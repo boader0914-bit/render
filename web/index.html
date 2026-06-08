@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>글램핑 수요 클러스터</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="auth-overlay" id="authOverlay" hidden>
+    <form class="auth-card" id="authForm">
+      <div class="auth-brand">
+        <strong>Glamping Cluster</strong>
+        <span>보호된 분석 화면</span>
+      </div>
+      <label class="field">
+        <span>접속 PIN</span>
+        <input id="authPinInput" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="current-password" placeholder="6자리 PIN">
+      </label>
+      <button class="primary-button" type="submit">확인</button>
+      <p class="hint" id="authStatus">외부 모바일 접속을 위해 PIN 확인이 필요합니다.</p>
+    </form>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="검색과 실행">
+      <div class="brand">
+        <strong>Glamping Cluster</strong>
+        <span>수요 지도 분석</span>
+      </div>
+
+      <section class="panel crawl-panel">
+        <div class="section-head">
+          <h2>새 수집</h2>
+        </div>
+        <form id="crawlForm" class="crawl-form">
+          <label class="field">
+            <span>키워드</span>
+            <input id="keywordInput" type="text" value="경북글램핑" autocomplete="off">
+          </label>
+          <div class="field-grid">
+            <label class="field">
+              <span>체크인</span>
+              <input id="checkInInput" type="date" value="2026-06-07">
+            </label>
+            <label class="field">
+              <span>체크아웃</span>
+              <input id="checkOutInput" type="date" value="2026-06-08">
+            </label>
+          </div>
+          <label class="field">
+            <span>성인</span>
+            <input id="adultsInput" type="number" min="1" max="10" value="2">
+          </label>
+          <button class="primary-button" type="submit">수집 실행</button>
+          <p class="hint" id="crawlStatus">수집 실행은 네이버/숙박 플랫폼 접속 권한이 필요합니다.</p>
+        </form>
+      </section>
+
+      <section class="panel feedback-panel">
+        <div class="section-head">
+          <h2>작업 피드백</h2>
+        </div>
+        <div class="feedback-list" id="feedbackList" aria-live="polite"></div>
+      </section>
+
+      <section class="panel run-panel">
+        <div class="section-head">
+          <h2>실행 결과</h2>
+          <button class="icon-button" id="refreshRuns" type="button" title="새로고침" aria-label="새로고침">↻</button>
+        </div>
+        <label class="field">
+          <span>결과 선택</span>
+          <select id="runSelect"></select>
+        </label>
+      </section>
+
+      <section class="panel yeogi-panel">
+        <div class="section-head">
+          <h2>여기어때 수동 보완</h2>
+        </div>
+        <p class="hint">자동수집은 차단 가능성이 높아 선택 보완 채널로 둡니다. 정상 브라우저에서 복사한 CSV/HTML/텍스트가 있을 때만 병합하세요.</p>
+        <div class="button-row">
+          <button class="secondary-button" id="yeogiOpenButton" type="button">코드 복사 후 열기</button>
+          <button class="secondary-button" id="yeogiScriptButton" type="button">추출 코드 복사</button>
+        </div>
+        <div class="script-fallback" id="yeogiScriptBox" hidden>
+          <div class="script-fallback-head">
+            <strong>추출 코드 직접 복사</strong>
+            <span>클립보드가 막힌 경우 사용</span>
+          </div>
+          <textarea id="yeogiScriptOutput" rows="6" readonly></textarea>
+        </div>
+        <label class="field">
+          <span>여기어때 결과 CSV/HTML/텍스트</span>
+          <textarea id="yeogiImportInput" rows="7" placeholder="추출 코드를 여기 넣지 말고, 여기어때 페이지에서 실행한 결과 CSV/HTML/텍스트만 붙여넣기"></textarea>
+        </label>
+        <button class="primary-button" id="yeogiImportButton" type="button">여기어때 결과 병합</button>
+        <p class="hint" id="yeogiImportStatus">실패해도 전체 분석에는 영향이 없습니다.</p>
+      </section>
+
+      <section class="panel api-panel">
+        <div class="section-head">
+          <h2>트래픽 API</h2>
+          <span class="api-state" id="trafficApiState">미설정</span>
+        </div>
+        <details class="api-settings">
+          <summary>API 키 입력</summary>
+          <form id="trafficKeyForm" class="traffic-key-form">
+            <label class="field">
+              <span>데이터랩 Client ID</span>
+              <input id="naverClientIdInput" type="password" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>데이터랩 Client Secret</span>
+              <input id="naverClientSecretInput" type="password" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>검색광고 API Key</span>
+              <input id="searchadApiKeyInput" type="password" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>검색광고 Secret Key</span>
+              <input id="searchadSecretKeyInput" type="password" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>검색광고 Customer ID</span>
+              <input id="searchadCustomerIdInput" type="password" autocomplete="off">
+            </label>
+            <button class="secondary-button" type="submit">API 키 저장</button>
+            <p class="hint" id="trafficKeyStatus">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
+          </form>
+        </details>
+      </section>
+
+      <section class="panel file-panel">
+        <div class="section-head">
+          <h2>파일</h2>
+        </div>
+        <div class="download-list" id="downloadList"></div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">글램핑 수요 클러스터 지도</h1>
+          <div class="meta-row" id="metaRow"></div>
+        </div>
+        <div class="status-pill" id="statusPill">준비</div>
+      </header>
+
+      <section class="analysis-strip" id="analysisStrip" aria-label="핵심 분석 기준"></section>
+
+      <section class="kpi-row" id="kpiRow" aria-label="요약 지표"></section>
+
+      <section class="panel availability-panel" id="availabilityPanel" aria-label="업체별 예약가능률"></section>
+
+      <section class="workspace">
+        <div class="map-area">
+          <div class="map-toolbar">
+            <div class="segmented" id="layerButtons">
+              <button class="active" type="button" data-layer="core">본질</button>
+              <button type="button" data-layer="type">유형</button>
+              <button type="button" data-layer="price">가격</button>
+              <button type="button" data-layer="ad">광고</button>
+            </div>
+            <div class="cluster-filters" id="clusterFilters"></div>
+            <div class="legend" id="legend"></div>
+          </div>
+
+          <div class="map-frame">
+            <svg id="clusterMap" viewBox="0 0 920 680" role="img" aria-label="수요 클러스터 지도">
+              <defs>
+                <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L0,6 L9,3 z" fill="#667085"></path>
+                </marker>
+              </defs>
+              <g id="mapGrid"></g>
+              <g id="mapLinks"></g>
+              <g id="mapMarkers"></g>
+            </svg>
+            <div class="map-caption">로컬 행정구역 지도 · 결과 범위 자동 줌 · 시군 스팟</div>
+          </div>
+        </div>
+
+        <aside class="detail-panel" id="detailPanel" aria-label="지역 상세"></aside>
+      </section>
+
+      <section class="bottom-grid">
+        <div class="panel">
+          <div class="section-head">
+            <h2>본질 클러스터별 수요</h2>
+          </div>
+          <div class="cluster-summary" id="coreSummary"></div>
+        </div>
+
+        <div class="panel">
+          <div class="section-head">
+            <h2>플랫폼 상태</h2>
+            <span class="subtle">핵심: 네이버 · 야놀자/NOL · ONDA · 떠나요</span>
+          </div>
+          <div class="platform-list" id="platformList"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

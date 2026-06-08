@@ -1,0 +1,8 @@
+config/*.local.json
+node_modules/
+logs/
+tools/
+outputs/
+.codex-remote-attachments/
+glamping_render_deploy_*.zip
+*.log
