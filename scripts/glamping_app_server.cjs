@@ -1463,8 +1463,8 @@ async function serveStatic(reqUrl, res) {
       ? `${html.slice(0, authStart)}${html.slice(appStart)}`
       : html;
     const publicHtml = noAuthHtml
-      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260609"')
-      .replace('src="/app.js"', 'src="/app.js?v=public-20260609"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260609-yeogi"')
+      .replace('src="/app.js"', 'src="/app.js?v=public-20260609-yeogi"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = reqUrl.pathname === "/" ? path.join(WEB_DIR, "index.html") : safeJoin(WEB_DIR, reqUrl.pathname);
