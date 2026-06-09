@@ -266,14 +266,31 @@ function authCookieHeader(req, authHash) {
   return `glamping_auth=${authHash}; Path=/; Max-Age=604800; ${sameSite}; HttpOnly`;
 }
 
+function truthyEnv(name) {
+  return /^(1|true|yes|on)$/i.test(String(process.env[name] || "").trim());
+}
+
 async function readAccessConfig() {
-  if (process.env.APP_PIN) {
+  const authMode = String(process.env.APP_AUTH_MODE || "public").trim().toLowerCase();
+  if (truthyEnv("APP_AUTH_DISABLED")) {
+    return { enabled: false, source: "env-disabled", salt: "", pinHash: "", entryTokenSalt: "", entryTokenHash: "" };
+  }
+  if (authMode !== "pin") {
+    return { enabled: false, source: "default-public", salt: "", pinHash: "", entryTokenSalt: "", entryTokenHash: "" };
+  }
+
+  const envPin = String(process.env.APP_PIN || "").trim();
+  if (envPin) {
     return {
       enabled: true,
       source: "env",
       salt: "env",
-      pinHash: hashPin(String(process.env.APP_PIN), "env")
+      pinHash: hashPin(envPin, "env")
     };
+  }
+
+  if (!truthyEnv("APP_ACCESS_FILE_ENABLED")) {
+    return { enabled: false, source: "default-public", salt: "", pinHash: "", entryTokenSalt: "", entryTokenHash: "" };
   }
 
   try {
