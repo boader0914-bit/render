@@ -206,6 +206,13 @@ button:focus {
   cursor: not-allowed;
 }
 
+.primary-button:disabled {
+  border-color: var(--line-strong);
+  background: #eef2f7;
+  color: #6b7684;
+  box-shadow: none;
+}
+
 .icon-button {
   width: 34px;
   padding: 0;
@@ -344,6 +351,7 @@ button:focus {
   grid-column: 2;
 }
 
+.manual-step .primary-button,
 .manual-step .secondary-button,
 .manual-step .ghost-button {
   min-height: 36px;
@@ -388,7 +396,7 @@ button:focus {
 
 .manual-import-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: stretch;
 }

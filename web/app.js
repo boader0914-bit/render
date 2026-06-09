@@ -418,7 +418,7 @@ function showYeogiLinkFallback(url) {
 
 function previewYeogiImport(value) {
   const text = String(value || "").trim();
-  if (!text) return { ready: false, tone: "idle", badge: "대기", message: "결과 CSV/텍스트 대기" };
+  if (!text) return { ready: false, tone: "idle", badge: "대기", message: "붙여넣기 대기" };
   if (looksLikeYeogiExtractScript(text)) {
     return { ready: false, tone: "warning", badge: "코드", message: "추출 코드가 붙어 있습니다" };
   }
@@ -469,7 +469,7 @@ function toggleYeogiScriptBox() {
 
 function clearYeogiImport() {
   if (els.yeogiImportInput) els.yeogiImportInput.value = "";
-  setYeogiImportStatus("수동 보완 결과를 기다리고 있습니다.");
+  setYeogiImportStatus("입력칸을 비웠습니다. 여기어때 결과를 붙여넣으세요.", "check");
   syncYeogiManualInterface();
 }
 
@@ -1309,7 +1309,7 @@ async function copyYeogiScript() {
   const script = csvExtractScript();
   try {
     await navigator.clipboard.writeText(script);
-    setYeogiImportStatus("추출 코드가 복사되었습니다. 여기어때 페이지에서 실행한 뒤 결과를 붙여넣으세요.", "check");
+    setYeogiImportStatus("추출 코드가 복사되었습니다. 여기어때 결과 페이지에서 실행한 뒤 나온 CSV를 앱에 붙여넣으세요.", "check");
     addFeedback("여기어때 브라우저 추출 코드를 복사했습니다.", "success");
   } catch (error) {
     showYeogiScriptFallback(script);
@@ -1338,7 +1338,7 @@ async function copyYeogiSearchLink() {
   try {
     await navigator.clipboard.writeText(url);
     if (els.yeogiLinkBox) els.yeogiLinkBox.hidden = true;
-    setYeogiImportStatus("여기어때 검색 링크가 복사되었습니다.", "check");
+    setYeogiImportStatus("검색 링크가 복사되었습니다. 새 탭에서 열고 결과를 확인하세요.", "check");
     addFeedback("여기어때 검색 링크를 복사했습니다.", "success");
   } catch (error) {
     showYeogiLinkFallback(url);
@@ -1350,7 +1350,7 @@ async function copyYeogiSearchLink() {
 async function openYeogiSearch() {
   const url = yeogiSearchUrl();
   window.open(url, "_blank", "noopener,noreferrer");
-  setYeogiImportStatus("여기어때 검색을 새 탭으로 열었습니다.", "check");
+  setYeogiImportStatus("여기어때 검색을 새 탭으로 열었습니다. 결과 화면에서 코드 실행 또는 화면 텍스트 복사를 진행하세요.", "check");
   addFeedback("여기어때 검색 페이지를 새 탭으로 열었습니다.", "info");
 }
 
