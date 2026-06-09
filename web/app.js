@@ -238,7 +238,14 @@ function yeogiKeyword() {
 }
 
 function yeogiSearchUrl() {
-  return `https://www.yeogi.com/domestic-accommodations?searchType=KEYWORD&keyword=${encodeURIComponent(yeogiKeyword())}`;
+  const url = new URL("https://www.yeogi.com/domestic-accommodations");
+  url.searchParams.set("freeForm", "true");
+  url.searchParams.set("keyword", yeogiKeyword());
+  url.searchParams.set("searchType", "KEYWORD");
+  if (els.checkInInput?.value) url.searchParams.set("checkIn", els.checkInInput.value);
+  if (els.checkOutInput?.value) url.searchParams.set("checkOut", els.checkOutInput.value);
+  url.searchParams.set("personal", String(Math.max(1, Number(els.adultsInput?.value || 2))));
+  return url.toString();
 }
 
 function csvExtractScript() {
@@ -247,6 +254,7 @@ function csvExtractScript() {
   const topicRe = /글램핑|캠핑|카라반|펜션|풀빌라|리조트|호텔|스테이|빌리지|캠프|camp|glamp/i;
   const badRe = /예약|쿠폰|할인|로그인|회원|검색|필터|지도|정렬|성인|아동|입실|퇴실|후기|리뷰|평점|무료취소|원/;
   const soldOutRe = /예약마감|예약완료|마감|매진|품절|sold\\s*out|unavailable/i;
+  const categoryRe = /^(?:풀빌라\\s*펜션|비즈니스\\s*호텔|레지던스\\s*호텔|관광\\s*호텔|모텔|호텔|펜션|캠핑|리조트|게스트하우스|한옥|카라반)\\s*/i;
   const clean = (value) => String(value || "").replace(/\\s+/g, " ").trim();
   const nameKey = (value) => clean(value).replace(/\\s+/g, "").toLowerCase();
   const escapeCsv = (value) => {
@@ -256,18 +264,36 @@ function csvExtractScript() {
   const pickName = (lines, priceIndex) => {
     const before = lines.slice(Math.max(0, priceIndex - 8), priceIndex).reverse();
     const around = lines.slice(Math.max(0, priceIndex - 8), Math.min(lines.length, priceIndex + 4));
-    return [...before, ...around].find((line) => topicRe.test(line) && !badRe.test(line) && !priceRe.test(line)) || "";
+    const found = [...before, ...around].find((line) => topicRe.test(line) && !badRe.test(line) && !priceRe.test(line)) || "";
+    return clean(found.replace(categoryRe, ""));
+  };
+  const lowestPrice = (text) => {
+    const prices = String(text || "").match(priceRe) || [];
+    const values = prices
+      .map((item) => Number(String(item).replace(/[^\\d]/g, "")))
+      .filter((value) => Number.isFinite(value) && value >= 10000);
+    const min = values.length ? Math.min(...values) : 0;
+    return min ? min.toLocaleString("ko-KR") + "원" : clean(prices[0] || "");
   };
   const rows = [];
   const seen = new Set();
-  const candidates = [...document.querySelectorAll("a[href], article, li, [role='listitem'], [data-testid], [class*='card'], [class*='item']")];
+  const cardsFromLinks = [...document.querySelectorAll("a[href*='/domestic-accommodations/']")].map((link) => {
+    let node = link;
+    for (let i = 0; i < 4 && node?.parentElement; i += 1) {
+      const text = String(node.innerText || "");
+      if (priceRe.test(text) && topicRe.test(text) && text.length < 2600) return node;
+      node = node.parentElement;
+    }
+    return link;
+  });
+  const candidates = [...cardsFromLinks, ...document.querySelectorAll("a[href], article, li, [role='listitem'], [data-testid], [class*='card'], [class*='item']")];
   for (const el of candidates) {
     const rawText = String(el.innerText || "");
     if (rawText.length > 2200) continue;
     if (!priceRe.test(rawText) || !topicRe.test(rawText)) continue;
     const lines = rawText.split(/\\n+/).map(clean).filter(Boolean);
     if (lines.length > 36) continue;
-    const price = clean((rawText.match(priceRe) || [""])[0]);
+    const price = lowestPrice(rawText);
     const priceIndex = Math.max(0, lines.findIndex((line) => priceRe.test(line)));
     const name = pickName(lines, priceIndex);
     if (!name || !price) continue;
@@ -291,12 +317,14 @@ function csvExtractScript() {
     if (rows.length >= 80) break;
   }
   if (!rows.length) {
-    const lines = String(document.body?.innerText || "").split(/\\n+/).map(clean).filter(Boolean);
+    const lines = String(document.body?.innerText || "")
+      .replace(/(원|개|확인|마감|매진)(풀빌라\\s*펜션|비즈니스\\s*호텔|레지던스\\s*호텔|관광\\s*호텔|모텔|호텔|펜션|캠핑|리조트|게스트하우스|한옥|카라반)(?=[가-힣A-Za-z0-9★])/g, "$1\\n$2")
+      .split(/\\n+/).map(clean).filter(Boolean);
     lines.forEach((line, index) => {
       if (!priceRe.test(line)) return;
       const windowLines = lines.slice(Math.max(0, index - 8), Math.min(lines.length, index + 4));
       const name = pickName(lines, index);
-      const price = clean((line.match(priceRe) || [""])[0]);
+      const price = lowestPrice(line);
       const key = nameKey(name);
       if (!name || !price || seen.has(key)) return;
       seen.add(key);
@@ -331,6 +359,19 @@ function looksLikeYeogiExtractScript(value) {
   return /\(\(\)\s*=>\s*\{/.test(text) &&
     /const\s+priceRe/.test(text) &&
     /navigator\.clipboard|console\.log\(csv\)|headers\s*=/.test(text);
+}
+
+function looksLikeYeogiCsvHeader(line) {
+  const cells = String(line || "")
+    .split(",")
+    .map((cell) => cell.replace(/^\uFEFF/, "").trim().toLowerCase())
+    .filter(Boolean);
+  if (cells.length < 2) return false;
+  const hasName = cells.some((cell) => /^(name|업체명|숙소명|상품명|title)$/.test(cell));
+  const hasPrice = cells.some((cell) => /^(price|가격|최저가)$/.test(cell));
+  const hasRank = cells.some((cell) => /^(rank|rank_or_order|순위)$/.test(cell));
+  const hasUrl = cells.some((cell) => /^(url|상품 url|링크)$/.test(cell));
+  return hasName && (hasPrice || hasRank || hasUrl);
 }
 
 function showYeogiScriptFallback(script) {
@@ -368,7 +409,7 @@ function previewYeogiImport(value) {
 
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const firstLine = lines[0] || "";
-  const csvLike = firstLine.includes(",") && /(name|업체|숙소|price|가격|url|rank|순위)/i.test(firstLine);
+  const csvLike = looksLikeYeogiCsvHeader(firstLine);
   if (csvLike) {
     const count = Math.max(0, lines.length - 1);
     return count
@@ -378,9 +419,12 @@ function previewYeogiImport(value) {
 
   const priceRe = /(?:\d{1,3},)*\d{1,3}\s*원|(?:\d{1,3},)+\d{3}/;
   const topicRe = /글램핑|캠핑|카라반|펜션|리조트|스테이|빌리지|glamp|camp/i;
+  const categoryStartRe = /(?:^|\n)(풀빌라\s*펜션|비즈니스\s*호텔|레지던스\s*호텔|관광\s*호텔|모텔|호텔|펜션|캠핑|리조트|게스트하우스|한옥|카라반)(?=[가-힣A-Za-z0-9★\[])/g;
+  const categoryBoundaryRe = /(원|개|확인|마감|매진)(풀빌라\s*펜션|비즈니스\s*호텔|레지던스\s*호텔|관광\s*호텔|모텔|호텔|펜션|캠핑|리조트|게스트하우스|한옥|카라반)(?=[가-힣A-Za-z0-9★\[])/g;
   const priceCount = lines.filter((line) => priceRe.test(line)).length;
   const nameCount = new Set(lines.filter((line) => topicRe.test(line) && line.length <= 80)).size;
-  const count = Math.max(priceCount, Math.min(nameCount, 80));
+  const compactCount = (text.match(categoryStartRe) || []).length + (text.match(categoryBoundaryRe) || []).length;
+  const count = Math.max(priceCount, compactCount, Math.min(nameCount, 80));
   if (count) return { ready: true, tone: "ready", badge: `${fmtNumber(count)}건`, message: `텍스트 ${fmtNumber(count)}건 후보` };
   if (text.length > 300) return { ready: true, tone: "check", badge: "검토", message: "긴 텍스트 감지, 병합 전 검토" };
   return { ready: false, tone: "warning", badge: "부족", message: "숙소/가격 후보가 부족합니다" };
@@ -1248,12 +1292,8 @@ async function copyYeogiScriptBeforeOpen() {
 
 async function openYeogiSearch() {
   const url = yeogiSearchUrl();
-  const copied = await copyYeogiScriptBeforeOpen();
   window.open(url, "_blank", "noopener,noreferrer");
-  setYeogiImportStatus(copied
-    ? `${yeogiKeyword()} 검색을 열었습니다. 추출 코드는 이미 복사되었습니다.`
-    : `${yeogiKeyword()} 검색을 열었습니다. 추출 코드는 별도 코드 박스에 남겼습니다.`,
-    copied ? "check" : "warning");
+  setYeogiImportStatus(`${yeogiKeyword()} 검색을 열었습니다. 결과 페이지 텍스트를 붙여넣거나 추출 코드를 따로 사용하세요.`, "check");
   addFeedback("여기어때 검색 페이지를 열었습니다.", "info");
 }
 
