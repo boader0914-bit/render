@@ -349,6 +349,21 @@ button:focus {
   min-height: 36px;
 }
 
+.link-fallback {
+  margin-bottom: 10px;
+}
+
+.link-fallback input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--ink);
+  font-size: 13px;
+  padding: 0 12px;
+}
+
 .button-pair {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

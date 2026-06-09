@@ -6,6 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { URL } = require("node:url");
+const yeogiImportParser = require("./yeogi_import_parser.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
@@ -317,6 +318,28 @@ function displayNameForRun(dirName, manifest = null) {
   const keyword = manifest?.keyword || province.keyword;
   const date = dirName.match(/(\d{8})/)?.[1] || "";
   return `${keyword}${date ? ` · ${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)}` : ""}`;
+}
+
+async function readRunConditions(dirPath, manifest, reportFile) {
+  const result = {
+    checkIn: manifest?.checkIn || "",
+    checkOut: manifest?.checkOut || "",
+    adults: manifest?.adults || ""
+  };
+  if ((result.checkIn && result.checkOut && result.adults) || !reportFile) return result;
+
+  try {
+    const report = await fsp.readFile(path.join(dirPath, reportFile), "utf8");
+    const match = report.match(/성인\s*(\d+)명,\s*1박,\s*체크인\s*(\d{4}-\d{2}-\d{2})\s*\/\s*체크아웃\s*(\d{4}-\d{2}-\d{2})/);
+    if (match) {
+      result.adults ||= Number(match[1]);
+      result.checkIn ||= match[2];
+      result.checkOut ||= match[3];
+    }
+  } catch {
+    // Older runs may not have a report file; keep form defaults in that case.
+  }
+  return result;
 }
 
 async function readManifest(dirPath) {
@@ -750,7 +773,7 @@ async function importYeogiSupplement(payload) {
   const platformText = (await fsp.readFile(platformPath, "utf8")).replace(/^\uFEFF/, "");
   const originalRows = parseCsv(platformText);
   const originalHeaders = csvHeaderLine(platformText);
-  const parsedRows = parseYeogiImport(sourceText);
+  const parsedRows = yeogiImportParser.parseYeogiImport(sourceText);
   if (!parsedRows.length) {
     throw new Error("여기어때 숙소 행을 찾지 못했습니다. CSV 헤더 또는 페이지 텍스트를 다시 확인하세요.");
   }
@@ -1258,6 +1281,7 @@ async function loadRun(runId) {
   const adFile = files.find((file) => file.endsWith("_ad_place_list.csv"));
   const platformFile = files.find((file) => file.endsWith("_glamping_crawl_test.csv"));
   const reportFile = files.find((file) => file.endsWith("_glamping_crawl_test_report.md"));
+  const conditions = await readRunConditions(dirPath, manifest, reportFile);
 
   const regionalRows = regionalFile
     ? parseCsv((await fsp.readFile(path.join(dirPath, regionalFile), "utf8")).replace(/^\uFEFF/, ""))
@@ -1282,6 +1306,9 @@ async function loadRun(runId) {
       province: provinceKey,
       provinceLabel: province.label,
       mapBounds: province.mapBounds,
+      checkIn: conditions.checkIn,
+      checkOut: conditions.checkOut,
+      adults: conditions.adults,
       counts: manifest?.counts || {},
       files: {
         regional: regionalFile,
@@ -1456,8 +1483,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260609-yeogi2"')
-      .replace('src="/app.js"', 'src="/app.js?v=public-20260609-yeogi2"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260610-nol-filter"')
+      .replace('src="/app.js"', 'src="/app.js?v=public-20260610-nol-filter"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

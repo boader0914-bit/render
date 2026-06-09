@@ -104,6 +104,7 @@ const els = {
   runSelect: document.getElementById("runSelect"),
   refreshRuns: document.getElementById("refreshRuns"),
   crawlForm: document.getElementById("crawlForm"),
+  yeogiCopyLinkButton: document.getElementById("yeogiCopyLinkButton"),
   yeogiOpenButton: document.getElementById("yeogiOpenButton"),
   yeogiScriptButton: document.getElementById("yeogiScriptButton"),
   yeogiToggleScriptButton: document.getElementById("yeogiToggleScriptButton"),
@@ -111,6 +112,8 @@ const els = {
   yeogiManualBadge: document.getElementById("yeogiManualBadge"),
   yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
   yeogiPreviewStatus: document.getElementById("yeogiPreviewStatus"),
+  yeogiLinkBox: document.getElementById("yeogiLinkBox"),
+  yeogiLinkOutput: document.getElementById("yeogiLinkOutput"),
   yeogiScriptBox: document.getElementById("yeogiScriptBox"),
   yeogiScriptOutput: document.getElementById("yeogiScriptOutput"),
   yeogiImportInput: document.getElementById("yeogiImportInput"),
@@ -239,12 +242,16 @@ function yeogiKeyword() {
 
 function yeogiSearchUrl() {
   const url = new URL("https://www.yeogi.com/domestic-accommodations");
+  const run = state.data?.run || {};
+  const checkIn = run.checkIn || els.checkInInput?.value || "";
+  const checkOut = run.checkOut || els.checkOutInput?.value || "";
+  const adults = run.adults || els.adultsInput?.value || 2;
   url.searchParams.set("freeForm", "true");
   url.searchParams.set("keyword", yeogiKeyword());
   url.searchParams.set("searchType", "KEYWORD");
-  if (els.checkInInput?.value) url.searchParams.set("checkIn", els.checkInInput.value);
-  if (els.checkOutInput?.value) url.searchParams.set("checkOut", els.checkOutInput.value);
-  url.searchParams.set("personal", String(Math.max(1, Number(els.adultsInput?.value || 2))));
+  if (checkIn) url.searchParams.set("checkIn", checkIn);
+  if (checkOut) url.searchParams.set("checkOut", checkOut);
+  url.searchParams.set("personal", String(Math.max(1, Number(adults || 2))));
   return url.toString();
 }
 
@@ -398,6 +405,15 @@ function setYeogiImportStatus(text, tone = "idle") {
 function updateYeogiKeywordLabel() {
   if (!els.yeogiCurrentKeyword) return;
   els.yeogiCurrentKeyword.textContent = `${yeogiKeyword()} 검색 기준`;
+  if (els.yeogiLinkOutput) els.yeogiLinkOutput.value = yeogiSearchUrl();
+}
+
+function showYeogiLinkFallback(url) {
+  if (!els.yeogiLinkBox || !els.yeogiLinkOutput) return;
+  els.yeogiLinkOutput.value = url;
+  els.yeogiLinkBox.hidden = false;
+  els.yeogiLinkOutput.focus();
+  els.yeogiLinkOutput.select();
 }
 
 function previewYeogiImport(value) {
@@ -455,6 +471,33 @@ function clearYeogiImport() {
   if (els.yeogiImportInput) els.yeogiImportInput.value = "";
   setYeogiImportStatus("수동 보완 결과를 기다리고 있습니다.");
   syncYeogiManualInterface();
+}
+
+function formatDateInput(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function initializeDateInputs() {
+  if (!els.checkInInput || !els.checkOutInput) return;
+  const today = formatDateInput(new Date());
+  const tomorrow = formatDateInput(addDays(new Date(), 1));
+  const dayAfterTomorrow = formatDateInput(addDays(new Date(), 2));
+
+  els.checkInInput.min = today;
+  els.checkOutInput.min = tomorrow;
+  if (!els.checkInInput.value || els.checkInInput.value < today) {
+    els.checkInInput.value = tomorrow;
+  }
+  if (!els.checkOutInput.value || els.checkOutInput.value <= els.checkInInput.value) {
+    els.checkOutInput.value = dayAfterTomorrow;
+  }
 }
 
 function normalize(value) {
@@ -1290,11 +1333,25 @@ async function copyYeogiScriptBeforeOpen() {
   }
 }
 
+async function copyYeogiSearchLink() {
+  const url = yeogiSearchUrl();
+  try {
+    await navigator.clipboard.writeText(url);
+    if (els.yeogiLinkBox) els.yeogiLinkBox.hidden = true;
+    setYeogiImportStatus("여기어때 검색 링크가 복사되었습니다.", "check");
+    addFeedback("여기어때 검색 링크를 복사했습니다.", "success");
+  } catch (error) {
+    showYeogiLinkFallback(url);
+    setYeogiImportStatus("클립보드 복사가 막혀 검색 링크를 아래에 표시했습니다.", "warning");
+    addFeedback("검색 링크를 직접 선택할 수 있도록 표시했습니다.", "warning");
+  }
+}
+
 async function openYeogiSearch() {
   const url = yeogiSearchUrl();
   window.open(url, "_blank", "noopener,noreferrer");
-  setYeogiImportStatus(`${yeogiKeyword()} 검색을 열었습니다. 결과 페이지 텍스트를 붙여넣거나 추출 코드를 따로 사용하세요.`, "check");
-  addFeedback("여기어때 검색 페이지를 열었습니다.", "info");
+  setYeogiImportStatus("여기어때 검색을 새 탭으로 열었습니다.", "check");
+  addFeedback("여기어때 검색 페이지를 새 탭으로 열었습니다.", "info");
 }
 
 async function submitYeogiImport() {
@@ -1379,12 +1436,16 @@ function wireEvents() {
   });
 
   els.crawlForm.addEventListener("submit", submitCrawl);
+  els.yeogiCopyLinkButton.addEventListener("click", copyYeogiSearchLink);
   els.yeogiOpenButton.addEventListener("click", openYeogiSearch);
   els.yeogiScriptButton.addEventListener("click", copyYeogiScript);
   els.yeogiToggleScriptButton.addEventListener("click", toggleYeogiScriptBox);
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.yeogiImportInput.addEventListener("input", syncYeogiManualInterface);
   els.keywordInput.addEventListener("input", syncYeogiManualInterface);
+  els.checkInInput.addEventListener("change", syncYeogiManualInterface);
+  els.checkOutInput.addEventListener("change", syncYeogiManualInterface);
+  els.adultsInput.addEventListener("input", syncYeogiManualInterface);
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
 }
@@ -1392,6 +1453,7 @@ function wireEvents() {
 async function startApp() {
   if (state.started) return;
   state.started = true;
+  initializeDateInputs();
   wireEvents();
   addFeedback("키워드를 입력하고 수집 실행을 누르면 진행 상태가 여기에 표시됩니다.", "info");
   loadTrafficKeyStatus().catch(() => {});

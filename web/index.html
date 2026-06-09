@@ -72,7 +72,10 @@
               <strong>검색 준비</strong>
               <span id="yeogiCurrentKeyword">현재 키워드 기준</span>
             </div>
-            <button class="secondary-button" id="yeogiOpenButton" type="button">검색 열기</button>
+            <div class="button-pair">
+              <button class="secondary-button" id="yeogiCopyLinkButton" type="button">링크 복사</button>
+              <button class="ghost-button" id="yeogiOpenButton" type="button">새 탭 열기</button>
+            </div>
           </div>
           <div class="manual-step">
             <span class="step-index">2</span>
@@ -93,6 +96,9 @@
             </div>
             <button class="ghost-button" id="yeogiClearButton" type="button">비우기</button>
           </div>
+        </div>
+        <div class="link-fallback" id="yeogiLinkBox" hidden>
+          <input id="yeogiLinkOutput" type="text" readonly>
         </div>
         <div class="script-fallback" id="yeogiScriptBox" hidden>
           <div class="script-fallback-head">

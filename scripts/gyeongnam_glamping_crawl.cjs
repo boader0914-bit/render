@@ -442,9 +442,24 @@ function productTypeCluster(row) {
   if (/풀빌라|리조트/.test(text)) return "풀빌라/리조트형";
   if (/카라반/.test(text)) return "카라반";
   if (/펜션/.test(text) && /글램핑/.test(text)) return "펜션형 글램핑";
+  if (/펜션/.test(text)) return "펜션형";
   if (/캠핑장|오토캠핑|캠핑/.test(text) && !/글램핑/.test(text)) return "캠핑장";
   if (/글램핑/.test(text)) return "글램핑";
   return "확인필요";
+}
+
+function isRelevantOtaAccommodation(row) {
+  const text = [
+    row.name,
+    row.category,
+    row.location,
+    row["상품유형클러스터"],
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const hasOutdoorSignal = /글램핑|카라반|캠핑|오토캠핑|야영|펜션|풀빌라|리조트|스테이|camp|glamp/i.test(text);
+  const hasHotelOnlySignal = /모텔|호텔|비즈니스호텔|레지던스호텔/i.test(text);
+  return hasOutdoorSignal || !hasHotelOnlySignal;
 }
 
 function priceCluster(row) {
@@ -1066,7 +1081,7 @@ async function collectNol() {
   });
 
   const items = Array.isArray(list.data?.items) ? list.data.items.filter((item) => item.type === "PRODUCT_ITEM") : [];
-  const rows = items.map((entry, index) => {
+  const rawRows = items.map((entry, index) => {
     const data = entry.data || {};
     const meta = entry.serverLogMeta || {};
     const price = data.prices?.[0];
@@ -1085,11 +1100,17 @@ async function collectNol() {
       url: data.action?.web || "",
     };
   });
+  const rows = rawRows.filter(isRelevantOtaAccommodation).map((row, index) => ({
+    ...row,
+    rank_or_order: index + 1,
+  }));
 
   return {
     status: list.res.status,
     total: count.data?.count ?? "",
+    rawFirstPage: rawRows.length,
     firstPage: rows.length,
+    filteredOut: rawRows.length - rows.length,
     rows,
   };
 }
@@ -1606,7 +1627,7 @@ async function main() {
     { 항목: "네이버 지역별", 값: `${regional.rows.length}건 수집 (${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개)` },
     { 항목: "네이버 예약재고", 값: `상위 ${naverBookingStock.limit}개 제한 중 ${naverBookingStock.collected}개 확인 / 성공 ${naverBookingStock.successful}건` },
     { 항목: "5건 미만 지역", 값: underfilledRegions || "없음" },
-    { 항목: "야놀자/NOL", 값: `전체 ${nol.total}건 / 1페이지 ${nol.firstPage}건 수집` },
+    { 항목: "야놀자/NOL", 값: `전체 ${nol.total}건 / 1페이지 원본 ${nol.rawFirstPage}건 중 캠핑형 ${nol.firstPage}건 수집, 제외 ${nol.filteredOut}건` },
     {
       항목: "여기어때",
       값: yeogi.blocked
@@ -1675,7 +1696,8 @@ async function main() {
 
 ## 야놀자/NOL
 - 상태: 성공
-- 결과: 전체 ${nol.total}건 / 1페이지 ${nol.firstPage}건
+- 결과: 전체 ${nol.total}건 / 1페이지 원본 ${nol.rawFirstPage}건 중 캠핑형 ${nol.firstPage}건 수집
+- 제외: 모텔/호텔 등 글램핑·카라반·캠핑·펜션 신호가 약한 결과 ${nol.filteredOut}건 제외
 - 광고/비광고 분리: 가능
 - 재고 해석: 검색 노출·가격은 수집하되 전체객실수와 채널별 배정수는 상세 재고 확인 필요
 
@@ -1735,6 +1757,9 @@ async function main() {
     regionSlug: province.slug,
     searchKeyword: QUERY,
     naverKeyword: NAVER_QUERY,
+    checkIn: CHECK_IN,
+    checkOut: CHECK_OUT,
+    adults: ADULTS,
     files: [
       `${prefix}_glamping_crawl_test.csv`,
       `${prefix}_glamping_crawl_test_report.md`,
@@ -1752,6 +1777,8 @@ async function main() {
       naverBookingStockChecked: naverBookingStock.collected,
       naverBookingStockSucceeded: naverBookingStock.successful,
       nolFirstPage: nol.firstPage,
+      nolRawFirstPage: nol.rawFirstPage,
+      nolFilteredOut: nol.filteredOut,
       ddnayo: ddnayo.rows.length,
     },
   };

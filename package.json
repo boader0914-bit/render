@@ -5,7 +5,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node scripts/glamping_app_server.cjs",
-    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js"
+    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs",
+    "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
+    "test": "npm run check && npm run test:yeogi"
   },
   "engines": {
     "node": ">=20"
