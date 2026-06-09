@@ -205,6 +205,7 @@ button:focus {
 
 .primary-button,
 .secondary-button,
+.ghost-button,
 .icon-button,
 .segmented button,
 .cluster-filter {
@@ -232,9 +233,19 @@ button:focus {
   font-weight: 800;
 }
 
-.primary-button:disabled {
+.ghost-button {
+  width: 100%;
+  background: #f9fafb;
+  color: #4e5968;
+  border-color: var(--line-strong);
+  font-weight: 800;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.ghost-button:disabled {
   opacity: .55;
-  cursor: wait;
+  cursor: not-allowed;
 }
 
 .icon-button {
@@ -277,6 +288,177 @@ button:focus {
 
 .traffic-key-form {
   margin-top: 12px;
+}
+
+.manual-badge {
+  flex: 0 0 auto;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #4e5968;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.manual-badge.ready {
+  border-color: rgba(0, 166, 109, .26);
+  background: #edf8f2;
+  color: #206744;
+}
+
+.manual-badge.warning {
+  border-color: rgba(245, 159, 0, .34);
+  background: #fff8e8;
+  color: #9a5a00;
+}
+
+.manual-badge.check,
+.manual-badge.progress {
+  border-color: rgba(49, 130, 246, .28);
+  background: #eef4ff;
+  color: #1457c7;
+}
+
+.manual-badge.error {
+  border-color: rgba(240, 68, 82, .3);
+  background: #fff5f6;
+  color: #b4232f;
+}
+
+.manual-flow {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.manual-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.step-index {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: var(--focus);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.manual-step-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.manual-step-body strong {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.manual-step-body span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.manual-step > button,
+.manual-step .button-pair {
+  grid-column: 2;
+}
+
+.manual-step .secondary-button,
+.manual-step .ghost-button {
+  min-height: 36px;
+}
+
+.button-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.manual-preview.ready {
+  color: #206744;
+  font-weight: 800;
+}
+
+.manual-preview.warning {
+  color: #9a5a00;
+  font-weight: 800;
+}
+
+.manual-preview.check {
+  color: #1457c7;
+  font-weight: 800;
+}
+
+.manual-import-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.manual-status {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: #4e5968;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.manual-status.ready {
+  border-color: rgba(0, 166, 109, .24);
+  background: #f2fbf7;
+  color: #206744;
+  font-weight: 800;
+}
+
+.manual-status.warning {
+  border-color: rgba(245, 159, 0, .28);
+  background: #fff8e8;
+  color: #8a5400;
+}
+
+.manual-status.check,
+.manual-status.progress {
+  border-color: rgba(49, 130, 246, .24);
+  background: #f2f6ff;
+  color: #1457c7;
+}
+
+.manual-status.error {
+  border-color: rgba(240, 68, 82, .28);
+  background: #fff5f6;
+  color: #b4232f;
 }
 
 .script-fallback {
@@ -1369,8 +1551,8 @@ h1 {
   .app-shell,
   .main,
   .sidebar {
-    width: 100vw;
-    max-width: 100vw;
+    width: 100%;
+    max-width: 100%;
     overflow-x: hidden;
   }
 
@@ -1406,6 +1588,20 @@ h1 {
   .availability-summary span {
     justify-content: center;
     padding: 0 7px;
+  }
+
+  .manual-step {
+    padding: 9px;
+  }
+
+  .manual-step > button,
+  .manual-step .button-pair,
+  .manual-import-row {
+    grid-column: 1 / -1;
+  }
+
+  .manual-import-row {
+    grid-template-columns: 1fr;
   }
 
   .kpi-row {

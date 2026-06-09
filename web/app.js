@@ -131,6 +131,11 @@ const els = {
   crawlForm: document.getElementById("crawlForm"),
   yeogiOpenButton: document.getElementById("yeogiOpenButton"),
   yeogiScriptButton: document.getElementById("yeogiScriptButton"),
+  yeogiToggleScriptButton: document.getElementById("yeogiToggleScriptButton"),
+  yeogiClearButton: document.getElementById("yeogiClearButton"),
+  yeogiManualBadge: document.getElementById("yeogiManualBadge"),
+  yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
+  yeogiPreviewStatus: document.getElementById("yeogiPreviewStatus"),
   yeogiScriptBox: document.getElementById("yeogiScriptBox"),
   yeogiScriptOutput: document.getElementById("yeogiScriptOutput"),
   yeogiImportInput: document.getElementById("yeogiImportInput"),
@@ -386,8 +391,80 @@ function showYeogiScriptFallback(script) {
   if (!els.yeogiScriptBox || !els.yeogiScriptOutput) return;
   els.yeogiScriptOutput.value = script;
   els.yeogiScriptBox.hidden = false;
+  if (els.yeogiToggleScriptButton) els.yeogiToggleScriptButton.textContent = "코드 닫기";
   els.yeogiScriptOutput.focus();
   els.yeogiScriptOutput.select();
+}
+
+function setYeogiManualBadge(text, tone = "idle") {
+  if (!els.yeogiManualBadge) return;
+  els.yeogiManualBadge.textContent = text;
+  els.yeogiManualBadge.className = `manual-badge ${tone}`;
+}
+
+function setYeogiImportStatus(text, tone = "idle") {
+  if (!els.yeogiImportStatus) return;
+  els.yeogiImportStatus.textContent = text;
+  els.yeogiImportStatus.className = `manual-status ${tone}`;
+}
+
+function updateYeogiKeywordLabel() {
+  if (!els.yeogiCurrentKeyword) return;
+  els.yeogiCurrentKeyword.textContent = `${yeogiKeyword()} 검색 기준`;
+}
+
+function previewYeogiImport(value) {
+  const text = String(value || "").trim();
+  if (!text) return { ready: false, tone: "idle", badge: "대기", message: "결과 CSV/텍스트 대기" };
+  if (looksLikeYeogiExtractScript(text)) {
+    return { ready: false, tone: "warning", badge: "코드", message: "추출 코드가 붙어 있습니다" };
+  }
+
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const firstLine = lines[0] || "";
+  const csvLike = firstLine.includes(",") && /(name|업체|숙소|price|가격|url|rank|순위)/i.test(firstLine);
+  if (csvLike) {
+    const count = Math.max(0, lines.length - 1);
+    return count
+      ? { ready: true, tone: "ready", badge: `${fmtNumber(count)}건`, message: `CSV ${fmtNumber(count)}건 후보` }
+      : { ready: false, tone: "warning", badge: "확인", message: "CSV 헤더만 감지됨" };
+  }
+
+  const priceRe = /(?:\d{1,3},)*\d{1,3}\s*원|(?:\d{1,3},)+\d{3}/;
+  const topicRe = /글램핑|캠핑|카라반|펜션|리조트|스테이|빌리지|glamp|camp/i;
+  const priceCount = lines.filter((line) => priceRe.test(line)).length;
+  const nameCount = new Set(lines.filter((line) => topicRe.test(line) && line.length <= 80)).size;
+  const count = Math.max(priceCount, Math.min(nameCount, 80));
+  if (count) return { ready: true, tone: "ready", badge: `${fmtNumber(count)}건`, message: `텍스트 ${fmtNumber(count)}건 후보` };
+  if (text.length > 300) return { ready: true, tone: "check", badge: "검토", message: "긴 텍스트 감지, 병합 전 검토" };
+  return { ready: false, tone: "warning", badge: "부족", message: "숙소/가격 후보가 부족합니다" };
+}
+
+function syncYeogiManualInterface() {
+  updateYeogiKeywordLabel();
+  const preview = previewYeogiImport(els.yeogiImportInput?.value || "");
+  if (els.yeogiPreviewStatus) {
+    els.yeogiPreviewStatus.textContent = preview.message;
+    els.yeogiPreviewStatus.className = `manual-preview ${preview.tone}`;
+  }
+  setYeogiManualBadge(preview.badge, preview.tone);
+  if (els.yeogiImportButton) {
+    els.yeogiImportButton.disabled = !preview.ready || !state.activeRunId;
+  }
+}
+
+function toggleYeogiScriptBox() {
+  if (!els.yeogiScriptBox || !els.yeogiScriptOutput) return;
+  const willShow = els.yeogiScriptBox.hidden;
+  if (willShow && !els.yeogiScriptOutput.value) els.yeogiScriptOutput.value = csvExtractScript();
+  els.yeogiScriptBox.hidden = !willShow;
+  if (els.yeogiToggleScriptButton) els.yeogiToggleScriptButton.textContent = willShow ? "코드 닫기" : "코드 보기";
+}
+
+function clearYeogiImport() {
+  if (els.yeogiImportInput) els.yeogiImportInput.value = "";
+  setYeogiImportStatus("수동 보완 결과를 기다리고 있습니다.");
+  syncYeogiManualInterface();
 }
 
 function normalize(value) {
@@ -566,7 +643,10 @@ async function loadRuns(selectLatest = false) {
   if (!state.activeRunId || selectLatest) state.activeRunId = state.runs[0]?.id || null;
   renderRuns();
   if (state.activeRunId) await loadRun(state.activeRunId);
-  else renderEmpty();
+  else {
+    renderEmpty();
+    syncYeogiManualInterface();
+  }
 }
 
 async function loadTrafficKeyStatus() {
@@ -600,6 +680,7 @@ async function loadRun(runId) {
   state.enabledCore = new Set(coreOrder);
   state.mapBounds = computeMapBounds(data.regions);
   renderAll();
+  syncYeogiManualInterface();
   status("준비");
   addFeedback(`${data.run.label} 분석 결과를 표시했습니다.`, "success");
 }
@@ -1195,11 +1276,11 @@ async function copyYeogiScript() {
   const script = csvExtractScript();
   try {
     await navigator.clipboard.writeText(script);
-    els.yeogiImportStatus.textContent = "추출 코드가 복사되었습니다.";
+    setYeogiImportStatus("추출 코드가 복사되었습니다. 여기어때 페이지에서 실행한 뒤 결과를 붙여넣으세요.", "check");
     addFeedback("여기어때 브라우저 추출 코드를 복사했습니다.", "success");
   } catch (error) {
     showYeogiScriptFallback(script);
-    els.yeogiImportStatus.textContent = "클립보드 복사가 막혀 별도 코드 박스에 표시했습니다.";
+    setYeogiImportStatus("클립보드 복사가 막혀 아래 코드 박스에 표시했습니다.", "warning");
     addFeedback("클립보드 복사가 막혀 추출 코드를 별도 박스에 표시했습니다.", "warning");
   }
 }
@@ -1208,10 +1289,12 @@ async function copyYeogiScriptBeforeOpen() {
   const script = csvExtractScript();
   try {
     await navigator.clipboard.writeText(script);
+    setYeogiImportStatus("추출 코드 복사 후 여기어때 검색을 여는 중입니다.", "check");
     addFeedback("추출 코드를 먼저 복사했습니다.", "success");
     return true;
   } catch (error) {
     showYeogiScriptFallback(script);
+    setYeogiImportStatus("클립보드가 막혀 추출 코드를 아래 코드 박스에 남겼습니다.", "warning");
     addFeedback("클립보드가 막혀 추출 코드를 별도 박스에 남겼습니다.", "warning");
     return false;
   }
@@ -1221,33 +1304,44 @@ async function openYeogiSearch() {
   const url = yeogiSearchUrl();
   const copied = await copyYeogiScriptBeforeOpen();
   window.open(url, "_blank", "noopener,noreferrer");
-  els.yeogiImportStatus.textContent = copied
+  setYeogiImportStatus(copied
     ? `${yeogiKeyword()} 검색을 열었습니다. 추출 코드는 이미 복사되었습니다.`
-    : `${yeogiKeyword()} 검색을 열었습니다. 추출 코드는 별도 코드 박스에 남겼습니다.`;
+    : `${yeogiKeyword()} 검색을 열었습니다. 추출 코드는 별도 코드 박스에 남겼습니다.`,
+    copied ? "check" : "warning");
   addFeedback("여기어때 검색 페이지를 열었습니다.", "info");
 }
 
 async function submitYeogiImport() {
   if (!state.activeRunId) {
-    els.yeogiImportStatus.textContent = "먼저 실행 결과를 선택하세요.";
+    setYeogiImportStatus("먼저 실행 결과를 선택하세요.", "warning");
+    syncYeogiManualInterface();
     addFeedback("여기어때 데이터를 합칠 실행 결과가 필요합니다.", "warning");
     return;
   }
 
   const sourceText = els.yeogiImportInput.value.trim();
+  const preview = previewYeogiImport(sourceText);
   if (!sourceText) {
-    els.yeogiImportStatus.textContent = "붙여넣기 데이터가 필요합니다.";
+    setYeogiImportStatus("붙여넣기 데이터가 필요합니다.", "warning");
+    syncYeogiManualInterface();
     addFeedback("CSV, HTML, 텍스트 중 하나를 붙여넣어야 합니다.", "warning");
     return;
   }
   if (looksLikeYeogiExtractScript(sourceText)) {
-    els.yeogiImportStatus.textContent = "추출 코드가 아니라 여기어때 페이지에서 실행한 결과 CSV/HTML/텍스트를 붙여넣어야 합니다.";
+    setYeogiImportStatus("추출 코드가 아니라 여기어때 페이지에서 실행한 결과 CSV/HTML/텍스트를 붙여넣어야 합니다.", "warning");
+    syncYeogiManualInterface();
     addFeedback("결과 입력칸에 추출 코드가 들어 있어 병합을 중단했습니다.", "warning");
+    return;
+  }
+  if (!preview.ready) {
+    setYeogiImportStatus("숙소명 또는 가격 후보가 부족합니다. 여기어때 결과 화면의 텍스트나 추출 CSV를 다시 붙여넣으세요.", "warning");
+    syncYeogiManualInterface();
+    addFeedback("여기어때 붙여넣기 데이터가 부족해 병합을 중단했습니다.", "warning");
     return;
   }
 
   els.yeogiImportButton.disabled = true;
-  els.yeogiImportStatus.textContent = "여기어때 결과를 병합 중입니다.";
+  setYeogiImportStatus("여기어때 결과를 병합 중입니다.", "progress");
   addFeedback("여기어때 보조 수집 데이터를 병합합니다.", "progress");
 
   try {
@@ -1263,14 +1357,14 @@ async function submitYeogiImport() {
     renderRuns();
     renderAll();
     els.yeogiImportInput.value = "";
-    els.yeogiImportStatus.textContent = `여기어때 ${fmtNumber(result.importedCount)}건 병합 완료`;
+    setYeogiImportStatus(`여기어때 ${fmtNumber(result.importedCount)}건 병합 완료`, "ready");
     status("준비");
     addFeedback(`여기어때 ${fmtNumber(result.importedCount)}건을 현재 결과에 반영했습니다.`, "success");
   } catch (error) {
-    els.yeogiImportStatus.textContent = `병합 실패: ${error.message}`;
+    setYeogiImportStatus(`병합 실패: ${error.message}`, "error");
     addFeedback(`여기어때 병합 실패: ${error.message}`, "error");
   } finally {
-    els.yeogiImportButton.disabled = false;
+    syncYeogiManualInterface();
   }
 }
 
@@ -1329,6 +1423,10 @@ function wireEvents() {
   els.crawlForm.addEventListener("submit", submitCrawl);
   els.yeogiOpenButton.addEventListener("click", openYeogiSearch);
   els.yeogiScriptButton.addEventListener("click", copyYeogiScript);
+  els.yeogiToggleScriptButton.addEventListener("click", toggleYeogiScriptBox);
+  els.yeogiClearButton.addEventListener("click", clearYeogiImport);
+  els.yeogiImportInput.addEventListener("input", syncYeogiManualInterface);
+  els.keywordInput.addEventListener("input", syncYeogiManualInterface);
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
 }

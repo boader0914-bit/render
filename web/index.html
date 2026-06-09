@@ -78,25 +78,52 @@
       <section class="panel yeogi-panel">
         <div class="section-head">
           <h2>여기어때 수동 보완</h2>
+          <span class="manual-badge" id="yeogiManualBadge">대기</span>
         </div>
-        <p class="hint">자동수집은 차단 가능성이 높아 선택 보완 채널로 둡니다. 정상 브라우저에서 복사한 CSV/HTML/텍스트가 있을 때만 병합하세요.</p>
-        <div class="button-row">
-          <button class="secondary-button" id="yeogiOpenButton" type="button">코드 복사 후 열기</button>
-          <button class="secondary-button" id="yeogiScriptButton" type="button">추출 코드 복사</button>
+        <div class="manual-flow" aria-label="여기어때 수동 보완 단계">
+          <div class="manual-step">
+            <span class="step-index">1</span>
+            <div class="manual-step-body">
+              <strong>검색 준비</strong>
+              <span id="yeogiCurrentKeyword">현재 키워드 기준</span>
+            </div>
+            <button class="secondary-button" id="yeogiOpenButton" type="button">검색 열기</button>
+          </div>
+          <div class="manual-step">
+            <span class="step-index">2</span>
+            <div class="manual-step-body">
+              <strong>결과 추출</strong>
+              <span>복사한 코드를 여기어때 페이지에서 실행</span>
+            </div>
+            <div class="button-pair">
+              <button class="secondary-button" id="yeogiScriptButton" type="button">코드 복사</button>
+              <button class="ghost-button" id="yeogiToggleScriptButton" type="button">코드 보기</button>
+            </div>
+          </div>
+          <div class="manual-step">
+            <span class="step-index">3</span>
+            <div class="manual-step-body">
+              <strong>붙여넣기</strong>
+              <span id="yeogiPreviewStatus" aria-live="polite">결과 CSV/텍스트 대기</span>
+            </div>
+            <button class="ghost-button" id="yeogiClearButton" type="button">비우기</button>
+          </div>
         </div>
         <div class="script-fallback" id="yeogiScriptBox" hidden>
           <div class="script-fallback-head">
-            <strong>추출 코드 직접 복사</strong>
-            <span>클립보드가 막힌 경우 사용</span>
+            <strong>추출 코드</strong>
+            <span>복사가 막힐 때 직접 선택</span>
           </div>
           <textarea id="yeogiScriptOutput" rows="6" readonly></textarea>
         </div>
         <label class="field">
           <span>여기어때 결과 CSV/HTML/텍스트</span>
-          <textarea id="yeogiImportInput" rows="7" placeholder="추출 코드를 여기 넣지 말고, 여기어때 페이지에서 실행한 결과 CSV/HTML/텍스트만 붙여넣기"></textarea>
+          <textarea id="yeogiImportInput" rows="7" placeholder="여기어때 페이지에서 추출된 결과만 붙여넣기"></textarea>
         </label>
-        <button class="primary-button" id="yeogiImportButton" type="button">여기어때 결과 병합</button>
-        <p class="hint" id="yeogiImportStatus">실패해도 전체 분석에는 영향이 없습니다.</p>
+        <div class="manual-import-row">
+          <p class="manual-status" id="yeogiImportStatus" aria-live="polite">수동 보완 결과를 기다리고 있습니다.</p>
+          <button class="primary-button" id="yeogiImportButton" type="button" disabled>병합</button>
+        </div>
       </section>
 
       <section class="panel api-panel">
