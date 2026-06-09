@@ -1457,8 +1457,12 @@ async function runCrawler(payload) {
 async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
-    const publicHtml = html
-      .replace(/\s*<div class="auth-overlay" id="authOverlay" hidden>[\s\S]*?<\/div>\s*<div class="app-shell">/, "\n  <div class=\"app-shell\">")
+    const authStart = html.indexOf('  <div class="auth-overlay" id="authOverlay" hidden>');
+    const appStart = html.indexOf('  <div class="app-shell">');
+    const noAuthHtml = authStart >= 0 && appStart > authStart
+      ? `${html.slice(0, authStart)}${html.slice(appStart)}`
+      : html;
+    const publicHtml = noAuthHtml
       .replace('href="/styles.css"', 'href="/styles.css?v=public-20260609"')
       .replace('src="/app.js"', 'src="/app.js?v=public-20260609"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
