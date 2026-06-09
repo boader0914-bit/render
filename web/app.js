@@ -1,23 +1,3 @@
-function safeSessionGet(key) {
-  try {
-    return sessionStorage.getItem(key) || "";
-  } catch {
-    return "";
-  }
-}
-
-function safeSessionSet(key, value) {
-  try {
-    sessionStorage.setItem(key, value);
-  } catch {}
-}
-
-function safeSessionRemove(key) {
-  try {
-    sessionStorage.removeItem(key);
-  } catch {}
-}
-
 const state = {
   runs: [],
   data: null,
@@ -29,7 +9,6 @@ const state = {
   mapBounds: null,
   mapLoadPromise: null,
   loading: false,
-  accessPin: safeSessionGet("glampingAccessPin"),
   started: false
 };
 
@@ -122,10 +101,6 @@ const labelOffsets = {
 };
 
 const els = {
-  authOverlay: document.getElementById("authOverlay"),
-  authForm: document.getElementById("authForm"),
-  authPinInput: document.getElementById("authPinInput"),
-  authStatus: document.getElementById("authStatus"),
   runSelect: document.getElementById("runSelect"),
   refreshRuns: document.getElementById("refreshRuns"),
   crawlForm: document.getElementById("crawlForm"),
@@ -239,38 +214,9 @@ function status(text) {
   els.statusPill.textContent = text;
 }
 
-function showAuth(message = "접속 PIN을 입력하세요.") {
-  if (!els.authOverlay) return;
-  document.body.classList.add("auth-locked");
-  els.authOverlay.hidden = false;
-  els.authStatus.textContent = message;
-  setTimeout(() => els.authPinInput?.focus(), 0);
-}
-
-function hideAuth() {
-  if (!els.authOverlay) return;
-  document.body.classList.remove("auth-locked");
-  els.authOverlay.hidden = true;
-}
-
-function authorizedUrl(url) {
-  if (!state.accessPin || !url || /^(https?:)?\/\//.test(url)) return url;
-  const target = new URL(url, window.location.origin);
-  target.searchParams.set("pin", state.accessPin);
-  return `${target.pathname}${target.search}${target.hash}`;
-}
-
 async function fetchJson(url, options = {}) {
-  const { skipAuth, ...fetchOptions } = options;
-  const headers = new Headers(fetchOptions.headers || {});
-  if (!skipAuth && state.accessPin) headers.set("X-Access-Pin", state.accessPin);
-  const response = await fetch(url, { ...fetchOptions, headers });
+  const response = await fetch(url, options);
   const data = await response.json();
-  if (response.status === 401) {
-    safeSessionRemove("glampingAccessPin");
-    state.accessPin = "";
-    showAuth(data.error || "접속 PIN이 필요합니다.");
-  }
   if (!response.ok) throw new Error(data.error || "요청 실패");
   return data;
 }
@@ -1191,7 +1137,7 @@ function renderDownloads() {
     return;
   }
   els.downloadList.innerHTML = downloads.map((file) => `
-    <a class="download-item" href="${authorizedUrl(file.url)}" target="_blank" rel="noreferrer">
+    <a class="download-item" href="${file.url}" target="_blank" rel="noreferrer">
       <strong>${file.name}</strong>
       <span>열기 / 다운로드</span>
     </a>
@@ -1368,34 +1314,6 @@ async function submitYeogiImport() {
   }
 }
 
-async function submitAuth(event) {
-  event.preventDefault();
-  const pin = els.authPinInput.value.trim();
-  if (!pin) {
-    els.authStatus.textContent = "PIN을 입력하세요.";
-    return;
-  }
-
-  els.authStatus.textContent = "확인 중입니다.";
-  try {
-    await fetchJson("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pin }),
-      skipAuth: true
-    });
-    state.accessPin = pin;
-    safeSessionSet("glampingAccessPin", pin);
-    els.authPinInput.value = "";
-    hideAuth();
-    if (state.started) await loadRuns(true);
-    else await startApp();
-  } catch (error) {
-    els.authStatus.textContent = error.message;
-    els.authPinInput.select();
-  }
-}
-
 function wireEvents() {
   els.refreshRuns.addEventListener("click", () => loadRuns(true).catch((error) => {
     status("오류");
@@ -1441,33 +1359,7 @@ async function startApp() {
 }
 
 async function boot() {
-  els.authForm?.addEventListener("submit", submitAuth);
-  try {
-    const url = new URL(window.location.href);
-    const urlPin = url.searchParams.get("pin")?.trim();
-    if (urlPin) {
-      url.searchParams.delete("pin");
-      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-      await fetchJson("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin: urlPin }),
-        skipAuth: true
-      });
-      state.accessPin = urlPin;
-      safeSessionSet("glampingAccessPin", urlPin);
-    }
-
-    const auth = await fetchJson("/api/auth/status");
-    if (auth.enabled && !auth.authenticated) {
-      showAuth("접속 PIN을 입력하세요.");
-      return;
-    }
-    hideAuth();
-    await startApp();
-  } catch (error) {
-    showAuth(error.message || "접속 PIN이 필요합니다.");
-  }
+  await startApp();
 }
 
 boot().catch((error) => {

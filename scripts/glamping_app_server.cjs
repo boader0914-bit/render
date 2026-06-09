@@ -14,7 +14,6 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || ROOT);
 const OUTPUTS_DIR = path.resolve(process.env.OUTPUTS_DIR || path.join(DATA_DIR, "outputs"));
 const CONFIG_DIR = path.resolve(process.env.CONFIG_DIR || path.join(DATA_DIR, "config"));
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
-const ACCESS_FILE = path.join(CONFIG_DIR, "app_access.local.json");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.RENDER_EXTERNAL_URL ? "0.0.0.0" : "127.0.0.1");
 const DEFAULT_NODE_MODULES = path.join(
@@ -254,119 +253,6 @@ async function saveTrafficKeys(payload) {
   return trafficKeyStatus(next);
 }
 
-function hashPin(pin, salt) {
-  return crypto.createHash("sha256").update(`${salt}:${pin}`).digest("hex");
-}
-
-function authCookieHeader(req, authHash) {
-  const host = String(req.headers.host || "");
-  const forwardedProto = String(req.headers["x-forwarded-proto"] || "");
-  const secure = forwardedProto.includes("https") || host.includes("trycloudflare.com");
-  const sameSite = secure ? "SameSite=None; Secure" : "SameSite=Lax";
-  return `glamping_auth=${authHash}; Path=/; Max-Age=604800; ${sameSite}; HttpOnly`;
-}
-
-function truthyEnv(name) {
-  return /^(1|true|yes|on)$/i.test(String(process.env[name] || "").trim());
-}
-
-async function readAccessConfig() {
-  const authMode = String(process.env.APP_AUTH_MODE || "public").trim().toLowerCase();
-  if (truthyEnv("APP_AUTH_DISABLED")) {
-    return { enabled: false, source: "env-disabled", salt: "", pinHash: "", entryTokenSalt: "", entryTokenHash: "" };
-  }
-  if (authMode !== "pin") {
-    return { enabled: false, source: "default-public", salt: "", pinHash: "", entryTokenSalt: "", entryTokenHash: "" };
-  }
-
-  const envPin = String(process.env.APP_PIN || "").trim();
-  if (envPin) {
-    return {
-      enabled: true,
-      source: "env",
-      salt: "env",
-      pinHash: hashPin(envPin, "env")
-    };
-  }
-
-  if (!truthyEnv("APP_ACCESS_FILE_ENABLED")) {
-    return { enabled: false, source: "default-public", salt: "", pinHash: "", entryTokenSalt: "", entryTokenHash: "" };
-  }
-
-  try {
-    const saved = JSON.parse((await fsp.readFile(ACCESS_FILE, "utf8")).replace(/^\uFEFF/, ""));
-    return {
-      enabled: saved.enabled !== false && Boolean(saved.salt && saved.pinHash),
-      source: "file",
-      salt: String(saved.salt || ""),
-      pinHash: String(saved.pinHash || ""),
-      entryTokenSalt: String(saved.entryTokenSalt || ""),
-      entryTokenHash: String(saved.entryTokenHash || "")
-    };
-  } catch {
-    return { enabled: false, source: "none", salt: "", pinHash: "", entryTokenSalt: "", entryTokenHash: "" };
-  }
-}
-
-function timingSafeEqualText(left, right) {
-  const leftBuffer = Buffer.from(String(left || ""), "utf8");
-  const rightBuffer = Buffer.from(String(right || ""), "utf8");
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function cookieValue(req, name) {
-  const raw = String(req.headers.cookie || "");
-  return raw
-    .split(";")
-    .map((item) => item.trim())
-    .find((item) => item.startsWith(`${name}=`))
-    ?.slice(name.length + 1) || "";
-}
-
-function accessFromRequest(req, reqUrl) {
-  const auth = String(req.headers.authorization || "");
-  const pin = auth.toLowerCase().startsWith("bearer ")
-    ? auth.slice(7).trim()
-    : String(req.headers["x-access-pin"] || reqUrl.searchParams.get("pin") || "").trim();
-  return {
-    pin,
-    authHash: String(cookieValue(req, "glamping_auth") || "").trim()
-  };
-}
-
-async function verifyAccess(access) {
-  const config = await readAccessConfig();
-  if (!config.enabled) return { ok: true, enabled: false };
-  if (access?.authHash && timingSafeEqualText(access.authHash, config.pinHash)) {
-    return { ok: true, enabled: true, authHash: config.pinHash };
-  }
-  if (!access?.pin) return { ok: false, enabled: true };
-  return {
-    ok: timingSafeEqualText(hashPin(access.pin, config.salt), config.pinHash),
-    enabled: true,
-    authHash: config.pinHash
-  };
-}
-
-async function verifyEntryToken(token) {
-  const config = await readAccessConfig();
-  if (!config.enabled) return { ok: true, enabled: false, authHash: "" };
-  if (!config.entryTokenSalt || !config.entryTokenHash || !token) return { ok: false, enabled: true };
-  return {
-    ok: timingSafeEqualText(hashPin(token, config.entryTokenSalt), config.entryTokenHash),
-    enabled: true,
-    authHash: config.pinHash
-  };
-}
-
-async function requireAccess(req, res, reqUrl) {
-  const access = await verifyAccess(accessFromRequest(req, reqUrl));
-  if (access.ok) return true;
-  send(res, 401, { error: "접속 PIN이 필요합니다.", authRequired: true });
-  return false;
-}
-
 function send(res, status, body, contentType = "application/json; charset=utf-8", extraHeaders = {}) {
   const payload = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body);
   res.writeHead(status, {
@@ -375,15 +261,6 @@ function send(res, status, body, contentType = "application/json; charset=utf-8"
     ...extraHeaders
   });
   res.end(payload);
-}
-
-function redirect(res, location, extraHeaders = {}) {
-  res.writeHead(302, {
-    Location: location,
-    "Cache-Control": "no-store",
-    ...extraHeaders
-  });
-  res.end();
 }
 
 function notFound(res) {
@@ -1472,19 +1349,14 @@ async function runCrawler(payload) {
 }
 
 async function serveStatic(reqUrl, res) {
-  if (reqUrl.pathname === "/view") {
+  if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
-    const authStart = html.indexOf('  <div class="auth-overlay" id="authOverlay" hidden>');
-    const appStart = html.indexOf('  <div class="app-shell">');
-    const noAuthHtml = authStart >= 0 && appStart > authStart
-      ? `${html.slice(0, authStart)}${html.slice(appStart)}`
-      : html;
-    const publicHtml = noAuthHtml
-      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260609-yeogi"')
-      .replace('src="/app.js"', 'src="/app.js?v=public-20260609-yeogi"');
+    const publicHtml = html
+      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260609-open"')
+      .replace('src="/app.js"', 'src="/app.js?v=public-20260609-open"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
-  const filePath = reqUrl.pathname === "/" ? path.join(WEB_DIR, "index.html") : safeJoin(WEB_DIR, reqUrl.pathname);
+  const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
   if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
   const ext = path.extname(filePath).toLowerCase();
   send(res, 200, await fsp.readFile(filePath), MIME_TYPES[ext] || "application/octet-stream");
@@ -1502,57 +1374,8 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
-    if (req.method === "GET" && reqUrl.pathname.startsWith("/start/")) {
-      const token = decodeURIComponent(reqUrl.pathname.replace(/^\/start\//, "")).trim();
-      const access = await verifyEntryToken(token);
-      if (access.ok) {
-        return redirect(res, "/", {
-          "Set-Cookie": authCookieHeader(req, access.authHash)
-        });
-      }
-      return redirect(res, "/");
-    }
-
-    if (req.method === "GET" && reqUrl.searchParams.has("pin")) {
-      const incomingPin = String(reqUrl.searchParams.get("pin") || "");
-      reqUrl.searchParams.delete("pin");
-      const search = reqUrl.searchParams.toString();
-      const cleanUrl = `${reqUrl.pathname}${search ? `?${search}` : ""}${reqUrl.hash || ""}` || "/";
-      const access = await verifyAccess({ pin: incomingPin });
-      if (access.ok) {
-        return redirect(res, cleanUrl || "/", {
-          "Set-Cookie": authCookieHeader(req, access.authHash)
-        });
-      }
-      return redirect(res, cleanUrl || "/");
-    }
-
     if (req.method === "GET" && reqUrl.pathname === "/api/health") {
       return send(res, 200, { ok: true, root: ROOT, outputsDir: OUTPUTS_DIR, configDir: CONFIG_DIR });
-    }
-
-    if (req.method === "GET" && reqUrl.pathname === "/api/auth/status") {
-      const config = await readAccessConfig();
-      const access = await verifyAccess(accessFromRequest(req, reqUrl));
-      return send(res, 200, {
-        enabled: config.enabled,
-        authenticated: access.ok,
-        source: config.source
-      });
-    }
-
-    if (req.method === "POST" && reqUrl.pathname === "/api/auth/login") {
-      const payload = await parseJsonBody(req);
-      const access = await verifyAccess({ pin: String(payload.pin || "") });
-      return access.ok
-        ? send(res, 200, { ok: true }, "application/json; charset=utf-8", {
-            "Set-Cookie": authCookieHeader(req, access.authHash)
-          })
-        : send(res, 401, { error: "PIN이 맞지 않습니다.", authRequired: true });
-    }
-
-    if ((reqUrl.pathname.startsWith("/api/") || reqUrl.pathname.startsWith("/outputs/")) && !(await requireAccess(req, res, reqUrl))) {
-      return;
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
