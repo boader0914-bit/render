@@ -1455,6 +1455,14 @@ async function runCrawler(payload) {
 }
 
 async function serveStatic(reqUrl, res) {
+  if (reqUrl.pathname === "/view") {
+    const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
+    const publicHtml = html
+      .replace(/\s*<div class="auth-overlay" id="authOverlay" hidden>[\s\S]*?<\/div>\s*<div class="app-shell">/, "\n  <div class=\"app-shell\">")
+      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260609"')
+      .replace('src="/app.js"', 'src="/app.js?v=public-20260609"');
+    return send(res, 200, publicHtml, "text/html; charset=utf-8");
+  }
   const filePath = reqUrl.pathname === "/" ? path.join(WEB_DIR, "index.html") : safeJoin(WEB_DIR, reqUrl.pathname);
   if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
   const ext = path.extname(filePath).toLowerCase();
