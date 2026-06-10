@@ -41,6 +41,7 @@ select,
 textarea {
   font: inherit;
   letter-spacing: 0;
+  min-width: 0;
 }
 
 button {
@@ -877,6 +878,8 @@ h1 {
 
 .detail-panel {
   min-width: 0;
+  max-height: 760px;
+  overflow: auto;
   padding: 18px;
 }
 
@@ -958,6 +961,7 @@ h1 {
 .place-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 13px;
 }
 
@@ -967,6 +971,7 @@ h1 {
   padding: 8px 6px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 .place-table th {
@@ -984,16 +989,18 @@ h1 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 420px;
   gap: 14px;
+  align-items: start;
   margin-top: 14px;
 }
 
 .bottom-grid .panel {
+  align-self: start;
   padding: 14px;
 }
 
 .cluster-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
   gap: 8px;
 }
 
@@ -1365,7 +1372,7 @@ h1 {
 
 .platform-status-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 7px;
   padding: 0 12px 12px;
 }
@@ -1582,11 +1589,33 @@ h1 {
     max-width: calc(100vw - 24px);
   }
 
+  .detail-panel {
+    max-height: none;
+    overflow: visible;
+  }
+
   .cluster-summary,
-  .availability-list,
   .detail-kpis,
   .field-grid {
     grid-template-columns: 1fr;
+  }
+
+  .availability-list {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 0 2px 4px;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .availability-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .availability-card {
+    flex: 0 0 min(82vw, 318px);
+    scroll-snap-align: start;
   }
 
   .availability-head,
@@ -1649,7 +1678,9 @@ h1 {
   }
 
   .meta-row {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
     overflow: visible;
   }
 
@@ -1661,6 +1692,52 @@ h1 {
     justify-content: flex-start;
     white-space: nowrap;
     overflow-wrap: anywhere;
+  }
+
+  .meta-row > span {
+    width: 100%;
+    min-height: 30px;
+    justify-content: center;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .meta-row > .meta-warning {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .platform-item summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .platform-badge {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .platform-item summary::after {
+    grid-column: 2;
+    grid-row: 2;
+    justify-content: center;
+    margin-top: 6px;
+  }
+
+  .platform-status-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .platform-status {
+    min-height: 50px;
+    padding: 7px 4px;
+  }
+
+  .platform-status strong {
+    font-size: 16px;
   }
 
   .cluster-filter {
