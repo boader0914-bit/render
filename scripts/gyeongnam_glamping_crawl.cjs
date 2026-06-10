@@ -10,9 +10,32 @@ try {
   ({ Workbook: ArtifactWorkbook, SpreadsheetFile: ArtifactSpreadsheetFile } = require("@oai/artifact-tool"));
 }
 
-const CHECK_IN = process.env.CHECK_IN || "2026-06-07";
-const CHECK_OUT = process.env.CHECK_OUT || "2026-06-08";
+const PRODUCT_MODES = {
+  all: "전체",
+  lodging: "숙박",
+  campnic: "캠프닉"
+};
+
+function kstDate(offsetDays = 0) {
+  const now = new Date();
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  kst.setUTCDate(kst.getUTCDate() + offsetDays);
+  return kst.toISOString().slice(0, 10);
+}
+
+function normalizeProductMode(value) {
+  const text = String(value || "").trim();
+  if (PRODUCT_MODES[text]) return text;
+  if (text === "숙박") return "lodging";
+  if (text === "캠프닉" || text === "데이유즈" || text.toLowerCase() === "dayuse") return "campnic";
+  return "all";
+}
+
+const CHECK_IN = process.env.CHECK_IN || kstDate(0);
+const CHECK_OUT = process.env.CHECK_OUT || kstDate(1);
 const ADULTS = Number(process.env.ADULTS || 2);
+const PRODUCT_MODE = normalizeProductMode(process.env.PRODUCT_MODE || "all");
+const PRODUCT_MODE_LABEL = PRODUCT_MODES[PRODUCT_MODE];
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 
 const regionSlugMap = {
@@ -1621,7 +1644,7 @@ async function main() {
     .join(", ");
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
-    { 항목: "조건", 값: `성인 ${ADULTS}명, 1박, 체크인 ${CHECK_IN}, 체크아웃 ${CHECK_OUT}` },
+    { 항목: "조건", 값: `상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, 1박, 체크인 ${CHECK_IN}, 체크아웃 ${CHECK_OUT}` },
     { 항목: "네이버 전체", 값: `${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집` },
     { 항목: "네이버 광고", 값: `${naver.adTotal}건 수집` },
     { 항목: "네이버 지역별", 값: `${regional.rows.length}건 수집 (${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개)` },
@@ -1662,7 +1685,7 @@ async function main() {
 - 검색 키워드: ${QUERY}
 - 네이버 전체 키워드: ${NAVER_QUERY}
 - 판단 유형: ${province.isLocal ? "지역형" : "광역형"}
-- OTA 기준 조건: 성인 ${ADULTS}명, 1박, 체크인 ${CHECK_IN} / 체크아웃 ${CHECK_OUT}
+- OTA 기준 조건: 상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, 1박, 체크인 ${CHECK_IN} / 체크아웃 ${CHECK_OUT}
 - 핵심 분석 채널: 네이버, 야놀자/NOL, ONDA, 떠나요
 - 보조 채널: 여기어때(자동수집 차단 시 수동 보완만 사용)
 
@@ -1760,6 +1783,8 @@ async function main() {
     checkIn: CHECK_IN,
     checkOut: CHECK_OUT,
     adults: ADULTS,
+    productMode: PRODUCT_MODE,
+    productModeLabel: PRODUCT_MODE_LABEL,
     files: [
       `${prefix}_glamping_crawl_test.csv`,
       `${prefix}_glamping_crawl_test_report.md`,

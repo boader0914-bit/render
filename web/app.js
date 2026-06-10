@@ -52,6 +52,12 @@ const layerColors = {
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const KOREA_FULL_BOUNDS = { minLon: 124.6, maxLon: 131.9, minLat: 33.0, maxLat: 38.75 };
 const MAP_DRAW_BOX = { x: 70, y: 42, width: 780, height: 590 };
+const DEFAULT_ADULTS = 2;
+const productModeLabels = {
+  all: "전체",
+  lodging: "숙박",
+  campnic: "캠프닉"
+};
 
 const labelOffsets = {
   gyeongbuk: {
@@ -123,7 +129,7 @@ const els = {
   keywordInput: document.getElementById("keywordInput"),
   checkInInput: document.getElementById("checkInInput"),
   checkOutInput: document.getElementById("checkOutInput"),
-  adultsInput: document.getElementById("adultsInput"),
+  productModeInput: document.getElementById("productModeInput"),
   crawlStatus: document.getElementById("crawlStatus"),
   trafficApiState: document.getElementById("trafficApiState"),
   trafficKeyStatus: document.getElementById("trafficKeyStatus"),
@@ -240,18 +246,26 @@ function yeogiKeyword() {
   return spacedGlampingKeyword(activeKeyword());
 }
 
+function productModeLabel(value) {
+  return productModeLabels[value] || productModeLabels.all;
+}
+
+function activeProductMode() {
+  return state.data?.run?.productMode || els.productModeInput?.value || "all";
+}
+
 function yeogiSearchUrl() {
   const url = new URL("https://www.yeogi.com/domestic-accommodations");
   const run = state.data?.run || {};
   const checkIn = run.checkIn || els.checkInInput?.value || "";
   const checkOut = run.checkOut || els.checkOutInput?.value || "";
-  const adults = run.adults || els.adultsInput?.value || 2;
+  const adults = run.adults || DEFAULT_ADULTS;
   url.searchParams.set("freeForm", "true");
   url.searchParams.set("keyword", yeogiKeyword());
   url.searchParams.set("searchType", "KEYWORD");
   if (checkIn) url.searchParams.set("checkIn", checkIn);
   if (checkOut) url.searchParams.set("checkOut", checkOut);
-  url.searchParams.set("personal", String(Math.max(1, Number(adults || 2))));
+  url.searchParams.set("personal", String(Math.max(1, Number(adults || DEFAULT_ADULTS))));
   return url.toString();
 }
 
@@ -404,7 +418,7 @@ function setYeogiImportStatus(text, tone = "idle") {
 
 function updateYeogiKeywordLabel() {
   if (!els.yeogiCurrentKeyword) return;
-  els.yeogiCurrentKeyword.textContent = `${yeogiKeyword()} 검색 기준`;
+  els.yeogiCurrentKeyword.textContent = `${yeogiKeyword()} · ${productModeLabel(activeProductMode())} 기준`;
   if (els.yeogiLinkOutput) els.yeogiLinkOutput.value = yeogiSearchUrl();
 }
 
@@ -484,20 +498,36 @@ function addDays(date, days) {
   return next;
 }
 
+function dateFromInput(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return new Date();
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+function nextDateInput(value) {
+  return formatDateInput(addDays(dateFromInput(value), 1));
+}
+
+function ensureCheckoutAfterCheckin() {
+  if (!els.checkInInput || !els.checkOutInput) return;
+  const nextDay = nextDateInput(els.checkInInput.value);
+  els.checkOutInput.min = nextDay;
+  if (!els.checkOutInput.value || els.checkOutInput.value <= els.checkInInput.value) {
+    els.checkOutInput.value = nextDay;
+  }
+}
+
 function initializeDateInputs() {
   if (!els.checkInInput || !els.checkOutInput) return;
   const today = formatDateInput(new Date());
   const tomorrow = formatDateInput(addDays(new Date(), 1));
-  const dayAfterTomorrow = formatDateInput(addDays(new Date(), 2));
 
   els.checkInInput.min = today;
   els.checkOutInput.min = tomorrow;
   if (!els.checkInInput.value || els.checkInInput.value < today) {
-    els.checkInInput.value = tomorrow;
+    els.checkInInput.value = today;
   }
-  if (!els.checkOutInput.value || els.checkOutInput.value <= els.checkInInput.value) {
-    els.checkOutInput.value = dayAfterTomorrow;
-  }
+  ensureCheckoutAfterCheckin();
 }
 
 function normalize(value) {
@@ -754,6 +784,7 @@ function renderHeader() {
     `지역별 상위 노출 ${fmtNumber(stats.totalRegionalRows)}건`,
     `${fmtNumber(state.data.regions.length)}개 시군`,
     trafficText,
+    `상품범위 ${productModeLabel(run.productMode || "all")}`,
     "핵심채널 네이버·NOL·ONDA·떠나요",
     "본질 클러스터 기본",
     "유형·가격·광고 옵션"
@@ -1240,7 +1271,8 @@ async function submitCrawl(event) {
     keyword: els.keywordInput.value.trim(),
     checkIn: els.checkInInput.value,
     checkOut: els.checkOutInput.value,
-    adults: Number(els.adultsInput.value || 2)
+    adults: DEFAULT_ADULTS,
+    productMode: els.productModeInput?.value || "all"
   };
   if (!payload.keyword) {
     els.crawlStatus.textContent = "키워드를 입력하세요.";
@@ -1428,9 +1460,15 @@ function wireEvents() {
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.yeogiImportInput.addEventListener("input", syncYeogiManualInterface);
   els.keywordInput.addEventListener("input", syncYeogiManualInterface);
-  els.checkInInput.addEventListener("change", syncYeogiManualInterface);
-  els.checkOutInput.addEventListener("change", syncYeogiManualInterface);
-  els.adultsInput.addEventListener("input", syncYeogiManualInterface);
+  els.checkInInput.addEventListener("change", () => {
+    ensureCheckoutAfterCheckin();
+    syncYeogiManualInterface();
+  });
+  els.checkOutInput.addEventListener("change", () => {
+    ensureCheckoutAfterCheckin();
+    syncYeogiManualInterface();
+  });
+  els.productModeInput.addEventListener("change", syncYeogiManualInterface);
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
 }

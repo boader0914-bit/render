@@ -26,6 +26,26 @@ const DEFAULT_NODE_MODULES = path.join(
   "node",
   "node_modules"
 );
+const PRODUCT_MODES = {
+  all: "전체",
+  lodging: "숙박",
+  campnic: "캠프닉"
+};
+
+function kstDate(offsetDays = 0) {
+  const now = new Date();
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  kst.setUTCDate(kst.getUTCDate() + offsetDays);
+  return kst.toISOString().slice(0, 10);
+}
+
+function normalizeProductMode(value) {
+  const text = String(value || "").trim();
+  if (PRODUCT_MODES[text]) return text;
+  if (text === "숙박") return "lodging";
+  if (text === "캠프닉" || text === "데이유즈" || text.toLowerCase() === "dayuse") return "campnic";
+  return "all";
+}
 
 const PROVINCES = {
   gyeongbuk: {
@@ -324,7 +344,8 @@ async function readRunConditions(dirPath, manifest, reportFile) {
   const result = {
     checkIn: manifest?.checkIn || "",
     checkOut: manifest?.checkOut || "",
-    adults: manifest?.adults || ""
+    adults: manifest?.adults || "",
+    productMode: manifest?.productMode || ""
   };
   if ((result.checkIn && result.checkOut && result.adults) || !reportFile) return result;
 
@@ -1309,6 +1330,8 @@ async function loadRun(runId) {
       checkIn: conditions.checkIn,
       checkOut: conditions.checkOut,
       adults: conditions.adults,
+      productMode: conditions.productMode,
+      productModeLabel: PRODUCT_MODES[conditions.productMode] || PRODUCT_MODES.all,
       counts: manifest?.counts || {},
       files: {
         regional: regionalFile,
@@ -1432,9 +1455,10 @@ async function runCrawler(payload) {
 
   const env = {
     ...process.env,
-    CHECK_IN: payload.checkIn || process.env.CHECK_IN || "2026-06-07",
-    CHECK_OUT: payload.checkOut || process.env.CHECK_OUT || "2026-06-08",
+    CHECK_IN: payload.checkIn || process.env.CHECK_IN || kstDate(0),
+    CHECK_OUT: payload.checkOut || process.env.CHECK_OUT || kstDate(1),
     ADULTS: String(payload.adults || process.env.ADULTS || 2),
+    PRODUCT_MODE: normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all"),
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,
@@ -1483,8 +1507,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260610-mobile-yeogi-text-flow"')
-      .replace('src="/app.js"', 'src="/app.js?v=public-20260610-mobile-yeogi-text-flow"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260610-crawl-scope"')
+      .replace('src="/app.js"', 'src="/app.js?v=public-20260610-crawl-scope"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

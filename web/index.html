@@ -25,17 +25,21 @@
           </label>
           <div class="field-grid">
             <label class="field">
-              <span>체크인</span>
-              <input id="checkInInput" type="date" value="2026-06-07">
+              <span>체크인(수집일)</span>
+              <input id="checkInInput" type="date">
             </label>
             <label class="field">
-              <span>체크아웃</span>
-              <input id="checkOutInput" type="date" value="2026-06-08">
+              <span>체크아웃(+1일)</span>
+              <input id="checkOutInput" type="date">
             </label>
           </div>
           <label class="field">
-            <span>성인</span>
-            <input id="adultsInput" type="number" min="1" max="10" value="2">
+            <span>상품 범위</span>
+            <select id="productModeInput">
+              <option value="all">전체</option>
+              <option value="lodging">숙박</option>
+              <option value="campnic">캠프닉</option>
+            </select>
           </label>
           <button class="primary-button" type="submit">수집 실행</button>
           <p class="hint" id="crawlStatus">수집 실행은 네이버/숙박 플랫폼 접속 권한이 필요합니다.</p>
