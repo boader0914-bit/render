@@ -1301,6 +1301,7 @@ async function loadRun(runId) {
   const overallFile = files.find((file) => file.endsWith("_overall_place_rank.csv"));
   const adFile = files.find((file) => file.endsWith("_ad_place_list.csv"));
   const platformFile = files.find((file) => file.endsWith("_glamping_crawl_test.csv"));
+  const yeogiManualFile = files.find((file) => file.endsWith("_yeogi_manual_import.csv"));
   const reportFile = files.find((file) => file.endsWith("_glamping_crawl_test_report.md"));
   const conditions = await readRunConditions(dirPath, manifest, reportFile);
 
@@ -1316,6 +1317,15 @@ async function loadRun(runId) {
   const platformRows = platformFile
     ? parseCsv((await fsp.readFile(path.join(dirPath, platformFile), "utf8")).replace(/^\uFEFF/, ""))
     : [];
+  const yeogiManualRows = yeogiManualFile
+    ? parseCsv((await fsp.readFile(path.join(dirPath, yeogiManualFile), "utf8")).replace(/^\uFEFF/, ""))
+    : [];
+  const displayPlatformRows = yeogiManualRows.length
+    ? [
+        ...platformRows.filter((row) => String(row.channel || row["플랫폼"] || "") !== "여기어때"),
+        ...yeogiManualRows
+      ]
+    : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey);
   await enrichRegionsWithTraffic(regions, dirPath);
   const stats = summarizeStats(regions);
@@ -1338,14 +1348,15 @@ async function loadRun(runId) {
         overall: overallFile,
         ads: adFile,
         platform: platformFile,
+        yeogiManual: yeogiManualFile,
         report: reportFile,
         all: files
       }
     },
     stats,
     regions,
-    availability: summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...platformRows]),
-    platform: summarizePlatformRows(platformRows),
+    availability: summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows]),
+    platform: summarizePlatformRows(displayPlatformRows),
     downloads: files
       .filter((file) => /\.(csv|xlsx|md|html|png)$/i.test(file))
       .map((file) => ({
@@ -1365,11 +1376,12 @@ function summarizePlatformRows(rows) {
         count: 0,
         ads: 0,
         organic: 0,
+        manual: 0,
         failed: 0,
         other: 0,
-        statusCounts: { 광고: 0, 비광고: 0, 실패: 0, 기타: 0 },
+        statusCounts: { 광고: 0, 비광고: 0, 수동: 0, 실패: 0, 기타: 0 },
         samples: [],
-        samplesByStatus: { 광고: [], 비광고: [], 실패: [], 기타: [] }
+        samplesByStatus: { 광고: [], 비광고: [], 수동: [], 실패: [], 기타: [] }
       };
     }
 
@@ -1377,6 +1389,7 @@ function summarizePlatformRows(rows) {
     item.count += 1;
     const adValue = String(row["광고 여부"] || row["광고클러스터"] || row.ad_flag || row["광고집행클러스터"] || "");
     const statusValue = String(row["수집 상태"] || row.status || row.section || "");
+    const methodValue = String(row["수집방식"] || row.collectionMethod || "");
     const nameValue = String(row["업체명"] || row.name || "");
     const rawReasonValue = String(row["실패 원인"] || row.reason || "");
     const inferredYeogiReason =
@@ -1389,18 +1402,23 @@ function summarizePlatformRows(rows) {
         ? "제휴 API는 현실성 낮은 장기 옵션으로 두고, 단기는 사용자 브라우저 세션 기반 확인 또는 수동 CSV/HTML 가져오기로 보완합니다."
         : "");
     const failed = statusValue.includes("실패") || statusValue.includes("차단") || reasonValue.length > 0;
+    const manual = !failed && (
+      statusValue.includes("수동") ||
+      methodValue.includes("수동") ||
+      directionValue.includes("수동")
+    );
     const ad = !failed && (
       adValue === "Y" ||
       adValue.includes("광고 집행") ||
       adValue.includes("광고+비광고") ||
       (statusValue.includes("광고") && !statusValue.includes("비광고"))
     );
-    const organic = !failed && !ad && (
+    const organic = !failed && !manual && !ad && (
       adValue === "N" ||
       statusValue.includes("비광고") ||
       statusValue.includes("검색결과")
     );
-    const group = failed ? "실패" : ad ? "광고" : organic ? "비광고" : "기타";
+    const group = failed ? "실패" : manual ? "수동" : ad ? "광고" : organic ? "비광고" : "기타";
     const fallbackCoreRole =
       platform === "여기어때" ? "보조" : platform === "떠나요" ? "핵심(떠나요/ONDA)" : "핵심";
     const fallbackInventoryNote =
@@ -1440,6 +1458,7 @@ function summarizePlatformRows(rows) {
     item.statusCounts[group] += 1;
     if (group === "광고") item.ads += 1;
     else if (group === "비광고") item.organic += 1;
+    else if (group === "수동") item.manual += 1;
     else if (group === "실패") item.failed += 1;
     else item.other += 1;
 
@@ -1507,8 +1526,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260610-data-audit"')
-      .replace('src="/app.js"', 'src="/app.js?v=public-20260610-data-audit"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260610-yeogi-manual-merge"')
+      .replace('src="/app.js"', 'src="/app.js?v=public-20260610-yeogi-manual-merge"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

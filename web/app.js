@@ -1231,13 +1231,13 @@ function renderPlatforms() {
     els.platformList.innerHTML = `<div class="empty">플랫폼 수집 데이터가 없습니다.</div>`;
     return;
   }
-  const statusOrder = ["광고", "비광고", "실패", "기타"];
+  const statusOrder = ["광고", "비광고", "수동", "실패", "기타"];
   els.platformList.innerHTML = platforms.map((platform, index) => `
     <details class="platform-item ${platformRole(platform.platform)}" ${index === 0 ? "open" : ""}>
       <summary>
         <span>
           <strong>${platform.platform}</strong>
-          <small>${fmtNumber(platform.count)}건 · 광고 ${fmtNumber(platform.ads)}건 · 비광고 ${fmtNumber(platform.organic)}건 · 실패 ${fmtNumber(platform.failed)}건</small>
+          <small>${fmtNumber(platform.count)}건 · 광고 ${fmtNumber(platform.ads)}건 · 비광고 ${fmtNumber(platform.organic)}건 · 수동 ${fmtNumber(platform.manual || 0)}건 · 실패 ${fmtNumber(platform.failed)}건</small>
         </span>
         <b class="platform-badge">${platformRoleLabel(platform.platform)}</b>
       </summary>
