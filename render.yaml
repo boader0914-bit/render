@@ -22,6 +22,8 @@ services:
         value: /var/data/outputs
       - key: CONFIG_DIR
         value: /var/data/config
+      - key: APP_PIN
+        sync: false
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET
