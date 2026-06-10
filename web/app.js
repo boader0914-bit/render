@@ -508,6 +508,13 @@ function nextDateInput(value) {
   return formatDateInput(addDays(dateFromInput(value), 1));
 }
 
+function runDateNotice(run = {}) {
+  if (!run.checkIn) return "";
+  const today = formatDateInput(new Date());
+  if (run.checkIn === today) return "";
+  return `주의: 이 결과는 ${run.checkIn} 체크인 기준입니다. 현재 직접 확인값과 다를 수 있습니다.`;
+}
+
 function ensureCheckoutAfterCheckin() {
   if (!els.checkInInput || !els.checkOutInput) return;
   const nextDay = nextDateInput(els.checkInInput.value);
@@ -778,8 +785,12 @@ function renderHeader() {
   const trafficText = stats.traffic?.collectableCount
     ? `월검색 ${fmtNumber(stats.traffic.totalSearchVolume)}건`
     : "검색광고 지표 확인필요";
+  const notice = runDateNotice(run);
   els.pageTitle.textContent = `${run.label} 수요 클러스터`;
   els.metaRow.innerHTML = [
+    `체크인 ${run.checkIn || "미확인"}`,
+    `체크아웃 ${run.checkOut || "미확인"}`,
+    `기준 ${run.adults || DEFAULT_ADULTS}인`,
     `${run.provinceLabel} 지도`,
     `지역별 상위 노출 ${fmtNumber(stats.totalRegionalRows)}건`,
     `${fmtNumber(state.data.regions.length)}개 시군`,
@@ -787,8 +798,9 @@ function renderHeader() {
     `상품범위 ${productModeLabel(run.productMode || "all")}`,
     "핵심채널 네이버·NOL·ONDA·떠나요",
     "본질 클러스터 기본",
-    "유형·가격·광고 옵션"
-  ].map((text) => `<span>${text}</span>`).join("");
+    "유형·가격·광고 옵션",
+    notice ? `<span class="meta-warning">${notice}</span>` : ""
+  ].filter(Boolean).map((text) => text.startsWith("<span") ? text : `<span>${text}</span>`).join("");
 }
 
 function platformRole(platformName) {
@@ -823,9 +835,9 @@ function renderAnalysisStrip() {
       note: `${fmtNumber(coreCount)}건 수집`
     },
     {
-      kicker: "예약가능률",
+      kicker: "네이버예약 가능률",
       value: checkedPlaces ? fmtAvailabilityRate(availabilityStats.weightedRate) : "확인필요",
-      note: `네이버 숙박재고 ${fmtNumber(checkedPlaces)}곳`
+      note: `날짜·채널 기준 ${fmtNumber(checkedPlaces)}곳`
     },
     {
       kicker: "재고 해석",
@@ -893,7 +905,7 @@ function renderAvailability() {
   if (!items.length) {
     els.availabilityPanel.innerHTML = `
       <div class="section-head">
-        <h2>네이버 상위 업체 예약가능률</h2>
+        <h2>네이버예약 채널 가능률</h2>
       </div>
       <div class="empty">네이버예약 재고 확인 데이터가 없습니다.</div>
     `;
@@ -901,11 +913,12 @@ function renderAvailability() {
   }
 
   const stats = availability.stats || {};
+  const run = state.data?.run || {};
   els.availabilityPanel.innerHTML = `
     <div class="section-head availability-head">
       <div>
-        <h2>네이버 상위 업체 예약가능률</h2>
-        <p>네이버예약 채널의 날짜별 숙박재고 기준 · 실제 전체 객실수와 다를 수 있음 · 데이유즈는 별도 표시</p>
+        <h2>네이버예약 채널 가능률</h2>
+        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · 네이버예약 채널의 숙박재고만 반영 · 실제 전체 객실수와 다를 수 있음 · 데이유즈는 별도 표시</p>
       </div>
       <div class="availability-summary">
         <span><strong>${fmtAvailabilityRate(stats.weightedRate)}</strong>전체</span>

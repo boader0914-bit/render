@@ -549,6 +549,17 @@ h1 {
   padding: 0 9px;
 }
 
+.meta-row > .meta-warning {
+  width: 100%;
+  min-height: 38px;
+  border-color: rgba(230, 126, 34, .35);
+  background: #fff7eb;
+  color: #995b11;
+  font-weight: 800;
+  line-height: 1.35;
+  word-break: keep-all;
+}
+
 .status-pill {
   white-space: nowrap;
   font-weight: 700;
