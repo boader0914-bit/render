@@ -1,6 +1,7 @@
 const YEOGI_CATEGORY_RE = /(?:풀빌라\s*펜션|비즈니스\s*호텔|레지던스\s*호텔|관광\s*호텔|모텔|호텔|펜션|캠핑|리조트|게스트하우스|한옥|카라반)/i;
 const YEOGI_CATEGORY_START_RE = /^(?:풀빌라\s*펜션|비즈니스\s*호텔|레지던스\s*호텔|관광\s*호텔|모텔|호텔|펜션|캠핑|리조트|게스트하우스|한옥|카라반)\s*/i;
 const YEOGI_PRICE_RE = /(?:\d{1,3},)*\d{1,3}\s*원\s*~?|(?:\d{1,3},)+\d{3}/g;
+const GENERIC_NAME_WORD_RE = /글램핑|캠핑|카라반|펜션|리조트|호텔|모텔|풀빌라|캠프|스테이|숙박|숙소|한옥|게스트하우스|야영장|camping|glamping|camp|glamp|stay|hotel|resort|pension/gi;
 
 function parseCsv(text) {
   const rows = [];
@@ -104,6 +105,15 @@ function cleanYeogiName(value) {
     .trim();
 }
 
+function isGenericYeogiName(value) {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  const residual = text
+    .replace(GENERIC_NAME_WORD_RE, "")
+    .replace(/[^0-9A-Za-z가-힣]/g, "");
+  return residual.length === 0;
+}
+
 function parseYeogiCompactLine(line) {
   const text = String(line || "").replace(/\s+/g, " ").trim();
   if (!YEOGI_CATEGORY_RE.test(text)) return null;
@@ -126,7 +136,7 @@ function parseYeogiCompactLine(line) {
   }
 
   const name = cleanYeogiName(nameSource);
-  if (!name || name.length < 2 || name.length > 80) return null;
+  if (!name || name.length < 2 || name.length > 80 || isGenericYeogiName(name)) return null;
 
   const soldOut = /예약마감|예약완료|마감|매진|품절|sold\s*out|unavailable|다른 날짜 확인/i.test(text);
   return {
@@ -208,7 +218,7 @@ function parseYeogiCsvImport(text) {
         raw
       };
     })
-    .filter((row) => row.name);
+    .filter((row) => row.name && !isGenericYeogiName(row.name));
 }
 
 function looksLikeYeogiCsvHeader(line) {
@@ -227,6 +237,7 @@ function looksLikeYeogiCsvHeader(line) {
 function isLikelyPlaceName(line) {
   const text = String(line || "").trim();
   if (text.length < 2 || text.length > 70) return false;
+  if (isGenericYeogiName(text)) return false;
   if (!/[가-힣A-Za-z0-9]/.test(text)) return false;
   if (/원|예약|쿠폰|할인|로그인|회원|검색|필터|지도|정렬|성인|아동|입실|퇴실|후기|리뷰|평점|무료취소/.test(text)) return false;
   return /글램핑|캠핑|카라반|펜션|풀빌라|리조트|호텔|스테이|빌리지|캠프|camp|glamp/i.test(text);
@@ -240,7 +251,7 @@ function parseYeogiTextImport(text) {
 
   const addRow = (row) => {
     if (!row?.name) return;
-    const key = `${row.name}|${row.price || ""}`.replace(/\s+/g, "").toLowerCase();
+    const key = row.name.replace(/\s+/g, "").toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
     rows.push({ ...row, rank: row.rank || String(rows.length + 1) });
@@ -258,7 +269,7 @@ function parseYeogiTextImport(text) {
     const end = Math.min(lines.length, index + 5);
     const windowLines = lines.slice(start, end);
     const before = lines.slice(start, index).reverse();
-    const name = before.find(isLikelyPlaceName) || windowLines.find(isLikelyPlaceName) || "";
+    const name = before.find(isLikelyPlaceName) || "";
     if (!name) return;
     const price = line.match(pricePattern)?.[0] || line;
     const raw = windowLines.join(" / ");
@@ -315,7 +326,7 @@ function parseYeogiImport(text) {
   const firstLine = source.replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0] || "";
   const csvLike = looksLikeYeogiCsvHeader(firstLine);
   const rows = csvLike ? parseYeogiCsvImport(source) : parseYeogiTextImport(source);
-  return rows.filter((row) => row.name);
+  return rows.filter((row) => row.name && !isGenericYeogiName(row.name));
 }
 
 module.exports = {

@@ -59,6 +59,24 @@ assert.deepEqual(pick(compactRows), [
 const singleLineText = "캠핑포천 해핑글램핑포천시4.732명 평가120,000원이 가격으로 남은 객실 1개카라반안성 M글램핑카라반안성시4.913명 평가150,000원";
 assert.deepEqual(names(parseYeogiImport(singleLineText)), ["포천 해핑글램핑", "안성 M글램핑카라반"]);
 
+const genericNameCsvText = [
+  "rank,name,price,location,reservation_available,raw",
+  '1,"글램핑","280,000원","","Y","generic category noise"',
+  '2,"캠핑","50,000원","","Y","generic category noise"',
+  '3,"산청 지리산리조트글램핑","180,000원","산청군","Y","valid place"'
+].join("\n");
+assert.deepEqual(names(parseYeogiImport(genericNameCsvText)), ["산청 지리산리조트글램핑"]);
+
+const genericNameText = [
+  "글램핑",
+  "280,000원",
+  "캠핑",
+  "50,000원",
+  "산청 지리산리조트글램핑",
+  "180,000원"
+].join("\n");
+assert.deepEqual(names(parseYeogiImport(genericNameText)), ["산청 지리산리조트글램핑"]);
+
 const csvText = [
   "rank,name,price,location,reservation_available,raw",
   '1,"포천 해핑글램핑","120,000원","포천시","Y","쿠폰, 객실 1개"',

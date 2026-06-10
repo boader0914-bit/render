@@ -17,6 +17,8 @@ const CONFIG_DIR = path.resolve(process.env.CONFIG_DIR || path.join(DATA_DIR, "c
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.RENDER_EXTERNAL_URL ? "0.0.0.0" : "127.0.0.1");
+const APP_PIN = String(process.env.APP_PIN || "").trim();
+const APP_USER = String(process.env.APP_USER || "admin").trim() || "admin";
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
@@ -274,14 +276,92 @@ async function saveTrafficKeys(payload) {
   return trafficKeyStatus(next);
 }
 
+function securityHeaders() {
+  return {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "connect-src 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'"
+    ].join("; ")
+  };
+}
+
 function send(res, status, body, contentType = "application/json; charset=utf-8", extraHeaders = {}) {
   const payload = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body);
   res.writeHead(status, {
+    ...securityHeaders(),
     "Content-Type": contentType,
     "Cache-Control": "no-store",
     ...extraHeaders
   });
   res.end(payload);
+}
+
+function sendHead(res, status, contentType = "application/json; charset=utf-8", extraHeaders = {}) {
+  res.writeHead(status, {
+    ...securityHeaders(),
+    "Content-Type": contentType,
+    "Cache-Control": "no-store",
+    ...extraHeaders
+  });
+  res.end();
+}
+
+function secureEqualText(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function parseBasicAuth(req) {
+  const header = String(req.headers.authorization || "");
+  if (!header.toLowerCase().startsWith("basic ")) return null;
+  try {
+    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
+    const separator = decoded.indexOf(":");
+    if (separator < 0) return { user: decoded, password: "" };
+    return {
+      user: decoded.slice(0, separator),
+      password: decoded.slice(separator + 1)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isPublicPath(pathname) {
+  return pathname === "/api/health";
+}
+
+function isAuthorized(req) {
+  if (!APP_PIN) return true;
+  const auth = parseBasicAuth(req);
+  if (!auth) return false;
+  const pinMatches = secureEqualText(auth.password, APP_PIN) || secureEqualText(auth.user, APP_PIN);
+  const userMatches = !auth.password || secureEqualText(auth.user, APP_USER) || secureEqualText(auth.password, APP_PIN);
+  return pinMatches && userMatches;
+}
+
+function unauthorized(res) {
+  return send(
+    res,
+    401,
+    { error: "Authentication required" },
+    "application/json; charset=utf-8",
+    {
+      "WWW-Authenticate": 'Basic realm="Glamping Cluster", charset="UTF-8"'
+    }
+  );
 }
 
 function notFound(res) {
@@ -1548,8 +1628,17 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
-    if (req.method === "GET" && reqUrl.pathname === "/api/health") {
-      return send(res, 200, { ok: true, root: ROOT, outputsDir: OUTPUTS_DIR, configDir: CONFIG_DIR });
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
+      if (req.method === "HEAD") return sendHead(res, 200);
+      return send(res, 200, { ok: true, authRequired: Boolean(APP_PIN) });
+    }
+
+    if (!isPublicPath(reqUrl.pathname) && !isAuthorized(req)) {
+      return unauthorized(res);
+    }
+
+    if (req.method === "HEAD" && (reqUrl.pathname === "/" || reqUrl.pathname === "/view")) {
+      return sendHead(res, 200, "text/html; charset=utf-8");
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
