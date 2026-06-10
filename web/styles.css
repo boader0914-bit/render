@@ -442,6 +442,28 @@ button:focus {
   color: #b4232f;
 }
 
+.manual-advanced {
+  margin: 0 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.manual-advanced summary {
+  cursor: pointer;
+  color: #4e5968;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.manual-advanced p {
+  margin: 8px 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .script-fallback {
   display: grid;
   gap: 8px;

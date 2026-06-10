@@ -1309,27 +1309,12 @@ async function copyYeogiScript() {
   const script = csvExtractScript();
   try {
     await navigator.clipboard.writeText(script);
-    setYeogiImportStatus("추출 코드가 복사되었습니다. 여기어때 결과 페이지에서 실행한 뒤 나온 CSV를 앱에 붙여넣으세요.", "check");
-    addFeedback("여기어때 브라우저 추출 코드를 복사했습니다.", "success");
+    setYeogiImportStatus("PC용 추출 코드가 복사되었습니다. 여기어때 결과 페이지 콘솔에서 실행한 뒤 나온 CSV를 붙여넣으세요.", "check");
+    addFeedback("PC용 여기어때 추출 코드를 복사했습니다.", "success");
   } catch (error) {
     showYeogiScriptFallback(script);
     setYeogiImportStatus("클립보드 복사가 막혀 아래 코드 박스에 표시했습니다.", "warning");
     addFeedback("클립보드 복사가 막혀 추출 코드를 별도 박스에 표시했습니다.", "warning");
-  }
-}
-
-async function copyYeogiScriptBeforeOpen() {
-  const script = csvExtractScript();
-  try {
-    await navigator.clipboard.writeText(script);
-    setYeogiImportStatus("추출 코드를 먼저 복사했습니다. 여기어때 검색을 엽니다.", "check");
-    addFeedback("추출 코드를 먼저 복사한 뒤 여기어때를 엽니다.", "success");
-    return true;
-  } catch (error) {
-    showYeogiScriptFallback(script);
-    setYeogiImportStatus("코드 복사가 막혀 검색을 열지 않았습니다. 아래 코드 박스에서 직접 복사한 뒤 다시 열어주세요.", "warning");
-    addFeedback("코드 복사가 막혀 새 탭 열기를 멈췄습니다.", "warning");
-    return false;
   }
 }
 
@@ -1338,7 +1323,7 @@ async function copyYeogiSearchLink() {
   try {
     await navigator.clipboard.writeText(url);
     if (els.yeogiLinkBox) els.yeogiLinkBox.hidden = true;
-    setYeogiImportStatus("검색 링크만 복사했습니다. 모바일에서 코드를 쓸 예정이면 '코드 복사 후 열기'를 사용하세요.", "check");
+    setYeogiImportStatus("검색 링크만 복사했습니다. 모바일에서는 결과 화면을 직접 열어 텍스트를 복사하는 흐름이 기본입니다.", "check");
     addFeedback("여기어때 검색 링크만 복사했습니다.", "success");
   } catch (error) {
     showYeogiLinkFallback(url);
@@ -1349,11 +1334,9 @@ async function copyYeogiSearchLink() {
 
 async function openYeogiSearch() {
   const url = yeogiSearchUrl();
-  const copied = await copyYeogiScriptBeforeOpen();
-  if (!copied) return;
   window.open(url, "_blank", "noopener,noreferrer");
-  setYeogiImportStatus("코드를 복사한 뒤 여기어때를 열었습니다. 코드 실행이 어렵다면 결과 화면 텍스트를 복사해 앱에 붙여넣으세요.", "check");
-  addFeedback("코드 복사 후 여기어때 검색 페이지를 열었습니다.", "info");
+  setYeogiImportStatus("여기어때 결과 화면을 열었습니다. 모바일에서는 그 화면의 숙소 목록 텍스트를 복사한 뒤 앱으로 돌아와 붙여넣으세요.", "check");
+  addFeedback("여기어때 결과 화면을 열었습니다.", "info");
 }
 
 async function submitYeogiImport() {
