@@ -178,9 +178,20 @@ function fmtAvailability(place) {
   const rate = Number(place.availabilityRate);
   if (Number.isFinite(available) && Number.isFinite(total) && total > 0) {
     const rateText = Number.isFinite(rate) ? ` · ${(rate * 100).toFixed(0)}%` : "";
-    return `숙박재고 ${available}/${total}${rateText}`;
+    return `예약가능 ${available}/${total}${rateText}`;
   }
   return "확인불가";
+}
+
+function fmtSoldOut(item) {
+  const soldOut = Number(item.soldOutRooms);
+  const total = Number(item.totalRooms);
+  const rate = Number(item.soldOutRate);
+  if (Number.isFinite(soldOut) && Number.isFinite(total) && total > 0) {
+    const resolvedRate = Number.isFinite(rate) ? rate : soldOut / total;
+    return `판매완료/마감 ${fmtNumber(soldOut)}/${fmtNumber(total)} · ${fmtAvailabilityRate(resolvedRate)}`;
+  }
+  return "";
 }
 
 function fmtDayUseStock(item) {
@@ -917,13 +928,13 @@ function renderAvailability() {
   els.availabilityPanel.innerHTML = `
     <div class="section-head availability-head">
       <div>
-        <h2>네이버예약 채널 가능률</h2>
-        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · 네이버예약 채널의 숙박재고만 반영 · 실제 전체 객실수와 다를 수 있음 · 데이유즈는 별도 표시</p>
+        <h2>네이버예약 채널 예약가능률</h2>
+        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · 판매율이 아닌 예약가능률 · 네이버예약 채널의 숙박 상품/재고만 반영 · 데이유즈는 별도 표시</p>
       </div>
       <div class="availability-summary">
-        <span><strong>${fmtAvailabilityRate(stats.weightedRate)}</strong>전체</span>
+        <span><strong>${fmtAvailabilityRate(stats.weightedRate)}</strong>예약가능률</span>
         <span><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong>업체</span>
-        <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>숙박재고</span>
+        <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>예약가능</span>
       </div>
     </div>
     <div class="availability-list">
@@ -935,11 +946,12 @@ function renderAvailability() {
             <div class="availability-card-top">
               <span class="availability-rank">${item.rank || "-"}</span>
               <strong>${item.name}</strong>
-              <b>${fmtAvailabilityRate(item.rate)}</b>
+              <b><span>예약가능률</span>${fmtAvailabilityRate(item.rate)}</b>
             </div>
             <div class="availability-meter"><span style="width:${width}%"></span></div>
             <div class="availability-meta">
-              <span>숙박재고 ${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)}</span>
+              <span>예약가능 ${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)}${item.availabilityUnit ? ` ${item.availabilityUnit}` : ""}</span>
+              ${fmtSoldOut(item) ? `<span>${fmtSoldOut(item)}</span>` : ""}
               ${fmtDayUseStock(item) ? `<span>${fmtDayUseStock(item)}</span>` : ""}
               <span>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</span>
               <span>${item.region || "지역 확인"}</span>
@@ -976,6 +988,7 @@ function renderLayerControls() {
   });
 
   const palette = layerColors[state.layer] || coreColors;
+  els.legend.hidden = state.layer === "core";
   els.legend.innerHTML = Object.entries(palette).map(([name, color]) => `
     <span><span class="dot" style="background:${color}"></span>${name}</span>
   `).join("");

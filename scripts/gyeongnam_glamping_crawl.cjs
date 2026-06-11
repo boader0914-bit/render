@@ -745,10 +745,21 @@ function naverBookingSaleType(item) {
   return "미분류";
 }
 
+function naverGroupedRoomCount(value) {
+  const text = String(value || "");
+  const match = text.match(/(?:^|[^0-9])(?:[A-Za-z가-힣]+[_-]?)?(\d+)\s*[~～-]\s*(\d+)(?:[^0-9]|$)/);
+  if (!match) return 0;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  return end - start + 1;
+}
+
 function classifyNaverBookingList(items, schedules) {
   const totalStock = schedules.reduce((sum, item) => sum + Math.max(0, asStockNumber(item.stock) || 0), 0);
   const names = items.map((item) => String(item.name || ""));
   const unitNameCount = names.filter((name) => /\d+\s*(호|번|동)|[A-Z]-?\d+/i.test(name)).length;
+  if (names.some((name) => naverGroupedRoomCount(name) > 1)) return "객실 묶음 상품리스트";
   if (totalStock > items.length) return "객실 종류별 리스트";
   if (unitNameCount >= Math.max(1, Math.ceil(items.length * 0.4))) return "객실별 예약리스트";
   if (schedules.length && schedules.every((item) => (asStockNumber(item.stock) || 0) <= 1)) return "객실별 예약리스트";
@@ -758,8 +769,12 @@ function classifyNaverBookingList(items, schedules) {
 function summarizeNaverScheduleGroup(items, schedules, listType) {
   let totalStock = 0;
   let availableStock = 0;
+  let rawTotalStock = 0;
+  let rawAvailableStock = 0;
+  let groupedRoomCount = 0;
   let minPrice = null;
   let knownStockCount = 0;
+  const groupedProductList = listType === "객실 묶음 상품리스트";
 
   for (const schedule of schedules) {
     const stock = asStockNumber(schedule.stock);
@@ -767,12 +782,17 @@ function summarizeNaverScheduleGroup(items, schedules, listType) {
     const occupiedBookingCount = Math.max(0, asStockNumber(schedule.occupiedBookingCount) || 0);
     const usedCount = bookingCount + occupiedBookingCount;
     const price = asStockNumber(schedule.price);
+    const open = schedule.isBusinessDay !== false && schedule.isSaleDay !== false;
     if (price !== null && price > 0) minPrice = minPrice === null ? price : Math.min(minPrice, price);
+    groupedRoomCount += naverGroupedRoomCount(schedule.name);
+    if (stock !== null && stock >= 0) {
+      rawTotalStock += stock;
+      rawAvailableStock += open ? Math.max(0, stock - usedCount) : 0;
+    }
 
-    if (listType === "객실별 예약리스트") {
+    if (listType === "객실별 예약리스트" || groupedProductList) {
       knownStockCount += stock !== null && stock >= 0 ? 1 : 0;
       totalStock += 1;
-      const open = schedule.isBusinessDay !== false && schedule.isSaleDay !== false;
       const available = stock === null
         ? open && price !== null
         : open && Math.max(0, stock - usedCount) > 0;
@@ -787,9 +807,8 @@ function summarizeNaverScheduleGroup(items, schedules, listType) {
       continue;
     }
 
-    const open = schedule.isBusinessDay !== false && schedule.isSaleDay !== false && price !== null;
     totalStock += 1;
-    if (open) availableStock += 1;
+    if (open && price !== null) availableStock += 1;
   }
 
   return {
@@ -798,6 +817,11 @@ function summarizeNaverScheduleGroup(items, schedules, listType) {
     availableStock,
     totalStock,
     rate: totalStock ? Number((availableStock / totalStock).toFixed(3)) : null,
+    soldOutStock: totalStock ? Math.max(0, totalStock - availableStock) : 0,
+    soldOutRate: totalStock ? Number(((totalStock - availableStock) / totalStock).toFixed(3)) : null,
+    rawAvailableStock,
+    rawTotalStock,
+    groupedRoomCount,
     minPrice,
     knownStockCount,
   };
@@ -814,12 +838,24 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   const minPrice = minPrices.length ? Math.min(...minPrices) : null;
   const evidence = !nightSummary.totalStock
     ? "날짜별 객실 재고 확인불가"
+    : listType === "객실 묶음 상품리스트"
+      ? `${listType}: ${CHECK_IN} 기준 네이버 숙박 묶음 상품별 예약가능 여부로 계산 (${nightSummary.knownStockCount}/${schedules.length}개 상품 stock 확인). 내부 stock 합계 ${nightSummary.rawAvailableStock}/${nightSummary.rawTotalStock}는 검증용이며 전체상품수량으로 표시하지 않음.`
     : listType === "객실별 예약리스트"
       ? `${listType}: ${CHECK_IN} 기준 네이버 숙박 예약가능 상품 수 / 노출 객실 상품 수 (${nightSummary.knownStockCount}/${schedules.length}개 상품 stock 확인). 전체 보유 객실수 아님.`
       : `${listType}: ${CHECK_IN} 기준 네이버 숙박 상품별 stock - bookingCount - occupiedBookingCount 수량 합산 (${nightSummary.knownStockCount}/${schedules.length}개 상품 stock 확인). 전체 보유 객실수 아님.`;
+  const availabilityUnit = listType === "객실 묶음 상품리스트"
+    ? "묶음상품"
+    : listType === "객실별 예약리스트"
+      ? "객실상품"
+      : "재고수량";
+  const rawStockNote = nightSummary.rawTotalStock && nightSummary.rawTotalStock !== nightSummary.totalStock
+    ? `원시stock ${nightSummary.rawAvailableStock}/${nightSummary.rawTotalStock}`
+    : "";
   const productTypeSummary = [
     `숙박상품 ${itemCounts.night || 0}종`,
-    nightSummary.totalStock ? `숙박재고 ${nightSummary.availableStock}/${nightSummary.totalStock}` : "",
+    nightSummary.totalStock ? `예약가능 ${nightSummary.availableStock}/${nightSummary.totalStock}${availabilityUnit ? ` ${availabilityUnit}` : ""}` : "",
+    nightSummary.soldOutStock || nightSummary.totalStock ? `판매완료/마감 ${nightSummary.soldOutStock}/${nightSummary.totalStock}` : "",
+    rawStockNote,
     `데이유즈상품 ${itemCounts.dayUse || 0}종`,
     dayUseSummary.totalStock ? `데이유즈재고 ${dayUseSummary.availableStock}/${dayUseSummary.totalStock}` : "",
     `미분류 ${itemCounts.unknown || 0}종`,
@@ -827,6 +863,7 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   const inventoryMemo = [
     "네이버예약 날짜/채널 기준 재고",
     "실제 전체 객실수와 다를 수 있음",
+    listType === "객실 묶음 상품리스트" ? "객실번호 범위형 묶음 상품은 상품 단위로 계산" : "",
     dayUseSummary.totalStock ? `데이유즈는 숙박 예약가능률 계산에서 제외(${dayUseSummary.availableStock}/${dayUseSummary.totalStock})` : "",
   ].filter(Boolean).join(" · ");
   return {
@@ -846,6 +883,12 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
     nightAvailableStock: nightSummary.availableStock,
     nightTotalStock: nightSummary.totalStock,
     nightAvailabilityRate: nightSummary.rate,
+    nightSoldOutStock: nightSummary.soldOutStock,
+    nightSoldOutRate: nightSummary.soldOutRate,
+    nightRawAvailableStock: nightSummary.rawAvailableStock,
+    nightRawTotalStock: nightSummary.rawTotalStock,
+    groupedRoomCount: nightSummary.groupedRoomCount,
+    availabilityUnit,
     dayUseAvailableStock: dayUseSummary.availableStock,
     dayUseTotalStock: dayUseSummary.totalStock,
     dayUseAvailabilityRate: dayUseSummary.rate,
@@ -975,6 +1018,12 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.숙박예약가능수 = result.nightAvailableStock ?? "";
       row.숙박확인재고수 = result.nightTotalStock ?? "";
       row.숙박예약가능률 = result.nightAvailabilityRate === null || result.nightAvailabilityRate === undefined ? "" : result.nightAvailabilityRate;
+      row.숙박판매완료수 = result.nightSoldOutStock ?? "";
+      row.숙박판매완료율 = result.nightSoldOutRate === null || result.nightSoldOutRate === undefined ? "" : result.nightSoldOutRate;
+      row.네이버원시예약가능재고 = result.nightRawAvailableStock ?? "";
+      row.네이버원시전체재고 = result.nightRawTotalStock ?? "";
+      row.네이버묶음객실범위수 = result.groupedRoomCount ?? "";
+      row.예약계산단위 = result.availabilityUnit || "";
       row.데이유즈예약가능수 = result.dayUseAvailableStock ?? "";
       row.데이유즈확인재고수 = result.dayUseTotalStock ?? "";
       row.데이유즈예약가능률 = result.dayUseAvailabilityRate === null || result.dayUseAvailabilityRate === undefined ? "" : result.dayUseAvailabilityRate;
@@ -1203,7 +1252,7 @@ function setNaverInventoryAuditFields(row) {
   row.핵심분석채널 = "핵심";
   row.채널재고해석 = "네이버예약은 ONDA/떠나요 등 전 채널 연동 재고와 분리 운영될 수 있어 네이버 날짜별 재고를 독립 기준으로 확인";
   row.전체객실수확인상태 = row.숙박확인재고수 || row.확인객실수
-    ? `${row.숙박확인재고수 || row.확인객실수}개(네이버 숙박재고, 전체 객실수 아님)`
+    ? `${row.숙박확인재고수 || row.확인객실수}개(${row.예약계산단위 || "네이버 숙박재고"} 기준, 전체 객실수 아님)`
     : row.네이버예약재고수집상태 || "미확인";
   row.채널수확인상태 = row.네이버예약사업자ID ? "네이버예약 채널 단독 확인" : "네이버예약 채널 미확인";
   row.네이버분리확인 = "네이버 분리 가능성 있음";
@@ -1215,7 +1264,7 @@ function platformInventoryAuditFields(channel, row = {}) {
       핵심분석채널: "핵심",
       채널재고해석: "네이버예약은 ONDA/떠나요 등 전 채널 연동 재고와 분리 운영될 수 있어 네이버 날짜별 재고를 독립 기준으로 확인",
       전체객실수확인상태: row["숙박확인재고수"] || row["확인객실수"]
-        ? `${row["숙박확인재고수"] || row["확인객실수"]}개(네이버 숙박재고, 전체 객실수 아님)`
+        ? `${row["숙박확인재고수"] || row["확인객실수"]}개(${row["예약계산단위"] || "네이버 숙박재고"} 기준, 전체 객실수 아님)`
         : "미확인",
       채널수확인상태: row["네이버예약사업자ID"] ? "네이버예약 채널 단독 확인" : "네이버예약 채널 미확인",
       네이버분리확인: "네이버 분리 가능성 있음",
@@ -1274,6 +1323,12 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "숙박예약가능수": row.숙박예약가능수 ?? "",
       "숙박확인재고수": row.숙박확인재고수 ?? "",
       "숙박예약가능률": row.숙박예약가능률 ?? "",
+      "숙박판매완료수": row.숙박판매완료수 ?? "",
+      "숙박판매완료율": row.숙박판매완료율 ?? "",
+      "예약계산단위": row.예약계산단위 || "",
+      "네이버원시예약가능재고": row.네이버원시예약가능재고 ?? "",
+      "네이버원시전체재고": row.네이버원시전체재고 ?? "",
+      "네이버묶음객실범위수": row.네이버묶음객실범위수 ?? "",
       "데이유즈예약가능수": row.데이유즈예약가능수 ?? "",
       "데이유즈확인재고수": row.데이유즈확인재고수 ?? "",
       "데이유즈예약가능률": row.데이유즈예약가능률 ?? "",
@@ -1306,6 +1361,12 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "숙박예약가능수": row.숙박예약가능수 ?? "",
       "숙박확인재고수": row.숙박확인재고수 ?? "",
       "숙박예약가능률": row.숙박예약가능률 ?? "",
+      "숙박판매완료수": row.숙박판매완료수 ?? "",
+      "숙박판매완료율": row.숙박판매완료율 ?? "",
+      "예약계산단위": row.예약계산단위 || "",
+      "네이버원시예약가능재고": row.네이버원시예약가능재고 ?? "",
+      "네이버원시전체재고": row.네이버원시전체재고 ?? "",
+      "네이버묶음객실범위수": row.네이버묶음객실범위수 ?? "",
       "데이유즈예약가능수": row.데이유즈예약가능수 ?? "",
       "데이유즈확인재고수": row.데이유즈확인재고수 ?? "",
       "데이유즈예약가능률": row.데이유즈예약가능률 ?? "",
@@ -1464,6 +1525,12 @@ async function main() {
     "숙박예약가능수",
     "숙박확인재고수",
     "숙박예약가능률",
+    "숙박판매완료수",
+    "숙박판매완료율",
+    "예약계산단위",
+    "네이버원시예약가능재고",
+    "네이버원시전체재고",
+    "네이버묶음객실범위수",
     "데이유즈예약가능수",
     "데이유즈확인재고수",
     "데이유즈예약가능률",
@@ -1518,6 +1585,12 @@ async function main() {
     "숙박예약가능수",
     "숙박확인재고수",
     "숙박예약가능률",
+    "숙박판매완료수",
+    "숙박판매완료율",
+    "예약계산단위",
+    "네이버원시예약가능재고",
+    "네이버원시전체재고",
+    "네이버묶음객실범위수",
     "데이유즈예약가능수",
     "데이유즈확인재고수",
     "데이유즈예약가능률",
@@ -1574,6 +1647,12 @@ async function main() {
     "숙박예약가능수",
     "숙박확인재고수",
     "숙박예약가능률",
+    "숙박판매완료수",
+    "숙박판매완료율",
+    "예약계산단위",
+    "네이버원시예약가능재고",
+    "네이버원시전체재고",
+    "네이버묶음객실범위수",
     "데이유즈예약가능수",
     "데이유즈확인재고수",
     "데이유즈예약가능률",
@@ -1628,6 +1707,12 @@ async function main() {
     "숙박예약가능수",
     "숙박확인재고수",
     "숙박예약가능률",
+    "숙박판매완료수",
+    "숙박판매완료율",
+    "예약계산단위",
+    "네이버원시예약가능재고",
+    "네이버원시전체재고",
+    "네이버묶음객실범위수",
     "데이유즈예약가능수",
     "데이유즈확인재고수",
     "데이유즈예약가능률",
@@ -1692,7 +1777,9 @@ async function main() {
 ## 객실수/채널수 해석 원칙
 - ONDA·떠나요처럼 전 채널 연동이 가능한 구조라도 네이버예약은 별도 재고로 분리 운영될 수 있다.
 - 예약가능률은 채널 통합 재고로 단정하지 않고, 네이버/야놀자/NOL/ONDA/떠나요의 채널별 노출·재고 기준을 분리해 기록한다.
-- 네이버의 "숙박상품수"는 상품종류 수이고, "숙박확인재고수"는 해당 날짜 네이버예약 숙박 상품별 stock 합계다. 실제 전체 보유 객실수로 단정하지 않는다.
+- 네이버의 "숙박상품수"는 상품종류 수이고, "숙박확인재고수"는 예약리스트 유형에 따라 객실상품/묶음상품/재고수량 단위로 계산한다. 실제 전체 보유 객실수로 단정하지 않는다.
+- 객실번호 범위형 묶음 상품(예: 1~3, 4~7)은 내부 stock 합계를 전체상품수량으로 표시하지 않고 상품 단위 예약가능률과 원시 stock 검증값을 분리 기록한다.
+- "숙박예약가능률"은 판매율이 아니라 예약가능률이며, 판매완료/마감 비율은 "숙박판매완료율"로 별도 기록한다.
 - 데이유즈 상품은 1박 예약가능률 계산에서 제외하고, "데이유즈상품수/데이유즈확인재고수"로 별도 기록한다.
 - 실제 전체객실수는 네이버 노출 재고, 야놀자/NOL, ONDA/떠나요, 사업자 직접 정보가 서로 다를 수 있으므로 검증 메모에 분리 기록한다.
 - 채널수는 목록 검색에서 확인되지 않으면 "미확인"으로 남기고, 전 채널 연동 여부와 네이버 분리 가능성을 별도 메모한다.
@@ -1705,7 +1792,7 @@ async function main() {
 - 5건 미만 지역: ${underfilledRegions || "없음"}
 - 광고/비광고 분리: 가능
 - 예약재고: 상위 ${naverBookingStock.limit}개 제한으로 ${naverBookingStock.collected}개 확인, ${naverBookingStock.successful}건 성공
-- 예약가능률 산식: 객실별 예약리스트는 예약가능 상품 수 / 노출 객실 상품 수, 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
+- 예약가능률 산식: 객실별 예약리스트는 예약가능 상품 수 / 노출 객실 상품 수, 객실 묶음 상품리스트는 예약가능 묶음 상품 수 / 묶음 상품 수, 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
 - 네이버 상품 구분: 1박 조건은 \`ACCOMMODATION_NIGHT\` 숙박 상품만 예약가능률에 반영하고, \`ACCOMMODATION_DAY_USE\` 데이유즈 상품은 점심/저녁 등 상품종류와 재고합계를 별도 카운트로 분리
 - 네이버 분리 기준: ONDA/떠나요 등 전 채널 연동 재고와 섞지 않고 네이버예약 재고를 독립 확인
 

@@ -1331,6 +1331,9 @@ function summarizeAvailabilityRows(rows) {
     const totalRooms = numericField(row, ["숙박확인재고수", "확인객실수", "totalRooms"]);
     const rate = numericField(row, ["숙박예약가능률", "예약가능률", "availabilityRate"]);
     if (availableRooms === null || totalRooms === null || totalRooms <= 0) continue;
+    const soldOutRooms = numericField(row, ["숙박판매완료수", "soldOutRooms"]);
+    const soldOutRate = numericField(row, ["숙박판매완료율", "soldOutRate"]);
+    const resolvedSoldOutRooms = soldOutRooms !== null ? soldOutRooms : Math.max(0, totalRooms - availableRooms);
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -1349,6 +1352,12 @@ function summarizeAvailabilityRows(rows) {
       totalRooms,
       nightAvailableStock: availableRooms,
       nightTotalStock: totalRooms,
+      soldOutRooms: resolvedSoldOutRooms,
+      soldOutRate: soldOutRate !== null ? soldOutRate : Number((resolvedSoldOutRooms / totalRooms).toFixed(3)),
+      availabilityUnit: row["예약계산단위"] || "",
+      rawAvailableStock: numericField(row, ["네이버원시예약가능재고", "rawAvailableStock"]),
+      rawTotalStock: numericField(row, ["네이버원시전체재고", "rawTotalStock"]),
+      groupedRoomCount: numericField(row, ["네이버묶음객실범위수", "groupedRoomCount"]),
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
       inventoryScope: row["네이버재고범위"] || "네이버예약 채널/날짜 기준 재고",
@@ -1363,12 +1372,15 @@ function summarizeAvailabilityRows(rows) {
   const items = [...byPlace.values()].sort((a, b) => a.rank - b.rank);
   const totalAvailableRooms = items.reduce((sum, item) => sum + item.availableRooms, 0);
   const totalRooms = items.reduce((sum, item) => sum + item.totalRooms, 0);
+  const totalSoldOutRooms = items.reduce((sum, item) => sum + item.soldOutRooms, 0);
   return {
     stats: {
       checkedPlaces: items.length,
       totalAvailableRooms,
+      totalSoldOutRooms,
       totalRooms,
       weightedRate: totalRooms ? Number((totalAvailableRooms / totalRooms).toFixed(3)) : null,
+      weightedSoldOutRate: totalRooms ? Number((totalSoldOutRooms / totalRooms).toFixed(3)) : null,
       lowAvailabilityCount: items.filter((item) => item.rate < 0.7).length
     },
     items: items.slice(0, 30)

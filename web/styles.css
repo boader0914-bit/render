@@ -741,6 +741,10 @@ h1 {
   width: 100%;
 }
 
+.legend[hidden] {
+  display: none;
+}
+
 .segmented button,
 .cluster-filter {
   min-width: 56px;
@@ -1168,8 +1172,17 @@ h1 {
 }
 
 .availability-card b {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
   font-size: 17px;
   color: var(--green);
+}
+
+.availability-card b span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .availability-card.mid b {
@@ -1649,6 +1662,7 @@ h1 {
   .availability-card b {
     grid-column: 2;
     justify-self: start;
+    justify-items: start;
   }
 
   .availability-head,
