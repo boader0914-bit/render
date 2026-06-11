@@ -177,10 +177,26 @@ function fmtAvailability(place) {
   const total = Number(place.totalRooms);
   const rate = Number(place.availabilityRate);
   if (Number.isFinite(available) && Number.isFinite(total) && total > 0) {
-    const rateText = Number.isFinite(rate) ? ` · ${(rate * 100).toFixed(0)}%` : "";
-    return `예약가능 ${available}/${total}${rateText}`;
+    const rateText = Number.isFinite(rate) ? ` · 잔여율 ${(rate * 100).toFixed(0)}%` : "";
+    return `잔여 ${available}/${total}${rateText}`;
   }
   return "확인불가";
+}
+
+function availabilityUnitLabel(item = {}) {
+  if (item.availabilityUnit) return item.availabilityUnit;
+  if (item.listType === "객실 묶음 상품리스트") return "묶음상품";
+  if (item.listType === "객실별 예약리스트") return "객실상품";
+  return "상품/재고";
+}
+
+function fmtRemainingStock(item = {}) {
+  const available = Number(item.availableRooms);
+  const total = Number(item.totalRooms);
+  if (Number.isFinite(available) && Number.isFinite(total) && total > 0) {
+    return `잔여 ${fmtNumber(available)}/${fmtNumber(total)} ${availabilityUnitLabel(item)}`;
+  }
+  return "잔여 확인불가";
 }
 
 function fmtSoldOut(item) {
@@ -192,6 +208,49 @@ function fmtSoldOut(item) {
     return `판매완료/마감 ${fmtNumber(soldOut)}/${fmtNumber(total)} · ${fmtAvailabilityRate(resolvedRate)}`;
   }
   return "";
+}
+
+function companyKey(value) {
+  return String(value || "").replace(/\s+/g, "").toLowerCase();
+}
+
+function companyPlatformMap() {
+  const map = new Map();
+  for (const company of state.data?.companyPlatforms || []) {
+    map.set(company.key || companyKey(company.name), company);
+  }
+  return map;
+}
+
+function platformTone(platform = "") {
+  if (platform.includes("네이버")) return "naver";
+  if (platform.includes("여기")) return "yeogi";
+  if (platform.includes("떠나요")) return "ddnayo";
+  if (platform.includes("야놀자") || platform.includes("NOL")) return "nol";
+  return "other";
+}
+
+function renderCompanyPlatforms(item, platformMap) {
+  const company = platformMap.get(companyKey(item.name));
+  const rows = company?.platforms || [];
+  if (!rows.length) return "";
+  return `
+    <details class="company-platforms">
+      <summary>플랫폼 ${fmtNumber(rows.length)}개 더보기</summary>
+      <div class="company-platform-list">
+        ${rows.map((row) => `
+          <a class="company-platform ${platformTone(row.platform)}" href="${row.url || "#"}" target="${row.url ? "_blank" : "_self"}" rel="noreferrer">
+            <span class="company-platform-name">${row.platform}</span>
+            <span class="company-platform-body">
+              <strong>${row.rank ? `${row.rank}위` : row.group || "확인"}</strong>
+              <small>${[row.price, row.stock, row.status].filter(Boolean).join(" · ") || "내용 확인"}</small>
+              ${row.inventoryNote ? `<small>${row.inventoryNote}</small>` : ""}
+            </span>
+          </a>
+        `).join("")}
+      </div>
+    </details>
+  `;
 }
 
 function fmtDayUseStock(item) {
@@ -916,25 +975,26 @@ function renderAvailability() {
   if (!items.length) {
     els.availabilityPanel.innerHTML = `
       <div class="section-head">
-        <h2>네이버예약 채널 가능률</h2>
+        <h2>업체 순위</h2>
       </div>
-      <div class="empty">네이버예약 재고 확인 데이터가 없습니다.</div>
+      <div class="empty">업체별 잔여 객실/상품 데이터가 없습니다.</div>
     `;
     return;
   }
 
   const stats = availability.stats || {};
   const run = state.data?.run || {};
+  const platformMap = companyPlatformMap();
   els.availabilityPanel.innerHTML = `
     <div class="section-head availability-head">
       <div>
-        <h2>네이버예약 채널 예약가능률</h2>
-        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · 판매율이 아닌 예약가능률 · 네이버예약 채널의 숙박 상품/재고만 반영 · 데이유즈는 별도 표시</p>
+        <h2>업체 순위</h2>
+        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · 네이버예약 잔여 객실/상품을 우선 표시 · 업체별 더보기에서 플랫폼별 내용을 함께 확인</p>
       </div>
       <div class="availability-summary">
-        <span><strong>${fmtAvailabilityRate(stats.weightedRate)}</strong>예약가능률</span>
+        <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>전체 잔여</span>
         <span><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong>업체</span>
-        <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>예약가능</span>
+        <span><strong>${fmtNumber(stats.totalSoldOutRooms || 0)}</strong>마감</span>
       </div>
     </div>
     <div class="availability-list">
@@ -942,15 +1002,15 @@ function renderAvailability() {
         const rate = Number(item.rate);
         const width = Number.isFinite(rate) ? Math.max(3, Math.min(100, rate * 100)) : 0;
         return `
-          <a class="availability-card ${availabilityLevel(item.rate)}" href="${item.url || "#"}" target="${item.url ? "_blank" : "_self"}" rel="noreferrer" title="${item.basis || ""}">
+          <article class="availability-card ${availabilityLevel(item.rate)}" title="${item.basis || ""}">
             <div class="availability-card-top">
               <span class="availability-rank">${item.rank || "-"}</span>
-              <strong>${item.name}</strong>
-              <b><span>예약가능률</span>${fmtAvailabilityRate(item.rate)}</b>
+              <strong>${item.url ? `<a href="${item.url}" target="_blank" rel="noreferrer">${item.name}</a>` : item.name}</strong>
+              <b><span>${availabilityUnitLabel(item)}</span>${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)}</b>
             </div>
             <div class="availability-meter"><span style="width:${width}%"></span></div>
             <div class="availability-meta">
-              <span>예약가능 ${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)}${item.availabilityUnit ? ` ${item.availabilityUnit}` : ""}</span>
+              <span>${fmtRemainingStock(item)}</span>
               ${fmtSoldOut(item) ? `<span>${fmtSoldOut(item)}</span>` : ""}
               ${fmtDayUseStock(item) ? `<span>${fmtDayUseStock(item)}</span>` : ""}
               <span>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</span>
@@ -958,7 +1018,8 @@ function renderAvailability() {
               <span>${item.price || item.listType || "가격 확인"}</span>
               ${item.inventoryMemo ? `<span>${item.inventoryMemo}</span>` : ""}
             </div>
-          </a>
+            ${renderCompanyPlatforms(item, platformMap)}
+          </article>
         `;
       }).join("")}
     </div>
@@ -1177,7 +1238,7 @@ function renderDetail() {
           <th>순위</th>
           <th>업체명</th>
           <th>유형</th>
-          <th>네이버 숙박재고</th>
+          <th>잔여 객실/상품</th>
           <th>가격</th>
         </tr>
       </thead>

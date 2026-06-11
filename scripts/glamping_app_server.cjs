@@ -1387,6 +1387,101 @@ function summarizeAvailabilityRows(rows) {
   };
 }
 
+function platformRowGroup(row, platform, statusValue, reasonValue, directionValue, adValue) {
+  const failed = statusValue.includes("실패") || statusValue.includes("차단") || reasonValue.length > 0;
+  const manual = !failed && (
+    statusValue.includes("수동") ||
+    String(row["수집방식"] || row.collectionMethod || "").includes("수동") ||
+    directionValue.includes("수동")
+  );
+  const ad = !failed && (
+    adValue === "Y" ||
+    adValue.includes("광고 집행") ||
+    adValue.includes("광고+비광고") ||
+    (statusValue.includes("광고") && !statusValue.includes("비광고"))
+  );
+  const organic = !failed && !manual && !ad && (
+    adValue === "N" ||
+    statusValue.includes("비광고") ||
+    statusValue.includes("검색결과") ||
+    platform === "떠나요" ||
+    platform === "야놀자/NOL"
+  );
+  return failed ? "실패" : manual ? "수동" : ad ? "광고" : organic ? "비광고" : "기타";
+}
+
+function summarizeCompanyPlatforms(rows) {
+  const companies = new Map();
+
+  for (const row of rows) {
+    const name = String(row["업체명"] || row.name || "").trim();
+    if (!name || name.includes("Cloudflare")) continue;
+
+    const key = compactKeyword(name);
+    if (!key) continue;
+
+    const platform = row["플랫폼"] || row.channel || "확인불가";
+    const statusValue = String(row["수집 상태"] || row.status || row.section || "");
+    const rawReasonValue = String(row["실패 원인"] || row.reason || "");
+    const inferredYeogiReason =
+      platform === "여기어때" && statusValue.includes("차단")
+        ? "Cloudflare/WAF 차단"
+        : "";
+    const reasonValue = rawReasonValue || inferredYeogiReason;
+    const directionValue = String(row["수집 방향"] || row.collectionDirection || row.collection_direction || "");
+    const adValue = String(row["광고 여부"] || row["광고클러스터"] || row.ad_flag || row["광고집행클러스터"] || "");
+    const group = platformRowGroup(row, platform, statusValue, reasonValue, directionValue, adValue);
+
+    if (!companies.has(key)) {
+      companies.set(key, {
+        key,
+        name,
+        bestRank: 9999,
+        platforms: []
+      });
+    }
+
+    const company = companies.get(key);
+    const rank = numericField(row, ["순위", "rank_or_order", "overall_rank", "ad_order"]);
+    if (rank !== null) company.bestRank = Math.min(company.bestRank, rank);
+
+    const available = row["숙박예약가능수"] || row["예약가능객실수"] || "";
+    const total = row["숙박확인재고수"] || row["확인객실수"] || "";
+    const soldOut = row["숙박판매완료수"] || "";
+    const unit = row["예약계산단위"] || "";
+    const stock = available && total
+      ? `잔여 ${available}/${total}${unit ? ` ${unit}` : ""}${soldOut ? ` · 마감 ${soldOut}/${total}` : ""}`
+      : row["전체객실수확인상태"] || "";
+
+    company.platforms.push({
+      platform,
+      rank: rank ?? "",
+      group,
+      price: row["예약최저가"] || row["가격"] || row.price || row["금액"] || "",
+      status: statusValue || group,
+      stock,
+      inventoryNote: row["네이버상품구성"] || row["채널재고해석"] || "",
+      url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
+    });
+  }
+
+  return [...companies.values()]
+    .map((company) => ({
+      ...company,
+      bestRank: company.bestRank === 9999 ? null : company.bestRank,
+      platforms: company.platforms
+        .sort((a, b) => {
+          const rankA = Number(a.rank || 9999);
+          const rankB = Number(b.rank || 9999);
+          if (rankA !== rankB) return rankA - rankB;
+          return String(a.platform).localeCompare(String(b.platform), "ko");
+        })
+        .slice(0, 8)
+    }))
+    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999))
+    .slice(0, 40);
+}
+
 function resolveRunDir(runId) {
   const safeId = path.basename(runId);
   const dirPath = path.join(OUTPUTS_DIR, safeId);
@@ -1463,6 +1558,7 @@ async function loadRun(runId) {
     regions,
     availability: summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows]),
     platform: summarizePlatformRows(displayPlatformRows),
+    companyPlatforms: summarizeCompanyPlatforms(displayPlatformRows),
     downloads: files
       .filter((file) => /\.(csv|xlsx|md|html|png)$/i.test(file))
       .map((file) => ({
