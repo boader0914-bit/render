@@ -1589,11 +1589,11 @@ h1 {
   }
 
   .map-frame {
-    min-height: 520px;
+    min-height: 440px;
   }
 
   #clusterMap {
-    height: 520px;
+    height: 440px;
   }
 }
 
@@ -1631,21 +1631,15 @@ h1 {
   }
 
   .availability-list {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr;
     gap: 8px;
-    overflow-x: auto;
-    padding: 0 2px 4px;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-  }
-
-  .availability-list::-webkit-scrollbar {
-    display: none;
+    overflow: visible;
+    padding: 0;
   }
 
   .availability-card {
-    flex: 0 0 min(82vw, 318px);
-    scroll-snap-align: start;
+    width: 100%;
   }
 
   .availability-card-top {
@@ -1669,7 +1663,20 @@ h1 {
 
   .availability-summary span {
     justify-content: center;
-    padding: 0 7px;
+    min-width: 0;
+    min-height: 42px;
+    padding: 6px 7px;
+    border-radius: 18px;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .map-frame {
+    min-height: 360px;
+  }
+
+  #clusterMap {
+    height: 360px;
   }
 
   .manual-step {
@@ -1700,20 +1707,13 @@ h1 {
     line-height: 1.35;
   }
 
-  .meta-row,
-  .cluster-filters,
-  .legend {
+  .meta-row {
     display: flex;
     flex-wrap: nowrap;
     max-width: 100%;
     overflow-x: auto;
     padding-bottom: 2px;
     scrollbar-width: none;
-  }
-
-  .cluster-filters::-webkit-scrollbar,
-  .legend::-webkit-scrollbar {
-    display: none;
   }
 
   .meta-row {
@@ -1745,6 +1745,30 @@ h1 {
     grid-column: 1 / -1;
     justify-content: flex-start;
     text-align: left;
+  }
+
+  .cluster-filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+    gap: 7px;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+    gap: 6px;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .cluster-filter,
+  .legend > span {
+    width: 100%;
+    justify-content: center;
+    white-space: normal;
+    text-align: center;
   }
 
   .platform-item summary {
