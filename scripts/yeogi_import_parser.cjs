@@ -114,6 +114,12 @@ function isGenericYeogiName(value) {
   return residual.length === 0;
 }
 
+function yeogiNameKey(value) {
+  return cleanYeogiName(value)
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
+}
+
 function parseYeogiCompactLine(line) {
   const text = String(line || "").replace(/\s+/g, " ").trim();
   if (!YEOGI_CATEGORY_RE.test(text)) return null;
@@ -218,6 +224,7 @@ function parseYeogiCsvImport(text) {
         raw
       };
     })
+    .map((row) => ({ ...row, name: cleanYeogiName(row.name) }))
     .filter((row) => row.name && !isGenericYeogiName(row.name));
 }
 
@@ -251,7 +258,8 @@ function parseYeogiTextImport(text) {
 
   const addRow = (row) => {
     if (!row?.name) return;
-    const key = row.name.replace(/\s+/g, "").toLowerCase();
+    const key = yeogiNameKey(row.name);
+    if (!key || isGenericYeogiName(row.name)) return;
     if (seen.has(key)) return;
     seen.add(key);
     rows.push({ ...row, rank: row.rank || String(rows.length + 1) });
@@ -295,7 +303,8 @@ function parseYeogiTextImport(text) {
   if (!rows.length) {
     for (const line of lines) {
       if (!isLikelyPlaceName(line)) continue;
-      const key = line;
+      const key = yeogiNameKey(line);
+      if (!key) continue;
       if (seen.has(key)) continue;
       seen.add(key);
       rows.push({

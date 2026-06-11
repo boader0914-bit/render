@@ -106,4 +106,12 @@ const pastedScript = "(() => { const priceRe = /원/; const headers = ['name']; 
 assert.equal(looksLikeYeogiExtractScript(pastedScript), true);
 assert.deepEqual(parseYeogiImport(pastedScript), []);
 
+const duplicateText = [
+  "Blue Ridge Glamping",
+  "120,000",
+  "Blue    Ridge   Glamping",
+  "130,000"
+].join("\n");
+assert.deepEqual(names(parseYeogiImport(duplicateText)), ["Blue Ridge Glamping"]);
+
 console.log("Yeogi import parser tests passed");

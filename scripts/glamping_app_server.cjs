@@ -19,6 +19,7 @@ const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.RENDER_EXTERNAL_URL ? "0.0.0.0" : "127.0.0.1");
 const APP_PIN = String(process.env.APP_PIN || "").trim();
 const APP_USER = String(process.env.APP_USER || "admin").trim() || "admin";
+const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
@@ -277,10 +278,13 @@ async function saveTrafficKeys(payload) {
 }
 
 function securityHeaders() {
-  return {
+  const headers = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
+    "X-Robots-Tag": "noindex, nofollow",
     "Referrer-Policy": "same-origin",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Content-Security-Policy": [
       "default-src 'self'",
@@ -293,6 +297,12 @@ function securityHeaders() {
       "frame-ancestors 'none'"
     ].join("; ")
   };
+
+  if (IS_PRODUCTION_RUNTIME) {
+    headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+  }
+
+  return headers;
 }
 
 function send(res, status, body, contentType = "application/json; charset=utf-8", extraHeaders = {}) {
@@ -341,6 +351,10 @@ function parseBasicAuth(req) {
 
 function isPublicPath(pathname) {
   return pathname === "/api/health";
+}
+
+function isMissingRequiredAuthConfig(pathname) {
+  return IS_PRODUCTION_RUNTIME && !APP_PIN && !isPublicPath(pathname);
 }
 
 function isAuthorized(req) {
@@ -1631,6 +1645,10 @@ async function route(req, res) {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
       if (req.method === "HEAD") return sendHead(res, 200);
       return send(res, 200, { ok: true, authRequired: Boolean(APP_PIN) });
+    }
+
+    if (isMissingRequiredAuthConfig(reqUrl.pathname)) {
+      return send(res, 503, { error: "APP_PIN must be configured before using this service in production." });
     }
 
     if (!isPublicPath(reqUrl.pathname) && !isAuthorized(req)) {
