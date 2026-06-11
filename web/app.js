@@ -846,7 +846,6 @@ function renderAll() {
   renderMap();
   renderDetail();
   renderCoreSummary();
-  renderPlatforms();
   renderDownloads();
 }
 
