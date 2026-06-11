@@ -48,6 +48,11 @@ button {
   cursor: pointer;
 }
 
+img,
+svg {
+  max-width: 100%;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
@@ -106,8 +111,13 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.section-head > * {
+  min-width: 0;
 }
 
 .section-head h2 {
@@ -165,9 +175,20 @@ button:focus {
 .primary-button,
 .secondary-button,
 .ghost-button,
-.icon-button,
 .segmented button,
 .cluster-filter {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+  border-radius: 7px;
+  min-height: 40px;
+  padding: 0 12px;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.icon-button {
   border: 1px solid var(--line);
   background: #ffffff;
   color: var(--ink);
@@ -375,7 +396,7 @@ button:focus {
 
 .button-pair {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 6px;
   min-width: 0;
 }
@@ -568,7 +589,7 @@ h1 {
 
 .analysis-strip {
   display: grid;
-  grid-template-columns: 1.35fr repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -629,7 +650,7 @@ h1 {
 
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -691,7 +712,7 @@ h1 {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(540px, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   gap: 14px;
   align-items: start;
 }
@@ -746,14 +767,14 @@ h1 {
 
 .map-frame {
   position: relative;
-  min-height: 650px;
+  min-height: clamp(420px, 58vw, 650px);
   background: #f9fbfd;
 }
 
 #clusterMap {
   display: block;
   width: 100%;
-  height: 650px;
+  height: clamp(420px, 58vw, 650px);
   overflow: hidden;
   background:
     linear-gradient(180deg, #ffffff 0%, #f5f8fc 100%);
@@ -934,7 +955,7 @@ h1 {
   font-size: 12px;
   line-height: 1.35;
   word-break: keep-all;
-  overflow-wrap: normal;
+  overflow-wrap: anywhere;
 }
 
 .info-list {
@@ -960,6 +981,7 @@ h1 {
 
 .place-table {
   width: 100%;
+  min-width: 560px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 13px;
@@ -1075,7 +1097,7 @@ h1 {
 
 .availability-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
 }
 
@@ -1305,6 +1327,7 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 12px;
   cursor: pointer;
@@ -1372,7 +1395,7 @@ h1 {
 
 .platform-status-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   gap: 7px;
   padding: 0 12px 12px;
 }
@@ -1483,6 +1506,17 @@ h1 {
   text-align: center;
 }
 
+@media (max-width: 1320px) {
+  .workspace,
+  .bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-panel {
+    max-height: none;
+  }
+}
+
 @media (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1503,11 +1537,6 @@ h1 {
 
   .sidebar .panel {
     margin-bottom: 0;
-  }
-
-  .workspace,
-  .bottom-grid {
-    grid-template-columns: 1fr;
   }
 
   .analysis-strip {
@@ -1591,7 +1620,8 @@ h1 {
 
   .detail-panel {
     max-height: none;
-    overflow: visible;
+    overflow-x: auto;
+    overflow-y: visible;
   }
 
   .cluster-summary,
@@ -1616,6 +1646,15 @@ h1 {
   .availability-card {
     flex: 0 0 min(82vw, 318px);
     scroll-snap-align: start;
+  }
+
+  .availability-card-top {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .availability-card b {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .availability-head,
@@ -1727,7 +1766,7 @@ h1 {
   }
 
   .platform-status-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 5px;
   }
 
