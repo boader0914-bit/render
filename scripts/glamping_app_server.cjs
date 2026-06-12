@@ -1334,6 +1334,11 @@ function summarizeAvailabilityRows(rows) {
     const soldOutRooms = numericField(row, ["숙박판매완료수", "soldOutRooms"]);
     const soldOutRate = numericField(row, ["숙박판매완료율", "soldOutRate"]);
     const resolvedSoldOutRooms = soldOutRooms !== null ? soldOutRooms : Math.max(0, totalRooms - availableRooms);
+    const weeklyDays = numericField(row, ["주간재고수집일수", "weeklyDays"]);
+    const weeklyDetail = row["주간잔여상세"] || "";
+    const weeklySummary = weeklyDetail
+      ? (weeklyDays ? `${weeklyDays}일 날짜별 잔여` : "날짜별 잔여")
+      : row["주간잔여요약"] || "";
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -1358,12 +1363,12 @@ function summarizeAvailabilityRows(rows) {
       rawAvailableStock: numericField(row, ["네이버원시예약가능재고", "rawAvailableStock"]),
       rawTotalStock: numericField(row, ["네이버원시전체재고", "rawTotalStock"]),
       groupedRoomCount: numericField(row, ["네이버묶음객실범위수", "groupedRoomCount"]),
-      weeklyDays: numericField(row, ["주간재고수집일수", "weeklyDays"]),
-      weeklySummary: row["주간잔여요약"] || "",
+      weeklyDays,
+      weeklySummary,
       weeklyAvgAvailable: numericField(row, ["주간평균잔여수", "weeklyAvgAvailable"]),
       weeklyMinAvailable: numericField(row, ["주간최소잔여수", "weeklyMinAvailable"]),
       weeklySoldOutDays: numericField(row, ["주간마감일수", "weeklySoldOutDays"]),
-      weeklyDetail: row["주간잔여상세"] || "",
+      weeklyDetail,
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
       inventoryScope: row["네이버재고범위"] || "네이버예약 채널/날짜 기준 재고",
@@ -1458,8 +1463,14 @@ function summarizeCompanyPlatforms(rows) {
     const stock = available && total
       ? `잔여 ${available}/${total}${unit ? ` ${unit}` : ""}${soldOut ? ` · 마감 ${soldOut}/${total}` : ""}`
       : row["전체객실수확인상태"] || "";
-    const weeklySummary = row["주간잔여요약"] || "";
     const weeklyDetail = row["주간잔여상세"] || "";
+    const weeklyDays = numericField(row, ["주간재고수집일수", "weeklyDays"]);
+    const weeklySummary = weeklyDetail
+      ? (weeklyDays ? `${weeklyDays}일 날짜별 잔여` : "날짜별 잔여")
+      : row["주간잔여요약"] || "";
+    const weeklyStockText = weeklyDetail
+      ? `${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
+      : weeklySummary;
 
     company.platforms.push({
       platform,
@@ -1467,7 +1478,7 @@ function summarizeCompanyPlatforms(rows) {
       group,
       price: row["예약최저가"] || row["가격"] || row.price || row["금액"] || "",
       status: statusValue || group,
-      stock: weeklySummary ? `${stock} · ${weeklySummary}` : stock,
+      stock: weeklyStockText ? `${stock} · ${weeklyStockText}` : stock,
       inventoryNote: row["네이버상품구성"] || row["채널재고해석"] || "",
       weeklySummary,
       weeklyDetail,

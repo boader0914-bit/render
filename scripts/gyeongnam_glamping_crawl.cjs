@@ -996,7 +996,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     minAvailable,
     soldOutDays,
     detail,
-    summary: `${valid.length}일 잔여 평균 ${avgAvailable} · 최소 ${minAvailable} · 마감 ${soldOutDays}일`,
+    summary: `${valid.length}일 날짜별 잔여`,
     dates: valid,
   };
 }

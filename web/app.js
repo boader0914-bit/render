@@ -1003,6 +1003,9 @@ function renderAvailability() {
       ${items.slice(0, 12).map((item) => {
         const rate = Number(item.rate);
         const width = Number.isFinite(rate) ? Math.max(3, Math.min(100, rate * 100)) : 0;
+        const weeklyText = item.weeklyDetail
+          ? `${item.weeklySummary ? `${item.weeklySummary}: ` : ""}${item.weeklyDetail}`
+          : item.weeklySummary;
         return `
           <article class="availability-card ${availabilityLevel(item.rate)}" title="${item.basis || ""}">
             <div class="availability-card-top">
@@ -1013,8 +1016,7 @@ function renderAvailability() {
             <div class="availability-meter"><span style="width:${width}%"></span></div>
             <div class="availability-meta">
               <span>${fmtRemainingStock(item)}</span>
-              ${item.weeklySummary ? `<span>${item.weeklySummary}</span>` : ""}
-              ${item.weeklyDetail ? `<span>${item.weeklyDetail}</span>` : ""}
+              ${weeklyText ? `<span>${weeklyText}</span>` : ""}
               ${fmtSoldOut(item) ? `<span>${fmtSoldOut(item)}</span>` : ""}
               ${fmtDayUseStock(item) ? `<span>${fmtDayUseStock(item)}</span>` : ""}
               <span>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</span>
