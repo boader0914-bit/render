@@ -1358,6 +1358,12 @@ function summarizeAvailabilityRows(rows) {
       rawAvailableStock: numericField(row, ["네이버원시예약가능재고", "rawAvailableStock"]),
       rawTotalStock: numericField(row, ["네이버원시전체재고", "rawTotalStock"]),
       groupedRoomCount: numericField(row, ["네이버묶음객실범위수", "groupedRoomCount"]),
+      weeklyDays: numericField(row, ["주간재고수집일수", "weeklyDays"]),
+      weeklySummary: row["주간잔여요약"] || "",
+      weeklyAvgAvailable: numericField(row, ["주간평균잔여수", "weeklyAvgAvailable"]),
+      weeklyMinAvailable: numericField(row, ["주간최소잔여수", "weeklyMinAvailable"]),
+      weeklySoldOutDays: numericField(row, ["주간마감일수", "weeklySoldOutDays"]),
+      weeklyDetail: row["주간잔여상세"] || "",
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
       inventoryScope: row["네이버재고범위"] || "네이버예약 채널/날짜 기준 재고",
@@ -1452,6 +1458,8 @@ function summarizeCompanyPlatforms(rows) {
     const stock = available && total
       ? `잔여 ${available}/${total}${unit ? ` ${unit}` : ""}${soldOut ? ` · 마감 ${soldOut}/${total}` : ""}`
       : row["전체객실수확인상태"] || "";
+    const weeklySummary = row["주간잔여요약"] || "";
+    const weeklyDetail = row["주간잔여상세"] || "";
 
     company.platforms.push({
       platform,
@@ -1459,8 +1467,10 @@ function summarizeCompanyPlatforms(rows) {
       group,
       price: row["예약최저가"] || row["가격"] || row.price || row["금액"] || "",
       status: statusValue || group,
-      stock,
+      stock: weeklySummary ? `${stock} · ${weeklySummary}` : stock,
       inventoryNote: row["네이버상품구성"] || row["채널재고해석"] || "",
+      weeklySummary,
+      weeklyDetail,
       url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
     });
   }
@@ -1543,6 +1553,8 @@ async function loadRun(runId) {
       adults: conditions.adults,
       productMode: conditions.productMode,
       productModeLabel: PRODUCT_MODES[conditions.productMode] || PRODUCT_MODES.all,
+      bookingRangeDays: manifest?.bookingRangeDays || 1,
+      bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
       counts: manifest?.counts || {},
       files: {
         regional: regionalFile,
@@ -1680,6 +1692,8 @@ async function runCrawler(payload) {
     CHECK_OUT: payload.checkOut || process.env.CHECK_OUT || kstDate(1),
     ADULTS: String(payload.adults || process.env.ADULTS || 2),
     PRODUCT_MODE: normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all"),
+    BOOKING_RANGE_DAYS: String(payload.bookingDays || payload.bookingRangeDays || process.env.BOOKING_RANGE_DAYS || 1),
+    BOOKING_RANGE_PLACE_LIMIT: String(payload.bookingRangePlaceLimit || process.env.BOOKING_RANGE_PLACE_LIMIT || ""),
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,

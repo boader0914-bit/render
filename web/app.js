@@ -984,11 +984,14 @@ function renderAvailability() {
   const stats = availability.stats || {};
   const run = state.data?.run || {};
   const platformMap = companyPlatformMap();
+  const rangeText = Number(run.bookingRangeDays || 1) > 1
+    ? `${run.bookingRangeDays}일 예약재고 테스트 · 상위 ${fmtNumber(run.bookingRangePlaceLimit || 0)}개 업체 주간 상세`
+    : "네이버예약 잔여 객실/상품을 우선 표시";
   els.availabilityPanel.innerHTML = `
     <div class="section-head availability-head">
       <div>
         <h2>업체 순위</h2>
-        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · 네이버예약 잔여 객실/상품을 우선 표시 · 업체별 더보기에서 플랫폼별 내용을 함께 확인</p>
+        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · ${rangeText} · 업체별 더보기에서 플랫폼별 내용을 함께 확인</p>
       </div>
       <div class="availability-summary">
         <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>전체 잔여</span>
@@ -1010,6 +1013,8 @@ function renderAvailability() {
             <div class="availability-meter"><span style="width:${width}%"></span></div>
             <div class="availability-meta">
               <span>${fmtRemainingStock(item)}</span>
+              ${item.weeklySummary ? `<span>${item.weeklySummary}</span>` : ""}
+              ${item.weeklyDetail ? `<span>${item.weeklyDetail}</span>` : ""}
               ${fmtSoldOut(item) ? `<span>${fmtSoldOut(item)}</span>` : ""}
               ${fmtDayUseStock(item) ? `<span>${fmtDayUseStock(item)}</span>` : ""}
               <span>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</span>

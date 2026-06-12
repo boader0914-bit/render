@@ -31,11 +31,29 @@ function normalizeProductMode(value) {
   return "all";
 }
 
+function boundedInteger(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(number)));
+}
+
+function addDays(dateString, offsetDays) {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+function shortDate(dateString) {
+  return String(dateString || "").slice(5).replace("-", "/");
+}
+
 const CHECK_IN = process.env.CHECK_IN || kstDate(0);
 const CHECK_OUT = process.env.CHECK_OUT || kstDate(1);
 const ADULTS = Number(process.env.ADULTS || 2);
 const PRODUCT_MODE = normalizeProductMode(process.env.PRODUCT_MODE || "all");
 const PRODUCT_MODE_LABEL = PRODUCT_MODES[PRODUCT_MODE];
+const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 1, 1, 31);
+const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? 10 : 0, 0, 20);
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 
 const regionSlugMap = {
@@ -681,7 +699,8 @@ async function getNaverBookingBusiness(placeId) {
   };
 }
 
-async function postNaverBookingGraphql(operationName, query, variables, businessId) {
+async function postNaverBookingGraphql(operationName, query, variables, businessId, date = CHECK_IN) {
+  const checkOut = addDays(date, 1);
   const response = await fetch(NAVER_BOOKING_GRAPHQL_URL, {
     method: "POST",
     headers: {
@@ -689,7 +708,7 @@ async function postNaverBookingGraphql(operationName, query, variables, business
       accept: "*/*",
       "content-type": "application/json",
       origin: "https://m.booking.naver.com",
-      referer: `https://m.booking.naver.com/booking/3/bizes/${businessId}/search?startDate=${CHECK_IN}&endDate=${CHECK_OUT}&adult=${ADULTS}`,
+      referer: `https://m.booking.naver.com/booking/3/bizes/${businessId}/search?startDate=${date}&endDate=${checkOut}&adult=${ADULTS}`,
     },
     body: JSON.stringify({ operationName, query, variables }),
   });
@@ -711,12 +730,12 @@ async function getNaverBookingItems(bookingBusinessId) {
   };
 }
 
-async function getNaverDailySchedule(bookingBusinessId, bizItemId) {
+async function getNaverDailySchedule(bookingBusinessId, bizItemId, date = CHECK_IN) {
   const scheduleParams = {
     businessId: String(bookingBusinessId),
     businessTypeId: 3,
-    startDateTime: `${CHECK_IN}T00:00:00`,
-    endDateTime: `${CHECK_IN}T00:00:00`,
+    startDateTime: `${date}T00:00:00`,
+    endDateTime: `${date}T00:00:00`,
     bizItemId: String(bizItemId),
   };
   const result = await postNaverBookingGraphql(
@@ -724,10 +743,11 @@ async function getNaverDailySchedule(bookingBusinessId, bizItemId) {
     naverDailyScheduleQuery,
     { scheduleParams },
     bookingBusinessId,
+    date,
   );
   return {
     status: result.status,
-    day: result.data?.data?.schedule?.bizItemSchedule?.daily?.date?.[CHECK_IN] || null,
+    day: result.data?.data?.schedule?.bizItemSchedule?.daily?.date?.[date] || null,
     errors: result.data?.errors || null,
   };
 }
@@ -909,11 +929,11 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   };
 }
 
-async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 40) {
+async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 40, date = CHECK_IN) {
   const schedules = [];
   for (const item of items.slice(0, limit)) {
     await delay(90);
-    const schedule = await getNaverDailySchedule(bookingBusinessId, item.bizItemId);
+    const schedule = await getNaverDailySchedule(bookingBusinessId, item.bizItemId, date);
     const day = schedule.day || {};
     const stock = asStockNumber(day.stock);
     const bookingCount = Math.max(0, asStockNumber(day.bookingCount) || 0);
@@ -937,7 +957,51 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
   return schedules;
 }
 
-async function collectNaverBookingAvailability(placeId, cache) {
+async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days) {
+  if (!items.length || days <= 1) return null;
+  const summaries = [];
+
+  for (let index = 0; index < days; index += 1) {
+    const date = addDays(CHECK_IN, index);
+    const schedules = index === 0
+      ? firstSchedules
+      : await collectNaverSchedulesForItems(bookingBusinessId, items, 40, date);
+    const listType = schedules.length ? classifyNaverBookingList(items, schedules) : "";
+    const summary = summarizeNaverScheduleGroup(items, schedules, listType);
+    const availabilityUnit = listType === "객실 묶음 상품리스트"
+      ? "묶음상품"
+      : listType === "객실별 예약리스트"
+        ? "객실상품"
+        : "재고수량";
+    summaries.push({
+      date,
+      listType,
+      availabilityUnit,
+      available: summary.availableStock,
+      total: summary.totalStock,
+      soldOut: summary.soldOutStock,
+      rate: summary.rate,
+    });
+  }
+
+  const valid = summaries.filter((item) => item.total > 0);
+  if (!valid.length) return null;
+  const avgAvailable = Number((valid.reduce((sum, item) => sum + item.available, 0) / valid.length).toFixed(1));
+  const minAvailable = Math.min(...valid.map((item) => item.available));
+  const soldOutDays = valid.filter((item) => item.available <= 0).length;
+  const detail = valid.map((item) => `${shortDate(item.date)} ${item.available}/${item.total}`).join(", ");
+  return {
+    days: valid.length,
+    avgAvailable,
+    minAvailable,
+    soldOutDays,
+    detail,
+    summary: `${valid.length}일 잔여 평균 ${avgAvailable} · 최소 ${minAvailable} · 마감 ${soldOutDays}일`,
+    dates: valid,
+  };
+}
+
+async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   if (!placeId) return { status: "place_id 없음" };
   if (cache.has(placeId)) return cache.get(placeId);
 
@@ -961,6 +1025,9 @@ async function collectNaverBookingAvailability(placeId, cache) {
   const items = nightItems.length ? nightItems : unknownItems;
   const schedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, items, 40);
   const dayUseSchedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems, 20);
+  const weekly = options.collectRange
+    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, items, schedules, BOOKING_RANGE_DAYS)
+    : null;
 
   const result = {
     status: itemResult.errors
@@ -976,6 +1043,7 @@ async function collectNaverBookingAvailability(placeId, cache) {
       dayUseItems,
       dayUseSchedules,
     }),
+    weekly,
   };
   cache.set(placeId, result);
   return result;
@@ -999,7 +1067,11 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
     }
     uniquePlaceIds.add(row.place_id);
     try {
-      const result = await collectNaverBookingAvailability(row.place_id, cache);
+      const collectRange = BOOKING_RANGE_DAYS > 1 &&
+        BOOKING_RANGE_PLACE_LIMIT > 0 &&
+        !alreadyKnown &&
+        uniquePlaceIds.size <= BOOKING_RANGE_PLACE_LIMIT;
+      const result = await collectNaverBookingAvailability(row.place_id, cache, { collectRange });
       if (!alreadyKnown) collected += 1;
       if (!alreadyKnown && result.status === "성공") successful += 1;
 
@@ -1032,6 +1104,12 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.객실수검증메모 = result.inventoryMemo || "";
       row.예약최저가 = result.minPrice ? formatWon(result.minPrice) : "";
       row.예약가능근거 = result.evidence || "";
+      row.주간재고수집일수 = result.weekly?.days ?? "";
+      row.주간잔여요약 = result.weekly?.summary || "";
+      row.주간평균잔여수 = result.weekly?.avgAvailable ?? "";
+      row.주간최소잔여수 = result.weekly?.minAvailable ?? "";
+      row.주간마감일수 = result.weekly?.soldOutDays ?? "";
+      row.주간잔여상세 = result.weekly?.detail || "";
     } catch (error) {
       if (!alreadyKnown) collected += 1;
       row.네이버예약재고수집상태 = `실패: ${error.message || error}`;
@@ -1335,6 +1413,12 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "데이유즈계산대상상품수": row.데이유즈계산대상상품수 ?? "",
       "네이버재고범위": row.네이버재고범위 || "",
       "객실수검증메모": row.객실수검증메모 || "",
+      "주간재고수집일수": row.주간재고수집일수 ?? "",
+      "주간잔여요약": row.주간잔여요약 || "",
+      "주간평균잔여수": row.주간평균잔여수 ?? "",
+      "주간최소잔여수": row.주간최소잔여수 ?? "",
+      "주간마감일수": row.주간마감일수 ?? "",
+      "주간잔여상세": row.주간잔여상세 || "",
       "예약가능근거": row.예약가능근거 || "",
     })),
     ...naver.ads.map((row) => ({
@@ -1373,6 +1457,12 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "데이유즈계산대상상품수": row.데이유즈계산대상상품수 ?? "",
       "네이버재고범위": row.네이버재고범위 || "",
       "객실수검증메모": row.객실수검증메모 || "",
+      "주간재고수집일수": row.주간재고수집일수 ?? "",
+      "주간잔여요약": row.주간잔여요약 || "",
+      "주간평균잔여수": row.주간평균잔여수 ?? "",
+      "주간최소잔여수": row.주간최소잔여수 ?? "",
+      "주간마감일수": row.주간마감일수 ?? "",
+      "주간잔여상세": row.주간잔여상세 || "",
       "예약가능근거": row.예약가능근거 || "",
     })),
     ...nol.rows,
@@ -1537,6 +1627,12 @@ async function main() {
     "데이유즈계산대상상품수",
     "네이버재고범위",
     "객실수검증메모",
+    "주간재고수집일수",
+    "주간잔여요약",
+    "주간평균잔여수",
+    "주간최소잔여수",
+    "주간마감일수",
+    "주간잔여상세",
     "예약가능근거",
     "실패 원인",
     "수집 방향",
@@ -1597,6 +1693,12 @@ async function main() {
     "데이유즈계산대상상품수",
     "네이버재고범위",
     "객실수검증메모",
+    "주간재고수집일수",
+    "주간잔여요약",
+    "주간평균잔여수",
+    "주간최소잔여수",
+    "주간마감일수",
+    "주간잔여상세",
     "예약최저가",
     "예약가능근거",
     "url",
@@ -1659,6 +1761,12 @@ async function main() {
     "데이유즈계산대상상품수",
     "네이버재고범위",
     "객실수검증메모",
+    "주간재고수집일수",
+    "주간잔여요약",
+    "주간평균잔여수",
+    "주간최소잔여수",
+    "주간마감일수",
+    "주간잔여상세",
     "예약최저가",
     "예약가능근거",
     "url",
@@ -1719,6 +1827,12 @@ async function main() {
     "데이유즈계산대상상품수",
     "네이버재고범위",
     "객실수검증메모",
+    "주간재고수집일수",
+    "주간잔여요약",
+    "주간평균잔여수",
+    "주간최소잔여수",
+    "주간마감일수",
+    "주간잔여상세",
     "예약최저가",
     "예약가능근거",
     "url",
@@ -1730,6 +1844,7 @@ async function main() {
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
     { 항목: "조건", 값: `상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, 1박, 체크인 ${CHECK_IN}, 체크아웃 ${CHECK_OUT}` },
+    { 항목: "예약재고 기간", 값: BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 주간 상세` : "1일 기준" },
     { 항목: "네이버 전체", 값: `${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집` },
     { 항목: "네이버 광고", 값: `${naver.adTotal}건 수집` },
     { 항목: "네이버 지역별", 값: `${regional.rows.length}건 수집 (${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개)` },
@@ -1771,6 +1886,7 @@ async function main() {
 - 네이버 전체 키워드: ${NAVER_QUERY}
 - 판단 유형: ${province.isLocal ? "지역형" : "광역형"}
 - OTA 기준 조건: 상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, 1박, 체크인 ${CHECK_IN} / 체크아웃 ${CHECK_OUT}
+- 예약재고 기간: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 주간 상세` : "1일 기준"}
 - 핵심 분석 채널: 네이버, 야놀자/NOL, ONDA, 떠나요
 - 보조 채널: 여기어때(자동수집 차단 시 수동 보완만 사용)
 
@@ -1792,6 +1908,7 @@ async function main() {
 - 5건 미만 지역: ${underfilledRegions || "없음"}
 - 광고/비광고 분리: 가능
 - 예약재고: 상위 ${naverBookingStock.limit}개 제한으로 ${naverBookingStock.collected}개 확인, ${naverBookingStock.successful}건 성공
+- 주간 예약재고 테스트: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체만 날짜별 잔여 반복 확인` : "비활성"}
 - 예약가능률 산식: 객실별 예약리스트는 예약가능 상품 수 / 노출 객실 상품 수, 객실 묶음 상품리스트는 예약가능 묶음 상품 수 / 묶음 상품 수, 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
 - 네이버 상품 구분: 1박 조건은 \`ACCOMMODATION_NIGHT\` 숙박 상품만 예약가능률에 반영하고, \`ACCOMMODATION_DAY_USE\` 데이유즈 상품은 점심/저녁 등 상품종류와 재고합계를 별도 카운트로 분리
 - 네이버 분리 기준: ONDA/떠나요 등 전 채널 연동 재고와 섞지 않고 네이버예약 재고를 독립 확인
@@ -1872,6 +1989,8 @@ async function main() {
     adults: ADULTS,
     productMode: PRODUCT_MODE,
     productModeLabel: PRODUCT_MODE_LABEL,
+    bookingRangeDays: BOOKING_RANGE_DAYS,
+    bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
     files: [
       `${prefix}_glamping_crawl_test.csv`,
       `${prefix}_glamping_crawl_test_report.md`,
