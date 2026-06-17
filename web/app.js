@@ -210,6 +210,28 @@ function fmtSoldOut(item) {
   return "";
 }
 
+function dateDiffDays(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  return Math.round((end - start) / 86400000);
+}
+
+function bookingDaysFromInputs(checkIn, checkOut) {
+  const diff = dateDiffDays(checkIn, checkOut);
+  return diff > 1 ? Math.min(31, diff + 1) : 1;
+}
+
+function fmtWeeklyReservation(item = {}) {
+  const avg = Number(item.weeklyAvgReservationRate);
+  const detail = item.weeklyReservationRateDetail || "";
+  if (!Number.isFinite(avg) && !detail) return "";
+  return [
+    Number.isFinite(avg) ? `평균 예약률 ${fmtAvailabilityRate(avg)}` : "",
+    detail ? `날짜별 예약률: ${detail}` : ""
+  ].filter(Boolean).join(" · ");
+}
+
 function companyKey(value) {
   return String(value || "").replace(/\s+/g, "").toLowerCase();
 }
@@ -985,13 +1007,16 @@ function renderAvailability() {
   const run = state.data?.run || {};
   const platformMap = companyPlatformMap();
   const rangeText = Number(run.bookingRangeDays || 1) > 1
-    ? `${run.bookingRangeDays}일 예약재고 테스트 · 상위 ${fmtNumber(run.bookingRangePlaceLimit || 0)}개 업체 주간 상세`
+    ? `${run.bookingRangeDays}일 날짜별 예약률/잔여 · 상위 ${fmtNumber(run.bookingRangePlaceLimit || 0)}개 업체 기간 상세`
     : "네이버예약 잔여 객실/상품을 우선 표시";
+  const dateText = Number(run.bookingRangeDays || 1) > 1
+    ? `${run.checkIn || "선택 날짜"}부터 ${run.bookingRangeDays}일 기준`
+    : `${run.checkIn || "선택 날짜"} 체크인 기준`;
   els.availabilityPanel.innerHTML = `
     <div class="section-head availability-head">
       <div>
         <h2>업체 순위</h2>
-        <p>${run.checkIn || "선택 날짜"} 체크인 기준 · ${rangeText} · 업체별 더보기에서 플랫폼별 내용을 함께 확인</p>
+        <p>${dateText} · ${rangeText} · 업체별 더보기에서 플랫폼별 내용을 함께 확인</p>
       </div>
       <div class="availability-summary">
         <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>전체 잔여</span>
@@ -1006,6 +1031,7 @@ function renderAvailability() {
         const weeklyText = item.weeklyDetail
           ? `${item.weeklySummary ? `${item.weeklySummary}: ` : ""}${item.weeklyDetail}`
           : item.weeklySummary;
+        const weeklyReservationText = fmtWeeklyReservation(item);
         return `
           <article class="availability-card ${availabilityLevel(item.rate)}" title="${item.basis || ""}">
             <div class="availability-card-top">
@@ -1016,6 +1042,7 @@ function renderAvailability() {
             <div class="availability-meter"><span style="width:${width}%"></span></div>
             <div class="availability-meta">
               <span>${fmtRemainingStock(item)}</span>
+              ${weeklyReservationText ? `<span>${weeklyReservationText}</span>` : ""}
               ${weeklyText ? `<span>${weeklyText}</span>` : ""}
               ${fmtSoldOut(item) ? `<span>${fmtSoldOut(item)}</span>` : ""}
               ${fmtDayUseStock(item) ? `<span>${fmtDayUseStock(item)}</span>` : ""}
@@ -1365,7 +1392,8 @@ async function submitCrawl(event) {
     checkIn: els.checkInInput.value,
     checkOut: els.checkOutInput.value,
     adults: DEFAULT_ADULTS,
-    productMode: els.productModeInput?.value || "all"
+    productMode: els.productModeInput?.value || "all",
+    bookingDays: bookingDaysFromInputs(els.checkInInput.value, els.checkOutInput.value)
   };
   if (!payload.keyword) {
     els.crawlStatus.textContent = "키워드를 입력하세요.";

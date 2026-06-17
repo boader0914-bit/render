@@ -47,6 +47,12 @@ function shortDate(dateString) {
   return String(dateString || "").slice(5).replace("-", "/");
 }
 
+function formatRate(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return `${Math.round(number * 100)}%`;
+}
+
 const CHECK_IN = process.env.CHECK_IN || kstDate(0);
 const CHECK_OUT = process.env.CHECK_OUT || kstDate(1);
 const ADULTS = Number(process.env.ADULTS || 2);
@@ -989,13 +995,25 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
   const avgAvailable = Number((valid.reduce((sum, item) => sum + item.available, 0) / valid.length).toFixed(1));
   const minAvailable = Math.min(...valid.map((item) => item.available));
   const soldOutDays = valid.filter((item) => item.available <= 0).length;
+  const avgReservationRate = Number((valid.reduce((sum, item) => {
+    const reservationRate = item.total > 0 ? item.soldOut / item.total : 0;
+    return sum + reservationRate;
+  }, 0) / valid.length).toFixed(3));
   const detail = valid.map((item) => `${shortDate(item.date)} ${item.available}/${item.total}`).join(", ");
+  const reservationRateDetail = valid
+    .map((item) => {
+      const reservationRate = item.total > 0 ? item.soldOut / item.total : null;
+      return `${shortDate(item.date)} ${formatRate(reservationRate)}(${item.soldOut}/${item.total})`;
+    })
+    .join(", ");
   return {
     days: valid.length,
     avgAvailable,
     minAvailable,
     soldOutDays,
+    avgReservationRate,
     detail,
+    reservationRateDetail,
     summary: `${valid.length}일 날짜별 잔여`,
     dates: valid,
   };
@@ -1110,6 +1128,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.주간최소잔여수 = result.weekly?.minAvailable ?? "";
       row.주간마감일수 = result.weekly?.soldOutDays ?? "";
       row.주간잔여상세 = result.weekly?.detail || "";
+      row.주간평균예약률 = result.weekly?.avgReservationRate ?? "";
+      row.주간예약률상세 = result.weekly?.reservationRateDetail || "";
     } catch (error) {
       if (!alreadyKnown) collected += 1;
       row.네이버예약재고수집상태 = `실패: ${error.message || error}`;
@@ -1419,6 +1439,8 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간최소잔여수": row.주간최소잔여수 ?? "",
       "주간마감일수": row.주간마감일수 ?? "",
       "주간잔여상세": row.주간잔여상세 || "",
+      "주간평균예약률": row.주간평균예약률 ?? "",
+      "주간예약률상세": row.주간예약률상세 || "",
       "예약가능근거": row.예약가능근거 || "",
     })),
     ...naver.ads.map((row) => ({
@@ -1463,6 +1485,8 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간최소잔여수": row.주간최소잔여수 ?? "",
       "주간마감일수": row.주간마감일수 ?? "",
       "주간잔여상세": row.주간잔여상세 || "",
+      "주간평균예약률": row.주간평균예약률 ?? "",
+      "주간예약률상세": row.주간예약률상세 || "",
       "예약가능근거": row.예약가능근거 || "",
     })),
     ...nol.rows,
@@ -1633,6 +1657,8 @@ async function main() {
     "주간최소잔여수",
     "주간마감일수",
     "주간잔여상세",
+    "주간평균예약률",
+    "주간예약률상세",
     "예약가능근거",
     "실패 원인",
     "수집 방향",
@@ -1699,6 +1725,8 @@ async function main() {
     "주간최소잔여수",
     "주간마감일수",
     "주간잔여상세",
+    "주간평균예약률",
+    "주간예약률상세",
     "예약최저가",
     "예약가능근거",
     "url",
@@ -1767,6 +1795,8 @@ async function main() {
     "주간최소잔여수",
     "주간마감일수",
     "주간잔여상세",
+    "주간평균예약률",
+    "주간예약률상세",
     "예약최저가",
     "예약가능근거",
     "url",
@@ -1833,6 +1863,8 @@ async function main() {
     "주간최소잔여수",
     "주간마감일수",
     "주간잔여상세",
+    "주간평균예약률",
+    "주간예약률상세",
     "예약최저가",
     "예약가능근거",
     "url",

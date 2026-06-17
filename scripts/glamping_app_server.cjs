@@ -1308,6 +1308,42 @@ function numericField(row, keys) {
   return null;
 }
 
+function dateDiffDays(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  return Math.round((end - start) / 86400000);
+}
+
+function bookingDaysFromRange(checkIn, checkOut) {
+  const diff = dateDiffDays(checkIn, checkOut);
+  return diff > 1 ? Math.min(31, diff + 1) : 1;
+}
+
+function formatRate(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return `${Math.round(number * 100)}%`;
+}
+
+function parseWeeklyReservationRates(detail) {
+  const matches = String(detail || "").matchAll(/(\d{2}\/\d{2})\s+(\d+)\/(\d+)/g);
+  const rows = [];
+  for (const match of matches) {
+    const date = match[1];
+    const available = Number(match[2]);
+    const total = Number(match[3]);
+    if (!Number.isFinite(available) || !Number.isFinite(total) || total <= 0) continue;
+    const soldOut = Math.max(0, total - available);
+    const rate = soldOut / total;
+    rows.push({ date, soldOut, total, rate });
+  }
+  if (!rows.length) return { average: null, detail: "" };
+  const average = Number((rows.reduce((sum, row) => sum + row.rate, 0) / rows.length).toFixed(3));
+  const rateDetail = rows.map((row) => `${row.date} ${formatRate(row.rate)}(${row.soldOut}/${row.total})`).join(", ");
+  return { average, detail: rateDetail };
+}
+
 function availabilityPlaceKey(row) {
   const explicit = row.place_id || row["place_id"];
   if (explicit) return `place:${explicit}`;
@@ -1339,6 +1375,9 @@ function summarizeAvailabilityRows(rows) {
     const weeklySummary = weeklyDetail
       ? (weeklyDays ? `${weeklyDays}일 날짜별 잔여` : "날짜별 잔여")
       : row["주간잔여요약"] || "";
+    const derivedWeeklyRates = parseWeeklyReservationRates(weeklyDetail);
+    const weeklyAvgReservationRate = numericField(row, ["주간평균예약률", "weeklyAvgReservationRate"]) ?? derivedWeeklyRates.average;
+    const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -1369,6 +1408,8 @@ function summarizeAvailabilityRows(rows) {
       weeklyMinAvailable: numericField(row, ["주간최소잔여수", "weeklyMinAvailable"]),
       weeklySoldOutDays: numericField(row, ["주간마감일수", "weeklySoldOutDays"]),
       weeklyDetail,
+      weeklyAvgReservationRate,
+      weeklyReservationRateDetail,
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
       inventoryScope: row["네이버재고범위"] || "네이버예약 채널/날짜 기준 재고",
@@ -1468,8 +1509,11 @@ function summarizeCompanyPlatforms(rows) {
     const weeklySummary = weeklyDetail
       ? (weeklyDays ? `${weeklyDays}일 날짜별 잔여` : "날짜별 잔여")
       : row["주간잔여요약"] || "";
+    const derivedWeeklyRates = parseWeeklyReservationRates(weeklyDetail);
+    const weeklyAvgReservationRate = numericField(row, ["주간평균예약률", "weeklyAvgReservationRate"]) ?? derivedWeeklyRates.average;
+    const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
     const weeklyStockText = weeklyDetail
-      ? `${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
+      ? `${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
       : weeklySummary;
 
     company.platforms.push({
@@ -1482,6 +1526,8 @@ function summarizeCompanyPlatforms(rows) {
       inventoryNote: row["네이버상품구성"] || row["채널재고해석"] || "",
       weeklySummary,
       weeklyDetail,
+      weeklyAvgReservationRate,
+      weeklyReservationRateDetail,
       url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
     });
   }
@@ -1696,14 +1742,17 @@ function summarizePlatformRows(rows) {
 async function runCrawler(payload) {
   const keyword = String(payload.keyword || "").trim();
   if (!keyword) throw new Error("키워드를 입력해야 합니다.");
+  const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
+  const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(1);
+  const bookingRangeDays = payload.bookingDays || payload.bookingRangeDays || bookingDaysFromRange(checkIn, checkOut) || process.env.BOOKING_RANGE_DAYS || 1;
 
   const env = {
     ...process.env,
-    CHECK_IN: payload.checkIn || process.env.CHECK_IN || kstDate(0),
-    CHECK_OUT: payload.checkOut || process.env.CHECK_OUT || kstDate(1),
+    CHECK_IN: checkIn,
+    CHECK_OUT: checkOut,
     ADULTS: String(payload.adults || process.env.ADULTS || 2),
     PRODUCT_MODE: normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all"),
-    BOOKING_RANGE_DAYS: String(payload.bookingDays || payload.bookingRangeDays || process.env.BOOKING_RANGE_DAYS || 1),
+    BOOKING_RANGE_DAYS: String(bookingRangeDays),
     BOOKING_RANGE_PLACE_LIMIT: String(payload.bookingRangePlaceLimit || process.env.BOOKING_RANGE_PLACE_LIMIT || ""),
     DATA_DIR,
     OUTPUTS_DIR,
