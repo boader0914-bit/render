@@ -1349,7 +1349,7 @@ h1 {
 
 .weekly-bars {
   min-width: 0;
-  height: 44px;
+  height: 54px;
   display: grid;
   grid-template-columns: repeat(7, 16px);
   gap: 9px;
@@ -1358,10 +1358,20 @@ h1 {
 
 .weekly-bars i {
   min-width: 0;
-  height: 44px;
-  display: flex;
+  height: 54px;
+  display: grid;
+  grid-template-rows: 15px minmax(10px, 1fr);
+  gap: 3px;
   align-items: flex-end;
+  justify-items: center;
   font-style: normal;
+}
+
+.weekly-bars i strong {
+  color: #1b64da;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 900;
 }
 
 .weekly-bars b {
@@ -1376,6 +1386,10 @@ h1 {
 .weekly-bars i:nth-child(2n) b,
 .weekly-bars i:nth-child(7n) b {
   background: #3182f6;
+}
+
+.weekly-count-bars i:has(strong:not(:empty)) b {
+  box-shadow: inset 0 0 0 1px rgba(49, 130, 246, .08);
 }
 
 .weekly-range {
@@ -1626,7 +1640,7 @@ h1 {
 .daily-rate-row {
   min-height: 46px;
   display: grid;
-  grid-template-columns: minmax(72px, auto) minmax(180px, 1fr) minmax(120px, 220px);
+  grid-template-columns: minmax(72px, auto) minmax(160px, 1fr) minmax(48px, auto) minmax(120px, 220px);
   align-items: center;
   gap: 10px;
   border: 1px solid #edf0f3;
@@ -1641,6 +1655,26 @@ h1 {
   color: #4e5968;
   font-size: 15px;
   font-weight: 600;
+  display: grid;
+  gap: 2px;
+}
+
+.daily-rate-row strong b {
+  color: #111827;
+  font-size: 17px;
+}
+
+.daily-rate-row strong small {
+  color: #6b7684;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.daily-rate-percent {
+  color: #1b64da;
+  font-size: 15px;
+  font-weight: 900;
+  text-align: right;
 }
 
 .daily-rate-row em {
@@ -2218,10 +2252,15 @@ h1 {
   .weekly-bars {
     grid-template-columns: repeat(7, 13px);
     gap: 6px;
+    height: 52px;
   }
 
   .weekly-bars b {
     width: 13px;
+  }
+
+  .weekly-bars i strong {
+    font-size: 9px;
   }
 
   .platform-badges span {
@@ -2246,11 +2285,15 @@ h1 {
   }
 
   .daily-rate-row {
-    grid-template-columns: minmax(56px, auto) minmax(0, 1fr);
+    grid-template-columns: minmax(56px, auto) minmax(0, 1fr) minmax(42px, auto);
   }
 
   .daily-rate-row em {
     grid-column: 1 / -1;
+  }
+
+  .daily-rate-percent {
+    font-size: 13px;
   }
 
   .availability-head,

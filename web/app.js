@@ -1022,6 +1022,9 @@ function weeklyRateRows(item = {}) {
       label: match[1],
       rate: Number(match[2]),
       stock: match[3],
+      sold,
+      total,
+      available: Number.isFinite(sold) && Number.isFinite(total) ? Math.max(0, total - sold) : null,
       remaining: Number.isFinite(sold) && Number.isFinite(total) ? `${Math.max(0, total - sold)}/${total} 잔여` : ""
     };
   });
@@ -1059,13 +1062,14 @@ function renderWeeklyMini(item = {}) {
   if (!rows.length) return "";
   const visibleRows = rows.slice(0, 7);
   return `
-    <div class="weekly-mini" aria-label="날짜별 예약률">
-      <span>날짜별</span>
-      <div class="weekly-bars">
+    <div class="weekly-mini" aria-label="날짜별 판매수량">
+      <span>날짜별 판매</span>
+      <div class="weekly-bars weekly-count-bars">
         ${visibleRows.map((row) => {
           const height = Number.isFinite(row.rate) ? Math.max(8, Math.min(100, row.rate)) : 8;
           return `
-            <i title="${row.label} ${Number.isFinite(row.rate) ? `${row.rate}%` : ""}">
+            <i title="${row.label} 판매 ${Number.isFinite(row.sold) ? row.sold : "확인불가"} / 전체 ${Number.isFinite(row.total) ? row.total : "확인불가"}">
+              <strong>${Number.isFinite(row.sold) ? fmtNumber(row.sold) : "-"}</strong>
               <b style="height:${height}%"></b>
             </i>
           `;
@@ -1090,7 +1094,11 @@ function renderWeeklyDetail(item = {}, options = {}) {
           ${rows.map((row) => `
             <div class="daily-rate-row">
               <span>${row.label}</span>
-              <strong>${[row.remaining, Number.isFinite(row.rate) ? `예약률 ${row.rate}%` : ""].filter(Boolean).join(" · ") || "확인불가"}</strong>
+              <strong>
+                <b>판매 ${Number.isFinite(row.sold) ? fmtNumber(row.sold) : "-"}</b>
+                <small>${Number.isFinite(row.available) && Number.isFinite(row.total) ? `잔여 ${fmtNumber(row.available)} · 전체 ${fmtNumber(row.total)}` : row.remaining || "수량 확인불가"}</small>
+              </strong>
+              <span class="daily-rate-percent">${Number.isFinite(row.rate) ? `${row.rate}%` : ""}</span>
               <em><i style="width:${Number.isFinite(row.rate) ? Math.max(4, Math.min(100, row.rate)) : 0}%"></i></em>
             </div>
           `).join("")}
