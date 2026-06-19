@@ -1057,22 +1057,22 @@ function fmtWeeklySales(item = {}) {
   return `7일 판매 ${fmtNumber(sales.sold)}${Number.isFinite(sales.total) && sales.total > 0 ? `/${fmtNumber(sales.total)}` : ""}`;
 }
 
-function renderWeeklySalesVisual(item = {}) {
-  const sales = weeklySalesTotal(item);
-  if (!Number.isFinite(sales.sold)) return "";
-  const totalLabel = Number.isFinite(sales.total) && sales.total > 0 ? `/${fmtNumber(sales.total)}` : "";
-  const percent = Number.isFinite(sales.total) && sales.total > 0
-    ? Math.max(4, Math.min(100, (sales.sold / sales.total) * 100))
-    : 0;
-  return `
-    <div class="weekly-sales-visual" aria-label="7일 합산 판매수량">
-      <span>
-        <em>7일 판매</em>
-        <strong>${fmtNumber(sales.sold)}${totalLabel}</strong>
-      </span>
-      <b><i style="width:${percent}%"></i></b>
-    </div>
-  `;
+function formatShortDate(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function dateRangeLabel(run = {}) {
+  const start = formatShortDate(run.checkIn);
+  if (start && Number(run.bookingRangeDays || 0) > 1) {
+    const startDate = new Date(run.checkIn);
+    startDate.setDate(startDate.getDate() + Number(run.bookingRangeDays || 1) - 1);
+    return `${start}~${formatShortDate(startDate)}`;
+  }
+  const end = formatShortDate(run.checkOut);
+  if (start && end) return `${start}~${end}`;
+  return start || "날짜 미확인";
 }
 
 function renderWeeklyMini(item = {}) {
@@ -1081,13 +1081,12 @@ function renderWeeklyMini(item = {}) {
   const visibleRows = rows.slice(0, 7);
   return `
     <div class="weekly-mini" aria-label="날짜별 판매수량">
-      <span>날짜별 판매</span>
+      <span>날짜별</span>
       <div class="weekly-bars weekly-count-bars">
         ${visibleRows.map((row) => {
           const height = Number.isFinite(row.rate) ? Math.max(8, Math.min(100, row.rate)) : 8;
           return `
             <i title="${row.label} 판매 ${Number.isFinite(row.sold) ? row.sold : "확인불가"} / 전체 ${Number.isFinite(row.total) ? row.total : "확인불가"}">
-              <strong>${Number.isFinite(row.sold) ? fmtNumber(row.sold) : "-"}</strong>
               <b style="height:${height}%"></b>
             </i>
           `;
@@ -1109,17 +1108,22 @@ function renderWeeklyDetail(item = {}, options = {}) {
       <div class="detail-block">
         ${showTitle ? `<h3>날짜별 예약률</h3>` : ""}
         <div class="daily-rate-list">
-          ${rows.map((row) => `
-            <div class="daily-rate-row">
-              <span>${row.label}</span>
-              <strong>
-                <b>판매 ${Number.isFinite(row.sold) ? fmtNumber(row.sold) : "-"}</b>
-                <small>${Number.isFinite(row.available) && Number.isFinite(row.total) ? `잔여 ${fmtNumber(row.available)} · 전체 ${fmtNumber(row.total)}` : row.remaining || "수량 확인불가"}</small>
-              </strong>
-              <span class="daily-rate-percent">${Number.isFinite(row.rate) ? `${row.rate}%` : ""}</span>
-              <em><i style="width:${Number.isFinite(row.rate) ? Math.max(4, Math.min(100, row.rate)) : 0}%"></i></em>
-            </div>
-          `).join("")}
+          ${rows.map((row) => {
+            const stockLabel = Number.isFinite(row.available) && Number.isFinite(row.total)
+              ? `${fmtNumber(row.available)}/${fmtNumber(row.total)} 잔여`
+              : row.remaining || "수량 확인불가";
+            const rateLabel = Number.isFinite(row.rate) ? `예약률 ${row.rate}%` : "예약률 확인불가";
+            return `
+              <div class="daily-rate-row">
+                <span>${row.label}</span>
+                <strong>
+                  <b>${stockLabel} · ${rateLabel}</b>
+                </strong>
+                <span class="daily-rate-percent">${Number.isFinite(row.rate) ? `${row.rate}%` : ""}</span>
+                <em><i style="width:${Number.isFinite(row.rate) ? Math.max(4, Math.min(100, row.rate)) : 0}%"></i></em>
+              </div>
+            `;
+          }).join("")}
         </div>
       </div>
     `;
@@ -1209,22 +1213,21 @@ function renderAvailability() {
   const stats = availability.stats || {};
   const run = state.data?.run || {};
   const platformMap = companyPlatformMap();
-  const rangeText = Number(run.bookingRangeDays || 1) > 1
-    ? `${run.bookingRangeDays}일 날짜별 예약률/잔여`
-    : "네이버예약 잔여 객실/상품을 우선 표시";
-  const dateText = Number(run.bookingRangeDays || 1) > 1
-    ? `${run.checkIn || "선택 날짜"}부터 ${run.bookingRangeDays}일 기준`
-    : `${run.checkIn || "선택 날짜"} 체크인 기준`;
   els.availabilityPanel.innerHTML = `
     <div class="section-head availability-head">
       <div>
-        <h2>업체 순위</h2>
-        <p>네이버 플레이스 노출순 · ${dateText} · ${rangeText}</p>
+        <h2>글램핑 클러스터</h2>
+        <p>네이버 플레이스 노출순 · ${dateRangeLabel(run)}</p>
       </div>
+      <button class="availability-filter" type="button" aria-label="필터"><span></span></button>
       <div class="availability-summary">
-        <span class="summary-room"><i>▮</i><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>잔여</span>
-        <span class="summary-company"><i>■</i><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong>업체</span>
-        <span class="summary-rate"><i>%</i><strong>${fmtAvailabilityRate(stats.totalSoldOutRooms && stats.totalRooms ? stats.totalSoldOutRooms / stats.totalRooms : NaN)}</strong>평균 예약률</span>
+        <span class="summary-room"><i>▮</i><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong><em>잔여</em></span>
+        <span class="summary-company"><i>■</i><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong><em>업체</em></span>
+        <span class="summary-rate"><i>%</i><small>평균 예약률</small><strong>${fmtAvailabilityRate(stats.totalSoldOutRooms && stats.totalRooms ? stats.totalSoldOutRooms / stats.totalRooms : NaN)}</strong></span>
+      </div>
+      <div class="availability-rank-title">
+        <h2>업체 순위</h2>
+        <p>네이버 플레이스 순서로 비교</p>
       </div>
     </div>
     <div class="availability-list">
@@ -1251,7 +1254,6 @@ function renderAvailability() {
               ${renderWeeklyMini(item)}
               <div class="availability-card-actions">
                 <strong>${item.price || "가격 확인"}</strong>
-                ${renderWeeklySalesVisual(item)}
                 ${renderPlatformBadges(item, platformMap)}
                 <details class="availability-more">
                   <summary>더보기</summary>
@@ -1267,12 +1269,11 @@ function renderAvailability() {
                       <span>검색수요</span>
                     </div>
                     <div class="detail-block">
-                      <h3>날짜별 예약 현황</h3>
-                      ${renderWeeklySalesVisual(item)}
+                      <h3 class="sheet-section-title booking">날짜별 예약 현황</h3>
                       ${renderWeeklyDetail(item, { showTitle: false })}
                     </div>
                     <div class="detail-block">
-                      <h3>플랫폼 비교</h3>
+                      <h3 class="sheet-section-title platform">플랫폼 비교</h3>
                       <div class="sheet-platform-list">
                         ${renderPlatformDetailRows(item, platformMap)}
                       </div>
