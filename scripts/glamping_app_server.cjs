@@ -1381,10 +1381,12 @@ function parseWeeklyReservationRates(detail) {
     const rate = soldOut / total;
     rows.push({ date, soldOut, total, rate });
   }
-  if (!rows.length) return { average: null, detail: "" };
+  if (!rows.length) return { average: null, detail: "", totalSoldOut: null, totalStock: null };
   const average = Number((rows.reduce((sum, row) => sum + row.rate, 0) / rows.length).toFixed(3));
+  const totalSoldOut = rows.reduce((sum, row) => sum + row.soldOut, 0);
+  const totalStock = rows.reduce((sum, row) => sum + row.total, 0);
   const rateDetail = rows.map((row) => `${row.date} ${formatRate(row.rate)}(${row.soldOut}/${row.total})`).join(", ");
-  return { average, detail: rateDetail };
+  return { average, detail: rateDetail, totalSoldOut, totalStock };
 }
 
 function availabilityPlaceKey(row) {
@@ -1421,6 +1423,8 @@ function summarizeAvailabilityRows(rows) {
     const derivedWeeklyRates = parseWeeklyReservationRates(weeklyDetail);
     const weeklyAvgReservationRate = numericField(row, ["주간평균예약률", "weeklyAvgReservationRate"]) ?? derivedWeeklyRates.average;
     const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
+    const weeklyTotalSoldOut = numericField(row, ["주간판매수량합계", "weeklyTotalSoldOut"]) ?? derivedWeeklyRates.totalSoldOut;
+    const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -1450,6 +1454,8 @@ function summarizeAvailabilityRows(rows) {
       weeklyAvgAvailable: numericField(row, ["주간평균잔여수", "weeklyAvgAvailable"]),
       weeklyMinAvailable: numericField(row, ["주간최소잔여수", "weeklyMinAvailable"]),
       weeklySoldOutDays: numericField(row, ["주간마감일수", "weeklySoldOutDays"]),
+      weeklyTotalSoldOut,
+      weeklyTotalStock,
       weeklyDetail,
       weeklyAvgReservationRate,
       weeklyReservationRateDetail,
@@ -1555,8 +1561,10 @@ function summarizeCompanyPlatforms(rows) {
     const derivedWeeklyRates = parseWeeklyReservationRates(weeklyDetail);
     const weeklyAvgReservationRate = numericField(row, ["주간평균예약률", "weeklyAvgReservationRate"]) ?? derivedWeeklyRates.average;
     const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
+    const weeklyTotalSoldOut = numericField(row, ["주간판매수량합계", "weeklyTotalSoldOut"]) ?? derivedWeeklyRates.totalSoldOut;
+    const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
     const weeklyStockText = weeklyDetail
-      ? `${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
+      ? `${weeklyTotalSoldOut !== null ? `7일 판매 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
       : weeklySummary;
 
     company.platforms.push({
@@ -1571,6 +1579,8 @@ function summarizeCompanyPlatforms(rows) {
       weeklyDetail,
       weeklyAvgReservationRate,
       weeklyReservationRateDetail,
+      weeklyTotalSoldOut,
+      weeklyTotalStock,
       url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
     });
   }

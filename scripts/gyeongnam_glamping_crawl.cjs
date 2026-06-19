@@ -1004,6 +1004,8 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
   const avgAvailable = Number((valid.reduce((sum, item) => sum + item.available, 0) / valid.length).toFixed(1));
   const minAvailable = Math.min(...valid.map((item) => item.available));
   const soldOutDays = valid.filter((item) => item.available <= 0).length;
+  const totalSoldOut = valid.reduce((sum, item) => sum + item.soldOut, 0);
+  const totalStock = valid.reduce((sum, item) => sum + item.total, 0);
   const avgReservationRate = Number((valid.reduce((sum, item) => {
     const reservationRate = item.total > 0 ? item.soldOut / item.total : 0;
     return sum + reservationRate;
@@ -1020,6 +1022,8 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     avgAvailable,
     minAvailable,
     soldOutDays,
+    totalSoldOut,
+    totalStock,
     avgReservationRate,
     detail,
     reservationRateDetail,
@@ -1136,6 +1140,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.주간평균잔여수 = result.weekly?.avgAvailable ?? "";
       row.주간최소잔여수 = result.weekly?.minAvailable ?? "";
       row.주간마감일수 = result.weekly?.soldOutDays ?? "";
+      row.주간판매수량합계 = result.weekly?.totalSoldOut ?? "";
+      row.주간전체수량합계 = result.weekly?.totalStock ?? "";
       row.주간잔여상세 = result.weekly?.detail || "";
       row.주간평균예약률 = result.weekly?.avgReservationRate ?? "";
       row.주간예약률상세 = result.weekly?.reservationRateDetail || "";
@@ -1447,6 +1453,8 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간평균잔여수": row.주간평균잔여수 ?? "",
       "주간최소잔여수": row.주간최소잔여수 ?? "",
       "주간마감일수": row.주간마감일수 ?? "",
+      "주간판매수량합계": row.주간판매수량합계 ?? "",
+      "주간전체수량합계": row.주간전체수량합계 ?? "",
       "주간잔여상세": row.주간잔여상세 || "",
       "주간평균예약률": row.주간평균예약률 ?? "",
       "주간예약률상세": row.주간예약률상세 || "",
@@ -1493,6 +1501,8 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간평균잔여수": row.주간평균잔여수 ?? "",
       "주간최소잔여수": row.주간최소잔여수 ?? "",
       "주간마감일수": row.주간마감일수 ?? "",
+      "주간판매수량합계": row.주간판매수량합계 ?? "",
+      "주간전체수량합계": row.주간전체수량합계 ?? "",
       "주간잔여상세": row.주간잔여상세 || "",
       "주간평균예약률": row.주간평균예약률 ?? "",
       "주간예약률상세": row.주간예약률상세 || "",
@@ -1665,6 +1675,8 @@ async function main() {
     "주간평균잔여수",
     "주간최소잔여수",
     "주간마감일수",
+    "주간판매수량합계",
+    "주간전체수량합계",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
@@ -1733,6 +1745,8 @@ async function main() {
     "주간평균잔여수",
     "주간최소잔여수",
     "주간마감일수",
+    "주간판매수량합계",
+    "주간전체수량합계",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
@@ -1803,6 +1817,8 @@ async function main() {
     "주간평균잔여수",
     "주간최소잔여수",
     "주간마감일수",
+    "주간판매수량합계",
+    "주간전체수량합계",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
@@ -1871,6 +1887,8 @@ async function main() {
     "주간평균잔여수",
     "주간최소잔여수",
     "주간마감일수",
+    "주간판매수량합계",
+    "주간전체수량합계",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",

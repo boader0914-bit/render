@@ -1027,6 +1027,33 @@ function weeklyRateRows(item = {}) {
   });
 }
 
+function weeklySalesTotal(item = {}) {
+  const explicitSold = Number(item.weeklyTotalSoldOut);
+  const explicitTotal = Number(item.weeklyTotalStock);
+  if (Number.isFinite(explicitSold)) {
+    return {
+      sold: explicitSold,
+      total: Number.isFinite(explicitTotal) ? explicitTotal : null
+    };
+  }
+  const rows = weeklyRateRows(item);
+  if (!rows.length) return { sold: null, total: null };
+  return rows.reduce((sum, row) => {
+    const match = String(row.stock || "").match(/^(\d+)\/(\d+)$/);
+    if (!match) return sum;
+    return {
+      sold: sum.sold + Number(match[1]),
+      total: sum.total + Number(match[2])
+    };
+  }, { sold: 0, total: 0 });
+}
+
+function fmtWeeklySales(item = {}) {
+  const sales = weeklySalesTotal(item);
+  if (!Number.isFinite(sales.sold)) return "";
+  return `7일 판매 ${fmtNumber(sales.sold)}${Number.isFinite(sales.total) && sales.total > 0 ? `/${fmtNumber(sales.total)}` : ""}`;
+}
+
 function renderWeeklyMini(item = {}) {
   const rows = weeklyRateRows(item);
   if (!rows.length) return "";
@@ -1182,6 +1209,7 @@ function renderAvailability() {
           ? `${item.weeklySummary ? `${item.weeklySummary}: ` : ""}${item.weeklyDetail}`
           : item.weeklySummary;
         const weeklyReservationText = fmtWeeklyReservation(item);
+        const weeklySalesText = fmtWeeklySales(item);
         const regionText = [item.region, item.category].filter(Boolean).join(" · ") || item.listType || "정보 확인";
         return `
           <article class="availability-card ${availabilityLevel(item.rate)}" title="${item.basis || ""}">
@@ -1197,6 +1225,7 @@ function renderAvailability() {
               ${renderWeeklyMini(item)}
               <div class="availability-card-actions">
                 <strong>${item.price || "가격 확인"}</strong>
+                ${weeklySalesText ? `<span class="weekly-sales">${weeklySalesText}</span>` : ""}
                 ${renderPlatformBadges(item, platformMap)}
                 <details class="availability-more">
                   <summary>더보기</summary>
@@ -1213,6 +1242,7 @@ function renderAvailability() {
                     </div>
                     <div class="detail-block">
                       <h3>날짜별 예약 현황</h3>
+                      ${weeklySalesText ? `<p class="weekly-sales-note">${weeklySalesText} 합산</p>` : ""}
                       ${renderWeeklyDetail(item, { showTitle: false })}
                     </div>
                     <div class="detail-block">
@@ -1224,6 +1254,7 @@ function renderAvailability() {
                     <div class="detail-block">
                       <h3>수집 근거</h3>
                       <p>${fmtRemainingStock(item)}</p>
+                      ${weeklySalesText ? `<p>${weeklySalesText}</p>` : ""}
                       ${weeklyReservationText ? `<p>${weeklyReservationText}</p>` : ""}
                       ${weeklyText ? `<p>${weeklyText}</p>` : ""}
                       ${fmtSoldOut(item) ? `<p>${fmtSoldOut(item)}</p>` : ""}

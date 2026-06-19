@@ -1504,6 +1504,25 @@ h1 {
   line-height: 1.15;
 }
 
+.weekly-sales {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1b64da;
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.weekly-sales-note {
+  margin: -2px 0 0;
+  color: #1b64da;
+  font-size: 14px;
+  font-weight: 900;
+}
+
 .availability-sheet {
   position: fixed;
   z-index: 30;
@@ -2213,6 +2232,12 @@ h1 {
 
   .availability-card-actions > strong {
     font-size: 17px;
+  }
+
+  .weekly-sales {
+    min-height: 28px;
+    padding: 0 9px;
+    font-size: 12px;
   }
 
   .availability-sheet {
