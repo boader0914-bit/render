@@ -465,6 +465,48 @@ async function readManifest(dirPath) {
   }
 }
 
+function manifestFile(manifest, role, files, legacyMatcher) {
+  const candidate = manifest?.fileRoles?.[role];
+  if (candidate && files.includes(candidate)) return candidate;
+  return files.find(legacyMatcher);
+}
+
+function safeFilePart(value, fallback = "검색") {
+  const cleaned = String(value || "")
+    .normalize("NFKC")
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return (cleaned || fallback).slice(0, 80);
+}
+
+function downloadLabelForFile(file, manifest = {}) {
+  const roles = manifest.fileRoles || {};
+  const role = Object.entries(roles).find(([, name]) => name === file)?.[0];
+  const labels = {
+    platform: "플랫폼 통합 결과",
+    report: "수집 리포트",
+    overall: "네이버 전체 순위",
+    ads: "네이버 광고 순위",
+    regional: "네이버 지역별 순위",
+    ddnayo: "떠나요 검색 결과",
+    workbook: "전체 수집 결과",
+    naverWorkbook: "네이버 순위 통합",
+    yeogiManual: "여기어때 수동 보완"
+  };
+  if (role && labels[role]) return labels[role];
+  if (/_glamping_crawl_test_report\.md$/i.test(file)) return "수집 리포트";
+  if (/_glamping_crawl_test\.csv$/i.test(file)) return "플랫폼 통합 결과";
+  if (/_overall_place_rank\.csv$/i.test(file)) return "네이버 전체 순위";
+  if (/_ad_place_list\.csv$/i.test(file)) return "네이버 광고 순위";
+  if (/_naver_place_glamping_clusters\.csv$/i.test(file)) return "네이버 지역별 순위";
+  if (/_ddnayo_search_results\.csv$/i.test(file)) return "떠나요 검색 결과";
+  if (/_glamping_crawl_results\.xlsx$/i.test(file)) return "전체 수집 결과";
+  if (/_naver_place_glamping_clusters_with_overall\.xlsx$/i.test(file)) return "네이버 순위 통합";
+  if (/_yeogi_manual_import\.csv$/i.test(file)) return "여기어때 수동 보완";
+  return file;
+}
+
 async function listRuns() {
   await fsp.mkdir(OUTPUTS_DIR, { recursive: true });
   const entries = await fsp.readdir(OUTPUTS_DIR, { withFileTypes: true });
@@ -881,7 +923,8 @@ async function importYeogiSupplement(payload) {
   if (!sourceText) throw new Error("붙여넣기 데이터가 비어 있습니다.");
 
   const files = await fsp.readdir(dirPath);
-  const platformFile = files.find((file) => file.endsWith("_glamping_crawl_test.csv"));
+  const manifest = (await readManifest(dirPath)) || {};
+  const platformFile = manifestFile(manifest, "platform", files, (file) => file.endsWith("_glamping_crawl_test.csv"));
   if (!platformFile) throw new Error("플랫폼 결과 CSV를 찾을 수 없습니다.");
 
   const platformPath = path.join(dirPath, platformFile);
@@ -921,12 +964,12 @@ async function importYeogiSupplement(payload) {
   const columns = orderedColumns(mergedRows, originalHeaders);
   await writeCsv(platformPath, mergedRows, columns);
 
-  const prefix = platformFile.replace(/_glamping_crawl_test\.csv$/i, "");
-  const importFile = `${prefix}_yeogi_manual_import.csv`;
+  const prefix = safeFilePart(manifest.keyword || manifest.searchKeyword || platformFile.replace(/\.[^.]+$/, ""));
+  const importFile = `${prefix}_여기어때수동보완.csv`;
   await writeCsv(path.join(dirPath, importFile), importedRows, orderedColumns(importedRows, columns));
 
-  const manifest = (await readManifest(dirPath)) || {};
   manifest.files = Array.from(new Set([...(manifest.files || []), importFile]));
+  manifest.fileRoles = { ...(manifest.fileRoles || {}), yeogiManual: importFile };
   manifest.counts = { ...(manifest.counts || {}), yeogiManual: importedRows.length };
   manifest.yeogiImport = { importedAt, count: importedRows.length, method: "browser_or_manual" };
   await fsp.writeFile(path.join(dirPath, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
@@ -1565,12 +1608,12 @@ async function loadRun(runId) {
   const manifest = await readManifest(dirPath);
   const provinceKey = provinceKeyForRun(runId, manifest);
   const province = PROVINCES[provinceKey] || PROVINCES.local;
-  const regionalFile = files.find((file) => file.endsWith("_naver_place_glamping_clusters.csv"));
-  const overallFile = files.find((file) => file.endsWith("_overall_place_rank.csv"));
-  const adFile = files.find((file) => file.endsWith("_ad_place_list.csv"));
-  const platformFile = files.find((file) => file.endsWith("_glamping_crawl_test.csv"));
-  const yeogiManualFile = files.find((file) => file.endsWith("_yeogi_manual_import.csv"));
-  const reportFile = files.find((file) => file.endsWith("_glamping_crawl_test_report.md"));
+  const regionalFile = manifestFile(manifest, "regional", files, (file) => file.endsWith("_naver_place_glamping_clusters.csv"));
+  const overallFile = manifestFile(manifest, "overall", files, (file) => file.endsWith("_overall_place_rank.csv"));
+  const adFile = manifestFile(manifest, "ads", files, (file) => file.endsWith("_ad_place_list.csv"));
+  const platformFile = manifestFile(manifest, "platform", files, (file) => file.endsWith("_glamping_crawl_test.csv"));
+  const yeogiManualFile = manifestFile(manifest, "yeogiManual", files, (file) => file.endsWith("_yeogi_manual_import.csv"));
+  const reportFile = manifestFile(manifest, "report", files, (file) => file.endsWith("_glamping_crawl_test_report.md"));
   const conditions = await readRunConditions(dirPath, manifest, reportFile);
 
   const regionalRows = regionalFile
@@ -1632,6 +1675,7 @@ async function loadRun(runId) {
       .filter((file) => /\.(csv|xlsx|md|html|png)$/i.test(file))
       .map((file) => ({
         name: file,
+        label: downloadLabelForFile(file, manifest || {}),
         url: `/outputs/${encodeURIComponent(runId)}/${encodeURIComponent(file)}`
       }))
   };
@@ -1743,8 +1787,8 @@ async function runCrawler(payload) {
   const keyword = String(payload.keyword || "").trim();
   if (!keyword) throw new Error("키워드를 입력해야 합니다.");
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
-  const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(1);
-  const bookingRangeDays = payload.bookingDays || payload.bookingRangeDays || bookingDaysFromRange(checkIn, checkOut) || process.env.BOOKING_RANGE_DAYS || 1;
+  const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
+  const bookingRangeDays = payload.bookingDays || payload.bookingRangeDays || bookingDaysFromRange(checkIn, checkOut) || process.env.BOOKING_RANGE_DAYS || 7;
 
   const env = {
     ...process.env,

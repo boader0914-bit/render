@@ -53,12 +53,21 @@ function formatRate(value) {
   return `${Math.round(number * 100)}%`;
 }
 
+function safeFilePart(value, fallback = "검색") {
+  const cleaned = String(value || "")
+    .normalize("NFKC")
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return (cleaned || fallback).slice(0, 80);
+}
+
 const CHECK_IN = process.env.CHECK_IN || kstDate(0);
-const CHECK_OUT = process.env.CHECK_OUT || kstDate(1);
+const CHECK_OUT = process.env.CHECK_OUT || kstDate(6);
 const ADULTS = Number(process.env.ADULTS || 2);
 const PRODUCT_MODE = normalizeProductMode(process.env.PRODUCT_MODE || "all");
 const PRODUCT_MODE_LABEL = PRODUCT_MODES[PRODUCT_MODE];
-const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 1, 1, 31);
+const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 7, 1, 31);
 const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? 10 : 0, 0, 20);
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 
@@ -1873,9 +1882,10 @@ async function main() {
     .filter((item) => item.collected < REGIONAL_LIMIT)
     .map((item) => `${item.region} ${item.collected}건`)
     .join(", ");
+  const bookingConditionText = `상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, ${BOOKING_RANGE_DAYS}일 기준, 체크인 ${CHECK_IN}, 종료일 ${CHECK_OUT}`;
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
-    { 항목: "조건", 값: `상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, 1박, 체크인 ${CHECK_IN}, 체크아웃 ${CHECK_OUT}` },
+    { 항목: "조건", 값: bookingConditionText },
     { 항목: "예약재고 기간", 값: BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 주간 상세` : "1일 기준" },
     { 항목: "네이버 전체", 값: `${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집` },
     { 항목: "네이버 광고", 값: `${naver.adTotal}건 수집` },
@@ -1899,16 +1909,26 @@ async function main() {
     },
   ];
 
-  const prefix = `${province.slug}`;
-  await writeCsv(path.join(OUTPUT_DIR, `${prefix}_glamping_crawl_test.csv`), platformRows, platformColumns);
-  await writeCsv(path.join(OUTPUT_DIR, `${prefix}_overall_place_rank.csv`), naver.overall, overallColumns);
-  await writeCsv(path.join(OUTPUT_DIR, `${prefix}_ad_place_list.csv`), naver.ads, adColumns);
+  const prefix = safeFilePart(RAW_KEYWORD || QUERY || province.keyword || province.short);
+  const fileRoles = {
+    platform: `${prefix}_플랫폼통합.csv`,
+    report: `${prefix}_수집리포트.md`,
+    overall: `${prefix}_네이버전체순위.csv`,
+    ads: `${prefix}_네이버광고순위.csv`,
+    regional: `${prefix}_네이버지역별순위.csv`,
+    ddnayo: `${prefix}_떠나요검색결과.csv`,
+    workbook: `${prefix}_전체수집결과.xlsx`,
+    naverWorkbook: `${prefix}_네이버순위통합.xlsx`
+  };
+  await writeCsv(path.join(OUTPUT_DIR, fileRoles.platform), platformRows, platformColumns);
+  await writeCsv(path.join(OUTPUT_DIR, fileRoles.overall), naver.overall, overallColumns);
+  await writeCsv(path.join(OUTPUT_DIR, fileRoles.ads), naver.ads, adColumns);
   await writeCsv(
-    path.join(OUTPUT_DIR, `${prefix}_naver_place_glamping_clusters.csv`),
+    path.join(OUTPUT_DIR, fileRoles.regional),
     regional.rows,
     regionalColumns,
   );
-  await writeCsv(path.join(OUTPUT_DIR, `${prefix}_ddnayo_search_results.csv`), ddnayo.rows, platformColumns);
+  await writeCsv(path.join(OUTPUT_DIR, fileRoles.ddnayo), ddnayo.rows, platformColumns);
 
   const report = `# ${province.short} 글램핑 자동수집 테스트
 
@@ -1917,7 +1937,7 @@ async function main() {
 - 검색 키워드: ${QUERY}
 - 네이버 전체 키워드: ${NAVER_QUERY}
 - 판단 유형: ${province.isLocal ? "지역형" : "광역형"}
-- OTA 기준 조건: 상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, 1박, 체크인 ${CHECK_IN} / 체크아웃 ${CHECK_OUT}
+- OTA 기준 조건: ${bookingConditionText}
 - 예약재고 기간: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 주간 상세` : "1일 기준"}
 - 핵심 분석 채널: 네이버, 야놀자/NOL, ONDA, 떠나요
 - 보조 채널: 여기어때(자동수집 차단 시 수동 보완만 사용)
@@ -1988,9 +2008,9 @@ async function main() {
 - ONDA/떠나요: 핵심 분석 채널. 전 채널 연동 가능성이 있어도 네이버예약은 분리될 수 있으므로 전체객실수와 채널수를 별도 확인한다.
 - 떠나요: 자동수집 가능. 단, 띄어쓰기 키워드와 공백 제거 키워드의 결과 수가 다를 수 있어 둘 다 확인했다.
 `;
-  await fs.writeFile(path.join(OUTPUT_DIR, `${prefix}_glamping_crawl_test_report.md`), report, "utf8");
+  await fs.writeFile(path.join(OUTPUT_DIR, fileRoles.report), report, "utf8");
 
-  const allWorkbook = path.join(OUTPUT_DIR, `${prefix}_glamping_crawl_results.xlsx`);
+  const allWorkbook = path.join(OUTPUT_DIR, fileRoles.workbook);
   await buildWorkbook(allWorkbook, [
     { name: "요약", rows: summaryRows, columns: ["항목", "값"] },
     { name: "플랫폼테스트", rows: platformRows, columns: platformColumns },
@@ -2000,7 +2020,7 @@ async function main() {
     { name: "떠나요", rows: ddnayo.rows, columns: platformColumns },
   ]);
 
-  const naverWorkbook = path.join(OUTPUT_DIR, `${prefix}_naver_place_glamping_clusters_with_overall.xlsx`);
+  const naverWorkbook = path.join(OUTPUT_DIR, fileRoles.naverWorkbook);
   await buildWorkbook(naverWorkbook, [
     { name: "요약", rows: summaryRows.slice(0, 5), columns: ["항목", "값"] },
     { name: "지역별상위5", rows: regional.rows, columns: regionalColumns },
@@ -2023,16 +2043,8 @@ async function main() {
     productModeLabel: PRODUCT_MODE_LABEL,
     bookingRangeDays: BOOKING_RANGE_DAYS,
     bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
-    files: [
-      `${prefix}_glamping_crawl_test.csv`,
-      `${prefix}_glamping_crawl_test_report.md`,
-      `${prefix}_overall_place_rank.csv`,
-      `${prefix}_ad_place_list.csv`,
-      `${prefix}_naver_place_glamping_clusters.csv`,
-      `${prefix}_ddnayo_search_results.csv`,
-      `${prefix}_glamping_crawl_results.xlsx`,
-      `${prefix}_naver_place_glamping_clusters_with_overall.xlsx`,
-    ],
+    fileRoles,
+    files: Object.values(fileRoles),
     counts: {
       naverOverall: naver.overall.length,
       naverAds: naver.ads.length,

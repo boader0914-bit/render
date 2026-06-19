@@ -1059,7 +1059,8 @@ h1 {
 
 .availability-panel {
   margin-top: 12px;
-  padding: 14px;
+  padding: 16px;
+  background: #f7f8fa;
 }
 
 .availability-head {
@@ -1101,19 +1102,18 @@ h1 {
 
 .availability-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
 }
 
 .availability-card {
   min-width: 0;
   display: grid;
-  gap: 8px;
+  gap: 10px;
   border: 1px solid var(--line);
-  border-left: 4px solid var(--green);
-  border-radius: 8px;
+  border-radius: 12px;
   background: #ffffff;
-  padding: 10px;
+  padding: 14px;
   color: var(--ink);
   text-decoration: none;
   transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
@@ -1126,33 +1126,31 @@ h1 {
 }
 
 .availability-card.high {
-  background: #f8fffb;
+  background: #ffffff;
 }
 
 .availability-card.mid {
-  border-left-color: var(--orange);
-  background: #fffaf2;
+  background: #fffdf8;
 }
 
 .availability-card.low {
-  border-left-color: var(--red);
-  background: #fff7f8;
+  background: #fffafa;
 }
 
 .availability-card.unknown {
-  border-left-color: var(--muted);
+  background: #ffffff;
 }
 
 .availability-card-top {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
+  grid-template-columns: auto minmax(0, 1fr) minmax(76px, auto);
+  align-items: start;
+  gap: 9px;
 }
 
 .availability-rank {
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1163,51 +1161,101 @@ h1 {
   font-weight: 800;
 }
 
-.availability-card strong {
+.availability-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.availability-title strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1.25;
 }
 
-.availability-card strong a {
+.availability-title strong a {
   color: inherit;
   text-decoration: none;
 }
 
-.availability-card strong a:hover {
+.availability-title strong a:hover {
   color: var(--blue);
 }
 
-.availability-card b {
+.availability-title small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.availability-card-top > b {
   display: grid;
   justify-items: end;
   gap: 1px;
-  font-size: 17px;
+  min-width: 76px;
+  font-size: 18px;
+  line-height: 1.1;
   color: var(--green);
 }
 
-.availability-card b span {
+.availability-card-top > b span {
   color: var(--muted);
   font-size: 10px;
   font-weight: 700;
 }
 
-.availability-card.mid b {
+.availability-card.mid .availability-card-top > b {
   color: #b86a00;
 }
 
-.availability-card.low b {
+.availability-card.low .availability-card-top > b {
   color: var(--red);
 }
 
-.availability-card.unknown b {
+.availability-card.unknown .availability-card-top > b {
   color: var(--muted);
 }
 
+.availability-quick {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.availability-quick span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #edf0f3;
+  border-radius: 10px;
+  background: #fbfcfd;
+  padding: 9px 10px;
+}
+
+.availability-quick em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.availability-quick strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .availability-meter {
-  height: 8px;
+  height: 6px;
   overflow: hidden;
   border-radius: 999px;
   background: #eef2f6;
@@ -1228,26 +1276,99 @@ h1 {
   background: #d84b3a;
 }
 
-.availability-meta {
+.weekly-mini {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: end;
+  gap: 9px;
+}
+
+.weekly-mini > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.weekly-bars {
+  min-width: 0;
+  height: 46px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(18px, 1fr));
+  gap: 5px;
+  align-items: end;
+}
+
+.weekly-bars i {
+  min-width: 0;
+  height: 46px;
+  display: grid;
+  grid-template-rows: minmax(18px, 1fr) 14px;
+  align-items: end;
+  justify-items: center;
+  gap: 4px;
+  font-style: normal;
+}
+
+.weekly-bars b {
+  width: 100%;
+  min-height: 6px;
+  max-height: 28px;
+  display: block;
+  border-radius: 999px 999px 3px 3px;
+  background: #3182f6;
+}
+
+.weekly-bars small {
+  width: 100%;
+  color: var(--muted);
+  font-size: 9px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.platform-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
+  min-width: 0;
 }
 
-.availability-meta span {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.platform-badges span {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #1457c7;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.platform-badges .yeogi {
+  background: #fff4df;
+  color: #9a5a00;
+}
+
+.platform-badges .ddnayo {
+  background: #f2fbf7;
+  color: #1f7a4d;
+}
+
+.platform-badges .nol {
+  background: #f6f0ff;
+  color: #6b4aa8;
 }
 
 .company-platforms {
   border-top: 1px solid var(--line);
-  padding-top: 7px;
+  padding-top: 9px;
 }
 
-.company-platforms summary {
+.company-platforms summary,
+.availability-more summary {
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -1259,6 +1380,73 @@ h1 {
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
+}
+
+.availability-more {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.availability-more summary {
+  background: #ffffff;
+  color: #4e5968;
+  border-color: var(--line);
+}
+
+.availability-more-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.detail-block {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.detail-block h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.detail-block p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.daily-rate-list {
+  display: grid;
+  gap: 5px;
+}
+
+.daily-rate-row {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: minmax(54px, auto) minmax(48px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.daily-rate-row strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.daily-rate-row em {
+  color: var(--muted);
+  font-style: normal;
+  text-align: right;
 }
 
 .company-platform-list {
@@ -1755,7 +1943,7 @@ h1 {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .availability-card b {
+  .availability-card-top > b {
     grid-column: 2;
     justify-self: start;
     justify-items: start;

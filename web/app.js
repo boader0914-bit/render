@@ -53,6 +53,7 @@ const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const KOREA_FULL_BOUNDS = { minLon: 124.6, maxLon: 131.9, minLat: 33.0, maxLat: 38.75 };
 const MAP_DRAW_BOX = { x: 70, y: 42, width: 780, height: 590 };
 const DEFAULT_ADULTS = 2;
+const DEFAULT_BOOKING_DAYS = 7;
 const productModeLabels = {
   all: "전체",
   lodging: "숙박",
@@ -600,6 +601,10 @@ function nextDateInput(value) {
   return formatDateInput(addDays(dateFromInput(value), 1));
 }
 
+function defaultBookingEndInput(value) {
+  return formatDateInput(addDays(dateFromInput(value), DEFAULT_BOOKING_DAYS - 1));
+}
+
 function runDateNotice(run = {}) {
   if (!run.checkIn) return "";
   const today = formatDateInput(new Date());
@@ -612,8 +617,14 @@ function ensureCheckoutAfterCheckin() {
   const nextDay = nextDateInput(els.checkInInput.value);
   els.checkOutInput.min = nextDay;
   if (!els.checkOutInput.value || els.checkOutInput.value <= els.checkInInput.value) {
-    els.checkOutInput.value = nextDay;
+    els.checkOutInput.value = defaultBookingEndInput(els.checkInInput.value);
   }
+}
+
+function setDefaultBookingRange() {
+  if (!els.checkInInput || !els.checkOutInput) return;
+  els.checkOutInput.min = nextDateInput(els.checkInInput.value);
+  els.checkOutInput.value = defaultBookingEndInput(els.checkInInput.value);
 }
 
 function initializeDateInputs() {
@@ -626,7 +637,11 @@ function initializeDateInputs() {
   if (!els.checkInInput.value || els.checkInInput.value < today) {
     els.checkInInput.value = today;
   }
-  ensureCheckoutAfterCheckin();
+  if (!els.checkOutInput.value || els.checkOutInput.value <= els.checkInInput.value) {
+    setDefaultBookingRange();
+  } else {
+    ensureCheckoutAfterCheckin();
+  }
 }
 
 function normalize(value) {
@@ -989,6 +1004,97 @@ function fmtAvailabilityRate(value) {
   return `${Math.round(n * 100)}%`;
 }
 
+function weeklyDetailEntries(detail = "") {
+  return String(detail || "")
+    .split(/\s*,\s*/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function weeklyRateRows(item = {}) {
+  return weeklyDetailEntries(item.weeklyReservationRateDetail).map((entry) => {
+    const match = entry.match(/^(\d{1,2}\/\d{1,2})\s+(\d+)%\(([^)]+)\)$/);
+    if (!match) return { label: entry, rate: null, stock: "" };
+    return {
+      label: match[1],
+      rate: Number(match[2]),
+      stock: match[3]
+    };
+  });
+}
+
+function renderWeeklyMini(item = {}) {
+  const rows = weeklyRateRows(item);
+  if (!rows.length) return "";
+  return `
+    <div class="weekly-mini" aria-label="날짜별 예약률">
+      <span>날짜별</span>
+      <div class="weekly-bars">
+        ${rows.slice(0, 7).map((row) => {
+          const height = Number.isFinite(row.rate) ? Math.max(8, Math.min(100, row.rate)) : 8;
+          return `
+            <i title="${row.label} ${Number.isFinite(row.rate) ? `${row.rate}%` : ""}">
+              <b style="height:${height}%"></b>
+              <small>${row.label.replace("/", ".")}</small>
+            </i>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderWeeklyDetail(item = {}) {
+  const rows = weeklyRateRows(item);
+  if (rows.length) {
+    return `
+      <div class="detail-block">
+        <h3>날짜별 예약률</h3>
+        <div class="daily-rate-list">
+          ${rows.map((row) => `
+            <div class="daily-rate-row">
+              <span>${row.label}</span>
+              <strong>${Number.isFinite(row.rate) ? `${row.rate}%` : "확인불가"}</strong>
+              ${row.stock ? `<em>${row.stock}</em>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
+  const stockRows = weeklyDetailEntries(item.weeklyDetail);
+  if (!stockRows.length) return "";
+  return `
+    <div class="detail-block">
+      <h3>날짜별 잔여</h3>
+      <div class="daily-rate-list">
+        ${stockRows.map((row) => `<div class="daily-rate-row"><span>${row}</span></div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlatformBadges(item, platformMap) {
+  const company = platformMap.get(companyKey(item.name));
+  const rows = company?.platforms || [];
+  if (!rows.length) return `<div class="platform-badges"><span>네이버 예약</span></div>`;
+  const names = [...new Set(rows.map((row) => row.platform).filter(Boolean))];
+  return `
+    <div class="platform-badges" aria-label="확인된 플랫폼">
+      ${names.slice(0, 4).map((name) => `<span class="${platformTone(name)}">${name}</span>`).join("")}
+      ${names.length > 4 ? `<span>+${fmtNumber(names.length - 4)}</span>` : ""}
+    </div>
+  `;
+}
+
+function fmtAverageReservation(item = {}) {
+  const avg = Number(item.weeklyAvgReservationRate);
+  if (Number.isFinite(avg)) return fmtAvailabilityRate(avg);
+  const soldOutRate = Number(item.soldOutRate);
+  if (Number.isFinite(soldOutRate)) return fmtAvailabilityRate(soldOutRate);
+  return "확인불가";
+}
+
 function renderAvailability() {
   if (!els.availabilityPanel) return;
   const availability = state.data?.availability;
@@ -1007,7 +1113,7 @@ function renderAvailability() {
   const run = state.data?.run || {};
   const platformMap = companyPlatformMap();
   const rangeText = Number(run.bookingRangeDays || 1) > 1
-    ? `${run.bookingRangeDays}일 날짜별 예약률/잔여 · 상위 ${fmtNumber(run.bookingRangePlaceLimit || 0)}개 업체 기간 상세`
+    ? `${run.bookingRangeDays}일 날짜별 예약률/잔여`
     : "네이버예약 잔여 객실/상품을 우선 표시";
   const dateText = Number(run.bookingRangeDays || 1) > 1
     ? `${run.checkIn || "선택 날짜"}부터 ${run.bookingRangeDays}일 기준`
@@ -1016,7 +1122,7 @@ function renderAvailability() {
     <div class="section-head availability-head">
       <div>
         <h2>업체 순위</h2>
-        <p>${dateText} · ${rangeText} · 업체별 더보기에서 플랫폼별 내용을 함께 확인</p>
+        <p>네이버 플레이스 노출순 · ${dateText} · ${rangeText}</p>
       </div>
       <div class="availability-summary">
         <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>전체 잔여</span>
@@ -1032,26 +1138,41 @@ function renderAvailability() {
           ? `${item.weeklySummary ? `${item.weeklySummary}: ` : ""}${item.weeklyDetail}`
           : item.weeklySummary;
         const weeklyReservationText = fmtWeeklyReservation(item);
+        const regionText = [item.region, item.category].filter(Boolean).join(" · ") || item.listType || "정보 확인";
         return `
           <article class="availability-card ${availabilityLevel(item.rate)}" title="${item.basis || ""}">
             <div class="availability-card-top">
               <span class="availability-rank">${item.rank || "-"}</span>
-              <strong>${item.url ? `<a href="${item.url}" target="_blank" rel="noreferrer">${item.name}</a>` : item.name}</strong>
-              <b><span>${availabilityUnitLabel(item)}</span>${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)}</b>
+              <div class="availability-title">
+                <strong>${item.url ? `<a href="${item.url}" target="_blank" rel="noreferrer">${item.name}</a>` : item.name}</strong>
+                <small>${regionText}</small>
+              </div>
+              <b><span>잔여 ${availabilityUnitLabel(item)}</span>${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)}</b>
+            </div>
+            <div class="availability-quick">
+              <span><em>평균 예약률</em><strong>${fmtAverageReservation(item)}</strong></span>
+              <span><em>최저가</em><strong>${item.price || "확인"}</strong></span>
             </div>
             <div class="availability-meter"><span style="width:${width}%"></span></div>
-            <div class="availability-meta">
-              <span>${fmtRemainingStock(item)}</span>
-              ${weeklyReservationText ? `<span>${weeklyReservationText}</span>` : ""}
-              ${weeklyText ? `<span>${weeklyText}</span>` : ""}
-              ${fmtSoldOut(item) ? `<span>${fmtSoldOut(item)}</span>` : ""}
-              ${fmtDayUseStock(item) ? `<span>${fmtDayUseStock(item)}</span>` : ""}
-              <span>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</span>
-              <span>${item.region || "지역 확인"}</span>
-              <span>${item.price || item.listType || "가격 확인"}</span>
-              ${item.inventoryMemo ? `<span>${item.inventoryMemo}</span>` : ""}
-            </div>
+            ${renderWeeklyMini(item)}
+            ${renderPlatformBadges(item, platformMap)}
             ${renderCompanyPlatforms(item, platformMap)}
+            <details class="availability-more">
+              <summary>재고 근거 더보기</summary>
+              <div class="availability-more-body">
+                ${renderWeeklyDetail(item)}
+                <div class="detail-block">
+                  <h3>수집 근거</h3>
+                  <p>${fmtRemainingStock(item)}</p>
+                  ${weeklyReservationText ? `<p>${weeklyReservationText}</p>` : ""}
+                  ${weeklyText ? `<p>${weeklyText}</p>` : ""}
+                  ${fmtSoldOut(item) ? `<p>${fmtSoldOut(item)}</p>` : ""}
+                  ${fmtDayUseStock(item) ? `<p>${fmtDayUseStock(item)}</p>` : ""}
+                  <p>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</p>
+                  ${item.inventoryMemo ? `<p>${item.inventoryMemo}</p>` : ""}
+                </div>
+              </div>
+            </details>
           </article>
         `;
       }).join("")}
@@ -1375,9 +1496,9 @@ function renderDownloads() {
     return;
   }
   els.downloadList.innerHTML = downloads.map((file) => `
-    <a class="download-item" href="${file.url}" target="_blank" rel="noreferrer">
-      <strong>${file.name}</strong>
-      <span>열기 / 다운로드</span>
+    <a class="download-item" href="${file.url}" download="${file.name}" target="_blank" rel="noreferrer">
+      <strong>${file.label || file.name}</strong>
+      <span>${file.name}</span>
     </a>
   `).join("");
 }
@@ -1582,7 +1703,7 @@ function wireEvents() {
   els.yeogiImportInput.addEventListener("input", syncYeogiManualInterface);
   els.keywordInput.addEventListener("input", syncYeogiManualInterface);
   els.checkInInput.addEventListener("change", () => {
-    ensureCheckoutAfterCheckin();
+    setDefaultBookingRange();
     syncYeogiManualInterface();
   });
   els.checkOutInput.addEventListener("change", () => {
