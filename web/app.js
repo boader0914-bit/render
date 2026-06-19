@@ -1057,6 +1057,24 @@ function fmtWeeklySales(item = {}) {
   return `7일 판매 ${fmtNumber(sales.sold)}${Number.isFinite(sales.total) && sales.total > 0 ? `/${fmtNumber(sales.total)}` : ""}`;
 }
 
+function renderWeeklySalesVisual(item = {}) {
+  const sales = weeklySalesTotal(item);
+  if (!Number.isFinite(sales.sold)) return "";
+  const totalLabel = Number.isFinite(sales.total) && sales.total > 0 ? `/${fmtNumber(sales.total)}` : "";
+  const percent = Number.isFinite(sales.total) && sales.total > 0
+    ? Math.max(4, Math.min(100, (sales.sold / sales.total) * 100))
+    : 0;
+  return `
+    <div class="weekly-sales-visual" aria-label="7일 합산 판매수량">
+      <span>
+        <em>7일 판매</em>
+        <strong>${fmtNumber(sales.sold)}${totalLabel}</strong>
+      </span>
+      <b><i style="width:${percent}%"></i></b>
+    </div>
+  `;
+}
+
 function renderWeeklyMini(item = {}) {
   const rows = weeklyRateRows(item);
   if (!rows.length) return "";
@@ -1233,7 +1251,7 @@ function renderAvailability() {
               ${renderWeeklyMini(item)}
               <div class="availability-card-actions">
                 <strong>${item.price || "가격 확인"}</strong>
-                ${weeklySalesText ? `<span class="weekly-sales">${weeklySalesText}</span>` : ""}
+                ${renderWeeklySalesVisual(item)}
                 ${renderPlatformBadges(item, platformMap)}
                 <details class="availability-more">
                   <summary>더보기</summary>
@@ -1241,7 +1259,7 @@ function renderAvailability() {
                     <span class="sheet-handle"></span>
                     <div class="sheet-head">
                       <h3>${item.name} 상세</h3>
-                      <span>×</span>
+                      <button class="sheet-close" type="button" aria-label="상세 닫기" data-close-details>×</button>
                     </div>
                     <div class="sheet-tabs">
                       <span class="active">예약</span>
@@ -1250,7 +1268,7 @@ function renderAvailability() {
                     </div>
                     <div class="detail-block">
                       <h3>날짜별 예약 현황</h3>
-                      ${weeklySalesText ? `<p class="weekly-sales-note">${weeklySalesText} 합산</p>` : ""}
+                      ${renderWeeklySalesVisual(item)}
                       ${renderWeeklyDetail(item, { showTitle: false })}
                     </div>
                     <div class="detail-block">
@@ -1818,6 +1836,28 @@ function wireEvents() {
   els.productModeInput.addEventListener("change", syncYeogiManualInterface);
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
+  els.availabilityPanel?.addEventListener("click", (event) => {
+    const closeButton = event.target.closest("[data-close-details]");
+    if (closeButton) {
+      const details = closeButton.closest("details");
+      if (details) details.open = false;
+      return;
+    }
+
+    const summary = event.target.closest(".availability-more > summary");
+    if (summary) {
+      const details = summary.parentElement;
+      els.availabilityPanel.querySelectorAll(".availability-more[open]").forEach((openDetails) => {
+        if (openDetails !== details) openDetails.open = false;
+      });
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    els.availabilityPanel?.querySelectorAll(".availability-more[open]").forEach((details) => {
+      details.open = false;
+    });
+  });
 }
 
 async function startApp() {

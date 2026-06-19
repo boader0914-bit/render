@@ -1530,6 +1530,54 @@ h1 {
   font-weight: 900;
 }
 
+.weekly-sales-visual {
+  width: min(100%, 220px);
+  display: grid;
+  gap: 7px;
+  border: 1px solid #d7e7ff;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  padding: 9px 11px;
+  box-shadow: 0 8px 18px rgba(49, 130, 246, .08);
+}
+
+.weekly-sales-visual span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.weekly-sales-visual em {
+  color: #6b7684;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.weekly-sales-visual strong {
+  color: #1b64da;
+  font-size: 17px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.weekly-sales-visual > b {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5e8eb;
+}
+
+.weekly-sales-visual > b i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #60a5fa 0%, #1d7bf2 100%);
+}
+
 .weekly-sales-note {
   margin: -2px 0 0;
   color: #1b64da;
@@ -1576,10 +1624,28 @@ h1 {
   font-size: 23px;
 }
 
-.sheet-head span {
+.sheet-close {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   color: #111827;
   font-size: 34px;
   line-height: 1;
+  cursor: pointer;
+}
+
+.sheet-close:hover {
+  background: #f2f4f6;
+}
+
+.availability-sheet .weekly-sales-visual {
+  width: 100%;
+  max-width: none;
+  box-shadow: none;
 }
 
 .sheet-tabs {
@@ -2166,6 +2232,18 @@ h1 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .availability-card-main {
+    grid-template-columns: 1fr;
+  }
+
+  .availability-card-actions {
+    justify-items: stretch;
+  }
+
+  .weekly-sales-visual {
+    width: 100%;
+  }
+
   .workspace {
     gap: 10px;
   }
@@ -2245,8 +2323,8 @@ h1 {
   }
 
   .availability-card-main {
-    grid-template-columns: minmax(150px, 1fr) minmax(96px, auto);
-    gap: 10px;
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   .weekly-bars {
@@ -2271,6 +2349,14 @@ h1 {
 
   .availability-card-actions > strong {
     font-size: 17px;
+  }
+
+  .weekly-sales-visual {
+    padding: 8px 10px;
+  }
+
+  .weekly-sales-visual strong {
+    font-size: 16px;
   }
 
   .weekly-sales {
