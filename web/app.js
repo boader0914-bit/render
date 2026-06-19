@@ -1015,10 +1015,14 @@ function weeklyRateRows(item = {}) {
   return weeklyDetailEntries(item.weeklyReservationRateDetail).map((entry) => {
     const match = entry.match(/^(\d{1,2}\/\d{1,2})\s+(\d+)%\(([^)]+)\)$/);
     if (!match) return { label: entry, rate: null, stock: "" };
+    const stockMatch = match[3].match(/^(\d+)\/(\d+)$/);
+    const sold = stockMatch ? Number(stockMatch[1]) : null;
+    const total = stockMatch ? Number(stockMatch[2]) : null;
     return {
       label: match[1],
       rate: Number(match[2]),
-      stock: match[3]
+      stock: match[3],
+      remaining: Number.isFinite(sold) && Number.isFinite(total) ? `${Math.max(0, total - sold)}/${total} 잔여` : ""
     };
   });
 }
@@ -1026,36 +1030,41 @@ function weeklyRateRows(item = {}) {
 function renderWeeklyMini(item = {}) {
   const rows = weeklyRateRows(item);
   if (!rows.length) return "";
+  const visibleRows = rows.slice(0, 7);
   return `
     <div class="weekly-mini" aria-label="날짜별 예약률">
       <span>날짜별</span>
       <div class="weekly-bars">
-        ${rows.slice(0, 7).map((row) => {
+        ${visibleRows.map((row) => {
           const height = Number.isFinite(row.rate) ? Math.max(8, Math.min(100, row.rate)) : 8;
           return `
             <i title="${row.label} ${Number.isFinite(row.rate) ? `${row.rate}%` : ""}">
               <b style="height:${height}%"></b>
-              <small>${row.label.replace("/", ".")}</small>
             </i>
           `;
         }).join("")}
+      </div>
+      <div class="weekly-range">
+        <small>${visibleRows[0]?.label || ""}</small>
+        <small>${visibleRows.at(-1)?.label || ""}</small>
       </div>
     </div>
   `;
 }
 
-function renderWeeklyDetail(item = {}) {
+function renderWeeklyDetail(item = {}, options = {}) {
+  const showTitle = options.showTitle !== false;
   const rows = weeklyRateRows(item);
   if (rows.length) {
     return `
       <div class="detail-block">
-        <h3>날짜별 예약률</h3>
+        ${showTitle ? `<h3>날짜별 예약률</h3>` : ""}
         <div class="daily-rate-list">
           ${rows.map((row) => `
             <div class="daily-rate-row">
               <span>${row.label}</span>
-              <strong>${Number.isFinite(row.rate) ? `${row.rate}%` : "확인불가"}</strong>
-              ${row.stock ? `<em>${row.stock}</em>` : ""}
+              <strong>${[row.remaining, Number.isFinite(row.rate) ? `예약률 ${row.rate}%` : ""].filter(Boolean).join(" · ") || "확인불가"}</strong>
+              <em><i style="width:${Number.isFinite(row.rate) ? Math.max(4, Math.min(100, row.rate)) : 0}%"></i></em>
             </div>
           `).join("")}
         </div>
@@ -1066,7 +1075,7 @@ function renderWeeklyDetail(item = {}) {
   if (!stockRows.length) return "";
   return `
     <div class="detail-block">
-      <h3>날짜별 잔여</h3>
+      ${showTitle ? `<h3>날짜별 잔여</h3>` : ""}
       <div class="daily-rate-list">
         ${stockRows.map((row) => `<div class="daily-rate-row"><span>${row}</span></div>`).join("")}
       </div>
@@ -1077,14 +1086,49 @@ function renderWeeklyDetail(item = {}) {
 function renderPlatformBadges(item, platformMap) {
   const company = platformMap.get(companyKey(item.name));
   const rows = company?.platforms || [];
-  if (!rows.length) return `<div class="platform-badges"><span>네이버 예약</span></div>`;
+  if (!rows.length) return `<div class="platform-badges"><span class="naver"><b>N</b>네이버</span></div>`;
   const names = [...new Set(rows.map((row) => row.platform).filter(Boolean))];
   return `
     <div class="platform-badges" aria-label="확인된 플랫폼">
-      ${names.slice(0, 4).map((name) => `<span class="${platformTone(name)}">${name}</span>`).join("")}
-      ${names.length > 4 ? `<span>+${fmtNumber(names.length - 4)}</span>` : ""}
+      ${names.slice(0, 3).map((name) => `<span class="${platformTone(name)}"><b>${platformInitial(name)}</b>${platformDisplayName(name)}</span>`).join("")}
+      ${names.length > 3 ? `<span>+${fmtNumber(names.length - 3)}</span>` : ""}
     </div>
   `;
+}
+
+function platformInitial(platform = "") {
+  if (platform.includes("네이버")) return "N";
+  if (platform.includes("여기")) return "여";
+  if (platform.includes("떠나요")) return "떠";
+  if (platform.includes("야놀자") || platform.includes("NOL")) return "야";
+  return "P";
+}
+
+function platformDisplayName(platform = "") {
+  if (platform.includes("네이버")) return "네이버";
+  if (platform.includes("여기")) return "여기어때";
+  if (platform.includes("떠나요")) return "떠나요";
+  if (platform.includes("야놀자") || platform.includes("NOL")) return "야놀자";
+  return platform || "플랫폼";
+}
+
+function renderPlatformDetailRows(item, platformMap) {
+  const company = platformMap.get(companyKey(item.name));
+  const rows = company?.platforms || [];
+  if (!rows.length) {
+    return `
+      <div class="sheet-platform-row naver">
+        <span><b>N</b>네이버 예약</span>
+        <strong>${fmtRemainingStock(item)}</strong>
+      </div>
+    `;
+  }
+  return rows.slice(0, 6).map((row) => `
+    <a class="sheet-platform-row ${platformTone(row.platform)}" href="${row.url || "#"}" target="${row.url ? "_blank" : "_self"}" rel="noreferrer">
+      <span><b>${platformInitial(row.platform)}</b>${platformDisplayName(row.platform)}</span>
+      <strong>${[row.stock, row.status, row.price].filter(Boolean)[0] || "확인 필요"}</strong>
+    </a>
+  `).join("");
 }
 
 function fmtAverageReservation(item = {}) {
@@ -1125,9 +1169,9 @@ function renderAvailability() {
         <p>네이버 플레이스 노출순 · ${dateText} · ${rangeText}</p>
       </div>
       <div class="availability-summary">
-        <span><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>전체 잔여</span>
-        <span><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong>업체</span>
-        <span><strong>${fmtNumber(stats.totalSoldOutRooms || 0)}</strong>마감</span>
+        <span class="summary-room"><i>▮</i><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong>잔여</span>
+        <span class="summary-company"><i>■</i><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong>업체</span>
+        <span class="summary-rate"><i>%</i><strong>${fmtAvailabilityRate(stats.totalSoldOutRooms && stats.totalRooms ? stats.totalSoldOutRooms / stats.totalRooms : NaN)}</strong>평균 예약률</span>
       </div>
     </div>
     <div class="availability-list">
@@ -1147,32 +1191,54 @@ function renderAvailability() {
                 <strong>${item.url ? `<a href="${item.url}" target="_blank" rel="noreferrer">${item.name}</a>` : item.name}</strong>
                 <small>${regionText}</small>
               </div>
-              <b><span>잔여 ${availabilityUnitLabel(item)}</span>${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)}</b>
+              <b><span>${fmtNumber(item.availableRooms)}/${fmtNumber(item.totalRooms)} <em>잔여</em></span><strong>평균 ${fmtAverageReservation(item)}</strong></b>
             </div>
-            <div class="availability-quick">
-              <span><em>평균 예약률</em><strong>${fmtAverageReservation(item)}</strong></span>
-              <span><em>최저가</em><strong>${item.price || "확인"}</strong></span>
+            <div class="availability-card-main">
+              ${renderWeeklyMini(item)}
+              <div class="availability-card-actions">
+                <strong>${item.price || "가격 확인"}</strong>
+                ${renderPlatformBadges(item, platformMap)}
+                <details class="availability-more">
+                  <summary>더보기</summary>
+                  <div class="availability-sheet">
+                    <span class="sheet-handle"></span>
+                    <div class="sheet-head">
+                      <h3>${item.name} 상세</h3>
+                      <span>×</span>
+                    </div>
+                    <div class="sheet-tabs">
+                      <span class="active">예약</span>
+                      <span>플랫폼</span>
+                      <span>검색수요</span>
+                    </div>
+                    <div class="detail-block">
+                      <h3>날짜별 예약 현황</h3>
+                      ${renderWeeklyDetail(item, { showTitle: false })}
+                    </div>
+                    <div class="detail-block">
+                      <h3>플랫폼 비교</h3>
+                      <div class="sheet-platform-list">
+                        ${renderPlatformDetailRows(item, platformMap)}
+                      </div>
+                    </div>
+                    <div class="detail-block">
+                      <h3>수집 근거</h3>
+                      <p>${fmtRemainingStock(item)}</p>
+                      ${weeklyReservationText ? `<p>${weeklyReservationText}</p>` : ""}
+                      ${weeklyText ? `<p>${weeklyText}</p>` : ""}
+                      ${fmtSoldOut(item) ? `<p>${fmtSoldOut(item)}</p>` : ""}
+                      ${fmtDayUseStock(item) ? `<p>${fmtDayUseStock(item)}</p>` : ""}
+                      <p>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</p>
+                      ${item.inventoryMemo ? `<p>${item.inventoryMemo}</p>` : ""}
+                    </div>
+                  </div>
+                </details>
+              </div>
             </div>
             <div class="availability-meter"><span style="width:${width}%"></span></div>
-            ${renderWeeklyMini(item)}
-            ${renderPlatformBadges(item, platformMap)}
-            ${renderCompanyPlatforms(item, platformMap)}
-            <details class="availability-more">
-              <summary>재고 근거 더보기</summary>
-              <div class="availability-more-body">
+            <div class="availability-inline-detail">
                 ${renderWeeklyDetail(item)}
-                <div class="detail-block">
-                  <h3>수집 근거</h3>
-                  <p>${fmtRemainingStock(item)}</p>
-                  ${weeklyReservationText ? `<p>${weeklyReservationText}</p>` : ""}
-                  ${weeklyText ? `<p>${weeklyText}</p>` : ""}
-                  ${fmtSoldOut(item) ? `<p>${fmtSoldOut(item)}</p>` : ""}
-                  ${fmtDayUseStock(item) ? `<p>${fmtDayUseStock(item)}</p>` : ""}
-                  <p>${item.productTypeSummary || `숙박 ${fmtNumber(item.nightItemCount || 0)} · 데이유즈 ${fmtNumber(item.dayUseItemCount || 0)}`}</p>
-                  ${item.inventoryMemo ? `<p>${item.inventoryMemo}</p>` : ""}
-                </div>
-              </div>
-            </details>
+            </div>
           </article>
         `;
       }).join("")}
