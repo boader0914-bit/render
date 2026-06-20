@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: glamping-datalab-v2
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: /tmp/glamping-data
+      - key: OUTPUTS_DIR
+        value: /tmp/glamping-data/outputs
+      - key: CONFIG_DIR
+        value: /tmp/glamping-data/config
+      - key: NAVER_CLIENT_ID
+        sync: false
+      - key: NAVER_CLIENT_SECRET
+        sync: false
+      - key: NAVER_SEARCHAD_API_KEY
+        sync: false
+      - key: NAVER_SEARCHAD_SECRET_KEY
+        sync: false
+      - key: NAVER_SEARCHAD_CUSTOMER_ID
+        sync: false

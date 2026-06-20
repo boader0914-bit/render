@@ -1,6 +1,5 @@
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
-const crypto = require("node:crypto");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
@@ -17,8 +16,6 @@ const CONFIG_DIR = path.resolve(process.env.CONFIG_DIR || path.join(DATA_DIR, "c
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (process.env.RENDER || process.env.RENDER_EXTERNAL_URL ? "0.0.0.0" : "127.0.0.1");
-const APP_PIN = String(process.env.APP_PIN || "").trim();
-const APP_USER = String(process.env.APP_USER || "admin").trim() || "admin";
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
@@ -324,58 +321,6 @@ function sendHead(res, status, contentType = "application/json; charset=utf-8", 
     ...extraHeaders
   });
   res.end();
-}
-
-function secureEqualText(left, right) {
-  const leftBuffer = Buffer.from(String(left || ""));
-  const rightBuffer = Buffer.from(String(right || ""));
-  if (leftBuffer.length !== rightBuffer.length) return false;
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function parseBasicAuth(req) {
-  const header = String(req.headers.authorization || "");
-  if (!header.toLowerCase().startsWith("basic ")) return null;
-  try {
-    const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
-    const separator = decoded.indexOf(":");
-    if (separator < 0) return { user: decoded, password: "" };
-    return {
-      user: decoded.slice(0, separator),
-      password: decoded.slice(separator + 1)
-    };
-  } catch {
-    return null;
-  }
-}
-
-function isPublicPath(pathname) {
-  return pathname === "/api/health";
-}
-
-function isMissingRequiredAuthConfig(pathname) {
-  return IS_PRODUCTION_RUNTIME && !APP_PIN && !isPublicPath(pathname);
-}
-
-function isAuthorized(req) {
-  if (!APP_PIN) return true;
-  const auth = parseBasicAuth(req);
-  if (!auth) return false;
-  const pinMatches = secureEqualText(auth.password, APP_PIN) || secureEqualText(auth.user, APP_PIN);
-  const userMatches = !auth.password || secureEqualText(auth.user, APP_USER) || secureEqualText(auth.password, APP_PIN);
-  return pinMatches && userMatches;
-}
-
-function unauthorized(res) {
-  return send(
-    res,
-    401,
-    { error: "Authentication required" },
-    "application/json; charset=utf-8",
-    {
-      "WWW-Authenticate": 'Basic realm="Glamping Cluster", charset="UTF-8"'
-    }
-  );
 }
 
 function notFound(res) {
@@ -1856,8 +1801,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=public-20260610-responsive-polish"')
-      .replace('src="/app.js"', 'src="/app.js?v=public-20260610-responsive-polish"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260620-mobile-ranking"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260620-mobile-ranking"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -1880,15 +1825,7 @@ async function route(req, res) {
   try {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
       if (req.method === "HEAD") return sendHead(res, 200);
-      return send(res, 200, { ok: true, authRequired: Boolean(APP_PIN) });
-    }
-
-    if (isMissingRequiredAuthConfig(reqUrl.pathname)) {
-      return send(res, 503, { error: "APP_PIN must be configured before using this service in production." });
-    }
-
-    if (!isPublicPath(reqUrl.pathname) && !isAuthorized(req)) {
-      return unauthorized(res);
+      return send(res, 200, { ok: true, authRequired: false });
     }
 
     if (req.method === "HEAD" && (reqUrl.pathname === "/" || reqUrl.pathname === "/view")) {

@@ -2,228 +2,241 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>글램핑 수요 클러스터</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>글램핑데이터랩 V2</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="검색과 실행">
-      <div class="brand">
-        <strong>Glamping Cluster</strong>
-        <span>수요 지도 분석</span>
+    <header class="app-header">
+      <div class="header-copy">
+        <p class="eyebrow">글램핑데이터랩 V2</p>
+        <h1 id="pageTitle">업체 순위</h1>
+        <p id="pageSubtitle">수집 결과를 불러오는 중입니다.</p>
       </div>
+      <button class="icon-button" id="openControlButton" type="button" aria-label="필터 및 관리 열기">
+        <span aria-hidden="true"></span>
+      </button>
+    </header>
 
-      <section class="panel crawl-panel">
-        <div class="section-head">
-          <h2>새 수집</h2>
-        </div>
-        <form id="crawlForm" class="crawl-form">
-          <label class="field">
-            <span>키워드</span>
-            <input id="keywordInput" type="text" value="경북글램핑" autocomplete="off">
-          </label>
-          <div class="field-grid">
-            <label class="field">
-              <span>체크인(수집일)</span>
-              <input id="checkInInput" type="date">
-            </label>
-            <label class="field">
-              <span>종료일</span>
-              <input id="checkOutInput" type="date">
-            </label>
+    <main class="app-main">
+      <section class="summary-grid" id="summaryGrid" aria-label="핵심 지표"></section>
+
+      <section class="notice-card" id="noticeCard" hidden></section>
+
+      <nav class="bottom-nav" aria-label="주요 화면">
+        <button class="active" type="button" data-tab="rank">업체순위</button>
+        <button type="button" data-tab="target">영업타깃</button>
+        <button type="button" data-tab="map">지역지도</button>
+        <button type="button" data-tab="admin">관리</button>
+      </nav>
+
+      <section class="tab-panel active" id="rankPanel" data-panel="rank" aria-label="업체 순위">
+        <div class="section-title">
+          <div>
+            <h2>업체 순위</h2>
+            <p>네이버 플레이스 노출순으로 비교</p>
           </div>
-          <label class="field">
-            <span>상품 범위</span>
-            <select id="productModeInput">
-              <option value="all">전체</option>
-              <option value="lodging">숙박</option>
-              <option value="campnic">캠프닉</option>
-            </select>
-          </label>
-          <button class="primary-button" type="submit">수집 실행</button>
-          <p class="hint" id="crawlStatus">기본은 체크인 포함 7일 수집입니다. 네이버/숙박 플랫폼 접속 권한이 필요합니다.</p>
-        </form>
+          <span id="rankCount">0 업체</span>
+        </div>
+        <div class="company-list" id="companyList"></div>
       </section>
 
-      <section class="panel feedback-panel">
-        <div class="section-head">
-          <h2>작업 피드백</h2>
+      <section class="tab-panel" id="targetPanel" data-panel="target" aria-label="영업 타깃">
+        <div class="section-title">
+          <div>
+            <h2>영업 타깃</h2>
+            <p>노출은 있으나 상품/채널 구성이 약한 업체</p>
+          </div>
+          <span id="targetCount">0 후보</span>
         </div>
-        <div class="feedback-list" id="feedbackList" aria-live="polite"></div>
+        <div class="target-list" id="targetList"></div>
       </section>
 
-      <section class="panel run-panel">
-        <div class="section-head">
-          <h2>실행 결과</h2>
-          <button class="icon-button" id="refreshRuns" type="button" title="새로고침" aria-label="새로고침">↻</button>
+      <section class="tab-panel" id="mapPanel" data-panel="map" aria-label="지역지도">
+        <div class="section-title">
+          <div>
+            <h2>지역 클러스터 지도</h2>
+            <p>시군구 경계 · 업체 스팟 · 검색량 · 판매율</p>
+          </div>
+          <span id="mapCount">0 지역</span>
         </div>
-        <label class="field">
-          <span>결과 선택</span>
-          <select id="runSelect"></select>
-        </label>
+        <div class="map-card">
+          <div class="map-layer-row" id="mapLayerRow"></div>
+          <div class="map-frame">
+            <svg id="clusterMap" viewBox="0 0 720 620" role="img" aria-label="지역 클러스터 지도"></svg>
+            <div class="map-caption">로컬 행정구역 지도 · 결과 범위 자동 줌 · 외부 지도 실패 시 대체 표시</div>
+          </div>
+          <div class="map-legend" id="mapLegend"></div>
+        </div>
+        <div class="region-list" id="regionList"></div>
       </section>
 
-      <section class="panel yeogi-panel">
-        <div class="section-head">
-          <h2>여기어때 수동 보완</h2>
-          <span class="manual-badge" id="yeogiManualBadge">대기</span>
+      <section class="tab-panel" id="adminPanel" data-panel="admin" aria-label="관리">
+        <div class="section-title">
+          <div>
+            <h2>관리</h2>
+            <p>수집 실행, 여기어때 통합, 파일, API 설정</p>
+          </div>
+          <span id="adminStatus">준비</span>
         </div>
-        <div class="manual-flow" aria-label="여기어때 수동 보완 단계">
-          <div class="manual-step">
-            <span class="step-index">1</span>
-            <div class="manual-step-body">
-              <strong>결과 화면 열기</strong>
-              <span id="yeogiCurrentKeyword">현재 키워드 기준</span>
+
+        <div class="admin-stack">
+          <form class="admin-card" id="crawlForm">
+            <h3>새 수집</h3>
+            <label class="field">
+              <span>키워드</span>
+              <input id="keywordInput" type="text" value="경북글램핑" autocomplete="off">
+            </label>
+            <div class="field-grid">
+              <label class="field">
+                <span>체크인</span>
+                <input id="checkInInput" type="date">
+              </label>
+              <label class="field">
+                <span>종료일</span>
+                <input id="checkOutInput" type="date">
+              </label>
             </div>
-            <div class="button-pair">
+            <label class="field">
+              <span>상품 범위</span>
+              <select id="productModeInput">
+                <option value="all">전체</option>
+                <option value="lodging">숙박</option>
+                <option value="campnic">데이유즈/캠프닉</option>
+              </select>
+            </label>
+            <button class="primary-button" type="submit">수집 실행</button>
+            <p class="hint" id="crawlStatus">기본은 체크인 포함 7일 수집입니다.</p>
+          </form>
+
+          <section class="admin-card">
+            <div class="card-head">
+              <h3>실행 결과</h3>
+              <button class="small-button" id="refreshRuns" type="button">새로고침</button>
+            </div>
+            <label class="field">
+              <span>결과 선택</span>
+              <select id="runSelect"></select>
+            </label>
+          </section>
+
+          <section class="admin-card">
+            <div class="card-head">
+              <h3>여기어때 통합</h3>
+              <span class="state-badge" id="yeogiManualBadge">대기</span>
+            </div>
+            <div class="yeogi-actions">
               <button class="secondary-button" id="yeogiOpenButton" type="button">결과 화면 열기</button>
               <button class="ghost-button" id="yeogiCopyLinkButton" type="button">링크만 복사</button>
             </div>
-          </div>
-          <div class="manual-step">
-            <span class="step-index">2</span>
-            <div class="manual-step-body">
-              <strong>여기어때에서 복사</strong>
-              <span>새 화면에서 숙소 목록 텍스트를 복사</span>
+            <p class="hint" id="yeogiCurrentKeyword">현재 키워드 기준</p>
+            <div class="link-fallback" id="yeogiLinkBox" hidden>
+              <input id="yeogiLinkOutput" type="text" readonly>
             </div>
-          </div>
-          <div class="manual-step">
-            <span class="step-index">3</span>
-            <div class="manual-step-body">
-              <strong>붙여넣고 병합</strong>
-              <span id="yeogiPreviewStatus" aria-live="polite">붙여넣기 대기</span>
-            </div>
-            <div class="button-pair">
-              <button class="primary-button" id="yeogiImportButton" type="button" disabled>결과 병합</button>
+            <details class="advanced-box">
+              <summary>PC용 추출 코드</summary>
+              <div class="yeogi-actions">
+                <button class="secondary-button" id="yeogiScriptButton" type="button">코드 복사</button>
+                <button class="ghost-button" id="yeogiToggleScriptButton" type="button">코드 보기</button>
+              </div>
+              <div class="script-fallback" id="yeogiScriptBox" hidden>
+                <textarea id="yeogiScriptOutput" rows="6" readonly></textarea>
+              </div>
+            </details>
+            <label class="field">
+              <span>여기어때 검색 결과 붙여넣기</span>
+              <textarea id="yeogiImportInput" rows="7" placeholder="여기어때 결과 화면에서 복사한 숙소 목록 텍스트 또는 PC 추출 CSV를 붙여넣으세요."></textarea>
+            </label>
+            <div class="yeogi-actions">
+              <button class="primary-button" id="yeogiImportButton" type="button" disabled>통합하기</button>
               <button class="ghost-button" id="yeogiClearButton" type="button">입력 지우기</button>
             </div>
-          </div>
-        </div>
-        <div class="link-fallback" id="yeogiLinkBox" hidden>
-          <input id="yeogiLinkOutput" type="text" readonly>
-        </div>
-        <details class="manual-advanced">
-          <summary>PC용 추출 코드</summary>
-          <p>PC에서 개발자도구 콘솔을 사용할 때만 쓰는 보조 기능입니다. 모바일 기본 흐름은 결과 화면 텍스트 복사입니다.</p>
-          <div class="button-pair">
-            <button class="secondary-button" id="yeogiScriptButton" type="button">코드 복사</button>
-            <button class="ghost-button" id="yeogiToggleScriptButton" type="button">코드 보기</button>
-          </div>
-        </details>
-        <div class="script-fallback" id="yeogiScriptBox" hidden>
-          <div class="script-fallback-head">
-            <strong>추출 코드</strong>
-            <span>복사가 막힐 때 직접 선택</span>
-          </div>
-          <textarea id="yeogiScriptOutput" rows="6" readonly></textarea>
-        </div>
-        <label class="field">
-          <span>여기어때 검색 결과 붙여넣기</span>
-          <textarea id="yeogiImportInput" rows="7" placeholder="여기어때 결과 화면에서 복사한 숙소 목록 텍스트를 붙여넣으세요. PC 추출 CSV도 가능합니다."></textarea>
-        </label>
-        <div class="manual-import-row">
-          <p class="manual-status" id="yeogiImportStatus" aria-live="polite">여기어때 결과를 붙여넣으면 병합할 수 있습니다.</p>
-        </div>
-      </section>
+            <p class="import-status" id="yeogiPreviewStatus">붙여넣기 대기</p>
+            <p class="import-status" id="yeogiImportStatus">통합하면 화면이 자동 갱신됩니다.</p>
+          </section>
 
-      <section class="panel api-panel">
-        <div class="section-head">
-          <h2>트래픽 API</h2>
-          <span class="api-state" id="trafficApiState">미설정</span>
-        </div>
-        <details class="api-settings">
-          <summary>API 키 입력</summary>
-          <form id="trafficKeyForm" class="traffic-key-form">
-            <label class="field">
-              <span>데이터랩 Client ID</span>
-              <input id="naverClientIdInput" type="password" autocomplete="off">
-            </label>
-            <label class="field">
-              <span>데이터랩 Client Secret</span>
-              <input id="naverClientSecretInput" type="password" autocomplete="off">
-            </label>
-            <label class="field">
-              <span>검색광고 API Key</span>
-              <input id="searchadApiKeyInput" type="password" autocomplete="off">
-            </label>
-            <label class="field">
-              <span>검색광고 Secret Key</span>
-              <input id="searchadSecretKeyInput" type="password" autocomplete="off">
-            </label>
-            <label class="field">
-              <span>검색광고 Customer ID</span>
-              <input id="searchadCustomerIdInput" type="password" autocomplete="off">
-            </label>
-            <button class="secondary-button" type="submit">API 키 저장</button>
-            <p class="hint" id="trafficKeyStatus">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
-          </form>
-        </details>
-      </section>
-
-      <section class="panel file-panel">
-        <div class="section-head">
-          <h2>파일</h2>
-        </div>
-        <div class="download-list" id="downloadList"></div>
-      </section>
-    </aside>
-
-    <main class="main">
-      <header class="topbar">
-        <div>
-          <h1 id="pageTitle">글램핑 수요 클러스터 지도</h1>
-          <div class="meta-row" id="metaRow"></div>
-        </div>
-        <div class="status-pill" id="statusPill">준비</div>
-      </header>
-
-      <section class="analysis-strip" id="analysisStrip" aria-label="핵심 분석 기준"></section>
-
-      <section class="kpi-row" id="kpiRow" aria-label="요약 지표"></section>
-
-      <section class="panel availability-panel" id="availabilityPanel" aria-label="업체 순위와 플랫폼별 내용"></section>
-
-      <section class="workspace">
-        <div class="map-area">
-          <div class="map-toolbar">
-            <div class="segmented" id="layerButtons">
-              <button class="active" type="button" data-layer="core">본질</button>
-              <button type="button" data-layer="type">유형</button>
-              <button type="button" data-layer="price">가격</button>
-              <button type="button" data-layer="ad">광고</button>
+          <section class="admin-card">
+            <div class="card-head">
+              <h3>트래픽 API</h3>
+              <span class="state-badge" id="trafficApiState">미설정</span>
             </div>
-            <div class="cluster-filters" id="clusterFilters"></div>
-            <div class="legend" id="legend"></div>
-          </div>
+            <details class="advanced-box">
+              <summary>API 키 입력</summary>
+              <form id="trafficKeyForm" class="traffic-key-form">
+                <label class="field">
+                  <span>데이터랩 Client ID</span>
+                  <input id="naverClientIdInput" type="password" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>데이터랩 Client Secret</span>
+                  <input id="naverClientSecretInput" type="password" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>검색광고 API Key</span>
+                  <input id="searchadApiKeyInput" type="password" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>검색광고 Secret Key</span>
+                  <input id="searchadSecretKeyInput" type="password" autocomplete="off">
+                </label>
+                <label class="field">
+                  <span>검색광고 Customer ID</span>
+                  <input id="searchadCustomerIdInput" type="password" autocomplete="off">
+                </label>
+                <button class="secondary-button" type="submit">API 키 저장</button>
+                <p class="hint" id="trafficKeyStatus">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
+              </form>
+            </details>
+          </section>
 
-          <div class="map-frame">
-            <svg id="clusterMap" viewBox="0 0 920 680" role="img" aria-label="수요 클러스터 지도">
-              <defs>
-                <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-                  <path d="M0,0 L0,6 L9,3 z" fill="#667085"></path>
-                </marker>
-              </defs>
-              <g id="mapGrid"></g>
-              <g id="mapLinks"></g>
-              <g id="mapMarkers"></g>
-            </svg>
-            <div class="map-caption">로컬 행정구역 지도 · 결과 범위 자동 줌 · 시군 스팟</div>
-          </div>
-        </div>
-
-        <aside class="detail-panel" id="detailPanel" aria-label="지역 상세"></aside>
-      </section>
-
-      <section class="bottom-grid">
-        <div class="panel">
-          <div class="section-head">
-            <h2>본질 클러스터별 수요</h2>
-          </div>
-          <div class="cluster-summary" id="coreSummary"></div>
+          <section class="admin-card">
+            <h3>파일</h3>
+            <div class="download-list" id="downloadList"></div>
+          </section>
         </div>
       </section>
     </main>
+
+  </div>
+
+  <div class="control-drawer" id="controlDrawer" hidden>
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <section class="drawer-panel" role="dialog" aria-modal="true" aria-label="필터 및 관리">
+      <div class="drawer-handle"></div>
+      <div class="drawer-head">
+        <h2>필터 및 관리</h2>
+        <button class="close-button" type="button" data-close-drawer aria-label="닫기">×</button>
+      </div>
+      <div class="drawer-actions">
+        <button class="secondary-button" type="button" data-drawer-tab="rank">업체순위 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="target">영업타깃 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="map">지도 보기</button>
+        <button class="primary-button" type="button" data-drawer-tab="admin">관리 열기</button>
+      </div>
+      <p class="hint">수집, 여기어때 통합, API 키, 파일은 관리 탭에 있습니다.</p>
+    </section>
+  </div>
+
+  <div class="detail-sheet" id="detailSheet" hidden>
+    <div class="sheet-backdrop" data-close-sheet></div>
+    <section class="sheet-panel" role="dialog" aria-modal="true" aria-label="업체 상세">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="sheetTitle">업체 상세</h2>
+          <p id="sheetSubtitle"></p>
+        </div>
+        <button class="close-button" type="button" data-close-sheet aria-label="상세 닫기">×</button>
+      </div>
+      <div class="sheet-tabs" role="tablist" aria-label="상세 구분">
+        <button class="active" type="button" data-sheet-tab="booking">예약</button>
+        <button type="button" data-sheet-tab="platform">플랫폼</button>
+        <button type="button" data-sheet-tab="search">검색수요</button>
+      </div>
+      <div class="sheet-body" id="sheetBody"></div>
+    </section>
   </div>
 
   <script src="/app.js"></script>
