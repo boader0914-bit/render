@@ -989,6 +989,16 @@ function normalizeClusterName(value) {
   return name;
 }
 
+function normalizeInventoryMemo(memo, listType = "") {
+  const text = String(memo || "");
+  if (!text) return "";
+  if (!String(listType || "").includes("객실 묶음 상품리스트")) return text;
+  return text.replace(
+    "객실번호 범위형 묶음 상품은 상품 단위로 계산",
+    "객실번호 범위형 묶음 상품은 내부 stock 수량 합산"
+  );
+}
+
 function metricNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const text = String(value || "").replace(/,/g, "").trim();
@@ -1247,7 +1257,7 @@ function summarizeRegionalRows(rows, provinceKey) {
       dayUseAvailableStock: row["데이유즈예약가능수"] || "",
       dayUseTotalStock: row["데이유즈확인재고수"] || "",
       inventoryScope: row["네이버재고범위"] || "네이버예약 채널/날짜 기준 재고",
-      inventoryMemo: row["객실수검증메모"] || "",
+      inventoryMemo: normalizeInventoryMemo(row["객실수검증메모"], row["예약리스트유형"]),
       availabilityBasis: row["예약가능근거"] || row["네이버예약재고수집상태"] || "",
       url: row["url"] || row["상품 URL"] || ""
     });
@@ -1436,7 +1446,7 @@ function summarizeAvailabilityRows(rows) {
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
       inventoryScope: row["네이버재고범위"] || "네이버예약 채널/날짜 기준 재고",
-      inventoryMemo: row["객실수검증메모"] || "",
+      inventoryMemo: normalizeInventoryMemo(row["객실수검증메모"], row["예약리스트유형"]),
       rate: rate !== null ? rate : Number((availableRooms / totalRooms).toFixed(3)),
       price: row["예약최저가"] || row["금액"] || row.price || "",
       basis: row["예약가능근거"] || row["네이버예약재고수집상태"] || "",
