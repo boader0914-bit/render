@@ -388,7 +388,8 @@ a {
 .mini-bars {
   display: grid;
   gap: 6px;
-  max-width: 210px;
+  width: max-content;
+  max-width: none;
 }
 
 .bar-row {
@@ -396,6 +397,7 @@ a {
   display: flex;
   align-items: end;
   gap: 6px;
+  width: max-content;
 }
 
 .bar-stack {
@@ -439,12 +441,29 @@ a {
 }
 
 .bar-labels {
-  display: flex;
-  justify-content: space-between;
-  max-width: 210px;
+  display: grid;
+  grid-template-columns: repeat(7, 14px);
+  gap: 6px;
+  width: max-content;
+  max-width: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1;
   white-space: nowrap;
+}
+
+.bar-labels small {
+  display: block;
+  min-width: 0;
+  text-align: center;
+}
+
+.bar-labels small:first-child {
+  grid-column: 1;
+}
+
+.bar-labels small:last-child {
+  grid-column: 7;
 }
 
 .empty-chart {
@@ -1313,11 +1332,6 @@ a {
 
   .more-button {
     align-self: end;
-  }
-
-  .mini-bars,
-  .bar-labels {
-    max-width: 190px;
   }
 
   .date-row {
