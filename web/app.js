@@ -306,7 +306,7 @@ function salesStats(item = {}, kind = "lodging") {
     const weeklySold = finiteNumber(item.weeklyTotalSoldOut, NaN);
     const weeklySupply = finiteNumber(item.weeklyTotalStock, NaN);
     if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
-      return { sold: weeklySold, supply: weeklySupply, rate: weeklySold / weeklySupply, unit: "박", label: `${rows.length || days}일 집계`, basis: "range" };
+      return { sold: weeklySold, supply: weeklySupply, rate: weeklySold / weeklySupply, unit: "개", label: `${rows.length || days}일 집계`, basis: "range" };
     }
     if (rows.length) {
       const sum = rows.reduce((acc, row) => {
@@ -314,12 +314,12 @@ function salesStats(item = {}, kind = "lodging") {
         acc.supply += finiteNumber(row.total);
         return acc;
       }, { sold: 0, supply: 0 });
-      return { ...sum, rate: sum.supply ? sum.sold / sum.supply : NaN, unit: "박", label: `${rows.length}일 집계`, basis: "range" };
+      return { ...sum, rate: sum.supply ? sum.sold / sum.supply : NaN, unit: "개", label: `${rows.length}일 집계`, basis: "range" };
     }
     const total = finiteNumber(item.nightTotalStock, finiteNumber(item.totalRooms, 0));
     const available = finiteNumber(item.nightAvailableStock, finiteNumber(item.availableRooms, total));
     const sold = Math.max(0, total - available);
-    return { sold, supply: total, rate: total ? sold / total : NaN, unit: "박", label: `${basisDate} 기준`, basis: "basis" };
+    return { sold, supply: total, rate: total ? sold / total : NaN, unit: "개", label: `${basisDate} 기준`, basis: "basis" };
   }
 
   const total = finiteNumber(item.dayUseTotalStock, 0);
@@ -423,8 +423,8 @@ function miniBars(item) {
           const hot = !row.missing && Number(row.rate) >= 0.45 ? "hot" : "";
           const missing = row.missing ? "missing" : "";
           const title = row.missing
-            ? `${row.label} 미수집 · 전체 범위 ${fmtNumber(row.total)}박`
-            : `${row.label} ${fmtNumber(row.sold)}/${fmtNumber(row.total)}박 추정`;
+            ? `${row.label} 미수집 · 기준재고 ${fmtNumber(row.total)}개`
+            : `${row.label} ${fmtNumber(row.sold)}/${fmtNumber(row.total)}개 추정`;
           return `
             <span class="bar-stack ${hot} ${missing}" title="${escapeHtml(title)}" style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px">
               <span class="bar-track"><span class="bar-fill"></span></span>
@@ -767,9 +767,9 @@ function sheetRowsForBooking(item) {
     sold: row.sold,
     supply: row.total,
     rate: row.rate,
-    unit: "박",
+    unit: "개",
     missing: row.missing,
-    statusText: row.missing ? "미수집" : "판매/마감 추정",
+    statusText: row.missing ? "미수집" : "마감추정",
     note: row.missing
       ? "날짜별 상세 미수집"
       : row.source === "daily"
@@ -787,7 +787,7 @@ function dateRow(row) {
       <div class="date-row missing">
         <div>
           <strong>${escapeHtml(row.label)} · 미수집</strong>
-          <small>${escapeHtml(note)}전체 범위 ${fmtNumber(row.supply)}${row.unit}</small>
+          <small>${escapeHtml(note)}기준재고 ${fmtNumber(row.supply)}${row.unit}</small>
         </div>
         <div class="progress missing"><span style="width:100%"></span></div>
       </div>
@@ -796,7 +796,7 @@ function dateRow(row) {
   return `
     <div class="date-row">
       <div>
-        <strong>${escapeHtml(row.label)} · ${fmtNumber(row.sold)}/${fmtNumber(row.supply)}${row.unit} ${escapeHtml(statusText)}</strong>
+        <strong>${escapeHtml(row.label)} · ${escapeHtml(statusText)} ${fmtNumber(row.sold)}${row.unit} / 확인재고 ${fmtNumber(row.supply)}${row.unit}</strong>
         <small>${escapeHtml(note)}추정률 ${fmtRate(row.rate)}</small>
       </div>
       <div class="progress"><span style="width:${Math.max(2, Math.min(100, rate * 100))}%"></span></div>
@@ -816,7 +816,7 @@ function renderSheetBooking(item) {
     supply: day.supply,
     rate: day.rate,
     unit: "회",
-    statusText: "판매/마감 추정",
+    statusText: "마감추정",
     note: "데이유즈/캠프닉 기준일 재고"
   }] : [];
   return `

@@ -825,13 +825,19 @@ function summarizeNaverScheduleGroup(items, schedules, listType) {
       rawAvailableStock += open ? Math.max(0, stock - usedCount) : 0;
     }
 
-    if (listType === "객실별 예약리스트" || groupedProductList) {
+    if (listType === "객실별 예약리스트") {
       knownStockCount += stock !== null && stock >= 0 ? 1 : 0;
       totalStock += 1;
       const available = stock === null
         ? open && price !== null
         : open && Math.max(0, stock - usedCount) > 0;
       if (available) availableStock += 1;
+      continue;
+    }
+
+    if (groupedProductList && stock === null) {
+      totalStock += 1;
+      if (open && price !== null) availableStock += 1;
       continue;
     }
 
@@ -874,12 +880,12 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   const evidence = !nightSummary.totalStock
     ? "날짜별 객실 재고 확인불가"
     : listType === "객실 묶음 상품리스트"
-      ? `${listType}: ${CHECK_IN} 기준 네이버 숙박 묶음 상품별 예약가능 여부로 계산 (${nightSummary.knownStockCount}/${schedules.length}개 상품 stock 확인). 내부 stock 합계 ${nightSummary.rawAvailableStock}/${nightSummary.rawTotalStock}는 검증용이며 전체상품수량으로 표시하지 않음.`
+      ? `${listType}: ${CHECK_IN} 기준 네이버 숙박 묶음 상품의 내부 stock 수량을 합산 (${nightSummary.knownStockCount}/${schedules.length}개 상품 stock 확인). 전체 보유 객실수 아님.`
     : listType === "객실별 예약리스트"
       ? `${listType}: ${CHECK_IN} 기준 네이버 숙박 예약가능 상품 수 / 노출 객실 상품 수 (${nightSummary.knownStockCount}/${schedules.length}개 상품 stock 확인). 전체 보유 객실수 아님.`
       : `${listType}: ${CHECK_IN} 기준 네이버 숙박 상품별 stock - bookingCount - occupiedBookingCount 수량 합산 (${nightSummary.knownStockCount}/${schedules.length}개 상품 stock 확인). 전체 보유 객실수 아님.`;
   const availabilityUnit = listType === "객실 묶음 상품리스트"
-    ? "묶음상품"
+    ? "재고수량"
     : listType === "객실별 예약리스트"
       ? "객실상품"
       : "재고수량";
@@ -889,7 +895,7 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   const productTypeSummary = [
     `숙박상품 ${itemCounts.night || 0}종`,
     nightSummary.totalStock ? `예약가능 ${nightSummary.availableStock}/${nightSummary.totalStock}${availabilityUnit ? ` ${availabilityUnit}` : ""}` : "",
-    nightSummary.soldOutStock || nightSummary.totalStock ? `판매완료/마감 ${nightSummary.soldOutStock}/${nightSummary.totalStock}` : "",
+    nightSummary.soldOutStock || nightSummary.totalStock ? `판매완료/마감 ${nightSummary.soldOutStock}/${nightSummary.totalStock}${availabilityUnit ? ` ${availabilityUnit}` : ""}` : "",
     rawStockNote,
     `데이유즈상품 ${itemCounts.dayUse || 0}종`,
     dayUseSummary.totalStock ? `데이유즈재고 ${dayUseSummary.availableStock}/${dayUseSummary.totalStock}` : "",
@@ -999,7 +1005,24 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     });
   }
 
-  const valid = summaries.filter((item) => item.total > 0);
+  const rawValid = summaries.filter((item) => item.total > 0);
+  const basisTotal = rawValid[0]?.total || Math.max(0, ...rawValid.map((item) => item.total || 0));
+  const valid = rawValid.map((item) => {
+    const total = basisTotal || item.total;
+    const available = Math.min(Math.max(0, item.available || 0), total);
+    const soldOut = Math.max(0, total - available);
+    const rate = total > 0 ? soldOut / total : null;
+    return {
+      ...item,
+      rawAvailable: item.available,
+      rawTotal: item.total,
+      available,
+      total,
+      soldOut,
+      rate,
+      totalChanged: item.total !== total,
+    };
+  });
   if (!valid.length) return null;
   const avgAvailable = Number((valid.reduce((sum, item) => sum + item.available, 0) / valid.length).toFixed(1));
   const minAvailable = Math.min(...valid.map((item) => item.available));
@@ -1017,8 +1040,13 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
       return `${shortDate(item.date)} ${formatRate(reservationRate)}(${item.soldOut}/${item.total})`;
     })
     .join(", ");
+  const totalVarianceDetail = valid
+    .filter((item) => item.totalChanged)
+    .map((item) => `${shortDate(item.date)} 원시 ${item.rawAvailable}/${item.rawTotal} -> 기준 ${item.available}/${item.total}`)
+    .join(", ");
   return {
     days: valid.length,
+    basisTotal,
     avgAvailable,
     minAvailable,
     soldOutDays,
@@ -1027,6 +1055,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     avgReservationRate,
     detail,
     reservationRateDetail,
+    totalVarianceDetail,
     summary: `${valid.length}일 날짜별 잔여`,
     dates: valid,
   };
@@ -1142,6 +1171,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.주간마감일수 = result.weekly?.soldOutDays ?? "";
       row.주간판매수량합계 = result.weekly?.totalSoldOut ?? "";
       row.주간전체수량합계 = result.weekly?.totalStock ?? "";
+      row.주간기준재고수 = result.weekly?.basisTotal ?? "";
+      row.주간원시재고변동 = result.weekly?.totalVarianceDetail || "";
       row.주간잔여상세 = result.weekly?.detail || "";
       row.주간평균예약률 = result.weekly?.avgReservationRate ?? "";
       row.주간예약률상세 = result.weekly?.reservationRateDetail || "";
@@ -1455,6 +1486,8 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간마감일수": row.주간마감일수 ?? "",
       "주간판매수량합계": row.주간판매수량합계 ?? "",
       "주간전체수량합계": row.주간전체수량합계 ?? "",
+      "주간기준재고수": row.주간기준재고수 ?? "",
+      "주간원시재고변동": row.주간원시재고변동 || "",
       "주간잔여상세": row.주간잔여상세 || "",
       "주간평균예약률": row.주간평균예약률 ?? "",
       "주간예약률상세": row.주간예약률상세 || "",
@@ -1503,6 +1536,8 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간마감일수": row.주간마감일수 ?? "",
       "주간판매수량합계": row.주간판매수량합계 ?? "",
       "주간전체수량합계": row.주간전체수량합계 ?? "",
+      "주간기준재고수": row.주간기준재고수 ?? "",
+      "주간원시재고변동": row.주간원시재고변동 || "",
       "주간잔여상세": row.주간잔여상세 || "",
       "주간평균예약률": row.주간평균예약률 ?? "",
       "주간예약률상세": row.주간예약률상세 || "",
@@ -1677,6 +1712,8 @@ async function main() {
     "주간마감일수",
     "주간판매수량합계",
     "주간전체수량합계",
+    "주간기준재고수",
+    "주간원시재고변동",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
@@ -1747,6 +1784,8 @@ async function main() {
     "주간마감일수",
     "주간판매수량합계",
     "주간전체수량합계",
+    "주간기준재고수",
+    "주간원시재고변동",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
@@ -1819,6 +1858,8 @@ async function main() {
     "주간마감일수",
     "주간판매수량합계",
     "주간전체수량합계",
+    "주간기준재고수",
+    "주간원시재고변동",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
@@ -1889,6 +1930,8 @@ async function main() {
     "주간마감일수",
     "주간판매수량합계",
     "주간전체수량합계",
+    "주간기준재고수",
+    "주간원시재고변동",
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
