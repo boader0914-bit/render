@@ -1395,6 +1395,8 @@ function summarizeAvailabilityRows(rows) {
     const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
     const weeklyTotalSoldOut = numericField(row, ["주간판매수량합계", "weeklyTotalSoldOut"]) ?? derivedWeeklyRates.totalSoldOut;
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
+    const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
+    const weeklyRawStockVariance = row["주간원시재고변동"] || "";
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -1426,6 +1428,8 @@ function summarizeAvailabilityRows(rows) {
       weeklySoldOutDays: numericField(row, ["주간마감일수", "weeklySoldOutDays"]),
       weeklyTotalSoldOut,
       weeklyTotalStock,
+      weeklyBasisTotal,
+      weeklyRawStockVariance,
       weeklyDetail,
       weeklyAvgReservationRate,
       weeklyReservationRateDetail,
@@ -1533,8 +1537,10 @@ function summarizeCompanyPlatforms(rows) {
     const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
     const weeklyTotalSoldOut = numericField(row, ["주간판매수량합계", "weeklyTotalSoldOut"]) ?? derivedWeeklyRates.totalSoldOut;
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
+    const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
+    const weeklyRawStockVariance = row["주간원시재고변동"] || "";
     const weeklyStockText = weeklyDetail
-      ? `${weeklyTotalSoldOut !== null ? `7일 판매 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
+      ? `${weeklyTotalSoldOut !== null ? `7일 마감추정 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyBasisTotal ? `기준재고 ${weeklyBasisTotal} · ` : ""}${weeklyRawStockVariance ? `원시재고 변동: ${weeklyRawStockVariance} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
       : weeklySummary;
 
     company.platforms.push({
@@ -1551,6 +1557,8 @@ function summarizeCompanyPlatforms(rows) {
       weeklyReservationRateDetail,
       weeklyTotalSoldOut,
       weeklyTotalStock,
+      weeklyBasisTotal,
+      weeklyRawStockVariance,
       url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
     });
   }

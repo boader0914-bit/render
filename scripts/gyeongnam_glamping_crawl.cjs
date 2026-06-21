@@ -904,7 +904,7 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   const inventoryMemo = [
     "네이버예약 날짜/채널 기준 재고",
     "실제 전체 객실수와 다를 수 있음",
-    listType === "객실 묶음 상품리스트" ? "객실번호 범위형 묶음 상품은 상품 단위로 계산" : "",
+    listType === "객실 묶음 상품리스트" ? "객실번호 범위형 묶음 상품은 내부 stock 수량 합산" : "",
     dayUseSummary.totalStock ? `데이유즈는 숙박 예약가능률 계산에서 제외(${dayUseSummary.availableStock}/${dayUseSummary.totalStock})` : "",
   ].filter(Boolean).join(" · ");
   return {
@@ -2022,7 +2022,7 @@ async function main() {
 - 광고/비광고 분리: 가능
 - 예약재고: 상위 ${naverBookingStock.limit}개 제한으로 ${naverBookingStock.collected}개 확인, ${naverBookingStock.successful}건 성공
 - 주간 예약재고 테스트: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체만 날짜별 잔여 반복 확인` : "비활성"}
-- 예약가능률 산식: 객실별 예약리스트는 예약가능 상품 수 / 노출 객실 상품 수, 객실 묶음 상품리스트는 예약가능 묶음 상품 수 / 묶음 상품 수, 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
+- 예약가능률 산식: 객실별 예약리스트는 예약가능 객실상품 수 / 노출 객실상품 수, 객실 묶음 상품리스트와 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
 - 네이버 상품 구분: 1박 조건은 \`ACCOMMODATION_NIGHT\` 숙박 상품만 예약가능률에 반영하고, \`ACCOMMODATION_DAY_USE\` 데이유즈 상품은 점심/저녁 등 상품종류와 재고합계를 별도 카운트로 분리
 - 네이버 분리 기준: ONDA/떠나요 등 전 채널 연동 재고와 섞지 않고 네이버예약 재고를 독립 확인
 

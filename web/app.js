@@ -853,6 +853,15 @@ function renderSheetBooking(item) {
           <strong>${missingRows}일</strong>
         </div>
       ` : ""}
+      ${item.weeklyRawStockVariance ? `
+        <div class="search-row">
+          <div>
+            <strong>원시재고 변동</strong>
+            <small>${escapeHtml(item.weeklyRawStockVariance)}</small>
+          </div>
+          <strong>기준재고 보정</strong>
+        </div>
+      ` : ""}
       <div class="search-row">
         <div>
           <strong>${escapeHtml(item.inventoryScope || "채널 기준 재고")}</strong>
