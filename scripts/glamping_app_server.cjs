@@ -11,13 +11,29 @@ const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
 const REPO_OUTPUTS_DIR = path.join(ROOT, "outputs");
-const DATA_DIR = path.resolve(process.env.DATA_DIR || ROOT);
-const OUTPUTS_DIR = path.resolve(process.env.OUTPUTS_DIR || path.join(DATA_DIR, "outputs"));
-const CONFIG_DIR = path.resolve(process.env.CONFIG_DIR || path.join(DATA_DIR, "config"));
+const RENDER_DISK_DIR = "/var/data";
+const IS_RENDER_RUNTIME = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+const HAS_RENDER_DISK = IS_RENDER_RUNTIME && fs.existsSync(RENDER_DISK_DIR);
+const isTmpDataPath = (value) => /^\/tmp(?:\/|$)/.test(String(value || "").replace(/\\/g, "/"));
+const DATA_DIR = path.resolve(
+  HAS_RENDER_DISK && (!process.env.DATA_DIR || isTmpDataPath(process.env.DATA_DIR))
+    ? RENDER_DISK_DIR
+    : (process.env.DATA_DIR || ROOT)
+);
+const OUTPUTS_DIR = path.resolve(
+  HAS_RENDER_DISK && (!process.env.OUTPUTS_DIR || isTmpDataPath(process.env.OUTPUTS_DIR))
+    ? path.join(DATA_DIR, "outputs")
+    : (process.env.OUTPUTS_DIR || path.join(DATA_DIR, "outputs"))
+);
+const CONFIG_DIR = path.resolve(
+  HAS_RENDER_DISK && (!process.env.CONFIG_DIR || isTmpDataPath(process.env.CONFIG_DIR))
+    ? path.join(DATA_DIR, "config")
+    : (process.env.CONFIG_DIR || path.join(DATA_DIR, "config"))
+);
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const PORT = Number(process.env.PORT || 3210);
-const HOST = process.env.HOST || (process.env.RENDER || process.env.RENDER_EXTERNAL_URL ? "0.0.0.0" : "127.0.0.1");
-const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
+const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
