@@ -233,6 +233,7 @@ const trafficKeyFields = [
   "searchadSecretKey",
   "searchadCustomerId"
 ];
+const ADMIN_TOKEN = normalizeApiKey(process.env.GLAMPING_ADMIN_TOKEN || process.env.ADMIN_TOKEN || "");
 
 function maskSecret(value) {
   const text = String(value || "");
@@ -291,6 +292,37 @@ async function saveTrafficKeys(payload) {
 
   await fsp.writeFile(TRAFFIC_KEYS_FILE, JSON.stringify(next, null, 2), "utf8");
   return trafficKeyStatus(next);
+}
+
+function adminAuthRequired() {
+  return Boolean(ADMIN_TOKEN);
+}
+
+function getAdminToken(req) {
+  const bearer = String(req.headers.authorization || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  return normalizeApiKey(req.headers["x-admin-token"] || req.headers["x-glamping-admin-token"] || bearer);
+}
+
+function timingSafeTextEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireAdmin(req) {
+  if (!adminAuthRequired()) return;
+  const token = getAdminToken(req);
+  if (!token) {
+    const error = new Error("관리 토큰이 필요합니다.");
+    error.statusCode = 401;
+    throw error;
+  }
+  if (!timingSafeTextEqual(token, ADMIN_TOKEN)) {
+    const error = new Error("관리 토큰이 올바르지 않습니다.");
+    error.statusCode = 403;
+    throw error;
+  }
 }
 
 function securityHeaders() {
@@ -1872,8 +1904,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260621-platform-links"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260621-platform-links"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260621-admin-security"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260621-admin-security"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -1896,7 +1928,7 @@ async function route(req, res) {
   try {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
       if (req.method === "HEAD") return sendHead(res, 200);
-      return send(res, 200, { ok: true, authRequired: false });
+      return send(res, 200, { ok: true, authRequired: adminAuthRequired() });
     }
 
     if (req.method === "HEAD" && (reqUrl.pathname === "/" || reqUrl.pathname === "/view")) {
@@ -1912,6 +1944,7 @@ async function route(req, res) {
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys") {
+      requireAdmin(req);
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveTrafficKeys(payload));
     }
@@ -1923,6 +1956,7 @@ async function route(req, res) {
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl") {
+      requireAdmin(req);
       const payload = await parseJsonBody(req);
       const result = await runCrawler(payload);
       const runs = await listRuns();
@@ -1930,6 +1964,7 @@ async function route(req, res) {
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/yeogi-import") {
+      requireAdmin(req);
       const payload = await parseJsonBody(req);
       const result = await importYeogiSupplement(payload);
       const runs = await listRuns();

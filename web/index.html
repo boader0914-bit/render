@@ -83,6 +83,24 @@
         </div>
 
         <div class="admin-stack">
+          <section class="admin-card" id="adminSecurityCard">
+            <div class="card-head">
+              <h3>관리 보안</h3>
+              <span class="state-badge" id="adminSecurityState">확인중</span>
+            </div>
+            <form id="adminTokenForm" class="traffic-key-form">
+              <label class="field">
+                <span>관리 토큰</span>
+                <input id="adminTokenInput" type="password" autocomplete="current-password" placeholder="관리 작업 전에 입력">
+              </label>
+              <div class="yeogi-actions">
+                <button class="secondary-button" type="submit">잠금 해제</button>
+                <button class="ghost-button" id="adminTokenClearButton" type="button">토큰 지우기</button>
+              </div>
+              <p class="hint" id="adminTokenStatus">조회는 공개, 수집/병합/API 키 저장은 관리 토큰으로 보호합니다.</p>
+            </form>
+          </section>
+
           <form class="admin-card" id="crawlForm">
             <h3>새 수집</h3>
             <label class="field">
