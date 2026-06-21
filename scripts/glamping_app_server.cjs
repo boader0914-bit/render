@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
+const crypto = require("node:crypto");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
