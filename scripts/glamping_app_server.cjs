@@ -34,6 +34,11 @@ const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
+const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || "admin").trim();
+const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "0914").trim();
+const SESSION_COOKIE_NAME = "glamping_datalab_session";
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const sessions = new Map();
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
 const DEFAULT_NODE_MODULES = path.join(
@@ -233,7 +238,6 @@ const trafficKeyFields = [
   "searchadSecretKey",
   "searchadCustomerId"
 ];
-const ADMIN_TOKEN = normalizeApiKey(process.env.GLAMPING_ADMIN_TOKEN || process.env.ADMIN_TOKEN || "");
 
 function maskSecret(value) {
   const text = String(value || "");
@@ -294,15 +298,6 @@ async function saveTrafficKeys(payload) {
   return trafficKeyStatus(next);
 }
 
-function adminAuthRequired() {
-  return Boolean(ADMIN_TOKEN);
-}
-
-function getAdminToken(req) {
-  const bearer = String(req.headers.authorization || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
-  return normalizeApiKey(req.headers["x-admin-token"] || req.headers["x-glamping-admin-token"] || bearer);
-}
-
 function timingSafeTextEqual(left, right) {
   const leftBuffer = Buffer.from(String(left || ""));
   const rightBuffer = Buffer.from(String(right || ""));
@@ -310,19 +305,126 @@ function timingSafeTextEqual(left, right) {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function requireAdmin(req) {
-  if (!adminAuthRequired()) return;
-  const token = getAdminToken(req);
-  if (!token) {
-    const error = new Error("관리 토큰이 필요합니다.");
-    error.statusCode = 401;
-    throw error;
+function parseCookies(req) {
+  return Object.fromEntries(
+    String(req.headers.cookie || "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const index = part.indexOf("=");
+        if (index < 0) return [part, ""];
+        return [part.slice(0, index), decodeURIComponent(part.slice(index + 1))];
+      })
+  );
+}
+
+function sessionCookie(value, maxAgeSeconds = SESSION_TTL_MS / 1000) {
+  return [
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(value || "")}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    IS_PRODUCTION_RUNTIME ? "Secure" : "",
+    `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`
+  ].filter(Boolean).join("; ");
+}
+
+function clearSessionCookie() {
+  return sessionCookie("", 0);
+}
+
+function cleanupSessions() {
+  const now = Date.now();
+  for (const [id, session] of sessions) {
+    if (!session || session.expiresAt <= now) sessions.delete(id);
   }
-  if (!timingSafeTextEqual(token, ADMIN_TOKEN)) {
-    const error = new Error("관리 토큰이 올바르지 않습니다.");
-    error.statusCode = 403;
-    throw error;
+}
+
+function createSession(username) {
+  cleanupSessions();
+  const id = crypto.randomBytes(32).toString("base64url");
+  sessions.set(id, {
+    username,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS
+  });
+  return id;
+}
+
+function getSession(req) {
+  cleanupSessions();
+  const id = parseCookies(req)[SESSION_COOKIE_NAME];
+  if (!id) return null;
+  const session = sessions.get(id);
+  if (!session || session.expiresAt <= Date.now()) {
+    sessions.delete(id);
+    return null;
   }
+  session.expiresAt = Date.now() + SESSION_TTL_MS;
+  return { id, ...session };
+}
+
+function isAuthenticated(req) {
+  return Boolean(getSession(req));
+}
+
+function acceptsHtml(req) {
+  return String(req.headers.accept || "").includes("text/html");
+}
+
+function loginPage(message = "") {
+  const escapedMessage = String(message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>글램핑데이터랩 로그인</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
+    main { width: min(100% - 32px, 420px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
+    p { margin: 0 0 22px; color: #667085; line-height: 1.45; }
+    label { display: grid; gap: 8px; margin-top: 14px; font-size: 13px; font-weight: 800; color: #344054; }
+    input { width: 100%; min-height: 52px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 14px; font: inherit; font-size: 17px; outline: none; }
+    input:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
+    button { width: 100%; min-height: 54px; margin-top: 20px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .error { min-height: 20px; margin-top: 14px; color: #f04438; font-size: 13px; font-weight: 800; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>글램핑데이터랩</h1>
+    <p>계정 정보를 입력하면 분석 화면으로 이동합니다.</p>
+    <form method="post" action="/login">
+      <label>아이디<input name="username" autocomplete="username" autofocus required></label>
+      <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">로그인</button>
+      <div class="error">${escapedMessage}</div>
+    </form>
+  </main>
+</body>
+</html>`;
+}
+
+function sendLogin(res, status = 200, message = "") {
+  return send(res, status, loginPage(message), "text/html; charset=utf-8");
+}
+
+function requireLogin(req, res, reqUrl) {
+  if (isAuthenticated(req)) return true;
+  if (req.method === "GET" && acceptsHtml(req)) {
+    sendLogin(res, 200);
+  } else if (req.method === "HEAD") {
+    sendHead(res, 401);
+  } else {
+    send(res, 401, { error: "로그인이 필요합니다." });
+  }
+  return false;
 }
 
 function securityHeaders() {
@@ -378,7 +480,7 @@ function notFound(res) {
   send(res, 404, { error: "Not found" });
 }
 
-function parseJsonBody(req) {
+function readRequestBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
     req.on("data", (chunk) => {
@@ -389,14 +491,24 @@ function parseJsonBody(req) {
       }
     });
     req.on("end", () => {
-      if (!body.trim()) return resolve({});
-      try {
-        resolve(JSON.parse(body));
-      } catch (error) {
-        reject(error);
-      }
+      resolve(body);
     });
   });
+}
+
+async function parseJsonBody(req) {
+  const body = await readRequestBody(req);
+  if (!body.trim()) return {};
+  return JSON.parse(body);
+}
+
+async function parseLoginBody(req) {
+  const body = await readRequestBody(req);
+  if (!body.trim()) return {};
+  if (String(req.headers["content-type"] || "").includes("application/json")) {
+    return JSON.parse(body);
+  }
+  return Object.fromEntries(new URLSearchParams(body));
 }
 
 function safeJoin(base, requestPath) {
@@ -1904,8 +2016,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260621-admin-security"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260621-admin-security"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260621-login-gate"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260621-login-gate"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -1928,8 +2040,43 @@ async function route(req, res) {
   try {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
       if (req.method === "HEAD") return sendHead(res, 200);
-      return send(res, 200, { ok: true, authRequired: adminAuthRequired() });
+      return send(res, 200, { ok: true, loginRequired: true, authenticated: isAuthenticated(req) });
     }
+
+    if (req.method === "POST" && (reqUrl.pathname === "/api/login" || reqUrl.pathname === "/login")) {
+      const payload = await parseLoginBody(req);
+      const username = String(payload.username || "").trim();
+      const password = String(payload.password || "").trim();
+      if (!timingSafeTextEqual(username, ADMIN_USERNAME) || !timingSafeTextEqual(password, ADMIN_PASSWORD)) {
+        if (reqUrl.pathname === "/login") return sendLogin(res, 401, "아이디 또는 비밀번호가 올바르지 않습니다.");
+        return send(res, 401, { error: "아이디 또는 비밀번호가 올바르지 않습니다." });
+      }
+      const sessionId = createSession(username);
+      if (reqUrl.pathname === "/login") {
+        return send(res, 302, "", "text/plain; charset=utf-8", {
+          "Set-Cookie": sessionCookie(sessionId),
+          Location: "/"
+        });
+      }
+      return send(res, 200, { ok: true }, "application/json; charset=utf-8", {
+        "Set-Cookie": sessionCookie(sessionId)
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/logout") {
+      const session = getSession(req);
+      if (session?.id) sessions.delete(session.id);
+      return send(res, 200, { ok: true }, "application/json; charset=utf-8", {
+        "Set-Cookie": clearSessionCookie()
+      });
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/login") {
+      if (isAuthenticated(req)) return send(res, 302, "", "text/plain; charset=utf-8", { Location: "/" });
+      return sendLogin(res);
+    }
+
+    if (!requireLogin(req, res, reqUrl)) return;
 
     if (req.method === "HEAD" && (reqUrl.pathname === "/" || reqUrl.pathname === "/view")) {
       return sendHead(res, 200, "text/html; charset=utf-8");
@@ -1944,7 +2091,6 @@ async function route(req, res) {
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys") {
-      requireAdmin(req);
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveTrafficKeys(payload));
     }
@@ -1956,7 +2102,6 @@ async function route(req, res) {
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl") {
-      requireAdmin(req);
       const payload = await parseJsonBody(req);
       const result = await runCrawler(payload);
       const runs = await listRuns();
@@ -1964,7 +2109,6 @@ async function route(req, res) {
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/yeogi-import") {
-      requireAdmin(req);
       const payload = await parseJsonBody(req);
       const result = await importYeogiSupplement(payload);
       const runs = await listRuns();

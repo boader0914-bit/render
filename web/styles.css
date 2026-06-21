@@ -255,6 +255,14 @@ a {
   white-space: nowrap;
 }
 
+.admin-title-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .company-list,
 .target-list,
 .region-list,

@@ -6,9 +6,7 @@ const state = {
   selectedItem: null,
   selectedSheetTab: "booking",
   mapData: null,
-  mapPromise: null,
-  adminAuthRequired: false,
-  adminToken: ""
+  mapPromise: null
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -22,7 +20,6 @@ const CORE_COLORS = {
 };
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const DEFAULT_BOOKING_DAYS = 7;
-const ADMIN_TOKEN_STORAGE_KEY = "glampingDatalabAdminToken";
 
 const els = {
   pageTitle: document.getElementById("pageTitle"),
@@ -48,12 +45,7 @@ const els = {
   runSelect: document.getElementById("runSelect"),
   refreshRuns: document.getElementById("refreshRuns"),
   crawlForm: document.getElementById("crawlForm"),
-  adminSecurityCard: document.getElementById("adminSecurityCard"),
-  adminSecurityState: document.getElementById("adminSecurityState"),
-  adminTokenForm: document.getElementById("adminTokenForm"),
-  adminTokenInput: document.getElementById("adminTokenInput"),
-  adminTokenClearButton: document.getElementById("adminTokenClearButton"),
-  adminTokenStatus: document.getElementById("adminTokenStatus"),
+  logoutButton: document.getElementById("logoutButton"),
   keywordInput: document.getElementById("keywordInput"),
   checkInInput: document.getElementById("checkInInput"),
   checkOutInput: document.getElementById("checkOutInput"),
@@ -91,39 +83,6 @@ function escapeHtml(value) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function readStoredAdminToken() {
-  try {
-    return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredAdminToken(token) {
-  try {
-    if (token) sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-    else sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-  } catch {
-    // Private browsing modes may block session storage; the in-memory token still works.
-  }
-}
-
-function adminHeaders() {
-  return state.adminToken ? { "X-Admin-Token": state.adminToken } : {};
-}
-
-function adminJsonHeaders() {
-  return { "Content-Type": "application/json", ...adminHeaders() };
-}
-
-function adminActionReady(statusElement, actionLabel = "관리 작업") {
-  if (!state.adminAuthRequired || state.adminToken) return true;
-  const message = `${actionLabel} 전에 관리 토큰을 입력하세요.`;
-  if (statusElement) statusElement.textContent = message;
-  setStatus("잠김");
-  return false;
 }
 
 function fmtNumber(value) {
@@ -215,6 +174,9 @@ async function fetchJson(url, options) {
   if (!response.ok) {
     const error = new Error(data.error || `요청 실패: ${response.status}`);
     error.status = response.status;
+    if (response.status === 401 && !url.includes("/api/logout")) {
+      location.replace("/login");
+    }
     throw error;
   }
   return data;
@@ -1155,14 +1117,13 @@ async function submitYeogiImport() {
     els.yeogiImportStatus.textContent = "선택된 결과와 붙여넣은 내용이 필요합니다.";
     return;
   }
-  if (!adminActionReady(els.yeogiImportStatus, "여기어때 통합")) return;
   setYeogiBadge("통합 중");
   els.yeogiImportStatus.textContent = "여기어때 데이터를 통합 중입니다.";
   els.yeogiImportButton.disabled = true;
   try {
     const result = await fetchJson("/api/yeogi-import", {
       method: "POST",
-      headers: adminJsonHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ runId: state.activeRunId, sourceText })
     });
     state.runs = result.runs || state.runs;
@@ -1181,7 +1142,6 @@ async function submitYeogiImport() {
 
 async function submitTrafficKeys(event) {
   event.preventDefault();
-  if (!adminActionReady(els.trafficKeyStatus, "API 키 저장")) return;
   els.trafficKeyStatus.textContent = "저장 중입니다.";
   try {
     const payload = {
@@ -1193,7 +1153,7 @@ async function submitTrafficKeys(event) {
     };
     const data = await fetchJson("/api/settings/traffic-keys", {
       method: "POST",
-      headers: adminJsonHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     renderTrafficState(data);
@@ -1217,54 +1177,14 @@ async function loadTrafficState() {
   }
 }
 
-function renderAdminSecurity(data = {}) {
-  state.adminAuthRequired = Boolean(data.authRequired);
-  state.adminToken ||= readStoredAdminToken();
-  if (!els.adminSecurityState || !els.adminTokenStatus) return;
-
-  if (!state.adminAuthRequired) {
-    els.adminSecurityState.textContent = "미설정";
-    els.adminTokenStatus.textContent = "서버에 관리 토큰이 아직 설정되지 않았습니다. Render 환경변수 GLAMPING_ADMIN_TOKEN을 설정하면 관리 작업이 잠깁니다.";
-    if (els.adminTokenInput) els.adminTokenInput.disabled = true;
-    return;
-  }
-
-  if (els.adminTokenInput) els.adminTokenInput.disabled = false;
-  els.adminSecurityState.textContent = state.adminToken ? "토큰 입력됨" : "잠김";
-  els.adminTokenStatus.textContent = state.adminToken
-    ? "이 브라우저 세션에서 관리 작업을 실행할 수 있습니다."
-    : "수집 실행, 여기어때 통합, API 키 저장 전에 관리 토큰을 입력하세요.";
-}
-
-async function loadSecurityState() {
+async function logout() {
   try {
-    renderAdminSecurity(await fetchJson("/api/health"));
+    await fetchJson("/api/logout", { method: "POST" });
   } catch {
-    renderAdminSecurity({ authRequired: false });
+    // Even if the session is already gone, return the user to the login screen.
+  } finally {
+    location.replace("/login");
   }
-}
-
-function submitAdminToken(event) {
-  event.preventDefault();
-  const token = String(els.adminTokenInput?.value || "").trim();
-  if (!state.adminAuthRequired) {
-    els.adminTokenStatus.textContent = "서버에 관리 토큰이 설정되지 않아 입력이 필요 없습니다.";
-    return;
-  }
-  if (!token) {
-    els.adminTokenStatus.textContent = "관리 토큰을 입력하세요.";
-    return;
-  }
-  state.adminToken = token;
-  writeStoredAdminToken(token);
-  if (els.adminTokenInput) els.adminTokenInput.value = "";
-  renderAdminSecurity({ authRequired: true });
-}
-
-function clearAdminToken() {
-  state.adminToken = "";
-  writeStoredAdminToken("");
-  renderAdminSecurity({ authRequired: state.adminAuthRequired });
 }
 
 async function submitCrawl(event) {
@@ -1276,7 +1196,6 @@ async function submitCrawl(event) {
     checkOut: els.checkOutInput.value,
     productMode: els.productModeInput.value
   };
-  if (!adminActionReady(els.crawlStatus, "수집 실행")) return;
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
   els.crawlStatus.textContent = "수집 실행 중입니다.";
@@ -1284,7 +1203,7 @@ async function submitCrawl(event) {
   try {
     const result = await fetchJson("/api/crawl", {
       method: "POST",
-      headers: adminJsonHeaders(),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
     state.runs = result.runs || state.runs;
@@ -1351,16 +1270,14 @@ function bindEvents() {
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
-  els.adminTokenForm?.addEventListener("submit", submitAdminToken);
-  els.adminTokenClearButton?.addEventListener("click", clearAdminToken);
+  els.logoutButton?.addEventListener("click", logout);
 }
 
 async function init() {
   bindEvents();
   setDefaultDates();
-  state.adminToken = readStoredAdminToken();
   try {
-    await Promise.all([loadRuns(true), loadTrafficState(), loadSecurityState()]);
+    await Promise.all([loadRuns(true), loadTrafficState()]);
   } catch (error) {
     setStatus("오류");
     els.pageSubtitle.textContent = error.message;
