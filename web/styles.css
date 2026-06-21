@@ -511,6 +511,18 @@ a {
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+  text-decoration: none;
+}
+
+a.platform-chip,
+a.platform-row {
+  cursor: pointer;
+}
+
+a.platform-chip:hover,
+a.platform-row:hover {
+  border-color: rgba(49, 130, 246, 0.45);
+  background: #f5f9ff;
 }
 
 .platform-dot {
@@ -1097,6 +1109,8 @@ a {
 
 .platform-row {
   grid-template-columns: 30px minmax(0, 1fr) auto;
+  color: inherit;
+  text-decoration: none;
 }
 
 .platform-row .platform-dot {

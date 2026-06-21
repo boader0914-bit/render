@@ -237,6 +237,11 @@ function platformLetter(platform = "") {
   return "기";
 }
 
+function externalPlatformUrl(url) {
+  const text = String(url || "").trim();
+  return /^https?:\/\//i.test(text) ? text : "";
+}
+
 function companyPlatformMap() {
   const map = new Map();
   for (const company of state.data?.companyPlatforms || []) {
@@ -273,7 +278,11 @@ function platformChips(item) {
   return rows.map((row) => {
     const tone = platformTone(row.platform);
     const name = platformShortName(row.platform);
-    return `<span class="platform-chip ${tone}"><b class="platform-dot">${platformLetter(row.platform)}</b>${escapeHtml(name)}</span>`;
+    const url = externalPlatformUrl(row.url);
+    const content = `<b class="platform-dot">${platformLetter(row.platform)}</b>${escapeHtml(name)}`;
+    return url
+      ? `<a class="platform-chip ${tone}" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(`${name}에서 ${item.name || "업체"} 보기`)}">${content}</a>`
+      : `<span class="platform-chip ${tone}">${content}</span>`;
   }).join("");
 }
 
@@ -892,15 +901,19 @@ function renderSheetPlatform(item) {
       <h3>플랫폼 비교</h3>
       ${baseRows.map((row) => {
         const [tone, label] = platformStatus(row);
-        return `
-          <div class="platform-row ${tone}">
-            <b class="platform-dot">${platformLetter(row.platform)}</b>
-            <div>
-              <strong>${escapeHtml(platformShortName(row.platform))}</strong>
-              <small>${escapeHtml(row.price || row.stock || row.inventoryNote || "상세 확인")}</small>
-            </div>
-            <em>${escapeHtml(label)}</em>
+        const url = externalPlatformUrl(row.url);
+        const rowContent = `
+          <b class="platform-dot">${platformLetter(row.platform)}</b>
+          <div>
+            <strong>${escapeHtml(platformShortName(row.platform))}</strong>
+            <small>${escapeHtml(row.price || row.stock || row.inventoryNote || "상세 확인")}</small>
           </div>
+          <em>${escapeHtml(url ? "이동" : label)}</em>
+        `;
+        return `
+          ${url
+            ? `<a class="platform-row ${tone}" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(`${platformShortName(row.platform)}에서 ${item.name || "업체"} 보기`)}">${rowContent}</a>`
+            : `<div class="platform-row ${tone}">${rowContent}</div>`}
         `;
       }).join("")}
     </section>
