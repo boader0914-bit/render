@@ -34,6 +34,8 @@ const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
+let activeCrawlPromise = null;
+let activeCrawlStartedAt = null;
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
@@ -477,7 +479,10 @@ async function listRuns() {
   for (const entry of entries) {
     if (!entry.isDirectory() || !/_glamping_\d{8}(?:_\d{6})?$/.test(entry.name)) continue;
     const dirPath = path.join(OUTPUTS_DIR, entry.name);
+    const files = await fsp.readdir(dirPath).catch(() => []);
     const manifest = await readManifest(dirPath);
+    if (!manifest && files.length === 0) continue;
+    if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) continue;
     const stat = await fsp.stat(dirPath);
     const provinceKey = provinceKeyForRun(entry.name, manifest);
 
@@ -488,7 +493,7 @@ async function listRuns() {
       provinceLabel: (PROVINCES[provinceKey] || PROVINCES.local).label,
       updatedAt: stat.mtime.toISOString(),
       counts: manifest?.counts || {},
-      files: manifest?.files || []
+      files: manifest?.files || files
     });
   }
 
@@ -1782,6 +1787,25 @@ function summarizePlatformRows(rows) {
 }
 
 async function runCrawler(payload) {
+  if (activeCrawlPromise) {
+    const elapsedSeconds = activeCrawlStartedAt
+      ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
+      : 0;
+    const error = new Error(`이미 수집이 진행 중입니다${elapsedSeconds ? ` (${elapsedSeconds}초 경과)` : ""}. 완료 후 다시 실행하세요.`);
+    error.statusCode = 409;
+    throw error;
+  }
+  activeCrawlStartedAt = new Date();
+  activeCrawlPromise = runCrawlerInternal(payload);
+  try {
+    return await activeCrawlPromise;
+  } finally {
+    activeCrawlPromise = null;
+    activeCrawlStartedAt = null;
+  }
+}
+
+async function runCrawlerInternal(payload) {
   const keyword = String(payload.keyword || "").trim();
   if (!keyword) throw new Error("키워드를 입력해야 합니다.");
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
@@ -1922,7 +1946,7 @@ async function route(req, res) {
 
     send(res, 405, { error: "Method not allowed" });
   } catch (error) {
-    send(res, 500, { error: error.message || String(error) });
+    send(res, error.statusCode || 500, { error: error.message || String(error) });
   }
 }
 

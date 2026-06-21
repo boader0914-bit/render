@@ -1160,12 +1160,15 @@ async function loadTrafficState() {
 
 async function submitCrawl(event) {
   event.preventDefault();
+  const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
   const payload = {
     keyword: els.keywordInput.value.trim(),
     checkIn: els.checkInInput.value,
     checkOut: els.checkOutInput.value,
     productMode: els.productModeInput.value
   };
+  if (submitButton?.disabled) return;
+  if (submitButton) submitButton.disabled = true;
   els.crawlStatus.textContent = "수집 실행 중입니다.";
   setStatus("수집 중");
   try {
@@ -1182,6 +1185,8 @@ async function submitCrawl(event) {
   } catch (error) {
     els.crawlStatus.textContent = `수집 실패: ${error.message}`;
     setStatus("수집 실패");
+  } finally {
+    if (submitButton) submitButton.disabled = false;
   }
 }
 
