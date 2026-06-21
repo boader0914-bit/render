@@ -1325,6 +1325,14 @@ function bookingDaysFromRange(checkIn, checkOut) {
   return diff > 1 ? Math.min(31, diff + 1) : 1;
 }
 
+function resolveBookingRangePlaceLimit(value, bookingRangeDays) {
+  const text = String(value ?? "").trim();
+  if (!text) return Number(bookingRangeDays) > 1 ? 10 : 0;
+  const number = Number(text);
+  if (!Number.isFinite(number)) return Number(bookingRangeDays) > 1 ? 10 : 0;
+  return Math.max(0, Math.min(20, Math.floor(number)));
+}
+
 function formatRate(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "";
@@ -1761,6 +1769,10 @@ async function runCrawler(payload) {
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
   const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
   const bookingRangeDays = payload.bookingDays || payload.bookingRangeDays || bookingDaysFromRange(checkIn, checkOut) || process.env.BOOKING_RANGE_DAYS || 7;
+  const bookingRangePlaceLimit = resolveBookingRangePlaceLimit(
+    payload.bookingRangePlaceLimit ?? process.env.BOOKING_RANGE_PLACE_LIMIT,
+    bookingRangeDays
+  );
 
   const env = {
     ...process.env,
@@ -1769,7 +1781,7 @@ async function runCrawler(payload) {
     ADULTS: String(payload.adults || process.env.ADULTS || 2),
     PRODUCT_MODE: normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all"),
     BOOKING_RANGE_DAYS: String(bookingRangeDays),
-    BOOKING_RANGE_PLACE_LIMIT: String(payload.bookingRangePlaceLimit || process.env.BOOKING_RANGE_PLACE_LIMIT || ""),
+    BOOKING_RANGE_PLACE_LIMIT: String(bookingRangePlaceLimit),
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,
