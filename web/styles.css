@@ -398,15 +398,44 @@ a {
   gap: 6px;
 }
 
-.bar-row i {
+.bar-stack {
   width: 14px;
   min-width: 10px;
-  border-radius: 4px 4px 2px 2px;
-  background: #cfe4ff;
+  height: 32px;
+  display: flex;
+  align-items: end;
 }
 
-.bar-row i.hot {
+.bar-track {
+  position: relative;
+  width: 100%;
+  height: var(--range-h, 32px);
+  border-radius: 4px 4px 2px 2px;
+  background: rgba(49, 130, 246, 0.14);
+  overflow: hidden;
+}
+
+.bar-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--fill-h, 0);
   background: var(--blue);
+  border-radius: inherit;
+}
+
+.bar-stack.hot .bar-fill {
+  background: #1677ff;
+}
+
+.bar-stack.missing .bar-track {
+  background: rgba(152, 162, 179, 0.18);
+  border: 1px dashed rgba(152, 162, 179, 0.55);
+}
+
+.bar-stack.missing .bar-fill {
+  opacity: 0;
 }
 
 .bar-labels {
@@ -1032,6 +1061,19 @@ a {
   height: 100%;
   border-radius: inherit;
   background: var(--blue);
+}
+
+.date-row.missing {
+  opacity: 0.72;
+}
+
+.progress.missing {
+  background: rgba(152, 162, 179, 0.16);
+  border: 1px dashed rgba(152, 162, 179, 0.55);
+}
+
+.progress.missing span {
+  background: transparent;
 }
 
 .platform-row {
