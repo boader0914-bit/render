@@ -923,8 +923,6 @@ async function loadRun(runId) {
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
   if (els.keywordInput) els.keywordInput.value = run.keyword || (run.label || "").split("·")[0].trim() || els.keywordInput.value;
-  if (els.checkInInput && run.checkIn) els.checkInInput.value = run.checkIn;
-  if (els.checkOutInput && run.checkOut) els.checkOutInput.value = run.checkOut;
   renderAll();
   setStatus("준비");
 }
