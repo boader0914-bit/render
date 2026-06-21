@@ -418,6 +418,15 @@ a {
   white-space: nowrap;
 }
 
+.empty-chart {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .company-action {
   grid-area: action;
   min-width: 0;
@@ -993,11 +1002,22 @@ a {
   white-space: nowrap;
 }
 
+.date-row strong {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: keep-all;
+  line-height: 1.35;
+}
+
 .date-row small,
 .platform-row small,
 .search-row small {
+  display: block;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.45;
+  word-break: keep-all;
 }
 
 .progress {
@@ -1256,6 +1276,10 @@ a {
   .mini-bars,
   .bar-labels {
     max-width: 190px;
+  }
+
+  .date-row {
+    grid-template-columns: 1fr;
   }
 
   .yeogi-actions,

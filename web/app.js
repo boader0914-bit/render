@@ -19,7 +19,7 @@ const CORE_COLORS = {
   "확인필요": "#98a2b3"
 };
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
-const DEFAULT_BOOKING_DAYS = 7;
+const DEFAULT_BOOKING_DAYS = 1;
 
 const els = {
   pageTitle: document.getElementById("pageTitle"),
@@ -115,11 +115,15 @@ function monthDay(value) {
 function dateRangeLabel(run = {}) {
   const start = monthDay(run.checkIn);
   const end = monthDay(run.checkOut);
+  const days = bookingDays(run);
+  if (days <= 1) return start ? `${start} 기준` : "기준일 확인";
   if (start && end) return `${start}~${end}`;
   return "기간 확인";
 }
 
 function bookingDays(run = {}) {
+  const explicit = Number(run.bookingRangeDays);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.min(31, Math.round(explicit));
   const start = parseDate(run.checkIn);
   const end = parseDate(run.checkOut);
   if (!start || !end) return 1;
@@ -273,12 +277,13 @@ function finiteNumber(value, fallback = 0) {
 function salesStats(item = {}, kind = "lodging") {
   const run = state.data?.run || {};
   const days = bookingDays(run);
+  const basisDate = monthDay(run.checkIn) || "기준일";
   if (kind === "lodging") {
     const rows = weeklyRows(item);
     const weeklySold = finiteNumber(item.weeklyTotalSoldOut, NaN);
     const weeklySupply = finiteNumber(item.weeklyTotalStock, NaN);
     if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
-      return { sold: weeklySold, supply: weeklySupply, rate: weeklySold / weeklySupply, unit: "박", label: `${rows.length || days}일` };
+      return { sold: weeklySold, supply: weeklySupply, rate: weeklySold / weeklySupply, unit: "박", label: `${rows.length || days}일 집계`, basis: "range" };
     }
     if (rows.length) {
       const sum = rows.reduce((acc, row) => {
@@ -286,27 +291,27 @@ function salesStats(item = {}, kind = "lodging") {
         acc.supply += finiteNumber(row.total);
         return acc;
       }, { sold: 0, supply: 0 });
-      return { ...sum, rate: sum.supply ? sum.sold / sum.supply : NaN, unit: "박", label: `${rows.length}일` };
+      return { ...sum, rate: sum.supply ? sum.sold / sum.supply : NaN, unit: "박", label: `${rows.length}일 집계`, basis: "range" };
     }
     const total = finiteNumber(item.nightTotalStock, finiteNumber(item.totalRooms, 0));
     const available = finiteNumber(item.nightAvailableStock, finiteNumber(item.availableRooms, total));
     const sold = Math.max(0, total - available);
-    return { sold, supply: total, rate: total ? sold / total : NaN, unit: "박", label: days > 1 ? "기준일" : "숙박" };
+    return { sold, supply: total, rate: total ? sold / total : NaN, unit: "박", label: `${basisDate} 기준`, basis: "basis" };
   }
 
   const total = finiteNumber(item.dayUseTotalStock, 0);
   const available = finiteNumber(item.dayUseAvailableStock, total);
   const sold = Math.max(0, total - available);
-  return { sold, supply: total, rate: total ? sold / total : NaN, unit: "회", label: "당일" };
+  return { sold, supply: total, rate: total ? sold / total : NaN, unit: "회", label: `${basisDate} 기준`, basis: "basis" };
 }
 
 function salesLine(item, kind = "lodging") {
   const stats = salesStats(item, kind);
   if (!stats.supply) {
-    return kind === "lodging" ? "숙박 판매 확인필요" : "당일상품 없음";
+    return kind === "lodging" ? "숙박 재고 확인필요" : "데이유즈/캠프닉 없음";
   }
-  const name = kind === "lodging" ? "숙박" : "당일";
-  return `${name} ${fmtNumber(stats.sold)}/${fmtNumber(stats.supply)}${stats.unit} 판매 · ${fmtRate(stats.rate)}`;
+  const name = kind === "lodging" ? "숙박" : "데이유즈";
+  return `${name} ${stats.label} ${fmtNumber(stats.sold)}/${fmtNumber(stats.supply)}${stats.unit} 추정 · ${fmtRate(stats.rate)}`;
 }
 
 function summarizeSales(items = []) {
@@ -333,28 +338,34 @@ function categoryText(item = {}) {
 
 function miniBars(item) {
   const rows = weeklyRows(item);
+  const lodging = salesStats(item, "lodging");
   const visible = rows.length
     ? rows.slice(0, 7)
-    : Array.from({ length: Math.max(3, Math.min(DEFAULT_BOOKING_DAYS, bookingDays(state.data?.run || {}) || 7)) }, (_, index) => {
-      const lodging = salesStats(item, "lodging");
-      const base = Number.isFinite(lodging.rate) ? lodging.rate : 0;
-      const variance = [0.35, 0.55, 0.42, 0.68, 0.5, 0.75, 0.6][index % 7];
-      return {
-        label: index === 0 ? monthDay(state.data?.run?.checkIn) : "",
-        rate: Math.max(0.04, Math.min(1, base ? (base * 0.55) + (variance * 0.45) : variance * 0.25)),
-        sold: null,
-        total: null
-      };
-    });
+    : lodging.supply
+      ? [{
+        label: monthDay(state.data?.run?.checkIn) || "기준일",
+        rate: lodging.rate,
+        sold: lodging.sold,
+        total: lodging.supply,
+        basis: true
+      }]
+      : [];
+  if (!visible.length) {
+    return `
+      <div class="mini-bars unavailable" aria-label="예약 그래프 없음">
+        <div class="empty-chart">예약 재고 확인필요</div>
+      </div>
+    `;
+  }
   const first = visible[0]?.label || monthDay(state.data?.run?.checkIn) || "";
-  const last = rows.length ? visible[visible.length - 1]?.label : monthDay(state.data?.run?.checkOut);
+  const last = visible.length > 1 ? visible[visible.length - 1]?.label : (rows.length ? "일자별" : "기준일");
   return `
     <div class="mini-bars" aria-label="날짜별 판매 흐름">
       <div class="bar-row">
         ${visible.map((row) => {
           const height = Math.max(7, Math.round((Number(row.rate) || 0.05) * 31));
           const hot = Number(row.rate) >= 0.45 ? "hot" : "";
-          const title = row.total ? `${row.label} ${row.sold}/${row.total} 판매` : `${row.label || "기간"} 판매 흐름`;
+          const title = row.total ? `${row.label} ${row.sold}/${row.total} 추정` : `${row.label || "기간"} 예약 흐름`;
           return `<i class="${hot}" style="height:${height}px" title="${escapeHtml(title)}"></i>`;
         }).join("")}
       </div>
@@ -419,7 +430,7 @@ function renderCompanies() {
         </div>
         <div class="company-metric">
           <strong>${metric}</strong>
-          <span>${lodging.supply ? "숙박 판매" : "판매 확인"}</span>
+          <span>${lodging.supply ? "숙박 추정" : "재고 확인"}</span>
           <small>${fmtRate(lodging.rate)}</small>
         </div>
         <div class="company-chart">
@@ -690,25 +701,38 @@ function setActiveTab(tab) {
 function sheetRowsForBooking(item) {
   const rows = weeklyRows(item);
   if (rows.length) {
-    return rows.map((row) => ({ label: row.label, sold: row.sold, supply: row.total, rate: row.rate, unit: "박" }));
+    return rows.map((row) => ({
+      label: row.label,
+      sold: row.sold,
+      supply: row.total,
+      rate: row.rate,
+      unit: "박",
+      statusText: "판매/마감 추정",
+      note: "네이버예약 날짜별 재고"
+    }));
   }
   const lodging = salesStats(item, "lodging");
+  if (!lodging.supply) return [];
   return [{
-    label: monthDay(state.data?.run?.checkIn) || "기준일",
+    label: `${monthDay(state.data?.run?.checkIn) || "기준일"} 기준`,
     sold: lodging.sold,
     supply: lodging.supply,
     rate: lodging.rate,
-    unit: "박"
+    unit: "박",
+    statusText: "판매/마감 추정",
+    note: item.listType || "네이버예약 기준일 재고"
   }];
 }
 
 function dateRow(row) {
   const rate = Number.isFinite(row.rate) ? row.rate : 0;
+  const statusText = row.statusText || "판매/마감 추정";
+  const note = row.note ? `${row.note} · ` : "";
   return `
     <div class="date-row">
       <div>
-        <strong>${escapeHtml(row.label)} · ${fmtNumber(row.sold)}/${fmtNumber(row.supply)}${row.unit} 판매</strong>
-        <small>판매율 ${fmtRate(row.rate)}</small>
+        <strong>${escapeHtml(row.label)} · ${fmtNumber(row.sold)}/${fmtNumber(row.supply)}${row.unit} ${escapeHtml(statusText)}</strong>
+        <small>${escapeHtml(note)}추정률 ${fmtRate(row.rate)}</small>
       </div>
       <div class="progress"><span style="width:${Math.max(2, Math.min(100, rate * 100))}%"></span></div>
     </div>
@@ -717,24 +741,42 @@ function dateRow(row) {
 
 function renderSheetBooking(item) {
   const day = salesStats(item, "day");
+  const hasDailyRows = weeklyRows(item).length > 0;
+  const lodgingRows = sheetRowsForBooking(item);
   const dayRows = day.supply ? [{
-    label: monthDay(state.data?.run?.checkIn) || "기준일",
+    label: `${monthDay(state.data?.run?.checkIn) || "기준일"} 기준`,
     sold: day.sold,
     supply: day.supply,
     rate: day.rate,
-    unit: "회"
+    unit: "회",
+    statusText: "판매/마감 추정",
+    note: "데이유즈/캠프닉 기준일 재고"
   }] : [];
   return `
     <section class="sheet-section">
-      <h3>숙박</h3>
-      ${sheetRowsForBooking(item).map(dateRow).join("")}
+      <h3>${hasDailyRows ? "숙박 일자별 상세" : "숙박 기준일 상세"}</h3>
+      ${lodgingRows.length ? lodgingRows.map(dateRow).join("") : `<div class="empty">숙박 재고가 확인되지 않았습니다.</div>`}
     </section>
     <section class="sheet-section">
-      <h3>데이유즈/캠프닉</h3>
+      <h3>데이유즈/캠프닉 기준일</h3>
       ${dayRows.length ? dayRows.map(dateRow).join("") : `<div class="empty">데이유즈/캠프닉 상품이 확인되지 않았습니다.</div>`}
     </section>
     <section class="sheet-section">
       <h3>재고 해석</h3>
+      <div class="search-row">
+        <div>
+          <strong>표시 기준</strong>
+          <small>숙박은 날짜별 재고가 수집된 경우에만 기간 합산합니다. 없으면 기준일 재고만 표시합니다.</small>
+        </div>
+        <strong>${hasDailyRows ? "기간 집계" : "기준일"}</strong>
+      </div>
+      <div class="search-row">
+        <div>
+          <strong>데이유즈/캠프닉</strong>
+          <small>현재는 기준일 확인 재고입니다. 숙박 예약률 계산에는 포함하지 않습니다.</small>
+        </div>
+        <strong>보조 지표</strong>
+      </div>
       <div class="search-row">
         <div>
           <strong>${escapeHtml(item.inventoryScope || "채널 기준 재고")}</strong>
@@ -1065,7 +1107,7 @@ function setDefaultDates() {
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   const start = new Date(kst);
   const end = new Date(kst);
-  end.setUTCDate(end.getUTCDate() + 6);
+  end.setUTCDate(end.getUTCDate() + DEFAULT_BOOKING_DAYS);
   if (els.checkInInput && !els.checkInInput.value) els.checkInInput.value = start.toISOString().slice(0, 10);
   if (els.checkOutInput && !els.checkOutInput.value) els.checkOutInput.value = end.toISOString().slice(0, 10);
 }
