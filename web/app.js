@@ -167,9 +167,10 @@ function normalizeMonthDayLabel(value) {
   return match ? `${Number(match[1])}/${Number(match[2])}` : String(value || "");
 }
 
-function sevenDayLabels(run = {}) {
+function bookingRangeLabels(run = {}) {
   const base = run.checkIn || new Date().toISOString().slice(0, 10);
-  return Array.from({ length: DEFAULT_BOOKING_DAYS }, (_, index) => {
+  const count = Math.max(1, Math.min(31, bookingDays(run) || DEFAULT_BOOKING_DAYS));
+  return Array.from({ length: count }, (_, index) => {
     const date = isoAddDays(base, index);
     return monthDay(date) || `D+${index}`;
   });
@@ -508,7 +509,7 @@ function bookingGraphRows(item) {
   );
   const basisLabel = normalizeMonthDayLabel(monthDay(run.checkIn));
 
-  return sevenDayLabels(run).map((label) => {
+  return bookingRangeLabels(run).map((label) => {
     const key = normalizeMonthDayLabel(label);
     const row = rowMap.get(key);
     if (row) {
@@ -551,7 +552,7 @@ function miniBars(item) {
   const first = visible[0]?.label || monthDay(state.data?.run?.checkIn) || "";
   const last = visible[visible.length - 1]?.label || "";
   return `
-    <div class="mini-bars" aria-label="날짜별 판매 흐름">
+    <div class="mini-bars" aria-label="날짜별 판매 흐름" style="--bar-count:${Math.max(1, visible.length)}">
       <div class="bar-row">
         ${visible.map((row) => {
           const rangeHeight = row.total ? Math.max(18, Math.round((row.total / maxTotal) * 32)) : 32;
@@ -1140,13 +1141,16 @@ function dateRow(row) {
 }
 
 function renderSheetBooking(item) {
+  const run = state.data?.run || {};
+  const rangeDays = bookingDays(run);
+  const rangeLabel = dateRangeLabel(run);
+  const placeLimit = finiteNumber(run.bookingRangePlaceLimit, rangeDays > 1 ? 10 : 0);
   const day = salesStats(item, "day");
   const lodgingRows = sheetRowsForBooking(item);
   const collectedRows = lodgingRows.filter((row) => !row.missing).length;
   const missingRows = lodgingRows.length - collectedRows;
-  const hasDailyRows = weeklyRows(item).length > 0;
   const dayRows = day.supply ? [{
-    label: `${monthDay(state.data?.run?.checkIn) || "기준일"} 기준`,
+    label: `${monthDay(run.checkIn) || "기준일"} 기준`,
     sold: day.sold,
     supply: day.supply,
     rate: day.rate,
@@ -1168,9 +1172,9 @@ function renderSheetBooking(item) {
       <div class="search-row">
         <div>
           <strong>표시 기준</strong>
-          <small>그래프와 더보기는 7일 기준입니다. 수집값이 없는 날짜는 반투명 미수집으로 표시합니다.</small>
+          <small>그래프와 더보기는 ${escapeHtml(rangeLabel)} 입력기간 기준입니다. 수집값이 없는 날짜는 반투명 미수집으로 표시합니다.</small>
         </div>
-        <strong>${hasDailyRows ? `${collectedRows}/${DEFAULT_BOOKING_DAYS}일` : `${collectedRows}/${DEFAULT_BOOKING_DAYS}일`}</strong>
+        <strong>${collectedRows}/${rangeDays}일</strong>
       </div>
       <div class="search-row">
         <div>
@@ -1183,7 +1187,7 @@ function renderSheetBooking(item) {
         <div class="search-row">
           <div>
             <strong>미수집 날짜</strong>
-            <small>새 7일 수집을 실행하면 상위 업체는 날짜별 상세를 반복 확인합니다.</small>
+            <small>입력기간 전체를 기준으로 다시 수집하면 상위 ${fmtNumber(placeLimit)}개 업체는 날짜별 상세를 반복 확인합니다.</small>
           </div>
           <strong>${missingRows}일</strong>
         </div>

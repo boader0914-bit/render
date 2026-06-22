@@ -766,7 +766,7 @@ a {
 
 .bar-labels {
   display: grid;
-  grid-template-columns: repeat(7, 14px);
+  grid-template-columns: repeat(var(--bar-count, 7), 14px);
   gap: 6px;
   width: max-content;
   max-width: none;
@@ -787,7 +787,7 @@ a {
 }
 
 .bar-labels small:last-child {
-  grid-column: 7;
+  grid-column: var(--bar-count, 7);
 }
 
 .empty-chart {
