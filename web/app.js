@@ -1004,6 +1004,36 @@ function fmtAvailabilityRate(value) {
   return `${Math.round(n * 100)}%`;
 }
 
+function summaryIcon(type) {
+  const icons = {
+    stock: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 11V6.5A2.5 2.5 0 0 1 6.5 4h4A2.5 2.5 0 0 1 13 6.5V11" />
+        <path d="M4 11h16a2 2 0 0 1 2 2v5" />
+        <path d="M2 18h20" />
+        <path d="M4 18v2" />
+        <path d="M20 18v2" />
+      </svg>
+    `,
+    company: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 10h16" />
+        <path d="M5 10l1.1-4.4A2 2 0 0 1 8 4h8a2 2 0 0 1 1.9 1.6L19 10" />
+        <path d="M6 10v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-9" />
+        <path d="M9 20v-5h6v5" />
+      </svg>
+    `,
+    rate: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 17l5-5 4 4 7-8" />
+        <path d="M15 8h5v5" />
+        <path d="M4 21h16" />
+      </svg>
+    `
+  };
+  return icons[type] || icons.stock;
+}
+
 function weeklyDetailEntries(detail = "") {
   return String(detail || "")
     .split(/\s*,\s*/)
@@ -1221,9 +1251,9 @@ function renderAvailability() {
       </div>
       <button class="availability-filter" type="button" aria-label="필터"><span></span></button>
       <div class="availability-summary">
-        <span class="summary-room"><i>▮</i><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong><em>잔여</em></span>
-        <span class="summary-company"><i>■</i><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong><em>업체</em></span>
-        <span class="summary-rate"><i>%</i><small>평균 예약률</small><strong>${fmtAvailabilityRate(stats.totalSoldOutRooms && stats.totalRooms ? stats.totalSoldOutRooms / stats.totalRooms : NaN)}</strong></span>
+        <span class="summary-room"><i>${summaryIcon("stock")}</i><strong>${fmtNumber(stats.totalAvailableRooms || 0)}/${fmtNumber(stats.totalRooms || 0)}</strong><em>판매 가능</em></span>
+        <span class="summary-company"><i>${summaryIcon("company")}</i><strong>${fmtNumber(stats.checkedPlaces || 0)}</strong><em>분석 업체</em></span>
+        <span class="summary-rate"><i>${summaryIcon("rate")}</i><small>평균 판매율</small><strong>${fmtAvailabilityRate(stats.totalSoldOutRooms && stats.totalRooms ? stats.totalSoldOutRooms / stats.totalRooms : NaN)}</strong></span>
       </div>
       <div class="availability-rank-title">
         <h2>업체 순위</h2>
