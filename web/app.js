@@ -582,7 +582,7 @@ function renderSummary() {
   els.summaryGrid.innerHTML = `
     <article class="summary-card">
       <span class="summary-icon blue">${summaryIcon("sales")}</span>
-      <div><strong>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}</strong><small>숙박 판매</small></div>
+      <div><strong>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}</strong><small>객실 판매</small></div>
     </article>
     <article class="summary-card">
       <span class="summary-icon purple">${summaryIcon("company")}</span>
