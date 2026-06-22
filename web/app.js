@@ -1174,7 +1174,7 @@ function renderSheetBooking(item) {
           <strong>표시 기준</strong>
           <small>그래프와 더보기는 ${escapeHtml(rangeLabel)} 입력기간 기준입니다. 수집값이 없는 날짜는 반투명 미수집으로 표시합니다.</small>
         </div>
-        <strong>${collectedRows}/${rangeDays}일</strong>
+        <strong>${fmtNumber(rangeDays)}일 중 ${fmtNumber(collectedRows)}일</strong>
       </div>
       <div class="search-row">
         <div>
