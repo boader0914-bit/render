@@ -27,6 +27,7 @@
 
       <nav class="bottom-nav" aria-label="주요 화면">
         <button class="active" type="button" data-tab="rank">업체순위</button>
+        <button type="button" data-tab="dictionary">입지사전</button>
         <button type="button" data-tab="target">영업타깃</button>
         <button type="button" data-tab="map">지역지도</button>
         <button type="button" data-tab="admin">관리</button>
@@ -41,6 +42,30 @@
           <span id="rankCount">0 업체</span>
         </div>
         <div class="company-list" id="companyList"></div>
+      </section>
+
+      <section class="tab-panel" id="dictionaryPanel" data-panel="dictionary" aria-label="입지사전">
+        <div class="section-title">
+          <div>
+            <h2>입지사전</h2>
+            <p>저장된 지역 카드로 클러스터와 상품 방향 판단</p>
+          </div>
+          <span id="dictionaryCount">0 지역</span>
+        </div>
+
+        <section class="dictionary-search-card">
+          <form class="dictionary-search" id="dictionarySearchForm">
+            <label class="field">
+              <span>지역명 + 업종</span>
+              <input id="dictionarySearchInput" type="text" value="포천글램핑" autocomplete="off">
+            </label>
+            <button class="primary-button" type="submit">지역 카드 호출</button>
+          </form>
+          <div class="dictionary-chip-row" id="dictionaryQuickButtons"></div>
+          <p class="hint" id="dictionarySearchStatus">실시간 검색이 아니라 저장된 지역 판단 사전을 호출합니다.</p>
+        </section>
+
+        <div class="dictionary-result" id="dictionaryResult"></div>
       </section>
 
       <section class="tab-panel" id="targetPanel" data-panel="target" aria-label="영업 타깃">
@@ -214,6 +239,7 @@
       </div>
       <div class="drawer-actions">
         <button class="secondary-button" type="button" data-drawer-tab="rank">업체순위 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="dictionary">입지사전 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="target">영업타깃 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="map">지도 보기</button>
         <button class="primary-button" type="button" data-drawer-tab="admin">관리 열기</button>

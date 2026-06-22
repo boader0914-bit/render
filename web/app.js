@@ -6,7 +6,9 @@ const state = {
   selectedItem: null,
   selectedSheetTab: "booking",
   mapData: null,
-  mapPromise: null
+  mapPromise: null,
+  dictionary: null,
+  selectedLocationCard: null
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -19,6 +21,7 @@ const CORE_COLORS = {
   "확인필요": "#98a2b3"
 };
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
+const LOCATION_DICTIONARY_URL = "/data/location_dictionary.json";
 const DEFAULT_BOOKING_DAYS = 7;
 
 const els = {
@@ -28,6 +31,12 @@ const els = {
   noticeCard: document.getElementById("noticeCard"),
   rankCount: document.getElementById("rankCount"),
   companyList: document.getElementById("companyList"),
+  dictionaryCount: document.getElementById("dictionaryCount"),
+  dictionarySearchForm: document.getElementById("dictionarySearchForm"),
+  dictionarySearchInput: document.getElementById("dictionarySearchInput"),
+  dictionaryQuickButtons: document.getElementById("dictionaryQuickButtons"),
+  dictionarySearchStatus: document.getElementById("dictionarySearchStatus"),
+  dictionaryResult: document.getElementById("dictionaryResult"),
   targetCount: document.getElementById("targetCount"),
   targetList: document.getElementById("targetList"),
   mapCount: document.getElementById("mapCount"),
@@ -214,6 +223,68 @@ function yeogiSearchUrl() {
 
 function companyKey(value) {
   return String(value || "").replace(/\s+/g, "").toLowerCase();
+}
+
+function compactSearchText(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function locationClusterCodes(card = {}) {
+  return String(card.primaryCluster || "")
+    .split("+")
+    .map((code) => code.trim())
+    .filter(Boolean);
+}
+
+function locationClusterMeta(code) {
+  return (state.dictionary?.clusters || []).find((cluster) => cluster.code === code) || { code, name: code };
+}
+
+function locationScoreBand(value, index = {}) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return ["unknown", "확인"];
+  const reverse = /경쟁|확장|주의/.test(`${index.label || ""}${index.shortLabel || ""}`);
+  if (reverse) {
+    if (number >= 70) return ["risk", "주의"];
+    if (number >= 50) return ["mid", "중"];
+    return ["strong", "낮음"];
+  }
+  if (number >= 70) return ["strong", "강"];
+  if (number >= 50) return ["mid", "중"];
+  return ["weak", "약"];
+}
+
+function locationCardForQuery(query) {
+  const dictionary = state.dictionary;
+  if (!dictionary) return { card: null, alias: null, reason: "loading" };
+  const compact = compactSearchText(query);
+  if (!compact) return { card: null, alias: null, reason: "empty" };
+
+  const aliases = dictionary.aliases || [];
+  const cards = dictionary.cards || [];
+  const matchedAlias = aliases.find((alias) => {
+    const candidates = [
+      alias.searchKeyword,
+      alias.sigungu,
+      ...(alias.aliases || [])
+    ].map(compactSearchText).filter(Boolean);
+    const regionOnly = compact.replace(/글램핑|카라반|캠핑장|캠핑|펜션/g, "");
+    return candidates.some((candidate) => {
+      const candidateRegion = candidate.replace(/글램핑|카라반|캠핑장|캠핑|펜션|시|군|구/g, "");
+      return compact.includes(candidate) ||
+        candidate.includes(compact) ||
+        (regionOnly && (candidate.includes(regionOnly) || regionOnly.includes(candidateRegion)));
+    });
+  });
+
+  const card = matchedAlias
+    ? cards.find((item) => item.regionKey === matchedAlias.regionKey)
+    : cards.find((item) => compactSearchText(item.searchKeyword) === compact || compact.includes(compactSearchText(item.searchKeyword)));
+
+  return { card: card || null, alias: matchedAlias || null, reason: card ? "matched" : "missing" };
 }
 
 function platformTone(platform = "") {
@@ -741,24 +812,222 @@ function renderDownloads() {
   `).join("");
 }
 
+function renderDictionaryQuickButtons() {
+  if (!els.dictionaryQuickButtons) return;
+  const cards = state.dictionary?.cards || [];
+  els.dictionaryQuickButtons.innerHTML = cards.map((card) => `
+    <button class="dictionary-chip" type="button" data-location-query="${escapeHtml(card.searchKeyword)}">
+      ${escapeHtml(card.searchKeyword)}
+    </button>
+  `).join("");
+}
+
+function dictionaryAliasForCard(card) {
+  if (!card) return null;
+  return (state.dictionary?.aliases || []).find((alias) => alias.regionKey === card.regionKey) || null;
+}
+
+function weightedLocationScore(card) {
+  const indexes = Object.values(card?.indexes || {});
+  const models = state.dictionary?.scoreModels || [];
+  let weighted = 0;
+  let totalWeight = 0;
+  indexes.forEach((index) => {
+    const model = models.find((entry) => entry.name === index.label || entry.name.includes(index.shortLabel));
+    const weight = Number(model?.weight || 10);
+    const raw = Number(index.value);
+    if (!Number.isFinite(raw)) return;
+    const reverse = String(model?.direction || "").includes("역") || /경쟁|확장/.test(index.label || "");
+    weighted += (reverse ? 100 - raw : raw) * weight;
+    totalWeight += weight;
+  });
+  return totalWeight ? Math.round(weighted / totalWeight) : NaN;
+}
+
+function renderLocationDictionary(match = null) {
+  if (!els.dictionaryResult) return;
+  const cards = state.dictionary?.cards || [];
+  if (els.dictionaryCount) els.dictionaryCount.textContent = `${fmtNumber(cards.length)} 지역`;
+  if (!state.dictionary) {
+    els.dictionaryResult.innerHTML = `<div class="empty">입지판단 사전을 불러오는 중입니다.</div>`;
+    return;
+  }
+
+  const query = els.dictionarySearchInput?.value?.trim() || "";
+  const result = match || locationCardForQuery(query || cards[0]?.searchKeyword || "");
+  const card = result.card || state.selectedLocationCard;
+  if (!card) {
+    if (els.dictionarySearchStatus) {
+      els.dictionarySearchStatus.textContent = query
+        ? `"${query}"에 맞는 저장 지역 카드가 없습니다. 현재는 등록된 지역부터 판단합니다.`
+        : "지역명과 업종을 입력하면 저장된 지역 카드를 호출합니다.";
+    }
+    els.dictionaryResult.innerHTML = `
+      <article class="location-card empty-location">
+        <h3>저장된 카드가 없는 지역입니다</h3>
+        <p>현재 사전에는 ${cards.map((item) => escapeHtml(item.searchKeyword)).join(", ")} 카드가 등록되어 있습니다. 같은 구조로 지역 카드를 추가하면 즉시 호출할 수 있습니다.</p>
+      </article>
+    `;
+    return;
+  }
+
+  state.selectedLocationCard = card;
+  const alias = result.alias || dictionaryAliasForCard(card);
+  const clusters = locationClusterCodes(card).map(locationClusterMeta);
+  const indexes = Object.values(card.indexes || {});
+  const score = weightedLocationScore(card);
+  const topIndexes = indexes
+    .slice()
+    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+    .slice(0, 3);
+
+  if (els.dictionarySearchStatus) {
+    els.dictionarySearchStatus.textContent = `${card.searchKeyword} 카드 호출 · ${clusters.map((cluster) => cluster.name).join(" + ")}`;
+  }
+
+  els.dictionaryResult.innerHTML = `
+    <article class="location-card">
+      <div class="location-hero">
+        <div>
+          <p class="eyebrow">저장형 입지판단 카드</p>
+          <h3>${escapeHtml(card.searchKeyword)}</h3>
+          <p>${escapeHtml(card.interpretation || "지역 해석을 확인하세요.")}</p>
+        </div>
+        <div class="location-score">
+          <strong>${Number.isFinite(score) ? fmtNumber(score) : "확인"}</strong>
+          <span>보정 총점</span>
+        </div>
+      </div>
+
+      <div class="location-meta-row">
+        <span>${escapeHtml(alias?.sido || "광역")}</span>
+        <span>${escapeHtml(alias?.sigungu || "시군구")}</span>
+        <span>1차권역 ${fmtNumber(alias?.primaryRadiusKm || 0)}km</span>
+        <span>2차권역 ${fmtNumber(alias?.secondaryRadiusKm || 0)}km</span>
+      </div>
+
+      <div class="location-cluster-row">
+        ${clusters.map((cluster) => `
+          <span class="location-cluster-chip">
+            <b>${escapeHtml(cluster.code)}</b>
+            ${escapeHtml(cluster.name)}
+          </span>
+        `).join("")}
+      </div>
+
+      <section class="location-block">
+        <div class="location-block-head">
+          <h4>8대 지수</h4>
+          <span>높은 축: ${topIndexes.map((index) => escapeHtml(index.shortLabel)).join(" · ")}</span>
+        </div>
+        <div class="location-index-grid">
+          ${indexes.map((index) => {
+            const [tone, label] = locationScoreBand(index.value, index);
+            return `
+              <div class="location-index ${tone}">
+                <div>
+                  <strong>${escapeHtml(index.shortLabel || index.label)}</strong>
+                  <em>${fmtNumber(index.value)}</em>
+                </div>
+                <span>${escapeHtml(label)}</span>
+                <div class="location-progress"><i style="width:${Math.max(0, Math.min(100, Number(index.value) || 0))}%"></i></div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </section>
+
+      <section class="location-block">
+        <div class="location-block-head">
+          <h4>상품/가격/채널/운영 제안</h4>
+          <span>클러스터 규칙 기반</span>
+        </div>
+        <div class="location-advice-grid">
+          ${clusters.map((cluster) => `
+            <div class="location-advice-card">
+              <strong>${escapeHtml(cluster.name)}</strong>
+              <p>${escapeHtml(cluster.sentence || cluster.condition || "")}</p>
+              <dl>
+                <div><dt>상품</dt><dd>${escapeHtml(cluster.product || "확인")}</dd></div>
+                <div><dt>가격</dt><dd>${escapeHtml(cluster.price || "확인")}</dd></div>
+                <div><dt>채널</dt><dd>${escapeHtml(cluster.channel || "확인")}</dd></div>
+                <div><dt>운영</dt><dd>${escapeHtml(cluster.operation || "확인")}</dd></div>
+              </dl>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+
+      <section class="location-block">
+        <div class="location-summary-grid">
+          <div>
+            <strong>우선 상품</strong>
+            <p>${escapeHtml(card.recommendedProduct || "상품 제안 확인")}</p>
+          </div>
+          <div>
+            <strong>주의점</strong>
+            <p>${escapeHtml(card.caution || alias?.fallbackAction || "추가 확인 필요")}</p>
+          </div>
+          <div>
+            <strong>미등록 지역 처리</strong>
+            <p>${escapeHtml(alias?.fallbackAction || "인접 생활권과 관광 앵커를 수동 확인")}</p>
+          </div>
+        </div>
+      </section>
+    </article>
+  `;
+}
+
+function runDictionarySearch(query) {
+  if (query && els.dictionarySearchInput) els.dictionarySearchInput.value = query;
+  const result = locationCardForQuery(els.dictionarySearchInput?.value || "");
+  state.selectedLocationCard = result.card;
+  renderLocationDictionary(result);
+}
+
+async function loadLocationDictionary() {
+  try {
+    state.dictionary = await fetchJson(LOCATION_DICTIONARY_URL);
+    renderDictionaryQuickButtons();
+    if (!els.dictionarySearchInput?.value && state.dictionary.cards?.[0]) {
+      els.dictionarySearchInput.value = state.dictionary.cards[0].searchKeyword;
+    }
+    runDictionarySearch(els.dictionarySearchInput?.value || state.dictionary.cards?.[0]?.searchKeyword || "");
+  } catch (error) {
+    if (els.dictionarySearchStatus) els.dictionarySearchStatus.textContent = `입지사전 로딩 실패: ${error.message}`;
+    if (els.dictionaryResult) els.dictionaryResult.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
 function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
-  els.pageTitle.textContent = state.activeTab === "rank" ? "업체 순위" :
-    state.activeTab === "target" ? "영업 타깃" :
-    state.activeTab === "map" ? "지역 클러스터 지도" : "관리";
-  els.pageSubtitle.textContent = `${title} · ${dateRangeLabel(run)}`;
+  const titleMap = {
+    rank: "업체 순위",
+    dictionary: "입지사전",
+    target: "영업 타깃",
+    map: "지역 클러스터 지도",
+    admin: "관리"
+  };
+  els.pageTitle.textContent = titleMap[state.activeTab] || "업체 순위";
+  els.pageSubtitle.textContent = state.activeTab === "dictionary"
+    ? "저장된 지역 카드 · 8대 지수 · 클러스터 판정"
+    : `${title} · ${dateRangeLabel(run)}`;
   document.title = `글램핑데이터랩 V2 · ${title}`;
 }
 
 function renderAll() {
-  if (!state.data) return;
+  if (!state.data) {
+    renderLocationDictionary();
+    return;
+  }
   renderHeader();
   renderSummary();
   renderNotice();
   renderCompanies();
   renderTargets();
   renderMap();
+  renderLocationDictionary();
   renderDownloads();
   syncYeogiManualInterface();
 }
@@ -774,6 +1043,7 @@ function setActiveTab(tab) {
   renderHeader();
   closeDrawer();
   if (tab === "map") renderMap();
+  if (tab === "dictionary") renderLocationDictionary();
 }
 
 function sheetRowsForBooking(item) {
@@ -1271,17 +1541,27 @@ function bindEvents() {
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
   els.logoutButton?.addEventListener("click", logout);
+  els.dictionarySearchForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    runDictionarySearch();
+  });
+  els.dictionaryQuickButtons?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-location-query]");
+    if (!button) return;
+    runDictionarySearch(button.dataset.locationQuery);
+  });
 }
 
 async function init() {
   bindEvents();
   setDefaultDates();
   try {
-    await Promise.all([loadRuns(true), loadTrafficState()]);
+    await Promise.all([loadRuns(true), loadTrafficState(), loadLocationDictionary()]);
   } catch (error) {
     setStatus("오류");
     els.pageSubtitle.textContent = error.message;
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    loadLocationDictionary();
   }
 }
 

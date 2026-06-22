@@ -271,6 +271,8 @@ a {
   gap: 12px;
 }
 
+.dictionary-search-card,
+.location-card,
 .company-card,
 .target-card,
 .region-card,
@@ -281,6 +283,298 @@ a {
   border-radius: 18px;
   background: var(--panel);
   box-shadow: var(--soft-shadow);
+}
+
+.dictionary-search-card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 18px;
+}
+
+.dictionary-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.dictionary-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dictionary-chip {
+  min-height: 34px;
+  border: 1px solid #c7dcff;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: var(--blue-dark);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.dictionary-result {
+  display: grid;
+  gap: 12px;
+}
+
+.location-card {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.empty-location h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.empty-location p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.location-hero {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 118px;
+  gap: 16px;
+  align-items: start;
+}
+
+.location-hero h3 {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 34px);
+  line-height: 1.15;
+  font-weight: 900;
+}
+
+.location-hero p:not(.eyebrow) {
+  margin: 8px 0 0;
+  color: #344054;
+  font-size: 15px;
+}
+
+.location-score {
+  min-height: 96px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  border-radius: 18px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+}
+
+.location-score strong {
+  display: block;
+  font-size: 34px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.location-score span {
+  margin-top: 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.location-meta-row,
+.location-cluster-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.location-meta-row span,
+.location-cluster-chip {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.location-meta-row span {
+  border: 1px solid var(--line);
+  background: #fbfcfd;
+  color: #344054;
+}
+
+.location-cluster-chip {
+  border: 1px solid #b9d5ff;
+  background: #f5f9ff;
+  color: var(--blue-dark);
+}
+
+.location-cluster-chip b {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.location-block {
+  display: grid;
+  gap: 12px;
+}
+
+.location-block-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.location-block-head h4 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.location-block-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.location-index-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.location-index {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfcfd;
+}
+
+.location-index div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.location-index strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.location-index em {
+  color: #000b1a;
+  font-size: 20px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.location-index span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.location-progress {
+  height: 7px;
+  border-radius: 999px;
+  background: #edf2f7;
+  overflow: hidden;
+}
+
+.location-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue);
+}
+
+.location-index.strong .location-progress i {
+  background: var(--green);
+}
+
+.location-index.mid .location-progress i {
+  background: var(--orange);
+}
+
+.location-index.weak .location-progress i {
+  background: var(--weak);
+}
+
+.location-index.risk .location-progress i {
+  background: var(--red);
+}
+
+.location-advice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.location-advice-card {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.location-advice-card strong,
+.location-summary-grid strong {
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.location-advice-card p,
+.location-summary-grid p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.location-advice-card dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.location-advice-card dl div {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.location-advice-card dt {
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.location-advice-card dd {
+  min-width: 0;
+  margin: 0;
+  color: #344054;
+  font-size: 13px;
+}
+
+.location-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
 }
 
 .company-card {
@@ -893,10 +1187,10 @@ a.platform-row:hover {
   position: sticky;
   z-index: 20;
   top: max(10px, env(safe-area-inset-top));
-  width: min(560px, 100%);
+  width: min(680px, 100%);
   margin: 0 auto 24px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 5px;
   padding: 7px;
   border: 1px solid rgba(228, 231, 236, .8);
@@ -1245,6 +1539,45 @@ a.platform-row:hover {
     font-size: 24px;
   }
 
+  .dictionary-search {
+    grid-template-columns: 1fr;
+  }
+
+  .location-card,
+  .dictionary-search-card {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .location-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .location-score {
+    min-height: 78px;
+    justify-items: start;
+    padding: 14px;
+  }
+
+  .location-index-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .location-advice-grid,
+  .location-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .location-block-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .location-block-head span {
+    text-align: left;
+  }
+
   .company-card {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 14px 10px;
@@ -1350,6 +1683,40 @@ a.platform-row:hover {
 
   .company-action .platform-chips {
     justify-content: flex-start;
+  }
+
+  .bottom-nav {
+    gap: 3px;
+    padding: 5px;
+    border-radius: 16px;
+  }
+
+  .bottom-nav button {
+    min-height: 40px;
+    border-radius: 11px;
+    font-size: 11px;
+  }
+
+  .location-hero h3 {
+    font-size: 24px;
+  }
+
+  .location-meta-row span,
+  .location-cluster-chip,
+  .dictionary-chip {
+    font-size: 11px;
+  }
+
+  .location-index {
+    padding: 11px;
+  }
+
+  .location-index strong {
+    font-size: 13px;
+  }
+
+  .location-index em {
+    font-size: 18px;
   }
 
   .more-button {

@@ -1,0 +1,422 @@
+{
+  "version": "location-dictionary-v0.1",
+  "generatedAt": "2026-06-22T02:58:04.894613+00:00",
+  "source": "입지_판단_사전자료.xlsx",
+  "aliases": [
+    {
+      "searchKeyword": "안성 글램핑",
+      "regionKey": "kr_gyeonggi_anseong",
+      "sido": "경기",
+      "sigungu": "안성시",
+      "businessType": "글램핑",
+      "aliases": [
+        "안성M",
+        "무티",
+        "안성캠핑"
+      ],
+      "primaryRadiusKm": 50,
+      "secondaryRadiusKm": 70,
+      "fallbackAction": "인접 생활권 수동 확인"
+    },
+    {
+      "searchKeyword": "포천 글램핑",
+      "regionKey": "kr_gyeonggi_pocheon",
+      "sido": "경기",
+      "sigungu": "포천시",
+      "businessType": "글램핑",
+      "aliases": [
+        "포천카라반",
+        "서울근교북부"
+      ],
+      "primaryRadiusKm": 50,
+      "secondaryRadiusKm": 70,
+      "fallbackAction": "의정부·남양주·서울북부 생활권 확인"
+    },
+    {
+      "searchKeyword": "산청 글램핑",
+      "regionKey": "kr_gyeongnam_sancheong",
+      "sido": "경남",
+      "sigungu": "산청군",
+      "businessType": "글램핑",
+      "aliases": [
+        "지리산",
+        "경남글램핑"
+      ],
+      "primaryRadiusKm": 50,
+      "secondaryRadiusKm": 100,
+      "fallbackAction": "진주·대구·창원 도달시간 확인"
+    },
+    {
+      "searchKeyword": "사천 글램핑",
+      "regionKey": "kr_gyeongnam_sacheon",
+      "sido": "경남",
+      "sigungu": "사천시",
+      "businessType": "글램핑",
+      "aliases": [
+        "남해안",
+        "진주근교"
+      ],
+      "primaryRadiusKm": 50,
+      "secondaryRadiusKm": 70,
+      "fallbackAction": "진주·창원·항공산업권 확인"
+    }
+  ],
+  "scoreModels": [
+    {
+      "code": "S01",
+      "name": "가족생활권지수",
+      "direction": "정방향",
+      "weight": 13,
+      "interpretation": "30-49세와 아동 비율, 아파트 생활권, 주말 가족 수요"
+    },
+    {
+      "code": "S02",
+      "name": "청년근교수요지수",
+      "direction": "정방향",
+      "weight": 11,
+      "interpretation": "20-39세 접근성, 커플·친구·사진 콘텐츠 수요"
+    },
+    {
+      "code": "S03",
+      "name": "데이유즈가능지수",
+      "direction": "정방향",
+      "weight": 14,
+      "interpretation": "50km 내 도시 인구, 운전시간, 당일 BBQ·캠프닉 가능성"
+    },
+    {
+      "code": "S04",
+      "name": "산업평일수요지수",
+      "direction": "정방향",
+      "weight": 13,
+      "interpretation": "산단, 제조공장, 앵커기업, 협력사·워크숍 수요"
+    },
+    {
+      "code": "S05",
+      "name": "관광목적성지수",
+      "direction": "정방향",
+      "weight": 14,
+      "interpretation": "외지 방문자, 체류시간, 관광소비, 지역 앵커"
+    },
+    {
+      "code": "S06",
+      "name": "운영유지관리지수",
+      "direction": "정방향",
+      "weight": 15,
+      "interpretation": "청소, 세탁, 식자재, 수리, 응급 접근성"
+    },
+    {
+      "code": "S07",
+      "name": "경쟁혼잡지수",
+      "direction": "역방향",
+      "weight": 10,
+      "interpretation": "동일업종 과밀도. 높을수록 종합점수 감점"
+    },
+    {
+      "code": "S08",
+      "name": "확장주의지수",
+      "direction": "역방향",
+      "weight": 10,
+      "interpretation": "수요는 있어도 메인터넌스·저해요인이 커서 확장 주의가 필요한 정도"
+    }
+  ],
+  "clusters": [
+    {
+      "code": "C_FAM_NEAR",
+      "name": "도심근교 가족형",
+      "condition": "가족생활권 >=70 AND 데이유즈 >=60",
+      "demand": "주말 가족, 키즈, 부모 모임",
+      "product": "키즈풀, 캠프닉, 당일 BBQ, 개별 화장실",
+      "price": "주말 유지, 평일 가족 특가",
+      "channel": "네이버플레이스, 블로그, 맘카페, 인스타",
+      "operation": "안전, 소음, 응급 접근성 우선",
+      "flag": "아동 안전·소음 민원",
+      "sentence": "가까운 도시 가족이 하루를 맡길 수 있는 글램핑"
+    },
+    {
+      "code": "C_YOUNG_NEAR",
+      "name": "도심근교 커플·친구형",
+      "condition": "청년근교 >=70 OR 20-39세 접근성 강",
+      "demand": "커플, 친구, 기념일, 사진 수요",
+      "product": "데이유즈, 야간 BBQ, 감성 객실, 포토존",
+      "price": "금토 고정, 일-목 진입가",
+      "channel": "인스타, 네이버, 숏폼, 블로그",
+      "operation": "체크인 전후 동선·야간 운영 관리",
+      "flag": "과장 감성·소음",
+      "sentence": "퇴근 후에도 갈 수 있는 근교 체류 상품"
+    },
+    {
+      "code": "C_INDUSTRIAL_WEEKDAY",
+      "name": "산업평일수요형",
+      "condition": "산업평일 >=70 AND 도심/공장 접근성 양호",
+      "demand": "제조업 종사자, 협력사, 기업 모임",
+      "product": "평일 BBQ, 회식형 캠프닉, 워크숍, 출장 숙박",
+      "price": "평일 패키지, 단체 견적",
+      "channel": "네이버, 기업 제휴, 지역 커뮤니티",
+      "operation": "주차, 단체 동선, 식음료 표준화",
+      "flag": "산업 경관·대형차량",
+      "sentence": "관광보다 평일 식사와 모임 수요가 강한 입지"
+    },
+    {
+      "code": "C_TOUR_DEST",
+      "name": "관광목적형",
+      "condition": "관광목적성 >=70 AND 데이유즈 <60",
+      "demand": "외지 관광객, 숙박 목적 방문",
+      "product": "석식/조식, 지역관광, 풍경, 조용한 체류",
+      "price": "성수기·주말 프리미엄",
+      "channel": "블로그, 여행 플랫폼, 관광 키워드",
+      "operation": "체류 완성도와 객실 품질",
+      "flag": "계절성·비수기 공실",
+      "sentence": "일부러 찾아오는 이유를 숙소 안에 완성해야 하는 입지"
+    },
+    {
+      "code": "C_MAINT_RISK",
+      "name": "고령·저밀도 운영주의형",
+      "condition": "운영유지관리 <45 OR 고령화 높고 도심 멀다",
+      "demand": "외부 목적형 수요 중심",
+      "product": "객실 수 제한, 고장 적은 설비, 단순 운영",
+      "price": "확장 전 보수적",
+      "channel": "관광/콘텐츠 중심",
+      "operation": "청소·세탁·수리 외주 확보 전 확장 금지",
+      "flag": "인력·설비 리스크",
+      "sentence": "수요보다 운영 가능 규모를 먼저 정해야 하는 입지"
+    },
+    {
+      "code": "C_BALANCED_EXPAND",
+      "name": "복합확장형",
+      "condition": "수요 평균 >=65 AND 운영 >=65",
+      "demand": "근교+관광+일부 평일 수요",
+      "product": "숙박, 데이유즈, 캠프닉 혼합",
+      "price": "요일별 세분화",
+      "channel": "네이버+SNS+전문 플랫폼",
+      "operation": "표준 운영 매뉴얼 필요",
+      "flag": "과확장",
+      "sentence": "상품을 나누면 객실 수보다 체류 흐름이 강해지는 입지"
+    },
+    {
+      "code": "C_COMPETITION_HIGH",
+      "name": "경쟁과밀 주의형",
+      "condition": "경쟁혼잡 >=75",
+      "demand": "선택 비교 고객",
+      "product": "한 문장 차별화, 대표 음식, 객실 선택 기준",
+      "price": "저가 경쟁 금지, 포함가 명확화",
+      "channel": "리뷰·블로그·플레이스 품질",
+      "operation": "사진/후기/가격 동기화",
+      "flag": "가격 출혈",
+      "sentence": "많은 숙소 중 왜 여기를 선택해야 하는지 먼저 보여야 하는 입지"
+    },
+    {
+      "code": "C_LOW_DEMAND",
+      "name": "저수요 보수형",
+      "condition": "주요 수요 지수 대부분 <45",
+      "demand": "제한적 외부 유입",
+      "product": "작은 규모, 목적형 콘텐츠, 위탁 검토",
+      "price": "투자 보수",
+      "channel": "지역 관광/특수 목적",
+      "operation": "고정비 최소화",
+      "flag": "투자회수 장기화",
+      "sentence": "검색보다 비용 구조를 먼저 검토해야 하는 입지"
+    }
+  ],
+  "cards": [
+    {
+      "regionKey": "kr_gyeonggi_anseong",
+      "searchKeyword": "안성 글램핑",
+      "interpretation": "경기 남부 생활권과 제조업/산단권을 함께 보는 근교·산업 복합 입지",
+      "primaryCluster": "C_INDUSTRIAL_WEEKDAY + C_BALANCED_EXPAND",
+      "indexes": {
+        "family": {
+          "label": "가족생활권지수",
+          "shortLabel": "가족",
+          "value": 70
+        },
+        "young": {
+          "label": "청년근교수요지수",
+          "shortLabel": "청년",
+          "value": 62
+        },
+        "dayUse": {
+          "label": "데이유즈가능지수",
+          "shortLabel": "데이유즈",
+          "value": 76
+        },
+        "industry": {
+          "label": "산업평일수요지수",
+          "shortLabel": "산업",
+          "value": 80
+        },
+        "tourism": {
+          "label": "관광목적성지수",
+          "shortLabel": "관광",
+          "value": 45
+        },
+        "operation": {
+          "label": "운영유지관리지수",
+          "shortLabel": "운영",
+          "value": 72
+        },
+        "competition": {
+          "label": "경쟁혼잡지수",
+          "shortLabel": "경쟁혼잡",
+          "value": 63
+        },
+        "expansionRisk": {
+          "label": "확장주의지수",
+          "shortLabel": "확장주의",
+          "value": 34
+        }
+      },
+      "recommendedProduct": "평일 BBQ, 회식형 캠프닉, 가족 주말 패키지, 네이버 중심 채널",
+      "caution": "산업 수요와 감성 숙박 이미지를 분리해 설명"
+    },
+    {
+      "regionKey": "kr_gyeonggi_pocheon",
+      "searchKeyword": "포천 글램핑",
+      "interpretation": "서울 북부 접근성과 자연 관광이 겹치는 근교 관광 입지",
+      "primaryCluster": "C_YOUNG_NEAR + C_COMPETITION_HIGH",
+      "indexes": {
+        "family": {
+          "label": "가족생활권지수",
+          "shortLabel": "가족",
+          "value": 72
+        },
+        "young": {
+          "label": "청년근교수요지수",
+          "shortLabel": "청년",
+          "value": 70
+        },
+        "dayUse": {
+          "label": "데이유즈가능지수",
+          "shortLabel": "데이유즈",
+          "value": 78
+        },
+        "industry": {
+          "label": "산업평일수요지수",
+          "shortLabel": "산업",
+          "value": 40
+        },
+        "tourism": {
+          "label": "관광목적성지수",
+          "shortLabel": "관광",
+          "value": 68
+        },
+        "operation": {
+          "label": "운영유지관리지수",
+          "shortLabel": "운영",
+          "value": 66
+        },
+        "competition": {
+          "label": "경쟁혼잡지수",
+          "shortLabel": "경쟁혼잡",
+          "value": 76
+        },
+        "expansionRisk": {
+          "label": "확장주의지수",
+          "shortLabel": "확장주의",
+          "value": 42
+        }
+      },
+      "recommendedProduct": "데이유즈, 커플/친구 감성, 가족 물놀이, 서울근교 키워드",
+      "caution": "경쟁이 많아 대표 음식·사진·후기 차별화 필요"
+    },
+    {
+      "regionKey": "kr_gyeongnam_sancheong",
+      "searchKeyword": "산청 글램핑",
+      "interpretation": "도심 당일권보다 지리산·계곡·자연 체류를 중심으로 읽는 관광목적형 입지",
+      "primaryCluster": "C_TOUR_DEST + C_MAINT_RISK",
+      "indexes": {
+        "family": {
+          "label": "가족생활권지수",
+          "shortLabel": "가족",
+          "value": 42
+        },
+        "young": {
+          "label": "청년근교수요지수",
+          "shortLabel": "청년",
+          "value": 38
+        },
+        "dayUse": {
+          "label": "데이유즈가능지수",
+          "shortLabel": "데이유즈",
+          "value": 35
+        },
+        "industry": {
+          "label": "산업평일수요지수",
+          "shortLabel": "산업",
+          "value": 25
+        },
+        "tourism": {
+          "label": "관광목적성지수",
+          "shortLabel": "관광",
+          "value": 78
+        },
+        "operation": {
+          "label": "운영유지관리지수",
+          "shortLabel": "운영",
+          "value": 45
+        },
+        "competition": {
+          "label": "경쟁혼잡지수",
+          "shortLabel": "경쟁혼잡",
+          "value": 40
+        },
+        "expansionRisk": {
+          "label": "확장주의지수",
+          "shortLabel": "확장주의",
+          "value": 62
+        }
+      },
+      "recommendedProduct": "석식/조식, 조용한 체류, 계곡/산 콘텐츠, 숙박 완성도",
+      "caution": "인력·세탁·수리 접근성 확인 전 객실 확장 주의"
+    },
+    {
+      "regionKey": "kr_gyeongnam_sacheon",
+      "searchKeyword": "사천 글램핑",
+      "interpretation": "항공·제조 산업권과 남해안 관광권이 동시에 작동할 수 있는 복합 입지",
+      "primaryCluster": "C_INDUSTRIAL_WEEKDAY + C_TOUR_DEST",
+      "indexes": {
+        "family": {
+          "label": "가족생활권지수",
+          "shortLabel": "가족",
+          "value": 58
+        },
+        "young": {
+          "label": "청년근교수요지수",
+          "shortLabel": "청년",
+          "value": 52
+        },
+        "dayUse": {
+          "label": "데이유즈가능지수",
+          "shortLabel": "데이유즈",
+          "value": 65
+        },
+        "industry": {
+          "label": "산업평일수요지수",
+          "shortLabel": "산업",
+          "value": 75
+        },
+        "tourism": {
+          "label": "관광목적성지수",
+          "shortLabel": "관광",
+          "value": 70
+        },
+        "operation": {
+          "label": "운영유지관리지수",
+          "shortLabel": "운영",
+          "value": 62
+        },
+        "competition": {
+          "label": "경쟁혼잡지수",
+          "shortLabel": "경쟁혼잡",
+          "value": 52
+        },
+        "expansionRisk": {
+          "label": "확장주의지수",
+          "shortLabel": "확장주의",
+          "value": 43
+        }
+      },
+      "recommendedProduct": "평일 산업권 모임, 주말 해안 관광, 진주 생활권 데이유즈",
+      "caution": "관광형 문장과 산업형 평일 상품을 분리 운영"
+    }
+  ]
+}
