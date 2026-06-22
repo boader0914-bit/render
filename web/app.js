@@ -2,7 +2,7 @@ const state = {
   runs: [],
   data: null,
   activeRunId: null,
-  activeTab: "rank",
+  activeTab: "report",
   selectedItem: null,
   selectedSheetTab: "booking",
   mapData: null,
@@ -29,6 +29,7 @@ const els = {
   pageSubtitle: document.getElementById("pageSubtitle"),
   summaryGrid: document.getElementById("summaryGrid"),
   noticeCard: document.getElementById("noticeCard"),
+  reportBody: document.getElementById("reportBody"),
   rankCount: document.getElementById("rankCount"),
   companyList: document.getElementById("companyList"),
   dictionaryCount: document.getElementById("dictionaryCount"),
@@ -666,12 +667,241 @@ function targetReasons(item) {
   return reasons.slice(0, 5);
 }
 
-function renderTargets() {
-  const items = (state.data?.availability?.items || [])
+function targetEntries(limit = 15) {
+  const entries = (state.data?.availability?.items || [])
     .map((item) => ({ item, reasons: targetReasons(item) }))
     .filter((entry) => entry.reasons.length)
-    .sort((a, b) => b.reasons.length - a.reasons.length || Number(a.item.rank || 999) - Number(b.item.rank || 999))
-    .slice(0, 15);
+    .sort((a, b) => b.reasons.length - a.reasons.length || Number(a.item.rank || 999) - Number(b.item.rank || 999));
+  return limit ? entries.slice(0, limit) : entries;
+}
+
+function reportPlatformStats(items = []) {
+  const platformNames = ["네이버", "야놀자", "여기어때", "떠나요"];
+  const stats = Object.fromEntries(platformNames.map((name) => [name, 0]));
+  for (const item of items) {
+    const names = platformsForItem(item).map((row) => platformShortName(row.platform));
+    platformNames.forEach((name) => {
+      if (names.includes(name)) stats[name] += 1;
+    });
+  }
+  return {
+    names: platformNames,
+    counts: stats,
+    missingYeogi: Math.max(0, items.length - stats["여기어때"]),
+    missingYanolja: Math.max(0, items.length - stats["야놀자"]),
+    missingDdnayo: Math.max(0, items.length - stats["떠나요"])
+  };
+}
+
+function reportMarketScore({ rate, targetCount, itemCount, platformGapRatio, searchVolume }) {
+  const targetSignal = itemCount ? Math.min(30, (targetCount / itemCount) * 40) : 0;
+  const gapSignal = Math.min(22, platformGapRatio * 26);
+  const saleSignal = Number.isFinite(rate) ? (rate < 0.35 ? 18 : rate < 0.55 ? 12 : 5) : 8;
+  const demandSignal = searchVolume >= 30000 ? 16 : searchVolume >= 10000 ? 10 : searchVolume > 0 ? 6 : 4;
+  return Math.max(35, Math.min(94, Math.round(30 + targetSignal + gapSignal + saleSignal + demandSignal)));
+}
+
+function reportDecision(score, rate, targetCount) {
+  if (score >= 75 && targetCount >= 5) {
+    return {
+      label: "집중 공략",
+      tone: "strong",
+      summary: "노출은 확인되지만 상품/채널 구성 공백이 커서 영업 전환 여지가 큽니다."
+    };
+  }
+  if (score >= 62) {
+    return {
+      label: "선별 공략",
+      tone: "watch",
+      summary: "상위 업체 중 채널 누락과 상품 공백이 있는 곳부터 선별 접촉이 적합합니다."
+    };
+  }
+  if (Number.isFinite(rate) && rate >= 0.6) {
+    return {
+      label: "수요 강세",
+      tone: "hot",
+      summary: "판매율이 높아 신규 영업보다 기존 고객 운영 효율과 가격 점검이 우선입니다."
+    };
+  }
+  return {
+    label: "관찰",
+    tone: "neutral",
+    summary: "즉시 공략보다는 추가 수집과 플랫폼별 실제 노출 검증이 필요합니다."
+  };
+}
+
+function renderReport() {
+  if (!els.reportBody) return;
+  const data = state.data || {};
+  const run = data.run || {};
+  const items = data.availability?.items || [];
+  if (!items.length) {
+    els.reportBody.innerHTML = `<div class="empty">요약할 수집 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
+    return;
+  }
+
+  const sales = summarizeSales(items);
+  const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(data.availability?.stats?.weightedSoldOutRate, NaN);
+  const targets = targetEntries(8);
+  const allTargets = targetEntries(0);
+  const platformStats = reportPlatformStats(items);
+  const searchVolume = (data.regions || []).reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
+  const platformGapRatio = items.length ? (platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo) / (items.length * 3) : 0;
+  const score = reportMarketScore({
+    rate,
+    targetCount: allTargets.length,
+    itemCount: items.length,
+    platformGapRatio,
+    searchVolume
+  });
+  const decision = reportDecision(score, rate, allTargets.length);
+  const dayUseCount = items.filter((item) => salesStats(item, "day").supply > 0).length;
+  const lowSalesCount = items.filter((item) => {
+    const lodging = salesStats(item, "lodging");
+    return Number.isFinite(lodging.rate) && lodging.rate < 0.25;
+  }).length;
+  const regions = (data.regions || []).slice(0, 4);
+  const keyword = activeKeyword();
+  const range = dateRangeLabel(run);
+
+  els.reportBody.innerHTML = `
+    <section class="report-hero">
+      <div class="report-hero-copy">
+        <span class="report-badge ${decision.tone}">${escapeHtml(decision.label)}</span>
+        <h2>${escapeHtml(keyword)} 시장 브리핑</h2>
+        <p>${escapeHtml(range)} 입력기간 기준으로 네이버 노출, 객실 판매율, 채널 공백, 상품 구성 약점을 함께 판정했습니다.</p>
+      </div>
+      <div class="report-score-card">
+        <span>공략 매력도</span>
+        <strong>${fmtNumber(score)}</strong>
+        <small>${escapeHtml(decision.summary)}</small>
+      </div>
+    </section>
+
+    <section class="report-metric-grid" aria-label="보고서 핵심 지표">
+      <article>
+        <span>객실 판매율</span>
+        <strong>${fmtRate(rate)}</strong>
+        <small>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}개 추정</small>
+      </article>
+      <article>
+        <span>분석 업체</span>
+        <strong>${fmtNumber(items.length)}</strong>
+        <small>상위 노출 기준</small>
+      </article>
+      <article>
+        <span>컨택 후보</span>
+        <strong>${fmtNumber(allTargets.length)}</strong>
+        <small>채널/상품 약점 감지</small>
+      </article>
+      <article>
+        <span>상품 공백</span>
+        <strong>${fmtNumber(items.length - dayUseCount)}</strong>
+        <small>데이유즈/캠프닉 미확인</small>
+      </article>
+    </section>
+
+    <section class="report-layout">
+      <article class="report-card market">
+        <div class="report-card-head">
+          <div>
+            <h3>시장 해석</h3>
+            <p>판매율, 채널 공백, 상품 구성으로 본 영업 우선순위</p>
+          </div>
+          <span>${fmtNumber(bookingDays(run))}일 기준</span>
+        </div>
+        <div class="report-insight-list">
+          <div><b>판매 강도</b><span>${Number.isFinite(rate) ? `${fmtRate(rate)} 객실 판매율` : "확인필요"}</span></div>
+          <div><b>저판매 후보</b><span>${fmtNumber(lowSalesCount)}개 업체</span></div>
+          <div><b>검색 수요</b><span>${searchVolume ? `월 ${fmtNumber(searchVolume)}회` : "API 확인필요"}</span></div>
+          <div><b>상품 확장</b><span>${fmtNumber(dayUseCount)}개 업체만 데이유즈/캠프닉 확인</span></div>
+        </div>
+      </article>
+
+      <article class="report-card">
+        <div class="report-card-head">
+          <div>
+            <h3>플랫폼 공백</h3>
+            <p>검색 노출 대비 OTA/직판 채널 구성</p>
+          </div>
+        </div>
+        <div class="report-channel-grid">
+          ${platformStats.names.map((name) => `
+            <div>
+              <span>${escapeHtml(name)}</span>
+              <strong>${fmtNumber(platformStats.counts[name])}</strong>
+              <small>${fmtNumber(items.length - platformStats.counts[name])}개 미확인</small>
+            </div>
+          `).join("")}
+        </div>
+      </article>
+
+      <article class="report-card report-action-card">
+        <div class="report-card-head">
+          <div>
+            <h3>이번 주 액션</h3>
+            <p>먼저 확인해야 할 영업/운영 과제</p>
+          </div>
+        </div>
+        <ol class="report-action-list">
+          <li><strong>상위 노출 업체부터 채널 누락 확인</strong><span>여기어때 ${fmtNumber(platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(platformStats.missingYanolja)}개 미확인</span></li>
+          <li><strong>객실 판매율 낮은 업체 상품 재구성</strong><span>저판매 후보 ${fmtNumber(lowSalesCount)}개, 가격/패키지/캠프닉 점검</span></li>
+          <li><strong>데이유즈/캠프닉 공백 제안</strong><span>${fmtNumber(items.length - dayUseCount)}개 업체는 당일상품 확인 필요</span></li>
+        </ol>
+      </article>
+    </section>
+
+    <section class="report-card report-target-preview">
+      <div class="report-card-head">
+        <div>
+          <h3>우선 컨택 후보</h3>
+          <p>노출은 있으나 상품/채널 구성이 약한 업체</p>
+        </div>
+        <button class="small-button" type="button" data-drawer-tab="target">전체 보기</button>
+      </div>
+      <div class="report-target-list">
+        ${targets.length ? targets.slice(0, 5).map(({ item, reasons }, index) => {
+          const lodging = salesStats(item, "lodging");
+          const itemIndex = items.indexOf(item);
+          return `
+            <button class="report-target-row" type="button" data-open-company="${itemIndex}">
+              <span>${index + 1}</span>
+              <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+              <em>${fmtRate(lodging.rate)}</em>
+              <small>${reasons.map(escapeHtml).join(" · ")}</small>
+            </button>
+          `;
+        }).join("") : `<div class="empty">우선 컨택 후보가 없습니다.</div>`}
+      </div>
+    </section>
+
+    <section class="report-card report-region-preview">
+      <div class="report-card-head">
+        <div>
+          <h3>지역 클러스터 요약</h3>
+          <p>관광 앵커와 인접 수요권 기준</p>
+        </div>
+        <button class="small-button" type="button" data-drawer-tab="map">지도 보기</button>
+      </div>
+      <div class="report-region-grid">
+        ${regions.length ? regions.map((region) => {
+          const primary = regionPrimary(region);
+          const traffic = region.traffic || {};
+          return `
+            <div>
+              <span style="background:${CORE_COLORS[primary] || CORE_COLORS["확인필요"]}"></span>
+              <strong>${escapeHtml(region.region || region.name || "지역")}</strong>
+              <small>${escapeHtml(primary)} · 월검색 ${fmtNumber(traffic.totalSearchVolume || 0)}</small>
+            </div>
+          `;
+        }).join("") : `<div class="empty">지역 클러스터 데이터가 없습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderTargets() {
+  const items = targetEntries(15);
 
   els.targetCount.textContent = `${fmtNumber(items.length)} 후보`;
   if (!items.length) {
@@ -1054,16 +1284,21 @@ function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
   const titleMap = {
+    report: "요약 리포트",
     rank: "업체 순위",
     dictionary: "입지사전",
     target: "영업 타깃",
     map: "지역 클러스터 지도",
     admin: "관리"
   };
-  els.pageTitle.textContent = titleMap[state.activeTab] || "업체 순위";
-  els.pageSubtitle.textContent = state.activeTab === "dictionary"
-    ? "저장된 지역 카드 · 8대 지수 · 클러스터 판정"
-    : `${title} · ${dateRangeLabel(run)}`;
+  els.pageTitle.textContent = titleMap[state.activeTab] || "요약 리포트";
+  if (state.activeTab === "dictionary") {
+    els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
+  } else if (state.activeTab === "report") {
+    els.pageSubtitle.textContent = `${title} · 상업용 시장 요약 · ${dateRangeLabel(run)}`;
+  } else {
+    els.pageSubtitle.textContent = `${title} · ${dateRangeLabel(run)}`;
+  }
   document.title = `글램핑데이터랩 V2 · ${title}`;
 }
 
@@ -1075,6 +1310,7 @@ function renderAll() {
   renderHeader();
   renderSummary();
   renderNotice();
+  renderReport();
   renderCompanies();
   renderTargets();
   renderMap();
@@ -1093,6 +1329,7 @@ function setActiveTab(tab) {
   });
   renderHeader();
   closeDrawer();
+  if (tab === "report") renderReport();
   if (tab === "map") renderMap();
   if (tab === "dictionary") renderLocationDictionary();
 }
@@ -1337,6 +1574,7 @@ async function loadRuns(selectLatest = false) {
   state.runs = data.runs || [];
   els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
   if (!state.runs.length) {
+    if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
     els.companyList.innerHTML = `<div class="empty">실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
     setStatus("결과 없음");
     return;

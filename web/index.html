@@ -12,7 +12,7 @@
     <header class="app-header">
       <div class="header-copy">
         <p class="eyebrow">글램핑데이터랩 V2</p>
-        <h1 id="pageTitle">업체 순위</h1>
+        <h1 id="pageTitle">요약 리포트</h1>
         <p id="pageSubtitle">수집 결과를 불러오는 중입니다.</p>
       </div>
       <button class="icon-button" id="openControlButton" type="button" aria-label="필터 및 관리 열기">
@@ -26,14 +26,19 @@
       <section class="notice-card" id="noticeCard" hidden></section>
 
       <nav class="bottom-nav" aria-label="주요 화면">
-        <button class="active" type="button" data-tab="rank">업체순위</button>
+        <button class="active" type="button" data-tab="report">요약</button>
+        <button type="button" data-tab="rank">업체순위</button>
         <button type="button" data-tab="dictionary">입지사전</button>
         <button type="button" data-tab="target">영업타깃</button>
         <button type="button" data-tab="map">지역지도</button>
         <button type="button" data-tab="admin">관리</button>
       </nav>
 
-      <section class="tab-panel active" id="rankPanel" data-panel="rank" aria-label="업체 순위">
+      <section class="tab-panel active" id="reportPanel" data-panel="report" aria-label="요약 리포트">
+        <div id="reportBody" class="report-body"></div>
+      </section>
+
+      <section class="tab-panel" id="rankPanel" data-panel="rank" aria-label="업체 순위">
         <div class="section-title">
           <div>
             <h2>업체 순위</h2>
@@ -238,6 +243,7 @@
         <button class="close-button" type="button" data-close-drawer aria-label="닫기">×</button>
       </div>
       <div class="drawer-actions">
+        <button class="secondary-button" type="button" data-drawer-tab="report">요약 리포트 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="rank">업체순위 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="dictionary">입지사전 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="target">영업타깃 보기</button>
