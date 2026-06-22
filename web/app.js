@@ -471,6 +471,26 @@ function priceText(value) {
   return text.includes("~") ? text : `${text}~`;
 }
 
+function priceMeta(item = {}) {
+  const hasLodging = finiteNumber(item.nightItemCount, 0) > 0 || finiteNumber(item.nightTotalStock, 0) > 0;
+  const hasDayUse = finiteNumber(item.dayUseItemCount, 0) > 0 || finiteNumber(item.dayUseTotalStock, 0) > 0;
+  let label = "표시 최저가";
+  if (hasLodging && hasDayUse) label = "전체상품 최저";
+  else if (hasLodging) label = "숙박 최저가";
+  else if (hasDayUse) label = "데이유즈 최저";
+  return { label, value: priceText(item.price) };
+}
+
+function priceBlock(item = {}) {
+  const meta = priceMeta(item);
+  return `
+    <div class="price-block" title="${escapeHtml(`${meta.label}: ${meta.value}`)}">
+      <span>${escapeHtml(meta.label)}</span>
+      <strong class="price">${escapeHtml(meta.value)}</strong>
+    </div>
+  `;
+}
+
 function categoryText(item = {}) {
   return [item.region || item.address, item.category || item.type].filter(Boolean).join(" · ") || "지역 확인";
 }
@@ -620,8 +640,8 @@ function renderCompanies() {
           ${miniBars(item)}
         </div>
         <div class="company-action">
-          <div>
-            <div class="price">${escapeHtml(priceText(item.price))}</div>
+          <div class="company-price-platform">
+            ${priceBlock(item)}
             <div class="platform-chips">${platformChips(item)}</div>
           </div>
           <button class="more-button" type="button" data-open-company="${index}">더보기</button>

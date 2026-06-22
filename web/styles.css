@@ -15,7 +15,8 @@
   --red: #f04438;
   --shadow: 0 10px 28px rgba(16, 24, 40, .08);
   --soft-shadow: 0 6px 16px rgba(16, 24, 40, .06);
-  font-family: Arial, "Malgun Gothic", sans-serif;
+  --font-sans: "Pretendard", "Inter", "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font-family: var(--font-sans);
 }
 
 * {
@@ -35,6 +36,9 @@ body {
   letter-spacing: 0;
   overflow-x: hidden;
   word-break: keep-all;
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -44,6 +48,13 @@ textarea {
   font: inherit;
   letter-spacing: 0;
   min-width: 0;
+}
+
+strong,
+.price,
+.summary-card strong,
+.company-metric strong {
+  font-variant-numeric: tabular-nums;
 }
 
 button {
@@ -619,8 +630,8 @@ a {
   border-radius: 16px;
   background: #eef5ff;
   color: var(--blue);
-  font-size: 22px;
-  font-weight: 900;
+  font-size: 20px;
+  font-weight: 850;
 }
 
 .company-title {
@@ -631,9 +642,9 @@ a {
   display: -webkit-box;
   overflow: hidden;
   color: #000b1a;
-  font-size: 21px;
-  font-weight: 900;
-  line-height: 1.24;
+  font-size: 20px;
+  font-weight: 850;
+  line-height: 1.28;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
@@ -642,7 +653,7 @@ a {
   display: block;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -659,8 +670,8 @@ a {
 
 .company-metric strong {
   color: #000b1a;
-  font-size: 22px;
-  font-weight: 900;
+  font-size: 21px;
+  font-weight: 850;
   line-height: 1.1;
   white-space: nowrap;
 }
@@ -668,8 +679,8 @@ a {
 .company-metric span,
 .company-metric small {
   color: var(--blue-dark);
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 750;
   white-space: nowrap;
 }
 
@@ -686,16 +697,16 @@ a {
 }
 
 .sales-line {
-  color: #344054;
+  color: #7a5af8;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 750;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sales-line.day {
-  color: #7a5af8;
+  color: #344054;
 }
 
 .mini-bars {
@@ -797,9 +808,34 @@ a {
   gap: 10px;
 }
 
+.company-price-platform {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.price-block {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.price-block span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .price {
-  font-size: 20px;
-  font-weight: 900;
+  display: block;
+  color: #06142f;
+  font-size: 19px;
+  font-weight: 850;
+  line-height: 1.12;
   white-space: nowrap;
 }
 
@@ -1609,11 +1645,12 @@ a.platform-row:hover {
     width: 40px;
     height: 40px;
     border-radius: 13px;
-    font-size: 20px;
+    font-size: 18px;
   }
 
   .company-title strong {
-    font-size: 20px;
+    font-size: 19px;
+    line-height: 1.3;
   }
 
   .company-metric {
@@ -1621,7 +1658,11 @@ a.platform-row:hover {
   }
 
   .company-metric strong {
-    font-size: 20px;
+    font-size: 19px;
+  }
+
+  .sales-line {
+    font-size: 12px;
   }
 
   .company-chart {
@@ -1633,7 +1674,11 @@ a.platform-row:hover {
   }
 
   .price {
-    font-size: 18px;
+    font-size: 17px;
+  }
+
+  .price-block span {
+    font-size: 10px;
   }
 
   .platform-chips {
@@ -1698,6 +1743,11 @@ a.platform-row:hover {
     grid-template-columns: minmax(0, 1fr) auto;
     justify-items: start;
     align-items: end;
+  }
+
+  .company-price-platform,
+  .price-block {
+    justify-items: start;
   }
 
   .company-action .platform-chips {
