@@ -105,6 +105,36 @@ function fmtRate(value) {
   return `${Math.round(number * 100)}%`;
 }
 
+function summaryIcon(type) {
+  const icons = {
+    sales: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 18V7" />
+        <path d="M20 18v-6a3 3 0 0 0-3-3h-6v9" />
+        <path d="M4 12h16" />
+        <path d="M7 12V8a2 2 0 0 1 2-2h2" />
+      </svg>
+    `,
+    company: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 10h14" />
+        <path d="M6 10l1-5h10l1 5" />
+        <path d="M6 10v8h12v-8" />
+        <path d="M9 18v-5h6v5" />
+      </svg>
+    `,
+    rate: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 18V6" />
+        <path d="M4 18h16" />
+        <path d="M7 14l3-3 3 2 5-6" />
+        <path d="M16 7h2v2" />
+      </svg>
+    `
+  };
+  return icons[type] || icons.sales;
+}
+
 function fmtSearchRate(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "확인필요";
@@ -530,15 +560,15 @@ function renderSummary() {
   const checked = state.data?.availability?.stats?.checkedPlaces || items.length;
   els.summaryGrid.innerHTML = `
     <article class="summary-card">
-      <span class="summary-icon blue">박</span>
+      <span class="summary-icon blue">${summaryIcon("sales")}</span>
       <div><strong>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}</strong><small>숙박 판매</small></div>
     </article>
     <article class="summary-card">
-      <span class="summary-icon purple">업</span>
-      <div><strong>${fmtNumber(checked)}</strong><small>업체</small></div>
+      <span class="summary-icon purple">${summaryIcon("company")}</span>
+      <div><strong>${fmtNumber(checked)}</strong><small>분석 업체</small></div>
     </article>
     <article class="summary-card">
-      <span class="summary-icon green">%</span>
+      <span class="summary-icon green">${summaryIcon("rate")}</span>
       <div><strong>${fmtRate(rate)}</strong><small>평균 판매율</small></div>
     </article>
   `;

@@ -164,9 +164,8 @@ a {
   border-radius: 14px;
   display: grid;
   place-items: center;
-  font-size: 18px;
-  font-weight: 900;
-  white-space: nowrap;
+  flex: 0 0 auto;
+  font-size: 0;
 }
 
 .summary-icon.blue {
@@ -184,6 +183,17 @@ a {
   color: var(--green);
 }
 
+.summary-icon-svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .summary-card strong {
   display: block;
   color: var(--blue);
@@ -198,6 +208,7 @@ a {
   margin-top: 3px;
   color: var(--muted);
   font-size: 13px;
+  word-break: keep-all;
 }
 
 .notice-card {
@@ -1520,7 +1531,11 @@ a.platform-row:hover {
     width: 26px;
     height: 26px;
     border-radius: 9px;
-    font-size: 13px;
+  }
+
+  .summary-icon-svg {
+    width: 16px;
+    height: 16px;
   }
 
   .summary-card strong {
@@ -1655,7 +1670,11 @@ a.platform-row:hover {
   .summary-icon {
     width: 22px;
     height: 22px;
-    font-size: 11px;
+  }
+
+  .summary-icon-svg {
+    width: 14px;
+    height: 14px;
   }
 
   .summary-card strong {
