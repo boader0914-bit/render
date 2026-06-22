@@ -344,6 +344,12 @@ a {
   white-space: nowrap;
 }
 
+.dictionary-chip.group {
+  border-color: #b7e4cc;
+  background: #ecfdf3;
+  color: #067647;
+}
+
 .dictionary-result {
   display: grid;
   gap: 12px;
@@ -602,6 +608,97 @@ a {
   gap: 14px;
   border-top: 1px solid var(--line);
   padding-top: 14px;
+}
+
+.region-group-card {
+  border-color: #c7dcff;
+}
+
+.region-group-hero {
+  padding: 18px;
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(49, 130, 246, .12), rgba(18, 183, 106, .08)),
+    #fbfcfd;
+}
+
+.region-group-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.region-group-summary div,
+.region-mini-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fbfcfd;
+}
+
+.region-group-summary div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+}
+
+.region-group-summary strong {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.region-group-summary p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.region-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.region-mini-card {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-height: 104px;
+  padding: 13px;
+  text-align: left;
+}
+
+.region-mini-card strong,
+.region-mini-card span,
+.region-mini-card small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.region-mini-card strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.region-mini-card span {
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.region-mini-card small {
+  display: -webkit-box;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .company-card {
@@ -2065,7 +2162,9 @@ a.platform-row:hover {
   }
 
   .location-advice-grid,
-  .location-summary-grid {
+  .location-summary-grid,
+  .region-group-summary,
+  .region-card-grid {
     grid-template-columns: 1fr;
   }
 

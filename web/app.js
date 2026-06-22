@@ -275,6 +275,73 @@ function locationClusterMeta(code) {
   return (state.dictionary?.clusters || []).find((cluster) => cluster.code === code) || { code, name: code };
 }
 
+function locationGroupCards(group = {}) {
+  const keys = group.children || [];
+  const cards = state.dictionary?.cards || [];
+  return keys
+    .map((key) => cards.find((card) => card.regionKey === key))
+    .filter(Boolean);
+}
+
+function averageLocationIndexes(cards = []) {
+  const buckets = new Map();
+  cards.forEach((card) => {
+    Object.entries(card.indexes || {}).forEach(([key, index]) => {
+      const bucket = buckets.get(key) || {
+        key,
+        label: index.label,
+        shortLabel: index.shortLabel,
+        total: 0,
+        count: 0
+      };
+      const value = Number(index.value);
+      if (Number.isFinite(value)) {
+        bucket.total += value;
+        bucket.count += 1;
+      }
+      buckets.set(key, bucket);
+    });
+  });
+  return [...buckets.values()].map((bucket) => ({
+    label: bucket.label,
+    shortLabel: bucket.shortLabel,
+    value: bucket.count ? Math.round(bucket.total / bucket.count) : 0
+  }));
+}
+
+function regionGroupScore(group = {}, cards = []) {
+  const cardScores = cards
+    .map(weightedLocationScore)
+    .filter(Number.isFinite);
+  const localScore = cardScores.length
+    ? Math.round(cardScores.reduce((sum, score) => sum + score, 0) / cardScores.length)
+    : 0;
+  const marketScore = Number(group.marketSignal);
+  if (!Number.isFinite(marketScore)) return localScore || NaN;
+  if (!localScore) return Math.round(marketScore);
+  return Math.round(marketScore * 0.3 + localScore * 0.7);
+}
+
+function locationGroupForQuery(query) {
+  const dictionary = state.dictionary;
+  const compact = compactSearchText(query);
+  if (!dictionary || !compact) return null;
+  const regionOnly = compact.replace(/글램핑|카라반|캠핑장|캠핑|펜션/g, "");
+  return (dictionary.regionGroups || []).find((group) => {
+    const candidates = [
+      group.searchKeyword,
+      group.sido,
+      ...(group.aliases || [])
+    ].map(compactSearchText).filter(Boolean);
+    return candidates.some((candidate) => {
+      const candidateRegion = candidate.replace(/글램핑|카라반|캠핑장|캠핑|펜션|도|특별자치도/g, "");
+      return compact.includes(candidate) ||
+        candidate.includes(compact) ||
+        (regionOnly && (candidate.includes(regionOnly) || regionOnly.includes(candidateRegion)));
+    });
+  }) || null;
+}
+
 function locationScoreBand(value, index = {}) {
   const number = Number(value);
   if (!Number.isFinite(number)) return ["unknown", "확인"];
@@ -291,9 +358,12 @@ function locationScoreBand(value, index = {}) {
 
 function locationCardForQuery(query) {
   const dictionary = state.dictionary;
-  if (!dictionary) return { card: null, alias: null, reason: "loading" };
+  if (!dictionary) return { card: null, group: null, alias: null, reason: "loading" };
   const compact = compactSearchText(query);
-  if (!compact) return { card: null, alias: null, reason: "empty" };
+  if (!compact) return { card: null, group: null, alias: null, reason: "empty" };
+
+  const matchedGroup = locationGroupForQuery(query);
+  if (matchedGroup) return { card: null, group: matchedGroup, alias: null, reason: "group" };
 
   const aliases = dictionary.aliases || [];
   const cards = dictionary.cards || [];
@@ -1095,12 +1165,20 @@ function renderDownloads() {
 
 function renderDictionaryQuickButtons() {
   if (!els.dictionaryQuickButtons) return;
+  const groups = state.dictionary?.regionGroups || [];
   const cards = state.dictionary?.cards || [];
-  els.dictionaryQuickButtons.innerHTML = cards.map((card) => `
+  els.dictionaryQuickButtons.innerHTML = [
+    ...groups.map((group) => `
+    <button class="dictionary-chip group" type="button" data-location-query="${escapeHtml(group.searchKeyword)}">
+      ${escapeHtml(group.searchKeyword)}
+    </button>
+  `),
+    ...cards.map((card) => `
     <button class="dictionary-chip" type="button" data-location-query="${escapeHtml(card.searchKeyword)}">
       ${escapeHtml(card.searchKeyword)}
     </button>
-  `).join("");
+  `)
+  ].join("");
 }
 
 function dictionaryAliasForCard(card) {
@@ -1125,10 +1203,149 @@ function weightedLocationScore(card) {
   return totalWeight ? Math.round(weighted / totalWeight) : NaN;
 }
 
+function renderLocationGroupDictionary(group) {
+  const cards = locationGroupCards(group);
+  const score = regionGroupScore(group, cards);
+  const indexes = averageLocationIndexes(cards);
+  const topIndexes = indexes
+    .slice()
+    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+    .slice(0, 3);
+  const clusterCounts = new Map();
+  cards.forEach((card) => {
+    locationClusterCodes(card).forEach((code) => {
+      clusterCounts.set(code, (clusterCounts.get(code) || 0) + 1);
+    });
+  });
+  const clusters = [...clusterCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([code, count]) => ({ ...locationClusterMeta(code), count }));
+  const rankedCards = cards
+    .slice()
+    .sort((a, b) => {
+      const aScore = weightedLocationScore(a);
+      const bScore = weightedLocationScore(b);
+      return (Number.isFinite(bScore) ? bScore : 0) - (Number.isFinite(aScore) ? aScore : 0);
+    });
+
+  if (els.dictionarySearchStatus) {
+    els.dictionarySearchStatus.textContent = `${group.searchKeyword} 권역 스캔 · ${fmtNumber(cards.length)}개 지역 카드 연결`;
+  }
+
+  els.dictionaryResult.innerHTML = `
+    <article class="location-card region-group-card">
+      <div class="location-hero region-group-hero">
+        <div>
+          <p class="eyebrow">권역-지역 계층 분석</p>
+          <h3>${escapeHtml(group.searchKeyword)}</h3>
+          <p>${escapeHtml(group.interpretation || "광역 검색으로 시장 크기를 보고, 하위 지역 카드로 영업 우선순위를 판단합니다.")}</p>
+        </div>
+        <div class="location-score">
+          <strong>${Number.isFinite(score) ? fmtNumber(score) : "확인"}</strong>
+          <span>권역 총점</span>
+        </div>
+      </div>
+
+      <div class="location-meta-row">
+        <span>권역 스캔 30%</span>
+        <span>지역 카드 70%</span>
+        <span>연결 ${fmtNumber(cards.length)}지역</span>
+        <span>시장신호 ${fmtNumber(group.marketSignal || 0)}</span>
+      </div>
+
+      <div class="location-cluster-row">
+        ${clusters.length ? clusters.map((cluster) => `
+          <span class="location-cluster-chip">
+            <b>${escapeHtml(cluster.code)}</b>
+            ${escapeHtml(cluster.name)} ${fmtNumber(cluster.count)}
+          </span>
+        `).join("") : `<span class="location-cluster-chip"><b>대기</b>지역 카드 추가 필요</span>`}
+      </div>
+
+      <section class="location-block">
+        <div class="location-block-head">
+          <h4>권역 해석</h4>
+          <span>${escapeHtml(group.sido || "광역")} · ${escapeHtml(group.strategy || "권역 먼저, 지역 카드로 검증")}</span>
+        </div>
+        <div class="region-group-summary">
+          <div>
+            <strong>권역 역할</strong>
+            <p>${escapeHtml(group.role || "광역 검색량과 노출 분포로 시장 크기를 파악합니다.")}</p>
+          </div>
+          <div>
+            <strong>판단 방식</strong>
+            <p>권역 시장신호 30%와 연결 지역 카드 평균 70%를 합산해 우선순위를 봅니다.</p>
+          </div>
+          <div>
+            <strong>영업 관점</strong>
+            <p>${escapeHtml(group.salesFocus || "상위 노출은 있으나 상품/채널 구성이 약한 업체를 우선 확인합니다.")}</p>
+          </div>
+        </div>
+      </section>
+
+      ${indexes.length ? `
+        <section class="location-block">
+          <div class="location-block-head">
+            <h4>연결 지역 평균 8대 지수</h4>
+            <span>높은 축: ${topIndexes.map((index) => escapeHtml(index.shortLabel)).join(" · ")}</span>
+          </div>
+          <div class="location-index-grid">
+            ${indexes.map((index) => {
+              const [tone, label] = locationScoreBand(index.value, index);
+              return `
+                <div class="location-index ${tone}">
+                  <div>
+                    <strong>${escapeHtml(index.shortLabel || index.label)}</strong>
+                    <em>${fmtNumber(index.value)}</em>
+                  </div>
+                  <span>${escapeHtml(label)}</span>
+                  <div class="location-progress"><i style="width:${Math.max(0, Math.min(100, Number(index.value) || 0))}%"></i></div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </section>
+      ` : ""}
+
+      <section class="location-block">
+        <div class="location-block-head">
+          <h4>연결 지역 카드</h4>
+          <span>클릭하면 지역 카드로 이동</span>
+        </div>
+        <div class="region-card-grid">
+          ${rankedCards.length ? rankedCards.map((card) => {
+            const cardScore = weightedLocationScore(card);
+            const clustersForCard = locationClusterCodes(card).map(locationClusterMeta).map((cluster) => cluster.name).join(" + ");
+            return `
+              <button class="region-mini-card" type="button" data-location-query="${escapeHtml(card.searchKeyword)}">
+                <strong>${escapeHtml(card.searchKeyword)}</strong>
+                <span>${Number.isFinite(cardScore) ? `${fmtNumber(cardScore)}점` : "확인"} · ${escapeHtml(clustersForCard || "클러스터 확인")}</span>
+                <small>${escapeHtml(card.recommendedProduct || card.interpretation || "")}</small>
+              </button>
+            `;
+          }).join("") : `<div class="empty">아직 연결된 지역 카드가 없습니다. 아래 추가 후보 중 먼저 고를 지역을 선택하세요.</div>`}
+        </div>
+      </section>
+
+      <section class="location-block">
+        <div class="location-block-head">
+          <h4>다음 추가 후보</h4>
+          <span>2차 사전 후보</span>
+        </div>
+        <div class="location-meta-row">
+          ${(group.plannedKeywords || []).map((keyword) => `<span>${escapeHtml(keyword)}</span>`).join("") || "<span>추가 후보 없음</span>"}
+        </div>
+      </section>
+    </article>
+  `;
+}
+
 function renderLocationDictionary(match = null) {
   if (!els.dictionaryResult) return;
   const cards = state.dictionary?.cards || [];
-  if (els.dictionaryCount) els.dictionaryCount.textContent = `${fmtNumber(cards.length)} 지역`;
+  const groups = state.dictionary?.regionGroups || [];
+  if (els.dictionaryCount) els.dictionaryCount.textContent = `${fmtNumber(groups.length)} 권역 · ${fmtNumber(cards.length)} 지역`;
   if (!state.dictionary) {
     els.dictionaryResult.innerHTML = `<div class="empty">입지판단 사전을 불러오는 중입니다.</div>`;
     return;
@@ -1136,6 +1353,10 @@ function renderLocationDictionary(match = null) {
 
   const query = els.dictionarySearchInput?.value?.trim() || "";
   const result = match || locationCardForQuery(query || cards[0]?.searchKeyword || "");
+  if (result.group) {
+    renderLocationGroupDictionary(result.group);
+    return;
+  }
   const card = result.card || state.selectedLocationCard;
   if (!card) {
     if (els.dictionarySearchStatus) {
@@ -1838,6 +2059,11 @@ function bindEvents() {
     runDictionarySearch();
   });
   els.dictionaryQuickButtons?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-location-query]");
+    if (!button) return;
+    runDictionarySearch(button.dataset.locationQuery);
+  });
+  els.dictionaryResult?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-location-query]");
     if (!button) return;
     runDictionarySearch(button.dataset.locationQuery);
