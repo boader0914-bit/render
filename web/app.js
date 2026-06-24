@@ -8,7 +8,8 @@ const state = {
   mapData: null,
   mapPromise: null,
   dictionary: null,
-  selectedLocationCard: null
+  selectedLocationCard: null,
+  crawlStatusTimer: null
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -225,6 +226,38 @@ async function fetchJson(url, options) {
 
 function setStatus(text) {
   if (els.adminStatus) els.adminStatus.textContent = text;
+}
+
+function formatElapsed(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const minutes = Math.floor(value / 60);
+  const rest = Math.round(value % 60);
+  return minutes ? `${minutes}분 ${rest}초` : `${rest}초`;
+}
+
+async function pollCrawlStatusUntilIdle(notifyIdle = false) {
+  if (state.crawlStatusTimer) {
+    clearTimeout(state.crawlStatusTimer);
+    state.crawlStatusTimer = null;
+  }
+  try {
+    const status = await fetchJson("/api/crawl-status");
+    if (status.active) {
+      const elapsed = formatElapsed(status.elapsedSeconds);
+      if (els.crawlStatus) {
+        els.crawlStatus.textContent = `기존 수집이 진행 중입니다${elapsed ? ` (${elapsed} 경과)` : ""}. 완료되면 결과를 자동 갱신합니다.`;
+      }
+      setStatus("수집 중");
+      state.crawlStatusTimer = setTimeout(() => pollCrawlStatusUntilIdle(true), 10000);
+      return;
+    }
+    setStatus("준비");
+    if (notifyIdle && els.crawlStatus) els.crawlStatus.textContent = "진행 중인 수집이 끝났습니다. 결과를 갱신했습니다.";
+    await loadRuns(true);
+  } catch (error) {
+    if (els.crawlStatus) els.crawlStatus.textContent = `수집 상태 확인 실패: ${error.message}`;
+  }
 }
 
 function activeKeyword() {
@@ -1995,8 +2028,14 @@ async function submitCrawl(event) {
     els.crawlStatus.textContent = "수집 완료. 화면을 갱신했습니다.";
     setActiveTab("rank");
   } catch (error) {
-    els.crawlStatus.textContent = `수집 실패: ${error.message}`;
-    setStatus("수집 실패");
+    if (error.status === 409) {
+      els.crawlStatus.textContent = `${error.message} 결과가 생기면 자동으로 갱신합니다.`;
+      setStatus("수집 중");
+      pollCrawlStatusUntilIdle(true);
+    } else {
+      els.crawlStatus.textContent = `수집 실패: ${error.message}`;
+      setStatus("수집 실패");
+    }
   } finally {
     if (submitButton) submitButton.disabled = false;
   }
@@ -2075,6 +2114,7 @@ async function init() {
   setDefaultDates();
   try {
     await Promise.all([loadRuns(true), loadTrafficState(), loadLocationDictionary()]);
+    pollCrawlStatusUntilIdle(false);
   } catch (error) {
     setStatus("오류");
     els.pageSubtitle.textContent = error.message;

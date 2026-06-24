@@ -1949,6 +1949,17 @@ async function runCrawler(payload) {
   }
 }
 
+function currentCrawlStatus() {
+  const elapsedSeconds = activeCrawlStartedAt
+    ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
+    : 0;
+  return {
+    active: !!activeCrawlPromise,
+    startedAt: activeCrawlStartedAt ? activeCrawlStartedAt.toISOString() : null,
+    elapsedSeconds
+  };
+}
+
 async function runCrawlerInternal(payload) {
   const keyword = String(payload.keyword || "").trim();
   if (!keyword) throw new Error("키워드를 입력해야 합니다.");
@@ -2016,8 +2027,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260622-area-dictionary"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260622-area-dictionary"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260624-crawl-status"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260624-crawl-status"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -2084,6 +2095,10 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
       return send(res, 200, { runs: await listRuns() });
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
+      return send(res, 200, currentCrawlStatus());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {
