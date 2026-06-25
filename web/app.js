@@ -586,7 +586,17 @@ function salesStats(item = {}, kind = "lodging") {
     const weeklySold = finiteNumber(item.weeklyTotalSoldOut, NaN);
     const weeklySupply = finiteNumber(item.weeklyTotalStock, NaN);
     if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
-      return { sold: weeklySold, supply: weeklySupply, rate: weeklySold / weeklySupply, unit: "개", label: `${rows.length || days}일 집계`, basis: "range" };
+      const basisTotal = finiteNumber(item.weeklyBasisTotal, 0);
+      const normalizedSupply = basisTotal && rows.length ? basisTotal * rows.length : weeklySupply;
+      return {
+        sold: weeklySold,
+        supply: normalizedSupply,
+        rawSupply: weeklySupply,
+        rate: normalizedSupply ? weeklySold / normalizedSupply : weeklySold / weeklySupply,
+        unit: "개",
+        label: `${rows.length || days}일 집계`,
+        basis: "range"
+      };
     }
     if (rows.length) {
       const sum = rows.reduce((acc, row) => {
@@ -606,7 +616,17 @@ function salesStats(item = {}, kind = "lodging") {
   const weeklySold = finiteNumber(item.dayUseWeeklyTotalSoldOut, NaN);
   const weeklySupply = finiteNumber(item.dayUseWeeklyTotalStock, NaN);
   if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
-    return { sold: weeklySold, supply: weeklySupply, rate: weeklySold / weeklySupply, unit: "회", label: `${rows.length || days}일 집계`, basis: "range" };
+    const basisTotal = finiteNumber(item.dayUseWeeklyBasisTotal, 0);
+    const normalizedSupply = basisTotal && rows.length ? basisTotal * rows.length : weeklySupply;
+    return {
+      sold: weeklySold,
+      supply: normalizedSupply,
+      rawSupply: weeklySupply,
+      rate: normalizedSupply ? weeklySold / normalizedSupply : weeklySold / weeklySupply,
+      unit: "회",
+      label: `${rows.length || days}일 집계`,
+      basis: "range"
+    };
   }
   if (rows.length) {
     const sum = rows.reduce((acc, row) => {
@@ -682,6 +702,7 @@ function bookingGraphRows(item) {
   const maxTotal = Math.max(
     0,
     baseTotal,
+    finiteNumber(item.weeklyBasisTotal, 0),
     ...rows.map((row) => finiteNumber(row.total, 0))
   );
   const basisLabel = normalizeMonthDayLabel(monthDay(run.checkIn));
@@ -690,14 +711,20 @@ function bookingGraphRows(item) {
     const key = normalizeMonthDayLabel(label);
     const row = rowMap.get(key);
     if (row) {
+      const rawTotal = finiteNumber(row.total, maxTotal);
+      const basisTotal = Math.max(maxTotal, rawTotal);
+      const sold = finiteNumber(row.sold, 0);
       return {
         label,
-        sold: finiteNumber(row.sold, 0),
-        total: finiteNumber(row.total, maxTotal),
-        rate: row.rate,
+        sold,
+        total: basisTotal,
+        rawTotal,
+        hidden: Math.max(0, basisTotal - rawTotal),
+        rate: basisTotal ? sold / basisTotal : row.rate,
+        rawRate: row.rate,
         source: "daily",
         missing: false,
-        maxTotal
+        maxTotal: basisTotal
       };
     }
     if (!rows.length && key === basisLabel && lodging.supply) {
@@ -705,6 +732,8 @@ function bookingGraphRows(item) {
         label,
         sold: finiteNumber(lodging.sold, 0),
         total: finiteNumber(lodging.supply, maxTotal),
+        rawTotal: finiteNumber(lodging.rawSupply, finiteNumber(lodging.supply, maxTotal)),
+        hidden: Math.max(0, finiteNumber(lodging.supply, maxTotal) - finiteNumber(lodging.rawSupply, finiteNumber(lodging.supply, maxTotal))),
         rate: lodging.rate,
         source: "basis",
         missing: false,
@@ -736,9 +765,11 @@ function miniBars(item) {
           const fillHeight = row.missing ? 0 : Math.max(2, Math.round((row.sold / maxTotal) * 32));
           const hot = !row.missing && Number(row.rate) >= 0.45 ? "hot" : "";
           const missing = row.missing ? "missing" : "";
+          const openStock = finiteNumber(row.rawTotal, row.total);
+          const hidden = Math.max(0, finiteNumber(row.hidden, 0));
           const title = row.missing
-            ? `${row.label} 미수집 · 기준재고 ${fmtNumber(row.total)}개`
-            : `${row.label} ${fmtNumber(row.sold)}/${fmtNumber(row.total)}개 추정`;
+            ? `${row.label} 미수집 · 기준총량 ${fmtNumber(row.total)}개`
+            : `${row.label} 마감추정 ${fmtNumber(row.sold)}/${fmtNumber(row.total)}개 · 판매열림 ${fmtNumber(openStock)}개${hidden ? ` · 미오픈/차단 ${fmtNumber(hidden)}개` : ""}`;
           return `
             <span class="bar-stack ${hot} ${missing}" title="${escapeHtml(title)}" style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px">
               <span class="bar-track"><span class="bar-fill"></span></span>
@@ -1669,6 +1700,8 @@ function sheetRowsForBooking(item) {
     rate: row.rate,
     unit: "개",
     missing: row.missing,
+    openStock: row.rawTotal ?? row.total,
+    hidden: row.hidden || 0,
     statusText: row.missing ? "미수집" : "마감추정",
     note: row.missing
       ? "날짜별 상세 미수집"
@@ -1709,6 +1742,11 @@ function dateRow(row) {
   const rate = Number.isFinite(row.rate) ? row.rate : 0;
   const statusText = row.statusText || "판매/마감 추정";
   const note = row.note ? `${row.note} · ` : "";
+  const openStock = finiteNumber(row.openStock, row.supply);
+  const hidden = Math.max(0, finiteNumber(row.hidden, 0));
+  const stockNote = hidden
+    ? `판매열림 ${fmtNumber(openStock)}${row.unit} · 미오픈/차단 ${fmtNumber(hidden)}${row.unit}`
+    : `판매열림 ${fmtNumber(openStock)}${row.unit}`;
   if (row.missing) {
     return `
       <div class="date-row missing">
@@ -1723,8 +1761,8 @@ function dateRow(row) {
   return `
     <div class="date-row">
       <div>
-        <strong>${escapeHtml(row.label)} · ${escapeHtml(statusText)} ${fmtNumber(row.sold)}${row.unit} / 확인재고 ${fmtNumber(row.supply)}${row.unit}</strong>
-        <small>${escapeHtml(note)}추정률 ${fmtRate(row.rate)}</small>
+        <strong>${escapeHtml(row.label)} · ${escapeHtml(statusText)} ${fmtNumber(row.sold)}${row.unit} / 기준총량 ${fmtNumber(row.supply)}${row.unit}</strong>
+        <small>${escapeHtml(note)}${escapeHtml(stockNote)} · 기준총량 대비 ${fmtRate(row.rate)}</small>
       </div>
       <div class="progress"><span style="width:${Math.max(2, Math.min(100, rate * 100))}%"></span></div>
     </div>
