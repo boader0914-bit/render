@@ -313,6 +313,71 @@ function spacedGlampingKeyword(value) {
   return `${normalized} 글램핑`.trim();
 }
 
+function uniqueNonEmpty(values) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function compactName(value) {
+  return compactKeyword(value)
+    .toLowerCase()
+    .replace(/[(){}\[\]<>·ㆍ._,\-–—/\\|"'`~!@#$%^&*+=:;?]/g, "");
+}
+
+function companySearchQueries(keyword) {
+  const raw = String(keyword || "").trim();
+  const compact = compactKeyword(raw);
+  const hasGlamping = /글램핑/.test(compact);
+  const base = compact.replace(/글램핑$/, "");
+  return uniqueNonEmpty([
+    raw,
+    compact,
+    hasGlamping ? spacedGlampingKeyword(compact) : "",
+    !hasGlamping ? `${raw} 글램핑` : "",
+    !hasGlamping ? `${compact}글램핑` : "",
+    hasGlamping && base.length >= 3 ? base : "",
+  ]);
+}
+
+function companyNameMatchScore(name, keyword = RAW_KEYWORD) {
+  const candidate = compactName(name);
+  const target = compactName(keyword);
+  if (!candidate || !target) return 0;
+  if (candidate === target) return 100;
+  if (target.includes(candidate) && candidate.length >= 3) return 90;
+
+  const rawTokens = String(keyword || "")
+    .trim()
+    .split(/\s+/)
+    .map(compactName)
+    .filter((token) => token.length >= 2);
+  const genericTokens = new Set(["글램핑", "카라반", "펜션", "캠핑", "캠핑장", "리조트", "스테이"]);
+  const identityTokens = rawTokens.filter((token) => !genericTokens.has(token));
+  if (identityTokens.length >= 2) {
+    return identityTokens.every((token) => candidate.includes(token)) ? 80 : 0;
+  }
+  if (rawTokens.length >= 2 && identityTokens.some((token) => token.length >= 3)) {
+    return rawTokens.every((token) => candidate.includes(token)) ? 80 : 0;
+  }
+
+  if (candidate.includes(target)) return 50;
+
+  const glampingBase = target.replace(/글램핑$/, "");
+  return glampingBase.length >= 3 && candidate.includes(glampingBase) && candidate.includes("글램핑") ? 40 : 0;
+}
+
+function companyNameMatches(name, keyword = RAW_KEYWORD) {
+  return companyNameMatchScore(name, keyword) > 0;
+}
+
+function filterCompanyRows(rows, getName = (row) => row.name || row.업체명 || "") {
+  if (!province.isCompany) return rows;
+  const scored = rows
+    .map((row) => ({ row, score: companyNameMatchScore(getName(row), RAW_KEYWORD) }))
+    .filter((item) => item.score > 0);
+  const strong = scored.filter((item) => item.score >= 80);
+  return (strong.length ? strong : scored).map((item) => item.row);
+}
+
 function detectProvince(keyword) {
   const compact = compactKeyword(keyword);
   return provinceConfigs.find((config) => config.aliases.some((alias) => compact.startsWith(alias)));
@@ -477,13 +542,22 @@ function pickNaverSearchKey(state, query) {
   });
 }
 
-function pickNaverAdKey(state, query) {
+function pickNaverPlaceListKey(state, query) {
+  const keys = Object.keys(state.ROOT_QUERY || {});
+  return keys.find((key) => {
+    if (!key.startsWith("placeList(")) return false;
+    const parsed = parseRootKey(key);
+    return parsed?.input?.query === query && parsed?.input?.display === 50;
+  });
+}
+
+function pickNaverAdKey(state, query, businessTypes = ["accommodation"]) {
   const keys = Object.keys(state.ROOT_QUERY || {});
   return keys.find((key) => {
     if (!key.startsWith("adBusinesses(")) return false;
     if (key.includes('"channel":"openingPlace"')) return false;
     const parsed = parseRootKey(key);
-    return parsed?.input?.query === query && parsed?.input?.businessType === "accommodation";
+    return parsed?.input?.query === query && businessTypes.includes(parsed?.input?.businessType);
   });
 }
 
@@ -1238,55 +1312,94 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
 }
 
 async function collectNaverMain() {
-  const { state, status, url } = await getNaverState(NAVER_QUERY);
-  const searchKey = pickNaverSearchKey(state, NAVER_QUERY);
-  const adKey = pickNaverAdKey(state, NAVER_QUERY);
-  if (!searchKey) {
-    if (province.isCompany) {
-      return {
-        status,
-        url,
-        total: 0,
-        adTotal: 0,
-        overall: [],
-        ads: [],
-        warning: "Naver main search key not found.",
-      };
+  const queries = province.isCompany ? companySearchQueries(RAW_KEYWORD) : [NAVER_QUERY];
+  const attemptedQueries = [];
+  let lastStatus = 0;
+  let lastUrl = "";
+
+  for (const query of queries) {
+    const { state, status, url } = await getNaverState(query);
+    lastStatus = status;
+    lastUrl = url;
+    const searchKey = pickNaverSearchKey(state, query) || (province.isCompany ? pickNaverPlaceListKey(state, query) : "");
+    const adKey = pickNaverAdKey(state, query, province.isCompany ? ["accommodation", "place"] : ["accommodation"]);
+    const isPlaceList = Boolean(searchKey && searchKey.startsWith("placeList("));
+    const attempt = {
+      query,
+      status,
+      searchKey: Boolean(searchKey),
+      searchType: isPlaceList ? "placeList" : (searchKey ? "accommodationSearch" : ""),
+      adKey: Boolean(adKey),
+      matched: 0,
+      filteredOut: 0,
+    };
+    attemptedQueries.push(attempt);
+
+    if (!searchKey && (!province.isCompany || !adKey)) {
+      continue;
     }
-    throw new Error("Naver main search key not found.");
+
+    const searchResult = searchKey ? state.ROOT_QUERY[searchKey] : null;
+    const overallRefs = searchResult
+      ? (isPlaceList ? searchResult.businesses?.items || [] : searchResult.business?.items || [])
+      : [];
+    const adRefs = adKey ? state.ROOT_QUERY[adKey].items || [] : [];
+
+    let overall = overallRefs.map((ref, index) => {
+      const item = state[ref.__ref];
+      return mapNaverItem(state, item, {
+        query,
+        overall_rank: index + 1,
+        구분: "비광고",
+      });
+    });
+
+    let ads = adRefs.map((ref, index) => {
+      const item = state[ref.__ref];
+      return mapNaverItem(state, item, {
+        query,
+        ad_order: index + 1,
+        구분: "광고",
+        ad_id: item.adId || "",
+        ad_description: item.adDescription || "",
+      });
+    });
+
+    if (province.isCompany) {
+      const beforeFilter = overall.length + ads.length;
+      overall = filterCompanyRows(overall, (row) => row.업체명);
+      ads = filterCompanyRows(ads, (row) => row.업체명);
+      attempt.matched = overall.length + ads.length;
+      attempt.filteredOut = beforeFilter - attempt.matched;
+      if (!attempt.matched) continue;
+    }
+
+    return {
+      status,
+      url,
+      total: searchResult ? (isPlaceList ? searchResult.businesses?.total || 0 : searchResult.business?.total || 0) : 0,
+      adTotal: adKey ? state.ROOT_QUERY[adKey].total : 0,
+      overall,
+      ads,
+      usedQuery: query,
+      attemptedQueries,
+    };
   }
 
-  const overallRefs = state.ROOT_QUERY[searchKey].business.items || [];
-  const adRefs = adKey ? state.ROOT_QUERY[adKey].items || [] : [];
-
-  const overall = overallRefs.map((ref, index) => {
-    const item = state[ref.__ref];
-    return mapNaverItem(state, item, {
-      query: NAVER_QUERY,
-      overall_rank: index + 1,
-      구분: "비광고",
-    });
-  });
-
-  const ads = adRefs.map((ref, index) => {
-    const item = state[ref.__ref];
-    return mapNaverItem(state, item, {
-      query: NAVER_QUERY,
-      ad_order: index + 1,
-      구분: "광고",
-      ad_id: item.adId || "",
-      ad_description: item.adDescription || "",
-    });
-  });
-
-  return {
-    status,
-    url,
-    total: state.ROOT_QUERY[searchKey].business.total,
-    adTotal: adKey ? state.ROOT_QUERY[adKey].total : 0,
-    overall,
-    ads,
-  };
+  if (province.isCompany) {
+    return {
+      status: lastStatus,
+      url: lastUrl,
+      total: 0,
+      adTotal: 0,
+      overall: [],
+      ads: [],
+      warning: "Company search produced no exact place match.",
+      usedQuery: "",
+      attemptedQueries,
+    };
+  }
+  throw new Error("Naver main search key not found.");
 }
 
 async function collectNaverRegional() {
@@ -1395,7 +1508,11 @@ async function collectNol() {
       url: data.action?.web || "",
     };
   });
-  const rows = rawRows.filter(isRelevantOtaAccommodation).map((row, index) => ({
+  const relevantRows = rawRows.filter(isRelevantOtaAccommodation);
+  const matchedRows = province.isCompany
+    ? filterCompanyRows(relevantRows, (row) => row.name)
+    : relevantRows;
+  const rows = matchedRows.map((row, index) => ({
     ...row,
     rank_or_order: index + 1,
   }));
@@ -1406,6 +1523,7 @@ async function collectNol() {
     rawFirstPage: rawRows.length,
     firstPage: rows.length,
     filteredOut: rawRows.length - rows.length,
+    companyFilteredOut: province.isCompany ? relevantRows.length - matchedRows.length : 0,
     rows,
   };
 }
@@ -1449,7 +1567,7 @@ async function collectDdnayo() {
   const source = normalized.data?.data?.totalSize > 0 ? normalized : exact;
   const usedQuery = source === normalized ? DDNAYO_QUERY_NORMALIZED : DDNAYO_QUERY_EXACT;
   const contents = source.data?.data?.contents || [];
-  const rows = contents.map((item, index) => ({
+  const rawRows = contents.map((item, index) => ({
     channel: "떠나요",
     section: usedQuery === DDNAYO_QUERY_NORMALIZED ? "검색결과(공백제거 키워드)" : "검색결과",
     rank_or_order: index + 1,
@@ -1462,11 +1580,16 @@ async function collectDdnayo() {
     ad_flag: "확인불가",
     url: item.productUrl || "",
   }));
+  const rows = province.isCompany
+    ? filterCompanyRows(rawRows, (row) => row.name).map((row, index) => ({ ...row, rank_or_order: index + 1 }))
+    : rawRows;
 
   return {
     exactTotal: exact.data?.data?.totalSize ?? 0,
     normalizedTotal: normalized.data?.data?.totalSize ?? 0,
     usedQuery,
+    rawFirstPage: rawRows.length,
+    companyFilteredOut: province.isCompany ? rawRows.length - rows.length : 0,
     rows,
   };
 }
@@ -2125,6 +2248,9 @@ async function main() {
   ];
 
   const prefix = safeFilePart(RAW_KEYWORD || QUERY || province.keyword || province.short);
+  const naverAttemptText = (naver.attemptedQueries || [])
+    .map((item) => `${item.query}:${item.matched || 0}`)
+    .join(", ");
   const fileRoles = {
     platform: `${prefix}_플랫폼통합.csv`,
     report: `${prefix}_수집리포트.md`,
@@ -2150,7 +2276,8 @@ async function main() {
 - 수집일시: ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}
 - 입력 키워드: ${RAW_KEYWORD}
 - 검색 키워드: ${QUERY}
-- 네이버 전체 키워드: ${NAVER_QUERY}
+- 네이버 전체 키워드: ${naver.usedQuery || NAVER_QUERY}
+- 네이버 업체명 후보: ${naverAttemptText || "해당없음"}
 - 수집 모드: ${SEARCH_MODE_LABEL}
 - 판단 유형: ${province.isCompany ? "업체명" : province.isLocal ? "지역형" : "광역형"}
 - OTA 기준 조건: ${bookingConditionText}
@@ -2253,7 +2380,8 @@ async function main() {
     provinceKey: province.parentProvinceKey || province.slug,
     regionSlug: province.slug,
     searchKeyword: QUERY,
-    naverKeyword: NAVER_QUERY,
+    naverKeyword: naver.usedQuery || NAVER_QUERY,
+    naverAttemptedQueries: naver.attemptedQueries || [],
     checkIn: CHECK_IN,
     checkOut: CHECK_OUT,
     adults: ADULTS,
