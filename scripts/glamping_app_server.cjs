@@ -1568,6 +1568,12 @@ function summarizeAvailabilityRows(rows) {
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
     const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
+    const dayUseWeeklyDetail = row.dayUseWeeklyDetail || "";
+    const derivedDayUseWeeklyRates = parseWeeklyReservationRates(dayUseWeeklyDetail);
+    const dayUseWeeklyAvgReservationRate = numericField(row, ["dayUseWeeklyAvgReservationRate"]) ?? derivedDayUseWeeklyRates.average;
+    const dayUseWeeklyReservationRateDetail = row.dayUseWeeklyReservationRateDetail || derivedDayUseWeeklyRates.detail;
+    const dayUseWeeklyTotalSoldOut = numericField(row, ["dayUseWeeklyTotalSoldOut"]) ?? derivedDayUseWeeklyRates.totalSoldOut;
+    const dayUseWeeklyTotalStock = numericField(row, ["dayUseWeeklyTotalStock"]) ?? derivedDayUseWeeklyRates.totalStock;
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -1606,6 +1612,18 @@ function summarizeAvailabilityRows(rows) {
       weeklyReservationRateDetail,
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
+      dayUseWeeklyDays: numericField(row, ["dayUseWeeklyDays"]),
+      dayUseWeeklySummary: row.dayUseWeeklySummary || "",
+      dayUseWeeklyAvgAvailable: numericField(row, ["dayUseWeeklyAvgAvailable"]),
+      dayUseWeeklyMinAvailable: numericField(row, ["dayUseWeeklyMinAvailable"]),
+      dayUseWeeklySoldOutDays: numericField(row, ["dayUseWeeklySoldOutDays"]),
+      dayUseWeeklyTotalSoldOut,
+      dayUseWeeklyTotalStock,
+      dayUseWeeklyBasisTotal: numericField(row, ["dayUseWeeklyBasisTotal"]),
+      dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
+      dayUseWeeklyDetail,
+      dayUseWeeklyAvgReservationRate,
+      dayUseWeeklyReservationRateDetail,
       inventoryScope: row["네이버재고범위"] || "네이버예약 채널/날짜 기준 재고",
       inventoryMemo: normalizeInventoryMemo(row["객실수검증메모"], row["예약리스트유형"]),
       rate: rate !== null ? rate : Number((availableRooms / totalRooms).toFixed(3)),
@@ -1710,9 +1728,18 @@ function summarizeCompanyPlatforms(rows) {
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
     const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
+    const dayUseWeeklyDetail = row.dayUseWeeklyDetail || "";
+    const derivedDayUseWeeklyRates = parseWeeklyReservationRates(dayUseWeeklyDetail);
+    const dayUseWeeklyAvgReservationRate = numericField(row, ["dayUseWeeklyAvgReservationRate"]) ?? derivedDayUseWeeklyRates.average;
+    const dayUseWeeklyReservationRateDetail = row.dayUseWeeklyReservationRateDetail || derivedDayUseWeeklyRates.detail;
+    const dayUseWeeklyTotalSoldOut = numericField(row, ["dayUseWeeklyTotalSoldOut"]) ?? derivedDayUseWeeklyRates.totalSoldOut;
+    const dayUseWeeklyTotalStock = numericField(row, ["dayUseWeeklyTotalStock"]) ?? derivedDayUseWeeklyRates.totalStock;
     const weeklyStockText = weeklyDetail
-      ? `${weeklyTotalSoldOut !== null ? `${weeklyDays || "기간"}일 마감추정 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyBasisTotal ? `기준재고 ${weeklyBasisTotal} · ` : ""}${weeklyRawStockVariance ? `원시재고 변동: ${weeklyRawStockVariance} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
+      ? `${weeklyTotalSoldOut !== null ? `${weeklyDays || "기간"}일 마감추정 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyBasisTotal ? `최대재고 ${weeklyBasisTotal} · ` : ""}${weeklyRawStockVariance ? `날짜별 원시재고: ${weeklyRawStockVariance} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
       : weeklySummary;
+    const dayUseWeeklyStockText = dayUseWeeklyDetail
+      ? `데이유즈/캠프닉 ${dayUseWeeklyTotalSoldOut !== null ? `${row.dayUseWeeklyDays || "기간"}일 마감추정 ${dayUseWeeklyTotalSoldOut}${dayUseWeeklyTotalStock ? `/${dayUseWeeklyTotalStock}` : ""} · ` : ""}${dayUseWeeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(dayUseWeeklyAvgReservationRate)} · ` : ""}${dayUseWeeklyReservationRateDetail ? `날짜별 예약률: ${dayUseWeeklyReservationRateDetail} · ` : ""}${dayUseWeeklyDetail}`
+      : "";
 
     company.platforms.push({
       platform,
@@ -1720,7 +1747,7 @@ function summarizeCompanyPlatforms(rows) {
       group,
       price: row["예약최저가"] || row["가격"] || row.price || row["금액"] || "",
       status: statusValue || group,
-      stock: weeklyStockText ? `${stock} · ${weeklyStockText}` : stock,
+      stock: [stock, weeklyStockText, dayUseWeeklyStockText].filter(Boolean).join(" · "),
       inventoryNote: row["네이버상품구성"] || row["채널재고해석"] || "",
       weeklySummary,
       weeklyDetail,
@@ -1730,6 +1757,16 @@ function summarizeCompanyPlatforms(rows) {
       weeklyTotalStock,
       weeklyBasisTotal,
       weeklyRawStockVariance,
+      dayUseWeeklyDays: numericField(row, ["dayUseWeeklyDays"]),
+      dayUseWeeklySummary: row.dayUseWeeklySummary || "",
+      dayUseWeeklyDetail,
+      dayUseWeeklyAvgReservationRate,
+      dayUseWeeklyReservationRateDetail,
+      dayUseWeeklyTotalSoldOut,
+      dayUseWeeklyTotalStock,
+      dayUseWeeklyBasisTotal: numericField(row, ["dayUseWeeklyBasisTotal"]),
+      dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
+      dayUseWeeklyStockText,
       url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
     });
   }
@@ -2044,8 +2081,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260625-company-mode"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260625-company-mode"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260625-variable-stock"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260625-variable-stock"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

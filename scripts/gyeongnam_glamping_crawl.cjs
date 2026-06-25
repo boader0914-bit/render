@@ -1035,9 +1035,13 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
   }
 
   const rawValid = summaries.filter((item) => item.total > 0);
-  const basisTotal = rawValid[0]?.total || Math.max(0, ...rawValid.map((item) => item.total || 0));
+  const totals = rawValid.map((item) => item.total || 0).filter((value) => value > 0);
+  const minTotal = totals.length ? Math.min(...totals) : 0;
+  const maxTotal = totals.length ? Math.max(...totals) : 0;
+  const basisTotal = maxTotal;
+  const hasVariableTotal = minTotal > 0 && maxTotal > minTotal;
   const valid = rawValid.map((item) => {
-    const total = basisTotal || item.total;
+    const total = item.total;
     const available = Math.min(Math.max(0, item.available || 0), total);
     const soldOut = Math.max(0, total - available);
     const rate = total > 0 ? soldOut / total : null;
@@ -1049,7 +1053,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
       total,
       soldOut,
       rate,
-      totalChanged: item.total !== total,
+      totalChanged: hasVariableTotal,
     };
   });
   if (!valid.length) return null;
@@ -1069,13 +1073,15 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
       return `${shortDate(item.date)} ${formatRate(reservationRate)}(${item.soldOut}/${item.total})`;
     })
     .join(", ");
-  const totalVarianceDetail = valid
-    .filter((item) => item.totalChanged)
-    .map((item) => `${shortDate(item.date)} 원시 ${item.rawAvailable}/${item.rawTotal} -> 기준 ${item.available}/${item.total}`)
-    .join(", ");
+  const totalVarianceDetail = hasVariableTotal
+    ? valid.map((item) => `${shortDate(item.date)} 원시 ${item.rawAvailable}/${item.rawTotal}`).join(", ")
+    : "";
   return {
     days: valid.length,
     basisTotal,
+    minTotal,
+    maxTotal,
+    hasVariableTotal,
     avgAvailable,
     minAvailable,
     soldOutDays,
@@ -1117,6 +1123,9 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   const weekly = options.collectRange
     ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, items, schedules, BOOKING_RANGE_DAYS)
     : null;
+  const dayUseWeekly = options.collectRange
+    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS)
+    : null;
 
   const result = {
     status: itemResult.errors
@@ -1133,6 +1142,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
       dayUseSchedules,
     }),
     weekly,
+    dayUseWeekly,
   };
   cache.set(placeId, result);
   return result;
@@ -1205,6 +1215,18 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.주간잔여상세 = result.weekly?.detail || "";
       row.주간평균예약률 = result.weekly?.avgReservationRate ?? "";
       row.주간예약률상세 = result.weekly?.reservationRateDetail || "";
+      row.dayUseWeeklyDays = result.dayUseWeekly?.days ?? "";
+      row.dayUseWeeklySummary = result.dayUseWeekly?.summary || "";
+      row.dayUseWeeklyAvgAvailable = result.dayUseWeekly?.avgAvailable ?? "";
+      row.dayUseWeeklyMinAvailable = result.dayUseWeekly?.minAvailable ?? "";
+      row.dayUseWeeklySoldOutDays = result.dayUseWeekly?.soldOutDays ?? "";
+      row.dayUseWeeklyTotalSoldOut = result.dayUseWeekly?.totalSoldOut ?? "";
+      row.dayUseWeeklyTotalStock = result.dayUseWeekly?.totalStock ?? "";
+      row.dayUseWeeklyBasisTotal = result.dayUseWeekly?.basisTotal ?? "";
+      row.dayUseWeeklyRawStockVariance = result.dayUseWeekly?.totalVarianceDetail || "";
+      row.dayUseWeeklyDetail = result.dayUseWeekly?.detail || "";
+      row.dayUseWeeklyAvgReservationRate = result.dayUseWeekly?.avgReservationRate ?? "";
+      row.dayUseWeeklyReservationRateDetail = result.dayUseWeekly?.reservationRateDetail || "";
     } catch (error) {
       if (!alreadyKnown) collected += 1;
       row.네이버예약재고수집상태 = `실패: ${error.message || error}`;
@@ -1548,6 +1570,18 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간잔여상세": row.주간잔여상세 || "",
       "주간평균예약률": row.주간평균예약률 ?? "",
       "주간예약률상세": row.주간예약률상세 || "",
+      dayUseWeeklyDays: row.dayUseWeeklyDays ?? "",
+      dayUseWeeklySummary: row.dayUseWeeklySummary || "",
+      dayUseWeeklyAvgAvailable: row.dayUseWeeklyAvgAvailable ?? "",
+      dayUseWeeklyMinAvailable: row.dayUseWeeklyMinAvailable ?? "",
+      dayUseWeeklySoldOutDays: row.dayUseWeeklySoldOutDays ?? "",
+      dayUseWeeklyTotalSoldOut: row.dayUseWeeklyTotalSoldOut ?? "",
+      dayUseWeeklyTotalStock: row.dayUseWeeklyTotalStock ?? "",
+      dayUseWeeklyBasisTotal: row.dayUseWeeklyBasisTotal ?? "",
+      dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
+      dayUseWeeklyDetail: row.dayUseWeeklyDetail || "",
+      dayUseWeeklyAvgReservationRate: row.dayUseWeeklyAvgReservationRate ?? "",
+      dayUseWeeklyReservationRateDetail: row.dayUseWeeklyReservationRateDetail || "",
       "예약가능근거": row.예약가능근거 || "",
     })),
     ...naver.ads.map((row) => ({
@@ -1598,6 +1632,18 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간잔여상세": row.주간잔여상세 || "",
       "주간평균예약률": row.주간평균예약률 ?? "",
       "주간예약률상세": row.주간예약률상세 || "",
+      dayUseWeeklyDays: row.dayUseWeeklyDays ?? "",
+      dayUseWeeklySummary: row.dayUseWeeklySummary || "",
+      dayUseWeeklyAvgAvailable: row.dayUseWeeklyAvgAvailable ?? "",
+      dayUseWeeklyMinAvailable: row.dayUseWeeklyMinAvailable ?? "",
+      dayUseWeeklySoldOutDays: row.dayUseWeeklySoldOutDays ?? "",
+      dayUseWeeklyTotalSoldOut: row.dayUseWeeklyTotalSoldOut ?? "",
+      dayUseWeeklyTotalStock: row.dayUseWeeklyTotalStock ?? "",
+      dayUseWeeklyBasisTotal: row.dayUseWeeklyBasisTotal ?? "",
+      dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
+      dayUseWeeklyDetail: row.dayUseWeeklyDetail || "",
+      dayUseWeeklyAvgReservationRate: row.dayUseWeeklyAvgReservationRate ?? "",
+      dayUseWeeklyReservationRateDetail: row.dayUseWeeklyReservationRateDetail || "",
       "예약가능근거": row.예약가능근거 || "",
     })),
     ...nol.rows,
@@ -1774,6 +1820,18 @@ async function main() {
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
+    "dayUseWeeklyDays",
+    "dayUseWeeklySummary",
+    "dayUseWeeklyAvgAvailable",
+    "dayUseWeeklyMinAvailable",
+    "dayUseWeeklySoldOutDays",
+    "dayUseWeeklyTotalSoldOut",
+    "dayUseWeeklyTotalStock",
+    "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyRawStockVariance",
+    "dayUseWeeklyDetail",
+    "dayUseWeeklyAvgReservationRate",
+    "dayUseWeeklyReservationRateDetail",
     "예약가능근거",
     "실패 원인",
     "수집 방향",
@@ -1846,6 +1904,18 @@ async function main() {
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
+    "dayUseWeeklyDays",
+    "dayUseWeeklySummary",
+    "dayUseWeeklyAvgAvailable",
+    "dayUseWeeklyMinAvailable",
+    "dayUseWeeklySoldOutDays",
+    "dayUseWeeklyTotalSoldOut",
+    "dayUseWeeklyTotalStock",
+    "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyRawStockVariance",
+    "dayUseWeeklyDetail",
+    "dayUseWeeklyAvgReservationRate",
+    "dayUseWeeklyReservationRateDetail",
     "예약최저가",
     "예약가능근거",
     "url",
@@ -1920,6 +1990,18 @@ async function main() {
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
+    "dayUseWeeklyDays",
+    "dayUseWeeklySummary",
+    "dayUseWeeklyAvgAvailable",
+    "dayUseWeeklyMinAvailable",
+    "dayUseWeeklySoldOutDays",
+    "dayUseWeeklyTotalSoldOut",
+    "dayUseWeeklyTotalStock",
+    "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyRawStockVariance",
+    "dayUseWeeklyDetail",
+    "dayUseWeeklyAvgReservationRate",
+    "dayUseWeeklyReservationRateDetail",
     "예약최저가",
     "예약가능근거",
     "url",
@@ -1992,6 +2074,18 @@ async function main() {
     "주간잔여상세",
     "주간평균예약률",
     "주간예약률상세",
+    "dayUseWeeklyDays",
+    "dayUseWeeklySummary",
+    "dayUseWeeklyAvgAvailable",
+    "dayUseWeeklyMinAvailable",
+    "dayUseWeeklySoldOutDays",
+    "dayUseWeeklyTotalSoldOut",
+    "dayUseWeeklyTotalStock",
+    "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyRawStockVariance",
+    "dayUseWeeklyDetail",
+    "dayUseWeeklyAvgReservationRate",
+    "dayUseWeeklyReservationRateDetail",
     "예약최저가",
     "예약가능근거",
     "url",

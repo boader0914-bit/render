@@ -557,8 +557,8 @@ function platformChips(item) {
   }).join("");
 }
 
-function weeklyRows(item = {}) {
-  const detail = String(item.weeklyReservationRateDetail || "");
+function weeklyRows(item = {}, kind = "lodging") {
+  const detail = String(kind === "day" ? item.dayUseWeeklyReservationRateDetail || "" : item.weeklyReservationRateDetail || "");
   if (!detail) return [];
   return detail.split(/\s*,\s*/).map((entry) => {
     const match = entry.match(/^(\d{1,2}\/\d{1,2})\s+(\d+)%\((\d+)\/(\d+)\)$/);
@@ -602,6 +602,20 @@ function salesStats(item = {}, kind = "lodging") {
     return { sold, supply: total, rate: total ? sold / total : NaN, unit: "개", label: `${basisDate} 기준`, basis: "basis" };
   }
 
+  const rows = weeklyRows(item, "day");
+  const weeklySold = finiteNumber(item.dayUseWeeklyTotalSoldOut, NaN);
+  const weeklySupply = finiteNumber(item.dayUseWeeklyTotalStock, NaN);
+  if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
+    return { sold: weeklySold, supply: weeklySupply, rate: weeklySold / weeklySupply, unit: "회", label: `${rows.length || days}일 집계`, basis: "range" };
+  }
+  if (rows.length) {
+    const sum = rows.reduce((acc, row) => {
+      acc.sold += finiteNumber(row.sold);
+      acc.supply += finiteNumber(row.total);
+      return acc;
+    }, { sold: 0, supply: 0 });
+    return { ...sum, rate: sum.supply ? sum.sold / sum.supply : NaN, unit: "회", label: `${rows.length}일 집계`, basis: "range" };
+  }
   const total = finiteNumber(item.dayUseTotalStock, 0);
   const available = finiteNumber(item.dayUseAvailableStock, total);
   const sold = Math.max(0, total - available);
@@ -1664,6 +1678,33 @@ function sheetRowsForBooking(item) {
   }));
 }
 
+function sheetRowsForDayUse(item) {
+  const rows = weeklyRows(item, "day");
+  if (rows.length) {
+    return rows.map((row) => ({
+      label: row.label,
+      sold: row.sold,
+      supply: row.total,
+      rate: row.rate,
+      unit: "회",
+      missing: false,
+      statusText: "마감추정",
+      note: "데이유즈/캠프닉 날짜별 재고"
+    }));
+  }
+  const day = salesStats(item, "day");
+  if (!day.supply) return [];
+  return [{
+    label: `${monthDay(state.data?.run?.checkIn) || "기준일"} 기준`,
+    sold: day.sold,
+    supply: day.supply,
+    rate: day.rate,
+    unit: "회",
+    statusText: "마감추정",
+    note: "데이유즈/캠프닉 기준일 재고"
+  }];
+}
+
 function dateRow(row) {
   const rate = Number.isFinite(row.rate) ? row.rate : 0;
   const statusText = row.statusText || "판매/마감 추정";
@@ -1695,19 +1736,10 @@ function renderSheetBooking(item) {
   const rangeDays = bookingDays(run);
   const rangeLabel = dateRangeLabel(run);
   const placeLimit = finiteNumber(run.bookingRangePlaceLimit, rangeDays > 1 ? 10 : 0);
-  const day = salesStats(item, "day");
   const lodgingRows = sheetRowsForBooking(item);
   const collectedRows = lodgingRows.filter((row) => !row.missing).length;
   const missingRows = lodgingRows.length - collectedRows;
-  const dayRows = day.supply ? [{
-    label: `${monthDay(run.checkIn) || "기준일"} 기준`,
-    sold: day.sold,
-    supply: day.supply,
-    rate: day.rate,
-    unit: "회",
-    statusText: "마감추정",
-    note: "데이유즈/캠프닉 기준일 재고"
-  }] : [];
+  const dayRows = sheetRowsForDayUse(item);
   return `
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>
@@ -1745,10 +1777,10 @@ function renderSheetBooking(item) {
       ${item.weeklyRawStockVariance ? `
         <div class="search-row">
           <div>
-            <strong>원시재고 변동</strong>
+            <strong>날짜별 원시재고</strong>
             <small>${escapeHtml(item.weeklyRawStockVariance)}</small>
           </div>
-          <strong>기준재고 보정</strong>
+          <strong>총량 변동</strong>
         </div>
       ` : ""}
       <div class="search-row">
