@@ -1038,6 +1038,43 @@ function parseYeogiImport(text) {
   return rows.filter((row) => row.name);
 }
 
+function cleanYeogiManualName(value) {
+  return String(value || "")
+    .replace(/\s*,\s*[^,]*(?:여기어때|특가).*$/i, "")
+    .replace(/\s*[-–—]\s*.*(?:여기어때|특가).*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isYeogiManualNoiseName(value) {
+  const text = cleanYeogiManualName(value);
+  if (!text || text.length < 2) return true;
+  return /^(제공용품|서비스|위의 정보|수영장 운영|숙소소개|이용 안내|객실 이용|공지사항|안내사항|환불|취소|예약 안내|추가요금)/.test(text) ||
+    /(변경될 수 있습니다|사정에 따라|날씨 또는|부탄가스|그릇세트|무료취소|쿠폰|로그인|회원가입)/.test(text);
+}
+
+function normalizeYeogiManualRows(rows) {
+  const seen = new Set();
+  const normalized = [];
+  for (const row of rows) {
+    const platform = String(row.channel || row["플랫폼"] || "");
+    if (!platform.includes("여기")) {
+      normalized.push(row);
+      continue;
+    }
+
+    const next = { ...row, name: cleanYeogiManualName(row.name || row["업체명"] || "") };
+    if (row["업체명"]) next["업체명"] = next.name;
+    if (isYeogiManualNoiseName(next.name || next["업체명"] || "")) continue;
+
+    const key = `${platform}:${companyPlatformKey(next.name || next["업체명"] || "")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(next);
+  }
+  return normalized;
+}
+
 async function importYeogiSupplement(payload) {
   const runId = String(payload.runId || "").trim();
   const sourceText = String(payload.sourceText || "").trim();
@@ -1060,7 +1097,7 @@ async function importYeogiSupplement(payload) {
   }
 
   const importedAt = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
-  const importedRows = parsedRows.map((row, index) => ({
+  const importedRows = normalizeYeogiManualRows(parsedRows.map((row, index) => ({
     channel: "여기어때",
     section: row.section,
     rank_or_order: row.rank || index + 1,
@@ -1080,7 +1117,10 @@ async function importYeogiSupplement(payload) {
     "예약가능근거": row.availabilityStatus || "",
     "예약가능률대체지표": row.reservationAvailable === "Y" ? 1 : row.reservationAvailable === "N" ? 0 : "",
     "원문": row.raw || ""
-  }));
+  })));
+  if (!importedRows.length) {
+    throw new Error("여기어때 숙소 행을 찾지 못했습니다. 안내문이 아닌 실제 숙소명/가격이 포함된 결과 텍스트를 붙여넣으세요.");
+  }
 
   const remainingRows = originalRows.filter((row) => String(row.channel || row["플랫폼"] || "") !== "여기어때");
   const mergedRows = [...remainingRows, ...importedRows];
@@ -1128,6 +1168,13 @@ function topRawKey(map) {
 
 function compactKeyword(keyword) {
   return String(keyword || "").replace(/\s+/g, "");
+}
+
+function companyPlatformKey(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
 }
 
 function normalizeSearchKeyword(keyword) {
@@ -1681,7 +1728,7 @@ function summarizeCompanyPlatforms(rows) {
     const name = String(row["업체명"] || row.name || "").trim();
     if (!name || name.includes("Cloudflare")) continue;
 
-    const key = compactKeyword(name);
+    const key = companyPlatformKey(name);
     if (!key) continue;
 
     const platform = row["플랫폼"] || row.channel || "확인불가";
@@ -1825,7 +1872,7 @@ async function loadRun(runId) {
     ? parseCsv((await fsp.readFile(path.join(dirPath, platformFile), "utf8")).replace(/^\uFEFF/, ""))
     : [];
   const yeogiManualRows = yeogiManualFile
-    ? parseCsv((await fsp.readFile(path.join(dirPath, yeogiManualFile), "utf8")).replace(/^\uFEFF/, ""))
+    ? normalizeYeogiManualRows(parseCsv((await fsp.readFile(path.join(dirPath, yeogiManualFile), "utf8")).replace(/^\uFEFF/, "")))
     : [];
   const displayPlatformRows = yeogiManualRows.length
     ? [
@@ -2081,8 +2128,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260625-basis-stock"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260625-basis-stock"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260625-yeogi-merge"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260625-yeogi-merge"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

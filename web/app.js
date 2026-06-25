@@ -346,7 +346,10 @@ function yeogiSearchUrl() {
 }
 
 function companyKey(value) {
-  return String(value || "").replace(/\s+/g, "").toLowerCase();
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
 }
 
 function compactSearchText(value) {
@@ -516,14 +519,23 @@ function externalPlatformUrl(url) {
 function companyPlatformMap() {
   const map = new Map();
   for (const company of state.data?.companyPlatforms || []) {
-    map.set(company.key || companyKey(company.name), company);
+    const keys = [company.key, company.name].map(companyKey).filter(Boolean);
+    keys.forEach((key) => map.set(key, company));
   }
   return map;
 }
 
 function platformsForItem(item) {
   const map = companyPlatformMap();
-  const company = map.get(companyKey(item.name));
+  const key = companyKey(item.name);
+  let company = map.get(key);
+  if (!company && key) {
+    company = [...map.entries()].find(([candidate]) => (
+      candidate === key ||
+      (candidate.length >= 4 && key.includes(candidate)) ||
+      (key.length >= 4 && candidate.includes(key))
+    ))?.[1];
+  }
   const rows = company?.platforms ? [...company.platforms] : [];
   if (!rows.length && item.url) {
     rows.push({
@@ -2067,6 +2079,7 @@ async function submitYeogiImport() {
   els.yeogiImportStatus.textContent = "여기어때 데이터를 통합 중입니다.";
   els.yeogiImportButton.disabled = true;
   try {
+    const selectedKey = companyKey(state.selectedItem?.name);
     const result = await fetchJson("/api/yeogi-import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2074,10 +2087,15 @@ async function submitYeogiImport() {
     });
     state.runs = result.runs || state.runs;
     state.data = result.data || state.data;
+    if (selectedKey) {
+      const updatedItem = (state.data?.availability?.items || []).find((item) => companyKey(item.name) === selectedKey);
+      if (updatedItem) state.selectedItem = updatedItem;
+    }
     els.yeogiImportInput.value = "";
     setYeogiBadge("통합완료");
     els.yeogiImportStatus.textContent = `통합 완료: ${fmtNumber(result.importedCount || 0)}건 반영 · 화면 자동 갱신`;
     renderAll();
+    if (state.selectedItem && els.detailSheet && !els.detailSheet.hidden) renderSheet();
   } catch (error) {
     setYeogiBadge("오류");
     els.yeogiImportStatus.textContent = `통합 실패: ${error.message}`;
