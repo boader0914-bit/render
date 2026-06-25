@@ -15,6 +15,10 @@ const PRODUCT_MODES = {
   lodging: "숙박",
   campnic: "캠프닉"
 };
+const SEARCH_MODES = {
+  keyword: "키워드/권역",
+  company: "업체명"
+};
 
 function kstDate(offsetDays = 0) {
   const now = new Date();
@@ -29,6 +33,13 @@ function normalizeProductMode(value) {
   if (text === "숙박") return "lodging";
   if (text === "캠프닉" || text === "데이유즈" || text.toLowerCase() === "dayuse") return "campnic";
   return "all";
+}
+
+function normalizeSearchMode(value) {
+  const text = String(value || "").trim();
+  if (SEARCH_MODES[text]) return text;
+  if (text === "업체명" || text.toLowerCase() === "company") return "company";
+  return "keyword";
 }
 
 function boundedInteger(value, fallback, min, max) {
@@ -70,6 +81,8 @@ const PRODUCT_MODE_LABEL = PRODUCT_MODES[PRODUCT_MODE];
 const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 7, 1, 31);
 const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? 10 : 0, 0, 20);
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
+const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
+const SEARCH_MODE_LABEL = SEARCH_MODES[SEARCH_MODE];
 
 const regionSlugMap = {
   거제: "geoje",
@@ -334,11 +347,27 @@ function makeLocalConfig(keyword) {
   };
 }
 
-const province = detectProvince(RAW_KEYWORD) || makeLocalConfig(RAW_KEYWORD);
-const QUERY = province.mainQuery || (province.isLocal ? spacedGlampingKeyword(RAW_KEYWORD) : `${province.short} 글램핑`);
-const NAVER_QUERY = province.naverQuery || (province.isLocal ? QUERY : `${province.full} 글램핑`);
-const DDNAYO_QUERY_EXACT = province.ddnayoQuery || spacedGlampingKeyword(RAW_KEYWORD);
-const DDNAYO_QUERY_NORMALIZED = compactKeyword(province.ddnayoQuery || RAW_KEYWORD);
+function makeCompanyConfig(keyword) {
+  const companyName = String(keyword || "").trim() || "업체명";
+  const compact = compactKeyword(companyName);
+  return {
+    slug: `company_${Buffer.from(compact || companyName).toString("hex").slice(0, 16)}`,
+    short: companyName,
+    full: companyName,
+    aliases: [companyName],
+    regions: [],
+    tourismClusters: { 업체명검색: [companyName] },
+    isCompany: true,
+    isLocal: false,
+    parentProvinceKey: "local",
+  };
+}
+
+const province = SEARCH_MODE === "company" ? makeCompanyConfig(RAW_KEYWORD) : (detectProvince(RAW_KEYWORD) || makeLocalConfig(RAW_KEYWORD));
+const QUERY = province.mainQuery || (province.isCompany ? RAW_KEYWORD.trim() : (province.isLocal ? spacedGlampingKeyword(RAW_KEYWORD) : `${province.short} 글램핑`));
+const NAVER_QUERY = province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} 글램핑`));
+const DDNAYO_QUERY_EXACT = province.ddnayoQuery || (province.isCompany ? QUERY : spacedGlampingKeyword(RAW_KEYWORD));
+const DDNAYO_QUERY_NORMALIZED = compactKeyword(province.ddnayoQuery || (province.isCompany ? QUERY : RAW_KEYWORD));
 const RUN_DATE = CHECK_IN.replaceAll("-", "");
 const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false }).replaceAll(":", "");
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
@@ -1190,7 +1219,20 @@ async function collectNaverMain() {
   const { state, status, url } = await getNaverState(NAVER_QUERY);
   const searchKey = pickNaverSearchKey(state, NAVER_QUERY);
   const adKey = pickNaverAdKey(state, NAVER_QUERY);
-  if (!searchKey) throw new Error("Naver main search key not found.");
+  if (!searchKey) {
+    if (province.isCompany) {
+      return {
+        status,
+        url,
+        total: 0,
+        adTotal: 0,
+        overall: [],
+        ads: [],
+        warning: "Naver main search key not found.",
+      };
+    }
+    throw new Error("Naver main search key not found.");
+  }
 
   const overallRefs = state.ROOT_QUERY[searchKey].business.items || [];
   const adRefs = adKey ? state.ROOT_QUERY[adKey].items || [] : [];
@@ -1228,6 +1270,21 @@ async function collectNaverMain() {
 async function collectNaverRegional() {
   const rows = [];
   const summaries = [];
+  if (province.isCompany) {
+    return {
+      rows,
+      summaries: [
+        {
+          region: province.short,
+          query: NAVER_QUERY,
+          status: "skipped",
+          total: 0,
+          collected: 0,
+          note: "업체명 모드는 지역별 키워드 반복 수집을 제외",
+        },
+      ],
+    };
+  }
   for (const region of regions) {
     const regionalPrefix = province.regionalPrefix === undefined ? province.short : province.regionalPrefix;
     const query = province.isLocal ? QUERY : [regionalPrefix, region, "글램핑"].filter(Boolean).join(" ");
@@ -1939,13 +1996,16 @@ async function main() {
     "예약가능근거",
     "url",
   ];
-  const underfilledRegions = regional.summaries
-    .filter((item) => item.collected < REGIONAL_LIMIT)
-    .map((item) => `${item.region} ${item.collected}건`)
-    .join(", ");
+  const underfilledRegions = province.isCompany
+    ? "업체명 모드는 지역별 키워드 반복 수집 제외"
+    : regional.summaries
+        .filter((item) => item.collected < REGIONAL_LIMIT)
+        .map((item) => `${item.region} ${item.collected}건`)
+        .join(", ");
   const bookingConditionText = `상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, ${BOOKING_RANGE_DAYS}일 기준, 체크인 ${CHECK_IN}, 종료일 ${CHECK_OUT}`;
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
+    { 항목: "수집 모드", 값: SEARCH_MODE_LABEL },
     { 항목: "조건", 값: bookingConditionText },
     { 항목: "예약재고 기간", 값: BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준" },
     { 항목: "네이버 전체", 값: `${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집` },
@@ -1997,7 +2057,8 @@ async function main() {
 - 입력 키워드: ${RAW_KEYWORD}
 - 검색 키워드: ${QUERY}
 - 네이버 전체 키워드: ${NAVER_QUERY}
-- 판단 유형: ${province.isLocal ? "지역형" : "광역형"}
+- 수집 모드: ${SEARCH_MODE_LABEL}
+- 판단 유형: ${province.isCompany ? "업체명" : province.isLocal ? "지역형" : "광역형"}
 - OTA 기준 조건: ${bookingConditionText}
 - 예약재고 기간: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준"}
 - 핵심 분석 채널: 네이버, 야놀자/NOL, ONDA, 떠나요
@@ -2092,7 +2153,9 @@ async function main() {
   const manifest = {
     outputDir: OUTPUT_DIR,
     keyword: RAW_KEYWORD,
-    keywordType: province.isLocal ? "local" : "province",
+    keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),
+    searchMode: SEARCH_MODE,
+    searchModeLabel: SEARCH_MODE_LABEL,
     provinceKey: province.parentProvinceKey || province.slug,
     regionSlug: province.slug,
     searchKeyword: QUERY,

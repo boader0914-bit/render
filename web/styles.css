@@ -1228,6 +1228,86 @@ a.platform-row:hover {
   gap: 10px;
 }
 
+.crawl-progress {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+  min-height: 58px;
+  border: 1px solid #bfdbfe;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 72%);
+  padding: 12px;
+}
+
+.crawl-progress[hidden] {
+  display: none;
+}
+
+.crawl-progress::after {
+  content: "";
+  position: absolute;
+  inset: auto 12px 8px 58px;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(49, 130, 246, 0.12), rgba(49, 130, 246, 0.75), rgba(49, 130, 246, 0.12));
+  animation: crawl-sweep 1.25s ease-in-out infinite;
+}
+
+.crawl-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid #dbeafe;
+  border-top-color: var(--blue);
+  border-radius: 999px;
+  animation: crawl-spin 0.8s linear infinite;
+}
+
+.crawl-progress-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding-bottom: 5px;
+}
+
+.crawl-progress-copy strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.crawl-progress-copy small {
+  overflow: hidden;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes crawl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes crawl-sweep {
+  0% {
+    transform: translateX(-36%);
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(36%);
+    opacity: 0.35;
+  }
+}
+
 .primary-button,
 .secondary-button,
 .ghost-button {

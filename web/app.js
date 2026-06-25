@@ -60,7 +60,11 @@ const els = {
   keywordInput: document.getElementById("keywordInput"),
   checkInInput: document.getElementById("checkInInput"),
   checkOutInput: document.getElementById("checkOutInput"),
+  searchModeInput: document.getElementById("searchModeInput"),
   productModeInput: document.getElementById("productModeInput"),
+  crawlProgress: document.getElementById("crawlProgress"),
+  crawlProgressTitle: document.getElementById("crawlProgressTitle"),
+  crawlProgressText: document.getElementById("crawlProgressText"),
   crawlStatus: document.getElementById("crawlStatus"),
   yeogiManualBadge: document.getElementById("yeogiManualBadge"),
   yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
@@ -228,6 +232,55 @@ function setStatus(text) {
   if (els.adminStatus) els.adminStatus.textContent = text;
 }
 
+function ensureCrawlControls() {
+  if (!els.crawlForm) return;
+
+  if (!els.searchModeInput) {
+    const keywordLabel = els.keywordInput?.closest(".field");
+    const modeLabel = document.createElement("label");
+    modeLabel.className = "field";
+    modeLabel.innerHTML = `
+      <span>수집 모드</span>
+      <select id="searchModeInput">
+        <option value="keyword">키워드/권역</option>
+        <option value="company">업체명</option>
+      </select>
+    `;
+    keywordLabel?.after(modeLabel);
+    els.searchModeInput = modeLabel.querySelector("#searchModeInput");
+  }
+
+  if (!els.crawlProgress) {
+    const submitButton = els.crawlForm.querySelector('button[type="submit"]');
+    const progress = document.createElement("div");
+    progress.className = "crawl-progress";
+    progress.id = "crawlProgress";
+    progress.hidden = true;
+    progress.innerHTML = `
+      <span class="crawl-spinner" aria-hidden="true"></span>
+      <div class="crawl-progress-copy">
+        <strong id="crawlProgressTitle">수집 준비</strong>
+        <small id="crawlProgressText">네이버·NOL·떠나요를 확인합니다.</small>
+      </div>
+    `;
+    submitButton?.after(progress);
+    els.crawlProgress = progress;
+    els.crawlProgressTitle = progress.querySelector("#crawlProgressTitle");
+    els.crawlProgressText = progress.querySelector("#crawlProgressText");
+  }
+}
+
+function searchModeLabel(value) {
+  return value === "company" ? "업체명" : "키워드/권역";
+}
+
+function setCrawlProgress(active, title = "", text = "") {
+  if (!els.crawlProgress) return;
+  els.crawlProgress.hidden = !active;
+  if (title && els.crawlProgressTitle) els.crawlProgressTitle.textContent = title;
+  if (text && els.crawlProgressText) els.crawlProgressText.textContent = text;
+}
+
 function formatElapsed(seconds) {
   const value = Number(seconds);
   if (!Number.isFinite(value) || value <= 0) return "";
@@ -245,6 +298,11 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
     const status = await fetchJson("/api/crawl-status");
     if (status.active) {
       const elapsed = formatElapsed(status.elapsedSeconds);
+      setCrawlProgress(
+        true,
+        "수집 진행 중",
+        `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}.`
+      );
       if (els.crawlStatus) {
         els.crawlStatus.textContent = `기존 수집이 진행 중입니다${elapsed ? ` (${elapsed} 경과)` : ""}. 완료되면 결과를 자동 갱신합니다.`;
       }
@@ -252,6 +310,7 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
       state.crawlStatusTimer = setTimeout(() => pollCrawlStatusUntilIdle(true), 10000);
       return;
     }
+    setCrawlProgress(false);
     setStatus("준비");
     if (notifyIdle && els.crawlStatus) els.crawlStatus.textContent = "진행 중인 수집이 끝났습니다. 결과를 갱신했습니다.";
     await loadRuns(true);
@@ -1849,6 +1908,7 @@ async function loadRun(runId) {
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
   if (els.keywordInput) els.keywordInput.value = run.keyword || (run.label || "").split("·")[0].trim() || els.keywordInput.value;
+  if (els.searchModeInput) els.searchModeInput.value = run.searchMode || (run.keywordType === "company" ? "company" : "keyword");
   renderAll();
   setStatus("준비");
 }
@@ -2010,11 +2070,17 @@ async function submitCrawl(event) {
     keyword: els.keywordInput.value.trim(),
     checkIn: els.checkInInput.value,
     checkOut: els.checkOutInput.value,
+    searchMode: els.searchModeInput?.value || "keyword",
     productMode: els.productModeInput.value
   };
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
-  els.crawlStatus.textContent = "수집 실행 중입니다.";
+  setCrawlProgress(
+    true,
+    "수집 실행 중",
+    `${searchModeLabel(payload.searchMode)} 기준으로 네이버·NOL·떠나요를 확인합니다.`
+  );
+  els.crawlStatus.textContent = `${searchModeLabel(payload.searchMode)} 기준 수집을 시작했습니다. 완료되면 화면을 갱신합니다.`;
   setStatus("수집 중");
   try {
     const result = await fetchJson("/api/crawl", {
@@ -2025,14 +2091,17 @@ async function submitCrawl(event) {
     state.runs = result.runs || state.runs;
     state.activeRunId = result.runId || state.runs[0]?.id;
     await loadRuns(false);
+    setCrawlProgress(false);
     els.crawlStatus.textContent = "수집 완료. 화면을 갱신했습니다.";
     setActiveTab("rank");
   } catch (error) {
     if (error.status === 409) {
+      setCrawlProgress(true, "수집 대기 중", "이미 진행 중인 수집이 끝나면 결과를 자동으로 불러옵니다.");
       els.crawlStatus.textContent = `${error.message} 결과가 생기면 자동으로 갱신합니다.`;
       setStatus("수집 중");
       pollCrawlStatusUntilIdle(true);
     } else {
+      setCrawlProgress(false);
       els.crawlStatus.textContent = `수집 실패: ${error.message}`;
       setStatus("수집 실패");
     }
@@ -2110,6 +2179,7 @@ function bindEvents() {
 }
 
 async function init() {
+  ensureCrawlControls();
   bindEvents();
   setDefaultDates();
   try {

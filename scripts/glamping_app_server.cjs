@@ -55,6 +55,10 @@ const PRODUCT_MODES = {
   lodging: "숙박",
   campnic: "캠프닉"
 };
+const SEARCH_MODES = {
+  keyword: "키워드/권역",
+  company: "업체명"
+};
 
 function kstDate(offsetDays = 0) {
   const now = new Date();
@@ -69,6 +73,13 @@ function normalizeProductMode(value) {
   if (text === "숙박") return "lodging";
   if (text === "캠프닉" || text === "데이유즈" || text.toLowerCase() === "dayuse") return "campnic";
   return "all";
+}
+
+function normalizeSearchMode(value) {
+  const text = String(value || "").trim();
+  if (SEARCH_MODES[text]) return text;
+  if (text === "업체명" || text.toLowerCase() === "company") return "company";
+  return "keyword";
 }
 
 const PROVINCES = {
@@ -538,8 +549,9 @@ function provinceKeyForRun(dirName, manifest) {
 function displayNameForRun(dirName, manifest = null) {
   const province = PROVINCES[provinceKeyForRun(dirName, manifest)] || PROVINCES.local;
   const keyword = manifest?.keyword || province.keyword;
+  const modePrefix = manifest?.searchMode === "company" || manifest?.keywordType === "company" ? "업체명 · " : "";
   const date = dirName.match(/(\d{8})/)?.[1] || "";
-  return `${keyword}${date ? ` · ${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)}` : ""}`;
+  return `${modePrefix}${keyword}${date ? ` · ${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)}` : ""}`;
 }
 
 async function readRunConditions(dirPath, manifest, reportFile) {
@@ -1792,6 +1804,10 @@ async function loadRun(runId) {
     run: {
       id: runId,
       label: displayNameForRun(runId, manifest),
+      keyword: manifest?.keyword || conditions.keyword || "",
+      keywordType: manifest?.keywordType || "province",
+      searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
+      searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
       province: provinceKey,
       provinceLabel: province.label,
       mapBounds: province.mapBounds,
@@ -1976,6 +1992,7 @@ async function runCrawlerInternal(payload) {
     CHECK_IN: checkIn,
     CHECK_OUT: checkOut,
     ADULTS: String(payload.adults || process.env.ADULTS || 2),
+    SEARCH_MODE: normalizeSearchMode(payload.searchMode || process.env.SEARCH_MODE || "keyword"),
     PRODUCT_MODE: normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all"),
     BOOKING_RANGE_DAYS: String(bookingRangeDays),
     BOOKING_RANGE_PLACE_LIMIT: String(bookingRangePlaceLimit),
@@ -2027,8 +2044,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260624-crawl-status"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260624-crawl-status"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260625-company-mode"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260625-company-mode"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
