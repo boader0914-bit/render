@@ -30,6 +30,7 @@ const CONFIG_DIR = path.resolve(
     ? path.join(DATA_DIR, "config")
     : (process.env.CONFIG_DIR || path.join(DATA_DIR, "config"))
 );
+// Stable API key storage policy: releases may replace code, but must keep this file path.
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
@@ -279,9 +280,23 @@ async function readTrafficKeys() {
 }
 
 function trafficKeyStatus(keys) {
+  const envFields = {
+    naverClientId: Boolean(process.env.NAVER_CLIENT_ID),
+    naverClientSecret: Boolean(process.env.NAVER_CLIENT_SECRET),
+    searchadApiKey: Boolean(process.env.NAVER_SEARCHAD_API_KEY),
+    searchadSecretKey: Boolean(process.env.NAVER_SEARCHAD_SECRET_KEY),
+    searchadCustomerId: Boolean(process.env.NAVER_SEARCHAD_CUSTOMER_ID)
+  };
   return {
     datalabConfigured: Boolean(keys.naverClientId && keys.naverClientSecret),
     searchadConfigured: Boolean(keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId),
+    storage: {
+      configDir: CONFIG_DIR,
+      file: TRAFFIC_KEYS_FILE,
+      persistent: HAS_RENDER_DISK || !isTmpDataPath(CONFIG_DIR),
+      envOverride: Object.values(envFields).some(Boolean),
+      envFields
+    },
     fields: Object.fromEntries(
       trafficKeyFields.map((field) => [
         field,
@@ -1183,6 +1198,44 @@ function normalizeSearchKeyword(keyword) {
   return compact.endsWith("글램핑") ? compact : `${compact}글램핑`;
 }
 
+function uniqueTexts(values) {
+  return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
+}
+
+function datalabKeywordVariants(keyword) {
+  const raw = String(keyword || "").trim();
+  const compact = compactKeyword(raw);
+  return uniqueTexts([
+    raw,
+    compact,
+    compact.replace(/글램핑$/u, " 글램핑")
+  ]).slice(0, 5);
+}
+
+function isoDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function dateDaysAgo(days) {
+  const date = new Date();
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date;
+}
+
+function datalabTrendRange(monthCount = 12) {
+  const end = dateDaysAgo(1);
+  const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - Math.max(1, monthCount - 1), 1));
+  return { startDate: isoDate(start), endDate: isoDate(end), timeUnit: "month" };
+}
+
+function demandKeywordForRun(manifest, conditions, regions) {
+  const raw = manifest?.keyword || conditions?.keyword || regions?.[0]?.trafficKeyword || "";
+  if (!raw) return "";
+  const searchMode = manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword");
+  return searchMode === "company" ? compactKeyword(raw) : normalizeSearchKeyword(raw);
+}
+
 function trafficKeywordForRegion(keyword, region) {
   const compact = compactKeyword(keyword);
   const regionName = compactKeyword(region);
@@ -1319,6 +1372,93 @@ async function collectSearchAdMetric(keyword, keys, attempt = 0) {
   return normalizeSearchAdRow(keyword, close, result.status);
 }
 
+function normalizeDatalabTrend(keyword, result, range) {
+  const group = Array.isArray(result?.results) ? result.results[0] : null;
+  const rows = Array.isArray(group?.data) ? group.data : [];
+  const series = rows.map((row) => {
+    const ratio = Number(row.ratio);
+    return {
+      period: row.period || "",
+      month: row.period || "",
+      ratio: Number.isFinite(ratio) ? ratio : null,
+      value: Number.isFinite(ratio) ? ratio : null
+    };
+  });
+
+  return {
+    source: "naver_datalab_search",
+    keyword,
+    configured: true,
+    collectable: series.some((entry) => Number.isFinite(entry.ratio)),
+    status: 200,
+    startDate: range.startDate,
+    endDate: range.endDate,
+    timeUnit: range.timeUnit,
+    note: "Naver DataLab returns relative trend ratios, not absolute search volume.",
+    series,
+    rawTitle: group?.title || keyword,
+    collectedAt: new Date().toISOString()
+  };
+}
+
+async function collectDatalabTrend(keyword, keys, attempt = 0) {
+  const compact = compactKeyword(keyword);
+  if (!compact) return null;
+
+  if (!keys.naverClientId || !keys.naverClientSecret) {
+    return {
+      source: "naver_datalab_search",
+      keyword: compact,
+      configured: false,
+      collectable: false,
+      reason: "Naver DataLab API keys are not configured.",
+      series: []
+    };
+  }
+
+  const range = datalabTrendRange(12);
+  const result = await requestJson("https://openapi.naver.com/v1/datalab/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Naver-Client-Id": keys.naverClientId,
+      "X-Naver-Client-Secret": keys.naverClientSecret
+    },
+    body: JSON.stringify({
+      ...range,
+      keywordGroups: [
+        {
+          groupName: compact,
+          keywords: datalabKeywordVariants(compact)
+        }
+      ]
+    })
+  });
+
+  if (result.status === 429 && attempt < 2) {
+    await sleep(1200 * (attempt + 1));
+    return collectDatalabTrend(keyword, keys, attempt + 1);
+  }
+
+  if (!result.ok) {
+    return {
+      source: "naver_datalab_search",
+      keyword: compact,
+      configured: true,
+      collectable: false,
+      status: result.status,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      timeUnit: range.timeUnit,
+      reason: result.data?.errorMessage || result.data?.message || result.data?.title || "Naver DataLab API request failed.",
+      series: [],
+      collectedAt: new Date().toISOString()
+    };
+  }
+
+  return normalizeDatalabTrend(compact, result.data, range);
+}
+
 function createTrafficAggregate() {
   return {
     keywordCount: 0,
@@ -1349,15 +1489,16 @@ async function readTrafficCache(cachePath) {
   try {
     return JSON.parse((await fsp.readFile(cachePath, "utf8")).replace(/^\uFEFF/, ""));
   } catch {
-    return { source: "naver_searchad_keywordstool", metrics: {} };
+    return { source: "naver_traffic_sources", metrics: {}, trends: {} };
   }
 }
 
-async function enrichRegionsWithTraffic(regions, dirPath) {
+async function enrichRegionsWithTraffic(regions, dirPath, demandKeyword = "") {
   const keys = await readTrafficKeys();
   const cachePath = path.join(dirPath, "traffic_metrics.json");
   const cache = await readTrafficCache(cachePath);
   const metrics = cache.metrics || {};
+  const trends = cache.trends || {};
   let changed = false;
 
   for (const region of regions) {
@@ -1374,13 +1515,28 @@ async function enrichRegionsWithTraffic(regions, dirPath) {
     region.traffic = metrics[keyword];
   }
 
-  if (changed && keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId) {
+  const datalabKeyword = compactKeyword(demandKeyword || regions[0]?.trafficKeyword || "");
+  let datalabTrend = datalabKeyword ? trends[datalabKeyword] : null;
+  if (datalabKeyword && !datalabTrend?.collectable) {
+    datalabTrend = await collectDatalabTrend(datalabKeyword, keys);
+    if (datalabTrend) {
+      trends[datalabKeyword] = datalabTrend;
+      changed = true;
+      await sleep(350);
+    }
+  }
+
+  const canPersistTraffic = keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId;
+  const canPersistTrend = keys.naverClientId && keys.naverClientSecret;
+  if (changed && (canPersistTraffic || canPersistTrend)) {
     await fsp.writeFile(
       cachePath,
-      JSON.stringify({ source: "naver_searchad_keywordstool", updatedAt: new Date().toISOString(), metrics }, null, 2),
+      JSON.stringify({ source: "naver_traffic_sources", updatedAt: new Date().toISOString(), metrics, trends }, null, 2),
       "utf8"
     );
   }
+
+  return datalabTrend || null;
 }
 
 function defaultProfile(region, provinceKey, index) {
@@ -1881,8 +2037,9 @@ async function loadRun(runId) {
       ]
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey);
-  await enrichRegionsWithTraffic(regions, dirPath);
+  const datalabTrend = await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
+  if (datalabTrend) stats.datalabTrend = datalabTrend;
 
   return {
     run: {
@@ -1914,6 +2071,7 @@ async function loadRun(runId) {
       }
     },
     stats,
+    datalabTrend,
     regions,
     availability: summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows]),
     platform: summarizePlatformRows(displayPlatformRows),
@@ -2128,8 +2286,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260627-demand-ui"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260627-demand-ui"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260627-api-datalab"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260627-api-datalab"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
