@@ -9,6 +9,7 @@ const state = {
   mapPromise: null,
   dictionary: null,
   selectedLocationCard: null,
+  dictionarySyncedRunId: null,
   trafficKeyState: null,
   crawlStatusTimer: null
 };
@@ -422,6 +423,87 @@ function regionGroupScore(group = {}, cards = []) {
   return Math.round(marketScore * 0.3 + localScore * 0.7);
 }
 
+function stripLocationBusinessWords(value) {
+  return compactSearchText(value)
+    .replace(/글램핑|카라반|캠핑장|캠핑|캠프닉|데이유즈|펜션|풀빌라|리조트|호텔|스테이|빌리지|야영장|오토캠핑/g, "")
+    .replace(/특별자치도|특별자치시|광역시|특별시|자치도|자치시/g, "")
+    .replace(/(도|시|군|구|읍|면|동)$/g, "");
+}
+
+function locationMatchScore(query, values = [], exactOnly = false) {
+  const queryFull = compactSearchText(query);
+  const queryBase = stripLocationBusinessWords(query);
+  if (!queryFull) return 0;
+  let best = 0;
+  values.filter(Boolean).forEach((value) => {
+    const candidateFull = compactSearchText(value);
+    const candidateBase = stripLocationBusinessWords(value);
+    if (!candidateFull) return;
+    if (queryFull === candidateFull) best = Math.max(best, 100);
+    if (queryBase && candidateBase && queryBase === candidateBase) best = Math.max(best, 94);
+    if (exactOnly) return;
+    if (candidateFull.length >= 2 && (queryFull.includes(candidateFull) || candidateFull.includes(queryFull))) {
+      best = Math.max(best, 84);
+    }
+    if (candidateBase.length >= 2 && queryBase && (queryBase.includes(candidateBase) || candidateBase.includes(queryBase))) {
+      best = Math.max(best, 74);
+    }
+  });
+  return best;
+}
+
+function bestLocationGroupMatch(query, exactOnly = false) {
+  return (state.dictionary?.regionGroups || [])
+    .map((group) => ({
+      group,
+      score: locationMatchScore(query, [group.searchKeyword, group.sido, ...(group.aliases || [])], exactOnly)
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)[0] || null;
+}
+
+function bestLocationCardMatch(query, exactOnly = false) {
+  const aliases = state.dictionary?.aliases || [];
+  return (state.dictionary?.cards || [])
+    .map((card) => {
+      const alias = aliases.find((item) => item.regionKey === card.regionKey) || null;
+      const directValues = [card.searchKeyword, alias?.searchKeyword, alias?.sigungu];
+      const values = exactOnly ? directValues : [...directValues, ...(alias?.aliases || [])];
+      return {
+        card,
+        alias,
+        score: locationMatchScore(query, values, exactOnly)
+      };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)[0] || null;
+}
+
+function locationDictionaryMatchForQuery(query) {
+  if (!state.dictionary) return null;
+  const groupExact = bestLocationGroupMatch(query, true);
+  if (groupExact?.score >= 94) {
+    return { card: null, group: groupExact.group, alias: null, reason: "group-exact" };
+  }
+
+  const cardExact = bestLocationCardMatch(query, true);
+  if (cardExact?.score >= 94) {
+    return { card: cardExact.card, group: null, alias: cardExact.alias, reason: "card-exact" };
+  }
+
+  const cardMatch = bestLocationCardMatch(query, false);
+  if (cardMatch?.score >= 74) {
+    return { card: cardMatch.card, group: null, alias: cardMatch.alias, reason: "card-match" };
+  }
+
+  const groupMatch = bestLocationGroupMatch(query, false);
+  if (groupMatch?.score >= 74) {
+    return { card: null, group: groupMatch.group, alias: null, reason: "group-match" };
+  }
+
+  return null;
+}
+
 function locationGroupForQuery(query) {
   const dictionary = state.dictionary;
   const compact = compactSearchText(query);
@@ -461,6 +543,9 @@ function locationCardForQuery(query) {
   if (!dictionary) return { card: null, group: null, alias: null, reason: "loading" };
   const compact = compactSearchText(query);
   if (!compact) return { card: null, group: null, alias: null, reason: "empty" };
+
+  const orderedMatch = locationDictionaryMatchForQuery(query);
+  if (orderedMatch) return orderedMatch;
 
   const matchedGroup = locationGroupForQuery(query);
   if (matchedGroup) return { card: null, group: matchedGroup, alias: null, reason: "group" };
@@ -2156,6 +2241,19 @@ function renderLocationDictionary(match = null) {
   `;
 }
 
+function syncDictionaryInputToActiveRun(force = false) {
+  if (!els.dictionarySearchInput || !state.data?.run) return "";
+  const keyword = activeKeyword();
+  const runId = state.activeRunId || state.data.run.id || "";
+  if (!keyword) return "";
+  if (force || state.dictionarySyncedRunId !== runId) {
+    els.dictionarySearchInput.value = keyword;
+    state.dictionarySyncedRunId = runId;
+    state.selectedLocationCard = null;
+  }
+  return keyword;
+}
+
 function runDictionarySearch(query) {
   if (query && els.dictionarySearchInput) els.dictionarySearchInput.value = query;
   const result = locationCardForQuery(els.dictionarySearchInput?.value || "");
@@ -2519,6 +2617,7 @@ async function loadRun(runId) {
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
   state.data = data;
   state.activeRunId = runId;
+  syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
   if (els.keywordInput) els.keywordInput.value = run.keyword || (run.label || "").split("·")[0].trim() || els.keywordInput.value;
