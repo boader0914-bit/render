@@ -316,12 +316,56 @@ async function saveTrafficKeys(payload) {
 
   for (const field of trafficKeyFields) {
     if (Object.prototype.hasOwnProperty.call(payload, field)) {
-      next[field] = normalizeApiKey(payload[field]);
+      const value = normalizeApiKey(payload[field]);
+      if (value) next[field] = value;
     }
   }
 
   await fsp.writeFile(TRAFFIC_KEYS_FILE, JSON.stringify(next, null, 2), "utf8");
   return trafficKeyStatus(next);
+}
+
+function summarizeTrafficApiCheck(result, configured) {
+  if (!configured) {
+    return {
+      configured: false,
+      ok: false,
+      status: null,
+      message: "API key is not configured."
+    };
+  }
+
+  return {
+    configured: true,
+    ok: Boolean(result?.collectable),
+    status: result?.status || null,
+    message: result?.collectable
+      ? "OK"
+      : (result?.reason || result?.message || result?.errorMessage || "API verification failed.")
+  };
+}
+
+async function verifyTrafficKeys() {
+  const keys = await readTrafficKeys();
+  const status = trafficKeyStatus(keys);
+  const keyword = "글램핑";
+  const datalabConfigured = Boolean(keys.naverClientId && keys.naverClientSecret);
+  const searchadConfigured = Boolean(keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId);
+
+  const [datalabResult, searchadResult] = await Promise.all([
+    datalabConfigured ? collectDatalabTrend(keyword, keys) : Promise.resolve(null),
+    searchadConfigured ? collectSearchAdMetric(keyword, keys) : Promise.resolve(null)
+  ]);
+
+  return {
+    ...status,
+    verification: {
+      checkedAt: new Date().toISOString(),
+      keyword,
+      datalab: summarizeTrafficApiCheck(datalabResult, datalabConfigured),
+      searchad: summarizeTrafficApiCheck(searchadResult, searchadConfigured)
+    }
+  };
 }
 
 function timingSafeTextEqual(left, right) {
@@ -2286,8 +2330,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260627-api-datalab-status"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260627-api-datalab-status"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260627-api-verify"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260627-api-verify"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -2367,6 +2411,10 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys") {
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveTrafficKeys(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys/verify") {
+      return send(res, 200, await verifyTrafficKeys());
     }
 
     if (req.method === "GET" && reqUrl.pathname.startsWith("/api/runs/")) {

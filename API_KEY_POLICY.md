@@ -22,9 +22,16 @@ This app must keep API key integration stable across releases.
 
 Future V2 releases must keep the same key names and the same `CONFIG_DIR` based storage path.
 Code can change, but key storage must remain outside the deployed source directory.
+Blank key fields in the admin UI must preserve the existing saved key instead of clearing it.
 
 ## Data Usage
 
 - SearchAd API is used for monthly PC/mobile search volume, click estimate, CTR, and competition.
 - Naver DataLab API is used for relative trend index only.
 - DataLab does not provide absolute search volume, so it must not replace SearchAd volume.
+
+## Verification
+
+- `POST /api/settings/traffic-keys/verify` performs a live authentication test.
+- "Configured" only means a key is saved.
+- "Verified" means the saved key successfully authenticated against the upstream API.

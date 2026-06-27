@@ -87,6 +87,8 @@ const els = {
   trafficApiState: document.getElementById("trafficApiState"),
   trafficKeyForm: document.getElementById("trafficKeyForm"),
   trafficKeyStatus: document.getElementById("trafficKeyStatus"),
+  trafficKeyVerifyButton: document.getElementById("trafficKeyVerifyButton"),
+  trafficKeyVerifyResult: document.getElementById("trafficKeyVerifyResult"),
   naverClientIdInput: document.getElementById("naverClientIdInput"),
   naverClientSecretInput: document.getElementById("naverClientSecretInput"),
   searchadApiKeyInput: document.getElementById("searchadApiKeyInput"),
@@ -2390,13 +2392,21 @@ async function submitTrafficKeys(event) {
   event.preventDefault();
   els.trafficKeyStatus.textContent = "저장 중입니다.";
   try {
-    const payload = {
-      naverClientId: els.naverClientIdInput.value,
-      naverClientSecret: els.naverClientSecretInput.value,
-      searchadApiKey: els.searchadApiKeyInput.value,
-      searchadSecretKey: els.searchadSecretKeyInput.value,
-      searchadCustomerId: els.searchadCustomerIdInput.value
-    };
+    const payload = {};
+    [
+      ["naverClientId", els.naverClientIdInput],
+      ["naverClientSecret", els.naverClientSecretInput],
+      ["searchadApiKey", els.searchadApiKeyInput],
+      ["searchadSecretKey", els.searchadSecretKeyInput],
+      ["searchadCustomerId", els.searchadCustomerIdInput]
+    ].forEach(([key, input]) => {
+      const value = input?.value?.trim();
+      if (value) payload[key] = value;
+    });
+    if (!Object.keys(payload).length) {
+      els.trafficKeyStatus.textContent = "입력된 새 키가 없습니다. 기존 키는 유지됩니다.";
+      return;
+    }
     const data = await fetchJson("/api/settings/traffic-keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2404,16 +2414,63 @@ async function submitTrafficKeys(event) {
     });
     renderTrafficState(data);
     els.trafficKeyForm.reset();
-    els.trafficKeyStatus.textContent = "API 키를 저장했습니다.";
+    els.trafficKeyStatus.textContent = "API 키를 저장했습니다. 연결을 확인합니다.";
+    await verifyTrafficKeys();
   } catch (error) {
     els.trafficKeyStatus.textContent = `저장 실패: ${error.message}`;
   }
 }
 
+function trafficCheckLabel(name, check) {
+  if (!check?.configured) return `${name}: 키 없음`;
+  if (check.ok) return `${name}: 정상`;
+  const status = check.status ? ` ${check.status}` : "";
+  return `${name}: 실패${status} · ${check.message || "확인 필요"}`;
+}
+
+function renderTrafficVerification(data) {
+  if (!els.trafficKeyVerifyResult) return;
+  const verification = data?.verification;
+  if (!verification) {
+    els.trafficKeyVerifyResult.textContent = "저장 후 연결 테스트로 실제 인증 상태를 확인합니다.";
+    return;
+  }
+  const datalab = trafficCheckLabel("DataLab", verification.datalab);
+  const searchad = trafficCheckLabel("SearchAd", verification.searchad);
+  els.trafficKeyVerifyResult.textContent = `${datalab} / ${searchad}`;
+}
+
+async function verifyTrafficKeys() {
+  if (!els.trafficKeyVerifyButton) return;
+  els.trafficKeyVerifyButton.disabled = true;
+  els.trafficKeyStatus.textContent = "API 연결을 테스트 중입니다.";
+  try {
+    const data = await fetchJson("/api/settings/traffic-keys/verify", { method: "POST" });
+    renderTrafficState(data);
+    renderTrafficVerification(data);
+    const datalabOk = Boolean(data?.verification?.datalab?.ok);
+    const searchadOk = Boolean(data?.verification?.searchad?.ok);
+    els.trafficKeyStatus.textContent = datalabOk && searchadOk
+      ? "API 연결이 정상입니다."
+      : "일부 API 연결에 문제가 있습니다. 아래 결과를 확인하세요.";
+  } catch (error) {
+    els.trafficKeyStatus.textContent = `연결 테스트 실패: ${error.message}`;
+  } finally {
+    els.trafficKeyVerifyButton.disabled = false;
+  }
+}
+
 function renderTrafficState(data) {
   state.trafficKeyState = data || null;
-  const ready = data?.datalabConfigured || data?.searchadConfigured;
-  els.trafficApiState.textContent = ready ? "연동 준비" : "미설정";
+  const datalabOk = data?.verification?.datalab?.ok;
+  const searchadOk = data?.verification?.searchad?.ok;
+  const configured = data?.datalabConfigured || data?.searchadConfigured;
+  els.trafficApiState.textContent = datalabOk || searchadOk
+    ? "연동 정상"
+    : configured
+      ? "키 저장됨"
+      : "미설정";
+  renderTrafficVerification(data);
   renderDemand();
 }
 
@@ -2533,6 +2590,7 @@ function bindEvents() {
   els.yeogiImportButton.addEventListener("click", submitYeogiImport);
   els.yeogiClearButton.addEventListener("click", clearYeogiImport);
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
+  els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
   els.logoutButton?.addEventListener("click", logout);
   els.dictionarySearchForm?.addEventListener("submit", (event) => {
     event.preventDefault();
