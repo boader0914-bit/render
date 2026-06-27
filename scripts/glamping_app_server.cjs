@@ -231,6 +231,188 @@ const PROVINCES = {
   }
 };
 
+const DEMAND_LEVEL_SCORES = {
+  "최상": 100,
+  "상": 85,
+  "중상": 70,
+  "중": 55,
+  "중하": 40,
+  "하": 25
+};
+
+const DEMAND_SEGMENTS = [
+  {
+    name: "대학생 커플",
+    group: "커플형",
+    weekend: 4,
+    weekday: 5,
+    conversion: 5,
+    weight: 14,
+    priority: 5,
+    seasons: ["봄", "가을"],
+    keywords: ["장박", "가격민감", "불멍"],
+    message: "평일에도 부담 적은 입문형 글램핑",
+    operation: "평일특가, 감성사진, 불멍 강조",
+    caution: "초등 가족",
+    status: "유지"
+  },
+  {
+    name: "직장인 커플",
+    group: "커플형",
+    weekend: 5,
+    weekday: 2,
+    conversion: 4,
+    weight: 18,
+    priority: 3,
+    seasons: ["봄", "가을", "연말"],
+    keywords: ["기념일", "프라이빗"],
+    message: "주말에 쉬기 좋은 프라이빗 글램핑",
+    operation: "금·토 집중, 기념일형 상품",
+    caution: "평일 유입 약함",
+    status: "유지"
+  },
+  {
+    name: "대학생 그룹",
+    group: "그룹형",
+    weekend: 5,
+    weekday: 5,
+    conversion: 4,
+    weight: 9,
+    priority: 4,
+    seasons: ["여름", "겨울"],
+    keywords: ["가성비", "단체", "추억"],
+    message: "친구들과 가볍게 즐기는 단체 글램핑",
+    operation: "방학 시즌, 단체 사진 강조",
+    caution: "소음 관리 필요",
+    status: "유지"
+  },
+  {
+    name: "직장인 그룹",
+    group: "그룹형",
+    weekend: 5,
+    weekday: 2,
+    conversion: 3,
+    weight: 9,
+    priority: 2,
+    seasons: ["봄", "가을"],
+    keywords: ["워크숍", "모임"],
+    message: "소규모 모임에 적합한 글램핑",
+    operation: "기업/소모임 제안형",
+    caution: "일정 제약 큼",
+    status: "검토"
+  },
+  {
+    name: "영유아 가족",
+    group: "가족형",
+    weekend: 4,
+    weekday: 3,
+    conversion: 4,
+    weight: 8,
+    priority: 4,
+    seasons: ["봄", "여름", "가을"],
+    keywords: ["안전", "편의", "가족"],
+    message: "부모가 편한 가족형 글램핑",
+    operation: "낮시간 체류, 부모 편의 강조",
+    caution: "",
+    status: "유지"
+  },
+  {
+    name: "초등 가족",
+    group: "가족형",
+    weekend: 4,
+    weekday: 4,
+    conversion: 5,
+    weight: 15,
+    priority: 5,
+    seasons: ["봄", "여름", "가을"],
+    keywords: ["체험", "안전", "가족"],
+    message: "아이와 함께 즐기는 가족형 글램핑",
+    operation: "체험, 야외동선, 부모 편의 강조",
+    caution: "우천 변수 큼",
+    status: "유지"
+  },
+  {
+    name: "중고등 가족",
+    group: "가족형",
+    weekend: 5,
+    weekday: 1,
+    conversion: 2,
+    weight: 11,
+    priority: 1,
+    seasons: ["여름", "연휴"],
+    keywords: ["연휴", "단기휴가"],
+    message: "방학·연휴 한정 가족형 수요",
+    operation: "방학/연휴 특화",
+    caution: "평시 반응 약함",
+    status: "보완"
+  },
+  {
+    name: "자연체류형",
+    group: "평일확장형",
+    weekend: 3,
+    weekday: 5,
+    conversion: 5,
+    weight: 10,
+    priority: 5,
+    seasons: ["가을", "겨울", "연중"],
+    keywords: ["조용한 쉼", "자연"],
+    message: "조용히 쉬기 좋은 자연형 글램핑",
+    operation: "평일쉼, 야간 불멍, 산책 강조",
+    caution: "화려한 연출보다 안정감",
+    status: "유지"
+  },
+  {
+    name: "프리랜서·원격근무",
+    group: "평일확장형",
+    weekend: 2,
+    weekday: 5,
+    conversion: 4,
+    weight: 4,
+    priority: 4,
+    seasons: ["연중"],
+    keywords: ["워케이션", "장박"],
+    message: "평일에도 머물 수 있는 워케이션형 글램핑",
+    operation: "와이파이, 테이블, 조용한 공간",
+    caution: "장박 운영 기준 필요",
+    status: "검토"
+  },
+  {
+    name: "은퇴 시니어",
+    group: "시니어형",
+    weekend: 2,
+    weekday: 5,
+    conversion: 3,
+    weight: 2,
+    priority: 2,
+    seasons: ["봄", "가을"],
+    keywords: ["평일", "조용함"],
+    message: "전 세그먼트",
+    operation: "낮시간, 동선 단순화, 조용함",
+    caution: "디지털 예약 불편 가능",
+    status: "검토"
+  }
+];
+
+const MONTHLY_DEMAND_MAP = [
+  { month: 1, season: "겨울", level: "중상", weekdaySignal: "중고생 겨울캠프", targets: ["커플", "자연체류형", "대학생 커플"], keywords: ["겨울", "불멍", "온기"], operation: "숨은 성수기 관리", action: "리뷰 축적, 겨울 콘텐츠 확보", price: "보합", content: "야간사진, 불멍, 온기", risks: ["장박"], interpretation: "겨울 감성 후기 유지" },
+  { month: 2, season: "겨울", level: "중상", weekdaySignal: "중고생 겨울캠프", targets: ["커플", "가족형"], keywords: ["설날", "겨울마감"], operation: "연휴 대응", action: "연휴형 상품 정리", price: "보합", content: "설 연휴, 가족 모임", risks: ["한파", "연휴 집중"], interpretation: "연휴 집중형 운영 유지검토 필요" },
+  { month: 3, season: "봄", level: "중하", weekdaySignal: "초등 가족", targets: ["시니어형", "대학생 커플"], keywords: ["봄 시작", "비수기"], operation: "가격 민감 구간", action: "프로모션, 입문형 상품", price: "한정 할인", content: "봄 전환, 자연 회복", risks: ["날씨 불안정"], interpretation: "평일형 타겟 확장 권장" },
+  { month: 4, season: "봄", level: "중", weekdaySignal: "직장인 커플", targets: ["초등 가족", "대학생 커플"], keywords: ["벚꽃", "봄나들이"], operation: "야외활동 회복", action: "봄 사진 교체, 가족형 문구 강화", price: "보합", content: "벚꽃, 산책, 가족 체험", risks: ["비", "미세먼지"], interpretation: "초등 가족 반응 증가" },
+  { month: 5, season: "봄", level: "상", weekdaySignal: "가족 단위", targets: ["초등 가족", "영유아 가족"], keywords: ["어린이날", "어버이날"], operation: "가족 중심 달", action: "가족 패키지 강화", price: "연휴 중심 단가 유지", content: "가족 체험, 연휴", risks: ["날씨", "행사 집중"], interpretation: "가족 키워드 강화 권장" },
+  { month: 6, season: "여름", level: "중", weekdaySignal: "대학엠티", targets: ["소규모 활동", "커플"], keywords: ["초여름", "활동적인 구간"], operation: "장마 전 구간", action: "단체 어트랙션", price: "보합", content: "어트랙션, 액티비티", risks: ["장마"], interpretation: "평일형 메시지 유효" },
+  { month: 7, season: "여름", level: "최상", weekdaySignal: "전 세그먼트", targets: ["가족형", "커플형"], keywords: ["여름휴가 시작"], operation: "성수기 운영", action: "단가 최적화", price: "단가 유지", content: "수영/야외, 휴가", risks: ["장마", "폭염"], interpretation: "성수기 단가 방어 우선" },
+  { month: 8, season: "여름", level: "최상", weekdaySignal: "전 세그먼트", targets: ["가족형", "그룹형"], keywords: ["여름휴가 절정"], operation: "성수기 운영", action: "리뷰/사진 최대 확보", price: "단가 유지", content: "활동감, 여름 경험", risks: ["폭염"], interpretation: "후기 축적 최우선" },
+  { month: 9, season: "가을", level: "중", weekdaySignal: "커플", targets: ["초등 가족", "자연체류형"], keywords: ["가을 시작", "추석"], operation: "회복 구간", action: "가을 콘텐츠 전환", price: "보합", content: "초가을, 가족/커플", risks: ["태풍", "추석 편차"], interpretation: "가을 전환기 콘텐츠 필요" },
+  { month: 10, season: "가을", level: "상", weekdaySignal: "전 세그먼트", targets: ["커플형", "가족형"], keywords: ["단풍", "야외활동"], operation: "가을 성수기", action: "대표 시즌 브랜딩 강화", price: "단가 유지", content: "단풍, 산책, 야외경험", risks: ["주말 몰림"], interpretation: "대표 시즌 키워드 강화" },
+  { month: 11, season: "가을", level: "중상", weekdaySignal: "커플", targets: ["자연체류형", "프리랜서형"], keywords: ["늦가을", "불멍", "조용한 쉼"], operation: "감성보다 깊게 쉬는 경험", action: "평일쉼 상품, 불멍 강조", price: "보합/패키지", content: "야간사진, 불멍, 온기", risks: ["한파 시작"], interpretation: "평일 반응은 자연체류형이 강함" },
+  { month: 12, season: "겨울", level: "중", weekdaySignal: "직장인 모임", targets: ["커플", "자연체류형"], keywords: ["연말", "소모임"], operation: "송년 시즌", action: "소규모 모임형/커플형 운영", price: "보합", content: "연말 감성, 불멍", risks: ["한파", "예약 편차"], interpretation: "연말 소모임 수요 반영" }
+];
+
+const DEMAND_AI_SIGNALS = [
+  { keyword: "조용한 쉼", segment: "자연체류형", frequency: 12, signal: "조용함, 불멍, 쉬기 좋음", proposal: "11월~2월 자연체류형 메시지 강화" },
+  { keyword: "아이와 함께", segment: "초등 가족", frequency: 8, signal: "체험, 안전", proposal: "4~5월 가족형 키워드 보강" }
+];
+
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -1721,6 +1903,171 @@ function summarizeStats(regions) {
   return stats;
 }
 
+function clampScore(value, min = 0, max = 100) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.max(min, Math.min(max, Math.round(number)));
+}
+
+function demandMonthFromConditions(conditions = {}) {
+  const dateText = conditions.checkIn || kstDate(0);
+  const match = String(dateText).match(/^\d{4}-(\d{1,2})-/);
+  const month = match ? Number(match[1]) : new Date().getMonth() + 1;
+  return Number.isFinite(month) && month >= 1 && month <= 12 ? month : new Date().getMonth() + 1;
+}
+
+function demandSegmentMatches(segment, monthInfo) {
+  const targets = (monthInfo.targets || []).join(" ");
+  const keywords = [...(monthInfo.keywords || []), monthInfo.weekdaySignal || "", monthInfo.content || ""].join(" ");
+  if (targets.includes(segment.name) || targets.includes(segment.group)) return true;
+  if (segment.keywords.some((keyword) => keywords.includes(keyword))) return true;
+  if ((monthInfo.season && segment.seasons.includes(monthInfo.season)) && segment.priority >= 4) return true;
+  return false;
+}
+
+function demandTopSegments(monthInfo, limit = 3) {
+  return DEMAND_SEGMENTS
+    .map((segment) => ({
+      ...segment,
+      fitScore:
+        (demandSegmentMatches(segment, monthInfo) ? 42 : 0) +
+        segment.priority * 8 +
+        segment.conversion * 6 +
+        segment.weight * 0.8 +
+        (segment.seasons.includes(monthInfo.season) || segment.seasons.includes("연중") ? 12 : 0)
+    }))
+    .sort((a, b) => b.fitScore - a.fitScore)
+    .slice(0, limit);
+}
+
+function demandTrendMomentum(datalabTrend) {
+  const series = (datalabTrend?.series || datalabTrend?.data || [])
+    .map((entry) => Number(entry.ratio ?? entry.value ?? entry.score))
+    .filter(Number.isFinite);
+  if (series.length < 2) return { score: 50, label: "트렌드 확인필요", change: null };
+  const first = series[0] || 0;
+  const last = series[series.length - 1] || 0;
+  const change = first ? (last - first) / first : 0;
+  const score = clampScore(55 + change * 100);
+  return {
+    score,
+    change,
+    label: change >= 0.15 ? "트렌드 상승" : change <= -0.15 ? "트렌드 하락" : "트렌드 보합"
+  };
+}
+
+function demandRiskScore(monthInfo, regions = []) {
+  const riskCount = (monthInfo.risks || []).length;
+  const weatherRisk = (monthInfo.risks || []).some((risk) => /장마|폭염|태풍|한파|날씨|비/.test(risk));
+  const naturalShare = regions.length
+    ? regions.filter((region) => /자연|메인 관광/.test(region.primary || "")).length / regions.length
+    : 0.5;
+  const raw = 100 - riskCount * 10 - (weatherRisk ? 8 : 0) + naturalShare * 8;
+  return clampScore(raw, 35, 95);
+}
+
+function demandContentScore(monthInfo, topSegments, datalabTrend) {
+  const aiFrequency = DEMAND_AI_SIGNALS
+    .filter((signal) => topSegments.some((segment) => segment.name === signal.segment || segment.group === signal.segment))
+    .reduce((sum, signal) => sum + signal.frequency, 0);
+  const trend = demandTrendMomentum(datalabTrend);
+  return clampScore(58 + Math.min(18, aiFrequency) + (trend.score - 50) * 0.25);
+}
+
+function demandPriceDefenseScore(monthInfo, availability) {
+  const base = DEMAND_LEVEL_SCORES[monthInfo.level] || 55;
+  const soldRate = Number(availability?.stats?.weightedSoldOutRate);
+  const saleSignal = Number.isFinite(soldRate) ? soldRate * 22 : 8;
+  const priceSignal = /단가 유지|단가 최적화|보합/.test(monthInfo.price || "") ? 9 : -4;
+  return clampScore(base * 0.72 + saleSignal + priceSignal);
+}
+
+function buildDemandStructure({ manifest, conditions, regions, availability, datalabTrend }) {
+  const month = demandMonthFromConditions(conditions);
+  const monthInfo = MONTHLY_DEMAND_MAP.find((entry) => entry.month === month) || MONTHLY_DEMAND_MAP[0];
+  const topSegments = demandTopSegments(monthInfo, 3);
+  const demandScore = DEMAND_LEVEL_SCORES[monthInfo.level] || 55;
+  const targetFitScore = clampScore(
+    topSegments.reduce((sum, segment) => sum + Math.min(100, segment.fitScore), 0) / Math.max(1, topSegments.length)
+  );
+  const weekdayScore = clampScore(
+    topSegments.reduce((sum, segment) => sum + segment.weekday * 20, 0) / Math.max(1, topSegments.length)
+  );
+  const priceScore = demandPriceDefenseScore(monthInfo, availability);
+  const contentScore = demandContentScore(monthInfo, topSegments, datalabTrend);
+  const riskScore = demandRiskScore(monthInfo, regions);
+  const aiSignalScore = clampScore(50 + Math.min(30, DEMAND_AI_SIGNALS.reduce((sum, signal) => sum + signal.frequency, 0)));
+  const overallScore = clampScore(
+    demandScore * 0.25 +
+    targetFitScore * 0.20 +
+    weekdayScore * 0.15 +
+    priceScore * 0.15 +
+    contentScore * 0.10 +
+    riskScore * 0.10 +
+    aiSignalScore * 0.05
+  );
+  const overallLabel = overallScore >= 82
+    ? "강한 수요"
+    : overallScore >= 68
+      ? "선별 공략"
+      : overallScore >= 55
+        ? "보통 수요"
+        : "주의 필요";
+  const targetKeywords = Array.from(new Set([
+    ...(monthInfo.keywords || []),
+    ...topSegments.flatMap((segment) => segment.keywords || [])
+  ])).slice(0, 8);
+
+  return {
+    source: "숙박업 메인터넌스",
+    sourceVersion: "2026-03-08 사전 기준",
+    keyword: manifest?.keyword || conditions?.keyword || "",
+    month,
+    monthLabel: `${month}월`,
+    season: monthInfo.season,
+    overallScore,
+    overallLabel,
+    summary: `${monthInfo.month || month}월은 ${monthInfo.level} 수요 구간이며 ${topSegments.map((item) => item.name).join(", ")} 중심으로 판단합니다.`,
+    metrics: [
+      { key: "monthlyDemand", label: "월 수요강도", score: demandScore, value: monthInfo.level, note: `${monthInfo.season} · ${monthInfo.operation}` },
+      { key: "targetFit", label: "핵심타겟 적합도", score: targetFitScore, value: topSegments.map((item) => item.group).join("·"), note: topSegments.map((item) => item.name).join(" · ") },
+      { key: "weekday", label: "평일 확장성", score: weekdayScore, value: weekdayScore >= 70 ? "높음" : weekdayScore >= 50 ? "보통" : "낮음", note: monthInfo.weekdaySignal },
+      { key: "price", label: "가격 방어력", score: priceScore, value: priceScore >= 80 ? "높음" : priceScore >= 60 ? "보통" : "낮음", note: monthInfo.price },
+      { key: "content", label: "콘텐츠 반응", score: contentScore, value: contentScore >= 75 ? "강함" : contentScore >= 55 ? "보통" : "약함", note: monthInfo.content },
+      { key: "risk", label: "운영 리스크 보정", score: riskScore, value: riskScore >= 75 ? "안정" : riskScore >= 55 ? "주의" : "위험", note: (monthInfo.risks || []).join(" · ") || "특이 리스크 없음" },
+      { key: "aiSignal", label: "AI 신호 반영", score: aiSignalScore, value: `${DEMAND_AI_SIGNALS.length}개 신호`, note: DEMAND_AI_SIGNALS.map((signal) => signal.keyword).join(" · ") }
+    ],
+    radar: [
+      { label: "월수요", score: demandScore },
+      { label: "타겟", score: targetFitScore },
+      { label: "평일", score: weekdayScore },
+      { label: "가격", score: priceScore },
+      { label: "콘텐츠", score: contentScore },
+      { label: "리스크", score: riskScore }
+    ],
+    topSegments: topSegments.map((segment) => ({
+      name: segment.name,
+      group: segment.group,
+      score: clampScore(segment.fitScore),
+      priority: segment.priority,
+      operation: segment.operation,
+      caution: segment.caution,
+      message: segment.message,
+      keywords: segment.keywords
+    })),
+    recommendedOperations: [
+      monthInfo.action,
+      monthInfo.interpretation,
+      ...topSegments.map((segment) => segment.operation)
+    ].filter(Boolean).slice(0, 5),
+    contentKeywords: targetKeywords,
+    risks: monthInfo.risks || [],
+    priceStrategy: monthInfo.price,
+    interpretation: monthInfo.interpretation,
+    aiSignals: DEMAND_AI_SIGNALS
+  };
+}
+
 function numericField(row, keys) {
   for (const key of keys) {
     const value = row[key];
@@ -2084,6 +2431,14 @@ async function loadRun(runId) {
   const datalabTrend = await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
+  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows]);
+  const demandStructure = buildDemandStructure({
+    manifest,
+    conditions,
+    regions,
+    availability,
+    datalabTrend
+  });
 
   return {
     run: {
@@ -2116,8 +2471,9 @@ async function loadRun(runId) {
     },
     stats,
     datalabTrend,
+    demandStructure,
     regions,
-    availability: summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows]),
+    availability,
     platform: summarizePlatformRows(displayPlatformRows),
     companyPlatforms: summarizeCompanyPlatforms(displayPlatformRows),
     downloads: files

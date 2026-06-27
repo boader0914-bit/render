@@ -1336,6 +1336,192 @@ function demandPriorityLabel(traffic = {}, extraSignal = 0) {
   return "보류";
 }
 
+function demandStructureSource() {
+  return state.data?.demandStructure || null;
+}
+
+function demandTone(score) {
+  const number = Number(score);
+  if (number >= 82) return "strong";
+  if (number >= 68) return "good";
+  if (number >= 55) return "watch";
+  return "risk";
+}
+
+function demandMetricValue(metric = {}) {
+  if (metric.key === "monthlyDemand") return metric.value || "확인";
+  if (metric.key === "targetFit") {
+    const names = (demandStructureSource()?.topSegments || []).slice(0, 2).map((item) => item.group);
+    return Array.from(new Set(names)).join("·") || metric.value || "확인";
+  }
+  return metric.value || `${fmtNumber(metric.score)}점`;
+}
+
+function demandRadarChart(items = []) {
+  const width = 320;
+  const height = 260;
+  const cx = width / 2;
+  const cy = 132;
+  const radius = 92;
+  const axes = items.length ? items.slice(0, 6) : [
+    { label: "월수요", score: 0 },
+    { label: "타겟", score: 0 },
+    { label: "평일", score: 0 },
+    { label: "가격", score: 0 },
+    { label: "콘텐츠", score: 0 },
+    { label: "리스크", score: 0 }
+  ];
+  const pointFor = (index, score = 100) => {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index) / axes.length;
+    const r = radius * Math.max(0, Math.min(100, Number(score) || 0)) / 100;
+    return {
+      x: cx + Math.cos(angle) * r,
+      y: cy + Math.sin(angle) * r,
+      angle
+    };
+  };
+  const grid = [25, 50, 75, 100].map((score) => axes.map((_, index) => {
+    const point = pointFor(index, score);
+    return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+  }).join(" "));
+  const polygon = axes.map((axis, index) => {
+    const point = pointFor(index, axis.score);
+    return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
+  }).join(" ");
+  return `
+    <svg class="structure-radar" viewBox="0 0 ${width} ${height}" role="img" aria-label="수요구조 레이더 차트">
+      <g class="structure-radar-grid">
+        ${grid.map((points) => `<polygon points="${points}"></polygon>`).join("")}
+        ${axes.map((_, index) => {
+          const outer = pointFor(index, 100);
+          return `<line x1="${cx}" y1="${cy}" x2="${outer.x.toFixed(1)}" y2="${outer.y.toFixed(1)}"></line>`;
+        }).join("")}
+      </g>
+      <polygon class="structure-radar-fill" points="${polygon}"></polygon>
+      <polyline class="structure-radar-line" points="${polygon} ${polygon.split(" ")[0] || ""}"></polyline>
+      <g class="structure-radar-labels">
+        ${axes.map((axis, index) => {
+          const point = pointFor(index, 118);
+          return `<text x="${point.x.toFixed(1)}" y="${point.y.toFixed(1)}">${escapeHtml(axis.label)}</text>`;
+        }).join("")}
+      </g>
+    </svg>
+  `;
+}
+
+function renderDemandStructure() {
+  const structure = demandStructureSource();
+  if (!structure) {
+    return `
+      <section class="structure-empty-card">
+        <strong>수요구조 사전 대기</strong>
+        <p>숙박업 메인터넌스 사전이 연결되면 월별 수요강도, 핵심타겟, 평일 확장성, 가격 방어력을 표시합니다.</p>
+      </section>
+    `;
+  }
+  const primaryMetrics = (structure.metrics || []).slice(0, 4);
+  const secondaryMetrics = (structure.metrics || []).slice(4);
+  const tone = demandTone(structure.overallScore);
+  return `
+    <section class="structure-hero ${tone}">
+      <div class="structure-score">
+        <span>수요구조 종합점수</span>
+        <strong>${fmtNumber(structure.overallScore)}</strong>
+        <em>${escapeHtml(structure.overallLabel || "판단 대기")}</em>
+      </div>
+      <div class="structure-summary">
+        <p class="eyebrow">${escapeHtml(structure.source || "숙박업 메인터넌스")}</p>
+        <h3>${escapeHtml(structure.monthLabel || "")} ${escapeHtml(structure.season || "")} 수요 판단</h3>
+        <p>${escapeHtml(structure.summary || structure.interpretation || "")}</p>
+        <div class="structure-chip-row">
+          ${(structure.contentKeywords || []).slice(0, 6).map((keyword) => `<span>${escapeHtml(keyword)}</span>`).join("")}
+        </div>
+      </div>
+    </section>
+
+    <section class="structure-metric-grid" aria-label="수요구조 핵심 지표">
+      ${primaryMetrics.map((metric) => `
+        <article>
+          <span>${escapeHtml(metric.label)}</span>
+          <strong>${escapeHtml(demandMetricValue(metric))}</strong>
+          <small>${fmtNumber(metric.score)}점 · ${escapeHtml(metric.note || "")}</small>
+        </article>
+      `).join("")}
+    </section>
+
+    <section class="structure-layout">
+      <article class="structure-card radar-card">
+        <div class="demand-card-head">
+          <div>
+            <h3>지표 균형</h3>
+            <p>월수요, 타겟, 평일, 가격, 콘텐츠, 리스크 기준</p>
+          </div>
+        </div>
+        ${demandRadarChart(structure.radar || [])}
+      </article>
+
+      <article class="structure-card">
+        <div class="demand-card-head">
+          <div>
+            <h3>핵심 타겟</h3>
+            <p>이번 시점에 우선 맞춰야 할 고객군</p>
+          </div>
+          <span>${escapeHtml(structure.monthLabel || "")}</span>
+        </div>
+        <div class="segment-list">
+          ${(structure.topSegments || []).map((segment) => `
+            <div>
+              <strong>${escapeHtml(segment.name)}</strong>
+              <span>${escapeHtml(segment.group)} · ${fmtNumber(segment.score)}점</span>
+              <small>${escapeHtml(segment.operation || "")}</small>
+            </div>
+          `).join("")}
+        </div>
+      </article>
+    </section>
+
+    <section class="structure-action-grid">
+      <article class="structure-card">
+        <div class="demand-card-head">
+          <div>
+            <h3>추천 운영</h3>
+            <p>상품·가격·콘텐츠 실행 방향</p>
+          </div>
+        </div>
+        <ol class="structure-action-list">
+          ${(structure.recommendedOperations || []).slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ol>
+      </article>
+      <article class="structure-card risk">
+        <div class="demand-card-head">
+          <div>
+            <h3>운영 리스크</h3>
+            <p>예약률 해석 시 보정해야 할 변수</p>
+          </div>
+        </div>
+        <div class="risk-chip-row">
+          ${(structure.risks || []).length
+            ? structure.risks.map((risk) => `<span>${escapeHtml(risk)}</span>`).join("")
+            : `<span>특이 리스크 없음</span>`}
+        </div>
+        <p>${escapeHtml(structure.interpretation || "")}</p>
+      </article>
+    </section>
+
+    ${secondaryMetrics.length ? `
+      <section class="structure-submetric-row">
+        ${secondaryMetrics.map((metric) => `
+          <article>
+            <span>${escapeHtml(metric.label)}</span>
+            <strong>${fmtNumber(metric.score)}</strong>
+            <small>${escapeHtml(metric.note || metric.value || "")}</small>
+          </article>
+        `).join("")}
+      </section>
+    ` : ""}
+  `;
+}
+
 function demandRegionRows() {
   return (state.data?.regions || [])
     .map((region) => ({
@@ -1397,12 +1583,14 @@ function renderDemand() {
   els.demandDashboard.innerHTML = `
     <section class="demand-hero-card">
       <div>
-        <p class="eyebrow">검색수요 분석</p>
+        <p class="eyebrow">수요구조 분석</p>
         <h3>${escapeHtml(activeKeyword())}</h3>
-        <p>${escapeHtml(dateRangeLabel(run))} · 최근 12개월 트렌드 슬롯 · 네이버 검색광고 수요</p>
+        <p>${escapeHtml(dateRangeLabel(run))} · 숙박업 메인터넌스 사전 · 네이버 검색수요</p>
       </div>
       <span>${escapeHtml(productModeLabel(run.productMode || "all"))}</span>
     </section>
+
+    ${renderDemandStructure()}
 
     <section class="demand-metric-grid" aria-label="검색수요 핵심 지표">
       <article><span>월검색량</span><strong>${total ? fmtNumber(total) : "확인필요"}</strong><small>PC+모바일</small></article>
@@ -1998,14 +2186,14 @@ function renderHeader() {
     dictionary: "입지사전",
     target: "영업 타깃",
     map: "지역 클러스터 지도",
-    demand: "검색수요 분석",
+    demand: "수요구조 분석",
     admin: "관리"
   };
   els.pageTitle.textContent = titleMap[state.activeTab] || "요약 리포트";
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
   } else if (state.activeTab === "demand") {
-    els.pageSubtitle.textContent = `${title} · 네이버 트렌드 · 검색광고 수요`;
+    els.pageSubtitle.textContent = `${title} · 숙박업 메인터넌스 · 네이버 트렌드`;
   } else if (state.activeTab === "report") {
     els.pageSubtitle.textContent = `${title} · 상업용 시장 요약 · ${dateRangeLabel(run)}`;
   } else {
