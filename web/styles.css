@@ -2267,40 +2267,78 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
-.trend-bars {
-  display: grid;
-  grid-template-columns: repeat(var(--trend-count, 12), minmax(0, 1fr));
-  gap: 9px;
-  align-items: end;
-  min-height: 160px;
-  padding: 10px 2px 0;
-}
-
-.trend-bar {
+.trend-line-chart {
   min-width: 0;
   display: grid;
-  align-items: end;
-  justify-items: center;
-  gap: 8px;
+  gap: 6px;
+  padding-top: 2px;
 }
 
-.trend-bar i {
+.trend-line-svg {
   display: block;
-  width: min(100%, 28px);
-  min-height: 10px;
-  border-radius: 8px 8px 3px 3px;
-  background: linear-gradient(180deg, #6aa7ff, var(--blue));
+  width: 100%;
+  height: 210px;
+  overflow: visible;
 }
 
-.trend-bar.missing i {
-  border: 1px dashed rgba(152, 162, 179, .65);
-  background: rgba(152, 162, 179, .16);
+.trend-grid line {
+  stroke: rgba(148, 163, 184, .22);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
-.trend-bar b {
+.trend-line-area {
+  fill: rgba(49, 130, 246, .1);
+}
+
+.trend-line-path {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 8px 14px rgba(49, 130, 246, .2));
+  vector-effect: non-scaling-stroke;
+}
+
+.trend-point circle {
+  fill: #fff;
+  stroke: var(--blue);
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.trend-point.missing circle {
+  fill: rgba(148, 163, 184, .18);
+  stroke: rgba(148, 163, 184, .55);
+  stroke-dasharray: 3 3;
+}
+
+.trend-point text {
+  fill: #175cd3;
+  font-size: 13px;
+  font-weight: 950;
+  text-anchor: middle;
+  font-variant-numeric: tabular-nums;
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 4;
+  stroke-linejoin: round;
+}
+
+.trend-line-axis {
+  display: grid;
+  grid-template-columns: repeat(var(--trend-count, 12), minmax(0, 1fr));
+  gap: 2px;
+  align-items: center;
+}
+
+.trend-line-axis span {
+  min-width: 0;
   color: var(--muted);
   font-size: 11px;
   font-weight: 850;
+  text-align: center;
   white-space: nowrap;
 }
 
@@ -2814,12 +2852,16 @@ a.platform-row:hover {
     padding: 14px;
   }
 
-  .trend-bars {
-    gap: 5px;
-    min-height: 138px;
+  .trend-line-svg {
+    height: 184px;
   }
 
-  .trend-bar b {
+  .trend-point text {
+    font-size: 10px;
+    stroke-width: 3;
+  }
+
+  .trend-line-axis span {
     font-size: 10px;
   }
 

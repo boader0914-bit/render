@@ -1161,10 +1161,11 @@ function demandTrendSource() {
   const source = candidates.find((entry) => Array.isArray(entry.series) || Array.isArray(entry.data));
   const rawSeries = source ? (source.series || source.data || []) : [];
   const series = rawSeries.map((entry, index) => {
-    const label = entry.month || entry.period || entry.date || `${index + 1}월`;
+    const rawLabel = entry.month || entry.period || entry.date || `${index + 1}월`;
     const value = Number(entry.ratio ?? entry.value ?? entry.score);
     return {
-      label: String(label).replace(/^\d{4}-0?/, "").replace(/^\d{4}-/, ""),
+      label: trendMonthLabel(rawLabel, index),
+      rawLabel: String(rawLabel),
       value: Number.isFinite(value) ? value : null
     };
   }).filter((entry) => entry.label);
@@ -1178,11 +1179,81 @@ function demandTrendSource() {
   };
 }
 
+function trendMonthLabel(value, index = 0) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(?:\d{4}-)?0?(\d{1,2})(?:-\d{1,2})?/);
+  if (match) return `${Number(match[1])}월`;
+  if (/^\d{1,2}$/.test(text)) return `${Number(text)}월`;
+  if (/월$/.test(text)) return text.replace(/^0/, "");
+  return `${index + 1}월`;
+}
+
+function trendIndexLabel(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, "");
+}
+
+function trendLineChart(series, trend) {
+  const width = 640;
+  const height = 220;
+  const padX = 28;
+  const padTop = 34;
+  const padBottom = 34;
+  const baseline = height - padBottom;
+  const chartHeight = baseline - padTop;
+  const numericValues = series.map((entry) => Number(entry.value)).filter(Number.isFinite);
+  const max = Math.max(100, ...numericValues);
+  const count = Math.max(1, series.length - 1);
+  const points = series.map((entry, index) => {
+    const value = Number(entry.value);
+    const hasValue = Number.isFinite(value);
+    const x = padX + ((width - padX * 2) * index) / count;
+    const y = hasValue ? baseline - Math.max(0, Math.min(1, value / max)) * chartHeight : baseline;
+    return { ...entry, index, value, hasValue, x, y };
+  });
+  const validPoints = points.filter((point) => point.hasValue);
+  const linePoints = validPoints.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+  const areaPoints = validPoints.length >= 2
+    ? `${validPoints[0].x.toFixed(1)},${baseline} ${linePoints} ${validPoints[validPoints.length - 1].x.toFixed(1)},${baseline}`
+    : "";
+  const gridLines = [0, 25, 50, 75, 100].map((value) => {
+    const y = baseline - (value / 100) * chartHeight;
+    return `<line x1="${padX}" y1="${y.toFixed(1)}" x2="${width - padX}" y2="${y.toFixed(1)}"></line>`;
+  }).join("");
+
+  return `
+    <div class="trend-line-chart ${trend.hasSeries ? "" : "pending"}" style="--trend-count:${series.length}">
+      <svg class="trend-line-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="월별 네이버 데이터랩 상대지수">
+        <g class="trend-grid">${gridLines}</g>
+        ${areaPoints ? `<polygon class="trend-line-area" points="${areaPoints}"></polygon>` : ""}
+        ${linePoints ? `<polyline class="trend-line-path" points="${linePoints}"></polyline>` : ""}
+        <g class="trend-points">
+          ${points.map((point) => {
+            const title = point.hasValue
+              ? `${point.label} 상대지수 ${trendIndexLabel(point.value)}`
+              : `${point.label} 데이터 대기`;
+            const textY = Math.max(14, point.y - 12);
+            return `
+              <g class="trend-point ${point.hasValue ? "" : "missing"}" title="${escapeHtml(title)}">
+                <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${point.hasValue ? 5 : 4}"></circle>
+                ${point.hasValue ? `<text x="${point.x.toFixed(1)}" y="${textY.toFixed(1)}">${escapeHtml(trendIndexLabel(point.value))}</text>` : ""}
+              </g>
+            `;
+          }).join("")}
+        </g>
+      </svg>
+      <div class="trend-line-axis">
+        ${points.map((point) => `<span>${escapeHtml(point.label)}</span>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function demandTrendChart() {
   const trend = demandTrendSource();
   const fallbackMonths = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
   const series = trend.series.length ? trend.series.slice(-12) : fallbackMonths.map((label) => ({ label, value: null }));
-  const max = Math.max(100, ...series.map((entry) => finiteNumber(entry.value, 0)));
   const errorLabel = Number(trend.status) === 401 ? "인증 실패" : "API 오류";
   const statusLabel = trend.reason ? errorLabel : (trend.configured ? "데이터랩 준비" : "API 키 필요");
   const detailLabel = trend.hasSeries
@@ -1199,19 +1270,7 @@ function demandTrendChart() {
         </div>
         <span>${escapeHtml(statusLabel)}</span>
       </div>
-      <div class="trend-bars" style="--trend-count:${series.length}">
-        ${series.map((entry) => {
-          const value = Number(entry.value);
-          const height = Number.isFinite(value) ? Math.max(10, Math.round((value / max) * 110)) : 26;
-          const title = Number.isFinite(value) ? `${entry.label} 상대지수 ${value}` : `${entry.label} 데이터 대기`;
-          return `
-            <span class="trend-bar ${Number.isFinite(value) ? "" : "missing"}" title="${escapeHtml(title)}">
-              <i style="height:${height}px"></i>
-              <b>${escapeHtml(String(entry.label).replace(/^0/, ""))}</b>
-            </span>
-          `;
-        }).join("")}
-      </div>
+      ${trendLineChart(series, trend)}
     </div>
   `;
 }
