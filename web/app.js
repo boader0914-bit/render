@@ -1224,6 +1224,9 @@ function trendLineChart(series, trend) {
 
   return `
     <div class="trend-line-chart ${trend.hasSeries ? "" : "pending"}" style="--trend-count:${series.length}">
+      <div class="trend-line-values">
+        ${points.map((point) => `<span>${point.hasValue ? escapeHtml(trendIndexLabel(point.value)) : "-"}</span>`).join("")}
+      </div>
       <svg class="trend-line-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="월별 네이버 데이터랩 상대지수">
         <g class="trend-grid">${gridLines}</g>
         ${areaPoints ? `<polygon class="trend-line-area" points="${areaPoints}"></polygon>` : ""}
@@ -1233,11 +1236,9 @@ function trendLineChart(series, trend) {
             const title = point.hasValue
               ? `${point.label} 상대지수 ${trendIndexLabel(point.value)}`
               : `${point.label} 데이터 대기`;
-            const textY = Math.max(14, point.y - 12);
             return `
               <g class="trend-point ${point.hasValue ? "" : "missing"}" title="${escapeHtml(title)}">
                 <circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${point.hasValue ? 5 : 4}"></circle>
-                ${point.hasValue ? `<text x="${point.x.toFixed(1)}" y="${textY.toFixed(1)}">${escapeHtml(trendIndexLabel(point.value))}</text>` : ""}
               </g>
             `;
           }).join("")}

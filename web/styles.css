@@ -2270,8 +2270,25 @@ a.platform-row:hover {
 .trend-line-chart {
   min-width: 0;
   display: grid;
-  gap: 6px;
+  gap: 7px;
   padding-top: 2px;
+}
+
+.trend-line-values {
+  display: grid;
+  grid-template-columns: repeat(var(--trend-count, 12), minmax(0, 1fr));
+  gap: 2px;
+  align-items: center;
+}
+
+.trend-line-values span {
+  min-width: 0;
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .trend-line-svg {
@@ -2312,18 +2329,6 @@ a.platform-row:hover {
   fill: rgba(148, 163, 184, .18);
   stroke: rgba(148, 163, 184, .55);
   stroke-dasharray: 3 3;
-}
-
-.trend-point text {
-  fill: #175cd3;
-  font-size: 13px;
-  font-weight: 950;
-  text-anchor: middle;
-  font-variant-numeric: tabular-nums;
-  paint-order: stroke;
-  stroke: #fff;
-  stroke-width: 4;
-  stroke-linejoin: round;
 }
 
 .trend-line-axis {
@@ -2856,11 +2861,7 @@ a.platform-row:hover {
     height: 184px;
   }
 
-  .trend-point text {
-    font-size: 10px;
-    stroke-width: 3;
-  }
-
+  .trend-line-values span,
   .trend-line-axis span {
     font-size: 10px;
   }
