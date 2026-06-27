@@ -441,6 +441,7 @@ const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${province.slug}_glamping_${RUN_ST
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const NAVER_BOOKING_STOCK_LIMIT = Number(process.env.NAVER_BOOKING_STOCK_LIMIT || 20);
 const NAVER_BOOKING_GRAPHQL_URL = "https://m.booking.naver.com/graphql";
+const NAVER_BOOKING_ID_FALLBACK = String(process.env.NAVER_BOOKING_ID_FALLBACK || "1") !== "0";
 
 const headers = {
   "user-agent":
@@ -463,6 +464,101 @@ async function writeCsv(filePath, rows, columns) {
     ...rows.map((row) => columns.map((column) => csvEscape(row[column])).join(",")),
   ];
   await fs.writeFile(filePath, `\uFEFF${lines.join("\n")}`, "utf8");
+}
+
+function parseCsvLine(line) {
+  const values = [];
+  let current = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (inQuotes && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === "," && !inQuotes) {
+      values.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  values.push(current);
+  return values;
+}
+
+function parseCsvRows(text) {
+  const lines = String(text || "")
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim());
+  if (!lines.length) return [];
+  const headers = parseCsvLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const values = parseCsvLine(line);
+    return Object.fromEntries(headers.map((header, index) => [header, values[index] || ""]));
+  });
+}
+
+let historicalNaverBookingBusinessMap = null;
+
+async function loadHistoricalNaverBookingBusinessMap() {
+  if (historicalNaverBookingBusinessMap) return historicalNaverBookingBusinessMap;
+  const map = new Map();
+  if (!NAVER_BOOKING_ID_FALLBACK) {
+    historicalNaverBookingBusinessMap = map;
+    return map;
+  }
+
+  const root = path.resolve(OUTPUT_ROOT);
+  let directories = [];
+  try {
+    directories = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    historicalNaverBookingBusinessMap = map;
+    return map;
+  }
+
+  for (const directory of directories) {
+    if (!directory.isDirectory()) continue;
+    const dirPath = path.join(root, directory.name);
+    let files = [];
+    try {
+      files = await fs.readdir(dirPath);
+    } catch {
+      continue;
+    }
+    const overallFile = files.find((file) => file.endsWith("_네이버전체순위.csv"));
+    if (!overallFile) continue;
+    let rows = [];
+    try {
+      rows = parseCsvRows(await fs.readFile(path.join(dirPath, overallFile), "utf8"));
+    } catch {
+      continue;
+    }
+    for (const row of rows) {
+      const placeId = String(row.place_id || "").trim();
+      const bookingBusinessId = String(row.네이버예약사업자ID || "").trim();
+      if (!placeId || !bookingBusinessId) continue;
+      map.set(placeId, {
+        bookingBusinessId,
+        bookingUrl: row.네이버예약URL || `https://m.booking.naver.com/booking/3/bizes/${bookingBusinessId}/search`,
+        source: "historical",
+        sourceRun: directory.name,
+      });
+    }
+  }
+
+  historicalNaverBookingBusinessMap = map;
+  return map;
+}
+
+async function getHistoricalNaverBookingBusiness(placeId) {
+  const map = await loadHistoricalNaverBookingBusinessMap();
+  return map.get(String(placeId || "")) || null;
 }
 
 function jsonEnd(s, start) {
@@ -793,28 +889,43 @@ function delay(ms) {
 async function getNaverBookingBusiness(placeId) {
   if (!placeId) return null;
   const endpoint = "https://pcmap-api.place.naver.com/graphql";
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      ...headers,
-      accept: "*/*",
-      "content-type": "application/json",
-      origin: "https://pcmap.place.naver.com",
-      referer: `https://pcmap.place.naver.com/accommodation/${placeId}`,
-    },
-    body: JSON.stringify({
-      operationName: "naverBookingBusiness",
-      query: naverBookingBusinessQuery,
-      variables: { id: String(placeId), isNx: false },
-    }),
-  });
-  const data = await response.json().catch(() => null);
-  const booking = data?.data?.business?.naverBooking || {};
-  return {
-    bookingBusinessId: booking.bookingBusinessId || "",
-    bookingUrl: booking.naverBookingUrl || booking.naverBookingHubUrl || "",
-    status: response.status,
-  };
+  let lastResult = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt) await delay(450);
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        ...headers,
+        accept: "*/*",
+        "content-type": "application/json",
+        origin: "https://pcmap.place.naver.com",
+        referer: `https://pcmap.place.naver.com/accommodation/${placeId}`,
+      },
+      body: JSON.stringify({
+        operationName: "naverBookingBusiness",
+        query: naverBookingBusinessQuery,
+        variables: { id: String(placeId), isNx: false },
+      }),
+    });
+    const text = await response.text();
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+    const isCaptcha = /captcha|WtmCaptcha|ncpt\.naver\.com/i.test(text);
+    const booking = data?.data?.business?.naverBooking || {};
+    lastResult = {
+      bookingBusinessId: booking.bookingBusinessId || "",
+      bookingUrl: booking.naverBookingUrl || booking.naverBookingHubUrl || "",
+      status: response.status,
+      blocked: isCaptcha || response.status === 405 || response.status === 429,
+      errors: data?.errors || null,
+    };
+    if (lastResult.bookingBusinessId || !lastResult.blocked) break;
+  }
+  return lastResult;
 }
 
 async function postNaverBookingGraphql(operationName, query, variables, businessId, date = CHECK_IN) {
@@ -1174,10 +1285,29 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   if (!placeId) return { status: "place_id 없음" };
   if (cache.has(placeId)) return cache.get(placeId);
 
-  const booking = await getNaverBookingBusiness(placeId);
+  let booking = await getNaverBookingBusiness(placeId);
+  let fallbackBooking = null;
   if (!booking?.bookingBusinessId) {
+    fallbackBooking = await getHistoricalNaverBookingBusiness(placeId);
+    if (fallbackBooking?.bookingBusinessId) {
+      booking = {
+        ...booking,
+        ...fallbackBooking,
+        lookupStatus: booking?.blocked
+          ? `네이버예약 ID 조회 차단(${booking.status || "응답오류"})`
+          : `네이버예약 ID 과거값 재사용`,
+      };
+    }
+  }
+
+  if (!booking?.bookingBusinessId) {
+    const status = booking?.blocked
+      ? `네이버예약 ID 조회 차단(${booking.status || "응답오류"})`
+      : booking?.errors
+        ? `네이버예약 ID 조회 오류(${booking.status || "응답오류"})`
+        : "네이버예약 사업자ID 없음";
     const result = {
-      status: "네이버예약 사업자ID 없음",
+      status,
       bookingBusinessId: "",
       bookingUrl: booking?.bookingUrl || "",
     };
@@ -1206,7 +1336,9 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
       ? "객실목록 일부 오류"
       : !nightItems.length && dayUseItems.length && !unknownItems.length
         ? "숙박상품 없음(데이유즈만)"
-        : "성공",
+        : fallbackBooking?.bookingBusinessId
+          ? "성공(과거ID)"
+          : "성공",
     ...summarizeNaverBookingAvailability(items, schedules, booking.bookingBusinessId, booking.bookingUrl, {
       night: nightItems.length,
       dayUse: dayUseItems.length,
@@ -1218,6 +1350,12 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     weekly,
     dayUseWeekly,
   };
+  if (fallbackBooking?.bookingBusinessId) {
+    result.inventoryMemo = [
+      result.inventoryMemo,
+      `네이버예약 ID 실시간 조회 실패로 과거 확인 ID 재사용(${fallbackBooking.sourceRun || "기존 결과"})`,
+    ].filter(Boolean).join(" · ");
+  }
   cache.set(placeId, result);
   return result;
 }
@@ -1246,7 +1384,7 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
         uniquePlaceIds.size <= BOOKING_RANGE_PLACE_LIMIT;
       const result = await collectNaverBookingAvailability(row.place_id, cache, { collectRange });
       if (!alreadyKnown) collected += 1;
-      if (!alreadyKnown && result.status === "성공") successful += 1;
+      if (!alreadyKnown && String(result.status || "").startsWith("성공")) successful += 1;
 
       row.네이버예약재고수집상태 = result.status || "확인불가";
       row.네이버예약사업자ID = result.bookingBusinessId || "";
