@@ -9,6 +9,7 @@ const state = {
   mapPromise: null,
   dictionary: null,
   selectedLocationCard: null,
+  trafficKeyState: null,
   crawlStatusTimer: null
 };
 
@@ -46,6 +47,8 @@ const els = {
   clusterMap: document.getElementById("clusterMap"),
   mapLegend: document.getElementById("mapLegend"),
   regionList: document.getElementById("regionList"),
+  demandState: document.getElementById("demandState"),
+  demandDashboard: document.getElementById("demandDashboard"),
   adminStatus: document.getElementById("adminStatus"),
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
@@ -1119,6 +1122,266 @@ function renderReport() {
   `;
 }
 
+function demandTrafficAggregate() {
+  const statsTraffic = state.data?.stats?.traffic || {};
+  if (statsTraffic.totalSearchVolume || statsTraffic.collectableCount) return statsTraffic;
+  return (state.data?.regions || []).reduce((aggregate, region) => {
+    const traffic = region.traffic || {};
+    aggregate.keywordCount += 1;
+    if (!traffic.collectable) return aggregate;
+    aggregate.collectableCount += 1;
+    aggregate.monthlyPc += finiteNumber(traffic.monthlyPc, 0);
+    aggregate.monthlyMobile += finiteNumber(traffic.monthlyMobile, 0);
+    aggregate.totalSearchVolume += finiteNumber(traffic.totalSearchVolume, 0);
+    aggregate.totalClicks += finiteNumber(traffic.totalClicks, 0);
+    aggregate.combinedCtr = aggregate.totalSearchVolume
+      ? Number(((aggregate.totalClicks / aggregate.totalSearchVolume) * 100).toFixed(2))
+      : null;
+    return aggregate;
+  }, {
+    keywordCount: 0,
+    collectableCount: 0,
+    monthlyPc: 0,
+    monthlyMobile: 0,
+    totalSearchVolume: 0,
+    totalClicks: 0,
+    combinedCtr: null
+  });
+}
+
+function demandTrendSource() {
+  const candidates = [
+    state.data?.datalabTrend,
+    state.data?.stats?.datalabTrend,
+    state.data?.trend,
+    state.data?.stats?.trend
+  ].filter(Boolean);
+  const source = candidates.find((entry) => Array.isArray(entry.series) || Array.isArray(entry.data));
+  const rawSeries = source ? (source.series || source.data || []) : [];
+  const series = rawSeries.map((entry, index) => {
+    const label = entry.month || entry.period || entry.date || `${index + 1}월`;
+    const value = Number(entry.ratio ?? entry.value ?? entry.score);
+    return {
+      label: String(label).replace(/^\d{4}-0?/, "").replace(/^\d{4}-/, ""),
+      value: Number.isFinite(value) ? value : null
+    };
+  }).filter((entry) => entry.label);
+  return {
+    configured: Boolean(state.trafficKeyState?.datalabConfigured),
+    hasSeries: series.some((entry) => Number.isFinite(entry.value)),
+    series
+  };
+}
+
+function demandTrendChart() {
+  const trend = demandTrendSource();
+  const fallbackMonths = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
+  const series = trend.series.length ? trend.series.slice(-12) : fallbackMonths.map((label) => ({ label, value: null }));
+  const max = Math.max(100, ...series.map((entry) => finiteNumber(entry.value, 0)));
+  return `
+    <div class="demand-chart ${trend.hasSeries ? "" : "pending"}">
+      <div class="demand-chart-head">
+        <div>
+          <strong>네이버 트렌드 상대지수</strong>
+          <small>${trend.hasSeries ? "최고점=100 기준" : "데이터랩 API 연동 후 12개월 추세 표시"}</small>
+        </div>
+        <span>${trend.configured ? "데이터랩 준비" : "API 키 필요"}</span>
+      </div>
+      <div class="trend-bars" style="--trend-count:${series.length}">
+        ${series.map((entry) => {
+          const value = Number(entry.value);
+          const height = Number.isFinite(value) ? Math.max(10, Math.round((value / max) * 110)) : 26;
+          const title = Number.isFinite(value) ? `${entry.label} 상대지수 ${value}` : `${entry.label} 데이터 대기`;
+          return `
+            <span class="trend-bar ${Number.isFinite(value) ? "" : "missing"}" title="${escapeHtml(title)}">
+              <i style="height:${height}px"></i>
+              <b>${escapeHtml(String(entry.label).replace(/^0/, ""))}</b>
+            </span>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function demandMobileShare(traffic = {}) {
+  const mobile = finiteNumber(traffic.monthlyMobile, 0);
+  const total = finiteNumber(traffic.totalSearchVolume, 0);
+  return total ? mobile / total : NaN;
+}
+
+function demandTrendLabel() {
+  const trend = demandTrendSource();
+  if (!trend.hasSeries) return "연동 대기";
+  const values = trend.series.map((entry) => Number(entry.value)).filter(Number.isFinite);
+  if (values.length < 2) return "확인";
+  const first = values[0];
+  const last = values[values.length - 1];
+  const change = first ? (last - first) / first : 0;
+  if (change >= 0.15) return `상승 ${formatSignedRate(change)}`;
+  if (change <= -0.15) return `하락 ${formatSignedRate(change)}`;
+  return "보합";
+}
+
+function formatSignedRate(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "확인";
+  const sign = number > 0 ? "+" : "";
+  return `${sign}${Math.round(number * 100)}%`;
+}
+
+function demandInterpretation(traffic = {}) {
+  const total = finiteNumber(traffic.totalSearchVolume, 0);
+  const mobileShare = demandMobileShare(traffic);
+  const ctr = Number(traffic.combinedCtr);
+  const pills = [];
+  if (total >= 30000) pills.push("광역 수요 강함");
+  else if (total >= 10000) pills.push("지역 수요 유효");
+  else if (total > 0) pills.push("소형 키워드");
+  else pills.push("검색광고 확인필요");
+
+  if (Number.isFinite(mobileShare) && mobileShare >= 0.75) pills.push("모바일 중심");
+  else if (Number.isFinite(mobileShare)) pills.push("PC 보조수요");
+
+  if (Number.isFinite(ctr) && ctr >= 1) pills.push("클릭 반응 양호");
+  else if (Number.isFinite(ctr)) pills.push("CTR 점검");
+
+  pills.push(demandTrendSource().hasSeries ? demandTrendLabel() : "트렌드 API 대기");
+  return pills;
+}
+
+function demandPriorityLabel(traffic = {}, extraSignal = 0) {
+  const volume = finiteNumber(traffic.totalSearchVolume, 0);
+  const ctr = Number(traffic.combinedCtr);
+  if (volume >= 30000) return "1순위";
+  const score = (volume >= 8000 ? 34 : volume >= 3000 ? 27 : volume >= 1500 ? 21 : volume > 0 ? 14 : 6) +
+    (Number.isFinite(ctr) && ctr >= 1 ? 10 : Number.isFinite(ctr) ? 6 : 3) +
+    extraSignal;
+  if (score >= 38) return "1순위";
+  if (score >= 27) return "2순위";
+  return "보류";
+}
+
+function demandRegionRows() {
+  return (state.data?.regions || [])
+    .map((region) => ({
+      region,
+      traffic: region.traffic || {},
+      primary: regionPrimary(region)
+    }))
+    .sort((a, b) => finiteNumber(b.traffic.totalSearchVolume, 0) - finiteNumber(a.traffic.totalSearchVolume, 0))
+    .slice(0, 8);
+}
+
+function demandCompanySample() {
+  const target = targetEntries(1)[0]?.item || (state.data?.availability?.items || [])[0];
+  if (!target) return "";
+  const region = (state.data?.regions || []).find((entry) => {
+    const regionName = String(entry.region || "");
+    const itemRegion = String(target.region || "");
+    return regionName && itemRegion && (regionName.includes(itemRegion) || itemRegion.includes(regionName));
+  });
+  const traffic = region?.traffic || demandTrafficAggregate();
+  const lodging = salesStats(target, "lodging");
+  const index = (state.data?.availability?.items || []).indexOf(target);
+  return `
+    <article class="demand-company-card">
+      <div>
+        <span>업체 적용 예시</span>
+        <strong>${escapeHtml(target.name || "업체명 확인")}</strong>
+        <small>${escapeHtml(categoryText(target))} · 네이버 ${escapeHtml(target.rank || index + 1)}위</small>
+      </div>
+      <dl>
+        <div><dt>객실판매</dt><dd>${lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}개 · ${fmtRate(lodging.rate)}` : "확인필요"}</dd></div>
+        <div><dt>검색수요</dt><dd>${traffic.totalSearchVolume ? fmtNumber(traffic.totalSearchVolume) : "확인필요"} · ${demandTrendLabel()}</dd></div>
+        <div><dt>영업판단</dt><dd>${demandPriorityLabel(traffic, targetReasons(target).length * 5)}</dd></div>
+      </dl>
+      <button class="secondary-button" type="button" data-open-company="${index}">상세 보기</button>
+    </article>
+  `;
+}
+
+function renderDemand() {
+  if (!els.demandDashboard) return;
+  const data = state.data || {};
+  const run = data.run || {};
+  const traffic = demandTrafficAggregate();
+  const total = finiteNumber(traffic.totalSearchVolume, 0);
+  const mobileShare = demandMobileShare(traffic);
+  const ctr = Number(traffic.combinedCtr);
+  const trend = demandTrendSource();
+  const regions = demandRegionRows();
+  const demandStateText = trend.hasSeries
+    ? "트렌드 반영"
+    : state.trafficKeyState?.datalabConfigured
+      ? "트렌드 대기"
+      : "데이터랩 미설정";
+  if (els.demandState) els.demandState.textContent = demandStateText;
+
+  els.demandDashboard.innerHTML = `
+    <section class="demand-hero-card">
+      <div>
+        <p class="eyebrow">검색수요 분석</p>
+        <h3>${escapeHtml(activeKeyword())}</h3>
+        <p>${escapeHtml(dateRangeLabel(run))} · 최근 12개월 트렌드 슬롯 · 네이버 검색광고 수요</p>
+      </div>
+      <span>${escapeHtml(productModeLabel(run.productMode || "all"))}</span>
+    </section>
+
+    <section class="demand-metric-grid" aria-label="검색수요 핵심 지표">
+      <article><span>월검색량</span><strong>${total ? fmtNumber(total) : "확인필요"}</strong><small>PC+모바일</small></article>
+      <article><span>모바일 비중</span><strong>${Number.isFinite(mobileShare) ? fmtRate(mobileShare) : "확인필요"}</strong><small>검색광고 API</small></article>
+      <article><span>평균 CTR</span><strong>${Number.isFinite(ctr) ? fmtSearchRate(ctr) : "확인필요"}</strong><small>예상 클릭 반응</small></article>
+      <article><span>트렌드 상태</span><strong>${escapeHtml(demandTrendLabel())}</strong><small>데이터랩 상대지수</small></article>
+    </section>
+
+    <section class="demand-layout">
+      ${demandTrendChart()}
+      <article class="demand-insight-card">
+        <div class="demand-card-head">
+          <div>
+            <h3>수요 해석</h3>
+            <p>검색광고 지표와 데이터랩 추세를 분리해 판단</p>
+          </div>
+        </div>
+        <div class="demand-pill-row">
+          ${demandInterpretation(traffic).map((label) => `<span>${escapeHtml(label)}</span>`).join("")}
+        </div>
+        <div class="demand-rule-box">
+          <strong>판단 기준</strong>
+          <p>검색량은 시장 크기, 트렌드는 타이밍, 예약재고와 플랫폼 공백은 영업 가능성을 판단합니다.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="demand-table-card">
+      <div class="demand-card-head">
+        <div>
+          <h3>지역 비교</h3>
+          <p>지역 키워드별 월검색량과 영업 우선순위</p>
+        </div>
+        <span>${fmtNumber(regions.length)} 지역</span>
+      </div>
+      <div class="demand-region-table">
+        <div class="demand-region-head">
+          <span>지역</span><span>월검색량</span><span>트렌드</span><span>클러스터</span><span>판단</span>
+        </div>
+        ${regions.length ? regions.map(({ region, traffic: rowTraffic, primary }) => `
+          <div class="demand-region-row">
+            <strong>${escapeHtml(region.region || region.name || "지역")}</strong>
+            <span>${rowTraffic.totalSearchVolume ? fmtNumber(rowTraffic.totalSearchVolume) : "확인필요"}</span>
+            <span>${escapeHtml(rowTraffic.trendLabel || "연동대기")}</span>
+            <span>${escapeHtml(primary)}</span>
+            <em>${escapeHtml(demandPriorityLabel(rowTraffic))}</em>
+          </div>
+        `).join("") : `<div class="empty">지역별 검색수요 데이터가 없습니다.</div>`}
+      </div>
+    </section>
+
+    ${demandCompanySample()}
+  `;
+}
+
 function renderTargets() {
   const items = targetEntries(15);
 
@@ -1659,11 +1922,14 @@ function renderHeader() {
     dictionary: "입지사전",
     target: "영업 타깃",
     map: "지역 클러스터 지도",
+    demand: "검색수요 분석",
     admin: "관리"
   };
   els.pageTitle.textContent = titleMap[state.activeTab] || "요약 리포트";
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
+  } else if (state.activeTab === "demand") {
+    els.pageSubtitle.textContent = `${title} · 네이버 트렌드 · 검색광고 수요`;
   } else if (state.activeTab === "report") {
     els.pageSubtitle.textContent = `${title} · 상업용 시장 요약 · ${dateRangeLabel(run)}`;
   } else {
@@ -1684,6 +1950,7 @@ function renderAll() {
   renderCompanies();
   renderTargets();
   renderMap();
+  renderDemand();
   renderLocationDictionary();
   renderDownloads();
   syncYeogiManualInterface();
@@ -1701,6 +1968,7 @@ function setActiveTab(tab) {
   closeDrawer();
   if (tab === "report") renderReport();
   if (tab === "map") renderMap();
+  if (tab === "demand") renderDemand();
   if (tab === "dictionary") renderLocationDictionary();
 }
 
@@ -2129,8 +2397,10 @@ async function submitTrafficKeys(event) {
 }
 
 function renderTrafficState(data) {
+  state.trafficKeyState = data || null;
   const ready = data?.datalabConfigured || data?.searchadConfigured;
   els.trafficApiState.textContent = ready ? "연동 준비" : "미설정";
+  renderDemand();
 }
 
 async function loadTrafficState() {
