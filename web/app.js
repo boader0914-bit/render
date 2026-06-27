@@ -1167,9 +1167,12 @@ function demandTrendSource() {
     };
   }).filter((entry) => entry.label);
   return {
-    configured: Boolean(state.trafficKeyState?.datalabConfigured),
+    configured: Boolean(state.trafficKeyState?.datalabConfigured || source?.configured),
     hasSeries: series.some((entry) => Number.isFinite(entry.value)),
-    series
+    series,
+    status: source?.status || null,
+    reason: source?.reason || "",
+    collectable: source?.collectable
   };
 }
 
@@ -1178,14 +1181,21 @@ function demandTrendChart() {
   const fallbackMonths = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
   const series = trend.series.length ? trend.series.slice(-12) : fallbackMonths.map((label) => ({ label, value: null }));
   const max = Math.max(100, ...series.map((entry) => finiteNumber(entry.value, 0)));
+  const errorLabel = Number(trend.status) === 401 ? "인증 실패" : "API 오류";
+  const statusLabel = trend.reason ? errorLabel : (trend.configured ? "데이터랩 준비" : "API 키 필요");
+  const detailLabel = trend.hasSeries
+    ? "최고점=100 기준"
+    : trend.reason
+      ? trend.reason
+      : "데이터랩 API 연동 후 12개월 추세 표시";
   return `
     <div class="demand-chart ${trend.hasSeries ? "" : "pending"}">
       <div class="demand-chart-head">
         <div>
           <strong>네이버 트렌드 상대지수</strong>
-          <small>${trend.hasSeries ? "최고점=100 기준" : "데이터랩 API 연동 후 12개월 추세 표시"}</small>
+          <small>${escapeHtml(detailLabel)}</small>
         </div>
-        <span>${trend.configured ? "데이터랩 준비" : "API 키 필요"}</span>
+        <span>${escapeHtml(statusLabel)}</span>
       </div>
       <div class="trend-bars" style="--trend-count:${series.length}">
         ${series.map((entry) => {
@@ -1212,6 +1222,7 @@ function demandMobileShare(traffic = {}) {
 
 function demandTrendLabel() {
   const trend = demandTrendSource();
+  if (trend.reason) return Number(trend.status) === 401 ? "인증 실패" : "API 오류";
   if (!trend.hasSeries) return "연동 대기";
   const values = trend.series.map((entry) => Number(entry.value)).filter(Number.isFinite);
   if (values.length < 2) return "확인";
@@ -1234,6 +1245,7 @@ function demandInterpretation(traffic = {}) {
   const total = finiteNumber(traffic.totalSearchVolume, 0);
   const mobileShare = demandMobileShare(traffic);
   const ctr = Number(traffic.combinedCtr);
+  const trend = demandTrendSource();
   const pills = [];
   if (total >= 30000) pills.push("광역 수요 강함");
   else if (total >= 10000) pills.push("지역 수요 유효");
@@ -1246,7 +1258,7 @@ function demandInterpretation(traffic = {}) {
   if (Number.isFinite(ctr) && ctr >= 1) pills.push("클릭 반응 양호");
   else if (Number.isFinite(ctr)) pills.push("CTR 점검");
 
-  pills.push(demandTrendSource().hasSeries ? demandTrendLabel() : "트렌드 API 대기");
+  pills.push(trend.hasSeries || trend.reason ? demandTrendLabel() : "트렌드 API 대기");
   return pills;
 }
 
@@ -1313,6 +1325,8 @@ function renderDemand() {
   const regions = demandRegionRows();
   const demandStateText = trend.hasSeries
     ? "트렌드 반영"
+    : trend.reason
+      ? (Number(trend.status) === 401 ? "인증 실패" : "API 오류")
     : state.trafficKeyState?.datalabConfigured
       ? "트렌드 대기"
       : "데이터랩 미설정";
