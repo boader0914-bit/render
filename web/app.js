@@ -142,6 +142,13 @@ function summaryIcon(type) {
         <path d="M7 14l3-3 3 2 5-6" />
         <path d="M16 7h2v2" />
       </svg>
+    `,
+    trust: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z" />
+        <path d="M12 8v5" />
+        <path d="M12 17h.01" />
+      </svg>
     `
   };
   return icons[type] || icons.sales;
@@ -795,6 +802,23 @@ function categoryText(item = {}) {
   return [item.region || item.address, item.category || item.type].filter(Boolean).join(" · ") || "지역 확인";
 }
 
+function inventoryConfidenceInfo(item = {}) {
+  const confidence = item.inventoryConfidence || {};
+  const grade = item.inventoryConfidenceGrade || confidence.grade || "C";
+  const label = item.inventoryConfidenceLabel || confidence.label || `${grade} 참고`;
+  const summary = item.inventoryConfidenceSummary || confidence.summary || label;
+  const reasons = item.inventoryConfidenceReasons || confidence.reasons || [];
+  const alerts = item.inventoryAlerts || confidence.alerts || [];
+  const tone = ["A", "B"].includes(grade) ? "good" : grade === "C" ? "watch" : "bad";
+  return { grade, label, summary, reasons, alerts, tone };
+}
+
+function inventoryConfidenceBadge(item = {}) {
+  const info = inventoryConfidenceInfo(item);
+  const alertText = info.alerts.length ? ` · ${info.alerts[0]}` : "";
+  return `<span class="confidence-badge ${info.tone}" title="${escapeHtml(info.summary)}">신뢰도 ${escapeHtml(info.grade)}${escapeHtml(alertText)}</span>`;
+}
+
 function bookingGraphRows(item) {
   const run = state.data?.run || {};
   const rows = weeklyRows(item);
@@ -889,6 +913,8 @@ function renderSummary() {
   const sales = summarizeSales(items);
   const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(state.data?.availability?.stats?.weightedSoldOutRate, NaN);
   const checked = state.data?.availability?.stats?.checkedPlaces || items.length;
+  const lowConfidence = finiteNumber(state.data?.availability?.stats?.lowConfidenceCount, 0);
+  const stockVariance = finiteNumber(state.data?.availability?.stats?.stockVarianceCount, 0);
   els.summaryGrid.innerHTML = `
     <article class="summary-card">
       <span class="summary-icon blue">${summaryIcon("sales")}</span>
@@ -901,6 +927,10 @@ function renderSummary() {
     <article class="summary-card">
       <span class="summary-icon green">${summaryIcon("rate")}</span>
       <div><strong>${fmtRate(rate)}</strong><small>평균 판매율</small></div>
+    </article>
+    <article class="summary-card">
+      <span class="summary-icon amber">${summaryIcon("trust")}</span>
+      <div><strong>${fmtNumber(lowConfidence)}</strong><small>검증 필요 · 변동 ${fmtNumber(stockVariance)}</small></div>
     </article>
   `;
 }
@@ -936,6 +966,7 @@ function renderCompanies() {
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>
+            <div class="company-badges">${inventoryConfidenceBadge(item)}</div>
           </div>
         </div>
         <div class="company-metric">
@@ -948,6 +979,7 @@ function renderCompanies() {
             <span class="sales-line">${escapeHtml(salesLine(item, "lodging"))}</span>
             <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
           </div>
+          ${flowChipRow(item)}
           ${miniBars(item)}
         </div>
         <div class="company-action">
@@ -962,25 +994,187 @@ function renderCompanies() {
   }).join("");
 }
 
-function targetReasons(item) {
+function dateForRangeLabel(label, run = {}) {
+  const match = String(label || "").match(/(\d{1,2})\/(\d{1,2})/);
+  if (!match) return null;
+  const base = parseDate(run.checkIn) || new Date();
+  const month = Number(match[1]) - 1;
+  const day = Number(match[2]);
+  const year = month < base.getMonth() && base.getMonth() >= 10 ? base.getFullYear() + 1 : base.getFullYear();
+  const date = new Date(year, month, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function summarizeFlowRows(rows = []) {
+  const valid = rows.filter((row) => !row.missing && Number.isFinite(row.rate) && finiteNumber(row.total, 0) > 0);
+  const total = valid.reduce((sum, row) => sum + finiteNumber(row.total, 0), 0);
+  const sold = valid.reduce((sum, row) => sum + finiteNumber(row.sold, 0), 0);
+  return {
+    count: valid.length,
+    sold,
+    total,
+    rate: total ? sold / total : NaN
+  };
+}
+
+function historyCompanyBenchmark(item = {}) {
+  const key = companyKey(item.name);
+  return key ? state.data?.history?.benchmarks?.companyBenchmarks?.[key] || null : null;
+}
+
+function salesFlowProfile(item = {}) {
+  const run = state.data?.run || {};
+  const rows = bookingGraphRows(item).map((row) => {
+    const date = dateForRangeLabel(row.label, run);
+    return { ...row, date, day: date ? date.getDay() : null };
+  });
+  const collected = rows.filter((row) => !row.missing && Number.isFinite(row.rate));
+  const weekdayRows = collected.filter((row) => row.day >= 1 && row.day <= 4);
+  const fridayRows = collected.filter((row) => row.day === 5);
+  const saturdayRows = collected.filter((row) => row.day === 6);
+  const sundayRows = collected.filter((row) => row.day === 0);
+  const weekday = summarizeFlowRows(weekdayRows);
+  const weekdayLabel = weekday.count >= 4
+    ? "평일 평균"
+    : weekday.count >= 2
+      ? "관측평일"
+      : weekday.count === 1
+        ? "평일 참고"
+        : "평일 없음";
+  const history = historyCompanyBenchmark(item);
+  return {
+    rows,
+    all: summarizeFlowRows(collected),
+    weekday: { ...weekday, label: weekdayLabel },
+    friday: summarizeFlowRows(fridayRows),
+    saturday: summarizeFlowRows(saturdayRows),
+    sunday: summarizeFlowRows(sundayRows),
+    history
+  };
+}
+
+function flowMetricText(label, metric = {}) {
+  return `${label} ${Number.isFinite(metric.rate) ? fmtRate(metric.rate) : "확인필요"}`;
+}
+
+function flowChipRow(item = {}) {
+  const flow = salesFlowProfile(item);
+  const historyWeekday = flow.history?.weekday;
+  const historyText = historyWeekday?.observations
+    ? `누적평일 ${fmtRate(historyWeekday.saleRate)}`
+    : "";
+  return `
+    <div class="flow-chip-row" aria-label="7일 판매 흐름 요약">
+      <span>${escapeHtml(flowMetricText("전체", flow.all))}</span>
+      <span>${escapeHtml(`${flow.weekday.label} ${Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요"}${flow.weekday.count ? ` · ${flow.weekday.count}일` : ""}`)}</span>
+      <span>${escapeHtml(flowMetricText("금", flow.friday))}</span>
+      <span class="${Number.isFinite(flow.saturday.rate) && flow.saturday.rate >= 0.75 ? "hot" : ""}">${escapeHtml(flowMetricText("토", flow.saturday))}</span>
+      <span>${escapeHtml(flowMetricText("일", flow.sunday))}</span>
+      ${historyText ? `<span class="history">${escapeHtml(historyText)}</span>` : ""}
+    </div>
+  `;
+}
+
+function targetExpansionAnalysis(item = {}) {
   const platforms = platformsForItem(item).map((row) => platformShortName(row.platform));
   const lodging = salesStats(item, "lodging");
   const day = salesStats(item, "day");
+  const confidence = inventoryConfidenceInfo(item);
+  const flow = salesFlowProfile(item);
+  const profile = {
+    friday: flow.friday,
+    saturday: flow.saturday,
+    sunday: flow.sunday,
+    weekday: flow.weekday,
+    all: flow.all
+  };
+  const rank = Number(item.rank || 999);
   const reasons = [];
-  if (!platforms.includes("여기어때")) reasons.push("여기어때 확인");
-  if (!platforms.includes("야놀자")) reasons.push("야놀자 미노출");
-  if (!platforms.includes("떠나요")) reasons.push("떠나요 확인");
-  if (Number.isFinite(lodging.rate) && lodging.rate < 0.25) reasons.push("판매율 낮음");
-  if (!day.supply) reasons.push("당일상품 없음");
-  if (item.ad && String(item.ad).includes("광고")) reasons.push("광고비 효율 점검");
-  return reasons.slice(0, 5);
+  let score = 0;
+
+  if (rank >= 5 && rank <= 20) {
+    score += 22;
+    reasons.push("네이버 5~20위권");
+  } else if (rank >= 1 && rank <= 4) {
+    score += 6;
+    reasons.push("상위권 강자");
+  } else if (rank <= 30) {
+    score += 10;
+    reasons.push("노출 개선 여지");
+  }
+
+  const allRate = profile.all?.rate;
+  const weekdayRate = profile.weekday?.rate;
+  const satRate = profile.saturday?.rate;
+  const friRate = profile.friday?.rate;
+  const sunRate = profile.sunday?.rate;
+  if (Number.isFinite(allRate) && flow.all.count >= 5) {
+    score += allRate < 0.45 ? 10 : 4;
+    reasons.push(`7일 전체 ${fmtRate(allRate)}`);
+  }
+  if (Number.isFinite(weekdayRate) && flow.weekday.count >= 2 && weekdayRate <= 0.35) {
+    score += 14;
+    reasons.push(`${flow.weekday.label} 약함 ${fmtRate(weekdayRate)}`);
+  }
+  if (Number.isFinite(satRate) && satRate >= 0.75) {
+    score += 28;
+    reasons.push(`토요일 수요 확인 ${fmtRate(satRate)}`);
+  } else if (Number.isFinite(satRate) && satRate >= 0.55) {
+    score += 18;
+    reasons.push(`토요일 판매 보통 ${fmtRate(satRate)}`);
+  }
+
+  const fridayGap = Number.isFinite(satRate) && Number.isFinite(friRate) ? satRate - friRate : NaN;
+  const sundayGap = Number.isFinite(satRate) && Number.isFinite(sunRate) ? satRate - sunRate : NaN;
+  if (Number.isFinite(fridayGap) && fridayGap >= 0.35) {
+    score += 18;
+    reasons.push(`금요일 미활용 ${fmtRate(friRate)}`);
+  }
+  if (Number.isFinite(sundayGap) && sundayGap >= 0.35) {
+    score += 18;
+    reasons.push(`일요일 미활용 ${fmtRate(sunRate)}`);
+  }
+
+  if (!Number.isFinite(friRate) && !Number.isFinite(sunRate) && Number.isFinite(lodging.rate) && lodging.rate < 0.35) {
+    score += 8;
+    reasons.push("전후일 데이터 추가 확인");
+  }
+  if (!day.supply) {
+    score += 7;
+    reasons.push("당일상품 확장 여지");
+  }
+  if (!platforms.includes("여기어때")) {
+    score += 5;
+    reasons.push("여기어때 확인");
+  }
+  if (!platforms.includes("야놀자")) {
+    score += 4;
+    reasons.push("야놀자 확인");
+  }
+  if (["D", "E"].includes(confidence.grade)) {
+    score -= 12;
+    reasons.push("수집값 검증 필요");
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return {
+    score,
+    label: score >= 75 ? "1순위 확장 후보" : score >= 55 ? "검토 후보" : "관찰 후보",
+    reasons: reasons.slice(0, 6),
+    profile,
+    flow
+  };
+}
+
+function targetReasons(item) {
+  return targetExpansionAnalysis(item).reasons;
 }
 
 function targetEntries(limit = 15) {
   const entries = (state.data?.availability?.items || [])
-    .map((item) => ({ item, reasons: targetReasons(item) }))
-    .filter((entry) => entry.reasons.length)
-    .sort((a, b) => b.reasons.length - a.reasons.length || Number(a.item.rank || 999) - Number(b.item.rank || 999));
+    .map((item) => ({ item, ...targetExpansionAnalysis(item) }))
+    .filter((entry) => entry.score >= 42 && entry.reasons.length)
+    .sort((a, b) => b.score - a.score || Number(a.item.rank || 999) - Number(b.item.rank || 999));
   return limit ? entries.slice(0, limit) : entries;
 }
 
@@ -1740,13 +1934,14 @@ function renderTargets() {
     return;
   }
 
-  els.targetList.innerHTML = items.map(({ item, reasons }, index) => `
+  els.targetList.innerHTML = items.map(({ item, reasons, score, label }, index) => `
     <article class="target-card">
       <div class="target-head">
         <strong>${index + 1}. ${escapeHtml(item.name)}</strong>
-        <span>컨택 후보</span>
+        <span>${escapeHtml(label)} · ${fmtNumber(score)}</span>
       </div>
       <p class="hint">${escapeHtml(categoryText(item))} · ${escapeHtml(salesLine(item, "lodging"))}</p>
+      ${flowChipRow(item)}
       <div class="target-reasons">
         ${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
       </div>
@@ -2876,6 +3071,10 @@ function renderSheetBooking(item) {
   const collectedRows = lodgingRows.filter((row) => !row.missing).length;
   const missingRows = lodgingRows.length - collectedRows;
   const dayRows = sheetRowsForDayUse(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const confidenceReasons = [...confidence.alerts, ...confidence.reasons].filter(Boolean).slice(0, 4);
+  const flow = salesFlowProfile(item);
+  const historyWeekday = flow.history?.weekday;
   return `
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>
@@ -2900,6 +3099,20 @@ function renderSheetBooking(item) {
           <small>현재는 기준일 확인 재고입니다. 숙박 예약률 계산에는 포함하지 않습니다.</small>
         </div>
         <strong>보조 지표</strong>
+      </div>
+      <div class="search-row confidence-row ${confidence.tone}">
+        <div>
+          <strong>수집 신뢰도 ${escapeHtml(confidence.grade)}</strong>
+          <small>${escapeHtml(confidenceReasons.length ? confidenceReasons.join(" · ") : confidence.summary)}</small>
+        </div>
+        <strong>${escapeHtml(confidence.label)}</strong>
+      </div>
+      <div class="search-row">
+        <div>
+          <strong>7일 흐름 / 평일 기준</strong>
+          <small>${escapeHtml(`전체 ${fmtRate(flow.all.rate)} · ${flow.weekday.label} ${Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요"}(${flow.weekday.count}일) · 금 ${fmtRate(flow.friday.rate)} · 토 ${fmtRate(flow.saturday.rate)} · 일 ${fmtRate(flow.sunday.rate)}`)}</small>
+        </div>
+        <strong>${historyWeekday?.observations ? `누적 ${fmtRate(historyWeekday.saleRate)}` : "누적 대기"}</strong>
       </div>
       ${missingRows ? `
         <div class="search-row">

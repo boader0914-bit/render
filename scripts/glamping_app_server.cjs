@@ -32,6 +32,8 @@ const CONFIG_DIR = path.resolve(
 );
 // Stable API key storage policy: releases may replace code, but must keep this file path.
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
+const HISTORY_DIR = path.join(DATA_DIR, "history");
+const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
@@ -1377,6 +1379,9 @@ async function importYeogiSupplement(payload) {
   manifest.counts = { ...(manifest.counts || {}), yeogiManual: importedRows.length };
   manifest.yeogiImport = { importedAt, count: importedRows.length, method: "browser_or_manual" };
   await fsp.writeFile(path.join(dirPath, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+  await appendHistoryForRun(runId).catch((error) => {
+    console.warn(`Could not append history for ${runId}: ${error.message || error}`);
+  });
 
   return { importedCount: importedRows.length, data: await loadRun(runId) };
 }
@@ -1484,6 +1489,87 @@ function normalizeInventoryMemo(memo, listType = "") {
     "객실번호 범위형 묶음 상품은 상품 단위로 계산",
     "객실번호 범위형 묶음 상품은 내부 stock 수량 합산"
   );
+}
+
+function inventoryConfidenceLabel(grade) {
+  return {
+    A: "A 신뢰",
+    B: "B 양호",
+    C: "C 참고",
+    D: "D 검증",
+    E: "E 수동확인"
+  }[grade] || "C 참고";
+}
+
+function evaluateInventoryConfidence(context = {}) {
+  const reasons = [];
+  const alerts = [];
+  let score = 45;
+
+  if (context.totalRooms > 0 && context.availableRooms >= 0) {
+    score += 16;
+    reasons.push("기준일 전체/잔여 수량 확인");
+  } else {
+    score -= 24;
+    alerts.push("기준 수량 확인 불가");
+  }
+
+  if (context.weeklyDays >= 6 && context.weeklyDetail) {
+    score += 22;
+    reasons.push("기간 대부분 날짜별 재고 확인");
+  } else if (context.weeklyDays >= 2 && context.weeklyDetail) {
+    score += 12;
+    reasons.push("일부 날짜별 재고 확인");
+  } else {
+    score -= 12;
+    alerts.push("날짜별 상세 부족");
+  }
+
+  if (context.countedItemCount > 0) {
+    score += 6;
+    reasons.push("예약 상품 단위 확인");
+  }
+
+  const listType = String(context.listType || "");
+  if (listType.includes("객실별")) {
+    score += 7;
+    reasons.push("객실별 리스트형");
+  } else if (listType.includes("묶음") || listType.includes("종류")) {
+    score -= 4;
+    reasons.push("종류/묶음형 수량 해석 필요");
+  } else if (!listType) {
+    score -= 5;
+    alerts.push("예약 리스트 유형 미확인");
+  }
+
+  if (context.weeklyRawStockVariance) {
+    score -= 9;
+    alerts.push("날짜별 전체수량 변동");
+  }
+
+  if (context.rawTotalStock && context.totalRooms && context.rawTotalStock !== context.totalRooms) {
+    score -= 5;
+    alerts.push("원시 재고와 계산 재고 차이");
+  }
+
+  if (context.dayUseTotalStock > 0) {
+    reasons.push("당일상품 별도 확인");
+  }
+
+  if (alerts.length) score = Math.min(score, 86);
+  const grade = score >= 88 ? "A" : score >= 74 ? "B" : score >= 58 ? "C" : score >= 42 ? "D" : "E";
+  const summary = alerts.length
+    ? `${inventoryConfidenceLabel(grade)} · ${alerts[0]}`
+    : `${inventoryConfidenceLabel(grade)} · ${reasons[0] || "수량 기준 확인"}`;
+
+  return {
+    grade,
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    label: inventoryConfidenceLabel(grade),
+    summary,
+    reasons: reasons.slice(0, 4),
+    alerts: alerts.slice(0, 4)
+  };
 }
 
 function metricNumber(value) {
@@ -2124,6 +2210,361 @@ function parseWeeklyReservationRates(detail) {
   return { average, detail: rateDetail, totalSoldOut, totalStock };
 }
 
+function stableHash(value) {
+  return crypto.createHash("sha1").update(String(value || "")).digest("hex").slice(0, 16);
+}
+
+function runDateFromId(runId) {
+  const match = String(runId || "").match(/(\d{4})(\d{2})(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : "";
+}
+
+function normalizeObservationNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function dateFromMonthDay(label, checkIn) {
+  const match = String(label || "").match(/(\d{1,2})\/(\d{1,2})/);
+  if (!match) return "";
+  const base = String(checkIn || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const year = base ? Number(base[1]) : new Date().getFullYear();
+  const baseMonth = base ? Number(base[2]) : Number(match[1]);
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const resolvedYear = month < baseMonth && baseMonth >= 11 ? year + 1 : year;
+  return `${resolvedYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function parseAvailabilityDetail(detail, checkIn) {
+  const rows = [];
+  const matches = String(detail || "").matchAll(/(\d{1,2}\/\d{1,2})\s+(\d+)\/(\d+)/g);
+  for (const match of matches) {
+    const available = Number(match[2]);
+    const total = Number(match[3]);
+    if (!Number.isFinite(available) || !Number.isFinite(total) || total <= 0) continue;
+    rows.push({
+      stayDate: dateFromMonthDay(match[1], checkIn),
+      label: match[1],
+      available,
+      total
+    });
+  }
+  return rows.filter((row) => row.stayDate);
+}
+
+function parseReservationRateDetail(detail, checkIn) {
+  const rows = [];
+  const matches = String(detail || "").matchAll(/(\d{1,2}\/\d{1,2})\s+\d+%\((\d+)\/(\d+)\)/g);
+  for (const match of matches) {
+    const sold = Number(match[2]);
+    const total = Number(match[3]);
+    if (!Number.isFinite(sold) || !Number.isFinite(total) || total <= 0) continue;
+    rows.push({
+      stayDate: dateFromMonthDay(match[1], checkIn),
+      label: match[1],
+      available: Math.max(0, total - sold),
+      total
+    });
+  }
+  return rows.filter((row) => row.stayDate);
+}
+
+function singleAvailabilityRow(stayDate, available, total) {
+  const resolvedAvailable = normalizeObservationNumber(available);
+  const resolvedTotal = normalizeObservationNumber(total);
+  if (resolvedAvailable === null || resolvedTotal === null || resolvedTotal <= 0) return [];
+  return [{
+    stayDate,
+    label: stayDate,
+    available: Math.max(0, resolvedAvailable),
+    total: resolvedTotal
+  }];
+}
+
+function historySeriesForItem(item, productType, checkIn) {
+  if (productType === "dayuse") {
+    return parseAvailabilityDetail(item.dayUseWeeklyDetail, checkIn)
+      .concat(parseReservationRateDetail(item.dayUseWeeklyReservationRateDetail, checkIn))
+      .reduce((rows, row) => rows.some((itemRow) => itemRow.stayDate === row.stayDate) ? rows : [...rows, row], [])
+      .concat(
+        !item.dayUseWeeklyDetail && !item.dayUseWeeklyReservationRateDetail
+          ? singleAvailabilityRow(checkIn, item.dayUseAvailableStock, item.dayUseTotalStock)
+          : []
+      );
+  }
+
+  return parseAvailabilityDetail(item.weeklyDetail, checkIn)
+    .concat(parseReservationRateDetail(item.weeklyReservationRateDetail, checkIn))
+    .reduce((rows, row) => rows.some((itemRow) => itemRow.stayDate === row.stayDate) ? rows : [...rows, row], [])
+    .concat(
+      !item.weeklyDetail && !item.weeklyReservationRateDetail
+        ? singleAvailabilityRow(checkIn, item.nightAvailableStock ?? item.availableRooms, item.nightTotalStock ?? item.totalRooms)
+        : []
+    );
+}
+
+function buildHistoryObservations(data, collectedAt) {
+  const run = data?.run || {};
+  const checkIn = run.checkIn || runDateFromId(run.id) || kstDate(0);
+  const collectedDate = String(collectedAt || "").slice(0, 10) || runDateFromId(run.id) || kstDate(0);
+  const keyword = run.keyword || run.label || "";
+  const keywordKey = compactKeyword(keyword).toLowerCase();
+  const items = data?.availability?.items || [];
+  const observations = [];
+
+  for (const item of items) {
+    const companyKey = compactKeyword(item.name || "").toLowerCase();
+    if (!companyKey) continue;
+
+    for (const productType of ["lodging", "dayuse"]) {
+      const series = historySeriesForItem(item, productType, checkIn);
+      for (const row of series) {
+        const total = normalizeObservationNumber(row.total);
+        const available = normalizeObservationNumber(row.available);
+        if (total === null || available === null || total <= 0) continue;
+        const sold = Math.max(0, total - Math.max(0, available));
+        const leadTimeDays = dateDiffDays(collectedDate, row.stayDate);
+        const observationId = stableHash([
+          run.id,
+          keywordKey,
+          companyKey,
+          productType,
+          row.stayDate
+        ].join("|"));
+
+        observations.push({
+          schemaVersion: 1,
+          observationId,
+          runId: run.id,
+          runLabel: run.label || "",
+          keyword,
+          keywordKey,
+          searchMode: run.searchMode || "",
+          productMode: run.productMode || "",
+          collectedAt,
+          collectedDate,
+          stayDate: row.stayDate,
+          leadTimeDays,
+          companyName: item.name || "",
+          companyKey,
+          region: item.region || "",
+          rank: item.rank ?? null,
+          productType,
+          supply: total,
+          available: Math.max(0, available),
+          sold,
+          saleRate: total ? Number((sold / total).toFixed(4)) : null,
+          price: item.price || "",
+          listType: item.listType || "",
+          inventoryScope: item.inventoryScope || "",
+          inventoryMemo: item.inventoryMemo || "",
+          inventoryConfidenceGrade: item.inventoryConfidenceGrade || "",
+          inventoryConfidenceScore: item.inventoryConfidenceScore ?? null,
+          inventoryAlerts: item.inventoryAlerts || [],
+          sourceUrl: item.url || "",
+          rawLabel: row.label || ""
+        });
+      }
+    }
+  }
+
+  return observations;
+}
+
+async function readHistoryObservations() {
+  try {
+    const text = await fsp.readFile(HISTORY_OBSERVATIONS_FILE, "utf8");
+    const deduped = new Map();
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row?.observationId) deduped.set(row.observationId, row);
+      } catch {
+        // Keep reading even if one historical line was partially written.
+      }
+    }
+    return [...deduped.values()];
+  } catch {
+    return [];
+  }
+}
+
+async function appendHistoryForRun(runId) {
+  const dirPath = resolveRunDir(runId);
+  if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
+  const stat = await fsp.stat(dirPath);
+  const collectedAt = stat.mtime.toISOString();
+  const data = await loadRun(runId, { skipHistory: true });
+  const observations = buildHistoryObservations(data, collectedAt);
+  if (!observations.length) return { appended: 0, reason: "no_observations" };
+  await fsp.mkdir(HISTORY_DIR, { recursive: true });
+  await fsp.appendFile(
+    HISTORY_OBSERVATIONS_FILE,
+    `${observations.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8"
+  );
+  return { appended: observations.length, file: "history/observations.jsonl" };
+}
+
+function historyDayIndex(dateText) {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : date.getUTCDay();
+}
+
+function createHistoryBucket(label = "") {
+  return {
+    label,
+    observations: 0,
+    sold: 0,
+    supply: 0,
+    available: 0,
+    runIds: new Set(),
+    companyKeys: new Set()
+  };
+}
+
+function addHistoryObservation(bucket, row) {
+  const supply = Number(row.supply || 0);
+  if (!Number.isFinite(supply) || supply <= 0) return;
+  bucket.observations += 1;
+  bucket.sold += Number(row.sold || 0);
+  bucket.supply += supply;
+  bucket.available += Number(row.available || 0);
+  if (row.runId) bucket.runIds.add(row.runId);
+  if (row.companyKey) bucket.companyKeys.add(row.companyKey);
+}
+
+function finalizeHistoryBucket(bucket) {
+  return {
+    label: bucket.label,
+    observations: bucket.observations,
+    sold: bucket.sold,
+    supply: bucket.supply,
+    available: bucket.available,
+    saleRate: bucket.supply ? Number((bucket.sold / bucket.supply).toFixed(4)) : null,
+    runCount: bucket.runIds.size,
+    companyCount: bucket.companyKeys.size
+  };
+}
+
+function summarizeHistoryBenchmarks(observations) {
+  const dayLabels = ["일", "월", "화", "수", "목", "금", "토"];
+  const lodgingRows = observations.filter((row) => row.productType === "lodging");
+  const weekdayBucket = createHistoryBucket("누적 평일");
+  const allBucket = createHistoryBucket("누적 전체");
+  const dayBuckets = new Map();
+  const companyBuckets = new Map();
+
+  for (const row of lodgingRows) {
+    const dayIndex = historyDayIndex(row.stayDate);
+    if (dayIndex === null) continue;
+    addHistoryObservation(allBucket, row);
+
+    if (!dayBuckets.has(dayIndex)) dayBuckets.set(dayIndex, createHistoryBucket(dayLabels[dayIndex]));
+    addHistoryObservation(dayBuckets.get(dayIndex), row);
+
+    if (dayIndex >= 1 && dayIndex <= 4) {
+      addHistoryObservation(weekdayBucket, row);
+      const key = row.companyKey || "";
+      if (key) {
+        if (!companyBuckets.has(key)) {
+          companyBuckets.set(key, {
+            companyName: row.companyName || "",
+            weekday: createHistoryBucket("누적 평일"),
+            all: createHistoryBucket("누적 전체")
+          });
+        }
+        addHistoryObservation(companyBuckets.get(key).weekday, row);
+      }
+    }
+
+    const key = row.companyKey || "";
+    if (key) {
+      if (!companyBuckets.has(key)) {
+        companyBuckets.set(key, {
+          companyName: row.companyName || "",
+          weekday: createHistoryBucket("누적 평일"),
+          all: createHistoryBucket("누적 전체")
+        });
+      }
+      addHistoryObservation(companyBuckets.get(key).all, row);
+    }
+  }
+
+  const companyBenchmarks = {};
+  for (const [key, buckets] of companyBuckets.entries()) {
+    companyBenchmarks[key] = {
+      companyName: buckets.companyName,
+      weekday: finalizeHistoryBucket(buckets.weekday),
+      all: finalizeHistoryBucket(buckets.all)
+    };
+  }
+
+  return {
+    all: finalizeHistoryBucket(allBucket),
+    weekday: finalizeHistoryBucket(weekdayBucket),
+    byDay: [...dayBuckets.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([dayIndex, bucket]) => ({
+        dayIndex,
+        ...finalizeHistoryBucket(bucket)
+      })),
+    companyBenchmarks
+  };
+}
+
+async function summarizeHistoryForRun(data) {
+  const run = data?.run || {};
+  const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
+  if (!keywordKey) return { enabled: true, observationCount: 0, runCount: 0, currentRunObservationCount: 0 };
+  const observations = (await readHistoryObservations()).filter((row) => row.keywordKey === keywordKey);
+  const currentRunObservationCount = observations.filter((row) => row.runId === run.id).length;
+  const runIds = new Set(observations.map((row) => row.runId).filter(Boolean));
+  const companyKeys = new Set(observations.map((row) => row.companyKey).filter(Boolean));
+  const leadBuckets = new Map();
+
+  for (const row of observations) {
+    if (!Number.isFinite(row.leadTimeDays) || !Number.isFinite(row.supply) || row.supply <= 0) continue;
+    const bucket = leadBuckets.get(row.leadTimeDays) || {
+      leadTimeDays: row.leadTimeDays,
+      observations: 0,
+      sold: 0,
+      supply: 0,
+      available: 0
+    };
+    bucket.observations += 1;
+    bucket.sold += Number(row.sold || 0);
+    bucket.supply += Number(row.supply || 0);
+    bucket.available += Number(row.available || 0);
+    leadBuckets.set(row.leadTimeDays, bucket);
+  }
+
+  const leadTime = [...leadBuckets.values()]
+    .sort((a, b) => b.leadTimeDays - a.leadTimeDays)
+    .map((bucket) => ({
+      ...bucket,
+      saleRate: bucket.supply ? Number((bucket.sold / bucket.supply).toFixed(4)) : null
+    }));
+  const benchmarks = summarizeHistoryBenchmarks(observations);
+
+  return {
+    enabled: true,
+    storage: "jsonl",
+    file: "history/observations.jsonl",
+    keyword: run.keyword || "",
+    observationCount: observations.length,
+    currentRunObservationCount,
+    runCount: runIds.size,
+    companyCount: companyKeys.size,
+    latestCollectedAt: observations.map((row) => row.collectedAt).filter(Boolean).sort().at(-1) || "",
+    canAnalyzeLeadTime: runIds.size >= 2,
+    leadTime,
+    benchmarks
+  };
+}
+
 function availabilityPlaceKey(row) {
   const explicit = row.place_id || row["place_id"];
   if (explicit) return `place:${explicit}`;
@@ -2227,7 +2668,32 @@ function summarizeAvailabilityRows(rows) {
     });
   }
 
-  const items = [...byPlace.values()].sort((a, b) => a.rank - b.rank);
+  const items = [...byPlace.values()]
+    .map((item) => {
+      const confidence = evaluateInventoryConfidence({
+        availableRooms: item.availableRooms,
+        totalRooms: item.totalRooms,
+        countedItemCount: item.countedItemCount,
+        weeklyDays: item.weeklyDays,
+        weeklyDetail: item.weeklyDetail,
+        weeklyRawStockVariance: item.weeklyRawStockVariance,
+        listType: item.listType,
+        rawTotalStock: item.rawTotalStock,
+        dayUseTotalStock: item.dayUseTotalStock,
+        inventoryMemo: item.inventoryMemo
+      });
+      return {
+        ...item,
+        inventoryConfidence: confidence,
+        inventoryConfidenceGrade: confidence.grade,
+        inventoryConfidenceLabel: confidence.label,
+        inventoryConfidenceScore: confidence.score,
+        inventoryConfidenceSummary: confidence.summary,
+        inventoryConfidenceReasons: confidence.reasons,
+        inventoryAlerts: confidence.alerts
+      };
+    })
+    .sort((a, b) => a.rank - b.rank);
   const totalAvailableRooms = items.reduce((sum, item) => sum + item.availableRooms, 0);
   const totalRooms = items.reduce((sum, item) => sum + item.totalRooms, 0);
   const totalSoldOutRooms = items.reduce((sum, item) => sum + item.soldOutRooms, 0);
@@ -2239,7 +2705,14 @@ function summarizeAvailabilityRows(rows) {
       totalRooms,
       weightedRate: totalRooms ? Number((totalAvailableRooms / totalRooms).toFixed(3)) : null,
       weightedSoldOutRate: totalRooms ? Number((totalSoldOutRooms / totalRooms).toFixed(3)) : null,
-      lowAvailabilityCount: items.filter((item) => item.rate < 0.7).length
+      lowAvailabilityCount: items.filter((item) => item.rate < 0.7).length,
+      lowConfidenceCount: items.filter((item) => ["D", "E"].includes(item.inventoryConfidenceGrade)).length,
+      stockVarianceCount: items.filter((item) => (item.inventoryAlerts || []).includes("날짜별 전체수량 변동")).length,
+      confidenceCounts: items.reduce((acc, item) => {
+        const grade = item.inventoryConfidenceGrade || "C";
+        acc[grade] = (acc[grade] || 0) + 1;
+        return acc;
+      }, {})
     },
     items: items.slice(0, 30)
   };
@@ -2390,7 +2863,7 @@ function resolveRunDir(runId) {
   return dirPath;
 }
 
-async function loadRun(runId) {
+async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
 
@@ -2440,7 +2913,7 @@ async function loadRun(runId) {
     datalabTrend
   });
 
-  return {
+  const result = {
     run: {
       id: runId,
       label: displayNameForRun(runId, manifest),
@@ -2484,6 +2957,19 @@ async function loadRun(runId) {
         url: `/outputs/${encodeURIComponent(runId)}/${encodeURIComponent(file)}`
       }))
   };
+
+  if (!options.skipHistory) {
+    let history = await summarizeHistoryForRun(result);
+    if (!history.currentRunObservationCount && availability.items.length) {
+      await appendHistoryForRun(runId).catch((error) => {
+        console.warn(`Could not backfill history for ${runId}: ${error.message || error}`);
+      });
+      history = await summarizeHistoryForRun(result);
+    }
+    result.history = history;
+  }
+
+  return result;
 }
 
 function summarizePlatformRows(rows) {
@@ -2674,7 +3160,10 @@ async function runCrawlerInternal(payload) {
         const parsed = jsonStart >= 0 ? JSON.parse(trimmed.slice(jsonStart)) : null;
         const outputDir = parsed?.outputDir || "";
         const runId = outputDir ? path.basename(outputDir) : null;
-        resolve({ output: parsed, runId });
+        const history = runId
+          ? await appendHistoryForRun(runId).catch((error) => ({ appended: 0, error: error.message || String(error) }))
+          : null;
+        resolve({ output: parsed, runId, history });
       } catch {
         resolve({ output: stdout, runId: null });
       }
@@ -2686,8 +3175,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260628-region-decision"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260628-region-decision"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-flow-release"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-flow-release"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
