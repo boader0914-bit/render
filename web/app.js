@@ -1964,6 +1964,242 @@ function weightedLocationScore(card) {
   return totalWeight ? Math.round(weighted / totalWeight) : NaN;
 }
 
+function locationIndexValue(card, key, fallback = NaN) {
+  const value = Number(card?.indexes?.[key]?.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function locationRuntimeScope(card = {}, alias = null) {
+  const allItems = state.data?.availability?.items || [];
+  const regions = state.data?.regions || [];
+  const terms = [
+    alias?.sigungu,
+    card.searchKeyword,
+    ...(alias?.aliases || [])
+  ]
+    .map(stripLocationBusinessWords)
+    .filter((term) => term.length >= 2);
+  const activeBase = stripLocationBusinessWords(activeKeyword());
+  const cardBase = stripLocationBusinessWords(card.searchKeyword);
+  const exactActive = activeBase && cardBase && (activeBase === cardBase || activeBase.includes(cardBase) || cardBase.includes(activeBase));
+
+  const itemMatches = (item) => {
+    const haystack = compactSearchText([item.region, item.address, item.location, item.name, item.category].filter(Boolean).join(" "));
+    return terms.some((term) => term && haystack.includes(term));
+  };
+  const regionMatches = (region) => {
+    const haystack = compactSearchText([region.region, region.name, region.target, region.note].filter(Boolean).join(" "));
+    return terms.some((term) => term && haystack.includes(term));
+  };
+  const scopedItems = allItems.filter(itemMatches);
+  const scopedRegions = regions.filter(regionMatches);
+  return {
+    items: scopedItems.length ? scopedItems : (exactActive ? allItems : []),
+    regions: scopedRegions.length ? scopedRegions : (exactActive ? regions : []),
+    exactActive
+  };
+}
+
+function locationRuntimeStats(card = {}, alias = null) {
+  const scope = locationRuntimeScope(card, alias);
+  const items = scope.items;
+  const sales = summarizeSales(items);
+  const rate = sales.supply ? sales.sold / sales.supply : NaN;
+  const platformStats = reportPlatformStats(items);
+  const itemSet = new Set(items);
+  const targets = targetEntries(0).filter((entry) => itemSet.has(entry.item));
+  const adCount = items.filter((item) => /광고/.test(String(item.ad || item.adFlag || item.adStatus || ""))).length;
+  const searchVolume = scope.regions.reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
+  const platformGap = items.length
+    ? platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo
+    : 0;
+  return {
+    ...scope,
+    sales,
+    rate,
+    platformStats,
+    targets,
+    adCount,
+    adRatio: items.length ? adCount / items.length : NaN,
+    searchVolume,
+    platformGap
+  };
+}
+
+function locationDecision(card = {}, clusters = [], runtime = {}) {
+  const baseScore = weightedLocationScore(card);
+  const tourism = locationIndexValue(card, "tourism", 0);
+  const dayUse = locationIndexValue(card, "dayUse", 0);
+  const operation = locationIndexValue(card, "operation", 0);
+  const expansionRisk = locationIndexValue(card, "expansionRisk", 0);
+  const runtimeScore = runtime.items?.length
+    ? reportMarketScore({
+        rate: runtime.rate,
+        targetCount: runtime.targets?.length || 0,
+        itemCount: runtime.items.length,
+        platformGapRatio: runtime.items.length ? runtime.platformGap / (runtime.items.length * 3) : 0,
+        searchVolume: runtime.searchVolume
+      })
+    : 0;
+  const confidence = Number.isFinite(baseScore)
+    ? Math.round(baseScore * (runtimeScore ? 0.68 : 1) + runtimeScore * (runtimeScore ? 0.32 : 0))
+    : runtimeScore || NaN;
+  const headline = clusters.length
+    ? clusters.map((cluster) => cluster.name).slice(0, 2).join(" + ")
+    : "입지판정 확인";
+  const chips = [];
+  chips.push(tourism >= 70 ? "숙박 중심" : "근교/당일 검증");
+  chips.push(dayUse >= 65 ? "데이유즈 강화" : "데이유즈 보조");
+  chips.push(expansionRisk >= 55 ? "확장 신중" : "확장 여지");
+  if (operation < 50) chips.push("운영 총량 검증");
+  const summary = tourism >= 70
+    ? "목적 방문 수요는 강하지만 실제 객실 총량과 운영 가능 규모를 먼저 확인해야 합니다."
+    : "생활권 수요와 상품 구성의 반응을 실제 판매율로 확인해야 합니다.";
+  const tone = expansionRisk >= 60 || operation < 45 ? "caution" : tourism >= 70 ? "strong" : "watch";
+  return { confidence, headline, chips, summary, tone };
+}
+
+function locationEvidenceRows(card = {}) {
+  const rows = [
+    ["tourism", "관광", "목적 방문 강도"],
+    ["operation", "운영", "인력/세탁/수리 부담"],
+    ["expansionRisk", "확장주의", "객실 확대 전 총량 검증"],
+    ["dayUse", "데이유즈", "당일상품 확장성"]
+  ];
+  return rows.map(([key, label, note]) => {
+    const index = card.indexes?.[key] || {};
+    const value = finiteNumber(index.value, 0);
+    const [tone, band] = locationScoreBand(value, index);
+    return { key, label, note, value, band, tone };
+  });
+}
+
+function renderLocationDecisionPanel(card, clusters, runtime) {
+  const decision = locationDecision(card, clusters, runtime);
+  return `
+    <section class="location-decision ${decision.tone}">
+      <div class="location-decision-score">
+        <span>확신도</span>
+        <strong>${Number.isFinite(decision.confidence) ? fmtNumber(decision.confidence) : "확인"}</strong>
+      </div>
+      <div class="location-decision-copy">
+        <p class="eyebrow">최종 입지판정</p>
+        <h4>${escapeHtml(decision.headline)}</h4>
+        <p>${escapeHtml(decision.summary)}</p>
+        <div class="location-action-chips">
+          ${decision.chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderLocationEvidence(card) {
+  const rows = locationEvidenceRows(card);
+  return `
+    <section class="location-block">
+      <div class="location-block-head">
+        <h4>판단 근거</h4>
+        <span>핵심 지수만 먼저 확인</span>
+      </div>
+      <div class="location-evidence-list">
+        ${rows.map((row) => `
+          <div class="location-evidence ${row.tone}">
+            <b>${escapeHtml(row.label)}</b>
+            <strong>${fmtNumber(row.value)}</strong>
+            <span>${escapeHtml(row.band)} · ${escapeHtml(row.note)}</span>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderLocationReality(runtime = {}) {
+  const salesRate = Number.isFinite(runtime.rate) ? fmtRate(runtime.rate) : "확인필요";
+  const adRatio = Number.isFinite(runtime.adRatio) ? fmtRate(runtime.adRatio) : "확인필요";
+  const salesBar = Number.isFinite(runtime.rate) ? Math.round(Math.max(0, Math.min(1, runtime.rate)) * 100) : 0;
+  const dictionaryStrength = runtime.regions?.length
+    ? Math.min(100, Math.round((runtime.searchVolume ? 65 : 45) + Math.min(25, runtime.items.length)))
+    : 55;
+  return `
+    <section class="location-block">
+      <div class="location-block-head">
+        <h4>사전판단 × 수집결과</h4>
+        <span>실제 노출/판매와 비교</span>
+      </div>
+      <div class="location-reality-grid">
+        <div><span>상위노출</span><strong>${fmtNumber(runtime.items?.length || 0)}</strong><small>업체</small></div>
+        <div><span>객실판매율</span><strong>${salesRate}</strong><small>${fmtNumber(runtime.sales?.sold || 0)}/${fmtNumber(runtime.sales?.supply || 0)}개</small></div>
+        <div><span>광고비중</span><strong>${adRatio}</strong><small>${fmtNumber(runtime.adCount || 0)}개 광고</small></div>
+        <div><span>월검색</span><strong>${runtime.searchVolume ? fmtNumber(runtime.searchVolume) : "API"}</strong><small>${runtime.searchVolume ? "검색량" : "확인필요"}</small></div>
+      </div>
+      <div class="location-compare-bars">
+        <div>
+          <span>사전 강도</span>
+          <i><b style="width:${dictionaryStrength}%"></b></i>
+          <em>${fmtNumber(dictionaryStrength)}</em>
+        </div>
+        <div>
+          <span>실제 판매</span>
+          <i><b style="width:${salesBar}%"></b></i>
+          <em>${salesRate}</em>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderLocationTargetPreview(runtime = {}) {
+  const allItems = state.data?.availability?.items || [];
+  const targets = (runtime.targets || []).slice(0, 3);
+  return `
+    <section class="location-block">
+      <div class="location-block-head">
+        <h4>컨택 우선순위</h4>
+        <span>${fmtNumber(runtime.targets?.length || 0)} 후보 감지</span>
+      </div>
+      <div class="location-target-list">
+        ${targets.length ? targets.map(({ item, reasons }, index) => {
+          const itemIndex = allItems.indexOf(item);
+          return `
+            <button class="location-target-row" type="button" data-open-company="${itemIndex}">
+              <b>${index + 1}</b>
+              <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+              <span>${reasons.map(escapeHtml).slice(0, 3).join(" · ")}</span>
+            </button>
+          `;
+        }).join("") : `<div class="location-empty-note">현재 수집결과 안에서 즉시 컨택 후보가 뚜렷하지 않습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function locationActionItems(card = {}, runtime = {}) {
+  const actions = ["객실 총량 검증", "네이버 상품분리"];
+  if ((runtime.platformGap || 0) > 0) actions.push("채널 공백 확인");
+  if (locationIndexValue(card, "dayUse", 0) < 55) actions.push("데이유즈 설계");
+  if (locationIndexValue(card, "operation", 0) < 55) actions.push("운영 한계 확인");
+  actions.push("사진/가격 점검");
+  return [...new Set(actions)].slice(0, 6);
+}
+
+function renderLocationActionPlan(card, runtime) {
+  return `
+    <section class="location-block">
+      <div class="location-block-head">
+        <h4>이번 주 실행</h4>
+        <span>확인 순서</span>
+      </div>
+      <div class="location-action-panel">
+        ${locationActionItems(card, runtime).map((action, index) => `
+          <span><b>${index + 1}</b>${escapeHtml(action)}</span>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderLocationGroupDictionary(group) {
   const cards = locationGroupCards(group);
   const score = regionGroupScore(group, cards);
@@ -2139,6 +2375,7 @@ function renderLocationDictionary(match = null) {
   const clusters = locationClusterCodes(card).map(locationClusterMeta);
   const indexes = Object.values(card.indexes || {});
   const score = weightedLocationScore(card);
+  const runtime = locationRuntimeStats(card, alias);
   const topIndexes = indexes
     .slice()
     .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
@@ -2177,6 +2414,11 @@ function renderLocationDictionary(match = null) {
           </span>
         `).join("")}
       </div>
+
+      ${renderLocationDecisionPanel(card, clusters, runtime)}
+      ${renderLocationEvidence(card)}
+      ${renderLocationReality(runtime)}
+      ${renderLocationTargetPreview(runtime)}
 
       <section class="location-block">
         <div class="location-block-head">
@@ -2220,6 +2462,8 @@ function renderLocationDictionary(match = null) {
           `).join("")}
         </div>
       </section>
+
+      ${renderLocationActionPlan(card, runtime)}
 
       <section class="location-block">
         <div class="location-summary-grid">
