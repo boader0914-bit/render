@@ -2200,6 +2200,209 @@ function renderLocationActionPlan(card, runtime) {
   `;
 }
 
+function locationGroupRuntimeStats(group = {}, cards = []) {
+  const allItems = state.data?.availability?.items || [];
+  const allRegions = state.data?.regions || [];
+  const aliases = state.dictionary?.aliases || [];
+  const terms = [
+    group.searchKeyword,
+    group.sido,
+    ...(group.aliases || []),
+    ...(group.plannedKeywords || []),
+    ...cards.flatMap((card) => {
+      const alias = aliases.find((item) => item.regionKey === card.regionKey) || {};
+      return [card.searchKeyword, alias.sigungu, ...(alias.aliases || [])];
+    })
+  ]
+    .map(stripLocationBusinessWords)
+    .filter((term) => term.length >= 2);
+  const activeBase = stripLocationBusinessWords(activeKeyword());
+  const groupBase = stripLocationBusinessWords(group.searchKeyword || group.sido || "");
+  const exactActive = activeBase && groupBase && (activeBase === groupBase || activeBase.includes(groupBase) || groupBase.includes(activeBase));
+  const matches = (values = []) => {
+    const haystack = compactSearchText(values.filter(Boolean).join(" "));
+    return terms.some((term) => term && haystack.includes(term));
+  };
+  const scopedItems = allItems.filter((item) => matches([item.region, item.address, item.location, item.name, item.category]));
+  const scopedRegions = allRegions.filter((region) => matches([region.region, region.name, region.target, region.note]));
+  const items = scopedItems.length ? scopedItems : (exactActive ? allItems : []);
+  const regions = scopedRegions.length ? scopedRegions : (exactActive ? allRegions : []);
+  const sales = summarizeSales(items);
+  const rate = sales.supply ? sales.sold / sales.supply : NaN;
+  const platformStats = reportPlatformStats(items);
+  const itemSet = new Set(items);
+  const targets = targetEntries(0).filter((entry) => itemSet.has(entry.item));
+  const adCount = items.filter((item) => /광고/.test(String(item.ad || item.adFlag || item.adStatus || ""))).length;
+  const searchVolume = regions.reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
+  const platformGap = items.length
+    ? platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo
+    : 0;
+  return {
+    items,
+    regions,
+    sales,
+    rate,
+    platformStats,
+    targets,
+    adCount,
+    adRatio: items.length ? adCount / items.length : NaN,
+    searchVolume,
+    platformGap,
+    exactActive
+  };
+}
+
+function locationGroupDecision(group = {}, cards = [], runtime = {}, score = NaN, clusters = []) {
+  const runtimeScore = runtime.items?.length
+    ? reportMarketScore({
+        rate: runtime.rate,
+        targetCount: runtime.targets?.length || 0,
+        itemCount: runtime.items.length,
+        platformGapRatio: runtime.items.length ? runtime.platformGap / (runtime.items.length * 3) : 0,
+        searchVolume: runtime.searchVolume
+      })
+    : 0;
+  const marketSignal = finiteNumber(group.marketSignal, 0);
+  const baseScore = Number.isFinite(score) ? score : marketSignal;
+  const decisionScore = Math.round(
+    (baseScore || 0) * 0.55 +
+    (marketSignal || 0) * 0.2 +
+    (runtimeScore || baseScore || 0) * 0.25
+  );
+  const label = decisionScore >= 76
+    ? "집중 권역"
+    : decisionScore >= 64
+      ? "선별 권역"
+      : "보강 권역";
+  const dominant = clusters[0]?.name || group.strategy || "권역 판단";
+  const second = clusters[1]?.name || "하위 지역 검증";
+  const summary = runtime.items?.length
+    ? "광역 검색으로 시장 크기를 보고, 수집결과가 붙는 하위 지역부터 영업 우선순위를 잡습니다."
+    : "광역 사전 판단은 가능하지만 현재 run의 실제 수집결과와 연결된 업체가 적어 추가 수집이 필요합니다.";
+  const chips = [
+    `${fmtNumber(cards.length)}개 지역카드`,
+    runtime.items?.length ? `${fmtNumber(runtime.items.length)}개 업체연결` : "실측 연결 대기",
+    runtime.targets?.length ? `${fmtNumber(runtime.targets.length)}개 컨택후보` : "후보 검증",
+    group.strategy || "권역 전략"
+  ];
+  return { score: decisionScore, label, headline: `${dominant} + ${second}`, summary, chips };
+}
+
+function renderLocationGroupDecision(group, cards, clusters, runtime, score) {
+  const decision = locationGroupDecision(group, cards, runtime, score, clusters);
+  return `
+    <section class="location-decision region-decision">
+      <div class="location-decision-score">
+        <span>권역점수</span>
+        <strong>${fmtNumber(decision.score)}</strong>
+      </div>
+      <div class="location-decision-copy">
+        <p class="eyebrow">권역판정 · ${escapeHtml(decision.label)}</p>
+        <h4>${escapeHtml(decision.headline)}</h4>
+        <p>${escapeHtml(decision.summary)}</p>
+        <div class="location-action-chips">
+          ${decision.chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function locationGroupCardRows(cards = []) {
+  return cards.map((card) => {
+    const alias = dictionaryAliasForCard(card);
+    const runtime = locationRuntimeStats(card, alias);
+    const score = weightedLocationScore(card);
+    const clusters = locationClusterCodes(card).map(locationClusterMeta);
+    const targetScore = Math.min(22, (runtime.targets?.length || 0) * 4);
+    const gapScore = runtime.items?.length ? Math.min(14, (runtime.platformGap / Math.max(1, runtime.items.length * 3)) * 18) : 0;
+    const saleScore = Number.isFinite(runtime.rate) ? (runtime.rate < 0.35 ? 12 : runtime.rate < 0.55 ? 7 : 2) : 4;
+    const priority = Math.round((Number.isFinite(score) ? score : 50) * 0.62 + targetScore + gapScore + saleScore);
+    return {
+      card,
+      alias,
+      runtime,
+      score,
+      priority,
+      clusters,
+      primaryCluster: clusters[0]?.name || "클러스터 확인"
+    };
+  }).sort((a, b) => b.priority - a.priority || b.score - a.score);
+}
+
+function renderLocationGroupComparison(rows = []) {
+  return `
+    <section class="location-block">
+      <div class="location-block-head">
+        <h4>하위 지역 비교</h4>
+        <span>사전점수 + 실제수집 연결</span>
+      </div>
+      <div class="region-compare-list">
+        ${rows.slice(0, 6).map((row) => {
+          const rate = Number.isFinite(row.runtime.rate) ? fmtRate(row.runtime.rate) : "확인필요";
+          return `
+            <button class="region-compare-row" type="button" data-location-query="${escapeHtml(row.card.searchKeyword)}">
+              <b>${escapeHtml(row.card.searchKeyword)}</b>
+              <span>${escapeHtml(row.primaryCluster)}</span>
+              <strong>${Number.isFinite(row.score) ? `${fmtNumber(row.score)}점` : "확인"}</strong>
+              <small>업체 ${fmtNumber(row.runtime.items?.length || 0)} · 판매 ${rate} · 후보 ${fmtNumber(row.runtime.targets?.length || 0)}</small>
+            </button>
+          `;
+        }).join("") || `<div class="location-empty-note">비교할 하위 지역 카드가 없습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderLocationGroupPriority(rows = []) {
+  const priorities = rows.slice(0, 4);
+  return `
+    <section class="location-block">
+      <div class="location-block-head">
+        <h4>우선 공략 지역</h4>
+        <span>영업 착수 순서</span>
+      </div>
+      <div class="region-priority-grid">
+        ${priorities.map((row, index) => {
+          const reason = [
+            row.runtime.targets?.length ? `컨택후보 ${fmtNumber(row.runtime.targets.length)}` : "",
+            row.runtime.platformGap ? "채널공백" : "",
+            Number.isFinite(row.runtime.rate) && row.runtime.rate < 0.35 ? "저판매" : "",
+            row.primaryCluster
+          ].filter(Boolean).slice(0, 3).join(" · ");
+          return `
+            <button class="region-priority-card" type="button" data-location-query="${escapeHtml(row.card.searchKeyword)}">
+              <em>${index + 1}</em>
+              <strong>${escapeHtml(row.card.searchKeyword)}</strong>
+              <span>${escapeHtml(reason || "지역 카드 세부 확인")}</span>
+            </button>
+          `;
+        }).join("") || `<div class="location-empty-note">우선 공략 지역을 산출할 카드가 없습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderLocationGroupActionPlan(group = {}, runtime = {}) {
+  const actions = ["하위 지역별 재수집", "상위노출 업체 분류"];
+  if ((runtime.platformGap || 0) > 0) actions.push("권역 채널공백 확인");
+  if ((runtime.targets?.length || 0) > 0) actions.push("컨택 후보 선별");
+  actions.push("광역 키워드 검색량 비교", "지역카드 추가 후보 선정");
+  return `
+    <section class="location-block">
+      <div class="location-block-head">
+        <h4>권역 실행</h4>
+        <span>${escapeHtml(group.sido || "광역")} 기준</span>
+      </div>
+      <div class="location-action-panel">
+        ${[...new Set(actions)].slice(0, 6).map((action, index) => `
+          <span><b>${index + 1}</b>${escapeHtml(action)}</span>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderLocationGroupDictionary(group) {
   const cards = locationGroupCards(group);
   const score = regionGroupScore(group, cards);
@@ -2225,6 +2428,8 @@ function renderLocationGroupDictionary(group) {
       const bScore = weightedLocationScore(b);
       return (Number.isFinite(bScore) ? bScore : 0) - (Number.isFinite(aScore) ? aScore : 0);
     });
+  const runtime = locationGroupRuntimeStats(group, cards);
+  const regionRows = locationGroupCardRows(cards);
 
   if (els.dictionarySearchStatus) {
     els.dictionarySearchStatus.textContent = `${group.searchKeyword} 권역 스캔 · ${fmtNumber(cards.length)}개 지역 카드 연결`;
@@ -2259,6 +2464,11 @@ function renderLocationGroupDictionary(group) {
           </span>
         `).join("") : `<span class="location-cluster-chip"><b>대기</b>지역 카드 추가 필요</span>`}
       </div>
+
+      ${renderLocationGroupDecision(group, cards, clusters, runtime, score)}
+      ${renderLocationReality(runtime)}
+      ${renderLocationGroupComparison(regionRows)}
+      ${renderLocationGroupPriority(regionRows)}
 
       <section class="location-block">
         <div class="location-block-head">
@@ -2324,6 +2534,8 @@ function renderLocationGroupDictionary(group) {
           }).join("") : `<div class="empty">아직 연결된 지역 카드가 없습니다. 아래 추가 후보 중 먼저 고를 지역을 선택하세요.</div>`}
         </div>
       </section>
+
+      ${renderLocationGroupActionPlan(group, runtime)}
 
       <section class="location-block">
         <div class="location-block-head">
