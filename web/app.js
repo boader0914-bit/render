@@ -872,6 +872,12 @@ function inventoryStructureBadge(item = {}) {
   return `<span class="structure-badge ${escapeHtml(info.tone)}" title="${escapeHtml(info.summary)}">${escapeHtml(info.label)}${escapeHtml(flagText)}</span>`;
 }
 
+function otaVerificationBadge(item = {}) {
+  const audit = inventoryAuditProfile(item);
+  if (!audit.otaCheckNeeded) return "";
+  return `<span class="structure-badge ota-check" title="${escapeHtml(audit.otaReason || "네이버 기준 수량 해석 보조 확인")}">OTA 확인 필요</span>`;
+}
+
 function bookingGraphRows(item) {
   const run = state.data?.run || {};
   const rows = weeklyRows(item);
@@ -1028,7 +1034,7 @@ function renderCompanies() {
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>
-            <div class="company-badges">${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}</div>
+            <div class="company-badges">${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${otaVerificationBadge(item)}</div>
           </div>
         </div>
         <div class="company-metric">
@@ -1216,6 +1222,7 @@ function inventoryAuditProfile(item = {}) {
   const flags = new Set(structure.flags || []);
   const reasons = [];
   const actions = [];
+  const otaSignals = [];
   let statusKey = "normal";
   let tone = "good";
   let priority = 0;
@@ -1226,6 +1233,7 @@ function inventoryAuditProfile(item = {}) {
     priority += 70;
     reasons.push("예약ID 또는 상품 구조 재확인이 필요합니다.");
     actions.push("네이버 객실 탭에서 객실별/종류별 판매 방식을 직접 확인");
+    otaSignals.push("상품/객실 구조");
   }
 
   if (flags.has("dynamic_capacity") || (Number.isFinite(totalGapRate) && totalGap >= 2 && totalGapRate >= 0.25)) {
@@ -1236,11 +1244,13 @@ function inventoryAuditProfile(item = {}) {
     priority += 48;
     reasons.push(`날짜별 총량 변동 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`);
     actions.push("전화예약, 시설점검, 채널 재고조절 가능성으로 우선 해석");
+    otaSignals.push("날짜별 총량 변동");
   }
 
   if (varianceRows.length) {
     priority += Math.min(30, varianceRows.length * 8);
     reasons.push(`총량 튐 ${fmtNumber(varianceRows.length)}일`);
+    otaSignals.push("총량 이상치");
   }
 
   if (missingCount) {
@@ -1260,6 +1270,7 @@ function inventoryAuditProfile(item = {}) {
     }
     priority += confidence.grade === "E" ? 30 : 18;
     reasons.push(`수집 신뢰도 ${confidence.grade}`);
+    if (confidence.grade === "E") otaSignals.push("수집 신뢰도 낮음");
   }
 
   if (flags.has("dayuse_rotation") || (day.supply && lodging.supply && day.supply >= lodging.supply * 0.6)) {
@@ -1298,10 +1309,15 @@ function inventoryAuditProfile(item = {}) {
       : statusKey === "phone_stock"
         ? "총량 변동 원인을 메모하고 판매율 해석"
         : "날짜별 상세를 열어 원자료 확인";
+  const otaCheckNeeded = !["normal", "confirmed"].includes(statusKey) && otaSignals.length > 0;
+  const otaReason = otaCheckNeeded ? `${[...new Set(otaSignals)].join(", ")} 보조 확인` : "";
 
   return {
     statusKey,
     label: labelMap[statusKey] || "확인 필요",
+    indexLabel: otaCheckNeeded ? "OTA 확인 필요" : (labelMap[statusKey] || "확인 필요"),
+    otaCheckNeeded,
+    otaReason,
     tone,
     priority,
     reasons: [...new Set(reasons)].slice(0, 5),
@@ -1327,27 +1343,33 @@ function validationQueueEntries(items = [], limit = 8) {
   return limit ? entries.slice(0, limit) : entries;
 }
 
+function auditIndexLabel(audit = {}) {
+  return audit.otaCheckNeeded ? "OTA 확인 필요" : (audit.indexLabel || audit.label || "확인 필요");
+}
+
 function renderValidationQueue(items = []) {
   const entries = validationQueueEntries(items, 6);
   const allEntries = items.map((item) => inventoryAuditProfile(item));
   const counts = allEntries.reduce((acc, audit) => {
     acc[audit.statusKey] = (acc[audit.statusKey] || 0) + 1;
+    if (audit.otaCheckNeeded) acc.otaCheckNeeded = (acc.otaCheckNeeded || 0) + 1;
+    if (audit.statusKey === "quantity_check" && !audit.otaCheckNeeded) acc.sourceCheck = (acc.sourceCheck || 0) + 1;
     return acc;
   }, {});
   const chips = [
-    ["상품구조 의심", counts.structure_risk || 0, "bad"],
-    ["수량확인 필요", counts.quantity_check || 0, "watch"],
-    ["재고조절 가능성", counts.phone_stock || 0, "watch"],
+    ["OTA 확인 필요", counts.otaCheckNeeded || 0, "bad"],
+    ["원자료 재확인", counts.sourceCheck || 0, "watch"],
+    ["오프라인예약 가능성", counts.phone_stock || 0, "watch"],
     ["정상/확정", (counts.normal || 0) + (counts.confirmed || 0), "good"]
   ];
   return `
     <div class="validation-card validation-card-audit">
       <div class="validation-card-head compact">
         <div>
-          <span class="eyebrow">검증 큐</span>
-          <h3>이상치·수량 구조 점검</h3>
+          <span class="eyebrow">확인 필요</span>
+          <h3>네이버 기준 해석 보조 확인</h3>
         </div>
-        <span>${fmtNumber(entries.length)} 우선확인</span>
+        <span>${fmtNumber(counts.otaCheckNeeded || 0)} OTA색인</span>
       </div>
       <div class="audit-status-strip">
         ${chips.map(([label, count, tone]) => `<span class="${tone}">${escapeHtml(label)} <b>${fmtNumber(count)}</b></span>`).join("")}
@@ -1361,7 +1383,7 @@ function renderValidationQueue(items = []) {
             <button type="button" data-open-company="${index}">
               <span class="audit-rank">${escapeHtml(item.rank || index + 1)}</span>
               <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
-              <em class="${escapeHtml(audit.tone)}">${escapeHtml(audit.label)}</em>
+              <em class="${escapeHtml(audit.otaCheckNeeded ? "bad" : audit.tone)}">${escapeHtml(auditIndexLabel(audit))}</em>
               <small>${escapeHtml([metric, audit.reasons[0]].filter(Boolean).join(" · "))}</small>
             </button>
           `;
@@ -1377,7 +1399,7 @@ function validationReasonRow(item = {}) {
   const structure = inventoryStructureInfo(item);
   const audit = inventoryAuditProfile(item);
   const reasons = [
-    `${audit.label}: ${audit.actions[0] || "확인"}`,
+    `${auditIndexLabel(audit)}: ${audit.actions[0] || "확인"}`,
     ...audit.reasons,
     `구조: ${structure.label}`,
     `확인: ${structure.action}`,
@@ -1537,13 +1559,10 @@ function targetExpansionAnalysis(item = {}) {
     score += 7;
     reasons.push("당일상품 확장 여지");
   }
-  if (!platforms.includes("여기어때")) {
-    score += 5;
-    reasons.push("여기어때 확인");
-  }
-  if (!platforms.includes("야놀자")) {
-    score += 4;
-    reasons.push("야놀자 확인");
+  const missingOtas = ["여기어때", "야놀자", "떠나요"].filter((name) => !platforms.includes(name));
+  if (audit.otaCheckNeeded && missingOtas.length) {
+    score += Math.min(8, missingOtas.length * 3);
+    reasons.push(`OTA 보조 확인 ${missingOtas.slice(0, 2).join("/")}`);
   }
   if (["D", "E"].includes(confidence.grade)) {
     score -= 12;
@@ -1587,18 +1606,29 @@ function targetEntries(limit = 15) {
 function reportPlatformStats(items = []) {
   const platformNames = ["네이버", "야놀자", "여기어때", "떠나요"];
   const stats = Object.fromEntries(platformNames.map((name) => [name, 0]));
+  const otaStats = Object.fromEntries(platformNames.map((name) => [name, 0]));
+  let otaCheckCount = 0;
   for (const item of items) {
     const names = platformsForItem(item).map((row) => platformShortName(row.platform));
+    const audit = inventoryAuditProfile(item);
     platformNames.forEach((name) => {
       if (names.includes(name)) stats[name] += 1;
     });
+    if (audit.otaCheckNeeded) {
+      otaCheckCount += 1;
+      platformNames.forEach((name) => {
+        if (names.includes(name)) otaStats[name] += 1;
+      });
+    }
   }
   return {
     names: platformNames,
     counts: stats,
-    missingYeogi: Math.max(0, items.length - stats["여기어때"]),
-    missingYanolja: Math.max(0, items.length - stats["야놀자"]),
-    missingDdnayo: Math.max(0, items.length - stats["떠나요"])
+    otaCheckCount,
+    otaCounts: otaStats,
+    missingYeogi: Math.max(0, otaCheckCount - otaStats["여기어때"]),
+    missingYanolja: Math.max(0, otaCheckCount - otaStats["야놀자"]),
+    missingDdnayo: Math.max(0, otaCheckCount - otaStats["떠나요"])
   };
 }
 
@@ -1615,14 +1645,14 @@ function reportDecision(score, rate, targetCount) {
     return {
       label: "집중 공략",
       tone: "strong",
-      summary: "노출은 확인되지만 상품/채널 구성 공백이 커서 영업 전환 여지가 큽니다."
+      summary: "노출은 확인되지만 판매 흐름과 상품 구성 개선 여지가 큽니다."
     };
   }
   if (score >= 62) {
     return {
       label: "선별 공략",
       tone: "watch",
-      summary: "상위 업체 중 채널 누락과 상품 공백이 있는 곳부터 선별 접촉이 적합합니다."
+      summary: "상위 업체 중 판매 흐름이 비는 곳부터 선별 접촉이 적합합니다."
     };
   }
   if (Number.isFinite(rate) && rate >= 0.6) {
@@ -1635,7 +1665,7 @@ function reportDecision(score, rate, targetCount) {
   return {
     label: "관찰",
     tone: "neutral",
-    summary: "즉시 공략보다는 추가 수집과 플랫폼별 실제 노출 검증이 필요합니다."
+    summary: "즉시 공략보다는 추가 수집과 네이버 기준값 검증이 필요합니다."
   };
 }
 
@@ -1655,7 +1685,7 @@ function renderReport() {
   const allTargets = targetEntries(0);
   const platformStats = reportPlatformStats(items);
   const searchVolume = (data.regions || []).reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
-  const platformGapRatio = items.length ? (platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo) / (items.length * 3) : 0;
+  const platformGapRatio = platformStats.otaCheckCount ? (platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo) / (platformStats.otaCheckCount * 3) : 0;
   const score = reportMarketScore({
     rate,
     targetCount: allTargets.length,
@@ -1678,7 +1708,7 @@ function renderReport() {
       <div class="report-hero-copy">
         <span class="report-badge ${decision.tone}">${escapeHtml(decision.label)}</span>
         <h2>${escapeHtml(keyword)} 시장 브리핑</h2>
-        <p>${escapeHtml(range)} 입력기간 기준으로 네이버 노출, 객실 판매율, 채널 공백, 상품 구성 약점을 함께 판정했습니다.</p>
+        <p>${escapeHtml(range)} 입력기간 기준으로 네이버 노출, 객실 판매율, OTA 보조 확인, 상품 구성 약점을 함께 판정했습니다.</p>
       </div>
       <div class="report-score-card">
         <span>공략 매력도</span>
@@ -1701,7 +1731,7 @@ function renderReport() {
       <article>
         <span>컨택 후보</span>
         <strong>${fmtNumber(allTargets.length)}</strong>
-        <small>채널/상품 약점 감지</small>
+        <small>판매흐름/상품 약점 감지</small>
       </article>
       <article>
         <span>상품 공백</span>
@@ -1715,7 +1745,7 @@ function renderReport() {
         <div class="report-card-head">
           <div>
             <h3>시장 해석</h3>
-            <p>판매율, 채널 공백, 상품 구성으로 본 영업 우선순위</p>
+            <p>판매율, OTA 보조 확인, 상품 구성으로 본 영업 우선순위</p>
           </div>
           <span>${fmtNumber(bookingDays(run))}일 기준</span>
         </div>
@@ -1730,8 +1760,8 @@ function renderReport() {
       <article class="report-card">
         <div class="report-card-head">
           <div>
-            <h3>플랫폼 공백</h3>
-            <p>검색 노출 대비 OTA/직판 채널 구성</p>
+            <h3>OTA 보조 확인</h3>
+            <p>의심 업체 기준 보조 채널 현황</p>
           </div>
         </div>
         <div class="report-channel-grid">
@@ -1739,7 +1769,7 @@ function renderReport() {
             <div>
               <span>${escapeHtml(name)}</span>
               <strong>${fmtNumber(platformStats.counts[name])}</strong>
-              <small>${fmtNumber(items.length - platformStats.counts[name])}개 미확인</small>
+              <small>${name === "네이버" ? "기준 채널" : `${fmtNumber(Math.max(0, (platformStats.otaCheckCount || 0) - (platformStats.otaCounts[name] || 0)))}개 보조확인`}</small>
             </div>
           `).join("")}
         </div>
@@ -1753,7 +1783,7 @@ function renderReport() {
           </div>
         </div>
         <ol class="report-action-list">
-          <li><strong>상위 노출 업체부터 채널 누락 확인</strong><span>여기어때 ${fmtNumber(platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(platformStats.missingYanolja)}개 미확인</span></li>
+          <li><strong>OTA 색인 업체만 보조 채널 확인</strong><span>색인 ${fmtNumber(platformStats.otaCheckCount || 0)}개 · 여기어때 ${fmtNumber(platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(platformStats.missingYanolja)}개 확인</span></li>
           <li><strong>객실 판매율 낮은 업체 상품 재구성</strong><span>저판매 후보 ${fmtNumber(lowSalesCount)}개, 가격/패키지/캠프닉 점검</span></li>
           <li><strong>데이유즈/캠프닉 공백 제안</strong><span>${fmtNumber(items.length - dayUseCount)}개 업체는 당일상품 확인 필요</span></li>
         </ol>
@@ -1764,7 +1794,7 @@ function renderReport() {
       <div class="report-card-head">
         <div>
           <h3>우선 컨택 후보</h3>
-          <p>노출은 있으나 상품/채널 구성이 약한 업체</p>
+          <p>노출은 있으나 판매 흐름과 상품 구성이 약한 업체</p>
         </div>
         <button class="small-button" type="button" data-drawer-tab="target">전체 보기</button>
       </div>
@@ -2538,7 +2568,7 @@ function historyOpsAuditLog() {
       ${entries.map(({ item, index, audit }) => `
         <button class="${escapeHtml(audit.tone)}" type="button" data-open-company="${index}">
           <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
-          <span>${escapeHtml(audit.label)} · ${escapeHtml(audit.reasons[0] || audit.actions[0] || "확인 필요")}</span>
+          <span>${escapeHtml(auditIndexLabel(audit))} · ${escapeHtml(audit.reasons[0] || audit.actions[0] || "확인 필요")}</span>
         </button>
       `).join("")}
     </div>
@@ -3890,7 +3920,7 @@ function dateRow(row) {
 function sheetAuditPanel(item = {}) {
   const audit = inventoryAuditProfile(item);
   const metrics = [
-    ["검증상태", audit.label, audit.actions[0] || "확인"],
+    ["확인색인", auditIndexLabel(audit), audit.otaReason || audit.actions[0] || "확인"],
     ["총량변동", audit.metrics.totalMax ? `${fmtNumber(audit.metrics.totalMin)}~${fmtNumber(audit.metrics.totalMax)}개` : "대기", audit.metrics.totalGap ? `차이 ${fmtNumber(audit.metrics.totalGap)}개` : "변동 없음"],
     ["미수집", `${fmtNumber(audit.metrics.missingCount)}일`, "입력기간 기준"],
     ["누적편차", rateGapText(audit.metrics.weekdayGap), "현재 평일-누적 평일"]
@@ -3898,8 +3928,8 @@ function sheetAuditPanel(item = {}) {
   return `
     <section class="sheet-section sheet-audit-section ${escapeHtml(audit.tone)}">
       <div class="sheet-structure-title">
-        <h3>검증 큐 판단</h3>
-        <span class="structure-badge ${escapeHtml(audit.tone)}">${escapeHtml(audit.label)}</span>
+        <h3>확인 필요 판단</h3>
+        <span class="structure-badge ${escapeHtml(audit.otaCheckNeeded ? "ota-check" : audit.tone)}">${escapeHtml(auditIndexLabel(audit))}</span>
       </div>
       <div class="sheet-audit-grid">
         ${metrics.map(([label, value, note]) => `
@@ -4127,6 +4157,8 @@ function renderSheetBooking(item) {
 function platformStatus(row) {
   const status = String(row.status || row.group || "");
   if (status.includes("미노출") || status.includes("실패") || status.includes("차단")) return ["bad", status || "미노출"];
+  if (status.includes("OTA 확인")) return ["warn", "OTA 확인 필요"];
+  if (status.includes("보조")) return ["good", "보조"];
   if (status.includes("확인") || status.includes("수동")) return ["warn", status || "확인 필요"];
   return ["good", status || "노출"];
 }
@@ -4134,9 +4166,17 @@ function platformStatus(row) {
 function renderSheetPlatform(item) {
   const rows = platformsForItem(item);
   const known = new Set(rows.map((row) => platformShortName(row.platform)));
+  const audit = inventoryAuditProfile(item);
   const baseRows = [...rows];
   ["네이버", "여기어때", "야놀자", "떠나요"].forEach((name) => {
-    if (!known.has(name)) baseRows.push({ platform: name, status: name === "네이버" ? "확인 필요" : "미노출/확인 필요" });
+    if (!known.has(name)) {
+      const status = name === "네이버"
+        ? "확인 필요"
+        : audit.otaCheckNeeded
+          ? "OTA 확인 필요"
+          : "보조 확인";
+      baseRows.push({ platform: name, status });
+    }
   });
   return `
     <section class="sheet-section">
@@ -4160,13 +4200,13 @@ function renderSheetPlatform(item) {
       }).join("")}
     </section>
     <section class="sheet-section">
-      <h3>여기어때 통합</h3>
+      <h3>OTA 보조 확인</h3>
       <div class="search-row">
         <div>
-          <strong>${known.has("여기어때") ? "여기어때 데이터 반영됨" : "여기어때 확인 필요"}</strong>
-          <small>관리 탭에서 결과 텍스트를 붙여넣고 통합하면 화면이 자동 갱신됩니다.</small>
+          <strong>${audit.otaCheckNeeded ? "OTA 확인 필요" : "현재는 네이버 기준 판단"}</strong>
+          <small>${audit.otaCheckNeeded ? escapeHtml(audit.otaReason || "네이버 수량 해석 보조 확인") : "네이버 재고 구조가 안정적이면 OTA는 노출/가격 보조값으로만 봅니다."}</small>
         </div>
-        <strong>${known.has("여기어때") ? "완료" : "대기"}</strong>
+        <strong>${audit.otaCheckNeeded ? "색인" : "보조"}</strong>
       </div>
     </section>
   `;
