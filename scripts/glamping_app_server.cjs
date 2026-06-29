@@ -2399,6 +2399,22 @@ function parseReservationRateDetail(detail, checkIn) {
   return rows.filter((row) => row.stayDate);
 }
 
+function applyOfflineReservationBasis(rows, basisTotal) {
+  const resolvedBasis = Number(basisTotal);
+  if (!Number.isFinite(resolvedBasis) || resolvedBasis <= 0) return rows;
+  return rows.map((row) => {
+    const rawTotal = Number(row.total || 0);
+    if (!Number.isFinite(rawTotal) || rawTotal <= 0 || rawTotal >= resolvedBasis) return row;
+    return {
+      ...row,
+      rawTotal,
+      offlineReserved: resolvedBasis - rawTotal,
+      total: resolvedBasis,
+      available: Math.min(Math.max(0, Number(row.available || 0)), resolvedBasis)
+    };
+  });
+}
+
 function singleAvailabilityRow(stayDate, available, total) {
   const resolvedAvailable = normalizeObservationNumber(available);
   const resolvedTotal = normalizeObservationNumber(total);
@@ -2413,7 +2429,7 @@ function singleAvailabilityRow(stayDate, available, total) {
 
 function historySeriesForItem(item, productType, checkIn) {
   if (productType === "dayuse") {
-    return parseAvailabilityDetail(item.dayUseWeeklyDetail, checkIn)
+    const rows = parseAvailabilityDetail(item.dayUseWeeklyDetail, checkIn)
       .concat(parseReservationRateDetail(item.dayUseWeeklyReservationRateDetail, checkIn))
       .reduce((rows, row) => rows.some((itemRow) => itemRow.stayDate === row.stayDate) ? rows : [...rows, row], [])
       .concat(
@@ -2421,9 +2437,10 @@ function historySeriesForItem(item, productType, checkIn) {
           ? singleAvailabilityRow(checkIn, item.dayUseAvailableStock, item.dayUseTotalStock)
           : []
       );
+    return applyOfflineReservationBasis(rows, item.dayUseWeeklyBasisTotal);
   }
 
-  return parseAvailabilityDetail(item.weeklyDetail, checkIn)
+  const rows = parseAvailabilityDetail(item.weeklyDetail, checkIn)
     .concat(parseReservationRateDetail(item.weeklyReservationRateDetail, checkIn))
     .reduce((rows, row) => rows.some((itemRow) => itemRow.stayDate === row.stayDate) ? rows : [...rows, row], [])
     .concat(
@@ -2431,6 +2448,7 @@ function historySeriesForItem(item, productType, checkIn) {
         ? singleAvailabilityRow(checkIn, item.nightAvailableStock ?? item.availableRooms, item.nightTotalStock ?? item.totalRooms)
         : []
     );
+  return applyOfflineReservationBasis(rows, item.weeklyBasisTotal);
 }
 
 function buildHistoryObservations(data, collectedAt) {
@@ -3363,8 +3381,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-audit-queue"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-audit-queue"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-offline-reserved"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-offline-reserved"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

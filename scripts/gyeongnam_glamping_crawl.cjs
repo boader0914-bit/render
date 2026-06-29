@@ -1226,17 +1226,20 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
   const basisTotal = maxTotal;
   const hasVariableTotal = minTotal > 0 && maxTotal > minTotal;
   const valid = rawValid.map((item) => {
-    const total = item.total;
+    const rawTotal = item.total;
+    const total = Math.max(basisTotal, rawTotal);
     const available = Math.min(Math.max(0, item.available || 0), total);
+    const offlineReserved = Math.max(0, total - rawTotal);
     const soldOut = Math.max(0, total - available);
     const rate = total > 0 ? soldOut / total : null;
     return {
       ...item,
       rawAvailable: item.available,
-      rawTotal: item.total,
+      rawTotal,
       available,
       total,
       soldOut,
+      offlineReserved,
       rate,
       totalChanged: hasVariableTotal,
     };
@@ -1259,7 +1262,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     })
     .join(", ");
   const totalVarianceDetail = hasVariableTotal
-    ? valid.map((item) => `${shortDate(item.date)} 원시 ${item.rawAvailable}/${item.rawTotal}`).join(", ")
+    ? valid.map((item) => `${shortDate(item.date)} 원시 ${item.rawAvailable}/${item.rawTotal}${item.offlineReserved ? ` 오프라인예약 ${item.offlineReserved}` : ""}`).join(", ")
     : "";
   return {
     days: valid.length,

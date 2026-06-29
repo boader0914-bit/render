@@ -681,6 +681,18 @@ function weeklyRows(item = {}, kind = "lodging") {
   }).filter(Boolean);
 }
 
+function basisTotalForRows(rows = [], explicitBasis = 0) {
+  return Math.max(
+    0,
+    finiteNumber(explicitBasis, 0),
+    ...rows.map((row) => finiteNumber(row.total, 0))
+  );
+}
+
+function offlineSoldForTotal(basisTotal, rawTotal) {
+  return Math.max(0, finiteNumber(basisTotal, 0) - finiteNumber(rawTotal, 0));
+}
+
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -697,22 +709,32 @@ function salesStats(item = {}, kind = "lodging") {
     if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
       const basisTotal = finiteNumber(item.weeklyBasisTotal, 0);
       const normalizedSupply = basisTotal && rows.length ? basisTotal * rows.length : weeklySupply;
+      const offlineSold = offlineSoldForTotal(normalizedSupply, weeklySupply);
+      const sold = Math.min(normalizedSupply, weeklySold + offlineSold);
       return {
-        sold: weeklySold,
+        sold,
         supply: normalizedSupply,
         rawSupply: weeklySupply,
-        rate: normalizedSupply ? weeklySold / normalizedSupply : weeklySold / weeklySupply,
+        rawSold: weeklySold,
+        offlineSold,
+        rate: normalizedSupply ? sold / normalizedSupply : weeklySold / weeklySupply,
         unit: "개",
         label: `${rows.length || days}일 집계`,
         basis: "range"
       };
     }
     if (rows.length) {
+      const basisTotal = basisTotalForRows(rows, item.weeklyBasisTotal);
       const sum = rows.reduce((acc, row) => {
-        acc.sold += finiteNumber(row.sold);
-        acc.supply += finiteNumber(row.total);
+        const rawTotal = finiteNumber(row.total, 0);
+        const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
+        acc.sold += Math.min(basisTotal || rawTotal, finiteNumber(row.sold) + offlineSold);
+        acc.rawSold += finiteNumber(row.sold);
+        acc.offlineSold += offlineSold;
+        acc.supply += basisTotal || rawTotal;
+        acc.rawSupply += rawTotal;
         return acc;
-      }, { sold: 0, supply: 0 });
+      }, { sold: 0, rawSold: 0, offlineSold: 0, supply: 0, rawSupply: 0 });
       return { ...sum, rate: sum.supply ? sum.sold / sum.supply : NaN, unit: "개", label: `${rows.length}일 집계`, basis: "range" };
     }
     const total = finiteNumber(item.nightTotalStock, finiteNumber(item.totalRooms, 0));
@@ -727,22 +749,32 @@ function salesStats(item = {}, kind = "lodging") {
   if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
     const basisTotal = finiteNumber(item.dayUseWeeklyBasisTotal, 0);
     const normalizedSupply = basisTotal && rows.length ? basisTotal * rows.length : weeklySupply;
+    const offlineSold = offlineSoldForTotal(normalizedSupply, weeklySupply);
+    const sold = Math.min(normalizedSupply, weeklySold + offlineSold);
     return {
-      sold: weeklySold,
+      sold,
       supply: normalizedSupply,
       rawSupply: weeklySupply,
-      rate: normalizedSupply ? weeklySold / normalizedSupply : weeklySold / weeklySupply,
+      rawSold: weeklySold,
+      offlineSold,
+      rate: normalizedSupply ? sold / normalizedSupply : weeklySold / weeklySupply,
       unit: "회",
       label: `${rows.length || days}일 집계`,
       basis: "range"
     };
   }
   if (rows.length) {
+    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal);
     const sum = rows.reduce((acc, row) => {
-      acc.sold += finiteNumber(row.sold);
-      acc.supply += finiteNumber(row.total);
+      const rawTotal = finiteNumber(row.total, 0);
+      const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
+      acc.sold += Math.min(basisTotal || rawTotal, finiteNumber(row.sold) + offlineSold);
+      acc.rawSold += finiteNumber(row.sold);
+      acc.offlineSold += offlineSold;
+      acc.supply += basisTotal || rawTotal;
+      acc.rawSupply += rawTotal;
       return acc;
-    }, { sold: 0, supply: 0 });
+    }, { sold: 0, rawSold: 0, offlineSold: 0, supply: 0, rawSupply: 0 });
     return { ...sum, rate: sum.supply ? sum.sold / sum.supply : NaN, unit: "회", label: `${rows.length}일 집계`, basis: "range" };
   }
   const total = finiteNumber(item.dayUseTotalStock, 0);
@@ -857,13 +889,17 @@ function bookingGraphRows(item) {
     if (row) {
       const rawTotal = finiteNumber(row.total, maxTotal);
       const basisTotal = Math.max(maxTotal, rawTotal);
-      const sold = finiteNumber(row.sold, 0);
+      const rawSold = finiteNumber(row.sold, 0);
+      const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
+      const sold = Math.min(basisTotal, rawSold + offlineSold);
       return {
         label,
         sold,
         total: basisTotal,
         rawTotal,
-        hidden: Math.max(0, basisTotal - rawTotal),
+        rawSold,
+        offlineSold,
+        hidden: offlineSold,
         rate: basisTotal ? sold / basisTotal : row.rate,
         rawRate: row.rate,
         source: "daily",
@@ -872,12 +908,17 @@ function bookingGraphRows(item) {
       };
     }
     if (!rows.length && key === basisLabel && lodging.supply) {
+      const rawTotal = finiteNumber(lodging.rawSupply, finiteNumber(lodging.supply, maxTotal));
+      const total = finiteNumber(lodging.supply, maxTotal);
+      const offlineSold = offlineSoldForTotal(total, rawTotal);
       return {
         label,
         sold: finiteNumber(lodging.sold, 0),
-        total: finiteNumber(lodging.supply, maxTotal),
-        rawTotal: finiteNumber(lodging.rawSupply, finiteNumber(lodging.supply, maxTotal)),
-        hidden: Math.max(0, finiteNumber(lodging.supply, maxTotal) - finiteNumber(lodging.rawSupply, finiteNumber(lodging.supply, maxTotal))),
+        total,
+        rawTotal,
+        rawSold: finiteNumber(lodging.rawSold, Math.max(0, rawTotal - finiteNumber(item.nightAvailableStock, finiteNumber(item.availableRooms, rawTotal)))),
+        offlineSold,
+        hidden: offlineSold,
         rate: lodging.rate,
         source: "basis",
         missing: false,
@@ -913,7 +954,7 @@ function miniBars(item) {
           const hidden = Math.max(0, finiteNumber(row.hidden, 0));
           const title = row.missing
             ? `${row.label} 미수집 · 기준총량 ${fmtNumber(row.total)}개`
-            : `${row.label} 마감추정 ${fmtNumber(row.sold)}/${fmtNumber(row.total)}개 · 판매열림 ${fmtNumber(openStock)}개${hidden ? ` · 미오픈/차단 ${fmtNumber(hidden)}개` : ""}`;
+            : `${row.label} 예약확정 ${fmtNumber(row.sold)}/${fmtNumber(row.total)}개 · 온라인열림 ${fmtNumber(openStock)}개${hidden ? ` · 오프라인예약 ${fmtNumber(hidden)}개 포함` : ""}`;
           return `
             <span class="bar-stack ${hot} ${missing}" title="${escapeHtml(title)}" style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px">
               <span class="bar-track"><span class="bar-fill"></span></span>
@@ -3545,7 +3586,9 @@ function sheetRowsForBooking(item) {
     missing: row.missing,
     openStock: row.rawTotal ?? row.total,
     hidden: row.hidden || 0,
-    statusText: row.missing ? "미수집" : "마감추정",
+    rawSold: row.rawSold ?? row.sold,
+    offlineSold: row.offlineSold || row.hidden || 0,
+    statusText: row.missing ? "미수집" : "예약확정",
     note: row.missing
       ? "날짜별 상세 미수집"
       : row.source === "daily"
@@ -3557,15 +3600,22 @@ function sheetRowsForBooking(item) {
 function sheetRowsForDayUse(item) {
   const rows = weeklyRows(item, "day");
   if (rows.length) {
+    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal);
     return rows.map((row) => ({
       label: row.label,
-      sold: row.sold,
-      supply: row.total,
-      rate: row.rate,
+      sold: Math.min(basisTotal || row.total, finiteNumber(row.sold) + offlineSoldForTotal(basisTotal, row.total)),
+      supply: basisTotal || row.total,
       unit: "회",
       missing: false,
-      statusText: "마감추정",
+      openStock: row.total,
+      hidden: offlineSoldForTotal(basisTotal, row.total),
+      rawSold: row.sold,
+      offlineSold: offlineSoldForTotal(basisTotal, row.total),
+      statusText: "예약확정",
       note: "데이유즈/캠프닉 날짜별 재고"
+    })).map((row) => ({
+      ...row,
+      rate: row.supply ? row.sold / row.supply : NaN
     }));
   }
   const day = salesStats(item, "day");
@@ -3588,8 +3638,8 @@ function dateRow(row) {
   const openStock = finiteNumber(row.openStock, row.supply);
   const hidden = Math.max(0, finiteNumber(row.hidden, 0));
   const stockNote = hidden
-    ? `판매열림 ${fmtNumber(openStock)}${row.unit} · 미오픈/차단 ${fmtNumber(hidden)}${row.unit}`
-    : `판매열림 ${fmtNumber(openStock)}${row.unit}`;
+    ? `온라인열림 ${fmtNumber(openStock)}${row.unit} · 오프라인예약 ${fmtNumber(hidden)}${row.unit} 포함`
+    : `온라인열림 ${fmtNumber(openStock)}${row.unit}`;
   if (row.missing) {
     return `
       <div class="date-row missing">
