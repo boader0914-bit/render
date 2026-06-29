@@ -955,7 +955,7 @@ function renderCompanies() {
     return;
   }
 
-  els.companyList.innerHTML = items.slice(0, 30).map((item, index) => {
+  const cards = items.slice(0, 30).map((item, index) => {
     const lodging = salesStats(item, "lodging");
     const day = salesStats(item, "day");
     const metric = lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}` : "확인필요";
@@ -980,6 +980,7 @@ function renderCompanies() {
             <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
           </div>
           ${flowChipRow(item)}
+          ${validationReasonRow(item)}
           ${miniBars(item)}
         </div>
         <div class="company-action">
@@ -992,6 +993,7 @@ function renderCompanies() {
       </article>
     `;
   }).join("");
+  els.companyList.innerHTML = `${renderValidationBoard(items)}${cards}`;
 }
 
 function dateForRangeLabel(label, run = {}) {
@@ -1072,6 +1074,120 @@ function flowChipRow(item = {}) {
       <span>${escapeHtml(flowMetricText("일", flow.sunday))}</span>
       ${historyText ? `<span class="history">${escapeHtml(historyText)}</span>` : ""}
     </div>
+  `;
+}
+
+function combineFlowMetrics(metrics = []) {
+  const valid = metrics.filter((metric) => metric && Number.isFinite(metric.rate) && finiteNumber(metric.total, 0) > 0);
+  const sold = valid.reduce((sum, metric) => sum + finiteNumber(metric.sold, 0), 0);
+  const total = valid.reduce((sum, metric) => sum + finiteNumber(metric.total, 0), 0);
+  const count = valid.reduce((sum, metric) => sum + finiteNumber(metric.count, 0), 0);
+  return {
+    sold,
+    total,
+    count,
+    rate: total ? sold / total : NaN
+  };
+}
+
+function aggregateFlowProfiles(items = []) {
+  const profiles = items.map((item) => salesFlowProfile(item));
+  return {
+    all: combineFlowMetrics(profiles.map((profile) => profile.all)),
+    weekday: combineFlowMetrics(profiles.map((profile) => profile.weekday)),
+    friday: combineFlowMetrics(profiles.map((profile) => profile.friday)),
+    saturday: combineFlowMetrics(profiles.map((profile) => profile.saturday)),
+    sunday: combineFlowMetrics(profiles.map((profile) => profile.sunday))
+  };
+}
+
+function validationCardValue(label, value, note = "") {
+  return `
+    <div class="validation-metric">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+    </div>
+  `;
+}
+
+function validationReasonRow(item = {}) {
+  const analysis = targetExpansionAnalysis(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const reasons = [
+    ...confidence.alerts.map((reason) => `검증: ${reason}`),
+    ...analysis.reasons
+  ].filter(Boolean).slice(0, 4);
+  if (!reasons.length) return "";
+  return `
+    <div class="reason-chip-row" aria-label="판단 근거">
+      ${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function renderValidationBoard(items = []) {
+  const stats = state.data?.availability?.stats || {};
+  const flow = aggregateFlowProfiles(items);
+  const lowConfidence = finiteNumber(stats.lowConfidenceCount, 0);
+  const stockVariance = finiteNumber(stats.stockVarianceCount, 0);
+  const missingItems = items.filter((item) => bookingGraphRows(item).some((row) => row.missing)).length;
+  const targets = targetEntries(5);
+  const run = state.data?.run || {};
+  const rangeLabel = dateRangeLabel(run);
+  return `
+    <section class="validation-board" aria-label="관리자 검증 요약">
+      <div class="validation-card validation-card-main">
+        <div class="validation-card-head">
+          <div>
+            <span class="eyebrow">관리자 검증</span>
+            <h3>7일 흐름과 수집 신뢰도</h3>
+          </div>
+          <b>${escapeHtml(rangeLabel)}</b>
+        </div>
+        <div class="validation-metric-grid">
+          ${validationCardValue("전체 판매율", fmtRate(flow.all.rate), `${fmtNumber(flow.all.sold)}/${fmtNumber(flow.all.total)}개`)}
+          ${validationCardValue("평일 기준", Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요", `${fmtNumber(flow.weekday.count)}일 관측`)}
+          ${validationCardValue("토요일", Number.isFinite(flow.saturday.rate) ? fmtRate(flow.saturday.rate) : "확인필요", "주말 수요")}
+          ${validationCardValue("검증 필요", fmtNumber(lowConfidence), `총량 변동 ${fmtNumber(stockVariance)}`)}
+        </div>
+      </div>
+      <div class="validation-card validation-card-flow">
+        <div class="validation-card-head compact">
+          <h3>요일별 압력</h3>
+          <span>${fmtNumber(items.length)} 업체</span>
+        </div>
+        <div class="weekday-pressure">
+          ${[
+            ["평일", flow.weekday],
+            ["금", flow.friday],
+            ["토", flow.saturday],
+            ["일", flow.sunday]
+          ].map(([label, metric]) => `
+            <div>
+              <span>${label}</span>
+              <b>${Number.isFinite(metric.rate) ? fmtRate(metric.rate) : "확인필요"}</b>
+              <i><em style="width:${Number.isFinite(metric.rate) ? Math.max(3, Math.min(100, metric.rate * 100)) : 0}%"></em></i>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+      <div class="validation-card validation-card-target">
+        <div class="validation-card-head compact">
+          <h3>우선 확인</h3>
+          <span>${fmtNumber(targets.length)} 후보</span>
+        </div>
+        <div class="validation-target-list">
+          ${targets.length ? targets.slice(0, 3).map(({ item, score, reasons }) => `
+            <button type="button" data-open-company="${items.indexOf(item)}">
+              <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+              <span>${fmtNumber(score)}점 · ${escapeHtml(reasons[0] || "확인 필요")}</span>
+            </button>
+          `).join("") : `<p>현재 기준 우선 후보가 없습니다.</p>`}
+        </div>
+        <small>${missingItems ? `${fmtNumber(missingItems)}개 업체는 일부 날짜 미수집` : "입력 기간 날짜별 수집 정상"}</small>
+      </div>
+    </section>
   `;
 }
 
@@ -3062,6 +3178,47 @@ function dateRow(row) {
   `;
 }
 
+function sheetFlowOverview(item = {}) {
+  const flow = salesFlowProfile(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const historyWeekday = flow.history?.weekday;
+  const analysis = targetExpansionAnalysis(item);
+  const cells = [
+    ["7일 전체", flow.all, `${fmtNumber(flow.all.sold)}/${fmtNumber(flow.all.total)}개`],
+    [flow.weekday.label, flow.weekday, `${fmtNumber(flow.weekday.count)}일 관측`],
+    ["금요일", flow.friday, "전야 수요"],
+    ["토요일", flow.saturday, "핵심 수요"],
+    ["일요일", flow.sunday, "퇴실 후 공백"],
+    ["누적평일", historyWeekday, historyWeekday?.observations ? `${fmtNumber(historyWeekday.observations)}건` : "대기"]
+  ];
+  return `
+    <section class="sheet-section sheet-decision-section">
+      <div class="sheet-decision-head">
+        <div>
+          <h3>관리자 판단 요약</h3>
+          <p>${escapeHtml(analysis.label)} · ${fmtNumber(analysis.score)}점</p>
+        </div>
+        <span class="confidence-badge ${confidence.tone}">${escapeHtml(confidence.label)}</span>
+      </div>
+      <div class="sheet-flow-grid">
+        ${cells.map(([label, metric, note]) => {
+          const rate = metric && Number.isFinite(metric.rate ?? metric.saleRate)
+            ? (Number.isFinite(metric.rate) ? metric.rate : metric.saleRate)
+            : NaN;
+          return `
+            <div>
+              <span>${escapeHtml(label)}</span>
+              <strong>${Number.isFinite(rate) ? fmtRate(rate) : "확인필요"}</strong>
+              <small>${escapeHtml(note || "")}</small>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      ${validationReasonRow(item)}
+    </section>
+  `;
+}
+
 function renderSheetBooking(item) {
   const run = state.data?.run || {};
   const rangeDays = bookingDays(run);
@@ -3076,6 +3233,7 @@ function renderSheetBooking(item) {
   const flow = salesFlowProfile(item);
   const historyWeekday = flow.history?.weekday;
   return `
+    ${sheetFlowOverview(item)}
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>
       ${lodgingRows.length ? lodgingRows.map(dateRow).join("") : `<div class="empty">숙박 재고가 확인되지 않았습니다.</div>`}
