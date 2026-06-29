@@ -8,6 +8,7 @@ const state = {
   mapData: null,
   mapPromise: null,
   dictionary: null,
+  historyOps: null,
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
   trafficKeyState: null,
@@ -50,6 +51,8 @@ const els = {
   regionList: document.getElementById("regionList"),
   demandState: document.getElementById("demandState"),
   demandDashboard: document.getElementById("demandDashboard"),
+  historyOpsState: document.getElementById("historyOpsState"),
+  historyOpsDashboard: document.getElementById("historyOpsDashboard"),
   adminStatus: document.getElementById("adminStatus"),
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
@@ -2429,6 +2432,223 @@ function renderHistoryLab() {
   `;
 }
 
+function historyOpsSource() {
+  return state.historyOps || {};
+}
+
+function activeHistoryKeywordSummary() {
+  const keywordKey = companyKey(activeKeyword());
+  const labelKey = companyKey(state.data?.run?.keyword || state.data?.run?.label || "");
+  const keywords = historyOpsSource().keywords || [];
+  return keywords.find((row) => row.keywordKey === keywordKey)
+    || keywords.find((row) => row.keywordKey === labelKey)
+    || keywords.find((row) => companyKey(row.keyword).includes(keywordKey) || keywordKey.includes(companyKey(row.keyword)))
+    || keywords[0]
+    || null;
+}
+
+function historyOpsCard(label, value, note = "") {
+  return `
+    <article>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+    </article>
+  `;
+}
+
+function historyOpsTimeline(rows = []) {
+  const items = [...rows].slice(-10);
+  if (!items.length) return `<div class="history-empty-inline">수집 회차 데이터가 아직 없습니다.</div>`;
+  const maxRate = Math.max(0.01, ...items.map((row) => Number(row.saleRate || 0)));
+  return `
+    <div class="history-ops-timeline" aria-label="누적 DB 수집 회차 변화">
+      ${items.map((row) => {
+        const rate = Number(row.saleRate);
+        const height = Number.isFinite(rate) ? Math.max(5, Math.min(100, (rate / maxRate) * 100)) : 0;
+        return `
+          <div title="${escapeHtml(`${row.collectedDate} · ${historyRateText(rate)} · ${fmtNumber(row.companyCount)}업체`)}">
+            <b>${historyRateText(rate)}</b>
+            <span><i style="height:${height}%"></i></span>
+            <em>${escapeHtml(String(row.collectedDate || "").slice(5).replace("-", "/"))}</em>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function historyOpsKeywordRows(activeKeywordRow) {
+  const keywords = (historyOpsSource().keywords || []).slice(0, 8);
+  if (!keywords.length) return `<div class="empty">누적 DB 키워드가 아직 없습니다.</div>`;
+  return `
+    <div class="history-ops-keyword-list">
+      ${keywords.map((row) => {
+        const active = activeKeywordRow && row.keywordKey === activeKeywordRow.keywordKey ? "active" : "";
+        return `
+          <article class="${active}">
+            <div>
+              <strong>${escapeHtml(row.keyword || "키워드 확인")}</strong>
+              <small>최근 ${escapeHtml(row.latestCollectedDate || "대기")} · ${fmtNumber(row.runCount)}회 수집 · ${fmtNumber(row.companyCount)}업체</small>
+            </div>
+            <span>${historyRateText(row.saleRate)}</span>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function historyOpsComparison(row) {
+  if (!row) return `<div class="empty">비교할 활성 키워드가 없습니다.</div>`;
+  const comparison = row.comparison;
+  const cells = [
+    ["누적 판매율", historyRateText(row.saleRate), `${fmtNumber(row.sold)}/${fmtNumber(row.supply)}개`],
+    ["수집 회차", `${fmtNumber(row.runCount)}회`, `${escapeHtml(row.firstCollectedDate || "-")}~${escapeHtml(row.latestCollectedDate || "-")}`],
+    ["업체 범위", `${fmtNumber(row.companyCount)}업체`, `${fmtNumber(row.observations)}건 관측`],
+    ["직전 대비", comparison ? formatSignedRate(comparison.saleRateDelta) : "대기", comparison ? `${comparison.previousDate}→${comparison.latestDate}` : "2회 이상 필요"]
+  ];
+  return `
+    <div class="history-ops-comparison">
+      ${cells.map(([label, value, note]) => `
+        <article>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+          <small>${escapeHtml(note)}</small>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function historyOpsAuditLog() {
+  const entries = validationQueueEntries(state.data?.availability?.items || [], 4);
+  if (!entries.length) {
+    return `
+      <div class="history-ops-log">
+        <article class="good">
+          <strong>현재 검증 큐 안정</strong>
+          <span>우선 확인할 이상치가 없습니다.</span>
+        </article>
+      </div>
+    `;
+  }
+  return `
+    <div class="history-ops-log">
+      ${entries.map(({ item, index, audit }) => `
+        <button class="${escapeHtml(audit.tone)}" type="button" data-open-company="${index}">
+          <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+          <span>${escapeHtml(audit.label)} · ${escapeHtml(audit.reasons[0] || audit.actions[0] || "확인 필요")}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function historyOpsCompanyTrends(activeKeywordRow) {
+  const trends = activeKeywordRow?.companyTrends || [];
+  if (!trends.length) return `<div class="empty">업체별 누적 추이가 아직 부족합니다.</div>`;
+  const currentItems = state.data?.availability?.items || [];
+  return `
+    <div class="history-ops-company-list">
+      ${trends.slice(0, 6).map((trend) => {
+        const itemIndex = currentItems.findIndex((item) => companyKey(item.name) === trend.companyKey);
+        const buttonAttrs = itemIndex >= 0 ? `type="button" data-open-company="${itemIndex}"` : `type="button" disabled`;
+        const spark = trend.byDate || [];
+        return `
+          <button ${buttonAttrs}>
+            <div>
+              <strong>${escapeHtml(trend.companyName || "업체명 확인")}</strong>
+              <small>${fmtNumber(trend.runCount)}회 · ${fmtNumber(trend.observations)}건 · 변동폭 ${historyRateText(trend.volatility)}</small>
+            </div>
+            <div class="history-ops-spark" aria-label="${escapeHtml(`${trend.companyName || ""} 누적 추이`)}">
+              ${spark.map((row) => {
+                const rate = Number(row.saleRate);
+                const height = Number.isFinite(rate) ? Math.max(4, Math.min(30, rate * 30)) : 0;
+                return `<span title="${escapeHtml(`${row.collectedDate} · ${historyRateText(rate)}`)}" style="height:${height}px"></span>`;
+              }).join("")}
+            </div>
+            <em>${historyRateText(trend.latest?.saleRate ?? trend.saleRate)}</em>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderHistoryOps() {
+  if (!els.historyOpsDashboard) return;
+  const ops = historyOpsSource();
+  const overall = ops.overall || {};
+  const activeKeywordRow = activeHistoryKeywordSummary();
+  if (!ops.keywords?.length) {
+    if (els.historyOpsState) els.historyOpsState.textContent = "누적 대기";
+    els.historyOpsDashboard.innerHTML = `
+      <section class="history-ops-empty">
+        <strong>누적 DB가 아직 비어 있습니다.</strong>
+        <p>같은 키워드를 반복 수집하면 키워드별 이력, 회차 비교, 업체별 추이가 자동으로 쌓입니다.</p>
+      </section>
+    `;
+    return;
+  }
+  if (els.historyOpsState) els.historyOpsState.textContent = `${fmtNumber(overall.keywordCount)} 키워드`;
+  els.historyOpsDashboard.innerHTML = `
+    <section class="history-ops-hero">
+      <div>
+        <p class="eyebrow">누적 DB 운영</p>
+        <h3>${escapeHtml(activeKeywordRow?.keyword || activeKeyword())}</h3>
+        <p>반복 수집된 관측값으로 키워드별 추이와 업체별 안정성을 확인합니다.</p>
+      </div>
+      <span>${escapeHtml(activeKeywordRow?.latestCollectedDate || overall.latestCollectedAt?.slice(0, 10) || "대기")}</span>
+    </section>
+
+    <section class="history-ops-metrics">
+      ${historyOpsCard("누적 키워드", fmtNumber(overall.keywordCount), `${fmtNumber(overall.runCount)}회 수집`)}
+      ${historyOpsCard("누적 관측", fmtNumber(overall.observationCount), `${fmtNumber(overall.companyCount)}업체`)}
+      ${historyOpsCard("활성 키워드", fmtNumber(activeKeywordRow?.observations || 0), `${fmtNumber(activeKeywordRow?.companyCount || 0)}업체`)}
+      ${historyOpsCard("활성 판매율", historyRateText(activeKeywordRow?.saleRate), `${fmtNumber(activeKeywordRow?.sold || 0)}/${fmtNumber(activeKeywordRow?.supply || 0)}개`)}
+    </section>
+
+    <section class="history-ops-layout">
+      <article class="history-ops-card wide">
+        <div class="history-card-head">
+          <strong>키워드별 누적 수집 이력</strong>
+          <small>최근 수집순</small>
+        </div>
+        ${historyOpsKeywordRows(activeKeywordRow)}
+      </article>
+      <article class="history-ops-card">
+        <div class="history-card-head">
+          <strong>수집 회차 비교</strong>
+          <small>활성 키워드</small>
+        </div>
+        ${historyOpsComparison(activeKeywordRow)}
+      </article>
+      <article class="history-ops-card">
+        <div class="history-card-head">
+          <strong>회차별 판매율 추이</strong>
+          <small>${escapeHtml(activeKeywordRow?.keyword || "")}</small>
+        </div>
+        ${historyOpsTimeline(activeKeywordRow?.timeline || [])}
+      </article>
+      <article class="history-ops-card">
+        <div class="history-card-head">
+          <strong>데이터 신뢰도 로그</strong>
+          <small>현재 실행 기준</small>
+        </div>
+        ${historyOpsAuditLog()}
+      </article>
+      <article class="history-ops-card wide">
+        <div class="history-card-head">
+          <strong>업체별 누적 추이</strong>
+          <small>변동폭 높은 순</small>
+        </div>
+        ${historyOpsCompanyTrends(activeKeywordRow)}
+      </article>
+    </section>
+  `;
+}
+
 function renderDemand() {
   if (!els.demandDashboard) return;
   const data = state.data || {};
@@ -3527,11 +3747,14 @@ function renderHeader() {
     target: "영업 타깃",
     map: "지역 클러스터 지도",
     demand: "수요구조 분석",
+    historyOps: "누적 DB 분석",
     admin: "관리"
   };
   els.pageTitle.textContent = titleMap[state.activeTab] || "요약 리포트";
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
+  } else if (state.activeTab === "historyOps") {
+    els.pageSubtitle.textContent = `${title} · 반복 수집 이력 · 회차 비교 · 업체별 추이`;
   } else if (state.activeTab === "demand") {
     els.pageSubtitle.textContent = `${title} · 숙박업 메인터넌스 · 네이버 트렌드`;
   } else if (state.activeTab === "report") {
@@ -3555,6 +3778,7 @@ function renderAll() {
   renderTargets();
   renderMap();
   renderDemand();
+  renderHistoryOps();
   renderLocationDictionary();
   renderDownloads();
   syncYeogiManualInterface();
@@ -3573,6 +3797,7 @@ function setActiveTab(tab) {
   if (tab === "report") renderReport();
   if (tab === "map") renderMap();
   if (tab === "demand") renderDemand();
+  if (tab === "historyOps") renderHistoryOps();
   if (tab === "dictionary") renderLocationDictionary();
 }
 
@@ -4018,6 +4243,15 @@ function closeDrawer() {
   if (els.detailSheet.hidden) document.body.style.overflow = "";
 }
 
+async function loadHistoryOps() {
+  try {
+    state.historyOps = await fetchJson("/api/history/summary");
+  } catch (error) {
+    state.historyOps = { error: error.message, keywords: [], overall: {} };
+    if (els.historyOpsState) els.historyOpsState.textContent = "오류";
+  }
+}
+
 async function loadRuns(selectLatest = false) {
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
@@ -4042,6 +4276,7 @@ async function loadRun(runId) {
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
   state.data = data;
   state.activeRunId = runId;
+  await loadHistoryOps();
   syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
@@ -4150,6 +4385,7 @@ async function submitYeogiImport() {
     els.yeogiImportInput.value = "";
     setYeogiBadge("통합완료");
     els.yeogiImportStatus.textContent = `통합 완료: ${fmtNumber(result.importedCount || 0)}건 반영 · 화면 자동 갱신`;
+    await loadHistoryOps();
     renderAll();
     if (state.selectedItem && els.detailSheet && !els.detailSheet.hidden) renderSheet();
   } catch (error) {

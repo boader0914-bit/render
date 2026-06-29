@@ -2701,6 +2701,189 @@ function summarizeHistoryTimeline(observations) {
     }));
 }
 
+function summarizeHistoryOpsForKeyword(keywordBucket) {
+  const timeline = [...keywordBucket.dateBuckets.values()]
+    .sort((a, b) => a.collectedDate.localeCompare(b.collectedDate))
+    .map((bucket) => ({
+      collectedDate: bucket.collectedDate,
+      observations: bucket.observations,
+      sold: bucket.sold,
+      supply: bucket.supply,
+      saleRate: bucket.supply ? Number((bucket.sold / bucket.supply).toFixed(4)) : null,
+      runCount: bucket.runIds.size,
+      companyCount: bucket.companyKeys.size
+    }));
+
+  const latest = timeline.at(-1) || null;
+  const previous = timeline.length > 1 ? timeline.at(-2) : null;
+  const comparison = latest && previous
+    ? {
+        previousDate: previous.collectedDate,
+        latestDate: latest.collectedDate,
+        saleRateDelta: Number(((latest.saleRate || 0) - (previous.saleRate || 0)).toFixed(4)),
+        soldDelta: latest.sold - previous.sold,
+        supplyDelta: latest.supply - previous.supply,
+        companyDelta: latest.companyCount - previous.companyCount
+      }
+    : null;
+
+  const companyTrends = [...keywordBucket.companyBuckets.values()]
+    .map((bucket) => {
+      const byDate = [...bucket.dateBuckets.values()]
+        .sort((a, b) => a.collectedDate.localeCompare(b.collectedDate))
+        .map((dateBucket) => ({
+          collectedDate: dateBucket.collectedDate,
+          sold: dateBucket.sold,
+          supply: dateBucket.supply,
+          saleRate: dateBucket.supply ? Number((dateBucket.sold / dateBucket.supply).toFixed(4)) : null,
+          observations: dateBucket.observations
+        }));
+      const rates = byDate.map((row) => row.saleRate).filter((value) => Number.isFinite(value));
+      return {
+        companyName: bucket.companyName,
+        companyKey: bucket.companyKey,
+        observations: bucket.observations,
+        sold: bucket.sold,
+        supply: bucket.supply,
+        saleRate: bucket.supply ? Number((bucket.sold / bucket.supply).toFixed(4)) : null,
+        runCount: bucket.runIds.size,
+        dateCount: bucket.dateBuckets.size,
+        latest: byDate.at(-1) || null,
+        minRate: rates.length ? Math.min(...rates) : null,
+        maxRate: rates.length ? Math.max(...rates) : null,
+        volatility: rates.length ? Number((Math.max(...rates) - Math.min(...rates)).toFixed(4)) : null,
+        byDate: byDate.slice(-8)
+      };
+    })
+    .sort((a, b) => (b.volatility || 0) - (a.volatility || 0) || b.observations - a.observations)
+    .slice(0, 12);
+
+  return {
+    keyword: keywordBucket.keyword,
+    keywordKey: keywordBucket.keywordKey,
+    observations: keywordBucket.observations,
+    lodgingObservations: keywordBucket.lodgingObservations,
+    dayUseObservations: keywordBucket.dayUseObservations,
+    runCount: keywordBucket.runIds.size,
+    companyCount: keywordBucket.companyKeys.size,
+    dateCount: keywordBucket.dateBuckets.size,
+    firstCollectedDate: timeline[0]?.collectedDate || "",
+    latestCollectedDate: latest?.collectedDate || "",
+    sold: keywordBucket.sold,
+    supply: keywordBucket.supply,
+    saleRate: keywordBucket.supply ? Number((keywordBucket.sold / keywordBucket.supply).toFixed(4)) : null,
+    timeline: timeline.slice(-10),
+    comparison,
+    companyTrends
+  };
+}
+
+async function summarizeHistoryOperations() {
+  const observations = await readHistoryObservations();
+  const keywordBuckets = new Map();
+  const runIds = new Set();
+  const companyKeys = new Set();
+
+  for (const row of observations) {
+    const keywordKey = String(row.keywordKey || compactKeyword(row.keyword || "")).toLowerCase();
+    if (!keywordKey) continue;
+    runIds.add(row.runId);
+    if (row.companyKey) companyKeys.add(row.companyKey);
+
+    if (!keywordBuckets.has(keywordKey)) {
+      keywordBuckets.set(keywordKey, {
+        keyword: row.keyword || keywordKey,
+        keywordKey,
+        observations: 0,
+        lodgingObservations: 0,
+        dayUseObservations: 0,
+        sold: 0,
+        supply: 0,
+        runIds: new Set(),
+        companyKeys: new Set(),
+        dateBuckets: new Map(),
+        companyBuckets: new Map()
+      });
+    }
+
+    const bucket = keywordBuckets.get(keywordKey);
+    bucket.keyword = bucket.keyword || row.keyword || keywordKey;
+    bucket.observations += 1;
+    if (row.productType === "lodging") bucket.lodgingObservations += 1;
+    if (row.productType === "dayuse") bucket.dayUseObservations += 1;
+    if (row.runId) bucket.runIds.add(row.runId);
+    if (row.companyKey) bucket.companyKeys.add(row.companyKey);
+
+    const supply = Number(row.supply || 0);
+    const sold = Number(row.sold || 0);
+    if (row.productType === "lodging" && Number.isFinite(supply) && supply > 0) {
+      bucket.sold += Number.isFinite(sold) ? sold : 0;
+      bucket.supply += supply;
+      const collectedDate = String(row.collectedDate || row.collectedAt || "").slice(0, 10) || "unknown";
+      const dateBucket = bucket.dateBuckets.get(collectedDate) || {
+        collectedDate,
+        observations: 0,
+        sold: 0,
+        supply: 0,
+        runIds: new Set(),
+        companyKeys: new Set()
+      };
+      dateBucket.observations += 1;
+      dateBucket.sold += Number.isFinite(sold) ? sold : 0;
+      dateBucket.supply += supply;
+      if (row.runId) dateBucket.runIds.add(row.runId);
+      if (row.companyKey) dateBucket.companyKeys.add(row.companyKey);
+      bucket.dateBuckets.set(collectedDate, dateBucket);
+
+      if (row.companyKey) {
+        const companyBucket = bucket.companyBuckets.get(row.companyKey) || {
+          companyName: row.companyName || "",
+          companyKey: row.companyKey,
+          observations: 0,
+          sold: 0,
+          supply: 0,
+          runIds: new Set(),
+          dateBuckets: new Map()
+        };
+        companyBucket.companyName = companyBucket.companyName || row.companyName || row.companyKey;
+        companyBucket.observations += 1;
+        companyBucket.sold += Number.isFinite(sold) ? sold : 0;
+        companyBucket.supply += supply;
+        if (row.runId) companyBucket.runIds.add(row.runId);
+        const companyDateBucket = companyBucket.dateBuckets.get(collectedDate) || {
+          collectedDate,
+          observations: 0,
+          sold: 0,
+          supply: 0
+        };
+        companyDateBucket.observations += 1;
+        companyDateBucket.sold += Number.isFinite(sold) ? sold : 0;
+        companyDateBucket.supply += supply;
+        companyBucket.dateBuckets.set(collectedDate, companyDateBucket);
+        bucket.companyBuckets.set(row.companyKey, companyBucket);
+      }
+    }
+  }
+
+  const keywords = [...keywordBuckets.values()]
+    .map(summarizeHistoryOpsForKeyword)
+    .sort((a, b) => (b.latestCollectedDate || "").localeCompare(a.latestCollectedDate || "") || b.observations - a.observations);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    storage: "jsonl",
+    file: "history/observations.jsonl",
+    overall: {
+      keywordCount: keywords.length,
+      observationCount: observations.length,
+      runCount: runIds.size,
+      companyCount: companyKeys.size,
+      latestCollectedAt: observations.map((row) => row.collectedAt).filter(Boolean).sort().at(-1) || ""
+    },
+    keywords
+  };
+}
+
 async function summarizeHistoryForRun(data) {
   const run = data?.run || {};
   const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
@@ -3381,8 +3564,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-offline-reserved"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-offline-reserved"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-history-ops"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-history-ops"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -3453,6 +3636,10 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       return send(res, 200, currentCrawlStatus());
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {
+      return send(res, 200, await summarizeHistoryOperations());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {

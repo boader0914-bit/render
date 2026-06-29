@@ -2314,7 +2314,7 @@ a.platform-row:hover {
   width: min(880px, 100%);
   margin: 0 auto 24px;
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 5px;
   padding: 7px;
   border: 1px solid rgba(228, 231, 236, .8);
@@ -3873,6 +3873,312 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.history-ops-dashboard {
+  display: grid;
+  gap: 14px;
+}
+
+.history-ops-empty,
+.history-ops-hero,
+.history-ops-card,
+.history-ops-metrics article {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: var(--soft-shadow);
+}
+
+.history-ops-empty {
+  display: grid;
+  gap: 8px;
+  padding: 24px;
+}
+
+.history-ops-empty strong {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 950;
+}
+
+.history-ops-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.history-ops-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px;
+}
+
+.history-ops-hero h3 {
+  margin: 4px 0 8px;
+  color: var(--ink);
+  font-size: clamp(26px, 5vw, 42px);
+  line-height: 1.05;
+  font-weight: 950;
+}
+
+.history-ops-hero p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.history-ops-hero > span {
+  flex: 0 0 auto;
+  border: 1px solid #dbe7ff;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: var(--blue-dark);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.history-ops-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.history-ops-metrics article {
+  display: grid;
+  gap: 5px;
+  padding: 15px;
+}
+
+.history-ops-metrics span,
+.history-ops-metrics small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.history-ops-metrics strong {
+  min-width: 0;
+  color: var(--blue);
+  font-size: clamp(22px, 4vw, 32px);
+  line-height: 1.05;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.history-ops-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(300px, .85fr);
+  gap: 14px;
+}
+
+.history-ops-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.history-ops-card.wide {
+  grid-column: 1 / -1;
+}
+
+.history-ops-keyword-list,
+.history-ops-log,
+.history-ops-company-list {
+  display: grid;
+  gap: 8px;
+}
+
+.history-ops-keyword-list article,
+.history-ops-log button,
+.history-ops-log article,
+.history-ops-company-list button {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fbfcfd;
+  text-align: left;
+}
+
+.history-ops-keyword-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+}
+
+.history-ops-keyword-list article.active {
+  border-color: #b8d7ff;
+  background: #f5f9ff;
+}
+
+.history-ops-keyword-list strong,
+.history-ops-company-list strong,
+.history-ops-log strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-ops-keyword-list small,
+.history-ops-company-list small,
+.history-ops-log span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.history-ops-keyword-list article > span {
+  color: var(--blue-dark);
+  font-size: 18px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.history-ops-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.history-ops-comparison article {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.history-ops-comparison span,
+.history-ops-comparison small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.history-ops-comparison strong {
+  color: var(--ink);
+  font-size: 19px;
+  line-height: 1.05;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.history-ops-timeline {
+  min-height: 154px;
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.history-ops-timeline div {
+  flex: 0 0 42px;
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  align-items: end;
+}
+
+.history-ops-timeline span {
+  width: 100%;
+  height: 94px;
+  display: flex;
+  align-items: end;
+  border-radius: 10px;
+  background: #edf2f7;
+  overflow: hidden;
+}
+
+.history-ops-timeline i,
+.history-ops-spark span {
+  display: block;
+  width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, #3182f6, #175cd3);
+}
+
+.history-ops-timeline b,
+.history-ops-timeline em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.history-ops-log button,
+.history-ops-log article {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+}
+
+.history-ops-log button.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.history-ops-log button.bad {
+  border-color: #fecaca;
+  background: #fef3f2;
+}
+
+.history-ops-log article.good {
+  border-color: #b7ebcf;
+  background: #ecfdf3;
+}
+
+.history-ops-company-list button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(86px, .35fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+}
+
+.history-ops-company-list button:disabled {
+  opacity: .72;
+}
+
+.history-ops-spark {
+  height: 34px;
+  display: flex;
+  align-items: end;
+  gap: 4px;
+}
+
+.history-ops-spark span {
+  width: 9px;
+  min-height: 4px;
+  background: #3182f6;
+}
+
+.history-ops-company-list em {
+  color: var(--blue-dark);
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .demand-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(280px, .9fr);
@@ -4270,8 +4576,17 @@ a.platform-row:hover {
 
   .demand-layout,
   .demand-company-card,
+  .history-ops-layout,
   .history-layout {
     grid-template-columns: 1fr;
+  }
+
+  .history-ops-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .history-ops-hero {
+    display: grid;
   }
 
   .history-metric-grid {
@@ -4569,8 +4884,19 @@ a.platform-row:hover {
   .validation-metric-grid,
   .sheet-flow-grid,
   .sheet-history-grid,
-  .sheet-audit-grid {
+  .sheet-audit-grid,
+  .history-ops-metrics,
+  .history-ops-comparison {
     grid-template-columns: 1fr;
+  }
+
+  .history-ops-company-list button {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .history-ops-spark {
+    grid-column: 1 / -1;
+    order: 3;
   }
 
   .audit-queue-list button {

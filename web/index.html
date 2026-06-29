@@ -32,6 +32,7 @@
         <button type="button" data-tab="target">영업타깃</button>
         <button type="button" data-tab="map">지역지도</button>
         <button type="button" data-tab="demand">수요구조</button>
+        <button type="button" data-tab="historyOps">누적DB</button>
         <button type="button" data-tab="admin">관리</button>
       </nav>
 
@@ -113,6 +114,17 @@
           <span id="demandState">대기</span>
         </div>
         <div class="demand-dashboard" id="demandDashboard"></div>
+      </section>
+
+      <section class="tab-panel" id="historyOpsPanel" data-panel="historyOps" aria-label="누적 DB 분석">
+        <div class="section-title">
+          <div>
+            <h2>누적 DB 분석</h2>
+            <p>동일 키워드 반복 수집 이력, 회차 비교, 업체별 추이 관리</p>
+          </div>
+          <span id="historyOpsState">대기</span>
+        </div>
+        <div class="history-ops-dashboard" id="historyOpsDashboard"></div>
       </section>
 
       <section class="tab-panel" id="adminPanel" data-panel="admin" aria-label="관리">
@@ -263,6 +275,7 @@
         <button class="secondary-button" type="button" data-drawer-tab="target">영업타깃 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="map">지도 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="demand">검색수요 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="historyOps">누적DB 보기</button>
         <button class="primary-button" type="button" data-drawer-tab="admin">관리 열기</button>
       </div>
       <p class="hint">수집, 여기어때 통합, API 키, 파일은 관리 탭에 있습니다.</p>
