@@ -1129,11 +1129,212 @@ function validationCardValue(label, value, note = "") {
   `;
 }
 
+function medianNumber(values = []) {
+  const sorted = values
+    .map(Number)
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (!sorted.length) return NaN;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function rateGapText(value) {
+  return Number.isFinite(Number(value)) ? formatSignedRate(Number(value)) : "대기";
+}
+
+function inventoryAuditProfile(item = {}) {
+  const rows = bookingGraphRows(item);
+  const collectedRows = rows.filter((row) => !row.missing && finiteNumber(row.total, 0) > 0);
+  const rawTotals = collectedRows
+    .map((row) => finiteNumber(row.rawTotal, row.total))
+    .filter((value) => value > 0);
+  const totalMax = rawTotals.length ? Math.max(...rawTotals) : 0;
+  const totalMin = rawTotals.length ? Math.min(...rawTotals) : 0;
+  const totalMedian = medianNumber(rawTotals);
+  const totalGap = Math.max(0, totalMax - totalMin);
+  const totalGapRate = totalMax ? totalGap / totalMax : NaN;
+  const varianceRows = collectedRows.filter((row) => {
+    const rawTotal = finiteNumber(row.rawTotal, row.total);
+    if (!rawTotal || !Number.isFinite(totalMedian)) return false;
+    return rawTotal <= totalMedian * 0.72 || rawTotal >= totalMedian * 1.28;
+  });
+  const missingCount = rows.filter((row) => row.missing).length;
+  const structure = inventoryStructureInfo(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const flow = salesFlowProfile(item);
+  const weekdayHistory = flow.history?.weekday;
+  const weekdayGap = Number.isFinite(flow.weekday.rate) && Number.isFinite(Number(weekdayHistory?.saleRate))
+    ? flow.weekday.rate - Number(weekdayHistory.saleRate)
+    : NaN;
+  const lodging = salesStats(item, "lodging");
+  const day = salesStats(item, "day");
+  const flags = new Set(structure.flags || []);
+  const reasons = [];
+  const actions = [];
+  let statusKey = "normal";
+  let tone = "good";
+  let priority = 0;
+
+  if (flags.has("booking_id_reused") || confidence.grade === "E") {
+    statusKey = "structure_risk";
+    tone = "bad";
+    priority += 70;
+    reasons.push("예약ID 또는 상품 구조 재확인이 필요합니다.");
+    actions.push("네이버 객실 탭에서 객실별/종류별 판매 방식을 직접 확인");
+  }
+
+  if (flags.has("dynamic_capacity") || (Number.isFinite(totalGapRate) && totalGap >= 2 && totalGapRate >= 0.25)) {
+    if (statusKey === "normal") {
+      statusKey = "phone_stock";
+      tone = "watch";
+    }
+    priority += 48;
+    reasons.push(`날짜별 총량 변동 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`);
+    actions.push("전화예약, 시설점검, 채널 재고조절 가능성으로 우선 해석");
+  }
+
+  if (varianceRows.length) {
+    priority += Math.min(30, varianceRows.length * 8);
+    reasons.push(`총량 튐 ${fmtNumber(varianceRows.length)}일`);
+  }
+
+  if (missingCount) {
+    if (statusKey === "normal") {
+      statusKey = "quantity_check";
+      tone = "watch";
+    }
+    priority += Math.min(32, missingCount * 6);
+    reasons.push(`미수집 날짜 ${fmtNumber(missingCount)}일`);
+    actions.push("동일 기간으로 재수집 후 날짜별 상세 비교");
+  }
+
+  if (["D", "E"].includes(confidence.grade)) {
+    if (statusKey === "normal") {
+      statusKey = "quantity_check";
+      tone = "watch";
+    }
+    priority += confidence.grade === "E" ? 30 : 18;
+    reasons.push(`수집 신뢰도 ${confidence.grade}`);
+  }
+
+  if (flags.has("dayuse_rotation") || (day.supply && lodging.supply && day.supply >= lodging.supply * 0.6)) {
+    priority += 14;
+    reasons.push("데이유즈/캠프닉 회전형 상품 병행 가능성");
+    actions.push("숙박과 당일상품을 분리해서 판매수·총량 확인");
+  }
+
+  if (Number.isFinite(weekdayGap) && Math.abs(weekdayGap) >= 0.25) {
+    if (statusKey === "normal") {
+      statusKey = "quantity_check";
+      tone = "watch";
+    }
+    priority += 16;
+    reasons.push(`누적 평일 대비 ${rateGapText(weekdayGap)}`);
+  }
+
+  if (statusKey === "normal" && confidence.grade === "A" && collectedRows.length >= Math.min(7, bookingDays(state.data?.run || {}))) {
+    statusKey = "confirmed";
+    tone = "good";
+    reasons.push("현재 기간 기준 수량 구조가 안정적입니다.");
+    actions.push("영업타깃 판단에 바로 사용 가능");
+  }
+
+  const labelMap = {
+    confirmed: "수동확정 가능",
+    normal: "정상",
+    quantity_check: "수량확인 필요",
+    structure_risk: "상품구조 의심",
+    phone_stock: "전화예약/재고조절 가능성"
+  };
+  const defaultAction = statusKey === "normal" || statusKey === "confirmed"
+    ? "현재 결과를 기준값으로 사용"
+    : statusKey === "structure_risk"
+      ? "상품 종류와 실제 객실 수량을 먼저 검증"
+      : statusKey === "phone_stock"
+        ? "총량 변동 원인을 메모하고 판매율 해석"
+        : "날짜별 상세를 열어 원자료 확인";
+
+  return {
+    statusKey,
+    label: labelMap[statusKey] || "확인 필요",
+    tone,
+    priority,
+    reasons: [...new Set(reasons)].slice(0, 5),
+    actions: [...new Set(actions.length ? actions : [defaultAction])].slice(0, 3),
+    metrics: {
+      totalMin,
+      totalMax,
+      totalGap,
+      totalGapRate,
+      missingCount,
+      varianceDays: varianceRows.length,
+      weekdayGap,
+      collectedDays: collectedRows.length
+    }
+  };
+}
+
+function validationQueueEntries(items = [], limit = 8) {
+  const entries = items
+    .map((item, index) => ({ item, index, audit: inventoryAuditProfile(item) }))
+    .filter(({ audit }) => audit.statusKey !== "confirmed" && audit.statusKey !== "normal")
+    .sort((a, b) => b.audit.priority - a.audit.priority || Number(a.item.rank || 999) - Number(b.item.rank || 999));
+  return limit ? entries.slice(0, limit) : entries;
+}
+
+function renderValidationQueue(items = []) {
+  const entries = validationQueueEntries(items, 6);
+  const allEntries = items.map((item) => inventoryAuditProfile(item));
+  const counts = allEntries.reduce((acc, audit) => {
+    acc[audit.statusKey] = (acc[audit.statusKey] || 0) + 1;
+    return acc;
+  }, {});
+  const chips = [
+    ["상품구조 의심", counts.structure_risk || 0, "bad"],
+    ["수량확인 필요", counts.quantity_check || 0, "watch"],
+    ["재고조절 가능성", counts.phone_stock || 0, "watch"],
+    ["정상/확정", (counts.normal || 0) + (counts.confirmed || 0), "good"]
+  ];
+  return `
+    <div class="validation-card validation-card-audit">
+      <div class="validation-card-head compact">
+        <div>
+          <span class="eyebrow">검증 큐</span>
+          <h3>이상치·수량 구조 점검</h3>
+        </div>
+        <span>${fmtNumber(entries.length)} 우선확인</span>
+      </div>
+      <div class="audit-status-strip">
+        ${chips.map(([label, count, tone]) => `<span class="${tone}">${escapeHtml(label)} <b>${fmtNumber(count)}</b></span>`).join("")}
+      </div>
+      <div class="audit-queue-list">
+        ${entries.length ? entries.map(({ item, index, audit }) => {
+          const metric = audit.metrics.totalMax
+            ? `총량 ${fmtNumber(audit.metrics.totalMin)}~${fmtNumber(audit.metrics.totalMax)}개`
+            : `${fmtNumber(audit.metrics.collectedDays)}일 관측`;
+          return `
+            <button type="button" data-open-company="${index}">
+              <span class="audit-rank">${escapeHtml(item.rank || index + 1)}</span>
+              <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+              <em class="${escapeHtml(audit.tone)}">${escapeHtml(audit.label)}</em>
+              <small>${escapeHtml([metric, audit.reasons[0]].filter(Boolean).join(" · "))}</small>
+            </button>
+          `;
+        }).join("") : `<p>현재 우선 검증할 이상치가 없습니다.</p>`}
+      </div>
+    </div>
+  `;
+}
+
 function validationReasonRow(item = {}) {
   const analysis = targetExpansionAnalysis(item);
   const confidence = inventoryConfidenceInfo(item);
   const structure = inventoryStructureInfo(item);
+  const audit = inventoryAuditProfile(item);
   const reasons = [
+    `${audit.label}: ${audit.actions[0] || "확인"}`,
+    ...audit.reasons,
     `구조: ${structure.label}`,
     `확인: ${structure.action}`,
     ...confidence.alerts.map((reason) => `검증: ${reason}`),
@@ -1218,6 +1419,7 @@ function renderValidationBoard(items = []) {
         </div>
         <small>${missingItems ? `${fmtNumber(missingItems)}개 업체는 일부 날짜 미수집` : "입력 기간 날짜별 수집 정상"}</small>
       </div>
+      ${renderValidationQueue(items)}
     </section>
   `;
 }
@@ -1227,6 +1429,7 @@ function targetExpansionAnalysis(item = {}) {
   const lodging = salesStats(item, "lodging");
   const day = salesStats(item, "day");
   const confidence = inventoryConfidenceInfo(item);
+  const audit = inventoryAuditProfile(item);
   const flow = salesFlowProfile(item);
   const profile = {
     friday: flow.friday,
@@ -1301,6 +1504,18 @@ function targetExpansionAnalysis(item = {}) {
   if (["D", "E"].includes(confidence.grade)) {
     score -= 12;
     reasons.push("수집값 검증 필요");
+  }
+  if (audit.statusKey === "phone_stock") {
+    score += 4;
+    reasons.push("전화예약/재고조절 메모 필요");
+  }
+  if (audit.statusKey === "quantity_check") {
+    score -= 7;
+    reasons.push("수량 확인 후 판단");
+  }
+  if (audit.statusKey === "structure_risk") {
+    score -= 16;
+    reasons.push("상품구조 검증 후 컨택");
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
@@ -3397,6 +3612,36 @@ function dateRow(row) {
   `;
 }
 
+function sheetAuditPanel(item = {}) {
+  const audit = inventoryAuditProfile(item);
+  const metrics = [
+    ["검증상태", audit.label, audit.actions[0] || "확인"],
+    ["총량변동", audit.metrics.totalMax ? `${fmtNumber(audit.metrics.totalMin)}~${fmtNumber(audit.metrics.totalMax)}개` : "대기", audit.metrics.totalGap ? `차이 ${fmtNumber(audit.metrics.totalGap)}개` : "변동 없음"],
+    ["미수집", `${fmtNumber(audit.metrics.missingCount)}일`, "입력기간 기준"],
+    ["누적편차", rateGapText(audit.metrics.weekdayGap), "현재 평일-누적 평일"]
+  ];
+  return `
+    <section class="sheet-section sheet-audit-section ${escapeHtml(audit.tone)}">
+      <div class="sheet-structure-title">
+        <h3>검증 큐 판단</h3>
+        <span class="structure-badge ${escapeHtml(audit.tone)}">${escapeHtml(audit.label)}</span>
+      </div>
+      <div class="sheet-audit-grid">
+        ${metrics.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sheet-audit-reasons">
+        ${(audit.reasons.length ? audit.reasons : ["현재 기준 특이 신호가 없습니다."]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function sheetFlowOverview(item = {}) {
   const flow = salesFlowProfile(item);
   const confidence = inventoryConfidenceInfo(item);
@@ -3534,6 +3779,7 @@ function renderSheetBooking(item) {
   const historyWeekday = flow.history?.weekday;
   return `
     ${sheetFlowOverview(item)}
+    ${sheetAuditPanel(item)}
     ${sheetHistoryPanel(item)}
     ${sheetInventoryStructure(item)}
     <section class="sheet-section">

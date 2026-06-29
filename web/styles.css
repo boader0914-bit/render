@@ -487,6 +487,130 @@ a {
   margin-top: 10px;
 }
 
+.validation-card-audit {
+  grid-column: 1 / -1;
+}
+
+.audit-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.audit-status-strip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.audit-status-strip span.good {
+  border-color: #b7ebcf;
+  background: #f0fdf6;
+  color: #087443;
+}
+
+.audit-status-strip span.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.audit-status-strip span.bad {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
+}
+
+.audit-status-strip b {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.audit-queue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-queue-list button {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1.1fr) minmax(110px, .55fr) minmax(0, 1.35fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  padding: 11px;
+  text-align: left;
+}
+
+.audit-rank {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 12px;
+  background: #eef6ff;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.audit-queue-list strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-queue-list em {
+  justify-self: start;
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.audit-queue-list em.good {
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.audit-queue-list em.watch {
+  background: #fffaeb;
+  color: #b54708;
+}
+
+.audit-queue-list em.bad {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.audit-queue-list small,
+.audit-queue-list p {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .dictionary-search-card,
 .location-card,
 .company-card,
@@ -2433,6 +2557,72 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.sheet-audit-section {
+  gap: 12px;
+}
+
+.sheet-audit-section.good {
+  border-color: #b7ebcf;
+}
+
+.sheet-audit-section.watch {
+  border-color: #fedf89;
+}
+
+.sheet-audit-section.bad {
+  border-color: #fecaca;
+}
+
+.sheet-audit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sheet-audit-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.sheet-audit-grid span,
+.sheet-audit-grid small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.sheet-audit-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.08;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.sheet-audit-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.sheet-audit-reasons span {
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
 .sheet-structure-section {
   gap: 12px;
 }
@@ -4092,6 +4282,10 @@ a.platform-row:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .sheet-audit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .demand-company-card dl {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -4109,6 +4303,14 @@ a.platform-row:hover {
 
   .validation-board {
     grid-template-columns: 1fr;
+  }
+
+  .audit-queue-list button {
+    grid-template-columns: 38px minmax(0, 1fr) minmax(98px, auto);
+  }
+
+  .audit-queue-list small {
+    grid-column: 2 / -1;
   }
 
   .validation-metric-grid {
@@ -4366,8 +4568,18 @@ a.platform-row:hover {
 
   .validation-metric-grid,
   .sheet-flow-grid,
-  .sheet-history-grid {
+  .sheet-history-grid,
+  .sheet-audit-grid {
     grid-template-columns: 1fr;
+  }
+
+  .audit-queue-list button {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .audit-queue-list em,
+  .audit-queue-list small {
+    grid-column: 2 / -1;
   }
 
   .history-metric-grid {
