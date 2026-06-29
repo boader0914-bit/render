@@ -1987,6 +1987,192 @@ function demandCompanySample() {
   `;
 }
 
+function historySource() {
+  return state.data?.history || {};
+}
+
+function historyRateText(value) {
+  return Number.isFinite(Number(value)) ? fmtRate(Number(value)) : "누적 대기";
+}
+
+function historyMetricCard(label, value, note = "") {
+  return `
+    <article>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+    </article>
+  `;
+}
+
+function historyLeadTimeChart(leadTime = []) {
+  const rows = [...leadTime]
+    .filter((row) => Number.isFinite(Number(row.leadTimeDays)))
+    .sort((a, b) => Number(b.leadTimeDays) - Number(a.leadTimeDays))
+    .slice(-14);
+  if (!rows.length) {
+    return `<div class="history-empty-inline">리드타임 누적 데이터가 아직 부족합니다.</div>`;
+  }
+  return `
+    <div class="history-lead-chart" aria-label="리드타임별 누적 판매율">
+      ${rows.map((row) => {
+        const rate = Number(row.saleRate);
+        const height = Number.isFinite(rate) ? Math.max(4, Math.min(100, rate * 100)) : 0;
+        const label = Number(row.leadTimeDays) === 0 ? "D-day" : `D-${fmtNumber(row.leadTimeDays)}`;
+        return `
+          <div title="${escapeHtml(`${label} · ${historyRateText(rate)} · ${fmtNumber(row.observations)}건`)}">
+            <span><i style="height:${height}%"></i></span>
+            <b>${escapeHtml(label)}</b>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function historyDayBars(byDay = []) {
+  const order = ["월", "화", "수", "목", "금", "토", "일"];
+  const mapped = new Map((byDay || []).map((row) => [row.label, row]));
+  return `
+    <div class="history-day-bars" aria-label="요일별 누적 판매율">
+      ${order.map((label) => {
+        const row = mapped.get(label);
+        const rate = Number(row?.saleRate);
+        const width = Number.isFinite(rate) ? Math.max(3, Math.min(100, rate * 100)) : 0;
+        return `
+          <div>
+            <span>${label}</span>
+            <i><em style="width:${width}%"></em></i>
+            <strong>${historyRateText(rate)}</strong>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function historyTimelineChart(timeline = []) {
+  const rows = [...timeline].slice(-8);
+  if (!rows.length) {
+    return `<div class="history-empty-inline">수집일별 변화 데이터가 아직 없습니다.</div>`;
+  }
+  return `
+    <div class="history-timeline" aria-label="수집일별 누적 판매율 변화">
+      ${rows.map((row) => {
+        const rate = Number(row.saleRate);
+        const height = Number.isFinite(rate) ? Math.max(4, Math.min(100, rate * 100)) : 0;
+        const label = row.collectedDate ? row.collectedDate.slice(5).replace("-", "/") : "-";
+        return `
+          <div title="${escapeHtml(`${row.collectedDate || ""} · ${historyRateText(rate)} · ${fmtNumber(row.companyCount)}업체`)}">
+            <b>${historyRateText(rate)}</b>
+            <span><i style="height:${height}%"></i></span>
+            <em>${escapeHtml(label)}</em>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function historyCompanyRows() {
+  const benchmarks = historySource().benchmarks?.companyBenchmarks || {};
+  const items = state.data?.availability?.items || [];
+  return items
+    .map((item) => {
+      const key = companyKey(item.name);
+      const benchmark = key ? benchmarks[key] : null;
+      const flow = salesFlowProfile(item);
+      const weekday = benchmark?.weekday;
+      const all = benchmark?.all;
+      const sat = flow.saturday;
+      const currentAll = flow.all;
+      const gap = Number.isFinite(Number(sat.rate)) && Number.isFinite(Number(weekday?.saleRate))
+        ? Number(sat.rate) - Number(weekday.saleRate)
+        : NaN;
+      return { item, benchmark, weekday, all, sat, currentAll, gap };
+    })
+    .filter((row) => row.benchmark && (row.all?.observations || row.weekday?.observations))
+    .sort((a, b) => {
+      const gapA = Number.isFinite(a.gap) ? a.gap : -1;
+      const gapB = Number.isFinite(b.gap) ? b.gap : -1;
+      return gapB - gapA || Number(a.item.rank || 999) - Number(b.item.rank || 999);
+    })
+    .slice(0, 6);
+}
+
+function renderHistoryLab() {
+  const history = historySource();
+  const benchmarks = history.benchmarks || {};
+  const rows = historyCompanyRows();
+  const hasHistory = finiteNumber(history.observationCount, 0) > 0;
+  if (!hasHistory) {
+    return `
+      <section class="history-lab empty-state">
+        <div class="demand-card-head">
+          <div>
+            <h3>누적 DB</h3>
+            <p>같은 키워드를 반복 수집하면 리드타임과 요일별 평균이 쌓입니다.</p>
+          </div>
+          <span>대기</span>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="history-lab">
+      <div class="demand-card-head">
+        <div>
+          <h3>누적 DB</h3>
+          <p>동일 키워드 반복 수집 기반 리드타임·요일별·업체별 변화</p>
+        </div>
+        <span>${history.canAnalyzeLeadTime ? "분석 가능" : "누적 중"}</span>
+      </div>
+      <div class="history-metric-grid">
+        ${historyMetricCard("누적 관측", fmtNumber(history.observationCount), `${fmtNumber(history.runCount)}회 수집 · ${fmtNumber(history.companyCount)}업체`)}
+        ${historyMetricCard("현재 수집 반영", fmtNumber(history.currentRunObservationCount), "이번 결과 관측치")}
+        ${historyMetricCard("누적 평일", historyRateText(benchmarks.weekday?.saleRate), `${fmtNumber(benchmarks.weekday?.observations || 0)}건`)}
+        ${historyMetricCard("누적 전체", historyRateText(benchmarks.all?.saleRate), `${fmtNumber(benchmarks.all?.sold || 0)}/${fmtNumber(benchmarks.all?.supply || 0)}개`)}
+      </div>
+      <div class="history-layout">
+        <article class="history-card">
+          <div class="history-card-head">
+            <strong>리드타임 곡선</strong>
+            <small>D-day 기준 판매율</small>
+          </div>
+          ${historyLeadTimeChart(history.leadTime || [])}
+        </article>
+        <article class="history-card">
+          <div class="history-card-head">
+            <strong>요일별 평균</strong>
+            <small>숙박 상품 누적 기준</small>
+          </div>
+          ${historyDayBars(benchmarks.byDay || [])}
+        </article>
+        <article class="history-card">
+          <div class="history-card-head">
+            <strong>수집일별 변화</strong>
+            <small>최근 수집일 기준</small>
+          </div>
+          ${historyTimelineChart(history.timeline || [])}
+        </article>
+      </div>
+      <div class="history-company-table">
+        <div class="history-company-head">
+          <span>업체</span><span>현재 전체</span><span>누적 평일</span><span>토-평일 차이</span>
+        </div>
+        ${rows.length ? rows.map(({ item, weekday, currentAll, gap }) => `
+          <button type="button" data-open-company="${(state.data?.availability?.items || []).indexOf(item)}">
+            <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+            <span>${historyRateText(currentAll.rate)}</span>
+            <span>${historyRateText(weekday?.saleRate)}</span>
+            <em>${Number.isFinite(gap) ? formatSignedRate(gap) : "대기"}</em>
+          </button>
+        `).join("") : `<p>업체별 누적 비교 데이터가 아직 부족합니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderDemand() {
   if (!els.demandDashboard) return;
   const data = state.data || {};
@@ -2017,6 +2203,8 @@ function renderDemand() {
     </section>
 
     ${renderDemandStructure()}
+
+    ${renderHistoryLab()}
 
     <section class="demand-metric-grid" aria-label="검색수요 핵심 지표">
       <article><span>월검색량</span><strong>${total ? fmtNumber(total) : "확인필요"}</strong><small>PC+모바일</small></article>
@@ -3292,6 +3480,45 @@ function sheetInventoryStructure(item = {}) {
   `;
 }
 
+function sheetHistoryPanel(item = {}) {
+  const benchmark = historyCompanyBenchmark(item);
+  if (!benchmark?.all?.observations && !benchmark?.weekday?.observations) {
+    return "";
+  }
+  const flow = salesFlowProfile(item);
+  const currentWeekday = flow.weekday;
+  const currentAll = flow.all;
+  const cumulativeAll = benchmark.all || {};
+  const cumulativeWeekday = benchmark.weekday || {};
+  const weekdayGap = Number.isFinite(Number(currentWeekday.rate)) && Number.isFinite(Number(cumulativeWeekday.saleRate))
+    ? Number(currentWeekday.rate) - Number(cumulativeWeekday.saleRate)
+    : NaN;
+  const cells = [
+    ["현재 전체", historyRateText(currentAll.rate), `${fmtNumber(currentAll.sold)}/${fmtNumber(currentAll.total)}개`],
+    ["누적 전체", historyRateText(cumulativeAll.saleRate), `${fmtNumber(cumulativeAll.observations || 0)}건`],
+    ["현재 평일", historyRateText(currentWeekday.rate), `${fmtNumber(currentWeekday.count || 0)}일`],
+    ["누적 평일", historyRateText(cumulativeWeekday.saleRate), `${fmtNumber(cumulativeWeekday.observations || 0)}건`],
+    ["평일 편차", Number.isFinite(weekdayGap) ? formatSignedRate(weekdayGap) : "대기", "현재-누적"]
+  ];
+  return `
+    <section class="sheet-section sheet-history-section">
+      <div class="sheet-structure-title">
+        <h3>누적 DB 비교</h3>
+        <span class="structure-badge watch">${fmtNumber(cumulativeAll.runCount || 0)}회 수집</span>
+      </div>
+      <div class="sheet-history-grid">
+        ${cells.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderSheetBooking(item) {
   const run = state.data?.run || {};
   const rangeDays = bookingDays(run);
@@ -3307,6 +3534,7 @@ function renderSheetBooking(item) {
   const historyWeekday = flow.history?.weekday;
   return `
     ${sheetFlowOverview(item)}
+    ${sheetHistoryPanel(item)}
     ${sheetInventoryStructure(item)}
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>

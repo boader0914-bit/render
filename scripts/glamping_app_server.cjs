@@ -2644,6 +2644,45 @@ function summarizeHistoryBenchmarks(observations) {
   };
 }
 
+function summarizeHistoryTimeline(observations) {
+  const dateBuckets = new Map();
+  const lodgingRows = observations.filter((row) => row.productType === "lodging");
+
+  for (const row of lodgingRows) {
+    const collectedDate = String(row.collectedDate || row.collectedAt || "").slice(0, 10);
+    if (!collectedDate) continue;
+    const bucket = dateBuckets.get(collectedDate) || {
+      collectedDate,
+      observations: 0,
+      sold: 0,
+      supply: 0,
+      available: 0,
+      runIds: new Set(),
+      companyKeys: new Set()
+    };
+    bucket.observations += 1;
+    bucket.sold += Number(row.sold || 0);
+    bucket.supply += Number(row.supply || 0);
+    bucket.available += Number(row.available || 0);
+    if (row.runId) bucket.runIds.add(row.runId);
+    if (row.companyKey) bucket.companyKeys.add(row.companyKey);
+    dateBuckets.set(collectedDate, bucket);
+  }
+
+  return [...dateBuckets.values()]
+    .sort((a, b) => a.collectedDate.localeCompare(b.collectedDate))
+    .map((bucket) => ({
+      collectedDate: bucket.collectedDate,
+      observations: bucket.observations,
+      sold: bucket.sold,
+      supply: bucket.supply,
+      available: bucket.available,
+      saleRate: bucket.supply ? Number((bucket.sold / bucket.supply).toFixed(4)) : null,
+      runCount: bucket.runIds.size,
+      companyCount: bucket.companyKeys.size
+    }));
+}
+
 async function summarizeHistoryForRun(data) {
   const run = data?.run || {};
   const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
@@ -2677,6 +2716,7 @@ async function summarizeHistoryForRun(data) {
       saleRate: bucket.supply ? Number((bucket.sold / bucket.supply).toFixed(4)) : null
     }));
   const benchmarks = summarizeHistoryBenchmarks(observations);
+  const timeline = summarizeHistoryTimeline(observations);
 
   return {
     enabled: true,
@@ -2690,7 +2730,8 @@ async function summarizeHistoryForRun(data) {
     latestCollectedAt: observations.map((row) => row.collectedAt).filter(Boolean).sort().at(-1) || "",
     canAnalyzeLeadTime: runIds.size >= 2,
     leadTime,
-    benchmarks
+    benchmarks,
+    timeline
   };
 }
 
@@ -3322,8 +3363,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-inventory-structure"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-inventory-structure"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-history-lab"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-history-lab"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
