@@ -813,10 +813,28 @@ function inventoryConfidenceInfo(item = {}) {
   return { grade, label, summary, reasons, alerts, tone };
 }
 
+function inventoryStructureInfo(item = {}) {
+  const structure = item.inventoryStructure || {};
+  const type = item.inventoryStructureType || structure.type || "unknown";
+  const label = item.inventoryStructureLabel || structure.label || "구조 확인필요";
+  const tone = item.inventoryStructureTone || structure.tone || "bad";
+  const summary = item.inventoryStructureSummary || structure.summary || "예약 리스트 구조 확인이 필요합니다.";
+  const flags = item.inventoryStructureFlags || structure.flags || [];
+  const notes = item.inventoryStructureNotes || structure.notes || [];
+  const action = item.inventoryStructureAction || structure.action || "표본 날짜 재검증";
+  return { type, label, tone, summary, flags, notes, action };
+}
+
 function inventoryConfidenceBadge(item = {}) {
   const info = inventoryConfidenceInfo(item);
   const alertText = info.alerts.length ? ` · ${info.alerts[0]}` : "";
   return `<span class="confidence-badge ${info.tone}" title="${escapeHtml(info.summary)}">신뢰도 ${escapeHtml(info.grade)}${escapeHtml(alertText)}</span>`;
+}
+
+function inventoryStructureBadge(item = {}) {
+  const info = inventoryStructureInfo(item);
+  const flagText = info.flags.includes("dynamic_capacity") ? " · 총량변동" : info.flags.includes("dayuse_rotation") ? " · 당일병행" : "";
+  return `<span class="structure-badge ${escapeHtml(info.tone)}" title="${escapeHtml(info.summary)}">${escapeHtml(info.label)}${escapeHtml(flagText)}</span>`;
 }
 
 function bookingGraphRows(item) {
@@ -966,7 +984,7 @@ function renderCompanies() {
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>
-            <div class="company-badges">${inventoryConfidenceBadge(item)}</div>
+            <div class="company-badges">${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}</div>
           </div>
         </div>
         <div class="company-metric">
@@ -1114,8 +1132,12 @@ function validationCardValue(label, value, note = "") {
 function validationReasonRow(item = {}) {
   const analysis = targetExpansionAnalysis(item);
   const confidence = inventoryConfidenceInfo(item);
+  const structure = inventoryStructureInfo(item);
   const reasons = [
+    `구조: ${structure.label}`,
+    `확인: ${structure.action}`,
     ...confidence.alerts.map((reason) => `검증: ${reason}`),
+    ...structure.notes,
     ...analysis.reasons
   ].filter(Boolean).slice(0, 4);
   if (!reasons.length) return "";
@@ -1131,6 +1153,14 @@ function renderValidationBoard(items = []) {
   const flow = aggregateFlowProfiles(items);
   const lowConfidence = finiteNumber(stats.lowConfidenceCount, 0);
   const stockVariance = finiteNumber(stats.stockVarianceCount, 0);
+  const dayUseMixed = finiteNumber(stats.dayUseMixedCount, 0);
+  const bookingIdReused = finiteNumber(stats.bookingIdReusedCount, 0);
+  const structureCounts = stats.inventoryStructureCounts || {};
+  const structureSummary = Object.entries(structureCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([label, count]) => `${label} ${fmtNumber(count)}`)
+    .join(" · ");
   const missingItems = items.filter((item) => bookingGraphRows(item).some((row) => row.missing)).length;
   const targets = targetEntries(5);
   const run = state.data?.run || {};
@@ -1149,8 +1179,9 @@ function renderValidationBoard(items = []) {
           ${validationCardValue("전체 판매율", fmtRate(flow.all.rate), `${fmtNumber(flow.all.sold)}/${fmtNumber(flow.all.total)}개`)}
           ${validationCardValue("평일 기준", Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요", `${fmtNumber(flow.weekday.count)}일 관측`)}
           ${validationCardValue("토요일", Number.isFinite(flow.saturday.rate) ? fmtRate(flow.saturday.rate) : "확인필요", "주말 수요")}
-          ${validationCardValue("검증 필요", fmtNumber(lowConfidence), `총량 변동 ${fmtNumber(stockVariance)}`)}
+          ${validationCardValue("검증 필요", fmtNumber(lowConfidence), `총량변동 ${fmtNumber(stockVariance)} · 당일 ${fmtNumber(dayUseMixed)}`)}
         </div>
+        ${structureSummary ? `<div class="structure-summary-strip">${escapeHtml(structureSummary)}${bookingIdReused ? ` · 예약ID 재확인 ${fmtNumber(bookingIdReused)}` : ""}</div>` : ""}
       </div>
       <div class="validation-card validation-card-flow">
         <div class="validation-card-head compact">
@@ -3181,6 +3212,7 @@ function dateRow(row) {
 function sheetFlowOverview(item = {}) {
   const flow = salesFlowProfile(item);
   const confidence = inventoryConfidenceInfo(item);
+  const structure = inventoryStructureInfo(item);
   const historyWeekday = flow.history?.weekday;
   const analysis = targetExpansionAnalysis(item);
   const cells = [
@@ -3196,7 +3228,7 @@ function sheetFlowOverview(item = {}) {
       <div class="sheet-decision-head">
         <div>
           <h3>관리자 판단 요약</h3>
-          <p>${escapeHtml(analysis.label)} · ${fmtNumber(analysis.score)}점</p>
+          <p>${escapeHtml(analysis.label)} · ${fmtNumber(analysis.score)}점 · ${escapeHtml(structure.label)}</p>
         </div>
         <span class="confidence-badge ${confidence.tone}">${escapeHtml(confidence.label)}</span>
       </div>
@@ -3219,6 +3251,47 @@ function sheetFlowOverview(item = {}) {
   `;
 }
 
+function sheetInventoryStructure(item = {}) {
+  const structure = inventoryStructureInfo(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const flags = structure.flags || [];
+  const rows = [
+    ["리스트 구조", structure.label, structure.summary],
+    ["검증 액션", structure.action, flags.includes("dynamic_capacity") ? "날짜별 총량 변동은 전화예약, 시설점검, 채널별 재고조정 가능성으로 우선 해석합니다." : ""],
+    ["수량 기준", item.inventoryScope || "네이버예약 채널/날짜 기준 재고", item.inventoryMemo || "실제 전체 객실수와 다를 수 있습니다."],
+    ["신뢰도", confidence.label, confidence.summary]
+  ];
+  return `
+    <section class="sheet-section sheet-structure-section">
+      <div class="sheet-structure-title">
+        <h3>수량 구조 검증</h3>
+        ${inventoryStructureBadge(item)}
+      </div>
+      <div class="sheet-structure-list">
+        ${rows.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+          </div>
+        `).join("")}
+      </div>
+      ${flags.length ? `
+        <div class="structure-flag-row">
+          ${flags.map((flag) => `<span>${escapeHtml({
+            dayuse_rotation: "당일 회전형 병행",
+            dynamic_capacity: "날짜별 총량 변동",
+            raw_calc_gap: "원시/계산 재고 차이",
+            grouped_range: "객실 범위형 상품",
+            booking_id_reused: "예약ID 재확인",
+            not_total_rooms: "전체 객실수 아님"
+          }[flag] || flag)}</span>`).join("")}
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
 function renderSheetBooking(item) {
   const run = state.data?.run || {};
   const rangeDays = bookingDays(run);
@@ -3234,6 +3307,7 @@ function renderSheetBooking(item) {
   const historyWeekday = flow.history?.weekday;
   return `
     ${sheetFlowOverview(item)}
+    ${sheetInventoryStructure(item)}
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>
       ${lodgingRows.length ? lodgingRows.map(dateRow).join("") : `<div class="empty">숙박 재고가 확인되지 않았습니다.</div>`}

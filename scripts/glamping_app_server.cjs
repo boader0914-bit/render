@@ -1501,9 +1501,124 @@ function inventoryConfidenceLabel(grade) {
   }[grade] || "C 참고";
 }
 
+function inventoryStructureMeta(type) {
+  return {
+    room_unit: {
+      label: "객실별 노출형",
+      tone: "good",
+      summary: "객실/상품이 개별로 노출되어 기준일 재고 해석이 비교적 단순합니다."
+    },
+    room_type_stock: {
+      label: "종류별 수량형",
+      tone: "watch",
+      summary: "객실 종류별 stock 합산값입니다. 판매 가능 수량으로 보되 실제 전체 보유 객실수와 구분합니다."
+    },
+    grouped_stock: {
+      label: "묶음·범위형",
+      tone: "bad",
+      summary: "객실번호 범위나 묶음 상품의 내부 stock 합산값입니다. 상품명 구조 검증이 필요합니다."
+    },
+    stock_only: {
+      label: "재고 합산형",
+      tone: "watch",
+      summary: "예약 상품의 stock 합산값입니다. 객실 단위인지 상품 단위인지 추가 확인이 필요합니다."
+    },
+    dayuse_only: {
+      label: "당일상품 중심",
+      tone: "watch",
+      summary: "숙박보다 데이유즈/캠프닉 상품 수량 해석이 중요합니다."
+    },
+    unknown: {
+      label: "구조 확인필요",
+      tone: "bad",
+      summary: "예약 리스트 구조가 명확하지 않아 수동 검증이 필요합니다."
+    }
+  }[type] || {
+    label: "구조 확인필요",
+    tone: "bad",
+    summary: "예약 리스트 구조가 명확하지 않아 수동 검증이 필요합니다."
+  };
+}
+
+function evaluateInventoryStructure(context = {}) {
+  const listType = String(context.listType || "");
+  const memo = String(context.inventoryMemo || "");
+  const flags = [];
+  const notes = [];
+  let type = "unknown";
+
+  if (listType.includes("객실별")) {
+    type = "room_unit";
+    notes.push("객실별 예약리스트");
+  } else if (listType.includes("객실 종류별")) {
+    type = "room_type_stock";
+    notes.push("객실 종류별 stock 합산");
+  } else if (listType.includes("묶음")) {
+    type = "grouped_stock";
+    notes.push("객실 범위/묶음 상품");
+  } else if (context.totalRooms > 0) {
+    type = "stock_only";
+    notes.push("예약 stock 합산");
+  }
+
+  if (!context.totalRooms && context.dayUseTotalStock > 0) {
+    type = "dayuse_only";
+  }
+
+  if (context.dayUseTotalStock > 0 || context.dayUseItemCount > 0) {
+    flags.push("dayuse_rotation");
+    notes.push("데이유즈/캠프닉 별도 분리");
+  }
+
+  if (context.weeklyRawStockVariance || context.dayUseWeeklyRawStockVariance) {
+    flags.push("dynamic_capacity");
+    notes.push("날짜별 총량 변동");
+  }
+
+  if (context.rawTotalStock && context.totalRooms && context.rawTotalStock !== context.totalRooms) {
+    flags.push("raw_calc_gap");
+    notes.push("원시 stock과 계산값 차이");
+  }
+
+  if (context.groupedRoomCount > 0 || memo.includes("묶음 상품")) {
+    if (!flags.includes("grouped_range")) flags.push("grouped_range");
+  }
+
+  if (memo.includes("과거 확인 ID 재사용")) {
+    flags.push("booking_id_reused");
+    notes.push("예약ID 과거값 재사용");
+  }
+
+  if (memo.includes("전체 객실수와 다를 수 있음")) {
+    flags.push("not_total_rooms");
+  }
+
+  const meta = inventoryStructureMeta(type);
+  const action = flags.includes("booking_id_reused")
+    ? "네이버 예약ID 재확인"
+    : flags.includes("dynamic_capacity")
+      ? "전화예약·정비·채널조정 확인"
+      : type === "grouped_stock"
+        ? "상품명 범위와 stock 대조"
+        : type === "room_type_stock"
+          ? "종류별 수량과 실제 객실수 구분"
+          : "표본 날짜 재검증";
+
+  return {
+    type,
+    label: meta.label,
+    tone: meta.tone,
+    summary: meta.summary,
+    flags,
+    notes: [...new Set(notes)].slice(0, 5),
+    action
+  };
+}
+
 function evaluateInventoryConfidence(context = {}) {
   const reasons = [];
   const alerts = [];
+  const structure = evaluateInventoryStructure(context);
   let score = 45;
 
   if (context.totalRooms > 0 && context.availableRooms >= 0) {
@@ -1532,41 +1647,55 @@ function evaluateInventoryConfidence(context = {}) {
 
   const listType = String(context.listType || "");
   if (listType.includes("객실별")) {
-    score += 7;
-    reasons.push("객실별 리스트형");
-  } else if (listType.includes("묶음") || listType.includes("종류")) {
-    score -= 4;
-    reasons.push("종류/묶음형 수량 해석 필요");
+    score += 8;
+    reasons.push("객실별 노출형");
+  } else if (listType.includes("객실 종류별")) {
+    score += 3;
+    reasons.push("종류별 수량형");
+  } else if (listType.includes("묶음")) {
+    score -= 7;
+    alerts.push("묶음/범위형 상품 해석 필요");
   } else if (!listType) {
-    score -= 5;
+    score -= 8;
     alerts.push("예약 리스트 유형 미확인");
   }
 
   if (context.weeklyRawStockVariance) {
-    score -= 9;
-    alerts.push("날짜별 전체수량 변동");
+    score -= 8;
+    alerts.push("날짜별 총량 변동");
   }
 
   if (context.rawTotalStock && context.totalRooms && context.rawTotalStock !== context.totalRooms) {
-    score -= 5;
+    score -= 4;
     alerts.push("원시 재고와 계산 재고 차이");
   }
 
   if (context.dayUseTotalStock > 0) {
-    reasons.push("당일상품 별도 확인");
+    reasons.push("당일 회전형 별도 분리");
+  }
+
+  if (structure.flags.includes("booking_id_reused")) {
+    score -= 8;
+    alerts.push("예약ID 과거값 재사용");
+  }
+
+  if (structure.flags.includes("dynamic_capacity")) {
+    reasons.push("전화예약/정비/채널조정 가능성");
   }
 
   if (alerts.length) score = Math.min(score, 86);
+  if (structure.type === "room_unit" && !alerts.length) score += 3;
   const grade = score >= 88 ? "A" : score >= 74 ? "B" : score >= 58 ? "C" : score >= 42 ? "D" : "E";
   const summary = alerts.length
     ? `${inventoryConfidenceLabel(grade)} · ${alerts[0]}`
-    : `${inventoryConfidenceLabel(grade)} · ${reasons[0] || "수량 기준 확인"}`;
+    : `${inventoryConfidenceLabel(grade)} · ${structure.label}`;
 
   return {
     grade,
     score: Math.max(0, Math.min(100, Math.round(score))),
     label: inventoryConfidenceLabel(grade),
     summary,
+    structure,
     reasons: reasons.slice(0, 4),
     alerts: alerts.slice(0, 4)
   };
@@ -2679,12 +2808,23 @@ function summarizeAvailabilityRows(rows) {
         weeklyRawStockVariance: item.weeklyRawStockVariance,
         listType: item.listType,
         rawTotalStock: item.rawTotalStock,
+        groupedRoomCount: item.groupedRoomCount,
         dayUseTotalStock: item.dayUseTotalStock,
+        dayUseItemCount: item.dayUseItemCount,
+        dayUseWeeklyRawStockVariance: item.dayUseWeeklyRawStockVariance,
         inventoryMemo: item.inventoryMemo
       });
       return {
         ...item,
         inventoryConfidence: confidence,
+        inventoryStructure: confidence.structure,
+        inventoryStructureType: confidence.structure.type,
+        inventoryStructureLabel: confidence.structure.label,
+        inventoryStructureTone: confidence.structure.tone,
+        inventoryStructureSummary: confidence.structure.summary,
+        inventoryStructureFlags: confidence.structure.flags,
+        inventoryStructureNotes: confidence.structure.notes,
+        inventoryStructureAction: confidence.structure.action,
         inventoryConfidenceGrade: confidence.grade,
         inventoryConfidenceLabel: confidence.label,
         inventoryConfidenceScore: confidence.score,
@@ -2707,10 +2847,17 @@ function summarizeAvailabilityRows(rows) {
       weightedSoldOutRate: totalRooms ? Number((totalSoldOutRooms / totalRooms).toFixed(3)) : null,
       lowAvailabilityCount: items.filter((item) => item.rate < 0.7).length,
       lowConfidenceCount: items.filter((item) => ["D", "E"].includes(item.inventoryConfidenceGrade)).length,
-      stockVarianceCount: items.filter((item) => (item.inventoryAlerts || []).includes("날짜별 전체수량 변동")).length,
+      stockVarianceCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("dynamic_capacity")).length,
+      dayUseMixedCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("dayuse_rotation")).length,
+      bookingIdReusedCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("booking_id_reused")).length,
       confidenceCounts: items.reduce((acc, item) => {
         const grade = item.inventoryConfidenceGrade || "C";
         acc[grade] = (acc[grade] || 0) + 1;
+        return acc;
+      }, {}),
+      inventoryStructureCounts: items.reduce((acc, item) => {
+        const label = item.inventoryStructureLabel || "구조 확인필요";
+        acc[label] = (acc[label] || 0) + 1;
         return acc;
       }, {})
     },
@@ -3175,8 +3322,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-hybrid-ui-1"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-hybrid-ui-1"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-inventory-structure"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-inventory-structure"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
