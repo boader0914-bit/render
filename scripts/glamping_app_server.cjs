@@ -2537,6 +2537,100 @@ function historySeriesForItem(item, productType, checkIn) {
   return applyOfflineReservationBasis(rows, item.weeklyBasisTotal);
 }
 
+function dayOfWeekFromDate(dateText) {
+  const match = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  const day = date.getUTCDay();
+  return Number.isFinite(day) ? day : null;
+}
+
+function toNullableRate(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Number(number.toFixed(3)) : null;
+}
+
+function normalizeSignalRows(rows = []) {
+  return rows
+    .map((row) => {
+      const total = Number(row.total);
+      const available = Number(row.available);
+      if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(available)) return null;
+      const resolvedAvailable = Math.max(0, Math.min(available, total));
+      const sold = Math.max(0, total - resolvedAvailable);
+      return {
+        stayDate: row.stayDate || "",
+        dayOfWeek: dayOfWeekFromDate(row.stayDate),
+        total,
+        available: resolvedAvailable,
+        sold,
+        rate: total ? sold / total : 0
+      };
+    })
+    .filter(Boolean);
+}
+
+function averageSignalRate(rows = []) {
+  const valid = rows.filter((row) => Number.isFinite(row.rate));
+  if (!valid.length) return null;
+  return toNullableRate(valid.reduce((sum, row) => sum + row.rate, 0) / valid.length);
+}
+
+function summarizeProductSalesSignal(rows = []) {
+  const normalized = normalizeSignalRows(rows);
+  const byDay = (day) => normalized.filter((row) => row.dayOfWeek === day);
+  const weekdayRows = normalized.filter((row) => row.dayOfWeek >= 1 && row.dayOfWeek <= 4);
+  const totals = normalized.map((row) => row.total).filter((value) => value > 0);
+  const minTotal = totals.length ? Math.min(...totals) : null;
+  const maxTotal = totals.length ? Math.max(...totals) : null;
+  const fridayRate = averageSignalRate(byDay(5));
+  const saturdayRate = averageSignalRate(byDay(6));
+  const sundayRate = averageSignalRate(byDay(0));
+  const weekdayRate = averageSignalRate(weekdayRows);
+  const overallRate = averageSignalRate(normalized);
+  const anchorRate = saturdayRate ?? overallRate ?? null;
+  return {
+    days: normalized.length,
+    totalSupply: normalized.reduce((sum, row) => sum + row.total, 0),
+    totalSold: normalized.reduce((sum, row) => sum + row.sold, 0),
+    averageRate: overallRate,
+    fridayRate,
+    saturdayRate,
+    sundayRate,
+    weekdayRate,
+    fridayWeak: fridayRate !== null && (fridayRate <= 0.25 || (anchorRate !== null && anchorRate >= 0.55 && fridayRate + 0.25 < anchorRate)),
+    sundayWeak: sundayRate !== null && (sundayRate <= 0.22 || (anchorRate !== null && anchorRate >= 0.55 && sundayRate + 0.28 < anchorRate)),
+    weekdayWeak: weekdayRows.length >= 2 && weekdayRate !== null && (weekdayRate <= 0.22 || (anchorRate !== null && anchorRate >= 0.55 && weekdayRate + 0.30 < anchorRate)),
+    stockVariance: minTotal !== null && maxTotal !== null && maxTotal > minTotal,
+    stockVarianceRatio: minTotal ? toNullableRate(maxTotal / minTotal) : null,
+    minTotal,
+    maxTotal
+  };
+}
+
+function companySalesSignalFromItem(item = {}, run = {}) {
+  const checkIn = run.checkIn || runDateFromId(run.id) || kstDate(0);
+  const lodging = summarizeProductSalesSignal(historySeriesForItem(item, "lodging", checkIn));
+  const dayUse = summarizeProductSalesSignal(historySeriesForItem(item, "dayuse", checkIn));
+  const structureFlags = Array.isArray(item.inventoryStructureFlags) ? item.inventoryStructureFlags : [];
+  const confidenceGrade = String(item.inventoryConfidenceGrade || "").toUpperCase();
+  const structureWeak = Boolean(confidenceGrade && !["A", "B"].includes(confidenceGrade));
+  const dayUseHasSupply = dayUse.totalSupply > 0 || Number(item.dayUseTotalStock || 0) > 0 || Number(item.dayUseItemCount || 0) > 0;
+  return {
+    checkIn,
+    lodging,
+    dayUse,
+    lodgingDays: lodging.days,
+    dayUseDays: dayUse.days,
+    dayUseMissing: !dayUseHasSupply,
+    structureWeak,
+    stockVariance: Boolean(lodging.stockVariance || dayUse.stockVariance || structureFlags.includes("dynamic_capacity")),
+    bookingIdReused: structureFlags.includes("booking_id_reused"),
+    groupedStock: structureFlags.includes("grouped_range") || ["grouped_stock", "stock_only", "unknown"].includes(String(item.inventoryStructureType || "")),
+    structureFlags: boundedUnique(structureFlags, 10)
+  };
+}
+
 function emptyCompanyMaster() {
   return {
     schemaVersion: 1,
@@ -2592,6 +2686,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const regionKey = normalizeCompanyIdentityName(region);
   const sourceKeys = companySourceKeys({ placeId, bookingBusinessId, nameKey, addressKey, regionKey });
   const keywordLayer = keywordLayerFromRunLike(run);
+  const salesSignal = companySalesSignalFromItem(item, run);
   return {
     name,
     nameKey,
@@ -2620,6 +2715,8 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     inventoryStructureType: item.inventoryStructureType || "",
     inventoryStructureLabel: item.inventoryStructureLabel || "",
     inventoryConfidenceGrade: item.inventoryConfidenceGrade || "",
+    inventoryStructureFlags: Array.isArray(item.inventoryStructureFlags) ? item.inventoryStructureFlags : [],
+    salesSignal,
     price: item.price || ""
   };
 }
@@ -2719,6 +2816,8 @@ function updateCompanyInventory(company, entity) {
     structureType: entity.inventoryStructureType,
     structureLabel: entity.inventoryStructureLabel,
     confidenceGrade: entity.inventoryConfidenceGrade,
+    structureFlags: boundedUnique(entity.inventoryStructureFlags || [], 10),
+    salesSignal: entity.salesSignal || {},
     price: entity.price
   };
   if (!alreadyCounted && entity.inventoryStructureLabel) {
@@ -2929,6 +3028,76 @@ function salesTargetRankScore(bestRank) {
   return 7;
 }
 
+function companySalesTargetSignals(company = {}) {
+  const latestInventory = company.inventory?.latest || {};
+  const signal = latestInventory.salesSignal || {};
+  const lodging = signal.lodging || {};
+  const dayUse = signal.dayUse || {};
+  const latestFlags = Array.isArray(latestInventory.structureFlags) ? latestInventory.structureFlags : [];
+  const signalFlags = Array.isArray(signal.structureFlags) ? signal.structureFlags : [];
+  const structureFlags = boundedUnique([
+    ...latestFlags,
+    ...signalFlags
+  ], 12);
+  const confidenceGrade = String(latestInventory.confidenceGrade || "").toUpperCase();
+  const structureWeak = Boolean(
+    signal.structureWeak ||
+    (confidenceGrade && !["A", "B"].includes(confidenceGrade)) ||
+    signal.groupedStock ||
+    structureFlags.includes("grouped_range")
+  );
+  const stockVariance = Boolean(signal.stockVariance || structureFlags.includes("dynamic_capacity"));
+  const bookingIdReused = Boolean(signal.bookingIdReused || structureFlags.includes("booking_id_reused"));
+  const productNamingReview = Boolean(structureWeak || bookingIdReused || signal.groupedStock);
+  const dayUseMissing = Boolean(signal.dayUseMissing && (lodging.totalSupply || lodging.days));
+  const otaReviewNeeded = Boolean(structureWeak || stockVariance || bookingIdReused);
+  return {
+    fridayWeak: Boolean(lodging.fridayWeak),
+    sundayWeak: Boolean(lodging.sundayWeak),
+    weekdayWeak: Boolean(lodging.weekdayWeak),
+    dayUseMissing,
+    structureWeak,
+    stockVariance,
+    bookingIdReused,
+    productNamingReview,
+    otaReviewNeeded,
+    lodgingRate: lodging.averageRate ?? null,
+    dayUseRate: dayUse.averageRate ?? null,
+    fridayRate: lodging.fridayRate ?? null,
+    saturdayRate: lodging.saturdayRate ?? null,
+    sundayRate: lodging.sundayRate ?? null,
+    weekdayRate: lodging.weekdayRate ?? null,
+    lodgingDays: lodging.days || 0,
+    dayUseDays: dayUse.days || 0
+  };
+}
+
+function companySalesTargetSignalReasons(signals = {}) {
+  const reasons = [];
+  const tags = [];
+  const scoreParts = [];
+  const add = (flag, score, tag, reason) => {
+    if (!flag) return;
+    scoreParts.push(score);
+    tags.push(tag);
+    reasons.push(reason);
+  };
+  add(signals.fridayWeak, 8, "금요일 약함", "토요일 대비 금요일 판매 공백이 보여 금요일 상품/가격 개선 여지");
+  add(signals.sundayWeak, 8, "일요일 약함", "주말 이후 일요일 판매가 약해 연박/퇴실일 상품 개선 여지");
+  add(signals.weekdayWeak, 5, "평일 약함", "월~목 평균 판매가 낮아 평일 패키지/타깃 보완 여지");
+  add(signals.dayUseMissing, 5, "당일상품 공백", "데이유즈/캠프닉 확인 수량이 없어 당일상품 확장 검토");
+  add(signals.structureWeak, 6, "수량구조 확인", "객실 수량 구조가 흔들려 총량/상품 단위 검증 필요");
+  add(signals.stockVariance, 5, "오프라인예약 반영", "날짜별 총량 변동이 있어 전화예약/비연동 채널 수량조절 가능성");
+  add(signals.bookingIdReused, 5, "예약ID 확인", "예약ID 또는 상품 구조 재사용 가능성이 있어 네이버 상품 구조 재확인 필요");
+  add(signals.productNamingReview, 4, "상품명 검토", "네이버 예약 상품명/구성이 고객 관점에서 재정리될 여지");
+  add(signals.otaReviewNeeded, 4, "OTA 확인", "판단이 흔들리는 업체로 OTA/채널 비교 확인 필요");
+  return {
+    score: scoreParts.reduce((sum, value) => sum + Number(value || 0), 0),
+    tags: boundedUnique(tags, 8),
+    reasons: boundedUnique(reasons, 8)
+  };
+}
+
 function companySalesTargetProfile(company = {}) {
   const layerType = company.exposureLayer?.type || "unknown";
   const scoreParts = [];
@@ -2987,6 +3156,10 @@ function companySalesTargetProfile(company = {}) {
     scoreParts.push(5);
     reasons.push("수량 구조 검증 여지");
   }
+  const signals = companySalesTargetSignals(company);
+  const signalProfile = companySalesTargetSignalReasons(signals);
+  if (signalProfile.score) scoreParts.push(signalProfile.score);
+  reasons.push(...signalProfile.reasons);
 
   let score = Math.min(100, Math.max(0, Math.round(scoreParts.reduce((sum, value) => sum + Number(value || 0), 0))));
   if (category === "contact" && score < 58) {
@@ -3002,6 +3175,8 @@ function companySalesTargetProfile(company = {}) {
       score,
       category,
       categoryLabel,
+      signals,
+      priorityTags: signalProfile.tags,
       reasons: boundedUnique(reasons, 8),
       recommendation: category === "contact"
         ? "광역 진입 여지가 있는 로컬 전용 업체로 우선 컨택"
@@ -4510,8 +4685,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-master-targets"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-master-targets"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-sales-signals"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-sales-signals"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

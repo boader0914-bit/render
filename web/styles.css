@@ -2201,6 +2201,25 @@ a.platform-row:hover {
   font-weight: 950;
 }
 
+.company-target-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.company-target-tags mark {
+  border: 1px solid #c7dcff;
+  border-radius: 999px;
+  background: #f4f8ff;
+  color: var(--blue-dark);
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .company-master-filter {
   display: grid;
   grid-template-columns: minmax(180px, 1.5fr) repeat(2, minmax(130px, 1fr)) auto;

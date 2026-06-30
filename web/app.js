@@ -2804,6 +2804,16 @@ function companyMasterKeywordText(company = {}) {
   }).join(" · ");
 }
 
+function companySalesTargetTagHtml(company = {}, limit = 6) {
+  const tags = company.salesTarget?.priorityTags || [];
+  if (!tags.length) return "";
+  return `
+    <div class="company-target-tags">
+      ${tags.slice(0, limit).map((tag) => `<mark>${escapeHtml(tag)}</mark>`).join("")}
+    </div>
+  `;
+}
+
 function companyMasterSalesTargetsPanel(master = {}) {
   const targets = master.salesTargets || {};
   const topTargets = targets.topTargets || [];
@@ -2823,6 +2833,7 @@ function companyMasterSalesTargetsPanel(master = {}) {
               <span>${fmtNumber(company.salesTarget?.score || 0)}점</span>
             </div>
             <small>${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${escapeHtml(companyMasterKeywordText(company))}</small>
+            ${companySalesTargetTagHtml(company, 5)}
             <p>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 3).join(" · ") || company.salesTarget?.recommendation || "추가 확인 필요")}</p>
           </article>
         `).join("") : `<p>현재 기준 우선 컨택 후보가 없습니다. 로컬 키워드 수집이 늘어나면 자동으로 채워집니다.</p>`}
@@ -2911,8 +2922,9 @@ function companyMasterListPanel(master = {}) {
               <span>${fmtNumber(company.keywordCount || 0)}키워드</span>
               <span>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "순위대기"}</span>
             </div>
+            ${companySalesTargetTagHtml(company, 6)}
             <p>${escapeHtml(companyMasterKeywordText(company))}</p>
-            <small>${escapeHtml(company.salesTarget?.recommendation || "추가 수집 후 판단")}</small>
+            <small>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 2).join(" · ") || company.salesTarget?.recommendation || "추가 수집 후 판단")}</small>
           </article>
         `).join("") : `<p class="empty">필터 조건에 맞는 업체가 없습니다.</p>`}
       </div>
