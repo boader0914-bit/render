@@ -2115,6 +2115,8 @@ a.platform-row:hover {
 
 .company-sales-panel,
 .company-sales-list,
+.company-review-panel,
+.company-review-queue,
 .company-master-list-panel,
 .company-master-list {
   display: grid;
@@ -2130,6 +2132,8 @@ a.platform-row:hover {
 .company-sales-metrics article,
 .company-sales-list,
 .company-sales-list article,
+.company-review-panel,
+.company-review-queue article,
 .company-master-filter,
 .company-master-list-panel,
 .company-master-list article {
@@ -2144,6 +2148,8 @@ a.platform-row:hover {
 .company-sales-metrics small,
 .company-sales-list small,
 .company-sales-list p,
+.company-review-panel small,
+.company-review-queue p,
 .company-master-filter small,
 .company-master-list-head span,
 .company-master-list article p,
@@ -2182,6 +2188,8 @@ a.platform-row:hover {
 }
 
 .company-sales-list article > div,
+.company-review-head,
+.company-review-queue article > div,
 .company-master-list-head,
 .company-master-row-main {
   display: flex;
@@ -2218,6 +2226,111 @@ a.platform-row:hover {
   font-weight: 900;
   line-height: 1.1;
   white-space: nowrap;
+}
+
+.company-review-panel {
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.company-review-head {
+  align-items: center;
+}
+
+.company-review-head strong,
+.company-review-queue b {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.company-review-head span,
+.company-review-queue article > div span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.company-review-queue article {
+  display: grid;
+  gap: 8px;
+  background: #fff;
+}
+
+.company-review-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.company-review-actions.compact {
+  grid-template-columns: repeat(5, minmax(0, auto));
+  justify-content: start;
+}
+
+.company-review-actions button {
+  min-height: 36px;
+  min-width: 0;
+  border: 1px solid #c7dcff;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.company-review-actions button.active,
+.company-review-actions button:hover {
+  background: #eaf3ff;
+  border-color: #8cbcff;
+  color: var(--blue);
+}
+
+.company-review-actions button[data-company-review-action="exclude"] {
+  border-color: #fecaca;
+  color: #b42318;
+}
+
+.company-review-actions button[data-company-review-action="manual_needed"] {
+  border-color: #fedf89;
+  color: #b54708;
+}
+
+.company-review-badge {
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: var(--muted);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.company-review-badge.confirmed {
+  border-color: #b7e4cc;
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.company-review-badge.hold,
+.company-review-badge.manual_needed {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.company-review-badge.exclude {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
 }
 
 .company-master-filter {
@@ -4981,6 +5094,8 @@ a.platform-row:hover {
   }
 
   .company-sales-list article > div,
+  .company-review-head,
+  .company-review-queue article > div,
   .company-master-list-head,
   .company-master-row-main {
     display: grid;
@@ -4993,6 +5108,12 @@ a.platform-row:hover {
   .company-manual-form > div:first-child,
   .company-manual-actions {
     grid-template-columns: 1fr;
+  }
+
+  .company-review-actions,
+  .company-review-actions.compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
   }
 
   .app-header {

@@ -2931,6 +2931,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     exposureLayer,
     inventory: company.inventory || {},
     manualCorrection: company.manualCorrection || null,
+    adminReview: company.adminReview || null,
     identityConfidence: companyIdentityConfidence(company)
   };
 }
@@ -3098,10 +3099,30 @@ function companySalesTargetSignalReasons(signals = {}) {
   };
 }
 
+function companyAdminReviewMeta(status) {
+  return {
+    confirmed: { label: "판단 맞음", category: null, scoreDelta: 6, tag: "관리자 확인" },
+    hold: { label: "보류", category: "observe", scoreCap: 50, tag: "보류" },
+    exclude: { label: "제외", category: "exclude", scoreSet: 0, tag: "관리자 제외" },
+    manual_needed: { label: "보정 필요", category: "verify", scoreFloor: 55, tag: "보정 필요" }
+  }[status] || null;
+}
+
+function companyTargetCategoryLabelForServer(category) {
+  return {
+    contact: "컨택 후보",
+    observe: "관찰 후보",
+    verify: "검증 후보",
+    benchmark: "벤치마크",
+    exclude: "제외 후보"
+  }[category] || "관찰 후보";
+}
+
 function companySalesTargetProfile(company = {}) {
   const layerType = company.exposureLayer?.type || "unknown";
   const scoreParts = [];
   const reasons = [];
+  const adminTags = [];
   let category = "exclude";
   let categoryLabel = "제외 후보";
 
@@ -3160,6 +3181,11 @@ function companySalesTargetProfile(company = {}) {
   const signalProfile = companySalesTargetSignalReasons(signals);
   if (signalProfile.score) scoreParts.push(signalProfile.score);
   reasons.push(...signalProfile.reasons);
+  const adminReview = company.adminReview || null;
+  const adminMeta = companyAdminReviewMeta(adminReview?.status);
+  if (adminMeta?.scoreDelta) scoreParts.push(adminMeta.scoreDelta);
+  if (adminMeta?.tag) adminTags.push(adminMeta.tag);
+  if (adminMeta?.label) reasons.unshift(`관리자 검증: ${adminMeta.label}`);
 
   let score = Math.min(100, Math.max(0, Math.round(scoreParts.reduce((sum, value) => sum + Number(value || 0), 0))));
   if (category === "contact" && score < 58) {
@@ -3168,6 +3194,13 @@ function companySalesTargetProfile(company = {}) {
   }
   if (category === "benchmark") score = Math.min(score, 45);
   if (category === "verify") score = Math.min(score, 55);
+  if (adminMeta?.category) {
+    category = adminMeta.category;
+    categoryLabel = companyTargetCategoryLabelForServer(category);
+  }
+  if (Number.isFinite(adminMeta?.scoreSet)) score = adminMeta.scoreSet;
+  if (Number.isFinite(adminMeta?.scoreCap)) score = Math.min(score, adminMeta.scoreCap);
+  if (Number.isFinite(adminMeta?.scoreFloor)) score = Math.max(score, adminMeta.scoreFloor);
 
   return {
     ...company,
@@ -3176,7 +3209,7 @@ function companySalesTargetProfile(company = {}) {
       category,
       categoryLabel,
       signals,
-      priorityTags: signalProfile.tags,
+      priorityTags: boundedUnique([...adminTags, ...signalProfile.tags], 8),
       reasons: boundedUnique(reasons, 8),
       recommendation: category === "contact"
         ? "광역 진입 여지가 있는 로컬 전용 업체로 우선 컨택"
@@ -3431,6 +3464,47 @@ async function saveCompanyManualCorrection(payload = {}) {
     ...(await summarizeCompanyMaster()),
     company: companyRecordSummary(company),
     resolved: { action: payload.active === false ? "clearManualCorrection" : "saveManualCorrection", companyId }
+  };
+}
+
+async function saveCompanyAdminReview(payload = {}) {
+  const companyId = String(payload.companyId || "").trim();
+  const status = String(payload.status || "").trim();
+  const master = await readCompanyMaster();
+  const company = master.companies?.[companyId];
+  if (!company) {
+    const error = new Error("검증할 업체를 찾지 못했습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const meta = companyAdminReviewMeta(status);
+  if (!status || status === "clear") {
+    company.adminReview = null;
+  } else if (!meta) {
+    const error = new Error("지원하지 않는 검증 상태입니다.");
+    error.statusCode = 400;
+    throw error;
+  } else {
+    company.adminReview = {
+      status,
+      label: meta.label,
+      note: String(payload.note || "").trim(),
+      source: "admin",
+      updatedAt: new Date().toISOString()
+    };
+  }
+  company.duplicateNotes = [
+    ...(company.duplicateNotes || []),
+    {
+      at: new Date().toISOString(),
+      reason: company.adminReview ? `관리자 검증: ${company.adminReview.label}` : "관리자 검증 해제"
+    }
+  ].slice(-40);
+  await writeCompanyMaster(master);
+  return {
+    ...(await summarizeCompanyMaster()),
+    company: companyRecordSummary(company),
+    resolved: { action: "saveAdminReview", companyId, status: company.adminReview?.status || "clear" }
   };
 }
 
@@ -4685,8 +4759,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-sales-signals"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-sales-signals"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-review-queue"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-review-queue"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -4775,6 +4849,11 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/manual-correction") {
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyManualCorrection(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/admin-review") {
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveCompanyAdminReview(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/backfill") {

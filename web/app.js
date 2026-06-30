@@ -2814,6 +2814,40 @@ function companySalesTargetTagHtml(company = {}, limit = 6) {
   `;
 }
 
+function companyAdminReviewLabel(status) {
+  return {
+    confirmed: "판단 맞음",
+    hold: "보류",
+    exclude: "제외",
+    manual_needed: "보정 필요"
+  }[status] || "미검증";
+}
+
+function companyAdminReviewBadgeHtml(company = {}) {
+  const status = company.adminReview?.status || "pending";
+  const label = company.adminReview?.label || companyAdminReviewLabel(status);
+  return `<span class="company-review-badge ${escapeHtml(status)}">${escapeHtml(label)}</span>`;
+}
+
+function companyReviewActionsHtml(company = {}, compact = false) {
+  const companyId = company.companyId || "";
+  const current = company.adminReview?.status || "";
+  const actions = [
+    ["confirmed", "맞음"],
+    ["hold", "보류"],
+    ["manual_needed", "보정"],
+    ["exclude", "제외"]
+  ];
+  return `
+    <div class="company-review-actions ${compact ? "compact" : ""}">
+      ${actions.map(([status, label]) => `
+        <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}">${label}</button>
+      `).join("")}
+      ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}">해제</button>` : ""}
+    </div>
+  `;
+}
+
 function companyMasterSalesTargetsPanel(master = {}) {
   const targets = master.salesTargets || {};
   const topTargets = targets.topTargets || [];
@@ -2837,6 +2871,39 @@ function companyMasterSalesTargetsPanel(master = {}) {
             <p>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 3).join(" · ") || company.salesTarget?.recommendation || "추가 확인 필요")}</p>
           </article>
         `).join("") : `<p>현재 기준 우선 컨택 후보가 없습니다. 로컬 키워드 수집이 늘어나면 자동으로 채워집니다.</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function companyMasterReviewQueuePanel(master = {}) {
+  const companies = master.companies || [];
+  const reviewedCount = companies.filter((company) => company.adminReview?.status).length;
+  const rows = companies
+    .filter((company) => !company.adminReview?.status && ["contact", "verify"].includes(company.salesTarget?.category))
+    .sort((a, b) => (b.salesTarget?.score || 0) - (a.salesTarget?.score || 0) || (a.bestRank || 9999) - (b.bestRank || 9999))
+    .slice(0, 8);
+  return `
+    <div class="company-review-panel">
+      <div class="company-review-head">
+        <div>
+          <strong>관리자 검증 큐</strong>
+          <small>알고리즘 후보를 맞음/보류/제외/보정 필요로 확정</small>
+        </div>
+        <span>${fmtNumber(reviewedCount)}개 검증됨</span>
+      </div>
+      <div class="company-review-queue">
+        ${rows.length ? rows.map((company) => `
+          <article>
+            <div>
+              <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+              <span>${fmtNumber(company.salesTarget?.score || 0)}점</span>
+            </div>
+            ${companySalesTargetTagHtml(company, 5)}
+            <p>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 2).join(" · ") || company.salesTarget?.recommendation || "검증 필요")}</p>
+            ${companyReviewActionsHtml(company)}
+          </article>
+        `).join("") : `<p class="empty">현재 미검증 컨택/검증 후보가 없습니다.</p>`}
       </div>
     </div>
   `;
@@ -2918,6 +2985,7 @@ function companyMasterListPanel(master = {}) {
             <div class="company-master-row-tags">
               <span>${escapeHtml(company.exposureLayer?.label || "분류 대기")}</span>
               <span>${escapeHtml(companyTargetCategoryLabel(company.salesTarget?.category))}</span>
+              ${companyAdminReviewBadgeHtml(company)}
               <span>${fmtNumber(company.salesTarget?.score || 0)}점</span>
               <span>${fmtNumber(company.keywordCount || 0)}키워드</span>
               <span>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "순위대기"}</span>
@@ -2925,6 +2993,7 @@ function companyMasterListPanel(master = {}) {
             ${companySalesTargetTagHtml(company, 6)}
             <p>${escapeHtml(companyMasterKeywordText(company))}</p>
             <small>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 2).join(" · ") || company.salesTarget?.recommendation || "추가 수집 후 판단")}</small>
+            ${companyReviewActionsHtml(company, true)}
           </article>
         `).join("") : `<p class="empty">필터 조건에 맞는 업체가 없습니다.</p>`}
       </div>
@@ -2977,6 +3046,7 @@ function renderCompanyMasterPanel() {
     </div>
     ${companyMasterCrossKeywordPanel(master)}
     ${companyMasterSalesTargetsPanel(master)}
+    ${companyMasterReviewQueuePanel(master)}
     ${companyMasterFilterPanel(master)}
     ${companyMasterListPanel(master)}
     <div class="company-master-rule">
@@ -4765,6 +4835,32 @@ async function saveCompanyCorrection(button, clear = false) {
   }
 }
 
+async function saveCompanyAdminReview(button) {
+  const companyId = button?.dataset?.companyId || "";
+  const status = button?.dataset?.companyReviewAction || "";
+  if (!companyId || !status) return;
+  button.disabled = true;
+  setStatus(status === "clear" ? "검증 해제 중" : "검증 저장 중");
+  try {
+    const data = await fetchJson("/api/company-master/admin-review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId, status })
+    });
+    state.companyMaster = data;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
+    renderCompanyMasterPanel();
+    setStatus(status === "clear" ? "검증 해제 완료" : `${companyAdminReviewLabel(status)} 저장 완료`);
+  } catch (error) {
+    setStatus("검증 저장 실패");
+    if (els.companyMasterPanel) {
+      els.companyMasterPanel.insertAdjacentHTML("afterbegin", `<div class="empty">검증 저장 실패: ${escapeHtml(error.message)}</div>`);
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function backfillCompanyMaster(button) {
   if (!button) return;
   button.disabled = true;
@@ -5110,6 +5206,8 @@ function bindEvents() {
     if (saveCorrection) saveCompanyCorrection(saveCorrection, false);
     const clearCorrection = event.target.closest("[data-clear-company-correction]");
     if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
+    const reviewAction = event.target.closest("[data-company-review-action]");
+    if (reviewAction) saveCompanyAdminReview(reviewAction);
     const backfillButton = event.target.closest("[data-company-backfill]");
     if (backfillButton) backfillCompanyMaster(backfillButton);
     if (event.target.closest("[data-close-sheet]")) closeSheet();
