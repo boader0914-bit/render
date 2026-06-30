@@ -1965,6 +1965,121 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.company-master-panel,
+.company-master-duplicates,
+.company-profile-keywords {
+  display: grid;
+  gap: 10px;
+}
+
+.company-master-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.company-master-metrics article,
+.company-master-rule,
+.company-master-duplicates article,
+.company-profile-keywords span {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.company-master-metrics span,
+.company-master-metrics small,
+.company-master-rule p,
+.company-master-duplicates small,
+.company-master-duplicates span,
+.company-profile-keywords small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.company-master-metrics strong {
+  display: block;
+  margin: 4px 0;
+  color: var(--blue);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
+.company-master-rule {
+  background: #f8fbff;
+}
+
+.company-master-rule strong,
+.company-master-duplicates strong,
+.company-profile-keywords strong {
+  display: block;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.company-master-rule p {
+  margin: 6px 0 0;
+  line-height: 1.45;
+}
+
+.company-master-duplicates article div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.company-master-duplicates article span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #f9fafb;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.company-master-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.company-master-actions button {
+  border: 1px solid #d6e6ff;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.company-master-actions button:last-child {
+  border-color: #e8edf5;
+  color: var(--muted);
+}
+
+.company-master-actions button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.company-profile-keywords {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
 .map-card {
   overflow: hidden;
   margin-bottom: 12px;
@@ -4526,6 +4641,11 @@ a.platform-row:hover {
 @media (max-width: 720px) {
   .app-shell {
     padding: 26px 13px 34px;
+  }
+
+  .company-master-metrics,
+  .company-profile-keywords {
+    grid-template-columns: 1fr;
   }
 
   .app-header {

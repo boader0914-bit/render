@@ -3,6 +3,8 @@ node_modules/
 logs/
 tools/
 outputs/
+history/
+company_master/
 .codex-remote-attachments/
 glamping_render_deploy_*.zip
 *.log

@@ -34,6 +34,8 @@ const CONFIG_DIR = path.resolve(
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
+const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
+const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
@@ -1433,6 +1435,45 @@ function uniqueTexts(values) {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
 }
 
+function normalizeCompanyIdentityName(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\(주\)|㈜|주식회사|유한회사|농업회사법인|영농조합법인|사단법인|재단법인/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
+}
+
+function normalizeCompanyLooseName(value) {
+  return normalizeCompanyIdentityName(value)
+    .replace(/글램핑장|오토캠핑장|카라반캠핑장|야영장|캠핑장|글램핑|카라반|캠핑|펜션|리조트|호텔|스테이|빌리지|지점|본점/gu, "");
+}
+
+function normalizeAddressKey(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .toLowerCase();
+}
+
+function extractNaverPlaceId(value = {}) {
+  const explicit = value.placeId || value.place_id || value["place_id"] || value.naverPlaceId;
+  if (explicit) return String(explicit).trim();
+  const text = `${value.url || ""} ${value["url"] || ""} ${value.naverUrl || ""} ${value["네이버예약URL"] || ""}`;
+  return text.match(/\/accommodation\/(\d+)/)?.[1] || text.match(/[?&]entry=pll[^0-9]*(\d+)/)?.[1] || "";
+}
+
+function extractBookingBusinessId(value = {}) {
+  const explicit = value.bookingBusinessId || value.businessId || value.naverBookingBusinessId;
+  if (explicit) return String(explicit).trim();
+  const text = `${value.url || ""} ${value["url"] || ""} ${value.naverBookingUrl || ""} ${value["네이버예약URL"] || ""}`;
+  return text.match(/\/bizes\/(\d+)/)?.[1] || "";
+}
+
+function boundedUnique(values = [], limit = 20) {
+  return uniqueTexts(values).slice(0, limit);
+}
+
 function datalabKeywordVariants(keyword) {
   const raw = String(keyword || "").trim();
   const compact = compactKeyword(raw);
@@ -2451,6 +2492,476 @@ function historySeriesForItem(item, productType, checkIn) {
   return applyOfflineReservationBasis(rows, item.weeklyBasisTotal);
 }
 
+function emptyCompanyMaster() {
+  return {
+    schemaVersion: 1,
+    updatedAt: "",
+    companies: {},
+    sourceIndex: {},
+    duplicateResolutions: {}
+  };
+}
+
+async function readCompanyMaster() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(COMPANY_MASTER_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      ...emptyCompanyMaster(),
+      ...parsed,
+      companies: parsed.companies || {},
+      sourceIndex: parsed.sourceIndex || {},
+      duplicateResolutions: parsed.duplicateResolutions || {}
+    };
+  } catch {
+    return emptyCompanyMaster();
+  }
+}
+
+async function writeCompanyMaster(master) {
+  await fsp.mkdir(COMPANY_MASTER_DIR, { recursive: true });
+  const next = { ...master, updatedAt: new Date().toISOString() };
+  master.updatedAt = next.updatedAt;
+  const tempPath = `${COMPANY_MASTER_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tempPath, COMPANY_MASTER_FILE);
+}
+
+function companySourceKeys(entity = {}) {
+  const keys = [];
+  if (entity.placeId) keys.push(`place:${entity.placeId}`);
+  if (entity.bookingBusinessId) keys.push(`booking:${entity.bookingBusinessId}`);
+  if (entity.nameKey && entity.addressKey) keys.push(`name_addr:${entity.nameKey}:${entity.addressKey}`);
+  if (entity.nameKey && entity.regionKey) keys.push(`name_region:${entity.nameKey}:${entity.regionKey}`);
+  return boundedUnique(keys, 10);
+}
+
+function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
+  const name = String(item.name || "").trim();
+  const region = String(item.region || "").trim();
+  const address = String(item.address || "").trim();
+  const placeId = extractNaverPlaceId(item);
+  const bookingBusinessId = extractBookingBusinessId(item);
+  const nameKey = normalizeCompanyIdentityName(name);
+  const looseNameKey = normalizeCompanyLooseName(name);
+  const addressKey = normalizeAddressKey(address);
+  const regionKey = normalizeCompanyIdentityName(region);
+  const sourceKeys = companySourceKeys({ placeId, bookingBusinessId, nameKey, addressKey, regionKey });
+  return {
+    name,
+    nameKey,
+    looseNameKey,
+    region,
+    regionKey,
+    address,
+    addressKey,
+    placeId,
+    bookingBusinessId,
+    sourceKeys,
+    url: item.url || "",
+    rank: item.rank ?? null,
+    keyword: run.keyword || run.label || "",
+    keywordKey: compactKeyword(run.keyword || run.label || "").toLowerCase(),
+    searchMode: run.searchMode || "",
+    productMode: run.productMode || "",
+    runId: run.id || "",
+    collectedAt,
+    collectedDate: String(collectedAt || "").slice(0, 10),
+    listType: item.listType || "",
+    inventoryStructureType: item.inventoryStructureType || "",
+    inventoryStructureLabel: item.inventoryStructureLabel || "",
+    inventoryConfidenceGrade: item.inventoryConfidenceGrade || "",
+    price: item.price || ""
+  };
+}
+
+function createCompanyRecord(companyId, entity) {
+  const now = entity.collectedAt || new Date().toISOString();
+  return {
+    companyId,
+    primaryName: entity.name || "업체명 확인",
+    nameKey: entity.nameKey || "",
+    looseNameKey: entity.looseNameKey || "",
+    aliases: boundedUnique([entity.name]),
+    placeIds: boundedUnique([entity.placeId]),
+    bookingBusinessIds: boundedUnique([entity.bookingBusinessId]),
+    regions: boundedUnique([entity.region]),
+    addresses: boundedUnique([entity.address]),
+    urls: boundedUnique([entity.url]),
+    firstSeenAt: now,
+    lastSeenAt: now,
+    firstRunId: entity.runId || "",
+    lastRunId: entity.runId || "",
+    runIds: boundedUnique([entity.runId], 120),
+    keywords: {},
+    inventory: {
+      latest: {},
+      structureCounts: {},
+      confidenceCounts: {}
+    },
+    manualCorrection: null,
+    duplicateNotes: []
+  };
+}
+
+function mergeCompanyFieldArrays(company, entity) {
+  company.aliases = boundedUnique([...(company.aliases || []), entity.name], 30);
+  company.placeIds = boundedUnique([...(company.placeIds || []), entity.placeId], 20);
+  company.bookingBusinessIds = boundedUnique([...(company.bookingBusinessIds || []), entity.bookingBusinessId], 20);
+  company.regions = boundedUnique([...(company.regions || []), entity.region], 20);
+  company.addresses = boundedUnique([...(company.addresses || []), entity.address], 20);
+  company.urls = boundedUnique([...(company.urls || []), entity.url], 30);
+  company.runIds = boundedUnique([...(company.runIds || []), entity.runId], 120);
+  if (!company.primaryName || company.primaryName === "업체명 확인") company.primaryName = entity.name || company.primaryName;
+  if (!company.nameKey) company.nameKey = entity.nameKey || "";
+  if (!company.looseNameKey) company.looseNameKey = entity.looseNameKey || "";
+}
+
+function upsertCompanyKeywordExposure(company, entity) {
+  if (!entity.keywordKey) return;
+  const keyword = company.keywords[entity.keywordKey] || {
+    keyword: entity.keyword || entity.keywordKey,
+    keywordKey: entity.keywordKey,
+    firstSeenAt: entity.collectedAt,
+    lastSeenAt: entity.collectedAt,
+    bestRank: null,
+    latestRank: null,
+    latestRunId: "",
+    runs: []
+  };
+  const existingIndex = keyword.runs.findIndex((row) => row.runId === entity.runId);
+  const exposure = {
+    runId: entity.runId,
+    collectedAt: entity.collectedAt,
+    collectedDate: entity.collectedDate,
+    rank: Number(entity.rank) || null,
+    searchMode: entity.searchMode || "",
+    productMode: entity.productMode || ""
+  };
+  if (existingIndex >= 0) keyword.runs[existingIndex] = { ...keyword.runs[existingIndex], ...exposure };
+  else keyword.runs.push(exposure);
+  keyword.runs = keyword.runs
+    .filter((row) => row.runId)
+    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))
+    .slice(0, 80);
+  keyword.firstSeenAt = [keyword.firstSeenAt, entity.collectedAt].filter(Boolean).sort()[0] || entity.collectedAt;
+  keyword.lastSeenAt = [keyword.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt;
+  keyword.latestRank = exposure.rank;
+  keyword.latestRunId = entity.runId;
+  const ranks = keyword.runs.map((row) => Number(row.rank)).filter((rank) => Number.isFinite(rank) && rank > 0);
+  keyword.bestRank = ranks.length ? Math.min(...ranks) : null;
+  keyword.runCount = keyword.runs.length;
+  company.keywords[entity.keywordKey] = keyword;
+}
+
+function updateCompanyInventory(company, entity) {
+  const inventory = company.inventory || { latest: {}, structureCounts: {}, confidenceCounts: {}, runIds: [] };
+  const alreadyCounted = entity.runId && (inventory.runIds || []).includes(entity.runId);
+  inventory.latest = {
+    runId: entity.runId,
+    collectedAt: entity.collectedAt,
+    listType: entity.listType,
+    structureType: entity.inventoryStructureType,
+    structureLabel: entity.inventoryStructureLabel,
+    confidenceGrade: entity.inventoryConfidenceGrade,
+    price: entity.price
+  };
+  if (!alreadyCounted && entity.inventoryStructureLabel) {
+    inventory.structureCounts[entity.inventoryStructureLabel] = (inventory.structureCounts[entity.inventoryStructureLabel] || 0) + 1;
+  }
+  if (!alreadyCounted && entity.inventoryConfidenceGrade) {
+    inventory.confidenceCounts[entity.inventoryConfidenceGrade] = (inventory.confidenceCounts[entity.inventoryConfidenceGrade] || 0) + 1;
+  }
+  inventory.runIds = boundedUnique([...(inventory.runIds || []), entity.runId], 120);
+  company.inventory = inventory;
+}
+
+function companyRecordSummary(company = {}, activeKeywordKey = "") {
+  const keywords = Object.values(company.keywords || {})
+    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
+    .map((row) => ({
+      keyword: row.keyword,
+      keywordKey: row.keywordKey,
+      runCount: row.runCount || row.runs?.length || 0,
+      bestRank: row.bestRank,
+      latestRank: row.latestRank,
+      lastSeenAt: row.lastSeenAt,
+      latestRunId: row.latestRunId
+    }));
+  const best = keywords.find((row) => row.bestRank) || keywords[0] || null;
+  const activeKeyword = activeKeywordKey ? keywords.find((row) => row.keywordKey === activeKeywordKey) : null;
+  return {
+    companyId: company.companyId,
+    primaryName: company.primaryName,
+    aliases: (company.aliases || []).slice(0, 6),
+    placeIds: company.placeIds || [],
+    bookingBusinessIds: company.bookingBusinessIds || [],
+    regions: company.regions || [],
+    addresses: (company.addresses || []).slice(0, 3),
+    firstSeenAt: company.firstSeenAt,
+    lastSeenAt: company.lastSeenAt,
+    runCount: (company.runIds || []).length,
+    keywordCount: keywords.length,
+    keywords: keywords.slice(0, 8),
+    bestRank: best?.bestRank || null,
+    bestKeyword: best?.keyword || "",
+    latestKeyword: keywords.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))[0]?.keyword || "",
+    activeKeyword,
+    inventory: company.inventory || {},
+    manualCorrection: company.manualCorrection || null
+  };
+}
+
+function findCompanyDuplicateCandidates(master) {
+  const buckets = new Map();
+  for (const company of Object.values(master.companies || {})) {
+    const loose = company.looseNameKey || normalizeCompanyLooseName(company.primaryName);
+    const region = normalizeCompanyIdentityName((company.regions || [])[0] || "");
+    if (!loose || loose.length < 2) continue;
+    const key = `${loose}:${region}`;
+    const bucket = buckets.get(key) || [];
+    bucket.push(company);
+    buckets.set(key, bucket);
+  }
+  return [...buckets.entries()]
+    .filter(([key, companies]) => companies.length > 1 && master.duplicateResolutions?.[key] !== "separate")
+    .map(([candidateKey, companies]) => ({
+      candidateKey,
+      reason: "유사 업체명 + 지역",
+      companies: companies.map((company) => companyRecordSummary(company)).slice(0, 6)
+    }))
+    .slice(0, 20);
+}
+
+function applyCompanyManualCorrection(item, company) {
+  const correction = company?.manualCorrection;
+  if (!correction || correction.active === false) return item;
+  const next = { ...item, companyManualCorrection: correction, manualCorrectionApplied: true };
+  const lodgingBasis = Number(correction.lodgingBasisTotal);
+  const dayUseBasis = Number(correction.dayUseBasisTotal);
+  if (Number.isFinite(lodgingBasis) && lodgingBasis > 0) {
+    next.weeklyBasisTotal = Math.max(Number(next.weeklyBasisTotal || 0), lodgingBasis);
+    next.nightTotalStock = Math.max(Number(next.nightTotalStock || 0), lodgingBasis);
+  }
+  if (Number.isFinite(dayUseBasis) && dayUseBasis > 0) {
+    next.dayUseWeeklyBasisTotal = Math.max(Number(next.dayUseWeeklyBasisTotal || 0), dayUseBasis);
+    next.dayUseTotalStock = Math.max(Number(next.dayUseTotalStock || 0), dayUseBasis);
+  }
+  return next;
+}
+
+function upsertCompanyRecord(master, entity) {
+  const sourceKeys = entity.sourceKeys || [];
+  const matchedIds = boundedUnique(sourceKeys.map((key) => master.sourceIndex[key]).filter(Boolean), 10);
+  let companyId = matchedIds[0];
+  if (!companyId) {
+    companyId = entity.placeId
+      ? `cmp_place_${entity.placeId}`
+      : `cmp_${stableHash([entity.nameKey, entity.addressKey, entity.regionKey, entity.bookingBusinessId].filter(Boolean).join("|"))}`;
+  }
+  let company = master.companies[companyId];
+  if (!company) {
+    company = createCompanyRecord(companyId, entity);
+    master.companies[companyId] = company;
+  }
+  if (matchedIds.length > 1) {
+    company.duplicateNotes = [
+      ...(company.duplicateNotes || []),
+      {
+        at: entity.collectedAt,
+        reason: "하나의 수집 업체가 여러 기존 companyId와 연결됨",
+        matchedIds
+      }
+    ].slice(-20);
+  }
+  company.lastSeenAt = [company.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt;
+  company.lastRunId = entity.runId || company.lastRunId;
+  mergeCompanyFieldArrays(company, entity);
+  upsertCompanyKeywordExposure(company, entity);
+  updateCompanyInventory(company, entity);
+  for (const key of sourceKeys) master.sourceIndex[key] = companyId;
+  return company;
+}
+
+function mergeCompanyKeyword(targetKeyword = {}, sourceKeyword = {}) {
+  const runsById = new Map();
+  for (const row of [...(targetKeyword.runs || []), ...(sourceKeyword.runs || [])]) {
+    if (!row?.runId) continue;
+    runsById.set(row.runId, { ...(runsById.get(row.runId) || {}), ...row });
+  }
+  const runs = [...runsById.values()]
+    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))
+    .slice(0, 80);
+  const ranks = runs.map((row) => Number(row.rank)).filter((rank) => Number.isFinite(rank) && rank > 0);
+  const latest = runs[0] || {};
+  return {
+    ...targetKeyword,
+    ...sourceKeyword,
+    keyword: targetKeyword.keyword || sourceKeyword.keyword || "",
+    keywordKey: targetKeyword.keywordKey || sourceKeyword.keywordKey || "",
+    firstSeenAt: [targetKeyword.firstSeenAt, sourceKeyword.firstSeenAt].filter(Boolean).sort()[0] || "",
+    lastSeenAt: [targetKeyword.lastSeenAt, sourceKeyword.lastSeenAt].filter(Boolean).sort().at(-1) || "",
+    bestRank: ranks.length ? Math.min(...ranks) : null,
+    latestRank: latest.rank || null,
+    latestRunId: latest.runId || "",
+    runCount: runs.length,
+    runs
+  };
+}
+
+function mergeCompanyInventory(targetInventory = {}, sourceInventory = {}) {
+  const merged = {
+    latest: targetInventory.latest || sourceInventory.latest || {},
+    structureCounts: { ...(targetInventory.structureCounts || {}) },
+    confidenceCounts: { ...(targetInventory.confidenceCounts || {}) },
+    runIds: boundedUnique([...(targetInventory.runIds || []), ...(sourceInventory.runIds || [])], 120)
+  };
+  for (const [key, count] of Object.entries(sourceInventory.structureCounts || {})) {
+    merged.structureCounts[key] = (merged.structureCounts[key] || 0) + Number(count || 0);
+  }
+  for (const [key, count] of Object.entries(sourceInventory.confidenceCounts || {})) {
+    merged.confidenceCounts[key] = (merged.confidenceCounts[key] || 0) + Number(count || 0);
+  }
+  if (
+    sourceInventory.latest?.collectedAt
+    && String(sourceInventory.latest.collectedAt).localeCompare(String(merged.latest?.collectedAt || "")) > 0
+  ) {
+    merged.latest = sourceInventory.latest;
+  }
+  return merged;
+}
+
+function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
+  const ids = boundedUnique(companyIds, 20).filter((id) => master.companies?.[id]);
+  if (ids.length < 2) {
+    const error = new Error("병합할 업체를 2개 이상 선택해야 합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const targetId = ids[0];
+  const target = master.companies[targetId];
+  for (const sourceId of ids.slice(1)) {
+    const source = master.companies[sourceId];
+    if (!source) continue;
+    target.aliases = boundedUnique([...(target.aliases || []), ...(source.aliases || []), source.primaryName], 40);
+    target.placeIds = boundedUnique([...(target.placeIds || []), ...(source.placeIds || [])], 30);
+    target.bookingBusinessIds = boundedUnique([...(target.bookingBusinessIds || []), ...(source.bookingBusinessIds || [])], 30);
+    target.regions = boundedUnique([...(target.regions || []), ...(source.regions || [])], 30);
+    target.addresses = boundedUnique([...(target.addresses || []), ...(source.addresses || [])], 30);
+    target.urls = boundedUnique([...(target.urls || []), ...(source.urls || [])], 40);
+    target.runIds = boundedUnique([...(target.runIds || []), ...(source.runIds || [])], 160);
+    target.firstSeenAt = [target.firstSeenAt, source.firstSeenAt].filter(Boolean).sort()[0] || target.firstSeenAt || "";
+    target.lastSeenAt = [target.lastSeenAt, source.lastSeenAt].filter(Boolean).sort().at(-1) || target.lastSeenAt || "";
+    target.keywords = target.keywords || {};
+    for (const [keywordKey, sourceKeyword] of Object.entries(source.keywords || {})) {
+      target.keywords[keywordKey] = mergeCompanyKeyword(target.keywords[keywordKey], sourceKeyword);
+    }
+    target.inventory = mergeCompanyInventory(target.inventory || {}, source.inventory || {});
+    if (!target.manualCorrection && source.manualCorrection) target.manualCorrection = source.manualCorrection;
+    target.duplicateNotes = [
+      ...(target.duplicateNotes || []),
+      {
+        at: new Date().toISOString(),
+        reason: "관리자 병합",
+        mergedCompanyId: sourceId,
+        candidateKey
+      },
+      ...(source.duplicateNotes || [])
+    ].slice(-40);
+    for (const [sourceKey, indexedCompanyId] of Object.entries(master.sourceIndex || {})) {
+      if (indexedCompanyId === sourceId) master.sourceIndex[sourceKey] = targetId;
+    }
+    delete master.companies[sourceId];
+  }
+  if (candidateKey) master.duplicateResolutions[candidateKey] = `merged:${targetId}`;
+  return target;
+}
+
+async function resolveCompanyMasterDuplicate(payload = {}) {
+  const action = String(payload.action || "").trim();
+  const candidateKey = String(payload.candidateKey || "").trim();
+  const companyIds = Array.isArray(payload.companyIds) ? payload.companyIds.map((value) => String(value || "").trim()) : [];
+  const master = await readCompanyMaster();
+  if (action === "separate") {
+    if (!candidateKey) {
+      const error = new Error("분리 유지할 후보 키가 없습니다.");
+      error.statusCode = 400;
+      throw error;
+    }
+    master.duplicateResolutions[candidateKey] = "separate";
+    await writeCompanyMaster(master);
+    return { ...(await summarizeCompanyMaster()), resolved: { action, candidateKey } };
+  }
+  if (action === "merge") {
+    const target = mergeCompanyRecords(master, companyIds, candidateKey);
+    await writeCompanyMaster(master);
+    return { ...(await summarizeCompanyMaster()), resolved: { action, candidateKey, companyId: target.companyId } };
+  }
+  const error = new Error("지원하지 않는 중복 처리 방식입니다.");
+  error.statusCode = 400;
+  throw error;
+}
+
+async function upsertCompanyMasterForRun(data, collectedAt) {
+  const master = await readCompanyMaster();
+  const run = data?.run || {};
+  const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
+  const items = data?.availability?.items || [];
+  const beforeSnapshot = JSON.stringify({
+    companies: master.companies,
+    sourceIndex: master.sourceIndex,
+    duplicateResolutions: master.duplicateResolutions
+  });
+  let touched = 0;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const entity = companyEntityFromItem(items[index], run, collectedAt);
+    if (!entity.nameKey || !entity.sourceKeys.length) continue;
+    const company = upsertCompanyRecord(master, entity);
+    touched += 1;
+    const correctedItem = applyCompanyManualCorrection(items[index], company);
+    items[index] = {
+      ...correctedItem,
+      companyId: company.companyId,
+      companyProfile: companyRecordSummary(company, keywordKey)
+    };
+  }
+
+  const afterSnapshot = JSON.stringify({
+    companies: master.companies,
+    sourceIndex: master.sourceIndex,
+    duplicateResolutions: master.duplicateResolutions
+  });
+  if (touched && beforeSnapshot !== afterSnapshot) await writeCompanyMaster(master);
+  const duplicateCandidates = findCompanyDuplicateCandidates(master);
+  return {
+    file: "company_master/companies.json",
+    totalCompanies: Object.keys(master.companies || {}).length,
+    currentRunCompanies: touched,
+    duplicateCandidateCount: duplicateCandidates.length,
+    duplicateCandidates,
+    updatedAt: master.updatedAt || "",
+    principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합"
+  };
+}
+
+async function summarizeCompanyMaster() {
+  const master = await readCompanyMaster();
+  const duplicateCandidates = findCompanyDuplicateCandidates(master);
+  return {
+    file: "company_master/companies.json",
+    totalCompanies: Object.keys(master.companies || {}).length,
+    sourceKeyCount: Object.keys(master.sourceIndex || {}).length,
+    duplicateCandidateCount: duplicateCandidates.length,
+    duplicateCandidates,
+    updatedAt: master.updatedAt || "",
+    principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합",
+    companies: Object.values(master.companies || {})
+      .map((company) => companyRecordSummary(company))
+      .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
+      .slice(0, 30)
+  };
+}
+
 function buildHistoryObservations(data, collectedAt) {
   const run = data?.run || {};
   const checkIn = run.checkIn || runDateFromId(run.id) || kstDate(0);
@@ -2461,7 +2972,7 @@ function buildHistoryObservations(data, collectedAt) {
   const observations = [];
 
   for (const item of items) {
-    const companyKey = compactKeyword(item.name || "").toLowerCase();
+    const companyKey = item.companyId || compactKeyword(item.name || "").toLowerCase();
     if (!companyKey) continue;
 
     for (const productType of ["lodging", "dayuse"]) {
@@ -2952,6 +3463,13 @@ function availabilityPlaceKey(row) {
   return name ? `name:${name}:${region}` : "";
 }
 
+function availabilityBookingBusinessId(row = {}) {
+  return extractBookingBusinessId({
+    ...row,
+    naverBookingUrl: row["네이버예약URL"] || row.naverBookingUrl || ""
+  });
+}
+
 function summarizeAvailabilityRows(rows) {
   const byPlace = new Map();
   for (const row of rows) {
@@ -2983,8 +3501,14 @@ function summarizeAvailabilityRows(rows) {
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
+    const placeId = extractNaverPlaceId(row);
+    const bookingBusinessId = availabilityBookingBusinessId(row);
 
     byPlace.set(key, {
+      sourceKey: key,
+      placeId,
+      place_id: placeId,
+      bookingBusinessId,
       rank: numericField(row, ["overall_rank", "순위", "rank_or_order"]) || byPlace.size + 1,
       name: row["업체명"] || row.name || "확인불가",
       region: row["소재지클러스터"] || row["검색클러스터"] || row["지역"] || "",
@@ -3256,6 +3780,8 @@ async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
 
+  const stat = await fsp.stat(dirPath);
+  const collectedAt = stat.mtime.toISOString();
   const files = await fsp.readdir(dirPath);
   const manifest = await readManifest(dirPath);
   const provinceKey = provinceKeyForRun(runId, manifest);
@@ -3346,6 +3872,14 @@ async function loadRun(runId, options = {}) {
         url: `/outputs/${encodeURIComponent(runId)}/${encodeURIComponent(file)}`
       }))
   };
+
+  result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt).catch((error) => ({
+    error: error.message || String(error),
+    totalCompanies: 0,
+    currentRunCompanies: 0,
+    duplicateCandidateCount: 0,
+    duplicateCandidates: []
+  }));
 
   if (!options.skipHistory) {
     let history = await summarizeHistoryForRun(result);
@@ -3564,8 +4098,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260629-ota-index"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260629-ota-index"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-company-master"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-company-master"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -3640,6 +4174,15 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {
       return send(res, 200, await summarizeHistoryOperations());
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/company-master/summary") {
+      return send(res, 200, await summarizeCompanyMaster());
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/duplicates") {
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await resolveCompanyMasterDuplicate(payload));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {

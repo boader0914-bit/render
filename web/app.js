@@ -9,6 +9,7 @@ const state = {
   mapPromise: null,
   dictionary: null,
   historyOps: null,
+  companyMaster: null,
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
   trafficKeyState: null,
@@ -93,6 +94,8 @@ const els = {
   trafficKeyStatus: document.getElementById("trafficKeyStatus"),
   trafficKeyVerifyButton: document.getElementById("trafficKeyVerifyButton"),
   trafficKeyVerifyResult: document.getElementById("trafficKeyVerifyResult"),
+  companyMasterState: document.getElementById("companyMasterState"),
+  companyMasterPanel: document.getElementById("companyMasterPanel"),
   naverClientIdInput: document.getElementById("naverClientIdInput"),
   naverClientSecretInput: document.getElementById("naverClientSecretInput"),
   searchadApiKeyInput: document.getElementById("searchadApiKeyInput"),
@@ -2606,6 +2609,101 @@ function historyOpsCompanyTrends(activeKeywordRow) {
   `;
 }
 
+function companyProfileKeywordList(profile = {}) {
+  const rows = profile.keywords || [];
+  if (!rows.length) return `<div class="empty">아직 다른 키워드 노출 이력이 없습니다.</div>`;
+  return `
+    <div class="company-profile-keywords">
+      ${rows.slice(0, 6).map((row) => `
+        <span>
+          <strong>${escapeHtml(row.keyword || "키워드")}</strong>
+          <small>최고 ${row.bestRank ? `${fmtNumber(row.bestRank)}위` : "순위대기"} · ${fmtNumber(row.runCount || 0)}회</small>
+        </span>
+      `).join("")}
+    </div>
+  `;
+}
+
+function sheetCompanyProfile(item = {}) {
+  const profile = item.companyProfile || {};
+  if (!profile.companyId) return "";
+  const active = profile.activeKeyword;
+  const correction = profile.manualCorrection || item.companyManualCorrection;
+  const cells = [
+    ["누적 수집", `${fmtNumber(profile.runCount || 0)}회`, `${fmtNumber(profile.keywordCount || 0)}개 키워드`],
+    ["최고 노출", profile.bestRank ? `${fmtNumber(profile.bestRank)}위` : "대기", profile.bestKeyword || "키워드 누적 중"],
+    ["현재 키워드", active?.latestRank ? `${fmtNumber(active.latestRank)}위` : "대기", active?.keyword || activeKeyword()],
+    ["수동 보정", correction ? "적용 가능" : "없음", correction?.note || "업체 단위 보정값 대기"]
+  ];
+  return `
+    <section class="sheet-section sheet-company-profile-section">
+      <div class="sheet-structure-title">
+        <h3>누적 업체 프로필</h3>
+        <span class="structure-badge watch">${escapeHtml(profile.companyId)}</span>
+      </div>
+      <div class="sheet-history-grid">
+        ${cells.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </div>
+        `).join("")}
+      </div>
+      ${companyProfileKeywordList(profile)}
+    </section>
+  `;
+}
+
+function renderCompanyMasterPanel() {
+  if (!els.companyMasterPanel) return;
+  const master = { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
+  if (els.companyMasterState) {
+    els.companyMasterState.textContent = master.error ? "오류" : master.totalCompanies ? `${fmtNumber(master.totalCompanies)} 업체` : "대기";
+  }
+  if (master.error) {
+    els.companyMasterPanel.innerHTML = `<div class="empty">업체 마스터 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    return;
+  }
+  if (!master.totalCompanies) {
+    els.companyMasterPanel.innerHTML = `
+      <div class="empty">
+        업체 마스터 DB가 아직 비어 있습니다. 수집 결과를 열면 업체별 고유키와 키워드 이력이 자동 저장됩니다.
+      </div>
+    `;
+    return;
+  }
+  const duplicates = master.duplicateCandidates || [];
+  els.companyMasterPanel.innerHTML = `
+    <div class="company-master-metrics">
+      <article><span>전체 업체</span><strong>${fmtNumber(master.totalCompanies)}</strong><small>마스터 DB</small></article>
+      <article><span>이번 결과</span><strong>${fmtNumber(master.currentRunCompanies || 0)}</strong><small>자동 upsert</small></article>
+      <article><span>중복 후보</span><strong>${fmtNumber(master.duplicateCandidateCount || 0)}</strong><small>수동 검토</small></article>
+    </div>
+    <div class="company-master-rule">
+      <strong>병합 기준</strong>
+      <p>${escapeHtml(master.principle || "place_id/예약ID 우선, 업체명+주소/지역 보조")}</p>
+    </div>
+    <div class="company-master-duplicates">
+      ${duplicates.length ? duplicates.slice(0, 5).map((candidate) => `
+        <article>
+          <strong>${escapeHtml(candidate.reason || "중복 후보")}</strong>
+          <small>${escapeHtml(candidate.candidateKey || "")}</small>
+          <div>
+            ${(candidate.companies || []).map((company) => `
+              <span>${escapeHtml(company.primaryName || "업체명 확인")} · ${fmtNumber(company.runCount || 0)}회</span>
+            `).join("")}
+          </div>
+          <div class="company-master-actions">
+            <button type="button" data-company-duplicate-action="merge" data-candidate-key="${escapeHtml(candidate.candidateKey || "")}" data-company-ids="${escapeHtml((candidate.companies || []).map((company) => company.companyId).filter(Boolean).join(","))}">대표로 병합</button>
+            <button type="button" data-company-duplicate-action="separate" data-candidate-key="${escapeHtml(candidate.candidateKey || "")}">분리 유지</button>
+          </div>
+        </article>
+      `).join("") : `<p>현재 수동 병합/분리 후보가 없습니다.</p>`}
+    </div>
+  `;
+}
+
 function renderHistoryOps() {
   if (!els.historyOpsDashboard) return;
   const ops = historyOpsSource();
@@ -3809,6 +3907,7 @@ function renderAll() {
   renderMap();
   renderDemand();
   renderHistoryOps();
+  renderCompanyMasterPanel();
   renderLocationDictionary();
   renderDownloads();
   syncYeogiManualInterface();
@@ -4085,6 +4184,7 @@ function renderSheetBooking(item) {
   return `
     ${sheetFlowOverview(item)}
     ${sheetAuditPanel(item)}
+    ${sheetCompanyProfile(item)}
     ${sheetHistoryPanel(item)}
     ${sheetInventoryStructure(item)}
     <section class="sheet-section">
@@ -4292,6 +4392,41 @@ async function loadHistoryOps() {
   }
 }
 
+async function loadCompanyMasterSummary() {
+  try {
+    state.companyMaster = await fetchJson("/api/company-master/summary");
+  } catch (error) {
+    state.companyMaster = { error: error.message, totalCompanies: 0, duplicateCandidates: [] };
+  }
+}
+
+async function resolveCompanyDuplicate(button) {
+  const action = button?.dataset?.companyDuplicateAction;
+  const candidateKey = button?.dataset?.candidateKey || "";
+  const companyIds = (button?.dataset?.companyIds || "").split(",").map((value) => value.trim()).filter(Boolean);
+  if (!action || !candidateKey) return;
+  button.disabled = true;
+  if (els.companyMasterState) els.companyMasterState.textContent = action === "merge" ? "병합 중" : "분리 저장 중";
+  try {
+    const data = await fetchJson("/api/company-master/duplicates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, candidateKey, companyIds })
+    });
+    state.companyMaster = data;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
+    renderCompanyMasterPanel();
+    setStatus(action === "merge" ? "업체 병합 완료" : "분리 유지 저장");
+  } catch (error) {
+    if (els.companyMasterPanel) {
+      els.companyMasterPanel.insertAdjacentHTML("afterbegin", `<div class="empty">중복 처리 실패: ${escapeHtml(error.message)}</div>`);
+    }
+    if (els.companyMasterState) els.companyMasterState.textContent = "오류";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadRuns(selectLatest = false) {
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
@@ -4317,6 +4452,7 @@ async function loadRun(runId) {
   state.data = data;
   state.activeRunId = runId;
   await loadHistoryOps();
+  await loadCompanyMasterSummary();
   syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
@@ -4604,6 +4740,8 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
+    const duplicateAction = event.target.closest("[data-company-duplicate-action]");
+    if (duplicateAction) resolveCompanyDuplicate(duplicateAction);
     if (event.target.closest("[data-close-sheet]")) closeSheet();
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const drawerTab = event.target.closest("[data-drawer-tab]");
