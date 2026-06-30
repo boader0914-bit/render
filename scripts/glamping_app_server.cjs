@@ -2707,7 +2707,8 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     latestKeyword: keywords.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))[0]?.keyword || "",
     activeKeyword,
     inventory: company.inventory || {},
-    manualCorrection: company.manualCorrection || null
+    manualCorrection: company.manualCorrection || null,
+    identityConfidence: companyIdentityConfidence(company)
   };
 }
 
@@ -2732,6 +2733,47 @@ function findCompanyDuplicateCandidates(master) {
     .slice(0, 20);
 }
 
+function summarizeCompanyCrossKeyword(master) {
+  const companies = Object.values(master.companies || {}).map((company) => companyRecordSummary(company));
+  const multiKeywordCompanies = companies
+    .filter((company) => (company.keywordCount || 0) >= 2)
+    .sort((a, b) => (b.keywordCount || 0) - (a.keywordCount || 0) || (b.runCount || 0) - (a.runCount || 0));
+  const confidenceCounts = companies.reduce((acc, company) => {
+    const label = company.identityConfidence?.label || "검토 필요";
+    acc[label] = (acc[label] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    totalCompanies: companies.length,
+    multiKeywordCompanyCount: multiKeywordCompanies.length,
+    singleKeywordCompanyCount: companies.filter((company) => (company.keywordCount || 0) <= 1).length,
+    keywordLinks: companies.reduce((sum, company) => sum + Number(company.keywordCount || 0), 0),
+    confidenceCounts,
+    topMultiKeywordCompanies: multiKeywordCompanies.slice(0, 12).map((company) => ({
+      companyId: company.companyId,
+      primaryName: company.primaryName,
+      runCount: company.runCount,
+      keywordCount: company.keywordCount,
+      bestRank: company.bestRank,
+      bestKeyword: company.bestKeyword,
+      identityConfidence: company.identityConfidence,
+      keywords: (company.keywords || []).slice(0, 6)
+    })),
+    reviewNeededCompanies: companies
+      .filter((company) => company.identityConfidence?.level === "review" || company.identityConfidence?.level === "medium")
+      .sort((a, b) => (b.runCount || 0) - (a.runCount || 0))
+      .slice(0, 12)
+      .map((company) => ({
+        companyId: company.companyId,
+        primaryName: company.primaryName,
+        runCount: company.runCount,
+        keywordCount: company.keywordCount,
+        identityConfidence: company.identityConfidence,
+        keywords: (company.keywords || []).slice(0, 4)
+      }))
+  };
+}
+
 function applyCompanyManualCorrection(item, company) {
   const correction = company?.manualCorrection;
   if (!correction || correction.active === false) return item;
@@ -2747,6 +2789,19 @@ function applyCompanyManualCorrection(item, company) {
     next.dayUseTotalStock = Math.max(Number(next.dayUseTotalStock || 0), dayUseBasis);
   }
   return next;
+}
+
+function companyIdentityConfidence(company = {}) {
+  if ((company.placeIds || []).length) {
+    return { level: "certain", label: "확실", reason: "네이버 place_id 기준" };
+  }
+  if ((company.bookingBusinessIds || []).length) {
+    return { level: "high", label: "높음", reason: "네이버 예약ID 기준" };
+  }
+  if ((company.addresses || []).length) {
+    return { level: "medium", label: "보통", reason: "업체명+주소 기준" };
+  }
+  return { level: "review", label: "검토 필요", reason: "업체명+지역 보조 기준" };
 }
 
 function upsertCompanyRecord(master, entity) {
@@ -2991,12 +3046,63 @@ async function summarizeCompanyMaster() {
     sourceKeyCount: Object.keys(master.sourceIndex || {}).length,
     duplicateCandidateCount: duplicateCandidates.length,
     duplicateCandidates,
+    crossKeyword: summarizeCompanyCrossKeyword(master),
     updatedAt: master.updatedAt || "",
     principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합",
     companies: Object.values(master.companies || {})
       .map((company) => companyRecordSummary(company))
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
       .slice(0, 30)
+  };
+}
+
+async function backfillCompanyMasterFromRuns(payload = {}) {
+  const requestedRunIds = Array.isArray(payload.runIds)
+    ? new Set(payload.runIds.map((value) => String(value || "").trim()).filter(Boolean))
+    : null;
+  const limit = Number(payload.limit);
+  const runs = (await listRuns())
+    .filter((run) => !requestedRunIds || requestedRunIds.has(run.id))
+    .sort((a, b) => String(a.updatedAt || "").localeCompare(String(b.updatedAt || "")))
+    .slice(0, Number.isFinite(limit) && limit > 0 ? Math.min(500, Math.round(limit)) : undefined);
+  const startedAt = new Date().toISOString();
+  const processed = [];
+  const failed = [];
+  let touchedCompanies = 0;
+
+  for (const run of runs) {
+    try {
+      const data = await loadRun(run.id, { skipHistory: true });
+      const currentRunCompanies = Number(data?.companyMaster?.currentRunCompanies || 0);
+      touchedCompanies += currentRunCompanies;
+      processed.push({
+        runId: run.id,
+        label: run.label || run.id,
+        updatedAt: run.updatedAt,
+        currentRunCompanies,
+        totalCompanies: data?.companyMaster?.totalCompanies || 0
+      });
+    } catch (error) {
+      failed.push({
+        runId: run.id,
+        label: run.label || run.id,
+        message: error.message || String(error)
+      });
+    }
+  }
+
+  return {
+    ...(await summarizeCompanyMaster()),
+    backfill: {
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      requestedRuns: runs.length,
+      processedRuns: processed.length,
+      failedRuns: failed.length,
+      touchedCompanies,
+      runs: processed.slice(-30).reverse(),
+      failed
+    }
   };
 }
 
@@ -4136,8 +4242,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-company-master-correction"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-company-master-correction"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-company-backfill"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-company-backfill"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -4226,6 +4332,11 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/manual-correction") {
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyManualCorrection(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/backfill") {
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await backfillCompanyMasterFromRuns(payload));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {

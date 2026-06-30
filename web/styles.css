@@ -1972,14 +1972,65 @@ a.platform-row:hover {
   gap: 10px;
 }
 
+.company-master-tools,
+.company-master-backfill,
+.company-cross-panel,
+.company-cross-list {
+  display: grid;
+  gap: 10px;
+}
+
+.company-master-tools {
+  border: 1px solid #d6e6ff;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.company-master-tools button {
+  min-height: 42px;
+  border: 1px solid #a9ccff;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.company-master-tools button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.company-master-tools small,
+.company-master-backfill p,
+.company-cross-list p,
+.company-cross-list small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
 .company-master-metrics {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
+.company-cross-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .company-master-metrics article,
+.company-cross-metrics article,
 .company-master-rule,
+.company-master-backfill,
+.company-cross-list,
+.company-cross-list article,
 .company-master-duplicates article,
 .company-profile-keywords span {
   min-width: 0;
@@ -1990,7 +2041,9 @@ a.platform-row:hover {
 }
 
 .company-master-metrics span,
+.company-cross-metrics span,
 .company-master-metrics small,
+.company-cross-metrics small,
 .company-master-rule p,
 .company-master-duplicates small,
 .company-master-duplicates span,
@@ -2000,7 +2053,8 @@ a.platform-row:hover {
   font-weight: 800;
 }
 
-.company-master-metrics strong {
+.company-master-metrics strong,
+.company-cross-metrics strong {
   display: block;
   margin: 4px 0;
   color: var(--blue);
@@ -2014,6 +2068,9 @@ a.platform-row:hover {
 }
 
 .company-master-rule strong,
+.company-master-backfill strong,
+.company-cross-list strong,
+.company-cross-list b,
 .company-master-duplicates strong,
 .company-profile-keywords strong {
   display: block;
@@ -2021,6 +2078,38 @@ a.platform-row:hover {
   color: var(--ink);
   font-size: 14px;
   font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.company-master-backfill div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.company-master-backfill span {
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.company-cross-list article {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.company-cross-list article > div {
+  display: grid;
+  gap: 4px;
+}
+
+.company-cross-list p {
+  margin: 0;
   overflow-wrap: anywhere;
 }
 
@@ -4711,6 +4800,7 @@ a.platform-row:hover {
   }
 
   .company-master-metrics,
+  .company-cross-metrics,
   .company-profile-keywords {
     grid-template-columns: 1fr;
   }

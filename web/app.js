@@ -2683,6 +2683,75 @@ function sheetCompanyProfile(item = {}) {
   `;
 }
 
+function companyMasterTools() {
+  return `
+    <div class="company-master-tools">
+      <button type="button" data-company-backfill>기존 결과 전체 반영</button>
+      <small>저장된 수집 결과를 다시 읽어 업체 고유키, 노출 키워드, 수동 보정 재사용 기준을 마스터 DB에 누적합니다.</small>
+    </div>
+  `;
+}
+
+function companyMasterBackfillResult(master = {}) {
+  const backfill = master.backfill;
+  if (!backfill) return "";
+  return `
+    <div class="company-master-backfill">
+      <strong>백필 완료</strong>
+      <p>${fmtNumber(backfill.processedRuns || 0)}개 결과 반영 · ${fmtNumber(backfill.touchedCompanies || 0)}개 업체 확인 · 실패 ${fmtNumber(backfill.failedRuns || 0)}건</p>
+      ${(backfill.runs || []).length ? `
+        <div>
+          ${(backfill.runs || []).slice(0, 5).map((run) => `
+            <span>${escapeHtml(run.label || run.runId)} · ${fmtNumber(run.currentRunCompanies || 0)}업체</span>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function companyMasterCrossKeywordPanel(master = {}) {
+  const cross = master.crossKeyword || {};
+  if (!cross.totalCompanies) return "";
+  const topCompanies = cross.topMultiKeywordCompanies || [];
+  const reviewCompanies = cross.reviewNeededCompanies || [];
+  const confidence = cross.confidenceCounts || {};
+  return `
+    <div class="company-cross-panel">
+      <div class="company-cross-metrics">
+        <article><span>교차 확인</span><strong>${fmtNumber(cross.multiKeywordCompanyCount || 0)}</strong><small>2개 이상 키워드</small></article>
+        <article><span>단일 키워드</span><strong>${fmtNumber(cross.singleKeywordCompanyCount || 0)}</strong><small>추가 수집 필요</small></article>
+        <article><span>확실/높음</span><strong>${fmtNumber((confidence["확실"] || 0) + (confidence["높음"] || 0))}</strong><small>ID 기반</small></article>
+      </div>
+      <div class="company-cross-list">
+        <strong>여러 키워드에서 같은 업체로 묶인 사례</strong>
+        ${topCompanies.length ? topCompanies.slice(0, 6).map((company) => `
+          <article>
+            <div>
+              <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+              <small>${escapeHtml(company.identityConfidence?.label || "검토 필요")} · ${fmtNumber(company.keywordCount || 0)}개 키워드 · ${fmtNumber(company.runCount || 0)}회</small>
+            </div>
+            <p>${(company.keywords || []).map((row) => escapeHtml(row.keyword || "")).filter(Boolean).join(" · ") || "키워드 대기"}</p>
+          </article>
+        `).join("") : `<p>아직 2개 이상 키워드에서 묶인 업체가 없습니다. 권역+지역+업체명 검색을 반복하면 여기에 쌓입니다.</p>`}
+      </div>
+      ${reviewCompanies.length ? `
+        <div class="company-cross-list">
+          <strong>고유키 신뢰도 보강 대상</strong>
+          ${reviewCompanies.slice(0, 4).map((company) => `
+            <article>
+              <div>
+                <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+                <small>${escapeHtml(company.identityConfidence?.label || "검토 필요")} · ${escapeHtml(company.identityConfidence?.reason || "")}</small>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function renderCompanyMasterPanel() {
   if (!els.companyMasterPanel) return;
   const master = { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
@@ -2698,16 +2767,20 @@ function renderCompanyMasterPanel() {
       <div class="empty">
         업체 마스터 DB가 아직 비어 있습니다. 수집 결과를 열면 업체별 고유키와 키워드 이력이 자동 저장됩니다.
       </div>
+      ${companyMasterTools()}
     `;
     return;
   }
   const duplicates = master.duplicateCandidates || [];
   els.companyMasterPanel.innerHTML = `
+    ${companyMasterTools()}
+    ${companyMasterBackfillResult(master)}
     <div class="company-master-metrics">
       <article><span>전체 업체</span><strong>${fmtNumber(master.totalCompanies)}</strong><small>마스터 DB</small></article>
       <article><span>이번 결과</span><strong>${fmtNumber(master.currentRunCompanies || 0)}</strong><small>자동 upsert</small></article>
       <article><span>중복 후보</span><strong>${fmtNumber(master.duplicateCandidateCount || 0)}</strong><small>수동 검토</small></article>
     </div>
+    ${companyMasterCrossKeywordPanel(master)}
     <div class="company-master-rule">
       <strong>병합 기준</strong>
       <p>${escapeHtml(master.principle || "place_id/예약ID 우선, 업체명+주소/지역 보조")}</p>
@@ -4494,6 +4567,32 @@ async function saveCompanyCorrection(button, clear = false) {
   }
 }
 
+async function backfillCompanyMaster(button) {
+  if (!button) return;
+  button.disabled = true;
+  if (els.companyMasterState) els.companyMasterState.textContent = "백필 중";
+  setStatus("기존 결과 반영 중");
+  try {
+    const data = await fetchJson("/api/company-master/backfill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    state.companyMaster = data;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
+    renderCompanyMasterPanel();
+    setStatus(`백필 완료: ${fmtNumber(data.backfill?.processedRuns || 0)}개 결과`);
+  } catch (error) {
+    if (els.companyMasterPanel) {
+      els.companyMasterPanel.insertAdjacentHTML("afterbegin", `<div class="empty">백필 실패: ${escapeHtml(error.message)}</div>`);
+    }
+    if (els.companyMasterState) els.companyMasterState.textContent = "오류";
+    setStatus("백필 실패");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadRuns(selectLatest = false) {
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
@@ -4813,6 +4912,8 @@ function bindEvents() {
     if (saveCorrection) saveCompanyCorrection(saveCorrection, false);
     const clearCorrection = event.target.closest("[data-clear-company-correction]");
     if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
+    const backfillButton = event.target.closest("[data-company-backfill]");
+    if (backfillButton) backfillCompanyMaster(backfillButton);
     if (event.target.closest("[data-close-sheet]")) closeSheet();
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const drawerTab = event.target.closest("[data-drawer-tab]");
