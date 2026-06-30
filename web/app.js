@@ -1611,6 +1611,90 @@ function targetEntries(limit = 15) {
   return limit ? entries.slice(0, limit) : entries;
 }
 
+function companyMasterSource() {
+  return { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
+}
+
+function companyItemFromCurrentRun(company = {}) {
+  const items = state.data?.availability?.items || [];
+  const aliases = new Set([company.primaryName, ...(company.aliases || [])].map((value) => compactSearchText(value || "")).filter(Boolean));
+  return items.find((item) => item.companyId && item.companyId === company.companyId) ||
+    items.find((item) => aliases.has(compactSearchText(item.name || ""))) ||
+    null;
+}
+
+function companySalesAction(company = {}) {
+  const tags = company.salesTarget?.priorityTags || [];
+  const signals = company.salesTarget?.signals || {};
+  const reasons = company.salesTarget?.reasons || [];
+  const has = (text) => tags.some((tag) => String(tag).includes(text)) || reasons.some((reason) => String(reason).includes(text));
+  if (has("금요일")) {
+    return {
+      label: "금요일 보강",
+      pitch: "토요일 수요를 금요일 숙박/연박 패키지로 당겨오는 제안",
+      next: "금요일 가격, 조식/바비큐, 2박 할인 구성을 확인"
+    };
+  }
+  if (has("일요일")) {
+    return {
+      label: "일요일 보강",
+      pitch: "주말 이후 빈 수요를 늦은 퇴실/일요일 특가로 회수",
+      next: "일요일 잔여율과 퇴실시간/연박 조건 확인"
+    };
+  }
+  if (has("평일") || signals.weekdayWeak) {
+    return {
+      label: "평일 패키지",
+      pitch: "월~목 저점에 가족/단체/기업 소규모 체류 상품 제안",
+      next: "평일 평균 판매율과 지역 생활권 수요 확인"
+    };
+  }
+  if (has("당일") || has("캠프닉") || signals.dayUseMissing) {
+    return {
+      label: "캠프닉 추가",
+      pitch: "숙박 외 당일상품을 보조 매출 상품으로 설계",
+      next: "데이유즈 회차, 기준 인원, 바비큐 포함 여부 확인"
+    };
+  }
+  if (has("OTA") || has("예약ID") || has("수량구조")) {
+    return {
+      label: "채널/수량 확인",
+      pitch: "네이버 기준 총량을 확인한 뒤 OTA 가격·노출 공백 점검",
+      next: "총 객실수, 예약ID, NOL/떠나요/여기어때 노출 비교"
+    };
+  }
+  return {
+    label: "상품 재정리",
+    pitch: "노출 대비 예약 상품과 가격 구성을 고객 관점으로 정리",
+    next: "대표 상품명, 최저가, 주말/평일 구성 확인"
+  };
+}
+
+function companySalesStage(company = {}) {
+  const review = company.adminReview?.status || "";
+  if (review === "confirmed") return { key: "confirmed", label: "확정 타깃", priority: 0 };
+  if (review === "manual_needed") return { key: "manual", label: "보정 필요", priority: 2 };
+  if (review === "hold") return { key: "hold", label: "보류", priority: 5 };
+  if (review === "exclude" || company.salesTarget?.category === "exclude") return { key: "exclude", label: "제외", priority: 9 };
+  if (company.salesTarget?.category === "contact") return { key: "contact", label: "컨택 후보", priority: 1 };
+  if (company.salesTarget?.category === "verify") return { key: "verify", label: "검증 후보", priority: 3 };
+  return { key: "observe", label: "관찰", priority: 6 };
+}
+
+function companySalesBoardEntries() {
+  const master = companyMasterSource();
+  const companies = master.companies || [];
+  return companies
+    .map((company) => {
+      const stage = companySalesStage(company);
+      const action = companySalesAction(company);
+      const item = companyItemFromCurrentRun(company);
+      return { company, stage, action, item };
+    })
+    .filter((entry) => entry.stage.key !== "exclude" && ["confirmed", "contact", "manual", "verify", "hold"].includes(entry.stage.key))
+    .sort((a, b) => a.stage.priority - b.stage.priority || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
+}
+
 function reportPlatformStats(items = []) {
   const platformNames = ["네이버", "야놀자", "여기어때", "떠나요"];
   const stats = Object.fromEntries(platformNames.map((name) => [name, 0]));
@@ -3234,28 +3318,108 @@ function renderDemand() {
 }
 
 function renderTargets() {
-  const items = targetEntries(15);
+  const boardEntries = companySalesBoardEntries();
+  const currentItems = targetEntries(12);
+  const confirmed = boardEntries.filter((entry) => entry.stage.key === "confirmed");
+  const contact = boardEntries.filter((entry) => entry.stage.key === "contact");
+  const manual = boardEntries.filter((entry) => entry.stage.key === "manual" || entry.stage.key === "verify");
+  const hold = boardEntries.filter((entry) => entry.stage.key === "hold");
+  const actionableCount = confirmed.length + contact.length;
+  const currentOnly = currentItems.filter(({ item }) => !boardEntries.some((entry) => entry.item === item)).slice(0, 6);
 
-  els.targetCount.textContent = `${fmtNumber(items.length)} 후보`;
-  if (!items.length) {
+  els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
+  if (!boardEntries.length && !currentItems.length) {
     els.targetList.innerHTML = `<div class="empty">현재 기준 영업 후보가 없습니다.</div>`;
     return;
   }
 
-  els.targetList.innerHTML = items.map(({ item, reasons, score, label }, index) => `
-    <article class="target-card">
-      <div class="target-head">
-        <strong>${index + 1}. ${escapeHtml(item.name)}</strong>
-        <span>${escapeHtml(label)} · ${fmtNumber(score)}</span>
+  const boardCard = (entry, index) => {
+    const { company, stage, action, item } = entry;
+    const itemIndex = item ? (state.data?.availability?.items || []).indexOf(item) : -1;
+    const regionText = (company.regions || []).slice(0, 2).join(" · ") || item?.region || "지역 확인";
+    const tags = company.salesTarget?.priorityTags || [];
+    return `
+      <article class="target-action-card ${stage.key}">
+        <div class="target-action-head">
+          <span>${index + 1}</span>
+          <div>
+            <strong>${escapeHtml(company.primaryName || item?.name || "업체명 확인")}</strong>
+            <small>${escapeHtml(regionText)} · ${escapeHtml(stage.label)} · ${fmtNumber(company.salesTarget?.score || 0)}점</small>
+          </div>
+          ${companyAdminReviewBadgeHtml(company)}
+        </div>
+        <div class="target-action-main">
+          <b>${escapeHtml(action.label)}</b>
+          <p>${escapeHtml(action.pitch)}</p>
+        </div>
+        <div class="target-reasons">
+          ${tags.length ? tags.slice(0, 5).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") : (company.salesTarget?.reasons || []).slice(0, 4).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+        </div>
+        <div class="target-next-line">
+          <strong>다음 확인</strong>
+          <span>${escapeHtml(action.next)}</span>
+        </div>
+        <div class="target-card-actions">
+          ${itemIndex >= 0 ? `<button class="secondary-button" type="button" data-open-company="${itemIndex}">상세 보기</button>` : `<button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>`}
+        </div>
+      </article>
+    `;
+  };
+  const lane = (title, subtitle, rows, emptyText) => `
+    <section class="target-lane">
+      <div class="target-lane-head">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(subtitle)}</small>
+        </div>
+        <span>${fmtNumber(rows.length)}</span>
       </div>
-      <p class="hint">${escapeHtml(categoryText(item))} · ${escapeHtml(salesLine(item, "lodging"))}</p>
-      ${flowChipRow(item)}
-      <div class="target-reasons">
-        ${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+      <div class="target-lane-list">
+        ${rows.length ? rows.slice(0, 6).map(boardCard).join("") : `<p class="empty">${escapeHtml(emptyText)}</p>`}
       </div>
-      <button class="secondary-button" type="button" data-open-company="${(state.data?.availability?.items || []).indexOf(item)}">상세 보기</button>
-    </article>
-  `).join("");
+    </section>
+  `;
+
+  els.targetList.innerHTML = `
+    <section class="target-board-hero">
+      <article><span>오늘 컨택</span><strong>${fmtNumber(actionableCount)}</strong><small>확정+컨택 후보</small></article>
+      <article><span>검증 완료</span><strong>${fmtNumber(confirmed.length)}</strong><small>판단 맞음</small></article>
+      <article><span>보정 필요</span><strong>${fmtNumber(manual.length)}</strong><small>수량/채널 확인</small></article>
+      <article><span>보류</span><strong>${fmtNumber(hold.length)}</strong><small>추가 관찰</small></article>
+    </section>
+    <section class="target-board">
+      ${lane("확정 타깃", "관리자가 판단 맞음으로 확정한 업체", confirmed, "아직 확정 타깃이 없습니다. 관리 탭에서 후보를 검증하세요.")}
+      ${lane("컨택 후보", "광역 진입 또는 판매 개선 여지가 큰 업체", contact, "현재 컨택 후보가 없습니다.")}
+      ${lane("보정/검증 필요", "수량 구조나 OTA 확인 후 제안해야 하는 업체", manual, "보정 또는 검증 필요 업체가 없습니다.")}
+    </section>
+    ${currentOnly.length ? `
+      <section class="target-current-run">
+        <div class="target-lane-head">
+          <div>
+            <strong>현재 수집 결과 후보</strong>
+            <small>아직 업체 마스터 검증 전인 단기 후보</small>
+          </div>
+          <span>${fmtNumber(currentOnly.length)}</span>
+        </div>
+        <div class="target-current-grid">
+          ${currentOnly.map(({ item, reasons, score, label }, index) => `
+            <article class="target-card">
+              <div class="target-head">
+                <strong>${index + 1}. ${escapeHtml(item.name)}</strong>
+                <span>${escapeHtml(label)} · ${fmtNumber(score)}</span>
+              </div>
+              <p class="hint">${escapeHtml(categoryText(item))} · ${escapeHtml(salesLine(item, "lodging"))}</p>
+              ${flowChipRow(item)}
+              <div class="target-reasons">
+                ${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+              </div>
+              <button class="secondary-button" type="button" data-open-company="${(state.data?.availability?.items || []).indexOf(item)}">상세 보기</button>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    ` : ""}
+  `;
 }
 
 function regionPrimary(region = {}) {
@@ -4850,6 +5014,7 @@ async function saveCompanyAdminReview(button) {
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
     renderCompanyMasterPanel();
+    renderTargets();
     setStatus(status === "clear" ? "검증 해제 완료" : `${companyAdminReviewLabel(status)} 저장 완료`);
   } catch (error) {
     setStatus("검증 저장 실패");
