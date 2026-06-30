@@ -2080,6 +2080,73 @@ a.platform-row:hover {
   margin-top: 12px;
 }
 
+.company-manual-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.company-manual-form > div:first-child {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.company-manual-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.company-manual-form label span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.company-manual-form input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px;
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.company-manual-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.company-manual-actions button {
+  min-height: 40px;
+  border: 1px solid #d6e6ff;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.company-manual-actions button:last-child {
+  border-color: #e8edf5;
+  color: var(--muted);
+}
+
+.company-manual-actions button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
 .map-card {
   overflow: hidden;
   margin-bottom: 12px;
@@ -4645,6 +4712,11 @@ a.platform-row:hover {
 
   .company-master-metrics,
   .company-profile-keywords {
+    grid-template-columns: 1fr;
+  }
+
+  .company-manual-form > div:first-child,
+  .company-manual-actions {
     grid-template-columns: 1fr;
   }
 

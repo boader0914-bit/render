@@ -2901,6 +2901,44 @@ async function resolveCompanyMasterDuplicate(payload = {}) {
   throw error;
 }
 
+async function saveCompanyManualCorrection(payload = {}) {
+  const companyId = String(payload.companyId || "").trim();
+  const master = await readCompanyMaster();
+  const company = master.companies?.[companyId];
+  if (!company) {
+    const error = new Error("수동 보정할 업체를 찾지 못했습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (payload.active === false) {
+    company.manualCorrection = null;
+  } else {
+    const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
+    const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
+    company.manualCorrection = {
+      active: true,
+      lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
+      dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
+      note: String(payload.note || "").trim(),
+      source: "admin",
+      updatedAt: new Date().toISOString()
+    };
+  }
+  company.duplicateNotes = [
+    ...(company.duplicateNotes || []),
+    {
+      at: new Date().toISOString(),
+      reason: payload.active === false ? "수동 보정 해제" : "수동 보정 저장"
+    }
+  ].slice(-40);
+  await writeCompanyMaster(master);
+  return {
+    ...(await summarizeCompanyMaster()),
+    company: companyRecordSummary(company),
+    resolved: { action: payload.active === false ? "clearManualCorrection" : "saveManualCorrection", companyId }
+  };
+}
+
 async function upsertCompanyMasterForRun(data, collectedAt) {
   const master = await readCompanyMaster();
   const run = data?.run || {};
@@ -4183,6 +4221,11 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/duplicates") {
       const payload = await parseJsonBody(req);
       return send(res, 200, await resolveCompanyMasterDuplicate(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/manual-correction") {
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveCompanyManualCorrection(payload));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {

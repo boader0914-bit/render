@@ -2624,6 +2624,33 @@ function companyProfileKeywordList(profile = {}) {
   `;
 }
 
+function sheetManualCorrectionForm(profile = {}, item = {}) {
+  if (!profile.companyId) return "";
+  const correction = profile.manualCorrection || item.companyManualCorrection || {};
+  return `
+    <div class="company-manual-form" data-company-manual-form data-company-id="${escapeHtml(profile.companyId)}">
+      <div>
+        <label>
+          <span>숙박 기준 총량</span>
+          <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 30">
+        </label>
+        <label>
+          <span>데이유즈/캠프닉 기준 총량</span>
+          <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correction.dayUseBasisTotal || "")}" placeholder="예: 12">
+        </label>
+      </div>
+      <label>
+        <span>보정 메모</span>
+        <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전화예약 조절 반영, 실제 객실 30동">
+      </label>
+      <div class="company-manual-actions">
+        <button type="button" data-save-company-correction data-company-id="${escapeHtml(profile.companyId)}">보정 저장</button>
+        <button type="button" data-clear-company-correction data-company-id="${escapeHtml(profile.companyId)}">보정 해제</button>
+      </div>
+    </div>
+  `;
+}
+
 function sheetCompanyProfile(item = {}) {
   const profile = item.companyProfile || {};
   if (!profile.companyId) return "";
@@ -2651,6 +2678,7 @@ function sheetCompanyProfile(item = {}) {
         `).join("")}
       </div>
       ${companyProfileKeywordList(profile)}
+      ${sheetManualCorrectionForm(profile, item)}
     </section>
   `;
 }
@@ -4427,6 +4455,45 @@ async function resolveCompanyDuplicate(button) {
   }
 }
 
+async function saveCompanyCorrection(button, clear = false) {
+  const form = button?.closest("[data-company-manual-form]");
+  const companyId = button?.dataset?.companyId || form?.dataset?.companyId || state.selectedItem?.companyId || "";
+  if (!companyId) return;
+  button.disabled = true;
+  setStatus(clear ? "보정 해제 중" : "보정 저장 중");
+  const selectedCompanyId = state.selectedItem?.companyId || companyId;
+  const payload = clear
+    ? { companyId, active: false }
+    : {
+        companyId,
+        lodgingBasisTotal: form?.querySelector("[data-manual-lodging]")?.value || "",
+        dayUseBasisTotal: form?.querySelector("[data-manual-dayuse]")?.value || "",
+        note: form?.querySelector("[data-manual-note]")?.value || ""
+      };
+  try {
+    const data = await fetchJson("/api/company-master/manual-correction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    state.companyMaster = data;
+    if (state.activeRunId) {
+      await loadRun(state.activeRunId);
+      const updatedItem = (state.data?.availability?.items || []).find((item) => item.companyId === selectedCompanyId);
+      if (updatedItem) state.selectedItem = updatedItem;
+      if (state.selectedItem && els.detailSheet && !els.detailSheet.hidden) renderSheet();
+    } else {
+      renderCompanyMasterPanel();
+    }
+    setStatus(clear ? "보정 해제 완료" : "보정 저장 완료");
+  } catch (error) {
+    setStatus("보정 저장 실패");
+    if (form) form.insertAdjacentHTML("beforeend", `<div class="empty">보정 저장 실패: ${escapeHtml(error.message)}</div>`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadRuns(selectLatest = false) {
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
@@ -4742,6 +4809,10 @@ function bindEvents() {
     if (open) openSheet(open.dataset.openCompany);
     const duplicateAction = event.target.closest("[data-company-duplicate-action]");
     if (duplicateAction) resolveCompanyDuplicate(duplicateAction);
+    const saveCorrection = event.target.closest("[data-save-company-correction]");
+    if (saveCorrection) saveCompanyCorrection(saveCorrection, false);
+    const clearCorrection = event.target.closest("[data-clear-company-correction]");
+    if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
     if (event.target.closest("[data-close-sheet]")) closeSheet();
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const drawerTab = event.target.closest("[data-drawer-tab]");
