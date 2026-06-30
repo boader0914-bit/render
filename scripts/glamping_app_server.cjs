@@ -1418,6 +1418,51 @@ function compactKeyword(keyword) {
   return String(keyword || "").replace(/\s+/g, "");
 }
 
+const REGIONAL_KEYWORD_ALIASES = {
+  gyeongnam: ["경남", "경상남도"],
+  gyeongbuk: ["경북", "경상북도"],
+  gyeonggi: ["경기", "경기도"],
+  jeonbuk: ["전북", "전라북도"],
+  jeonnam: ["전남", "전라남도"],
+  chungnam: ["충남", "충청남도"],
+  chungbuk: ["충북", "충청북도"],
+  gangwon: ["강원", "강원도"],
+  jeju: ["제주", "제주도"],
+  seoul: ["서울", "서울시", "서울특별시"],
+  busan: ["부산", "부산시", "부산광역시"],
+  daegu: ["대구", "대구시", "대구광역시"],
+  incheon: ["인천", "인천시", "인천광역시"],
+  gwangju: ["광주", "광주시", "광주광역시"],
+  daejeon: ["대전", "대전시", "대전광역시"],
+  ulsan: ["울산", "울산시", "울산광역시"],
+  sejong: ["세종", "세종시", "세종특별자치시"]
+};
+
+function keywordLayerCore(keyword) {
+  return compactKeyword(keyword)
+    .normalize("NFKC")
+    .replace(/[·ㆍ|].*$/u, "")
+    .replace(/\d{4}-?\d{2}-?\d{2}.*/u, "")
+    .replace(/(글램핑|캠핑|카라반|펜션)$/u, "")
+    .toLowerCase();
+}
+
+function keywordLayerFromRunLike(value = {}) {
+  const searchMode = String(value.searchMode || "").trim();
+  const keywordType = String(value.keywordType || "").trim();
+  if (searchMode === "company" || keywordType === "company") {
+    return { type: "company", label: "업체명 확인", note: "업체명 검색 기준" };
+  }
+  const core = keywordLayerCore(value.keyword || value.label || "");
+  if (!core) return { type: "unknown", label: "분류 대기", note: "키워드 확인 필요" };
+  for (const aliases of Object.values(REGIONAL_KEYWORD_ALIASES)) {
+    if (aliases.map((alias) => keywordLayerCore(alias)).includes(core)) {
+      return { type: "regional", label: "광역 노출", note: "권역 키워드 기준" };
+    }
+  }
+  return { type: "local", label: "로컬 노출", note: "지역 키워드 기준" };
+}
+
 function companyPlatformKey(value) {
   return String(value || "")
     .normalize("NFKC")
@@ -2546,6 +2591,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const addressKey = normalizeAddressKey(address);
   const regionKey = normalizeCompanyIdentityName(region);
   const sourceKeys = companySourceKeys({ placeId, bookingBusinessId, nameKey, addressKey, regionKey });
+  const keywordLayer = keywordLayerFromRunLike(run);
   return {
     name,
     nameKey,
@@ -2561,6 +2607,10 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     rank: item.rank ?? null,
     keyword: run.keyword || run.label || "",
     keywordKey: compactKeyword(run.keyword || run.label || "").toLowerCase(),
+    keywordLayer: keywordLayer.type,
+    keywordLayerLabel: keywordLayer.label,
+    keywordLayerNote: keywordLayer.note,
+    provinceKey: run.province || "",
     searchMode: run.searchMode || "",
     productMode: run.productMode || "",
     runId: run.id || "",
@@ -2635,7 +2685,10 @@ function upsertCompanyKeywordExposure(company, entity) {
     collectedDate: entity.collectedDate,
     rank: Number(entity.rank) || null,
     searchMode: entity.searchMode || "",
-    productMode: entity.productMode || ""
+    productMode: entity.productMode || "",
+    keywordLayer: entity.keywordLayer || "",
+    keywordLayerLabel: entity.keywordLayerLabel || "",
+    provinceKey: entity.provinceKey || ""
   };
   if (existingIndex >= 0) keyword.runs[existingIndex] = { ...keyword.runs[existingIndex], ...exposure };
   else keyword.runs.push(exposure);
@@ -2647,6 +2700,9 @@ function upsertCompanyKeywordExposure(company, entity) {
   keyword.lastSeenAt = [keyword.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt;
   keyword.latestRank = exposure.rank;
   keyword.latestRunId = entity.runId;
+  keyword.keywordLayer = entity.keywordLayer || keyword.keywordLayer || "";
+  keyword.keywordLayerLabel = entity.keywordLayerLabel || keyword.keywordLayerLabel || "";
+  keyword.provinceKey = entity.provinceKey || keyword.provinceKey || "";
   const ranks = keyword.runs.map((row) => Number(row.rank)).filter((rank) => Number.isFinite(rank) && rank > 0);
   keyword.bestRank = ranks.length ? Math.min(...ranks) : null;
   keyword.runCount = keyword.runs.length;
@@ -2675,20 +2731,87 @@ function updateCompanyInventory(company, entity) {
   company.inventory = inventory;
 }
 
+function keywordExposureLayer(keyword = {}) {
+  const latestRun = (keyword.runs || [])[0] || {};
+  if (keyword.keywordLayer) {
+    return {
+      type: keyword.keywordLayer,
+      label: keyword.keywordLayerLabel || keywordLayerFromRunLike(keyword).label,
+      note: keywordLayerFromRunLike(keyword).note
+    };
+  }
+  if (latestRun.keywordLayer) {
+    return {
+      type: latestRun.keywordLayer,
+      label: latestRun.keywordLayerLabel || keywordLayerFromRunLike({ ...keyword, ...latestRun }).label,
+      note: keywordLayerFromRunLike({ ...keyword, ...latestRun }).note
+    };
+  }
+  return keywordLayerFromRunLike({
+    keyword: keyword.keyword,
+    searchMode: latestRun.searchMode || keyword.searchMode || "",
+    keywordType: keyword.keywordType || ""
+  });
+}
+
+function companyExposureLayerFromKeywords(keywords = []) {
+  const regional = keywords.filter((row) => row.layer?.type === "regional");
+  const local = keywords.filter((row) => row.layer?.type === "local");
+  const company = keywords.filter((row) => row.layer?.type === "company");
+  if (regional.length && local.length) {
+    return {
+      type: "regional_local",
+      label: "광역+로컬 장악형",
+      note: "권역 키워드와 지역 키워드에 동시에 노출"
+    };
+  }
+  if (local.length && !regional.length) {
+    return {
+      type: "local_only",
+      label: "로컬 전용형",
+      note: "지역 키워드에는 노출되나 광역 키워드 노출은 미확인"
+    };
+  }
+  if (regional.length && !local.length) {
+    return {
+      type: "local_match_pending",
+      label: "로컬 매칭 대기",
+      note: "광역 노출 업체이며, 대응 로컬 키워드 수집/매칭이 필요"
+    };
+  }
+  if (company.length) {
+    return {
+      type: "company_only",
+      label: "업체명 확인형",
+      note: "업체명 검색으로 확인, 키워드 노출 구조 검증 필요"
+    };
+  }
+  return {
+    type: "unknown",
+    label: "분류 대기",
+    note: "노출 키워드 추가 수집 필요"
+  };
+}
+
 function companyRecordSummary(company = {}, activeKeywordKey = "") {
   const keywords = Object.values(company.keywords || {})
     .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
-    .map((row) => ({
-      keyword: row.keyword,
-      keywordKey: row.keywordKey,
-      runCount: row.runCount || row.runs?.length || 0,
-      bestRank: row.bestRank,
-      latestRank: row.latestRank,
-      lastSeenAt: row.lastSeenAt,
-      latestRunId: row.latestRunId
-    }));
+    .map((row) => {
+      const layer = keywordExposureLayer(row);
+      return {
+        keyword: row.keyword,
+        keywordKey: row.keywordKey,
+        runCount: row.runCount || row.runs?.length || 0,
+        bestRank: row.bestRank,
+        latestRank: row.latestRank,
+        lastSeenAt: row.lastSeenAt,
+        latestRunId: row.latestRunId,
+        layer
+      };
+    });
   const best = keywords.find((row) => row.bestRank) || keywords[0] || null;
   const activeKeyword = activeKeywordKey ? keywords.find((row) => row.keywordKey === activeKeywordKey) : null;
+  const exposureLayer = companyExposureLayerFromKeywords(keywords);
   return {
     companyId: company.companyId,
     primaryName: company.primaryName,
@@ -2706,6 +2829,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     bestKeyword: best?.keyword || "",
     latestKeyword: keywords.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))[0]?.keyword || "",
     activeKeyword,
+    exposureLayer,
     inventory: company.inventory || {},
     manualCorrection: company.manualCorrection || null,
     identityConfidence: companyIdentityConfidence(company)
@@ -2735,30 +2859,51 @@ function findCompanyDuplicateCandidates(master) {
 
 function summarizeCompanyCrossKeyword(master) {
   const companies = Object.values(master.companies || {}).map((company) => companyRecordSummary(company));
-  const multiKeywordCompanies = companies
-    .filter((company) => (company.keywordCount || 0) >= 2)
-    .sort((a, b) => (b.keywordCount || 0) - (a.keywordCount || 0) || (b.runCount || 0) - (a.runCount || 0));
+  const byLayer = (type) => companies.filter((company) => company.exposureLayer?.type === type);
+  const regionalLocalCompanies = byLayer("regional_local")
+    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || (b.keywordCount || 0) - (a.keywordCount || 0));
+  const localOnlyCompanies = byLayer("local_only")
+    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || (b.runCount || 0) - (a.runCount || 0));
+  const pendingCompanies = byLayer("local_match_pending")
+    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || (b.runCount || 0) - (a.runCount || 0));
+  const companyOnlyCompanies = byLayer("company_only")
+    .sort((a, b) => (b.runCount || 0) - (a.runCount || 0));
   const confidenceCounts = companies.reduce((acc, company) => {
     const label = company.identityConfidence?.label || "검토 필요";
     acc[label] = (acc[label] || 0) + 1;
     return acc;
   }, {});
+  const layerCounts = companies.reduce((acc, company) => {
+    const type = company.exposureLayer?.type || "unknown";
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+  const mapCompany = (company) => ({
+    companyId: company.companyId,
+    primaryName: company.primaryName,
+    runCount: company.runCount,
+    keywordCount: company.keywordCount,
+    bestRank: company.bestRank,
+    bestKeyword: company.bestKeyword,
+    exposureLayer: company.exposureLayer,
+    identityConfidence: company.identityConfidence,
+    keywords: (company.keywords || []).slice(0, 8)
+  });
   return {
     totalCompanies: companies.length,
-    multiKeywordCompanyCount: multiKeywordCompanies.length,
-    singleKeywordCompanyCount: companies.filter((company) => (company.keywordCount || 0) <= 1).length,
+    regionalLocalCompanyCount: regionalLocalCompanies.length,
+    localOnlyCompanyCount: localOnlyCompanies.length,
+    localMatchPendingCompanyCount: pendingCompanies.length,
+    companyOnlyCompanyCount: companyOnlyCompanies.length,
+    regionalExposureCompanyCount: companies.filter((company) => (company.keywords || []).some((row) => row.layer?.type === "regional")).length,
+    localExposureCompanyCount: companies.filter((company) => (company.keywords || []).some((row) => row.layer?.type === "local")).length,
     keywordLinks: companies.reduce((sum, company) => sum + Number(company.keywordCount || 0), 0),
     confidenceCounts,
-    topMultiKeywordCompanies: multiKeywordCompanies.slice(0, 12).map((company) => ({
-      companyId: company.companyId,
-      primaryName: company.primaryName,
-      runCount: company.runCount,
-      keywordCount: company.keywordCount,
-      bestRank: company.bestRank,
-      bestKeyword: company.bestKeyword,
-      identityConfidence: company.identityConfidence,
-      keywords: (company.keywords || []).slice(0, 6)
-    })),
+    layerCounts,
+    regionalLocalCompanies: regionalLocalCompanies.slice(0, 12).map(mapCompany),
+    localOnlyCompanies: localOnlyCompanies.slice(0, 12).map(mapCompany),
+    localMatchPendingCompanies: pendingCompanies.slice(0, 12).map(mapCompany),
+    companyOnlyCompanies: companyOnlyCompanies.slice(0, 12).map(mapCompany),
     reviewNeededCompanies: companies
       .filter((company) => company.identityConfidence?.level === "review" || company.identityConfidence?.level === "medium")
       .sort((a, b) => (b.runCount || 0) - (a.runCount || 0))
@@ -2768,6 +2913,7 @@ function summarizeCompanyCrossKeyword(master) {
         primaryName: company.primaryName,
         runCount: company.runCount,
         keywordCount: company.keywordCount,
+        exposureLayer: company.exposureLayer,
         identityConfidence: company.identityConfidence,
         keywords: (company.keywords || []).slice(0, 4)
       }))
@@ -2858,6 +3004,9 @@ function mergeCompanyKeyword(targetKeyword = {}, sourceKeyword = {}) {
     bestRank: ranks.length ? Math.min(...ranks) : null,
     latestRank: latest.rank || null,
     latestRunId: latest.runId || "",
+    keywordLayer: targetKeyword.keywordLayer || sourceKeyword.keywordLayer || latest.keywordLayer || "",
+    keywordLayerLabel: targetKeyword.keywordLayerLabel || sourceKeyword.keywordLayerLabel || latest.keywordLayerLabel || "",
+    provinceKey: targetKeyword.provinceKey || sourceKeyword.provinceKey || latest.provinceKey || "",
     runCount: runs.length,
     runs
   };
@@ -4242,8 +4391,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-company-backfill"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-company-backfill"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-exposure-layer"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-exposure-layer"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

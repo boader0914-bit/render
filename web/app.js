@@ -2658,6 +2658,7 @@ function sheetCompanyProfile(item = {}) {
   const correction = profile.manualCorrection || item.companyManualCorrection;
   const cells = [
     ["누적 수집", `${fmtNumber(profile.runCount || 0)}회`, `${fmtNumber(profile.keywordCount || 0)}개 키워드`],
+    ["노출 레이어", profile.exposureLayer?.label || "분류 대기", profile.exposureLayer?.note || "키워드 누적 필요"],
     ["최고 노출", profile.bestRank ? `${fmtNumber(profile.bestRank)}위` : "대기", profile.bestKeyword || "키워드 누적 중"],
     ["현재 키워드", active?.latestRank ? `${fmtNumber(active.latestRank)}위` : "대기", active?.keyword || activeKeyword()],
     ["수동 보정", correction ? "적용 가능" : "없음", correction?.note || "업체 단위 보정값 대기"]
@@ -2713,27 +2714,53 @@ function companyMasterBackfillResult(master = {}) {
 function companyMasterCrossKeywordPanel(master = {}) {
   const cross = master.crossKeyword || {};
   if (!cross.totalCompanies) return "";
-  const topCompanies = cross.topMultiKeywordCompanies || [];
+  const regionalLocalCompanies = cross.regionalLocalCompanies || [];
+  const localOnlyCompanies = cross.localOnlyCompanies || [];
+  const pendingCompanies = cross.localMatchPendingCompanies || [];
+  const companyOnlyCompanies = cross.companyOnlyCompanies || [];
   const reviewCompanies = cross.reviewNeededCompanies || [];
   const confidence = cross.confidenceCounts || {};
+  const renderLayerCompanies = (companies, emptyText) => companies.length ? companies.slice(0, 6).map((company) => `
+    <article>
+      <div>
+        <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+        <small>${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${fmtNumber(company.keywordCount || 0)}개 키워드 · ${fmtNumber(company.runCount || 0)}회</small>
+      </div>
+      <p>${(company.keywords || []).map((row) => {
+        const label = row.layer?.label ? `${row.keyword}(${row.layer.label})` : row.keyword;
+        return escapeHtml(label || "");
+      }).filter(Boolean).join(" · ") || "키워드 대기"}</p>
+    </article>
+  `).join("") : `<p>${escapeHtml(emptyText)}</p>`;
   return `
     <div class="company-cross-panel">
       <div class="company-cross-metrics">
-        <article><span>교차 확인</span><strong>${fmtNumber(cross.multiKeywordCompanyCount || 0)}</strong><small>2개 이상 키워드</small></article>
-        <article><span>단일 키워드</span><strong>${fmtNumber(cross.singleKeywordCompanyCount || 0)}</strong><small>추가 수집 필요</small></article>
+        <article><span>광역+로컬</span><strong>${fmtNumber(cross.regionalLocalCompanyCount || 0)}</strong><small>권역 강자</small></article>
+        <article><span>로컬 전용</span><strong>${fmtNumber(cross.localOnlyCompanyCount || 0)}</strong><small>개선 후보</small></article>
+        <article><span>매칭 대기</span><strong>${fmtNumber(cross.localMatchPendingCompanyCount || 0)}</strong><small>로컬 수집 필요</small></article>
         <article><span>확실/높음</span><strong>${fmtNumber((confidence["확실"] || 0) + (confidence["높음"] || 0))}</strong><small>ID 기반</small></article>
       </div>
       <div class="company-cross-list">
-        <strong>여러 키워드에서 같은 업체로 묶인 사례</strong>
-        ${topCompanies.length ? topCompanies.slice(0, 6).map((company) => `
-          <article>
-            <div>
-              <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
-              <small>${escapeHtml(company.identityConfidence?.label || "검토 필요")} · ${fmtNumber(company.keywordCount || 0)}개 키워드 · ${fmtNumber(company.runCount || 0)}회</small>
-            </div>
-            <p>${(company.keywords || []).map((row) => escapeHtml(row.keyword || "")).filter(Boolean).join(" · ") || "키워드 대기"}</p>
-          </article>
-        `).join("") : `<p>아직 2개 이상 키워드에서 묶인 업체가 없습니다. 권역+지역+업체명 검색을 반복하면 여기에 쌓입니다.</p>`}
+        <strong>광역+로컬 장악형</strong>
+        ${renderLayerCompanies(regionalLocalCompanies, "아직 광역과 로컬에 동시에 잡힌 업체가 없습니다. 권역 키워드와 지역 키워드를 함께 쌓으면 확인됩니다.")}
+      </div>
+      <div class="company-cross-list">
+        <strong>로컬 전용 개선 후보</strong>
+        ${renderLayerCompanies(localOnlyCompanies, "아직 로컬 전용 후보가 없습니다. 지역 키워드 수집이 늘어나면 광역 미노출 업체를 찾을 수 있습니다.")}
+      </div>
+      <div class="company-cross-list">
+        <strong>로컬 매칭 대기</strong>
+        ${renderLayerCompanies(pendingCompanies, "광역 노출 업체의 대응 로컬 키워드가 모두 매칭되었습니다.")}
+      </div>
+      ${companyOnlyCompanies.length ? `
+        <div class="company-cross-list">
+          <strong>업체명 확인형</strong>
+          ${renderLayerCompanies(companyOnlyCompanies, "업체명 검색 전용 업체가 없습니다.")}
+        </div>
+      ` : ""}
+      <div class="company-master-rule">
+        <strong>해석 기준</strong>
+        <p>광역 키워드 노출은 네이버 가산점이 높은 업체로 해석하고, 로컬 키워드에만 노출되는 업체를 개선 후보로 봅니다. 광역에서만 보이는 업체는 유형이 아니라 로컬 매칭 대기 상태입니다.</p>
       </div>
       ${reviewCompanies.length ? `
         <div class="company-cross-list">
