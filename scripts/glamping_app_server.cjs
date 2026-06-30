@@ -2920,6 +2920,122 @@ function summarizeCompanyCrossKeyword(master) {
   };
 }
 
+function salesTargetRankScore(bestRank) {
+  const rank = Number(bestRank);
+  if (!Number.isFinite(rank) || rank <= 0) return 6;
+  if (rank <= 5) return 20;
+  if (rank <= 10) return 16;
+  if (rank <= 20) return 12;
+  return 7;
+}
+
+function companySalesTargetProfile(company = {}) {
+  const layerType = company.exposureLayer?.type || "unknown";
+  const scoreParts = [];
+  const reasons = [];
+  let category = "exclude";
+  let categoryLabel = "제외 후보";
+
+  if (layerType === "local_only") {
+    scoreParts.push(48);
+    reasons.push("로컬 키워드에는 노출되지만 광역 키워드 노출은 미확인");
+    category = "contact";
+    categoryLabel = "컨택 후보";
+  } else if (layerType === "company_only") {
+    scoreParts.push(34);
+    reasons.push("업체명 검색으로만 확인되어 키워드 노출 구조 검증 필요");
+    category = "observe";
+    categoryLabel = "관찰 후보";
+  } else if (layerType === "local_match_pending") {
+    scoreParts.push(24);
+    reasons.push("광역 노출 업체로 로컬 매칭 수집이 먼저 필요");
+    category = "verify";
+    categoryLabel = "검증 후보";
+  } else if (layerType === "regional_local") {
+    scoreParts.push(10);
+    reasons.push("광역과 로컬에 함께 노출되는 권역 강자");
+    category = "benchmark";
+    categoryLabel = "벤치마크";
+  }
+
+  const rankScore = salesTargetRankScore(company.bestRank);
+  scoreParts.push(rankScore);
+  if (company.bestRank) reasons.push(`최고 노출 ${company.bestRank}위`);
+
+  const localKeywordCount = (company.keywords || []).filter((row) => row.layer?.type === "local").length;
+  const regionalKeywordCount = (company.keywords || []).filter((row) => row.layer?.type === "regional").length;
+  if (localKeywordCount) {
+    scoreParts.push(Math.min(12, localKeywordCount * 4));
+    reasons.push(`로컬 키워드 ${localKeywordCount}개 확인`);
+  }
+  if (regionalKeywordCount) {
+    reasons.push(`광역 키워드 ${regionalKeywordCount}개 확인`);
+  }
+
+  if (company.manualCorrection) {
+    scoreParts.push(4);
+    reasons.push("수동 보정값 보유");
+  }
+  if (company.identityConfidence?.level === "certain" || company.identityConfidence?.level === "high") {
+    scoreParts.push(6);
+    reasons.push(company.identityConfidence.reason || "고유키 신뢰도 높음");
+  }
+
+  const latestInventory = company.inventory?.latest || {};
+  if (latestInventory.structureLabel) reasons.push(`수량 구조: ${latestInventory.structureLabel}`);
+  if (latestInventory.confidenceGrade && !["A", "B"].includes(String(latestInventory.confidenceGrade).toUpperCase())) {
+    scoreParts.push(5);
+    reasons.push("수량 구조 검증 여지");
+  }
+
+  let score = Math.min(100, Math.max(0, Math.round(scoreParts.reduce((sum, value) => sum + Number(value || 0), 0))));
+  if (category === "contact" && score < 58) {
+    category = "observe";
+    categoryLabel = "관찰 후보";
+  }
+  if (category === "benchmark") score = Math.min(score, 45);
+  if (category === "verify") score = Math.min(score, 55);
+
+  return {
+    ...company,
+    salesTarget: {
+      score,
+      category,
+      categoryLabel,
+      reasons: boundedUnique(reasons, 8),
+      recommendation: category === "contact"
+        ? "광역 진입 여지가 있는 로컬 전용 업체로 우선 컨택"
+        : category === "verify"
+          ? "주소/지역 기준 로컬 키워드 수집 후 재판정"
+          : category === "benchmark"
+            ? "상품/리뷰/가격 벤치마크 대상으로 관찰"
+            : "추가 수집 후 관찰"
+    }
+  };
+}
+
+function summarizeCompanySalesTargets(companies = []) {
+  const profiled = companies.map((company) => company.salesTarget ? company : companySalesTargetProfile(company));
+  const byCategory = (category) => profiled
+    .filter((company) => company.salesTarget.category === category)
+    .sort((a, b) => (b.salesTarget.score || 0) - (a.salesTarget.score || 0) || (a.bestRank || 9999) - (b.bestRank || 9999));
+  const contactCandidates = byCategory("contact");
+  const observeCandidates = byCategory("observe");
+  const verificationQueue = byCategory("verify");
+  const benchmarkCompanies = byCategory("benchmark");
+  return {
+    totalCompanies: profiled.length,
+    contactCandidateCount: contactCandidates.length,
+    observeCandidateCount: observeCandidates.length,
+    verificationQueueCount: verificationQueue.length,
+    benchmarkCount: benchmarkCompanies.length,
+    topTargets: contactCandidates.slice(0, 20),
+    observeCandidates: observeCandidates.slice(0, 12),
+    verificationQueue: verificationQueue.slice(0, 12),
+    benchmarkCompanies: benchmarkCompanies.slice(0, 12)
+  };
+}
+
 function applyCompanyManualCorrection(item, company) {
   const correction = company?.manualCorrection;
   if (!correction || correction.active === false) return item;
@@ -3189,6 +3305,11 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
 async function summarizeCompanyMaster() {
   const master = await readCompanyMaster();
   const duplicateCandidates = findCompanyDuplicateCandidates(master);
+  const companies = Object.values(master.companies || {})
+    .map((company) => companyRecordSummary(company))
+    .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
+  const profiledCompanies = companies.map(companySalesTargetProfile);
+  const salesTargets = summarizeCompanySalesTargets(profiledCompanies);
   return {
     file: "company_master/companies.json",
     totalCompanies: Object.keys(master.companies || {}).length,
@@ -3196,12 +3317,10 @@ async function summarizeCompanyMaster() {
     duplicateCandidateCount: duplicateCandidates.length,
     duplicateCandidates,
     crossKeyword: summarizeCompanyCrossKeyword(master),
+    salesTargets,
     updatedAt: master.updatedAt || "",
     principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합",
-    companies: Object.values(master.companies || {})
-      .map((company) => companyRecordSummary(company))
-      .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
-      .slice(0, 30)
+    companies: profiledCompanies.slice(0, 300)
   };
 }
 
@@ -4391,8 +4510,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-exposure-layer"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-exposure-layer"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260630-master-targets"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260630-master-targets"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

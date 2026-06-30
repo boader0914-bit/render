@@ -10,6 +10,11 @@ const state = {
   dictionary: null,
   historyOps: null,
   companyMaster: null,
+  companyMasterFilters: {
+    query: "",
+    layer: "all",
+    target: "all"
+  },
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
   trafficKeyState: null,
@@ -2779,6 +2784,157 @@ function companyMasterCrossKeywordPanel(master = {}) {
   `;
 }
 
+function companyTargetCategoryLabel(category) {
+  return {
+    contact: "컨택 후보",
+    observe: "관찰 후보",
+    verify: "검증 후보",
+    benchmark: "벤치마크",
+    exclude: "제외 후보"
+  }[category] || "관찰 후보";
+}
+
+function companyMasterKeywordText(company = {}) {
+  const keywords = company.keywords || [];
+  if (!keywords.length) return "키워드 없음";
+  return keywords.slice(0, 4).map((row) => {
+    const layer = row.layer?.label ? `/${row.layer.label}` : "";
+    const rank = row.bestRank ? ` ${fmtNumber(row.bestRank)}위` : "";
+    return `${row.keyword || "키워드"}${layer}${rank}`;
+  }).join(" · ");
+}
+
+function companyMasterSalesTargetsPanel(master = {}) {
+  const targets = master.salesTargets || {};
+  const topTargets = targets.topTargets || [];
+  return `
+    <div class="company-sales-panel">
+      <div class="company-sales-metrics">
+        <article><span>컨택 후보</span><strong>${fmtNumber(targets.contactCandidateCount || 0)}</strong><small>로컬 전용 중심</small></article>
+        <article><span>검증 후보</span><strong>${fmtNumber(targets.verificationQueueCount || 0)}</strong><small>로컬 매칭 필요</small></article>
+        <article><span>벤치마크</span><strong>${fmtNumber(targets.benchmarkCount || 0)}</strong><small>광역+로컬 강자</small></article>
+      </div>
+      <div class="company-sales-list">
+        <strong>우선 컨택 후보</strong>
+        ${topTargets.length ? topTargets.slice(0, 6).map((company) => `
+          <article>
+            <div>
+              <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+              <span>${fmtNumber(company.salesTarget?.score || 0)}점</span>
+            </div>
+            <small>${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${escapeHtml(companyMasterKeywordText(company))}</small>
+            <p>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 3).join(" · ") || company.salesTarget?.recommendation || "추가 확인 필요")}</p>
+          </article>
+        `).join("") : `<p>현재 기준 우선 컨택 후보가 없습니다. 로컬 키워드 수집이 늘어나면 자동으로 채워집니다.</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function companyMasterFilterPanel(master = {}) {
+  const filters = state.companyMasterFilters || {};
+  const total = (master.companies || []).length;
+  return `
+    <div class="company-master-filter">
+      <label>
+        <span>업체 검색</span>
+        <input type="search" data-company-master-search value="${escapeHtml(filters.query || "")}" placeholder="업체명, 지역, 키워드">
+      </label>
+      <label>
+        <span>노출 레이어</span>
+        <select data-company-master-layer>
+          ${[
+            ["all", "전체"],
+            ["regional_local", "광역+로컬"],
+            ["local_only", "로컬 전용"],
+            ["local_match_pending", "로컬 매칭 대기"],
+            ["company_only", "업체명 확인"]
+          ].map(([value, label]) => `<option value="${value}" ${filters.layer === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+      </label>
+      <label>
+        <span>후보 유형</span>
+        <select data-company-master-target>
+          ${[
+            ["all", "전체"],
+            ["contact", "컨택 후보"],
+            ["verify", "검증 후보"],
+            ["benchmark", "벤치마크"],
+            ["observe", "관찰 후보"],
+            ["exclude", "제외 후보"]
+          ].map(([value, label]) => `<option value="${value}" ${filters.target === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+      </label>
+      <small>${fmtNumber(total)}개 업체 기준</small>
+    </div>
+  `;
+}
+
+function companyMasterFilteredCompanies(master = {}) {
+  const filters = state.companyMasterFilters || {};
+  const query = compactSearchText(filters.query || "");
+  return (master.companies || []).filter((company) => {
+    if (filters.layer && filters.layer !== "all" && company.exposureLayer?.type !== filters.layer) return false;
+    if (filters.target && filters.target !== "all" && company.salesTarget?.category !== filters.target) return false;
+    if (!query) return true;
+    const text = compactSearchText([
+      company.primaryName,
+      ...(company.aliases || []),
+      ...(company.regions || []),
+      ...(company.addresses || []),
+      ...(company.keywords || []).map((row) => row.keyword).filter(Boolean)
+    ].join(" "));
+    return text.includes(query);
+  });
+}
+
+function companyMasterListPanel(master = {}) {
+  const rows = companyMasterFilteredCompanies(master)
+    .sort((a, b) => (b.salesTarget?.score || 0) - (a.salesTarget?.score || 0) || (a.bestRank || 9999) - (b.bestRank || 9999));
+  return `
+    <div class="company-master-list-panel">
+      <div class="company-master-list-head">
+        <strong>업체 마스터 리스트</strong>
+        <span>${fmtNumber(rows.length)}개 표시</span>
+      </div>
+      <div class="company-master-list">
+        ${rows.length ? rows.slice(0, 80).map((company) => `
+          <article>
+            <div class="company-master-row-main">
+              <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+              <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.identityConfidence?.label || "검토 필요")}</small>
+            </div>
+            <div class="company-master-row-tags">
+              <span>${escapeHtml(company.exposureLayer?.label || "분류 대기")}</span>
+              <span>${escapeHtml(companyTargetCategoryLabel(company.salesTarget?.category))}</span>
+              <span>${fmtNumber(company.salesTarget?.score || 0)}점</span>
+              <span>${fmtNumber(company.keywordCount || 0)}키워드</span>
+              <span>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "순위대기"}</span>
+            </div>
+            <p>${escapeHtml(companyMasterKeywordText(company))}</p>
+            <small>${escapeHtml(company.salesTarget?.recommendation || "추가 수집 후 판단")}</small>
+          </article>
+        `).join("") : `<p class="empty">필터 조건에 맞는 업체가 없습니다.</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function rerenderCompanyMasterPreservingSearch() {
+  const active = document.activeElement;
+  const preserveSearch = active?.matches?.("[data-company-master-search]");
+  const selectionStart = preserveSearch ? active.selectionStart : null;
+  const selectionEnd = preserveSearch ? active.selectionEnd : null;
+  renderCompanyMasterPanel();
+  if (preserveSearch) {
+    const input = document.querySelector("[data-company-master-search]");
+    input?.focus();
+    if (input && selectionStart !== null && selectionEnd !== null) {
+      input.setSelectionRange(selectionStart, selectionEnd);
+    }
+  }
+}
+
 function renderCompanyMasterPanel() {
   if (!els.companyMasterPanel) return;
   const master = { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
@@ -2808,6 +2964,9 @@ function renderCompanyMasterPanel() {
       <article><span>중복 후보</span><strong>${fmtNumber(master.duplicateCandidateCount || 0)}</strong><small>수동 검토</small></article>
     </div>
     ${companyMasterCrossKeywordPanel(master)}
+    ${companyMasterSalesTargetsPanel(master)}
+    ${companyMasterFilterPanel(master)}
+    ${companyMasterListPanel(master)}
     <div class="company-master-rule">
       <strong>병합 기준</strong>
       <p>${escapeHtml(master.principle || "place_id/예약ID 우선, 업체명+주소/지역 보조")}</p>
@@ -4945,6 +5104,24 @@ function bindEvents() {
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const drawerTab = event.target.closest("[data-drawer-tab]");
     if (drawerTab) setActiveTab(drawerTab.dataset.drawerTab);
+  });
+  document.addEventListener("input", (event) => {
+    const search = event.target.closest("[data-company-master-search]");
+    if (!search) return;
+    state.companyMasterFilters.query = search.value || "";
+    rerenderCompanyMasterPreservingSearch();
+  });
+  document.addEventListener("change", (event) => {
+    const layer = event.target.closest("[data-company-master-layer]");
+    if (layer) {
+      state.companyMasterFilters.layer = layer.value || "all";
+      renderCompanyMasterPanel();
+    }
+    const target = event.target.closest("[data-company-master-target]");
+    if (target) {
+      state.companyMasterFilters.target = target.value || "all";
+      renderCompanyMasterPanel();
+    }
   });
   els.openControlButton.addEventListener("click", openDrawer);
   document.querySelectorAll(".sheet-tabs button").forEach((button) => {

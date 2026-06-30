@@ -2113,6 +2113,157 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.company-sales-panel,
+.company-sales-list,
+.company-master-list-panel,
+.company-master-list {
+  display: grid;
+  gap: 10px;
+}
+
+.company-sales-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.company-sales-metrics article,
+.company-sales-list,
+.company-sales-list article,
+.company-master-filter,
+.company-master-list-panel,
+.company-master-list article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.company-sales-metrics span,
+.company-sales-metrics small,
+.company-sales-list small,
+.company-sales-list p,
+.company-master-filter small,
+.company-master-list-head span,
+.company-master-list article p,
+.company-master-list article small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.company-sales-metrics strong {
+  display: block;
+  margin: 4px 0;
+  color: var(--blue);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
+.company-sales-list strong,
+.company-sales-list b,
+.company-master-list-head strong,
+.company-master-list b {
+  display: block;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.company-sales-list article {
+  display: grid;
+  gap: 6px;
+  background: #f8fbff;
+}
+
+.company-sales-list article > div,
+.company-master-list-head,
+.company-master-row-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.company-sales-list article span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.company-master-filter {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) repeat(2, minmax(130px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+  background: #f8fbff;
+}
+
+.company-master-filter label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.company-master-filter label span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.company-master-filter input,
+.company-master-filter select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.company-master-list article {
+  display: grid;
+  gap: 8px;
+}
+
+.company-master-row-main {
+  align-items: center;
+}
+
+.company-master-row-main small {
+  text-align: right;
+}
+
+.company-master-row-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.company-master-row-tags span {
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: var(--muted);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
 .company-master-rule p {
   margin: 6px 0 0;
   line-height: 1.45;
@@ -4801,8 +4952,23 @@ a.platform-row:hover {
 
   .company-master-metrics,
   .company-cross-metrics,
+  .company-sales-metrics,
   .company-profile-keywords {
     grid-template-columns: 1fr;
+  }
+
+  .company-master-filter {
+    grid-template-columns: 1fr;
+  }
+
+  .company-sales-list article > div,
+  .company-master-list-head,
+  .company-master-row-main {
+    display: grid;
+  }
+
+  .company-master-row-main small {
+    text-align: left;
   }
 
   .company-manual-form > div:first-child,
