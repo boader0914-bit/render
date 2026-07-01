@@ -13,7 +13,8 @@ const state = {
   companyMasterFilters: {
     query: "",
     layer: "all",
-    target: "all"
+    target: "all",
+    check: "priority"
   },
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
@@ -3241,8 +3242,69 @@ function companyCheckRecommendation(company = {}, profile = {}) {
   return "누적 수집을 더 쌓아 관찰 유지 여부를 판단하세요.";
 }
 
+function companyCheckPriority(company = {}, profile = {}, type = {}) {
+  const issueWeights = {
+    manual: 26,
+    structure: 22,
+    booking: 18,
+    offline: 16,
+    dayuse: 12,
+    ota: 10
+  };
+  let score = Number(profile.priority || 0);
+  for (const issue of profile.issues || []) score += issueWeights[issue.key] || 8;
+  const latest = company.inventory?.latest || {};
+  const sales = latest.salesSignal || {};
+  const lodging = sales.lodging || {};
+  const dayUse = sales.dayUse || {};
+  if (lodging.fridayWeak) score += 8;
+  if (lodging.sundayWeak) score += 8;
+  if (lodging.weekdayWeak) score += 6;
+  if (lodging.stockVariance || sales.stockVariance) score += 12;
+  if (dayUse.days === 0 && sales.dayUseMissing) score += 6;
+  if (company.salesTarget?.category === "contact") score += 14;
+  if (company.salesTarget?.category === "verify") score += 10;
+  if (company.salesTarget?.category === "benchmark") score += 2;
+  if (company.salesTarget?.category === "exclude") score += 8;
+  if (company.exposureLayer?.type === "local_only") score += 10;
+  if (company.exposureLayer?.type === "local_match_pending") score += 8;
+  if (company.exposureLayer?.type === "regional_local") score += 4;
+  const bestRank = Number(company.bestRank || 0);
+  if (bestRank > 0 && bestRank <= 5) score += 12;
+  else if (bestRank > 0 && bestRank <= 10) score += 8;
+  else if (bestRank > 0 && bestRank <= 20) score += 4;
+  if (company.identityConfidence?.level === "review") score += 15;
+  if (profile.applied) score -= 14;
+  const bounded = Math.max(0, Math.round(score));
+  if (bounded >= 95) return { key: "urgent", label: "긴급", score: bounded, note: "오늘 먼저 확인" };
+  if (bounded >= 70) return { key: "high", label: "높음", score: bounded, note: "우선 확인" };
+  if (bounded >= 45) return { key: "normal", label: "보통", score: bounded, note: "필터 확인" };
+  return { key: "watch", label: "관찰", score: bounded, note: "누적 관찰" };
+}
+
+function companyCheckFilterOptions() {
+  return [
+    ["priority", "오늘 우선"],
+    ["all", "전체"],
+    ["correction", "보정 필요"],
+    ["ota", "OTA 확인"],
+    ["contact", "컨택 후보"],
+    ["exclude", "제외 검토"],
+    ["benchmark", "벤치마크"]
+  ];
+}
+
+function companyCheckFilterMatches(entry = {}, filter = "priority", index = 0) {
+  if (filter === "all") return true;
+  if (filter === "priority") return index < 15;
+  if (filter === "ota") return entry.type.key === "ota" || (entry.profile.issues || []).some((issue) => issue.key === "ota");
+  if (filter === "exclude") return entry.type.key === "exclude" || entry.company.salesTarget?.category === "exclude";
+  if (filter === "benchmark") return entry.type.key === "benchmark" || entry.company.salesTarget?.category === "benchmark";
+  return entry.type.key === filter;
+}
+
 function companyCheckEntryHtml(entry = {}) {
-  const { company, profile, type } = entry;
+  const { company, profile, type, priority } = entry;
   const latest = company.inventory?.latest || {};
   const reasons = companyCheckReasons(company, profile);
   const showCorrectionForm = (profile.issues || []).some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key));
@@ -3254,6 +3316,10 @@ function companyCheckEntryHtml(entry = {}) {
           <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${fmtNumber(company.salesTarget?.score || 0)}점</small>
         </div>
         <span>${escapeHtml(type.label)}</span>
+      </div>
+      <div class="company-check-priority">
+        <strong class="${escapeHtml(priority.key)}">${escapeHtml(priority.label)}</strong>
+        <span>${fmtNumber(priority.score)}점 · ${escapeHtml(priority.note)}</span>
       </div>
       <div class="company-check-tags">
         ${companyMasterIdentityTag(company)}
@@ -3285,27 +3351,33 @@ function companyMasterCheckPanel(master = {}) {
     .map((company) => {
       const profile = companyNeedsCorrection(company);
       const type = companyCheckEntryType(company, profile);
+      const priority = companyCheckPriority(company, profile, type);
       const include = profile.needed
         || ["contact", "verify", "benchmark"].includes(company.salesTarget?.category)
         || company.identityConfidence?.level === "review"
         || company.adminReview?.status === "manual_needed";
-      return { company, profile, type, include };
+      return { company, profile, type, priority, include };
     })
     .filter((entry) => entry.include && entry.company.adminReview?.status !== "confirmed" && entry.company.adminReview?.status !== "exclude")
     .sort((a, b) => {
       const typeWeight = { correction: 5, ota: 4, contact: 3, exclude: 2, benchmark: 1, observe: 0 };
-      return (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
+      return b.priority.score - a.priority.score
+        || (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
         || b.profile.priority - a.profile.priority
         || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0)
         || (a.company.bestRank || 9999) - (b.company.bestRank || 9999);
     });
-  const countBy = (predicate) => entries.filter(predicate).length;
+  const filters = state.companyMasterFilters || {};
+  const selectedFilter = filters.check || "priority";
+  const countForFilter = (value) => entries.filter((entry, index) => companyCheckFilterMatches(entry, value, index)).length;
+  const visibleEntries = entries.filter((entry, index) => companyCheckFilterMatches(entry, selectedFilter, index));
   const metrics = [
-    ["전체", entries.length, "오늘 볼 업체"],
-    ["보정 필요", countBy((entry) => entry.type.key === "correction"), "수량/상품 구조"],
-    ["OTA 확인", countBy((entry) => entry.type.key === "ota"), "플랫폼 보조 확인"],
-    ["컨택 후보", countBy((entry) => entry.type.key === "contact"), "영업 검토"]
+    ["오늘 우선", countForFilter("priority"), "기본 표시"],
+    ["보정 필요", countForFilter("correction"), "수량/상품 구조"],
+    ["OTA 확인", countForFilter("ota"), "플랫폼 보조 확인"],
+    ["컨택 후보", countForFilter("contact"), "영업 검토"]
   ];
+  const displayLimit = selectedFilter === "priority" ? 15 : 24;
   return `
     <section class="company-check-panel">
       <div class="company-check-head">
@@ -3313,7 +3385,7 @@ function companyMasterCheckPanel(master = {}) {
           <strong>확인할 업체</strong>
           <small>자동 분석만으로 확정하지 않고 사람이 마지막으로 확인해야 하는 업체입니다.</small>
         </div>
-        <span>${fmtNumber(entries.length)}개 대기</span>
+        <span>${fmtNumber(visibleEntries.length)}/${fmtNumber(entries.length)}개 대기</span>
       </div>
       <div class="company-check-metrics">
         ${metrics.map(([label, value, note]) => `
@@ -3324,8 +3396,18 @@ function companyMasterCheckPanel(master = {}) {
           </article>
         `).join("")}
       </div>
+      <div class="company-check-filters">
+        ${companyCheckFilterOptions().map(([value, label]) => `
+          <button type="button" class="${selectedFilter === value ? "active" : ""}" data-company-check-filter="${escapeHtml(value)}">
+            ${escapeHtml(label)}
+            <span>${fmtNumber(value === "all" ? entries.length : countForFilter(value))}</span>
+          </button>
+        `).join("")}
+      </div>
       <div class="company-check-list">
-        ${entries.length ? entries.slice(0, 12).map(companyCheckEntryHtml).join("") : `<p class="empty">현재 확인할 업체가 없습니다.</p>`}
+        ${visibleEntries.length
+          ? visibleEntries.slice(0, displayLimit).map(companyCheckEntryHtml).join("")
+          : `<p class="empty">해당 조건의 확인할 업체가 없습니다.</p>`}
       </div>
     </section>
   `;
@@ -5875,6 +5957,11 @@ function bindEvents() {
     if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
     const reviewAction = event.target.closest("[data-company-review-action]");
     if (reviewAction) saveCompanyAdminReview(reviewAction);
+    const checkFilter = event.target.closest("[data-company-check-filter]");
+    if (checkFilter) {
+      state.companyMasterFilters.check = checkFilter.dataset.companyCheckFilter || "priority";
+      renderCompanyMasterPanel();
+    }
     const backfillButton = event.target.closest("[data-company-backfill]");
     if (backfillButton) backfillCompanyMaster(backfillButton);
     if (event.target.closest("[data-close-sheet]")) closeSheet();

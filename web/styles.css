@@ -2587,6 +2587,52 @@ a.platform-row:hover {
   background: #fff;
 }
 
+.company-check-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.company-check-filters button {
+  min-height: 36px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #dbe4f0;
+  border-radius: 999px;
+  background: #fff;
+  color: #344054;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.company-check-filters button span {
+  min-width: 22px;
+  border-radius: 999px;
+  background: #f2f4f7;
+  color: #475467;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.company-check-filters button.active {
+  border-color: #93c5fd;
+  background: #eaf3ff;
+  color: var(--blue-dark);
+  box-shadow: inset 0 0 0 1px rgba(49, 130, 246, 0.08);
+}
+
+.company-check-filters button.active span {
+  background: #fff;
+  color: var(--blue);
+}
+
 .company-check-card.correction {
   border-color: #fed7aa;
   background: #fffdf8;
@@ -2630,6 +2676,57 @@ a.platform-row:hover {
   border-color: #dbeafe;
   background: #f4f8ff;
   color: var(--blue-dark);
+}
+
+.company-check-priority {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 9px 10px;
+}
+
+.company-check-priority strong {
+  flex: 0 0 auto;
+  justify-self: start;
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.company-check-priority strong.urgent {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.company-check-priority strong.high {
+  background: #fff4df;
+  color: #b54708;
+}
+
+.company-check-priority strong.normal {
+  background: #eaf3ff;
+  color: var(--blue);
+}
+
+.company-check-priority strong.watch {
+  background: #eef2f6;
+  color: #475467;
+}
+
+.company-check-priority span {
+  justify-self: end;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .company-check-reason {
@@ -5742,6 +5839,7 @@ a.platform-row:hover {
   .company-sales-list article > div,
   .company-check-head,
   .company-check-card-head,
+  .company-check-priority,
   .company-review-head,
   .company-review-queue article > div,
   .company-correction-head,
@@ -5756,6 +5854,15 @@ a.platform-row:hover {
   }
 
   .company-master-row-main small {
+    text-align: left;
+  }
+
+  .company-check-priority {
+    align-items: start;
+  }
+
+  .company-check-priority span {
+    justify-self: start;
     text-align: left;
   }
 
