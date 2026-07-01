@@ -2757,6 +2757,18 @@ a.platform-row:hover {
   font-size: 13px;
 }
 
+.company-check-more {
+  margin: 0;
+  border: 1px dashed #c7dcff;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: var(--blue-dark);
+  padding: 10px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
 .company-target-tags {
   display: flex;
   flex-wrap: wrap;

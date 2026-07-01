@@ -3378,6 +3378,8 @@ function companyMasterCheckPanel(master = {}) {
     ["컨택 후보", countForFilter("contact"), "영업 검토"]
   ];
   const displayLimit = selectedFilter === "priority" ? 15 : 24;
+  const displayedEntries = visibleEntries.slice(0, displayLimit);
+  const hiddenCount = Math.max(0, visibleEntries.length - displayedEntries.length);
   return `
     <section class="company-check-panel">
       <div class="company-check-head">
@@ -3385,7 +3387,7 @@ function companyMasterCheckPanel(master = {}) {
           <strong>확인할 업체</strong>
           <small>자동 분석만으로 확정하지 않고 사람이 마지막으로 확인해야 하는 업체입니다.</small>
         </div>
-        <span>${fmtNumber(visibleEntries.length)}/${fmtNumber(entries.length)}개 대기</span>
+        <span>${fmtNumber(displayedEntries.length)}/${fmtNumber(visibleEntries.length)}개 표시 · 전체 ${fmtNumber(entries.length)}</span>
       </div>
       <div class="company-check-metrics">
         ${metrics.map(([label, value, note]) => `
@@ -3405,9 +3407,10 @@ function companyMasterCheckPanel(master = {}) {
         `).join("")}
       </div>
       <div class="company-check-list">
-        ${visibleEntries.length
-          ? visibleEntries.slice(0, displayLimit).map(companyCheckEntryHtml).join("")
+        ${displayedEntries.length
+          ? displayedEntries.map(companyCheckEntryHtml).join("")
           : `<p class="empty">해당 조건의 확인할 업체가 없습니다.</p>`}
+        ${hiddenCount ? `<p class="company-check-more">상위 ${fmtNumber(displayedEntries.length)}개를 먼저 표시합니다. 남은 ${fmtNumber(hiddenCount)}개는 아래 업체 마스터에서 검색해 확인하세요.</p>` : ""}
       </div>
     </section>
   `;
