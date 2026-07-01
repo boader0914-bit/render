@@ -1533,6 +1533,12 @@ a {
   color: #b91c1c;
 }
 
+.confidence-badge.manual {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #047857;
+}
+
 .structure-badge {
   max-width: 100%;
   min-height: 26px;
@@ -1620,6 +1626,11 @@ a {
 
 .search-row.confidence-row.bad {
   background: #fff5f5;
+}
+
+.search-row.confidence-row.manual {
+  border-color: #bbf7d0;
+  background: #f6fef9;
 }
 
 .company-chart {

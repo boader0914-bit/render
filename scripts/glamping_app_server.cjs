@@ -3046,6 +3046,30 @@ function companyInventoryWithManualCorrection(company = {}) {
   };
 }
 
+function companyCorrectionStatus(company = {}, inventory = null) {
+  const correction = company.manualCorrection;
+  const latest = (inventory || company.inventory || {}).latest || {};
+  if (correction && correction.active !== false) {
+    const parts = [];
+    if (correction.lodgingBasisTotal) parts.push(`숙박 ${correction.lodgingBasisTotal}개`);
+    if (correction.dayUseBasisTotal) parts.push(`데이유즈 ${correction.dayUseBasisTotal}회`);
+    return {
+      key: "admin_override",
+      label: "관리자 보정",
+      detail: parts.join(" · ") || "보정 기준 저장",
+      note: correction.note || "관리자 보정값 기준",
+      updatedAt: correction.updatedAt || ""
+    };
+  }
+  return {
+    key: "auto_estimate",
+    label: "자동추정",
+    detail: latest.confidenceGrade ? `내부 신뢰도 ${latest.confidenceGrade}` : "추정 대기",
+    note: latest.confidenceSummary || "수집값 기반 자동추정",
+    updatedAt: latest.collectedAt || ""
+  };
+}
+
 function companyRecordSummary(company = {}, activeKeywordKey = "") {
   const inventory = companyInventoryWithManualCorrection(company);
   const keywords = Object.values(company.keywords || {})
@@ -3085,6 +3109,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     activeKeyword,
     exposureLayer,
     inventory,
+    correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection: company.manualCorrection || null,
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
     adminReview: company.adminReview || null,
@@ -4950,8 +4975,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-pocheon-mode-guard"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-pocheon-mode-guard"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-correction-status-release"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-correction-status-release"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

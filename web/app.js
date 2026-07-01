@@ -912,9 +912,8 @@ function inventoryStructureInfo(item = {}) {
 }
 
 function inventoryConfidenceBadge(item = {}) {
-  const info = inventoryConfidenceInfo(item);
-  const alertText = info.alerts.length ? ` · ${info.alerts[0]}` : "";
-  return `<span class="confidence-badge ${info.tone}" title="${escapeHtml(info.summary)}">신뢰도 ${escapeHtml(info.grade)}${escapeHtml(alertText)}</span>`;
+  const status = correctionStatusInfo(item);
+  return `<span class="confidence-badge ${escapeHtml(status.tone)}" title="${escapeHtml(status.summary)}">${escapeHtml(status.label)}</span>`;
 }
 
 function inventoryStructureBadge(item = {}) {
@@ -945,10 +944,31 @@ function manualCorrectionInfo(item = {}) {
   };
 }
 
+function correctionStatusInfo(item = {}) {
+  const manual = manualCorrectionInfo(item);
+  const confidence = inventoryConfidenceInfo(item);
+  if (manual) {
+    return {
+      key: "admin",
+      label: "관리자 보정",
+      tone: "manual",
+      summary: `${manual.label} · ${manual.note}`,
+      detail: manual.label,
+      confidence
+    };
+  }
+  return {
+    key: "auto",
+    label: "자동추정",
+    tone: confidence.tone,
+    summary: `자동추정 · 내부 신뢰도 ${confidence.grade} · ${confidence.summary}`,
+    detail: `내부 신뢰도 ${confidence.grade}`,
+    confidence
+  };
+}
+
 function manualCorrectionBadge(item = {}) {
-  const info = manualCorrectionInfo(item);
-  if (!info) return "";
-  return `<span class="structure-badge manual-correction" title="${escapeHtml(`${info.label} · ${info.note}`)}">관리자 보정</span>`;
+  return "";
 }
 
 function bookingGraphRows(item) {
@@ -2814,12 +2834,13 @@ function sheetCompanyProfile(item = {}) {
   if (!profile.companyId) return "";
   const active = profile.activeKeyword;
   const correctionInfo = manualCorrectionInfo(item);
+  const correctionStatus = correctionStatusInfo(item);
   const cells = [
     ["누적 수집", `${fmtNumber(profile.runCount || 0)}회`, `${fmtNumber(profile.keywordCount || 0)}개 키워드`],
     ["노출 레이어", profile.exposureLayer?.label || "분류 대기", profile.exposureLayer?.note || "키워드 누적 필요"],
     ["최고 노출", profile.bestRank ? `${fmtNumber(profile.bestRank)}위` : "대기", profile.bestKeyword || "키워드 누적 중"],
     ["현재 키워드", active?.latestRank ? `${fmtNumber(active.latestRank)}위` : "대기", active?.keyword || activeKeyword()],
-    ["수동 보정", correctionInfo ? "판단 반영" : "없음", correctionInfo ? `${correctionInfo.label} · ${correctionInfo.note}` : "업체 단위 보정값 대기"]
+    ["보정 상태", correctionStatus.label, correctionInfo ? `${correctionInfo.label} · ${correctionInfo.note}` : correctionStatus.detail]
   ];
   return `
     <section class="sheet-section sheet-company-profile-section">
@@ -3167,6 +3188,10 @@ function companyMasterCorrectionPanel(master = {}) {
       <div class="company-correction-list">
         ${rows.length ? rows.map(({ company, profile }) => {
           const latest = company.inventory?.latest || {};
+          const correctionStatus = company.correctionStatus || {
+            label: company.manualCorrection ? "관리자 보정" : "자동추정",
+            detail: latest.confidenceGrade ? `내부 신뢰도 ${latest.confidenceGrade}` : "추정 대기"
+          };
           return `
             <article class="${profile.applied ? "applied" : ""}">
               <div class="company-correction-title">
@@ -3174,7 +3199,7 @@ function companyMasterCorrectionPanel(master = {}) {
                   <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
                   <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${fmtNumber(company.salesTarget?.score || 0)}점</small>
                 </div>
-                <span>${profile.applied ? "보정 적용" : "확인 필요"}</span>
+                <span>${escapeHtml(correctionStatus.label)}</span>
               </div>
               <div class="company-correction-tags">
                 ${profile.issues.slice(0, 6).map((issue) => `<mark>${escapeHtml(issue.label)}</mark>`).join("")}
@@ -3184,7 +3209,7 @@ function companyMasterCorrectionPanel(master = {}) {
               </ul>
               <div class="company-correction-meta">
                 <span>구조 ${escapeHtml(latest.structureLabel || "대기")}</span>
-                <span>신뢰도 ${escapeHtml(latest.confidenceGrade || "대기")}</span>
+                <span>${escapeHtml(correctionStatus.detail || "자동추정")}</span>
                 <span>${escapeHtml(company.manualCorrection?.note || "보정 메모 없음")}</span>
               </div>
               ${companyCorrectionFormHtml(company, true)}
@@ -4788,7 +4813,7 @@ function sheetAuditPanel(item = {}) {
 
 function sheetFlowOverview(item = {}) {
   const flow = salesFlowProfile(item);
-  const confidence = inventoryConfidenceInfo(item);
+  const correctionStatus = correctionStatusInfo(item);
   const structure = inventoryStructureInfo(item);
   const historyWeekday = flow.history?.weekday;
   const analysis = targetExpansionAnalysis(item);
@@ -4807,7 +4832,7 @@ function sheetFlowOverview(item = {}) {
           <h3>관리자 판단 요약</h3>
           <p>${escapeHtml(analysis.label)} · ${fmtNumber(analysis.score)}점 · ${escapeHtml(structure.label)}</p>
         </div>
-        <span class="confidence-badge ${confidence.tone}">${escapeHtml(confidence.label)}</span>
+        <span class="confidence-badge ${escapeHtml(correctionStatus.tone)}">${escapeHtml(correctionStatus.label)}</span>
       </div>
       <div class="sheet-flow-grid">
         ${cells.map(([label, metric, note]) => {
@@ -4831,12 +4856,13 @@ function sheetFlowOverview(item = {}) {
 function sheetInventoryStructure(item = {}) {
   const structure = inventoryStructureInfo(item);
   const confidence = inventoryConfidenceInfo(item);
+  const correctionStatus = correctionStatusInfo(item);
   const flags = structure.flags || [];
   const rows = [
     ["리스트 구조", structure.label, structure.summary],
     ["검증 액션", structure.action, flags.includes("dynamic_capacity") ? "날짜별 총량 변동은 전화예약, 시설점검, 채널별 재고조정 가능성으로 우선 해석합니다." : ""],
     ["수량 기준", item.inventoryScope || "네이버예약 채널/날짜 기준 재고", item.inventoryMemo || "실제 전체 객실수와 다를 수 있습니다."],
-    ["신뢰도", confidence.label, confidence.summary]
+    ["보정 상태", correctionStatus.label, correctionStatus.key === "admin" ? correctionStatus.summary : `자동추정 근거: ${confidence.label} · ${confidence.summary}`]
   ];
   return `
     <section class="sheet-section sheet-structure-section">
@@ -4918,6 +4944,7 @@ function renderSheetBooking(item) {
   const missingRows = lodgingRows.length - collectedRows;
   const dayRows = sheetRowsForDayUse(item);
   const confidence = inventoryConfidenceInfo(item);
+  const correctionStatus = correctionStatusInfo(item);
   const confidenceReasons = [...confidence.alerts, ...confidence.reasons].filter(Boolean).slice(0, 4);
   const flow = salesFlowProfile(item);
   const historyWeekday = flow.history?.weekday;
@@ -4951,12 +4978,12 @@ function renderSheetBooking(item) {
         </div>
         <strong>보조 지표</strong>
       </div>
-      <div class="search-row confidence-row ${confidence.tone}">
+      <div class="search-row confidence-row ${escapeHtml(correctionStatus.tone)}">
         <div>
-          <strong>수집 신뢰도 ${escapeHtml(confidence.grade)}</strong>
-          <small>${escapeHtml(confidenceReasons.length ? confidenceReasons.join(" · ") : confidence.summary)}</small>
+          <strong>보정 상태 ${escapeHtml(correctionStatus.label)}</strong>
+          <small>${escapeHtml(correctionStatus.key === "admin" ? correctionStatus.summary : (confidenceReasons.length ? `자동추정 근거: ${confidenceReasons.join(" · ")}` : correctionStatus.summary))}</small>
         </div>
-        <strong>${escapeHtml(confidence.label)}</strong>
+        <strong>${escapeHtml(correctionStatus.detail)}</strong>
       </div>
       <div class="search-row">
         <div>
