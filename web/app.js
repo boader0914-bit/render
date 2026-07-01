@@ -692,10 +692,17 @@ function weeklyRows(item = {}, kind = "lodging") {
   }).filter(Boolean);
 }
 
-function basisTotalForRows(rows = [], explicitBasis = 0) {
+function activeManualCorrection(item = {}) {
+  const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
+  return Boolean(item.manualCorrectionApplied || correction.active);
+}
+
+function basisTotalForRows(rows = [], explicitBasis = 0, authoritative = false) {
+  const basis = finiteNumber(explicitBasis, 0);
+  if (authoritative && basis > 0) return basis;
   return Math.max(
     0,
-    finiteNumber(explicitBasis, 0),
+    basis,
     ...rows.map((row) => finiteNumber(row.total, 0))
   );
 }
@@ -735,7 +742,7 @@ function salesStats(item = {}, kind = "lodging") {
       };
     }
     if (rows.length) {
-      const basisTotal = basisTotalForRows(rows, item.weeklyBasisTotal);
+      const basisTotal = basisTotalForRows(rows, item.weeklyBasisTotal, activeManualCorrection(item));
       const sum = rows.reduce((acc, row) => {
         const rawTotal = finiteNumber(row.total, 0);
         const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
@@ -775,7 +782,7 @@ function salesStats(item = {}, kind = "lodging") {
     };
   }
   if (rows.length) {
-    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal);
+    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal, activeManualCorrection(item));
     const sum = rows.reduce((acc, row) => {
       const rawTotal = finiteNumber(row.total, 0);
       const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
@@ -886,18 +893,44 @@ function otaVerificationBadge(item = {}) {
   return `<span class="structure-badge ota-check" title="${escapeHtml(audit.otaReason || "네이버 기준 수량 해석 보조 확인")}">OTA 확인 필요</span>`;
 }
 
+function manualCorrectionInfo(item = {}) {
+  const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
+  const hasCorrectionValue = Boolean(correction.lodgingBasisTotal || correction.dayUseBasisTotal || correction.note);
+  if (!correction || correction.active === false || !hasCorrectionValue) return null;
+  const lodging = finiteNumber(correction.lodgingBasisTotal, 0);
+  const dayUse = finiteNumber(correction.dayUseBasisTotal, 0);
+  const parts = [];
+  if (lodging > 0) parts.push(`숙박 ${fmtNumber(lodging)}개`);
+  if (dayUse > 0) parts.push(`데이유즈 ${fmtNumber(dayUse)}회`);
+  return {
+    correction,
+    label: parts.length ? parts.join(" · ") : "보정 기준",
+    note: correction.note || "관리자 수동 보정값 기준"
+  };
+}
+
+function manualCorrectionBadge(item = {}) {
+  const info = manualCorrectionInfo(item);
+  if (!info) return "";
+  return `<span class="structure-badge manual-correction" title="${escapeHtml(`${info.label} · ${info.note}`)}">관리자 보정</span>`;
+}
+
 function bookingGraphRows(item) {
   const run = state.data?.run || {};
   const rows = weeklyRows(item);
   const rowMap = new Map(rows.map((row) => [normalizeMonthDayLabel(row.label), row]));
   const lodging = salesStats(item, "lodging");
+  const manualBasis = activeManualCorrection(item);
   const baseTotal = finiteNumber(item.nightTotalStock, finiteNumber(item.totalRooms, finiteNumber(lodging.supply, 0)));
-  const maxTotal = Math.max(
-    0,
-    baseTotal,
-    finiteNumber(item.weeklyBasisTotal, 0),
-    ...rows.map((row) => finiteNumber(row.total, 0))
-  );
+  const correctedBasis = finiteNumber(item.weeklyBasisTotal, baseTotal);
+  const maxTotal = manualBasis && correctedBasis > 0
+    ? correctedBasis
+    : Math.max(
+      0,
+      baseTotal,
+      correctedBasis,
+      ...rows.map((row) => finiteNumber(row.total, 0))
+    );
   const basisLabel = normalizeMonthDayLabel(monthDay(run.checkIn));
 
   return bookingRangeLabels(run).map((label) => {
@@ -905,7 +938,7 @@ function bookingGraphRows(item) {
     const row = rowMap.get(key);
     if (row) {
       const rawTotal = finiteNumber(row.total, maxTotal);
-      const basisTotal = Math.max(maxTotal, rawTotal);
+      const basisTotal = manualBasis && maxTotal > 0 ? maxTotal : Math.max(maxTotal, rawTotal);
       const rawSold = finiteNumber(row.sold, 0);
       const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
       const sold = Math.min(basisTotal, rawSold + offlineSold);
@@ -1042,7 +1075,7 @@ function renderCompanies() {
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>
-            <div class="company-badges">${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${otaVerificationBadge(item)}</div>
+            <div class="company-badges">${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${manualCorrectionBadge(item)}${otaVerificationBadge(item)}</div>
           </div>
         </div>
         <div class="company-metric">
@@ -2744,13 +2777,13 @@ function sheetCompanyProfile(item = {}) {
   const profile = item.companyProfile || {};
   if (!profile.companyId) return "";
   const active = profile.activeKeyword;
-  const correction = profile.manualCorrection || item.companyManualCorrection;
+  const correctionInfo = manualCorrectionInfo(item);
   const cells = [
     ["누적 수집", `${fmtNumber(profile.runCount || 0)}회`, `${fmtNumber(profile.keywordCount || 0)}개 키워드`],
     ["노출 레이어", profile.exposureLayer?.label || "분류 대기", profile.exposureLayer?.note || "키워드 누적 필요"],
     ["최고 노출", profile.bestRank ? `${fmtNumber(profile.bestRank)}위` : "대기", profile.bestKeyword || "키워드 누적 중"],
     ["현재 키워드", active?.latestRank ? `${fmtNumber(active.latestRank)}위` : "대기", active?.keyword || activeKeyword()],
-    ["수동 보정", correction ? "적용 가능" : "없음", correction?.note || "업체 단위 보정값 대기"]
+    ["수동 보정", correctionInfo ? "판단 반영" : "없음", correctionInfo ? `${correctionInfo.label} · ${correctionInfo.note}` : "업체 단위 보정값 대기"]
   ];
   return `
     <section class="sheet-section sheet-company-profile-section">
@@ -2768,8 +2801,34 @@ function sheetCompanyProfile(item = {}) {
         `).join("")}
       </div>
       ${companyProfileKeywordList(profile)}
+      ${sheetManualCorrectionEvidence(item)}
       ${sheetManualCorrectionForm(profile, item)}
     </section>
+  `;
+}
+
+function sheetManualCorrectionEvidence(item = {}) {
+  const info = manualCorrectionInfo(item);
+  if (!info) return "";
+  const lodging = salesStats(item, "lodging");
+  const day = salesStats(item, "day");
+  const rawLodging = finiteNumber(item.rawNightTotalStock, finiteNumber(item.rawWeeklyBasisTotal, 0));
+  const rawDayUse = finiteNumber(item.rawDayUseTotalStock, finiteNumber(item.rawDayUseWeeklyBasisTotal, 0));
+  const rows = [
+    ["숙박 기준", lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}개` : "확인필요", rawLodging ? `네이버 원본 ${fmtNumber(rawLodging)}개` : "원본 총량 대기"],
+    ["데이유즈 기준", day.supply ? `${fmtNumber(day.sold)}/${fmtNumber(day.supply)}회` : "없음", rawDayUse ? `네이버 원본 ${fmtNumber(rawDayUse)}회` : "원본 총량 대기"],
+    ["보정 메모", info.note || "메모 없음", info.label]
+  ];
+  return `
+    <div class="manual-correction-evidence">
+      ${rows.map(([label, value, note]) => `
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+          <small>${escapeHtml(note)}</small>
+        </div>
+      `).join("")}
+    </div>
   `;
 }
 
@@ -4596,7 +4655,7 @@ function sheetRowsForBooking(item) {
 function sheetRowsForDayUse(item) {
   const rows = weeklyRows(item, "day");
   if (rows.length) {
-    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal);
+    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal, activeManualCorrection(item));
     return rows.map((row) => ({
       label: row.label,
       sold: Math.min(basisTotal || row.total, finiteNumber(row.sold) + offlineSoldForTotal(basisTotal, row.total)),
@@ -4633,9 +4692,12 @@ function dateRow(row) {
   const note = row.note ? `${row.note} · ` : "";
   const openStock = finiteNumber(row.openStock, row.supply);
   const hidden = Math.max(0, finiteNumber(row.hidden, 0));
+  const rawOverBasis = openStock > finiteNumber(row.supply, 0);
   const stockNote = hidden
     ? `온라인열림 ${fmtNumber(openStock)}${row.unit} · 오프라인예약 ${fmtNumber(hidden)}${row.unit} 포함`
-    : `온라인열림 ${fmtNumber(openStock)}${row.unit}`;
+    : rawOverBasis
+      ? `네이버 원본 ${fmtNumber(openStock)}${row.unit} · 관리자 보정 기준`
+      : `온라인열림 ${fmtNumber(openStock)}${row.unit}`;
   if (row.missing) {
     return `
       <div class="date-row missing">

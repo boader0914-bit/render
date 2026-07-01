@@ -1575,6 +1575,12 @@ a {
   color: #b45309;
 }
 
+.structure-badge.manual-correction {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #047857;
+}
+
 .company-metric {
   grid-area: metric;
   min-width: 112px;
@@ -3379,6 +3385,39 @@ a.platform-row:hover {
   line-height: 1.08;
   font-weight: 950;
   white-space: nowrap;
+}
+
+.manual-correction-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.manual-correction-evidence div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #bbf7d0;
+  border-radius: 13px;
+  background: #f7fef9;
+  padding: 10px;
+}
+
+.manual-correction-evidence span,
+.manual-correction-evidence small {
+  color: #047857;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.manual-correction-evidence strong {
+  color: #064e3b;
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
 }
 
 .sheet-audit-section {
@@ -5460,7 +5499,8 @@ a.platform-row:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .sheet-history-grid {
+  .sheet-history-grid,
+  .manual-correction-evidence {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -5751,6 +5791,7 @@ a.platform-row:hover {
   .validation-metric-grid,
   .sheet-flow-grid,
   .sheet-history-grid,
+  .manual-correction-evidence,
   .sheet-audit-grid,
   .target-board-hero,
   .history-ops-metrics,

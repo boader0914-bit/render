@@ -2485,18 +2485,33 @@ function parseReservationRateDetail(detail, checkIn) {
   return rows.filter((row) => row.stayDate);
 }
 
-function applyOfflineReservationBasis(rows, basisTotal) {
+function hasActiveManualCorrection(item = {}) {
+  return Boolean(item.manualCorrectionApplied || item.companyManualCorrection?.active);
+}
+
+function applyOfflineReservationBasis(rows, basisTotal, options = {}) {
   const resolvedBasis = Number(basisTotal);
   if (!Number.isFinite(resolvedBasis) || resolvedBasis <= 0) return rows;
+  const authoritative = Boolean(options.authoritative);
   return rows.map((row) => {
     const rawTotal = Number(row.total || 0);
-    if (!Number.isFinite(rawTotal) || rawTotal <= 0 || rawTotal >= resolvedBasis) return row;
+    const rawAvailable = Number(row.available || 0);
+    if (!Number.isFinite(rawTotal) || rawTotal <= 0 || !Number.isFinite(rawAvailable)) return row;
+    if (!authoritative && rawTotal >= resolvedBasis) return row;
+    const correctedTotal = authoritative ? resolvedBasis : Math.max(rawTotal, resolvedBasis);
+    if (!Number.isFinite(correctedTotal) || correctedTotal <= 0) return row;
+    const rawSold = Math.max(0, rawTotal - Math.max(0, Math.min(rawAvailable, rawTotal)));
+    const offlineReserved = Math.max(0, correctedTotal - rawTotal);
+    const correctedSold = Math.max(0, Math.min(correctedTotal, rawSold + offlineReserved));
     return {
       ...row,
       rawTotal,
-      offlineReserved: resolvedBasis - rawTotal,
-      total: resolvedBasis,
-      available: Math.min(Math.max(0, Number(row.available || 0)), resolvedBasis)
+      rawAvailable: Math.max(0, Math.min(rawAvailable, rawTotal)),
+      rawSold,
+      offlineReserved,
+      stockBasisAdjusted: authoritative && rawTotal !== correctedTotal,
+      total: correctedTotal,
+      available: Math.max(0, correctedTotal - correctedSold)
     };
   });
 }
@@ -2523,7 +2538,7 @@ function historySeriesForItem(item, productType, checkIn) {
           ? singleAvailabilityRow(checkIn, item.dayUseAvailableStock, item.dayUseTotalStock)
           : []
       );
-    return applyOfflineReservationBasis(rows, item.dayUseWeeklyBasisTotal);
+    return applyOfflineReservationBasis(rows, item.dayUseWeeklyBasisTotal, { authoritative: hasActiveManualCorrection(item) });
   }
 
   const rows = parseAvailabilityDetail(item.weeklyDetail, checkIn)
@@ -2534,7 +2549,7 @@ function historySeriesForItem(item, productType, checkIn) {
         ? singleAvailabilityRow(checkIn, item.nightAvailableStock ?? item.availableRooms, item.nightTotalStock ?? item.totalRooms)
         : []
     );
-  return applyOfflineReservationBasis(rows, item.weeklyBasisTotal);
+  return applyOfflineReservationBasis(rows, item.weeklyBasisTotal, { authoritative: hasActiveManualCorrection(item) });
 }
 
 function dayOfWeekFromDate(dateText) {
@@ -2613,6 +2628,7 @@ function companySalesSignalFromItem(item = {}, run = {}) {
   const lodging = summarizeProductSalesSignal(historySeriesForItem(item, "lodging", checkIn));
   const dayUse = summarizeProductSalesSignal(historySeriesForItem(item, "dayuse", checkIn));
   const structureFlags = Array.isArray(item.inventoryStructureFlags) ? item.inventoryStructureFlags : [];
+  const manualApplied = hasActiveManualCorrection(item);
   const confidenceGrade = String(item.inventoryConfidenceGrade || "").toUpperCase();
   const structureWeak = Boolean(confidenceGrade && !["A", "B"].includes(confidenceGrade));
   const dayUseHasSupply = dayUse.totalSupply > 0 || Number(item.dayUseTotalStock || 0) > 0 || Number(item.dayUseItemCount || 0) > 0;
@@ -2627,7 +2643,11 @@ function companySalesSignalFromItem(item = {}, run = {}) {
     stockVariance: Boolean(lodging.stockVariance || dayUse.stockVariance || structureFlags.includes("dynamic_capacity")),
     bookingIdReused: structureFlags.includes("booking_id_reused"),
     groupedStock: structureFlags.includes("grouped_range") || ["grouped_stock", "stock_only", "unknown"].includes(String(item.inventoryStructureType || "")),
-    structureFlags: boundedUnique(structureFlags, 10)
+    manualCorrectionApplied: manualApplied,
+    structureFlags: boundedUnique([
+      ...structureFlags,
+      manualApplied ? "manual_correction" : ""
+    ], 10)
   };
 }
 
@@ -2892,7 +2912,109 @@ function companyExposureLayerFromKeywords(keywords = []) {
   };
 }
 
+function adjustedRateForBasis(rate, rawDailyTotal, basisTotal) {
+  const numericRate = Number(rate);
+  const rawTotal = Number(rawDailyTotal);
+  const basis = Number(basisTotal);
+  if (!Number.isFinite(numericRate) || !Number.isFinite(rawTotal) || rawTotal <= 0 || !Number.isFinite(basis) || basis <= 0) return rate ?? null;
+  const rawSold = Math.max(0, rawTotal * numericRate);
+  const offlineReserved = Math.max(0, basis - rawTotal);
+  const correctedSold = Math.max(0, Math.min(basis, rawSold + offlineReserved));
+  return toNullableRate(correctedSold / basis);
+}
+
+function applyManualBasisToSalesSummary(summary = {}, basisTotal) {
+  const basis = Number(basisTotal);
+  const days = Number(summary.days || 0);
+  const rawTotalSupply = Number(summary.totalSupply || 0);
+  const rawTotalSold = Number(summary.totalSold || 0);
+  if (!Number.isFinite(basis) || basis <= 0 || !Number.isFinite(days) || days <= 0 || !Number.isFinite(rawTotalSupply) || rawTotalSupply <= 0) {
+    return Number.isFinite(basis) && basis > 0
+      ? { ...summary, manualBasisTotal: Math.round(basis), manualCorrectionApplied: false }
+      : summary;
+  }
+  const roundedBasis = Math.round(basis);
+  const correctedSupply = roundedBasis * days;
+  const offlineReserved = Math.max(0, correctedSupply - rawTotalSupply);
+  const correctedSold = Math.max(0, Math.min(correctedSupply, rawTotalSold + offlineReserved));
+  const rawDailyTotal = rawTotalSupply / days;
+  return {
+    ...summary,
+    rawTotalSupply,
+    rawTotalSold,
+    rawAverageRate: summary.averageRate ?? null,
+    manualBasisTotal: roundedBasis,
+    manualOfflineReserved: Math.round(offlineReserved),
+    manualCorrectionApplied: true,
+    totalSupply: correctedSupply,
+    totalSold: Math.round(correctedSold),
+    averageRate: toNullableRate(correctedSupply ? correctedSold / correctedSupply : null),
+    fridayRate: adjustedRateForBasis(summary.fridayRate, rawDailyTotal, roundedBasis),
+    saturdayRate: adjustedRateForBasis(summary.saturdayRate, rawDailyTotal, roundedBasis),
+    sundayRate: adjustedRateForBasis(summary.sundayRate, rawDailyTotal, roundedBasis),
+    weekdayRate: adjustedRateForBasis(summary.weekdayRate, rawDailyTotal, roundedBasis),
+    stockVariance: Boolean(summary.stockVariance || summary.minTotal !== roundedBasis || summary.maxTotal !== roundedBasis),
+    stockVarianceRatio: summary.minTotal ? summary.stockVarianceRatio : null,
+    minTotal: roundedBasis,
+    maxTotal: roundedBasis
+  };
+}
+
+function salesSignalWithManualCorrection(signal = {}, correction = {}) {
+  if (!correction || correction.active === false) return signal || {};
+  const lodging = applyManualBasisToSalesSummary(signal.lodging || {}, correction.lodgingBasisTotal);
+  const dayUse = applyManualBasisToSalesSummary(signal.dayUse || {}, correction.dayUseBasisTotal);
+  const applied = Boolean(lodging.manualCorrectionApplied || dayUse.manualCorrectionApplied);
+  return {
+    ...signal,
+    lodging,
+    dayUse,
+    lodgingDays: lodging.days || signal.lodgingDays || 0,
+    dayUseDays: dayUse.days || signal.dayUseDays || 0,
+    dayUseMissing: dayUse.totalSupply > 0 ? false : signal.dayUseMissing,
+    stockVariance: Boolean(signal.stockVariance || lodging.stockVariance || dayUse.stockVariance),
+    manualCorrectionApplied: applied,
+    manualCorrection: {
+      lodgingBasisTotal: correction.lodgingBasisTotal || null,
+      dayUseBasisTotal: correction.dayUseBasisTotal || null,
+      note: correction.note || "",
+      updatedAt: correction.updatedAt || ""
+    },
+    structureFlags: boundedUnique([
+      ...(Array.isArray(signal.structureFlags) ? signal.structureFlags : []),
+      "manual_correction"
+    ], 12)
+  };
+}
+
+function companyInventoryWithManualCorrection(company = {}) {
+  const inventory = company.inventory || {};
+  const correction = company.manualCorrection;
+  if (!correction || correction.active === false) return inventory;
+  const latest = inventory.latest || {};
+  const correctedSignal = salesSignalWithManualCorrection(latest.salesSignal || {}, correction);
+  return {
+    ...inventory,
+    latest: {
+      ...latest,
+      salesSignal: correctedSignal,
+      manualCorrectionApplied: true,
+      correctionBasis: {
+        lodgingBasisTotal: correction.lodgingBasisTotal || null,
+        dayUseBasisTotal: correction.dayUseBasisTotal || null,
+        note: correction.note || "",
+        updatedAt: correction.updatedAt || ""
+      },
+      structureFlags: boundedUnique([
+        ...(Array.isArray(latest.structureFlags) ? latest.structureFlags : []),
+        "manual_correction"
+      ], 12)
+    }
+  };
+}
+
 function companyRecordSummary(company = {}, activeKeywordKey = "") {
+  const inventory = companyInventoryWithManualCorrection(company);
   const keywords = Object.values(company.keywords || {})
     .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
     .map((row) => {
@@ -2929,8 +3051,9 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     latestKeyword: keywords.sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))[0]?.keyword || "",
     activeKeyword,
     exposureLayer,
-    inventory: company.inventory || {},
+    inventory,
     manualCorrection: company.manualCorrection || null,
+    manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
     adminReview: company.adminReview || null,
     identityConfidence: companyIdentityConfidence(company)
   };
@@ -3247,16 +3370,26 @@ function summarizeCompanySalesTargets(companies = []) {
 function applyCompanyManualCorrection(item, company) {
   const correction = company?.manualCorrection;
   if (!correction || correction.active === false) return item;
-  const next = { ...item, companyManualCorrection: correction, manualCorrectionApplied: true };
+  const next = {
+    ...item,
+    companyManualCorrection: correction,
+    manualCorrectionApplied: true,
+    rawWeeklyBasisTotal: item.weeklyBasisTotal ?? null,
+    rawNightTotalStock: item.nightTotalStock ?? item.totalRooms ?? null,
+    rawDayUseWeeklyBasisTotal: item.dayUseWeeklyBasisTotal ?? null,
+    rawDayUseTotalStock: item.dayUseTotalStock ?? null
+  };
   const lodgingBasis = Number(correction.lodgingBasisTotal);
   const dayUseBasis = Number(correction.dayUseBasisTotal);
   if (Number.isFinite(lodgingBasis) && lodgingBasis > 0) {
-    next.weeklyBasisTotal = Math.max(Number(next.weeklyBasisTotal || 0), lodgingBasis);
-    next.nightTotalStock = Math.max(Number(next.nightTotalStock || 0), lodgingBasis);
+    next.weeklyBasisTotal = Math.round(lodgingBasis);
+    next.nightTotalStock = Math.round(lodgingBasis);
+    next.manualLodgingBasisTotal = Math.round(lodgingBasis);
   }
   if (Number.isFinite(dayUseBasis) && dayUseBasis > 0) {
-    next.dayUseWeeklyBasisTotal = Math.max(Number(next.dayUseWeeklyBasisTotal || 0), dayUseBasis);
-    next.dayUseTotalStock = Math.max(Number(next.dayUseTotalStock || 0), dayUseBasis);
+    next.dayUseWeeklyBasisTotal = Math.round(dayUseBasis);
+    next.dayUseTotalStock = Math.round(dayUseBasis);
+    next.manualDayUseBasisTotal = Math.round(dayUseBasis);
   }
   return next;
 }
@@ -3438,6 +3571,7 @@ async function saveCompanyManualCorrection(payload = {}) {
     error.statusCode = 404;
     throw error;
   }
+  const savedAt = new Date().toISOString();
   if (payload.active === false) {
     company.manualCorrection = null;
   } else {
@@ -3449,13 +3583,23 @@ async function saveCompanyManualCorrection(payload = {}) {
       dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
       note: String(payload.note || "").trim(),
       source: "admin",
-      updatedAt: new Date().toISOString()
+      updatedAt: savedAt
     };
   }
+  company.manualCorrectionHistory = [
+    ...(company.manualCorrectionHistory || []),
+    {
+      at: savedAt,
+      action: payload.active === false ? "clear" : "save",
+      lodgingBasisTotal: company.manualCorrection?.lodgingBasisTotal || null,
+      dayUseBasisTotal: company.manualCorrection?.dayUseBasisTotal || null,
+      note: company.manualCorrection?.note || ""
+    }
+  ].slice(-30);
   company.duplicateNotes = [
     ...(company.duplicateNotes || []),
     {
-      at: new Date().toISOString(),
+      at: savedAt,
       reason: payload.active === false ? "수동 보정 해제" : "수동 보정 저장"
     }
   ].slice(-40);
@@ -3526,6 +3670,16 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
     const company = upsertCompanyRecord(master, entity);
     touched += 1;
     const correctedItem = applyCompanyManualCorrection(items[index], company);
+    if (correctedItem.manualCorrectionApplied) {
+      const correctedEntity = companyEntityFromItem(correctedItem, run, collectedAt);
+      updateCompanyInventory(company, {
+        ...correctedEntity,
+        inventoryStructureFlags: boundedUnique([
+          ...(correctedEntity.inventoryStructureFlags || []),
+          "manual_correction"
+        ], 12)
+      });
+    }
     items[index] = {
       ...correctedItem,
       companyId: company.companyId,
@@ -4759,8 +4913,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-correction-panel"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-correction-panel"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-manual-correction-applied"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-manual-correction-applied"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
