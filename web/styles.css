@@ -2426,6 +2426,8 @@ a.platform-row:hover {
 
 .company-sales-panel,
 .company-sales-list,
+.company-check-panel,
+.company-check-list,
 .company-review-panel,
 .company-review-queue,
 .company-correction-panel,
@@ -2442,9 +2444,18 @@ a.platform-row:hover {
   gap: 10px;
 }
 
+.company-check-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .company-sales-metrics article,
+.company-check-metrics article,
 .company-sales-list,
 .company-sales-list article,
+.company-check-panel,
+.company-check-list article,
 .company-review-panel,
 .company-review-queue article,
 .company-correction-panel,
@@ -2461,6 +2472,12 @@ a.platform-row:hover {
 
 .company-sales-metrics span,
 .company-sales-metrics small,
+.company-check-metrics span,
+.company-check-metrics small,
+.company-check-head small,
+.company-check-card small,
+.company-check-reason li,
+.company-check-next span,
 .company-sales-list small,
 .company-sales-list p,
 .company-review-panel small,
@@ -2487,8 +2504,21 @@ a.platform-row:hover {
   line-height: 1.05;
 }
 
+.company-check-metrics strong {
+  display: block;
+  margin: 4px 0;
+  color: var(--blue);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
 .company-sales-list strong,
 .company-sales-list b,
+.company-check-head strong,
+.company-check-card b,
+.company-check-reason strong,
+.company-check-next strong,
 .company-master-list-head strong,
 .company-master-list b {
   display: block;
@@ -2506,6 +2536,8 @@ a.platform-row:hover {
 }
 
 .company-sales-list article > div,
+.company-check-head,
+.company-check-card-head,
 .company-review-head,
 .company-review-queue article > div,
 .company-correction-head,
@@ -2527,6 +2559,105 @@ a.platform-row:hover {
   padding: 5px 8px;
   font-size: 12px;
   font-weight: 950;
+}
+
+.company-check-panel {
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+}
+
+.company-check-head {
+  align-items: center;
+}
+
+.company-check-head > span,
+.company-check-card-head > span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-check-card {
+  display: grid;
+  gap: 10px;
+  background: #fff;
+}
+
+.company-check-card.correction {
+  border-color: #fed7aa;
+  background: #fffdf8;
+}
+
+.company-check-card.ota {
+  border-color: #bfdbfe;
+  background: #fbfdff;
+}
+
+.company-check-card.contact {
+  border-color: #bbf7d0;
+  background: #fbfefc;
+}
+
+.company-check-card.exclude {
+  border-color: #fecaca;
+  background: #fffafa;
+}
+
+.company-check-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.company-check-tags span,
+.company-check-tags mark {
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: var(--muted);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.company-check-tags mark {
+  border-color: #dbeafe;
+  background: #f4f8ff;
+  color: var(--blue-dark);
+}
+
+.company-check-reason {
+  display: grid;
+  gap: 6px;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.company-check-reason ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 16px;
+}
+
+.company-check-next {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f4f8ff;
+  padding: 10px;
+}
+
+.company-check-next strong {
+  font-size: 13px;
 }
 
 .company-target-tags {
@@ -5593,6 +5724,7 @@ a.platform-row:hover {
   .company-cross-metrics,
   .company-verification-metrics,
   .company-verification-grid,
+  .company-check-metrics,
   .company-sales-metrics,
   .target-board,
   .company-profile-keywords {
@@ -5608,6 +5740,8 @@ a.platform-row:hover {
   }
 
   .company-sales-list article > div,
+  .company-check-head,
+  .company-check-card-head,
   .company-review-head,
   .company-review-queue article > div,
   .company-correction-head,

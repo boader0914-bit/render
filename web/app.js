@@ -3210,6 +3210,127 @@ function companyNeedsCorrection(company = {}) {
   };
 }
 
+function companyCheckEntryType(company = {}, profile = {}) {
+  const issues = profile.issues || [];
+  if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
+    return { key: "correction", label: "보정 필요" };
+  }
+  if (issues.some((issue) => issue.key === "ota")) return { key: "ota", label: "OTA 확인" };
+  if (company.salesTarget?.category === "contact") return { key: "contact", label: "컨택 후보" };
+  if (company.salesTarget?.category === "benchmark") return { key: "benchmark", label: "벤치마크" };
+  if (company.salesTarget?.category === "exclude" || company.identityConfidence?.level === "review") return { key: "exclude", label: "제외 검토" };
+  return { key: "observe", label: "관찰" };
+}
+
+function companyCheckReasons(company = {}, profile = {}) {
+  const issueReasons = (profile.issues || []).map((issue) => `${issue.label}: ${issue.task}`);
+  const targetReasons = company.salesTarget?.reasons || [];
+  const fallback = company.salesTarget?.recommendation || company.identityConfidence?.reason || "추가 확인 후 판단";
+  return [...new Set([...issueReasons, ...targetReasons, fallback].filter(Boolean))].slice(0, 4);
+}
+
+function companyCheckRecommendation(company = {}, profile = {}) {
+  const issues = profile.issues || [];
+  if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
+    return profile.applied ? "보정값이 적용되어 있습니다. 실제 총량과 맞는지 확인 후 확정하세요." : "수량 구조를 확인하고 필요하면 관리자 보정값을 입력하세요.";
+  }
+  if (issues.some((issue) => issue.key === "ota")) return "OTA 노출과 가격을 확인한 뒤 컨택/보류를 결정하세요.";
+  if (company.salesTarget?.category === "contact") return "노출은 있으나 개선 여지가 있는 업체입니다. 컨택 후보로 검토하세요.";
+  if (company.salesTarget?.category === "benchmark") return "광역과 로컬에서 강한 업체입니다. 벤치마크로 관찰하세요.";
+  if (company.salesTarget?.category === "exclude" || company.identityConfidence?.level === "review") return "글램핑 적합성 또는 업체 동일성을 확인한 뒤 제외 여부를 정하세요.";
+  return "누적 수집을 더 쌓아 관찰 유지 여부를 판단하세요.";
+}
+
+function companyCheckEntryHtml(entry = {}) {
+  const { company, profile, type } = entry;
+  const latest = company.inventory?.latest || {};
+  const reasons = companyCheckReasons(company, profile);
+  const showCorrectionForm = (profile.issues || []).some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key));
+  return `
+    <article class="company-check-card ${escapeHtml(type.key)}">
+      <div class="company-check-card-head">
+        <div>
+          <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+          <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${fmtNumber(company.salesTarget?.score || 0)}점</small>
+        </div>
+        <span>${escapeHtml(type.label)}</span>
+      </div>
+      <div class="company-check-tags">
+        ${companyMasterIdentityTag(company)}
+        ${companyMasterCorrectionTag(company)}
+        <mark>${escapeHtml(companyTargetCategoryLabel(company.salesTarget?.category))}</mark>
+        <mark>${fmtNumber(company.keywordCount || 0)}키워드</mark>
+        <mark>구조 ${escapeHtml(latest.structureLabel || "대기")}</mark>
+        ${(profile.issues || []).slice(0, 4).map((issue) => `<mark>${escapeHtml(issue.label)}</mark>`).join("")}
+      </div>
+      ${companyMasterKeywordChips(company, 5)}
+      <div class="company-check-reason">
+        <strong>왜 확인해야 하나?</strong>
+        <ul>
+          ${reasons.slice(0, 3).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}
+        </ul>
+      </div>
+      <div class="company-check-next">
+        <span>추천 판단</span>
+        <strong>${escapeHtml(companyCheckRecommendation(company, profile))}</strong>
+      </div>
+      ${companyReviewActionsHtml(company, true)}
+      ${showCorrectionForm ? companyCorrectionFormHtml(company, true) : ""}
+    </article>
+  `;
+}
+
+function companyMasterCheckPanel(master = {}) {
+  const entries = (master.companies || [])
+    .map((company) => {
+      const profile = companyNeedsCorrection(company);
+      const type = companyCheckEntryType(company, profile);
+      const include = profile.needed
+        || ["contact", "verify", "benchmark"].includes(company.salesTarget?.category)
+        || company.identityConfidence?.level === "review"
+        || company.adminReview?.status === "manual_needed";
+      return { company, profile, type, include };
+    })
+    .filter((entry) => entry.include && entry.company.adminReview?.status !== "confirmed" && entry.company.adminReview?.status !== "exclude")
+    .sort((a, b) => {
+      const typeWeight = { correction: 5, ota: 4, contact: 3, exclude: 2, benchmark: 1, observe: 0 };
+      return (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
+        || b.profile.priority - a.profile.priority
+        || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0)
+        || (a.company.bestRank || 9999) - (b.company.bestRank || 9999);
+    });
+  const countBy = (predicate) => entries.filter(predicate).length;
+  const metrics = [
+    ["전체", entries.length, "오늘 볼 업체"],
+    ["보정 필요", countBy((entry) => entry.type.key === "correction"), "수량/상품 구조"],
+    ["OTA 확인", countBy((entry) => entry.type.key === "ota"), "플랫폼 보조 확인"],
+    ["컨택 후보", countBy((entry) => entry.type.key === "contact"), "영업 검토"]
+  ];
+  return `
+    <section class="company-check-panel">
+      <div class="company-check-head">
+        <div>
+          <strong>확인할 업체</strong>
+          <small>자동 분석만으로 확정하지 않고 사람이 마지막으로 확인해야 하는 업체입니다.</small>
+        </div>
+        <span>${fmtNumber(entries.length)}개 대기</span>
+      </div>
+      <div class="company-check-metrics">
+        ${metrics.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmtNumber(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="company-check-list">
+        ${entries.length ? entries.slice(0, 12).map(companyCheckEntryHtml).join("") : `<p class="empty">현재 확인할 업체가 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
 function companyCorrectionFormHtml(company = {}, compact = false) {
   const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
   return `
@@ -3492,8 +3613,7 @@ function renderCompanyMasterPanel() {
     ${companyMasterVerificationPanel(master)}
     ${companyMasterCrossKeywordPanel(master)}
     ${companyMasterSalesTargetsPanel(master)}
-    ${companyMasterReviewQueuePanel(master)}
-    ${companyMasterCorrectionPanel(master)}
+    ${companyMasterCheckPanel(master)}
     ${companyMasterFilterPanel(master)}
     ${companyMasterListPanel(master)}
     <div class="company-master-rule">
