@@ -2286,6 +2286,8 @@ a.platform-row:hover {
 .company-sales-list,
 .company-review-panel,
 .company-review-queue,
+.company-correction-panel,
+.company-correction-list,
 .company-master-list-panel,
 .company-master-list {
   display: grid;
@@ -2303,6 +2305,8 @@ a.platform-row:hover {
 .company-sales-list article,
 .company-review-panel,
 .company-review-queue article,
+.company-correction-panel,
+.company-correction-list article,
 .company-master-filter,
 .company-master-list-panel,
 .company-master-list article {
@@ -2319,6 +2323,9 @@ a.platform-row:hover {
 .company-sales-list p,
 .company-review-panel small,
 .company-review-queue p,
+.company-correction-panel small,
+.company-correction-list li,
+.company-correction-meta span,
 .company-master-filter small,
 .company-master-list-head span,
 .company-master-list article p,
@@ -2359,6 +2366,8 @@ a.platform-row:hover {
 .company-sales-list article > div,
 .company-review-head,
 .company-review-queue article > div,
+.company-correction-head,
+.company-correction-title,
 .company-master-list-head,
 .company-master-row-main {
   display: flex;
@@ -2401,12 +2410,22 @@ a.platform-row:hover {
   background: linear-gradient(180deg, #ffffff, #f8fbff);
 }
 
+.company-correction-panel {
+  background: linear-gradient(180deg, #ffffff, #fffaf2);
+}
+
 .company-review-head {
   align-items: center;
 }
 
+.company-correction-head {
+  align-items: center;
+}
+
 .company-review-head strong,
-.company-review-queue b {
+.company-review-queue b,
+.company-correction-head strong,
+.company-correction-title b {
   display: block;
   color: var(--ink);
   font-size: 14px;
@@ -2415,7 +2434,9 @@ a.platform-row:hover {
 }
 
 .company-review-head span,
-.company-review-queue article > div span {
+.company-review-queue article > div span,
+.company-correction-head > span,
+.company-correction-title > span {
   flex: 0 0 auto;
   border-radius: 999px;
   background: #eaf3ff;
@@ -2425,10 +2446,84 @@ a.platform-row:hover {
   font-weight: 950;
 }
 
+.company-correction-head > span {
+  background: #fff4df;
+  color: #b45309;
+}
+
+.company-correction-title > span {
+  background: #fff4df;
+  color: #b45309;
+}
+
+.company-correction-list article.applied .company-correction-title > span {
+  background: #ecfdf3;
+  color: #027a48;
+}
+
 .company-review-queue article {
   display: grid;
   gap: 8px;
   background: #fff;
+}
+
+.company-correction-list article {
+  display: grid;
+  gap: 9px;
+  background: #fff;
+}
+
+.company-correction-list article.applied {
+  background: #fbfdfb;
+}
+
+.company-correction-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.company-correction-tags mark {
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.company-correction-list ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 16px;
+}
+
+.company-correction-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.company-correction-meta span {
+  min-width: 0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 7px 8px;
+  overflow-wrap: anywhere;
+}
+
+.correction-inline-form {
+  margin-top: 0;
+  background: #fff;
+}
+
+.correction-inline-form.compact {
+  border-style: dashed;
+  padding: 10px;
 }
 
 .company-review-actions {
@@ -5270,6 +5365,8 @@ a.platform-row:hover {
   .company-sales-list article > div,
   .company-review-head,
   .company-review-queue article > div,
+  .company-correction-head,
+  .company-correction-title,
   .target-lane-head,
   .company-master-list-head,
   .company-master-row-main {
@@ -5281,7 +5378,8 @@ a.platform-row:hover {
   }
 
   .company-manual-form > div:first-child,
-  .company-manual-actions {
+  .company-manual-actions,
+  .company-correction-meta {
     grid-template-columns: 1fr;
   }
 

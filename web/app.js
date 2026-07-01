@@ -2932,6 +2932,65 @@ function companyReviewActionsHtml(company = {}, compact = false) {
   `;
 }
 
+function companyNeedsCorrection(company = {}) {
+  const signals = company.salesTarget?.signals || {};
+  const tags = company.salesTarget?.priorityTags || [];
+  const reasons = company.salesTarget?.reasons || [];
+  const latest = company.inventory?.latest || {};
+  const hasText = (text) => tags.some((tag) => String(tag).includes(text)) || reasons.some((reason) => String(reason).includes(text));
+  const issues = [];
+  if (signals.structureWeak || hasText("수량구조") || ["C", "D", "E"].includes(String(latest.confidenceGrade || "").toUpperCase())) {
+    issues.push({ key: "structure", label: "수량구조", task: "객실별/종류별 판매 방식과 실제 총 객실수 확인" });
+  }
+  if (signals.bookingIdReused || hasText("예약ID")) {
+    issues.push({ key: "booking", label: "예약ID", task: "네이버 예약ID와 상품명이 현재 객실 구조와 맞는지 확인" });
+  }
+  if (signals.stockVariance || hasText("오프라인")) {
+    issues.push({ key: "offline", label: "총량변동", task: "전화예약/비연동 채널 조절 가능성을 메모" });
+  }
+  if (signals.dayUseMissing || hasText("당일") || hasText("캠프닉")) {
+    issues.push({ key: "dayuse", label: "당일상품", task: "데이유즈/캠프닉 회차와 판매 가능 수량 확인" });
+  }
+  if (signals.otaReviewNeeded || hasText("OTA")) {
+    issues.push({ key: "ota", label: "OTA", task: "NOL/떠나요/여기어때 노출과 가격 보조 확인" });
+  }
+  if (company.adminReview?.status === "manual_needed" && !issues.some((issue) => issue.key === "manual")) {
+    issues.unshift({ key: "manual", label: "관리자 보정", task: "관리자가 보정 필요로 지정한 업체" });
+  }
+  return {
+    needed: company.adminReview?.status === "manual_needed" || issues.length > 0,
+    issues,
+    applied: Boolean(company.manualCorrection),
+    priority: (company.adminReview?.status === "manual_needed" ? 40 : 0) + issues.length * 12 + (company.manualCorrection ? -18 : 0) + Number(company.salesTarget?.score || 0) / 10
+  };
+}
+
+function companyCorrectionFormHtml(company = {}, compact = false) {
+  const correction = company.manualCorrection || {};
+  return `
+    <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
+      <div>
+        <label>
+          <span>숙박 총량</span>
+          <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 30">
+        </label>
+        <label>
+          <span>데이유즈 총량</span>
+          <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correction.dayUseBasisTotal || "")}" placeholder="예: 12">
+        </label>
+      </div>
+      <label>
+        <span>보정 메모</span>
+        <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전화예약 조절, 실제 객실 30동, 캠프닉 2회전">
+      </label>
+      <div class="company-manual-actions">
+        <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">저장</button>
+        <button type="button" data-clear-company-correction data-company-id="${escapeHtml(company.companyId || "")}">해제</button>
+      </div>
+    </div>
+  `;
+}
+
 function companyMasterSalesTargetsPanel(master = {}) {
   const targets = master.salesTargets || {};
   const topTargets = targets.topTargets || [];
@@ -2988,6 +3047,55 @@ function companyMasterReviewQueuePanel(master = {}) {
             ${companyReviewActionsHtml(company)}
           </article>
         `).join("") : `<p class="empty">현재 미검증 컨택/검증 후보가 없습니다.</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function companyMasterCorrectionPanel(master = {}) {
+  const rows = (master.companies || [])
+    .map((company) => ({ company, profile: companyNeedsCorrection(company) }))
+    .filter((entry) => entry.profile.needed)
+    .sort((a, b) => b.profile.priority - a.profile.priority || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0))
+    .slice(0, 12);
+  const appliedCount = rows.filter((entry) => entry.profile.applied).length;
+  const urgentCount = rows.filter((entry) => !entry.profile.applied).length;
+  return `
+    <div class="company-correction-panel">
+      <div class="company-correction-head">
+        <div>
+          <strong>보정 필요 업체</strong>
+          <small>수량 구조·예약ID·총량변동·당일상품·OTA 확인이 필요한 업체</small>
+        </div>
+        <span>${fmtNumber(urgentCount)}개 미보정 · ${fmtNumber(appliedCount)}개 적용</span>
+      </div>
+      <div class="company-correction-list">
+        ${rows.length ? rows.map(({ company, profile }) => {
+          const latest = company.inventory?.latest || {};
+          return `
+            <article class="${profile.applied ? "applied" : ""}">
+              <div class="company-correction-title">
+                <div>
+                  <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+                  <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${fmtNumber(company.salesTarget?.score || 0)}점</small>
+                </div>
+                <span>${profile.applied ? "보정 적용" : "확인 필요"}</span>
+              </div>
+              <div class="company-correction-tags">
+                ${profile.issues.slice(0, 6).map((issue) => `<mark>${escapeHtml(issue.label)}</mark>`).join("")}
+              </div>
+              <ul>
+                ${profile.issues.slice(0, 4).map((issue) => `<li>${escapeHtml(issue.task)}</li>`).join("")}
+              </ul>
+              <div class="company-correction-meta">
+                <span>구조 ${escapeHtml(latest.structureLabel || "대기")}</span>
+                <span>신뢰도 ${escapeHtml(latest.confidenceGrade || "대기")}</span>
+                <span>${escapeHtml(company.manualCorrection?.note || "보정 메모 없음")}</span>
+              </div>
+              ${companyCorrectionFormHtml(company, true)}
+            </article>
+          `;
+        }).join("") : `<p class="empty">현재 보정 필요 업체가 없습니다.</p>`}
       </div>
     </div>
   `;
@@ -3131,6 +3239,7 @@ function renderCompanyMasterPanel() {
     ${companyMasterCrossKeywordPanel(master)}
     ${companyMasterSalesTargetsPanel(master)}
     ${companyMasterReviewQueuePanel(master)}
+    ${companyMasterCorrectionPanel(master)}
     ${companyMasterFilterPanel(master)}
     ${companyMasterListPanel(master)}
     <div class="company-master-rule">
