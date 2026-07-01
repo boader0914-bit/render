@@ -3131,6 +3131,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     manualCorrection,
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
     adminReview: company.adminReview || null,
+    adminReviewHistory: (company.adminReviewHistory || []).slice(-8),
     identityConfidence: companyIdentityConfidence(company)
   };
 }
@@ -3619,6 +3620,21 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
     if (!manualCorrectionHasValue(target.manualCorrection) && manualCorrectionHasValue(source.manualCorrection)) {
       target.manualCorrection = source.manualCorrection;
     }
+    target.manualCorrectionHistory = [
+      ...(target.manualCorrectionHistory || []),
+      ...(source.manualCorrectionHistory || [])
+    ]
+      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
+      .slice(-50);
+    if (!target.adminReview && source.adminReview) {
+      target.adminReview = source.adminReview;
+    }
+    target.adminReviewHistory = [
+      ...(target.adminReviewHistory || []),
+      ...(source.adminReviewHistory || [])
+    ]
+      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
+      .slice(-50);
     target.duplicateNotes = [
       ...(target.duplicateNotes || []),
       {
@@ -3725,7 +3741,18 @@ async function saveCompanyAdminReview(payload = {}) {
     throw error;
   }
   const meta = companyAdminReviewMeta(status);
+  const savedAt = new Date().toISOString();
+  let historyEntry = null;
   if (!status || status === "clear") {
+    historyEntry = {
+      at: savedAt,
+      action: "clear",
+      previousStatus: company.adminReview?.status || "",
+      previousLabel: company.adminReview?.label || "",
+      label: "검증 해제",
+      note: String(payload.note || "").trim(),
+      source: "admin"
+    };
     company.adminReview = null;
   } else if (!meta) {
     const error = new Error("지원하지 않는 검증 상태입니다.");
@@ -3737,13 +3764,26 @@ async function saveCompanyAdminReview(payload = {}) {
       label: meta.label,
       note: String(payload.note || "").trim(),
       source: "admin",
-      updatedAt: new Date().toISOString()
+      updatedAt: savedAt
+    };
+    historyEntry = {
+      at: savedAt,
+      action: "save",
+      status,
+      label: meta.label,
+      category: meta.category || "",
+      note: company.adminReview.note,
+      source: "admin"
     };
   }
+  company.adminReviewHistory = [
+    ...(company.adminReviewHistory || []),
+    historyEntry
+  ].filter(Boolean).slice(-50);
   company.duplicateNotes = [
     ...(company.duplicateNotes || []),
     {
-      at: new Date().toISOString(),
+      at: savedAt,
       reason: company.adminReview ? `관리자 검증: ${company.adminReview.label}` : "관리자 검증 해제"
     }
   ].slice(-40);
@@ -5020,8 +5060,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-company-check-priority-display"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-company-check-priority-display"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-admin-review-loop"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-admin-review-loop"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

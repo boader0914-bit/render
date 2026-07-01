@@ -2908,6 +2908,23 @@ a.platform-row:hover {
   padding: 10px;
 }
 
+.company-review-control {
+  display: grid;
+  gap: 8px;
+}
+
+.company-review-control input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 10px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
 .company-review-actions {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3861,6 +3878,64 @@ a.platform-row:hover {
   font-size: 16px;
   font-weight: 950;
   line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.company-review-history {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.company-review-history > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.company-review-history strong,
+.company-review-history b {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.company-review-history > div:first-child span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-review-history article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  border-top: 1px solid #e8edf5;
+  padding-top: 8px;
+}
+
+.company-review-history article span,
+.company-review-history article small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.company-review-history article small {
+  grid-column: 1 / -1;
   overflow-wrap: anywhere;
 }
 
@@ -5867,6 +5942,16 @@ a.platform-row:hover {
 
   .company-master-row-main small {
     text-align: left;
+  }
+
+  .company-review-history > div:first-child,
+  .company-review-history article {
+    display: grid;
+  }
+
+  .company-review-history > div:first-child span,
+  .company-review-history article span {
+    justify-self: start;
   }
 
   .company-check-priority {

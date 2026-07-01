@@ -183,6 +183,16 @@ function monthDay(value) {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+function compactDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 16);
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hour}:${minute}`;
+}
+
 function isoAddDays(value, offset) {
   const date = parseDate(value);
   if (!date) return "";
@@ -2845,6 +2855,27 @@ function sheetManualCorrectionForm(profile = {}, item = {}) {
   `;
 }
 
+function companyReviewHistoryPanel(profile = {}) {
+  const rows = (profile.adminReviewHistory || []).slice().reverse().slice(0, 5);
+  const current = profile.adminReview || null;
+  if (!rows.length && !current) return "";
+  return `
+    <div class="company-review-history">
+      <div>
+        <strong>관리자 판단 이력</strong>
+        <span>${current ? escapeHtml(current.label || companyAdminReviewLabel(current.status)) : "현재 판단 없음"}</span>
+      </div>
+      ${rows.length ? rows.map((row) => `
+        <article>
+          <b>${escapeHtml(row.label || companyAdminReviewLabel(row.status) || "판단 기록")}</b>
+          <span>${escapeHtml(compactDateTime(row.at))}</span>
+          ${row.note ? `<small>${escapeHtml(row.note)}</small>` : `<small>${escapeHtml(row.action === "clear" ? "검증 상태를 해제했습니다." : "메모 없이 저장됨")}</small>`}
+        </article>
+      `).join("") : `<article><b>${escapeHtml(current.label || companyAdminReviewLabel(current.status))}</b><span>${escapeHtml(compactDateTime(current.updatedAt))}</span><small>${escapeHtml(current.note || "현재 저장된 판단입니다.")}</small></article>`}
+    </div>
+  `;
+}
+
 function sheetCompanyProfile(item = {}) {
   const profile = item.companyProfile || {};
   if (!profile.companyId) return "";
@@ -2874,6 +2905,7 @@ function sheetCompanyProfile(item = {}) {
         `).join("")}
       </div>
       ${companyProfileKeywordList(profile)}
+      ${companyReviewHistoryPanel(profile)}
       ${sheetManualCorrectionEvidence(item)}
       ${sheetManualCorrectionForm(profile, item)}
     </section>
@@ -3161,6 +3193,7 @@ function companyAdminReviewBadgeHtml(company = {}) {
 function companyReviewActionsHtml(company = {}, compact = false) {
   const companyId = company.companyId || "";
   const current = company.adminReview?.status || "";
+  const note = company.adminReview?.note || "";
   const actions = [
     ["confirmed", "맞음"],
     ["hold", "보류"],
@@ -3168,11 +3201,14 @@ function companyReviewActionsHtml(company = {}, compact = false) {
     ["exclude", "제외"]
   ];
   return `
-    <div class="company-review-actions ${compact ? "compact" : ""}">
-      ${actions.map(([status, label]) => `
-        <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}">${label}</button>
-      `).join("")}
-      ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}">해제</button>` : ""}
+    <div class="company-review-control ${compact ? "compact" : ""}" data-company-review-control data-company-id="${escapeHtml(companyId)}">
+      <input type="text" data-company-review-note value="${escapeHtml(note)}" placeholder="판단 메모 선택 입력">
+      <div class="company-review-actions ${compact ? "compact" : ""}">
+        ${actions.map(([status, label]) => `
+          <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}">${label}</button>
+        `).join("")}
+        ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}">해제</button>` : ""}
+      </div>
     </div>
   `;
 }
@@ -5581,13 +5617,15 @@ async function saveCompanyAdminReview(button) {
   const companyId = button?.dataset?.companyId || "";
   const status = button?.dataset?.companyReviewAction || "";
   if (!companyId || !status) return;
+  const control = button.closest("[data-company-review-control]");
+  const note = control?.querySelector("[data-company-review-note]")?.value || "";
   button.disabled = true;
   setStatus(status === "clear" ? "검증 해제 중" : "검증 저장 중");
   try {
     const data = await fetchJson("/api/company-master/admin-review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId, status })
+      body: JSON.stringify({ companyId, status, note })
     });
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
