@@ -2518,8 +2518,25 @@ function parseReservationRateDetail(detail, checkIn) {
   return rows.filter((row) => row.stayDate);
 }
 
+function manualCorrectionHasValue(correction = {}) {
+  if (!correction || correction.active === false) return false;
+  const lodging = Number(correction.lodgingBasisTotal);
+  const dayUse = Number(correction.dayUseBasisTotal);
+  const note = String(correction.note || "").trim();
+  return manualCorrectionHasBasis(correction) || note.length > 0;
+}
+
+function manualCorrectionHasBasis(correction = {}) {
+  if (!correction || correction.active === false) return false;
+  const lodging = Number(correction.lodgingBasisTotal);
+  const dayUse = Number(correction.dayUseBasisTotal);
+  return (Number.isFinite(lodging) && lodging > 0)
+    || (Number.isFinite(dayUse) && dayUse > 0);
+}
+
 function hasActiveManualCorrection(item = {}) {
-  return Boolean(item.manualCorrectionApplied || item.companyManualCorrection?.active);
+  const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || item.manualCorrection || null;
+  return manualCorrectionHasBasis(correction);
 }
 
 function applyOfflineReservationBasis(rows, basisTotal, options = {}) {
@@ -2994,7 +3011,7 @@ function applyManualBasisToSalesSummary(summary = {}, basisTotal) {
 }
 
 function salesSignalWithManualCorrection(signal = {}, correction = {}) {
-  if (!correction || correction.active === false) return signal || {};
+  if (!manualCorrectionHasBasis(correction)) return signal || {};
   const lodging = applyManualBasisToSalesSummary(signal.lodging || {}, correction.lodgingBasisTotal);
   const dayUse = applyManualBasisToSalesSummary(signal.dayUse || {}, correction.dayUseBasisTotal);
   const applied = Boolean(lodging.manualCorrectionApplied || dayUse.manualCorrectionApplied);
@@ -3023,7 +3040,7 @@ function salesSignalWithManualCorrection(signal = {}, correction = {}) {
 function companyInventoryWithManualCorrection(company = {}) {
   const inventory = company.inventory || {};
   const correction = company.manualCorrection;
-  if (!correction || correction.active === false) return inventory;
+  if (!manualCorrectionHasBasis(correction)) return inventory;
   const latest = inventory.latest || {};
   const correctedSignal = salesSignalWithManualCorrection(latest.salesSignal || {}, correction);
   return {
@@ -3049,7 +3066,7 @@ function companyInventoryWithManualCorrection(company = {}) {
 function companyCorrectionStatus(company = {}, inventory = null) {
   const correction = company.manualCorrection;
   const latest = (inventory || company.inventory || {}).latest || {};
-  if (correction && correction.active !== false) {
+  if (manualCorrectionHasValue(correction)) {
     const parts = [];
     if (correction.lodgingBasisTotal) parts.push(`숙박 ${correction.lodgingBasisTotal}개`);
     if (correction.dayUseBasisTotal) parts.push(`데이유즈 ${correction.dayUseBasisTotal}회`);
@@ -3072,6 +3089,7 @@ function companyCorrectionStatus(company = {}, inventory = null) {
 
 function companyRecordSummary(company = {}, activeKeywordKey = "") {
   const inventory = companyInventoryWithManualCorrection(company);
+  const manualCorrection = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : null;
   const keywords = Object.values(company.keywords || {})
     .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
     .map((row) => {
@@ -3110,7 +3128,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     exposureLayer,
     inventory,
     correctionStatus: companyCorrectionStatus(company, inventory),
-    manualCorrection: company.manualCorrection || null,
+    manualCorrection,
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
     adminReview: company.adminReview || null,
     identityConfidence: companyIdentityConfidence(company)
@@ -3343,7 +3361,7 @@ function companySalesTargetProfile(company = {}) {
     reasons.push(`광역 키워드 ${regionalKeywordCount}개 확인`);
   }
 
-  if (company.manualCorrection) {
+  if (manualCorrectionHasValue(company.manualCorrection)) {
     scoreParts.push(4);
     reasons.push("수동 보정값 보유");
   }
@@ -3427,11 +3445,11 @@ function summarizeCompanySalesTargets(companies = []) {
 
 function applyCompanyManualCorrection(item, company) {
   const correction = company?.manualCorrection;
-  if (!correction || correction.active === false) return item;
+  if (!manualCorrectionHasValue(correction)) return item;
   const next = {
     ...item,
     companyManualCorrection: correction,
-    manualCorrectionApplied: true,
+    manualCorrectionApplied: false,
     rawWeeklyBasisTotal: item.weeklyBasisTotal ?? null,
     rawNightTotalStock: item.nightTotalStock ?? item.totalRooms ?? null,
     rawDayUseWeeklyBasisTotal: item.dayUseWeeklyBasisTotal ?? null,
@@ -3443,11 +3461,13 @@ function applyCompanyManualCorrection(item, company) {
     next.weeklyBasisTotal = Math.round(lodgingBasis);
     next.nightTotalStock = Math.round(lodgingBasis);
     next.manualLodgingBasisTotal = Math.round(lodgingBasis);
+    next.manualCorrectionApplied = true;
   }
   if (Number.isFinite(dayUseBasis) && dayUseBasis > 0) {
     next.dayUseWeeklyBasisTotal = Math.round(dayUseBasis);
     next.dayUseTotalStock = Math.round(dayUseBasis);
     next.manualDayUseBasisTotal = Math.round(dayUseBasis);
+    next.manualCorrectionApplied = true;
   }
   return next;
 }
@@ -3575,7 +3595,9 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
       target.keywords[keywordKey] = mergeCompanyKeyword(target.keywords[keywordKey], sourceKeyword);
     }
     target.inventory = mergeCompanyInventory(target.inventory || {}, source.inventory || {});
-    if (!target.manualCorrection && source.manualCorrection) target.manualCorrection = source.manualCorrection;
+    if (!manualCorrectionHasValue(target.manualCorrection) && manualCorrectionHasValue(source.manualCorrection)) {
+      target.manualCorrection = source.manualCorrection;
+    }
     target.duplicateNotes = [
       ...(target.duplicateNotes || []),
       {
@@ -3630,25 +3652,27 @@ async function saveCompanyManualCorrection(payload = {}) {
     throw error;
   }
   const savedAt = new Date().toISOString();
-  if (payload.active === false) {
+  const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
+  const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
+  const nextCorrection = {
+    active: true,
+    lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
+    dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
+    note: String(payload.note || "").trim(),
+    source: "admin",
+    updatedAt: savedAt
+  };
+  const shouldClear = payload.active === false || !manualCorrectionHasValue(nextCorrection);
+  if (shouldClear) {
     company.manualCorrection = null;
   } else {
-    const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
-    const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
-    company.manualCorrection = {
-      active: true,
-      lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
-      dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
-      note: String(payload.note || "").trim(),
-      source: "admin",
-      updatedAt: savedAt
-    };
+    company.manualCorrection = nextCorrection;
   }
   company.manualCorrectionHistory = [
     ...(company.manualCorrectionHistory || []),
     {
       at: savedAt,
-      action: payload.active === false ? "clear" : "save",
+      action: shouldClear ? "clear" : "save",
       lodgingBasisTotal: company.manualCorrection?.lodgingBasisTotal || null,
       dayUseBasisTotal: company.manualCorrection?.dayUseBasisTotal || null,
       note: company.manualCorrection?.note || ""
@@ -3658,14 +3682,14 @@ async function saveCompanyManualCorrection(payload = {}) {
     ...(company.duplicateNotes || []),
     {
       at: savedAt,
-      reason: payload.active === false ? "수동 보정 해제" : "수동 보정 저장"
+      reason: shouldClear ? "수동 보정 해제" : "수동 보정 저장"
     }
   ].slice(-40);
   await writeCompanyMaster(master);
   return {
     ...(await summarizeCompanyMaster()),
     company: companyRecordSummary(company),
-    resolved: { action: payload.active === false ? "clearManualCorrection" : "saveManualCorrection", companyId }
+    resolved: { action: shouldClear ? "clearManualCorrection" : "saveManualCorrection", companyId }
   };
 }
 
@@ -4975,8 +4999,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-correction-status-release"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-correction-status-release"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-empty-correction-guard"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-empty-correction-guard"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

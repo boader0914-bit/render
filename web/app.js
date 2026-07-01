@@ -730,7 +730,22 @@ function weeklyRows(item = {}, kind = "lodging") {
 
 function activeManualCorrection(item = {}) {
   const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
-  return Boolean(item.manualCorrectionApplied || correction.active);
+  return manualCorrectionHasBasis(correction);
+}
+
+function manualCorrectionHasValue(correction = {}) {
+  if (!correction || correction.active === false) return false;
+  const lodging = finiteNumber(correction.lodgingBasisTotal, 0);
+  const dayUse = finiteNumber(correction.dayUseBasisTotal, 0);
+  const note = String(correction.note || "").trim();
+  return manualCorrectionHasBasis(correction) || note.length > 0;
+}
+
+function manualCorrectionHasBasis(correction = {}) {
+  if (!correction || correction.active === false) return false;
+  const lodging = finiteNumber(correction.lodgingBasisTotal, 0);
+  const dayUse = finiteNumber(correction.dayUseBasisTotal, 0);
+  return lodging > 0 || dayUse > 0;
 }
 
 function basisTotalForRows(rows = [], explicitBasis = 0, authoritative = false) {
@@ -930,8 +945,7 @@ function otaVerificationBadge(item = {}) {
 
 function manualCorrectionInfo(item = {}) {
   const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
-  const hasCorrectionValue = Boolean(correction.lodgingBasisTotal || correction.dayUseBasisTotal || correction.note);
-  if (!correction || correction.active === false || !hasCorrectionValue) return null;
+  if (!manualCorrectionHasValue(correction)) return null;
   const lodging = finiteNumber(correction.lodgingBasisTotal, 0);
   const dayUse = finiteNumber(correction.dayUseBasisTotal, 0);
   const parts = [];
@@ -2804,7 +2818,8 @@ function companyProfileKeywordList(profile = {}) {
 
 function sheetManualCorrectionForm(profile = {}, item = {}) {
   if (!profile.companyId) return "";
-  const correction = profile.manualCorrection || item.companyManualCorrection || {};
+  const candidateCorrection = profile.manualCorrection || item.companyManualCorrection || {};
+  const correction = manualCorrectionHasValue(candidateCorrection) ? candidateCorrection : {};
   return `
     <div class="company-manual-form" data-company-manual-form data-company-id="${escapeHtml(profile.companyId)}">
       <div>
@@ -3053,6 +3068,7 @@ function companyNeedsCorrection(company = {}) {
   const tags = company.salesTarget?.priorityTags || [];
   const reasons = company.salesTarget?.reasons || [];
   const latest = company.inventory?.latest || {};
+  const hasManualCorrection = manualCorrectionHasValue(company.manualCorrection);
   const hasText = (text) => tags.some((tag) => String(tag).includes(text)) || reasons.some((reason) => String(reason).includes(text));
   const issues = [];
   if (signals.structureWeak || hasText("수량구조") || ["C", "D", "E"].includes(String(latest.confidenceGrade || "").toUpperCase())) {
@@ -3076,13 +3092,13 @@ function companyNeedsCorrection(company = {}) {
   return {
     needed: company.adminReview?.status === "manual_needed" || issues.length > 0,
     issues,
-    applied: Boolean(company.manualCorrection),
-    priority: (company.adminReview?.status === "manual_needed" ? 40 : 0) + issues.length * 12 + (company.manualCorrection ? -18 : 0) + Number(company.salesTarget?.score || 0) / 10
+    applied: hasManualCorrection,
+    priority: (company.adminReview?.status === "manual_needed" ? 40 : 0) + issues.length * 12 + (hasManualCorrection ? -18 : 0) + Number(company.salesTarget?.score || 0) / 10
   };
 }
 
 function companyCorrectionFormHtml(company = {}, compact = false) {
-  const correction = company.manualCorrection || {};
+  const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
   return `
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
       <div>
@@ -3188,10 +3204,12 @@ function companyMasterCorrectionPanel(master = {}) {
       <div class="company-correction-list">
         ${rows.length ? rows.map(({ company, profile }) => {
           const latest = company.inventory?.latest || {};
+          const hasManualCorrection = manualCorrectionHasValue(company.manualCorrection);
           const correctionStatus = company.correctionStatus || {
-            label: company.manualCorrection ? "관리자 보정" : "자동추정",
+            label: hasManualCorrection ? "관리자 보정" : "자동추정",
             detail: latest.confidenceGrade ? `내부 신뢰도 ${latest.confidenceGrade}` : "추정 대기"
           };
+          const correctionNote = hasManualCorrection ? company.manualCorrection?.note : "";
           return `
             <article class="${profile.applied ? "applied" : ""}">
               <div class="company-correction-title">
@@ -3210,7 +3228,7 @@ function companyMasterCorrectionPanel(master = {}) {
               <div class="company-correction-meta">
                 <span>구조 ${escapeHtml(latest.structureLabel || "대기")}</span>
                 <span>${escapeHtml(correctionStatus.detail || "자동추정")}</span>
-                <span>${escapeHtml(company.manualCorrection?.note || "보정 메모 없음")}</span>
+                <span>${escapeHtml(correctionNote || "보정 메모 없음")}</span>
               </div>
               ${companyCorrectionFormHtml(company, true)}
             </article>
@@ -5199,15 +5217,20 @@ async function saveCompanyCorrection(button, clear = false) {
   const companyId = button?.dataset?.companyId || form?.dataset?.companyId || state.selectedItem?.companyId || "";
   if (!companyId) return;
   button.disabled = true;
-  setStatus(clear ? "보정 해제 중" : "보정 저장 중");
   const selectedCompanyId = state.selectedItem?.companyId || companyId;
-  const payload = clear
+  const lodgingBasisTotal = form?.querySelector("[data-manual-lodging]")?.value || "";
+  const dayUseBasisTotal = form?.querySelector("[data-manual-dayuse]")?.value || "";
+  const note = form?.querySelector("[data-manual-note]")?.value || "";
+  const emptySave = !clear && !String(lodgingBasisTotal).trim() && !String(dayUseBasisTotal).trim() && !String(note).trim();
+  const shouldClear = clear || emptySave;
+  setStatus(shouldClear ? "보정 해제 중" : "보정 저장 중");
+  const payload = shouldClear
     ? { companyId, active: false }
     : {
         companyId,
-        lodgingBasisTotal: form?.querySelector("[data-manual-lodging]")?.value || "",
-        dayUseBasisTotal: form?.querySelector("[data-manual-dayuse]")?.value || "",
-        note: form?.querySelector("[data-manual-note]")?.value || ""
+        lodgingBasisTotal,
+        dayUseBasisTotal,
+        note
       };
   try {
     const data = await fetchJson("/api/company-master/manual-correction", {
@@ -5224,7 +5247,7 @@ async function saveCompanyCorrection(button, clear = false) {
     } else {
       renderCompanyMasterPanel();
     }
-    setStatus(clear ? "보정 해제 완료" : "보정 저장 완료");
+    setStatus(shouldClear ? "보정 해제 완료" : "보정 저장 완료");
   } catch (error) {
     setStatus("보정 저장 실패");
     if (form) form.insertAdjacentHTML("beforeend", `<div class="empty">보정 저장 실패: ${escapeHtml(error.message)}</div>`);
