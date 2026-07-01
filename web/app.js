@@ -3019,6 +3019,119 @@ function companyMasterKeywordText(company = {}) {
   }).join(" · ");
 }
 
+function companyMasterKeywordChips(company = {}, limit = 6) {
+  const keywords = company.keywords || [];
+  if (!keywords.length) return `<div class="company-keyword-chips"><span>키워드 없음</span></div>`;
+  return `
+    <div class="company-keyword-chips">
+      ${keywords.slice(0, limit).map((row) => {
+        const rank = row.bestRank ? `${fmtNumber(row.bestRank)}위` : "순위대기";
+        const latest = row.latestRank && row.latestRank !== row.bestRank ? ` / 최근 ${fmtNumber(row.latestRank)}위` : "";
+        return `<span>${escapeHtml(row.keyword || "키워드")} <b>${escapeHtml(rank + latest)}</b></span>`;
+      }).join("")}
+      ${keywords.length > limit ? `<span>+${fmtNumber(keywords.length - limit)}개</span>` : ""}
+    </div>
+  `;
+}
+
+function companyMasterIdentityTag(company = {}) {
+  const level = company.identityConfidence?.level || "review";
+  const label = company.identityConfidence?.label || "검토 필요";
+  return `<span class="company-identity-tag ${escapeHtml(level)}">${escapeHtml(label)}</span>`;
+}
+
+function companyMasterCorrectionTag(company = {}) {
+  const status = company.correctionStatus || {};
+  const isAdmin = status.key === "admin_override" || manualCorrectionHasValue(company.manualCorrection);
+  return `<span class="company-correction-status ${isAdmin ? "admin" : "auto"}">${escapeHtml(isAdmin ? "관리자 보정" : "자동추정")}</span>`;
+}
+
+function companyMasterVerificationItem(company = {}, meta = "") {
+  return `
+    <article>
+      <div>
+        <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+        <span>${escapeHtml(company.exposureLayer?.label || "분류 대기")}</span>
+      </div>
+      <small>${escapeHtml(meta || company.salesTarget?.recommendation || "검증 정보 대기")}</small>
+      <div class="company-verification-tags">
+        ${companyMasterIdentityTag(company)}
+        ${companyMasterCorrectionTag(company)}
+        <span>${fmtNumber(company.keywordCount || 0)}키워드</span>
+        <span>${fmtNumber(company.runCount || 0)}회</span>
+      </div>
+      ${companyMasterKeywordChips(company, 4)}
+    </article>
+  `;
+}
+
+function companyMasterVerificationPanel(master = {}) {
+  const companies = master.companies || [];
+  if (!companies.length) return "";
+  const trusted = companies.filter((company) => ["certain", "high"].includes(company.identityConfidence?.level) || (company.placeIds || []).length || (company.bookingBusinessIds || []).length);
+  const merged = companies
+    .filter((company) => Number(company.keywordCount || 0) >= 2)
+    .sort((a, b) => (b.keywordCount || 0) - (a.keywordCount || 0) || (b.runCount || 0) - (a.runCount || 0));
+  const corrections = companies
+    .filter((company) => manualCorrectionHasValue(company.manualCorrection))
+    .sort((a, b) => String(b.correctionStatus?.updatedAt || "").localeCompare(String(a.correctionStatus?.updatedAt || "")));
+  const review = companies
+    .map((company) => ({ company, profile: companyNeedsCorrection(company) }))
+    .filter(({ company, profile }) => profile.needed || company.identityConfidence?.level === "review")
+    .sort((a, b) => b.profile.priority - a.profile.priority || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
+  const latestSeenAt = companies.map((company) => company.lastSeenAt).filter(Boolean).sort().at(-1) || "";
+  const recentDate = master.history?.latestCollectedAt || master.latestCollectedAt || latestSeenAt;
+  const renderLane = (title, note, rows, emptyText, metaBuilder) => `
+    <div class="company-verification-lane">
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(note)}</small>
+      </div>
+      ${rows.length ? rows.slice(0, 4).map((company) => companyMasterVerificationItem(company, metaBuilder ? metaBuilder(company) : "")).join("") : `<p class="empty">${escapeHtml(emptyText)}</p>`}
+    </div>
+  `;
+  return `
+    <section class="company-verification-panel">
+      <div class="company-verification-head">
+        <div>
+          <strong>업체 DB 검증</strong>
+          <small>고유키, 키워드 병합, 보정 재사용 상태를 먼저 확인합니다.</small>
+        </div>
+        <span>${escapeHtml(recentDate ? recentDate.slice(0, 10) : "누적 DB")}</span>
+      </div>
+      <div class="company-verification-metrics">
+        <article><span>고유키 안정</span><strong>${fmtNumber(trusted.length)}</strong><small>place_id/예약ID 기반</small></article>
+        <article><span>키워드 병합</span><strong>${fmtNumber(merged.length)}</strong><small>2개 이상 키워드 연결</small></article>
+        <article><span>보정 재사용</span><strong>${fmtNumber(corrections.length)}</strong><small>업체 단위 보정값</small></article>
+        <article><span>확인 필요</span><strong>${fmtNumber(review.length)}</strong><small>수량/ID/OTA 검토</small></article>
+      </div>
+      <div class="company-verification-grid">
+        ${renderLane(
+          "보정 재사용",
+          "한 번 저장한 보정값이 다른 키워드 수집에도 붙는 업체",
+          corrections,
+          "현재 관리자 보정값이 있는 업체가 없습니다.",
+          (company) => company.correctionStatus?.detail || "관리자 보정값 기준"
+        )}
+        ${renderLane(
+          "키워드 병합 확인",
+          "권역·지역·업체명 검색이 같은 업체로 합쳐진 사례",
+          merged,
+          "아직 2개 이상 키워드가 연결된 업체가 없습니다.",
+          (company) => `${fmtNumber(company.keywordCount || 0)}개 키워드 · 최고 ${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "순위대기"}`
+        )}
+        ${renderLane(
+          "확인 필요",
+          "판단이 흔들릴 수 있어 관리자 확인이 필요한 업체",
+          review.map((entry) => entry.company),
+          "현재 확인 필요 업체가 없습니다.",
+          (company) => (company.salesTarget?.reasons || []).slice(0, 2).join(" · ") || company.identityConfidence?.reason || "추가 확인 필요"
+        )}
+      </div>
+    </section>
+  `;
+}
+
 function companySalesTargetTagHtml(company = {}, limit = 6) {
   const tags = company.salesTarget?.priorityTags || [];
   if (!tags.length) return "";
@@ -3310,18 +3423,20 @@ function companyMasterListPanel(master = {}) {
           <article>
             <div class="company-master-row-main">
               <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
-              <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.identityConfidence?.label || "검토 필요")}</small>
+              <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.companyId || "고유키 대기")}</small>
             </div>
             <div class="company-master-row-tags">
               <span>${escapeHtml(company.exposureLayer?.label || "분류 대기")}</span>
               <span>${escapeHtml(companyTargetCategoryLabel(company.salesTarget?.category))}</span>
+              ${companyMasterIdentityTag(company)}
+              ${companyMasterCorrectionTag(company)}
               ${companyAdminReviewBadgeHtml(company)}
               <span>${fmtNumber(company.salesTarget?.score || 0)}점</span>
               <span>${fmtNumber(company.keywordCount || 0)}키워드</span>
               <span>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "순위대기"}</span>
             </div>
             ${companySalesTargetTagHtml(company, 6)}
-            <p>${escapeHtml(companyMasterKeywordText(company))}</p>
+            ${companyMasterKeywordChips(company, 6)}
             <small>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 2).join(" · ") || company.salesTarget?.recommendation || "추가 수집 후 판단")}</small>
             ${companyReviewActionsHtml(company, true)}
           </article>
@@ -3374,6 +3489,7 @@ function renderCompanyMasterPanel() {
       <article><span>이번 결과</span><strong>${fmtNumber(master.currentRunCompanies || 0)}</strong><small>자동 upsert</small></article>
       <article><span>중복 후보</span><strong>${fmtNumber(master.duplicateCandidateCount || 0)}</strong><small>수동 검토</small></article>
     </div>
+    ${companyMasterVerificationPanel(master)}
     ${companyMasterCrossKeywordPanel(master)}
     ${companyMasterSalesTargetsPanel(master)}
     ${companyMasterReviewQueuePanel(master)}

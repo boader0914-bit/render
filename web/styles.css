@@ -2161,7 +2161,9 @@ a.platform-row:hover {
 .company-master-tools,
 .company-master-backfill,
 .company-cross-panel,
-.company-cross-list {
+.company-cross-list,
+.company-verification-panel,
+.company-verification-lane {
   display: grid;
   gap: 10px;
 }
@@ -2203,6 +2205,129 @@ a.platform-row:hover {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+}
+
+.company-verification-panel {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff, #f7fbff);
+  padding: 14px;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, .05);
+}
+
+.company-verification-head,
+.company-verification-lane > div:first-child,
+.company-verification-panel article > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.company-verification-head strong,
+.company-verification-lane strong,
+.company-verification-panel b {
+  display: block;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.company-verification-head small,
+.company-verification-head span,
+.company-verification-lane small,
+.company-verification-panel article small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.company-verification-head > span,
+.company-verification-panel article > div:first-child span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-verification-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.company-verification-metrics article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.company-verification-metrics span,
+.company-verification-metrics small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.company-verification-metrics strong {
+  display: block;
+  margin: 4px 0;
+  color: var(--blue);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
+.company-verification-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.company-verification-lane {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.company-verification-panel article {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #eef2f7;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 10px;
+}
+
+.company-verification-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.company-verification-tags span {
+  border: 1px solid #e8edf5;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: var(--muted);
+  padding: 5px 7px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 .company-cross-metrics {
@@ -2675,6 +2800,74 @@ a.platform-row:hover {
   font-size: 12px;
   font-weight: 850;
   white-space: nowrap;
+}
+
+.company-master-row-tags .company-identity-tag.certain,
+.company-verification-tags .company-identity-tag.certain {
+  border-color: #b7e4cc;
+  background: #ecfdf3;
+  color: #067647;
+}
+
+.company-master-row-tags .company-identity-tag.high,
+.company-verification-tags .company-identity-tag.high {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #175cd3;
+}
+
+.company-master-row-tags .company-identity-tag.medium,
+.company-verification-tags .company-identity-tag.medium {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.company-master-row-tags .company-identity-tag.review,
+.company-verification-tags .company-identity-tag.review {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
+}
+
+.company-master-row-tags .company-correction-status.admin,
+.company-verification-tags .company-correction-status.admin {
+  border-color: #b7e4cc;
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.company-master-row-tags .company-correction-status.auto,
+.company-verification-tags .company-correction-status.auto {
+  border-color: #e8edf5;
+  background: #f8fafc;
+  color: #475467;
+}
+
+.company-keyword-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.company-keyword-chips span {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f4f8ff;
+  color: var(--blue-dark);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.company-keyword-chips b {
+  color: var(--blue);
+  font-size: inherit;
+  font-weight: 950;
 }
 
 .company-master-rule p {
@@ -5398,6 +5591,8 @@ a.platform-row:hover {
 
   .company-master-metrics,
   .company-cross-metrics,
+  .company-verification-metrics,
+  .company-verification-grid,
   .company-sales-metrics,
   .target-board,
   .company-profile-keywords {
@@ -5417,6 +5612,9 @@ a.platform-row:hover {
   .company-review-queue article > div,
   .company-correction-head,
   .company-correction-title,
+  .company-verification-head,
+  .company-verification-lane > div:first-child,
+  .company-verification-panel article > div:first-child,
   .target-lane-head,
   .company-master-list-head,
   .company-master-row-main {

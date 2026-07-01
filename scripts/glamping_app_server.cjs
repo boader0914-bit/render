@@ -3135,6 +3135,26 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
   };
 }
 
+function companyIdSetsOverlap(first = [], second = []) {
+  const left = new Set((first || []).map((value) => String(value || "").trim()).filter(Boolean));
+  return (second || []).some((value) => left.has(String(value || "").trim()));
+}
+
+function companiesHaveDistinctStrongIds(companies = [], field = "") {
+  if (!companies.length || !companies.every((company) => (company[field] || []).length)) return false;
+  for (let i = 0; i < companies.length; i += 1) {
+    for (let j = i + 1; j < companies.length; j += 1) {
+      if (companyIdSetsOverlap(companies[i][field], companies[j][field])) return false;
+    }
+  }
+  return true;
+}
+
+function shouldSuppressDuplicateCandidate(companies = []) {
+  return companiesHaveDistinctStrongIds(companies, "placeIds")
+    || companiesHaveDistinctStrongIds(companies, "bookingBusinessIds");
+}
+
 function findCompanyDuplicateCandidates(master) {
   const buckets = new Map();
   for (const company of Object.values(master.companies || {})) {
@@ -3148,6 +3168,7 @@ function findCompanyDuplicateCandidates(master) {
   }
   return [...buckets.entries()]
     .filter(([key, companies]) => companies.length > 1 && master.duplicateResolutions?.[key] !== "separate")
+    .filter(([, companies]) => !shouldSuppressDuplicateCandidate(companies))
     .map(([candidateKey, companies]) => ({
       candidateKey,
       reason: "유사 업체명 + 지역",
@@ -4999,8 +5020,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-empty-correction-guard"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-empty-correction-guard"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260701-master-verification-ui"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260701-master-verification-ui"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
