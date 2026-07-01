@@ -232,6 +232,42 @@ function productModeLabel(value) {
   return "전체";
 }
 
+const REGIONAL_GLAMPING_BASES = new Set([
+  "\uACBD\uB0A8", "\uACBD\uC0C1\uB0A8\uB3C4", "\uACBD\uB0A8\uB3C4",
+  "\uACBD\uBD81", "\uACBD\uC0C1\uBD81\uB3C4", "\uACBD\uBD81\uB3C4",
+  "\uACBD\uAE30", "\uACBD\uAE30\uB3C4", "\uACBD\uAE30\uBD81\uBD80", "\uACBD\uAE30\uB0A8\uBD80", "\uC218\uB3C4\uAD8C", "\uC11C\uC6B8\uADFC\uAD50",
+  "\uAC15\uC6D0", "\uAC15\uC6D0\uB3C4", "\uC81C\uC8FC", "\uC81C\uC8FC\uB3C4",
+  "\uC804\uBD81", "\uC804\uB77C\uBD81\uB3C4", "\uC804\uBD81\uD2B9\uBCC4\uC790\uCE58\uB3C4",
+  "\uC804\uB0A8", "\uC804\uB77C\uB0A8\uB3C4",
+  "\uCDA9\uB0A8", "\uCDA9\uCCAD\uB0A8\uB3C4", "\uCDA9\uBD81", "\uCDA9\uCCAD\uBD81\uB3C4",
+  "\uC11C\uC6B8", "\uBD80\uC0B0", "\uB300\uAD6C", "\uC778\uCC9C", "\uAD11\uC8FC", "\uB300\uC804", "\uC6B8\uC0B0", "\uC138\uC885",
+  "\uD3EC\uCC9C", "\uAC00\uD3C9", "\uC591\uD3C9", "\uC5F0\uCC9C", "\uD30C\uC8FC", "\uAE40\uD3EC", "\uAC15\uD654", "\uB0A8\uC591\uC8FC", "\uC591\uC8FC", "\uC758\uC815\uBD80",
+  "\uC548\uC131", "\uC774\uCC9C", "\uC6A9\uC778", "\uC5EC\uC8FC", "\uD3C9\uD0DD", "\uD654\uC131", "\uC624\uC0B0", "\uAD11\uC8FC",
+  "\uC9C4\uC8FC", "\uC0AC\uCC9C", "\uC0B0\uCCAD", "\uB0A8\uD574", "\uD558\uB3D9", "\uD569\uCC9C", "\uAC70\uCC3D", "\uD568\uC591", "\uBC00\uC591", "\uAE40\uD574", "\uC591\uC0B0", "\uAC70\uC81C", "\uD1B5\uC601", "\uACE0\uC131", "\uCC3D\uB155", "\uD568\uC548", "\uC758\uB839", "\uCC3D\uC6D0",
+  "\uACBD\uC8FC", "\uD3EC\uD56D", "\uC548\uB3D9", "\uC601\uCC9C", "\uBB38\uACBD", "\uCCAD\uB3C4", "\uC131\uC8FC", "\uCE60\uACE1", "\uAE40\uCC9C", "\uAD6C\uBBF8", "\uC601\uC8FC", "\uC0C1\uC8FC", "\uC601\uB355", "\uC6B8\uC9C4",
+  "\uC804\uC8FC", "\uC644\uC8FC", "\uAD70\uC0B0", "\uC775\uC0B0", "\uBB34\uC8FC", "\uC9C4\uC548", "\uC7A5\uC218", "\uB0A8\uC6D0", "\uC784\uC2E4", "\uC21C\uCC3D", "\uACE0\uCC3D", "\uBD80\uC548", "\uC815\uC74D",
+  "\uCC9C\uC548", "\uC544\uC0B0", "\uACF5\uC8FC", "\uBCF4\uB839", "\uC11C\uC0B0", "\uB2F9\uC9C4", "\uBD80\uC5EC", "\uC608\uC0B0", "\uD64D\uC131", "\uD0DC\uC548",
+  "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9"
+]);
+
+function compactCrawlKeyword(value) {
+  return String(value || "").normalize("NFKC").replace(/\s+/g, "");
+}
+
+function looksLikeRegionalGlampingKeyword(value) {
+  const compact = compactCrawlKeyword(value);
+  const glamping = "\uAE00\uB7A8\uD551";
+  if (!compact.endsWith(glamping)) return false;
+  const base = compact.slice(0, -glamping.length);
+  if (!base || base.length > 10) return false;
+  const withoutAdminSuffix = base.replace(/(\uD2B9\uBCC4\uC790\uCE58\uB3C4|\uAD11\uC5ED\uC2DC|\uD2B9\uBCC4\uC2DC|\uD2B9\uBCC4\uC790\uCE58\uC2DC|\uC790\uCE58\uB3C4|\uC790\uCE58\uC2DC|\uC2DC|\uAD70|\uAD6C|\uB3C4)$/u, "");
+  return REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix);
+}
+
+function correctedSearchMode(keyword, mode) {
+  return mode === "company" && looksLikeRegionalGlampingKeyword(keyword) ? "keyword" : mode;
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   const text = await response.text();
@@ -5253,7 +5289,10 @@ async function loadRun(runId) {
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
   if (els.keywordInput) els.keywordInput.value = run.keyword || (run.label || "").split("·")[0].trim() || els.keywordInput.value;
-  if (els.searchModeInput) els.searchModeInput.value = run.searchMode || (run.keywordType === "company" ? "company" : "keyword");
+  if (els.searchModeInput) {
+    const runMode = run.searchMode || (run.keywordType === "company" ? "company" : "keyword");
+    els.searchModeInput.value = correctedSearchMode(run.keyword || "", runMode);
+  }
   renderAll();
   setStatus("준비");
 }
@@ -5475,11 +5514,17 @@ async function logout() {
 async function submitCrawl(event) {
   event.preventDefault();
   const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
+  const requestedMode = els.searchModeInput?.value || "keyword";
+  const resolvedMode = correctedSearchMode(els.keywordInput.value.trim(), requestedMode);
+  if (els.searchModeInput && resolvedMode !== requestedMode) {
+    els.searchModeInput.value = resolvedMode;
+    els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
+  }
   const payload = {
     keyword: els.keywordInput.value.trim(),
     checkIn: els.checkInInput.value,
     checkOut: els.checkOutInput.value,
-    searchMode: els.searchModeInput?.value || "keyword",
+    searchMode: resolvedMode,
     productMode: els.productModeInput.value
   };
   if (submitButton?.disabled) return;
