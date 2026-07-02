@@ -2076,6 +2076,8 @@ a.platform-row:hover {
 .target-board-hero article,
 .target-lane,
 .target-current-run,
+.sales-pipeline-panel,
+.target-followup-board,
 .target-action-card {
   min-width: 0;
   border: 1px solid var(--line);
@@ -2117,7 +2119,9 @@ a.platform-row:hover {
 }
 
 .target-lane,
-.target-current-run {
+.target-current-run,
+.sales-pipeline-panel,
+.target-followup-board {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -2152,9 +2156,14 @@ a.platform-row:hover {
 }
 
 .target-lane-list,
-.target-current-grid {
+.target-current-grid,
+.target-followup-list {
   display: grid;
   gap: 10px;
+}
+
+.target-followup-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .target-action-card {
@@ -2204,6 +2213,13 @@ a.platform-row:hover {
   font-weight: 950;
   line-height: 1.25;
   overflow-wrap: anywhere;
+}
+
+.target-badge-stack {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 5px;
 }
 
 .target-action-main {
@@ -2262,6 +2278,98 @@ a.platform-row:hover {
 .sales-contact-badge.bad {
   background: #fef3f2;
   color: #b42318;
+}
+
+.sales-followup-badge {
+  justify-self: end;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #475467;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sales-followup-badge.overdue {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.sales-followup-badge.today {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.sales-followup-badge.soon,
+.sales-followup-badge.needs-date {
+  background: #fff4df;
+  color: #b54708;
+}
+
+.sales-followup-badge.scheduled {
+  background: #eaf3ff;
+  color: var(--blue-dark);
+}
+
+.sales-followup-badge.closed {
+  background: #f2f4f7;
+  color: #667085;
+}
+
+.sales-pipeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+}
+
+.sales-pipeline-card {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+  padding: 11px;
+}
+
+.sales-pipeline-card span,
+.sales-pipeline-card small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sales-pipeline-card strong {
+  color: var(--ink);
+  font-size: 21px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.sales-pipeline-card.good,
+.sales-pipeline-card.strong {
+  border-color: #b7e4cc;
+  background: #f6fef9;
+}
+
+.sales-pipeline-card.progress,
+.sales-pipeline-card.wait {
+  border-color: #b9d5ff;
+  background: #f8fbff;
+}
+
+.sales-pipeline-card.hold {
+  border-color: #fedf89;
+  background: #fffcf5;
+}
+
+.sales-pipeline-card.bad {
+  border-color: #fecdca;
+  background: #fffbfa;
 }
 
 .target-execution-metrics {
@@ -2361,6 +2469,78 @@ a.platform-row:hover {
   font-size: 12px;
   font-weight: 950;
   white-space: nowrap;
+}
+
+.sales-contact-history {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.sales-contact-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sales-contact-history-head strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.sales-contact-history-head small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.sales-contact-history ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sales-contact-history li {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.sales-contact-history li > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.sales-contact-history li strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.35;
+}
+
+.sales-contact-history li small {
+  display: block;
+  color: #475467;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.sales-contact-history.empty-history {
+  background: #f9fafb;
 }
 
 .target-card-actions {
@@ -6867,6 +7047,8 @@ a.platform-row:hover {
   .target-board,
   .target-export-bar,
   .target-execution-metrics,
+  .sales-pipeline-grid,
+  .target-followup-list,
   .sales-contact-fields,
   .sales-contact-actions,
   .company-profile-keywords {
@@ -6875,6 +7057,17 @@ a.platform-row:hover {
 
   .target-board-hero {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .target-action-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .target-badge-stack {
+    grid-column: 1 / -1;
+    grid-auto-flow: column;
+    justify-content: start;
+    justify-items: start;
   }
 
   .company-master-filter {
@@ -7319,6 +7512,8 @@ a.platform-row:hover {
   .company-queue-log-list article > div,
   .target-export-bar,
   .target-execution-metrics,
+  .sales-pipeline-grid,
+  .target-followup-list,
   .sales-contact-fields,
   .sales-contact-actions,
   .collection-diagnostic-grid,

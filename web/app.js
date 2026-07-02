@@ -2792,11 +2792,14 @@ function companySalesBoardEntries() {
       const revenueImpact = companyQueueRevenueImpact(company);
       const comparison = companyRecrawlComparison(company);
       const contact = company.salesContact || {};
-      const priorityScore = companySalesExecutionScore(company, revenueImpact, comparison);
-      return { company, stage, action, item, decision, revenueImpact, comparison, contact, priorityScore };
+      const executionScore = companySalesExecutionScore(company, revenueImpact, comparison);
+      const followUp = companySalesFollowUpProfile(company, revenueImpact);
+      const followUpScore = companySalesFollowUpScore(company, revenueImpact, followUp);
+      const priorityScore = executionScore + followUpScore;
+      return { company, stage, action, item, decision, revenueImpact, comparison, contact, executionScore, followUp, followUpScore, priorityScore };
     })
     .filter((entry) => ["confirmed", "contact"].includes(entry.stage.key) && !entry.decision.inQueue)
-    .sort((a, b) => a.stage.priority - b.stage.priority || b.priorityScore - a.priorityScore || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
+    .sort((a, b) => a.stage.priority - b.stage.priority || a.followUp.priority - b.followUp.priority || b.priorityScore - a.priorityScore || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
 }
 
 function salesContactOptions() {
@@ -2823,6 +2826,77 @@ function salesContactMeta(status) {
   }[status] || { label: "미컨택", tone: "todo", order: 1 };
 }
 
+function todayIsoDate() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function salesPipelineStatusKeys() {
+  return ["first_contacted", "waiting_reply", "interested", "high_potential"];
+}
+
+function salesHotStatusKeys() {
+  return ["interested", "high_potential"];
+}
+
+function salesClosedStatusKeys() {
+  return ["hold", "excluded"];
+}
+
+function companySalesFollowUpProfile(company = {}, revenueImpact = {}) {
+  const contact = company.salesContact || {};
+  const status = contact.status || "not_contacted";
+  const nextActionAt = String(contact.nextActionAt || "").slice(0, 10);
+  const today = todayIsoDate();
+  const soonLimit = isoAddDays(today, 3);
+  const hasNext = /^\d{4}-\d{2}-\d{2}$/.test(nextActionAt);
+  const active = salesPipelineStatusKeys().includes(status);
+  const closed = salesClosedStatusKeys().includes(status);
+  const revenue = finiteNumber(revenueImpact.totalRevenue);
+  if (closed) {
+    return { key: "closed", label: "종료", tone: "closed", priority: 8, nextActionAt, detail: salesContactMeta(status).label, revenue };
+  }
+  if (hasNext && nextActionAt < today) {
+    return { key: "overdue", label: "지연", tone: "overdue", priority: 0, nextActionAt, detail: `${nextActionAt} 처리 필요`, revenue };
+  }
+  if (hasNext && nextActionAt === today) {
+    return { key: "today", label: "오늘 처리", tone: "today", priority: 1, nextActionAt, detail: "오늘 후속 예정", revenue };
+  }
+  if (hasNext && soonLimit && nextActionAt <= soonLimit) {
+    return { key: "soon", label: "임박", tone: "soon", priority: 2, nextActionAt, detail: `${nextActionAt} 예정`, revenue };
+  }
+  if (active && !hasNext) {
+    return { key: "needs_date", label: "날짜 필요", tone: "needs-date", priority: 3, nextActionAt, detail: "다음 액션일 미지정", revenue };
+  }
+  if (hasNext) {
+    return { key: "scheduled", label: "예정", tone: "scheduled", priority: 4, nextActionAt, detail: `${nextActionAt} 예정`, revenue };
+  }
+  return { key: "not_planned", label: "초기 컨택", tone: "todo", priority: 5, nextActionAt, detail: "컨택일 미지정", revenue };
+}
+
+function companySalesFollowUpScore(company = {}, revenueImpact = {}, followUp = null) {
+  const profile = followUp || companySalesFollowUpProfile(company, revenueImpact);
+  const status = company.salesContact?.status || "not_contacted";
+  let score = 0;
+  if (profile.key === "overdue") score += 38;
+  else if (profile.key === "today") score += 34;
+  else if (profile.key === "soon") score += 22;
+  else if (profile.key === "needs_date") score += 14;
+  if (status === "high_potential") score += 28;
+  else if (status === "interested") score += 22;
+  else if (status === "waiting_reply") score += 14;
+  else if (status === "first_contacted") score += 9;
+  const revenue = finiteNumber(revenueImpact.totalRevenue);
+  if (revenue >= 5000000) score += 18;
+  else if (revenue >= 2000000) score += 11;
+  else if (revenue >= 700000) score += 5;
+  if (salesClosedStatusKeys().includes(status)) score -= 50;
+  return Math.max(0, Math.round(score));
+}
+
 function companySalesExecutionScore(company = {}, revenueImpact = {}, comparison = {}) {
   let score = Number(company.salesTarget?.score || 0);
   const rank = Number(company.bestRank || 0);
@@ -2846,6 +2920,34 @@ function companySalesExecutionScore(company = {}, revenueImpact = {}, comparison
   if (company.salesContact?.status === "excluded") score -= 80;
   if (company.salesContact?.status === "hold") score -= 20;
   return Math.max(0, Math.round(score));
+}
+
+function companySalesPipelineSummary(entries = []) {
+  const rows = salesContactOptions().map(([status, fallbackLabel]) => {
+    const meta = salesContactMeta(status);
+    const matches = entries.filter((entry) => (entry.company.salesContact?.status || "not_contacted") === status);
+    return {
+      status,
+      label: meta.label || fallbackLabel,
+      tone: meta.tone,
+      count: matches.length,
+      revenue: matches.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
+      due: matches.filter((entry) => ["overdue", "today", "soon"].includes(entry.followUp.key)).length
+    };
+  });
+  const active = entries.filter((entry) => salesPipelineStatusKeys().includes(entry.company.salesContact?.status || ""));
+  const hot = entries.filter((entry) => salesHotStatusKeys().includes(entry.company.salesContact?.status || ""));
+  return {
+    rows,
+    activeCount: active.length,
+    activeRevenue: active.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
+    hotCount: hot.length,
+    hotRevenue: hot.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
+    overdueCount: entries.filter((entry) => entry.followUp.key === "overdue").length,
+    todayCount: entries.filter((entry) => entry.followUp.key === "today").length,
+    soonCount: entries.filter((entry) => entry.followUp.key === "soon").length,
+    needsDateCount: entries.filter((entry) => entry.followUp.key === "needs_date").length
+  };
 }
 
 function companySalesPrimaryUrl(company = {}, item = {}) {
@@ -2912,12 +3014,80 @@ function salesContactFormHtml(company = {}) {
   `;
 }
 
+function salesContactHistoryHtml(company = {}) {
+  const rows = (company.salesContactHistory || []).slice(-4).reverse();
+  if (!rows.length) {
+    return `
+      <div class="sales-contact-history empty-history">
+        <div class="sales-contact-history-head">
+          <strong>컨택 히스토리</strong>
+          <small>저장된 컨택 기록 없음</small>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="sales-contact-history">
+      <div class="sales-contact-history-head">
+        <strong>컨택 히스토리</strong>
+        <small>최근 ${fmtNumber(rows.length)}건</small>
+      </div>
+      <ol>
+        ${rows.map((row) => {
+          const meta = salesContactMeta(row.status);
+          const details = [
+            row.channel ? `채널 ${row.channel}` : "",
+            row.contactPerson ? `담당 ${row.contactPerson}` : "",
+            row.nextActionAt ? `다음 ${row.nextActionAt}` : "",
+            row.proposal || "",
+            row.note || ""
+          ].filter(Boolean).join(" · ");
+          return `
+            <li>
+              <span>${escapeHtml(compactDateTime(row.at || row.updatedAt || ""))}</span>
+              <div>
+                <strong>${escapeHtml(row.label || meta.label)}</strong>
+                <small>${escapeHtml(details || "상태 저장")}</small>
+              </div>
+            </li>
+          `;
+        }).join("")}
+      </ol>
+    </div>
+  `;
+}
+
+function salesPipelineHtml(summary = {}) {
+  const activeRevenue = fmtWon(summary.activeRevenue);
+  const hotRevenue = fmtWon(summary.hotRevenue);
+  return `
+    <section class="sales-pipeline-panel">
+      <div class="target-lane-head">
+        <div>
+          <strong>영업 파이프라인</strong>
+          <small>컨택 상태별 진행 수량과 예상 매출을 분리해서 봅니다. 진행 매출 ${activeRevenue}, 관심/유력 매출 ${hotRevenue}</small>
+        </div>
+        <span>${fmtNumber(summary.activeCount || 0)}</span>
+      </div>
+      <div class="sales-pipeline-grid">
+        ${(summary.rows || []).map((row) => `
+          <article class="sales-pipeline-card ${escapeHtml(row.tone)}">
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${fmtNumber(row.count)}</strong>
+            <small>${fmtWon(row.revenue)} · 후속 ${fmtNumber(row.due)}</small>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function salesTargetCsvValue(value) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function salesTargetCsv(entries = []) {
-  const headers = ["업체명", "지역", "URL", "우선순위", "예상매출", "상태", "다음액션", "제안포인트", "메모", "추천사유"];
+  const headers = ["업체명", "지역", "URL", "우선순위", "예상매출", "컨택상태", "후속상태", "다음액션", "제안포인트", "메모", "추천사유"];
   const rows = entries.map((entry) => {
     const company = entry.company || {};
     const item = entry.item || {};
@@ -2929,6 +3099,7 @@ function salesTargetCsv(entries = []) {
       entry.priorityScore,
       finiteNumber(entry.revenueImpact?.totalRevenue),
       salesContactMeta(contact.status).label,
+      entry.followUp?.label || "",
       contact.nextActionAt || "",
       contact.proposal || entry.action?.label || "",
       contact.note || "",
@@ -5774,15 +5945,13 @@ function renderTargets() {
   const currentItems = targetEntries(12);
   const confirmed = boardEntries.filter((entry) => entry.stage.key === "confirmed");
   const contact = boardEntries.filter((entry) => entry.stage.key === "contact");
+  const pipelineSummary = companySalesPipelineSummary(boardEntries);
+  const followUpEntries = boardEntries.filter((entry) => ["overdue", "today", "soon", "needs_date"].includes(entry.followUp.key)).slice(0, 8);
   const masterQueueCount = companyDecisionQueueEntries(companyMasterSource()).filter((entry) => entry.workflow.key !== "done").length;
   const currentQueueCount = validationQueueEntries(state.data?.availability?.items || [], 0).length;
   const decisionQueueCount = masterQueueCount || currentQueueCount;
   const actionableCount = confirmed.length + contact.length;
   const currentOnly = currentItems.filter(({ item }) => !boardEntries.some((entry) => entry.item === item)).slice(0, 6);
-  const notContactedCount = boardEntries.filter((entry) => !entry.company.salesContact?.status || entry.company.salesContact.status === "not_contacted").length;
-  const waitingCount = boardEntries.filter((entry) => ["first_contacted", "waiting_reply"].includes(entry.company.salesContact?.status)).length;
-  const highPotentialCount = boardEntries.filter((entry) => ["interested", "high_potential"].includes(entry.company.salesContact?.status)).length;
-  const nextActionCount = boardEntries.filter((entry) => entry.company.salesContact?.nextActionAt).length;
 
   els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
   if (!boardEntries.length && !currentItems.length) {
@@ -5791,7 +5960,7 @@ function renderTargets() {
   }
 
   const boardCard = (entry, index) => {
-    const { company, stage, action, item, revenueImpact, priorityScore } = entry;
+    const { company, stage, action, item, revenueImpact, priorityScore, followUp } = entry;
     const itemIndex = item ? (state.data?.availability?.items || []).indexOf(item) : -1;
     const regionText = (company.regions || []).slice(0, 2).join(" · ") || item?.region || "지역 확인";
     const evidence = companySalesEvidenceList(company, entry);
@@ -5805,12 +5974,15 @@ function renderTargets() {
             <strong>${escapeHtml(company.primaryName || item?.name || "업체명 확인")}</strong>
             <small>${escapeHtml(regionText)} · ${escapeHtml(stage.label)} · 우선순위 ${fmtNumber(priorityScore)}</small>
           </div>
-          <mark class="sales-contact-badge ${escapeHtml(contactMeta.tone)}">${escapeHtml(contactMeta.label)}</mark>
+          <div class="target-badge-stack">
+            <mark class="sales-contact-badge ${escapeHtml(contactMeta.tone)}">${escapeHtml(contactMeta.label)}</mark>
+            <mark class="sales-followup-badge ${escapeHtml(followUp.tone)}">${escapeHtml(followUp.label)}</mark>
+          </div>
         </div>
         <div class="target-execution-metrics">
           <div><span>예상매출</span><strong>${fmtWon(revenueImpact.totalRevenue)}</strong><small>가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회</small></div>
           <div><span>노출</span><strong>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "대기"}</strong><small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 확인")}</small></div>
-          <div><span>상태</span><strong>${escapeHtml(contactMeta.label)}</strong><small>${escapeHtml(company.salesContact?.nextActionAt || "다음 액션 미지정")}</small></div>
+          <div><span>후속</span><strong>${escapeHtml(followUp.label)}</strong><small>${escapeHtml(followUp.detail || "다음 액션 미지정")}</small></div>
         </div>
         <div class="target-action-main">
           <b>${escapeHtml(action.label)}</b>
@@ -5820,10 +5992,11 @@ function renderTargets() {
           ${evidence.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
         </div>
         <div class="target-next-line">
-          <strong>다음 확인</strong>
+          <strong>다음 액션</strong>
           <span>${escapeHtml(company.salesContact?.proposal || action.next)}</span>
         </div>
         ${salesContactFormHtml(company)}
+        ${salesContactHistoryHtml(company)}
         <div class="target-card-actions">
           ${itemIndex >= 0 ? `<button class="secondary-button" type="button" data-open-company="${itemIndex}">상세 보기</button>` : `<button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>`}
           ${url ? `<a class="secondary-button target-link-button" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">예약/플레이스</a>` : ""}
@@ -5848,18 +6021,31 @@ function renderTargets() {
 
   els.targetList.innerHTML = `
     <section class="target-board-hero">
-      <article><span>오늘 컨택</span><strong>${fmtNumber(actionableCount)}</strong><small>큐 제외 즉시 후보</small></article>
-      <article><span>미컨택</span><strong>${fmtNumber(notContactedCount)}</strong><small>아직 실행 전</small></article>
-      <article><span>답변 대기</span><strong>${fmtNumber(waitingCount)}</strong><small>1차 컨택/대기</small></article>
-      <article><span>관심/유력</span><strong>${fmtNumber(highPotentialCount)}</strong><small>후속 제안 대상</small></article>
-      <article><span>다음 액션</span><strong>${fmtNumber(nextActionCount)}</strong><small>날짜 지정됨</small></article>
+      <article><span>영업 대상</span><strong>${fmtNumber(actionableCount)}</strong><small>큐 제외 즉시 후보</small></article>
+      <article><span>오늘 처리</span><strong>${fmtNumber(pipelineSummary.todayCount)}</strong><small>오늘 후속 예정</small></article>
+      <article><span>지연</span><strong>${fmtNumber(pipelineSummary.overdueCount)}</strong><small>날짜 지난 액션</small></article>
+      <article><span>진행 파이프라인</span><strong>${fmtNumber(pipelineSummary.activeCount)}</strong><small>1차 이후 진행 중</small></article>
+      <article><span>진행 매출</span><strong>${fmtWon(pipelineSummary.activeRevenue)}</strong><small>컨택 진행 예상액</small></article>
     </section>
     <section class="target-export-bar">
       <div>
-        <strong>영업타깃 실행 관리 V2</strong>
-        <small>판단 큐에서 컨택 가능으로 확정된 업체와 바로 컨택 가능한 후보를 실행 상태로 관리합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
+        <strong>영업 후속관리 / 파이프라인 V2</strong>
+        <small>컨택 가능 업체를 상태별 파이프라인으로 관리하고, 오늘 처리·지연·날짜 미지정 후속을 우선 정렬합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
       </div>
       <button type="button" data-export-sales-targets>컨택 리스트 CSV</button>
+    </section>
+    ${salesPipelineHtml(pipelineSummary)}
+    <section class="target-followup-board">
+      <div class="target-lane-head">
+        <div>
+          <strong>오늘/지연 후속 대상</strong>
+          <small>지연 ${fmtNumber(pipelineSummary.overdueCount)} · 오늘 ${fmtNumber(pipelineSummary.todayCount)} · 임박 ${fmtNumber(pipelineSummary.soonCount)} · 날짜 필요 ${fmtNumber(pipelineSummary.needsDateCount)}</small>
+        </div>
+        <span>${fmtNumber(followUpEntries.length)}</span>
+      </div>
+      <div class="target-followup-list">
+        ${followUpEntries.length ? followUpEntries.map(boardCard).join("") : `<p class="empty">우선 후속 대상이 없습니다.</p>`}
+      </div>
     </section>
     <section class="target-board">
       ${lane("확정 타깃", "관리자가 판단 맞음으로 확정한 업체", confirmed, "아직 확정 타깃이 없습니다. 관리 탭에서 후보를 검증하세요.")}
