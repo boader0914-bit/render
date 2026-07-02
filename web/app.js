@@ -4248,6 +4248,51 @@ function salesTargetCsv(entries = []) {
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
 }
 
+function salesGateCsv(entries = salesGateReviewEntries(0)) {
+  const headers = ["업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "보류상태", "큐유형", "워크플로우", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "추천조치", "추천근거", "예상매출", "매출정밀도", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
+  const rows = entries.map((entry) => {
+    const company = entry.company || {};
+    const item = entry.item || {};
+    const decision = entry.decision || {};
+    const revenueImpact = entry.revenueImpact || {};
+    const precision = revenueImpact.precision || {};
+    const regions = Array.isArray(company.regions) ? company.regions : [];
+    const recommendationReasons = Array.isArray(entry.autoRecommendation?.reasons) ? entry.autoRecommendation.reasons : [];
+    const workflowReasons = Array.isArray(entry.workflow?.reasons) ? entry.workflow.reasons : [];
+    const decisionActions = Array.isArray(decision.actions) ? decision.actions : [];
+    const nextActions = [...workflowReasons, ...decisionActions].filter(Boolean);
+    const revenue = finiteNumber(revenueImpact.totalRevenue, 0);
+    const pricedSoldOut = finiteNumber(revenueImpact.totalPricedSoldOut, 0);
+    const missingPriceSoldOut = finiteNumber(revenueImpact.totalMissingPriceSoldOut, 0);
+    return [
+      company.companyId || "",
+      company.primaryName || item.name || "",
+      regions.slice(0, 3).join(" / ") || item.region || "",
+      companySalesPrimaryUrl(company, item),
+      company.bestRank ? `${fmtNumber(company.bestRank)}위` : "",
+      company.bestKeyword || company.latestKeyword || "",
+      entry.gateStatus || company.adminReview?.label || entry.workflow?.label || entry.type?.label || "확인 필요",
+      entry.type?.label || "",
+      entry.workflow?.label || "",
+      entry.gateReason || decision.summary || "",
+      decision.problemDateText || "",
+      decision.quantityConfidence || "",
+      decision.gapType || "",
+      decision.channelText || "",
+      entry.autoRecommendation?.label || "",
+      recommendationReasons.slice(0, 3).join(" | "),
+      revenue || "",
+      [precision.grade, precision.label].filter(Boolean).join(" · "),
+      pricedSoldOut || "",
+      missingPriceSoldOut || "",
+      company.adminReview?.note || "",
+      companyReviewContextText(company.adminReview?.context || {}),
+      nextActions.slice(0, 2).join(" | ")
+    ].map(salesTargetCsvValue).join(",");
+  });
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
+}
+
 function collectionQualityCsv(profile = collectionQualityMonitorProfile()) {
   const headers = ["구분", "대상", "지역", "순위", "상태/점수", "근거", "추천설정", "예상매출"];
   const rows = [
@@ -7734,7 +7779,10 @@ function renderTargets() {
         <strong>영업 반응/성과 추적 V2</strong>
         <small>컨택 결과와 반응 사유를 기록하고, 응답률·관심률·미팅 전환률과 제안 유형별 반응을 우선순위에 반영합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
       </div>
-      <button type="button" data-export-sales-targets>컨택+반응 CSV</button>
+      <div class="target-export-actions">
+        <button type="button" data-export-sales-targets>컨택+반응 CSV</button>
+        <button type="button" data-export-sales-gate>보류사유 CSV</button>
+      </div>
     </section>
     ${gatePanel(gatedEntries)}
     ${salesPipelineHtml(pipelineSummary)}
@@ -9654,6 +9702,26 @@ function exportSalesTargetsCsv() {
   setStatus(`컨택 리스트 ${fmtNumber(entries.length)}개 내보내기`);
 }
 
+function exportSalesGateCsv() {
+  const entries = salesGateReviewEntries(0);
+  if (!entries.length) {
+    setStatus("내보낼 컨택 보류 사유 없음");
+    return;
+  }
+  const csv = salesGateCsv(entries);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `glamping-sales-gate-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`컨택 보류 사유 ${fmtNumber(entries.length)}개 내보내기`);
+}
+
 function exportCollectionQualityCsv() {
   const profile = collectionQualityMonitorProfile();
   if (!profile.hasData) {
@@ -10276,6 +10344,7 @@ function bindEvents() {
     const salesCallNote = event.target.closest("[data-copy-sales-call-note]");
     if (salesCallNote) copySalesProposal(salesCallNote, "call");
     if (event.target.closest("[data-export-sales-targets]")) exportSalesTargetsCsv();
+    if (event.target.closest("[data-export-sales-gate]")) exportSalesGateCsv();
     if (event.target.closest("[data-export-collection-quality]")) exportCollectionQualityCsv();
     if (event.target.closest("[data-export-recrawl-automation]")) exportRecrawlAutomationCsv();
     if (event.target.closest("[data-export-admin-review-audit]")) exportAdminReviewAuditCsv();

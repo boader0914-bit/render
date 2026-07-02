@@ -2047,6 +2047,13 @@ a.platform-row:hover {
   gap: 4px;
 }
 
+.target-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .target-export-bar strong {
   color: var(--ink);
   font-size: 16px;
@@ -8115,6 +8122,10 @@ a.platform-row:hover {
 
   .target-board-hero {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .target-export-actions {
+    justify-content: flex-start;
   }
 
   .target-action-head {
