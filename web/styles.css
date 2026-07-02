@@ -3688,6 +3688,17 @@ a.platform-row:hover {
   gap: 3px;
 }
 
+.company-queue-log-panel > button {
+  justify-self: start;
+  min-height: 32px;
+  padding: 0 11px;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: var(--blue-dark);
+  font-size: 11px;
+  font-weight: 950;
+}
+
 .company-queue-log-panel strong,
 .company-queue-log-list b {
   min-width: 0;

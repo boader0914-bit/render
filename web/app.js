@@ -4314,6 +4314,87 @@ function recrawlAutomationCsv(entries = companyDecisionQueueEntries(companyMaste
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
 }
 
+function adminReviewContextCells(context = {}) {
+  const comparison = context.comparison || {};
+  const recrawl = context.recrawlPlan || {};
+  const revenue = context.revenue || {};
+  const comparisonDetail = Array.isArray(comparison.cells)
+    ? comparison.cells.map((cell) => {
+        const label = cell.label || cell.key || "비교";
+        const values = [cell.before, cell.after].filter(Boolean).join(" -> ");
+        return [label, values, cell.note].filter(Boolean).join(" ");
+      }).filter(Boolean).slice(0, 4).join(" | ")
+    : "";
+  return {
+    summary: companyReviewContextText(context),
+    recommendation: [context.recommendationLabel, ...(context.recommendationReasons || [])].filter(Boolean).join(" | "),
+    problemDateText: context.problemDateText || "",
+    quantityConfidence: context.quantityConfidence || "",
+    gapType: context.gapType || "",
+    channelText: context.channelText || "",
+    recrawlText: [
+      recrawl.keyword,
+      recrawl.range ? `상세 ${recrawl.range}위` : "",
+      recrawl.checkIn || recrawl.checkOut ? `${recrawl.checkIn || ""}~${recrawl.checkOut || ""}` : recrawl.dateText
+    ].filter(Boolean).join(" | "),
+    improved: comparison.hasComparison ? finiteNumber(comparison.improved, 0) : "",
+    worsened: comparison.hasComparison ? finiteNumber(comparison.worsened, 0) : "",
+    comparisonDetail,
+    revenue: finiteNumber(revenue.totalRevenue, 0) || "",
+    pricedSoldOut: finiteNumber(revenue.totalPricedSoldOut, 0) || "",
+    missingPriceSoldOut: finiteNumber(revenue.totalMissingPriceSoldOut, 0) || "",
+    precision: [revenue.precisionGrade, revenue.precisionLabel].filter(Boolean).join(" · ")
+  };
+}
+
+function adminReviewAuditRows(master = companyMasterSource()) {
+  return (master.companies || []).flatMap((company) => {
+    const histories = Array.isArray(company.adminReviewHistory) ? company.adminReviewHistory : [];
+    const rows = histories.map((history) => ({ kind: "이력", review: history }));
+    if (!rows.length && company.adminReview) rows.push({ kind: "현재", review: company.adminReview });
+    return rows.map(({ kind, review }) => {
+      const context = adminReviewContextCells(review.context || {});
+      return [
+        kind,
+        company.companyId || "",
+        company.primaryName || "",
+        (company.regions || []).slice(0, 3).join(" / "),
+        company.bestRank ? `${fmtNumber(company.bestRank)}위` : "",
+        company.adminReview?.label || companyAdminReviewLabel(company.adminReview?.status),
+        review.action === "clear" ? "해제" : (review.label || companyAdminReviewLabel(review.status)),
+        review.status || "",
+        review.at || review.updatedAt || "",
+        review.note || "",
+        review.context?.source || "",
+        context.summary,
+        context.recommendation,
+        context.problemDateText,
+        context.quantityConfidence,
+        context.gapType,
+        context.channelText,
+        context.recrawlText,
+        context.improved,
+        context.worsened,
+        context.comparisonDetail,
+        context.revenue,
+        context.pricedSoldOut,
+        context.missingPriceSoldOut,
+        context.precision
+      ];
+    });
+  }).sort((a, b) => String(b[8] || "").localeCompare(String(a[8] || "")));
+}
+
+function adminReviewAuditCsv(master = companyMasterSource()) {
+  const headers = [
+    "구분", "업체ID", "업체명", "지역", "최고순위", "현재상태", "저장상태", "상태코드", "처리시각", "관리메모", "근거출처",
+    "근거요약", "자동추천", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "재수집설정",
+    "비교개선", "비교악화", "비교상세", "예상매출", "가격확보수량", "가격누락수량", "매출정밀도"
+  ];
+  const rows = adminReviewAuditRows(master);
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
+}
+
 function reportPlatformStats(items = []) {
   const platformNames = ["네이버", "야놀자", "여기어때", "떠나요"];
   const stats = Object.fromEntries(platformNames.map((name) => [name, 0]));
@@ -6910,6 +6991,7 @@ function companyQueueOperationSummaryHtml(entries = []) {
           <strong>최근 처리 로그</strong>
           <small>관리자 판단, 보정, 재수집 이후 상태 변화를 최신순으로 표시합니다.</small>
         </div>
+        <button type="button" data-export-admin-review-audit>판단 이력 CSV</button>
         <div class="company-queue-log-list">
           ${logs.length ? logs.map((row) => `
             <article class="${escapeHtml(row.tone)}">
@@ -9549,6 +9631,26 @@ function exportRecrawlAutomationCsv() {
   setStatus(`재수집 자동화 리포트 ${fmtNumber(profile.needsExecution.length + profile.transitions.length)}개 내보내기`);
 }
 
+function exportAdminReviewAuditCsv() {
+  const rows = adminReviewAuditRows(companyMasterSource());
+  if (!rows.length) {
+    setStatus("내보낼 관리자 판단 이력이 없음");
+    return;
+  }
+  const csv = adminReviewAuditCsv(companyMasterSource());
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `glamping-admin-review-audit-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`관리자 판단 이력 ${fmtNumber(rows.length)}건 내보내기`);
+}
+
 async function copyTextToClipboard(text = "") {
   const value = String(text || "");
   if (!value.trim()) return false;
@@ -10112,6 +10214,7 @@ function bindEvents() {
     if (event.target.closest("[data-export-sales-targets]")) exportSalesTargetsCsv();
     if (event.target.closest("[data-export-collection-quality]")) exportCollectionQualityCsv();
     if (event.target.closest("[data-export-recrawl-automation]")) exportRecrawlAutomationCsv();
+    if (event.target.closest("[data-export-admin-review-audit]")) exportAdminReviewAuditCsv();
     const qualitySetting = event.target.closest("[data-apply-quality-setting]");
     if (qualitySetting) applyCollectionQualitySetting(qualitySetting);
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
