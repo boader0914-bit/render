@@ -417,7 +417,11 @@ function crawlEstimateBasisText(basis = {}) {
     ? `${fmtNumber(basis.bookingRangeDays)}일 · 상세 대상 중 최대 ${fmtNumber(basis.bookingRangePlaceLimit)}개`
     : "1일 기준";
   const detail = basis.collectionMode === "fast" ? "상세 생략" : `상세 ${basis.detailRankRanges || "1-20"}위`;
-  return `${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range}`;
+  const timing = basis.timing || {};
+  const timingText = timing.source === "measured"
+    ? `예상 기준: 최근 유사 수집 ${fmtNumber(timing.sampleCount)}건 평균 ${formatElapsed(timing.averageSeconds)}`
+    : "예상 기준: 조건 모델";
+  return `${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
 }
 
 function crawlStageFallbacks() {
@@ -520,9 +524,11 @@ function updateCrawlProgressNumbers(meta = {}) {
   if (els.crawlProgressPercent) els.crawlProgressPercent.textContent = hasPercent ? `${Math.round(percent)}%` : "예측중";
   if (els.crawlProgressElapsed) els.crawlProgressElapsed.textContent = formatElapsed(elapsed) || "0초";
   if (els.crawlProgressRemaining) {
-    els.crawlProgressRemaining.textContent = Number.isFinite(remaining)
-      ? (remaining <= 0 ? "곧 완료" : formatElapsed(remaining))
-      : "계산 중";
+    els.crawlProgressRemaining.textContent = meta.isDelayed
+      ? `지연 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`
+      : (Number.isFinite(remaining)
+          ? (remaining <= 0 ? "곧 완료" : formatElapsed(remaining))
+          : "계산 중");
   }
   if (els.crawlProgressEta) els.crawlProgressEta.textContent = formatClockTime(meta.estimatedCompleteAt);
   if (els.crawlProgressBasis) els.crawlProgressBasis.textContent = crawlEstimateBasisText(meta.estimateBasis);
@@ -532,6 +538,7 @@ function updateCrawlProgressNumbers(meta = {}) {
 function setCrawlProgress(active, title = "", text = "", meta = {}) {
   if (!els.crawlProgress) return;
   els.crawlProgress.hidden = !active;
+  els.crawlProgress.classList.toggle("is-delayed", Boolean(active && meta.isDelayed));
   if (title && els.crawlProgressTitle) els.crawlProgressTitle.textContent = title;
   if (text && els.crawlProgressText) els.crawlProgressText.textContent = text;
   if (active) updateCrawlProgressNumbers(meta);
@@ -564,6 +571,7 @@ function crawlEstimateInlineText(status = {}) {
   const eta = formatClockTime(status.estimatedCompleteAt);
   const stage = crawlCurrentStageText(status);
   const parts = [];
+  if (status.isDelayed) parts.push(`지연 ${formatElapsed(status.delayedSeconds) || "확인 중"}`);
   if (stage) parts.push(stage);
   if (Number.isFinite(percent)) parts.push(`예상 ${Math.round(percent)}%`);
   if (Number.isFinite(remaining)) parts.push(`남은 ${remaining <= 0 ? "곧 완료" : formatElapsed(remaining)}`);
@@ -579,14 +587,19 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
       const elapsed = formatElapsed(status.elapsedSeconds);
       const estimate = crawlEstimateInlineText(status);
       const stage = status.currentStage || {};
+      const delayed = Boolean(status.isDelayed);
       setCrawlProgress(
         true,
-        stage.label ? `${stage.label} 진행 중` : "수집 진행 중",
-        stage.detail || `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`,
+        delayed ? "예상보다 지연 중" : (stage.label ? `${stage.label} 진행 중` : "수집 진행 중"),
+        delayed
+          ? `예상 완료 시간을 ${formatElapsed(status.delayedSeconds) || "초과"} 넘겼습니다. 마지막 단계와 저장 처리를 계속 확인하고 있습니다.`
+          : (stage.detail || `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`),
         status
       );
       if (els.crawlStatus) {
-        els.crawlStatus.textContent = `수집이 진행 중입니다${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`;
+        els.crawlStatus.textContent = delayed
+          ? `수집이 예상보다 오래 걸리고 있습니다${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`
+          : `수집이 진행 중입니다${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`;
       }
       setStatus("수집 중");
       scheduleCrawlStatusPoll(Number(status.remainingSeconds) <= 60 ? 5000 : 10000, true);

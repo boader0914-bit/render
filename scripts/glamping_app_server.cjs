@@ -35,9 +35,11 @@ const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
+const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const DATALAB_TREND_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const CRAWL_TIMING_MAX_ENTRIES = 240;
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
@@ -198,7 +200,7 @@ function crawlExecutionPlan(payload = {}) {
   };
 }
 
-function estimateCrawlCompletion(payload = {}) {
+function estimateCrawlCompletion(payload = {}, timingStore = null) {
   const plan = crawlExecutionPlan(payload);
   const rangePlaceCount = plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
   const fast = plan.collectionMode === "fast";
@@ -256,17 +258,16 @@ function estimateCrawlCompletion(payload = {}) {
     seconds: Math.max(4, Math.round(stage.seconds || 0))
   }));
   const stagedSeconds = stages.reduce((sum, stage) => sum + stage.seconds, 0);
-  const estimatedTotalSeconds = Math.max(
+  const modelTotalSeconds = Math.max(
     fast ? 45 : 90,
     stagedSeconds
   );
-  if (stages.length && estimatedTotalSeconds > stagedSeconds) {
-    stages[stages.length - 1].seconds += estimatedTotalSeconds - stagedSeconds;
-  }
+  const timing = crawlTimingAdjustment(plan, modelTotalSeconds, timingStore);
+  const estimatedTotalSeconds = timing.estimatedTotalSeconds;
   return {
     ...plan,
     estimatedTotalSeconds,
-    stages,
+    stages: scaleCrawlStages(stages, estimatedTotalSeconds),
     basis: {
       searchMode: plan.resolvedSearchMode,
       searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
@@ -276,8 +277,109 @@ function estimateCrawlCompletion(payload = {}) {
       collectionModeLabel: COLLECTION_MODES[plan.collectionMode] || COLLECTION_MODES.precision,
       detailRankRanges: plan.detailRankRanges,
       bookingRangeDays: plan.bookingRangeDays,
-      bookingRangePlaceLimit: plan.bookingRangePlaceLimit
+      bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
+      timing
     }
+  };
+}
+
+function scaleCrawlStages(stages = [], targetTotalSeconds = 0) {
+  const rows = stages.map((stage) => ({ ...stage, seconds: Math.max(4, Math.round(stage.seconds || 0)) }));
+  if (!rows.length) return rows;
+  const baseTotal = rows.reduce((sum, stage) => sum + stage.seconds, 0);
+  const target = Math.max(rows.length * 4, Math.round(Number(targetTotalSeconds) || baseTotal));
+  const scaled = rows.map((stage) => ({
+    ...stage,
+    seconds: Math.max(4, Math.round((stage.seconds / Math.max(1, baseTotal)) * target))
+  }));
+  const delta = target - scaled.reduce((sum, stage) => sum + stage.seconds, 0);
+  scaled[scaled.length - 1].seconds = Math.max(4, scaled[scaled.length - 1].seconds + delta);
+  return scaled;
+}
+
+function crawlTimingConditions(plan = {}) {
+  return {
+    searchMode: plan.resolvedSearchMode || plan.searchMode || "keyword",
+    requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode || plan.searchMode || "keyword"),
+    productMode: normalizeProductMode(plan.productMode),
+    collectionMode: normalizeCollectionMode(plan.collectionMode),
+    detailRankRanges: plan.detailRankRanges || "없음",
+    bookingRangeDays: Math.max(1, Math.min(31, Math.round(Number(plan.bookingRangeDays) || 1))),
+    bookingRangePlaceLimit: Math.max(0, Math.min(20, Math.round(Number(plan.bookingRangePlaceLimit) || 0)))
+  };
+}
+
+function crawlTimingSimilarityScore(plan = {}, entry = {}) {
+  if (!entry?.success || !Number.isFinite(Number(entry.durationSeconds))) return 0;
+  const left = crawlTimingConditions(plan);
+  const right = entry.conditions || {};
+  if (right.collectionMode !== left.collectionMode) return 0;
+  if (right.searchMode !== left.searchMode) return 0;
+  if (right.productMode !== left.productMode) return 0;
+
+  let score = 9;
+  const dayDelta = Math.abs(Number(right.bookingRangeDays || 1) - left.bookingRangeDays);
+  if (dayDelta === 0) score += 4;
+  else if (dayDelta <= 2) score += 3;
+  else if (dayDelta <= 7) score += 1;
+  else return 0;
+
+  const limitDelta = Math.abs(Number(right.bookingRangePlaceLimit || 0) - left.bookingRangePlaceLimit);
+  if (limitDelta === 0) score += 2;
+  else if (limitDelta <= 5) score += 1;
+
+  if ((right.detailRankRanges || "없음") === left.detailRankRanges) score += 2;
+  return score;
+}
+
+function crawlTimingAdjustment(plan = {}, modelTotalSeconds = 0, timingStore = null) {
+  const model = Math.max(1, Math.round(Number(modelTotalSeconds) || 1));
+  const entries = Array.isArray(timingStore?.entries) ? timingStore.entries : [];
+  const matches = entries
+    .map((entry) => ({
+      entry,
+      score: crawlTimingSimilarityScore(plan, entry),
+      endedAtMs: Date.parse(entry.endedAt || entry.startedAt || "")
+    }))
+    .filter((row) => row.score > 0 && Number.isFinite(row.endedAtMs))
+    .sort((a, b) => (b.score - a.score) || (b.endedAtMs - a.endedAtMs))
+    .slice(0, 12);
+
+  if (!matches.length) {
+    return {
+      source: "model",
+      label: "조건 모델",
+      sampleCount: 0,
+      modelTotalSeconds: model,
+      estimatedTotalSeconds: model,
+      averageSeconds: null
+    };
+  }
+
+  const weighted = matches.reduce((acc, row, index) => {
+    const duration = Math.max(1, Number(row.entry.durationSeconds) || 1);
+    const recencyWeight = Math.max(0.35, 1 - index * 0.045);
+    const weight = row.score * recencyWeight;
+    acc.weight += weight;
+    acc.seconds += duration * weight;
+    return acc;
+  }, { weight: 0, seconds: 0 });
+  const averageSeconds = Math.round(weighted.seconds / Math.max(1, weighted.weight));
+  const blend = matches.length >= 3 ? 0.72 : matches.length === 2 ? 0.62 : 0.52;
+  const blended = Math.round(model * (1 - blend) + averageSeconds * blend);
+  const estimatedTotalSeconds = Math.max(
+    Math.round(model * 0.45),
+    Math.min(Math.round(model * 2.6), blended)
+  );
+
+  return {
+    source: "measured",
+    label: "최근 유사 수집",
+    sampleCount: matches.length,
+    modelTotalSeconds: model,
+    estimatedTotalSeconds,
+    averageSeconds,
+    latestEndedAt: new Date(Math.max(...matches.map((row) => row.endedAtMs))).toISOString()
   };
 }
 
@@ -5698,6 +5800,76 @@ function summarizePlatformRows(rows) {
   return Object.values(platformMap);
 }
 
+function emptyCrawlTimingStore() {
+  return { source: "glamping_crawl_timing_store", version: 1, updatedAt: "", entries: [] };
+}
+
+function normalizeCrawlTimingStore(store = {}) {
+  const entries = Array.isArray(store.entries)
+    ? store.entries.filter((entry) => Number.isFinite(Number(entry.durationSeconds))).slice(-CRAWL_TIMING_MAX_ENTRIES)
+    : [];
+  return {
+    source: "glamping_crawl_timing_store",
+    version: 1,
+    ...store,
+    entries
+  };
+}
+
+function readCrawlTimingStoreSync() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(HISTORY_CRAWL_TIMINGS_FILE, "utf8").replace(/^\uFEFF/, ""));
+    return normalizeCrawlTimingStore(parsed);
+  } catch {
+    return emptyCrawlTimingStore();
+  }
+}
+
+async function readCrawlTimingStore() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(HISTORY_CRAWL_TIMINGS_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return normalizeCrawlTimingStore(parsed);
+  } catch {
+    return emptyCrawlTimingStore();
+  }
+}
+
+async function writeCrawlTimingStore(store) {
+  await fsp.mkdir(HISTORY_DIR, { recursive: true });
+  const next = normalizeCrawlTimingStore({ ...store, updatedAt: new Date().toISOString() });
+  const tempPath = `${HISTORY_CRAWL_TIMINGS_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tempPath, HISTORY_CRAWL_TIMINGS_FILE);
+}
+
+function crawlTimingErrorSummary(error) {
+  const text = String(error?.message || error || "").replace(/\s+/g, " ").trim();
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
+
+async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, result, error }) {
+  if (!startedAt || !endedAt) return { recorded: false, reason: "missing_time" };
+  const durationSeconds = Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
+  const success = !error;
+  const store = await readCrawlTimingStore();
+  const entry = {
+    id: crypto.randomUUID(),
+    startedAt: startedAt.toISOString(),
+    endedAt: endedAt.toISOString(),
+    durationSeconds,
+    success,
+    runId: result?.runId || null,
+    keyword: plan?.keyword || "",
+    conditions: crawlTimingConditions(plan),
+    estimatedTotalSeconds: estimate?.estimatedTotalSeconds || null,
+    estimateSource: estimate?.basis?.timing?.source || "model",
+    error: success ? "" : crawlTimingErrorSummary(error)
+  };
+  store.entries = [...(store.entries || []), entry].slice(-CRAWL_TIMING_MAX_ENTRIES);
+  await writeCrawlTimingStore(store);
+  return { recorded: true, durationSeconds, success, sampleCount: store.entries.length, file: "history/crawl_timings.json" };
+}
+
 async function runCrawler(payload) {
   if (activeCrawlPromise) {
     const elapsedSeconds = activeCrawlStartedAt
@@ -5708,11 +5880,31 @@ async function runCrawler(payload) {
     throw error;
   }
   activeCrawlStartedAt = new Date();
-  activeCrawlEstimate = estimateCrawlCompletion(payload);
+  activeCrawlEstimate = estimateCrawlCompletion(payload, readCrawlTimingStoreSync());
   activeCrawlPromise = runCrawlerInternal(payload);
+  let result = null;
+  let failure = null;
   try {
-    return await activeCrawlPromise;
+    result = await activeCrawlPromise;
+    return result;
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
+    const endedAt = new Date();
+    const estimate = activeCrawlEstimate;
+    await appendCrawlTimingEntry({
+      plan: estimate,
+      startedAt: activeCrawlStartedAt,
+      endedAt,
+      estimate,
+      result,
+      error: failure
+    }).then((timing) => {
+      if (result && typeof result === "object") result.crawlTiming = timing;
+    }).catch((error) => {
+      console.warn(`Could not record crawl timing: ${error.message || error}`);
+    });
     activeCrawlPromise = null;
     activeCrawlStartedAt = null;
     activeCrawlEstimate = null;
@@ -5733,6 +5925,12 @@ function currentCrawlStatus() {
   const estimatedCompleteAt = activeCrawlStartedAt && estimatedTotalSeconds
     ? new Date(activeCrawlStartedAt.getTime() + estimatedTotalSeconds * 1000).toISOString()
     : null;
+  const delayThresholdSeconds = estimatedTotalSeconds
+    ? Math.max(30, Math.round(estimatedTotalSeconds * 0.15))
+    : 0;
+  const delayedSeconds = activeCrawlPromise && estimatedTotalSeconds && elapsedSeconds > estimatedTotalSeconds + delayThresholdSeconds
+    ? elapsedSeconds - estimatedTotalSeconds
+    : 0;
   const stageStatus = activeCrawlPromise
     ? activeCrawlStageStatus(elapsedSeconds)
     : { currentStage: null, stages: [] };
@@ -5744,6 +5942,9 @@ function currentCrawlStatus() {
     remainingSeconds,
     estimatedProgress,
     estimatedCompleteAt,
+    isDelayed: delayedSeconds > 0,
+    delayedSeconds,
+    delayThresholdSeconds: activeCrawlPromise ? delayThresholdSeconds : null,
     currentStage: stageStatus.currentStage,
     stages: stageStatus.stages,
     estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null
@@ -5863,8 +6064,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-progress-ux"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-progress-ux"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-eta-calibration"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-eta-calibration"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

@@ -4798,6 +4798,11 @@ a.platform-row:hover {
   display: none;
 }
 
+.crawl-progress.is-delayed {
+  border-color: #fedf89;
+  background: linear-gradient(135deg, #fffbeb 0%, #ffffff 62%, #fff7ed 100%);
+}
+
 .crawl-progress::after {
   content: "";
   position: absolute;
@@ -4808,6 +4813,10 @@ a.platform-row:hover {
   animation: crawl-sweep 1.25s ease-in-out infinite;
 }
 
+.crawl-progress.is-delayed::after {
+  background: linear-gradient(90deg, rgba(247, 144, 9, 0.12), rgba(247, 144, 9, 0.78), rgba(247, 144, 9, 0.12));
+}
+
 .crawl-spinner {
   width: 30px;
   height: 30px;
@@ -4815,6 +4824,11 @@ a.platform-row:hover {
   border-top-color: var(--blue);
   border-radius: 999px;
   animation: crawl-spin 0.8s linear infinite;
+}
+
+.crawl-progress.is-delayed .crawl-spinner {
+  border-color: #fef0c7;
+  border-top-color: #f79009;
 }
 
 .crawl-progress-copy {
@@ -4914,6 +4928,10 @@ a.platform-row:hover {
   border-radius: inherit;
   background: linear-gradient(90deg, #2563eb, #12b76a);
   transition: width 0.5s ease;
+}
+
+.crawl-progress.is-delayed .crawl-progress-meter span {
+  background: linear-gradient(90deg, #f79009, #f04438);
 }
 
 .crawl-progress-meter span::after {
