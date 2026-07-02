@@ -1216,53 +1216,99 @@ function renderNotice() {
   els.noticeCard.hidden = true;
 }
 
+function rankedCompanyItems() {
+  const availabilityItems = state.data?.availability?.items || [];
+  const rankingItems = state.data?.ranking?.items || [];
+  if (rankingItems.length) return rankingItems;
+  return availabilityItems.map((item, index) => ({
+    ...item,
+    hasInventory: true,
+    availabilityIndex: index,
+    overallRank: item.rank || index + 1,
+    rankingSourceLabel: "재고 분석 순위"
+  }));
+}
+
+function inventoryLinked(item = {}) {
+  return item.hasInventory !== false && Number(item.availabilityIndex) >= 0;
+}
+
+function rankMetaChipRow(item = {}) {
+  const chips = [
+    item.overallRank ? `전체 ${fmtNumber(item.overallRank)}위` : "",
+    item.regionalRank ? `지역 ${fmtNumber(item.regionalRank)}위` : "",
+    item.adRank ? `광고 ${fmtNumber(item.adRank)}위` : "",
+    item.hasInventory ? "재고 분석 완료" : "재고 미수집"
+  ].filter(Boolean);
+  return `<div class="flow-chip-row">${chips.slice(0, 4).map((chip, index) => `<span class="${index === 0 ? "hot" : ""}">${escapeHtml(chip)}</span>`).join("")}</div>`;
+}
+
 function renderCompanies() {
-  const items = state.data?.availability?.items || [];
-  els.rankCount.textContent = `${fmtNumber(items.length)} 업체`;
+  const analysisItems = state.data?.availability?.items || [];
+  const items = rankedCompanyItems();
+  const ranking = state.data?.ranking || {};
+  els.rankCount.textContent = ranking.total
+    ? `${fmtNumber(items.length)} 순위 · 재고 ${fmtNumber(ranking.inventoryLinkedCount || analysisItems.length)}`
+    : `${fmtNumber(items.length)} 업체`;
   if (!items.length) {
-    els.companyList.innerHTML = `<div class="empty">업체별 판매/재고 데이터가 없습니다.</div>`;
+    els.companyList.innerHTML = `<div class="empty">네이버 순위 데이터가 없습니다.</div>`;
     return;
   }
 
   const cards = items.slice(0, 30).map((item, index) => {
+    const linked = inventoryLinked(item);
     const lodging = salesStats(item, "lodging");
-    const day = salesStats(item, "day");
-    const metric = lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}` : "확인필요";
+    const metric = linked && lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}` : `${fmtNumber(item.rank || index + 1)}위`;
+    const stockStatus = item.bookingStatus || (linked ? "재고 분석 완료" : "예약ID 조회 실패/미수집");
     return `
-      <article class="company-card" data-company-index="${index}">
+      <article class="company-card ${linked ? "" : "rank-only"}" data-company-index="${index}">
         <div class="company-main">
           <span class="rank-badge">${escapeHtml(item.rank || index + 1)}</span>
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>
-            <div class="company-badges">${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${manualCorrectionBadge(item)}${otaVerificationBadge(item)}</div>
+            <div class="company-badges">${
+              linked
+                ? `${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${manualCorrectionBadge(item)}${otaVerificationBadge(item)}`
+                : `<span class="confidence-badge watch" title="${escapeHtml(stockStatus)}">재고 미수집</span><span class="structure-badge watch">${escapeHtml(item.rankingSourceLabel || "네이버 전체 순위")}</span>`
+            }</div>
           </div>
         </div>
         <div class="company-metric">
           <strong>${metric}</strong>
-          <span>${lodging.supply ? "숙박 추정" : "재고 확인"}</span>
-          <small>${fmtRate(lodging.rate)}</small>
+          <span>${linked && lodging.supply ? "숙박 추정" : "네이버 전체"}</span>
+          <small title="${escapeHtml(stockStatus)}">${linked && lodging.supply ? fmtRate(lodging.rate) : escapeHtml(stockStatus)}</small>
         </div>
         <div class="company-chart">
-          <div class="sales-lines">
-            <span class="sales-line">${escapeHtml(salesLine(item, "lodging"))}</span>
-            <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
-          </div>
-          ${flowChipRow(item)}
-          ${validationReasonRow(item)}
-          ${miniBars(item)}
+          ${linked ? `
+            <div class="sales-lines">
+              <span class="sales-line">${escapeHtml(salesLine(item, "lodging"))}</span>
+              <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
+            </div>
+            ${flowChipRow(item)}
+            ${validationReasonRow(item)}
+            ${miniBars(item)}
+          ` : `
+            <div class="sales-lines">
+              <span class="sales-line">${escapeHtml(`${item.rankingSourceLabel || "네이버 전체 순위"} ${fmtNumber(item.rank || index + 1)}위 · ${stockStatus}`)}</span>
+              <span class="sales-line day">${escapeHtml([item.searchKeyword, item.regionalCluster || item.region, item.address].filter(Boolean).join(" · ") || "지역/주소 확인")}</span>
+            </div>
+            ${rankMetaChipRow(item)}
+          `}
         </div>
         <div class="company-action">
           <div class="company-price-platform">
             ${priceBlock(item)}
             <div class="platform-chips">${platformChips(item)}</div>
           </div>
-          <button class="more-button" type="button" data-open-company="${index}">더보기</button>
+          ${linked
+            ? `<button class="more-button" type="button" data-open-company="${Number(item.availabilityIndex)}">더보기</button>`
+            : `<button class="more-button" type="button" disabled title="${escapeHtml(stockStatus)}">상세 없음</button>`}
         </div>
       </article>
     `;
   }).join("");
-  els.companyList.innerHTML = `${renderValidationBoard(items)}${cards}`;
+  els.companyList.innerHTML = `${renderValidationBoard(analysisItems)}${cards}`;
 }
 
 function dateForRangeLabel(label, run = {}) {

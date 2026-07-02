@@ -4638,6 +4638,108 @@ function availabilityBookingBusinessId(row = {}) {
   });
 }
 
+function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
+  const overallRank = numericField(row, ["overall_rank"]);
+  const regionalRank = numericField(row, ["순위"]);
+  const adRank = numericField(row, ["ad_order"]);
+  const rank = source === "overall"
+    ? overallRank
+    : source === "regional"
+      ? regionalRank
+      : adRank;
+  const placeId = extractNaverPlaceId(row);
+  return {
+    sourceKey: availabilityPlaceKey(row),
+    placeId,
+    place_id: placeId,
+    rank: rank || fallbackRank,
+    overallRank,
+    regionalRank,
+    adRank,
+    rankingSource: source,
+    rankingSourceLabel: source === "overall" ? "네이버 전체 순위" : source === "regional" ? "네이버 지역별 순위" : "네이버 광고 순위",
+    searchKeyword: row["검색키워드"] || row.query || "",
+    searchCluster: row["검색클러스터"] || row["지역"] || "",
+    name: row["업체명"] || row.name || "확인불가",
+    category: row["카테고리"] || row.category || "",
+    region: row["소재지클러스터"] || row["검색클러스터"] || row["지역"] || "",
+    address: row["주소"] || row.location || "",
+    price: row["예약최저가"] || row["금액"] || row.price || "",
+    bookingStatus: row["네이버예약재고수집상태"] || row["예약가능근거"] || "",
+    url: row.url || row["네이버예약URL"] || ""
+  };
+}
+
+function summarizeRankingRows(overallRows = [], adRows = [], regionalRows = [], availability = {}) {
+  const availabilityItems = availability.items || [];
+  const availabilityByKey = new Map();
+  availabilityItems.forEach((item, index) => {
+    const keys = [
+      item.sourceKey,
+      item.placeId ? `place:${item.placeId}` : "",
+      item.place_id ? `place:${item.place_id}` : "",
+      item.bookingBusinessId ? `booking:${item.bookingBusinessId}` : ""
+    ].filter(Boolean);
+    for (const key of keys) {
+      if (!availabilityByKey.has(key)) availabilityByKey.set(key, { item, index });
+    }
+  });
+
+  const regionalByKey = new Map();
+  for (const row of regionalRows) {
+    const key = availabilityPlaceKey(row);
+    const rank = numericField(row, ["순위"]);
+    if (!key || !rank) continue;
+    const current = regionalByKey.get(key);
+    if (!current || rank < current.rank) {
+      regionalByKey.set(key, {
+        rank,
+        keyword: row["검색키워드"] || "",
+        region: row["지역"] || row["검색클러스터"] || ""
+      });
+    }
+  }
+
+  const adByKey = new Map();
+  for (const row of adRows) {
+    const key = availabilityPlaceKey(row);
+    const rank = numericField(row, ["ad_order"]);
+    if (key && rank) adByKey.set(key, { rank });
+  }
+
+  const sourceRows = overallRows.length ? overallRows : (regionalRows.length ? regionalRows : adRows);
+  const source = overallRows.length ? "overall" : (regionalRows.length ? "regional" : "ad");
+  const items = sourceRows
+    .map((row, index) => {
+      const base = rankingRowBase(row, index + 1, source);
+      const linked = availabilityByKey.get(base.sourceKey);
+      const regional = regionalByKey.get(base.sourceKey);
+      const ad = adByKey.get(base.sourceKey);
+      return {
+        ...(linked?.item || {}),
+        ...base,
+        rank: base.rank || linked?.item?.rank || index + 1,
+        hasInventory: Boolean(linked),
+        availabilityIndex: Number.isInteger(linked?.index) ? linked.index : -1,
+        inventoryRank: linked?.item?.rank || null,
+        regionalRank: regional?.rank || base.regionalRank || null,
+        regionalKeyword: regional?.keyword || "",
+        regionalCluster: regional?.region || "",
+        adRank: ad?.rank || base.adRank || null,
+        bookingStatus: base.bookingStatus || linked?.item?.basis || (linked ? "재고 분석 완료" : "재고 미수집")
+      };
+    })
+    .sort((a, b) => Number(a.rank || 9999) - Number(b.rank || 9999))
+    .slice(0, 50);
+
+  return {
+    source: source === "overall" ? "naver_overall" : source === "regional" ? "naver_regional" : "naver_ad",
+    total: overallRows.length || regionalRows.length || adRows.length || 0,
+    inventoryLinkedCount: items.filter((item) => item.hasInventory).length,
+    items
+  };
+}
+
 function summarizeAvailabilityRows(rows) {
   const byPlace = new Map();
   for (const row of rows) {
@@ -4988,6 +5090,7 @@ async function loadRun(runId, options = {}) {
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows]);
+  const ranking = summarizeRankingRows(overallRows, adRows, regionalRows, availability);
   const demandStructure = buildDemandStructure({
     manifest,
     conditions,
@@ -5029,6 +5132,7 @@ async function loadRun(runId, options = {}) {
     datalabTrend,
     demandStructure,
     regions,
+    ranking,
     availability,
     platform: summarizePlatformRows(displayPlatformRows),
     companyPlatforms: summarizeCompanyPlatforms(displayPlatformRows),
@@ -5278,8 +5382,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-crawl-eta"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-crawl-eta"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-rank-source-fix"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-rank-source-fix"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
