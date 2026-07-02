@@ -4460,7 +4460,7 @@ function companyDecisionEvidenceHtml(decision = {}) {
   `;
 }
 
-function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decision = {}) {
+function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
   const run = state.data?.run || {};
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
   const issues = new Set((profile.issues || []).map((issue) => issue.key));
@@ -4474,6 +4474,23 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
   const dateText = decision.problemDateText && decision.problemDateText !== "최근 수집일 기준"
     ? decision.problemDateText
     : dateRangeLabel(run);
+  const keyword = run.keyword || company.bestKeyword || activeKeyword();
+  return {
+    keyword,
+    range,
+    dateText,
+    checkIn: run.checkIn || els.checkInInput?.value || "",
+    checkOut: run.checkOut || els.checkOutInput?.value || "",
+    searchMode: run.searchMode || "keyword",
+    productMode: run.productMode || "all",
+    collectionMode: "precision"
+  };
+}
+
+function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decision = {}) {
+  const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
+  const issues = new Set((profile.issues || []).map((issue) => issue.key));
   const statusSuggestion = company.adminReview?.status
     ? companyAdminReviewLabel(company.adminReview.status)
     : criteria.has("manual_recheck") || issues.has("manual") || issues.has("structure") || issues.has("offline")
@@ -4487,8 +4504,8 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
             : "확인 필요";
   const rows = [
     ["추천 처리", statusSuggestion, "버튼으로 처리 상태 저장"],
-    ["재수집 설정", `정밀분석 · 상세 ${range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
-    ["문제 날짜", dateText || "최근 수집일 기준", "동일 기간 재수집 또는 날짜별 직접 확인"],
+    ["재수집 설정", `정밀분석 · 상세 ${plan.range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
+    ["문제 날짜", plan.dateText || "최근 수집일 기준", "동일 기간 재수집 또는 날짜별 직접 확인"],
     ["확인 채널", decision.channelText || "네이버 기준", "OTA/네이버 객실 탭/전화예약 메모"]
   ];
   return `
@@ -4500,6 +4517,10 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
           <small>${escapeHtml(note)}</small>
         </div>
       `).join("")}
+    </div>
+    <div class="company-check-apply-row">
+      <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}">수집 설정 적용</button>
+      <small>${escapeHtml(`${plan.keyword} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`)}</small>
     </div>
   `;
 }
@@ -6952,6 +6973,38 @@ async function saveCompanyAdminReview(button) {
   }
 }
 
+function applyQueueRecrawlSetting(button) {
+  const companyId = button?.dataset?.queueRecrawlCompany || "";
+  const company = (companyMasterSource().companies || []).find((row) => row.companyId === companyId);
+  if (!company) {
+    setStatus("재수집 설정 실패");
+    return;
+  }
+  const decision = companyDecisionQueueProfile(company);
+  const profile = companyNeedsCorrection(company);
+  const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const keyword = plan.keyword || activeKeyword();
+  if (els.keywordInput) els.keywordInput.value = keyword;
+  if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
+  if (els.checkOutInput && plan.checkOut) els.checkOutInput.value = plan.checkOut;
+  if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword");
+  if (els.productModeInput) els.productModeInput.value = plan.productMode || "all";
+  if (els.collectionModeInput) els.collectionModeInput.value = "precision";
+  if (els.detailRankRangesInput) {
+    els.detailRankRangesInput.disabled = false;
+    els.detailRankRangesInput.value = plan.range || "1-20";
+  }
+  syncCollectionModeInputs();
+  setActiveTab("admin");
+  if (els.crawlStatus) {
+    els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 조건을 확인한 뒤 수집 실행을 누르세요.`;
+  }
+  setStatus("재수집 설정 적용");
+  window.requestAnimationFrame(() => {
+    els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 async function backfillCompanyMaster(button) {
   if (!button) return;
   button.disabled = true;
@@ -7334,6 +7387,8 @@ function bindEvents() {
     if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
     const reviewAction = event.target.closest("[data-company-review-action]");
     if (reviewAction) saveCompanyAdminReview(reviewAction);
+    const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
+    if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
     const checkFilter = event.target.closest("[data-company-check-filter]");
     if (checkFilter) {
       state.companyMasterFilters.check = checkFilter.dataset.companyCheckFilter || "priority";

@@ -2967,6 +2967,38 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.company-check-apply-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px dashed #c7dcff;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 9px;
+}
+
+.company-check-apply-row button {
+  min-height: 34px;
+  border: 1px solid #8cbcff;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-check-apply-row small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .company-check-more {
   margin: 0;
   border: 1px dashed #c7dcff;
@@ -6341,6 +6373,7 @@ a.platform-row:hover {
   .company-sales-metrics,
   .company-decision-evidence,
   .company-check-action-plan,
+  .company-check-apply-row,
   .target-board,
   .company-profile-keywords {
     grid-template-columns: 1fr;
@@ -6782,6 +6815,7 @@ a.platform-row:hover {
   .manual-correction-evidence,
   .company-decision-evidence,
   .company-check-action-plan,
+  .company-check-apply-row,
   .collection-diagnostic-grid,
   .collection-diagnostic-list,
   .sheet-collection-grid,
