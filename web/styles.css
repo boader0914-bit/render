@@ -3463,7 +3463,7 @@ a.platform-row:hover {
   align-items: center;
   gap: 12px;
   overflow: hidden;
-  min-height: 58px;
+  min-height: 132px;
   border: 1px solid #bfdbfe;
   border-radius: 16px;
   background: linear-gradient(135deg, #eff6ff 0%, #ffffff 72%);
@@ -3516,6 +3516,80 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.crawl-progress-meter {
+  grid-column: 1 / -1;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dbeafe;
+}
+
+.crawl-progress-meter span {
+  position: relative;
+  display: block;
+  width: 8%;
+  height: 100%;
+  min-width: 26px;
+  overflow: hidden;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #12b76a);
+  transition: width 0.5s ease;
+}
+
+.crawl-progress-meter span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.58), transparent);
+  animation: crawl-meter-shine 1.5s ease-in-out infinite;
+}
+
+.crawl-progress-numbers {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.crawl-progress-numbers span {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 8px 9px;
+}
+
+.crawl-progress-numbers b,
+.crawl-progress-numbers small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crawl-progress-numbers b {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.crawl-progress-numbers small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.crawl-progress-basis {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @keyframes crawl-spin {
   to {
     transform: rotate(360deg);
@@ -3533,6 +3607,15 @@ a.platform-row:hover {
   100% {
     transform: translateX(36%);
     opacity: 0.35;
+  }
+}
+
+@keyframes crawl-meter-shine {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
   }
 }
 
@@ -6375,6 +6458,10 @@ a.platform-row:hover {
 }
 
 @media (max-width: 560px) {
+  .crawl-progress-numbers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;

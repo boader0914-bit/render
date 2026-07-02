@@ -48,6 +48,7 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const sessions = new Map();
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
+let activeCrawlEstimate = null;
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
@@ -120,6 +121,65 @@ function looksLikeRegionalGlampingKeyword(value) {
 function resolveSearchModeForCrawl(keyword, value) {
   const mode = normalizeSearchMode(value);
   return mode === "company" && looksLikeRegionalGlampingKeyword(keyword) ? "keyword" : mode;
+}
+
+function crawlExecutionPlan(payload = {}) {
+  const keyword = String(payload.keyword || "").trim();
+  const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
+  const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
+  const rawBookingDays = Number(
+    payload.bookingDays ||
+    payload.bookingRangeDays ||
+    bookingDaysFromRange(checkIn, checkOut) ||
+    process.env.BOOKING_RANGE_DAYS ||
+    7
+  );
+  const bookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingDays) ? rawBookingDays : 7)));
+  const bookingRangePlaceLimit = resolveBookingRangePlaceLimit(
+    payload.bookingRangePlaceLimit ?? process.env.BOOKING_RANGE_PLACE_LIMIT,
+    bookingRangeDays
+  );
+  const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
+  const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode);
+  const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
+  return {
+    keyword,
+    checkIn,
+    checkOut,
+    bookingRangeDays,
+    bookingRangePlaceLimit,
+    requestedSearchMode,
+    resolvedSearchMode,
+    productMode
+  };
+}
+
+function estimateCrawlCompletion(payload = {}) {
+  const plan = crawlExecutionPlan(payload);
+  const rangePlaceCount = plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
+  const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
+  const productSeconds = plan.productMode === "all" ? 45 : 26;
+  const trendSeconds = plan.resolvedSearchMode === "keyword" ? 25 : 10;
+  const rangeSeconds = rangePlaceCount
+    ? rangePlaceCount * plan.bookingRangeDays * (plan.productMode === "all" ? 5.5 : 4.2)
+    : 18;
+  const ioSeconds = 35;
+  const estimatedTotalSeconds = Math.max(
+    90,
+    Math.round(searchSeconds + productSeconds + trendSeconds + rangeSeconds + ioSeconds)
+  );
+  return {
+    ...plan,
+    estimatedTotalSeconds,
+    basis: {
+      searchMode: plan.resolvedSearchMode,
+      searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
+      productMode: plan.productMode,
+      productModeLabel: PRODUCT_MODES[plan.productMode] || PRODUCT_MODES.all,
+      bookingRangeDays: plan.bookingRangeDays,
+      bookingRangePlaceLimit: plan.bookingRangePlaceLimit
+    }
+  };
 }
 
 const PROVINCES = {
@@ -5115,12 +5175,14 @@ async function runCrawler(payload) {
     throw error;
   }
   activeCrawlStartedAt = new Date();
+  activeCrawlEstimate = estimateCrawlCompletion(payload);
   activeCrawlPromise = runCrawlerInternal(payload);
   try {
     return await activeCrawlPromise;
   } finally {
     activeCrawlPromise = null;
     activeCrawlStartedAt = null;
+    activeCrawlEstimate = null;
   }
 }
 
@@ -5128,37 +5190,43 @@ function currentCrawlStatus() {
   const elapsedSeconds = activeCrawlStartedAt
     ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
     : 0;
+  const estimatedTotalSeconds = activeCrawlEstimate?.estimatedTotalSeconds || 0;
+  const remainingSeconds = activeCrawlPromise && estimatedTotalSeconds
+    ? Math.max(0, Math.round(estimatedTotalSeconds - elapsedSeconds))
+    : null;
+  const estimatedProgress = activeCrawlPromise && estimatedTotalSeconds
+    ? Math.max(1, Math.min(99, Math.round((elapsedSeconds / estimatedTotalSeconds) * 100)))
+    : null;
+  const estimatedCompleteAt = activeCrawlStartedAt && estimatedTotalSeconds
+    ? new Date(activeCrawlStartedAt.getTime() + estimatedTotalSeconds * 1000).toISOString()
+    : null;
   return {
     active: !!activeCrawlPromise,
     startedAt: activeCrawlStartedAt ? activeCrawlStartedAt.toISOString() : null,
-    elapsedSeconds
+    elapsedSeconds,
+    estimatedTotalSeconds: activeCrawlPromise ? estimatedTotalSeconds : null,
+    remainingSeconds,
+    estimatedProgress,
+    estimatedCompleteAt,
+    estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null
   };
 }
 
 async function runCrawlerInternal(payload) {
-  const keyword = String(payload.keyword || "").trim();
+  const plan = crawlExecutionPlan(payload);
+  const keyword = plan.keyword;
   if (!keyword) throw new Error("키워드를 입력해야 합니다.");
-  const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
-  const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
-  const bookingRangeDays = payload.bookingDays || payload.bookingRangeDays || bookingDaysFromRange(checkIn, checkOut) || process.env.BOOKING_RANGE_DAYS || 7;
-  const bookingRangePlaceLimit = resolveBookingRangePlaceLimit(
-    payload.bookingRangePlaceLimit ?? process.env.BOOKING_RANGE_PLACE_LIMIT,
-    bookingRangeDays
-  );
-
-  const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
-  const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode);
   const env = {
     ...process.env,
-    CHECK_IN: checkIn,
-    CHECK_OUT: checkOut,
+    CHECK_IN: plan.checkIn,
+    CHECK_OUT: plan.checkOut,
     ADULTS: String(payload.adults || process.env.ADULTS || 2),
-    SEARCH_MODE: resolvedSearchMode,
-    SEARCH_MODE_REQUESTED: normalizeSearchMode(requestedSearchMode),
-    SEARCH_MODE_AUTO_CORRECTED: resolvedSearchMode !== normalizeSearchMode(requestedSearchMode) ? "1" : "0",
-    PRODUCT_MODE: normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all"),
-    BOOKING_RANGE_DAYS: String(bookingRangeDays),
-    BOOKING_RANGE_PLACE_LIMIT: String(bookingRangePlaceLimit),
+    SEARCH_MODE: plan.resolvedSearchMode,
+    SEARCH_MODE_REQUESTED: normalizeSearchMode(plan.requestedSearchMode),
+    SEARCH_MODE_AUTO_CORRECTED: plan.resolvedSearchMode !== normalizeSearchMode(plan.requestedSearchMode) ? "1" : "0",
+    PRODUCT_MODE: plan.productMode,
+    BOOKING_RANGE_DAYS: String(plan.bookingRangeDays),
+    BOOKING_RANGE_PLACE_LIMIT: String(plan.bookingRangePlaceLimit),
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,
@@ -5210,8 +5278,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-admin-decision-queue"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-admin-decision-queue"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-crawl-eta"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-crawl-eta"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

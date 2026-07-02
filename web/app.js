@@ -79,6 +79,12 @@ const els = {
   crawlProgress: document.getElementById("crawlProgress"),
   crawlProgressTitle: document.getElementById("crawlProgressTitle"),
   crawlProgressText: document.getElementById("crawlProgressText"),
+  crawlProgressBar: document.getElementById("crawlProgressBar"),
+  crawlProgressPercent: document.getElementById("crawlProgressPercent"),
+  crawlProgressElapsed: document.getElementById("crawlProgressElapsed"),
+  crawlProgressRemaining: document.getElementById("crawlProgressRemaining"),
+  crawlProgressEta: document.getElementById("crawlProgressEta"),
+  crawlProgressBasis: document.getElementById("crawlProgressBasis"),
   crawlStatus: document.getElementById("crawlStatus"),
   yeogiManualBadge: document.getElementById("yeogiManualBadge"),
   yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
@@ -333,11 +339,25 @@ function ensureCrawlControls() {
         <strong id="crawlProgressTitle">수집 준비</strong>
         <small id="crawlProgressText">네이버·NOL·떠나요를 확인합니다.</small>
       </div>
+      <div class="crawl-progress-meter" aria-hidden="true"><span id="crawlProgressBar"></span></div>
+      <div class="crawl-progress-numbers" aria-label="수집 예상 시간">
+        <span><b id="crawlProgressPercent">예측중</b><small>진행률</small></span>
+        <span><b id="crawlProgressElapsed">0초</b><small>경과</small></span>
+        <span><b id="crawlProgressRemaining">계산 중</b><small>남은 시간</small></span>
+        <span><b id="crawlProgressEta">--:--</b><small>완료 예정</small></span>
+      </div>
+      <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
     `;
     submitButton?.after(progress);
     els.crawlProgress = progress;
     els.crawlProgressTitle = progress.querySelector("#crawlProgressTitle");
     els.crawlProgressText = progress.querySelector("#crawlProgressText");
+    els.crawlProgressBar = progress.querySelector("#crawlProgressBar");
+    els.crawlProgressPercent = progress.querySelector("#crawlProgressPercent");
+    els.crawlProgressElapsed = progress.querySelector("#crawlProgressElapsed");
+    els.crawlProgressRemaining = progress.querySelector("#crawlProgressRemaining");
+    els.crawlProgressEta = progress.querySelector("#crawlProgressEta");
+    els.crawlProgressBasis = progress.querySelector("#crawlProgressBasis");
   }
 }
 
@@ -345,40 +365,99 @@ function searchModeLabel(value) {
   return value === "company" ? "업체명" : "키워드/권역";
 }
 
-function setCrawlProgress(active, title = "", text = "") {
+function formatClockTime(value) {
+  if (!value) return "--:--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--:--";
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${hour}:${minute}`;
+}
+
+function crawlEstimateBasisText(basis = {}) {
+  if (!basis || !Object.keys(basis).length) return "조건 기반 예상값입니다.";
+  const range = Number(basis.bookingRangeDays) > 1
+    ? `${fmtNumber(basis.bookingRangeDays)}일 · 상위 ${fmtNumber(basis.bookingRangePlaceLimit)}개 상세`
+    : "1일 기준";
+  return `${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${range}`;
+}
+
+function updateCrawlProgressNumbers(meta = {}) {
+  const percent = Number(meta.estimatedProgress);
+  const elapsed = Number(meta.elapsedSeconds);
+  const remaining = Number(meta.remainingSeconds);
+  const hasPercent = Number.isFinite(percent);
+  const width = hasPercent ? Math.max(5, Math.min(99, percent)) : 8;
+  if (els.crawlProgressBar) els.crawlProgressBar.style.width = `${width}%`;
+  if (els.crawlProgressPercent) els.crawlProgressPercent.textContent = hasPercent ? `${Math.round(percent)}%` : "예측중";
+  if (els.crawlProgressElapsed) els.crawlProgressElapsed.textContent = formatElapsed(elapsed) || "0초";
+  if (els.crawlProgressRemaining) {
+    els.crawlProgressRemaining.textContent = Number.isFinite(remaining)
+      ? (remaining <= 0 ? "곧 완료" : formatElapsed(remaining))
+      : "계산 중";
+  }
+  if (els.crawlProgressEta) els.crawlProgressEta.textContent = formatClockTime(meta.estimatedCompleteAt);
+  if (els.crawlProgressBasis) els.crawlProgressBasis.textContent = crawlEstimateBasisText(meta.estimateBasis);
+}
+
+function setCrawlProgress(active, title = "", text = "", meta = {}) {
   if (!els.crawlProgress) return;
   els.crawlProgress.hidden = !active;
   if (title && els.crawlProgressTitle) els.crawlProgressTitle.textContent = title;
   if (text && els.crawlProgressText) els.crawlProgressText.textContent = text;
+  if (active) updateCrawlProgressNumbers(meta);
 }
 
 function formatElapsed(seconds) {
   const value = Number(seconds);
   if (!Number.isFinite(value) || value <= 0) return "";
+  const hours = Math.floor(value / 3600);
   const minutes = Math.floor(value / 60);
   const rest = Math.round(value % 60);
+  if (hours) return `${hours}시간 ${Math.max(0, minutes - hours * 60)}분`;
   return minutes ? `${minutes}분 ${rest}초` : `${rest}초`;
 }
 
+function clearCrawlStatusTimer() {
+  if (!state.crawlStatusTimer) return;
+  clearTimeout(state.crawlStatusTimer);
+  state.crawlStatusTimer = null;
+}
+
+function scheduleCrawlStatusPoll(delay = 5000, notifyIdle = false) {
+  clearCrawlStatusTimer();
+  state.crawlStatusTimer = setTimeout(() => pollCrawlStatusUntilIdle(notifyIdle), delay);
+}
+
+function crawlEstimateInlineText(status = {}) {
+  const percent = Number(status.estimatedProgress);
+  const remaining = Number(status.remainingSeconds);
+  const eta = formatClockTime(status.estimatedCompleteAt);
+  const parts = [];
+  if (Number.isFinite(percent)) parts.push(`예상 ${Math.round(percent)}%`);
+  if (Number.isFinite(remaining)) parts.push(`남은 ${remaining <= 0 ? "곧 완료" : formatElapsed(remaining)}`);
+  if (eta !== "--:--") parts.push(`완료 ${eta}`);
+  return parts.join(" · ");
+}
+
 async function pollCrawlStatusUntilIdle(notifyIdle = false) {
-  if (state.crawlStatusTimer) {
-    clearTimeout(state.crawlStatusTimer);
-    state.crawlStatusTimer = null;
-  }
+  clearCrawlStatusTimer();
   try {
     const status = await fetchJson("/api/crawl-status");
     if (status.active) {
       const elapsed = formatElapsed(status.elapsedSeconds);
+      const estimate = crawlEstimateInlineText(status);
       setCrawlProgress(
         true,
         "수집 진행 중",
-        `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}.`
+        `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`,
+        status
       );
       if (els.crawlStatus) {
-        els.crawlStatus.textContent = `기존 수집이 진행 중입니다${elapsed ? ` (${elapsed} 경과)` : ""}. 완료되면 결과를 자동 갱신합니다.`;
+        els.crawlStatus.textContent = `수집이 진행 중입니다${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`;
       }
       setStatus("수집 중");
-      state.crawlStatusTimer = setTimeout(() => pollCrawlStatusUntilIdle(true), 10000);
+      scheduleCrawlStatusPoll(Number(status.remainingSeconds) <= 60 ? 5000 : 10000, true);
       return;
     }
     setCrawlProgress(false);
@@ -6551,6 +6630,7 @@ async function submitCrawl(event) {
   );
   els.crawlStatus.textContent = `${searchModeLabel(payload.searchMode)} 기준 수집을 시작했습니다. 완료되면 화면을 갱신합니다.`;
   setStatus("수집 중");
+  scheduleCrawlStatusPoll(1500, false);
   try {
     const result = await fetchJson("/api/crawl", {
       method: "POST",
@@ -6560,6 +6640,7 @@ async function submitCrawl(event) {
     state.runs = result.runs || state.runs;
     state.activeRunId = result.runId || state.runs[0]?.id;
     await loadRuns(false);
+    clearCrawlStatusTimer();
     setCrawlProgress(false);
     els.crawlStatus.textContent = "수집 완료. 화면을 갱신했습니다.";
     setActiveTab("rank");
@@ -6570,6 +6651,7 @@ async function submitCrawl(event) {
       setStatus("수집 중");
       pollCrawlStatusUntilIdle(true);
     } else {
+      clearCrawlStatusTimer();
       setCrawlProgress(false);
       els.crawlStatus.textContent = `수집 실패: ${error.message}`;
       setStatus("수집 실패");
