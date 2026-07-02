@@ -1064,6 +1064,120 @@ function itemRevenueStats(item = {}, kind = "lodging") {
   };
 }
 
+function revenueDayTypeRows(revenue = {}) {
+  const text = String(revenue.byDayType || "").trim();
+  const unit = revenue.unit || "";
+  const order = ["평일", "금요일", "토요일", "일요일"];
+  if (!text) return [];
+  return text.split(/\s*,\s*/).map((entry) => {
+    const match = entry.match(/^(평일|금요일|토요일|일요일)\s+(.+?)\((.*)\)$/);
+    if (!match) return null;
+    const detail = match[3] || "";
+    const countMatch = detail.match(new RegExp(`(\\d+)\\s*${unit || "[개회]"}`));
+    const offlineMatch = detail.match(/오프라인\s+(\d+)/);
+    const missingMatch = detail.match(/가격누락\s+(\d+)/);
+    return {
+      label: match[1],
+      revenueText: match[2],
+      pricedSoldOut: countMatch ? Number(countMatch[1]) : 0,
+      offlineReserved: offlineMatch ? Number(offlineMatch[1]) : 0,
+      missingPriceSoldOut: missingMatch ? Number(missingMatch[1]) : 0,
+      detail,
+      unit,
+      order: order.indexOf(match[1])
+    };
+  }).filter(Boolean).sort((a, b) => a.order - b.order);
+}
+
+function revenueProductRows(item = {}) {
+  const rows = Array.isArray(item.itemDetails) ? item.itemDetails : [];
+  return rows.map((row, index) => {
+    const saleType = String(row.saleType || row.bizItemSubType || "").trim();
+    const kind = /데이|day|캠프닉/i.test(saleType) ? "day" : "lodging";
+    const stock = optionalNumber(row.stock);
+    const available = optionalNumber(row.available);
+    const bookingCount = finiteNumber(row.bookingCount, 0) + finiteNumber(row.occupiedBookingCount, 0);
+    const sold = Number.isFinite(stock) && Number.isFinite(available)
+      ? Math.max(0, stock - available)
+      : bookingCount;
+    return {
+      key: row.bizItemId || `${row.name || "상품"}-${index}`,
+      name: row.name || "상품명 확인",
+      kind,
+      kindLabel: kind === "day" ? "데이유즈/캠프닉" : "숙박",
+      stock: Number.isFinite(stock) ? stock : null,
+      available: Number.isFinite(available) ? available : null,
+      sold,
+      price: optionalNumber(row.price),
+      quantityKnown: Number.isFinite(stock) || Number.isFinite(available)
+    };
+  });
+}
+
+function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lodging"), dayUse = itemRevenueStats(item, "day")) {
+  const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
+  const priced = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
+  const missing = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
+  const soldQuantity = priced + missing;
+  const coverage = soldQuantity ? priced / soldQuantity : NaN;
+  const confidence = inventoryConfidenceInfo(item);
+  const structure = inventoryStructureInfo(item);
+  const productRows = revenueProductRows(item);
+  const productKnown = productRows.length > 0 || finiteNumber(item.countedItemCount, 0) + finiteNumber(item.nightItemCount, 0) + finiteNumber(item.dayUseItemCount, 0) > 0;
+  const hasDayType = revenueDayTypeRows(lodging).length > 0 || revenueDayTypeRows(dayUse).length > 0;
+  const rangeBasis = lodging.basis === "range" || dayUse.basis === "range";
+  let score = 42;
+  if (totalRevenue > 0) score += 12;
+  if (rangeBasis) score += 14;
+  if (hasDayType) score += 12;
+  if (productKnown) score += 9;
+  if (Number.isFinite(coverage)) score += Math.round(coverage * 18);
+  if (["A", "B"].includes(confidence.grade)) score += 8;
+  if (["D", "E"].includes(confidence.grade)) score -= 12;
+  if (structure.type === "unknown" || structure.type === "grouped_stock") score -= 8;
+  if (missing > 0) score -= Math.min(20, missing * 3);
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const grade = score >= 86 ? "A" : score >= 72 ? "B" : score >= 58 ? "C" : score >= 42 ? "D" : "E";
+  const tone = ["A", "B"].includes(grade) ? "good" : grade === "C" ? "watch" : "bad";
+  const reasons = [
+    rangeBasis ? "기간 기준 수집" : "기준일 중심",
+    hasDayType ? "평일/금/토/일 분리" : "요일별 매출 대기",
+    productKnown ? "상품별 수량 확인" : "상품별 수량 미확보",
+    Number.isFinite(coverage) ? `가격확보 ${fmtRate(coverage)}` : "가격확보 대기",
+    missing ? `가격누락 ${fmtNumber(missing)}개/회` : "가격누락 없음",
+    confidence.grade ? `수량 신뢰도 ${confidence.grade}` : ""
+  ].filter(Boolean);
+  return {
+    score,
+    grade,
+    tone,
+    label: grade === "A" ? "매출 신뢰 높음" : grade === "B" ? "매출 신뢰 양호" : grade === "C" ? "보완 필요" : "정밀 확인 필요",
+    coverage,
+    priced,
+    missing,
+    soldQuantity,
+    productKnown,
+    hasDayType,
+    rangeBasis,
+    reasons
+  };
+}
+
+function preciseRevenueProfile(item = {}) {
+  const lodging = itemRevenueStats(item, "lodging");
+  const dayUse = itemRevenueStats(item, "day");
+  const precision = revenuePrecisionProfile(item, lodging, dayUse);
+  return {
+    lodging,
+    dayUse,
+    precision,
+    totalRevenue: finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue),
+    lodgingDayRows: revenueDayTypeRows(lodging),
+    dayUseDayRows: revenueDayTypeRows(dayUse),
+    productRows: revenueProductRows(item)
+  };
+}
+
 function summarizeRevenue(items = []) {
   return items.reduce((acc, item) => {
     const lodging = itemRevenueStats(item, "lodging");
@@ -2883,6 +2997,7 @@ function companyQueueRevenueImpact(company = {}) {
   const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
   const totalPricedSoldOut = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
   const totalMissingPriceSoldOut = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
+  const precision = revenuePrecisionProfile(item || {}, lodging, dayUse);
   const hasDetail = Boolean(
     totalRevenue ||
     totalPricedSoldOut ||
@@ -2901,6 +3016,7 @@ function companyQueueRevenueImpact(company = {}) {
     totalRevenue,
     totalPricedSoldOut,
     totalMissingPriceSoldOut,
+    precision,
     source: item ? "current" : "master"
   };
 }
@@ -3508,6 +3624,7 @@ function companySalesEvidenceList(company = {}, entry = {}) {
     entry.action?.pitch,
     company.bestRank ? `최고 노출 ${fmtNumber(company.bestRank)}위 · ${company.bestKeyword || "대표 키워드"}` : "",
     finiteNumber(revenue.totalRevenue) ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : "",
+    revenue.precision?.grade ? `매출 신뢰도 ${revenue.precision.grade} · ${fmtNumber(revenue.precision.score)}점` : "",
     finiteNumber(revenue.totalMissingPriceSoldOut) ? `가격 누락 ${fmtNumber(revenue.totalMissingPriceSoldOut)}개/회` : "",
     signals.fridayWeak ? `금요일 공백 ${fmtRate(signals.fridayRate)}` : "",
     signals.sundayWeak ? `일요일 공백 ${fmtRate(signals.sundayRate)}` : "",
@@ -3525,6 +3642,7 @@ function companySalesProposalSignals(company = {}, entry = {}) {
   const rows = [
     { label: "제안축", value: action.label || "상품 재정리" },
     { label: "예상매출", value: fmtWon(revenue.totalRevenue) },
+    revenue.precision?.grade ? { label: "매출신뢰", value: `${revenue.precision.grade} · ${fmtNumber(revenue.precision.score)}점` } : null,
     company.bestRank ? { label: "노출", value: `${fmtNumber(company.bestRank)}위 · ${company.bestKeyword || company.latestKeyword || "대표 키워드"}` } : null,
     finiteNumber(revenue.totalMissingPriceSoldOut) ? { label: "가격확인", value: `${fmtNumber(revenue.totalMissingPriceSoldOut)}개/회` } : null,
     signals.fridayWeak ? { label: "금요일", value: `공백 ${fmtRate(signals.fridayRate)}` } : null,
@@ -5810,23 +5928,29 @@ function companyQueueRevenueImpactHtml(company = {}) {
   const impact = companyQueueRevenueImpact(company);
   if (!impact.hasDetail) return "";
   const priceTone = impact.totalMissingPriceSoldOut > 0 ? "watch" : "good";
+  const precision = impact.precision || {};
   const sourceText = impact.source === "current" ? "현재 수집 결과" : "업체 최신 스냅샷";
   return `
     <div class="company-check-revenue-impact">
       <div>
         <span>숙박 예상매출</span>
         <strong>${fmtWon(impact.lodging.revenue)}</strong>
-        <small>${escapeHtml(queueRevenueCoverageShort(impact.lodging))}</small>
+        <small>${escapeHtml(`${queueRevenueCoverageShort(impact.lodging)} · ${queueRevenueDetailShort(impact.lodging, "요일별 가격 대기")}`)}</small>
       </div>
       <div>
         <span>데이유즈/캠프닉</span>
         <strong>${fmtWon(impact.dayUse.revenue)}</strong>
-        <small>${escapeHtml(queueRevenueCoverageShort(impact.dayUse))}</small>
+        <small>${escapeHtml(`${queueRevenueCoverageShort(impact.dayUse)} · ${queueRevenueDetailShort(impact.dayUse, "회차 가격 대기")}`)}</small>
       </div>
       <div class="${priceTone}">
         <span>매출 영향</span>
         <strong>${fmtWon(impact.totalRevenue)}</strong>
         <small>${escapeHtml(`${sourceText} · ${queueRevenueDetailShort(impact.lodging, "숙박 요일별 매출 대기")}`)}</small>
+      </div>
+      <div class="${escapeHtml(precision.tone || "watch")}">
+        <span>매출 신뢰도</span>
+        <strong>${escapeHtml(precision.grade ? `${precision.grade} · ${fmtNumber(precision.score)}점` : "대기")}</strong>
+        <small>${escapeHtml((precision.reasons || []).slice(0, 2).join(" · ") || "가격/수량 정밀 확인 필요")}</small>
       </div>
     </div>
   `;
@@ -7000,7 +7124,7 @@ function renderTargets() {
           </div>
         </div>
         <div class="target-execution-metrics">
-          <div><span>예상매출</span><strong>${fmtWon(revenueImpact.totalRevenue)}</strong><small>가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회</small></div>
+          <div><span>예상매출</span><strong>${fmtWon(revenueImpact.totalRevenue)}</strong><small>${escapeHtml(revenueImpact.precision?.grade ? `신뢰 ${revenueImpact.precision.grade} · 가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회` : `가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회`)}</small></div>
           <div><span>노출</span><strong>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "대기"}</strong><small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 확인")}</small></div>
           <div><span>후속</span><strong>${escapeHtml(followUp.label)}</strong><small>${escapeHtml(followUp.detail || "다음 액션 미지정")}</small></div>
           <div><span>반응</span><strong>${escapeHtml(responseMeta.label)}</strong><small>${escapeHtml(reasonMeta.label)}</small></div>
@@ -8330,9 +8454,48 @@ function revenueCoverageText(revenue = {}) {
   return `${fmtNumber(priced)}${revenue.unit} 가격확인${missing ? ` · 가격누락 ${fmtNumber(missing)}${revenue.unit}` : ""}`;
 }
 
+function revenueDayTypeGridHtml(title, rows = [], fallback = "요일별 가격과 판매수량을 같은 수집에서 확보해야 합니다.") {
+  return `
+    <div class="revenue-day-panel">
+      <strong>${escapeHtml(title)}</strong>
+      <div class="revenue-day-grid">
+        ${rows.length ? rows.map((row) => `
+          <div>
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.revenueText)}</strong>
+            <small>${escapeHtml(`${fmtNumber(row.pricedSoldOut)}${row.unit} 가격확인${row.offlineReserved ? ` · 오프라인 ${fmtNumber(row.offlineReserved)}${row.unit}` : ""}${row.missingPriceSoldOut ? ` · 가격누락 ${fmtNumber(row.missingPriceSoldOut)}${row.unit}` : ""}`)}</small>
+          </div>
+        `).join("") : `<p class="empty">${escapeHtml(fallback)}</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function revenueProductRowsHtml(rows = []) {
+  if (!rows.length) {
+    return `<div class="empty">상품별 수량 데이터가 아직 없습니다. 정밀분석 재수집 후 객실/데이유즈 상품 단위가 표시됩니다.</div>`;
+  }
+  return `
+    <div class="revenue-product-list">
+      ${rows.slice(0, 8).map((row) => `
+        <div>
+          <div>
+            <strong>${escapeHtml(row.name)}</strong>
+            <small>${escapeHtml(row.kindLabel)}</small>
+          </div>
+          <span>${row.stock === null ? "총량확인" : `${fmtNumber(row.stock)}개/회`}</span>
+          <span>${row.available === null ? "잔여확인" : `${fmtNumber(row.available)}잔여`}</span>
+          <span>${fmtNumber(row.sold)}판매</span>
+          <b>${Number.isFinite(row.price) ? fmtWon(row.price) : "가격확인"}</b>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function sheetRevenuePanel(item = {}) {
-  const lodging = itemRevenueStats(item, "lodging");
-  const dayUse = itemRevenueStats(item, "day");
+  const profile = preciseRevenueProfile(item);
+  const { lodging, dayUse, precision } = profile;
   const lodgingDetail = lodging.byDayType || lodging.detail || "요일별 매출은 다음 수집부터 표시됩니다.";
   const dayUseDetail = dayUse.byDayType || dayUse.detail || "데이유즈/캠프닉 매출은 상품 가격과 판매수량이 함께 확인될 때 표시됩니다.";
   const offlineRows = [
@@ -8342,10 +8505,15 @@ function sheetRevenuePanel(item = {}) {
   return `
     <section class="sheet-section sheet-revenue-section">
       <div class="sheet-structure-title">
-        <h3>예상 매출</h3>
-        <span class="structure-badge watch">가격확인 수량 기준</span>
+        <h3>예상 매출 정밀 산정</h3>
+        <span class="structure-badge ${escapeHtml(precision.tone)}">${escapeHtml(`${precision.grade} · ${precision.label}`)}</span>
       </div>
       <div class="sheet-history-grid">
+        <div>
+          <span>전체 예상매출</span>
+          <strong>${fmtWon(profile.totalRevenue)}</strong>
+          <small>${escapeHtml(`가격확보 ${Number.isFinite(precision.coverage) ? fmtRate(precision.coverage) : "대기"} · ${fmtNumber(precision.priced)}개/회`)}</small>
+        </div>
         <div>
           <span>숙박 매출</span>
           <strong>${fmtWon(lodging.revenue)}</strong>
@@ -8361,6 +8529,20 @@ function sheetRevenuePanel(item = {}) {
           <strong>${fmtWon(dayUse.revenue)}</strong>
           <small>${escapeHtml(`${dayUse.label} · ${revenueCoverageText(dayUse)}`)}</small>
         </div>
+        <div>
+          <span>매출 신뢰도</span>
+          <strong>${fmtNumber(precision.score)}점</strong>
+          <small>${escapeHtml(precision.reasons.slice(0, 2).join(" · "))}</small>
+        </div>
+      </div>
+      ${revenueDayTypeGridHtml("숙박 요일별 가격/판매금", profile.lodgingDayRows)}
+      ${revenueDayTypeGridHtml("데이유즈/캠프닉 요일별 가격/판매금", profile.dayUseDayRows, "데이유즈/캠프닉은 숙박과 같은 카테고리로 보되, 회차 가격과 판매수량이 확인될 때 산정합니다.")}
+      <div class="revenue-product-panel">
+        <div class="history-card-head">
+          <strong>상품별 수량/가격</strong>
+          <small>할인 옵션·패키지는 산출하지 않고 상품 가격과 판매수량만 반영</small>
+        </div>
+        ${revenueProductRowsHtml(profile.productRows)}
       </div>
       <div class="search-row">
         <div>

@@ -3874,7 +3874,7 @@ a.platform-row:hover {
 
 .company-check-revenue-impact {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -3913,6 +3913,16 @@ a.platform-row:hover {
 
 .company-check-revenue-impact div.watch strong {
   color: #b54708;
+}
+
+.company-check-revenue-impact div.good {
+  border-color: #b7e4c7;
+  background: #f6fef9;
+}
+
+.company-check-revenue-impact div.bad {
+  border-color: #fecaca;
+  background: #fef3f2;
 }
 
 .company-recheck-card {
@@ -5292,6 +5302,91 @@ a.platform-row:hover {
   font-size: 17px;
   line-height: 1.08;
   font-weight: 950;
+  white-space: nowrap;
+}
+
+.revenue-day-panel,
+.revenue-product-panel {
+  display: grid;
+  gap: 9px;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.revenue-day-panel > strong,
+.revenue-product-panel strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.revenue-day-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.revenue-day-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.revenue-day-grid span,
+.revenue-day-grid small,
+.revenue-product-list small,
+.revenue-product-list span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.revenue-day-grid strong {
+  color: var(--blue);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.revenue-product-list {
+  display: grid;
+  gap: 7px;
+}
+
+.revenue-product-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(64px, .5fr)) minmax(74px, .55fr);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 9px;
+}
+
+.revenue-product-list > div > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.revenue-product-list b {
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 950;
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -7733,6 +7828,7 @@ a.platform-row:hover {
   .company-recheck-head,
   .company-recheck-recommend,
   .company-queue-log-list article > div,
+  .revenue-product-list > div,
   .target-board,
   .target-export-bar,
   .target-execution-metrics,
@@ -7919,6 +8015,7 @@ a.platform-row:hover {
   }
 
   .sheet-history-grid,
+  .revenue-day-grid,
   .manual-correction-evidence {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -8249,6 +8346,8 @@ a.platform-row:hover {
   .collection-quality-feedback,
   .recrawl-auto-metrics,
   .recrawl-auto-cells,
+  .revenue-day-grid,
+  .revenue-product-list > div,
   .sheet-collection-grid,
   .sheet-audit-grid,
   .target-board-hero,
