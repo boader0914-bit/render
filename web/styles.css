@@ -2752,6 +2752,114 @@ a.platform-row:hover {
   color: var(--blue);
 }
 
+.company-queue-ops {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.company-queue-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.company-queue-ops-grid article,
+.company-queue-log-panel {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.company-queue-ops-grid article {
+  display: grid;
+  gap: 3px;
+}
+
+.company-queue-ops-grid span,
+.company-queue-ops-grid small,
+.company-queue-log-panel small,
+.company-queue-log-list small,
+.company-queue-log-list span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-queue-ops-grid strong {
+  color: var(--blue-dark);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.company-queue-log-panel {
+  display: grid;
+  gap: 8px;
+  background: #fff;
+}
+
+.company-queue-log-panel > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.company-queue-log-panel strong,
+.company-queue-log-list b {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.company-queue-log-list {
+  display: grid;
+  gap: 6px;
+}
+
+.company-queue-log-list article {
+  display: grid;
+  gap: 4px;
+  border-left: 3px solid #93c5fd;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px 9px;
+}
+
+.company-queue-log-list article.good {
+  border-left-color: #12b76a;
+  background: #f6fef9;
+}
+
+.company-queue-log-list article.bad {
+  border-left-color: #f04438;
+  background: #fff7f7;
+}
+
+.company-queue-log-list article.watch {
+  border-left-color: #f79009;
+  background: #fffbeb;
+}
+
+.company-queue-log-list article > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.company-queue-log-list span {
+  justify-self: end;
+  text-align: right;
+}
+
 .company-check-card.correction {
   border-color: #fed7aa;
   background: #fffdf8;
@@ -6565,9 +6673,12 @@ a.platform-row:hover {
   .company-check-action-plan,
   .company-check-revenue-impact,
   .company-recheck-grid,
+  .company-queue-ops,
+  .company-queue-ops-grid,
   .company-check-apply-row,
   .company-recheck-head,
   .company-recheck-recommend,
+  .company-queue-log-list article > div,
   .target-board,
   .company-profile-keywords {
     grid-template-columns: 1fr;
@@ -7011,9 +7122,12 @@ a.platform-row:hover {
   .company-check-action-plan,
   .company-check-revenue-impact,
   .company-recheck-grid,
+  .company-queue-ops,
+  .company-queue-ops-grid,
   .company-check-apply-row,
   .company-recheck-head,
   .company-recheck-recommend,
+  .company-queue-log-list article > div,
   .collection-diagnostic-grid,
   .collection-diagnostic-list,
   .sheet-collection-grid,

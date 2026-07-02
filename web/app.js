@@ -4756,7 +4756,15 @@ function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = 
 function companyCheckFilterOptions() {
   return [
     ["priority", "오늘 처리"],
-    ["recheck", "재확인"],
+    ["recheck", "재검토"],
+    ["recommend_contact", "추천 컨택"],
+    ["recommend_manual", "추천 보정"],
+    ["recommend_recrawl", "추천 재수집"],
+    ["recommend_check", "추천 확인"],
+    ["high_revenue", "매출 영향"],
+    ["price_missing", "가격 누락"],
+    ["improved", "개선"],
+    ["worsened", "악화"],
     ["recrawl", "재수집"],
     ["all", "전체"],
     ["correction", "보정 필요"],
@@ -4767,14 +4775,26 @@ function companyCheckFilterOptions() {
 }
 
 function companyCheckFilterMatches(entry = {}, filter = "priority") {
+  const open = entry.workflow?.key !== "done";
+  const recommendation = entry.autoRecommendation || {};
+  const comparison = entry.comparison || {};
+  const revenue = entry.revenueImpact || {};
   if (filter === "all") return true;
   if (filter === "priority") return entry.workflow.key === "open";
   if (filter === "recheck") return entry.workflow.key === "recheck";
-  if (filter === "recrawl") return entry.workflow.key !== "done" && (entry.type.key === "recrawl" || entry.company.adminReview?.status === "recrawl_needed");
+  if (filter === "recommend_contact") return open && recommendation.status === "contact_ready";
+  if (filter === "recommend_manual") return open && recommendation.status === "manual_needed";
+  if (filter === "recommend_recrawl") return open && recommendation.status === "recrawl_needed";
+  if (filter === "recommend_check") return open && recommendation.status === "check_needed";
+  if (filter === "high_revenue") return open && finiteNumber(revenue.totalRevenue) >= 2000000;
+  if (filter === "price_missing") return open && finiteNumber(revenue.totalMissingPriceSoldOut) > 0;
+  if (filter === "improved") return open && comparison.hasComparison && comparison.improved > comparison.worsened;
+  if (filter === "worsened") return open && comparison.hasComparison && comparison.worsened > 0;
+  if (filter === "recrawl") return open && (entry.type.key === "recrawl" || entry.company.adminReview?.status === "recrawl_needed");
   if (filter === "done") return entry.workflow.key === "done";
-  if (filter === "ota") return entry.workflow.key !== "done" && (entry.type.key === "ota" || (entry.profile.issues || []).some((issue) => issue.key === "ota"));
-  if (filter === "gap") return entry.workflow.key !== "done" && (entry.type.key === "gap" || (entry.profile.issues || []).some((issue) => issue.key === "gap"));
-  return entry.workflow.key !== "done" && entry.type.key === filter;
+  if (filter === "ota") return open && (entry.type.key === "ota" || (entry.profile.issues || []).some((issue) => issue.key === "ota"));
+  if (filter === "gap") return open && (entry.type.key === "gap" || (entry.profile.issues || []).some((issue) => issue.key === "gap"));
+  return open && entry.type.key === filter;
 }
 
 function companyDecisionQueueEntries(master = {}) {
@@ -4785,10 +4805,13 @@ function companyDecisionQueueEntries(master = {}) {
       const type = companyCheckEntryType(company, profile);
       const workflow = companyCheckWorkflow(company, profile, type);
       const priority = companyCheckPriority(company, profile, type, workflow);
+      const comparison = companyRecrawlComparison(company);
+      const autoRecommendation = companyRecrawlAutoRecommendation(company, profile, decision, comparison);
+      const revenueImpact = companyQueueRevenueImpact(company);
       const include = decision.inQueue
         || Boolean(company.adminReview?.status)
         || workflow.key === "recheck";
-      return { company, profile, type, workflow, priority, decision, include };
+      return { company, profile, type, workflow, priority, decision, comparison, autoRecommendation, revenueImpact, include };
     })
     .filter((entry) => entry.include)
     .sort((a, b) => {
@@ -4942,6 +4965,107 @@ function companyCheckEntryHtml(entry = {}) {
   `;
 }
 
+function companyQueueRecentLogs(entries = []) {
+  const rows = [];
+  for (const entry of entries) {
+    const company = entry.company || {};
+    const name = company.primaryName || "업체명 확인";
+    for (const history of (company.adminReviewHistory || []).slice(-3)) {
+      rows.push({
+        at: history.at || "",
+        tone: history.status === "contact_ready" ? "good" : history.status === "exclude" ? "bad" : "watch",
+        name,
+        label: "관리자 판단",
+        value: history.action === "clear" ? "판단 해제" : (history.label || companyAdminReviewLabel(history.status) || "상태 변경"),
+        note: history.note || history.reason || "관리자 처리 이력"
+      });
+    }
+    if (entry.workflow?.key === "recheck") {
+      rows.push({
+        at: entry.comparison?.latest?.collectedAt || company.lastSeenAt || "",
+        tone: entry.autoRecommendation?.tone || "watch",
+        name,
+        label: "재검토 필요",
+        value: entry.autoRecommendation?.label || entry.workflow.label || "재검토",
+        note: (entry.workflow.reasons || entry.autoRecommendation?.reasons || []).slice(0, 2).join(" · ") || "새 수집/보정 이후 판단 필요"
+      });
+    }
+    if (entry.comparison?.hasComparison && (entry.comparison.improved || entry.comparison.worsened)) {
+      rows.push({
+        at: entry.comparison.latest?.collectedAt || company.lastSeenAt || "",
+        tone: entry.comparison.worsened > entry.comparison.improved ? "bad" : "good",
+        name,
+        label: "재수집 비교",
+        value: `개선 ${fmtNumber(entry.comparison.improved)} / 악화 ${fmtNumber(entry.comparison.worsened)}`,
+        note: `${entry.autoRecommendation?.label || "추천 대기"} · 매출 ${fmtWon(entry.revenueImpact?.totalRevenue || 0)}`
+      });
+    }
+    if (manualCorrectionHasValue(company.manualCorrection)) {
+      rows.push({
+        at: company.manualCorrection.updatedAt || "",
+        tone: "watch",
+        name,
+        label: "수동 보정",
+        value: company.correctionStatus?.detail || "보정값 저장",
+        note: company.manualCorrection.note || "보정 후 재검토 대상"
+      });
+    }
+  }
+  return rows
+    .filter((row) => row.at || row.name)
+    .sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))
+    .slice(0, 8);
+}
+
+function companyQueueOperationSummaryHtml(entries = []) {
+  const open = entries.filter((entry) => entry.workflow.key !== "done");
+  const countRecommendation = (status) => open.filter((entry) => entry.autoRecommendation?.status === status).length;
+  const highRevenue = open.filter((entry) => finiteNumber(entry.revenueImpact?.totalRevenue) >= 2000000);
+  const priceMissing = open.filter((entry) => finiteNumber(entry.revenueImpact?.totalMissingPriceSoldOut) > 0);
+  const improved = open.filter((entry) => entry.comparison?.hasComparison && entry.comparison.improved > entry.comparison.worsened);
+  const worsened = open.filter((entry) => entry.comparison?.hasComparison && entry.comparison.worsened > 0);
+  const logs = companyQueueRecentLogs(entries);
+  const cards = [
+    ["오늘 처리", open.filter((entry) => entry.workflow.key === "open").length, "미완료 판단 큐"],
+    ["재검토", open.filter((entry) => entry.workflow.key === "recheck").length, "재수집/보정 후 확인"],
+    ["추천 컨택", countRecommendation("contact_ready"), "바로 영업타깃 이동 가능"],
+    ["추천 보정", countRecommendation("manual_needed"), "총량/상품 구조 확인"],
+    ["매출 영향", highRevenue.length, "예상매출 200만원 이상"],
+    ["가격 누락", priceMissing.length, "매출 산정 불완전"],
+    ["개선/악화", `${fmtNumber(improved.length)} / ${fmtNumber(worsened.length)}`, "재수집 전후 비교"]
+  ];
+  return `
+    <div class="company-queue-ops">
+      <div class="company-queue-ops-grid">
+        ${cards.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(typeof value === "number" ? fmtNumber(value) : String(value))}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="company-queue-log-panel">
+        <div>
+          <strong>최근 처리 로그</strong>
+          <small>관리자 판단, 보정, 재수집 이후 상태 변화를 최신순으로 표시합니다.</small>
+        </div>
+        <div class="company-queue-log-list">
+          ${logs.length ? logs.map((row) => `
+            <article class="${escapeHtml(row.tone)}">
+              <div>
+                <b>${escapeHtml(row.name)}</b>
+                <span>${escapeHtml(row.label)} · ${escapeHtml(row.value)}</span>
+              </div>
+              <small>${escapeHtml(compactDateTime(row.at))} · ${escapeHtml(row.note)}</small>
+            </article>
+          `).join("") : `<p class="empty">아직 표시할 처리 로그가 없습니다.</p>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function companyMasterCheckPanel(master = {}) {
   const entries = companyDecisionQueueEntries(master);
   const filters = state.companyMasterFilters || {};
@@ -4978,6 +5102,7 @@ function companyMasterCheckPanel(master = {}) {
           </article>
         `).join("")}
       </div>
+      ${companyQueueOperationSummaryHtml(entries)}
       <div class="company-check-filters">
         ${companyCheckFilterOptions().map(([value, label]) => `
           <button type="button" class="${selectedFilter === value ? "active" : ""}" data-company-check-filter="${escapeHtml(value)}">
