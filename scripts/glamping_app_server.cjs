@@ -383,6 +383,24 @@ function crawlTimingAdjustment(plan = {}, modelTotalSeconds = 0, timingStore = n
   };
 }
 
+function publicCrawlEstimate(payload = {}, timingStore = null) {
+  const estimate = estimateCrawlCompletion(payload, timingStore);
+  return {
+    keyword: estimate.keyword,
+    checkIn: estimate.checkIn,
+    checkOut: estimate.checkOut,
+    searchMode: estimate.resolvedSearchMode,
+    productMode: estimate.productMode,
+    collectionMode: estimate.collectionMode,
+    detailRankRanges: estimate.detailRankRanges,
+    bookingRangeDays: estimate.bookingRangeDays,
+    bookingRangePlaceLimit: estimate.bookingRangePlaceLimit,
+    estimatedTotalSeconds: estimate.estimatedTotalSeconds,
+    estimateBasis: estimate.basis,
+    stages: estimate.stages
+  };
+}
+
 const PROVINCES = {
   gyeongbuk: {
     label: "경북",
@@ -6064,8 +6082,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-eta-calibration"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-eta-calibration"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-recrawl-eta"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-recrawl-eta"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -6136,6 +6154,21 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       return send(res, 200, currentCrawlStatus());
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/crawl-estimate") {
+      const payload = await parseJsonBody(req);
+      const timingStore = readCrawlTimingStoreSync();
+      const items = Array.isArray(payload.items) ? payload.items.slice(0, 40) : null;
+      if (items) {
+        return send(res, 200, {
+          items: items.map((item) => ({
+            clientKey: item.clientKey || "",
+            estimate: publicCrawlEstimate(item, timingStore)
+          }))
+        });
+      }
+      return send(res, 200, publicCrawlEstimate(payload, timingStore));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {

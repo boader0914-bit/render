@@ -16,6 +16,7 @@ const state = {
     target: "all",
     check: "priority"
   },
+  crawlEtaByKey: {},
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
   trafficKeyState: null,
@@ -484,6 +485,47 @@ function crawlPreviewMeta(payload = {}) {
       bookingRangePlaceLimit: placeLimit
     }
   };
+}
+
+function crawlEstimatePayloadFromPlan(plan = {}) {
+  return {
+    keyword: plan.keyword || activeKeyword(),
+    checkIn: plan.checkIn || els.checkInInput?.value || "",
+    checkOut: plan.checkOut || els.checkOutInput?.value || "",
+    searchMode: plan.searchMode || "keyword",
+    productMode: plan.productMode || "all",
+    collectionMode: plan.collectionMode || "precision",
+    detailRankRanges: plan.detailRankRanges || plan.range || "1-20"
+  };
+}
+
+function crawlEtaKey(plan = {}) {
+  const payload = crawlEstimatePayloadFromPlan(plan);
+  return [
+    payload.keyword,
+    payload.checkIn,
+    payload.checkOut,
+    payload.searchMode,
+    payload.productMode,
+    payload.collectionMode,
+    payload.detailRankRanges
+  ].map((value) => String(value || "").trim()).join("|");
+}
+
+function crawlEtaForPlan(plan = {}) {
+  const key = crawlEtaKey(plan);
+  return state.crawlEtaByKey[key] || crawlPreviewMeta(crawlEstimatePayloadFromPlan(plan));
+}
+
+function crawlEtaSourceText(eta = {}) {
+  const timing = eta.estimateBasis?.timing || {};
+  if (timing.source === "measured") return `최근 유사 ${fmtNumber(timing.sampleCount)}건`;
+  return "조건 모델";
+}
+
+function crawlEtaShortText(eta = {}) {
+  const seconds = Number(eta.estimatedTotalSeconds);
+  return Number.isFinite(seconds) ? formatElapsed(seconds) : "계산 대기";
 }
 
 function crawlStageStatusText(stage = {}) {
@@ -4128,7 +4170,7 @@ function collectionQualityCsv(profile = collectionQualityMonitorProfile()) {
 
 function recrawlAutomationCsv(entries = companyDecisionQueueEntries(companyMasterSource())) {
   const profile = recrawlAutomationProfile(entries);
-  const headers = ["구분", "업체명", "지역", "순위", "추천상태", "재수집설정", "전후비교", "근거", "예상매출", "관리메모"];
+  const headers = ["구분", "업체명", "지역", "순위", "추천상태", "재수집설정", "예상소요", "예상기준", "전후비교", "근거", "예상매출", "관리메모"];
   const rowFor = (group, row) => [
     group,
     row.name,
@@ -4136,6 +4178,8 @@ function recrawlAutomationCsv(entries = companyDecisionQueueEntries(companyMaste
     row.rank ? `${fmtNumber(row.rank)}위` : "",
     recrawlAutomationStatusLabel(row.status),
     `정밀분석 · 상세 ${row.range}위 · ${row.dateText}`,
+    row.etaText || "",
+    row.etaSource || "",
     row.comparison?.hasComparison ? `개선 ${fmtNumber(row.comparison.improved)} / 악화 ${fmtNumber(row.comparison.worsened)} · ${compactDateTime(row.previous)} → ${compactDateTime(row.latest)}` : "비교 대기",
     row.reason,
     row.revenue ? finiteNumber(row.revenue, 0) : "",
@@ -6235,6 +6279,7 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
 
 function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decision = {}) {
   const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const eta = crawlEtaForPlan(plan);
   const recheckComparison = companyRecrawlComparison(company);
   const autoRecommendation = companyRecrawlAutoRecommendation(company, profile, decision, recheckComparison);
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
@@ -6256,6 +6301,7 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
     ["추천 처리", statusSuggestion, "버튼으로 처리 상태 저장"],
     ["자동 재검토", recheckComparison.hasComparison ? `${autoRecommendation.label} · 개선 ${fmtNumber(recheckComparison.improved)} / 악화 ${fmtNumber(recheckComparison.worsened)}` : "비교 대기", "재수집 전후 수량/가격/공백 비교"],
     ["재수집 설정", `정밀분석 · 상세 ${plan.range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
+    ["예상 소요", `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`, "수집 실행 전 ETA 기준"],
     ["문제 날짜", plan.dateText || "최근 수집일 기준", "동일 기간 재수집 또는 날짜별 직접 확인"],
     ["확인 채널", decision.channelText || "네이버 기준", "OTA/네이버 객실 탭/전화예약 메모"]
   ];
@@ -6400,6 +6446,7 @@ function recrawlAutomationNote(entry = {}) {
 function recrawlAutomationRow(entry = {}) {
   const company = entry.company || {};
   const plan = companyQueueRecrawlPlan(company, entry.profile, entry.decision);
+  const eta = crawlEtaForPlan(plan);
   const comparison = entry.comparison || {};
   const recommendation = entry.autoRecommendation || {};
   const latest = comparison.latest?.collectedAt || company.inventory?.latest?.collectedAt || company.lastSeenAt || "";
@@ -6422,6 +6469,9 @@ function recrawlAutomationRow(entry = {}) {
     entry,
     company,
     plan,
+    eta,
+    etaText: crawlEtaShortText(eta),
+    etaSource: crawlEtaSourceText(eta),
     comparison,
     recommendation,
     name: company.primaryName || "업체명 확인",
@@ -6472,13 +6522,53 @@ function recrawlAutomationProfile(entries = []) {
   };
 }
 
+async function loadRecrawlEtaEstimates(master = state.companyMaster) {
+  const entries = companyDecisionQueueEntries(master || {});
+  const profile = recrawlAutomationProfile(entries);
+  const rows = profile.needsExecution.slice(0, 16);
+  const unique = new Map();
+  for (const row of rows) {
+    const payload = crawlEstimatePayloadFromPlan(row.plan);
+    const key = crawlEtaKey(payload);
+    if (!unique.has(key)) unique.set(key, { ...payload, clientKey: key });
+  }
+  if (!unique.size) {
+    state.crawlEtaByKey = {};
+    return;
+  }
+  try {
+    const data = await fetchJson("/api/crawl-estimate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: [...unique.values()] })
+    });
+    const next = {};
+    for (const row of data.items || []) {
+      if (row.clientKey && row.estimate) next[row.clientKey] = row.estimate;
+    }
+    state.crawlEtaByKey = next;
+  } catch {
+    state.crawlEtaByKey = {};
+  }
+}
+
+function recrawlAutomationEtaCells(row = {}) {
+  return `
+    <div class="recrawl-auto-eta">
+      <span><b>예상 소요</b>${escapeHtml(row.etaText || "계산 대기")}</span>
+      <span><b>예상 기준</b>${escapeHtml(row.etaSource || "조건 모델")}</span>
+    </div>
+  `;
+}
+
 function recrawlAutomationMiniCells(row = {}) {
   if (!row.comparison?.hasComparison) {
     return `
       <div class="recrawl-auto-cells">
-        <span>이전 수집 대기</span>
-        <span>${escapeHtml(row.dateText)}</span>
-        <span>${escapeHtml(row.range)}위</span>
+        <span><b>비교</b>이전 수집 대기</span>
+        <span><b>기간</b>${escapeHtml(row.dateText)}</span>
+        <span><b>범위</b>${escapeHtml(row.range)}위</span>
+        <span><b>예상</b>${escapeHtml(row.etaText || "계산 대기")}</span>
       </div>
     `;
   }
@@ -6504,8 +6594,15 @@ function recrawlAutomationCompanyAttrs(row = {}) {
 
 function recrawlAutomationBoardHtml(entries = []) {
   const profile = recrawlAutomationProfile(entries);
+  const executionEtaSeconds = profile.needsExecution
+    .map((row) => Number(row.eta?.estimatedTotalSeconds))
+    .filter(Number.isFinite);
+  const averageEtaSeconds = executionEtaSeconds.length
+    ? Math.round(executionEtaSeconds.reduce((sum, value) => sum + value, 0) / executionEtaSeconds.length)
+    : null;
   const metricRows = [
     ["실행 대기", profile.needsExecution.length, "수집 설정 적용 대상"],
+    ["평균 ETA", averageEtaSeconds ? formatElapsed(averageEtaSeconds) : "대기", "실측 기록 반영"],
     ["비교 완료", profile.compared.length, "전후 스냅샷 확보"],
     ["컨택 전환", profile.contactReady.length, "영업타깃 이동 추천"],
     ["보정 필요", profile.manualNeeded.length, "수량/총량 확인"],
@@ -6526,7 +6623,7 @@ function recrawlAutomationBoardHtml(entries = []) {
         ${metricRows.map(([label, value, note]) => `
           <article>
             <span>${escapeHtml(label)}</span>
-            <strong>${fmtNumber(value)}</strong>
+            <strong>${escapeHtml(typeof value === "number" ? fmtNumber(value) : String(value))}</strong>
             <small>${escapeHtml(note)}</small>
           </article>
         `).join("")}
@@ -6544,6 +6641,7 @@ function recrawlAutomationBoardHtml(entries = []) {
                 <div>
                   <b>${escapeHtml(row.name)}</b>
                   <small>${escapeHtml([row.region, row.rank ? `${fmtNumber(row.rank)}위` : "", row.dateText, `상세 ${row.range}위`].filter(Boolean).join(" · "))}</small>
+                  ${recrawlAutomationEtaCells(row)}
                   <p>${escapeHtml(row.reason)}</p>
                 </div>
                 <button type="button" data-queue-recrawl-company="${escapeHtml(row.company.companyId || "")}">수집 설정</button>
@@ -9035,8 +9133,10 @@ async function loadHistoryOps() {
 async function loadCompanyMasterSummary() {
   try {
     state.companyMaster = await fetchJson("/api/company-master/summary");
+    await loadRecrawlEtaEstimates(state.companyMaster);
   } catch (error) {
     state.companyMaster = { error: error.message, totalCompanies: 0, duplicateCandidates: [] };
+    state.crawlEtaByKey = {};
   }
 }
 
@@ -9322,6 +9422,7 @@ function applyQueueRecrawlSetting(button) {
   const decision = companyDecisionQueueProfile(company);
   const profile = companyNeedsCorrection(company);
   const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const eta = crawlEtaForPlan(plan);
   const keyword = plan.keyword || activeKeyword();
   if (els.keywordInput) els.keywordInput.value = keyword;
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
@@ -9336,7 +9437,7 @@ function applyQueueRecrawlSetting(button) {
   syncCollectionModeInputs();
   setActiveTab("admin");
   if (els.crawlStatus) {
-    els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 조건을 확인한 뒤 수집 실행을 누르세요.`;
+    els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
   setStatus("재수집 설정 적용");
   window.requestAnimationFrame(() => {

@@ -3436,7 +3436,7 @@ a.platform-row:hover {
 
 .recrawl-auto-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
   gap: 8px;
 }
 
@@ -3524,12 +3524,32 @@ a.platform-row:hover {
   gap: 5px;
 }
 
+.recrawl-auto-eta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
 .recrawl-auto-cells span {
   display: grid;
   gap: 2px;
   border: 1px solid #e8edf5;
   border-radius: 9px;
   background: #fff;
+  padding: 6px;
+}
+
+.recrawl-auto-eta span {
+  display: grid;
+  gap: 2px;
+  border: 1px solid #dbeafe;
+  border-radius: 9px;
+  background: #f8fbff;
+  color: var(--blue-dark);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
   padding: 6px;
 }
 
@@ -3544,6 +3564,12 @@ a.platform-row:hover {
 }
 
 .recrawl-auto-cells b {
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 950;
+}
+
+.recrawl-auto-eta b {
   color: var(--ink);
   font-size: 10px;
   font-weight: 950;
@@ -8059,6 +8085,7 @@ a.platform-row:hover {
   .collection-quality-metrics,
   .collection-quality-feedback,
   .recrawl-auto-metrics,
+  .recrawl-auto-eta,
   .recrawl-auto-cells {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -8438,6 +8465,7 @@ a.platform-row:hover {
   .collection-quality-metrics,
   .collection-quality-feedback,
   .recrawl-auto-metrics,
+  .recrawl-auto-eta,
   .recrawl-auto-cells,
   .revenue-day-grid,
   .revenue-product-list > div,
