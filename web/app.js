@@ -3606,6 +3606,32 @@ function companySalesBoardEntries() {
     .sort((a, b) => a.stage.priority - b.stage.priority || a.followUp.priority - b.followUp.priority || b.priorityScore - a.priorityScore || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
 }
 
+function salesGateReviewEntries(limit = 8) {
+  const boardIds = new Set(companySalesBoardEntries().map((entry) => entry.company.companyId).filter(Boolean));
+  const rows = companyDecisionQueueEntries(companyMasterSource())
+    .filter((entry) => !boardIds.has(entry.company.companyId))
+    .filter((entry) => !["confirmed", "contact_ready"].includes(entry.company.adminReview?.status || ""))
+    .map((entry) => {
+      const contextText = companyReviewContextText(entry.company.adminReview?.context || {});
+      const note = entry.company.adminReview?.note || "";
+      const reasons = [
+        note,
+        contextText,
+        entry.decision?.summary,
+        entry.decision?.reasons?.[0],
+        entry.autoRecommendation?.label,
+        ...(entry.autoRecommendation?.reasons || []),
+        ...(entry.company.salesTarget?.reasons || [])
+      ].filter(Boolean);
+      return {
+        ...entry,
+        gateReason: compactListText(reasons, "판단 근거 확인 필요", 3),
+        gateStatus: entry.company.adminReview?.label || entry.workflow?.label || entry.type?.label || "확인 필요"
+      };
+    });
+  return limit ? rows.slice(0, limit) : rows;
+}
+
 function salesContactOptions() {
   return [
     ["not_contacted", "미컨택"],
@@ -7586,9 +7612,10 @@ function renderTargets() {
   const decisionQueueCount = masterQueueCount || currentQueueCount;
   const actionableCount = confirmed.length + contact.length;
   const currentOnly = currentItems.filter(({ item }) => !boardEntries.some((entry) => entry.item === item)).slice(0, 6);
+  const gatedEntries = salesGateReviewEntries(8);
 
   els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
-  if (!boardEntries.length && !currentItems.length) {
+  if (!boardEntries.length && !currentItems.length && !gatedEntries.length) {
     els.targetList.innerHTML = `<div class="empty">현재 기준 바로 컨택 가능한 영업 후보가 없습니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 관리 탭에서 먼저 확인하세요.</div>`;
     return;
   }
@@ -7657,6 +7684,42 @@ function renderTargets() {
       </div>
     </section>
   `;
+  const gatePanel = (rows) => rows.length ? `
+    <section class="target-gate-panel">
+      <div class="target-lane-head">
+        <div>
+          <strong>컨택 보류 사유</strong>
+          <small>판단 큐에 남아 있어 영업타깃에서 제외된 업체와 확인 근거입니다.</small>
+        </div>
+        <span>${fmtNumber(rows.length)}</span>
+      </div>
+      <div class="target-gate-list">
+        ${rows.map(({ company, workflow, type, decision, autoRecommendation, revenueImpact, gateReason, gateStatus }, index) => `
+          <article class="${escapeHtml(workflow?.tone || type?.key || "watch")}">
+            <div class="target-gate-head">
+              <mark>${fmtNumber(index + 1)}</mark>
+              <div>
+                <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+                <small>${escapeHtml([(company.regions || []).slice(0, 2).join(" / "), company.bestRank ? `${fmtNumber(company.bestRank)}위` : "", company.bestKeyword || company.latestKeyword || ""].filter(Boolean).join(" · ") || "지역/순위 확인")}</small>
+              </div>
+              <span>${escapeHtml(gateStatus)}</span>
+            </div>
+            <div class="target-gate-grid">
+              <div><span>큐 사유</span><strong>${escapeHtml(decision.label || type?.label || "확인 필요")}</strong><small>${escapeHtml(decision.problemDateText || "문제 날짜 확인")}</small></div>
+              <div><span>수량/공백</span><strong>${escapeHtml(decision.quantityConfidence || "수량 확인")}</strong><small>${escapeHtml(decision.gapType || "공백 유형 없음")}</small></div>
+              <div><span>확인 채널</span><strong>${escapeHtml(decision.channelText || "네이버 기준")}</strong><small>${escapeHtml(autoRecommendation?.label || workflow?.label || "관리자 판단")}</small></div>
+              <div><span>예상매출</span><strong>${fmtWon(revenueImpact?.totalRevenue || 0)}</strong><small>${escapeHtml(revenueImpact?.precision?.label || "매출 정밀도 대기")}</small></div>
+            </div>
+            <p>${escapeHtml(gateReason)}</p>
+            <div class="target-card-actions">
+              <button class="secondary-button" type="button" data-drawer-tab="decisionQueue">판단 큐에서 처리</button>
+              <button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  ` : "";
 
   els.targetList.innerHTML = `
     <section class="target-board-hero">
@@ -7673,6 +7736,7 @@ function renderTargets() {
       </div>
       <button type="button" data-export-sales-targets>컨택+반응 CSV</button>
     </section>
+    ${gatePanel(gatedEntries)}
     ${salesPipelineHtml(pipelineSummary)}
     ${salesPerformanceHtml(performanceSummary, proposalResponseRows)}
     <section class="target-followup-board">

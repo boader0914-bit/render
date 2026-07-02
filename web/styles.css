@@ -2076,6 +2076,7 @@ a.platform-row:hover {
 .target-board-hero article,
 .target-lane,
 .target-current-run,
+.target-gate-panel,
 .sales-pipeline-panel,
 .target-followup-board,
 .target-action-card {
@@ -2120,6 +2121,7 @@ a.platform-row:hover {
 
 .target-lane,
 .target-current-run,
+.target-gate-panel,
 .sales-pipeline-panel,
 .sales-performance-panel,
 .target-followup-board {
@@ -2158,9 +2160,105 @@ a.platform-row:hover {
 
 .target-lane-list,
 .target-current-grid,
+.target-gate-list,
 .target-followup-list {
   display: grid;
   gap: 10px;
+}
+
+.target-gate-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.target-gate-list article {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #fedf89;
+  border-radius: 14px;
+  background: #fffcf5;
+  padding: 12px;
+}
+
+.target-gate-list article.done,
+.target-gate-list article.hold {
+  border-color: #e8edf5;
+  background: #f8fafc;
+}
+
+.target-gate-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+}
+
+.target-gate-head mark {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #fff7e6;
+  color: #b54708;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.target-gate-head b,
+.target-gate-grid strong {
+  display: block;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.target-gate-head small,
+.target-gate-grid span,
+.target-gate-grid small,
+.target-gate-list p {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.target-gate-head > span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #fff4df;
+  color: #b54708;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.target-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.target-gate-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #f2e1b9;
+  border-radius: 11px;
+  background: #fff;
+  padding: 8px;
+}
+
+.target-gate-list p {
+  margin: 0;
 }
 
 .target-followup-list {
@@ -8000,6 +8098,8 @@ a.platform-row:hover {
   .target-board,
   .target-export-bar,
   .target-execution-metrics,
+  .target-gate-list,
+  .target-gate-grid,
   .sales-pipeline-grid,
   .sales-performance-metrics,
   .sales-proposal-response-grid,
@@ -8521,6 +8621,9 @@ a.platform-row:hover {
   .company-queue-log-list article > div,
   .target-export-bar,
   .target-execution-metrics,
+  .target-gate-list,
+  .target-gate-grid,
+  .target-gate-head,
   .sales-pipeline-grid,
   .sales-performance-metrics,
   .sales-proposal-response-grid,
