@@ -103,7 +103,7 @@ function normalizeCollectionMode(value) {
 
 function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
-  const source = text || fallback;
+  const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return [];
   if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 50 }];
   const ranges = [];
@@ -115,7 +115,7 @@ function parseRankRanges(value, fallback = "1-20") {
     if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
     ranges.push({ from: Math.min(left, right), to: Math.max(left, right) });
   }
-  return ranges;
+  return ranges.length || !fallback || source === fallback ? ranges : parseRankRanges(fallback, "");
 }
 
 function rankRangeLabel(ranges = []) {
@@ -5512,8 +5512,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-offline-product-revenue"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-offline-product-revenue"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-precision-rank-default"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-precision-rank-default"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

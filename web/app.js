@@ -6668,7 +6668,13 @@ async function loadRun(runId) {
   }
   if (els.productModeInput && run.productMode) els.productModeInput.value = run.productMode;
   if (els.collectionModeInput) els.collectionModeInput.value = run.collectionMode || "precision";
-  if (els.detailRankRangesInput) els.detailRankRangesInput.value = run.detailRankRanges || (run.collectionMode === "fast" ? "" : "1-20");
+  if (els.detailRankRangesInput) {
+    const rawDetailRankRanges = String(run.detailRankRanges || "").trim();
+    const useDefaultDetailRange = !rawDetailRankRanges || /^(none|skip|없음)$/i.test(rawDetailRankRanges);
+    els.detailRankRangesInput.value = run.collectionMode === "fast"
+      ? ""
+      : (useDefaultDetailRange ? "1-20" : rawDetailRankRanges);
+  }
   syncCollectionModeInputs();
   renderAll();
   setStatus("준비");
@@ -6898,9 +6904,10 @@ async function submitCrawl(event) {
     els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
   const collectionMode = els.collectionModeInput?.value || "precision";
+  const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
   const detailRankRanges = collectionMode === "fast"
     ? ""
-    : (els.detailRankRangesInput?.value?.trim() || "1-20");
+    : (/^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-20" : (rawDetailRankRanges || "1-20"));
   const payload = {
     keyword: els.keywordInput.value.trim(),
     checkIn: els.checkInInput.value,

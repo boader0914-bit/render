@@ -61,7 +61,7 @@ function boundedInteger(value, fallback, min, max) {
 
 function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
-  const source = text || fallback;
+  const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return [];
   if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 50 }];
   const ranges = [];
@@ -74,7 +74,7 @@ function parseRankRanges(value, fallback = "1-20") {
     const to = Math.max(left, right);
     ranges.push({ from, to });
   }
-  return ranges;
+  return ranges.length || !fallback || source === fallback ? ranges : parseRankRanges(fallback, "");
 }
 
 function rankRangeLabel(ranges = []) {
