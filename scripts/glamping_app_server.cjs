@@ -3200,6 +3200,13 @@ function upsertCompanyKeywordExposure(company, entity) {
 function updateCompanyInventory(company, entity) {
   const inventory = company.inventory || { latest: {}, structureCounts: {}, confidenceCounts: {}, runIds: [] };
   const alreadyCounted = entity.runId && (inventory.runIds || []).includes(entity.runId);
+  const currentLatest = inventory.latest || {};
+  const isSameRun = Boolean(entity.runId && currentLatest.runId && entity.runId === currentLatest.runId);
+  if ((currentLatest.runId || currentLatest.collectedAt) && !isSameRun) {
+    const previousSnapshot = companyInventorySnapshot(currentLatest);
+    inventory.previousLatest = previousSnapshot;
+    inventory.snapshots = mergeInventorySnapshots([previousSnapshot, ...(inventory.snapshots || [])]);
+  }
   inventory.latest = {
     runId: entity.runId,
     collectedAt: entity.collectedAt,
@@ -3220,6 +3227,39 @@ function updateCompanyInventory(company, entity) {
   }
   inventory.runIds = boundedUnique([...(inventory.runIds || []), entity.runId], 120);
   company.inventory = inventory;
+}
+
+function companyInventorySnapshot(latest = {}) {
+  return {
+    runId: latest.runId || "",
+    collectedAt: latest.collectedAt || "",
+    listType: latest.listType || "",
+    structureType: latest.structureType || "",
+    structureLabel: latest.structureLabel || "",
+    confidenceGrade: latest.confidenceGrade || "",
+    structureFlags: Array.isArray(latest.structureFlags) ? boundedUnique(latest.structureFlags, 12) : [],
+    salesSignal: latest.salesSignal || {},
+    revenue: latest.revenue || {},
+    price: latest.price || "",
+    manualCorrectionApplied: Boolean(latest.manualCorrectionApplied),
+    correctionBasis: latest.correctionBasis || null
+  };
+}
+
+function mergeInventorySnapshots(rows = []) {
+  const byKey = new Map();
+  for (const row of rows) {
+    if (!row || !(row.runId || row.collectedAt)) continue;
+    const snapshot = companyInventorySnapshot(row);
+    const key = snapshot.runId || snapshot.collectedAt;
+    const current = byKey.get(key);
+    if (!current || String(snapshot.collectedAt || "").localeCompare(String(current.collectedAt || "")) > 0) {
+      byKey.set(key, snapshot);
+    }
+  }
+  return [...byKey.values()]
+    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))
+    .slice(0, 8);
 }
 
 function keywordExposureLayer(keyword = {}) {
@@ -3899,7 +3939,15 @@ function mergeCompanyInventory(targetInventory = {}, sourceInventory = {}) {
     latest: targetInventory.latest || sourceInventory.latest || {},
     structureCounts: { ...(targetInventory.structureCounts || {}) },
     confidenceCounts: { ...(targetInventory.confidenceCounts || {}) },
-    runIds: boundedUnique([...(targetInventory.runIds || []), ...(sourceInventory.runIds || [])], 120)
+    runIds: boundedUnique([...(targetInventory.runIds || []), ...(sourceInventory.runIds || [])], 120),
+    snapshots: mergeInventorySnapshots([
+      targetInventory.latest,
+      sourceInventory.latest,
+      targetInventory.previousLatest,
+      sourceInventory.previousLatest,
+      ...(targetInventory.snapshots || []),
+      ...(sourceInventory.snapshots || [])
+    ])
   };
   for (const [key, count] of Object.entries(sourceInventory.structureCounts || {})) {
     merged.structureCounts[key] = (merged.structureCounts[key] || 0) + Number(count || 0);
@@ -3911,8 +3959,10 @@ function mergeCompanyInventory(targetInventory = {}, sourceInventory = {}) {
     sourceInventory.latest?.collectedAt
     && String(sourceInventory.latest.collectedAt).localeCompare(String(merged.latest?.collectedAt || "")) > 0
   ) {
+    merged.snapshots = mergeInventorySnapshots([merged.latest, ...merged.snapshots]);
     merged.latest = sourceInventory.latest;
   }
+  merged.previousLatest = merged.snapshots.find((row) => (row.runId || row.collectedAt) !== (merged.latest?.runId || merged.latest?.collectedAt)) || null;
   return merged;
 }
 
@@ -5577,8 +5627,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-queue-revenue-impact"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-queue-revenue-impact"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-recheck-loop"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-recheck-loop"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

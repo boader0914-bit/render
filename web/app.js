@@ -2470,6 +2470,255 @@ function companyQueueRevenueImpact(company = {}) {
   };
 }
 
+function queueSnapshotRevenueImpact(snapshot = {}) {
+  const lodging = queueRevenuePartFromSnapshot(snapshot.revenue?.lodging || {}, "개");
+  const dayUse = queueRevenuePartFromSnapshot(snapshot.revenue?.dayUse || {}, "회");
+  return {
+    lodging,
+    dayUse,
+    totalRevenue: finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue),
+    totalPricedSoldOut: finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut),
+    totalMissingPriceSoldOut: finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut)
+  };
+}
+
+function queueGradeScore(value) {
+  return { A: 5, B: 4, C: 3, D: 2, E: 1 }[String(value || "").toUpperCase()] || 0;
+}
+
+function queueSignalGapCount(signal = {}) {
+  const lodging = signal.lodging || {};
+  return [lodging.fridayWeak, lodging.sundayWeak, lodging.weekdayWeak].filter(Boolean).length;
+}
+
+function queueSnapshotMetrics(snapshot = {}) {
+  const signal = snapshot.salesSignal || {};
+  const lodging = signal.lodging || {};
+  const dayUse = signal.dayUse || {};
+  const flags = new Set([
+    ...(Array.isArray(snapshot.structureFlags) ? snapshot.structureFlags : []),
+    ...(Array.isArray(signal.structureFlags) ? signal.structureFlags : [])
+  ]);
+  const revenue = queueSnapshotRevenueImpact(snapshot);
+  const grade = String(snapshot.confidenceGrade || "").toUpperCase();
+  const totalSupply = finiteNumber(lodging.totalSupply) + finiteNumber(dayUse.totalSupply);
+  const totalSold = finiteNumber(lodging.totalSold) + finiteNumber(dayUse.totalSold);
+  const offlineQuantity = finiteNumber(lodging.manualOfflineReserved) + finiteNumber(dayUse.manualOfflineReserved);
+  const offlineDetail = compactListText([
+    revenue.lodging.offlineDetail,
+    revenue.dayUse.offlineDetail
+  ].filter(Boolean), "", 2);
+  return {
+    runId: snapshot.runId || "",
+    collectedAt: snapshot.collectedAt || "",
+    grade,
+    gradeScore: queueGradeScore(grade),
+    structureLabel: snapshot.structureLabel || "구조 대기",
+    quantityWeak: Boolean(signal.structureWeak || flags.has("grouped_range") || flags.has("booking_id_reused") || ["C", "D", "E"].includes(grade)),
+    stockVariance: Boolean(signal.stockVariance || lodging.stockVariance || dayUse.stockVariance || flags.has("dynamic_capacity")),
+    gapCount: queueSignalGapCount(signal),
+    fridayWeak: Boolean(lodging.fridayWeak),
+    sundayWeak: Boolean(lodging.sundayWeak),
+    weekdayWeak: Boolean(lodging.weekdayWeak),
+    totalSupply,
+    totalSold,
+    averageRate: Number.isFinite(Number(lodging.averageRate)) ? Number(lodging.averageRate) : null,
+    totalRevenue: revenue.totalRevenue,
+    totalPricedSoldOut: revenue.totalPricedSoldOut,
+    totalMissingPriceSoldOut: revenue.totalMissingPriceSoldOut,
+    offlineQuantity,
+    offlineEstimated: Boolean(offlineQuantity || offlineDetail || signal.stockVariance || flags.has("dynamic_capacity")),
+    offlineDetail
+  };
+}
+
+function queueDeltaTone(previous, current, higherIsBetter = true) {
+  const left = Number(previous);
+  const right = Number(current);
+  if (!Number.isFinite(left) || !Number.isFinite(right) || left === right) return "same";
+  return higherIsBetter ? (right > left ? "good" : "bad") : (right < left ? "good" : "bad");
+}
+
+function queueBooleanResolvedTone(previous, current) {
+  if (Boolean(previous) === Boolean(current)) return "same";
+  return previous && !current ? "good" : "bad";
+}
+
+function queueComparisonCell(label, before, after, tone = "same", note = "") {
+  return `
+    <div class="${escapeHtml(tone)}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(`${before} → ${after}`)}</strong>
+      <small>${escapeHtml(note || (tone === "good" ? "개선" : tone === "bad" ? "악화" : "유지"))}</small>
+    </div>
+  `;
+}
+
+function companyRecrawlComparison(company = {}) {
+  const latest = company.inventory?.latest || {};
+  const previous = company.inventory?.previousLatest
+    || (company.inventory?.snapshots || []).find((row) => (row.runId || row.collectedAt) !== (latest.runId || latest.collectedAt))
+    || null;
+  if (!latest?.collectedAt || !previous?.collectedAt) {
+    return { hasComparison: false, latest, previous };
+  }
+  const current = queueSnapshotMetrics(latest);
+  const before = queueSnapshotMetrics(previous);
+  const cells = [
+    {
+      key: "confidence",
+      label: "수량 신뢰도",
+      before: before.grade ? `${before.grade} · ${before.structureLabel}` : "대기",
+      after: current.grade ? `${current.grade} · ${current.structureLabel}` : "대기",
+      tone: queueDeltaTone(before.gradeScore, current.gradeScore, true),
+      note: current.quantityWeak ? "구조 확인 필요" : "수량 구조 안정"
+    },
+    {
+      key: "price",
+      label: "가격 확보",
+      before: `${fmtNumber(before.totalPricedSoldOut)}개 확인 · 누락 ${fmtNumber(before.totalMissingPriceSoldOut)}`,
+      after: `${fmtNumber(current.totalPricedSoldOut)}개 확인 · 누락 ${fmtNumber(current.totalMissingPriceSoldOut)}`,
+      tone: before.totalMissingPriceSoldOut !== current.totalMissingPriceSoldOut
+        ? queueDeltaTone(before.totalMissingPriceSoldOut, current.totalMissingPriceSoldOut, false)
+        : queueDeltaTone(before.totalPricedSoldOut, current.totalPricedSoldOut, true),
+      note: current.totalMissingPriceSoldOut ? "가격 누락 남음" : "가격 누락 없음"
+    },
+    {
+      key: "gap",
+      label: "판매 공백",
+      before: `${fmtNumber(before.gapCount)}개 유형`,
+      after: `${fmtNumber(current.gapCount)}개 유형`,
+      tone: queueDeltaTone(before.gapCount, current.gapCount, false),
+      note: current.gapCount ? "금/일/평일 공백 확인" : "공백 신호 해소"
+    },
+    {
+      key: "stock",
+      label: "총량 변동",
+      before: before.stockVariance ? "있음" : "없음",
+      after: current.stockVariance ? "있음" : "없음",
+      tone: queueBooleanResolvedTone(before.stockVariance, current.stockVariance),
+      note: current.stockVariance ? "날짜별 총량 변동" : "총량 안정"
+    },
+    {
+      key: "offline",
+      label: "오프라인 예약",
+      before: before.offlineEstimated ? `${fmtNumber(before.offlineQuantity)}개/회 추정` : "신호 없음",
+      after: current.offlineEstimated ? `${fmtNumber(current.offlineQuantity)}개/회 추정` : "신호 없음",
+      tone: queueBooleanResolvedTone(before.offlineEstimated, current.offlineEstimated),
+      note: current.offlineDetail || (current.offlineEstimated ? "미오픈/차단/총량차 반영" : "추정 신호 없음")
+    },
+    {
+      key: "revenue",
+      label: "예상 매출",
+      before: fmtWon(before.totalRevenue),
+      after: fmtWon(current.totalRevenue),
+      tone: queueDeltaTone(before.totalRevenue, current.totalRevenue, true),
+      note: `변화 ${formatSignedWon(current.totalRevenue - before.totalRevenue)}`
+    }
+  ];
+  const improved = cells.filter((cell) => cell.tone === "good").length;
+  const worsened = cells.filter((cell) => cell.tone === "bad").length;
+  const tone = worsened > improved ? "bad" : improved > 0 ? "good" : "same";
+  return {
+    hasComparison: true,
+    latest,
+    previous,
+    current,
+    before,
+    cells,
+    improved,
+    worsened,
+    tone
+  };
+}
+
+function formatSignedWon(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 0) return "0원";
+  const sign = number > 0 ? "+" : "-";
+  return `${sign}${fmtWon(Math.abs(number))}`;
+}
+
+function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision = {}, comparison = null) {
+  const compare = comparison || companyRecrawlComparison(company);
+  const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
+  const issues = new Set((profile.issues || []).map((issue) => issue.key));
+  const current = compare.current || queueSnapshotMetrics(company.inventory?.latest || {});
+  const quantityIssue = criteria.has("quantity") || criteria.has("capacity") || issues.has("structure") || issues.has("booking") || issues.has("offline");
+  const noQuantity = !current.totalSupply && !current.totalSold;
+  const priceIssue = current.totalMissingPriceSoldOut > 0 || (!current.totalPricedSoldOut && current.totalSold > 0);
+  if (!compare.hasComparison) {
+    return {
+      status: company.adminReview?.status || "recrawl_needed",
+      label: "비교 대기",
+      tone: "watch",
+      reasons: ["이전 수집 스냅샷이 없어 재수집 전후 비교는 다음 수집부터 표시됩니다."]
+    };
+  }
+  if (noQuantity) {
+    return { status: "recrawl_needed", label: "재수집 필요", tone: "watch", reasons: ["최신 수집에서 판매/총량 데이터가 충분히 확보되지 않았습니다."] };
+  }
+  if (quantityIssue || current.quantityWeak || current.stockVariance) {
+    return { status: "manual_needed", label: "보정 필요", tone: "bad", reasons: ["수량 구조 또는 날짜별 총량 변동이 남아 있어 관리자 보정/확인이 필요합니다."] };
+  }
+  if (priceIssue) {
+    return { status: "recrawl_needed", label: "재수집 필요", tone: "watch", reasons: ["판매수량은 있으나 가격 누락이 남아 매출 판단이 불완전합니다."] };
+  }
+  if (criteria.has("ota") || issues.has("ota") || criteria.has("gap") || issues.has("gap")) {
+    return { status: "check_needed", label: "확인 필요", tone: "watch", reasons: ["OTA 또는 요일별 판매 공백은 사람이 채널/상품 조건을 확인해야 합니다."] };
+  }
+  if (!decision.inQueue || compare.improved >= 2 || company.salesTarget?.category === "contact") {
+    return { status: "contact_ready", label: "컨택 가능", tone: "good", reasons: ["재수집 후 핵심 수량/가격 문제가 해소되어 컨택 후보로 볼 수 있습니다."] };
+  }
+  return { status: "check_needed", label: "확인 필요", tone: "watch", reasons: ["잔여 신호를 확인한 뒤 컨택 또는 보류를 결정하세요."] };
+}
+
+function companyRecrawlComparisonHtml(company = {}, profile = {}, decision = {}) {
+  const comparison = companyRecrawlComparison(company);
+  const recommendation = companyRecrawlAutoRecommendation(company, profile, decision, comparison);
+  const latestDate = comparison.latest?.collectedAt ? compactDateTime(comparison.latest.collectedAt) : "최신 수집 대기";
+  const previousDate = comparison.previous?.collectedAt ? compactDateTime(comparison.previous.collectedAt) : "이전 수집 대기";
+  const applyButton = recommendation.status
+    ? `<button type="button" data-company-review-action="${escapeHtml(recommendation.status)}" data-company-id="${escapeHtml(company.companyId || "")}">추천 적용</button>`
+    : "";
+  if (!comparison.hasComparison) {
+    return `
+      <div class="company-recheck-card watch">
+        <div class="company-recheck-head">
+          <div>
+            <strong>재수집 후 자동 재검토</strong>
+            <small>${escapeHtml(`${previousDate} → ${latestDate}`)}</small>
+          </div>
+          <span class="company-recheck-badge watch">${escapeHtml(recommendation.label)}</span>
+        </div>
+        <p>${escapeHtml(recommendation.reasons[0] || "이전 수집값이 확보되면 전후 비교가 표시됩니다.")}</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="company-recheck-card ${escapeHtml(comparison.tone)}">
+      <div class="company-recheck-head">
+        <div>
+          <strong>재수집 후 자동 재검토</strong>
+          <small>${escapeHtml(`${previousDate} → ${latestDate}`)}</small>
+        </div>
+        <span class="company-recheck-badge ${escapeHtml(recommendation.tone)}">${escapeHtml(recommendation.label)}</span>
+      </div>
+      <div class="company-recheck-grid">
+        ${comparison.cells.map((cell) => queueComparisonCell(cell.label, cell.before, cell.after, cell.tone, cell.note)).join("")}
+      </div>
+      <div class="company-recheck-recommend">
+        <div>
+          <span>자동 추천</span>
+          <strong>${escapeHtml(companyAdminReviewLabel(recommendation.status) || recommendation.label)}</strong>
+          <small>${escapeHtml(recommendation.reasons.join(" · "))}</small>
+        </div>
+        ${applyButton}
+      </div>
+    </div>
+  `;
+}
+
 function companySalesAction(company = {}) {
   const tags = company.salesTarget?.priorityTags || [];
   const signals = company.salesTarget?.signals || {};
@@ -4353,6 +4602,9 @@ function companyReviewRecheckProfile(company = {}, profile = {}) {
   }
 
   if (!reviewAt) return { needed: false, reasons: [] };
+  if (hasNewCollection && review.status === "recrawl_needed") {
+    reasons.push("재수집 필요 판단 이후 새 수집 결과가 들어와 전후 비교가 필요");
+  }
   if (hasNewCollection && issueKeys.size) {
     reasons.push(`기존 판단 이후 ${[...issueKeys].map((key) => ({
       structure: "수량구조",
@@ -4389,13 +4641,13 @@ function companyCheckWorkflow(company = {}, profile = {}, type = {}) {
   if (review?.status === "manual_needed" && profile.applied) {
     return { key: "recheck", label: "보정 후 재검토", tone: "recheck", reasons: ["보정값이 입력되어 판단을 다시 저장해야 함"] };
   }
-  if (review?.status === "recrawl_needed") {
+  if (!recheck.needed && review?.status === "recrawl_needed") {
     return { key: "open", label: "재수집 필요", tone: "open", reasons: ["관리자가 재수집 필요로 지정"] };
   }
-  if (review?.status === "check_needed") {
+  if (!recheck.needed && review?.status === "check_needed") {
     return { key: "open", label: "확인 필요", tone: "open", reasons: ["관리자가 확인 필요로 지정"] };
   }
-  if (review?.status === "manual_needed") {
+  if (!recheck.needed && review?.status === "manual_needed") {
     return { key: "open", label: "수동 보정 필요", tone: "open", reasons: ["관리자가 수동 보정 필요로 지정"] };
   }
   if (recheck.needed) {
@@ -4600,10 +4852,14 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
 
 function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decision = {}) {
   const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const recheckComparison = companyRecrawlComparison(company);
+  const autoRecommendation = companyRecrawlAutoRecommendation(company, profile, decision, recheckComparison);
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
   const issues = new Set((profile.issues || []).map((issue) => issue.key));
   const statusSuggestion = company.adminReview?.status
     ? companyAdminReviewLabel(company.adminReview.status)
+    : recheckComparison.hasComparison
+      ? autoRecommendation.label
     : criteria.has("manual_recheck") || issues.has("manual") || issues.has("structure") || issues.has("offline")
       ? "보정 필요"
       : workflow.key === "recheck" || criteria.has("quantity") || criteria.has("capacity") || issues.has("booking")
@@ -4615,6 +4871,7 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
             : "확인 필요";
   const rows = [
     ["추천 처리", statusSuggestion, "버튼으로 처리 상태 저장"],
+    ["자동 재검토", recheckComparison.hasComparison ? `${autoRecommendation.label} · 개선 ${fmtNumber(recheckComparison.improved)} / 악화 ${fmtNumber(recheckComparison.worsened)}` : "비교 대기", "재수집 전후 수량/가격/공백 비교"],
     ["재수집 설정", `정밀분석 · 상세 ${plan.range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
     ["문제 날짜", plan.dateText || "최근 수집일 기준", "동일 기간 재수집 또는 날짜별 직접 확인"],
     ["확인 채널", decision.channelText || "네이버 기준", "OTA/네이버 객실 탭/전화예약 메모"]
@@ -4666,6 +4923,7 @@ function companyCheckEntryHtml(entry = {}) {
       </div>
       ${companyDecisionEvidenceHtml(decision)}
       ${companyQueueRevenueImpactHtml(company)}
+      ${companyRecrawlComparisonHtml(company, profile, decision)}
       ${companyMasterKeywordChips(company, 5)}
       <div class="company-check-reason">
         <strong>왜 확인해야 하나?</strong>
@@ -6558,6 +6816,15 @@ function sheetAuditPanel(item = {}) {
   `;
 }
 
+function sheetRecrawlComparisonPanel(item = {}) {
+  const companyId = item.companyId || item.companyProfile?.companyId || "";
+  const company = (companyMasterSource().companies || []).find((row) => row.companyId === companyId) || item.companyProfile || {};
+  if (!company.companyId) return "";
+  const decision = companyDecisionQueueProfile(company);
+  const profile = companyNeedsCorrection(company);
+  return companyRecrawlComparisonHtml(company, profile, decision);
+}
+
 function revenueCoverageText(revenue = {}) {
   const priced = finiteNumber(revenue.pricedSoldOut, 0);
   const missing = finiteNumber(revenue.missingPriceSoldOut, 0);
@@ -6766,6 +7033,7 @@ function renderSheetBooking(item) {
     ${sheetCollectionStatusPanel(item)}
     ${sheetRevenuePanel(item)}
     ${sheetAuditPanel(item)}
+    ${sheetRecrawlComparisonPanel(item)}
     ${sheetCompanyProfile(item)}
     ${sheetHistoryPanel(item)}
     ${sheetInventoryStructure(item)}
@@ -7060,7 +7328,11 @@ async function saveCompanyAdminReview(button) {
   const status = button?.dataset?.companyReviewAction || "";
   if (!companyId || !status) return;
   const control = button.closest("[data-company-review-control]");
-  const note = control?.querySelector("[data-company-review-note]")?.value || "";
+  const existingCompany = (companyMasterSource().companies || []).find((row) => row.companyId === companyId);
+  const note = control?.querySelector("[data-company-review-note]")?.value
+    ?? button.dataset.companyReviewNote
+    ?? existingCompany?.adminReview?.note
+    ?? "";
   button.disabled = true;
   setStatus(status === "clear" ? "검증 해제 중" : "검증 저장 중");
   try {

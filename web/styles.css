@@ -3010,6 +3010,153 @@ a.platform-row:hover {
   color: #b54708;
 }
 
+.company-recheck-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d7e9ff;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.company-recheck-card.good {
+  border-color: #b7e4c7;
+  background: #f6fef9;
+}
+
+.company-recheck-card.bad {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.company-recheck-card > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.company-recheck-head,
+.company-recheck-recommend {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.company-recheck-head > div,
+.company-recheck-recommend > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.company-recheck-head strong,
+.company-recheck-recommend strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.company-recheck-head small,
+.company-recheck-recommend span,
+.company-recheck-recommend small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-recheck-badge {
+  justify-self: end;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue-dark);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-recheck-badge.good {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.company-recheck-badge.bad {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.company-recheck-badge.watch {
+  background: #fff4df;
+  color: #b54708;
+}
+
+.company-recheck-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.company-recheck-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px;
+}
+
+.company-recheck-grid div.good {
+  border-color: #b7e4c7;
+  background: #f6fef9;
+}
+
+.company-recheck-grid div.bad {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.company-recheck-grid span,
+.company-recheck-grid small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-recheck-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.company-recheck-recommend {
+  border-top: 1px solid #dbeafe;
+  padding-top: 9px;
+}
+
+.company-recheck-recommend button {
+  min-height: 34px;
+  border: 1px solid #8cbcff;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .company-check-apply-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -6417,7 +6564,10 @@ a.platform-row:hover {
   .company-decision-evidence,
   .company-check-action-plan,
   .company-check-revenue-impact,
+  .company-recheck-grid,
   .company-check-apply-row,
+  .company-recheck-head,
+  .company-recheck-recommend,
   .target-board,
   .company-profile-keywords {
     grid-template-columns: 1fr;
@@ -6860,7 +7010,10 @@ a.platform-row:hover {
   .company-decision-evidence,
   .company-check-action-plan,
   .company-check-revenue-impact,
+  .company-recheck-grid,
   .company-check-apply-row,
+  .company-recheck-head,
+  .company-recheck-recommend,
   .collection-diagnostic-grid,
   .collection-diagnostic-list,
   .sheet-collection-grid,
