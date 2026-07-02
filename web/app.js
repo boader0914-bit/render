@@ -1699,6 +1699,441 @@ function collectionDiagnosticProfile(items = []) {
   };
 }
 
+function collectionQualityScore(diag = {}) {
+  let score = 100;
+  if (!diag.precision) score -= 18;
+  if (diag.checked > 0 && diag.succeeded === 0) score -= 35;
+  if (diag.candidates > 0 && diag.acquired === 0) score -= 25;
+  if (Number.isFinite(diag.successRate)) {
+    score -= Math.round(Math.max(0, 0.92 - diag.successRate) * 46);
+  } else if (!diag.checked) {
+    score -= 10;
+  }
+  if (Number.isFinite(diag.coverageRate)) {
+    score -= Math.round(Math.max(0, 0.82 - diag.coverageRate) * 34);
+  }
+  score -= Math.min(20, finiteNumber(diag.rankOnly, 0) * 4);
+  score -= Math.min(18, finiteNumber(diag.skippedByRank, 0) * 2);
+  score -= Math.min(18, finiteNumber(diag.priceMissing, 0) * 3);
+  score -= Math.min(18, finiteNumber(diag.quantityUnclear, 0) * 3);
+  score -= Math.min(18, finiteNumber(diag.missingData, 0) * 6 + finiteNumber(diag.missingDates, 0) * 3 + finiteNumber(diag.partialData, 0) * 2);
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const label = score >= 85 ? "안정" : score >= 70 ? "주의" : score >= 50 ? "재수집 권장" : "수집 불안정";
+  const tone = score >= 85 ? "good" : score >= 50 ? "watch" : "bad";
+  const summary = score >= 85
+    ? "현재 수집 결과를 바로 판단에 활용할 수 있습니다."
+    : score >= 70
+      ? "일부 업체는 확인 후 판단하는 것이 좋습니다."
+      : score >= 50
+        ? "가격/수량/범위 누락을 보강 수집해야 합니다."
+        : "현재 결과만으로 영업 판단을 내리기 어렵습니다.";
+  return { score, label, tone, summary };
+}
+
+function collectionQualityRankRangeForRank(rank) {
+  const value = Number(rank || 0);
+  if (value > 0 && value <= 5) return "1-5";
+  if (value > 0 && value <= 10) return "1-10";
+  if (value > 0 && value <= 20) return "1-20";
+  return "1-30";
+}
+
+function collectionQualityHistoryAlerts(activeKeywordRow = null) {
+  const rows = activeKeywordRow?.timeline || [];
+  if (rows.length < 2) return [];
+  const latest = rows[rows.length - 1] || {};
+  const previous = rows[rows.length - 2] || {};
+  const alerts = [];
+  const latestCount = finiteNumber(latest.companyCount, NaN);
+  const previousCount = finiteNumber(previous.companyCount, NaN);
+  if (Number.isFinite(latestCount) && Number.isFinite(previousCount) && previousCount > 0 && latestCount < previousCount * 0.7) {
+    alerts.push({
+      key: "history_company_drop",
+      label: "수집 업체 수 급감",
+      value: `${fmtNumber(previousCount)} → ${fmtNumber(latestCount)}업체`,
+      detail: "직전 회차 대비 확보 업체가 30% 이상 줄었습니다. 상세 순위 범위나 예약ID 연결을 재확인해야 합니다.",
+      tone: "bad",
+      severity: 92
+    });
+  }
+  const latestObservations = finiteNumber(latest.observations, NaN);
+  const previousObservations = finiteNumber(previous.observations, NaN);
+  if (Number.isFinite(latestObservations) && Number.isFinite(previousObservations) && previousObservations > 0 && latestObservations < previousObservations * 0.65) {
+    alerts.push({
+      key: "history_observation_drop",
+      label: "관측치 급감",
+      value: `${fmtNumber(previousObservations)} → ${fmtNumber(latestObservations)}건`,
+      detail: "날짜별 수량/가격 관측치가 직전보다 크게 줄었습니다. 동일 기간 재수집을 권장합니다.",
+      tone: "watch",
+      severity: 82
+    });
+  }
+  const latestRate = Number(latest.saleRate);
+  const previousRate = Number(previous.saleRate);
+  if (Number.isFinite(latestRate) && Number.isFinite(previousRate) && previousRate - latestRate >= 0.25) {
+    alerts.push({
+      key: "history_sale_rate_drop",
+      label: "판매율 급락",
+      value: `${fmtRate(previousRate)} → ${fmtRate(latestRate)}`,
+      detail: "판매율 급락은 실제 시장 변화일 수 있지만, 수집 누락과 구분하기 위해 재수집 비교가 필요합니다.",
+      tone: "watch",
+      severity: 70
+    });
+  }
+  return alerts;
+}
+
+function collectionQualityAlerts(diag = {}, activeKeywordRow = null) {
+  const alerts = [
+    ...collectionQualityHistoryAlerts(activeKeywordRow),
+    ...(diag.issues || []).map(([label, count, detail, tone]) => ({
+      key: companyKey(label),
+      label,
+      value: `${fmtNumber(count)}건`,
+      detail,
+      tone,
+      severity: tone === "bad" ? 90 : tone === "watch" ? 70 : 40
+    }))
+  ];
+  if (diag.priceMissing > 0 || diag.quantityUnclear > 0) {
+    alerts.push({
+      key: "price_quantity_coverage",
+      label: "가격/수량 확보율 저하",
+      value: `가격 ${fmtNumber(diag.priceMissing)} · 수량 ${fmtNumber(diag.quantityUnclear)}`,
+      detail: "요일별 가격과 상품별 수량이 확인되지 않은 업체는 예상 매출 산정에서 보수적으로 분리됩니다.",
+      tone: "watch",
+      severity: 76
+    });
+  }
+  if (diag.skippedByRank > 0) {
+    alerts.push({
+      key: "rank_range_skipped",
+      label: "상세 수집 범위 밖 업체",
+      value: `${fmtNumber(diag.skippedByRank)}개`,
+      detail: "플레이스 순위 범위를 1-5, 6-10, 10-20처럼 분할하면 속도와 정확도를 함께 관리할 수 있습니다.",
+      tone: "watch",
+      severity: 68
+    });
+  }
+  return alerts
+    .filter((row, index, list) => list.findIndex((other) => other.key === row.key) === index)
+    .sort((a, b) => b.severity - a.severity)
+    .slice(0, 8);
+}
+
+function collectionQualityCompanyIndexForName(name = "", companyId = "") {
+  const items = state.data?.availability?.items || [];
+  if (companyId) {
+    const idIndex = items.findIndex((item) => item.companyProfile?.companyId === companyId);
+    if (idIndex >= 0) return idIndex;
+  }
+  const key = companyKey(name);
+  if (!key) return -1;
+  return items.findIndex((item) => companyKey(item.name) === key);
+}
+
+function collectionQualityRecrawlRows(diag = {}) {
+  const items = state.data?.availability?.items || [];
+  const rankingItems = state.data?.ranking?.items || [];
+  const rows = [];
+  items.forEach((item, index) => {
+    const profile = collectionStatusProfile(item);
+    const decision = decisionQueueProfile(item);
+    if (profile.statusKey === "ready" && !decision.inQueue) return;
+    const rank = Number(item.rank || item.overallRank || index + 1);
+    const reasons = [
+      decision.inQueue ? `판단 큐: ${decision.label}` : "",
+      ...profile.reasons,
+      decision.problemDateText && decision.problemDateText !== "문제 날짜 없음" ? `문제 날짜: ${decision.problemDateText}` : "",
+      profile.priceMissing ? "요일/상품별 판매가 재확인" : "",
+      profile.quantityUnclear ? "상품별 총량 구조 재확인" : ""
+    ].filter(Boolean);
+    const score = (decision.priority || 0)
+      + (profile.statusKey === "missing" ? 42 : 0)
+      + (profile.statusKey === "partial" ? 24 : 0)
+      + (profile.priceMissing ? 12 : 0)
+      + (profile.quantityUnclear ? 12 : 0)
+      + (rank > 0 && rank <= 10 ? 8 : 0);
+    rows.push({
+      key: item.companyProfile?.companyId || companyKey(item.name) || `current-${index}`,
+      source: "현재 수집",
+      name: item.name || "업체명 확인",
+      region: item.region || item.address || "",
+      rank,
+      score,
+      tone: profile.statusKey === "missing" ? "bad" : "watch",
+      reason: compactListText(reasons, "재수집 확인 필요", 3),
+      setting: `정밀분석 · 상세 ${collectionQualityRankRangeForRank(rank)}위`,
+      range: collectionQualityRankRangeForRank(rank),
+      revenue: 0,
+      itemIndex: index
+    });
+  });
+  rankingItems.forEach((item, index) => {
+    if (inventoryLinked(item)) return;
+    const rank = Number(item.rank || item.overallRank || index + 1);
+    const key = companyKey(item.name) || `rank-${index}`;
+    if (rows.some((row) => row.key === key)) return;
+    rows.push({
+      key,
+      source: "순위 노출",
+      name: item.name || "업체명 확인",
+      region: item.region || item.address || "",
+      rank,
+      score: 36 + (rank > 0 && rank <= 10 ? 10 : 0),
+      tone: "watch",
+      reason: "네이버 노출은 있으나 상세 재고/가격이 확보되지 않았습니다.",
+      setting: `정밀분석 · 상세 ${collectionQualityRankRangeForRank(rank)}위`,
+      range: collectionQualityRankRangeForRank(rank),
+      revenue: 0,
+      itemIndex: collectionQualityCompanyIndexForName(item.name)
+    });
+  });
+  companyDecisionQueueEntries(companyMasterSource())
+    .filter((entry) => entry.workflow.key !== "done")
+    .forEach((entry) => {
+      const company = entry.company || {};
+      const plan = companyQueueRecrawlPlan(company, entry.profile, entry.decision);
+      const rank = Number(company.bestRank || 0);
+      const revenue = finiteNumber(entry.revenueImpact?.totalRevenue, 0);
+      const key = company.companyId || companyKey(company.primaryName);
+      const existing = rows.find((row) => row.key === key);
+      const reason = compactListText([
+        entry.autoRecommendation?.label,
+        entry.decision?.summary,
+        entry.type?.label,
+        entry.profile?.issues?.[0]?.label
+      ], "관리자 판단 필요", 3);
+      const row = {
+        key,
+        source: "판단 큐",
+        name: company.primaryName || "업체명 확인",
+        region: (company.regions || []).slice(0, 2).join(" / "),
+        rank,
+        score: finiteNumber(entry.priority?.score, 0) + Math.min(20, revenue / 150000) + (entry.autoRecommendation?.status === "recrawl_needed" ? 12 : 0),
+        tone: entry.autoRecommendation?.tone || entry.type?.tone || "watch",
+        reason,
+        setting: `정밀분석 · 상세 ${plan.range || "1-20"}위`,
+        range: plan.range || "1-20",
+        revenue,
+        itemIndex: collectionQualityCompanyIndexForName(company.primaryName, company.companyId)
+      };
+      if (existing) {
+        existing.score = Math.max(existing.score, row.score);
+        existing.source = `${existing.source} + 판단 큐`;
+        existing.revenue = Math.max(existing.revenue || 0, revenue);
+        existing.reason = compactListText([existing.reason, reason], "관리자 판단 필요", 3);
+      } else {
+        rows.push(row);
+      }
+    });
+  if (diag.checked > 0 && diag.succeeded === 0 && !rows.length) {
+    rows.push({
+      key: "all_failed",
+      source: "수집 실패",
+      name: activeKeyword(),
+      region: "",
+      rank: 0,
+      score: 100,
+      tone: "bad",
+      reason: "상세 재고 확인을 시도했지만 성공 업체가 없습니다.",
+      setting: "정밀분석 · 상세 1-20위",
+      range: "1-20",
+      revenue: 0,
+      itemIndex: -1
+    });
+  }
+  return rows
+    .filter((row) => row.name)
+    .sort((a, b) => b.score - a.score || finiteNumber(b.revenue, 0) - finiteNumber(a.revenue, 0) || finiteNumber(a.rank, 9999) - finiteNumber(b.rank, 9999))
+    .slice(0, 8);
+}
+
+function collectionQualitySettingFeedback(diag = {}, quality = {}) {
+  const keyword = activeKeyword();
+  const rows = [];
+  if (!diag.precision) {
+    rows.push({
+      label: "정밀분석으로 전환",
+      value: "상세 1-20위",
+      detail: "빠른 순위 모드는 상세 재고를 생략하므로 판단 큐/예상 매출 산정에는 정밀분석이 필요합니다.",
+      range: "1-20",
+      mode: "precision",
+      keyword
+    });
+  }
+  if (diag.skippedByRank > 0 || diag.rankOnly > 0) {
+    rows.push({
+      label: "상세 범위 확대",
+      value: "1-30위",
+      detail: "노출만 있고 재고가 없는 업체가 많으면 상세 범위를 1-30위까지 넓혀 확인합니다.",
+      range: "1-30",
+      mode: "precision",
+      keyword
+    });
+  }
+  if (diag.priceMissing > 0 || diag.quantityUnclear > 0 || diag.missingDates > 0) {
+    rows.push({
+      label: "동일 기간 재수집",
+      value: effectiveDetailRankRange(diag.run),
+      detail: "요일별 가격, 상품별 총량, 미수집 날짜를 같은 기간으로 다시 확인합니다.",
+      range: effectiveDetailRankRange(diag.run) === "상세 생략" ? "1-20" : effectiveDetailRankRange(diag.run),
+      mode: "precision",
+      keyword
+    });
+  }
+  rows.push({
+    label: "순위 구간 분할",
+    value: "1-5 / 6-10 / 10-20",
+    detail: "상위권은 정확도, 10-20위권은 신규 후보 발굴로 나눠 수집하면 속도와 비용을 조절할 수 있습니다.",
+    range: "1-5,6-10,10-20",
+    mode: "precision",
+    keyword
+  });
+  if (quality.score >= 85 && !diag.skippedByRank && !diag.priceMissing && !diag.quantityUnclear) {
+    rows.push({
+      label: "속도 우선 가능",
+      value: "상세 1-5위",
+      detail: "품질 점수가 안정이면 상위 1-5위만 정밀 확인하고 나머지는 빠른 순위로 확인해도 됩니다.",
+      range: "1-5",
+      mode: "precision",
+      keyword
+    });
+  }
+  return rows
+    .filter((row, index, list) => list.findIndex((other) => `${other.label}-${other.value}` === `${row.label}-${row.value}`) === index)
+    .slice(0, 5);
+}
+
+function collectionQualityMonitorProfile() {
+  const items = state.data?.availability?.items || [];
+  const diag = collectionDiagnosticProfile(items);
+  const quality = collectionQualityScore(diag);
+  const activeKeywordRow = activeHistoryKeywordSummary();
+  const alerts = collectionQualityAlerts(diag, activeKeywordRow);
+  const recrawlRows = collectionQualityRecrawlRows(diag);
+  const feedback = collectionQualitySettingFeedback(diag, quality);
+  return {
+    diag,
+    quality,
+    activeKeywordRow,
+    alerts,
+    recrawlRows,
+    feedback,
+    hasData: Boolean(items.length || state.data?.ranking?.items?.length || diag.checked || diag.candidates)
+  };
+}
+
+function collectionQualityMetric(label, value, note = "", tone = "") {
+  return `
+    <article class="${escapeHtml(tone)}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+    </article>
+  `;
+}
+
+function collectionQualityDetailLabel(diag = {}) {
+  return diag.precision ? `상세 ${diag.rangeLabel}위` : "상세 생략";
+}
+
+function collectionQualityMonitorHtml() {
+  const profile = collectionQualityMonitorProfile();
+  const { diag, quality, alerts, recrawlRows, feedback } = profile;
+  if (!profile.hasData) {
+    return `
+      <section class="collection-quality-panel">
+        <div class="collection-quality-head">
+          <div>
+            <p class="eyebrow">수집 안정성 모니터링 V2</p>
+            <h3>수집 결과 대기</h3>
+            <p>정밀분석을 실행하면 품질 점수, 이상 수집 신호, 재수집 우선순위를 자동으로 계산합니다.</p>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="collection-quality-panel ${escapeHtml(quality.tone)}">
+      <div class="collection-quality-head">
+        <div>
+          <p class="eyebrow">수집 안정성 모니터링 V2</p>
+          <h3>데이터 품질 ${fmtNumber(quality.score)}점 · ${escapeHtml(quality.label)}</h3>
+          <p>${escapeHtml(quality.summary)} 현재 설정은 ${escapeHtml(diag.run.collectionModeLabel || collectionModeLabel(diag.run.collectionMode))} · ${escapeHtml(collectionQualityDetailLabel(diag))} 기준입니다.</p>
+        </div>
+        <button type="button" data-export-collection-quality>품질 CSV</button>
+      </div>
+      <div class="collection-quality-metrics">
+        ${collectionQualityMetric("품질 점수", `${fmtNumber(quality.score)}점`, quality.label, quality.tone)}
+        ${collectionQualityMetric("확인/성공", `${fmtNumber(diag.checked)}/${fmtNumber(diag.succeeded)}`, Number.isFinite(diag.successRate) ? `성공률 ${fmtRate(diag.successRate)}` : "시도 없음")}
+        ${collectionQualityMetric("후보 대비 확보", fmtNumber(diag.acquired), Number.isFinite(diag.coverageRate) ? `확보율 ${fmtRate(diag.coverageRate)}` : "상세 재고 기준")}
+        ${collectionQualityMetric("가격/수량 이슈", fmtNumber(diag.priceMissing + diag.quantityUnclear), `가격 ${fmtNumber(diag.priceMissing)} · 수량 ${fmtNumber(diag.quantityUnclear)}`, diag.priceMissing || diag.quantityUnclear ? "watch" : "good")}
+        ${collectionQualityMetric("범위/노출 누락", fmtNumber(diag.skippedByRank + diag.rankOnly), `범위밖 ${fmtNumber(diag.skippedByRank)} · 노출만 ${fmtNumber(diag.rankOnly)}`, diag.skippedByRank || diag.rankOnly ? "watch" : "good")}
+      </div>
+      <div class="collection-quality-grid">
+        <article>
+          <div class="history-card-head">
+            <strong>이상 수집 신호</strong>
+            <small>실패·부분 수집·급감 감지</small>
+          </div>
+          <div class="collection-quality-alerts">
+            ${alerts.length ? alerts.map((row) => `
+              <div class="${escapeHtml(row.tone)}">
+                <b>${escapeHtml(row.label)}</b>
+                <span>${escapeHtml(row.value)}</span>
+                <small>${escapeHtml(row.detail)}</small>
+              </div>
+            `).join("") : `
+              <div class="good">
+                <b>이상 신호 없음</b>
+                <span>정상</span>
+                <small>현재 설정에서 뚜렷한 수집 오류나 급감 신호가 없습니다.</small>
+              </div>
+            `}
+          </div>
+        </article>
+        <article>
+          <div class="history-card-head">
+            <strong>재수집 우선순위</strong>
+            <small>사람 판단 전 보강 대상</small>
+          </div>
+          <div class="collection-quality-recrawl">
+            ${recrawlRows.length ? recrawlRows.map((row, index) => `
+              <div class="${escapeHtml(row.tone)}">
+                <mark>${fmtNumber(index + 1)}</mark>
+                <div>
+                  <strong>${escapeHtml(row.name)}</strong>
+                  <small>${escapeHtml([row.source, row.region, row.rank ? `${fmtNumber(row.rank)}위` : "", row.revenue ? `예상 ${fmtWon(row.revenue)}` : ""].filter(Boolean).join(" · "))}</small>
+                  <p>${escapeHtml(row.reason)}</p>
+                </div>
+                <button type="button" data-apply-quality-setting data-quality-range="${escapeHtml(row.range)}" data-quality-mode="precision" data-quality-keyword="${escapeHtml(activeKeyword())}">${escapeHtml(row.setting)}</button>
+                ${row.itemIndex >= 0 ? `<button type="button" data-open-company="${row.itemIndex}">상세</button>` : ""}
+              </div>
+            `).join("") : `<p class="empty">재수집 우선 대상이 없습니다.</p>`}
+          </div>
+        </article>
+        <article class="wide">
+          <div class="history-card-head">
+            <strong>수집 설정 피드백</strong>
+            <small>검색 속도와 정확도 조절</small>
+          </div>
+          <div class="collection-quality-feedback">
+            ${feedback.map((row) => `
+              <div>
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.value)}</strong>
+                <small>${escapeHtml(row.detail)}</small>
+                <button type="button" data-apply-quality-setting data-quality-range="${escapeHtml(row.range)}" data-quality-mode="${escapeHtml(row.mode)}" data-quality-keyword="${escapeHtml(row.keyword)}">설정 적용</button>
+              </div>
+            `).join("")}
+          </div>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
 function renderCollectionDiagnostics(items = []) {
   const diag = collectionDiagnosticProfile(items);
   const modeLabel = diag.precision ? `상세 ${diag.rangeLabel}위` : "상세 생략";
@@ -3414,6 +3849,53 @@ function salesTargetCsv(entries = []) {
     ].map(salesTargetCsvValue).join(",");
   });
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
+}
+
+function collectionQualityCsv(profile = collectionQualityMonitorProfile()) {
+  const headers = ["구분", "대상", "지역", "순위", "상태/점수", "근거", "추천설정", "예상매출"];
+  const rows = [
+    [
+      "요약",
+      activeKeyword(),
+      "",
+      "",
+      `${fmtNumber(profile.quality.score)}점 · ${profile.quality.label}`,
+      profile.quality.summary,
+      `${profile.diag.run.collectionModeLabel || collectionModeLabel(profile.diag.run.collectionMode)} · ${collectionQualityDetailLabel(profile.diag)}`,
+      ""
+    ],
+    ...profile.alerts.map((row) => [
+      "이상신호",
+      row.label,
+      "",
+      "",
+      row.value,
+      row.detail,
+      "",
+      ""
+    ]),
+    ...profile.recrawlRows.map((row) => [
+      "재수집",
+      row.name,
+      row.region,
+      row.rank ? `${fmtNumber(row.rank)}위` : "",
+      `${fmtNumber(row.score)}점 · ${row.source}`,
+      row.reason,
+      row.setting,
+      row.revenue ? finiteNumber(row.revenue, 0) : ""
+    ]),
+    ...profile.feedback.map((row) => [
+      "설정피드백",
+      row.label,
+      "",
+      "",
+      row.value,
+      row.detail,
+      `${row.mode === "fast" ? "빠른순위" : "정밀분석"} · 상세 ${row.range}`,
+      ""
+    ])
+  ];
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
 }
 
 function reportPlatformStats(items = []) {
@@ -6098,6 +6580,7 @@ function renderHistoryOps() {
         <strong>누적 DB가 아직 비어 있습니다.</strong>
         <p>같은 키워드를 반복 수집하면 키워드별 이력, 회차 비교, 업체별 추이가 자동으로 쌓입니다.</p>
       </section>
+      ${collectionQualityMonitorHtml()}
     `;
     return;
   }
@@ -6118,6 +6601,8 @@ function renderHistoryOps() {
       ${historyOpsCard("활성 키워드", fmtNumber(activeKeywordRow?.observations || 0), `${fmtNumber(activeKeywordRow?.companyCount || 0)}업체`)}
       ${historyOpsCard("활성 판매율", historyRateText(activeKeywordRow?.saleRate), `${fmtNumber(activeKeywordRow?.sold || 0)}/${fmtNumber(activeKeywordRow?.supply || 0)}개`)}
     </section>
+
+    ${collectionQualityMonitorHtml()}
 
     <section class="history-ops-layout">
       <article class="history-ops-card wide">
@@ -8204,6 +8689,26 @@ function exportSalesTargetsCsv() {
   setStatus(`컨택 리스트 ${fmtNumber(entries.length)}개 내보내기`);
 }
 
+function exportCollectionQualityCsv() {
+  const profile = collectionQualityMonitorProfile();
+  if (!profile.hasData) {
+    setStatus("내보낼 수집 품질 데이터 없음");
+    return;
+  }
+  const csv = collectionQualityCsv(profile);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `glamping-collection-quality-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`수집 품질 리포트 ${fmtNumber(profile.recrawlRows.length)}개 우선순위 내보내기`);
+}
+
 async function copyTextToClipboard(text = "") {
   const value = String(text || "");
   if (!value.trim()) return false;
@@ -8245,6 +8750,30 @@ async function copySalesProposal(button, type = "script") {
   } finally {
     button.disabled = false;
   }
+}
+
+function applyCollectionQualitySetting(button) {
+  const range = button?.dataset?.qualityRange || "1-20";
+  const mode = button?.dataset?.qualityMode || "precision";
+  const keyword = button?.dataset?.qualityKeyword || activeKeyword();
+  if (els.keywordInput) els.keywordInput.value = keyword;
+  if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, "keyword");
+  if (els.productModeInput) els.productModeInput.value = "all";
+  if (els.collectionModeInput) els.collectionModeInput.value = mode;
+  if (els.detailRankRangesInput) {
+    els.detailRankRangesInput.disabled = mode === "fast";
+    els.detailRankRangesInput.value = mode === "fast" ? "" : range;
+  }
+  syncCollectionModeInputs();
+  setActiveTab("admin");
+  if (els.crawlStatus) {
+    const detail = mode === "fast" ? "빠른 순위 · 상세 생략" : `정밀분석 · 상세 ${range}위`;
+    els.crawlStatus.textContent = `${keyword} 수집 설정을 적용했습니다. ${detail}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
+  }
+  setStatus("수집 품질 권장 설정 적용");
+  window.requestAnimationFrame(() => {
+    els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 function applyQueueRecrawlSetting(button) {
@@ -8668,6 +9197,9 @@ function bindEvents() {
     const salesCallNote = event.target.closest("[data-copy-sales-call-note]");
     if (salesCallNote) copySalesProposal(salesCallNote, "call");
     if (event.target.closest("[data-export-sales-targets]")) exportSalesTargetsCsv();
+    if (event.target.closest("[data-export-collection-quality]")) exportCollectionQualityCsv();
+    const qualitySetting = event.target.closest("[data-apply-quality-setting]");
+    if (qualitySetting) applyCollectionQualitySetting(qualitySetting);
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
     if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
     const checkFilter = event.target.closest("[data-company-check-filter]");

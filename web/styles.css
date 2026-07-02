@@ -6675,6 +6675,262 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.collection-quality-panel {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+  box-shadow: var(--soft-shadow);
+  padding: 18px;
+}
+
+.collection-quality-panel.good {
+  border-color: #b7ebcf;
+}
+
+.collection-quality-panel.watch {
+  border-color: #fedf89;
+}
+
+.collection-quality-panel.bad {
+  border-color: #fecaca;
+}
+
+.collection-quality-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.collection-quality-head h3 {
+  margin: 4px 0 7px;
+  color: var(--ink);
+  font-size: clamp(22px, 4vw, 34px);
+  line-height: 1.08;
+  font-weight: 950;
+}
+
+.collection-quality-head p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.collection-quality-head button,
+.collection-quality-recrawl button,
+.collection-quality-feedback button {
+  border: 0;
+  border-radius: 12px;
+  background: var(--blue);
+  color: #fff;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.collection-quality-recrawl button + button {
+  background: #eef4ff;
+  color: var(--blue-dark);
+}
+
+.collection-quality-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.collection-quality-metrics article {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e8edf5;
+  border-radius: 15px;
+  background: #fbfcfd;
+  padding: 13px;
+}
+
+.collection-quality-metrics article.good {
+  border-color: #b7ebcf;
+  background: #ecfdf3;
+}
+
+.collection-quality-metrics article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.collection-quality-metrics article.bad {
+  border-color: #fecaca;
+  background: #fef3f2;
+}
+
+.collection-quality-metrics span,
+.collection-quality-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.collection-quality-metrics strong {
+  color: var(--ink);
+  font-size: clamp(18px, 3vw, 28px);
+  line-height: 1.05;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.collection-quality-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  gap: 12px;
+}
+
+.collection-quality-grid > article {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e8edf5;
+  border-radius: 16px;
+  background: #fbfcfd;
+  padding: 14px;
+}
+
+.collection-quality-grid > article.wide {
+  grid-column: 1 / -1;
+}
+
+.collection-quality-alerts,
+.collection-quality-recrawl,
+.collection-quality-feedback {
+  display: grid;
+  gap: 8px;
+}
+
+.collection-quality-alerts > div,
+.collection-quality-recrawl > div,
+.collection-quality-feedback > div {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.collection-quality-alerts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  padding: 11px;
+}
+
+.collection-quality-alerts > div.good {
+  border-color: #b7ebcf;
+  background: #ecfdf3;
+}
+
+.collection-quality-alerts > div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.collection-quality-alerts > div.bad {
+  border-color: #fecaca;
+  background: #fef3f2;
+}
+
+.collection-quality-alerts b,
+.collection-quality-recrawl strong,
+.collection-quality-feedback strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.collection-quality-alerts span {
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.collection-quality-alerts small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.collection-quality-recrawl > div {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+}
+
+.collection-quality-recrawl > div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.collection-quality-recrawl > div.bad {
+  border-color: #fecaca;
+  background: #fef3f2;
+}
+
+.collection-quality-recrawl mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: #eef4ff;
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.collection-quality-recrawl small,
+.collection-quality-recrawl p,
+.collection-quality-feedback span,
+.collection-quality-feedback small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.collection-quality-recrawl p {
+  margin-top: 3px;
+}
+
+.collection-quality-feedback {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.collection-quality-feedback > div {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.collection-quality-feedback button {
+  justify-self: start;
+  background: #eef4ff;
+  color: var(--blue-dark);
+}
+
 .history-ops-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(300px, .85fr);
@@ -7445,17 +7701,34 @@ a.platform-row:hover {
 
   .demand-layout,
   .demand-company-card,
+  .collection-quality-grid,
   .history-ops-layout,
   .history-layout {
     grid-template-columns: 1fr;
   }
 
-  .history-ops-metrics {
+  .history-ops-metrics,
+  .collection-quality-metrics,
+  .collection-quality-feedback {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .history-ops-hero {
+  .history-ops-hero,
+  .collection-quality-head {
     display: grid;
+  }
+
+  .collection-quality-head button {
+    justify-self: start;
+  }
+
+  .collection-quality-recrawl > div {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .collection-quality-recrawl button {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .history-metric-grid {
@@ -7788,6 +8061,8 @@ a.platform-row:hover {
   .sales-contact-actions,
   .collection-diagnostic-grid,
   .collection-diagnostic-list,
+  .collection-quality-metrics,
+  .collection-quality-feedback,
   .sheet-collection-grid,
   .sheet-audit-grid,
   .target-board-hero,
