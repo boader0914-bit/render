@@ -2096,7 +2096,11 @@ function demandTrendSource() {
     series,
     status: source?.status || null,
     reason: source?.reason || "",
-    collectable: source?.collectable
+    collectable: source?.collectable,
+    keyword: source?.keyword || source?.rawTitle || activeKeyword(),
+    collectedAt: source?.collectedAt || "",
+    cacheHit: Boolean(source?.cache?.hit),
+    observationCount: source?.cache?.observationCount || null
   };
 }
 
@@ -2177,9 +2181,14 @@ function demandTrendChart() {
   const fallbackMonths = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
   const series = trend.series.length ? trend.series.slice(-12) : fallbackMonths.map((label) => ({ label, value: null }));
   const errorLabel = Number(trend.status) === 401 ? "인증 실패" : "API 오류";
-  const statusLabel = trend.reason ? errorLabel : (trend.configured ? "데이터랩 준비" : "API 키 필요");
+  const validMonthCount = series.filter((entry) => Number.isFinite(Number(entry.value))).length;
+  const statusLabel = trend.reason
+    ? errorLabel
+    : trend.hasSeries
+      ? `${trend.cacheHit ? "저장자료 사용" : "연동 정상"} · ${fmtNumber(validMonthCount)}개월`
+      : (trend.configured ? "연동 대기" : "API 키 필요");
   const detailLabel = trend.hasSeries
-    ? "최고점=100 기준"
+    ? `최고점=100 기준 · ${trend.keyword || activeKeyword()}${trend.collectedAt ? ` · ${compactDateTime(trend.collectedAt)}` : ""}`
     : trend.reason
       ? trend.reason
       : "데이터랩 API 연동 후 12개월 추세 표시";
@@ -3930,7 +3939,7 @@ function renderDemand() {
   const trend = demandTrendSource();
   const regions = demandRegionRows();
   const demandStateText = trend.hasSeries
-    ? "트렌드 반영"
+    ? "연동 정상"
     : trend.reason
       ? (Number(trend.status) === 401 ? "인증 실패" : "API 오류")
     : state.trafficKeyState?.datalabConfigured

@@ -34,8 +34,10 @@ const CONFIG_DIR = path.resolve(
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
+const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
+const DATALAB_TREND_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
@@ -1961,7 +1963,100 @@ function normalizeDatalabTrend(keyword, result, range) {
   };
 }
 
-async function collectDatalabTrend(keyword, keys, attempt = 0) {
+function datalabTrendCacheKey(keyword) {
+  return compactKeyword(keyword).toLowerCase();
+}
+
+async function readDatalabTrendStore() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(HISTORY_DATALAB_TRENDS_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      source: "naver_datalab_trend_store",
+      version: 1,
+      ...parsed,
+      keywords: parsed.keywords || {}
+    };
+  } catch {
+    return { source: "naver_datalab_trend_store", version: 1, updatedAt: "", keywords: {} };
+  }
+}
+
+async function writeDatalabTrendStore(store) {
+  await fsp.mkdir(HISTORY_DIR, { recursive: true });
+  const next = { ...store, updatedAt: new Date().toISOString() };
+  const tempPath = `${HISTORY_DATALAB_TRENDS_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tempPath, HISTORY_DATALAB_TRENDS_FILE);
+}
+
+function datalabTrendSnapshot(trend = {}) {
+  return {
+    source: trend.source || "naver_datalab_search",
+    keyword: trend.keyword || "",
+    configured: Boolean(trend.configured),
+    collectable: Boolean(trend.collectable),
+    status: trend.status || null,
+    startDate: trend.startDate || "",
+    endDate: trend.endDate || "",
+    timeUnit: trend.timeUnit || "month",
+    note: trend.note || "",
+    reason: trend.reason || "",
+    series: Array.isArray(trend.series) ? trend.series.slice(-24) : [],
+    rawTitle: trend.rawTitle || trend.keyword || "",
+    collectedAt: trend.collectedAt || new Date().toISOString()
+  };
+}
+
+function freshDatalabTrendFromStore(entry = {}, range = {}) {
+  const latest = entry.latest || null;
+  if (!latest?.collectable) return null;
+  if (latest.startDate !== range.startDate || latest.endDate !== range.endDate || latest.timeUnit !== range.timeUnit) return null;
+  const collectedAt = Date.parse(latest.collectedAt || "");
+  if (!Number.isFinite(collectedAt) || Date.now() - collectedAt > DATALAB_TREND_CACHE_TTL_MS) return null;
+  return {
+    ...latest,
+    cache: {
+      hit: true,
+      file: "history/datalab_trends.json",
+      observationCount: entry.observationCount || (entry.observations || []).length || 1,
+      lastCollectedAt: latest.collectedAt || ""
+    }
+  };
+}
+
+async function rememberDatalabTrend(keyword, trend = {}, { cacheHit = false } = {}) {
+  const key = datalabTrendCacheKey(keyword || trend.keyword);
+  if (!key || !trend?.configured) return trend;
+  const store = await readDatalabTrendStore();
+  const current = store.keywords[key] || {
+    keyword: trend.keyword || compactKeyword(keyword),
+    keywordKey: key,
+    firstCollectedAt: trend.collectedAt || new Date().toISOString(),
+    useCount: 0,
+    observations: []
+  };
+  const now = new Date().toISOString();
+  current.keyword = current.keyword || trend.keyword || compactKeyword(keyword);
+  current.keywordKey = key;
+  current.lastUsedAt = now;
+  current.useCount = Number(current.useCount || 0) + 1;
+  if (!cacheHit) {
+    const snapshot = datalabTrendSnapshot(trend);
+    current.latest = snapshot;
+    current.observations = [
+      ...(current.observations || []),
+      snapshot
+    ].slice(-80);
+    current.firstCollectedAt = current.firstCollectedAt || snapshot.collectedAt;
+    current.lastCollectedAt = snapshot.collectedAt;
+  }
+  current.observationCount = (current.observations || []).length;
+  store.keywords[key] = current;
+  await writeDatalabTrendStore(store);
+  return trend;
+}
+
+async function collectDatalabTrend(keyword, keys, attempt = 0, range = datalabTrendRange(12)) {
   const compact = compactKeyword(keyword);
   if (!compact) return null;
 
@@ -1976,7 +2071,6 @@ async function collectDatalabTrend(keyword, keys, attempt = 0) {
     };
   }
 
-  const range = datalabTrendRange(12);
   const result = await requestJson("https://openapi.naver.com/v1/datalab/search", {
     method: "POST",
     headers: {
@@ -1997,7 +2091,7 @@ async function collectDatalabTrend(keyword, keys, attempt = 0) {
 
   if (result.status === 429 && attempt < 2) {
     await sleep(1200 * (attempt + 1));
-    return collectDatalabTrend(keyword, keys, attempt + 1);
+    return collectDatalabTrend(keyword, keys, attempt + 1, range);
   }
 
   if (!result.ok) {
@@ -2017,6 +2111,25 @@ async function collectDatalabTrend(keyword, keys, attempt = 0) {
   }
 
   return normalizeDatalabTrend(compact, result.data, range);
+}
+
+async function collectDatalabTrendCached(keyword, keys) {
+  const compact = compactKeyword(keyword);
+  if (!compact) return null;
+  if (!keys.naverClientId || !keys.naverClientSecret) return collectDatalabTrend(keyword, keys);
+
+  const range = datalabTrendRange(12);
+  const store = await readDatalabTrendStore();
+  const key = datalabTrendCacheKey(compact);
+  const cached = freshDatalabTrendFromStore(store.keywords?.[key], range);
+  if (cached) {
+    await rememberDatalabTrend(compact, cached, { cacheHit: true });
+    return cached;
+  }
+
+  const trend = await collectDatalabTrend(compact, keys, 0, range);
+  if (trend) await rememberDatalabTrend(compact, trend);
+  return trend;
 }
 
 function createTrafficAggregate() {
@@ -2078,7 +2191,7 @@ async function enrichRegionsWithTraffic(regions, dirPath, demandKeyword = "") {
   const datalabKeyword = compactKeyword(demandKeyword || regions[0]?.trafficKeyword || "");
   let datalabTrend = datalabKeyword ? trends[datalabKeyword] : null;
   if (datalabKeyword && !datalabTrend?.collectable) {
-    datalabTrend = await collectDatalabTrend(datalabKeyword, keys);
+    datalabTrend = await collectDatalabTrendCached(datalabKeyword, keys);
     if (datalabTrend) {
       trends[datalabKeyword] = datalabTrend;
       changed = true;
@@ -5060,8 +5173,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-review-queue-routing"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-review-queue-routing"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-trend-cache"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-trend-cache"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
