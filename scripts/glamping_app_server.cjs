@@ -4358,6 +4358,80 @@ async function saveCompanyManualCorrection(payload = {}) {
   };
 }
 
+function sanitizeAdminReviewContext(value = {}) {
+  if (!value || typeof value !== "object") return null;
+  const text = (input, max = 180) => String(input || "").replace(/\s+/g, " ").trim().slice(0, max);
+  const numberOrZero = (input) => {
+    const value = Number(input);
+    return Number.isFinite(value) ? Math.round(value) : 0;
+  };
+  const list = (input, limit = 4, max = 180) => Array.isArray(input)
+    ? input.map((item) => text(item, max)).filter(Boolean).slice(0, limit)
+    : [];
+  const recrawlSource = value.recrawlPlan && typeof value.recrawlPlan === "object" ? value.recrawlPlan : {};
+  const comparisonSource = value.comparison && typeof value.comparison === "object" ? value.comparison : {};
+  const revenueSource = value.revenue && typeof value.revenue === "object" ? value.revenue : {};
+  const comparisonCells = Array.isArray(comparisonSource.cells)
+    ? comparisonSource.cells.map((cell) => ({
+        key: text(cell?.key, 40),
+        label: text(cell?.label, 80),
+        before: text(cell?.before, 100),
+        after: text(cell?.after, 100),
+        tone: text(cell?.tone, 20),
+        note: text(cell?.note, 120)
+      })).filter((cell) => cell.key || cell.label || cell.before || cell.after || cell.note).slice(0, 6)
+    : [];
+  const context = {
+    source: text(value.source, 50),
+    appliedStatus: text(value.appliedStatus, 40),
+    appliedLabel: text(value.appliedLabel, 80),
+    recommendationStatus: text(value.recommendationStatus, 40),
+    recommendationLabel: text(value.recommendationLabel, 80),
+    recommendationReasons: list(value.recommendationReasons, 4, 220),
+    decisionLabel: text(value.decisionLabel, 100),
+    decisionSummary: text(value.decisionSummary, 220),
+    problemDateText: text(value.problemDateText, 220),
+    quantityConfidence: text(value.quantityConfidence, 140),
+    gapType: text(value.gapType, 120),
+    channelText: text(value.channelText, 180),
+    summary: text(value.summary, 260),
+    recrawlPlan: {
+      keyword: text(recrawlSource.keyword, 120),
+      range: text(recrawlSource.range, 40),
+      dateText: text(recrawlSource.dateText, 180),
+      checkIn: text(recrawlSource.checkIn, 20),
+      checkOut: text(recrawlSource.checkOut, 20)
+    },
+    comparison: {
+      hasComparison: Boolean(comparisonSource.hasComparison),
+      improved: numberOrZero(comparisonSource.improved),
+      worsened: numberOrZero(comparisonSource.worsened),
+      tone: text(comparisonSource.tone, 20),
+      previousCollectedAt: text(comparisonSource.previousCollectedAt, 40),
+      latestCollectedAt: text(comparisonSource.latestCollectedAt, 40),
+      cells: comparisonCells
+    },
+    revenue: {
+      totalRevenue: numberOrZero(revenueSource.totalRevenue),
+      totalPricedSoldOut: numberOrZero(revenueSource.totalPricedSoldOut),
+      totalMissingPriceSoldOut: numberOrZero(revenueSource.totalMissingPriceSoldOut),
+      precisionLabel: text(revenueSource.precisionLabel, 80),
+      precisionGrade: text(revenueSource.precisionGrade, 20)
+    }
+  };
+  const hasText = [
+    context.summary,
+    context.recommendationLabel,
+    context.decisionLabel,
+    context.decisionSummary,
+    context.problemDateText,
+    context.quantityConfidence,
+    context.channelText
+  ].some(Boolean);
+  const hasMetrics = context.comparison.hasComparison || context.revenue.totalRevenue || context.revenue.totalMissingPriceSoldOut;
+  return hasText || hasMetrics ? context : null;
+}
+
 async function saveCompanyAdminReview(payload = {}) {
   const companyId = String(payload.companyId || "").trim();
   const status = String(payload.status || "").trim();
@@ -4370,6 +4444,7 @@ async function saveCompanyAdminReview(payload = {}) {
   }
   const meta = companyAdminReviewMeta(status);
   const savedAt = new Date().toISOString();
+  const reviewContext = sanitizeAdminReviewContext(payload.reviewContext);
   let historyEntry = null;
   if (!status || status === "clear") {
     historyEntry = {
@@ -4379,6 +4454,7 @@ async function saveCompanyAdminReview(payload = {}) {
       previousLabel: company.adminReview?.label || "",
       label: "검증 해제",
       note: String(payload.note || "").trim(),
+      ...(reviewContext ? { context: reviewContext } : {}),
       source: "admin"
     };
     company.adminReview = null;
@@ -4392,6 +4468,7 @@ async function saveCompanyAdminReview(payload = {}) {
       label: meta.label,
       note: String(payload.note || "").trim(),
       source: "admin",
+      ...(reviewContext ? { context: reviewContext } : {}),
       updatedAt: savedAt
     };
     historyEntry = {
@@ -4401,6 +4478,7 @@ async function saveCompanyAdminReview(payload = {}) {
       label: meta.label,
       category: meta.category || "",
       note: company.adminReview.note,
+      ...(reviewContext ? { context: reviewContext } : {}),
       source: "admin"
     };
   }
@@ -6117,8 +6195,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-recrawl-context"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-recrawl-context"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-review-context"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-review-context"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

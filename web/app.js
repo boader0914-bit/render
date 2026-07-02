@@ -3392,6 +3392,91 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
   return { status: "check_needed", label: "확인 필요", tone: "watch", reasons: ["잔여 신호를 확인한 뒤 컨택 또는 보류를 결정하세요."] };
 }
 
+function companyReviewContextText(context = {}) {
+  if (!context || typeof context !== "object") return "";
+  const comparison = context.comparison || {};
+  const recrawl = context.recrawlPlan || {};
+  const revenue = context.revenue || {};
+  return compactListText([
+    context.summary,
+    context.recommendationLabel ? `자동 추천 ${context.recommendationLabel}` : "",
+    comparison.hasComparison ? `비교 개선 ${fmtNumber(comparison.improved)} / 악화 ${fmtNumber(comparison.worsened)}` : "",
+    recrawl.range ? `재수집 상세 ${recrawl.range}위` : "",
+    revenue.totalRevenue ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : ""
+  ], "", 4);
+}
+
+function companyReviewContextFromButton(button, status = "") {
+  const companyId = button?.dataset?.companyId || "";
+  if (!companyId) return null;
+  const entries = companyDecisionQueueEntries(companyMasterSource());
+  const entry = entries.find((row) => row.company?.companyId === companyId);
+  const company = entry?.company || (companyMasterSource().companies || []).find((row) => row.companyId === companyId) || {};
+  if (!company.companyId) return null;
+  const profile = entry?.profile || companyNeedsCorrection(company);
+  const decision = entry?.decision || companyDecisionQueueProfile(company);
+  const comparison = entry?.comparison || companyRecrawlComparison(company);
+  const recommendation = entry?.autoRecommendation || companyRecrawlAutoRecommendation(company, profile, decision, comparison);
+  const revenue = entry?.revenueImpact || companyQueueRevenueImpact(company);
+  const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const comparisonCells = comparison?.hasComparison
+    ? (comparison.cells || []).map((cell) => ({
+        key: cell.key || "",
+        label: cell.label || "",
+        before: cell.before || "",
+        after: cell.after || "",
+        tone: cell.tone || "same",
+        note: cell.note || ""
+      })).slice(0, 6)
+    : [];
+  const summary = compactListText([
+    decision.label,
+    recommendation.label,
+    decision.problemDateText && decision.problemDateText !== "문제 날짜 없음" ? `문제 날짜 ${decision.problemDateText}` : "",
+    decision.quantityConfidence,
+    comparison?.hasComparison ? `개선 ${fmtNumber(comparison.improved)} / 악화 ${fmtNumber(comparison.worsened)}` : "",
+    revenue.totalRevenue ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : ""
+  ], "관리자 판단 저장", 4);
+  return {
+    source: entry ? "decision_queue" : "company_master",
+    appliedStatus: status,
+    appliedLabel: companyAdminReviewLabel(status),
+    recommendationStatus: recommendation.status || "",
+    recommendationLabel: recommendation.label || "",
+    recommendationReasons: (recommendation.reasons || []).slice(0, 4),
+    decisionLabel: decision.label || "",
+    decisionSummary: decision.summary || "",
+    problemDateText: decision.problemDateText || "",
+    quantityConfidence: decision.quantityConfidence || "",
+    gapType: decision.gapType || "",
+    channelText: decision.channelText || "",
+    summary,
+    recrawlPlan: {
+      keyword: plan.keyword || activeKeyword(),
+      range: plan.range || plan.detailRankRanges || "",
+      dateText: plan.dateText || "",
+      checkIn: plan.checkIn || "",
+      checkOut: plan.checkOut || ""
+    },
+    comparison: {
+      hasComparison: Boolean(comparison?.hasComparison),
+      improved: comparison?.improved || 0,
+      worsened: comparison?.worsened || 0,
+      tone: comparison?.tone || "same",
+      previousCollectedAt: comparison?.previous?.collectedAt || "",
+      latestCollectedAt: comparison?.latest?.collectedAt || "",
+      cells: comparisonCells
+    },
+    revenue: {
+      totalRevenue: revenue.totalRevenue || 0,
+      totalPricedSoldOut: revenue.totalPricedSoldOut || 0,
+      totalMissingPriceSoldOut: revenue.totalMissingPriceSoldOut || 0,
+      precisionLabel: revenue.precision?.label || "",
+      precisionGrade: revenue.precision?.grade || ""
+    }
+  };
+}
+
 function companyRecrawlComparisonHtml(company = {}, profile = {}, decision = {}) {
   const comparison = companyRecrawlComparison(company);
   const recommendation = companyRecrawlAutoRecommendation(company, profile, decision, comparison);
@@ -5486,9 +5571,9 @@ function companyReviewHistoryPanel(profile = {}) {
         <article>
           <b>${escapeHtml(row.label || companyAdminReviewLabel(row.status) || "판단 기록")}</b>
           <span>${escapeHtml(compactDateTime(row.at))}</span>
-          ${row.note ? `<small>${escapeHtml(row.note)}</small>` : `<small>${escapeHtml(row.action === "clear" ? "검증 상태를 해제했습니다." : "메모 없이 저장됨")}</small>`}
+          <small>${escapeHtml(row.note || companyReviewContextText(row.context) || (row.action === "clear" ? "검증 상태를 해제했습니다." : "메모 없이 저장됨"))}</small>
         </article>
-      `).join("") : `<article><b>${escapeHtml(current.label || companyAdminReviewLabel(current.status))}</b><span>${escapeHtml(compactDateTime(current.updatedAt))}</span><small>${escapeHtml(current.note || "현재 저장된 판단입니다.")}</small></article>`}
+      `).join("") : `<article><b>${escapeHtml(current.label || companyAdminReviewLabel(current.status))}</b><span>${escapeHtml(compactDateTime(current.updatedAt))}</span><small>${escapeHtml(current.note || companyReviewContextText(current.context) || "현재 저장된 판단입니다.")}</small></article>`}
     </div>
   `;
 }
@@ -6419,7 +6504,7 @@ function companyQueueRecentLogs(entries = []) {
         name,
         label: "관리자 판단",
         value: history.action === "clear" ? "판단 해제" : (history.label || companyAdminReviewLabel(history.status) || "상태 변경"),
-        note: history.note || history.reason || "관리자 처리 이력"
+        note: history.note || companyReviewContextText(history.context) || history.reason || "관리자 처리 이력"
       });
     }
     if (entry.workflow?.key === "recheck") {
@@ -9341,13 +9426,14 @@ async function saveCompanyAdminReview(button) {
     ?? button.dataset.companyReviewNote
     ?? existingCompany?.adminReview?.note
     ?? "";
+  const reviewContext = companyReviewContextFromButton(button, status);
   button.disabled = true;
   setStatus(status === "clear" ? "검증 해제 중" : "검증 저장 중");
   try {
     const data = await fetchJson("/api/company-master/admin-review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId, status, note })
+      body: JSON.stringify({ companyId, status, note, reviewContext })
     });
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
