@@ -2037,6 +2037,7 @@ async function decorateDatalabTrendWithCache(keyword, trend = {}) {
   if (!key) return trend;
   const store = await readDatalabTrendStore();
   const entry = store.keywords?.[key];
+  if (!entry && trend?.configured) return rememberDatalabTrend(keyword || trend.keyword, trend);
   if (!entry) return trend;
   return {
     ...trend,
