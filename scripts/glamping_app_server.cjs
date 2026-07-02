@@ -211,13 +211,62 @@ function estimateCrawlCompletion(payload = {}) {
   const regionalSeconds = fast ? 0 : 80;
   const otaSeconds = fast ? 0 : 35;
   const ioSeconds = fast ? 18 : 35;
+  const stages = [
+    {
+      key: "rank",
+      label: "순위 수집",
+      seconds: searchSeconds,
+      detail: "네이버 플레이스 순위와 업체 기본 정보를 정리합니다."
+    },
+    {
+      key: "trend",
+      label: "수요 확인",
+      seconds: trendSeconds,
+      detail: "검색수요와 트렌드 캐시를 확인합니다."
+    },
+    fast
+      ? {
+          key: "inventory",
+          label: "상세 생략",
+          seconds: 6,
+          detail: "빠른 순위 모드라 날짜별 재고와 가격 확인을 건너뜁니다."
+        }
+      : {
+          key: "inventory",
+          label: "재고/가격 확인",
+          seconds: productSeconds + rangeSeconds,
+          detail: `상세 ${plan.detailRankRanges || "1-20"}위의 날짜별 수량과 요일별 가격을 확인합니다.`
+        },
+    !fast
+      ? {
+          key: "ota",
+          label: "보조 채널",
+          seconds: otaSeconds + regionalSeconds,
+          detail: "OTA 보조 신호와 지역 수요 데이터를 정리합니다."
+        }
+      : null,
+    {
+      key: "save",
+      label: "저장/분석",
+      seconds: ioSeconds,
+      detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다."
+    }
+  ].filter(Boolean).map((stage) => ({
+    ...stage,
+    seconds: Math.max(4, Math.round(stage.seconds || 0))
+  }));
+  const stagedSeconds = stages.reduce((sum, stage) => sum + stage.seconds, 0);
   const estimatedTotalSeconds = Math.max(
     fast ? 45 : 90,
-    Math.round(searchSeconds + productSeconds + trendSeconds + rangeSeconds + regionalSeconds + otaSeconds + ioSeconds)
+    stagedSeconds
   );
+  if (stages.length && estimatedTotalSeconds > stagedSeconds) {
+    stages[stages.length - 1].seconds += estimatedTotalSeconds - stagedSeconds;
+  }
   return {
     ...plan,
     estimatedTotalSeconds,
+    stages,
     basis: {
       searchMode: plan.resolvedSearchMode,
       searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
@@ -5684,6 +5733,9 @@ function currentCrawlStatus() {
   const estimatedCompleteAt = activeCrawlStartedAt && estimatedTotalSeconds
     ? new Date(activeCrawlStartedAt.getTime() + estimatedTotalSeconds * 1000).toISOString()
     : null;
+  const stageStatus = activeCrawlPromise
+    ? activeCrawlStageStatus(elapsedSeconds)
+    : { currentStage: null, stages: [] };
   return {
     active: !!activeCrawlPromise,
     startedAt: activeCrawlStartedAt ? activeCrawlStartedAt.toISOString() : null,
@@ -5692,8 +5744,55 @@ function currentCrawlStatus() {
     remainingSeconds,
     estimatedProgress,
     estimatedCompleteAt,
+    currentStage: stageStatus.currentStage,
+    stages: stageStatus.stages,
     estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null
   };
+}
+
+function activeCrawlStageStatus(elapsedSeconds = 0) {
+  const stages = Array.isArray(activeCrawlEstimate?.stages) ? activeCrawlEstimate.stages : [];
+  if (!stages.length) return { currentStage: null, stages: [] };
+  let cursor = 0;
+  let currentStage = null;
+  const rendered = stages.map((stage, index) => {
+    const seconds = Math.max(1, Number(stage.seconds) || 1);
+    const start = cursor;
+    const end = cursor + seconds;
+    cursor = end;
+    let status = "pending";
+    let progress = 0;
+    if (elapsedSeconds >= end) {
+      status = "done";
+      progress = 100;
+    } else if (elapsedSeconds >= start || (!currentStage && index === 0)) {
+      status = "active";
+      progress = ((elapsedSeconds - start) / seconds) * 100;
+      progress = Math.max(1, Math.min(99, progress));
+    }
+    const row = {
+      key: stage.key,
+      label: stage.label,
+      detail: stage.detail,
+      seconds,
+      status,
+      progress: Math.round(progress)
+    };
+    if (status === "active") currentStage = row;
+    return row;
+  });
+  if (!currentStage && rendered.length) {
+    const pending = rendered.find((stage) => stage.status === "pending");
+    if (pending) {
+      currentStage = pending;
+    } else {
+      const last = rendered[rendered.length - 1];
+      last.status = "active";
+      last.progress = 99;
+      currentStage = last;
+    }
+  }
+  return { currentStage, stages: rendered };
 }
 
 async function runCrawlerInternal(payload) {
@@ -5764,8 +5863,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-precise-revenue"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-precise-revenue"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-progress-ux"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-progress-ux"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

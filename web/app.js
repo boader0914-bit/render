@@ -89,6 +89,7 @@ const els = {
   crawlProgressRemaining: document.getElementById("crawlProgressRemaining"),
   crawlProgressEta: document.getElementById("crawlProgressEta"),
   crawlProgressBasis: document.getElementById("crawlProgressBasis"),
+  crawlProgressStages: document.getElementById("crawlProgressStages"),
   crawlStatus: document.getElementById("crawlStatus"),
   yeogiManualBadge: document.getElementById("yeogiManualBadge"),
   yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
@@ -373,6 +374,7 @@ function ensureCrawlControls() {
         <strong id="crawlProgressTitle">수집 준비</strong>
         <small id="crawlProgressText">네이버·NOL·떠나요를 확인합니다.</small>
       </div>
+      <div class="crawl-progress-stages" id="crawlProgressStages" aria-label="수집 단계"></div>
       <div class="crawl-progress-meter" aria-hidden="true"><span id="crawlProgressBar"></span></div>
       <div class="crawl-progress-numbers" aria-label="수집 예상 시간">
         <span><b id="crawlProgressPercent">예측중</b><small>진행률</small></span>
@@ -392,6 +394,7 @@ function ensureCrawlControls() {
     els.crawlProgressRemaining = progress.querySelector("#crawlProgressRemaining");
     els.crawlProgressEta = progress.querySelector("#crawlProgressEta");
     els.crawlProgressBasis = progress.querySelector("#crawlProgressBasis");
+    els.crawlProgressStages = progress.querySelector("#crawlProgressStages");
   }
 }
 
@@ -417,6 +420,96 @@ function crawlEstimateBasisText(basis = {}) {
   return `${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range}`;
 }
 
+function crawlStageFallbacks() {
+  return [
+    { key: "rank", label: "순위", status: "active", progress: 0 },
+    { key: "inventory", label: "재고/가격", status: "pending", progress: 0 },
+    { key: "save", label: "저장", status: "pending", progress: 0 }
+  ];
+}
+
+function crawlPreviewMeta(payload = {}) {
+  const days = Math.max(1, Math.min(31, bookingDays(payload) || DEFAULT_BOOKING_DAYS));
+  const placeLimit = days > 1 ? 10 : 0;
+  const fast = payload.collectionMode === "fast";
+  const searchSeconds = payload.searchMode === "company" ? 55 : 95;
+  const trendSeconds = payload.searchMode === "keyword" ? 25 : 10;
+  const productSeconds = fast ? 0 : (payload.productMode === "all" ? 45 : 26);
+  const rangeSeconds = !fast && placeLimit
+    ? placeLimit * days * (payload.productMode === "all" ? 5.5 : 4.2)
+    : 0;
+  const regionalSeconds = fast ? 0 : 80;
+  const otaSeconds = fast ? 0 : 35;
+  const ioSeconds = fast ? 18 : 35;
+  const stages = [
+    { key: "rank", label: "순위 수집", seconds: searchSeconds, detail: "네이버 플레이스 순위와 업체 기본 정보를 정리합니다." },
+    { key: "trend", label: "수요 확인", seconds: trendSeconds, detail: "검색수요와 트렌드 캐시를 확인합니다." },
+    fast
+      ? { key: "inventory", label: "상세 생략", seconds: 6, detail: "빠른 순위 모드라 날짜별 재고와 가격 확인을 건너뜁니다." }
+      : { key: "inventory", label: "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `상세 ${payload.detailRankRanges || "1-20"}위의 날짜별 수량과 요일별 가격을 확인합니다.` },
+    !fast ? { key: "ota", label: "보조 채널", seconds: otaSeconds + regionalSeconds, detail: "OTA 보조 신호와 지역 수요 데이터를 정리합니다." } : null,
+    { key: "save", label: "저장/분석", seconds: ioSeconds, detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다." }
+  ].filter(Boolean).map((stage, index) => ({
+    ...stage,
+    seconds: Math.max(4, Math.round(stage.seconds || 0)),
+    status: index === 0 ? "active" : "pending",
+    progress: index === 0 ? 1 : 0
+  }));
+  const stagedSeconds = stages.reduce((sum, stage) => sum + stage.seconds, 0);
+  const estimatedTotalSeconds = Math.max(fast ? 45 : 90, stagedSeconds);
+  if (stages.length && estimatedTotalSeconds > stagedSeconds) {
+    stages[stages.length - 1].seconds += estimatedTotalSeconds - stagedSeconds;
+  }
+  return {
+    elapsedSeconds: 0,
+    remainingSeconds: estimatedTotalSeconds,
+    estimatedTotalSeconds,
+    estimatedProgress: 1,
+    estimatedCompleteAt: new Date(Date.now() + estimatedTotalSeconds * 1000).toISOString(),
+    currentStage: stages[0] || null,
+    stages,
+    estimateBasis: {
+      searchMode: payload.searchMode,
+      searchModeLabel: searchModeLabel(payload.searchMode),
+      productMode: payload.productMode,
+      productModeLabel: productModeLabel(payload.productMode),
+      collectionMode: payload.collectionMode,
+      collectionModeLabel: collectionModeLabel(payload.collectionMode),
+      detailRankRanges: payload.detailRankRanges,
+      bookingRangeDays: days,
+      bookingRangePlaceLimit: placeLimit
+    }
+  };
+}
+
+function crawlStageStatusText(stage = {}) {
+  if (stage.status === "done") return "완료";
+  if (stage.status === "active") {
+    const progress = Number(stage.progress);
+    return Number.isFinite(progress) ? `${Math.max(1, Math.min(99, Math.round(progress)))}%` : "진행";
+  }
+  return "대기";
+}
+
+function renderCrawlStages(meta = {}) {
+  if (!els.crawlProgressStages) return;
+  const rows = Array.isArray(meta.stages) && meta.stages.length ? meta.stages : crawlStageFallbacks();
+  els.crawlProgressStages.innerHTML = rows.map((stage) => `
+    <span class="${escapeHtml(stage.status || "pending")}">
+      <b>${escapeHtml(stage.label || "단계")}</b>
+      <small>${escapeHtml(crawlStageStatusText(stage))}</small>
+    </span>
+  `).join("");
+}
+
+function crawlCurrentStageText(meta = {}) {
+  const stage = meta.currentStage || {};
+  if (!stage.label) return "";
+  const progress = Number(stage.progress);
+  const progressText = Number.isFinite(progress) ? ` ${Math.max(1, Math.min(99, Math.round(progress)))}%` : "";
+  return `${stage.label}${progressText}`;
+}
+
 function updateCrawlProgressNumbers(meta = {}) {
   const percent = Number(meta.estimatedProgress);
   const elapsed = Number(meta.elapsedSeconds);
@@ -433,6 +526,7 @@ function updateCrawlProgressNumbers(meta = {}) {
   }
   if (els.crawlProgressEta) els.crawlProgressEta.textContent = formatClockTime(meta.estimatedCompleteAt);
   if (els.crawlProgressBasis) els.crawlProgressBasis.textContent = crawlEstimateBasisText(meta.estimateBasis);
+  renderCrawlStages(meta);
 }
 
 function setCrawlProgress(active, title = "", text = "", meta = {}) {
@@ -468,7 +562,9 @@ function crawlEstimateInlineText(status = {}) {
   const percent = Number(status.estimatedProgress);
   const remaining = Number(status.remainingSeconds);
   const eta = formatClockTime(status.estimatedCompleteAt);
+  const stage = crawlCurrentStageText(status);
   const parts = [];
+  if (stage) parts.push(stage);
   if (Number.isFinite(percent)) parts.push(`예상 ${Math.round(percent)}%`);
   if (Number.isFinite(remaining)) parts.push(`남은 ${remaining <= 0 ? "곧 완료" : formatElapsed(remaining)}`);
   if (eta !== "--:--") parts.push(`완료 ${eta}`);
@@ -482,10 +578,11 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
     if (status.active) {
       const elapsed = formatElapsed(status.elapsedSeconds);
       const estimate = crawlEstimateInlineText(status);
+      const stage = status.currentStage || {};
       setCrawlProgress(
         true,
-        "수집 진행 중",
-        `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`,
+        stage.label ? `${stage.label} 진행 중` : "수집 진행 중",
+        stage.detail || `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`,
         status
       );
       if (els.crawlStatus) {
@@ -9553,12 +9650,14 @@ async function submitCrawl(event) {
   const detailText = payload.collectionMode === "fast"
     ? "상세 분석 생략"
     : `상세 ${payload.detailRankRanges || "1-20"}위`;
+  const preview = crawlPreviewMeta(payload);
   setCrawlProgress(
     true,
     "수집 실행 중",
-    `${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`
+    `${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
+    preview
   );
-  els.crawlStatus.textContent = `${collectionModeLabel(payload.collectionMode)} 기준 수집을 시작했습니다. ${detailText}. 완료되면 화면을 갱신합니다.`;
+  els.crawlStatus.textContent = `${collectionModeLabel(payload.collectionMode)} 기준 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
   setStatus("수집 중");
   scheduleCrawlStatusPoll(1500, false);
   try {
@@ -9576,7 +9675,7 @@ async function submitCrawl(event) {
     setActiveTab("rank");
   } catch (error) {
     if (error.status === 409) {
-      setCrawlProgress(true, "수집 대기 중", "이미 진행 중인 수집이 끝나면 결과를 자동으로 불러옵니다.");
+      setCrawlProgress(true, "수집 대기 중", "이미 진행 중인 수집이 끝나면 결과를 자동으로 불러옵니다.", { stages: crawlStageFallbacks() });
       els.crawlStatus.textContent = `${error.message} 결과가 생기면 자동으로 갱신합니다.`;
       setStatus("수집 중");
       pollCrawlStatusUntilIdle(true);

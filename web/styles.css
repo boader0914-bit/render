@@ -4786,11 +4786,12 @@ a.platform-row:hover {
   align-items: center;
   gap: 12px;
   overflow: hidden;
-  min-height: 132px;
-  border: 1px solid #bfdbfe;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 72%);
-  padding: 12px;
+  min-height: 156px;
+  border: 1px solid #d0d5dd;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 58%, #f7fef9 100%);
+  box-shadow: 0 14px 28px rgba(16, 24, 40, 0.08);
+  padding: 13px;
 }
 
 .crawl-progress[hidden] {
@@ -4837,6 +4838,62 @@ a.platform-row:hover {
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.crawl-progress-stages {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+  gap: 6px;
+}
+
+.crawl-progress-stages span {
+  min-width: 0;
+  border: 1px solid #e4e7ec;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 8px 9px;
+  transition: border-color 0.25s ease, background 0.25s ease, box-shadow 0.25s ease;
+}
+
+.crawl-progress-stages span.done {
+  border-color: #b7e4c7;
+  background: #f6fef9;
+}
+
+.crawl-progress-stages span.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 1px rgba(49, 130, 246, 0.16);
+}
+
+.crawl-progress-stages b,
+.crawl-progress-stages small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crawl-progress-stages b {
+  color: #101828;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.crawl-progress-stages small {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.crawl-progress-stages span.done small {
+  color: #12805c;
+}
+
+.crawl-progress-stages span.active small {
+  color: #175cd3;
 }
 
 .crawl-progress-meter {
@@ -8238,6 +8295,24 @@ a.platform-row:hover {
 }
 
 @media (max-width: 560px) {
+  .crawl-progress {
+    grid-template-columns: 30px minmax(0, 1fr);
+    padding: 11px;
+  }
+
+  .crawl-progress::after {
+    inset: auto 10px 8px 50px;
+  }
+
+  .crawl-progress-copy small,
+  .crawl-progress-basis {
+    white-space: normal;
+  }
+
+  .crawl-progress-stages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .crawl-progress-numbers {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
