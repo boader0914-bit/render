@@ -3898,6 +3898,29 @@ function collectionQualityCsv(profile = collectionQualityMonitorProfile()) {
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
 }
 
+function recrawlAutomationCsv(entries = companyDecisionQueueEntries(companyMasterSource())) {
+  const profile = recrawlAutomationProfile(entries);
+  const headers = ["구분", "업체명", "지역", "순위", "추천상태", "재수집설정", "전후비교", "근거", "예상매출", "관리메모"];
+  const rowFor = (group, row) => [
+    group,
+    row.name,
+    row.region,
+    row.rank ? `${fmtNumber(row.rank)}위` : "",
+    recrawlAutomationStatusLabel(row.status),
+    `정밀분석 · 상세 ${row.range}위 · ${row.dateText}`,
+    row.comparison?.hasComparison ? `개선 ${fmtNumber(row.comparison.improved)} / 악화 ${fmtNumber(row.comparison.worsened)} · ${compactDateTime(row.previous)} → ${compactDateTime(row.latest)}` : "비교 대기",
+    row.reason,
+    row.revenue ? finiteNumber(row.revenue, 0) : "",
+    row.note
+  ];
+  const rows = [
+    ...profile.needsExecution.map((row) => rowFor("재수집실행", row)),
+    ...profile.transitions.map((row) => rowFor("추천적용", row)),
+    ...profile.compared.map((row) => rowFor("전후비교", row))
+  ];
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
+}
+
 function reportPlatformStats(items = []) {
   const platformNames = ["네이버", "야놀자", "여기어때", "떠나요"];
   const stats = Object.fromEntries(platformNames.map((name) => [name, 0]));
@@ -6120,6 +6143,205 @@ function companyQueueRecentLogs(entries = []) {
     .slice(0, 8);
 }
 
+function recrawlAutomationStatusLabel(status = "") {
+  return companyAdminReviewLabel(status) || {
+    contact_ready: "컨택 가능",
+    manual_needed: "보정 필요",
+    check_needed: "확인 필요",
+    recrawl_needed: "재수집 필요"
+  }[status] || "추천 대기";
+}
+
+function recrawlAutomationNote(entry = {}) {
+  const recommendation = entry.autoRecommendation || {};
+  const comparison = entry.comparison || {};
+  const base = [
+    `재수집 자동판정: ${recommendation.label || recrawlAutomationStatusLabel(recommendation.status)}`,
+    ...(recommendation.reasons || []).slice(0, 2),
+    comparison.hasComparison ? `개선 ${fmtNumber(comparison.improved)} / 악화 ${fmtNumber(comparison.worsened)}` : ""
+  ].filter(Boolean);
+  return compactListText(base, "재수집 자동판정", 3);
+}
+
+function recrawlAutomationRow(entry = {}) {
+  const company = entry.company || {};
+  const plan = companyQueueRecrawlPlan(company, entry.profile, entry.decision);
+  const comparison = entry.comparison || {};
+  const recommendation = entry.autoRecommendation || {};
+  const latest = comparison.latest?.collectedAt || company.inventory?.latest?.collectedAt || company.lastSeenAt || "";
+  const previous = comparison.previous?.collectedAt || company.inventory?.previousLatest?.collectedAt || "";
+  const rank = Number(company.bestRank || 0);
+  const revenue = finiteNumber(entry.revenueImpact?.totalRevenue, 0);
+  const reasons = [
+    recommendation.label,
+    ...(recommendation.reasons || []),
+    entry.decision?.summary,
+    (entry.profile?.issues || [])[0]?.task
+  ].filter(Boolean);
+  const score = finiteNumber(entry.priority?.score, 0)
+    + (recommendation.status === "recrawl_needed" ? 22 : 0)
+    + (recommendation.status === "contact_ready" ? 18 : 0)
+    + (comparison.hasComparison ? 10 : 0)
+    + Math.min(18, revenue / 200000)
+    + (rank > 0 && rank <= 10 ? 8 : 0);
+  return {
+    entry,
+    company,
+    plan,
+    comparison,
+    recommendation,
+    name: company.primaryName || "업체명 확인",
+    region: (company.regions || []).slice(0, 2).join(" / "),
+    rank,
+    revenue,
+    score,
+    latest,
+    previous,
+    range: plan.range || "1-20",
+    dateText: plan.dateText || "최근 수집일 기준",
+    status: recommendation.status || "check_needed",
+    label: recommendation.label || recrawlAutomationStatusLabel(recommendation.status),
+    tone: recommendation.tone || entry.type?.tone || "watch",
+    reason: compactListText(reasons, "재수집 후 판단 필요", 3),
+    note: recrawlAutomationNote(entry)
+  };
+}
+
+function recrawlAutomationProfile(entries = []) {
+  const open = entries.filter((entry) => entry.workflow.key !== "done");
+  const rows = open.map(recrawlAutomationRow);
+  const needsExecution = rows
+    .filter((row) => row.status === "recrawl_needed" || row.entry.type.key === "recrawl" || !row.comparison.hasComparison)
+    .sort((a, b) => b.score - a.score || finiteNumber(a.rank, 9999) - finiteNumber(b.rank, 9999));
+  const compared = rows
+    .filter((row) => row.comparison.hasComparison)
+    .sort((a, b) => String(b.latest || "").localeCompare(String(a.latest || "")) || b.score - a.score);
+  const transitions = compared
+    .filter((row) => row.status && row.company.adminReview?.status !== row.status)
+    .sort((a, b) => {
+      const weight = { contact_ready: 4, manual_needed: 3, check_needed: 2, recrawl_needed: 1 };
+      return (weight[b.status] || 0) - (weight[a.status] || 0) || b.score - a.score;
+    });
+  const contactReady = transitions.filter((row) => row.status === "contact_ready");
+  const manualNeeded = transitions.filter((row) => row.status === "manual_needed");
+  const checkNeeded = transitions.filter((row) => row.status === "check_needed");
+  const repeatNeeded = transitions.filter((row) => row.status === "recrawl_needed");
+  return {
+    rows,
+    needsExecution,
+    compared,
+    transitions,
+    contactReady,
+    manualNeeded,
+    checkNeeded,
+    repeatNeeded
+  };
+}
+
+function recrawlAutomationMiniCells(row = {}) {
+  if (!row.comparison?.hasComparison) {
+    return `
+      <div class="recrawl-auto-cells">
+        <span>이전 수집 대기</span>
+        <span>${escapeHtml(row.dateText)}</span>
+        <span>${escapeHtml(row.range)}위</span>
+      </div>
+    `;
+  }
+  const price = (row.comparison.cells || []).find((cell) => cell.key === "price");
+  const stock = (row.comparison.cells || []).find((cell) => cell.key === "stock");
+  const revenue = (row.comparison.cells || []).find((cell) => cell.key === "revenue");
+  const cells = [
+    ["개선/악화", `${fmtNumber(row.comparison.improved)} / ${fmtNumber(row.comparison.worsened)}`, row.comparison.tone],
+    ["가격", price?.note || "가격 비교", price?.tone || "same"],
+    ["총량", stock?.note || "총량 비교", stock?.tone || "same"],
+    ["매출", revenue?.note || fmtWon(row.revenue), revenue?.tone || "same"]
+  ];
+  return `
+    <div class="recrawl-auto-cells">
+      ${cells.map(([label, value, tone]) => `<span class="${escapeHtml(tone)}"><b>${escapeHtml(label)}</b>${escapeHtml(value)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function recrawlAutomationCompanyAttrs(row = {}) {
+  return `data-company-id="${escapeHtml(row.company.companyId || "")}"`;
+}
+
+function recrawlAutomationBoardHtml(entries = []) {
+  const profile = recrawlAutomationProfile(entries);
+  const metricRows = [
+    ["실행 대기", profile.needsExecution.length, "수집 설정 적용 대상"],
+    ["비교 완료", profile.compared.length, "전후 스냅샷 확보"],
+    ["컨택 전환", profile.contactReady.length, "영업타깃 이동 추천"],
+    ["보정 필요", profile.manualNeeded.length, "수량/총량 확인"],
+    ["재수집 반복", profile.repeatNeeded.length, "가격/수량 미확보"]
+  ];
+  const executionRows = profile.needsExecution.slice(0, 5);
+  const transitionRows = profile.transitions.slice(0, 6);
+  return `
+    <section class="recrawl-auto-panel">
+      <div class="recrawl-auto-head">
+        <div>
+          <strong>재수집 실행/비교 자동화 V2</strong>
+          <small>재수집 대상 설정, 전후 비교, 추천 상태 적용을 한 흐름으로 관리합니다.</small>
+        </div>
+        <button type="button" data-export-recrawl-automation>재수집 CSV</button>
+      </div>
+      <div class="recrawl-auto-metrics">
+        ${metricRows.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmtNumber(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="recrawl-auto-layout">
+        <article>
+          <div class="history-card-head">
+            <strong>1. 재수집 실행 순서</strong>
+            <small>동일 기간 · 권장 상세 범위</small>
+          </div>
+          <div class="recrawl-auto-list">
+            ${executionRows.length ? executionRows.map((row, index) => `
+              <div class="${escapeHtml(row.tone)}">
+                <mark>${fmtNumber(index + 1)}</mark>
+                <div>
+                  <b>${escapeHtml(row.name)}</b>
+                  <small>${escapeHtml([row.region, row.rank ? `${fmtNumber(row.rank)}위` : "", row.dateText, `상세 ${row.range}위`].filter(Boolean).join(" · "))}</small>
+                  <p>${escapeHtml(row.reason)}</p>
+                </div>
+                <button type="button" data-queue-recrawl-company="${escapeHtml(row.company.companyId || "")}">수집 설정</button>
+              </div>
+            `).join("") : `<p class="empty">재수집 실행 대기 대상이 없습니다.</p>`}
+          </div>
+        </article>
+        <article>
+          <div class="history-card-head">
+            <strong>2. 전후 비교와 자동 추천</strong>
+            <small>추천 적용 시 판단 큐/영업타깃 상태가 갱신됩니다.</small>
+          </div>
+          <div class="recrawl-auto-list transition">
+            ${transitionRows.length ? transitionRows.map((row, index) => `
+              <div class="${escapeHtml(row.tone)}">
+                <mark>${fmtNumber(index + 1)}</mark>
+                <div>
+                  <b>${escapeHtml(row.name)}</b>
+                  <small>${escapeHtml([row.previous ? compactDateTime(row.previous) : "이전 대기", row.latest ? compactDateTime(row.latest) : "최신 대기", row.revenue ? `매출 ${fmtWon(row.revenue)}` : ""].filter(Boolean).join(" → "))}</small>
+                  ${recrawlAutomationMiniCells(row)}
+                  <p>${escapeHtml(row.reason)}</p>
+                </div>
+                <button type="button" data-company-review-action="${escapeHtml(row.status)}" ${recrawlAutomationCompanyAttrs(row)} data-company-review-note="${escapeHtml(row.note)}">${escapeHtml(recrawlAutomationStatusLabel(row.status))}</button>
+              </div>
+            `).join("") : `<p class="empty">적용할 자동 추천이 없습니다. 재수집 후 비교가 쌓이면 표시됩니다.</p>`}
+          </div>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
 function companyQueueOperationSummaryHtml(entries = []) {
   const open = entries.filter((entry) => entry.workflow.key !== "done");
   const countRecommendation = (status) => open.filter((entry) => entry.autoRecommendation?.status === status).length;
@@ -6205,6 +6427,7 @@ function companyMasterCheckPanel(master = {}) {
           </article>
         `).join("")}
       </div>
+      ${recrawlAutomationBoardHtml(entries)}
       ${companyQueueOperationSummaryHtml(entries)}
       <div class="company-check-filters">
         ${companyCheckFilterOptions().map(([value, label]) => `
@@ -8709,6 +8932,27 @@ function exportCollectionQualityCsv() {
   setStatus(`수집 품질 리포트 ${fmtNumber(profile.recrawlRows.length)}개 우선순위 내보내기`);
 }
 
+function exportRecrawlAutomationCsv() {
+  const entries = companyDecisionQueueEntries(companyMasterSource());
+  const profile = recrawlAutomationProfile(entries);
+  if (!profile.needsExecution.length && !profile.transitions.length && !profile.compared.length) {
+    setStatus("내보낼 재수집 자동화 데이터 없음");
+    return;
+  }
+  const csv = recrawlAutomationCsv(entries);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `glamping-recrawl-automation-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`재수집 자동화 리포트 ${fmtNumber(profile.needsExecution.length + profile.transitions.length)}개 내보내기`);
+}
+
 async function copyTextToClipboard(text = "") {
   const value = String(text || "");
   if (!value.trim()) return false;
@@ -9198,6 +9442,7 @@ function bindEvents() {
     if (salesCallNote) copySalesProposal(salesCallNote, "call");
     if (event.target.closest("[data-export-sales-targets]")) exportSalesTargetsCsv();
     if (event.target.closest("[data-export-collection-quality]")) exportCollectionQualityCsv();
+    if (event.target.closest("[data-export-recrawl-automation]")) exportRecrawlAutomationCsv();
     const qualitySetting = event.target.closest("[data-apply-quality-setting]");
     if (qualitySetting) applyCollectionQualitySetting(qualitySetting);
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
