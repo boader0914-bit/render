@@ -4812,12 +4812,22 @@ function summarizeAvailabilityRows(rows) {
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
     const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
+    const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
+    const weeklyPricedSoldOut = numericField(row, ["주간숙박가격확인판매수량", "weeklyPricedSoldOut"]);
+    const weeklyMissingPriceSoldOut = numericField(row, ["주간숙박가격누락판매수량", "weeklyMissingPriceSoldOut"]);
+    const weeklyAvgSoldUnitPrice = numericField(row, ["주간숙박평균판매단가", "weeklyAvgSoldUnitPrice"]);
+    const weeklyRevenueDetail = row["주간숙박매출상세"] || "";
+    const weeklyRevenueByDayType = row["주간숙박요일매출"] || "";
     const dayUseWeeklyDetail = row.dayUseWeeklyDetail || "";
     const derivedDayUseWeeklyRates = parseWeeklyReservationRates(dayUseWeeklyDetail);
     const dayUseWeeklyAvgReservationRate = numericField(row, ["dayUseWeeklyAvgReservationRate"]) ?? derivedDayUseWeeklyRates.average;
     const dayUseWeeklyReservationRateDetail = row.dayUseWeeklyReservationRateDetail || derivedDayUseWeeklyRates.detail;
     const dayUseWeeklyTotalSoldOut = numericField(row, ["dayUseWeeklyTotalSoldOut"]) ?? derivedDayUseWeeklyRates.totalSoldOut;
     const dayUseWeeklyTotalStock = numericField(row, ["dayUseWeeklyTotalStock"]) ?? derivedDayUseWeeklyRates.totalStock;
+    const dayUseWeeklyEstimatedRevenue = numericField(row, ["dayUseWeeklyEstimatedRevenue"]);
+    const dayUseWeeklyPricedSoldOut = numericField(row, ["dayUseWeeklyPricedSoldOut"]);
+    const dayUseWeeklyMissingPriceSoldOut = numericField(row, ["dayUseWeeklyMissingPriceSoldOut"]);
+    const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -4844,6 +4854,10 @@ function summarizeAvailabilityRows(rows) {
       nightTotalStock: totalRooms,
       soldOutRooms: resolvedSoldOutRooms,
       soldOutRate: soldOutRate !== null ? soldOutRate : Number((resolvedSoldOutRooms / totalRooms).toFixed(3)),
+      basisLodgingRevenue: numericField(row, ["숙박기준일예상매출", "basisLodgingRevenue"]),
+      basisLodgingPricedSoldOut: numericField(row, ["숙박기준일가격확인판매수량", "basisLodgingPricedSoldOut"]),
+      basisLodgingMissingPriceSoldOut: numericField(row, ["숙박기준일가격누락판매수량", "basisLodgingMissingPriceSoldOut"]),
+      basisLodgingAvgSoldUnitPrice: numericField(row, ["숙박기준일평균판매단가", "basisLodgingAvgSoldUnitPrice"]),
       availabilityUnit: row["예약계산단위"] || "",
       rawAvailableStock: numericField(row, ["네이버원시예약가능재고", "rawAvailableStock"]),
       rawTotalStock: numericField(row, ["네이버원시전체재고", "rawTotalStock"]),
@@ -4860,8 +4874,18 @@ function summarizeAvailabilityRows(rows) {
       weeklyDetail,
       weeklyAvgReservationRate,
       weeklyReservationRateDetail,
+      weeklyEstimatedRevenue,
+      weeklyPricedSoldOut,
+      weeklyMissingPriceSoldOut,
+      weeklyAvgSoldUnitPrice,
+      weeklyRevenueDetail,
+      weeklyRevenueByDayType,
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
+      basisDayUseRevenue: numericField(row, ["데이유즈기준일예상매출", "basisDayUseRevenue"]),
+      basisDayUsePricedSoldOut: numericField(row, ["데이유즈기준일가격확인판매수량", "basisDayUsePricedSoldOut"]),
+      basisDayUseMissingPriceSoldOut: numericField(row, ["데이유즈기준일가격누락판매수량", "basisDayUseMissingPriceSoldOut"]),
+      basisDayUseAvgSoldUnitPrice: numericField(row, ["데이유즈기준일평균판매단가", "basisDayUseAvgSoldUnitPrice"]),
       dayUseWeeklyDays: numericField(row, ["dayUseWeeklyDays"]),
       dayUseWeeklySummary: row.dayUseWeeklySummary || "",
       dayUseWeeklyAvgAvailable: numericField(row, ["dayUseWeeklyAvgAvailable"]),
@@ -4870,6 +4894,12 @@ function summarizeAvailabilityRows(rows) {
       dayUseWeeklyTotalSoldOut,
       dayUseWeeklyTotalStock,
       dayUseWeeklyBasisTotal: numericField(row, ["dayUseWeeklyBasisTotal"]),
+      dayUseWeeklyEstimatedRevenue,
+      dayUseWeeklyPricedSoldOut,
+      dayUseWeeklyMissingPriceSoldOut,
+      dayUseWeeklyAvgSoldUnitPrice,
+      dayUseWeeklyRevenueDetail: row.dayUseWeeklyRevenueDetail || "",
+      dayUseWeeklyRevenueByDayType: row.dayUseWeeklyRevenueByDayType || "",
       dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
       dayUseWeeklyDetail,
       dayUseWeeklyAvgReservationRate,
@@ -4923,12 +4953,21 @@ function summarizeAvailabilityRows(rows) {
   const totalAvailableRooms = items.reduce((sum, item) => sum + item.availableRooms, 0);
   const totalRooms = items.reduce((sum, item) => sum + item.totalRooms, 0);
   const totalSoldOutRooms = items.reduce((sum, item) => sum + item.soldOutRooms, 0);
+  const totalEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.weeklyEstimatedRevenue ?? item.basisLodgingRevenue ?? 0), 0);
+  const totalPricedSoldOut = items.reduce((sum, item) => sum + Number(item.weeklyPricedSoldOut ?? item.basisLodgingPricedSoldOut ?? 0), 0);
+  const totalMissingPriceSoldOut = items.reduce((sum, item) => sum + Number(item.weeklyMissingPriceSoldOut ?? item.basisLodgingMissingPriceSoldOut ?? 0), 0);
+  const dayUseEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0), 0);
   return {
     stats: {
       checkedPlaces: items.length,
       totalAvailableRooms,
       totalSoldOutRooms,
       totalRooms,
+      totalEstimatedRevenue,
+      totalPricedSoldOut,
+      totalMissingPriceSoldOut,
+      avgSoldUnitPrice: totalPricedSoldOut ? Math.round(totalEstimatedRevenue / totalPricedSoldOut) : null,
+      dayUseEstimatedRevenue,
       weightedRate: totalRooms ? Number((totalAvailableRooms / totalRooms).toFixed(3)) : null,
       weightedSoldOutRate: totalRooms ? Number((totalSoldOutRooms / totalRooms).toFixed(3)) : null,
       lowAvailabilityCount: items.filter((item) => item.rate < 0.7).length,
@@ -5028,17 +5067,33 @@ function summarizeCompanyPlatforms(rows) {
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
     const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
+    const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
+    const weeklyPricedSoldOut = numericField(row, ["주간숙박가격확인판매수량", "weeklyPricedSoldOut"]);
+    const weeklyMissingPriceSoldOut = numericField(row, ["주간숙박가격누락판매수량", "weeklyMissingPriceSoldOut"]);
+    const weeklyAvgSoldUnitPrice = numericField(row, ["주간숙박평균판매단가", "weeklyAvgSoldUnitPrice"]);
+    const weeklyRevenueDetail = row["주간숙박매출상세"] || "";
+    const weeklyRevenueByDayType = row["주간숙박요일매출"] || "";
     const dayUseWeeklyDetail = row.dayUseWeeklyDetail || "";
     const derivedDayUseWeeklyRates = parseWeeklyReservationRates(dayUseWeeklyDetail);
     const dayUseWeeklyAvgReservationRate = numericField(row, ["dayUseWeeklyAvgReservationRate"]) ?? derivedDayUseWeeklyRates.average;
     const dayUseWeeklyReservationRateDetail = row.dayUseWeeklyReservationRateDetail || derivedDayUseWeeklyRates.detail;
     const dayUseWeeklyTotalSoldOut = numericField(row, ["dayUseWeeklyTotalSoldOut"]) ?? derivedDayUseWeeklyRates.totalSoldOut;
     const dayUseWeeklyTotalStock = numericField(row, ["dayUseWeeklyTotalStock"]) ?? derivedDayUseWeeklyRates.totalStock;
+    const dayUseWeeklyEstimatedRevenue = numericField(row, ["dayUseWeeklyEstimatedRevenue"]);
+    const dayUseWeeklyPricedSoldOut = numericField(row, ["dayUseWeeklyPricedSoldOut"]);
+    const dayUseWeeklyMissingPriceSoldOut = numericField(row, ["dayUseWeeklyMissingPriceSoldOut"]);
+    const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
     const weeklyStockText = weeklyDetail
       ? `${weeklyTotalSoldOut !== null ? `${weeklyDays || "기간"}일 마감추정 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyBasisTotal ? `최대재고 ${weeklyBasisTotal} · ` : ""}${weeklyRawStockVariance ? `날짜별 원시재고: ${weeklyRawStockVariance} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
       : weeklySummary;
     const dayUseWeeklyStockText = dayUseWeeklyDetail
       ? `데이유즈/캠프닉 ${dayUseWeeklyTotalSoldOut !== null ? `${row.dayUseWeeklyDays || "기간"}일 마감추정 ${dayUseWeeklyTotalSoldOut}${dayUseWeeklyTotalStock ? `/${dayUseWeeklyTotalStock}` : ""} · ` : ""}${dayUseWeeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(dayUseWeeklyAvgReservationRate)} · ` : ""}${dayUseWeeklyReservationRateDetail ? `날짜별 예약률: ${dayUseWeeklyReservationRateDetail} · ` : ""}${dayUseWeeklyDetail}`
+      : "";
+    const revenueText = weeklyEstimatedRevenue || weeklyMissingPriceSoldOut
+      ? `숙박 예상매출 ${Number(weeklyEstimatedRevenue || 0).toLocaleString("ko-KR")}원${weeklyMissingPriceSoldOut ? ` · 가격누락 ${weeklyMissingPriceSoldOut}개` : ""}`
+      : "";
+    const dayUseRevenueText = dayUseWeeklyEstimatedRevenue || dayUseWeeklyMissingPriceSoldOut
+      ? `데이유즈/캠프닉 예상매출 ${Number(dayUseWeeklyEstimatedRevenue || 0).toLocaleString("ko-KR")}원${dayUseWeeklyMissingPriceSoldOut ? ` · 가격누락 ${dayUseWeeklyMissingPriceSoldOut}회` : ""}`
       : "";
 
     company.platforms.push({
@@ -5047,7 +5102,7 @@ function summarizeCompanyPlatforms(rows) {
       group,
       price: row["예약최저가"] || row["가격"] || row.price || row["금액"] || "",
       status: statusValue || group,
-      stock: [stock, weeklyStockText, dayUseWeeklyStockText].filter(Boolean).join(" · "),
+      stock: [stock, weeklyStockText, revenueText, dayUseWeeklyStockText, dayUseRevenueText].filter(Boolean).join(" · "),
       inventoryNote: row["네이버상품구성"] || row["채널재고해석"] || "",
       weeklySummary,
       weeklyDetail,
@@ -5057,6 +5112,12 @@ function summarizeCompanyPlatforms(rows) {
       weeklyTotalStock,
       weeklyBasisTotal,
       weeklyRawStockVariance,
+      weeklyEstimatedRevenue,
+      weeklyPricedSoldOut,
+      weeklyMissingPriceSoldOut,
+      weeklyAvgSoldUnitPrice,
+      weeklyRevenueDetail,
+      weeklyRevenueByDayType,
       dayUseWeeklyDays: numericField(row, ["dayUseWeeklyDays"]),
       dayUseWeeklySummary: row.dayUseWeeklySummary || "",
       dayUseWeeklyDetail,
@@ -5065,6 +5126,12 @@ function summarizeCompanyPlatforms(rows) {
       dayUseWeeklyTotalSoldOut,
       dayUseWeeklyTotalStock,
       dayUseWeeklyBasisTotal: numericField(row, ["dayUseWeeklyBasisTotal"]),
+      dayUseWeeklyEstimatedRevenue,
+      dayUseWeeklyPricedSoldOut,
+      dayUseWeeklyMissingPriceSoldOut,
+      dayUseWeeklyAvgSoldUnitPrice,
+      dayUseWeeklyRevenueDetail: row.dayUseWeeklyRevenueDetail || "",
+      dayUseWeeklyRevenueByDayType: row.dayUseWeeklyRevenueByDayType || "",
       dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
       dayUseWeeklyStockText,
       url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
@@ -5437,8 +5504,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-decision-queue-tab"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-decision-queue-tab"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-revenue-by-product"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-revenue-by-product"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

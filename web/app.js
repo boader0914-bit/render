@@ -133,6 +133,14 @@ function fmtNumber(value) {
   return Number.isFinite(number) ? number.toLocaleString("ko-KR") : "0";
 }
 
+function fmtWon(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "0원";
+  if (number >= 100000000) return `${(number / 100000000).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}억원`;
+  if (number >= 10000) return `${Math.round(number / 10000).toLocaleString("ko-KR")}만원`;
+  return `${number.toLocaleString("ko-KR")}원`;
+}
+
 function fmtRate(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "확인필요";
@@ -163,6 +171,16 @@ function summaryIcon(type) {
         <path d="M4 18h16" />
         <path d="M7 14l3-3 3 2 5-6" />
         <path d="M16 7h2v2" />
+      </svg>
+    `,
+    money: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16v10H4z" />
+        <path d="M8 11h.01" />
+        <path d="M16 13h.01" />
+        <path d="M12 9v6" />
+        <path d="M10.5 10.5c0-.8.7-1.3 1.6-1.3 1 0 1.6.4 1.9.8" />
+        <path d="M13.5 13.5c0 .8-.7 1.3-1.6 1.3-1 0-1.6-.4-1.9-.8" />
       </svg>
     `,
     trust: `
@@ -874,6 +892,12 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") return NaN;
+  const number = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(number) ? number : NaN;
+}
+
 function salesStats(item = {}, kind = "lodging") {
   const run = state.data?.run || {};
   const days = bookingDays(run);
@@ -978,6 +1002,76 @@ function summarizeSales(items = []) {
     acc.daySupply += finiteNumber(day.supply);
     return acc;
   }, { sold: 0, supply: 0, daySold: 0, daySupply: 0 });
+}
+
+function itemRevenueStats(item = {}, kind = "lodging") {
+  const sales = salesStats(item, kind === "day" ? "day" : "lodging");
+  const unit = kind === "day" ? "회" : "개";
+  const weeklyRevenue = optionalNumber(kind === "day" ? item.dayUseWeeklyEstimatedRevenue : item.weeklyEstimatedRevenue);
+  const weeklyPriced = optionalNumber(kind === "day" ? item.dayUseWeeklyPricedSoldOut : item.weeklyPricedSoldOut);
+  const weeklyMissing = optionalNumber(kind === "day" ? item.dayUseWeeklyMissingPriceSoldOut : item.weeklyMissingPriceSoldOut);
+  const weeklyAvg = optionalNumber(kind === "day" ? item.dayUseWeeklyAvgSoldUnitPrice : item.weeklyAvgSoldUnitPrice);
+  const weeklyDetail = kind === "day" ? item.dayUseWeeklyRevenueDetail : item.weeklyRevenueDetail;
+  const weeklyByDay = kind === "day" ? item.dayUseWeeklyRevenueByDayType : item.weeklyRevenueByDayType;
+  const hasWeekly = [weeklyRevenue, weeklyPriced, weeklyMissing, weeklyAvg].some(Number.isFinite);
+  if (hasWeekly) {
+    return {
+      revenue: Number.isFinite(weeklyRevenue) ? weeklyRevenue : 0,
+      pricedSoldOut: Number.isFinite(weeklyPriced) ? weeklyPriced : 0,
+      missingPriceSoldOut: Number.isFinite(weeklyMissing) ? weeklyMissing : 0,
+      avgSoldUnitPrice: Number.isFinite(weeklyAvg) ? weeklyAvg : null,
+      label: sales.label || "기간 집계",
+      unit,
+      detail: weeklyDetail || "",
+      byDayType: weeklyByDay || "",
+      basis: "range"
+    };
+  }
+
+  const basisRevenue = optionalNumber(kind === "day" ? item.basisDayUseRevenue : item.basisLodgingRevenue);
+  const basisPriced = optionalNumber(kind === "day" ? item.basisDayUsePricedSoldOut : item.basisLodgingPricedSoldOut);
+  const basisMissing = optionalNumber(kind === "day" ? item.basisDayUseMissingPriceSoldOut : item.basisLodgingMissingPriceSoldOut);
+  const basisAvg = optionalNumber(kind === "day" ? item.basisDayUseAvgSoldUnitPrice : item.basisLodgingAvgSoldUnitPrice);
+  const hasBasis = [basisRevenue, basisPriced, basisMissing, basisAvg].some(Number.isFinite);
+  if (hasBasis) {
+    return {
+      revenue: Number.isFinite(basisRevenue) ? basisRevenue : 0,
+      pricedSoldOut: Number.isFinite(basisPriced) ? basisPriced : 0,
+      missingPriceSoldOut: Number.isFinite(basisMissing) ? basisMissing : 0,
+      avgSoldUnitPrice: Number.isFinite(basisAvg) ? basisAvg : null,
+      label: sales.label || "기준일",
+      unit,
+      detail: "",
+      byDayType: "",
+      basis: "basis"
+    };
+  }
+
+  return {
+    revenue: 0,
+    pricedSoldOut: 0,
+    missingPriceSoldOut: 0,
+    avgSoldUnitPrice: null,
+    label: "가격 수집 필요",
+    unit,
+    detail: "",
+    byDayType: "",
+    basis: "missing"
+  };
+}
+
+function summarizeRevenue(items = []) {
+  return items.reduce((acc, item) => {
+    const lodging = itemRevenueStats(item, "lodging");
+    const day = itemRevenueStats(item, "day");
+    acc.revenue += finiteNumber(lodging.revenue);
+    acc.pricedSoldOut += finiteNumber(lodging.pricedSoldOut);
+    acc.missingPriceSoldOut += finiteNumber(lodging.missingPriceSoldOut);
+    acc.dayRevenue += finiteNumber(day.revenue);
+    acc.dayPricedSoldOut += finiteNumber(day.pricedSoldOut);
+    acc.dayMissingPriceSoldOut += finiteNumber(day.missingPriceSoldOut);
+    return acc;
+  }, { revenue: 0, pricedSoldOut: 0, missingPriceSoldOut: 0, dayRevenue: 0, dayPricedSoldOut: 0, dayMissingPriceSoldOut: 0 });
 }
 
 function priceText(value) {
@@ -1197,14 +1291,22 @@ function miniBars(item) {
 function renderSummary() {
   const items = state.data?.availability?.items || [];
   const sales = summarizeSales(items);
+  const revenue = summarizeRevenue(items);
   const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(state.data?.availability?.stats?.weightedSoldOutRate, NaN);
   const checked = state.data?.availability?.stats?.checkedPlaces || items.length;
   const lowConfidence = finiteNumber(state.data?.availability?.stats?.lowConfidenceCount, 0);
   const stockVariance = finiteNumber(state.data?.availability?.stats?.stockVarianceCount, 0);
+  const revenueNote = revenue.missingPriceSoldOut
+    ? `${fmtNumber(revenue.pricedSoldOut)}개 가격확인 · 가격누락 ${fmtNumber(revenue.missingPriceSoldOut)}개`
+    : `${fmtNumber(revenue.pricedSoldOut)}개 가격확인`;
   els.summaryGrid.innerHTML = `
     <article class="summary-card">
       <span class="summary-icon blue">${summaryIcon("sales")}</span>
       <div><strong>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}</strong><small>객실 판매</small></div>
+    </article>
+    <article class="summary-card">
+      <span class="summary-icon green">${summaryIcon("money")}</span>
+      <div><strong>${fmtWon(revenue.revenue)}</strong><small>숙박 예상 매출 · ${escapeHtml(revenueNote)}</small></div>
     </article>
     <article class="summary-card">
       <span class="summary-icon purple">${summaryIcon("company")}</span>
@@ -5971,6 +6073,59 @@ function sheetAuditPanel(item = {}) {
   `;
 }
 
+function revenueCoverageText(revenue = {}) {
+  const priced = finiteNumber(revenue.pricedSoldOut, 0);
+  const missing = finiteNumber(revenue.missingPriceSoldOut, 0);
+  if (!priced && !missing) return "가격/판매수량 대기";
+  return `${fmtNumber(priced)}${revenue.unit} 가격확인${missing ? ` · 가격누락 ${fmtNumber(missing)}${revenue.unit}` : ""}`;
+}
+
+function sheetRevenuePanel(item = {}) {
+  const lodging = itemRevenueStats(item, "lodging");
+  const dayUse = itemRevenueStats(item, "day");
+  const lodgingDetail = lodging.byDayType || lodging.detail || "요일별 매출은 다음 수집부터 표시됩니다.";
+  const dayUseDetail = dayUse.byDayType || dayUse.detail || "데이유즈/캠프닉 매출은 상품 가격과 판매수량이 함께 확인될 때 표시됩니다.";
+  return `
+    <section class="sheet-section sheet-revenue-section">
+      <div class="sheet-structure-title">
+        <h3>예상 매출</h3>
+        <span class="structure-badge watch">가격확인 수량 기준</span>
+      </div>
+      <div class="sheet-history-grid">
+        <div>
+          <span>숙박 매출</span>
+          <strong>${fmtWon(lodging.revenue)}</strong>
+          <small>${escapeHtml(`${lodging.label} · ${revenueCoverageText(lodging)}`)}</small>
+        </div>
+        <div>
+          <span>숙박 평균단가</span>
+          <strong>${lodging.avgSoldUnitPrice ? fmtWon(lodging.avgSoldUnitPrice) : "확인필요"}</strong>
+          <small>상품별 가격×판매수량 가중 평균</small>
+        </div>
+        <div>
+          <span>데이유즈/캠프닉</span>
+          <strong>${fmtWon(dayUse.revenue)}</strong>
+          <small>${escapeHtml(`${dayUse.label} · ${revenueCoverageText(dayUse)}`)}</small>
+        </div>
+      </div>
+      <div class="search-row">
+        <div>
+          <strong>숙박 요일별 매출</strong>
+          <small>${escapeHtml(lodgingDetail)}</small>
+        </div>
+        <strong>${fmtWon(lodging.revenue)}</strong>
+      </div>
+      <div class="search-row">
+        <div>
+          <strong>데이유즈/캠프닉 매출</strong>
+          <small>${escapeHtml(dayUseDetail)}</small>
+        </div>
+        <strong>${fmtWon(dayUse.revenue)}</strong>
+      </div>
+    </section>
+  `;
+}
+
 function sheetFlowOverview(item = {}) {
   const flow = salesFlowProfile(item);
   const correctionStatus = correctionStatusInfo(item);
@@ -6110,6 +6265,7 @@ function renderSheetBooking(item) {
   const historyWeekday = flow.history?.weekday;
   return `
     ${sheetFlowOverview(item)}
+    ${sheetRevenuePanel(item)}
     ${sheetAuditPanel(item)}
     ${sheetCompanyProfile(item)}
     ${sheetHistoryPanel(item)}
