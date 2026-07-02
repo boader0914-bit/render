@@ -263,10 +263,12 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
     stagedSeconds
   );
   const timing = crawlTimingAdjustment(plan, modelTotalSeconds, timingStore);
+  const recrawlContext = sanitizeRecrawlContext(payload.recrawlContext, plan);
   const estimatedTotalSeconds = timing.estimatedTotalSeconds;
   return {
     ...plan,
     estimatedTotalSeconds,
+    recrawlContext,
     stages: scaleCrawlStages(stages, estimatedTotalSeconds),
     basis: {
       searchMode: plan.resolvedSearchMode,
@@ -306,6 +308,34 @@ function crawlTimingConditions(plan = {}) {
     detailRankRanges: plan.detailRankRanges || "없음",
     bookingRangeDays: Math.max(1, Math.min(31, Math.round(Number(plan.bookingRangeDays) || 1))),
     bookingRangePlaceLimit: Math.max(0, Math.min(20, Math.round(Number(plan.bookingRangePlaceLimit) || 0)))
+  };
+}
+
+function sanitizeRecrawlContext(value = {}, plan = {}) {
+  if (!value || typeof value !== "object") return null;
+  const type = String(value.type || "").trim();
+  if (!["company", "batch"].includes(type)) return null;
+  const companyIds = Array.isArray(value.companyIds)
+    ? value.companyIds.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 40)
+    : [];
+  const companyNames = Array.isArray(value.companyNames)
+    ? value.companyNames.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 40)
+    : [];
+  const count = Math.max(companyIds.length, companyNames.length, Math.round(Number(value.count) || 0), type === "company" ? 1 : 0);
+  return {
+    type,
+    key: String(value.key || "").trim().slice(0, 240),
+    label: String(value.label || (type === "batch" ? "묶음 재수집" : "개별 재수집")).trim().slice(0, 80),
+    count,
+    companyIds,
+    companyNames,
+    keyword: String(plan.keyword || value.keyword || "").trim(),
+    range: String(plan.detailRankRanges || value.range || "").trim(),
+    checkIn: String(plan.checkIn || value.checkIn || "").trim(),
+    checkOut: String(plan.checkOut || value.checkOut || "").trim(),
+    savedSeconds: Math.max(0, Math.round(Number(value.savedSeconds) || 0)),
+    etaSeconds: Math.max(0, Math.round(Number(value.etaSeconds) || 0)),
+    source: String(value.source || "decision_queue").trim().slice(0, 60)
   };
 }
 
@@ -5879,6 +5909,7 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
     runId: result?.runId || null,
     keyword: plan?.keyword || "",
     conditions: crawlTimingConditions(plan),
+    recrawlContext: estimate?.recrawlContext || null,
     estimatedTotalSeconds: estimate?.estimatedTotalSeconds || null,
     estimateSource: estimate?.basis?.timing?.source || "model",
     error: success ? "" : crawlTimingErrorSummary(error)
@@ -5919,7 +5950,10 @@ async function runCrawler(payload) {
       result,
       error: failure
     }).then((timing) => {
-      if (result && typeof result === "object") result.crawlTiming = timing;
+      if (result && typeof result === "object") {
+        result.crawlTiming = timing;
+        result.recrawlContext = estimate?.recrawlContext || null;
+      }
     }).catch((error) => {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
@@ -5963,6 +5997,7 @@ function currentCrawlStatus() {
     isDelayed: delayedSeconds > 0,
     delayedSeconds,
     delayThresholdSeconds: activeCrawlPromise ? delayThresholdSeconds : null,
+    recrawlContext: activeCrawlPromise ? activeCrawlEstimate?.recrawlContext || null : null,
     currentStage: stageStatus.currentStage,
     stages: stageStatus.stages,
     estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null
@@ -6082,8 +6117,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-recrawl-batch"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-recrawl-batch"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-recrawl-context"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-recrawl-context"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

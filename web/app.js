@@ -20,7 +20,8 @@ const state = {
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
   trafficKeyState: null,
-  crawlStatusTimer: null
+  crawlStatusTimer: null,
+  pendingRecrawlContext: null
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -528,6 +529,20 @@ function crawlEtaShortText(eta = {}) {
   return Number.isFinite(seconds) ? formatElapsed(seconds) : "계산 대기";
 }
 
+function recrawlContextMatchesPayload(context = {}, payload = {}) {
+  if (!context?.key) return false;
+  return context.key === crawlEtaKey(crawlEstimatePayloadFromPlan(payload));
+}
+
+function recrawlContextStatusText(context = {}) {
+  if (!context?.type) return "";
+  const count = Number(context.count || 0);
+  const label = context.type === "batch" ? "묶음 재수집" : "재수집";
+  const names = Array.isArray(context.companyNames) ? context.companyNames.slice(0, 2).join(", ") : "";
+  const suffix = count > 2 ? ` 외 ${fmtNumber(count - 2)}개` : "";
+  return `${label}${count ? ` ${fmtNumber(count)}개` : ""}${names ? ` · ${names}${suffix}` : ""}`;
+}
+
 function crawlStageStatusText(stage = {}) {
   if (stage.status === "done") return "완료";
   if (stage.status === "active") {
@@ -630,18 +645,19 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
       const estimate = crawlEstimateInlineText(status);
       const stage = status.currentStage || {};
       const delayed = Boolean(status.isDelayed);
+      const recrawlText = recrawlContextStatusText(status.recrawlContext);
       setCrawlProgress(
         true,
         delayed ? "예상보다 지연 중" : (stage.label ? `${stage.label} 진행 중` : "수집 진행 중"),
         delayed
           ? `예상 완료 시간을 ${formatElapsed(status.delayedSeconds) || "초과"} 넘겼습니다. 마지막 단계와 저장 처리를 계속 확인하고 있습니다.`
-          : (stage.detail || `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`),
+          : `${recrawlText ? `${recrawlText} · ` : ""}${stage.detail || `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`}`,
         status
       );
       if (els.crawlStatus) {
         els.crawlStatus.textContent = delayed
-          ? `수집이 예상보다 오래 걸리고 있습니다${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`
-          : `수집이 진행 중입니다${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`;
+          ? `수집이 예상보다 오래 걸리고 있습니다${recrawlText ? ` · ${recrawlText}` : ""}${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`
+          : `수집이 진행 중입니다${recrawlText ? ` · ${recrawlText}` : ""}${elapsed ? ` (${elapsed} 경과)` : ""}${estimate ? ` · ${estimate}` : ""}. 완료되면 결과를 자동 갱신합니다.`;
       }
       setStatus("수집 중");
       scheduleCrawlStatusPoll(Number(status.remainingSeconds) <= 60 ? 5000 : 10000, true);
@@ -9525,6 +9541,20 @@ function applyQueueRecrawlSetting(button) {
   const profile = companyNeedsCorrection(company);
   const plan = companyQueueRecrawlPlan(company, profile, decision);
   const eta = crawlEtaForPlan(plan);
+  state.pendingRecrawlContext = {
+    type: "company",
+    key: crawlEtaKey(plan),
+    label: "개별 재수집",
+    count: 1,
+    companyIds: [company.companyId || ""].filter(Boolean),
+    companyNames: [company.primaryName || ""].filter(Boolean),
+    keyword: plan.keyword || activeKeyword(),
+    range: plan.range || "1-20",
+    checkIn: plan.checkIn || "",
+    checkOut: plan.checkOut || "",
+    etaSeconds: eta.estimatedTotalSeconds || 0,
+    source: "decision_queue"
+  };
   const keyword = plan.keyword || activeKeyword();
   if (els.keywordInput) els.keywordInput.value = keyword;
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
@@ -9558,6 +9588,21 @@ function applyRecrawlBatchSetting(button) {
   }
   const plan = batch.plan || {};
   const eta = batch.eta || crawlEtaForPlan(plan);
+  state.pendingRecrawlContext = {
+    type: "batch",
+    key: batch.key,
+    label: "묶음 재수집",
+    count: batch.count || 0,
+    companyIds: batch.rows.map((row) => row.company.companyId || "").filter(Boolean),
+    companyNames: batch.names || [],
+    keyword: plan.keyword || activeKeyword(),
+    range: plan.range || plan.detailRankRanges || "1-20",
+    checkIn: plan.checkIn || "",
+    checkOut: plan.checkOut || "",
+    savedSeconds: batch.savedSeconds || 0,
+    etaSeconds: eta.estimatedTotalSeconds || 0,
+    source: "decision_queue_batch"
+  };
   const keyword = plan.keyword || activeKeyword();
   if (els.keywordInput) els.keywordInput.value = keyword;
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
@@ -9895,19 +9940,23 @@ async function submitCrawl(event) {
     collectionMode,
     detailRankRanges
   };
+  if (recrawlContextMatchesPayload(state.pendingRecrawlContext, payload)) {
+    payload.recrawlContext = state.pendingRecrawlContext;
+  }
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
   const detailText = payload.collectionMode === "fast"
     ? "상세 분석 생략"
     : `상세 ${payload.detailRankRanges || "1-20"}위`;
   const preview = crawlPreviewMeta(payload);
+  const recrawlText = recrawlContextStatusText(payload.recrawlContext);
   setCrawlProgress(
     true,
     "수집 실행 중",
-    `${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
+    `${recrawlText ? `${recrawlText} · ` : ""}${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
     preview
   );
-  els.crawlStatus.textContent = `${collectionModeLabel(payload.collectionMode)} 기준 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
+  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${collectionModeLabel(payload.collectionMode)} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
   setStatus("수집 중");
   scheduleCrawlStatusPoll(1500, false);
   try {
@@ -9921,7 +9970,10 @@ async function submitCrawl(event) {
     await loadRuns(false);
     clearCrawlStatusTimer();
     setCrawlProgress(false);
-    els.crawlStatus.textContent = "수집 완료. 화면을 갱신했습니다.";
+    els.crawlStatus.textContent = payload.recrawlContext
+      ? `${recrawlContextStatusText(payload.recrawlContext)} 완료. 화면을 갱신했습니다.`
+      : "수집 완료. 화면을 갱신했습니다.";
+    if (payload.recrawlContext) state.pendingRecrawlContext = null;
     setActiveTab("rank");
   } catch (error) {
     if (error.status === 409) {
