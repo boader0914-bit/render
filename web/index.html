@@ -30,6 +30,7 @@
         <button type="button" data-tab="rank">업체순위</button>
         <button type="button" data-tab="dictionary">입지사전</button>
         <button type="button" data-tab="target">영업타깃</button>
+        <button type="button" data-tab="decisionQueue">판단큐</button>
         <button type="button" data-tab="map">지역지도</button>
         <button type="button" data-tab="demand">수요구조</button>
         <button type="button" data-tab="historyOps">누적DB</button>
@@ -84,6 +85,17 @@
           <span id="targetCount">0 후보</span>
         </div>
         <div class="target-list" id="targetList"></div>
+      </section>
+
+      <section class="tab-panel" id="decisionQueuePanel" data-panel="decisionQueue" aria-label="관리자 판단 큐">
+        <div class="section-title">
+          <div>
+            <h2>관리자 판단 큐</h2>
+            <p>사람 확인 후 컨택 여부를 결정할 업체</p>
+          </div>
+          <span id="decisionQueueCount">0 대기</span>
+        </div>
+        <div class="decision-queue-list" id="decisionQueueList"></div>
       </section>
 
       <section class="tab-panel" id="mapPanel" data-panel="map" aria-label="지역지도">
@@ -294,6 +306,7 @@
         <button class="secondary-button" type="button" data-drawer-tab="rank">업체순위 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="dictionary">입지사전 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="target">영업타깃 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="decisionQueue">판단큐 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="map">지도 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="demand">검색수요 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="historyOps">누적DB 보기</button>

@@ -51,6 +51,8 @@ const els = {
   dictionaryResult: document.getElementById("dictionaryResult"),
   targetCount: document.getElementById("targetCount"),
   targetList: document.getElementById("targetList"),
+  decisionQueueCount: document.getElementById("decisionQueueCount"),
+  decisionQueueList: document.getElementById("decisionQueueList"),
   mapCount: document.getElementById("mapCount"),
   mapLayerRow: document.getElementById("mapLayerRow"),
   clusterMap: document.getElementById("clusterMap"),
@@ -4048,6 +4050,32 @@ function companyCheckFilterMatches(entry = {}, filter = "priority") {
   return entry.workflow.key !== "done" && entry.type.key === filter;
 }
 
+function companyDecisionQueueEntries(master = {}) {
+  return (master.companies || [])
+    .map((company) => {
+      const decision = companyDecisionQueueProfile(company);
+      const profile = companyNeedsCorrection(company);
+      const type = companyCheckEntryType(company, profile);
+      const workflow = companyCheckWorkflow(company, profile, type);
+      const priority = companyCheckPriority(company, profile, type, workflow);
+      const include = decision.inQueue
+        || Boolean(company.adminReview?.status)
+        || workflow.key === "recheck";
+      return { company, profile, type, workflow, priority, decision, include };
+    })
+    .filter((entry) => entry.include)
+    .sort((a, b) => {
+      const workflowWeight = { open: 3, recheck: 2, done: 1 };
+      const typeWeight = { correction: 5, ota: 4, gap: 3, exclude: 2, benchmark: 1, observe: 0 };
+      return (workflowWeight[b.workflow.key] || 0) - (workflowWeight[a.workflow.key] || 0)
+        || b.priority.score - a.priority.score
+        || (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
+        || b.profile.priority - a.profile.priority
+        || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0)
+        || (a.company.bestRank || 9999) - (b.company.bestRank || 9999);
+    });
+}
+
 function companyDecisionEvidenceHtml(decision = {}) {
   const cells = [
     ["문제 날짜", decision.problemDateText || "최근 수집일 기준"],
@@ -4115,29 +4143,7 @@ function companyCheckEntryHtml(entry = {}) {
 }
 
 function companyMasterCheckPanel(master = {}) {
-  const entries = (master.companies || [])
-    .map((company) => {
-      const decision = companyDecisionQueueProfile(company);
-      const profile = companyNeedsCorrection(company);
-      const type = companyCheckEntryType(company, profile);
-      const workflow = companyCheckWorkflow(company, profile, type);
-      const priority = companyCheckPriority(company, profile, type, workflow);
-      const include = decision.inQueue
-        || Boolean(company.adminReview?.status)
-        || workflow.key === "recheck";
-      return { company, profile, type, workflow, priority, decision, include };
-    })
-    .filter((entry) => entry.include)
-    .sort((a, b) => {
-      const workflowWeight = { open: 3, recheck: 2, done: 1 };
-      const typeWeight = { correction: 5, ota: 4, gap: 3, exclude: 2, benchmark: 1, observe: 0 };
-      return (workflowWeight[b.workflow.key] || 0) - (workflowWeight[a.workflow.key] || 0)
-        || b.priority.score - a.priority.score
-        || (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
-        || b.profile.priority - a.profile.priority
-        || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0)
-        || (a.company.bestRank || 9999) - (b.company.bestRank || 9999);
-    });
+  const entries = companyDecisionQueueEntries(master);
   const filters = state.companyMasterFilters || {};
   const selectedFilter = filters.check || "priority";
   const countForFilter = (value) => entries.filter((entry) => companyCheckFilterMatches(entry, value)).length;
@@ -4431,12 +4437,40 @@ function companyMasterListPanel(master = {}) {
   `;
 }
 
+function renderDecisionQueue() {
+  if (!els.decisionQueueList) return;
+  const master = companyMasterSource();
+  if (master.error) {
+    if (els.decisionQueueCount) els.decisionQueueCount.textContent = "오류";
+    els.decisionQueueList.innerHTML = `<div class="empty">판단 큐 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    return;
+  }
+  const companies = master.companies || [];
+  const entries = companyDecisionQueueEntries(master);
+  const openCount = entries.filter((entry) => entry.workflow.key !== "done").length;
+  if (els.decisionQueueCount) {
+    els.decisionQueueCount.textContent = `${fmtNumber(openCount)} 대기`;
+  }
+  if (!companies.length) {
+    els.decisionQueueList.innerHTML = `<div class="empty">업체 마스터를 불러오는 중입니다. 관리 탭에서 수집 결과를 선택하거나 기존 결과 전체 반영을 실행하세요.</div>`;
+    return;
+  }
+  els.decisionQueueList.innerHTML = `
+    <div class="decision-queue-intro">
+      <strong>영업타깃과 판단 큐 분리 기준</strong>
+      <p>영업타깃은 바로 컨택 가능한 업체만 표시하고, 판단 큐는 OTA·수량 구조·날짜별 총량·판매 공백·수동 보정 신호가 있어 사람이 확인해야 하는 업체만 모읍니다.</p>
+    </div>
+    ${companyMasterCheckPanel(master)}
+  `;
+}
+
 function rerenderCompanyMasterPreservingSearch() {
   const active = document.activeElement;
   const preserveSearch = active?.matches?.("[data-company-master-search]");
   const selectionStart = preserveSearch ? active.selectionStart : null;
   const selectionEnd = preserveSearch ? active.selectionEnd : null;
   renderCompanyMasterPanel();
+  renderDecisionQueue();
   if (preserveSearch) {
     const input = document.querySelector("[data-company-master-search]");
     input?.focus();
@@ -5754,6 +5788,7 @@ function renderHeader() {
     rank: "업체 순위",
     dictionary: "입지사전",
     target: "영업 타깃",
+    decisionQueue: "관리자 판단 큐",
     map: "지역 클러스터 지도",
     demand: "수요구조 분석",
     historyOps: "누적 DB 분석",
@@ -5762,6 +5797,8 @@ function renderHeader() {
   els.pageTitle.textContent = titleMap[state.activeTab] || "요약 리포트";
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
+  } else if (state.activeTab === "decisionQueue") {
+    els.pageSubtitle.textContent = `${title} · 컨택 전 사람 확인 · OTA/수량/공백/보정 재검토`;
   } else if (state.activeTab === "historyOps") {
     els.pageSubtitle.textContent = `${title} · 반복 수집 이력 · 회차 비교 · 업체별 추이`;
   } else if (state.activeTab === "demand") {
@@ -5785,6 +5822,7 @@ function renderAll() {
   renderReport();
   renderCompanies();
   renderTargets();
+  renderDecisionQueue();
   renderMap();
   renderDemand();
   renderHistoryOps();
@@ -5805,6 +5843,7 @@ function setActiveTab(tab) {
   renderHeader();
   closeDrawer();
   if (tab === "report") renderReport();
+  if (tab === "decisionQueue") renderDecisionQueue();
   if (tab === "map") renderMap();
   if (tab === "demand") renderDemand();
   if (tab === "historyOps") renderHistoryOps();
@@ -6304,6 +6343,7 @@ async function resolveCompanyDuplicate(button) {
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
     renderCompanyMasterPanel();
+    renderDecisionQueue();
     setStatus(action === "merge" ? "업체 병합 완료" : "분리 유지 저장");
   } catch (error) {
     if (els.companyMasterPanel) {
@@ -6349,6 +6389,7 @@ async function saveCompanyCorrection(button, clear = false) {
       if (state.selectedItem && els.detailSheet && !els.detailSheet.hidden) renderSheet();
     } else {
       renderCompanyMasterPanel();
+      renderDecisionQueue();
     }
     setStatus(shouldClear ? "보정 해제 완료" : "보정 저장 완료");
   } catch (error) {
@@ -6376,6 +6417,7 @@ async function saveCompanyAdminReview(button) {
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
     renderCompanyMasterPanel();
+    renderDecisionQueue();
     renderTargets();
     setStatus(status === "clear" ? "검증 해제 완료" : `${companyAdminReviewLabel(status)} 저장 완료`);
   } catch (error) {
@@ -6402,6 +6444,7 @@ async function backfillCompanyMaster(button) {
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
     renderCompanyMasterPanel();
+    renderDecisionQueue();
     setStatus(`백필 완료: ${fmtNumber(data.backfill?.processedRuns || 0)}개 결과`);
   } catch (error) {
     if (els.companyMasterPanel) {
@@ -6422,6 +6465,8 @@ async function loadRuns(selectLatest = false) {
   if (!state.runs.length) {
     if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
     els.companyList.innerHTML = `<div class="empty">실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
+    if (els.decisionQueueCount) els.decisionQueueCount.textContent = "0 대기";
+    if (els.decisionQueueList) els.decisionQueueList.innerHTML = `<div class="empty">실행 결과가 없습니다. 수집 후 판단 큐가 생성됩니다.</div>`;
     setStatus("결과 없음");
     return;
   }
@@ -6764,6 +6809,7 @@ function bindEvents() {
     if (checkFilter) {
       state.companyMasterFilters.check = checkFilter.dataset.companyCheckFilter || "priority";
       renderCompanyMasterPanel();
+      renderDecisionQueue();
     }
     const backfillButton = event.target.closest("[data-company-backfill]");
     if (backfillButton) backfillCompanyMaster(backfillButton);
@@ -6783,11 +6829,13 @@ function bindEvents() {
     if (layer) {
       state.companyMasterFilters.layer = layer.value || "all";
       renderCompanyMasterPanel();
+      renderDecisionQueue();
     }
     const target = event.target.closest("[data-company-master-target]");
     if (target) {
       state.companyMasterFilters.target = target.value || "all";
       renderCompanyMasterPanel();
+      renderDecisionQueue();
     }
   });
   els.openControlButton.addEventListener("click", openDrawer);

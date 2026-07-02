@@ -2578,6 +2578,34 @@ a.platform-row:hover {
   background: linear-gradient(180deg, #ffffff, #f8fbff);
 }
 
+.decision-queue-list {
+  display: grid;
+  gap: 12px;
+}
+
+.decision-queue-intro {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.decision-queue-intro strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.decision-queue-intro p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
 .company-check-head {
   align-items: center;
 }
@@ -3757,10 +3785,10 @@ a.platform-row:hover {
   position: sticky;
   z-index: 20;
   top: max(10px, env(safe-area-inset-top));
-  width: min(880px, 100%);
+  width: min(980px, 100%);
   margin: 0 auto 24px;
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 5px;
   padding: 7px;
   border: 1px solid rgba(228, 231, 236, .8);
