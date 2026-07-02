@@ -1549,6 +1549,195 @@ function validationCardValue(label, value, note = "") {
   `;
 }
 
+function effectiveDetailRankRange(run = {}) {
+  const mode = run.collectionMode || "precision";
+  if (mode === "fast") return "상세 생략";
+  const raw = String(run.detailRankRanges || "").trim();
+  return !raw || /^(none|skip|없음)$/i.test(raw) ? "1-20" : raw;
+}
+
+function collectionStatusProfile(item = {}) {
+  const rows = bookingGraphRows(item);
+  const collectedRows = rows.filter((row) => !row.missing && finiteNumber(row.total, 0) > 0);
+  const missingDates = rows.filter((row) => row.missing).map((row) => row.label);
+  const lodging = salesStats(item, "lodging");
+  const dayUse = salesStats(item, "day");
+  const lodgingRevenue = itemRevenueStats(item, "lodging");
+  const dayUseRevenue = itemRevenueStats(item, "day");
+  const confidence = inventoryConfidenceInfo(item);
+  const structure = inventoryStructureInfo(item);
+  const flags = new Set(structure.flags || []);
+  const soldQuantity = finiteNumber(lodging.sold, 0) + finiteNumber(dayUse.sold, 0);
+  const pricedQuantity = finiteNumber(lodgingRevenue.pricedSoldOut, 0) + finiteNumber(dayUseRevenue.pricedSoldOut, 0);
+  const missingPriceQuantity = finiteNumber(lodgingRevenue.missingPriceSoldOut, 0) + finiteNumber(dayUseRevenue.missingPriceSoldOut, 0);
+  const productCount = finiteNumber(item.countedItemCount, 0) + finiteNumber(item.nightItemCount, 0) + finiteNumber(item.dayUseItemCount, 0);
+  const productKnown = productCount > 0 || Boolean(String(item.productTypeSummary || "").trim());
+  const quantityUnclear = Boolean(
+    ["D", "E"].includes(confidence.grade) ||
+    ["unknown", "stock_only", "grouped_stock"].includes(structure.type) ||
+    flags.has("booking_id_reused") ||
+    flags.has("grouped_range") ||
+    missingDates.length > 0
+  );
+  const priceMissing = Boolean(
+    missingPriceQuantity > 0 ||
+    (soldQuantity > 0 && pricedQuantity === 0 && lodgingRevenue.basis === "missing" && dayUseRevenue.basis === "missing")
+  );
+  const offlineQuantity = rows.reduce((sum, row) => sum + finiteNumber(row.offlineSold || row.hidden, 0), 0);
+  const hasOfflineDetail = Boolean(item.weeklyOfflineReservationDetail || item.dayUseWeeklyOfflineReservationDetail);
+  const offlineEstimated = offlineQuantity > 0 || hasOfflineDetail;
+  const statusKey = !collectedRows.length
+    ? "missing"
+    : priceMissing || quantityUnclear || !productKnown
+      ? "partial"
+      : "ready";
+  const tone = statusKey === "ready" ? "good" : statusKey === "partial" ? "watch" : "bad";
+  const reasons = [];
+  if (!collectedRows.length) reasons.push("날짜별 재고가 확보되지 않음");
+  if (missingDates.length) reasons.push(`미수집 날짜 ${fmtNumber(missingDates.length)}일`);
+  if (quantityUnclear) reasons.push(`수량 신뢰도 ${confidence.grade} · ${structure.label}`);
+  if (!productKnown) reasons.push("상품별 수량 구조 확인 필요");
+  if (priceMissing) reasons.push(`가격 누락 판매수량 ${fmtNumber(missingPriceQuantity || soldQuantity)}개/회`);
+  if (offlineEstimated) reasons.push("오프라인 예약/차단 추정 포함");
+  return {
+    statusKey,
+    tone,
+    label: statusKey === "ready" ? "데이터 확보" : statusKey === "partial" ? "부분 확보" : "미확보",
+    collectedDays: collectedRows.length,
+    expectedDays: rows.length,
+    missingDates,
+    productKnown,
+    productCount,
+    quantityUnclear,
+    priceMissing,
+    pricedQuantity,
+    missingPriceQuantity,
+    soldQuantity,
+    offlineEstimated,
+    offlineQuantity,
+    reasons: reasons.slice(0, 5)
+  };
+}
+
+function collectionDiagnosticProfile(items = []) {
+  const run = state.data?.run || {};
+  const counts = run.counts || {};
+  const ranking = state.data?.ranking || {};
+  const checked = finiteNumber(counts.naverBookingStockChecked, 0);
+  const succeeded = finiteNumber(counts.naverBookingStockSucceeded, items.length);
+  const skippedByRank = finiteNumber(counts.naverBookingStockSkippedByRank, 0);
+  const skippedByMode = finiteNumber(counts.naverBookingStockSkippedByMode, 0);
+  const candidates = Math.max(checked + skippedByRank + skippedByMode, finiteNumber(ranking.total, 0));
+  const rankOnly = (ranking.items || []).filter((item) => !inventoryLinked(item)).length;
+  const profiles = items.map((item) => collectionStatusProfile(item));
+  const missingData = profiles.filter((profile) => profile.statusKey === "missing").length;
+  const partialData = profiles.filter((profile) => profile.statusKey === "partial").length;
+  const priceMissing = profiles.filter((profile) => profile.priceMissing).length;
+  const quantityUnclear = profiles.filter((profile) => profile.quantityUnclear || !profile.productKnown).length;
+  const missingDates = profiles.filter((profile) => profile.missingDates.length).length;
+  const offlineEstimated = profiles.filter((profile) => profile.offlineEstimated).length;
+  const successRate = checked ? succeeded / checked : NaN;
+  const coverageRate = candidates ? succeeded / candidates : NaN;
+  const precision = (run.collectionMode || "precision") !== "fast";
+  const zeroPrecisionData = precision && !items.length;
+  const tone = zeroPrecisionData
+    ? "bad"
+    : (!precision || partialData || priceMissing || quantityUnclear || rankOnly || skippedByRank)
+      ? "watch"
+      : "good";
+  const issues = [];
+  if (!precision) {
+    issues.push(["빠른 순위 모드", skippedByMode || candidates, "상세 재고를 의도적으로 생략했습니다.", "watch"]);
+  }
+  if (zeroPrecisionData && skippedByRank) {
+    issues.push(["범위 제외", skippedByRank, "상세 수집 순위 범위 밖이라 재고를 확인하지 못했습니다.", "bad"]);
+  } else if (skippedByRank) {
+    issues.push(["범위 제외", skippedByRank, "지정 순위 밖 후보입니다. 필요 시 1-30 등으로 범위를 넓히세요.", "watch"]);
+  }
+  if (precision && checked === 0 && !skippedByRank) {
+    issues.push(["확인 시도 0", 0, "네이버예약 링크/예약ID 또는 상세 조건을 확인해야 합니다.", "bad"]);
+  }
+  if (checked > 0 && succeeded === 0) {
+    issues.push(["재고 확인 실패", checked, "예약재고 API 응답 또는 파서 결과가 연결되지 않았습니다.", "bad"]);
+  }
+  if (rankOnly) {
+    issues.push(["노출만 확인", rankOnly, "네이버 순위는 있으나 재고 상세가 없는 업체입니다.", "watch"]);
+  }
+  if (missingDates) {
+    issues.push(["미수집 날짜", missingDates, "기간 중 일부 날짜 재고가 없어 상세 재수집 대상입니다.", "watch"]);
+  }
+  if (quantityUnclear) {
+    issues.push(["수량 구조 확인", quantityUnclear, "상품별 수량 또는 객실 구조가 불명확합니다.", "watch"]);
+  }
+  if (priceMissing) {
+    issues.push(["가격 누락", priceMissing, "판매수량은 있으나 가격이 없어 매출 산정에서 제외된 업체입니다.", "watch"]);
+  }
+  if (offlineEstimated) {
+    issues.push(["오프라인 예약 추정", offlineEstimated, "총량 최대값 대비 부족분을 오프라인 예약/차단으로 해석했습니다.", "good"]);
+  }
+  return {
+    run,
+    rangeLabel: effectiveDetailRankRange(run),
+    precision,
+    tone,
+    checked,
+    succeeded,
+    skippedByRank,
+    skippedByMode,
+    candidates,
+    rankOnly,
+    acquired: items.length,
+    partialData,
+    missingData,
+    priceMissing,
+    quantityUnclear,
+    missingDates,
+    offlineEstimated,
+    successRate,
+    coverageRate,
+    issues
+  };
+}
+
+function renderCollectionDiagnostics(items = []) {
+  const diag = collectionDiagnosticProfile(items);
+  const modeLabel = diag.precision ? `상세 ${diag.rangeLabel}위` : "상세 생략";
+  const statusLabel = diag.tone === "good"
+    ? "정밀분석 데이터 확보"
+    : diag.tone === "bad"
+      ? "데이터 미확보 원인 확인"
+      : "데이터 부분 확보";
+  const issueRows = diag.issues.length ? diag.issues : [["특이사항 없음", diag.acquired, "현재 범위에서는 재고/가격/수량 진단 신호가 안정적입니다.", "good"]];
+  return `
+    <div class="validation-card validation-card-collection ${escapeHtml(diag.tone)}">
+      <div class="validation-card-head">
+        <div>
+          <span class="eyebrow">정밀분석 데이터 확보 진단</span>
+          <h3>${escapeHtml(statusLabel)}</h3>
+        </div>
+        <span>${escapeHtml(diag.run.collectionModeLabel || collectionModeLabel(diag.run.collectionMode))} · ${escapeHtml(modeLabel)}</span>
+      </div>
+      <div class="collection-diagnostic-grid">
+        ${validationCardValue("재고 후보", fmtNumber(diag.candidates || diag.checked + diag.skippedByRank), `범위 제외 ${fmtNumber(diag.skippedByRank)}`)}
+        ${validationCardValue("확인/성공", `${fmtNumber(diag.checked)}/${fmtNumber(diag.succeeded)}`, Number.isFinite(diag.successRate) ? `성공률 ${fmtRate(diag.successRate)}` : "시도 없음")}
+        ${validationCardValue("확보 업체", fmtNumber(diag.acquired), Number.isFinite(diag.coverageRate) ? `후보 대비 ${fmtRate(diag.coverageRate)}` : "재고 상세")}
+        ${validationCardValue("노출만 확인", fmtNumber(diag.rankOnly), "순위는 있으나 상세 재고 없음")}
+        ${validationCardValue("가격/수량 확인", fmtNumber(diag.priceMissing + diag.quantityUnclear), `가격 ${fmtNumber(diag.priceMissing)} · 수량 ${fmtNumber(diag.quantityUnclear)}`)}
+        ${validationCardValue("오프라인 추정", fmtNumber(diag.offlineEstimated), "미오픈/차단 포함 해석")}
+      </div>
+      <div class="collection-diagnostic-list">
+        ${issueRows.map(([label, count, note, tone]) => `
+          <div class="${escapeHtml(tone)}">
+            <strong>${escapeHtml(label)}</strong>
+            <b>${fmtNumber(count)}</b>
+            <small>${escapeHtml(note)}</small>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function medianNumber(values = []) {
   const sorted = values
     .map(Number)
@@ -1681,6 +1870,31 @@ function inventoryAuditProfile(item = {}) {
     actions.push("숙박과 당일상품을 분리해서 판매수·총량 확인");
   }
 
+  const collectionStatus = collectionStatusProfile(item);
+  const dataIncomplete = Boolean(collectionStatus.priceMissing || !collectionStatus.productKnown || collectionStatus.statusKey === "missing");
+  if (dataIncomplete) {
+    if (statusKey === "normal") {
+      statusKey = "data_missing";
+      tone = collectionStatus.statusKey === "missing" ? "bad" : "watch";
+    }
+    priority += collectionStatus.statusKey === "missing" ? 42 : 24;
+    if (!collectionStatus.productKnown) {
+      reasons.push("상품별 수량 구조가 확보되지 않았습니다.");
+      actions.push("네이버 상품별 객실수와 숙박/데이유즈 구분을 확인");
+      issueChannels.add("네이버 상품/수량");
+    }
+    if (collectionStatus.priceMissing) {
+      reasons.push(`가격 누락 판매수량 ${fmtNumber(collectionStatus.missingPriceQuantity || collectionStatus.soldQuantity)}개/회`);
+      actions.push("평일/금/토/일 상품 가격을 확인한 뒤 매출을 재산정");
+      issueChannels.add("네이버 가격/요일");
+    }
+    if (collectionStatus.statusKey === "missing") {
+      reasons.push("정밀분석 재고 상세가 확보되지 않았습니다.");
+      actions.push("상세 순위 범위, 예약ID, 수집 기간을 확인하고 재수집");
+      issueChannels.add("정밀분석 재수집");
+    }
+  }
+
   const saturdayRate = flow.saturday.rate;
   const naverExposed = Number(item.rank || 0) > 0 || platformsForItem(item).some((row) => platformShortName(row.platform) === "네이버");
   const addGap = (label, metric, dayIndexes) => {
@@ -1753,6 +1967,7 @@ function inventoryAuditProfile(item = {}) {
     structure_risk: "상품구조 의심",
     phone_stock: "전화예약/재고조절 가능성",
     sales_gap: "판매 공백 확인",
+    data_missing: "가격/수량 미확보",
     manual_recheck: "보정 후 재검토"
   };
   const defaultAction = statusKey === "normal" || statusKey === "confirmed"
@@ -1802,6 +2017,12 @@ function inventoryAuditProfile(item = {}) {
       reason: `네이버 노출 대비 ${gapTypes.join("/")} 공백`,
       action: "금요일/일요일/평일 가격과 연박 조건 확인"
     } : null,
+    dataIncomplete ? {
+      key: "data",
+      label: "가격/수량 미확보",
+      reason: collectionStatus.reasons[0] || "정밀분석 결과만으로 컨택 판단이 불충분",
+      action: "상품별 수량과 요일별 가격을 확인한 뒤 영업타깃 여부 재판정"
+    } : null,
     manualRecheckNeeded ? {
       key: "manual_recheck",
       label: "수동 보정 후 재검토 필요",
@@ -1837,7 +2058,10 @@ function inventoryAuditProfile(item = {}) {
       missingCount,
       varianceDays: varianceRows.length,
       weekdayGap,
-      collectedDays: collectedRows.length
+      collectedDays: collectedRows.length,
+      dataStatus: collectionStatus.statusKey,
+      missingPriceQuantity: collectionStatus.missingPriceQuantity,
+      productKnown: collectionStatus.productKnown
     }
   };
 }
@@ -1910,6 +2134,7 @@ function renderValidationQueue(items = []) {
     ["수량 구조 불명확", counts.quantity || 0, "watch"],
     ["총량 변동 큼", counts.capacity || 0, "watch"],
     ["판매 공백 큼", counts.gap || 0, "watch"],
+    ["가격/수량 미확보", counts.data || 0, "watch"],
     ["정상/확정", counts.clean || 0, "good"]
   ];
   return `
@@ -1990,6 +2215,7 @@ function renderValidationBoard(items = []) {
   const rangeLabel = dateRangeLabel(run);
   return `
     <section class="validation-board" aria-label="관리자 검증 요약">
+      ${renderCollectionDiagnostics(items)}
       <div class="validation-card validation-card-main">
         <div class="validation-card-head">
           <div>
@@ -2135,6 +2361,10 @@ function targetExpansionAnalysis(item = {}) {
   if (audit.statusKey === "structure_risk") {
     score -= 16;
     reasons.push("상품구조 검증 후 컨택");
+  }
+  if (audit.statusKey === "data_missing") {
+    score -= 14;
+    reasons.push("가격/수량 확보 후 판단");
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
@@ -6045,6 +6275,49 @@ function dateRow(row) {
   `;
 }
 
+function sheetCollectionStatusPanel(item = {}) {
+  const status = collectionStatusProfile(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const structure = inventoryStructureInfo(item);
+  const decision = decisionQueueProfile(item);
+  const priceText = status.priceMissing
+    ? `가격누락 ${fmtNumber(status.missingPriceQuantity || status.soldQuantity)}개/회`
+    : status.pricedQuantity
+      ? `가격확인 ${fmtNumber(status.pricedQuantity)}개/회`
+      : "판매/가격 대기";
+  const productText = status.productKnown
+    ? `${status.productCount ? `${fmtNumber(status.productCount)}개 상품` : "상품구성 확인"}`
+    : "상품별 수량 확인필요";
+  const rows = [
+    ["수집 상태", status.label, `${fmtNumber(status.collectedDays)}/${fmtNumber(status.expectedDays)}일 확보`],
+    ["문제 날짜", compactListText(status.missingDates, "없음", 5), status.missingDates.length ? "동일 기간 재수집 대상" : "기간 내 날짜 확보"],
+    ["수량 신뢰도", `신뢰도 ${confidence.grade} · ${structure.label}`, structure.action || "자동 수량 판단"],
+    ["상품별 수량", productText, status.productKnown ? "숙박/데이유즈 분리 기준" : "객실/상품 수량 직접 확인"],
+    ["가격 확보", priceText, "할인 옵션 패키지는 산출 제외"],
+    ["오프라인 예약", status.offlineEstimated ? `${fmtNumber(status.offlineQuantity)}개 추정` : "특이 없음", "미오픈/차단은 오프라인 예약 가능성으로 해석"]
+  ];
+  return `
+    <section class="sheet-section sheet-collection-section ${escapeHtml(status.tone)}">
+      <div class="sheet-structure-title">
+        <h3>정밀분석 수집 상태</h3>
+        <span class="structure-badge ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</span>
+      </div>
+      <div class="sheet-collection-grid">
+        ${rows.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sheet-audit-reasons">
+        ${(status.reasons.length ? status.reasons : [`판단 큐 상태: ${decision.inQueue ? decision.label : "바로 판단 가능"}`]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function sheetAuditPanel(item = {}) {
   const decision = decisionQueueProfile(item);
   const audit = decision.audit;
@@ -6282,6 +6555,7 @@ function renderSheetBooking(item) {
   const historyWeekday = flow.history?.weekday;
   return `
     ${sheetFlowOverview(item)}
+    ${sheetCollectionStatusPanel(item)}
     ${sheetRevenuePanel(item)}
     ${sheetAuditPanel(item)}
     ${sheetCompanyProfile(item)}
