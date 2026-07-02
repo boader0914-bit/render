@@ -2653,6 +2653,26 @@ a.platform-row:hover {
   background: #fffafa;
 }
 
+.company-check-card.recheck {
+  border-color: #fedf89;
+  background: #fffdf5;
+}
+
+.company-check-card.done {
+  border-color: #e4e7ec;
+  background: #fbfcfd;
+}
+
+.company-check-card.done .company-check-card-head > span {
+  background: #eef2f6;
+  color: #475467;
+}
+
+.company-check-card.recheck .company-check-card-head > span {
+  background: #fff4df;
+  color: #b54708;
+}
+
 .company-check-tags {
   display: flex;
   flex-wrap: wrap;

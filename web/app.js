@@ -3185,7 +3185,8 @@ function companyAdminReviewLabel(status) {
 }
 
 function companyAdminReviewBadgeHtml(company = {}) {
-  const status = company.adminReview?.status || "pending";
+  const status = company.adminReview?.status || "";
+  if (!status) return "";
   const label = company.adminReview?.label || companyAdminReviewLabel(status);
   return `<span class="company-review-badge ${escapeHtml(status)}">${escapeHtml(label)}</span>`;
 }
@@ -3259,14 +3260,17 @@ function companyCheckEntryType(company = {}, profile = {}) {
   return { key: "observe", label: "관찰" };
 }
 
-function companyCheckReasons(company = {}, profile = {}) {
+function companyCheckReasons(company = {}, profile = {}, workflow = {}) {
   const issueReasons = (profile.issues || []).map((issue) => `${issue.label}: ${issue.task}`);
+  const workflowReasons = workflow.key === "recheck" ? (workflow.reasons || []).map((reason) => `재확인: ${reason}`) : [];
   const targetReasons = company.salesTarget?.reasons || [];
   const fallback = company.salesTarget?.recommendation || company.identityConfidence?.reason || "추가 확인 후 판단";
-  return [...new Set([...issueReasons, ...targetReasons, fallback].filter(Boolean))].slice(0, 4);
+  return [...new Set([...workflowReasons, ...issueReasons, ...targetReasons, fallback].filter(Boolean))].slice(0, 4);
 }
 
-function companyCheckRecommendation(company = {}, profile = {}) {
+function companyCheckRecommendation(company = {}, profile = {}, workflow = {}) {
+  if (workflow.key === "recheck") return "기존 관리자 판단 이후 조건이 바뀌었습니다. 변경 사유만 확인하고 판단을 다시 저장하세요.";
+  if (workflow.key === "done") return "이미 처리된 업체입니다. 새 신호가 생기면 재확인 큐로 자동 이동합니다.";
   const issues = profile.issues || [];
   if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
     return profile.applied ? "보정값이 적용되어 있습니다. 실제 총량과 맞는지 확인 후 확정하세요." : "수량 구조를 확인하고 필요하면 관리자 보정값을 입력하세요.";
@@ -3278,7 +3282,80 @@ function companyCheckRecommendation(company = {}, profile = {}) {
   return "누적 수집을 더 쌓아 관찰 유지 여부를 판단하세요.";
 }
 
-function companyCheckPriority(company = {}, profile = {}, type = {}) {
+function isAfterDate(value, base) {
+  const left = Date.parse(value || "");
+  const right = Date.parse(base || "");
+  return Number.isFinite(left) && Number.isFinite(right) && left > right;
+}
+
+function companyReviewRecheckProfile(company = {}, profile = {}) {
+  const review = company.adminReview || null;
+  if (!review?.status) return { needed: false, reasons: [] };
+  const reviewAt = review.updatedAt || "";
+  const latest = company.inventory?.latest || {};
+  const latestAt = latest.collectedAt || company.lastSeenAt || "";
+  const hasNewCollection = isAfterDate(latestAt, reviewAt) || isAfterDate(company.lastSeenAt, reviewAt);
+  const newKeywords = (company.keywords || []).filter((row) => isAfterDate(row.lastSeenAt, reviewAt));
+  const issueKeys = new Set((profile.issues || []).map((issue) => issue.key).filter((key) => key !== "manual"));
+  const reasons = [];
+
+  if (review.status === "manual_needed" && profile.applied) {
+    return { needed: false, reasons: ["관리자 보정값이 적용되어 완료/보류로 이동"] };
+  }
+
+  if (!reviewAt) return { needed: false, reasons: [] };
+  if (hasNewCollection && issueKeys.size) {
+    reasons.push(`기존 판단 이후 ${[...issueKeys].map((key) => ({
+      structure: "수량구조",
+      booking: "예약ID",
+      offline: "총량변동",
+      dayuse: "당일상품",
+      ota: "OTA"
+    }[key] || key)).join(", ")} 신호 발생`);
+  }
+  if (newKeywords.length && Number(company.bestRank || 0) > 0 && Number(company.bestRank || 0) <= 10) {
+    reasons.push(`기존 판단 이후 새 키워드 노출 ${newKeywords.slice(0, 2).map((row) => row.keyword).filter(Boolean).join(", ")}`);
+  }
+  if (hasNewCollection && ["D", "E"].includes(String(latest.confidenceGrade || "").toUpperCase())) {
+    reasons.push(`수량 신뢰도 ${latest.confidenceGrade} 등급으로 악화`);
+  }
+  if (review.status === "exclude" && hasNewCollection && Number(company.bestRank || 9999) <= 5) {
+    reasons.push("제외 후 상위권 노출이 다시 확인됨");
+  }
+  if (review.status === "confirmed" && hasNewCollection && company.salesTarget?.category === "verify") {
+    reasons.push("확정 후 검증 후보 신호가 다시 발생");
+  }
+
+  return {
+    needed: reasons.length > 0,
+    reasons: reasons.slice(0, 4),
+    reviewAt,
+    latestAt
+  };
+}
+
+function companyCheckWorkflow(company = {}, profile = {}, type = {}) {
+  const review = company.adminReview || null;
+  const recheck = companyReviewRecheckProfile(company, profile);
+  if (recheck.needed) {
+    return { key: "recheck", label: "재확인", tone: "recheck", reasons: recheck.reasons };
+  }
+  if (review?.status === "manual_needed" && profile.applied) {
+    return { key: "done", label: "보정값 적용", tone: "done", reasons: ["보정값이 입력되어 기본 처리 큐에서 제외"] };
+  }
+  if (review?.status === "confirmed") {
+    return { key: "done", label: "확인 완료", tone: "done", reasons: ["관리자가 판단 맞음으로 확정"] };
+  }
+  if (review?.status === "exclude") {
+    return { key: "done", label: "제외 완료", tone: "done", reasons: ["관리자가 제외로 확정"] };
+  }
+  if (review?.status === "hold") {
+    return { key: "done", label: "보류", tone: "hold", reasons: ["관리자가 보류로 지정"] };
+  }
+  return { key: "open", label: type.label || "오늘 처리", tone: "open", reasons: [] };
+}
+
+function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = {}) {
   const issueWeights = {
     manual: 26,
     structure: 22,
@@ -3311,6 +3388,8 @@ function companyCheckPriority(company = {}, profile = {}, type = {}) {
   else if (bestRank > 0 && bestRank <= 20) score += 4;
   if (company.identityConfidence?.level === "review") score += 15;
   if (profile.applied) score -= 14;
+  if (workflow.key === "recheck") score += 28;
+  if (workflow.key === "done") score -= 35;
   const bounded = Math.max(0, Math.round(score));
   if (bounded >= 95) return { key: "urgent", label: "긴급", score: bounded, note: "오늘 먼저 확인" };
   if (bounded >= 70) return { key: "high", label: "높음", score: bounded, note: "우선 확인" };
@@ -3320,49 +3399,51 @@ function companyCheckPriority(company = {}, profile = {}, type = {}) {
 
 function companyCheckFilterOptions() {
   return [
-    ["priority", "오늘 우선"],
+    ["priority", "오늘 처리"],
+    ["recheck", "재확인"],
     ["all", "전체"],
     ["correction", "보정 필요"],
     ["ota", "OTA 확인"],
     ["contact", "컨택 후보"],
-    ["exclude", "제외 검토"],
-    ["benchmark", "벤치마크"]
+    ["done", "완료/보류"]
   ];
 }
 
-function companyCheckFilterMatches(entry = {}, filter = "priority", index = 0) {
+function companyCheckFilterMatches(entry = {}, filter = "priority") {
   if (filter === "all") return true;
-  if (filter === "priority") return index < 15;
-  if (filter === "ota") return entry.type.key === "ota" || (entry.profile.issues || []).some((issue) => issue.key === "ota");
-  if (filter === "exclude") return entry.type.key === "exclude" || entry.company.salesTarget?.category === "exclude";
-  if (filter === "benchmark") return entry.type.key === "benchmark" || entry.company.salesTarget?.category === "benchmark";
-  return entry.type.key === filter;
+  if (filter === "priority") return entry.workflow.key === "open";
+  if (filter === "recheck") return entry.workflow.key === "recheck";
+  if (filter === "done") return entry.workflow.key === "done";
+  if (filter === "ota") return entry.workflow.key !== "done" && (entry.type.key === "ota" || (entry.profile.issues || []).some((issue) => issue.key === "ota"));
+  return entry.workflow.key !== "done" && entry.type.key === filter;
 }
 
 function companyCheckEntryHtml(entry = {}) {
-  const { company, profile, type, priority } = entry;
+  const { company, profile, type, priority, workflow } = entry;
   const latest = company.inventory?.latest || {};
-  const reasons = companyCheckReasons(company, profile);
+  const reasons = companyCheckReasons(company, profile, workflow);
   const showCorrectionForm = (profile.issues || []).some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key));
   return `
-    <article class="company-check-card ${escapeHtml(type.key)}">
+    <article class="company-check-card ${escapeHtml(type.key)} ${escapeHtml(workflow.key)}">
       <div class="company-check-card-head">
         <div>
           <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
           <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.exposureLayer?.label || "분류 대기")} · ${fmtNumber(company.salesTarget?.score || 0)}점</small>
         </div>
-        <span>${escapeHtml(type.label)}</span>
+        <span>${escapeHtml(workflow.label)}</span>
       </div>
       <div class="company-check-priority">
         <strong class="${escapeHtml(priority.key)}">${escapeHtml(priority.label)}</strong>
         <span>${fmtNumber(priority.score)}점 · ${escapeHtml(priority.note)}</span>
       </div>
       <div class="company-check-tags">
+        ${companyAdminReviewBadgeHtml(company)}
         ${companyMasterIdentityTag(company)}
         ${companyMasterCorrectionTag(company)}
         <mark>${escapeHtml(companyTargetCategoryLabel(company.salesTarget?.category))}</mark>
         <mark>${fmtNumber(company.keywordCount || 0)}키워드</mark>
         <mark>구조 ${escapeHtml(latest.structureLabel || "대기")}</mark>
+        <mark>${escapeHtml(workflow.label)}</mark>
         ${(profile.issues || []).slice(0, 4).map((issue) => `<mark>${escapeHtml(issue.label)}</mark>`).join("")}
       </div>
       ${companyMasterKeywordChips(company, 5)}
@@ -3374,7 +3455,7 @@ function companyCheckEntryHtml(entry = {}) {
       </div>
       <div class="company-check-next">
         <span>추천 판단</span>
-        <strong>${escapeHtml(companyCheckRecommendation(company, profile))}</strong>
+        <strong>${escapeHtml(companyCheckRecommendation(company, profile, workflow))}</strong>
       </div>
       ${companyReviewActionsHtml(company, true)}
       ${showCorrectionForm ? companyCorrectionFormHtml(company, true) : ""}
@@ -3387,17 +3468,21 @@ function companyMasterCheckPanel(master = {}) {
     .map((company) => {
       const profile = companyNeedsCorrection(company);
       const type = companyCheckEntryType(company, profile);
-      const priority = companyCheckPriority(company, profile, type);
+      const workflow = companyCheckWorkflow(company, profile, type);
+      const priority = companyCheckPriority(company, profile, type, workflow);
       const include = profile.needed
         || ["contact", "verify", "benchmark"].includes(company.salesTarget?.category)
         || company.identityConfidence?.level === "review"
-        || company.adminReview?.status === "manual_needed";
-      return { company, profile, type, priority, include };
+        || Boolean(company.adminReview?.status)
+        || workflow.key === "recheck";
+      return { company, profile, type, workflow, priority, include };
     })
-    .filter((entry) => entry.include && entry.company.adminReview?.status !== "confirmed" && entry.company.adminReview?.status !== "exclude")
+    .filter((entry) => entry.include)
     .sort((a, b) => {
+      const workflowWeight = { open: 3, recheck: 2, done: 1 };
       const typeWeight = { correction: 5, ota: 4, contact: 3, exclude: 2, benchmark: 1, observe: 0 };
-      return b.priority.score - a.priority.score
+      return (workflowWeight[b.workflow.key] || 0) - (workflowWeight[a.workflow.key] || 0)
+        || b.priority.score - a.priority.score
         || (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
         || b.profile.priority - a.profile.priority
         || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0)
@@ -3405,13 +3490,13 @@ function companyMasterCheckPanel(master = {}) {
     });
   const filters = state.companyMasterFilters || {};
   const selectedFilter = filters.check || "priority";
-  const countForFilter = (value) => entries.filter((entry, index) => companyCheckFilterMatches(entry, value, index)).length;
-  const visibleEntries = entries.filter((entry, index) => companyCheckFilterMatches(entry, selectedFilter, index));
+  const countForFilter = (value) => entries.filter((entry) => companyCheckFilterMatches(entry, value)).length;
+  const visibleEntries = entries.filter((entry) => companyCheckFilterMatches(entry, selectedFilter));
   const metrics = [
-    ["오늘 우선", countForFilter("priority"), "기본 표시"],
-    ["보정 필요", countForFilter("correction"), "수량/상품 구조"],
-    ["OTA 확인", countForFilter("ota"), "플랫폼 보조 확인"],
-    ["컨택 후보", countForFilter("contact"), "영업 검토"]
+    ["오늘 처리", countForFilter("priority"), "미확인 우선"],
+    ["재확인", countForFilter("recheck"), "판단 후 조건변화"],
+    ["보정 필요", countForFilter("correction"), "보정값 입력 전"],
+    ["완료/보류", countForFilter("done"), "기본 큐 제외"]
   ];
   const displayLimit = selectedFilter === "priority" ? 15 : 24;
   const displayedEntries = visibleEntries.slice(0, displayLimit);
