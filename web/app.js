@@ -1315,6 +1315,24 @@ function rateGapText(value) {
   return Number.isFinite(Number(value)) ? formatSignedRate(Number(value)) : "대기";
 }
 
+function compactListText(values = [], emptyText = "없음", limit = 4) {
+  const unique = [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+  if (!unique.length) return emptyText;
+  const shown = unique.slice(0, limit);
+  const suffix = unique.length > shown.length ? ` 외 ${fmtNumber(unique.length - shown.length)}` : "";
+  return `${shown.join(", ")}${suffix}`;
+}
+
+function isReviewBeforeCorrection(review = {}, correction = {}) {
+  const correctionAt = correction?.updatedAt || "";
+  const reviewAt = review?.updatedAt || "";
+  if (!correctionAt) return false;
+  if (!reviewAt) return true;
+  const correctionTime = Date.parse(correctionAt);
+  const reviewTime = Date.parse(reviewAt);
+  return Number.isFinite(correctionTime) && Number.isFinite(reviewTime) && correctionTime > reviewTime;
+}
+
 function inventoryAuditProfile(item = {}) {
   const rows = bookingGraphRows(item);
   const collectedRows = rows.filter((row) => !row.missing && finiteNumber(row.total, 0) > 0);
@@ -1345,6 +1363,13 @@ function inventoryAuditProfile(item = {}) {
   const reasons = [];
   const actions = [];
   const otaSignals = [];
+  const issueChannels = new Set();
+  const problemDates = {
+    missing: rows.filter((row) => row.missing).map((row) => row.label),
+    variance: varianceRows.map((row) => `${row.label} ${fmtNumber(finiteNumber(row.rawTotal, row.total))}개`),
+    gap: []
+  };
+  const gapTypes = [];
   let statusKey = "normal";
   let tone = "good";
   let priority = 0;
@@ -1356,6 +1381,8 @@ function inventoryAuditProfile(item = {}) {
     reasons.push("예약ID 또는 상품 구조 재확인이 필요합니다.");
     actions.push("네이버 객실 탭에서 객실별/종류별 판매 방식을 직접 확인");
     otaSignals.push("상품/객실 구조");
+    issueChannels.add("네이버 객실 탭");
+    issueChannels.add("OTA 보조 채널");
   }
 
   if (flags.has("dynamic_capacity") || (Number.isFinite(totalGapRate) && totalGap >= 2 && totalGapRate >= 0.25)) {
@@ -1367,12 +1394,15 @@ function inventoryAuditProfile(item = {}) {
     reasons.push(`날짜별 총량 변동 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`);
     actions.push("전화예약, 시설점검, 채널 재고조절 가능성으로 우선 해석");
     otaSignals.push("날짜별 총량 변동");
+    issueChannels.add("전화예약/오프라인");
+    issueChannels.add("네이버 날짜별 재고");
   }
 
   if (varianceRows.length) {
     priority += Math.min(30, varianceRows.length * 8);
     reasons.push(`총량 튐 ${fmtNumber(varianceRows.length)}일`);
     otaSignals.push("총량 이상치");
+    issueChannels.add("네이버 날짜별 재고");
   }
 
   if (missingCount) {
@@ -1383,6 +1413,7 @@ function inventoryAuditProfile(item = {}) {
     priority += Math.min(32, missingCount * 6);
     reasons.push(`미수집 날짜 ${fmtNumber(missingCount)}일`);
     actions.push("동일 기간으로 재수집 후 날짜별 상세 비교");
+    issueChannels.add("네이버 재수집");
   }
 
   if (["D", "E"].includes(confidence.grade)) {
@@ -1393,12 +1424,41 @@ function inventoryAuditProfile(item = {}) {
     priority += confidence.grade === "E" ? 30 : 18;
     reasons.push(`수집 신뢰도 ${confidence.grade}`);
     if (confidence.grade === "E") otaSignals.push("수집 신뢰도 낮음");
+    issueChannels.add("네이버 객실 탭");
   }
 
   if (flags.has("dayuse_rotation") || (day.supply && lodging.supply && day.supply >= lodging.supply * 0.6)) {
     priority += 14;
     reasons.push("데이유즈/캠프닉 회전형 상품 병행 가능성");
     actions.push("숙박과 당일상품을 분리해서 판매수·총량 확인");
+  }
+
+  const saturdayRate = flow.saturday.rate;
+  const naverExposed = Number(item.rank || 0) > 0 || platformsForItem(item).some((row) => platformShortName(row.platform) === "네이버");
+  const addGap = (label, metric, dayIndexes) => {
+    if (!naverExposed || !Number.isFinite(saturdayRate) || saturdayRate < 0.55) return;
+    const rate = metric?.rate;
+    const isGap = !Number.isFinite(rate) || rate <= 0.35 || saturdayRate - rate >= 0.35;
+    if (!isGap) return;
+    gapTypes.push(label);
+    const labels = flow.rows
+      .filter((row) => !row.missing && dayIndexes.includes(row.day))
+      .map((row) => row.label);
+    if (labels.length) problemDates.gap.push(`${label} ${labels.join("/")}`);
+  };
+  addGap("금요일", flow.friday, [5]);
+  addGap("일요일", flow.sunday, [0]);
+  addGap(flow.weekday.label || "평일", flow.weekday, [1, 2, 3, 4]);
+  if (gapTypes.length) {
+    if (statusKey === "normal") {
+      statusKey = "sales_gap";
+      tone = "watch";
+    }
+    priority += Math.min(36, 16 + gapTypes.length * 8);
+    reasons.push(`네이버 노출 대비 ${gapTypes.join("/")} 판매 공백`);
+    actions.push(`${gapTypes.join("/")} 가격, 연박, 퇴실 조건 확인`);
+    issueChannels.add("네이버 가격/일자");
+    issueChannels.add("관리자 영업 판단");
   }
 
   if (Number.isFinite(weekdayGap) && Math.abs(weekdayGap) >= 0.25) {
@@ -1408,6 +1468,27 @@ function inventoryAuditProfile(item = {}) {
     }
     priority += 16;
     reasons.push(`누적 평일 대비 ${rateGapText(weekdayGap)}`);
+  }
+
+  const correctionInfo = manualCorrectionInfo(item);
+  const correction = correctionInfo?.correction || {};
+  const review = item.companyProfile?.adminReview || {};
+  const manualRecheckNeeded = Boolean(
+    correctionInfo && (
+      !review.status ||
+      review.status === "manual_needed" ||
+      isReviewBeforeCorrection(review, correction)
+    )
+  );
+  if (manualRecheckNeeded) {
+    if (statusKey === "normal" || statusKey === "confirmed") {
+      statusKey = "manual_recheck";
+      tone = "watch";
+    }
+    priority += 24;
+    reasons.push("수동 보정 후 재검토 필요");
+    actions.push("보정 기준 총량으로 판매율을 다시 확인하고 판단 저장");
+    issueChannels.add("관리자 보정 메모");
   }
 
   if (statusKey === "normal" && confidence.grade === "A" && collectedRows.length >= Math.min(7, bookingDays(state.data?.run || {}))) {
@@ -1422,7 +1503,9 @@ function inventoryAuditProfile(item = {}) {
     normal: "정상",
     quantity_check: "수량확인 필요",
     structure_risk: "상품구조 의심",
-    phone_stock: "전화예약/재고조절 가능성"
+    phone_stock: "전화예약/재고조절 가능성",
+    sales_gap: "판매 공백 확인",
+    manual_recheck: "보정 후 재검토"
   };
   const defaultAction = statusKey === "normal" || statusKey === "confirmed"
     ? "현재 결과를 기준값으로 사용"
@@ -1433,6 +1516,51 @@ function inventoryAuditProfile(item = {}) {
         : "날짜별 상세를 열어 원자료 확인";
   const otaCheckNeeded = !["normal", "confirmed"].includes(statusKey) && otaSignals.length > 0;
   const otaReason = otaCheckNeeded ? `${[...new Set(otaSignals)].join(", ")} 보조 확인` : "";
+  if (otaCheckNeeded) {
+    issueChannels.add("여기어때 수동 보완");
+    issueChannels.add("NOL/야놀자");
+    issueChannels.add("떠나요");
+  }
+  const quantityUnclear = Boolean(
+    ["D", "E"].includes(confidence.grade) ||
+    flags.has("booking_id_reused") ||
+    flags.has("grouped_range") ||
+    ["unknown", "stock_only", "grouped_stock"].includes(structure.type) ||
+    missingCount > 0
+  );
+  const capacityVolatile = Boolean(flags.has("dynamic_capacity") || (Number.isFinite(totalGapRate) && totalGap >= 2 && totalGapRate >= 0.25));
+  const criteria = [
+    otaCheckNeeded ? {
+      key: "ota",
+      label: "OTA 확인 필요",
+      reason: otaReason || "네이버 기준만으로 확정하기 어려움",
+      action: "여기어때는 수동 보완값으로 확인하고, NOL/야놀자/떠나요 노출을 비교"
+    } : null,
+    quantityUnclear ? {
+      key: "quantity",
+      label: "수량 구조 불명확",
+      reason: `수량 신뢰도 ${confidence.grade} · ${structure.label}`,
+      action: structure.action || "객실별/상품별 수량 재확인"
+    } : null,
+    capacityVolatile ? {
+      key: "capacity",
+      label: "날짜별 총량 변동 큼",
+      reason: totalMax ? `총량 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개` : "날짜별 원시 총량 변동",
+      action: "미오픈/차단/온라인 미노출은 오프라인 예약 가능성으로 메모"
+    } : null,
+    gapTypes.length ? {
+      key: "gap",
+      label: "판매 공백 큼",
+      reason: `네이버 노출 대비 ${gapTypes.join("/")} 공백`,
+      action: "금요일/일요일/평일 가격과 연박 조건 확인"
+    } : null,
+    manualRecheckNeeded ? {
+      key: "manual_recheck",
+      label: "수동 보정 후 재검토 필요",
+      reason: correctionInfo?.label || "관리자 보정값 보유",
+      action: "보정값 적용 후 컨택/보류/제외 판단 재저장"
+    } : null
+  ].filter(Boolean);
 
   return {
     statusKey,
@@ -1440,6 +1568,15 @@ function inventoryAuditProfile(item = {}) {
     indexLabel: otaCheckNeeded ? "OTA 확인 필요" : (labelMap[statusKey] || "확인 필요"),
     otaCheckNeeded,
     otaReason,
+    inQueue: criteria.length > 0,
+    criteria,
+    neededChannels: [...issueChannels],
+    problemDates,
+    gapTypes,
+    quantityUnclear,
+    capacityVolatile,
+    manualRecheckNeeded,
+    correctionStatus: correctionInfo ? "관리자 보정" : "자동추정",
     tone,
     priority,
     reasons: [...new Set(reasons)].slice(0, 5),
@@ -1459,9 +1596,12 @@ function inventoryAuditProfile(item = {}) {
 
 function validationQueueEntries(items = [], limit = 8) {
   const entries = items
-    .map((item, index) => ({ item, index, audit: inventoryAuditProfile(item) }))
-    .filter(({ audit }) => audit.statusKey !== "confirmed" && audit.statusKey !== "normal")
-    .sort((a, b) => b.audit.priority - a.audit.priority || Number(a.item.rank || 999) - Number(b.item.rank || 999));
+    .map((item, index) => {
+      const decision = decisionQueueProfile(item);
+      return { item, index, audit: decision.audit, decision };
+    })
+    .filter(({ decision }) => decision.inQueue)
+    .sort((a, b) => b.decision.priority - a.decision.priority || Number(a.item.rank || 999) - Number(b.item.rank || 999));
   return limit ? entries.slice(0, limit) : entries;
 }
 
@@ -1469,35 +1609,75 @@ function auditIndexLabel(audit = {}) {
   return audit.otaCheckNeeded ? "OTA 확인 필요" : (audit.indexLabel || audit.label || "확인 필요");
 }
 
+function auditProblemDateText(audit = {}) {
+  const dates = [
+    ...(audit.problemDates?.variance || []),
+    ...(audit.problemDates?.gap || []),
+    ...(audit.problemDates?.missing || []).map((label) => `${label} 미수집`)
+  ];
+  return compactListText(dates, "문제 날짜 없음", 5);
+}
+
+function decisionQueueProfile(item = {}) {
+  const audit = inventoryAuditProfile(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const structure = inventoryStructureInfo(item);
+  const correction = manualCorrectionInfo(item);
+  const criteria = audit.criteria || [];
+  const reasons = criteria.length
+    ? criteria.map((criterion) => `${criterion.label}: ${criterion.reason}`)
+    : audit.reasons;
+  return {
+    audit,
+    inQueue: Boolean(audit.inQueue),
+    label: criteria[0]?.label || auditIndexLabel(audit),
+    tone: audit.tone,
+    priority: audit.priority,
+    criteria,
+    reasons,
+    actions: criteria.map((criterion) => criterion.action).filter(Boolean).concat(audit.actions || []).slice(0, 4),
+    problemDateText: auditProblemDateText(audit),
+    quantityConfidence: `신뢰도 ${confidence.grade} · ${structure.label}`,
+    gapType: compactListText(audit.gapTypes || [], "공백 특이 없음", 3),
+    channelText: compactListText(audit.neededChannels || [], "네이버 기준", 4),
+    correctionText: correction ? `${correction.label} · ${correction.note}` : "자동추정",
+    adminReviewText: item.companyProfile?.adminReview?.label || companyAdminReviewLabel(item.companyProfile?.adminReview?.status),
+    summary: reasons[0] || audit.actions?.[0] || "확인 필요"
+  };
+}
+
 function renderValidationQueue(items = []) {
   const entries = validationQueueEntries(items, 6);
-  const allEntries = items.map((item) => inventoryAuditProfile(item));
-  const counts = allEntries.reduce((acc, audit) => {
-    acc[audit.statusKey] = (acc[audit.statusKey] || 0) + 1;
-    if (audit.otaCheckNeeded) acc.otaCheckNeeded = (acc.otaCheckNeeded || 0) + 1;
-    if (audit.statusKey === "quantity_check" && !audit.otaCheckNeeded) acc.sourceCheck = (acc.sourceCheck || 0) + 1;
+  const allProfiles = items.map((item) => decisionQueueProfile(item));
+  const queueCount = allProfiles.filter((profile) => profile.inQueue).length;
+  const counts = allProfiles.reduce((acc, profile) => {
+    for (const criterion of profile.criteria || []) {
+      acc[criterion.key] = (acc[criterion.key] || 0) + 1;
+    }
+    if (!profile.inQueue) acc.clean = (acc.clean || 0) + 1;
     return acc;
   }, {});
   const chips = [
-    ["OTA 확인 필요", counts.otaCheckNeeded || 0, "bad"],
-    ["원자료 재확인", counts.sourceCheck || 0, "watch"],
-    ["오프라인예약 가능성", counts.phone_stock || 0, "watch"],
-    ["정상/확정", (counts.normal || 0) + (counts.confirmed || 0), "good"]
+    ["OTA 확인 필요", counts.ota || 0, "bad"],
+    ["수량 구조 불명확", counts.quantity || 0, "watch"],
+    ["총량 변동 큼", counts.capacity || 0, "watch"],
+    ["판매 공백 큼", counts.gap || 0, "watch"],
+    ["정상/확정", counts.clean || 0, "good"]
   ];
   return `
     <div class="validation-card validation-card-audit">
       <div class="validation-card-head compact">
         <div>
-          <span class="eyebrow">확인 필요</span>
-          <h3>네이버 기준 해석 보조 확인</h3>
+          <span class="eyebrow">관리자 판단 큐 V2</span>
+          <h3>사람이 확인해야 할 업체</h3>
         </div>
-        <span>${fmtNumber(counts.otaCheckNeeded || 0)} OTA색인</span>
+        <span>${fmtNumber(queueCount)} 큐 진입</span>
       </div>
       <div class="audit-status-strip">
         ${chips.map(([label, count, tone]) => `<span class="${tone}">${escapeHtml(label)} <b>${fmtNumber(count)}</b></span>`).join("")}
       </div>
       <div class="audit-queue-list">
-        ${entries.length ? entries.map(({ item, index, audit }) => {
+        ${entries.length ? entries.map(({ item, index, audit, decision }) => {
           const metric = audit.metrics.totalMax
             ? `총량 ${fmtNumber(audit.metrics.totalMin)}~${fmtNumber(audit.metrics.totalMax)}개`
             : `${fmtNumber(audit.metrics.collectedDays)}일 관측`;
@@ -1505,8 +1685,8 @@ function renderValidationQueue(items = []) {
             <button type="button" data-open-company="${index}">
               <span class="audit-rank">${escapeHtml(item.rank || index + 1)}</span>
               <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
-              <em class="${escapeHtml(audit.otaCheckNeeded ? "bad" : audit.tone)}">${escapeHtml(auditIndexLabel(audit))}</em>
-              <small>${escapeHtml([metric, audit.reasons[0]].filter(Boolean).join(" · "))}</small>
+              <em class="${escapeHtml(decision.tone)}">${escapeHtml(decision.label)}</em>
+              <small>${escapeHtml([metric, decision.problemDateText, decision.summary].filter(Boolean).join(" · "))}</small>
             </button>
           `;
         }).join("") : `<p>현재 우선 검증할 이상치가 없습니다.</p>`}
@@ -1519,20 +1699,26 @@ function validationReasonRow(item = {}) {
   const analysis = targetExpansionAnalysis(item);
   const confidence = inventoryConfidenceInfo(item);
   const structure = inventoryStructureInfo(item);
-  const audit = inventoryAuditProfile(item);
-  const reasons = [
-    `${auditIndexLabel(audit)}: ${audit.actions[0] || "확인"}`,
-    ...audit.reasons,
-    `구조: ${structure.label}`,
-    `확인: ${structure.action}`,
-    ...confidence.alerts.map((reason) => `검증: ${reason}`),
-    ...structure.notes,
-    ...analysis.reasons
-  ].filter(Boolean).slice(0, 4);
-  if (!reasons.length) return "";
+  const decision = decisionQueueProfile(item);
+  const reasons = decision.inQueue
+    ? [
+        `판단 큐: ${decision.label}`,
+        `문제 날짜: ${decision.problemDateText}`,
+        `수량: ${decision.quantityConfidence}`,
+        `채널: ${decision.channelText}`
+      ]
+    : [
+        `구조: ${structure.label}`,
+        `확인: ${structure.action}`,
+        ...confidence.alerts.map((reason) => `검증: ${reason}`),
+        ...structure.notes,
+        ...analysis.reasons
+      ];
+  const visibleReasons = reasons.filter(Boolean).slice(0, 4);
+  if (!visibleReasons.length) return "";
   return `
     <div class="reason-chip-row" aria-label="판단 근거">
-      ${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+      ${visibleReasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
     </div>
   `;
 }
@@ -1594,7 +1780,7 @@ function renderValidationBoard(items = []) {
       </div>
       <div class="validation-card validation-card-target">
         <div class="validation-card-head compact">
-          <h3>우선 확인</h3>
+          <h3>바로 컨택 후보</h3>
           <span>${fmtNumber(targets.length)} 후보</span>
         </div>
         <div class="validation-target-list">
@@ -1605,7 +1791,7 @@ function renderValidationBoard(items = []) {
             </button>
           `).join("") : `<p>현재 기준 우선 후보가 없습니다.</p>`}
         </div>
-        <small>${missingItems ? `${fmtNumber(missingItems)}개 업체는 일부 날짜 미수집` : "입력 기간 날짜별 수집 정상"}</small>
+        <small>${missingItems ? `${fmtNumber(missingItems)}개 업체는 일부 날짜 미수집으로 판단 큐 확인` : "판단 큐를 제외한 즉시 후보"}</small>
       </div>
       ${renderValidationQueue(items)}
     </section>
@@ -1717,10 +1903,11 @@ function targetReasons(item) {
   return targetExpansionAnalysis(item).reasons;
 }
 
-function targetEntries(limit = 15) {
+function targetEntries(limit = 15, options = {}) {
+  const includeDecisionQueue = Boolean(options.includeDecisionQueue);
   const entries = (state.data?.availability?.items || [])
-    .map((item) => ({ item, ...targetExpansionAnalysis(item) }))
-    .filter((entry) => entry.score >= 42 && entry.reasons.length)
+    .map((item) => ({ item, decision: decisionQueueProfile(item), ...targetExpansionAnalysis(item) }))
+    .filter((entry) => entry.score >= 42 && entry.reasons.length && (includeDecisionQueue || !entry.decision.inQueue))
     .sort((a, b) => b.score - a.score || Number(a.item.rank || 999) - Number(b.item.rank || 999));
   return limit ? entries.slice(0, limit) : entries;
 }
@@ -1803,9 +1990,10 @@ function companySalesBoardEntries() {
       const stage = companySalesStage(company);
       const action = companySalesAction(company);
       const item = companyItemFromCurrentRun(company);
-      return { company, stage, action, item };
+      const decision = companyDecisionQueueProfile(company);
+      return { company, stage, action, item, decision };
     })
-    .filter((entry) => entry.stage.key !== "exclude" && ["confirmed", "contact", "manual", "verify", "hold"].includes(entry.stage.key))
+    .filter((entry) => ["confirmed", "contact"].includes(entry.stage.key) && !entry.decision.inQueue)
     .sort((a, b) => a.stage.priority - b.stage.priority || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
 }
 
@@ -2968,10 +3156,10 @@ function historyOpsAuditLog() {
   }
   return `
     <div class="history-ops-log">
-      ${entries.map(({ item, index, audit }) => `
-        <button class="${escapeHtml(audit.tone)}" type="button" data-open-company="${index}">
+      ${entries.map(({ item, index, decision }) => `
+        <button class="${escapeHtml(decision.tone)}" type="button" data-open-company="${index}">
           <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
-          <span>${escapeHtml(auditIndexLabel(audit))} · ${escapeHtml(audit.reasons[0] || audit.actions[0] || "확인 필요")}</span>
+          <span>${escapeHtml(decision.label)} · ${escapeHtml(decision.summary || "확인 필요")}</span>
         </button>
       `).join("")}
     </div>
@@ -3411,6 +3599,98 @@ function companyReviewActionsHtml(company = {}, compact = false) {
   `;
 }
 
+function companyDecisionQueueProfile(company = {}) {
+  const latest = company.inventory?.latest || {};
+  const signals = company.salesTarget?.signals || {};
+  const salesSignal = latest.salesSignal || {};
+  const structureFlags = new Set([
+    ...(Array.isArray(latest.structureFlags) ? latest.structureFlags : []),
+    ...(Array.isArray(salesSignal.structureFlags) ? salesSignal.structureFlags : [])
+  ]);
+  const confidenceGrade = String(latest.confidenceGrade || "").toUpperCase() || "C";
+  const structureLabel = latest.structureLabel || "구조 대기";
+  const review = company.adminReview || {};
+  const hasManualCorrection = manualCorrectionHasValue(company.manualCorrection);
+  const manualNeedsReview = Boolean(
+    review.status === "manual_needed" ||
+    (hasManualCorrection && (!review.status || isReviewBeforeCorrection(review, company.manualCorrection || {})))
+  );
+  const staleAfterReview = Boolean(
+    review.status &&
+    latest.collectedAt &&
+    review.updatedAt &&
+    isAfterDate(latest.collectedAt, review.updatedAt)
+  );
+  const gapLabels = [
+    signals.fridayWeak ? `금요일 ${fmtRate(signals.fridayRate)}` : "",
+    signals.sundayWeak ? `일요일 ${fmtRate(signals.sundayRate)}` : "",
+    signals.weekdayWeak ? `평일 ${fmtRate(signals.weekdayRate)}` : ""
+  ].filter(Boolean);
+  const criteria = [
+    (signals.otaReviewNeeded || structureFlags.has("booking_id_reused") || structureFlags.has("dynamic_capacity")) ? {
+      key: "ota",
+      label: "OTA 확인 필요",
+      reason: "네이버 기준만으로 컨택 여부를 확정하기 어려움",
+      action: "여기어때 수동 보완, NOL/야놀자, 떠나요 노출과 가격 비교"
+    } : null,
+    (signals.structureWeak || ["C", "D", "E"].includes(confidenceGrade) || structureFlags.has("grouped_range") || structureFlags.has("booking_id_reused")) ? {
+      key: "quantity",
+      label: "수량 구조 불명확",
+      reason: `수량 신뢰도 ${confidenceGrade} · ${structureLabel}`,
+      action: "네이버 객실 탭에서 객실/상품 단위와 실제 총량 확인"
+    } : null,
+    (signals.stockVariance || structureFlags.has("dynamic_capacity")) ? {
+      key: "capacity",
+      label: "날짜별 총량 변동 큼",
+      reason: "날짜별 판매 가능 총량이 흔들림",
+      action: "미오픈/차단/온라인 미노출은 오프라인 예약 가능성으로 메모"
+    } : null,
+    gapLabels.length ? {
+      key: "gap",
+      label: "판매 공백 큼",
+      reason: `네이버 노출 대비 ${gapLabels.join(" · ")} 공백`,
+      action: "금요일/일요일/평일 가격, 연박, 퇴실 조건 확인"
+    } : null,
+    manualNeedsReview ? {
+      key: "manual_recheck",
+      label: "수동 보정 후 재검토 필요",
+      reason: hasManualCorrection ? (company.correctionStatus?.detail || "관리자 보정값 보유") : "관리자가 보정 필요로 지정",
+      action: "보정값 적용 후 컨택/보류/제외 판단 재저장"
+    } : null
+  ].filter(Boolean);
+  if (staleAfterReview && criteria.length) {
+    criteria.unshift({
+      key: "recheck",
+      label: "관리자 판단 후 재확인",
+      reason: "이전 판단 이후 새 수집 신호가 들어옴",
+      action: "변경된 신호만 확인하고 판단을 다시 저장"
+    });
+  }
+  const closed = ["confirmed", "hold", "exclude"].includes(review.status || "");
+  const inQueue = criteria.length > 0 && (!closed || staleAfterReview || manualNeedsReview);
+  const channels = [];
+  if (criteria.some((criterion) => criterion.key === "ota")) channels.push("여기어때 수동", "NOL/야놀자", "떠나요");
+  if (criteria.some((criterion) => criterion.key === "quantity")) channels.push("네이버 객실 탭");
+  if (criteria.some((criterion) => criterion.key === "capacity")) channels.push("전화예약/오프라인");
+  if (criteria.some((criterion) => criterion.key === "gap")) channels.push("네이버 가격/일자");
+  if (criteria.some((criterion) => criterion.key === "manual_recheck")) channels.push("관리자 보정 메모");
+  return {
+    inQueue,
+    criteria,
+    priority: criteria.length * 18 + (staleAfterReview ? 28 : 0) + Number(company.salesTarget?.score || 0) / 5,
+    label: criteria[0]?.label || "판단 대기",
+    reasons: criteria.map((criterion) => `${criterion.label}: ${criterion.reason}`),
+    actions: criteria.map((criterion) => criterion.action).filter(Boolean),
+    problemDateText: compactListText([salesSignal.checkIn, ...gapLabels].filter(Boolean), "최근 수집일 기준", 4),
+    quantityConfidence: `신뢰도 ${confidenceGrade} · ${structureLabel}`,
+    gapType: compactListText(gapLabels, "공백 특이 없음", 3),
+    channelText: compactListText(channels, "네이버 기준", 4),
+    correctionText: hasManualCorrection ? (company.correctionStatus?.detail || "관리자 보정") : "자동추정",
+    adminReviewText: review.label || companyAdminReviewLabel(review.status),
+    tone: criteria.some((criterion) => ["ota", "quantity", "capacity"].includes(criterion.key)) ? "watch" : "good"
+  };
+}
+
 function companyNeedsCorrection(company = {}) {
   const signals = company.salesTarget?.signals || {};
   const tags = company.salesTarget?.priorityTags || [];
@@ -3418,6 +3698,7 @@ function companyNeedsCorrection(company = {}) {
   const latest = company.inventory?.latest || {};
   const hasManualCorrection = manualCorrectionHasValue(company.manualCorrection);
   const hasText = (text) => tags.some((tag) => String(tag).includes(text)) || reasons.some((reason) => String(reason).includes(text));
+  const decision = companyDecisionQueueProfile(company);
   const issues = [];
   if (signals.structureWeak || hasText("수량구조") || ["C", "D", "E"].includes(String(latest.confidenceGrade || "").toUpperCase())) {
     issues.push({ key: "structure", label: "수량구조", task: "객실별/종류별 판매 방식과 실제 총 객실수 확인" });
@@ -3434,14 +3715,21 @@ function companyNeedsCorrection(company = {}) {
   if (signals.otaReviewNeeded || hasText("OTA")) {
     issues.push({ key: "ota", label: "OTA", task: "NOL/떠나요/여기어때 노출과 가격 보조 확인" });
   }
+  if ((signals.fridayWeak || signals.sundayWeak || signals.weekdayWeak) && !issues.some((issue) => issue.key === "gap")) {
+    issues.push({ key: "gap", label: "판매 공백", task: "금요일/일요일/평일 공백을 확인한 뒤 컨택 여부 판단" });
+  }
+  if (decision.criteria.some((criterion) => criterion.key === "manual_recheck") && !issues.some((issue) => issue.key === "manual")) {
+    issues.unshift({ key: "manual", label: "보정 후 재검토", task: "수동 보정값 적용 후 판단을 다시 저장" });
+  }
   if (company.adminReview?.status === "manual_needed" && !issues.some((issue) => issue.key === "manual")) {
     issues.unshift({ key: "manual", label: "관리자 보정", task: "관리자가 보정 필요로 지정한 업체" });
   }
   return {
-    needed: company.adminReview?.status === "manual_needed" || issues.length > 0,
+    needed: decision.inQueue || company.adminReview?.status === "manual_needed" || issues.length > 0,
     issues,
     applied: hasManualCorrection,
-    priority: (company.adminReview?.status === "manual_needed" ? 40 : 0) + issues.length * 12 + (hasManualCorrection ? -18 : 0) + Number(company.salesTarget?.score || 0) / 10
+    decision,
+    priority: decision.priority + (company.adminReview?.status === "manual_needed" ? 40 : 0) + issues.length * 12 + (hasManualCorrection ? -18 : 0) + Number(company.salesTarget?.score || 0) / 10
   };
 }
 
@@ -3451,21 +3739,24 @@ function companyCheckEntryType(company = {}, profile = {}) {
     return { key: "correction", label: "보정 필요" };
   }
   if (issues.some((issue) => issue.key === "ota")) return { key: "ota", label: "OTA 확인" };
+  if (issues.some((issue) => issue.key === "gap")) return { key: "gap", label: "판매 공백" };
   if (company.salesTarget?.category === "contact") return { key: "contact", label: "컨택 후보" };
   if (company.salesTarget?.category === "benchmark") return { key: "benchmark", label: "벤치마크" };
   if (company.salesTarget?.category === "exclude" || company.identityConfidence?.level === "review") return { key: "exclude", label: "제외 검토" };
   return { key: "observe", label: "관찰" };
 }
 
-function companyCheckReasons(company = {}, profile = {}, workflow = {}) {
+function companyCheckReasons(company = {}, profile = {}, workflow = {}, decision = {}) {
   const issueReasons = (profile.issues || []).map((issue) => `${issue.label}: ${issue.task}`);
   const workflowReasons = workflow.key === "recheck" ? (workflow.reasons || []).map((reason) => `재확인: ${reason}`) : [];
+  const decisionReasons = decision.inQueue ? decision.reasons || [] : [];
   const targetReasons = company.salesTarget?.reasons || [];
   const fallback = company.salesTarget?.recommendation || company.identityConfidence?.reason || "추가 확인 후 판단";
-  return [...new Set([...workflowReasons, ...issueReasons, ...targetReasons, fallback].filter(Boolean))].slice(0, 4);
+  return [...new Set([...workflowReasons, ...decisionReasons, ...issueReasons, ...targetReasons, fallback].filter(Boolean))].slice(0, 4);
 }
 
-function companyCheckRecommendation(company = {}, profile = {}, workflow = {}) {
+function companyCheckRecommendation(company = {}, profile = {}, workflow = {}, decision = {}) {
+  if (workflow.key === "recheck" && workflow.label === "보정 후 재검토") return "보정값 기준 판매율과 실제 총량을 확인한 뒤 컨택/보류/제외 판단을 다시 저장하세요.";
   if (workflow.key === "recheck") return "기존 관리자 판단 이후 조건이 바뀌었습니다. 변경 사유만 확인하고 판단을 다시 저장하세요.";
   if (workflow.key === "done") return "이미 처리된 업체입니다. 새 신호가 생기면 재확인 큐로 자동 이동합니다.";
   const issues = profile.issues || [];
@@ -3473,6 +3764,7 @@ function companyCheckRecommendation(company = {}, profile = {}, workflow = {}) {
     return profile.applied ? "보정값이 적용되어 있습니다. 실제 총량과 맞는지 확인 후 확정하세요." : "수량 구조를 확인하고 필요하면 관리자 보정값을 입력하세요.";
   }
   if (issues.some((issue) => issue.key === "ota")) return "OTA 노출과 가격을 확인한 뒤 컨택/보류를 결정하세요.";
+  if ((decision.criteria || []).some((criterion) => criterion.key === "gap") || issues.some((issue) => issue.key === "gap")) return "판매 공백 날짜의 가격/연박 조건을 확인한 뒤 바로 컨택할지 보류할지 정하세요.";
   if (company.salesTarget?.category === "contact") return "노출은 있으나 개선 여지가 있는 업체입니다. 컨택 후보로 검토하세요.";
   if (company.salesTarget?.category === "benchmark") return "광역과 로컬에서 강한 업체입니다. 벤치마크로 관찰하세요.";
   if (company.salesTarget?.category === "exclude" || company.identityConfidence?.level === "review") return "글램핑 적합성 또는 업체 동일성을 확인한 뒤 제외 여부를 정하세요.";
@@ -3497,7 +3789,7 @@ function companyReviewRecheckProfile(company = {}, profile = {}) {
   const reasons = [];
 
   if (review.status === "manual_needed" && profile.applied) {
-    return { needed: false, reasons: ["관리자 보정값이 적용되어 완료/보류로 이동"] };
+    return { needed: true, reasons: ["관리자 보정값이 적용되어 컨택 여부 재판단 필요"] };
   }
 
   if (!reviewAt) return { needed: false, reasons: [] };
@@ -3534,11 +3826,11 @@ function companyReviewRecheckProfile(company = {}, profile = {}) {
 function companyCheckWorkflow(company = {}, profile = {}, type = {}) {
   const review = company.adminReview || null;
   const recheck = companyReviewRecheckProfile(company, profile);
+  if (review?.status === "manual_needed" && profile.applied) {
+    return { key: "recheck", label: "보정 후 재검토", tone: "recheck", reasons: ["보정값이 입력되어 판단을 다시 저장해야 함"] };
+  }
   if (recheck.needed) {
     return { key: "recheck", label: "재확인", tone: "recheck", reasons: recheck.reasons };
-  }
-  if (review?.status === "manual_needed" && profile.applied) {
-    return { key: "done", label: "보정값 적용", tone: "done", reasons: ["보정값이 입력되어 기본 처리 큐에서 제외"] };
   }
   if (review?.status === "confirmed") {
     return { key: "done", label: "확인 완료", tone: "done", reasons: ["관리자가 판단 맞음으로 확정"] };
@@ -3601,7 +3893,7 @@ function companyCheckFilterOptions() {
     ["all", "전체"],
     ["correction", "보정 필요"],
     ["ota", "OTA 확인"],
-    ["contact", "컨택 후보"],
+    ["gap", "판매 공백"],
     ["done", "완료/보류"]
   ];
 }
@@ -3612,13 +3904,34 @@ function companyCheckFilterMatches(entry = {}, filter = "priority") {
   if (filter === "recheck") return entry.workflow.key === "recheck";
   if (filter === "done") return entry.workflow.key === "done";
   if (filter === "ota") return entry.workflow.key !== "done" && (entry.type.key === "ota" || (entry.profile.issues || []).some((issue) => issue.key === "ota"));
+  if (filter === "gap") return entry.workflow.key !== "done" && (entry.type.key === "gap" || (entry.profile.issues || []).some((issue) => issue.key === "gap"));
   return entry.workflow.key !== "done" && entry.type.key === filter;
 }
 
+function companyDecisionEvidenceHtml(decision = {}) {
+  const cells = [
+    ["문제 날짜", decision.problemDateText || "최근 수집일 기준"],
+    ["수량 신뢰도", decision.quantityConfidence || "대기"],
+    ["공백 유형", decision.gapType || "공백 특이 없음"],
+    ["확인 채널", decision.channelText || "네이버 기준"],
+    ["보정 상태", decision.correctionText || "자동추정"]
+  ];
+  return `
+    <div class="company-decision-evidence">
+      ${cells.map(([label, value]) => `
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function companyCheckEntryHtml(entry = {}) {
-  const { company, profile, type, priority, workflow } = entry;
+  const { company, profile, type, priority, workflow, decision } = entry;
   const latest = company.inventory?.latest || {};
-  const reasons = companyCheckReasons(company, profile, workflow);
+  const reasons = companyCheckReasons(company, profile, workflow, decision);
   const showCorrectionForm = (profile.issues || []).some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key));
   return `
     <article class="company-check-card ${escapeHtml(type.key)} ${escapeHtml(workflow.key)}">
@@ -3643,6 +3956,7 @@ function companyCheckEntryHtml(entry = {}) {
         <mark>${escapeHtml(workflow.label)}</mark>
         ${(profile.issues || []).slice(0, 4).map((issue) => `<mark>${escapeHtml(issue.label)}</mark>`).join("")}
       </div>
+      ${companyDecisionEvidenceHtml(decision)}
       ${companyMasterKeywordChips(company, 5)}
       <div class="company-check-reason">
         <strong>왜 확인해야 하나?</strong>
@@ -3652,7 +3966,7 @@ function companyCheckEntryHtml(entry = {}) {
       </div>
       <div class="company-check-next">
         <span>추천 판단</span>
-        <strong>${escapeHtml(companyCheckRecommendation(company, profile, workflow))}</strong>
+        <strong>${escapeHtml(companyCheckRecommendation(company, profile, workflow, decision))}</strong>
       </div>
       ${companyReviewActionsHtml(company, true)}
       ${showCorrectionForm ? companyCorrectionFormHtml(company, true) : ""}
@@ -3663,21 +3977,20 @@ function companyCheckEntryHtml(entry = {}) {
 function companyMasterCheckPanel(master = {}) {
   const entries = (master.companies || [])
     .map((company) => {
+      const decision = companyDecisionQueueProfile(company);
       const profile = companyNeedsCorrection(company);
       const type = companyCheckEntryType(company, profile);
       const workflow = companyCheckWorkflow(company, profile, type);
       const priority = companyCheckPriority(company, profile, type, workflow);
-      const include = profile.needed
-        || ["contact", "verify", "benchmark"].includes(company.salesTarget?.category)
-        || company.identityConfidence?.level === "review"
+      const include = decision.inQueue
         || Boolean(company.adminReview?.status)
         || workflow.key === "recheck";
-      return { company, profile, type, workflow, priority, include };
+      return { company, profile, type, workflow, priority, decision, include };
     })
     .filter((entry) => entry.include)
     .sort((a, b) => {
       const workflowWeight = { open: 3, recheck: 2, done: 1 };
-      const typeWeight = { correction: 5, ota: 4, contact: 3, exclude: 2, benchmark: 1, observe: 0 };
+      const typeWeight = { correction: 5, ota: 4, gap: 3, exclude: 2, benchmark: 1, observe: 0 };
       return (workflowWeight[b.workflow.key] || 0) - (workflowWeight[a.workflow.key] || 0)
         || b.priority.score - a.priority.score
         || (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
@@ -3689,11 +4002,13 @@ function companyMasterCheckPanel(master = {}) {
   const selectedFilter = filters.check || "priority";
   const countForFilter = (value) => entries.filter((entry) => companyCheckFilterMatches(entry, value)).length;
   const visibleEntries = entries.filter((entry) => companyCheckFilterMatches(entry, selectedFilter));
+  const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
+  const criterionCount = (key) => openEntries.filter((entry) => (entry.decision.criteria || []).some((criterion) => criterion.key === key)).length;
   const metrics = [
-    ["오늘 처리", countForFilter("priority"), "미확인 우선"],
-    ["재확인", countForFilter("recheck"), "판단 후 조건변화"],
-    ["보정 필요", countForFilter("correction"), "보정값 입력 전"],
-    ["완료/보류", countForFilter("done"), "기본 큐 제외"]
+    ["판단 큐", openEntries.length, "사람 확인 필요"],
+    ["OTA 확인", criterionCount("ota"), "보조 채널 확인"],
+    ["수량/총량", criterionCount("quantity") + criterionCount("capacity"), "구조·변동 확인"],
+    ["재검토", criterionCount("manual_recheck") + countForFilter("recheck"), "보정/새 신호"]
   ];
   const displayLimit = selectedFilter === "priority" ? 15 : 24;
   const displayedEntries = visibleEntries.slice(0, displayLimit);
@@ -3702,8 +4017,8 @@ function companyMasterCheckPanel(master = {}) {
     <section class="company-check-panel">
       <div class="company-check-head">
         <div>
-          <strong>확인할 업체</strong>
-          <small>자동 분석만으로 확정하지 않고 사람이 마지막으로 확인해야 하는 업체입니다.</small>
+          <strong>관리자 판단 큐 V2</strong>
+          <small>OTA, 수량 구조, 날짜별 총량 변동, 판매 공백, 보정 후 재검토 기준으로 컨택 전 확인할 업체입니다.</small>
         </div>
         <span>${fmtNumber(displayedEntries.length)}/${fmtNumber(visibleEntries.length)}개 표시 · 전체 ${fmtNumber(entries.length)}</span>
       </div>
@@ -3762,16 +4077,22 @@ function companyCorrectionFormHtml(company = {}, compact = false) {
 
 function companyMasterSalesTargetsPanel(master = {}) {
   const targets = master.salesTargets || {};
-  const topTargets = targets.topTargets || [];
+  const companies = master.companies || [];
+  const topTargets = companies
+    .filter((company) => company.salesTarget?.category === "contact" && !companyDecisionQueueProfile(company).inQueue)
+    .sort((a, b) => (b.salesTarget?.score || 0) - (a.salesTarget?.score || 0) || (a.bestRank || 9999) - (b.bestRank || 9999));
+  const confirmedTargets = companies.filter((company) => company.adminReview?.status === "confirmed" && !companyDecisionQueueProfile(company).inQueue);
+  const queueCount = companies.filter((company) => companyDecisionQueueProfile(company).inQueue).length;
   return `
     <div class="company-sales-panel">
       <div class="company-sales-metrics">
-        <article><span>컨택 후보</span><strong>${fmtNumber(targets.contactCandidateCount || 0)}</strong><small>로컬 전용 중심</small></article>
-        <article><span>검증 후보</span><strong>${fmtNumber(targets.verificationQueueCount || 0)}</strong><small>로컬 매칭 필요</small></article>
+        <article><span>바로 컨택</span><strong>${fmtNumber(topTargets.length)}</strong><small>판단 큐 제외</small></article>
+        <article><span>확정 타깃</span><strong>${fmtNumber(confirmedTargets.length)}</strong><small>관리자 판단 맞음</small></article>
         <article><span>벤치마크</span><strong>${fmtNumber(targets.benchmarkCount || 0)}</strong><small>광역+로컬 강자</small></article>
+        <article><span>판단 큐</span><strong>${fmtNumber(queueCount)}</strong><small>컨택 전 확인</small></article>
       </div>
       <div class="company-sales-list">
-        <strong>우선 컨택 후보</strong>
+        <strong>바로 컨택 후보</strong>
         ${topTargets.length ? topTargets.slice(0, 6).map((company) => `
           <article>
             <div>
@@ -3782,7 +4103,7 @@ function companyMasterSalesTargetsPanel(master = {}) {
             ${companySalesTargetTagHtml(company, 5)}
             <p>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 3).join(" · ") || company.salesTarget?.recommendation || "추가 확인 필요")}</p>
           </article>
-        `).join("") : `<p>현재 기준 우선 컨택 후보가 없습니다. 로컬 키워드 수집이 늘어나면 자동으로 채워집니다.</p>`}
+        `).join("") : `<p>현재 기준 바로 컨택 후보가 없습니다. 판단 큐 항목은 아래에서 먼저 확인하세요.</p>`}
       </div>
     </div>
   `;
@@ -4209,14 +4530,15 @@ function renderTargets() {
   const currentItems = targetEntries(12);
   const confirmed = boardEntries.filter((entry) => entry.stage.key === "confirmed");
   const contact = boardEntries.filter((entry) => entry.stage.key === "contact");
-  const manual = boardEntries.filter((entry) => entry.stage.key === "manual" || entry.stage.key === "verify");
-  const hold = boardEntries.filter((entry) => entry.stage.key === "hold");
+  const masterQueueCount = (companyMasterSource().companies || []).filter((company) => companyDecisionQueueProfile(company).inQueue).length;
+  const currentQueueCount = validationQueueEntries(state.data?.availability?.items || [], 0).length;
+  const decisionQueueCount = masterQueueCount || currentQueueCount;
   const actionableCount = confirmed.length + contact.length;
   const currentOnly = currentItems.filter(({ item }) => !boardEntries.some((entry) => entry.item === item)).slice(0, 6);
 
   els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
   if (!boardEntries.length && !currentItems.length) {
-    els.targetList.innerHTML = `<div class="empty">현재 기준 영업 후보가 없습니다.</div>`;
+    els.targetList.innerHTML = `<div class="empty">현재 기준 바로 컨택 가능한 영업 후보가 없습니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 관리 탭에서 먼저 확인하세요.</div>`;
     return;
   }
 
@@ -4269,15 +4591,14 @@ function renderTargets() {
 
   els.targetList.innerHTML = `
     <section class="target-board-hero">
-      <article><span>오늘 컨택</span><strong>${fmtNumber(actionableCount)}</strong><small>확정+컨택 후보</small></article>
+      <article><span>오늘 컨택</span><strong>${fmtNumber(actionableCount)}</strong><small>큐 제외 즉시 후보</small></article>
       <article><span>검증 완료</span><strong>${fmtNumber(confirmed.length)}</strong><small>판단 맞음</small></article>
-      <article><span>보정 필요</span><strong>${fmtNumber(manual.length)}</strong><small>수량/채널 확인</small></article>
-      <article><span>보류</span><strong>${fmtNumber(hold.length)}</strong><small>추가 관찰</small></article>
+      <article><span>현재 결과</span><strong>${fmtNumber(currentOnly.length)}</strong><small>마스터 반영 전</small></article>
+      <article><span>판단 큐</span><strong>${fmtNumber(decisionQueueCount)}</strong><small>관리 탭에서 확인</small></article>
     </section>
     <section class="target-board">
       ${lane("확정 타깃", "관리자가 판단 맞음으로 확정한 업체", confirmed, "아직 확정 타깃이 없습니다. 관리 탭에서 후보를 검증하세요.")}
-      ${lane("컨택 후보", "광역 진입 또는 판매 개선 여지가 큰 업체", contact, "현재 컨택 후보가 없습니다.")}
-      ${lane("보정/검증 필요", "수량 구조나 OTA 확인 후 제안해야 하는 업체", manual, "보정 또는 검증 필요 업체가 없습니다.")}
+      ${lane("컨택 후보", "판단 큐에 걸리지 않은 바로 컨택 가능한 업체", contact, "현재 바로 컨택 가능한 후보가 없습니다.")}
     </section>
     ${currentOnly.length ? `
       <section class="target-current-run">
@@ -5440,18 +5761,20 @@ function dateRow(row) {
 }
 
 function sheetAuditPanel(item = {}) {
-  const audit = inventoryAuditProfile(item);
+  const decision = decisionQueueProfile(item);
+  const audit = decision.audit;
   const metrics = [
-    ["확인색인", auditIndexLabel(audit), audit.otaReason || audit.actions[0] || "확인"],
-    ["총량변동", audit.metrics.totalMax ? `${fmtNumber(audit.metrics.totalMin)}~${fmtNumber(audit.metrics.totalMax)}개` : "대기", audit.metrics.totalGap ? `차이 ${fmtNumber(audit.metrics.totalGap)}개` : "변동 없음"],
-    ["미수집", `${fmtNumber(audit.metrics.missingCount)}일`, "입력기간 기준"],
-    ["누적편차", rateGapText(audit.metrics.weekdayGap), "현재 평일-누적 평일"]
+    ["문제 날짜", decision.problemDateText, audit.metrics.missingCount ? `미수집 ${fmtNumber(audit.metrics.missingCount)}일` : "날짜별 기준"],
+    ["수량 신뢰도", decision.quantityConfidence, audit.criteria?.find((criterion) => criterion.key === "quantity")?.reason || "자동 수량 판단"],
+    ["공백 유형", decision.gapType, audit.criteria?.find((criterion) => criterion.key === "gap")?.reason || "요일별 공백"],
+    ["확인 채널", decision.channelText, audit.otaReason || "필요 채널"],
+    ["보정 상태", decision.correctionText, decision.adminReviewText || "관리자 판단 대기"]
   ];
   return `
     <section class="sheet-section sheet-audit-section ${escapeHtml(audit.tone)}">
       <div class="sheet-structure-title">
-        <h3>확인 필요 판단</h3>
-        <span class="structure-badge ${escapeHtml(audit.otaCheckNeeded ? "ota-check" : audit.tone)}">${escapeHtml(auditIndexLabel(audit))}</span>
+        <h3>관리자 판단 큐 V2</h3>
+        <span class="structure-badge ${escapeHtml(audit.otaCheckNeeded ? "ota-check" : audit.tone)}">${escapeHtml(decision.inQueue ? decision.label : "바로 판단 가능")}</span>
       </div>
       <div class="sheet-audit-grid">
         ${metrics.map(([label, value, note]) => `
@@ -5463,7 +5786,7 @@ function sheetAuditPanel(item = {}) {
         `).join("")}
       </div>
       <div class="sheet-audit-reasons">
-        ${(audit.reasons.length ? audit.reasons : ["현재 기준 특이 신호가 없습니다."]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+        ${(decision.reasons.length ? decision.reasons : ["현재 기준 특이 신호가 없습니다."]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
       </div>
     </section>
   `;

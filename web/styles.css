@@ -1976,7 +1976,7 @@ a.platform-row:hover {
 
 .target-board {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -2440,7 +2440,7 @@ a.platform-row:hover {
 
 .company-sales-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -2696,6 +2696,37 @@ a.platform-row:hover {
   border-color: #dbeafe;
   background: #f4f8ff;
   color: var(--blue-dark);
+}
+
+.company-decision-evidence {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.company-decision-evidence div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fbfcfd;
+  padding: 9px;
+}
+
+.company-decision-evidence span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.company-decision-evidence strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 950;
+  overflow-wrap: anywhere;
 }
 
 .company-check-priority {
@@ -3977,7 +4008,7 @@ a.platform-row:hover {
 
 .sheet-audit-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -5990,6 +6021,7 @@ a.platform-row:hover {
   .company-verification-grid,
   .company-check-metrics,
   .company-sales-metrics,
+  .company-decision-evidence,
   .target-board,
   .company-profile-keywords {
     grid-template-columns: 1fr;
@@ -6419,6 +6451,7 @@ a.platform-row:hover {
   .sheet-flow-grid,
   .sheet-history-grid,
   .manual-correction-evidence,
+  .company-decision-evidence,
   .sheet-audit-grid,
   .target-board-hero,
   .history-ops-metrics,
