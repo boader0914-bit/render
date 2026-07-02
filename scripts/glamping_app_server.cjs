@@ -3708,6 +3708,35 @@ function companySalesContactMeta(status) {
   }[status] || null;
 }
 
+function companySalesResponseMeta(status) {
+  return {
+    not_recorded: { label: "반응 미기록", tone: "todo", score: 0 },
+    no_response: { label: "무응답", tone: "wait", score: -8 },
+    replied: { label: "답변 있음", tone: "progress", score: 10 },
+    requested_materials: { label: "자료 요청", tone: "good", score: 18 },
+    meeting_scheduled: { label: "미팅 예정", tone: "strong", score: 28 },
+    low_interest: { label: "관심 낮음", tone: "hold", score: -18 },
+    price_rejected: { label: "가격 거절", tone: "bad", score: -16 },
+    contract_review: { label: "계약 검토", tone: "strong", score: 34 },
+    contract_excluded: { label: "계약 제외", tone: "bad", score: -45 }
+  }[status] || null;
+}
+
+function companySalesResponseReasonMeta(reason) {
+  return {
+    none: { label: "사유 미기록", tone: "todo" },
+    price_issue: { label: "가격 문제", tone: "bad" },
+    ops_mismatch: { label: "운영 방식 불일치", tone: "hold" },
+    using_ota: { label: "OTA 사용 중", tone: "progress" },
+    direct_booking_pref: { label: "직접 예약 선호", tone: "wait" },
+    low_room_count: { label: "객실 수 부족", tone: "hold" },
+    after_peak: { label: "성수기 이후 재논의", tone: "progress" },
+    needs_owner_review: { label: "대표 검토 필요", tone: "good" },
+    product_fit: { label: "상품 적합", tone: "strong" },
+    offline_booking_high: { label: "오프라인 예약 높음", tone: "good" }
+  }[reason] || null;
+}
+
 function companyTargetCategoryLabelForServer(category) {
   return {
     contact: "컨택 후보",
@@ -4198,6 +4227,8 @@ async function saveCompanyAdminReview(payload = {}) {
 async function saveCompanySalesContact(payload = {}) {
   const companyId = String(payload.companyId || "").trim();
   const status = String(payload.status || "not_contacted").trim();
+  const responseStatus = String(payload.responseStatus || "not_recorded").trim();
+  const responseReason = String(payload.responseReason || "none").trim();
   const master = await readCompanyMaster();
   const company = master.companies?.[companyId];
   if (!company) {
@@ -4211,11 +4242,28 @@ async function saveCompanySalesContact(payload = {}) {
     error.statusCode = 400;
     throw error;
   }
+  const responseMeta = companySalesResponseMeta(responseStatus);
+  if (!responseMeta) {
+    const error = new Error("지원하지 않는 영업 반응 상태입니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const reasonMeta = companySalesResponseReasonMeta(responseReason);
+  if (!reasonMeta) {
+    const error = new Error("지원하지 않는 영업 반응 사유입니다.");
+    error.statusCode = 400;
+    throw error;
+  }
   const savedAt = new Date().toISOString();
   const nextContact = {
     status,
     label: meta.label,
     tone: meta.tone,
+    responseStatus,
+    responseLabel: responseMeta.label,
+    responseTone: responseMeta.tone,
+    responseReason,
+    responseReasonLabel: reasonMeta.label,
     channel: String(payload.channel || "").trim(),
     contactPerson: String(payload.contactPerson || "").trim(),
     proposal: String(payload.proposal || "").trim(),
@@ -4232,6 +4280,10 @@ async function saveCompanySalesContact(payload = {}) {
       action: "save",
       status,
       label: meta.label,
+      responseStatus,
+      responseLabel: responseMeta.label,
+      responseReason,
+      responseReasonLabel: reasonMeta.label,
       channel: nextContact.channel,
       contactPerson: nextContact.contactPerson,
       proposal: nextContact.proposal,
@@ -4244,7 +4296,7 @@ async function saveCompanySalesContact(payload = {}) {
     ...(company.duplicateNotes || []),
     {
       at: savedAt,
-      reason: `영업 컨택 ${meta.label}`
+      reason: responseStatus === "not_recorded" ? `영업 컨택 ${meta.label}` : `영업 컨택 ${meta.label} / 반응 ${responseMeta.label}`
     }
   ].slice(-50);
   await writeCompanyMaster(master);
@@ -5712,8 +5764,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-sales-scripts"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-sales-scripts"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-sales-response"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-sales-response"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

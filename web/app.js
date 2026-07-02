@@ -2826,6 +2826,64 @@ function salesContactMeta(status) {
   }[status] || { label: "미컨택", tone: "todo", order: 1 };
 }
 
+function salesResponseOptions() {
+  return [
+    ["not_recorded", "반응 미기록"],
+    ["no_response", "무응답"],
+    ["replied", "답변 있음"],
+    ["requested_materials", "자료 요청"],
+    ["meeting_scheduled", "미팅 예정"],
+    ["low_interest", "관심 낮음"],
+    ["price_rejected", "가격 거절"],
+    ["contract_review", "계약 검토"],
+    ["contract_excluded", "계약 제외"]
+  ];
+}
+
+function salesResponseMeta(status) {
+  return {
+    not_recorded: { label: "반응 미기록", tone: "todo", score: 0, positive: false },
+    no_response: { label: "무응답", tone: "wait", score: -8, positive: false },
+    replied: { label: "답변 있음", tone: "progress", score: 10, positive: true },
+    requested_materials: { label: "자료 요청", tone: "good", score: 18, positive: true },
+    meeting_scheduled: { label: "미팅 예정", tone: "strong", score: 28, positive: true },
+    low_interest: { label: "관심 낮음", tone: "hold", score: -18, positive: false },
+    price_rejected: { label: "가격 거절", tone: "bad", score: -16, positive: false },
+    contract_review: { label: "계약 검토", tone: "strong", score: 34, positive: true },
+    contract_excluded: { label: "계약 제외", tone: "bad", score: -45, positive: false }
+  }[status] || { label: "반응 미기록", tone: "todo", score: 0, positive: false };
+}
+
+function salesResponseReasonOptions() {
+  return [
+    ["none", "사유 미기록"],
+    ["price_issue", "가격 문제"],
+    ["ops_mismatch", "운영 방식 불일치"],
+    ["using_ota", "OTA 사용 중"],
+    ["direct_booking_pref", "직접 예약 선호"],
+    ["low_room_count", "객실 수 부족"],
+    ["after_peak", "성수기 이후 재논의"],
+    ["needs_owner_review", "대표 검토 필요"],
+    ["product_fit", "상품 적합"],
+    ["offline_booking_high", "오프라인 예약 높음"]
+  ];
+}
+
+function salesResponseReasonMeta(reason) {
+  return {
+    none: { label: "사유 미기록", tone: "todo" },
+    price_issue: { label: "가격 문제", tone: "bad" },
+    ops_mismatch: { label: "운영 방식 불일치", tone: "hold" },
+    using_ota: { label: "OTA 사용 중", tone: "progress" },
+    direct_booking_pref: { label: "직접 예약 선호", tone: "wait" },
+    low_room_count: { label: "객실 수 부족", tone: "hold" },
+    after_peak: { label: "성수기 이후 재논의", tone: "progress" },
+    needs_owner_review: { label: "대표 검토 필요", tone: "good" },
+    product_fit: { label: "상품 적합", tone: "strong" },
+    offline_booking_high: { label: "오프라인 예약 높음", tone: "good" }
+  }[reason] || { label: "사유 미기록", tone: "todo" };
+}
+
 function todayIsoDate() {
   const today = new Date();
   const year = today.getFullYear();
@@ -2880,6 +2938,7 @@ function companySalesFollowUpProfile(company = {}, revenueImpact = {}) {
 function companySalesFollowUpScore(company = {}, revenueImpact = {}, followUp = null) {
   const profile = followUp || companySalesFollowUpProfile(company, revenueImpact);
   const status = company.salesContact?.status || "not_contacted";
+  const response = salesResponseMeta(company.salesContact?.responseStatus || "not_recorded");
   let score = 0;
   if (profile.key === "overdue") score += 38;
   else if (profile.key === "today") score += 34;
@@ -2894,6 +2953,7 @@ function companySalesFollowUpScore(company = {}, revenueImpact = {}, followUp = 
   else if (revenue >= 2000000) score += 11;
   else if (revenue >= 700000) score += 5;
   if (salesClosedStatusKeys().includes(status)) score -= 50;
+  score += response.score || 0;
   return Math.max(0, Math.round(score));
 }
 
@@ -2948,6 +3008,56 @@ function companySalesPipelineSummary(entries = []) {
     soonCount: entries.filter((entry) => entry.followUp.key === "soon").length,
     needsDateCount: entries.filter((entry) => entry.followUp.key === "needs_date").length
   };
+}
+
+function companySalesPerformanceSummary(entries = []) {
+  const contacted = entries.filter((entry) => (entry.company.salesContact?.status || "not_contacted") !== "not_contacted");
+  const recorded = entries.filter((entry) => (entry.company.salesContact?.responseStatus || "not_recorded") !== "not_recorded");
+  const responded = entries.filter((entry) => ["replied", "requested_materials", "meeting_scheduled", "contract_review"].includes(entry.company.salesContact?.responseStatus));
+  const interested = entries.filter((entry) => ["requested_materials", "meeting_scheduled", "contract_review"].includes(entry.company.salesContact?.responseStatus) || salesHotStatusKeys().includes(entry.company.salesContact?.status || ""));
+  const meetings = entries.filter((entry) => entry.company.salesContact?.responseStatus === "meeting_scheduled");
+  const contractReview = entries.filter((entry) => entry.company.salesContact?.responseStatus === "contract_review" || entry.company.salesContact?.status === "high_potential");
+  return {
+    contactedCount: contacted.length,
+    recordedCount: recorded.length,
+    respondedCount: responded.length,
+    interestedCount: interested.length,
+    meetingCount: meetings.length,
+    contractReviewCount: contractReview.length,
+    responseRate: contacted.length ? responded.length / contacted.length : NaN,
+    interestRate: contacted.length ? interested.length / contacted.length : NaN,
+    meetingRate: contacted.length ? meetings.length / contacted.length : NaN,
+    contractRevenue: contractReview.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
+    responseRevenue: responded.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0)
+  };
+}
+
+function companySalesProposalResponseSummary(entries = []) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const key = entry.action?.label || "상품 재정리";
+    if (!groups.has(key)) {
+      groups.set(key, { label: key, total: 0, contacted: 0, responded: 0, interested: 0, meeting: 0, contract: 0, revenue: 0 });
+    }
+    const row = groups.get(key);
+    const status = entry.company.salesContact?.status || "not_contacted";
+    const response = entry.company.salesContact?.responseStatus || "not_recorded";
+    row.total += 1;
+    row.revenue += finiteNumber(entry.revenueImpact?.totalRevenue);
+    if (status !== "not_contacted") row.contacted += 1;
+    if (["replied", "requested_materials", "meeting_scheduled", "contract_review"].includes(response)) row.responded += 1;
+    if (["requested_materials", "meeting_scheduled", "contract_review"].includes(response) || salesHotStatusKeys().includes(status)) row.interested += 1;
+    if (response === "meeting_scheduled") row.meeting += 1;
+    if (response === "contract_review" || status === "high_potential") row.contract += 1;
+  }
+  return [...groups.values()]
+    .map((row) => ({
+      ...row,
+      responseRate: row.contacted ? row.responded / row.contacted : NaN,
+      interestRate: row.contacted ? row.interested / row.contacted : NaN
+    }))
+    .sort((a, b) => b.interested - a.interested || b.responded - a.responded || b.revenue - a.revenue)
+    .slice(0, 6);
 }
 
 function companySalesPrimaryUrl(company = {}, item = {}) {
@@ -3105,6 +3215,8 @@ function salesProposalHtml(entry = {}) {
 function salesContactFormHtml(company = {}) {
   const contact = company.salesContact || {};
   const status = contact.status || "not_contacted";
+  const responseStatus = contact.responseStatus || "not_recorded";
+  const responseReason = contact.responseReason || "none";
   return `
     <div class="sales-contact-form" data-sales-contact-form data-company-id="${escapeHtml(company.companyId || "")}">
       <div class="sales-contact-fields">
@@ -3125,6 +3237,20 @@ function salesContactFormHtml(company = {}) {
         <label>
           <span>다음 액션</span>
           <input type="date" data-sales-contact-next value="${escapeHtml(contact.nextActionAt || "")}">
+        </label>
+      </div>
+      <div class="sales-response-fields">
+        <label>
+          <span>컨택 결과</span>
+          <select data-sales-response-status>
+            ${salesResponseOptions().map(([value, label]) => `<option value="${value}" ${responseStatus === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>반응 사유</span>
+          <select data-sales-response-reason>
+            ${salesResponseReasonOptions().map(([value, label]) => `<option value="${value}" ${responseReason === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
         </label>
       </div>
       <label>
@@ -3164,7 +3290,11 @@ function salesContactHistoryHtml(company = {}) {
       <ol>
         ${rows.map((row) => {
           const meta = salesContactMeta(row.status);
+          const responseMeta = salesResponseMeta(row.responseStatus);
+          const reasonMeta = salesResponseReasonMeta(row.responseReason);
           const details = [
+            row.responseStatus && row.responseStatus !== "not_recorded" ? `반응 ${row.responseLabel || responseMeta.label}` : "",
+            row.responseReason && row.responseReason !== "none" ? `사유 ${row.responseReasonLabel || reasonMeta.label}` : "",
             row.channel ? `채널 ${row.channel}` : "",
             row.contactPerson ? `담당 ${row.contactPerson}` : "",
             row.nextActionAt ? `다음 ${row.nextActionAt}` : "",
@@ -3211,12 +3341,53 @@ function salesPipelineHtml(summary = {}) {
   `;
 }
 
+function salesPerformanceHtml(summary = {}, proposalRows = []) {
+  const metricRows = [
+    ["컨택", fmtNumber(summary.contactedCount), `반응 기록 ${fmtNumber(summary.recordedCount)}`],
+    ["응답률", fmtRate(summary.responseRate), `응답 ${fmtNumber(summary.respondedCount)}`],
+    ["관심률", fmtRate(summary.interestRate), `관심 ${fmtNumber(summary.interestedCount)}`],
+    ["미팅 전환", fmtRate(summary.meetingRate), `미팅 ${fmtNumber(summary.meetingCount)}`],
+    ["계약 검토", fmtNumber(summary.contractReviewCount), fmtWon(summary.contractRevenue)]
+  ];
+  return `
+    <section class="sales-performance-panel">
+      <div class="target-lane-head">
+        <div>
+          <strong>영업 반응/성과 추적 V2</strong>
+          <small>컨택 결과와 반응 사유를 기록하고, 실제 반응이 좋은 제안 유형을 다음 우선순위에 반영합니다.</small>
+        </div>
+        <span>${fmtNumber(summary.respondedCount || 0)}</span>
+      </div>
+      <div class="sales-performance-metrics">
+        ${metricRows.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="sales-proposal-response-grid">
+        ${proposalRows.length ? proposalRows.map((row) => `
+          <article>
+            <div>
+              <strong>${escapeHtml(row.label)}</strong>
+              <small>컨택 ${fmtNumber(row.contacted)} · 응답 ${fmtNumber(row.responded)} · 관심 ${fmtNumber(row.interested)}</small>
+            </div>
+            <span>${fmtRate(row.responseRate)}</span>
+          </article>
+        `).join("") : `<p class="empty">제안 유형별 반응 데이터가 아직 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
 function salesTargetCsvValue(value) {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
 }
 
 function salesTargetCsv(entries = []) {
-  const headers = ["업체명", "지역", "URL", "우선순위", "예상매출", "컨택상태", "후속상태", "다음액션", "제안포인트", "메모", "추천사유", "제안요약", "확인질문", "컨택문구", "전화메모"];
+  const headers = ["업체명", "지역", "URL", "우선순위", "예상매출", "컨택상태", "컨택결과", "반응사유", "후속상태", "다음액션", "제안포인트", "메모", "추천사유", "제안요약", "확인질문", "컨택문구", "전화메모"];
   const rows = entries.map((entry) => {
     const company = entry.company || {};
     const item = entry.item || {};
@@ -3229,6 +3400,8 @@ function salesTargetCsv(entries = []) {
       entry.priorityScore,
       finiteNumber(entry.revenueImpact?.totalRevenue),
       salesContactMeta(contact.status).label,
+      salesResponseMeta(contact.responseStatus).label,
+      salesResponseReasonMeta(contact.responseReason).label,
       entry.followUp?.label || "",
       contact.nextActionAt || "",
       contact.proposal || entry.action?.label || "",
@@ -6080,6 +6253,8 @@ function renderTargets() {
   const confirmed = boardEntries.filter((entry) => entry.stage.key === "confirmed");
   const contact = boardEntries.filter((entry) => entry.stage.key === "contact");
   const pipelineSummary = companySalesPipelineSummary(boardEntries);
+  const performanceSummary = companySalesPerformanceSummary(boardEntries);
+  const proposalResponseRows = companySalesProposalResponseSummary(boardEntries);
   const followUpEntries = boardEntries.filter((entry) => ["overdue", "today", "soon", "needs_date"].includes(entry.followUp.key)).slice(0, 8);
   const masterQueueCount = companyDecisionQueueEntries(companyMasterSource()).filter((entry) => entry.workflow.key !== "done").length;
   const currentQueueCount = validationQueueEntries(state.data?.availability?.items || [], 0).length;
@@ -6099,6 +6274,8 @@ function renderTargets() {
     const regionText = (company.regions || []).slice(0, 2).join(" · ") || item?.region || "지역 확인";
     const evidence = companySalesEvidenceList(company, entry);
     const contactMeta = salesContactMeta(company.salesContact?.status);
+    const responseMeta = salesResponseMeta(company.salesContact?.responseStatus);
+    const reasonMeta = salesResponseReasonMeta(company.salesContact?.responseReason);
     const url = companySalesPrimaryUrl(company, item);
     return `
       <article class="target-action-card ${stage.key}">
@@ -6111,12 +6288,14 @@ function renderTargets() {
           <div class="target-badge-stack">
             <mark class="sales-contact-badge ${escapeHtml(contactMeta.tone)}">${escapeHtml(contactMeta.label)}</mark>
             <mark class="sales-followup-badge ${escapeHtml(followUp.tone)}">${escapeHtml(followUp.label)}</mark>
+            <mark class="sales-response-badge ${escapeHtml(responseMeta.tone)}">${escapeHtml(responseMeta.label)}</mark>
           </div>
         </div>
         <div class="target-execution-metrics">
           <div><span>예상매출</span><strong>${fmtWon(revenueImpact.totalRevenue)}</strong><small>가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회</small></div>
           <div><span>노출</span><strong>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "대기"}</strong><small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 확인")}</small></div>
           <div><span>후속</span><strong>${escapeHtml(followUp.label)}</strong><small>${escapeHtml(followUp.detail || "다음 액션 미지정")}</small></div>
+          <div><span>반응</span><strong>${escapeHtml(responseMeta.label)}</strong><small>${escapeHtml(reasonMeta.label)}</small></div>
         </div>
         <div class="target-action-main">
           <b>${escapeHtml(action.label)}</b>
@@ -6159,17 +6338,18 @@ function renderTargets() {
       <article><span>영업 대상</span><strong>${fmtNumber(actionableCount)}</strong><small>큐 제외 즉시 후보</small></article>
       <article><span>오늘 처리</span><strong>${fmtNumber(pipelineSummary.todayCount)}</strong><small>오늘 후속 예정</small></article>
       <article><span>지연</span><strong>${fmtNumber(pipelineSummary.overdueCount)}</strong><small>날짜 지난 액션</small></article>
-      <article><span>진행 파이프라인</span><strong>${fmtNumber(pipelineSummary.activeCount)}</strong><small>1차 이후 진행 중</small></article>
-      <article><span>진행 매출</span><strong>${fmtWon(pipelineSummary.activeRevenue)}</strong><small>컨택 진행 예상액</small></article>
+      <article><span>응답률</span><strong>${fmtRate(performanceSummary.responseRate)}</strong><small>응답 ${fmtNumber(performanceSummary.respondedCount)}</small></article>
+      <article><span>계약 검토</span><strong>${fmtNumber(performanceSummary.contractReviewCount)}</strong><small>${fmtWon(performanceSummary.contractRevenue)}</small></article>
     </section>
     <section class="target-export-bar">
       <div>
-        <strong>영업 제안/컨택 스크립트 V2</strong>
-        <small>상태별 파이프라인과 함께 업체별 제안 근거, 확인 질문, 문자/카톡 초안, 전화 메모를 자동 생성합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
+        <strong>영업 반응/성과 추적 V2</strong>
+        <small>컨택 결과와 반응 사유를 기록하고, 응답률·관심률·미팅 전환률과 제안 유형별 반응을 우선순위에 반영합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
       </div>
-      <button type="button" data-export-sales-targets>컨택+문구 CSV</button>
+      <button type="button" data-export-sales-targets>컨택+반응 CSV</button>
     </section>
     ${salesPipelineHtml(pipelineSummary)}
+    ${salesPerformanceHtml(performanceSummary, proposalResponseRows)}
     <section class="target-followup-board">
       <div class="target-lane-head">
         <div>
@@ -7974,6 +8154,8 @@ async function saveCompanySalesContact(button) {
   const payload = {
     companyId,
     status: form.querySelector("[data-sales-contact-status]")?.value || "not_contacted",
+    responseStatus: form.querySelector("[data-sales-response-status]")?.value || "not_recorded",
+    responseReason: form.querySelector("[data-sales-response-reason]")?.value || "none",
     channel: form.querySelector("[data-sales-contact-channel]")?.value || "",
     contactPerson: form.querySelector("[data-sales-contact-person]")?.value || "",
     proposal: form.querySelector("[data-sales-contact-proposal]")?.value || "",
@@ -7993,7 +8175,7 @@ async function saveCompanySalesContact(button) {
     renderTargets();
     renderCompanyMasterPanel();
     renderDecisionQueue();
-    setStatus(`${salesContactMeta(payload.status).label} 저장 완료`);
+    setStatus(`${salesContactMeta(payload.status).label} / ${salesResponseMeta(payload.responseStatus).label} 저장 완료`);
   } catch (error) {
     setStatus("컨택 상태 저장 실패");
     form.insertAdjacentHTML("afterbegin", `<div class="empty">컨택 저장 실패: ${escapeHtml(error.message)}</div>`);
