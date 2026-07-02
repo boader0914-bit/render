@@ -2015,11 +2015,34 @@ function freshDatalabTrendFromStore(entry = {}, range = {}) {
   if (!Number.isFinite(collectedAt) || Date.now() - collectedAt > DATALAB_TREND_CACHE_TTL_MS) return null;
   return {
     ...latest,
+    cache: datalabTrendCacheMeta(entry, true)
+  };
+}
+
+function datalabTrendCacheMeta(entry = {}, hit = false) {
+  const observations = Array.isArray(entry.observations) ? entry.observations : [];
+  return {
+    hit: Boolean(hit),
+    file: "history/datalab_trends.json",
+    observationCount: Number(entry.observationCount || observations.length || (entry.latest ? 1 : 0)),
+    firstCollectedAt: entry.firstCollectedAt || entry.firstSeenAt || observations[0]?.collectedAt || "",
+    lastCollectedAt: entry.lastCollectedAt || entry.lastSeenAt || entry.latest?.collectedAt || observations[observations.length - 1]?.collectedAt || "",
+    lastUsedAt: entry.lastUsedAt || ""
+  };
+}
+
+async function decorateDatalabTrendWithCache(keyword, trend = {}) {
+  if (!trend?.collectable) return trend;
+  const key = datalabTrendCacheKey(keyword || trend.keyword);
+  if (!key) return trend;
+  const store = await readDatalabTrendStore();
+  const entry = store.keywords?.[key];
+  if (!entry) return trend;
+  return {
+    ...trend,
     cache: {
-      hit: true,
-      file: "history/datalab_trends.json",
-      observationCount: entry.observationCount || (entry.observations || []).length || 1,
-      lastCollectedAt: latest.collectedAt || ""
+      ...datalabTrendCacheMeta(entry, Boolean(trend.cache?.hit)),
+      ...(trend.cache || {})
     }
   };
 }
@@ -2053,7 +2076,13 @@ async function rememberDatalabTrend(keyword, trend = {}, { cacheHit = false } = 
   current.observationCount = (current.observations || []).length;
   store.keywords[key] = current;
   await writeDatalabTrendStore(store);
-  return trend;
+  return {
+    ...trend,
+    cache: {
+      ...(trend.cache || {}),
+      ...datalabTrendCacheMeta(current, cacheHit || Boolean(trend.cache?.hit))
+    }
+  };
 }
 
 async function collectDatalabTrend(keyword, keys, attempt = 0, range = datalabTrendRange(12)) {
@@ -2123,12 +2152,11 @@ async function collectDatalabTrendCached(keyword, keys) {
   const key = datalabTrendCacheKey(compact);
   const cached = freshDatalabTrendFromStore(store.keywords?.[key], range);
   if (cached) {
-    await rememberDatalabTrend(compact, cached, { cacheHit: true });
-    return cached;
+    return rememberDatalabTrend(compact, cached, { cacheHit: true });
   }
 
   const trend = await collectDatalabTrend(compact, keys, 0, range);
-  if (trend) await rememberDatalabTrend(compact, trend);
+  if (trend) return rememberDatalabTrend(compact, trend);
   return trend;
 }
 
@@ -2190,6 +2218,14 @@ async function enrichRegionsWithTraffic(regions, dirPath, demandKeyword = "") {
 
   const datalabKeyword = compactKeyword(demandKeyword || regions[0]?.trafficKeyword || "");
   let datalabTrend = datalabKeyword ? trends[datalabKeyword] : null;
+  if (datalabKeyword && datalabTrend?.collectable && !datalabTrend.cache) {
+    const decoratedTrend = await decorateDatalabTrendWithCache(datalabKeyword, datalabTrend);
+    if (decoratedTrend?.cache) {
+      datalabTrend = decoratedTrend;
+      trends[datalabKeyword] = datalabTrend;
+      changed = true;
+    }
+  }
   if (datalabKeyword && !datalabTrend?.collectable) {
     datalabTrend = await collectDatalabTrendCached(datalabKeyword, keys);
     if (datalabTrend) {
@@ -5173,8 +5209,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-trend-cache"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-trend-cache"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-trend-insights"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-trend-insights"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

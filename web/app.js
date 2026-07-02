@@ -2100,7 +2100,10 @@ function demandTrendSource() {
     keyword: source?.keyword || source?.rawTitle || activeKeyword(),
     collectedAt: source?.collectedAt || "",
     cacheHit: Boolean(source?.cache?.hit),
-    observationCount: source?.cache?.observationCount || null
+    observationCount: source?.cache?.observationCount || null,
+    firstCollectedAt: source?.cache?.firstCollectedAt || "",
+    lastCollectedAt: source?.cache?.lastCollectedAt || "",
+    lastUsedAt: source?.cache?.lastUsedAt || ""
   };
 }
 
@@ -2224,6 +2227,191 @@ function demandTrendLabel() {
   if (change >= 0.15) return `상승 ${formatSignedRate(change)}`;
   if (change <= -0.15) return `하락 ${formatSignedRate(change)}`;
   return "보합";
+}
+
+function averageTrendValue(entries = []) {
+  const values = entries.map((entry) => Number(entry.value)).filter(Number.isFinite);
+  if (!values.length) return NaN;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function demandTrendStats(trend = demandTrendSource()) {
+  const valid = trend.series
+    .map((entry, index) => ({ ...entry, index, value: Number(entry.value) }))
+    .filter((entry) => Number.isFinite(entry.value));
+  const first = valid[0] || null;
+  const last = valid[valid.length - 1] || null;
+  const peak = valid.reduce((best, entry) => !best || entry.value > best.value ? entry : best, null);
+  const low = valid.reduce((best, entry) => !best || entry.value < best.value ? entry : best, null);
+  const recent = valid.slice(-3);
+  const previous = valid.slice(-6, -3);
+  const recentAvg = averageTrendValue(recent);
+  const previousAvg = averageTrendValue(previous);
+  const recentChange = Number.isFinite(recentAvg) && Number.isFinite(previousAvg) && previousAvg
+    ? (recentAvg - previousAvg) / previousAvg
+    : NaN;
+  const overallChange = first && last && first.value
+    ? (last.value - first.value) / first.value
+    : NaN;
+  const peakRatio = peak && last && peak.value
+    ? last.value / peak.value
+    : NaN;
+  return {
+    valid,
+    first,
+    last,
+    peak,
+    low,
+    recentAvg,
+    previousAvg,
+    recentChange,
+    overallChange,
+    peakRatio
+  };
+}
+
+function demandTrendDirectionCard(trend, stats) {
+  if (!trend.hasSeries || !stats.valid.length) {
+    return {
+      tone: "neutral",
+      label: "추세 방향",
+      value: "연동 대기",
+      detail: "데이터랩 월별 지수가 들어오면 최근 흐름을 판단합니다."
+    };
+  }
+  const change = Number.isFinite(stats.recentChange) ? stats.recentChange : stats.overallChange;
+  const basis = Number.isFinite(stats.recentChange) ? "최근 3개월 평균 기준" : "12개월 시작·끝 기준";
+  if (Number.isFinite(change) && change >= 0.15) {
+    return {
+      tone: "positive",
+      label: "추세 방향",
+      value: `상승 ${formatSignedRate(change)}`,
+      detail: `${basis}. 검색 관심이 올라오는 구간입니다.`
+    };
+  }
+  if (Number.isFinite(change) && change <= -0.15) {
+    return {
+      tone: "warning",
+      label: "추세 방향",
+      value: `하락 ${formatSignedRate(change)}`,
+      detail: `${basis}. 상품 전환이나 가격 방어를 함께 봐야 합니다.`
+    };
+  }
+  return {
+    tone: "neutral",
+    label: "추세 방향",
+    value: "보합",
+    detail: `${basis}. 검색 흐름은 큰 변동 없이 유지됩니다.`
+  };
+}
+
+function demandTrendPeakCard(trend, stats) {
+  if (!trend.hasSeries || !stats.peak) {
+    return {
+      tone: "neutral",
+      label: "피크 월",
+      value: "확인 필요",
+      detail: "12개월 상대지수가 쌓이면 성수기 위치를 잡습니다."
+    };
+  }
+  const nearPeak = Number.isFinite(stats.peakRatio) && stats.peakRatio >= 0.82;
+  return {
+    tone: nearPeak ? "positive" : "neutral",
+    label: "피크 월",
+    value: `${stats.peak.label} ${trendIndexLabel(stats.peak.value)}`,
+    detail: nearPeak
+      ? `현재 ${stats.last?.label || "최근월"}도 피크권입니다. 노출/상품 점검 우선.`
+      : `최근월은 피크 대비 ${Number.isFinite(stats.peakRatio) ? fmtRate(stats.peakRatio) : "확인필요"} 수준입니다.`
+  };
+}
+
+function demandTrendQualityCard(traffic = {}) {
+  const total = finiteNumber(traffic.totalSearchVolume, 0);
+  const mobileShare = demandMobileShare(traffic);
+  const ctr = Number(traffic.combinedCtr);
+  let tone = "neutral";
+  let value = total ? `${fmtNumber(total)}회` : "확인 필요";
+  if (total >= 30000 || (Number.isFinite(ctr) && ctr >= 2)) tone = "positive";
+  else if (!total || (Number.isFinite(ctr) && ctr < 0.8)) tone = "warning";
+  const detail = [
+    Number.isFinite(mobileShare) ? `모바일 ${fmtRate(mobileShare)}` : "모바일 확인필요",
+    Number.isFinite(ctr) ? `CTR ${fmtSearchRate(ctr)}` : "CTR 확인필요"
+  ].join(" · ");
+  return {
+    tone,
+    label: "수요 품질",
+    value,
+    detail
+  };
+}
+
+function demandTrendStorageCard(trend) {
+  if (!trend.hasSeries) {
+    return {
+      tone: "neutral",
+      label: "누적 신뢰",
+      value: "대기",
+      detail: "키워드별 저장 DB가 쌓이면 재사용성과 비교력이 올라갑니다."
+    };
+  }
+  const count = Number(trend.observationCount || 0);
+  const tone = count >= 7 ? "positive" : count >= 2 ? "neutral" : "warning";
+  const value = count ? `${fmtNumber(count)}회 저장` : "신규 수집";
+  const source = trend.cacheHit ? "저장자료 재사용" : "이번 실행 수집";
+  const time = trend.lastCollectedAt || trend.collectedAt;
+  return {
+    tone,
+    label: "누적 신뢰",
+    value,
+    detail: `${source}${time ? ` · ${compactDateTime(time)}` : ""}`
+  };
+}
+
+function demandTrendInsightCards(traffic = {}) {
+  const trend = demandTrendSource();
+  const stats = demandTrendStats(trend);
+  return [
+    demandTrendDirectionCard(trend, stats),
+    demandTrendPeakCard(trend, stats),
+    demandTrendQualityCard(traffic),
+    demandTrendStorageCard(trend)
+  ];
+}
+
+function demandTrendActionText(traffic = {}) {
+  const trend = demandTrendSource();
+  const stats = demandTrendStats(trend);
+  const mobileShare = demandMobileShare(traffic);
+  const rising = Number.isFinite(stats.recentChange) && stats.recentChange >= 0.15;
+  const falling = Number.isFinite(stats.recentChange) && stats.recentChange <= -0.15;
+  const peakNow = Number.isFinite(stats.peakRatio) && stats.peakRatio >= 0.82;
+  if (!trend.hasSeries) {
+    return "검색광고 지표와 데이터랩 추세가 함께 들어오면 시장 크기와 계절 흐름을 분리해 판단합니다.";
+  }
+  if (rising && Number.isFinite(mobileShare) && mobileShare >= 0.75) {
+    return "검색 관심과 모바일 비중이 같이 높습니다. 네이버 예약 첫 화면, 모바일 상품명, 당일/숙박 대표상품을 우선 점검합니다.";
+  }
+  if (peakNow) {
+    return "최근 수요가 피크권입니다. 상위 노출 업체의 금·일 공백, 가격 방어, 채널 미노출을 컨택 후보 판단에 연결합니다.";
+  }
+  if (falling) {
+    return "검색 추세가 내려가는 구간입니다. 신규 영업보다 기존 후보의 상품 재구성, 평일/일요일 보완 제안을 우선합니다.";
+  }
+  return "검색량, 모바일 비중, CTR, 예약 판매율을 함께 보며 노출은 있는데 판매 구조가 약한 업체를 우선 확인합니다.";
+}
+
+function renderDemandTrendInsightCards(traffic = {}) {
+  return `
+    <div class="demand-signal-grid" aria-label="트렌드 판단 카드">
+      ${demandTrendInsightCards(traffic).map((card) => `
+        <article class="demand-signal-card ${escapeHtml(card.tone)}">
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(card.value)}</strong>
+          <small>${escapeHtml(card.detail)}</small>
+        </article>
+      `).join("")}
+    </div>
+  `;
 }
 
 function formatSignedRate(value) {
@@ -3980,9 +4168,10 @@ function renderDemand() {
         <div class="demand-pill-row">
           ${demandInterpretation(traffic).map((label) => `<span>${escapeHtml(label)}</span>`).join("")}
         </div>
+        ${renderDemandTrendInsightCards(traffic)}
         <div class="demand-rule-box">
-          <strong>판단 기준</strong>
-          <p>검색량은 시장 크기, 트렌드는 타이밍, 예약재고와 플랫폼 공백은 영업 가능성을 판단합니다.</p>
+          <strong>다음 판단</strong>
+          <p>${escapeHtml(demandTrendActionText(traffic))}</p>
         </div>
       </article>
     </section>
