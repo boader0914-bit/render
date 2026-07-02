@@ -1013,6 +1013,7 @@ function itemRevenueStats(item = {}, kind = "lodging") {
   const weeklyAvg = optionalNumber(kind === "day" ? item.dayUseWeeklyAvgSoldUnitPrice : item.weeklyAvgSoldUnitPrice);
   const weeklyDetail = kind === "day" ? item.dayUseWeeklyRevenueDetail : item.weeklyRevenueDetail;
   const weeklyByDay = kind === "day" ? item.dayUseWeeklyRevenueByDayType : item.weeklyRevenueByDayType;
+  const weeklyOffline = kind === "day" ? item.dayUseWeeklyOfflineReservationDetail : item.weeklyOfflineReservationDetail;
   const hasWeekly = [weeklyRevenue, weeklyPriced, weeklyMissing, weeklyAvg].some(Number.isFinite);
   if (hasWeekly) {
     return {
@@ -1024,6 +1025,7 @@ function itemRevenueStats(item = {}, kind = "lodging") {
       unit,
       detail: weeklyDetail || "",
       byDayType: weeklyByDay || "",
+      offlineDetail: weeklyOffline || "",
       basis: "range"
     };
   }
@@ -1043,6 +1045,7 @@ function itemRevenueStats(item = {}, kind = "lodging") {
       unit,
       detail: "",
       byDayType: "",
+      offlineDetail: "",
       basis: "basis"
     };
   }
@@ -1056,6 +1059,7 @@ function itemRevenueStats(item = {}, kind = "lodging") {
     unit,
     detail: "",
     byDayType: "",
+    offlineDetail: "",
     basis: "missing"
   };
 }
@@ -6085,6 +6089,10 @@ function sheetRevenuePanel(item = {}) {
   const dayUse = itemRevenueStats(item, "day");
   const lodgingDetail = lodging.byDayType || lodging.detail || "요일별 매출은 다음 수집부터 표시됩니다.";
   const dayUseDetail = dayUse.byDayType || dayUse.detail || "데이유즈/캠프닉 매출은 상품 가격과 판매수량이 함께 확인될 때 표시됩니다.";
+  const offlineRows = [
+    lodging.offlineDetail ? ["숙박 오프라인 예약 추정", lodging.offlineDetail, lodging.revenue] : null,
+    dayUse.offlineDetail ? ["데이유즈/캠프닉 오프라인 예약 추정", dayUse.offlineDetail, dayUse.revenue] : null
+  ].filter(Boolean);
   return `
     <section class="sheet-section sheet-revenue-section">
       <div class="sheet-structure-title">
@@ -6122,6 +6130,15 @@ function sheetRevenuePanel(item = {}) {
         </div>
         <strong>${fmtWon(dayUse.revenue)}</strong>
       </div>
+      ${offlineRows.map(([label, detail, revenue]) => `
+        <div class="search-row">
+          <div>
+            <strong>${escapeHtml(label)}</strong>
+            <small>${escapeHtml(detail)}</small>
+          </div>
+          <strong>${fmtWon(revenue)}</strong>
+        </div>
+      `).join("")}
     </section>
   `;
 }

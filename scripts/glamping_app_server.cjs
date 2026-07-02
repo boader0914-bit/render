@@ -4818,6 +4818,7 @@ function summarizeAvailabilityRows(rows) {
     const weeklyAvgSoldUnitPrice = numericField(row, ["주간숙박평균판매단가", "weeklyAvgSoldUnitPrice"]);
     const weeklyRevenueDetail = row["주간숙박매출상세"] || "";
     const weeklyRevenueByDayType = row["주간숙박요일매출"] || "";
+    const weeklyOfflineReservationDetail = row["주간숙박오프라인예약상세"] || "";
     const dayUseWeeklyDetail = row.dayUseWeeklyDetail || "";
     const derivedDayUseWeeklyRates = parseWeeklyReservationRates(dayUseWeeklyDetail);
     const dayUseWeeklyAvgReservationRate = numericField(row, ["dayUseWeeklyAvgReservationRate"]) ?? derivedDayUseWeeklyRates.average;
@@ -4828,6 +4829,7 @@ function summarizeAvailabilityRows(rows) {
     const dayUseWeeklyPricedSoldOut = numericField(row, ["dayUseWeeklyPricedSoldOut"]);
     const dayUseWeeklyMissingPriceSoldOut = numericField(row, ["dayUseWeeklyMissingPriceSoldOut"]);
     const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
+    const dayUseWeeklyOfflineReservationDetail = row.dayUseWeeklyOfflineReservationDetail || "";
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -4880,6 +4882,7 @@ function summarizeAvailabilityRows(rows) {
       weeklyAvgSoldUnitPrice,
       weeklyRevenueDetail,
       weeklyRevenueByDayType,
+      weeklyOfflineReservationDetail,
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
       basisDayUseRevenue: numericField(row, ["데이유즈기준일예상매출", "basisDayUseRevenue"]),
@@ -4900,6 +4903,7 @@ function summarizeAvailabilityRows(rows) {
       dayUseWeeklyAvgSoldUnitPrice,
       dayUseWeeklyRevenueDetail: row.dayUseWeeklyRevenueDetail || "",
       dayUseWeeklyRevenueByDayType: row.dayUseWeeklyRevenueByDayType || "",
+      dayUseWeeklyOfflineReservationDetail,
       dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
       dayUseWeeklyDetail,
       dayUseWeeklyAvgReservationRate,
@@ -5073,6 +5077,7 @@ function summarizeCompanyPlatforms(rows) {
     const weeklyAvgSoldUnitPrice = numericField(row, ["주간숙박평균판매단가", "weeklyAvgSoldUnitPrice"]);
     const weeklyRevenueDetail = row["주간숙박매출상세"] || "";
     const weeklyRevenueByDayType = row["주간숙박요일매출"] || "";
+    const weeklyOfflineReservationDetail = row["주간숙박오프라인예약상세"] || "";
     const dayUseWeeklyDetail = row.dayUseWeeklyDetail || "";
     const derivedDayUseWeeklyRates = parseWeeklyReservationRates(dayUseWeeklyDetail);
     const dayUseWeeklyAvgReservationRate = numericField(row, ["dayUseWeeklyAvgReservationRate"]) ?? derivedDayUseWeeklyRates.average;
@@ -5083,6 +5088,7 @@ function summarizeCompanyPlatforms(rows) {
     const dayUseWeeklyPricedSoldOut = numericField(row, ["dayUseWeeklyPricedSoldOut"]);
     const dayUseWeeklyMissingPriceSoldOut = numericField(row, ["dayUseWeeklyMissingPriceSoldOut"]);
     const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
+    const dayUseWeeklyOfflineReservationDetail = row.dayUseWeeklyOfflineReservationDetail || "";
     const weeklyStockText = weeklyDetail
       ? `${weeklyTotalSoldOut !== null ? `${weeklyDays || "기간"}일 마감추정 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyBasisTotal ? `최대재고 ${weeklyBasisTotal} · ` : ""}${weeklyRawStockVariance ? `날짜별 원시재고: ${weeklyRawStockVariance} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
       : weeklySummary;
@@ -5118,6 +5124,7 @@ function summarizeCompanyPlatforms(rows) {
       weeklyAvgSoldUnitPrice,
       weeklyRevenueDetail,
       weeklyRevenueByDayType,
+      weeklyOfflineReservationDetail,
       dayUseWeeklyDays: numericField(row, ["dayUseWeeklyDays"]),
       dayUseWeeklySummary: row.dayUseWeeklySummary || "",
       dayUseWeeklyDetail,
@@ -5132,6 +5139,7 @@ function summarizeCompanyPlatforms(rows) {
       dayUseWeeklyAvgSoldUnitPrice,
       dayUseWeeklyRevenueDetail: row.dayUseWeeklyRevenueDetail || "",
       dayUseWeeklyRevenueByDayType: row.dayUseWeeklyRevenueByDayType || "",
+      dayUseWeeklyOfflineReservationDetail,
       dayUseWeeklyRawStockVariance: row.dayUseWeeklyRawStockVariance || "",
       dayUseWeeklyStockText,
       url: row.url || row["상품 URL"] || row["네이버예약URL"] || ""
@@ -5504,8 +5512,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-revenue-by-product"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-revenue-by-product"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-offline-product-revenue"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-offline-product-revenue"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
