@@ -2762,6 +2762,12 @@ a.platform-row:hover {
   background: #fbfdff;
 }
 
+.company-check-card.recrawl,
+.company-check-card.check {
+  border-color: #c7dcff;
+  background: #f8fbff;
+}
+
 .company-check-card.contact {
   border-color: #bbf7d0;
   background: #fbfefc;
@@ -2925,6 +2931,40 @@ a.platform-row:hover {
 
 .company-check-next strong {
   font-size: 13px;
+}
+
+.company-check-action-plan {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.company-check-action-plan div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 9px;
+}
+
+.company-check-action-plan span,
+.company-check-action-plan small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-check-action-plan strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
 }
 
 .company-check-more {
@@ -3102,7 +3142,7 @@ a.platform-row:hover {
 }
 
 .company-review-actions.compact {
-  grid-template-columns: repeat(5, minmax(0, auto));
+  grid-template-columns: repeat(6, minmax(0, auto));
   justify-content: start;
 }
 
@@ -3131,6 +3171,17 @@ a.platform-row:hover {
   color: #b42318;
 }
 
+.company-review-actions button[data-company-review-action="contact_ready"] {
+  border-color: #bbf7d0;
+  color: #087443;
+}
+
+.company-review-actions button[data-company-review-action="check_needed"],
+.company-review-actions button[data-company-review-action="recrawl_needed"] {
+  border-color: #c7dcff;
+  color: var(--blue-dark);
+}
+
 .company-review-actions button[data-company-review-action="manual_needed"] {
   border-color: #fedf89;
   color: #b54708;
@@ -3147,10 +3198,18 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
-.company-review-badge.confirmed {
+.company-review-badge.confirmed,
+.company-review-badge.contact_ready {
   border-color: #b7e4cc;
   background: #ecfdf3;
   color: #067647;
+}
+
+.company-review-badge.check_needed,
+.company-review-badge.recrawl_needed {
+  border-color: #c7dcff;
+  background: #f4f8ff;
+  color: var(--blue-dark);
 }
 
 .company-review-badge.hold,
@@ -6281,6 +6340,7 @@ a.platform-row:hover {
   .company-check-metrics,
   .company-sales-metrics,
   .company-decision-evidence,
+  .company-check-action-plan,
   .target-board,
   .company-profile-keywords {
     grid-template-columns: 1fr;
@@ -6721,6 +6781,7 @@ a.platform-row:hover {
   .sheet-history-grid,
   .manual-correction-evidence,
   .company-decision-evidence,
+  .company-check-action-plan,
   .collection-diagnostic-grid,
   .collection-diagnostic-list,
   .sheet-collection-grid,

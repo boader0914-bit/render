@@ -2451,8 +2451,11 @@ function companySalesAction(company = {}) {
 
 function companySalesStage(company = {}) {
   const review = company.adminReview?.status || "";
-  if (review === "confirmed") return { key: "confirmed", label: "확정 타깃", priority: 0 };
+  if (review === "contact_ready") return { key: "contact", label: "컨택 가능", priority: 0 };
+  if (review === "confirmed") return { key: "confirmed", label: "확인 완료", priority: 0 };
   if (review === "manual_needed") return { key: "manual", label: "보정 필요", priority: 2 };
+  if (review === "recrawl_needed") return { key: "verify", label: "재수집 필요", priority: 2 };
+  if (review === "check_needed") return { key: "verify", label: "확인 필요", priority: 2 };
   if (review === "hold") return { key: "hold", label: "보류", priority: 5 };
   if (review === "exclude" || company.salesTarget?.category === "exclude") return { key: "exclude", label: "제외", priority: 9 };
   if (company.salesTarget?.category === "contact") return { key: "contact", label: "컨택 후보", priority: 1 };
@@ -3769,6 +3772,7 @@ function sheetCompanyProfile(item = {}) {
       </div>
       ${companyProfileKeywordList(profile)}
       ${companyReviewHistoryPanel(profile)}
+      ${companyReviewActionsHtml(profile, true)}
       ${sheetManualCorrectionEvidence(item)}
       ${sheetManualCorrectionForm(profile, item)}
     </section>
@@ -4040,7 +4044,10 @@ function companySalesTargetTagHtml(company = {}, limit = 6) {
 
 function companyAdminReviewLabel(status) {
   return {
-    confirmed: "판단 맞음",
+    confirmed: "확인 완료",
+    check_needed: "확인 필요",
+    recrawl_needed: "재수집 필요",
+    contact_ready: "컨택 가능",
     hold: "보류",
     exclude: "제외",
     manual_needed: "보정 필요"
@@ -4059,14 +4066,16 @@ function companyReviewActionsHtml(company = {}, compact = false) {
   const current = company.adminReview?.status || "";
   const note = company.adminReview?.note || "";
   const actions = [
-    ["confirmed", "맞음"],
-    ["hold", "보류"],
+    ["check_needed", "확인"],
+    ["recrawl_needed", "재수집"],
     ["manual_needed", "보정"],
+    ["contact_ready", "컨택"],
+    ["hold", "보류"],
     ["exclude", "제외"]
   ];
   return `
     <div class="company-review-control ${compact ? "compact" : ""}" data-company-review-control data-company-id="${escapeHtml(companyId)}">
-      <input type="text" data-company-review-note value="${escapeHtml(note)}" placeholder="판단 메모 선택 입력">
+      <input type="text" data-company-review-note value="${escapeHtml(note)}" placeholder="확인 채널, 재수집 범위, 수량/가격 메모">
       <div class="company-review-actions ${compact ? "compact" : ""}">
         ${actions.map(([status, label]) => `
           <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}">${label}</button>
@@ -4144,7 +4153,7 @@ function companyDecisionQueueProfile(company = {}) {
       action: "변경된 신호만 확인하고 판단을 다시 저장"
     });
   }
-  const closed = ["confirmed", "hold", "exclude"].includes(review.status || "");
+  const closed = ["confirmed", "contact_ready", "hold", "exclude"].includes(review.status || "");
   const inQueue = criteria.length > 0 && (!closed || staleAfterReview || manualNeedsReview);
   const channels = [];
   if (criteria.some((criterion) => criterion.key === "ota")) channels.push("여기어때 수동", "NOL/야놀자", "떠나요");
@@ -4212,6 +4221,11 @@ function companyNeedsCorrection(company = {}) {
 }
 
 function companyCheckEntryType(company = {}, profile = {}) {
+  const reviewStatus = company.adminReview?.status || "";
+  if (reviewStatus === "recrawl_needed") return { key: "recrawl", label: "재수집 필요" };
+  if (reviewStatus === "check_needed") return { key: "check", label: "확인 필요" };
+  if (reviewStatus === "contact_ready") return { key: "contact", label: "컨택 가능" };
+  if (reviewStatus === "manual_needed") return { key: "correction", label: "보정 필요" };
   const issues = profile.issues || [];
   if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
     return { key: "correction", label: "보정 필요" };
@@ -4289,8 +4303,8 @@ function companyReviewRecheckProfile(company = {}, profile = {}) {
   if (review.status === "exclude" && hasNewCollection && Number(company.bestRank || 9999) <= 5) {
     reasons.push("제외 후 상위권 노출이 다시 확인됨");
   }
-  if (review.status === "confirmed" && hasNewCollection && company.salesTarget?.category === "verify") {
-    reasons.push("확정 후 검증 후보 신호가 다시 발생");
+  if (["confirmed", "contact_ready"].includes(review.status) && hasNewCollection && company.salesTarget?.category === "verify") {
+    reasons.push("컨택 가능 판단 후 검증 후보 신호가 다시 발생");
   }
 
   return {
@@ -4307,8 +4321,20 @@ function companyCheckWorkflow(company = {}, profile = {}, type = {}) {
   if (review?.status === "manual_needed" && profile.applied) {
     return { key: "recheck", label: "보정 후 재검토", tone: "recheck", reasons: ["보정값이 입력되어 판단을 다시 저장해야 함"] };
   }
+  if (review?.status === "recrawl_needed") {
+    return { key: "open", label: "재수집 필요", tone: "open", reasons: ["관리자가 재수집 필요로 지정"] };
+  }
+  if (review?.status === "check_needed") {
+    return { key: "open", label: "확인 필요", tone: "open", reasons: ["관리자가 확인 필요로 지정"] };
+  }
+  if (review?.status === "manual_needed") {
+    return { key: "open", label: "수동 보정 필요", tone: "open", reasons: ["관리자가 수동 보정 필요로 지정"] };
+  }
   if (recheck.needed) {
     return { key: "recheck", label: "재확인", tone: "recheck", reasons: recheck.reasons };
+  }
+  if (review?.status === "contact_ready") {
+    return { key: "done", label: "컨택 가능", tone: "done", reasons: ["관리자가 컨택 가능으로 확정"] };
   }
   if (review?.status === "confirmed") {
     return { key: "done", label: "확인 완료", tone: "done", reasons: ["관리자가 판단 맞음으로 확정"] };
@@ -4368,6 +4394,7 @@ function companyCheckFilterOptions() {
   return [
     ["priority", "오늘 처리"],
     ["recheck", "재확인"],
+    ["recrawl", "재수집"],
     ["all", "전체"],
     ["correction", "보정 필요"],
     ["ota", "OTA 확인"],
@@ -4380,6 +4407,7 @@ function companyCheckFilterMatches(entry = {}, filter = "priority") {
   if (filter === "all") return true;
   if (filter === "priority") return entry.workflow.key === "open";
   if (filter === "recheck") return entry.workflow.key === "recheck";
+  if (filter === "recrawl") return entry.workflow.key !== "done" && (entry.type.key === "recrawl" || entry.company.adminReview?.status === "recrawl_needed");
   if (filter === "done") return entry.workflow.key === "done";
   if (filter === "ota") return entry.workflow.key !== "done" && (entry.type.key === "ota" || (entry.profile.issues || []).some((issue) => issue.key === "ota"));
   if (filter === "gap") return entry.workflow.key !== "done" && (entry.type.key === "gap" || (entry.profile.issues || []).some((issue) => issue.key === "gap"));
@@ -4402,7 +4430,7 @@ function companyDecisionQueueEntries(master = {}) {
     .filter((entry) => entry.include)
     .sort((a, b) => {
       const workflowWeight = { open: 3, recheck: 2, done: 1 };
-      const typeWeight = { correction: 5, ota: 4, gap: 3, exclude: 2, benchmark: 1, observe: 0 };
+      const typeWeight = { correction: 6, recrawl: 5, check: 4, ota: 4, gap: 3, exclude: 2, benchmark: 1, observe: 0 };
       return (workflowWeight[b.workflow.key] || 0) - (workflowWeight[a.workflow.key] || 0)
         || b.priority.score - a.priority.score
         || (typeWeight[b.type.key] || 0) - (typeWeight[a.type.key] || 0)
@@ -4426,6 +4454,50 @@ function companyDecisionEvidenceHtml(decision = {}) {
         <div>
           <span>${escapeHtml(label)}</span>
           <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decision = {}) {
+  const run = state.data?.run || {};
+  const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
+  const issues = new Set((profile.issues || []).map((issue) => issue.key));
+  const rank = Number(company.bestRank || 0);
+  let range = "1-20";
+  if (!rank || rank > 20 || criteria.has("ota") || criteria.has("quantity") || criteria.has("capacity") || issues.has("booking")) {
+    range = "1-30";
+  } else if (rank <= 5 && !(criteria.has("quantity") || criteria.has("capacity"))) {
+    range = "1-10";
+  }
+  const dateText = decision.problemDateText && decision.problemDateText !== "최근 수집일 기준"
+    ? decision.problemDateText
+    : dateRangeLabel(run);
+  const statusSuggestion = company.adminReview?.status
+    ? companyAdminReviewLabel(company.adminReview.status)
+    : criteria.has("manual_recheck") || issues.has("manual") || issues.has("structure") || issues.has("offline")
+      ? "보정 필요"
+      : workflow.key === "recheck" || criteria.has("quantity") || criteria.has("capacity") || issues.has("booking")
+        ? "재수집 필요"
+        : criteria.has("gap") || criteria.has("ota") || issues.has("ota")
+          ? "확인 필요"
+          : company.salesTarget?.category === "contact"
+            ? "컨택 가능"
+            : "확인 필요";
+  const rows = [
+    ["추천 처리", statusSuggestion, "버튼으로 처리 상태 저장"],
+    ["재수집 설정", `정밀분석 · 상세 ${range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
+    ["문제 날짜", dateText || "최근 수집일 기준", "동일 기간 재수집 또는 날짜별 직접 확인"],
+    ["확인 채널", decision.channelText || "네이버 기준", "OTA/네이버 객실 탭/전화예약 메모"]
+  ];
+  return `
+    <div class="company-check-action-plan">
+      ${rows.map(([label, value, note]) => `
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+          <small>${escapeHtml(note)}</small>
         </div>
       `).join("")}
     </div>
@@ -4472,6 +4544,7 @@ function companyCheckEntryHtml(entry = {}) {
         <span>추천 판단</span>
         <strong>${escapeHtml(companyCheckRecommendation(company, profile, workflow, decision))}</strong>
       </div>
+      ${companyQueueActionPlan(company, profile, workflow, decision)}
       ${companyReviewActionsHtml(company, true)}
       ${showCorrectionForm ? companyCorrectionFormHtml(company, true) : ""}
     </article>
@@ -4486,11 +4559,12 @@ function companyMasterCheckPanel(master = {}) {
   const visibleEntries = entries.filter((entry) => companyCheckFilterMatches(entry, selectedFilter));
   const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
   const criterionCount = (key) => openEntries.filter((entry) => (entry.decision.criteria || []).some((criterion) => criterion.key === key)).length;
+  const reviewStatusCount = (status) => entries.filter((entry) => entry.company.adminReview?.status === status).length;
   const metrics = [
     ["판단 큐", openEntries.length, "사람 확인 필요"],
-    ["OTA 확인", criterionCount("ota"), "보조 채널 확인"],
-    ["수량/총량", criterionCount("quantity") + criterionCount("capacity"), "구조·변동 확인"],
-    ["재검토", criterionCount("manual_recheck") + countForFilter("recheck"), "보정/새 신호"]
+    ["재수집 필요", reviewStatusCount("recrawl_needed"), "범위/기간 재확인"],
+    ["수동 보정", reviewStatusCount("manual_needed") + criterionCount("manual_recheck"), "총량 보정 후 재판정"],
+    ["컨택 가능", reviewStatusCount("contact_ready"), "영업타깃 이동"]
   ];
   const displayLimit = selectedFilter === "priority" ? 15 : 24;
   const displayedEntries = visibleEntries.slice(0, displayLimit);
@@ -4560,11 +4634,12 @@ function companyCorrectionFormHtml(company = {}, compact = false) {
 function companyMasterSalesTargetsPanel(master = {}) {
   const targets = master.salesTargets || {};
   const companies = master.companies || [];
+  const queueEntries = companyDecisionQueueEntries(master);
   const topTargets = companies
     .filter((company) => company.salesTarget?.category === "contact" && !companyDecisionQueueProfile(company).inQueue)
     .sort((a, b) => (b.salesTarget?.score || 0) - (a.salesTarget?.score || 0) || (a.bestRank || 9999) - (b.bestRank || 9999));
-  const confirmedTargets = companies.filter((company) => company.adminReview?.status === "confirmed" && !companyDecisionQueueProfile(company).inQueue);
-  const queueCount = companies.filter((company) => companyDecisionQueueProfile(company).inQueue).length;
+  const confirmedTargets = companies.filter((company) => ["confirmed", "contact_ready"].includes(company.adminReview?.status) && !companyDecisionQueueProfile(company).inQueue);
+  const queueCount = queueEntries.filter((entry) => entry.workflow.key !== "done").length;
   return `
     <div class="company-sales-panel">
       <div class="company-sales-metrics">
@@ -5040,7 +5115,7 @@ function renderTargets() {
   const currentItems = targetEntries(12);
   const confirmed = boardEntries.filter((entry) => entry.stage.key === "confirmed");
   const contact = boardEntries.filter((entry) => entry.stage.key === "contact");
-  const masterQueueCount = (companyMasterSource().companies || []).filter((company) => companyDecisionQueueProfile(company).inQueue).length;
+  const masterQueueCount = companyDecisionQueueEntries(companyMasterSource()).filter((entry) => entry.workflow.key !== "done").length;
   const currentQueueCount = validationQueueEntries(state.data?.availability?.items || [], 0).length;
   const decisionQueueCount = masterQueueCount || currentQueueCount;
   const actionableCount = confirmed.length + contact.length;

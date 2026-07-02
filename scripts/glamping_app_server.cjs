@@ -3582,7 +3582,10 @@ function companySalesTargetSignalReasons(signals = {}) {
 
 function companyAdminReviewMeta(status) {
   return {
-    confirmed: { label: "판단 맞음", category: null, scoreDelta: 6, tag: "관리자 확인" },
+    confirmed: { label: "확인 완료", category: null, scoreDelta: 6, tag: "관리자 확인" },
+    check_needed: { label: "확인 필요", category: "verify", scoreFloor: 45, tag: "확인 필요" },
+    recrawl_needed: { label: "재수집 필요", category: "verify", scoreFloor: 50, tag: "재수집 필요" },
+    contact_ready: { label: "컨택 가능", category: "contact", scoreFloor: 72, tag: "컨택 가능" },
     hold: { label: "보류", category: "observe", scoreCap: 50, tag: "보류" },
     exclude: { label: "제외", category: "exclude", scoreSet: 0, tag: "관리자 제외" },
     manual_needed: { label: "보정 필요", category: "verify", scoreFloor: 55, tag: "보정 필요" }
@@ -5512,8 +5515,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-precision-diagnostics"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-precision-diagnostics"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-queue-actions"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-queue-actions"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
