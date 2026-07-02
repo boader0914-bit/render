@@ -2973,6 +2973,135 @@ function companySalesEvidenceList(company = {}, entry = {}) {
   return [...new Set(rows)].slice(0, 7);
 }
 
+function companySalesProposalSignals(company = {}, entry = {}) {
+  const signals = company.salesTarget?.signals || {};
+  const action = entry.action || companySalesAction(company);
+  const revenue = entry.revenueImpact || {};
+  const rows = [
+    { label: "제안축", value: action.label || "상품 재정리" },
+    { label: "예상매출", value: fmtWon(revenue.totalRevenue) },
+    company.bestRank ? { label: "노출", value: `${fmtNumber(company.bestRank)}위 · ${company.bestKeyword || company.latestKeyword || "대표 키워드"}` } : null,
+    finiteNumber(revenue.totalMissingPriceSoldOut) ? { label: "가격확인", value: `${fmtNumber(revenue.totalMissingPriceSoldOut)}개/회` } : null,
+    signals.fridayWeak ? { label: "금요일", value: `공백 ${fmtRate(signals.fridayRate)}` } : null,
+    signals.sundayWeak ? { label: "일요일", value: `공백 ${fmtRate(signals.sundayRate)}` } : null,
+    signals.weekdayWeak ? { label: "평일", value: `공백 ${fmtRate(signals.weekdayRate)}` } : null,
+    signals.dayUseMissing ? { label: "캠프닉", value: "데이유즈/캠프닉 확인" } : null,
+    manualCorrectionHasValue(company.manualCorrection) ? { label: "보정", value: company.correctionStatus?.detail || "수동 보정 있음" } : null
+  ].filter((row) => row && row.value && row.value !== "0원");
+  return rows.slice(0, 8);
+}
+
+function companySalesProposalQuestions(company = {}, entry = {}) {
+  const action = entry.action || companySalesAction(company);
+  const signals = company.salesTarget?.signals || {};
+  const questions = [
+    "실제 운영 총 객실수와 네이버에 열어둔 판매 수량이 같은가요?",
+    "평일, 금요일, 토요일, 일요일 대표 판매가와 운영 상품 구성이 각각 어떻게 되나요?",
+    "미오픈/차단으로 보이는 수량 중 오프라인 예약으로 잡는 비중이 어느 정도인가요?"
+  ];
+  if (signals.fridayWeak || String(action.label || "").includes("금요일")) {
+    questions.push("금요일 객실 공백을 연박, 바비큐, 늦은 입실 상품으로 보강할 수 있나요?");
+  }
+  if (signals.sundayWeak || String(action.label || "").includes("일요일")) {
+    questions.push("일요일 잔여 객실에 늦은 퇴실, 특가, 다음 주 재방문 혜택을 붙일 수 있나요?");
+  }
+  if (signals.weekdayWeak || String(action.label || "").includes("평일")) {
+    questions.push("월~목 평일에 가족, 단체, 기업 소규모 체류 상품을 운영할 수 있나요?");
+  }
+  if (signals.dayUseMissing || String(action.label || "").includes("캠프닉")) {
+    questions.push("데이유즈/캠프닉은 숙박과 같은 카테고리로 묶어 회차, 기준 인원, 바비큐 포함 여부를 확인해야 합니다.");
+  }
+  questions.push("NOL, 떠나요, 여기어때 등 OTA 채널별 노출 가격과 네이버 예약 가격이 일치하나요?");
+  return [...new Set(questions)].slice(0, 7);
+}
+
+function companySalesScriptText(company = {}, entry = {}) {
+  const action = entry.action || companySalesAction(company);
+  const contact = company.salesContact || {};
+  const status = contact.status || "not_contacted";
+  const companyName = company.primaryName || entry.item?.name || "대표님";
+  const revenueText = fmtWon(entry.revenueImpact?.totalRevenue);
+  const rankText = company.bestRank ? `${company.bestKeyword || company.latestKeyword || "주요 키워드"} ${fmtNumber(company.bestRank)}위 노출` : "네이버 노출 데이터";
+  const proposal = contact.proposal || action.next || action.pitch || "예약 상품 구성을 확인";
+  const lead = `${companyName} 담당자님, 안녕하세요. 글램핑 예약 데이터 기준으로 ${rankText}과 판매 공백을 같이 보고 연락드립니다.`;
+  if (status === "waiting_reply") {
+    return `${lead}\n지난 컨택 이후 ${action.label} 제안 가능성을 다시 확인드리고 싶습니다. 현재 분석상 ${revenueText} 수준의 보완 여지가 있어 보이며, ${proposal}만 확인되면 바로 실행안을 정리할 수 있습니다.`;
+  }
+  if (status === "interested") {
+    return `${lead}\n관심 주신 내용 기준으로는 ${action.label}이 우선입니다. 평일/금요일/일요일 가격과 실제 총 객실수만 맞춰보면, ${revenueText} 규모의 공백을 어떤 상품으로 회수할지 제안서를 짧게 정리드릴 수 있습니다.`;
+  }
+  if (status === "high_potential") {
+    return `${lead}\n현재는 계약 가능성이 높은 상태로 보고 있습니다. ${proposal} 확인 후 ${action.label} 실행안과 예상 매출 근거를 확정해서 다음 미팅에서 바로 결정하실 수 있게 준비하겠습니다.`;
+  }
+  if (status === "first_contacted") {
+    return `${lead}\n1차로 말씀드린 내용처럼 ${action.label} 여지가 보입니다. 실제 운영 총량과 요일별 가격만 맞춰보면 ${revenueText} 수준의 공백을 더 정확히 산출할 수 있습니다.`;
+  }
+  return `${lead}\n분석상 ${action.label} 제안이 우선으로 보이고, 예상 보완 매출은 ${revenueText} 수준입니다. 실제 총 객실수, 요일별 가격, 오프라인 예약 비중만 확인되면 바로 적용 가능한 제안으로 정리드리겠습니다.`;
+}
+
+function companySalesCallNote(company = {}, entry = {}) {
+  const action = entry.action || companySalesAction(company);
+  const questions = companySalesProposalQuestions(company, entry).slice(0, 4);
+  return [
+    `전화 목적: ${action.label} 제안 가능성 확인`,
+    `핵심 근거: ${companySalesEvidenceList(company, entry).slice(0, 3).join(" / ") || action.pitch}`,
+    `확인 질문: ${questions.join(" / ")}`,
+    `다음 액션: ${company.salesContact?.nextActionAt || "후속 일정 지정"}`
+  ].join("\n");
+}
+
+function companySalesProposalProfile(company = {}, entry = {}) {
+  const signals = companySalesProposalSignals(company, entry);
+  const questions = companySalesProposalQuestions(company, entry);
+  const script = companySalesScriptText(company, entry);
+  const callNote = companySalesCallNote(company, entry);
+  return {
+    signals,
+    questions,
+    script,
+    callNote,
+    summary: signals.map((row) => `${row.label}: ${row.value}`).join(" / "),
+    questionText: questions.map((question, index) => `${index + 1}. ${question}`).join("\n")
+  };
+}
+
+function salesProposalHtml(entry = {}) {
+  const company = entry.company || {};
+  const profile = companySalesProposalProfile(company, entry);
+  return `
+    <div class="sales-proposal-card">
+      <div class="sales-proposal-head">
+        <div>
+          <strong>제안/컨택 스크립트</strong>
+          <small>${escapeHtml(entry.action?.label || "상품 재정리")} · ${escapeHtml(salesContactMeta(company.salesContact?.status).label)}</small>
+        </div>
+        <div class="sales-copy-actions">
+          <button type="button" data-copy-sales-script data-company-id="${escapeHtml(company.companyId || "")}">문구 복사</button>
+          <button type="button" data-copy-sales-call-note data-company-id="${escapeHtml(company.companyId || "")}">전화 메모</button>
+        </div>
+      </div>
+      <div class="sales-proposal-grid">
+        ${profile.signals.map((row) => `
+          <div>
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sales-script-box">
+        <span>문자/카톡 초안</span>
+        <p>${escapeHtml(profile.script)}</p>
+      </div>
+      <div class="sales-question-list">
+        <strong>확인 질문</strong>
+        <ol>
+          ${profile.questions.map((question) => `<li>${escapeHtml(question)}</li>`).join("")}
+        </ol>
+      </div>
+    </div>
+  `;
+}
+
 function salesContactFormHtml(company = {}) {
   const contact = company.salesContact || {};
   const status = contact.status || "not_contacted";
@@ -3087,11 +3216,12 @@ function salesTargetCsvValue(value) {
 }
 
 function salesTargetCsv(entries = []) {
-  const headers = ["업체명", "지역", "URL", "우선순위", "예상매출", "컨택상태", "후속상태", "다음액션", "제안포인트", "메모", "추천사유"];
+  const headers = ["업체명", "지역", "URL", "우선순위", "예상매출", "컨택상태", "후속상태", "다음액션", "제안포인트", "메모", "추천사유", "제안요약", "확인질문", "컨택문구", "전화메모"];
   const rows = entries.map((entry) => {
     const company = entry.company || {};
     const item = entry.item || {};
     const contact = company.salesContact || {};
+    const proposal = companySalesProposalProfile(company, entry);
     return [
       company.primaryName || item.name || "",
       (company.regions || []).slice(0, 2).join(" / ") || item.region || "",
@@ -3103,7 +3233,11 @@ function salesTargetCsv(entries = []) {
       contact.nextActionAt || "",
       contact.proposal || entry.action?.label || "",
       contact.note || "",
-      companySalesEvidenceList(company, entry).join(" | ")
+      companySalesEvidenceList(company, entry).join(" | "),
+      proposal.summary,
+      proposal.questionText,
+      proposal.script,
+      proposal.callNote
     ].map(salesTargetCsvValue).join(",");
   });
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
@@ -5995,6 +6129,7 @@ function renderTargets() {
           <strong>다음 액션</strong>
           <span>${escapeHtml(company.salesContact?.proposal || action.next)}</span>
         </div>
+        ${salesProposalHtml(entry)}
         ${salesContactFormHtml(company)}
         ${salesContactHistoryHtml(company)}
         <div class="target-card-actions">
@@ -6029,10 +6164,10 @@ function renderTargets() {
     </section>
     <section class="target-export-bar">
       <div>
-        <strong>영업 후속관리 / 파이프라인 V2</strong>
-        <small>컨택 가능 업체를 상태별 파이프라인으로 관리하고, 오늘 처리·지연·날짜 미지정 후속을 우선 정렬합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
+        <strong>영업 제안/컨택 스크립트 V2</strong>
+        <small>상태별 파이프라인과 함께 업체별 제안 근거, 확인 질문, 문자/카톡 초안, 전화 메모를 자동 생성합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
       </div>
-      <button type="button" data-export-sales-targets>컨택 리스트 CSV</button>
+      <button type="button" data-export-sales-targets>컨택+문구 CSV</button>
     </section>
     ${salesPipelineHtml(pipelineSummary)}
     <section class="target-followup-board">
@@ -7887,6 +8022,49 @@ function exportSalesTargetsCsv() {
   setStatus(`컨택 리스트 ${fmtNumber(entries.length)}개 내보내기`);
 }
 
+async function copyTextToClipboard(text = "") {
+  const value = String(text || "");
+  if (!value.trim()) return false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch (error) {
+      // Fall through to textarea copy for non-secure contexts or denied clipboard permissions.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const ok = document.execCommand("copy");
+  textarea.remove();
+  return ok;
+}
+
+async function copySalesProposal(button, type = "script") {
+  const companyId = button?.dataset?.companyId || "";
+  const entry = companySalesBoardEntries().find((row) => row.company.companyId === companyId);
+  if (!entry) {
+    setStatus("복사할 영업 문구를 찾지 못했습니다.");
+    return;
+  }
+  const proposal = companySalesProposalProfile(entry.company, entry);
+  const text = type === "call" ? proposal.callNote : proposal.script;
+  button.disabled = true;
+  try {
+    const ok = await copyTextToClipboard(text);
+    setStatus(ok ? (type === "call" ? "전화 메모 복사 완료" : "컨택 문구 복사 완료") : "복사 실패");
+  } catch (error) {
+    setStatus(`복사 실패: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function applyQueueRecrawlSetting(button) {
   const companyId = button?.dataset?.queueRecrawlCompany || "";
   const company = (companyMasterSource().companies || []).find((row) => row.companyId === companyId);
@@ -8303,6 +8481,10 @@ function bindEvents() {
     if (reviewAction) saveCompanyAdminReview(reviewAction);
     const salesContact = event.target.closest("[data-save-sales-contact]");
     if (salesContact) saveCompanySalesContact(salesContact);
+    const salesScript = event.target.closest("[data-copy-sales-script]");
+    if (salesScript) copySalesProposal(salesScript, "script");
+    const salesCallNote = event.target.closest("[data-copy-sales-call-note]");
+    if (salesCallNote) copySalesProposal(salesCallNote, "call");
     if (event.target.closest("[data-export-sales-targets]")) exportSalesTargetsCsv();
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
     if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
