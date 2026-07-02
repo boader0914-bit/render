@@ -3494,6 +3494,8 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
     adminReview: company.adminReview || null,
     adminReviewHistory: (company.adminReviewHistory || []).slice(-8),
+    salesContact: company.salesContact || null,
+    salesContactHistory: (company.salesContactHistory || []).slice(-12),
     identityConfidence: companyIdentityConfidence(company)
   };
 }
@@ -3691,6 +3693,18 @@ function companyAdminReviewMeta(status) {
     hold: { label: "보류", category: "observe", scoreCap: 50, tag: "보류" },
     exclude: { label: "제외", category: "exclude", scoreSet: 0, tag: "관리자 제외" },
     manual_needed: { label: "보정 필요", category: "verify", scoreFloor: 55, tag: "보정 필요" }
+  }[status] || null;
+}
+
+function companySalesContactMeta(status) {
+  return {
+    not_contacted: { label: "미컨택", tone: "todo", order: 1 },
+    first_contacted: { label: "1차 컨택", tone: "progress", order: 2 },
+    waiting_reply: { label: "답변 대기", tone: "wait", order: 3 },
+    interested: { label: "관심 있음", tone: "good", order: 4 },
+    high_potential: { label: "계약 가능성 높음", tone: "strong", order: 5 },
+    hold: { label: "보류", tone: "hold", order: 6 },
+    excluded: { label: "제외", tone: "bad", order: 7 }
   }[status] || null;
 }
 
@@ -4010,6 +4024,17 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
     ]
       .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
       .slice(-50);
+    const latestSalesContact = [target.salesContact, source.salesContact]
+      .filter(Boolean)
+      .sort((a, b) => String(a.updatedAt || "").localeCompare(String(b.updatedAt || "")))
+      .at(-1);
+    if (latestSalesContact) target.salesContact = latestSalesContact;
+    target.salesContactHistory = [
+      ...(target.salesContactHistory || []),
+      ...(source.salesContactHistory || [])
+    ]
+      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
+      .slice(-80);
     target.duplicateNotes = [
       ...(target.duplicateNotes || []),
       {
@@ -4167,6 +4192,66 @@ async function saveCompanyAdminReview(payload = {}) {
     ...(await summarizeCompanyMaster()),
     company: companyRecordSummary(company),
     resolved: { action: "saveAdminReview", companyId, status: company.adminReview?.status || "clear" }
+  };
+}
+
+async function saveCompanySalesContact(payload = {}) {
+  const companyId = String(payload.companyId || "").trim();
+  const status = String(payload.status || "not_contacted").trim();
+  const master = await readCompanyMaster();
+  const company = master.companies?.[companyId];
+  if (!company) {
+    const error = new Error("컨택 상태를 저장할 업체를 찾지 못했습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const meta = companySalesContactMeta(status);
+  if (!meta) {
+    const error = new Error("지원하지 않는 컨택 상태입니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const savedAt = new Date().toISOString();
+  const nextContact = {
+    status,
+    label: meta.label,
+    tone: meta.tone,
+    channel: String(payload.channel || "").trim(),
+    contactPerson: String(payload.contactPerson || "").trim(),
+    proposal: String(payload.proposal || "").trim(),
+    nextActionAt: String(payload.nextActionAt || "").trim(),
+    note: String(payload.note || "").trim(),
+    source: "sales",
+    updatedAt: savedAt
+  };
+  company.salesContact = nextContact;
+  company.salesContactHistory = [
+    ...(company.salesContactHistory || []),
+    {
+      at: savedAt,
+      action: "save",
+      status,
+      label: meta.label,
+      channel: nextContact.channel,
+      contactPerson: nextContact.contactPerson,
+      proposal: nextContact.proposal,
+      nextActionAt: nextContact.nextActionAt,
+      note: nextContact.note,
+      source: "sales"
+    }
+  ].slice(-80);
+  company.duplicateNotes = [
+    ...(company.duplicateNotes || []),
+    {
+      at: savedAt,
+      reason: `영업 컨택 ${meta.label}`
+    }
+  ].slice(-50);
+  await writeCompanyMaster(master);
+  return {
+    ...(await summarizeCompanyMaster()),
+    company: companyRecordSummary(company),
+    resolved: { action: "saveSalesContact", companyId, status }
   };
 }
 
@@ -5627,8 +5712,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-queue-ops"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-queue-ops"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-sales-execution"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-sales-execution"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -5722,6 +5807,11 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/admin-review") {
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyAdminReview(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/sales-contact") {
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveCompanySalesContact(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/backfill") {

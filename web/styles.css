@@ -2024,8 +2024,53 @@ a.platform-row:hover {
 
 .target-board-hero {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
+}
+
+.target-export-bar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  background: #f8fbff;
+  box-shadow: var(--soft-shadow);
+  padding: 14px;
+}
+
+.target-export-bar > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.target-export-bar strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.target-export-bar small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.target-export-bar button {
+  min-height: 38px;
+  border: 1px solid #8cbcff;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
 }
 
 .target-board-hero article,
@@ -2128,6 +2173,10 @@ a.platform-row:hover {
   border-color: #fedf89;
 }
 
+.target-action-card.exclude {
+  opacity: 0.78;
+}
+
 .target-action-head {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -2181,14 +2230,150 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.sales-contact-badge {
+  justify-self: end;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #475467;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sales-contact-badge.progress,
+.sales-contact-badge.wait {
+  background: #eaf3ff;
+  color: var(--blue-dark);
+}
+
+.sales-contact-badge.good,
+.sales-contact-badge.strong {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.sales-contact-badge.hold {
+  background: #fff4df;
+  color: #b54708;
+}
+
+.sales-contact-badge.bad {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.target-execution-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.target-execution-metrics div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 9px;
+}
+
+.target-execution-metrics span,
+.target-execution-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.target-execution-metrics strong {
+  color: var(--blue-dark);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
 .target-next-line {
   display: grid;
   gap: 3px;
 }
 
+.sales-contact-form {
+  display: grid;
+  gap: 8px;
+  border: 1px dashed #c7dcff;
+  border-radius: 13px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.sales-contact-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sales-contact-form label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sales-contact-form label span,
+.sales-contact-actions small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.sales-contact-form input,
+.sales-contact-form select {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.sales-contact-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.sales-contact-actions button {
+  min-height: 34px;
+  border: 1px solid #8cbcff;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .target-card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.target-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 .target-head,
@@ -6680,6 +6865,10 @@ a.platform-row:hover {
   .company-recheck-recommend,
   .company-queue-log-list article > div,
   .target-board,
+  .target-export-bar,
+  .target-execution-metrics,
+  .sales-contact-fields,
+  .sales-contact-actions,
   .company-profile-keywords {
     grid-template-columns: 1fr;
   }
@@ -7128,6 +7317,10 @@ a.platform-row:hover {
   .company-recheck-head,
   .company-recheck-recommend,
   .company-queue-log-list article > div,
+  .target-export-bar,
+  .target-execution-metrics,
+  .sales-contact-fields,
+  .sales-contact-actions,
   .collection-diagnostic-grid,
   .collection-diagnostic-list,
   .sheet-collection-grid,

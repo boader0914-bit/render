@@ -2789,10 +2789,153 @@ function companySalesBoardEntries() {
       const action = companySalesAction(company);
       const item = companyItemFromCurrentRun(company);
       const decision = companyDecisionQueueProfile(company);
-      return { company, stage, action, item, decision };
+      const revenueImpact = companyQueueRevenueImpact(company);
+      const comparison = companyRecrawlComparison(company);
+      const contact = company.salesContact || {};
+      const priorityScore = companySalesExecutionScore(company, revenueImpact, comparison);
+      return { company, stage, action, item, decision, revenueImpact, comparison, contact, priorityScore };
     })
     .filter((entry) => ["confirmed", "contact"].includes(entry.stage.key) && !entry.decision.inQueue)
-    .sort((a, b) => a.stage.priority - b.stage.priority || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
+    .sort((a, b) => a.stage.priority - b.stage.priority || b.priorityScore - a.priorityScore || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
+}
+
+function salesContactOptions() {
+  return [
+    ["not_contacted", "미컨택"],
+    ["first_contacted", "1차 컨택"],
+    ["waiting_reply", "답변 대기"],
+    ["interested", "관심 있음"],
+    ["high_potential", "계약 가능성 높음"],
+    ["hold", "보류"],
+    ["excluded", "제외"]
+  ];
+}
+
+function salesContactMeta(status) {
+  return {
+    not_contacted: { label: "미컨택", tone: "todo", order: 1 },
+    first_contacted: { label: "1차 컨택", tone: "progress", order: 2 },
+    waiting_reply: { label: "답변 대기", tone: "wait", order: 3 },
+    interested: { label: "관심 있음", tone: "good", order: 4 },
+    high_potential: { label: "계약 가능성 높음", tone: "strong", order: 5 },
+    hold: { label: "보류", tone: "hold", order: 6 },
+    excluded: { label: "제외", tone: "bad", order: 7 }
+  }[status] || { label: "미컨택", tone: "todo", order: 1 };
+}
+
+function companySalesExecutionScore(company = {}, revenueImpact = {}, comparison = {}) {
+  let score = Number(company.salesTarget?.score || 0);
+  const rank = Number(company.bestRank || 0);
+  if (rank > 0 && rank <= 5) score += 14;
+  else if (rank > 0 && rank <= 10) score += 9;
+  else if (rank > 0 && rank <= 20) score += 5;
+  const revenue = finiteNumber(revenueImpact.totalRevenue);
+  if (revenue >= 5000000) score += 18;
+  else if (revenue >= 2000000) score += 11;
+  else if (revenue >= 700000) score += 5;
+  if (finiteNumber(revenueImpact.totalMissingPriceSoldOut) > 0) score += 4;
+  const signals = company.salesTarget?.signals || {};
+  if (signals.fridayWeak) score += 5;
+  if (signals.sundayWeak) score += 5;
+  if (signals.weekdayWeak) score += 4;
+  if (comparison.hasComparison && comparison.improved > comparison.worsened) score += 8;
+  if (company.adminReview?.status === "contact_ready") score += 12;
+  if (company.adminReview?.status === "confirmed") score += 8;
+  const contactOrder = salesContactMeta(company.salesContact?.status).order;
+  if (contactOrder >= 4 && contactOrder <= 5) score += 10;
+  if (company.salesContact?.status === "excluded") score -= 80;
+  if (company.salesContact?.status === "hold") score -= 20;
+  return Math.max(0, Math.round(score));
+}
+
+function companySalesPrimaryUrl(company = {}, item = {}) {
+  return externalPlatformUrl(item?.url) || externalPlatformUrl((company.urls || [])[0]) || "";
+}
+
+function companySalesEvidenceList(company = {}, entry = {}) {
+  const signals = company.salesTarget?.signals || {};
+  const revenue = entry.revenueImpact || {};
+  const rows = [
+    company.salesTarget?.recommendation,
+    ...(company.salesTarget?.reasons || []).slice(0, 2),
+    entry.action?.pitch,
+    company.bestRank ? `최고 노출 ${fmtNumber(company.bestRank)}위 · ${company.bestKeyword || "대표 키워드"}` : "",
+    finiteNumber(revenue.totalRevenue) ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : "",
+    finiteNumber(revenue.totalMissingPriceSoldOut) ? `가격 누락 ${fmtNumber(revenue.totalMissingPriceSoldOut)}개/회` : "",
+    signals.fridayWeak ? `금요일 공백 ${fmtRate(signals.fridayRate)}` : "",
+    signals.sundayWeak ? `일요일 공백 ${fmtRate(signals.sundayRate)}` : "",
+    signals.weekdayWeak ? `평일 공백 ${fmtRate(signals.weekdayRate)}` : "",
+    manualCorrectionHasValue(company.manualCorrection) ? `수동 보정: ${company.correctionStatus?.detail || "보정값 있음"}` : "",
+    entry.comparison?.hasComparison ? `재수집 비교 개선 ${fmtNumber(entry.comparison.improved)} / 악화 ${fmtNumber(entry.comparison.worsened)}` : ""
+  ].filter(Boolean);
+  return [...new Set(rows)].slice(0, 7);
+}
+
+function salesContactFormHtml(company = {}) {
+  const contact = company.salesContact || {};
+  const status = contact.status || "not_contacted";
+  return `
+    <div class="sales-contact-form" data-sales-contact-form data-company-id="${escapeHtml(company.companyId || "")}">
+      <div class="sales-contact-fields">
+        <label>
+          <span>상태</span>
+          <select data-sales-contact-status>
+            ${salesContactOptions().map(([value, label]) => `<option value="${value}" ${status === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>채널</span>
+          <input type="text" data-sales-contact-channel value="${escapeHtml(contact.channel || "")}" placeholder="전화, 문자, 카톡">
+        </label>
+        <label>
+          <span>담당자</span>
+          <input type="text" data-sales-contact-person value="${escapeHtml(contact.contactPerson || "")}" placeholder="대표/담당자">
+        </label>
+        <label>
+          <span>다음 액션</span>
+          <input type="date" data-sales-contact-next value="${escapeHtml(contact.nextActionAt || "")}">
+        </label>
+      </div>
+      <label>
+        <span>제안 포인트</span>
+        <input type="text" data-sales-contact-proposal value="${escapeHtml(contact.proposal || "")}" placeholder="예: 금요일 객실 공백 보완, 평일 패키지 제안">
+      </label>
+      <label>
+        <span>메모</span>
+        <input type="text" data-sales-contact-note value="${escapeHtml(contact.note || "")}" placeholder="통화/문자/카톡 메모">
+      </label>
+      <div class="sales-contact-actions">
+        <small>${contact.updatedAt ? `최근 저장 ${escapeHtml(compactDateTime(contact.updatedAt))}` : "컨택 상태 미저장"}</small>
+        <button type="button" data-save-sales-contact data-company-id="${escapeHtml(company.companyId || "")}">컨택 저장</button>
+      </div>
+    </div>
+  `;
+}
+
+function salesTargetCsvValue(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function salesTargetCsv(entries = []) {
+  const headers = ["업체명", "지역", "URL", "우선순위", "예상매출", "상태", "다음액션", "제안포인트", "메모", "추천사유"];
+  const rows = entries.map((entry) => {
+    const company = entry.company || {};
+    const item = entry.item || {};
+    const contact = company.salesContact || {};
+    return [
+      company.primaryName || item.name || "",
+      (company.regions || []).slice(0, 2).join(" / ") || item.region || "",
+      companySalesPrimaryUrl(company, item),
+      entry.priorityScore,
+      finiteNumber(entry.revenueImpact?.totalRevenue),
+      salesContactMeta(contact.status).label,
+      contact.nextActionAt || "",
+      contact.proposal || entry.action?.label || "",
+      contact.note || "",
+      companySalesEvidenceList(company, entry).join(" | ")
+    ].map(salesTargetCsvValue).join(",");
+  });
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
 }
 
 function reportPlatformStats(items = []) {
@@ -5636,6 +5779,10 @@ function renderTargets() {
   const decisionQueueCount = masterQueueCount || currentQueueCount;
   const actionableCount = confirmed.length + contact.length;
   const currentOnly = currentItems.filter(({ item }) => !boardEntries.some((entry) => entry.item === item)).slice(0, 6);
+  const notContactedCount = boardEntries.filter((entry) => !entry.company.salesContact?.status || entry.company.salesContact.status === "not_contacted").length;
+  const waitingCount = boardEntries.filter((entry) => ["first_contacted", "waiting_reply"].includes(entry.company.salesContact?.status)).length;
+  const highPotentialCount = boardEntries.filter((entry) => ["interested", "high_potential"].includes(entry.company.salesContact?.status)).length;
+  const nextActionCount = boardEntries.filter((entry) => entry.company.salesContact?.nextActionAt).length;
 
   els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
   if (!boardEntries.length && !currentItems.length) {
@@ -5644,33 +5791,42 @@ function renderTargets() {
   }
 
   const boardCard = (entry, index) => {
-    const { company, stage, action, item } = entry;
+    const { company, stage, action, item, revenueImpact, priorityScore } = entry;
     const itemIndex = item ? (state.data?.availability?.items || []).indexOf(item) : -1;
     const regionText = (company.regions || []).slice(0, 2).join(" · ") || item?.region || "지역 확인";
-    const tags = company.salesTarget?.priorityTags || [];
+    const evidence = companySalesEvidenceList(company, entry);
+    const contactMeta = salesContactMeta(company.salesContact?.status);
+    const url = companySalesPrimaryUrl(company, item);
     return `
       <article class="target-action-card ${stage.key}">
         <div class="target-action-head">
           <span>${index + 1}</span>
           <div>
             <strong>${escapeHtml(company.primaryName || item?.name || "업체명 확인")}</strong>
-            <small>${escapeHtml(regionText)} · ${escapeHtml(stage.label)} · ${fmtNumber(company.salesTarget?.score || 0)}점</small>
+            <small>${escapeHtml(regionText)} · ${escapeHtml(stage.label)} · 우선순위 ${fmtNumber(priorityScore)}</small>
           </div>
-          ${companyAdminReviewBadgeHtml(company)}
+          <mark class="sales-contact-badge ${escapeHtml(contactMeta.tone)}">${escapeHtml(contactMeta.label)}</mark>
+        </div>
+        <div class="target-execution-metrics">
+          <div><span>예상매출</span><strong>${fmtWon(revenueImpact.totalRevenue)}</strong><small>가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회</small></div>
+          <div><span>노출</span><strong>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "대기"}</strong><small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 확인")}</small></div>
+          <div><span>상태</span><strong>${escapeHtml(contactMeta.label)}</strong><small>${escapeHtml(company.salesContact?.nextActionAt || "다음 액션 미지정")}</small></div>
         </div>
         <div class="target-action-main">
           <b>${escapeHtml(action.label)}</b>
           <p>${escapeHtml(action.pitch)}</p>
         </div>
         <div class="target-reasons">
-          ${tags.length ? tags.slice(0, 5).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") : (company.salesTarget?.reasons || []).slice(0, 4).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+          ${evidence.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
         </div>
         <div class="target-next-line">
           <strong>다음 확인</strong>
-          <span>${escapeHtml(action.next)}</span>
+          <span>${escapeHtml(company.salesContact?.proposal || action.next)}</span>
         </div>
+        ${salesContactFormHtml(company)}
         <div class="target-card-actions">
           ${itemIndex >= 0 ? `<button class="secondary-button" type="button" data-open-company="${itemIndex}">상세 보기</button>` : `<button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>`}
+          ${url ? `<a class="secondary-button target-link-button" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">예약/플레이스</a>` : ""}
         </div>
       </article>
     `;
@@ -5693,9 +5849,17 @@ function renderTargets() {
   els.targetList.innerHTML = `
     <section class="target-board-hero">
       <article><span>오늘 컨택</span><strong>${fmtNumber(actionableCount)}</strong><small>큐 제외 즉시 후보</small></article>
-      <article><span>검증 완료</span><strong>${fmtNumber(confirmed.length)}</strong><small>판단 맞음</small></article>
-      <article><span>현재 결과</span><strong>${fmtNumber(currentOnly.length)}</strong><small>마스터 반영 전</small></article>
-      <article><span>판단 큐</span><strong>${fmtNumber(decisionQueueCount)}</strong><small>관리 탭에서 확인</small></article>
+      <article><span>미컨택</span><strong>${fmtNumber(notContactedCount)}</strong><small>아직 실행 전</small></article>
+      <article><span>답변 대기</span><strong>${fmtNumber(waitingCount)}</strong><small>1차 컨택/대기</small></article>
+      <article><span>관심/유력</span><strong>${fmtNumber(highPotentialCount)}</strong><small>후속 제안 대상</small></article>
+      <article><span>다음 액션</span><strong>${fmtNumber(nextActionCount)}</strong><small>날짜 지정됨</small></article>
+    </section>
+    <section class="target-export-bar">
+      <div>
+        <strong>영업타깃 실행 관리 V2</strong>
+        <small>판단 큐에서 컨택 가능으로 확정된 업체와 바로 컨택 가능한 후보를 실행 상태로 관리합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
+      </div>
+      <button type="button" data-export-sales-targets>컨택 리스트 CSV</button>
     </section>
     <section class="target-board">
       ${lane("확정 타깃", "관리자가 판단 맞음으로 확정한 업체", confirmed, "아직 확정 타깃이 없습니다. 관리 탭에서 후보를 검증하세요.")}
@@ -7482,6 +7646,61 @@ async function saveCompanyAdminReview(button) {
   }
 }
 
+async function saveCompanySalesContact(button) {
+  const companyId = button?.dataset?.companyId || button?.closest("[data-sales-contact-form]")?.dataset?.companyId || "";
+  const form = button?.closest("[data-sales-contact-form]");
+  if (!companyId || !form) return;
+  const payload = {
+    companyId,
+    status: form.querySelector("[data-sales-contact-status]")?.value || "not_contacted",
+    channel: form.querySelector("[data-sales-contact-channel]")?.value || "",
+    contactPerson: form.querySelector("[data-sales-contact-person]")?.value || "",
+    proposal: form.querySelector("[data-sales-contact-proposal]")?.value || "",
+    nextActionAt: form.querySelector("[data-sales-contact-next]")?.value || "",
+    note: form.querySelector("[data-sales-contact-note]")?.value || ""
+  };
+  button.disabled = true;
+  setStatus("컨택 상태 저장 중");
+  try {
+    const data = await fetchJson("/api/company-master/sales-contact", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    state.companyMaster = data;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
+    renderTargets();
+    renderCompanyMasterPanel();
+    renderDecisionQueue();
+    setStatus(`${salesContactMeta(payload.status).label} 저장 완료`);
+  } catch (error) {
+    setStatus("컨택 상태 저장 실패");
+    form.insertAdjacentHTML("afterbegin", `<div class="empty">컨택 저장 실패: ${escapeHtml(error.message)}</div>`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function exportSalesTargetsCsv() {
+  const entries = companySalesBoardEntries();
+  if (!entries.length) {
+    setStatus("내보낼 컨택 리스트 없음");
+    return;
+  }
+  const csv = salesTargetCsv(entries);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `glamping-sales-targets-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`컨택 리스트 ${fmtNumber(entries.length)}개 내보내기`);
+}
+
 function applyQueueRecrawlSetting(button) {
   const companyId = button?.dataset?.queueRecrawlCompany || "";
   const company = (companyMasterSource().companies || []).find((row) => row.companyId === companyId);
@@ -7896,6 +8115,9 @@ function bindEvents() {
     if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
     const reviewAction = event.target.closest("[data-company-review-action]");
     if (reviewAction) saveCompanyAdminReview(reviewAction);
+    const salesContact = event.target.closest("[data-save-sales-contact]");
+    if (salesContact) saveCompanySalesContact(salesContact);
+    if (event.target.closest("[data-export-sales-targets]")) exportSalesTargetsCsv();
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
     if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
     const checkFilter = event.target.closest("[data-company-check-filter]");
