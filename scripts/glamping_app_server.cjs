@@ -2961,6 +2961,65 @@ function companySalesSignalFromItem(item = {}, run = {}) {
   };
 }
 
+function snapshotNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function companyRevenueSnapshotPart(item = {}, config = {}) {
+  const weeklyRevenue = snapshotNumber(item[config.weeklyRevenue]);
+  const basisRevenue = snapshotNumber(item[config.basisRevenue]);
+  const weeklyPriced = snapshotNumber(item[config.weeklyPriced]);
+  const basisPriced = snapshotNumber(item[config.basisPriced]);
+  const weeklyMissing = snapshotNumber(item[config.weeklyMissing]);
+  const basisMissing = snapshotNumber(item[config.basisMissing]);
+  const weeklyAvg = snapshotNumber(item[config.weeklyAvg]);
+  const basisAvg = snapshotNumber(item[config.basisAvg]);
+  const hasWeekly = [weeklyRevenue, weeklyPriced, weeklyMissing, weeklyAvg].some((value) => value !== null);
+  return {
+    revenue: hasWeekly ? weeklyRevenue : basisRevenue,
+    pricedSoldOut: hasWeekly ? weeklyPriced : basisPriced,
+    missingPriceSoldOut: hasWeekly ? weeklyMissing : basisMissing,
+    avgSoldUnitPrice: hasWeekly ? weeklyAvg : basisAvg,
+    byDayType: item[config.byDayType] || "",
+    detail: item[config.detail] || "",
+    offlineDetail: item[config.offlineDetail] || "",
+    basis: hasWeekly ? "range" : "basis"
+  };
+}
+
+function companyRevenueSnapshotFromItem(item = {}) {
+  return {
+    lodging: companyRevenueSnapshotPart(item, {
+      weeklyRevenue: "weeklyEstimatedRevenue",
+      basisRevenue: "basisLodgingRevenue",
+      weeklyPriced: "weeklyPricedSoldOut",
+      basisPriced: "basisLodgingPricedSoldOut",
+      weeklyMissing: "weeklyMissingPriceSoldOut",
+      basisMissing: "basisLodgingMissingPriceSoldOut",
+      weeklyAvg: "weeklyAvgSoldUnitPrice",
+      basisAvg: "basisLodgingAvgSoldUnitPrice",
+      byDayType: "weeklyRevenueByDayType",
+      detail: "weeklyRevenueDetail",
+      offlineDetail: "weeklyOfflineReservationDetail"
+    }),
+    dayUse: companyRevenueSnapshotPart(item, {
+      weeklyRevenue: "dayUseWeeklyEstimatedRevenue",
+      basisRevenue: "basisDayUseRevenue",
+      weeklyPriced: "dayUseWeeklyPricedSoldOut",
+      basisPriced: "basisDayUsePricedSoldOut",
+      weeklyMissing: "dayUseWeeklyMissingPriceSoldOut",
+      basisMissing: "basisDayUseMissingPriceSoldOut",
+      weeklyAvg: "dayUseWeeklyAvgSoldUnitPrice",
+      basisAvg: "basisDayUseAvgSoldUnitPrice",
+      byDayType: "dayUseWeeklyRevenueByDayType",
+      detail: "dayUseWeeklyRevenueDetail",
+      offlineDetail: "dayUseWeeklyOfflineReservationDetail"
+    })
+  };
+}
+
 function emptyCompanyMaster() {
   return {
     schemaVersion: 1,
@@ -3017,6 +3076,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const sourceKeys = companySourceKeys({ placeId, bookingBusinessId, nameKey, addressKey, regionKey });
   const keywordLayer = keywordLayerFromRunLike(run);
   const salesSignal = companySalesSignalFromItem(item, run);
+  const revenueSnapshot = companyRevenueSnapshotFromItem(item);
   return {
     name,
     nameKey,
@@ -3047,6 +3107,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     inventoryConfidenceGrade: item.inventoryConfidenceGrade || "",
     inventoryStructureFlags: Array.isArray(item.inventoryStructureFlags) ? item.inventoryStructureFlags : [],
     salesSignal,
+    revenueSnapshot,
     price: item.price || ""
   };
 }
@@ -3148,6 +3209,7 @@ function updateCompanyInventory(company, entity) {
     confidenceGrade: entity.inventoryConfidenceGrade,
     structureFlags: boundedUnique(entity.inventoryStructureFlags || [], 10),
     salesSignal: entity.salesSignal || {},
+    revenue: entity.revenueSnapshot || {},
     price: entity.price
   };
   if (!alreadyCounted && entity.inventoryStructureLabel) {
@@ -5515,8 +5577,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-queue-recrawl-apply"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-queue-recrawl-apply"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-queue-revenue-impact"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-queue-revenue-impact"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

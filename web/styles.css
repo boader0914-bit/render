@@ -2967,6 +2967,49 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.company-check-revenue-impact {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.company-check-revenue-impact div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e6f2ea;
+  border-radius: 12px;
+  background: #f8fdf9;
+  padding: 9px;
+}
+
+.company-check-revenue-impact div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.company-check-revenue-impact span,
+.company-check-revenue-impact small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-check-revenue-impact strong {
+  min-width: 0;
+  color: #067647;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+
+.company-check-revenue-impact div.watch strong {
+  color: #b54708;
+}
+
 .company-check-apply-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -6373,6 +6416,7 @@ a.platform-row:hover {
   .company-sales-metrics,
   .company-decision-evidence,
   .company-check-action-plan,
+  .company-check-revenue-impact,
   .company-check-apply-row,
   .target-board,
   .company-profile-keywords {
@@ -6815,6 +6859,7 @@ a.platform-row:hover {
   .manual-correction-evidence,
   .company-decision-evidence,
   .company-check-action-plan,
+  .company-check-revenue-impact,
   .company-check-apply-row,
   .collection-diagnostic-grid,
   .collection-diagnostic-list,

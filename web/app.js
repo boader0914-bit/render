@@ -2402,6 +2402,74 @@ function companyItemFromCurrentRun(company = {}) {
     null;
 }
 
+function queueRevenuePartFromItem(item = {}, kind = "lodging") {
+  const stats = itemRevenueStats(item, kind);
+  return {
+    revenue: stats.revenue,
+    pricedSoldOut: stats.pricedSoldOut,
+    missingPriceSoldOut: stats.missingPriceSoldOut,
+    avgSoldUnitPrice: stats.avgSoldUnitPrice,
+    byDayType: stats.byDayType,
+    detail: stats.detail,
+    offlineDetail: stats.offlineDetail,
+    basis: stats.basis,
+    label: stats.label,
+    unit: stats.unit
+  };
+}
+
+function queueRevenuePartFromSnapshot(part = {}, unit = "") {
+  const revenue = optionalNumber(part.revenue);
+  const priced = optionalNumber(part.pricedSoldOut);
+  const missing = optionalNumber(part.missingPriceSoldOut);
+  const avg = optionalNumber(part.avgSoldUnitPrice);
+  return {
+    revenue: Number.isFinite(revenue) ? revenue : 0,
+    pricedSoldOut: Number.isFinite(priced) ? priced : 0,
+    missingPriceSoldOut: Number.isFinite(missing) ? missing : 0,
+    avgSoldUnitPrice: Number.isFinite(avg) ? avg : null,
+    byDayType: part.byDayType || "",
+    detail: part.detail || "",
+    offlineDetail: part.offlineDetail || "",
+    basis: part.basis || "basis",
+    label: part.basis === "range" ? "기간 집계" : "기준일",
+    unit
+  };
+}
+
+function companyQueueRevenueImpact(company = {}) {
+  const item = companyItemFromCurrentRun(company);
+  const lodging = item
+    ? queueRevenuePartFromItem(item, "lodging")
+    : queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.lodging || {}, "개");
+  const dayUse = item
+    ? queueRevenuePartFromItem(item, "day")
+    : queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.dayUse || {}, "회");
+  const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
+  const totalPricedSoldOut = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
+  const totalMissingPriceSoldOut = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
+  const hasDetail = Boolean(
+    totalRevenue ||
+    totalPricedSoldOut ||
+    totalMissingPriceSoldOut ||
+    lodging.avgSoldUnitPrice ||
+    dayUse.avgSoldUnitPrice ||
+    lodging.byDayType ||
+    dayUse.byDayType ||
+    lodging.offlineDetail ||
+    dayUse.offlineDetail
+  );
+  return {
+    hasDetail,
+    lodging,
+    dayUse,
+    totalRevenue,
+    totalPricedSoldOut,
+    totalMissingPriceSoldOut,
+    source: item ? "current" : "master"
+  };
+}
+
 function companySalesAction(company = {}) {
   const tags = company.salesTarget?.priorityTags || [];
   const signals = company.salesTarget?.signals || {};
@@ -4348,6 +4416,44 @@ function companyCheckWorkflow(company = {}, profile = {}, type = {}) {
   return { key: "open", label: type.label || "오늘 처리", tone: "open", reasons: [] };
 }
 
+function queueRevenueCoverageShort(part = {}) {
+  const priced = finiteNumber(part.pricedSoldOut, 0);
+  const missing = finiteNumber(part.missingPriceSoldOut, 0);
+  const unit = part.unit || "";
+  if (!priced && !missing) return "가격 판매수량 대기";
+  return `가격확인 ${fmtNumber(priced)}${unit}${missing ? ` · 가격누락 ${fmtNumber(missing)}${unit}` : ""}`;
+}
+
+function queueRevenueDetailShort(part = {}, fallback = "요일별 가격/수량 추가 확인") {
+  return compactListText([part.byDayType, part.offlineDetail, part.detail].filter(Boolean), fallback, 2);
+}
+
+function companyQueueRevenueImpactHtml(company = {}) {
+  const impact = companyQueueRevenueImpact(company);
+  if (!impact.hasDetail) return "";
+  const priceTone = impact.totalMissingPriceSoldOut > 0 ? "watch" : "good";
+  const sourceText = impact.source === "current" ? "현재 수집 결과" : "업체 최신 스냅샷";
+  return `
+    <div class="company-check-revenue-impact">
+      <div>
+        <span>숙박 예상매출</span>
+        <strong>${fmtWon(impact.lodging.revenue)}</strong>
+        <small>${escapeHtml(queueRevenueCoverageShort(impact.lodging))}</small>
+      </div>
+      <div>
+        <span>데이유즈/캠프닉</span>
+        <strong>${fmtWon(impact.dayUse.revenue)}</strong>
+        <small>${escapeHtml(queueRevenueCoverageShort(impact.dayUse))}</small>
+      </div>
+      <div class="${priceTone}">
+        <span>매출 영향</span>
+        <strong>${fmtWon(impact.totalRevenue)}</strong>
+        <small>${escapeHtml(`${sourceText} · ${queueRevenueDetailShort(impact.lodging, "숙박 요일별 매출 대기")}`)}</small>
+      </div>
+    </div>
+  `;
+}
+
 function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = {}) {
   const issueWeights = {
     manual: 26,
@@ -4379,6 +4485,11 @@ function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = 
   if (bestRank > 0 && bestRank <= 5) score += 12;
   else if (bestRank > 0 && bestRank <= 10) score += 8;
   else if (bestRank > 0 && bestRank <= 20) score += 4;
+  const revenueImpact = companyQueueRevenueImpact(company);
+  if (revenueImpact.totalRevenue >= 5000000) score += 16;
+  else if (revenueImpact.totalRevenue >= 2000000) score += 10;
+  else if (revenueImpact.totalRevenue >= 700000) score += 5;
+  if (revenueImpact.totalMissingPriceSoldOut > 0) score += Math.min(12, revenueImpact.totalMissingPriceSoldOut * 2);
   if (company.identityConfidence?.level === "review") score += 15;
   if (profile.applied) score -= 14;
   if (workflow.key === "recheck") score += 28;
@@ -4554,6 +4665,7 @@ function companyCheckEntryHtml(entry = {}) {
         ${(profile.issues || []).slice(0, 4).map((issue) => `<mark>${escapeHtml(issue.label)}</mark>`).join("")}
       </div>
       ${companyDecisionEvidenceHtml(decision)}
+      ${companyQueueRevenueImpactHtml(company)}
       ${companyMasterKeywordChips(company, 5)}
       <div class="company-check-reason">
         <strong>왜 확인해야 하나?</strong>
