@@ -67,6 +67,10 @@ const SEARCH_MODES = {
   keyword: "키워드/권역",
   company: "업체명"
 };
+const COLLECTION_MODES = {
+  precision: "정밀 분석",
+  fast: "빠른 순위"
+};
 
 function kstDate(offsetDays = 0) {
   const now = new Date();
@@ -88,6 +92,36 @@ function normalizeSearchMode(value) {
   if (SEARCH_MODES[text]) return text;
   if (text === "업체명" || text.toLowerCase() === "company") return "company";
   return "keyword";
+}
+
+function normalizeCollectionMode(value) {
+  const text = String(value || "").trim();
+  if (COLLECTION_MODES[text]) return text;
+  if (text === "빠른 순위" || text.toLowerCase() === "fast") return "fast";
+  return "precision";
+}
+
+function parseRankRanges(value, fallback = "1-20") {
+  const text = String(value ?? "").trim();
+  const source = text || fallback;
+  if (!source || /^(none|skip|없음)$/i.test(source)) return [];
+  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 50 }];
+  const ranges = [];
+  for (const part of source.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)) {
+    const match = part.match(/^(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?$/);
+    if (!match) continue;
+    const left = Math.max(1, Math.min(50, Math.floor(Number(match[1]))));
+    const right = Math.max(1, Math.min(50, Math.floor(Number(match[2] || match[1]))));
+    if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
+    ranges.push({ from: Math.min(left, right), to: Math.max(left, right) });
+  }
+  return ranges;
+}
+
+function rankRangeLabel(ranges = []) {
+  return ranges.length
+    ? ranges.map((range) => (range.from === range.to ? `${range.from}` : `${range.from}-${range.to}`)).join(",")
+    : "없음";
 }
 
 const REGIONAL_GLAMPING_BASES = new Set([
@@ -142,6 +176,14 @@ function crawlExecutionPlan(payload = {}) {
   const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
   const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode);
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
+  const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
+  const rawDetailRankRanges = collectionMode === "fast"
+    ? ""
+    : (payload.detailRankRanges || process.env.DETAIL_RANK_RANGES);
+  const detailRankRanges = rankRangeLabel(parseRankRanges(
+    rawDetailRankRanges,
+    collectionMode === "fast" ? "" : "1-20"
+  ));
   return {
     keyword,
     checkIn,
@@ -150,23 +192,28 @@ function crawlExecutionPlan(payload = {}) {
     bookingRangePlaceLimit,
     requestedSearchMode,
     resolvedSearchMode,
-    productMode
+    productMode,
+    collectionMode,
+    detailRankRanges
   };
 }
 
 function estimateCrawlCompletion(payload = {}) {
   const plan = crawlExecutionPlan(payload);
   const rangePlaceCount = plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
+  const fast = plan.collectionMode === "fast";
   const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
-  const productSeconds = plan.productMode === "all" ? 45 : 26;
+  const productSeconds = fast ? 0 : (plan.productMode === "all" ? 45 : 26);
   const trendSeconds = plan.resolvedSearchMode === "keyword" ? 25 : 10;
-  const rangeSeconds = rangePlaceCount
+  const rangeSeconds = !fast && rangePlaceCount
     ? rangePlaceCount * plan.bookingRangeDays * (plan.productMode === "all" ? 5.5 : 4.2)
-    : 18;
-  const ioSeconds = 35;
+    : 0;
+  const regionalSeconds = fast ? 0 : 80;
+  const otaSeconds = fast ? 0 : 35;
+  const ioSeconds = fast ? 18 : 35;
   const estimatedTotalSeconds = Math.max(
-    90,
-    Math.round(searchSeconds + productSeconds + trendSeconds + rangeSeconds + ioSeconds)
+    fast ? 45 : 90,
+    Math.round(searchSeconds + productSeconds + trendSeconds + rangeSeconds + regionalSeconds + otaSeconds + ioSeconds)
   );
   return {
     ...plan,
@@ -176,6 +223,9 @@ function estimateCrawlCompletion(payload = {}) {
       searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
       productMode: plan.productMode,
       productModeLabel: PRODUCT_MODES[plan.productMode] || PRODUCT_MODES.all,
+      collectionMode: plan.collectionMode,
+      collectionModeLabel: COLLECTION_MODES[plan.collectionMode] || COLLECTION_MODES.precision,
+      detailRankRanges: plan.detailRankRanges,
       bookingRangeDays: plan.bookingRangeDays,
       bookingRangePlaceLimit: plan.bookingRangePlaceLimit
     }
@@ -5107,6 +5157,9 @@ async function loadRun(runId, options = {}) {
       keywordType: manifest?.keywordType || "province",
       searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
       searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
+      collectionMode: manifest?.collectionMode || "precision",
+      collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
+      detailRankRanges: manifest?.detailRankRanges || "",
       province: provinceKey,
       provinceLabel: province.label,
       mapBounds: province.mapBounds,
@@ -5328,6 +5381,8 @@ async function runCrawlerInternal(payload) {
     SEARCH_MODE: plan.resolvedSearchMode,
     SEARCH_MODE_REQUESTED: normalizeSearchMode(plan.requestedSearchMode),
     SEARCH_MODE_AUTO_CORRECTED: plan.resolvedSearchMode !== normalizeSearchMode(plan.requestedSearchMode) ? "1" : "0",
+    COLLECTION_MODE: plan.collectionMode,
+    DETAIL_RANK_RANGES: plan.detailRankRanges,
     PRODUCT_MODE: plan.productMode,
     BOOKING_RANGE_DAYS: String(plan.bookingRangeDays),
     BOOKING_RANGE_PLACE_LIMIT: String(plan.bookingRangePlaceLimit),
@@ -5382,8 +5437,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-rank-source-fix"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-rank-source-fix"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260702-collection-scope"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260702-collection-scope"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

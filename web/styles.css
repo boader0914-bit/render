@@ -3456,6 +3456,14 @@ a.platform-row:hover {
   padding: 0 12px;
 }
 
+.field input:disabled,
+.field select:disabled,
+.field textarea:disabled {
+  background: #f2f4f7;
+  color: #98a2b3;
+  cursor: not-allowed;
+}
+
 .field textarea {
   min-height: 136px;
   padding: 12px;

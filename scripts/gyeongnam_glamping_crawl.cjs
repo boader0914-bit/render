@@ -19,6 +19,10 @@ const SEARCH_MODES = {
   keyword: "키워드/권역",
   company: "업체명"
 };
+const COLLECTION_MODES = {
+  precision: "정밀 분석",
+  fast: "빠른 순위"
+};
 
 function kstDate(offsetDays = 0) {
   const now = new Date();
@@ -42,10 +46,46 @@ function normalizeSearchMode(value) {
   return "keyword";
 }
 
+function normalizeCollectionMode(value) {
+  const text = String(value || "").trim();
+  if (COLLECTION_MODES[text]) return text;
+  if (text === "빠른 순위" || text.toLowerCase() === "fast") return "fast";
+  return "precision";
+}
+
 function boundedInteger(value, fallback, min, max) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(number)));
+}
+
+function parseRankRanges(value, fallback = "1-20") {
+  const text = String(value ?? "").trim();
+  const source = text || fallback;
+  if (!source || /^(none|skip|없음)$/i.test(source)) return [];
+  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 50 }];
+  const ranges = [];
+  for (const part of source.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)) {
+    const match = part.match(/^(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?$/);
+    if (!match) continue;
+    const left = boundedInteger(match[1], 0, 1, 50);
+    const right = boundedInteger(match[2] || match[1], left, 1, 50);
+    const from = Math.min(left, right);
+    const to = Math.max(left, right);
+    ranges.push({ from, to });
+  }
+  return ranges;
+}
+
+function rankRangeLabel(ranges = []) {
+  return ranges.length
+    ? ranges.map((range) => (range.from === range.to ? `${range.from}` : `${range.from}-${range.to}`)).join(",")
+    : "없음";
+}
+
+function rankInRanges(rank, ranges = []) {
+  const number = Number(rank);
+  return Number.isFinite(number) && ranges.some((range) => number >= range.from && number <= range.to);
 }
 
 function addDays(dateString, offsetDays) {
@@ -83,6 +123,10 @@ const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
 const SEARCH_MODE_LABEL = SEARCH_MODES[SEARCH_MODE];
+const COLLECTION_MODE = normalizeCollectionMode(process.env.COLLECTION_MODE || "precision");
+const COLLECTION_MODE_LABEL = COLLECTION_MODES[COLLECTION_MODE];
+const DETAIL_RANK_RANGES = parseRankRanges(process.env.DETAIL_RANK_RANGES, COLLECTION_MODE === "fast" ? "" : "1-20");
+const DETAIL_RANK_RANGE_LABEL = rankRangeLabel(DETAIL_RANK_RANGES);
 
 const regionSlugMap = {
   거제: "geoje",
@@ -1367,6 +1411,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
   const cache = new Map();
   let collected = 0;
   let successful = 0;
+  let skippedByMode = 0;
+  let skippedByRank = 0;
   const uniquePlaceIds = new Set();
 
   for (const row of rows) {
@@ -1375,6 +1421,22 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       continue;
     }
     const alreadyKnown = uniquePlaceIds.has(row.place_id);
+    const overallRank = asNumber(row.overall_rank);
+    const adRank = asNumber(row.ad_order);
+    const detailEligible = COLLECTION_MODE !== "fast" && (
+      rankInRanges(overallRank, DETAIL_RANK_RANGES) ||
+      (!overallRank && rankInRanges(adRank, DETAIL_RANK_RANGES))
+    );
+    if (!alreadyKnown && COLLECTION_MODE === "fast") {
+      row.네이버예약재고수집상태 = "미수집(빠른 순위 모드)";
+      skippedByMode += 1;
+      continue;
+    }
+    if (!alreadyKnown && !detailEligible) {
+      row.네이버예약재고수집상태 = `미수집(상세 분석 범위 ${DETAIL_RANK_RANGE_LABEL} 제외)`;
+      skippedByRank += 1;
+      continue;
+    }
     if (!alreadyKnown && uniquePlaceIds.size >= NAVER_BOOKING_STOCK_LIMIT) {
       row.네이버예약재고수집상태 = `미수집(상위 ${NAVER_BOOKING_STOCK_LIMIT}개 제한)`;
       continue;
@@ -1449,7 +1511,15 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
   }
 
   rows.forEach(setNaverInventoryAuditFields);
-  return { limit: NAVER_BOOKING_STOCK_LIMIT, collected, successful };
+  return {
+    limit: NAVER_BOOKING_STOCK_LIMIT,
+    collected,
+    successful,
+    skippedByMode,
+    skippedByRank,
+    detailRankRanges: DETAIL_RANK_RANGE_LABEL,
+    collectionMode: COLLECTION_MODE
+  };
 }
 
 async function collectNaverMain() {
@@ -1586,6 +1656,58 @@ async function collectNaverRegional() {
     summaries.push({ region, query, status, total: result.total, collected: Math.min(refs.length, REGIONAL_LIMIT), note: "" });
   }
   return { rows, summaries };
+}
+
+function skippedRegional(note = "빠른 순위 모드에서 지역별 반복 수집 생략") {
+  return {
+    rows: [],
+    summaries: regions.map((region) => ({
+      region,
+      query: [province.short, region, "글램핑"].filter(Boolean).join(" "),
+      status: "skipped",
+      total: 0,
+      collected: 0,
+      note
+    }))
+  };
+}
+
+function skippedNol(note = "빠른 순위 모드에서 보조 OTA 수집 생략") {
+  return {
+    status: "skipped",
+    total: 0,
+    rawFirstPage: 0,
+    firstPage: 0,
+    filteredOut: 0,
+    companyFilteredOut: 0,
+    note,
+    rows: []
+  };
+}
+
+function skippedYeogi(note = "빠른 순위 모드에서 여기어때 자동 확인 생략") {
+  return {
+    status: "skipped",
+    attemptedUrl: "",
+    finalUrl: "",
+    blocked: true,
+    reason: note,
+    collectionDirection: "필요 시 수동 보완으로 확인",
+    rows: []
+  };
+}
+
+function skippedDdnayo(note = "빠른 순위 모드에서 떠나요 수집 생략") {
+  return {
+    exactTotal: 0,
+    normalizedTotal: 0,
+    usedQuery: "skipped",
+    rawFirstPage: 0,
+    firstPage: 0,
+    filteredOut: 0,
+    note,
+    rows: []
+  };
 }
 
 async function collectNol() {
@@ -2003,17 +2125,19 @@ async function main() {
   console.log("Collecting Naver main...");
   const naver = await collectNaverMain();
 
-  console.log("Collecting Naver regional clusters...");
-  const regional = await collectNaverRegional();
+  const fastMode = COLLECTION_MODE === "fast";
 
-  console.log("Collecting NOL...");
-  const nol = await collectNol();
+  console.log(fastMode ? "Skipping Naver regional clusters for fast ranking..." : "Collecting Naver regional clusters...");
+  const regional = fastMode ? skippedRegional() : await collectNaverRegional();
 
-  console.log("Checking Yeogi...");
-  const yeogi = await collectYeogi();
+  console.log(fastMode ? "Skipping NOL for fast ranking..." : "Collecting NOL...");
+  const nol = fastMode ? skippedNol() : await collectNol();
 
-  console.log("Collecting DDNayo...");
-  const ddnayo = await collectDdnayo();
+  console.log(fastMode ? "Skipping Yeogi for fast ranking..." : "Checking Yeogi...");
+  const yeogi = fastMode ? skippedYeogi() : await collectYeogi();
+
+  console.log(fastMode ? "Skipping DDNayo for fast ranking..." : "Collecting DDNayo...");
+  const ddnayo = fastMode ? skippedDdnayo() : await collectDdnayo();
 
   applyNaverAdClusters(naver, regional.rows);
   console.log("Checking Naver booking stock...");
@@ -2364,12 +2488,14 @@ async function main() {
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
     { 항목: "수집 모드", 값: SEARCH_MODE_LABEL },
+    { 항목: "수집 방식", 값: COLLECTION_MODE_LABEL },
     { 항목: "조건", 값: bookingConditionText },
-    { 항목: "예약재고 기간", 값: BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준" },
+    { 항목: "상세 분석 순위", 값: COLLECTION_MODE === "fast" ? "빠른 순위 모드: 상세 분석 생략" : `${DETAIL_RANK_RANGE_LABEL}위` },
+    { 항목: "예약재고 기간", 값: BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준" },
     { 항목: "네이버 전체", 값: `${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집` },
     { 항목: "네이버 광고", 값: `${naver.adTotal}건 수집` },
     { 항목: "네이버 지역별", 값: `${regional.rows.length}건 수집 (${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개)` },
-    { 항목: "네이버 예약재고", 값: `상위 ${naverBookingStock.limit}개 제한 중 ${naverBookingStock.collected}개 확인 / 성공 ${naverBookingStock.successful}건` },
+    { 항목: "네이버 예약재고", 값: `상세 범위 ${naverBookingStock.detailRankRanges} / ${naverBookingStock.collected}개 확인 / 성공 ${naverBookingStock.successful}건 / 범위 제외 ${naverBookingStock.skippedByRank}건` },
     { 항목: "5건 미만 지역", 값: underfilledRegions || "없음" },
     { 항목: "야놀자/NOL", 값: `전체 ${nol.total}건 / 1페이지 원본 ${nol.rawFirstPage}건 중 캠핑형 ${nol.firstPage}건 수집, 제외 ${nol.filteredOut}건` },
     {
@@ -2420,9 +2546,11 @@ async function main() {
 - 네이버 전체 키워드: ${naver.usedQuery || NAVER_QUERY}
 - 네이버 업체명 후보: ${naverAttemptText || "해당없음"}
 - 수집 모드: ${SEARCH_MODE_LABEL}
+- 수집 방식: ${COLLECTION_MODE_LABEL}
+- 상세 분석 순위: ${COLLECTION_MODE === "fast" ? "빠른 순위 모드: 상세 분석 생략" : `${DETAIL_RANK_RANGE_LABEL}위`}
 - 판단 유형: ${province.isCompany ? "업체명" : province.isLocal ? "지역형" : "광역형"}
 - OTA 기준 조건: ${bookingConditionText}
-- 예약재고 기간: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준"}
+- 예약재고 기간: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준"}
 - 핵심 분석 채널: 네이버, 야놀자/NOL, ONDA, 떠나요
 - 보조 채널: 여기어때(자동수집 차단 시 수동 보완만 사용)
 
@@ -2443,8 +2571,8 @@ async function main() {
 - 지역별 키워드: ${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개 = ${regional.rows.length}건 수집
 - 5건 미만 지역: ${underfilledRegions || "없음"}
 - 광고/비광고 분리: 가능
-- 예약재고: 상위 ${naverBookingStock.limit}개 제한으로 ${naverBookingStock.collected}개 확인, ${naverBookingStock.successful}건 성공
-- 입력기간 예약재고 테스트: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일, 상위 ${BOOKING_RANGE_PLACE_LIMIT}개 업체만 날짜별 잔여 반복 확인` : "비활성"}
+- 예약재고: 상세 범위 ${naverBookingStock.detailRankRanges}, ${naverBookingStock.collected}개 확인, ${naverBookingStock.successful}건 성공, 범위 제외 ${naverBookingStock.skippedByRank}건
+- 입력기간 예약재고 테스트: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체만 날짜별 잔여 반복 확인` : "비활성"}
 - 예약가능률 산식: 객실별 예약리스트는 예약가능 객실상품 수 / 노출 객실상품 수, 객실 묶음 상품리스트와 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
 - 네이버 상품 구분: 1박 조건은 \`ACCOMMODATION_NIGHT\` 숙박 상품만 예약가능률에 반영하고, \`ACCOMMODATION_DAY_USE\` 데이유즈 상품은 점심/저녁 등 상품종류와 재고합계를 별도 카운트로 분리
 - 네이버 분리 기준: ONDA/떠나요 등 전 채널 연동 재고와 섞지 않고 네이버예약 재고를 독립 확인
@@ -2458,7 +2586,7 @@ async function main() {
 - 광고집행클러스터: 광고 집행, 비광고 상위 노출, 광고+비광고 동시 노출, 확인불가
 
 ## 야놀자/NOL
-- 상태: 성공
+- 상태: ${nol.status === "skipped" ? "생략" : "성공"}
 - 결과: 전체 ${nol.total}건 / 1페이지 원본 ${nol.rawFirstPage}건 중 캠핑형 ${nol.firstPage}건 수집
 - 제외: 모텔/호텔 등 글램핑·카라반·캠핑·펜션 신호가 약한 결과 ${nol.filteredOut}건 제외
 - 광고/비광고 분리: 가능
@@ -2473,7 +2601,7 @@ async function main() {
 - 수집 방향: ${yeogi.collectionDirection || "응답 HTML/JSON 구조 확인 후 파서 구현 필요"}
 
 ## 떠나요
-- 상태: 성공
+- 상태: ${ddnayo.usedQuery === "skipped" ? "생략" : "성공"}
 - 정확 키워드 "${DDNAYO_QUERY_EXACT}": ${ddnayo.exactTotal}건
 - 공백 제거 키워드 "${DDNAYO_QUERY_NORMALIZED}": ${ddnayo.normalizedTotal}건
 - 사용 데이터: ${ddnayo.usedQuery}
@@ -2518,6 +2646,9 @@ async function main() {
     keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),
     searchMode: SEARCH_MODE,
     searchModeLabel: SEARCH_MODE_LABEL,
+    collectionMode: COLLECTION_MODE,
+    collectionModeLabel: COLLECTION_MODE_LABEL,
+    detailRankRanges: DETAIL_RANK_RANGE_LABEL,
     provinceKey: province.parentProvinceKey || province.slug,
     regionSlug: province.slug,
     searchKeyword: QUERY,
@@ -2538,6 +2669,8 @@ async function main() {
       naverRegional: regional.rows.length,
       naverBookingStockChecked: naverBookingStock.collected,
       naverBookingStockSucceeded: naverBookingStock.successful,
+      naverBookingStockSkippedByMode: naverBookingStock.skippedByMode,
+      naverBookingStockSkippedByRank: naverBookingStock.skippedByRank,
       nolFirstPage: nol.firstPage,
       nolRawFirstPage: nol.rawFirstPage,
       nolFilteredOut: nol.filteredOut,

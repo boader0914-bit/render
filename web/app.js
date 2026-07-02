@@ -76,6 +76,8 @@ const els = {
   checkOutInput: document.getElementById("checkOutInput"),
   searchModeInput: document.getElementById("searchModeInput"),
   productModeInput: document.getElementById("productModeInput"),
+  collectionModeInput: document.getElementById("collectionModeInput"),
+  detailRankRangesInput: document.getElementById("detailRankRangesInput"),
   crawlProgress: document.getElementById("crawlProgress"),
   crawlProgressTitle: document.getElementById("crawlProgressTitle"),
   crawlProgressText: document.getElementById("crawlProgressText"),
@@ -249,6 +251,18 @@ function productModeLabel(value) {
   return "전체";
 }
 
+function collectionModeLabel(value) {
+  return value === "fast" ? "빠른 순위" : "정밀 분석";
+}
+
+function syncCollectionModeInputs() {
+  if (!els.collectionModeInput || !els.detailRankRangesInput) return;
+  const fast = els.collectionModeInput.value === "fast";
+  els.detailRankRangesInput.disabled = fast;
+  els.detailRankRangesInput.placeholder = fast ? "빠른 순위는 상세 생략" : "예: 1-5,10-20";
+  if (!fast && !els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = "1-20";
+}
+
 const REGIONAL_GLAMPING_BASES = new Set([
   "\uACBD\uB0A8", "\uACBD\uC0C1\uB0A8\uB3C4", "\uACBD\uB0A8\uB3C4",
   "\uACBD\uBD81", "\uACBD\uC0C1\uBD81\uB3C4", "\uACBD\uBD81\uB3C4",
@@ -377,9 +391,10 @@ function formatClockTime(value) {
 function crawlEstimateBasisText(basis = {}) {
   if (!basis || !Object.keys(basis).length) return "조건 기반 예상값입니다.";
   const range = Number(basis.bookingRangeDays) > 1
-    ? `${fmtNumber(basis.bookingRangeDays)}일 · 상위 ${fmtNumber(basis.bookingRangePlaceLimit)}개 상세`
+    ? `${fmtNumber(basis.bookingRangeDays)}일 · 상세 대상 중 최대 ${fmtNumber(basis.bookingRangePlaceLimit)}개`
     : "1일 기준";
-  return `${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${range}`;
+  const detail = basis.collectionMode === "fast" ? "상세 생략" : `상세 ${basis.detailRankRanges || "1-20"}위`;
+  return `${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range}`;
 }
 
 function updateCrawlProgressNumbers(meta = {}) {
@@ -6433,6 +6448,10 @@ async function loadRun(runId) {
     const runMode = run.searchMode || (run.keywordType === "company" ? "company" : "keyword");
     els.searchModeInput.value = correctedSearchMode(run.keyword || "", runMode);
   }
+  if (els.productModeInput && run.productMode) els.productModeInput.value = run.productMode;
+  if (els.collectionModeInput) els.collectionModeInput.value = run.collectionMode || "precision";
+  if (els.detailRankRangesInput) els.detailRankRangesInput.value = run.detailRankRanges || (run.collectionMode === "fast" ? "" : "1-20");
+  syncCollectionModeInputs();
   renderAll();
   setStatus("준비");
 }
@@ -6660,21 +6679,30 @@ async function submitCrawl(event) {
     els.searchModeInput.value = resolvedMode;
     els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
+  const collectionMode = els.collectionModeInput?.value || "precision";
+  const detailRankRanges = collectionMode === "fast"
+    ? ""
+    : (els.detailRankRangesInput?.value?.trim() || "1-20");
   const payload = {
     keyword: els.keywordInput.value.trim(),
     checkIn: els.checkInInput.value,
     checkOut: els.checkOutInput.value,
     searchMode: resolvedMode,
-    productMode: els.productModeInput.value
+    productMode: els.productModeInput.value,
+    collectionMode,
+    detailRankRanges
   };
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
+  const detailText = payload.collectionMode === "fast"
+    ? "상세 분석 생략"
+    : `상세 ${payload.detailRankRanges || "1-20"}위`;
   setCrawlProgress(
     true,
     "수집 실행 중",
-    `${searchModeLabel(payload.searchMode)} 기준으로 네이버·NOL·떠나요를 확인합니다.`
+    `${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`
   );
-  els.crawlStatus.textContent = `${searchModeLabel(payload.searchMode)} 기준 수집을 시작했습니다. 완료되면 화면을 갱신합니다.`;
+  els.crawlStatus.textContent = `${collectionModeLabel(payload.collectionMode)} 기준 수집을 시작했습니다. ${detailText}. 완료되면 화면을 갱신합니다.`;
   setStatus("수집 중");
   scheduleCrawlStatusPoll(1500, false);
   try {
@@ -6793,6 +6821,7 @@ function bindEvents() {
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
   els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
   els.logoutButton?.addEventListener("click", logout);
+  els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
   els.dictionarySearchForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     runDictionarySearch();
@@ -6811,6 +6840,7 @@ function bindEvents() {
 
 async function init() {
   ensureCrawlControls();
+  syncCollectionModeInputs();
   bindEvents();
   setDefaultDates();
   try {
