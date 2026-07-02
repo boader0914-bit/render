@@ -4170,22 +4170,42 @@ function collectionQualityCsv(profile = collectionQualityMonitorProfile()) {
 
 function recrawlAutomationCsv(entries = companyDecisionQueueEntries(companyMasterSource())) {
   const profile = recrawlAutomationProfile(entries);
-  const headers = ["구분", "업체명", "지역", "순위", "추천상태", "재수집설정", "예상소요", "예상기준", "전후비교", "근거", "예상매출", "관리메모"];
+  const batches = recrawlAutomationBatches(profile.needsExecution);
+  const headers = ["구분", "업체명/묶음", "지역", "순위", "포함업체", "추천상태", "재수집설정", "예상소요", "예상기준", "절감예상", "전후비교", "근거", "예상매출", "관리메모"];
   const rowFor = (group, row) => [
     group,
     row.name,
     row.region,
     row.rank ? `${fmtNumber(row.rank)}위` : "",
+    "1",
     recrawlAutomationStatusLabel(row.status),
     `정밀분석 · 상세 ${row.range}위 · ${row.dateText}`,
     row.etaText || "",
     row.etaSource || "",
+    "",
     row.comparison?.hasComparison ? `개선 ${fmtNumber(row.comparison.improved)} / 악화 ${fmtNumber(row.comparison.worsened)} · ${compactDateTime(row.previous)} → ${compactDateTime(row.latest)}` : "비교 대기",
     row.reason,
     row.revenue ? finiteNumber(row.revenue, 0) : "",
     row.note
   ];
+  const batchFor = (batch) => [
+    "묶음실행",
+    batch.names.join(" / "),
+    batch.regions.join(" / "),
+    "",
+    batch.count,
+    "묶음 수집",
+    `정밀분석 · 상세 ${batch.plan.range || batch.plan.detailRankRanges || "1-20"}위 · ${batch.plan.checkIn || ""}~${batch.plan.checkOut || ""}`,
+    batch.etaText || "",
+    batch.etaSource || "",
+    batch.savedSeconds ? formatElapsed(batch.savedSeconds) : "",
+    "한 번 수집으로 동일 조건 후보 동시 확인",
+    batch.reason,
+    batch.revenue ? finiteNumber(batch.revenue, 0) : "",
+    `${batch.plan.keyword || activeKeyword()} · ${fmtNumber(batch.count)}개 후보`
+  ];
   const rows = [
+    ...batches.map(batchFor),
     ...profile.needsExecution.map((row) => rowFor("재수집실행", row)),
     ...profile.transitions.map((row) => rowFor("추천적용", row)),
     ...profile.compared.map((row) => rowFor("전후비교", row))
@@ -6522,6 +6542,49 @@ function recrawlAutomationProfile(entries = []) {
   };
 }
 
+function recrawlAutomationBatchKey(plan = {}) {
+  return crawlEtaKey(plan);
+}
+
+function recrawlAutomationBatches(rows = []) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = recrawlAutomationBatchKey(row.plan);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        plan: row.plan,
+        eta: row.eta,
+        etaText: row.etaText,
+        etaSource: row.etaSource,
+        rows: [],
+        score: 0,
+        revenue: 0,
+        minRank: 9999
+      });
+    }
+    const batch = map.get(key);
+    batch.rows.push(row);
+    batch.score += finiteNumber(row.score, 0);
+    batch.revenue += finiteNumber(row.revenue, 0);
+    batch.minRank = Math.min(batch.minRank, finiteNumber(row.rank, 9999));
+  }
+  return [...map.values()]
+    .map((batch) => {
+      const etaSeconds = Number(batch.eta?.estimatedTotalSeconds);
+      const savedSeconds = Number.isFinite(etaSeconds) ? Math.max(0, (batch.rows.length - 1) * etaSeconds) : 0;
+      return {
+        ...batch,
+        count: batch.rows.length,
+        savedSeconds,
+        names: batch.rows.map((row) => row.name).filter(Boolean),
+        regions: [...new Set(batch.rows.map((row) => row.region).filter(Boolean))],
+        reason: compactListText(batch.rows.flatMap((row) => [row.reason, row.label]).filter(Boolean), "동일 조건 재수집", 3)
+      };
+    })
+    .sort((a, b) => b.count - a.count || b.savedSeconds - a.savedSeconds || b.score - a.score || a.minRank - b.minRank);
+}
+
 async function loadRecrawlEtaEstimates(master = state.companyMaster) {
   const entries = companyDecisionQueueEntries(master || {});
   const profile = recrawlAutomationProfile(entries);
@@ -6561,6 +6624,40 @@ function recrawlAutomationEtaCells(row = {}) {
   `;
 }
 
+function recrawlAutomationBatchHtml(batches = []) {
+  const rows = batches.slice(0, 4);
+  return `
+    <article class="recrawl-batch-panel">
+      <div class="history-card-head">
+        <strong>0. 묶음 실행</strong>
+        <small>같은 키워드·기간·범위는 한 번 수집해 여러 판단 큐 업체를 동시에 확인합니다.</small>
+      </div>
+      <div class="recrawl-batch-list">
+        ${rows.length ? rows.map((batch, index) => `
+          <div>
+            <mark>${fmtNumber(index + 1)}</mark>
+            <div>
+              <b>${escapeHtml(batch.plan.keyword || activeKeyword())}</b>
+              <small>${escapeHtml([
+                `${fmtNumber(batch.count)}개 후보`,
+                batch.plan.checkIn && batch.plan.checkOut ? `${batch.plan.checkIn}~${batch.plan.checkOut}` : "기간 확인",
+                `상세 ${batch.plan.range || batch.plan.detailRankRanges || "1-20"}위`,
+                batch.regions.slice(0, 2).join(" / ")
+              ].filter(Boolean).join(" · "))}</small>
+              <div class="recrawl-auto-eta">
+                <span><b>묶음 ETA</b>${escapeHtml(batch.etaText || "계산 대기")}</span>
+                <span><b>절감 예상</b>${escapeHtml(batch.savedSeconds ? formatElapsed(batch.savedSeconds) : "중복 없음")}</span>
+              </div>
+              <p>${escapeHtml(`${batch.names.slice(0, 3).join(", ")}${batch.count > 3 ? ` 외 ${fmtNumber(batch.count - 3)}개` : ""} · ${batch.reason}`)}</p>
+            </div>
+            <button type="button" data-recrawl-batch-key="${escapeHtml(batch.key)}">묶음 설정</button>
+          </div>
+        `).join("") : `<p class="empty">같은 조건으로 묶을 재수집 후보가 없습니다.</p>`}
+      </div>
+    </article>
+  `;
+}
+
 function recrawlAutomationMiniCells(row = {}) {
   if (!row.comparison?.hasComparison) {
     return `
@@ -6594,15 +6691,19 @@ function recrawlAutomationCompanyAttrs(row = {}) {
 
 function recrawlAutomationBoardHtml(entries = []) {
   const profile = recrawlAutomationProfile(entries);
+  const batches = recrawlAutomationBatches(profile.needsExecution);
   const executionEtaSeconds = profile.needsExecution
     .map((row) => Number(row.eta?.estimatedTotalSeconds))
     .filter(Number.isFinite);
   const averageEtaSeconds = executionEtaSeconds.length
     ? Math.round(executionEtaSeconds.reduce((sum, value) => sum + value, 0) / executionEtaSeconds.length)
     : null;
+  const totalSavedSeconds = batches.reduce((sum, batch) => sum + finiteNumber(batch.savedSeconds, 0), 0);
   const metricRows = [
+    ["실행 묶음", batches.length, "중복 수집 축소"],
     ["실행 대기", profile.needsExecution.length, "수집 설정 적용 대상"],
     ["평균 ETA", averageEtaSeconds ? formatElapsed(averageEtaSeconds) : "대기", "실측 기록 반영"],
+    ["절감 예상", totalSavedSeconds ? formatElapsed(totalSavedSeconds) : "대기", "개별 실행 대비"],
     ["비교 완료", profile.compared.length, "전후 스냅샷 확보"],
     ["컨택 전환", profile.contactReady.length, "영업타깃 이동 추천"],
     ["보정 필요", profile.manualNeeded.length, "수량/총량 확인"],
@@ -6628,6 +6729,7 @@ function recrawlAutomationBoardHtml(entries = []) {
           </article>
         `).join("")}
       </div>
+      ${recrawlAutomationBatchHtml(batches)}
       <div class="recrawl-auto-layout">
         <article>
           <div class="history-card-head">
@@ -9445,6 +9547,40 @@ function applyQueueRecrawlSetting(button) {
   });
 }
 
+function applyRecrawlBatchSetting(button) {
+  const key = button?.dataset?.recrawlBatchKey || "";
+  const entries = companyDecisionQueueEntries(companyMasterSource());
+  const profile = recrawlAutomationProfile(entries);
+  const batch = recrawlAutomationBatches(profile.needsExecution).find((row) => row.key === key);
+  if (!batch) {
+    setStatus("묶음 재수집 설정 실패");
+    return;
+  }
+  const plan = batch.plan || {};
+  const eta = batch.eta || crawlEtaForPlan(plan);
+  const keyword = plan.keyword || activeKeyword();
+  if (els.keywordInput) els.keywordInput.value = keyword;
+  if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
+  if (els.checkOutInput && plan.checkOut) els.checkOutInput.value = plan.checkOut;
+  if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword");
+  if (els.productModeInput) els.productModeInput.value = plan.productMode || "all";
+  if (els.collectionModeInput) els.collectionModeInput.value = plan.collectionMode || "precision";
+  if (els.detailRankRangesInput) {
+    els.detailRankRangesInput.disabled = false;
+    els.detailRankRangesInput.value = plan.range || plan.detailRankRanges || "1-20";
+  }
+  syncCollectionModeInputs();
+  setActiveTab("admin");
+  if (els.crawlStatus) {
+    const saved = batch.savedSeconds ? ` · 개별 실행 대비 ${formatElapsed(batch.savedSeconds)} 절감` : "";
+    els.crawlStatus.textContent = `${fmtNumber(batch.count)}개 후보 묶음 재수집 설정을 적용했습니다. 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
+  }
+  setStatus("묶음 재수집 설정 적용");
+  window.requestAnimationFrame(() => {
+    els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 async function backfillCompanyMaster(button) {
   if (!button) return;
   button.disabled = true;
@@ -9842,6 +9978,8 @@ function bindEvents() {
     if (qualitySetting) applyCollectionQualitySetting(qualitySetting);
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
     if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
+    const recrawlBatch = event.target.closest("[data-recrawl-batch-key]");
+    if (recrawlBatch) applyRecrawlBatchSetting(recrawlBatch);
     const checkFilter = event.target.closest("[data-company-check-filter]");
     if (checkFilter) {
       state.companyMasterFilters.check = checkFilter.dataset.companyCheckFilter || "priority";
