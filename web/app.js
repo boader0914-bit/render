@@ -2154,16 +2154,29 @@ function inventoryLinked(item = {}) {
 function regionBoundaryBadge(item = {}) {
   const searchRegion = item.searchRegion || item.searchCluster || "";
   const addressRegion = item.addressRegion || item.region || "";
-  if (!item.outsideSearchRegion || !searchRegion || !addressRegion) return "";
-  return `<span class="structure-badge watch" title="${escapeHtml(`${searchRegion} 검색권 결과이나 실제 소재지는 ${addressRegion}입니다.`)}">인접지역 노출</span>`;
+  const status = item.regionBoundaryStatus || (item.outsideSearchRegion ? "outside" : "same");
+  if (!searchRegion || !addressRegion || status === "same" || status === "unknown") return "";
+  const label = item.regionBoundaryLabel || (status === "outside" ? "권역 밖 노출" : "권역 내 노출");
+  const tone = status === "outside" ? "watch" : "good";
+  const detail = item.regionBoundaryDetail || (
+    status === "outside"
+      ? `${searchRegion} 검색권 결과이나 실제 소재지는 ${addressRegion}입니다.`
+      : `${searchRegion} 권역에 포함된 ${addressRegion} 소재입니다.`
+  );
+  return `<span class="structure-badge ${tone}" title="${escapeHtml(detail)}">${escapeHtml(label)}</span>`;
 }
 
 function itemLocationLine(item = {}) {
   const searchRegion = item.searchRegion || item.searchCluster || "";
   const addressRegion = item.addressRegion || item.region || "";
-  const regionText = item.outsideSearchRegion && searchRegion && addressRegion
-    ? `${searchRegion} 검색권 · ${addressRegion} 소재`
-    : (addressRegion || searchRegion);
+  const status = item.regionBoundaryStatus || (item.outsideSearchRegion ? "outside" : "same");
+  const regionText = searchRegion && addressRegion && status === "within"
+    ? `${searchRegion} 권역 · ${addressRegion} 소재`
+    : searchRegion && addressRegion && status === "parent"
+      ? `${addressRegion} 권역 · ${searchRegion} 검색`
+      : searchRegion && addressRegion && status === "outside"
+        ? `${searchRegion} 검색권 · ${addressRegion} 소재`
+        : (addressRegion || searchRegion);
   return [item.searchKeyword, regionText, item.address].filter(Boolean).join(" · ") || "지역/주소 확인";
 }
 
@@ -2173,7 +2186,7 @@ function rankMetaChipRow(item = {}) {
     item.regionalRank ? `지역 ${fmtNumber(item.regionalRank)}위` : "",
     item.adRank ? `광고 ${fmtNumber(item.adRank)}위` : "",
     item.hasInventory ? "재고 분석 완료" : "재고 미수집",
-    item.outsideSearchRegion ? "인접지역 노출" : ""
+    ["within", "parent", "outside"].includes(item.regionBoundaryStatus) ? item.regionBoundaryLabel : (item.outsideSearchRegion ? "권역 밖 노출" : "")
   ].filter(Boolean);
   return `<div class="flow-chip-row">${chips.slice(0, 4).map((chip, index) => `<span class="${index === 0 ? "hot" : ""}">${escapeHtml(chip)}</span>`).join("")}</div>`;
 }

@@ -1875,12 +1875,12 @@ const REGIONAL_KEYWORD_ALIASES = {
   gyeongnam: ["경남", "경상남도"],
   gyeongbuk: ["경북", "경상북도"],
   gyeonggi: ["경기", "경기도"],
-  jeonbuk: ["전북", "전라북도"],
+  jeonbuk: ["전북", "전라북도", "전북특별자치도"],
   jeonnam: ["전남", "전라남도"],
   chungnam: ["충남", "충청남도"],
   chungbuk: ["충북", "충청북도"],
-  gangwon: ["강원", "강원도"],
-  jeju: ["제주", "제주도"],
+  gangwon: ["강원", "강원도", "강원특별자치도"],
+  jeju: ["제주", "제주도", "제주특별자치도"],
   seoul: ["서울", "서울시", "서울특별시"],
   busan: ["부산", "부산시", "부산광역시"],
   daegu: ["대구", "대구시", "대구광역시"],
@@ -1890,6 +1890,108 @@ const REGIONAL_KEYWORD_ALIASES = {
   ulsan: ["울산", "울산시", "울산광역시"],
   sejong: ["세종", "세종시", "세종특별자치시"]
 };
+
+const ADMIN_REGION_GROUPS = {
+  seoul: { label: "서울", aliases: ["서울", "서울시", "서울특별시"], children: ["종로", "중", "용산", "성동", "광진", "동대문", "중랑", "성북", "강북", "도봉", "노원", "은평", "서대문", "마포", "양천", "강서", "구로", "금천", "영등포", "동작", "관악", "서초", "강남", "송파", "강동"] },
+  busan: { label: "부산", aliases: ["부산", "부산시", "부산광역시"], children: ["중", "서", "동", "영도", "부산진", "동래", "남", "북", "해운대", "사하", "금정", "강서", "연제", "수영", "사상", "기장"] },
+  daegu: { label: "대구", aliases: ["대구", "대구시", "대구광역시"], children: ["중", "동", "서", "남", "북", "수성", "달서", "달성", "군위"] },
+  incheon: { label: "인천", aliases: ["인천", "인천시", "인천광역시"], children: ["중", "동", "미추홀", "연수", "남동", "부평", "계양", "서", "강화", "옹진"] },
+  gwangju: { label: "광주", aliases: ["광주", "광주시", "광주광역시"], children: ["동", "서", "남", "북", "광산"] },
+  daejeon: { label: "대전", aliases: ["대전", "대전시", "대전광역시"], children: ["동", "중", "서", "유성", "대덕"] },
+  ulsan: { label: "울산", aliases: ["울산", "울산시", "울산광역시"], children: ["중", "남", "동", "북", "울주"] },
+  sejong: { label: "세종", aliases: ["세종", "세종시", "세종특별자치시"], children: ["세종"] },
+  gyeonggi: { label: "경기", aliases: ["경기", "경기도"], children: ["수원", "성남", "의정부", "안양", "부천", "광명", "평택", "동두천", "안산", "고양", "과천", "구리", "남양주", "오산", "시흥", "군포", "의왕", "하남", "용인", "파주", "이천", "안성", "김포", "화성", "광주", "양주", "포천", "여주", "연천", "가평", "양평"] },
+  gangwon: { label: "강원", aliases: ["강원", "강원도", "강원특별자치도"], children: ["춘천", "원주", "강릉", "동해", "태백", "속초", "삼척", "홍천", "횡성", "영월", "평창", "정선", "철원", "화천", "양구", "인제", "고성", "양양"] },
+  chungbuk: { label: "충북", aliases: ["충북", "충청북도"], children: ["청주", "충주", "제천", "보은", "옥천", "영동", "증평", "진천", "괴산", "음성", "단양"] },
+  chungnam: { label: "충남", aliases: ["충남", "충청남도"], children: ["천안", "공주", "보령", "아산", "서산", "논산", "계룡", "당진", "금산", "부여", "서천", "청양", "홍성", "예산", "태안"] },
+  jeonbuk: { label: "전북", aliases: ["전북", "전라북도", "전북특별자치도"], children: ["전주", "군산", "익산", "정읍", "남원", "김제", "완주", "진안", "무주", "장수", "임실", "순창", "고창", "부안"] },
+  jeonnam: { label: "전남", aliases: ["전남", "전라남도"], children: ["목포", "여수", "순천", "나주", "광양", "담양", "곡성", "구례", "고흥", "보성", "화순", "장흥", "강진", "해남", "영암", "무안", "함평", "영광", "장성", "완도", "진도", "신안"] },
+  gyeongbuk: { label: "경북", aliases: ["경북", "경상북도"], children: ["포항", "경주", "김천", "안동", "구미", "영주", "영천", "상주", "문경", "경산", "의성", "청송", "영양", "영덕", "청도", "고령", "성주", "칠곡", "예천", "봉화", "울진", "울릉"] },
+  gyeongnam: { label: "경남", aliases: ["경남", "경상남도"], children: ["창원", "진주", "통영", "사천", "김해", "밀양", "거제", "양산", "의령", "함안", "창녕", "고성", "남해", "하동", "산청", "함양", "거창", "합천"] },
+  jeju: { label: "제주", aliases: ["제주", "제주도", "제주특별자치도"], children: ["제주", "서귀포"] }
+};
+
+function adminRegionToken(value = "") {
+  return compactKeyword(value)
+    .normalize("NFKC")
+    .replace(/(특별자치도|특별자치시|특별시|광역시|자치시|자치구|도|시|군|구)$/u, "");
+}
+
+const ADMIN_REGION_ALIAS_TO_KEY = (() => {
+  const map = new Map();
+  for (const [key, group] of Object.entries(ADMIN_REGION_GROUPS)) {
+    map.set(adminRegionToken(group.label), key);
+    for (const alias of group.aliases || []) map.set(adminRegionToken(alias), key);
+  }
+  return map;
+})();
+
+const ADMIN_REGION_CHILD_SETS = (() => {
+  const map = {};
+  for (const [key, group] of Object.entries(ADMIN_REGION_GROUPS)) {
+    map[key] = new Set((group.children || []).map(adminRegionToken));
+  }
+  return map;
+})();
+
+function normalizeAdminRegionName(value = "") {
+  const token = adminRegionToken(value);
+  return ADMIN_REGION_ALIAS_TO_KEY.get(token) || token;
+}
+
+function adminRegionContains(parentKey, childName) {
+  const childToken = adminRegionToken(childName);
+  const childKey = normalizeAdminRegionName(childName);
+  if (!parentKey || (!childKey && !childToken)) return false;
+  if (parentKey === childKey) return true;
+  const children = ADMIN_REGION_CHILD_SETS[parentKey];
+  return Boolean(children?.has(childKey) || children?.has(childToken));
+}
+
+function topicParticle(value = "") {
+  const text = String(value || "").trim();
+  const last = text[text.length - 1] || "";
+  const code = last.charCodeAt(0);
+  if (code < 0xac00 || code > 0xd7a3) return "는";
+  return ((code - 0xac00) % 28) ? "은" : "는";
+}
+
+function regionBoundaryInfo(searchRegion = "", addressRegion = "") {
+  const searchLabel = String(searchRegion || "").trim();
+  const addressLabel = String(addressRegion || "").trim();
+  const searchKey = normalizeAdminRegionName(searchLabel);
+  const addressKey = normalizeAdminRegionName(addressLabel);
+  if (!searchKey || !addressKey) {
+    return { status: "unknown", label: "", detail: "", outside: false };
+  }
+  if (searchKey === addressKey) {
+    return { status: "same", label: "동일지역", detail: `${addressLabel || searchLabel} 소재`, outside: false };
+  }
+  if (adminRegionContains(searchKey, addressKey)) {
+    const parentLabel = ADMIN_REGION_GROUPS[searchKey]?.label || searchLabel;
+    return {
+      status: "within",
+      label: "권역 내 노출",
+      detail: `${addressLabel}${topicParticle(addressLabel)} ${parentLabel} 권역에 포함됩니다.`,
+      outside: false
+    };
+  }
+  if (adminRegionContains(addressKey, searchKey)) {
+    const parentLabel = ADMIN_REGION_GROUPS[addressKey]?.label || addressLabel;
+    return {
+      status: "parent",
+      label: "상위권역 확인",
+      detail: `${searchLabel} 검색 결과가 ${parentLabel} 상위권역으로만 확인됩니다.`,
+      outside: false
+    };
+  }
+  return {
+    status: "outside",
+    label: "권역 밖 노출",
+    detail: `${searchLabel} 검색권 결과이나 실제 소재지는 ${addressLabel}입니다.`,
+    outside: true
+  };
+}
 
 function keywordLayerCore(keyword) {
   return compactKeyword(keyword)
@@ -5392,6 +5494,7 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
   const placeId = extractNaverPlaceId(row);
   const searchRegion = rowSearchRegion(row);
   const addressRegion = rowAddressRegion(row);
+  const boundary = regionBoundaryInfo(searchRegion, addressRegion);
   return {
     sourceKey: availabilityPlaceKey(row),
     placeId,
@@ -5406,7 +5509,10 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
     searchCluster: searchRegion,
     searchRegion,
     addressRegion,
-    outsideSearchRegion: Boolean(searchRegion && addressRegion && searchRegion !== addressRegion),
+    regionBoundaryStatus: boundary.status,
+    regionBoundaryLabel: boundary.label,
+    regionBoundaryDetail: boundary.detail,
+    outsideSearchRegion: boundary.outside,
     name: row["업체명"] || row.name || "확인불가",
     category: row["카테고리"] || row.category || "",
     region: rowDisplayRegion(row),
@@ -5540,6 +5646,7 @@ function summarizeAvailabilityRows(rows) {
     const bookingBusinessId = availabilityBookingBusinessId(row);
     const searchRegion = rowSearchRegion(row);
     const addressRegion = rowAddressRegion(row);
+    const boundary = regionBoundaryInfo(searchRegion, addressRegion);
 
     byPlace.set(key, {
       sourceKey: key,
@@ -5552,7 +5659,10 @@ function summarizeAvailabilityRows(rows) {
       searchRegion,
       searchCluster: searchRegion,
       addressRegion,
-      outsideSearchRegion: Boolean(searchRegion && addressRegion && searchRegion !== addressRegion),
+      regionBoundaryStatus: boundary.status,
+      regionBoundaryLabel: boundary.label,
+      regionBoundaryDetail: boundary.detail,
+      outsideSearchRegion: boundary.outside,
       address: row["주소"] || row.location || "",
       listType: row["예약리스트유형"] || "",
       productTypeSummary: row["네이버상품구성"] || "",
@@ -6427,8 +6537,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-region-average-revenue"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-region-average-revenue"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-admin-region-boundary"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-admin-region-boundary"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
