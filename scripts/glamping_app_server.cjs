@@ -3337,6 +3337,30 @@ function parseStockVarianceDetail(detail) {
   };
 }
 
+function maxPositiveNumber(...values) {
+  const numbers = values
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return numbers.length ? Math.max(...numbers) : null;
+}
+
+function parseBasisTotalFromRule(rule) {
+  const text = String(rule || "");
+  const matches = Array.from(text.matchAll(/(?:후보|보정값|기준)[^\d]{0,24}(\d{1,5})/g))
+    .map((match) => Number(match[1]))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (matches.length) return Math.max(...matches);
+  const equalsMatch = text.match(/=\s*(\d{1,5})\s*(?:개|회)?/);
+  const equalsValue = equalsMatch ? Number(equalsMatch[1]) : null;
+  return Number.isFinite(equalsValue) && equalsValue > 0 ? equalsValue : null;
+}
+
+function basisRuleForTotal(storedRule, basisTotal, fallbackBuilder) {
+  const parsedTotal = parseBasisTotalFromRule(storedRule);
+  if (storedRule && (!basisTotal || !parsedTotal || parsedTotal === basisTotal)) return storedRule;
+  return basisTotal ? fallbackBuilder(basisTotal) : "";
+}
+
 function stableHash(value) {
   return crypto.createHash("sha1").update(String(value || "")).digest("hex").slice(0, 16);
 }
@@ -5848,17 +5872,17 @@ function summarizeAvailabilityRows(rows) {
     const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
     const weeklyTotalSoldOut = numericField(row, ["주간판매수량합계", "weeklyTotalSoldOut"]) ?? derivedWeeklyRates.totalSoldOut;
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
-    const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
+    const weeklyExplicitBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
     const weeklyVariance = parseStockVarianceDetail(weeklyRawStockVariance);
+    const storedWeeklyBasisRule = row["주간숙박총량기준"] || row.weeklyBasisRule || "";
     const weeklyMinTotal = numericField(row, ["주간총량최소값", "weeklyMinTotal"]) ?? weeklyVariance.minTotal;
-    const weeklyMaxTotal = numericField(row, ["주간총량최대값", "weeklyMaxTotal"]) ?? weeklyVariance.maxTotal;
+    const weeklyMaxTotal = numericField(row, ["주간총량최대값", "weeklyMaxTotal"]) ?? weeklyVariance.maxTotal ?? parseBasisTotalFromRule(storedWeeklyBasisRule);
+    const weeklyBasisTotal = maxPositiveNumber(weeklyExplicitBasisTotal, weeklyMaxTotal, parseBasisTotalFromRule(storedWeeklyBasisRule));
     const weeklyMaxTotalDays = numericField(row, ["주간최대총량확인일수", "weeklyMaxTotalDays"]) ?? weeklyVariance.maxTotalDays;
     const weeklyTotalVarianceGap = numericField(row, ["주간총량편차", "weeklyTotalVarianceGap"]) ?? weeklyVariance.totalVarianceGap;
     const weeklyOfflineReservedTotal = numericField(row, ["주간숙박오프라인예약추정수", "weeklyOfflineReservedTotal"]) ?? weeklyVariance.totalOfflineReserved;
-    const weeklyBasisRule = row["주간숙박총량기준"] || row.weeklyBasisRule || (weeklyBasisTotal
-      ? `전체객실수후보=${weeklyBasisTotal}개(날짜별 숙박 총량 최대값)`
-      : "");
+    const weeklyBasisRule = basisRuleForTotal(storedWeeklyBasisRule, weeklyBasisTotal, (value) => `전체객실수후보=${value}개(날짜별 숙박 총량 최대값)`);
     const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
     const weeklyAdjustedRevenue = numericField(row, ["weeklyAdjustedRevenue"]);
     const weeklyMissingPriceEstimatedRevenue = numericField(row, ["weeklyMissingPriceEstimatedRevenue"]);
@@ -5877,15 +5901,15 @@ function summarizeAvailabilityRows(rows) {
     const dayUseWeeklyReservationRateDetail = row.dayUseWeeklyReservationRateDetail || derivedDayUseWeeklyRates.detail;
     const dayUseWeeklyTotalSoldOut = numericField(row, ["dayUseWeeklyTotalSoldOut"]) ?? derivedDayUseWeeklyRates.totalSoldOut;
     const dayUseWeeklyTotalStock = numericField(row, ["dayUseWeeklyTotalStock"]) ?? derivedDayUseWeeklyRates.totalStock;
-    const dayUseWeeklyBasisTotal = numericField(row, ["dayUseWeeklyBasisTotal"]);
+    const dayUseWeeklyExplicitBasisTotal = numericField(row, ["dayUseWeeklyBasisTotal"]);
+    const storedDayUseWeeklyBasisRule = row.dayUseWeeklyBasisRule || "";
     const dayUseWeeklyMinTotal = numericField(row, ["dayUseWeeklyMinTotal"]) ?? dayUseWeeklyVariance.minTotal;
-    const dayUseWeeklyMaxTotal = numericField(row, ["dayUseWeeklyMaxTotal"]) ?? dayUseWeeklyVariance.maxTotal;
+    const dayUseWeeklyMaxTotal = numericField(row, ["dayUseWeeklyMaxTotal"]) ?? dayUseWeeklyVariance.maxTotal ?? parseBasisTotalFromRule(storedDayUseWeeklyBasisRule);
+    const dayUseWeeklyBasisTotal = maxPositiveNumber(dayUseWeeklyExplicitBasisTotal, dayUseWeeklyMaxTotal, parseBasisTotalFromRule(storedDayUseWeeklyBasisRule));
     const dayUseWeeklyMaxTotalDays = numericField(row, ["dayUseWeeklyMaxTotalDays"]) ?? dayUseWeeklyVariance.maxTotalDays;
     const dayUseWeeklyTotalVarianceGap = numericField(row, ["dayUseWeeklyTotalVarianceGap"]) ?? dayUseWeeklyVariance.totalVarianceGap;
     const dayUseWeeklyOfflineReservedTotal = numericField(row, ["dayUseWeeklyOfflineReservedTotal"]) ?? dayUseWeeklyVariance.totalOfflineReserved;
-    const dayUseWeeklyBasisRule = row.dayUseWeeklyBasisRule || (dayUseWeeklyBasisTotal
-      ? `데이유즈/캠프닉총량후보=${dayUseWeeklyBasisTotal}회(날짜별 총량 최대값)`
-      : "");
+    const dayUseWeeklyBasisRule = basisRuleForTotal(storedDayUseWeeklyBasisRule, dayUseWeeklyBasisTotal, (value) => `데이유즈/캠프닉총량후보=${value}회(날짜별 총량 최대값)`);
     const dayUseWeeklyEstimatedRevenue = numericField(row, ["dayUseWeeklyEstimatedRevenue"]);
     const dayUseWeeklyAdjustedRevenue = numericField(row, ["dayUseWeeklyAdjustedRevenue"]);
     const dayUseWeeklyMissingPriceEstimatedRevenue = numericField(row, ["dayUseWeeklyMissingPriceEstimatedRevenue"]);
@@ -6199,13 +6223,13 @@ function summarizeCompanyPlatforms(rows) {
     const weeklyReservationRateDetail = row["주간예약률상세"] || derivedWeeklyRates.detail;
     const weeklyTotalSoldOut = numericField(row, ["주간판매수량합계", "weeklyTotalSoldOut"]) ?? derivedWeeklyRates.totalSoldOut;
     const weeklyTotalStock = numericField(row, ["주간전체수량합계", "weeklyTotalStock"]) ?? derivedWeeklyRates.totalStock;
-    const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
+    const weeklyExplicitBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
     const weeklyVariance = parseStockVarianceDetail(weeklyRawStockVariance);
+    const storedWeeklyBasisRule = row["주간숙박총량기준"] || row.weeklyBasisRule || "";
+    const weeklyBasisTotal = maxPositiveNumber(weeklyExplicitBasisTotal, weeklyVariance.maxTotal, parseBasisTotalFromRule(storedWeeklyBasisRule));
     const weeklyOfflineReservedTotal = numericField(row, ["주간숙박오프라인예약추정수", "weeklyOfflineReservedTotal"]) ?? weeklyVariance.totalOfflineReserved;
-    const weeklyBasisRule = row["주간숙박총량기준"] || row.weeklyBasisRule || (weeklyBasisTotal
-      ? `전체객실수후보=${weeklyBasisTotal}개(날짜별 숙박 총량 최대값${weeklyOfflineReservedTotal ? ` · 오프라인/차단 ${weeklyOfflineReservedTotal}개 추정` : ""})`
-      : "");
+    const weeklyBasisRule = basisRuleForTotal(storedWeeklyBasisRule, weeklyBasisTotal, (value) => `전체객실수후보=${value}개(날짜별 숙박 총량 최대값${weeklyOfflineReservedTotal ? ` · 오프라인/차단 ${weeklyOfflineReservedTotal}개 추정` : ""})`);
     const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
     const weeklyAdjustedRevenue = numericField(row, ["weeklyAdjustedRevenue"]);
     const weeklyMissingPriceEstimatedRevenue = numericField(row, ["weeklyMissingPriceEstimatedRevenue"]);
