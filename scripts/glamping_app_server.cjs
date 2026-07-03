@@ -3669,6 +3669,7 @@ function companySalesSignalFromItem(item = {}, run = {}) {
   const confidenceGrade = String(item.inventoryConfidenceGrade || "").toUpperCase();
   const structureWeak = Boolean(confidenceGrade && !["A", "B"].includes(confidenceGrade));
   const dayUseHasSupply = dayUse.totalSupply > 0 || Number(item.dayUseTotalStock || 0) > 0 || Number(item.dayUseItemCount || 0) > 0;
+  const couponSignal = naverCouponSignalFromItem(item);
   return {
     checkIn,
     lodging,
@@ -3693,10 +3694,31 @@ function companySalesSignalFromItem(item = {}, run = {}) {
     bookingIdReused: structureFlags.includes("booking_id_reused"),
     groupedStock: structureFlags.includes("grouped_range") || ["grouped_stock", "stock_only", "unknown"].includes(String(item.inventoryStructureType || "")),
     manualCorrectionApplied: manualApplied,
+    couponSignal,
+    naverCouponVisible: couponSignal.visible,
+    naverCouponStatus: couponSignal.status,
+    naverCouponNames: couponSignal.names,
+    naverCouponChannel: couponSignal.channel,
+    naverCouponDetail: couponSignal.detail,
     structureFlags: boundedUnique([
       ...structureFlags,
       manualApplied ? "manual_correction" : ""
     ], 10)
+  };
+}
+
+function naverCouponSignalFromItem(item = {}) {
+  const status = String(item.naverCouponStatus || item["네이버쿠폰노출상태"] || "").trim();
+  const names = String(item.naverCouponNames || item["네이버쿠폰명"] || "").trim();
+  const channel = String(item.naverCouponChannel || item["네이버쿠폰확인채널"] || "").trim();
+  const detail = String(item.naverCouponDetail || item["네이버쿠폰상세"] || "").trim();
+  const visible = status === "있음" || Boolean(names);
+  return {
+    visible,
+    status: status || (visible ? "있음" : ""),
+    names,
+    channel: channel || (visible ? "네이버" : ""),
+    detail: detail || (visible ? `네이버 공개 노출 쿠폰: ${names || "쿠폰명 확인"}` : "")
   };
 }
 
@@ -3844,6 +3866,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const sourceKeys = companySourceKeys({ placeId, bookingBusinessId, nameKey, addressKey, regionKey });
   const keywordLayer = keywordLayerFromRunLike(run);
   const salesSignal = companySalesSignalFromItem(item, run);
+  const couponSignal = salesSignal.couponSignal || naverCouponSignalFromItem(item);
   const revenueSnapshot = companyRevenueSnapshotFromItem(item);
   return {
     name,
@@ -3899,6 +3922,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
       dayUseBasisRule: item.dayUseWeeklyBasisRule || ""
     },
     salesSignal,
+    couponSignal,
     revenueSnapshot,
     price: item.price || ""
   };
@@ -4009,6 +4033,7 @@ function updateCompanyInventory(company, entity) {
     structureFlags: boundedUnique(entity.inventoryStructureFlags || [], 10),
     stockBasis: entity.stockBasis || {},
     salesSignal: entity.salesSignal || {},
+    couponSignal: entity.couponSignal || entity.salesSignal?.couponSignal || {},
     revenue: entity.revenueSnapshot || {},
     price: entity.price
   };
@@ -4033,6 +4058,7 @@ function companyInventorySnapshot(latest = {}) {
     structureFlags: Array.isArray(latest.structureFlags) ? boundedUnique(latest.structureFlags, 12) : [],
     stockBasis: latest.stockBasis || {},
     salesSignal: latest.salesSignal || {},
+    couponSignal: latest.couponSignal || latest.salesSignal?.couponSignal || {},
     revenue: latest.revenue || {},
     price: latest.price || "",
     manualCorrectionApplied: Boolean(latest.manualCorrectionApplied),
@@ -4413,6 +4439,7 @@ function companySalesTargetSignals(company = {}) {
   const signal = latestInventory.salesSignal || {};
   const lodging = signal.lodging || {};
   const dayUse = signal.dayUse || {};
+  const couponSignal = latestInventory.couponSignal || signal.couponSignal || {};
   const latestFlags = Array.isArray(latestInventory.structureFlags) ? latestInventory.structureFlags : [];
   const signalFlags = Array.isArray(signal.structureFlags) ? signal.structureFlags : [];
   const structureFlags = boundedUnique([
@@ -4431,6 +4458,12 @@ function companySalesTargetSignals(company = {}) {
   const productNamingReview = Boolean(structureWeak || bookingIdReused || signal.groupedStock);
   const dayUseMissing = Boolean(signal.dayUseMissing && (lodging.totalSupply || lodging.days));
   const otaReviewNeeded = Boolean(structureWeak || stockVariance || bookingIdReused);
+  const couponVisible = Boolean(
+    signal.naverCouponVisible ||
+    couponSignal.visible ||
+    couponSignal.status === "있음" ||
+    couponSignal.names
+  );
   return {
     fridayWeak: Boolean(lodging.fridayWeak),
     sundayWeak: Boolean(lodging.sundayWeak),
@@ -4441,6 +4474,11 @@ function companySalesTargetSignals(company = {}) {
     bookingIdReused,
     productNamingReview,
     otaReviewNeeded,
+    couponVisible,
+    couponNames: couponSignal.names || signal.naverCouponNames || "",
+    couponStatus: couponSignal.status || signal.naverCouponStatus || "",
+    couponChannel: couponSignal.channel || signal.naverCouponChannel || "",
+    couponDetail: couponSignal.detail || signal.naverCouponDetail || "",
     lodgingRate: lodging.averageRate ?? null,
     dayUseRate: dayUse.averageRate ?? null,
     fridayRate: lodging.fridayRate ?? null,
@@ -4471,6 +4509,7 @@ function companySalesTargetSignalReasons(signals = {}) {
   add(signals.bookingIdReused, 5, "예약ID 확인", "예약ID 또는 상품 구조 재사용 가능성이 있어 네이버 상품 구조 재확인 필요");
   add(signals.productNamingReview, 4, "상품명 검토", "네이버 예약 상품명/구성이 고객 관점에서 재정리될 여지");
   add(signals.otaReviewNeeded, 4, "OTA 확인", "판단이 흔들리는 업체로 OTA/채널 비교 확인 필요");
+  add(signals.couponVisible, 3, "쿠폰 노출", `네이버 쿠폰 노출${signals.couponNames ? `(${signals.couponNames})` : ""}이 있어 가격/프로모션 전략 접근 가능`);
   return {
     score: scoreParts.reduce((sum, value) => sum + Number(value || 0), 0),
     tags: boundedUnique(tags, 8),
@@ -5888,6 +5927,10 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
     address: row["주소"] || row.location || "",
     price: row["예약최저가"] || row["금액"] || row.price || "",
     bookingStatus: row["네이버예약재고수집상태"] || row["예약가능근거"] || "",
+    naverCouponStatus: row["네이버쿠폰노출상태"] || row.naverCouponStatus || "",
+    naverCouponNames: row["네이버쿠폰명"] || row.naverCouponNames || "",
+    naverCouponChannel: row["네이버쿠폰확인채널"] || row.naverCouponChannel || "",
+    naverCouponDetail: row["네이버쿠폰상세"] || row.naverCouponDetail || "",
     url: row.url || row["네이버예약URL"] || ""
   };
 }
@@ -5948,6 +5991,10 @@ function summarizeRankingRows(overallRows = [], adRows = [], regionalRows = [], 
         regionalKeyword: regional?.keyword || "",
         regionalCluster: regional?.region || "",
         adRank: ad?.rank || base.adRank || null,
+        naverCouponStatus: base.naverCouponStatus || linked?.item?.naverCouponStatus || "",
+        naverCouponNames: base.naverCouponNames || linked?.item?.naverCouponNames || "",
+        naverCouponChannel: base.naverCouponChannel || linked?.item?.naverCouponChannel || "",
+        naverCouponDetail: base.naverCouponDetail || linked?.item?.naverCouponDetail || "",
         bookingStatus: base.bookingStatus || linked?.item?.basis || (linked ? "재고 분석 완료" : "재고 미수집")
       };
     })
@@ -6056,6 +6103,10 @@ function summarizeAvailabilityRows(rows) {
     const dayUseWeeklyMissingPriceSoldOut = numericField(row, ["dayUseWeeklyMissingPriceSoldOut"]);
     const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
     const dayUseWeeklyOfflineReservationDetail = row.dayUseWeeklyOfflineReservationDetail || "";
+    const naverCouponStatus = row["네이버쿠폰노출상태"] || row.naverCouponStatus || "";
+    const naverCouponNames = row["네이버쿠폰명"] || row.naverCouponNames || "";
+    const naverCouponChannel = row["네이버쿠폰확인채널"] || row.naverCouponChannel || "";
+    const naverCouponDetail = row["네이버쿠폰상세"] || row.naverCouponDetail || "";
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -6083,6 +6134,10 @@ function summarizeAvailabilityRows(rows) {
       address: row["주소"] || row.location || "",
       listType: row["예약리스트유형"] || "",
       productTypeSummary: row["네이버상품구성"] || "",
+      naverCouponStatus,
+      naverCouponNames,
+      naverCouponChannel,
+      naverCouponDetail,
       nightItemCount: numericField(row, ["숙박상품수"]),
       dayUseItemCount: numericField(row, ["데이유즈상품수"]),
       countedItemCount: numericField(row, ["예약계산대상상품수"]),
@@ -6281,6 +6336,7 @@ function summarizeAvailabilityRows(rows) {
       stockVarianceCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("dynamic_capacity")).length,
       dayUseMixedCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("dayuse_rotation")).length,
       bookingIdReusedCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("booking_id_reused")).length,
+      naverCouponVisibleCount: items.filter((item) => item.naverCouponStatus === "있음" || item.naverCouponNames).length,
       confidenceCounts: items.reduce((acc, item) => {
         const grade = item.inventoryConfidenceGrade || "C";
         acc[grade] = (acc[grade] || 0) + 1;
@@ -6999,8 +7055,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-operating-basis"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-operating-basis"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-coupon-signal"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-coupon-signal"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

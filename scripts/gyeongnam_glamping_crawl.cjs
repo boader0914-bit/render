@@ -1120,6 +1120,85 @@ function naverBookingSaleType(item) {
   return "미분류";
 }
 
+const COUPON_SIGNAL_PATTERN = /coupon|benefit|promotion|discount|쿠폰|혜택|할인|프로모션|즉시할인/i;
+const COUPON_NEGATIVE_PATTERN = /쿠폰\s*(없음|미제공|사용\s*불가|불가)|혜택\s*(없음|미제공)|할인\s*(없음|미제공|불가)/i;
+
+function parseJsonLike(value) {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!/^[\[{]/.test(text)) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCouponText(value) {
+  const text = String(value || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/["'`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length < 2 || text.length > 80) return "";
+  if (/^(있음|없음|확인불가|Y|N|true|false)$/i.test(text)) return "";
+  if (COUPON_NEGATIVE_PATTERN.test(text)) return "";
+  if (/^[\d,\s원%~.-]+$/.test(text)) return "";
+  return text;
+}
+
+function couponTextFragments(text) {
+  const source = String(text || "").replace(/\s+/g, " ").trim();
+  if (!source) return [];
+  const simpleParts = source.split(/\s*(?:,|\/|\||·|ㆍ|\n|\r)\s*/).map(normalizeCouponText).filter(Boolean);
+  const windowMatches = Array.from(source.matchAll(/.{0,24}(?:쿠폰|혜택|할인|프로모션|즉시할인).{0,34}/gi))
+    .map((match) => normalizeCouponText(match[0]))
+    .filter(Boolean);
+  return uniqueNonEmpty([...simpleParts, ...windowMatches]).slice(0, 5);
+}
+
+function collectCouponTexts(value, path = [], depth = 0, output = []) {
+  if (depth > 5 || value === null || value === undefined) return output;
+  const pathText = path.join(".");
+  const keyHit = COUPON_SIGNAL_PATTERN.test(pathText);
+  if (typeof value === "string") {
+    const parsed = parseJsonLike(value);
+    if (parsed) {
+      collectCouponTexts(parsed, path, depth + 1, output);
+      return output;
+    }
+    const textHit = COUPON_SIGNAL_PATTERN.test(value);
+    if (keyHit || textHit) {
+      const fragments = couponTextFragments(value);
+      if (fragments.length) output.push(...fragments);
+      else {
+        const normalized = normalizeCouponText(value);
+        if (normalized) output.push(normalized);
+      }
+    }
+    return output;
+  }
+  if (typeof value !== "object") return output;
+  if (Array.isArray(value)) {
+    value.slice(0, 30).forEach((item, index) => collectCouponTexts(item, [...path, String(index)], depth + 1, output));
+    return output;
+  }
+  Object.entries(value).slice(0, 80).forEach(([key, child]) => {
+    collectCouponTexts(child, [...path, key], depth + 1, output);
+  });
+  return output;
+}
+
+function summarizeNaverCouponExposure(sources = []) {
+  const names = uniqueNonEmpty(sources.flatMap((source) => collectCouponTexts(source))).slice(0, 5);
+  return {
+    couponStatus: names.length ? "있음" : "없음",
+    couponNames: names.join(" · "),
+    couponChannel: "네이버",
+    couponDetail: names.length ? `네이버 공개 노출 쿠폰 ${names.length}건` : "네이버 공개 노출 쿠폰 없음",
+  };
+}
+
 function naverGroupedRoomCount(value) {
   const text = String(value || "");
   const match = text.match(/(?:^|[^0-9])(?:[A-Za-z가-힣]+[_-]?)?(\d+)\s*[~～-]\s*(\d+)(?:[^0-9]|$)/);
@@ -1310,6 +1389,7 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   const dayUseSchedules = extra.dayUseSchedules || [];
   const dayUseListType = dayUseSchedules.length ? classifyNaverBookingList(dayUseItems, dayUseSchedules) : "";
   const dayUseSummary = summarizeNaverScheduleGroup(dayUseItems, dayUseSchedules, dayUseListType || "객실 종류별 리스트");
+  const coupon = summarizeNaverCouponExposure([items, dayUseItems, schedules, dayUseSchedules]);
   const minPrices = [nightSummary.minPrice, dayUseSummary.minPrice].filter((value) => value !== null && value !== undefined);
   const minPrice = minPrices.length ? Math.min(...minPrices) : null;
   const evidence = !nightSummary.totalStock
@@ -1387,6 +1467,10 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
     dayUseTotalStock: dayUseSummary.totalStock,
     dayUseAvailabilityRate: dayUseSummary.rate,
     dayUseCountedItemCount: dayUseSchedules.length,
+    naverCouponStatus: coupon.couponStatus,
+    naverCouponNames: coupon.couponNames,
+    naverCouponChannel: coupon.couponChannel,
+    naverCouponDetail: coupon.couponDetail,
     inventoryScope: "네이버예약 채널/날짜 기준 재고",
     inventoryMemo,
     itemDetails: [...schedules, ...dayUseSchedules].map((item) => ({
@@ -1399,6 +1483,8 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
       occupiedBookingCount: item.occupiedBookingCount,
       available: item.available,
       price: item.price,
+      couponStatus: item.couponStatus,
+      couponNames: item.couponNames,
     })),
   };
 }
@@ -1528,6 +1614,7 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
     const bookingCount = Math.max(0, asStockNumber(day.bookingCount) || 0);
     const occupiedBookingCount = Math.max(0, asStockNumber(day.occupiedBookingCount) || 0);
     const price = asStockNumber(day.prices?.[0]?.price ?? item.minMaxPrice?.minPrice ?? item.price);
+    const coupon = summarizeNaverCouponExposure([item, day]);
     return {
       bizItemId: item.bizItemId,
       name: item.name,
@@ -1538,6 +1625,9 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
       occupiedBookingCount,
       available: stock === null ? null : Math.max(0, stock - bookingCount - occupiedBookingCount),
       price,
+      couponStatus: coupon.couponStatus,
+      couponNames: coupon.couponNames,
+      couponDetail: coupon.couponDetail,
       isBusinessDay: day.isBusinessDay,
       isSaleDay: day.isSaleDay,
       errors: schedule.errors,
@@ -1909,6 +1999,10 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.데이유즈확인재고수 = result.dayUseTotalStock ?? "";
       row.데이유즈예약가능률 = result.dayUseAvailabilityRate === null || result.dayUseAvailabilityRate === undefined ? "" : result.dayUseAvailabilityRate;
       row.데이유즈계산대상상품수 = result.dayUseCountedItemCount ?? "";
+      row.네이버쿠폰노출상태 = result.naverCouponStatus || "";
+      row.네이버쿠폰명 = result.naverCouponNames || "";
+      row.네이버쿠폰확인채널 = result.naverCouponChannel || "";
+      row.네이버쿠폰상세 = result.naverCouponDetail || "";
       row.데이유즈기준일예상매출 = result.dayUseEstimatedRevenue ?? "";
       row.basisDayUseAdjustedRevenue = result.dayUseAdjustedEstimatedRevenue ?? "";
       row.basisDayUseMissingPriceEstimatedRevenue = result.dayUseMissingPriceEstimatedRevenue ?? "";
@@ -2462,6 +2556,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "데이유즈확인재고수": row.데이유즈확인재고수 ?? "",
       "데이유즈예약가능률": row.데이유즈예약가능률 ?? "",
       "데이유즈계산대상상품수": row.데이유즈계산대상상품수 ?? "",
+      "네이버쿠폰노출상태": row.네이버쿠폰노출상태 || "",
+      "네이버쿠폰명": row.네이버쿠폰명 || "",
+      "네이버쿠폰확인채널": row.네이버쿠폰확인채널 || "",
+      "네이버쿠폰상세": row.네이버쿠폰상세 || "",
       "네이버재고범위": row.네이버재고범위 || "",
       "객실수검증메모": row.객실수검증메모 || "",
       "주간재고수집일수": row.주간재고수집일수 ?? "",
@@ -2545,6 +2643,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "데이유즈확인재고수": row.데이유즈확인재고수 ?? "",
       "데이유즈예약가능률": row.데이유즈예약가능률 ?? "",
       "데이유즈계산대상상품수": row.데이유즈계산대상상품수 ?? "",
+      "네이버쿠폰노출상태": row.네이버쿠폰노출상태 || "",
+      "네이버쿠폰명": row.네이버쿠폰명 || "",
+      "네이버쿠폰확인채널": row.네이버쿠폰확인채널 || "",
+      "네이버쿠폰상세": row.네이버쿠폰상세 || "",
       "네이버재고범위": row.네이버재고범위 || "",
       "객실수검증메모": row.객실수검증메모 || "",
       "주간재고수집일수": row.주간재고수집일수 ?? "",
@@ -2792,6 +2894,10 @@ async function main() {
     "데이유즈확인재고수",
     "데이유즈예약가능률",
     "데이유즈계산대상상품수",
+    "네이버쿠폰노출상태",
+    "네이버쿠폰명",
+    "네이버쿠폰확인채널",
+    "네이버쿠폰상세",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",
@@ -2897,6 +3003,10 @@ async function main() {
     "데이유즈확인재고수",
     "데이유즈예약가능률",
     "데이유즈계산대상상품수",
+    "네이버쿠폰노출상태",
+    "네이버쿠폰명",
+    "네이버쿠폰확인채널",
+    "네이버쿠폰상세",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",
@@ -3004,6 +3114,10 @@ async function main() {
     "데이유즈확인재고수",
     "데이유즈예약가능률",
     "데이유즈계산대상상품수",
+    "네이버쿠폰노출상태",
+    "네이버쿠폰명",
+    "네이버쿠폰확인채널",
+    "네이버쿠폰상세",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",
@@ -3109,6 +3223,10 @@ async function main() {
     "데이유즈확인재고수",
     "데이유즈예약가능률",
     "데이유즈계산대상상품수",
+    "네이버쿠폰노출상태",
+    "네이버쿠폰명",
+    "네이버쿠폰확인채널",
+    "네이버쿠폰상세",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",

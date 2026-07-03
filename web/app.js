@@ -2450,6 +2450,31 @@ function effectiveDetailRankRange(run = {}) {
   return !raw || /^(none|skip|없음)$/i.test(raw) ? "1-20" : raw;
 }
 
+function naverCouponInfo(item = {}) {
+  const latest = item.companyProfile?.inventory?.latest || {};
+  const latestSignal = latest.salesSignal || {};
+  const salesTargetSignals = item.companyProfile?.salesTarget?.signals || {};
+  const couponSignal = latest.couponSignal || latestSignal.couponSignal || {};
+  const status = String(item.naverCouponStatus || couponSignal.status || latestSignal.naverCouponStatus || salesTargetSignals.couponStatus || "").trim();
+  const names = String(item.naverCouponNames || couponSignal.names || latestSignal.naverCouponNames || salesTargetSignals.couponNames || "").trim();
+  const channel = String(item.naverCouponChannel || couponSignal.channel || latestSignal.naverCouponChannel || salesTargetSignals.couponChannel || "").trim();
+  const detail = String(item.naverCouponDetail || couponSignal.detail || latestSignal.naverCouponDetail || salesTargetSignals.couponDetail || "").trim();
+  const visible = Boolean(
+    status === "있음" ||
+    names ||
+    couponSignal.visible ||
+    latestSignal.naverCouponVisible ||
+    salesTargetSignals.couponVisible
+  );
+  return {
+    visible,
+    status: status || (visible ? "있음" : ""),
+    names,
+    channel: channel || (visible ? "네이버" : ""),
+    detail: detail || (visible ? "네이버 공개 화면 쿠폰 노출" : "공개 쿠폰 노출 신호 없음")
+  };
+}
+
 function collectionStatusProfile(item = {}) {
   const rows = bookingGraphRows(item);
   const collectedRows = rows.filter((row) => !row.missing && finiteNumber(row.total, 0) > 0);
@@ -2460,6 +2485,7 @@ function collectionStatusProfile(item = {}) {
   const dayUseRevenue = itemRevenueStats(item, "day");
   const confidence = inventoryConfidenceInfo(item);
   const structure = inventoryStructureInfo(item);
+  const coupon = naverCouponInfo(item);
   const flags = new Set(structure.flags || []);
   const soldQuantity = finiteNumber(lodging.sold, 0) + finiteNumber(dayUse.sold, 0);
   const pricedQuantity = finiteNumber(lodgingRevenue.pricedSoldOut, 0) + finiteNumber(dayUseRevenue.pricedSoldOut, 0);
@@ -2528,6 +2554,7 @@ function collectionStatusProfile(item = {}) {
     operatingTotal,
     structuralBlockedQuantity,
     basisRule,
+    coupon,
     reasons: reasons.slice(0, 5)
   };
 }
@@ -10556,6 +10583,11 @@ function sheetCollectionStatusPanel(item = {}) {
     : status.pricedQuantity
       ? `가격확인 ${fmtNumber(status.pricedQuantity)}개/회`
       : "판매/가격 대기";
+  const coupon = status.coupon || naverCouponInfo(item);
+  const couponValue = coupon.visible ? "쿠폰 노출" : (coupon.status || "미노출/미확인");
+  const couponNote = coupon.visible
+    ? compactListText([coupon.names, coupon.detail, coupon.channel].filter(Boolean), "쿠폰명 확인", 2)
+    : coupon.detail;
   const productText = status.productKnown
     ? `${status.productCount ? `${fmtNumber(status.productCount)}개 상품` : "상품구성 확인"}`
     : "상품별 수량 확인필요";
@@ -10567,6 +10599,7 @@ function sheetCollectionStatusPanel(item = {}) {
     ["수량 신뢰도", `신뢰도 ${confidence.grade} · ${structure.label}`, structure.action || "자동 수량 판단"],
     ["상품별 수량", productText, status.productKnown ? "숙박/데이유즈 분리 기준" : "객실/상품 수량 직접 확인"],
     ["가격 확보", priceText, "할인 옵션 패키지는 산출 제외"],
+    ["네이버 쿠폰", couponValue, couponNote],
     ["오프라인 예약", status.offlineEstimated ? `${fmtNumber(status.offlineQuantity)}개 추정` : "특이 없음", "운영 기준 미만 날짜만 오프라인 예약/일시 차단으로 해석"]
   ];
   return `
