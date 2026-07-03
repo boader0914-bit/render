@@ -990,6 +990,64 @@ async function getNaverBookingBusiness(placeId) {
   return lastResult;
 }
 
+function extractNaverBookingBusinessIds(text) {
+  const raw = String(text || "");
+  const normalized = raw
+    .replace(/\\u002[fF]/g, "/")
+    .replace(/\\\//g, "/");
+  const ids = new Set();
+  for (const source of [raw, normalized]) {
+    for (const pattern of [
+      /booking\/3\/bizes\/(\d+)/g,
+      /bookingBusinessId["'\\]*\s*[:=]\s*["'\\]*(\d+)/g,
+      /naverBooking(?:Url|HubUrl)[\s\S]{0,500}?bizes\/(\d+)/g,
+    ]) {
+      let match = null;
+      while ((match = pattern.exec(source))) {
+        if (match[1]) ids.add(match[1]);
+      }
+    }
+  }
+  return Array.from(ids);
+}
+
+async function getNaverBookingBusinessFromPlacePage(placeId) {
+  if (!placeId || !NAVER_BOOKING_ID_FALLBACK) return null;
+  const routes = [
+    { label: "pc", url: `https://pcmap.place.naver.com/accommodation/${placeId}` },
+    { label: "pc/room", url: `https://pcmap.place.naver.com/accommodation/${placeId}/room` },
+    { label: "m/home", url: `https://m.place.naver.com/accommodation/${placeId}/home` },
+    { label: "m/room", url: `https://m.place.naver.com/accommodation/${placeId}/room` },
+  ];
+
+  for (const route of routes) {
+    try {
+      const { res, text } = await fetchText(route.url, {
+        headers: {
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          referer: `https://pcmap.place.naver.com/accommodation/${placeId}`,
+        },
+      });
+      const bookingBusinessId = extractNaverBookingBusinessIds(text)[0] || "";
+      if (bookingBusinessId) {
+        return {
+          bookingBusinessId,
+          bookingUrl: `https://m.booking.naver.com/booking/3/bizes/${bookingBusinessId}/search`,
+          status: res.status,
+          blocked: false,
+          errors: null,
+          source: "place_html",
+          sourceRoute: route.label,
+        };
+      }
+    } catch {
+      // Keep the fallback best-effort. The original GraphQL status remains authoritative.
+    }
+    await delay(120);
+  }
+  return null;
+}
+
 async function postNaverBookingGraphql(operationName, query, variables, businessId, date = CHECK_IN) {
   const checkOut = addDays(date, 1);
   const response = await fetch(NAVER_BOOKING_GRAPHQL_URL, {
@@ -1628,6 +1686,16 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   if (cache.has(placeId)) return cache.get(placeId);
 
   let booking = await getNaverBookingBusiness(placeId);
+  let pageBooking = null;
+  if (!booking?.bookingBusinessId) {
+    pageBooking = await getNaverBookingBusinessFromPlacePage(placeId);
+    if (pageBooking?.bookingBusinessId) {
+      booking = {
+        ...booking,
+        ...pageBooking,
+      };
+    }
+  }
   let fallbackBooking = null;
   if (!booking?.bookingBusinessId) {
     fallbackBooking = await getHistoricalNaverBookingBusiness(placeId);
@@ -1680,7 +1748,9 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
         ? "숙박상품 없음(데이유즈만)"
         : fallbackBooking?.bookingBusinessId
           ? "성공(과거ID)"
-          : "성공",
+          : pageBooking?.bookingBusinessId
+            ? "성공(URL추출)"
+            : "성공",
     ...summarizeNaverBookingAvailability(items, schedules, booking.bookingBusinessId, booking.bookingUrl, {
       night: nightItems.length,
       dayUse: dayUseItems.length,
@@ -1696,6 +1766,12 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     result.inventoryMemo = [
       result.inventoryMemo,
       `네이버예약 ID 실시간 조회 실패로 과거 확인 ID 재사용(${fallbackBooking.sourceRun || "기존 결과"})`,
+    ].filter(Boolean).join(" · ");
+  }
+  if (pageBooking?.bookingBusinessId) {
+    result.inventoryMemo = [
+      result.inventoryMemo,
+      `네이버예약 ID를 플레이스 페이지 URL에서 추출(${pageBooking.sourceRoute || "place"})`,
     ].filter(Boolean).join(" · ");
   }
   cache.set(placeId, result);
