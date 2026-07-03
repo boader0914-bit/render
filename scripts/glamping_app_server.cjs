@@ -6195,8 +6195,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-sales-gate-filtered-bulk"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-sales-gate-filtered-bulk"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-sales-gate-filtered-export"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-sales-gate-filtered-export"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

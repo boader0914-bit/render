@@ -4558,8 +4558,8 @@ function salesTargetCsv(entries = []) {
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
 }
 
-function salesGateCsv(entries = salesGateReviewEntries(0)) {
-  const headers = ["업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "보류상태", "큐유형", "워크플로우", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "추천조치", "추천근거", "예상매출", "매출정밀도", "요일가격확보", "상품수량근거", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
+function salesGateCsv(entries = salesGateReviewEntries(0), context = {}) {
+  const headers = ["필터", "업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "보류상태", "큐유형", "워크플로우", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "추천조치", "추천근거", "예상매출", "매출정밀도", "요일가격확보", "상품수량근거", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
   const rows = entries.map((entry) => {
     const company = entry.company || {};
     const item = entry.item || {};
@@ -4577,6 +4577,7 @@ function salesGateCsv(entries = salesGateReviewEntries(0)) {
     const dayCoverage = queueRevenueDayCoverageSummary(revenueImpact);
     const productCoverage = queueRevenueProductCoverageSummary(revenueImpact);
     return [
+      context.filterLabel || "",
       company.companyId || "",
       company.primaryName || item.name || "",
       regions.slice(0, 3).join(" / ") || item.region || "",
@@ -8580,7 +8581,7 @@ function renderTargets() {
       </div>
       <div class="target-export-actions">
         <button type="button" data-export-sales-targets>컨택+반응 CSV</button>
-        <button type="button" data-export-sales-gate>보류사유 CSV</button>
+        <button type="button" data-export-sales-gate>${escapeHtml(selectedSalesGateFilter === "all" ? "보류사유 CSV" : `${salesGateFilterLabel(selectedSalesGateFilter)} CSV`)}</button>
       </div>
     </section>
     ${gatePanel(gatedEntries, filteredGatedEntries, allGatedEntries, selectedSalesGateFilter)}
@@ -10615,23 +10616,25 @@ function exportSalesTargetsCsv() {
 }
 
 function exportSalesGateCsv() {
-  const entries = salesGateReviewEntries(0);
+  const selectedFilter = state.companyMasterFilters?.salesGate || "all";
+  const filterLabel = salesGateFilterLabel(selectedFilter);
+  const entries = salesGateFilteredEntries(salesGateReviewEntries(0), selectedFilter);
   if (!entries.length) {
-    setStatus("내보낼 컨택 보류 사유 없음");
+    setStatus(`${filterLabel} 필터에서 내보낼 컨택 보류 사유 없음`);
     return;
   }
-  const csv = salesGateCsv(entries);
+  const csv = salesGateCsv(entries, { filterLabel });
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const date = new Date().toISOString().slice(0, 10);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `glamping-sales-gate-${date}.csv`;
+  anchor.download = `glamping-sales-gate-${selectedFilter}-${date}.csv`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-  setStatus(`컨택 보류 사유 ${fmtNumber(entries.length)}개 내보내기`);
+  setStatus(`${filterLabel} 컨택 보류 사유 ${fmtNumber(entries.length)}개 내보내기`);
 }
 
 function exportDecisionQueueCsv() {
