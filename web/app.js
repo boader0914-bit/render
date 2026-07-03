@@ -84,6 +84,8 @@ const els = {
   productModeInput: document.getElementById("productModeInput"),
   collectionModeInput: document.getElementById("collectionModeInput"),
   detailRankRangesInput: document.getElementById("detailRankRangesInput"),
+  crawlSpeedPresetRow: document.getElementById("crawlSpeedPresetRow"),
+  crawlSpeedPreview: document.getElementById("crawlSpeedPreview"),
   crawlProgress: document.getElementById("crawlProgress"),
   crawlProgressTitle: document.getElementById("crawlProgressTitle"),
   crawlProgressText: document.getElementById("crawlProgressText"),
@@ -280,12 +282,89 @@ function collectionModeLabel(value) {
   return value === "fast" ? "빠른 순위" : "정밀 분석";
 }
 
+function normalizedRankRangeText(value = "") {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[~–—]/g, "-")
+    .replace(/\s+/g, "");
+}
+
+function crawlSpeedPresetOptions() {
+  return [
+    { key: "fast", label: "순위만", collectionMode: "fast", range: "", note: "상세 생략" },
+    { key: "top5", label: "1-5위", collectionMode: "precision", range: "1-5", note: "최상위만 정밀" },
+    { key: "top10", label: "1-10위", collectionMode: "precision", range: "1-10", note: "상위권 정밀" },
+    { key: "mid10_20", label: "10-20위", collectionMode: "precision", range: "10-20", note: "중위권 보강" },
+    { key: "split", label: "분할", collectionMode: "precision", range: "1-5,6-10,10-20", note: "구간별 확인" }
+  ];
+}
+
+function currentCrawlFormPayload() {
+  const keyword = els.keywordInput?.value?.trim() || "";
+  const requestedMode = els.searchModeInput?.value || "keyword";
+  const resolvedMode = correctedSearchMode(keyword, requestedMode);
+  const collectionMode = els.collectionModeInput?.value || "precision";
+  const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
+  const detailRankRanges = collectionMode === "fast"
+    ? ""
+    : (/^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-20" : (rawDetailRankRanges || "1-20"));
+  return {
+    keyword,
+    checkIn: els.checkInInput?.value || "",
+    checkOut: els.checkOutInput?.value || "",
+    searchMode: resolvedMode,
+    requestedMode,
+    productMode: els.productModeInput?.value || "all",
+    collectionMode,
+    detailRankRanges
+  };
+}
+
+function selectedCrawlSpeedPresetKey(payload = currentCrawlFormPayload()) {
+  if (payload.collectionMode === "fast") return "fast";
+  const range = normalizedRankRangeText(payload.detailRankRanges || "");
+  return crawlSpeedPresetOptions().find((preset) => normalizedRankRangeText(preset.range) === range)?.key || "";
+}
+
+function updateCrawlSpeedPreview() {
+  if (!els.crawlSpeedPresetRow && !els.crawlSpeedPreview) return;
+  const payload = currentCrawlFormPayload();
+  const preview = crawlPreviewMeta(payload);
+  const selectedKey = selectedCrawlSpeedPresetKey(payload);
+  els.crawlSpeedPresetRow?.querySelectorAll("[data-crawl-speed-preset]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.crawlSpeedPreset === selectedKey);
+  });
+  if (els.crawlSpeedPreview) {
+    const detailText = payload.collectionMode === "fast" ? "상세 생략" : `상세 ${payload.detailRankRanges || "1-20"}위`;
+    els.crawlSpeedPreview.textContent = `${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}`;
+  }
+}
+
+function applyCrawlSpeedPreset(key = "") {
+  const preset = crawlSpeedPresetOptions().find((row) => row.key === key);
+  if (!preset) return;
+  if (els.collectionModeInput) els.collectionModeInput.value = preset.collectionMode;
+  if (els.detailRankRangesInput) {
+    els.detailRankRangesInput.value = preset.range;
+    els.detailRankRangesInput.disabled = preset.collectionMode === "fast";
+  }
+  syncCollectionModeInputs();
+  updateCrawlSpeedPreview();
+  if (els.crawlStatus) {
+    const payload = currentCrawlFormPayload();
+    const preview = crawlPreviewMeta(payload);
+    const detailText = payload.collectionMode === "fast" ? "상세 생략" : `상세 ${payload.detailRankRanges || "1-20"}위`;
+    els.crawlStatus.textContent = `${preset.label} 프리셋 적용 · ${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · ${preset.note}`;
+  }
+}
+
 function syncCollectionModeInputs() {
   if (!els.collectionModeInput || !els.detailRankRangesInput) return;
   const fast = els.collectionModeInput.value === "fast";
   els.detailRankRangesInput.disabled = fast;
   els.detailRankRangesInput.placeholder = fast ? "빠른 순위는 상세 생략" : "예: 1-5,10-20";
   if (!fast && !els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = "1-20";
+  updateCrawlSpeedPreview();
 }
 
 const REGIONAL_GLAMPING_BASES = new Set([
@@ -11486,6 +11565,7 @@ function setDefaultDates() {
   end.setUTCDate(end.getUTCDate() + (DEFAULT_BOOKING_DAYS > 1 ? DEFAULT_BOOKING_DAYS - 1 : 1));
   if (els.checkInInput && !els.checkInInput.value) els.checkInInput.value = start.toISOString().slice(0, 10);
   if (els.checkOutInput && !els.checkOutInput.value) els.checkOutInput.value = end.toISOString().slice(0, 10);
+  updateCrawlSpeedPreview();
 }
 
 function bindEvents() {
@@ -11607,6 +11687,15 @@ function bindEvents() {
   els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
   els.logoutButton?.addEventListener("click", logout);
   els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
+  els.crawlSpeedPresetRow?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-crawl-speed-preset]");
+    if (!button) return;
+    applyCrawlSpeedPreset(button.dataset.crawlSpeedPreset || "");
+  });
+  [els.keywordInput, els.checkInInput, els.checkOutInput, els.searchModeInput, els.productModeInput, els.detailRankRangesInput].forEach((input) => {
+    input?.addEventListener("input", updateCrawlSpeedPreview);
+    input?.addEventListener("change", updateCrawlSpeedPreview);
+  });
   els.dictionarySearchForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     runDictionarySearch();

@@ -189,6 +189,19 @@
                 <input id="detailRankRangesInput" type="text" value="1-20" placeholder="예: 1-5,10-20">
               </label>
             </div>
+            <div class="crawl-speed-panel">
+              <div>
+                <strong>수집 속도 프리셋</strong>
+                <span id="crawlSpeedPreview">예상 계산 대기</span>
+              </div>
+              <div class="crawl-speed-options" id="crawlSpeedPresetRow">
+                <button type="button" data-crawl-speed-preset="fast">순위만</button>
+                <button type="button" data-crawl-speed-preset="top5">1-5위</button>
+                <button type="button" data-crawl-speed-preset="top10">1-10위</button>
+                <button type="button" data-crawl-speed-preset="mid10_20">10-20위</button>
+                <button type="button" data-crawl-speed-preset="split">분할</button>
+              </div>
+            </div>
             <button class="primary-button" type="submit">수집 실행</button>
             <p class="hint" id="crawlStatus">정밀 분석은 지정 순위만 재고 상세를 확인합니다. 빠른 순위는 네이버 전체 순위만 먼저 수집합니다.</p>
           </form>

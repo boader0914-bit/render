@@ -5479,6 +5479,65 @@ a.platform-row:hover {
   gap: 10px;
 }
 
+.crawl-speed-panel {
+  display: grid;
+  gap: 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 11px;
+}
+
+.crawl-speed-panel > div:first-child {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.crawl-speed-panel strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.crawl-speed-panel span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.crawl-speed-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.crawl-speed-options button {
+  min-height: 34px;
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.crawl-speed-options button.active,
+.crawl-speed-options button:hover {
+  border-color: #93c5fd;
+  background: #eaf3ff;
+  color: var(--blue);
+}
+
 .crawl-progress {
   position: relative;
   display: grid;
@@ -9146,6 +9205,19 @@ a.platform-row:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .crawl-speed-panel > div:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .crawl-speed-panel span {
+    text-align: left;
+  }
+
+  .crawl-speed-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -9571,6 +9643,7 @@ a.platform-row:hover {
   }
 
   .yeogi-actions,
+  .crawl-speed-options,
   .field-grid {
     grid-template-columns: 1fr;
   }
