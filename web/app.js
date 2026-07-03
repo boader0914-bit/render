@@ -3416,6 +3416,7 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
   const issues = new Set((profile.issues || []).map((issue) => issue.key));
   const current = compare.current || queueSnapshotMetrics(company.inventory?.latest || {});
+  const revenueEvidence = queueRevenueEvidenceProfile(companyQueueRevenueImpact(company));
   const quantityIssue = criteria.has("quantity") || criteria.has("capacity") || issues.has("structure") || issues.has("booking") || issues.has("offline");
   const noQuantity = !current.totalSupply && !current.totalSold;
   const priceIssue = current.totalMissingPriceSoldOut > 0 || (!current.totalPricedSoldOut && current.totalSold > 0);
@@ -3424,7 +3425,10 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
       status: company.adminReview?.status || "recrawl_needed",
       label: "비교 대기",
       tone: "watch",
-      reasons: ["이전 수집 스냅샷이 없어 재수집 전후 비교는 다음 수집부터 표시됩니다."]
+      reasons: [
+        ...(revenueEvidence.weak ? revenueEvidence.reasons.slice(0, 2) : []),
+        "이전 수집 스냅샷이 없어 재수집 전후 비교는 다음 수집부터 표시됩니다."
+      ]
     };
   }
   if (noQuantity) {
@@ -3435,6 +3439,9 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
   }
   if (priceIssue) {
     return { status: "recrawl_needed", label: "재수집 필요", tone: "watch", reasons: ["판매수량은 있으나 가격 누락이 남아 매출 판단이 불완전합니다."] };
+  }
+  if (revenueEvidence.weak) {
+    return { status: "recrawl_needed", label: "매출 근거 보강", tone: "watch", reasons: revenueEvidence.reasons.slice(0, 3) };
   }
   if (criteria.has("ota") || issues.has("ota") || criteria.has("gap") || issues.has("gap")) {
     return { status: "check_needed", label: "확인 필요", tone: "watch", reasons: ["OTA 또는 요일별 판매 공백은 사람이 채널/상품 조건을 확인해야 합니다."] };
@@ -6576,6 +6583,46 @@ function queueRevenueProductCoverageSummary(impact = {}) {
   };
 }
 
+function queueRevenueEvidenceProfile(impact = {}) {
+  const precision = impact.precision || {};
+  const grade = String(precision.grade || "").toUpperCase();
+  const precisionScore = Number(precision.score);
+  const dayLabels = new Set([
+    ...(impact.lodgingDayRows || []).map((row) => row.label),
+    ...(impact.dayUseDayRows || []).map((row) => row.label)
+  ].filter(Boolean));
+  const dayCovered = dayLabels.size;
+  const productRows = impact.productRows || [];
+  const totalRevenue = finiteNumber(impact.totalRevenue, 0);
+  const priced = finiteNumber(impact.totalPricedSoldOut, 0);
+  const missing = finiteNumber(impact.totalMissingPriceSoldOut, 0);
+  const totalSold = priced + missing;
+  const hasRevenueBasis = Boolean(totalRevenue || totalSold);
+  const priceMissing = missing > 0;
+  const productKnown = Boolean(precision.productKnown || productRows.length);
+  const dayCoverageWeak = hasRevenueBasis && dayCovered < 4;
+  const productWeak = hasRevenueBasis && !productKnown;
+  const precisionWeak = hasRevenueBasis && (["D", "E"].includes(grade) || (Number.isFinite(precisionScore) && precisionScore < 58));
+  const reasons = [
+    dayCoverageWeak ? `요일별 가격 ${fmtNumber(dayCovered)}/4개 요일 확보` : "",
+    productWeak ? "상품종류별 수량 미확보" : "",
+    priceMissing ? `가격누락 ${fmtNumber(missing)}개/회` : "",
+    precisionWeak ? `매출 신뢰도 ${grade || "대기"}${Number.isFinite(precisionScore) ? ` · ${fmtNumber(precisionScore)}점` : ""}` : ""
+  ].filter(Boolean);
+  return {
+    weak: Boolean(reasons.length),
+    hasRevenueBasis,
+    dayCovered,
+    productKnown,
+    priceMissing,
+    productWeak,
+    dayCoverageWeak,
+    precisionWeak,
+    reasons,
+    label: reasons.length ? "매출 근거 보강" : "매출 근거 안정"
+  };
+}
+
 function companyQueueRevenueImpactHtml(company = {}) {
   const impact = companyQueueRevenueImpact(company);
   if (!impact.hasDetail) return "";
@@ -6656,6 +6703,7 @@ function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = 
   else if (revenueImpact.totalRevenue >= 2000000) score += 10;
   else if (revenueImpact.totalRevenue >= 700000) score += 5;
   if (revenueImpact.totalMissingPriceSoldOut > 0) score += Math.min(12, revenueImpact.totalMissingPriceSoldOut * 2);
+  if (queueRevenueEvidenceProfile(revenueImpact).weak) score += 10;
   if (company.identityConfidence?.level === "review") score += 15;
   if (profile.applied) score -= 14;
   if (workflow.key === "recheck") score += 28;
@@ -6676,6 +6724,7 @@ function companyCheckFilterOptions() {
     ["recommend_recrawl", "추천 재수집"],
     ["recommend_check", "추천 확인"],
     ["high_revenue", "매출 영향"],
+    ["revenue_weak", "매출 근거"],
     ["price_missing", "가격 누락"],
     ["improved", "개선"],
     ["worsened", "악화"],
@@ -6705,6 +6754,7 @@ function companyCheckFilterMatches(entry = {}, filter = "priority") {
   if (filter === "recommend_recrawl") return open && recommendation.status === "recrawl_needed";
   if (filter === "recommend_check") return open && recommendation.status === "check_needed";
   if (filter === "high_revenue") return open && finiteNumber(revenue.totalRevenue) >= 2000000;
+  if (filter === "revenue_weak") return open && queueRevenueEvidenceProfile(revenue).weak;
   if (filter === "price_missing") return open && finiteNumber(revenue.totalMissingPriceSoldOut) > 0;
   if (filter === "improved") return open && comparison.hasComparison && comparison.improved > comparison.worsened;
   if (filter === "worsened") return open && comparison.hasComparison && comparison.worsened > 0;
@@ -6750,7 +6800,9 @@ function companyCheckSearchMatches(entry = {}, query = "") {
     ...array(profile.issues).flatMap((issue) => [issue.label, issue.task]),
     entry.autoRecommendation?.label,
     ...array(entry.autoRecommendation?.reasons),
-    entry.revenueImpact?.precision?.label
+    entry.revenueImpact?.precision?.label,
+    queueRevenueEvidenceProfile(entry.revenueImpact || {}).label,
+    ...queueRevenueEvidenceProfile(entry.revenueImpact || {}).reasons
   ].filter(Boolean).join(" "));
   return text.includes(query);
 }
@@ -7013,10 +7065,11 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
 }
 
 function companyCheckEntryHtml(entry = {}) {
-  const { company, profile, type, priority, workflow, decision } = entry;
+  const { company, profile, type, priority, workflow, decision, revenueImpact } = entry;
   const latest = company.inventory?.latest || {};
   const reasons = companyCheckReasons(company, profile, workflow, decision);
   const showCorrectionForm = (profile.issues || []).some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key));
+  const revenueEvidence = queueRevenueEvidenceProfile(revenueImpact || {});
   return `
     <article class="company-check-card ${escapeHtml(type.key)} ${escapeHtml(workflow.key)}">
       <div class="company-check-card-head">
@@ -7038,6 +7091,7 @@ function companyCheckEntryHtml(entry = {}) {
         <mark>${fmtNumber(company.keywordCount || 0)}키워드</mark>
         <mark>구조 ${escapeHtml(latest.structureLabel || "대기")}</mark>
         <mark>${escapeHtml(workflow.label)}</mark>
+        ${revenueEvidence.weak ? `<mark>${escapeHtml(revenueEvidence.label)}</mark>` : ""}
         ${(profile.issues || []).slice(0, 4).map((issue) => `<mark>${escapeHtml(issue.label)}</mark>`).join("")}
       </div>
       ${companyDecisionEvidenceHtml(decision)}
@@ -7143,15 +7197,18 @@ function recrawlAutomationRow(entry = {}) {
   const previous = comparison.previous?.collectedAt || company.inventory?.previousLatest?.collectedAt || "";
   const rank = Number(company.bestRank || 0);
   const revenue = finiteNumber(entry.revenueImpact?.totalRevenue, 0);
+  const revenueEvidence = queueRevenueEvidenceProfile(entry.revenueImpact || {});
   const reasons = [
     recommendation.label,
     ...(recommendation.reasons || []),
+    revenueEvidence.weak ? compactListText(revenueEvidence.reasons, "매출 근거 보강", 2) : "",
     entry.decision?.summary,
     (entry.profile?.issues || [])[0]?.task
   ].filter(Boolean);
   const score = finiteNumber(entry.priority?.score, 0)
     + (recommendation.status === "recrawl_needed" ? 22 : 0)
     + (recommendation.status === "contact_ready" ? 18 : 0)
+    + (revenueEvidence.weak ? 14 : 0)
     + (comparison.hasComparison ? 10 : 0)
     + Math.min(18, revenue / 200000)
     + (rank > 0 && rank <= 10 ? 8 : 0);
@@ -7177,6 +7234,7 @@ function recrawlAutomationRow(entry = {}) {
     label: recommendation.label || recrawlAutomationStatusLabel(recommendation.status),
     tone: recommendation.tone || entry.type?.tone || "watch",
     reason: compactListText(reasons, "재수집 후 판단 필요", 3),
+    revenueEvidence,
     regionScope: plan.regionScope || "",
     keywordSource: plan.keywordSource || "업체 기준",
     note: recrawlAutomationNote(entry)
@@ -7187,7 +7245,7 @@ function recrawlAutomationProfile(entries = []) {
   const open = entries.filter((entry) => entry.workflow.key !== "done");
   const rows = open.map(recrawlAutomationRow);
   const needsExecution = rows
-    .filter((row) => row.status === "recrawl_needed" || row.entry.type.key === "recrawl" || !row.comparison.hasComparison)
+    .filter((row) => row.status === "recrawl_needed" || row.revenueEvidence?.weak || row.entry.type.key === "recrawl" || !row.comparison.hasComparison)
     .sort((a, b) => b.score - a.score || finiteNumber(a.rank, 9999) - finiteNumber(b.rank, 9999));
   const compared = rows
     .filter((row) => row.comparison.hasComparison)
@@ -7456,6 +7514,7 @@ function companyQueueOperationSummaryHtml(entries = []) {
   const open = entries.filter((entry) => entry.workflow.key !== "done");
   const countRecommendation = (status) => open.filter((entry) => entry.autoRecommendation?.status === status).length;
   const highRevenue = open.filter((entry) => finiteNumber(entry.revenueImpact?.totalRevenue) >= 2000000);
+  const revenueWeak = open.filter((entry) => queueRevenueEvidenceProfile(entry.revenueImpact || {}).weak);
   const priceMissing = open.filter((entry) => finiteNumber(entry.revenueImpact?.totalMissingPriceSoldOut) > 0);
   const improved = open.filter((entry) => entry.comparison?.hasComparison && entry.comparison.improved > entry.comparison.worsened);
   const worsened = open.filter((entry) => entry.comparison?.hasComparison && entry.comparison.worsened > 0);
@@ -7466,6 +7525,7 @@ function companyQueueOperationSummaryHtml(entries = []) {
     ["추천 컨택", countRecommendation("contact_ready"), "바로 영업타깃 이동 가능"],
     ["추천 보정", countRecommendation("manual_needed"), "총량/상품 구조 확인"],
     ["매출 영향", highRevenue.length, "예상매출 200만원 이상"],
+    ["매출 근거", revenueWeak.length, "요일/상품/가격 보강"],
     ["가격 누락", priceMissing.length, "매출 산정 불완전"],
     ["개선/악화", `${fmtNumber(improved.length)} / ${fmtNumber(worsened.length)}`, "재수집 전후 비교"]
   ];
@@ -7539,10 +7599,12 @@ function companyMasterCheckPanel(master = {}) {
   const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
   const criterionCount = (key) => openEntries.filter((entry) => (entry.decision.criteria || []).some((criterion) => criterion.key === key)).length;
   const reviewStatusCount = (status) => entries.filter((entry) => entry.company.adminReview?.status === status).length;
+  const revenueWeakCount = openEntries.filter((entry) => queueRevenueEvidenceProfile(entry.revenueImpact || {}).weak).length;
   const metrics = [
     ["판단 큐", openEntries.length, "사람 확인 필요"],
     ["재수집 필요", reviewStatusCount("recrawl_needed"), "범위/기간 재확인"],
     ["수동 보정", reviewStatusCount("manual_needed") + criterionCount("manual_recheck"), "총량 보정 후 재판정"],
+    ["매출 근거", revenueWeakCount, "요일/상품/가격 보강"],
     ["컨택 가능", reviewStatusCount("contact_ready"), "영업타깃 이동"]
   ];
   const displayLimit = selectedFilter === "priority" ? 15 : 24;
