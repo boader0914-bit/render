@@ -15,7 +15,8 @@ const state = {
     layer: "all",
     target: "all",
     check: "priority",
-    checkQuery: ""
+    checkQuery: "",
+    salesGate: "all"
   },
   crawlEtaByKey: {},
   selectedLocationCard: null,
@@ -3748,6 +3749,60 @@ function salesGateReviewEntries(limit = 8) {
   return limit ? rows.slice(0, limit) : rows;
 }
 
+function salesGateFilterOptions() {
+  return [
+    ["all", "전체"],
+    ["revenue_weak", "매출 근거"],
+    ["recrawl", "재수집"],
+    ["manual", "확인/보정"],
+    ["high_revenue", "고매출"],
+    ["gap", "판매 공백"],
+    ["ota", "OTA"]
+  ];
+}
+
+function salesGateFilterLabel(value = "all") {
+  return salesGateFilterOptions().find(([key]) => key === value)?.[1] || "전체";
+}
+
+function salesGateFilterMatches(entry = {}, filter = "all") {
+  if (filter === "all") return true;
+  const criteria = new Set((entry.decision?.criteria || []).map((criterion) => criterion.key).filter(Boolean));
+  const issues = new Set((entry.profile?.issues || []).map((issue) => issue.key).filter(Boolean));
+  const recommendationStatus = entry.autoRecommendation?.status || "";
+  const reviewStatus = entry.company?.adminReview?.status || "";
+  const typeKey = entry.type?.key || "";
+  const revenue = entry.revenueImpact || {};
+  const revenueEvidence = entry.revenueEvidence || queueRevenueEvidenceProfile(revenue);
+  if (filter === "revenue_weak") return revenueEvidence.weak || criteria.has("revenue") || finiteNumber(revenue.totalMissingPriceSoldOut) > 0;
+  if (filter === "recrawl") return recommendationStatus === "recrawl_needed" || reviewStatus === "recrawl_needed" || typeKey === "recrawl" || criteria.has("revenue") || revenueEvidence.weak;
+  if (filter === "manual") return ["manual_needed", "check_needed"].includes(recommendationStatus) || ["manual_needed", "check_needed"].includes(reviewStatus) || ["correction", "check"].includes(typeKey) || ["quantity", "capacity", "manual_recheck"].some((key) => criteria.has(key)) || ["manual", "structure", "booking", "offline"].some((key) => issues.has(key));
+  if (filter === "high_revenue") return finiteNumber(revenue.totalRevenue) >= 2000000;
+  if (filter === "gap") return criteria.has("gap") || issues.has("gap") || (entry.decision?.gapType && entry.decision.gapType !== "공백 특이 없음");
+  if (filter === "ota") return criteria.has("ota") || issues.has("ota") || ["OTA", "여기어때", "야놀자", "떠나요"].some((label) => (entry.decision?.channelText || "").includes(label));
+  return false;
+}
+
+function salesGateFilteredEntries(entries = [], filter = "all") {
+  return entries.filter((entry) => salesGateFilterMatches(entry, filter));
+}
+
+function salesGateFilterHtml(entries = [], selectedFilter = "all") {
+  return `
+    <div class="target-gate-filters" role="group" aria-label="보류 게이트 필터">
+      ${salesGateFilterOptions().map(([value, label]) => {
+        const count = value === "all" ? entries.length : entries.filter((entry) => salesGateFilterMatches(entry, value)).length;
+        return `
+          <button type="button" class="${selectedFilter === value ? "active" : ""}" data-sales-gate-filter="${escapeHtml(value)}">
+            ${escapeHtml(label)}
+            <span>${fmtNumber(count)}</span>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
 function salesGateReviewActionsHtml(entry = {}) {
   const company = entry.company || {};
   const companyId = company.companyId || "";
@@ -3779,9 +3834,10 @@ function salesGateReviewActionsHtml(entry = {}) {
   `;
 }
 
-function salesGateBulkReviewHtml(entries = []) {
+function salesGateBulkReviewHtml(entries = [], selectedFilter = "all") {
   const count = entries.filter((entry) => entry.company?.companyId).length;
   if (!count) return "";
+  const filterLabel = salesGateFilterLabel(selectedFilter);
   const actions = [
     ["recrawl_needed", "재수집"],
     ["check_needed", "확인"],
@@ -3793,9 +3849,9 @@ function salesGateBulkReviewHtml(entries = []) {
     <div class="target-gate-bulk" data-sales-gate-bulk>
       <div>
         <strong>보류 게이트 일괄 처리</strong>
-        <small>${escapeHtml(`현재 보류 대상 ${fmtNumber(count)}개 · 저장 후 컨택 가능 업체는 영업타깃으로 이동`)}</small>
+        <small>${escapeHtml(`현재 필터 ${filterLabel} · 보류 대상 ${fmtNumber(count)}개 · 저장 후 컨택 가능 업체는 영업타깃으로 이동`)}</small>
       </div>
-      <input type="text" data-sales-gate-bulk-note value="${escapeHtml(`보류 게이트 일괄 처리: ${fmtNumber(count)}개`)}" placeholder="보류 게이트 일괄 처리 메모">
+      <input type="text" data-sales-gate-bulk-note value="${escapeHtml(`보류 게이트 일괄 처리: ${filterLabel} ${fmtNumber(count)}개`)}" placeholder="보류 게이트 일괄 처리 메모">
       <div>
         ${actions.map(([status, label]) => `<button type="button" data-sales-gate-bulk-action="${escapeHtml(status)}">${escapeHtml(label)}</button>`).join("")}
       </div>
@@ -8390,10 +8446,12 @@ function renderTargets() {
   const actionableCount = confirmed.length + contact.length;
   const currentOnly = currentItems.filter(({ item }) => !boardEntries.some((entry) => entry.item === item)).slice(0, 6);
   const allGatedEntries = salesGateReviewEntries(0);
-  const gatedEntries = allGatedEntries.slice(0, 8);
+  const selectedSalesGateFilter = state.companyMasterFilters?.salesGate || "all";
+  const filteredGatedEntries = salesGateFilteredEntries(allGatedEntries, selectedSalesGateFilter);
+  const gatedEntries = filteredGatedEntries.slice(0, 8);
 
   els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
-  if (!boardEntries.length && !currentItems.length && !gatedEntries.length) {
+  if (!boardEntries.length && !currentItems.length && !allGatedEntries.length) {
     els.targetList.innerHTML = `<div class="empty">현재 기준 바로 컨택 가능한 영업 후보가 없습니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 관리 탭에서 먼저 확인하세요.</div>`;
     return;
   }
@@ -8462,19 +8520,20 @@ function renderTargets() {
       </div>
     </section>
   `;
-  const gatePanel = (rows, batchRows = rows) => rows.length ? `
+  const gatePanel = (rows, filteredRows = rows, allRows = filteredRows, selectedFilter = "all") => allRows.length ? `
     <section class="target-gate-panel">
       <div class="target-lane-head">
         <div>
           <strong>컨택 보류 사유</strong>
           <small>판단 큐에 남아 있어 영업타깃에서 제외된 업체와 확인 근거입니다.</small>
         </div>
-        <span>${fmtNumber(batchRows.length)}</span>
+        <span>${fmtNumber(filteredRows.length)} / ${fmtNumber(allRows.length)}</span>
       </div>
-      ${salesGateBatchHtml(batchRows)}
-      ${salesGateBulkReviewHtml(batchRows)}
+      ${salesGateFilterHtml(allRows, selectedFilter)}
+      ${salesGateBatchHtml(filteredRows)}
+      ${salesGateBulkReviewHtml(filteredRows, selectedFilter)}
       <div class="target-gate-list">
-        ${rows.map((entry, index) => {
+        ${rows.length ? rows.map((entry, index) => {
           const { company, workflow, type, decision, autoRecommendation, revenueImpact, gateReason, gateStatus } = entry;
           return `
           <article class="${escapeHtml(workflow?.tone || type?.key || "watch")}">
@@ -8501,7 +8560,7 @@ function renderTargets() {
             </div>
           </article>
         `;
-        }).join("")}
+        }).join("") : `<p class="empty target-gate-empty">${escapeHtml(`${salesGateFilterLabel(selectedFilter)} 조건의 보류 업체가 없습니다.`)}</p>`}
       </div>
     </section>
   ` : "";
@@ -8524,7 +8583,7 @@ function renderTargets() {
         <button type="button" data-export-sales-gate>보류사유 CSV</button>
       </div>
     </section>
-    ${gatePanel(gatedEntries, allGatedEntries)}
+    ${gatePanel(gatedEntries, filteredGatedEntries, allGatedEntries, selectedSalesGateFilter)}
     ${salesPipelineHtml(pipelineSummary)}
     ${salesPerformanceHtml(performanceSummary, proposalResponseRows)}
     <section class="target-followup-board">
@@ -10482,23 +10541,25 @@ async function saveCompanySalesContact(button) {
 async function applySalesGateBulkReview(button) {
   const status = button?.dataset?.salesGateBulkAction || "";
   if (!status) return;
-  const entries = salesGateReviewEntries(0);
+  const selectedFilter = state.companyMasterFilters?.salesGate || "all";
+  const filterLabel = salesGateFilterLabel(selectedFilter);
+  const entries = salesGateFilteredEntries(salesGateReviewEntries(0), selectedFilter);
   const rows = entries
     .map((entry) => ({ entry, companyId: entry.company?.companyId || "" }))
     .filter((row) => row.companyId);
   if (!rows.length) {
-    setStatus("일괄 처리할 보류 게이트 없음");
+    setStatus(`${filterLabel} 필터에서 일괄 처리할 보류 게이트 없음`);
     return;
   }
   const label = companyAdminReviewLabel(status);
-  if (rows.length > 12 && !window.confirm(`보류 게이트 ${fmtNumber(rows.length)}개 업체를 '${label}' 상태로 일괄 저장할까요?`)) {
+  if (rows.length > 12 && !window.confirm(`${filterLabel} 보류 게이트 ${fmtNumber(rows.length)}개 업체를 '${label}' 상태로 일괄 저장할까요?`)) {
     return;
   }
   const panel = button.closest("[data-sales-gate-bulk]");
   const buttons = panel ? Array.from(panel.querySelectorAll("button")) : [button];
-  const note = panel?.querySelector("[data-sales-gate-bulk-note]")?.value || `보류 게이트 일괄 처리: ${label}`;
+  const note = panel?.querySelector("[data-sales-gate-bulk-note]")?.value || `보류 게이트 일괄 처리: ${filterLabel} ${label}`;
   buttons.forEach((item) => { item.disabled = true; });
-  setStatus(`${label} 보류 게이트 일괄 저장 중 0/${fmtNumber(rows.length)}`);
+  setStatus(`${filterLabel} ${label} 보류 게이트 일괄 저장 중 0/${fmtNumber(rows.length)}`);
   let latestData = null;
   let saved = 0;
   let failed = 0;
@@ -10506,9 +10567,9 @@ async function applySalesGateBulkReview(button) {
     const reviewContext = companyReviewContextForCompany(companyId, status, "sales_gate_bulk");
     if (reviewContext) {
       reviewContext.summary = compactListText([
-        `보류 게이트 일괄 ${label}`,
+        `보류 게이트 일괄 ${filterLabel} ${label}`,
         reviewContext.summary
-      ], `보류 게이트 일괄 ${label}`, 4);
+      ], `보류 게이트 일괄 ${filterLabel} ${label}`, 4);
     }
     try {
       latestData = await fetchJson("/api/company-master/admin-review", {
@@ -10517,7 +10578,7 @@ async function applySalesGateBulkReview(button) {
         body: JSON.stringify({ companyId, status, note, reviewContext })
       });
       saved += 1;
-      setStatus(`${label} 보류 게이트 일괄 저장 중 ${fmtNumber(saved)}/${fmtNumber(rows.length)}`);
+      setStatus(`${filterLabel} ${label} 보류 게이트 일괄 저장 중 ${fmtNumber(saved)}/${fmtNumber(rows.length)}`);
     } catch {
       failed += 1;
     }
@@ -10530,7 +10591,7 @@ async function applySalesGateBulkReview(button) {
     renderTargets();
   }
   buttons.forEach((item) => { item.disabled = false; });
-  setStatus(failed ? `${label} 일괄 저장 완료 · 실패 ${fmtNumber(failed)}개` : `${label} 일괄 저장 완료`);
+  setStatus(failed ? `${filterLabel} ${label} 일괄 저장 완료 · 실패 ${fmtNumber(failed)}개` : `${filterLabel} ${label} 일괄 저장 완료`);
 }
 
 function exportSalesTargetsCsv() {
@@ -11241,6 +11302,12 @@ function bindEvents() {
       state.companyMasterFilters.check = checkFilter.dataset.companyCheckFilter || "priority";
       renderCompanyMasterPanel();
       renderDecisionQueue();
+    }
+    const salesGateFilter = event.target.closest("[data-sales-gate-filter]");
+    if (salesGateFilter) {
+      state.companyMasterFilters = state.companyMasterFilters || {};
+      state.companyMasterFilters.salesGate = salesGateFilter.dataset.salesGateFilter || "all";
+      renderTargets();
     }
     if (event.target.closest("[data-company-check-search-clear]")) {
       state.companyMasterFilters.checkQuery = "";

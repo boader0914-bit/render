@@ -2186,6 +2186,49 @@ a.platform-row:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.target-gate-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.target-gate-filters button {
+  min-height: 34px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #fff;
+  color: #475467;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.target-gate-filters button span {
+  min-width: 22px;
+  border-radius: 999px;
+  background: #f2f4f7;
+  color: #475467;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+.target-gate-filters button.active {
+  border-color: #93c5fd;
+  background: #eaf3ff;
+  color: var(--blue-dark);
+}
+
+.target-gate-filters button.active span {
+  background: #fff;
+  color: var(--blue);
+}
+
 .target-gate-bulk {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(160px, .8fr) auto;
@@ -2255,6 +2298,10 @@ a.platform-row:hover {
   border-radius: 14px;
   background: #fffcf5;
   padding: 12px;
+}
+
+.target-gate-empty {
+  grid-column: 1 / -1;
 }
 
 .target-gate-list article.done,
