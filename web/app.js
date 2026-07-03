@@ -1504,6 +1504,25 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : NaN;
 }
 
+function projectedRevenueFields(revenue, pricedSoldOut, missingPriceSoldOut, adjustedRevenue, missingPriceEstimatedRevenue, precisionRate) {
+  const baseRevenue = Number.isFinite(revenue) ? revenue : 0;
+  const priced = Number.isFinite(pricedSoldOut) ? pricedSoldOut : 0;
+  const missing = Number.isFinite(missingPriceSoldOut) ? missingPriceSoldOut : 0;
+  const avg = priced ? Math.round(baseRevenue / priced) : null;
+  const fallbackGap = avg && missing ? avg * missing : 0;
+  const gap = Number.isFinite(missingPriceEstimatedRevenue) ? missingPriceEstimatedRevenue : fallbackGap;
+  const adjusted = Number.isFinite(adjustedRevenue) ? adjustedRevenue : baseRevenue + gap;
+  const totalSold = priced + missing;
+  const precision = Number.isFinite(precisionRate)
+    ? precisionRate
+    : (totalSold ? priced / totalSold : NaN);
+  return {
+    adjustedRevenue: adjusted,
+    missingPriceEstimatedRevenue: gap,
+    revenuePrecisionRate: precision
+  };
+}
+
 function salesStats(item = {}, kind = "lodging") {
   const run = state.data?.run || {};
   const days = bookingDays(run);
@@ -1614,18 +1633,28 @@ function itemRevenueStats(item = {}, kind = "lodging") {
   const sales = salesStats(item, kind === "day" ? "day" : "lodging");
   const unit = kind === "day" ? "회" : "개";
   const weeklyRevenue = optionalNumber(kind === "day" ? item.dayUseWeeklyEstimatedRevenue : item.weeklyEstimatedRevenue);
+  const weeklyAdjusted = optionalNumber(kind === "day" ? item.dayUseWeeklyAdjustedRevenue : item.weeklyAdjustedRevenue);
+  const weeklyGapRevenue = optionalNumber(kind === "day" ? item.dayUseWeeklyMissingPriceEstimatedRevenue : item.weeklyMissingPriceEstimatedRevenue);
+  const weeklyPrecisionRate = optionalNumber(kind === "day" ? item.dayUseWeeklyRevenuePrecisionRate : item.weeklyRevenuePrecisionRate);
   const weeklyPriced = optionalNumber(kind === "day" ? item.dayUseWeeklyPricedSoldOut : item.weeklyPricedSoldOut);
   const weeklyMissing = optionalNumber(kind === "day" ? item.dayUseWeeklyMissingPriceSoldOut : item.weeklyMissingPriceSoldOut);
   const weeklyAvg = optionalNumber(kind === "day" ? item.dayUseWeeklyAvgSoldUnitPrice : item.weeklyAvgSoldUnitPrice);
   const weeklyDetail = kind === "day" ? item.dayUseWeeklyRevenueDetail : item.weeklyRevenueDetail;
   const weeklyByDay = kind === "day" ? item.dayUseWeeklyRevenueByDayType : item.weeklyRevenueByDayType;
   const weeklyOffline = kind === "day" ? item.dayUseWeeklyOfflineReservationDetail : item.weeklyOfflineReservationDetail;
-  const hasWeekly = [weeklyRevenue, weeklyPriced, weeklyMissing, weeklyAvg].some(Number.isFinite);
+  const hasWeekly = [weeklyRevenue, weeklyAdjusted, weeklyGapRevenue, weeklyPrecisionRate, weeklyPriced, weeklyMissing, weeklyAvg].some(Number.isFinite);
   if (hasWeekly) {
+    const revenue = Number.isFinite(weeklyRevenue) ? weeklyRevenue : 0;
+    const pricedSoldOut = Number.isFinite(weeklyPriced) ? weeklyPriced : 0;
+    const missingPriceSoldOut = Number.isFinite(weeklyMissing) ? weeklyMissing : 0;
+    const projected = projectedRevenueFields(revenue, pricedSoldOut, missingPriceSoldOut, weeklyAdjusted, weeklyGapRevenue, weeklyPrecisionRate);
     return {
-      revenue: Number.isFinite(weeklyRevenue) ? weeklyRevenue : 0,
-      pricedSoldOut: Number.isFinite(weeklyPriced) ? weeklyPriced : 0,
-      missingPriceSoldOut: Number.isFinite(weeklyMissing) ? weeklyMissing : 0,
+      revenue,
+      adjustedRevenue: projected.adjustedRevenue,
+      missingPriceEstimatedRevenue: projected.missingPriceEstimatedRevenue,
+      revenuePrecisionRate: projected.revenuePrecisionRate,
+      pricedSoldOut,
+      missingPriceSoldOut,
       avgSoldUnitPrice: Number.isFinite(weeklyAvg) ? weeklyAvg : null,
       label: sales.label || "기간 집계",
       unit,
@@ -1637,15 +1666,25 @@ function itemRevenueStats(item = {}, kind = "lodging") {
   }
 
   const basisRevenue = optionalNumber(kind === "day" ? item.basisDayUseRevenue : item.basisLodgingRevenue);
+  const basisAdjusted = optionalNumber(kind === "day" ? item.basisDayUseAdjustedRevenue : item.basisLodgingAdjustedRevenue);
+  const basisGapRevenue = optionalNumber(kind === "day" ? item.basisDayUseMissingPriceEstimatedRevenue : item.basisLodgingMissingPriceEstimatedRevenue);
+  const basisPrecisionRate = optionalNumber(kind === "day" ? item.basisDayUseRevenuePrecisionRate : item.basisLodgingRevenuePrecisionRate);
   const basisPriced = optionalNumber(kind === "day" ? item.basisDayUsePricedSoldOut : item.basisLodgingPricedSoldOut);
   const basisMissing = optionalNumber(kind === "day" ? item.basisDayUseMissingPriceSoldOut : item.basisLodgingMissingPriceSoldOut);
   const basisAvg = optionalNumber(kind === "day" ? item.basisDayUseAvgSoldUnitPrice : item.basisLodgingAvgSoldUnitPrice);
-  const hasBasis = [basisRevenue, basisPriced, basisMissing, basisAvg].some(Number.isFinite);
+  const hasBasis = [basisRevenue, basisAdjusted, basisGapRevenue, basisPrecisionRate, basisPriced, basisMissing, basisAvg].some(Number.isFinite);
   if (hasBasis) {
+    const revenue = Number.isFinite(basisRevenue) ? basisRevenue : 0;
+    const pricedSoldOut = Number.isFinite(basisPriced) ? basisPriced : 0;
+    const missingPriceSoldOut = Number.isFinite(basisMissing) ? basisMissing : 0;
+    const projected = projectedRevenueFields(revenue, pricedSoldOut, missingPriceSoldOut, basisAdjusted, basisGapRevenue, basisPrecisionRate);
     return {
-      revenue: Number.isFinite(basisRevenue) ? basisRevenue : 0,
-      pricedSoldOut: Number.isFinite(basisPriced) ? basisPriced : 0,
-      missingPriceSoldOut: Number.isFinite(basisMissing) ? basisMissing : 0,
+      revenue,
+      adjustedRevenue: projected.adjustedRevenue,
+      missingPriceEstimatedRevenue: projected.missingPriceEstimatedRevenue,
+      revenuePrecisionRate: projected.revenuePrecisionRate,
+      pricedSoldOut,
+      missingPriceSoldOut,
       avgSoldUnitPrice: Number.isFinite(basisAvg) ? basisAvg : null,
       label: sales.label || "기준일",
       unit,
@@ -1658,6 +1697,9 @@ function itemRevenueStats(item = {}, kind = "lodging") {
 
   return {
     revenue: 0,
+    adjustedRevenue: 0,
+    missingPriceEstimatedRevenue: 0,
+    revenuePrecisionRate: NaN,
     pricedSoldOut: 0,
     missingPriceSoldOut: 0,
     avgSoldUnitPrice: null,
@@ -1729,6 +1771,8 @@ function revenueProductRows(item = {}) {
 
 function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lodging"), dayUse = itemRevenueStats(item, "day")) {
   const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
+  const totalAdjustedRevenue = finiteNumber(lodging.adjustedRevenue) + finiteNumber(dayUse.adjustedRevenue);
+  const totalMissingPriceEstimatedRevenue = finiteNumber(lodging.missingPriceEstimatedRevenue) + finiteNumber(dayUse.missingPriceEstimatedRevenue);
   const priced = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
   const missing = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
   const soldQuantity = priced + missing;
@@ -1740,7 +1784,7 @@ function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lo
   const hasDayType = revenueDayTypeRows(lodging).length > 0 || revenueDayTypeRows(dayUse).length > 0;
   const rangeBasis = lodging.basis === "range" || dayUse.basis === "range";
   let score = 42;
-  if (totalRevenue > 0) score += 12;
+  if ((totalAdjustedRevenue || totalRevenue) > 0) score += 12;
   if (rangeBasis) score += 14;
   if (hasDayType) score += 12;
   if (productKnown) score += 9;
@@ -1766,6 +1810,9 @@ function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lo
     tone,
     label: grade === "A" ? "매출 신뢰 높음" : grade === "B" ? "매출 신뢰 양호" : grade === "C" ? "보완 필요" : "정밀 확인 필요",
     coverage,
+    totalRevenue,
+    totalAdjustedRevenue,
+    totalMissingPriceEstimatedRevenue,
     priced,
     missing,
     soldQuantity,
@@ -1785,6 +1832,8 @@ function preciseRevenueProfile(item = {}) {
     dayUse,
     precision,
     totalRevenue: finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue),
+    totalAdjustedRevenue: finiteNumber(lodging.adjustedRevenue) + finiteNumber(dayUse.adjustedRevenue),
+    totalMissingPriceEstimatedRevenue: finiteNumber(lodging.missingPriceEstimatedRevenue) + finiteNumber(dayUse.missingPriceEstimatedRevenue),
     lodgingDayRows: revenueDayTypeRows(lodging),
     dayUseDayRows: revenueDayTypeRows(dayUse),
     productRows: revenueProductRows(item)
@@ -1796,13 +1845,28 @@ function summarizeRevenue(items = []) {
     const lodging = itemRevenueStats(item, "lodging");
     const day = itemRevenueStats(item, "day");
     acc.revenue += finiteNumber(lodging.revenue);
+    acc.adjustedRevenue += finiteNumber(lodging.adjustedRevenue);
+    acc.missingPriceEstimatedRevenue += finiteNumber(lodging.missingPriceEstimatedRevenue);
     acc.pricedSoldOut += finiteNumber(lodging.pricedSoldOut);
     acc.missingPriceSoldOut += finiteNumber(lodging.missingPriceSoldOut);
     acc.dayRevenue += finiteNumber(day.revenue);
+    acc.dayAdjustedRevenue += finiteNumber(day.adjustedRevenue);
+    acc.dayMissingPriceEstimatedRevenue += finiteNumber(day.missingPriceEstimatedRevenue);
     acc.dayPricedSoldOut += finiteNumber(day.pricedSoldOut);
     acc.dayMissingPriceSoldOut += finiteNumber(day.missingPriceSoldOut);
     return acc;
-  }, { revenue: 0, pricedSoldOut: 0, missingPriceSoldOut: 0, dayRevenue: 0, dayPricedSoldOut: 0, dayMissingPriceSoldOut: 0 });
+  }, {
+    revenue: 0,
+    adjustedRevenue: 0,
+    missingPriceEstimatedRevenue: 0,
+    pricedSoldOut: 0,
+    missingPriceSoldOut: 0,
+    dayRevenue: 0,
+    dayAdjustedRevenue: 0,
+    dayMissingPriceEstimatedRevenue: 0,
+    dayPricedSoldOut: 0,
+    dayMissingPriceSoldOut: 0
+  });
 }
 
 function priceText(value) {
@@ -2622,7 +2686,7 @@ function collectionQualityRecrawlRows(diag = {}) {
       const company = entry.company || {};
       const plan = companyQueueRecrawlPlan(company, entry.profile, entry.decision);
       const rank = Number(company.bestRank || 0);
-      const revenue = finiteNumber(entry.revenueImpact?.totalRevenue, 0);
+      const revenue = effectiveRevenueValue(entry.revenueImpact || {});
       const key = company.companyId || companyKey(company.primaryName);
       const existing = rows.find((row) => row.key === key);
       const reason = compactListText([
@@ -3586,6 +3650,9 @@ function queueRevenuePartFromItem(item = {}, kind = "lodging") {
   const stats = itemRevenueStats(item, kind);
   return {
     revenue: stats.revenue,
+    adjustedRevenue: stats.adjustedRevenue,
+    missingPriceEstimatedRevenue: stats.missingPriceEstimatedRevenue,
+    revenuePrecisionRate: stats.revenuePrecisionRate,
     pricedSoldOut: stats.pricedSoldOut,
     missingPriceSoldOut: stats.missingPriceSoldOut,
     avgSoldUnitPrice: stats.avgSoldUnitPrice,
@@ -3600,13 +3667,23 @@ function queueRevenuePartFromItem(item = {}, kind = "lodging") {
 
 function queueRevenuePartFromSnapshot(part = {}, unit = "") {
   const revenue = optionalNumber(part.revenue);
+  const adjusted = optionalNumber(part.adjustedRevenue);
+  const gapRevenue = optionalNumber(part.missingPriceEstimatedRevenue);
+  const precisionRate = optionalNumber(part.revenuePrecisionRate);
   const priced = optionalNumber(part.pricedSoldOut);
   const missing = optionalNumber(part.missingPriceSoldOut);
   const avg = optionalNumber(part.avgSoldUnitPrice);
+  const baseRevenue = Number.isFinite(revenue) ? revenue : 0;
+  const pricedSoldOut = Number.isFinite(priced) ? priced : 0;
+  const missingPriceSoldOut = Number.isFinite(missing) ? missing : 0;
+  const projected = projectedRevenueFields(baseRevenue, pricedSoldOut, missingPriceSoldOut, adjusted, gapRevenue, precisionRate);
   return {
-    revenue: Number.isFinite(revenue) ? revenue : 0,
-    pricedSoldOut: Number.isFinite(priced) ? priced : 0,
-    missingPriceSoldOut: Number.isFinite(missing) ? missing : 0,
+    revenue: baseRevenue,
+    adjustedRevenue: projected.adjustedRevenue,
+    missingPriceEstimatedRevenue: projected.missingPriceEstimatedRevenue,
+    revenuePrecisionRate: projected.revenuePrecisionRate,
+    pricedSoldOut,
+    missingPriceSoldOut,
     avgSoldUnitPrice: Number.isFinite(avg) ? avg : null,
     byDayType: part.byDayType || "",
     detail: part.detail || "",
@@ -3621,6 +3698,8 @@ function itemQueueRevenueImpact(item = {}) {
   const lodging = queueRevenuePartFromItem(item, "lodging");
   const dayUse = queueRevenuePartFromItem(item, "day");
   const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
+  const totalAdjustedRevenue = finiteNumber(lodging.adjustedRevenue) + finiteNumber(dayUse.adjustedRevenue);
+  const totalMissingPriceEstimatedRevenue = finiteNumber(lodging.missingPriceEstimatedRevenue) + finiteNumber(dayUse.missingPriceEstimatedRevenue);
   const totalPricedSoldOut = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
   const totalMissingPriceSoldOut = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
   const precision = revenuePrecisionProfile(item || {}, lodging, dayUse);
@@ -3647,6 +3726,8 @@ function itemQueueRevenueImpact(item = {}) {
     dayUseDayRows,
     productRows,
     totalRevenue,
+    totalAdjustedRevenue,
+    totalMissingPriceEstimatedRevenue,
     totalPricedSoldOut,
     totalMissingPriceSoldOut,
     precision,
@@ -3660,6 +3741,8 @@ function companyQueueRevenueImpact(company = {}) {
   const lodging = queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.lodging || {}, "개");
   const dayUse = queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.dayUse || {}, "회");
   const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
+  const totalAdjustedRevenue = finiteNumber(lodging.adjustedRevenue) + finiteNumber(dayUse.adjustedRevenue);
+  const totalMissingPriceEstimatedRevenue = finiteNumber(lodging.missingPriceEstimatedRevenue) + finiteNumber(dayUse.missingPriceEstimatedRevenue);
   const totalPricedSoldOut = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
   const totalMissingPriceSoldOut = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
   const precision = revenuePrecisionProfile({}, lodging, dayUse);
@@ -3686,6 +3769,8 @@ function companyQueueRevenueImpact(company = {}) {
     dayUseDayRows,
     productRows,
     totalRevenue,
+    totalAdjustedRevenue,
+    totalMissingPriceEstimatedRevenue,
     totalPricedSoldOut,
     totalMissingPriceSoldOut,
     precision,
@@ -3700,9 +3785,25 @@ function queueSnapshotRevenueImpact(snapshot = {}) {
     lodging,
     dayUse,
     totalRevenue: finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue),
+    totalAdjustedRevenue: finiteNumber(lodging.adjustedRevenue) + finiteNumber(dayUse.adjustedRevenue),
+    totalMissingPriceEstimatedRevenue: finiteNumber(lodging.missingPriceEstimatedRevenue) + finiteNumber(dayUse.missingPriceEstimatedRevenue),
     totalPricedSoldOut: finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut),
     totalMissingPriceSoldOut: finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut)
   };
+}
+
+function effectiveRevenueValue(impact = {}) {
+  const adjusted = finiteNumber(impact.totalAdjustedRevenue, 0);
+  const base = finiteNumber(impact.totalRevenue, 0);
+  return adjusted || base;
+}
+
+function revenueAdjustmentNote(impact = {}) {
+  const adjusted = finiteNumber(impact.totalAdjustedRevenue, 0);
+  const base = finiteNumber(impact.totalRevenue, 0);
+  const gap = finiteNumber(impact.totalMissingPriceEstimatedRevenue, 0);
+  if (adjusted > base && gap > 0) return `보정포함 ${fmtWon(adjusted)} · 가격누락 보정 ${fmtWon(gap)}`;
+  return `확인가격 매출 ${fmtWon(base)}`;
 }
 
 function queueGradeScore(value) {
@@ -3747,6 +3848,8 @@ function queueSnapshotMetrics(snapshot = {}) {
     totalSold,
     averageRate: Number.isFinite(Number(lodging.averageRate)) ? Number(lodging.averageRate) : null,
     totalRevenue: revenue.totalRevenue,
+    totalAdjustedRevenue: revenue.totalAdjustedRevenue,
+    totalMissingPriceEstimatedRevenue: revenue.totalMissingPriceEstimatedRevenue,
     totalPricedSoldOut: revenue.totalPricedSoldOut,
     totalMissingPriceSoldOut: revenue.totalMissingPriceSoldOut,
     offlineQuantity,
@@ -3787,6 +3890,8 @@ function companyRecrawlComparison(company = {}) {
   }
   const current = queueSnapshotMetrics(latest);
   const before = queueSnapshotMetrics(previous);
+  const beforeRevenue = effectiveRevenueValue(before);
+  const currentRevenue = effectiveRevenueValue(current);
   const cells = [
     {
       key: "confidence",
@@ -3833,10 +3938,10 @@ function companyRecrawlComparison(company = {}) {
     {
       key: "revenue",
       label: "예상 매출",
-      before: fmtWon(before.totalRevenue),
-      after: fmtWon(current.totalRevenue),
-      tone: queueDeltaTone(before.totalRevenue, current.totalRevenue, true),
-      note: `변화 ${formatSignedWon(current.totalRevenue - before.totalRevenue)}`
+      before: fmtWon(beforeRevenue),
+      after: fmtWon(currentRevenue),
+      tone: queueDeltaTone(beforeRevenue, currentRevenue, true),
+      note: `변화 ${formatSignedWon(currentRevenue - beforeRevenue)}`
     }
   ];
   const improved = cells.filter((cell) => cell.tone === "good").length;
@@ -3954,12 +4059,13 @@ function companyReviewContextText(context = {}) {
   const comparison = context.comparison || {};
   const recrawl = context.recrawlPlan || {};
   const revenue = context.revenue || {};
+  const revenueValue = effectiveRevenueValue(revenue);
   return compactListText([
     context.summary,
     context.recommendationLabel ? `자동 추천 ${context.recommendationLabel}` : "",
     comparison.hasComparison ? `비교 개선 ${fmtNumber(comparison.improved)} / 악화 ${fmtNumber(comparison.worsened)}` : "",
     recrawl.range ? `재수집 상세 ${recrawl.range}위` : "",
-    revenue.totalRevenue ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : ""
+    revenueValue ? `예상매출 ${fmtWon(revenueValue)}` : ""
   ], "", 4);
 }
 
@@ -3974,6 +4080,7 @@ function companyReviewContextForCompany(companyId = "", status = "", sourceOverr
   const comparison = entry?.comparison || companyRecrawlComparison(company);
   const recommendation = entry?.autoRecommendation || companyRecrawlAutoRecommendation(company, profile, decision, comparison);
   const revenue = entry?.revenueImpact || companyQueueRevenueImpact(company);
+  const revenueValue = effectiveRevenueValue(revenue);
   const plan = companyQueueRecrawlPlan(company, profile, decision);
   const comparisonCells = comparison?.hasComparison
     ? (comparison.cells || []).map((cell) => ({
@@ -3991,7 +4098,7 @@ function companyReviewContextForCompany(companyId = "", status = "", sourceOverr
     decision.problemDateText && decision.problemDateText !== "문제 날짜 없음" ? `문제 날짜 ${decision.problemDateText}` : "",
     decision.quantityConfidence,
     comparison?.hasComparison ? `개선 ${fmtNumber(comparison.improved)} / 악화 ${fmtNumber(comparison.worsened)}` : "",
-    revenue.totalRevenue ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : ""
+    revenueValue ? `예상매출 ${fmtWon(revenueValue)}` : ""
   ], "관리자 판단 저장", 4);
   return {
     source: sourceOverride || (entry ? "decision_queue" : "company_master"),
@@ -4025,6 +4132,8 @@ function companyReviewContextForCompany(companyId = "", status = "", sourceOverr
     },
     revenue: {
       totalRevenue: revenue.totalRevenue || 0,
+      totalAdjustedRevenue: revenue.totalAdjustedRevenue || 0,
+      totalMissingPriceEstimatedRevenue: revenue.totalMissingPriceEstimatedRevenue || 0,
       totalPricedSoldOut: revenue.totalPricedSoldOut || 0,
       totalMissingPriceSoldOut: revenue.totalMissingPriceSoldOut || 0,
       precisionLabel: revenue.precision?.label || "",
@@ -4221,7 +4330,7 @@ function salesGateFilterMatches(entry = {}, filter = "all") {
   if (filter === "revenue_weak") return revenueEvidence.weak || criteria.has("revenue") || finiteNumber(revenue.totalMissingPriceSoldOut) > 0;
   if (filter === "recrawl") return recommendationStatus === "recrawl_needed" || reviewStatus === "recrawl_needed" || typeKey === "recrawl" || criteria.has("revenue") || revenueEvidence.weak;
   if (filter === "manual") return ["manual_needed", "check_needed"].includes(recommendationStatus) || ["manual_needed", "check_needed"].includes(reviewStatus) || ["correction", "check"].includes(typeKey) || ["quantity", "capacity", "manual_recheck"].some((key) => criteria.has(key)) || ["manual", "structure", "booking", "offline"].some((key) => issues.has(key));
-  if (filter === "high_revenue") return finiteNumber(revenue.totalRevenue) >= 2000000;
+  if (filter === "high_revenue") return effectiveRevenueValue(revenue) >= 2000000;
   if (filter === "gap") return criteria.has("gap") || issues.has("gap") || (entry.decision?.gapType && entry.decision.gapType !== "공백 특이 없음");
   if (filter === "ota") return criteria.has("ota") || issues.has("ota") || ["OTA", "여기어때", "야놀자", "떠나요"].some((label) => (entry.decision?.channelText || "").includes(label));
   return false;
@@ -4497,7 +4606,7 @@ function companySalesFollowUpProfile(company = {}, revenueImpact = {}) {
   const hasNext = /^\d{4}-\d{2}-\d{2}$/.test(nextActionAt);
   const active = salesPipelineStatusKeys().includes(status);
   const closed = salesClosedStatusKeys().includes(status);
-  const revenue = finiteNumber(revenueImpact.totalRevenue);
+  const revenue = effectiveRevenueValue(revenueImpact);
   if (closed) {
     return { key: "closed", label: "종료", tone: "closed", priority: 8, nextActionAt, detail: salesContactMeta(status).label, revenue };
   }
@@ -4532,7 +4641,7 @@ function companySalesFollowUpScore(company = {}, revenueImpact = {}, followUp = 
   else if (status === "interested") score += 22;
   else if (status === "waiting_reply") score += 14;
   else if (status === "first_contacted") score += 9;
-  const revenue = finiteNumber(revenueImpact.totalRevenue);
+  const revenue = effectiveRevenueValue(revenueImpact);
   if (revenue >= 5000000) score += 18;
   else if (revenue >= 2000000) score += 11;
   else if (revenue >= 700000) score += 5;
@@ -4547,7 +4656,7 @@ function companySalesExecutionScore(company = {}, revenueImpact = {}, comparison
   if (rank > 0 && rank <= 5) score += 14;
   else if (rank > 0 && rank <= 10) score += 9;
   else if (rank > 0 && rank <= 20) score += 5;
-  const revenue = finiteNumber(revenueImpact.totalRevenue);
+  const revenue = effectiveRevenueValue(revenueImpact);
   if (revenue >= 5000000) score += 18;
   else if (revenue >= 2000000) score += 11;
   else if (revenue >= 700000) score += 5;
@@ -4575,7 +4684,7 @@ function companySalesPipelineSummary(entries = []) {
       label: meta.label || fallbackLabel,
       tone: meta.tone,
       count: matches.length,
-      revenue: matches.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
+      revenue: matches.reduce((sum, entry) => sum + effectiveRevenueValue(entry.revenueImpact || {}), 0),
       due: matches.filter((entry) => ["overdue", "today", "soon"].includes(entry.followUp.key)).length
     };
   });
@@ -4584,9 +4693,9 @@ function companySalesPipelineSummary(entries = []) {
   return {
     rows,
     activeCount: active.length,
-    activeRevenue: active.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
+    activeRevenue: active.reduce((sum, entry) => sum + effectiveRevenueValue(entry.revenueImpact || {}), 0),
     hotCount: hot.length,
-    hotRevenue: hot.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
+    hotRevenue: hot.reduce((sum, entry) => sum + effectiveRevenueValue(entry.revenueImpact || {}), 0),
     overdueCount: entries.filter((entry) => entry.followUp.key === "overdue").length,
     todayCount: entries.filter((entry) => entry.followUp.key === "today").length,
     soonCount: entries.filter((entry) => entry.followUp.key === "soon").length,
@@ -4611,8 +4720,8 @@ function companySalesPerformanceSummary(entries = []) {
     responseRate: contacted.length ? responded.length / contacted.length : NaN,
     interestRate: contacted.length ? interested.length / contacted.length : NaN,
     meetingRate: contacted.length ? meetings.length / contacted.length : NaN,
-    contractRevenue: contractReview.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0),
-    responseRevenue: responded.reduce((sum, entry) => sum + finiteNumber(entry.revenueImpact?.totalRevenue), 0)
+    contractRevenue: contractReview.reduce((sum, entry) => sum + effectiveRevenueValue(entry.revenueImpact || {}), 0),
+    responseRevenue: responded.reduce((sum, entry) => sum + effectiveRevenueValue(entry.revenueImpact || {}), 0)
   };
 }
 
@@ -4627,7 +4736,7 @@ function companySalesProposalResponseSummary(entries = []) {
     const status = entry.company.salesContact?.status || "not_contacted";
     const response = entry.company.salesContact?.responseStatus || "not_recorded";
     row.total += 1;
-    row.revenue += finiteNumber(entry.revenueImpact?.totalRevenue);
+    row.revenue += effectiveRevenueValue(entry.revenueImpact || {});
     if (status !== "not_contacted") row.contacted += 1;
     if (["replied", "requested_materials", "meeting_scheduled", "contract_review"].includes(response)) row.responded += 1;
     if (["requested_materials", "meeting_scheduled", "contract_review"].includes(response) || salesHotStatusKeys().includes(status)) row.interested += 1;
@@ -4656,7 +4765,7 @@ function companySalesEvidenceList(company = {}, entry = {}) {
     ...(company.salesTarget?.reasons || []).slice(0, 2),
     entry.action?.pitch,
     company.bestRank ? `최고 노출 ${fmtNumber(company.bestRank)}위 · ${company.bestKeyword || "대표 키워드"}` : "",
-    finiteNumber(revenue.totalRevenue) ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : "",
+    effectiveRevenueValue(revenue) ? `예상매출 ${fmtWon(effectiveRevenueValue(revenue))}` : "",
     revenue.precision?.grade ? `매출 신뢰도 ${revenue.precision.grade} · ${fmtNumber(revenue.precision.score)}점` : "",
     finiteNumber(revenue.totalMissingPriceSoldOut) ? `가격 누락 ${fmtNumber(revenue.totalMissingPriceSoldOut)}개/회` : "",
     signals.fridayWeak ? `금요일 공백 ${fmtRate(signals.fridayRate)}` : "",
@@ -4674,7 +4783,7 @@ function companySalesProposalSignals(company = {}, entry = {}) {
   const revenue = entry.revenueImpact || {};
   const rows = [
     { label: "제안축", value: action.label || "상품 재정리" },
-    { label: "예상매출", value: fmtWon(revenue.totalRevenue) },
+    { label: "예상매출", value: fmtWon(effectiveRevenueValue(revenue)) },
     revenue.precision?.grade ? { label: "매출신뢰", value: `${revenue.precision.grade} · ${fmtNumber(revenue.precision.score)}점` } : null,
     company.bestRank ? { label: "노출", value: `${fmtNumber(company.bestRank)}위 · ${company.bestKeyword || company.latestKeyword || "대표 키워드"}` } : null,
     finiteNumber(revenue.totalMissingPriceSoldOut) ? { label: "가격확인", value: `${fmtNumber(revenue.totalMissingPriceSoldOut)}개/회` } : null,
@@ -4716,7 +4825,7 @@ function companySalesScriptText(company = {}, entry = {}) {
   const contact = company.salesContact || {};
   const status = contact.status || "not_contacted";
   const companyName = company.primaryName || entry.item?.name || "대표님";
-  const revenueText = fmtWon(entry.revenueImpact?.totalRevenue);
+  const revenueText = fmtWon(effectiveRevenueValue(entry.revenueImpact || {}));
   const rankText = company.bestRank ? `${company.bestKeyword || company.latestKeyword || "주요 키워드"} ${fmtNumber(company.bestRank)}위 노출` : "네이버 노출 데이터";
   const proposal = contact.proposal || action.next || action.pitch || "예약 상품 구성을 확인";
   const lead = `${companyName} 담당자님, 안녕하세요. 글램핑 예약 데이터 기준으로 ${rankText}과 판매 공백을 같이 보고 연락드립니다.`;
@@ -4984,7 +5093,7 @@ function salesTargetCsv(entries = []) {
       (company.regions || []).slice(0, 2).join(" / ") || item.region || "",
       companySalesPrimaryUrl(company, item),
       entry.priorityScore,
-      finiteNumber(entry.revenueImpact?.totalRevenue),
+      effectiveRevenueValue(entry.revenueImpact || {}),
       salesContactMeta(contact.status).label,
       salesResponseMeta(contact.responseStatus).label,
       salesResponseReasonMeta(contact.responseReason).label,
@@ -5015,7 +5124,7 @@ function salesGateCsv(entries = salesGateReviewEntries(0), context = {}) {
     const workflowReasons = Array.isArray(entry.workflow?.reasons) ? entry.workflow.reasons : [];
     const decisionActions = Array.isArray(decision.actions) ? decision.actions : [];
     const nextActions = [...workflowReasons, ...decisionActions].filter(Boolean);
-    const revenue = finiteNumber(revenueImpact.totalRevenue, 0);
+    const revenue = effectiveRevenueValue(revenueImpact);
     const pricedSoldOut = finiteNumber(revenueImpact.totalPricedSoldOut, 0);
     const missingPriceSoldOut = finiteNumber(revenueImpact.totalMissingPriceSoldOut, 0);
     const dayCoverage = queueRevenueDayCoverageSummary(revenueImpact);
@@ -5091,7 +5200,7 @@ function decisionQueueCsv(entries = [], context = {}) {
       decision.channelText || "",
       `${plan.keyword} · ${plan.regionScope ? `지역 ${plan.regionScope} · ` : ""}${plan.keywordSource || "업체 기준"} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`,
       `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`,
-      finiteNumber(revenueImpact.totalRevenue, 0) || "",
+      effectiveRevenueValue(revenueImpact) || "",
       [precision.grade, precision.label].filter(Boolean).join(" · "),
       dayCoverage.csv || "",
       productCoverage.csv || "",
@@ -5223,7 +5332,7 @@ function adminReviewContextCells(context = {}) {
     improved: comparison.hasComparison ? finiteNumber(comparison.improved, 0) : "",
     worsened: comparison.hasComparison ? finiteNumber(comparison.worsened, 0) : "",
     comparisonDetail,
-    revenue: finiteNumber(revenue.totalRevenue, 0) || "",
+    revenue: effectiveRevenueValue(revenue) || "",
     pricedSoldOut: finiteNumber(revenue.totalPricedSoldOut, 0) || "",
     missingPriceSoldOut: finiteNumber(revenue.totalMissingPriceSoldOut, 0) || "",
     precision: [revenue.precisionGrade, revenue.precisionLabel].filter(Boolean).join(" · ")
@@ -7246,7 +7355,7 @@ function queueRevenueProductKindSummary(label, rows = [], part = {}, unit = "개
     tone,
     hasSalesBasis: true,
     value,
-    detail: `${quantityText} · ${priceText}${missing ? ` · 가격누락 ${fmtNumber(missing)}${unit}` : ""} · 매출 ${fmtWon(part.revenue)}`
+    detail: `${quantityText} · ${priceText}${missing ? ` · 가격누락 ${fmtNumber(missing)}${unit}` : ""} · 매출 ${fmtWon(part.adjustedRevenue || part.revenue)}`
   };
 }
 
@@ -7295,7 +7404,7 @@ function queueRevenueEvidenceProfile(impact = {}) {
   ].filter(Boolean));
   const dayCovered = dayLabels.size;
   const productRows = impact.productRows || [];
-  const totalRevenue = finiteNumber(impact.totalRevenue, 0);
+  const totalRevenue = effectiveRevenueValue(impact);
   const priced = finiteNumber(impact.totalPricedSoldOut, 0);
   const missing = finiteNumber(impact.totalMissingPriceSoldOut, 0);
   const totalSold = priced + missing;
@@ -7333,6 +7442,8 @@ function companyQueueRevenueImpactHtml(company = {}) {
   const sourceText = impact.source === "current" ? "현재 수집 결과" : "업체 최신 스냅샷";
   const dayCoverage = queueRevenueDayCoverageSummary(impact);
   const productCoverage = queueRevenueProductCoverageSummary(impact);
+  const revenueValue = effectiveRevenueValue(impact);
+  const revenueNote = revenueAdjustmentNote(impact);
   return `
     <div class="company-check-revenue-impact">
       <div>
@@ -7347,8 +7458,8 @@ function companyQueueRevenueImpactHtml(company = {}) {
       </div>
       <div class="${priceTone}">
         <span>매출 영향</span>
-        <strong>${fmtWon(impact.totalRevenue)}</strong>
-        <small>${escapeHtml(`${sourceText} · ${queueRevenueDetailShort(impact.lodging, "숙박 요일별 매출 대기")}`)}</small>
+        <strong>${fmtWon(revenueValue)}</strong>
+        <small>${escapeHtml(`${sourceText} · ${revenueNote}`)}</small>
       </div>
       <div class="${escapeHtml(precision.tone || "watch")}">
         <span>매출 신뢰도</span>
@@ -7401,9 +7512,10 @@ function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = 
   else if (bestRank > 0 && bestRank <= 10) score += 8;
   else if (bestRank > 0 && bestRank <= 20) score += 4;
   const revenueImpact = companyQueueRevenueImpact(company);
-  if (revenueImpact.totalRevenue >= 5000000) score += 16;
-  else if (revenueImpact.totalRevenue >= 2000000) score += 10;
-  else if (revenueImpact.totalRevenue >= 700000) score += 5;
+  const revenueValue = effectiveRevenueValue(revenueImpact);
+  if (revenueValue >= 5000000) score += 16;
+  else if (revenueValue >= 2000000) score += 10;
+  else if (revenueValue >= 700000) score += 5;
   if (revenueImpact.totalMissingPriceSoldOut > 0) score += Math.min(12, revenueImpact.totalMissingPriceSoldOut * 2);
   if (queueRevenueEvidenceProfile(revenueImpact).weak) score += 10;
   if (company.identityConfidence?.level === "review") score += 15;
@@ -7455,7 +7567,7 @@ function companyCheckFilterMatches(entry = {}, filter = "priority") {
   if (filter === "recommend_manual") return open && recommendation.status === "manual_needed";
   if (filter === "recommend_recrawl") return open && recommendation.status === "recrawl_needed";
   if (filter === "recommend_check") return open && recommendation.status === "check_needed";
-  if (filter === "high_revenue") return open && finiteNumber(revenue.totalRevenue) >= 2000000;
+  if (filter === "high_revenue") return open && effectiveRevenueValue(revenue) >= 2000000;
   if (filter === "revenue_weak") return open && queueRevenueEvidenceProfile(revenue).weak;
   if (filter === "price_missing") return open && finiteNumber(revenue.totalMissingPriceSoldOut) > 0;
   if (filter === "improved") return open && comparison.hasComparison && comparison.improved > comparison.worsened;
@@ -7906,7 +8018,7 @@ function companyQueueRecentLogs(entries = []) {
         name,
         label: "재수집 비교",
         value: `개선 ${fmtNumber(entry.comparison.improved)} / 악화 ${fmtNumber(entry.comparison.worsened)}`,
-        note: `${entry.autoRecommendation?.label || "추천 대기"} · 매출 ${fmtWon(entry.revenueImpact?.totalRevenue || 0)}`
+        note: `${entry.autoRecommendation?.label || "추천 대기"} · 매출 ${fmtWon(effectiveRevenueValue(entry.revenueImpact || {}))}`
       });
     }
     if (manualCorrectionHasValue(company.manualCorrection)) {
@@ -7955,7 +8067,7 @@ function recrawlAutomationRow(entry = {}) {
   const latest = comparison.latest?.collectedAt || company.inventory?.latest?.collectedAt || company.lastSeenAt || "";
   const previous = comparison.previous?.collectedAt || company.inventory?.previousLatest?.collectedAt || "";
   const rank = Number(company.bestRank || 0);
-  const revenue = finiteNumber(entry.revenueImpact?.totalRevenue, 0);
+  const revenue = effectiveRevenueValue(entry.revenueImpact || {});
   const revenueEvidence = queueRevenueEvidenceProfile(entry.revenueImpact || {});
   const reasons = [
     recommendation.label,
@@ -8272,7 +8384,7 @@ function recrawlAutomationBoardHtml(entries = []) {
 function companyQueueOperationSummaryHtml(entries = []) {
   const open = entries.filter((entry) => entry.workflow.key !== "done");
   const countRecommendation = (status) => open.filter((entry) => entry.autoRecommendation?.status === status).length;
-  const highRevenue = open.filter((entry) => finiteNumber(entry.revenueImpact?.totalRevenue) >= 2000000);
+  const highRevenue = open.filter((entry) => effectiveRevenueValue(entry.revenueImpact || {}) >= 2000000);
   const revenueWeak = open.filter((entry) => queueRevenueEvidenceProfile(entry.revenueImpact || {}).weak);
   const priceMissing = open.filter((entry) => finiteNumber(entry.revenueImpact?.totalMissingPriceSoldOut) > 0);
   const improved = open.filter((entry) => entry.comparison?.hasComparison && entry.comparison.improved > entry.comparison.worsened);
@@ -8965,6 +9077,8 @@ function renderTargets() {
     const responseMeta = salesResponseMeta(company.salesContact?.responseStatus);
     const reasonMeta = salesResponseReasonMeta(company.salesContact?.responseReason);
     const url = companySalesPrimaryUrl(company, item);
+    const revenueValue = effectiveRevenueValue(revenueImpact);
+    const revenueNote = revenueAdjustmentNote(revenueImpact);
     return `
       <article class="target-action-card ${stage.key}">
         <div class="target-action-head">
@@ -8980,7 +9094,7 @@ function renderTargets() {
           </div>
         </div>
         <div class="target-execution-metrics">
-          <div><span>예상매출</span><strong>${fmtWon(revenueImpact.totalRevenue)}</strong><small>${escapeHtml(revenueImpact.precision?.grade ? `신뢰 ${revenueImpact.precision.grade} · 가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회` : `가격누락 ${fmtNumber(revenueImpact.totalMissingPriceSoldOut)}개/회`)}</small></div>
+          <div><span>예상매출</span><strong>${fmtWon(revenueValue)}</strong><small>${escapeHtml(revenueImpact.precision?.grade ? `신뢰 ${revenueImpact.precision.grade} · ${revenueNote}` : revenueNote)}</small></div>
           <div><span>노출</span><strong>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "대기"}</strong><small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 확인")}</small></div>
           <div><span>후속</span><strong>${escapeHtml(followUp.label)}</strong><small>${escapeHtml(followUp.detail || "다음 액션 미지정")}</small></div>
           <div><span>반응</span><strong>${escapeHtml(responseMeta.label)}</strong><small>${escapeHtml(reasonMeta.label)}</small></div>
@@ -9049,7 +9163,7 @@ function renderTargets() {
               <div><span>큐 사유</span><strong>${escapeHtml(decision.label || type?.label || "확인 필요")}</strong><small>${escapeHtml(decision.problemDateText || "문제 날짜 확인")}</small></div>
               <div><span>수량/공백</span><strong>${escapeHtml(decision.quantityConfidence || "수량 확인")}</strong><small>${escapeHtml(decision.gapType || "공백 유형 없음")}</small></div>
               <div><span>확인 채널</span><strong>${escapeHtml(decision.channelText || "네이버 기준")}</strong><small>${escapeHtml(autoRecommendation?.label || workflow?.label || "관리자 판단")}</small></div>
-              <div><span>예상매출</span><strong>${fmtWon(revenueImpact?.totalRevenue || 0)}</strong><small>${escapeHtml(revenueImpact?.precision?.label || "매출 정밀도 대기")}</small></div>
+              <div><span>예상매출</span><strong>${fmtWon(effectiveRevenueValue(revenueImpact || {}))}</strong><small>${escapeHtml(revenueAdjustmentNote(revenueImpact || {}))}</small></div>
             </div>
             ${salesGateRevenueEvidenceHtml(entry)}
             <p>${escapeHtml(gateReason)}</p>
@@ -10480,8 +10594,9 @@ function sheetRecrawlComparisonPanel(item = {}) {
 function revenueCoverageText(revenue = {}) {
   const priced = finiteNumber(revenue.pricedSoldOut, 0);
   const missing = finiteNumber(revenue.missingPriceSoldOut, 0);
+  const gapRevenue = finiteNumber(revenue.missingPriceEstimatedRevenue, 0);
   if (!priced && !missing) return "가격/판매수량 대기";
-  return `${fmtNumber(priced)}${revenue.unit} 가격확인${missing ? ` · 가격누락 ${fmtNumber(missing)}${revenue.unit}` : ""}`;
+  return `${fmtNumber(priced)}${revenue.unit} 가격확인${missing ? ` · 가격누락 ${fmtNumber(missing)}${revenue.unit}` : ""}${gapRevenue ? ` · 보정 ${fmtWon(gapRevenue)}` : ""}`;
 }
 
 function revenueDayTypeGridHtml(title, rows = [], fallback = "요일별 가격과 판매수량을 같은 수집에서 확보해야 합니다.") {
@@ -10532,6 +10647,12 @@ function sheetRevenuePanel(item = {}) {
     lodging.offlineDetail ? ["숙박 오프라인 예약 추정", lodging.offlineDetail, lodging.revenue] : null,
     dayUse.offlineDetail ? ["데이유즈/캠프닉 오프라인 예약 추정", dayUse.offlineDetail, dayUse.revenue] : null
   ].filter(Boolean);
+  const totalRevenueValue = profile.totalAdjustedRevenue || profile.totalRevenue;
+  const totalRevenueNote = profile.totalAdjustedRevenue > profile.totalRevenue && profile.totalMissingPriceEstimatedRevenue
+    ? `확인가격 ${fmtWon(profile.totalRevenue)} · 가격누락 보정 ${fmtWon(profile.totalMissingPriceEstimatedRevenue)}`
+    : `가격확보 ${Number.isFinite(precision.coverage) ? fmtRate(precision.coverage) : "대기"} · ${fmtNumber(precision.priced)}개/회`;
+  const lodgingRevenueValue = lodging.adjustedRevenue || lodging.revenue;
+  const dayUseRevenueValue = dayUse.adjustedRevenue || dayUse.revenue;
   return `
     <section class="sheet-section sheet-revenue-section">
       <div class="sheet-structure-title">
@@ -10541,13 +10662,13 @@ function sheetRevenuePanel(item = {}) {
       <div class="sheet-history-grid">
         <div>
           <span>전체 예상매출</span>
-          <strong>${fmtWon(profile.totalRevenue)}</strong>
-          <small>${escapeHtml(`가격확보 ${Number.isFinite(precision.coverage) ? fmtRate(precision.coverage) : "대기"} · ${fmtNumber(precision.priced)}개/회`)}</small>
+          <strong>${fmtWon(totalRevenueValue)}</strong>
+          <small>${escapeHtml(totalRevenueNote)}</small>
         </div>
         <div>
           <span>숙박 매출</span>
-          <strong>${fmtWon(lodging.revenue)}</strong>
-          <small>${escapeHtml(`${lodging.label} · ${revenueCoverageText(lodging)}`)}</small>
+          <strong>${fmtWon(lodgingRevenueValue)}</strong>
+          <small>${escapeHtml(`${lodging.label} · ${revenueCoverageText(lodging)}${lodgingRevenueValue > lodging.revenue ? ` · 원매출 ${fmtWon(lodging.revenue)}` : ""}`)}</small>
         </div>
         <div>
           <span>숙박 평균단가</span>
@@ -10556,8 +10677,8 @@ function sheetRevenuePanel(item = {}) {
         </div>
         <div>
           <span>데이유즈/캠프닉</span>
-          <strong>${fmtWon(dayUse.revenue)}</strong>
-          <small>${escapeHtml(`${dayUse.label} · ${revenueCoverageText(dayUse)}`)}</small>
+          <strong>${fmtWon(dayUseRevenueValue)}</strong>
+          <small>${escapeHtml(`${dayUse.label} · ${revenueCoverageText(dayUse)}${dayUseRevenueValue > dayUse.revenue ? ` · 원매출 ${fmtWon(dayUse.revenue)}` : ""}`)}</small>
         </div>
         <div>
           <span>매출 신뢰도</span>

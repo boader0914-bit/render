@@ -484,6 +484,8 @@ const OUTPUT_ROOT = process.env.OUTPUTS_DIR || process.env.DATA_DIR || "outputs"
 const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${province.slug}_glamping_${RUN_STAMP}`);
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const NAVER_BOOKING_STOCK_LIMIT = Number(process.env.NAVER_BOOKING_STOCK_LIMIT || 20);
+const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, 4, 1, 8);
+const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
 const NAVER_BOOKING_GRAPHQL_URL = "https://m.booking.naver.com/graphql";
 const NAVER_BOOKING_ID_FALLBACK = String(process.env.NAVER_BOOKING_ID_FALLBACK || "1") !== "0";
 
@@ -930,6 +932,22 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function mapWithConcurrency(items, limit, mapper) {
+  const rows = Array.from(items || []);
+  const results = new Array(rows.length);
+  const workerCount = Math.max(1, Math.min(Math.round(limit) || 1, rows.length || 1));
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < rows.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(rows[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
+}
+
 async function getNaverBookingBusiness(placeId) {
   if (!placeId) return null;
   const endpoint = "https://pcmap-api.place.naver.com/graphql";
@@ -1113,6 +1131,21 @@ function scheduleProductLabel(schedule) {
   return text.length > 22 ? `${text.slice(0, 22)}...` : text;
 }
 
+function revenueProjectionFields(estimatedRevenue = 0, pricedSoldOut = 0, missingPriceSoldOut = 0) {
+  const revenue = Math.max(0, Number(estimatedRevenue) || 0);
+  const priced = Math.max(0, Number(pricedSoldOut) || 0);
+  const missing = Math.max(0, Number(missingPriceSoldOut) || 0);
+  const avg = priced ? Math.round(revenue / priced) : null;
+  const missingPriceEstimatedRevenue = avg && missing ? missing * avg : 0;
+  const adjustedEstimatedRevenue = revenue + missingPriceEstimatedRevenue;
+  const sold = priced + missing;
+  return {
+    adjustedEstimatedRevenue,
+    missingPriceEstimatedRevenue,
+    revenuePrecisionRate: sold ? Number((priced / sold).toFixed(3)) : null,
+  };
+}
+
 function summarizeNaverScheduleRevenue(schedules, listType) {
   let estimatedRevenue = 0;
   let pricedSoldOut = 0;
@@ -1140,6 +1173,7 @@ function summarizeNaverScheduleRevenue(schedules, listType) {
     avgSoldUnitPrice: pricedSoldOut ? Math.round(estimatedRevenue / pricedSoldOut) : null,
     minSoldPrice,
     maxSoldPrice,
+    ...revenueProjectionFields(estimatedRevenue, pricedSoldOut, missingPriceSoldOut),
   };
 }
 
@@ -1274,12 +1308,18 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
     groupedRoomCount: nightSummary.groupedRoomCount,
     availabilityUnit,
     nightEstimatedRevenue: nightSummary.estimatedRevenue,
+    nightAdjustedEstimatedRevenue: nightSummary.adjustedEstimatedRevenue,
+    nightMissingPriceEstimatedRevenue: nightSummary.missingPriceEstimatedRevenue,
+    nightRevenuePrecisionRate: nightSummary.revenuePrecisionRate,
     nightPricedSoldOut: nightSummary.pricedSoldOut,
     nightMissingPriceSoldOut: nightSummary.missingPriceSoldOut,
     nightAvgSoldUnitPrice: nightSummary.avgSoldUnitPrice,
     nightMinSoldPrice: nightSummary.minSoldPrice,
     nightMaxSoldPrice: nightSummary.maxSoldPrice,
     dayUseEstimatedRevenue: dayUseSummary.estimatedRevenue,
+    dayUseAdjustedEstimatedRevenue: dayUseSummary.adjustedEstimatedRevenue,
+    dayUseMissingPriceEstimatedRevenue: dayUseSummary.missingPriceEstimatedRevenue,
+    dayUseRevenuePrecisionRate: dayUseSummary.revenuePrecisionRate,
     dayUsePricedSoldOut: dayUseSummary.pricedSoldOut,
     dayUseMissingPriceSoldOut: dayUseSummary.missingPriceSoldOut,
     dayUseAvgSoldUnitPrice: dayUseSummary.avgSoldUnitPrice,
@@ -1422,16 +1462,15 @@ function summarizeOfflineProductRevenue(summary, productBasis, offlineReserved, 
 }
 
 async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 40, date = CHECK_IN) {
-  const schedules = [];
-  for (const item of items.slice(0, limit)) {
-    await delay(90);
+  return mapWithConcurrency(items.slice(0, limit), NAVER_SCHEDULE_CONCURRENCY, async (item, index) => {
+    if (NAVER_SCHEDULE_DELAY_MS) await delay(NAVER_SCHEDULE_DELAY_MS * (index % NAVER_SCHEDULE_CONCURRENCY));
     const schedule = await getNaverDailySchedule(bookingBusinessId, item.bizItemId, date);
     const day = schedule.day || {};
     const stock = asStockNumber(day.stock);
     const bookingCount = Math.max(0, asStockNumber(day.bookingCount) || 0);
     const occupiedBookingCount = Math.max(0, asStockNumber(day.occupiedBookingCount) || 0);
     const price = asStockNumber(day.prices?.[0]?.price ?? item.minMaxPrice?.minPrice ?? item.price);
-    schedules.push({
+    return {
       bizItemId: item.bizItemId,
       name: item.name,
       bizItemSubType: item.bizItemSubType || "",
@@ -1444,9 +1483,8 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
       isBusinessDay: day.isBusinessDay,
       isSaleDay: day.isSaleDay,
       errors: schedule.errors,
-    });
-  }
-  return schedules;
+    };
+  });
 }
 
 async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days, unitLabel = "개") {
@@ -1527,6 +1565,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
   const totalPricedSoldOut = valid.reduce((sum, item) => sum + Number(item.pricedSoldOut || 0), 0);
   const totalMissingPriceSoldOut = valid.reduce((sum, item) => sum + Number(item.missingPriceSoldOut || 0), 0);
   const avgSoldUnitPrice = totalPricedSoldOut ? Math.round(totalEstimatedRevenue / totalPricedSoldOut) : null;
+  const projectedRevenue = revenueProjectionFields(totalEstimatedRevenue, totalPricedSoldOut, totalMissingPriceSoldOut);
   const avgReservationRate = Number((valid.reduce((sum, item) => {
     const reservationRate = item.total > 0 ? item.soldOut / item.total : 0;
     return sum + reservationRate;
@@ -1566,6 +1605,9 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     totalSoldOut,
     totalStock,
     totalEstimatedRevenue,
+    totalAdjustedEstimatedRevenue: projectedRevenue.adjustedEstimatedRevenue,
+    totalMissingPriceEstimatedRevenue: projectedRevenue.missingPriceEstimatedRevenue,
+    revenuePrecisionRate: projectedRevenue.revenuePrecisionRate,
     totalPricedSoldOut,
     totalMissingPriceSoldOut,
     avgSoldUnitPrice,
@@ -1722,6 +1764,9 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.숙박판매완료수 = result.nightSoldOutStock ?? "";
       row.숙박판매완료율 = result.nightSoldOutRate === null || result.nightSoldOutRate === undefined ? "" : result.nightSoldOutRate;
       row.숙박기준일예상매출 = result.nightEstimatedRevenue ?? "";
+      row.basisLodgingAdjustedRevenue = result.nightAdjustedEstimatedRevenue ?? "";
+      row.basisLodgingMissingPriceEstimatedRevenue = result.nightMissingPriceEstimatedRevenue ?? "";
+      row.basisLodgingRevenuePrecisionRate = result.nightRevenuePrecisionRate ?? "";
       row.숙박기준일가격확인판매수량 = result.nightPricedSoldOut ?? "";
       row.숙박기준일가격누락판매수량 = result.nightMissingPriceSoldOut ?? "";
       row.숙박기준일평균판매단가 = result.nightAvgSoldUnitPrice ?? "";
@@ -1734,6 +1779,9 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.데이유즈예약가능률 = result.dayUseAvailabilityRate === null || result.dayUseAvailabilityRate === undefined ? "" : result.dayUseAvailabilityRate;
       row.데이유즈계산대상상품수 = result.dayUseCountedItemCount ?? "";
       row.데이유즈기준일예상매출 = result.dayUseEstimatedRevenue ?? "";
+      row.basisDayUseAdjustedRevenue = result.dayUseAdjustedEstimatedRevenue ?? "";
+      row.basisDayUseMissingPriceEstimatedRevenue = result.dayUseMissingPriceEstimatedRevenue ?? "";
+      row.basisDayUseRevenuePrecisionRate = result.dayUseRevenuePrecisionRate ?? "";
       row.데이유즈기준일가격확인판매수량 = result.dayUsePricedSoldOut ?? "";
       row.데이유즈기준일가격누락판매수량 = result.dayUseMissingPriceSoldOut ?? "";
       row.데이유즈기준일평균판매단가 = result.dayUseAvgSoldUnitPrice ?? "";
@@ -1750,6 +1798,9 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.주간전체수량합계 = result.weekly?.totalStock ?? "";
       row.주간기준재고수 = result.weekly?.basisTotal ?? "";
       row.주간숙박예상매출 = result.weekly?.totalEstimatedRevenue ?? "";
+      row.weeklyAdjustedRevenue = result.weekly?.totalAdjustedEstimatedRevenue ?? "";
+      row.weeklyMissingPriceEstimatedRevenue = result.weekly?.totalMissingPriceEstimatedRevenue ?? "";
+      row.weeklyRevenuePrecisionRate = result.weekly?.revenuePrecisionRate ?? "";
       row.주간숙박가격확인판매수량 = result.weekly?.totalPricedSoldOut ?? "";
       row.주간숙박가격누락판매수량 = result.weekly?.totalMissingPriceSoldOut ?? "";
       row.주간숙박평균판매단가 = result.weekly?.avgSoldUnitPrice ?? "";
@@ -1769,6 +1820,9 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.dayUseWeeklyTotalStock = result.dayUseWeekly?.totalStock ?? "";
       row.dayUseWeeklyBasisTotal = result.dayUseWeekly?.basisTotal ?? "";
       row.dayUseWeeklyEstimatedRevenue = result.dayUseWeekly?.totalEstimatedRevenue ?? "";
+      row.dayUseWeeklyAdjustedRevenue = result.dayUseWeekly?.totalAdjustedEstimatedRevenue ?? "";
+      row.dayUseWeeklyMissingPriceEstimatedRevenue = result.dayUseWeekly?.totalMissingPriceEstimatedRevenue ?? "";
+      row.dayUseWeeklyRevenuePrecisionRate = result.dayUseWeekly?.revenuePrecisionRate ?? "";
       row.dayUseWeeklyPricedSoldOut = result.dayUseWeekly?.totalPricedSoldOut ?? "";
       row.dayUseWeeklyMissingPriceSoldOut = result.dayUseWeekly?.totalMissingPriceSoldOut ?? "";
       row.dayUseWeeklyAvgSoldUnitPrice = result.dayUseWeekly?.avgSoldUnitPrice ?? "";
@@ -2184,6 +2238,9 @@ function platformInventoryAuditFields(channel, row = {}) {
 function naverRevenueFields(row = {}) {
   return {
     "숙박기준일예상매출": row.숙박기준일예상매출 ?? "",
+    basisLodgingAdjustedRevenue: row.basisLodgingAdjustedRevenue ?? "",
+    basisLodgingMissingPriceEstimatedRevenue: row.basisLodgingMissingPriceEstimatedRevenue ?? "",
+    basisLodgingRevenuePrecisionRate: row.basisLodgingRevenuePrecisionRate ?? "",
     "숙박기준일가격확인판매수량": row.숙박기준일가격확인판매수량 ?? "",
     "숙박기준일가격누락판매수량": row.숙박기준일가격누락판매수량 ?? "",
     "숙박기준일평균판매단가": row.숙박기준일평균판매단가 ?? "",
@@ -2191,7 +2248,13 @@ function naverRevenueFields(row = {}) {
     "데이유즈기준일가격확인판매수량": row.데이유즈기준일가격확인판매수량 ?? "",
     "데이유즈기준일가격누락판매수량": row.데이유즈기준일가격누락판매수량 ?? "",
     "데이유즈기준일평균판매단가": row.데이유즈기준일평균판매단가 ?? "",
+    basisDayUseAdjustedRevenue: row.basisDayUseAdjustedRevenue ?? "",
+    basisDayUseMissingPriceEstimatedRevenue: row.basisDayUseMissingPriceEstimatedRevenue ?? "",
+    basisDayUseRevenuePrecisionRate: row.basisDayUseRevenuePrecisionRate ?? "",
     "주간숙박예상매출": row.주간숙박예상매출 ?? "",
+    weeklyAdjustedRevenue: row.weeklyAdjustedRevenue ?? "",
+    weeklyMissingPriceEstimatedRevenue: row.weeklyMissingPriceEstimatedRevenue ?? "",
+    weeklyRevenuePrecisionRate: row.weeklyRevenuePrecisionRate ?? "",
     "주간숙박가격확인판매수량": row.주간숙박가격확인판매수량 ?? "",
     "주간숙박가격누락판매수량": row.주간숙박가격누락판매수량 ?? "",
     "주간숙박평균판매단가": row.주간숙박평균판매단가 ?? "",
@@ -2199,6 +2262,9 @@ function naverRevenueFields(row = {}) {
     "주간숙박요일매출": row.주간숙박요일매출 || "",
     "주간숙박오프라인예약상세": row.주간숙박오프라인예약상세 || "",
     dayUseWeeklyEstimatedRevenue: row.dayUseWeeklyEstimatedRevenue ?? "",
+    dayUseWeeklyAdjustedRevenue: row.dayUseWeeklyAdjustedRevenue ?? "",
+    dayUseWeeklyMissingPriceEstimatedRevenue: row.dayUseWeeklyMissingPriceEstimatedRevenue ?? "",
+    dayUseWeeklyRevenuePrecisionRate: row.dayUseWeeklyRevenuePrecisionRate ?? "",
     dayUseWeeklyPricedSoldOut: row.dayUseWeeklyPricedSoldOut ?? "",
     dayUseWeeklyMissingPriceSoldOut: row.dayUseWeeklyMissingPriceSoldOut ?? "",
     dayUseWeeklyAvgSoldUnitPrice: row.dayUseWeeklyAvgSoldUnitPrice ?? "",
@@ -2454,6 +2520,9 @@ async function main() {
 
   const revenueColumns = [
     "숙박기준일예상매출",
+    "basisLodgingAdjustedRevenue",
+    "basisLodgingMissingPriceEstimatedRevenue",
+    "basisLodgingRevenuePrecisionRate",
     "숙박기준일가격확인판매수량",
     "숙박기준일가격누락판매수량",
     "숙박기준일평균판매단가",
@@ -2461,7 +2530,13 @@ async function main() {
     "데이유즈기준일가격확인판매수량",
     "데이유즈기준일가격누락판매수량",
     "데이유즈기준일평균판매단가",
+    "basisDayUseAdjustedRevenue",
+    "basisDayUseMissingPriceEstimatedRevenue",
+    "basisDayUseRevenuePrecisionRate",
     "주간숙박예상매출",
+    "weeklyAdjustedRevenue",
+    "weeklyMissingPriceEstimatedRevenue",
+    "weeklyRevenuePrecisionRate",
     "주간숙박가격확인판매수량",
     "주간숙박가격누락판매수량",
     "주간숙박평균판매단가",
@@ -2469,6 +2544,9 @@ async function main() {
     "주간숙박요일매출",
     "주간숙박오프라인예약상세",
     "dayUseWeeklyEstimatedRevenue",
+    "dayUseWeeklyAdjustedRevenue",
+    "dayUseWeeklyMissingPriceEstimatedRevenue",
+    "dayUseWeeklyRevenuePrecisionRate",
     "dayUseWeeklyPricedSoldOut",
     "dayUseWeeklyMissingPriceSoldOut",
     "dayUseWeeklyAvgSoldUnitPrice",

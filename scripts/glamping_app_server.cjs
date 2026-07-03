@@ -3278,15 +3278,32 @@ function snapshotNumber(value) {
 function companyRevenueSnapshotPart(item = {}, config = {}) {
   const weeklyRevenue = snapshotNumber(item[config.weeklyRevenue]);
   const basisRevenue = snapshotNumber(item[config.basisRevenue]);
+  const weeklyAdjusted = snapshotNumber(item[config.weeklyAdjusted]);
+  const basisAdjusted = snapshotNumber(item[config.basisAdjusted]);
+  const weeklyGap = snapshotNumber(item[config.weeklyGap]);
+  const basisGap = snapshotNumber(item[config.basisGap]);
+  const weeklyPrecisionRate = snapshotNumber(item[config.weeklyPrecisionRate]);
+  const basisPrecisionRate = snapshotNumber(item[config.basisPrecisionRate]);
   const weeklyPriced = snapshotNumber(item[config.weeklyPriced]);
   const basisPriced = snapshotNumber(item[config.basisPriced]);
   const weeklyMissing = snapshotNumber(item[config.weeklyMissing]);
   const basisMissing = snapshotNumber(item[config.basisMissing]);
   const weeklyAvg = snapshotNumber(item[config.weeklyAvg]);
   const basisAvg = snapshotNumber(item[config.basisAvg]);
-  const hasWeekly = [weeklyRevenue, weeklyPriced, weeklyMissing, weeklyAvg].some((value) => value !== null);
+  const hasWeekly = [
+    weeklyRevenue,
+    weeklyAdjusted,
+    weeklyGap,
+    weeklyPrecisionRate,
+    weeklyPriced,
+    weeklyMissing,
+    weeklyAvg
+  ].some((value) => value !== null);
   return {
     revenue: hasWeekly ? weeklyRevenue : basisRevenue,
+    adjustedRevenue: hasWeekly ? weeklyAdjusted : basisAdjusted,
+    missingPriceEstimatedRevenue: hasWeekly ? weeklyGap : basisGap,
+    revenuePrecisionRate: hasWeekly ? weeklyPrecisionRate : basisPrecisionRate,
     pricedSoldOut: hasWeekly ? weeklyPriced : basisPriced,
     missingPriceSoldOut: hasWeekly ? weeklyMissing : basisMissing,
     avgSoldUnitPrice: hasWeekly ? weeklyAvg : basisAvg,
@@ -3302,6 +3319,12 @@ function companyRevenueSnapshotFromItem(item = {}) {
     lodging: companyRevenueSnapshotPart(item, {
       weeklyRevenue: "weeklyEstimatedRevenue",
       basisRevenue: "basisLodgingRevenue",
+      weeklyAdjusted: "weeklyAdjustedRevenue",
+      basisAdjusted: "basisLodgingAdjustedRevenue",
+      weeklyGap: "weeklyMissingPriceEstimatedRevenue",
+      basisGap: "basisLodgingMissingPriceEstimatedRevenue",
+      weeklyPrecisionRate: "weeklyRevenuePrecisionRate",
+      basisPrecisionRate: "basisLodgingRevenuePrecisionRate",
       weeklyPriced: "weeklyPricedSoldOut",
       basisPriced: "basisLodgingPricedSoldOut",
       weeklyMissing: "weeklyMissingPriceSoldOut",
@@ -3315,6 +3338,12 @@ function companyRevenueSnapshotFromItem(item = {}) {
     dayUse: companyRevenueSnapshotPart(item, {
       weeklyRevenue: "dayUseWeeklyEstimatedRevenue",
       basisRevenue: "basisDayUseRevenue",
+      weeklyAdjusted: "dayUseWeeklyAdjustedRevenue",
+      basisAdjusted: "basisDayUseAdjustedRevenue",
+      weeklyGap: "dayUseWeeklyMissingPriceEstimatedRevenue",
+      basisGap: "basisDayUseMissingPriceEstimatedRevenue",
+      weeklyPrecisionRate: "dayUseWeeklyRevenuePrecisionRate",
+      basisPrecisionRate: "basisDayUseRevenuePrecisionRate",
       weeklyPriced: "dayUseWeeklyPricedSoldOut",
       basisPriced: "basisDayUsePricedSoldOut",
       weeklyMissing: "dayUseWeeklyMissingPriceSoldOut",
@@ -5451,6 +5480,9 @@ function summarizeAvailabilityRows(rows) {
     const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
     const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
+    const weeklyAdjustedRevenue = numericField(row, ["weeklyAdjustedRevenue"]);
+    const weeklyMissingPriceEstimatedRevenue = numericField(row, ["weeklyMissingPriceEstimatedRevenue"]);
+    const weeklyRevenuePrecisionRate = numericField(row, ["weeklyRevenuePrecisionRate"]);
     const weeklyPricedSoldOut = numericField(row, ["주간숙박가격확인판매수량", "weeklyPricedSoldOut"]);
     const weeklyMissingPriceSoldOut = numericField(row, ["주간숙박가격누락판매수량", "weeklyMissingPriceSoldOut"]);
     const weeklyAvgSoldUnitPrice = numericField(row, ["주간숙박평균판매단가", "weeklyAvgSoldUnitPrice"]);
@@ -5464,6 +5496,9 @@ function summarizeAvailabilityRows(rows) {
     const dayUseWeeklyTotalSoldOut = numericField(row, ["dayUseWeeklyTotalSoldOut"]) ?? derivedDayUseWeeklyRates.totalSoldOut;
     const dayUseWeeklyTotalStock = numericField(row, ["dayUseWeeklyTotalStock"]) ?? derivedDayUseWeeklyRates.totalStock;
     const dayUseWeeklyEstimatedRevenue = numericField(row, ["dayUseWeeklyEstimatedRevenue"]);
+    const dayUseWeeklyAdjustedRevenue = numericField(row, ["dayUseWeeklyAdjustedRevenue"]);
+    const dayUseWeeklyMissingPriceEstimatedRevenue = numericField(row, ["dayUseWeeklyMissingPriceEstimatedRevenue"]);
+    const dayUseWeeklyRevenuePrecisionRate = numericField(row, ["dayUseWeeklyRevenuePrecisionRate"]);
     const dayUseWeeklyPricedSoldOut = numericField(row, ["dayUseWeeklyPricedSoldOut"]);
     const dayUseWeeklyMissingPriceSoldOut = numericField(row, ["dayUseWeeklyMissingPriceSoldOut"]);
     const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
@@ -5495,6 +5530,9 @@ function summarizeAvailabilityRows(rows) {
       soldOutRooms: resolvedSoldOutRooms,
       soldOutRate: soldOutRate !== null ? soldOutRate : Number((resolvedSoldOutRooms / totalRooms).toFixed(3)),
       basisLodgingRevenue: numericField(row, ["숙박기준일예상매출", "basisLodgingRevenue"]),
+      basisLodgingAdjustedRevenue: numericField(row, ["basisLodgingAdjustedRevenue"]),
+      basisLodgingMissingPriceEstimatedRevenue: numericField(row, ["basisLodgingMissingPriceEstimatedRevenue"]),
+      basisLodgingRevenuePrecisionRate: numericField(row, ["basisLodgingRevenuePrecisionRate"]),
       basisLodgingPricedSoldOut: numericField(row, ["숙박기준일가격확인판매수량", "basisLodgingPricedSoldOut"]),
       basisLodgingMissingPriceSoldOut: numericField(row, ["숙박기준일가격누락판매수량", "basisLodgingMissingPriceSoldOut"]),
       basisLodgingAvgSoldUnitPrice: numericField(row, ["숙박기준일평균판매단가", "basisLodgingAvgSoldUnitPrice"]),
@@ -5515,6 +5553,9 @@ function summarizeAvailabilityRows(rows) {
       weeklyAvgReservationRate,
       weeklyReservationRateDetail,
       weeklyEstimatedRevenue,
+      weeklyAdjustedRevenue,
+      weeklyMissingPriceEstimatedRevenue,
+      weeklyRevenuePrecisionRate,
       weeklyPricedSoldOut,
       weeklyMissingPriceSoldOut,
       weeklyAvgSoldUnitPrice,
@@ -5524,6 +5565,9 @@ function summarizeAvailabilityRows(rows) {
       dayUseAvailableStock: numericField(row, ["데이유즈예약가능수"]),
       dayUseTotalStock: numericField(row, ["데이유즈확인재고수"]),
       basisDayUseRevenue: numericField(row, ["데이유즈기준일예상매출", "basisDayUseRevenue"]),
+      basisDayUseAdjustedRevenue: numericField(row, ["basisDayUseAdjustedRevenue"]),
+      basisDayUseMissingPriceEstimatedRevenue: numericField(row, ["basisDayUseMissingPriceEstimatedRevenue"]),
+      basisDayUseRevenuePrecisionRate: numericField(row, ["basisDayUseRevenuePrecisionRate"]),
       basisDayUsePricedSoldOut: numericField(row, ["데이유즈기준일가격확인판매수량", "basisDayUsePricedSoldOut"]),
       basisDayUseMissingPriceSoldOut: numericField(row, ["데이유즈기준일가격누락판매수량", "basisDayUseMissingPriceSoldOut"]),
       basisDayUseAvgSoldUnitPrice: numericField(row, ["데이유즈기준일평균판매단가", "basisDayUseAvgSoldUnitPrice"]),
@@ -5536,6 +5580,9 @@ function summarizeAvailabilityRows(rows) {
       dayUseWeeklyTotalStock,
       dayUseWeeklyBasisTotal: numericField(row, ["dayUseWeeklyBasisTotal"]),
       dayUseWeeklyEstimatedRevenue,
+      dayUseWeeklyAdjustedRevenue,
+      dayUseWeeklyMissingPriceEstimatedRevenue,
+      dayUseWeeklyRevenuePrecisionRate,
       dayUseWeeklyPricedSoldOut,
       dayUseWeeklyMissingPriceSoldOut,
       dayUseWeeklyAvgSoldUnitPrice,
@@ -5596,9 +5643,16 @@ function summarizeAvailabilityRows(rows) {
   const totalRooms = items.reduce((sum, item) => sum + item.totalRooms, 0);
   const totalSoldOutRooms = items.reduce((sum, item) => sum + item.soldOutRooms, 0);
   const totalEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.weeklyEstimatedRevenue ?? item.basisLodgingRevenue ?? 0), 0);
+  const totalAdjustedEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.weeklyAdjustedRevenue ?? item.basisLodgingAdjustedRevenue ?? item.weeklyEstimatedRevenue ?? item.basisLodgingRevenue ?? 0), 0);
+  const totalMissingPriceEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.weeklyMissingPriceEstimatedRevenue ?? item.basisLodgingMissingPriceEstimatedRevenue ?? 0), 0);
   const totalPricedSoldOut = items.reduce((sum, item) => sum + Number(item.weeklyPricedSoldOut ?? item.basisLodgingPricedSoldOut ?? 0), 0);
   const totalMissingPriceSoldOut = items.reduce((sum, item) => sum + Number(item.weeklyMissingPriceSoldOut ?? item.basisLodgingMissingPriceSoldOut ?? 0), 0);
   const dayUseEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0), 0);
+  const dayUseAdjustedEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.dayUseWeeklyAdjustedRevenue ?? item.basisDayUseAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0), 0);
+  const dayUseMissingPriceEstimatedRevenue = items.reduce((sum, item) => sum + Number(item.dayUseWeeklyMissingPriceEstimatedRevenue ?? item.basisDayUseMissingPriceEstimatedRevenue ?? 0), 0);
+  const revenuePrecisionRate = (totalPricedSoldOut + totalMissingPriceSoldOut)
+    ? Number((totalPricedSoldOut / (totalPricedSoldOut + totalMissingPriceSoldOut)).toFixed(3))
+    : null;
   return {
     stats: {
       checkedPlaces: items.length,
@@ -5606,10 +5660,15 @@ function summarizeAvailabilityRows(rows) {
       totalSoldOutRooms,
       totalRooms,
       totalEstimatedRevenue,
+      totalAdjustedEstimatedRevenue,
+      totalMissingPriceEstimatedRevenue,
       totalPricedSoldOut,
       totalMissingPriceSoldOut,
+      revenuePrecisionRate,
       avgSoldUnitPrice: totalPricedSoldOut ? Math.round(totalEstimatedRevenue / totalPricedSoldOut) : null,
       dayUseEstimatedRevenue,
+      dayUseAdjustedEstimatedRevenue,
+      dayUseMissingPriceEstimatedRevenue,
       weightedRate: totalRooms ? Number((totalAvailableRooms / totalRooms).toFixed(3)) : null,
       weightedSoldOutRate: totalRooms ? Number((totalSoldOutRooms / totalRooms).toFixed(3)) : null,
       lowAvailabilityCount: items.filter((item) => item.rate < 0.7).length,
@@ -5710,6 +5769,9 @@ function summarizeCompanyPlatforms(rows) {
     const weeklyBasisTotal = numericField(row, ["주간기준재고수", "weeklyBasisTotal"]);
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
     const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
+    const weeklyAdjustedRevenue = numericField(row, ["weeklyAdjustedRevenue"]);
+    const weeklyMissingPriceEstimatedRevenue = numericField(row, ["weeklyMissingPriceEstimatedRevenue"]);
+    const weeklyRevenuePrecisionRate = numericField(row, ["weeklyRevenuePrecisionRate"]);
     const weeklyPricedSoldOut = numericField(row, ["주간숙박가격확인판매수량", "weeklyPricedSoldOut"]);
     const weeklyMissingPriceSoldOut = numericField(row, ["주간숙박가격누락판매수량", "weeklyMissingPriceSoldOut"]);
     const weeklyAvgSoldUnitPrice = numericField(row, ["주간숙박평균판매단가", "weeklyAvgSoldUnitPrice"]);
@@ -5723,6 +5785,9 @@ function summarizeCompanyPlatforms(rows) {
     const dayUseWeeklyTotalSoldOut = numericField(row, ["dayUseWeeklyTotalSoldOut"]) ?? derivedDayUseWeeklyRates.totalSoldOut;
     const dayUseWeeklyTotalStock = numericField(row, ["dayUseWeeklyTotalStock"]) ?? derivedDayUseWeeklyRates.totalStock;
     const dayUseWeeklyEstimatedRevenue = numericField(row, ["dayUseWeeklyEstimatedRevenue"]);
+    const dayUseWeeklyAdjustedRevenue = numericField(row, ["dayUseWeeklyAdjustedRevenue"]);
+    const dayUseWeeklyMissingPriceEstimatedRevenue = numericField(row, ["dayUseWeeklyMissingPriceEstimatedRevenue"]);
+    const dayUseWeeklyRevenuePrecisionRate = numericField(row, ["dayUseWeeklyRevenuePrecisionRate"]);
     const dayUseWeeklyPricedSoldOut = numericField(row, ["dayUseWeeklyPricedSoldOut"]);
     const dayUseWeeklyMissingPriceSoldOut = numericField(row, ["dayUseWeeklyMissingPriceSoldOut"]);
     const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
@@ -5757,6 +5822,9 @@ function summarizeCompanyPlatforms(rows) {
       weeklyBasisTotal,
       weeklyRawStockVariance,
       weeklyEstimatedRevenue,
+      weeklyAdjustedRevenue,
+      weeklyMissingPriceEstimatedRevenue,
+      weeklyRevenuePrecisionRate,
       weeklyPricedSoldOut,
       weeklyMissingPriceSoldOut,
       weeklyAvgSoldUnitPrice,
@@ -5772,6 +5840,9 @@ function summarizeCompanyPlatforms(rows) {
       dayUseWeeklyTotalStock,
       dayUseWeeklyBasisTotal: numericField(row, ["dayUseWeeklyBasisTotal"]),
       dayUseWeeklyEstimatedRevenue,
+      dayUseWeeklyAdjustedRevenue,
+      dayUseWeeklyMissingPriceEstimatedRevenue,
+      dayUseWeeklyRevenuePrecisionRate,
       dayUseWeeklyPricedSoldOut,
       dayUseWeeklyMissingPriceSoldOut,
       dayUseWeeklyAvgSoldUnitPrice,
@@ -6304,8 +6375,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-location-card-request-queue"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-location-card-request-queue"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-speed-revenue-precision"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-speed-revenue-precision"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
