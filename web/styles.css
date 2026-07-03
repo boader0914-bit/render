@@ -4227,6 +4227,10 @@ a.platform-row:hover {
   background: #fffbeb;
 }
 
+.company-check-revenue-impact div.wide {
+  grid-column: span 2;
+}
+
 .company-check-revenue-impact span,
 .company-check-revenue-impact small {
   color: var(--muted);
@@ -4257,6 +4261,10 @@ a.platform-row:hover {
 .company-check-revenue-impact div.bad {
   border-color: #fecaca;
   background: #fef3f2;
+}
+
+.company-check-revenue-impact div.bad strong {
+  color: #b42318;
 }
 
 .company-recheck-card {
@@ -8292,6 +8300,10 @@ a.platform-row:hover {
   .sales-contact-actions,
   .company-profile-keywords {
     grid-template-columns: 1fr;
+  }
+
+  .company-check-revenue-impact div.wide {
+    grid-column: auto;
   }
 
   .target-board-hero {

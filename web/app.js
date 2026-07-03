@@ -1271,6 +1271,13 @@ function itemRevenueStats(item = {}, kind = "lodging") {
   };
 }
 
+function revenueParsedCount(match) {
+  if (!match) return 0;
+  const value = String(match[1] || "").replace(/,/g, "");
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
 function revenueDayTypeRows(revenue = {}) {
   const text = String(revenue.byDayType || "").trim();
   const unit = revenue.unit || "";
@@ -1280,15 +1287,15 @@ function revenueDayTypeRows(revenue = {}) {
     const match = entry.match(/^(평일|금요일|토요일|일요일)\s+(.+?)\((.*)\)$/);
     if (!match) return null;
     const detail = match[3] || "";
-    const countMatch = detail.match(new RegExp(`(\\d+)\\s*${unit || "[개회]"}`));
-    const offlineMatch = detail.match(/오프라인\s+(\d+)/);
-    const missingMatch = detail.match(/가격누락\s+(\d+)/);
+    const countMatch = detail.match(new RegExp(`([\\d,]+)\\s*${unit || "[개회]"}`));
+    const offlineMatch = detail.match(/오프라인\s+([\d,]+)/);
+    const missingMatch = detail.match(/가격누락\s+([\d,]+)/);
     return {
       label: match[1],
       revenueText: match[2],
-      pricedSoldOut: countMatch ? Number(countMatch[1]) : 0,
-      offlineReserved: offlineMatch ? Number(offlineMatch[1]) : 0,
-      missingPriceSoldOut: missingMatch ? Number(missingMatch[1]) : 0,
+      pricedSoldOut: revenueParsedCount(countMatch),
+      offlineReserved: revenueParsedCount(offlineMatch),
+      missingPriceSoldOut: revenueParsedCount(missingMatch),
       detail,
       unit,
       order: order.indexOf(match[1])
@@ -3205,6 +3212,9 @@ function companyQueueRevenueImpact(company = {}) {
   const totalPricedSoldOut = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
   const totalMissingPriceSoldOut = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
   const precision = revenuePrecisionProfile(item || {}, lodging, dayUse);
+  const lodgingDayRows = revenueDayTypeRows(lodging);
+  const dayUseDayRows = revenueDayTypeRows(dayUse);
+  const productRows = item ? revenueProductRows(item) : [];
   const hasDetail = Boolean(
     totalRevenue ||
     totalPricedSoldOut ||
@@ -3214,12 +3224,16 @@ function companyQueueRevenueImpact(company = {}) {
     lodging.byDayType ||
     dayUse.byDayType ||
     lodging.offlineDetail ||
-    dayUse.offlineDetail
+    dayUse.offlineDetail ||
+    productRows.length
   );
   return {
     hasDetail,
     lodging,
     dayUse,
+    lodgingDayRows,
+    dayUseDayRows,
+    productRows,
     totalRevenue,
     totalPricedSoldOut,
     totalMissingPriceSoldOut,
@@ -4291,7 +4305,7 @@ function salesTargetCsv(entries = []) {
 }
 
 function salesGateCsv(entries = salesGateReviewEntries(0)) {
-  const headers = ["업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "보류상태", "큐유형", "워크플로우", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "추천조치", "추천근거", "예상매출", "매출정밀도", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
+  const headers = ["업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "보류상태", "큐유형", "워크플로우", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "추천조치", "추천근거", "예상매출", "매출정밀도", "요일가격확보", "상품수량근거", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
   const rows = entries.map((entry) => {
     const company = entry.company || {};
     const item = entry.item || {};
@@ -4306,6 +4320,8 @@ function salesGateCsv(entries = salesGateReviewEntries(0)) {
     const revenue = finiteNumber(revenueImpact.totalRevenue, 0);
     const pricedSoldOut = finiteNumber(revenueImpact.totalPricedSoldOut, 0);
     const missingPriceSoldOut = finiteNumber(revenueImpact.totalMissingPriceSoldOut, 0);
+    const dayCoverage = queueRevenueDayCoverageSummary(revenueImpact);
+    const productCoverage = queueRevenueProductCoverageSummary(revenueImpact);
     return [
       company.companyId || "",
       company.primaryName || item.name || "",
@@ -4325,6 +4341,8 @@ function salesGateCsv(entries = salesGateReviewEntries(0)) {
       recommendationReasons.slice(0, 3).join(" | "),
       revenue || "",
       [precision.grade, precision.label].filter(Boolean).join(" · "),
+      dayCoverage.csv || "",
+      productCoverage.csv || "",
       pricedSoldOut || "",
       missingPriceSoldOut || "",
       company.adminReview?.note || "",
@@ -4336,7 +4354,7 @@ function salesGateCsv(entries = salesGateReviewEntries(0)) {
 }
 
 function decisionQueueCsv(entries = [], context = {}) {
-  const headers = ["필터", "검색어", "업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "우선도", "우선도점수", "워크플로우", "큐유형", "현재관리상태", "자동추천", "추천근거", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "재수집설정", "예상소요", "예상매출", "매출정밀도", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
+  const headers = ["필터", "검색어", "업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "우선도", "우선도점수", "워크플로우", "큐유형", "현재관리상태", "자동추천", "추천근거", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "재수집설정", "예상소요", "예상매출", "매출정밀도", "요일가격확보", "상품수량근거", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
   const rows = entries.map((entry) => {
     const company = entry.company || {};
     const decision = entry.decision || {};
@@ -4349,6 +4367,8 @@ function decisionQueueCsv(entries = [], context = {}) {
     const decisionReasons = Array.isArray(decision.reasons) ? decision.reasons : [];
     const decisionActions = Array.isArray(decision.actions) ? decision.actions : [];
     const workflowReasons = Array.isArray(entry.workflow?.reasons) ? entry.workflow.reasons : [];
+    const dayCoverage = queueRevenueDayCoverageSummary(revenueImpact);
+    const productCoverage = queueRevenueProductCoverageSummary(revenueImpact);
     return [
       context.filterLabel || "",
       context.query || "",
@@ -4374,6 +4394,8 @@ function decisionQueueCsv(entries = [], context = {}) {
       `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`,
       finiteNumber(revenueImpact.totalRevenue, 0) || "",
       [precision.grade, precision.label].filter(Boolean).join(" · "),
+      dayCoverage.csv || "",
+      productCoverage.csv || "",
       finiteNumber(revenueImpact.totalPricedSoldOut, 0) || "",
       finiteNumber(revenueImpact.totalMissingPriceSoldOut, 0) || "",
       company.adminReview?.note || "",
@@ -6442,12 +6464,126 @@ function queueRevenueDetailShort(part = {}, fallback = "요일별 가격/수량 
   return compactListText([part.byDayType, part.offlineDetail, part.detail].filter(Boolean), fallback, 2);
 }
 
+function queueRevenueDayCoverageSummary(impact = {}) {
+  const labels = ["평일", "금요일", "토요일", "일요일"];
+  const sourceRows = [
+    ...(impact.lodgingDayRows || []).map((row) => ({ ...row, kindLabel: "숙박", unit: row.unit || "개" })),
+    ...(impact.dayUseDayRows || []).map((row) => ({ ...row, kindLabel: "데이유즈", unit: row.unit || "회" }))
+  ];
+  const segments = labels.map((label) => {
+    const rows = sourceRows.filter((row) => row.label === label);
+    const priced = rows.reduce((sum, row) => sum + finiteNumber(row.pricedSoldOut, 0), 0);
+    const missing = rows.reduce((sum, row) => sum + finiteNumber(row.missingPriceSoldOut, 0), 0);
+    const offline = rows.reduce((sum, row) => sum + finiteNumber(row.offlineReserved, 0), 0);
+    const countText = rows.length
+      ? rows.map((row) => `${row.kindLabel} ${fmtNumber(row.pricedSoldOut)}${row.unit}`).join(" + ")
+      : "대기";
+    return { label, rows, priced, missing, offline, countText };
+  });
+  const covered = segments.filter((row) => row.rows.length).length;
+  const missing = segments.reduce((sum, row) => sum + row.missing, 0);
+  const offline = segments.reduce((sum, row) => sum + row.offline, 0);
+  const tone = covered === labels.length && !missing ? "good" : covered ? "watch" : "bad";
+  const detail = compactListText(
+    segments.map((row) => {
+      if (!row.rows.length) return `${row.label} 대기`;
+      const flags = [
+        row.missing ? `가격누락 ${fmtNumber(row.missing)}개/회` : "",
+        row.offline ? `오프라인 ${fmtNumber(row.offline)}개/회` : ""
+      ].filter(Boolean);
+      return `${row.label} ${row.countText}${flags.length ? ` · ${flags.join(" · ")}` : ""}`;
+    }),
+    "요일별 가격/판매수량 대기",
+    4
+  );
+  return {
+    tone,
+    value: `${fmtNumber(covered)}/4개 요일 확보`,
+    detail,
+    csv: `${fmtNumber(covered)}/4개 요일 확보${missing ? ` · 가격누락 ${fmtNumber(missing)}개/회` : ""}${offline ? ` · 오프라인 ${fmtNumber(offline)}개/회` : ""} | ${detail}`
+  };
+}
+
+function queueRevenueProductKindSummary(label, rows = [], part = {}, unit = "개") {
+  const productCount = rows.length;
+  const quantityKnown = rows.filter((row) => row.quantityKnown).length;
+  const priceKnown = rows.filter((row) => Number.isFinite(row.price)).length;
+  const stockTotal = rows.reduce((sum, row) => sum + (Number.isFinite(row.stock) ? row.stock : 0), 0);
+  const soldTotal = rows.reduce((sum, row) => sum + finiteNumber(row.sold, 0), 0);
+  const priced = finiteNumber(part.pricedSoldOut, 0);
+  const missing = finiteNumber(part.missingPriceSoldOut, 0);
+  const hasSalesBasis = Boolean(productCount || priced || missing || finiteNumber(part.revenue, 0));
+  if (!hasSalesBasis) {
+    return {
+      label,
+      tone: "good",
+      hasSalesBasis: false,
+      value: `${label} 대기`,
+      detail: "판매근거 없음"
+    };
+  }
+  const value = productCount
+    ? `${label} ${fmtNumber(productCount)}종 · 판매 ${fmtNumber(soldTotal)}${unit}`
+    : `${label} 상품목록 대기 · 판매 ${fmtNumber(priced + missing)}${unit}`;
+  const quantityText = productCount
+    ? (stockTotal ? `총량 ${fmtNumber(stockTotal)}${unit}` : `총량확인 ${fmtNumber(quantityKnown)}/${fmtNumber(productCount)}종`)
+    : "상품목록 미확보";
+  const priceText = productCount
+    ? `가격 ${fmtNumber(priceKnown)}/${fmtNumber(productCount)}종`
+    : `가격확인 ${fmtNumber(priced)}${unit}`;
+  const tone = missing ? "watch" : (productCount && quantityKnown === productCount && priceKnown === productCount ? "good" : "watch");
+  return {
+    label,
+    tone,
+    hasSalesBasis: true,
+    value,
+    detail: `${quantityText} · ${priceText}${missing ? ` · 가격누락 ${fmtNumber(missing)}${unit}` : ""} · 매출 ${fmtWon(part.revenue)}`
+  };
+}
+
+function queueRevenueProductCoverageSummary(impact = {}) {
+  const productRows = impact.productRows || [];
+  const lodging = queueRevenueProductKindSummary(
+    "숙박",
+    productRows.filter((row) => row.kind !== "day"),
+    impact.lodging || {},
+    "개"
+  );
+  const dayUse = queueRevenueProductKindSummary(
+    "데이유즈/캠프닉",
+    productRows.filter((row) => row.kind === "day"),
+    impact.dayUse || {},
+    "회"
+  );
+  const summaries = [lodging, dayUse];
+  const activeSummaries = summaries.filter((row) => row.hasSalesBasis);
+  const productCount = productRows.length;
+  const priced = finiteNumber(impact.totalPricedSoldOut, 0);
+  const missing = finiteNumber(impact.totalMissingPriceSoldOut, 0);
+  const value = productCount
+    ? `상품 ${fmtNumber(productCount)}종 · 가격확인 ${fmtNumber(priced)}개/회`
+    : priced || missing
+      ? `판매근거 ${fmtNumber(priced + missing)}개/회`
+      : "상품 근거 대기";
+  const tone = missing ? "watch" : (productCount && activeSummaries.length && activeSummaries.every((row) => row.tone === "good") ? "good" : "watch");
+  const detailRows = activeSummaries.length ? activeSummaries : summaries;
+  const detail = compactListText(detailRows.map((row) => `${row.label}: ${row.detail}`), "상품별 수량/가격 대기", 2);
+  return {
+    tone,
+    value,
+    detail,
+    csv: `${value} | ${detail}`
+  };
+}
+
 function companyQueueRevenueImpactHtml(company = {}) {
   const impact = companyQueueRevenueImpact(company);
   if (!impact.hasDetail) return "";
   const priceTone = impact.totalMissingPriceSoldOut > 0 ? "watch" : "good";
   const precision = impact.precision || {};
   const sourceText = impact.source === "current" ? "현재 수집 결과" : "업체 최신 스냅샷";
+  const dayCoverage = queueRevenueDayCoverageSummary(impact);
+  const productCoverage = queueRevenueProductCoverageSummary(impact);
   return `
     <div class="company-check-revenue-impact">
       <div>
@@ -6469,6 +6605,16 @@ function companyQueueRevenueImpactHtml(company = {}) {
         <span>매출 신뢰도</span>
         <strong>${escapeHtml(precision.grade ? `${precision.grade} · ${fmtNumber(precision.score)}점` : "대기")}</strong>
         <small>${escapeHtml((precision.reasons || []).slice(0, 2).join(" · ") || "가격/수량 정밀 확인 필요")}</small>
+      </div>
+      <div class="${escapeHtml(dayCoverage.tone)} wide">
+        <span>요일별 가격 확보</span>
+        <strong>${escapeHtml(dayCoverage.value)}</strong>
+        <small>${escapeHtml(dayCoverage.detail)}</small>
+      </div>
+      <div class="${escapeHtml(productCoverage.tone)} wide">
+        <span>상품종류별 수량</span>
+        <strong>${escapeHtml(productCoverage.value)}</strong>
+        <small>${escapeHtml(productCoverage.detail)}</small>
       </div>
     </div>
   `;
