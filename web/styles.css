@@ -3432,6 +3432,63 @@ a.platform-row:hover {
   background: #fff;
 }
 
+.company-check-search {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.company-check-search label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.company-check-search span,
+.company-check-search small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.company-check-search input {
+  min-width: 0;
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 850;
+  outline: none;
+}
+
+.company-check-search input:focus {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(49, 130, 246, 0.12);
+}
+
+.company-check-search button {
+  min-height: 38px;
+  border: 1px solid #bfd7ff;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .company-check-filters {
   display: flex;
   flex-wrap: wrap;
@@ -8093,6 +8150,7 @@ a.platform-row:hover {
   .company-decision-evidence,
   .company-check-action-plan,
   .company-check-revenue-impact,
+  .company-check-search,
   .company-recheck-grid,
   .company-queue-ops,
   .company-queue-ops-grid,
@@ -8622,6 +8680,7 @@ a.platform-row:hover {
   .company-decision-evidence,
   .company-check-action-plan,
   .company-check-revenue-impact,
+  .company-check-search,
   .company-recheck-grid,
   .company-queue-ops,
   .company-queue-ops-grid,

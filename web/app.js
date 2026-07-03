@@ -14,7 +14,8 @@ const state = {
     query: "",
     layer: "all",
     target: "all",
-    check: "priority"
+    check: "priority",
+    checkQuery: ""
   },
   crawlEtaByKey: {},
   selectedLocationCard: null,
@@ -6474,6 +6475,46 @@ function companyCheckFilterMatches(entry = {}, filter = "priority") {
   return open && entry.type.key === filter;
 }
 
+function companyCheckSearchMatches(entry = {}, query = "") {
+  if (!query) return true;
+  const company = entry.company || {};
+  const decision = entry.decision || {};
+  const profile = entry.profile || {};
+  const array = (value) => Array.isArray(value) ? value : [];
+  const text = compactSearchText([
+    company.companyId,
+    company.primaryName,
+    ...array(company.aliases),
+    ...array(company.regions),
+    ...array(company.addresses),
+    company.bestKeyword,
+    company.latestKeyword,
+    ...array(company.keywords).map((row) => row.keyword).filter(Boolean),
+    ...array(company.salesTarget?.priorityTags),
+    ...array(company.salesTarget?.reasons),
+    company.salesTarget?.recommendation,
+    company.exposureLayer?.label,
+    entry.type?.label,
+    entry.workflow?.label,
+    ...array(entry.workflow?.reasons),
+    entry.priority?.label,
+    decision.label,
+    decision.summary,
+    decision.problemDateText,
+    decision.quantityConfidence,
+    decision.gapType,
+    decision.channelText,
+    ...array(decision.reasons),
+    ...array(decision.actions),
+    ...array(decision.criteria).flatMap((criterion) => [criterion.label, criterion.reason, criterion.action]),
+    ...array(profile.issues).flatMap((issue) => [issue.label, issue.task]),
+    entry.autoRecommendation?.label,
+    ...array(entry.autoRecommendation?.reasons),
+    entry.revenueImpact?.precision?.label
+  ].filter(Boolean).join(" "));
+  return text.includes(query);
+}
+
 function companyDecisionQueueEntries(master = {}) {
   return (master.companies || [])
     .map((company) => {
@@ -7083,8 +7124,11 @@ function companyMasterCheckPanel(master = {}) {
   const entries = companyDecisionQueueEntries(master);
   const filters = state.companyMasterFilters || {};
   const selectedFilter = filters.check || "priority";
+  const checkQuery = filters.checkQuery || "";
+  const checkSearch = compactSearchText(checkQuery);
   const countForFilter = (value) => entries.filter((entry) => companyCheckFilterMatches(entry, value)).length;
-  const visibleEntries = entries.filter((entry) => companyCheckFilterMatches(entry, selectedFilter));
+  const filteredEntries = entries.filter((entry) => companyCheckFilterMatches(entry, selectedFilter));
+  const visibleEntries = filteredEntries.filter((entry) => companyCheckSearchMatches(entry, checkSearch));
   const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
   const criterionCount = (key) => openEntries.filter((entry) => (entry.decision.criteria || []).some((criterion) => criterion.key === key)).length;
   const reviewStatusCount = (status) => entries.filter((entry) => entry.company.adminReview?.status === status).length;
@@ -7104,7 +7148,7 @@ function companyMasterCheckPanel(master = {}) {
           <strong>관리자 판단 큐 V2</strong>
           <small>OTA, 수량 구조, 날짜별 총량 변동, 판매 공백, 보정 후 재검토 기준으로 컨택 전 확인할 업체입니다.</small>
         </div>
-        <span>${fmtNumber(displayedEntries.length)}/${fmtNumber(visibleEntries.length)}개 표시 · 전체 ${fmtNumber(entries.length)}</span>
+        <span>${fmtNumber(displayedEntries.length)}/${fmtNumber(visibleEntries.length)}개 표시 · 필터 ${fmtNumber(filteredEntries.length)} · 전체 ${fmtNumber(entries.length)}</span>
       </div>
       <div class="company-check-metrics">
         ${metrics.map(([label, value, note]) => `
@@ -7117,6 +7161,14 @@ function companyMasterCheckPanel(master = {}) {
       </div>
       ${recrawlAutomationBoardHtml(entries)}
       ${companyQueueOperationSummaryHtml(entries)}
+      <div class="company-check-search">
+        <label>
+          <span>큐 검색</span>
+          <input type="search" data-company-check-search value="${escapeHtml(checkQuery)}" placeholder="업체명, 지역, 키워드, 큐사유, 확인채널">
+        </label>
+        <small>${escapeHtml(checkSearch ? `현재 필터 ${fmtNumber(filteredEntries.length)}개 중 ${fmtNumber(visibleEntries.length)}개 표시` : "업체명·지역·키워드·큐사유·확인채널로 빠르게 좁힙니다.")}</small>
+        ${checkSearch ? `<button type="button" data-company-check-search-clear>검색 해제</button>` : ""}
+      </div>
       <div class="company-check-filters">
         ${companyCheckFilterOptions().map(([value, label]) => `
           <button type="button" class="${selectedFilter === value ? "active" : ""}" data-company-check-filter="${escapeHtml(value)}">
@@ -7128,7 +7180,7 @@ function companyMasterCheckPanel(master = {}) {
       <div class="company-check-list">
         ${displayedEntries.length
           ? displayedEntries.map(companyCheckEntryHtml).join("")
-          : `<p class="empty">해당 조건의 확인할 업체가 없습니다.</p>`}
+          : `<p class="empty">${escapeHtml(checkSearch ? "검색 조건에 맞는 판단 큐 업체가 없습니다." : "해당 조건의 확인할 업체가 없습니다.")}</p>`}
         ${hiddenCount ? `<p class="company-check-more">상위 ${fmtNumber(displayedEntries.length)}개를 먼저 표시합니다. 남은 ${fmtNumber(hiddenCount)}개는 아래 업체 마스터에서 검색해 확인하세요.</p>` : ""}
       </div>
     </section>
@@ -7407,13 +7459,19 @@ function renderDecisionQueue() {
 
 function rerenderCompanyMasterPreservingSearch() {
   const active = document.activeElement;
-  const preserveSearch = active?.matches?.("[data-company-master-search]");
+  const preserveSelector = active?.matches?.("[data-company-master-search]")
+    ? "[data-company-master-search]"
+    : active?.matches?.("[data-company-check-search]")
+      ? "[data-company-check-search]"
+      : "";
+  const preserveSearch = Boolean(preserveSelector);
   const selectionStart = preserveSearch ? active.selectionStart : null;
   const selectionEnd = preserveSearch ? active.selectionEnd : null;
+  const previousValue = preserveSearch ? active.value : "";
   renderCompanyMasterPanel();
   renderDecisionQueue();
   if (preserveSearch) {
-    const input = document.querySelector("[data-company-master-search]");
+    const input = Array.from(document.querySelectorAll(preserveSelector)).find((node) => node.value === previousValue) || document.querySelector(preserveSelector);
     input?.focus();
     if (input && selectionStart !== null && selectionEnd !== null) {
       input.setSelectionRange(selectionStart, selectionEnd);
@@ -10360,6 +10418,11 @@ function bindEvents() {
       renderCompanyMasterPanel();
       renderDecisionQueue();
     }
+    if (event.target.closest("[data-company-check-search-clear]")) {
+      state.companyMasterFilters.checkQuery = "";
+      renderCompanyMasterPanel();
+      renderDecisionQueue();
+    }
     const backfillButton = event.target.closest("[data-company-backfill]");
     if (backfillButton) backfillCompanyMaster(backfillButton);
     if (event.target.closest("[data-close-sheet]")) closeSheet();
@@ -10368,6 +10431,12 @@ function bindEvents() {
     if (drawerTab) setActiveTab(drawerTab.dataset.drawerTab);
   });
   document.addEventListener("input", (event) => {
+    const checkSearch = event.target.closest("[data-company-check-search]");
+    if (checkSearch) {
+      state.companyMasterFilters.checkQuery = checkSearch.value || "";
+      rerenderCompanyMasterPreservingSearch();
+      return;
+    }
     const search = event.target.closest("[data-company-master-search]");
     if (!search) return;
     state.companyMasterFilters.query = search.value || "";
