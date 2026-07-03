@@ -3779,6 +3779,30 @@ function salesGateReviewActionsHtml(entry = {}) {
   `;
 }
 
+function salesGateBulkReviewHtml(entries = []) {
+  const count = entries.filter((entry) => entry.company?.companyId).length;
+  if (!count) return "";
+  const actions = [
+    ["recrawl_needed", "재수집"],
+    ["check_needed", "확인"],
+    ["manual_needed", "보정"],
+    ["contact_ready", "컨택"],
+    ["hold", "보류"]
+  ];
+  return `
+    <div class="target-gate-bulk" data-sales-gate-bulk>
+      <div>
+        <strong>보류 게이트 일괄 처리</strong>
+        <small>${escapeHtml(`현재 보류 대상 ${fmtNumber(count)}개 · 저장 후 컨택 가능 업체는 영업타깃으로 이동`)}</small>
+      </div>
+      <input type="text" data-sales-gate-bulk-note value="${escapeHtml(`보류 게이트 일괄 처리: ${fmtNumber(count)}개`)}" placeholder="보류 게이트 일괄 처리 메모">
+      <div>
+        ${actions.map(([status, label]) => `<button type="button" data-sales-gate-bulk-action="${escapeHtml(status)}">${escapeHtml(label)}</button>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function salesGateRevenueEvidenceHtml(entry = {}) {
   const company = entry.company || {};
   const profile = entry.profile || {};
@@ -8448,6 +8472,7 @@ function renderTargets() {
         <span>${fmtNumber(batchRows.length)}</span>
       </div>
       ${salesGateBatchHtml(batchRows)}
+      ${salesGateBulkReviewHtml(batchRows)}
       <div class="target-gate-list">
         ${rows.map((entry, index) => {
           const { company, workflow, type, decision, autoRecommendation, revenueImpact, gateReason, gateStatus } = entry;
@@ -10454,6 +10479,60 @@ async function saveCompanySalesContact(button) {
   }
 }
 
+async function applySalesGateBulkReview(button) {
+  const status = button?.dataset?.salesGateBulkAction || "";
+  if (!status) return;
+  const entries = salesGateReviewEntries(0);
+  const rows = entries
+    .map((entry) => ({ entry, companyId: entry.company?.companyId || "" }))
+    .filter((row) => row.companyId);
+  if (!rows.length) {
+    setStatus("일괄 처리할 보류 게이트 없음");
+    return;
+  }
+  const label = companyAdminReviewLabel(status);
+  if (rows.length > 12 && !window.confirm(`보류 게이트 ${fmtNumber(rows.length)}개 업체를 '${label}' 상태로 일괄 저장할까요?`)) {
+    return;
+  }
+  const panel = button.closest("[data-sales-gate-bulk]");
+  const buttons = panel ? Array.from(panel.querySelectorAll("button")) : [button];
+  const note = panel?.querySelector("[data-sales-gate-bulk-note]")?.value || `보류 게이트 일괄 처리: ${label}`;
+  buttons.forEach((item) => { item.disabled = true; });
+  setStatus(`${label} 보류 게이트 일괄 저장 중 0/${fmtNumber(rows.length)}`);
+  let latestData = null;
+  let saved = 0;
+  let failed = 0;
+  for (const { companyId } of rows) {
+    const reviewContext = companyReviewContextForCompany(companyId, status, "sales_gate_bulk");
+    if (reviewContext) {
+      reviewContext.summary = compactListText([
+        `보류 게이트 일괄 ${label}`,
+        reviewContext.summary
+      ], `보류 게이트 일괄 ${label}`, 4);
+    }
+    try {
+      latestData = await fetchJson("/api/company-master/admin-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId, status, note, reviewContext })
+      });
+      saved += 1;
+      setStatus(`${label} 보류 게이트 일괄 저장 중 ${fmtNumber(saved)}/${fmtNumber(rows.length)}`);
+    } catch {
+      failed += 1;
+    }
+  }
+  if (latestData) {
+    state.companyMaster = latestData;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...latestData };
+    renderCompanyMasterPanel();
+    renderDecisionQueue();
+    renderTargets();
+  }
+  buttons.forEach((item) => { item.disabled = false; });
+  setStatus(failed ? `${label} 일괄 저장 완료 · 실패 ${fmtNumber(failed)}개` : `${label} 일괄 저장 완료`);
+}
+
 function exportSalesTargetsCsv() {
   const entries = companySalesBoardEntries();
   if (!entries.length) {
@@ -11137,6 +11216,8 @@ function bindEvents() {
     if (reviewAction) saveCompanyAdminReview(reviewAction);
     const bulkReviewAction = event.target.closest("[data-company-check-bulk-action]");
     if (bulkReviewAction) applyCompanyCheckBulkReview(bulkReviewAction);
+    const salesGateBulkAction = event.target.closest("[data-sales-gate-bulk-action]");
+    if (salesGateBulkAction) applySalesGateBulkReview(salesGateBulkAction);
     const salesContact = event.target.closest("[data-save-sales-contact]");
     if (salesContact) saveCompanySalesContact(salesContact);
     const salesScript = event.target.closest("[data-copy-sales-script]");

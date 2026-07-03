@@ -2186,6 +2186,67 @@ a.platform-row:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.target-gate-bulk {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(160px, .8fr) auto;
+  gap: 9px;
+  align-items: center;
+  border: 1px solid #dbeafe;
+  border-radius: 13px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.target-gate-bulk > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.target-gate-bulk > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.target-gate-bulk strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.target-gate-bulk small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.target-gate-bulk input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 9px 10px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.target-gate-bulk button {
+  min-height: 32px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .target-gate-list article {
   min-width: 0;
   display: grid;
@@ -8385,6 +8446,7 @@ a.platform-row:hover {
   .target-gate-recrawl,
   .target-gate-batch .recrawl-batch-list,
   .target-gate-review .company-review-actions.compact,
+  .target-gate-bulk,
   .sales-pipeline-grid,
   .sales-performance-metrics,
   .sales-proposal-response-grid,
@@ -8922,6 +8984,7 @@ a.platform-row:hover {
   .target-gate-recrawl,
   .target-gate-batch .recrawl-batch-list,
   .target-gate-review .company-review-actions.compact,
+  .target-gate-bulk,
   .target-gate-head,
   .sales-pipeline-grid,
   .sales-performance-metrics,
