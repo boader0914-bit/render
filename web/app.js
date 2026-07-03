@@ -3709,15 +3709,16 @@ function companySalesBoardEntries() {
       const item = companyItemFromCurrentRun(company);
       const decision = companyDecisionQueueProfile(company);
       const revenueImpact = companyQueueRevenueImpact(company);
+      const revenueEvidence = queueRevenueEvidenceProfile(revenueImpact);
       const comparison = companyRecrawlComparison(company);
       const contact = company.salesContact || {};
       const executionScore = companySalesExecutionScore(company, revenueImpact, comparison);
       const followUp = companySalesFollowUpProfile(company, revenueImpact);
       const followUpScore = companySalesFollowUpScore(company, revenueImpact, followUp);
       const priorityScore = executionScore + followUpScore;
-      return { company, stage, action, item, decision, revenueImpact, comparison, contact, executionScore, followUp, followUpScore, priorityScore };
+      return { company, stage, action, item, decision, revenueImpact, revenueEvidence, comparison, contact, executionScore, followUp, followUpScore, priorityScore };
     })
-    .filter((entry) => ["confirmed", "contact"].includes(entry.stage.key) && !entry.decision.inQueue)
+    .filter((entry) => ["confirmed", "contact"].includes(entry.stage.key) && !entry.decision.inQueue && (!entry.revenueEvidence.weak || ["confirmed", "contact_ready"].includes(entry.company.adminReview?.status || "")))
     .sort((a, b) => a.stage.priority - b.stage.priority || a.followUp.priority - b.followUp.priority || b.priorityScore - a.priorityScore || (b.company.salesTarget?.score || 0) - (a.company.salesTarget?.score || 0) || (a.company.bestRank || 9999) - (b.company.bestRank || 9999));
 }
 
@@ -3745,6 +3746,43 @@ function salesGateReviewEntries(limit = 8) {
       };
     });
   return limit ? rows.slice(0, limit) : rows;
+}
+
+function salesGateRevenueEvidenceHtml(entry = {}) {
+  const company = entry.company || {};
+  const profile = entry.profile || {};
+  const decision = entry.decision || {};
+  const revenueImpact = entry.revenueImpact || {};
+  const revenueEvidence = entry.revenueEvidence || queueRevenueEvidenceProfile(revenueImpact);
+  const dayCoverage = queueRevenueDayCoverageSummary(revenueImpact);
+  const productCoverage = queueRevenueProductCoverageSummary(revenueImpact);
+  const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const eta = crawlEtaForPlan(plan);
+  const reasonText = compactListText(revenueEvidence.reasons || [], "매출 근거는 현재 기준 안정적입니다.", 3);
+  return `
+    <div class="target-gate-evidence ${escapeHtml(revenueEvidence.weak ? "watch" : "good")}">
+      <div>
+        <span>요일 가격</span>
+        <strong>${escapeHtml(dayCoverage.value)}</strong>
+        <small>${escapeHtml(dayCoverage.detail)}</small>
+      </div>
+      <div>
+        <span>상품 수량</span>
+        <strong>${escapeHtml(productCoverage.value)}</strong>
+        <small>${escapeHtml(productCoverage.detail)}</small>
+      </div>
+      <div>
+        <span>보류 근거</span>
+        <strong>${escapeHtml(revenueEvidence.label)}</strong>
+        <small>${escapeHtml(reasonText)}</small>
+      </div>
+    </div>
+    <div class="target-gate-recrawl">
+      <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="sales_gate">수집 설정 적용</button>
+      <small>${escapeHtml(`${plan.keyword || activeKeyword()} · ${plan.regionScope ? `지역 ${plan.regionScope} · ` : ""}${plan.keywordSource || "업체 기준"} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)}`)}</small>
+      ${recrawlRangePresetHtml({ companyId: company.companyId || "", selectedRange: plan.range || "1-20" })}
+    </div>
+  `;
 }
 
 function salesContactOptions() {
@@ -8332,7 +8370,9 @@ function renderTargets() {
         <span>${fmtNumber(rows.length)}</span>
       </div>
       <div class="target-gate-list">
-        ${rows.map(({ company, workflow, type, decision, autoRecommendation, revenueImpact, gateReason, gateStatus }, index) => `
+        ${rows.map((entry, index) => {
+          const { company, workflow, type, decision, autoRecommendation, revenueImpact, gateReason, gateStatus } = entry;
+          return `
           <article class="${escapeHtml(workflow?.tone || type?.key || "watch")}">
             <div class="target-gate-head">
               <mark>${fmtNumber(index + 1)}</mark>
@@ -8348,13 +8388,15 @@ function renderTargets() {
               <div><span>확인 채널</span><strong>${escapeHtml(decision.channelText || "네이버 기준")}</strong><small>${escapeHtml(autoRecommendation?.label || workflow?.label || "관리자 판단")}</small></div>
               <div><span>예상매출</span><strong>${fmtWon(revenueImpact?.totalRevenue || 0)}</strong><small>${escapeHtml(revenueImpact?.precision?.label || "매출 정밀도 대기")}</small></div>
             </div>
+            ${salesGateRevenueEvidenceHtml(entry)}
             <p>${escapeHtml(gateReason)}</p>
             <div class="target-card-actions">
               <button class="secondary-button" type="button" data-drawer-tab="decisionQueue">판단 큐에서 처리</button>
               <button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>
             </div>
           </article>
-        `).join("")}
+        `;
+        }).join("")}
       </div>
     </section>
   ` : "";
@@ -10545,7 +10587,7 @@ function applyQueueRecrawlSetting(button) {
     checkIn: plan.checkIn || "",
     checkOut: plan.checkOut || "",
     etaSeconds: eta.estimatedTotalSeconds || 0,
-    source: "decision_queue"
+    source: button?.dataset?.queueRecrawlSource || "decision_queue"
   };
   const keyword = plan.keyword || activeKeyword();
   if (els.keywordInput) els.keywordInput.value = keyword;
