@@ -3785,6 +3785,52 @@ function salesGateRevenueEvidenceHtml(entry = {}) {
   `;
 }
 
+function salesGateRecrawlRows(entries = salesGateReviewEntries(0)) {
+  return entries
+    .map(recrawlAutomationRow)
+    .filter((row) => row.status === "recrawl_needed" || row.revenueEvidence?.weak || row.entry.type.key === "recrawl" || !row.comparison.hasComparison);
+}
+
+function salesGateRecrawlBatches(entries = salesGateReviewEntries(0)) {
+  return recrawlAutomationBatches(salesGateRecrawlRows(entries));
+}
+
+function salesGateBatchHtml(entries = []) {
+  const rows = salesGateRecrawlBatches(entries).filter((batch) => batch.count > 1).slice(0, 3);
+  if (!rows.length) return "";
+  return `
+    <article class="target-gate-batch recrawl-batch-panel">
+      <div class="history-card-head">
+        <strong>보류 항목 묶음 실행</strong>
+        <small>같은 키워드·지역·기간·상세 범위의 보류 업체를 한 번에 재수집합니다.</small>
+      </div>
+      <div class="recrawl-batch-list">
+        ${rows.map((batch, index) => `
+          <div>
+            <mark>${fmtNumber(index + 1)}</mark>
+            <div>
+              <b>${escapeHtml(batch.plan.keyword || activeKeyword())}</b>
+              <small>${escapeHtml([
+                `${fmtNumber(batch.count)}개 보류`,
+                batch.regionScopes?.length ? `지역 ${batch.regionScopes.slice(0, 2).join(" / ")}` : "",
+                batch.plan.checkIn && batch.plan.checkOut ? `${batch.plan.checkIn}~${batch.plan.checkOut}` : "기간 확인",
+                `상세 ${batch.plan.range || batch.plan.detailRankRanges || "1-20"}위`
+              ].filter(Boolean).join(" · "))}</small>
+              <div class="recrawl-auto-eta">
+                <span><b>묶음 ETA</b>${escapeHtml(batch.etaText || "계산 대기")}</span>
+                <span><b>절감 예상</b>${escapeHtml(batch.savedSeconds ? formatElapsed(batch.savedSeconds) : "중복 없음")}</span>
+              </div>
+              <p>${escapeHtml(`${batch.names.slice(0, 3).join(", ")}${batch.count > 3 ? ` 외 ${fmtNumber(batch.count - 3)}개` : ""} · ${batch.reason}`)}</p>
+              ${recrawlRangePresetHtml({ batchKey: batch.key, selectedRange: batch.plan.range || batch.plan.detailRankRanges || "1-20", source: "sales_gate" })}
+            </div>
+            <button type="button" data-recrawl-batch-key="${escapeHtml(batch.key)}" data-recrawl-batch-source="sales_gate">묶음 설정</button>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
 function salesContactOptions() {
   return [
     ["not_contacted", "미컨택"],
@@ -7094,7 +7140,7 @@ function recrawlRankRangePresets(selectedRange = "1-20") {
   return [...new Set([selectedRange || "1-20", "1-5", "1-10", "10-20", "1-20", "1-30"].filter(Boolean))];
 }
 
-function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange = "1-20" } = {}) {
+function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange = "1-20", source = "" } = {}) {
   const presets = recrawlRankRangePresets(selectedRange);
   return `
     <div class="recrawl-range-presets">
@@ -7102,7 +7148,7 @@ function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange =
       ${presets.map((range) => {
         const attrs = companyId
           ? `data-queue-recrawl-company="${escapeHtml(companyId)}" data-queue-recrawl-range="${escapeHtml(range)}"`
-          : `data-recrawl-batch-key="${escapeHtml(batchKey)}" data-recrawl-batch-range="${escapeHtml(range)}"`;
+          : `data-recrawl-batch-key="${escapeHtml(batchKey)}" data-recrawl-batch-range="${escapeHtml(range)}"${source ? ` data-recrawl-batch-source="${escapeHtml(source)}"` : ""}`;
         return `<button type="button" class="${range === selectedRange ? "active" : ""}" ${attrs}>${escapeHtml(range)}위</button>`;
       }).join("")}
     </div>
@@ -8288,7 +8334,8 @@ function renderTargets() {
   const decisionQueueCount = masterQueueCount || currentQueueCount;
   const actionableCount = confirmed.length + contact.length;
   const currentOnly = currentItems.filter(({ item }) => !boardEntries.some((entry) => entry.item === item)).slice(0, 6);
-  const gatedEntries = salesGateReviewEntries(8);
+  const allGatedEntries = salesGateReviewEntries(0);
+  const gatedEntries = allGatedEntries.slice(0, 8);
 
   els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
   if (!boardEntries.length && !currentItems.length && !gatedEntries.length) {
@@ -8360,15 +8407,16 @@ function renderTargets() {
       </div>
     </section>
   `;
-  const gatePanel = (rows) => rows.length ? `
+  const gatePanel = (rows, batchRows = rows) => rows.length ? `
     <section class="target-gate-panel">
       <div class="target-lane-head">
         <div>
           <strong>컨택 보류 사유</strong>
           <small>판단 큐에 남아 있어 영업타깃에서 제외된 업체와 확인 근거입니다.</small>
         </div>
-        <span>${fmtNumber(rows.length)}</span>
+        <span>${fmtNumber(batchRows.length)}</span>
       </div>
+      ${salesGateBatchHtml(batchRows)}
       <div class="target-gate-list">
         ${rows.map((entry, index) => {
           const { company, workflow, type, decision, autoRecommendation, revenueImpact, gateReason, gateStatus } = entry;
@@ -8419,7 +8467,7 @@ function renderTargets() {
         <button type="button" data-export-sales-gate>보류사유 CSV</button>
       </div>
     </section>
-    ${gatePanel(gatedEntries)}
+    ${gatePanel(gatedEntries, allGatedEntries)}
     ${salesPipelineHtml(pipelineSummary)}
     ${salesPerformanceHtml(performanceSummary, proposalResponseRows)}
     <section class="target-followup-board">
@@ -10613,9 +10661,10 @@ function applyQueueRecrawlSetting(button) {
 
 function applyRecrawlBatchSetting(button) {
   const key = button?.dataset?.recrawlBatchKey || "";
-  const entries = companyDecisionQueueEntries(companyMasterSource());
-  const profile = recrawlAutomationProfile(entries);
-  const batch = recrawlAutomationBatches(profile.needsExecution).find((row) => row.key === key);
+  const source = button?.dataset?.recrawlBatchSource || "decision_queue";
+  const entries = source === "sales_gate" ? salesGateReviewEntries(0) : companyDecisionQueueEntries(companyMasterSource());
+  const rows = source === "sales_gate" ? salesGateRecrawlRows(entries) : recrawlAutomationProfile(entries).needsExecution;
+  const batch = recrawlAutomationBatches(rows).find((row) => row.key === key);
   if (!batch) {
     setStatus("묶음 재수집 설정 실패");
     return;
@@ -10637,7 +10686,7 @@ function applyRecrawlBatchSetting(button) {
     checkOut: plan.checkOut || "",
     savedSeconds: batch.savedSeconds || 0,
     etaSeconds: eta.estimatedTotalSeconds || 0,
-    source: "decision_queue_batch"
+    source: source === "sales_gate" ? "sales_gate_batch" : "decision_queue_batch"
   };
   const keyword = plan.keyword || activeKeyword();
   if (els.keywordInput) els.keywordInput.value = keyword;
@@ -10654,7 +10703,8 @@ function applyRecrawlBatchSetting(button) {
   setActiveTab("admin");
   if (els.crawlStatus) {
     const saved = batch.savedSeconds ? ` · 개별 실행 대비 ${formatElapsed(batch.savedSeconds)} 절감` : "";
-    els.crawlStatus.textContent = `${fmtNumber(batch.count)}개 후보 묶음 재수집 설정을 적용했습니다. 상세 ${plan.range || plan.detailRankRanges || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
+    const label = source === "sales_gate" ? "보류 업체" : "후보";
+    els.crawlStatus.textContent = `${fmtNumber(batch.count)}개 ${label} 묶음 재수집 설정을 적용했습니다. 상세 ${plan.range || plan.detailRankRanges || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
   }
   setStatus("묶음 재수집 설정 적용");
   window.requestAnimationFrame(() => {

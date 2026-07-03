@@ -2177,6 +2177,15 @@ a.platform-row:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.target-gate-batch {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+
+.target-gate-batch .recrawl-batch-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .target-gate-list article {
   min-width: 0;
   display: grid;
@@ -8357,6 +8366,7 @@ a.platform-row:hover {
   .target-gate-grid,
   .target-gate-evidence,
   .target-gate-recrawl,
+  .target-gate-batch .recrawl-batch-list,
   .sales-pipeline-grid,
   .sales-performance-metrics,
   .sales-proposal-response-grid,
@@ -8892,6 +8902,7 @@ a.platform-row:hover {
   .target-gate-grid,
   .target-gate-evidence,
   .target-gate-recrawl,
+  .target-gate-batch .recrawl-batch-list,
   .target-gate-head,
   .sales-pipeline-grid,
   .sales-performance-metrics,
