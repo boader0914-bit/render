@@ -3489,6 +3489,85 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.company-check-bulk {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.8fr);
+  gap: 9px;
+  align-items: center;
+  border: 1px solid #e4e7ec;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.company-check-bulk > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.company-check-bulk strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.company-check-bulk small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-check-bulk input {
+  min-width: 0;
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.company-check-bulk > div:last-of-type {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.company-check-bulk > small {
+  grid-column: 1 / -1;
+}
+
+.company-check-bulk button {
+  min-height: 36px;
+  border: 1px solid #dbe4f0;
+  border-radius: 999px;
+  background: #fff;
+  color: #344054;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-check-bulk button:hover:not(:disabled) {
+  border-color: #93c5fd;
+  color: var(--blue-dark);
+}
+
+.company-check-bulk button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
 .company-check-filters {
   display: flex;
   flex-wrap: wrap;
@@ -8151,6 +8230,7 @@ a.platform-row:hover {
   .company-check-action-plan,
   .company-check-revenue-impact,
   .company-check-search,
+  .company-check-bulk,
   .company-recheck-grid,
   .company-queue-ops,
   .company-queue-ops-grid,
@@ -8681,6 +8761,7 @@ a.platform-row:hover {
   .company-check-action-plan,
   .company-check-revenue-impact,
   .company-check-search,
+  .company-check-bulk,
   .company-recheck-grid,
   .company-queue-ops,
   .company-queue-ops-grid,

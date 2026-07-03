@@ -3445,8 +3445,7 @@ function companyReviewContextText(context = {}) {
   ], "", 4);
 }
 
-function companyReviewContextFromButton(button, status = "") {
-  const companyId = button?.dataset?.companyId || "";
+function companyReviewContextForCompany(companyId = "", status = "", sourceOverride = "") {
   if (!companyId) return null;
   const entries = companyDecisionQueueEntries(companyMasterSource());
   const entry = entries.find((row) => row.company?.companyId === companyId);
@@ -3477,7 +3476,7 @@ function companyReviewContextFromButton(button, status = "") {
     revenue.totalRevenue ? `예상매출 ${fmtWon(revenue.totalRevenue)}` : ""
   ], "관리자 판단 저장", 4);
   return {
-    source: entry ? "decision_queue" : "company_master",
+    source: sourceOverride || (entry ? "decision_queue" : "company_master"),
     appliedStatus: status,
     appliedLabel: companyAdminReviewLabel(status),
     recommendationStatus: recommendation.status || "",
@@ -3607,6 +3606,10 @@ function companySalesAction(company = {}) {
     pitch: "노출 대비 예약 상품과 가격 구성을 고객 관점으로 정리",
     next: "대표 상품명, 최저가, 주말/평일 구성 확인"
   };
+}
+
+function companyReviewContextFromButton(button, status = "") {
+  return companyReviewContextForCompany(button?.dataset?.companyId || "", status);
 }
 
 function companySalesStage(company = {}) {
@@ -7321,6 +7324,37 @@ function companyQueueOperationSummaryHtml(entries = []) {
   `;
 }
 
+function companyCheckBulkReviewHtml(visibleEntries = [], filteredEntries = [], selectedFilter = "priority", checkQuery = "") {
+  const count = visibleEntries.length;
+  const filterLabel = companyCheckFilterLabel(selectedFilter);
+  const queryText = String(checkQuery || "").trim();
+  const actions = [
+    ["check_needed", "확인 필요"],
+    ["recrawl_needed", "재수집 필요"],
+    ["manual_needed", "보정 필요"],
+    ["contact_ready", "컨택 가능"],
+    ["hold", "보류"]
+  ];
+  const scopeText = queryText
+    ? `${filterLabel} 필터 · "${queryText}" 검색 결과`
+    : `${filterLabel} 필터 전체 결과`;
+  return `
+    <div class="company-check-bulk" data-company-check-bulk>
+      <div>
+        <strong>현재 큐 일괄 처리</strong>
+        <small>${escapeHtml(`${scopeText} ${fmtNumber(count)}개 대상 · 화면에 보이는 카드 수와 관계없이 필터/검색 결과 전체에 적용`)}</small>
+      </div>
+      <input type="text" data-company-check-bulk-note value="${escapeHtml(`일괄 처리: ${filterLabel}${queryText ? ` / ${queryText}` : ""}`)}" placeholder="일괄 처리 메모">
+      <div>
+        ${actions.map(([status, label]) => `
+          <button type="button" data-company-check-bulk-action="${escapeHtml(status)}" ${count ? "" : "disabled"}>${escapeHtml(label)}</button>
+        `).join("")}
+      </div>
+      <small>${escapeHtml(`현재 필터 ${fmtNumber(filteredEntries.length)}개 중 검색 적용 ${fmtNumber(count)}개`)}</small>
+    </div>
+  `;
+}
+
 function companyMasterCheckPanel(master = {}) {
   const { entries, selectedFilter, checkQuery, checkSearch, filteredEntries, visibleEntries } = companyCheckVisibleEntries(master);
   const countForFilter = (value) => entries.filter((entry) => companyCheckFilterMatches(entry, value)).length;
@@ -7365,6 +7399,7 @@ function companyMasterCheckPanel(master = {}) {
         <button type="button" data-export-decision-queue>현재 큐 CSV</button>
         ${checkSearch ? `<button type="button" data-company-check-search-clear>검색 해제</button>` : ""}
       </div>
+      ${companyCheckBulkReviewHtml(visibleEntries, filteredEntries, selectedFilter, checkQuery)}
       <div class="company-check-filters">
         ${companyCheckFilterOptions().map(([value, label]) => `
           <button type="button" class="${selectedFilter === value ? "active" : ""}" data-company-check-filter="${escapeHtml(value)}">
@@ -9899,6 +9934,63 @@ async function saveCompanyAdminReview(button) {
   }
 }
 
+async function applyCompanyCheckBulkReview(button) {
+  const status = button?.dataset?.companyCheckBulkAction || "";
+  if (!status) return;
+  const { visibleEntries, filterLabel, checkQuery } = companyCheckVisibleEntries(companyMasterSource());
+  const rows = visibleEntries
+    .map((entry) => ({ entry, companyId: entry.company?.companyId || "" }))
+    .filter((row) => row.companyId);
+  if (!rows.length) {
+    setStatus("일괄 처리할 판단 큐 결과 없음");
+    return;
+  }
+  const label = companyAdminReviewLabel(status);
+  const queryText = String(checkQuery || "").trim();
+  const scopeText = `${filterLabel}${queryText ? ` / ${queryText}` : ""}`;
+  if (rows.length > 20 && !window.confirm(`${scopeText} ${fmtNumber(rows.length)}개 업체를 '${label}' 상태로 일괄 저장할까요?`)) {
+    return;
+  }
+  const panel = button.closest("[data-company-check-bulk]");
+  const buttons = panel ? Array.from(panel.querySelectorAll("button")) : [button];
+  const note = panel?.querySelector("[data-company-check-bulk-note]")?.value || `일괄 처리: ${scopeText}`;
+  buttons.forEach((item) => { item.disabled = true; });
+  setStatus(`${label} 일괄 저장 중 0/${fmtNumber(rows.length)}`);
+  let latestData = null;
+  let saved = 0;
+  let failed = 0;
+  for (const { companyId } of rows) {
+    const reviewContext = companyReviewContextForCompany(companyId, status, "decision_queue_bulk");
+    if (reviewContext) {
+      reviewContext.summary = compactListText([
+        `일괄 ${label}: ${scopeText}`,
+        reviewContext.summary
+      ], `일괄 ${label}`, 4);
+    }
+    try {
+      latestData = await fetchJson("/api/company-master/admin-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId, status, note, reviewContext })
+      });
+      saved += 1;
+      setStatus(`${label} 일괄 저장 중 ${fmtNumber(saved)}/${fmtNumber(rows.length)}`);
+    } catch {
+      failed += 1;
+    }
+  }
+  if (latestData) {
+    state.companyMaster = latestData;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...latestData };
+    renderCompanyMasterPanel();
+    renderDecisionQueue();
+    renderTargets();
+  } else {
+    buttons.forEach((item) => { item.disabled = false; });
+  }
+  setStatus(failed ? `${label} 일괄 저장 ${fmtNumber(saved)}개 완료 · 실패 ${fmtNumber(failed)}개` : `${label} 일괄 저장 ${fmtNumber(saved)}개 완료`);
+}
+
 async function saveCompanySalesContact(button) {
   const companyId = button?.dataset?.companyId || button?.closest("[data-sales-contact-form]")?.dataset?.companyId || "";
   const form = button?.closest("[data-sales-contact-form]");
@@ -10615,6 +10707,8 @@ function bindEvents() {
     if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
     const reviewAction = event.target.closest("[data-company-review-action]");
     if (reviewAction) saveCompanyAdminReview(reviewAction);
+    const bulkReviewAction = event.target.closest("[data-company-check-bulk-action]");
+    if (bulkReviewAction) applyCompanyCheckBulkReview(bulkReviewAction);
     const salesContact = event.target.closest("[data-save-sales-contact]");
     if (salesContact) saveCompanySalesContact(salesContact);
     const salesScript = event.target.closest("[data-copy-sales-script]");
