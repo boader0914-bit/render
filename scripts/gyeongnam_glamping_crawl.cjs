@@ -1545,6 +1545,42 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
   });
 }
 
+function operatingTotalBasisFromTotals(totals = [], basisTotal = 0) {
+  const validTotals = totals
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (!validTotals.length || !basisTotal) {
+    return {
+      operatingTotal: basisTotal || 0,
+      operatingTotalDays: 0,
+      structuralBlockedTotal: 0,
+      stockBasisType: "no_basis"
+    };
+  }
+  const frequency = new Map();
+  validTotals.forEach((value) => frequency.set(value, (frequency.get(value) || 0) + 1));
+  const maxTotalDays = frequency.get(basisTotal) || 0;
+  const candidates = [...frequency.entries()]
+    .filter(([value]) => value > 0 && value < basisTotal)
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1];
+      return right[0] - left[0];
+    });
+  const stableLower = candidates.find(([, count]) => (
+    count >= Math.max(2, Math.ceil(validTotals.length * 0.5)) &&
+    count > maxTotalDays
+  ));
+  const operatingTotal = stableLower ? stableLower[0] : basisTotal;
+  const operatingTotalDays = stableLower ? stableLower[1] : maxTotalDays;
+  const structuralBlockedTotal = Math.max(0, basisTotal - operatingTotal);
+  return {
+    operatingTotal,
+    operatingTotalDays,
+    structuralBlockedTotal,
+    stockBasisType: structuralBlockedTotal > 0 ? "operating_reduced" : "max_total"
+  };
+}
+
 async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days, unitLabel = "개") {
   if (!items.length || days <= 1) return null;
   const summaries = [];
@@ -1583,14 +1619,19 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
   const maxTotal = totals.length ? Math.max(...totals) : 0;
   const basisTotal = maxTotal;
   const maxTotalDays = maxTotal ? totals.filter((value) => value === maxTotal).length : 0;
+  const operatingBasis = operatingTotalBasisFromTotals(totals, basisTotal);
+  const operatingTotal = operatingBasis.operatingTotal || basisTotal;
+  const operatingTotalDays = operatingBasis.operatingTotalDays || 0;
+  const structuralBlockedTotal = operatingBasis.structuralBlockedTotal || 0;
+  const stockBasisType = operatingBasis.stockBasisType;
   const totalVarianceGap = Math.max(0, maxTotal - minTotal);
   const hasVariableTotal = minTotal > 0 && maxTotal > minTotal;
   const productBasis = buildProductStockBasis(rawValid);
   const valid = rawValid.map((item) => {
     const rawTotal = item.total;
-    const total = Math.max(basisTotal, rawTotal);
+    const total = Math.max(operatingTotal, rawTotal);
     const available = Math.min(Math.max(0, item.available || 0), total);
-    const offlineReserved = Math.max(0, total - rawTotal);
+    const offlineReserved = Math.max(0, operatingTotal - rawTotal);
     const offlineRevenue = summarizeOfflineProductRevenue(item, productBasis, offlineReserved, unitLabel);
     const soldOut = Math.max(0, total - available);
     const rate = total > 0 ? soldOut / total : null;
@@ -1652,14 +1693,18 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     .map((item) => `${shortDate(item.date)} 오프라인예약추정 ${item.offlineReserved}${unitLabel}${item.offlineProductDetail ? `: ${item.offlineProductDetail}` : ""}`)
     .join(", ");
   const totalVarianceDetail = hasVariableTotal
-    ? valid.map((item) => `${shortDate(item.date)} 원시 ${item.rawAvailable}/${item.rawTotal}${item.offlineReserved ? ` 오프라인예약 ${item.offlineReserved}${unitLabel}` : ""}${item.offlineProductDetail ? ` (${item.offlineProductDetail})` : ""}`).join(", ")
+    ? valid.map((item) => `${shortDate(item.date)} 원시 ${item.rawAvailable}/${item.rawTotal}${item.offlineReserved ? ` 오프라인예약 ${item.offlineReserved}${unitLabel}` : ""}${item.rawTotal > operatingTotal ? ` 운영상회 ${item.rawTotal - operatingTotal}${unitLabel}` : ""}${item.offlineProductDetail ? ` (${item.offlineProductDetail})` : ""}`).join(", ")
     : "";
   const basisRule = basisTotal
-    ? `전체객실수후보=${basisTotal}${unitLabel}(날짜별 총량 최대값${maxTotalDays ? `, ${maxTotalDays}일 확인` : ""})${totalOfflineReserved ? ` · 최대값 미만 ${totalOfflineReserved}${unitLabel} 오프라인/차단 추정` : ""}`
+    ? `전체객실수후보=${basisTotal}${unitLabel}(날짜별 총량 최대값${maxTotalDays ? `, ${maxTotalDays}일 확인` : ""})${structuralBlockedTotal ? ` · 운영판매기준=${operatingTotal}${unitLabel} · 상시차단/운영축소 ${structuralBlockedTotal}${unitLabel}` : ""}${totalOfflineReserved ? ` · 운영기준 미만 ${totalOfflineReserved}${unitLabel} 오프라인/차단 추정` : ""}`
     : "";
   return {
     days: valid.length,
     basisTotal,
+    operatingTotal,
+    operatingTotalDays,
+    structuralBlockedTotal,
+    stockBasisType,
     minTotal,
     maxTotal,
     maxTotalDays,
@@ -1883,6 +1928,10 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.주간판매수량합계 = result.weekly?.totalSoldOut ?? "";
       row.주간전체수량합계 = result.weekly?.totalStock ?? "";
       row.주간기준재고수 = result.weekly?.basisTotal ?? "";
+      row.주간운영판매기준수 = result.weekly?.operatingTotal ?? "";
+      row.주간운영판매기준확인일수 = result.weekly?.operatingTotalDays ?? "";
+      row.주간상시차단추정수 = result.weekly?.structuralBlockedTotal ?? "";
+      row.주간총량판단유형 = result.weekly?.stockBasisType || "";
       row.주간총량최소값 = result.weekly?.minTotal ?? "";
       row.주간총량최대값 = result.weekly?.maxTotal ?? "";
       row.주간최대총량확인일수 = result.weekly?.maxTotalDays ?? "";
@@ -1911,6 +1960,10 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.dayUseWeeklyTotalSoldOut = result.dayUseWeekly?.totalSoldOut ?? "";
       row.dayUseWeeklyTotalStock = result.dayUseWeekly?.totalStock ?? "";
       row.dayUseWeeklyBasisTotal = result.dayUseWeekly?.basisTotal ?? "";
+      row.dayUseWeeklyOperatingTotal = result.dayUseWeekly?.operatingTotal ?? "";
+      row.dayUseWeeklyOperatingTotalDays = result.dayUseWeekly?.operatingTotalDays ?? "";
+      row.dayUseWeeklyStructuralBlockedTotal = result.dayUseWeekly?.structuralBlockedTotal ?? "";
+      row.dayUseWeeklyStockBasisType = result.dayUseWeekly?.stockBasisType || "";
       row.dayUseWeeklyMinTotal = result.dayUseWeekly?.minTotal ?? "";
       row.dayUseWeeklyMaxTotal = result.dayUseWeekly?.maxTotal ?? "";
       row.dayUseWeeklyMaxTotalDays = result.dayUseWeekly?.maxTotalDays ?? "";
@@ -2419,6 +2472,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간판매수량합계": row.주간판매수량합계 ?? "",
       "주간전체수량합계": row.주간전체수량합계 ?? "",
       "주간기준재고수": row.주간기준재고수 ?? "",
+      "주간운영판매기준수": row.주간운영판매기준수 ?? "",
+      "주간운영판매기준확인일수": row.주간운영판매기준확인일수 ?? "",
+      "주간상시차단추정수": row.주간상시차단추정수 ?? "",
+      "주간총량판단유형": row.주간총량판단유형 || "",
       "주간총량최소값": row.주간총량최소값 ?? "",
       "주간총량최대값": row.주간총량최대값 ?? "",
       "주간최대총량확인일수": row.주간최대총량확인일수 ?? "",
@@ -2437,6 +2494,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       dayUseWeeklyTotalSoldOut: row.dayUseWeeklyTotalSoldOut ?? "",
       dayUseWeeklyTotalStock: row.dayUseWeeklyTotalStock ?? "",
       dayUseWeeklyBasisTotal: row.dayUseWeeklyBasisTotal ?? "",
+      dayUseWeeklyOperatingTotal: row.dayUseWeeklyOperatingTotal ?? "",
+      dayUseWeeklyOperatingTotalDays: row.dayUseWeeklyOperatingTotalDays ?? "",
+      dayUseWeeklyStructuralBlockedTotal: row.dayUseWeeklyStructuralBlockedTotal ?? "",
+      dayUseWeeklyStockBasisType: row.dayUseWeeklyStockBasisType || "",
       dayUseWeeklyMinTotal: row.dayUseWeeklyMinTotal ?? "",
       dayUseWeeklyMaxTotal: row.dayUseWeeklyMaxTotal ?? "",
       dayUseWeeklyMaxTotalDays: row.dayUseWeeklyMaxTotalDays ?? "",
@@ -2494,6 +2555,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       "주간판매수량합계": row.주간판매수량합계 ?? "",
       "주간전체수량합계": row.주간전체수량합계 ?? "",
       "주간기준재고수": row.주간기준재고수 ?? "",
+      "주간운영판매기준수": row.주간운영판매기준수 ?? "",
+      "주간운영판매기준확인일수": row.주간운영판매기준확인일수 ?? "",
+      "주간상시차단추정수": row.주간상시차단추정수 ?? "",
+      "주간총량판단유형": row.주간총량판단유형 || "",
       "주간총량최소값": row.주간총량최소값 ?? "",
       "주간총량최대값": row.주간총량최대값 ?? "",
       "주간최대총량확인일수": row.주간최대총량확인일수 ?? "",
@@ -2512,6 +2577,10 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       dayUseWeeklyTotalSoldOut: row.dayUseWeeklyTotalSoldOut ?? "",
       dayUseWeeklyTotalStock: row.dayUseWeeklyTotalStock ?? "",
       dayUseWeeklyBasisTotal: row.dayUseWeeklyBasisTotal ?? "",
+      dayUseWeeklyOperatingTotal: row.dayUseWeeklyOperatingTotal ?? "",
+      dayUseWeeklyOperatingTotalDays: row.dayUseWeeklyOperatingTotalDays ?? "",
+      dayUseWeeklyStructuralBlockedTotal: row.dayUseWeeklyStructuralBlockedTotal ?? "",
+      dayUseWeeklyStockBasisType: row.dayUseWeeklyStockBasisType || "",
       dayUseWeeklyMinTotal: row.dayUseWeeklyMinTotal ?? "",
       dayUseWeeklyMaxTotal: row.dayUseWeeklyMaxTotal ?? "",
       dayUseWeeklyMaxTotalDays: row.dayUseWeeklyMaxTotalDays ?? "",
@@ -2733,6 +2802,10 @@ async function main() {
     "주간판매수량합계",
     "주간전체수량합계",
     "주간기준재고수",
+    "주간운영판매기준수",
+    "주간운영판매기준확인일수",
+    "주간상시차단추정수",
+    "주간총량판단유형",
     "주간총량최소값",
     "주간총량최대값",
     "주간최대총량확인일수",
@@ -2751,6 +2824,10 @@ async function main() {
     "dayUseWeeklyTotalSoldOut",
     "dayUseWeeklyTotalStock",
     "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyOperatingTotal",
+    "dayUseWeeklyOperatingTotalDays",
+    "dayUseWeeklyStructuralBlockedTotal",
+    "dayUseWeeklyStockBasisType",
     "dayUseWeeklyMinTotal",
     "dayUseWeeklyMaxTotal",
     "dayUseWeeklyMaxTotalDays",
@@ -2830,6 +2907,10 @@ async function main() {
     "주간판매수량합계",
     "주간전체수량합계",
     "주간기준재고수",
+    "주간운영판매기준수",
+    "주간운영판매기준확인일수",
+    "주간상시차단추정수",
+    "주간총량판단유형",
     "주간총량최소값",
     "주간총량최대값",
     "주간최대총량확인일수",
@@ -2848,6 +2929,10 @@ async function main() {
     "dayUseWeeklyTotalSoldOut",
     "dayUseWeeklyTotalStock",
     "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyOperatingTotal",
+    "dayUseWeeklyOperatingTotalDays",
+    "dayUseWeeklyStructuralBlockedTotal",
+    "dayUseWeeklyStockBasisType",
     "dayUseWeeklyMinTotal",
     "dayUseWeeklyMaxTotal",
     "dayUseWeeklyMaxTotalDays",
@@ -2929,6 +3014,10 @@ async function main() {
     "주간판매수량합계",
     "주간전체수량합계",
     "주간기준재고수",
+    "주간운영판매기준수",
+    "주간운영판매기준확인일수",
+    "주간상시차단추정수",
+    "주간총량판단유형",
     "주간총량최소값",
     "주간총량최대값",
     "주간최대총량확인일수",
@@ -2947,6 +3036,10 @@ async function main() {
     "dayUseWeeklyTotalSoldOut",
     "dayUseWeeklyTotalStock",
     "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyOperatingTotal",
+    "dayUseWeeklyOperatingTotalDays",
+    "dayUseWeeklyStructuralBlockedTotal",
+    "dayUseWeeklyStockBasisType",
     "dayUseWeeklyMinTotal",
     "dayUseWeeklyMaxTotal",
     "dayUseWeeklyMaxTotalDays",
@@ -3026,6 +3119,10 @@ async function main() {
     "주간판매수량합계",
     "주간전체수량합계",
     "주간기준재고수",
+    "주간운영판매기준수",
+    "주간운영판매기준확인일수",
+    "주간상시차단추정수",
+    "주간총량판단유형",
     "주간총량최소값",
     "주간총량최대값",
     "주간최대총량확인일수",
@@ -3044,6 +3141,10 @@ async function main() {
     "dayUseWeeklyTotalSoldOut",
     "dayUseWeeklyTotalStock",
     "dayUseWeeklyBasisTotal",
+    "dayUseWeeklyOperatingTotal",
+    "dayUseWeeklyOperatingTotalDays",
+    "dayUseWeeklyStructuralBlockedTotal",
+    "dayUseWeeklyStockBasisType",
     "dayUseWeeklyMinTotal",
     "dayUseWeeklyMaxTotal",
     "dayUseWeeklyMaxTotalDays",
@@ -3142,8 +3243,9 @@ async function main() {
 - 객실번호 범위형 묶음 상품(예: 1~3, 4~7)은 내부 stock 합계를 전체상품수량으로 표시하지 않고 상품 단위 예약가능률과 원시 stock 검증값을 분리 기록한다.
 - "숙박예약가능률"은 판매율이 아니라 예약가능률이며, 판매완료/마감 비율은 "숙박판매완료율"로 별도 기록한다.
 - 데이유즈/캠프닉 상품은 1박 예약가능률 계산에서 제외하고, "데이유즈상품수/데이유즈확인재고수"로 같은 당일상품 카테고리에 별도 기록한다.
-- 숙박 전체객실수 후보는 날짜별 네이버 숙박 총량의 최대값으로 잡고, 그보다 작게 수집된 날짜의 부족분은 오프라인 예약/차단/미오픈 추정으로 본다.
-- 상품별 오프라인 추정은 상품별 최대 stock 대비 해당일 stock 부족분으로 배분한다.
+- 숙박 전체객실수 후보는 날짜별 네이버 숙박 총량의 최대값으로 잡되, 반복적으로 낮은 총량은 현재 운영 판매 기준으로 분리한다.
+- 전체객실수 후보와 운영 판매 기준의 차이는 상시 차단/운영 축소로 보고, 운영 기준보다 작게 수집된 날짜의 부족분만 오프라인 예약/일시 차단/미오픈 추정으로 본다.
+- 상품별 오프라인 추정은 상품별 운영 기준 stock 대비 해당일 stock 부족분으로 배분한다.
 - 오프라인 예약 추정 수량도 해당 날짜·상품의 가격이 확인되면 예상 매출에 포함하고, 상품 배정 또는 가격이 불명확한 수량만 가격누락으로 분리한다.
 - 실제 전체객실수는 네이버 노출 재고, 야놀자/NOL, ONDA/떠나요, 사업자 직접 정보가 서로 다를 수 있으므로 검증 메모에 분리 기록한다.
 - 채널수는 목록 검색에서 확인되지 않으면 "미확인"으로 남기고, 전 채널 연동 여부와 네이버 분리 가능성을 별도 메모한다.

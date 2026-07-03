@@ -2364,7 +2364,7 @@ function evaluateInventoryStructure(context = {}) {
 
   if (context.weeklyRawStockVariance || context.dayUseWeeklyRawStockVariance) {
     flags.push("dynamic_capacity");
-    notes.push("날짜별 총량 변동은 최대 총량 기준 오프라인/차단 추정");
+    notes.push("날짜별 총량 변동은 운영 기준과 일시 차단을 분리");
   }
 
   if (context.rawTotalStock && context.totalRooms && context.rawTotalStock !== context.totalRooms) {
@@ -2433,6 +2433,8 @@ function evaluateInventoryConfidence(context = {}) {
   }
 
   const weeklyBasisTotal = Number(context.weeklyBasisTotal);
+  const weeklyOperatingTotal = Number(context.weeklyOperatingTotal);
+  const weeklyStructuralBlockedTotal = Number(context.weeklyStructuralBlockedTotal);
   const weeklyOfflineReservedTotal = Number(context.weeklyOfflineReservedTotal);
   const weeklyMaxTotalDays = Number(context.weeklyMaxTotalDays);
   const weeklyTotalVarianceGap = Number(context.weeklyTotalVarianceGap);
@@ -2442,6 +2444,10 @@ function evaluateInventoryConfidence(context = {}) {
   if (Number.isFinite(weeklyBasisTotal) && weeklyBasisTotal > 0 && context.weeklyDays >= 2) {
     score += 7;
     reasons.push("날짜별 숙박 총량 최대값을 전체 객실수 후보로 적용");
+  }
+  if (Number.isFinite(weeklyStructuralBlockedTotal) && weeklyStructuralBlockedTotal > 0) {
+    reasons.push("반복 낮은 총량은 상시 차단/운영 축소로 분리");
+    score += Number.isFinite(weeklyOperatingTotal) && weeklyOperatingTotal > 0 ? 2 : 0;
   }
 
   if (context.countedItemCount > 0) {
@@ -2467,7 +2473,7 @@ function evaluateInventoryConfidence(context = {}) {
   if (context.weeklyRawStockVariance) {
     const hasOfflineEstimate = Number.isFinite(weeklyOfflineReservedTotal) && weeklyOfflineReservedTotal > 0;
     if (hasOfflineEstimate) {
-      reasons.push("최대 총량 미만 날짜는 오프라인 예약/차단으로 보정");
+      reasons.push("운영 기준 미만 날짜는 오프라인 예약/일시 차단으로 보정");
       score -= Number.isFinite(weeklyMaxTotalDays) && weeklyMaxTotalDays >= 2 ? 2 : 5;
       alerts.push(Number.isFinite(weeklyMaxTotalDays) && weeklyMaxTotalDays < 2
         ? "최대 총량 반복 확인 부족"
@@ -3361,6 +3367,84 @@ function basisRuleForTotal(storedRule, basisTotal, fallbackBuilder) {
   return basisTotal ? fallbackBuilder(basisTotal) : "";
 }
 
+function operatingTotalFromVarianceRows(rows = [], basisTotal = null) {
+  const total = Number(basisTotal);
+  if (!Number.isFinite(total) || total <= 0) return { operatingTotal: null, operatingTotalDays: null };
+  const totals = rows
+    .map((row) => Number(row.rawTotal))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (!totals.length) return { operatingTotal: total, operatingTotalDays: null };
+  const frequency = new Map();
+  totals.forEach((value) => frequency.set(value, (frequency.get(value) || 0) + 1));
+  const maxTotalDays = frequency.get(total) || 0;
+  const lower = [...frequency.entries()]
+    .filter(([value]) => value > 0 && value < total)
+    .sort((left, right) => {
+      if (right[1] !== left[1]) return right[1] - left[1];
+      return right[0] - left[0];
+    });
+  const stableLower = lower.find(([, count]) => (
+    count >= Math.max(2, Math.ceil(totals.length * 0.5)) &&
+    count > maxTotalDays
+  ));
+  if (!stableLower) return { operatingTotal: total, operatingTotalDays: maxTotalDays || null };
+  return { operatingTotal: stableLower[0], operatingTotalDays: stableLower[1] };
+}
+
+function resolvedStockBasis({ basisTotal, explicitBasisTotal, storedRule, variance, operatingTotal, operatingTotalDays, structuralBlockedTotal, stockBasisType } = {}) {
+  const candidateTotal = maxPositiveNumber(basisTotal, parseBasisTotalFromRule(storedRule));
+  let resolvedOperating = Number(operatingTotal);
+  let resolvedOperatingDays = Number(operatingTotalDays);
+  if (!Number.isFinite(resolvedOperating) || resolvedOperating <= 0) {
+    const inferred = operatingTotalFromVarianceRows(variance?.rows || [], candidateTotal);
+    resolvedOperating = inferred.operatingTotal;
+    resolvedOperatingDays = inferred.operatingTotalDays;
+  }
+  const explicit = Number(explicitBasisTotal);
+  if (
+    Number.isFinite(explicit) &&
+    explicit > 0 &&
+    candidateTotal &&
+    explicit < candidateTotal &&
+    (!resolvedOperating || resolvedOperating >= candidateTotal)
+  ) {
+    resolvedOperating = explicit;
+  }
+  if (!Number.isFinite(resolvedOperating) || resolvedOperating <= 0) resolvedOperating = candidateTotal;
+  if (!Number.isFinite(resolvedOperatingDays) || resolvedOperatingDays < 0) resolvedOperatingDays = null;
+  const resolvedStructural = Number.isFinite(Number(structuralBlockedTotal)) && Number(structuralBlockedTotal) >= 0
+    ? Number(structuralBlockedTotal)
+    : Math.max(0, Number(candidateTotal || 0) - Number(resolvedOperating || 0));
+  return {
+    basisTotal: candidateTotal,
+    operatingTotal: resolvedOperating || null,
+    operatingTotalDays: resolvedOperatingDays,
+    structuralBlockedTotal: resolvedStructural || null,
+    stockBasisType: stockBasisType || (resolvedStructural > 0 ? "operating_reduced" : candidateTotal ? "max_total" : "")
+  };
+}
+
+function offlineReservedTotalForOperating(variance = {}, operatingTotal = null) {
+  const operating = Number(operatingTotal);
+  if (!Number.isFinite(operating) || operating <= 0 || !Array.isArray(variance.rows) || !variance.rows.length) {
+    return variance.totalOfflineReserved;
+  }
+  const total = variance.rows.reduce((sum, row) => {
+    const rawTotal = Number(row.rawTotal);
+    return sum + (Number.isFinite(rawTotal) ? Math.max(0, operating - rawTotal) : 0);
+  }, 0);
+  return total || null;
+}
+
+function stockBasisRule(storedRule, basisTotal, operatingTotal, structuralBlockedTotal, offlineReservedTotal, unitLabel = "개", totalLabel = "숙박") {
+  const parsedTotal = parseBasisTotalFromRule(storedRule);
+  if (storedRule && basisTotal && parsedTotal === basisTotal && !structuralBlockedTotal) return storedRule;
+  if (!basisTotal) return "";
+  return `전체객실수후보=${basisTotal}${unitLabel}(날짜별 ${totalLabel} 총량 최대값)` +
+    (structuralBlockedTotal ? ` · 운영판매기준=${operatingTotal}${unitLabel} · 상시차단/운영축소 ${structuralBlockedTotal}${unitLabel}` : "") +
+    (offlineReservedTotal ? ` · 운영기준 미만 ${offlineReservedTotal}${unitLabel} 오프라인/차단 추정` : "");
+}
+
 function stableHash(value) {
   return crypto.createHash("sha1").update(String(value || "")).digest("hex").slice(0, 16);
 }
@@ -3593,11 +3677,15 @@ function companySalesSignalFromItem(item = {}, run = {}) {
     dayUseDays: dayUse.days,
     dayUseMissing: !dayUseHasSupply,
     lodgingBasisTotal: snapshotNumber(item.weeklyBasisTotal),
+    lodgingOperatingTotal: snapshotNumber(item.weeklyOperatingTotal),
+    lodgingStructuralBlockedTotal: snapshotNumber(item.weeklyStructuralBlockedTotal),
     lodgingMaxTotalDays: snapshotNumber(item.weeklyMaxTotalDays),
     lodgingTotalVarianceGap: snapshotNumber(item.weeklyTotalVarianceGap),
     lodgingOfflineReservedTotal: snapshotNumber(item.weeklyOfflineReservedTotal),
     lodgingBasisRule: item.weeklyBasisRule || "",
     dayUseBasisTotal: snapshotNumber(item.dayUseWeeklyBasisTotal),
+    dayUseOperatingTotal: snapshotNumber(item.dayUseWeeklyOperatingTotal),
+    dayUseStructuralBlockedTotal: snapshotNumber(item.dayUseWeeklyStructuralBlockedTotal),
     dayUseOfflineReservedTotal: snapshotNumber(item.dayUseWeeklyOfflineReservedTotal),
     dayUseBasisRule: item.dayUseWeeklyBasisRule || "",
     structureWeak,
@@ -3788,6 +3876,10 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     inventoryStructureFlags: Array.isArray(item.inventoryStructureFlags) ? item.inventoryStructureFlags : [],
     stockBasis: {
       lodgingBasisTotal: snapshotNumber(item.weeklyBasisTotal),
+      lodgingOperatingTotal: snapshotNumber(item.weeklyOperatingTotal),
+      lodgingOperatingTotalDays: snapshotNumber(item.weeklyOperatingTotalDays),
+      lodgingStructuralBlockedTotal: snapshotNumber(item.weeklyStructuralBlockedTotal),
+      lodgingStockBasisType: item.weeklyStockBasisType || "",
       lodgingMinTotal: snapshotNumber(item.weeklyMinTotal),
       lodgingMaxTotal: snapshotNumber(item.weeklyMaxTotal),
       lodgingMaxTotalDays: snapshotNumber(item.weeklyMaxTotalDays),
@@ -3795,6 +3887,10 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
       lodgingOfflineReservedTotal: snapshotNumber(item.weeklyOfflineReservedTotal),
       lodgingBasisRule: item.weeklyBasisRule || "",
       dayUseBasisTotal: snapshotNumber(item.dayUseWeeklyBasisTotal),
+      dayUseOperatingTotal: snapshotNumber(item.dayUseWeeklyOperatingTotal),
+      dayUseOperatingTotalDays: snapshotNumber(item.dayUseWeeklyOperatingTotalDays),
+      dayUseStructuralBlockedTotal: snapshotNumber(item.dayUseWeeklyStructuralBlockedTotal),
+      dayUseStockBasisType: item.dayUseWeeklyStockBasisType || "",
       dayUseMinTotal: snapshotNumber(item.dayUseWeeklyMinTotal),
       dayUseMaxTotal: snapshotNumber(item.dayUseWeeklyMaxTotal),
       dayUseMaxTotalDays: snapshotNumber(item.dayUseWeeklyMaxTotalDays),
@@ -4128,8 +4224,8 @@ function companyCorrectionStatus(company = {}, inventory = null) {
   const latest = (inventory || company.inventory || {}).latest || {};
   if (manualCorrectionHasValue(correction)) {
     const parts = [];
-    if (correction.lodgingBasisTotal) parts.push(`숙박 ${correction.lodgingBasisTotal}개`);
-    if (correction.dayUseBasisTotal) parts.push(`데이유즈 ${correction.dayUseBasisTotal}회`);
+    if (correction.lodgingBasisTotal) parts.push(`숙박 운영 ${correction.lodgingBasisTotal}개`);
+    if (correction.dayUseBasisTotal) parts.push(`데이유즈 운영 ${correction.dayUseBasisTotal}회`);
     return {
       key: "admin_override",
       label: "관리자 보정",
@@ -4371,7 +4467,7 @@ function companySalesTargetSignalReasons(signals = {}) {
   add(signals.weekdayWeak, 5, "평일 약함", "월~목 평균 판매가 낮아 평일 패키지/타깃 보완 여지");
   add(signals.dayUseMissing, 5, "당일상품 공백", "데이유즈/캠프닉 확인 수량이 없어 당일상품 확장 검토");
   add(signals.structureWeak, 6, "수량구조 확인", "객실 수량 구조가 흔들려 총량/상품 단위 검증 필요");
-  add(signals.stockVariance, 5, "오프라인예약 반영", "날짜별 최대 총량을 전체객실수 후보로 보고 부족분은 전화예약/차단 가능성");
+  add(signals.stockVariance, 5, "재고조정 반영", "전체객실수 후보와 운영 판매 기준을 분리하고 운영 기준 미만만 전화예약/차단 가능성");
   add(signals.bookingIdReused, 5, "예약ID 확인", "예약ID 또는 상품 구조 재사용 가능성이 있어 네이버 상품 구조 재확인 필요");
   add(signals.productNamingReview, 4, "상품명 검토", "네이버 예약 상품명/구성이 고객 관점에서 재정리될 여지");
   add(signals.otaReviewNeeded, 4, "OTA 확인", "판단이 흔들리는 업체로 OTA/채널 비교 확인 필요");
@@ -4586,15 +4682,29 @@ function applyCompanyManualCorrection(item, company) {
   const lodgingBasis = Number(correction.lodgingBasisTotal);
   const dayUseBasis = Number(correction.dayUseBasisTotal);
   if (Number.isFinite(lodgingBasis) && lodgingBasis > 0) {
-    next.weeklyBasisTotal = Math.round(lodgingBasis);
-    next.nightTotalStock = Math.round(lodgingBasis);
-    next.manualLodgingBasisTotal = Math.round(lodgingBasis);
+    const operating = Math.round(lodgingBasis);
+    const candidate = maxPositiveNumber(item.weeklyBasisTotal, item.weeklyMaxTotal, operating) || operating;
+    const structural = Math.max(0, candidate - operating);
+    next.weeklyBasisTotal = candidate;
+    next.weeklyOperatingTotal = operating;
+    next.weeklyStructuralBlockedTotal = structural || null;
+    next.weeklyStockBasisType = structural ? "manual_operating_reduced" : "manual_operating";
+    next.weeklyBasisRule = stockBasisRule(item.weeklyBasisRule || "", candidate, operating, structural, item.weeklyOfflineReservedTotal, "개");
+    next.nightTotalStock = operating;
+    next.manualLodgingBasisTotal = operating;
     next.manualCorrectionApplied = true;
   }
   if (Number.isFinite(dayUseBasis) && dayUseBasis > 0) {
-    next.dayUseWeeklyBasisTotal = Math.round(dayUseBasis);
-    next.dayUseTotalStock = Math.round(dayUseBasis);
-    next.manualDayUseBasisTotal = Math.round(dayUseBasis);
+    const operating = Math.round(dayUseBasis);
+    const candidate = maxPositiveNumber(item.dayUseWeeklyBasisTotal, item.dayUseWeeklyMaxTotal, operating) || operating;
+    const structural = Math.max(0, candidate - operating);
+    next.dayUseWeeklyBasisTotal = candidate;
+    next.dayUseWeeklyOperatingTotal = operating;
+    next.dayUseWeeklyStructuralBlockedTotal = structural || null;
+    next.dayUseWeeklyStockBasisType = structural ? "manual_operating_reduced" : "manual_operating";
+    next.dayUseWeeklyBasisRule = stockBasisRule(item.dayUseWeeklyBasisRule || "", candidate, operating, structural, item.dayUseWeeklyOfflineReservedTotal, "회", "데이유즈/캠프닉");
+    next.dayUseTotalStock = operating;
+    next.manualDayUseBasisTotal = operating;
     next.manualCorrectionApplied = true;
   }
   return next;
@@ -5878,11 +5988,25 @@ function summarizeAvailabilityRows(rows) {
     const storedWeeklyBasisRule = row["주간숙박총량기준"] || row.weeklyBasisRule || "";
     const weeklyMinTotal = numericField(row, ["주간총량최소값", "weeklyMinTotal"]) ?? weeklyVariance.minTotal;
     const weeklyMaxTotal = numericField(row, ["주간총량최대값", "weeklyMaxTotal"]) ?? weeklyVariance.maxTotal ?? parseBasisTotalFromRule(storedWeeklyBasisRule);
-    const weeklyBasisTotal = maxPositiveNumber(weeklyExplicitBasisTotal, weeklyMaxTotal, parseBasisTotalFromRule(storedWeeklyBasisRule));
+    const weeklyStockBasis = resolvedStockBasis({
+      basisTotal: maxPositiveNumber(weeklyExplicitBasisTotal, weeklyMaxTotal, parseBasisTotalFromRule(storedWeeklyBasisRule)),
+      explicitBasisTotal: weeklyExplicitBasisTotal,
+      storedRule: storedWeeklyBasisRule,
+      variance: weeklyVariance,
+      operatingTotal: numericField(row, ["주간운영판매기준수", "weeklyOperatingTotal"]),
+      operatingTotalDays: numericField(row, ["주간운영판매기준확인일수", "weeklyOperatingTotalDays"]),
+      structuralBlockedTotal: numericField(row, ["주간상시차단추정수", "weeklyStructuralBlockedTotal"]),
+      stockBasisType: row["주간총량판단유형"] || row.weeklyStockBasisType || ""
+    });
+    const weeklyBasisTotal = weeklyStockBasis.basisTotal;
+    const weeklyOperatingTotal = weeklyStockBasis.operatingTotal;
+    const weeklyOperatingTotalDays = weeklyStockBasis.operatingTotalDays;
+    const weeklyStructuralBlockedTotal = weeklyStockBasis.structuralBlockedTotal;
+    const weeklyStockBasisType = weeklyStockBasis.stockBasisType;
     const weeklyMaxTotalDays = numericField(row, ["주간최대총량확인일수", "weeklyMaxTotalDays"]) ?? weeklyVariance.maxTotalDays;
     const weeklyTotalVarianceGap = numericField(row, ["주간총량편차", "weeklyTotalVarianceGap"]) ?? weeklyVariance.totalVarianceGap;
-    const weeklyOfflineReservedTotal = numericField(row, ["주간숙박오프라인예약추정수", "weeklyOfflineReservedTotal"]) ?? weeklyVariance.totalOfflineReserved;
-    const weeklyBasisRule = basisRuleForTotal(storedWeeklyBasisRule, weeklyBasisTotal, (value) => `전체객실수후보=${value}개(날짜별 숙박 총량 최대값)`);
+    const weeklyOfflineReservedTotal = numericField(row, ["주간숙박오프라인예약추정수", "weeklyOfflineReservedTotal"]) ?? offlineReservedTotalForOperating(weeklyVariance, weeklyOperatingTotal);
+    const weeklyBasisRule = stockBasisRule(storedWeeklyBasisRule, weeklyBasisTotal, weeklyOperatingTotal, weeklyStructuralBlockedTotal, weeklyOfflineReservedTotal, "개");
     const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
     const weeklyAdjustedRevenue = numericField(row, ["weeklyAdjustedRevenue"]);
     const weeklyMissingPriceEstimatedRevenue = numericField(row, ["weeklyMissingPriceEstimatedRevenue"]);
@@ -5905,11 +6029,25 @@ function summarizeAvailabilityRows(rows) {
     const storedDayUseWeeklyBasisRule = row.dayUseWeeklyBasisRule || "";
     const dayUseWeeklyMinTotal = numericField(row, ["dayUseWeeklyMinTotal"]) ?? dayUseWeeklyVariance.minTotal;
     const dayUseWeeklyMaxTotal = numericField(row, ["dayUseWeeklyMaxTotal"]) ?? dayUseWeeklyVariance.maxTotal ?? parseBasisTotalFromRule(storedDayUseWeeklyBasisRule);
-    const dayUseWeeklyBasisTotal = maxPositiveNumber(dayUseWeeklyExplicitBasisTotal, dayUseWeeklyMaxTotal, parseBasisTotalFromRule(storedDayUseWeeklyBasisRule));
+    const dayUseWeeklyStockBasis = resolvedStockBasis({
+      basisTotal: maxPositiveNumber(dayUseWeeklyExplicitBasisTotal, dayUseWeeklyMaxTotal, parseBasisTotalFromRule(storedDayUseWeeklyBasisRule)),
+      explicitBasisTotal: dayUseWeeklyExplicitBasisTotal,
+      storedRule: storedDayUseWeeklyBasisRule,
+      variance: dayUseWeeklyVariance,
+      operatingTotal: numericField(row, ["dayUseWeeklyOperatingTotal"]),
+      operatingTotalDays: numericField(row, ["dayUseWeeklyOperatingTotalDays"]),
+      structuralBlockedTotal: numericField(row, ["dayUseWeeklyStructuralBlockedTotal"]),
+      stockBasisType: row.dayUseWeeklyStockBasisType || ""
+    });
+    const dayUseWeeklyBasisTotal = dayUseWeeklyStockBasis.basisTotal;
+    const dayUseWeeklyOperatingTotal = dayUseWeeklyStockBasis.operatingTotal;
+    const dayUseWeeklyOperatingTotalDays = dayUseWeeklyStockBasis.operatingTotalDays;
+    const dayUseWeeklyStructuralBlockedTotal = dayUseWeeklyStockBasis.structuralBlockedTotal;
+    const dayUseWeeklyStockBasisType = dayUseWeeklyStockBasis.stockBasisType;
     const dayUseWeeklyMaxTotalDays = numericField(row, ["dayUseWeeklyMaxTotalDays"]) ?? dayUseWeeklyVariance.maxTotalDays;
     const dayUseWeeklyTotalVarianceGap = numericField(row, ["dayUseWeeklyTotalVarianceGap"]) ?? dayUseWeeklyVariance.totalVarianceGap;
-    const dayUseWeeklyOfflineReservedTotal = numericField(row, ["dayUseWeeklyOfflineReservedTotal"]) ?? dayUseWeeklyVariance.totalOfflineReserved;
-    const dayUseWeeklyBasisRule = basisRuleForTotal(storedDayUseWeeklyBasisRule, dayUseWeeklyBasisTotal, (value) => `데이유즈/캠프닉총량후보=${value}회(날짜별 총량 최대값)`);
+    const dayUseWeeklyOfflineReservedTotal = numericField(row, ["dayUseWeeklyOfflineReservedTotal"]) ?? offlineReservedTotalForOperating(dayUseWeeklyVariance, dayUseWeeklyOperatingTotal);
+    const dayUseWeeklyBasisRule = stockBasisRule(storedDayUseWeeklyBasisRule, dayUseWeeklyBasisTotal, dayUseWeeklyOperatingTotal, dayUseWeeklyStructuralBlockedTotal, dayUseWeeklyOfflineReservedTotal, "회", "데이유즈/캠프닉");
     const dayUseWeeklyEstimatedRevenue = numericField(row, ["dayUseWeeklyEstimatedRevenue"]);
     const dayUseWeeklyAdjustedRevenue = numericField(row, ["dayUseWeeklyAdjustedRevenue"]);
     const dayUseWeeklyMissingPriceEstimatedRevenue = numericField(row, ["dayUseWeeklyMissingPriceEstimatedRevenue"]);
@@ -5973,6 +6111,10 @@ function summarizeAvailabilityRows(rows) {
       weeklyTotalSoldOut,
       weeklyTotalStock,
       weeklyBasisTotal,
+      weeklyOperatingTotal,
+      weeklyOperatingTotalDays,
+      weeklyStructuralBlockedTotal,
+      weeklyStockBasisType,
       weeklyMinTotal,
       weeklyMaxTotal,
       weeklyMaxTotalDays,
@@ -6010,6 +6152,10 @@ function summarizeAvailabilityRows(rows) {
       dayUseWeeklyTotalSoldOut,
       dayUseWeeklyTotalStock,
       dayUseWeeklyBasisTotal,
+      dayUseWeeklyOperatingTotal,
+      dayUseWeeklyOperatingTotalDays,
+      dayUseWeeklyStructuralBlockedTotal,
+      dayUseWeeklyStockBasisType,
       dayUseWeeklyMinTotal,
       dayUseWeeklyMaxTotal,
       dayUseWeeklyMaxTotalDays,
@@ -6048,6 +6194,8 @@ function summarizeAvailabilityRows(rows) {
         weeklyDays: item.weeklyDays,
         weeklyDetail: item.weeklyDetail,
         weeklyBasisTotal: item.weeklyBasisTotal,
+        weeklyOperatingTotal: item.weeklyOperatingTotal,
+        weeklyStructuralBlockedTotal: item.weeklyStructuralBlockedTotal,
         weeklyOfflineReservedTotal: item.weeklyOfflineReservedTotal,
         weeklyMaxTotalDays: item.weeklyMaxTotalDays,
         weeklyTotalVarianceGap: item.weeklyTotalVarianceGap,
@@ -6227,9 +6375,21 @@ function summarizeCompanyPlatforms(rows) {
     const weeklyRawStockVariance = row["주간원시재고변동"] || "";
     const weeklyVariance = parseStockVarianceDetail(weeklyRawStockVariance);
     const storedWeeklyBasisRule = row["주간숙박총량기준"] || row.weeklyBasisRule || "";
-    const weeklyBasisTotal = maxPositiveNumber(weeklyExplicitBasisTotal, weeklyVariance.maxTotal, parseBasisTotalFromRule(storedWeeklyBasisRule));
-    const weeklyOfflineReservedTotal = numericField(row, ["주간숙박오프라인예약추정수", "weeklyOfflineReservedTotal"]) ?? weeklyVariance.totalOfflineReserved;
-    const weeklyBasisRule = basisRuleForTotal(storedWeeklyBasisRule, weeklyBasisTotal, (value) => `전체객실수후보=${value}개(날짜별 숙박 총량 최대값${weeklyOfflineReservedTotal ? ` · 오프라인/차단 ${weeklyOfflineReservedTotal}개 추정` : ""})`);
+    const weeklyStockBasis = resolvedStockBasis({
+      basisTotal: maxPositiveNumber(weeklyExplicitBasisTotal, weeklyVariance.maxTotal, parseBasisTotalFromRule(storedWeeklyBasisRule)),
+      explicitBasisTotal: weeklyExplicitBasisTotal,
+      storedRule: storedWeeklyBasisRule,
+      variance: weeklyVariance,
+      operatingTotal: numericField(row, ["주간운영판매기준수", "weeklyOperatingTotal"]),
+      operatingTotalDays: numericField(row, ["주간운영판매기준확인일수", "weeklyOperatingTotalDays"]),
+      structuralBlockedTotal: numericField(row, ["주간상시차단추정수", "weeklyStructuralBlockedTotal"]),
+      stockBasisType: row["주간총량판단유형"] || row.weeklyStockBasisType || ""
+    });
+    const weeklyBasisTotal = weeklyStockBasis.basisTotal;
+    const weeklyOperatingTotal = weeklyStockBasis.operatingTotal;
+    const weeklyStructuralBlockedTotal = weeklyStockBasis.structuralBlockedTotal;
+    const weeklyOfflineReservedTotal = numericField(row, ["주간숙박오프라인예약추정수", "weeklyOfflineReservedTotal"]) ?? offlineReservedTotalForOperating(weeklyVariance, weeklyOperatingTotal);
+    const weeklyBasisRule = stockBasisRule(storedWeeklyBasisRule, weeklyBasisTotal, weeklyOperatingTotal, weeklyStructuralBlockedTotal, weeklyOfflineReservedTotal, "개");
     const weeklyEstimatedRevenue = numericField(row, ["주간숙박예상매출", "weeklyEstimatedRevenue"]);
     const weeklyAdjustedRevenue = numericField(row, ["weeklyAdjustedRevenue"]);
     const weeklyMissingPriceEstimatedRevenue = numericField(row, ["weeklyMissingPriceEstimatedRevenue"]);
@@ -6255,7 +6415,7 @@ function summarizeCompanyPlatforms(rows) {
     const dayUseWeeklyAvgSoldUnitPrice = numericField(row, ["dayUseWeeklyAvgSoldUnitPrice"]);
     const dayUseWeeklyOfflineReservationDetail = row.dayUseWeeklyOfflineReservationDetail || "";
     const weeklyStockText = weeklyDetail
-      ? `${weeklyTotalSoldOut !== null ? `${weeklyDays || "기간"}일 마감추정 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyBasisTotal ? `전체객실수후보 ${weeklyBasisTotal} · ` : ""}${weeklyBasisRule ? `${weeklyBasisRule} · ` : ""}${weeklyRawStockVariance ? `날짜별 원시재고: ${weeklyRawStockVariance} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
+      ? `${weeklyTotalSoldOut !== null ? `${weeklyDays || "기간"}일 마감추정 ${weeklyTotalSoldOut}${weeklyTotalStock ? `/${weeklyTotalStock}` : ""} · ` : ""}${weeklyBasisTotal ? `전체객실수후보 ${weeklyBasisTotal}${weeklyOperatingTotal && weeklyOperatingTotal !== weeklyBasisTotal ? ` · 운영기준 ${weeklyOperatingTotal}` : ""} · ` : ""}${weeklyBasisRule ? `${weeklyBasisRule} · ` : ""}${weeklyRawStockVariance ? `날짜별 원시재고: ${weeklyRawStockVariance} · ` : ""}${weeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(weeklyAvgReservationRate)} · ` : ""}${weeklyReservationRateDetail ? `날짜별 예약률: ${weeklyReservationRateDetail} · ` : ""}${weeklySummary ? `${weeklySummary}: ` : ""}${weeklyDetail}`
       : weeklySummary;
     const dayUseWeeklyStockText = dayUseWeeklyDetail
       ? `데이유즈/캠프닉 ${dayUseWeeklyTotalSoldOut !== null ? `${row.dayUseWeeklyDays || "기간"}일 마감추정 ${dayUseWeeklyTotalSoldOut}${dayUseWeeklyTotalStock ? `/${dayUseWeeklyTotalStock}` : ""} · ` : ""}${dayUseWeeklyAvgReservationRate !== null ? `평균 예약률 ${formatRate(dayUseWeeklyAvgReservationRate)} · ` : ""}${dayUseWeeklyReservationRateDetail ? `날짜별 예약률: ${dayUseWeeklyReservationRateDetail} · ` : ""}${dayUseWeeklyDetail}`
@@ -6839,8 +6999,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-room-basis"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-room-basis"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-operating-basis"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-operating-basis"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

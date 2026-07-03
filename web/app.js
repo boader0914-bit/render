@@ -1598,7 +1598,7 @@ function salesStats(item = {}, kind = "lodging") {
     const weeklySold = finiteNumber(item.weeklyTotalSoldOut, NaN);
     const weeklySupply = finiteNumber(item.weeklyTotalStock, NaN);
     if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
-      const basisTotal = finiteNumber(item.weeklyBasisTotal, 0);
+      const basisTotal = finiteNumber(item.weeklyOperatingTotal, finiteNumber(item.weeklyBasisTotal, 0));
       const normalizedSupply = basisTotal && rows.length ? basisTotal * rows.length : weeklySupply;
       const offlineSold = offlineSoldForTotal(normalizedSupply, weeklySupply);
       const sold = Math.min(normalizedSupply, weeklySold + offlineSold);
@@ -1615,7 +1615,7 @@ function salesStats(item = {}, kind = "lodging") {
       };
     }
     if (rows.length) {
-      const basisTotal = basisTotalForRows(rows, item.weeklyBasisTotal, activeManualCorrection(item));
+      const basisTotal = basisTotalForRows(rows, item.weeklyOperatingTotal || item.weeklyBasisTotal, activeManualCorrection(item));
       const sum = rows.reduce((acc, row) => {
         const rawTotal = finiteNumber(row.total, 0);
         const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
@@ -1638,7 +1638,7 @@ function salesStats(item = {}, kind = "lodging") {
   const weeklySold = finiteNumber(item.dayUseWeeklyTotalSoldOut, NaN);
   const weeklySupply = finiteNumber(item.dayUseWeeklyTotalStock, NaN);
   if (Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0) {
-    const basisTotal = finiteNumber(item.dayUseWeeklyBasisTotal, 0);
+    const basisTotal = finiteNumber(item.dayUseWeeklyOperatingTotal, finiteNumber(item.dayUseWeeklyBasisTotal, 0));
     const normalizedSupply = basisTotal && rows.length ? basisTotal * rows.length : weeklySupply;
     const offlineSold = offlineSoldForTotal(normalizedSupply, weeklySupply);
     const sold = Math.min(normalizedSupply, weeklySold + offlineSold);
@@ -1655,7 +1655,7 @@ function salesStats(item = {}, kind = "lodging") {
     };
   }
   if (rows.length) {
-    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal, activeManualCorrection(item));
+    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyOperatingTotal || item.dayUseWeeklyBasisTotal, activeManualCorrection(item));
     const sum = rows.reduce((acc, row) => {
       const rawTotal = finiteNumber(row.total, 0);
       const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
@@ -2011,8 +2011,8 @@ function manualCorrectionInfo(item = {}) {
   const lodging = finiteNumber(correction.lodgingBasisTotal, 0);
   const dayUse = finiteNumber(correction.dayUseBasisTotal, 0);
   const parts = [];
-  if (lodging > 0) parts.push(`숙박 ${fmtNumber(lodging)}개`);
-  if (dayUse > 0) parts.push(`데이유즈 ${fmtNumber(dayUse)}회`);
+  if (lodging > 0) parts.push(`숙박 운영 ${fmtNumber(lodging)}개`);
+  if (dayUse > 0) parts.push(`데이유즈 운영 ${fmtNumber(dayUse)}회`);
   return {
     correction,
     label: parts.length ? parts.join(" · ") : "보정 기준",
@@ -2054,12 +2054,14 @@ function bookingGraphRows(item) {
   const lodging = salesStats(item, "lodging");
   const manualBasis = activeManualCorrection(item);
   const baseTotal = finiteNumber(item.nightTotalStock, finiteNumber(item.totalRooms, finiteNumber(lodging.supply, 0)));
-  const correctedBasis = finiteNumber(item.weeklyBasisTotal, baseTotal);
-  const maxTotal = manualBasis && correctedBasis > 0
-    ? correctedBasis
+  const candidateBasis = finiteNumber(item.weeklyBasisTotal, baseTotal);
+  const correctedBasis = finiteNumber(item.weeklyOperatingTotal, candidateBasis);
+  const maxTotal = manualBasis && candidateBasis > 0
+    ? candidateBasis
     : Math.max(
       0,
       baseTotal,
+      candidateBasis,
       correctedBasis,
       ...rows.map((row) => finiteNumber(row.total, 0))
     );
@@ -2070,7 +2072,8 @@ function bookingGraphRows(item) {
     const row = rowMap.get(key);
     if (row) {
       const rawTotal = finiteNumber(row.total, maxTotal);
-      const basisTotal = manualBasis && maxTotal > 0 ? maxTotal : Math.max(maxTotal, rawTotal);
+      const operatingBasis = correctedBasis || maxTotal;
+      const basisTotal = Math.max(operatingBasis, rawTotal);
       const rawSold = finiteNumber(row.sold, 0);
       const offlineSold = offlineSoldForTotal(basisTotal, rawTotal);
       const sold = Math.min(basisTotal, rawSold + offlineSold);
@@ -2110,7 +2113,7 @@ function bookingGraphRows(item) {
     return {
       label,
       sold: 0,
-      total: maxTotal,
+      total: correctedBasis || maxTotal,
       rate: NaN,
       source: "missing",
       missing: true,
@@ -2465,7 +2468,10 @@ function collectionStatusProfile(item = {}) {
   const productKnown = productCount > 0 || Boolean(String(item.productTypeSummary || "").trim());
   const manualCorrection = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
   const manualLodgingBasis = manualCorrectionHasBasis(manualCorrection) ? finiteNumber(manualCorrection.lodgingBasisTotal, 0) : 0;
-  const basisTotal = manualLodgingBasis || finiteNumber(item.weeklyBasisTotal, 0);
+  const basisTotal = finiteNumber(item.weeklyBasisTotal, manualLodgingBasis);
+  const operatingTotal = manualLodgingBasis || finiteNumber(item.weeklyOperatingTotal, basisTotal);
+  const structuralBlockedQuantity = finiteNumber(item.weeklyStructuralBlockedTotal, Math.max(0, basisTotal - operatingTotal)) +
+    finiteNumber(item.dayUseWeeklyStructuralBlockedTotal, 0);
   const quantityUnclear = Boolean(
     ["D", "E"].includes(confidence.grade) ||
     ["unknown", "stock_only", "grouped_stock"].includes(structure.type) ||
@@ -2500,6 +2506,7 @@ function collectionStatusProfile(item = {}) {
   if (quantityUnclear) reasons.push(`수량 신뢰도 ${confidence.grade} · ${structure.label}`);
   if (!productKnown) reasons.push("상품별 수량 구조 확인 필요");
   if (priceMissing) reasons.push(`가격 누락 판매수량 ${fmtNumber(missingPriceQuantity || soldQuantity)}개/회`);
+  if (structuralBlockedQuantity > 0) reasons.push(`상시 차단/운영 축소 ${fmtNumber(structuralBlockedQuantity)}개/회`);
   if (offlineEstimated) reasons.push("오프라인 예약/차단 추정 포함");
   return {
     statusKey,
@@ -2518,6 +2525,8 @@ function collectionStatusProfile(item = {}) {
     offlineEstimated,
     offlineQuantity,
     basisTotal,
+    operatingTotal,
+    structuralBlockedQuantity,
     basisRule,
     reasons: reasons.slice(0, 5)
   };
@@ -2577,7 +2586,7 @@ function collectionDiagnosticProfile(items = []) {
     issues.push(["가격 누락", priceMissing, "판매수량은 있으나 가격이 없어 매출 산정에서 제외된 업체입니다.", "watch"]);
   }
   if (offlineEstimated) {
-    issues.push(["오프라인 예약 추정", offlineEstimated, "총량 최대값 대비 부족분을 오프라인 예약/차단으로 해석했습니다.", "good"]);
+    issues.push(["오프라인 예약 추정", offlineEstimated, "운영 기준 미만 부족분을 오프라인 예약/일시 차단으로 해석했습니다.", "good"]);
   }
   return {
     run,
@@ -3138,8 +3147,10 @@ function inventoryAuditProfile(item = {}) {
     .map((row) => finiteNumber(row.rawTotal, row.total))
     .filter((value) => value > 0);
   const varianceTotals = rawVarianceRows.map((row) => row.rawTotal).filter((value) => value > 0);
-  const totalMax = finiteNumber(item.weeklyMaxTotal, 0) || (varianceTotals.length ? Math.max(...varianceTotals) : (rawTotals.length ? Math.max(...rawTotals) : 0));
+  const totalMax = finiteNumber(item.weeklyMaxTotal, 0) || finiteNumber(item.weeklyBasisTotal, 0) || (varianceTotals.length ? Math.max(...varianceTotals) : (rawTotals.length ? Math.max(...rawTotals) : 0));
   const totalMin = finiteNumber(item.weeklyMinTotal, 0) || (varianceTotals.length ? Math.min(...varianceTotals) : (rawTotals.length ? Math.min(...rawTotals) : 0));
+  const operatingTotal = finiteNumber(item.weeklyOperatingTotal, totalMax);
+  const structuralBlockedTotal = finiteNumber(item.weeklyStructuralBlockedTotal, Math.max(0, totalMax - operatingTotal));
   const totalMedian = medianNumber(rawTotals);
   const totalGap = finiteNumber(item.weeklyTotalVarianceGap, 0) || Math.max(0, totalMax - totalMin);
   const totalGapRate = totalMax ? totalGap / totalMax : NaN;
@@ -3167,7 +3178,7 @@ function inventoryAuditProfile(item = {}) {
     missing: rows.filter((row) => row.missing).map((row) => row.label),
     variance: varianceRows.map((row) => {
       const rawTotal = finiteNumber(row.rawTotal, row.total);
-      const offline = finiteNumber(row.offlineReserved, 0);
+      const offline = operatingTotal ? Math.max(0, operatingTotal - rawTotal) : finiteNumber(row.offlineReserved, 0);
       return `${row.label} 원시 ${fmtNumber(rawTotal)}개${offline ? ` · 오프라인 ${fmtNumber(offline)}개` : ""}`;
     }),
     gap: []
@@ -3197,10 +3208,22 @@ function inventoryAuditProfile(item = {}) {
     reasons.push(totalMin && totalMax
       ? `날짜별 총량 변동 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`
       : "날짜별 총량 변동 감지");
-    actions.push("전화예약, 시설점검, 채널 재고조절 가능성으로 우선 해석");
+    actions.push("전체 객실 후보, 운영 판매 기준, 일시 차단 수량을 분리 확인");
     otaSignals.push("날짜별 총량 변동");
     issueChannels.add("전화예약/오프라인");
     issueChannels.add("네이버 날짜별 재고");
+  }
+
+  if (structuralBlockedTotal > 0) {
+    if (statusKey === "normal") {
+      statusKey = "phone_stock";
+      tone = "watch";
+    }
+    priority += 36;
+    reasons.push(`상시 차단/운영 축소 ${fmtNumber(structuralBlockedTotal)}개`);
+    actions.push("현재 운영 판매 기준을 매출 산정 기준으로 유지할지 관리자 확인");
+    otaSignals.push("운영 판매 기준 분리");
+    issueChannels.add("네이버 재고 세팅");
   }
 
   if (varianceRows.length) {
@@ -6753,17 +6776,17 @@ function sheetManualCorrectionForm(profile = {}, item = {}) {
     <div class="company-manual-form" data-company-manual-form data-company-id="${escapeHtml(profile.companyId)}">
       <div>
         <label>
-          <span>숙박 기준 총량</span>
-          <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 30">
+          <span>숙박 운영 판매 기준</span>
+          <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 26">
         </label>
         <label>
-          <span>데이유즈/캠프닉 기준 총량</span>
+          <span>데이유즈/캠프닉 운영 기준</span>
           <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correction.dayUseBasisTotal || "")}" placeholder="예: 12">
         </label>
       </div>
       <label>
         <span>보정 메모</span>
-        <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전화예약 조절 반영, 실제 객실 30동">
+        <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
       </label>
       <div class="company-manual-actions">
         <button type="button" data-save-company-correction data-company-id="${escapeHtml(profile.companyId)}">보정 저장</button>
@@ -8678,17 +8701,17 @@ function companyCorrectionFormHtml(company = {}, compact = false) {
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
       <div>
         <label>
-          <span>숙박 총량</span>
-          <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 30">
+          <span>숙박 운영 기준</span>
+          <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 26">
         </label>
         <label>
-          <span>데이유즈 총량</span>
+          <span>데이유즈 운영 기준</span>
           <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correction.dayUseBasisTotal || "")}" placeholder="예: 12">
         </label>
       </div>
       <label>
         <span>보정 메모</span>
-        <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전화예약 조절, 실제 객실 30동, 캠프닉 2회전">
+        <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
       </label>
       <div class="company-manual-actions">
         <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">저장</button>
@@ -10458,7 +10481,7 @@ function sheetRowsForBooking(item) {
 function sheetRowsForDayUse(item) {
   const rows = weeklyRows(item, "day");
   if (rows.length) {
-    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyBasisTotal, activeManualCorrection(item));
+    const basisTotal = basisTotalForRows(rows, item.dayUseWeeklyOperatingTotal || item.dayUseWeeklyBasisTotal, activeManualCorrection(item));
     return rows.map((row) => ({
       label: row.label,
       sold: Math.min(basisTotal || row.total, finiteNumber(row.sold) + offlineSoldForTotal(basisTotal, row.total)),
@@ -10540,10 +10563,11 @@ function sheetCollectionStatusPanel(item = {}) {
     ["수집 상태", status.label, `${fmtNumber(status.collectedDays)}/${fmtNumber(status.expectedDays)}일 확보`],
     ["문제 날짜", compactListText(status.missingDates, "없음", 5), status.missingDates.length ? "동일 기간 재수집 대상" : "기간 내 날짜 확보"],
     ["총량 기준", status.basisTotal ? `${fmtNumber(status.basisTotal)}개` : "확인필요", status.basisRule],
+    ["운영 기준", status.operatingTotal ? `${fmtNumber(status.operatingTotal)}개` : "확인필요", status.structuralBlockedQuantity ? `상시 차단/운영 축소 ${fmtNumber(status.structuralBlockedQuantity)}개/회 분리` : "전체 후보와 동일"],
     ["수량 신뢰도", `신뢰도 ${confidence.grade} · ${structure.label}`, structure.action || "자동 수량 판단"],
     ["상품별 수량", productText, status.productKnown ? "숙박/데이유즈 분리 기준" : "객실/상품 수량 직접 확인"],
     ["가격 확보", priceText, "할인 옵션 패키지는 산출 제외"],
-    ["오프라인 예약", status.offlineEstimated ? `${fmtNumber(status.offlineQuantity)}개 추정` : "특이 없음", "미오픈/차단은 오프라인 예약 가능성으로 해석"]
+    ["오프라인 예약", status.offlineEstimated ? `${fmtNumber(status.offlineQuantity)}개 추정` : "특이 없음", "운영 기준 미만 날짜만 오프라인 예약/일시 차단으로 해석"]
   ];
   return `
     <section class="sheet-section sheet-collection-section ${escapeHtml(status.tone)}">
