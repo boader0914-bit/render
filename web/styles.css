@@ -2339,6 +2339,23 @@ a.platform-row:hover {
   grid-column: 1 / -1;
 }
 
+.target-gate-review {
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 8px;
+}
+
+.target-gate-review .company-review-actions.compact {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.target-gate-review .company-review-actions button {
+  min-height: 32px;
+  padding-inline: 8px;
+  font-size: 11px;
+}
+
 .target-gate-list p {
   margin: 0;
 }
@@ -8367,6 +8384,7 @@ a.platform-row:hover {
   .target-gate-evidence,
   .target-gate-recrawl,
   .target-gate-batch .recrawl-batch-list,
+  .target-gate-review .company-review-actions.compact,
   .sales-pipeline-grid,
   .sales-performance-metrics,
   .sales-proposal-response-grid,
@@ -8903,6 +8921,7 @@ a.platform-row:hover {
   .target-gate-evidence,
   .target-gate-recrawl,
   .target-gate-batch .recrawl-batch-list,
+  .target-gate-review .company-review-actions.compact,
   .target-gate-head,
   .sales-pipeline-grid,
   .sales-performance-metrics,

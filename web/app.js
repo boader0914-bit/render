@@ -3682,7 +3682,7 @@ function companySalesAction(company = {}) {
 }
 
 function companyReviewContextFromButton(button, status = "") {
-  return companyReviewContextForCompany(button?.dataset?.companyId || "", status);
+  return companyReviewContextForCompany(button?.dataset?.companyId || "", status, button?.dataset?.companyReviewSource || "");
 }
 
 function companySalesStage(company = {}) {
@@ -3746,6 +3746,37 @@ function salesGateReviewEntries(limit = 8) {
       };
     });
   return limit ? rows.slice(0, limit) : rows;
+}
+
+function salesGateReviewActionsHtml(entry = {}) {
+  const company = entry.company || {};
+  const companyId = company.companyId || "";
+  if (!companyId) return "";
+  const current = company.adminReview?.status || "";
+  const recommendationStatus = entry.autoRecommendation?.status || "";
+  const note = company.adminReview?.note || compactListText([
+    "영업 보류 게이트",
+    entry.gateStatus,
+    entry.gateReason,
+    ...(entry.revenueEvidence?.reasons || []).slice(0, 1)
+  ], "영업 보류 게이트 판단", 3);
+  const actions = [
+    ["recrawl_needed", "재수집"],
+    ["check_needed", "확인"],
+    ["manual_needed", "보정"],
+    ["contact_ready", "컨택"],
+    ["hold", "보류"]
+  ];
+  return `
+    <div class="target-gate-review company-review-control compact" data-company-review-control data-company-id="${escapeHtml(companyId)}">
+      <input type="text" data-company-review-note value="${escapeHtml(note)}" placeholder="보류 게이트 판단 메모">
+      <div class="company-review-actions compact">
+        ${actions.map(([status, label]) => `
+          <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}" data-company-review-source="sales_gate">${escapeHtml(recommendationStatus === status ? `추천 ${label}` : label)}</button>
+        `).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function salesGateRevenueEvidenceHtml(entry = {}) {
@@ -8438,6 +8469,7 @@ function renderTargets() {
             </div>
             ${salesGateRevenueEvidenceHtml(entry)}
             <p>${escapeHtml(gateReason)}</p>
+            ${salesGateReviewActionsHtml(entry)}
             <div class="target-card-actions">
               <button class="secondary-button" type="button" data-drawer-tab="decisionQueue">판단 큐에서 처리</button>
               <button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>
