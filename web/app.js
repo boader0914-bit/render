@@ -2085,15 +2085,19 @@ function miniBars(item) {
 
 function renderSummary() {
   const items = state.data?.availability?.items || [];
+  const stats = state.data?.availability?.stats || {};
   const sales = summarizeSales(items);
   const revenue = summarizeRevenue(items);
-  const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(state.data?.availability?.stats?.weightedSoldOutRate, NaN);
-  const checked = state.data?.availability?.stats?.checkedPlaces || items.length;
-  const lowConfidence = finiteNumber(state.data?.availability?.stats?.lowConfidenceCount, 0);
-  const stockVariance = finiteNumber(state.data?.availability?.stats?.stockVarianceCount, 0);
-  const revenueNote = revenue.missingPriceSoldOut
-    ? `${fmtNumber(revenue.pricedSoldOut)}개 가격확인 · 가격누락 ${fmtNumber(revenue.missingPriceSoldOut)}개`
-    : `${fmtNumber(revenue.pricedSoldOut)}개 가격확인`;
+  const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(stats.weightedSoldOutRate, NaN);
+  const checked = stats.checkedPlaces || items.length;
+  const lowConfidence = finiteNumber(stats.lowConfidenceCount, 0);
+  const stockVariance = finiteNumber(stats.stockVarianceCount, 0);
+  const averageRevenue = finiteNumber(stats.averageAdjustedEstimatedRevenue, 0) || finiteNumber(revenue.adjustedRevenue, 0);
+  const revenueSampleCount = finiteNumber(stats.revenueSampleCount, 0);
+  const revenueCoverage = Number(stats.revenueCoverageRate);
+  const revenueNote = revenueSampleCount
+    ? `매출표본 ${fmtNumber(revenueSampleCount)}개${Number.isFinite(revenueCoverage) ? ` · 커버 ${fmtRate(revenueCoverage)}` : ""}`
+    : "매출표본 대기";
   els.summaryGrid.innerHTML = `
     <article class="summary-card">
       <span class="summary-icon blue">${summaryIcon("sales")}</span>
@@ -2101,7 +2105,7 @@ function renderSummary() {
     </article>
     <article class="summary-card">
       <span class="summary-icon green">${summaryIcon("money")}</span>
-      <div><strong>${fmtWon(revenue.revenue)}</strong><small>숙박 예상 매출 · ${escapeHtml(revenueNote)}</small></div>
+      <div><strong>${fmtWon(averageRevenue)}</strong><small>표본 평균 예상매출 · ${escapeHtml(revenueNote)}</small></div>
     </article>
     <article class="summary-card">
       <span class="summary-icon purple">${summaryIcon("company")}</span>
@@ -2147,12 +2151,29 @@ function inventoryLinked(item = {}) {
   return item.hasInventory !== false && Number(item.availabilityIndex) >= 0;
 }
 
+function regionBoundaryBadge(item = {}) {
+  const searchRegion = item.searchRegion || item.searchCluster || "";
+  const addressRegion = item.addressRegion || item.region || "";
+  if (!item.outsideSearchRegion || !searchRegion || !addressRegion) return "";
+  return `<span class="structure-badge watch" title="${escapeHtml(`${searchRegion} 검색권 결과이나 실제 소재지는 ${addressRegion}입니다.`)}">인접지역 노출</span>`;
+}
+
+function itemLocationLine(item = {}) {
+  const searchRegion = item.searchRegion || item.searchCluster || "";
+  const addressRegion = item.addressRegion || item.region || "";
+  const regionText = item.outsideSearchRegion && searchRegion && addressRegion
+    ? `${searchRegion} 검색권 · ${addressRegion} 소재`
+    : (addressRegion || searchRegion);
+  return [item.searchKeyword, regionText, item.address].filter(Boolean).join(" · ") || "지역/주소 확인";
+}
+
 function rankMetaChipRow(item = {}) {
   const chips = [
     item.overallRank ? `전체 ${fmtNumber(item.overallRank)}위` : "",
     item.regionalRank ? `지역 ${fmtNumber(item.regionalRank)}위` : "",
     item.adRank ? `광고 ${fmtNumber(item.adRank)}위` : "",
-    item.hasInventory ? "재고 분석 완료" : "재고 미수집"
+    item.hasInventory ? "재고 분석 완료" : "재고 미수집",
+    item.outsideSearchRegion ? "인접지역 노출" : ""
   ].filter(Boolean);
   return `<div class="flow-chip-row">${chips.slice(0, 4).map((chip, index) => `<span class="${index === 0 ? "hot" : ""}">${escapeHtml(chip)}</span>`).join("")}</div>`;
 }
@@ -2183,8 +2204,8 @@ function renderCompanies() {
             <small>${escapeHtml(categoryText(item))}</small>
             <div class="company-badges">${
               linked
-                ? `${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${manualCorrectionBadge(item)}${otaVerificationBadge(item)}`
-                : `<span class="confidence-badge watch" title="${escapeHtml(stockStatus)}">재고 미수집</span><span class="structure-badge watch">${escapeHtml(item.rankingSourceLabel || "네이버 전체 순위")}</span>`
+                ? `${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${regionBoundaryBadge(item)}${manualCorrectionBadge(item)}${otaVerificationBadge(item)}`
+                : `<span class="confidence-badge watch" title="${escapeHtml(stockStatus)}">재고 미수집</span><span class="structure-badge watch">${escapeHtml(item.rankingSourceLabel || "네이버 전체 순위")}</span>${regionBoundaryBadge(item)}`
             }</div>
           </div>
         </div>
@@ -2205,7 +2226,7 @@ function renderCompanies() {
           ` : `
             <div class="sales-lines">
               <span class="sales-line">${escapeHtml(`${item.rankingSourceLabel || "네이버 전체 순위"} ${fmtNumber(item.rank || index + 1)}위 · ${stockStatus}`)}</span>
-              <span class="sales-line day">${escapeHtml([item.searchKeyword, item.regionalCluster || item.region, item.address].filter(Boolean).join(" · ") || "지역/주소 확인")}</span>
+              <span class="sales-line day">${escapeHtml(itemLocationLine(item))}</span>
             </div>
             ${rankMetaChipRow(item)}
           `}

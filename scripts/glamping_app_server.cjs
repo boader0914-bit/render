@@ -5355,6 +5355,18 @@ function availabilityBookingBusinessId(row = {}) {
   });
 }
 
+function rowAddressRegion(row = {}) {
+  return row["소재지클러스터"] || row.addressRegion || row.actualRegion || "";
+}
+
+function rowSearchRegion(row = {}) {
+  return row["검색클러스터"] || row["지역"] || row.searchCluster || row.searchRegion || "";
+}
+
+function rowDisplayRegion(row = {}) {
+  return rowAddressRegion(row) || rowSearchRegion(row) || "";
+}
+
 function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
   const overallRank = numericField(row, ["overall_rank"]);
   const regionalRank = numericField(row, ["순위"]);
@@ -5365,6 +5377,8 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
       ? regionalRank
       : adRank;
   const placeId = extractNaverPlaceId(row);
+  const searchRegion = rowSearchRegion(row);
+  const addressRegion = rowAddressRegion(row);
   return {
     sourceKey: availabilityPlaceKey(row),
     placeId,
@@ -5376,10 +5390,13 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
     rankingSource: source,
     rankingSourceLabel: source === "overall" ? "네이버 전체 순위" : source === "regional" ? "네이버 지역별 순위" : "네이버 광고 순위",
     searchKeyword: row["검색키워드"] || row.query || "",
-    searchCluster: row["검색클러스터"] || row["지역"] || "",
+    searchCluster: searchRegion,
+    searchRegion,
+    addressRegion,
+    outsideSearchRegion: Boolean(searchRegion && addressRegion && searchRegion !== addressRegion),
     name: row["업체명"] || row.name || "확인불가",
     category: row["카테고리"] || row.category || "",
-    region: row["소재지클러스터"] || row["검색클러스터"] || row["지역"] || "",
+    region: rowDisplayRegion(row),
     address: row["주소"] || row.location || "",
     price: row["예약최저가"] || row["금액"] || row.price || "",
     bookingStatus: row["네이버예약재고수집상태"] || row["예약가능근거"] || "",
@@ -5508,6 +5525,8 @@ function summarizeAvailabilityRows(rows) {
     if (!key || byPlace.has(key)) continue;
     const placeId = extractNaverPlaceId(row);
     const bookingBusinessId = availabilityBookingBusinessId(row);
+    const searchRegion = rowSearchRegion(row);
+    const addressRegion = rowAddressRegion(row);
 
     byPlace.set(key, {
       sourceKey: key,
@@ -5516,7 +5535,11 @@ function summarizeAvailabilityRows(rows) {
       bookingBusinessId,
       rank: numericField(row, ["overall_rank", "순위", "rank_or_order"]) || byPlace.size + 1,
       name: row["업체명"] || row.name || "확인불가",
-      region: row["소재지클러스터"] || row["검색클러스터"] || row["지역"] || "",
+      region: addressRegion || searchRegion || "",
+      searchRegion,
+      searchCluster: searchRegion,
+      addressRegion,
+      outsideSearchRegion: Boolean(searchRegion && addressRegion && searchRegion !== addressRegion),
       address: row["주소"] || row.location || "",
       listType: row["예약리스트유형"] || "",
       productTypeSummary: row["네이버상품구성"] || "",
@@ -5653,6 +5676,16 @@ function summarizeAvailabilityRows(rows) {
   const revenuePrecisionRate = (totalPricedSoldOut + totalMissingPriceSoldOut)
     ? Number((totalPricedSoldOut / (totalPricedSoldOut + totalMissingPriceSoldOut)).toFixed(3))
     : null;
+  const revenueSampleCount = items.filter((item) => {
+    const lodgingRevenue = Number(item.weeklyAdjustedRevenue ?? item.basisLodgingAdjustedRevenue ?? item.weeklyEstimatedRevenue ?? item.basisLodgingRevenue ?? 0);
+    const dayUseRevenue = Number(item.dayUseWeeklyAdjustedRevenue ?? item.basisDayUseAdjustedRevenue ?? item.dayUseWeeklyEstimatedRevenue ?? item.basisDayUseRevenue ?? 0);
+    return lodgingRevenue + dayUseRevenue > 0;
+  }).length;
+  const combinedEstimatedRevenue = totalEstimatedRevenue + dayUseEstimatedRevenue;
+  const combinedAdjustedEstimatedRevenue = totalAdjustedEstimatedRevenue + dayUseAdjustedEstimatedRevenue;
+  const averageEstimatedRevenue = revenueSampleCount ? Math.round(combinedEstimatedRevenue / revenueSampleCount) : 0;
+  const averageAdjustedEstimatedRevenue = revenueSampleCount ? Math.round(combinedAdjustedEstimatedRevenue / revenueSampleCount) : 0;
+  const revenueCoverageRate = items.length ? Number((revenueSampleCount / items.length).toFixed(3)) : null;
   return {
     stats: {
       checkedPlaces: items.length,
@@ -5669,6 +5702,12 @@ function summarizeAvailabilityRows(rows) {
       dayUseEstimatedRevenue,
       dayUseAdjustedEstimatedRevenue,
       dayUseMissingPriceEstimatedRevenue,
+      combinedEstimatedRevenue,
+      combinedAdjustedEstimatedRevenue,
+      averageEstimatedRevenue,
+      averageAdjustedEstimatedRevenue,
+      revenueSampleCount,
+      revenueCoverageRate,
       weightedRate: totalRooms ? Number((totalAvailableRooms / totalRooms).toFixed(3)) : null,
       weightedSoldOutRate: totalRooms ? Number((totalSoldOutRooms / totalRooms).toFixed(3)) : null,
       lowAvailabilityCount: items.filter((item) => item.rate < 0.7).length,
@@ -6375,8 +6414,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-speed-revenue-precision"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-speed-revenue-precision"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-region-average-revenue"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-region-average-revenue"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
