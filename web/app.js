@@ -2463,6 +2463,9 @@ function collectionStatusProfile(item = {}) {
   const missingPriceQuantity = finiteNumber(lodgingRevenue.missingPriceSoldOut, 0) + finiteNumber(dayUseRevenue.missingPriceSoldOut, 0);
   const productCount = finiteNumber(item.countedItemCount, 0) + finiteNumber(item.nightItemCount, 0) + finiteNumber(item.dayUseItemCount, 0);
   const productKnown = productCount > 0 || Boolean(String(item.productTypeSummary || "").trim());
+  const manualCorrection = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
+  const manualLodgingBasis = manualCorrectionHasBasis(manualCorrection) ? finiteNumber(manualCorrection.lodgingBasisTotal, 0) : 0;
+  const basisTotal = manualLodgingBasis || finiteNumber(item.weeklyBasisTotal, 0);
   const quantityUnclear = Boolean(
     ["D", "E"].includes(confidence.grade) ||
     ["unknown", "stock_only", "grouped_stock"].includes(structure.type) ||
@@ -2474,9 +2477,17 @@ function collectionStatusProfile(item = {}) {
     missingPriceQuantity > 0 ||
     (soldQuantity > 0 && pricedQuantity === 0 && lodgingRevenue.basis === "missing" && dayUseRevenue.basis === "missing")
   );
-  const offlineQuantity = rows.reduce((sum, row) => sum + finiteNumber(row.offlineSold || row.hidden, 0), 0);
+  const offlineQuantity = Math.max(
+    finiteNumber(item.weeklyOfflineReservedTotal, 0),
+    rows.reduce((sum, row) => sum + finiteNumber(row.offlineSold || row.hidden, 0), 0)
+  ) + finiteNumber(item.dayUseWeeklyOfflineReservedTotal, 0);
   const hasOfflineDetail = Boolean(item.weeklyOfflineReservationDetail || item.dayUseWeeklyOfflineReservationDetail);
   const offlineEstimated = offlineQuantity > 0 || hasOfflineDetail;
+  const basisRule = manualLodgingBasis
+    ? `관리자 보정값 ${fmtNumber(manualLodgingBasis)}개 기준`
+    : item.weeklyBasisRule || (basisTotal
+    ? `전체객실수 후보는 날짜별 숙박 총량 최대값 ${fmtNumber(basisTotal)}개 기준`
+    : "날짜별 총량 최대값 기준");
   const statusKey = !collectedRows.length
     ? "missing"
     : priceMissing || quantityUnclear || !productKnown
@@ -2506,6 +2517,8 @@ function collectionStatusProfile(item = {}) {
     soldQuantity,
     offlineEstimated,
     offlineQuantity,
+    basisTotal,
+    basisRule,
     reasons: reasons.slice(0, 5)
   };
 }
@@ -3074,6 +3087,27 @@ function medianNumber(values = []) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+function stockVarianceRowsFromDetail(detail = "") {
+  const rows = String(detail || "")
+    .split(/\s*,\s*/)
+    .map((entry) => {
+      const match = entry.match(/(\d{1,2}\/\d{1,2}).*?원시\s+(\d+)\/(\d+)(?:.*?오프라인예약\s+(\d+))?/);
+      if (!match) return null;
+      return {
+        label: normalizeMonthDayLabel(match[1]),
+        rawAvailable: Number(match[2]),
+        rawTotal: Number(match[3]),
+        offlineReserved: Number(match[4] || 0)
+      };
+    })
+    .filter((row) => row && Number.isFinite(row.rawTotal) && row.rawTotal > 0);
+  const maxTotal = rows.length ? Math.max(...rows.map((row) => row.rawTotal)) : 0;
+  return rows.map((row) => ({
+    ...row,
+    offlineReserved: row.offlineReserved || (maxTotal ? Math.max(0, maxTotal - row.rawTotal) : 0)
+  }));
+}
+
 function rateGapText(value) {
   return Number.isFinite(Number(value)) ? formatSignedRate(Number(value)) : "대기";
 }
@@ -3099,15 +3133,17 @@ function isReviewBeforeCorrection(review = {}, correction = {}) {
 function inventoryAuditProfile(item = {}) {
   const rows = bookingGraphRows(item);
   const collectedRows = rows.filter((row) => !row.missing && finiteNumber(row.total, 0) > 0);
+  const rawVarianceRows = stockVarianceRowsFromDetail(item.weeklyRawStockVariance);
   const rawTotals = collectedRows
     .map((row) => finiteNumber(row.rawTotal, row.total))
     .filter((value) => value > 0);
-  const totalMax = rawTotals.length ? Math.max(...rawTotals) : 0;
-  const totalMin = rawTotals.length ? Math.min(...rawTotals) : 0;
+  const varianceTotals = rawVarianceRows.map((row) => row.rawTotal).filter((value) => value > 0);
+  const totalMax = finiteNumber(item.weeklyMaxTotal, 0) || (varianceTotals.length ? Math.max(...varianceTotals) : (rawTotals.length ? Math.max(...rawTotals) : 0));
+  const totalMin = finiteNumber(item.weeklyMinTotal, 0) || (varianceTotals.length ? Math.min(...varianceTotals) : (rawTotals.length ? Math.min(...rawTotals) : 0));
   const totalMedian = medianNumber(rawTotals);
-  const totalGap = Math.max(0, totalMax - totalMin);
+  const totalGap = finiteNumber(item.weeklyTotalVarianceGap, 0) || Math.max(0, totalMax - totalMin);
   const totalGapRate = totalMax ? totalGap / totalMax : NaN;
-  const varianceRows = collectedRows.filter((row) => {
+  const varianceRows = rawVarianceRows.length ? rawVarianceRows.filter((row) => row.rawTotal < totalMax) : collectedRows.filter((row) => {
     const rawTotal = finiteNumber(row.rawTotal, row.total);
     if (!rawTotal || !Number.isFinite(totalMedian)) return false;
     return rawTotal <= totalMedian * 0.72 || rawTotal >= totalMedian * 1.28;
@@ -3129,7 +3165,11 @@ function inventoryAuditProfile(item = {}) {
   const issueChannels = new Set();
   const problemDates = {
     missing: rows.filter((row) => row.missing).map((row) => row.label),
-    variance: varianceRows.map((row) => `${row.label} ${fmtNumber(finiteNumber(row.rawTotal, row.total))}개`),
+    variance: varianceRows.map((row) => {
+      const rawTotal = finiteNumber(row.rawTotal, row.total);
+      const offline = finiteNumber(row.offlineReserved, 0);
+      return `${row.label} 원시 ${fmtNumber(rawTotal)}개${offline ? ` · 오프라인 ${fmtNumber(offline)}개` : ""}`;
+    }),
     gap: []
   };
   const gapTypes = [];
@@ -3154,7 +3194,9 @@ function inventoryAuditProfile(item = {}) {
       tone = "watch";
     }
     priority += 48;
-    reasons.push(`날짜별 총량 변동 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`);
+    reasons.push(totalMin && totalMax
+      ? `날짜별 총량 변동 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`
+      : "날짜별 총량 변동 감지");
     actions.push("전화예약, 시설점검, 채널 재고조절 가능성으로 우선 해석");
     otaSignals.push("날짜별 총량 변동");
     issueChannels.add("전화예약/오프라인");
@@ -10497,6 +10539,7 @@ function sheetCollectionStatusPanel(item = {}) {
   const rows = [
     ["수집 상태", status.label, `${fmtNumber(status.collectedDays)}/${fmtNumber(status.expectedDays)}일 확보`],
     ["문제 날짜", compactListText(status.missingDates, "없음", 5), status.missingDates.length ? "동일 기간 재수집 대상" : "기간 내 날짜 확보"],
+    ["총량 기준", status.basisTotal ? `${fmtNumber(status.basisTotal)}개` : "확인필요", status.basisRule],
     ["수량 신뢰도", `신뢰도 ${confidence.grade} · ${structure.label}`, structure.action || "자동 수량 판단"],
     ["상품별 수량", productText, status.productKnown ? "숙박/데이유즈 분리 기준" : "객실/상품 수량 직접 확인"],
     ["가격 확보", priceText, "할인 옵션 패키지는 산출 제외"],
