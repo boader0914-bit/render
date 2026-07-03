@@ -305,18 +305,56 @@ const REGIONAL_GLAMPING_BASES = new Set([
   "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9"
 ]);
 
+const BROAD_REGION_BASES = new Set([
+  "경남", "경상남도", "경남도", "경북", "경상북도", "경북도", "경기", "경기도", "경기북부", "경기남부", "수도권", "서울근교",
+  "강원", "강원도", "제주", "제주도", "전북", "전라북도", "전북특별자치도", "전남", "전라남도",
+  "충남", "충청남도", "충북", "충청북도", "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종"
+]);
+
+const REGION_BASE_ALIASES = {
+  경상남: "경남",
+  경상남도: "경남",
+  경남도: "경남",
+  경상북: "경북",
+  경상북도: "경북",
+  경북도: "경북",
+  경기도: "경기",
+  전라북: "전북",
+  전라북도: "전북",
+  전북특별자치: "전북",
+  전북특별자치도: "전북",
+  전라남: "전남",
+  전라남도: "전남",
+  충청남: "충남",
+  충청남도: "충남",
+  충청북: "충북",
+  충청북도: "충북",
+  강원도: "강원",
+  제주도: "제주"
+};
+
 function compactCrawlKeyword(value) {
   return String(value || "").normalize("NFKC").replace(/\s+/g, "");
 }
 
-function looksLikeRegionalGlampingKeyword(value) {
+function normalizedRegionBase(value) {
+  const raw = compactCrawlKeyword(value);
+  const base = raw.replace(/(특별자치도|광역시|특별시|특별자치시|자치도|자치시|시|군|구|도)$/u, "");
+  return REGION_BASE_ALIASES[base] || REGION_BASE_ALIASES[raw] || base || raw;
+}
+
+function regionalGlampingKeywordBase(value) {
   const compact = compactCrawlKeyword(value);
-  const glamping = "\uAE00\uB7A8\uD551";
-  if (!compact.endsWith(glamping)) return false;
+  const glamping = "글램핑";
+  if (!compact.endsWith(glamping)) return "";
   const base = compact.slice(0, -glamping.length);
-  if (!base || base.length > 10) return false;
-  const withoutAdminSuffix = base.replace(/(\uD2B9\uBCC4\uC790\uCE58\uB3C4|\uAD11\uC5ED\uC2DC|\uD2B9\uBCC4\uC2DC|\uD2B9\uBCC4\uC790\uCE58\uC2DC|\uC790\uCE58\uB3C4|\uC790\uCE58\uC2DC|\uC2DC|\uAD70|\uAD6C|\uB3C4)$/u, "");
-  return REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix);
+  if (!base || base.length > 10) return "";
+  const withoutAdminSuffix = normalizedRegionBase(base);
+  return REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix) ? withoutAdminSuffix : "";
+}
+
+function looksLikeRegionalGlampingKeyword(value) {
+  return Boolean(regionalGlampingKeywordBase(value));
 }
 
 function correctedSearchMode(keyword, mode) {
@@ -4329,7 +4367,7 @@ function decisionQueueCsv(entries = [], context = {}) {
       decision.quantityConfidence || "",
       decision.gapType || "",
       decision.channelText || "",
-      `${plan.keyword} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`,
+      `${plan.keyword} · ${plan.regionScope ? `지역 ${plan.regionScope} · ` : ""}${plan.keywordSource || "업체 기준"} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`,
       `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`,
       finiteNumber(revenueImpact.totalRevenue, 0) || "",
       [precision.grade, precision.label].filter(Boolean).join(" · "),
@@ -4401,7 +4439,7 @@ function recrawlAutomationCsv(entries = companyDecisionQueueEntries(companyMaste
     row.rank ? `${fmtNumber(row.rank)}위` : "",
     "1",
     recrawlAutomationStatusLabel(row.status),
-    `정밀분석 · 상세 ${row.range}위 · ${row.dateText}`,
+    `${row.plan?.keyword || ""} · ${row.keywordSource || "업체 기준"}${row.regionScope ? ` · 지역 ${row.regionScope}` : ""} · 정밀분석 · 상세 ${row.range}위 · ${row.dateText}`,
     row.etaText || "",
     row.etaSource || "",
     "",
@@ -4424,7 +4462,7 @@ function recrawlAutomationCsv(entries = companyDecisionQueueEntries(companyMaste
     "한 번 수집으로 동일 조건 후보 동시 확인",
     batch.reason,
     batch.revenue ? finiteNumber(batch.revenue, 0) : "",
-    `${batch.plan.keyword || activeKeyword()} · ${fmtNumber(batch.count)}개 후보`
+    `${batch.plan.keyword || activeKeyword()}${batch.regionScopes?.length ? ` · 지역 ${batch.regionScopes.join("/")}` : ""} · ${fmtNumber(batch.count)}개 후보`
   ];
   const rows = [
     ...batches.map(batchFor),
@@ -6636,11 +6674,95 @@ function companyDecisionEvidenceHtml(decision = {}) {
   `;
 }
 
+function companyRegionBaseCandidates(company = {}) {
+  const values = [
+    ...(Array.isArray(company.regions) ? company.regions : []),
+    ...(Array.isArray(company.addresses) ? company.addresses : [])
+  ].map(compactCrawlKeyword).filter(Boolean);
+  const found = [];
+  for (const base of REGIONAL_GLAMPING_BASES) {
+    const compact = compactCrawlKeyword(base);
+    if (values.some((value) => value.includes(compact))) found.push(normalizedRegionBase(base));
+  }
+  return [...new Set(found)]
+    .sort((a, b) => {
+      const broadDelta = Number(BROAD_REGION_BASES.has(a)) - Number(BROAD_REGION_BASES.has(b));
+      return broadDelta || b.length - a.length || a.localeCompare(b);
+    });
+}
+
+function companyPrimaryRegionBase(company = {}) {
+  return companyRegionBaseCandidates(company)[0] || "";
+}
+
+function regionalKeywordMatchesCompany(company = {}, keyword = "") {
+  const base = regionalGlampingKeywordBase(keyword);
+  if (!base) return true;
+  const candidates = companyRegionBaseCandidates(company);
+  if (!candidates.length) return false;
+  const compactBase = compactCrawlKeyword(base);
+  return candidates.some((candidate) => compactCrawlKeyword(candidate) === compactBase);
+}
+
+function sortedCompanyKeywordRows(company = {}) {
+  return (Array.isArray(company.keywords) ? company.keywords : [])
+    .filter((row) => row?.keyword)
+    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
+}
+
+function companyRecrawlKeywordPlan(company = {}, run = {}) {
+  const rows = sortedCompanyKeywordRows(company);
+  const regionBase = companyPrimaryRegionBase(company);
+  const rowPlan = (row, source) => ({
+    keyword: row.keyword,
+    rank: row.bestRank || row.latestRank || company.bestRank || 0,
+    regionScope: regionalGlampingKeywordBase(row.keyword) || regionBase,
+    keywordSource: source
+  });
+  const currentKeyword = run.keyword || activeKeyword();
+  const currentKey = compactCrawlKeyword(currentKeyword).toLowerCase();
+  const exactCurrent = currentKey
+    ? rows.find((row) => compactCrawlKeyword(row.keyword).toLowerCase() === currentKey && regionalKeywordMatchesCompany(company, row.keyword))
+    : null;
+  if (exactCurrent) return rowPlan(exactCurrent, "현재 키워드 노출");
+  const hasRegionScope = Boolean(regionBase);
+  const local = rows.find((row) => row.layer?.type === "local" && regionalKeywordMatchesCompany(company, row.keyword))
+    || (!hasRegionScope ? rows.find((row) => row.layer?.type === "local") : null);
+  if (local) return rowPlan(local, "업체 로컬 키워드");
+  const regionMatched = rows.find((row) => regionalKeywordMatchesCompany(company, row.keyword));
+  if (regionMatched) return rowPlan(regionMatched, "업체 노출 키워드");
+  const fallbackKeyword = [company.bestKeyword, company.latestKeyword]
+    .find((keyword) => keyword && regionalKeywordMatchesCompany(company, keyword));
+  if (fallbackKeyword) {
+    return {
+      keyword: fallbackKeyword,
+      rank: company.bestRank || 0,
+      regionScope: regionalGlampingKeywordBase(fallbackKeyword) || regionBase,
+      keywordSource: "업체 대표 키워드"
+    };
+  }
+  if (regionBase) {
+    return {
+      keyword: `${regionBase}글램핑`,
+      rank: company.bestRank || 0,
+      regionScope: regionBase,
+      keywordSource: "업체 지역 기준"
+    };
+  }
+  return {
+    keyword: company.bestKeyword || company.latestKeyword || currentKeyword || activeKeyword(),
+    rank: company.bestRank || 0,
+    regionScope: "",
+    keywordSource: "기본 키워드"
+  };
+}
+
 function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
   const run = state.data?.run || {};
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
   const issues = new Set((profile.issues || []).map((issue) => issue.key));
-  const rank = Number(company.bestRank || 0);
+  const keywordPlan = companyRecrawlKeywordPlan(company, run);
+  const rank = Number(keywordPlan.rank || company.bestRank || 0);
   let range = "1-20";
   if (!rank || rank > 20 || criteria.has("ota") || criteria.has("quantity") || criteria.has("capacity") || issues.has("booking")) {
     range = "1-30";
@@ -6650,14 +6772,16 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
   const dateText = decision.problemDateText && decision.problemDateText !== "최근 수집일 기준"
     ? decision.problemDateText
     : dateRangeLabel(run);
-  const keyword = run.keyword || company.bestKeyword || activeKeyword();
+  const keyword = keywordPlan.keyword || company.bestKeyword || activeKeyword();
   return {
     keyword,
+    regionScope: keywordPlan.regionScope || regionalGlampingKeywordBase(keyword) || "",
+    keywordSource: keywordPlan.keywordSource || "업체 기준",
     range,
     dateText,
     checkIn: run.checkIn || els.checkInInput?.value || "",
     checkOut: run.checkOut || els.checkOutInput?.value || "",
-    searchMode: run.searchMode || "keyword",
+    searchMode: correctedSearchMode(keyword, run.searchMode || "keyword"),
     productMode: run.productMode || "all",
     collectionMode: "precision"
   };
@@ -6703,7 +6827,7 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
     </div>
     <div class="company-check-apply-row">
       <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}">수집 설정 적용</button>
-      <small>${escapeHtml(`${plan.keyword} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`)}</small>
+      <small>${escapeHtml(`${plan.keyword} · ${plan.keywordSource || "업체 기준"}${plan.regionScope ? ` · 지역 ${plan.regionScope}` : ""} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`)}</small>
     </div>
   `;
 }
@@ -6873,6 +6997,8 @@ function recrawlAutomationRow(entry = {}) {
     label: recommendation.label || recrawlAutomationStatusLabel(recommendation.status),
     tone: recommendation.tone || entry.type?.tone || "watch",
     reason: compactListText(reasons, "재수집 후 판단 필요", 3),
+    regionScope: plan.regionScope || "",
+    keywordSource: plan.keywordSource || "업체 기준",
     note: recrawlAutomationNote(entry)
   };
 }
@@ -6909,7 +7035,7 @@ function recrawlAutomationProfile(entries = []) {
 }
 
 function recrawlAutomationBatchKey(plan = {}) {
-  return crawlEtaKey(plan);
+  return `${crawlEtaKey(plan)}|region:${compactCrawlKeyword(plan.regionScope || regionalGlampingKeywordBase(plan.keyword) || "")}`;
 }
 
 function recrawlAutomationBatches(rows = []) {
@@ -6945,6 +7071,7 @@ function recrawlAutomationBatches(rows = []) {
         savedSeconds,
         names: batch.rows.map((row) => row.name).filter(Boolean),
         regions: [...new Set(batch.rows.map((row) => row.region).filter(Boolean))],
+        regionScopes: [...new Set(batch.rows.map((row) => row.regionScope).filter(Boolean))],
         reason: compactListText(batch.rows.flatMap((row) => [row.reason, row.label]).filter(Boolean), "동일 조건 재수집", 3)
       };
     })
@@ -6996,7 +7123,7 @@ function recrawlAutomationBatchHtml(batches = []) {
     <article class="recrawl-batch-panel">
       <div class="history-card-head">
         <strong>0. 묶음 실행</strong>
-        <small>같은 키워드·기간·범위는 한 번 수집해 여러 판단 큐 업체를 동시에 확인합니다.</small>
+        <small>같은 키워드·지역·기간·범위만 한 번 수집해 여러 판단 큐 업체를 동시에 확인합니다.</small>
       </div>
       <div class="recrawl-batch-list">
         ${rows.length ? rows.map((batch, index) => `
@@ -7006,6 +7133,7 @@ function recrawlAutomationBatchHtml(batches = []) {
               <b>${escapeHtml(batch.plan.keyword || activeKeyword())}</b>
               <small>${escapeHtml([
                 `${fmtNumber(batch.count)}개 후보`,
+                batch.regionScopes?.length ? `지역 ${batch.regionScopes.slice(0, 2).join(" / ")}` : "",
                 batch.plan.checkIn && batch.plan.checkOut ? `${batch.plan.checkIn}~${batch.plan.checkOut}` : "기간 확인",
                 `상세 ${batch.plan.range || batch.plan.detailRankRanges || "1-20"}위`,
                 batch.regions.slice(0, 2).join(" / ")
@@ -7031,6 +7159,7 @@ function recrawlAutomationMiniCells(row = {}) {
         <span><b>비교</b>이전 수집 대기</span>
         <span><b>기간</b>${escapeHtml(row.dateText)}</span>
         <span><b>범위</b>${escapeHtml(row.range)}위</span>
+        <span><b>키워드</b>${escapeHtml(row.keywordSource || "업체 기준")}</span>
         <span><b>예상</b>${escapeHtml(row.etaText || "계산 대기")}</span>
       </div>
     `;
@@ -10015,6 +10144,8 @@ function applyQueueRecrawlSetting(button) {
     companyNames: [company.primaryName || ""].filter(Boolean),
     keyword: plan.keyword || activeKeyword(),
     range: plan.range || "1-20",
+    regionScope: plan.regionScope || "",
+    keywordSource: plan.keywordSource || "업체 기준",
     checkIn: plan.checkIn || "",
     checkOut: plan.checkOut || "",
     etaSeconds: eta.estimatedTotalSeconds || 0,
@@ -10055,13 +10186,15 @@ function applyRecrawlBatchSetting(button) {
   const eta = batch.eta || crawlEtaForPlan(plan);
   state.pendingRecrawlContext = {
     type: "batch",
-    key: batch.key,
+    key: crawlEtaKey(plan),
+    batchKey: batch.key,
     label: "묶음 재수집",
     count: batch.count || 0,
     companyIds: batch.rows.map((row) => row.company.companyId || "").filter(Boolean),
     companyNames: batch.names || [],
     keyword: plan.keyword || activeKeyword(),
     range: plan.range || plan.detailRankRanges || "1-20",
+    regionScope: plan.regionScope || batch.regionScopes?.join("/") || "",
     checkIn: plan.checkIn || "",
     checkOut: plan.checkOut || "",
     savedSeconds: batch.savedSeconds || 0,
