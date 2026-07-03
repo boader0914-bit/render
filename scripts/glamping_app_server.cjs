@@ -130,7 +130,8 @@ const REGIONAL_GLAMPING_BASES = new Set([
   "\uACBD\uB0A8", "\uACBD\uC0C1\uB0A8\uB3C4", "\uACBD\uB0A8\uB3C4",
   "\uACBD\uBD81", "\uACBD\uC0C1\uBD81\uB3C4", "\uACBD\uBD81\uB3C4",
   "\uACBD\uAE30", "\uACBD\uAE30\uB3C4", "\uACBD\uAE30\uBD81\uBD80", "\uACBD\uAE30\uB0A8\uBD80", "\uC218\uB3C4\uAD8C", "\uC11C\uC6B8\uADFC\uAD50",
-  "\uAC15\uC6D0", "\uAC15\uC6D0\uB3C4", "\uC81C\uC8FC", "\uC81C\uC8FC\uB3C4",
+  "\uAC15\uC6D0", "\uAC15\uC6D0\uB3C4", "\uCD98\uCC9C", "\uC6D0\uC8FC", "\uAC15\uB989", "\uB3D9\uD574", "\uD0DC\uBC31", "\uC18D\uCD08", "\uC0BC\uCC99", "\uD64D\uCC9C", "\uD6A1\uC131", "\uC601\uC6D4", "\uD3C9\uCC3D", "\uC815\uC120", "\uCCA0\uC6D0", "\uD654\uCC9C", "\uC591\uAD6C", "\uC778\uC81C", "\uACE0\uC131", "\uC591\uC591",
+  "\uC81C\uC8FC", "\uC81C\uC8FC\uB3C4",
   "\uC804\uBD81", "\uC804\uB77C\uBD81\uB3C4", "\uC804\uBD81\uD2B9\uBCC4\uC790\uCE58\uB3C4",
   "\uC804\uB0A8", "\uC804\uB77C\uB0A8\uB3C4",
   "\uCDA9\uB0A8", "\uCDA9\uCCAD\uB0A8\uB3C4", "\uCDA9\uBD81", "\uCDA9\uCCAD\uBD81\uB3C4",
@@ -6195,8 +6196,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-crawl-speed-presets"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-crawl-speed-presets"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-new-region-keyword-guard"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-new-region-keyword-guard"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
