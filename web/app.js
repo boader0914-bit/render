@@ -1,4 +1,10 @@
 const state = {
+  session: {
+    authenticated: false,
+    username: "",
+    role: "admin",
+    roleLabel: "관리자"
+  },
   runs: [],
   data: null,
   activeRunId: null,
@@ -39,6 +45,21 @@ const CORE_COLORS = {
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const LOCATION_DICTIONARY_URL = "/data/location_dictionary.json";
 const DEFAULT_BOOKING_DAYS = 7;
+const ROLE_TABS = {
+  admin: ["report", "rank", "dictionary", "target", "decisionQueue", "map", "demand", "historyOps", "admin"],
+  b2b: ["report", "rank", "map", "demand"]
+};
+const TAB_LABELS = {
+  report: "요약 리포트",
+  rank: "업체 순위",
+  dictionary: "입지사전",
+  target: "영업 타깃",
+  decisionQueue: "관리자 판단 큐",
+  map: "지역 클러스터 지도",
+  demand: "수요구조 분석",
+  historyOps: "누적 DB 분석",
+  admin: "관리"
+};
 
 const els = {
   pageTitle: document.getElementById("pageTitle"),
@@ -78,6 +99,7 @@ const els = {
   refreshRuns: document.getElementById("refreshRuns"),
   crawlForm: document.getElementById("crawlForm"),
   logoutButton: document.getElementById("logoutButton"),
+  headerLogoutButton: document.getElementById("headerLogoutButton"),
   keywordInput: document.getElementById("keywordInput"),
   checkInInput: document.getElementById("checkInInput"),
   checkOutInput: document.getElementById("checkOutInput"),
@@ -443,6 +465,48 @@ function correctedSearchMode(keyword, mode) {
   return mode === "company" && looksLikeRegionalGlampingKeyword(keyword) ? "keyword" : mode;
 }
 
+function currentRole() {
+  return state.session?.role === "b2b" ? "b2b" : "admin";
+}
+
+function isAdminRole() {
+  return currentRole() === "admin";
+}
+
+function roleTabs() {
+  return ROLE_TABS[currentRole()] || ROLE_TABS.admin;
+}
+
+function roleAllowsTab(tab) {
+  return roleTabs().includes(tab);
+}
+
+function firstRoleTab() {
+  return roleTabs()[0] || "report";
+}
+
+function applyRoleUi() {
+  const allowedTabs = new Set(roleTabs());
+  if (!allowedTabs.has(state.activeTab)) state.activeTab = firstRoleTab();
+  document.querySelectorAll("[data-tab]").forEach((button) => {
+    const allowed = allowedTabs.has(button.dataset.tab);
+    button.hidden = !allowed;
+    button.classList.toggle("active", allowed && button.dataset.tab === state.activeTab);
+  });
+  document.querySelectorAll("[data-drawer-tab]").forEach((button) => {
+    button.hidden = !allowedTabs.has(button.dataset.drawerTab);
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    const allowed = allowedTabs.has(panel.dataset.panel);
+    panel.hidden = !allowed;
+    panel.classList.toggle("active", allowed && panel.dataset.panel === state.activeTab);
+  });
+  const roleLabel = state.session?.roleLabel || (isAdminRole() ? "관리자" : "B2B");
+  if (els.adminStatus) {
+    els.adminStatus.textContent = `${roleLabel} 모드`;
+  }
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   const text = await response.text();
@@ -457,6 +521,8 @@ async function fetchJson(url, options) {
     error.status = response.status;
     if (response.status === 401 && !url.includes("/api/logout")) {
       location.replace("/login");
+    } else if (response.status === 403) {
+      setStatus("권한 없음");
     }
     throw error;
   }
@@ -2256,7 +2322,7 @@ function renderCompanies() {
       </article>
     `;
   }).join("");
-  els.companyList.innerHTML = `${renderValidationBoard(analysisItems)}${cards}`;
+  els.companyList.innerHTML = `${isAdminRole() ? renderValidationBoard(analysisItems) : ""}${cards}`;
 }
 
 function dateForRangeLabel(label, run = {}) {
@@ -5499,8 +5565,9 @@ function renderReport() {
 
   const sales = summarizeSales(items);
   const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(data.availability?.stats?.weightedSoldOutRate, NaN);
-  const targets = targetEntries(8);
-  const allTargets = targetEntries(0);
+  const publicMode = !isAdminRole();
+  const targets = publicMode ? [] : targetEntries(8);
+  const allTargets = publicMode ? [] : targetEntries(0);
   const platformStats = reportPlatformStats(items);
   const searchVolume = (data.regions || []).reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
   const platformGapRatio = platformStats.otaCheckCount ? (platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo) / (platformStats.otaCheckCount * 3) : 0;
@@ -5526,10 +5593,10 @@ function renderReport() {
       <div class="report-hero-copy">
         <span class="report-badge ${decision.tone}">${escapeHtml(decision.label)}</span>
         <h2>${escapeHtml(keyword)} 시장 브리핑</h2>
-        <p>${escapeHtml(range)} 입력기간 기준으로 네이버 노출, 객실 판매율, OTA 보조 확인, 상품 구성 약점을 함께 판정했습니다.</p>
+        <p>${escapeHtml(range)} 입력기간 기준으로 네이버 노출, 객실 판매율, OTA 보조 확인, 상품 구성을 함께 판정했습니다.</p>
       </div>
       <div class="report-score-card">
-        <span>공략 매력도</span>
+        <span>${publicMode ? "시장 상태" : "공략 매력도"}</span>
         <strong>${fmtNumber(score)}</strong>
         <small>${escapeHtml(decision.summary)}</small>
       </div>
@@ -5547,9 +5614,9 @@ function renderReport() {
         <small>상위 노출 기준</small>
       </article>
       <article>
-        <span>컨택 후보</span>
-        <strong>${fmtNumber(allTargets.length)}</strong>
-        <small>판매흐름/상품 약점 감지</small>
+        <span>${publicMode ? "저판매 구간" : "컨택 후보"}</span>
+        <strong>${fmtNumber(publicMode ? lowSalesCount : allTargets.length)}</strong>
+        <small>${publicMode ? "판매 흐름 점검 대상" : "판매흐름/상품 약점 감지"}</small>
       </article>
       <article>
         <span>상품 공백</span>
@@ -5563,7 +5630,7 @@ function renderReport() {
         <div class="report-card-head">
           <div>
             <h3>시장 해석</h3>
-            <p>판매율, OTA 보조 확인, 상품 구성으로 본 영업 우선순위</p>
+            <p>${publicMode ? "판매율, OTA 보조 확인, 상품 구성으로 본 운영 상태" : "판매율, OTA 보조 확인, 상품 구성으로 본 영업 우선순위"}</p>
           </div>
           <span>${fmtNumber(bookingDays(run))}일 기준</span>
         </div>
@@ -5597,18 +5664,18 @@ function renderReport() {
         <div class="report-card-head">
           <div>
             <h3>이번 주 액션</h3>
-            <p>먼저 확인해야 할 영업/운영 과제</p>
+            <p>${publicMode ? "먼저 점검해야 할 운영 과제" : "먼저 확인해야 할 영업/운영 과제"}</p>
           </div>
         </div>
         <ol class="report-action-list">
           <li><strong>OTA 색인 업체만 보조 채널 확인</strong><span>색인 ${fmtNumber(platformStats.otaCheckCount || 0)}개 · 여기어때 ${fmtNumber(platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(platformStats.missingYanolja)}개 확인</span></li>
-          <li><strong>객실 판매율 낮은 업체 상품 재구성</strong><span>저판매 후보 ${fmtNumber(lowSalesCount)}개, 가격/패키지/캠프닉 점검</span></li>
+          <li><strong>객실 판매율 낮은 업체 상품 재구성</strong><span>저판매 ${fmtNumber(lowSalesCount)}개, 가격/패키지/캠프닉 점검</span></li>
           <li><strong>데이유즈/캠프닉 공백 제안</strong><span>${fmtNumber(items.length - dayUseCount)}개 업체는 당일상품 확인 필요</span></li>
         </ol>
       </article>
     </section>
 
-    <section class="report-card report-target-preview">
+    ${publicMode ? "" : `<section class="report-card report-target-preview">
       <div class="report-card-head">
         <div>
           <h3>우선 컨택 후보</h3>
@@ -5630,7 +5697,7 @@ function renderReport() {
           `;
         }).join("") : `<div class="empty">우선 컨택 후보가 없습니다.</div>`}
       </div>
-    </section>
+    </section>`}
 
     <section class="report-card report-region-preview">
       <div class="report-card-head">
@@ -10265,18 +10332,7 @@ async function loadLocationCardRequests() {
 function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
-  const titleMap = {
-    report: "요약 리포트",
-    rank: "업체 순위",
-    dictionary: "입지사전",
-    target: "영업 타깃",
-    decisionQueue: "관리자 판단 큐",
-    map: "지역 클러스터 지도",
-    demand: "수요구조 분석",
-    historyOps: "누적 DB 분석",
-    admin: "관리"
-  };
-  els.pageTitle.textContent = titleMap[state.activeTab] || "요약 리포트";
+  els.pageTitle.textContent = TAB_LABELS[state.activeTab] || "요약 리포트";
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
   } else if (state.activeTab === "decisionQueue") {
@@ -10294,8 +10350,9 @@ function renderHeader() {
 }
 
 function renderAll() {
+  applyRoleUi();
   if (!state.data) {
-    renderLocationDictionary();
+    if (roleAllowsTab("dictionary")) renderLocationDictionary();
     return;
   }
   renderHeader();
@@ -10303,33 +10360,36 @@ function renderAll() {
   renderNotice();
   renderReport();
   renderCompanies();
-  renderTargets();
-  renderDecisionQueue();
-  renderMap();
-  renderDemand();
-  renderHistoryOps();
-  renderCompanyMasterPanel();
-  renderLocationDictionary();
-  renderDownloads();
-  syncYeogiManualInterface();
+  if (roleAllowsTab("target")) renderTargets();
+  if (roleAllowsTab("decisionQueue")) renderDecisionQueue();
+  if (roleAllowsTab("map")) renderMap();
+  if (roleAllowsTab("demand")) renderDemand();
+  if (roleAllowsTab("historyOps")) renderHistoryOps();
+  if (isAdminRole()) {
+    renderCompanyMasterPanel();
+    renderDownloads();
+    syncYeogiManualInterface();
+  }
+  if (roleAllowsTab("dictionary")) renderLocationDictionary();
 }
 
 function setActiveTab(tab) {
-  state.activeTab = tab;
+  state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  applyRoleUi();
   document.querySelectorAll(".tab-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.panel === tab);
+    panel.classList.toggle("active", panel.dataset.panel === state.activeTab && roleAllowsTab(panel.dataset.panel));
   });
   document.querySelectorAll(".bottom-nav button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.tab === tab);
+    button.classList.toggle("active", button.dataset.tab === state.activeTab);
   });
   renderHeader();
   closeDrawer();
-  if (tab === "report") renderReport();
-  if (tab === "decisionQueue") renderDecisionQueue();
-  if (tab === "map") renderMap();
-  if (tab === "demand") renderDemand();
-  if (tab === "historyOps") renderHistoryOps();
-  if (tab === "dictionary") renderLocationDictionary();
+  if (state.activeTab === "report") renderReport();
+  if (state.activeTab === "decisionQueue") renderDecisionQueue();
+  if (state.activeTab === "map") renderMap();
+  if (state.activeTab === "demand") renderDemand();
+  if (state.activeTab === "historyOps") renderHistoryOps();
+  if (state.activeTab === "dictionary") renderLocationDictionary();
 }
 
 function sheetRowsForBooking(item) {
@@ -10893,14 +10953,14 @@ function renderSheetBooking(item) {
   const confidenceReasons = [...confidence.alerts, ...confidence.reasons].filter(Boolean).slice(0, 4);
   const flow = salesFlowProfile(item);
   const historyWeekday = flow.history?.weekday;
+  const adminBlocks = isAdminRole()
+    ? `${sheetAuditPanel(item)}${sheetRecrawlComparisonPanel(item)}${sheetCompanyProfile(item)}${sheetHistoryPanel(item)}`
+    : "";
   return `
     ${sheetFlowOverview(item)}
     ${sheetCollectionStatusPanel(item)}
     ${sheetRevenuePanel(item)}
-    ${sheetAuditPanel(item)}
-    ${sheetRecrawlComparisonPanel(item)}
-    ${sheetCompanyProfile(item)}
-    ${sheetHistoryPanel(item)}
+    ${adminBlocks}
     ${sheetInventoryStructure(item)}
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>
@@ -11098,7 +11158,27 @@ function closeDrawer() {
   if (els.detailSheet.hidden) document.body.style.overflow = "";
 }
 
+async function loadSession() {
+  const session = await fetchJson("/api/session");
+  state.session = {
+    authenticated: Boolean(session.authenticated),
+    username: session.username || "",
+    role: session.role === "b2b" ? "b2b" : "admin",
+    roleLabel: session.roleLabel || (session.role === "b2b" ? "B2B" : "관리자")
+  };
+  if (location.pathname === "/b2b" && state.session.role === "b2b") {
+    state.activeTab = "report";
+  } else if (location.pathname === "/admin" && state.session.role === "admin") {
+    state.activeTab = "admin";
+  }
+  applyRoleUi();
+}
+
 async function loadHistoryOps() {
+  if (!isAdminRole()) {
+    state.historyOps = null;
+    return;
+  }
   try {
     state.historyOps = await fetchJson("/api/history/summary");
   } catch (error) {
@@ -11108,6 +11188,11 @@ async function loadHistoryOps() {
 }
 
 async function loadCompanyMasterSummary() {
+  if (!isAdminRole()) {
+    state.companyMaster = null;
+    state.crawlEtaByKey = {};
+    return;
+  }
   try {
     state.companyMaster = await fetchJson("/api/company-master/summary");
     await loadRecrawlEtaEstimates(state.companyMaster);
@@ -11704,8 +11789,9 @@ async function loadRuns(selectLatest = false) {
   state.runs = data.runs || [];
   els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
   if (!state.runs.length) {
-    if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
-    els.companyList.innerHTML = `<div class="empty">실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
+    const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "조회 가능한 실행 결과가 없습니다.";
+    if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
+    els.companyList.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
     if (els.decisionQueueCount) els.decisionQueueCount.textContent = "0 대기";
     if (els.decisionQueueList) els.decisionQueueList.innerHTML = `<div class="empty">실행 결과가 없습니다. 수집 후 판단 큐가 생성됩니다.</div>`;
     setStatus("결과 없음");
@@ -11724,9 +11810,15 @@ async function loadRun(runId) {
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
   state.data = data;
   state.activeRunId = runId;
-  await loadHistoryOps();
-  await loadCompanyMasterSummary();
-  syncDictionaryInputToActiveRun(true);
+  if (isAdminRole()) {
+    await loadHistoryOps();
+    await loadCompanyMasterSummary();
+  } else {
+    state.historyOps = null;
+    state.companyMaster = null;
+    state.crawlEtaByKey = {};
+  }
+  if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
   if (els.keywordInput) els.keywordInput.value = run.keyword || (run.label || "").split("·")[0].trim() || els.keywordInput.value;
@@ -11945,6 +12037,10 @@ function renderTrafficState(data) {
 }
 
 async function loadTrafficState() {
+  if (!isAdminRole()) {
+    state.trafficKeyState = null;
+    return;
+  }
   try {
     renderTrafficState(await fetchJson("/api/settings/traffic-keys"));
   } catch {
@@ -12166,6 +12262,7 @@ function bindEvents() {
   els.trafficKeyForm.addEventListener("submit", submitTrafficKeys);
   els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
   els.logoutButton?.addEventListener("click", logout);
+  els.headerLogoutButton?.addEventListener("click", logout);
   els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
   els.crawlSpeedPresetRow?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-crawl-speed-preset]");
@@ -12204,17 +12301,22 @@ function bindEvents() {
 
 async function init() {
   ensureCrawlControls();
-  syncCollectionModeInputs();
-  bindEvents();
-  setDefaultDates();
   try {
-    await Promise.all([loadRuns(true), loadTrafficState(), loadLocationDictionary(), loadLocationCardRequests()]);
-    pollCrawlStatusUntilIdle(false);
+    await loadSession();
+    syncCollectionModeInputs();
+    bindEvents();
+    setDefaultDates();
+    const tasks = [loadRuns(true)];
+    if (isAdminRole()) {
+      tasks.push(loadTrafficState(), loadLocationDictionary(), loadLocationCardRequests());
+    }
+    await Promise.all(tasks);
+    if (isAdminRole()) pollCrawlStatusUntilIdle(false);
   } catch (error) {
     setStatus("오류");
     els.pageSubtitle.textContent = error.message;
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-    loadLocationDictionary();
+    if (isAdminRole()) loadLocationDictionary();
   }
 }
 

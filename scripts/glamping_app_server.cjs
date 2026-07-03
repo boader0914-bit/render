@@ -46,8 +46,16 @@ const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
 const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || "admin").trim();
 const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "0914").trim();
+const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || "b2b").trim();
+const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B_PASSWORD || "0914").trim();
+const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENABLED || "1").trim())
+  && Boolean(B2B_USERNAME && B2B_PASSWORD);
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const USER_ROLES = {
+  admin: "admin",
+  b2b: "b2b"
+};
 const sessions = new Map();
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
@@ -1050,11 +1058,34 @@ function cleanupSessions() {
   }
 }
 
-function createSession(username) {
+function normalizeUserRole(role) {
+  return role === USER_ROLES.b2b ? USER_ROLES.b2b : USER_ROLES.admin;
+}
+
+function userRoleLabel(role) {
+  return normalizeUserRole(role) === USER_ROLES.b2b ? "B2B" : "관리자";
+}
+
+function authenticatedUserForCredentials(username, password) {
+  if (timingSafeTextEqual(username, ADMIN_USERNAME) && timingSafeTextEqual(password, ADMIN_PASSWORD)) {
+    return { username: ADMIN_USERNAME, role: USER_ROLES.admin, roleLabel: userRoleLabel(USER_ROLES.admin) };
+  }
+  if (
+    B2B_ENABLED
+    && timingSafeTextEqual(username, B2B_USERNAME)
+    && timingSafeTextEqual(password, B2B_PASSWORD)
+  ) {
+    return { username: B2B_USERNAME, role: USER_ROLES.b2b, roleLabel: userRoleLabel(USER_ROLES.b2b) };
+  }
+  return null;
+}
+
+function createSession(username, role = USER_ROLES.admin) {
   cleanupSessions();
   const id = crypto.randomBytes(32).toString("base64url");
   sessions.set(id, {
     username,
+    role: normalizeUserRole(role),
     createdAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS
   });
@@ -1078,8 +1109,53 @@ function isAuthenticated(req) {
   return Boolean(getSession(req));
 }
 
+function publicSession(session) {
+  if (!session) {
+    return { authenticated: false, username: "", role: "", roleLabel: "" };
+  }
+  const role = normalizeUserRole(session.role);
+  return {
+    authenticated: true,
+    username: session.username || "",
+    role,
+    roleLabel: userRoleLabel(role)
+  };
+}
+
+function redirectPathForRole(role) {
+  return normalizeUserRole(role) === USER_ROLES.b2b ? "/b2b" : "/admin";
+}
+
 function acceptsHtml(req) {
   return String(req.headers.accept || "").includes("text/html");
+}
+
+function forbiddenPage(message = "") {
+  const escapedMessage = String(message || "접근 권한이 없습니다.").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>글램핑데이터랩 권한 없음</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
+    main { width: min(100% - 32px, 420px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
+    p { margin: 0 0 22px; color: #667085; line-height: 1.45; }
+    a, button { display: inline-grid; place-items: center; width: 100%; min-height: 50px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-weight: 900; text-decoration: none; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>접근 권한 없음</h1>
+    <p>${escapedMessage}</p>
+    <a href="/">분석 화면으로 이동</a>
+  </main>
+</body>
+</html>`;
 }
 
 function loginPage(message = "") {
@@ -1133,6 +1209,18 @@ function requireLogin(req, res, reqUrl) {
   } else {
     send(res, 401, { error: "로그인이 필요합니다." });
   }
+  return false;
+}
+
+function sendForbidden(req, res, message = "관리자 권한이 필요합니다.") {
+  if (req.method === "HEAD") return sendHead(res, 403);
+  if (acceptsHtml(req)) return send(res, 403, forbiddenPage(message), "text/html; charset=utf-8");
+  return send(res, 403, { error: message });
+}
+
+function requireAdminSession(session, req, res) {
+  if (normalizeUserRole(session?.role) === USER_ROLES.admin) return true;
+  sendForbidden(req, res);
   return false;
 }
 
@@ -1352,6 +1440,69 @@ async function listRuns() {
   }
 
   return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function cloneJson(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+const B2B_PRIVATE_FIELD_KEYS = new Set([
+  "sourceKey",
+  "placeId",
+  "place_id",
+  "bookingBusinessId",
+  "bookingBusinessIds",
+  "placeIds",
+  "companyId",
+  "companyProfile",
+  "companyMaster",
+  "manualCorrection",
+  "manualCorrectionHistory",
+  "companyManualCorrection",
+  "manualCorrectionApplied",
+  "adminReview",
+  "adminReviewHistory",
+  "salesContact",
+  "salesContactHistory",
+  "duplicateCandidates",
+  "sourceIndex",
+  "downloads",
+  "files",
+  "file",
+  "history",
+  "urls",
+  "url"
+]);
+
+function stripB2BPrivateFields(value) {
+  if (Array.isArray(value)) {
+    value.forEach(stripB2BPrivateFields);
+    return value;
+  }
+  if (!value || typeof value !== "object") return value;
+  for (const key of Object.keys(value)) {
+    if (B2B_PRIVATE_FIELD_KEYS.has(key)) {
+      delete value[key];
+    } else {
+      stripB2BPrivateFields(value[key]);
+    }
+  }
+  return value;
+}
+
+function publicRunsForRole(runs = [], role = USER_ROLES.admin) {
+  if (normalizeUserRole(role) === USER_ROLES.admin) return runs;
+  return runs.map((run) => {
+    const copy = { ...run };
+    delete copy.files;
+    return copy;
+  });
+}
+
+function publicRunForRole(runData, role = USER_ROLES.admin) {
+  if (normalizeUserRole(role) === USER_ROLES.admin || !runData) return runData;
+  const copy = cloneJson(runData);
+  return stripB2BPrivateFields(copy);
 }
 
 async function seedOutputsFromRepo() {
@@ -6144,13 +6295,15 @@ async function loadRun(runId, options = {}) {
       }))
   };
 
-  result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt).catch((error) => ({
-    error: error.message || String(error),
-    totalCompanies: 0,
-    currentRunCompanies: 0,
-    duplicateCandidateCount: 0,
-    duplicateCandidates: []
-  }));
+  if (!options.skipCompanyMaster) {
+    result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt).catch((error) => ({
+      error: error.message || String(error),
+      totalCompanies: 0,
+      currentRunCompanies: 0,
+      duplicateCandidateCount: 0,
+      duplicateCandidates: []
+    }));
+  }
 
   if (!options.skipHistory) {
     let history = await summarizeHistoryForRun(result);
@@ -6534,11 +6687,11 @@ async function runCrawlerInternal(payload) {
 }
 
 async function serveStatic(reqUrl, res) {
-  if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
+  if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-admin-region-boundary"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-admin-region-boundary"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-role-login"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-role-login"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -6560,26 +6713,28 @@ async function route(req, res) {
 
   try {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
+      const session = getSession(req);
       if (req.method === "HEAD") return sendHead(res, 200);
-      return send(res, 200, { ok: true, loginRequired: true, authenticated: isAuthenticated(req) });
+      return send(res, 200, { ok: true, loginRequired: true, ...publicSession(session) });
     }
 
     if (req.method === "POST" && (reqUrl.pathname === "/api/login" || reqUrl.pathname === "/login")) {
       const payload = await parseLoginBody(req);
       const username = String(payload.username || "").trim();
       const password = String(payload.password || "").trim();
-      if (!timingSafeTextEqual(username, ADMIN_USERNAME) || !timingSafeTextEqual(password, ADMIN_PASSWORD)) {
+      const account = authenticatedUserForCredentials(username, password);
+      if (!account) {
         if (reqUrl.pathname === "/login") return sendLogin(res, 401, "아이디 또는 비밀번호가 올바르지 않습니다.");
         return send(res, 401, { error: "아이디 또는 비밀번호가 올바르지 않습니다." });
       }
-      const sessionId = createSession(username);
+      const sessionId = createSession(account.username, account.role);
       if (reqUrl.pathname === "/login") {
         return send(res, 302, "", "text/plain; charset=utf-8", {
           "Set-Cookie": sessionCookie(sessionId),
-          Location: "/"
+          Location: redirectPathForRole(account.role)
         });
       }
-      return send(res, 200, { ok: true }, "application/json; charset=utf-8", {
+      return send(res, 200, { ok: true, ...account }, "application/json; charset=utf-8", {
         "Set-Cookie": sessionCookie(sessionId)
       });
     }
@@ -6593,25 +6748,35 @@ async function route(req, res) {
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/login") {
-      if (isAuthenticated(req)) return send(res, 302, "", "text/plain; charset=utf-8", { Location: "/" });
+      const session = getSession(req);
+      if (session) return send(res, 302, "", "text/plain; charset=utf-8", { Location: redirectPathForRole(session.role) });
       return sendLogin(res);
     }
 
     if (!requireLogin(req, res, reqUrl)) return;
+    const session = getSession(req);
 
-    if (req.method === "HEAD" && (reqUrl.pathname === "/" || reqUrl.pathname === "/view")) {
+    if (req.method === "GET" && reqUrl.pathname === "/api/session") {
+      return send(res, 200, publicSession(session));
+    }
+
+    if (reqUrl.pathname === "/admin" && !requireAdminSession(session, req, res)) return;
+
+    if (req.method === "HEAD" && ["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
       return sendHead(res, 200, "text/html; charset=utf-8");
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
-      return send(res, 200, { runs: await listRuns() });
+      return send(res, 200, { runs: publicRunsForRole(await listRuns(), session.role) });
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
+      if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, currentCrawlStatus());
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl-estimate") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       const timingStore = readCrawlTimingStoreSync();
       const items = Array.isArray(payload.items) ? payload.items.slice(0, 40) : null;
@@ -6627,81 +6792,97 @@ async function route(req, res) {
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {
+      if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await summarizeHistoryOperations());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/summary") {
+      if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await summarizeCompanyMaster());
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {
+      if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, publicLocationCardRequests(await readLocationCardRequests()));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/location-card-request") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveLocationCardRequest(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/duplicates") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await resolveCompanyMasterDuplicate(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/manual-correction") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyManualCorrection(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/admin-review") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyAdminReview(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/sales-contact") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanySalesContact(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/backfill") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await backfillCompanyMasterFromRuns(payload));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/settings/traffic-keys") {
+      if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, trafficKeyStatus(await readTrafficKeys()));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveTrafficKeys(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/settings/traffic-keys/verify") {
+      if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await verifyTrafficKeys());
     }
 
     if (req.method === "GET" && reqUrl.pathname.startsWith("/api/runs/")) {
       const runId = decodeURIComponent(reqUrl.pathname.replace("/api/runs/", ""));
-      const data = await loadRun(runId);
-      return data ? send(res, 200, data) : notFound(res);
+      const admin = normalizeUserRole(session.role) === USER_ROLES.admin;
+      const data = await loadRun(runId, admin ? {} : { skipCompanyMaster: true, skipHistory: true });
+      return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       const result = await runCrawler(payload);
-      const runs = await listRuns();
+      const runs = publicRunsForRole(await listRuns(), session.role);
       return send(res, 200, { ...result, runs });
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/yeogi-import") {
+      if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       const result = await importYeogiSupplement(payload);
-      const runs = await listRuns();
+      const runs = publicRunsForRole(await listRuns(), session.role);
       return send(res, 200, { ...result, runs });
     }
 
     if (req.method === "GET" && reqUrl.pathname.startsWith("/outputs/")) {
+      if (!requireAdminSession(session, req, res)) return;
       return serveOutput(reqUrl, res);
     }
 
