@@ -32,6 +32,7 @@ const CONFIG_DIR = path.resolve(
 );
 // Stable API key storage policy: releases may replace code, but must keep this file path.
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
+const LOCATION_CARD_REQUESTS_FILE = path.join(CONFIG_DIR, "location_card_requests.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
@@ -854,6 +855,113 @@ async function saveTrafficKeys(payload) {
 
   await fsp.writeFile(TRAFFIC_KEYS_FILE, JSON.stringify(next, null, 2), "utf8");
   return trafficKeyStatus(next);
+}
+
+function emptyLocationCardRequests() {
+  return {
+    schemaVersion: 1,
+    updatedAt: "",
+    requests: {}
+  };
+}
+
+async function readLocationCardRequests() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(LOCATION_CARD_REQUESTS_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      ...emptyLocationCardRequests(),
+      ...parsed,
+      requests: parsed.requests || {}
+    };
+  } catch {
+    return emptyLocationCardRequests();
+  }
+}
+
+function locationCandidateKey(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function sanitizeLocationRequestText(value, max = 240) {
+  return String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function sanitizeLocationRequestNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function sanitizeLocationRequestEvidence(value = {}) {
+  const sampleCompanies = Array.isArray(value.sampleCompanies)
+    ? value.sampleCompanies.map((item) => sanitizeLocationRequestText(item, 80)).filter(Boolean).slice(0, 8)
+    : [];
+  return {
+    itemCount: sanitizeLocationRequestNumber(value.itemCount),
+    regionCount: sanitizeLocationRequestNumber(value.regionCount),
+    salesSupply: sanitizeLocationRequestNumber(value.salesSupply),
+    salesSold: sanitizeLocationRequestNumber(value.salesSold),
+    targetCount: sanitizeLocationRequestNumber(value.targetCount),
+    searchVolume: sanitizeLocationRequestNumber(value.searchVolume),
+    platformGap: sanitizeLocationRequestNumber(value.platformGap),
+    sampleCompanies
+  };
+}
+
+function publicLocationCardRequests(store = emptyLocationCardRequests()) {
+  const requests = store.requests || {};
+  return {
+    schemaVersion: store.schemaVersion || 1,
+    updatedAt: store.updatedAt || "",
+    requests,
+    items: Object.values(requests).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
+  };
+}
+
+async function saveLocationCardRequest(payload = {}) {
+  const allowed = new Set(["requested", "temporary", "ignored", "linked"]);
+  const status = allowed.has(payload.status) ? payload.status : "requested";
+  const keyword = sanitizeLocationRequestText(payload.keyword || payload.searchKeyword || payload.query, 120);
+  const regionBase = sanitizeLocationRequestText(payload.regionBase || payload.region, 80);
+  const key = locationCandidateKey(payload.key || regionBase || keyword) || `candidate_${stableHash(keyword || Date.now())}`;
+  const now = new Date().toISOString();
+  const store = await readLocationCardRequests();
+  const current = store.requests[key] || {};
+  const history = Array.isArray(current.history) ? current.history.slice(-19) : [];
+  const next = {
+    ...current,
+    key,
+    keyword,
+    regionBase,
+    searchKeyword: sanitizeLocationRequestText(payload.searchKeyword || keyword, 120),
+    status,
+    relatedRegion: sanitizeLocationRequestText(payload.relatedRegion, 120),
+    note: sanitizeLocationRequestText(payload.note, 500),
+    runId: sanitizeLocationRequestText(payload.runId, 120),
+    activeKeyword: sanitizeLocationRequestText(payload.activeKeyword, 120),
+    evidence: sanitizeLocationRequestEvidence(payload.evidence),
+    firstSeenAt: current.firstSeenAt || now,
+    updatedAt: now,
+    history: [
+      ...history,
+      {
+        status,
+        relatedRegion: sanitizeLocationRequestText(payload.relatedRegion, 120),
+        note: sanitizeLocationRequestText(payload.note, 240),
+        at: now
+      }
+    ]
+  };
+
+  store.requests[key] = next;
+  store.updatedAt = now;
+  await fsp.mkdir(CONFIG_DIR, { recursive: true });
+  const tempPath = `${LOCATION_CARD_REQUESTS_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(store, null, 2), "utf8");
+  await fsp.rename(tempPath, LOCATION_CARD_REQUESTS_FILE);
+  return publicLocationCardRequests(store);
 }
 
 function summarizeTrafficApiCheck(result, configured) {
@@ -6196,8 +6304,8 @@ async function serveStatic(reqUrl, res) {
   if (reqUrl.pathname === "/" || reqUrl.pathname === "/view") {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-new-region-keyword-guard"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-new-region-keyword-guard"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260703-location-card-request-flow"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260703-location-card-request-flow"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -6291,6 +6399,15 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/summary") {
       return send(res, 200, await summarizeCompanyMaster());
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {
+      return send(res, 200, publicLocationCardRequests(await readLocationCardRequests()));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/location-card-request") {
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveLocationCardRequest(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/duplicates") {

@@ -762,6 +762,79 @@ a {
   color: var(--muted);
 }
 
+.location-candidate-card {
+  border-color: #fedf89;
+  background: #fffdf7;
+}
+
+.location-candidate-card.requested {
+  border-color: #b7e4cc;
+  background: #fbfffc;
+}
+
+.location-candidate-card.temporary {
+  border-color: #c7dcff;
+  background: #f8fbff;
+}
+
+.location-candidate-card.ignored {
+  border-color: #e4e7ec;
+  background: #fbfcfd;
+}
+
+.location-candidate-card.linked {
+  border-color: #ddd6fe;
+  background: #fbfaff;
+}
+
+.location-candidate-evidence {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.location-candidate-evidence div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.location-candidate-evidence span,
+.location-candidate-evidence small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.location-candidate-evidence strong {
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.1;
+  font-weight: 950;
+}
+
+.location-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.location-candidate-actions button {
+  min-width: 0;
+}
+
+.location-candidate-temp {
+  border: 1px solid #c7dcff;
+  border-radius: 16px;
+  background: #fff;
+  padding: 14px;
+}
+
 .location-hero {
   min-width: 0;
   display: grid;
@@ -9080,7 +9153,8 @@ a.platform-row:hover {
   }
 
   .location-evidence-list,
-  .location-reality-grid {
+  .location-reality-grid,
+  .location-candidate-evidence {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

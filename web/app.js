@@ -8,6 +8,7 @@ const state = {
   mapData: null,
   mapPromise: null,
   dictionary: null,
+  locationCardRequests: null,
   historyOps: null,
   companyMaster: null,
   companyMasterFilters: {
@@ -1039,6 +1040,216 @@ function locationCardForQuery(query) {
     : cards.find((item) => compactSearchText(item.searchKeyword) === compact || compact.includes(compactSearchText(item.searchKeyword)));
 
   return { card: card || null, alias: matchedAlias || null, reason: card ? "matched" : "missing" };
+}
+
+function locationCardRequestStatusMeta(status) {
+  const map = {
+    requested: { label: "개발 요청됨", tone: "requested", note: "지역카드 개발 큐에 저장됐습니다." },
+    temporary: { label: "임시 카드", tone: "temporary", note: "현재 수집 결과 기준으로 임시 판단합니다." },
+    ignored: { label: "이번에는 제외", tone: "ignored", note: "정식 카드 개발에서 일단 제외됐습니다." },
+    linked: { label: "유사 지역 연결", tone: "linked", note: "기존 지역카드와 연결해 판단합니다." }
+  };
+  return map[status] || { label: "신규 지역 후보", tone: "new", note: "정식 지역카드 개발 여부를 선택하세요." };
+}
+
+function locationCandidateKey(candidate = {}) {
+  return compactSearchText(candidate.key || candidate.regionBase || candidate.keyword || "");
+}
+
+function locationCardRequestForCandidate(candidate = {}) {
+  const key = locationCandidateKey(candidate);
+  return key ? state.locationCardRequests?.requests?.[key] || null : null;
+}
+
+function locationCandidateFromQuery(query) {
+  const keyword = String(query || activeKeyword() || "").trim();
+  if (!keyword) return null;
+  const regionalBase = regionalGlampingKeywordBase(keyword);
+  const strippedBase = stripLocationBusinessWords(keyword);
+  const regionBase = regionalBase || strippedBase;
+  const hasBusinessWord = /글램핑|카라반|캠핑|펜션/.test(keyword);
+  if (!regionBase || regionBase.length < 2 || regionBase.length > 12 || (!regionalBase && !hasBusinessWord)) return null;
+
+  const alias = {
+    sigungu: regionBase,
+    aliases: [regionBase, `${regionBase}글램핑`, `${regionBase} 글램핑`]
+  };
+  const runtime = locationRuntimeStats({ searchKeyword: keyword }, alias);
+  const sales = runtime.sales || {};
+  const evidence = {
+    itemCount: runtime.items?.length || 0,
+    regionCount: runtime.regions?.length || 0,
+    salesSupply: sales.supply || 0,
+    salesSold: sales.sold || 0,
+    targetCount: runtime.targets?.length || 0,
+    searchVolume: runtime.searchVolume || 0,
+    platformGap: runtime.platformGap || 0,
+    sampleCompanies: (runtime.items || []).map((item) => item.name).filter(Boolean).slice(0, 5)
+  };
+  return {
+    key: compactSearchText(regionBase || keyword),
+    keyword,
+    searchKeyword: keyword,
+    regionBase,
+    runtime,
+    evidence,
+    runId: state.activeRunId || state.data?.run?.id || "",
+    activeKeyword: activeKeyword()
+  };
+}
+
+function renderLocationCandidateEvidence(candidate = {}) {
+  const evidence = candidate.evidence || {};
+  const salesRate = evidence.salesSupply ? fmtRate(evidence.salesSold / evidence.salesSupply) : "확인필요";
+  return `
+    <div class="location-candidate-evidence">
+      <div><span>상위노출</span><strong>${fmtNumber(evidence.itemCount)}</strong><small>업체</small></div>
+      <div><span>판매율</span><strong>${salesRate}</strong><small>${fmtNumber(evidence.salesSold)}/${fmtNumber(evidence.salesSupply)}개</small></div>
+      <div><span>검색량</span><strong>${evidence.searchVolume ? fmtNumber(evidence.searchVolume) : "API"}</strong><small>${evidence.searchVolume ? "월검색량" : "확인필요"}</small></div>
+      <div><span>타깃후보</span><strong>${fmtNumber(evidence.targetCount)}</strong><small>영업 후보</small></div>
+      <div><span>지역근거</span><strong>${fmtNumber(evidence.regionCount)}</strong><small>수집 지역 row</small></div>
+      <div><span>채널공백</span><strong>${fmtNumber(evidence.platformGap)}</strong><small>OTA 보완 신호</small></div>
+    </div>
+  `;
+}
+
+function renderLocationCandidateTemporary(candidate = {}) {
+  const runtime = candidate.runtime || {};
+  const targets = (runtime.targets || []).slice(0, 3);
+  const sampleCompanies = candidate.evidence?.sampleCompanies || [];
+  return `
+    <section class="location-block location-candidate-temp">
+      <div class="location-block-head">
+        <h4>임시 지역카드</h4>
+        <span>현재 수집 결과만 사용</span>
+      </div>
+      <div class="location-meta-row">
+        ${(sampleCompanies.length ? sampleCompanies : ["대표 업체 수집 후 표시"]).map((name) => `<span>${escapeHtml(name)}</span>`).join("")}
+      </div>
+      <div class="location-action-panel">
+        <span><b>1</b> 정식 카드 전까지 현재 run 기준으로 판단</span>
+        <span><b>2</b> 수집 결과가 반복되면 개발 요청으로 승격</span>
+        <span><b>3</b> 영업타깃은 판단큐 근거 확인 후 분리</span>
+      </div>
+      <div class="location-target-list">
+        ${targets.length ? targets.map(({ item, reasons }, index) => `
+          <button class="location-target-row" type="button" data-open-company="${(state.data?.availability?.items || []).indexOf(item)}">
+            <b>${index + 1}</b>
+            <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+            <span>${reasons.map(escapeHtml).slice(0, 3).join(" · ")}</span>
+          </button>
+        `).join("") : `<div class="location-empty-note">아직 임시 카드에서 바로 볼 영업타깃 후보가 없습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderMissingLocationCandidate(query, cards = []) {
+  const candidate = locationCandidateFromQuery(query);
+  const saved = candidate ? locationCardRequestForCandidate(candidate) : null;
+  const status = locationCardRequestStatusMeta(saved?.status);
+  const knownCards = cards.slice(0, 6).map((item) => item.searchKeyword).filter(Boolean);
+  if (!candidate) {
+    return `
+      <article class="location-card empty-location">
+        <h3>저장된 카드가 없는 검색어입니다</h3>
+        <p>지역 키워드로 확인되면 신규 지역 후보로 표시됩니다. 현재 등록 카드: ${knownCards.map(escapeHtml).join(", ") || "없음"}</p>
+      </article>
+    `;
+  }
+  return `
+    <article class="location-card empty-location location-candidate-card ${escapeHtml(status.tone)}">
+      <div class="location-hero">
+        <div>
+          <p class="eyebrow">신규 지역 후보 · ${escapeHtml(status.label)}</p>
+          <h3>${escapeHtml(candidate.keyword)}</h3>
+          <p>정식 지역카드가 없습니다. 현재 수집 근거를 보고 지역카드 개발 여부를 선택하세요.</p>
+        </div>
+        <div class="location-score">
+          <strong>${fmtNumber(candidate.evidence.itemCount)}</strong>
+          <span>수집 업체</span>
+        </div>
+      </div>
+      <div class="location-meta-row">
+        <span>감지 지역 ${escapeHtml(candidate.regionBase)}</span>
+        <span>상태 ${escapeHtml(status.label)}</span>
+        ${saved?.relatedRegion ? `<span>연결 ${escapeHtml(saved.relatedRegion)}</span>` : ""}
+        ${saved?.updatedAt ? `<span>처리 ${escapeHtml(saved.updatedAt.slice(0, 10))}</span>` : ""}
+      </div>
+      <section class="location-decision caution">
+        <div class="location-decision-score">
+          <span>판단</span>
+          <strong>?</strong>
+        </div>
+        <div class="location-decision-copy">
+          <p class="eyebrow">지역카드 개발 확인</p>
+          <h4>이 지역을 정식 카드로 개발할까요?</h4>
+          <p>${escapeHtml(status.note)} 수집 데이터가 충분하지 않으면 임시 카드로만 보고, 반복 검색되거나 업체 근거가 쌓이면 개발 요청으로 전환합니다.</p>
+          <div class="location-action-chips">
+            <span>월검색량 ${candidate.evidence.searchVolume ? fmtNumber(candidate.evidence.searchVolume) : "확인필요"}</span>
+            <span>영업후보 ${fmtNumber(candidate.evidence.targetCount)}</span>
+            <span>채널공백 ${fmtNumber(candidate.evidence.platformGap)}</span>
+          </div>
+        </div>
+      </section>
+      ${renderLocationCandidateEvidence(candidate)}
+      <div class="location-candidate-actions" data-location-candidate-key="${escapeHtml(candidate.key)}">
+        <button class="secondary-button" type="button" data-location-candidate-action="temporary">임시 카드로 보기</button>
+        <button class="primary-button" type="button" data-location-candidate-action="requested">지역카드 개발 요청</button>
+        <button class="secondary-button" type="button" data-location-candidate-action="linked">유사 지역에 연결</button>
+        <button class="ghost-button" type="button" data-location-candidate-action="ignored">이번에는 제외</button>
+      </div>
+      ${saved?.status === "temporary" ? renderLocationCandidateTemporary(candidate) : ""}
+      <section class="location-block">
+        <div class="location-block-head">
+          <h4>현재 등록 카드</h4>
+          <span>${fmtNumber(cards.length)}개 중 일부</span>
+        </div>
+        <div class="location-meta-row">
+          ${knownCards.map((name) => `<span>${escapeHtml(name)}</span>`).join("") || "<span>등록 카드 없음</span>"}
+        </div>
+      </section>
+    </article>
+  `;
+}
+
+async function saveLocationCardCandidateAction(button) {
+  const status = button?.dataset?.locationCandidateAction || "";
+  const query = els.dictionarySearchInput?.value?.trim() || activeKeyword();
+  const candidate = locationCandidateFromQuery(query);
+  if (!candidate || !status) return;
+  let relatedRegion = "";
+  if (status === "linked") {
+    relatedRegion = window.prompt("연결할 기존 지역카드 검색어를 입력하세요.", "") || "";
+    if (!relatedRegion.trim()) return;
+  }
+  const label = locationCardRequestStatusMeta(status).label;
+  button.disabled = true;
+  setStatus(`${label} 저장 중`);
+  try {
+    state.locationCardRequests = await fetchJson("/api/location-card-request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key: candidate.key,
+        keyword: candidate.keyword,
+        searchKeyword: candidate.searchKeyword,
+        regionBase: candidate.regionBase,
+        status,
+        relatedRegion,
+        runId: candidate.runId,
+        activeKeyword: candidate.activeKeyword,
+        evidence: candidate.evidence
+      })
+    });
+    setStatus(`${label} 저장 완료`);
+    renderLocationDictionary();
+  } catch (error) {
+    setStatus(`${label} 저장 실패`);
+    els.dictionaryResult?.insertAdjacentHTML("afterbegin", `<div class="empty">지역 후보 저장 실패: ${escapeHtml(error.message)}</div>`);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function platformTone(platform = "") {
@@ -9629,15 +9840,10 @@ function renderLocationDictionary(match = null) {
   if (!card) {
     if (els.dictionarySearchStatus) {
       els.dictionarySearchStatus.textContent = query
-        ? `"${query}"에 맞는 저장 지역 카드가 없습니다. 현재는 등록된 지역부터 판단합니다.`
+        ? `"${query}"에 맞는 저장 지역 카드가 없습니다. 신규 지역 후보로 확인합니다.`
         : "지역명과 업종을 입력하면 저장된 지역 카드를 호출합니다.";
     }
-    els.dictionaryResult.innerHTML = `
-      <article class="location-card empty-location">
-        <h3>저장된 카드가 없는 지역입니다</h3>
-        <p>현재 사전에는 ${cards.map((item) => escapeHtml(item.searchKeyword)).join(", ")} 카드가 등록되어 있습니다. 같은 구조로 지역 카드를 추가하면 즉시 호출할 수 있습니다.</p>
-      </article>
-    `;
+    els.dictionaryResult.innerHTML = renderMissingLocationCandidate(query, cards);
     return;
   }
 
@@ -9787,6 +9993,15 @@ async function loadLocationDictionary() {
   } catch (error) {
     if (els.dictionarySearchStatus) els.dictionarySearchStatus.textContent = `입지사전 로딩 실패: ${error.message}`;
     if (els.dictionaryResult) els.dictionaryResult.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function loadLocationCardRequests() {
+  try {
+    state.locationCardRequests = await fetchJson("/api/location-card-requests");
+    if (state.activeTab === "dictionary" && state.dictionary) renderLocationDictionary();
+  } catch (error) {
+    state.locationCardRequests = { error: error.message, requests: {}, items: [] };
   }
 }
 
@@ -11707,6 +11922,11 @@ function bindEvents() {
     runDictionarySearch(button.dataset.locationQuery);
   });
   els.dictionaryResult?.addEventListener("click", (event) => {
+    const candidateButton = event.target.closest("[data-location-candidate-action]");
+    if (candidateButton) {
+      saveLocationCardCandidateAction(candidateButton);
+      return;
+    }
     const button = event.target.closest("[data-location-query]");
     if (!button) return;
     runDictionarySearch(button.dataset.locationQuery);
@@ -11719,7 +11939,7 @@ async function init() {
   bindEvents();
   setDefaultDates();
   try {
-    await Promise.all([loadRuns(true), loadTrafficState(), loadLocationDictionary()]);
+    await Promise.all([loadRuns(true), loadTrafficState(), loadLocationDictionary(), loadLocationCardRequests()]);
     pollCrawlStatusUntilIdle(false);
   } catch (error) {
     setStatus("오류");
