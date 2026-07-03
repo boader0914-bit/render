@@ -4406,6 +4406,128 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.company-resolution-panel {
+  display: grid;
+  gap: 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 11px;
+}
+
+.company-resolution-panel.good {
+  border-color: #bbf7d0;
+  background: #f7fef9;
+}
+
+.company-resolution-panel.bad {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.company-resolution-panel.hold {
+  border-color: #e8edf5;
+  background: #f8fafc;
+}
+
+.company-resolution-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.company-resolution-head strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.company-resolution-head small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-resolution-head > span {
+  flex: none;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--blue-dark);
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-resolution-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.company-resolution-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 9px;
+}
+
+.company-resolution-grid span,
+.company-resolution-grid small,
+.company-resolution-states small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-resolution-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.company-resolution-states {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.company-resolution-states span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e8edf5;
+  border-radius: 10px;
+  background: #fff;
+  padding: 7px 8px;
+}
+
+.company-resolution-states span.active {
+  border-color: #93c5fd;
+  background: #eaf3ff;
+}
+
+.company-resolution-states b {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 950;
+}
+
 .company-check-revenue-impact {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -8558,6 +8680,8 @@ a.platform-row:hover {
   .company-sales-metrics,
   .company-decision-evidence,
   .company-check-action-plan,
+  .company-resolution-grid,
+  .company-resolution-states,
   .company-check-revenue-impact,
   .company-check-search,
   .company-check-bulk,
@@ -9100,6 +9224,8 @@ a.platform-row:hover {
   .manual-correction-evidence,
   .company-decision-evidence,
   .company-check-action-plan,
+  .company-resolution-grid,
+  .company-resolution-states,
   .company-check-revenue-impact,
   .company-check-search,
   .company-check-bulk,

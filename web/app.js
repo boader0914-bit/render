@@ -3505,6 +3505,52 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
   return { status: "check_needed", label: "확인 필요", tone: "watch", reasons: ["잔여 신호를 확인한 뒤 컨택 또는 보류를 결정하세요."] };
 }
 
+function companyAdminReviewOutcome(status = "") {
+  return {
+    contact_ready: { label: "영업타깃 이동", detail: "바로 컨택 가능한 업체로 분리", tone: "good" },
+    confirmed: { label: "확정 타깃", detail: "관리자가 판단 맞음으로 확정", tone: "good" },
+    recrawl_needed: { label: "판단큐 유지", detail: "재수집 후 전후 비교 필요", tone: "watch" },
+    check_needed: { label: "판단큐 유지", detail: "채널/공백 확인 후 재판단", tone: "watch" },
+    manual_needed: { label: "보정 후 재검토", detail: "총량/상품 수량 보정 필요", tone: "bad" },
+    hold: { label: "보류 유지", detail: "컨택 제외, 관찰 또는 추후 확인", tone: "hold" },
+    exclude: { label: "영업 제외", detail: "타깃/판단큐에서 제외", tone: "bad" }
+  }[status] || { label: "판단 대기", detail: "관리자 처리 상태 미정", tone: "watch" };
+}
+
+function companyQueueResolutionProfile(company = {}, profile = {}, workflow = {}, decision = {}, comparison = null) {
+  const compare = comparison || companyRecrawlComparison(company);
+  const recommendation = companyRecrawlAutoRecommendation(company, profile, decision, compare);
+  const status = recommendation.status || company.adminReview?.status || "check_needed";
+  const outcome = companyAdminReviewOutcome(status);
+  const criteriaLabels = (decision.criteria || []).map((criterion) => criterion.label || criterion.reason).filter(Boolean);
+  const issueLabels = (profile.issues || []).map((issue) => issue.label || issue.task).filter(Boolean);
+  const blockers = [...new Set([
+    ...criteriaLabels,
+    ...issueLabels,
+    ...(recommendation.reasons || [])
+  ].filter(Boolean))];
+  const nextAction = {
+    contact_ready: "컨택 기록을 남기고 응답/관심도를 추적",
+    confirmed: "확정 타깃으로 유지하며 후속 일정 관리",
+    recrawl_needed: "수집 설정 적용 후 같은 기간으로 재수집",
+    check_needed: "OTA, 네이버 객실 탭, 공백 날짜를 확인",
+    manual_needed: "기준 총량과 상품별 수량 보정 후 재검토",
+    hold: "보류 사유를 남기고 다음 수집에서 변화 확인",
+    exclude: "동일성/업종 부적합 근거를 남기고 제외"
+  }[status] || "관리자 확인 후 상태 저장";
+  return {
+    status,
+    recommendation,
+    outcome,
+    nextAction,
+    blockers,
+    comparison: compare,
+    workflow,
+    canMoveToTarget: status === "contact_ready" || status === "confirmed",
+    needsMoreData: ["recrawl_needed", "manual_needed", "check_needed"].includes(status)
+  };
+}
+
 function companyReviewContextText(context = {}) {
   if (!context || typeof context !== "object") return "";
   const comparison = context.comparison || {};
@@ -7283,6 +7329,7 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
   const eta = crawlEtaForPlan(plan);
   const recheckComparison = companyRecrawlComparison(company);
   const autoRecommendation = companyRecrawlAutoRecommendation(company, profile, decision, recheckComparison);
+  const resolution = companyQueueResolutionProfile(company, profile, workflow, decision, recheckComparison);
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
   const issues = new Set((profile.issues || []).map((issue) => issue.key));
   const statusSuggestion = company.adminReview?.status
@@ -7300,6 +7347,8 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
             : "확인 필요";
   const rows = [
     ["추천 처리", statusSuggestion, "버튼으로 처리 상태 저장"],
+    ["해소 경로", resolution.outcome.label, resolution.outcome.detail],
+    ["다음 액션", resolution.nextAction, resolution.canMoveToTarget ? "영업타깃에서 후속 관리" : "판단큐에서 근거 보강"],
     ["자동 재검토", recheckComparison.hasComparison ? `${autoRecommendation.label} · 개선 ${fmtNumber(recheckComparison.improved)} / 악화 ${fmtNumber(recheckComparison.worsened)}` : "비교 대기", "재수집 전후 수량/가격/공백 비교"],
     ["재수집 설정", `정밀분석 · 상세 ${plan.range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
     ["예상 소요", `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`, "수집 실행 전 ETA 기준"],
@@ -7320,6 +7369,57 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
       <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}">수집 설정 적용</button>
       <small>${escapeHtml(`${plan.keyword} · ${plan.keywordSource || "업체 기준"}${plan.regionScope ? ` · 지역 ${plan.regionScope}` : ""} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`)}</small>
       ${recrawlRangePresetHtml({ companyId: company.companyId || "", selectedRange: plan.range || "1-20" })}
+    </div>
+  `;
+}
+
+function companyQueueResolutionHtml(company = {}, profile = {}, workflow = {}, decision = {}, compact = false) {
+  if (!company.companyId) return "";
+  const resolution = companyQueueResolutionProfile(company, profile, workflow, decision);
+  const blockerText = compactListText(resolution.blockers, resolution.canMoveToTarget ? "잔여 차단 조건 없음" : "잔여 조건 확인", 3);
+  const comparisonText = resolution.comparison?.hasComparison
+    ? `개선 ${fmtNumber(resolution.comparison.improved)} / 악화 ${fmtNumber(resolution.comparison.worsened)}`
+    : "비교 대기";
+  const rows = [
+    ["자동 추천", resolution.recommendation.label || companyAdminReviewLabel(resolution.status), compactListText(resolution.recommendation.reasons || [], "추천 근거 대기", 2)],
+    ["이동 위치", resolution.outcome.label, resolution.outcome.detail],
+    ["잔여 조건", blockerText, resolution.needsMoreData ? "해소 전 컨택 보류" : "컨택 가능성 확인"],
+    ["재수집 비교", comparisonText, resolution.comparison?.hasComparison ? "전후 변화 기준" : "다음 수집부터 비교"]
+  ];
+  const states = [
+    ["contact_ready", "컨택", "영업타깃 이동"],
+    ["recrawl_needed", "재수집", "큐 유지"],
+    ["manual_needed", "보정", "재검토"],
+    ["check_needed", "확인", "큐 유지"],
+    ["hold", "보류", "관찰"],
+    ["exclude", "제외", "제거"]
+  ];
+  return `
+    <div class="company-resolution-panel ${escapeHtml(resolution.outcome.tone)} ${compact ? "compact" : ""}">
+      <div class="company-resolution-head">
+        <div>
+          <strong>판단큐 해소 흐름</strong>
+          <small>${escapeHtml(resolution.nextAction)}</small>
+        </div>
+        <span>${escapeHtml(resolution.outcome.label)}</span>
+      </div>
+      <div class="company-resolution-grid">
+        ${rows.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="company-resolution-states">
+        ${states.map(([status, label, effect]) => `
+          <span class="${resolution.status === status ? "active" : ""}">
+            <b>${escapeHtml(label)}</b>
+            <small>${escapeHtml(effect)}</small>
+          </span>
+        `).join("")}
+      </div>
     </div>
   `;
 }
@@ -7369,6 +7469,7 @@ function companyCheckEntryHtml(entry = {}) {
         <strong>${escapeHtml(companyCheckRecommendation(company, profile, workflow, decision))}</strong>
       </div>
       ${companyQueueActionPlan(company, profile, workflow, decision)}
+      ${companyQueueResolutionHtml(company, profile, workflow, decision)}
       ${companyReviewActionsHtml(company, true)}
       ${showCorrectionForm ? companyCorrectionFormHtml(company, true) : ""}
     </article>
@@ -9839,6 +9940,7 @@ function sheetAuditDetailProfile(item = {}) {
       itemDecision,
       criteria: itemDecision.criteria || [],
       profile: {},
+      workflow: {},
       autoRecommendation: null,
       comparison: null,
       revenueImpact,
@@ -9848,6 +9950,8 @@ function sheetAuditDetailProfile(item = {}) {
   }
   const profile = companyNeedsCorrection(company);
   const decision = companyDecisionQueueProfile(company);
+  const type = companyCheckEntryType(company, profile);
+  const workflow = companyCheckWorkflow(company, profile, type);
   const comparison = companyRecrawlComparison(company);
   const autoRecommendation = companyRecrawlAutoRecommendation(company, profile, decision, comparison);
   const revenueImpact = companyQueueRevenueImpact(company);
@@ -9857,6 +9961,7 @@ function sheetAuditDetailProfile(item = {}) {
     itemDecision,
     criteria: (decision.criteria || []).length ? decision.criteria : (itemDecision.criteria || []),
     profile,
+    workflow,
     autoRecommendation,
     comparison,
     revenueImpact,
@@ -9951,6 +10056,7 @@ function sheetAuditPanel(item = {}) {
           </article>
         `).join("")}
       </div>
+      ${companyQueueResolutionHtml(detail.company || {}, detail.profile || {}, detail.workflow || {}, decision, true)}
       <div class="sheet-audit-reasons">
         ${(reasonChips.length ? reasonChips : ["현재 기준 특이 신호가 없습니다."]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
       </div>
@@ -10549,7 +10655,9 @@ async function saveCompanyAdminReview(button) {
     renderCompanyMasterPanel();
     renderDecisionQueue();
     renderTargets();
-    setStatus(status === "clear" ? "검증 해제 완료" : `${companyAdminReviewLabel(status)} 저장 완료`);
+    if (state.selectedItem && els.detailSheet && !els.detailSheet.hidden) renderSheet();
+    const outcome = companyAdminReviewOutcome(status);
+    setStatus(status === "clear" ? "검증 해제 완료" : `${companyAdminReviewLabel(status)} 저장 완료 · ${outcome.label}`);
   } catch (error) {
     setStatus("검증 저장 실패");
     if (els.companyMasterPanel) {
@@ -10614,7 +10722,8 @@ async function applyCompanyCheckBulkReview(button) {
   } else {
     buttons.forEach((item) => { item.disabled = false; });
   }
-  setStatus(failed ? `${label} 일괄 저장 ${fmtNumber(saved)}개 완료 · 실패 ${fmtNumber(failed)}개` : `${label} 일괄 저장 ${fmtNumber(saved)}개 완료`);
+  const outcome = companyAdminReviewOutcome(status);
+  setStatus(failed ? `${label} 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label} · 실패 ${fmtNumber(failed)}개` : `${label} 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label}`);
 }
 
 async function saveCompanySalesContact(button) {
@@ -10707,7 +10816,8 @@ async function applySalesGateBulkReview(button) {
     renderTargets();
   }
   buttons.forEach((item) => { item.disabled = false; });
-  setStatus(failed ? `${filterLabel} ${label} 일괄 저장 완료 · 실패 ${fmtNumber(failed)}개` : `${filterLabel} ${label} 일괄 저장 완료`);
+  const outcome = companyAdminReviewOutcome(status);
+  setStatus(failed ? `${filterLabel} ${label} 일괄 저장 완료 · ${outcome.label} · 실패 ${fmtNumber(failed)}개` : `${filterLabel} ${label} 일괄 저장 완료 · ${outcome.label}`);
 }
 
 function exportSalesTargetsCsv() {
