@@ -4294,6 +4294,55 @@ function salesGateCsv(entries = salesGateReviewEntries(0)) {
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
 }
 
+function decisionQueueCsv(entries = [], context = {}) {
+  const headers = ["필터", "검색어", "업체ID", "업체명", "지역", "URL", "최고순위", "최고키워드", "우선도", "우선도점수", "워크플로우", "큐유형", "현재관리상태", "자동추천", "추천근거", "큐사유", "문제날짜", "수량신뢰도", "공백유형", "확인채널", "재수집설정", "예상소요", "예상매출", "매출정밀도", "가격확보수량", "가격누락수량", "관리메모", "저장근거", "다음처리"];
+  const rows = entries.map((entry) => {
+    const company = entry.company || {};
+    const decision = entry.decision || {};
+    const revenueImpact = entry.revenueImpact || {};
+    const precision = revenueImpact.precision || {};
+    const plan = companyQueueRecrawlPlan(company, entry.profile || {}, decision);
+    const eta = crawlEtaForPlan(plan);
+    const regions = Array.isArray(company.regions) ? company.regions : [];
+    const recommendationReasons = Array.isArray(entry.autoRecommendation?.reasons) ? entry.autoRecommendation.reasons : [];
+    const decisionReasons = Array.isArray(decision.reasons) ? decision.reasons : [];
+    const decisionActions = Array.isArray(decision.actions) ? decision.actions : [];
+    const workflowReasons = Array.isArray(entry.workflow?.reasons) ? entry.workflow.reasons : [];
+    return [
+      context.filterLabel || "",
+      context.query || "",
+      company.companyId || "",
+      company.primaryName || "",
+      regions.slice(0, 3).join(" / "),
+      companySalesPrimaryUrl(company, companyItemFromCurrentRun(company) || {}),
+      company.bestRank ? `${fmtNumber(company.bestRank)}위` : "",
+      company.bestKeyword || company.latestKeyword || "",
+      entry.priority?.label || "",
+      finiteNumber(entry.priority?.score, 0) || "",
+      entry.workflow?.label || "",
+      entry.type?.label || "",
+      company.adminReview?.label || companyAdminReviewLabel(company.adminReview?.status) || "미검증",
+      entry.autoRecommendation?.label || "",
+      recommendationReasons.slice(0, 3).join(" | "),
+      decision.summary || decisionReasons.slice(0, 2).join(" | "),
+      decision.problemDateText || "",
+      decision.quantityConfidence || "",
+      decision.gapType || "",
+      decision.channelText || "",
+      `${plan.keyword} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`,
+      `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`,
+      finiteNumber(revenueImpact.totalRevenue, 0) || "",
+      [precision.grade, precision.label].filter(Boolean).join(" · "),
+      finiteNumber(revenueImpact.totalPricedSoldOut, 0) || "",
+      finiteNumber(revenueImpact.totalMissingPriceSoldOut, 0) || "",
+      company.adminReview?.note || "",
+      companyReviewContextText(company.adminReview?.context || {}),
+      [...workflowReasons, ...decisionActions].filter(Boolean).slice(0, 2).join(" | ")
+    ].map(salesTargetCsvValue).join(",");
+  });
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.join("\n")}`;
+}
+
 function collectionQualityCsv(profile = collectionQualityMonitorProfile()) {
   const headers = ["구분", "대상", "지역", "순위", "상태/점수", "근거", "추천설정", "예상매출"];
   const rows = [
@@ -6452,6 +6501,10 @@ function companyCheckFilterOptions() {
   ];
 }
 
+function companyCheckFilterLabel(value = "priority") {
+  return companyCheckFilterOptions().find(([key]) => key === value)?.[1] || "오늘 처리";
+}
+
 function companyCheckFilterMatches(entry = {}, filter = "priority") {
   const open = entry.workflow?.key !== "done";
   const recommendation = entry.autoRecommendation || {};
@@ -6513,6 +6566,25 @@ function companyCheckSearchMatches(entry = {}, query = "") {
     entry.revenueImpact?.precision?.label
   ].filter(Boolean).join(" "));
   return text.includes(query);
+}
+
+function companyCheckVisibleEntries(master = companyMasterSource()) {
+  const entries = companyDecisionQueueEntries(master);
+  const filters = state.companyMasterFilters || {};
+  const selectedFilter = filters.check || "priority";
+  const checkQuery = filters.checkQuery || "";
+  const checkSearch = compactSearchText(checkQuery);
+  const filteredEntries = entries.filter((entry) => companyCheckFilterMatches(entry, selectedFilter));
+  const visibleEntries = filteredEntries.filter((entry) => companyCheckSearchMatches(entry, checkSearch));
+  return {
+    entries,
+    selectedFilter,
+    filterLabel: companyCheckFilterLabel(selectedFilter),
+    checkQuery,
+    checkSearch,
+    filteredEntries,
+    visibleEntries
+  };
 }
 
 function companyDecisionQueueEntries(master = {}) {
@@ -7121,14 +7193,8 @@ function companyQueueOperationSummaryHtml(entries = []) {
 }
 
 function companyMasterCheckPanel(master = {}) {
-  const entries = companyDecisionQueueEntries(master);
-  const filters = state.companyMasterFilters || {};
-  const selectedFilter = filters.check || "priority";
-  const checkQuery = filters.checkQuery || "";
-  const checkSearch = compactSearchText(checkQuery);
+  const { entries, selectedFilter, checkQuery, checkSearch, filteredEntries, visibleEntries } = companyCheckVisibleEntries(master);
   const countForFilter = (value) => entries.filter((entry) => companyCheckFilterMatches(entry, value)).length;
-  const filteredEntries = entries.filter((entry) => companyCheckFilterMatches(entry, selectedFilter));
-  const visibleEntries = filteredEntries.filter((entry) => companyCheckSearchMatches(entry, checkSearch));
   const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
   const criterionCount = (key) => openEntries.filter((entry) => (entry.decision.criteria || []).some((criterion) => criterion.key === key)).length;
   const reviewStatusCount = (status) => entries.filter((entry) => entry.company.adminReview?.status === status).length;
@@ -7167,6 +7233,7 @@ function companyMasterCheckPanel(master = {}) {
           <input type="search" data-company-check-search value="${escapeHtml(checkQuery)}" placeholder="업체명, 지역, 키워드, 큐사유, 확인채널">
         </label>
         <small>${escapeHtml(checkSearch ? `현재 필터 ${fmtNumber(filteredEntries.length)}개 중 ${fmtNumber(visibleEntries.length)}개 표시` : "업체명·지역·키워드·큐사유·확인채널로 빠르게 좁힙니다.")}</small>
+        <button type="button" data-export-decision-queue>현재 큐 CSV</button>
         ${checkSearch ? `<button type="button" data-company-check-search-clear>검색 해제</button>` : ""}
       </div>
       <div class="company-check-filters">
@@ -9780,6 +9847,26 @@ function exportSalesGateCsv() {
   setStatus(`컨택 보류 사유 ${fmtNumber(entries.length)}개 내보내기`);
 }
 
+function exportDecisionQueueCsv() {
+  const { visibleEntries, selectedFilter, filterLabel, checkQuery } = companyCheckVisibleEntries(companyMasterSource());
+  if (!visibleEntries.length) {
+    setStatus("내보낼 판단 큐 결과 없음");
+    return;
+  }
+  const csv = decisionQueueCsv(visibleEntries, { filterLabel, query: checkQuery });
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `glamping-decision-queue-${selectedFilter}-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`판단 큐 ${fmtNumber(visibleEntries.length)}개 내보내기`);
+}
+
 function exportCollectionQualityCsv() {
   const profile = collectionQualityMonitorProfile();
   if (!profile.hasData) {
@@ -10403,6 +10490,7 @@ function bindEvents() {
     if (salesCallNote) copySalesProposal(salesCallNote, "call");
     if (event.target.closest("[data-export-sales-targets]")) exportSalesTargetsCsv();
     if (event.target.closest("[data-export-sales-gate]")) exportSalesGateCsv();
+    if (event.target.closest("[data-export-decision-queue]")) exportDecisionQueueCsv();
     if (event.target.closest("[data-export-collection-quality]")) exportCollectionQualityCsv();
     if (event.target.closest("[data-export-recrawl-automation]")) exportRecrawlAutomationCsv();
     if (event.target.closest("[data-export-admin-review-audit]")) exportAdminReviewAuditCsv();
