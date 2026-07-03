@@ -5355,8 +5355,21 @@ function availabilityBookingBusinessId(row = {}) {
   });
 }
 
+function addressRegionFromAddress(address = "") {
+  const tokens = String(address || "").trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return "";
+  const suffixPattern = /(특별자치시|특별시|광역시|자치시|시|군|구)$/u;
+  for (let index = 1; index < tokens.length; index += 1) {
+    if (suffixPattern.test(tokens[index])) return tokens[index].replace(suffixPattern, "");
+  }
+  return suffixPattern.test(tokens[0]) ? tokens[0].replace(suffixPattern, "") : "";
+}
+
 function rowAddressRegion(row = {}) {
-  return row["소재지클러스터"] || row.addressRegion || row.actualRegion || "";
+  return row["소재지클러스터"] ||
+    row.addressRegion ||
+    row.actualRegion ||
+    addressRegionFromAddress(row["주소"] || row.address || row.location || "");
 }
 
 function rowSearchRegion(row = {}) {
