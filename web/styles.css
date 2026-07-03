@@ -6150,6 +6150,92 @@ a.platform-row:hover {
   border-color: #fecaca;
 }
 
+.sheet-audit-summary,
+.sheet-audit-criteria {
+  display: grid;
+  gap: 8px;
+}
+
+.sheet-audit-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sheet-audit-summary div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #dbeafe;
+  border-radius: 13px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.sheet-audit-summary span,
+.sheet-audit-summary small,
+.sheet-audit-criteria p,
+.sheet-audit-criteria small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sheet-audit-summary strong {
+  min-width: 0;
+  color: var(--blue-dark);
+  font-size: 15px;
+  line-height: 1.08;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.sheet-audit-criteria {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sheet-audit-criteria article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  padding: 10px;
+}
+
+.sheet-audit-criteria mark {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.sheet-audit-criteria div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sheet-audit-criteria strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.15;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.sheet-audit-criteria p {
+  margin: 0;
+}
+
 .sheet-collection-section {
   gap: 12px;
 }
@@ -8694,7 +8780,9 @@ a.platform-row:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .sheet-audit-grid {
+  .sheet-audit-grid,
+  .sheet-audit-summary,
+  .sheet-audit-criteria {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -9053,6 +9141,8 @@ a.platform-row:hover {
   .revenue-product-list > div,
   .sheet-collection-grid,
   .sheet-audit-grid,
+  .sheet-audit-summary,
+  .sheet-audit-criteria,
   .target-board-hero,
   .history-ops-metrics,
   .history-ops-comparison {

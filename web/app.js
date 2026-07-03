@@ -9811,21 +9811,124 @@ function sheetCollectionStatusPanel(item = {}) {
   `;
 }
 
+function sheetMasterCompanyForItem(item = {}) {
+  const companies = companyMasterSource().companies || [];
+  const companyId = item.companyId || item.companyProfile?.companyId || "";
+  if (companyId) {
+    const direct = companies.find((company) => company.companyId === companyId);
+    if (direct) return direct;
+  }
+  const itemName = compactSearchText(item.name || "");
+  if (!itemName || itemName.length < 3) return null;
+  return companies.find((company) => {
+    const names = [company.primaryName, ...(company.aliases || [])]
+      .map((value) => compactSearchText(value || ""))
+      .filter(Boolean);
+    return names.some((name) => name === itemName || name.includes(itemName) || itemName.includes(name));
+  }) || null;
+}
+
+function sheetAuditDetailProfile(item = {}) {
+  const itemDecision = decisionQueueProfile(item);
+  const company = sheetMasterCompanyForItem(item);
+  if (!company?.companyId) {
+    const revenueImpact = itemQueueRevenueImpact(item);
+    return {
+      company: item.companyProfile || {},
+      decision: itemDecision,
+      itemDecision,
+      criteria: itemDecision.criteria || [],
+      profile: {},
+      autoRecommendation: null,
+      comparison: null,
+      revenueImpact,
+      revenueEvidence: queueRevenueEvidenceProfile(revenueImpact),
+      sourceLabel: "현재 수집 결과"
+    };
+  }
+  const profile = companyNeedsCorrection(company);
+  const decision = companyDecisionQueueProfile(company);
+  const comparison = companyRecrawlComparison(company);
+  const autoRecommendation = companyRecrawlAutoRecommendation(company, profile, decision, comparison);
+  const revenueImpact = companyQueueRevenueImpact(company);
+  return {
+    company,
+    decision,
+    itemDecision,
+    criteria: (decision.criteria || []).length ? decision.criteria : (itemDecision.criteria || []),
+    profile,
+    autoRecommendation,
+    comparison,
+    revenueImpact,
+    revenueEvidence: queueRevenueEvidenceProfile(revenueImpact),
+    sourceLabel: "누적 업체 DB"
+  };
+}
+
+function sheetAuditCriteriaForDetail(detail = {}) {
+  const decision = detail.decision || {};
+  const criteria = (detail.criteria || []).filter(Boolean);
+  if (criteria.length) return criteria;
+  const reasons = decision.reasons || [];
+  if (reasons.length) {
+    return reasons.slice(0, 3).map((reason, index) => ({
+      key: `reason_${index}`,
+      label: index ? "보조 근거" : (decision.label || "확인 필요"),
+      reason,
+      action: (decision.actions || [])[index] || "관리자 확인 후 컨택/보류 판단"
+    }));
+  }
+  return [{
+    key: "clear",
+    label: decision.inQueue ? (decision.label || "확인 필요") : "바로 판단 가능",
+    reason: decision.summary || (decision.inQueue ? "관리자 판단 근거 확인 필요" : "현재 기준 큐 진입 사유 없음"),
+    action: decision.inQueue ? "근거 확인 후 상태 저장" : "영업타깃 분리 기준 통과"
+  }];
+}
+
 function sheetAuditPanel(item = {}) {
-  const decision = decisionQueueProfile(item);
-  const audit = decision.audit;
+  const detail = sheetAuditDetailProfile(item);
+  const decision = detail.decision || {};
+  const itemDecision = detail.itemDecision || decisionQueueProfile(item);
+  const audit = itemDecision.audit;
+  const review = detail.company?.adminReview || item.companyProfile?.adminReview || {};
+  const manualCorrection = detail.company?.manualCorrection || item.companyProfile?.manualCorrection || item.companyManualCorrection || {};
+  const hasManualCorrection = manualCorrectionHasValue(manualCorrection);
+  const correctionDetail = hasManualCorrection
+    ? (detail.company?.correctionStatus?.detail || item.companyProfile?.correctionStatus?.detail || manualCorrection.note || "관리자 보정값 있음")
+    : (review.status === "manual_needed" ? "관리자 보정 필요로 저장됨" : "수동 보정값 없음");
+  const recommendation = detail.autoRecommendation;
+  const criteria = sheetAuditCriteriaForDetail(detail);
+  const queueActive = Boolean(decision.inQueue || itemDecision.inQueue || detail.revenueEvidence?.weak);
+  const tone = decision.tone || itemDecision.tone || audit.tone || "watch";
   const metrics = [
-    ["문제 날짜", decision.problemDateText, audit.metrics.missingCount ? `미수집 ${fmtNumber(audit.metrics.missingCount)}일` : "날짜별 기준"],
-    ["수량 신뢰도", decision.quantityConfidence, audit.criteria?.find((criterion) => criterion.key === "quantity")?.reason || "자동 수량 판단"],
-    ["공백 유형", decision.gapType, audit.criteria?.find((criterion) => criterion.key === "gap")?.reason || "요일별 공백"],
-    ["확인 채널", decision.channelText, audit.otaReason || "필요 채널"],
-    ["보정 상태", decision.correctionText, decision.adminReviewText || "관리자 판단 대기"]
+    ["문제 날짜", decision.problemDateText || itemDecision.problemDateText, audit.metrics.missingCount ? `미수집 ${fmtNumber(audit.metrics.missingCount)}일` : "날짜별 기준"],
+    ["수량 신뢰도", decision.quantityConfidence || itemDecision.quantityConfidence, criteria.find((criterion) => criterion.key === "quantity")?.reason || "자동 수량 판단"],
+    ["공백 유형", decision.gapType || itemDecision.gapType, criteria.find((criterion) => criterion.key === "gap")?.reason || "요일별 공백"],
+    ["확인 채널", decision.channelText || itemDecision.channelText, criteria.find((criterion) => criterion.key === "ota")?.action || audit.otaReason || "필요 채널"],
+    ["보정 상태", decision.correctionText || itemDecision.correctionText, correctionDetail]
   ];
+  const summaryRows = [
+    ["큐 상태", queueActive ? (decision.label || itemDecision.label || "판단 큐") : "바로 판단 가능", detail.sourceLabel],
+    ["추천 처리", recommendation?.label || (queueActive ? "확인 필요" : "컨택 가능"), compactListText(recommendation?.reasons || decision.actions || [], "관리자 판단 기준", 2)],
+    ["관리자 판단", review.label || companyAdminReviewLabel(review.status), review.note || companyReviewContextText(review.context || {}) || "저장 메모 없음"],
+    ["수동 보정", hasManualCorrection ? "보정 있음" : (review.status === "manual_needed" ? "보정 필요" : "보정 없음"), correctionDetail]
+  ];
+  const reasonChips = (decision.reasons || []).length ? decision.reasons : (itemDecision.reasons || []);
   return `
-    <section class="sheet-section sheet-audit-section ${escapeHtml(audit.tone)}">
+    <section class="sheet-section sheet-audit-section ${escapeHtml(tone)}">
       <div class="sheet-structure-title">
         <h3>관리자 판단 큐 V2</h3>
-        <span class="structure-badge ${escapeHtml(audit.otaCheckNeeded ? "ota-check" : audit.tone)}">${escapeHtml(decision.inQueue ? decision.label : "바로 판단 가능")}</span>
+        <span class="structure-badge ${escapeHtml(audit.otaCheckNeeded ? "ota-check" : tone)}">${escapeHtml(queueActive ? (decision.label || itemDecision.label) : "바로 판단 가능")}</span>
+      </div>
+      <div class="sheet-audit-summary">
+        ${summaryRows.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </div>
+        `).join("")}
       </div>
       <div class="sheet-audit-grid">
         ${metrics.map(([label, value, note]) => `
@@ -9836,8 +9939,20 @@ function sheetAuditPanel(item = {}) {
           </div>
         `).join("")}
       </div>
+      <div class="sheet-audit-criteria">
+        ${criteria.slice(0, 5).map((criterion, index) => `
+          <article class="${escapeHtml(criterion.key || "reason")}">
+            <mark>${fmtNumber(index + 1)}</mark>
+            <div>
+              <strong>${escapeHtml(criterion.label || "확인 필요")}</strong>
+              <p>${escapeHtml(criterion.reason || "판단 근거 확인 필요")}</p>
+              <small>${escapeHtml(criterion.action || "관리자 확인 후 상태 저장")}</small>
+            </div>
+          </article>
+        `).join("")}
+      </div>
       <div class="sheet-audit-reasons">
-        ${(decision.reasons.length ? decision.reasons : ["현재 기준 특이 신호가 없습니다."]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+        ${(reasonChips.length ? reasonChips : ["현재 기준 특이 신호가 없습니다."]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
       </div>
     </section>
   `;
