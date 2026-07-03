@@ -1252,6 +1252,113 @@ async function saveLocationCardCandidateAction(button) {
   }
 }
 
+function locationCardRequestItems() {
+  const source = state.locationCardRequests || {};
+  const items = Array.isArray(source.items) ? source.items : Object.values(source.requests || {});
+  const order = { requested: 0, temporary: 1, linked: 2, ignored: 3 };
+  return items
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => {
+      const statusDiff = (order[a.status] ?? 9) - (order[b.status] ?? 9);
+      if (statusDiff) return statusDiff;
+      return String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""));
+    });
+}
+
+function locationRequestEvidenceText(evidence = {}) {
+  const salesRate = evidence.salesSupply ? fmtRate(evidence.salesSold / evidence.salesSupply) : "판매 확인필요";
+  return [
+    `업체 ${fmtNumber(evidence.itemCount || 0)}`,
+    salesRate,
+    `검색량 ${evidence.searchVolume ? fmtNumber(evidence.searchVolume) : "확인필요"}`,
+    `타깃 ${fmtNumber(evidence.targetCount || 0)}`,
+    `공백 ${fmtNumber(evidence.platformGap || 0)}`
+  ].join(" · ");
+}
+
+function renderLocationCardRequestQueue() {
+  const items = locationCardRequestItems();
+  if (!items.length) return "";
+  const counts = items.reduce((acc, item) => {
+    acc[item.status || "new"] = (acc[item.status || "new"] || 0) + 1;
+    return acc;
+  }, {});
+  const countText = [
+    counts.requested ? `개발요청 ${fmtNumber(counts.requested)}` : "",
+    counts.temporary ? `임시 ${fmtNumber(counts.temporary)}` : "",
+    counts.linked ? `연결 ${fmtNumber(counts.linked)}` : "",
+    counts.ignored ? `제외 ${fmtNumber(counts.ignored)}` : ""
+  ].filter(Boolean).join(" · ");
+  return `
+    <section class="location-request-queue">
+      <div class="location-block-head">
+        <h4>지역카드 개발 큐</h4>
+        <span>${escapeHtml(countText || `${fmtNumber(items.length)}개 후보`)}</span>
+      </div>
+      <div class="location-request-list">
+        ${items.slice(0, 8).map((item) => {
+          const meta = locationCardRequestStatusMeta(item.status);
+          const key = item.key || locationCandidateKey(item);
+          const title = item.searchKeyword || item.keyword || item.regionBase || key || "지역 후보";
+          return `
+            <article class="location-request-row ${escapeHtml(meta.tone)}">
+              <div>
+                <strong>${escapeHtml(title)}</strong>
+                <small>${escapeHtml([item.regionBase ? `지역 ${item.regionBase}` : "", meta.label, item.updatedAt ? item.updatedAt.slice(0, 10) : ""].filter(Boolean).join(" · "))}</small>
+                <p>${escapeHtml(locationRequestEvidenceText(item.evidence || {}))}</p>
+              </div>
+              <div class="location-request-actions">
+                <button class="ghost-button" type="button" data-location-query="${escapeHtml(title)}">열기</button>
+                <button class="secondary-button" type="button" data-location-request-key="${escapeHtml(key)}" data-location-request-action="temporary">임시</button>
+                <button class="primary-button" type="button" data-location-request-key="${escapeHtml(key)}" data-location-request-action="requested">개발</button>
+                <button class="secondary-button" type="button" data-location-request-key="${escapeHtml(key)}" data-location-request-action="linked">연결</button>
+                <button class="ghost-button" type="button" data-location-request-key="${escapeHtml(key)}" data-location-request-action="ignored">제외</button>
+              </div>
+            </article>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+async function saveLocationCardRequestQueueAction(button) {
+  const key = button?.dataset?.locationRequestKey || "";
+  const status = button?.dataset?.locationRequestAction || "";
+  const request = key ? state.locationCardRequests?.requests?.[key] || locationCardRequestItems().find((item) => item.key === key) : null;
+  if (!request || !status) return;
+  let relatedRegion = request.relatedRegion || "";
+  if (status === "linked") {
+    relatedRegion = window.prompt("연결할 기존 지역카드 검색어를 입력하세요.", relatedRegion || "") || "";
+    if (!relatedRegion.trim()) return;
+  }
+  const label = locationCardRequestStatusMeta(status).label;
+  button.disabled = true;
+  setStatus(`${label} 저장 중`);
+  try {
+    state.locationCardRequests = await fetchJson("/api/location-card-request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...request,
+        key,
+        status,
+        relatedRegion,
+        evidence: request.evidence || {},
+        note: request.note || `지역카드 개발 큐에서 ${label} 처리`
+      })
+    });
+    setStatus(`${label} 저장 완료`);
+    renderLocationDictionary();
+  } catch (error) {
+    setStatus(`${label} 저장 실패`);
+    els.dictionaryResult?.insertAdjacentHTML("afterbegin", `<div class="empty">지역카드 큐 저장 실패: ${escapeHtml(error.message)}</div>`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function platformTone(platform = "") {
   const text = String(platform);
   if (text.includes("네이버")) return "naver";
@@ -9831,6 +9938,7 @@ function renderLocationDictionary(match = null) {
   }
 
   const query = els.dictionarySearchInput?.value?.trim() || "";
+  const requestQueueHtml = renderLocationCardRequestQueue();
   const result = match || locationCardForQuery(query || cards[0]?.searchKeyword || "");
   if (result.group) {
     renderLocationGroupDictionary(result.group);
@@ -9843,7 +9951,7 @@ function renderLocationDictionary(match = null) {
         ? `"${query}"에 맞는 저장 지역 카드가 없습니다. 신규 지역 후보로 확인합니다.`
         : "지역명과 업종을 입력하면 저장된 지역 카드를 호출합니다.";
     }
-    els.dictionaryResult.innerHTML = renderMissingLocationCandidate(query, cards);
+    els.dictionaryResult.innerHTML = `${requestQueueHtml}${renderMissingLocationCandidate(query, cards)}`;
     return;
   }
 
@@ -9863,6 +9971,7 @@ function renderLocationDictionary(match = null) {
   }
 
   els.dictionaryResult.innerHTML = `
+    ${requestQueueHtml}
     <article class="location-card">
       <div class="location-hero">
         <div>
@@ -11922,6 +12031,11 @@ function bindEvents() {
     runDictionarySearch(button.dataset.locationQuery);
   });
   els.dictionaryResult?.addEventListener("click", (event) => {
+    const requestButton = event.target.closest("[data-location-request-action]");
+    if (requestButton) {
+      saveLocationCardRequestQueueAction(requestButton);
+      return;
+    }
     const candidateButton = event.target.closest("[data-location-candidate-action]");
     if (candidateButton) {
       saveLocationCardCandidateAction(candidateButton);

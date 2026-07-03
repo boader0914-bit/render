@@ -835,6 +835,85 @@ a {
   padding: 14px;
 }
 
+.location-request-queue {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  background: #f8fbff;
+  box-shadow: var(--soft-shadow);
+  padding: 16px;
+}
+
+.location-request-list {
+  display: grid;
+  gap: 8px;
+}
+
+.location-request-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-left: 4px solid #98a2b3;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.location-request-row.requested {
+  border-left-color: var(--green);
+}
+
+.location-request-row.temporary {
+  border-left-color: var(--blue);
+}
+
+.location-request-row.linked {
+  border-left-color: #7a5af8;
+}
+
+.location-request-row.ignored {
+  border-left-color: #98a2b3;
+}
+
+.location-request-row strong,
+.location-request-row small,
+.location-request-row p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.location-request-row strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.location-request-row small,
+.location-request-row p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.location-request-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.location-request-actions button {
+  min-height: 32px;
+  border-radius: 9px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 .location-hero {
   min-width: 0;
   display: grid;
@@ -9167,6 +9246,14 @@ a.platform-row:hover {
   .region-group-summary,
   .region-card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .location-request-row {
+    grid-template-columns: 1fr;
+  }
+
+  .location-request-actions {
+    justify-content: flex-start;
   }
 
   .region-priority-grid {
