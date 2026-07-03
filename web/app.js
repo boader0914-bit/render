@@ -6790,6 +6790,36 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
   };
 }
 
+function recrawlRankRangePresets(selectedRange = "1-20") {
+  return [...new Set([selectedRange || "1-20", "1-5", "1-10", "10-20", "1-20", "1-30"].filter(Boolean))];
+}
+
+function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange = "1-20" } = {}) {
+  const presets = recrawlRankRangePresets(selectedRange);
+  return `
+    <div class="recrawl-range-presets">
+      <span>범위 선택</span>
+      ${presets.map((range) => {
+        const attrs = companyId
+          ? `data-queue-recrawl-company="${escapeHtml(companyId)}" data-queue-recrawl-range="${escapeHtml(range)}"`
+          : `data-recrawl-batch-key="${escapeHtml(batchKey)}" data-recrawl-batch-range="${escapeHtml(range)}"`;
+        return `<button type="button" class="${range === selectedRange ? "active" : ""}" ${attrs}>${escapeHtml(range)}위</button>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function applyRecrawlRangeOverride(plan = {}, range = "") {
+  const value = String(range || "").trim();
+  if (!value) return { ...plan };
+  return {
+    ...plan,
+    range: value,
+    detailRankRanges: value,
+    collectionMode: "precision"
+  };
+}
+
 function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decision = {}) {
   const plan = companyQueueRecrawlPlan(company, profile, decision);
   const eta = crawlEtaForPlan(plan);
@@ -6831,6 +6861,7 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
     <div class="company-check-apply-row">
       <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}">수집 설정 적용</button>
       <small>${escapeHtml(`${plan.keyword} · ${plan.keywordSource || "업체 기준"}${plan.regionScope ? ` · 지역 ${plan.regionScope}` : ""} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range}위`)}</small>
+      ${recrawlRangePresetHtml({ companyId: company.companyId || "", selectedRange: plan.range || "1-20" })}
     </div>
   `;
 }
@@ -7146,6 +7177,7 @@ function recrawlAutomationBatchHtml(batches = []) {
                 <span><b>절감 예상</b>${escapeHtml(batch.savedSeconds ? formatElapsed(batch.savedSeconds) : "중복 없음")}</span>
               </div>
               <p>${escapeHtml(`${batch.names.slice(0, 3).join(", ")}${batch.count > 3 ? ` 외 ${fmtNumber(batch.count - 3)}개` : ""} · ${batch.reason}`)}</p>
+              ${recrawlRangePresetHtml({ batchKey: batch.key, selectedRange: batch.plan.range || batch.plan.detailRankRanges || "1-20" })}
             </div>
             <button type="button" data-recrawl-batch-key="${escapeHtml(batch.key)}">묶음 설정</button>
           </div>
@@ -10225,7 +10257,7 @@ function applyQueueRecrawlSetting(button) {
   }
   const decision = companyDecisionQueueProfile(company);
   const profile = companyNeedsCorrection(company);
-  const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const plan = applyRecrawlRangeOverride(companyQueueRecrawlPlan(company, profile, decision), button?.dataset?.queueRecrawlRange || "");
   const eta = crawlEtaForPlan(plan);
   state.pendingRecrawlContext = {
     type: "company",
@@ -10257,7 +10289,7 @@ function applyQueueRecrawlSetting(button) {
   syncCollectionModeInputs();
   setActiveTab("admin");
   if (els.crawlStatus) {
-    els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
+    els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
   setStatus("재수집 설정 적용");
   window.requestAnimationFrame(() => {
@@ -10274,8 +10306,8 @@ function applyRecrawlBatchSetting(button) {
     setStatus("묶음 재수집 설정 실패");
     return;
   }
-  const plan = batch.plan || {};
-  const eta = batch.eta || crawlEtaForPlan(plan);
+  const plan = applyRecrawlRangeOverride(batch.plan || {}, button?.dataset?.recrawlBatchRange || "");
+  const eta = button?.dataset?.recrawlBatchRange ? crawlEtaForPlan(plan) : (batch.eta || crawlEtaForPlan(plan));
   state.pendingRecrawlContext = {
     type: "batch",
     key: crawlEtaKey(plan),
@@ -10308,7 +10340,7 @@ function applyRecrawlBatchSetting(button) {
   setActiveTab("admin");
   if (els.crawlStatus) {
     const saved = batch.savedSeconds ? ` · 개별 실행 대비 ${formatElapsed(batch.savedSeconds)} 절감` : "";
-    els.crawlStatus.textContent = `${fmtNumber(batch.count)}개 후보 묶음 재수집 설정을 적용했습니다. 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
+    els.crawlStatus.textContent = `${fmtNumber(batch.count)}개 후보 묶음 재수집 설정을 적용했습니다. 상세 ${plan.range || plan.detailRankRanges || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
   }
   setStatus("묶음 재수집 설정 적용");
   window.requestAnimationFrame(() => {

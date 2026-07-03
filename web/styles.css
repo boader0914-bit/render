@@ -4438,6 +4438,42 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.recrawl-range-presets {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.recrawl-range-presets span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.recrawl-range-presets button,
+.recrawl-batch-list .recrawl-range-presets button {
+  min-height: 28px;
+  border: 1px solid #dbe4f0;
+  border-radius: 999px;
+  background: #fff;
+  color: #344054;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.recrawl-range-presets button.active,
+.recrawl-batch-list .recrawl-range-presets button.active {
+  border-color: #93c5fd;
+  background: #eaf3ff;
+  color: var(--blue-dark);
+}
+
 .company-check-more {
   margin: 0;
   border: 1px dashed #c7dcff;
