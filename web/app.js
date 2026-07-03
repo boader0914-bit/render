@@ -2858,23 +2858,36 @@ function decisionQueueProfile(item = {}) {
   const confidence = inventoryConfidenceInfo(item);
   const structure = inventoryStructureInfo(item);
   const correction = manualCorrectionInfo(item);
-  const criteria = audit.criteria || [];
+  const revenueEvidence = queueRevenueEvidenceProfile(itemQueueRevenueImpact(item));
+  const revenueCriterion = revenueEvidence.weak ? {
+    key: "revenue",
+    label: "매출 근거 보강",
+    reason: compactListText(revenueEvidence.reasons, "요일/상품/가격 근거 확인 필요", 3),
+    action: "요일별 가격과 상품별 수량을 같은 기간으로 재수집"
+  } : null;
+  const criteria = [...(audit.criteria || []), revenueCriterion].filter(Boolean);
   const reasons = criteria.length
     ? criteria.map((criterion) => `${criterion.label}: ${criterion.reason}`)
     : audit.reasons;
+  const inQueue = Boolean(audit.inQueue || revenueEvidence.weak);
+  const channels = [
+    ...(audit.neededChannels || []),
+    revenueEvidence.weak ? "네이버 가격/상품" : ""
+  ].filter(Boolean);
+  const tone = revenueEvidence.weak && audit.tone === "good" ? "watch" : audit.tone;
   return {
     audit,
-    inQueue: Boolean(audit.inQueue),
+    inQueue,
     label: criteria[0]?.label || auditIndexLabel(audit),
-    tone: audit.tone,
-    priority: audit.priority,
+    tone,
+    priority: audit.priority + (revenueEvidence.weak ? 18 : 0),
     criteria,
     reasons,
     actions: criteria.map((criterion) => criterion.action).filter(Boolean).concat(audit.actions || []).slice(0, 4),
     problemDateText: auditProblemDateText(audit),
     quantityConfidence: `신뢰도 ${confidence.grade} · ${structure.label}`,
     gapType: compactListText(audit.gapTypes || [], "공백 특이 없음", 3),
-    channelText: compactListText(audit.neededChannels || [], "네이버 기준", 4),
+    channelText: compactListText(channels, "네이버 기준", 4),
     correctionText: correction ? `${correction.label} · ${correction.note}` : "자동추정",
     adminReviewText: item.companyProfile?.adminReview?.label || companyAdminReviewLabel(item.companyProfile?.adminReview?.status),
     summary: reasons[0] || audit.actions?.[0] || "확인 필요"
@@ -2897,6 +2910,7 @@ function renderValidationQueue(items = []) {
     ["수량 구조 불명확", counts.quantity || 0, "watch"],
     ["총량 변동 큼", counts.capacity || 0, "watch"],
     ["판매 공백 큼", counts.gap || 0, "watch"],
+    ["매출 근거 보강", counts.revenue || 0, "watch"],
     ["가격/수량 미확보", counts.data || 0, "watch"],
     ["정상/확정", counts.clean || 0, "good"]
   ];
@@ -3147,8 +3161,12 @@ function targetReasons(item) {
 function targetEntries(limit = 15, options = {}) {
   const includeDecisionQueue = Boolean(options.includeDecisionQueue);
   const entries = (state.data?.availability?.items || [])
-    .map((item) => ({ item, decision: decisionQueueProfile(item), ...targetExpansionAnalysis(item) }))
-    .filter((entry) => entry.score >= 42 && entry.reasons.length && (includeDecisionQueue || !entry.decision.inQueue))
+    .map((item) => {
+      const revenueImpact = itemQueueRevenueImpact(item);
+      const revenueEvidence = queueRevenueEvidenceProfile(revenueImpact);
+      return { item, decision: decisionQueueProfile(item), revenueImpact, revenueEvidence, ...targetExpansionAnalysis(item) };
+    })
+    .filter((entry) => entry.score >= 42 && entry.reasons.length && (includeDecisionQueue || (!entry.decision.inQueue && !entry.revenueEvidence.weak)))
     .sort((a, b) => b.score - a.score || Number(a.item.rank || 999) - Number(b.item.rank || 999));
   return limit ? entries.slice(0, limit) : entries;
 }
@@ -3200,21 +3218,16 @@ function queueRevenuePartFromSnapshot(part = {}, unit = "") {
   };
 }
 
-function companyQueueRevenueImpact(company = {}) {
-  const item = companyItemFromCurrentRun(company);
-  const lodging = item
-    ? queueRevenuePartFromItem(item, "lodging")
-    : queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.lodging || {}, "개");
-  const dayUse = item
-    ? queueRevenuePartFromItem(item, "day")
-    : queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.dayUse || {}, "회");
+function itemQueueRevenueImpact(item = {}) {
+  const lodging = queueRevenuePartFromItem(item, "lodging");
+  const dayUse = queueRevenuePartFromItem(item, "day");
   const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
   const totalPricedSoldOut = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
   const totalMissingPriceSoldOut = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
   const precision = revenuePrecisionProfile(item || {}, lodging, dayUse);
   const lodgingDayRows = revenueDayTypeRows(lodging);
   const dayUseDayRows = revenueDayTypeRows(dayUse);
-  const productRows = item ? revenueProductRows(item) : [];
+  const productRows = revenueProductRows(item);
   const hasDetail = Boolean(
     totalRevenue ||
     totalPricedSoldOut ||
@@ -3238,7 +3251,46 @@ function companyQueueRevenueImpact(company = {}) {
     totalPricedSoldOut,
     totalMissingPriceSoldOut,
     precision,
-    source: item ? "current" : "master"
+    source: "current"
+  };
+}
+
+function companyQueueRevenueImpact(company = {}) {
+  const item = companyItemFromCurrentRun(company);
+  if (item) return itemQueueRevenueImpact(item);
+  const lodging = queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.lodging || {}, "개");
+  const dayUse = queueRevenuePartFromSnapshot(company.inventory?.latest?.revenue?.dayUse || {}, "회");
+  const totalRevenue = finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue);
+  const totalPricedSoldOut = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
+  const totalMissingPriceSoldOut = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
+  const precision = revenuePrecisionProfile({}, lodging, dayUse);
+  const lodgingDayRows = revenueDayTypeRows(lodging);
+  const dayUseDayRows = revenueDayTypeRows(dayUse);
+  const productRows = [];
+  const hasDetail = Boolean(
+    totalRevenue ||
+    totalPricedSoldOut ||
+    totalMissingPriceSoldOut ||
+    lodging.avgSoldUnitPrice ||
+    dayUse.avgSoldUnitPrice ||
+    lodging.byDayType ||
+    dayUse.byDayType ||
+    lodging.offlineDetail ||
+    dayUse.offlineDetail ||
+    productRows.length
+  );
+  return {
+    hasDetail,
+    lodging,
+    dayUse,
+    lodgingDayRows,
+    dayUseDayRows,
+    productRows,
+    totalRevenue,
+    totalPricedSoldOut,
+    totalMissingPriceSoldOut,
+    precision,
+    source: "master"
   };
 }
 
@@ -6216,6 +6268,7 @@ function companyDecisionQueueProfile(company = {}) {
     review.updatedAt &&
     isAfterDate(latest.collectedAt, review.updatedAt)
   );
+  const revenueEvidence = queueRevenueEvidenceProfile(companyQueueRevenueImpact(company));
   const gapLabels = [
     signals.fridayWeak ? `금요일 ${fmtRate(signals.fridayRate)}` : "",
     signals.sundayWeak ? `일요일 ${fmtRate(signals.sundayRate)}` : "",
@@ -6251,6 +6304,12 @@ function companyDecisionQueueProfile(company = {}) {
       label: "수동 보정 후 재검토 필요",
       reason: hasManualCorrection ? (company.correctionStatus?.detail || "관리자 보정값 보유") : "관리자가 보정 필요로 지정",
       action: "보정값 적용 후 컨택/보류/제외 판단 재저장"
+    } : null,
+    revenueEvidence.weak ? {
+      key: "revenue",
+      label: "매출 근거 보강",
+      reason: compactListText(revenueEvidence.reasons, "요일/상품/가격 근거 확인 필요", 3),
+      action: "요일별 가격과 상품별 수량을 같은 기간으로 재수집"
     } : null
   ].filter(Boolean);
   if (staleAfterReview && criteria.length) {
@@ -6269,6 +6328,7 @@ function companyDecisionQueueProfile(company = {}) {
   if (criteria.some((criterion) => criterion.key === "capacity")) channels.push("전화예약/오프라인");
   if (criteria.some((criterion) => criterion.key === "gap")) channels.push("네이버 가격/일자");
   if (criteria.some((criterion) => criterion.key === "manual_recheck")) channels.push("관리자 보정 메모");
+  if (criteria.some((criterion) => criterion.key === "revenue")) channels.push("네이버 가격/상품");
   return {
     inQueue,
     criteria,
@@ -6282,7 +6342,7 @@ function companyDecisionQueueProfile(company = {}) {
     channelText: compactListText(channels, "네이버 기준", 4),
     correctionText: hasManualCorrection ? (company.correctionStatus?.detail || "관리자 보정") : "자동추정",
     adminReviewText: review.label || companyAdminReviewLabel(review.status),
-    tone: criteria.some((criterion) => ["ota", "quantity", "capacity"].includes(criterion.key)) ? "watch" : "good"
+    tone: criteria.some((criterion) => ["ota", "quantity", "capacity", "revenue"].includes(criterion.key)) ? "watch" : "good"
   };
 }
 
@@ -6338,6 +6398,7 @@ function companyCheckEntryType(company = {}, profile = {}) {
   if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
     return { key: "correction", label: "보정 필요" };
   }
+  if ((profile.decision?.criteria || []).some((criterion) => criterion.key === "revenue")) return { key: "recrawl", label: "매출 근거 보강" };
   if (issues.some((issue) => issue.key === "ota")) return { key: "ota", label: "OTA 확인" };
   if (issues.some((issue) => issue.key === "gap")) return { key: "gap", label: "판매 공백" };
   if (company.salesTarget?.category === "contact") return { key: "contact", label: "컨택 후보" };
@@ -6363,6 +6424,7 @@ function companyCheckRecommendation(company = {}, profile = {}, workflow = {}, d
   if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
     return profile.applied ? "보정값이 적용되어 있습니다. 실제 총량과 맞는지 확인 후 확정하세요." : "수량 구조를 확인하고 필요하면 관리자 보정값을 입력하세요.";
   }
+  if ((decision.criteria || []).some((criterion) => criterion.key === "revenue")) return "요일별 가격과 상품종류별 수량 근거를 먼저 보강한 뒤 컨택 가능 여부를 다시 판단하세요.";
   if (issues.some((issue) => issue.key === "ota")) return "OTA 노출과 가격을 확인한 뒤 컨택/보류를 결정하세요.";
   if ((decision.criteria || []).some((criterion) => criterion.key === "gap") || issues.some((issue) => issue.key === "gap")) return "판매 공백 날짜의 가격/연박 조건을 확인한 뒤 바로 컨택할지 보류할지 정하세요.";
   if (company.salesTarget?.category === "contact") return "노출은 있으나 개선 여지가 있는 업체입니다. 컨택 후보로 검토하세요.";
@@ -6837,10 +6899,12 @@ function companyDecisionQueueEntries(master = {}) {
       const comparison = companyRecrawlComparison(company);
       const autoRecommendation = companyRecrawlAutoRecommendation(company, profile, decision, comparison);
       const revenueImpact = companyQueueRevenueImpact(company);
+      const revenueEvidence = queueRevenueEvidenceProfile(revenueImpact);
       const include = decision.inQueue
+        || revenueEvidence.weak
         || Boolean(company.adminReview?.status)
         || workflow.key === "recheck";
-      return { company, profile, type, workflow, priority, decision, comparison, autoRecommendation, revenueImpact, include };
+      return { company, profile, type, workflow, priority, decision, comparison, autoRecommendation, revenueImpact, revenueEvidence, include };
     })
     .filter((entry) => entry.include)
     .sort((a, b) => {
