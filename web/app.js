@@ -11872,6 +11872,7 @@ function sheetFlowOverview(item = {}) {
   const structure = inventoryStructureInfo(item);
   const historyWeekday = flow.history?.weekday;
   const analysis = targetExpansionAnalysis(item);
+  const publicMode = !isAdminRole();
   const cells = [
     ["7일 전체", flow.all, `${fmtNumber(flow.all.sold)}/${fmtNumber(flow.all.total)}개`],
     [flow.weekday.label, flow.weekday, `${fmtNumber(flow.weekday.count)}일 관측`],
@@ -11884,10 +11885,10 @@ function sheetFlowOverview(item = {}) {
     <section class="sheet-section sheet-decision-section">
       <div class="sheet-decision-head">
         <div>
-          <h3>관리자 판단 요약</h3>
-          <p>${escapeHtml(analysis.label)} · ${fmtNumber(analysis.score)}점 · ${escapeHtml(structure.label)}</p>
+          <h3>${publicMode ? "요일별 판매 흐름" : "관리자 판단 요약"}</h3>
+          <p>${escapeHtml(publicMode ? "평일, 금요일, 토요일, 일요일 판매 흐름을 나눠 운영 포인트를 봅니다." : `${analysis.label} · ${fmtNumber(analysis.score)}점 · ${structure.label}`)}</p>
         </div>
-        <span class="confidence-badge ${escapeHtml(correctionStatus.tone)}">${escapeHtml(correctionStatus.label)}</span>
+        <span class="confidence-badge ${escapeHtml(correctionStatus.tone)}">${escapeHtml(publicMode ? "판매 흐름" : correctionStatus.label)}</span>
       </div>
       <div class="sheet-flow-grid">
         ${cells.map(([label, metric, note]) => {
@@ -11903,7 +11904,7 @@ function sheetFlowOverview(item = {}) {
           `;
         }).join("")}
       </div>
-      ${validationReasonRow(item)}
+      ${publicMode ? "" : validationReasonRow(item)}
     </section>
   `;
 }
@@ -11946,6 +11947,69 @@ function sheetInventoryStructure(item = {}) {
           }[flag] || flag)}</span>`).join("")}
         </div>
       ` : ""}
+    </section>
+  `;
+}
+
+function renderB2BBookingQualityPanel(item = {}, lodgingRows = sheetRowsForBooking(item), dayRows = sheetRowsForDayUse(item)) {
+  if (isAdminRole()) return "";
+  const status = collectionStatusProfile(item);
+  const lodging = salesStats(item, "lodging");
+  const day = salesStats(item, "day");
+  const revenue = itemRevenueStats(item, "lodging");
+  const remaining = Math.max(0, finiteNumber(lodging.supply, 0) - finiteNumber(lodging.sold, 0));
+  const missingCount = lodgingRows.filter((row) => row.missing).length;
+  const tone = status.statusKey === "ready" ? "good" : status.statusKey === "partial" ? "watch" : "bad";
+  const label = status.statusKey === "ready"
+    ? "판단 기준 확보"
+    : status.statusKey === "partial"
+      ? "표본 보강 필요"
+      : "예약 표본 부족";
+  const summary = status.statusKey === "ready"
+    ? "현재 예약 표본은 판매 흐름과 잔여 객실 판단에 활용할 수 있습니다."
+    : status.statusKey === "partial"
+      ? "일부 날짜, 가격, 상품 구성이 부족해 판매 판단은 보조 기준으로 봅니다."
+      : "예약 수량 표본이 부족합니다. 순위와 채널 노출을 먼저 보고 추가 확인이 필요합니다.";
+  const basisText = status.basisTotal
+    ? `${fmtNumber(status.basisTotal)}실 기준`
+    : "총량 확인필요";
+  const priceText = revenue.pricedSoldOut
+    ? `${fmtNumber(revenue.pricedSoldOut)}개 가격 확인`
+    : "가격 표본 대기";
+  const offlineText = status.offlineEstimated
+    ? `${fmtNumber(status.offlineQuantity)}개 오프라인 추정`
+    : "특이 신호 없음";
+  const metrics = [
+    { label: "숙박 판매율", value: Number.isFinite(lodging.rate) ? fmtRate(lodging.rate) : "확인필요", note: lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}실` : "숙박 표본 대기" },
+    { label: "잔여 객실", value: lodging.supply ? fmtNumber(remaining) : "확인필요", note: basisText },
+    { label: "데이유즈/캠프닉", value: day.supply ? fmtRate(day.rate) : "미확인", note: dayRows.length ? `${fmtNumber(day.sold)}/${fmtNumber(day.supply)}개` : "같은 카테고리 보조 판단" },
+    { label: "매출 표본", value: revenue.adjustedRevenue ? fmtWon(revenue.adjustedRevenue) : "대기", note: revenueCoverageText(revenue) },
+    { label: "날짜 표본", value: `${fmtNumber(lodgingRows.length - missingCount)}/${fmtNumber(lodgingRows.length)}`, note: missingCount ? `미확인 ${fmtNumber(missingCount)}일` : "기간 내 날짜 확보" },
+    { label: "오프라인 예약", value: status.offlineEstimated ? "반영" : "특이 없음", note: offlineText }
+  ];
+  return `
+    <section class="sheet-section sheet-b2b-booking ${escapeHtml(tone)}">
+      <div class="sheet-b2b-head">
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <h3>예약 판단 기준</h3>
+          <p>${escapeHtml(summary)}</p>
+        </div>
+        <strong>${escapeHtml(Number.isFinite(lodging.rate) ? fmtRate(lodging.rate) : "예약")}</strong>
+      </div>
+      <div class="sheet-b2b-platform-grid">
+        ${metrics.map((metric) => `
+          <div>
+            <span>${escapeHtml(metric.label)}</span>
+            <strong>${escapeHtml(metric.value)}</strong>
+            <small>${escapeHtml(metric.note || "")}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sheet-b2b-coupon-line">
+        <strong>가격/수량 해석 기준</strong>
+        <span>${escapeHtml([basisText, priceText, missingCount ? `미확인 날짜 ${fmtNumber(missingCount)}일` : "", status.offlineEstimated ? "오프라인 예약 가능성 반영" : ""].filter(Boolean).join(" · "))}</span>
+      </div>
     </section>
   `;
 }
@@ -12003,16 +12067,17 @@ function renderSheetBooking(item) {
   const confidenceReasons = [...confidence.alerts, ...confidence.reasons].filter(Boolean).slice(0, 4);
   const flow = salesFlowProfile(item);
   const historyWeekday = flow.history?.weekday;
+  const publicMode = !isAdminRole();
+  const publicBlocks = publicMode
+    ? `${sheetB2BInsightPanel(item)}${renderB2BBookingQualityPanel(item, lodgingRows, dayRows)}`
+    : "";
   const adminBlocks = isAdminRole()
-    ? `${sheetAuditPanel(item)}${sheetRecrawlComparisonPanel(item)}${sheetCompanyProfile(item)}${sheetHistoryPanel(item)}`
+    ? `${sheetCollectionStatusPanel(item)}${sheetRevenuePanel(item)}${sheetAuditPanel(item)}${sheetRecrawlComparisonPanel(item)}${sheetCompanyProfile(item)}${sheetInventoryStructure(item)}${sheetHistoryPanel(item)}`
     : "";
   return `
-    ${!isAdminRole() ? sheetB2BInsightPanel(item) : ""}
+    ${publicBlocks}
     ${sheetFlowOverview(item)}
-    ${sheetCollectionStatusPanel(item)}
-    ${sheetRevenuePanel(item)}
     ${adminBlocks}
-    ${sheetInventoryStructure(item)}
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>
       ${lodgingRows.length ? lodgingRows.map(dateRow).join("") : `<div class="empty">숙박 재고가 확인되지 않았습니다.</div>`}

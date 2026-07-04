@@ -7126,7 +7126,8 @@ a.platform-row:hover {
 }
 
 .sheet-b2b-platform,
-.sheet-b2b-search {
+.sheet-b2b-search,
+.sheet-b2b-booking {
   gap: 12px;
   border: 1px solid #d5e3f7;
   border-radius: 18px;
@@ -7135,25 +7136,30 @@ a.platform-row:hover {
 }
 
 .sheet-b2b-platform.strong,
-.sheet-b2b-search.strong {
+.sheet-b2b-search.strong,
+.sheet-b2b-booking.strong {
   border-color: #b8d9d3;
   background: #f6fbfa;
 }
 
 .sheet-b2b-platform.good,
-.sheet-b2b-search.good {
+.sheet-b2b-search.good,
+.sheet-b2b-booking.good {
   border-color: #bbf7d0;
   background: #f6fef9;
 }
 
 .sheet-b2b-platform.watch,
-.sheet-b2b-search.watch {
+.sheet-b2b-search.watch,
+.sheet-b2b-booking.watch {
   border-color: #fedf89;
   background: #fffbeb;
 }
 
 .sheet-b2b-platform.hot,
-.sheet-b2b-search.hot {
+.sheet-b2b-search.hot,
+.sheet-b2b-booking.hot,
+.sheet-b2b-booking.bad {
   border-color: #fecaca;
   background: #fff8f8;
 }

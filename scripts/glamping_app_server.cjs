@@ -1236,9 +1236,10 @@ function securityHeaders() {
     "Content-Security-Policy": [
       "default-src 'self'",
       "script-src 'self'",
-      "style-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+      "font-src 'self' data: https://cdn.jsdelivr.net",
       "img-src 'self' data:",
-      "connect-src 'self'",
+      "connect-src 'self' https://cdn.jsdelivr.net",
       "base-uri 'self'",
       "form-action 'self'",
       "frame-ancestors 'none'"
@@ -7057,8 +7058,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-sheet-briefs"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-sheet-briefs"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-b2b-quality"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-b2b-quality"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
