@@ -11512,6 +11512,7 @@ async function loadLocationDictionary() {
       els.dictionarySearchInput.value = state.dictionary.cards[0].searchKeyword;
     }
     runDictionarySearch(els.dictionarySearchInput?.value || state.dictionary.cards?.[0]?.searchKeyword || "");
+    if (!isAdminRole()) renderB2BSearchPanel();
   } catch (error) {
     if (els.dictionarySearchStatus) els.dictionarySearchStatus.textContent = `입지사전 로딩 실패: ${error.message}`;
     if (els.dictionaryResult) els.dictionaryResult.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
@@ -11653,6 +11654,109 @@ function b2bSearchMatches(query = state.b2bSearchQuery) {
   return rows.slice(0, 8);
 }
 
+function b2bDictionaryNoMatch(query = "") {
+  const trimmed = String(query || "").trim();
+  if (!state.dictionary || !trimmed) {
+    return {
+      type: "unknown",
+      title: "저장 리포트 없음",
+      note: "관리자가 수집한 지역 경쟁 리포트가 아직 없습니다.",
+      tokens: [],
+      chips: []
+    };
+  }
+  const match = locationCardForQuery(trimmed);
+  if (match?.group) {
+    const cards = locationGroupCards(match.group);
+    return {
+      type: "group",
+      title: `${match.group.searchKeyword || match.group.sido || "상위 권역"} 권역 리포트 대기`,
+      note: `${fmtNumber(cards.length)}개 지역 카드가 연결된 권역입니다. 현재 저장 리포트에는 직접 수집 결과가 없습니다.`,
+      tokens: [match.group.searchKeyword, match.group.sido, ...(match.group.aliases || [])],
+      chips: cards.slice(0, 4).map((card) => card.searchKeyword).filter(Boolean)
+    };
+  }
+  if (match?.card) {
+    const alias = match.alias || dictionaryAliasForCard(match.card);
+    const clusters = locationClusterCodes(match.card).map(locationClusterMeta).map((cluster) => cluster.name).filter(Boolean);
+    return {
+      type: "card",
+      title: `${match.card.searchKeyword || trimmed} 지역카드 있음`,
+      note: `입지사전에는 등록되어 있지만 저장 리포트는 아직 없습니다.${clusters.length ? ` ${clusters.slice(0, 2).join(" · ")} 기준으로 수집하면 됩니다.` : ""}`,
+      tokens: [match.card.searchKeyword, alias?.sido, alias?.sigungu, ...(alias?.aliases || [])],
+      chips: clusters.slice(0, 4)
+    };
+  }
+  const candidate = locationCandidateFromQuery(trimmed);
+  if (candidate) {
+    return {
+      type: "candidate",
+      title: `${candidate.regionBase || trimmed} 신규 수집 필요`,
+      note: "저장 지역카드와 저장 리포트가 모두 없습니다. 관리자 수집 대상 지역으로 분류합니다.",
+      tokens: [candidate.keyword, candidate.regionBase],
+      chips: ["신규 지역", "수집 필요"]
+    };
+  }
+  return {
+    type: "unknown",
+    title: "검색어 확인 필요",
+    note: "지역명과 업종을 함께 입력하면 저장 리포트와 지역카드 기준으로 다시 매칭합니다.",
+    tokens: b2bMeaningfulSearchTokens(trimmed),
+    chips: ["지역명 + 글램핑"]
+  };
+}
+
+function b2bFallbackRunOptions(query = "", dictionaryInfo = b2bDictionaryNoMatch(query)) {
+  const tokens = [
+    ...b2bMeaningfulSearchTokens(query),
+    ...(dictionaryInfo.tokens || []).map(b2bSearchText)
+  ].filter(Boolean);
+  const scored = state.runs.map((run, index) => {
+    const haystack = b2bSearchText(runSearchHaystack(run));
+    const province = b2bSearchText(run.provinceLabel || "");
+    let score = 0;
+    tokens.forEach((token) => {
+      if (!token) return;
+      if (haystack.includes(token)) score += 50;
+      if (province && (province.includes(token) || token.includes(province))) score += 30;
+    });
+    return { run, index, score };
+  }).filter((row) => row.score > 0);
+  const sorted = scored.sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 3);
+  if (sorted.length) return sorted.map((row) => ({ ...row, reason: "관련 리포트" }));
+  return state.runs.slice(0, 3).map((run, index) => ({ run, index, score: 0, reason: "최근 리포트" }));
+}
+
+function b2bSearchNoMatchPanel(query = state.b2bSearchQuery) {
+  const info = b2bDictionaryNoMatch(query);
+  const fallbacks = b2bFallbackRunOptions(query, info);
+  return `
+    <div class="b2b-search-empty b2b-search-missing ${escapeHtml(info.type)}">
+      <div class="b2b-search-missing-copy">
+        <span>${escapeHtml(info.type === "candidate" ? "수집 필요" : info.type === "card" || info.type === "group" ? "지역카드 확인" : "검색 결과 없음")}</span>
+        <strong>${escapeHtml(info.title)}</strong>
+        <p>${escapeHtml(info.note)}</p>
+        ${(info.chips || []).length ? `
+          <div class="b2b-search-missing-chips">
+            ${(info.chips || []).map((chip) => `<em>${escapeHtml(chip)}</em>`).join("")}
+          </div>
+        ` : ""}
+      </div>
+      ${fallbacks.length ? `
+        <div class="b2b-search-fallbacks">
+          <small>대체 확인 리포트</small>
+          ${fallbacks.map((row) => `
+            <button type="button" data-b2b-run-id="${escapeHtml(row.run.id)}">
+              <b>${escapeHtml(runSearchTitle(row.run))}</b>
+              <span>${escapeHtml(row.reason)} · ${escapeHtml(runSearchDateLabel(row.run))}</span>
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function b2bSearchResultCard(row = {}, normalized = "") {
   const run = row.run || {};
   const metrics = runSearchMetrics(run);
@@ -11698,9 +11802,10 @@ function renderB2BSearchPanel() {
     const resultHtml = matches.length
       ? matches.map((row) => b2bSearchResultCard(row, normalized)).join("")
       : `<div class="b2b-search-empty">${normalized ? `"${escapeHtml(state.b2bSearchQuery)}" 저장 리포트 없음` : "준비된 지역 경쟁 리포트 없음"}</div>`;
+    const searchResultHtml = matches.length ? resultHtml : b2bSearchNoMatchPanel(state.b2bSearchQuery);
     els.b2bSearchResults.innerHTML = `
       ${quickHtml}
-      <div class="b2b-search-result-grid">${resultHtml}</div>
+      <div class="b2b-search-result-grid">${searchResultHtml}</div>
     `;
   }
   if (els.b2bSearchStatus) {
@@ -13992,9 +14097,9 @@ async function init() {
     syncCollectionModeInputs();
     bindEvents();
     setDefaultDates();
-    const tasks = [loadRuns(true)];
+    const tasks = [loadRuns(true), loadLocationDictionary()];
     if (isAdminRole()) {
-      tasks.push(loadTrafficState(), loadLocationDictionary(), loadLocationCardRequests());
+      tasks.push(loadTrafficState(), loadLocationCardRequests());
     }
     await Promise.all(tasks);
     if (isAdminRole()) pollCrawlStatusUntilIdle(false);
