@@ -8280,6 +8280,213 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.b2b-public-board {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
+  gap: 10px;
+}
+
+.b2b-public-actions,
+.b2b-public-priority,
+.b2b-public-data {
+  min-width: 0;
+  display: grid;
+  gap: 11px;
+  border: 1px solid #edf1f5;
+  border-radius: 15px;
+  background: #fbfcfd;
+  padding: 14px;
+}
+
+.b2b-public-data {
+  grid-column: 1 / -1;
+}
+
+.b2b-action-stack,
+.b2b-priority-list {
+  display: grid;
+  gap: 8px;
+}
+
+.b2b-action-stack > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.b2b-action-stack > div.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-action-stack > div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-action-stack > div.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-action-stack mark {
+  min-width: 0;
+  display: inline-grid;
+  place-items: center;
+  min-height: 40px;
+  border-radius: 12px;
+  background: #eef5ff;
+  color: #175cd3;
+  font-size: 15px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.b2b-action-stack strong,
+.b2b-priority-list strong,
+.b2b-data-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.b2b-action-stack span,
+.b2b-priority-list small,
+.b2b-data-grid span,
+.b2b-data-grid small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-action-stack button {
+  min-height: 36px;
+  border: 1px solid #d0d5dd;
+  border-radius: 11px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.b2b-priority-list button {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rank name label"
+    "rank meta meta";
+  gap: 3px 9px;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 9px;
+  text-align: left;
+}
+
+.b2b-priority-list button.watch {
+  border-color: #fedf89;
+}
+
+.b2b-priority-list button.hot {
+  border-color: #fecaca;
+}
+
+.b2b-priority-list button.strong {
+  border-color: #b8d9d3;
+}
+
+.b2b-priority-list button:disabled {
+  cursor: not-allowed;
+}
+
+.b2b-priority-list span {
+  grid-area: rank;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #eef5ff;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.b2b-priority-list strong {
+  grid-area: name;
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-priority-list em {
+  grid-area: label;
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-priority-list small {
+  grid-area: meta;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-data-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-data-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.b2b-data-grid div.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-data-grid div.good {
+  border-color: #bbf7d0;
+  background: #f6fef9;
+}
+
+.b2b-data-grid div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-data-grid strong {
+  font-size: 18px;
+  line-height: 1.08;
+}
+
 .report-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -10524,6 +10731,7 @@ a.platform-row:hover {
   .report-hero,
   .b2b-brief-head,
   .b2b-brief-grid,
+  .b2b-public-board,
   .report-layout {
     grid-template-columns: 1fr;
   }
@@ -10538,7 +10746,8 @@ a.platform-row:hover {
   }
 
   .report-metric-grid,
-  .b2b-brief-metrics {
+  .b2b-brief-metrics,
+  .b2b-data-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -11106,6 +11315,34 @@ a.platform-row:hover {
     padding: 14px;
   }
 
+  .b2b-action-stack > div,
+  .b2b-priority-list button {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .b2b-action-stack mark,
+  .b2b-priority-list span,
+  .b2b-priority-list strong,
+  .b2b-priority-list em,
+  .b2b-priority-list small {
+    grid-area: auto;
+  }
+
+  .b2b-action-stack mark,
+  .b2b-priority-list span {
+    justify-self: start;
+  }
+
+  .b2b-action-stack button {
+    width: 100%;
+  }
+
+  .b2b-priority-list strong,
+  .b2b-priority-list small {
+    white-space: normal;
+  }
+
   .report-card-head {
     flex-direction: column;
     gap: 8px;
@@ -11113,6 +11350,7 @@ a.platform-row:hover {
 
   .report-channel-grid,
   .b2b-brief-metrics,
+  .b2b-data-grid,
   .report-region-grid,
   .structure-metric-grid,
   .structure-submetric-row,

@@ -2152,7 +2152,7 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
     <section class="b2b-rank-brief ${escapeHtml(model.decision.tone)}">
       <div class="b2b-rank-head">
         <div>
-          <p class="eyebrow">B2B Rank Brief</p>
+          <p class="eyebrow">노출 순위 브리프</p>
           <h3>상위 노출 업체 운영 판단</h3>
           <p>${escapeHtml(model.decision.summary)}</p>
         </div>
@@ -6031,6 +6031,180 @@ function b2bMarketBriefModel(data = state.data || {}) {
   };
 }
 
+function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
+  const rankModel = b2bRankBoardModel();
+  const items = state.data?.availability?.items || [];
+  const detailCoverage = rankModel.rows.length ? rankModel.linkedRows.length / rankModel.rows.length : NaN;
+  const couponRows = items.filter((item) => naverCouponInfo(item).visible);
+  const offlineRows = items.filter((item) => collectionStatusProfile(item).offlineEstimated);
+  const revenueCoverageText = brief.revenueSampleCount
+    ? `${fmtNumber(brief.revenueSampleCount)}개 표본${Number.isFinite(brief.revenueCoverage) ? ` · ${fmtRate(brief.revenueCoverage)}` : ""}`
+    : "매출 표본 대기";
+  const dataStatus = [
+    { label: "상세 표본", value: `${fmtNumber(rankModel.linkedRows.length)}/${fmtNumber(rankModel.rows.length)}`, note: Number.isFinite(detailCoverage) ? fmtRate(detailCoverage) : "확인필요", tone: Number.isFinite(detailCoverage) && detailCoverage >= 0.55 ? "good" : "watch" },
+    { label: "매출 표본", value: brief.revenueSampleCount ? fmtNumber(brief.revenueSampleCount) : "대기", note: revenueCoverageText, tone: brief.revenueSampleCount ? "good" : "watch" },
+    { label: "채널 비교", value: fmtNumber(brief.platformStats.otaCheckCount || 0), note: "보조 채널 확인 대상", tone: brief.platformStats.otaCheckCount ? "watch" : "good" },
+    { label: "쿠폰 노출", value: fmtNumber(couponRows.length), note: couponRows.length ? "프로모션 신호" : "노출 신호 없음", tone: couponRows.length ? "strong" : "neutral" }
+  ];
+  const actionRows = [];
+  if (rankModel.rankOnlyRows.length) {
+    actionRows.push({
+      tone: "watch",
+      label: "상세 표본 보강",
+      value: `${fmtNumber(rankModel.rankOnlyRows.length)}개`,
+      detail: "상위 노출은 있으나 예약 수량 표본이 없어 판매 판단을 보류합니다.",
+      tab: "rank",
+      button: "순위 확인"
+    });
+  }
+  if (rankModel.gapRows.length) {
+    actionRows.push({
+      tone: "strong",
+      label: "판매 공백 확인",
+      value: `${fmtNumber(rankModel.gapRows.length)}개`,
+      detail: "노출 대비 잔여 객실이 남은 업체부터 가격, 상품명, 채널 노출을 봅니다.",
+      tab: "rank",
+      button: "업체 보기"
+    });
+  }
+  if (brief.platformStats.otaCheckCount) {
+    actionRows.push({
+      tone: "watch",
+      label: "채널 비교",
+      value: `${fmtNumber(brief.platformStats.otaCheckCount)}개`,
+      detail: `여기어때 ${fmtNumber(brief.platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(brief.platformStats.missingYanolja)}개 보조 확인 여지가 있습니다.`,
+      tab: "rank",
+      button: "채널 보기"
+    });
+  }
+  if (brief.dayUseGapCount) {
+    actionRows.push({
+      tone: "neutral",
+      label: "상품 구성 점검",
+      value: `${fmtNumber(brief.dayUseGapCount)}개`,
+      detail: "데이유즈/캠프닉 노출이 약한 업체는 당일 상품 운영 가능성을 확인합니다.",
+      tab: "rank",
+      button: "상품 보기"
+    });
+  }
+  if (couponRows.length) {
+    actionRows.push({
+      tone: "strong",
+      label: "쿠폰 신호 활용",
+      value: `${fmtNumber(couponRows.length)}개`,
+      detail: "네이버 공개 화면에 쿠폰 노출이 있어 프로모션 비교 포인트로 활용할 수 있습니다.",
+      tab: "rank",
+      button: "쿠폰 보기"
+    });
+  }
+  if (!actionRows.length && rankModel.hotRows.length) {
+    actionRows.push({
+      tone: "hot",
+      label: "강수요 방어",
+      value: `${fmtNumber(rankModel.hotRows.length)}개`,
+      detail: "판매율이 높은 업체는 가격 방어와 주말 재고 운영을 먼저 확인합니다.",
+      tab: "rank",
+      button: "강수요 보기"
+    });
+  }
+  if (!actionRows.length) {
+    actionRows.push({
+      tone: "good",
+      label: "현 상태 유지",
+      value: "안정",
+      detail: "현재 표본에서는 급한 공백보다 기간 비교와 권역 수요 추적이 우선입니다.",
+      tab: "demand",
+      button: "수요 보기"
+    });
+  }
+  const priorityRows = rankModel.focusRows.slice(0, 3).map((row, order) => {
+    const profile = b2bCompanyActionProfile(row.item, row.insight);
+    const openIndex = Number(row.item.availabilityIndex);
+    return {
+      order: order + 1,
+      item: row.item,
+      profile,
+      openIndex,
+      canOpen: row.linked && Number.isFinite(openIndex) && openIndex >= 0
+    };
+  });
+  return {
+    rankModel,
+    dataStatus,
+    actionRows: actionRows.slice(0, 4),
+    priorityRows,
+    couponCount: couponRows.length,
+    offlineCount: offlineRows.length,
+    detailCoverage
+  };
+}
+
+function renderB2BPublicOverview(brief = b2bMarketBriefModel()) {
+  const model = b2bPublicOverviewModel(brief);
+  return `
+    <div class="b2b-public-board">
+      <article class="b2b-public-actions">
+        <div class="report-card-head">
+          <div>
+            <h3>오늘 볼 것</h3>
+            <p>공개 리포트에서 바로 확인할 운영 우선순위입니다.</p>
+          </div>
+          <span>${fmtNumber(model.actionRows.length)}개</span>
+        </div>
+        <div class="b2b-action-stack">
+          ${model.actionRows.map((row) => `
+            <div class="${escapeHtml(row.tone)}">
+              <mark>${escapeHtml(row.value)}</mark>
+              <div>
+                <strong>${escapeHtml(row.label)}</strong>
+                <span>${escapeHtml(row.detail)}</span>
+              </div>
+              <button type="button" data-drawer-tab="${escapeHtml(row.tab)}">${escapeHtml(row.button)}</button>
+            </div>
+          `).join("")}
+        </div>
+      </article>
+      <article class="b2b-public-priority">
+        <div class="report-card-head">
+          <div>
+            <h3>우선 확인 업체</h3>
+            <p>노출, 판매율, 잔여 객실을 함께 본 공개 후보입니다.</p>
+          </div>
+          <span>${fmtNumber(model.priorityRows.length)}개</span>
+        </div>
+        <div class="b2b-priority-list">
+          ${model.priorityRows.length ? model.priorityRows.map((row) => `
+            <button type="button" ${row.canOpen ? `data-open-company="${row.openIndex}"` : "disabled"} class="${escapeHtml(row.profile.tone)}">
+              <span>${fmtNumber(row.order)}</span>
+              <strong>${escapeHtml(row.item.name || "업체명 확인")}</strong>
+              <em>${escapeHtml(row.profile.label)}</em>
+              <small>${escapeHtml(row.profile.chips.slice(0, 3).join(" · "))}</small>
+            </button>
+          `).join("") : `<div class="empty">우선 확인할 업체 표본이 없습니다.</div>`}
+        </div>
+      </article>
+      <article class="b2b-public-data">
+        <div class="report-card-head">
+          <div>
+            <h3>데이터 상태</h3>
+            <p>공개 판단에 사용한 표본의 확보 수준입니다.</p>
+          </div>
+          <span>${model.offlineCount ? `오프라인 ${fmtNumber(model.offlineCount)}개` : "표본 기준"}</span>
+        </div>
+        <div class="b2b-data-grid">
+          ${model.dataStatus.map((row) => `
+            <div class="${escapeHtml(row.tone)}">
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.value)}</strong>
+              <small>${escapeHtml(row.note)}</small>
+            </div>
+          `).join("")}
+        </div>
+      </article>
+    </div>
+  `;
+}
+
 function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const regionLabel = brief.topRegion.region || brief.topRegion.name || "지역 데이터 대기";
   const primary = brief.topRegion ? regionPrimary(brief.topRegion) : "";
@@ -6038,7 +6212,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
     <section class="b2b-brief-card">
       <div class="b2b-brief-head">
         <div>
-          <span class="report-badge ${escapeHtml(brief.decision.tone)}">B2B Market Brief</span>
+          <span class="report-badge ${escapeHtml(brief.decision.tone)}">공개 운영 브리프</span>
           <h3>${escapeHtml(brief.keyword)} 운영 인사이트</h3>
           <p>${escapeHtml(brief.decision.summary)}</p>
         </div>
@@ -6089,6 +6263,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
           </div>
         </article>
       </div>
+      ${renderB2BPublicOverview(brief)}
     </section>
   `;
 }
@@ -6128,18 +6303,20 @@ function renderReport() {
   const keyword = activeKeyword();
   const range = dateRangeLabel(run);
   const b2bBrief = publicMode ? b2bMarketBriefModel(data) : null;
+  const heroDecision = publicMode && b2bBrief ? b2bBrief.decision : decision;
+  const heroScore = publicMode && b2bBrief ? b2bBrief.score : score;
 
   els.reportBody.innerHTML = `
     <section class="report-hero">
       <div class="report-hero-copy">
-        <span class="report-badge ${decision.tone}">${escapeHtml(decision.label)}</span>
+        <span class="report-badge ${escapeHtml(heroDecision.tone)}">${escapeHtml(heroDecision.label)}</span>
         <h2>${escapeHtml(keyword)} 시장 브리핑</h2>
         <p>${escapeHtml(range)} 입력기간 기준으로 네이버 노출, 객실 판매율, OTA 보조 확인, 상품 구성을 함께 판정했습니다.</p>
       </div>
       <div class="report-score-card">
         <span>${publicMode ? "시장 상태" : "공략 매력도"}</span>
-        <strong>${fmtNumber(score)}</strong>
-        <small>${escapeHtml(decision.summary)}</small>
+        <strong>${fmtNumber(heroScore)}</strong>
+        <small>${escapeHtml(heroDecision.summary)}</small>
       </div>
     </section>
 
