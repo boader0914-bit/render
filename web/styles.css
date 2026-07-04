@@ -15,7 +15,9 @@
   --red: #f04438;
   --shadow: 0 10px 28px rgba(16, 24, 40, .08);
   --soft-shadow: 0 6px 16px rgba(16, 24, 40, .06);
-  --font-sans: "Pretendard", "Inter", "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-sans: "Pretendard Variable", "Pretendard", "Inter", "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-number: "Pretendard Variable", "Pretendard", "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-family: var(--font-sans);
 }
 
@@ -37,8 +39,10 @@ body {
   overflow-x: hidden;
   word-break: keep-all;
   font-family: var(--font-sans);
+  font-weight: 400;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,
@@ -54,6 +58,16 @@ strong,
 .price,
 .summary-card strong,
 .company-metric strong {
+  font-family: var(--font-number);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
