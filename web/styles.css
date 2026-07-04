@@ -9525,6 +9525,295 @@ a.platform-row:hover {
   border-top: 1px solid #e5ebf3;
 }
 
+.b2b-demand-outlook {
+  min-width: 0;
+  display: grid;
+  gap: 11px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  padding: 14px;
+}
+
+.b2b-demand-outlook-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.b2b-demand-outlook-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-demand-outlook-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.b2b-demand-outlook-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.4;
+}
+
+.b2b-demand-outlook-head em {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 0 11px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-demand-outlook-head em.positive {
+  border-color: #bbf7d0;
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.b2b-demand-outlook-head em.warning {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.b2b-demand-outlook-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-demand-outlook-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.b2b-demand-outlook-grid article.positive {
+  border-color: #bbf7d0;
+  background: #f6fef9;
+}
+
+.b2b-demand-outlook-grid article.warning {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-demand-outlook-grid span,
+.b2b-demand-outlook-grid small,
+.b2b-demand-empty-line,
+.b2b-demand-action-board span,
+.b2b-demand-action-board small,
+.b2b-demand-competitors small,
+.b2b-demand-competitors button small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-demand-outlook-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.08;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.b2b-demand-season-strip {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 5px;
+  min-height: 96px;
+  padding: 8px;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.b2b-demand-season-strip div {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(38px, 1fr) auto auto;
+  gap: 4px;
+  align-items: end;
+  justify-items: center;
+}
+
+.b2b-demand-season-strip span {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  border-radius: 10px;
+  background: #eef4ff;
+  overflow: hidden;
+}
+
+.b2b-demand-season-strip i {
+  width: 100%;
+  display: block;
+  border-radius: 10px 10px 0 0;
+  background: #9cc4ff;
+}
+
+.b2b-demand-season-strip div.high i {
+  background: #60a5fa;
+}
+
+.b2b-demand-season-strip div.peak i {
+  background: #34d399;
+}
+
+.b2b-demand-season-strip div.recent i {
+  background: #f59e0b;
+}
+
+.b2b-demand-season-strip b,
+.b2b-demand-season-strip small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.b2b-demand-outlook-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+  gap: 9px;
+}
+
+.b2b-demand-action-board,
+.b2b-demand-competitors {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.b2b-demand-action-board div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.b2b-demand-action-board strong,
+.b2b-demand-competitors > div strong,
+.b2b-demand-competitors button strong {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.b2b-demand-competitors > div {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b2b-demand-competitors button {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rank name rate"
+    "rank note note";
+  gap: 3px 8px;
+  align-items: center;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 9px;
+  text-align: left;
+}
+
+.b2b-demand-competitors button.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-demand-competitors button.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-demand-competitors button.strong,
+.b2b-demand-competitors button.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-demand-competitors button:disabled {
+  cursor: not-allowed;
+}
+
+.b2b-demand-competitors button span {
+  grid-area: rank;
+  display: inline-grid;
+  place-items: center;
+  min-height: 32px;
+  border-radius: 10px;
+  background: #eef5ff;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-demand-competitors button strong {
+  grid-area: name;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-demand-competitors button em {
+  grid-area: rate;
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-demand-competitors button small {
+  grid-area: note;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .b2b-demand-grid span,
 .b2b-demand-grid small,
 .b2b-demand-actions span,
@@ -11171,6 +11460,7 @@ body.role-b2b .b2b-map-brief,
 body.role-b2b .map-card,
 body.role-b2b .region-card,
 body.role-b2b .b2b-demand-playbook,
+body.role-b2b .b2b-demand-outlook,
 body.role-b2b .demand-hero-card,
 body.role-b2b .demand-chart,
 body.role-b2b .demand-insight-card,
@@ -11228,6 +11518,11 @@ body.role-b2b .report-channel-grid div,
 body.role-b2b .company-insight-grid div,
 body.role-b2b .b2b-company-action,
 body.role-b2b .b2b-company-chips em,
+body.role-b2b .b2b-demand-outlook-grid article,
+body.role-b2b .b2b-demand-season-strip,
+body.role-b2b .b2b-demand-season-strip span,
+body.role-b2b .b2b-demand-action-board div,
+body.role-b2b .b2b-demand-competitors button,
 body.role-b2b .sheet-b2b-detail-grid div,
 body.role-b2b .sheet-b2b-flow-strip div,
 body.role-b2b .sheet-b2b-evidence-grid div,
@@ -11272,6 +11567,11 @@ body.role-b2b .b2b-data-grid strong,
 body.role-b2b .b2b-map-metrics strong,
 body.role-b2b .b2b-demand-grid strong,
 body.role-b2b .b2b-demand-actions strong,
+body.role-b2b .b2b-demand-outlook-head strong,
+body.role-b2b .b2b-demand-outlook-grid strong,
+body.role-b2b .b2b-demand-action-board strong,
+body.role-b2b .b2b-demand-competitors > div strong,
+body.role-b2b .b2b-demand-competitors button strong,
 body.role-b2b .demand-metric-grid strong,
 body.role-b2b .demand-signal-card strong,
 body.role-b2b .demand-region-row strong,
@@ -11326,6 +11626,19 @@ body.role-b2b .sheet-b2b-flow-strip span,
 body.role-b2b .sheet-b2b-flow-strip small,
 body.role-b2b .sheet-b2b-evidence-grid span,
 body.role-b2b .sheet-b2b-evidence-grid small {
+  color: var(--muted);
+}
+
+body.role-b2b .b2b-demand-outlook-head span,
+body.role-b2b .b2b-demand-outlook-grid span,
+body.role-b2b .b2b-demand-outlook-grid small,
+body.role-b2b .b2b-demand-empty-line,
+body.role-b2b .b2b-demand-action-board span,
+body.role-b2b .b2b-demand-action-board small,
+body.role-b2b .b2b-demand-competitors small,
+body.role-b2b .b2b-demand-competitors button small,
+body.role-b2b .b2b-demand-season-strip b,
+body.role-b2b .b2b-demand-season-strip small {
   color: var(--muted);
 }
 
@@ -11452,6 +11765,56 @@ body.role-b2b .b2b-demand-grid article {
   background: #121822;
 }
 
+body.role-b2b .b2b-demand-outlook-head em {
+  border-color: rgba(156, 174, 204, .22);
+  background: #121822;
+  color: var(--ink);
+}
+
+body.role-b2b .b2b-demand-outlook-head em.positive,
+body.role-b2b .b2b-demand-outlook-grid article.positive,
+body.role-b2b .b2b-demand-competitors button.strong,
+body.role-b2b .b2b-demand-competitors button.good {
+  border-color: rgba(52, 211, 153, .32);
+  background: rgba(52, 211, 153, .09);
+}
+
+body.role-b2b .b2b-demand-outlook-head em.positive {
+  color: #a7f3d0;
+}
+
+body.role-b2b .b2b-demand-outlook-head em.warning,
+body.role-b2b .b2b-demand-outlook-grid article.warning,
+body.role-b2b .b2b-demand-competitors button.watch {
+  border-color: rgba(251, 191, 36, .32);
+  background: rgba(251, 191, 36, .09);
+}
+
+body.role-b2b .b2b-demand-outlook-head em.warning {
+  color: #fde68a;
+}
+
+body.role-b2b .b2b-demand-competitors button.hot {
+  border-color: rgba(251, 113, 133, .32);
+  background: rgba(251, 113, 133, .09);
+}
+
+body.role-b2b .b2b-demand-season-strip i {
+  background: #4c7fb9;
+}
+
+body.role-b2b .b2b-demand-season-strip div.high i {
+  background: #60a5fa;
+}
+
+body.role-b2b .b2b-demand-season-strip div.peak i {
+  background: #34d399;
+}
+
+body.role-b2b .b2b-demand-season-strip div.recent i {
+  background: #fbbf24;
+}
+
 body.role-b2b .b2b-action-stack > div.strong,
 body.role-b2b .b2b-data-grid div.strong,
 body.role-b2b .b2b-snapshot-grid article.strong,
@@ -11514,6 +11877,7 @@ body.role-b2b .sheet-b2b-booking.bad {
 body.role-b2b .b2b-action-stack mark,
 body.role-b2b .rank-badge,
 body.role-b2b .b2b-snapshot-row span,
+body.role-b2b .b2b-demand-competitors button span,
 body.role-b2b .b2b-priority-list span {
   background: rgba(106, 168, 255, .14);
   color: #acd0ff;
@@ -11862,6 +12226,10 @@ body.role-b2b .demand-region-head {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .b2b-demand-outlook-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .structure-hero,
   .structure-layout,
   .structure-action-grid {
@@ -11877,6 +12245,7 @@ body.role-b2b .demand-region-head {
   }
 
   .demand-layout,
+  .b2b-demand-outlook-layout,
   .demand-company-card,
   .collection-quality-grid,
   .history-ops-layout,
@@ -12716,8 +13085,14 @@ body.role-b2b .demand-region-head {
   .b2b-rank-head,
   .b2b-map-head,
   .b2b-demand-head,
+  .b2b-demand-outlook-head,
   .b2b-demand-actions {
     grid-template-columns: 1fr;
+  }
+
+  .b2b-demand-outlook-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .b2b-rank-head > strong,
@@ -12730,15 +13105,21 @@ body.role-b2b .demand-region-head {
   .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-demand-grid,
+  .b2b-demand-outlook-grid,
   .region-card-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .b2b-demand-outlook-layout {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 560px) {
   .b2b-rank-brief,
   .b2b-map-brief,
-  .b2b-demand-playbook {
+  .b2b-demand-playbook,
+  .b2b-demand-outlook {
     padding: 16px;
     border-radius: 16px;
   }
@@ -12747,8 +13128,34 @@ body.role-b2b .demand-region-head {
   .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-demand-grid,
+  .b2b-demand-outlook-grid,
   .region-card-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .b2b-demand-season-strip {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .b2b-demand-competitors button {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .b2b-demand-competitors button span,
+  .b2b-demand-competitors button strong,
+  .b2b-demand-competitors button em,
+  .b2b-demand-competitors button small {
+    grid-area: auto;
+  }
+
+  .b2b-demand-competitors button span {
+    justify-self: start;
+  }
+
+  .b2b-demand-competitors button strong,
+  .b2b-demand-competitors button small {
+    white-space: normal;
   }
 
   .region-card {
