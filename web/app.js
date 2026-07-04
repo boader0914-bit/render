@@ -12089,6 +12089,157 @@ function platformStatus(row) {
   return ["good", status || "노출"];
 }
 
+function b2bPlatformModel(item = {}, rows = platformsForItem(item), audit = inventoryAuditProfile(item)) {
+  const coupon = naverCouponInfo(item);
+  const visibleRows = rows.filter((row) => {
+    const status = String(row.status || row.group || "");
+    return !/미노출|실패|차단/.test(status);
+  });
+  const naverRow = rows.find((row) => platformShortName(row.platform) === "네이버") || null;
+  const otaRows = rows.filter((row) => platformShortName(row.platform) !== "네이버");
+  const hasOta = otaRows.some((row) => !/미노출|실패|차단/.test(String(row.status || row.group || "")));
+  const decision = audit.otaCheckNeeded
+    ? {
+      tone: "watch",
+      label: "OTA 보완 확인",
+      summary: "네이버 수량만으로 전체 운영을 판단하기 애매한 구간입니다. 여기어때, 야놀자, 떠나요 노출과 가격을 보조 확인합니다."
+    }
+    : coupon.visible
+      ? {
+        tone: "strong",
+        label: "프로모션 확인",
+        summary: "네이버 쿠폰이 노출되어 가격/혜택 중심의 접근이 가능합니다. 쿠폰명과 노출 채널을 먼저 확인합니다."
+      }
+      : hasOta
+        ? {
+          tone: "good",
+          label: "채널 보조 가능",
+          summary: "네이버 외 OTA 노출이 있어 가격과 객실 구성 비교가 가능합니다."
+        }
+        : {
+          tone: "neutral",
+          label: "네이버 중심",
+          summary: "현재 확인 가능한 채널은 네이버 중심입니다. 추가 OTA 표본은 수동 보완 대상으로 둡니다."
+        };
+  return {
+    coupon,
+    naverRow,
+    otaRows,
+    visibleRows,
+    hasOta,
+    decision,
+    metrics: [
+      { label: "노출 채널", value: fmtNumber(visibleRows.length), note: rows.length ? `${fmtNumber(rows.length)}개 채널 확인` : "채널 표본 대기" },
+      { label: "네이버", value: naverRow ? "노출" : "확인필요", note: naverRow?.price || naverRow?.stock || item.price || "예약 화면 기준" },
+      { label: "OTA", value: hasOta ? "보조 가능" : "보완 필요", note: otaRows.length ? `${fmtNumber(otaRows.length)}개 OTA 표본` : "여기어때/야놀자/떠나요" },
+      { label: "쿠폰", value: coupon.visible ? "노출" : "미확인", note: coupon.visible ? (coupon.names || coupon.status || "쿠폰명 확인") : coupon.detail }
+    ]
+  };
+}
+
+function renderB2BPlatformBrief(item = {}, rows = platformsForItem(item), audit = inventoryAuditProfile(item)) {
+  if (isAdminRole()) return "";
+  const model = b2bPlatformModel(item, rows, audit);
+  return `
+    <section class="sheet-section sheet-b2b-platform ${escapeHtml(model.decision.tone)}">
+      <div class="sheet-b2b-head">
+        <div>
+          <span>${escapeHtml(model.decision.label)}</span>
+          <h3>채널 노출과 혜택 요약</h3>
+          <p>${escapeHtml(model.decision.summary)}</p>
+        </div>
+        <strong>${escapeHtml(model.coupon.visible ? "쿠폰" : "채널")}</strong>
+      </div>
+      <div class="sheet-b2b-platform-grid">
+        ${model.metrics.map((metric) => `
+          <div>
+            <span>${escapeHtml(metric.label)}</span>
+            <strong>${escapeHtml(metric.value)}</strong>
+            <small>${escapeHtml(metric.note || "")}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sheet-b2b-coupon-line">
+        <strong>${model.coupon.visible ? "네이버 쿠폰 노출" : "쿠폰 노출 미확인"}</strong>
+        <span>${escapeHtml([model.coupon.names, model.coupon.channel, model.coupon.detail].filter(Boolean).join(" · ") || "쿠폰명/노출 채널 추가 확인")}</span>
+      </div>
+    </section>
+  `;
+}
+
+function sheetRegionForItem(item = {}) {
+  const itemRegion = String(item.region || item.addressRegion || "").trim();
+  return (state.data?.regions || []).find((entry) => {
+    const regionName = String(entry.region || entry.name || "").trim();
+    if (!regionName || !itemRegion) return false;
+    return regionName.includes(itemRegion) || itemRegion.includes(regionName);
+  }) || null;
+}
+
+function b2bSearchModel(item = {}) {
+  const region = sheetRegionForItem(item);
+  const traffic = region?.traffic || state.data?.stats?.traffic || {};
+  const insight = companyRankInsight(item, item.rank || item.overallRank || 0);
+  const profile = b2bCompanyActionProfile(item, insight);
+  const status = item.regionBoundaryStatus || (item.outsideSearchRegion ? "outside" : "same");
+  const boundaryLabel = status === "outside"
+    ? "반경 노출 경쟁권"
+    : ["within", "parent"].includes(status)
+      ? "권역 내 노출"
+      : "검색권역 확인";
+  const boundaryDetail = item.regionBoundaryDetail || (
+    status === "outside"
+      ? "검색 지역 경계 밖 소재라도 네이버 플레이스 반경 노출로 함께 비교되는 업체입니다."
+      : "검색권역과 업체 소재지가 같은 생활권으로 해석됩니다."
+  );
+  const total = finiteNumber(traffic.totalSearchVolume, 0);
+  const ctr = Number(traffic.combinedCtr);
+  return {
+    region,
+    traffic,
+    insight,
+    profile,
+    boundaryLabel,
+    boundaryDetail,
+    metrics: [
+      { label: "검색량", value: total ? fmtNumber(total) : "확인필요", note: traffic.relKeyword || traffic.keyword || activeKeyword() },
+      { label: "CTR", value: traffic.collectable || total ? fmtSearchRate(ctr) : "확인필요", note: "검색광고 API 기준" },
+      { label: "순위", value: insight.rank ? `${fmtNumber(insight.rank)}위` : "확인필요", note: item.rankingSourceLabel || "네이버 플레이스" },
+      { label: "권역", value: boundaryLabel, note: regionPrimary(region || {}) }
+    ]
+  };
+}
+
+function renderB2BSearchBrief(item = {}) {
+  if (isAdminRole()) return "";
+  const model = b2bSearchModel(item);
+  return `
+    <section class="sheet-section sheet-b2b-search ${escapeHtml(model.profile.tone)}">
+      <div class="sheet-b2b-head">
+        <div>
+          <span>${escapeHtml(model.profile.label)}</span>
+          <h3>검색수요와 노출 근거</h3>
+          <p>${escapeHtml(model.profile.summary)}</p>
+        </div>
+        <strong>${escapeHtml(model.insight.rank ? `${fmtNumber(model.insight.rank)}위` : "순위")}</strong>
+      </div>
+      <div class="sheet-b2b-platform-grid">
+        ${model.metrics.map((metric) => `
+          <div>
+            <span>${escapeHtml(metric.label)}</span>
+            <strong>${escapeHtml(metric.value)}</strong>
+            <small>${escapeHtml(metric.note || "")}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sheet-b2b-coupon-line">
+        <strong>${escapeHtml(model.boundaryLabel)}</strong>
+        <span>${escapeHtml(model.boundaryDetail)}</span>
+      </div>
+    </section>
+  `;
+}
+
 function renderSheetPlatform(item) {
   const rows = platformsForItem(item);
   const known = new Set(rows.map((row) => platformShortName(row.platform)));
@@ -12105,6 +12256,7 @@ function renderSheetPlatform(item) {
     }
   });
   return `
+    ${renderB2BPlatformBrief(item, baseRows, audit)}
     <section class="sheet-section">
       <h3>플랫폼 비교</h3>
       ${baseRows.map((row) => {
@@ -12129,19 +12281,26 @@ function renderSheetPlatform(item) {
       <h3>OTA 보조 확인</h3>
       <div class="search-row">
         <div>
-          <strong>${audit.otaCheckNeeded ? "OTA 확인 필요" : "현재는 네이버 기준 판단"}</strong>
-          <small>${audit.otaCheckNeeded ? escapeHtml(audit.otaReason || "네이버 수량 해석 보조 확인") : "네이버 재고 구조가 안정적이면 OTA는 노출/가격 보조값으로만 봅니다."}</small>
+          <strong>${audit.otaCheckNeeded ? (isAdminRole() ? "OTA 확인 필요" : "다른 예약채널 비교 필요") : (isAdminRole() ? "현재는 네이버 기준 판단" : "네이버 중심 판단 가능")}</strong>
+          <small>${audit.otaCheckNeeded
+            ? escapeHtml(isAdminRole()
+              ? (audit.otaReason || "네이버 수량 해석 보조 확인")
+              : "네이버만으로 전체 판매 구조가 충분히 설명되지 않아 OTA 노출, 가격, 잔여 객실을 함께 봅니다.")
+            : (isAdminRole()
+              ? "네이버 재고 구조가 안정적이면 OTA는 노출/가격 보조값으로만 봅니다."
+              : "현재 표본에서는 네이버 예약 흐름을 중심으로 보고, OTA는 가격/혜택 비교용으로 봅니다.")}</small>
         </div>
-        <strong>${audit.otaCheckNeeded ? "색인" : "보조"}</strong>
+        <strong>${audit.otaCheckNeeded ? (isAdminRole() ? "확인" : "비교") : "보조"}</strong>
       </div>
     </section>
   `;
 }
 
 function renderSheetSearch(item) {
-  const region = (state.data?.regions || []).find((entry) => String(entry.region || "").includes(item.region) || String(item.region || "").includes(entry.region));
+  const region = sheetRegionForItem(item);
   const traffic = region?.traffic || state.data?.stats?.traffic || {};
   return `
+    ${renderB2BSearchBrief(item)}
     <section class="sheet-section">
       <h3>검색수요</h3>
       <div class="search-row">
