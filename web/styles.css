@@ -191,27 +191,68 @@ a {
 .b2b-search-results {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.b2b-search-quick {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.b2b-search-quick button {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: #175cd3;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.b2b-search-result-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
   gap: 8px;
 }
 
-.b2b-search-results button {
+.b2b-search-card {
+  position: relative;
   min-width: 0;
   display: grid;
-  gap: 3px;
+  align-content: start;
+  gap: 7px;
   border: 1px solid #e5ebf3;
   border-radius: 13px;
   background: #fbfcfd;
-  padding: 10px;
+  padding: 11px;
   text-align: left;
 }
 
-.b2b-search-results button.active {
+.b2b-search-card.active {
   border-color: #b8d9d3;
   background: #f6fbfa;
 }
 
-.b2b-search-results strong {
+.b2b-search-match {
+  justify-self: start;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-search-card strong {
   min-width: 0;
   overflow: hidden;
   color: var(--ink);
@@ -221,7 +262,8 @@ a {
   white-space: nowrap;
 }
 
-.b2b-search-results span,
+.b2b-search-card-sub,
+.b2b-search-card-mode,
 .b2b-search-status,
 .b2b-search-empty {
   min-width: 0;
@@ -230,6 +272,42 @@ a {
   font-weight: 820;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.b2b-search-card-metrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.b2b-search-card-metrics em {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e5ebf3;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 7px;
+  font-style: normal;
+}
+
+.b2b-search-card-metrics b {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-search-card-metrics small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.2;
 }
 
 .b2b-search-empty {
@@ -10755,7 +10833,9 @@ body.role-b2b .field textarea:focus {
   box-shadow: 0 0 0 4px rgba(106, 168, 255, .13);
 }
 
-body.role-b2b .b2b-search-results button,
+body.role-b2b .b2b-search-quick button,
+body.role-b2b .b2b-search-card,
+body.role-b2b .b2b-search-card-metrics em,
 body.role-b2b .b2b-action-stack > div,
 body.role-b2b .b2b-data-grid div,
 body.role-b2b .report-channel-grid div,
@@ -10778,14 +10858,15 @@ body.role-b2b .demand-company-card dl div {
   background: #121822;
 }
 
-body.role-b2b .b2b-search-results button.active,
+body.role-b2b .b2b-search-card.active,
 body.role-b2b .bottom-nav button.active {
   border-color: rgba(106, 168, 255, .42);
   background: #1e3148;
   color: #dcecff;
 }
 
-body.role-b2b .b2b-search-results strong,
+body.role-b2b .b2b-search-card strong,
+body.role-b2b .b2b-search-card-metrics b,
 body.role-b2b .summary-card strong,
 body.role-b2b .report-metric-grid strong,
 body.role-b2b .report-channel-grid strong,
@@ -10814,6 +10895,20 @@ body.role-b2b .summary-card strong,
 body.role-b2b .report-metric-grid strong,
 body.role-b2b .b2b-brief-score strong {
   color: #8fc7ff;
+}
+
+body.role-b2b .b2b-search-quick button,
+body.role-b2b .b2b-search-match {
+  border-color: rgba(106, 168, 255, .26);
+  background: rgba(106, 168, 255, .12);
+  color: #b9d7ff;
+}
+
+body.role-b2b .b2b-search-card-sub,
+body.role-b2b .b2b-search-card-mode,
+body.role-b2b .b2b-search-card-metrics small,
+body.role-b2b .b2b-search-status {
+  color: var(--muted);
 }
 
 body.role-b2b .b2b-brief-score span,
@@ -10863,6 +10958,12 @@ body.role-b2b .confidence-badge {
 }
 
 body.role-b2b .notice-card {
+  border-color: rgba(251, 191, 36, .34);
+  background: rgba(251, 191, 36, .11);
+  color: #f8d98b;
+}
+
+body.role-b2b .b2b-search-empty {
   border-color: rgba(251, 191, 36, .34);
   background: rgba(251, 191, 36, .11);
   color: #f8d98b;
@@ -11274,7 +11375,8 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-search-form,
-  .b2b-search-results {
+  .b2b-search-results,
+  .b2b-search-result-grid {
     grid-template-columns: 1fr;
   }
 

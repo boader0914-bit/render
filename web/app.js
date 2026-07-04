@@ -11531,6 +11531,17 @@ function b2bSearchText(value = "") {
   return compactCrawlKeyword(value).toLowerCase();
 }
 
+function b2bSearchTokens(value = "") {
+  return String(value || "").normalize("NFKC").toLowerCase().match(/[가-힣a-z0-9]+/g) || [];
+}
+
+function b2bMeaningfulSearchTokens(value = "") {
+  const generic = new Set(["글램핑", "캠핑", "펜션", "숙소", "리조트", "카라반", "오토캠핑"]);
+  return b2bSearchTokens(value)
+    .map(b2bSearchText)
+    .filter((token) => token && token.length > 1 && !generic.has(token));
+}
+
 function runSearchTitle(run = {}) {
   return String(run.keyword || run.searchKeyword || run.label || run.id || "").split("·")[0].trim() || run.id || "리포트";
 }
@@ -11539,32 +11550,98 @@ function runSearchHaystack(run = {}) {
   return [
     run.keyword,
     run.searchKeyword,
+    run.naverKeyword,
     run.label,
     run.id,
+    run.provinceLabel,
+    run.collectionModeLabel,
+    run.searchModeLabel,
     run.region,
     run.regionBase
   ].map((value) => String(value || "")).join(" ");
 }
 
+function runCount(run = {}, keys = []) {
+  const counts = run.counts || {};
+  for (const key of keys) {
+    const value = Number(counts[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+function runSearchDateLabel(run = {}) {
+  const range = dateRangeLabel(run);
+  if (range && range !== "기준일 확인" && range !== "기간 확인") return range;
+  if (run.updatedAt) return String(run.updatedAt).slice(0, 10);
+  return "기준일 확인";
+}
+
+function runSearchModeLabel(run = {}) {
+  const parts = [
+    run.collectionModeLabel || (run.collectionMode === "fast" ? "빠른 분석" : "정밀 분석"),
+    run.detailRankRanges ? `${run.detailRankRanges}위` : "",
+    Number(run.bookingRangeDays) > 1 ? `${fmtNumber(run.bookingRangeDays)}일` : ""
+  ].filter(Boolean);
+  return parts.join(" · ") || "분석 리포트";
+}
+
+function runSearchMetrics(run = {}) {
+  const exposure = runCount(run, ["naverOverall", "naverRegional"]);
+  const ads = runCount(run, ["naverAds"]);
+  const salesSample = runCount(run, ["naverBookingStockSucceeded", "naverBookingStockChecked"]);
+  return [
+    { label: "노출 표본", value: fmtNumber(exposure) },
+    { label: "매출 표본", value: salesSample ? `${fmtNumber(salesSample)}곳` : "대기" },
+    { label: "광고 표본", value: fmtNumber(ads) }
+  ];
+}
+
+function b2bSearchMatchLabel(row = {}, normalized = "") {
+  if (row.active) return "열람중";
+  if (!normalized) return row.index < 3 ? "최근" : "보관";
+  if (row.score >= 100) return "정확";
+  if (row.score >= 78) return "관련";
+  return "후보";
+}
+
+function b2bQuickSearchOptions() {
+  const activeRun = state.runs.find((run) => run.id === state.activeRunId);
+  const seen = new Set();
+  return [activeRun, ...state.runs].filter(Boolean).map((run) => {
+    const title = runSearchTitle(run);
+    const key = b2bSearchText(title);
+    if (!key || seen.has(key)) return null;
+    seen.add(key);
+    return { query: title, label: title.replace(/글램핑$/u, "") || title };
+  }).filter(Boolean).slice(0, 6);
+}
+
 function b2bSearchMatches(query = state.b2bSearchQuery) {
   const normalized = b2bSearchText(query);
+  const queryTokens = b2bMeaningfulSearchTokens(query);
   const activeRun = state.runs.find((run) => run.id === state.activeRunId);
   const rows = state.runs.map((run, index) => {
     const title = runSearchTitle(run);
     const compactTitle = b2bSearchText(title);
     const haystack = b2bSearchText(runSearchHaystack(run));
+    const haystackTokens = b2bSearchTokens(runSearchHaystack(run)).map(b2bSearchText);
     let score = 0;
     if (!normalized) {
       score = run.id === state.activeRunId ? 80 : Math.max(1, 30 - index);
     } else if (compactTitle === normalized || b2bSearchText(run.keyword) === normalized) {
-      score = 100;
+      score = 120;
+    } else if (compactTitle.startsWith(normalized)) {
+      score = 94;
     } else if (compactTitle.includes(normalized)) {
       score = 78;
     } else if (haystack.includes(normalized)) {
-      score = 62;
+      score = 70;
     } else {
-      const tokens = normalized.match(/[가-힣a-z0-9]+/g) || [];
-      const hitCount = tokens.filter((token) => haystack.includes(token)).length;
+      const hitCount = queryTokens.filter((token) => {
+        const compactToken = b2bSearchText(token);
+        return compactToken && (haystack.includes(compactToken) || haystackTokens.includes(compactToken));
+      }).length;
       score = hitCount ? Math.min(55, 24 + hitCount * 12) : 0;
     }
     return { run, index, title, score, active: run.id === state.activeRunId };
@@ -11573,7 +11650,30 @@ function b2bSearchMatches(query = state.b2bSearchQuery) {
   if (!rows.length && activeRun && !normalized) {
     return [{ run: activeRun, index: state.runs.indexOf(activeRun), title: runSearchTitle(activeRun), score: 80, active: true }];
   }
-  return rows.slice(0, 6);
+  return rows.slice(0, 8);
+}
+
+function b2bSearchResultCard(row = {}, normalized = "") {
+  const run = row.run || {};
+  const metrics = runSearchMetrics(run);
+  const activeClass = row.active ? " active" : "";
+  const currentAttr = row.active ? ' aria-current="page"' : "";
+  return `
+    <button type="button" class="b2b-search-card${activeClass}" data-b2b-run-id="${escapeHtml(run.id)}"${currentAttr}>
+      <span class="b2b-search-match">${escapeHtml(b2bSearchMatchLabel(row, normalized))}</span>
+      <strong>${escapeHtml(row.title)}</strong>
+      <span class="b2b-search-card-sub">${escapeHtml(run.provinceLabel || run.label || run.id)} · ${escapeHtml(runSearchDateLabel(run))}</span>
+      <span class="b2b-search-card-mode">${escapeHtml(runSearchModeLabel(run))}</span>
+      <span class="b2b-search-card-metrics">
+        ${metrics.map((metric) => `
+          <em>
+            <b>${escapeHtml(metric.value)}</b>
+            <small>${escapeHtml(metric.label)}</small>
+          </em>
+        `).join("")}
+      </span>
+    </button>
+  `;
 }
 
 function renderB2BSearchPanel() {
@@ -11587,17 +11687,28 @@ function renderB2BSearchPanel() {
   const matches = b2bSearchMatches(state.b2bSearchQuery);
   const normalized = b2bSearchText(state.b2bSearchQuery);
   if (els.b2bSearchResults) {
-    els.b2bSearchResults.innerHTML = matches.length ? matches.map((row) => `
-      <button type="button" data-b2b-run-id="${escapeHtml(row.run.id)}" class="${row.active ? "active" : ""}">
-        <strong>${escapeHtml(row.title)}</strong>
-        <span>${escapeHtml(row.run.label || row.run.id)}</span>
-      </button>
-    `).join("") : `<div class="b2b-search-empty">준비된 지역 경쟁 리포트가 없습니다.</div>`;
+    const quickOptions = b2bQuickSearchOptions();
+    const quickHtml = quickOptions.length ? `
+      <div class="b2b-search-quick" aria-label="빠른 지역 선택">
+        ${quickOptions.map((option) => `
+          <button type="button" data-b2b-query="${escapeHtml(option.query)}">${escapeHtml(option.label)}</button>
+        `).join("")}
+      </div>
+    ` : "";
+    const resultHtml = matches.length
+      ? matches.map((row) => b2bSearchResultCard(row, normalized)).join("")
+      : `<div class="b2b-search-empty">${normalized ? `"${escapeHtml(state.b2bSearchQuery)}" 저장 리포트 없음` : "준비된 지역 경쟁 리포트 없음"}</div>`;
+    els.b2bSearchResults.innerHTML = `
+      ${quickHtml}
+      <div class="b2b-search-result-grid">${resultHtml}</div>
+    `;
   }
   if (els.b2bSearchStatus) {
+    const activeRun = state.runs.find((run) => run.id === state.activeRunId);
+    const activeLabel = activeRun ? ` · 현재 ${runSearchTitle(activeRun)}` : "";
     els.b2bSearchStatus.textContent = normalized
-      ? `${fmtNumber(state.runs.length)}개 경쟁 리포트 중 ${fmtNumber(matches.length)}개 검색`
-      : `${fmtNumber(state.runs.length)}개 지역 경쟁 리포트에서 선택`;
+      ? `검색 결과 ${fmtNumber(matches.length)}개 / 저장 ${fmtNumber(state.runs.length)}개${activeLabel}`
+      : `저장 리포트 ${fmtNumber(state.runs.length)}개${activeLabel}`;
   }
 }
 
@@ -11607,7 +11718,7 @@ async function submitB2BSearch() {
   const matches = b2bSearchMatches(state.b2bSearchQuery);
   renderB2BSearchPanel();
   if (!matches.length) {
-    if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "저장된 지역 경쟁 리포트가 없습니다. 관리자에게 수집을 요청하세요.";
+    if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "일치하는 저장 리포트가 없습니다.";
     return;
   }
   const target = matches[0].run;
@@ -13326,8 +13437,8 @@ async function loadRuns(selectLatest = false) {
   const data = await fetchJson("/api/runs");
   state.runs = data.runs || [];
   els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
-  renderB2BSearchPanel();
   if (!state.runs.length) {
+    renderB2BSearchPanel();
     const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "조회 가능한 실행 결과가 없습니다.";
     if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
@@ -13340,6 +13451,7 @@ async function loadRuns(selectLatest = false) {
     state.activeRunId = state.runs[0].id;
   }
   els.runSelect.value = state.activeRunId;
+  renderB2BSearchPanel();
   await loadRun(state.activeRunId);
 }
 
@@ -13697,6 +13809,17 @@ function bindEvents() {
         setStatus("리포트 로딩 실패");
         if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = error.message;
       });
+      return;
+    }
+    const b2bQuery = event.target.closest("[data-b2b-query]");
+    if (b2bQuery) {
+      state.b2bSearchQuery = b2bQuery.dataset.b2bQuery || "";
+      if (els.b2bSearchInput) els.b2bSearchInput.value = state.b2bSearchQuery;
+      submitB2BSearch().catch((error) => {
+        setStatus("리포트 검색 실패");
+        if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = error.message;
+      });
+      return;
     }
     const duplicateAction = event.target.closest("[data-company-duplicate-action]");
     if (duplicateAction) resolveCompanyDuplicate(duplicateAction);

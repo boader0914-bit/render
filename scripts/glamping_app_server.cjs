@@ -1432,6 +1432,19 @@ async function listRuns() {
     runs.push({
       id: entry.name,
       label: displayNameForRun(entry.name, manifest),
+      keyword: manifest?.keyword || (PROVINCES[provinceKey] || PROVINCES.local).keyword || "",
+      searchKeyword: manifest?.searchKeyword || "",
+      naverKeyword: manifest?.naverKeyword || "",
+      keywordType: manifest?.keywordType || "province",
+      searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
+      searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
+      collectionMode: manifest?.collectionMode || "precision",
+      collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
+      detailRankRanges: manifest?.detailRankRanges || "",
+      bookingRangeDays: manifest?.bookingRangeDays || 1,
+      bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
+      checkIn: manifest?.checkIn || "",
+      checkOut: manifest?.checkOut || "",
       province: provinceKey,
       provinceLabel: (PROVINCES[provinceKey] || PROVINCES.local).label,
       updatedAt: stat.mtime.toISOString(),
@@ -7058,8 +7071,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-dark-ui"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-dark-ui"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-search-hub"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-search-hub"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
