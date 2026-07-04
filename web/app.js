@@ -11101,6 +11101,189 @@ function b2bRegionMapModel() {
   };
 }
 
+function b2bBoundaryBucket(item = {}) {
+  const status = item.regionBoundaryStatus || (item.outsideSearchRegion ? "outside" : "same");
+  if (status === "outside") return "outside";
+  if (status === "within" || status === "parent") return "adjacent";
+  if (status === "same") return "local";
+  return "unknown";
+}
+
+function b2bMapCompetitionModel(model = b2bRegionMapModel()) {
+  const rankRows = b2bRankBoardModel();
+  const buckets = model.items.reduce((acc, item) => {
+    const bucket = b2bBoundaryBucket(item);
+    acc[bucket] = (acc[bucket] || 0) + 1;
+    return acc;
+  }, { local: 0, adjacent: 0, outside: 0, unknown: 0 });
+  const radiusRows = rankRows.rows
+    .filter((row) => row.item.regionBoundaryStatus === "outside" || row.item.outsideSearchRegion || b2bBoundaryBucket(row.item) === "adjacent")
+    .slice(0, 5);
+  const fallbackRows = rankRows.rows.slice(0, 5);
+  const competitorRows = (radiusRows.length ? radiusRows : fallbackRows).map((row) => {
+    const itemIndex = row.linked ? finiteNumber(row.item.availabilityIndex, -1) : -1;
+    const bucket = b2bBoundaryBucket(row.item);
+    const boundaryLabel = bucket === "outside"
+      ? "권역 밖"
+      : bucket === "adjacent"
+        ? "인접권"
+        : bucket === "local"
+          ? "지역 내"
+          : "권역 확인";
+    const location = itemLocationLine(row.item);
+    return {
+      itemIndex,
+      rank: row.rank,
+      name: row.item.name || "업체명 확인",
+      boundaryLabel,
+      tone: bucket === "outside" ? "watch" : row.insight?.tone || "neutral",
+      metric: Number.isFinite(row.rate) ? fmtRate(row.rate) : (row.rank ? `${fmtNumber(row.rank)}위` : "노출"),
+      note: row.linked
+        ? `${location} · 잔여 ${fmtNumber(row.remaining)}실`
+        : `${location} · 예약 표본 대기`
+    };
+  });
+  const regionRows = model.regions.map((region) => {
+    const runtime = model.regionRuntime.get(region) || regionRuntimeForMapRegion(region);
+    const traffic = region.traffic || {};
+    const searchVolume = finiteNumber(traffic.totalSearchVolume, 0);
+    const salesRate = Number(runtime.salesRate);
+    const score = Math.round(
+      Math.min(45, searchVolume / 900)
+      + Math.min(30, runtime.items.length * 4)
+      + (Number.isFinite(salesRate) ? salesRate * 25 : 0)
+      + Math.min(12, runtime.outsideCount * 4)
+    );
+    return {
+      region,
+      runtime,
+      score,
+      primary: regionPrimary(region),
+      name: region.region || region.name || "지역",
+      searchVolume,
+      salesRate,
+      tone: score >= 70 ? "strong" : score >= 46 ? "watch" : "neutral"
+    };
+  }).sort((a, b) => b.score - a.score || b.searchVolume - a.searchVolume).slice(0, 4);
+  const salesRate = Number(model.salesRate);
+  const localRatio = model.items.length ? buckets.local / model.items.length : NaN;
+  const cards = [
+    {
+      tone: "neutral",
+      label: "검색권 표본",
+      value: fmtNumber(model.items.length),
+      note: "네이버 노출 경쟁업체"
+    },
+    {
+      tone: model.outsideCount ? "watch" : "good",
+      label: "권역 밖 노출",
+      value: fmtNumber(model.outsideCount),
+      note: model.outsideCount ? "반경 노출 경쟁권 포함" : "지역 내 표본 중심"
+    },
+    {
+      tone: Number.isFinite(localRatio) && localRatio >= 0.7 ? "good" : "watch",
+      label: "지역 내 비중",
+      value: Number.isFinite(localRatio) ? fmtRate(localRatio) : "확인필요",
+      note: `지역 내 ${fmtNumber(buckets.local)} · 인접 ${fmtNumber(buckets.adjacent)}`
+    },
+    {
+      tone: Number.isFinite(salesRate) && salesRate >= 0.55 ? "strong" : "neutral",
+      label: "경쟁 판매율",
+      value: Number.isFinite(salesRate) ? fmtRate(salesRate) : "확인필요",
+      note: model.sales.supply ? `${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실` : "수량 표본 대기"
+    }
+  ];
+  const actionRows = [
+    {
+      label: "지역 내 경쟁",
+      value: `${fmtNumber(buckets.local)}개`,
+      detail: "검색 지역 안에 있는 업체는 직접 경쟁권으로 보고 노출 순위와 판매율을 우선 비교합니다."
+    },
+    {
+      label: "인접/반경 경쟁",
+      value: `${fmtNumber(buckets.adjacent + buckets.outside)}개`,
+      detail: "소재지가 달라도 네이버 반경 노출로 함께 보이면 고객 입장에서는 같은 선택지입니다."
+    },
+    {
+      label: "지도 해석 기준",
+      value: "최대 100km",
+      detail: "네이버 플레이스는 검색 중심 반경 노출이 가능하므로 행정구역보다 실제 노출권을 우선 봅니다."
+    }
+  ];
+  return {
+    buckets,
+    cards,
+    actionRows,
+    regionRows,
+    competitorRows
+  };
+}
+
+function renderB2BMapCompetitionBoard(model = b2bRegionMapModel(), board = b2bMapCompetitionModel(model)) {
+  if (isAdminRole()) return "";
+  return `
+    <div class="b2b-map-competition-board">
+      <div class="b2b-map-board-head">
+        <div>
+          <strong>지역 경쟁권 해석</strong>
+          <span>행정구역과 실제 네이버 반경 노출을 분리해 봅니다.</span>
+        </div>
+        <em>${board.buckets.outside ? "반경 노출 포함" : "지역 내 중심"}</em>
+      </div>
+      <div class="b2b-map-board-grid">
+        ${board.cards.map((card) => `
+          <article class="${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="b2b-map-board-layout">
+        <article class="b2b-map-action-board">
+          ${board.actionRows.map((row) => `
+            <div>
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.value)}</strong>
+              <small>${escapeHtml(row.detail)}</small>
+            </div>
+          `).join("")}
+        </article>
+        <article class="b2b-map-region-rank">
+          <div>
+            <strong>주요 경쟁권</strong>
+            <small>검색량·업체수·판매율 기준</small>
+          </div>
+          ${board.regionRows.length ? board.regionRows.map((row) => `
+            <div class="${escapeHtml(row.tone)}">
+              <span>${escapeHtml(row.name)}</span>
+              <strong>${fmtNumber(row.score)}</strong>
+              <small>${escapeHtml(`${row.primary} · 업체 ${fmtNumber(row.runtime.items.length)} · 검색 ${row.searchVolume ? fmtNumber(row.searchVolume) : "대기"} · 판매 ${Number.isFinite(row.salesRate) ? fmtRate(row.salesRate) : "대기"}`)}</small>
+            </div>
+          `).join("") : `<p>지역 표본이 없습니다.</p>`}
+        </article>
+      </div>
+      <div class="b2b-map-radius-list">
+        <div>
+          <strong>반경 노출 경쟁업체</strong>
+          <small>권역 밖 또는 인접권 노출 업체를 별도 확인합니다.</small>
+        </div>
+        ${board.competitorRows.length ? board.competitorRows.map((row) => {
+          const attrs = row.itemIndex >= 0 ? `type="button" data-open-company="${row.itemIndex}"` : `type="button" disabled`;
+          return `
+            <button class="${escapeHtml(row.tone)}" ${attrs}>
+              <span>${row.rank ? `${fmtNumber(row.rank)}위` : "순위"}</span>
+              <strong>${escapeHtml(row.name)}</strong>
+              <em>${escapeHtml(row.boundaryLabel)}</em>
+              <small>${escapeHtml(`${row.metric} · ${row.note}`)}</small>
+            </button>
+          `;
+        }).join("") : `<p>반경 노출 경쟁업체 표본이 없습니다.</p>`}
+      </div>
+    </div>
+  `;
+}
+
 function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
   if (isAdminRole()) return "";
   const topRegionName = model.topRegion?.region || model.topRegion?.name || "확인필요";
@@ -11127,6 +11310,7 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
           ? model.clusters.map((cluster) => `<span>${escapeHtml(cluster.name)} ${fmtNumber(cluster.count)}</span>`).join("")
           : `<span>클러스터 대기</span>`}
       </div>
+      ${renderB2BMapCompetitionBoard(model)}
     </section>
   `;
 }

@@ -6725,6 +6725,225 @@ a.platform-row:hover {
   font-weight: 900;
 }
 
+.b2b-map-competition-board {
+  min-width: 0;
+  display: grid;
+  gap: 11px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  padding: 14px;
+}
+
+.b2b-map-board-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.b2b-map-board-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-map-board-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.b2b-map-board-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.4;
+}
+
+.b2b-map-board-head em {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 0 11px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-map-board-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-map-board-grid article,
+.b2b-map-action-board div,
+.b2b-map-region-rank div:not(:first-child) {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.b2b-map-board-grid article.good,
+.b2b-map-board-grid article.strong,
+.b2b-map-region-rank div.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-map-board-grid article.watch,
+.b2b-map-region-rank div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-map-board-grid span,
+.b2b-map-board-grid small,
+.b2b-map-action-board span,
+.b2b-map-action-board small,
+.b2b-map-region-rank small,
+.b2b-map-radius-list small,
+.b2b-map-radius-list button small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-board-grid strong,
+.b2b-map-action-board strong,
+.b2b-map-region-rank strong,
+.b2b-map-radius-list > div strong,
+.b2b-map-radius-list button strong {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-board-grid strong {
+  font-size: 19px;
+  line-height: 1.08;
+}
+
+.b2b-map-board-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+  gap: 9px;
+}
+
+.b2b-map-action-board,
+.b2b-map-region-rank,
+.b2b-map-radius-list {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.b2b-map-region-rank > div:first-child,
+.b2b-map-radius-list > div:first-child {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b2b-map-radius-list {
+  border-top: 1px solid #e8edf5;
+  padding-top: 10px;
+}
+
+.b2b-map-radius-list button {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rank name label"
+    "rank note note";
+  gap: 3px 8px;
+  align-items: center;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 9px;
+  text-align: left;
+}
+
+.b2b-map-radius-list button.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-map-radius-list button.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-map-radius-list button.strong,
+.b2b-map-radius-list button.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-map-radius-list button:disabled {
+  cursor: not-allowed;
+}
+
+.b2b-map-radius-list button span {
+  grid-area: rank;
+  display: inline-grid;
+  place-items: center;
+  min-height: 32px;
+  border-radius: 10px;
+  background: #eef5ff;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-map-radius-list button strong {
+  grid-area: name;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-map-radius-list button em {
+  grid-area: label;
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-map-radius-list button small {
+  grid-area: note;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .region-card.strong {
   border-color: #b8d8ff;
 }
@@ -11457,6 +11676,7 @@ body.role-b2b .b2b-public-data,
 body.role-b2b .b2b-rank-brief,
 body.role-b2b .company-card,
 body.role-b2b .b2b-map-brief,
+body.role-b2b .b2b-map-competition-board,
 body.role-b2b .map-card,
 body.role-b2b .region-card,
 body.role-b2b .b2b-demand-playbook,
@@ -11523,6 +11743,10 @@ body.role-b2b .b2b-demand-season-strip,
 body.role-b2b .b2b-demand-season-strip span,
 body.role-b2b .b2b-demand-action-board div,
 body.role-b2b .b2b-demand-competitors button,
+body.role-b2b .b2b-map-board-grid article,
+body.role-b2b .b2b-map-action-board div,
+body.role-b2b .b2b-map-region-rank div:not(:first-child),
+body.role-b2b .b2b-map-radius-list button,
 body.role-b2b .sheet-b2b-detail-grid div,
 body.role-b2b .sheet-b2b-flow-strip div,
 body.role-b2b .sheet-b2b-evidence-grid div,
@@ -11572,6 +11796,12 @@ body.role-b2b .b2b-demand-outlook-grid strong,
 body.role-b2b .b2b-demand-action-board strong,
 body.role-b2b .b2b-demand-competitors > div strong,
 body.role-b2b .b2b-demand-competitors button strong,
+body.role-b2b .b2b-map-board-head strong,
+body.role-b2b .b2b-map-board-grid strong,
+body.role-b2b .b2b-map-action-board strong,
+body.role-b2b .b2b-map-region-rank strong,
+body.role-b2b .b2b-map-radius-list > div strong,
+body.role-b2b .b2b-map-radius-list button strong,
 body.role-b2b .demand-metric-grid strong,
 body.role-b2b .demand-signal-card strong,
 body.role-b2b .demand-region-row strong,
@@ -11639,6 +11869,17 @@ body.role-b2b .b2b-demand-competitors small,
 body.role-b2b .b2b-demand-competitors button small,
 body.role-b2b .b2b-demand-season-strip b,
 body.role-b2b .b2b-demand-season-strip small {
+  color: var(--muted);
+}
+
+body.role-b2b .b2b-map-board-head span,
+body.role-b2b .b2b-map-board-grid span,
+body.role-b2b .b2b-map-board-grid small,
+body.role-b2b .b2b-map-action-board span,
+body.role-b2b .b2b-map-action-board small,
+body.role-b2b .b2b-map-region-rank small,
+body.role-b2b .b2b-map-radius-list small,
+body.role-b2b .b2b-map-radius-list button small {
   color: var(--muted);
 }
 
@@ -11815,6 +12056,12 @@ body.role-b2b .b2b-demand-season-strip div.recent i {
   background: #fbbf24;
 }
 
+body.role-b2b .b2b-map-board-head em {
+  border-color: rgba(156, 174, 204, .22);
+  background: #121822;
+  color: var(--ink);
+}
+
 body.role-b2b .b2b-action-stack > div.strong,
 body.role-b2b .b2b-data-grid div.strong,
 body.role-b2b .b2b-snapshot-grid article.strong,
@@ -11828,6 +12075,11 @@ body.role-b2b .sheet-b2b-detail-grid div.strong,
 body.role-b2b .sheet-b2b-detail-grid div.good,
 body.role-b2b .sheet-b2b-flow-strip div.strong,
 body.role-b2b .sheet-b2b-flow-strip div.good,
+body.role-b2b .b2b-map-board-grid article.strong,
+body.role-b2b .b2b-map-board-grid article.good,
+body.role-b2b .b2b-map-region-rank div.strong,
+body.role-b2b .b2b-map-radius-list button.strong,
+body.role-b2b .b2b-map-radius-list button.good,
 body.role-b2b .b2b-company-action.strong,
 body.role-b2b .sheet-b2b-insight.strong,
 body.role-b2b .sheet-b2b-platform.strong,
@@ -11848,6 +12100,9 @@ body.role-b2b .company-insight-grid div.watch,
 body.role-b2b .sheet-b2b-detail.watch,
 body.role-b2b .sheet-b2b-detail-grid div.watch,
 body.role-b2b .sheet-b2b-flow-strip div.watch,
+body.role-b2b .b2b-map-board-grid article.watch,
+body.role-b2b .b2b-map-region-rank div.watch,
+body.role-b2b .b2b-map-radius-list button.watch,
 body.role-b2b .b2b-company-action.watch,
 body.role-b2b .sheet-b2b-insight.watch,
 body.role-b2b .sheet-b2b-platform.watch,
@@ -11864,6 +12119,7 @@ body.role-b2b .company-insight-grid div.hot,
 body.role-b2b .sheet-b2b-detail.hot,
 body.role-b2b .sheet-b2b-detail-grid div.hot,
 body.role-b2b .sheet-b2b-flow-strip div.hot,
+body.role-b2b .b2b-map-radius-list button.hot,
 body.role-b2b .b2b-company-action.hot,
 body.role-b2b .sheet-b2b-insight.hot,
 body.role-b2b .sheet-b2b-platform.hot,
@@ -11878,6 +12134,7 @@ body.role-b2b .b2b-action-stack mark,
 body.role-b2b .rank-badge,
 body.role-b2b .b2b-snapshot-row span,
 body.role-b2b .b2b-demand-competitors button span,
+body.role-b2b .b2b-map-radius-list button span,
 body.role-b2b .b2b-priority-list span {
   background: rgba(106, 168, 255, .14);
   color: #acd0ff;
@@ -12214,6 +12471,7 @@ body.role-b2b .demand-region-head {
   .report-metric-grid,
   .b2b-brief-metrics,
   .b2b-snapshot-grid,
+  .b2b-map-board-grid,
   .b2b-data-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -12246,6 +12504,7 @@ body.role-b2b .demand-region-head {
 
   .demand-layout,
   .b2b-demand-outlook-layout,
+  .b2b-map-board-layout,
   .demand-company-card,
   .collection-quality-grid,
   .history-ops-layout,
@@ -13084,12 +13343,14 @@ body.role-b2b .demand-region-head {
 @media (max-width: 860px) {
   .b2b-rank-head,
   .b2b-map-head,
+  .b2b-map-board-head,
   .b2b-demand-head,
   .b2b-demand-outlook-head,
   .b2b-demand-actions {
     grid-template-columns: 1fr;
   }
 
+  .b2b-map-board-head,
   .b2b-demand-outlook-head {
     align-items: flex-start;
     flex-direction: column;
@@ -13104,6 +13365,7 @@ body.role-b2b .demand-region-head {
   .b2b-rank-metrics,
   .b2b-rank-focus,
   .b2b-map-metrics,
+  .b2b-map-board-grid,
   .b2b-demand-grid,
   .b2b-demand-outlook-grid,
   .region-card-metrics {
@@ -13113,11 +13375,16 @@ body.role-b2b .demand-region-head {
   .b2b-demand-outlook-layout {
     grid-template-columns: 1fr;
   }
+
+  .b2b-map-board-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
   .b2b-rank-brief,
   .b2b-map-brief,
+  .b2b-map-competition-board,
   .b2b-demand-playbook,
   .b2b-demand-outlook {
     padding: 16px;
@@ -13127,6 +13394,7 @@ body.role-b2b .demand-region-head {
   .b2b-rank-metrics,
   .b2b-rank-focus,
   .b2b-map-metrics,
+  .b2b-map-board-grid,
   .b2b-demand-grid,
   .b2b-demand-outlook-grid,
   .region-card-metrics {
@@ -13155,6 +13423,27 @@ body.role-b2b .demand-region-head {
 
   .b2b-demand-competitors button strong,
   .b2b-demand-competitors button small {
+    white-space: normal;
+  }
+
+  .b2b-map-radius-list button {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .b2b-map-radius-list button span,
+  .b2b-map-radius-list button strong,
+  .b2b-map-radius-list button em,
+  .b2b-map-radius-list button small {
+    grid-area: auto;
+  }
+
+  .b2b-map-radius-list button span {
+    justify-self: start;
+  }
+
+  .b2b-map-radius-list button strong,
+  .b2b-map-radius-list button small {
     white-space: normal;
   }
 
