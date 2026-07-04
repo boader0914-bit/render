@@ -30,7 +30,8 @@ const state = {
   dictionarySyncedRunId: null,
   trafficKeyState: null,
   crawlStatusTimer: null,
-  pendingRecrawlContext: null
+  pendingRecrawlContext: null,
+  b2bSearchQuery: ""
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -90,6 +91,11 @@ const els = {
   historyOpsDashboard: document.getElementById("historyOpsDashboard"),
   adminStatus: document.getElementById("adminStatus"),
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
+  b2bSearchPanel: document.getElementById("b2bSearchPanel"),
+  b2bSearchForm: document.getElementById("b2bSearchForm"),
+  b2bSearchInput: document.getElementById("b2bSearchInput"),
+  b2bSearchResults: document.getElementById("b2bSearchResults"),
+  b2bSearchStatus: document.getElementById("b2bSearchStatus"),
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
   detailSheet: document.getElementById("detailSheet"),
@@ -11543,6 +11549,99 @@ async function loadLocationCardRequests() {
   }
 }
 
+function b2bSearchText(value = "") {
+  return compactCrawlKeyword(value).toLowerCase();
+}
+
+function runSearchTitle(run = {}) {
+  return String(run.keyword || run.searchKeyword || run.label || run.id || "").split("·")[0].trim() || run.id || "리포트";
+}
+
+function runSearchHaystack(run = {}) {
+  return [
+    run.keyword,
+    run.searchKeyword,
+    run.label,
+    run.id,
+    run.region,
+    run.regionBase
+  ].map((value) => String(value || "")).join(" ");
+}
+
+function b2bSearchMatches(query = state.b2bSearchQuery) {
+  const normalized = b2bSearchText(query);
+  const activeRun = state.runs.find((run) => run.id === state.activeRunId);
+  const rows = state.runs.map((run, index) => {
+    const title = runSearchTitle(run);
+    const compactTitle = b2bSearchText(title);
+    const haystack = b2bSearchText(runSearchHaystack(run));
+    let score = 0;
+    if (!normalized) {
+      score = run.id === state.activeRunId ? 80 : Math.max(1, 30 - index);
+    } else if (compactTitle === normalized || b2bSearchText(run.keyword) === normalized) {
+      score = 100;
+    } else if (compactTitle.includes(normalized)) {
+      score = 78;
+    } else if (haystack.includes(normalized)) {
+      score = 62;
+    } else {
+      const tokens = normalized.match(/[가-힣a-z0-9]+/g) || [];
+      const hitCount = tokens.filter((token) => haystack.includes(token)).length;
+      score = hitCount ? Math.min(55, 24 + hitCount * 12) : 0;
+    }
+    return { run, index, title, score, active: run.id === state.activeRunId };
+  }).filter((row) => row.score > 0);
+  rows.sort((a, b) => b.score - a.score || a.index - b.index);
+  if (!rows.length && activeRun && !normalized) {
+    return [{ run: activeRun, index: state.runs.indexOf(activeRun), title: runSearchTitle(activeRun), score: 80, active: true }];
+  }
+  return rows.slice(0, 6);
+}
+
+function renderB2BSearchPanel() {
+  if (!els.b2bSearchPanel) return;
+  const publicMode = !isAdminRole();
+  els.b2bSearchPanel.hidden = !publicMode;
+  if (!publicMode) return;
+  if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) {
+    els.b2bSearchInput.value = state.b2bSearchQuery || "";
+  }
+  const matches = b2bSearchMatches(state.b2bSearchQuery);
+  const normalized = b2bSearchText(state.b2bSearchQuery);
+  if (els.b2bSearchResults) {
+    els.b2bSearchResults.innerHTML = matches.length ? matches.map((row) => `
+      <button type="button" data-b2b-run-id="${escapeHtml(row.run.id)}" class="${row.active ? "active" : ""}">
+        <strong>${escapeHtml(row.title)}</strong>
+        <span>${escapeHtml(row.run.label || row.run.id)}</span>
+      </button>
+    `).join("") : `<div class="b2b-search-empty">준비된 리포트가 없습니다.</div>`;
+  }
+  if (els.b2bSearchStatus) {
+    els.b2bSearchStatus.textContent = normalized
+      ? `${fmtNumber(state.runs.length)}개 저장 리포트 중 ${fmtNumber(matches.length)}개 검색`
+      : `${fmtNumber(state.runs.length)}개 저장 리포트에서 선택`;
+  }
+}
+
+async function submitB2BSearch() {
+  if (isAdminRole()) return;
+  state.b2bSearchQuery = els.b2bSearchInput?.value?.trim() || "";
+  const matches = b2bSearchMatches(state.b2bSearchQuery);
+  renderB2BSearchPanel();
+  if (!matches.length) {
+    if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "저장된 리포트가 없습니다. 관리자에게 수집을 요청하세요.";
+    return;
+  }
+  const target = matches[0].run;
+  if (!target?.id || target.id === state.activeRunId) {
+    setActiveTab("report");
+    return;
+  }
+  setStatus("리포트 로딩");
+  await loadRun(target.id);
+  setActiveTab("report");
+}
+
 function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
@@ -11565,6 +11664,7 @@ function renderHeader() {
 
 function renderAll() {
   applyRoleUi();
+  renderB2BSearchPanel();
   if (!state.data) {
     if (roleAllowsTab("dictionary")) renderLocationDictionary();
     return;
@@ -13240,6 +13340,7 @@ async function loadRuns(selectLatest = false) {
   const data = await fetchJson("/api/runs");
   state.runs = data.runs || [];
   els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
+  renderB2BSearchPanel();
   if (!state.runs.length) {
     const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "조회 가능한 실행 결과가 없습니다.";
     if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
@@ -13603,6 +13704,14 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
+    const b2bRun = event.target.closest("[data-b2b-run-id]");
+    if (b2bRun) {
+      state.b2bSearchQuery = runSearchTitle(state.runs.find((run) => run.id === b2bRun.dataset.b2bRunId) || {});
+      loadRun(b2bRun.dataset.b2bRunId).then(() => setActiveTab("report")).catch((error) => {
+        setStatus("리포트 로딩 실패");
+        if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = error.message;
+      });
+    }
     const duplicateAction = event.target.closest("[data-company-duplicate-action]");
     if (duplicateAction) resolveCompanyDuplicate(duplicateAction);
     const saveCorrection = event.target.closest("[data-save-company-correction]");
@@ -13661,6 +13770,12 @@ function bindEvents() {
     if (drawerTab) setActiveTab(drawerTab.dataset.drawerTab);
   });
   document.addEventListener("input", (event) => {
+    const b2bSearch = event.target.closest("#b2bSearchInput");
+    if (b2bSearch) {
+      state.b2bSearchQuery = b2bSearch.value || "";
+      renderB2BSearchPanel();
+      return;
+    }
     const checkSearch = event.target.closest("[data-company-check-search]");
     if (checkSearch) {
       state.companyMasterFilters.checkQuery = checkSearch.value || "";
@@ -13731,6 +13846,13 @@ function bindEvents() {
   els.dictionarySearchForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     runDictionarySearch();
+  });
+  els.b2bSearchForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitB2BSearch().catch((error) => {
+      setStatus("리포트 검색 실패");
+      if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = error.message;
+    });
   });
   els.dictionaryQuickButtons?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-location-query]");

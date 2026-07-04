@@ -138,6 +138,112 @@ a {
   font-size: 16px;
 }
 
+.b2b-search-panel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  margin: -6px 0 20px;
+  padding: 14px;
+  border: 1px solid #d5e3f7;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: var(--soft-shadow);
+}
+
+.b2b-search-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.b2b-search-form label {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.b2b-search-form span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.b2b-search-form input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d0d5dd;
+  border-radius: 13px;
+  background: #fbfcfd;
+  color: var(--ink);
+  padding: 0 13px;
+  font-size: 15px;
+  font-weight: 820;
+  outline: none;
+}
+
+.b2b-search-form input:focus {
+  border-color: #84caff;
+  box-shadow: 0 0 0 3px rgba(49, 130, 246, .12);
+}
+
+.b2b-search-results {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-search-results button {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #fbfcfd;
+  padding: 10px;
+  text-align: left;
+}
+
+.b2b-search-results button.active {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-search-results strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-search-results span,
+.b2b-search-status,
+.b2b-search-empty {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-search-empty {
+  grid-column: 1 / -1;
+  border: 1px solid #fedf89;
+  border-radius: 13px;
+  background: #fffbeb;
+  padding: 11px;
+}
+
+.b2b-search-status {
+  margin: 0;
+}
+
 .icon-button,
 .close-button,
 .small-button {
@@ -10726,6 +10832,11 @@ a.platform-row:hover {
     min-height: 38px;
     padding: 0 10px;
     font-size: 13px;
+  }
+
+  .b2b-search-form,
+  .b2b-search-results {
+    grid-template-columns: 1fr;
   }
 
   .report-hero,
