@@ -1989,10 +1989,10 @@ function companyRankInsight(item = {}, fallbackRank = 0) {
       label = "수요 강세";
     } else if (rate <= 0.25 && remaining > 0) {
       tone = "watch";
-      label = "판매 공백";
+      label = "잔여 객실";
     } else if (remaining >= Math.max(3, Math.ceil(supply * 0.35))) {
       tone = "strong";
-      label = "개선 여지";
+      label = "운영 여지";
     } else {
       tone = "good";
       label = "정상 흐름";
@@ -2061,20 +2061,20 @@ function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) 
     summary = "네이버 노출은 확인됐지만 예약 수량 표본이 없어 판매 판단은 보류합니다.";
   } else if (Number.isFinite(rate) && rate <= 0.35 && remaining > 0) {
     tone = "watch";
-    label = "판매 공백";
-    summary = "상위 노출 대비 잔여 객실이 남아 있어 상품명, 가격, 채널 노출을 먼저 확인합니다.";
+    label = "잔여 객실";
+    summary = "상위 노출 대비 남은 객실이 있어 가격, 상품 구성, 채널 상태를 함께 봅니다.";
   } else if (Number.isFinite(rate) && rate >= 0.65) {
     tone = "hot";
     label = "강수요";
     summary = "판매율이 높아 가격 방어, 주말 재고, 객실 믹스 관리가 우선입니다.";
   } else if (insight.productGap) {
     tone = "watch";
-    label = "상품 공백";
-    summary = "숙박 중심 표본입니다. 데이유즈/캠프닉 상품 노출 여부를 보완 확인합니다.";
+    label = "상품 구성";
+    summary = "숙박 중심 표본입니다. 데이유즈/캠프닉 상품 노출 여부를 함께 표시합니다.";
   } else if (remaining >= Math.max(3, Math.ceil(finiteNumber(insight.supply, 0) * 0.35))) {
     tone = "strong";
-    label = "개선 여지";
-    summary = "판매 여지가 남아 있어 노출 대비 전환을 높일 수 있는 후보입니다.";
+    label = "운영 여지";
+    summary = "잔여 객실과 노출 흐름을 함께 볼 수 있는 업체입니다.";
   }
   return {
     tone,
@@ -2133,12 +2133,12 @@ function b2bRankBoardModel(items = rankedCompanyItems()) {
     .sort((a, b) => b.opportunityScore - a.opportunityScore || a.rank - b.rank)
     .slice(0, 4);
   const decision = rankOnlyRows.length > linkedRows.length
-    ? { label: "상세 표본 보강", tone: "watch", summary: "순위 노출은 충분하지만 예약 수량 표본이 부족해 상세 수집 범위를 먼저 넓히는 것이 좋습니다." }
+    ? { label: "표본 확인", tone: "watch", summary: "순위 노출은 확인됐고, 예약 수량 표본은 일부 업체 중심으로 확보되어 있습니다." }
     : gapRows.length >= 2
-      ? { label: "판매 공백 확인", tone: "strong", summary: "상위 노출 중 판매율이 낮은 업체가 있어 가격, 상품명, 채널 노출 개선 후보를 먼저 봅니다." }
+      ? { label: "잔여 객실 확인", tone: "strong", summary: "상위 노출 업체 중 잔여 객실이 있는 구간을 가격, 상품 구성, 채널 상태와 함께 봅니다." }
       : hotRows.length >= 2
-        ? { label: "강수요 방어", tone: "hot", summary: "판매율이 높은 업체가 많아 가격 방어와 주말 재고 운영을 우선 확인합니다." }
-        : { label: "순위 안정권", tone: "neutral", summary: "현재 표본에서는 급한 공백보다 업체별 세부 조건 비교가 우선입니다." };
+        ? { label: "강수요 구간", tone: "hot", summary: "판매율이 높은 업체가 많아 주말 재고와 가격 흐름을 함께 확인합니다." }
+        : { label: "순위 요약", tone: "neutral", summary: "현재 표본에서는 업체별 순위와 예약 표본 상태를 함께 비교합니다." };
   return {
     rows,
     linkedRows,
@@ -2168,23 +2168,8 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
         <article><span>상위 노출</span><strong>${fmtNumber(model.rows.length)}</strong><small>현재 화면 기준</small></article>
         <article><span>상세 표본</span><strong>${fmtNumber(model.linkedRows.length)}</strong><small>예약 수량 확인</small></article>
         <article><span>평균 판매율</span><strong>${Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요"}</strong><small>${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실</small></article>
-        <article><span>판매 공백</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>노출 대비 잔여 객실</small></article>
+        <article><span>잔여 객실 표본</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>노출 대비 잔여 객실</small></article>
         <article><span>강수요</span><strong>${fmtNumber(model.hotRows.length)}</strong><small>판매율 65% 이상</small></article>
-      </div>
-      <div class="b2b-rank-focus">
-        ${model.focusRows.length ? model.focusRows.map((row, order) => {
-          const profile = b2bCompanyActionProfile(row.item, row.insight);
-          const openIndex = Number(row.item.availabilityIndex);
-          const canOpen = row.linked && Number.isFinite(openIndex) && openIndex >= 0;
-          return `
-            <button type="button" ${canOpen ? `data-open-company="${openIndex}"` : "disabled"} class="${escapeHtml(profile.tone)}">
-              <span>${fmtNumber(order + 1)}</span>
-              <strong>${escapeHtml(row.item.name || "업체명 확인")}</strong>
-              <em>${escapeHtml(profile.label)}</em>
-              <small>${escapeHtml(profile.chips.slice(0, 3).join(" · "))}</small>
-            </button>
-          `;
-        }).join("") : `<div class="empty">순위 비교 표본이 없습니다.</div>`}
       </div>
     </section>
   `;
@@ -5948,14 +5933,14 @@ function b2bMarketDecision(score, rate, opportunityCount) {
     return {
       label: "확장 검토",
       tone: "strong",
-      summary: "검색 수요와 판매 공백이 함께 보여 추가 노출, 상품 구성, 가격 점검의 우선순위가 높습니다."
+      summary: "검색 수요와 잔여 객실 표본이 함께 보여 상품 구성, 가격, 채널 상태를 함께 확인할 수 있습니다."
     };
   }
   if (score >= 64) {
     return {
-      label: "선별 개선",
+      label: "운영 점검",
       tone: "watch",
-      summary: "상위 노출 업체 중 판매율이 낮은 구간을 중심으로 운영 개선 여지를 확인할 수 있습니다."
+      summary: "상위 노출 업체의 판매율과 잔여 객실 표본을 중심으로 운영 상태를 비교합니다."
     };
   }
   if (Number.isFinite(rate) && rate >= 0.6) {
@@ -6049,111 +6034,61 @@ function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
   const dataStatus = [
     { label: "상세 표본", value: `${fmtNumber(rankModel.linkedRows.length)}/${fmtNumber(rankModel.rows.length)}`, note: Number.isFinite(detailCoverage) ? fmtRate(detailCoverage) : "확인필요", tone: Number.isFinite(detailCoverage) && detailCoverage >= 0.55 ? "good" : "watch" },
     { label: "매출 표본", value: brief.revenueSampleCount ? fmtNumber(brief.revenueSampleCount) : "대기", note: revenueCoverageText, tone: brief.revenueSampleCount ? "good" : "watch" },
-    { label: "채널 비교", value: fmtNumber(brief.platformStats.otaCheckCount || 0), note: "보조 채널 확인 대상", tone: brief.platformStats.otaCheckCount ? "watch" : "good" },
+    { label: "채널 비교", value: fmtNumber(brief.platformStats.otaCheckCount || 0), note: "보조 채널 표본", tone: brief.platformStats.otaCheckCount ? "watch" : "good" },
     { label: "쿠폰 노출", value: fmtNumber(couponRows.length), note: couponRows.length ? "프로모션 신호" : "노출 신호 없음", tone: couponRows.length ? "strong" : "neutral" }
   ];
-  const actionRows = [];
-  if (rankModel.rankOnlyRows.length) {
-    actionRows.push({
-      tone: "watch",
-      label: "상세 표본 보강",
-      value: `${fmtNumber(rankModel.rankOnlyRows.length)}개`,
-      detail: "상위 노출은 있으나 예약 수량 표본이 없어 판매 판단을 보류합니다.",
-      tab: "rank",
-      button: "순위 확인"
-    });
-  }
-  if (rankModel.gapRows.length) {
-    actionRows.push({
+  const actionRows = [
+    {
       tone: "strong",
-      label: "판매 공백 확인",
-      value: `${fmtNumber(rankModel.gapRows.length)}개`,
-      detail: "노출 대비 잔여 객실이 남은 업체부터 가격, 상품명, 채널 노출을 봅니다.",
-      tab: "rank",
-      button: "업체 보기"
-    });
-  }
-  if (brief.platformStats.otaCheckCount) {
-    actionRows.push({
+      label: "시장 요약",
+      value: fmtNumber(brief.score),
+      detail: "검색 수요와 객실 판매율을 같은 기준으로 요약합니다.",
+      tab: "report",
+      button: "요약 보기"
+    },
+    {
       tone: "watch",
-      label: "채널 비교",
-      value: `${fmtNumber(brief.platformStats.otaCheckCount)}개`,
-      detail: `여기어때 ${fmtNumber(brief.platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(brief.platformStats.missingYanolja)}개 보조 확인 여지가 있습니다.`,
+      label: "업체 순위",
+      value: `${fmtNumber(rankModel.rows.length)}개`,
+      detail: `상위 노출과 예약 표본 ${fmtNumber(rankModel.linkedRows.length)}개를 함께 봅니다.`,
       tab: "rank",
-      button: "채널 보기"
-    });
-  }
-  if (brief.dayUseGapCount) {
-    actionRows.push({
+      button: "순위 보기"
+    },
+    {
       tone: "neutral",
-      label: "상품 구성 점검",
-      value: `${fmtNumber(brief.dayUseGapCount)}개`,
-      detail: "데이유즈/캠프닉 노출이 약한 업체는 당일 상품 운영 가능성을 확인합니다.",
-      tab: "rank",
-      button: "상품 보기"
-    });
-  }
-  if (couponRows.length) {
-    actionRows.push({
-      tone: "strong",
-      label: "쿠폰 신호 활용",
-      value: `${fmtNumber(couponRows.length)}개`,
-      detail: "네이버 공개 화면에 쿠폰 노출이 있어 프로모션 비교 포인트로 활용할 수 있습니다.",
-      tab: "rank",
-      button: "쿠폰 보기"
-    });
-  }
-  if (!actionRows.length && rankModel.hotRows.length) {
-    actionRows.push({
-      tone: "hot",
-      label: "강수요 방어",
-      value: `${fmtNumber(rankModel.hotRows.length)}개`,
-      detail: "판매율이 높은 업체는 가격 방어와 주말 재고 운영을 먼저 확인합니다.",
-      tab: "rank",
-      button: "강수요 보기"
-    });
-  }
-  if (!actionRows.length) {
-    actionRows.push({
+      label: "지역 지도",
+      value: `${fmtNumber(brief.regions.length)}권역`,
+      detail: "관광 앵커와 인접 수요권 기준으로 지역 흐름을 봅니다.",
+      tab: "map",
+      button: "지도 보기"
+    },
+    {
       tone: "good",
-      label: "현 상태 유지",
-      value: "안정",
-      detail: "현재 표본에서는 급한 공백보다 기간 비교와 권역 수요 추적이 우선입니다.",
+      label: "수요 구조",
+      value: brief.searchVolume ? fmtNumber(brief.searchVolume) : "대기",
+      detail: "검색 추이와 계절성을 함께 확인합니다.",
       tab: "demand",
       button: "수요 보기"
-    });
-  }
-  const priorityRows = rankModel.focusRows.slice(0, 3).map((row, order) => {
-    const profile = b2bCompanyActionProfile(row.item, row.insight);
-    const openIndex = Number(row.item.availabilityIndex);
-    return {
-      order: order + 1,
-      item: row.item,
-      profile,
-      openIndex,
-      canOpen: row.linked && Number.isFinite(openIndex) && openIndex >= 0
-    };
-  });
+    }
+  ];
   return {
     rankModel,
     dataStatus,
-    actionRows: actionRows.slice(0, 4),
-    priorityRows,
+    actionRows,
     couponCount: couponRows.length,
     offlineCount: offlineRows.length,
     detailCoverage
   };
 }
 
-function renderB2BPublicOverview(brief = b2bMarketBriefModel()) {
-  const model = b2bPublicOverviewModel(brief);
+function renderB2BPublicOverview(brief = b2bMarketBriefModel(), model = b2bPublicOverviewModel(brief)) {
   return `
     <div class="b2b-public-board">
       <article class="b2b-public-actions">
         <div class="report-card-head">
           <div>
-            <h3>오늘 볼 것</h3>
-            <p>공개 리포트에서 바로 확인할 운영 우선순위입니다.</p>
+            <h3>리포트 구성</h3>
+            <p>B2B 화면에서 제공하는 시장 분석 범위입니다.</p>
           </div>
           <span>${fmtNumber(model.actionRows.length)}개</span>
         </div>
@@ -6168,25 +6103,6 @@ function renderB2BPublicOverview(brief = b2bMarketBriefModel()) {
               <button type="button" data-drawer-tab="${escapeHtml(row.tab)}">${escapeHtml(row.button)}</button>
             </div>
           `).join("")}
-        </div>
-      </article>
-      <article class="b2b-public-priority">
-        <div class="report-card-head">
-          <div>
-            <h3>우선 확인 업체</h3>
-            <p>노출, 판매율, 잔여 객실을 함께 본 공개 후보입니다.</p>
-          </div>
-          <span>${fmtNumber(model.priorityRows.length)}개</span>
-        </div>
-        <div class="b2b-priority-list">
-          ${model.priorityRows.length ? model.priorityRows.map((row) => `
-            <button type="button" ${row.canOpen ? `data-open-company="${row.openIndex}"` : "disabled"} class="${escapeHtml(row.profile.tone)}">
-              <span>${fmtNumber(row.order)}</span>
-              <strong>${escapeHtml(row.item.name || "업체명 확인")}</strong>
-              <em>${escapeHtml(row.profile.label)}</em>
-              <small>${escapeHtml(row.profile.chips.slice(0, 3).join(" · "))}</small>
-            </button>
-          `).join("") : `<div class="empty">우선 확인할 업체 표본이 없습니다.</div>`}
         </div>
       </article>
       <article class="b2b-public-data">
@@ -6214,6 +6130,7 @@ function renderB2BPublicOverview(brief = b2bMarketBriefModel()) {
 function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const regionLabel = brief.topRegion.region || brief.topRegion.name || "지역 데이터 대기";
   const primary = brief.topRegion ? regionPrimary(brief.topRegion) : "";
+  const overviewModel = b2bPublicOverviewModel(brief);
   return `
     <section class="b2b-brief-card">
       <div class="b2b-brief-head">
@@ -6239,37 +6156,31 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
           <div class="report-card-head">
             <div>
               <h3>운영 해석</h3>
-              <p>판매율, 잔여 객실, 상품 공백을 고객 관점으로 요약합니다.</p>
+              <p>판매율, 잔여 객실, 상품 구성을 고객 관점으로 요약합니다.</p>
             </div>
           </div>
           <div class="report-insight-list">
             <div><b>판매 흐름</b><span>${Number.isFinite(brief.rate) ? `${fmtRate(brief.rate)} 판매` : "확인 필요"}</span></div>
             <div><b>잔여 객실</b><span>${fmtNumber(brief.remainingSupply)}개 추정</span></div>
-            <div><b>상품 공백</b><span>${fmtNumber(brief.dayUseGapCount)}개 업체 데이유즈/캠프닉 미확인</span></div>
-            <div><b>채널 보강</b><span>${fmtNumber(brief.platformStats.otaCheckCount || 0)}개 업체 OTA 비교 기준</span></div>
+            <div><b>상품 구성</b><span>${fmtNumber(brief.dayUseGapCount)}개 업체 데이유즈/캠프닉 미확인</span></div>
+            <div><b>채널 표본</b><span>${fmtNumber(brief.platformStats.otaCheckCount || 0)}개 업체 OTA 비교 기준</span></div>
           </div>
         </article>
-        <article class="b2b-opportunity-panel">
+        <article class="b2b-insight-panel">
           <div class="report-card-head">
             <div>
-              <h3>개선 후보</h3>
-              <p>상위 노출 중 판매율이 낮은 업체부터 확인합니다.</p>
+              <h3>데이터 범위</h3>
+              <p>공개 리포트에 사용한 표본과 보조 신호입니다.</p>
             </div>
-            <span>${fmtNumber(brief.opportunityRows.length)}개</span>
           </div>
-          <div class="b2b-opportunity-list">
-            ${brief.opportunityRows.length ? brief.opportunityRows.slice(0, 4).map((row, index) => `
-              <button type="button" data-open-company="${row.index}">
-                <span>${fmtNumber(index + 1)}</span>
-                <strong>${escapeHtml(row.item.name || "업체명 확인")}</strong>
-                <em>${fmtRate(row.lodging.rate)}</em>
-                <small>${fmtNumber(row.lodging.sold)}/${fmtNumber(row.lodging.supply)} 객실 · ${escapeHtml(row.item.region || row.item.address || "지역 확인")}</small>
-              </button>
-            `).join("") : `<div class="empty">판매율 비교 가능한 업체가 아직 없습니다.</div>`}
+          <div class="report-insight-list">
+            ${overviewModel.dataStatus.map((row) => `
+              <div><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.value)} · ${escapeHtml(row.note)}</span></div>
+            `).join("")}
           </div>
         </article>
       </div>
-      ${renderB2BPublicOverview(brief)}
+      ${renderB2BPublicOverview(brief, overviewModel)}
     </section>
   `;
 }
@@ -6311,6 +6222,37 @@ function renderReport() {
   const b2bBrief = publicMode ? b2bMarketBriefModel(data) : null;
   const heroDecision = publicMode && b2bBrief ? b2bBrief.decision : decision;
   const heroScore = publicMode && b2bBrief ? b2bBrief.score : score;
+  const reportActionTitle = publicMode ? "리포트 체크포인트" : "이번 주 액션";
+  const reportActionSubtitle = publicMode ? "B2B 리포트에서 확인할 핵심 범위" : "먼저 확인해야 할 영업/운영 과제";
+  const reportActionItems = publicMode
+    ? [
+      {
+        title: "순위와 예약 표본 확인",
+        detail: `상위 노출 ${fmtNumber(items.length)}개 · 예약 수량 ${fmtNumber(sales.supply)}개 기준`
+      },
+      {
+        title: "지역과 수요 구조 확인",
+        detail: `${fmtNumber(regions.length)}개 권역 · 검색수요 ${searchVolume ? `월 ${fmtNumber(searchVolume)}회` : "API 확인필요"}`
+      },
+      {
+        title: "채널과 상품 구성 확인",
+        detail: `OTA 표본 ${fmtNumber(platformStats.otaCheckCount || 0)}개 · 데이유즈/캠프닉 ${fmtNumber(dayUseCount)}개 확인`
+      }
+    ]
+    : [
+      {
+        title: "OTA 색인 업체만 보조 채널 확인",
+        detail: `색인 ${fmtNumber(platformStats.otaCheckCount || 0)}개 · 여기어때 ${fmtNumber(platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(platformStats.missingYanolja)}개 확인`
+      },
+      {
+        title: "객실 판매율 낮은 업체 상품 재구성",
+        detail: `저판매 ${fmtNumber(lowSalesCount)}개, 가격/패키지/캠프닉 점검`
+      },
+      {
+        title: "데이유즈/캠프닉 공백 제안",
+        detail: `${fmtNumber(items.length - dayUseCount)}개 업체는 당일상품 확인 필요`
+      }
+    ];
 
   els.reportBody.innerHTML = `
     <section class="report-hero">
@@ -6340,14 +6282,14 @@ function renderReport() {
         <small>상위 노출 기준</small>
       </article>
       <article>
-        <span>${publicMode ? "저판매 구간" : "컨택 후보"}</span>
-        <strong>${fmtNumber(publicMode ? lowSalesCount : allTargets.length)}</strong>
-        <small>${publicMode ? "판매 흐름 점검 대상" : "판매흐름/상품 약점 감지"}</small>
+        <span>${publicMode ? "잔여 객실" : "컨택 후보"}</span>
+        <strong>${fmtNumber(publicMode && b2bBrief ? b2bBrief.remainingSupply : allTargets.length)}</strong>
+        <small>${publicMode ? "판매 여지 표본" : "판매흐름/상품 약점 감지"}</small>
       </article>
       <article>
-        <span>상품 공백</span>
+        <span>${publicMode ? "상품 구성" : "상품 공백"}</span>
         <strong>${fmtNumber(items.length - dayUseCount)}</strong>
-        <small>데이유즈/캠프닉 미확인</small>
+        <small>${publicMode ? "데이유즈/캠프닉 표본" : "데이유즈/캠프닉 미확인"}</small>
       </article>
     </section>
 
@@ -6362,17 +6304,17 @@ function renderReport() {
         </div>
         <div class="report-insight-list">
           <div><b>판매 강도</b><span>${Number.isFinite(rate) ? `${fmtRate(rate)} 객실 판매율` : "확인필요"}</span></div>
-          <div><b>저판매 후보</b><span>${fmtNumber(lowSalesCount)}개 업체</span></div>
+          <div><b>${publicMode ? "잔여 객실" : "저판매 후보"}</b><span>${publicMode && b2bBrief ? `${fmtNumber(b2bBrief.remainingSupply)}개 추정` : `${fmtNumber(lowSalesCount)}개 업체`}</span></div>
           <div><b>검색 수요</b><span>${searchVolume ? `월 ${fmtNumber(searchVolume)}회` : "API 확인필요"}</span></div>
-          <div><b>상품 확장</b><span>${fmtNumber(dayUseCount)}개 업체만 데이유즈/캠프닉 확인</span></div>
+          <div><b>${publicMode ? "상품 구성" : "상품 확장"}</b><span>${fmtNumber(dayUseCount)}개 업체 데이유즈/캠프닉 확인</span></div>
         </div>
       </article>
 
       <article class="report-card">
         <div class="report-card-head">
           <div>
-            <h3>OTA 보조 확인</h3>
-            <p>의심 업체 기준 보조 채널 현황</p>
+            <h3>${publicMode ? "채널 표본" : "OTA 보조 확인"}</h3>
+            <p>${publicMode ? "수집된 채널 기준 현황" : "의심 업체 기준 보조 채널 현황"}</p>
           </div>
         </div>
         <div class="report-channel-grid">
@@ -6389,14 +6331,12 @@ function renderReport() {
       <article class="report-card report-action-card">
         <div class="report-card-head">
           <div>
-            <h3>이번 주 액션</h3>
-            <p>${publicMode ? "먼저 점검해야 할 운영 과제" : "먼저 확인해야 할 영업/운영 과제"}</p>
+            <h3>${reportActionTitle}</h3>
+            <p>${reportActionSubtitle}</p>
           </div>
         </div>
         <ol class="report-action-list">
-          <li><strong>OTA 색인 업체만 보조 채널 확인</strong><span>색인 ${fmtNumber(platformStats.otaCheckCount || 0)}개 · 여기어때 ${fmtNumber(platformStats.missingYeogi)}개, 야놀자 ${fmtNumber(platformStats.missingYanolja)}개 확인</span></li>
-          <li><strong>객실 판매율 낮은 업체 상품 재구성</strong><span>저판매 ${fmtNumber(lowSalesCount)}개, 가격/패키지/캠프닉 점검</span></li>
-          <li><strong>데이유즈/캠프닉 공백 제안</strong><span>${fmtNumber(items.length - dayUseCount)}개 업체는 당일상품 확인 필요</span></li>
+          ${reportActionItems.map((item) => `<li><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.detail)}</span></li>`).join("")}
         </ol>
       </article>
     </section>
@@ -6803,12 +6743,12 @@ function demandTrendActionText(traffic = {}) {
     return "검색 관심과 모바일 비중이 같이 높습니다. 네이버 예약 첫 화면, 모바일 상품명, 당일/숙박 대표상품을 우선 점검합니다.";
   }
   if (peakNow) {
-    return "최근 수요가 피크권입니다. 상위 노출 업체의 금·일 공백, 가격 방어, 채널 미노출을 컨택 후보 판단에 연결합니다.";
+    return "최근 수요가 피크권입니다. 상위 노출 업체의 금·일 판매 흐름, 가격, 채널 표본을 함께 확인합니다.";
   }
   if (falling) {
-    return "검색 추세가 내려가는 구간입니다. 신규 영업보다 기존 후보의 상품 재구성, 평일/일요일 보완 제안을 우선합니다.";
+    return "검색 추세가 내려가는 구간입니다. 상품 구성과 평일/일요일 판매 흐름을 기간별로 비교합니다.";
   }
-  return "검색량, 모바일 비중, CTR, 예약 판매율을 함께 보며 노출은 있는데 판매 구조가 약한 업체를 우선 확인합니다.";
+  return "검색량, 모바일 비중, CTR, 예약 판매율을 함께 보며 노출과 판매 구조를 비교합니다.";
 }
 
 function renderDemandTrendInsightCards(traffic = {}) {
