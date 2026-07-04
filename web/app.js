@@ -1962,6 +1962,111 @@ function priceBlock(item = {}) {
   `;
 }
 
+function companyRankInsight(item = {}, fallbackRank = 0) {
+  const linked = inventoryLinked(item);
+  const lodging = salesStats(item, "lodging");
+  const day = salesStats(item, "day");
+  const impact = itemQueueRevenueImpact(item);
+  const revenue = effectiveRevenueValue(impact);
+  const supply = finiteNumber(lodging.supply, 0);
+  const sold = finiteNumber(lodging.sold, 0);
+  const hasInventory = linked || supply > 0 || sold > 0;
+  const remaining = Math.max(0, supply - sold);
+  const rate = lodging.supply ? lodging.rate : NaN;
+  const dayUseKnown = finiteNumber(day.supply, 0) > 0;
+  const rank = finiteNumber(item.rank || item.overallRank || fallbackRank, fallbackRank);
+  let tone = "neutral";
+  let label = "관찰";
+  if (hasInventory && Number.isFinite(rate)) {
+    if (rate >= 0.65) {
+      tone = "hot";
+      label = "수요 강세";
+    } else if (rate <= 0.25 && remaining > 0) {
+      tone = "watch";
+      label = "판매 공백";
+    } else if (remaining >= Math.max(3, Math.ceil(supply * 0.35))) {
+      tone = "strong";
+      label = "개선 여지";
+    } else {
+      tone = "good";
+      label = "정상 흐름";
+    }
+  } else if (!hasInventory) {
+    tone = "rank";
+    label = "노출 확인";
+  }
+  return {
+    linked,
+    hasInventory,
+    rank,
+    tone,
+    label,
+    lodging,
+    day,
+    sold,
+    supply,
+    remaining,
+    rate,
+    dayUseKnown,
+    revenue,
+    revenueNote: revenueAdjustmentNote(impact),
+    precision: impact.precision || {},
+    productGap: hasInventory && !dayUseKnown,
+    metricText: hasInventory && supply ? fmtRate(rate) : `${fmtNumber(rank)}위`,
+    metricLabel: hasInventory && supply ? "객실 판매율" : "네이버 노출",
+    stockText: hasInventory && supply ? `${fmtNumber(sold)}/${fmtNumber(supply)} 객실` : (item.bookingStatus || "예약 상세 대기")
+  };
+}
+
+function companyRankInsightGrid(insight = {}) {
+  const cells = [
+    ["예상 매출", insight.revenue ? fmtWon(insight.revenue) : "대기", insight.revenue ? insight.revenueNote : "가격 표본 대기", "revenue"],
+    ["판매율", Number.isFinite(insight.rate) ? fmtRate(insight.rate) : "확인필요", insight.stockText, insight.tone],
+    ["잔여 객실", insight.hasInventory ? fmtNumber(insight.remaining) : "대기", insight.hasInventory ? "판매 여지 추정" : "상세 수집 필요", insight.hasInventory ? (insight.remaining ? "watch" : "good") : "neutral"],
+    ["상품", insight.dayUseKnown ? "숙박+데이" : "숙박 중심", insight.productGap ? "데이유즈/캠프닉 미확인" : "상품 구성 확인", insight.productGap ? "watch" : "neutral"]
+  ];
+  return `
+    <div class="company-insight-grid">
+      ${cells.map(([label, value, note, tone]) => `
+        <div class="${escapeHtml(tone || "neutral")}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(String(value || "대기"))}</strong>
+          <small>${escapeHtml(note || "")}</small>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function sheetB2BInsightPanel(item = {}) {
+  const insight = companyRankInsight(item, item.rank || 0);
+  const flow = salesFlowProfile(item);
+  const structure = inventoryStructureInfo(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const action = insight.productGap
+    ? "데이유즈/캠프닉 상품 노출 여부 확인"
+    : insight.remaining > 0
+      ? "잔여 객실 판매 흐름과 가격 점검"
+      : "강한 수요 구간의 가격/재고 운영 점검";
+  return `
+    <section class="sheet-section sheet-b2b-insight ${escapeHtml(insight.tone)}">
+      <div class="sheet-b2b-head">
+        <div>
+          <span>${escapeHtml(insight.label)}</span>
+          <h3>${escapeHtml(item.name || "업체명 확인")} 운영 요약</h3>
+          <p>${escapeHtml(action)}</p>
+        </div>
+        <strong>${escapeHtml(insight.metricText)}</strong>
+      </div>
+      ${companyRankInsightGrid(insight)}
+      <div class="sheet-b2b-note-grid">
+        <div><span>판매 흐름</span><strong>${escapeHtml(flow.all.label || fmtRate(flow.all.rate))}</strong><small>${escapeHtml(`평일 ${Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요"} · 금 ${fmtRate(flow.friday.rate)} · 토 ${fmtRate(flow.saturday.rate)} · 일 ${fmtRate(flow.sunday.rate)}`)}</small></div>
+        <div><span>수량 신뢰</span><strong>${escapeHtml(confidence.label)}</strong><small>${escapeHtml(structure.summary || structure.label)}</small></div>
+      </div>
+    </section>
+  `;
+}
+
 function categoryText(item = {}) {
   return [item.region || item.address, item.category || item.type].filter(Boolean).join(" · ") || "지역 확인";
 }
@@ -2303,10 +2408,11 @@ function renderCompanies() {
   const cards = items.slice(0, 30).map((item, index) => {
     const linked = inventoryLinked(item);
     const lodging = salesStats(item, "lodging");
-    const metric = linked && lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}` : `${fmtNumber(item.rank || index + 1)}위`;
+    const insight = companyRankInsight(item, index + 1);
+    const metric = insight.metricText;
     const stockStatus = item.bookingStatus || (linked ? "재고 분석 완료" : "예약ID 조회 실패/미수집");
     return `
-      <article class="company-card ${linked ? "" : "rank-only"}" data-company-index="${index}">
+      <article class="company-card ${linked ? "" : "rank-only"} ${escapeHtml(insight.tone)}" data-company-index="${index}">
         <div class="company-main">
           <span class="rank-badge">${escapeHtml(item.rank || index + 1)}</span>
           <div class="company-title">
@@ -2321,11 +2427,12 @@ function renderCompanies() {
         </div>
         <div class="company-metric">
           <strong>${metric}</strong>
-          <span>${linked && lodging.supply ? "숙박 추정" : "네이버 전체"}</span>
-          <small title="${escapeHtml(stockStatus)}">${linked && lodging.supply ? fmtRate(lodging.rate) : escapeHtml(stockStatus)}</small>
+          <span>${escapeHtml(insight.metricLabel)}</span>
+          <small title="${escapeHtml(stockStatus)}">${escapeHtml(insight.stockText)}</small>
         </div>
         <div class="company-chart">
           ${linked ? `
+            ${companyRankInsightGrid(insight)}
             <div class="sales-lines">
               <span class="sales-line">${escapeHtml(salesLine(item, "lodging"))}</span>
               <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
@@ -11516,6 +11623,7 @@ function renderSheetBooking(item) {
     ? `${sheetAuditPanel(item)}${sheetRecrawlComparisonPanel(item)}${sheetCompanyProfile(item)}${sheetHistoryPanel(item)}`
     : "";
   return `
+    ${!isAdminRole() ? sheetB2BInsightPanel(item) : ""}
     ${sheetFlowOverview(item)}
     ${sheetCollectionStatusPanel(item)}
     ${sheetRevenuePanel(item)}

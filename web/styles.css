@@ -2255,6 +2255,95 @@ a {
   white-space: nowrap;
 }
 
+.company-card.strong {
+  border-color: #b8d9d3;
+}
+
+.company-card.watch {
+  border-color: #fedf89;
+}
+
+.company-card.hot {
+  border-color: #fecaca;
+}
+
+.company-insight-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.company-card .company-insight-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.company-insight-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e8edf5;
+  border-radius: 11px;
+  background: #fbfcfd;
+  padding: 8px;
+}
+
+.company-insight-grid div.revenue {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.company-insight-grid div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.company-insight-grid div.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.company-insight-grid div.good {
+  border-color: #bbf7d0;
+  background: #f6fef9;
+}
+
+.company-insight-grid span,
+.company-insight-grid small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.company-insight-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.company-insight-grid div.revenue strong,
+.company-insight-grid div.good strong {
+  color: #067647;
+}
+
+.company-insight-grid div.watch strong {
+  color: #b54708;
+}
+
+.company-insight-grid div.hot strong {
+  color: #b42318;
+}
+
 .search-row.confidence-row {
   border-color: #dfe7f4;
 }
@@ -6606,6 +6695,112 @@ a.platform-row:hover {
   padding: 14px;
 }
 
+.sheet-b2b-insight {
+  gap: 12px;
+  border: 1px solid #d5e3f7;
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.sheet-b2b-insight.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.sheet-b2b-insight.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.sheet-b2b-insight.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.sheet-b2b-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.sheet-b2b-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sheet-b2b-head span {
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.sheet-b2b-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1.18;
+  font-weight: 950;
+}
+
+.sheet-b2b-head p {
+  margin: 0;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+  word-break: keep-all;
+}
+
+.sheet-b2b-head > strong {
+  min-width: 78px;
+  border: 1px solid #b8d9d3;
+  border-radius: 14px;
+  background: #fff;
+  color: #0f766e;
+  padding: 10px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sheet-b2b-note-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sheet-b2b-note-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.sheet-b2b-note-grid span,
+.sheet-b2b-note-grid small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sheet-b2b-note-grid strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
 .sheet-decision-head {
   min-width: 0;
   display: flex;
@@ -9742,7 +9937,9 @@ a.platform-row:hover {
 
   .sheet-history-grid,
   .revenue-day-grid,
-  .manual-correction-evidence {
+  .manual-correction-evidence,
+  .sheet-b2b-insight .company-insight-grid,
+  .sheet-b2b-note-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -10184,6 +10381,19 @@ a.platform-row:hover {
   .sheet-structure-title {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .sheet-b2b-head {
+    grid-template-columns: 1fr;
+  }
+
+  .sheet-b2b-head > strong {
+    justify-self: start;
+  }
+
+  .sheet-b2b-insight .company-insight-grid,
+  .sheet-b2b-note-grid {
+    grid-template-columns: 1fr;
   }
 
   .sheet-structure-list div {
