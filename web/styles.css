@@ -7357,6 +7357,194 @@ a.platform-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.b2b-brief-card {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #d5e3f7;
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: var(--soft-shadow);
+}
+
+.b2b-brief-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 220px);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.b2b-brief-head > div:first-child {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.b2b-brief-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 26px;
+  line-height: 1.14;
+  font-weight: 950;
+}
+
+.b2b-brief-head p {
+  max-width: 760px;
+  margin: 0;
+  color: #475467;
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.b2b-brief-score {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  border: 1px solid #c7dcff;
+  border-radius: 16px;
+  background: #f5f9ff;
+  padding: 14px;
+}
+
+.b2b-brief-score span,
+.b2b-brief-score small {
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.b2b-brief-score strong {
+  color: #0b4fb3;
+  font-size: 42px;
+  line-height: 1;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.b2b-brief-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.b2b-brief-metrics article,
+.b2b-insight-panel,
+.b2b-opportunity-panel {
+  min-width: 0;
+  border: 1px solid #edf1f5;
+  border-radius: 15px;
+  background: #fbfcfd;
+}
+
+.b2b-brief-metrics article {
+  display: grid;
+  gap: 4px;
+  padding: 13px;
+}
+
+.b2b-brief-metrics span,
+.b2b-brief-metrics small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-brief-metrics strong {
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1.05;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-brief-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+  gap: 10px;
+}
+
+.b2b-insight-panel,
+.b2b-opportunity-panel {
+  display: grid;
+  gap: 11px;
+  padding: 14px;
+}
+
+.b2b-opportunity-list {
+  display: grid;
+  gap: 7px;
+}
+
+.b2b-opportunity-list button {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rank name rate"
+    "rank meta meta";
+  align-items: center;
+  gap: 3px 9px;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 9px;
+  text-align: left;
+}
+
+.b2b-opportunity-list span {
+  grid-area: rank;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #eef5ff;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.b2b-opportunity-list strong {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-opportunity-list em {
+  grid-area: rate;
+  color: #0f766e;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-opportunity-list small {
+  grid-area: meta;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .report-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -9464,6 +9652,8 @@ a.platform-row:hover {
   }
 
   .report-hero,
+  .b2b-brief-head,
+  .b2b-brief-grid,
   .report-layout {
     grid-template-columns: 1fr;
   }
@@ -9477,7 +9667,8 @@ a.platform-row:hover {
     min-height: 126px;
   }
 
-  .report-metric-grid {
+  .report-metric-grid,
+  .b2b-brief-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -9842,6 +10033,9 @@ a.platform-row:hover {
   }
 
   .report-metric-grid article,
+  .b2b-brief-card,
+  .b2b-insight-panel,
+  .b2b-opportunity-panel,
   .report-card,
   .demand-hero-card,
     .demand-chart,
@@ -9858,6 +10052,7 @@ a.platform-row:hover {
   }
 
   .report-metric-grid article,
+  .b2b-brief-metrics article,
   .structure-metric-grid article,
   .structure-submetric-row article,
   .demand-metric-grid article {
@@ -10019,7 +10214,8 @@ a.platform-row:hover {
     font-size: 22px;
   }
 
-  .report-card {
+  .report-card,
+  .b2b-brief-card {
     padding: 14px;
   }
 
@@ -10029,6 +10225,7 @@ a.platform-row:hover {
   }
 
   .report-channel-grid,
+  .b2b-brief-metrics,
   .report-region-grid,
   .structure-metric-grid,
   .structure-submetric-row,
@@ -10107,6 +10304,18 @@ a.platform-row:hover {
   }
 
   .report-target-row em {
+    justify-self: start;
+  }
+
+  .b2b-opportunity-list button {
+    grid-template-columns: 30px minmax(0, 1fr);
+    grid-template-areas:
+      "rank name"
+      "rank rate"
+      "meta meta";
+  }
+
+  .b2b-opportunity-list em {
     justify-self: start;
   }
 
