@@ -6056,6 +6056,125 @@ function b2bMarketBriefModel(data = state.data || {}) {
   };
 }
 
+function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
+  const rankModel = b2bRankBoardModel();
+  const topRows = rankModel.rows.slice(0, 6).map((row) => {
+    const insight = row.insight || companyRankInsight(row.item, row.index + 1);
+    const revenue = finiteNumber(insight.revenue, 0);
+    const itemIndex = row.linked ? finiteNumber(row.item.availabilityIndex, -1) : -1;
+    const rank = finiteNumber(row.rank, row.index + 1);
+    const productText = insight.dayUseKnown ? "숙박+데이" : "숙박 중심";
+    const rateText = Number.isFinite(row.rate) ? fmtRate(row.rate) : "판매율 대기";
+    const remainingText = row.linked ? `${fmtNumber(row.remaining)}실` : "상세 대기";
+    const revenueText = revenue ? fmtWon(revenue) : "매출 표본 대기";
+    const meta = row.linked
+      ? `${rateText} · 잔여 ${remainingText} · ${productText}`
+      : `${row.item.rankingSourceLabel || "네이버 노출"} · 예약 표본 대기`;
+    return {
+      itemIndex,
+      rank,
+      rankText: `${fmtNumber(rank)}위`,
+      name: row.item.name || "업체명 확인",
+      tone: insight.tone || "neutral",
+      revenue,
+      revenueText,
+      rateText,
+      remainingText,
+      productText,
+      meta
+    };
+  });
+  const exposureRows = rankModel.rows.filter((row) => row.rank > 0 && row.rank <= 5);
+  const topExposureRows = exposureRows.length ? exposureRows : rankModel.rows.slice(0, 5);
+  const revenueRows = topRows.filter((row) => row.revenue > 0);
+  const topRevenueTotal = revenueRows.reduce((sum, row) => sum + row.revenue, 0);
+  const revenueLeader = topRows.slice().sort((a, b) => b.revenue - a.revenue)[0] || null;
+  const remainingRooms = rankModel.gapRows.reduce((sum, row) => sum + finiteNumber(row.remaining, 0), 0);
+  const trend = demandTrendSource();
+  const trendStats = demandTrendStats(trend);
+  const trendLabel = demandTrendLabel();
+  let trendTone = "neutral";
+  if (trend.reason) {
+    trendTone = "watch";
+  } else if (trend.hasSeries) {
+    if (Number.isFinite(trendStats.recentChange) && trendStats.recentChange >= 0.12) trendTone = "strong";
+    else if (Number.isFinite(trendStats.recentChange) && trendStats.recentChange <= -0.12) trendTone = "watch";
+    else trendTone = "good";
+  }
+  const peakLabel = trendStats.peak ? `${trendStats.peak.label} 피크` : "피크 대기";
+  const recentLabel = Number.isFinite(trendStats.recentChange)
+    ? `최근 3개월 ${formatSignedRate(trendStats.recentChange)}`
+    : "최근 추이 대기";
+  const trendNote = trend.reason
+    ? trend.reason
+    : trend.hasSeries
+      ? `${peakLabel} · ${recentLabel}`
+      : "데이터랩 연동 대기";
+  const cards = [
+    {
+      tone: topRevenueTotal ? "strong" : "watch",
+      label: "상위 경쟁 매출",
+      value: topRevenueTotal ? fmtWon(topRevenueTotal) : "표본 대기",
+      note: revenueRows.length ? `${fmtNumber(revenueRows.length)}개 업체 합산` : "가격·수량 표본 필요"
+    },
+    {
+      tone: "neutral",
+      label: "노출 1~5위",
+      value: fmtNumber(topExposureRows.length),
+      note: topRows[0] ? `${topRows[0].name} ${topRows[0].rankText}` : "순위 표본 대기"
+    },
+    {
+      tone: rankModel.hotRows.length ? "hot" : "neutral",
+      label: "강수요 업체",
+      value: fmtNumber(rankModel.hotRows.length),
+      note: "판매율 65% 이상"
+    },
+    {
+      tone: trendTone,
+      label: "향후 수요",
+      value: trendLabel,
+      note: trendNote
+    }
+  ];
+  const insights = [
+    {
+      label: "매출 표본",
+      value: revenueRows.length
+        ? `${fmtNumber(revenueRows.length)}개 업체에서 예상 매출을 확인했습니다.`
+        : "상위 업체의 가격·수량 표본이 확보되면 경쟁 매출을 계산합니다."
+    },
+    {
+      label: "노출 해석",
+      value: topRows[0]
+        ? `${topRows[0].rankText} ${topRows[0].name} 기준으로 상위 노출 경쟁권을 비교합니다.`
+        : "네이버 노출 표본을 먼저 확인해야 합니다."
+    },
+    {
+      label: "재고 여지",
+      value: remainingRooms
+        ? `노출 대비 잔여 객실 ${fmtNumber(remainingRooms)}실이 관찰됩니다.`
+        : "상위 노출 업체의 잔여 객실 신호가 약합니다."
+    },
+    {
+      label: "수요 방향",
+      value: trendNote
+    }
+  ];
+  return {
+    rankModel,
+    rows: topRows,
+    cards,
+    insights,
+    revenueRows,
+    revenueLeader,
+    topRevenueTotal,
+    remainingRooms,
+    trendLabel,
+    trendNote,
+    range: brief.range
+  };
+}
+
 function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
   const rankModel = b2bRankBoardModel();
   const items = state.data?.availability?.items || [];
@@ -6161,10 +6280,68 @@ function renderB2BPublicOverview(brief = b2bMarketBriefModel(), model = b2bPubli
   `;
 }
 
+function renderB2BCompetitiveSnapshot(brief = b2bMarketBriefModel(), model = b2bCompetitiveSnapshotModel(brief)) {
+  if (!model.rows.length) return "";
+  return `
+    <div class="b2b-competition-snapshot">
+      <div class="report-card-head">
+        <div>
+          <h3>경쟁 매출·노출·수요 스냅샷</h3>
+          <p>고객이 바로 확인해야 하는 상위 경쟁업체의 예상 매출, 노출 순위, 판매율, 향후 수요 방향입니다.</p>
+        </div>
+        <span>${escapeHtml(model.range || "기간 확인")}</span>
+      </div>
+      <div class="b2b-snapshot-grid">
+        ${model.cards.map((card) => `
+          <article class="${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="b2b-snapshot-layout">
+        <article class="b2b-snapshot-list">
+          <div class="b2b-snapshot-subhead">
+            <strong>상위 노출 경쟁업체</strong>
+            <small>업체를 누르면 예약·가격·요일별 판매 상세로 이동합니다.</small>
+          </div>
+          ${model.rows.map((row) => {
+            const buttonAttrs = row.itemIndex >= 0
+              ? `type="button" data-open-company="${row.itemIndex}"`
+              : `type="button" disabled`;
+            return `
+              <button class="b2b-snapshot-row ${escapeHtml(row.tone)}" ${buttonAttrs}>
+                <span>${escapeHtml(row.rankText)}</span>
+                <strong>${escapeHtml(row.name)}</strong>
+                <em>${escapeHtml(row.revenueText)}</em>
+                <small>${escapeHtml(row.meta)}</small>
+              </button>
+            `;
+          }).join("")}
+        </article>
+        <article class="b2b-snapshot-read">
+          <div class="b2b-snapshot-subhead">
+            <strong>고객용 해석</strong>
+            <small>영업 후보가 아니라 지역 경쟁 리포트 관점으로 표시합니다.</small>
+          </div>
+          ${model.insights.map((row) => `
+            <div>
+              <b>${escapeHtml(row.label)}</b>
+              <span>${escapeHtml(row.value)}</span>
+            </div>
+          `).join("")}
+        </article>
+      </div>
+    </div>
+  `;
+}
+
 function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const regionLabel = brief.topRegion.region || brief.topRegion.name || "지역 데이터 대기";
   const primary = brief.topRegion ? regionPrimary(brief.topRegion) : "";
   const overviewModel = b2bPublicOverviewModel(brief);
+  const snapshotModel = b2bCompetitiveSnapshotModel(brief);
   return `
     <section class="b2b-brief-card">
       <div class="b2b-brief-head">
@@ -6185,6 +6362,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
         <article><span>객실 판매율</span><strong>${fmtRate(brief.rate)}</strong><small>${fmtNumber(brief.sold)}/${fmtNumber(brief.supply)} 객실</small></article>
         <article><span>수요 전망</span><strong>${fmtNumber(brief.searchVolume)}</strong><small>${escapeHtml(regionLabel)} · ${escapeHtml(primary || "권역 확인")}</small></article>
       </div>
+      ${renderB2BCompetitiveSnapshot(brief, snapshotModel)}
       <div class="b2b-brief-grid">
         <article class="b2b-insight-panel">
           <div class="report-card-head">
