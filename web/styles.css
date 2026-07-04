@@ -693,6 +693,185 @@ a {
   gap: 12px;
 }
 
+.b2b-rank-brief {
+  min-width: 0;
+  display: grid;
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid #d5e3f7;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: var(--soft-shadow);
+}
+
+.b2b-rank-brief.strong {
+  border-color: #b8d9d3;
+}
+
+.b2b-rank-brief.watch {
+  border-color: #fedf89;
+}
+
+.b2b-rank-brief.hot {
+  border-color: #fecaca;
+}
+
+.b2b-rank-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.b2b-rank-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  line-height: 1.14;
+  font-weight: 950;
+}
+
+.b2b-rank-head p:not(.eyebrow) {
+  max-width: 780px;
+  margin: 7px 0 0;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.5;
+  word-break: keep-all;
+}
+
+.b2b-rank-head > strong {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-rank-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.b2b-rank-metrics article {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 13px;
+  border-top: 1px solid #e5ebf3;
+}
+
+.b2b-rank-metrics span,
+.b2b-rank-metrics small,
+.b2b-rank-focus small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-rank-metrics strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 21px;
+  line-height: 1.05;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-rank-focus {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.b2b-rank-focus button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rank name label"
+    "rank meta meta";
+  gap: 4px 8px;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 14px;
+  background: #fbfcfd;
+  padding: 10px;
+  text-align: left;
+}
+
+.b2b-rank-focus button:disabled {
+  opacity: .62;
+}
+
+.b2b-rank-focus button.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-rank-focus button.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-rank-focus button.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-rank-focus span {
+  grid-area: rank;
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #eef5ff;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.b2b-rank-focus strong {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-rank-focus em {
+  grid-area: label;
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-rank-focus small {
+  grid-area: meta;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .admin-stack {
   grid-template-columns: minmax(280px, .82fr) minmax(0, 1.18fr);
   align-items: start;
@@ -2342,6 +2521,77 @@ a {
 
 .company-insight-grid div.hot strong {
   color: #b42318;
+}
+
+.b2b-company-action {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.b2b-company-action.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-company-action.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-company-action.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-company-action.rank {
+  border-color: #d0d5dd;
+  background: #f9fafb;
+}
+
+.b2b-company-action > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.b2b-company-action span {
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-company-action strong {
+  min-width: 0;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.b2b-company-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.b2b-company-chips em {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 850;
+  white-space: nowrap;
 }
 
 .search-row.confidence-row {
@@ -6958,6 +7208,49 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.sheet-b2b-action-list {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .72);
+  padding: 11px;
+}
+
+.sheet-b2b-action-list > strong {
+  color: #0f766e;
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.sheet-b2b-action-list p {
+  margin: 0;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.sheet-b2b-action-list div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sheet-b2b-action-list span {
+  min-height: 25px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: var(--blue-dark);
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .sheet-decision-head {
   min-width: 0;
   display: flex;
@@ -10962,17 +11255,21 @@ a.platform-row:hover {
 }
 
 @media (max-width: 860px) {
+  .b2b-rank-head,
   .b2b-map-head,
   .b2b-demand-head,
   .b2b-demand-actions {
     grid-template-columns: 1fr;
   }
 
+  .b2b-rank-head > strong,
   .b2b-map-head > strong,
   .b2b-demand-head > strong {
     justify-self: start;
   }
 
+  .b2b-rank-metrics,
+  .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-demand-grid,
   .region-card-metrics {
@@ -10981,12 +11278,15 @@ a.platform-row:hover {
 }
 
 @media (max-width: 560px) {
+  .b2b-rank-brief,
   .b2b-map-brief,
   .b2b-demand-playbook {
     padding: 16px;
     border-radius: 16px;
   }
 
+  .b2b-rank-metrics,
+  .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-demand-grid,
   .region-card-metrics {

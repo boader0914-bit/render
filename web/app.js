@@ -2038,11 +2038,158 @@ function companyRankInsightGrid(insight = {}) {
   `;
 }
 
+function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) {
+  const rank = finiteNumber(item.rank || item.overallRank || insight.rank, insight.rank);
+  const flow = salesFlowProfile(item);
+  const platforms = platformsForItem(item);
+  const linked = inventoryLinked(item);
+  const rate = Number(insight.rate);
+  const remaining = finiteNumber(insight.remaining, 0);
+  const platformCount = platforms.length;
+  let tone = "neutral";
+  let label = "관찰";
+  let summary = "노출, 판매율, 가격 표본을 함께 보고 운영 우선순위를 판단합니다.";
+  if (!linked) {
+    tone = "rank";
+    label = "상세 표본 대기";
+    summary = "네이버 노출은 확인됐지만 예약 수량 표본이 없어 판매 판단은 보류합니다.";
+  } else if (Number.isFinite(rate) && rate <= 0.35 && remaining > 0) {
+    tone = "watch";
+    label = "판매 공백";
+    summary = "상위 노출 대비 잔여 객실이 남아 있어 상품명, 가격, 채널 노출을 먼저 확인합니다.";
+  } else if (Number.isFinite(rate) && rate >= 0.65) {
+    tone = "hot";
+    label = "강수요";
+    summary = "판매율이 높아 가격 방어, 주말 재고, 객실 믹스 관리가 우선입니다.";
+  } else if (insight.productGap) {
+    tone = "watch";
+    label = "상품 공백";
+    summary = "숙박 중심 표본입니다. 데이유즈/캠프닉 상품 노출 여부를 보완 확인합니다.";
+  } else if (remaining >= Math.max(3, Math.ceil(finiteNumber(insight.supply, 0) * 0.35))) {
+    tone = "strong";
+    label = "개선 여지";
+    summary = "판매 여지가 남아 있어 노출 대비 전환을 높일 수 있는 후보입니다.";
+  }
+  return {
+    tone,
+    label,
+    summary,
+    chips: [
+      rank ? `네이버 ${fmtNumber(rank)}위` : "순위 확인",
+      linked && Number.isFinite(rate) ? `판매율 ${fmtRate(rate)}` : "수량 표본 대기",
+      linked ? `잔여 ${fmtNumber(remaining)}실` : "예약ID 확인 필요",
+      platformCount ? `채널 ${fmtNumber(platformCount)}개` : "채널 보강"
+    ],
+    flowText: linked
+      ? `평일 ${Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요"} · 금 ${fmtRate(flow.friday.rate)} · 토 ${fmtRate(flow.saturday.rate)} · 일 ${fmtRate(flow.sunday.rate)}`
+      : "상세 수집 후 요일별 판매 흐름 표시"
+  };
+}
+
+function b2bCompanyActionLine(item = {}, insight = companyRankInsight(item)) {
+  if (isAdminRole()) return "";
+  const profile = b2bCompanyActionProfile(item, insight);
+  return `
+    <div class="b2b-company-action ${escapeHtml(profile.tone)}">
+      <div>
+        <span>${escapeHtml(profile.label)}</span>
+        <strong>${escapeHtml(profile.summary)}</strong>
+      </div>
+      <div class="b2b-company-chips">
+        ${profile.chips.map((chip) => `<em>${escapeHtml(chip)}</em>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function b2bRankBoardModel(items = rankedCompanyItems()) {
+  const rows = items.slice(0, 30).map((item, index) => {
+    const insight = companyRankInsight(item, index + 1);
+    const linked = inventoryLinked(item);
+    const rate = Number(insight.rate);
+    const rank = finiteNumber(item.rank || item.overallRank || index + 1, index + 1);
+    const remaining = finiteNumber(insight.remaining, 0);
+    const opportunityScore = (linked ? 30 : 8)
+      + (rank > 0 && rank <= 5 ? 18 : rank <= 10 ? 12 : rank <= 20 ? 6 : 0)
+      + (Number.isFinite(rate) && rate <= 0.35 && remaining > 0 ? 22 : 0)
+      + (remaining >= 3 ? 8 : 0)
+      + Math.min(18, Math.round(finiteNumber(insight.revenue, 0) / 500000));
+    return { item, index, insight, linked, rate, rank, remaining, opportunityScore };
+  });
+  const linkedRows = rows.filter((row) => row.linked);
+  const rankOnlyRows = rows.filter((row) => !row.linked);
+  const gapRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= 0.35 && row.remaining > 0);
+  const hotRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= 0.65);
+  const sales = summarizeSales(linkedRows.map((row) => row.item));
+  const rate = sales.supply ? sales.sold / sales.supply : NaN;
+  const focusRows = rows
+    .slice()
+    .sort((a, b) => b.opportunityScore - a.opportunityScore || a.rank - b.rank)
+    .slice(0, 4);
+  const decision = rankOnlyRows.length > linkedRows.length
+    ? { label: "상세 표본 보강", tone: "watch", summary: "순위 노출은 충분하지만 예약 수량 표본이 부족해 상세 수집 범위를 먼저 넓히는 것이 좋습니다." }
+    : gapRows.length >= 2
+      ? { label: "판매 공백 확인", tone: "strong", summary: "상위 노출 중 판매율이 낮은 업체가 있어 가격, 상품명, 채널 노출 개선 후보를 먼저 봅니다." }
+      : hotRows.length >= 2
+        ? { label: "강수요 방어", tone: "hot", summary: "판매율이 높은 업체가 많아 가격 방어와 주말 재고 운영을 우선 확인합니다." }
+        : { label: "순위 안정권", tone: "neutral", summary: "현재 표본에서는 급한 공백보다 업체별 세부 조건 비교가 우선입니다." };
+  return {
+    rows,
+    linkedRows,
+    rankOnlyRows,
+    gapRows,
+    hotRows,
+    sales,
+    rate,
+    focusRows,
+    decision
+  };
+}
+
+function renderB2BRankBrief(model = b2bRankBoardModel()) {
+  if (isAdminRole()) return "";
+  return `
+    <section class="b2b-rank-brief ${escapeHtml(model.decision.tone)}">
+      <div class="b2b-rank-head">
+        <div>
+          <p class="eyebrow">B2B Rank Brief</p>
+          <h3>상위 노출 업체 운영 판단</h3>
+          <p>${escapeHtml(model.decision.summary)}</p>
+        </div>
+        <strong>${escapeHtml(model.decision.label)}</strong>
+      </div>
+      <div class="b2b-rank-metrics">
+        <article><span>상위 노출</span><strong>${fmtNumber(model.rows.length)}</strong><small>현재 화면 기준</small></article>
+        <article><span>상세 표본</span><strong>${fmtNumber(model.linkedRows.length)}</strong><small>예약 수량 확인</small></article>
+        <article><span>평균 판매율</span><strong>${Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요"}</strong><small>${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실</small></article>
+        <article><span>판매 공백</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>노출 대비 잔여 객실</small></article>
+        <article><span>강수요</span><strong>${fmtNumber(model.hotRows.length)}</strong><small>판매율 65% 이상</small></article>
+      </div>
+      <div class="b2b-rank-focus">
+        ${model.focusRows.length ? model.focusRows.map((row, order) => {
+          const profile = b2bCompanyActionProfile(row.item, row.insight);
+          const openIndex = Number(row.item.availabilityIndex);
+          const canOpen = row.linked && Number.isFinite(openIndex) && openIndex >= 0;
+          return `
+            <button type="button" ${canOpen ? `data-open-company="${openIndex}"` : "disabled"} class="${escapeHtml(profile.tone)}">
+              <span>${fmtNumber(order + 1)}</span>
+              <strong>${escapeHtml(row.item.name || "업체명 확인")}</strong>
+              <em>${escapeHtml(profile.label)}</em>
+              <small>${escapeHtml(profile.chips.slice(0, 3).join(" · "))}</small>
+            </button>
+          `;
+        }).join("") : `<div class="empty">순위 비교 표본이 없습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function sheetB2BInsightPanel(item = {}) {
   const insight = companyRankInsight(item, item.rank || 0);
   const flow = salesFlowProfile(item);
   const structure = inventoryStructureInfo(item);
   const confidence = inventoryConfidenceInfo(item);
+  const profile = b2bCompanyActionProfile(item, insight);
   const action = insight.productGap
     ? "데이유즈/캠프닉 상품 노출 여부 확인"
     : insight.remaining > 0
@@ -2062,6 +2209,13 @@ function sheetB2BInsightPanel(item = {}) {
       <div class="sheet-b2b-note-grid">
         <div><span>판매 흐름</span><strong>${escapeHtml(flow.all.label || fmtRate(flow.all.rate))}</strong><small>${escapeHtml(`평일 ${Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요"} · 금 ${fmtRate(flow.friday.rate)} · 토 ${fmtRate(flow.saturday.rate)} · 일 ${fmtRate(flow.sunday.rate)}`)}</small></div>
         <div><span>수량 신뢰</span><strong>${escapeHtml(confidence.label)}</strong><small>${escapeHtml(structure.summary || structure.label)}</small></div>
+      </div>
+      <div class="sheet-b2b-action-list">
+        <strong>${escapeHtml(profile.label)}</strong>
+        <p>${escapeHtml(profile.summary)}</p>
+        <div>
+          ${profile.chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+        </div>
       </div>
     </section>
   `;
@@ -2397,6 +2551,7 @@ function renderCompanies() {
   const analysisItems = state.data?.availability?.items || [];
   const items = rankedCompanyItems();
   const ranking = state.data?.ranking || {};
+  const b2bRankBrief = !isAdminRole() ? renderB2BRankBrief(b2bRankBoardModel(items)) : "";
   els.rankCount.textContent = ranking.total
     ? `${fmtNumber(items.length)} 순위 · 재고 ${fmtNumber(ranking.inventoryLinkedCount || analysisItems.length)}`
     : `${fmtNumber(items.length)} 업체`;
@@ -2433,6 +2588,7 @@ function renderCompanies() {
         <div class="company-chart">
           ${linked ? `
             ${companyRankInsightGrid(insight)}
+            ${b2bCompanyActionLine(item, insight)}
             <div class="sales-lines">
               <span class="sales-line">${escapeHtml(salesLine(item, "lodging"))}</span>
               <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
@@ -2446,6 +2602,7 @@ function renderCompanies() {
               <span class="sales-line day">${escapeHtml(itemLocationLine(item))}</span>
             </div>
             ${rankMetaChipRow(item)}
+            ${b2bCompanyActionLine(item, insight)}
           `}
         </div>
         <div class="company-action">
@@ -2460,7 +2617,7 @@ function renderCompanies() {
       </article>
     `;
   }).join("");
-  els.companyList.innerHTML = `${isAdminRole() ? renderValidationBoard(analysisItems) : ""}${cards}`;
+  els.companyList.innerHTML = `${b2bRankBrief}${isAdminRole() ? renderValidationBoard(analysisItems) : ""}${cards}`;
 }
 
 function dateForRangeLabel(label, run = {}) {
