@@ -6071,6 +6071,163 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.b2b-map-brief {
+  min-width: 0;
+  display: grid;
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid #d5e3f7;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: var(--soft-shadow);
+}
+
+.b2b-map-brief.good {
+  border-color: #b8d8ff;
+}
+
+.b2b-map-brief.group {
+  border-color: #c7d7fe;
+}
+
+.b2b-map-brief.watch,
+.b2b-map-brief.wait {
+  border-color: #fedf89;
+}
+
+.b2b-map-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.b2b-map-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  line-height: 1.14;
+  font-weight: 950;
+}
+
+.b2b-map-head p:not(.eyebrow) {
+  max-width: 780px;
+  margin: 7px 0 0;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.5;
+  word-break: keep-all;
+}
+
+.b2b-map-head > strong {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-map-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.b2b-map-metrics article {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 13px;
+  border-top: 1px solid #e5ebf3;
+}
+
+.b2b-map-metrics span,
+.b2b-map-metrics small,
+.region-card-metrics span,
+.region-card-metrics small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-metrics strong,
+.region-card-metrics strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 21px;
+  line-height: 1.05;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-cluster-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.b2b-map-cluster-row span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.region-card.strong {
+  border-color: #b8d8ff;
+}
+
+.region-card.watch {
+  border-color: #fedf89;
+}
+
+.region-card-main {
+  min-width: 0;
+}
+
+.region-card-metrics {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.region-card-metrics div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.region-card-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 9px;
+  border-top: 1px dashed #d0d5dd;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.45;
+}
+
 .admin-card {
   display: grid;
   gap: 12px;
@@ -8148,6 +8305,141 @@ a.platform-row:hover {
   font-weight: 950;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
+}
+
+.b2b-demand-playbook {
+  min-width: 0;
+  display: grid;
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid #d5e3f7;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: var(--soft-shadow);
+}
+
+.b2b-demand-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.b2b-demand-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  line-height: 1.14;
+  font-weight: 950;
+}
+
+.b2b-demand-head p:not(.eyebrow) {
+  max-width: 780px;
+  margin: 7px 0 0;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.5;
+  word-break: keep-all;
+}
+
+.b2b-demand-head > strong {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #ecfdf3;
+  color: #027a48;
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-demand-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.b2b-demand-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 13px 0 0;
+  border-top: 1px solid #e5ebf3;
+}
+
+.b2b-demand-grid span,
+.b2b-demand-grid small,
+.b2b-demand-actions span,
+.b2b-demand-actions li {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.b2b-demand-grid strong,
+.b2b-demand-actions strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1.08;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.b2b-demand-actions {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.b2b-demand-actions > div {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.b2b-demand-actions p {
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.55;
+  word-break: keep-all;
+}
+
+.b2b-demand-actions ul {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.b2b-demand-actions li {
+  position: relative;
+  padding-left: 15px;
+}
+
+.b2b-demand-actions li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: .66em;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #3182f6;
 }
 
 .structure-empty-card,
@@ -10666,5 +10958,46 @@ a.platform-row:hover {
   .crawl-speed-options,
   .field-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .b2b-map-head,
+  .b2b-demand-head,
+  .b2b-demand-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .b2b-map-head > strong,
+  .b2b-demand-head > strong {
+    justify-self: start;
+  }
+
+  .b2b-map-metrics,
+  .b2b-demand-grid,
+  .region-card-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .b2b-map-brief,
+  .b2b-demand-playbook {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .b2b-map-metrics,
+  .b2b-demand-grid,
+  .region-card-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .region-card {
+    grid-template-columns: 1fr;
+  }
+
+  .region-card em {
+    justify-self: start;
   }
 }

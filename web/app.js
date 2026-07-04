@@ -6722,6 +6722,110 @@ function demandRegionRows() {
     .slice(0, 8);
 }
 
+function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
+  const trend = demandTrendSource();
+  const stats = demandTrendStats(trend);
+  const total = finiteNumber(traffic.totalSearchVolume, 0);
+  const mobileShare = demandMobileShare(traffic);
+  const ctr = Number(traffic.combinedCtr);
+  const items = state.data?.availability?.items || [];
+  const sales = summarizeSales(items);
+  const salesRate = sales.supply ? sales.sold / sales.supply : NaN;
+  const peakText = trend.hasSeries && stats.peak ? `${stats.peak.label} ${trendIndexLabel(stats.peak.value)}` : "확인필요";
+  const recentText = trend.hasSeries && stats.last ? `${stats.last.label} ${trendIndexLabel(stats.last.value)}` : "대기";
+  const demandStrength = total >= 30000
+    ? "광역 수요 강함"
+    : total >= 10000
+      ? "지역 수요 유효"
+      : total > 0
+        ? "소형 키워드"
+        : "검색량 확인필요";
+  const decision = total >= 30000 || (Number.isFinite(salesRate) && salesRate >= 0.55)
+    ? "운영 우선권"
+    : total >= 10000
+      ? "권역 검토"
+      : "표본 보강";
+  const action = demandTrendActionText(traffic);
+  return {
+    trend,
+    stats,
+    total,
+    mobileShare,
+    ctr,
+    sales,
+    salesRate,
+    peakText,
+    recentText,
+    demandStrength,
+    decision,
+    action,
+    metrics: [
+      {
+        label: "월 검색량",
+        value: total ? fmtNumber(total) : "확인필요",
+        detail: traffic.collectableCount ? `${fmtNumber(traffic.collectableCount)}개 키워드 합산` : "네이버 검색광고 API"
+      },
+      {
+        label: "수요 방향",
+        value: demandTrendLabel(),
+        detail: trend.hasSeries ? "12개월 트렌드 기준" : "트렌드 데이터 대기"
+      },
+      {
+        label: "피크 월",
+        value: peakText,
+        detail: trend.hasSeries ? `최근 ${recentText}` : "누적 캐시 확보 후 표시"
+      },
+      {
+        label: "판매 표본",
+        value: Number.isFinite(salesRate) ? fmtRate(salesRate) : "확인필요",
+        detail: sales.supply ? `${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}실 표본` : "수량 표본 대기"
+      }
+    ],
+    checks: [
+      total ? `검색량은 ${demandStrength} 구간입니다.` : "검색광고 API 표본이 없어 수요 강도는 보류합니다.",
+      Number.isFinite(mobileShare) ? `모바일 비중 ${fmtRate(mobileShare)}로 예약 화면/상품명 영향이 큽니다.` : "모바일 비중은 추가 수집 후 판단합니다.",
+      Number.isFinite(ctr) ? `평균 CTR ${fmtSearchRate(ctr)}로 노출 대비 클릭 반응을 봅니다.` : "CTR은 키워드별 클릭 데이터 확보 후 비교합니다.",
+      sales.supply ? `네이버 예약 판매율 ${fmtRate(salesRate)}와 잔여 객실을 함께 봅니다.` : "업체별 수량 표본이 없는 경우 지도/순위 표본을 먼저 봅니다."
+    ]
+  };
+}
+
+function renderB2BDemandPlaybook(traffic = demandTrafficAggregate()) {
+  if (isAdminRole()) return "";
+  const model = b2bDemandPlaybookModel(traffic);
+  return `
+    <section class="b2b-demand-playbook">
+      <div class="b2b-demand-head">
+        <div>
+          <p class="eyebrow">B2B Demand Playbook</p>
+          <h3>수요가 강한 시점과 운영 포인트</h3>
+          <p>검색량, 12개월 트렌드, 네이버 예약 판매 표본을 한 화면에서 묶어 현재 권역의 운영 판단 기준을 보여줍니다.</p>
+        </div>
+        <strong>${escapeHtml(model.decision)}</strong>
+      </div>
+      <div class="b2b-demand-grid">
+        ${model.metrics.map((metric) => `
+          <article>
+            <span>${escapeHtml(metric.label)}</span>
+            <strong>${escapeHtml(metric.value)}</strong>
+            <small>${escapeHtml(metric.detail)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="b2b-demand-actions">
+        <div>
+          <span>우선 해석</span>
+          <strong>${escapeHtml(model.demandStrength)}</strong>
+          <p>${escapeHtml(model.action)}</p>
+        </div>
+        <ul>
+          ${model.checks.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}
+        </ul>
+      </div>
+    </section>
+  `;
+}
+
 function demandCompanySample() {
   const target = targetEntries(1)[0]?.item || (state.data?.availability?.items || [])[0];
   if (!target) return "";
@@ -9738,6 +9842,8 @@ function renderDemand() {
       <span>${escapeHtml(productModeLabel(run.productMode || "all"))}</span>
     </section>
 
+    ${renderB2BDemandPlaybook(traffic)}
+
     ${renderDemandStructure()}
 
     ${renderHistoryLab()}
@@ -10004,6 +10110,111 @@ function regionPrimary(region = {}) {
   return region.primary || region.cluster || region.core || "확인필요";
 }
 
+function regionRuntimeForMapRegion(region = {}) {
+  const localNames = [
+    region.region,
+    region.name,
+    region.target
+  ].map(compactSearchText).filter((name) => name.length >= 2);
+  const clusterNames = [
+    region.primary,
+    region.cluster,
+    region.core
+  ].map(compactSearchText).filter((name) => name.length >= 2);
+  const regionNames = localNames.length ? localNames : clusterNames;
+  const items = (state.data?.availability?.items || []).filter((item) => {
+    const haystack = compactSearchText([
+      item.region,
+      item.addressRegion,
+      item.searchRegion,
+      item.searchCluster,
+      item.address,
+      item.name,
+      item.searchKeyword
+    ].filter(Boolean).join(" "));
+    return haystack.length >= 2 && regionNames.some((name) => name.length >= 2 && (haystack.includes(name) || name.includes(haystack)));
+  });
+  const sales = summarizeSales(items);
+  const outsideCount = items.filter((item) => item.regionBoundaryStatus === "outside" || item.outsideSearchRegion).length;
+  return {
+    items,
+    sales,
+    outsideCount,
+    salesRate: sales.supply ? sales.sold / sales.supply : NaN
+  };
+}
+
+function b2bRegionMapModel() {
+  const regions = state.data?.regions || [];
+  const items = state.data?.availability?.items || [];
+  const sales = summarizeSales(items);
+  const match = locationCardForQuery(activeKeyword());
+  const candidate = !match?.card && !match?.group ? locationCandidateFromQuery(activeKeyword()) : null;
+  const totalSearchVolume = regions.reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
+  const outsideCount = items.filter((item) => item.regionBoundaryStatus === "outside" || item.outsideSearchRegion).length;
+  const regionRuntime = new Map(regions.map((region) => [region, regionRuntimeForMapRegion(region)]));
+  const topRegion = regions.slice().sort((a, b) => finiteNumber(b.traffic?.totalSearchVolume, 0) - finiteNumber(a.traffic?.totalSearchVolume, 0))[0] || null;
+  const clusterCounts = regions.reduce((acc, region) => {
+    const primary = regionPrimary(region);
+    acc[primary] = (acc[primary] || 0) + 1;
+    return acc;
+  }, {});
+  const clusters = Object.entries(clusterCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({ name, count }));
+  const status = match?.card
+    ? { label: "지역카드 연결", tone: "good", detail: match.card.searchKeyword || match.alias?.searchKeyword || activeKeyword() }
+    : match?.group
+      ? { label: "광역 권역", tone: "group", detail: match.group.searchKeyword || match.group.sido || activeKeyword() }
+      : candidate
+        ? { label: "신규 지역 후보", tone: "watch", detail: candidate.regionBase || candidate.keyword }
+        : { label: "카드 대기", tone: "wait", detail: "현재 수집 표본 기준" };
+  return {
+    regions,
+    items,
+    sales,
+    salesRate: sales.supply ? sales.sold / sales.supply : NaN,
+    totalSearchVolume,
+    outsideCount,
+    regionRuntime,
+    topRegion,
+    clusters,
+    status,
+    summary: "네이버 플레이스는 검색 중심과 반경에 따라 인접 지역이 함께 노출될 수 있어, 권역 밖 표본은 제외가 아니라 실제 경쟁권으로 분리 해석합니다."
+  };
+}
+
+function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
+  if (isAdminRole()) return "";
+  const topRegionName = model.topRegion?.region || model.topRegion?.name || "확인필요";
+  const salesRate = Number.isFinite(model.salesRate) ? fmtRate(model.salesRate) : "확인필요";
+  return `
+    <section class="b2b-map-brief ${escapeHtml(model.status.tone)}">
+      <div class="b2b-map-head">
+        <div>
+          <p class="eyebrow">B2B Region Brief</p>
+          <h3>${escapeHtml(activeKeyword())} 권역 해석</h3>
+          <p>${escapeHtml(model.summary)}</p>
+        </div>
+        <strong>${escapeHtml(model.status.label)}</strong>
+      </div>
+      <div class="b2b-map-metrics">
+        <article><span>대표 권역</span><strong>${escapeHtml(topRegionName)}</strong><small>${escapeHtml(model.status.detail || "현재 검색 기준")}</small></article>
+        <article><span>수집 업체</span><strong>${fmtNumber(model.items.length)}</strong><small>네이버 노출 표본</small></article>
+        <article><span>판매율</span><strong>${salesRate}</strong><small>${model.sales.supply ? `${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실` : "수량 표본 대기"}</small></article>
+        <article><span>월 검색량</span><strong>${model.totalSearchVolume ? fmtNumber(model.totalSearchVolume) : "확인필요"}</strong><small>지역 키워드 합산</small></article>
+        <article><span>권역 밖 노출</span><strong>${fmtNumber(model.outsideCount)}</strong><small>반경 노출 별도 해석</small></article>
+      </div>
+      <div class="b2b-map-cluster-row">
+        ${model.clusters.length
+          ? model.clusters.map((cluster) => `<span>${escapeHtml(cluster.name)} ${fmtNumber(cluster.count)}</span>`).join("")
+          : `<span>클러스터 대기</span>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderMapControls() {
   els.mapLayerRow.innerHTML = ["시군구 경계", "업체 스팟", "검색량", "판매율"].map((name, index) => `
     <span><b style="background:${["#3182f6", "#12b76a", "#7a5af8", "#f79009"][index]}"></b>${name}</span>
@@ -10139,20 +10350,36 @@ function renderRegions() {
     els.regionList.innerHTML = `<div class="empty">지역 클러스터 데이터가 없습니다.</div>`;
     return;
   }
-  els.regionList.innerHTML = regions.map((region) => {
+  const model = b2bRegionMapModel();
+  const cards = regions.map((region) => {
     const traffic = region.traffic || {};
     const primary = regionPrimary(region);
+    const runtime = model.regionRuntime.get(region) || regionRuntimeForMapRegion(region);
+    const priority = demandPriorityLabel(traffic, runtime.items.length ? 6 : 0);
+    const tone = priority.includes("1") ? "strong" : priority.includes("2") ? "watch" : "neutral";
+    const salesRate = Number.isFinite(runtime.salesRate) ? fmtRate(runtime.salesRate) : "확인필요";
+    const boundaryNote = runtime.outsideCount
+      ? `${fmtNumber(runtime.outsideCount)}곳은 검색권역 밖 소재입니다. 네이버 반경 노출 경쟁권으로 봅니다.`
+      : "검색권역 내부 표본 중심입니다.";
     return `
-      <article class="region-card">
-        <div>
+      <article class="region-card ${escapeHtml(tone)}">
+        <div class="region-card-main">
           <strong>${escapeHtml(region.region || region.name || "지역")}</strong>
           <small>${escapeHtml(primary)} · ${escapeHtml(region.target || "수요권 확인")}</small>
           <p>월검색 ${fmtNumber(traffic.totalSearchVolume || 0)} · CTR ${traffic.collectable ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</p>
         </div>
-        <em>${escapeHtml(region.dominantType || region.type || "분석")}</em>
+        <em>${escapeHtml(priority)}</em>
+        <div class="region-card-metrics">
+          <div><span>업체 표본</span><strong>${fmtNumber(runtime.items.length)}</strong><small>${escapeHtml(region.dominantType || region.type || "분석")}</small></div>
+          <div><span>판매율</span><strong>${salesRate}</strong><small>${runtime.sales.supply ? `${fmtNumber(runtime.sales.sold)}/${fmtNumber(runtime.sales.supply)}실` : "표본 대기"}</small></div>
+          <div><span>월검색</span><strong>${traffic.totalSearchVolume ? fmtNumber(traffic.totalSearchVolume) : "확인필요"}</strong><small>키워드 수요</small></div>
+          <div><span>CTR</span><strong>${traffic.collectable ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</strong><small>클릭 반응</small></div>
+        </div>
+        ${!isAdminRole() ? `<p class="region-card-note">${escapeHtml(boundaryNote)}</p>` : ""}
       </article>
     `;
   }).join("");
+  els.regionList.innerHTML = `${renderB2BRegionMapBrief(model)}${cards}`;
 }
 
 function renderDownloads() {
