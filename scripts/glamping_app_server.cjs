@@ -39,7 +39,7 @@ const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json"
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
-const DATALAB_TREND_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
 const CRAWL_TIMING_MAX_ENTRIES = 240;
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
@@ -2713,8 +2713,6 @@ function freshDatalabTrendFromStore(entry = {}, range = {}) {
   const latest = entry.latest || null;
   if (!latest?.collectable) return null;
   if (latest.startDate !== range.startDate || latest.endDate !== range.endDate || latest.timeUnit !== range.timeUnit) return null;
-  const collectedAt = Date.parse(latest.collectedAt || "");
-  if (!Number.isFinite(collectedAt) || Date.now() - collectedAt > DATALAB_TREND_CACHE_TTL_MS) return null;
   return {
     ...latest,
     cache: datalabTrendCacheMeta(entry, true)
@@ -2725,7 +2723,11 @@ function datalabTrendCacheMeta(entry = {}, hit = false) {
   const observations = Array.isArray(entry.observations) ? entry.observations : [];
   return {
     hit: Boolean(hit),
+    policy: DATALAB_TREND_CACHE_POLICY,
     file: "history/datalab_trends.json",
+    startDate: entry.latest?.startDate || "",
+    endDate: entry.latest?.endDate || "",
+    timeUnit: entry.latest?.timeUnit || "month",
     observationCount: Number(entry.observationCount || observations.length || (entry.latest ? 1 : 0)),
     firstCollectedAt: entry.firstCollectedAt || entry.firstSeenAt || observations[0]?.collectedAt || "",
     lastCollectedAt: entry.lastCollectedAt || entry.lastSeenAt || entry.latest?.collectedAt || observations[observations.length - 1]?.collectedAt || "",
@@ -2848,7 +2850,6 @@ async function collectDatalabTrend(keyword, keys, attempt = 0, range = datalabTr
 async function collectDatalabTrendCached(keyword, keys) {
   const compact = compactKeyword(keyword);
   if (!compact) return null;
-  if (!keys.naverClientId || !keys.naverClientSecret) return collectDatalabTrend(keyword, keys);
 
   const range = datalabTrendRange(12);
   const store = await readDatalabTrendStore();
@@ -2857,6 +2858,7 @@ async function collectDatalabTrendCached(keyword, keys) {
   if (cached) {
     return rememberDatalabTrend(compact, cached, { cacheHit: true });
   }
+  if (!keys.naverClientId || !keys.naverClientSecret) return collectDatalabTrend(keyword, keys, 0, range);
 
   const trend = await collectDatalabTrend(compact, keys, 0, range);
   if (trend) return rememberDatalabTrend(compact, trend);
@@ -7055,8 +7057,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-coupon-signal"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-coupon-signal"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260704-datalab-daily-cache"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260704-datalab-daily-cache"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

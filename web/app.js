@@ -5871,6 +5871,9 @@ function demandTrendSource() {
     keyword: source?.keyword || source?.rawTitle || activeKeyword(),
     collectedAt: source?.collectedAt || "",
     cacheHit: Boolean(source?.cache?.hit),
+    cachePolicy: source?.cache?.policy || "",
+    cacheStartDate: source?.cache?.startDate || source?.startDate || "",
+    cacheEndDate: source?.cache?.endDate || source?.endDate || "",
     observationCount: source?.cache?.observationCount || null,
     firstCollectedAt: source?.cache?.firstCollectedAt || "",
     lastCollectedAt: source?.cache?.lastCollectedAt || "",
@@ -5959,10 +5962,13 @@ function demandTrendChart() {
   const statusLabel = trend.reason
     ? errorLabel
     : trend.hasSeries
-      ? `${trend.cacheHit ? "저장자료 사용" : "연동 정상"} · ${fmtNumber(validMonthCount)}개월`
+      ? `${trend.cacheHit ? "동일일자 저장자료" : "연동 정상"} · ${fmtNumber(validMonthCount)}개월`
       : (trend.configured ? "연동 대기" : "API 키 필요");
+  const cacheBasis = trend.cacheHit && trend.cacheEndDate
+    ? ` · 기준일 ${trend.cacheEndDate}`
+    : "";
   const detailLabel = trend.hasSeries
-    ? `최고점=100 기준 · ${trend.keyword || activeKeyword()}${trend.collectedAt ? ` · ${compactDateTime(trend.collectedAt)}` : ""}`
+    ? `최고점=100 기준 · ${trend.keyword || activeKeyword()}${cacheBasis}${trend.collectedAt ? ` · ${compactDateTime(trend.collectedAt)}` : ""}`
     : trend.reason
       ? trend.reason
       : "데이터랩 API 연동 후 12개월 추세 표시";
@@ -6128,13 +6134,13 @@ function demandTrendStorageCard(trend) {
   const count = Number(trend.observationCount || 0);
   const tone = count >= 7 ? "positive" : count >= 2 ? "neutral" : "warning";
   const value = count ? `${fmtNumber(count)}회 저장` : "신규 수집";
-  const source = trend.cacheHit ? "저장자료 재사용" : "이번 실행 수집";
+  const source = trend.cacheHit ? "동일 키워드·동일 기준일 재사용" : "이번 실행 수집";
   const time = trend.lastCollectedAt || trend.collectedAt;
   return {
     tone,
     label: "누적 신뢰",
     value,
-    detail: `${source}${time ? ` · ${compactDateTime(time)}` : ""}`
+    detail: `${source}${trend.cacheEndDate ? ` · ${trend.cacheEndDate}` : ""}${time ? ` · ${compactDateTime(time)}` : ""}`
   };
 }
 
