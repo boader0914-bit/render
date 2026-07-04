@@ -2149,12 +2149,13 @@ function b2bRankBoardModel(items = rankedCompanyItems()) {
     const rate = Number(insight.rate);
     const rank = finiteNumber(item.rank || item.overallRank || index + 1, index + 1);
     const remaining = finiteNumber(insight.remaining, 0);
+    const itemIndex = linked ? finiteNumber(item.availabilityIndex, -1) : -1;
     const opportunityScore = (linked ? 30 : 8)
       + (rank > 0 && rank <= 5 ? 18 : rank <= 10 ? 12 : rank <= 20 ? 6 : 0)
       + (Number.isFinite(rate) && rate <= 0.35 && remaining > 0 ? 22 : 0)
       + (remaining >= 3 ? 8 : 0)
       + Math.min(18, Math.round(finiteNumber(insight.revenue, 0) / 500000));
-    return { item, index, insight, linked, rate, rank, remaining, opportunityScore };
+    return { item, index, itemIndex, insight, linked, rate, rank, remaining, opportunityScore };
   });
   const linkedRows = rows.filter((row) => row.linked);
   const rankOnlyRows = rows.filter((row) => !row.linked);
@@ -2186,6 +2187,240 @@ function b2bRankBoardModel(items = rankedCompanyItems()) {
   };
 }
 
+function b2bRankRangeLabel(rank) {
+  const number = finiteNumber(rank, NaN);
+  if (!Number.isFinite(number) || number <= 0) return "순위대기";
+  if (number <= 5) return "1~5위";
+  if (number <= 10) return "6~10위";
+  if (number <= 20) return "11~20위";
+  if (number <= 30) return "21~30위";
+  return "30위 밖";
+}
+
+function b2bRankRangeModel(model = b2bRankBoardModel()) {
+  const buckets = [
+    { label: "1~5위", tone: "hot", rows: [] },
+    { label: "6~10위", tone: "strong", rows: [] },
+    { label: "11~20위", tone: "watch", rows: [] },
+    { label: "21~30위", tone: "neutral", rows: [] }
+  ];
+  const byLabel = buckets.reduce((acc, bucket) => {
+    acc[bucket.label] = bucket;
+    return acc;
+  }, {});
+  (model.rows || []).forEach((row) => {
+    const label = b2bRankRangeLabel(row.rank);
+    const bucket = byLabel[label] || byLabel["21~30위"];
+    bucket.rows.push(row);
+  });
+  const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.rows.length));
+  return buckets.map((bucket) => {
+    const linkedRows = bucket.rows.filter((row) => row.linked);
+    const hotRows = bucket.rows.filter((row) => Number.isFinite(row.rate) && row.rate >= 0.65);
+    const gapRows = bucket.rows.filter((row) => row.linked && Number.isFinite(row.rate) && row.rate <= 0.35 && row.remaining > 0);
+    const revenueTotal = bucket.rows.reduce((sum, row) => sum + finiteNumber(row.insight?.revenue, 0), 0);
+    const sales = summarizeSales(linkedRows.map((row) => row.item));
+    return {
+      ...bucket,
+      count: bucket.rows.length,
+      linkedCount: linkedRows.length,
+      hotCount: hotRows.length,
+      gapCount: gapRows.length,
+      revenueTotal,
+      rate: sales.supply ? sales.sold / sales.supply : NaN,
+      width: Math.max(8, Math.round((bucket.rows.length / maxCount) * 100))
+    };
+  });
+}
+
+function b2bRankExposureModel(model = b2bRankBoardModel()) {
+  const rows = model.rows || [];
+  const linkedRows = model.linkedRows || rows.filter((row) => row.linked);
+  const rankOnlyRows = model.rankOnlyRows || rows.filter((row) => !row.linked);
+  const gapRows = model.gapRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= 0.35 && row.remaining > 0);
+  const hotRows = model.hotRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= 0.65);
+  const topFiveRows = rows.filter((row) => row.rank > 0 && row.rank <= 5);
+  const topRows = topFiveRows.length ? topFiveRows : rows.slice(0, 5);
+  const midRows = rows.filter((row) => row.rank >= 6 && row.rank <= 20);
+  const outsideRows = rows.filter((row) => row.item?.regionBoundaryStatus === "outside" || row.item?.outsideSearchRegion);
+  const revenueRows = rows.filter((row) => finiteNumber(row.insight?.revenue, 0) > 0);
+  const linkedCoverage = rows.length ? linkedRows.length / rows.length : NaN;
+  const remainingRooms = gapRows.reduce((sum, row) => sum + finiteNumber(row.remaining, 0), 0);
+  const revenueTotal = revenueRows.reduce((sum, row) => sum + finiteNumber(row.insight?.revenue, 0), 0);
+  const rangeRows = b2bRankRangeModel(model);
+  const summaryTone = Number.isFinite(linkedCoverage) && linkedCoverage >= 0.55
+    ? "strong"
+    : rankOnlyRows.length > linkedRows.length
+      ? "watch"
+      : model.decision?.tone || "neutral";
+  const cards = [
+    {
+      label: "상위 5위 경쟁",
+      value: fmtNumber(topRows.length),
+      note: `상세 표본 ${fmtNumber(topRows.filter((row) => row.linked).length)}개`,
+      tone: topRows.some((row) => Number.isFinite(row.rate) && row.rate >= 0.65) ? "hot" : "strong"
+    },
+    {
+      label: "상세 표본 확보",
+      value: Number.isFinite(linkedCoverage) ? fmtRate(linkedCoverage) : "대기",
+      note: `${fmtNumber(linkedRows.length)}/${fmtNumber(rows.length)}개 예약 수량 연결`,
+      tone: Number.isFinite(linkedCoverage) && linkedCoverage >= 0.55 ? "good" : "watch"
+    },
+    {
+      label: "노출-판매 괴리",
+      value: fmtNumber(gapRows.length),
+      note: gapRows.length ? `잔여 ${fmtNumber(remainingRooms)}실 확인` : "큰 공백 없음",
+      tone: gapRows.length ? "watch" : "good"
+    },
+    {
+      label: "강수요 업체",
+      value: fmtNumber(hotRows.length),
+      note: "판매율 65% 이상 표본",
+      tone: hotRows.length ? "hot" : "neutral"
+    },
+    {
+      label: "매출 표본",
+      value: revenueRows.length ? fmtNumber(revenueRows.length) : "대기",
+      note: revenueRows.length ? `합산 ${fmtWon(revenueTotal)}` : "가격 표본 필요",
+      tone: revenueRows.length ? "strong" : "watch"
+    },
+    {
+      label: "반경권 노출",
+      value: fmtNumber(outsideRows.length),
+      note: outsideRows.length ? "검색 반경 내 타지역 경쟁" : "지역권 중심 노출",
+      tone: outsideRows.length ? "watch" : "good"
+    }
+  ];
+  const actionRows = [
+    {
+      label: "상위권",
+      value: `${fmtNumber(topRows.length)}개`,
+      summary: "고객이 먼저 비교하는 가격·상품·리뷰 기준입니다.",
+      tone: "hot",
+      rows: topRows.slice(0, 3)
+    },
+    {
+      label: "중위권",
+      value: `${fmtNumber(midRows.length)}개`,
+      summary: "노출 개선 시 바로 비교군으로 들어올 수 있는 구간입니다.",
+      tone: "strong",
+      rows: midRows.slice(0, 3)
+    },
+    {
+      label: "표본대기",
+      value: `${fmtNumber(rankOnlyRows.length)}개`,
+      summary: "네이버 노출은 있으나 예약 수량 연결이 필요한 업체입니다.",
+      tone: rankOnlyRows.length ? "watch" : "good",
+      rows: rankOnlyRows.slice(0, 3)
+    }
+  ];
+  const focusRows = (model.focusRows || rows.slice(0, 4)).map((row) => {
+    const insight = row.insight || companyRankInsight(row.item, row.index + 1);
+    const itemIndex = Number.isFinite(row.itemIndex) ? row.itemIndex : (row.linked ? finiteNumber(row.item?.availabilityIndex, -1) : -1);
+    return {
+      ...row,
+      insight,
+      itemIndex,
+      name: row.item?.name || "업체명 확인",
+      label: insight.label || "노출 확인",
+      metric: row.linked && Number.isFinite(row.rate) ? fmtRate(row.rate) : `노출 ${fmtNumber(row.rank)}위`,
+      note: row.linked
+        ? `잔여 ${fmtNumber(row.remaining)}실 · ${insight.revenue ? fmtWon(insight.revenue) : "매출 표본 대기"}`
+        : "상세 예약 수량 연결 필요"
+    };
+  });
+  return {
+    rows,
+    linkedRows,
+    rankOnlyRows,
+    gapRows,
+    hotRows,
+    topRows,
+    midRows,
+    outsideRows,
+    revenueRows,
+    linkedCoverage,
+    remainingRooms,
+    revenueTotal,
+    rangeRows,
+    cards,
+    actionRows,
+    focusRows,
+    summaryTone,
+    summary: Number.isFinite(linkedCoverage)
+      ? `상세 표본 ${fmtRate(linkedCoverage)} 기준으로 상위 노출과 판매 공백을 같이 봅니다.`
+      : "상위 노출 업체의 상세 표본 연결이 필요합니다."
+  };
+}
+
+function renderB2BRankExposureBoard(model = b2bRankBoardModel()) {
+  const exposure = b2bRankExposureModel(model);
+  if (!exposure.rows.length) return "";
+  return `
+    <div class="b2b-rank-exposure-board">
+      <div class="b2b-rank-board-head">
+        <div>
+          <span>노출 경쟁판</span>
+          <strong>순위 구간별 경쟁 압력</strong>
+        </div>
+        <em class="${escapeHtml(exposure.summaryTone)}">${escapeHtml(exposure.summary)}</em>
+      </div>
+      <div class="b2b-rank-board-grid">
+        ${exposure.cards.map((card) => `
+          <article class="${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(String(card.value))}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="b2b-rank-board-layout">
+        <div class="b2b-rank-range-board">
+          ${exposure.rangeRows.map((row) => `
+            <div class="b2b-rank-range-row ${escapeHtml(row.tone)}">
+              <span>${escapeHtml(row.label)}</span>
+              <div>
+                <strong>${fmtNumber(row.count)}개 · 표본 ${fmtNumber(row.linkedCount)}개</strong>
+                <small>${Number.isFinite(row.rate) ? `판매율 ${fmtRate(row.rate)}` : "판매율 확인 필요"} · 공백 ${fmtNumber(row.gapCount)}개 · 강수요 ${fmtNumber(row.hotCount)}개</small>
+                <i class="b2b-rank-range-bar"><b style="width: ${row.width}%"></b></i>
+              </div>
+              <em>${row.revenueTotal ? fmtWon(row.revenueTotal) : "매출 대기"}</em>
+            </div>
+          `).join("")}
+        </div>
+        <div class="b2b-rank-action-board">
+          ${exposure.actionRows.map((row) => `
+            <div class="${escapeHtml(row.tone)}">
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.value)}</strong>
+              <small>${escapeHtml(row.summary)}</small>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+      <div class="b2b-rank-board-head compact">
+        <div>
+          <span>우선 비교 업체</span>
+          <strong>바로 열어볼 경쟁 후보</strong>
+        </div>
+      </div>
+      <div class="b2b-rank-focus">
+        ${exposure.focusRows.map((row) => {
+          const attrs = row.itemIndex >= 0 ? `type="button" data-open-company="${row.itemIndex}"` : `type="button" disabled`;
+          return `
+            <button class="${escapeHtml(row.insight.tone || "neutral")}" ${attrs}>
+              <span>${fmtNumber(row.rank || row.index + 1)}</span>
+              <strong>${escapeHtml(row.name)}</strong>
+              <em>${escapeHtml(row.label)}</em>
+              <small>${escapeHtml(`${row.metric} · ${row.note}`)}</small>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderB2BRankBrief(model = b2bRankBoardModel()) {
   if (isAdminRole()) return "";
   return `
@@ -2205,6 +2440,7 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
         <article><span>잔여 객실</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>노출 대비 잔여 객실</small></article>
         <article><span>강수요 업체</span><strong>${fmtNumber(model.hotRows.length)}</strong><small>판매율 65% 이상</small></article>
       </div>
+      ${renderB2BRankExposureBoard(model)}
     </section>
   `;
 }

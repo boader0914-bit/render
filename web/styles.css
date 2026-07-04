@@ -1076,6 +1076,223 @@ a {
   overflow-wrap: anywhere;
 }
 
+.b2b-rank-exposure-board {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.b2b-rank-board-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.b2b-rank-board-head.compact {
+  margin-top: 2px;
+}
+
+.b2b-rank-board-head div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.b2b-rank-board-head span,
+.b2b-rank-board-grid span,
+.b2b-rank-board-grid small,
+.b2b-rank-range-row small,
+.b2b-rank-action-board span,
+.b2b-rank-action-board small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-rank-board-head strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.b2b-rank-board-head em {
+  max-width: 420px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.35;
+  text-align: right;
+  word-break: keep-all;
+}
+
+.b2b-rank-board-head em.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.b2b-rank-board-head em.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+  color: #0f766e;
+}
+
+.b2b-rank-board-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.b2b-rank-board-grid article,
+.b2b-rank-action-board div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid #e5ebf3;
+  border-radius: 14px;
+  background: #fbfcfd;
+}
+
+.b2b-rank-board-grid strong,
+.b2b-rank-action-board strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-rank-board-grid article.good,
+.b2b-rank-action-board div.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-rank-board-grid article.strong,
+.b2b-rank-action-board div.strong {
+  border-color: #c8ddff;
+  background: #f5f9ff;
+}
+
+.b2b-rank-board-grid article.watch,
+.b2b-rank-action-board div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-rank-board-grid article.hot,
+.b2b-rank-action-board div.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-rank-board-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, .8fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.b2b-rank-range-board,
+.b2b-rank-action-board {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.b2b-rank-range-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e5ebf3;
+  border-radius: 14px;
+  background: #fbfcfd;
+}
+
+.b2b-rank-range-row > span {
+  width: 56px;
+  min-height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 11px;
+  background: #eef5ff;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-rank-range-row div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-rank-range-row strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.b2b-rank-range-row em {
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-rank-range-bar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5ebf3;
+}
+
+.b2b-rank-range-bar b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f74d0, #0f766e);
+}
+
+.b2b-rank-range-row.watch {
+  border-color: #fedf89;
+}
+
+.b2b-rank-range-row.hot {
+  border-color: #fecaca;
+}
+
+.b2b-rank-range-row.strong {
+  border-color: #c8ddff;
+}
+
 .b2b-rank-focus {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -11738,6 +11955,10 @@ body.role-b2b .report-channel-grid div,
 body.role-b2b .company-insight-grid div,
 body.role-b2b .b2b-company-action,
 body.role-b2b .b2b-company-chips em,
+body.role-b2b .b2b-rank-board-grid article,
+body.role-b2b .b2b-rank-range-row,
+body.role-b2b .b2b-rank-action-board div,
+body.role-b2b .b2b-rank-focus button,
 body.role-b2b .b2b-demand-outlook-grid article,
 body.role-b2b .b2b-demand-season-strip,
 body.role-b2b .b2b-demand-season-strip span,
@@ -11786,6 +12007,11 @@ body.role-b2b .b2b-snapshot-grid strong,
 body.role-b2b .b2b-snapshot-subhead strong,
 body.role-b2b .b2b-snapshot-row strong,
 body.role-b2b .b2b-snapshot-read b,
+body.role-b2b .b2b-rank-board-head strong,
+body.role-b2b .b2b-rank-board-grid strong,
+body.role-b2b .b2b-rank-range-row strong,
+body.role-b2b .b2b-rank-action-board strong,
+body.role-b2b .b2b-rank-focus strong,
 body.role-b2b .b2b-rank-metrics strong,
 body.role-b2b .b2b-data-grid strong,
 body.role-b2b .b2b-map-metrics strong,
@@ -11880,6 +12106,16 @@ body.role-b2b .b2b-map-action-board small,
 body.role-b2b .b2b-map-region-rank small,
 body.role-b2b .b2b-map-radius-list small,
 body.role-b2b .b2b-map-radius-list button small {
+  color: var(--muted);
+}
+
+body.role-b2b .b2b-rank-board-head span,
+body.role-b2b .b2b-rank-board-grid span,
+body.role-b2b .b2b-rank-board-grid small,
+body.role-b2b .b2b-rank-range-row small,
+body.role-b2b .b2b-rank-action-board span,
+body.role-b2b .b2b-rank-action-board small,
+body.role-b2b .b2b-rank-focus small {
   color: var(--muted);
 }
 
@@ -12062,6 +12298,32 @@ body.role-b2b .b2b-map-board-head em {
   color: var(--ink);
 }
 
+body.role-b2b .b2b-rank-board-head em {
+  border-color: rgba(156, 174, 204, .22);
+  background: #121822;
+  color: var(--ink);
+}
+
+body.role-b2b .b2b-rank-board-head em.strong {
+  border-color: rgba(52, 211, 153, .32);
+  background: rgba(52, 211, 153, .11);
+  color: #a7f3d0;
+}
+
+body.role-b2b .b2b-rank-board-head em.watch {
+  border-color: rgba(251, 191, 36, .34);
+  background: rgba(251, 191, 36, .11);
+  color: #fde68a;
+}
+
+body.role-b2b .b2b-rank-range-bar {
+  background: rgba(156, 174, 204, .18);
+}
+
+body.role-b2b .b2b-rank-range-bar b {
+  background: linear-gradient(90deg, #60a5fa, #34d399);
+}
+
 body.role-b2b .b2b-action-stack > div.strong,
 body.role-b2b .b2b-data-grid div.strong,
 body.role-b2b .b2b-snapshot-grid article.strong,
@@ -12075,6 +12337,14 @@ body.role-b2b .sheet-b2b-detail-grid div.strong,
 body.role-b2b .sheet-b2b-detail-grid div.good,
 body.role-b2b .sheet-b2b-flow-strip div.strong,
 body.role-b2b .sheet-b2b-flow-strip div.good,
+body.role-b2b .b2b-rank-board-grid article.strong,
+body.role-b2b .b2b-rank-board-grid article.good,
+body.role-b2b .b2b-rank-range-row.strong,
+body.role-b2b .b2b-rank-range-row.good,
+body.role-b2b .b2b-rank-action-board div.strong,
+body.role-b2b .b2b-rank-action-board div.good,
+body.role-b2b .b2b-rank-focus button.strong,
+body.role-b2b .b2b-rank-focus button.good,
 body.role-b2b .b2b-map-board-grid article.strong,
 body.role-b2b .b2b-map-board-grid article.good,
 body.role-b2b .b2b-map-region-rank div.strong,
@@ -12100,6 +12370,10 @@ body.role-b2b .company-insight-grid div.watch,
 body.role-b2b .sheet-b2b-detail.watch,
 body.role-b2b .sheet-b2b-detail-grid div.watch,
 body.role-b2b .sheet-b2b-flow-strip div.watch,
+body.role-b2b .b2b-rank-board-grid article.watch,
+body.role-b2b .b2b-rank-range-row.watch,
+body.role-b2b .b2b-rank-action-board div.watch,
+body.role-b2b .b2b-rank-focus button.watch,
 body.role-b2b .b2b-map-board-grid article.watch,
 body.role-b2b .b2b-map-region-rank div.watch,
 body.role-b2b .b2b-map-radius-list button.watch,
@@ -12119,6 +12393,10 @@ body.role-b2b .company-insight-grid div.hot,
 body.role-b2b .sheet-b2b-detail.hot,
 body.role-b2b .sheet-b2b-detail-grid div.hot,
 body.role-b2b .sheet-b2b-flow-strip div.hot,
+body.role-b2b .b2b-rank-board-grid article.hot,
+body.role-b2b .b2b-rank-range-row.hot,
+body.role-b2b .b2b-rank-action-board div.hot,
+body.role-b2b .b2b-rank-focus button.hot,
 body.role-b2b .b2b-map-radius-list button.hot,
 body.role-b2b .b2b-company-action.hot,
 body.role-b2b .sheet-b2b-insight.hot,
@@ -12132,6 +12410,8 @@ body.role-b2b .sheet-b2b-booking.bad {
 
 body.role-b2b .b2b-action-stack mark,
 body.role-b2b .rank-badge,
+body.role-b2b .b2b-rank-range-row > span,
+body.role-b2b .b2b-rank-focus span,
 body.role-b2b .b2b-snapshot-row span,
 body.role-b2b .b2b-demand-competitors button span,
 body.role-b2b .b2b-map-radius-list button span,
@@ -13342,6 +13622,7 @@ body.role-b2b .demand-region-head {
 
 @media (max-width: 860px) {
   .b2b-rank-head,
+  .b2b-rank-board-head,
   .b2b-map-head,
   .b2b-map-board-head,
   .b2b-demand-head,
@@ -13351,6 +13632,7 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-map-board-head,
+  .b2b-rank-board-head,
   .b2b-demand-outlook-head {
     align-items: flex-start;
     flex-direction: column;
@@ -13363,6 +13645,7 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-rank-metrics,
+  .b2b-rank-board-grid,
   .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-map-board-grid,
@@ -13379,6 +13662,15 @@ body.role-b2b .demand-region-head {
   .b2b-map-board-layout {
     grid-template-columns: 1fr;
   }
+
+  .b2b-rank-board-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .b2b-rank-board-head em {
+    max-width: none;
+    text-align: left;
+  }
 }
 
 @media (max-width: 560px) {
@@ -13392,6 +13684,7 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-rank-metrics,
+  .b2b-rank-board-grid,
   .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-map-board-grid,
@@ -13415,6 +13708,16 @@ body.role-b2b .demand-region-head {
   .b2b-demand-competitors button em,
   .b2b-demand-competitors button small {
     grid-area: auto;
+  }
+
+  .b2b-rank-range-row {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
+
+  .b2b-rank-range-row > span,
+  .b2b-rank-range-row em {
+    justify-self: start;
   }
 
   .b2b-demand-competitors button span {
