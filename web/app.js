@@ -89,6 +89,7 @@ const els = {
   historyOpsState: document.getElementById("historyOpsState"),
   historyOpsDashboard: document.getElementById("historyOpsDashboard"),
   adminStatus: document.getElementById("adminStatus"),
+  adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
   detailSheet: document.getElementById("detailSheet"),
@@ -8971,6 +8972,266 @@ function companyMasterListPanel(master = {}) {
   `;
 }
 
+function adminDateToken(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+}
+
+function adminRunDateToken(run = {}) {
+  const idMatch = String(run.id || "").match(/(\d{4})(\d{2})(\d{2})/);
+  if (idMatch) return `${idMatch[1]}${idMatch[2]}${idMatch[3]}`;
+  const rawDate = run.createdAt || run.collectedAt || run.updatedAt || run.date || "";
+  const date = rawDate ? new Date(rawDate) : null;
+  return date && !Number.isNaN(date.getTime()) ? adminDateToken(date) : "";
+}
+
+function adminConsoleMasterSource() {
+  return { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
+}
+
+function adminConsoleKpis(master = {}, entries = []) {
+  const companies = master.companies || [];
+  const todayToken = adminDateToken();
+  const todayRuns = (state.runs || []).filter((run) => adminRunDateToken(run) === todayToken).length;
+  const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
+  const manualNeeded = openEntries.filter((entry) =>
+    entry.type.key === "correction" ||
+    entry.profile.needed ||
+    entry.company.adminReview?.status === "manual_needed" ||
+    (entry.decision.criteria || []).some((criterion) => criterion.key === "manual_recheck")
+  ).length;
+  const inQueueCompanyIds = new Set(openEntries.map((entry) => entry.company.companyId).filter(Boolean));
+  const contactReady = companies.filter((company) =>
+    company.adminReview?.status === "contact_ready" ||
+    (company.salesTarget?.category === "contact" && !inQueueCompanyIds.has(company.companyId))
+  ).length;
+  const trend = state.data?.stats?.datalabTrend || state.data?.datalabTrend || state.data?.trend || {};
+  const cacheHit = Boolean(trend.cache?.hit);
+  return [
+    ["오늘 수집", todayRuns, `${fmtNumber(state.runs?.length || 0)}개 실행 결과`, "neutral"],
+    ["판단 큐", openEntries.length, "컨택 전 확인", openEntries.length ? "warning" : "good"],
+    ["보정 필요", manualNeeded, "수량/총량 검토", manualNeeded ? "bad" : "good"],
+    ["컨택 가능", contactReady, "큐 제외 후보", contactReady ? "good" : "neutral"],
+    ["캐시 재사용률", trend.collectable || trend.cache ? (cacheHit ? "100%" : "0%") : "대기", cacheHit ? "동일 기준일 저장자료" : "이번 실행/대기", cacheHit ? "good" : "neutral"]
+  ];
+}
+
+function adminConsoleQueuePreview(entries = []) {
+  const rows = entries.filter((entry) => entry.workflow.key !== "done").slice(0, 6);
+  return `
+    <section class="admin-console-panel admin-queue-preview">
+      <div class="admin-console-head">
+        <div>
+          <strong>판단 큐 V2</strong>
+          <small>OTA, 수량 구조, 총량 변동, 판매 공백, 보정 재검토를 먼저 처리합니다.</small>
+        </div>
+        <button type="button" data-drawer-tab="decisionQueue">전체 큐</button>
+      </div>
+      <div class="admin-queue-table">
+        <div class="admin-queue-row head">
+          <span>업체</span><span>지역</span><span>진입 사유</span><span>우선</span><span>액션</span>
+        </div>
+        ${rows.length ? rows.map((entry) => {
+          const company = entry.company || {};
+          const criteria = (entry.decision.criteria || []).slice(0, 4);
+          const region = (company.regions || [])[0] || "지역 확인";
+          return `
+            <div class="admin-queue-row ${escapeHtml(entry.workflow.key)}">
+              <div>
+                <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+                <small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 대기")}</small>
+              </div>
+              <span>${escapeHtml(region)}</span>
+              <div class="admin-reason-badges">
+                ${(criteria.length ? criteria : [{ label: entry.type.label || "확인 필요" }]).map((criterion) => `<mark>${escapeHtml(criterion.label || "확인 필요")}</mark>`).join("")}
+              </div>
+              <b>${fmtNumber(entry.priority.score || 0)}</b>
+              <div class="admin-row-actions">
+                <button type="button" data-company-review-action="check_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 확인 필요로 지정">확인</button>
+                <button type="button" data-company-review-action="manual_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보정 필요로 지정">보정</button>
+                <button type="button" data-company-review-action="hold" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보류로 지정">보류</button>
+              </div>
+            </div>
+          `;
+        }).join("") : `<p class="empty">현재 열린 판단 큐가 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function adminConsoleCrawlPanel(entries = []) {
+  const payload = currentCrawlFormPayload();
+  const preview = crawlPreviewMeta(payload);
+  const run = state.data?.run || {};
+  const counts = run.counts || {};
+  const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
+  const recrawlRows = recrawlAutomationProfile(entries).needsExecution;
+  const trend = state.data?.stats?.datalabTrend || state.data?.datalabTrend || {};
+  const cells = [
+    ["예상 소요", formatElapsed(preview.estimatedTotalSeconds), crawlEstimateBasisText(preview.estimateBasis)],
+    ["완료 예정", formatClockTime(preview.estimatedCompleteAt), `${collectionModeLabel(payload.collectionMode)} · ${payload.detailRankRanges || "상세 생략"}`],
+    ["API/캐시", trend.cache?.hit ? "캐시 사용" : trend.collectable ? "연동 정상" : "대기", trend.cache?.endDate || trend.reason || "동일 기준일 캐시 우선"],
+    ["재수집 후보", fmtNumber(recrawlRows.length), openEntries.length ? "큐 기준 자동 산출" : "대기"],
+    ["최근 상세", fmtNumber(counts.naverBookingStockSucceeded || 0), `${fmtNumber(counts.naverBookingStockChecked || 0)}개 시도`],
+    ["범위 제외", fmtNumber(counts.naverBookingStockSkippedByRank || 0), "설정 순위 밖"]
+  ];
+  return `
+    <section class="admin-console-panel admin-crawl-panel">
+      <div class="admin-console-head">
+        <div>
+          <strong>수집 상태</strong>
+          <small>현재 설정 기준 예상 시간과 최신 실행 품질을 함께 봅니다.</small>
+        </div>
+        <button type="button" data-drawer-tab="admin">수집 실행</button>
+      </div>
+      <div class="admin-crawl-meter">
+        <span style="width:${Math.max(8, Math.min(100, Math.round(preview.confidence * 100 || 48)))}%"></span>
+      </div>
+      <div class="admin-crawl-grid">
+        ${cells.map(([label, value, note]) => `
+          <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(String(value || "대기"))}</strong>
+            <small>${escapeHtml(note || "")}</small>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function adminConsoleMasterPreview(master = {}) {
+  const rows = (master.companies || [])
+    .slice()
+    .sort((a, b) => (b.salesTarget?.score || 0) - (a.salesTarget?.score || 0) || (a.bestRank || 9999) - (b.bestRank || 9999))
+    .slice(0, 7);
+  return `
+    <section class="admin-console-panel admin-master-preview">
+      <div class="admin-console-head">
+        <div>
+          <strong>업체 마스터</strong>
+          <small>누적 DB 기준 상위 업체와 전략 신호를 빠르게 확인합니다.</small>
+        </div>
+        <button type="button" data-company-master-focus>마스터 보기</button>
+      </div>
+      <div class="admin-master-table">
+        <div class="admin-master-row head">
+          <span>업체</span><span>최고</span><span>쿠폰</span><span>예상 평균 매출</span><span>보정</span>
+        </div>
+        ${rows.length ? rows.map((company) => {
+          const latest = company.inventory?.latest || {};
+          const couponSignal = latest.couponSignal || latest.salesSignal?.couponSignal || {};
+          const targetSignals = company.salesTarget?.signals || {};
+          const couponVisible = Boolean(
+            couponSignal.visible ||
+            couponSignal.status === "있음" ||
+            couponSignal.names ||
+            latest.salesSignal?.naverCouponVisible ||
+            targetSignals.couponVisible
+          );
+          const revenue = companyQueueRevenueImpact(company);
+          const revenueValue = effectiveRevenueValue(revenue);
+          const corrected = manualCorrectionHasValue(company.manualCorrection);
+          return `
+            <div class="admin-master-row">
+              <div>
+                <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+                <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || company.bestKeyword || "지역 대기")}</small>
+              </div>
+              <b>${company.bestRank ? `${fmtNumber(company.bestRank)}위` : "대기"}</b>
+              <span>${escapeHtml(couponVisible ? "노출" : "미확인")}</span>
+              <span>${revenueValue ? fmtWon(revenueValue) : "대기"}</span>
+              <mark class="${corrected ? "good" : latest.confidenceGrade && !["A", "B"].includes(String(latest.confidenceGrade).toUpperCase()) ? "watch" : ""}">${escapeHtml(corrected ? "보정" : (latest.confidenceGrade || "대기"))}</mark>
+            </div>
+          `;
+        }).join("") : `<p class="empty">업체 마스터가 아직 비어 있습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function adminConsoleTaskQueue(master = {}, entries = []) {
+  const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
+  const recrawlRows = recrawlAutomationProfile(entries).needsExecution;
+  const manualRows = openEntries.filter((entry) => entry.type.key === "correction" || entry.profile.needed);
+  const contactRows = (master.companies || []).filter((company) => company.salesTarget?.category === "contact" && !companyDecisionQueueProfile(company).inQueue);
+  const duplicateCount = master.duplicateCandidateCount || (master.duplicateCandidates || []).length;
+  const tasks = [
+    ["재수집 실행", recrawlRows.length, "예상 시간 기준 묶음 실행", "recrawl"],
+    ["수동 보정 입력", manualRows.length, "총량/상품 구조 보정", "correction"],
+    ["컨택 가능 전환", contactRows.length, "큐 제외 영업 후보", "contact"],
+    ["중복 병합 검토", duplicateCount, "업체 마스터 정리", "duplicate"]
+  ];
+  return `
+    <section class="admin-console-panel admin-task-panel">
+      <div class="admin-console-head">
+        <div>
+          <strong>관리자 작업</strong>
+          <small>오늘 처리할 큐를 작업 단위로 모읍니다.</small>
+        </div>
+        <button type="button" data-drawer-tab="decisionQueue">처리 화면</button>
+      </div>
+      <div class="admin-task-list">
+        ${tasks.map(([label, count, note, key]) => {
+          const attrs = key === "contact"
+            ? 'data-drawer-tab="target"'
+            : key === "duplicate"
+              ? "data-company-master-focus"
+              : `data-company-check-filter="${escapeHtml(key)}"`;
+          return `
+          <article class="${count ? "active" : ""}">
+            <div>
+              <strong>${escapeHtml(label)}</strong>
+              <small>${escapeHtml(note)}</small>
+            </div>
+            <span>${fmtNumber(count)}</span>
+            <button type="button" ${attrs}>${escapeHtml(count ? "열기" : "대기")}</button>
+          </article>
+        `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
+  if (!els.adminConsoleDashboard || !isAdminRole()) return;
+  if (master.error) {
+    els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty">관리자 콘솔 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    return;
+  }
+  const entries = companyDecisionQueueEntries(master);
+  const kpis = adminConsoleKpis(master, entries);
+  const latestRun = state.runs?.[0] || {};
+  els.adminConsoleDashboard.innerHTML = `
+    <section class="admin-console-hero">
+      <div>
+        <span>Admin Operations</span>
+        <h3>운영 콘솔</h3>
+        <p>수집 상태, 판단 큐, 업체 마스터, 관리자 작업을 한 화면에서 처리합니다.</p>
+      </div>
+      <small>최근 실행 ${escapeHtml(latestRun.label || latestRun.id || "대기")}</small>
+    </section>
+    <section class="admin-kpi-grid">
+      ${kpis.map(([label, value, note, tone]) => `
+        <article class="${escapeHtml(tone)}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(typeof value === "number" ? fmtNumber(value) : String(value))}</strong>
+          <small>${escapeHtml(note)}</small>
+        </article>
+      `).join("")}
+    </section>
+    <section class="admin-console-layout">
+      ${adminConsoleQueuePreview(entries)}
+      ${adminConsoleCrawlPanel(entries)}
+      ${adminConsoleMasterPreview(master)}
+      ${adminConsoleTaskQueue(master, entries)}
+    </section>
+  `;
+}
+
 function renderDecisionQueue() {
   if (!els.decisionQueueList) return;
   const master = companyMasterSource();
@@ -9023,6 +9284,7 @@ function rerenderCompanyMasterPreservingSearch() {
 function renderCompanyMasterPanel() {
   if (!els.companyMasterPanel) return;
   const master = { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
+  renderAdminConsoleDashboard(master);
   if (els.companyMasterState) {
     els.companyMasterState.textContent = master.error ? "오류" : master.totalCompanies ? `${fmtNumber(master.totalCompanies)} 업체` : "대기";
   }
@@ -10487,6 +10749,11 @@ function setActiveTab(tab) {
   if (state.activeTab === "map") renderMap();
   if (state.activeTab === "demand") renderDemand();
   if (state.activeTab === "historyOps") renderHistoryOps();
+  if (state.activeTab === "admin" && isAdminRole()) {
+    renderCompanyMasterPanel();
+    renderDownloads();
+    syncYeogiManualInterface();
+  }
   if (state.activeTab === "dictionary") renderLocationDictionary();
 }
 
@@ -12287,6 +12554,9 @@ function bindEvents() {
     if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
     const recrawlBatch = event.target.closest("[data-recrawl-batch-key]");
     if (recrawlBatch) applyRecrawlBatchSetting(recrawlBatch);
+    if (event.target.closest("[data-company-master-focus]")) {
+      els.companyMasterPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     const checkFilter = event.target.closest("[data-company-check-filter]");
     if (checkFilter) {
       state.companyMasterFilters.check = checkFilter.dataset.companyCheckFilter || "priority";
