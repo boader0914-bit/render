@@ -525,6 +525,8 @@ function syncRoleStaticLabels() {
 function applyRoleUi() {
   const allowedTabs = new Set(roleTabs());
   if (!allowedTabs.has(state.activeTab)) state.activeTab = firstRoleTab();
+  document.body.classList.toggle("role-b2b", !isAdminRole());
+  document.body.classList.toggle("role-admin", isAdminRole());
   document.querySelectorAll("[data-tab]").forEach((button) => {
     const allowed = allowedTabs.has(button.dataset.tab);
     button.hidden = !allowed;
