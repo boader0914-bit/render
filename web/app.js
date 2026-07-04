@@ -2209,6 +2209,210 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
   `;
 }
 
+function b2bRateTone(rate, fallback = "neutral") {
+  const number = Number(rate);
+  if (!Number.isFinite(number)) return fallback;
+  if (number >= 0.65) return "hot";
+  if (number <= 0.35) return "watch";
+  return "good";
+}
+
+function b2bFlowEvidenceRows(flow = salesFlowProfile({})) {
+  const rows = [
+    ["평일", flow.weekday, flow.weekday?.label || "평일"],
+    ["금요일", flow.friday, "금요일"],
+    ["토요일", flow.saturday, "토요일"],
+    ["일요일", flow.sunday, "일요일"]
+  ];
+  return rows.map(([label, metric, note]) => ({
+    label,
+    value: Number.isFinite(metric?.rate) ? fmtRate(metric.rate) : "확인필요",
+    note: metric?.total ? `${fmtNumber(metric.sold)}/${fmtNumber(metric.total)}실 · ${note}` : `${note} 표본 대기`,
+    tone: b2bRateTone(metric?.rate)
+  }));
+}
+
+function b2bDetailPositionModel(item = {}) {
+  const insight = companyRankInsight(item, item.rank || item.overallRank || 0);
+  const flow = salesFlowProfile(item);
+  const impact = itemQueueRevenueImpact(item);
+  const revenue = effectiveRevenueValue(impact);
+  const brief = b2bMarketBriefModel(state.data || {});
+  const marketRevenue = finiteNumber(brief.averageRevenue, 0);
+  const marketRate = Number(brief.rate);
+  const lodging = salesStats(item, "lodging");
+  const day = salesStats(item, "day");
+  const status = collectionStatusProfile(item);
+  const confidence = inventoryConfidenceInfo(item);
+  const correction = correctionStatusInfo(item);
+  const audit = inventoryAuditProfile(item);
+  const platforms = platformsForItem(item);
+  const coupon = naverCouponInfo(item);
+  const rank = finiteNumber(insight.rank || item.rank || item.overallRank, 0);
+  const remaining = Math.max(0, finiteNumber(lodging.supply, 0) - finiteNumber(lodging.sold, 0));
+  const revenueGap = revenue && marketRevenue ? (revenue - marketRevenue) / marketRevenue : NaN;
+  const rateGap = Number.isFinite(insight.rate) && Number.isFinite(marketRate) ? insight.rate - marketRate : NaN;
+  const rankBand = rank && rank <= 3
+    ? "최상위 노출"
+    : rank && rank <= 5
+      ? "상위 5위권"
+      : rank && rank <= 10
+        ? "상위 10위권"
+        : rank
+          ? "비교권 노출"
+          : "순위 대기";
+  let tone = insight.tone || "neutral";
+  let label = "경쟁 포지션";
+  let summary = "노출 순위, 예상 매출, 요일별 판매 흐름을 함께 보고 경쟁 위치를 판단합니다.";
+  if (!insight.hasInventory) {
+    tone = "watch";
+    label = "노출 중심 관찰";
+    summary = "네이버 노출은 확인됐지만 예약 수량 표본이 부족해 매출과 판매율 판단은 보류합니다.";
+  } else if (rank > 0 && rank <= 5 && Number.isFinite(insight.rate) && insight.rate >= 0.65) {
+    tone = "hot";
+    label = "상위권 고판매 경쟁사";
+    summary = "상위 노출과 높은 판매율이 함께 확인됩니다. 가격, 객실 구성, 주말 잔여 재고를 벤치마크합니다.";
+  } else if (rank > 0 && rank <= 5 && remaining > 0) {
+    tone = "strong";
+    label = "상위권 잔여 경쟁사";
+    summary = "상위 노출에도 잔여 객실이 남아 있습니다. 가격, 상품 구성, 채널 혜택을 비교합니다.";
+  } else if (revenue && marketRevenue && revenue >= marketRevenue * 1.2) {
+    tone = "strong";
+    label = "매출 상위 경쟁사";
+    summary = "지역 평균보다 높은 예상 매출 표본이 잡힙니다. 판매 가격대와 객실 수량을 함께 봅니다.";
+  } else if (Number.isFinite(insight.rate) && insight.rate <= 0.35) {
+    tone = "watch";
+    label = "판매 여지 관찰";
+    summary = "노출 대비 판매율이 낮아 가격, 요일별 공백, 상품 구성 차이를 확인합니다.";
+  }
+  const revenueBasis = impact.totalPricedSoldOut
+    ? `${fmtNumber(impact.totalPricedSoldOut)}개 가격 확인`
+    : "가격 표본 대기";
+  const missingPrice = impact.totalMissingPriceSoldOut
+    ? ` · 가격 미확인 ${fmtNumber(impact.totalMissingPriceSoldOut)}개`
+    : "";
+  const avgPrice = impact.lodging.avgSoldUnitPrice || impact.dayUse.avgSoldUnitPrice;
+  const cards = [
+    {
+      tone: revenue ? "strong" : "watch",
+      label: "예상 매출",
+      value: revenue ? fmtWon(revenue) : "표본 대기",
+      note: `${revenueAdjustmentNote(impact)} · ${revenueBasis}${missingPrice}`
+    },
+    {
+      tone: Number.isFinite(revenueGap) ? (revenueGap >= 0.15 ? "strong" : revenueGap <= -0.15 ? "watch" : "good") : "neutral",
+      label: "시장 평균 대비",
+      value: Number.isFinite(revenueGap) ? formatSignedRate(revenueGap) : "대기",
+      note: marketRevenue ? `지역 평균 ${fmtWon(marketRevenue)}` : "평균 매출 표본 대기"
+    },
+    {
+      tone: rank && rank <= 5 ? "hot" : rank && rank <= 10 ? "strong" : "neutral",
+      label: "네이버 노출",
+      value: rank ? `${fmtNumber(rank)}위` : "확인필요",
+      note: `${rankBand} · ${item.rankingSourceLabel || "플레이스"}`
+    },
+    {
+      tone: b2bRateTone(insight.rate, "watch"),
+      label: "예약 판매율",
+      value: Number.isFinite(insight.rate) ? fmtRate(insight.rate) : "확인필요",
+      note: lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}실` : "숙박 수량 표본 대기"
+    },
+    {
+      tone: remaining ? "watch" : "good",
+      label: "잔여 객실",
+      value: lodging.supply ? fmtNumber(remaining) : "대기",
+      note: status.offlineEstimated ? "오프라인 예약 가능성 반영" : status.label || "잔여 객실 추정"
+    },
+    {
+      tone: day.supply ? "good" : "neutral",
+      label: "상품 구성",
+      value: day.supply ? "숙박+데이" : "숙박 중심",
+      note: day.supply ? `데이유즈/캠프닉 ${fmtNumber(day.sold)}/${fmtNumber(day.supply)}` : "데이유즈/캠프닉 미확인"
+    }
+  ];
+  const evidence = [
+    {
+      label: "가격 기준",
+      value: avgPrice ? `평균 ${fmtWon(avgPrice)}` : "가격 표본 대기",
+      note: impact.lodging.byDayType || impact.dayUse.byDayType || revenueBasis
+    },
+    {
+      label: "노출 권역",
+      value: rankBand,
+      note: itemLocationLine(item)
+    },
+    {
+      label: "수량 신뢰",
+      value: correction.label,
+      note: `${confidence.label} · ${correction.summary}`
+    },
+    {
+      label: "채널/혜택",
+      value: coupon.visible ? "쿠폰 노출" : platforms.length ? `${fmtNumber(platforms.length)}채널` : "채널 보강",
+      note: coupon.visible ? (coupon.names || coupon.status || "쿠폰명 확인") : (audit.otaCheckNeeded ? "OTA 보조 확인 필요" : "네이버 중심 판단")
+    },
+    {
+      label: "판매율 차이",
+      value: Number.isFinite(rateGap) ? formatSignedRate(rateGap) : "대기",
+      note: Number.isFinite(marketRate) ? `지역 평균 ${fmtRate(marketRate)}` : "지역 평균 대기"
+    }
+  ];
+  return {
+    tone,
+    label,
+    summary,
+    cards,
+    evidence,
+    flowRows: b2bFlowEvidenceRows(flow),
+    metricText: insight.metricText,
+    rankBand
+  };
+}
+
+function renderB2BDetailPositionPanel(item = {}) {
+  if (isAdminRole()) return "";
+  const model = b2bDetailPositionModel(item);
+  return `
+    <section class="sheet-section sheet-b2b-detail ${escapeHtml(model.tone)}">
+      <div class="sheet-b2b-head">
+        <div>
+          <span>${escapeHtml(model.label)}</span>
+          <h3>${escapeHtml(item.name || "업체명 확인")} 경쟁 포지션</h3>
+          <p>${escapeHtml(model.summary)}</p>
+        </div>
+        <strong>${escapeHtml(model.metricText)}</strong>
+      </div>
+      <div class="sheet-b2b-detail-grid">
+        ${model.cards.map((card) => `
+          <div class="${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sheet-b2b-flow-strip">
+        ${model.flowRows.map((row) => `
+          <div class="${escapeHtml(row.tone)}">
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+            <small>${escapeHtml(row.note)}</small>
+          </div>
+        `).join("")}
+      </div>
+      <div class="sheet-b2b-evidence-grid">
+        ${model.evidence.map((row) => `
+          <div>
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+            <small>${escapeHtml(row.note)}</small>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function sheetB2BInsightPanel(item = {}) {
   const insight = companyRankInsight(item, item.rank || 0);
   const flow = salesFlowProfile(item);
@@ -12726,7 +12930,7 @@ function renderSheetBooking(item) {
   const historyWeekday = flow.history?.weekday;
   const publicMode = !isAdminRole();
   const publicBlocks = publicMode
-    ? `${sheetB2BInsightPanel(item)}${renderB2BBookingQualityPanel(item, lodgingRows, dayRows)}`
+    ? `${renderB2BDetailPositionPanel(item)}${sheetB2BInsightPanel(item)}${renderB2BBookingQualityPanel(item, lodgingRows, dayRows)}`
     : "";
   const adminBlocks = isAdminRole()
     ? `${sheetCollectionStatusPanel(item)}${sheetRevenuePanel(item)}${sheetAuditPanel(item)}${sheetRecrawlComparisonPanel(item)}${sheetCompanyProfile(item)}${sheetInventoryStructure(item)}${sheetHistoryPanel(item)}`

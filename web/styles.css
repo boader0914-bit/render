@@ -7395,6 +7395,29 @@ a.platform-row:hover {
   padding: 14px;
 }
 
+.sheet-b2b-detail {
+  gap: 12px;
+  border: 1px solid #d5e3f7;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  padding: 14px;
+}
+
+.sheet-b2b-detail.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.sheet-b2b-detail.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.sheet-b2b-detail.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
 .sheet-b2b-insight.strong {
   border-color: #b8d9d3;
   background: #f6fbfa;
@@ -7455,6 +7478,25 @@ a.platform-row:hover {
   gap: 8px;
 }
 
+.sheet-b2b-detail-grid,
+.sheet-b2b-flow-strip,
+.sheet-b2b-evidence-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.sheet-b2b-detail-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sheet-b2b-flow-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.sheet-b2b-evidence-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .sheet-b2b-platform-grid div {
   min-width: 0;
   display: grid;
@@ -7465,9 +7507,47 @@ a.platform-row:hover {
   padding: 10px;
 }
 
+.sheet-b2b-detail-grid div,
+.sheet-b2b-flow-strip div,
+.sheet-b2b-evidence-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.sheet-b2b-detail-grid div.strong,
+.sheet-b2b-flow-strip div.strong,
+.sheet-b2b-detail-grid div.good,
+.sheet-b2b-flow-strip div.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.sheet-b2b-detail-grid div.watch,
+.sheet-b2b-flow-strip div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.sheet-b2b-detail-grid div.hot,
+.sheet-b2b-flow-strip div.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
 .sheet-b2b-platform-grid span,
 .sheet-b2b-platform-grid small,
-.sheet-b2b-coupon-line span {
+.sheet-b2b-coupon-line span,
+.sheet-b2b-detail-grid span,
+.sheet-b2b-detail-grid small,
+.sheet-b2b-flow-strip span,
+.sheet-b2b-flow-strip small,
+.sheet-b2b-evidence-grid span,
+.sheet-b2b-evidence-grid small {
   color: var(--muted);
   font-size: 11px;
   font-weight: 850;
@@ -7475,7 +7555,10 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
-.sheet-b2b-platform-grid strong {
+.sheet-b2b-platform-grid strong,
+.sheet-b2b-detail-grid strong,
+.sheet-b2b-flow-strip strong,
+.sheet-b2b-evidence-grid strong {
   min-width: 0;
   color: var(--ink);
   font-size: 15px;
@@ -11095,6 +11178,7 @@ body.role-b2b .demand-table-card,
 body.role-b2b .demand-company-card,
 body.role-b2b .sheet-panel,
 body.role-b2b .drawer-panel,
+body.role-b2b .sheet-b2b-detail,
 body.role-b2b .sheet-b2b-insight,
 body.role-b2b .sheet-b2b-platform,
 body.role-b2b .sheet-b2b-search,
@@ -11144,6 +11228,9 @@ body.role-b2b .report-channel-grid div,
 body.role-b2b .company-insight-grid div,
 body.role-b2b .b2b-company-action,
 body.role-b2b .b2b-company-chips em,
+body.role-b2b .sheet-b2b-detail-grid div,
+body.role-b2b .sheet-b2b-flow-strip div,
+body.role-b2b .sheet-b2b-evidence-grid div,
 body.role-b2b .sheet-b2b-platform-grid div,
 body.role-b2b .sheet-b2b-booking-grid div,
 body.role-b2b .sheet-flow-grid div,
@@ -11191,6 +11278,9 @@ body.role-b2b .demand-region-row strong,
 body.role-b2b .demand-company-card strong,
 body.role-b2b .demand-company-card dd,
 body.role-b2b .company-insight-grid strong,
+body.role-b2b .sheet-b2b-detail-grid strong,
+body.role-b2b .sheet-b2b-flow-strip strong,
+body.role-b2b .sheet-b2b-evidence-grid strong,
 body.role-b2b .sheet-b2b-platform-grid strong,
 body.role-b2b .sheet-b2b-booking-grid strong,
 body.role-b2b .sheet-flow-grid strong,
@@ -11227,6 +11317,15 @@ body.role-b2b .b2b-snapshot-grid small,
 body.role-b2b .b2b-snapshot-subhead small,
 body.role-b2b .b2b-snapshot-row small,
 body.role-b2b .b2b-snapshot-read span {
+  color: var(--muted);
+}
+
+body.role-b2b .sheet-b2b-detail-grid span,
+body.role-b2b .sheet-b2b-detail-grid small,
+body.role-b2b .sheet-b2b-flow-strip span,
+body.role-b2b .sheet-b2b-flow-strip small,
+body.role-b2b .sheet-b2b-evidence-grid span,
+body.role-b2b .sheet-b2b-evidence-grid small {
   color: var(--muted);
 }
 
@@ -11361,6 +11460,11 @@ body.role-b2b .b2b-snapshot-row.strong,
 body.role-b2b .b2b-snapshot-row.good,
 body.role-b2b .company-insight-grid div.revenue,
 body.role-b2b .company-insight-grid div.good,
+body.role-b2b .sheet-b2b-detail.strong,
+body.role-b2b .sheet-b2b-detail-grid div.strong,
+body.role-b2b .sheet-b2b-detail-grid div.good,
+body.role-b2b .sheet-b2b-flow-strip div.strong,
+body.role-b2b .sheet-b2b-flow-strip div.good,
 body.role-b2b .b2b-company-action.strong,
 body.role-b2b .sheet-b2b-insight.strong,
 body.role-b2b .sheet-b2b-platform.strong,
@@ -11378,6 +11482,9 @@ body.role-b2b .b2b-data-grid div.watch,
 body.role-b2b .b2b-snapshot-grid article.watch,
 body.role-b2b .b2b-snapshot-row.watch,
 body.role-b2b .company-insight-grid div.watch,
+body.role-b2b .sheet-b2b-detail.watch,
+body.role-b2b .sheet-b2b-detail-grid div.watch,
+body.role-b2b .sheet-b2b-flow-strip div.watch,
 body.role-b2b .b2b-company-action.watch,
 body.role-b2b .sheet-b2b-insight.watch,
 body.role-b2b .sheet-b2b-platform.watch,
@@ -11391,6 +11498,9 @@ body.role-b2b .b2b-action-stack > div.hot,
 body.role-b2b .b2b-snapshot-grid article.hot,
 body.role-b2b .b2b-snapshot-row.hot,
 body.role-b2b .company-insight-grid div.hot,
+body.role-b2b .sheet-b2b-detail.hot,
+body.role-b2b .sheet-b2b-detail-grid div.hot,
+body.role-b2b .sheet-b2b-flow-strip div.hot,
 body.role-b2b .b2b-company-action.hot,
 body.role-b2b .sheet-b2b-insight.hot,
 body.role-b2b .sheet-b2b-platform.hot,
@@ -11815,6 +11925,9 @@ body.role-b2b .demand-region-head {
   .sheet-history-grid,
   .revenue-day-grid,
   .manual-correction-evidence,
+  .sheet-b2b-detail-grid,
+  .sheet-b2b-flow-strip,
+  .sheet-b2b-evidence-grid,
   .sheet-b2b-insight .company-insight-grid,
   .sheet-b2b-note-grid,
   .sheet-b2b-platform-grid {
@@ -12270,6 +12383,9 @@ body.role-b2b .demand-region-head {
     justify-self: start;
   }
 
+  .sheet-b2b-detail-grid,
+  .sheet-b2b-flow-strip,
+  .sheet-b2b-evidence-grid,
   .sheet-b2b-insight .company-insight-grid,
   .sheet-b2b-note-grid,
   .sheet-b2b-platform-grid {
