@@ -7238,15 +7238,34 @@ a.platform-row:hover {
 }
 
 .b2b-map-cluster-row span {
-  min-height: 30px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 10px;
-  border-radius: 999px;
+  min-width: min(100%, 184px);
+  min-height: 52px;
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
   background: #f5f9ff;
+}
+
+.b2b-map-cluster-row strong,
+.b2b-map-cluster-row small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-cluster-row strong {
   color: #175cd3;
   font-size: 12px;
-  font-weight: 900;
+  line-height: 1.2;
+  font-weight: 950;
+}
+
+.b2b-map-cluster-row small {
+  color: #344054;
+  font-size: 11px;
+  line-height: 1.35;
+  font-weight: 850;
 }
 
 .b2b-map-competition-board {
@@ -11419,6 +11438,95 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.b2b-demand-month-flow {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.b2b-demand-month-flow > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.b2b-demand-month-flow > div:first-child strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.b2b-demand-month-flow > div:first-child span,
+.b2b-demand-month-flow article span,
+.b2b-demand-month-flow article small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-demand-month-flow article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 30%);
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid #eef2f7;
+  border-radius: 12px;
+  background: #fbfcfd;
+}
+
+.b2b-demand-month-flow article.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-demand-month-flow article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-demand-month-flow article div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.b2b-demand-month-flow article strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.08;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-demand-month-flow article i {
+  height: 9px;
+  border-radius: 999px;
+  background: #e8edf5;
+  overflow: hidden;
+}
+
+.b2b-demand-month-flow article i b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f80ed, #34d399);
+}
+
+.b2b-demand-month-flow article.watch i b {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
 .b2b-demand-season-strip {
   min-width: 0;
   display: grid;
@@ -13261,6 +13369,7 @@ body.role-b2b .map-card,
 body.role-b2b .region-card,
 body.role-b2b .b2b-demand-playbook,
 body.role-b2b .b2b-demand-outlook,
+body.role-b2b .b2b-demand-month-flow,
 body.role-b2b .demand-hero-card,
 body.role-b2b .demand-chart,
 body.role-b2b .demand-insight-card,
@@ -13347,6 +13456,8 @@ body.role-b2b .b2b-rank-range-row,
 body.role-b2b .b2b-rank-action-board div,
 body.role-b2b .b2b-rank-focus button,
 body.role-b2b .b2b-demand-outlook-grid article,
+body.role-b2b .b2b-demand-month-flow article,
+body.role-b2b .b2b-demand-month-flow article i,
 body.role-b2b .b2b-demand-season-strip,
 body.role-b2b .b2b-demand-season-strip span,
 body.role-b2b .b2b-demand-action-board div,
@@ -13502,6 +13613,8 @@ body.role-b2b .b2b-demand-grid strong,
 body.role-b2b .b2b-demand-actions strong,
 body.role-b2b .b2b-demand-outlook-head strong,
 body.role-b2b .b2b-demand-outlook-grid strong,
+body.role-b2b .b2b-demand-month-flow > div:first-child strong,
+body.role-b2b .b2b-demand-month-flow article strong,
 body.role-b2b .b2b-demand-action-board strong,
 body.role-b2b .b2b-demand-competitors > div strong,
 body.role-b2b .b2b-demand-competitors button strong,
@@ -13612,6 +13725,9 @@ body.role-b2b .b2b-demand-outlook-head span,
 body.role-b2b .b2b-demand-outlook-grid span,
 body.role-b2b .b2b-demand-outlook-grid small,
 body.role-b2b .b2b-demand-empty-line,
+body.role-b2b .b2b-demand-month-flow > div:first-child span,
+body.role-b2b .b2b-demand-month-flow article span,
+body.role-b2b .b2b-demand-month-flow article small,
 body.role-b2b .b2b-demand-action-board span,
 body.role-b2b .b2b-demand-action-board small,
 body.role-b2b .b2b-demand-competitors small,
@@ -13795,6 +13911,14 @@ body.role-b2b .notice-card {
   color: #f8d98b;
 }
 
+body.role-b2b .b2b-map-cluster-row strong {
+  color: #d8e9ff;
+}
+
+body.role-b2b .b2b-map-cluster-row small {
+  color: #aab6c7;
+}
+
 body.role-b2b .b2b-search-empty {
   border-color: rgba(251, 191, 36, .34);
   background: rgba(251, 191, 36, .11);
@@ -13959,6 +14083,7 @@ body.role-b2b .b2b-demand-outlook-head em {
 
 body.role-b2b .b2b-demand-outlook-head em.positive,
 body.role-b2b .b2b-demand-outlook-grid article.positive,
+body.role-b2b .b2b-demand-month-flow article.strong,
 body.role-b2b .b2b-demand-competitors button.strong,
 body.role-b2b .b2b-demand-competitors button.good {
   border-color: rgba(52, 211, 153, .42);
@@ -13976,6 +14101,7 @@ body.role-b2b .b2b-demand-outlook-head em.positive {
 
 body.role-b2b .b2b-demand-outlook-head em.warning,
 body.role-b2b .b2b-demand-outlook-grid article.warning,
+body.role-b2b .b2b-demand-month-flow article.watch,
 body.role-b2b .b2b-demand-competitors button.watch {
   border-color: rgba(251, 191, 36, .42);
   background:
