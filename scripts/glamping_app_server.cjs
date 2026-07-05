@@ -33,10 +33,12 @@ const CONFIG_DIR = path.resolve(
 // Stable API key storage policy: releases may replace code, but must keep this file path.
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const LOCATION_CARD_REQUESTS_FILE = path.join(CONFIG_DIR, "location_card_requests.json");
+const B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
+const B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_history.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
@@ -52,6 +54,7 @@ const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENA
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const PASSWORD_HASH_ITERATIONS = 120000;
 const USER_ROLES = {
   admin: "admin",
   b2b: "b2b"
@@ -972,6 +975,324 @@ async function saveLocationCardRequest(payload = {}) {
   return publicLocationCardRequests(store);
 }
 
+function sanitizeMemberText(value, max = 240) {
+  return String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function normalizeLoginId(value = "") {
+  return sanitizeMemberText(value, 80).toLowerCase();
+}
+
+function emptyB2BMemberStore() {
+  return {
+    schemaVersion: 1,
+    updatedAt: "",
+    members: []
+  };
+}
+
+async function readB2BMemberStore() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(B2B_MEMBERS_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      ...emptyB2BMemberStore(),
+      ...parsed,
+      members: Array.isArray(parsed.members) ? parsed.members : []
+    };
+  } catch {
+    return emptyB2BMemberStore();
+  }
+}
+
+async function writeB2BMemberStore(store) {
+  await fsp.mkdir(CONFIG_DIR, { recursive: true });
+  const next = {
+    ...emptyB2BMemberStore(),
+    ...store,
+    updatedAt: new Date().toISOString(),
+    members: Array.isArray(store.members) ? store.members : []
+  };
+  const tempPath = `${B2B_MEMBERS_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tempPath, B2B_MEMBERS_FILE);
+  return next;
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString("base64url")) {
+  const digest = crypto.pbkdf2Sync(String(password || ""), salt, PASSWORD_HASH_ITERATIONS, 32, "sha256").toString("base64url");
+  return `pbkdf2_sha256$${PASSWORD_HASH_ITERATIONS}$${salt}$${digest}`;
+}
+
+function verifyPassword(password, storedHash = "") {
+  const parts = String(storedHash || "").split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isFinite(iterations) || iterations < 10000) return false;
+  const expected = Buffer.from(parts[3]);
+  const actual = Buffer.from(crypto.pbkdf2Sync(String(password || ""), parts[2], iterations, 32, "sha256").toString("base64url"));
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function normalizeOwnershipStatus(value = "") {
+  const text = String(value || "").trim();
+  if (["owned", "보유", "own"].includes(text)) return "owned";
+  if (["planning", "준비중", "준비 중", "plan"].includes(text)) return "planning";
+  if (["agency", "대행사", "컨설턴트"].includes(text)) return "agency";
+  return "none";
+}
+
+function ownershipStatusLabel(value = "") {
+  return {
+    owned: "글램핑장 보유",
+    planning: "오픈 준비 중",
+    none: "미보유/투자 검토",
+    agency: "대행사/컨설턴트"
+  }[normalizeOwnershipStatus(value)] || "미보유/투자 검토";
+}
+
+function memberProfileFromPayload(payload = {}) {
+  const otaRaw = Array.isArray(payload.otaChannels)
+    ? payload.otaChannels
+    : String(payload.otaChannels || "").split(/[,/\s]+/);
+  const otaChannels = otaRaw.map((item) => sanitizeMemberText(item, 30)).filter(Boolean).slice(0, 12);
+  return {
+    displayName: sanitizeMemberText(payload.displayName || payload.name, 80),
+    phone: sanitizeMemberText(payload.phone, 40),
+    email: sanitizeMemberText(payload.email, 120),
+    companyName: sanitizeMemberText(payload.companyName, 120),
+    ownershipStatus: normalizeOwnershipStatus(payload.ownershipStatus || payload.hasGlamping),
+    ownershipStatusLabel: ownershipStatusLabel(payload.ownershipStatus || payload.hasGlamping),
+    glampingName: sanitizeMemberText(payload.glampingName, 140),
+    address: sanitizeMemberText(payload.address, 240),
+    naverPlaceUrl: sanitizeMemberText(payload.naverPlaceUrl, 500),
+    naverBookingUrl: sanitizeMemberText(payload.naverBookingUrl, 500),
+    roomCount: Math.max(0, Math.min(999, Math.floor(Number(payload.roomCount) || 0))),
+    otaChannels,
+    note: sanitizeMemberText(payload.note, 800),
+    adminReviewStatus: "pending",
+    adminReviewLabel: "관리자 검토 대기"
+  };
+}
+
+function publicB2BMember(member = {}) {
+  const profile = member.profile || {};
+  return {
+    memberId: member.memberId || "",
+    username: member.username || "",
+    role: USER_ROLES.b2b,
+    accountType: member.accountType || "member",
+    status: member.status || "active",
+    createdAt: member.createdAt || "",
+    updatedAt: member.updatedAt || "",
+    lastLoginAt: member.lastLoginAt || "",
+    searchCount: Number(member.searchCount || 0),
+    profile: {
+      ...profile,
+      ownershipStatusLabel: profile.ownershipStatusLabel || ownershipStatusLabel(profile.ownershipStatus)
+    }
+  };
+}
+
+function validateSignupPayload(payload = {}) {
+  const username = normalizeLoginId(payload.username || payload.loginId);
+  const password = String(payload.password || "");
+  if (!/^[a-z0-9._@-]{4,80}$/i.test(username)) {
+    const error = new Error("아이디는 영문, 숫자, 이메일 형식으로 4자 이상 입력하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (username === normalizeLoginId(ADMIN_USERNAME) || username === normalizeLoginId(B2B_USERNAME)) {
+    const error = new Error("예약된 아이디는 사용할 수 없습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (password.length < 4 || password.length > 120) {
+    const error = new Error("비밀번호는 4자 이상 입력하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return { username, password };
+}
+
+async function registerB2BMember(payload = {}) {
+  const { username, password } = validateSignupPayload(payload);
+  const store = await readB2BMemberStore();
+  if (store.members.some((member) => normalizeLoginId(member.username) === username)) {
+    const error = new Error("이미 가입된 아이디입니다.");
+    error.statusCode = 409;
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const member = {
+    memberId: `m_${crypto.randomBytes(9).toString("base64url")}`,
+    username,
+    passwordHash: hashPassword(password),
+    role: USER_ROLES.b2b,
+    accountType: "member",
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+    lastLoginAt: "",
+    searchCount: 0,
+    profile: memberProfileFromPayload(payload)
+  };
+  store.members.push(member);
+  await writeB2BMemberStore(store);
+  return { ...publicB2BMember(member), passwordHash: member.passwordHash };
+}
+
+async function authenticateB2BMember(username, password) {
+  const normalized = normalizeLoginId(username);
+  if (!normalized) return null;
+  const store = await readB2BMemberStore();
+  const member = store.members.find((item) => normalizeLoginId(item.username) === normalized);
+  if (!member || member.status === "disabled" || !verifyPassword(password, member.passwordHash)) return null;
+  member.lastLoginAt = new Date().toISOString();
+  member.updatedAt = member.updatedAt || member.lastLoginAt;
+  await writeB2BMemberStore(store);
+  return {
+    ...publicB2BMember(member),
+    roleLabel: userRoleLabel(USER_ROLES.b2b)
+  };
+}
+
+function emptyB2BSearchHistoryStore() {
+  return {
+    schemaVersion: 1,
+    updatedAt: "",
+    entries: []
+  };
+}
+
+async function readB2BSearchHistoryStore() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(B2B_SEARCH_HISTORY_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      ...emptyB2BSearchHistoryStore(),
+      ...parsed,
+      entries: Array.isArray(parsed.entries) ? parsed.entries : []
+    };
+  } catch {
+    return emptyB2BSearchHistoryStore();
+  }
+}
+
+async function writeB2BSearchHistoryStore(store) {
+  await fsp.mkdir(HISTORY_DIR, { recursive: true });
+  const next = {
+    ...emptyB2BSearchHistoryStore(),
+    ...store,
+    updatedAt: new Date().toISOString(),
+    entries: Array.isArray(store.entries) ? store.entries : []
+  };
+  const tempPath = `${B2B_SEARCH_HISTORY_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tempPath, B2B_SEARCH_HISTORY_FILE);
+  return next;
+}
+
+function clientIpHash(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  const raw = forwarded || req.socket?.remoteAddress || "";
+  return raw ? crypto.createHash("sha256").update(`ip:${raw}`).digest("hex") : "";
+}
+
+function publicB2BSearchHistoryEntry(entry = {}) {
+  return {
+    id: entry.id || "",
+    runId: entry.runId || "",
+    keyword: entry.keyword || "",
+    runLabel: entry.runLabel || "",
+    regionLabel: entry.regionLabel || "",
+    checkIn: entry.checkIn || "",
+    checkOut: entry.checkOut || "",
+    detailRankRanges: entry.detailRankRanges || "",
+    collectionMode: entry.collectionMode || "",
+    collectionModeLabel: entry.collectionModeLabel || "",
+    bookingRangeDays: entry.bookingRangeDays || 0,
+    status: entry.status || "completed",
+    createdAt: entry.createdAt || "",
+    completedAt: entry.completedAt || "",
+    resultSummary: entry.resultSummary || {}
+  };
+}
+
+function memberMatchesSession(entry = {}, session = {}) {
+  if (!session) return false;
+  if (entry.memberId && session.memberId) return entry.memberId === session.memberId;
+  return normalizeLoginId(entry.username) === normalizeLoginId(session.username);
+}
+
+async function publicB2BSearchHistoryForSession(session, limit = 20) {
+  const store = await readB2BSearchHistoryStore();
+  const entries = normalizeUserRole(session?.role) === USER_ROLES.admin
+    ? store.entries
+    : store.entries.filter((entry) => memberMatchesSession(entry, session));
+  return {
+    entries: entries
+      .slice()
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .slice(0, Math.max(1, Math.min(100, Number(limit) || 20)))
+      .map(publicB2BSearchHistoryEntry)
+  };
+}
+
+function b2bSearchResultSummary(data = {}) {
+  const items = data.availability?.items || [];
+  const stats = data.availability?.stats || {};
+  return {
+    exposureSampleCount: Number(data.ranking?.items?.length || data.ranking?.rankedItems?.length || items.length || 0),
+    companyCount: Number(items.length || 0),
+    revenueSampleCount: Number(stats.revenueSampleCount || 0),
+    averageRevenue: Number(stats.averageAdjustedEstimatedRevenue || 0),
+    soldOutRate: Number(stats.weightedSoldOutRate || 0)
+  };
+}
+
+async function appendB2BSearchHistory({ session, req, payload, runId, data, crawlTiming }) {
+  const now = new Date().toISOString();
+  const store = await readB2BSearchHistoryStore();
+  const entry = {
+    id: `s_${crypto.randomBytes(9).toString("base64url")}`,
+    memberId: session?.memberId || "",
+    username: session?.username || "",
+    accountType: session?.accountType || (session?.username === B2B_USERNAME ? "demo" : "member"),
+    role: USER_ROLES.b2b,
+    ipHash: clientIpHash(req),
+    sessionHash: session?.id ? crypto.createHash("sha256").update(`session:${session.id}`).digest("hex") : "",
+    keyword: payload.keyword || "",
+    checkIn: payload.checkIn || "",
+    checkOut: payload.checkOut || "",
+    detailRankRanges: payload.detailRankRanges || "",
+    collectionMode: payload.collectionMode || "",
+    collectionModeLabel: COLLECTION_MODES[payload.collectionMode] || "",
+    bookingRangeDays: payload.bookingRangeDays || 0,
+    bookingRangePlaceLimit: payload.bookingRangePlaceLimit || 0,
+    runId,
+    runLabel: data?.run?.label || payload.keyword || runId,
+    regionLabel: data?.run?.provinceLabel || "",
+    status: "completed",
+    createdAt: now,
+    completedAt: now,
+    crawlTiming: crawlTiming || null,
+    resultSummary: b2bSearchResultSummary(data)
+  };
+  store.entries.push(entry);
+  await writeB2BSearchHistoryStore(store);
+
+  if (session?.memberId) {
+    const memberStore = await readB2BMemberStore();
+    const member = memberStore.members.find((item) => item.memberId === session.memberId);
+    if (member) {
+      member.searchCount = Number(member.searchCount || 0) + 1;
+      member.updatedAt = now;
+      await writeB2BMemberStore(memberStore);
+    }
+  }
+
+  return publicB2BSearchHistoryEntry(entry);
+}
+
 function summarizeTrafficApiCheck(result, configured) {
   if (!configured) {
     return {
@@ -1126,6 +1447,57 @@ function redirectPathForRole(role) {
   return normalizeUserRole(role) === USER_ROLES.b2b ? "/b2b" : "/admin";
 }
 
+function userRoleLabel(role) {
+  return normalizeUserRole(role) === USER_ROLES.b2b ? "B2B" : "마스터";
+}
+
+async function authenticatedUserForCredentials(username, password) {
+  if (timingSafeTextEqual(username, ADMIN_USERNAME) && timingSafeTextEqual(password, ADMIN_PASSWORD)) {
+    return { username: ADMIN_USERNAME, role: USER_ROLES.admin, roleLabel: userRoleLabel(USER_ROLES.admin), accountType: "master" };
+  }
+  const member = await authenticateB2BMember(username, password);
+  if (member) return member;
+  if (
+    B2B_ENABLED
+    && timingSafeTextEqual(username, B2B_USERNAME)
+    && timingSafeTextEqual(password, B2B_PASSWORD)
+  ) {
+    return { username: B2B_USERNAME, role: USER_ROLES.b2b, roleLabel: userRoleLabel(USER_ROLES.b2b), accountType: "demo" };
+  }
+  return null;
+}
+
+function createSession(username, role = USER_ROLES.admin, meta = {}) {
+  cleanupSessions();
+  const id = crypto.randomBytes(32).toString("base64url");
+  sessions.set(id, {
+    username,
+    role: normalizeUserRole(role),
+    memberId: meta.memberId || "",
+    accountType: meta.accountType || (normalizeUserRole(role) === USER_ROLES.admin ? "master" : "member"),
+    profile: meta.profile || null,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_TTL_MS
+  });
+  return id;
+}
+
+function publicSession(session) {
+  if (!session) {
+    return { authenticated: false, username: "", role: "", roleLabel: "", memberId: "", accountType: "", profile: null };
+  }
+  const role = normalizeUserRole(session.role);
+  return {
+    authenticated: true,
+    username: session.username || "",
+    role,
+    roleLabel: userRoleLabel(role),
+    memberId: session.memberId || "",
+    accountType: session.accountType || (role === USER_ROLES.admin ? "master" : "member"),
+    profile: session.profile || null
+  };
+}
+
 function acceptsHtml(req) {
   return String(req.headers.accept || "").includes("text/html");
 }
@@ -1178,6 +1550,7 @@ function loginPage(message = "") {
     input:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
     button { width: 100%; min-height: 54px; margin-top: 20px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
     button:disabled { opacity: .6; cursor: wait; }
+    .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
     .error { min-height: 20px; margin-top: 14px; color: #f04438; font-size: 13px; font-weight: 800; }
   </style>
 </head>
@@ -1191,6 +1564,84 @@ function loginPage(message = "") {
       <button type="submit">로그인</button>
       <div class="error">${escapedMessage}</div>
     </form>
+    <a class="link" href="/signup">B2B 회원가입</a>
+  </main>
+</body>
+</html>`;
+}
+
+function signupPage(message = "", values = {}) {
+  const escapedMessage = String(message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const value = (key) => String(values[key] || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const textarea = String(values.note || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const selected = (key) => normalizeOwnershipStatus(values.ownershipStatus || values.hasGlamping) === key ? " selected" : "";
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>글램핑데이터랩 B2B 회원가입</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
+    main { width: min(100% - 32px, 620px); padding: 28px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
+    p { margin: 0 0 18px; color: #667085; line-height: 1.45; }
+    form { display: grid; gap: 12px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    label { display: grid; gap: 7px; font-size: 13px; font-weight: 850; color: #344054; }
+    input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d0d5dd; border-radius: 13px; font: inherit; outline: none; }
+    textarea { min-height: 82px; padding-block: 11px; resize: vertical; }
+    input:focus, select:focus, textarea:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
+    button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
+    .error { min-height: 20px; color: #f04438; font-size: 13px; font-weight: 850; }
+    .hint { margin: 0; color: #667085; font-size: 12px; font-weight: 700; }
+    .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
+    @media (max-width: 560px) { main { padding: 22px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>B2B 회원가입</h1>
+    <p>로그인 아이디 기준으로 검색 이력을 묶고, 입력한 글램핑장 정보는 관리자 검토 전까지 제출 정보로만 보관합니다.</p>
+    <form method="post" action="/signup">
+      <div class="grid">
+        <label>아이디<input name="username" autocomplete="username" required value="${value("username")}"></label>
+        <label>비밀번호<input name="password" type="password" autocomplete="new-password" required></label>
+      </div>
+      <div class="grid">
+        <label>이름/담당자<input name="displayName" autocomplete="name" value="${value("displayName")}"></label>
+        <label>연락처<input name="phone" autocomplete="tel" value="${value("phone")}"></label>
+      </div>
+      <div class="grid">
+        <label>이메일<input name="email" type="email" autocomplete="email" value="${value("email")}"></label>
+        <label>회사/업체명<input name="companyName" value="${value("companyName")}"></label>
+      </div>
+      <label>글램핑장 보유 여부
+        <select name="ownershipStatus">
+          <option value="owned"${selected("owned")}>글램핑장 보유</option>
+          <option value="planning"${selected("planning")}>오픈 준비 중</option>
+          <option value="none"${selected("none")}>미보유 / 투자 검토</option>
+          <option value="agency"${selected("agency")}>대행사 / 컨설턴트</option>
+        </select>
+      </label>
+      <div class="grid">
+        <label>글램핑장명<input name="glampingName" value="${value("glampingName")}"></label>
+        <label>객실 수<input name="roomCount" type="number" min="0" step="1" value="${value("roomCount")}"></label>
+      </div>
+      <label>주소<input name="address" value="${value("address")}"></label>
+      <div class="grid">
+        <label>네이버 플레이스 URL<input name="naverPlaceUrl" value="${value("naverPlaceUrl")}"></label>
+        <label>네이버 예약 URL<input name="naverBookingUrl" value="${value("naverBookingUrl")}"></label>
+      </div>
+      <label>사용 OTA<input name="otaChannels" placeholder="예: 여기어때, 야놀자, 떠나요" value="${value("otaChannels")}"></label>
+      <label>메모<textarea name="note">${textarea}</textarea></label>
+      <p class="hint">회원 제출 정보는 관리자 검토 후 마스터 DB와 연결합니다.</p>
+      <button type="submit">가입하고 B2B 시작</button>
+      <div class="error">${escapedMessage}</div>
+    </form>
+    <a class="link" href="/login">이미 계정이 있습니다</a>
   </main>
 </body>
 </html>`;
@@ -1566,7 +2017,7 @@ function b2bSearchPayload(value = {}) {
   };
 }
 
-async function runB2BSearch(payload = {}) {
+async function runB2BSearch(payload = {}, context = {}) {
   const crawlPayload = b2bSearchPayload(payload);
   const result = await runCrawler(crawlPayload);
   const runId = result?.runId || "";
@@ -1581,11 +2032,22 @@ async function runB2BSearch(payload = {}) {
     error.statusCode = 500;
     throw error;
   }
+  const searchHistory = context.session
+    ? await appendB2BSearchHistory({
+        session: context.session,
+        req: context.req,
+        payload: crawlPayload,
+        runId,
+        data,
+        crawlTiming: result.crawlTiming || null
+      })
+    : null;
   return {
     ok: true,
     runId,
     data: publicRunForRole(data, USER_ROLES.b2b),
-    crawlTiming: result.crawlTiming || null
+    crawlTiming: result.crawlTiming || null,
+    searchHistory
   };
 }
 
@@ -7281,8 +7743,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-demand-graph-contrast"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-demand-graph-contrast"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-member-history"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-member-history"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -7309,16 +7771,42 @@ async function route(req, res) {
       return send(res, 200, { ok: true, loginRequired: true, ...publicSession(session) });
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/signup") {
+      const session = getSession(req);
+      if (session) return send(res, 302, "", "text/plain; charset=utf-8", { Location: redirectPathForRole(session.role) });
+      return send(res, 200, signupPage(), "text/html; charset=utf-8");
+    }
+
+    if (req.method === "POST" && (reqUrl.pathname === "/signup" || reqUrl.pathname === "/api/signup")) {
+      const payload = await parseLoginBody(req);
+      try {
+        const account = await registerB2BMember(payload);
+        const sessionId = createSession(account.username, account.role, account);
+        if (reqUrl.pathname === "/signup") {
+          return send(res, 302, "", "text/plain; charset=utf-8", {
+            "Set-Cookie": sessionCookie(sessionId),
+            Location: "/b2b"
+          });
+        }
+        return send(res, 200, { ok: true, ...publicSession({ ...account, role: USER_ROLES.b2b }) }, "application/json; charset=utf-8", {
+          "Set-Cookie": sessionCookie(sessionId)
+        });
+      } catch (error) {
+        if (reqUrl.pathname === "/signup") return send(res, error.statusCode || 400, signupPage(error.message, payload), "text/html; charset=utf-8");
+        return send(res, error.statusCode || 400, { error: error.message || String(error) });
+      }
+    }
+
     if (req.method === "POST" && (reqUrl.pathname === "/api/login" || reqUrl.pathname === "/login")) {
       const payload = await parseLoginBody(req);
       const username = String(payload.username || "").trim();
       const password = String(payload.password || "").trim();
-      const account = authenticatedUserForCredentials(username, password);
+      const account = await authenticatedUserForCredentials(username, password);
       if (!account) {
         if (reqUrl.pathname === "/login") return sendLogin(res, 401, "아이디 또는 비밀번호가 올바르지 않습니다.");
         return send(res, 401, { error: "아이디 또는 비밀번호가 올바르지 않습니다." });
       }
-      const sessionId = createSession(account.username, account.role);
+      const sessionId = createSession(account.username, account.role, account);
       if (reqUrl.pathname === "/login") {
         return send(res, 302, "", "text/plain; charset=utf-8", {
           "Set-Cookie": sessionCookie(sessionId),
@@ -7351,6 +7839,31 @@ async function route(req, res) {
       return send(res, 200, publicSession(session));
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/member/search-history") {
+      const limit = Number(reqUrl.searchParams.get("limit") || 20);
+      return send(res, 200, await publicB2BSearchHistoryForSession(session, limit));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname.startsWith("/api/member/runs/")) {
+      const runId = decodeURIComponent(reqUrl.pathname.replace("/api/member/runs/", ""));
+      const history = await readB2BSearchHistoryStore();
+      const allowed = normalizeUserRole(session.role) === USER_ROLES.admin
+        || history.entries.some((entry) => entry.runId === runId && memberMatchesSession(entry, session));
+      if (!allowed) return sendForbidden(req, res, "본인 검색 이력에 있는 리포트만 열람할 수 있습니다.");
+      const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true });
+      return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/b2b-members") {
+      if (!requireAdminSession(session, req, res)) return;
+      const memberStore = await readB2BMemberStore();
+      const history = await readB2BSearchHistoryStore();
+      return send(res, 200, {
+        members: memberStore.members.map(publicB2BMember),
+        searches: history.entries.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))).slice(0, 200).map(publicB2BSearchHistoryEntry)
+      });
+    }
+
     if (reqUrl.pathname === "/admin" && !requireAdminSession(session, req, res)) return;
 
     if (req.method === "HEAD" && ["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
@@ -7366,7 +7879,7 @@ async function route(req, res) {
         return sendForbidden(req, res, "B2B 검색 계정이 필요합니다.");
       }
       const payload = await parseJsonBody(req);
-      return send(res, 200, await runB2BSearch(payload));
+      return send(res, 200, await runB2BSearch(payload, { session, req }));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {

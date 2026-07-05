@@ -509,6 +509,96 @@ a {
   line-height: 1.2;
 }
 
+.b2b-search-history {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #e5ebf3;
+  padding-top: 10px;
+}
+
+.b2b-history-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b2b-history-head strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.b2b-history-head small,
+.b2b-search-history p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.b2b-history-head > span {
+  flex: 0 0 auto;
+  min-height: 25px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-history-list {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.b2b-history-list button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  border: 1px solid #e5ebf3;
+  border-radius: 12px;
+  background: #fbfcfd;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.b2b-history-list strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-history-list span,
+.b2b-history-list small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.b2b-history-list span {
+  grid-column: 1 / -1;
+}
+
+.b2b-history-list small {
+  justify-self: end;
+  white-space: nowrap;
+}
+
 .b2b-search-empty {
   grid-column: 1 / -1;
   border: 1px solid #fedf89;
@@ -13035,6 +13125,7 @@ body.role-b2b .field textarea:focus {
 
 body.role-b2b .b2b-search-quick button,
 body.role-b2b .b2b-search-card,
+body.role-b2b .b2b-history-list button,
 body.role-b2b .b2b-live-search-panel span,
 body.role-b2b .b2b-live-search-meta em,
 body.role-b2b .b2b-search-card-metrics em,
@@ -13153,6 +13244,8 @@ body.role-b2b .b2b-live-stages i.active {
 }
 
 body.role-b2b .b2b-search-card strong,
+body.role-b2b .b2b-history-head strong,
+body.role-b2b .b2b-history-list strong,
 body.role-b2b .b2b-search-card-metrics b,
 body.role-b2b .b2b-live-search-panel strong,
 body.role-b2b .b2b-live-search-meta em,
@@ -13248,6 +13341,10 @@ body.role-b2b .b2b-search-match {
 body.role-b2b .b2b-search-card-sub,
 body.role-b2b .b2b-search-card-mode,
 body.role-b2b .b2b-search-card-metrics small,
+body.role-b2b .b2b-history-head small,
+body.role-b2b .b2b-history-list span,
+body.role-b2b .b2b-history-list small,
+body.role-b2b .b2b-search-history p,
 body.role-b2b .b2b-live-search-panel p,
 body.role-b2b .b2b-search-missing-copy p,
 body.role-b2b .b2b-search-fallbacks small,
@@ -13492,6 +13589,16 @@ body.role-b2b .b2b-search-missing-copy > span {
 
 body.role-b2b .b2b-search-missing-chips em {
   color: #f8d98b;
+}
+
+body.role-b2b .b2b-search-history {
+  border-top-color: rgba(156, 174, 204, .18);
+}
+
+body.role-b2b .b2b-history-head > span {
+  border-color: rgba(106, 168, 255, .28);
+  background: rgba(106, 168, 255, .12);
+  color: #b9d7ff;
 }
 
 body.role-b2b .report-hero {

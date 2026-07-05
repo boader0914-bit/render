@@ -35,7 +35,8 @@ const state = {
   b2bSearchLoading: false,
   b2bSearchStartedAt: 0,
   b2bSearchPreview: null,
-  b2bSearchTimer: null
+  b2bSearchTimer: null,
+  memberSearchHistory: []
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -106,6 +107,7 @@ const els = {
   b2bSearchInput: document.getElementById("b2bSearchInput"),
   b2bSearchResults: document.getElementById("b2bSearchResults"),
   b2bSearchStatus: document.getElementById("b2bSearchStatus"),
+  b2bSearchHistory: document.getElementById("b2bSearchHistory"),
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
   detailSheet: document.getElementById("detailSheet"),
@@ -13464,6 +13466,36 @@ function b2bSearchResultCard(row = {}, normalized = "") {
   `;
 }
 
+function renderB2BSearchHistoryPanel() {
+  if (!els.b2bSearchHistory || isAdminRole()) return;
+  const rows = state.memberSearchHistory || [];
+  const profile = state.session?.profile || {};
+  const ownership = profile.ownershipStatusLabel || "";
+  const memberLabel = state.session?.accountType === "demo"
+    ? "공용 B2B 계정"
+    : [state.session?.username || "", ownership].filter(Boolean).join(" · ");
+  els.b2bSearchHistory.innerHTML = `
+    <div class="b2b-history-head">
+      <div>
+        <strong>내 검색 기록</strong>
+        <small>${escapeHtml(memberLabel || "로그인 아이디 기준")}</small>
+      </div>
+      <span>${fmtNumber(rows.length)}건</span>
+    </div>
+    ${rows.length ? `
+      <div class="b2b-history-list">
+        ${rows.slice(0, 8).map((row) => `
+          <button type="button" data-b2b-history-run-id="${escapeHtml(row.runId)}">
+            <strong>${escapeHtml(row.keyword || row.runLabel || "검색 리포트")}</strong>
+            <span>${escapeHtml([row.regionLabel, row.checkIn && row.checkOut ? `${row.checkIn.slice(5)}~${row.checkOut.slice(5)}` : "", row.detailRankRanges ? `${row.detailRankRanges}위` : ""].filter(Boolean).join(" · "))}</span>
+            <small>${escapeHtml(row.completedAt ? compactDateTime(row.completedAt) : "")}</small>
+          </button>
+        `).join("")}
+      </div>
+    ` : `<p>아직 이 아이디로 저장된 검색 기록이 없습니다.</p>`}
+  `;
+}
+
 function renderB2BSearchPanel() {
   if (!els.b2bSearchPanel) return;
   const publicMode = !isAdminRole();
@@ -13514,6 +13546,7 @@ function renderB2BSearchPanel() {
       ? `${state.b2bSearchQuery || "검색"} 실행 중 · 경과 ${formatElapsed(progressMeta.elapsedSeconds) || "0초"} · ${b2bSearchProgressText(progressMeta)} · 완료 ${formatClockTime(progressMeta.estimatedCompleteAt)}`
       : current;
   }
+  renderB2BSearchHistoryPanel();
 }
 
 function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
@@ -13560,6 +13593,7 @@ async function submitB2BSearch() {
     state.data = result.data || null;
     state.activeRunId = result.runId || state.data?.run?.id || null;
     state.runs = state.data?.run ? [{ ...state.data.run, id: state.activeRunId }] : [];
+    await loadMemberSearchHistory();
     state.activeTab = "report";
     setStatus("검색 완료");
     renderAll();
@@ -14733,12 +14767,29 @@ async function loadSession() {
     role: session.role === "b2b" ? "b2b" : "admin",
     roleLabel: session.roleLabel || (session.role === "b2b" ? "B2B" : "관리자")
   };
+  state.session.memberId = session.memberId || "";
+  state.session.accountType = session.accountType || "";
+  state.session.profile = session.profile || null;
+  if (state.session.role === "admin" && state.session.roleLabel !== "마스터") state.session.roleLabel = "마스터";
   if (location.pathname === "/b2b" && state.session.role === "b2b") {
     state.activeTab = "report";
   } else if (location.pathname === "/admin" && state.session.role === "admin") {
     state.activeTab = "admin";
   }
   applyRoleUi();
+}
+
+async function loadMemberSearchHistory() {
+  if (isAdminRole()) {
+    state.memberSearchHistory = [];
+    return;
+  }
+  try {
+    const data = await fetchJson("/api/member/search-history?limit=20");
+    state.memberSearchHistory = data.entries || [];
+  } catch {
+    state.memberSearchHistory = [];
+  }
 }
 
 async function loadHistoryOps() {
@@ -15409,6 +15460,18 @@ async function loadRun(runId) {
   setStatus("준비");
 }
 
+async function loadB2BHistoryRun(runId) {
+  if (!runId || isAdminRole()) return;
+  setStatus("검색 기록 로딩");
+  const data = await fetchJson(`/api/member/runs/${encodeURIComponent(runId)}`);
+  state.data = data;
+  state.activeRunId = runId;
+  state.runs = data.run ? [{ ...data.run, id: runId }] : [];
+  state.activeTab = "report";
+  renderAll();
+  setStatus("준비");
+}
+
 function syncYeogiManualInterface() {
   const url = yeogiSearchUrl();
   if (els.yeogiLinkOutput) els.yeogiLinkOutput.value = url;
@@ -15720,6 +15783,13 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
+    const b2bHistoryRun = event.target.closest("[data-b2b-history-run-id]");
+    if (b2bHistoryRun) {
+      loadB2BHistoryRun(b2bHistoryRun.dataset.b2bHistoryRunId).catch((error) => {
+        if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = error.message;
+      });
+      return;
+    }
     const b2bRun = event.target.closest("[data-b2b-run-id]");
     if (b2bRun) {
       state.b2bSearchQuery = runSearchTitle(state.runs.find((run) => run.id === b2bRun.dataset.b2bRunId) || {});
@@ -15913,8 +15983,11 @@ async function init() {
     const tasks = [loadRuns(true), loadLocationDictionary()];
     if (isAdminRole()) {
       tasks.push(loadTrafficState(), loadLocationCardRequests());
+    } else {
+      tasks.push(loadMemberSearchHistory());
     }
     await Promise.all(tasks);
+    renderB2BSearchPanel();
     if (isAdminRole()) pollCrawlStatusUntilIdle(false);
   } catch (error) {
     setStatus("오류");
