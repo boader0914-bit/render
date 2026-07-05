@@ -2190,6 +2190,101 @@ function companyRankInsightGrid(insight = {}) {
   `;
 }
 
+function b2bCompanyProductSummary(item = {}, insight = companyRankInsight(item)) {
+  const status = collectionStatusProfile(item);
+  const rows = revenueProductRows(item);
+  const lodgingProducts = rows.filter((row) => row.kind !== "day").length;
+  const dayProducts = rows.filter((row) => row.kind === "day").length;
+  const counted = finiteNumber(item.countedItemCount, 0);
+  const night = finiteNumber(item.nightItemCount, 0);
+  const dayUse = finiteNumber(item.dayUseItemCount, 0);
+  const productSummary = String(item.productTypeSummary || item.inventoryProductSummary || "").trim();
+  if (productSummary) {
+    return {
+      value: productSummary,
+      note: status.productKnown ? "상품 구성 확인" : "상품 구성 보조 확인"
+    };
+  }
+  if (lodgingProducts || dayProducts) {
+    return {
+      value: dayProducts ? `숙박 ${fmtNumber(lodgingProducts)}종 + 데이 ${fmtNumber(dayProducts)}종` : `숙박 ${fmtNumber(lodgingProducts)}종`,
+      note: "가격/수량 표본 기준"
+    };
+  }
+  if (night || dayUse || counted) {
+    return {
+      value: dayUse ? `숙박 ${fmtNumber(night || counted)}종 + 데이 ${fmtNumber(dayUse)}종` : `숙박 ${fmtNumber(night || counted)}종`,
+      note: status.productKnown ? "네이버 상품 수량 기준" : "상품 수량 보조 확인"
+    };
+  }
+  return {
+    value: insight.dayUseKnown ? "숙박+데이" : "숙박 중심",
+    note: insight.productGap ? "데이유즈/캠프닉 미확인" : "상품 구성 확인"
+  };
+}
+
+function b2bCompanyCouponSummary(item = {}) {
+  const coupon = naverCouponInfo(item);
+  return {
+    value: coupon.visible ? "쿠폰 있음" : "수동확인",
+    note: coupon.visible
+      ? (coupon.names || coupon.status || "쿠폰명 확인")
+      : (coupon.detail || "네이버 화면 수동 확인"),
+    tone: coupon.visible ? "strong" : "neutral"
+  };
+}
+
+function b2bCompanyCardSummary(item = {}, insight = companyRankInsight(item)) {
+  if (isAdminRole()) return companyRankInsightGrid(insight);
+  const rank = finiteNumber(item.rank || item.overallRank || insight.rank, insight.rank);
+  const product = b2bCompanyProductSummary(item, insight);
+  const coupon = b2bCompanyCouponSummary(item);
+  const revenue = finiteNumber(insight.revenue, 0);
+  const cells = [
+    {
+      label: "순위",
+      value: rank ? `${fmtNumber(rank)}위` : "확인필요",
+      note: item.rankingSourceLabel || "네이버 플레이스",
+      tone: rank && rank <= 5 ? "hot" : rank && rank <= 10 ? "strong" : "neutral"
+    },
+    {
+      label: "예약율",
+      value: Number.isFinite(insight.rate) ? fmtRate(insight.rate) : "확인필요",
+      note: insight.hasInventory ? insight.stockText : "네이버 플레이스 예약 기준 대기",
+      tone: insight.tone || "neutral"
+    },
+    {
+      label: "예상 매출",
+      value: revenue ? fmtWon(revenue) : "대기",
+      note: revenue ? insight.revenueNote : "가격/수량 표본 대기",
+      tone: revenue ? "revenue" : "watch"
+    },
+    {
+      label: "쿠폰",
+      value: coupon.value,
+      note: coupon.note,
+      tone: coupon.tone
+    },
+    {
+      label: "주요 상품",
+      value: product.value,
+      note: product.note,
+      tone: product.value.includes("데이") ? "good" : "neutral"
+    }
+  ];
+  return `
+    <div class="b2b-company-card-summary">
+      ${cells.map((cell) => `
+        <div class="${escapeHtml(cell.tone || "neutral")}">
+          <span>${escapeHtml(cell.label)}</span>
+          <strong>${escapeHtml(cell.value)}</strong>
+          <small>${escapeHtml(cell.note || "")}</small>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) {
   const rank = finiteNumber(item.rank || item.overallRank || insight.rank, insight.rank);
   const flow = salesFlowProfile(item);
@@ -2254,7 +2349,7 @@ function b2bCompanyActionLine(item = {}, insight = companyRankInsight(item)) {
   `;
 }
 
-function b2bRankBoardModel(items = rankedCompanyItems()) {
+function b2bRankBoardModel(items = b2bScopedRankedCompanyItems()) {
   const rows = items.slice(0, 30).map((item, index) => {
     const insight = companyRankInsight(item, index + 1);
     const linked = inventoryLinked(item);
@@ -2363,6 +2458,11 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
   const revenueAverage = revenueValues.length ? revenueValues.reduce((sum, value) => sum + value, 0) / revenueValues.length : 0;
   const revenueMax = revenueValues.length ? Math.max(...revenueValues) : 0;
   const revenueMin = revenueValues.length ? Math.min(...revenueValues) : 0;
+  const couponRows = rows.filter((row) => naverCouponInfo(row.item).visible);
+  const run = state.data?.run || {};
+  const scopeRange = effectiveDetailRankRange(run);
+  const scopeValue = scopeRange === "상세 생략" ? "순위만" : `${scopeRange}위`;
+  const scopeNote = `${dateRangeLabel(run)} · ${productModeLabel(run.productMode || "all")}`;
   const rangeRows = b2bRankRangeModel(model);
   const summaryTone = Number.isFinite(linkedCoverage) && linkedCoverage >= 0.55
     ? "strong"
@@ -2371,59 +2471,37 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
       : model.decision?.tone || "neutral";
   const cards = [
     {
-      label: "상위 5위 경쟁",
-      value: fmtNumber(topRows.length),
-      note: "지정 검색범위 기준",
-      tone: topRows.some((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE) ? "hot" : "strong"
+      label: "지정 검색범위",
+      value: scopeValue,
+      note: scopeNote,
+      tone: "strong"
     },
     {
-      label: B2B_LOW_RESERVATION_LABEL,
-      value: fmtNumber(gapRows.length),
-      note: gapRows.length ? "수집기간 예약율 기준" : "해당 업체 없음",
-      tone: gapRows.length ? "watch" : "good"
+      label: "경쟁업체",
+      value: fmtNumber(rows.length),
+      note: "최초 검색범위 안의 업체만 표시",
+      tone: "neutral"
     },
     {
-      label: B2B_HIGH_RESERVATION_LABEL,
-      value: fmtNumber(hotRows.length),
+      label: "평균 예약율",
+      value: Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요",
       note: "네이버 플레이스 예약 기준",
-      tone: hotRows.length ? "hot" : "neutral"
+      tone: Number.isFinite(model.rate) && model.rate >= B2B_HIGH_RESERVATION_RATE ? "hot" : "strong"
     },
     {
-      label: "매출 표본",
-      value: revenueRows.length ? fmtNumber(revenueRows.length) : "대기",
-      note: revenueRows.length ? `평균 ${fmtWon(revenueAverage)} · 최고 ${fmtWon(revenueMax)} · 최저 ${fmtWon(revenueMin)}` : "가격 표본 필요",
+      label: "예상 평균 매출",
+      value: revenueAverage ? fmtWon(revenueAverage) : "대기",
+      note: revenueRows.length ? `매출 표본 ${fmtNumber(revenueRows.length)}곳` : "가격/수량 표본 필요",
       tone: revenueRows.length ? "strong" : "watch"
     },
     {
-      label: "반경권 노출",
-      value: fmtNumber(outsideRows.length),
-      note: outsideRows.length ? "검색 반경 내 타지역 경쟁" : "지역권 중심 노출",
-      tone: outsideRows.length ? "watch" : "good"
+      label: "쿠폰 확인",
+      value: fmtNumber(couponRows.length),
+      note: couponRows.length ? "쿠폰명/혜택 노출 확인" : "자동 수집 제한",
+      tone: couponRows.length ? "strong" : "neutral"
     }
   ];
-  const actionRows = [
-    {
-      label: "상위권",
-      value: `${fmtNumber(topRows.length)}개`,
-      summary: "고객이 먼저 비교하는 가격·상품·리뷰 기준입니다.",
-      tone: "hot",
-      rows: topRows.slice(0, 3)
-    },
-    {
-      label: "중위권",
-      value: `${fmtNumber(midRows.length)}개`,
-      summary: "노출 개선 시 바로 비교군으로 들어올 수 있는 구간입니다.",
-      tone: "strong",
-      rows: midRows.slice(0, 3)
-    },
-    {
-      label: "예약율 대기",
-      value: `${fmtNumber(rankOnlyRows.length)}개`,
-      summary: "네이버 노출은 있으나 예약율 산정에서 제외한 업체입니다.",
-      tone: rankOnlyRows.length ? "watch" : "good",
-      rows: rankOnlyRows.slice(0, 3)
-    }
-  ];
+  const actionRows = [];
   const focusRows = (model.focusRows || rows.slice(0, 4)).map((row) => {
     const insight = row.insight || companyRankInsight(row.item, row.index + 1);
     const itemIndex = Number.isFinite(row.itemIndex) ? row.itemIndex : (row.linked ? finiteNumber(row.item?.availabilityIndex, -1) : -1);
@@ -2452,12 +2530,18 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     linkedCoverage,
     remainingRooms,
     revenueTotal,
+    revenueAverage,
+    revenueMax,
+    revenueMin,
+    couponRows,
+    scopeValue,
+    scopeNote,
     rangeRows,
     cards,
     actionRows,
     focusRows,
     summaryTone,
-    summary: `${fmtNumber(rows.length)}개 지정 검색범위에서 예약율과 매출 표본을 비교합니다.`
+    summary: `최초 지정 검색범위 ${scopeValue} 안의 경쟁업체만 표시합니다.`
   };
 }
 
@@ -2594,8 +2678,8 @@ function renderB2BRankExposureBoard(model = b2bRankBoardModel()) {
     <div class="b2b-rank-exposure-board">
       <div class="b2b-rank-board-head">
         <div>
-          <span>노출 경쟁판</span>
-          <strong>순위 구간별 경쟁 압력</strong>
+          <span>검색범위 요약</span>
+          <strong>지정 범위 안의 경쟁 비교</strong>
         </div>
         <em class="${escapeHtml(exposure.summaryTone)}">${escapeHtml(exposure.summary)}</em>
       </div>
@@ -2608,71 +2692,29 @@ function renderB2BRankExposureBoard(model = b2bRankBoardModel()) {
           </article>
         `).join("")}
       </div>
-      <div class="b2b-rank-board-layout">
-        <div class="b2b-rank-range-board">
-          ${exposure.rangeRows.map((row) => `
-            <div class="b2b-rank-range-row ${escapeHtml(row.tone)}">
-              <span>${escapeHtml(row.label)}</span>
-              <div>
-                <strong>${fmtNumber(row.count)}개 · 예약율 표본 ${fmtNumber(row.linkedCount)}개</strong>
-                <small>${Number.isFinite(row.rate) ? `예약율 ${fmtRate(row.rate)}` : "예약율 확인 필요"} · ${B2B_LOW_RESERVATION_LABEL} ${fmtNumber(row.gapCount)}개 · ${B2B_HIGH_RESERVATION_LABEL} ${fmtNumber(row.hotCount)}개</small>
-                <i class="b2b-rank-range-bar"><b style="width: ${row.width}%"></b></i>
-              </div>
-              <em>${row.revenueTotal ? fmtWon(row.revenueTotal) : "매출 대기"}</em>
-            </div>
-          `).join("")}
-        </div>
-        <div class="b2b-rank-action-board">
-          ${exposure.actionRows.map((row) => `
-            <div class="${escapeHtml(row.tone)}">
-              <span>${escapeHtml(row.label)}</span>
-              <strong>${escapeHtml(row.value)}</strong>
-              <small>${escapeHtml(row.summary)}</small>
-            </div>
-          `).join("")}
-        </div>
-      </div>
-      <div class="b2b-rank-board-head compact">
-        <div>
-          <span>우선 비교 업체</span>
-          <strong>바로 열어볼 경쟁 후보</strong>
-        </div>
-      </div>
-      <div class="b2b-rank-focus">
-        ${exposure.focusRows.map((row) => {
-          const attrs = row.itemIndex >= 0 ? `type="button" data-open-company="${row.itemIndex}"` : `type="button" disabled`;
-          return `
-            <button class="${escapeHtml(row.insight.tone || "neutral")}" ${attrs}>
-              <span>${fmtNumber(row.rank || row.index + 1)}</span>
-              <strong>${escapeHtml(row.name)}</strong>
-              <em>${escapeHtml(row.label)}</em>
-              <small>${escapeHtml(`${row.metric} · ${row.note}`)}</small>
-            </button>
-          `;
-        }).join("")}
-      </div>
     </div>
   `;
 }
 
 function renderB2BRankBrief(model = b2bRankBoardModel()) {
   if (isAdminRole()) return "";
+  const exposure = b2bRankExposureModel(model);
   return `
     <section class="b2b-rank-brief ${escapeHtml(model.decision.tone)}">
       <div class="b2b-rank-head">
         <div>
           <p class="eyebrow">경쟁업체 노출 브리프</p>
-          <h3>네이버 상위 노출 경쟁 비교</h3>
-          <p>${escapeHtml(model.decision.summary)}</p>
+          <h3>네이버 지정 검색범위 경쟁 비교</h3>
+          <p>${escapeHtml("처음 설정한 순위 범위 안에서 예약율, 예상 매출, 쿠폰, 상품 구성을 비교합니다.")}</p>
         </div>
-        <strong>${escapeHtml(model.decision.label)}</strong>
+        <strong>${escapeHtml(exposure.scopeValue || "검색범위")}</strong>
       </div>
       <div class="b2b-rank-metrics">
-        <article><span>경쟁업체</span><strong>${fmtNumber(model.rows.length)}</strong><small>상위 노출 기준</small></article>
-        <article><span>예약율 표본</span><strong>${fmtNumber(model.linkedRows.length)}</strong><small>네이버 플레이스 기준</small></article>
+        <article><span>검색범위</span><strong>${escapeHtml(exposure.scopeValue || "확인")}</strong><small>${escapeHtml(exposure.scopeNote || "최초 설정 기준")}</small></article>
+        <article><span>경쟁업체</span><strong>${fmtNumber(model.rows.length)}</strong><small>지정 범위 안</small></article>
         <article><span>평균 예약율</span><strong>${Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요"}</strong><small>${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실</small></article>
-        <article><span>${B2B_LOW_RESERVATION_LABEL}</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>수집기간 예약율 기준</small></article>
-        <article><span>${B2B_HIGH_RESERVATION_LABEL}</span><strong>${fmtNumber(model.hotRows.length)}</strong><small>예약율 표본 기준</small></article>
+        <article><span>예상 평균 매출</span><strong>${exposure.revenueAverage ? fmtWon(exposure.revenueAverage) : "대기"}</strong><small>매출 표본 ${fmtNumber(exposure.revenueRows.length)}곳</small></article>
+        <article><span>쿠폰 확인</span><strong>${fmtNumber(exposure.couponRows.length)}</strong><small>${exposure.couponRows.length ? "쿠폰명/혜택 확인" : "자동 수집 제한"}</small></article>
       </div>
       ${renderB2BRankExposureBoard(model)}
     </section>
@@ -2967,15 +3009,13 @@ function otaVerificationBadge(item = {}) {
 function b2bPublicCompanyBadges(item = {}, linked = inventoryLinked(item)) {
   if (isAdminRole()) return "";
   const status = collectionStatusProfile(item);
-  const boundary = regionBoundaryBadge(item);
   const badges = [
     linked
       ? `<span class="structure-badge good" title="네이버 플레이스 예약 기준으로 산정했습니다.">네이버 예약 기준</span>`
       : `<span class="structure-badge watch" title="네이버 노출은 확인됐지만 네이버 플레이스 예약 기준 표본이 부족합니다.">예약 기준 대기</span>`,
     status.offlineEstimated
       ? `<span class="structure-badge watch" title="운영 기준보다 낮은 수집값은 오프라인 예약 가능성을 반영합니다.">오프라인 예약 반영</span>`
-      : "",
-    boundary
+      : ""
   ].filter(Boolean);
   return badges.join("");
 }
@@ -3272,7 +3312,7 @@ function rankMetaChipRow(item = {}) {
 
 function renderCompanies() {
   const analysisItems = state.data?.availability?.items || [];
-  const items = rankedCompanyItems();
+  const items = isAdminRole() ? rankedCompanyItems() : b2bScopedRankedCompanyItems();
   const ranking = state.data?.ranking || {};
   const b2bRankBrief = !isAdminRole() ? renderB2BRankBrief(b2bRankBoardModel(items)) : "";
   els.rankCount.textContent = ranking.total
@@ -3287,10 +3327,11 @@ function renderCompanies() {
     const linked = inventoryLinked(item);
     const lodging = salesStats(item, "lodging");
     const insight = companyRankInsight(item, index + 1);
+    const publicMode = !isAdminRole();
     const metric = insight.metricText;
     const stockStatus = item.bookingStatus || (linked ? "재고 분석 완료" : "예약ID 조회 실패/미수집");
     return `
-      <article class="company-card ${linked ? "" : "rank-only"} ${escapeHtml(insight.tone)}" data-company-index="${index}">
+      <article class="company-card ${publicMode ? "b2b-public-company" : ""} ${linked ? "" : "rank-only"} ${escapeHtml(insight.tone)}" data-company-index="${index}">
         <div class="company-main">
           <span class="rank-badge">${escapeHtml(item.rank || index + 1)}</span>
           <div class="company-title">
@@ -3305,7 +3346,9 @@ function renderCompanies() {
           <small title="${escapeHtml(stockStatus)}">${escapeHtml(insight.stockText)}</small>
         </div>
         <div class="company-chart">
-          ${linked ? `
+          ${publicMode ? `
+            ${b2bCompanyCardSummary(item, insight)}
+          ` : linked ? `
             ${companyRankInsightGrid(insight)}
             ${b2bCompanyActionLine(item, insight)}
             <div class="sales-lines">
@@ -3313,7 +3356,7 @@ function renderCompanies() {
               <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
             </div>
             ${flowChipRow(item)}
-            ${isAdminRole() ? validationReasonRow(item) : ""}
+            ${validationReasonRow(item)}
             ${miniBars(item)}
           ` : `
             <div class="sales-lines">
@@ -3321,7 +3364,6 @@ function renderCompanies() {
               <span class="sales-line day">${escapeHtml(itemLocationLine(item))}</span>
             </div>
             ${rankMetaChipRow(item)}
-            ${b2bCompanyActionLine(item, insight)}
           `}
         </div>
         <div class="company-action">
@@ -3459,6 +3501,40 @@ function effectiveDetailRankRange(run = {}) {
   if (mode === "fast") return "상세 생략";
   const raw = String(run.detailRankRanges || "").trim();
   return !raw || /^(none|skip|없음)$/i.test(raw) ? "1-20" : raw;
+}
+
+function rankRangeSegments(value = "") {
+  const text = normalizedRankRangeText(value).replace(/위/g, "");
+  if (!text || /^(상세생략|순위만)$/i.test(text)) return [];
+  return text
+    .split(/[,/|]+/)
+    .map((part) => {
+      const numbers = (part.match(/\d+/g) || []).map((number) => Number(number)).filter((number) => Number.isFinite(number) && number > 0);
+      if (!numbers.length) return null;
+      const start = numbers[0];
+      const end = numbers[1] || numbers[0];
+      return {
+        start: Math.min(start, end),
+        end: Math.max(start, end)
+      };
+    })
+    .filter(Boolean);
+}
+
+function rankInSegments(rank, segments = []) {
+  const number = Number(rank);
+  if (!Number.isFinite(number) || !segments.length) return true;
+  return segments.some((segment) => number >= segment.start && number <= segment.end);
+}
+
+function b2bScopedRankedCompanyItems(items = rankedCompanyItems(), run = state.data?.run || {}) {
+  const range = effectiveDetailRankRange(run);
+  const segments = rankRangeSegments(range);
+  if (!segments.length) return items.slice(0, 30);
+  return items.filter((item, index) => {
+    const rank = finiteNumber(item.rank || item.overallRank || index + 1, index + 1);
+    return rankInSegments(rank, segments);
+  });
 }
 
 function naverCouponInfo(item = {}) {
