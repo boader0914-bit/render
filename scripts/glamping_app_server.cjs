@@ -2017,6 +2017,86 @@ function b2bSearchPayload(value = {}) {
   };
 }
 
+function b2bMyLodgePayload(value = {}) {
+  const lodgingName = String(value.lodgingName || value.companyName || value.keyword || value.query || "").trim();
+  if (!lodgingName) {
+    const error = new Error("숙소명을 입력해야 수집할 수 있습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const bookingRangeDays = Number(value.bookingRangeDays) || 7;
+  return {
+    keyword: lodgingName,
+    checkIn: value.checkIn || kstDate(0),
+    checkOut: value.checkOut || kstDate(Math.max(1, bookingRangeDays) - 1),
+    searchMode: "company",
+    productMode: normalizeProductMode(value.productMode || "all"),
+    collectionMode: normalizeCollectionMode(value.collectionMode || "precision"),
+    detailRankRanges: String(value.detailRankRanges || "1-5").trim() || "1-5",
+    bookingRangeDays,
+    bookingRangePlaceLimit: Math.max(1, Math.min(5, Math.round(Number(value.bookingRangePlaceLimit) || 3))),
+    sourceRole: USER_ROLES.b2b,
+    collectionSource: "b2b_search"
+  };
+}
+
+function b2bMyLodgeMatchScore(item = {}, targetName = "") {
+  const name = String(item.name || item.companyName || item["업체명"] || "").trim();
+  const candidate = companyPlatformKey(name);
+  const target = companyPlatformKey(targetName);
+  if (!candidate || !target) return 0;
+  if (candidate === target) return 100;
+  const looseCandidate = normalizeCompanyLooseName(name);
+  const looseTarget = normalizeCompanyLooseName(targetName);
+  if (looseCandidate && looseTarget && looseCandidate === looseTarget) return 96;
+  if (target.includes(candidate) && candidate.length >= 3) return 90;
+  if (candidate.includes(target) && target.length >= 3) return 86;
+  if (looseCandidate && looseTarget && looseTarget.includes(looseCandidate) && looseCandidate.length >= 3) return 84;
+  if (looseCandidate && looseTarget && looseCandidate.includes(looseTarget) && looseTarget.length >= 3) return 82;
+  const tokens = String(targetName || "")
+    .normalize("NFKC")
+    .split(/\s+/)
+    .map(companyPlatformKey)
+    .filter((token) => token.length >= 2 && !["글램핑", "캠핑", "카라반", "리조트", "펜션"].includes(token));
+  if (tokens.length && tokens.every((token) => candidate.includes(token))) return 72;
+  return 0;
+}
+
+function b2bMyLodgeCandidateItems(data = {}, targetName = "") {
+  const availabilityItems = Array.isArray(data?.availability?.items) ? data.availability.items : [];
+  const rankingItems = Array.isArray(data?.ranking?.items) ? data.ranking.items : [];
+  const rows = [
+    ...availabilityItems.map((item, index) => ({ item, index, source: "availability" })),
+    ...rankingItems.map((item, index) => ({ item, index, source: "ranking" }))
+  ];
+  const byKey = new Map();
+  for (const row of rows) {
+    const item = row.item || {};
+    const key = item.bookingBusinessId || item.placeId || item.sourceKey || companyPlatformKey(item.name || item.companyName || "");
+    if (!key) continue;
+    const score = b2bMyLodgeMatchScore(item, targetName);
+    const rank = Number(item.overallRank || item.rank || row.index + 1);
+    const detailBonus = row.source === "availability" || item.hasInventory ? 12 : 0;
+    const revenueBonus = Number(item.weeklyEstimatedRevenue || item.weeklyAdjustedRevenue || 0) > 0 ? 5 : 0;
+    const rankBonus = Number.isFinite(rank) && rank > 0 ? Math.max(0, 6 - Math.min(5, rank)) : 0;
+    const weightedScore = score + detailBonus + revenueBonus + rankBonus;
+    const next = {
+      item,
+      name: item.name || item.companyName || "",
+      score: weightedScore,
+      matchScore: score,
+      source: row.source,
+      rank: Number.isFinite(rank) ? rank : null
+    };
+    const prev = byKey.get(key);
+    if (!prev || next.score > prev.score) byKey.set(key, next);
+  }
+  return [...byKey.values()]
+    .filter((row) => row.matchScore > 0 || byKey.size === 1)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+}
+
 async function runB2BSearch(payload = {}, context = {}) {
   const crawlPayload = b2bSearchPayload(payload);
   const result = await runCrawler(crawlPayload);
@@ -2048,6 +2128,48 @@ async function runB2BSearch(payload = {}, context = {}) {
     data: publicRunForRole(data, USER_ROLES.b2b),
     crawlTiming: result.crawlTiming || null,
     searchHistory
+  };
+}
+
+async function runB2BMyLodgeCollection(payload = {}) {
+  const crawlPayload = b2bMyLodgePayload(payload);
+  const result = await runCrawler(crawlPayload);
+  const runId = result?.runId || "";
+  if (!runId) {
+    const error = new Error("내 숙소 수집 결과를 저장하지 못했습니다.");
+    error.statusCode = 500;
+    throw error;
+  }
+  const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true });
+  if (!data) {
+    const error = new Error("내 숙소 수집 결과를 불러오지 못했습니다.");
+    error.statusCode = 500;
+    throw error;
+  }
+  const candidates = b2bMyLodgeCandidateItems(data, crawlPayload.keyword);
+  const publicCandidates = publicRunForRole({ items: candidates.map((row) => row.item) }, USER_ROLES.b2b)?.items || [];
+  const candidateItems = publicCandidates.map((item, index) => ({
+    ...item,
+    matchScore: candidates[index]?.matchScore || 0,
+    matchName: candidates[index]?.name || "",
+    matchSource: candidates[index]?.source || "",
+    matchRank: candidates[index]?.rank || null
+  }));
+  return {
+    ok: true,
+    runId,
+    keyword: crawlPayload.keyword,
+    selectedItem: candidateItems[0] || null,
+    candidateItems,
+    selectedSummary: candidates[0]
+      ? {
+          name: candidates[0].name || "",
+          matchScore: candidates[0].matchScore || 0,
+          rank: candidates[0].rank || null,
+          source: candidates[0].source || ""
+        }
+      : null,
+    crawlTiming: result.crawlTiming || null
   };
 }
 
@@ -7778,8 +7900,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-my-lodge"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-my-lodge"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-my-lodge-collect"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-my-lodge-collect"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -7915,6 +8037,14 @@ async function route(req, res) {
       }
       const payload = await parseJsonBody(req);
       return send(res, 200, await runB2BSearch(payload, { session, req }));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/b2b-my-lodge-collect") {
+      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
+        return sendForbidden(req, res, "B2B 계정이 필요합니다.");
+      }
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await runB2BMyLodgeCollection(payload));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {

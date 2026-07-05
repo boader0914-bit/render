@@ -38,6 +38,9 @@ const state = {
   b2bSearchPreview: null,
   b2bSearchTimer: null,
   b2bMyLodgeDraft: null,
+  b2bMyLodgeCollecting: false,
+  b2bMyLodgeCollectStatus: "",
+  b2bMyLodgeCollectResult: null,
   memberSearchHistory: []
 };
 
@@ -7160,6 +7163,115 @@ function b2bMyLodgeFacilities(value = "") {
     .slice(0, 8);
 }
 
+function b2bWonNumber(value) {
+  if (Number.isFinite(Number(value))) return Number(value);
+  const text = String(value || "").replace(/,/g, "").replace(/\s+/g, "");
+  if (!text) return 0;
+  let total = 0;
+  const eok = text.match(/([\d.]+)억/u);
+  const man = text.match(/([\d.]+)만/u);
+  const won = text.match(/([\d.]+)원/u);
+  if (eok) total += Number(eok[1]) * 100000000;
+  if (man) total += Number(man[1]) * 10000;
+  if (!eok && !man && won) total += Number(won[1]);
+  if (Number.isFinite(total) && total > 0) return Math.round(total);
+  const numeric = Number(text.replace(/[^\d.]/g, ""));
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function roundB2BLodgePrice(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return String(Math.round(number / 1000) * 1000);
+}
+
+function b2bCollectedRoomCount(item = {}) {
+  const days = Math.max(1, bookingDays(state.data?.run || {}) || DEFAULT_BOOKING_DAYS);
+  const candidates = [
+    item.weeklyOperatingTotal,
+    item.weeklyBasisTotal,
+    item.weeklyMaxTotal,
+    item.nightTotalStock,
+    item.totalRooms,
+    item.rawTotalStock,
+    Number(item.weeklyTotalStock) > 0 ? Number(item.weeklyTotalStock) / days : 0
+  ].map((value) => finiteNumber(value, 0)).filter((value) => value > 0);
+  return candidates.length ? String(Math.round(Math.max(...candidates))) : "";
+}
+
+function b2bCollectedPriceFields(item = {}) {
+  const profile = preciseRevenueProfile(item);
+  const revenue = profile.lodging || {};
+  const result = {};
+  const keys = ["weekdayPrice", "fridayPrice", "saturdayPrice", "sundayPrice"];
+  (profile.lodgingDayRows || []).slice(0, 4).forEach((row, index) => {
+    const priced = finiteNumber(row.pricedSoldOut, 0);
+    const offline = finiteNumber(row.offlineReserved, 0);
+    const sold = priced + offline;
+    const amount = b2bWonNumber(row.revenueText);
+    const price = sold > 0 ? amount / sold : 0;
+    const rounded = roundB2BLodgePrice(price);
+    if (rounded) result[keys[index]] = rounded;
+  });
+  const avg = finiteNumber(revenue.avgSoldUnitPrice, finiteNumber(item.weeklyAvgSoldUnitPrice, finiteNumber(item.basisLodgingAvgSoldUnitPrice, 0)));
+  const fallback = roundB2BLodgePrice(avg);
+  if (fallback) {
+    keys.forEach((key) => {
+      if (!result[key]) result[key] = fallback;
+    });
+  }
+  return result;
+}
+
+function b2bCollectedFacilities(item = {}) {
+  const coupon = naverCouponInfo(item);
+  const productNames = (Array.isArray(item.itemDetails) ? item.itemDetails : [])
+    .map((row) => String(row.name || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return [
+    item.productTypeSummary,
+    item.category,
+    item.businessCategory,
+    ...productNames,
+    coupon.visible ? `쿠폰: ${coupon.names || "노출"}` : ""
+  ].filter(Boolean).join(", ").slice(0, 160);
+}
+
+function b2bCollectedNaverConnected(item = {}) {
+  return Boolean(
+    item.hasInventory ||
+    finiteNumber(item.weeklyTotalStock, 0) > 0 ||
+    finiteNumber(item.nightTotalStock, 0) > 0 ||
+    (Array.isArray(item.itemDetails) && item.itemDetails.length)
+  );
+}
+
+function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) {
+  const prices = b2bCollectedPriceFields(item);
+  const roomCount = b2bCollectedRoomCount(item);
+  const facilities = b2bCollectedFacilities(item);
+  const name = String(item.name || item.companyName || current.lodgingName || result.keyword || "").trim();
+  const collected = {
+    ...current,
+    lodgingName: name || current.lodgingName || "",
+    roomCount: roomCount || current.roomCount || "",
+    weekdayPrice: prices.weekdayPrice || current.weekdayPrice || "",
+    fridayPrice: prices.fridayPrice || current.fridayPrice || "",
+    saturdayPrice: prices.saturdayPrice || current.saturdayPrice || "",
+    sundayPrice: prices.sundayPrice || current.sundayPrice || "",
+    facilities: facilities || current.facilities || "",
+    naverConnected: b2bCollectedNaverConnected(item) || Boolean(current.naverConnected),
+    otaConnected: Boolean(current.otaConnected),
+    savedAt: new Date().toISOString(),
+    collectedAt: new Date().toISOString(),
+    collectionRunId: result.runId || "",
+    collectionSource: "naver_company",
+    collectionStatus: `${name || current.lodgingName || "내 숙소"} 자동 수집 완료`
+  };
+  return collected;
+}
+
 function b2bMyLodgeRate(flow = {}, key = "all", fallback = 0.25) {
   const rate = flow?.[key]?.rate;
   if (Number.isFinite(rate)) return Math.max(0, Math.min(1, rate));
@@ -7307,6 +7419,8 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
 function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyLodgeBenchmarkModel(brief)) {
   const draft = model.draft || {};
   const name = String(draft.lodgingName || "").trim();
+  const collecting = Boolean(state.b2bMyLodgeCollecting);
+  const collectStatus = state.b2bMyLodgeCollectStatus || draft.collectionStatus || "";
   const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
   return `
     <div class="b2b-my-lodge-board">
@@ -7352,9 +7466,11 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <label><input name="otaConnected" type="checkbox" ${draft.otaConnected ? "checked" : ""}> OTA 판매</label>
         </div>
         <div class="b2b-my-lodge-actions">
+          <button class="secondary-button collect" type="button" data-b2b-my-lodge-collect ${collecting ? "disabled" : ""}>${collecting ? "숙소명 수집중" : "숙소명으로 자동 수집"}</button>
           <button class="primary-button" type="button" data-b2b-my-lodge-save>저장하고 비교</button>
           <button class="secondary-button" type="button" data-b2b-my-lodge-clear ${model.hasInput ? "" : "disabled"}>초기화</button>
         </div>
+        ${collectStatus ? `<div class="b2b-my-lodge-collect-status ${collecting ? "loading" : ""}">${escapeHtml(collectStatus)}</div>` : ""}
       </form>
       <div class="b2b-my-lodge-result ${model.hasEstimateBasis ? "ready" : "empty"}">
         <article class="b2b-my-lodge-main">
@@ -7417,9 +7533,7 @@ function collectB2BMyLodgeFormValues() {
   };
 }
 
-function saveB2BMyLodgeBenchmark() {
-  const values = collectB2BMyLodgeFormValues();
-  if (!values) return;
+function persistB2BMyLodgeDraft(values = {}) {
   state.b2bMyLodgeDraft = { key: b2bMyLodgeStorageKey(), values };
   try {
     if (typeof localStorage !== "undefined") {
@@ -7428,12 +7542,63 @@ function saveB2BMyLodgeBenchmark() {
   } catch {
     // The comparison still renders from memory if browser storage is blocked.
   }
+}
+
+function saveB2BMyLodgeBenchmark() {
+  const values = collectB2BMyLodgeFormValues();
+  if (!values) return;
+  persistB2BMyLodgeDraft(values);
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+async function collectB2BMyLodgeByName() {
+  if (state.b2bMyLodgeCollecting) return;
+  const current = collectB2BMyLodgeFormValues() || {};
+  const lodgingName = String(current.lodgingName || "").trim();
+  if (!lodgingName) {
+    state.b2bMyLodgeCollectStatus = "숙소명을 먼저 입력하세요.";
+    renderReport();
+    return;
+  }
+  const payload = {
+    lodgingName,
+    checkIn: state.data?.run?.checkIn || els.checkInInput?.value || "",
+    checkOut: state.data?.run?.checkOut || els.checkOutInput?.value || "",
+    detailRankRanges: "1-5",
+    bookingRangeDays: DEFAULT_BOOKING_DAYS,
+    bookingRangePlaceLimit: 3
+  };
+  state.b2bMyLodgeCollecting = true;
+  state.b2bMyLodgeCollectStatus = `${lodgingName} 자동 수집을 시작합니다. 네이버 업체명 검색 기준입니다.`;
+  state.b2bMyLodgeCollectResult = null;
+  renderReport();
+  try {
+    const result = await fetchJson("/api/b2b-my-lodge-collect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const item = result.selectedItem || (Array.isArray(result.candidateItems) ? result.candidateItems[0] : null);
+    if (!item) throw new Error("일치하는 네이버 업체를 찾지 못했습니다. 숙소명을 더 정확히 입력하세요.");
+    const values = b2bMyLodgeDraftFromCollectedItem(item, result, current);
+    state.b2bMyLodgeCollectResult = result;
+    state.b2bMyLodgeCollectStatus = `${values.lodgingName || lodgingName} 자동 수집 완료 · 객실/가격/쿠폰/상품 구성을 반영했습니다.`;
+    values.collectionStatus = state.b2bMyLodgeCollectStatus;
+    persistB2BMyLodgeDraft(values);
+  } catch (error) {
+    state.b2bMyLodgeCollectStatus = `자동 수집 실패: ${error.message}`;
+  } finally {
+    state.b2bMyLodgeCollecting = false;
+    renderReport();
+    document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
+
 function clearB2BMyLodgeBenchmark() {
   state.b2bMyLodgeDraft = null;
+  state.b2bMyLodgeCollectStatus = "";
+  state.b2bMyLodgeCollectResult = null;
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.removeItem(b2bMyLodgeStorageKey());
@@ -17241,6 +17406,14 @@ function bindEvents() {
       renderB2BSearchPanel();
       els.b2bSearchPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
       if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색어를 적용했습니다. 범위를 확인한 뒤 검색 실행을 누르세요.`;
+      return;
+    }
+    if (event.target.closest("[data-b2b-my-lodge-collect]")) {
+      collectB2BMyLodgeByName().catch((error) => {
+        state.b2bMyLodgeCollecting = false;
+        state.b2bMyLodgeCollectStatus = `자동 수집 실패: ${error.message}`;
+        renderReport();
+      });
       return;
     }
     if (event.target.closest("[data-b2b-my-lodge-save]")) {
