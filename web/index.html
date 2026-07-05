@@ -31,6 +31,13 @@
           <span>지역/키워드 검색</span>
           <input id="b2bSearchInput" type="search" placeholder="예: 산청글램핑, 경주글램핑, 충남글램핑" autocomplete="off">
         </label>
+        <label class="b2b-range-field">
+          <span>검색범위</span>
+          <select id="b2bSearchRangeInput">
+            <option value="1-10">기본 분석 1~10위</option>
+            <option value="1-20">확장 분석 1~20위</option>
+          </select>
+        </label>
         <button class="primary-button" type="submit">검색 실행</button>
       </form>
       <div class="b2b-search-results" id="b2bSearchResults"></div>
@@ -198,32 +205,30 @@
             </label>
             <div class="field-grid">
               <label class="field">
-                <span>수집 방식</span>
+                <span>분석 방식</span>
                 <select id="collectionModeInput">
                   <option value="precision">정밀 분석</option>
-                  <option value="fast">빠른 순위</option>
                 </select>
               </label>
               <label class="field">
                 <span>상세 순위 범위</span>
-                <input id="detailRankRangesInput" type="text" value="1-20" placeholder="예: 1-5,10-20">
+                <input id="detailRankRangesInput" type="text" value="1-10" placeholder="예: 1-10, 1-20, 10-20">
               </label>
             </div>
             <div class="crawl-speed-panel">
               <div>
-                <strong>수집 속도 프리셋</strong>
+                <strong>검색범위 프리셋</strong>
                 <span id="crawlSpeedPreview">예상 계산 대기</span>
               </div>
               <div class="crawl-speed-options" id="crawlSpeedPresetRow">
-                <button type="button" data-crawl-speed-preset="fast">순위만</button>
+                <button type="button" data-crawl-speed-preset="top10">기본 1-10위</button>
+                <button type="button" data-crawl-speed-preset="top20">확장 1-20위</button>
                 <button type="button" data-crawl-speed-preset="top5">1-5위</button>
-                <button type="button" data-crawl-speed-preset="top10">1-10위</button>
                 <button type="button" data-crawl-speed-preset="mid10_20">10-20위</button>
-                <button type="button" data-crawl-speed-preset="split">분할</button>
               </div>
             </div>
             <button class="primary-button" type="submit">수집 실행</button>
-            <p class="hint" id="crawlStatus">정밀 분석은 지정 순위만 재고 상세를 확인합니다. 빠른 순위는 네이버 전체 순위만 먼저 수집합니다.</p>
+            <p class="hint" id="crawlStatus">기본 분석은 1~10위, 확장 분석은 1~20위까지 재고와 가격을 확인합니다.</p>
           </form>
 
           <section class="admin-card">

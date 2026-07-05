@@ -32,6 +32,7 @@ const state = {
   crawlStatusTimer: null,
   pendingRecrawlContext: null,
   b2bSearchQuery: "",
+  b2bSearchRange: "1-10",
   b2bSearchLoading: false,
   b2bSearchStartedAt: 0,
   b2bSearchPreview: null,
@@ -109,6 +110,7 @@ const els = {
   b2bSearchPanel: document.getElementById("b2bSearchPanel"),
   b2bSearchForm: document.getElementById("b2bSearchForm"),
   b2bSearchInput: document.getElementById("b2bSearchInput"),
+  b2bSearchRangeInput: document.getElementById("b2bSearchRangeInput"),
   b2bSearchResults: document.getElementById("b2bSearchResults"),
   b2bSearchStatus: document.getElementById("b2bSearchStatus"),
   b2bSearchHistory: document.getElementById("b2bSearchHistory"),
@@ -337,11 +339,10 @@ function normalizedRankRangeText(value = "") {
 
 function crawlSpeedPresetOptions() {
   return [
-    { key: "fast", label: "순위만", collectionMode: "fast", range: "", note: "상세 생략" },
-    { key: "top5", label: "1-5위", collectionMode: "precision", range: "1-5", note: "최상위만 정밀" },
-    { key: "top10", label: "1-10위", collectionMode: "precision", range: "1-10", note: "상위권 정밀" },
-    { key: "mid10_20", label: "10-20위", collectionMode: "precision", range: "10-20", note: "중위권 보강" },
-    { key: "split", label: "분할", collectionMode: "precision", range: "1-5,6-10,10-20", note: "구간별 확인" }
+    { key: "top10", label: "기본 1-10위", collectionMode: "precision", range: "1-10", note: "기본 정밀 분석" },
+    { key: "top20", label: "확장 1-20위", collectionMode: "precision", range: "1-20", note: "확장 정밀 분석" },
+    { key: "top5", label: "1-5위", collectionMode: "precision", range: "1-5", note: "최상위 구간 확인" },
+    { key: "mid10_20", label: "10-20위", collectionMode: "precision", range: "10-20", note: "중위권 보강" }
   ];
 }
 
@@ -349,11 +350,9 @@ function currentCrawlFormPayload() {
   const keyword = els.keywordInput?.value?.trim() || "";
   const requestedMode = els.searchModeInput?.value || "keyword";
   const resolvedMode = correctedSearchMode(keyword, requestedMode);
-  const collectionMode = els.collectionModeInput?.value || "precision";
+  const collectionMode = "precision";
   const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
-  const detailRankRanges = collectionMode === "fast"
-    ? ""
-    : (/^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-20" : (rawDetailRankRanges || "1-20"));
+  const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-10" : (rawDetailRankRanges || "1-10");
   return {
     keyword,
     checkIn: els.checkInInput?.value || "",
@@ -381,7 +380,7 @@ function updateCrawlSpeedPreview() {
     button.classList.toggle("active", button.dataset.crawlSpeedPreset === selectedKey);
   });
   if (els.crawlSpeedPreview) {
-    const detailText = payload.collectionMode === "fast" ? "상세 생략" : `상세 ${payload.detailRankRanges || "1-20"}위`;
+    const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
     els.crawlSpeedPreview.textContent = `${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}`;
   }
 }
@@ -392,24 +391,24 @@ function applyCrawlSpeedPreset(key = "") {
   if (els.collectionModeInput) els.collectionModeInput.value = preset.collectionMode;
   if (els.detailRankRangesInput) {
     els.detailRankRangesInput.value = preset.range;
-    els.detailRankRangesInput.disabled = preset.collectionMode === "fast";
+    els.detailRankRangesInput.disabled = false;
   }
   syncCollectionModeInputs();
   updateCrawlSpeedPreview();
   if (els.crawlStatus) {
     const payload = currentCrawlFormPayload();
     const preview = crawlPreviewMeta(payload);
-    const detailText = payload.collectionMode === "fast" ? "상세 생략" : `상세 ${payload.detailRankRanges || "1-20"}위`;
+    const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
     els.crawlStatus.textContent = `${preset.label} 프리셋 적용 · ${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · ${preset.note}`;
   }
 }
 
 function syncCollectionModeInputs() {
   if (!els.collectionModeInput || !els.detailRankRangesInput) return;
-  const fast = els.collectionModeInput.value === "fast";
-  els.detailRankRangesInput.disabled = fast;
-  els.detailRankRangesInput.placeholder = fast ? "빠른 순위는 상세 생략" : "예: 1-5,10-20";
-  if (!fast && !els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = "1-20";
+  els.collectionModeInput.value = "precision";
+  els.detailRankRangesInput.disabled = false;
+  els.detailRankRangesInput.placeholder = "예: 1-10, 1-20, 10-20";
+  if (!els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = "1-10";
   updateCrawlSpeedPreview();
 }
 
@@ -656,7 +655,7 @@ function crawlEstimateBasisText(basis = {}) {
   const range = Number(basis.bookingRangeDays) > 1
     ? `${fmtNumber(basis.bookingRangeDays)}일 · 상세 대상 중 최대 ${fmtNumber(basis.bookingRangePlaceLimit)}개`
     : "1일 기준";
-  const detail = basis.collectionMode === "fast" ? "상세 생략" : `상세 ${basis.detailRankRanges || "1-20"}위`;
+  const detail = basis.collectionMode === "fast" ? "상세 생략" : `상세 ${basis.detailRankRanges || "1-10"}위`;
   const timing = basis.timing || {};
   const timingText = timing.source === "measured"
     ? `예상 기준: 최근 유사 수집 ${fmtNumber(timing.sampleCount)}건 평균 ${formatElapsed(timing.averageSeconds)}`
@@ -690,7 +689,7 @@ function crawlPreviewMeta(payload = {}) {
     { key: "trend", label: "수요 확인", seconds: trendSeconds, detail: "검색수요와 트렌드 캐시를 확인합니다." },
     fast
       ? { key: "inventory", label: "상세 생략", seconds: 6, detail: "빠른 순위 모드라 날짜별 재고와 가격 확인을 건너뜁니다." }
-      : { key: "inventory", label: "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `상세 ${payload.detailRankRanges || "1-20"}위의 날짜별 수량과 요일별 가격을 확인합니다.` },
+      : { key: "inventory", label: "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `상세 ${payload.detailRankRanges || "1-10"}위의 날짜별 수량과 요일별 가격을 확인합니다.` },
     !fast ? { key: "ota", label: "보조 채널", seconds: otaSeconds + regionalSeconds, detail: "OTA 보조 신호와 지역 수요 데이터를 정리합니다." } : null,
     { key: "save", label: "저장/분석", seconds: ioSeconds, detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다." }
   ].filter(Boolean).map((stage, index) => ({
@@ -833,7 +832,7 @@ function crawlEstimatePayloadFromPlan(plan = {}) {
     searchMode: plan.searchMode || "keyword",
     productMode: plan.productMode || "all",
     collectionMode: plan.collectionMode || "precision",
-    detailRankRanges: plan.detailRankRanges || plan.range || "1-20"
+    detailRankRanges: plan.detailRankRanges || plan.range || "1-10"
   };
 }
 
@@ -2130,7 +2129,7 @@ function companyRankInsight(item = {}, fallbackRank = 0) {
     if (rate >= B2B_HIGH_RESERVATION_RATE) {
       tone = "hot";
       label = B2B_HIGH_RESERVATION_LABEL;
-    } else if (rate <= B2B_LOW_RESERVATION_RATE && remaining > 0) {
+    } else if (rate <= B2B_LOW_RESERVATION_RATE) {
       tone = "watch";
       label = B2B_LOW_RESERVATION_LABEL;
     } else if (remaining >= Math.max(3, Math.ceil(supply * 0.35))) {
@@ -2171,7 +2170,7 @@ function companyRankInsightGrid(insight = {}) {
   const cells = [
     ["예상 매출", insight.revenue ? fmtWon(insight.revenue) : "대기", insight.revenue ? insight.revenueNote : "가격 표본 대기", "revenue"],
     ["판매율", Number.isFinite(insight.rate) ? fmtRate(insight.rate) : "확인필요", insight.stockText, insight.tone],
-    ["잔여 객실", insight.hasInventory ? fmtNumber(insight.remaining) : "대기", insight.hasInventory ? "판매 여지 추정" : "상세 수집 필요", insight.hasInventory ? (insight.remaining ? "watch" : "good") : "neutral"],
+    ["예약 표본", insight.hasInventory ? insight.stockText : "대기", insight.hasInventory ? "판매 수량 확인" : "상세 수집 필요", insight.hasInventory ? "neutral" : "watch"],
     ["상품", insight.dayUseKnown ? "숙박+데이" : "숙박 중심", insight.productGap ? "데이유즈/캠프닉 미확인" : "상품 구성 확인", insight.productGap ? "watch" : "neutral"]
   ];
   return `
@@ -2202,7 +2201,7 @@ function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) 
     tone = "rank";
     label = "상세 표본 대기";
     summary = "네이버 노출은 확인됐지만 예약 수량 표본이 없어 판매 판단은 보류합니다.";
-  } else if (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE && remaining > 0) {
+  } else if (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE) {
     tone = "watch";
     label = B2B_LOW_RESERVATION_LABEL;
     summary = "수집기간 예약율이 낮아 가격, 상품 구성, 채널 상태를 함께 봅니다.";
@@ -2216,8 +2215,8 @@ function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) 
     summary = "숙박 중심 표본입니다. 데이유즈/캠프닉 상품 노출 여부를 함께 표시합니다.";
   } else if (remaining >= Math.max(3, Math.ceil(finiteNumber(insight.supply, 0) * 0.35))) {
     tone = "strong";
-    label = "경쟁 여지";
-    summary = "잔여 객실과 노출 흐름을 함께 비교할 수 있는 업체입니다.";
+    label = "비교 여지";
+    summary = "예약율과 노출 흐름을 함께 비교할 수 있는 업체입니다.";
   }
   return {
     tone,
@@ -2226,7 +2225,7 @@ function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) 
     chips: [
       rank ? `네이버 ${fmtNumber(rank)}위` : "순위 확인",
       linked && Number.isFinite(rate) ? `판매율 ${fmtRate(rate)}` : "수량 표본 대기",
-      linked ? `잔여 ${fmtNumber(remaining)}실` : "예약ID 확인 필요",
+      linked ? `판매 ${fmtNumber(insight.sold)}/${fmtNumber(insight.supply)}실` : "예약ID 확인 필요",
       platformCount ? `채널 ${fmtNumber(platformCount)}개` : "채널 보강"
     ],
     flowText: linked
@@ -2261,14 +2260,14 @@ function b2bRankBoardModel(items = rankedCompanyItems()) {
     const itemIndex = linked ? finiteNumber(item.availabilityIndex, -1) : -1;
     const opportunityScore = (linked ? 30 : 8)
       + (rank > 0 && rank <= 5 ? 18 : rank <= 10 ? 12 : rank <= 20 ? 6 : 0)
-      + (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE && remaining > 0 ? 22 : 0)
+      + (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE ? 22 : 0)
       + (remaining >= 3 ? 8 : 0)
       + Math.min(18, Math.round(finiteNumber(insight.revenue, 0) / 500000));
     return { item, index, itemIndex, insight, linked, rate, rank, remaining, opportunityScore };
   });
   const linkedRows = rows.filter((row) => row.linked);
   const rankOnlyRows = rows.filter((row) => !row.linked);
-  const gapRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE && row.remaining > 0);
+  const gapRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE);
   const hotRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE);
   const sales = summarizeSales(linkedRows.map((row) => row.item));
   const rate = sales.supply ? sales.sold / sales.supply : NaN;
@@ -2279,7 +2278,7 @@ function b2bRankBoardModel(items = rankedCompanyItems()) {
   const decision = rankOnlyRows.length > linkedRows.length
     ? { label: "노출 표본", tone: "watch", summary: "상위 노출 경쟁업체는 확인됐고, 예약 수량 표본은 일부 업체 중심으로 확보되어 있습니다." }
     : gapRows.length >= 2
-      ? { label: "잔여 경쟁권", tone: "strong", summary: "상위 노출 경쟁업체 중 잔여 객실이 있는 구간을 가격, 상품 구성, 채널 상태와 함께 봅니다." }
+      ? { label: "낮은 예약율 경쟁권", tone: "strong", summary: "상위 노출 경쟁업체 중 수집기간 예약율 20% 이하 구간을 가격, 상품 구성, 채널 상태와 함께 봅니다." }
       : hotRows.length >= 2
         ? { label: `${B2B_HIGH_RESERVATION_LABEL} 경쟁권`, tone: "hot", summary: "수집기간 예약율 40% 이상 경쟁업체가 많아 주말 재고와 가격 흐름을 함께 확인합니다." }
         : { label: "노출 요약", tone: "neutral", summary: "현재 표본에서는 경쟁업체별 순위와 예약 표본 상태를 함께 비교합니다." };
@@ -2326,7 +2325,7 @@ function b2bRankRangeModel(model = b2bRankBoardModel()) {
   return buckets.map((bucket) => {
     const linkedRows = bucket.rows.filter((row) => row.linked);
     const hotRows = bucket.rows.filter((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE);
-    const gapRows = bucket.rows.filter((row) => row.linked && Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE && row.remaining > 0);
+    const gapRows = bucket.rows.filter((row) => row.linked && Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE);
     const revenueTotal = bucket.rows.reduce((sum, row) => sum + finiteNumber(row.insight?.revenue, 0), 0);
     const sales = summarizeSales(linkedRows.map((row) => row.item));
     return {
@@ -2346,7 +2345,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
   const rows = model.rows || [];
   const linkedRows = model.linkedRows || rows.filter((row) => row.linked);
   const rankOnlyRows = model.rankOnlyRows || rows.filter((row) => !row.linked);
-  const gapRows = model.gapRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE && row.remaining > 0);
+  const gapRows = model.gapRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE);
   const hotRows = model.hotRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE);
   const topFiveRows = rows.filter((row) => row.rank > 0 && row.rank <= 5);
   const topRows = topFiveRows.length ? topFiveRows : rows.slice(0, 5);
@@ -2355,7 +2354,11 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
   const revenueRows = rows.filter((row) => finiteNumber(row.insight?.revenue, 0) > 0);
   const linkedCoverage = rows.length ? linkedRows.length / rows.length : NaN;
   const remainingRooms = gapRows.reduce((sum, row) => sum + finiteNumber(row.remaining, 0), 0);
-  const revenueTotal = revenueRows.reduce((sum, row) => sum + finiteNumber(row.insight?.revenue, 0), 0);
+  const revenueValues = revenueRows.map((row) => finiteNumber(row.insight?.revenue, 0)).filter((value) => value > 0);
+  const revenueTotal = revenueValues.reduce((sum, value) => sum + value, 0);
+  const revenueAverage = revenueValues.length ? revenueValues.reduce((sum, value) => sum + value, 0) / revenueValues.length : 0;
+  const revenueMax = revenueValues.length ? Math.max(...revenueValues) : 0;
+  const revenueMin = revenueValues.length ? Math.min(...revenueValues) : 0;
   const rangeRows = b2bRankRangeModel(model);
   const summaryTone = Number.isFinite(linkedCoverage) && linkedCoverage >= 0.55
     ? "strong"
@@ -2378,7 +2381,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     {
       label: B2B_LOW_RESERVATION_LABEL,
       value: fmtNumber(gapRows.length),
-      note: gapRows.length ? `잔여 ${fmtNumber(remainingRooms)}실 확인` : "해당 업체 없음",
+      note: gapRows.length ? "수집기간 예약율 기준" : "해당 업체 없음",
       tone: gapRows.length ? "watch" : "good"
     },
     {
@@ -2390,7 +2393,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     {
       label: "매출 표본",
       value: revenueRows.length ? fmtNumber(revenueRows.length) : "대기",
-      note: revenueRows.length ? `합산 ${fmtWon(revenueTotal)}` : "가격 표본 필요",
+      note: revenueRows.length ? `평균 ${fmtWon(revenueAverage)} · 최고 ${fmtWon(revenueMax)} · 최저 ${fmtWon(revenueMin)}` : "가격 표본 필요",
       tone: revenueRows.length ? "strong" : "watch"
     },
     {
@@ -2434,7 +2437,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
       label: insight.label || "노출 확인",
       metric: row.linked && Number.isFinite(row.rate) ? fmtRate(row.rate) : `노출 ${fmtNumber(row.rank)}위`,
       note: row.linked
-        ? `잔여 ${fmtNumber(row.remaining)}실 · ${insight.revenue ? fmtWon(insight.revenue) : "매출 표본 대기"}`
+        ? `예약율 ${fmtRate(row.rate)} · ${insight.revenue ? fmtWon(insight.revenue) : "매출 표본 대기"}`
         : "상세 예약 수량 연결 필요"
     };
   });
@@ -2460,6 +2463,132 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
       ? `상세 표본 ${fmtRate(linkedCoverage)} 기준으로 상위 노출과 ${B2B_LOW_RESERVATION_LABEL} 업체를 같이 봅니다.`
       : "상위 노출 업체의 상세 표본 연결이 필요합니다."
   };
+}
+
+function pearsonCorrelation(rows = []) {
+  const pairs = rows
+    .map((row) => ({ x: Number(row.score), y: Number(row.actualRate) * 100 }))
+    .filter((row) => Number.isFinite(row.x) && Number.isFinite(row.y));
+  if (pairs.length < 2) return NaN;
+  const avgX = pairs.reduce((sum, row) => sum + row.x, 0) / pairs.length;
+  const avgY = pairs.reduce((sum, row) => sum + row.y, 0) / pairs.length;
+  let numerator = 0;
+  let denomX = 0;
+  let denomY = 0;
+  pairs.forEach((row) => {
+    const dx = row.x - avgX;
+    const dy = row.y - avgY;
+    numerator += dx * dy;
+    denomX += dx * dx;
+    denomY += dy * dy;
+  });
+  const denominator = Math.sqrt(denomX * denomY);
+  return denominator ? numerator / denominator : NaN;
+}
+
+function b2bCompetitionSalesCorrelationModel(rankModel = b2bRankBoardModel()) {
+  const rows = (rankModel.rows || [])
+    .filter((row) => row.linked && Number.isFinite(row.rate))
+    .map((row) => {
+      const rank = finiteNumber(row.rank, row.index + 1);
+      const rankScore = Math.max(0, Math.min(100, Math.round(((31 - Math.min(30, Math.max(1, rank))) / 30) * 100)));
+      const itemIndex = Number.isFinite(row.itemIndex) ? row.itemIndex : finiteNumber(row.item?.availabilityIndex, -1);
+      return {
+        itemIndex,
+        name: row.item?.name || "업체명 확인",
+        rank,
+        score: rankScore,
+        actualRate: Number(row.rate),
+        revenue: finiteNumber(row.insight?.revenue, 0),
+        tone: row.rate >= B2B_HIGH_RESERVATION_RATE ? "hot" : row.rate <= B2B_LOW_RESERVATION_RATE ? "watch" : "neutral"
+      };
+    })
+    .sort((a, b) => a.rank - b.rank);
+  const correlation = pearsonCorrelation(rows);
+  const label = !Number.isFinite(correlation)
+    ? "표본 대기"
+    : correlation >= 0.35
+      ? "양의 상관"
+      : correlation <= -0.35
+        ? "역상관"
+        : "약한 상관";
+  const tone = !Number.isFinite(correlation)
+    ? "neutral"
+    : correlation >= 0.35
+      ? "strong"
+      : correlation <= -0.35
+        ? "watch"
+        : "good";
+  return {
+    rows,
+    correlation,
+    label,
+    tone,
+    sampleCount: rows.length
+  };
+}
+
+function renderB2BCompetitionSalesCorrelation(model = b2bCompetitionSalesCorrelationModel()) {
+  const width = 640;
+  const height = 260;
+  const padLeft = 52;
+  const padRight = 28;
+  const padTop = 28;
+  const padBottom = 44;
+  const chartWidth = width - padLeft - padRight;
+  const chartHeight = height - padTop - padBottom;
+  const rows = model.rows || [];
+  const points = rows.map((row) => {
+    const x = padLeft + (Math.max(0, Math.min(100, row.score)) / 100) * chartWidth;
+    const y = padTop + (1 - Math.max(0, Math.min(1, row.actualRate))) * chartHeight;
+    return { ...row, x, y };
+  });
+  const sampleRows = rows.slice().sort((a, b) => b.score - a.score || b.actualRate - a.actualRate).slice(0, 4);
+  const corrText = Number.isFinite(model.correlation) ? model.correlation.toFixed(2) : "대기";
+  const summary = Number.isFinite(model.correlation)
+    ? `${model.label} · 표본 ${fmtNumber(model.sampleCount)}개 · r=${corrText}`
+    : "예약율 표본이 2개 이상 확보되면 상관을 표시합니다.";
+  return `
+    <section class="b2b-correlation-card ${escapeHtml(model.tone || "neutral")}">
+      <div class="b2b-correlation-head">
+        <div>
+          <p class="eyebrow">경쟁 지표 상관</p>
+          <h3>노출 경쟁 지표와 실제 예약율</h3>
+          <p>${escapeHtml(summary)}</p>
+        </div>
+        <strong>${escapeHtml(corrText)}</strong>
+      </div>
+      <div class="b2b-correlation-chart" aria-label="노출 경쟁 지표와 예약율 산점도">
+        <svg viewBox="0 0 ${width} ${height}" role="img">
+          <line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${height - padBottom}" class="axis"></line>
+          <line x1="${padLeft}" y1="${height - padBottom}" x2="${width - padRight}" y2="${height - padBottom}" class="axis"></line>
+          <line x1="${padLeft}" y1="${padTop + chartHeight * 0.5}" x2="${width - padRight}" y2="${padTop + chartHeight * 0.5}" class="grid"></line>
+          <line x1="${padLeft + chartWidth * 0.5}" y1="${padTop}" x2="${padLeft + chartWidth * 0.5}" y2="${height - padBottom}" class="grid"></line>
+          <text x="${padLeft - 12}" y="${padTop + 6}" text-anchor="end">100%</text>
+          <text x="${padLeft - 12}" y="${height - padBottom}" text-anchor="end">0%</text>
+          <text x="${padLeft}" y="${height - 10}" text-anchor="start">낮음</text>
+          <text x="${width - padRight}" y="${height - 10}" text-anchor="end">노출 경쟁 높음</text>
+          ${points.map((point) => `
+            <circle class="point ${escapeHtml(point.tone)}" cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="8">
+              <title>${escapeHtml(point.name)} · ${fmtNumber(point.rank)}위 · 예약율 ${fmtRate(point.actualRate)}</title>
+            </circle>
+          `).join("")}
+        </svg>
+      </div>
+      <div class="b2b-correlation-legend">
+        <span>가로: 네이버 노출 순위 기반 경쟁 지표</span>
+        <span>세로: 수집기간 실제 예약율</span>
+      </div>
+      <div class="b2b-correlation-list">
+        ${sampleRows.map((row) => `
+          <div>
+            <b>${escapeHtml(row.name)}</b>
+            <span>${fmtNumber(row.rank)}위 · 지표 ${fmtNumber(row.score)} · 예약율 ${fmtRate(row.actualRate)}</span>
+          </div>
+        `).join("") || `<div><b>표본 대기</b><span>예약 수량 연결 표본이 더 필요합니다.</span></div>`}
+      </div>
+    </section>
+  `;
 }
 
 function renderB2BRankExposureBoard(model = b2bRankBoardModel()) {
@@ -2546,7 +2675,7 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
         <article><span>경쟁업체</span><strong>${fmtNumber(model.rows.length)}</strong><small>상위 노출 기준</small></article>
         <article><span>예약 표본</span><strong>${fmtNumber(model.linkedRows.length)}</strong><small>예약 수량 확인</small></article>
         <article><span>평균 예약율</span><strong>${Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요"}</strong><small>${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실</small></article>
-        <article><span>${B2B_LOW_RESERVATION_LABEL}</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>잔여 객실 보유</small></article>
+        <article><span>${B2B_LOW_RESERVATION_LABEL}</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>수집기간 예약율 기준</small></article>
         <article><span>${B2B_HIGH_RESERVATION_LABEL}</span><strong>${fmtNumber(model.hotRows.length)}</strong><small>예약 수량 표본 기준</small></article>
       </div>
       ${renderB2BRankExposureBoard(model)}
@@ -2616,11 +2745,11 @@ function b2bDetailPositionModel(item = {}) {
   } else if (rank > 0 && rank <= 5 && Number.isFinite(insight.rate) && insight.rate >= B2B_HIGH_RESERVATION_RATE) {
     tone = "hot";
     label = B2B_HIGH_RESERVATION_LABEL;
-    summary = "상위 노출과 수집기간 예약율 40% 이상이 함께 확인됩니다. 가격, 객실 구성, 주말 잔여 재고를 벤치마크합니다.";
+    summary = "상위 노출과 수집기간 예약율 40% 이상이 함께 확인됩니다. 가격, 객실 구성, 주말 판매 흐름을 벤치마크합니다.";
   } else if (rank > 0 && rank <= 5 && remaining > 0) {
     tone = "strong";
-    label = "상위권 잔여 경쟁사";
-    summary = "상위 노출에도 잔여 객실이 남아 있습니다. 가격, 상품 구성, 채널 혜택을 비교합니다.";
+    label = "상위권 비교사";
+    summary = "상위 노출 업체의 예약율, 가격, 상품 구성, 채널 혜택을 비교합니다.";
   } else if (revenue && marketRevenue && revenue >= marketRevenue * 1.2) {
     tone = "strong";
     label = "매출 상위 경쟁사";
@@ -2663,10 +2792,10 @@ function b2bDetailPositionModel(item = {}) {
       note: lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}실` : "숙박 수량 표본 대기"
     },
     {
-      tone: remaining ? "watch" : "good",
-      label: "잔여 객실",
-      value: lodging.supply ? fmtNumber(remaining) : "대기",
-      note: status.offlineEstimated ? "오프라인 예약 가능성 반영" : status.label || "잔여 객실 추정"
+      tone: lodging.supply ? "neutral" : "watch",
+      label: "예약 표본",
+      value: lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}실` : "대기",
+      note: status.offlineEstimated ? "오프라인 예약 가능성 반영" : status.label || "수량 표본 기준"
     },
     {
       tone: day.supply ? "good" : "neutral",
@@ -3038,7 +3167,7 @@ function renderSummary() {
       </article>
       <article class="summary-card public-summary-card">
         <span class="summary-icon amber">${summaryIcon("sales")}</span>
-        <div><strong>${fmtNumber(brief.remainingSupply)}</strong><small>경쟁권 잔여 객실 추정</small></div>
+        <div><strong>${fmtNumber(brief.salesSampleCount)}</strong><small>예약율 산출 표본</small></div>
       </article>
       <article class="summary-card public-summary-card">
         <span class="summary-icon purple">${summaryIcon("company")}</span>
@@ -6497,7 +6626,9 @@ function reportPlatformStats(items = []) {
 function reportMarketScore({ rate, targetCount, itemCount, platformGapRatio, searchVolume }) {
   const targetSignal = itemCount ? Math.min(30, (targetCount / itemCount) * 40) : 0;
   const gapSignal = Math.min(22, platformGapRatio * 26);
-  const saleSignal = Number.isFinite(rate) ? (rate < 0.35 ? 18 : rate < 0.55 ? 12 : 5) : 8;
+  const saleSignal = Number.isFinite(rate)
+    ? (rate <= B2B_LOW_RESERVATION_RATE ? 18 : rate < B2B_HIGH_RESERVATION_RATE ? 12 : 5)
+    : 8;
   const demandSignal = searchVolume >= 30000 ? 16 : searchVolume >= 10000 ? 10 : searchVolume > 0 ? 6 : 4;
   return Math.max(35, Math.min(94, Math.round(30 + targetSignal + gapSignal + saleSignal + demandSignal)));
 }
@@ -6536,14 +6667,14 @@ function b2bMarketDecision(score, rate, opportunityCount) {
     return {
       label: "경쟁 기회",
       tone: "strong",
-      summary: "검색 수요와 경쟁업체 잔여 객실 표본이 함께 보여 매출, 가격, 상품 구성을 비교하기 좋은 지역입니다."
+      summary: "검색 수요와 경쟁업체 예약율 표본이 함께 보여 매출, 가격, 상품 구성을 비교하기 좋은 지역입니다."
     };
   }
   if (score >= 64) {
     return {
       label: "경쟁 비교",
       tone: "watch",
-      summary: "상위 노출 경쟁업체의 판매율, 잔여 객실, 채널 표본을 중심으로 시장 위치를 비교합니다."
+      summary: "상위 노출 경쟁업체의 예약율, 매출 표본, 채널 표본을 중심으로 시장 위치를 비교합니다."
     };
   }
   if (Number.isFinite(rate) && rate >= 0.6) {
@@ -6587,7 +6718,8 @@ function b2bMarketBriefModel(data = state.data || {}) {
     .filter((row) => Number.isFinite(row.lodging.rate))
     .sort((a, b) => a.lodging.rate - b.lodging.rate)
     .slice(0, 5);
-  const lowSalesCount = opportunityRows.filter((row) => row.lodging.rate < 0.35).length;
+  const salesSampleCount = items.filter((item) => Number.isFinite(salesStats(item, "lodging").rate)).length;
+  const lowSalesCount = opportunityRows.filter((row) => row.lodging.rate <= B2B_LOW_RESERVATION_RATE).length;
   const score = reportMarketScore({
     rate,
     targetCount: lowSalesCount || opportunityRows.length,
@@ -6606,6 +6738,7 @@ function b2bMarketBriefModel(data = state.data || {}) {
     sold,
     supply,
     remainingSupply,
+    salesSampleCount,
     rate,
     averageRevenue,
     revenueSampleCount,
@@ -6657,6 +6790,10 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
   const topExposureRows = exposureRows.length ? exposureRows : rankModel.rows.slice(0, 5);
   const revenueRows = topRows.filter((row) => row.revenue > 0);
   const topRevenueTotal = revenueRows.reduce((sum, row) => sum + row.revenue, 0);
+  const revenueValues = revenueRows.map((row) => row.revenue).filter((value) => value > 0);
+  const revenueAverage = revenueValues.length ? revenueValues.reduce((sum, value) => sum + value, 0) / revenueValues.length : 0;
+  const revenueMax = revenueValues.length ? Math.max(...revenueValues) : 0;
+  const revenueMin = revenueValues.length ? Math.min(...revenueValues) : 0;
   const revenueLeader = topRows.slice().sort((a, b) => b.revenue - a.revenue)[0] || null;
   const remainingRooms = rankModel.gapRows.reduce((sum, row) => sum + finiteNumber(row.remaining, 0), 0);
   const trend = demandTrendSource();
@@ -6683,10 +6820,10 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
       : "데이터랩 연동 대기";
   const cards = [
     {
-      tone: topRevenueTotal ? "strong" : "watch",
-      label: "상위 경쟁 매출",
-      value: topRevenueTotal ? fmtWon(topRevenueTotal) : "표본 대기",
-      note: revenueRows.length ? `${fmtNumber(revenueRows.length)}개 업체 합산` : "가격·수량 표본 필요"
+      tone: revenueRows.length ? "strong" : "watch",
+      label: "매출 표본 범위",
+      value: revenueRows.length ? `평균 ${fmtWon(revenueAverage)}` : "표본 대기",
+      note: revenueRows.length ? `최고 ${fmtWon(revenueMax)} · 최저 ${fmtWon(revenueMin)}` : "가격·수량 표본 필요"
     },
     {
       tone: "neutral",
@@ -6721,10 +6858,10 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
         : "네이버 노출 표본을 먼저 확인해야 합니다."
     },
     {
-      label: "재고 여지",
-      value: remainingRooms
-        ? `노출 대비 잔여 객실 ${fmtNumber(remainingRooms)}실이 관찰됩니다.`
-        : "상위 노출 업체의 잔여 객실 신호가 약합니다."
+      label: "예약율 해석",
+      value: rankModel.gapRows.length
+        ? `${B2B_LOW_RESERVATION_LABEL} 업체 ${fmtNumber(rankModel.gapRows.length)}곳은 가격과 상품 구성을 함께 확인합니다.`
+        : `${B2B_LOW_RESERVATION_LABEL} 업체가 적어 판매 흐름이 안정적입니다.`
     },
     {
       label: "검색량 보정",
@@ -6739,6 +6876,9 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
     revenueRows,
     revenueLeader,
     topRevenueTotal,
+    revenueAverage,
+    revenueMax,
+    revenueMin,
     remainingRooms,
     trendLabel,
     trendNote,
@@ -6791,6 +6931,8 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
   const baseTotal = revenueRows.reduce((sum, row) => sum + row.baseRevenue, 0);
   const gapRevenueTotal = revenueRows.reduce((sum, row) => sum + row.gapRevenue, 0);
   const averageRevenue = revenueRows.length ? revenueTotal / revenueRows.length : finiteNumber(brief.averageRevenue, 0);
+  const revenueMax = revenueRows.length ? Math.max(...revenueRows.map((row) => row.revenue)) : 0;
+  const revenueMin = revenueRows.length ? Math.min(...revenueRows.map((row) => row.revenue)) : 0;
   const pricedTotal = precisionRows.reduce((sum, row) => sum + row.priced, 0);
   const missingTotal = precisionRows.reduce((sum, row) => sum + row.missing, 0);
   const soldQuantity = pricedTotal + missingTotal;
@@ -6822,6 +6964,18 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
       tone: revenueRows.length ? "strong" : "watch"
     },
     {
+      label: "최고 매출",
+      value: revenueMax ? fmtWon(revenueMax) : "대기",
+      note: topRows[0] ? `${topRows[0].name} · ${fmtNumber(topRows[0].rank)}위` : "상위 표본 대기",
+      tone: revenueMax ? "hot" : "neutral"
+    },
+    {
+      label: "최저 매출",
+      value: revenueMin ? fmtWon(revenueMin) : "대기",
+      note: revenueRows.length ? `${fmtNumber(revenueRows.length)}개 표본 중 최소` : "표본 대기",
+      tone: revenueMin ? "neutral" : "watch"
+    },
+    {
       label: "매출 표본",
       value: `${fmtNumber(revenueRows.length)}/${fmtNumber(items.length)}`,
       note: "경쟁업체 중 매출 산출 가능",
@@ -6832,12 +6986,6 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
       value: Number.isFinite(priceCoverage) ? fmtRate(priceCoverage) : "대기",
       note: `${fmtNumber(pricedTotal)}건 확인 · 누락 ${fmtNumber(missingTotal)}건`,
       tone: Number.isFinite(priceCoverage) && priceCoverage >= 0.7 ? "good" : "watch"
-    },
-    {
-      label: "상위 매출",
-      value: topRows[0]?.revenue ? fmtWon(topRows[0].revenue) : "대기",
-      note: topRows[0] ? `${topRows[0].name} · ${fmtNumber(topRows[0].rank)}위` : "상위 표본 대기",
-      tone: topRows[0] ? "hot" : "neutral"
     },
     {
       label: "보정 매출",
@@ -6880,6 +7028,8 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
     benchmarkRows,
     revenueTotal,
     averageRevenue,
+    revenueMax,
+    revenueMin,
     priceCoverage,
     pricedTotal,
     missingTotal,
@@ -7054,7 +7204,7 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
       value: topRank ? `${fmtNumber(topRank.rank)}위` : "대기",
       detail: gapCount
         ? `${B2B_LOW_RESERVATION_LABEL} 업체 ${fmtNumber(gapCount)}개를 먼저 열어 가격·상품 구성을 확인합니다.`
-        : "상위 노출 업체의 예약율과 잔여 객실을 기준값으로 봅니다.",
+        : "상위 노출 업체의 예약율과 매출 표본을 기준값으로 봅니다.",
       tab: "rank",
       button: "순위 보기"
     },
@@ -7330,7 +7480,7 @@ function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
       tone: nextDemand.tone || "good",
       label: "다음달 검색량",
       value: nextDemand.value,
-      detail: "현재 월검색량에 데이터랩 트렌드 보정지수를 반영합니다.",
+      detail: "직전월 검색량에 작년 다음달 트렌드 비율을 반영합니다.",
       tab: "demand",
       button: "전망 보기"
     }
@@ -7455,6 +7605,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const snapshotModel = b2bCompetitiveSnapshotModel(brief);
   const revenueModel = b2bRevenueBenchmarkModel(brief);
   const strategyModel = b2bStrategyBoardModel(brief, revenueModel);
+  const correlationModel = b2bCompetitionSalesCorrelationModel(snapshotModel.rankModel);
   const simpleModel = b2bSimpleSummaryModel(brief, strategyModel, revenueModel, snapshotModel);
   return `
     <section class="b2b-brief-card">
@@ -7485,18 +7636,19 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
           </div>
           ${renderB2BStrategyBoard(brief, strategyModel)}
           ${renderB2BCompetitiveSnapshot(brief, snapshotModel)}
+          ${renderB2BCompetitionSalesCorrelation(correlationModel)}
           ${renderB2BRevenueBenchmark(brief, revenueModel)}
           <div class="b2b-brief-grid">
             <article class="b2b-insight-panel">
               <div class="report-card-head">
                 <div>
                   <h3>경쟁 해석</h3>
-                  <p>경쟁업체의 판매율, 잔여 객실, 상품 구성을 고객 관점으로 요약합니다.</p>
+                  <p>경쟁업체의 예약율, 매출 표본, 상품 구성을 고객 관점으로 요약합니다.</p>
                 </div>
               </div>
               <div class="report-insight-list">
                 <div><b>판매 흐름</b><span>${Number.isFinite(brief.rate) ? `${fmtRate(brief.rate)} 판매` : "확인 필요"}</span></div>
-                <div><b>잔여 객실</b><span>${fmtNumber(brief.remainingSupply)}개 추정</span></div>
+                <div><b>예약 표본</b><span>${fmtNumber(brief.salesSampleCount)}개 업체</span></div>
                 <div><b>상품 구성</b><span>${fmtNumber(brief.dayUseGapCount)}개 업체 데이유즈/캠프닉 미확인</span></div>
                 <div><b>채널 표본</b><span>${fmtNumber(brief.platformStats.otaCheckCount || 0)}개 업체 OTA 비교 기준</span></div>
               </div>
@@ -7623,9 +7775,9 @@ function renderReport() {
         <small>상위 노출 기준</small>
       </article>
       <article>
-        <span>${publicMode ? "잔여 객실" : "컨택 후보"}</span>
-        <strong>${fmtNumber(publicMode && b2bBrief ? b2bBrief.remainingSupply : allTargets.length)}</strong>
-        <small>${publicMode ? "판매 여지 표본" : "판매흐름/상품 약점 감지"}</small>
+        <span>${publicMode ? "예약 표본" : "컨택 후보"}</span>
+        <strong>${fmtNumber(publicMode && b2bBrief ? b2bBrief.salesSampleCount : allTargets.length)}</strong>
+        <small>${publicMode ? "예약율 산출 가능" : "판매흐름/상품 약점 감지"}</small>
       </article>
       <article>
         <span>${publicMode ? "상품 구성" : "상품 공백"}</span>
@@ -7645,7 +7797,7 @@ function renderReport() {
         </div>
         <div class="report-insight-list">
           <div><b>판매 강도</b><span>${Number.isFinite(rate) ? `${fmtRate(rate)} 객실 판매율` : "확인필요"}</span></div>
-          <div><b>${publicMode ? "잔여 객실" : "저판매 후보"}</b><span>${publicMode && b2bBrief ? `${fmtNumber(b2bBrief.remainingSupply)}개 추정` : `${fmtNumber(lowSalesCount)}개 업체`}</span></div>
+          <div><b>${publicMode ? "예약 표본" : "저판매 후보"}</b><span>${publicMode && b2bBrief ? `${fmtNumber(b2bBrief.salesSampleCount)}개 업체` : `${fmtNumber(lowSalesCount)}개 업체`}</span></div>
           <div><b>검색 수요</b><span>${searchVolume ? `월 ${fmtNumber(searchVolume)}회` : "API 확인필요"}</span></div>
           <div><b>${publicMode ? "상품 구성" : "상품 확장"}</b><span>${fmtNumber(dayUseCount)}개 업체 데이유즈/캠프닉 확인</span></div>
         </div>
@@ -7770,8 +7922,12 @@ function demandTrendSource() {
   const series = rawSeries.map((entry, index) => {
     const rawLabel = entry.month || entry.period || entry.date || `${index + 1}월`;
     const value = Number(entry.ratio ?? entry.value ?? entry.score);
+    const period = trendPeriodInfo(rawLabel, index);
     return {
-      label: trendMonthLabel(rawLabel, index),
+      label: period.label,
+      year: period.year,
+      month: period.month,
+      periodLabel: period.periodLabel,
       rawLabel: String(rawLabel),
       value: Number.isFinite(value) ? value : null
     };
@@ -7796,13 +7952,44 @@ function demandTrendSource() {
   };
 }
 
-function trendMonthLabel(value, index = 0) {
+function trendPeriodInfo(value, index = 0) {
   const text = String(value || "").trim();
-  const match = text.match(/^(?:\d{4}-)?0?(\d{1,2})(?:-\d{1,2})?/);
-  if (match) return `${Number(match[1])}월`;
-  if (/^\d{1,2}$/.test(text)) return `${Number(text)}월`;
-  if (/월$/.test(text)) return text.replace(/^0/, "");
-  return `${index + 1}월`;
+  const yearMonth = text.match(/^(\d{4})[-./년\s]*0?(\d{1,2})/);
+  if (yearMonth) {
+    const year = Number(yearMonth[1]);
+    const month = Number(yearMonth[2]);
+    if (month >= 1 && month <= 12) {
+      return {
+        year,
+        month,
+        label: `${year}.${String(month).padStart(2, "0")}`,
+        periodLabel: `${year}년 ${month}월`
+      };
+    }
+  }
+  const monthMatch = text.match(/0?(\d{1,2})월?/);
+  if (monthMatch) {
+    const month = Number(monthMatch[1]);
+    if (month >= 1 && month <= 12) {
+      return {
+        year: null,
+        month,
+        label: `${month}월`,
+        periodLabel: `${month}월`
+      };
+    }
+  }
+  const fallbackMonth = ((index % 12) + 1);
+  return {
+    year: null,
+    month: fallbackMonth,
+    label: `${fallbackMonth}월`,
+    periodLabel: `${fallbackMonth}월`
+  };
+}
+
+function trendMonthLabel(value, index = 0) {
+  return trendPeriodInfo(value, index).label;
 }
 
 function trendIndexLabel(value) {
@@ -7966,20 +8153,34 @@ function demandTrendEntryForMonth(trend = demandTrendSource(), monthNumber = NaN
   const month = Number(monthNumber);
   if (!Number.isFinite(month)) return null;
   const rows = (trend.series || [])
-    .map((entry, index) => ({ ...entry, index, value: Number(entry.value), month: trendMonthNumber(entry.label) }))
+    .map((entry, index) => ({ ...entry, index, value: Number(entry.value), month: Number(entry.month) || trendMonthNumber(entry.label) }))
     .filter((entry) => entry.month === month && Number.isFinite(entry.value));
   return rows[rows.length - 1] || null;
 }
 
+function demandSeasonalTrendEntryForMonth(trend = demandTrendSource(), monthNumber = NaN, beforeIndex = NaN) {
+  const month = Number(monthNumber);
+  if (!Number.isFinite(month)) return null;
+  const rows = (trend.series || [])
+    .map((entry, index) => ({ ...entry, index, value: Number(entry.value), month: Number(entry.month) || trendMonthNumber(entry.label) }))
+    .filter((entry) => entry.month === month && Number.isFinite(entry.value));
+  if (!rows.length) return null;
+  const priorRows = Number.isFinite(beforeIndex)
+    ? rows.filter((entry) => entry.index < beforeIndex)
+    : [];
+  return priorRows[priorRows.length - 1] || rows[rows.length - 1] || null;
+}
+
 function demandNextMonthProjection(traffic = demandTrafficAggregate(), trend = demandTrendSource(), stats = demandTrendStats(trend)) {
   const currentVolume = finiteNumber(traffic.totalSearchVolume, 0);
-  const basisDate = parseDate(state.data?.run?.checkIn || "") || new Date();
-  const currentMonth = basisDate.getMonth() + 1;
+  const fallbackDate = new Date();
+  const fallbackBaseMonth = fallbackDate.getMonth() === 0 ? 12 : fallbackDate.getMonth();
+  const currentEntry = stats.last || demandTrendEntryForMonth(trend, fallbackBaseMonth);
+  const currentMonth = Number(currentEntry?.month) || trendMonthNumber(currentEntry?.label) || fallbackBaseMonth;
   const nextMonth = currentMonth === 12 ? 1 : currentMonth + 1;
-  const currentEntry = demandTrendEntryForMonth(trend, currentMonth) || stats.last;
-  const nextEntry = demandTrendEntryForMonth(trend, nextMonth);
+  const nextEntry = demandSeasonalTrendEntryForMonth(trend, nextMonth, currentEntry?.index);
   let factor = 1;
-  let basis = "현재 검색량 유지";
+  let basis = "직전월 검색량 유지";
   let detail = "";
   let hasTrendBasis = false;
 
@@ -7994,8 +8195,10 @@ function demandNextMonthProjection(traffic = demandTrafficAggregate(), trend = d
     Number.isFinite(nextEntry.value)
   ) {
     factor = nextEntry.value / currentEntry.value;
-    basis = `${currentMonth}월→${nextMonth}월 트렌드지수`;
-    detail = `지수 ${trendIndexLabel(currentEntry.value)}→${trendIndexLabel(nextEntry.value)}`;
+    const baseLabel = currentEntry.periodLabel || currentEntry.label || `${currentMonth}월`;
+    const targetLabel = nextEntry.periodLabel || nextEntry.label || `작년 ${nextMonth}월`;
+    basis = `${baseLabel} 검색량 × ${targetLabel}/${baseLabel} 트렌드 비율`;
+    detail = `지수 ${trendIndexLabel(currentEntry.value)}→${trendIndexLabel(nextEntry.value)} · 계절비율 ${factor.toFixed(2).replace(/\.00$/, "")}`;
     hasTrendBasis = true;
   } else if (trend.hasSeries && Number.isFinite(stats.recentChange)) {
     const bounded = Math.max(-0.35, Math.min(0.35, stats.recentChange));
@@ -8037,8 +8240,8 @@ function demandNextMonthProjection(traffic = demandTrafficAggregate(), trend = d
     value: projectedVolume ? `${fmtNumber(projectedVolume)}회` : (currentVolume ? "트렌드 대기" : "검색량 대기"),
     note: currentVolume
       ? (hasTrendBasis
-        ? `현재 ${fmtNumber(currentVolume)}회 · 트렌드 보정 ${Number.isFinite(change) ? formatSignedRate(change) : "확인"}`
-        : `현재 ${fmtNumber(currentVolume)}회 · 트렌드 보정 대기`)
+        ? `직전월 ${fmtNumber(currentVolume)}회 · 다음달 ${Number.isFinite(change) ? formatSignedRate(change) : "확인"}`
+        : `직전월 ${fmtNumber(currentVolume)}회 · 트렌드 보정 대기`)
       : "검색광고 월검색량 대기",
     detailText: [detail, basis].filter(Boolean).join(" · ")
   };
@@ -8473,7 +8676,7 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
       {
         label: "다음달 예상",
         value: nextDemand.value,
-        detail: nextDemand.detailText || "현재 월검색량에 트렌드 보정"
+        detail: nextDemand.detailText || "직전월 검색량에 작년 다음달 트렌드 비율 반영"
       },
       {
         label: "피크 월",
@@ -8497,7 +8700,9 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
 }
 
 function trendMonthNumber(label = "") {
-  const match = String(label || "").match(/(\d{1,2})월/);
+  const text = String(label || "").trim();
+  const yearMonth = text.match(/^\d{4}[-./년\s]*0?(\d{1,2})/);
+  const match = yearMonth || text.match(/(\d{1,2})월/) || text.match(/^0?(\d{1,2})$/);
   if (!match) return NaN;
   const month = Number(match[1]);
   return month >= 1 && month <= 12 ? month : NaN;
@@ -8582,7 +8787,7 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
       tone: revenueSample ? "positive" : "warning",
       label: "매출 표본",
       value: revenueSample ? `${fmtNumber(revenueSample)}개` : "대기",
-      note: market.averageRevenue ? `평균 ${fmtWon(market.averageRevenue)} · 상위 ${fmtWon(snapshot.topRevenueTotal)}` : "가격·수량 표본 필요"
+      note: market.averageRevenue ? `평균 ${fmtWon(market.averageRevenue)} · 최고 ${snapshot.revenueMax ? fmtWon(snapshot.revenueMax) : "대기"}` : "가격·수량 표본 필요"
     }
   ];
   const timeline = (trend.series.length ? trend.series.slice(-12) : [])
@@ -8657,7 +8862,7 @@ function renderB2BDemandOutlook(traffic = demandTrafficAggregate(), playbook = b
       <div class="b2b-demand-outlook-head">
         <div>
           <strong>다음달 검색량 보드</strong>
-          <span>현재 월검색량에 네이버 데이터랩 트렌드 보정지수를 반영합니다.</span>
+          <span>직전월 검색량에 작년 다음달 트렌드 비율을 반영합니다.</span>
         </div>
         <em class="${escapeHtml(model.forecastTone)}">${escapeHtml(model.forecastLabel)}</em>
       </div>
@@ -8724,7 +8929,7 @@ function renderB2BDemandPlaybook(traffic = demandTrafficAggregate()) {
         <div>
           <p class="eyebrow">B2B Demand Outlook</p>
           <h3>다음달 검색량과 경쟁 흐름</h3>
-          <p>현재 월검색량, 12개월 트렌드, 네이버 예약 판매 표본을 묶어 현재 권역의 수요 전망을 보여줍니다.</p>
+          <p>직전월 검색량, 12개월 트렌드, 네이버 예약 판매 표본을 묶어 다음달 권역 수요를 추정합니다.</p>
         </div>
         <strong>${escapeHtml(model.decision)}</strong>
       </div>
@@ -13623,6 +13828,9 @@ function renderB2BSearchPanel() {
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) {
     els.b2bSearchInput.value = state.b2bSearchQuery || "";
   }
+  if (els.b2bSearchRangeInput && document.activeElement !== els.b2bSearchRangeInput) {
+    els.b2bSearchRangeInput.value = state.b2bSearchRange || "1-10";
+  }
   if (els.b2bSearchResults) {
     const hasResult = Boolean(state.data?.run);
     const keyword = hasResult ? activeKeyword() : (state.b2bSearchQuery || "").trim();
@@ -13650,8 +13858,8 @@ function renderB2BSearchPanel() {
           ${state.b2bSearchLoading ? b2bSearchProgressHtml(progressMeta) : ""}
         </div>
         <div class="b2b-live-search-meta">
-          <em>정밀 분석</em>
-          <em>1-10위</em>
+          <em>${escapeHtml((state.b2bSearchRange || "1-10") === "1-20" ? "확장 분석" : "기본 분석")}</em>
+          <em>${escapeHtml(state.b2bSearchRange || "1-10")}위</em>
           <em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>
           ${state.b2bSearchLoading ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
@@ -13669,6 +13877,7 @@ function renderB2BSearchPanel() {
 }
 
 function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
+  const range = els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10";
   return {
     keyword: String(keyword || "").trim(),
     checkIn: els.checkInInput?.value || "",
@@ -13676,7 +13885,7 @@ function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
     searchMode: "keyword",
     productMode: "all",
     collectionMode: "precision",
-    detailRankRanges: "1-10"
+    detailRankRanges: range === "1-20" ? "1-20" : "1-10"
   };
 }
 
@@ -13689,6 +13898,7 @@ async function submitB2BSearch() {
     return;
   }
   if (state.b2bSearchLoading) return;
+  state.b2bSearchRange = els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10";
   const payload = b2bLiveSearchPayload(state.b2bSearchQuery);
   const submitButton = els.b2bSearchForm?.querySelector('button[type="submit"]');
   const preview = crawlPreviewMeta(payload);
@@ -15820,11 +16030,9 @@ async function submitCrawl(event) {
     els.searchModeInput.value = resolvedMode;
     els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
-  const collectionMode = els.collectionModeInput?.value || "precision";
+  const collectionMode = "precision";
   const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
-  const detailRankRanges = collectionMode === "fast"
-    ? ""
-    : (/^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-20" : (rawDetailRankRanges || "1-20"));
+  const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-10" : (rawDetailRankRanges || "1-10");
   const payload = {
     keyword: els.keywordInput.value.trim(),
     checkIn: els.checkInInput.value,
@@ -15839,9 +16047,7 @@ async function submitCrawl(event) {
   }
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
-  const detailText = payload.collectionMode === "fast"
-    ? "상세 분석 생략"
-    : `상세 ${payload.detailRankRanges || "1-20"}위`;
+  const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
   const preview = crawlPreviewMeta(payload);
   const recrawlText = recrawlContextStatusText(payload.recrawlContext);
   setCrawlProgress(
@@ -16006,6 +16212,12 @@ function bindEvents() {
     rerenderCompanyMasterPreservingSearch();
   });
   document.addEventListener("change", (event) => {
+    const b2bRange = event.target.closest("#b2bSearchRangeInput");
+    if (b2bRange) {
+      state.b2bSearchRange = b2bRange.value === "1-20" ? "1-20" : "1-10";
+      renderB2BSearchPanel();
+      return;
+    }
     const layer = event.target.closest("[data-company-master-layer]");
     if (layer) {
       state.companyMasterFilters.layer = layer.value || "all";

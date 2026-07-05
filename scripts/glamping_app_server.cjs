@@ -197,7 +197,7 @@ function crawlExecutionPlan(payload = {}) {
     : (payload.detailRankRanges || process.env.DETAIL_RANK_RANGES);
   const detailRankRanges = rankRangeLabel(parseRankRanges(
     rawDetailRankRanges,
-    collectionMode === "fast" ? "" : "1-20"
+    collectionMode === "fast" ? "" : "1-10"
   ));
   return {
     keyword,
@@ -7743,8 +7743,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-rate-thresholds"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-rate-thresholds"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-insight-refine"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-insight-refine"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
