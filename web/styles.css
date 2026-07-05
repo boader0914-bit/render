@@ -8965,6 +8965,186 @@ a.platform-row:hover {
   background: transparent;
 }
 
+.sheet-booking-bars {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 16px;
+  background: #fbfcfd;
+  padding: 14px;
+  gap: 12px;
+}
+
+.sheet-booking-bars-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sheet-booking-bars-head h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.sheet-booking-bars-head p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.sheet-booking-bars-head > span {
+  flex: 0 0 auto;
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbe7ff;
+  border-radius: 999px;
+  background: #f5f9ff;
+  color: var(--blue-dark);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.sheet-date-bars {
+  min-width: 0;
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 2px 2px;
+}
+
+.sheet-date-bar {
+  flex: 0 0 44px;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  align-items: end;
+}
+
+.sheet-date-bar strong,
+.sheet-date-bar em,
+.sheet-date-bar small {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-date-bar strong {
+  color: var(--ink);
+}
+
+.sheet-date-bar small {
+  color: var(--blue-dark);
+}
+
+.sheet-date-bar > span {
+  width: 24px;
+  height: var(--range-h, 90px);
+  display: flex;
+  align-items: end;
+  border: 1px solid rgba(49, 130, 246, .16);
+  border-radius: 9px;
+  background: rgba(49, 130, 246, .10);
+  overflow: hidden;
+}
+
+.sheet-date-bar > span i {
+  display: block;
+  width: 100%;
+  height: var(--fill-h, 0);
+  max-height: var(--range-h, 90px);
+  border-radius: inherit;
+  background: linear-gradient(180deg, #60a5fa, #2563eb);
+}
+
+.sheet-date-bar.strong > span i {
+  background: linear-gradient(180deg, #34d399, #059669);
+}
+
+.sheet-date-bar.hot > span i {
+  background: linear-gradient(180deg, #fb7185, #e11d48);
+}
+
+.sheet-date-bar.watch > span i {
+  background: linear-gradient(180deg, #fbbf24, #d97706);
+}
+
+.sheet-date-bar.missing > span {
+  border-style: dashed;
+  background: rgba(152, 162, 179, .14);
+}
+
+.sheet-date-bar.missing > span i {
+  display: none;
+}
+
+.sheet-weekday-bars {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.sheet-weekday-bars div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) minmax(54px, auto) 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheet-weekday-bars span,
+.sheet-weekday-bars strong,
+.sheet-weekday-bars small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-weekday-bars strong {
+  color: var(--blue-dark);
+  text-align: right;
+}
+
+.sheet-weekday-bars small {
+  text-align: right;
+}
+
+.sheet-weekday-bars b {
+  height: 10px;
+  border-radius: 999px;
+  background: #edf2f7;
+  overflow: hidden;
+}
+
+.sheet-weekday-bars i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #3182f6, #12b76a);
+}
+
 .platform-row {
   grid-template-columns: 30px minmax(0, 1fr) auto;
   color: inherit;
@@ -12805,6 +12985,15 @@ body.role-b2b .demand-chart,
 body.role-b2b .demand-insight-card,
 body.role-b2b .demand-table-card,
 body.role-b2b .demand-company-card,
+body.role-b2b .structure-empty-card,
+body.role-b2b .structure-hero,
+body.role-b2b .structure-card,
+body.role-b2b .structure-metric-grid article,
+body.role-b2b .structure-submetric-row article,
+body.role-b2b .history-lab,
+body.role-b2b .history-card,
+body.role-b2b .history-metric-grid article,
+body.role-b2b .history-company-table button,
 body.role-b2b .sheet-panel,
 body.role-b2b .drawer-panel,
 body.role-b2b .sheet-b2b-detail,
@@ -12812,6 +13001,7 @@ body.role-b2b .sheet-b2b-insight,
 body.role-b2b .sheet-b2b-platform,
 body.role-b2b .sheet-b2b-search,
 body.role-b2b .sheet-b2b-booking,
+body.role-b2b .sheet-booking-bars,
 body.role-b2b .sheet-decision-section {
   border-color: var(--line);
   background: rgba(23, 27, 34, .96);
@@ -12874,6 +13064,14 @@ body.role-b2b .b2b-demand-season-strip,
 body.role-b2b .b2b-demand-season-strip span,
 body.role-b2b .b2b-demand-action-board div,
 body.role-b2b .b2b-demand-competitors button,
+body.role-b2b .demand-signal-card,
+body.role-b2b .demand-rule-box,
+body.role-b2b .demand-pill-row span,
+body.role-b2b .history-card,
+body.role-b2b .history-metric-grid article,
+body.role-b2b .history-company-table button,
+body.role-b2b .sheet-date-bar > span,
+body.role-b2b .sheet-weekday-bars b,
 body.role-b2b .b2b-map-board-grid article,
 body.role-b2b .b2b-map-action-board div,
 body.role-b2b .b2b-map-region-rank div:not(:first-child),
@@ -13002,9 +13200,19 @@ body.role-b2b .b2b-map-radius-list > div strong,
 body.role-b2b .b2b-map-radius-list button strong,
 body.role-b2b .demand-metric-grid strong,
 body.role-b2b .demand-signal-card strong,
+body.role-b2b .demand-rule-box strong,
 body.role-b2b .demand-region-row strong,
 body.role-b2b .demand-company-card strong,
 body.role-b2b .demand-company-card dd,
+body.role-b2b .structure-empty-card strong,
+body.role-b2b .structure-metric-grid strong,
+body.role-b2b .structure-submetric-row strong,
+body.role-b2b .structure-card strong,
+body.role-b2b .history-card-head strong,
+body.role-b2b .history-metric-grid strong,
+body.role-b2b .history-company-table strong,
+body.role-b2b .sheet-booking-bars-head h3,
+body.role-b2b .sheet-date-bar strong,
 body.role-b2b .company-insight-grid strong,
 body.role-b2b .sheet-b2b-detail-grid strong,
 body.role-b2b .sheet-b2b-flow-strip strong,
@@ -13012,6 +13220,7 @@ body.role-b2b .sheet-b2b-evidence-grid strong,
 body.role-b2b .sheet-b2b-platform-grid strong,
 body.role-b2b .sheet-b2b-booking-grid strong,
 body.role-b2b .sheet-flow-grid strong,
+body.role-b2b .sheet-weekday-bars strong,
 body.role-b2b .sheet-collection-grid strong,
 body.role-b2b .sheet-audit-grid strong {
   color: var(--ink);
@@ -13019,7 +13228,13 @@ body.role-b2b .sheet-audit-grid strong {
 
 body.role-b2b .summary-card strong,
 body.role-b2b .report-metric-grid strong,
-body.role-b2b .b2b-brief-score strong {
+body.role-b2b .b2b-brief-score strong,
+body.role-b2b .demand-signal-card strong,
+body.role-b2b .history-metric-grid strong,
+body.role-b2b .history-day-bars strong,
+body.role-b2b .history-timeline b,
+body.role-b2b .sheet-date-bar small,
+body.role-b2b .sheet-weekday-bars strong {
   color: #8fc7ff;
 }
 
@@ -13086,6 +13301,32 @@ body.role-b2b .b2b-demand-competitors small,
 body.role-b2b .b2b-demand-competitors button small,
 body.role-b2b .b2b-demand-season-strip b,
 body.role-b2b .b2b-demand-season-strip small {
+  color: var(--muted);
+}
+
+body.role-b2b .demand-signal-card span,
+body.role-b2b .demand-signal-card small,
+body.role-b2b .demand-rule-box p,
+body.role-b2b .structure-empty-card p,
+body.role-b2b .structure-metric-grid span,
+body.role-b2b .structure-metric-grid small,
+body.role-b2b .structure-submetric-row span,
+body.role-b2b .structure-submetric-row small,
+body.role-b2b .history-card-head small,
+body.role-b2b .history-empty-inline,
+body.role-b2b .history-metric-grid span,
+body.role-b2b .history-metric-grid small,
+body.role-b2b .history-lead-chart b,
+body.role-b2b .history-timeline em,
+body.role-b2b .history-day-bars span,
+body.role-b2b .history-company-head,
+body.role-b2b .history-company-table span,
+body.role-b2b .history-company-table em,
+body.role-b2b .history-company-table p,
+body.role-b2b .sheet-booking-bars-head p,
+body.role-b2b .sheet-date-bar em,
+body.role-b2b .sheet-weekday-bars span,
+body.role-b2b .sheet-weekday-bars small {
   color: var(--muted);
 }
 
@@ -13706,6 +13947,51 @@ body.role-b2b .progress {
 
 body.role-b2b .progress span {
   background: #6aa8ff;
+}
+
+body.role-b2b .sheet-booking-bars-head > span {
+  border-color: rgba(106, 168, 255, .34);
+  background: rgba(106, 168, 255, .13);
+  color: #dcecff;
+}
+
+body.role-b2b .sheet-date-bar > span,
+body.role-b2b .sheet-weekday-bars b,
+body.role-b2b .history-lead-chart span,
+body.role-b2b .history-timeline span,
+body.role-b2b .history-day-bars i {
+  border-color: rgba(106, 168, 255, .16);
+  background: #263142;
+}
+
+body.role-b2b .sheet-date-bar > span i,
+body.role-b2b .sheet-weekday-bars i,
+body.role-b2b .history-lead-chart i,
+body.role-b2b .history-timeline i,
+body.role-b2b .history-day-bars em {
+  background: linear-gradient(180deg, #6aa8ff, #2f74d0);
+}
+
+body.role-b2b .sheet-weekday-bars i,
+body.role-b2b .history-day-bars em {
+  background: linear-gradient(90deg, #6aa8ff, #34d399);
+}
+
+body.role-b2b .sheet-date-bar.strong > span i {
+  background: linear-gradient(180deg, #34d399, #059669);
+}
+
+body.role-b2b .sheet-date-bar.hot > span i {
+  background: linear-gradient(180deg, #fb7185, #e11d48);
+}
+
+body.role-b2b .sheet-date-bar.watch > span i {
+  background: linear-gradient(180deg, #fbbf24, #d97706);
+}
+
+body.role-b2b .sheet-date-bar.missing > span {
+  border-color: rgba(156, 174, 204, .26);
+  background: rgba(156, 174, 204, .10);
 }
 
 body.role-b2b .demand-signal-card,

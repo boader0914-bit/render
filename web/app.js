@@ -14273,6 +14273,77 @@ function sheetHistoryPanel(item = {}) {
   `;
 }
 
+function sheetBookingBarsPanel(item = {}, lodgingRows = sheetRowsForBooking(item)) {
+  const run = state.data?.run || {};
+  const flow = salesFlowProfile(item);
+  const rows = lodgingRows.length ? lodgingRows : sheetRowsForBooking(item);
+  const maxTotal = Math.max(1, ...rows.map((row) => finiteNumber(row.supply, 0)));
+  const collectedRows = rows.filter((row) => !row.missing).length;
+  const dayNames = ["일", "월", "화", "수", "목", "금", "토"];
+  const flowRows = [
+    ["전체", flow.all, `${fmtNumber(flow.all.count)}일`],
+    ["평일", flow.weekday, `${fmtNumber(flow.weekday.count)}일`],
+    ["금요일", flow.friday, `${fmtNumber(flow.friday.count)}일`],
+    ["토요일", flow.saturday, `${fmtNumber(flow.saturday.count)}일`],
+    ["일요일", flow.sunday, `${fmtNumber(flow.sunday.count)}일`]
+  ];
+  return `
+    <section class="sheet-section sheet-booking-bars">
+      <div class="sheet-booking-bars-head">
+        <div>
+          <h3>검색 기간 날짜별 판매 흐름</h3>
+          <p>${escapeHtml(dateRangeLabel(run))} 입력기간 기준으로 날짜별 수량과 요일별 판매율을 함께 봅니다.</p>
+        </div>
+        <span>${fmtNumber(collectedRows)}/${fmtNumber(rows.length)}일 확보</span>
+      </div>
+      <div class="sheet-date-bars" aria-label="검색 기간 날짜별 판매율">
+        ${rows.map((row) => {
+          const date = dateForRangeLabel(row.label, run);
+          const dayName = date ? dayNames[date.getDay()] : "";
+          const supply = finiteNumber(row.supply, 0);
+          const sold = finiteNumber(row.sold, 0);
+          const rate = Number(row.rate);
+          const rangeHeight = supply ? Math.max(24, Math.round((supply / maxTotal) * 86)) : 24;
+          const fillHeight = row.missing || !supply ? 0 : Math.max(3, Math.round((sold / maxTotal) * 86));
+          const rateText = row.missing || !Number.isFinite(rate) ? "미수집" : fmtRate(rate);
+          const tone = row.missing
+            ? "missing"
+            : rate >= 0.70
+              ? "hot"
+              : rate >= 0.45
+                ? "strong"
+                : rate >= 0.20
+                  ? "watch"
+                  : "low";
+          const title = `${row.label}${dayName ? ` ${dayName}요일` : ""} · ${rateText} · ${fmtNumber(sold)}/${fmtNumber(supply)}${row.unit}`;
+          return `
+            <div class="sheet-date-bar ${tone}" title="${escapeHtml(title)}">
+              <strong>${escapeHtml(row.label)}</strong>
+              <span style="--range-h:${rangeHeight}px; --fill-h:${fillHeight}px"><i></i></span>
+              <em>${escapeHtml(dayName || "-")}</em>
+              <small>${escapeHtml(rateText)}</small>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <div class="sheet-weekday-bars" aria-label="요일별 판매율">
+        ${flowRows.map(([label, metric, note]) => {
+          const rate = Number(metric?.rate);
+          const width = Number.isFinite(rate) ? Math.max(3, Math.min(100, Math.round(rate * 100))) : 0;
+          return `
+            <div>
+              <span>${escapeHtml(label)}</span>
+              <b><i style="width:${width}%"></i></b>
+              <strong>${Number.isFinite(rate) ? fmtRate(rate) : "확인필요"}</strong>
+              <small>${escapeHtml(note)}</small>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderSheetBooking(item) {
   const run = state.data?.run || {};
   const rangeDays = bookingDays(run);
@@ -14298,6 +14369,7 @@ function renderSheetBooking(item) {
     ${publicBlocks}
     ${sheetFlowOverview(item)}
     ${adminBlocks}
+    ${sheetBookingBarsPanel(item, lodgingRows)}
     <section class="sheet-section">
       <h3>숙박 날짜별 예약 상세</h3>
       ${lodgingRows.length ? lodgingRows.map(dateRow).join("") : `<div class="empty">숙박 재고가 확인되지 않았습니다.</div>`}
