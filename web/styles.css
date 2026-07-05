@@ -12714,6 +12714,11 @@ body.role-b2b {
   --purple: #b69cff;
   --orange: #fbbf24;
   --red: #fb7185;
+  --active-rail: #6aa8ff;
+  --active-glow: rgba(106, 168, 255, .30);
+  --good-rail: #34d399;
+  --watch-rail: #fbbf24;
+  --hot-rail: #fb7185;
   --shadow: 0 18px 48px rgba(0, 0, 0, .34);
   --soft-shadow: 0 10px 28px rgba(0, 0, 0, .24);
   background:
@@ -12892,11 +12897,29 @@ body.role-b2b .demand-company-card dl div {
   background: #121822;
 }
 
-body.role-b2b .b2b-search-card.active,
-body.role-b2b .bottom-nav button.active {
-  border-color: rgba(106, 168, 255, .42);
-  background: #1e3148;
-  color: #dcecff;
+body.role-b2b .b2b-search-card.active {
+  position: relative;
+  border-color: rgba(106, 168, 255, .66);
+  background:
+    linear-gradient(135deg, rgba(47, 116, 208, .38), rgba(52, 211, 153, .10)),
+    #162235;
+  color: #edf6ff;
+  box-shadow:
+    inset 4px 0 0 var(--active-rail),
+    0 18px 44px rgba(0, 0, 0, .34),
+    0 0 0 1px rgba(106, 168, 255, .16);
+}
+
+body.role-b2b .b2b-search-card.active::after {
+  content: "";
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--good-rail);
+  box-shadow: 0 0 0 5px rgba(52, 211, 153, .13);
 }
 
 body.role-b2b .b2b-live-progress-track {
@@ -13148,11 +13171,51 @@ body.role-b2b .bottom-nav::-webkit-scrollbar {
 }
 
 body.role-b2b .bottom-nav button {
+  position: relative;
   min-width: 86px;
   padding: 0 14px;
   overflow: hidden;
   color: var(--muted);
   text-overflow: ellipsis;
+}
+
+body.role-b2b .bottom-nav button.active {
+  border-color: rgba(106, 168, 255, .58);
+  background:
+    linear-gradient(180deg, rgba(72, 132, 220, .92), rgba(36, 82, 151, .96));
+  color: #ffffff;
+  box-shadow:
+    0 12px 28px var(--active-glow),
+    inset 0 -3px 0 rgba(220, 236, 255, .70);
+}
+
+body.role-b2b .bottom-nav button.active::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .92);
+  transform: translateX(-50%);
+}
+
+body.role-b2b .tab-panel.active > .section-title {
+  position: relative;
+  padding-left: 15px;
+}
+
+body.role-b2b .tab-panel.active > .section-title::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--active-rail), var(--good-rail));
+  box-shadow: 0 0 18px var(--active-glow);
 }
 
 body.role-b2b .section-title span,
@@ -13285,20 +13348,35 @@ body.role-b2b .b2b-simple-card.strong,
 body.role-b2b .b2b-simple-card.good,
 body.role-b2b .b2b-simple-next button.strong,
 body.role-b2b .b2b-simple-next button.good {
-  border-color: rgba(52, 211, 153, .32);
-  background: rgba(52, 211, 153, .09);
+  border-color: rgba(52, 211, 153, .42);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--good-rail),
+    0 10px 24px rgba(0, 0, 0, .20);
 }
 
 body.role-b2b .b2b-simple-card.watch,
 body.role-b2b .b2b-simple-next button.watch {
-  border-color: rgba(251, 191, 36, .32);
-  background: rgba(251, 191, 36, .09);
+  border-color: rgba(251, 191, 36, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .16), rgba(251, 191, 36, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--watch-rail),
+    0 10px 24px rgba(0, 0, 0, .20);
 }
 
 body.role-b2b .b2b-simple-card.hot,
 body.role-b2b .b2b-simple-next button.hot {
-  border-color: rgba(251, 113, 133, .32);
-  background: rgba(251, 113, 133, .09);
+  border-color: rgba(251, 113, 133, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .16), rgba(251, 113, 133, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--hot-rail),
+    0 10px 24px rgba(0, 0, 0, .20);
 }
 
 body.role-b2b .b2b-demand-outlook-head em {
@@ -13311,8 +13389,13 @@ body.role-b2b .b2b-demand-outlook-head em.positive,
 body.role-b2b .b2b-demand-outlook-grid article.positive,
 body.role-b2b .b2b-demand-competitors button.strong,
 body.role-b2b .b2b-demand-competitors button.good {
-  border-color: rgba(52, 211, 153, .32);
-  background: rgba(52, 211, 153, .09);
+  border-color: rgba(52, 211, 153, .42);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--good-rail),
+    0 10px 24px rgba(0, 0, 0, .20);
 }
 
 body.role-b2b .b2b-demand-outlook-head em.positive {
@@ -13322,8 +13405,13 @@ body.role-b2b .b2b-demand-outlook-head em.positive {
 body.role-b2b .b2b-demand-outlook-head em.warning,
 body.role-b2b .b2b-demand-outlook-grid article.warning,
 body.role-b2b .b2b-demand-competitors button.watch {
-  border-color: rgba(251, 191, 36, .32);
-  background: rgba(251, 191, 36, .09);
+  border-color: rgba(251, 191, 36, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .16), rgba(251, 191, 36, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--watch-rail),
+    0 10px 24px rgba(0, 0, 0, .20);
 }
 
 body.role-b2b .b2b-demand-outlook-head em.warning {
@@ -13331,8 +13419,13 @@ body.role-b2b .b2b-demand-outlook-head em.warning {
 }
 
 body.role-b2b .b2b-demand-competitors button.hot {
-  border-color: rgba(251, 113, 133, .32);
-  background: rgba(251, 113, 133, .09);
+  border-color: rgba(251, 113, 133, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .16), rgba(251, 113, 133, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--hot-rail),
+    0 10px 24px rgba(0, 0, 0, .20);
 }
 
 body.role-b2b .b2b-demand-season-strip i {
@@ -13444,8 +13537,13 @@ body.role-b2b .sheet-b2b-booking.strong,
 body.role-b2b .sheet-b2b-platform.good,
 body.role-b2b .sheet-b2b-search.good,
 body.role-b2b .sheet-b2b-booking.good {
-  border-color: rgba(52, 211, 153, .32);
-  background: rgba(52, 211, 153, .09);
+  border-color: rgba(52, 211, 153, .42);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--good-rail),
+    0 12px 28px rgba(0, 0, 0, .22);
 }
 
 body.role-b2b .b2b-action-stack > div.watch,
@@ -13477,8 +13575,13 @@ body.role-b2b .sheet-b2b-insight.watch,
 body.role-b2b .sheet-b2b-platform.watch,
 body.role-b2b .sheet-b2b-search.watch,
 body.role-b2b .sheet-b2b-booking.watch {
-  border-color: rgba(251, 191, 36, .32);
-  background: rgba(251, 191, 36, .09);
+  border-color: rgba(251, 191, 36, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .16), rgba(251, 191, 36, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--watch-rail),
+    0 12px 28px rgba(0, 0, 0, .22);
 }
 
 body.role-b2b .b2b-action-stack > div.hot,
@@ -13505,8 +13608,13 @@ body.role-b2b .sheet-b2b-platform.hot,
 body.role-b2b .sheet-b2b-search.hot,
 body.role-b2b .sheet-b2b-booking.hot,
 body.role-b2b .sheet-b2b-booking.bad {
-  border-color: rgba(251, 113, 133, .32);
-  background: rgba(251, 113, 133, .09);
+  border-color: rgba(251, 113, 133, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .16), rgba(251, 113, 133, .05)),
+    #121822;
+  box-shadow:
+    inset 3px 0 0 var(--hot-rail),
+    0 12px 28px rgba(0, 0, 0, .22);
 }
 
 body.role-b2b .b2b-action-stack mark,
@@ -13550,8 +13658,10 @@ body.role-b2b .map-region {
 }
 
 body.role-b2b .map-region.active {
-  fill: #254466;
+  fill: #2d5c8f;
   stroke: #6aa8ff;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 7px rgba(106, 168, 255, .45));
 }
 
 body.role-b2b .map-caption {
@@ -13581,9 +13691,13 @@ body.role-b2b .sheet-tabs button {
 }
 
 body.role-b2b .sheet-tabs button.active {
-  background: #111923;
-  color: #dcecff;
-  box-shadow: none;
+  border-color: rgba(106, 168, 255, .46);
+  background:
+    linear-gradient(180deg, rgba(56, 111, 191, .74), rgba(28, 61, 111, .92));
+  color: #ffffff;
+  box-shadow:
+    0 10px 22px rgba(47, 116, 208, .24),
+    inset 0 -2px 0 rgba(220, 236, 255, .62);
 }
 
 body.role-b2b .progress {
