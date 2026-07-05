@@ -13066,6 +13066,25 @@ body.role-b2b .b2b-demand-season-strip small {
   color: var(--muted);
 }
 
+body.role-b2b .demand-hero-card h3 {
+  color: #f8fbff;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .24);
+}
+
+body.role-b2b .demand-hero-card p:not(.eyebrow) {
+  color: #d7deeb;
+}
+
+body.role-b2b .demand-hero-card .eyebrow {
+  color: #b9d6ff;
+}
+
+body.role-b2b .demand-hero-card > span {
+  border: 1px solid rgba(106, 168, 255, .42);
+  background: rgba(106, 168, 255, .14);
+  color: #e7f1ff;
+}
+
 body.role-b2b .b2b-map-board-head span,
 body.role-b2b .b2b-map-board-grid span,
 body.role-b2b .b2b-map-board-grid small,
