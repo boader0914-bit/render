@@ -491,6 +491,7 @@ const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CON
 const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
 const NAVER_BOOKING_GRAPHQL_URL = "https://m.booking.naver.com/graphql";
 const NAVER_BOOKING_ID_FALLBACK = String(process.env.NAVER_BOOKING_ID_FALLBACK || "1") !== "0";
+const NAVER_COUPON_PAGE_FALLBACK = String(process.env.NAVER_COUPON_PAGE_FALLBACK || "1") !== "0";
 
 const headers = {
   "user-agent":
@@ -1125,6 +1126,7 @@ function naverBookingSaleType(item) {
 
 const COUPON_SIGNAL_PATTERN = /coupon|benefit|promotion|discount|쿠폰|혜택|할인|프로모션|즉시할인/i;
 const COUPON_NEGATIVE_PATTERN = /쿠폰\s*(없음|미제공|사용\s*불가|불가)|혜택\s*(없음|미제공)|할인\s*(없음|미제공|불가)/i;
+const COUPON_GENERIC_PATTERN = /^(coupon|coupons|benefit|benefits|promotion|promotions|discount|discounts|쿠폰|쿠폰\s*(받기|다운로드|적용|적용시|사용|정보|안내|혜택|노출|확인)?|혜택|할인|프로모션|즉시할인|네이버\s*쿠폰|네이버\s*예약\s*쿠폰)$/i;
 
 function parseJsonLike(value) {
   if (typeof value !== "string") return null;
@@ -1137,24 +1139,42 @@ function parseJsonLike(value) {
   }
 }
 
+function decodeCouponText(value) {
+  return String(value || "")
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_, code) => String.fromCharCode(parseInt(code, 16)))
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+}
+
 function normalizeCouponText(value) {
-  const text = String(value || "")
+  const text = decodeCouponText(value)
     .replace(/<[^>]+>/g, " ")
     .replace(/["'`]/g, "")
+    .replace(/[\[\]{}()<>]/g, " ")
+    .replace(/\b(__typename|graphql|apollo|webpack|script|stylesheet|bookingBusinessId|bizItemId)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (!text || text.length < 2 || text.length > 80) return "";
   if (/^(있음|없음|확인불가|Y|N|true|false)$/i.test(text)) return "";
   if (COUPON_NEGATIVE_PATTERN.test(text)) return "";
+  if (COUPON_GENERIC_PATTERN.test(text)) return "";
   if (/^[\d,\s원%~.-]+$/.test(text)) return "";
+  if (/^[A-Za-z0-9_.$:/?\-=#&]+$/.test(text)) return "";
+  if (/[{}\[\];=]/.test(text) && !/[가-힣]/.test(text)) return "";
   return text;
 }
 
 function couponTextFragments(text) {
-  const source = String(text || "").replace(/\s+/g, " ").trim();
+  const source = decodeCouponText(text).replace(/\s+/g, " ").trim();
   if (!source) return [];
-  const simpleParts = source.split(/\s*(?:,|\/|\||·|ㆍ|\n|\r)\s*/).map(normalizeCouponText).filter(Boolean);
-  const windowMatches = Array.from(source.matchAll(/.{0,24}(?:쿠폰|혜택|할인|프로모션|즉시할인).{0,34}/gi))
+  const simpleParts = source.length <= 600
+    ? source.split(/\s*(?:,|\/|\||·|ㆍ|\n|\r)\s*/).map(normalizeCouponText).filter(Boolean)
+    : [];
+  const windowMatches = Array.from(source.matchAll(/.{0,28}(?:쿠폰|혜택|할인|프로모션|즉시할인|coupon|benefit|promotion|discount).{0,42}/gi))
     .map((match) => normalizeCouponText(match[0]))
     .filter(Boolean);
   return uniqueNonEmpty([...simpleParts, ...windowMatches]).slice(0, 5);
@@ -1192,14 +1212,130 @@ function collectCouponTexts(value, path = [], depth = 0, output = []) {
   return output;
 }
 
+function hasCouponPresenceSignal(value, path = [], depth = 0) {
+  if (depth > 5 || value === null || value === undefined) return false;
+  const pathText = path.join(".");
+  const keyHit = COUPON_SIGNAL_PATTERN.test(pathText);
+  if (typeof value === "boolean") return keyHit && value === true;
+  if (typeof value === "string") {
+    const parsed = parseJsonLike(value);
+    if (parsed) return hasCouponPresenceSignal(parsed, path, depth + 1);
+    const text = decodeCouponText(value).replace(/\s+/g, " ").trim();
+    if (!text || /^(없음|미제공|사용\s*불가|불가|N|false)$/i.test(text)) return false;
+    if (COUPON_NEGATIVE_PATTERN.test(text)) return false;
+    return Boolean(keyHit || COUPON_SIGNAL_PATTERN.test(text));
+  }
+  if (typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).some((item, index) => hasCouponPresenceSignal(item, [...path, String(index)], depth + 1));
+  }
+  return Object.entries(value).slice(0, 80).some(([key, child]) => hasCouponPresenceSignal(child, [...path, key], depth + 1));
+}
+
+function couponSource(label, value) {
+  return { __couponSource: true, label, value };
+}
+
+function splitCouponNames(value) {
+  return uniqueNonEmpty(String(value || "")
+    .split(/\s*(?:·|ㆍ|\||,|\n|\r)\s*/)
+    .map(normalizeCouponText)
+    .filter(Boolean));
+}
+
 function summarizeNaverCouponExposure(sources = []) {
-  const names = uniqueNonEmpty(sources.flatMap((source) => collectCouponTexts(source))).slice(0, 5);
+  const records = [];
+  const presenceLabels = [];
+  for (const source of sources) {
+    const label = source && source.__couponSource ? String(source.label || "").trim() : "";
+    const value = source && source.__couponSource ? source.value : source;
+    if (hasCouponPresenceSignal(value) && label) presenceLabels.push(label);
+    for (const text of collectCouponTexts(value)) {
+      records.push({ text, label });
+    }
+  }
+  const names = uniqueNonEmpty(records.map((record) => record.text)).slice(0, 5);
+  const labels = uniqueNonEmpty(records
+    .filter((record) => names.includes(record.text))
+    .map((record) => record.label)
+    .filter(Boolean))
+    .slice(0, 4);
+  const signalLabels = uniqueNonEmpty([...labels, ...presenceLabels]).slice(0, 4);
+  const visible = Boolean(names.length || signalLabels.length);
   return {
-    couponStatus: names.length ? "있음" : "없음",
+    couponStatus: visible ? "있음" : "없음",
     couponNames: names.join(" · "),
-    couponChannel: "네이버",
-    couponDetail: names.length ? `네이버 공개 노출 쿠폰 ${names.length}건` : "네이버 공개 노출 쿠폰 없음",
+    couponChannel: signalLabels.length ? `네이버(${signalLabels.join(", ")})` : "네이버",
+    couponDetail: names.length
+      ? `네이버 공개 노출 쿠폰 ${names.length}건${signalLabels.length ? ` · 근거 ${signalLabels.join(", ")}` : ""}`
+      : (visible
+        ? `네이버 쿠폰 노출 신호 확인 · 쿠폰명 미확인${signalLabels.length ? ` · 근거 ${signalLabels.join(", ")}` : ""}`
+        : "네이버 공개 노출 쿠폰 없음"),
   };
+}
+
+function mergeNaverCouponSignals(signals = []) {
+  const validSignals = signals.filter(Boolean);
+  const names = uniqueNonEmpty(validSignals.flatMap((signal) => splitCouponNames(signal.couponNames))).slice(0, 5);
+  const channels = uniqueNonEmpty(validSignals.map((signal) => normalizeCouponText(signal.couponChannel)).filter(Boolean)).slice(0, 4);
+  const visible = names.length || validSignals.some((signal) => String(signal.couponStatus || "").trim() === "있음");
+  const details = uniqueNonEmpty(validSignals.map((signal) => normalizeCouponText(signal.couponDetail)).filter(Boolean)).slice(0, 3);
+  return {
+    couponStatus: visible ? "있음" : "없음",
+    couponNames: names.join(" · "),
+    couponChannel: channels.join(" · ") || "네이버",
+    couponDetail: visible
+      ? (details.join(" · ") || `네이버 공개 노출 쿠폰 ${names.length || 1}건`)
+      : (details.join(" · ") || "네이버 공개 노출 쿠폰 없음"),
+  };
+}
+
+function naverBookingSearchUrl(bookingBusinessId, bookingUrl = "", date = CHECK_IN) {
+  const checkOut = addDays(date, 1);
+  const fallback = `https://m.booking.naver.com/booking/3/bizes/${bookingBusinessId}/search`;
+  let url = null;
+  try {
+    url = new URL(/^https?:\/\//i.test(String(bookingUrl || "")) ? bookingUrl : fallback);
+  } catch {
+    url = new URL(fallback);
+  }
+  if (!/\/search(?:\/)?$/i.test(url.pathname)) {
+    url = new URL(fallback);
+  }
+  url.searchParams.set("startDate", date);
+  url.searchParams.set("endDate", checkOut);
+  url.searchParams.set("adult", String(ADULTS));
+  return url.toString();
+}
+
+async function getNaverBookingPageCouponSignal(bookingBusinessId, bookingUrl = "", date = CHECK_IN) {
+  if (!NAVER_COUPON_PAGE_FALLBACK || !bookingBusinessId) return null;
+  const url = naverBookingSearchUrl(bookingBusinessId, bookingUrl, date);
+  try {
+    const { res, text } = await fetchText(url, {
+      headers: {
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        referer: url,
+      },
+    });
+    const signal = summarizeNaverCouponExposure([couponSource("예약페이지", text)]);
+    const hasPageCouponName = Boolean(signal.couponNames);
+    return {
+      ...signal,
+      couponStatus: hasPageCouponName ? "있음" : "없음",
+      couponChannel: hasPageCouponName ? signal.couponChannel : "네이버 예약페이지",
+      couponDetail: hasPageCouponName
+        ? `${signal.couponDetail} · 예약페이지 ${res.status}`
+        : `예약페이지 보조 확인(${res.status}) · 쿠폰명 미노출`,
+    };
+  } catch (error) {
+    return {
+      couponStatus: "없음",
+      couponNames: "",
+      couponChannel: "네이버 예약페이지",
+      couponDetail: `예약페이지 쿠폰 보조 확인 실패(${String(error?.message || error).slice(0, 60)})`,
+    };
+  }
 }
 
 function naverGroupedRoomCount(value) {
@@ -1392,7 +1528,15 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
   const dayUseSchedules = extra.dayUseSchedules || [];
   const dayUseListType = dayUseSchedules.length ? classifyNaverBookingList(dayUseItems, dayUseSchedules) : "";
   const dayUseSummary = summarizeNaverScheduleGroup(dayUseItems, dayUseSchedules, dayUseListType || "객실 종류별 리스트");
-  const coupon = summarizeNaverCouponExposure([items, dayUseItems, schedules, dayUseSchedules]);
+  const coupon = mergeNaverCouponSignals([
+    extra.couponSeed || summarizeNaverCouponExposure([
+      couponSource("숙박상품", items),
+      couponSource("데이유즈상품", dayUseItems),
+      couponSource("숙박일정", schedules),
+      couponSource("데이유즈일정", dayUseSchedules),
+    ]),
+    extra.pageCouponSignal,
+  ]);
   const minPrices = [nightSummary.minPrice, dayUseSummary.minPrice].filter((value) => value !== null && value !== undefined);
   const minPrice = minPrices.length ? Math.min(...minPrices) : null;
   const evidence = !nightSummary.totalStock
@@ -1488,6 +1632,8 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
       price: item.price,
       couponStatus: item.couponStatus,
       couponNames: item.couponNames,
+      couponChannel: item.couponChannel,
+      couponDetail: item.couponDetail,
     })),
   };
 }
@@ -1617,7 +1763,10 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
     const bookingCount = Math.max(0, asStockNumber(day.bookingCount) || 0);
     const occupiedBookingCount = Math.max(0, asStockNumber(day.occupiedBookingCount) || 0);
     const price = asStockNumber(day.prices?.[0]?.price ?? item.minMaxPrice?.minPrice ?? item.price);
-    const coupon = summarizeNaverCouponExposure([item, day]);
+    const coupon = summarizeNaverCouponExposure([
+      couponSource("상품", item),
+      couponSource("일정", day),
+    ]);
     return {
       bizItemId: item.bizItemId,
       name: item.name,
@@ -1630,6 +1779,7 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
       price,
       couponStatus: coupon.couponStatus,
       couponNames: coupon.couponNames,
+      couponChannel: coupon.couponChannel,
       couponDetail: coupon.couponDetail,
       isBusinessDay: day.isBusinessDay,
       isSaleDay: day.isSaleDay,
@@ -1882,6 +2032,15 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   const items = nightItems.length ? nightItems : unknownItems;
   const schedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, items, 40);
   const dayUseSchedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems, 20);
+  const couponSeed = summarizeNaverCouponExposure([
+    couponSource("숙박상품", items),
+    couponSource("데이유즈상품", dayUseItems),
+    couponSource("숙박일정", schedules),
+    couponSource("데이유즈일정", dayUseSchedules),
+  ]);
+  const pageCouponSignal = couponSeed.couponStatus === "있음"
+    ? null
+    : await getNaverBookingPageCouponSignal(booking.bookingBusinessId, booking.bookingUrl);
   const weekly = options.collectRange
     ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, items, schedules, BOOKING_RANGE_DAYS)
     : null;
@@ -1906,6 +2065,8 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
     }, {
       dayUseItems,
       dayUseSchedules,
+      couponSeed,
+      pageCouponSignal,
     }),
     weekly,
     dayUseWeekly,
