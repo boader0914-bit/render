@@ -9542,6 +9542,38 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.b2b-simple-meter {
+  min-width: 0;
+  height: 7px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: #e8edf5;
+  overflow: hidden;
+}
+
+.b2b-simple-meter i {
+  display: block;
+  width: var(--meter, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f80ed, #34d399);
+  animation: b2b-meter-fill .72s ease-out both;
+}
+
+.b2b-simple-card.watch .b2b-simple-meter i {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.b2b-simple-card.hot .b2b-simple-meter i {
+  background: linear-gradient(90deg, #fb7185, #f59e0b);
+}
+
+@keyframes b2b-meter-fill {
+  from {
+    width: 0;
+  }
+}
+
 .b2b-simple-card.good {
   border-color: #bbf7d0;
   background: #f6fef9;
@@ -11450,6 +11482,10 @@ a.platform-row:hover {
   display: grid;
   grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
   gap: 9px;
+}
+
+.b2b-demand-outlook-layout.single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .b2b-demand-action-board,
@@ -13856,6 +13892,10 @@ body.role-b2b .b2b-simple-next button,
 body.role-b2b .b2b-detail-pack summary::after {
   border-color: rgba(156, 174, 204, .20);
   background: #121822;
+}
+
+body.role-b2b .b2b-simple-meter {
+  background: rgba(156, 174, 204, .18);
 }
 
 body.role-b2b .b2b-simple-answer strong,
