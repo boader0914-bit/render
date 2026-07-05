@@ -7153,6 +7153,117 @@ a.platform-row:hover {
   filter: drop-shadow(0 8px 14px rgba(16, 24, 40, .22));
 }
 
+.map-radius-ring {
+  fill: rgba(49, 130, 246, .06);
+  stroke: rgba(49, 130, 246, .38);
+  stroke-width: 2;
+  stroke-dasharray: 8 7;
+  pointer-events: none;
+}
+
+.map-radius-ring.ring-50 {
+  fill: rgba(18, 183, 106, .08);
+  stroke: rgba(18, 183, 106, .42);
+}
+
+.map-search-center {
+  pointer-events: none;
+}
+
+.map-search-center circle {
+  fill: #ffffff;
+  stroke: #2f80ed;
+  stroke-width: 4;
+  filter: drop-shadow(0 10px 18px rgba(47, 128, 237, .26));
+}
+
+.map-search-center path {
+  stroke: #2f80ed;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.map-search-center text {
+  fill: #175cd3;
+  font-size: 13px;
+  font-weight: 950;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, .92);
+  stroke-width: 4px;
+}
+
+.company-map-marker {
+  cursor: pointer;
+  outline: none;
+  filter: drop-shadow(0 8px 12px rgba(16, 24, 40, .20));
+}
+
+.company-map-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.company-map-marker:focus-visible .company-map-halo,
+.company-map-marker:hover .company-map-halo {
+  opacity: .52;
+  transform: scale(1.18);
+}
+
+.company-map-halo {
+  fill: rgba(52, 211, 153, .24);
+  opacity: .34;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity .16s ease, transform .16s ease;
+}
+
+.company-map-dot {
+  fill: #12b76a;
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+
+.company-map-marker.adjacent .company-map-halo {
+  fill: rgba(251, 191, 36, .25);
+}
+
+.company-map-marker.adjacent .company-map-dot {
+  fill: #f59e0b;
+}
+
+.company-map-marker.outside .company-map-halo {
+  fill: rgba(251, 113, 133, .26);
+}
+
+.company-map-marker.outside .company-map-dot {
+  fill: #f43f5e;
+}
+
+.company-map-marker.watch .company-map-dot {
+  fill: #f59e0b;
+}
+
+.company-map-marker.hot .company-map-dot {
+  fill: #fb7185;
+}
+
+.company-map-rank {
+  fill: #ffffff;
+  font-size: 9px;
+  font-weight: 950;
+  pointer-events: none;
+}
+
+.company-map-label {
+  fill: #1d2939;
+  font-size: 11px;
+  font-weight: 950;
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, .90);
+  stroke-width: 4px;
+  pointer-events: none;
+}
+
 .map-caption {
   position: absolute;
   left: 50%;
@@ -14478,6 +14589,35 @@ body.role-b2b .map-region.active {
   stroke: #6aa8ff;
   stroke-width: 2.5;
   filter: drop-shadow(0 0 7px rgba(106, 168, 255, .45));
+}
+
+body.role-b2b .map-radius-ring {
+  fill: rgba(106, 168, 255, .07);
+  stroke: rgba(106, 168, 255, .50);
+}
+
+body.role-b2b .map-radius-ring.ring-50 {
+  fill: rgba(52, 211, 153, .08);
+  stroke: rgba(52, 211, 153, .48);
+}
+
+body.role-b2b .map-search-center circle {
+  fill: #0f1722;
+  stroke: #8fc7ff;
+}
+
+body.role-b2b .map-search-center path {
+  stroke: #8fc7ff;
+}
+
+body.role-b2b .map-search-center text,
+body.role-b2b .company-map-label {
+  fill: #e7f1ff;
+  stroke: rgba(15, 17, 23, .92);
+}
+
+body.role-b2b .company-map-dot {
+  stroke: #0f1117;
 }
 
 body.role-b2b .map-caption {

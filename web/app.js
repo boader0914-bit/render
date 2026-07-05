@@ -12692,8 +12692,8 @@ function renderB2BMapCompetitionBoard(model = b2bRegionMapModel(), board = b2bMa
       </div>
       <div class="b2b-map-radius-list">
         <div>
-          <strong>반경 노출 경쟁업체</strong>
-          <small>권역 밖 또는 인접권 노출 업체를 별도 확인합니다.</small>
+          <strong>지도 업체 요약</strong>
+          <small>점 또는 행을 누르면 예약·가격·채널 요약을 엽니다.</small>
         </div>
         ${board.competitorRows.length ? board.competitorRows.map((row) => {
           const attrs = row.itemIndex >= 0 ? `type="button" data-open-company="${row.itemIndex}"` : `type="button" disabled`;
@@ -12748,12 +12748,14 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
 }
 
 function renderMapControls() {
-  els.mapLayerRow.innerHTML = ["시군구 경계", "업체 스팟", "검색량", "판매율"].map((name, index) => `
-    <span><b style="background:${["#3182f6", "#12b76a", "#7a5af8", "#f79009"][index]}"></b>${name}</span>
+  els.mapLayerRow.innerHTML = ["검색 중심", "50/100km 반경", "지역 내 업체", "인접권", "권역 밖"].map((name, index) => `
+    <span><b style="background:${["#6aa8ff", "#8fc7ff", "#34d399", "#fbbf24", "#fb7185"][index]}"></b>${name}</span>
   `).join("");
   els.mapLegend.innerHTML = CORE_ORDER.slice(0, 5).map((name) => `
     <span><b style="background:${CORE_COLORS[name]}"></b>${name}</span>
-  `).join("");
+  `).join("") + `<span><b style="background:#ffffff;border:2px solid #34d399"></b>업체 점 클릭 시 요약</span>`;
+  const caption = document.querySelector(".map-caption");
+  if (caption) caption.textContent = "검색 기준 지역 중심 · 50/100km 반경 · 업체 위치 점 · 권역 밖 노출 구분";
 }
 
 async function loadLocalMap() {
@@ -12790,6 +12792,126 @@ function project(lon, lat, bounds) {
   return [x, y];
 }
 
+function coordinateFromValue(value = {}) {
+  const pairs = [
+    [value.lon, value.lat],
+    [value.lng, value.lat],
+    [value.longitude, value.latitude],
+    [value.x, value.y],
+    [value.geo?.lon, value.geo?.lat],
+    [value.geo?.lng, value.geo?.lat],
+    [value.geo?.longitude, value.geo?.latitude],
+    [value.location?.lon, value.location?.lat],
+    [value.location?.lng, value.location?.lat],
+    [value.location?.longitude, value.location?.latitude],
+    [value.companyProfile?.location?.lon, value.companyProfile?.location?.lat],
+    [value.companyProfile?.location?.lng, value.companyProfile?.location?.lat],
+    [value.companyProfile?.location?.longitude, value.companyProfile?.location?.latitude],
+    [value.companyProfile?.geo?.lon, value.companyProfile?.geo?.lat],
+    [value.companyProfile?.geo?.longitude, value.companyProfile?.geo?.latitude]
+  ];
+  for (const [rawLon, rawLat] of pairs) {
+    const lon = Number(rawLon);
+    const lat = Number(rawLat);
+    if (Number.isFinite(lon) && Number.isFinite(lat)) return { lon, lat, source: "exact" };
+  }
+  return null;
+}
+
+function regionCoordinate(region = {}) {
+  const coordinate = coordinateFromValue(region);
+  return coordinate ? { ...coordinate, source: "region" } : null;
+}
+
+function regionMatchScoreForItem(region = {}, item = {}) {
+  const regionTokens = [
+    region.region,
+    region.name,
+    region.target,
+    region.searchKeyword,
+    region.primary,
+    region.cluster,
+    region.core
+  ].map(compactSearchText).filter((token) => token.length >= 2);
+  const itemText = compactSearchText([
+    item.region,
+    item.addressRegion,
+    item.searchRegion,
+    item.searchCluster,
+    item.address,
+    item.name,
+    item.searchKeyword
+  ].filter(Boolean).join(" "));
+  if (!itemText || !regionTokens.length) return 0;
+  return regionTokens.reduce((score, token) => {
+    if (itemText === token) return Math.max(score, 7);
+    if (itemText.includes(token)) return Math.max(score, token.length >= 3 ? 6 : 4);
+    if (token.includes(itemText)) return Math.max(score, 3);
+    return score;
+  }, 0);
+}
+
+function regionForCompanyMapItem(item = {}, regions = []) {
+  let best = null;
+  let bestScore = 0;
+  for (const region of regions) {
+    const score = regionMatchScoreForItem(region, item);
+    if (score > bestScore) {
+      best = region;
+      bestScore = score;
+    }
+  }
+  return best || regions[0] || null;
+}
+
+function fallbackCompanyCoordinate(item = {}, index = 0, regions = [], centerRegion = null) {
+  const bucket = b2bBoundaryBucket(item);
+  const baseRegion = regionForCompanyMapItem(item, regions) || centerRegion;
+  const base = regionCoordinate(baseRegion || {});
+  if (!base) return null;
+  const angle = (index * 137.508 + (bucket === "outside" ? 34 : bucket === "adjacent" ? 18 : 0)) * Math.PI / 180;
+  const distance = bucket === "outside"
+    ? 0.28 + (index % 4) * 0.035
+    : bucket === "adjacent"
+      ? 0.17 + (index % 3) * 0.028
+      : 0.055 + (index % 5) * 0.014;
+  const latFactor = Math.max(0.35, Math.cos(base.lat * Math.PI / 180));
+  return {
+    lon: base.lon + (Math.cos(angle) * distance) / latFactor,
+    lat: base.lat + Math.sin(angle) * distance,
+    source: "estimated",
+    baseRegion
+  };
+}
+
+function companyMapPointRows(regions = []) {
+  const centerRegion = b2bRegionMapModel().topRegion || regions[0] || null;
+  const rankRows = b2bRankBoardModel().rows.slice(0, 30);
+  return rankRows.map((row, index) => {
+    const explicit = coordinateFromValue(row.item);
+    const coordinate = explicit || fallbackCompanyCoordinate(row.item, index, regions, centerRegion);
+    if (!coordinate) return null;
+    const itemIndex = Number.isFinite(row.itemIndex)
+      ? row.itemIndex
+      : (row.linked ? finiteNumber(row.item?.availabilityIndex, -1) : (state.data?.availability?.items || []).indexOf(row.item));
+    const bucket = b2bBoundaryBucket(row.item);
+    return {
+      ...row,
+      coordinate,
+      itemIndex,
+      bucket,
+      tone: bucket === "outside" ? "outside" : bucket === "adjacent" ? "adjacent" : row.insight?.tone || "local",
+      label: bucket === "outside" ? "권역 밖" : bucket === "adjacent" ? "인접권" : "지역 내"
+    };
+  }).filter(Boolean);
+}
+
+function svgRadiusForKm(lon, lat, km, bounds) {
+  const [, y1] = project(lon, lat, bounds);
+  const [, y2] = project(lon, lat + km / 111, bounds);
+  return Math.abs(y2 - y1);
+}
+
 function featurePath(feature, bounds) {
   const type = feature.geometry?.type;
   const coordinates = feature.geometry?.coordinates || [];
@@ -12803,12 +12925,16 @@ function featurePath(feature, bounds) {
   }).join(" ");
 }
 
-function regionBounds(regions = [], features = []) {
+function regionBounds(regions = [], features = [], items = []) {
   const pairs = [];
   for (const region of regions) {
     const lon = Number(region.lon || region.lng || region.longitude);
     const lat = Number(region.lat || region.latitude);
     if (Number.isFinite(lon) && Number.isFinite(lat)) pairs.push([lon, lat]);
+  }
+  for (const item of items) {
+    const coordinate = coordinateFromValue(item);
+    if (coordinate) pairs.push([coordinate.lon, coordinate.lat]);
   }
   if (!pairs.length) {
     features.slice(0, 80).forEach((feature) => pairs.push(...coordinatePairs(feature.geometry)));
@@ -12837,11 +12963,16 @@ function featureName(feature) {
 async function renderMap() {
   renderMapControls();
   const regions = state.data?.regions || [];
+  const items = state.data?.availability?.items || [];
   els.mapCount.textContent = `${fmtNumber(regions.length)} 지역`;
   const geojson = await loadLocalMap();
   const features = geojson?.features || [];
   const activeNames = new Set(regions.map((region) => String(region.region || region.name || "").replace(/\s+/g, "")));
-  const bounds = regionBounds(regions, features);
+  const bounds = regionBounds(regions, features, items);
+  const model = b2bRegionMapModel();
+  const centerRegion = model.topRegion || regions[0] || null;
+  const centerCoordinate = regionCoordinate(centerRegion || {});
+  const companyPoints = companyMapPointRows(regions);
 
   const visibleFeatures = features.filter((feature) => {
     const pairs = coordinatePairs(feature.geometry);
@@ -12854,6 +12985,24 @@ async function renderMap() {
     const active = Array.from(activeNames).some((regionName) => name.includes(regionName) || regionName.includes(name));
     return `<path class="map-region ${active ? "active" : ""}" d="${featurePath(feature, bounds)}"></path>`;
   }).join("");
+
+  const radiusOverlay = centerCoordinate ? (() => {
+    const [cx, cy] = project(centerCoordinate.lon, centerCoordinate.lat, bounds);
+    const r50 = svgRadiusForKm(centerCoordinate.lon, centerCoordinate.lat, 50, bounds);
+    const r100 = svgRadiusForKm(centerCoordinate.lon, centerCoordinate.lat, 100, bounds);
+    const centerName = centerRegion?.region || centerRegion?.name || activeKeyword();
+    return `
+      <g class="map-radius-layer" aria-label="검색 기준 반경">
+        <circle class="map-radius-ring ring-100" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r100.toFixed(1)}"></circle>
+        <circle class="map-radius-ring ring-50" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r50.toFixed(1)}"></circle>
+        <g class="map-search-center" transform="translate(${cx.toFixed(1)} ${cy.toFixed(1)})">
+          <circle r="10"></circle>
+          <path d="M-15 0H15M0-15V15"></path>
+          <text y="-20" text-anchor="middle">${escapeHtml(centerName)}</text>
+        </g>
+      </g>
+    `;
+  })() : "";
 
   const markers = regions.map((region, index) => {
     const lon = Number(region.lon || region.lng || region.longitude);
@@ -12872,7 +13021,30 @@ async function renderMap() {
     `;
   }).join("");
 
-  els.clusterMap.innerHTML = `${paths}${markers}`;
+  const companyMarkers = companyPoints.map((row) => {
+    const [x, y] = project(row.coordinate.lon, row.coordinate.lat, bounds);
+    const rank = finiteNumber(row.rank, row.index + 1);
+    const radius = rank <= 5 ? 9 : rank <= 10 ? 7 : 5.5;
+    const rateText = Number.isFinite(row.rate) ? fmtRate(row.rate) : "예약율 대기";
+    const attrs = row.itemIndex >= 0 ? `data-open-company="${row.itemIndex}" tabindex="0" role="button"` : "";
+    const sourceText = row.coordinate.source === "exact" ? "좌표" : "지역 중심 추정";
+    const name = row.item?.name || "업체명 확인";
+    const label = rank <= 5 || row.bucket !== "local"
+      ? `<text class="company-map-label" x="12" y="-10">${escapeHtml(name.slice(0, 10))}</text>`
+      : "";
+    return `
+      <g class="company-map-marker ${escapeHtml(row.bucket)} ${escapeHtml(row.tone)}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})" ${attrs}>
+        <title>${escapeHtml(`${fmtNumber(rank)}위 · ${name} · ${row.label} · ${rateText} · ${sourceText}`)}</title>
+        <circle class="company-map-hit" r="20"></circle>
+        <circle class="company-map-halo" r="${(radius + 7).toFixed(1)}"></circle>
+        <circle class="company-map-dot" r="${radius.toFixed(1)}"></circle>
+        <text class="company-map-rank" y="3" text-anchor="middle">${rank <= 20 ? fmtNumber(rank) : ""}</text>
+        ${label}
+      </g>
+    `;
+  }).join("");
+
+  els.clusterMap.innerHTML = `${paths}${radiusOverlay}${markers}${companyMarkers}`;
   renderRegions();
 }
 
@@ -16444,6 +16616,12 @@ function bindEvents() {
     });
   });
   document.addEventListener("keydown", (event) => {
+    const mapCompany = event.target.closest?.(".company-map-marker[data-open-company]");
+    if (mapCompany && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      openSheet(mapCompany.dataset.openCompany);
+      return;
+    }
     if (event.key !== "Escape") return;
     closeSheet();
     closeDrawer();
