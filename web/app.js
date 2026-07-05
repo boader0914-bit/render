@@ -7206,10 +7206,8 @@ function b2bCollectedPriceFields(item = {}) {
   const keys = ["weekdayPrice", "fridayPrice", "saturdayPrice", "sundayPrice"];
   (profile.lodgingDayRows || []).slice(0, 4).forEach((row, index) => {
     const priced = finiteNumber(row.pricedSoldOut, 0);
-    const offline = finiteNumber(row.offlineReserved, 0);
-    const sold = priced + offline;
     const amount = b2bWonNumber(row.revenueText);
-    const price = sold > 0 ? amount / sold : 0;
+    const price = priced > 0 ? amount / priced : 0;
     const rounded = roundB2BLodgePrice(price);
     if (rounded) result[keys[index]] = rounded;
   });

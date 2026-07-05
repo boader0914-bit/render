@@ -2024,7 +2024,8 @@ function b2bMyLodgePayload(value = {}) {
     error.statusCode = 400;
     throw error;
   }
-  const bookingRangeDays = Number(value.bookingRangeDays) || 7;
+  const rawBookingRangeDays = Number(value.bookingRangeDays);
+  const bookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingRangeDays) ? rawBookingRangeDays : 7)));
   return {
     keyword: lodgingName,
     checkIn: value.checkIn || kstDate(0),
@@ -7900,8 +7901,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-my-lodge-collect"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-my-lodge-collect"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-my-lodge-collect-fix"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-my-lodge-collect-fix"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
