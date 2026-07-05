@@ -66,10 +66,10 @@ const TAB_LABELS = {
   admin: "관리"
 };
 const B2B_TAB_LABELS = {
-  report: "지역 경쟁 리포트",
-  rank: "경쟁업체 노출",
-  map: "지역 경쟁 지도",
-  demand: "수요 전망"
+  report: "리포트",
+  rank: "노출",
+  map: "지도",
+  demand: "수요"
 };
 
 const els = {
