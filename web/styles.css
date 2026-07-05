@@ -277,6 +277,122 @@ a {
   white-space: nowrap;
 }
 
+.b2b-live-progress {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.b2b-live-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b2b-live-progress-head strong {
+  color: #175cd3;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.b2b-live-progress-head small {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.b2b-live-progress-track {
+  position: relative;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(23, 92, 211, .12);
+}
+
+.b2b-live-progress-track i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  min-width: 8%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #175cd3 0%, #2e90fa 45%, #84caff 65%, #175cd3 100%);
+  background-size: 180% 100%;
+  animation: b2b-progress-flow 1.2s linear infinite;
+}
+
+.b2b-live-progress.delayed .b2b-live-progress-head strong,
+.b2b-live-progress.delayed .b2b-live-progress-head small {
+  color: #b54708;
+}
+
+.b2b-live-progress.delayed .b2b-live-progress-track {
+  background: rgba(181, 71, 8, .14);
+}
+
+.b2b-live-progress.delayed .b2b-live-progress-track i {
+  background: linear-gradient(90deg, #b54708 0%, #f79009 48%, #fedf89 66%, #b54708 100%);
+}
+
+.b2b-live-time,
+.b2b-live-stages {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.b2b-live-time em,
+.b2b-live-stages i {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475467;
+  padding: 0 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.b2b-live-time b,
+.b2b-live-stages b {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-live-stages small {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.b2b-live-stages i.done {
+  border-color: #b7e4cc;
+  background: #ecfdf3;
+}
+
+.b2b-live-stages i.active {
+  border-color: #84caff;
+  background: #eff8ff;
+  box-shadow: 0 0 0 3px rgba(46, 144, 250, .10);
+}
+
+.b2b-live-stages i.pending {
+  opacity: .74;
+}
+
+@keyframes b2b-progress-flow {
+  from { background-position: 0 0; }
+  to { background-position: 180% 0; }
+}
+
 .b2b-search-quick {
   min-width: 0;
   display: flex;
@@ -12777,6 +12893,38 @@ body.role-b2b .bottom-nav button.active {
   border-color: rgba(106, 168, 255, .42);
   background: #1e3148;
   color: #dcecff;
+}
+
+body.role-b2b .b2b-live-progress-track {
+  background: rgba(106, 168, 255, .16);
+}
+
+body.role-b2b .b2b-live-progress-head strong,
+body.role-b2b .b2b-live-time b,
+body.role-b2b .b2b-live-stages b {
+  color: #dcecff;
+}
+
+body.role-b2b .b2b-live-progress-head small,
+body.role-b2b .b2b-live-stages small {
+  color: var(--muted);
+}
+
+body.role-b2b .b2b-live-time em,
+body.role-b2b .b2b-live-stages i {
+  border-color: rgba(156, 174, 204, .20);
+  background: #121822;
+  color: var(--muted);
+}
+
+body.role-b2b .b2b-live-stages i.done {
+  border-color: rgba(52, 211, 153, .30);
+  background: rgba(52, 211, 153, .10);
+}
+
+body.role-b2b .b2b-live-stages i.active {
+  border-color: rgba(106, 168, 255, .46);
+  background: rgba(106, 168, 255, .12);
 }
 
 body.role-b2b .b2b-search-card strong,

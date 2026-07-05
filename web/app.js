@@ -32,7 +32,10 @@ const state = {
   crawlStatusTimer: null,
   pendingRecrawlContext: null,
   b2bSearchQuery: "",
-  b2bSearchLoading: false
+  b2bSearchLoading: false,
+  b2bSearchStartedAt: 0,
+  b2bSearchPreview: null,
+  b2bSearchTimer: null
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -715,6 +718,105 @@ function crawlPreviewMeta(payload = {}) {
       bookingRangePlaceLimit: placeLimit
     }
   };
+}
+
+function b2bSearchStageRows(preview = {}, elapsedSeconds = 0) {
+  const stages = Array.isArray(preview.stages) && preview.stages.length ? preview.stages : crawlStageFallbacks();
+  const totalSeconds = stages.reduce((sum, stage) => sum + Math.max(1, Number(stage.seconds || 0)), 0);
+  if (elapsedSeconds >= totalSeconds) {
+    return stages.map((stage, index) => ({
+      ...stage,
+      status: index === stages.length - 1 ? "active" : "done",
+      progress: index === stages.length - 1 ? 99 : 100
+    }));
+  }
+  let cursor = 0;
+  return stages.map((stage) => {
+    const seconds = Math.max(1, Number(stage.seconds || 0));
+    const start = cursor;
+    const end = cursor + seconds;
+    cursor = end;
+    if (elapsedSeconds >= end) return { ...stage, status: "done", progress: 100 };
+    if (elapsedSeconds >= start) {
+      const progress = Math.max(1, Math.min(99, ((elapsedSeconds - start) / seconds) * 100));
+      return { ...stage, status: "active", progress };
+    }
+    return { ...stage, status: "pending", progress: 0 };
+  });
+}
+
+function b2bSearchProgressMeta() {
+  const preview = state.b2bSearchPreview || crawlPreviewMeta(b2bLiveSearchPayload(state.b2bSearchQuery || "지역글램핑"));
+  const startedAt = Number(state.b2bSearchStartedAt || Date.now());
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  const total = Math.max(1, Number(preview.estimatedTotalSeconds || 1));
+  const delayedSeconds = Math.max(0, elapsedSeconds - total);
+  const remainingSeconds = Math.max(0, Math.ceil(total - elapsedSeconds));
+  const stages = b2bSearchStageRows(preview, elapsedSeconds);
+  const currentStage = stages.find((stage) => stage.status === "active") || stages.at(-1) || null;
+  const estimatedProgress = delayedSeconds
+    ? 99
+    : Math.max(4, Math.min(98, (elapsedSeconds / total) * 100));
+  return {
+    ...preview,
+    elapsedSeconds,
+    remainingSeconds,
+    delayedSeconds,
+    isDelayed: delayedSeconds > 0,
+    estimatedProgress,
+    currentStage,
+    stages
+  };
+}
+
+function b2bSearchProgressText(meta = b2bSearchProgressMeta()) {
+  if (meta.isDelayed) return `예상 초과 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`;
+  return meta.remainingSeconds <= 0 ? "곧 완료" : `${formatElapsed(meta.remainingSeconds)} 남음`;
+}
+
+function b2bSearchProgressHtml(meta = b2bSearchProgressMeta()) {
+  const percent = Math.max(4, Math.min(99, Math.round(Number(meta.estimatedProgress || 0))));
+  return `
+    <div class="b2b-live-progress ${meta.isDelayed ? "delayed" : ""}">
+      <div class="b2b-live-progress-head">
+        <strong>${escapeHtml(`${percent}%`)}</strong>
+        <small>${escapeHtml(b2bSearchProgressText(meta))}</small>
+      </div>
+      <div class="b2b-live-progress-track" aria-label="검색 진행률">
+        <i style="width:${percent}%"></i>
+      </div>
+      <div class="b2b-live-time">
+        <em>경과 <b>${escapeHtml(formatElapsed(meta.elapsedSeconds) || "0초")}</b></em>
+        <em>남은시간 <b>${escapeHtml(b2bSearchProgressText(meta))}</b></em>
+        <em>완료예상 <b>${escapeHtml(formatClockTime(meta.estimatedCompleteAt))}</b></em>
+      </div>
+      <div class="b2b-live-stages">
+        ${(meta.stages || []).map((stage) => `
+          <i class="${escapeHtml(stage.status || "pending")}">
+            <b>${escapeHtml(stage.label || "단계")}</b>
+            <small>${escapeHtml(crawlStageStatusText(stage))}</small>
+          </i>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function clearB2BSearchTimer() {
+  if (!state.b2bSearchTimer) return;
+  clearInterval(state.b2bSearchTimer);
+  state.b2bSearchTimer = null;
+}
+
+function startB2BSearchTimer() {
+  clearB2BSearchTimer();
+  state.b2bSearchTimer = setInterval(() => {
+    if (!state.b2bSearchLoading) {
+      clearB2BSearchTimer();
+      return;
+    }
+    renderB2BSearchPanel();
+  }, 1000);
 }
 
 function crawlEstimatePayloadFromPlan(plan = {}) {
@@ -13374,7 +13476,8 @@ function renderB2BSearchPanel() {
     const hasResult = Boolean(state.data?.run);
     const keyword = hasResult ? activeKeyword() : (state.b2bSearchQuery || "").trim();
     const previewPayload = b2bLiveSearchPayload(keyword || "지역글램핑");
-    const preview = crawlPreviewMeta(previewPayload);
+    const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
+    const preview = progressMeta || crawlPreviewMeta(previewPayload);
     const panelClass = state.b2bSearchLoading ? "loading" : hasResult ? "ready" : "idle";
     const badge = state.b2bSearchLoading ? "검색중" : hasResult ? "결과 표시" : "새 검색";
     const title = state.b2bSearchLoading
@@ -13393,19 +13496,22 @@ function renderB2BSearchPanel() {
           <span>${escapeHtml(badge)}</span>
           <strong>${escapeHtml(title)}</strong>
           <p>${escapeHtml(copy)}</p>
+          ${state.b2bSearchLoading ? b2bSearchProgressHtml(progressMeta) : ""}
         </div>
         <div class="b2b-live-search-meta">
           <em>정밀 분석</em>
           <em>1-10위</em>
           <em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>
+          ${state.b2bSearchLoading ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
       </div>
     `;
   }
   if (els.b2bSearchStatus) {
     const current = state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "검색어를 입력하면 새 경쟁 리포트를 수집합니다.";
+    const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
     els.b2bSearchStatus.textContent = state.b2bSearchLoading
-      ? "검색을 실행 중입니다. 완료되면 결과가 자동으로 표시됩니다."
+      ? `${state.b2bSearchQuery || "검색"} 실행 중 · 경과 ${formatElapsed(progressMeta.elapsedSeconds) || "0초"} · ${b2bSearchProgressText(progressMeta)} · 완료 ${formatClockTime(progressMeta.estimatedCompleteAt)}`
       : current;
   }
 }
@@ -13435,7 +13541,10 @@ async function submitB2BSearch() {
   const submitButton = els.b2bSearchForm?.querySelector('button[type="submit"]');
   const preview = crawlPreviewMeta(payload);
   state.b2bSearchLoading = true;
+  state.b2bSearchStartedAt = Date.now();
+  state.b2bSearchPreview = preview;
   if (submitButton) submitButton.disabled = true;
+  startB2BSearchTimer();
   renderB2BSearchPanel();
   setStatus("B2B 검색 중");
   if (els.b2bSearchStatus) {
@@ -13459,6 +13568,9 @@ async function submitB2BSearch() {
     finalErrorMessage = `검색 실패: ${error.message}`;
   } finally {
     state.b2bSearchLoading = false;
+    state.b2bSearchStartedAt = 0;
+    state.b2bSearchPreview = null;
+    clearB2BSearchTimer();
     if (submitButton) submitButton.disabled = false;
     renderB2BSearchPanel();
     if (finalErrorMessage && els.b2bSearchStatus) els.b2bSearchStatus.textContent = finalErrorMessage;
