@@ -37,6 +37,7 @@ const state = {
   b2bSearchStartedAt: 0,
   b2bSearchPreview: null,
   b2bSearchTimer: null,
+  b2bMyLodgeDraft: null,
   memberSearchHistory: []
 };
 
@@ -56,6 +57,7 @@ const B2B_HIGH_RESERVATION_RATE = 0.4;
 const B2B_LOW_RESERVATION_RATE = 0.2;
 const B2B_HIGH_RESERVATION_LABEL = "수집기간 예약율 40% 이상";
 const B2B_LOW_RESERVATION_LABEL = "수집기간 예약율 20% 이하";
+const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
   admin: ["report", "rank", "dictionary", "target", "decisionQueue", "map", "demand", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand"]
@@ -7117,6 +7119,332 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
   };
 }
 
+function b2bMyLodgeStorageKey() {
+  const account = compactSearchText(state.session?.memberId || state.session?.username || "guest") || "guest";
+  const keyword = compactSearchText(activeKeyword() || "default") || "default";
+  return `${B2B_MY_LODGE_STORAGE_PREFIX}:${account}:${keyword}`;
+}
+
+function readB2BMyLodgeDraft() {
+  const key = b2bMyLodgeStorageKey();
+  const memoryDraft = state.b2bMyLodgeDraft?.key === key ? state.b2bMyLodgeDraft.values : null;
+  if (typeof localStorage === "undefined") return memoryDraft || {};
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return memoryDraft || {};
+  }
+}
+
+function b2bMyLodgeNumber(value) {
+  const number = optionalNumber(value);
+  return Number.isFinite(number) ? Math.max(0, number) : 0;
+}
+
+function b2bMyLodgeAveragePrice(draft = {}) {
+  const weekday = b2bMyLodgeNumber(draft.weekdayPrice);
+  const friday = b2bMyLodgeNumber(draft.fridayPrice);
+  const saturday = b2bMyLodgeNumber(draft.saturdayPrice);
+  const sunday = b2bMyLodgeNumber(draft.sundayPrice);
+  const weighted = weekday * 4 + friday + saturday + sunday;
+  return weighted > 0 ? weighted / 7 : 0;
+}
+
+function b2bMyLodgeFacilities(value = "") {
+  return String(value || "")
+    .split(/[,/|\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function b2bMyLodgeRate(flow = {}, key = "all", fallback = 0.25) {
+  const rate = flow?.[key]?.rate;
+  if (Number.isFinite(rate)) return Math.max(0, Math.min(1, rate));
+  return Math.max(0, Math.min(1, fallback));
+}
+
+function b2bMyLodgeDayTypeCounts(run = {}) {
+  const days = Math.max(1, bookingDays(run) || DEFAULT_BOOKING_DAYS);
+  const start = parseDate(run.checkIn) || new Date();
+  const counts = { weekday: 0, friday: 0, saturday: 0, sunday: 0 };
+  for (let index = 0; index < days; index += 1) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    const day = date.getDay();
+    if (day === 5) counts.friday += 1;
+    else if (day === 6) counts.saturday += 1;
+    else if (day === 0) counts.sunday += 1;
+    else counts.weekday += 1;
+  }
+  return counts;
+}
+
+function b2bMyLodgeDeltaText(value, base) {
+  if (!Number.isFinite(value) || !Number.isFinite(base) || base <= 0) return "비교 대기";
+  return formatSignedRate(value / base - 1);
+}
+
+function b2bMyLodgeDeltaTone(value, base) {
+  if (!Number.isFinite(value) || !Number.isFinite(base) || base <= 0) return "neutral";
+  const delta = value / base - 1;
+  if (delta >= 0.2) return "good";
+  if (delta <= -0.2) return "watch";
+  return "strong";
+}
+
+function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief)) {
+  const draft = readB2BMyLodgeDraft();
+  const roomCount = Math.round(b2bMyLodgeNumber(draft.roomCount));
+  const weekdayPrice = b2bMyLodgeNumber(draft.weekdayPrice);
+  const fridayPrice = b2bMyLodgeNumber(draft.fridayPrice);
+  const saturdayPrice = b2bMyLodgeNumber(draft.saturdayPrice);
+  const sundayPrice = b2bMyLodgeNumber(draft.sundayPrice);
+  const avgPrice = b2bMyLodgeAveragePrice(draft);
+  const hasInput = Boolean(String(draft.lodgingName || "").trim()) || roomCount > 0 || avgPrice > 0;
+  const hasEstimateBasis = roomCount > 0 && avgPrice > 0;
+  const fallbackRate = Number.isFinite(brief.rate) ? brief.rate : b2bMyLodgeRate(revenueModel.flow, "all", 0.25);
+  const rates = {
+    weekday: b2bMyLodgeRate(revenueModel.flow, "weekday", fallbackRate),
+    friday: b2bMyLodgeRate(revenueModel.flow, "friday", fallbackRate),
+    saturday: b2bMyLodgeRate(revenueModel.flow, "saturday", fallbackRate),
+    sunday: b2bMyLodgeRate(revenueModel.flow, "sunday", fallbackRate)
+  };
+  const dayCounts = b2bMyLodgeDayTypeCounts(state.data?.run || {});
+  const basisDays = Object.values(dayCounts).reduce((sum, count) => sum + count, 0);
+  const weeklyRevenue = hasEstimateBasis
+    ? Math.round((
+      roomCount * weekdayPrice * rates.weekday * dayCounts.weekday +
+      roomCount * fridayPrice * rates.friday * dayCounts.friday +
+      roomCount * saturdayPrice * rates.saturday * dayCounts.saturday +
+      roomCount * sundayPrice * rates.sunday * dayCounts.sunday
+    ) / 1000) * 1000
+    : 0;
+  const sortedRevenueRows = (revenueModel.revenueRows || [])
+    .filter((row) => row.revenue > 0)
+    .slice()
+    .sort((a, b) => b.revenue - a.revenue);
+  const topSlice = sortedRevenueRows.slice(0, Math.min(3, sortedRevenueRows.length));
+  const lowSlice = sortedRevenueRows.slice(Math.max(0, sortedRevenueRows.length - Math.min(3, sortedRevenueRows.length)));
+  const topAverage = topSlice.length ? topSlice.reduce((sum, row) => sum + row.revenue, 0) / topSlice.length : 0;
+  const lowAverage = lowSlice.length ? lowSlice.reduce((sum, row) => sum + row.revenue, 0) / lowSlice.length : 0;
+  const marketAvgPriceRows = sortedRevenueRows.filter((row) => row.avgPrice > 0);
+  const marketAvgPrice = marketAvgPriceRows.length
+    ? marketAvgPriceRows.reduce((sum, row) => sum + row.avgPrice, 0) / marketAvgPriceRows.length
+    : 0;
+  const averageRevenue = finiteNumber(revenueModel.averageRevenue, 0) || finiteNumber(brief.averageRevenue, 0);
+  const maxRevenue = finiteNumber(revenueModel.revenueMax, 0);
+  const maxChartValue = Math.max(weeklyRevenue, averageRevenue, topAverage, lowAverage, maxRevenue, 1);
+  const channelLabels = [
+    draft.naverConnected ? "네이버 예약" : "",
+    draft.otaConnected ? "OTA 판매" : ""
+  ].filter(Boolean);
+  const channelScore = (draft.naverConnected ? 1 : 0) + (draft.otaConnected ? 1 : 0);
+  const facilities = b2bMyLodgeFacilities(draft.facilities);
+  const benchmarkRows = [
+    { label: "내 숙소", value: weeklyRevenue, note: "입력 객실수와 요일별 가격 기준", tone: hasEstimateBasis ? "mine" : "neutral" },
+    { label: "지역 평균", value: averageRevenue, note: `${fmtNumber(sortedRevenueRows.length)}개 매출 표본 평균`, tone: "strong" },
+    { label: "상위권 평균", value: topAverage, note: topSlice.length ? `상위 ${fmtNumber(topSlice.length)}개 평균` : "상위 표본 대기", tone: "good" },
+    { label: "하위권 평균", value: lowAverage, note: lowSlice.length ? `하위 ${fmtNumber(lowSlice.length)}개 평균` : "하위 표본 대기", tone: "watch" },
+    { label: "매출 상위", value: maxRevenue, note: sortedRevenueRows[0]?.name || "최고 표본 대기", tone: "hot" }
+  ].map((row) => ({
+    ...row,
+    width: Math.max(row.value > 0 ? 8 : 0, Math.min(100, Math.round((row.value / maxChartValue) * 100)))
+  }));
+  const cards = [
+    {
+      tone: hasEstimateBasis ? "mine" : "neutral",
+      label: "내 예상 기간 매출",
+      value: hasEstimateBasis ? fmtWon(weeklyRevenue) : "입력 대기",
+      note: `${fmtNumber(basisDays)}일 검색기간 예약율 반영`
+    },
+    {
+      tone: b2bMyLodgeDeltaTone(weeklyRevenue, averageRevenue),
+      label: "지역 평균 대비",
+      value: hasEstimateBasis ? b2bMyLodgeDeltaText(weeklyRevenue, averageRevenue) : "입력 대기",
+      note: averageRevenue ? `지역 평균 ${fmtWon(averageRevenue)}` : "매출 표본 대기"
+    },
+    {
+      tone: b2bMyLodgeDeltaTone(weeklyRevenue, topAverage),
+      label: "상위권 대비",
+      value: hasEstimateBasis ? b2bMyLodgeDeltaText(weeklyRevenue, topAverage) : "입력 대기",
+      note: topAverage ? `상위권 평균 ${fmtWon(topAverage)}` : "상위 표본 대기"
+    },
+    {
+      tone: marketAvgPrice && avgPrice >= marketAvgPrice ? "strong" : "watch",
+      label: "평균 객실가",
+      value: avgPrice ? fmtWon(avgPrice) : "입력 대기",
+      note: marketAvgPrice ? `경쟁 평균 ${fmtWon(marketAvgPrice)}` : "가격 표본 대기"
+    },
+    {
+      tone: channelScore >= 2 ? "good" : channelScore === 1 ? "strong" : "watch",
+      label: "판매 채널",
+      value: channelLabels.length ? channelLabels.join(" + ") : "미입력",
+      note: "네이버/OTA 노출 여부"
+    }
+  ];
+  return {
+    draft,
+    hasInput,
+    hasEstimateBasis,
+    roomCount,
+    avgPrice,
+    weeklyRevenue,
+    rates,
+    dayCounts,
+    basisDays,
+    cards,
+    benchmarkRows,
+    facilities,
+    channelLabels,
+    savedAt: draft.savedAt || "",
+    storageKey: b2bMyLodgeStorageKey()
+  };
+}
+
+function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyLodgeBenchmarkModel(brief)) {
+  const draft = model.draft || {};
+  const name = String(draft.lodgingName || "").trim();
+  const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
+  return `
+    <div class="b2b-my-lodge-board">
+      <div class="b2b-my-lodge-head">
+        <div>
+          <span>My Stay Benchmark</span>
+          <strong>내 숙소 넣기</strong>
+          <p>객실 수, 요일별 가격, 채널 상태를 입력하면 현재 검색된 경쟁권의 평균·상위·하위 매출 표본과 비교합니다.</p>
+        </div>
+        <em>${escapeHtml(activeKeyword())}</em>
+      </div>
+      <form class="b2b-my-lodge-form" data-b2b-my-lodge-form>
+        <label class="b2b-my-lodge-field name">
+          <span>숙소명</span>
+          <input name="lodgingName" type="text" maxlength="80" value="${escapeHtml(name)}" placeholder="예: 내 글램핑장">
+        </label>
+        <label class="b2b-my-lodge-field">
+          <span>객실 수</span>
+          <input name="roomCount" type="number" min="0" step="1" value="${escapeHtml(draft.roomCount ?? "")}" placeholder="12">
+        </label>
+        <label class="b2b-my-lodge-field">
+          <span>평일 가격</span>
+          <input name="weekdayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.weekdayPrice ?? "")}" placeholder="120000">
+        </label>
+        <label class="b2b-my-lodge-field">
+          <span>금요일 가격</span>
+          <input name="fridayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.fridayPrice ?? "")}" placeholder="160000">
+        </label>
+        <label class="b2b-my-lodge-field">
+          <span>토요일 가격</span>
+          <input name="saturdayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.saturdayPrice ?? "")}" placeholder="220000">
+        </label>
+        <label class="b2b-my-lodge-field">
+          <span>일요일 가격</span>
+          <input name="sundayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.sundayPrice ?? "")}" placeholder="140000">
+        </label>
+        <label class="b2b-my-lodge-field facilities">
+          <span>시설</span>
+          <input name="facilities" type="text" maxlength="160" value="${escapeHtml(draft.facilities || "")}" placeholder="개별화장실, 수영장, 바비큐">
+        </label>
+        <div class="b2b-my-lodge-checks" aria-label="판매 채널">
+          <label><input name="naverConnected" type="checkbox" ${draft.naverConnected ? "checked" : ""}> 네이버 예약</label>
+          <label><input name="otaConnected" type="checkbox" ${draft.otaConnected ? "checked" : ""}> OTA 판매</label>
+        </div>
+        <div class="b2b-my-lodge-actions">
+          <button class="primary-button" type="button" data-b2b-my-lodge-save>저장하고 비교</button>
+          <button class="secondary-button" type="button" data-b2b-my-lodge-clear ${model.hasInput ? "" : "disabled"}>초기화</button>
+        </div>
+      </form>
+      <div class="b2b-my-lodge-result ${model.hasEstimateBasis ? "ready" : "empty"}">
+        <article class="b2b-my-lodge-main">
+          <span>${escapeHtml(name || "내 숙소")}</span>
+          <strong>${model.hasEstimateBasis ? fmtWon(model.weeklyRevenue) : "입력 후 비교"}</strong>
+          <small>경쟁권 요일별 예약율: 평일 ${fmtRate(model.rates.weekday)} · 금 ${fmtRate(model.rates.friday)} · 토 ${fmtRate(model.rates.saturday)} · 일 ${fmtRate(model.rates.sunday)}</small>
+          <div class="b2b-my-lodge-tags">
+            <em>${fmtNumber(model.roomCount)}실</em>
+            ${facilities.map((item) => `<em>${escapeHtml(item)}</em>`).join("")}
+          </div>
+        </article>
+        <div class="b2b-my-lodge-cards">
+          ${model.cards.map((card) => `
+            <article class="${escapeHtml(card.tone)}">
+              <span>${escapeHtml(card.label)}</span>
+              <strong>${escapeHtml(card.value)}</strong>
+              <small>${escapeHtml(card.note)}</small>
+            </article>
+          `).join("")}
+        </div>
+        <article class="b2b-my-lodge-chart">
+          <div class="b2b-my-lodge-subhead">
+            <strong>매출 포지션 비교</strong>
+            <small>내 숙소 vs 지역 평균·상위권·하위권·매출 상위</small>
+          </div>
+          ${model.benchmarkRows.map((row) => `
+            <div class="b2b-my-lodge-row ${escapeHtml(row.tone)}" style="--bar:${row.width}%">
+              <span>${escapeHtml(row.label)}</span>
+              <i><b></b></i>
+              <strong>${row.value ? fmtWon(row.value) : "대기"}</strong>
+              <small>${escapeHtml(row.note)}</small>
+            </div>
+          `).join("")}
+        </article>
+      </div>
+    </div>
+  `;
+}
+
+function collectB2BMyLodgeFormValues() {
+  const form = document.querySelector("[data-b2b-my-lodge-form]");
+  if (!form) return null;
+  const formData = new FormData(form);
+  const value = (name) => String(formData.get(name) || "").trim();
+  const numberValue = (name) => {
+    const number = b2bMyLodgeNumber(value(name));
+    return number > 0 ? String(Math.round(number)) : "";
+  };
+  return {
+    lodgingName: value("lodgingName").slice(0, 80),
+    roomCount: numberValue("roomCount"),
+    weekdayPrice: numberValue("weekdayPrice"),
+    fridayPrice: numberValue("fridayPrice"),
+    saturdayPrice: numberValue("saturdayPrice"),
+    sundayPrice: numberValue("sundayPrice"),
+    facilities: value("facilities").slice(0, 160),
+    naverConnected: Boolean(form.querySelector('input[name="naverConnected"]')?.checked),
+    otaConnected: Boolean(form.querySelector('input[name="otaConnected"]')?.checked),
+    savedAt: new Date().toISOString()
+  };
+}
+
+function saveB2BMyLodgeBenchmark() {
+  const values = collectB2BMyLodgeFormValues();
+  if (!values) return;
+  state.b2bMyLodgeDraft = { key: b2bMyLodgeStorageKey(), values };
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(b2bMyLodgeStorageKey(), JSON.stringify(values));
+    }
+  } catch {
+    // The comparison still renders from memory if browser storage is blocked.
+  }
+  renderReport();
+  document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function clearB2BMyLodgeBenchmark() {
+  state.b2bMyLodgeDraft = null;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem(b2bMyLodgeStorageKey());
+    }
+  } catch {
+    // Ignore browser storage failures and reset the visible report.
+  }
+  renderReport();
+  document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
 function renderB2BRevenueBenchmark(brief = b2bMarketBriefModel(), model = b2bRevenueBenchmarkModel(brief)) {
   if (!model.rows.length) return "";
   return `
@@ -7690,6 +8018,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const strategyModel = b2bStrategyBoardModel(brief, revenueModel);
   const correlationModel = b2bCompetitionSalesCorrelationModel(snapshotModel.rankModel);
   const simpleModel = b2bSimpleSummaryModel(brief, strategyModel, revenueModel, snapshotModel);
+  const myLodgeModel = b2bMyLodgeBenchmarkModel(brief, revenueModel);
   const rankRange = effectiveDetailRankRange(brief.run);
   const rankRangeLabel = rankRange === "상세 생략" ? rankRange : `${rankRange}위`;
   return `
@@ -7707,6 +8036,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
         </div>
       </div>
       ${renderB2BSimpleSummary(brief, simpleModel)}
+      ${renderB2BMyLodgeBenchmark(brief, myLodgeModel)}
       <details class="b2b-detail-pack">
         <summary>
           <span>분석 근거 펼치기</span>
@@ -16913,6 +17243,14 @@ function bindEvents() {
       if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색어를 적용했습니다. 범위를 확인한 뒤 검색 실행을 누르세요.`;
       return;
     }
+    if (event.target.closest("[data-b2b-my-lodge-save]")) {
+      saveB2BMyLodgeBenchmark();
+      return;
+    }
+    if (event.target.closest("[data-b2b-my-lodge-clear]")) {
+      clearB2BMyLodgeBenchmark();
+      return;
+    }
     const duplicateAction = event.target.closest("[data-company-duplicate-action]");
     if (duplicateAction) resolveCompanyDuplicate(duplicateAction);
     const saveCorrection = event.target.closest("[data-save-company-correction]");
@@ -16969,6 +17307,12 @@ function bindEvents() {
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const drawerTab = event.target.closest("[data-drawer-tab]");
     if (drawerTab) setActiveTab(drawerTab.dataset.drawerTab);
+  });
+  document.addEventListener("submit", (event) => {
+    if (event.target.closest("[data-b2b-my-lodge-form]")) {
+      event.preventDefault();
+      saveB2BMyLodgeBenchmark();
+    }
   });
   document.addEventListener("input", (event) => {
     const b2bSearch = event.target.closest("#b2bSearchInput");
