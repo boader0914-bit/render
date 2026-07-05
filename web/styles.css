@@ -194,6 +194,89 @@ a {
   gap: 10px;
 }
 
+.b2b-live-search-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.b2b-live-search-panel.ready {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-live-search-panel.loading {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-live-search-panel > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-live-search-panel span {
+  justify-self: start;
+  min-height: 23px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #175cd3;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-live-search-panel strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.b2b-live-search-panel p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.b2b-live-search-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.b2b-live-search-meta em {
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink);
+  padding: 0 9px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .b2b-search-quick {
   min-width: 0;
   display: flex;
@@ -12565,6 +12648,7 @@ body.role-b2b .summary-card,
 body.role-b2b .report-card,
 body.role-b2b .report-metric-grid article,
 body.role-b2b .b2b-brief-card,
+body.role-b2b .b2b-live-search-panel,
 body.role-b2b .b2b-strategy-board,
 body.role-b2b .b2b-competition-snapshot,
 body.role-b2b .b2b-revenue-board,
@@ -12624,6 +12708,8 @@ body.role-b2b .field textarea:focus {
 
 body.role-b2b .b2b-search-quick button,
 body.role-b2b .b2b-search-card,
+body.role-b2b .b2b-live-search-panel span,
+body.role-b2b .b2b-live-search-meta em,
 body.role-b2b .b2b-search-card-metrics em,
 body.role-b2b .b2b-search-fallbacks button,
 body.role-b2b .b2b-search-missing-chips em,
@@ -12683,6 +12769,8 @@ body.role-b2b .bottom-nav button.active {
 
 body.role-b2b .b2b-search-card strong,
 body.role-b2b .b2b-search-card-metrics b,
+body.role-b2b .b2b-live-search-panel strong,
+body.role-b2b .b2b-live-search-meta em,
 body.role-b2b .b2b-search-missing-copy strong,
 body.role-b2b .b2b-search-fallbacks b,
 body.role-b2b .summary-card strong,
@@ -12758,6 +12846,7 @@ body.role-b2b .b2b-search-match {
 body.role-b2b .b2b-search-card-sub,
 body.role-b2b .b2b-search-card-mode,
 body.role-b2b .b2b-search-card-metrics small,
+body.role-b2b .b2b-live-search-panel p,
 body.role-b2b .b2b-search-missing-copy p,
 body.role-b2b .b2b-search-fallbacks small,
 body.role-b2b .b2b-search-fallbacks span,
@@ -13540,8 +13629,13 @@ body.role-b2b .demand-region-head {
   .b2b-search-form,
   .b2b-search-results,
   .b2b-search-result-grid,
+  .b2b-live-search-panel,
   .b2b-search-missing {
     grid-template-columns: 1fr;
+  }
+
+  .b2b-live-search-meta {
+    justify-content: flex-start;
   }
 
   .report-hero,

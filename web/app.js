@@ -31,7 +31,8 @@ const state = {
   trafficKeyState: null,
   crawlStatusTimer: null,
   pendingRecrawlContext: null,
-  b2bSearchQuery: ""
+  b2bSearchQuery: "",
+  b2bSearchLoading: false
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -7742,7 +7743,7 @@ function demandTrendChart() {
   const statusLabel = trend.reason
     ? errorLabel
     : trend.hasSeries
-      ? `${trend.cacheHit ? "동일일자 저장자료" : "연동 정상"} · ${fmtNumber(validMonthCount)}개월`
+      ? `${trend.cacheHit ? "동일 기준일 캐시" : "연동 정상"} · ${fmtNumber(validMonthCount)}개월`
       : (trend.configured ? "연동 대기" : "API 키 필요");
   const cacheBasis = trend.cacheHit && trend.cacheEndDate
     ? ` · 기준일 ${trend.cacheEndDate}`
@@ -11113,7 +11114,7 @@ function adminConsoleKpis(master = {}, entries = []) {
     ["판단 큐", openEntries.length, "컨택 전 확인", openEntries.length ? "warning" : "good"],
     ["보정 필요", manualNeeded, "수량/총량 검토", manualNeeded ? "bad" : "good"],
     ["컨택 가능", contactReady, "큐 제외 후보", contactReady ? "good" : "neutral"],
-    ["캐시 재사용률", trend.collectable || trend.cache ? (cacheHit ? "100%" : "0%") : "대기", cacheHit ? "동일 기준일 저장자료" : "이번 실행/대기", cacheHit ? "good" : "neutral"]
+    ["캐시 재사용률", trend.collectable || trend.cache ? (cacheHit ? "100%" : "0%") : "대기", cacheHit ? "동일 기준일 캐시" : "이번 실행/대기", cacheHit ? "good" : "neutral"]
   ];
 }
 
@@ -13167,8 +13168,8 @@ function runSearchMetrics(run = {}) {
 }
 
 function b2bSearchMatchLabel(row = {}, normalized = "") {
-  if (row.active) return "열람중";
-  if (!normalized) return row.index < 3 ? "최근" : "보관";
+  if (row.active) return "현재 결과";
+  if (!normalized) return "검색 결과";
   if (row.score >= 100) return "정확";
   if (row.score >= 78) return "관련";
   return "후보";
@@ -13227,8 +13228,8 @@ function b2bDictionaryNoMatch(query = "") {
   if (!state.dictionary || !trimmed) {
     return {
       type: "unknown",
-      title: "저장 리포트 없음",
-      note: "관리자가 수집한 지역 경쟁 리포트가 아직 없습니다.",
+      title: "검색어를 입력하세요",
+      note: "지역명과 글램핑을 함께 입력하면 새 경쟁 리포트를 수집합니다.",
       tokens: [],
       chips: []
     };
@@ -13238,8 +13239,8 @@ function b2bDictionaryNoMatch(query = "") {
     const cards = locationGroupCards(match.group);
     return {
       type: "group",
-      title: `${match.group.searchKeyword || match.group.sido || "상위 권역"} 권역 리포트 대기`,
-      note: `${fmtNumber(cards.length)}개 지역 카드가 연결된 권역입니다. 현재 저장 리포트에는 직접 수집 결과가 없습니다.`,
+      title: `${match.group.searchKeyword || match.group.sido || "상위 권역"} 권역 검색 가능`,
+      note: `${fmtNumber(cards.length)}개 지역 카드가 연결된 권역입니다. 새 검색을 실행하면 현재 경쟁 리포트를 생성합니다.`,
       tokens: [match.group.searchKeyword, match.group.sido, ...(match.group.aliases || [])],
       chips: cards.slice(0, 4).map((card) => card.searchKeyword).filter(Boolean)
     };
@@ -13250,7 +13251,7 @@ function b2bDictionaryNoMatch(query = "") {
     return {
       type: "card",
       title: `${match.card.searchKeyword || trimmed} 지역카드 있음`,
-      note: `입지사전에는 등록되어 있지만 저장 리포트는 아직 없습니다.${clusters.length ? ` ${clusters.slice(0, 2).join(" · ")} 기준으로 수집하면 됩니다.` : ""}`,
+      note: `입지사전 기준 지역입니다.${clusters.length ? ` ${clusters.slice(0, 2).join(" · ")} 기준으로 새 검색을 실행할 수 있습니다.` : ""}`,
       tokens: [match.card.searchKeyword, alias?.sido, alias?.sigungu, ...(alias?.aliases || [])],
       chips: clusters.slice(0, 4)
     };
@@ -13260,7 +13261,7 @@ function b2bDictionaryNoMatch(query = "") {
     return {
       type: "candidate",
       title: `${candidate.regionBase || trimmed} 신규 수집 필요`,
-      note: "저장 지역카드와 저장 리포트가 모두 없습니다. 관리자 수집 대상 지역으로 분류합니다.",
+      note: "신규 지역으로 판단됩니다. 새 검색을 실행해 현재 노출과 예약 표본을 확인합니다.",
       tokens: [candidate.keyword, candidate.regionBase],
       chips: ["신규 지역", "수집 필요"]
     };
@@ -13268,13 +13269,14 @@ function b2bDictionaryNoMatch(query = "") {
   return {
     type: "unknown",
     title: "검색어 확인 필요",
-    note: "지역명과 업종을 함께 입력하면 저장 리포트와 지역카드 기준으로 다시 매칭합니다.",
+    note: "지역명과 업종을 함께 입력하면 현재 경쟁 리포트를 새로 수집합니다.",
     tokens: b2bMeaningfulSearchTokens(trimmed),
     chips: ["지역명 + 글램핑"]
   };
 }
 
 function b2bFallbackRunOptions(query = "", dictionaryInfo = b2bDictionaryNoMatch(query)) {
+  if (!isAdminRole()) return [];
   const tokens = [
     ...b2bMeaningfulSearchTokens(query),
     ...(dictionaryInfo.tokens || []).map(b2bSearchText)
@@ -13356,52 +13358,99 @@ function renderB2BSearchPanel() {
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) {
     els.b2bSearchInput.value = state.b2bSearchQuery || "";
   }
-  const matches = b2bSearchMatches(state.b2bSearchQuery);
-  const normalized = b2bSearchText(state.b2bSearchQuery);
   if (els.b2bSearchResults) {
-    const quickOptions = b2bQuickSearchOptions();
-    const quickHtml = quickOptions.length ? `
-      <div class="b2b-search-quick" aria-label="빠른 지역 선택">
-        ${quickOptions.map((option) => `
-          <button type="button" data-b2b-query="${escapeHtml(option.query)}">${escapeHtml(option.label)}</button>
-        `).join("")}
-      </div>
-    ` : "";
-    const resultHtml = matches.length
-      ? matches.map((row) => b2bSearchResultCard(row, normalized)).join("")
-      : `<div class="b2b-search-empty">${normalized ? `"${escapeHtml(state.b2bSearchQuery)}" 저장 리포트 없음` : "준비된 지역 경쟁 리포트 없음"}</div>`;
-    const searchResultHtml = matches.length ? resultHtml : b2bSearchNoMatchPanel(state.b2bSearchQuery);
+    const hasResult = Boolean(state.data?.run);
+    const keyword = hasResult ? activeKeyword() : (state.b2bSearchQuery || "").trim();
+    const previewPayload = b2bLiveSearchPayload(keyword || "지역글램핑");
+    const preview = crawlPreviewMeta(previewPayload);
+    const panelClass = state.b2bSearchLoading ? "loading" : hasResult ? "ready" : "idle";
+    const badge = state.b2bSearchLoading ? "검색중" : hasResult ? "결과 표시" : "새 검색";
+    const title = state.b2bSearchLoading
+      ? `${keyword || "입력 지역"} 검색 중`
+      : hasResult
+        ? `${keyword} 검색 결과`
+        : "지역명을 입력해 경쟁 리포트를 생성하세요";
+    const copy = state.b2bSearchLoading
+      ? "네이버 노출, 예약 수량, 요일별 가격 표본을 새로 확인하고 있습니다."
+      : hasResult
+        ? "방금 실행한 검색 결과를 표시합니다. 다른 지역은 검색어 입력 후 새로 실행하세요."
+        : "검색 시 현재 조건으로 네이버 노출, 예약 수량, 가격 표본을 새로 수집합니다.";
     els.b2bSearchResults.innerHTML = `
-      ${quickHtml}
-      <div class="b2b-search-result-grid">${searchResultHtml}</div>
+      <div class="b2b-live-search-panel ${escapeHtml(panelClass)}">
+        <div>
+          <span>${escapeHtml(badge)}</span>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(copy)}</p>
+        </div>
+        <div class="b2b-live-search-meta">
+          <em>정밀 분석</em>
+          <em>1-10위</em>
+          <em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>
+        </div>
+      </div>
     `;
   }
   if (els.b2bSearchStatus) {
-    const activeRun = state.runs.find((run) => run.id === state.activeRunId);
-    const activeLabel = activeRun ? ` · 현재 ${runSearchTitle(activeRun)}` : "";
-    els.b2bSearchStatus.textContent = normalized
-      ? `검색 결과 ${fmtNumber(matches.length)}개 / 저장 ${fmtNumber(state.runs.length)}개${activeLabel}`
-      : `저장 리포트 ${fmtNumber(state.runs.length)}개${activeLabel}`;
+    const current = state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "검색어를 입력하면 새 경쟁 리포트를 수집합니다.";
+    els.b2bSearchStatus.textContent = state.b2bSearchLoading
+      ? "검색을 실행 중입니다. 완료되면 결과가 자동으로 표시됩니다."
+      : current;
   }
+}
+
+function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
+  return {
+    keyword: String(keyword || "").trim(),
+    checkIn: els.checkInInput?.value || "",
+    checkOut: els.checkOutInput?.value || "",
+    searchMode: "keyword",
+    productMode: "all",
+    collectionMode: "precision",
+    detailRankRanges: "1-10"
+  };
 }
 
 async function submitB2BSearch() {
   if (isAdminRole()) return;
   state.b2bSearchQuery = els.b2bSearchInput?.value?.trim() || "";
-  const matches = b2bSearchMatches(state.b2bSearchQuery);
+  if (!state.b2bSearchQuery) {
+    renderB2BSearchPanel();
+    if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "검색할 지역명 또는 키워드를 입력하세요.";
+    return;
+  }
+  if (state.b2bSearchLoading) return;
+  const payload = b2bLiveSearchPayload(state.b2bSearchQuery);
+  const submitButton = els.b2bSearchForm?.querySelector('button[type="submit"]');
+  const preview = crawlPreviewMeta(payload);
+  state.b2bSearchLoading = true;
+  if (submitButton) submitButton.disabled = true;
   renderB2BSearchPanel();
-  if (!matches.length) {
-    if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "일치하는 저장 리포트가 없습니다.";
-    return;
+  setStatus("B2B 검색 중");
+  if (els.b2bSearchStatus) {
+    els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색을 시작했습니다. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
   }
-  const target = matches[0].run;
-  if (!target?.id || target.id === state.activeRunId) {
-    setActiveTab("report");
-    return;
+  let finalErrorMessage = "";
+  try {
+    const result = await fetchJson("/api/b2b-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    state.data = result.data || null;
+    state.activeRunId = result.runId || state.data?.run?.id || null;
+    state.runs = state.data?.run ? [{ ...state.data.run, id: state.activeRunId }] : [];
+    state.activeTab = "report";
+    setStatus("검색 완료");
+    renderAll();
+  } catch (error) {
+    setStatus("검색 실패");
+    finalErrorMessage = `검색 실패: ${error.message}`;
+  } finally {
+    state.b2bSearchLoading = false;
+    if (submitButton) submitButton.disabled = false;
+    renderB2BSearchPanel();
+    if (finalErrorMessage && els.b2bSearchStatus) els.b2bSearchStatus.textContent = finalErrorMessage;
   }
-  setStatus("리포트 로딩");
-  await loadRun(target.id);
-  setActiveTab("report");
 }
 
 function renderHeader() {
@@ -15112,7 +15161,7 @@ async function loadRuns(selectLatest = false) {
   els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
   if (!state.runs.length) {
     renderB2BSearchPanel();
-    const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "조회 가능한 실행 결과가 없습니다.";
+    const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "검색어를 입력하면 새 경쟁 리포트를 수집합니다.";
     if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
     if (els.decisionQueueCount) els.decisionQueueCount.textContent = "0 대기";

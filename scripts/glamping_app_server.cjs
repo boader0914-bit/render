@@ -1506,17 +1506,56 @@ function stripB2BPrivateFields(value) {
 
 function publicRunsForRole(runs = [], role = USER_ROLES.admin) {
   if (normalizeUserRole(role) === USER_ROLES.admin) return runs;
-  return runs.map((run) => {
-    const copy = { ...run };
-    delete copy.files;
-    return copy;
-  });
+  return [];
 }
 
 function publicRunForRole(runData, role = USER_ROLES.admin) {
   if (normalizeUserRole(role) === USER_ROLES.admin || !runData) return runData;
   const copy = cloneJson(runData);
   return stripB2BPrivateFields(copy);
+}
+
+function b2bSearchPayload(value = {}) {
+  const keyword = String(value.keyword || value.query || "").trim();
+  if (!keyword) {
+    const error = new Error("검색어를 입력해야 합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return {
+    keyword,
+    checkIn: value.checkIn || kstDate(0),
+    checkOut: value.checkOut || kstDate(6),
+    searchMode: "keyword",
+    productMode: normalizeProductMode(value.productMode || "all"),
+    collectionMode: normalizeCollectionMode(value.collectionMode || "precision"),
+    detailRankRanges: String(value.detailRankRanges || "1-10").trim() || "1-10",
+    bookingRangeDays: Number(value.bookingRangeDays) || 7,
+    bookingRangePlaceLimit: Number(value.bookingRangePlaceLimit) || 10
+  };
+}
+
+async function runB2BSearch(payload = {}) {
+  const crawlPayload = b2bSearchPayload(payload);
+  const result = await runCrawler(crawlPayload);
+  const runId = result?.runId || "";
+  if (!runId) {
+    const error = new Error("검색 결과를 저장하지 못했습니다.");
+    error.statusCode = 500;
+    throw error;
+  }
+  const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true });
+  if (!data) {
+    const error = new Error("검색 결과를 불러오지 못했습니다.");
+    error.statusCode = 500;
+    throw error;
+  }
+  return {
+    ok: true,
+    runId,
+    data: publicRunForRole(data, USER_ROLES.b2b),
+    crawlTiming: result.crawlTiming || null
+  };
 }
 
 async function seedOutputsFromRepo() {
@@ -7071,8 +7110,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-simple-view"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-simple-view"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260705-b2b-live-search"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260705-b2b-live-search"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -7149,6 +7188,14 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/runs") {
       return send(res, 200, { runs: publicRunsForRole(await listRuns(), session.role) });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {
+      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
+        return sendForbidden(req, res, "B2B 검색 계정이 필요합니다.");
+      }
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await runB2BSearch(payload));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
@@ -7240,9 +7287,11 @@ async function route(req, res) {
     }
 
     if (req.method === "GET" && reqUrl.pathname.startsWith("/api/runs/")) {
+      if (normalizeUserRole(session.role) !== USER_ROLES.admin) {
+        return sendForbidden(req, res, "저장 자료는 관리자만 볼 수 있습니다.");
+      }
       const runId = decodeURIComponent(reqUrl.pathname.replace("/api/runs/", ""));
-      const admin = normalizeUserRole(session.role) === USER_ROLES.admin;
-      const data = await loadRun(runId, admin ? {} : { skipCompanyMaster: true, skipHistory: true });
+      const data = await loadRun(runId);
       return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
     }
 
