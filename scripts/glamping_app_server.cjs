@@ -2793,7 +2793,9 @@ function dateDaysAgo(days) {
 }
 
 function datalabTrendRange(monthCount = 12) {
-  const end = dateDaysAgo(1);
+  const now = new Date();
+  now.setUTCHours(0, 0, 0, 0);
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
   const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - Math.max(1, monthCount - 1), 1));
   return { startDate: isoDate(start), endDate: isoDate(end), timeUnit: "month" };
 }
