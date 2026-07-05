@@ -7450,6 +7450,140 @@ a.platform-row:hover {
   font-weight: 850;
 }
 
+.b2b-map-cluster-detail {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.b2b-map-cluster-detail-head,
+.b2b-map-cluster-card-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b2b-map-cluster-detail-head strong,
+.b2b-map-cluster-card-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.b2b-map-cluster-detail-head small,
+.b2b-map-cluster-card-head small,
+.b2b-map-cluster-card-head span,
+.b2b-map-score-parts span,
+.b2b-map-score-parts small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-cluster-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.b2b-map-cluster-card-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.b2b-map-cluster-card-head span {
+  color: #175cd3;
+  font-weight: 950;
+}
+
+.b2b-map-cluster-card-head strong {
+  font-size: 24px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.b2b-map-score-parts {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-map-score-parts div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fbfcfd;
+  padding: 9px;
+}
+
+.b2b-map-score-parts div.strong,
+.b2b-map-score-parts div.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-map-score-parts div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-map-score-parts div.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-map-score-parts strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-score-parts i {
+  min-width: 0;
+  height: 8px;
+  border-radius: 999px;
+  background: #e8edf5;
+  overflow: hidden;
+}
+
+.b2b-map-score-parts i b {
+  display: block;
+  width: var(--score, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f80ed, #34d399);
+  animation: b2b-meter-fill .72s ease-out both;
+}
+
+.b2b-map-score-parts div.watch i b {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.b2b-map-score-parts div.hot i b {
+  background: linear-gradient(90deg, #fb7185, #f59e0b);
+}
+
 .b2b-map-competition-board {
   min-width: 0;
   display: grid;
@@ -14116,6 +14250,9 @@ body.role-b2b .b2b-rank-head > strong,
 body.role-b2b .b2b-map-head > strong,
 body.role-b2b .b2b-demand-head > strong,
 body.role-b2b .b2b-map-cluster-row span,
+body.role-b2b .b2b-map-cluster-detail,
+body.role-b2b .b2b-map-cluster-card,
+body.role-b2b .b2b-map-score-parts div,
 body.role-b2b .structure-badge,
 body.role-b2b .confidence-badge {
   border-color: rgba(106, 168, 255, .26);
@@ -14133,8 +14270,26 @@ body.role-b2b .b2b-map-cluster-row strong {
   color: #d8e9ff;
 }
 
-body.role-b2b .b2b-map-cluster-row small {
+body.role-b2b .b2b-map-cluster-detail-head strong,
+body.role-b2b .b2b-map-cluster-card-head strong,
+body.role-b2b .b2b-map-score-parts strong {
+  color: var(--ink);
+}
+
+body.role-b2b .b2b-map-cluster-card-head span {
+  color: #b9d7ff;
+}
+
+body.role-b2b .b2b-map-cluster-row small,
+body.role-b2b .b2b-map-cluster-detail-head small,
+body.role-b2b .b2b-map-cluster-card-head small,
+body.role-b2b .b2b-map-score-parts span,
+body.role-b2b .b2b-map-score-parts small {
   color: #aab6c7;
+}
+
+body.role-b2b .b2b-map-score-parts i {
+  background: rgba(156, 174, 204, .18);
 }
 
 body.role-b2b .b2b-search-empty {
@@ -16122,6 +16277,7 @@ body.role-b2b .structure-action-list li::before {
   .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-map-board-grid,
+  .b2b-map-score-parts,
   .b2b-demand-grid,
   .b2b-demand-outlook-grid,
   .region-card-metrics {
@@ -16161,10 +16317,17 @@ body.role-b2b .structure-action-list li::before {
   .b2b-rank-focus,
   .b2b-map-metrics,
   .b2b-map-board-grid,
+  .b2b-map-score-parts,
   .b2b-demand-grid,
   .b2b-demand-outlook-grid,
   .region-card-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .b2b-map-cluster-detail-head,
+  .b2b-map-cluster-card-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .b2b-demand-season-strip {

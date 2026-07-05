@@ -12459,6 +12459,102 @@ function regionRuntimeForMapRegion(region = {}) {
   };
 }
 
+function uniqueClusterItems(items = []) {
+  const seen = new Set();
+  return items.filter((item, index) => {
+    const key = item.companyId || item.placeId || item.naverPlaceId || item.bookingId || companyKey(item.name) || `cluster-${index}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function clusterRevenueMetrics(items = []) {
+  const rows = uniqueClusterItems(items).map((item) => {
+    const profile = preciseRevenueProfile(item);
+    const revenue = finiteNumber(profile.totalAdjustedRevenue, 0) || finiteNumber(profile.totalRevenue, 0);
+    return { item, revenue };
+  }).filter((row) => row.revenue > 0);
+  const total = rows.reduce((sum, row) => sum + row.revenue, 0);
+  return {
+    sampleCount: rows.length,
+    total,
+    average: rows.length ? total / rows.length : 0
+  };
+}
+
+function scorePart(key, label, score, max, value, note, tone = "neutral") {
+  const safeScore = Math.max(0, Math.min(max, Math.round(Number(score) || 0)));
+  return {
+    key,
+    label,
+    score: safeScore,
+    max,
+    value,
+    note,
+    tone,
+    width: max ? Math.round((safeScore / max) * 100) : 0
+  };
+}
+
+function clusterScoreDetail(cluster = {}) {
+  const density = cluster.count ? cluster.itemCount / cluster.count : 0;
+  const salesRate = Number(cluster.salesRate);
+  const revenueCoverage = cluster.itemCount ? cluster.revenueSampleCount / cluster.itemCount : NaN;
+  const localFit = cluster.itemCount
+    ? (finiteNumber(cluster.localCount, 0) + finiteNumber(cluster.adjacentCount, 0) * 0.65) / cluster.itemCount
+    : NaN;
+  const parts = [
+    scorePart(
+      "density",
+      "노출 밀도",
+      Math.min(22, density * 4),
+      22,
+      `${fmtNumber(cluster.itemCount)}곳`,
+      `${fmtNumber(cluster.count)}개 지역 · 지역당 ${density ? density.toFixed(1) : "0"}곳`,
+      density >= 4 ? "strong" : density >= 2 ? "good" : "neutral"
+    ),
+    scorePart(
+      "reservation",
+      "예약율",
+      Number.isFinite(salesRate) ? salesRate * 22 : 0,
+      22,
+      Number.isFinite(salesRate) ? fmtRate(salesRate) : "대기",
+      cluster.supply ? `${fmtNumber(cluster.sold)}/${fmtNumber(cluster.supply)}실` : "네이버 플레이스 예약 표본 대기",
+      Number.isFinite(salesRate) && salesRate >= B2B_HIGH_RESERVATION_RATE ? "hot" : Number.isFinite(salesRate) ? "good" : "watch"
+    ),
+    scorePart(
+      "revenue",
+      "매출 표본",
+      Number.isFinite(revenueCoverage) ? revenueCoverage * 20 : 0,
+      20,
+      cluster.revenueSampleCount ? `${fmtNumber(cluster.revenueSampleCount)}곳` : "대기",
+      cluster.revenueSampleCount ? `평균 ${fmtWon(cluster.revenueAverage)}` : "가격·수량 표본 필요",
+      cluster.revenueSampleCount ? "strong" : "watch"
+    ),
+    scorePart(
+      "search",
+      "검색 수요",
+      Math.min(22, cluster.searchVolume / 900),
+      22,
+      cluster.searchVolume ? fmtNumber(cluster.searchVolume) : "대기",
+      "지역 키워드 월검색량 합산",
+      cluster.searchVolume >= 18000 ? "strong" : cluster.searchVolume ? "good" : "watch"
+    ),
+    scorePart(
+      "distance",
+      "거리 적합도",
+      Number.isFinite(localFit) ? localFit * 14 : 0,
+      14,
+      Number.isFinite(localFit) ? fmtRate(localFit) : "대기",
+      `지역 내 ${fmtNumber(cluster.localCount || 0)} · 인접 ${fmtNumber(cluster.adjacentCount || 0)} · 권역 밖 ${fmtNumber(cluster.outsideCount || 0)}`,
+      Number.isFinite(localFit) && localFit >= 0.72 ? "good" : Number.isFinite(localFit) ? "watch" : "neutral"
+    )
+  ];
+  const score = parts.reduce((sum, part) => sum + part.score, 0);
+  return { parts, score };
+}
+
 function b2bRegionMapModel() {
   const regions = state.data?.regions || [];
   const items = state.data?.availability?.items || [];
@@ -12479,29 +12575,42 @@ function b2bRegionMapModel() {
         count: 0,
         searchVolume: 0,
         itemCount: 0,
+        localCount: 0,
+        adjacentCount: 0,
         outsideCount: 0,
+        unknownCount: 0,
         sold: 0,
-        supply: 0
+        supply: 0,
+        revenueSampleCount: 0,
+        revenueTotal: 0
       };
     }
+    const uniqueItems = uniqueClusterItems(runtime.items);
+    const revenueMetrics = clusterRevenueMetrics(uniqueItems);
+    const boundaryCounts = uniqueItems.reduce((counts, item) => {
+      const bucket = b2bBoundaryBucket(item);
+      counts[bucket] = (counts[bucket] || 0) + 1;
+      return counts;
+    }, { local: 0, adjacent: 0, outside: 0, unknown: 0 });
     acc[primary].count += 1;
     acc[primary].searchVolume += searchVolume;
-    acc[primary].itemCount += runtime.items.length;
-    acc[primary].outsideCount += runtime.outsideCount;
+    acc[primary].itemCount += uniqueItems.length;
+    acc[primary].localCount += finiteNumber(boundaryCounts.local, 0);
+    acc[primary].adjacentCount += finiteNumber(boundaryCounts.adjacent, 0);
+    acc[primary].outsideCount += finiteNumber(boundaryCounts.outside, 0);
+    acc[primary].unknownCount += finiteNumber(boundaryCounts.unknown, 0);
     acc[primary].sold += finiteNumber(runtime.sales?.sold, 0);
     acc[primary].supply += finiteNumber(runtime.sales?.supply, 0);
+    acc[primary].revenueSampleCount += revenueMetrics.sampleCount;
+    acc[primary].revenueTotal += revenueMetrics.total;
     return acc;
   }, {});
   const clusters = Object.values(clusterStats)
     .map((cluster) => {
       const salesRate = cluster.supply ? cluster.sold / cluster.supply : NaN;
-      const score = Math.round(
-        Math.min(48, cluster.searchVolume / 900)
-        + Math.min(26, cluster.itemCount * 3)
-        + (Number.isFinite(salesRate) ? salesRate * 18 : 0)
-        + Math.min(8, cluster.outsideCount * 2)
-      );
-      return { ...cluster, salesRate, score };
+      const revenueAverage = cluster.revenueSampleCount ? cluster.revenueTotal / cluster.revenueSampleCount : 0;
+      const detail = clusterScoreDetail({ ...cluster, salesRate, revenueAverage });
+      return { ...cluster, salesRate, revenueAverage, score: detail.score, scoreParts: detail.parts };
     })
     .sort((a, b) => b.score - a.score || b.searchVolume - a.searchVolume || b.count - a.count)
     .slice(0, 5)
@@ -12715,6 +12824,7 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
   if (isAdminRole()) return "";
   const topRegionName = model.topRegion?.region || model.topRegion?.name || "확인필요";
   const salesRate = Number.isFinite(model.salesRate) ? fmtRate(model.salesRate) : "확인필요";
+  const clusterDetailRows = model.clusters.slice(0, 3);
   return `
     <section class="b2b-map-brief ${escapeHtml(model.status.tone)}">
       <div class="b2b-map-head">
@@ -12737,11 +12847,40 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
           ? model.clusters.map((cluster) => `
             <span>
               <strong>${escapeHtml(cluster.name)} ${fmtNumber(cluster.score)}점</strong>
-              <small>${escapeHtml(`검색 ${cluster.searchVolume ? fmtNumber(cluster.searchVolume) : "대기"} · 업체 ${fmtNumber(cluster.itemCount)} · 판매 ${Number.isFinite(cluster.salesRate) ? fmtRate(cluster.salesRate) : "대기"}`)}</small>
+              <small>${escapeHtml(`노출 ${fmtNumber(cluster.itemCount)} · 예약 ${Number.isFinite(cluster.salesRate) ? fmtRate(cluster.salesRate) : "대기"} · 매출표본 ${fmtNumber(cluster.revenueSampleCount || 0)}`)}</small>
             </span>
           `).join("")
           : `<span>클러스터 대기</span>`}
       </div>
+      ${clusterDetailRows.length ? `
+        <div class="b2b-map-cluster-detail">
+          <div class="b2b-map-cluster-detail-head">
+            <strong>클러스터 점수 상세</strong>
+            <small>노출 밀도 · 예약율 · 매출 표본 · 검색 수요 · 거리 적합도 기준</small>
+          </div>
+          ${clusterDetailRows.map((cluster) => `
+            <article class="b2b-map-cluster-card">
+              <div class="b2b-map-cluster-card-head">
+                <div>
+                  <span>${escapeHtml(cluster.name)}</span>
+                  <strong>${fmtNumber(cluster.score)}점</strong>
+                </div>
+                <small>${escapeHtml(`지역 ${fmtNumber(cluster.count)} · 업체 ${fmtNumber(cluster.itemCount)} · 검색 ${cluster.searchVolume ? fmtNumber(cluster.searchVolume) : "대기"}`)}</small>
+              </div>
+              <div class="b2b-map-score-parts">
+                ${(cluster.scoreParts || []).map((part) => `
+                  <div class="${escapeHtml(part.tone || "neutral")}">
+                    <span>${escapeHtml(part.label)}</span>
+                    <strong>${fmtNumber(part.score)}/${fmtNumber(part.max)}</strong>
+                    <i style="--score:${Math.max(0, Math.min(100, Number(part.width) || 0))}%"><b></b></i>
+                    <small>${escapeHtml(`${part.value} · ${part.note}`)}</small>
+                  </div>
+                `).join("")}
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      ` : ""}
       ${renderB2BMapCompetitionBoard(model)}
     </section>
   `;
