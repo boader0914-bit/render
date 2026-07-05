@@ -51,6 +51,10 @@ const CORE_COLORS = {
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const LOCATION_DICTIONARY_URL = "/data/location_dictionary.json";
 const DEFAULT_BOOKING_DAYS = 7;
+const B2B_HIGH_RESERVATION_RATE = 0.4;
+const B2B_LOW_RESERVATION_RATE = 0.2;
+const B2B_HIGH_RESERVATION_LABEL = "수집기간 예약율 40% 이상";
+const B2B_LOW_RESERVATION_LABEL = "수집기간 예약율 20% 이하";
 const ROLE_TABS = {
   admin: ["report", "rank", "dictionary", "target", "decisionQueue", "map", "demand", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand"]
@@ -2123,12 +2127,12 @@ function companyRankInsight(item = {}, fallbackRank = 0) {
   let tone = "neutral";
   let label = "관찰";
   if (hasInventory && Number.isFinite(rate)) {
-    if (rate >= 0.65) {
+    if (rate >= B2B_HIGH_RESERVATION_RATE) {
       tone = "hot";
-      label = "수요 강세";
-    } else if (rate <= 0.25 && remaining > 0) {
+      label = B2B_HIGH_RESERVATION_LABEL;
+    } else if (rate <= B2B_LOW_RESERVATION_RATE && remaining > 0) {
       tone = "watch";
-      label = "잔여 객실";
+      label = B2B_LOW_RESERVATION_LABEL;
     } else if (remaining >= Math.max(3, Math.ceil(supply * 0.35))) {
       tone = "strong";
       label = "경쟁 여지";
@@ -2198,14 +2202,14 @@ function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) 
     tone = "rank";
     label = "상세 표본 대기";
     summary = "네이버 노출은 확인됐지만 예약 수량 표본이 없어 판매 판단은 보류합니다.";
-  } else if (Number.isFinite(rate) && rate <= 0.35 && remaining > 0) {
+  } else if (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE && remaining > 0) {
     tone = "watch";
-    label = "잔여 객실";
-    summary = "상위 노출 대비 남은 객실이 있어 가격, 상품 구성, 채널 상태를 함께 봅니다.";
-  } else if (Number.isFinite(rate) && rate >= 0.65) {
+    label = B2B_LOW_RESERVATION_LABEL;
+    summary = "수집기간 예약율이 낮아 가격, 상품 구성, 채널 상태를 함께 봅니다.";
+  } else if (Number.isFinite(rate) && rate >= B2B_HIGH_RESERVATION_RATE) {
     tone = "hot";
-    label = "강수요";
-    summary = "판매율이 높아 가격대, 주말 재고, 객실 믹스 비교가 우선입니다.";
+    label = B2B_HIGH_RESERVATION_LABEL;
+    summary = "수집기간 예약율이 높아 가격대, 주말 재고, 객실 믹스 비교가 우선입니다.";
   } else if (insight.productGap) {
     tone = "watch";
     label = "상품 구성";
@@ -2257,15 +2261,15 @@ function b2bRankBoardModel(items = rankedCompanyItems()) {
     const itemIndex = linked ? finiteNumber(item.availabilityIndex, -1) : -1;
     const opportunityScore = (linked ? 30 : 8)
       + (rank > 0 && rank <= 5 ? 18 : rank <= 10 ? 12 : rank <= 20 ? 6 : 0)
-      + (Number.isFinite(rate) && rate <= 0.35 && remaining > 0 ? 22 : 0)
+      + (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE && remaining > 0 ? 22 : 0)
       + (remaining >= 3 ? 8 : 0)
       + Math.min(18, Math.round(finiteNumber(insight.revenue, 0) / 500000));
     return { item, index, itemIndex, insight, linked, rate, rank, remaining, opportunityScore };
   });
   const linkedRows = rows.filter((row) => row.linked);
   const rankOnlyRows = rows.filter((row) => !row.linked);
-  const gapRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= 0.35 && row.remaining > 0);
-  const hotRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= 0.65);
+  const gapRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE && row.remaining > 0);
+  const hotRows = linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE);
   const sales = summarizeSales(linkedRows.map((row) => row.item));
   const rate = sales.supply ? sales.sold / sales.supply : NaN;
   const focusRows = rows
@@ -2277,7 +2281,7 @@ function b2bRankBoardModel(items = rankedCompanyItems()) {
     : gapRows.length >= 2
       ? { label: "잔여 경쟁권", tone: "strong", summary: "상위 노출 경쟁업체 중 잔여 객실이 있는 구간을 가격, 상품 구성, 채널 상태와 함께 봅니다." }
       : hotRows.length >= 2
-        ? { label: "강수요 경쟁권", tone: "hot", summary: "판매율이 높은 경쟁업체가 많아 주말 재고와 가격 흐름을 함께 확인합니다." }
+        ? { label: `${B2B_HIGH_RESERVATION_LABEL} 경쟁권`, tone: "hot", summary: "수집기간 예약율 40% 이상 경쟁업체가 많아 주말 재고와 가격 흐름을 함께 확인합니다." }
         : { label: "노출 요약", tone: "neutral", summary: "현재 표본에서는 경쟁업체별 순위와 예약 표본 상태를 함께 비교합니다." };
   return {
     rows,
@@ -2321,8 +2325,8 @@ function b2bRankRangeModel(model = b2bRankBoardModel()) {
   const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.rows.length));
   return buckets.map((bucket) => {
     const linkedRows = bucket.rows.filter((row) => row.linked);
-    const hotRows = bucket.rows.filter((row) => Number.isFinite(row.rate) && row.rate >= 0.65);
-    const gapRows = bucket.rows.filter((row) => row.linked && Number.isFinite(row.rate) && row.rate <= 0.35 && row.remaining > 0);
+    const hotRows = bucket.rows.filter((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE);
+    const gapRows = bucket.rows.filter((row) => row.linked && Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE && row.remaining > 0);
     const revenueTotal = bucket.rows.reduce((sum, row) => sum + finiteNumber(row.insight?.revenue, 0), 0);
     const sales = summarizeSales(linkedRows.map((row) => row.item));
     return {
@@ -2342,8 +2346,8 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
   const rows = model.rows || [];
   const linkedRows = model.linkedRows || rows.filter((row) => row.linked);
   const rankOnlyRows = model.rankOnlyRows || rows.filter((row) => !row.linked);
-  const gapRows = model.gapRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= 0.35 && row.remaining > 0);
-  const hotRows = model.hotRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= 0.65);
+  const gapRows = model.gapRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate <= B2B_LOW_RESERVATION_RATE && row.remaining > 0);
+  const hotRows = model.hotRows || linkedRows.filter((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE);
   const topFiveRows = rows.filter((row) => row.rank > 0 && row.rank <= 5);
   const topRows = topFiveRows.length ? topFiveRows : rows.slice(0, 5);
   const midRows = rows.filter((row) => row.rank >= 6 && row.rank <= 20);
@@ -2363,7 +2367,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
       label: "상위 5위 경쟁",
       value: fmtNumber(topRows.length),
       note: `상세 표본 ${fmtNumber(topRows.filter((row) => row.linked).length)}개`,
-      tone: topRows.some((row) => Number.isFinite(row.rate) && row.rate >= 0.65) ? "hot" : "strong"
+      tone: topRows.some((row) => Number.isFinite(row.rate) && row.rate >= B2B_HIGH_RESERVATION_RATE) ? "hot" : "strong"
     },
     {
       label: "상세 표본 확보",
@@ -2372,15 +2376,15 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
       tone: Number.isFinite(linkedCoverage) && linkedCoverage >= 0.55 ? "good" : "watch"
     },
     {
-      label: "낮은 예약률",
+      label: B2B_LOW_RESERVATION_LABEL,
       value: fmtNumber(gapRows.length),
-      note: gapRows.length ? `잔여 ${fmtNumber(remainingRooms)}실 확인` : "낮은 예약률 없음",
+      note: gapRows.length ? `잔여 ${fmtNumber(remainingRooms)}실 확인` : "해당 업체 없음",
       tone: gapRows.length ? "watch" : "good"
     },
     {
-      label: "강수요 업체",
+      label: B2B_HIGH_RESERVATION_LABEL,
       value: fmtNumber(hotRows.length),
-      note: "판매율 65% 이상 표본",
+      note: "예약 수량 표본 기준",
       tone: hotRows.length ? "hot" : "neutral"
     },
     {
@@ -2453,7 +2457,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     focusRows,
     summaryTone,
     summary: Number.isFinite(linkedCoverage)
-      ? `상세 표본 ${fmtRate(linkedCoverage)} 기준으로 상위 노출과 낮은 예약률 업체를 같이 봅니다.`
+      ? `상세 표본 ${fmtRate(linkedCoverage)} 기준으로 상위 노출과 ${B2B_LOW_RESERVATION_LABEL} 업체를 같이 봅니다.`
       : "상위 노출 업체의 상세 표본 연결이 필요합니다."
   };
 }
@@ -2486,7 +2490,7 @@ function renderB2BRankExposureBoard(model = b2bRankBoardModel()) {
               <span>${escapeHtml(row.label)}</span>
               <div>
                 <strong>${fmtNumber(row.count)}개 · 표본 ${fmtNumber(row.linkedCount)}개</strong>
-                <small>${Number.isFinite(row.rate) ? `판매율 ${fmtRate(row.rate)}` : "판매율 확인 필요"} · 낮은 예약률 ${fmtNumber(row.gapCount)}개 · 강수요 ${fmtNumber(row.hotCount)}개</small>
+                <small>${Number.isFinite(row.rate) ? `예약율 ${fmtRate(row.rate)}` : "예약율 확인 필요"} · ${B2B_LOW_RESERVATION_LABEL} ${fmtNumber(row.gapCount)}개 · ${B2B_HIGH_RESERVATION_LABEL} ${fmtNumber(row.hotCount)}개</small>
                 <i class="b2b-rank-range-bar"><b style="width: ${row.width}%"></b></i>
               </div>
               <em>${row.revenueTotal ? fmtWon(row.revenueTotal) : "매출 대기"}</em>
@@ -2541,9 +2545,9 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
       <div class="b2b-rank-metrics">
         <article><span>경쟁업체</span><strong>${fmtNumber(model.rows.length)}</strong><small>상위 노출 기준</small></article>
         <article><span>예약 표본</span><strong>${fmtNumber(model.linkedRows.length)}</strong><small>예약 수량 확인</small></article>
-        <article><span>평균 판매율</span><strong>${Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요"}</strong><small>${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실</small></article>
-        <article><span>낮은 예약률</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>판매율 35% 이하 · 잔여 객실</small></article>
-        <article><span>강수요 업체</span><strong>${fmtNumber(model.hotRows.length)}</strong><small>판매율 65% 이상</small></article>
+        <article><span>평균 예약율</span><strong>${Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요"}</strong><small>${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실</small></article>
+        <article><span>${B2B_LOW_RESERVATION_LABEL}</span><strong>${fmtNumber(model.gapRows.length)}</strong><small>잔여 객실 보유</small></article>
+        <article><span>${B2B_HIGH_RESERVATION_LABEL}</span><strong>${fmtNumber(model.hotRows.length)}</strong><small>예약 수량 표본 기준</small></article>
       </div>
       ${renderB2BRankExposureBoard(model)}
     </section>
@@ -2553,8 +2557,8 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
 function b2bRateTone(rate, fallback = "neutral") {
   const number = Number(rate);
   if (!Number.isFinite(number)) return fallback;
-  if (number >= 0.65) return "hot";
-  if (number <= 0.35) return "watch";
+  if (number >= B2B_HIGH_RESERVATION_RATE) return "hot";
+  if (number <= B2B_LOW_RESERVATION_RATE) return "watch";
   return "good";
 }
 
@@ -2609,10 +2613,10 @@ function b2bDetailPositionModel(item = {}) {
     tone = "watch";
     label = "노출 중심 관찰";
     summary = "네이버 노출은 확인됐지만 예약 수량 표본이 부족해 매출과 판매율 판단은 보류합니다.";
-  } else if (rank > 0 && rank <= 5 && Number.isFinite(insight.rate) && insight.rate >= 0.65) {
+  } else if (rank > 0 && rank <= 5 && Number.isFinite(insight.rate) && insight.rate >= B2B_HIGH_RESERVATION_RATE) {
     tone = "hot";
-    label = "상위권 고판매 경쟁사";
-    summary = "상위 노출과 높은 판매율이 함께 확인됩니다. 가격, 객실 구성, 주말 잔여 재고를 벤치마크합니다.";
+    label = B2B_HIGH_RESERVATION_LABEL;
+    summary = "상위 노출과 수집기간 예약율 40% 이상이 함께 확인됩니다. 가격, 객실 구성, 주말 잔여 재고를 벤치마크합니다.";
   } else if (rank > 0 && rank <= 5 && remaining > 0) {
     tone = "strong";
     label = "상위권 잔여 경쟁사";
@@ -2621,10 +2625,10 @@ function b2bDetailPositionModel(item = {}) {
     tone = "strong";
     label = "매출 상위 경쟁사";
     summary = "지역 평균보다 높은 예상 매출 표본이 잡힙니다. 판매 가격대와 객실 수량을 함께 봅니다.";
-  } else if (Number.isFinite(insight.rate) && insight.rate <= 0.35) {
+  } else if (Number.isFinite(insight.rate) && insight.rate <= B2B_LOW_RESERVATION_RATE) {
     tone = "watch";
-    label = "낮은 예약률 관찰";
-    summary = "노출 대비 예약률이 낮아 가격, 요일별 빈구간, 상품 구성 차이를 확인합니다.";
+    label = B2B_LOW_RESERVATION_LABEL;
+    summary = "노출 대비 수집기간 예약율이 낮아 가격, 요일별 빈구간, 상품 구성 차이를 확인합니다.";
   }
   const revenueBasis = impact.totalPricedSoldOut
     ? `${fmtNumber(impact.totalPricedSoldOut)}개 가격 확인`
@@ -6692,9 +6696,9 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
     },
     {
       tone: rankModel.hotRows.length ? "hot" : "neutral",
-      label: "강수요 업체",
+      label: B2B_HIGH_RESERVATION_LABEL,
       value: fmtNumber(rankModel.hotRows.length),
-      note: "판매율 65% 이상"
+      note: "예약 수량 표본 기준"
     },
     {
       tone: nextDemand.tone || trendTone,
@@ -6977,14 +6981,14 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
   if (revenueReady && (trendRising || peakNow) && hotCount >= 1) {
     decision = {
       tone: "hot",
-      label: "강수요 경쟁권",
-      summary: "매출 표본과 수요 신호가 동시에 잡힙니다. 상위 노출 업체의 가격과 주말 재고를 먼저 비교합니다."
+      label: `${B2B_HIGH_RESERVATION_LABEL} 경쟁권`,
+      summary: "매출 표본과 수요 신호가 동시에 잡힙니다. 수집기간 예약율 40% 이상 업체의 가격과 주말 재고를 먼저 비교합니다."
     };
   } else if (gapCount >= 2 && Number.isFinite(detailCoverage) && detailCoverage >= 0.35) {
     decision = {
       tone: "strong",
       label: "공략 가능권",
-      summary: "상위 노출 대비 낮은 예약률 업체가 보입니다. 가격, 상품 구성, 채널 노출 차이를 우선 비교합니다."
+      summary: `${B2B_LOW_RESERVATION_LABEL} 업체가 보입니다. 가격, 상품 구성, 채널 노출 차이를 우선 비교합니다.`
     };
   } else if (outsideCount > 0) {
     decision = {
@@ -7018,7 +7022,7 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
       tone: hotCount ? "hot" : gapCount ? "strong" : "neutral",
       label: "노출 판단",
       value: `${fmtNumber(rankModel.rows.length)}개`,
-      note: `강수요 ${fmtNumber(hotCount)}개 · 낮은 예약률 ${fmtNumber(gapCount)}개`
+      note: `${B2B_HIGH_RESERVATION_LABEL} ${fmtNumber(hotCount)}개 · ${B2B_LOW_RESERVATION_LABEL} ${fmtNumber(gapCount)}개`
     },
     {
       tone: nextDemand.tone || (trendRising || peakNow ? "hot" : trendFalling ? "watch" : "good"),
@@ -7049,8 +7053,8 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
       label: "노출 대응",
       value: topRank ? `${fmtNumber(topRank.rank)}위` : "대기",
       detail: gapCount
-        ? `낮은 예약률 업체 ${fmtNumber(gapCount)}개를 먼저 열어 가격·상품 구성을 확인합니다.`
-        : "상위 노출 업체의 판매율과 잔여 객실을 기준값으로 봅니다.",
+        ? `${B2B_LOW_RESERVATION_LABEL} 업체 ${fmtNumber(gapCount)}개를 먼저 열어 가격·상품 구성을 확인합니다.`
+        : "상위 노출 업체의 예약율과 잔여 객실을 기준값으로 봅니다.",
       tab: "rank",
       button: "순위 보기"
     },
@@ -7136,7 +7140,7 @@ function b2bSimpleSummaryModel(
   const detailCoverage = rankModel.rows.length ? rankModel.linkedRows.length / rankModel.rows.length : NaN;
   const summaryByTone = {
     hot: "수요와 매출 신호가 강합니다. 상위 경쟁업체의 가격대와 주말 판매 압력을 먼저 보세요.",
-    strong: "공략 가능한 경쟁권입니다. 노출 대비 낮은 예약률 업체와 가격 차이를 먼저 확인하세요.",
+    strong: `공략 가능한 경쟁권입니다. 노출 대비 ${B2B_LOW_RESERVATION_LABEL} 업체와 가격 차이를 먼저 확인하세요.`,
     watch: "권역 또는 표본 변수가 있습니다. 반경 경쟁권과 매출 표본을 보완해서 판단하세요.",
     neutral: "현재는 관찰 구간입니다. 경쟁업체 표본을 더 쌓아 방향성을 확인하세요."
   };
@@ -7150,8 +7154,8 @@ function b2bSimpleSummaryModel(
     {
       tone: hotCount ? "hot" : gapCount ? "strong" : "neutral",
       label: "경쟁 강도",
-      value: hotCount ? `강수요 ${fmtNumber(hotCount)}곳` : `${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
-      note: gapCount ? `낮은 예약률 업체 ${fmtNumber(gapCount)}곳` : "상위 노출 업체 기준"
+      value: hotCount ? `${B2B_HIGH_RESERVATION_LABEL} ${fmtNumber(hotCount)}곳` : `${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
+      note: gapCount ? `${B2B_LOW_RESERVATION_LABEL} 업체 ${fmtNumber(gapCount)}곳` : "상위 노출 업체 기준"
     },
     {
       tone: nextDemand.tone || (trend.reason ? "watch" : trend.hasSeries ? "good" : "neutral"),
@@ -7178,7 +7182,7 @@ function b2bSimpleSummaryModel(
     {
       tone: gapCount || hotCount ? "strong" : "neutral",
       label: "노출 경쟁 확인",
-      detail: "1~5위 업체와 낮은 예약률 업체를 확인",
+      detail: `1~5위 업체와 ${B2B_LOW_RESERVATION_LABEL} 업체를 확인`,
       tab: "rank"
     },
     {
@@ -8607,14 +8611,14 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
       label: "가격/재고",
       value: Number.isFinite(weekendGap) && weekendGap >= 0.25 ? "주말 방어" : "요일별 비교",
       detail: Number.isFinite(weekendGap)
-        ? `토요일과 평일 판매율 차이는 ${formatSignedRate(weekendGap)}입니다. 금·일·평일 낮은 예약률 구간을 함께 봅니다.`
+        ? `토요일과 평일 판매율 차이는 ${formatSignedRate(weekendGap)}입니다. 금·일·평일 ${B2B_LOW_RESERVATION_LABEL} 구간을 함께 봅니다.`
         : "요일별 가격과 수량 표본이 쌓이면 금·토·일·평일을 분리해 봅니다."
     },
     {
       label: "경쟁 기준",
-      value: rankModel.hotRows.length ? "강수요 업체 비교" : "상위 노출 비교",
+      value: rankModel.hotRows.length ? `${B2B_HIGH_RESERVATION_LABEL} 업체 비교` : "상위 노출 비교",
       detail: rankModel.hotRows.length
-        ? `판매율 65% 이상 업체 ${fmtNumber(rankModel.hotRows.length)}개를 가격/상품 벤치마크로 봅니다.`
+        ? `${B2B_HIGH_RESERVATION_LABEL} 업체 ${fmtNumber(rankModel.hotRows.length)}개를 가격/상품 벤치마크로 봅니다.`
         : "상위 노출 업체의 예약 표본을 확보해 향후 컨택 판단 근거로 씁니다."
     }
   ];
