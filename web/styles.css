@@ -14122,6 +14122,83 @@ body.role-b2b .demand-region-head {
   color: #b7c4d7;
 }
 
+body.role-b2b .company-badges:empty {
+  display: none;
+}
+
+body.role-b2b .company-card {
+  background: rgba(18, 24, 34, .98);
+}
+
+body.role-b2b .company-title strong,
+body.role-b2b .company-metric strong,
+body.role-b2b .price {
+  color: #f8fbff;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .22);
+}
+
+body.role-b2b .company-title small,
+body.role-b2b .company-metric span,
+body.role-b2b .company-metric small,
+body.role-b2b .price-block span {
+  color: #d7deeb;
+}
+
+body.role-b2b .sales-line,
+body.role-b2b .sales-line.day {
+  color: #cfe4ff;
+}
+
+body.role-b2b .flow-chip-row span,
+body.role-b2b .reason-chip-row span,
+body.role-b2b .platform-chip {
+  border-color: rgba(220, 236, 255, .24);
+  background: rgba(220, 236, 255, .10);
+  color: #e7f1ff;
+}
+
+body.role-b2b .flow-chip-row span.hot {
+  border-color: rgba(106, 168, 255, .42);
+  background: rgba(106, 168, 255, .18);
+  color: #f8fbff;
+}
+
+body.role-b2b .flow-chip-row span.history {
+  border-color: rgba(52, 211, 153, .34);
+  background: rgba(52, 211, 153, .12);
+  color: #bbf7d0;
+}
+
+body.role-b2b .structure-badge,
+body.role-b2b .confidence-badge {
+  border-color: rgba(220, 236, 255, .24);
+  background: rgba(220, 236, 255, .10);
+  color: #dcecff;
+}
+
+body.role-b2b .structure-badge.good,
+body.role-b2b .confidence-badge.good,
+body.role-b2b .confidence-badge.manual {
+  border-color: rgba(52, 211, 153, .34);
+  background: rgba(52, 211, 153, .12);
+  color: #bbf7d0;
+}
+
+body.role-b2b .structure-badge.watch,
+body.role-b2b .confidence-badge.watch,
+body.role-b2b .structure-badge.ota-check {
+  border-color: rgba(251, 191, 36, .36);
+  background: rgba(251, 191, 36, .13);
+  color: #fde68a;
+}
+
+body.role-b2b .more-button {
+  border-color: rgba(106, 168, 255, .46);
+  background: #2f74d0;
+  color: #ffffff;
+  box-shadow: 0 12px 24px rgba(47, 116, 208, .22);
+}
+
 body.role-b2b .structure-summary h3,
 body.role-b2b .structure-metric-grid strong,
 body.role-b2b .structure-card strong,

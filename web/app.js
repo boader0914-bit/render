@@ -2835,6 +2835,29 @@ function otaVerificationBadge(item = {}) {
   return `<span class="structure-badge ota-check" title="${escapeHtml(audit.otaReason || "네이버 기준 수량 해석 보조 확인")}">OTA 확인 필요</span>`;
 }
 
+function b2bPublicCompanyBadges(item = {}, linked = inventoryLinked(item)) {
+  if (isAdminRole()) return "";
+  const status = collectionStatusProfile(item);
+  const boundary = regionBoundaryBadge(item);
+  const badges = [
+    linked
+      ? `<span class="structure-badge good" title="네이버 예약 판매율과 잔여 객실 표본이 연결되었습니다.">예약 표본 연결</span>`
+      : `<span class="structure-badge watch" title="네이버 노출은 확인됐지만 예약 수량 표본이 부족합니다.">예약 표본 대기</span>`,
+    status.offlineEstimated
+      ? `<span class="structure-badge watch" title="운영 기준보다 낮은 수집값은 오프라인 예약 가능성을 반영합니다.">오프라인 예약 반영</span>`
+      : "",
+    boundary
+  ].filter(Boolean);
+  return badges.join("");
+}
+
+function companyBadges(item = {}, linked = inventoryLinked(item), stockStatus = "") {
+  if (!isAdminRole()) return b2bPublicCompanyBadges(item, linked);
+  return linked
+    ? `${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${regionBoundaryBadge(item)}${manualCorrectionBadge(item)}${otaVerificationBadge(item)}`
+    : `<span class="confidence-badge watch" title="${escapeHtml(stockStatus)}">재고 미수집</span><span class="structure-badge watch">${escapeHtml(item.rankingSourceLabel || "네이버 전체 순위")}</span>${regionBoundaryBadge(item)}`;
+}
+
 function manualCorrectionInfo(item = {}) {
   const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || {};
   if (!manualCorrectionHasValue(correction)) return null;
@@ -3144,11 +3167,7 @@ function renderCompanies() {
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>
-            <div class="company-badges">${
-              linked
-                ? `${inventoryConfidenceBadge(item)}${inventoryStructureBadge(item)}${regionBoundaryBadge(item)}${manualCorrectionBadge(item)}${otaVerificationBadge(item)}`
-                : `<span class="confidence-badge watch" title="${escapeHtml(stockStatus)}">재고 미수집</span><span class="structure-badge watch">${escapeHtml(item.rankingSourceLabel || "네이버 전체 순위")}</span>${regionBoundaryBadge(item)}`
-            }</div>
+            <div class="company-badges">${companyBadges(item, linked, stockStatus)}</div>
           </div>
         </div>
         <div class="company-metric">
@@ -3165,7 +3184,7 @@ function renderCompanies() {
               <span class="sales-line day">${escapeHtml(salesLine(item, "day"))}</span>
             </div>
             ${flowChipRow(item)}
-            ${validationReasonRow(item)}
+            ${isAdminRole() ? validationReasonRow(item) : ""}
             ${miniBars(item)}
           ` : `
             <div class="sales-lines">
@@ -13874,6 +13893,7 @@ function dateRow(row) {
 }
 
 function sheetCollectionStatusPanel(item = {}) {
+  if (!isAdminRole()) return "";
   const status = collectionStatusProfile(item);
   const confidence = inventoryConfidenceInfo(item);
   const structure = inventoryStructureInfo(item);
@@ -14004,6 +14024,7 @@ function sheetAuditCriteriaForDetail(detail = {}) {
 }
 
 function sheetAuditPanel(item = {}) {
+  if (!isAdminRole()) return "";
   const detail = sheetAuditDetailProfile(item);
   const decision = detail.decision || {};
   const itemDecision = detail.itemDecision || decisionQueueProfile(item);
