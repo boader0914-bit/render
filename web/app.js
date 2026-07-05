@@ -6823,6 +6823,206 @@ function renderB2BRevenueBenchmark(brief = b2bMarketBriefModel(), model = b2bRev
   `;
 }
 
+function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief)) {
+  const rankModel = b2bRankBoardModel();
+  const mapModel = b2bRegionMapModel();
+  const trend = demandTrendSource();
+  const trendStats = demandTrendStats(trend);
+  const detailCoverage = rankModel.rows.length ? rankModel.linkedRows.length / rankModel.rows.length : NaN;
+  const revenueCoverage = brief.itemCount ? revenueModel.revenueRows.length / brief.itemCount : NaN;
+  const outsideCount = finiteNumber(mapModel.outsideCount, 0);
+  const gapCount = finiteNumber(rankModel.gapRows.length, 0);
+  const hotCount = finiteNumber(rankModel.hotRows.length, 0);
+  const trendRising = Number.isFinite(trendStats.recentChange) && trendStats.recentChange >= 0.12;
+  const trendFalling = Number.isFinite(trendStats.recentChange) && trendStats.recentChange <= -0.12;
+  const peakNow = trend.hasSeries && Number.isFinite(trendStats.peakRatio) && trendStats.peakRatio >= 0.82;
+  const revenueReady = revenueModel.revenueRows.length > 0;
+  const priceCoverage = revenueModel.priceCoverage;
+  const weekendRate = revenueModel.weekend?.rate;
+  const weekdayRate = revenueModel.flow?.weekday?.rate;
+  let decision = {
+    tone: "neutral",
+    label: "관찰권",
+    summary: "매출, 노출, 수요 표본을 함께 보며 경쟁권의 기준값을 먼저 잡습니다."
+  };
+  if (revenueReady && (trendRising || peakNow) && hotCount >= 1) {
+    decision = {
+      tone: "hot",
+      label: "강수요 경쟁권",
+      summary: "매출 표본과 수요 신호가 동시에 잡힙니다. 상위 노출 업체의 가격과 주말 재고를 먼저 비교합니다."
+    };
+  } else if (gapCount >= 2 && Number.isFinite(detailCoverage) && detailCoverage >= 0.35) {
+    decision = {
+      tone: "strong",
+      label: "공략 가능권",
+      summary: "상위 노출 대비 판매 공백이 보입니다. 가격, 상품 구성, 채널 노출 차이를 우선 비교합니다."
+    };
+  } else if (outsideCount > 0) {
+    decision = {
+      tone: "watch",
+      label: "반경 경쟁권",
+      summary: "검색 지역 밖 업체도 노출됩니다. 행정구역보다 네이버 반경 경쟁권 기준으로 비교합니다."
+    };
+  } else if (trendFalling || !revenueReady) {
+    decision = {
+      tone: "watch",
+      label: "표본 보완권",
+      summary: "매출 또는 수요 표본이 부족합니다. 현재 값은 방향성 판단용으로 보고 표본 보완을 병행합니다."
+    };
+  }
+  const demandLabel = trend.reason
+    ? "추세 대기"
+    : trend.hasSeries
+      ? demandTrendLabel()
+      : "데이터랩 대기";
+  const topRegion = mapModel.topRegion || brief.topRegion || {};
+  const topRevenue = revenueModel.topRows?.[0] || null;
+  const topRank = rankModel.rows?.[0] || null;
+  const cards = [
+    {
+      tone: revenueReady ? "strong" : "watch",
+      label: "매출 판단",
+      value: revenueModel.averageRevenue ? fmtWon(revenueModel.averageRevenue) : "대기",
+      note: revenueReady ? `표본 ${fmtNumber(revenueModel.revenueRows.length)}개 · 가격 ${Number.isFinite(priceCoverage) ? fmtRate(priceCoverage) : "대기"}` : "가격·수량 표본 필요"
+    },
+    {
+      tone: hotCount ? "hot" : gapCount ? "strong" : "neutral",
+      label: "노출 판단",
+      value: `${fmtNumber(rankModel.rows.length)}개`,
+      note: `강수요 ${fmtNumber(hotCount)}개 · 공백 ${fmtNumber(gapCount)}개`
+    },
+    {
+      tone: trendRising || peakNow ? "hot" : trendFalling ? "watch" : "good",
+      label: "수요 판단",
+      value: demandLabel,
+      note: trend.hasSeries && Number.isFinite(trendStats.recentChange) ? `최근 ${formatSignedRate(trendStats.recentChange)}` : "12개월 추세 대기"
+    },
+    {
+      tone: outsideCount ? "watch" : "good",
+      label: "권역 판단",
+      value: outsideCount ? `${fmtNumber(outsideCount)}곳` : "지역권",
+      note: topRegion.region || topRegion.name || "지역 표본 기준"
+    }
+  ];
+  const actionRows = [
+    {
+      tone: revenueReady ? "strong" : "watch",
+      label: "가격 포지션",
+      value: topRevenue?.revenue ? fmtWon(topRevenue.revenue) : "표본 대기",
+      detail: topRevenue
+        ? `${topRevenue.name} 기준으로 평균가, 가격 확인률, 누락 보정 영향을 비교합니다.`
+        : "매출 표본이 확보되면 상위 업체 가격대를 기준으로 비교합니다.",
+      tab: "report",
+      button: "매출 보기"
+    },
+    {
+      tone: gapCount ? "strong" : hotCount ? "hot" : "neutral",
+      label: "노출 대응",
+      value: topRank ? `${fmtNumber(topRank.rank)}위` : "대기",
+      detail: gapCount
+        ? `판매 공백 ${fmtNumber(gapCount)}개 업체를 먼저 열어 가격·상품 구성을 확인합니다.`
+        : "상위 노출 업체의 판매율과 잔여 객실을 기준값으로 봅니다.",
+      tab: "rank",
+      button: "순위 보기"
+    },
+    {
+      tone: Number.isFinite(weekendRate) && weekendRate >= 0.65 ? "hot" : "good",
+      label: "요일 전략",
+      value: Number.isFinite(weekendRate) ? fmtRate(weekendRate) : "대기",
+      detail: Number.isFinite(weekendRate) && Number.isFinite(weekdayRate)
+        ? `주말 ${fmtRate(weekendRate)} · 평일 ${fmtRate(weekdayRate)} 기준으로 요일별 가격 차이를 봅니다.`
+        : "평일·금요일·토요일·일요일 판매 흐름 표본이 확보되면 요일별 전략을 분리합니다.",
+      tab: "demand",
+      button: "수요 보기"
+    },
+    {
+      tone: outsideCount ? "watch" : "good",
+      label: "권역 전략",
+      value: outsideCount ? "반경권" : "지역권",
+      detail: outsideCount
+        ? "네이버 반경 노출로 들어오는 타지역 업체까지 경쟁군에 포함합니다."
+        : "현재 표본은 검색 지역권 중심으로 비교합니다.",
+      tab: "map",
+      button: "지도 보기"
+    }
+  ];
+  const checklist = [
+    {
+      tone: revenueReady ? "strong" : "watch",
+      label: "매출 기준값",
+      note: revenueReady
+        ? `평균 ${fmtWon(revenueModel.averageRevenue)} · 상위 ${topRevenue?.revenue ? fmtWon(topRevenue.revenue) : "대기"}`
+        : "가격과 수량 표본을 먼저 확보"
+    },
+    {
+      tone: Number.isFinite(detailCoverage) && detailCoverage >= 0.55 ? "good" : "watch",
+      label: "표본 신뢰",
+      note: Number.isFinite(detailCoverage) ? `상세 연결 ${fmtRate(detailCoverage)} · 매출 표본 ${Number.isFinite(revenueCoverage) ? fmtRate(revenueCoverage) : "대기"}` : "상세 연결 대기"
+    },
+    {
+      tone: trendRising || peakNow ? "hot" : "neutral",
+      label: "수요 타이밍",
+      note: trend.reason || (trend.hasSeries ? `${demandLabel} · ${trendStats.peak?.label || "피크 대기"}` : "데이터랩 추세 대기")
+    }
+  ];
+  return {
+    decision,
+    cards,
+    actionRows,
+    checklist
+  };
+}
+
+function renderB2BStrategyBoard(brief = b2bMarketBriefModel(), model = b2bStrategyBoardModel(brief)) {
+  return `
+    <div class="b2b-strategy-board ${escapeHtml(model.decision.tone)}">
+      <div class="b2b-strategy-head">
+        <div>
+          <span>B2B Strategy Summary</span>
+          <strong>경쟁 대응 우선순위</strong>
+          <p>${escapeHtml(model.decision.summary)}</p>
+        </div>
+        <em>${escapeHtml(model.decision.label)}</em>
+      </div>
+      <div class="b2b-strategy-grid">
+        ${model.cards.map((card) => `
+          <article class="${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="b2b-strategy-layout">
+        <article class="b2b-strategy-actions">
+          ${model.actionRows.map((row) => `
+            <div class="${escapeHtml(row.tone)}">
+              <mark>${escapeHtml(row.value)}</mark>
+              <div>
+                <strong>${escapeHtml(row.label)}</strong>
+                <span>${escapeHtml(row.detail)}</span>
+              </div>
+              <button type="button" data-drawer-tab="${escapeHtml(row.tab)}">${escapeHtml(row.button)}</button>
+            </div>
+          `).join("")}
+        </article>
+        <article class="b2b-strategy-checklist">
+          <div class="b2b-strategy-subhead">
+            <strong>판단 체크</strong>
+            <small>리포트를 읽을 때 우선 확인할 기준입니다.</small>
+          </div>
+          ${model.checklist.map((row) => `
+            <div class="${escapeHtml(row.tone)}">
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.note)}</strong>
+            </div>
+          `).join("")}
+        </article>
+      </div>
+    </div>
+  `;
+}
+
 function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
   const rankModel = b2bRankBoardModel();
   const items = state.data?.availability?.items || [];
@@ -6990,6 +7190,8 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const primary = brief.topRegion ? regionPrimary(brief.topRegion) : "";
   const overviewModel = b2bPublicOverviewModel(brief);
   const snapshotModel = b2bCompetitiveSnapshotModel(brief);
+  const revenueModel = b2bRevenueBenchmarkModel(brief);
+  const strategyModel = b2bStrategyBoardModel(brief, revenueModel);
   return `
     <section class="b2b-brief-card">
       <div class="b2b-brief-head">
@@ -7010,8 +7212,9 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
         <article><span>객실 판매율</span><strong>${fmtRate(brief.rate)}</strong><small>${fmtNumber(brief.sold)}/${fmtNumber(brief.supply)} 객실</small></article>
         <article><span>수요 전망</span><strong>${fmtNumber(brief.searchVolume)}</strong><small>${escapeHtml(regionLabel)} · ${escapeHtml(primary || "권역 확인")}</small></article>
       </div>
+      ${renderB2BStrategyBoard(brief, strategyModel)}
       ${renderB2BCompetitiveSnapshot(brief, snapshotModel)}
-      ${renderB2BRevenueBenchmark(brief)}
+      ${renderB2BRevenueBenchmark(brief, revenueModel)}
       <div class="b2b-brief-grid">
         <article class="b2b-insight-panel">
           <div class="report-card-head">

@@ -9436,6 +9436,230 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.b2b-strategy-board {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid #d5e3f7;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.b2b-strategy-board.strong {
+  border-color: #b8d9d3;
+}
+
+.b2b-strategy-board.watch {
+  border-color: #fedf89;
+}
+
+.b2b-strategy-board.hot {
+  border-color: #fecaca;
+}
+
+.b2b-strategy-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.b2b-strategy-head div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-strategy-head span,
+.b2b-strategy-grid span,
+.b2b-strategy-grid small,
+.b2b-strategy-actions span,
+.b2b-strategy-subhead small,
+.b2b-strategy-checklist span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-strategy-head strong {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.b2b-strategy-head p {
+  max-width: 780px;
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.b2b-strategy-head em {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-strategy-grid article,
+.b2b-strategy-checklist > div:not(.b2b-strategy-subhead) {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 11px;
+}
+
+.b2b-strategy-grid strong,
+.b2b-strategy-checklist > div:not(.b2b-strategy-subhead) strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.08;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-strategy-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(250px, .8fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.b2b-strategy-actions,
+.b2b-strategy-checklist {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.b2b-strategy-actions > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.b2b-strategy-actions mark {
+  min-width: 0;
+  display: inline-grid;
+  place-items: center;
+  min-height: 38px;
+  border-radius: 12px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 13px;
+  font-weight: 950;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.b2b-strategy-actions div div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.b2b-strategy-actions strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.b2b-strategy-actions button {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #c7dcff;
+  border-radius: 11px;
+  background: #f5f9ff;
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-strategy-subhead {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.b2b-strategy-subhead strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.b2b-strategy-subhead small {
+  text-align: right;
+}
+
+.b2b-strategy-grid article.good,
+.b2b-strategy-actions > div.good,
+.b2b-strategy-checklist > div.good {
+  border-color: #bbf7d0;
+  background: #f6fef9;
+}
+
+.b2b-strategy-grid article.strong,
+.b2b-strategy-actions > div.strong,
+.b2b-strategy-checklist > div.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-strategy-grid article.watch,
+.b2b-strategy-actions > div.watch,
+.b2b-strategy-checklist > div.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-strategy-grid article.hot,
+.b2b-strategy-actions > div.hot,
+.b2b-strategy-checklist > div.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
 .b2b-insight-panel,
 .b2b-opportunity-panel {
   display: grid;
@@ -12097,6 +12321,7 @@ body.role-b2b .secondary-button,
 body.role-b2b .ghost-button,
 body.role-b2b .icon-button,
 body.role-b2b .close-button,
+body.role-b2b .b2b-strategy-actions button,
 body.role-b2b .b2b-action-stack button {
   border-color: rgba(156, 174, 204, .26);
   background: #202631;
@@ -12116,6 +12341,7 @@ body.role-b2b .summary-card,
 body.role-b2b .report-card,
 body.role-b2b .report-metric-grid article,
 body.role-b2b .b2b-brief-card,
+body.role-b2b .b2b-strategy-board,
 body.role-b2b .b2b-competition-snapshot,
 body.role-b2b .b2b-revenue-board,
 body.role-b2b .b2b-insight-panel,
@@ -12177,6 +12403,9 @@ body.role-b2b .b2b-search-card,
 body.role-b2b .b2b-search-card-metrics em,
 body.role-b2b .b2b-search-fallbacks button,
 body.role-b2b .b2b-search-missing-chips em,
+body.role-b2b .b2b-strategy-grid article,
+body.role-b2b .b2b-strategy-actions > div,
+body.role-b2b .b2b-strategy-checklist > div:not(.b2b-strategy-subhead),
 body.role-b2b .b2b-action-stack > div,
 body.role-b2b .b2b-data-grid div,
 body.role-b2b .b2b-snapshot-grid article,
@@ -12237,6 +12466,11 @@ body.role-b2b .report-metric-grid strong,
 body.role-b2b .report-channel-grid strong,
 body.role-b2b .b2b-brief-metrics strong,
 body.role-b2b .b2b-brief-score strong,
+body.role-b2b .b2b-strategy-head strong,
+body.role-b2b .b2b-strategy-grid strong,
+body.role-b2b .b2b-strategy-actions strong,
+body.role-b2b .b2b-strategy-subhead strong,
+body.role-b2b .b2b-strategy-checklist > div:not(.b2b-strategy-subhead) strong,
 body.role-b2b .b2b-snapshot-grid strong,
 body.role-b2b .b2b-snapshot-subhead strong,
 body.role-b2b .b2b-snapshot-row strong,
@@ -12304,6 +12538,16 @@ body.role-b2b .b2b-search-missing-copy p,
 body.role-b2b .b2b-search-fallbacks small,
 body.role-b2b .b2b-search-fallbacks span,
 body.role-b2b .b2b-search-status {
+  color: var(--muted);
+}
+
+body.role-b2b .b2b-strategy-head span,
+body.role-b2b .b2b-strategy-head p,
+body.role-b2b .b2b-strategy-grid span,
+body.role-b2b .b2b-strategy-grid small,
+body.role-b2b .b2b-strategy-actions span,
+body.role-b2b .b2b-strategy-subhead small,
+body.role-b2b .b2b-strategy-checklist span {
   color: var(--muted);
 }
 
@@ -12539,6 +12783,13 @@ body.role-b2b .b2b-demand-season-strip div.recent i {
   background: #fbbf24;
 }
 
+body.role-b2b .b2b-strategy-head em,
+body.role-b2b .b2b-strategy-actions mark {
+  border-color: rgba(106, 168, 255, .26);
+  background: rgba(106, 168, 255, .12);
+  color: #b9d7ff;
+}
+
 body.role-b2b .b2b-map-board-head em {
   border-color: rgba(156, 174, 204, .22);
   background: #121822;
@@ -12578,6 +12829,13 @@ body.role-b2b .b2b-rank-range-bar b {
 }
 
 body.role-b2b .b2b-action-stack > div.strong,
+body.role-b2b .b2b-strategy-board.strong,
+body.role-b2b .b2b-strategy-grid article.strong,
+body.role-b2b .b2b-strategy-grid article.good,
+body.role-b2b .b2b-strategy-actions > div.strong,
+body.role-b2b .b2b-strategy-actions > div.good,
+body.role-b2b .b2b-strategy-checklist > div.strong,
+body.role-b2b .b2b-strategy-checklist > div.good,
 body.role-b2b .b2b-data-grid div.strong,
 body.role-b2b .b2b-snapshot-grid article.strong,
 body.role-b2b .b2b-snapshot-grid article.good,
@@ -12623,6 +12881,10 @@ body.role-b2b .sheet-b2b-booking.good {
 }
 
 body.role-b2b .b2b-action-stack > div.watch,
+body.role-b2b .b2b-strategy-board.watch,
+body.role-b2b .b2b-strategy-grid article.watch,
+body.role-b2b .b2b-strategy-actions > div.watch,
+body.role-b2b .b2b-strategy-checklist > div.watch,
 body.role-b2b .b2b-data-grid div.watch,
 body.role-b2b .b2b-snapshot-grid article.watch,
 body.role-b2b .b2b-snapshot-row.watch,
@@ -12652,6 +12914,10 @@ body.role-b2b .sheet-b2b-booking.watch {
 }
 
 body.role-b2b .b2b-action-stack > div.hot,
+body.role-b2b .b2b-strategy-board.hot,
+body.role-b2b .b2b-strategy-grid article.hot,
+body.role-b2b .b2b-strategy-actions > div.hot,
+body.role-b2b .b2b-strategy-checklist > div.hot,
 body.role-b2b .b2b-snapshot-grid article.hot,
 body.role-b2b .b2b-snapshot-row.hot,
 body.role-b2b .b2b-revenue-grid article.hot,
@@ -13001,6 +13267,7 @@ body.role-b2b .demand-region-head {
   .report-hero,
   .b2b-brief-head,
   .b2b-brief-grid,
+  .b2b-strategy-layout,
   .b2b-snapshot-layout,
   .b2b-revenue-layout,
   .b2b-public-board,
@@ -13019,6 +13286,7 @@ body.role-b2b .demand-region-head {
 
   .report-metric-grid,
   .b2b-brief-metrics,
+  .b2b-strategy-grid,
   .b2b-snapshot-grid,
   .b2b-revenue-grid,
   .b2b-map-board-grid,
@@ -13604,6 +13872,7 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-action-stack > div,
+  .b2b-strategy-actions > div,
   .b2b-snapshot-row,
   .b2b-revenue-row,
   .b2b-priority-list button {
@@ -13612,6 +13881,10 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-action-stack mark,
+  .b2b-strategy-actions mark,
+  .b2b-strategy-actions strong,
+  .b2b-strategy-actions span,
+  .b2b-strategy-actions button,
   .b2b-snapshot-row span,
   .b2b-snapshot-row strong,
   .b2b-snapshot-row em,
@@ -13628,6 +13901,7 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-action-stack mark,
+  .b2b-strategy-actions mark,
   .b2b-snapshot-row span,
   .b2b-revenue-row span,
   .b2b-priority-list span {
@@ -13635,12 +13909,15 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-action-stack button,
+  .b2b-strategy-actions button,
   .b2b-snapshot-row,
   .b2b-revenue-row {
     width: 100%;
   }
 
   .b2b-snapshot-subhead,
+  .b2b-strategy-head,
+  .b2b-strategy-subhead,
   .b2b-revenue-subhead,
   .b2b-revenue-head {
     align-items: flex-start;
@@ -13649,6 +13926,7 @@ body.role-b2b .demand-region-head {
   }
 
   .b2b-snapshot-subhead small,
+  .b2b-strategy-subhead small,
   .b2b-revenue-subhead small {
     text-align: left;
   }
@@ -13667,6 +13945,7 @@ body.role-b2b .demand-region-head {
 
   .report-channel-grid,
   .b2b-brief-metrics,
+  .b2b-strategy-grid,
   .b2b-snapshot-grid,
   .b2b-revenue-grid,
   .b2b-data-grid,
