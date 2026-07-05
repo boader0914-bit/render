@@ -9155,6 +9155,17 @@ function companyMasterCorrectionTag(company = {}) {
   return `<span class="company-correction-status ${isAdmin ? "admin" : "auto"}">${escapeHtml(isAdmin ? "관리자 보정" : "자동추정")}</span>`;
 }
 
+function companyMasterSourceTag(company = {}) {
+  const sources = company.collectionSources || [];
+  const latest = company.inventory?.latest || {};
+  const latestSource = latest.collectionSource || sources[0] || "admin_search";
+  const b2bCount = Number((company.sourceStats || []).find((row) => row.collectionSource === "b2b_search")?.runCount || 0);
+  if (sources.includes("b2b_search") || latestSource === "b2b_search") {
+    return `<span class="company-source-tag b2b">B2B 검색${b2bCount ? ` ${fmtNumber(b2bCount)}회` : ""}</span>`;
+  }
+  return `<span class="company-source-tag admin">관리자 수집</span>`;
+}
+
 function companyMasterVerificationItem(company = {}, meta = "") {
   return `
     <article>
@@ -11054,6 +11065,7 @@ function companyMasterListPanel(master = {}) {
             <div class="company-master-row-tags">
               <span>${escapeHtml(company.exposureLayer?.label || "분류 대기")}</span>
               <span>${escapeHtml(companyTargetCategoryLabel(company.salesTarget?.category))}</span>
+              ${companyMasterSourceTag(company)}
               ${companyMasterIdentityTag(company)}
               ${companyMasterCorrectionTag(company)}
               ${companyAdminReviewBadgeHtml(company)}

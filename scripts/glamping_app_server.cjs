@@ -1440,6 +1440,9 @@ async function listRuns() {
       searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
       collectionMode: manifest?.collectionMode || "precision",
       collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
+      sourceRole: sourceRoleForCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
+      collectionSource: normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
+      collectionSourceLabel: manifest?.collectionSourceLabel || collectionSourceLabel(normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin)),
       detailRankRanges: manifest?.detailRankRanges || "",
       bookingRangeDays: manifest?.bookingRangeDays || 1,
       bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
@@ -1460,6 +1463,28 @@ function cloneJson(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
+function normalizeCollectionSource(value, role = USER_ROLES.admin) {
+  const text = String(value || "").trim().toLowerCase();
+  if (["b2b_search", "b2b"].includes(text)) return "b2b_search";
+  if (["admin_search", "admin", "crawl"].includes(text)) return "admin_search";
+  if (["backfill", "master_backfill"].includes(text)) return "master_backfill";
+  return normalizeUserRole(role) === USER_ROLES.b2b ? "b2b_search" : "admin_search";
+}
+
+function sourceRoleForCollectionSource(collectionSource, role = USER_ROLES.admin) {
+  const source = normalizeCollectionSource(collectionSource, role);
+  if (source === "b2b_search") return USER_ROLES.b2b;
+  return normalizeUserRole(role);
+}
+
+function collectionSourceLabel(collectionSource) {
+  return {
+    admin_search: "관리자 수집",
+    b2b_search: "B2B 검색",
+    master_backfill: "마스터 백필"
+  }[normalizeCollectionSource(collectionSource)] || "관리자 수집";
+}
+
 const B2B_PRIVATE_FIELD_KEYS = new Set([
   "sourceKey",
   "placeId",
@@ -1470,6 +1495,7 @@ const B2B_PRIVATE_FIELD_KEYS = new Set([
   "companyId",
   "companyProfile",
   "companyMaster",
+  "companyMasterOverlay",
   "manualCorrection",
   "manualCorrectionHistory",
   "companyManualCorrection",
@@ -1480,6 +1506,9 @@ const B2B_PRIVATE_FIELD_KEYS = new Set([
   "salesContactHistory",
   "duplicateCandidates",
   "sourceIndex",
+  "sourceRoles",
+  "collectionSources",
+  "sourceStats",
   "downloads",
   "files",
   "file",
@@ -1531,7 +1560,9 @@ function b2bSearchPayload(value = {}) {
     collectionMode: normalizeCollectionMode(value.collectionMode || "precision"),
     detailRankRanges: String(value.detailRankRanges || "1-10").trim() || "1-10",
     bookingRangeDays: Number(value.bookingRangeDays) || 7,
-    bookingRangePlaceLimit: Number(value.bookingRangePlaceLimit) || 10
+    bookingRangePlaceLimit: Number(value.bookingRangePlaceLimit) || 10,
+    sourceRole: USER_ROLES.b2b,
+    collectionSource: "b2b_search"
   };
 }
 
@@ -1544,7 +1575,7 @@ async function runB2BSearch(payload = {}) {
     error.statusCode = 500;
     throw error;
   }
-  const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true });
+  const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true });
   if (!data) {
     const error = new Error("검색 결과를 불러오지 못했습니다.");
     error.statusCode = 500;
@@ -3944,6 +3975,9 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     provinceKey: run.province || "",
     searchMode: run.searchMode || "",
     productMode: run.productMode || "",
+    sourceRole: sourceRoleForCollectionSource(run.collectionSource, run.sourceRole || USER_ROLES.admin),
+    collectionSource: normalizeCollectionSource(run.collectionSource, run.sourceRole || USER_ROLES.admin),
+    collectionSourceLabel: run.collectionSourceLabel || collectionSourceLabel(normalizeCollectionSource(run.collectionSource, run.sourceRole || USER_ROLES.admin)),
     runId: run.id || "",
     collectedAt,
     collectedDate: String(collectedAt || "").slice(0, 10),
@@ -4001,6 +4035,9 @@ function createCompanyRecord(companyId, entity) {
     firstRunId: entity.runId || "",
     lastRunId: entity.runId || "",
     runIds: boundedUnique([entity.runId], 120),
+    sourceRoles: boundedUnique([entity.sourceRole], 6),
+    collectionSources: boundedUnique([entity.collectionSource], 12),
+    sourceStats: {},
     keywords: {},
     inventory: {
       latest: {},
@@ -4025,6 +4062,38 @@ function mergeCompanyFieldArrays(company, entity) {
   if (!company.looseNameKey) company.looseNameKey = entity.looseNameKey || "";
 }
 
+function updateCompanySourceStats(company, entity) {
+  const collectionSource = normalizeCollectionSource(entity.collectionSource, entity.sourceRole);
+  const sourceRole = sourceRoleForCollectionSource(collectionSource, entity.sourceRole);
+  const sourceLabel = entity.collectionSourceLabel || collectionSourceLabel(collectionSource);
+  company.sourceRoles = boundedUnique([...(company.sourceRoles || []), sourceRole], 6);
+  company.collectionSources = boundedUnique([...(company.collectionSources || []), collectionSource], 12);
+  company.sourceStats = company.sourceStats || {};
+  const stat = company.sourceStats[collectionSource] || {
+    collectionSource,
+    sourceRole,
+    label: sourceLabel,
+    firstSeenAt: entity.collectedAt || "",
+    lastSeenAt: "",
+    lastRunId: "",
+    runIds: [],
+    keywords: [],
+    observationCount: 0,
+    runCount: 0
+  };
+  const alreadySeenRun = entity.runId && (stat.runIds || []).includes(entity.runId);
+  stat.sourceRole = sourceRole;
+  stat.label = sourceLabel;
+  stat.firstSeenAt = [stat.firstSeenAt, entity.collectedAt].filter(Boolean).sort()[0] || entity.collectedAt || "";
+  stat.lastSeenAt = [stat.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt || "";
+  stat.lastRunId = entity.runId || stat.lastRunId || "";
+  stat.runIds = boundedUnique([...(stat.runIds || []), entity.runId], 80);
+  stat.keywords = boundedUnique([...(stat.keywords || []), entity.keyword], 40);
+  if (!alreadySeenRun || !entity.runId) stat.observationCount = Number(stat.observationCount || 0) + 1;
+  stat.runCount = stat.runIds.length || Number(stat.runCount || 0);
+  company.sourceStats[collectionSource] = stat;
+}
+
 function upsertCompanyKeywordExposure(company, entity) {
   if (!entity.keywordKey) return;
   const keyword = company.keywords[entity.keywordKey] || {
@@ -4045,6 +4114,9 @@ function upsertCompanyKeywordExposure(company, entity) {
     rank: Number(entity.rank) || null,
     searchMode: entity.searchMode || "",
     productMode: entity.productMode || "",
+    sourceRole: entity.sourceRole || "",
+    collectionSource: entity.collectionSource || "",
+    collectionSourceLabel: entity.collectionSourceLabel || "",
     keywordLayer: entity.keywordLayer || "",
     keywordLayerLabel: entity.keywordLayerLabel || "",
     provinceKey: entity.provinceKey || ""
@@ -4081,6 +4153,9 @@ function updateCompanyInventory(company, entity) {
   inventory.latest = {
     runId: entity.runId,
     collectedAt: entity.collectedAt,
+    sourceRole: entity.sourceRole || "",
+    collectionSource: entity.collectionSource || "",
+    collectionSourceLabel: entity.collectionSourceLabel || "",
     listType: entity.listType,
     structureType: entity.inventoryStructureType,
     structureLabel: entity.inventoryStructureLabel,
@@ -4106,6 +4181,9 @@ function companyInventorySnapshot(latest = {}) {
   return {
     runId: latest.runId || "",
     collectedAt: latest.collectedAt || "",
+    sourceRole: latest.sourceRole || "",
+    collectionSource: latest.collectionSource || "",
+    collectionSourceLabel: latest.collectionSourceLabel || "",
     listType: latest.listType || "",
     structureType: latest.structureType || "",
     structureLabel: latest.structureLabel || "",
@@ -4356,6 +4434,11 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     firstSeenAt: company.firstSeenAt,
     lastSeenAt: company.lastSeenAt,
     runCount: (company.runIds || []).length,
+    sourceRoles: company.sourceRoles || [],
+    collectionSources: company.collectionSources || [],
+    sourceStats: Object.values(company.sourceStats || {})
+      .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
+      .slice(0, 8),
     keywordCount: keywords.length,
     keywords: keywords.slice(0, 8),
     bestRank: best?.bestRank || null,
@@ -4761,6 +4844,55 @@ function summarizeCompanySalesTargets(companies = []) {
   };
 }
 
+function findCompanyRecordForEntity(master = {}, entity = {}) {
+  const sourceKeys = entity.sourceKeys || [];
+  const matchedId = sourceKeys.map((key) => master.sourceIndex?.[key]).find(Boolean);
+  if (matchedId && master.companies?.[matchedId]) return master.companies[matchedId];
+  const fallbackId = entity.placeId
+    ? `cmp_place_${entity.placeId}`
+    : `cmp_${stableHash([entity.nameKey, entity.addressKey, entity.regionKey, entity.bookingBusinessId].filter(Boolean).join("|"))}`;
+  return master.companies?.[fallbackId] || null;
+}
+
+async function applyCompanyMasterOverridesForRun(data, collectedAt = "") {
+  const master = await readCompanyMaster();
+  const run = data?.run || {};
+  const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
+  const items = data?.availability?.items || [];
+  let matched = 0;
+  let corrected = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    const entity = companyEntityFromItem(items[index], run, collectedAt);
+    if (!entity.nameKey || !entity.sourceKeys.length) continue;
+    const company = findCompanyRecordForEntity(master, entity);
+    if (!company) continue;
+    matched += 1;
+    const correctedItem = applyCompanyMasterIdentity(applyCompanyManualCorrection(items[index], company), company);
+    if (correctedItem.manualCorrectionApplied) corrected += 1;
+    items[index] = {
+      ...correctedItem,
+      companyId: company.companyId,
+      companyProfile: companyRecordSummary(company, keywordKey)
+    };
+  }
+  return {
+    applied: matched,
+    corrected,
+    source: "company_master",
+    updatedAt: master.updatedAt || ""
+  };
+}
+
+function applyCompanyMasterIdentity(item = {}, company = {}) {
+  if (!company) return item;
+  return {
+    ...item,
+    name: company.primaryName || item.name || "",
+    region: (company.regions || []).find(Boolean) || item.region || "",
+    address: (company.addresses || []).find(Boolean) || item.address || ""
+  };
+}
+
 function applyCompanyManualCorrection(item, company) {
   const correction = company?.manualCorrection;
   if (!manualCorrectionHasValue(correction)) return item;
@@ -4844,6 +4976,7 @@ function upsertCompanyRecord(master, entity) {
   company.lastSeenAt = [company.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt;
   company.lastRunId = entity.runId || company.lastRunId;
   mergeCompanyFieldArrays(company, entity);
+  updateCompanySourceStats(company, entity);
   upsertCompanyKeywordExposure(company, entity);
   updateCompanyInventory(company, entity);
   for (const key of sourceKeys) master.sourceIndex[key] = companyId;
@@ -4930,6 +5063,23 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
     target.addresses = boundedUnique([...(target.addresses || []), ...(source.addresses || [])], 30);
     target.urls = boundedUnique([...(target.urls || []), ...(source.urls || [])], 40);
     target.runIds = boundedUnique([...(target.runIds || []), ...(source.runIds || [])], 160);
+    target.sourceRoles = boundedUnique([...(target.sourceRoles || []), ...(source.sourceRoles || [])], 8);
+    target.collectionSources = boundedUnique([...(target.collectionSources || []), ...(source.collectionSources || [])], 16);
+    target.sourceStats = { ...(target.sourceStats || {}) };
+    for (const [sourceKey, sourceStat] of Object.entries(source.sourceStats || {})) {
+      const currentStat = target.sourceStats[sourceKey] || {};
+      const runIds = boundedUnique([...(currentStat.runIds || []), ...(sourceStat.runIds || [])], 120);
+      target.sourceStats[sourceKey] = {
+        ...currentStat,
+        ...sourceStat,
+        firstSeenAt: [currentStat.firstSeenAt, sourceStat.firstSeenAt].filter(Boolean).sort()[0] || currentStat.firstSeenAt || sourceStat.firstSeenAt || "",
+        lastSeenAt: [currentStat.lastSeenAt, sourceStat.lastSeenAt].filter(Boolean).sort().at(-1) || currentStat.lastSeenAt || sourceStat.lastSeenAt || "",
+        runIds,
+        runCount: runIds.length,
+        observationCount: Number(currentStat.observationCount || 0) + Number(sourceStat.observationCount || 0),
+        keywords: boundedUnique([...(currentStat.keywords || []), ...(sourceStat.keywords || [])], 60)
+      };
+    }
     target.firstSeenAt = [target.firstSeenAt, source.firstSeenAt].filter(Boolean).sort()[0] || target.firstSeenAt || "";
     target.lastSeenAt = [target.lastSeenAt, source.lastSeenAt].filter(Boolean).sort().at(-1) || target.lastSeenAt || "";
     target.keywords = target.keywords || {};
@@ -5304,7 +5454,7 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
     if (!entity.nameKey || !entity.sourceKeys.length) continue;
     const company = upsertCompanyRecord(master, entity);
     touched += 1;
-    const correctedItem = applyCompanyManualCorrection(items[index], company);
+    const correctedItem = applyCompanyMasterIdentity(applyCompanyManualCorrection(items[index], company), company);
     if (correctedItem.manualCorrectionApplied) {
       const correctedEntity = companyEntityFromItem(correctedItem, run, collectedAt);
       updateCompanyInventory(company, {
@@ -5347,6 +5497,11 @@ async function summarizeCompanyMaster() {
     .map((company) => companyRecordSummary(company))
     .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
   const profiledCompanies = companies.map(companySalesTargetProfile);
+  const collectionSourceCounts = profiledCompanies.reduce((acc, company) => {
+    const sources = company.collectionSources?.length ? company.collectionSources : ["admin_search"];
+    for (const source of sources) acc[source] = (acc[source] || 0) + 1;
+    return acc;
+  }, {});
   const salesTargets = summarizeCompanySalesTargets(profiledCompanies);
   return {
     file: "company_master/companies.json",
@@ -5354,6 +5509,8 @@ async function summarizeCompanyMaster() {
     sourceKeyCount: Object.keys(master.sourceIndex || {}).length,
     duplicateCandidateCount: duplicateCandidates.length,
     duplicateCandidates,
+    collectionSourceCounts,
+    b2bSearchCompanyCount: collectionSourceCounts.b2b_search || 0,
     crossKeyword: summarizeCompanyCrossKeyword(master),
     salesTargets,
     updatedAt: master.updatedAt || "",
@@ -5450,6 +5607,9 @@ function buildHistoryObservations(data, collectedAt) {
           keywordKey,
           searchMode: run.searchMode || "",
           productMode: run.productMode || "",
+          sourceRole: run.sourceRole || "",
+          collectionSource: run.collectionSource || "",
+          collectionSourceLabel: run.collectionSourceLabel || "",
           collectedAt,
           collectedDate,
           stayDate: row.stayDate,
@@ -6723,6 +6883,12 @@ async function loadRun(runId, options = {}) {
       duplicateCandidateCount: 0,
       duplicateCandidates: []
     }));
+  } else if (options.applyCompanyMaster) {
+    result.companyMasterOverlay = await applyCompanyMasterOverridesForRun(result, collectedAt).catch((error) => ({
+      error: error.message || String(error),
+      applied: 0,
+      corrected: 0
+    }));
   }
 
   if (!options.skipHistory) {
@@ -7045,6 +7211,8 @@ function activeCrawlStageStatus(elapsedSeconds = 0) {
 async function runCrawlerInternal(payload) {
   const plan = crawlExecutionPlan(payload);
   const keyword = plan.keyword;
+  const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
+  const sourceRole = sourceRoleForCollectionSource(collectionSource, payload.sourceRole);
   if (!keyword) throw new Error("키워드를 입력해야 합니다.");
   const env = {
     ...process.env,
@@ -7059,6 +7227,9 @@ async function runCrawlerInternal(payload) {
     PRODUCT_MODE: plan.productMode,
     BOOKING_RANGE_DAYS: String(plan.bookingRangeDays),
     BOOKING_RANGE_PLACE_LIMIT: String(plan.bookingRangePlaceLimit),
+    SOURCE_ROLE: sourceRole,
+    COLLECTION_SOURCE: collectionSource,
+    COLLECTION_SOURCE_LABEL: collectionSourceLabel(collectionSource),
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,
@@ -7298,7 +7469,11 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl") {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
-      const result = await runCrawler(payload);
+      const result = await runCrawler({
+        ...payload,
+        sourceRole: USER_ROLES.admin,
+        collectionSource: normalizeCollectionSource(payload.collectionSource, USER_ROLES.admin)
+      });
       const runs = publicRunsForRole(await listRuns(), session.role);
       return send(res, 200, { ...result, runs });
     }

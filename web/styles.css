@@ -6643,6 +6643,18 @@ a.platform-row:hover {
   color: #475467;
 }
 
+.company-master-row-tags .company-source-tag.b2b {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.company-master-row-tags .company-source-tag.admin {
+  border-color: #d1fadf;
+  background: #f0fdf4;
+  color: #166534;
+}
+
 .company-keyword-chips {
   display: flex;
   flex-wrap: wrap;

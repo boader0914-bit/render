@@ -127,6 +127,9 @@ const COLLECTION_MODE = normalizeCollectionMode(process.env.COLLECTION_MODE || "
 const COLLECTION_MODE_LABEL = COLLECTION_MODES[COLLECTION_MODE];
 const DETAIL_RANK_RANGES = parseRankRanges(process.env.DETAIL_RANK_RANGES, COLLECTION_MODE === "fast" ? "" : "1-20");
 const DETAIL_RANK_RANGE_LABEL = rankRangeLabel(DETAIL_RANK_RANGES);
+const SOURCE_ROLE = String(process.env.SOURCE_ROLE || "admin").trim() || "admin";
+const COLLECTION_SOURCE = String(process.env.COLLECTION_SOURCE || (SOURCE_ROLE === "b2b" ? "b2b_search" : "admin_search")).trim();
+const COLLECTION_SOURCE_LABEL = String(process.env.COLLECTION_SOURCE_LABEL || (COLLECTION_SOURCE === "b2b_search" ? "B2B 검색" : "관리자 수집")).trim();
 
 const regionSlugMap = {
   거제: "geoje",
@@ -3452,6 +3455,9 @@ async function main() {
     searchModeLabel: SEARCH_MODE_LABEL,
     collectionMode: COLLECTION_MODE,
     collectionModeLabel: COLLECTION_MODE_LABEL,
+    sourceRole: SOURCE_ROLE,
+    collectionSource: COLLECTION_SOURCE,
+    collectionSourceLabel: COLLECTION_SOURCE_LABEL,
     detailRankRanges: DETAIL_RANK_RANGE_LABEL,
     provinceKey: province.parentProvinceKey || province.slug,
     regionSlug: province.slug,
