@@ -9206,6 +9206,236 @@ a.platform-row:hover {
   word-break: keep-all;
 }
 
+.b2b-revenue-board {
+  min-width: 0;
+  display: grid;
+  gap: 11px;
+  border: 1px solid #d5e3f7;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.b2b-revenue-board.strong {
+  border-color: #b8d9d3;
+}
+
+.b2b-revenue-board.watch {
+  border-color: #fedf89;
+}
+
+.b2b-revenue-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.b2b-revenue-head div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-revenue-head span,
+.b2b-revenue-grid span,
+.b2b-revenue-grid small,
+.b2b-revenue-subhead small,
+.b2b-revenue-row small,
+.b2b-revenue-guide span,
+.b2b-revenue-guide small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-revenue-head strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.b2b-revenue-head p {
+  max-width: 760px;
+  margin: 0;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 780;
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.b2b-revenue-head em {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-revenue-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-revenue-grid article,
+.b2b-revenue-guide > div:not(.b2b-revenue-subhead) {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #fbfcfd;
+  padding: 11px;
+}
+
+.b2b-revenue-grid strong,
+.b2b-revenue-guide > div:not(.b2b-revenue-subhead) strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.08;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.b2b-revenue-grid article.good,
+.b2b-revenue-guide > div.good,
+.b2b-revenue-row.good {
+  border-color: #bbf7d0;
+  background: #f6fef9;
+}
+
+.b2b-revenue-grid article.strong,
+.b2b-revenue-guide > div.strong,
+.b2b-revenue-row.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-revenue-grid article.watch,
+.b2b-revenue-guide > div.watch,
+.b2b-revenue-row.watch,
+.b2b-revenue-row.bad {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-revenue-grid article.hot,
+.b2b-revenue-row.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.b2b-revenue-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(240px, .82fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.b2b-revenue-list,
+.b2b-revenue-guide {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.b2b-revenue-subhead {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b2b-revenue-subhead strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.b2b-revenue-subhead small {
+  text-align: right;
+}
+
+.b2b-revenue-row {
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(94px, auto);
+  grid-template-areas:
+    "rank name revenue"
+    "rank meta revenue";
+  gap: 3px 9px;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 9px;
+  text-align: left;
+}
+
+.b2b-revenue-row:disabled {
+  cursor: not-allowed;
+}
+
+.b2b-revenue-row span {
+  grid-area: rank;
+  display: inline-grid;
+  place-items: center;
+  min-height: 34px;
+  border-radius: 11px;
+  background: #eef5ff;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.b2b-revenue-row strong {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b2b-revenue-row em {
+  grid-area: revenue;
+  color: #0f766e;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-revenue-row small {
+  grid-area: meta;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .b2b-insight-panel,
 .b2b-opportunity-panel {
   display: grid;
@@ -11887,6 +12117,7 @@ body.role-b2b .report-card,
 body.role-b2b .report-metric-grid article,
 body.role-b2b .b2b-brief-card,
 body.role-b2b .b2b-competition-snapshot,
+body.role-b2b .b2b-revenue-board,
 body.role-b2b .b2b-insight-panel,
 body.role-b2b .b2b-public-actions,
 body.role-b2b .b2b-public-data,
@@ -11951,6 +12182,9 @@ body.role-b2b .b2b-data-grid div,
 body.role-b2b .b2b-snapshot-grid article,
 body.role-b2b .b2b-snapshot-row,
 body.role-b2b .b2b-snapshot-read div,
+body.role-b2b .b2b-revenue-grid article,
+body.role-b2b .b2b-revenue-row,
+body.role-b2b .b2b-revenue-guide > div:not(.b2b-revenue-subhead),
 body.role-b2b .report-channel-grid div,
 body.role-b2b .company-insight-grid div,
 body.role-b2b .b2b-company-action,
@@ -12007,6 +12241,11 @@ body.role-b2b .b2b-snapshot-grid strong,
 body.role-b2b .b2b-snapshot-subhead strong,
 body.role-b2b .b2b-snapshot-row strong,
 body.role-b2b .b2b-snapshot-read b,
+body.role-b2b .b2b-revenue-head strong,
+body.role-b2b .b2b-revenue-grid strong,
+body.role-b2b .b2b-revenue-subhead strong,
+body.role-b2b .b2b-revenue-row strong,
+body.role-b2b .b2b-revenue-guide > div:not(.b2b-revenue-subhead) strong,
 body.role-b2b .b2b-rank-board-head strong,
 body.role-b2b .b2b-rank-board-grid strong,
 body.role-b2b .b2b-rank-range-row strong,
@@ -12072,7 +12311,15 @@ body.role-b2b .b2b-snapshot-grid span,
 body.role-b2b .b2b-snapshot-grid small,
 body.role-b2b .b2b-snapshot-subhead small,
 body.role-b2b .b2b-snapshot-row small,
-body.role-b2b .b2b-snapshot-read span {
+body.role-b2b .b2b-snapshot-read span,
+body.role-b2b .b2b-revenue-head span,
+body.role-b2b .b2b-revenue-head p,
+body.role-b2b .b2b-revenue-grid span,
+body.role-b2b .b2b-revenue-grid small,
+body.role-b2b .b2b-revenue-subhead small,
+body.role-b2b .b2b-revenue-row small,
+body.role-b2b .b2b-revenue-guide span,
+body.role-b2b .b2b-revenue-guide small {
   color: var(--muted);
 }
 
@@ -12298,6 +12545,12 @@ body.role-b2b .b2b-map-board-head em {
   color: var(--ink);
 }
 
+body.role-b2b .b2b-revenue-head em {
+  border-color: rgba(106, 168, 255, .26);
+  background: rgba(106, 168, 255, .12);
+  color: #b9d7ff;
+}
+
 body.role-b2b .b2b-rank-board-head em {
   border-color: rgba(156, 174, 204, .22);
   background: #121822;
@@ -12330,6 +12583,13 @@ body.role-b2b .b2b-snapshot-grid article.strong,
 body.role-b2b .b2b-snapshot-grid article.good,
 body.role-b2b .b2b-snapshot-row.strong,
 body.role-b2b .b2b-snapshot-row.good,
+body.role-b2b .b2b-revenue-board.strong,
+body.role-b2b .b2b-revenue-grid article.strong,
+body.role-b2b .b2b-revenue-grid article.good,
+body.role-b2b .b2b-revenue-row.strong,
+body.role-b2b .b2b-revenue-row.good,
+body.role-b2b .b2b-revenue-guide > div.strong,
+body.role-b2b .b2b-revenue-guide > div.good,
 body.role-b2b .company-insight-grid div.revenue,
 body.role-b2b .company-insight-grid div.good,
 body.role-b2b .sheet-b2b-detail.strong,
@@ -12366,6 +12626,11 @@ body.role-b2b .b2b-action-stack > div.watch,
 body.role-b2b .b2b-data-grid div.watch,
 body.role-b2b .b2b-snapshot-grid article.watch,
 body.role-b2b .b2b-snapshot-row.watch,
+body.role-b2b .b2b-revenue-board.watch,
+body.role-b2b .b2b-revenue-grid article.watch,
+body.role-b2b .b2b-revenue-row.watch,
+body.role-b2b .b2b-revenue-row.bad,
+body.role-b2b .b2b-revenue-guide > div.watch,
 body.role-b2b .company-insight-grid div.watch,
 body.role-b2b .sheet-b2b-detail.watch,
 body.role-b2b .sheet-b2b-detail-grid div.watch,
@@ -12389,6 +12654,8 @@ body.role-b2b .sheet-b2b-booking.watch {
 body.role-b2b .b2b-action-stack > div.hot,
 body.role-b2b .b2b-snapshot-grid article.hot,
 body.role-b2b .b2b-snapshot-row.hot,
+body.role-b2b .b2b-revenue-grid article.hot,
+body.role-b2b .b2b-revenue-row.hot,
 body.role-b2b .company-insight-grid div.hot,
 body.role-b2b .sheet-b2b-detail.hot,
 body.role-b2b .sheet-b2b-detail-grid div.hot,
@@ -12410,6 +12677,7 @@ body.role-b2b .sheet-b2b-booking.bad {
 
 body.role-b2b .b2b-action-stack mark,
 body.role-b2b .rank-badge,
+body.role-b2b .b2b-revenue-row span,
 body.role-b2b .b2b-rank-range-row > span,
 body.role-b2b .b2b-rank-focus span,
 body.role-b2b .b2b-snapshot-row span,
@@ -12734,6 +13002,7 @@ body.role-b2b .demand-region-head {
   .b2b-brief-head,
   .b2b-brief-grid,
   .b2b-snapshot-layout,
+  .b2b-revenue-layout,
   .b2b-public-board,
   .report-layout {
     grid-template-columns: 1fr;
@@ -12751,6 +13020,7 @@ body.role-b2b .demand-region-head {
   .report-metric-grid,
   .b2b-brief-metrics,
   .b2b-snapshot-grid,
+  .b2b-revenue-grid,
   .b2b-map-board-grid,
   .b2b-data-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -13335,6 +13605,7 @@ body.role-b2b .demand-region-head {
 
   .b2b-action-stack > div,
   .b2b-snapshot-row,
+  .b2b-revenue-row,
   .b2b-priority-list button {
     grid-template-columns: 1fr;
     grid-template-areas: none;
@@ -13345,6 +13616,10 @@ body.role-b2b .demand-region-head {
   .b2b-snapshot-row strong,
   .b2b-snapshot-row em,
   .b2b-snapshot-row small,
+  .b2b-revenue-row span,
+  .b2b-revenue-row strong,
+  .b2b-revenue-row em,
+  .b2b-revenue-row small,
   .b2b-priority-list span,
   .b2b-priority-list strong,
   .b2b-priority-list em,
@@ -13354,26 +13629,33 @@ body.role-b2b .demand-region-head {
 
   .b2b-action-stack mark,
   .b2b-snapshot-row span,
+  .b2b-revenue-row span,
   .b2b-priority-list span {
     justify-self: start;
   }
 
   .b2b-action-stack button,
-  .b2b-snapshot-row {
+  .b2b-snapshot-row,
+  .b2b-revenue-row {
     width: 100%;
   }
 
-  .b2b-snapshot-subhead {
+  .b2b-snapshot-subhead,
+  .b2b-revenue-subhead,
+  .b2b-revenue-head {
     align-items: flex-start;
     flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
-  .b2b-snapshot-subhead small {
+  .b2b-snapshot-subhead small,
+  .b2b-revenue-subhead small {
     text-align: left;
   }
 
   .b2b-priority-list strong,
   .b2b-snapshot-row strong,
+  .b2b-revenue-row strong,
   .b2b-priority-list small {
     white-space: normal;
   }
@@ -13386,6 +13668,7 @@ body.role-b2b .demand-region-head {
   .report-channel-grid,
   .b2b-brief-metrics,
   .b2b-snapshot-grid,
+  .b2b-revenue-grid,
   .b2b-data-grid,
   .report-region-grid,
   .structure-metric-grid,

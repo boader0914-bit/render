@@ -6615,6 +6615,214 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
   };
 }
 
+function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
+  const items = state.data?.availability?.items || [];
+  const rows = items.map((item, index) => {
+    const profile = preciseRevenueProfile(item);
+    const revenue = finiteNumber(profile.totalAdjustedRevenue, 0) || finiteNumber(profile.totalRevenue, 0);
+    const baseRevenue = finiteNumber(profile.totalRevenue, 0);
+    const gapRevenue = finiteNumber(profile.totalMissingPriceEstimatedRevenue, 0);
+    const precision = profile.precision || {};
+    const lodging = profile.lodging || {};
+    const dayUse = profile.dayUse || {};
+    const flow = salesFlowProfile(item);
+    const rank = finiteNumber(item.rank || item.overallRank || index + 1, index + 1);
+    const itemIndex = finiteNumber(item.availabilityIndex, index);
+    const avgPrice = finiteNumber(lodging.avgSoldUnitPrice, 0) || finiteNumber(dayUse.avgSoldUnitPrice, 0);
+    const priced = finiteNumber(precision.priced, 0);
+    const missing = finiteNumber(precision.missing, 0);
+    const soldQuantity = finiteNumber(precision.soldQuantity, priced + missing);
+    return {
+      item,
+      index,
+      itemIndex,
+      rank,
+      name: item.name || "업체명 확인",
+      revenue,
+      baseRevenue,
+      gapRevenue,
+      avgPrice,
+      precision,
+      grade: precision.grade || "",
+      tone: precision.tone || "neutral",
+      priced,
+      missing,
+      soldQuantity,
+      flow,
+      lodging,
+      dayUse
+    };
+  });
+  const revenueRows = rows.filter((row) => row.revenue > 0);
+  const precisionRows = rows.filter((row) => row.soldQuantity > 0 || row.revenue > 0);
+  const revenueTotal = revenueRows.reduce((sum, row) => sum + row.revenue, 0);
+  const baseTotal = revenueRows.reduce((sum, row) => sum + row.baseRevenue, 0);
+  const gapRevenueTotal = revenueRows.reduce((sum, row) => sum + row.gapRevenue, 0);
+  const averageRevenue = revenueRows.length ? revenueTotal / revenueRows.length : finiteNumber(brief.averageRevenue, 0);
+  const pricedTotal = precisionRows.reduce((sum, row) => sum + row.priced, 0);
+  const missingTotal = precisionRows.reduce((sum, row) => sum + row.missing, 0);
+  const soldQuantity = pricedTotal + missingTotal;
+  const priceCoverage = soldQuantity ? pricedTotal / soldQuantity : NaN;
+  const highPrecisionRows = precisionRows.filter((row) => ["A", "B"].includes(String(row.grade).toUpperCase()));
+  const precisionScore = precisionRows.length
+    ? Math.round(precisionRows.reduce((sum, row) => sum + finiteNumber(row.precision.score, 0), 0) / precisionRows.length)
+    : 0;
+  const topRows = revenueRows
+    .slice()
+    .sort((a, b) => b.revenue - a.revenue || a.rank - b.rank)
+    .slice(0, 4);
+  const benchmarkRows = topRows.length ? topRows : rows.slice(0, 4);
+  const flow = aggregateFlowProfiles(items);
+  const weekend = combineFlowMetrics([flow.friday, flow.saturday, flow.sunday]);
+  const weekdayGap = Number.isFinite(weekend.rate) && Number.isFinite(flow.weekday.rate)
+    ? weekend.rate - flow.weekday.rate
+    : NaN;
+  const decision = revenueRows.length >= Math.max(2, Math.ceil(items.length * 0.2))
+    ? { tone: "strong", label: "매출 비교 가능", summary: "가격과 판매 수량이 연결된 표본으로 경쟁업체 매출 수준을 비교할 수 있습니다." }
+    : precisionRows.length
+      ? { tone: "watch", label: "표본 보완 필요", summary: "일부 업체는 가격 또는 수량 표본이 부족하므로 매출은 보조 지표로 해석합니다." }
+      : { tone: "neutral", label: "매출 표본 대기", summary: "매출 산출에 필요한 가격과 판매 수량 표본이 더 필요합니다." };
+  const cards = [
+    {
+      label: "예상 평균 매출",
+      value: averageRevenue ? fmtWon(averageRevenue) : "대기",
+      note: revenueRows.length ? `${fmtNumber(revenueRows.length)}개 표본 평균` : "가격·수량 표본 필요",
+      tone: revenueRows.length ? "strong" : "watch"
+    },
+    {
+      label: "매출 표본",
+      value: `${fmtNumber(revenueRows.length)}/${fmtNumber(items.length)}`,
+      note: "경쟁업체 중 매출 산출 가능",
+      tone: revenueRows.length >= Math.max(2, Math.ceil(items.length * 0.2)) ? "good" : "watch"
+    },
+    {
+      label: "가격 확인률",
+      value: Number.isFinite(priceCoverage) ? fmtRate(priceCoverage) : "대기",
+      note: `${fmtNumber(pricedTotal)}건 확인 · 누락 ${fmtNumber(missingTotal)}건`,
+      tone: Number.isFinite(priceCoverage) && priceCoverage >= 0.7 ? "good" : "watch"
+    },
+    {
+      label: "상위 매출",
+      value: topRows[0]?.revenue ? fmtWon(topRows[0].revenue) : "대기",
+      note: topRows[0] ? `${topRows[0].name} · ${fmtNumber(topRows[0].rank)}위` : "상위 표본 대기",
+      tone: topRows[0] ? "hot" : "neutral"
+    },
+    {
+      label: "보정 매출",
+      value: gapRevenueTotal ? fmtWon(gapRevenueTotal) : "없음",
+      note: gapRevenueTotal ? `확인매출 ${fmtWon(baseTotal)}` : "가격누락 보정 없음",
+      tone: gapRevenueTotal ? "watch" : "good"
+    },
+    {
+      label: "주말 판매압력",
+      value: Number.isFinite(weekend.rate) ? fmtRate(weekend.rate) : "대기",
+      note: Number.isFinite(weekdayGap) ? `평일 대비 ${formatSignedRate(weekdayGap)}` : "요일 표본 필요",
+      tone: Number.isFinite(weekend.rate) && weekend.rate >= 0.65 ? "hot" : "neutral"
+    }
+  ];
+  const guideRows = [
+    {
+      tone: "strong",
+      label: "정밀도",
+      value: precisionScore ? `${fmtNumber(precisionScore)}점` : "대기",
+      note: highPrecisionRows.length ? `A/B 등급 ${fmtNumber(highPrecisionRows.length)}개` : "가격·요일 표본 확보 필요"
+    },
+    {
+      tone: "watch",
+      label: "가격 누락",
+      value: fmtNumber(missingTotal),
+      note: missingTotal ? "누락 가격은 평균가 기반 보정으로 표시" : "누락 보정 영향 낮음"
+    },
+    {
+      tone: "good",
+      label: "요일 해석",
+      value: Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "대기",
+      note: "평일·금요일·토요일·일요일 판매 흐름을 함께 반영"
+    }
+  ];
+  return {
+    rows,
+    revenueRows,
+    precisionRows,
+    topRows,
+    benchmarkRows,
+    revenueTotal,
+    averageRevenue,
+    priceCoverage,
+    pricedTotal,
+    missingTotal,
+    gapRevenueTotal,
+    precisionScore,
+    highPrecisionRows,
+    flow,
+    weekend,
+    weekdayGap,
+    decision,
+    cards,
+    guideRows
+  };
+}
+
+function renderB2BRevenueBenchmark(brief = b2bMarketBriefModel(), model = b2bRevenueBenchmarkModel(brief)) {
+  if (!model.rows.length) return "";
+  return `
+    <div class="b2b-revenue-board ${escapeHtml(model.decision.tone)}">
+      <div class="b2b-revenue-head">
+        <div>
+          <span>B2B Revenue Benchmark</span>
+          <strong>경쟁 매출 정밀도</strong>
+          <p>${escapeHtml(model.decision.summary)}</p>
+        </div>
+        <em>${escapeHtml(model.decision.label)}</em>
+      </div>
+      <div class="b2b-revenue-grid">
+        ${model.cards.map((card) => `
+          <article class="${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="b2b-revenue-layout">
+        <article class="b2b-revenue-list">
+          <div class="b2b-revenue-subhead">
+            <strong>매출 벤치마크 업체</strong>
+            <small>가격과 판매 수량이 연결된 경쟁업체를 우선 표시합니다.</small>
+          </div>
+          ${model.benchmarkRows.map((row) => {
+            const attrs = row.itemIndex >= 0 ? `type="button" data-open-company="${row.itemIndex}"` : `type="button" disabled`;
+            const revenueText = row.revenue ? fmtWon(row.revenue) : "매출 표본 대기";
+            const priceTextValue = row.avgPrice ? `평균가 ${fmtWon(row.avgPrice)}` : "가격 표본 대기";
+            const rateText = Number.isFinite(row.flow.all.rate) ? fmtRate(row.flow.all.rate) : "판매율 대기";
+            return `
+              <button class="b2b-revenue-row ${escapeHtml(row.tone)}" ${attrs}>
+                <span>${fmtNumber(row.rank)}위</span>
+                <strong>${escapeHtml(row.name)}</strong>
+                <em>${escapeHtml(revenueText)}</em>
+                <small>${escapeHtml(`${rateText} · ${priceTextValue} · 신뢰 ${row.grade || "대기"}`)}</small>
+              </button>
+            `;
+          }).join("")}
+        </article>
+        <article class="b2b-revenue-guide">
+          <div class="b2b-revenue-subhead">
+            <strong>해석 기준</strong>
+            <small>할인 옵션은 산출하지 않고, 확인 가격과 수량 기반 매출만 비교합니다.</small>
+          </div>
+          ${model.guideRows.map((row) => `
+            <div class="${escapeHtml(row.tone)}">
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.value)}</strong>
+              <small>${escapeHtml(row.note)}</small>
+            </div>
+          `).join("")}
+        </article>
+      </div>
+    </div>
+  `;
+}
+
 function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
   const rankModel = b2bRankBoardModel();
   const items = state.data?.availability?.items || [];
@@ -6803,6 +7011,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
         <article><span>수요 전망</span><strong>${fmtNumber(brief.searchVolume)}</strong><small>${escapeHtml(regionLabel)} · ${escapeHtml(primary || "권역 확인")}</small></article>
       </div>
       ${renderB2BCompetitiveSnapshot(brief, snapshotModel)}
+      ${renderB2BRevenueBenchmark(brief)}
       <div class="b2b-brief-grid">
         <article class="b2b-insight-panel">
           <div class="report-card-head">
