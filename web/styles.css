@@ -9547,6 +9547,10 @@ a.platform-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.b2b-report-first .b2b-brief-head {
+  align-items: center;
+}
+
 .b2b-simple-summary {
   min-width: 0;
   display: grid;
@@ -9616,10 +9620,24 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 5px;
+  align-content: space-between;
+  min-height: 128px;
   border: 1px solid #e5ebf3;
   border-radius: 14px;
   background: #ffffff;
   padding: 12px;
+}
+
+.b2b-simple-card-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.b2b-simple-card-head span {
+  max-width: 52%;
 }
 
 .b2b-simple-card strong {
@@ -9629,12 +9647,14 @@ a.platform-row:hover {
   font-weight: 950;
   line-height: 1.08;
   font-variant-numeric: tabular-nums;
+  text-align: right;
   overflow-wrap: anywhere;
 }
 
 .b2b-simple-meter {
+  position: relative;
   min-width: 0;
-  height: 7px;
+  height: 16px;
   margin-top: 4px;
   border-radius: 999px;
   background: #e8edf5;
@@ -9648,6 +9668,18 @@ a.platform-row:hover {
   border-radius: inherit;
   background: linear-gradient(90deg, #2f80ed, #34d399);
   animation: b2b-meter-fill .72s ease-out both;
+}
+
+.b2b-simple-meter em {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  color: #344054;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 950;
+  line-height: 1;
+  transform: translateY(-50%);
 }
 
 .b2b-simple-card.watch .b2b-simple-meter i {
@@ -14110,9 +14142,15 @@ body.role-b2b .b2b-simple-answer span,
 body.role-b2b .b2b-simple-answer small,
 body.role-b2b .b2b-simple-card span,
 body.role-b2b .b2b-simple-card small,
+body.role-b2b .b2b-simple-meter em,
 body.role-b2b .b2b-simple-next small,
 body.role-b2b .b2b-detail-pack summary small {
   color: var(--muted);
+}
+
+body.role-b2b .b2b-simple-meter em {
+  color: #e7f1ff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, .45);
 }
 
 body.role-b2b .b2b-simple-card.strong,
@@ -15555,6 +15593,23 @@ body.role-b2b .structure-action-list li::before {
 
   .b2b-simple-next > div {
     grid-template-columns: 1fr;
+  }
+
+  .b2b-simple-card {
+    min-height: 116px;
+  }
+
+  .b2b-simple-card-head {
+    display: grid;
+    gap: 4px;
+  }
+
+  .b2b-simple-card-head span {
+    max-width: none;
+  }
+
+  .b2b-simple-card strong {
+    text-align: left;
   }
 
   .b2b-detail-pack summary {

@@ -7352,8 +7352,8 @@ function b2bSimpleSummaryModel(
     ? brief.rate
     : (Number.isFinite(rankModel.rate) ? rankModel.rate : NaN);
   const reservationSampleNote = brief.salesSampleCount
-    ? `네이버 플레이스 예약 기준 ${fmtNumber(brief.salesSampleCount)}곳`
-    : "네이버 플레이스 예약 기준 대기";
+    ? `예약율 산출 표본 (네이버 플레이스 기준) ${fmtNumber(brief.salesSampleCount)}곳`
+    : "예약율 산출 표본 (네이버 플레이스 기준) 대기";
   const revenueMeter = revenueReady
     ? Math.max(18, Math.min(100, Math.round((revenueModel.revenueRows.length / Math.max(1, rankModel.rows.length || brief.itemCount)) * 100)))
     : 0;
@@ -7371,8 +7371,9 @@ function b2bSimpleSummaryModel(
       tone: hotCount ? "hot" : gapCount ? "strong" : "neutral",
       label: "경쟁지표",
       value: `${fmtNumber(competitionScore)}점`,
-      note: `${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교 · 지정 검색범위`,
-      barValue: competitionScore
+      note: `지정 검색범위 ${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
+      barValue: competitionScore,
+      meterLabel: `${fmtNumber(competitionScore)}점`
     },
     {
       tone: Number.isFinite(actualReservationRate) && actualReservationRate >= B2B_HIGH_RESERVATION_RATE
@@ -7383,21 +7384,24 @@ function b2bSimpleSummaryModel(
       label: "실제 예약 지표",
       value: Number.isFinite(actualReservationRate) ? fmtRate(actualReservationRate) : "확인필요",
       note: reservationSampleNote,
-      barValue: Number.isFinite(actualReservationRate) ? Math.round(actualReservationRate * 100) : 0
+      barValue: Number.isFinite(actualReservationRate) ? Math.round(actualReservationRate * 100) : 0,
+      meterLabel: Number.isFinite(actualReservationRate) ? fmtRate(actualReservationRate) : "대기"
     },
     {
       tone: revenueReady ? "strong" : "watch",
       label: "예상 평균 매출",
       value: revenueModel.averageRevenue ? fmtWon(revenueModel.averageRevenue) : fmtWon(brief.averageRevenue),
       note: Number.isFinite(priceCoverage) ? `${revenueSampleText} · 가격 ${fmtRate(priceCoverage)}` : revenueSampleText,
-      barValue: revenueMeter
+      barValue: revenueMeter,
+      meterLabel: revenueReady ? `표본 ${fmtNumber(revenueModel.revenueRows.length)}곳` : "대기"
     },
     {
       tone: nextDemand.tone || (trend.reason ? "watch" : trend.hasSeries ? "good" : "neutral"),
       label: "다음달 예상 검색량",
       value: nextDemand.value,
       note: nextDemand.note,
-      barValue: searchMeter
+      barValue: searchMeter,
+      meterLabel: Number.isFinite(nextDemand.change) ? formatSignedRate(nextDemand.change) : "예측"
     }
   ];
   const actions = [
@@ -7442,10 +7446,12 @@ function renderB2BSimpleSummary(brief = b2bMarketBriefModel(), model = b2bSimple
       <div class="b2b-simple-grid">
         ${model.cards.map((card) => `
           <article class="b2b-simple-card ${escapeHtml(card.tone)}">
-            <span>${escapeHtml(card.label)}</span>
-            <strong>${escapeHtml(card.value)}</strong>
+            <div class="b2b-simple-card-head">
+              <span>${escapeHtml(card.label)}</span>
+              <strong>${escapeHtml(card.value)}</strong>
+            </div>
             <small>${escapeHtml(card.note)}</small>
-            ${Number.isFinite(Number(card.barValue)) ? `<div class="b2b-simple-meter" style="--meter:${Math.max(0, Math.min(100, Number(card.barValue)))}%"><i></i></div>` : ""}
+            ${Number.isFinite(Number(card.barValue)) ? `<div class="b2b-simple-meter" style="--meter:${Math.max(0, Math.min(100, Number(card.barValue)))}%"><i></i><em>${escapeHtml(card.meterLabel || `${Math.round(Number(card.barValue))}%`)}</em></div>` : ""}
           </article>
         `).join("")}
       </div>
@@ -7684,25 +7690,27 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const strategyModel = b2bStrategyBoardModel(brief, revenueModel);
   const correlationModel = b2bCompetitionSalesCorrelationModel(snapshotModel.rankModel);
   const simpleModel = b2bSimpleSummaryModel(brief, strategyModel, revenueModel, snapshotModel);
+  const rankRange = effectiveDetailRankRange(brief.run);
+  const rankRangeLabel = rankRange === "상세 생략" ? rankRange : `${rankRange}위`;
   return `
-    <section class="b2b-brief-card">
+    <section class="b2b-brief-card b2b-report-first">
       <div class="b2b-brief-head">
         <div>
-          <span class="report-badge ${escapeHtml(brief.decision.tone)}">지역 경쟁 리포트</span>
-          <h3>${escapeHtml(brief.keyword)} 경쟁 매출·노출 인사이트</h3>
-          <p>${escapeHtml(brief.decision.summary)}</p>
+          <span class="report-badge ${escapeHtml(brief.decision.tone)}">리포트 요약</span>
+          <h3>${escapeHtml(brief.keyword)} 경쟁 현황</h3>
+          <p>${escapeHtml("지정 검색범위 안의 경쟁지표, 실제 예약율, 예상 평균 매출, 다음달 예상 검색량만 먼저 보여줍니다.")}</p>
         </div>
         <div class="b2b-brief-score">
-          <span>경쟁 지표</span>
-          <strong>${fmtNumber(brief.score)}</strong>
-          <small>${escapeHtml(brief.range)}</small>
+          <span>분석 기준</span>
+          <strong>${fmtNumber(brief.score)}점</strong>
+          <small>${escapeHtml(`${brief.range} · ${rankRangeLabel}`)}</small>
         </div>
       </div>
       ${renderB2BSimpleSummary(brief, simpleModel)}
       <details class="b2b-detail-pack">
         <summary>
-          <span>상세 지표 보기</span>
-          <small>매출 표본, 노출 경쟁, 데이터 상태를 펼쳐서 확인</small>
+          <span>분석 근거 펼치기</span>
+          <small>매출 표본, 노출 경쟁, 데이터 상태는 필요할 때만 확인</small>
         </summary>
         <div class="b2b-detail-pack-body">
           <div class="b2b-brief-metrics">
