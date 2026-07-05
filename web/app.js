@@ -6973,6 +6973,134 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
   };
 }
 
+function b2bSimpleSummaryModel(
+  brief = b2bMarketBriefModel(),
+  strategyModel = b2bStrategyBoardModel(brief),
+  revenueModel = b2bRevenueBenchmarkModel(brief),
+  snapshotModel = b2bCompetitiveSnapshotModel(brief)
+) {
+  const decision = strategyModel.decision || brief.decision || {};
+  const rankModel = snapshotModel.rankModel || b2bRankBoardModel();
+  const trend = demandTrendSource();
+  const trendStats = demandTrendStats(trend);
+  const revenueReady = revenueModel.revenueRows.length > 0;
+  const priceCoverage = revenueModel.priceCoverage;
+  const revenueSampleText = revenueReady
+    ? `${fmtNumber(revenueModel.revenueRows.length)}개 매출 표본`
+    : "매출 표본 대기";
+  const confidenceText = Number.isFinite(priceCoverage)
+    ? fmtRate(priceCoverage)
+    : (Number.isFinite(brief.revenueCoverage) ? fmtRate(brief.revenueCoverage) : "확인 대기");
+  const trendValue = trend.reason
+    ? "추세 대기"
+    : trend.hasSeries
+      ? demandTrendLabel()
+      : "데이터랩 대기";
+  const trendNote = trend.reason
+    ? trend.reason
+    : trend.hasSeries && Number.isFinite(trendStats.recentChange)
+      ? `최근 3개월 ${formatSignedRate(trendStats.recentChange)}`
+      : "12개월 추세 표본 기준";
+  const hotCount = finiteNumber(rankModel.hotRows?.length, 0);
+  const gapCount = finiteNumber(rankModel.gapRows?.length, 0);
+  const detailCoverage = rankModel.rows.length ? rankModel.linkedRows.length / rankModel.rows.length : NaN;
+  const summaryByTone = {
+    hot: "수요와 매출 신호가 강합니다. 상위 경쟁업체의 가격대와 주말 판매 압력을 먼저 보세요.",
+    strong: "공략 가능한 경쟁권입니다. 노출 대비 판매 공백과 가격 차이를 먼저 확인하세요.",
+    watch: "권역 또는 표본 변수가 있습니다. 반경 경쟁권과 매출 표본을 보완해서 판단하세요.",
+    neutral: "현재는 관찰 구간입니다. 경쟁업체 표본을 더 쌓아 방향성을 확인하세요."
+  };
+  const cards = [
+    {
+      tone: revenueReady ? "strong" : "watch",
+      label: "예상 평균 매출",
+      value: revenueModel.averageRevenue ? fmtWon(revenueModel.averageRevenue) : fmtWon(brief.averageRevenue),
+      note: revenueSampleText
+    },
+    {
+      tone: hotCount ? "hot" : gapCount ? "strong" : "neutral",
+      label: "경쟁 강도",
+      value: hotCount ? `강수요 ${fmtNumber(hotCount)}곳` : `${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
+      note: gapCount ? `판매 공백 ${fmtNumber(gapCount)}곳` : "상위 노출 업체 기준"
+    },
+    {
+      tone: trend.reason ? "watch" : trend.hasSeries ? "good" : "neutral",
+      label: "향후 수요",
+      value: trendValue,
+      note: trendNote
+    },
+    {
+      tone: Number.isFinite(detailCoverage) && detailCoverage >= 0.55 ? "good" : "watch",
+      label: "데이터 신뢰",
+      value: confidenceText,
+      note: Number.isFinite(detailCoverage)
+        ? `상세 연결 ${fmtRate(detailCoverage)}`
+        : "가격·예약 연결 기준"
+    }
+  ];
+  const actions = [
+    {
+      tone: revenueReady ? "strong" : "watch",
+      label: "매출 기준 확인",
+      detail: revenueReady ? "평균 매출과 상위 업체 가격대를 비교" : "가격·수량 표본을 먼저 확인",
+      tab: "report"
+    },
+    {
+      tone: gapCount || hotCount ? "strong" : "neutral",
+      label: "노출 경쟁 확인",
+      detail: "1~5위 업체와 판매 공백을 확인",
+      tab: "rank"
+    },
+    {
+      tone: trend.hasSeries ? "good" : "watch",
+      label: "수요 흐름 확인",
+      detail: "피크 월과 최근 3개월 방향을 확인",
+      tab: "demand"
+    }
+  ];
+  return {
+    decision,
+    headline: decision.label || brief.decision.label || "경쟁 리포트",
+    summary: summaryByTone[decision.tone] || decision.summary || brief.decision.summary,
+    cards,
+    actions,
+    dataNote: `${brief.range} · ${fmtNumber(brief.itemCount)}개 경쟁업체 기준`
+  };
+}
+
+function renderB2BSimpleSummary(brief = b2bMarketBriefModel(), model = b2bSimpleSummaryModel(brief)) {
+  return `
+    <div class="b2b-simple-summary ${escapeHtml(model.decision.tone || "neutral")}">
+      <div class="b2b-simple-answer">
+        <span>먼저 볼 결론</span>
+        <strong>${escapeHtml(model.headline)}</strong>
+        <p>${escapeHtml(model.summary)}</p>
+        <small>${escapeHtml(model.dataNote)}</small>
+      </div>
+      <div class="b2b-simple-grid">
+        ${model.cards.map((card) => `
+          <article class="b2b-simple-card ${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="b2b-simple-next">
+        <strong>다음 확인</strong>
+        <div>
+          ${model.actions.map((action) => `
+            <button class="${escapeHtml(action.tone)}" type="button" data-drawer-tab="${escapeHtml(action.tab)}">
+              <span>${escapeHtml(action.label)}</span>
+              <small>${escapeHtml(action.detail)}</small>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderB2BStrategyBoard(brief = b2bMarketBriefModel(), model = b2bStrategyBoardModel(brief)) {
   return `
     <div class="b2b-strategy-board ${escapeHtml(model.decision.tone)}">
@@ -7192,6 +7320,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const snapshotModel = b2bCompetitiveSnapshotModel(brief);
   const revenueModel = b2bRevenueBenchmarkModel(brief);
   const strategyModel = b2bStrategyBoardModel(brief, revenueModel);
+  const simpleModel = b2bSimpleSummaryModel(brief, strategyModel, revenueModel, snapshotModel);
   return `
     <section class="b2b-brief-card">
       <div class="b2b-brief-head">
@@ -7206,45 +7335,54 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
           <small>${escapeHtml(brief.range)}</small>
         </div>
       </div>
-      <div class="b2b-brief-metrics">
-        <article><span>예상 평균 매출</span><strong>${fmtWon(brief.averageRevenue)}</strong><small>${escapeHtml(brief.revenueNote)}</small></article>
-        <article><span>경쟁업체</span><strong>${fmtNumber(brief.itemCount)}</strong><small>상위 노출 표본</small></article>
-        <article><span>객실 판매율</span><strong>${fmtRate(brief.rate)}</strong><small>${fmtNumber(brief.sold)}/${fmtNumber(brief.supply)} 객실</small></article>
-        <article><span>수요 전망</span><strong>${fmtNumber(brief.searchVolume)}</strong><small>${escapeHtml(regionLabel)} · ${escapeHtml(primary || "권역 확인")}</small></article>
-      </div>
-      ${renderB2BStrategyBoard(brief, strategyModel)}
-      ${renderB2BCompetitiveSnapshot(brief, snapshotModel)}
-      ${renderB2BRevenueBenchmark(brief, revenueModel)}
-      <div class="b2b-brief-grid">
-        <article class="b2b-insight-panel">
-          <div class="report-card-head">
-            <div>
-              <h3>경쟁 해석</h3>
-              <p>경쟁업체의 판매율, 잔여 객실, 상품 구성을 고객 관점으로 요약합니다.</p>
-            </div>
+      ${renderB2BSimpleSummary(brief, simpleModel)}
+      <details class="b2b-detail-pack">
+        <summary>
+          <span>상세 지표 보기</span>
+          <small>매출 표본, 노출 경쟁, 데이터 상태를 펼쳐서 확인</small>
+        </summary>
+        <div class="b2b-detail-pack-body">
+          <div class="b2b-brief-metrics">
+            <article><span>예상 평균 매출</span><strong>${fmtWon(brief.averageRevenue)}</strong><small>${escapeHtml(brief.revenueNote)}</small></article>
+            <article><span>경쟁업체</span><strong>${fmtNumber(brief.itemCount)}</strong><small>상위 노출 표본</small></article>
+            <article><span>객실 판매율</span><strong>${fmtRate(brief.rate)}</strong><small>${fmtNumber(brief.sold)}/${fmtNumber(brief.supply)} 객실</small></article>
+            <article><span>수요 전망</span><strong>${fmtNumber(brief.searchVolume)}</strong><small>${escapeHtml(regionLabel)} · ${escapeHtml(primary || "권역 확인")}</small></article>
           </div>
-          <div class="report-insight-list">
-            <div><b>판매 흐름</b><span>${Number.isFinite(brief.rate) ? `${fmtRate(brief.rate)} 판매` : "확인 필요"}</span></div>
-            <div><b>잔여 객실</b><span>${fmtNumber(brief.remainingSupply)}개 추정</span></div>
-            <div><b>상품 구성</b><span>${fmtNumber(brief.dayUseGapCount)}개 업체 데이유즈/캠프닉 미확인</span></div>
-            <div><b>채널 표본</b><span>${fmtNumber(brief.platformStats.otaCheckCount || 0)}개 업체 OTA 비교 기준</span></div>
+          ${renderB2BStrategyBoard(brief, strategyModel)}
+          ${renderB2BCompetitiveSnapshot(brief, snapshotModel)}
+          ${renderB2BRevenueBenchmark(brief, revenueModel)}
+          <div class="b2b-brief-grid">
+            <article class="b2b-insight-panel">
+              <div class="report-card-head">
+                <div>
+                  <h3>경쟁 해석</h3>
+                  <p>경쟁업체의 판매율, 잔여 객실, 상품 구성을 고객 관점으로 요약합니다.</p>
+                </div>
+              </div>
+              <div class="report-insight-list">
+                <div><b>판매 흐름</b><span>${Number.isFinite(brief.rate) ? `${fmtRate(brief.rate)} 판매` : "확인 필요"}</span></div>
+                <div><b>잔여 객실</b><span>${fmtNumber(brief.remainingSupply)}개 추정</span></div>
+                <div><b>상품 구성</b><span>${fmtNumber(brief.dayUseGapCount)}개 업체 데이유즈/캠프닉 미확인</span></div>
+                <div><b>채널 표본</b><span>${fmtNumber(brief.platformStats.otaCheckCount || 0)}개 업체 OTA 비교 기준</span></div>
+              </div>
+            </article>
+            <article class="b2b-insight-panel">
+              <div class="report-card-head">
+                <div>
+                  <h3>데이터 범위</h3>
+                  <p>경쟁 리포트에 사용한 예약, 매출, 채널 보조 신호입니다.</p>
+                </div>
+              </div>
+              <div class="report-insight-list">
+                ${overviewModel.dataStatus.map((row) => `
+                  <div><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.value)} · ${escapeHtml(row.note)}</span></div>
+                `).join("")}
+              </div>
+            </article>
           </div>
-        </article>
-        <article class="b2b-insight-panel">
-          <div class="report-card-head">
-            <div>
-              <h3>데이터 범위</h3>
-              <p>경쟁 리포트에 사용한 예약, 매출, 채널 보조 신호입니다.</p>
-            </div>
-          </div>
-          <div class="report-insight-list">
-            ${overviewModel.dataStatus.map((row) => `
-              <div><b>${escapeHtml(row.label)}</b><span>${escapeHtml(row.value)} · ${escapeHtml(row.note)}</span></div>
-            `).join("")}
-          </div>
-        </article>
-      </div>
-      ${renderB2BPublicOverview(brief, overviewModel)}
+          ${renderB2BPublicOverview(brief, overviewModel)}
+        </div>
+      </details>
     </section>
   `;
 }
@@ -7338,7 +7476,7 @@ function renderReport() {
 
     ${publicMode ? renderB2BMarketBrief(b2bBrief) : ""}
 
-    <section class="report-metric-grid" aria-label="보고서 핵심 지표">
+    <section class="report-metric-grid ${publicMode ? "b2b-legacy-detail" : ""}" aria-label="보고서 핵심 지표">
       <article>
         <span>객실 판매율</span>
         <strong>${fmtRate(rate)}</strong>
@@ -7361,7 +7499,7 @@ function renderReport() {
       </article>
     </section>
 
-    <section class="report-layout">
+    <section class="report-layout ${publicMode ? "b2b-legacy-detail" : ""}">
       <article class="report-card market">
         <div class="report-card-head">
           <div>
@@ -7433,7 +7571,7 @@ function renderReport() {
       </div>
     </section>`}
 
-    <section class="report-card report-region-preview">
+    <section class="report-card report-region-preview ${publicMode ? "b2b-legacy-detail" : ""}">
       <div class="report-card-head">
         <div>
           <h3>${publicMode ? "지역 경쟁 구조" : "지역 클러스터 요약"}</h3>
