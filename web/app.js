@@ -9027,6 +9027,257 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
   };
 }
 
+function keywordRecommendationLabel(value = "") {
+  return compactCrawlKeyword(value);
+}
+
+function keywordTrafficIndex() {
+  const map = new Map();
+  const put = (keyword, traffic = {}, source = "검색광고") => {
+    const label = keywordRecommendationLabel(keyword || traffic.relKeyword || traffic.keyword);
+    const key = compactSearchText(label);
+    if (!key) return;
+    const row = {
+      keyword: label,
+      relKeyword: traffic.relKeyword || label,
+      totalSearchVolume: finiteNumber(traffic.totalSearchVolume, 0),
+      monthlyPc: finiteNumber(traffic.monthlyPc, 0),
+      monthlyMobile: finiteNumber(traffic.monthlyMobile, 0),
+      combinedCtr: Number(traffic.combinedCtr),
+      competition: traffic.competition || "",
+      collectable: Boolean(traffic.collectable || traffic.totalSearchVolume),
+      source
+    };
+    const current = map.get(key);
+    if (!current || row.totalSearchVolume > current.totalSearchVolume) map.set(key, row);
+  };
+
+  const aggregate = demandTrafficAggregate();
+  put(activeKeyword(), {
+    ...aggregate,
+    relKeyword: aggregate.relKeyword || aggregate.keyword || activeKeyword(),
+    collectable: Boolean(aggregate.totalSearchVolume)
+  }, "기준 키워드");
+
+  (state.data?.regions || []).forEach((region) => {
+    const traffic = region.traffic || {};
+    put(region.trafficKeyword || region.region || region.name, traffic, "지역 검색량");
+    put(traffic.keyword, traffic, "지역 검색량");
+    put(traffic.relKeyword, traffic, "지역 검색량");
+    (traffic.relatedKeywords || []).forEach((row) => {
+      put(row.keyword || row.relKeyword, {
+        ...row,
+        collectable: true
+      }, "검색광고 관련");
+    });
+  });
+  return map;
+}
+
+function keywordRecommendationContext() {
+  const keyword = activeKeyword();
+  const match = locationCardForQuery(keyword);
+  const candidate = locationCandidateFromQuery(keyword);
+  const card = match?.card || null;
+  const group = match?.group ||
+    locationGroupForQuery(keyword) ||
+    (card ? (state.dictionary?.regionGroups || []).find((item) => (item.children || []).includes(card.regionKey)) : null);
+  const alias = match?.alias || dictionaryAliasForCard(card);
+  const groupCards = group ? locationGroupCards(group) : [];
+  const base = [
+    alias?.sigungu,
+    group?.sido,
+    candidate?.regionBase,
+    stripLocationBusinessWords(card?.searchKeyword || ""),
+    stripLocationBusinessWords(group?.searchKeyword || ""),
+    stripLocationBusinessWords(keyword)
+  ].map((value) => String(value || "").trim()).find(Boolean) || "지역";
+  const clusters = card
+    ? locationClusterCodes(card).map(locationClusterMeta)
+    : groupCards.flatMap((item) => locationClusterCodes(item).map(locationClusterMeta));
+  const structure = demandStructureSource();
+  const contextText = [
+    keyword,
+    base,
+    group?.strategy,
+    group?.interpretation,
+    group?.salesFocus,
+    card?.recommendedProduct,
+    card?.interpretation,
+    ...(clusters || []).map((cluster) => `${cluster.name || ""} ${cluster.product || ""} ${cluster.channel || ""}`),
+    ...(structure?.topSegments || []).map((segment) => `${segment.name || ""} ${segment.group || ""}`),
+    ...(structure?.contentKeywords || [])
+  ].filter(Boolean).join(" ");
+  return {
+    keyword,
+    base: keywordRecommendationLabel(base),
+    card,
+    group,
+    alias,
+    groupCards,
+    clusters,
+    structure,
+    contextText
+  };
+}
+
+function keywordRecommendationPurpose(keyword = "", category = "", volume = 0) {
+  if (category === "기준") return "현재 리포트 기준 키워드";
+  if (category === "실측 관련") return "검색광고 관련 키워드로 다음 수집 후보";
+  if (category === "하위지역") return "광역 검색에서 분리 수집할 지역 후보";
+  if (category === "업종") return "글램핑 외 유사 업종 수요 확인";
+  if (category === "상품") return "카라반/오토캠핑 등 상품 구성 확인";
+  if (category === "시설") return "시설형 검색 의도와 상품명 점검";
+  if (category === "고객의도") return "가족·커플·단체 등 고객군별 콘텐츠 점검";
+  if (category === "관광") return "관광 앵커 기반 목적 방문 수요 확인";
+  return volume ? "검색수요 실측 후보" : "추가 수집 후보";
+}
+
+function b2bKeywordRecommendationModel(traffic = demandTrafficAggregate(), playbook = b2bDemandPlaybookModel(traffic)) {
+  const context = keywordRecommendationContext();
+  const trafficIndex = keywordTrafficIndex();
+  const seen = new Set();
+  const rows = [];
+  const trendChange = Number(playbook?.nextDemand?.change);
+  const trendBoost = Number.isFinite(trendChange)
+    ? trendChange >= 0.12 ? 4 : trendChange <= -0.12 ? -2 : 1
+    : 0;
+  const add = (keyword, category, source, baseScore = 60, explicitReason = "") => {
+    const label = keywordRecommendationLabel(keyword);
+    const key = compactSearchText(label);
+    if (!key || seen.has(key) || label.length < 3) return;
+    seen.add(key);
+    const trafficRow = trafficIndex.get(key) || null;
+    const volume = finiteNumber(trafficRow?.totalSearchVolume, 0);
+    const volumeBoost = volume >= 30000 ? 14 : volume >= 10000 ? 10 : volume >= 3000 ? 7 : volume > 0 ? 4 : 0;
+    const score = Math.max(35, Math.min(99, Math.round(baseScore + volumeBoost + trendBoost)));
+    const purpose = keywordRecommendationPurpose(label, category, volume);
+    rows.push({
+      keyword: label,
+      key,
+      category,
+      source,
+      purpose,
+      reason: explicitReason || (trafficRow?.source ? `${trafficRow.source} 기준` : "현재 지역/수요 구조 기준"),
+      score,
+      totalSearchVolume: volume,
+      ctr: Number(trafficRow?.combinedCtr),
+      competition: trafficRow?.competition || "",
+      collectable: Boolean(trafficRow?.collectable),
+      tone: score >= 82 ? "strong" : score >= 68 ? "good" : volume ? "neutral" : "watch"
+    });
+  };
+
+  const base = context.base || stripLocationBusinessWords(context.keyword) || "지역";
+  add(context.keyword, "기준", "현재 검색", 88, "현재 리포트의 노출·예약·수요 기준");
+  add(`${base}글램핑`, "기준", "지역명 + 글램핑", 86, "지역명과 업종을 붙인 기본 비교 키워드");
+  ["캠핑장", "카라반", "오토캠핑장"].forEach((suffix, index) => {
+    add(`${base}${suffix}`, index === 1 ? "상품" : "업종", "지역명 + 업종/상품", 70 - index * 2);
+  });
+
+  (context.group?.plannedKeywords || []).forEach((keyword, index) => {
+    add(keyword, "하위지역", "권역 plannedKeywords", 76 - Math.min(index, 4), `${context.group?.sido || base} 권역에서 분리 수집할 후보`);
+  });
+  (context.groupCards || []).forEach((card, index) => {
+    add(card.searchKeyword, "하위지역", "지역카드 하위지역", 74 - Math.min(index, 4), "지역카드가 연결된 하위 경쟁권");
+  });
+
+  [...trafficIndex.values()]
+    .filter((row) => {
+      const keyword = row.keyword || row.relKeyword || "";
+      const compact = compactSearchText(keyword);
+      if (!keyword || seen.has(compact)) return false;
+      if (!/(글램핑|캠핑|카라반|펜션|캠핑장|오토캠핑)/.test(keyword)) return false;
+      const baseCompact = compactSearchText(base);
+      return !baseCompact || compact.includes(baseCompact) || compactSearchText(context.keyword).includes(baseCompact);
+    })
+    .sort((a, b) => finiteNumber(b.totalSearchVolume, 0) - finiteNumber(a.totalSearchVolume, 0))
+    .slice(0, 6)
+    .forEach((row) => {
+      add(row.keyword || row.relKeyword, "실측 관련", "검색광고 관련 키워드", 78, "검색광고 API 관련 키워드 후보");
+    });
+
+  const text = context.contextText || "";
+  if (/바다|해안|해변|오션|섬|서해|남해/.test(text)) {
+    add(`${base}바다글램핑`, "관광", "관광 앵커", 66);
+    add(`${base}오션뷰글램핑`, "시설", "관광 앵커", 64);
+  }
+  if (/계곡|산|숲|자연|호수|강|둘레|휴양림/.test(text)) {
+    add(`${base}계곡글램핑`, "관광", "관광 앵커", 66);
+    add(`${base}숲속글램핑`, "시설", "자연 체류", 63);
+  }
+  if (/수도권|서울|근교/.test(text)) {
+    add("서울근교글램핑", "관광", "생활권 확장", 69);
+  }
+
+  ["수영장", "개별바베큐", "애견동반", "독채"].forEach((intent, index) => {
+    add(`${base}${intent}글램핑`, "시설", "시설 의도", 62 - index);
+  });
+  ["가족", "커플", "감성", "단체"].forEach((intent, index) => {
+    const boost = text.includes(intent) ? 6 : 0;
+    add(`${base}${intent}글램핑`, "고객의도", "고객 의도", 61 - index + boost);
+  });
+
+  rows.sort((a, b) => b.score - a.score || b.totalSearchVolume - a.totalSearchVolume || a.keyword.localeCompare(b.keyword, "ko"));
+  const recommended = rows.slice(0, 12);
+  const measuredCount = recommended.filter((row) => row.totalSearchVolume > 0).length;
+  const expansionCount = recommended.filter((row) => !row.totalSearchVolume).length;
+  return {
+    context,
+    rows: recommended,
+    measuredCount,
+    expansionCount,
+    base,
+    summary: measuredCount
+      ? `실측 검색량 ${fmtNumber(measuredCount)}개와 확장 후보 ${fmtNumber(expansionCount)}개`
+      : `확장 후보 ${fmtNumber(expansionCount)}개 · 다음 수집에서 검색량 확인`
+  };
+}
+
+function renderB2BKeywordRecommendations(traffic = demandTrafficAggregate(), playbook = b2bDemandPlaybookModel(traffic)) {
+  if (isAdminRole()) return "";
+  const model = b2bKeywordRecommendationModel(traffic, playbook);
+  const focus = model.rows.slice(0, 3);
+  const tail = model.rows.slice(3);
+  return `
+    <div class="b2b-keyword-recommend">
+      <div class="b2b-keyword-head">
+        <div>
+          <span>Keyword Expansion</span>
+          <strong>추천 검색 키워드</strong>
+          <small>${escapeHtml(`${activeKeyword()} 기준 · ${model.summary}`)}</small>
+        </div>
+        <em>${escapeHtml(model.base)}</em>
+      </div>
+      ${focus.length ? `
+        <div class="b2b-keyword-focus">
+          ${focus.map((row) => `
+            <article class="${escapeHtml(row.tone)}">
+              <span>${escapeHtml(row.category)}</span>
+              <strong>${escapeHtml(row.keyword)}</strong>
+              <small>${escapeHtml(row.totalSearchVolume ? `월검색 ${fmtNumber(row.totalSearchVolume)} · ${row.purpose}` : row.purpose)}</small>
+              <button type="button" data-b2b-keyword-apply="${escapeHtml(row.keyword)}">검색어 적용</button>
+            </article>
+          `).join("")}
+        </div>
+      ` : `<div class="b2b-demand-empty-line">추천 키워드 생성을 위한 지역 기준이 필요합니다.</div>`}
+      ${tail.length ? `
+        <div class="b2b-keyword-list">
+          ${tail.map((row) => `
+            <button type="button" class="${escapeHtml(row.tone)}" data-b2b-keyword-apply="${escapeHtml(row.keyword)}">
+              <span>${escapeHtml(row.category)}</span>
+              <strong>${escapeHtml(row.keyword)}</strong>
+              <em>${row.totalSearchVolume ? `${fmtNumber(row.totalSearchVolume)}회` : "수집후 확인"}</em>
+              <small>${escapeHtml(row.reason)}</small>
+            </button>
+          `).join("")}
+        </div>
+      ` : ""}
+      <p>추천 키워드는 검색광고 관련 키워드, 지역카드, 권역 후보, 시설·고객 의도 기준입니다. 적용 후 검색 실행 시 새 경쟁 리포트를 수집합니다.</p>
+    </div>
+  `;
+}
+
 function renderB2BDemandOutlook(traffic = demandTrafficAggregate(), playbook = b2bDemandPlaybookModel(traffic)) {
   if (isAdminRole()) return "";
   const model = b2bDemandOutlookModel(traffic, playbook);
@@ -9088,6 +9339,7 @@ function renderB2BDemandOutlook(traffic = demandTrafficAggregate(), playbook = b
           `).join("")}
         </article>
       </div>
+      ${renderB2BKeywordRecommendations(traffic, playbook)}
     </div>
   `;
 }
@@ -16650,6 +16902,15 @@ function bindEvents() {
         setStatus("리포트 검색 실패");
         if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = error.message;
       });
+      return;
+    }
+    const b2bKeywordApply = event.target.closest("[data-b2b-keyword-apply]");
+    if (b2bKeywordApply) {
+      state.b2bSearchQuery = b2bKeywordApply.dataset.b2bKeywordApply || "";
+      if (els.b2bSearchInput) els.b2bSearchInput.value = state.b2bSearchQuery;
+      renderB2BSearchPanel();
+      els.b2bSearchPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색어를 적용했습니다. 범위를 확인한 뒤 검색 실행을 누르세요.`;
       return;
     }
     const duplicateAction = event.target.closest("[data-company-duplicate-action]");

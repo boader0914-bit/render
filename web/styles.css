@@ -12123,6 +12123,146 @@ a.platform-row:hover {
   background: #3182f6;
 }
 
+.b2b-keyword-recommend {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.b2b-keyword-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.b2b-keyword-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-keyword-head span,
+.b2b-keyword-focus span,
+.b2b-keyword-focus small,
+.b2b-keyword-list span,
+.b2b-keyword-list small,
+.b2b-keyword-recommend p {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-keyword-head strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+}
+
+.b2b-keyword-head em {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #175cd3;
+  padding: 0 11px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.b2b-keyword-focus {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-keyword-focus article,
+.b2b-keyword-list button {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #ffffff;
+  padding: 10px;
+  text-align: left;
+}
+
+.b2b-keyword-focus article.strong,
+.b2b-keyword-list button.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.b2b-keyword-focus article.good,
+.b2b-keyword-list button.good {
+  border-color: #c7d7fe;
+  background: #f8fbff;
+}
+
+.b2b-keyword-focus article.watch,
+.b2b-keyword-list button.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-keyword-focus strong,
+.b2b-keyword-list strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.b2b-keyword-focus button {
+  min-height: 34px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eef5ff;
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.b2b-keyword-list {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-keyword-list button {
+  cursor: pointer;
+}
+
+.b2b-keyword-list em {
+  color: #175cd3;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+}
+
+.b2b-keyword-recommend p {
+  margin: 0;
+}
+
 .structure-empty-card,
 .structure-hero,
 .structure-card,
@@ -13718,6 +13858,7 @@ body.role-b2b .region-card,
 body.role-b2b .b2b-demand-playbook,
 body.role-b2b .b2b-demand-outlook,
 body.role-b2b .b2b-demand-month-flow,
+body.role-b2b .b2b-keyword-recommend,
 body.role-b2b .demand-hero-card,
 body.role-b2b .demand-chart,
 body.role-b2b .demand-insight-card,
@@ -13811,6 +13952,9 @@ body.role-b2b .b2b-demand-season-strip,
 body.role-b2b .b2b-demand-season-strip span,
 body.role-b2b .b2b-demand-action-board div,
 body.role-b2b .b2b-demand-competitors button,
+body.role-b2b .b2b-keyword-focus article,
+body.role-b2b .b2b-keyword-list button,
+body.role-b2b .b2b-keyword-head em,
 body.role-b2b .demand-signal-card,
 body.role-b2b .demand-rule-box,
 body.role-b2b .demand-pill-row span,
@@ -13967,6 +14111,9 @@ body.role-b2b .b2b-demand-month-flow article strong,
 body.role-b2b .b2b-demand-action-board strong,
 body.role-b2b .b2b-demand-competitors > div strong,
 body.role-b2b .b2b-demand-competitors button strong,
+body.role-b2b .b2b-keyword-head strong,
+body.role-b2b .b2b-keyword-focus strong,
+body.role-b2b .b2b-keyword-list strong,
 body.role-b2b .b2b-map-board-head strong,
 body.role-b2b .b2b-map-board-grid strong,
 body.role-b2b .b2b-map-action-board strong,
@@ -14083,8 +14230,26 @@ body.role-b2b .b2b-demand-action-board small,
 body.role-b2b .b2b-demand-competitors small,
 body.role-b2b .b2b-demand-competitors button small,
 body.role-b2b .b2b-demand-season-strip b,
-body.role-b2b .b2b-demand-season-strip small {
+body.role-b2b .b2b-demand-season-strip small,
+body.role-b2b .b2b-keyword-head span,
+body.role-b2b .b2b-keyword-head small,
+body.role-b2b .b2b-keyword-focus span,
+body.role-b2b .b2b-keyword-focus small,
+body.role-b2b .b2b-keyword-list span,
+body.role-b2b .b2b-keyword-list small,
+body.role-b2b .b2b-keyword-recommend p {
   color: var(--muted);
+}
+
+body.role-b2b .b2b-keyword-head em,
+body.role-b2b .b2b-keyword-list em {
+  color: #b9d7ff;
+}
+
+body.role-b2b .b2b-keyword-focus button {
+  border-color: rgba(106, 168, 255, .28);
+  background: rgba(106, 168, 255, .14);
+  color: #d8e9ff;
 }
 
 body.role-b2b .demand-signal-card span,
@@ -16280,6 +16445,8 @@ body.role-b2b .structure-action-list li::before {
   .b2b-map-score-parts,
   .b2b-demand-grid,
   .b2b-demand-outlook-grid,
+  .b2b-keyword-focus,
+  .b2b-keyword-list,
   .region-card-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -16320,6 +16487,8 @@ body.role-b2b .structure-action-list li::before {
   .b2b-map-score-parts,
   .b2b-demand-grid,
   .b2b-demand-outlook-grid,
+  .b2b-keyword-focus,
+  .b2b-keyword-list,
   .region-card-metrics {
     grid-template-columns: 1fr;
   }
@@ -16328,6 +16497,10 @@ body.role-b2b .structure-action-list li::before {
   .b2b-map-cluster-card-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .b2b-keyword-head {
+    grid-template-columns: 1fr;
   }
 
   .b2b-demand-season-strip {

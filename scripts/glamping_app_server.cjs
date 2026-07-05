@@ -3104,7 +3104,39 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function normalizeSearchAdRow(keyword, row, status = 200) {
+function normalizeSearchAdRelatedRows(rows = [], baseKeyword = "") {
+  const baseCompact = compactKeyword(baseKeyword).toLowerCase();
+  const seen = new Set();
+  return rows
+    .map((row) => {
+      const keyword = compactKeyword(row?.relKeyword || "");
+      const compact = compactKeyword(keyword).toLowerCase();
+      if (!keyword || seen.has(compact)) return null;
+      seen.add(compact);
+      const monthlyPc = metricNumber(row.monthlyPcQcCnt);
+      const monthlyMobile = metricNumber(row.monthlyMobileQcCnt);
+      const totalSearchVolume = monthlyPc + monthlyMobile;
+      const monthlyPcClicks = metricNumber(row.monthlyAvePcClkCnt);
+      const monthlyMobileClicks = metricNumber(row.monthlyAveMobileClkCnt);
+      const totalClicks = monthlyPcClicks + monthlyMobileClicks;
+      return {
+        keyword,
+        relKeyword: row.relKeyword || keyword,
+        monthlyPc,
+        monthlyMobile,
+        totalSearchVolume,
+        totalClicks,
+        combinedCtr: totalSearchVolume ? Number(((totalClicks / totalSearchVolume) * 100).toFixed(2)) : null,
+        competition: row.compIdx || "확인불가",
+        exact: Boolean(baseCompact && compact === baseCompact)
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(b.exact) - Number(a.exact) || b.totalSearchVolume - a.totalSearchVolume)
+    .slice(0, 20);
+}
+
+function normalizeSearchAdRow(keyword, row, status = 200, relatedRows = []) {
   if (!row) {
     return {
       keyword,
@@ -3135,7 +3167,8 @@ function normalizeSearchAdRow(keyword, row, status = 200) {
     pcCtr: metricNumber(row.monthlyAvePcCtr),
     mobileCtr: metricNumber(row.monthlyAveMobileCtr),
     combinedCtr: totalSearchVolume ? Number(((totalClicks / totalSearchVolume) * 100).toFixed(2)) : null,
-    competition: row.compIdx || "확인불가"
+    competition: row.compIdx || "확인불가",
+    relatedKeywords: normalizeSearchAdRelatedRows(relatedRows, keyword)
   };
 }
 
@@ -3181,7 +3214,7 @@ async function collectSearchAdMetric(keyword, keys, attempt = 0) {
   const list = Array.isArray(result.data?.keywordList) ? result.data.keywordList : [];
   const exact = list.find((row) => compactKeyword(row.relKeyword) === compactKeyword(keyword));
   const close = exact || list[0] || null;
-  return normalizeSearchAdRow(keyword, close, result.status);
+  return normalizeSearchAdRow(keyword, close, result.status, list);
 }
 
 function normalizeDatalabTrend(keyword, result, range) {
@@ -7745,8 +7778,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-coupon-collection"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-coupon-collection"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-keyword-recommend"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-keyword-recommend"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
