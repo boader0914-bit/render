@@ -14122,6 +14122,35 @@ body.role-b2b .demand-region-head {
   color: #b7c4d7;
 }
 
+body.role-b2b .structure-summary h3,
+body.role-b2b .structure-metric-grid strong,
+body.role-b2b .structure-card strong,
+body.role-b2b .structure-action-list li,
+body.role-b2b .segment-list strong,
+body.role-b2b .demand-signal-card strong,
+body.role-b2b .demand-rule-box strong {
+  color: #f8fbff;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .24);
+}
+
+body.role-b2b .structure-summary p:not(.eyebrow),
+body.role-b2b .structure-metric-grid small,
+body.role-b2b .structure-card p,
+body.role-b2b .segment-list span,
+body.role-b2b .segment-list small,
+body.role-b2b .demand-signal-card small,
+body.role-b2b .demand-rule-box p {
+  color: #d7deeb;
+}
+
+body.role-b2b .structure-chip-row span,
+body.role-b2b .risk-chip-row span,
+body.role-b2b .demand-pill-row span {
+  border-color: rgba(220, 236, 255, .26);
+  background: rgba(220, 236, 255, .11);
+  color: #dcecff;
+}
+
 @media (min-width: 860px) {
   .app-main {
     display: grid;
