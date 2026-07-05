@@ -7998,6 +7998,11 @@ function trendIndexLabel(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, "");
 }
 
+function trendAxisLabel(entry = {}) {
+  const month = Number(entry.month) || trendMonthNumber(entry.label || entry.rawLabel || "");
+  return Number.isFinite(month) ? `${month}월` : String(entry.label || "").replace(/^\d{4}[.-]/, "");
+}
+
 function trendLineChart(series, trend) {
   const width = 640;
   const height = 220;
@@ -8049,7 +8054,7 @@ function trendLineChart(series, trend) {
         </g>
       </svg>
       <div class="trend-line-axis">
-        ${points.map((point) => `<span>${escapeHtml(point.label)}</span>`).join("")}
+        ${points.map((point) => `<span title="${escapeHtml(point.periodLabel || point.label)}">${escapeHtml(trendAxisLabel(point))}</span>`).join("")}
       </div>
     </div>
   `;
@@ -8797,7 +8802,7 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
       const isRecent = stats.last && entry.index === stats.last.index;
       const tone = isPeak ? "peak" : isRecent ? "recent" : Number.isFinite(value) && value >= 80 ? "high" : "";
       return {
-        label: entry.label,
+        label: trendAxisLabel(entry),
         value,
         height: Number.isFinite(value) ? Math.max(5, Math.min(100, value)) : 0,
         tone,
@@ -8837,7 +8842,7 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
       rate: Number.isFinite(row.rate) ? fmtRate(row.rate) : "판매율 대기",
       revenue: revenue ? fmtWon(revenue) : "매출 표본 대기",
       note: row.linked
-        ? `잔여 ${fmtNumber(row.remaining)}실 · ${row.insight?.dayUseKnown ? "숙박+데이" : "숙박 중심"}`
+        ? `예약율 ${Number.isFinite(row.rate) ? fmtRate(row.rate) : "대기"} · ${row.insight?.dayUseKnown ? "숙박+데이" : "숙박 중심"}`
         : "예약 상세 표본 대기"
     };
   });

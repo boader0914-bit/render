@@ -12829,6 +12829,8 @@ a.platform-row:hover {
   font-weight: 950;
   font-variant-numeric: tabular-nums;
   text-align: center;
+  overflow: hidden;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -12885,6 +12887,8 @@ a.platform-row:hover {
   font-size: 11px;
   font-weight: 850;
   text-align: center;
+  overflow: hidden;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -15421,7 +15425,8 @@ body.role-b2b .structure-action-list li::before {
 
   .trend-line-values span,
   .trend-line-axis span {
-    font-size: 10px;
+    font-size: 9px;
+    letter-spacing: 0;
   }
 
   .demand-region-head {
