@@ -14228,6 +14228,39 @@ body.role-b2b .demand-pill-row span {
   color: #dcecff;
 }
 
+body.role-b2b .segment-list div {
+  border-color: rgba(220, 236, 255, .20);
+  background:
+    linear-gradient(135deg, rgba(106, 168, 255, .08), rgba(52, 211, 153, .04)),
+    #101720;
+}
+
+body.role-b2b .segment-list strong,
+body.role-b2b .structure-action-list li {
+  color: #f8fbff;
+  text-shadow: none;
+}
+
+body.role-b2b .segment-list span,
+body.role-b2b .structure-action-list li {
+  font-weight: 920;
+}
+
+body.role-b2b .segment-list span {
+  color: #cfe4ff;
+}
+
+body.role-b2b .segment-list small,
+body.role-b2b .structure-card.risk p {
+  color: #d7deeb;
+}
+
+body.role-b2b .structure-action-list li::before {
+  background: #dcecff;
+  color: #174c8f;
+  box-shadow: 0 8px 18px rgba(106, 168, 255, .18);
+}
+
 @media (min-width: 860px) {
   .app-main {
     display: grid;
