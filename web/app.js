@@ -6995,8 +6995,8 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
   };
 }
 
-function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
-  const items = state.data?.availability?.items || [];
+function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel(), data = state.data || {}) {
+  const items = data.availability?.items || [];
   const rows = items.map((item, index) => {
     const profile = preciseRevenueProfile(item);
     const revenue = finiteNumber(profile.totalAdjustedRevenue, 0) || finiteNumber(profile.totalRevenue, 0);
@@ -7825,12 +7825,12 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
   `;
 }
 
-function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyLodgeBenchmarkModel(brief)) {
+function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyLodgeBenchmarkModel(brief), revenueModelOverride = null) {
   const draft = model.draft || {};
   const name = String(draft.lodgingName || "").trim();
   const collecting = Boolean(state.b2bMyLodgeCollecting);
   const collectStatus = state.b2bMyLodgeCollectStatus || draft.collectionStatus || "";
-  const revenueModel = b2bRevenueBenchmarkModel(brief);
+  const revenueModel = revenueModelOverride || b2bRevenueBenchmarkModel(brief);
   const interestLodges = readB2BInterestLodges();
   const canRegisterMore = interestLodges.length < B2B_INTEREST_LODGE_LIMIT;
   const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
@@ -8812,13 +8812,38 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   `;
 }
 
+function renderB2BPreSearchMyLodge() {
+  const emptyData = {
+    run: state.data?.run || {},
+    availability: { items: [], stats: {} },
+    regions: []
+  };
+  const brief = b2bMarketBriefModel(emptyData);
+  const revenueModel = b2bRevenueBenchmarkModel(brief, emptyData);
+  const myLodgeModel = b2bMyLodgeBenchmarkModel(brief, revenueModel);
+  return `
+    <section class="b2b-brief-card b2b-report-first">
+      <div class="report-card-head">
+        <div>
+          <h3>관심숙소 등록</h3>
+          <p>검색 전에도 관심숙소를 먼저 등록할 수 있습니다. 이후 지역을 검색하면 등록한 숙소를 지역 평균·상위권·하위권 매출 표본과 비교합니다.</p>
+        </div>
+        <span>계정 저장</span>
+      </div>
+      ${renderB2BMyLodgeBenchmark(brief, myLodgeModel, revenueModel)}
+    </section>
+  `;
+}
+
 function renderReport() {
   if (!els.reportBody) return;
   const data = state.data || {};
   const run = data.run || {};
   const items = data.availability?.items || [];
   if (!items.length) {
-    els.reportBody.innerHTML = `<div class="empty">요약할 수집 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`;
+    els.reportBody.innerHTML = isAdminRole()
+      ? `<div class="empty">요약할 수집 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요.</div>`
+      : renderB2BPreSearchMyLodge();
     return;
   }
 
@@ -17683,7 +17708,11 @@ async function loadRuns(selectLatest = false) {
   if (!state.runs.length) {
     renderB2BSearchPanel();
     const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "검색어를 입력하면 새 경쟁 리포트를 수집합니다.";
-    if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
+    if (els.reportBody) {
+      els.reportBody.innerHTML = isAdminRole()
+        ? `<div class="empty">${escapeHtml(emptyText)}</div>`
+        : renderB2BPreSearchMyLodge();
+    }
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
     if (els.decisionQueueCount) els.decisionQueueCount.textContent = "0 대기";
     if (els.decisionQueueList) els.decisionQueueList.innerHTML = `<div class="empty">실행 결과가 없습니다. 수집 후 판단 큐가 생성됩니다.</div>`;
