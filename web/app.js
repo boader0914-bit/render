@@ -7172,6 +7172,14 @@ function b2bMyLodgeStoredObject(key = "") {
   }
 }
 
+function b2bMyLodgePersistentStoreValue(value = {}) {
+  if (!value || typeof value !== "object" || !b2bMyLodgeHasStructuredShape(value)) return {};
+  return {
+    ...value,
+    draft: {}
+  };
+}
+
 function b2bMyLodgeLegacyStorageKeys() {
   if (typeof localStorage === "undefined") return [];
   const account = b2bMyLodgeAccountToken();
@@ -7184,6 +7192,17 @@ function b2bMyLodgeLegacyStorageKeys() {
   } catch {
     return [];
   }
+}
+
+function clearB2BMyLodgeLegacyStorageKeys(keys = b2bMyLodgeLegacyStorageKeys()) {
+  if (typeof localStorage === "undefined") return;
+  keys.forEach((key) => {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore browser storage failures; the current account key remains authoritative.
+    }
+  });
 }
 
 function b2bMyLodgeMergeStoredValues(primary = {}, legacyValues = []) {
@@ -7216,14 +7235,17 @@ function readB2BMyLodgeStoredValue() {
   const memoryDraft = state.b2bMyLodgeDraft?.key === key ? state.b2bMyLodgeDraft.values : null;
   if (typeof localStorage === "undefined") return memoryDraft || {};
   try {
-    const primary = b2bMyLodgeStoredObject(key);
-    const legacyValues = b2bMyLodgeLegacyStorageKeys()
-      .map((legacyKey) => b2bMyLodgeStoredObject(legacyKey))
+    if (memoryDraft) return memoryDraft;
+    const primary = b2bMyLodgePersistentStoreValue(b2bMyLodgeStoredObject(key));
+    const legacyKeys = b2bMyLodgeLegacyStorageKeys();
+    const legacyValues = legacyKeys
+      .map((legacyKey) => b2bMyLodgePersistentStoreValue(b2bMyLodgeStoredObject(legacyKey)))
       .filter((value) => value && Object.keys(value).length);
-    if (!legacyValues.length) return Object.keys(primary).length ? primary : (memoryDraft || {});
-    const merged = b2bMyLodgeMergeStoredValues(Object.keys(primary).length ? primary : (memoryDraft || {}), legacyValues);
-    localStorage.setItem(key, JSON.stringify(merged));
-    return merged;
+    if (!legacyValues.length) return Object.keys(primary).length ? primary : {};
+    const merged = b2bMyLodgeMergeStoredValues(Object.keys(primary).length ? primary : {}, legacyValues);
+    localStorage.setItem(key, JSON.stringify({ ...merged, draft: {} }));
+    clearB2BMyLodgeLegacyStorageKeys(legacyKeys);
+    return { ...merged, draft: {} };
   } catch {
     return memoryDraft || {};
   }
@@ -7403,28 +7425,48 @@ function b2bNormalizeInterestLodge(lodge = {}) {
     collectedAt: lodge.collectedAt || "",
     collectionRunId: lodge.collectionRunId || "",
     collectionSource: lodge.collectionSource || "",
-    collectionStatus: lodge.collectionStatus || ""
+    collectionStatus: lodge.collectionStatus || "",
+    registeredAt: lodge.registeredAt || ""
   };
+}
+
+function b2bMyLodgeHasStructuredShape(value = {}) {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    (Array.isArray(value.interestLodges) || Object.prototype.hasOwnProperty.call(value, "draft"))
+  );
+}
+
+function b2bNormalizeMyLodgeDraft(draft = {}) {
+  if (!b2bMyLodgeDraftHasInput(draft)) return {};
+  const normalized = b2bNormalizeInterestLodge(draft);
+  return { ...normalized, id: "", registeredAt: "" };
+}
+
+function b2bInterestLodgeWasExplicitlyRegistered(lodge = {}) {
+  const id = String(lodge.id || "").trim();
+  return Boolean(lodge.registeredAt || /^interest-[a-z0-9]+-[a-z0-9]{6}$/i.test(id));
 }
 
 function b2bMyLodgeStoreFromValue(value = {}) {
   const source = value && typeof value === "object" ? value : {};
-  const hasStructuredShape = Array.isArray(source.interestLodges) || Object.prototype.hasOwnProperty.call(source, "draft");
-  if (hasStructuredShape) {
+  if (b2bMyLodgeHasStructuredShape(source)) {
     return {
       version: 2,
       draft: source.draft && typeof source.draft === "object" ? source.draft : {},
       interestLodges: (Array.isArray(source.interestLodges) ? source.interestLodges : [])
         .map((lodge) => b2bNormalizeInterestLodge(lodge))
         .filter((lodge) => b2bMyLodgeDraftHasInput(lodge))
+        .filter((lodge) => b2bInterestLodgeWasExplicitlyRegistered(lodge))
         .slice(0, B2B_INTEREST_LODGE_LIMIT)
     };
   }
   if (b2bMyLodgeDraftHasInput(source)) {
     return {
       version: 2,
-      draft: {},
-      interestLodges: [b2bNormalizeInterestLodge(source)].slice(0, B2B_INTEREST_LODGE_LIMIT)
+      draft: b2bNormalizeMyLodgeDraft(source),
+      interestLodges: []
     };
   }
   return { version: 2, draft: source, interestLodges: [] };
@@ -8344,7 +8386,8 @@ function persistB2BMyLodgeStore(store = {}) {
   state.b2bMyLodgeDraft = { key: b2bMyLodgeStorageKey(), values };
   try {
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem(b2bMyLodgeStorageKey(), JSON.stringify(values));
+      localStorage.setItem(b2bMyLodgeStorageKey(), JSON.stringify({ ...values, draft: {} }));
+      clearB2BMyLodgeLegacyStorageKeys();
     }
   } catch {
     // The comparison still renders from memory if browser storage is blocked.
@@ -8376,7 +8419,8 @@ function saveB2BMyLodgeBenchmark() {
   const lodge = b2bNormalizeInterestLodge({
     ...values,
     id: b2bNewInterestLodgeId(),
-    savedAt: new Date().toISOString()
+    savedAt: new Date().toISOString(),
+    registeredAt: new Date().toISOString()
   });
   interestLodges.push(lodge);
   state.b2bMyLodgeCollectStatus = `${lodge.lodgingName} 관심숙소 등록 완료`;
