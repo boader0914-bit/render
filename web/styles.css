@@ -16236,6 +16236,21 @@ body.role-b2b .structure-action-list li::before {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .b2b-my-lodge-field,
+  .b2b-my-lodge-field.facilities,
+  .b2b-room-segment-panel,
+  .b2b-my-lodge-checks,
+  .b2b-my-lodge-channel-note,
+  .b2b-my-lodge-actions,
+  .b2b-my-lodge-collect-status {
+    grid-column: 1 / -1;
+  }
+
+  .b2b-my-lodge-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+
   .b2b-interest-lodge-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -16685,6 +16700,17 @@ body.role-b2b .structure-action-list li::before {
   .summary-card small {
     margin-top: 1px;
     font-size: 11px;
+  }
+
+  .b2b-room-segment-row,
+  .b2b-interest-lodge-metrics,
+  .b2b-my-lodge-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .b2b-room-segment-head button,
+  .b2b-my-lodge-actions button {
+    width: 100%;
   }
 }
 

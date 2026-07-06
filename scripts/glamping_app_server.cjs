@@ -8303,8 +8303,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-rank-brief-period"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-rank-brief-period"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-mobile-interest-lodge"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-mobile-interest-lodge"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
