@@ -578,7 +578,7 @@ function syncRoleStaticLabels() {
   if (isAdminRole()) {
     setPanelHeading("rank", "업체 순위", "네이버 플레이스 노출순으로 비교");
     setPanelHeading("map", "지역 클러스터 지도", "시군구 경계 · 업체 스팟 · 검색량 · 판매율");
-    setPanelHeading("demand", "수요구조 분석", "숙박업 메인터넌스 사전과 검색수요를 함께 해석");
+    setPanelHeading("demand", "수요구조 분석", "시즌 수요 기준과 검색수요를 함께 해석");
     return;
   }
   setPanelHeading("rank", "경쟁업체 노출", "네이버 상위 노출 경쟁업체의 매출·판매율 표본 비교");
@@ -2309,7 +2309,7 @@ function b2bCompanyProductSummary(item = {}, insight = companyRankInsight(item))
   const productSummary = String(item.productTypeSummary || item.inventoryProductSummary || "").trim();
   if (productSummary) {
     return {
-      value: productSummary,
+      value: b2bPublicProductSummaryText(productSummary),
       note: status.productKnown ? "상품 구성 확인" : "상품 구성 보조 확인"
     };
   }
@@ -2329,6 +2329,19 @@ function b2bCompanyProductSummary(item = {}, insight = companyRankInsight(item))
     value: insight.dayUseKnown ? "숙박+데이" : "숙박 중심",
     note: insight.productGap ? "데이유즈/캠프닉 미확인" : "상품 구성 확인"
   };
+}
+
+function b2bPublicProductSummaryText(text = "") {
+  const parts = String(text || "")
+    .split(" · ")
+    .map((part) => part.trim())
+    .filter((part) => part && !/^미분류\s*0종/.test(part) && !/^원시stock/i.test(part))
+    .map((part) => part
+      .replace(/재고수량/g, "판매단위")
+      .replace(/객실상품/g, "객실")
+      .replace(/데이유즈재고/g, "데이유즈 가능")
+      .replace(/판매완료\/마감/g, "예약 완료"));
+  return parts.join(" · ") || "상품 구성 확인";
 }
 
 function b2bCompanyCouponSummary(item = {}) {
@@ -5167,6 +5180,7 @@ function revenueAdjustmentNote(impact = {}) {
   const adjusted = finiteNumber(impact.totalAdjustedRevenue, 0);
   const base = finiteNumber(impact.totalRevenue, 0);
   const gap = finiteNumber(impact.totalMissingPriceEstimatedRevenue, 0);
+  if (!isAdminRole()) return `예상 매출 ${fmtWon(adjusted || base)}`;
   if (adjusted > base && gap > 0) return `보정포함 ${fmtWon(adjusted)} · 가격누락 보정 ${fmtWon(gap)}`;
   return `확인가격 매출 ${fmtWon(base)}`;
 }
@@ -7146,9 +7160,9 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel(), data = state.da
       tone: Number.isFinite(priceCoverage) && priceCoverage >= 0.7 ? "good" : "watch"
     },
     {
-      label: "보정 매출",
+      label: "가격 보완분",
       value: gapRevenueTotal ? fmtWon(gapRevenueTotal) : "없음",
-      note: gapRevenueTotal ? `확인매출 ${fmtWon(baseTotal)}` : "가격누락 보정 없음",
+      note: gapRevenueTotal ? `확인 매출 ${fmtWon(baseTotal)} 기준 보수 추정` : "추가 보완 없음",
       tone: gapRevenueTotal ? "watch" : "good"
     },
     {
@@ -8274,7 +8288,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
     <div class="b2b-my-lodge-board">
       <div class="b2b-my-lodge-head">
         <div>
-          <span>My Stay Benchmark</span>
+          <span>관심숙소 비교</span>
           <strong>관심숙소 등록</strong>
           <p>비교할 숙소를 최대 2곳까지 등록하고, 객실종류별 수량·요일 가격으로 지역 평균·상위권 매출 표본과 비교합니다.</p>
         </div>
@@ -8835,7 +8849,7 @@ function b2bSimpleSummaryModel(
       value: `${fmtNumber(competitionScore)}점`,
       note: `지정 검색범위 ${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
       barValue: competitionScore,
-      meterLabel: `${fmtNumber(competitionScore)}점`
+      meterLabel: "종합 점수"
     },
     {
       tone: Number.isFinite(actualReservationRate) && actualReservationRate >= B2B_HIGH_RESERVATION_RATE
@@ -8847,7 +8861,7 @@ function b2bSimpleSummaryModel(
       value: Number.isFinite(actualReservationRate) ? fmtRate(actualReservationRate) : "확인필요",
       note: reservationSampleNote,
       barValue: Number.isFinite(actualReservationRate) ? Math.round(actualReservationRate * 100) : 0,
-      meterLabel: Number.isFinite(actualReservationRate) ? fmtRate(actualReservationRate) : "대기"
+      meterLabel: "예약 표본"
     },
     {
       tone: revenueReady ? "strong" : "watch",
@@ -8863,7 +8877,7 @@ function b2bSimpleSummaryModel(
       value: nextDemand.value,
       note: nextDemand.note,
       barValue: searchMeter,
-      meterLabel: Number.isFinite(nextDemand.change) ? formatSignedRate(nextDemand.change) : "예측"
+      meterLabel: "월별 예측"
     }
   ];
   const actions = [
@@ -9623,14 +9637,14 @@ function trendLineChart(series, trend) {
       <div class="trend-line-values">
         ${points.map((point) => `<span>${point.hasValue ? escapeHtml(trendIndexLabel(point.value)) : "-"}</span>`).join("")}
       </div>
-      <svg class="trend-line-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="월별 네이버 데이터랩 상대지수">
+      <svg class="trend-line-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="월별 네이버 검색 추이">
         <g class="trend-grid">${gridLines}</g>
         ${areaPoints ? `<polygon class="trend-line-area" points="${areaPoints}"></polygon>` : ""}
         ${linePoints ? `<polyline class="trend-line-path" points="${linePoints}"></polyline>` : ""}
         <g class="trend-points">
           ${points.map((point) => {
             const title = point.hasValue
-              ? `${point.label} 상대지수 ${trendIndexLabel(point.value)}`
+              ? `${point.label} 검색 추이 ${trendIndexLabel(point.value)}`
               : `${point.label} 데이터 대기`;
             return `
               <g class="trend-point ${point.hasValue ? "" : "missing"}" title="${escapeHtml(title)}">
@@ -9651,26 +9665,26 @@ function demandTrendChart() {
   const trend = demandTrendSource();
   const fallbackMonths = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
   const series = trend.series.length ? trend.series.slice(-12) : fallbackMonths.map((label) => ({ label, value: null }));
-  const errorLabel = Number(trend.status) === 401 ? "인증 실패" : "API 오류";
+  const errorLabel = Number(trend.status) === 401 ? "확인 필요" : "확인 필요";
   const validMonthCount = series.filter((entry) => Number.isFinite(Number(entry.value))).length;
   const statusLabel = trend.reason
     ? errorLabel
     : trend.hasSeries
-      ? `${trend.cacheHit ? "동일 기준일 캐시" : "연동 정상"} · ${fmtNumber(validMonthCount)}개월`
-      : (trend.configured ? "연동 대기" : "API 키 필요");
-  const cacheBasis = trend.cacheHit && trend.cacheEndDate
+      ? `12개월 추이 · ${fmtNumber(validMonthCount)}개월`
+      : (trend.configured ? "추이 대기" : "수요 대기");
+  const cacheBasis = !isAdminRole() ? "" : trend.cacheHit && trend.cacheEndDate
     ? ` · 기준일 ${trend.cacheEndDate}`
     : "";
   const detailLabel = trend.hasSeries
-    ? `최고점=100 기준 · ${trend.keyword || activeKeyword()}${cacheBasis}${trend.collectedAt ? ` · ${compactDateTime(trend.collectedAt)}` : ""}`
+    ? `최고점=100 기준 · ${trend.keyword || activeKeyword()}${cacheBasis}${isAdminRole() && trend.collectedAt ? ` · ${compactDateTime(trend.collectedAt)}` : ""}`
     : trend.reason
       ? trend.reason
-      : "데이터랩 API 연동 후 12개월 추세 표시";
+      : "12개월 검색 추세 확보 후 표시";
   return `
     <div class="demand-chart ${trend.hasSeries ? "" : "pending"}">
       <div class="demand-chart-head">
         <div>
-          <strong>네이버 트렌드 상대지수</strong>
+          <strong>네이버 검색 추이</strong>
           <small>${escapeHtml(detailLabel)}</small>
         </div>
         <span>${escapeHtml(statusLabel)}</span>
@@ -9688,8 +9702,8 @@ function demandMobileShare(traffic = {}) {
 
 function demandTrendLabel() {
   const trend = demandTrendSource();
-  if (trend.reason) return Number(trend.status) === 401 ? "인증 실패" : "API 오류";
-  if (!trend.hasSeries) return "연동 대기";
+  if (trend.reason) return "확인 필요";
+  if (!trend.hasSeries) return "추이 대기";
   const values = trend.series.map((entry) => Number(entry.value)).filter(Number.isFinite);
   if (values.length < 2) return "확인";
   const first = values[0];
@@ -9929,8 +9943,8 @@ function demandThreeMonthProjection(traffic = demandTrafficAggregate(), trend = 
       )
     ],
     basis: currentVolume
-      ? `${baseLabel} 검색량을 기준으로 데이터랩 상대지수 비율을 곱해 ${targetLabel}·${followingLabel} 예상 검색량을 환산합니다.`
-      : "검색광고 월검색량이 확보되면 기준월·이번달·다음달 추이를 표시합니다."
+      ? `${baseLabel} 검색량을 기준으로 12개월 검색 추이 비율을 곱해 ${targetLabel}·${followingLabel} 예상 검색량을 환산합니다.`
+      : "기준월 검색량이 확보되면 기준월·이번달·다음달 추이를 표시합니다."
   };
 }
 
@@ -9999,7 +10013,7 @@ function demandTrendQualityCard(traffic = {}) {
   else if (!total || (Number.isFinite(ctr) && ctr < 0.8)) tone = "warning";
   const detail = [
     Number.isFinite(mobileShare) ? `모바일 ${fmtRate(mobileShare)}` : "모바일 확인필요",
-    Number.isFinite(ctr) ? `CTR ${fmtSearchRate(ctr)}` : "CTR 확인필요"
+    Number.isFinite(ctr) ? `클릭 반응 ${fmtSearchRate(ctr)}` : "클릭 반응 확인필요"
   ].join(" · ");
   return {
     tone,
@@ -10061,7 +10075,7 @@ function demandTrendActionText(traffic = {}) {
   if (falling) {
     return "검색 추세가 내려가는 구간입니다. 상품 구성과 평일/일요일 판매 흐름을 기간별로 비교합니다.";
   }
-  return "검색량, 모바일 비중, CTR, 예약 판매율을 함께 보며 노출과 판매 구조를 비교합니다.";
+  return "검색량, 모바일 비중, 클릭 반응, 예약 판매율을 함께 보며 노출과 판매 구조를 비교합니다.";
 }
 
 function renderDemandTrendInsightCards(traffic = {}) {
@@ -10100,9 +10114,9 @@ function demandInterpretation(traffic = {}) {
   else if (Number.isFinite(mobileShare)) pills.push("PC 보조수요");
 
   if (Number.isFinite(ctr) && ctr >= 1) pills.push("클릭 반응 양호");
-  else if (Number.isFinite(ctr)) pills.push("CTR 점검");
+  else if (Number.isFinite(ctr)) pills.push("클릭 반응 점검");
 
-  pills.push(trend.hasSeries || trend.reason ? demandTrendLabel() : "트렌드 API 대기");
+  pills.push(trend.hasSeries || trend.reason ? demandTrendLabel() : "검색 추이 대기");
   return pills;
 }
 
@@ -10197,7 +10211,7 @@ function renderDemandStructure() {
     return `
       <section class="structure-empty-card">
         <strong>수요구조 사전 대기</strong>
-        <p>숙박업 메인터넌스 사전이 연결되면 월별 수요강도, 핵심타겟, 평일 확장성, 가격 방어력을 표시합니다.</p>
+        <p>시즌 수요 기준이 연결되면 월별 수요강도, 핵심타겟, 평일 확장성, 가격 방어력을 표시합니다.</p>
       </section>
     `;
   }
@@ -10212,7 +10226,7 @@ function renderDemandStructure() {
         <em>${escapeHtml(structure.overallLabel || "판단 대기")}</em>
       </div>
       <div class="structure-summary">
-        <p class="eyebrow">${escapeHtml(structure.source || "숙박업 메인터넌스")}</p>
+        <p class="eyebrow">${escapeHtml(isAdminRole() ? (structure.source || "숙박업 메인터넌스") : "시즌 수요 기준")}</p>
         <h3>${escapeHtml(structure.monthLabel || "")} ${escapeHtml(structure.season || "")} 수요 판단</h3>
         <p>${escapeHtml(structure.summary || structure.interpretation || "")}</p>
         <div class="structure-chip-row">
@@ -10236,7 +10250,7 @@ function renderDemandStructure() {
         <div class="demand-card-head">
           <div>
             <h3>지표 균형</h3>
-            <p>월수요, 타겟, 평일, 가격, 콘텐츠, 리스크 기준</p>
+            <p>월수요, 고객군, 평일, 가격, 콘텐츠, 운영 변수 기준</p>
           </div>
         </div>
         ${demandRadarChart(structure.radar || [])}
@@ -10278,7 +10292,7 @@ function renderDemandStructure() {
         <div class="demand-card-head">
           <div>
             <h3>운영 리스크</h3>
-            <p>예약률 해석 시 보정해야 할 변수</p>
+            <p>예약률 해석 시 함께 봐야 할 변수</p>
           </div>
         </div>
         <div class="risk-chip-row">
@@ -10358,7 +10372,7 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
       {
         label: "월 검색량",
         value: total ? fmtNumber(total) : "확인필요",
-        detail: traffic.collectableCount ? `${fmtNumber(traffic.collectableCount)}개 키워드 합산` : "네이버 검색광고 API"
+        detail: traffic.collectableCount ? `${fmtNumber(traffic.collectableCount)}개 키워드 합산` : "검색량 표본 대기"
       },
       {
         label: `${nextDemand.targetMonthLabel || "다음달"} 예상`,
@@ -10377,11 +10391,11 @@ function b2bDemandPlaybookModel(traffic = demandTrafficAggregate()) {
       }
     ],
     checks: [
-      total ? `검색량은 ${demandStrength} 구간입니다.` : "검색광고 API 표본이 없어 수요 강도는 보류합니다.",
-      nextDemand.projectedVolume ? `${nextDemand.label || "예상 검색량"}은 ${fmtNumber(nextDemand.projectedVolume)}회이며 ${nextDemand.note} 기준입니다.` : "예상 검색량은 검색광고 월검색량과 트렌드 표본 확보 후 표시합니다.",
+      total ? `검색량은 ${demandStrength} 구간입니다.` : "검색량 표본이 없어 수요 강도는 보류합니다.",
+      nextDemand.projectedVolume ? `${nextDemand.label || "예상 검색량"}은 ${fmtNumber(nextDemand.projectedVolume)}회이며 ${nextDemand.note} 기준입니다.` : "예상 검색량은 기준월 검색량과 12개월 추이 확보 후 표시합니다.",
       Number.isFinite(mobileShare) ? `모바일 비중 ${fmtRate(mobileShare)}로 예약 화면/상품명 영향이 큽니다.` : "모바일 비중은 추가 수집 후 판단합니다.",
-      Number.isFinite(ctr) ? `평균 CTR ${fmtSearchRate(ctr)}로 노출 대비 클릭 반응을 봅니다.` : "CTR은 키워드별 클릭 데이터 확보 후 비교합니다.",
-      sales.supply ? `네이버 예약 판매율 ${fmtRate(salesRate)}와 잔여 객실을 함께 봅니다.` : "업체별 수량 표본이 없는 경우 지도/순위 표본을 먼저 봅니다."
+      Number.isFinite(ctr) ? `클릭 반응 ${fmtSearchRate(ctr)}로 노출 대비 반응을 봅니다.` : "클릭 반응은 키워드별 데이터 확보 후 비교합니다.",
+      sales.supply ? `네이버 예약 판매율 ${fmtRate(salesRate)}와 예약 가능 흐름을 함께 봅니다.` : "업체별 수량 표본이 없는 경우 지도/순위 표본을 먼저 봅니다."
     ]
   };
 }
@@ -10456,7 +10470,7 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
       tone: Number.isFinite(playbook.mobileShare) && playbook.mobileShare >= 0.75 ? "positive" : "neutral",
       label: "모바일 예약수요",
       value: Number.isFinite(playbook.mobileShare) ? fmtRate(playbook.mobileShare) : "확인필요",
-      note: playbook.total ? `월검색 ${fmtNumber(playbook.total)} · CTR ${Number.isFinite(playbook.ctr) ? fmtSearchRate(playbook.ctr) : "대기"}` : "검색광고 표본 대기"
+      note: playbook.total ? `월검색 ${fmtNumber(playbook.total)} · 클릭 반응 ${Number.isFinite(playbook.ctr) ? fmtSearchRate(playbook.ctr) : "대기"}` : "검색량 표본 대기"
     },
     {
       tone: rankModel.hotRows.length ? "warning" : "neutral",
@@ -10694,7 +10708,7 @@ function b2bKeywordRecommendationModel(traffic = demandTrafficAggregate(), playb
     .sort((a, b) => finiteNumber(b.totalSearchVolume, 0) - finiteNumber(a.totalSearchVolume, 0))
     .slice(0, 6)
     .forEach((row) => {
-      add(row.keyword || row.relKeyword, "실측 관련", "검색광고 관련 키워드", 78, "검색광고 API 관련 키워드 후보");
+      add(row.keyword || row.relKeyword, "네이버 관련", "네이버 관련 검색어", 78, "네이버 관련 검색어 후보");
     });
 
   const text = context.contextText || "";
@@ -10743,7 +10757,7 @@ function renderB2BKeywordRecommendations(traffic = demandTrafficAggregate(), pla
     <div class="b2b-keyword-recommend">
       <div class="b2b-keyword-head">
         <div>
-          <span>Keyword Expansion</span>
+          <span>추천 검색어</span>
           <strong>추천 검색 키워드</strong>
           <small>${escapeHtml(`${activeKeyword()} 기준 · ${model.summary}`)}</small>
         </div>
@@ -10773,7 +10787,7 @@ function renderB2BKeywordRecommendations(traffic = demandTrafficAggregate(), pla
           `).join("")}
         </div>
       ` : ""}
-      <p>추천 키워드는 검색광고 관련 키워드, 지역카드, 권역 후보, 시설·고객 의도 기준입니다. 적용 후 검색 실행 시 새 경쟁 리포트를 수집합니다.</p>
+      <p>추천 키워드는 네이버 관련 검색어, 지역카드, 권역 후보, 시설·고객 의도 기준입니다. 지역이 달라도 같은 수요군의 확장 후보로 볼 수 있습니다.</p>
     </div>
   `;
 }
@@ -10851,7 +10865,7 @@ function renderB2BDemandPlaybook(traffic = demandTrafficAggregate()) {
     <section class="b2b-demand-playbook">
       <div class="b2b-demand-head">
         <div>
-          <p class="eyebrow">B2B Demand Outlook</p>
+          <p class="eyebrow">검색 수요 전망</p>
           <h3>월별 검색량과 경쟁 흐름</h3>
           <p>기준월 검색량, 12개월 트렌드, 네이버 예약 판매 표본을 묶어 이번달·다음달 권역 수요를 추정합니다.</p>
         </div>
@@ -11004,6 +11018,7 @@ function historyCompanyRows() {
 }
 
 function renderHistoryLab() {
+  if (!isAdminRole()) return "";
   const history = historySource();
   const benchmarks = history.benchmarks || {};
   const rows = historyCompanyRows();
@@ -13872,12 +13887,12 @@ function renderDemand() {
   const trend = demandTrendSource();
   const regions = demandRegionRows();
   const demandStateText = trend.hasSeries
-    ? "연동 정상"
+    ? "수요 데이터"
     : trend.reason
-      ? (Number(trend.status) === 401 ? "인증 실패" : "API 오류")
+      ? (Number(trend.status) === 401 ? "확인 필요" : "확인 필요")
     : state.trafficKeyState?.datalabConfigured
-      ? "트렌드 대기"
-      : "데이터랩 미설정";
+      ? "수요 확인 중"
+      : "수요 대기";
   if (els.demandState) els.demandState.textContent = demandStateText;
 
   els.demandDashboard.innerHTML = `
@@ -13885,7 +13900,7 @@ function renderDemand() {
       <div>
         <p class="eyebrow">수요구조 분석</p>
         <h3>${escapeHtml(activeKeyword())}</h3>
-        <p>${escapeHtml(dateRangeLabel(run))} · 숙박업 메인터넌스 사전 · 네이버 검색수요</p>
+        <p>${escapeHtml(dateRangeLabel(run))} · 시즌 수요 기준 · 네이버 검색수요</p>
       </div>
       <span>${escapeHtml(productModeLabel(run.productMode || "all"))}</span>
     </section>
@@ -13896,12 +13911,18 @@ function renderDemand() {
 
     ${renderHistoryLab()}
 
-    <section class="demand-metric-grid" aria-label="검색수요 핵심 지표">
-      <article><span>월검색량</span><strong>${total ? fmtNumber(total) : "확인필요"}</strong><small>PC+모바일</small></article>
-      <article><span>모바일 비중</span><strong>${Number.isFinite(mobileShare) ? fmtRate(mobileShare) : "확인필요"}</strong><small>검색광고 API</small></article>
-      <article><span>평균 CTR</span><strong>${Number.isFinite(ctr) ? fmtSearchRate(ctr) : "확인필요"}</strong><small>예상 클릭 반응</small></article>
-      <article><span>트렌드 상태</span><strong>${escapeHtml(demandTrendLabel())}</strong><small>데이터랩 상대지수</small></article>
-    </section>
+    <details class="demand-metric-grid b2b-internal-detail">
+      <summary>
+        <strong>검색수요 근거 보기</strong>
+        <span>월검색량, 모바일 비중, 클릭 반응, 12개월 추세</span>
+      </summary>
+      <div class="demand-metric-grid-inner">
+        <article><span>월검색량</span><strong>${total ? fmtNumber(total) : "확인필요"}</strong><small>PC+모바일</small></article>
+        <article><span>모바일 비중</span><strong>${Number.isFinite(mobileShare) ? fmtRate(mobileShare) : "확인필요"}</strong><small>모바일 검색 비중</small></article>
+        <article><span>클릭 반응</span><strong>${Number.isFinite(ctr) ? fmtSearchRate(ctr) : "확인필요"}</strong><small>검색 노출 대비 반응</small></article>
+        <article><span>12개월 추세</span><strong>${escapeHtml(demandTrendLabel())}</strong><small>네이버 검색 추이</small></article>
+      </div>
+    </details>
 
     <section class="demand-layout">
       ${demandTrendChart()}
@@ -13939,7 +13960,7 @@ function renderDemand() {
           <div class="demand-region-row">
             <strong>${escapeHtml(region.region || region.name || "지역")}</strong>
             <span>${rowTraffic.totalSearchVolume ? fmtNumber(rowTraffic.totalSearchVolume) : "확인필요"}</span>
-            <span>${escapeHtml(rowTraffic.trendLabel || "연동대기")}</span>
+            <span>${escapeHtml(rowTraffic.trendLabel || "확인중")}</span>
             <span>${escapeHtml(primary)}</span>
             <em>${escapeHtml(demandPriorityLabel(rowTraffic))}</em>
           </div>
@@ -14408,7 +14429,7 @@ function b2bMapCompetitionModel(model = b2bRegionMapModel()) {
       tone: bucket === "outside" ? "watch" : row.insight?.tone || "neutral",
       metric: Number.isFinite(row.rate) ? fmtRate(row.rate) : (row.rank ? `${fmtNumber(row.rank)}위` : "노출"),
       note: row.linked
-        ? `${location} · 잔여 ${fmtNumber(row.remaining)}실`
+        ? `${location} · 예약율 ${Number.isFinite(row.rate) ? fmtRate(row.rate) : "확인필요"}`
         : `${location} · 예약 표본 대기`
     };
   });
@@ -14562,7 +14583,7 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
     <section class="b2b-map-brief ${escapeHtml(model.status.tone)}">
       <div class="b2b-map-head">
         <div>
-          <p class="eyebrow">B2B Competition Map</p>
+          <p class="eyebrow">지역 경쟁 지도</p>
           <h3>${escapeHtml(activeKeyword())} 지역 경쟁 구조</h3>
           <p>${escapeHtml(model.summary)}</p>
         </div>
@@ -14942,14 +14963,14 @@ function renderRegions() {
         <div class="region-card-main">
           <strong>${escapeHtml(region.region || region.name || "지역")}</strong>
           <small>${escapeHtml(primary)} · ${escapeHtml(region.target || "수요권 확인")}</small>
-          <p>월검색 ${fmtNumber(traffic.totalSearchVolume || 0)} · CTR ${traffic.collectable ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</p>
+          <p>월검색 ${fmtNumber(traffic.totalSearchVolume || 0)} · 클릭 반응 ${traffic.collectable ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</p>
         </div>
         <em>${escapeHtml(priority)}</em>
         <div class="region-card-metrics">
           <div><span>업체 표본</span><strong>${fmtNumber(runtime.items.length)}</strong><small>${escapeHtml(region.dominantType || region.type || "분석")}</small></div>
           <div><span>판매율</span><strong>${salesRate}</strong><small>${runtime.sales.supply ? `${fmtNumber(runtime.sales.sold)}/${fmtNumber(runtime.sales.supply)}실` : "표본 대기"}</small></div>
           <div><span>월검색</span><strong>${traffic.totalSearchVolume ? fmtNumber(traffic.totalSearchVolume) : "확인필요"}</strong><small>키워드 수요</small></div>
-          <div><span>CTR</span><strong>${traffic.collectable ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</strong><small>클릭 반응</small></div>
+          <div><span>클릭 반응</span><strong>${traffic.collectable ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</strong><small>검색 반응</small></div>
         </div>
         ${!isAdminRole() ? `<p class="region-card-note">${escapeHtml(boundaryNote)}</p>` : ""}
       </article>
@@ -16100,7 +16121,7 @@ function renderB2BSearchHistoryPanel() {
           </button>
         `).join("")}
       </div>
-    ` : `<p>아직 이 아이디로 저장된 검색 기록이 없습니다.</p>`}
+    ` : rows.length ? "" : `<p>아직 이 아이디로 저장된 검색 기록이 없습니다.</p>`}
   `;
 }
 
@@ -16122,7 +16143,7 @@ function renderB2BSearchPanel() {
       : hasResult
         ? activeKeyword()
         : (state.b2bSearchQuery || "").trim();
-    const shouldShowEstimate = Boolean(state.b2bSearchLoading || hasResult || keyword);
+    const shouldShowEstimate = Boolean(state.b2bSearchLoading || (!hasResult && keyword));
     const previewPayload = shouldShowEstimate ? b2bLiveSearchPayload(keyword) : null;
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
     const preview = progressMeta || (previewPayload ? crawlPreviewMeta(previewPayload) : null);
@@ -16149,7 +16170,7 @@ function renderB2BSearchPanel() {
         <div class="b2b-live-search-meta">
           <em>${escapeHtml((state.b2bSearchRange || "1-10") === "1-20" ? "확장 분석" : "기본 분석")}</em>
           <em>${escapeHtml(state.b2bSearchRange || "1-10")}위</em>
-          ${preview ? `<em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>` : ""}
+          ${state.b2bSearchLoading && preview ? `<em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>` : ""}
           ${state.b2bSearchLoading && preview ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
       </div>
@@ -16363,7 +16384,7 @@ function renderHeader() {
     els.pageSubtitle.textContent = `${title} · 반복 수집 이력 · 회차 비교 · 업체별 추이`;
   } else if (state.activeTab === "demand") {
     els.pageSubtitle.textContent = isAdminRole()
-      ? `${title} · 숙박업 메인터넌스 · 네이버 트렌드`
+      ? `${title} · 시즌 수요 · 네이버 트렌드`
       : `${title} · 12개월 검색 추이 · 피크 월 · 월별 예상 검색량`;
   } else if (state.activeTab === "report") {
     els.pageSubtitle.textContent = isAdminRole()
@@ -16775,7 +16796,7 @@ function revenueProductRowsHtml(rows = []) {
             <small>${escapeHtml(row.kindLabel)}</small>
           </div>
           <span>${row.stock === null ? "총량확인" : `${fmtNumber(row.stock)}개/회`}</span>
-          <span>${row.available === null ? "잔여확인" : `${fmtNumber(row.available)}잔여`}</span>
+          <span>${row.available === null ? "예약가능 확인" : `예약가능 ${fmtNumber(row.available)}`}</span>
           <span>${fmtNumber(row.sold)}판매</span>
           <b>${Number.isFinite(row.price) ? fmtWon(row.price) : "가격확인"}</b>
         </div>
@@ -16795,7 +16816,9 @@ function sheetRevenuePanel(item = {}) {
   ].filter(Boolean);
   const totalRevenueValue = profile.totalAdjustedRevenue || profile.totalRevenue;
   const totalRevenueNote = profile.totalAdjustedRevenue > profile.totalRevenue && profile.totalMissingPriceEstimatedRevenue
-    ? `확인가격 ${fmtWon(profile.totalRevenue)} · 가격누락 보정 ${fmtWon(profile.totalMissingPriceEstimatedRevenue)}`
+    ? isAdminRole()
+      ? `확인가격 ${fmtWon(profile.totalRevenue)} · 가격누락 보정 ${fmtWon(profile.totalMissingPriceEstimatedRevenue)}`
+      : `가격 확인 매출 ${fmtWon(totalRevenueValue)}`
     : `가격확보 ${Number.isFinite(precision.coverage) ? fmtRate(precision.coverage) : "대기"} · ${fmtNumber(precision.priced)}개/회`;
   const lodgingRevenueValue = lodging.adjustedRevenue || lodging.revenue;
   const dayUseRevenueValue = dayUse.adjustedRevenue || dayUse.revenue;
@@ -17342,7 +17365,7 @@ function b2bSearchModel(item = {}) {
     boundaryDetail,
     metrics: [
       { label: "월검색량", value: total ? fmtNumber(total) : "확인필요", note: traffic.relKeyword || traffic.keyword || activeKeyword() },
-      { label: "CTR", value: traffic.collectable || total ? fmtSearchRate(ctr) : "확인필요", note: "검색광고 API 기준" },
+      { label: "클릭 반응", value: traffic.collectable || total ? fmtSearchRate(ctr) : "확인필요", note: "네이버 검색 기준" },
       { label: "노출순위", value: insight.rank ? `${fmtNumber(insight.rank)}위` : "확인필요", note: item.rankingSourceLabel || "네이버 플레이스" },
       { label: "노출권역", value: boundaryLabel, note: regionPrimary(region || {}) }
     ]
@@ -17358,7 +17381,7 @@ function renderB2BSearchBrief(item = {}) {
         <div>
           <span>${escapeHtml(model.profile.label)}</span>
           <h3>검색량과 노출 기준</h3>
-          <p>${escapeHtml("월검색량·CTR은 수요, 네이버 순위·반경권은 노출 근거로 봅니다.")}</p>
+          <p>${escapeHtml("월검색량과 클릭 반응은 수요, 네이버 순위·반경권은 노출 근거로 봅니다.")}</p>
         </div>
         <strong>${escapeHtml(model.insight.rank ? `${fmtNumber(model.insight.rank)}위` : "순위")}</strong>
       </div>
@@ -17452,7 +17475,7 @@ function renderSheetSearch(item) {
       <div class="search-row">
         <div>
           <strong>종합 클릭률</strong>
-          <small>검색광고 API 기준</small>
+          <small>네이버 검색 기준</small>
         </div>
         <strong>${traffic.collectable || traffic.totalSearchVolume ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</strong>
       </div>
@@ -18229,6 +18252,10 @@ async function loadB2BHistoryRun(runId) {
   state.data = data;
   state.activeRunId = runId;
   state.runs = data.run ? [{ ...data.run, id: runId }] : [];
+  state.b2bSearchQuery = data.run?.keyword || state.b2bSearchQuery || "";
+  state.b2bSearchRange = String(data.run?.detailRankRanges || "").includes("20") ? "1-20" : "1-10";
+  if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) els.b2bSearchInput.value = state.b2bSearchQuery;
+  if (els.b2bSearchRangeInput) els.b2bSearchRangeInput.value = state.b2bSearchRange;
   state.activeTab = "report";
   renderAll();
   setStatus("준비");

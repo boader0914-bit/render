@@ -12338,6 +12338,65 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.b2b-internal-detail.demand-metric-grid {
+  display: block;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--soft-shadow);
+  overflow: hidden;
+}
+
+.b2b-internal-detail summary {
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 17px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.b2b-internal-detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.b2b-internal-detail summary strong {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.b2b-internal-detail summary span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.demand-metric-grid-inner {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+@media (max-width: 760px) {
+  .b2b-internal-detail summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .b2b-internal-detail summary span {
+    text-align: left;
+  }
+
+  .demand-metric-grid-inner {
+    grid-template-columns: 1fr;
+  }
+}
+
 .b2b-demand-playbook {
   min-width: 0;
   display: grid;
