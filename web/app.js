@@ -315,6 +315,27 @@ function dateRangeLabel(run = {}) {
   return "기간 확인";
 }
 
+function b2bLongDateLabel(date) {
+  if (!date) return "";
+  const dayNames = ["일", "월", "화", "수", "목", "금", "토"];
+  const year = String(date.getFullYear()).slice(-2);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}. ${month}. ${day}(${dayNames[date.getDay()]})`;
+}
+
+function b2bDateRangeLabel(run = {}) {
+  const start = parseDate(run.checkIn);
+  if (!start) return dateRangeLabel(run);
+  const days = Math.max(1, Math.min(31, bookingDays(run) || DEFAULT_BOOKING_DAYS));
+  let end = parseDate(run.checkOut);
+  if (!end || end < start) {
+    end = new Date(start);
+    end.setDate(start.getDate() + days - 1);
+  }
+  return `${b2bLongDateLabel(start)} ~ ${b2bLongDateLabel(end)} (${days}일)`;
+}
+
 function bookingDays(run = {}) {
   const explicit = Number(run.bookingRangeDays);
   if (Number.isFinite(explicit) && explicit > 0) return Math.min(31, Math.round(explicit));
@@ -2468,7 +2489,9 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
   const run = state.data?.run || {};
   const scopeRange = effectiveDetailRankRange(run);
   const scopeValue = scopeRange === "상세 생략" ? "순위만" : `${scopeRange}위`;
-  const scopeNote = `${dateRangeLabel(run)} · ${productModeLabel(run.productMode || "all")}`;
+  const scopePeriod = b2bDateRangeLabel(run);
+  const scopeProduct = productModeLabel(run.productMode || "all");
+  const scopeNote = `${scopePeriod} · ${scopeProduct}`;
   const rangeRows = b2bRankRangeModel(model);
   const summaryTone = Number.isFinite(linkedCoverage) && linkedCoverage >= 0.55
     ? "strong"
@@ -2485,7 +2508,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     {
       label: "경쟁업체",
       value: fmtNumber(rows.length),
-      note: "최초 검색범위 안의 업체만 표시",
+      note: "지정 순위권 비교",
       tone: "neutral"
     },
     {
@@ -2541,13 +2564,15 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     revenueMin,
     couponRows,
     scopeValue,
+    scopePeriod,
+    scopeProduct,
     scopeNote,
     rangeRows,
     cards,
     actionRows,
     focusRows,
     summaryTone,
-    summary: `최초 지정 검색범위 ${scopeValue} 안의 경쟁업체만 표시합니다.`
+    summary: `예약율·예상 매출·쿠폰·상품 구성 기준`
   };
 }
 
@@ -2710,13 +2735,18 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
       <div class="b2b-rank-head">
         <div>
           <p class="eyebrow">경쟁업체 노출 브리프</p>
-          <h3>네이버 지정 검색범위 경쟁 비교</h3>
-          <p>${escapeHtml("처음 설정한 순위 범위 안에서 예약율, 예상 매출, 쿠폰, 상품 구성을 비교합니다.")}</p>
+          <h3>지정 순위권 경쟁 브리프</h3>
+          <p>${escapeHtml("검색 당시 지정한 순위 안에서 노출 위치, 예약율, 예상 매출, 쿠폰, 상품 구성을 같은 기준으로 비교합니다.")}</p>
+          <div class="b2b-rank-context">
+            <span>검색범위 ${escapeHtml(exposure.scopeValue || "확인")}</span>
+            <span>${escapeHtml(exposure.scopePeriod || "기간 확인")}</span>
+            <span>${escapeHtml(exposure.scopeProduct || "전체")}</span>
+          </div>
         </div>
         <strong>${escapeHtml(exposure.scopeValue || "검색범위")}</strong>
       </div>
       <div class="b2b-rank-metrics">
-        <article><span>검색범위</span><strong>${escapeHtml(exposure.scopeValue || "확인")}</strong><small>${escapeHtml(exposure.scopeNote || "최초 설정 기준")}</small></article>
+        <article><span>검색범위</span><strong>${escapeHtml(exposure.scopeValue || "확인")}</strong><small>${escapeHtml(exposure.scopePeriod || "기간 확인")}</small></article>
         <article><span>경쟁업체</span><strong>${fmtNumber(model.rows.length)}</strong><small>지정 범위 안</small></article>
         <article><span>평균 예약율</span><strong>${Number.isFinite(model.rate) ? fmtRate(model.rate) : "확인필요"}</strong><small>${fmtNumber(model.sales.sold)}/${fmtNumber(model.sales.supply)}실</small></article>
         <article><span>예상 평균 매출</span><strong>${exposure.revenueAverage ? fmtWon(exposure.revenueAverage) : "대기"}</strong><small>매출 표본 ${fmtNumber(exposure.revenueRows.length)}곳</small></article>

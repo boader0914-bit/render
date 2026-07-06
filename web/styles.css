@@ -1349,6 +1349,31 @@ a {
   word-break: keep-all;
 }
 
+.b2b-rank-context {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.b2b-rank-context span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #f7fbff;
+  color: #1d497a;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .b2b-rank-head > strong {
   min-height: 34px;
   display: inline-flex;
@@ -15155,6 +15180,7 @@ body.role-b2b .tab-panel.active > .section-title::before {
 body.role-b2b .section-title span,
 body.role-b2b .report-card-head > span,
 body.role-b2b .b2b-rank-head > strong,
+body.role-b2b .b2b-rank-context span,
 body.role-b2b .b2b-map-head > strong,
 body.role-b2b .b2b-demand-head > strong,
 body.role-b2b .b2b-map-cluster-row span,
