@@ -1678,7 +1678,7 @@ function privacyPage() {
     },
     {
       title: "동의 거부권",
-      body: "<p>회원은 개인정보 수집 및 이용에 동의하지 않을 수 있습니다. 다만 필수 항목 동의를 거부하면 사업자(개인) 회원가입과 리포트 이용이 제한됩니다.</p>"
+      body: "<p>회원은 개인정보 수집 및 이용에 동의하지 않을 수 있습니다. 다만 필수 항목 동의를 거부하면 회원가입과 리포트 이용이 제한됩니다.</p>"
     }
   ]);
 }
@@ -1745,7 +1745,7 @@ function loginPage(message = "") {
       <button type="submit">로그인</button>
       <div class="error">${escapedMessage}</div>
     </form>
-    <a class="link" href="/signup">사업자(개인) 회원가입</a>
+    <a class="link" href="/signup">회원가입</a>
   </main>
 </body>
 </html>`;
@@ -1761,7 +1761,7 @@ function signupPage(message = "", values = {}) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>글램핑데이터랩 사업자(개인) 회원가입</title>
+  <title>글램핑데이터랩 회원가입</title>
   <style>
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
@@ -1782,6 +1782,9 @@ function signupPage(message = "", values = {}) {
     .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 16px; background: #f9fafb; }
     .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #182230; font-size: 13px; line-height: 1.4; }
     .check a { color: #175cd3; font-weight: 900; text-decoration: none; }
+    .password-match { min-height: 18px; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
+    .password-match[data-state="ok"] { color: #067647; }
+    .password-match[data-state="error"] { color: #d92d20; }
     .required { color: #f04438; font-weight: 900; }
     .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
     @media (max-width: 560px) { main { padding: 22px; } .grid { grid-template-columns: 1fr; } }
@@ -1789,15 +1792,14 @@ function signupPage(message = "", values = {}) {
 </head>
 <body>
   <main>
-    <h1>사업자(개인) 회원가입</h1>
-    <p>아이디 기준으로 검색 이력을 묶고, 입력한 사업자 정보는 고객 DB에 보관합니다.</p>
-    <form method="post" action="/signup">
+    <h1>회원가입</h1>
+    <form method="post" action="/signup" data-signup-form>
       <div class="grid">
         <label><span>아이디 <b class="required">*</b></span><input name="username" autocomplete="username" required value="${value("username")}"></label>
-        <label><span>비밀번호 <b class="required">*</b></span><input name="password" type="password" autocomplete="new-password" required></label>
+        <label><span>비밀번호 <b class="required">*</b></span><input name="password" type="password" autocomplete="new-password" required data-password></label>
       </div>
       <div class="grid">
-        <label><span>비밀번호 확인 <b class="required">*</b></span><input name="passwordConfirm" type="password" autocomplete="new-password" required></label>
+        <label><span>비밀번호 확인 <b class="required">*</b></span><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><small class="password-match" data-password-match aria-live="polite"></small></label>
         <label><span>연락처 <b class="required">*</b></span><input name="phone" autocomplete="tel" required value="${value("phone")}"></label>
       </div>
       <div class="grid">
@@ -1823,8 +1825,52 @@ function signupPage(message = "", values = {}) {
     </form>
     <a class="link" href="/login">이미 계정이 있습니다</a>
   </main>
+  <script src="/signup.js" defer></script>
 </body>
 </html>`;
+}
+
+function signupScript() {
+  return `"use strict";
+(() => {
+  const form = document.querySelector("[data-signup-form]");
+  if (!form) return;
+  const password = form.querySelector("[data-password]");
+  const confirm = form.querySelector("[data-password-confirm]");
+  const status = form.querySelector("[data-password-match]");
+  if (!password || !confirm || !status) return;
+
+  const update = () => {
+    const left = password.value;
+    const right = confirm.value;
+    if (!left && !right) {
+      status.textContent = "";
+      status.dataset.state = "";
+      confirm.setCustomValidity("");
+      return;
+    }
+    if (!right) {
+      status.textContent = "비밀번호를 한 번 더 입력하세요.";
+      status.dataset.state = "";
+      confirm.setCustomValidity("");
+      return;
+    }
+    if (left === right) {
+      status.textContent = "비밀번호가 일치합니다.";
+      status.dataset.state = "ok";
+      confirm.setCustomValidity("");
+      return;
+    }
+    status.textContent = "비밀번호가 일치하지 않습니다.";
+    status.dataset.state = "error";
+    confirm.setCustomValidity("비밀번호 확인이 일치하지 않습니다.");
+  };
+
+  password.addEventListener("input", update);
+  confirm.addEventListener("input", update);
+  form.addEventListener("submit", update);
+  update();
+})();`;
 }
 
 function sendLogin(res, status = 200, message = "") {
@@ -8117,6 +8163,11 @@ async function route(req, res) {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/privacy") {
       if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
       return send(res, 200, privacyPage(), "text/html; charset=utf-8");
+    }
+
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/signup.js") {
+      if (req.method === "HEAD") return sendHead(res, 200, "application/javascript; charset=utf-8");
+      return send(res, 200, signupScript(), "application/javascript; charset=utf-8");
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/signup") {
