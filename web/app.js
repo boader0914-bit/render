@@ -7361,7 +7361,7 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
   const maxChartValue = Math.max(weeklyRevenue, averageRevenue, topAverage, lowAverage, maxRevenue, 1);
   const channelLabels = [
     draft.naverConnected ? "네이버 노출" : "",
-    draft.otaConnected ? "OTA 병행 노출" : ""
+    draft.otaConnected ? "OTA 노출" : ""
   ].filter(Boolean);
   const channelScore = (draft.naverConnected ? 1 : 0) + (draft.otaConnected ? 1 : 0);
   const facilities = b2bMyLodgeFacilities(draft.facilities);
@@ -7446,7 +7446,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
       <form class="b2b-my-lodge-form" data-b2b-my-lodge-form>
         <label class="b2b-my-lodge-field name">
           <span>숙소명</span>
-          <input name="lodgingName" type="text" maxlength="80" value="${escapeHtml(name)}" placeholder="예: 내 글램핑장">
+          <input name="lodgingName" type="text" maxlength="80" value="${escapeHtml(name)}" placeholder="지역명 + 운영업체명">
         </label>
         <label class="b2b-my-lodge-field">
           <span>객실 수</span>
@@ -7474,7 +7474,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
         </label>
         <div class="b2b-my-lodge-checks" aria-label="판매 채널 참고">
           <label><input name="naverConnected" type="checkbox" ${draft.naverConnected ? "checked" : ""}> 네이버 노출</label>
-          <label><input name="otaConnected" type="checkbox" ${draft.otaConnected ? "checked" : ""}> OTA 병행 노출</label>
+          <label><input name="otaConnected" type="checkbox" ${draft.otaConnected ? "checked" : ""}> OTA 노출</label>
         </div>
         <div class="b2b-my-lodge-channel-note">네이버/OTA는 같은 객실 재고를 공유할 수 있어 매출 산정에는 중복 가산하지 않습니다.</div>
         <div class="b2b-my-lodge-actions">
@@ -7918,14 +7918,14 @@ function b2bSimpleSummaryModel(
     },
     {
       tone: gapCount || hotCount ? "strong" : "neutral",
-      label: "노출 경쟁 확인",
-      detail: `1~5위 업체와 ${B2B_LOW_RESERVATION_LABEL} 업체를 확인`,
+      label: "순위경쟁 확인",
+      detail: "수집기간중 노출 순서, 예약율 확인",
       tab: "rank"
     },
     {
       tone: trend.hasSeries ? "good" : "watch",
-      label: "수요 흐름 확인",
-      detail: "피크 월과 최근 3개월 방향을 확인",
+      label: "예상 검색량 확인",
+      detail: "수집기간중 월별검색량과 흐름을 확인",
       tab: "demand"
     }
   ];
