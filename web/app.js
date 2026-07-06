@@ -1130,11 +1130,11 @@ function spacedGlampingKeyword(value) {
   return text;
 }
 
-function yeogiSearchUrl() {
+function yeogiSearchUrl(keyword = activeKeyword()) {
   const run = state.data?.run || {};
   const url = new URL("https://www.yeogi.com/domestic-accommodations");
   url.searchParams.set("freeForm", "true");
-  url.searchParams.set("keyword", spacedGlampingKeyword(activeKeyword()));
+  url.searchParams.set("keyword", spacedGlampingKeyword(keyword));
   url.searchParams.set("searchType", "KEYWORD");
   if (run.checkIn) url.searchParams.set("checkIn", run.checkIn);
   if (run.checkOut) url.searchParams.set("checkOut", run.checkOut);
@@ -1714,8 +1714,32 @@ function externalPlatformUrl(url) {
   return /^https?:\/\//i.test(text) ? text : "";
 }
 
+function platformFallbackSearchUrl(platform = "", item = {}) {
+  const name = platformShortName(platform);
+  const keyword = String(item.name || item.primaryName || activeKeyword() || "").trim();
+  if (!keyword && name !== "떠나요") return "";
+  if (name === "네이버") {
+    const url = new URL("https://search.naver.com/search.naver");
+    url.searchParams.set("query", keyword);
+    return url.toString();
+  }
+  if (name === "여기어때") return yeogiSearchUrl(keyword);
+  if (name === "야놀자") {
+    const url = new URL("https://nol.yanolja.com/discovery/s/results");
+    url.searchParams.set("keyword", keyword);
+    return url.toString();
+  }
+  if (name === "떠나요") {
+    const url = new URL("https://trip.ddnayo.com/main");
+    if (keyword) url.searchParams.set("keyword", keyword);
+    return url.toString();
+  }
+  return "";
+}
+
 function platformRowUrl(row = {}, item = {}) {
-  return externalPlatformUrl(row.url || row.link || row.href || (platformShortName(row.platform) === "네이버" ? item.url : ""));
+  return externalPlatformUrl(row.url || row.link || row.href || (platformShortName(row.platform) === "네이버" ? item.url : ""))
+    || platformFallbackSearchUrl(row.platform, item);
 }
 
 function companyPlatformMap() {
