@@ -7153,10 +7153,62 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel()) {
   };
 }
 
+function b2bMyLodgeAccountToken() {
+  return compactSearchText(state.session?.memberId || state.session?.username || "guest") || "guest";
+}
+
 function b2bMyLodgeStorageKey() {
-  const account = compactSearchText(state.session?.memberId || state.session?.username || "guest") || "guest";
-  const keyword = compactSearchText(activeKeyword() || "default") || "default";
-  return `${B2B_MY_LODGE_STORAGE_PREFIX}:${account}:${keyword}`;
+  return `${B2B_MY_LODGE_STORAGE_PREFIX}:${b2bMyLodgeAccountToken()}:account`;
+}
+
+function b2bMyLodgeStoredObject(key = "") {
+  if (typeof localStorage === "undefined" || !key) return {};
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function b2bMyLodgeLegacyStorageKeys() {
+  if (typeof localStorage === "undefined") return [];
+  const account = b2bMyLodgeAccountToken();
+  const currentKey = b2bMyLodgeStorageKey();
+  const prefix = `${B2B_MY_LODGE_STORAGE_PREFIX}:${account}:`;
+  try {
+    return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      .filter((key) => key && key.startsWith(prefix) && key !== currentKey)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function b2bMyLodgeMergeStoredValues(primary = {}, legacyValues = []) {
+  const stores = [primary, ...legacyValues].map((value) => b2bMyLodgeStoreFromValue(value));
+  const primaryStore = stores[0] || { draft: {}, interestLodges: [] };
+  const draft = b2bMyLodgeDraftHasInput(primaryStore.draft)
+    ? primaryStore.draft
+    : (stores.find((store) => b2bMyLodgeDraftHasInput(store.draft))?.draft || {});
+  const seen = new Set();
+  const interestLodges = [];
+  stores.forEach((store) => {
+    (store.interestLodges || []).forEach((lodge) => {
+      const normalized = b2bNormalizeInterestLodge(lodge);
+      if (!b2bMyLodgeDraftHasInput(normalized)) return;
+      const key = compactSearchText(normalized.lodgingName) || normalized.id || b2bStableInterestLodgeId(normalized);
+      if (seen.has(key)) return;
+      seen.add(key);
+      interestLodges.push(normalized);
+    });
+  });
+  return {
+    version: 2,
+    draft,
+    interestLodges: interestLodges.slice(0, B2B_INTEREST_LODGE_LIMIT)
+  };
 }
 
 function readB2BMyLodgeStoredValue() {
@@ -7164,9 +7216,14 @@ function readB2BMyLodgeStoredValue() {
   const memoryDraft = state.b2bMyLodgeDraft?.key === key ? state.b2bMyLodgeDraft.values : null;
   if (typeof localStorage === "undefined") return memoryDraft || {};
   try {
-    const raw = localStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? parsed : {};
+    const primary = b2bMyLodgeStoredObject(key);
+    const legacyValues = b2bMyLodgeLegacyStorageKeys()
+      .map((legacyKey) => b2bMyLodgeStoredObject(legacyKey))
+      .filter((value) => value && Object.keys(value).length);
+    if (!legacyValues.length) return Object.keys(primary).length ? primary : (memoryDraft || {});
+    const merged = b2bMyLodgeMergeStoredValues(Object.keys(primary).length ? primary : (memoryDraft || {}), legacyValues);
+    localStorage.setItem(key, JSON.stringify(merged));
+    return merged;
   } catch {
     return memoryDraft || {};
   }
