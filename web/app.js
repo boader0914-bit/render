@@ -15171,9 +15171,10 @@ function renderB2BSearchPanel() {
   if (els.b2bSearchResults) {
     const hasResult = Boolean(state.data?.run);
     const keyword = hasResult ? activeKeyword() : (state.b2bSearchQuery || "").trim();
-    const previewPayload = b2bLiveSearchPayload(keyword || "지역글램핑");
+    const shouldShowEstimate = Boolean(state.b2bSearchLoading || hasResult || keyword);
+    const previewPayload = shouldShowEstimate ? b2bLiveSearchPayload(keyword) : null;
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
-    const preview = progressMeta || crawlPreviewMeta(previewPayload);
+    const preview = progressMeta || (previewPayload ? crawlPreviewMeta(previewPayload) : null);
     const panelClass = state.b2bSearchLoading ? "loading" : hasResult ? "ready" : "idle";
     const badge = state.b2bSearchLoading ? "검색중" : hasResult ? "결과 표시" : "새 검색";
     const title = state.b2bSearchLoading
@@ -15197,8 +15198,8 @@ function renderB2BSearchPanel() {
         <div class="b2b-live-search-meta">
           <em>${escapeHtml((state.b2bSearchRange || "1-10") === "1-20" ? "확장 분석" : "기본 분석")}</em>
           <em>${escapeHtml(state.b2bSearchRange || "1-10")}위</em>
-          <em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>
-          ${state.b2bSearchLoading ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
+          ${preview ? `<em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>` : ""}
+          ${state.b2bSearchLoading && preview ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
       </div>
     `;
