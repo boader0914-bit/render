@@ -1407,6 +1407,35 @@ function scheduleProductLabel(schedule) {
   return text.length > 22 ? `${text.slice(0, 22)}...` : text;
 }
 
+function compactNaverScheduleDetail(schedule, listType = "", date = CHECK_IN, availabilityUnit = "") {
+  const quantity = scheduleQuantityProfile(schedule, listType);
+  return {
+    date,
+    key: scheduleProductKey(schedule),
+    bizItemId: schedule.bizItemId || "",
+    name: String(schedule.name || "").trim(),
+    saleType: schedule.saleType || "",
+    bizItemSubType: schedule.bizItemSubType || "",
+    listType,
+    availabilityUnit,
+    total: quantity.total,
+    available: quantity.available,
+    soldOut: quantity.soldOut,
+    stock: schedule.stock,
+    bookingCount: schedule.bookingCount,
+    occupiedBookingCount: schedule.occupiedBookingCount,
+    price: quantity.price,
+    open: quantity.open,
+    couponStatus: schedule.couponStatus || "",
+    couponNames: schedule.couponNames || ""
+  };
+}
+
+function jsonCell(value) {
+  if (!value || (Array.isArray(value) && !value.length)) return "";
+  return JSON.stringify(value);
+}
+
 function revenueProjectionFields(estimatedRevenue = 0, pricedSoldOut = 0, missingPriceSoldOut = 0) {
   const revenue = Math.max(0, Number(estimatedRevenue) || 0);
   const priced = Math.max(0, Number(pricedSoldOut) || 0);
@@ -1620,21 +1649,10 @@ function summarizeNaverBookingAvailability(items, schedules, bookingBusinessId, 
     naverCouponDetail: coupon.couponDetail,
     inventoryScope: "네이버예약 채널/날짜 기준 재고",
     inventoryMemo,
-    itemDetails: [...schedules, ...dayUseSchedules].map((item) => ({
-      bizItemId: item.bizItemId,
-      name: item.name,
-      bizItemSubType: item.bizItemSubType,
-      saleType: item.saleType,
-      stock: item.stock,
-      bookingCount: item.bookingCount,
-      occupiedBookingCount: item.occupiedBookingCount,
-      available: item.available,
-      price: item.price,
-      couponStatus: item.couponStatus,
-      couponNames: item.couponNames,
-      couponChannel: item.couponChannel,
-      couponDetail: item.couponDetail,
-    })),
+    itemDetails: [
+      ...schedules.map((item) => compactNaverScheduleDetail(item, listType, item.date || CHECK_IN, availabilityUnit)),
+      ...dayUseSchedules.map((item) => compactNaverScheduleDetail(item, dayUseListType || "객실 종류별 리스트", item.date || CHECK_IN, "회")),
+    ],
   };
 }
 
@@ -1768,6 +1786,7 @@ async function collectNaverSchedulesForItems(bookingBusinessId, items, limit = 4
       couponSource("일정", day),
     ]);
     return {
+      date,
       bizItemId: item.bizItemId,
       name: item.name,
       bizItemSubType: item.bizItemSubType || "",
@@ -1878,9 +1897,13 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     const offlineRevenue = summarizeOfflineProductRevenue(item, productBasis, offlineReserved, unitLabel);
     const soldOut = Math.max(0, total - available);
     const rate = total > 0 ? soldOut / total : null;
+    const productDetails = (item.schedules || [])
+      .map((schedule) => compactNaverScheduleDetail(schedule, item.listType, item.date, item.availabilityUnit))
+      .slice(0, 80);
     return {
       ...item,
       schedules: undefined,
+      productDetails,
       rawAvailable: item.available,
       rawTotal,
       available,
@@ -1976,6 +1999,7 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     totalVarianceDetail,
     summary: `${valid.length}일 날짜별 잔여`,
     dates: valid,
+    productDetails: valid.flatMap((item) => item.productDetails || []),
   };
 }
 
@@ -2167,6 +2191,9 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.네이버쿠폰명 = result.naverCouponNames || "";
       row.네이버쿠폰확인채널 = result.naverCouponChannel || "";
       row.네이버쿠폰상세 = result.naverCouponDetail || "";
+      row.네이버상품상세JSON = jsonCell(result.itemDetails || []);
+      row.네이버요일별상품상세JSON = jsonCell(result.weekly?.productDetails || []);
+      row.dayUseWeeklyProductDetailsJson = jsonCell(result.dayUseWeekly?.productDetails || []);
       row.데이유즈기준일예상매출 = result.dayUseEstimatedRevenue ?? "";
       row.basisDayUseAdjustedRevenue = result.dayUseAdjustedEstimatedRevenue ?? "";
       row.basisDayUseMissingPriceEstimatedRevenue = result.dayUseMissingPriceEstimatedRevenue ?? "";
@@ -3062,6 +3089,9 @@ async function main() {
     "네이버쿠폰명",
     "네이버쿠폰확인채널",
     "네이버쿠폰상세",
+    "네이버상품상세JSON",
+    "네이버요일별상품상세JSON",
+    "dayUseWeeklyProductDetailsJson",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",
@@ -3171,6 +3201,9 @@ async function main() {
     "네이버쿠폰명",
     "네이버쿠폰확인채널",
     "네이버쿠폰상세",
+    "네이버상품상세JSON",
+    "네이버요일별상품상세JSON",
+    "dayUseWeeklyProductDetailsJson",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",
@@ -3282,6 +3315,9 @@ async function main() {
     "네이버쿠폰명",
     "네이버쿠폰확인채널",
     "네이버쿠폰상세",
+    "네이버상품상세JSON",
+    "네이버요일별상품상세JSON",
+    "dayUseWeeklyProductDetailsJson",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",
@@ -3391,6 +3427,9 @@ async function main() {
     "네이버쿠폰명",
     "네이버쿠폰확인채널",
     "네이버쿠폰상세",
+    "네이버상품상세JSON",
+    "네이버요일별상품상세JSON",
+    "dayUseWeeklyProductDetailsJson",
     "네이버재고범위",
     "객실수검증메모",
     "주간재고수집일수",

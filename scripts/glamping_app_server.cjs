@@ -4373,6 +4373,23 @@ function numericField(row, keys) {
   return null;
 }
 
+function jsonArrayField(row, keys) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value === null || value === undefined || value === "") continue;
+    if (Array.isArray(value)) return value;
+    const text = String(value || "").trim();
+    if (!text) continue;
+    try {
+      const parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Older result rows do not carry structured product details.
+    }
+  }
+  return [];
+}
+
 function dateDiffDays(startDate, endDate) {
   const start = new Date(`${startDate}T00:00:00Z`);
   const end = new Date(`${endDate}T00:00:00Z`);
@@ -7345,6 +7362,11 @@ function summarizeAvailabilityRows(rows) {
     const naverCouponNames = row["네이버쿠폰명"] || row.naverCouponNames || "";
     const naverCouponChannel = row["네이버쿠폰확인채널"] || row.naverCouponChannel || "";
     const naverCouponDetail = row["네이버쿠폰상세"] || row.naverCouponDetail || "";
+    const itemDetails = jsonArrayField(row, ["네이버상품상세JSON", "itemDetailsJson", "itemDetails"]);
+    const weeklyProductDetails = [
+      ...jsonArrayField(row, ["네이버요일별상품상세JSON", "weeklyProductDetailsJson", "weeklyProductDetails"]),
+      ...jsonArrayField(row, ["dayUseWeeklyProductDetailsJson"])
+    ];
 
     const key = availabilityPlaceKey(row);
     if (!key || byPlace.has(key)) continue;
@@ -7377,6 +7399,8 @@ function summarizeAvailabilityRows(rows) {
       naverCouponNames,
       naverCouponChannel,
       naverCouponDetail,
+      itemDetails,
+      weeklyProductDetails,
       nightItemCount: numericField(row, ["숙박상품수"]),
       dayUseItemCount: numericField(row, ["데이유즈상품수"]),
       countedItemCount: numericField(row, ["예약계산대상상품수"]),
@@ -8305,8 +8329,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-lodge-autofill-basis"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-lodge-autofill-basis"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-lodge-autofill-v2"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-lodge-autofill-v2"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
