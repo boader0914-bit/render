@@ -9179,6 +9179,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const myLodgeModel = b2bMyLodgeBenchmarkModel(brief, revenueModel);
   const rankRange = effectiveDetailRankRange(brief.run);
   const rankRangeLabel = rankRange === "상세 생략" ? rankRange : `${rankRange}위`;
+  const sampleCount = snapshotModel.rankModel?.rows?.length || brief.itemCount || 0;
   return `
     <section class="b2b-brief-card b2b-report-first">
       <div class="b2b-brief-head">
@@ -9187,10 +9188,10 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
           <h3>${escapeHtml(brief.keyword)} 경쟁 현황</h3>
           <p>${escapeHtml("지정 검색범위 안의 경쟁지표, 실제 예약율, 예상 평균 매출, 월별 예상 검색량만 먼저 보여줍니다.")}</p>
         </div>
-        <div class="b2b-brief-score">
-          <span>분석 기준</span>
-          <strong>${fmtNumber(brief.score)}점</strong>
-          <small>${escapeHtml(`${brief.range} · ${rankRangeLabel}`)}</small>
+        <div class="b2b-brief-score analysis-scope">
+          <span>분석 조건</span>
+          <strong>${escapeHtml(brief.range)}</strong>
+          <small>${escapeHtml(`${rankRangeLabel} · ${fmtNumber(sampleCount)}곳 경쟁업체`)}</small>
         </div>
       </div>
       ${renderB2BSimpleSummary(brief, simpleModel)}

@@ -9920,6 +9920,24 @@ a.platform-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.b2b-brief-score.analysis-scope {
+  align-content: center;
+  gap: 7px;
+}
+
+.b2b-brief-score.analysis-scope strong {
+  color: #0b4fb3;
+  font-size: 20px;
+  line-height: 1.25;
+  word-break: keep-all;
+}
+
+.b2b-brief-score.analysis-scope small {
+  color: #344054;
+  line-height: 1.35;
+  word-break: keep-all;
+}
+
 .b2b-report-first .b2b-brief-head {
   align-items: center;
 }
