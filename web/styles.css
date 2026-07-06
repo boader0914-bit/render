@@ -546,7 +546,14 @@ a {
   font-weight: 800;
 }
 
-.b2b-history-head > span {
+.b2b-history-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.b2b-history-actions > span {
   flex: 0 0 auto;
   min-height: 25px;
   display: inline-flex;
@@ -558,6 +565,24 @@ a {
   padding: 0 9px;
   font-size: 11px;
   font-weight: 950;
+}
+
+.b2b-history-actions button {
+  min-height: 25px;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #fff;
+  color: #175cd3;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.b2b-history-actions button:hover {
+  border-color: #3182f6;
+  background: #eff6ff;
 }
 
 .b2b-history-list {
@@ -14919,10 +14944,17 @@ body.role-b2b .b2b-search-history {
   border-top-color: rgba(156, 174, 204, .18);
 }
 
-body.role-b2b .b2b-history-head > span {
+body.role-b2b .b2b-history-actions > span,
+body.role-b2b .b2b-history-actions button {
   border-color: rgba(106, 168, 255, .28);
   background: rgba(106, 168, 255, .12);
   color: #b9d7ff;
+}
+
+body.role-b2b .b2b-history-actions button:hover {
+  border-color: rgba(106, 168, 255, .46);
+  background: rgba(106, 168, 255, .20);
+  color: #e7f0ff;
 }
 
 body.role-b2b .report-hero {

@@ -41,7 +41,8 @@ const state = {
   b2bMyLodgeCollecting: false,
   b2bMyLodgeCollectStatus: "",
   b2bMyLodgeCollectResult: null,
-  memberSearchHistory: []
+  memberSearchHistory: [],
+  b2bHistoryExpanded: false
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -15118,20 +15119,31 @@ function b2bSearchResultCard(row = {}, normalized = "") {
 function renderB2BSearchHistoryPanel() {
   if (!els.b2bSearchHistory || isAdminRole()) return;
   const rows = state.memberSearchHistory || [];
+  const expanded = Boolean(state.b2bHistoryExpanded);
+  const latest = rows[0] || null;
   const profile = state.session?.profile || {};
   const ownership = profile.ownershipStatusLabel || "";
   const memberLabel = state.session?.accountType === "demo"
     ? "공용 B2B 계정"
     : [state.session?.username || "", ownership].filter(Boolean).join(" · ");
+  const latestLabel = latest
+    ? [
+      latest.keyword || latest.runLabel || "검색 리포트",
+      latest.completedAt ? compactDateTime(latest.completedAt) : ""
+    ].filter(Boolean).join(" · ")
+    : (memberLabel || "로그인 아이디 기준");
   els.b2bSearchHistory.innerHTML = `
     <div class="b2b-history-head">
       <div>
         <strong>내 검색 기록</strong>
-        <small>${escapeHtml(memberLabel || "로그인 아이디 기준")}</small>
+        <small>${escapeHtml(latestLabel)}</small>
       </div>
-      <span>${fmtNumber(rows.length)}건</span>
+      <div class="b2b-history-actions">
+        <span>${fmtNumber(rows.length)}건</span>
+        ${rows.length ? `<button type="button" data-b2b-history-toggle aria-expanded="${expanded ? "true" : "false"}">${expanded ? "접기" : "더보기"}</button>` : ""}
+      </div>
     </div>
-    ${rows.length ? `
+    ${rows.length && expanded ? `
       <div class="b2b-history-list">
         ${rows.slice(0, 8).map((row) => `
           <button type="button" data-b2b-history-run-id="${escapeHtml(row.runId)}">
@@ -15269,6 +15281,7 @@ function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
   els.pageTitle.textContent = tabLabel(state.activeTab);
+  if (els.pageSubtitle) els.pageSubtitle.hidden = false;
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
   } else if (state.activeTab === "decisionQueue") {
@@ -17435,6 +17448,11 @@ function bindEvents() {
   document.addEventListener("click", (event) => {
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
+    if (event.target.closest("[data-b2b-history-toggle]")) {
+      state.b2bHistoryExpanded = !state.b2bHistoryExpanded;
+      renderB2BSearchHistoryPanel();
+      return;
+    }
     const b2bHistoryRun = event.target.closest("[data-b2b-history-run-id]");
     if (b2bHistoryRun) {
       loadB2BHistoryRun(b2bHistoryRun.dataset.b2bHistoryRunId).catch((error) => {
