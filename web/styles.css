@@ -10829,6 +10829,19 @@ a.platform-row:hover {
   accent-color: var(--blue);
 }
 
+.b2b-my-lodge-channel-note {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid rgba(15, 23, 42, .10);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, .035);
+  color: #4c5f7a;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+  padding: 9px 11px;
+}
+
 .b2b-my-lodge-actions {
   min-width: 0;
   display: grid;
@@ -14453,6 +14466,7 @@ body.role-b2b .b2b-my-lodge-tags em {
 }
 
 body.role-b2b .b2b-my-lodge-actions .collect,
+body.role-b2b .b2b-my-lodge-channel-note,
 body.role-b2b .b2b-my-lodge-collect-status {
   border-color: rgba(106, 168, 255, .35);
   background: rgba(106, 168, 255, .13);
