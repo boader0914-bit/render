@@ -7347,6 +7347,33 @@ function b2bStableInterestLodgeId(lodge = {}) {
   return `interest-${(basis || "lodge").slice(0, 72)}`;
 }
 
+function b2bInterestLodgeMatchKey(lodge = {}) {
+  return compactSearchText([
+    lodge.id,
+    lodge.lodgingName,
+    lodge.savedAt,
+    lodge.collectedAt,
+    lodge.roomCount,
+    lodge.roomType
+  ].filter(Boolean).join("|"));
+}
+
+function b2bInterestLodgeTargetIndex(interestLodges = [], lodgeId = "", fallbackIndex = -1) {
+  const id = String(lodgeId || "").trim();
+  const normalizedId = compactSearchText(id);
+  const index = interestLodges.findIndex((lodge) => (
+    String(lodge.id || "").trim() === id ||
+    String(b2bStableInterestLodgeId(lodge) || "").trim() === id ||
+    compactSearchText(lodge.id || "") === normalizedId ||
+    compactSearchText(b2bStableInterestLodgeId(lodge)) === normalizedId ||
+    b2bInterestLodgeMatchKey(lodge) === normalizedId
+  ));
+  if (index >= 0) return index;
+  const number = Number(fallbackIndex);
+  if (Number.isInteger(number) && number >= 0 && number < interestLodges.length) return number;
+  return -1;
+}
+
 function b2bNewInterestLodgeId() {
   return `interest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -8073,6 +8100,7 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
       ${interestLodges.map((lodge, index) => {
         const model = b2bMyLodgeBenchmarkModel(brief, revenueModel, lodge);
         const name = String(lodge.lodgingName || `관심숙소 ${index + 1}`).trim();
+        const actionId = lodge.id || b2bStableInterestLodgeId(lodge) || b2bInterestLodgeMatchKey(lodge) || `index-${index}`;
         const facilities = model.facilities.length ? model.facilities.slice(0, 4) : [];
         const segmentLabels = model.roomSegments.map((row) => row.type).filter(Boolean).slice(0, 4);
         const chips = [
@@ -8098,8 +8126,8 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
               ${chips.length ? chips.map((chip) => `<em>${escapeHtml(chip)}</em>`).join("") : "<em>상세 입력 대기</em>"}
             </div>
             <div class="b2b-interest-lodge-actions">
-              <button class="secondary-button" type="button" data-b2b-interest-lodge-edit="${escapeHtml(lodge.id)}">수정</button>
-              <button class="ghost-button" type="button" data-b2b-interest-lodge-delete="${escapeHtml(lodge.id)}">삭제</button>
+              <button class="secondary-button" type="button" data-b2b-interest-lodge-edit="${escapeHtml(actionId)}" data-b2b-interest-lodge-index="${index}">수정</button>
+              <button class="ghost-button" type="button" data-b2b-interest-lodge-delete="${escapeHtml(actionId)}" data-b2b-interest-lodge-index="${index}">삭제</button>
             </div>
           </article>
         `;
@@ -8357,26 +8385,32 @@ function saveB2BMyLodgeBenchmark() {
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function editB2BInterestLodge(lodgeId = "") {
+function editB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
   const store = readB2BMyLodgeStore();
   const interestLodges = Array.isArray(store.interestLodges) ? store.interestLodges : [];
-  const target = interestLodges.find((lodge) => lodge.id === lodgeId);
-  if (!target) return;
+  const targetIndex = b2bInterestLodgeTargetIndex(interestLodges, lodgeId, fallbackIndex);
+  const target = targetIndex >= 0 ? interestLodges[targetIndex] : null;
+  if (!target) {
+    state.b2bMyLodgeCollectStatus = "수정할 관심숙소를 찾지 못했습니다. 화면을 새로고침한 뒤 다시 시도하세요.";
+    renderReport();
+    return;
+  }
   state.b2bMyLodgeCollectStatus = `${target.lodgingName || "관심숙소"} 정보를 수정합니다. 저장하면 다시 카드로 등록됩니다.`;
   persistB2BMyLodgeStore({
     ...store,
     draft: { ...target, id: "" },
-    interestLodges: interestLodges.filter((lodge) => lodge.id !== lodgeId)
+    interestLodges: interestLodges.filter((_, index) => index !== targetIndex)
   });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-function deleteB2BInterestLodge(lodgeId = "") {
+function deleteB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
   const store = readB2BMyLodgeStore();
   const interestLodges = Array.isArray(store.interestLodges) ? store.interestLodges : [];
-  const next = interestLodges.filter((lodge) => lodge.id !== lodgeId);
-  state.b2bMyLodgeCollectStatus = next.length === interestLodges.length ? "삭제할 관심숙소를 찾지 못했습니다." : "관심숙소를 삭제했습니다.";
+  const targetIndex = b2bInterestLodgeTargetIndex(interestLodges, lodgeId, fallbackIndex);
+  const next = targetIndex >= 0 ? interestLodges.filter((_, index) => index !== targetIndex) : interestLodges;
+  state.b2bMyLodgeCollectStatus = targetIndex < 0 ? "삭제할 관심숙소를 찾지 못했습니다." : "관심숙소를 삭제했습니다.";
   persistB2BMyLodgeStore({ ...store, interestLodges: next });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -18416,12 +18450,18 @@ function bindEvents() {
     }
     const interestLodgeEdit = event.target.closest("[data-b2b-interest-lodge-edit]");
     if (interestLodgeEdit) {
-      editB2BInterestLodge(interestLodgeEdit.dataset.b2bInterestLodgeEdit || "");
+      editB2BInterestLodge(
+        interestLodgeEdit.dataset.b2bInterestLodgeEdit || "",
+        Number(interestLodgeEdit.dataset.b2bInterestLodgeIndex)
+      );
       return;
     }
     const interestLodgeDelete = event.target.closest("[data-b2b-interest-lodge-delete]");
     if (interestLodgeDelete) {
-      deleteB2BInterestLodge(interestLodgeDelete.dataset.b2bInterestLodgeDelete || "");
+      deleteB2BInterestLodge(
+        interestLodgeDelete.dataset.b2bInterestLodgeDelete || "",
+        Number(interestLodgeDelete.dataset.b2bInterestLodgeIndex)
+      );
       return;
     }
     if (event.target.closest("[data-b2b-my-lodge-collect]")) {
