@@ -2603,7 +2603,6 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
   const revenueAverage = revenueValues.length ? revenueValues.reduce((sum, value) => sum + value, 0) / revenueValues.length : 0;
   const revenueMax = revenueValues.length ? Math.max(...revenueValues) : 0;
   const revenueMin = revenueValues.length ? Math.min(...revenueValues) : 0;
-  const couponRows = rows.filter((row) => naverCouponInfo(row.item).visible);
   const run = state.data?.run || {};
   const scopeRange = effectiveDetailRankRange(run);
   const scopeValue = scopeRange === "상세 생략" ? "순위만" : `${scopeRange}위`;
@@ -2640,12 +2639,6 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
       value: revenueAverage ? fmtWon(revenueAverage) : "대기",
       note: revenueRows.length ? `매출 표본 ${fmtNumber(revenueRows.length)}곳` : "가격/수량 표본 필요",
       tone: revenueRows.length ? "strong" : "watch"
-    },
-    {
-      label: "쿠폰 확인",
-      value: fmtNumber(couponRows.length),
-      note: couponRows.length ? "쿠폰명/혜택 노출 확인" : "자동 수집 제한",
-      tone: couponRows.length ? "strong" : "neutral"
     }
   ];
   const actionRows = [];
@@ -2680,7 +2673,6 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     revenueAverage,
     revenueMax,
     revenueMin,
-    couponRows,
     scopeValue,
     scopePeriod,
     scopeProduct,
@@ -2690,7 +2682,7 @@ function b2bRankExposureModel(model = b2bRankBoardModel()) {
     actionRows,
     focusRows,
     summaryTone,
-    summary: `예약율·예상 매출·쿠폰·상품 구성 기준`
+    summary: `예약율·예상 매출·상품 구성 기준`
   };
 }
 
@@ -2854,7 +2846,7 @@ function renderB2BRankBrief(model = b2bRankBoardModel()) {
         <div>
           <p class="eyebrow">순위 경쟁 브리프</p>
           <h3>지정 범위 경쟁업체</h3>
-          <p>${escapeHtml("검색 당시 지정한 순위 안에서 예약율, 예상 매출, 쿠폰, 상품 구성을 비교합니다.")}</p>
+          <p>${escapeHtml("검색 당시 지정한 순위 안에서 예약율, 예상 매출, 상품 구성을 비교합니다.")}</p>
           <div class="b2b-rank-context">
             <span>검색범위 ${escapeHtml(exposure.scopeValue || "확인")}</span>
             <span>${escapeHtml(exposure.scopePeriod || "기간 확인")}</span>
@@ -3436,9 +3428,11 @@ function renderCompanies() {
   const items = isAdminRole() ? rankedCompanyItems() : b2bScopedRankedCompanyItems();
   const ranking = state.data?.ranking || {};
   const b2bRankBrief = !isAdminRole() ? renderB2BRankBrief(b2bRankBoardModel(items)) : "";
-  els.rankCount.textContent = ranking.total
-    ? `${fmtNumber(items.length)} 순위 · 재고 ${fmtNumber(ranking.inventoryLinkedCount || analysisItems.length)}`
-    : `${fmtNumber(items.length)} 업체`;
+  els.rankCount.textContent = !isAdminRole()
+    ? `${fmtNumber(items.length)}곳 경쟁업체`
+    : ranking.total
+      ? `${fmtNumber(items.length)} 순위 · 재고 ${fmtNumber(ranking.inventoryLinkedCount || analysisItems.length)}`
+      : `${fmtNumber(items.length)} 업체`;
   if (!items.length) {
     els.companyList.innerHTML = `<div class="empty">네이버 순위 데이터가 없습니다.</div>`;
     return;
@@ -9013,7 +9007,6 @@ function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
   const rankModel = b2bRankBoardModel();
   const items = state.data?.availability?.items || [];
   const nextDemand = demandNextMonthProjection(demandTrafficAggregate());
-  const couponRows = items.filter((item) => naverCouponInfo(item).visible);
   const offlineRows = items.filter((item) => collectionStatusProfile(item).offlineEstimated);
   const revenueCoverageText = brief.revenueSampleCount
     ? `${fmtNumber(brief.revenueSampleCount)}개 표본${Number.isFinite(brief.revenueCoverage) ? ` · ${fmtRate(brief.revenueCoverage)}` : ""}`
@@ -9021,8 +9014,7 @@ function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
   const dataStatus = [
     { label: "분석 범위", value: `${fmtNumber(rankModel.rows.length || brief.itemCount)}곳`, note: "지정 검색범위 기준", tone: rankModel.rows.length ? "good" : "watch" },
     { label: "예약율 표본", value: brief.salesSampleCount ? `${fmtNumber(brief.salesSampleCount)}곳` : "대기", note: "네이버 플레이스 기준", tone: brief.salesSampleCount ? "good" : "watch" },
-    { label: "매출 표본", value: brief.revenueSampleCount ? fmtNumber(brief.revenueSampleCount) : "대기", note: revenueCoverageText, tone: brief.revenueSampleCount ? "good" : "watch" },
-    { label: "쿠폰 확인", value: fmtNumber(couponRows.length), note: couponRows.length ? "쿠폰명/노출 확인" : "자동 수집 제한", tone: couponRows.length ? "strong" : "neutral" }
+    { label: "매출 표본", value: brief.revenueSampleCount ? fmtNumber(brief.revenueSampleCount) : "대기", note: revenueCoverageText, tone: brief.revenueSampleCount ? "good" : "watch" }
   ];
   const actionRows = [
     {
@@ -9062,7 +9054,6 @@ function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
     rankModel,
     dataStatus,
     actionRows,
-    couponCount: couponRows.length,
     offlineCount: offlineRows.length
   };
 }
