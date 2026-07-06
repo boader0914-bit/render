@@ -7211,8 +7211,11 @@ function b2bMyLodgeLegacySegment(draft = {}) {
 }
 
 function b2bMyLodgeSegmentInputRows(draft = {}) {
-  const rows = b2bMyLodgeSegmentRows(draft);
-  if (rows.length) return rows;
+  if (Array.isArray(draft.roomSegments) && draft.roomSegments.length) {
+    return draft.roomSegments
+      .map((row) => b2bMyLodgeCleanSegment(row))
+      .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+  }
   const legacy = b2bMyLodgeLegacySegment(draft);
   return legacy ? [legacy] : [];
 }
@@ -7727,16 +7730,10 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
   `;
 }
 
-function collectB2BMyLodgeFormValues() {
+function collectB2BMyLodgeSegmentFormRows({ includeBlank = false } = {}) {
   const form = document.querySelector("[data-b2b-my-lodge-form]");
-  if (!form) return null;
-  const formData = new FormData(form);
-  const value = (name) => String(formData.get(name) || "").trim();
-  const numberValue = (name) => {
-    const number = b2bMyLodgeNumber(value(name));
-    return number > 0 ? String(Math.round(number)) : "";
-  };
-  const segmentRows = Array.from(form.querySelectorAll("[data-b2b-room-segment-row]"))
+  if (!form) return [];
+  const rows = Array.from(form.querySelectorAll("[data-b2b-room-segment-row]"))
     .map((row) => {
       const rowValue = (name) => String(row.querySelector(`[name="${name}"]`)?.value || "").trim();
       const rowNumber = (name) => {
@@ -7752,8 +7749,20 @@ function collectB2BMyLodgeFormValues() {
         sundayPrice: rowNumber("segmentSundayPrice")
       };
     })
-    .filter((row) => b2bMyLodgeSegmentHasInput(row))
     .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+  return includeBlank ? rows : rows.filter((row) => b2bMyLodgeSegmentHasInput(row));
+}
+
+function collectB2BMyLodgeFormValues() {
+  const form = document.querySelector("[data-b2b-my-lodge-form]");
+  if (!form) return null;
+  const formData = new FormData(form);
+  const value = (name) => String(formData.get(name) || "").trim();
+  const numberValue = (name) => {
+    const number = b2bMyLodgeNumber(value(name));
+    return number > 0 ? String(Math.round(number)) : "";
+  };
+  const segmentRows = collectB2BMyLodgeSegmentFormRows();
   const segmentTotal = segmentRows.reduce((sum, row) => sum + Math.round(b2bMyLodgeNumber(row.count)), 0);
   const firstSegment = segmentRows[0] || {};
   const roomType = segmentRows.map((row) => row.type).filter(Boolean).slice(0, 4).join(", ");
@@ -7795,7 +7804,9 @@ function saveB2BMyLodgeBenchmark() {
 
 function updateB2BMyLodgeRoomSegments(action = "add", index = -1) {
   const values = collectB2BMyLodgeFormValues() || readB2BMyLodgeDraft() || {};
-  const rows = Array.isArray(values.roomSegments) ? values.roomSegments.slice(0, B2B_MY_LODGE_SEGMENT_LIMIT) : [];
+  const displayedRows = collectB2BMyLodgeSegmentFormRows({ includeBlank: true });
+  const rows = (displayedRows.length ? displayedRows : b2bMyLodgeSegmentInputRows(values)).slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+  if (!rows.length) rows.push(b2bMyLodgeBlankSegment());
   if (action === "add" && rows.length < B2B_MY_LODGE_SEGMENT_LIMIT) {
     rows.push(b2bMyLodgeBlankSegment());
   }
