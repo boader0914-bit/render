@@ -1053,7 +1053,7 @@ function normalizeOwnershipStatus(value = "") {
 
 function ownershipStatusLabel(value = "") {
   return {
-    owned: "글램핑장 보유",
+    owned: "숙박업소 보유",
     planning: "오픈 준비 중",
     none: "미보유/투자 검토",
     agency: "대행사/컨설턴트"
@@ -1061,24 +1061,20 @@ function ownershipStatusLabel(value = "") {
 }
 
 function memberProfileFromPayload(payload = {}) {
-  const otaRaw = Array.isArray(payload.otaChannels)
-    ? payload.otaChannels
-    : String(payload.otaChannels || "").split(/[,/\s]+/);
-  const otaChannels = otaRaw.map((item) => sanitizeMemberText(item, 30)).filter(Boolean).slice(0, 12);
   return {
-    displayName: sanitizeMemberText(payload.displayName || payload.name, 80),
+    displayName: "",
     phone: sanitizeMemberText(payload.phone, 40),
     email: sanitizeMemberText(payload.email, 120),
     companyName: sanitizeMemberText(payload.companyName, 120),
     ownershipStatus: normalizeOwnershipStatus(payload.ownershipStatus || payload.hasGlamping),
     ownershipStatusLabel: ownershipStatusLabel(payload.ownershipStatus || payload.hasGlamping),
-    glampingName: sanitizeMemberText(payload.glampingName, 140),
-    address: sanitizeMemberText(payload.address, 240),
-    naverPlaceUrl: sanitizeMemberText(payload.naverPlaceUrl, 500),
-    naverBookingUrl: sanitizeMemberText(payload.naverBookingUrl, 500),
-    roomCount: Math.max(0, Math.min(999, Math.floor(Number(payload.roomCount) || 0))),
-    otaChannels,
-    note: sanitizeMemberText(payload.note, 800),
+    glampingName: "",
+    address: "",
+    naverPlaceUrl: "",
+    naverBookingUrl: "",
+    roomCount: 0,
+    otaChannels: [],
+    note: "",
     adminReviewStatus: "pending",
     adminReviewLabel: "관리자 검토 대기"
   };
@@ -1110,6 +1106,9 @@ function isConsentAccepted(value) {
 function validateSignupPayload(payload = {}) {
   const username = normalizeLoginId(payload.username || payload.loginId);
   const password = String(payload.password || "");
+  const passwordConfirm = String(payload.passwordConfirm || payload.confirmPassword || "");
+  const phone = sanitizeMemberText(payload.phone, 40);
+  const email = sanitizeMemberText(payload.email, 120);
   if (!/^[a-z0-9._@-]{4,80}$/i.test(username)) {
     const error = new Error("아이디는 영문, 숫자, 이메일 형식으로 4자 이상 입력하세요.");
     error.statusCode = 400;
@@ -1122,6 +1121,21 @@ function validateSignupPayload(payload = {}) {
   }
   if (password.length < 4 || password.length > 120) {
     const error = new Error("비밀번호는 4자 이상 입력하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (password !== passwordConfirm) {
+    const error = new Error("비밀번호 확인이 일치하지 않습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!phone) {
+    const error = new Error("연락처를 입력하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    const error = new Error("이메일을 올바르게 입력하세요.");
     error.statusCode = 400;
     throw error;
   }
@@ -1600,10 +1614,10 @@ function legalPage(title, eyebrow, sections) {
 }
 
 function termsPage() {
-  return legalPage("글램핑데이터랩 B2B 이용약관", "필수 동의", [
+  return legalPage("글램핑데이터랩 사업자(개인) 이용약관", "필수 동의", [
     {
       title: "목적",
-      body: "<p>이 약관은 글램핑데이터랩 B2B 서비스의 회원가입, 로그인, 경쟁 리포트 조회, 검색 이력 관리 및 관리자 검토 기능 이용 조건을 정합니다.</p>"
+      body: "<p>이 약관은 글램핑데이터랩 사업자(개인) 서비스의 회원가입, 로그인, 경쟁 리포트 조회, 검색 이력 관리 및 관리자 검토 기능 이용 조건을 정합니다.</p>"
     },
     {
       title: "서비스의 성격",
@@ -1615,7 +1629,7 @@ function termsPage() {
     },
     {
       title: "데이터 보관 구조",
-      body: "<ul><li>마스터 DB: 관리자 검토와 보정이 완료된 업체 고유정보, 객실 수, 가격 기준, 채널 정보 등을 저장합니다.</li><li>고객 DB: 회원 계정, 회원 제출 숙소 정보, 검색 이력, 동의 이력 등 회원별 이용 정보를 저장합니다.</li><li>회원 제출 숙소 정보는 관리자 검토 후 필요한 항목만 마스터 DB와 연결될 수 있습니다.</li></ul>"
+      body: "<ul><li>마스터 DB: 관리자 검토와 보정이 완료된 업체 고유정보, 객실 수, 가격 기준, 채널 정보 등을 저장합니다.</li><li>고객 DB: 회원 계정, 숙소 또는 회사명, 숙박업소 보유 여부, 검색 이력, 동의 이력 등 회원별 이용 정보를 저장합니다.</li><li>가입 단계에서 입력한 정보는 고객 DB에 보관하며, 마스터 DB 보정값과는 분리해 관리합니다.</li></ul>"
     },
     {
       title: "회원의 의무",
@@ -1636,11 +1650,11 @@ function privacyPage() {
   return legalPage("개인정보 수집 및 이용 안내", "필수 동의", [
     {
       title: "수집 목적",
-      body: "<ul><li>B2B 회원 식별, 로그인, 검색 이력 묶음 제공</li><li>지역 경쟁 리포트 생성 및 회원별 최근 분석 관리</li><li>회원이 제출한 숙소 정보의 관리자 검토와 마스터 DB 연결</li><li>서비스 안정성 확보, 부정 이용 방지, 문의 대응</li></ul>"
+      body: "<ul><li>사업자(개인) 회원 식별, 로그인, 검색 이력 묶음 제공</li><li>지역 경쟁 리포트 생성 및 회원별 최근 분석 관리</li><li>회원이 제출한 숙소 또는 회사 정보의 관리자 검토와 고객 DB 관리</li><li>서비스 안정성 확보, 부정 이용 방지, 문의 대응</li></ul>"
     },
     {
       title: "수집 항목",
-      body: "<ul><li>필수: 아이디, 비밀번호 해시, 만 14세 이상 확인, 약관 및 개인정보 동의 이력</li><li>선택 입력: 이름/담당자, 연락처, 이메일, 회사/업체명, 글램핑장 보유 여부, 숙소명, 주소, 객실 수, 네이버 플레이스 URL, 네이버 예약 URL, OTA 채널, 메모</li><li>자동 생성: 회원ID, 가입일, 최근 로그인, 검색 횟수, 검색 키워드, 검색 기간, 순위 범위, 실행 리포트 ID, IP 해시, 세션 해시, 브라우저 식별값 해시</li></ul>"
+      body: "<ul><li>필수: 아이디, 비밀번호 해시, 연락처, 이메일, 만 14세 이상 확인, 약관 및 개인정보 동의 이력</li><li>선택 입력: 숙소 또는 회사명, 숙박업소 보유 여부</li><li>자동 생성: 회원ID, 가입일, 최근 로그인, 검색 횟수, 검색 키워드, 검색 기간, 순위 범위, 실행 리포트 ID, IP 해시, 세션 해시, 브라우저 식별값 해시</li></ul>"
     },
     {
       title: "보관 위치",
@@ -1664,7 +1678,7 @@ function privacyPage() {
     },
     {
       title: "동의 거부권",
-      body: "<p>회원은 개인정보 수집 및 이용에 동의하지 않을 수 있습니다. 다만 필수 항목 동의를 거부하면 B2B 회원가입과 리포트 이용이 제한됩니다.</p>"
+      body: "<p>회원은 개인정보 수집 및 이용에 동의하지 않을 수 있습니다. 다만 필수 항목 동의를 거부하면 사업자(개인) 회원가입과 리포트 이용이 제한됩니다.</p>"
     }
   ]);
 }
@@ -1731,7 +1745,7 @@ function loginPage(message = "") {
       <button type="submit">로그인</button>
       <div class="error">${escapedMessage}</div>
     </form>
-    <a class="link" href="/signup">B2B 회원가입</a>
+    <a class="link" href="/signup">사업자(개인) 회원가입</a>
   </main>
 </body>
 </html>`;
@@ -1740,7 +1754,6 @@ function loginPage(message = "") {
 function signupPage(message = "", values = {}) {
   const escapedMessage = String(message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const value = (key) => String(values[key] || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const textarea = String(values.note || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const selected = (key) => normalizeOwnershipStatus(values.ownershipStatus || values.hasGlamping) === key ? " selected" : "";
   const checked = (key) => isConsentAccepted(values[key]) ? " checked" : "";
   return `<!doctype html>
@@ -1748,7 +1761,7 @@ function signupPage(message = "", values = {}) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>글램핑데이터랩 B2B 회원가입</title>
+  <title>글램핑데이터랩 사업자(개인) 회원가입</title>
   <style>
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
@@ -1769,53 +1782,43 @@ function signupPage(message = "", values = {}) {
     .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 16px; background: #f9fafb; }
     .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #182230; font-size: 13px; line-height: 1.4; }
     .check a { color: #175cd3; font-weight: 900; text-decoration: none; }
+    .required { color: #f04438; font-weight: 900; }
     .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
     @media (max-width: 560px) { main { padding: 22px; } .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>B2B 회원가입</h1>
-    <p>로그인 아이디 기준으로 검색 이력을 묶고, 입력한 글램핑장 정보는 관리자 검토 전까지 제출 정보로만 보관합니다.</p>
+    <h1>사업자(개인) 회원가입</h1>
+    <p>아이디 기준으로 검색 이력을 묶고, 입력한 사업자 정보는 고객 DB에 보관합니다.</p>
     <form method="post" action="/signup">
       <div class="grid">
-        <label>아이디<input name="username" autocomplete="username" required value="${value("username")}"></label>
-        <label>비밀번호<input name="password" type="password" autocomplete="new-password" required></label>
+        <label><span>아이디 <b class="required">*</b></span><input name="username" autocomplete="username" required value="${value("username")}"></label>
+        <label><span>비밀번호 <b class="required">*</b></span><input name="password" type="password" autocomplete="new-password" required></label>
       </div>
       <div class="grid">
-        <label>이름/담당자<input name="displayName" autocomplete="name" value="${value("displayName")}"></label>
-        <label>연락처<input name="phone" autocomplete="tel" value="${value("phone")}"></label>
+        <label><span>비밀번호 확인 <b class="required">*</b></span><input name="passwordConfirm" type="password" autocomplete="new-password" required></label>
+        <label><span>연락처 <b class="required">*</b></span><input name="phone" autocomplete="tel" required value="${value("phone")}"></label>
       </div>
       <div class="grid">
-        <label>이메일<input name="email" type="email" autocomplete="email" value="${value("email")}"></label>
-        <label>회사/업체명<input name="companyName" value="${value("companyName")}"></label>
+        <label><span>이메일 <b class="required">*</b></span><input name="email" type="email" autocomplete="email" required value="${value("email")}"></label>
+        <label>숙소 또는 회사명<input name="companyName" value="${value("companyName")}"></label>
       </div>
-      <label>글램핑장 보유 여부
+      <label>숙박업소 보유 여부
         <select name="ownershipStatus">
-          <option value="owned"${selected("owned")}>글램핑장 보유</option>
+          <option value="owned"${selected("owned")}>숙박업소 보유</option>
           <option value="planning"${selected("planning")}>오픈 준비 중</option>
           <option value="none"${selected("none")}>미보유 / 투자 검토</option>
           <option value="agency"${selected("agency")}>대행사 / 컨설턴트</option>
         </select>
       </label>
-      <div class="grid">
-        <label>글램핑장명<input name="glampingName" value="${value("glampingName")}"></label>
-        <label>객실 수<input name="roomCount" type="number" min="0" step="1" value="${value("roomCount")}"></label>
-      </div>
-      <label>주소<input name="address" value="${value("address")}"></label>
-      <div class="grid">
-        <label>네이버 플레이스 URL<input name="naverPlaceUrl" value="${value("naverPlaceUrl")}"></label>
-        <label>네이버 예약 URL<input name="naverBookingUrl" value="${value("naverBookingUrl")}"></label>
-      </div>
-      <label>사용 OTA<input name="otaChannels" placeholder="예: 여기어때, 야놀자, 떠나요" value="${value("otaChannels")}"></label>
-      <label>메모<textarea name="note">${textarea}</textarea></label>
       <section class="agreements" aria-label="회원가입 필수 동의">
-        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 글램핑데이터랩 B2B 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
+        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 글램핑데이터랩 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>
       </section>
-      <p class="hint">회원 제출 정보는 고객 DB에 보관하고, 관리자 검토 후 필요한 항목만 마스터 DB와 연결합니다.</p>
-      <button type="submit">가입하고 B2B 시작</button>
+      <p class="hint"><b class="required">*</b> 표시 항목은 필수 입력입니다.</p>
+      <button type="submit">가입하고 시작</button>
       <div class="error">${escapedMessage}</div>
     </form>
     <a class="link" href="/login">이미 계정이 있습니다</a>
