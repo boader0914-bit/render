@@ -70,6 +70,10 @@ const sessions = new Map();
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
 let activeCrawlEstimate = null;
+let activeCrawlChild = null;
+let activeCrawlCancelRequested = false;
+let activeCrawlCancelReason = "";
+let activeCrawlSourceRole = "";
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
@@ -446,6 +450,7 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     bookingRangeDays: estimate.bookingRangeDays,
     bookingRangePlaceLimit: estimate.bookingRangePlaceLimit,
     estimatedTotalSeconds: estimate.estimatedTotalSeconds,
+    estimatedCompleteAt: new Date(Date.now() + Math.max(0, estimate.estimatedTotalSeconds || 0) * 1000).toISOString(),
     estimateBasis: estimate.basis,
     stages: estimate.stages
   };
@@ -8137,6 +8142,12 @@ async function runCrawler(payload) {
   }
   activeCrawlStartedAt = new Date();
   activeCrawlEstimate = estimateCrawlCompletion(payload, readCrawlTimingStoreSync());
+  activeCrawlCancelRequested = false;
+  activeCrawlCancelReason = "";
+  activeCrawlSourceRole = sourceRoleForCollectionSource(
+    normalizeCollectionSource(payload.collectionSource, payload.sourceRole),
+    payload.sourceRole
+  );
   activeCrawlPromise = runCrawlerInternal(payload);
   let result = null;
   let failure = null;
@@ -8167,7 +8178,47 @@ async function runCrawler(payload) {
     activeCrawlPromise = null;
     activeCrawlStartedAt = null;
     activeCrawlEstimate = null;
+    activeCrawlChild = null;
+    activeCrawlCancelRequested = false;
+    activeCrawlCancelReason = "";
+    activeCrawlSourceRole = "";
   }
+}
+
+function crawlCancelledError(reason = "") {
+  const error = new Error(reason || "수집이 중지되었습니다.");
+  error.statusCode = 499;
+  error.cancelled = true;
+  return error;
+}
+
+function terminateActiveCrawlChild(reason = "사용자 요청으로 수집을 중지합니다.", requesterRole = USER_ROLES.admin) {
+  if (!activeCrawlPromise) return { ok: false, active: false, message: "진행 중인 수집이 없습니다." };
+  if (normalizeUserRole(requesterRole) === USER_ROLES.b2b && normalizeUserRole(activeCrawlSourceRole) !== USER_ROLES.b2b) {
+    return { ok: false, active: true, blocked: true, message: "관리자 수집은 B2B 화면에서 중지할 수 없습니다." };
+  }
+  activeCrawlCancelRequested = true;
+  activeCrawlCancelReason = reason;
+  const child = activeCrawlChild;
+  if (!child || child.killed || !child.pid) {
+    return { ok: true, active: true, message: "수집 중지 요청을 접수했습니다." };
+  }
+  try {
+    child.kill();
+  } catch {
+    // Fall through to the process-tree fallback below.
+  }
+  if (process.platform === "win32") {
+    setTimeout(() => {
+      if (!activeCrawlCancelRequested || !child.pid || child.killed) return;
+      try {
+        spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+      } catch {
+        // The child close handler will clear state when it exits.
+      }
+    }, 1500);
+  }
+  return { ok: true, active: true, message: "수집 중지 요청을 보냈습니다." };
 }
 
 function currentCrawlStatus() {
@@ -8203,6 +8254,9 @@ function currentCrawlStatus() {
     estimatedCompleteAt,
     isDelayed: delayedSeconds > 0,
     delayedSeconds,
+    cancelling: Boolean(activeCrawlCancelRequested),
+    cancelReason: activeCrawlCancelReason || "",
+    sourceRole: activeCrawlPromise ? normalizeUserRole(activeCrawlSourceRole) : "",
     delayThresholdSeconds: activeCrawlPromise ? delayThresholdSeconds : null,
     recrawlContext: activeCrawlPromise ? activeCrawlEstimate?.recrawlContext || null : null,
     currentStage: stageStatus.currentStage,
@@ -8292,6 +8346,7 @@ async function runCrawlerInternal(payload) {
       env,
       windowsHide: true
     });
+    activeCrawlChild = child;
     let stdout = "";
     let stderr = "";
 
@@ -8301,8 +8356,19 @@ async function runCrawlerInternal(payload) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString("utf8");
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (activeCrawlCancelRequested) {
+        reject(crawlCancelledError(activeCrawlCancelReason));
+        return;
+      }
+      reject(error);
+    });
     child.on("close", async (code) => {
+      if (activeCrawlChild === child) activeCrawlChild = null;
+      if (activeCrawlCancelRequested) {
+        reject(crawlCancelledError(activeCrawlCancelReason));
+        return;
+      }
       if (code !== 0) {
         reject(new Error(stderr || stdout || `수집 실행 실패: ${code}`));
         return;
@@ -8329,8 +8395,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-interest-lodge-explicit-save"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-interest-lodge-explicit-save"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-search-cancel-eta"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-search-cancel-eta"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -8496,13 +8562,32 @@ async function route(req, res) {
       return send(res, 200, await runB2BMyLodgeCollection(payload));
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/b2b-search/status") {
+      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
+        return sendForbidden(req, res, "B2B 계정이 필요합니다.");
+      }
+      return send(res, 200, currentCrawlStatus());
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search/cancel") {
+      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
+        return sendForbidden(req, res, "B2B 계정이 필요합니다.");
+      }
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      const reason = String(payload.reason || "새 B2B 검색 실행을 위해 기존 수집을 중지합니다.").trim();
+      const result = terminateActiveCrawlChild(reason, session.role);
+      return send(res, result.blocked ? 409 : 200, { ...result, error: result.blocked ? result.message : undefined, status: currentCrawlStatus() });
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, currentCrawlStatus());
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl-estimate") {
-      if (!requireAdminSession(session, req, res)) return;
+      if (![USER_ROLES.admin, USER_ROLES.b2b].includes(normalizeUserRole(session.role))) {
+        return sendForbidden(req, res, "로그인이 필요합니다.");
+      }
       const payload = await parseJsonBody(req);
       const timingStore = readCrawlTimingStoreSync();
       const items = Array.isArray(payload.items) ? payload.items.slice(0, 40) : null;

@@ -37,6 +37,11 @@ const state = {
   b2bSearchStartedAt: 0,
   b2bSearchPreview: null,
   b2bSearchTimer: null,
+  b2bSearchRequestId: 0,
+  b2bSearchActiveKeyword: "",
+  b2bSearchActiveRange: "",
+  b2bSearchPending: null,
+  b2bSearchCancelling: false,
   b2bMyLodgeDraft: null,
   b2bMyLodgeCollecting: false,
   b2bMyLodgeCollectStatus: "",
@@ -802,6 +807,7 @@ function b2bSearchProgressMeta() {
 }
 
 function b2bSearchProgressText(meta = b2bSearchProgressMeta()) {
+  if (state.b2bSearchCancelling) return "기존 검색 중지 중";
   if (meta.isDelayed) return `예상 초과 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`;
   return meta.remainingSeconds <= 0 ? "곧 완료" : `${formatElapsed(meta.remainingSeconds)} 남음`;
 }
@@ -849,6 +855,56 @@ function startB2BSearchTimer() {
     }
     renderB2BSearchPanel();
   }, 1000);
+}
+
+function normalizeB2BCrawlEstimate(estimate = {}, payload = {}) {
+  const fallback = crawlPreviewMeta(payload);
+  const total = Math.max(1, Math.round(Number(estimate.estimatedTotalSeconds || fallback.estimatedTotalSeconds || 1)));
+  const completeAt = estimate.estimatedCompleteAt || new Date(Date.now() + total * 1000).toISOString();
+  const stages = Array.isArray(estimate.stages) && estimate.stages.length ? estimate.stages : fallback.stages;
+  return {
+    ...fallback,
+    ...estimate,
+    estimatedTotalSeconds: total,
+    remainingSeconds: total,
+    estimatedProgress: 1,
+    estimatedCompleteAt: completeAt,
+    currentStage: stages?.[0] || fallback.currentStage || null,
+    stages,
+    estimateBasis: estimate.estimateBasis || fallback.estimateBasis
+  };
+}
+
+async function fetchB2BCrawlEstimate(payload = {}) {
+  const fallback = crawlPreviewMeta(payload);
+  try {
+    const estimate = await fetchJson("/api/crawl-estimate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return normalizeB2BCrawlEstimate(estimate, payload);
+  } catch {
+    return fallback;
+  }
+}
+
+function sleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForB2BSearchIdle(timeoutMs = 12000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const status = await fetchJson("/api/b2b-search/status");
+      if (!status.active) return true;
+    } catch {
+      return false;
+    }
+    await sleep(700);
+  }
+  return false;
 }
 
 function crawlEstimatePayloadFromPlan(plan = {}) {
@@ -16060,6 +16116,30 @@ function b2bSearchResultCard(row = {}, normalized = "") {
   `;
 }
 
+function b2bSearchConflictHtml(pending = state.b2bSearchPending) {
+  if (!pending) return "";
+  const currentMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
+  const currentKeyword = pending.currentKeyword || state.b2bSearchActiveKeyword || state.b2bSearchQuery || "기존 검색";
+  const nextKeyword = pending.keyword || "새 검색";
+  const elapsedText = currentMeta ? (formatElapsed(currentMeta.elapsedSeconds) || "0초") : "확인 중";
+  const remainingText = currentMeta ? b2bSearchProgressText(currentMeta) : "확인 중";
+  const nextEta = pending.preview ? formatElapsed(pending.preview.estimatedTotalSeconds) : "";
+  return `
+    <div class="b2b-search-conflict" role="dialog" aria-modal="false" aria-label="검색 중 새 검색 확인">
+      <div>
+        <span>검색 중 새 요청</span>
+        <strong>기존 검색을 중지하고 새 검색을 실행할까요?</strong>
+        <p>${escapeHtml(`현재 ${currentKeyword} 수집 중입니다. 경과 ${elapsedText} · ${remainingText}.`)}</p>
+        <p>${escapeHtml(`새 검색: ${nextKeyword}${nextEta ? ` · 예상 ${nextEta}` : ""}`)}</p>
+      </div>
+      <div class="b2b-search-conflict-actions">
+        <button class="secondary-button" type="button" data-b2b-search-continue>기존 검색 계속</button>
+        <button class="primary-button" type="button" data-b2b-search-cancel-restart ${state.b2bSearchCancelling ? "disabled" : ""}>${state.b2bSearchCancelling ? "중지 중" : "중지 후 새 검색"}</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderB2BSearchHistoryPanel() {
   if (!els.b2bSearchHistory || isAdminRole()) return;
   const rows = state.memberSearchHistory || [];
@@ -16114,7 +16194,11 @@ function renderB2BSearchPanel() {
   }
   if (els.b2bSearchResults) {
     const hasResult = Boolean(state.data?.run);
-    const keyword = hasResult ? activeKeyword() : (state.b2bSearchQuery || "").trim();
+    const keyword = state.b2bSearchLoading
+      ? (state.b2bSearchActiveKeyword || state.b2bSearchQuery || "").trim()
+      : hasResult
+        ? activeKeyword()
+        : (state.b2bSearchQuery || "").trim();
     const shouldShowEstimate = Boolean(state.b2bSearchLoading || hasResult || keyword);
     const previewPayload = shouldShowEstimate ? b2bLiveSearchPayload(keyword) : null;
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
@@ -16146,6 +16230,7 @@ function renderB2BSearchPanel() {
           ${state.b2bSearchLoading && preview ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
       </div>
+      ${b2bSearchConflictHtml()}
     `;
   }
   if (els.b2bSearchStatus) {
@@ -16167,40 +16252,81 @@ function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
     searchMode: "keyword",
     productMode: "all",
     collectionMode: "precision",
-    detailRankRanges: range === "1-20" ? "1-20" : "1-10"
+    detailRankRanges: range === "1-20" ? "1-20" : "1-10",
+    bookingRangeDays: DEFAULT_BOOKING_DAYS,
+    bookingRangePlaceLimit: 10
   };
 }
 
 async function submitB2BSearch() {
   if (isAdminRole()) return;
-  state.b2bSearchQuery = els.b2bSearchInput?.value?.trim() || "";
-  if (!state.b2bSearchQuery) {
+  const keyword = els.b2bSearchInput?.value?.trim() || "";
+  if (!keyword) {
     renderB2BSearchPanel();
     if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "검색할 지역명 또는 키워드를 입력하세요.";
     return;
   }
-  if (state.b2bSearchLoading) return;
-  state.b2bSearchRange = els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10";
-  const payload = b2bLiveSearchPayload(state.b2bSearchQuery);
+  const range = els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10";
+  state.b2bSearchQuery = keyword;
+  state.b2bSearchRange = range;
+  const payload = b2bLiveSearchPayload(keyword);
+  if (state.b2bSearchLoading) {
+    const preview = await fetchB2BCrawlEstimate(payload);
+    state.b2bSearchPending = {
+      keyword,
+      range,
+      payload,
+      preview,
+      requestedAt: Date.now(),
+      currentKeyword: state.b2bSearchActiveKeyword || state.b2bSearchQuery || "",
+      currentRange: state.b2bSearchActiveRange || state.b2bSearchRange || ""
+    };
+    renderB2BSearchPanel();
+    if (els.b2bSearchStatus) {
+      els.b2bSearchStatus.textContent = `${keyword} 새 검색 요청을 감지했습니다. 기존 검색을 계속할지 중지할지 선택하세요.`;
+    }
+    return;
+  }
+  await startB2BSearchRequest(payload, keyword, range);
+}
+
+async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10") {
   const submitButton = els.b2bSearchForm?.querySelector('button[type="submit"]');
-  const preview = crawlPreviewMeta(payload);
+  const requestId = ++state.b2bSearchRequestId;
+  const initialPreview = crawlPreviewMeta(payload);
   state.b2bSearchLoading = true;
+  state.b2bSearchCancelling = false;
+  state.b2bSearchPending = null;
+  state.b2bSearchActiveKeyword = keyword;
+  state.b2bSearchActiveRange = range;
+  state.b2bSearchQuery = keyword;
+  state.b2bSearchRange = range;
   state.b2bSearchStartedAt = Date.now();
-  state.b2bSearchPreview = preview;
-  if (submitButton) submitButton.disabled = true;
+  state.b2bSearchPreview = initialPreview;
+  if (submitButton) submitButton.disabled = false;
   startB2BSearchTimer();
   renderB2BSearchPanel();
   setStatus("B2B 검색 중");
   if (els.b2bSearchStatus) {
-    els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색을 시작했습니다. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
+    els.b2bSearchStatus.textContent = `${keyword} 검색 준비 중입니다. 예상 시간을 보정하고 있습니다.`;
   }
   let finalErrorMessage = "";
   try {
+    const preview = await fetchB2BCrawlEstimate(payload);
+    if (requestId !== state.b2bSearchRequestId) return;
+    state.b2bSearchStartedAt = Date.now();
+    state.b2bSearchPreview = preview;
+    renderB2BSearchPanel();
+    if (els.b2bSearchStatus) {
+      const basis = preview.estimateBasis?.timing?.source === "measured" ? "최근 수집 이력 기준" : "조건 모델 기준";
+      els.b2bSearchStatus.textContent = `${keyword} 검색을 시작했습니다. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)} · ${basis}.`;
+    }
     const result = await fetchJson("/api/b2b-search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+    if (requestId !== state.b2bSearchRequestId) return;
     state.data = result.data || null;
     state.activeRunId = result.runId || state.data?.run?.id || null;
     state.runs = state.data?.run ? [{ ...state.data.run, id: state.activeRunId }] : [];
@@ -16209,17 +16335,65 @@ async function submitB2BSearch() {
     setStatus("검색 완료");
     renderAll();
   } catch (error) {
+    if (requestId !== state.b2bSearchRequestId) return;
     setStatus("검색 실패");
-    finalErrorMessage = `검색 실패: ${error.message}`;
+    finalErrorMessage = error.status === 499 ? "기존 검색을 중지했습니다." : `검색 실패: ${error.message}`;
   } finally {
+    if (requestId !== state.b2bSearchRequestId) return;
     state.b2bSearchLoading = false;
+    state.b2bSearchCancelling = false;
     state.b2bSearchStartedAt = 0;
     state.b2bSearchPreview = null;
+    state.b2bSearchActiveKeyword = "";
+    state.b2bSearchActiveRange = "";
     clearB2BSearchTimer();
     if (submitButton) submitButton.disabled = false;
     renderB2BSearchPanel();
     if (finalErrorMessage && els.b2bSearchStatus) els.b2bSearchStatus.textContent = finalErrorMessage;
   }
+}
+
+function keepCurrentB2BSearch() {
+  const keyword = state.b2bSearchActiveKeyword || "기존 검색";
+  state.b2bSearchPending = null;
+  renderB2BSearchPanel();
+  if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${keyword} 검색을 계속합니다. 완료 후 새 검색을 실행할 수 있습니다.`;
+}
+
+async function cancelCurrentB2BSearchAndRestart() {
+  const pending = state.b2bSearchPending;
+  if (!pending || state.b2bSearchCancelling) return;
+  state.b2bSearchPending = null;
+  state.b2bSearchCancelling = true;
+  state.b2bSearchRequestId += 1;
+  renderB2BSearchPanel();
+  setStatus("B2B 검색 중지 중");
+  if (els.b2bSearchStatus) {
+    els.b2bSearchStatus.textContent = `${state.b2bSearchActiveKeyword || "기존 검색"} 중지 요청 중입니다.`;
+  }
+  let canStartNext = false;
+  try {
+    await fetchJson("/api/b2b-search/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: `${pending.keyword} 새 검색 실행을 위해 기존 B2B 검색을 중지합니다.` })
+    });
+    canStartNext = await waitForB2BSearchIdle();
+    if (!canStartNext && els.b2bSearchStatus) {
+      els.b2bSearchStatus.textContent = "기존 검색 중지가 아직 완료되지 않았습니다. 잠시 후 다시 실행하세요.";
+    }
+  } catch (error) {
+    if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `중지 요청 확인 실패: ${error.message}`;
+  } finally {
+    state.b2bSearchCancelling = false;
+    state.b2bSearchLoading = false;
+    state.b2bSearchStartedAt = 0;
+    state.b2bSearchPreview = null;
+    state.b2bSearchActiveKeyword = "";
+    state.b2bSearchActiveRange = "";
+    clearB2BSearchTimer();
+  }
+  if (canStartNext) await startB2BSearchRequest(pending.payload, pending.keyword, pending.range);
 }
 
 function renderB2BEmptyPanels() {
@@ -18481,6 +18655,18 @@ function bindEvents() {
       renderB2BSearchPanel();
       els.b2bSearchPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
       if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색어를 적용했습니다. 범위를 확인한 뒤 검색 실행을 누르세요.`;
+      return;
+    }
+    if (event.target.closest("[data-b2b-search-continue]")) {
+      keepCurrentB2BSearch();
+      return;
+    }
+    if (event.target.closest("[data-b2b-search-cancel-restart]")) {
+      cancelCurrentB2BSearchAndRestart().catch((error) => {
+        state.b2bSearchCancelling = false;
+        if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `검색 전환 실패: ${error.message}`;
+        renderB2BSearchPanel();
+      });
       return;
     }
     if (event.target.closest("[data-b2b-room-segment-add]")) {

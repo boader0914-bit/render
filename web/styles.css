@@ -394,6 +394,71 @@ a {
   opacity: .74;
 }
 
+.b2b-search-conflict {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid #84caff;
+  border-left: 4px solid #2e90fa;
+  border-radius: 16px;
+  background: #eff8ff;
+  padding: 14px;
+  box-shadow: 0 16px 38px rgba(23, 92, 211, .14);
+}
+
+.b2b-search-conflict > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.b2b-search-conflict span {
+  justify-self: start;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #b2ddff;
+  border-radius: 999px;
+  background: #fff;
+  color: #175cd3;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-search-conflict strong {
+  min-width: 0;
+  color: #101828;
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.b2b-search-conflict p {
+  margin: 0;
+  color: #344054;
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 850;
+  word-break: keep-all;
+}
+
+.b2b-search-conflict-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, auto));
+  gap: 8px;
+}
+
+.b2b-search-conflict-actions button {
+  min-height: 38px;
+  border-radius: 11px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
 @keyframes b2b-progress-flow {
   from { background-position: 0 0; }
   to { background-position: 180% 0; }
@@ -14504,6 +14569,7 @@ body.role-b2b .report-card,
 body.role-b2b .report-metric-grid article,
 body.role-b2b .b2b-brief-card,
 body.role-b2b .b2b-live-search-panel,
+body.role-b2b .b2b-search-conflict,
 body.role-b2b .b2b-strategy-board,
 body.role-b2b .b2b-competition-snapshot,
 body.role-b2b .b2b-correlation-card,
@@ -14674,6 +14740,29 @@ body.role-b2b .b2b-search-card.active {
     inset 4px 0 0 var(--active-rail),
     0 18px 44px rgba(0, 0, 0, .34),
     0 0 0 1px rgba(106, 168, 255, .16);
+}
+
+body.role-b2b .b2b-search-conflict {
+  border-color: rgba(106, 168, 255, .54);
+  border-left-color: #6aa8ff;
+  background:
+    linear-gradient(135deg, rgba(47, 116, 208, .28), rgba(52, 211, 153, .08)),
+    #162235;
+  box-shadow: 0 20px 46px rgba(0, 0, 0, .36);
+}
+
+body.role-b2b .b2b-search-conflict span {
+  border-color: rgba(106, 168, 255, .36);
+  background: #101722;
+  color: #9fd0ff;
+}
+
+body.role-b2b .b2b-search-conflict strong {
+  color: #f5f9ff;
+}
+
+body.role-b2b .b2b-search-conflict p {
+  color: #c8d2e0;
 }
 
 body.role-b2b .b2b-search-card.active::after {
@@ -16206,12 +16295,17 @@ body.role-b2b .structure-action-list li::before {
   .b2b-search-results,
   .b2b-search-result-grid,
   .b2b-live-search-panel,
+  .b2b-search-conflict,
   .b2b-search-missing {
     grid-template-columns: 1fr;
   }
 
   .b2b-live-search-meta {
     justify-content: flex-start;
+  }
+
+  .b2b-search-conflict-actions {
+    grid-template-columns: 1fr;
   }
 
   .report-hero,
