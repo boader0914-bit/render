@@ -1781,6 +1781,7 @@ function signupPage(message = "", values = {}) {
   const value = (key) => String(values[key] || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const selected = (key) => normalizeOwnershipStatus(values.ownershipStatus || values.hasGlamping) === key ? " selected" : "";
   const checked = (key) => isConsentAccepted(values[key]) ? " checked" : "";
+  const eyeIcon = `<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.1 12s3.7-7 9.9-7 9.9 7 9.9 7-3.7 7-9.9 7-9.9-7-9.9-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg><span class="sr-only">누르는 동안 비밀번호 보기</span>`;
   return `<!doctype html>
 <html lang="ko">
 <head>
@@ -1791,14 +1792,15 @@ function signupPage(message = "", values = {}) {
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 620px); padding: 28px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
+    main { width: min(100% - 32px, 640px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    h1 { margin: 0 0 20px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
     p { margin: 0 0 18px; color: #667085; line-height: 1.45; }
-    form { display: grid; gap: 12px; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    form { display: grid; gap: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
     .field-with-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-    .password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+    .password-control { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; align-items: center; }
     label { display: grid; gap: 7px; font-size: 13px; font-weight: 850; color: #344054; }
+    label > span:first-child { display: flex; min-height: 18px; align-items: center; gap: 3px; }
     input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d0d5dd; border-radius: 13px; font: inherit; outline: none; }
     input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3182f6; }
     textarea { min-height: 82px; padding-block: 11px; resize: vertical; }
@@ -1806,6 +1808,9 @@ function signupPage(message = "", values = {}) {
     button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
     .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; color: #175cd3; font-size: 13px; }
     .inline-action:hover { border-color: #3182f6; background: #eff6ff; }
+    .icon-action { display: inline-grid; place-items: center; width: 48px; min-width: 48px; min-height: 48px; padding: 0; border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; color: #344054; }
+    .icon-action:hover, .icon-action:focus-visible, .icon-action[data-active="true"] { border-color: #3182f6; background: #eff6ff; color: #175cd3; }
+    .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .error { min-height: 20px; color: #f04438; font-size: 13px; font-weight: 850; }
     .hint, .field-status { min-height: 18px; margin: 0; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
     .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #067647; }
@@ -1819,7 +1824,7 @@ function signupPage(message = "", values = {}) {
     @media (max-width: 560px) {
       main { padding: 22px; }
       .grid { grid-template-columns: 1fr; }
-      .field-with-action, .password-control { grid-template-columns: 1fr; }
+      .field-with-action { grid-template-columns: 1fr; }
       .inline-action { width: 100%; }
     }
   </style>
@@ -1837,8 +1842,8 @@ function signupPage(message = "", values = {}) {
         <small class="field-status" data-username-status aria-live="polite"></small>
       </label>
       <div class="grid">
-        <label><span>비밀번호 <b class="required">*</b></span><span class="password-control"><input name="password" type="password" autocomplete="new-password" required data-password><button class="inline-action" type="button" data-toggle-password>보기</button></span><small class="field-status" data-password-status>8자 이상 · 영문+숫자 · 대문자 또는 특수문자</small></label>
-        <label><span>비밀번호 확인 <b class="required">*</b></span><span class="password-control"><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><button class="inline-action" type="button" data-toggle-password>보기</button></span><small class="password-match" data-password-match aria-live="polite"></small></label>
+        <label><span>비밀번호 <b class="required">*</b></span><span class="password-control"><input name="password" type="password" autocomplete="new-password" required data-password><button class="icon-action" type="button" data-hold-password aria-label="누르는 동안 비밀번호 보기" title="누르는 동안 보기">${eyeIcon}</button></span><small class="field-status" data-password-status>8자 이상 · 영문+숫자 · 대문자 또는 특수문자</small></label>
+        <label><span>비밀번호 확인 <b class="required">*</b></span><span class="password-control"><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><button class="icon-action" type="button" data-hold-password aria-label="누르는 동안 비밀번호 확인 보기" title="누르는 동안 보기">${eyeIcon}</button></span><small class="password-match" data-password-match aria-live="polite"></small></label>
       </div>
       <div class="grid">
         <label><span>연락처 <b class="required">*</b></span><input name="phone" autocomplete="tel" required value="${value("phone")}"></label>
@@ -1991,14 +1996,34 @@ function signupScript() {
     }
   };
 
-  form.querySelectorAll("[data-toggle-password]").forEach((button) => {
-    button.addEventListener("click", () => {
+  form.querySelectorAll("[data-hold-password]").forEach((button) => {
+    const setVisible = (visible) => {
       const input = button.parentElement ? button.parentElement.querySelector("input") : null;
       if (!input) return;
-      const show = input.type === "password";
-      input.type = show ? "text" : "password";
-      button.textContent = show ? "숨김" : "보기";
-      button.setAttribute("aria-pressed", show ? "true" : "false");
+      input.type = visible ? "text" : "password";
+      button.dataset.active = visible ? "true" : "false";
+      button.setAttribute("aria-pressed", visible ? "true" : "false");
+    };
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      button.setPointerCapture?.(event.pointerId);
+      setVisible(true);
+    });
+    button.addEventListener("pointerup", () => setVisible(false));
+    button.addEventListener("pointercancel", () => setVisible(false));
+    button.addEventListener("pointerleave", () => setVisible(false));
+    button.addEventListener("blur", () => setVisible(false));
+    button.addEventListener("keydown", (event) => {
+      if (event.key === " " || event.key === "Enter") {
+        event.preventDefault();
+        setVisible(true);
+      }
+    });
+    button.addEventListener("keyup", (event) => {
+      if (event.key === " " || event.key === "Enter") {
+        event.preventDefault();
+        setVisible(false);
+      }
     });
   });
 
