@@ -7211,6 +7211,31 @@ function b2bCollectedRoomCount(item = {}) {
   return candidates.length ? String(Math.round(Math.max(...candidates))) : "";
 }
 
+function b2bCollectedRoomType(item = {}) {
+  const productNames = (Array.isArray(item.itemDetails) ? item.itemDetails : [])
+    .map((row) => String(row.name || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return [
+    item.productTypeSummary,
+    item.category,
+    item.businessCategory,
+    ...productNames
+  ].filter(Boolean).join(", ").slice(0, 80);
+}
+
+function b2bCollectedDayUseCount(item = {}) {
+  const days = Math.max(1, bookingDays(state.data?.run || {}) || DEFAULT_BOOKING_DAYS);
+  const candidates = [
+    item.dayUseWeeklyOperatingTotal,
+    item.dayUseWeeklyBasisTotal,
+    item.dayUseTotalStock,
+    item.dayUseItemCount,
+    Number(item.dayUseWeeklyTotalStock) > 0 ? Number(item.dayUseWeeklyTotalStock) / days : 0
+  ].map((value) => finiteNumber(value, 0)).filter((value) => value > 0);
+  return candidates.length ? String(Math.round(Math.max(...candidates))) : "";
+}
+
 function b2bCollectedPriceFields(item = {}) {
   const profile = preciseRevenueProfile(item);
   const revenue = profile.lodging || {};
@@ -7260,12 +7285,16 @@ function b2bCollectedNaverConnected(item = {}) {
 function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) {
   const prices = b2bCollectedPriceFields(item);
   const roomCount = b2bCollectedRoomCount(item);
+  const roomType = b2bCollectedRoomType(item);
+  const dayUseCount = b2bCollectedDayUseCount(item);
   const facilities = b2bCollectedFacilities(item);
   const name = String(item.name || item.companyName || current.lodgingName || result.keyword || "").trim();
   const collected = {
     ...current,
     lodgingName: name || current.lodgingName || "",
     roomCount: roomCount || current.roomCount || "",
+    roomType: roomType || current.roomType || "",
+    dayUseCount: dayUseCount || current.dayUseCount || "",
     weekdayPrice: prices.weekdayPrice || current.weekdayPrice || "",
     fridayPrice: prices.fridayPrice || current.fridayPrice || "",
     saturdayPrice: prices.saturdayPrice || current.saturdayPrice || "",
@@ -7320,12 +7349,14 @@ function b2bMyLodgeDeltaTone(value, base) {
 function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief)) {
   const draft = readB2BMyLodgeDraft();
   const roomCount = Math.round(b2bMyLodgeNumber(draft.roomCount));
+  const roomType = String(draft.roomType || "").trim();
+  const dayUseCount = Math.round(b2bMyLodgeNumber(draft.dayUseCount));
   const weekdayPrice = b2bMyLodgeNumber(draft.weekdayPrice);
   const fridayPrice = b2bMyLodgeNumber(draft.fridayPrice);
   const saturdayPrice = b2bMyLodgeNumber(draft.saturdayPrice);
   const sundayPrice = b2bMyLodgeNumber(draft.sundayPrice);
   const avgPrice = b2bMyLodgeAveragePrice(draft);
-  const hasInput = Boolean(String(draft.lodgingName || "").trim()) || roomCount > 0 || avgPrice > 0;
+  const hasInput = Boolean(String(draft.lodgingName || "").trim()) || roomCount > 0 || roomType || dayUseCount > 0 || avgPrice > 0;
   const hasEstimateBasis = roomCount > 0 && avgPrice > 0;
   const fallbackRate = Number.isFinite(brief.rate) ? brief.rate : b2bMyLodgeRate(revenueModel.flow, "all", 0.25);
   const rates = {
@@ -7412,6 +7443,8 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     hasInput,
     hasEstimateBasis,
     roomCount,
+    roomType,
+    dayUseCount,
     avgPrice,
     weeklyRevenue,
     rates,
@@ -7452,6 +7485,14 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <span>객실 수</span>
           <input name="roomCount" type="number" min="0" step="1" value="${escapeHtml(draft.roomCount ?? "")}" placeholder="12">
         </label>
+        <label class="b2b-my-lodge-field room-type">
+          <span>객실종류</span>
+          <input name="roomType" type="text" maxlength="80" value="${escapeHtml(draft.roomType || "")}" placeholder="글램핑, 카라반">
+        </label>
+        <label class="b2b-my-lodge-field">
+          <span>데이유즈</span>
+          <input name="dayUseCount" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(draft.dayUseCount ?? "")}" placeholder="예: 6">
+        </label>
         <label class="b2b-my-lodge-field">
           <span>평일 가격</span>
           <input name="weekdayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("weekdayPrice")}" placeholder="120,000">
@@ -7491,6 +7532,8 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <small>경쟁권 요일별 예약율: 평일 ${fmtRate(model.rates.weekday)} · 금 ${fmtRate(model.rates.friday)} · 토 ${fmtRate(model.rates.saturday)} · 일 ${fmtRate(model.rates.sunday)}</small>
           <div class="b2b-my-lodge-tags">
             <em>${fmtNumber(model.roomCount)}실</em>
+            ${model.roomType ? `<em>${escapeHtml(model.roomType)}</em>` : ""}
+            ${model.dayUseCount ? `<em>데이유즈 ${fmtNumber(model.dayUseCount)}회</em>` : ""}
             ${facilities.map((item) => `<em>${escapeHtml(item)}</em>`).join("")}
           </div>
         </article>
@@ -7534,6 +7577,8 @@ function collectB2BMyLodgeFormValues() {
   return {
     lodgingName: value("lodgingName").slice(0, 80),
     roomCount: numberValue("roomCount"),
+    roomType: value("roomType").slice(0, 80),
+    dayUseCount: numberValue("dayUseCount"),
     weekdayPrice: numberValue("weekdayPrice"),
     fridayPrice: numberValue("fridayPrice"),
     saturdayPrice: numberValue("saturdayPrice"),

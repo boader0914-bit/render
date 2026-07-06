@@ -10801,7 +10801,7 @@ a.platform-row:hover {
 .b2b-my-lodge-form {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) repeat(5, minmax(100px, 1fr));
+  grid-template-columns: minmax(180px, 1.35fr) repeat(7, minmax(90px, 1fr));
   gap: 8px;
   align-items: end;
 }
