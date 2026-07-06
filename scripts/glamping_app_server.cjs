@@ -1103,24 +1103,49 @@ function isConsentAccepted(value) {
   return /^(1|true|on|yes|agree|accepted)$/i.test(String(value || "").trim());
 }
 
+function signupUsernameError(username) {
+  if (!/^[a-z0-9._@-]{4,80}$/i.test(username)) return "아이디는 영문, 숫자, 이메일 형식으로 4자 이상 입력하세요.";
+  if (username === normalizeLoginId(ADMIN_USERNAME) || username === normalizeLoginId(B2B_USERNAME)) return "예약된 아이디는 사용할 수 없습니다.";
+  return "";
+}
+
+function signupPasswordError(password = "") {
+  if (password.length < 8 || password.length > 120) return "비밀번호는 8자 이상 입력하세요.";
+  if (!/[A-Za-z]/.test(password) || !/\d/.test(password) || !(/[A-Z]/.test(password) || /[^A-Za-z0-9]/.test(password))) {
+    return "비밀번호는 영문과 숫자를 포함하고, 대문자 또는 특수문자를 포함해야 합니다.";
+  }
+  return "";
+}
+
+async function checkSignupUsernameAvailability(value = "") {
+  const username = normalizeLoginId(value);
+  const formatError = signupUsernameError(username);
+  if (formatError) return { username, available: false, checked: true, message: formatError };
+  const store = await readB2BMemberStore();
+  const exists = store.members.some((member) => normalizeLoginId(member.username) === username);
+  return {
+    username,
+    available: !exists,
+    checked: true,
+    message: exists ? "이미 가입된 아이디입니다." : "사용 가능한 아이디입니다."
+  };
+}
+
 function validateSignupPayload(payload = {}) {
   const username = normalizeLoginId(payload.username || payload.loginId);
   const password = String(payload.password || "");
   const passwordConfirm = String(payload.passwordConfirm || payload.confirmPassword || "");
   const phone = sanitizeMemberText(payload.phone, 40);
   const email = sanitizeMemberText(payload.email, 120);
-  if (!/^[a-z0-9._@-]{4,80}$/i.test(username)) {
-    const error = new Error("아이디는 영문, 숫자, 이메일 형식으로 4자 이상 입력하세요.");
+  const usernameError = signupUsernameError(username);
+  if (usernameError) {
+    const error = new Error(usernameError);
     error.statusCode = 400;
     throw error;
   }
-  if (username === normalizeLoginId(ADMIN_USERNAME) || username === normalizeLoginId(B2B_USERNAME)) {
-    const error = new Error("예약된 아이디는 사용할 수 없습니다.");
-    error.statusCode = 400;
-    throw error;
-  }
-  if (password.length < 4 || password.length > 120) {
-    const error = new Error("비밀번호는 4자 이상 입력하세요.");
+  const passwordError = signupPasswordError(password);
+  if (passwordError) {
+    const error = new Error(passwordError);
     error.statusCode = 400;
     throw error;
   }
@@ -1771,49 +1796,63 @@ function signupPage(message = "", values = {}) {
     p { margin: 0 0 18px; color: #667085; line-height: 1.45; }
     form { display: grid; gap: 12px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .field-with-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+    .password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
     label { display: grid; gap: 7px; font-size: 13px; font-weight: 850; color: #344054; }
     input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d0d5dd; border-radius: 13px; font: inherit; outline: none; }
     input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3182f6; }
     textarea { min-height: 82px; padding-block: 11px; resize: vertical; }
     input:focus, select:focus, textarea:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
     button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
+    .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; color: #175cd3; font-size: 13px; }
+    .inline-action:hover { border-color: #3182f6; background: #eff6ff; }
     .error { min-height: 20px; color: #f04438; font-size: 13px; font-weight: 850; }
-    .hint { margin: 0; color: #667085; font-size: 12px; font-weight: 700; }
+    .hint, .field-status { min-height: 18px; margin: 0; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
+    .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #067647; }
+    .field-status[data-state="error"], .password-match[data-state="error"] { color: #d92d20; }
     .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 16px; background: #f9fafb; }
     .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #182230; font-size: 13px; line-height: 1.4; }
     .check a { color: #175cd3; font-weight: 900; text-decoration: none; }
     .password-match { min-height: 18px; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
-    .password-match[data-state="ok"] { color: #067647; }
-    .password-match[data-state="error"] { color: #d92d20; }
     .required { color: #f04438; font-weight: 900; }
     .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
-    @media (max-width: 560px) { main { padding: 22px; } .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 560px) {
+      main { padding: 22px; }
+      .grid { grid-template-columns: 1fr; }
+      .field-with-action, .password-control { grid-template-columns: 1fr; }
+      .inline-action { width: 100%; }
+    }
   </style>
 </head>
 <body>
   <main>
     <h1>회원가입</h1>
     <form method="post" action="/signup" data-signup-form>
+      <label>
+        <span>아이디 <b class="required">*</b></span>
+        <span class="field-with-action">
+          <input name="username" autocomplete="username" required value="${value("username")}" data-username>
+          <button class="inline-action" type="button" data-check-username>중복 확인</button>
+        </span>
+        <small class="field-status" data-username-status aria-live="polite"></small>
+      </label>
       <div class="grid">
-        <label><span>아이디 <b class="required">*</b></span><input name="username" autocomplete="username" required value="${value("username")}"></label>
-        <label><span>비밀번호 <b class="required">*</b></span><input name="password" type="password" autocomplete="new-password" required data-password></label>
+        <label><span>비밀번호 <b class="required">*</b></span><span class="password-control"><input name="password" type="password" autocomplete="new-password" required data-password><button class="inline-action" type="button" data-toggle-password>보기</button></span><small class="field-status" data-password-status>8자 이상 · 영문+숫자 · 대문자 또는 특수문자</small></label>
+        <label><span>비밀번호 확인 <b class="required">*</b></span><span class="password-control"><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><button class="inline-action" type="button" data-toggle-password>보기</button></span><small class="password-match" data-password-match aria-live="polite"></small></label>
       </div>
       <div class="grid">
-        <label><span>비밀번호 확인 <b class="required">*</b></span><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><small class="password-match" data-password-match aria-live="polite"></small></label>
         <label><span>연락처 <b class="required">*</b></span><input name="phone" autocomplete="tel" required value="${value("phone")}"></label>
+        <label><span>이메일 <b class="required">*</b></span><input name="email" type="email" autocomplete="email" required value="${value("email")}" data-email><small class="field-status" data-email-status aria-live="polite"></small></label>
       </div>
       <div class="grid">
-        <label><span>이메일 <b class="required">*</b></span><input name="email" type="email" autocomplete="email" required value="${value("email")}"></label>
         <label>숙소 또는 회사명<input name="companyName" value="${value("companyName")}"></label>
-      </div>
-      <label>숙박업소 보유 여부
-        <select name="ownershipStatus">
+        <label>숙박업소 보유 여부<select name="ownershipStatus">
           <option value="owned"${selected("owned")}>숙박업소 보유</option>
           <option value="planning"${selected("planning")}>오픈 준비 중</option>
           <option value="none"${selected("none")}>미보유 / 투자 검토</option>
           <option value="agency"${selected("agency")}>대행사 / 컨설턴트</option>
-        </select>
-      </label>
+        </select></label>
+      </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
         <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 글램핑데이터랩 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
@@ -1835,41 +1874,152 @@ function signupScript() {
 (() => {
   const form = document.querySelector("[data-signup-form]");
   if (!form) return;
+  const username = form.querySelector("[data-username]");
+  const usernameButton = form.querySelector("[data-check-username]");
+  const usernameStatus = form.querySelector("[data-username-status]");
   const password = form.querySelector("[data-password]");
   const confirm = form.querySelector("[data-password-confirm]");
-  const status = form.querySelector("[data-password-match]");
-  if (!password || !confirm || !status) return;
+  const passwordStatus = form.querySelector("[data-password-status]");
+  const matchStatus = form.querySelector("[data-password-match]");
+  const email = form.querySelector("[data-email]");
+  const emailStatus = form.querySelector("[data-email-status]");
+  if (!username || !password || !confirm || !matchStatus) return;
 
-  const update = () => {
+  let checkedUsername = "";
+  let usernameAvailable = false;
+
+  const setStatus = (element, text, state = "") => {
+    if (!element) return;
+    element.textContent = text;
+    element.dataset.state = state;
+  };
+
+  const passwordPolicyMessage = (value) => {
+    if (!value) return "8자 이상 · 영문+숫자 · 대문자 또는 특수문자";
+    if (value.length < 8) return "비밀번호는 8자 이상이어야 합니다.";
+    if (!/[A-Za-z]/.test(value) || !/\\d/.test(value)) return "영문과 숫자를 함께 포함해야 합니다.";
+    if (!(/[A-Z]/.test(value) || /[^A-Za-z0-9]/.test(value))) return "대문자 또는 특수문자를 포함해야 합니다.";
+    return "";
+  };
+
+  const updatePassword = () => {
     const left = password.value;
     const right = confirm.value;
+    const passwordMessage = passwordPolicyMessage(left);
+    if (passwordMessage) {
+      setStatus(passwordStatus, passwordMessage, left ? "error" : "");
+      password.setCustomValidity(left ? passwordMessage : "");
+    } else {
+      setStatus(passwordStatus, "사용 가능한 비밀번호입니다.", "ok");
+      password.setCustomValidity("");
+    }
     if (!left && !right) {
-      status.textContent = "";
-      status.dataset.state = "";
+      setStatus(matchStatus, "", "");
       confirm.setCustomValidity("");
       return;
     }
     if (!right) {
-      status.textContent = "비밀번호를 한 번 더 입력하세요.";
-      status.dataset.state = "";
+      setStatus(matchStatus, "비밀번호를 한 번 더 입력하세요.", "");
       confirm.setCustomValidity("");
       return;
     }
     if (left === right) {
-      status.textContent = "비밀번호가 일치합니다.";
-      status.dataset.state = "ok";
+      setStatus(matchStatus, "비밀번호가 일치합니다.", "ok");
       confirm.setCustomValidity("");
       return;
     }
-    status.textContent = "비밀번호가 일치하지 않습니다.";
-    status.dataset.state = "error";
+    setStatus(matchStatus, "비밀번호가 일치하지 않습니다.", "error");
     confirm.setCustomValidity("비밀번호 확인이 일치하지 않습니다.");
   };
 
-  password.addEventListener("input", update);
-  confirm.addEventListener("input", update);
-  form.addEventListener("submit", update);
-  update();
+  const updateEmail = () => {
+    if (!email || !emailStatus) return;
+    const value = email.value.trim();
+    if (!value) {
+      setStatus(emailStatus, "", "");
+      email.setCustomValidity("");
+      return;
+    }
+    if (/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(value)) {
+      setStatus(emailStatus, "올바른 이메일 형식입니다.", "ok");
+      email.setCustomValidity("");
+      return;
+    }
+    setStatus(emailStatus, "이메일 형식을 확인하세요.", "error");
+    email.setCustomValidity("이메일 형식을 확인하세요.");
+  };
+
+  const resetUsernameCheck = () => {
+    checkedUsername = "";
+    usernameAvailable = false;
+    username.setCustomValidity("");
+    setStatus(usernameStatus, "아이디 중복 확인을 진행하세요.", "");
+  };
+
+  const checkUsername = async () => {
+    const value = username.value.trim();
+    if (!value) {
+      setStatus(usernameStatus, "아이디를 입력하세요.", "error");
+      username.setCustomValidity("아이디를 입력하세요.");
+      return false;
+    }
+    if (usernameButton) {
+      usernameButton.disabled = true;
+      usernameButton.textContent = "확인 중";
+    }
+    try {
+      const response = await fetch("/api/signup/check-username?username=" + encodeURIComponent(value), {
+        headers: { Accept: "application/json" }
+      });
+      const data = await response.json();
+      checkedUsername = data.username || value.toLowerCase();
+      usernameAvailable = Boolean(data.available);
+      setStatus(usernameStatus, data.message || (usernameAvailable ? "사용 가능한 아이디입니다." : "사용할 수 없는 아이디입니다."), usernameAvailable ? "ok" : "error");
+      username.setCustomValidity(usernameAvailable ? "" : (data.message || "사용할 수 없는 아이디입니다."));
+      return usernameAvailable;
+    } catch {
+      checkedUsername = "";
+      usernameAvailable = false;
+      setStatus(usernameStatus, "중복 확인에 실패했습니다. 다시 시도하세요.", "error");
+      username.setCustomValidity("아이디 중복 확인이 필요합니다.");
+      return false;
+    } finally {
+      if (usernameButton) {
+        usernameButton.disabled = false;
+        usernameButton.textContent = "중복 확인";
+      }
+    }
+  };
+
+  form.querySelectorAll("[data-toggle-password]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = button.parentElement ? button.parentElement.querySelector("input") : null;
+      if (!input) return;
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.textContent = show ? "숨김" : "보기";
+      button.setAttribute("aria-pressed", show ? "true" : "false");
+    });
+  });
+
+  if (usernameButton) usernameButton.addEventListener("click", checkUsername);
+  username.addEventListener("input", resetUsernameCheck);
+  password.addEventListener("input", updatePassword);
+  confirm.addEventListener("input", updatePassword);
+  if (email) email.addEventListener("input", updateEmail);
+  form.addEventListener("submit", async (event) => {
+    updatePassword();
+    updateEmail();
+    const normalizedUsername = username.value.trim().toLowerCase();
+    if (!usernameAvailable || checkedUsername !== normalizedUsername) {
+      event.preventDefault();
+      const ok = await checkUsername();
+      if (ok && form.reportValidity()) form.requestSubmit();
+    }
+  });
+  updatePassword();
+  updateEmail();
+  if (username.value.trim()) resetUsernameCheck();
 })();`;
 }
 
@@ -8168,6 +8318,11 @@ async function route(req, res) {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/signup.js") {
       if (req.method === "HEAD") return sendHead(res, 200, "application/javascript; charset=utf-8");
       return send(res, 200, signupScript(), "application/javascript; charset=utf-8");
+    }
+
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/signup/check-username") {
+      if (req.method === "HEAD") return sendHead(res, 200);
+      return send(res, 200, await checkSignupUsernameAvailability(reqUrl.searchParams.get("username") || ""));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/signup") {
