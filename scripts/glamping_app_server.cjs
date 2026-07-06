@@ -149,6 +149,19 @@ function rankRangeLabel(ranges = []) {
     : "없음";
 }
 
+function rankRangePlaceLimit(ranges = []) {
+  const ranks = new Set();
+  for (const range of ranges) {
+    const from = Math.max(1, Math.min(50, Math.floor(Number(range.from) || 0)));
+    const to = Math.max(1, Math.min(50, Math.floor(Number(range.to) || from)));
+    for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
+      ranks.add(rank);
+      if (ranks.size >= 20) return 20;
+    }
+  }
+  return Math.max(0, Math.min(20, ranks.size));
+}
+
 const REGIONAL_GLAMPING_BASES = new Set([
   "\uACBD\uB0A8", "\uACBD\uC0C1\uB0A8\uB3C4", "\uACBD\uB0A8\uB3C4",
   "\uACBD\uBD81", "\uACBD\uC0C1\uBD81\uB3C4", "\uACBD\uBD81\uB3C4",
@@ -187,6 +200,17 @@ function crawlExecutionPlan(payload = {}) {
   const keyword = String(payload.keyword || "").trim();
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
   const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
+  const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
+  const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
+  const rawDetailRankRanges = collectionMode === "fast"
+    ? ""
+    : (payload.detailRankRanges || process.env.DETAIL_RANK_RANGES);
+  const parsedDetailRankRanges = parseRankRanges(
+    rawDetailRankRanges,
+    collectionMode === "fast" ? "" : "1-10"
+  );
+  const detailRankRanges = rankRangeLabel(parsedDetailRankRanges);
+  const detailPlaceLimit = collectionMode === "fast" ? 0 : (rankRangePlaceLimit(parsedDetailRankRanges) || 10);
   const rawBookingDays = Number(
     payload.bookingDays ||
     payload.bookingRangeDays ||
@@ -197,19 +221,11 @@ function crawlExecutionPlan(payload = {}) {
   const bookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingDays) ? rawBookingDays : 7)));
   const bookingRangePlaceLimit = resolveBookingRangePlaceLimit(
     payload.bookingRangePlaceLimit ?? process.env.BOOKING_RANGE_PLACE_LIMIT,
-    bookingRangeDays
+    bookingRangeDays,
+    detailPlaceLimit
   );
   const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
   const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode);
-  const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
-  const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
-  const rawDetailRankRanges = collectionMode === "fast"
-    ? ""
-    : (payload.detailRankRanges || process.env.DETAIL_RANK_RANGES);
-  const detailRankRanges = rankRangeLabel(parseRankRanges(
-    rawDetailRankRanges,
-    collectionMode === "fast" ? "" : "1-10"
-  ));
   return {
     keyword,
     checkIn,
@@ -2409,6 +2425,9 @@ function b2bSearchPayload(value = {}) {
     error.statusCode = 400;
     throw error;
   }
+  const detailRankRanges = String(value.detailRankRanges || "1-10").trim() || "1-10";
+  const detailPlaceLimit = rankRangePlaceLimit(parseRankRanges(detailRankRanges, "1-10")) || 10;
+  const providedPlaceLimit = Math.max(0, Math.min(20, Math.round(Number(value.bookingRangePlaceLimit) || 0)));
   return {
     keyword,
     checkIn: value.checkIn || kstDate(0),
@@ -2416,9 +2435,9 @@ function b2bSearchPayload(value = {}) {
     searchMode: "keyword",
     productMode: normalizeProductMode(value.productMode || "all"),
     collectionMode: normalizeCollectionMode(value.collectionMode || "precision"),
-    detailRankRanges: String(value.detailRankRanges || "1-10").trim() || "1-10",
+    detailRankRanges,
     bookingRangeDays: Number(value.bookingRangeDays) || 7,
-    bookingRangePlaceLimit: Number(value.bookingRangePlaceLimit) || 10,
+    bookingRangePlaceLimit: Math.max(providedPlaceLimit, detailPlaceLimit),
     sourceRole: USER_ROLES.b2b,
     collectionSource: "b2b_search"
   };
@@ -4426,11 +4445,12 @@ function bookingDaysFromRange(checkIn, checkOut) {
   return diff > 1 ? Math.min(31, diff + 1) : 1;
 }
 
-function resolveBookingRangePlaceLimit(value, bookingRangeDays) {
+function resolveBookingRangePlaceLimit(value, bookingRangeDays, fallbackLimit = 10) {
   const text = String(value ?? "").trim();
-  if (!text) return Number(bookingRangeDays) > 1 ? 10 : 0;
+  const fallback = Math.max(0, Math.min(20, Math.floor(Number(fallbackLimit) || 0)));
+  if (!text) return Number(bookingRangeDays) > 1 ? fallback : 0;
   const number = Number(text);
-  if (!Number.isFinite(number)) return Number(bookingRangeDays) > 1 ? 10 : 0;
+  if (!Number.isFinite(number)) return Number(bookingRangeDays) > 1 ? fallback : 0;
   return Math.max(0, Math.min(20, Math.floor(number)));
 }
 
@@ -8414,8 +8434,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-b2b-dedupe"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-b2b-dedupe"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-expand-rank-limit"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-expand-rank-limit"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

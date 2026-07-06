@@ -84,6 +84,19 @@ function rankRangeLabel(ranges = []) {
     : "없음";
 }
 
+function rankRangePlaceLimit(ranges = []) {
+  const ranks = new Set();
+  for (const range of ranges) {
+    const from = boundedInteger(range.from, 0, 1, 50);
+    const to = boundedInteger(range.to, from, 1, 50);
+    for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
+      ranks.add(rank);
+      if (ranks.size >= 20) return 20;
+    }
+  }
+  return Math.max(0, Math.min(20, ranks.size));
+}
+
 function rankInRanges(rank, ranges = []) {
   const number = Number(rank);
   return Number.isFinite(number) && ranges.some((range) => number >= range.from && number <= range.to);
@@ -134,7 +147,6 @@ const ADULTS = Number(process.env.ADULTS || 2);
 const PRODUCT_MODE = normalizeProductMode(process.env.PRODUCT_MODE || "all");
 const PRODUCT_MODE_LABEL = PRODUCT_MODES[PRODUCT_MODE];
 const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 7, 1, 31);
-const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? 10 : 0, 0, 20);
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
 const SEARCH_MODE_LABEL = SEARCH_MODES[SEARCH_MODE];
@@ -142,6 +154,8 @@ const COLLECTION_MODE = normalizeCollectionMode(process.env.COLLECTION_MODE || "
 const COLLECTION_MODE_LABEL = COLLECTION_MODES[COLLECTION_MODE];
 const DETAIL_RANK_RANGES = parseRankRanges(process.env.DETAIL_RANK_RANGES, COLLECTION_MODE === "fast" ? "" : "1-20");
 const DETAIL_RANK_RANGE_LABEL = rankRangeLabel(DETAIL_RANK_RANGES);
+const DETAIL_RANGE_PLACE_LIMIT = COLLECTION_MODE === "fast" ? 0 : (rankRangePlaceLimit(DETAIL_RANK_RANGES) || 10);
+const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? DETAIL_RANGE_PLACE_LIMIT : 0, 0, 20);
 const SOURCE_ROLE = String(process.env.SOURCE_ROLE || "admin").trim() || "admin";
 const COLLECTION_SOURCE = String(process.env.COLLECTION_SOURCE || (SOURCE_ROLE === "b2b" ? "b2b_search" : "admin_search")).trim();
 const COLLECTION_SOURCE_LABEL = String(process.env.COLLECTION_SOURCE_LABEL || (COLLECTION_SOURCE === "b2b_search" ? "B2B 검색" : "관리자 수집")).trim();

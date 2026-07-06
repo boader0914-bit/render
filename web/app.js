@@ -369,6 +369,28 @@ function normalizedRankRangeText(value = "") {
     .replace(/\s+/g, "");
 }
 
+function rankRangePlaceLimitFromText(value = "", fallback = "1-10") {
+  const text = normalizedRankRangeText(value);
+  const source = (!text || /^(none|skip|없음)$/i.test(text)) ? normalizedRankRangeText(fallback) : text;
+  if (!source || /^(none|skip|없음)$/i.test(source)) return 0;
+  if (/^(all|전체)$/i.test(source)) return 20;
+  const ranks = new Set();
+  source.split(",").forEach((part) => {
+    const match = part.match(/^(\d{1,3})(?:-(\d{1,3}))?$/);
+    if (!match) return;
+    const left = Math.max(1, Math.min(50, Math.floor(Number(match[1]))));
+    const right = Math.max(1, Math.min(50, Math.floor(Number(match[2] || match[1]))));
+    for (let rank = Math.min(left, right); rank <= Math.max(left, right); rank += 1) {
+      ranks.add(rank);
+      if (ranks.size >= 20) break;
+    }
+  });
+  if (!ranks.size && source !== normalizedRankRangeText(fallback)) {
+    return rankRangePlaceLimitFromText(fallback, "");
+  }
+  return Math.max(0, Math.min(20, ranks.size));
+}
+
 function crawlSpeedPresetOptions() {
   return [
     { key: "top10", label: "기본 1-10위", collectionMode: "precision", range: "1-10", note: "기본 정밀 분석" },
@@ -393,7 +415,8 @@ function currentCrawlFormPayload() {
     requestedMode,
     productMode: els.productModeInput?.value || "all",
     collectionMode,
-    detailRankRanges
+    detailRankRanges,
+    bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges)
   };
 }
 
@@ -705,8 +728,10 @@ function crawlStageFallbacks() {
 
 function crawlPreviewMeta(payload = {}) {
   const days = Math.max(1, Math.min(31, bookingDays(payload) || DEFAULT_BOOKING_DAYS));
-  const placeLimit = days > 1 ? 10 : 0;
   const fast = payload.collectionMode === "fast";
+  const placeLimit = days > 1 && !fast
+    ? Math.max(0, Math.min(20, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || "1-10"))))
+    : 0;
   const searchSeconds = payload.searchMode === "company" ? 55 : 95;
   const trendSeconds = payload.searchMode === "keyword" ? 25 : 10;
   const productSeconds = fast ? 0 : (payload.productMode === "all" ? 45 : 26);
@@ -16143,6 +16168,7 @@ function renderB2BSearchPanel() {
 
 function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
   const range = els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10";
+  const detailRankRanges = range === "1-20" ? "1-20" : "1-10";
   return {
     keyword: String(keyword || "").trim(),
     checkIn: els.checkInInput?.value || "",
@@ -16150,9 +16176,9 @@ function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
     searchMode: "keyword",
     productMode: "all",
     collectionMode: "precision",
-    detailRankRanges: range === "1-20" ? "1-20" : "1-10",
+    detailRankRanges,
     bookingRangeDays: DEFAULT_BOOKING_DAYS,
-    bookingRangePlaceLimit: 10
+    bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges)
   };
 }
 
