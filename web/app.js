@@ -7158,6 +7158,114 @@ function formatB2BWonInput(input) {
   input.value = digits ? Number(digits).toLocaleString("ko-KR") : "";
 }
 
+const B2B_MY_LODGE_SEGMENT_LIMIT = 8;
+const B2B_MY_LODGE_PRICE_KEYS = ["weekdayPrice", "fridayPrice", "saturdayPrice", "sundayPrice"];
+
+function b2bMyLodgeBlankSegment() {
+  return {
+    type: "",
+    count: "",
+    weekdayPrice: "",
+    fridayPrice: "",
+    saturdayPrice: "",
+    sundayPrice: ""
+  };
+}
+
+function b2bMyLodgeCleanSegment(row = {}) {
+  return {
+    type: String(row.type || row.roomType || "").trim().slice(0, 80),
+    count: Math.round(b2bMyLodgeNumber(row.count ?? row.roomCount)),
+    weekdayPrice: b2bMyLodgeNumber(row.weekdayPrice),
+    fridayPrice: b2bMyLodgeNumber(row.fridayPrice),
+    saturdayPrice: b2bMyLodgeNumber(row.saturdayPrice),
+    sundayPrice: b2bMyLodgeNumber(row.sundayPrice)
+  };
+}
+
+function b2bMyLodgeSegmentHasInput(row = {}) {
+  return Boolean(
+    String(row.type || "").trim() ||
+    b2bMyLodgeNumber(row.count) > 0 ||
+    B2B_MY_LODGE_PRICE_KEYS.some((key) => b2bMyLodgeNumber(row[key]) > 0)
+  );
+}
+
+function b2bMyLodgeSegmentRows(draft = {}) {
+  return (Array.isArray(draft.roomSegments) ? draft.roomSegments : [])
+    .map((row) => b2bMyLodgeCleanSegment(row))
+    .filter((row) => b2bMyLodgeSegmentHasInput(row))
+    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+}
+
+function b2bMyLodgeLegacySegment(draft = {}) {
+  const row = b2bMyLodgeCleanSegment({
+    type: draft.roomType,
+    count: draft.roomCount,
+    weekdayPrice: draft.weekdayPrice,
+    fridayPrice: draft.fridayPrice,
+    saturdayPrice: draft.saturdayPrice,
+    sundayPrice: draft.sundayPrice
+  });
+  return b2bMyLodgeSegmentHasInput(row) ? row : null;
+}
+
+function b2bMyLodgeSegmentInputRows(draft = {}) {
+  const rows = b2bMyLodgeSegmentRows(draft);
+  if (rows.length) return rows;
+  const legacy = b2bMyLodgeLegacySegment(draft);
+  return legacy ? [legacy] : [];
+}
+
+function b2bMyLodgeSegmentAverage(row = {}) {
+  const weekday = b2bMyLodgeNumber(row.weekdayPrice);
+  const friday = b2bMyLodgeNumber(row.fridayPrice);
+  const saturday = b2bMyLodgeNumber(row.saturdayPrice);
+  const sunday = b2bMyLodgeNumber(row.sundayPrice);
+  const weighted = weekday * 4 + friday + saturday + sunday;
+  if (weighted > 0) return weighted / 7;
+  const values = [weekday, friday, saturday, sunday].filter((value) => value > 0);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function b2bMyLodgeAveragePriceFromSegments(rows = []) {
+  let weightedTotal = 0;
+  let weightedCount = 0;
+  const unweighted = [];
+  rows.forEach((row) => {
+    const average = b2bMyLodgeSegmentAverage(row);
+    if (!average) return;
+    const count = Math.round(b2bMyLodgeNumber(row.count));
+    if (count > 0) {
+      weightedTotal += average * count;
+      weightedCount += count;
+    } else {
+      unweighted.push(average);
+    }
+  });
+  if (weightedCount > 0) return weightedTotal / weightedCount;
+  return unweighted.length ? unweighted.reduce((sum, value) => sum + value, 0) / unweighted.length : 0;
+}
+
+function b2bMyLodgeSegmentPrice(row = {}, key = "weekdayPrice") {
+  const direct = b2bMyLodgeNumber(row[key]);
+  if (direct > 0) return direct;
+  const weekday = b2bMyLodgeNumber(row.weekdayPrice);
+  return weekday > 0 ? weekday : b2bMyLodgeSegmentAverage(row);
+}
+
+function b2bMyLodgeSegmentRevenue(rows = [], rates = {}, dayCounts = {}) {
+  return rows.reduce((sum, row) => {
+    const count = Math.round(b2bMyLodgeNumber(row.count));
+    if (count <= 0) return sum;
+    return sum +
+      count * b2bMyLodgeSegmentPrice(row, "weekdayPrice") * b2bMyLodgeNumber(rates.weekday) * b2bMyLodgeNumber(dayCounts.weekday) +
+      count * b2bMyLodgeSegmentPrice(row, "fridayPrice") * b2bMyLodgeNumber(rates.friday) * b2bMyLodgeNumber(dayCounts.friday) +
+      count * b2bMyLodgeSegmentPrice(row, "saturdayPrice") * b2bMyLodgeNumber(rates.saturday) * b2bMyLodgeNumber(dayCounts.saturday) +
+      count * b2bMyLodgeSegmentPrice(row, "sundayPrice") * b2bMyLodgeNumber(rates.sunday) * b2bMyLodgeNumber(dayCounts.sunday);
+  }, 0);
+}
+
 function b2bMyLodgeAveragePrice(draft = {}) {
   const weekday = b2bMyLodgeNumber(draft.weekdayPrice);
   const friday = b2bMyLodgeNumber(draft.fridayPrice);
@@ -7289,6 +7397,18 @@ function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) 
   const dayUseCount = b2bCollectedDayUseCount(item);
   const facilities = b2bCollectedFacilities(item);
   const name = String(item.name || item.companyName || current.lodgingName || result.keyword || "").trim();
+  const collectedSegment = {
+    type: roomType || current.roomType || "",
+    count: roomCount || current.roomCount || "",
+    weekdayPrice: prices.weekdayPrice || current.weekdayPrice || "",
+    fridayPrice: prices.fridayPrice || current.fridayPrice || "",
+    saturdayPrice: prices.saturdayPrice || current.saturdayPrice || "",
+    sundayPrice: prices.sundayPrice || current.sundayPrice || ""
+  };
+  const currentSegments = b2bMyLodgeSegmentInputRows(current);
+  const roomSegments = b2bMyLodgeSegmentHasInput(collectedSegment)
+    ? [collectedSegment]
+    : currentSegments;
   const collected = {
     ...current,
     lodgingName: name || current.lodgingName || "",
@@ -7299,6 +7419,7 @@ function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) 
     fridayPrice: prices.fridayPrice || current.fridayPrice || "",
     saturdayPrice: prices.saturdayPrice || current.saturdayPrice || "",
     sundayPrice: prices.sundayPrice || current.sundayPrice || "",
+    roomSegments,
     facilities: facilities || current.facilities || "",
     naverConnected: b2bCollectedNaverConnected(item) || Boolean(current.naverConnected),
     otaConnected: Boolean(current.otaConnected),
@@ -7348,16 +7469,22 @@ function b2bMyLodgeDeltaTone(value, base) {
 
 function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief)) {
   const draft = readB2BMyLodgeDraft();
-  const roomCount = Math.round(b2bMyLodgeNumber(draft.roomCount));
-  const roomType = String(draft.roomType || "").trim();
+  const roomSegments = b2bMyLodgeSegmentRows(draft);
+  const segmentRoomCount = roomSegments.reduce((sum, row) => sum + Math.round(b2bMyLodgeNumber(row.count)), 0);
+  const roomCount = Math.round(b2bMyLodgeNumber(draft.roomCount)) || segmentRoomCount;
+  const segmentTypes = roomSegments.map((row) => row.type).filter(Boolean);
+  const roomType = String(draft.roomType || segmentTypes.slice(0, 4).join(", ")).trim();
   const dayUseCount = Math.round(b2bMyLodgeNumber(draft.dayUseCount));
   const weekdayPrice = b2bMyLodgeNumber(draft.weekdayPrice);
   const fridayPrice = b2bMyLodgeNumber(draft.fridayPrice);
   const saturdayPrice = b2bMyLodgeNumber(draft.saturdayPrice);
   const sundayPrice = b2bMyLodgeNumber(draft.sundayPrice);
-  const avgPrice = b2bMyLodgeAveragePrice(draft);
-  const hasInput = Boolean(String(draft.lodgingName || "").trim()) || roomCount > 0 || roomType || dayUseCount > 0 || avgPrice > 0;
-  const hasEstimateBasis = roomCount > 0 && avgPrice > 0;
+  const avgPrice = roomSegments.length ? b2bMyLodgeAveragePriceFromSegments(roomSegments) : b2bMyLodgeAveragePrice(draft);
+  const hasSegmentEstimateBasis = roomSegments.some((row) =>
+    b2bMyLodgeNumber(row.count) > 0 && B2B_MY_LODGE_PRICE_KEYS.some((key) => b2bMyLodgeNumber(row[key]) > 0)
+  );
+  const hasInput = Boolean(String(draft.lodgingName || "").trim()) || roomCount > 0 || roomType || dayUseCount > 0 || avgPrice > 0 || roomSegments.length > 0;
+  const hasEstimateBasis = hasSegmentEstimateBasis || (roomCount > 0 && avgPrice > 0);
   const fallbackRate = Number.isFinite(brief.rate) ? brief.rate : b2bMyLodgeRate(revenueModel.flow, "all", 0.25);
   const rates = {
     weekday: b2bMyLodgeRate(revenueModel.flow, "weekday", fallbackRate),
@@ -7367,7 +7494,7 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
   };
   const dayCounts = b2bMyLodgeDayTypeCounts(state.data?.run || {});
   const basisDays = Object.values(dayCounts).reduce((sum, count) => sum + count, 0);
-  const weeklyRevenue = hasEstimateBasis
+  const legacyWeeklyRevenue = hasEstimateBasis
     ? Math.round((
       roomCount * weekdayPrice * rates.weekday * dayCounts.weekday +
       roomCount * fridayPrice * rates.friday * dayCounts.friday +
@@ -7375,6 +7502,10 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
       roomCount * sundayPrice * rates.sunday * dayCounts.sunday
     ) / 1000) * 1000
     : 0;
+  const segmentWeeklyRevenue = hasSegmentEstimateBasis
+    ? Math.round(b2bMyLodgeSegmentRevenue(roomSegments, rates, dayCounts) / 1000) * 1000
+    : 0;
+  const weeklyRevenue = hasSegmentEstimateBasis ? segmentWeeklyRevenue : legacyWeeklyRevenue;
   const sortedRevenueRows = (revenueModel.revenueRows || [])
     .filter((row) => row.revenue > 0)
     .slice()
@@ -7396,8 +7527,11 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
   ].filter(Boolean);
   const channelScore = (draft.naverConnected ? 1 : 0) + (draft.otaConnected ? 1 : 0);
   const facilities = b2bMyLodgeFacilities(draft.facilities);
+  const segmentBasisText = hasSegmentEstimateBasis
+    ? `${fmtNumber(roomSegments.length)}개 객실종류 · 요일별 가격 기준`
+    : "입력 객실수와 요일별 가격 기준";
   const benchmarkRows = [
-    { label: "내 숙소", value: weeklyRevenue, note: "입력 객실수와 요일별 가격 기준", tone: hasEstimateBasis ? "mine" : "neutral" },
+    { label: "내 숙소", value: weeklyRevenue, note: segmentBasisText, tone: hasEstimateBasis ? "mine" : "neutral" },
     { label: "지역 평균", value: averageRevenue, note: `${fmtNumber(sortedRevenueRows.length)}개 매출 표본 평균`, tone: "strong" },
     { label: "상위권 평균", value: topAverage, note: topSlice.length ? `상위 ${fmtNumber(topSlice.length)}개 평균` : "상위 표본 대기", tone: "good" },
     { label: "하위권 평균", value: lowAverage, note: lowSlice.length ? `하위 ${fmtNumber(lowSlice.length)}개 평균` : "하위 표본 대기", tone: "watch" },
@@ -7411,7 +7545,9 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
       tone: hasEstimateBasis ? "mine" : "neutral",
       label: "내 예상 기간 매출",
       value: hasEstimateBasis ? fmtWon(weeklyRevenue) : "입력 대기",
-      note: `${fmtNumber(basisDays)}일 검색기간 예약율 반영`
+      note: hasSegmentEstimateBasis
+        ? `${fmtNumber(roomSegments.length)}개 객실종류 · ${fmtNumber(basisDays)}일 예약율 반영`
+        : `${fmtNumber(basisDays)}일 검색기간 예약율 반영`
     },
     {
       tone: b2bMyLodgeDeltaTone(weeklyRevenue, averageRevenue),
@@ -7445,6 +7581,8 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     roomCount,
     roomType,
     dayUseCount,
+    roomSegments,
+    segmentRoomCount,
     avgPrice,
     weeklyRevenue,
     rates,
@@ -7465,14 +7603,46 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
   const collecting = Boolean(state.b2bMyLodgeCollecting);
   const collectStatus = state.b2bMyLodgeCollectStatus || draft.collectionStatus || "";
   const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
-  const priceInputValue = (key) => escapeHtml(b2bMyLodgeInputNumberText(draft[key]));
+  const inputSegments = b2bMyLodgeSegmentInputRows(draft);
+  const segmentRows = inputSegments.length ? inputSegments : [b2bMyLodgeBlankSegment()];
+  const roomCountValue = draft.roomCount || (model.segmentRoomCount ? String(model.segmentRoomCount) : "");
+  const segmentPriceValue = (row, key) => escapeHtml(b2bMyLodgeInputNumberText(row[key]));
+  const segmentRowHtml = segmentRows.map((row, index) => `
+    <div class="b2b-room-segment-row" data-b2b-room-segment-row>
+      <label>
+        <span>객실 종류</span>
+        <input name="segmentType" type="text" maxlength="80" value="${escapeHtml(row.type || "")}" placeholder="글램핑, 카라반">
+      </label>
+      <label>
+        <span>수량</span>
+        <input name="segmentCount" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(row.count || "")}" placeholder="예: 6">
+      </label>
+      <label>
+        <span>평일</span>
+        <input name="segmentWeekdayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${segmentPriceValue(row, "weekdayPrice")}" placeholder="120,000">
+      </label>
+      <label>
+        <span>금</span>
+        <input name="segmentFridayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${segmentPriceValue(row, "fridayPrice")}" placeholder="160,000">
+      </label>
+      <label>
+        <span>토</span>
+        <input name="segmentSaturdayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${segmentPriceValue(row, "saturdayPrice")}" placeholder="220,000">
+      </label>
+      <label>
+        <span>일</span>
+        <input name="segmentSundayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${segmentPriceValue(row, "sundayPrice")}" placeholder="140,000">
+      </label>
+      <button class="b2b-room-segment-remove" type="button" data-b2b-room-segment-remove="${index}" aria-label="객실종류 삭제" ${segmentRows.length <= 1 ? "disabled" : ""}>×</button>
+    </div>
+  `).join("");
   return `
     <div class="b2b-my-lodge-board">
       <div class="b2b-my-lodge-head">
         <div>
           <span>My Stay Benchmark</span>
-          <strong>내숙소 찾기</strong>
-          <p>객실 수, 요일별 가격, 채널 상태를 입력하면 현재 검색된 경쟁권의 평균·상위·하위 매출 표본과 비교합니다.</p>
+          <strong>내숙소 등록</strong>
+          <p>총 객실수와 객실종류별 수량·요일 가격을 입력하면 현재 검색된 경쟁권의 평균·상위·하위 매출 표본과 비교합니다.</p>
         </div>
         <em>${escapeHtml(activeKeyword())}</em>
       </div>
@@ -7482,37 +7652,29 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <input name="lodgingName" type="text" maxlength="80" value="${escapeHtml(name)}" placeholder="지역명 + 운영업체명">
         </label>
         <label class="b2b-my-lodge-field">
-          <span>객실 수</span>
-          <input name="roomCount" type="number" min="0" step="1" value="${escapeHtml(draft.roomCount ?? "")}" placeholder="12">
-        </label>
-        <label class="b2b-my-lodge-field room-type">
-          <span>객실종류</span>
-          <input name="roomType" type="text" maxlength="80" value="${escapeHtml(draft.roomType || "")}" placeholder="글램핑, 카라반">
+          <span>객실 수(총량)</span>
+          <input name="roomCount" type="number" min="0" step="1" value="${escapeHtml(roomCountValue)}" placeholder="12">
         </label>
         <label class="b2b-my-lodge-field">
           <span>데이유즈</span>
           <input name="dayUseCount" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(draft.dayUseCount ?? "")}" placeholder="예: 6">
         </label>
-        <label class="b2b-my-lodge-field">
-          <span>평일 가격</span>
-          <input name="weekdayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("weekdayPrice")}" placeholder="120,000">
-        </label>
-        <label class="b2b-my-lodge-field">
-          <span>금요일 가격</span>
-          <input name="fridayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("fridayPrice")}" placeholder="160,000">
-        </label>
-        <label class="b2b-my-lodge-field">
-          <span>토요일 가격</span>
-          <input name="saturdayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("saturdayPrice")}" placeholder="220,000">
-        </label>
-        <label class="b2b-my-lodge-field">
-          <span>일요일 가격</span>
-          <input name="sundayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("sundayPrice")}" placeholder="140,000">
-        </label>
         <label class="b2b-my-lodge-field facilities">
           <span>시설</span>
           <input name="facilities" type="text" maxlength="160" value="${escapeHtml(draft.facilities || "")}" placeholder="개별화장실, 수영장, 바비큐">
         </label>
+        <div class="b2b-room-segment-panel" data-b2b-room-segments>
+          <div class="b2b-room-segment-head">
+            <div>
+              <strong>객실종류별 가격</strong>
+              <span>객실 종류를 추가해 세그먼트별 객실수와 평일·금·토·일 가격을 입력합니다.</span>
+            </div>
+            <button class="secondary-button" type="button" data-b2b-room-segment-add ${segmentRows.length >= B2B_MY_LODGE_SEGMENT_LIMIT ? "disabled" : ""}>객실종류 +</button>
+          </div>
+          <div class="b2b-room-segment-list">
+            ${segmentRowHtml}
+          </div>
+        </div>
         <div class="b2b-my-lodge-checks" aria-label="판매 채널 참고">
           <label><input name="naverConnected" type="checkbox" ${draft.naverConnected ? "checked" : ""}> 네이버 노출</label>
           <label><input name="otaConnected" type="checkbox" ${draft.otaConnected ? "checked" : ""}> OTA 노출</label>
@@ -7574,15 +7736,37 @@ function collectB2BMyLodgeFormValues() {
     const number = b2bMyLodgeNumber(value(name));
     return number > 0 ? String(Math.round(number)) : "";
   };
+  const segmentRows = Array.from(form.querySelectorAll("[data-b2b-room-segment-row]"))
+    .map((row) => {
+      const rowValue = (name) => String(row.querySelector(`[name="${name}"]`)?.value || "").trim();
+      const rowNumber = (name) => {
+        const number = b2bMyLodgeNumber(rowValue(name));
+        return number > 0 ? String(Math.round(number)) : "";
+      };
+      return {
+        type: rowValue("segmentType").slice(0, 80),
+        count: rowNumber("segmentCount"),
+        weekdayPrice: rowNumber("segmentWeekdayPrice"),
+        fridayPrice: rowNumber("segmentFridayPrice"),
+        saturdayPrice: rowNumber("segmentSaturdayPrice"),
+        sundayPrice: rowNumber("segmentSundayPrice")
+      };
+    })
+    .filter((row) => b2bMyLodgeSegmentHasInput(row))
+    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+  const segmentTotal = segmentRows.reduce((sum, row) => sum + Math.round(b2bMyLodgeNumber(row.count)), 0);
+  const firstSegment = segmentRows[0] || {};
+  const roomType = segmentRows.map((row) => row.type).filter(Boolean).slice(0, 4).join(", ");
   return {
     lodgingName: value("lodgingName").slice(0, 80),
-    roomCount: numberValue("roomCount"),
-    roomType: value("roomType").slice(0, 80),
+    roomCount: numberValue("roomCount") || (segmentTotal > 0 ? String(segmentTotal) : ""),
+    roomType: roomType.slice(0, 80),
     dayUseCount: numberValue("dayUseCount"),
-    weekdayPrice: numberValue("weekdayPrice"),
-    fridayPrice: numberValue("fridayPrice"),
-    saturdayPrice: numberValue("saturdayPrice"),
-    sundayPrice: numberValue("sundayPrice"),
+    weekdayPrice: firstSegment.weekdayPrice || "",
+    fridayPrice: firstSegment.fridayPrice || "",
+    saturdayPrice: firstSegment.saturdayPrice || "",
+    sundayPrice: firstSegment.sundayPrice || "",
+    roomSegments: segmentRows,
     facilities: value("facilities").slice(0, 160),
     naverConnected: Boolean(form.querySelector('input[name="naverConnected"]')?.checked),
     otaConnected: Boolean(form.querySelector('input[name="otaConnected"]')?.checked),
@@ -7607,6 +7791,21 @@ function saveB2BMyLodgeBenchmark() {
   persistB2BMyLodgeDraft(values);
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function updateB2BMyLodgeRoomSegments(action = "add", index = -1) {
+  const values = collectB2BMyLodgeFormValues() || readB2BMyLodgeDraft() || {};
+  const rows = Array.isArray(values.roomSegments) ? values.roomSegments.slice(0, B2B_MY_LODGE_SEGMENT_LIMIT) : [];
+  if (action === "add" && rows.length < B2B_MY_LODGE_SEGMENT_LIMIT) {
+    rows.push(b2bMyLodgeBlankSegment());
+  }
+  if (action === "remove" && rows.length > 1 && index >= 0 && index < rows.length) {
+    rows.splice(index, 1);
+  }
+  values.roomSegments = rows;
+  persistB2BMyLodgeDraft(values);
+  renderReport();
+  document.querySelector("[data-b2b-room-segments]")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 async function collectB2BMyLodgeByName() {
@@ -17590,6 +17789,15 @@ function bindEvents() {
       renderB2BSearchPanel();
       els.b2bSearchPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
       if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색어를 적용했습니다. 범위를 확인한 뒤 검색 실행을 누르세요.`;
+      return;
+    }
+    if (event.target.closest("[data-b2b-room-segment-add]")) {
+      updateB2BMyLodgeRoomSegments("add");
+      return;
+    }
+    const roomSegmentRemove = event.target.closest("[data-b2b-room-segment-remove]");
+    if (roomSegmentRemove) {
+      updateB2BMyLodgeRoomSegments("remove", Number(roomSegmentRemove.dataset.b2bRoomSegmentRemove));
       return;
     }
     if (event.target.closest("[data-b2b-my-lodge-collect]")) {
