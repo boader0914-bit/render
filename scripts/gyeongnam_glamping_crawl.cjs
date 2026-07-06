@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
 let XLSX = null;
 let ArtifactWorkbook = null;
 let ArtifactSpreadsheetFile = null;
@@ -111,6 +112,20 @@ function safeFilePart(value, fallback = "검색") {
     .replace(/\s+/g, "_")
     .replace(/^_+|_+$/g, "");
   return (cleaned || fallback).slice(0, 80);
+}
+
+function safeCellValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "string") return value;
+  if (value.length <= XLSX_CELL_TEXT_LIMIT) return value;
+  return `${value.slice(0, XLSX_CELL_TEXT_LIMIT - 48)}...(truncated ${value.length} chars)`;
+}
+
+function detailJsonRelativePath(meta = {}, jsonText = "") {
+  const field = safeFilePart(meta.field || "detail", "detail").slice(0, 42);
+  const place = safeFilePart(meta.placeId || meta.bookingBusinessId || meta.name || "item", "item").slice(0, 42);
+  const hash = crypto.createHash("sha1").update(`${field}:${jsonText}`).digest("hex").slice(0, 12);
+  return `${DETAIL_JSON_DIR_NAME}/${place}_${field}_${hash}.json`;
 }
 
 const CHECK_IN = process.env.CHECK_IN || kstDate(0);
@@ -485,6 +500,10 @@ const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul"
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
 const OUTPUT_ROOT = process.env.OUTPUTS_DIR || process.env.DATA_DIR || "outputs";
 const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${province.slug}_glamping_${RUN_STAMP}`);
+const DETAIL_JSON_DIR_NAME = "details";
+const DETAIL_JSON_INLINE_LIMIT = 28000;
+const XLSX_CELL_TEXT_LIMIT = 32000;
+const detailJsonFiles = [];
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const NAVER_BOOKING_STOCK_LIMIT = Number(process.env.NAVER_BOOKING_STOCK_LIMIT || 20);
 const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, 4, 1, 8);
@@ -1431,9 +1450,24 @@ function compactNaverScheduleDetail(schedule, listType = "", date = CHECK_IN, av
   };
 }
 
-function jsonCell(value) {
+async function jsonCell(value, meta = {}) {
   if (!value || (Array.isArray(value) && !value.length)) return "";
-  return JSON.stringify(value);
+  const jsonText = JSON.stringify(value);
+  if (jsonText.length <= DETAIL_JSON_INLINE_LIMIT) return jsonText;
+  const relativePath = detailJsonRelativePath(meta, jsonText);
+  const filePath = path.join(OUTPUT_DIR, ...relativePath.split("/"));
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(value, null, 2), "utf8");
+  detailJsonFiles.push({
+    field: meta.field || "",
+    name: meta.name || "",
+    placeId: meta.placeId || "",
+    bookingBusinessId: meta.bookingBusinessId || "",
+    file: relativePath,
+    itemCount: Array.isArray(value) ? value.length : 1,
+    originalLength: jsonText.length
+  });
+  return `@json-file:${relativePath}`;
 }
 
 function revenueProjectionFields(estimatedRevenue = 0, pricedSoldOut = 0, missingPriceSoldOut = 0) {
@@ -2191,9 +2225,14 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.네이버쿠폰명 = result.naverCouponNames || "";
       row.네이버쿠폰확인채널 = result.naverCouponChannel || "";
       row.네이버쿠폰상세 = result.naverCouponDetail || "";
-      row.네이버상품상세JSON = jsonCell(result.itemDetails || []);
-      row.네이버요일별상품상세JSON = jsonCell(result.weekly?.productDetails || []);
-      row.dayUseWeeklyProductDetailsJson = jsonCell(result.dayUseWeekly?.productDetails || []);
+      const jsonMeta = {
+        name: row.업체명 || row.name || "",
+        placeId: row.place_id || "",
+        bookingBusinessId: result.bookingBusinessId || ""
+      };
+      row.네이버상품상세JSON = await jsonCell(result.itemDetails || [], { ...jsonMeta, field: "naver_item_details" });
+      row.네이버요일별상품상세JSON = await jsonCell(result.weekly?.productDetails || [], { ...jsonMeta, field: "weekly_product_details" });
+      row.dayUseWeeklyProductDetailsJson = await jsonCell(result.dayUseWeekly?.productDetails || [], { ...jsonMeta, field: "dayuse_weekly_product_details" });
       row.데이유즈기준일예상매출 = result.dayUseEstimatedRevenue ?? "";
       row.basisDayUseAdjustedRevenue = result.dayUseAdjustedEstimatedRevenue ?? "";
       row.basisDayUseMissingPriceEstimatedRevenue = result.dayUseMissingPriceEstimatedRevenue ?? "";
@@ -2927,7 +2966,7 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
 }
 
 function aoaFromRows(rows, columns) {
-  return [columns, ...rows.map((row) => columns.map((column) => row[column] ?? ""))];
+  return [columns.map(safeCellValue), ...rows.map((row) => columns.map((column) => safeCellValue(row[column] ?? "")))];
 }
 
 function colName(index) {
@@ -3554,6 +3593,7 @@ async function main() {
 - 판단 유형: ${province.isCompany ? "업체명" : province.isLocal ? "지역형" : "광역형"}
 - OTA 기준 조건: ${bookingConditionText}
 - 예약재고 기간: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준"}
+- 상품상세 JSON: ${detailJsonFiles.length ? `긴 상품 상세 ${detailJsonFiles.length}개는 ${DETAIL_JSON_DIR_NAME}/ 별도 파일로 저장` : "XLSX 셀 한도 내 직접 저장"}
 - 핵심 분석 채널: 네이버, 야놀자/NOL, ONDA, 떠나요
 - 보조 채널: 여기어때(자동수집 차단 시 수동 보완만 사용)
 
@@ -3673,6 +3713,7 @@ async function main() {
     bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
     fileRoles,
     files: Object.values(fileRoles),
+    detailJsonFiles,
     counts: {
       naverOverall: naver.overall.length,
       naverAds: naver.ads.length,
@@ -3685,6 +3726,7 @@ async function main() {
       nolRawFirstPage: nol.rawFirstPage,
       nolFilteredOut: nol.filteredOut,
       ddnayo: ddnayo.rows.length,
+      detailJsonFiles: detailJsonFiles.length,
     },
   };
   await fs.writeFile(path.join(OUTPUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");

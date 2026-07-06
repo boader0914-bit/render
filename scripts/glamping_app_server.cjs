@@ -4378,13 +4378,32 @@ function numericField(row, keys) {
   return null;
 }
 
-function jsonArrayField(row, keys) {
+function jsonArrayFromFileReference(text = "", baseDir = "") {
+  if (!baseDir || !String(text || "").startsWith("@json-file:")) return [];
+  const relativePath = String(text || "").replace(/^@json-file:/, "").trim();
+  if (!relativePath) return [];
+  const filePath = safeJoin(baseDir, relativePath);
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, ""));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function jsonArrayField(row, keys, baseDir = "") {
   for (const key of keys) {
     const value = row[key];
     if (value === null || value === undefined || value === "") continue;
     if (Array.isArray(value)) return value;
     const text = String(value || "").trim();
     if (!text) continue;
+    if (text.startsWith("@json-file:")) {
+      const fromFile = jsonArrayFromFileReference(text, baseDir);
+      if (fromFile.length) return fromFile;
+      continue;
+    }
     try {
       const parsed = JSON.parse(text.replace(/^\uFEFF/, ""));
       if (Array.isArray(parsed)) return parsed;
@@ -7269,7 +7288,7 @@ function summarizeRankingRows(overallRows = [], adRows = [], regionalRows = [], 
   };
 }
 
-function summarizeAvailabilityRows(rows) {
+function summarizeAvailabilityRows(rows, baseDir = "") {
   const byPlace = new Map();
   for (const row of rows) {
     const availableRooms = numericField(row, ["숙박예약가능수", "예약가능객실수", "availableRooms"]);
@@ -7367,10 +7386,10 @@ function summarizeAvailabilityRows(rows) {
     const naverCouponNames = row["네이버쿠폰명"] || row.naverCouponNames || "";
     const naverCouponChannel = row["네이버쿠폰확인채널"] || row.naverCouponChannel || "";
     const naverCouponDetail = row["네이버쿠폰상세"] || row.naverCouponDetail || "";
-    const itemDetails = jsonArrayField(row, ["네이버상품상세JSON", "itemDetailsJson", "itemDetails"]);
+    const itemDetails = jsonArrayField(row, ["네이버상품상세JSON", "itemDetailsJson", "itemDetails"], baseDir);
     const weeklyProductDetails = [
-      ...jsonArrayField(row, ["네이버요일별상품상세JSON", "weeklyProductDetailsJson", "weeklyProductDetails"]),
-      ...jsonArrayField(row, ["dayUseWeeklyProductDetailsJson"])
+      ...jsonArrayField(row, ["네이버요일별상품상세JSON", "weeklyProductDetailsJson", "weeklyProductDetails"], baseDir),
+      ...jsonArrayField(row, ["dayUseWeeklyProductDetailsJson"], baseDir)
     ];
 
     const key = availabilityPlaceKey(row);
@@ -7869,7 +7888,7 @@ async function loadRun(runId, options = {}) {
   const datalabTrend = await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
-  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows]);
+  const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
   const ranking = summarizeRankingRows(overallRows, adRows, regionalRows, availability);
   const demandStructure = buildDemandStructure({
     manifest,
