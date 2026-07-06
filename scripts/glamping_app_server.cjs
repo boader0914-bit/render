@@ -30,17 +30,24 @@ const CONFIG_DIR = path.resolve(
     ? path.join(DATA_DIR, "config")
     : (process.env.CONFIG_DIR || path.join(DATA_DIR, "config"))
 );
+const CUSTOMER_DB_DIR = path.join(DATA_DIR, "customer_db");
 // Stable API key storage policy: releases may replace code, but must keep this file path.
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const LOCATION_CARD_REQUESTS_FILE = path.join(CONFIG_DIR, "location_card_requests.json");
-const B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
+const LEGACY_B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
+const B2B_MEMBERS_FILE = path.join(CUSTOMER_DB_DIR, "b2b_members.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
-const B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_history.json");
+const LEGACY_B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_history.json");
+const B2B_SEARCH_HISTORY_FILE = path.join(CUSTOMER_DB_DIR, "b2b_search_history.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
+const TERMS_VERSION = "2026-07-06";
+const PRIVACY_VERSION = "2026-07-06";
+const SERVICE_OPERATOR_NAME = String(process.env.GLAMPING_OPERATOR_NAME || "글램핑데이터랩").trim();
+const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "").trim();
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
 const CRAWL_TIMING_MAX_ENTRIES = 240;
 const PORT = Number(process.env.PORT || 3210);
@@ -992,20 +999,23 @@ function emptyB2BMemberStore() {
 }
 
 async function readB2BMemberStore() {
-  try {
-    const parsed = JSON.parse((await fsp.readFile(B2B_MEMBERS_FILE, "utf8")).replace(/^\uFEFF/, ""));
-    return {
-      ...emptyB2BMemberStore(),
-      ...parsed,
-      members: Array.isArray(parsed.members) ? parsed.members : []
-    };
-  } catch {
-    return emptyB2BMemberStore();
+  for (const file of [B2B_MEMBERS_FILE, LEGACY_B2B_MEMBERS_FILE]) {
+    try {
+      const parsed = JSON.parse((await fsp.readFile(file, "utf8")).replace(/^\uFEFF/, ""));
+      return {
+        ...emptyB2BMemberStore(),
+        ...parsed,
+        members: Array.isArray(parsed.members) ? parsed.members : []
+      };
+    } catch {
+      // Try the next known location before falling back to an empty store.
+    }
   }
+  return emptyB2BMemberStore();
 }
 
 async function writeB2BMemberStore(store) {
-  await fsp.mkdir(CONFIG_DIR, { recursive: true });
+  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
   const next = {
     ...emptyB2BMemberStore(),
     ...store,
@@ -1093,6 +1103,10 @@ function publicB2BMember(member = {}) {
   };
 }
 
+function isConsentAccepted(value) {
+  return /^(1|true|on|yes|agree|accepted)$/i.test(String(value || "").trim());
+}
+
 function validateSignupPayload(payload = {}) {
   const username = normalizeLoginId(payload.username || payload.loginId);
   const password = String(payload.password || "");
@@ -1111,10 +1125,39 @@ function validateSignupPayload(payload = {}) {
     error.statusCode = 400;
     throw error;
   }
+  if (!isConsentAccepted(payload.agreeTerms)) {
+    const error = new Error("이용약관 동의가 필요합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isConsentAccepted(payload.agreePrivacy)) {
+    const error = new Error("개인정보 수집 및 이용 동의가 필요합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isConsentAccepted(payload.confirmAge)) {
+    const error = new Error("만 14세 이상 확인이 필요합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
   return { username, password };
 }
 
-async function registerB2BMember(payload = {}) {
+function consentRecordFromRequest(req, acceptedAt) {
+  const userAgent = String(req?.headers?.["user-agent"] || "");
+  return {
+    termsAccepted: true,
+    termsVersion: TERMS_VERSION,
+    privacyAccepted: true,
+    privacyVersion: PRIVACY_VERSION,
+    ageConfirmed: true,
+    acceptedAt,
+    ipHash: req ? clientIpHash(req) : "",
+    userAgentHash: userAgent ? crypto.createHash("sha256").update(`ua:${userAgent}`).digest("hex") : ""
+  };
+}
+
+async function registerB2BMember(payload = {}, context = {}) {
   const { username, password } = validateSignupPayload(payload);
   const store = await readB2BMemberStore();
   if (store.members.some((member) => normalizeLoginId(member.username) === username)) {
@@ -1134,6 +1177,7 @@ async function registerB2BMember(payload = {}) {
     updatedAt: now,
     lastLoginAt: "",
     searchCount: 0,
+    consents: consentRecordFromRequest(context.req, now),
     profile: memberProfileFromPayload(payload)
   };
   store.members.push(member);
@@ -1165,20 +1209,23 @@ function emptyB2BSearchHistoryStore() {
 }
 
 async function readB2BSearchHistoryStore() {
-  try {
-    const parsed = JSON.parse((await fsp.readFile(B2B_SEARCH_HISTORY_FILE, "utf8")).replace(/^\uFEFF/, ""));
-    return {
-      ...emptyB2BSearchHistoryStore(),
-      ...parsed,
-      entries: Array.isArray(parsed.entries) ? parsed.entries : []
-    };
-  } catch {
-    return emptyB2BSearchHistoryStore();
+  for (const file of [B2B_SEARCH_HISTORY_FILE, LEGACY_B2B_SEARCH_HISTORY_FILE]) {
+    try {
+      const parsed = JSON.parse((await fsp.readFile(file, "utf8")).replace(/^\uFEFF/, ""));
+      return {
+        ...emptyB2BSearchHistoryStore(),
+        ...parsed,
+        entries: Array.isArray(parsed.entries) ? parsed.entries : []
+      };
+    } catch {
+      // Try the next known location before falling back to an empty store.
+    }
   }
+  return emptyB2BSearchHistoryStore();
 }
 
 async function writeB2BSearchHistoryStore(store) {
-  await fsp.mkdir(HISTORY_DIR, { recursive: true });
+  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
   const next = {
     ...emptyB2BSearchHistoryStore(),
     ...store,
@@ -1502,6 +1549,126 @@ function acceptsHtml(req) {
   return String(req.headers.accept || "").includes("text/html");
 }
 
+function escapeHtml(value = "") {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function policyContactHtml() {
+  if (!PRIVACY_CONTACT_EMAIL) return "서비스 관리자";
+  const escapedEmail = escapeHtml(PRIVACY_CONTACT_EMAIL);
+  return `<a href="mailto:${escapedEmail}">${escapedEmail}</a>`;
+}
+
+function legalPage(title, eyebrow, sections) {
+  const rows = sections.map((section) => `
+    <section>
+      <h2>${escapeHtml(section.title)}</h2>
+      ${section.body}
+    </section>`).join("");
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f6f8; color: #101828; }
+    main { width: min(100% - 32px, 860px); margin: 36px auto; padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 900; }
+    h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
+    h2 { margin: 26px 0 10px; font-size: 18px; letter-spacing: 0; }
+    p, li { color: #344054; font-size: 15px; line-height: 1.7; }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    a { color: #175cd3; font-weight: 900; text-decoration: none; }
+    .meta { margin: 0 0 18px; color: #667085; font-size: 13px; font-weight: 700; }
+    .back { display: inline-grid; place-items: center; min-height: 42px; margin-top: 24px; padding: 0 16px; border-radius: 12px; background: #3182f6; color: #fff; }
+    @media (max-width: 560px) { main { margin-block: 18px; padding: 22px; } h1 { font-size: 25px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+    <h1>${escapeHtml(title)}</h1>
+    <p class="meta">시행일 ${PRIVACY_VERSION.replace(/-/g, ".")} · 운영자 ${escapeHtml(SERVICE_OPERATOR_NAME)}</p>
+    ${rows}
+    <a class="back" href="/signup">회원가입으로 돌아가기</a>
+  </main>
+</body>
+</html>`;
+}
+
+function termsPage() {
+  return legalPage("글램핑데이터랩 B2B 이용약관", "필수 동의", [
+    {
+      title: "목적",
+      body: "<p>이 약관은 글램핑데이터랩 B2B 서비스의 회원가입, 로그인, 경쟁 리포트 조회, 검색 이력 관리 및 관리자 검토 기능 이용 조건을 정합니다.</p>"
+    },
+    {
+      title: "서비스의 성격",
+      body: "<p>서비스는 네이버 플레이스 노출, 네이버 예약 표본, 공개 가격·상품 정보, 검색 수요와 내부 보정 데이터를 결합해 지역 경쟁 리포트를 제공합니다. 자동 수집 및 추정 데이터는 의사결정 보조 자료이며 실제 매출, 예약률, 객실 수를 보증하지 않습니다.</p>"
+    },
+    {
+      title: "회원가입과 계정 관리",
+      body: "<p>회원은 가입 양식에 따라 계정 정보와 사업 관련 정보를 입력합니다. 회원은 본인 또는 소속 사업자가 관리 권한을 가진 정보만 입력해야 하며, 계정 공유·도용·허위 정보 입력으로 발생한 문제에 대한 책임은 회원에게 있습니다.</p>"
+    },
+    {
+      title: "데이터 보관 구조",
+      body: "<ul><li>마스터 DB: 관리자 검토와 보정이 완료된 업체 고유정보, 객실 수, 가격 기준, 채널 정보 등을 저장합니다.</li><li>고객 DB: 회원 계정, 회원 제출 숙소 정보, 검색 이력, 동의 이력 등 회원별 이용 정보를 저장합니다.</li><li>회원 제출 숙소 정보는 관리자 검토 후 필요한 항목만 마스터 DB와 연결될 수 있습니다.</li></ul>"
+    },
+    {
+      title: "회원의 의무",
+      body: "<ul><li>서비스를 무단 자동화, 역분석, 과도한 요청, 제3자 권리 침해 목적으로 사용하지 않아야 합니다.</li><li>수집 결과를 외부에 제공할 때에는 원자료의 한계와 추정값임을 인지해야 합니다.</li><li>계정 정보가 유출되거나 부정 사용이 의심되면 즉시 운영자에게 알려야 합니다.</li></ul>"
+    },
+    {
+      title: "서비스 변경과 제한",
+      body: "<p>외부 플랫폼 구조, API 정책, 네트워크 상태, 운영 정책에 따라 일부 수집 항목이나 리포트 항목은 변경·중단될 수 있습니다. 과도한 사용, 부정 사용, 보안 위험이 확인되면 이용을 제한할 수 있습니다.</p>"
+    },
+    {
+      title: "문의와 해지",
+      body: `<p>회원은 계정 삭제, 정보 정정, 검색 이력 삭제를 운영자에게 요청할 수 있습니다. 문의: ${policyContactHtml()}</p>`
+    }
+  ]);
+}
+
+function privacyPage() {
+  return legalPage("개인정보 수집 및 이용 안내", "필수 동의", [
+    {
+      title: "수집 목적",
+      body: "<ul><li>B2B 회원 식별, 로그인, 검색 이력 묶음 제공</li><li>지역 경쟁 리포트 생성 및 회원별 최근 분석 관리</li><li>회원이 제출한 숙소 정보의 관리자 검토와 마스터 DB 연결</li><li>서비스 안정성 확보, 부정 이용 방지, 문의 대응</li></ul>"
+    },
+    {
+      title: "수집 항목",
+      body: "<ul><li>필수: 아이디, 비밀번호 해시, 만 14세 이상 확인, 약관 및 개인정보 동의 이력</li><li>선택 입력: 이름/담당자, 연락처, 이메일, 회사/업체명, 글램핑장 보유 여부, 숙소명, 주소, 객실 수, 네이버 플레이스 URL, 네이버 예약 URL, OTA 채널, 메모</li><li>자동 생성: 회원ID, 가입일, 최근 로그인, 검색 횟수, 검색 키워드, 검색 기간, 순위 범위, 실행 리포트 ID, IP 해시, 세션 해시, 브라우저 식별값 해시</li></ul>"
+    },
+    {
+      title: "보관 위치",
+      body: "<ul><li>마스터 DB: 운영 서버의 영구 저장소 내 company_master 영역에 보관합니다.</li><li>고객 DB: 운영 서버의 영구 저장소 내 customer_db 영역에 보관합니다.</li><li>로컬 개발 환경에서는 동일한 구조로 프로젝트 데이터 폴더 아래에 보관됩니다.</li></ul>"
+    },
+    {
+      title: "보유 및 이용 기간",
+      body: "<p>회원 정보와 검색 이력은 회원 탈퇴, 삭제 요청 또는 수집 목적 달성 시까지 보관합니다. 단, 관계 법령상 보존이 필요한 경우에는 해당 법령에서 정한 기간 동안 보관할 수 있습니다.</p>"
+    },
+    {
+      title: "제3자 제공 및 처리위탁",
+      body: "<p>회원 개인정보를 별도 동의 없이 제3자에게 판매하거나 제공하지 않습니다. 다만 서버 호스팅, API 연동, 보안·장애 대응 등 서비스 운영에 필요한 외부 인프라를 사용할 수 있으며, 세부 위탁·국외 처리 내용은 운영 환경 확정 시 최신 처리방침에 반영합니다.</p>"
+    },
+    {
+      title: "정보주체의 권리",
+      body: `<p>회원은 개인정보 열람, 정정, 삭제, 처리정지, 동의 철회를 요청할 수 있습니다. 운영자는 본인 확인 후 관련 법령에 따라 처리합니다. 문의: ${policyContactHtml()}</p>`
+    },
+    {
+      title: "안전성 확보 조치",
+      body: "<p>비밀번호는 평문이 아니라 PBKDF2-SHA256 해시로 저장합니다. 접속 IP와 브라우저 식별값은 원문 대신 해시로 저장하며, 관리자 권한과 B2B 권한을 분리해 접근 범위를 제한합니다.</p>"
+    },
+    {
+      title: "동의 거부권",
+      body: "<p>회원은 개인정보 수집 및 이용에 동의하지 않을 수 있습니다. 다만 필수 항목 동의를 거부하면 B2B 회원가입과 리포트 이용이 제한됩니다.</p>"
+    }
+  ]);
+}
+
 function forbiddenPage(message = "") {
   const escapedMessage = String(message || "접근 권한이 없습니다.").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return `<!doctype html>
@@ -1575,6 +1742,7 @@ function signupPage(message = "", values = {}) {
   const value = (key) => String(values[key] || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const textarea = String(values.note || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const selected = (key) => normalizeOwnershipStatus(values.ownershipStatus || values.hasGlamping) === key ? " selected" : "";
+  const checked = (key) => isConsentAccepted(values[key]) ? " checked" : "";
   return `<!doctype html>
 <html lang="ko">
 <head>
@@ -1592,11 +1760,15 @@ function signupPage(message = "", values = {}) {
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     label { display: grid; gap: 7px; font-size: 13px; font-weight: 850; color: #344054; }
     input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d0d5dd; border-radius: 13px; font: inherit; outline: none; }
+    input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3182f6; }
     textarea { min-height: 82px; padding-block: 11px; resize: vertical; }
     input:focus, select:focus, textarea:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
     button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
     .error { min-height: 20px; color: #f04438; font-size: 13px; font-weight: 850; }
     .hint { margin: 0; color: #667085; font-size: 12px; font-weight: 700; }
+    .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 16px; background: #f9fafb; }
+    .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #182230; font-size: 13px; line-height: 1.4; }
+    .check a { color: #175cd3; font-weight: 900; text-decoration: none; }
     .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
     @media (max-width: 560px) { main { padding: 22px; } .grid { grid-template-columns: 1fr; } }
   </style>
@@ -1637,7 +1809,12 @@ function signupPage(message = "", values = {}) {
       </div>
       <label>사용 OTA<input name="otaChannels" placeholder="예: 여기어때, 야놀자, 떠나요" value="${value("otaChannels")}"></label>
       <label>메모<textarea name="note">${textarea}</textarea></label>
-      <p class="hint">회원 제출 정보는 관리자 검토 후 마스터 DB와 연결합니다.</p>
+      <section class="agreements" aria-label="회원가입 필수 동의">
+        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 글램핑데이터랩 B2B 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
+        <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
+        <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>
+      </section>
+      <p class="hint">회원 제출 정보는 고객 DB에 보관하고, 관리자 검토 후 필요한 항목만 마스터 DB와 연결합니다.</p>
       <button type="submit">가입하고 B2B 시작</button>
       <div class="error">${escapedMessage}</div>
     </form>
@@ -7929,6 +8106,16 @@ async function route(req, res) {
       return send(res, 200, { ok: true, loginRequired: true, ...publicSession(session) });
     }
 
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/terms") {
+      if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
+      return send(res, 200, termsPage(), "text/html; charset=utf-8");
+    }
+
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/privacy") {
+      if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
+      return send(res, 200, privacyPage(), "text/html; charset=utf-8");
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/signup") {
       const session = getSession(req);
       if (session) return send(res, 302, "", "text/plain; charset=utf-8", { Location: redirectPathForRole(session.role) });
@@ -7938,7 +8125,7 @@ async function route(req, res) {
     if (req.method === "POST" && (reqUrl.pathname === "/signup" || reqUrl.pathname === "/api/signup")) {
       const payload = await parseLoginBody(req);
       try {
-        const account = await registerB2BMember(payload);
+        const account = await registerB2BMember(payload, { req });
         const sessionId = createSession(account.username, account.role, account);
         if (reqUrl.pathname === "/signup") {
           return send(res, 302, "", "text/plain; charset=utf-8", {
