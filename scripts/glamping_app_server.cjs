@@ -2539,13 +2539,13 @@ async function runB2BMyLodgeCollection(payload = {}) {
   const result = await runCrawler(crawlPayload);
   const runId = result?.runId || "";
   if (!runId) {
-    const error = new Error("내 숙소 수집 결과를 저장하지 못했습니다.");
+    const error = new Error("관심숙소 수집 결과를 저장하지 못했습니다.");
     error.statusCode = 500;
     throw error;
   }
   const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true });
   if (!data) {
-    const error = new Error("내 숙소 수집 결과를 불러오지 못했습니다.");
+    const error = new Error("관심숙소 수집 결과를 불러오지 못했습니다.");
     error.statusCode = 500;
     throw error;
   }
@@ -8303,8 +8303,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-my-lodge-segment-add-fix"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-my-lodge-segment-add-fix"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260706-interest-lodges"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260706-interest-lodges"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

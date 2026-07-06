@@ -10798,6 +10798,136 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.b2b-interest-lodge-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.b2b-interest-lodge-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8fbff, #f6fbfa);
+  padding: 13px;
+}
+
+.b2b-interest-lodge-card-head {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-interest-lodge-card-head span,
+.b2b-interest-lodge-card-head em,
+.b2b-interest-lodge-metrics span,
+.b2b-interest-lodge-limit span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-interest-lodge-card-head strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.16;
+  overflow-wrap: anywhere;
+}
+
+.b2b-interest-lodge-card-head em {
+  color: var(--blue-dark);
+  font-size: 20px;
+  font-style: normal;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.b2b-interest-lodge-metrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.b2b-interest-lodge-metrics div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e5ebf3;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .72);
+  padding: 8px;
+}
+
+.b2b-interest-lodge-metrics strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.b2b-interest-lodge-tags {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.b2b-interest-lodge-tags em {
+  max-width: 100%;
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 950;
+  padding: 0 9px;
+  overflow-wrap: anywhere;
+}
+
+.b2b-interest-lodge-actions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.b2b-interest-lodge-actions button {
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+.b2b-interest-lodge-limit {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #eef5ff;
+  padding: 13px;
+}
+
+.b2b-interest-lodge-limit strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+}
+
 .b2b-my-lodge-form {
   min-width: 0;
   display: grid;
@@ -14455,6 +14585,9 @@ body.role-b2b .b2b-my-lodge-row,
 body.role-b2b .b2b-my-lodge-checks label,
 body.role-b2b .b2b-room-segment-panel,
 body.role-b2b .b2b-room-segment-row,
+body.role-b2b .b2b-interest-lodge-card,
+body.role-b2b .b2b-interest-lodge-metrics div,
+body.role-b2b .b2b-interest-lodge-limit,
 body.role-b2b .report-channel-grid div,
 body.role-b2b .company-insight-grid div,
 body.role-b2b .b2b-company-card-summary div,
@@ -14593,7 +14726,10 @@ body.role-b2b .b2b-my-lodge-subhead strong,
 body.role-b2b .b2b-my-lodge-row > span,
 body.role-b2b .b2b-my-lodge-row strong,
 body.role-b2b .b2b-my-lodge-checks label,
-body.role-b2b .b2b-room-segment-head strong {
+body.role-b2b .b2b-room-segment-head strong,
+body.role-b2b .b2b-interest-lodge-card-head strong,
+body.role-b2b .b2b-interest-lodge-metrics strong,
+body.role-b2b .b2b-interest-lodge-limit strong {
   color: var(--ink);
 }
 
@@ -14607,15 +14743,23 @@ body.role-b2b .b2b-my-lodge-cards small,
 body.role-b2b .b2b-my-lodge-subhead small,
 body.role-b2b .b2b-my-lodge-row small,
 body.role-b2b .b2b-room-segment-head span,
-body.role-b2b .b2b-room-segment-row span {
+body.role-b2b .b2b-room-segment-row span,
+body.role-b2b .b2b-interest-lodge-card-head span,
+body.role-b2b .b2b-interest-lodge-metrics span,
+body.role-b2b .b2b-interest-lodge-limit span {
   color: var(--muted);
 }
 
 body.role-b2b .b2b-my-lodge-head em,
-body.role-b2b .b2b-my-lodge-tags em {
+body.role-b2b .b2b-my-lodge-tags em,
+body.role-b2b .b2b-interest-lodge-tags em {
   border-color: rgba(106, 168, 255, .28);
   background: rgba(106, 168, 255, .13);
   color: #cfe4ff;
+}
+
+body.role-b2b .b2b-interest-lodge-card-head em {
+  color: #8fc2ff;
 }
 
 body.role-b2b .b2b-my-lodge-actions .collect,
@@ -16047,6 +16191,7 @@ body.role-b2b .structure-action-list li::before {
   .report-hero,
   .b2b-brief-head,
   .b2b-my-lodge-head,
+  .b2b-interest-lodge-grid,
   .b2b-my-lodge-form,
   .b2b-my-lodge-result,
   .b2b-brief-grid,
@@ -16062,6 +16207,10 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .b2b-room-segment-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .b2b-interest-lodge-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -16806,6 +16955,10 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .b2b-room-segment-row {
+    grid-template-columns: 1fr;
+  }
+
+  .b2b-interest-lodge-metrics {
     grid-template-columns: 1fr;
   }
 
