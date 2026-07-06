@@ -8520,6 +8520,12 @@ a.platform-row:hover {
   padding: 0 20px 14px;
 }
 
+.sheet-head > div,
+.drawer-head > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .drawer-head {
   padding-inline: 0;
 }
@@ -8529,6 +8535,16 @@ a.platform-row:hover {
   margin: 0;
   font-size: 22px;
   font-weight: 900;
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.sheet-head h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .sheet-head p {
@@ -12401,6 +12417,16 @@ a.platform-row:hover {
 }
 
 @media (max-width: 760px) {
+  .sheet-head {
+    gap: 10px;
+    padding-inline: 14px;
+  }
+
+  .sheet-head h2 {
+    font-size: 20px;
+    -webkit-line-clamp: 3;
+  }
+
   .b2b-internal-detail summary {
     align-items: flex-start;
     flex-direction: column;
