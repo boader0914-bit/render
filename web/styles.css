@@ -7174,6 +7174,12 @@ a.platform-row:hover {
   stroke-width: 1.4;
 }
 
+.map-empty-label {
+  fill: var(--muted);
+  font-size: 18px;
+  font-weight: 800;
+}
+
 .map-marker {
   filter: drop-shadow(0 8px 14px rgba(16, 24, 40, .22));
 }

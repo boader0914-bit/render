@@ -15278,6 +15278,36 @@ async function submitB2BSearch() {
   }
 }
 
+function renderB2BEmptyPanels() {
+  if (isAdminRole()) return;
+  const emptyMessages = {
+    report: "검색어를 입력하면 새 경쟁 리포트를 수집합니다.",
+    rank: "검색 후 업체 순위를 표시합니다.",
+    map: "검색 후 지역 지도와 경쟁권을 표시합니다.",
+    demand: "검색 후 수요 전망을 표시합니다."
+  };
+  const activeMessage = emptyMessages[state.activeTab] || emptyMessages.report;
+  if (els.pageTitle) els.pageTitle.textContent = tabLabel(state.activeTab);
+  if (els.pageSubtitle) {
+    els.pageSubtitle.hidden = false;
+    els.pageSubtitle.textContent = activeMessage;
+  }
+  document.title = `글램핑데이터랩 V2 · ${tabLabel(state.activeTab)}`;
+  if (els.summaryGrid) els.summaryGrid.innerHTML = "";
+  if (els.noticeCard) els.noticeCard.innerHTML = "";
+  if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">${emptyMessages.report}</div>`;
+  if (els.companyList) els.companyList.innerHTML = `<div class="empty">${emptyMessages.rank}</div>`;
+  if (els.rankCount) els.rankCount.textContent = "0";
+  if (els.mapCount) els.mapCount.textContent = "0";
+  if (els.clusterMap) {
+    els.clusterMap.innerHTML = `<text x="50%" y="50%" text-anchor="middle" class="map-empty-label">${emptyMessages.map}</text>`;
+  }
+  if (els.mapLegend) els.mapLegend.innerHTML = "";
+  if (els.regionList) els.regionList.innerHTML = `<div class="empty">${emptyMessages.map}</div>`;
+  if (els.demandState) els.demandState.textContent = "검색 대기";
+  if (els.demandDashboard) els.demandDashboard.innerHTML = `<div class="empty">${emptyMessages.demand}</div>`;
+}
+
 function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
@@ -15311,6 +15341,7 @@ function renderAll() {
   applyRoleUi();
   renderB2BSearchPanel();
   if (!state.data) {
+    renderB2BEmptyPanels();
     if (roleAllowsTab("dictionary")) renderLocationDictionary();
     return;
   }
@@ -15343,6 +15374,11 @@ function setActiveTab(tab) {
   });
   renderHeader();
   closeDrawer();
+  if (!state.data) {
+    renderB2BEmptyPanels();
+    if (state.activeTab === "dictionary") renderLocationDictionary();
+    return;
+  }
   if (state.activeTab === "report") renderReport();
   if (state.activeTab === "decisionQueue") renderDecisionQueue();
   if (state.activeTab === "map") renderMap();
@@ -17072,6 +17108,16 @@ async function backfillCompanyMaster(button) {
 }
 
 async function loadRuns(selectLatest = false) {
+  if (!isAdminRole()) {
+    state.runs = [];
+    state.activeRunId = null;
+    state.data = null;
+    if (els.runSelect) els.runSelect.innerHTML = "";
+    renderB2BSearchPanel();
+    renderB2BEmptyPanels();
+    setStatus("검색 대기");
+    return;
+  }
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
   state.runs = data.runs || [];
@@ -17694,13 +17740,15 @@ async function init() {
     syncCollectionModeInputs();
     bindEvents();
     setDefaultDates();
-    const tasks = [loadRuns(true), loadLocationDictionary()];
     if (isAdminRole()) {
-      tasks.push(loadTrafficState(), loadLocationCardRequests());
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests()]);
     } else {
-      tasks.push(loadMemberSearchHistory());
+      state.runs = [];
+      state.activeRunId = null;
+      state.data = null;
+      await loadMemberSearchHistory();
+      renderB2BEmptyPanels();
     }
-    await Promise.all(tasks);
     renderB2BSearchPanel();
     if (isAdminRole()) pollCrawlStatusUntilIdle(false);
   } catch (error) {
