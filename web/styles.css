@@ -792,10 +792,10 @@ a {
   min-width: 0;
   min-height: 82px;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
-  padding: 18px;
+  gap: 10px;
+  padding: 18px 15px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--panel);
@@ -807,9 +807,9 @@ a {
 }
 
 .summary-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 14px;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -851,10 +851,11 @@ a {
   display: block;
   max-width: 100%;
   color: var(--blue);
-  font-size: clamp(21px, 3vw, 30px);
+  font-size: clamp(20px, 2.35vw, 28px);
   font-weight: 900;
   line-height: 1.05;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
 
 .summary-card small {
@@ -10835,6 +10836,7 @@ a.platform-row:hover {
 
 .b2b-my-lodge-checks {
   min-width: 0;
+  grid-column: span 2;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
@@ -10875,16 +10877,20 @@ a.platform-row:hover {
 
 .b2b-my-lodge-actions {
   min-width: 0;
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, .72fr);
+  grid-template-columns: repeat(3, minmax(150px, max-content));
+  justify-content: start;
   gap: 7px;
 }
 
 .b2b-my-lodge-actions button {
   min-width: 0;
   min-height: 42px;
-  padding: 0 11px;
-  white-space: nowrap;
+  padding: 0 14px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
 }
 
 .b2b-my-lodge-actions .collect {

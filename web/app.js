@@ -7147,6 +7147,17 @@ function b2bMyLodgeNumber(value) {
   return Number.isFinite(number) ? Math.max(0, number) : 0;
 }
 
+function b2bMyLodgeInputNumberText(value) {
+  const number = b2bMyLodgeNumber(value);
+  return number > 0 ? fmtNumber(Math.round(number)) : "";
+}
+
+function formatB2BWonInput(input) {
+  if (!input) return;
+  const digits = String(input.value || "").replace(/[^\d]/g, "");
+  input.value = digits ? Number(digits).toLocaleString("ko-KR") : "";
+}
+
 function b2bMyLodgeAveragePrice(draft = {}) {
   const weekday = b2bMyLodgeNumber(draft.weekdayPrice);
   const friday = b2bMyLodgeNumber(draft.fridayPrice);
@@ -7421,12 +7432,13 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
   const collecting = Boolean(state.b2bMyLodgeCollecting);
   const collectStatus = state.b2bMyLodgeCollectStatus || draft.collectionStatus || "";
   const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
+  const priceInputValue = (key) => escapeHtml(b2bMyLodgeInputNumberText(draft[key]));
   return `
     <div class="b2b-my-lodge-board">
       <div class="b2b-my-lodge-head">
         <div>
           <span>My Stay Benchmark</span>
-          <strong>내 숙소 넣기</strong>
+          <strong>내숙소 찾기</strong>
           <p>객실 수, 요일별 가격, 채널 상태를 입력하면 현재 검색된 경쟁권의 평균·상위·하위 매출 표본과 비교합니다.</p>
         </div>
         <em>${escapeHtml(activeKeyword())}</em>
@@ -7442,19 +7454,19 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
         </label>
         <label class="b2b-my-lodge-field">
           <span>평일 가격</span>
-          <input name="weekdayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.weekdayPrice ?? "")}" placeholder="120000">
+          <input name="weekdayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("weekdayPrice")}" placeholder="120,000">
         </label>
         <label class="b2b-my-lodge-field">
           <span>금요일 가격</span>
-          <input name="fridayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.fridayPrice ?? "")}" placeholder="160000">
+          <input name="fridayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("fridayPrice")}" placeholder="160,000">
         </label>
         <label class="b2b-my-lodge-field">
           <span>토요일 가격</span>
-          <input name="saturdayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.saturdayPrice ?? "")}" placeholder="220000">
+          <input name="saturdayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("saturdayPrice")}" placeholder="220,000">
         </label>
         <label class="b2b-my-lodge-field">
           <span>일요일 가격</span>
-          <input name="sundayPrice" type="number" min="0" step="1000" value="${escapeHtml(draft.sundayPrice ?? "")}" placeholder="140000">
+          <input name="sundayPrice" type="text" inputmode="numeric" data-b2b-won-input value="${priceInputValue("sundayPrice")}" placeholder="140,000">
         </label>
         <label class="b2b-my-lodge-field facilities">
           <span>시설</span>
@@ -7466,7 +7478,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
         </div>
         <div class="b2b-my-lodge-channel-note">네이버/OTA는 같은 객실 재고를 공유할 수 있어 매출 산정에는 중복 가산하지 않습니다.</div>
         <div class="b2b-my-lodge-actions">
-          <button class="secondary-button collect" type="button" data-b2b-my-lodge-collect ${collecting ? "disabled" : ""}>${collecting ? "숙소명 수집중" : "숙소명으로 자동 수집"}</button>
+          <button class="secondary-button collect" type="button" data-b2b-my-lodge-collect ${collecting ? "disabled" : ""}>${collecting ? "숙소명 찾는 중" : "숙소명으로 찾기"}</button>
           <button class="primary-button" type="button" data-b2b-my-lodge-save>저장하고 비교</button>
           <button class="secondary-button" type="button" data-b2b-my-lodge-clear ${model.hasInput ? "" : "disabled"}>초기화</button>
         </div>
@@ -17619,6 +17631,11 @@ function bindEvents() {
     if (b2bSearch) {
       state.b2bSearchQuery = b2bSearch.value || "";
       renderB2BSearchPanel();
+      return;
+    }
+    const b2bWonInput = event.target.closest("[data-b2b-won-input]");
+    if (b2bWonInput) {
+      formatB2BWonInput(b2bWonInput);
       return;
     }
     const checkSearch = event.target.closest("[data-company-check-search]");
