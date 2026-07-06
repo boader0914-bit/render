@@ -15878,7 +15878,7 @@ function renderB2BEmptyPanels() {
   document.title = `글램핑데이터랩 V2 · ${tabLabel(state.activeTab)}`;
   if (els.summaryGrid) els.summaryGrid.innerHTML = "";
   if (els.noticeCard) els.noticeCard.innerHTML = "";
-  if (els.reportBody) els.reportBody.innerHTML = `<div class="empty">${emptyMessages.report}</div>`;
+  if (els.reportBody) els.reportBody.innerHTML = renderB2BPreSearchMyLodge();
   if (els.companyList) els.companyList.innerHTML = `<div class="empty">${emptyMessages.rank}</div>`;
   if (els.rankCount) els.rankCount.textContent = "0";
   if (els.mapCount) els.mapCount.textContent = "0";
