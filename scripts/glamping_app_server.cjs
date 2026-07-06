@@ -1798,7 +1798,8 @@ function signupPage(message = "", values = {}) {
     form { display: grid; gap: 14px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
     .field-with-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-    .password-control { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; align-items: center; }
+    .password-control { position: relative; display: block; }
+    .password-control input { padding-right: 56px; }
     label { display: grid; gap: 7px; font-size: 13px; font-weight: 850; color: #344054; }
     label > span:first-child { display: flex; min-height: 18px; align-items: center; gap: 3px; }
     input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d0d5dd; border-radius: 13px; font: inherit; outline: none; }
@@ -1808,8 +1809,8 @@ function signupPage(message = "", values = {}) {
     button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
     .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; color: #175cd3; font-size: 13px; }
     .inline-action:hover { border-color: #3182f6; background: #eff6ff; }
-    .icon-action { display: inline-grid; place-items: center; width: 48px; min-width: 48px; min-height: 48px; padding: 0; border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; color: #344054; }
-    .icon-action:hover, .icon-action:focus-visible, .icon-action[data-active="true"] { border-color: #3182f6; background: #eff6ff; color: #175cd3; }
+    .icon-action { position: absolute; top: 4px; right: 5px; display: inline-grid; place-items: center; width: 40px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 11px; background: transparent; color: #344054; }
+    .icon-action:hover, .icon-action:focus-visible, .icon-action[data-active="true"] { background: #eff6ff; color: #175cd3; }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .error { min-height: 20px; color: #f04438; font-size: 13px; font-weight: 850; }
     .hint, .field-status { min-height: 18px; margin: 0; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
@@ -1843,7 +1844,7 @@ function signupPage(message = "", values = {}) {
       </label>
       <div class="grid">
         <label><span>비밀번호 <b class="required">*</b></span><span class="password-control"><input name="password" type="password" autocomplete="new-password" required data-password><button class="icon-action" type="button" data-hold-password aria-label="누르는 동안 비밀번호 보기" title="누르는 동안 보기">${eyeIcon}</button></span><small class="field-status" data-password-status>8자 이상 · 영문+숫자 · 대문자 또는 특수문자</small></label>
-        <label><span>비밀번호 확인 <b class="required">*</b></span><span class="password-control"><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><button class="icon-action" type="button" data-hold-password aria-label="누르는 동안 비밀번호 확인 보기" title="누르는 동안 보기">${eyeIcon}</button></span><small class="password-match" data-password-match aria-live="polite"></small></label>
+        <label><span>비밀번호 확인 <b class="required">*</b></span><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><small class="password-match" data-password-match aria-live="polite"></small></label>
       </div>
       <div class="grid">
         <label><span>연락처 <b class="required">*</b></span><input name="phone" autocomplete="tel" required value="${value("phone")}"></label>
