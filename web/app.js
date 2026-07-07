@@ -14239,17 +14239,62 @@ function adminConsoleMemberPanel() {
             ? `${latest.keyword}${latest.completedAt ? ` · ${compactDateTime(latest.completedAt)}` : ""}`
             : "검색 없음";
           const policyText = b2bPolicyLabel(policy, member.accountType || "member");
+          const profile = member.profile || {};
+          const companyText = [profile.companyName || profile.lodgingName || "", profile.ownershipStatusLabel || ""].filter(Boolean).join(" · ") || "사업자 정보 없음";
+          const contactText = [profile.phone || "", profile.email || ""].filter(Boolean).join(" · ") || "연락처 미입력";
+          const joinedText = member.createdAt ? compactDateTime(member.createdAt) : "가입일 없음";
+          const loginText = member.lastLoginAt ? compactDateTime(member.lastLoginAt) : "최근 로그인 없음";
+          const consentTerms = member.consents?.termsVersion || "";
+          const consentPrivacy = member.consents?.privacyVersion || "";
+          const consentText = [consentTerms ? `약관 ${consentTerms}` : "", consentPrivacy ? `개인정보 ${consentPrivacy}` : ""].filter(Boolean).join(" · ") || "동의 기록 없음";
+          const consentAt = member.consents?.acceptedAt ? compactDateTime(member.consents.acceptedAt) : "동의일 없음";
+          const statusText = member.status === "disabled" ? "정지" : "활성";
+          const recentSearches = (Array.isArray(usage.recentSearches) ? usage.recentSearches : [])
+            .filter((entry) => entry && (entry.keyword || entry.runLabel))
+            .slice(0, 3);
           const memberId = escapeHtml(member.memberId || "");
           return `
             <div class="admin-member-row ${member.status === "disabled" ? "disabled" : ""}">
               <div>
                 <strong>${escapeHtml(member.username || "아이디 없음")}</strong>
-                <small>${escapeHtml([member.profile?.companyName || member.profile?.lodgingName || "", member.profile?.ownershipStatusLabel || ""].filter(Boolean).join(" · ") || (member.lastLoginAt ? `최근 로그인 ${compactDateTime(member.lastLoginAt)}` : "최근 로그인 없음"))}</small>
+                <small>${escapeHtml(companyText)}</small>
               </div>
               <b>${escapeHtml(todayText)}</b>
               <span>${fmtNumber(usage.countedTotal || member.searchCount || 0)}회</span>
               <mark>${escapeHtml(policyText)}</mark>
               <small>${escapeHtml(latestText)}</small>
+              <div class="admin-member-detail">
+                <div class="admin-member-meta-grid">
+                  <article>
+                    <span>가입/로그인</span>
+                    <strong>${escapeHtml(joinedText)}</strong>
+                    <small>${escapeHtml(loginText)}</small>
+                  </article>
+                  <article>
+                    <span>회원 연락처</span>
+                    <strong>${escapeHtml(contactText)}</strong>
+                    <small>${escapeHtml(companyText)}</small>
+                  </article>
+                  <article>
+                    <span>약관 동의</span>
+                    <strong>${escapeHtml(consentText)}</strong>
+                    <small>${escapeHtml(consentAt)}</small>
+                  </article>
+                  <article>
+                    <span>운영 상태</span>
+                    <strong>${escapeHtml(statusText)}</strong>
+                    <small>${escapeHtml(policyText)}</small>
+                  </article>
+                </div>
+                <div class="admin-member-search-list">
+                  ${recentSearches.length ? recentSearches.map((entry) => `
+                    <span>
+                      <b>${escapeHtml(entry.keyword || entry.runLabel || "검색어 없음")}</b>
+                      <em>${escapeHtml([entry.detailRankRanges ? `${entry.detailRankRanges}위` : "", entry.completedAt ? compactDateTime(entry.completedAt) : "", entry.quotaCounted === false ? "재사용" : "새 수집"].filter(Boolean).join(" · "))}</em>
+                    </span>
+                  `).join("") : `<span><b>최근 검색 없음</b><em>회원 검색 이력이 없습니다.</em></span>`}
+                </div>
+              </div>
               <div class="admin-member-controls">
                 <label>
                   <span>계정 유형</span>
