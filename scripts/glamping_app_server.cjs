@@ -3051,7 +3051,7 @@ function loginPage(message = "") {
     <section class="login-brand-panel" aria-label="숙박업 데이터랩 beta">
       <div>
         <h1>${brandTitleHtml("숙박업 데이터랩 beta")}</h1>
-        <p class="brand-note">예상매출을 확인하여 운영전략을 제안해드립니다.</p>
+        <p class="brand-note">운영전략을 제안해드립니다</p>
       </div>
     </section>
     <section class="login-form-panel" aria-label="로그인">
@@ -9923,8 +9923,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-login-copy-cleanup"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-login-copy-cleanup"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-login-copy-simple"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-login-copy-simple"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
