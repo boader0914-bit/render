@@ -2479,23 +2479,65 @@ function loginPage(message = "") {
       font-weight: 700;
       line-height: 1.55;
     }
-    .login-context {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin: 28px 0 0;
+    .login-scope-board {
+      display: grid;
+      gap: 12px;
+      margin-top: 34px;
     }
-    .login-context span {
+    .login-scope-title {
+      color: #eaf4ff;
+      font-size: 13px;
+      font-weight: 950;
+      letter-spacing: 0;
+    }
+    .login-scope-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .login-scope-card {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 11px;
+      align-items: center;
+      min-width: 0;
+      padding: 13px 14px;
+      border: 1px solid rgba(148, 163, 184, .22);
+      border-radius: 17px;
+      background: rgba(8, 13, 22, .36);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+    }
+    .login-scope-icon {
       display: inline-grid;
       place-items: center;
-      min-height: 30px;
-      padding: 0 12px;
-      border: 1px solid rgba(148, 163, 184, .24);
+      width: 36px;
+      height: 36px;
       border-radius: 999px;
+      background: rgba(49, 130, 246, .18);
       color: #dbeafe;
-      background: rgba(8, 13, 22, .34);
+      font-size: 13px;
+      font-weight: 950;
+      line-height: 1;
+    }
+    .login-scope-card:nth-child(2) .login-scope-icon { background: rgba(20, 184, 166, .18); color: #ccfbf1; }
+    .login-scope-card:nth-child(3) .login-scope-icon { background: rgba(245, 158, 11, .16); color: #fef3c7; }
+    .login-scope-copy {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+    .login-scope-copy strong {
+      color: #fff;
+      font-size: 14px;
+      font-weight: 950;
+      letter-spacing: 0;
+    }
+    .login-scope-copy span {
+      color: #aebbd0;
       font-size: 12px;
-      font-weight: 900;
+      font-weight: 750;
+      line-height: 1.45;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
     }
     .form-head { margin-bottom: 22px; }
     .form-head strong {
@@ -2557,6 +2599,8 @@ function loginPage(message = "") {
       .login-form-panel { padding: 26px; }
       h1 { margin-top: 24px; font-size: 36px; }
       .brand-note { font-size: 15px; }
+      .login-scope-board { margin-top: 26px; }
+      .login-scope-card { padding: 12px; }
     }
   </style>
 </head>
@@ -2568,11 +2612,32 @@ function loginPage(message = "") {
         <h1>숙박업 경쟁 리포트</h1>
         <p class="brand-note">지역 내 노출, 예약율, 예상 매출 흐름을 한 화면에서 확인합니다.</p>
       </div>
-      <div class="login-context" aria-label="로그인 권한">
-        <span>관리자</span>
-        <span>사업자</span>
-        <span>검색 이력</span>
-      </div>
+      <section class="login-scope-board" aria-label="계정별 이용 범위">
+        <div class="login-scope-title">계정별 이용 범위</div>
+        <div class="login-scope-grid">
+          <article class="login-scope-card">
+            <span class="login-scope-icon" aria-hidden="true">관</span>
+            <div class="login-scope-copy">
+              <strong>관리자</strong>
+              <span>수집 결과, 업체 마스터, 보정값, 판단 큐를 관리합니다.</span>
+            </div>
+          </article>
+          <article class="login-scope-card">
+            <span class="login-scope-icon" aria-hidden="true">사</span>
+            <div class="login-scope-copy">
+              <strong>사업자</strong>
+              <span>지역 경쟁 리포트와 관심 숙소 비교를 확인합니다.</span>
+            </div>
+          </article>
+          <article class="login-scope-card">
+            <span class="login-scope-icon" aria-hidden="true">기</span>
+            <div class="login-scope-copy">
+              <strong>검색 이력</strong>
+              <span>로그인 아이디 기준으로 최근 검색과 재사용 가능한 리포트를 저장합니다.</span>
+            </div>
+          </article>
+        </div>
+      </section>
     </section>
     <section class="login-form-panel" aria-label="로그인">
       <div class="form-head">
@@ -9352,8 +9417,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-login-polish"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-login-polish"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-login-scope-cards"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-login-scope-cards"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
