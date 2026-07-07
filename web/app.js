@@ -2267,7 +2267,7 @@ function companyRankInsight(item = {}, fallbackRank = 0) {
       label = B2B_HIGH_RESERVATION_LABEL;
     } else if (rate <= B2B_LOW_RESERVATION_RATE) {
       tone = "watch";
-      label = B2B_LOW_RESERVATION_LABEL;
+      label = isAdminRole() ? B2B_LOW_RESERVATION_LABEL : "예약 여유";
     } else if (remaining >= Math.max(3, Math.ceil(supply * 0.35))) {
       tone = "strong";
       label = "경쟁 여지";
@@ -2447,8 +2447,8 @@ function b2bCompanyActionProfile(item = {}, insight = companyRankInsight(item)) 
     summary = "네이버 노출은 확인됐지만 예약율 산정 표본이 없어 판매 판단은 보류합니다.";
   } else if (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE) {
     tone = "watch";
-    label = B2B_LOW_RESERVATION_LABEL;
-    summary = "수집기간 예약율이 낮아 가격, 상품 구성, 채널 상태를 함께 봅니다.";
+    label = "예약 여유";
+    summary = "수집기간 예약율이 낮은 표본입니다. 가격과 상품 구성은 비교 참고값으로 봅니다.";
   } else if (Number.isFinite(rate) && rate >= B2B_HIGH_RESERVATION_RATE) {
     tone = "hot";
     label = B2B_HIGH_RESERVATION_LABEL;
@@ -2502,12 +2502,11 @@ function b2bRankBoardModel(items = b2bScopedRankedCompanyItems()) {
     const rank = finiteNumber(item.rank || item.overallRank || index + 1, index + 1);
     const remaining = finiteNumber(insight.remaining, 0);
     const itemIndex = linked ? finiteNumber(item.availabilityIndex, -1) : -1;
-    const opportunityScore = (linked ? 30 : 8)
+    const competitionScore = (linked ? 30 : 8)
       + (rank > 0 && rank <= 5 ? 18 : rank <= 10 ? 12 : rank <= 20 ? 6 : 0)
-      + (Number.isFinite(rate) && rate <= B2B_LOW_RESERVATION_RATE ? 22 : 0)
-      + (remaining >= 3 ? 8 : 0)
+      + (Number.isFinite(rate) && rate >= B2B_HIGH_RESERVATION_RATE ? 22 : Number.isFinite(rate) ? Math.round(rate * 20) : 0)
       + Math.min(18, Math.round(finiteNumber(insight.revenue, 0) / 500000));
-    return { item, index, itemIndex, insight, linked, rate, rank, remaining, opportunityScore };
+    return { item, index, itemIndex, insight, linked, rate, rank, remaining, opportunityScore: competitionScore };
   });
   const linkedRows = rows.filter((row) => row.linked);
   const rankOnlyRows = rows.filter((row) => !row.linked);
@@ -2521,11 +2520,9 @@ function b2bRankBoardModel(items = b2bScopedRankedCompanyItems()) {
     .slice(0, 4);
   const decision = rankOnlyRows.length > linkedRows.length
     ? { label: "노출 표본", tone: "watch", summary: "상위 노출 경쟁업체는 확인됐고, 예약 수량 표본은 일부 업체 중심으로 확보되어 있습니다." }
-    : gapRows.length >= 2
-      ? { label: "낮은 예약율 경쟁권", tone: "strong", summary: "상위 노출 경쟁업체 중 수집기간 예약율 20% 이하 구간을 가격, 상품 구성, 채널 상태와 함께 봅니다." }
-      : hotRows.length >= 2
-        ? { label: `${B2B_HIGH_RESERVATION_LABEL} 경쟁권`, tone: "hot", summary: "수집기간 예약율 40% 이상 경쟁업체가 많아 주말 재고와 가격 흐름을 함께 확인합니다." }
-        : { label: "노출 요약", tone: "neutral", summary: "현재 표본에서는 경쟁업체별 순위와 예약 표본 상태를 함께 비교합니다." };
+    : hotRows.length >= 2
+      ? { label: `${B2B_HIGH_RESERVATION_LABEL} 경쟁권`, tone: "hot", summary: "수집기간 예약율 40% 이상 경쟁업체가 많아 주말 판매 흐름과 가격대를 함께 확인합니다." }
+      : { label: "노출 요약", tone: "neutral", summary: "현재 표본에서는 경쟁업체별 순위와 예약 표본 상태를 함께 비교합니다." };
   return {
     rows,
     linkedRows,
@@ -2773,13 +2770,13 @@ function renderB2BCompetitionSalesCorrelation(model = b2bCompetitionSalesCorrela
     <section class="b2b-correlation-card ${escapeHtml(model.tone || "neutral")}">
       <div class="b2b-correlation-head">
         <div>
-          <p class="eyebrow">경쟁 지표 상관</p>
-          <h3>노출 경쟁 지표와 실제 예약율</h3>
+          <p class="eyebrow">경쟁강도 상관</p>
+          <h3>노출강도와 실제 예약율</h3>
           <p>${escapeHtml(summary)}</p>
         </div>
         <strong>${escapeHtml(corrText)}</strong>
       </div>
-      <div class="b2b-correlation-chart" aria-label="노출 경쟁 지표와 예약율 산점도">
+      <div class="b2b-correlation-chart" aria-label="노출강도와 예약율 산점도">
         <svg viewBox="0 0 ${width} ${height}" role="img">
           <line x1="${padLeft}" y1="${padTop}" x2="${padLeft}" y2="${height - padBottom}" class="axis"></line>
           <line x1="${padLeft}" y1="${height - padBottom}" x2="${width - padRight}" y2="${height - padBottom}" class="axis"></line>
@@ -2797,14 +2794,14 @@ function renderB2BCompetitionSalesCorrelation(model = b2bCompetitionSalesCorrela
         </svg>
       </div>
       <div class="b2b-correlation-legend">
-        <span>가로: 네이버 노출 순위 기반 경쟁 지표</span>
+        <span>가로: 네이버 순위 기반 노출강도</span>
         <span>세로: 수집기간 실제 예약율</span>
       </div>
       <div class="b2b-correlation-list">
         ${sampleRows.map((row) => `
           <div>
             <b>${escapeHtml(row.name)}</b>
-            <span>${fmtNumber(row.rank)}위 · 지표 ${fmtNumber(row.score)} · 예약율 ${fmtRate(row.actualRate)}</span>
+            <span>${fmtNumber(row.rank)}위 · 노출강도 ${fmtNumber(row.score)} · 예약율 ${fmtRate(row.actualRate)}</span>
           </div>
         `).join("") || `<div><b>표본 대기</b><span>네이버 플레이스 예약 기준 표본이 더 필요합니다.</span></div>`}
       </div>
@@ -2933,8 +2930,8 @@ function b2bDetailPositionModel(item = {}) {
     summary = "지역 평균보다 높은 예상 매출 표본이 잡힙니다. 판매 가격대와 객실 수량을 함께 봅니다.";
   } else if (Number.isFinite(insight.rate) && insight.rate <= B2B_LOW_RESERVATION_RATE) {
     tone = "watch";
-    label = B2B_LOW_RESERVATION_LABEL;
-    summary = "노출 대비 수집기간 예약율이 낮아 가격, 요일별 빈구간, 상품 구성 차이를 확인합니다.";
+    label = "예약 여유";
+    summary = "노출 대비 수집기간 예약율이 낮은 표본입니다. 가격과 상품 구성 차이는 참고값으로 봅니다.";
   }
   const revenueBasis = impact.totalPricedSoldOut
     ? `${fmtNumber(impact.totalPricedSoldOut)}개 가격 확인`
@@ -6823,6 +6820,29 @@ function reportMarketScore({ rate, targetCount, itemCount, platformGapRatio, sea
   return Math.max(35, Math.min(94, Math.round(30 + targetSignal + gapSignal + saleSignal + demandSignal)));
 }
 
+function b2bCompetitionStrengthScore({
+  rate,
+  strongCount,
+  itemCount,
+  salesSampleCount,
+  averageRevenue,
+  revenueSampleCount,
+  searchVolume
+}) {
+  const exposureSignal = itemCount ? Math.min(16, itemCount * 0.9) : 0;
+  const strongReservationSignal = itemCount ? Math.min(24, (strongCount / itemCount) * 48) : 0;
+  const reservationSignal = Number.isFinite(rate)
+    ? Math.max(0, Math.min(20, (rate / 0.6) * 20))
+    : (salesSampleCount ? 8 : 4);
+  const revenueSignal = revenueSampleCount
+    ? Math.max(6, Math.min(16, (finiteNumber(averageRevenue, 0) / 1200000) * 10))
+    : 4;
+  const demandSignal = searchVolume >= 30000 ? 14 : searchVolume >= 10000 ? 10 : searchVolume > 0 ? 6 : 4;
+  return Math.max(35, Math.min(94, Math.round(
+    24 + exposureSignal + strongReservationSignal + reservationSignal + revenueSignal + demandSignal
+  )));
+}
+
 function reportDecision(score, rate, targetCount) {
   if (score >= 75 && targetCount >= 5) {
     return {
@@ -6852,30 +6872,30 @@ function reportDecision(score, rate, targetCount) {
   };
 }
 
-function b2bMarketDecision(score, rate, opportunityCount) {
-  if (score >= 78 && opportunityCount >= 3) {
+function b2bMarketDecision(score, rate, strongCount) {
+  if (score >= 78 || strongCount >= 3) {
     return {
-      label: "경쟁 기회",
-      tone: "strong",
-      summary: "검색 수요와 경쟁업체 예약율 표본이 함께 보여 매출, 가격, 상품 구성을 비교하기 좋은 지역입니다."
+      label: "경쟁 강함",
+      tone: "hot",
+      summary: "상위 경쟁업체의 예약율, 매출 표본, 검색수요가 함께 강한 경쟁권입니다."
     };
   }
   if (score >= 64) {
     return {
-      label: "경쟁 비교",
-      tone: "watch",
-      summary: "상위 노출 경쟁업체의 예약율, 매출 표본, 채널 표본을 중심으로 시장 위치를 비교합니다."
+      label: "경쟁 활발",
+      tone: "strong",
+      summary: "상위 노출 경쟁업체의 예약율과 매출 표본을 기준으로 시장 위치를 비교합니다."
     };
   }
-  if (Number.isFinite(rate) && rate >= 0.6) {
+  if (Number.isFinite(rate) && rate >= B2B_HIGH_RESERVATION_RATE) {
     return {
       label: "수요 강세",
       tone: "hot",
-      summary: "경쟁업체 판매율이 높아 가격대, 주말 재고, 채널 노출 흐름을 우선 비교합니다."
+      summary: "경쟁업체 예약율이 높아 가격대와 주말 판매 흐름을 우선 비교합니다."
     };
   }
   return {
-    label: "표본 관찰",
+    label: "경쟁 관찰",
     tone: "neutral",
     summary: "현재 표본만으로 단정하기보다 경쟁업체 표본과 기간별 수요 변화를 함께 보는 것이 적합합니다."
   };
@@ -6903,21 +6923,25 @@ function b2bMarketBriefModel(data = state.data || {}) {
     ? (platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo) / (platformStats.otaCheckCount * 3)
     : 0;
   const dayUseCount = items.filter((item) => salesStats(item, "day").supply > 0).length;
-  const opportunityRows = items
+  const reservationRows = items
     .map((item, index) => ({ item, index, lodging: salesStats(item, "lodging") }))
-    .filter((row) => Number.isFinite(row.lodging.rate))
+    .filter((row) => Number.isFinite(row.lodging.rate));
+  const opportunityRows = reservationRows
     .sort((a, b) => a.lodging.rate - b.lodging.rate)
     .slice(0, 5);
   const salesSampleCount = items.filter((item) => Number.isFinite(salesStats(item, "lodging").rate)).length;
   const lowSalesCount = opportunityRows.filter((row) => row.lodging.rate <= B2B_LOW_RESERVATION_RATE).length;
-  const score = reportMarketScore({
+  const strongSalesCount = reservationRows.filter((row) => row.lodging.rate >= B2B_HIGH_RESERVATION_RATE).length;
+  const score = b2bCompetitionStrengthScore({
     rate,
-    targetCount: lowSalesCount || opportunityRows.length,
+    strongCount: strongSalesCount,
     itemCount: items.length,
-    platformGapRatio,
+    salesSampleCount,
+    averageRevenue,
+    revenueSampleCount,
     searchVolume
   });
-  const decision = b2bMarketDecision(score, rate, lowSalesCount || opportunityRows.length);
+  const decision = b2bMarketDecision(score, rate, strongSalesCount);
   const regions = (data.regions || []).slice(0, 4);
   const topRegion = regions[0] || {};
   return {
@@ -6941,6 +6965,7 @@ function b2bMarketBriefModel(data = state.data || {}) {
     dayUseGapCount: Math.max(0, items.length - dayUseCount),
     opportunityRows,
     lowSalesCount,
+    strongSalesCount,
     score,
     decision,
     regions,
@@ -7049,9 +7074,9 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
     },
     {
       label: "예약율 해석",
-      value: rankModel.gapRows.length
-        ? `${B2B_LOW_RESERVATION_LABEL} 업체 ${fmtNumber(rankModel.gapRows.length)}곳은 가격과 상품 구성을 함께 확인합니다.`
-        : `${B2B_LOW_RESERVATION_LABEL} 업체가 적어 판매 흐름이 안정적입니다.`
+      value: rankModel.hotRows.length
+        ? `${B2B_HIGH_RESERVATION_LABEL} 업체 ${fmtNumber(rankModel.hotRows.length)}곳을 경쟁 기준으로 봅니다.`
+        : `예약율 산출 표본 ${fmtNumber(rankModel.linkedRows.length)}곳을 기준으로 비교합니다.`
     },
     {
       label: "검색량 보정",
@@ -8699,11 +8724,11 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
       label: `${B2B_HIGH_RESERVATION_LABEL} 경쟁권`,
       summary: "매출 표본과 수요 신호가 동시에 잡힙니다. 수집기간 예약율 40% 이상 업체의 가격과 주말 재고를 먼저 비교합니다."
     };
-  } else if (gapCount >= 2) {
+  } else if (hotCount >= 2 || (Number.isFinite(brief.rate) && brief.rate >= B2B_HIGH_RESERVATION_RATE)) {
     decision = {
       tone: "strong",
-      label: "공략 가능권",
-      summary: `${B2B_LOW_RESERVATION_LABEL} 업체가 보입니다. 가격, 상품 구성, 채널 노출 차이를 우선 비교합니다.`
+      label: "경쟁 활발권",
+      summary: "예약율이 높은 경쟁업체가 보여 가격대, 객실 구성, 주말 판매 흐름을 비교하기 좋은 권역입니다."
     };
   } else if (outsideCount > 0) {
     decision = {
@@ -8734,10 +8759,10 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
       note: revenueReady ? `표본 ${fmtNumber(revenueModel.revenueRows.length)}개 · 가격 ${Number.isFinite(priceCoverage) ? fmtRate(priceCoverage) : "대기"}` : "가격·수량 표본 필요"
     },
     {
-      tone: hotCount ? "hot" : gapCount ? "strong" : "neutral",
+      tone: hotCount ? "hot" : "neutral",
       label: "노출 판단",
       value: `${fmtNumber(rankModel.rows.length)}개`,
-      note: `${B2B_HIGH_RESERVATION_LABEL} ${fmtNumber(hotCount)}개 · ${B2B_LOW_RESERVATION_LABEL} ${fmtNumber(gapCount)}개`
+      note: `${B2B_HIGH_RESERVATION_LABEL} ${fmtNumber(hotCount)}개 · 예약 표본 ${fmtNumber(rankModel.linkedRows.length)}곳`
     },
     {
       tone: nextDemand.tone || (trendRising || peakNow ? "hot" : trendFalling ? "watch" : "good"),
@@ -8764,11 +8789,11 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
       button: "매출 보기"
     },
     {
-      tone: gapCount ? "strong" : hotCount ? "hot" : "neutral",
+      tone: hotCount ? "hot" : "neutral",
       label: "노출 대응",
       value: topRank ? `${fmtNumber(topRank.rank)}위` : "대기",
-      detail: gapCount
-        ? `${B2B_LOW_RESERVATION_LABEL} 업체 ${fmtNumber(gapCount)}개를 먼저 열어 가격·상품 구성을 확인합니다.`
+      detail: hotCount
+        ? `${B2B_HIGH_RESERVATION_LABEL} 업체 ${fmtNumber(hotCount)}개를 가격·상품 벤치마크로 봅니다.`
         : "상위 노출 업체의 예약율과 매출 표본을 기준값으로 봅니다.",
       tab: "rank",
       button: "순위 보기"
@@ -8856,18 +8881,18 @@ function b2bSimpleSummaryModel(
     : (nextDemand.projectedVolume ? 55 : 0);
   const summaryByTone = {
     hot: "수요와 매출 신호가 강합니다. 상위 경쟁업체의 가격대와 주말 판매 압력을 먼저 보세요.",
-    strong: `공략 가능한 경쟁권입니다. 노출 대비 ${B2B_LOW_RESERVATION_LABEL} 업체와 가격 차이를 먼저 확인하세요.`,
+    strong: "경쟁이 활발한 권역입니다. 상위 경쟁업체의 예약율, 매출, 상품 구성을 함께 비교하세요.",
     watch: "권역 또는 표본 변수가 있습니다. 반경 경쟁권과 매출 표본을 보완해서 판단하세요.",
     neutral: "현재는 관찰 구간입니다. 경쟁업체 표본을 더 쌓아 방향성을 확인하세요."
   };
   const cards = [
     {
-      tone: hotCount ? "hot" : gapCount ? "strong" : "neutral",
-      label: "경쟁지표",
+      tone: competitionScore >= 78 ? "hot" : competitionScore >= 64 ? "strong" : competitionScore >= 50 ? "watch" : "neutral",
+      label: "경쟁강도",
       value: `${fmtNumber(competitionScore)}점`,
       note: `지정 검색범위 ${fmtNumber(rankModel.rows.length || brief.itemCount)}곳 비교`,
       barValue: competitionScore,
-      meterLabel: "종합 점수"
+      meterLabel: "강도 점수"
     },
     {
       tone: Number.isFinite(actualReservationRate) && actualReservationRate >= B2B_HIGH_RESERVATION_RATE
@@ -9019,11 +9044,11 @@ function b2bPublicOverviewModel(brief = b2bMarketBriefModel()) {
   const actionRows = [
     {
       tone: "strong",
-      label: "경쟁 매출",
+      label: "경쟁강도",
       value: fmtNumber(brief.score),
-      detail: "경쟁업체 예상 매출과 객실 판매율을 같은 기준으로 봅니다.",
+      detail: "경쟁업체 예약율, 매출 표본, 검색수요를 같은 기준으로 봅니다.",
       tab: "report",
-      button: "매출 보기"
+      button: "강도 보기"
     },
     {
       tone: "watch",
@@ -9177,7 +9202,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
         <div>
           <span class="report-badge ${escapeHtml(brief.decision.tone)}">리포트 요약</span>
           <h3>${escapeHtml(brief.keyword)} 경쟁 현황</h3>
-          <p>${escapeHtml("지정 검색범위 안의 경쟁지표, 실제 예약율, 예상 평균 매출, 월별 예상 검색량만 먼저 보여줍니다.")}</p>
+          <p>${escapeHtml("지정 검색범위 안의 경쟁강도, 실제 예약율, 예상 평균 매출, 월별 예상 검색량만 먼저 보여줍니다.")}</p>
         </div>
         <div class="b2b-brief-score analysis-scope">
           <span>분석 조건</span>
@@ -9190,7 +9215,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
       <details class="b2b-detail-pack">
         <summary>
           <span>매출·상관 근거 보기</span>
-          <small>매출 표본 범위와 경쟁지표-예약율 관계만 확인</small>
+          <small>매출 표본 범위와 경쟁강도·예약율 관계만 확인</small>
         </summary>
         <div class="b2b-detail-pack-body">
           ${renderB2BCompetitionSalesCorrelation(correlationModel)}
@@ -9307,7 +9332,7 @@ function renderReport() {
         <p>${escapeHtml(heroCopy)}</p>
       </div>
       <div class="report-score-card">
-        <span>${publicMode ? "경쟁 지표" : "공략 매력도"}</span>
+        <span>${publicMode ? "경쟁강도" : "공략 매력도"}</span>
         <strong>${fmtNumber(heroScore)}</strong>
         <small>${escapeHtml(heroDecision.summary)}</small>
       </div>
@@ -10533,7 +10558,7 @@ function b2bDemandOutlookModel(traffic = demandTrafficAggregate(), playbook = b2
       label: "가격/재고",
       value: Number.isFinite(weekendGap) && weekendGap >= 0.25 ? "주말 방어" : "요일별 비교",
       detail: Number.isFinite(weekendGap)
-        ? `토요일과 평일 판매율 차이는 ${formatSignedRate(weekendGap)}입니다. 금·일·평일 ${B2B_LOW_RESERVATION_LABEL} 구간을 함께 봅니다.`
+        ? `토요일과 평일 판매율 차이는 ${formatSignedRate(weekendGap)}입니다. 금·일·평일 예약율 흐름을 함께 봅니다.`
         : "요일별 가격과 수량 표본이 쌓이면 금·토·일·평일을 분리해 봅니다."
     },
     {
