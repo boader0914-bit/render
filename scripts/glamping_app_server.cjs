@@ -79,6 +79,14 @@ let crawlJobSequence = 0;
 const crawlQueue = [];
 const recentCrawlResults = new Map();
 const CRAWL_RESULT_REUSE_TTL_MS = 5 * 60 * 1000;
+const B2B_COMPLETED_SEARCH_REUSE_TTL_MS = Math.max(
+  0,
+  Math.round(
+    Number.isFinite(Number(process.env.B2B_SEARCH_REUSE_TTL_MINUTES))
+      ? Number(process.env.B2B_SEARCH_REUSE_TTL_MINUTES)
+      : 30
+  )
+) * 60 * 1000;
 const CRAWL_RUNTIME_STAGE_DEFS = [
   { key: "rank_main", label: "네이버 순위", group: "rank", estimatedRatio: 0.18, detail: "지정 키워드의 네이버 플레이스 노출 순위를 확인합니다." },
   { key: "rank_regional", label: "지역권 노출", group: "rank", estimatedRatio: 0.12, detail: "검색 기준 지역과 인접 권역 노출을 정리합니다." },
@@ -1780,6 +1788,136 @@ async function publicB2BSearchHistoryForSession(session, limit = 20) {
   };
 }
 
+function completedB2BSearchReuseAllowed(payload = {}) {
+  if (!B2B_COMPLETED_SEARCH_REUSE_TTL_MS) return false;
+  if (payload.forceFresh || payload.disableReuse) return false;
+  if (payload.recrawlContext?.type) return false;
+  if (normalizeUserRole(payload.sourceRole) !== USER_ROLES.b2b) return false;
+  if (String(payload.collectionSource || "") !== "b2b_search") return false;
+  return normalizeSearchMode(payload.searchMode) === "keyword";
+}
+
+function b2bSearchHistoryTimeMs(entry = {}) {
+  const ms = Date.parse(entry.sourceCompletedAt || entry.completedAt || entry.createdAt || "");
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function comparableB2BSearchHistoryEntry(entry = {}) {
+  const detailRankRanges = String(entry.detailRankRanges || "1-10").trim() || "1-10";
+  const detailPlaceLimit = rankRangePlaceLimit(parseRankRanges(detailRankRanges, "1-10")) || 10;
+  const bookingRangePlaceLimit = Math.max(
+    Number(entry.bookingRangePlaceLimit || 0),
+    detailPlaceLimit
+  );
+  return {
+    keyword: compactKeyword(entry.keyword || "").toLowerCase(),
+    checkIn: entry.checkIn || "",
+    checkOut: entry.checkOut || "",
+    searchMode: normalizeSearchMode(entry.searchMode || "keyword"),
+    productMode: normalizeProductMode(entry.productMode || "all"),
+    collectionMode: normalizeCollectionMode(entry.collectionMode || "precision"),
+    detailRankRanges,
+    bookingRangeDays: Number(entry.bookingRangeDays || 7),
+    bookingRangePlaceLimit
+  };
+}
+
+function comparableB2BSearchPayload(payload = {}) {
+  return {
+    keyword: compactKeyword(payload.keyword || "").toLowerCase(),
+    checkIn: payload.checkIn || "",
+    checkOut: payload.checkOut || "",
+    searchMode: normalizeSearchMode(payload.searchMode || "keyword"),
+    productMode: normalizeProductMode(payload.productMode || "all"),
+    collectionMode: normalizeCollectionMode(payload.collectionMode || "precision"),
+    detailRankRanges: String(payload.detailRankRanges || "1-10").trim() || "1-10",
+    bookingRangeDays: Number(payload.bookingRangeDays || 7),
+    bookingRangePlaceLimit: Number(payload.bookingRangePlaceLimit || 0)
+  };
+}
+
+function b2bSearchHistoryMatchesPayload(entry = {}, payload = {}, signature = "") {
+  if (entry.searchSignature && signature && entry.searchSignature === signature) return true;
+  const left = comparableB2BSearchHistoryEntry(entry);
+  const right = comparableB2BSearchPayload(payload);
+  return left.keyword === right.keyword
+    && left.checkIn === right.checkIn
+    && left.checkOut === right.checkOut
+    && left.searchMode === right.searchMode
+    && left.productMode === right.productMode
+    && left.collectionMode === right.collectionMode
+    && left.detailRankRanges === right.detailRankRanges
+    && left.bookingRangeDays === right.bookingRangeDays
+    && left.bookingRangePlaceLimit === right.bookingRangePlaceLimit;
+}
+
+async function findReusableCompletedB2BSearch(crawlPayload = {}, options = {}) {
+  if (!completedB2BSearchReuseAllowed(crawlPayload)) return null;
+  const signature = options.signature || crawlPayloadSignature(crawlPayload);
+  const now = Date.now();
+  const store = await readB2BSearchHistoryStore();
+  const candidates = (store.entries || [])
+    .filter((entry) => entry?.status === "completed" && entry.runId)
+    .map((entry) => ({ entry, completedAtMs: b2bSearchHistoryTimeMs(entry) }))
+    .filter((row) => row.completedAtMs && now - row.completedAtMs <= B2B_COMPLETED_SEARCH_REUSE_TTL_MS)
+    .filter((row) => b2bSearchHistoryMatchesPayload(row.entry, crawlPayload, signature))
+    .sort((a, b) => b.completedAtMs - a.completedAtMs);
+
+  for (const row of candidates) {
+    if (!fs.existsSync(resolveRunDir(row.entry.runId))) continue;
+    const ageSeconds = Math.max(0, Math.round((now - row.completedAtMs) / 1000));
+    return {
+      mode: "completed_search",
+      runId: row.entry.runId,
+      keyword: row.entry.keyword || crawlPayload.keyword || "",
+      completedAt: new Date(row.completedAtMs).toISOString(),
+      ageSeconds,
+      signature,
+      ttlSeconds: Math.round(B2B_COMPLETED_SEARCH_REUSE_TTL_MS / 1000)
+    };
+  }
+  return null;
+}
+
+function completedB2BSearchReuseEstimate(base = {}, reuse = {}) {
+  const seconds = 4;
+  return {
+    ...base,
+    estimatedTotalSeconds: seconds,
+    remainingSeconds: seconds,
+    estimatedCompleteAt: new Date(Date.now() + seconds * 1000).toISOString(),
+    estimateBasis: {
+      ...(base.estimateBasis || {}),
+      timing: {
+        source: "recent_result",
+        label: "동일 조건 최근 결과",
+        sampleCount: 1,
+        averageSeconds: seconds,
+        ageSeconds: reuse.ageSeconds || 0,
+        reusedRunId: reuse.runId || ""
+      }
+    },
+    stages: [
+      { key: "reuse_check", label: "동일 조건 확인", seconds: 1, detail: "최근 완료된 동일 조건 검색 결과를 확인합니다.", status: "active", progress: 1 },
+      { key: "reuse_load", label: "결과 적용", seconds: 3, detail: "저장된 결과를 현재 화면에 맞게 불러옵니다.", status: "pending", progress: 0 }
+    ],
+    reuse
+  };
+}
+
+async function publicCrawlEstimateForSession(payload = {}, timingStore = null, session = {}) {
+  const base = publicCrawlEstimate(payload, timingStore);
+  if (normalizeUserRole(session?.role) !== USER_ROLES.b2b) return base;
+  let crawlPayload = null;
+  try {
+    crawlPayload = b2bSearchPayload(payload);
+  } catch {
+    return base;
+  }
+  const reuse = await findReusableCompletedB2BSearch(crawlPayload).catch(() => null);
+  return reuse ? completedB2BSearchReuseEstimate(base, reuse) : base;
+}
+
 function b2bSearchResultSummary(data = {}) {
   const items = data.availability?.items || [];
   const stats = data.availability?.stats || {};
@@ -1815,17 +1953,23 @@ async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId
     clientRequestId,
     checkIn: payload.checkIn || "",
     checkOut: payload.checkOut || "",
+    searchMode: normalizeSearchMode(payload.searchMode || "keyword"),
+    productMode: normalizeProductMode(payload.productMode || "all"),
     detailRankRanges: payload.detailRankRanges || "",
     collectionMode: payload.collectionMode || "",
     collectionModeLabel: COLLECTION_MODES[payload.collectionMode] || "",
     bookingRangeDays: payload.bookingRangeDays || 0,
     bookingRangePlaceLimit: payload.bookingRangePlaceLimit || 0,
+    searchSignature: crawlPayloadSignature(payload),
     runId,
     runLabel: data?.run?.label || payload.keyword || runId,
     regionLabel: data?.run?.provinceLabel || "",
     status: "completed",
     createdAt: now,
     completedAt: now,
+    sourceCompletedAt: crawlTiming?.reusedCompletedAt || now,
+    reuseMode: crawlTiming?.reuseMode || "",
+    reusedFromRunId: crawlTiming?.reusedRunId || "",
     crawlTiming: crawlTiming || null,
     resultSummary: b2bSearchResultSummary(data)
   };
@@ -3003,11 +3147,53 @@ function b2bMyLodgeCandidateItems(data = {}, targetName = "") {
     .slice(0, 5);
 }
 
+async function runB2BCrawlerWithReuse(crawlPayload = {}) {
+  const signature = crawlPayloadSignature(crawlPayload);
+  const cached = reusableRecentCrawlResult(signature);
+  if (cached) {
+    return resolveCrawlJob(cached, { signature, waiterCount: 1 }, "recent_reuse");
+  }
+
+  const existing = findReusableCrawlJob(signature);
+  if (existing) {
+    attachCrawlJobClient(existing, crawlPayload);
+    const result = await existing.promise;
+    return resolveCrawlJob(result, existing, "shared");
+  }
+
+  const reuse = await findReusableCompletedB2BSearch(crawlPayload, { signature });
+  if (reuse) {
+    const result = {
+      runId: reuse.runId,
+      reuse,
+      crawlTiming: {
+        recorded: false,
+        success: true,
+        durationSeconds: 0,
+        reused: true,
+        reuseMode: reuse.mode,
+        reusedRunId: reuse.runId,
+        reusedCompletedAt: reuse.completedAt,
+        ageSeconds: reuse.ageSeconds
+      },
+      queueStatus: {
+        mode: "completed_reuse",
+        signature,
+        waiterCount: 1
+      }
+    };
+    recentCrawlResults.set(signature, { createdAt: Date.now(), result });
+    return result;
+  }
+
+  return runCrawler(crawlPayload);
+}
+
 async function runB2BSearch(payload = {}, context = {}) {
   const crawlPayload = b2bSearchPayload(payload);
   const b2bSubscriber = b2bSubscriberFromContext(context, crawlPayload);
   if (b2bSubscriber) crawlPayload.b2bSubscriber = b2bSubscriber;
-  const result = await runCrawler(crawlPayload);
+  const result = await runB2BCrawlerWithReuse(crawlPayload);
   const runId = result?.runId || "";
   if (!runId) {
     const error = new Error("검색 결과를 저장하지 못했습니다.");
@@ -3035,6 +3221,8 @@ async function runB2BSearch(payload = {}, context = {}) {
     runId,
     data: publicRunForRole(data, USER_ROLES.b2b),
     crawlTiming: result.crawlTiming || null,
+    reuse: result.reuse || null,
+    queueStatus: result.queueStatus || null,
     searchHistory
   };
 }
@@ -8987,8 +9175,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-stage-timing-sync"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-stage-timing-sync"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-reuse-speed"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-reuse-speed"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9185,13 +9373,13 @@ async function route(req, res) {
       const items = Array.isArray(payload.items) ? payload.items.slice(0, 40) : null;
       if (items) {
         return send(res, 200, {
-          items: items.map((item) => ({
+          items: await Promise.all(items.map(async (item) => ({
             clientKey: item.clientKey || "",
-            estimate: publicCrawlEstimate(item, timingStore)
-          }))
+            estimate: await publicCrawlEstimateForSession(item, timingStore, session)
+          })))
         });
       }
-      return send(res, 200, publicCrawlEstimate(payload, timingStore));
+      return send(res, 200, await publicCrawlEstimateForSession(payload, timingStore, session));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {

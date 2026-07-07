@@ -799,9 +799,12 @@ function crawlEstimateBasisText(basis = {}) {
     : "1일 기준";
   const detail = basis.collectionMode === "fast" ? "상세 생략" : `상세 ${basis.detailRankRanges || "1-10"}위`;
   const timing = basis.timing || {};
-  const timingText = timing.source === "measured"
-    ? `예상 기준: 최근 유사 수집 ${fmtNumber(timing.sampleCount)}건 평균 ${formatElapsed(timing.averageSeconds)}`
-    : "예상 기준: 조건 모델";
+  let timingText = "예상 기준: 조건 모델";
+  if (timing.source === "measured") {
+    timingText = `예상 기준: 최근 유사 수집 ${fmtNumber(timing.sampleCount)}건 평균 ${formatElapsed(timing.averageSeconds)}`;
+  } else if (timing.source === "recent_result") {
+    timingText = `예상 기준: 동일 조건 최근 결과${timing.ageSeconds ? ` · ${formatElapsed(timing.ageSeconds)} 전 수집` : ""}`;
+  }
   return `${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
 }
 
@@ -16727,7 +16730,12 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
     });
     renderB2BSearchPanel();
     if (els.b2bSearchStatus) {
-      const basis = preview.estimateBasis?.timing?.source === "measured" ? "최근 수집 이력 기준" : "조건 모델 기준";
+      const timingSource = preview.estimateBasis?.timing?.source || "";
+      const basis = timingSource === "recent_result"
+        ? "동일 조건 최근 결과 사용"
+        : timingSource === "measured"
+          ? "최근 수집 이력 기준"
+          : "조건 모델 기준";
       els.b2bSearchStatus.textContent = `${keyword} 검색을 시작했습니다. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)} · ${basis}.`;
     }
     const result = await fetchJson("/api/b2b-search", {
