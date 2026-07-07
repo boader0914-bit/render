@@ -46,7 +46,7 @@ const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const TERMS_VERSION = "2026-07-06";
 const PRIVACY_VERSION = "2026-07-06";
-const SERVICE_OPERATOR_NAME = String(process.env.GLAMPING_OPERATOR_NAME || "글램핑데이터랩").trim();
+const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || "숙박업 데이터랩 beta").trim();
 const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "").trim();
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
 const CRAWL_TIMING_MAX_ENTRIES = 240;
@@ -2281,10 +2281,10 @@ function legalPage(title, eyebrow, sections) {
 }
 
 function termsPage() {
-  return legalPage("글램핑데이터랩 사업자(개인) 이용약관", "필수 동의", [
+  return legalPage("숙박업 데이터랩 beta 사업자(개인) 이용약관", "필수 동의", [
     {
       title: "목적",
-      body: "<p>이 약관은 글램핑데이터랩 사업자(개인) 서비스의 회원가입, 로그인, 경쟁 리포트 조회, 검색 이력 관리 및 관리자 검토 기능 이용 조건을 정합니다.</p>"
+      body: "<p>이 약관은 숙박업 데이터랩 beta 사업자(개인) 서비스의 회원가입, 로그인, 경쟁 리포트 조회, 검색 이력 관리 및 관리자 검토 기능 이용 조건을 정합니다.</p>"
     },
     {
       title: "서비스의 성격",
@@ -2357,7 +2357,7 @@ function forbiddenPage(message = "") {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>글램핑데이터랩 권한 없음</title>
+  <title>숙박업 데이터랩 beta 권한 없음</title>
   <style>
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
@@ -2385,7 +2385,7 @@ function loginPage(message = "") {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>글램핑데이터랩 로그인</title>
+  <title>숙박업 데이터랩 beta 로그인</title>
   <style>
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
@@ -2404,7 +2404,7 @@ function loginPage(message = "") {
 </head>
 <body>
   <main>
-    <h1>글램핑데이터랩</h1>
+    <h1>숙박업 데이터랩 beta</h1>
     <p>계정 정보를 입력하면 분석 화면으로 이동합니다.</p>
     <form method="post" action="/login">
       <label>아이디<input name="username" autocomplete="username" autofocus required></label>
@@ -2429,7 +2429,7 @@ function signupPage(message = "", values = {}) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>글램핑데이터랩 회원가입</title>
+  <title>숙박업 데이터랩 beta 회원가입</title>
   <style>
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
@@ -2502,7 +2502,7 @@ function signupPage(message = "", values = {}) {
         </select></label>
       </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
-        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 글램핑데이터랩 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
+        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>
       </section>
@@ -9175,8 +9175,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-booking-detail-parallel"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-booking-detail-parallel"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-lodging-datalab-beta"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-lodging-datalab-beta"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9512,7 +9512,7 @@ seedOutputsFromRepo()
   .finally(() => {
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
-      console.log(`Glamping cluster app running at ${primaryUrl}`);
+      console.log(`Lodging datalab beta app running at ${primaryUrl}`);
       if (HOST === "0.0.0.0") {
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
       }

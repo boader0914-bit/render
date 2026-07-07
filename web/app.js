@@ -1,3 +1,5 @@
+const APP_BRAND_NAME = "숙박업 데이터랩 beta";
+
 const state = {
   session: {
     authenticated: false,
@@ -16839,7 +16841,7 @@ function renderB2BEmptyPanels() {
     els.pageSubtitle.hidden = false;
     els.pageSubtitle.textContent = activeMessage;
   }
-  document.title = `글램핑데이터랩 V2 · ${tabLabel(state.activeTab)}`;
+  document.title = `${APP_BRAND_NAME} · ${tabLabel(state.activeTab)}`;
   if (els.summaryGrid) els.summaryGrid.innerHTML = "";
   if (els.noticeCard) els.noticeCard.innerHTML = "";
   if (els.reportBody) els.reportBody.innerHTML = renderB2BPreSearchMyLodge();
@@ -16881,7 +16883,7 @@ function renderHeader() {
   } else {
     els.pageSubtitle.textContent = `${title} · ${dateRangeLabel(run)}`;
   }
-  document.title = `글램핑데이터랩 V2 · ${title}`;
+  document.title = `${APP_BRAND_NAME} · ${title}`;
 }
 
 function renderAll() {
