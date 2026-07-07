@@ -642,22 +642,41 @@ function isAdminRole() {
   return currentRole() === "admin";
 }
 
+function b2bSearchPolicy() {
+  const quota = state.memberSearchQuota || {};
+  const isMember = currentRole() === "b2b" && String(state.session?.accountType || "").toLowerCase() === "member";
+  const expandedAllowed = Object.prototype.hasOwnProperty.call(quota, "expandedAllowed")
+    ? Boolean(quota.expandedAllowed)
+    : !isMember;
+  const limited = Object.prototype.hasOwnProperty.call(quota, "limited")
+    ? Boolean(quota.limited)
+    : isMember;
+  const dailyLimit = Number(quota.dailyLimit || (limited ? 2 : 0));
+  return {
+    limited,
+    dailyLimit,
+    expandedAllowed,
+    allowedRankRange: quota.allowedRankRange || (expandedAllowed ? "1-20" : "1-10")
+  };
+}
+
 function isGeneralB2BMember() {
-  return currentRole() === "b2b" && String(state.session?.accountType || "").toLowerCase() === "member";
+  const policy = b2bSearchPolicy();
+  return currentRole() === "b2b" && policy.limited && !policy.expandedAllowed;
 }
 
 function allowedB2BSearchRange(value = state.b2bSearchRange) {
-  if (isGeneralB2BMember()) return "1-10";
+  if (!b2bSearchPolicy().expandedAllowed) return "1-10";
   return value === "1-20" ? "1-20" : "1-10";
 }
 
 function syncB2BSearchRangeControl() {
   if (!els.b2bSearchRangeInput) return;
-  const generalMember = isGeneralB2BMember();
+  const expandedAllowed = b2bSearchPolicy().expandedAllowed;
   const expandedOption = els.b2bSearchRangeInput.querySelector('option[value="1-20"]');
   if (expandedOption) {
-    expandedOption.disabled = generalMember;
-    expandedOption.hidden = generalMember;
+    expandedOption.disabled = !expandedAllowed;
+    expandedOption.hidden = !expandedAllowed;
   }
   state.b2bSearchRange = allowedB2BSearchRange(state.b2bSearchRange || els.b2bSearchRangeInput.value || "1-10");
   if (els.b2bSearchRangeInput.value !== state.b2bSearchRange) {
@@ -14180,12 +14199,14 @@ function adminConsoleMemberPanel() {
           const policy = member.policy || {};
           const latest = usage.latestSearch || {};
           const limited = Boolean(policy.limited);
+          const dailyLimit = Number(policy.dailySearchLimit || policy.dailyLimit || 0);
           const todayText = limited
-            ? `${fmtNumber(usage.usedToday || 0)}/${fmtNumber(policy.dailyLimit || 2)}`
+            ? `${fmtNumber(usage.usedToday || 0)}/${fmtNumber(policy.dailyLimit || dailyLimit || 2)}`
             : "제한 없음";
           const latestText = latest.keyword
             ? `${latest.keyword}${latest.completedAt ? ` · ${compactDateTime(latest.completedAt)}` : ""}`
             : "검색 없음";
+          const memberId = escapeHtml(member.memberId || "");
           return `
             <div class="admin-member-row ${member.status === "disabled" ? "disabled" : ""}">
               <div>
@@ -14196,6 +14217,27 @@ function adminConsoleMemberPanel() {
               <span>${fmtNumber(usage.countedTotal || member.searchCount || 0)}회</span>
               <mark>${escapeHtml(policy.allowedRankRange || "1-10")}</mark>
               <small>${escapeHtml(latestText)}</small>
+              <div class="admin-member-controls">
+                <label>
+                  <span>계정 유형</span>
+                  <select data-b2b-member-type="${memberId}">
+                    ${[
+                      ["member", "일반"],
+                      ["test", "테스트"],
+                      ["internal", "내부"]
+                    ].map(([value, label]) => `<option value="${value}" ${member.accountType === value ? "selected" : ""}>${label}</option>`).join("")}
+                  </select>
+                </label>
+                <label>
+                  <span>일일 한도</span>
+                  <select data-b2b-member-limit="${memberId}">
+                    ${[2, 5, 10, 20].map((limit) => `<option value="${limit}" ${dailyLimit === limit ? "selected" : ""}>${fmtNumber(limit)}회</option>`).join("")}
+                    <option value="0" ${dailyLimit === 0 ? "selected" : ""}>제한 없음</option>
+                  </select>
+                </label>
+                <button type="button" data-b2b-member-expanded="${memberId}" data-expanded="${policy.expandedAllowed ? "1" : "0"}">${policy.expandedAllowed ? "1~20 허용중" : "1~20 허용"}</button>
+                <button type="button" data-b2b-member-status="${memberId}" data-status="${member.status === "disabled" ? "disabled" : "active"}">${member.status === "disabled" ? "활성화" : "정지"}</button>
+              </div>
             </div>
           `;
         }).join("") : `<p class="empty">아직 회원가입 계정이 없습니다.</p>`}
@@ -16681,22 +16723,23 @@ function renderB2BSearchHistoryPanel() {
 function b2bSearchUsagePanelHtml() {
   if (isAdminRole()) return "";
   const quota = state.memberSearchQuota || {};
-  const limited = Boolean(quota.limited || isGeneralB2BMember());
-  const limit = Number(quota.dailyLimit || 2);
+  const policy = b2bSearchPolicy();
+  const limited = Boolean(policy.limited);
+  const limit = Number(policy.dailyLimit || quota.dailyLimit || 2);
   const used = Math.max(0, Number(quota.usedToday || 0));
   const remaining = limited ? Math.max(0, Number(quota.remainingToday ?? (limit - used))) : null;
   const percent = limited ? Math.max(0, Math.min(100, Math.round((used / Math.max(1, limit)) * 100))) : 0;
   const resetText = quota.resetAfterSeconds ? `${formatElapsed(quota.resetAfterSeconds)} 후 초기화` : "매일 00시 초기화";
   const title = limited ? `오늘 남은 새 리포트 ${fmtNumber(remaining)}/${fmtNumber(limit)}회` : "공용 계정 · 새 검색 제한 없음";
   const detail = limited
-    ? `기본 분석 ${escapeHtml(quota.allowedRankRange || "1-10")}위 · 같은 조건 최근 리포트는 차감하지 않습니다.`
+    ? `${policy.expandedAllowed ? "확장 분석 가능" : "기본 분석"} ${policy.allowedRankRange}위 · 같은 조건 최근 리포트는 차감하지 않습니다.`
     : "테스트용 계정은 운영 검증을 위해 검색 범위 제한을 적용하지 않습니다.";
   return `
     <div class="b2b-usage-panel ${limited && remaining <= 0 ? "exhausted" : ""}">
       <div>
         <span>사용량</span>
         <strong>${escapeHtml(title)}</strong>
-        <p>${detail}</p>
+        <p>${escapeHtml(detail)}</p>
       </div>
       <div class="b2b-usage-meter" aria-label="오늘 새 리포트 사용량">
         <small>${escapeHtml(limited ? resetText : `누적 새 수집 ${fmtNumber(quota.countedTotal || 0)}회`)}</small>
@@ -16783,6 +16826,7 @@ function renderB2BSearchPanel() {
     const previewPayload = shouldShowEstimate ? b2bLiveSearchPayload(keyword) : null;
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
     const preview = progressMeta || (previewPayload ? crawlPreviewMeta(previewPayload) : null);
+    const policy = b2bSearchPolicy();
     const panelClass = state.b2bSearchLoading ? "loading" : hasResult ? "ready" : "idle";
     const badge = state.b2bSearchLoading ? "검색중" : hasResult ? "결과 표시" : "새 검색";
     const title = state.b2bSearchLoading
@@ -16794,8 +16838,8 @@ function renderB2BSearchPanel() {
       ? "네이버 노출, 예약 수량, 요일별 가격 표본을 새로 확인하고 있습니다."
       : hasResult
         ? "방금 실행한 검색 결과를 표시합니다. 다른 지역은 검색어 입력 후 새로 실행하세요."
-        : isGeneralB2BMember()
-          ? "기본 1~10위 범위로 새 표본을 수집합니다. 일반 회원은 하루 2회까지 새 리포트를 만들 수 있습니다."
+        : !policy.expandedAllowed
+          ? `기본 1~10위 범위로 새 표본을 수집합니다. 이 계정은 하루 ${fmtNumber(policy.dailyLimit || 2)}회까지 새 리포트를 만들 수 있습니다.`
           : "기본 1~10위 또는 확장 1~20위 범위로 새 표본을 수집합니다.";
     els.b2bSearchResults.innerHTML = `
       <div class="b2b-live-search-panel ${escapeHtml(panelClass)}">
@@ -16808,7 +16852,7 @@ function renderB2BSearchPanel() {
         <div class="b2b-live-search-meta">
           <em>${escapeHtml(selectedRange === "1-20" ? "확장 분석" : "기본 분석")}</em>
           <em>${escapeHtml(selectedRange)}위</em>
-          ${isGeneralB2BMember() ? `<em>일반 회원 하루 2회</em>` : ""}
+          ${policy.limited ? `<em>하루 ${fmtNumber(policy.dailyLimit || 2)}회</em>` : `<em>검색 제한 없음</em>`}
           ${state.b2bSearchLoading && preview ? `<em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>` : ""}
           ${state.b2bSearchLoading && preview ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
@@ -18264,6 +18308,36 @@ async function loadB2BMemberAdminOverview() {
   }
 }
 
+function b2bAdminMemberById(memberId = "") {
+  return (state.b2bMemberAdmin?.members || []).find((member) => member.memberId === memberId) || null;
+}
+
+async function updateB2BMemberAdminPolicy(memberId = "", patch = {}) {
+  const member = b2bAdminMemberById(memberId);
+  if (!member) return;
+  const policy = member.policy || {};
+  const payload = {
+    accountType: member.accountType || "member",
+    status: member.status || "active",
+    dailySearchLimit: policy.dailySearchLimit ?? policy.dailyLimit ?? 2,
+    expandedSearchAllowed: Boolean(policy.expandedAllowed || policy.expandedSearchAllowed),
+    ...patch
+  };
+  setStatus("회원 권한 저장 중");
+  try {
+    state.b2bMemberAdmin = await fetchJson(`/api/b2b-members/${encodeURIComponent(memberId)}/policy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    renderAdminConsoleDashboard();
+    setStatus("회원 권한 저장 완료");
+  } catch (error) {
+    setStatus("회원 권한 저장 실패");
+    if (els.adminStatus) els.adminStatus.textContent = `회원 권한 저장 실패: ${error.message}`;
+  }
+}
+
 async function restoreB2BActiveSearch() {
   if (isAdminRole()) return false;
   const record = readB2BActiveSearchRecord();
@@ -19450,6 +19524,20 @@ function bindEvents() {
     if (event.target.closest("[data-company-master-focus]")) {
       els.companyMasterPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
+    const memberExpanded = event.target.closest("[data-b2b-member-expanded]");
+    if (memberExpanded) {
+      const memberId = memberExpanded.dataset.b2bMemberExpanded || "";
+      const current = memberExpanded.dataset.expanded === "1";
+      updateB2BMemberAdminPolicy(memberId, { expandedSearchAllowed: !current }).catch(() => {});
+      return;
+    }
+    const memberStatus = event.target.closest("[data-b2b-member-status]");
+    if (memberStatus) {
+      const memberId = memberStatus.dataset.b2bMemberStatus || "";
+      const disabled = memberStatus.dataset.status === "disabled";
+      updateB2BMemberAdminPolicy(memberId, { status: disabled ? "active" : "disabled" }).catch(() => {});
+      return;
+    }
     const checkFilter = event.target.closest("[data-company-check-filter]");
     if (checkFilter) {
       state.companyMasterFilters.check = checkFilter.dataset.companyCheckFilter || "priority";
@@ -19504,12 +19592,26 @@ function bindEvents() {
     rerenderCompanyMasterPreservingSearch();
   });
   document.addEventListener("change", (event) => {
+    const memberType = event.target.closest("[data-b2b-member-type]");
+    if (memberType) {
+      updateB2BMemberAdminPolicy(memberType.dataset.b2bMemberType || "", {
+        accountType: memberType.value || "member"
+      }).catch(() => {});
+      return;
+    }
+    const memberLimit = event.target.closest("[data-b2b-member-limit]");
+    if (memberLimit) {
+      updateB2BMemberAdminPolicy(memberLimit.dataset.b2bMemberLimit || "", {
+        dailySearchLimit: Number(memberLimit.value)
+      }).catch(() => {});
+      return;
+    }
     const b2bRange = event.target.closest("#b2bSearchRangeInput");
     if (b2bRange) {
       state.b2bSearchRange = allowedB2BSearchRange(b2bRange.value);
       syncB2BSearchRangeControl();
-      if (isGeneralB2BMember() && b2bRange.value !== state.b2bSearchRange && els.b2bSearchStatus) {
-        els.b2bSearchStatus.textContent = "일반 회원은 기본 분석 1~10위만 사용할 수 있습니다.";
+      if (!b2bSearchPolicy().expandedAllowed && b2bRange.value !== state.b2bSearchRange && els.b2bSearchStatus) {
+        els.b2bSearchStatus.textContent = "이 계정은 기본 분석 1~10위만 사용할 수 있습니다.";
       }
       renderB2BSearchPanel();
       return;

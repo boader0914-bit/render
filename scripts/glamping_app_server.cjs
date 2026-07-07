@@ -60,7 +60,9 @@ const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B
 const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENABLED || "1").trim())
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
 const B2B_MEMBER_DAILY_SEARCH_LIMIT = 2;
+const B2B_MEMBER_MAX_DAILY_SEARCH_LIMIT = 50;
 const B2B_MEMBER_ALLOWED_RANK_RANGE = "1-10";
+const B2B_MEMBER_EXPANDED_RANK_RANGE = "1-20";
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
@@ -1545,18 +1547,60 @@ function memberProfileFromPayload(payload = {}) {
   };
 }
 
+function normalizeB2BAccountType(value = "") {
+  const text = String(value || "").trim().toLowerCase();
+  if (["demo", "test", "internal"].includes(text)) return text;
+  return "member";
+}
+
+function normalizeB2BMemberStatus(value = "") {
+  return String(value || "").trim().toLowerCase() === "disabled" ? "disabled" : "active";
+}
+
+function normalizeB2BMemberDailyLimit(value, fallback = B2B_MEMBER_DAILY_SEARCH_LIMIT) {
+  if (value === null || value === "" || value === undefined) return fallback;
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return fallback;
+  if (number <= 0) return 0;
+  return Math.max(1, Math.min(B2B_MEMBER_MAX_DAILY_SEARCH_LIMIT, number));
+}
+
+function normalizeB2BMemberPolicy(policy = {}, accountType = "member") {
+  const type = normalizeB2BAccountType(accountType);
+  const defaultUnlimited = ["demo", "test", "internal"].includes(type);
+  const dailySearchLimit = normalizeB2BMemberDailyLimit(
+    policy.dailySearchLimit,
+    defaultUnlimited ? 0 : B2B_MEMBER_DAILY_SEARCH_LIMIT
+  );
+  const expandedSearchAllowed = defaultUnlimited || policy.expandedSearchAllowed === true;
+  const limited = dailySearchLimit > 0;
+  return {
+    dailySearchLimit,
+    expandedSearchAllowed,
+    limited,
+    dailyLimit: limited ? dailySearchLimit : null,
+    allowedRankRange: expandedSearchAllowed ? B2B_MEMBER_EXPANDED_RANK_RANGE : B2B_MEMBER_ALLOWED_RANK_RANGE,
+    expandedAllowed: expandedSearchAllowed
+  };
+}
+
+function publicB2BMemberPolicy(member = {}) {
+  return normalizeB2BMemberPolicy(member.policy || {}, member.accountType || "member");
+}
+
 function publicB2BMember(member = {}) {
   const profile = member.profile || {};
   return {
     memberId: member.memberId || "",
     username: member.username || "",
     role: USER_ROLES.b2b,
-    accountType: member.accountType || "member",
-    status: member.status || "active",
+    accountType: normalizeB2BAccountType(member.accountType || "member"),
+    status: normalizeB2BMemberStatus(member.status || "active"),
     createdAt: member.createdAt || "",
     updatedAt: member.updatedAt || "",
     lastLoginAt: member.lastLoginAt || "",
     searchCount: Number(member.searchCount || 0),
+    policy: publicB2BMemberPolicy(member),
     profile: {
       ...profile,
       ownershipStatusLabel: profile.ownershipStatusLabel || ownershipStatusLabel(profile.ownershipStatus)
@@ -1681,6 +1725,7 @@ async function registerB2BMember(payload = {}, context = {}) {
     updatedAt: now,
     lastLoginAt: "",
     searchCount: 0,
+    policy: normalizeB2BMemberPolicy({}, "member"),
     consents: consentRecordFromRequest(context.req, now),
     profile: memberProfileFromPayload(payload)
   };
@@ -1859,6 +1904,36 @@ function isGeneralB2BMemberSession(session = {}) {
     && String(session?.accountType || "").toLowerCase() === "member";
 }
 
+async function effectiveB2BMemberPolicyForSession(session = {}) {
+  if (normalizeUserRole(session?.role) !== USER_ROLES.b2b) {
+    return normalizeB2BMemberPolicy({}, "member");
+  }
+  if (session.memberId || session.username) {
+    try {
+      const store = await readB2BMemberStore();
+      const member = (store.members || []).find((item) =>
+        (session.memberId && item.memberId === session.memberId) ||
+        normalizeLoginId(item.username) === normalizeLoginId(session.username)
+      );
+      if (member) {
+        return {
+          ...normalizeB2BMemberPolicy(member.policy || {}, member.accountType || session.accountType || "member"),
+          accountType: normalizeB2BAccountType(member.accountType || session.accountType || "member"),
+          status: normalizeB2BMemberStatus(member.status || "active")
+        };
+      }
+    } catch {
+      // Fall through to the session-level default policy.
+    }
+  }
+  const accountType = normalizeB2BAccountType(session.accountType || (session.username === B2B_USERNAME ? "demo" : "member"));
+  return {
+    ...normalizeB2BMemberPolicy({}, accountType),
+    accountType,
+    status: "active"
+  };
+}
+
 function kstDayKeyFromValue(value = Date.now()) {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
@@ -1908,14 +1983,16 @@ function b2bSearchUsageForOwner(owner = {}, entries = []) {
   };
 }
 
-async function b2bMemberDailySearchQuota(session = {}, store = null) {
+async function b2bMemberDailySearchQuota(session = {}, store = null, policy = null) {
   const history = store || await readB2BSearchHistoryStore();
   const usage = b2bSearchUsageForOwner(session, history.entries || []);
+  const effectivePolicy = policy || await effectiveB2BMemberPolicyForSession(session);
+  const dailyLimit = Number(effectivePolicy.dailySearchLimit || 0);
   return {
-    limited: true,
-    limit: B2B_MEMBER_DAILY_SEARCH_LIMIT,
+    limited: dailyLimit > 0,
+    limit: dailyLimit > 0 ? dailyLimit : null,
     used: usage.usedToday,
-    remaining: Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - usage.usedToday),
+    remaining: dailyLimit > 0 ? Math.max(0, dailyLimit - usage.usedToday) : null,
     dayKey: usage.dayKey,
     resetAfterSeconds: secondsUntilNextKstDay()
   };
@@ -1926,18 +2003,19 @@ async function publicB2BSearchUsageForSession(session = {}, store = null) {
   if (role !== USER_ROLES.b2b) return null;
   const history = store || await readB2BSearchHistoryStore();
   const usage = b2bSearchUsageForOwner(session, history.entries || []);
-  const limited = isGeneralB2BMemberSession(session);
+  const policy = await effectiveB2BMemberPolicyForSession(session);
+  const limited = Number(policy.dailySearchLimit || 0) > 0;
   return {
-    accountType: session.accountType || (session.username === B2B_USERNAME ? "demo" : "member"),
+    accountType: policy.accountType || session.accountType || (session.username === B2B_USERNAME ? "demo" : "member"),
     limited,
-    dailyLimit: limited ? B2B_MEMBER_DAILY_SEARCH_LIMIT : null,
+    dailyLimit: limited ? Number(policy.dailySearchLimit || 0) : null,
     usedToday: usage.usedToday,
-    remainingToday: limited ? Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - usage.usedToday) : null,
+    remainingToday: limited ? Math.max(0, Number(policy.dailySearchLimit || 0) - usage.usedToday) : null,
     countedTotal: usage.countedTotal,
     reuseCount: usage.reuseCount,
     sharedCount: usage.sharedCount,
-    allowedRankRange: limited ? B2B_MEMBER_ALLOWED_RANK_RANGE : "1-20",
-    expandedAllowed: !limited,
+    allowedRankRange: policy.allowedRankRange || B2B_MEMBER_ALLOWED_RANK_RANGE,
+    expandedAllowed: Boolean(policy.expandedSearchAllowed),
     dayKey: usage.dayKey,
     resetAfterSeconds: secondsUntilNextKstDay(),
     latestSearch: usage.latestSearch
@@ -1945,23 +2023,29 @@ async function publicB2BSearchUsageForSession(session = {}, store = null) {
 }
 
 async function assertB2BMemberSearchPolicy(crawlPayload = {}, session = {}, reusableSearch = null) {
-  if (!isGeneralB2BMemberSession(session)) {
+  const policy = await effectiveB2BMemberPolicyForSession(session);
+  if (policy.status === "disabled") {
+    const error = new Error("비활성화된 계정입니다. 관리자에게 문의하세요.");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (normalizeUserRole(session?.role) !== USER_ROLES.b2b) {
     return { limited: false, allowed: true };
   }
 
   const detailRankRanges = String(crawlPayload.detailRankRanges || "1-10").trim() || "1-10";
-  if (detailRankRanges !== B2B_MEMBER_ALLOWED_RANK_RANGE) {
-    const error = new Error("일반 계정은 기본 분석 1~10위만 사용할 수 있습니다.");
+  if (!policy.expandedSearchAllowed && detailRankRanges !== B2B_MEMBER_ALLOWED_RANK_RANGE) {
+    const error = new Error("이 계정은 기본 분석 1~10위만 사용할 수 있습니다.");
     error.statusCode = 403;
     throw error;
   }
 
-  const quota = await b2bMemberDailySearchQuota(session);
+  const quota = await b2bMemberDailySearchQuota(session, null, policy);
   if (reusableSearch) {
     return { ...quota, allowed: true, reuse: true };
   }
-  if (quota.remaining <= 0) {
-    const error = new Error(`일반 계정은 하루 ${B2B_MEMBER_DAILY_SEARCH_LIMIT}회까지 새 리포트를 수집할 수 있습니다. 같은 조건의 최근 리포트는 검색 이력에서 다시 열람하세요.`);
+  if (quota.limited && quota.remaining <= 0) {
+    const error = new Error(`이 계정은 하루 ${quota.limit}회까지 새 리포트를 수집할 수 있습니다. 같은 조건의 최근 리포트는 검색 이력에서 다시 열람하세요.`);
     error.statusCode = 429;
     error.retryAfterSeconds = quota.resetAfterSeconds;
     throw error;
@@ -1992,18 +2076,20 @@ async function publicB2BMembersAdminOverview() {
     .map((member) => {
       const publicMember = publicB2BMember(member);
       const usage = b2bSearchUsageForOwner(publicMember, entries);
-      const limited = String(publicMember.accountType || "").toLowerCase() === "member";
+      const policy = publicMember.policy || normalizeB2BMemberPolicy(member.policy || {}, member.accountType || "member");
+      const limited = Number(policy.dailySearchLimit || 0) > 0;
       return {
         ...publicMember,
         policy: {
+          ...policy,
           limited,
-          dailyLimit: limited ? B2B_MEMBER_DAILY_SEARCH_LIMIT : null,
-          allowedRankRange: limited ? B2B_MEMBER_ALLOWED_RANK_RANGE : "1-20",
-          expandedAllowed: !limited
+          dailyLimit: limited ? Number(policy.dailySearchLimit || 0) : null,
+          allowedRankRange: policy.allowedRankRange || B2B_MEMBER_ALLOWED_RANK_RANGE,
+          expandedAllowed: Boolean(policy.expandedSearchAllowed)
         },
         usage: {
           ...usage,
-          remainingToday: limited ? Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - usage.usedToday) : null,
+          remainingToday: limited ? Math.max(0, Number(policy.dailySearchLimit || 0) - usage.usedToday) : null,
           resetAfterSeconds: secondsUntilNextKstDay()
         }
       };
@@ -2041,6 +2127,75 @@ async function publicB2BMembersAdminOverview() {
       resetAfterSeconds: secondsUntilNextKstDay()
     }
   };
+}
+
+function parseBooleanOption(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (/^(1|true|yes|on|allow|allowed)$/i.test(String(value || "").trim())) return true;
+  if (/^(0|false|no|off|deny|denied)$/i.test(String(value || "").trim())) return false;
+  return fallback;
+}
+
+async function updateB2BMemberAdminPolicy(memberId = "", payload = {}, adminSession = {}) {
+  const targetId = String(memberId || payload.memberId || "").trim();
+  if (!targetId) {
+    const error = new Error("회원 ID가 필요합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const store = await readB2BMemberStore();
+  const member = (store.members || []).find((item) => item.memberId === targetId);
+  if (!member) {
+    const error = new Error("회원을 찾을 수 없습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const nextAccountType = normalizeB2BAccountType(payload.accountType || member.accountType || "member");
+  const accountTypeChanged = nextAccountType !== normalizeB2BAccountType(member.accountType || "member");
+  const currentPolicy = normalizeB2BMemberPolicy(member.policy || {}, member.accountType || "member");
+  const defaultPolicyForType = normalizeB2BMemberPolicy({}, nextAccountType);
+  const hasDailyLimit = Object.prototype.hasOwnProperty.call(payload, "dailySearchLimit");
+  const hasExpandedAllowed = Object.prototype.hasOwnProperty.call(payload, "expandedSearchAllowed");
+  const nextDailyLimit = normalizeB2BMemberDailyLimit(
+    hasDailyLimit ? payload.dailySearchLimit : (accountTypeChanged ? defaultPolicyForType.dailySearchLimit : currentPolicy.dailySearchLimit),
+    accountTypeChanged ? defaultPolicyForType.dailySearchLimit : currentPolicy.dailySearchLimit
+  );
+  const nextExpandedAllowed = parseBooleanOption(
+    hasExpandedAllowed ? payload.expandedSearchAllowed : (accountTypeChanged ? defaultPolicyForType.expandedSearchAllowed : currentPolicy.expandedSearchAllowed),
+    accountTypeChanged ? defaultPolicyForType.expandedSearchAllowed : currentPolicy.expandedSearchAllowed
+  );
+  const nextStatus = Object.prototype.hasOwnProperty.call(payload, "status")
+    ? normalizeB2BMemberStatus(payload.status)
+    : normalizeB2BMemberStatus(member.status || "active");
+
+  member.accountType = nextAccountType;
+  member.status = nextStatus;
+  member.policy = normalizeB2BMemberPolicy({
+    dailySearchLimit: nextDailyLimit,
+    expandedSearchAllowed: nextExpandedAllowed
+  }, nextAccountType);
+  member.updatedAt = now;
+  member.adminPolicyHistory = [
+    ...(Array.isArray(member.adminPolicyHistory) ? member.adminPolicyHistory : []),
+    {
+      changedAt: now,
+      adminUsername: adminSession?.username || "",
+      accountType: member.accountType,
+      status: member.status,
+      policy: member.policy
+    }
+  ].slice(-20);
+
+  await writeB2BMemberStore(store);
+  if (member.status === "disabled") {
+    for (const [sessionId, session] of sessions.entries()) {
+      if (session.memberId === member.memberId || normalizeLoginId(session.username) === normalizeLoginId(member.username)) {
+        sessions.delete(sessionId);
+      }
+    }
+  }
+  return publicB2BMembersAdminOverview();
 }
 
 function completedB2BSearchReuseAllowed(payload = {}) {
@@ -9636,8 +9791,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-member-usage"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-member-usage"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-member-policy"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-member-policy"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9787,6 +9942,13 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/b2b-members") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await publicB2BMembersAdminOverview());
+    }
+
+    if (req.method === "POST" && reqUrl.pathname.startsWith("/api/b2b-members/") && reqUrl.pathname.endsWith("/policy")) {
+      if (!requireAdminSession(session, req, res)) return;
+      const memberId = decodeURIComponent(reqUrl.pathname.replace("/api/b2b-members/", "").replace("/policy", ""));
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      return send(res, 200, await updateB2BMemberAdminPolicy(memberId, payload, session));
     }
 
     if (routeRolePage(req, res, reqUrl, session)) return;
