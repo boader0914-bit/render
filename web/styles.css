@@ -889,6 +889,89 @@ a {
   padding-top: 10px;
 }
 
+.b2b-account-panel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #e5ebf3;
+  padding-top: 10px;
+}
+
+.b2b-account-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.b2b-account-head strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.b2b-account-head small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-account-head > span {
+  flex: 0 0 auto;
+  min-height: 25px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #cfe4df;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #027a48;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-account-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-account-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e5ebf3;
+  border-radius: 13px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.b2b-account-grid span,
+.b2b-account-grid small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-account-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .b2b-history-head {
   min-width: 0;
   display: flex;
@@ -15120,6 +15203,7 @@ body.role-b2b .primary-button {
 
 body.role-b2b .b2b-search-panel,
 body.role-b2b .b2b-onboarding,
+body.role-b2b .b2b-account-grid article,
 body.role-b2b .summary-card,
 body.role-b2b .report-card,
 body.role-b2b .report-metric-grid article,
@@ -15208,6 +15292,17 @@ body.role-b2b .b2b-onboarding-plan strong {
 
 body.role-b2b .b2b-onboarding-plan small {
   color: var(--muted);
+}
+
+body.role-b2b .b2b-account-panel,
+body.role-b2b .b2b-search-history {
+  border-top-color: rgba(156, 174, 204, .18);
+}
+
+body.role-b2b .b2b-account-head > span {
+  border-color: rgba(52, 211, 153, .34);
+  background: rgba(52, 211, 153, .12);
+  color: #bbf7d0;
 }
 
 body.role-b2b .b2b-search-form input,
@@ -16910,6 +17005,7 @@ body.role-b2b .structure-action-list li::before {
 
   .b2b-search-form,
   .b2b-onboarding-steps,
+  .b2b-account-grid,
   .b2b-search-results,
   .b2b-search-result-grid,
   .b2b-live-search-panel,

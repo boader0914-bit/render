@@ -1590,6 +1590,7 @@ function publicB2BMemberPolicy(member = {}) {
 
 function publicB2BMember(member = {}) {
   const profile = member.profile || {};
+  const consents = member.consents || {};
   return {
     memberId: member.memberId || "",
     username: member.username || "",
@@ -1601,6 +1602,11 @@ function publicB2BMember(member = {}) {
     lastLoginAt: member.lastLoginAt || "",
     searchCount: Number(member.searchCount || 0),
     policy: publicB2BMemberPolicy(member),
+    consents: {
+      termsVersion: consents.termsVersion || "",
+      privacyVersion: consents.privacyVersion || "",
+      acceptedAt: consents.acceptedAt || ""
+    },
     profile: {
       ...profile,
       ownershipStatusLabel: profile.ownershipStatusLabel || ownershipStatusLabel(profile.ownershipStatus)
@@ -2617,7 +2623,10 @@ function createSession(username, role = USER_ROLES.admin, meta = {}) {
     memberId: meta.memberId || "",
     accountType: meta.accountType || (normalizeUserRole(role) === USER_ROLES.admin ? "master" : "member"),
     profile: meta.profile || null,
-    createdAt: Date.now(),
+    consents: meta.consents || null,
+    memberCreatedAt: meta.createdAt || "",
+    lastLoginAt: meta.lastLoginAt || "",
+    sessionCreatedAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS
   });
   return id;
@@ -2636,6 +2645,10 @@ function publicSession(session) {
     memberId: session.memberId || "",
     accountType: session.accountType || (role === USER_ROLES.admin ? "master" : "member"),
     profile: session.profile || null,
+    consents: session.consents || null,
+    memberCreatedAt: session.memberCreatedAt || "",
+    lastLoginAt: session.lastLoginAt || "",
+    sessionCreatedAt: session.sessionCreatedAt ? new Date(session.sessionCreatedAt).toISOString() : "",
     expiresAt: session.expiresAt ? new Date(session.expiresAt).toISOString() : ""
   };
 }
@@ -9883,8 +9896,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-legal-security-onboarding"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-legal-security-onboarding"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-account-security-panel"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-account-security-panel"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

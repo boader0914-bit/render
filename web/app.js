@@ -216,6 +216,7 @@ const els = {
   b2bSearchRangeInput: document.getElementById("b2bSearchRangeInput"),
   b2bSearchResults: document.getElementById("b2bSearchResults"),
   b2bSearchStatus: document.getElementById("b2bSearchStatus"),
+  b2bAccountPanel: document.getElementById("b2bAccountPanel"),
   b2bSearchHistory: document.getElementById("b2bSearchHistory"),
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
@@ -16752,6 +16753,59 @@ function renderB2BSearchHistoryPanel() {
   `;
 }
 
+function renderB2BAccountPanel() {
+  if (!els.b2bAccountPanel) return;
+  if (isAdminRole()) {
+    els.b2bAccountPanel.innerHTML = "";
+    return;
+  }
+  const session = state.session || {};
+  const profile = session.profile || {};
+  const policy = b2bSearchPolicy();
+  const quota = state.memberSearchQuota || {};
+  const consents = session.consents || {};
+  const accountLabel = b2bPlanLabel(policy, quota.accountType || session.accountType || "member");
+  const username = session.username || "로그인 계정";
+  const company = profile.companyName || profile.lodgingName || "숙소 또는 회사명 미입력";
+  const ownership = profile.ownershipStatusLabel || "보유 여부 미입력";
+  const rangeText = `${b2bDisplayRankRange(policy.allowedRankRange)}위`;
+  const limitText = policy.limited ? `하루 ${fmtNumber(policy.dailyLimit || 2)}회` : "새 검색 제한 없음";
+  const consentVersion = [consents.termsVersion ? `약관 ${consents.termsVersion}` : "", consents.privacyVersion ? `개인정보 ${consents.privacyVersion}` : ""].filter(Boolean).join(" · ");
+  const consentDate = consents.acceptedAt ? compactDateTime(consents.acceptedAt) : "";
+  const expiresText = session.expiresAt ? `${compactDateTime(session.expiresAt)}까지 유지` : "로그인 세션 유지";
+  els.b2bAccountPanel.innerHTML = `
+    <div class="b2b-account-head">
+      <div>
+        <strong>내 계정 기준</strong>
+        <small>${escapeHtml(`${username} · ${accountLabel}`)}</small>
+      </div>
+      <span>${escapeHtml(policy.expandedAllowed ? "확장 가능" : "기본 이용")}</span>
+    </div>
+    <div class="b2b-account-grid">
+      <article>
+        <span>계정</span>
+        <strong>${escapeHtml(company)}</strong>
+        <small>${escapeHtml(ownership)}</small>
+      </article>
+      <article>
+        <span>이용 기준</span>
+        <strong>${escapeHtml(`${rangeText} · ${limitText}`)}</strong>
+        <small>같은 조건 최근 리포트는 다시 열어도 차감하지 않습니다.</small>
+      </article>
+      <article>
+        <span>보관/동의</span>
+        <strong>고객 DB 기준</strong>
+        <small>${escapeHtml([consentVersion || "공용 계정", consentDate ? `${consentDate} 동의` : ""].filter(Boolean).join(" · "))}</small>
+      </article>
+      <article>
+        <span>보안 상태</span>
+        <strong>${escapeHtml(expiresText)}</strong>
+        <small>비밀번호 해시 저장 · IP/세션 식별값 해시 관리</small>
+      </article>
+    </div>
+  `;
+}
+
 function b2bSearchUsagePanelHtml() {
   if (isAdminRole()) return "";
   const quota = state.memberSearchQuota || {};
@@ -16873,6 +16927,7 @@ function renderB2BSearchPanel() {
       els.b2bOnboarding.hidden = true;
       els.b2bOnboarding.innerHTML = "";
     }
+    if (els.b2bAccountPanel) els.b2bAccountPanel.innerHTML = "";
     return;
   }
   renderB2BOnboardingPanel();
@@ -16941,6 +16996,7 @@ function renderB2BSearchPanel() {
       ? `${state.b2bSearchQuery || "검색"} 실행 중 · 경과 ${formatElapsed(progressMeta.elapsedSeconds) || "0초"} · ${b2bSearchProgressText(progressMeta)} · 완료 ${formatClockTime(progressMeta.estimatedCompleteAt)}`
       : current;
   }
+  renderB2BAccountPanel();
   renderB2BSearchHistoryPanel();
 }
 
@@ -18357,6 +18413,11 @@ async function loadSession() {
   state.session.memberId = session.memberId || "";
   state.session.accountType = session.accountType || "";
   state.session.profile = session.profile || null;
+  state.session.consents = session.consents || null;
+  state.session.memberCreatedAt = session.memberCreatedAt || "";
+  state.session.lastLoginAt = session.lastLoginAt || "";
+  state.session.sessionCreatedAt = session.sessionCreatedAt || "";
+  state.session.expiresAt = session.expiresAt || "";
   if (state.session.role === "admin" && state.session.roleLabel !== "마스터") state.session.roleLabel = "마스터";
   if (location.pathname === "/b2b" && state.session.role === "b2b") {
     state.activeTab = "report";
