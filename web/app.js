@@ -640,6 +640,29 @@ function isAdminRole() {
   return currentRole() === "admin";
 }
 
+function isGeneralB2BMember() {
+  return currentRole() === "b2b" && String(state.session?.accountType || "").toLowerCase() === "member";
+}
+
+function allowedB2BSearchRange(value = state.b2bSearchRange) {
+  if (isGeneralB2BMember()) return "1-10";
+  return value === "1-20" ? "1-20" : "1-10";
+}
+
+function syncB2BSearchRangeControl() {
+  if (!els.b2bSearchRangeInput) return;
+  const generalMember = isGeneralB2BMember();
+  const expandedOption = els.b2bSearchRangeInput.querySelector('option[value="1-20"]');
+  if (expandedOption) {
+    expandedOption.disabled = generalMember;
+    expandedOption.hidden = generalMember;
+  }
+  state.b2bSearchRange = allowedB2BSearchRange(state.b2bSearchRange || els.b2bSearchRangeInput.value || "1-10");
+  if (els.b2bSearchRangeInput.value !== state.b2bSearchRange) {
+    els.b2bSearchRangeInput.value = state.b2bSearchRange;
+  }
+}
+
 function roleTabs() {
   return ROLE_TABS[currentRole()] || ROLE_TABS.admin;
 }
@@ -700,6 +723,7 @@ function applyRoleUi() {
     els.adminStatus.textContent = `${roleLabel} 모드`;
   }
   syncRoleStaticLabels();
+  syncB2BSearchRangeControl();
 }
 
 async function fetchJson(url, options) {
@@ -16630,13 +16654,15 @@ function renderB2BSearchPanel() {
     return;
   }
   renderB2BOnboardingPanel();
+  syncB2BSearchRangeControl();
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) {
     els.b2bSearchInput.value = state.b2bSearchQuery || "";
   }
   if (els.b2bSearchRangeInput && document.activeElement !== els.b2bSearchRangeInput) {
-    els.b2bSearchRangeInput.value = state.b2bSearchRange || "1-10";
+    els.b2bSearchRangeInput.value = allowedB2BSearchRange(state.b2bSearchRange || "1-10");
   }
   if (els.b2bSearchResults) {
+    const selectedRange = allowedB2BSearchRange(state.b2bSearchRange || "1-10");
     const hasResult = Boolean(state.data?.run);
     const keyword = state.b2bSearchLoading
       ? (state.b2bSearchActiveKeyword || state.b2bSearchQuery || "").trim()
@@ -16658,7 +16684,9 @@ function renderB2BSearchPanel() {
       ? "네이버 노출, 예약 수량, 요일별 가격 표본을 새로 확인하고 있습니다."
       : hasResult
         ? "방금 실행한 검색 결과를 표시합니다. 다른 지역은 검색어 입력 후 새로 실행하세요."
-        : "기본 1~10위 또는 확장 1~20위 범위로 새 표본을 수집합니다.";
+        : isGeneralB2BMember()
+          ? "기본 1~10위 범위로 새 표본을 수집합니다. 일반 회원은 하루 2회까지 새 리포트를 만들 수 있습니다."
+          : "기본 1~10위 또는 확장 1~20위 범위로 새 표본을 수집합니다.";
     els.b2bSearchResults.innerHTML = `
       <div class="b2b-live-search-panel ${escapeHtml(panelClass)}">
         <div>
@@ -16668,8 +16696,9 @@ function renderB2BSearchPanel() {
           ${state.b2bSearchLoading ? b2bSearchProgressHtml(progressMeta) : ""}
         </div>
         <div class="b2b-live-search-meta">
-          <em>${escapeHtml((state.b2bSearchRange || "1-10") === "1-20" ? "확장 분석" : "기본 분석")}</em>
-          <em>${escapeHtml(state.b2bSearchRange || "1-10")}위</em>
+          <em>${escapeHtml(selectedRange === "1-20" ? "확장 분석" : "기본 분석")}</em>
+          <em>${escapeHtml(selectedRange)}위</em>
+          ${isGeneralB2BMember() ? `<em>일반 회원 하루 2회</em>` : ""}
           ${state.b2bSearchLoading && preview ? `<em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>` : ""}
           ${state.b2bSearchLoading && preview ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
@@ -16688,7 +16717,7 @@ function renderB2BSearchPanel() {
 }
 
 function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
-  const range = els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10";
+  const range = allowedB2BSearchRange(els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10");
   const detailRankRanges = range === "1-20" ? "1-20" : "1-10";
   return {
     keyword: String(keyword || "").trim(),
@@ -16712,7 +16741,10 @@ async function submitB2BSearch() {
     if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "검색할 지역명 또는 키워드를 입력하세요.";
     return;
   }
-  const range = els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10";
+  const range = allowedB2BSearchRange(els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10");
+  if (els.b2bSearchRangeInput && els.b2bSearchRangeInput.value !== range) {
+    els.b2bSearchRangeInput.value = range;
+  }
   state.b2bSearchQuery = keyword;
   state.b2bSearchRange = range;
   const payload = b2bLiveSearchPayload(keyword);
@@ -18113,7 +18145,7 @@ async function restoreB2BActiveSearch() {
     const requesterJob = status?.requesterJob || null;
     if (requesterJob && ["queued", "active", "cancelling"].includes(requesterJob.status)) {
       state.b2bSearchQuery = record.keyword || requesterJob.keyword || "";
-      state.b2bSearchRange = record.range || (String(requesterJob.detailRankRanges || "").includes("20") ? "1-20" : "1-10");
+      state.b2bSearchRange = allowedB2BSearchRange(record.range || (String(requesterJob.detailRankRanges || "").includes("20") ? "1-20" : "1-10"));
       state.b2bSearchLoading = true;
       state.b2bSearchRestored = true;
       state.b2bSearchCancelling = requesterJob.status === "cancelling";
@@ -18832,7 +18864,7 @@ async function loadB2BHistoryRun(runId) {
   state.activeRunId = runId;
   state.runs = data.run ? [{ ...data.run, id: runId }] : [];
   state.b2bSearchQuery = data.run?.keyword || state.b2bSearchQuery || "";
-  state.b2bSearchRange = String(data.run?.detailRankRanges || "").includes("20") ? "1-20" : "1-10";
+  state.b2bSearchRange = allowedB2BSearchRange(String(data.run?.detailRankRanges || "").includes("20") ? "1-20" : "1-10");
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) els.b2bSearchInput.value = state.b2bSearchQuery;
   if (els.b2bSearchRangeInput) els.b2bSearchRangeInput.value = state.b2bSearchRange;
   state.activeTab = "report";
@@ -19343,7 +19375,11 @@ function bindEvents() {
   document.addEventListener("change", (event) => {
     const b2bRange = event.target.closest("#b2bSearchRangeInput");
     if (b2bRange) {
-      state.b2bSearchRange = b2bRange.value === "1-20" ? "1-20" : "1-10";
+      state.b2bSearchRange = allowedB2BSearchRange(b2bRange.value);
+      syncB2BSearchRangeControl();
+      if (isGeneralB2BMember() && b2bRange.value !== state.b2bSearchRange && els.b2bSearchStatus) {
+        els.b2bSearchStatus.textContent = "일반 회원은 기본 분석 1~10위만 사용할 수 있습니다.";
+      }
       renderB2BSearchPanel();
       return;
     }

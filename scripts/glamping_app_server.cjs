@@ -59,6 +59,8 @@ const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USE
 const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B_PASSWORD || "0914").trim();
 const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENABLED || "1").trim())
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
+const B2B_MEMBER_DAILY_SEARCH_LIMIT = 2;
+const B2B_MEMBER_ALLOWED_RANK_RANGE = "1-10";
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
@@ -783,7 +785,8 @@ function b2bSubscriberFromPayload(payload = {}) {
     accountType: String(subscriber.accountType || "").trim(),
     role: USER_ROLES.b2b,
     ipHash: String(subscriber.ipHash || "").trim(),
-    sessionHash: String(subscriber.sessionHash || "").trim()
+    sessionHash: String(subscriber.sessionHash || "").trim(),
+    quotaCounted: subscriber.quotaCounted !== false
   };
 }
 
@@ -1848,6 +1851,76 @@ function b2bHistoryOwnerMatches(entry = {}, owner = {}) {
   return normalizeLoginId(entry.username) === normalizeLoginId(owner.username);
 }
 
+function isGeneralB2BMemberSession(session = {}) {
+  return normalizeUserRole(session?.role) === USER_ROLES.b2b
+    && String(session?.accountType || "").toLowerCase() === "member";
+}
+
+function kstDayKeyFromValue(value = Date.now()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const kstDateValue = new Date(date.getTime() + (9 * 60 * 60 * 1000));
+  return kstDateValue.toISOString().slice(0, 10);
+}
+
+function secondsUntilNextKstDay(nowMs = Date.now()) {
+  const kstDateValue = new Date(nowMs + (9 * 60 * 60 * 1000));
+  const nextUtcMs = Date.UTC(
+    kstDateValue.getUTCFullYear(),
+    kstDateValue.getUTCMonth(),
+    kstDateValue.getUTCDate() + 1
+  ) - (9 * 60 * 60 * 1000);
+  return Math.max(1, Math.ceil((nextUtcMs - nowMs) / 1000));
+}
+
+async function b2bMemberDailySearchQuota(session = {}) {
+  const dayKey = kstDayKeyFromValue();
+  const store = await readB2BSearchHistoryStore();
+  const counted = new Set();
+  for (const entry of store.entries || []) {
+    if (!memberMatchesSession(entry, session)) continue;
+    if (entry.quotaCounted === false) continue;
+    const entryDayKey = kstDayKeyFromValue(entry.createdAt || entry.completedAt || entry.sourceCompletedAt || "");
+    if (entryDayKey !== dayKey) continue;
+    const key = entry.runId || entry.searchSignature || entry.id;
+    if (key) counted.add(key);
+  }
+  const used = counted.size;
+  return {
+    limited: true,
+    limit: B2B_MEMBER_DAILY_SEARCH_LIMIT,
+    used,
+    remaining: Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - used),
+    dayKey,
+    resetAfterSeconds: secondsUntilNextKstDay()
+  };
+}
+
+async function assertB2BMemberSearchPolicy(crawlPayload = {}, session = {}, reusableSearch = null) {
+  if (!isGeneralB2BMemberSession(session)) {
+    return { limited: false, allowed: true };
+  }
+
+  const detailRankRanges = String(crawlPayload.detailRankRanges || "1-10").trim() || "1-10";
+  if (detailRankRanges !== B2B_MEMBER_ALLOWED_RANK_RANGE) {
+    const error = new Error("일반 계정은 기본 분석 1~10위만 사용할 수 있습니다.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const quota = await b2bMemberDailySearchQuota(session);
+  if (reusableSearch) {
+    return { ...quota, allowed: true, reuse: true };
+  }
+  if (quota.remaining <= 0) {
+    const error = new Error(`일반 계정은 하루 ${B2B_MEMBER_DAILY_SEARCH_LIMIT}회까지 새 리포트를 수집할 수 있습니다. 같은 조건의 최근 리포트는 검색 이력에서 다시 열람하세요.`);
+    error.statusCode = 429;
+    error.retryAfterSeconds = quota.resetAfterSeconds;
+    throw error;
+  }
+  return { ...quota, allowed: true, reuse: false };
+}
+
 async function publicB2BSearchHistoryForSession(session, limit = 20) {
   const store = await readB2BSearchHistoryStore();
   const entries = normalizeUserRole(session?.role) === USER_ROLES.admin
@@ -2004,7 +2077,7 @@ function b2bSearchResultSummary(data = {}) {
   };
 }
 
-async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId, data, crawlTiming }) {
+async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId, data, crawlTiming, quotaCounted = true }) {
   const now = new Date().toISOString();
   const store = await readB2BSearchHistoryStore();
   const owner = subscriber || session || {};
@@ -2044,13 +2117,14 @@ async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId
     sourceCompletedAt: crawlTiming?.reusedCompletedAt || now,
     reuseMode: crawlTiming?.reuseMode || "",
     reusedFromRunId: crawlTiming?.reusedRunId || "",
+    quotaCounted: quotaCounted !== false,
     crawlTiming: crawlTiming || null,
     resultSummary: b2bSearchResultSummary(data)
   };
   store.entries.push(entry);
   await writeB2BSearchHistoryStore(store);
 
-  if (owner?.memberId) {
+  if (owner?.memberId && quotaCounted !== false) {
     const memberStore = await readB2BMemberStore();
     const member = memberStore.members.find((item) => item.memberId === owner.memberId);
     if (member) {
@@ -2075,7 +2149,8 @@ async function ensureB2BSearchHistoryForJob(job = {}, result = {}) {
       payload: job.payload || {},
       runId: result.runId,
       data,
-      crawlTiming: result.crawlTiming || null
+      crawlTiming: result.crawlTiming || null,
+      quotaCounted: subscriber.quotaCounted !== false
     });
   }
 }
@@ -2091,7 +2166,8 @@ function b2bSubscriberFromContext(context = {}, payload = {}) {
     accountType: session.accountType || (session.username === B2B_USERNAME ? "demo" : "member"),
     role: USER_ROLES.b2b,
     ipHash: context.req ? clientIpHash(context.req) : "",
-    sessionHash: session.id ? crypto.createHash("sha256").update(`session:${session.id}`).digest("hex") : ""
+    sessionHash: session.id ? crypto.createHash("sha256").update(`session:${session.id}`).digest("hex") : "",
+    quotaCounted: context.quotaCounted !== false
   };
 }
 
@@ -3452,9 +3528,22 @@ async function runB2BCrawlerWithReuse(crawlPayload = {}) {
   return runCrawler(crawlPayload);
 }
 
+function b2bSearchResultReusedCollection(result = {}) {
+  const queueMode = String(result?.queueStatus?.mode || "");
+  return Boolean(result?.reuse || result?.crawlTiming?.reused)
+    || ["recent_reuse", "completed_reuse", "shared"].includes(queueMode);
+}
+
 async function runB2BSearch(payload = {}, context = {}) {
   const crawlPayload = b2bSearchPayload(payload);
-  const b2bSubscriber = b2bSubscriberFromContext(context, crawlPayload);
+  const signature = crawlPayloadSignature(crawlPayload);
+  const completedReuse = await findReusableCompletedB2BSearch(crawlPayload, { signature }).catch(() => null);
+  const sameSearchReuse = completedReuse || reusableRecentCrawlResult(signature) || findReusableCrawlJob(signature);
+  await assertB2BMemberSearchPolicy(crawlPayload, context.session || {}, sameSearchReuse);
+  const b2bSubscriber = b2bSubscriberFromContext({
+    ...context,
+    quotaCounted: !sameSearchReuse
+  }, crawlPayload);
   if (b2bSubscriber) crawlPayload.b2bSubscriber = b2bSubscriber;
   const result = await runB2BCrawlerWithReuse(crawlPayload);
   const runId = result?.runId || "";
@@ -3476,7 +3565,8 @@ async function runB2BSearch(payload = {}, context = {}) {
         payload: crawlPayload,
         runId,
         data,
-        crawlTiming: result.crawlTiming || null
+        crawlTiming: result.crawlTiming || null,
+        quotaCounted: (b2bSubscriber?.quotaCounted !== false) && !b2bSearchResultReusedCollection(result)
       })
     : null;
   return {
@@ -9438,8 +9528,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-role-route-guard"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-role-route-guard"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-member-search-limit"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-member-search-limit"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9771,7 +9861,13 @@ async function route(req, res) {
 
     send(res, 405, { error: "Method not allowed" });
   } catch (error) {
-    send(res, error.statusCode || 500, { error: error.message || String(error) });
+    const headers = error.retryAfterSeconds
+      ? { "Retry-After": String(Math.max(1, Number(error.retryAfterSeconds) || 1)) }
+      : {};
+    send(res, error.statusCode || 500, {
+      error: error.message || String(error),
+      retryAfterSeconds: error.retryAfterSeconds || undefined
+    }, "application/json; charset=utf-8", headers);
   }
 }
 
