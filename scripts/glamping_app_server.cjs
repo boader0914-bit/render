@@ -61,12 +61,16 @@ const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENA
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const LOGIN_FAILURE_LIMIT = 5;
+const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_LOCK_MS = 10 * 60 * 1000;
 const PASSWORD_HASH_ITERATIONS = 120000;
 const USER_ROLES = {
   admin: "admin",
   b2b: "b2b"
 };
 const sessions = new Map();
+const loginAttempts = new Map();
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
 let activeCrawlEstimate = null;
@@ -1741,6 +1745,76 @@ function clientIpHash(req) {
   return raw ? crypto.createHash("sha256").update(`ip:${raw}`).digest("hex") : "";
 }
 
+function loginAttemptKey(req, username = "") {
+  const loginId = normalizeLoginId(username) || "blank";
+  const ipHash = clientIpHash(req) || "unknown";
+  return `${loginId}:${ipHash}`;
+}
+
+function cleanupLoginAttempts(now = Date.now()) {
+  for (const [key, attempt] of loginAttempts) {
+    const lockedUntil = Number(attempt?.lockedUntil || 0);
+    const lastFailedAt = Number(attempt?.lastFailedAt || attempt?.firstFailedAt || 0);
+    const staleAfter = Math.max(lockedUntil, lastFailedAt) + LOGIN_FAILURE_WINDOW_MS + LOGIN_LOCK_MS;
+    if (!Number.isFinite(staleAfter) || staleAfter <= now) loginAttempts.delete(key);
+  }
+}
+
+function loginAttemptStatus(req, username = "") {
+  const now = Date.now();
+  cleanupLoginAttempts(now);
+  const key = loginAttemptKey(req, username);
+  const attempt = loginAttempts.get(key);
+  if (!attempt) return { key, locked: false, retryAfterSeconds: 0, count: 0 };
+  const lockedUntil = Number(attempt.lockedUntil || 0);
+  if (lockedUntil > now) {
+    return {
+      key,
+      locked: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((lockedUntil - now) / 1000)),
+      count: Number(attempt.count || 0)
+    };
+  }
+  if (Number(attempt.firstFailedAt || 0) && now - Number(attempt.firstFailedAt || 0) > LOGIN_FAILURE_WINDOW_MS) {
+    loginAttempts.delete(key);
+    return { key, locked: false, retryAfterSeconds: 0, count: 0 };
+  }
+  return { key, locked: false, retryAfterSeconds: 0, count: Number(attempt.count || 0) };
+}
+
+function recordLoginFailure(req, username = "") {
+  const now = Date.now();
+  cleanupLoginAttempts(now);
+  const key = loginAttemptKey(req, username);
+  const previous = loginAttempts.get(key);
+  const windowExpired = !previous?.firstFailedAt || now - Number(previous.firstFailedAt || 0) > LOGIN_FAILURE_WINDOW_MS;
+  const attempt = windowExpired
+    ? { firstFailedAt: now, count: 0, lockedUntil: 0 }
+    : { ...previous };
+  attempt.count = Number(attempt.count || 0) + 1;
+  attempt.lastFailedAt = now;
+  if (attempt.count >= LOGIN_FAILURE_LIMIT) {
+    attempt.lockedUntil = now + LOGIN_LOCK_MS;
+  }
+  loginAttempts.set(key, attempt);
+  return loginAttemptStatus(req, username);
+}
+
+function clearLoginFailures(req, username = "") {
+  loginAttempts.delete(loginAttemptKey(req, username));
+}
+
+function loginLockMessage(status = {}) {
+  const seconds = Math.max(1, Number(status.retryAfterSeconds || Math.ceil(LOGIN_LOCK_MS / 1000)));
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return `로그인 시도가 많습니다. ${minutes}분 후 다시 시도하세요.`;
+}
+
+function loginLockHeaders(status = {}) {
+  if (!status.locked) return {};
+  return { "Retry-After": String(Math.max(1, Number(status.retryAfterSeconds || Math.ceil(LOGIN_LOCK_MS / 1000)))) };
+}
+
 function publicB2BSearchHistoryEntry(entry = {}) {
   return {
     id: entry.id || "",
@@ -2212,7 +2286,7 @@ function createSession(username, role = USER_ROLES.admin, meta = {}) {
 
 function publicSession(session) {
   if (!session) {
-    return { authenticated: false, username: "", role: "", roleLabel: "", memberId: "", accountType: "", profile: null };
+    return { authenticated: false, username: "", role: "", roleLabel: "", memberId: "", accountType: "", profile: null, expiresAt: "" };
   }
   const role = normalizeUserRole(session.role);
   return {
@@ -2222,7 +2296,8 @@ function publicSession(session) {
     roleLabel: userRoleLabel(role),
     memberId: session.memberId || "",
     accountType: session.accountType || (role === USER_ROLES.admin ? "master" : "member"),
-    profile: session.profile || null
+    profile: session.profile || null,
+    expiresAt: session.expiresAt ? new Date(session.expiresAt).toISOString() : ""
   };
 }
 
@@ -2389,6 +2464,8 @@ function forbiddenPage(message = "") {
 
 function loginPage(message = "") {
   const escapedMessage = String(message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lockMinutes = Math.max(1, Math.ceil(LOGIN_LOCK_MS / 60000));
+  const sessionHours = Math.max(1, Math.round(SESSION_TTL_MS / 3600000));
   return `<!doctype html>
 <html lang="ko">
 <head>
@@ -2525,6 +2602,14 @@ function loginPage(message = "") {
     button:hover { background: #2f76df; }
     button:disabled { opacity: .6; cursor: wait; }
     .link { display: block; margin-top: 18px; color: #91c4ff; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
+    .security-note {
+      margin: 2px 0 0;
+      color: #8ea0b8;
+      font-size: 12px;
+      font-weight: 750;
+      line-height: 1.5;
+      word-break: keep-all;
+    }
     .error { min-height: 20px; color: #ff8b8b; font-size: 13px; font-weight: 900; line-height: 1.35; }
     @media (max-width: 760px) {
       body { align-items: stretch; padding: 14px; }
@@ -2553,6 +2638,7 @@ function loginPage(message = "") {
         <label>아이디<input name="username" autocomplete="username" autofocus required></label>
         <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
         <button type="submit">로그인</button>
+        <p class="security-note">보안을 위해 ${LOGIN_FAILURE_LIMIT}회 이상 실패하면 ${lockMinutes}분간 로그인이 제한됩니다. 로그인 세션은 최대 ${sessionHours}시간 유지됩니다.</p>
         <div class="error">${escapedMessage}</div>
       </form>
       <a class="link" href="/signup">회원가입</a>
@@ -2838,18 +2924,21 @@ function signupScript() {
 })();`;
 }
 
-function sendLogin(res, status = 200, message = "") {
-  return send(res, status, loginPage(message), "text/html; charset=utf-8");
+function sendLogin(res, status = 200, message = "", extraHeaders = {}) {
+  return send(res, status, loginPage(message), "text/html; charset=utf-8", extraHeaders);
 }
 
 function requireLogin(req, res, reqUrl) {
-  if (isAuthenticated(req)) return true;
+  const hadSessionCookie = Boolean(parseCookies(req)[SESSION_COOKIE_NAME]);
+  if (getSession(req)) return true;
+  const headers = hadSessionCookie ? { "Set-Cookie": clearSessionCookie() } : {};
+  const message = hadSessionCookie ? "세션이 만료되었습니다. 다시 로그인하세요." : "";
   if (req.method === "GET" && acceptsHtml(req)) {
-    sendLogin(res, 200);
+    sendLogin(res, 200, message, headers);
   } else if (req.method === "HEAD") {
-    sendHead(res, 401);
+    sendHead(res, 401, "application/json; charset=utf-8", headers);
   } else {
-    send(res, 401, { error: "로그인이 필요합니다." });
+    send(res, 401, { error: message || "로그인이 필요합니다." }, "application/json; charset=utf-8", headers);
   }
   return false;
 }
@@ -9322,8 +9411,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-onboarding-v1"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-onboarding-v1"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-auth-security-v1"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-auth-security-v1"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9400,11 +9489,27 @@ async function route(req, res) {
       const payload = await parseLoginBody(req);
       const username = String(payload.username || "").trim();
       const password = String(payload.password || "").trim();
+      const lockStatus = loginAttemptStatus(req, username);
+      if (lockStatus.locked) {
+        const message = loginLockMessage(lockStatus);
+        const headers = loginLockHeaders(lockStatus);
+        if (reqUrl.pathname === "/login") return sendLogin(res, 429, message, headers);
+        return send(res, 429, { error: message, retryAfterSeconds: lockStatus.retryAfterSeconds }, "application/json; charset=utf-8", headers);
+      }
       const account = await authenticatedUserForCredentials(username, password);
       if (!account) {
-        if (reqUrl.pathname === "/login") return sendLogin(res, 401, "아이디 또는 비밀번호가 올바르지 않습니다.");
-        return send(res, 401, { error: "아이디 또는 비밀번호가 올바르지 않습니다." });
+        const failureStatus = recordLoginFailure(req, username);
+        if (failureStatus.locked) {
+          const message = loginLockMessage(failureStatus);
+          const headers = loginLockHeaders(failureStatus);
+          if (reqUrl.pathname === "/login") return sendLogin(res, 429, message, headers);
+          return send(res, 429, { error: message, retryAfterSeconds: failureStatus.retryAfterSeconds }, "application/json; charset=utf-8", headers);
+        }
+        const message = "아이디 또는 비밀번호가 올바르지 않습니다.";
+        if (reqUrl.pathname === "/login") return sendLogin(res, 401, message);
+        return send(res, 401, { error: message });
       }
+      clearLoginFailures(req, username);
       const sessionId = createSession(account.username, account.role, account);
       if (reqUrl.pathname === "/login") {
         return send(res, 302, "", "text/plain; charset=utf-8", {
@@ -9426,9 +9531,10 @@ async function route(req, res) {
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/login") {
+      const hadSessionCookie = Boolean(parseCookies(req)[SESSION_COOKIE_NAME]);
       const session = getSession(req);
       if (session) return send(res, 302, "", "text/plain; charset=utf-8", { Location: redirectPathForRole(session.role) });
-      return sendLogin(res);
+      return sendLogin(res, 200, hadSessionCookie ? "세션이 만료되었습니다. 다시 로그인하세요." : "", hadSessionCookie ? { "Set-Cookie": clearSessionCookie() } : {});
     }
 
     if (!requireLogin(req, res, reqUrl)) return;
