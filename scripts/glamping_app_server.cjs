@@ -608,6 +608,35 @@ function resolveCrawlJob(result, job, mode = "completed") {
   };
 }
 
+function b2bSubscriberFromPayload(payload = {}) {
+  const subscriber = payload.b2bSubscriber && typeof payload.b2bSubscriber === "object" ? payload.b2bSubscriber : null;
+  const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId || subscriber?.clientRequestId);
+  if (!subscriber || !clientRequestId) return null;
+  return {
+    clientRequestId,
+    memberId: String(subscriber.memberId || "").trim(),
+    username: String(subscriber.username || "").trim(),
+    accountType: String(subscriber.accountType || "").trim(),
+    role: USER_ROLES.b2b,
+    ipHash: String(subscriber.ipHash || "").trim(),
+    sessionHash: String(subscriber.sessionHash || "").trim()
+  };
+}
+
+function b2bSubscriberKey(subscriber = {}) {
+  const identity = subscriber.memberId || normalizeLoginId(subscriber.username);
+  return [subscriber.clientRequestId || "", identity || "", subscriber.sessionHash || ""].join("|");
+}
+
+function addB2BSubscriberToJob(job, payload = {}) {
+  if (!job) return;
+  const subscriber = b2bSubscriberFromPayload(payload);
+  if (!subscriber) return;
+  const key = b2bSubscriberKey(subscriber);
+  if (!key.trim()) return;
+  job.b2bSubscribers.set(key, subscriber);
+}
+
 function createCrawlJob(payload = {}, signature = "") {
   const estimate = estimateCrawlCompletion(payload, readCrawlTimingStoreSync());
   const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
@@ -626,10 +655,12 @@ function createCrawlJob(payload = {}, signature = "") {
     startedAt: null,
     waiterCount: 1,
     clientRequestIds: new Set(clientRequestId ? [clientRequestId] : []),
+    b2bSubscribers: new Map(),
     promise: null,
     resolve: null,
     reject: null
   };
+  addB2BSubscriberToJob(job, payload);
   job.promise = new Promise((resolve, reject) => {
     job.resolve = resolve;
     job.reject = reject;
@@ -642,6 +673,7 @@ function attachCrawlJobClient(job, payload = {}) {
   job.waiterCount = Math.max(1, Number(job.waiterCount || 1) + 1);
   const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId);
   if (clientRequestId) job.clientRequestIds.add(clientRequestId);
+  addB2BSubscriberToJob(job, payload);
 }
 
 function startNextCrawlJob() {
@@ -692,6 +724,9 @@ function startCrawlJob(job) {
     if (!failure && result?.runId) {
       cleanupRecentCrawlResults();
       recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
+      await ensureB2BSearchHistoryForJob(job, result).catch((error) => {
+        console.warn(`Could not ensure B2B history for ${result.runId}: ${error.message || error}`);
+      });
     }
     activeCrawlPromise = null;
     activeCrawlStartedAt = null;
@@ -1545,6 +1580,7 @@ function publicB2BSearchHistoryEntry(entry = {}) {
     id: entry.id || "",
     runId: entry.runId || "",
     keyword: entry.keyword || "",
+    clientRequestId: entry.clientRequestId || "",
     runLabel: entry.runLabel || "",
     regionLabel: entry.regionLabel || "",
     checkIn: entry.checkIn || "",
@@ -1564,6 +1600,12 @@ function memberMatchesSession(entry = {}, session = {}) {
   if (!session) return false;
   if (entry.memberId && session.memberId) return entry.memberId === session.memberId;
   return normalizeLoginId(entry.username) === normalizeLoginId(session.username);
+}
+
+function b2bHistoryOwnerMatches(entry = {}, owner = {}) {
+  if (!owner) return false;
+  if (entry.memberId && owner.memberId) return entry.memberId === owner.memberId;
+  return normalizeLoginId(entry.username) === normalizeLoginId(owner.username);
 }
 
 async function publicB2BSearchHistoryForSession(session, limit = 20) {
@@ -1592,18 +1634,27 @@ function b2bSearchResultSummary(data = {}) {
   };
 }
 
-async function appendB2BSearchHistory({ session, req, payload, runId, data, crawlTiming }) {
+async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId, data, crawlTiming }) {
   const now = new Date().toISOString();
   const store = await readB2BSearchHistoryStore();
+  const owner = subscriber || session || {};
+  const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId || subscriber?.clientRequestId);
+  const existing = clientRequestId
+    ? store.entries.find((entry) => entry.runId === runId
+        && entry.clientRequestId === clientRequestId
+        && b2bHistoryOwnerMatches(entry, owner))
+    : null;
+  if (existing) return publicB2BSearchHistoryEntry(existing);
   const entry = {
     id: `s_${crypto.randomBytes(9).toString("base64url")}`,
-    memberId: session?.memberId || "",
-    username: session?.username || "",
-    accountType: session?.accountType || (session?.username === B2B_USERNAME ? "demo" : "member"),
+    memberId: owner?.memberId || "",
+    username: owner?.username || "",
+    accountType: owner?.accountType || (owner?.username === B2B_USERNAME ? "demo" : "member"),
     role: USER_ROLES.b2b,
-    ipHash: clientIpHash(req),
-    sessionHash: session?.id ? crypto.createHash("sha256").update(`session:${session.id}`).digest("hex") : "",
+    ipHash: owner?.ipHash || (req ? clientIpHash(req) : ""),
+    sessionHash: owner?.sessionHash || (session?.id ? crypto.createHash("sha256").update(`session:${session.id}`).digest("hex") : ""),
     keyword: payload.keyword || "",
+    clientRequestId,
     checkIn: payload.checkIn || "",
     checkOut: payload.checkOut || "",
     detailRankRanges: payload.detailRankRanges || "",
@@ -1623,9 +1674,9 @@ async function appendB2BSearchHistory({ session, req, payload, runId, data, craw
   store.entries.push(entry);
   await writeB2BSearchHistoryStore(store);
 
-  if (session?.memberId) {
+  if (owner?.memberId) {
     const memberStore = await readB2BMemberStore();
-    const member = memberStore.members.find((item) => item.memberId === session.memberId);
+    const member = memberStore.members.find((item) => item.memberId === owner.memberId);
     if (member) {
       member.searchCount = Number(member.searchCount || 0) + 1;
       member.updatedAt = now;
@@ -1634,6 +1685,38 @@ async function appendB2BSearchHistory({ session, req, payload, runId, data, craw
   }
 
   return publicB2BSearchHistoryEntry(entry);
+}
+
+const appendB2BSearchHistory = ensureB2BSearchHistory;
+
+async function ensureB2BSearchHistoryForJob(job = {}, result = {}) {
+  if (!result?.runId || !job?.b2bSubscribers?.size) return;
+  const data = await loadRun(result.runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true });
+  if (!data) return;
+  for (const subscriber of job.b2bSubscribers.values()) {
+    await ensureB2BSearchHistory({
+      subscriber,
+      payload: job.payload || {},
+      runId: result.runId,
+      data,
+      crawlTiming: result.crawlTiming || null
+    });
+  }
+}
+
+function b2bSubscriberFromContext(context = {}, payload = {}) {
+  const session = context.session || {};
+  const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId);
+  if (!clientRequestId || normalizeUserRole(session.role) !== USER_ROLES.b2b) return null;
+  return {
+    clientRequestId,
+    memberId: session.memberId || "",
+    username: session.username || "",
+    accountType: session.accountType || (session.username === B2B_USERNAME ? "demo" : "member"),
+    role: USER_ROLES.b2b,
+    ipHash: context.req ? clientIpHash(context.req) : "",
+    sessionHash: session.id ? crypto.createHash("sha256").update(`session:${session.id}`).digest("hex") : ""
+  };
 }
 
 function summarizeTrafficApiCheck(result, configured) {
@@ -2764,6 +2847,8 @@ function b2bMyLodgeCandidateItems(data = {}, targetName = "") {
 
 async function runB2BSearch(payload = {}, context = {}) {
   const crawlPayload = b2bSearchPayload(payload);
+  const b2bSubscriber = b2bSubscriberFromContext(context, crawlPayload);
+  if (b2bSubscriber) crawlPayload.b2bSubscriber = b2bSubscriber;
   const result = await runCrawler(crawlPayload);
   const runId = result?.runId || "";
   if (!runId) {
@@ -8736,8 +8821,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-search-queue-reuse"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-search-queue-reuse"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-mobile-search-restore"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-mobile-search-restore"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

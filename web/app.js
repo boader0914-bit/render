@@ -43,6 +43,7 @@ const state = {
   b2bSearchClientRequestId: "",
   b2bSearchServerStatus: null,
   b2bSearchStatusPolling: false,
+  b2bSearchRestored: false,
   b2bSearchPending: null,
   b2bSearchCancelling: false,
   b2bMyLodgeDraft: null,
@@ -898,6 +899,48 @@ function makeB2BSearchClientRequestId() {
   return `b2b_${Date.now().toString(36)}_${random}`;
 }
 
+function b2bActiveSearchStorageKey() {
+  const owner = state.session?.memberId || state.session?.username || "";
+  return owner ? `glamping:b2b:active-search:${owner}` : "";
+}
+
+function readB2BActiveSearchRecord() {
+  const key = b2bActiveSearchStorageKey();
+  if (!key || typeof localStorage === "undefined") return null;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    if (!parsed || parsed.version !== 1 || !parsed.clientRequestId) return null;
+    if (Number(parsed.expiresAt || 0) && Number(parsed.expiresAt) < Date.now()) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeB2BActiveSearchRecord(record = {}) {
+  const key = b2bActiveSearchStorageKey();
+  if (!key || typeof localStorage === "undefined" || !record.clientRequestId) return;
+  const next = {
+    version: 1,
+    ...record,
+    updatedAt: Date.now(),
+    expiresAt: Date.now() + 12 * 60 * 60 * 1000
+  };
+  localStorage.setItem(key, JSON.stringify(next));
+}
+
+function clearB2BActiveSearchRecord(clientRequestId = "") {
+  const key = b2bActiveSearchStorageKey();
+  if (!key || typeof localStorage === "undefined") return;
+  const current = readB2BActiveSearchRecord();
+  if (!clientRequestId || !current || current.clientRequestId === clientRequestId) {
+    localStorage.removeItem(key);
+  }
+}
+
 function b2bSearchStatusUrl() {
   const id = state.b2bSearchClientRequestId || "";
   return id ? `/api/b2b-search/status?clientRequestId=${encodeURIComponent(id)}` : "/api/b2b-search/status";
@@ -908,10 +951,40 @@ async function refreshB2BSearchServerStatus() {
   state.b2bSearchStatusPolling = true;
   try {
     state.b2bSearchServerStatus = await fetchJson(b2bSearchStatusUrl());
+    if (state.b2bSearchRestored
+      && !state.b2bSearchServerStatus?.requesterJob
+      && !state.b2bSearchServerStatus?.active) {
+      await finishRestoredB2BSearch();
+    }
   } catch {
     // The local estimate remains available if status polling is briefly unavailable.
   } finally {
     state.b2bSearchStatusPolling = false;
+  }
+}
+
+async function finishRestoredB2BSearch() {
+  const clientRequestId = state.b2bSearchClientRequestId || "";
+  if (!clientRequestId) return;
+  await loadMemberSearchHistory();
+  const match = (state.memberSearchHistory || []).find((entry) => entry.clientRequestId === clientRequestId);
+  state.b2bSearchLoading = false;
+  state.b2bSearchRestored = false;
+  state.b2bSearchStartedAt = 0;
+  state.b2bSearchPreview = null;
+  state.b2bSearchActiveKeyword = "";
+  state.b2bSearchActiveRange = "";
+  state.b2bSearchClientRequestId = "";
+  state.b2bSearchServerStatus = null;
+  clearB2BSearchTimer();
+  clearB2BActiveSearchRecord(clientRequestId);
+  if (match?.runId) {
+    await loadB2BHistoryRun(match.runId);
+    return;
+  }
+  renderB2BSearchPanel();
+  if (els.b2bSearchStatus) {
+    els.b2bSearchStatus.textContent = "이전 검색을 찾을 수 없습니다. 같은 조건으로 다시 실행하세요.";
   }
 }
 
@@ -16615,6 +16688,14 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
   state.b2bSearchRange = range;
   state.b2bSearchStartedAt = Date.now();
   state.b2bSearchPreview = initialPreview;
+  writeB2BActiveSearchRecord({
+    clientRequestId,
+    keyword,
+    range,
+    payload,
+    preview: initialPreview,
+    startedAt: state.b2bSearchStartedAt
+  });
   if (submitButton) submitButton.disabled = false;
   startB2BSearchTimer();
   refreshB2BSearchServerStatus().then(() => renderB2BSearchPanel());
@@ -16624,11 +16705,20 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
     els.b2bSearchStatus.textContent = `${keyword} 검색 준비 중입니다. 예상 시간을 보정하고 있습니다.`;
   }
   let finalErrorMessage = "";
+  let clearActiveSearch = false;
   try {
     const preview = await fetchB2BCrawlEstimate(payload);
     if (requestId !== state.b2bSearchRequestId) return;
     state.b2bSearchStartedAt = Date.now();
     state.b2bSearchPreview = preview;
+    writeB2BActiveSearchRecord({
+      clientRequestId,
+      keyword,
+      range,
+      payload,
+      preview,
+      startedAt: state.b2bSearchStartedAt
+    });
     renderB2BSearchPanel();
     if (els.b2bSearchStatus) {
       const basis = preview.estimateBasis?.timing?.source === "measured" ? "최근 수집 이력 기준" : "조건 모델 기준";
@@ -16644,6 +16734,7 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
     state.activeRunId = result.runId || state.data?.run?.id || null;
     state.runs = state.data?.run ? [{ ...state.data.run, id: state.activeRunId }] : [];
     await loadMemberSearchHistory();
+    clearActiveSearch = true;
     state.activeTab = "report";
     setStatus("검색 완료");
     renderAll();
@@ -16662,6 +16753,8 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
     state.b2bSearchClientRequestId = "";
     state.b2bSearchServerStatus = null;
     state.b2bSearchStatusPolling = false;
+    state.b2bSearchRestored = false;
+    if (clearActiveSearch) clearB2BActiveSearchRecord(clientRequestId);
     clearB2BSearchTimer();
     if (submitButton) submitButton.disabled = false;
     renderB2BSearchPanel();
@@ -16679,6 +16772,7 @@ function keepCurrentB2BSearch() {
 async function cancelCurrentB2BSearchAndRestart() {
   const pending = state.b2bSearchPending;
   if (!pending || state.b2bSearchCancelling) return;
+  const activeClientRequestId = state.b2bSearchClientRequestId || "";
   state.b2bSearchPending = null;
   state.b2bSearchCancelling = true;
   state.b2bSearchRequestId += 1;
@@ -16710,6 +16804,8 @@ async function cancelCurrentB2BSearchAndRestart() {
     state.b2bSearchClientRequestId = "";
     state.b2bSearchServerStatus = null;
     state.b2bSearchStatusPolling = false;
+    state.b2bSearchRestored = false;
+    clearB2BActiveSearchRecord(activeClientRequestId);
     clearB2BSearchTimer();
   }
   if (canStartNext) await startB2BSearchRequest(pending.payload, pending.keyword, pending.range);
@@ -17935,6 +18031,45 @@ async function loadMemberSearchHistory() {
   } catch {
     state.memberSearchHistory = [];
   }
+}
+
+async function restoreB2BActiveSearch() {
+  if (isAdminRole()) return false;
+  const record = readB2BActiveSearchRecord();
+  if (!record) return false;
+  state.b2bSearchClientRequestId = record.clientRequestId || "";
+  try {
+    const status = await fetchJson(b2bSearchStatusUrl());
+    const requesterJob = status?.requesterJob || null;
+    if (requesterJob && ["queued", "active", "cancelling"].includes(requesterJob.status)) {
+      state.b2bSearchQuery = record.keyword || requesterJob.keyword || "";
+      state.b2bSearchRange = record.range || (String(requesterJob.detailRankRanges || "").includes("20") ? "1-20" : "1-10");
+      state.b2bSearchLoading = true;
+      state.b2bSearchRestored = true;
+      state.b2bSearchCancelling = requesterJob.status === "cancelling";
+      state.b2bSearchServerStatus = status;
+      state.b2bSearchActiveKeyword = state.b2bSearchQuery;
+      state.b2bSearchActiveRange = state.b2bSearchRange;
+      state.b2bSearchStartedAt = Number(record.startedAt || Date.now());
+      state.b2bSearchPreview = record.preview || crawlPreviewMeta(record.payload || b2bLiveSearchPayload(state.b2bSearchQuery));
+      if (els.b2bSearchInput) els.b2bSearchInput.value = state.b2bSearchQuery;
+      if (els.b2bSearchRangeInput) els.b2bSearchRangeInput.value = state.b2bSearchRange;
+      startB2BSearchTimer();
+      renderB2BSearchPanel();
+      if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${state.b2bSearchQuery || "검색"} 진행 상태를 복구했습니다.`;
+      return true;
+    }
+    const match = (state.memberSearchHistory || []).find((entry) => entry.clientRequestId === record.clientRequestId);
+    clearB2BActiveSearchRecord(record.clientRequestId);
+    state.b2bSearchClientRequestId = "";
+    if (match?.runId) {
+      await loadB2BHistoryRun(match.runId);
+      return true;
+    }
+  } catch {
+    // Keep the saved record. A short network interruption should not discard a running search.
+  }
+  return false;
 }
 
 async function loadHistoryOps() {
@@ -19236,7 +19371,8 @@ async function init() {
       state.activeRunId = null;
       state.data = null;
       await loadMemberSearchHistory();
-      renderB2BEmptyPanels();
+      const restored = await restoreB2BActiveSearch();
+      if (!restored) renderB2BEmptyPanels();
     }
     renderB2BSearchPanel();
     if (isAdminRole()) pollCrawlStatusUntilIdle(false);
