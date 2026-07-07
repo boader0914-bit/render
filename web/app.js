@@ -208,6 +208,7 @@ const els = {
   adminStatus: document.getElementById("adminStatus"),
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
   b2bSearchPanel: document.getElementById("b2bSearchPanel"),
+  b2bOnboarding: document.getElementById("b2bOnboarding"),
   b2bSearchForm: document.getElementById("b2bSearchForm"),
   b2bSearchInput: document.getElementById("b2bSearchInput"),
   b2bSearchRangeInput: document.getElementById("b2bSearchRangeInput"),
@@ -16567,7 +16568,53 @@ function renderB2BSearchHistoryPanel() {
           </button>
         `).join("")}
       </div>
-    ` : rows.length ? "" : `<p>아직 이 아이디로 저장된 검색 기록이 없습니다.</p>`}
+    ` : rows.length ? "" : `<p>검색 완료 후 이 아이디의 최근 리포트가 여기에 쌓입니다.</p>`}
+  `;
+}
+
+function renderB2BOnboardingPanel() {
+  if (!els.b2bOnboarding) return;
+  const publicMode = !isAdminRole();
+  const hasResult = Boolean(state.data?.run);
+  const shouldShow = publicMode && !hasResult && !state.b2bSearchLoading;
+  els.b2bOnboarding.hidden = !shouldShow;
+  if (!shouldShow) {
+    els.b2bOnboarding.innerHTML = "";
+    return;
+  }
+  els.b2bOnboarding.innerHTML = `
+    <div class="b2b-onboarding-head">
+      <span>처음 이용하기</span>
+      <strong>지역을 검색하면 경쟁 리포트를 새로 수집합니다.</strong>
+      <p>검색 전 관심숙소를 먼저 등록하면 검색 후 지역 평균·상위권·하위권 매출 표본과 바로 비교할 수 있습니다.</p>
+    </div>
+    <div class="b2b-onboarding-steps" aria-label="이용 순서">
+      <article>
+        <b>1</b>
+        <div>
+          <strong>지역/업종 검색</strong>
+          <span>예: 포천글램핑, 경주풀빌라</span>
+        </div>
+      </article>
+      <article>
+        <b>2</b>
+        <div>
+          <strong>리포트 확인</strong>
+          <span>예약율, 예상 매출, 순위, 수요 흐름</span>
+        </div>
+      </article>
+      <article>
+        <b>3</b>
+        <div>
+          <strong>관심숙소 비교</strong>
+          <span>최대 2곳을 등록해 시장 평균과 비교</span>
+        </div>
+      </article>
+    </div>
+    <div class="b2b-onboarding-actions">
+      <button class="primary-button" type="button" data-b2b-onboarding-focus>검색어 입력하기</button>
+      <button class="secondary-button" type="button" data-b2b-onboarding-lodge>관심숙소 먼저 등록</button>
+    </div>
   `;
 }
 
@@ -16575,7 +16622,14 @@ function renderB2BSearchPanel() {
   if (!els.b2bSearchPanel) return;
   const publicMode = !isAdminRole();
   els.b2bSearchPanel.hidden = !publicMode;
-  if (!publicMode) return;
+  if (!publicMode) {
+    if (els.b2bOnboarding) {
+      els.b2bOnboarding.hidden = true;
+      els.b2bOnboarding.innerHTML = "";
+    }
+    return;
+  }
+  renderB2BOnboardingPanel();
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) {
     els.b2bSearchInput.value = state.b2bSearchQuery || "";
   }
@@ -16599,12 +16653,12 @@ function renderB2BSearchPanel() {
       ? `${keyword || "입력 지역"} 검색 중`
       : hasResult
         ? `${keyword} 검색 결과`
-        : "지역명을 입력해 경쟁 리포트를 생성하세요";
+        : "검색할 지역을 입력하세요";
     const copy = state.b2bSearchLoading
       ? "네이버 노출, 예약 수량, 요일별 가격 표본을 새로 확인하고 있습니다."
       : hasResult
         ? "방금 실행한 검색 결과를 표시합니다. 다른 지역은 검색어 입력 후 새로 실행하세요."
-        : "검색 시 현재 조건으로 네이버 노출, 예약 수량, 가격 표본을 새로 수집합니다.";
+        : "기본 1~10위 또는 확장 1~20위 범위로 새 표본을 수집합니다.";
     els.b2bSearchResults.innerHTML = `
       <div class="b2b-live-search-panel ${escapeHtml(panelClass)}">
         <div>
@@ -16624,7 +16678,7 @@ function renderB2BSearchPanel() {
     `;
   }
   if (els.b2bSearchStatus) {
-    const current = state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "검색어를 입력하면 새 경쟁 리포트를 수집합니다.";
+    const current = state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "지역/키워드를 입력하면 현재 기준으로 새 경쟁 리포트를 수집합니다.";
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
     els.b2bSearchStatus.textContent = state.b2bSearchLoading
       ? `${state.b2bSearchQuery || "검색"} 실행 중 · 경과 ${formatElapsed(progressMeta.elapsedSeconds) || "0초"} · ${b2bSearchProgressText(progressMeta)} · 완료 ${formatClockTime(progressMeta.estimatedCompleteAt)}`
@@ -16830,7 +16884,7 @@ async function cancelCurrentB2BSearchAndRestart() {
 function renderB2BEmptyPanels() {
   if (isAdminRole()) return;
   const emptyMessages = {
-    report: "검색어를 입력하면 새 경쟁 리포트를 수집합니다.",
+    report: "지역을 검색하거나 관심숙소를 먼저 등록하세요.",
     rank: "검색 후 업체 순위를 표시합니다.",
     map: "검색 후 지역 지도와 경쟁권을 표시합니다.",
     demand: "검색 후 수요 전망을 표시합니다."
@@ -19131,6 +19185,20 @@ function bindEvents() {
       renderB2BSearchPanel();
       els.b2bSearchPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
       if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `${state.b2bSearchQuery} 검색어를 적용했습니다. 범위를 확인한 뒤 검색 실행을 누르세요.`;
+      return;
+    }
+    if (event.target.closest("[data-b2b-onboarding-focus]")) {
+      els.b2bSearchPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => els.b2bSearchInput?.focus(), 120);
+      if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = "지역명과 업종을 함께 입력하면 더 정확합니다. 예: 포천글램핑";
+      return;
+    }
+    if (event.target.closest("[data-b2b-onboarding-lodge]")) {
+      setActiveTab("report");
+      window.setTimeout(() => {
+        const target = document.querySelector(".b2b-my-lodge-board") || els.reportBody;
+        target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
       return;
     }
     if (event.target.closest("[data-b2b-search-continue]")) {

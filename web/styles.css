@@ -178,6 +178,125 @@ a {
   box-shadow: var(--soft-shadow);
 }
 
+.b2b-onboarding {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid #d5e3f7;
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(49, 130, 246, .08), rgba(20, 184, 166, .06)),
+    #f8fbff;
+  padding: 14px;
+}
+
+.b2b-onboarding[hidden] {
+  display: none;
+}
+
+.b2b-onboarding-head {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.b2b-onboarding-head > span {
+  justify-self: start;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #b8d9d3;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #027a48;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.b2b-onboarding-head strong {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.2;
+  word-break: keep-all;
+}
+
+.b2b-onboarding-head p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 820;
+  line-height: 1.5;
+  word-break: keep-all;
+}
+
+.b2b-onboarding-steps {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-onboarding-steps article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .72);
+  padding: 11px;
+}
+
+.b2b-onboarding-steps b {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.b2b-onboarding-steps div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.b2b-onboarding-steps strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.b2b-onboarding-steps span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.35;
+  word-break: keep-all;
+}
+
+.b2b-onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.b2b-onboarding-actions button {
+  width: auto;
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+
 .b2b-search-form {
   min-width: 0;
   display: grid;
@@ -14700,6 +14819,7 @@ body.role-b2b .primary-button {
 }
 
 body.role-b2b .b2b-search-panel,
+body.role-b2b .b2b-onboarding,
 body.role-b2b .summary-card,
 body.role-b2b .report-card,
 body.role-b2b .report-metric-grid article,
@@ -14785,6 +14905,7 @@ body.role-b2b .field textarea:focus {
 
 body.role-b2b .b2b-search-quick button,
 body.role-b2b .b2b-search-card,
+body.role-b2b .b2b-onboarding-steps article,
 body.role-b2b .b2b-history-list button,
 body.role-b2b .b2b-live-search-panel span,
 body.role-b2b .b2b-live-search-meta em,
@@ -15063,6 +15184,8 @@ body.role-b2b .b2b-my-lodge-row.hot {
 }
 
 body.role-b2b .b2b-search-card strong,
+body.role-b2b .b2b-onboarding-head strong,
+body.role-b2b .b2b-onboarding-steps strong,
 body.role-b2b .b2b-history-head strong,
 body.role-b2b .b2b-history-list strong,
 body.role-b2b .b2b-search-card-metrics b,
@@ -15165,6 +15288,8 @@ body.role-b2b .b2b-search-match {
 
 body.role-b2b .b2b-search-card-sub,
 body.role-b2b .b2b-search-card-mode,
+body.role-b2b .b2b-onboarding-head p,
+body.role-b2b .b2b-onboarding-steps span,
 body.role-b2b .b2b-search-card-metrics small,
 body.role-b2b .b2b-history-head small,
 body.role-b2b .b2b-history-list span,
@@ -15469,6 +15594,24 @@ body.role-b2b .b2b-search-missing-chips em {
 
 body.role-b2b .b2b-search-history {
   border-top-color: rgba(156, 174, 204, .18);
+}
+
+body.role-b2b .b2b-onboarding {
+  border-color: rgba(106, 168, 255, .30);
+  background:
+    linear-gradient(135deg, rgba(49, 130, 246, .18), rgba(20, 184, 166, .10)),
+    #121822;
+}
+
+body.role-b2b .b2b-onboarding-head > span {
+  border-color: rgba(52, 211, 153, .34);
+  background: rgba(20, 184, 166, .16);
+  color: #a7f3d0;
+}
+
+body.role-b2b .b2b-onboarding-steps b {
+  background: rgba(106, 168, 255, .16);
+  color: #b9d7ff;
 }
 
 body.role-b2b .b2b-history-actions > span,
@@ -16428,6 +16571,7 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .b2b-search-form,
+  .b2b-onboarding-steps,
   .b2b-search-results,
   .b2b-search-result-grid,
   .b2b-live-search-panel,
@@ -16441,6 +16585,11 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .b2b-search-conflict-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .b2b-onboarding-actions {
+    display: grid;
     grid-template-columns: 1fr;
   }
 
