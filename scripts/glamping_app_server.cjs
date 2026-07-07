@@ -46,7 +46,7 @@ const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const TERMS_VERSION = "2026-07-06";
 const PRIVACY_VERSION = "2026-07-06";
-const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || "숙박업 데이터랩 beta").trim();
+const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || "숙박업 데이터랩").trim();
 const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "").trim();
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
 const CRAWL_TIMING_MAX_ENTRIES = 240;
@@ -2240,6 +2240,14 @@ function policyContactHtml() {
   return `<a href="mailto:${escapedEmail}">${escapedEmail}</a>`;
 }
 
+function brandTitleHtml(text = "") {
+  const escaped = escapeHtml(text || "");
+  return escaped.replace(
+    "숙박업 데이터랩 beta",
+    '숙박업 데이터랩 <span class="brand-beta-badge">beta</span>'
+  );
+}
+
 function legalPage(title, eyebrow, sections) {
   const rows = sections.map((section) => `
     <section>
@@ -2258,6 +2266,7 @@ function legalPage(title, eyebrow, sections) {
     body { margin: 0; background: #f4f6f8; color: #101828; }
     main { width: min(100% - 32px, 860px); margin: 36px auto; padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
     .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 900; }
+    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; margin-left: 7px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; vertical-align: .16em; }
     h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
     h2 { margin: 26px 0 10px; font-size: 18px; letter-spacing: 0; }
     p, li { color: #344054; font-size: 15px; line-height: 1.7; }
@@ -2271,7 +2280,7 @@ function legalPage(title, eyebrow, sections) {
 <body>
   <main>
     <p class="eyebrow">${escapeHtml(eyebrow)}</p>
-    <h1>${escapeHtml(title)}</h1>
+    <h1>${brandTitleHtml(title)}</h1>
     <p class="meta">시행일 ${PRIVACY_VERSION.replace(/-/g, ".")} · 운영자 ${escapeHtml(SERVICE_OPERATOR_NAME)}</p>
     ${rows}
     <a class="back" href="/signup">회원가입으로 돌아가기</a>
@@ -2392,6 +2401,7 @@ function loginPage(message = "") {
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
     main { width: min(100% - 32px, 420px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
     h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
+    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; margin-left: 7px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; vertical-align: .16em; }
     p { margin: 0 0 22px; color: #667085; line-height: 1.45; }
     label { display: grid; gap: 8px; margin-top: 14px; font-size: 13px; font-weight: 800; color: #344054; }
     input { width: 100%; min-height: 52px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 14px; font: inherit; font-size: 17px; outline: none; }
@@ -2404,7 +2414,7 @@ function loginPage(message = "") {
 </head>
 <body>
   <main>
-    <h1>숙박업 데이터랩 beta</h1>
+    <h1>${brandTitleHtml("숙박업 데이터랩 beta")}</h1>
     <p>계정 정보를 입력하면 분석 화면으로 이동합니다.</p>
     <form method="post" action="/login">
       <label>아이디<input name="username" autocomplete="username" autofocus required></label>
@@ -2435,6 +2445,8 @@ function signupPage(message = "", values = {}) {
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
     main { width: min(100% - 32px, 640px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
+    .brand-kicker { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 8px; color: #667085; font-size: 13px; font-weight: 900; }
+    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; }
     h1 { margin: 0 0 20px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
     p { margin: 0 0 18px; color: #667085; line-height: 1.45; }
     form { display: grid; gap: 14px; }
@@ -2474,6 +2486,7 @@ function signupPage(message = "", values = {}) {
 </head>
 <body>
   <main>
+    <p class="brand-kicker">${brandTitleHtml("숙박업 데이터랩 beta")}</p>
     <h1>회원가입</h1>
     <form method="post" action="/signup" data-signup-form>
       <label>
@@ -9175,8 +9188,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-lodging-datalab-beta"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-lodging-datalab-beta"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-beta-badge"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-beta-badge"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
