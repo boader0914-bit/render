@@ -570,6 +570,7 @@ const detailJsonFiles = [];
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const REGIONAL_SEARCH_CONCURRENCY = boundedInteger(process.env.REGIONAL_SEARCH_CONCURRENCY, 4, 1, 8);
 const NAVER_BOOKING_STOCK_LIMIT = Number(process.env.NAVER_BOOKING_STOCK_LIMIT || 20);
+const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, 2, 1, 4);
 const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, 4, 1, 8);
 const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
 const NAVER_BOOKING_GRAPHQL_URL = "https://m.booking.naver.com/graphql";
@@ -2216,6 +2217,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
   let skippedByMode = 0;
   let skippedByRank = 0;
   const uniquePlaceIds = new Set();
+  const bookingTasks = [];
+  const bookingResultPromises = new Map();
 
   for (const row of rows) {
     if (!row.place_id || row.예약 !== "Y") {
@@ -2244,12 +2247,25 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       continue;
     }
     uniquePlaceIds.add(row.place_id);
+    const collectRange = BOOKING_RANGE_DAYS > 1 &&
+      BOOKING_RANGE_PLACE_LIMIT > 0 &&
+      !alreadyKnown &&
+      uniquePlaceIds.size <= BOOKING_RANGE_PLACE_LIMIT;
+    bookingTasks.push({ row, alreadyKnown, collectRange });
+  }
+
+  async function collectBookingTaskResult(placeId, collectRange) {
+    const key = String(placeId || "");
+    if (!key) return { status: "place_id 없음" };
+    if (!bookingResultPromises.has(key)) {
+      bookingResultPromises.set(key, collectNaverBookingAvailability(placeId, cache, { collectRange }));
+    }
+    return bookingResultPromises.get(key);
+  }
+
+  await mapWithConcurrency(bookingTasks, NAVER_BOOKING_DETAIL_CONCURRENCY, async ({ row, alreadyKnown, collectRange }) => {
     try {
-      const collectRange = BOOKING_RANGE_DAYS > 1 &&
-        BOOKING_RANGE_PLACE_LIMIT > 0 &&
-        !alreadyKnown &&
-        uniquePlaceIds.size <= BOOKING_RANGE_PLACE_LIMIT;
-      const result = await collectNaverBookingAvailability(row.place_id, cache, { collectRange });
+      const result = await collectBookingTaskResult(row.place_id, collectRange);
       if (!alreadyKnown) collected += 1;
       if (!alreadyKnown && String(result.status || "").startsWith("성공")) successful += 1;
 
@@ -2376,7 +2392,7 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       if (!alreadyKnown) collected += 1;
       row.네이버예약재고수집상태 = `실패: ${error.message || error}`;
     }
-  }
+  });
 
   rows.forEach(setNaverInventoryAuditFields);
   return {
