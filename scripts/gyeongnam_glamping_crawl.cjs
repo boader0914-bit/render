@@ -568,6 +568,7 @@ const DETAIL_JSON_INLINE_LIMIT = 28000;
 const XLSX_CELL_TEXT_LIMIT = 32000;
 const detailJsonFiles = [];
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
+const REGIONAL_SEARCH_CONCURRENCY = boundedInteger(process.env.REGIONAL_SEARCH_CONCURRENCY, 4, 1, 8);
 const NAVER_BOOKING_STOCK_LIMIT = Number(process.env.NAVER_BOOKING_STOCK_LIMIT || 20);
 const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, 4, 1, 8);
 const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
@@ -2498,29 +2499,36 @@ async function collectNaverRegional() {
       ],
     };
   }
-  for (const region of regions) {
+  const regionalResults = await mapWithConcurrency(regions, REGIONAL_SEARCH_CONCURRENCY, async (region) => {
     const regionalPrefix = province.regionalPrefix === undefined ? province.short : province.regionalPrefix;
     const query = province.isLocal ? QUERY : [regionalPrefix, region, RAW_KEYWORD_SUFFIX].filter(Boolean).join(" ");
     const { state, status } = await getNaverState(query);
     const key = pickNaverSearchKey(state, query);
     if (!key) {
-      summaries.push({ region, query, status, total: 0, collected: 0, note: "검색 상태 키 없음" });
-      continue;
+      return {
+        rows: [],
+        summary: { region, query, status, total: 0, collected: 0, note: "검색 상태 키 없음" }
+      };
     }
     const result = state.ROOT_QUERY[key].business;
     const refs = result.items || [];
-    refs.slice(0, REGIONAL_LIMIT).forEach((ref, index) => {
+    const regionRows = refs.slice(0, REGIONAL_LIMIT).map((ref, index) => {
       const item = state[ref.__ref];
-      rows.push(
-        mapNaverItem(state, item, {
-          지역: region,
-          검색키워드: query,
-          순위: index + 1,
-          구분: "비광고",
-        }),
-      );
+      return mapNaverItem(state, item, {
+        지역: region,
+        검색키워드: query,
+        순위: index + 1,
+        구분: "비광고",
+      });
     });
-    summaries.push({ region, query, status, total: result.total, collected: Math.min(refs.length, REGIONAL_LIMIT), note: "" });
+    return {
+      rows: regionRows,
+      summary: { region, query, status, total: result.total, collected: Math.min(refs.length, REGIONAL_LIMIT), note: "" }
+    };
+  });
+  for (const item of regionalResults) {
+    rows.push(...(item?.rows || []));
+    if (item?.summary) summaries.push(item.summary);
   }
   return { rows, summaries };
 }
@@ -2607,16 +2615,18 @@ async function collectNol() {
       QUERY,
     )}&verticalCategory=PRODUCT_CATEGORY_KOREA_ACCOMMODATION&checkInDate=${CHECK_IN}&checkOutDate=${CHECK_OUT}&capacityAdults=${ADULTS}`,
   };
-  const count = await fetchJson(countUrl, {
-    method: "POST",
-    headers: commonHeaders,
-    body: JSON.stringify(body),
-  });
-  const list = await fetchJson(url, {
-    method: "POST",
-    headers: commonHeaders,
-    body: JSON.stringify(body),
-  });
+  const [count, list] = await Promise.all([
+    fetchJson(countUrl, {
+      method: "POST",
+      headers: commonHeaders,
+      body: JSON.stringify(body),
+    }),
+    fetchJson(url, {
+      method: "POST",
+      headers: commonHeaders,
+      body: JSON.stringify(body),
+    })
+  ]);
 
   const items = Array.isArray(list.data?.items) ? list.data.items.filter((item) => item.type === "PRODUCT_ITEM") : [];
   const rawRows = items.map((entry, index) => {
@@ -2692,8 +2702,10 @@ async function collectDdnayo() {
     });
   }
 
-  const exact = await search(DDNAYO_QUERY_EXACT, 10);
-  const normalized = await search(DDNAYO_QUERY_NORMALIZED, 24);
+  const [exact, normalized] = await Promise.all([
+    search(DDNAYO_QUERY_EXACT, 10),
+    search(DDNAYO_QUERY_NORMALIZED, 24)
+  ]);
   const source = normalized.data?.data?.totalSize > 0 ? normalized : exact;
   const usedQuery = source === normalized ? DDNAYO_QUERY_NORMALIZED : DDNAYO_QUERY_EXACT;
   const contents = source.data?.data?.contents || [];
