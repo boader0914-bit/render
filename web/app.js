@@ -1221,10 +1221,16 @@ function recrawlContextStatusText(context = {}) {
 }
 
 function crawlStageStatusText(stage = {}) {
-  if (stage.status === "done") return "완료";
+  if (stage.skipped) return "생략";
+  if (stage.status === "done") {
+    const seconds = Number(stage.durationSeconds);
+    return Number.isFinite(seconds) ? `완료 · ${formatElapsed(seconds)}` : "완료";
+  }
   if (stage.status === "active") {
     const progress = Number(stage.progress);
-    return Number.isFinite(progress) ? `${Math.max(1, Math.min(99, Math.round(progress)))}%` : "진행";
+    const elapsed = Number(stage.durationSeconds);
+    const elapsedText = Number.isFinite(elapsed) && elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : "";
+    return Number.isFinite(progress) ? `${Math.max(1, Math.min(99, Math.round(progress)))}%${elapsedText}` : `진행${elapsedText}`;
   }
   return "대기";
 }

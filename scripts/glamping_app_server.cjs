@@ -79,6 +79,28 @@ let crawlJobSequence = 0;
 const crawlQueue = [];
 const recentCrawlResults = new Map();
 const CRAWL_RESULT_REUSE_TTL_MS = 5 * 60 * 1000;
+const CRAWL_RUNTIME_STAGE_DEFS = [
+  { key: "rank_main", label: "네이버 순위", group: "rank", estimatedRatio: 0.18, detail: "지정 키워드의 네이버 플레이스 노출 순위를 확인합니다." },
+  { key: "rank_regional", label: "지역권 노출", group: "rank", estimatedRatio: 0.12, detail: "검색 기준 지역과 인접 권역 노출을 정리합니다." },
+  { key: "ota_nol", label: "NOL 확인", group: "ota", estimatedRatio: 0.08, detail: "NOL 보조 채널 노출을 확인합니다." },
+  { key: "ota_yeogi", label: "여기어때 확인", group: "ota", estimatedRatio: 0.08, detail: "여기어때 보조 채널 노출을 확인합니다." },
+  { key: "ota_ddnayo", label: "떠나요 확인", group: "ota", estimatedRatio: 0.08, detail: "떠나요 보조 채널 노출을 확인합니다." },
+  { key: "inventory", label: "예약/가격 확인", group: "inventory", estimatedRatio: 0.36, detail: "네이버 예약 수량, 요일별 가격, 상품 구성을 확인합니다." },
+  { key: "save", label: "저장/분석", group: "save", estimatedRatio: 0.10, detail: "결과 파일, 누적 DB, 마스터 자료를 정리합니다." }
+];
+const CRAWL_LOG_STAGE_RULES = [
+  { key: "rank_main", pattern: /Collecting Naver main/i },
+  { key: "rank_regional", pattern: /Collecting Naver regional/i },
+  { key: "rank_regional", pattern: /Skipping Naver regional/i, skipped: true },
+  { key: "ota_nol", pattern: /Collecting NOL/i },
+  { key: "ota_nol", pattern: /Skipping NOL/i, skipped: true },
+  { key: "ota_yeogi", pattern: /Checking Yeogi/i },
+  { key: "ota_yeogi", pattern: /Skipping Yeogi/i, skipped: true },
+  { key: "ota_ddnayo", pattern: /Collecting DDNayo/i },
+  { key: "ota_ddnayo", pattern: /Skipping DDNayo/i, skipped: true },
+  { key: "inventory", pattern: /Checking Naver booking stock/i },
+  { key: "save", pattern: /Writing outputs/i }
+];
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
@@ -575,7 +597,8 @@ function publicCrawlJob(job, position = 0) {
       : new Date(Date.now() + waitSeconds * 1000).toISOString(),
     estimatedCompleteAt: job.status === "active" && job.startedAt
       ? new Date(job.startedAt.getTime() + ownSeconds * 1000).toISOString()
-      : new Date(Date.now() + (waitSeconds + ownSeconds) * 1000).toISOString()
+      : new Date(Date.now() + (waitSeconds + ownSeconds) * 1000).toISOString(),
+    stageTimings: publicCrawlStageTimings(job)
   };
 }
 
@@ -606,6 +629,135 @@ function resolveCrawlJob(result, job, mode = "completed") {
       waiterCount: job?.waiterCount || 1
     }
   };
+}
+
+function crawlRuntimeStageDef(key) {
+  return CRAWL_RUNTIME_STAGE_DEFS.find((stage) => stage.key === key) || { key, label: key, group: key, estimatedRatio: 0.1, detail: "" };
+}
+
+function crawlRuntimeStageEstimatedSeconds(key, estimate = activeCrawlEstimate) {
+  const def = crawlRuntimeStageDef(key);
+  const total = Math.max(1, Number(estimate?.estimatedTotalSeconds || activeCrawlEstimate?.estimatedTotalSeconds || 1));
+  return Math.max(4, Math.round(total * Number(def.estimatedRatio || 0.1)));
+}
+
+function ensureCrawlRuntimeState(job) {
+  if (!job) return null;
+  if (!Array.isArray(job.stageEvents)) job.stageEvents = [];
+  if (!job.stageEventByKey) job.stageEventByKey = new Map();
+  return job;
+}
+
+function finishOpenCrawlRuntimeStage(job, endedAt = new Date()) {
+  if (!ensureCrawlRuntimeState(job)) return;
+  const current = job.stageEvents.find((event) => event.status === "active");
+  if (!current) return;
+  current.status = "done";
+  current.endedAt = endedAt.toISOString();
+  current.durationSeconds = Math.max(0, Math.round((endedAt.getTime() - Date.parse(current.startedAt || endedAt.toISOString())) / 1000));
+}
+
+function recordCrawlRuntimeStage(job, key, options = {}) {
+  if (!ensureCrawlRuntimeState(job)) return null;
+  const def = crawlRuntimeStageDef(key);
+  const now = options.at instanceof Date ? options.at : new Date();
+  const existing = job.stageEventByKey.get(key);
+  if (existing) {
+    if (options.skipped && existing.status !== "done") {
+      existing.status = "done";
+      existing.skipped = true;
+      existing.endedAt = now.toISOString();
+      existing.durationSeconds = 0;
+    }
+    return existing;
+  }
+  finishOpenCrawlRuntimeStage(job, now);
+  const event = {
+    key,
+    group: def.group || key,
+    label: def.label || key,
+    detail: def.detail || "",
+    status: options.skipped ? "done" : "active",
+    skipped: Boolean(options.skipped),
+    startedAt: now.toISOString(),
+    endedAt: options.skipped ? now.toISOString() : "",
+    durationSeconds: options.skipped ? 0 : null,
+    estimatedSeconds: crawlRuntimeStageEstimatedSeconds(key, job.estimate)
+  };
+  job.stageEvents.push(event);
+  job.stageEventByKey.set(key, event);
+  return event;
+}
+
+function recordCrawlRuntimeLog(job, text = "") {
+  if (!job || !text) return;
+  for (const line of String(text).split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    const rule = CRAWL_LOG_STAGE_RULES.find((item) => item.pattern.test(line));
+    if (rule) recordCrawlRuntimeStage(job, rule.key, { skipped: rule.skipped });
+  }
+}
+
+function recordCrawlRuntimeOutputChunk(job, chunk = "", flush = false) {
+  if (!ensureCrawlRuntimeState(job)) return;
+  const text = String(chunk || "");
+  const source = `${job.stdoutLineBuffer || ""}${text}`;
+  const lines = source.split(/\r?\n/);
+  job.stdoutLineBuffer = flush ? "" : (lines.pop() || "");
+  recordCrawlRuntimeLog(job, flush ? source : lines.join("\n"));
+}
+
+function crawlRuntimeStageRows(job = activeCrawlJob, elapsedSeconds = 0) {
+  if (!job || !Array.isArray(job.stageEvents) || !job.stageEvents.length) return null;
+  const byKey = new Map(job.stageEvents.map((event) => [event.key, event]));
+  const rows = CRAWL_RUNTIME_STAGE_DEFS.map((def) => {
+    const event = byKey.get(def.key);
+    if (!event) return {
+      key: def.key,
+      group: def.group,
+      label: def.label,
+      detail: def.detail,
+      seconds: crawlRuntimeStageEstimatedSeconds(def.key, job.estimate),
+      status: "pending",
+      progress: 0,
+      actual: true
+    };
+    if (event.status === "done") return {
+      ...event,
+      seconds: event.estimatedSeconds || crawlRuntimeStageEstimatedSeconds(def.key, job.estimate),
+      progress: 100,
+      actual: true
+    };
+    const startedAtMs = Date.parse(event.startedAt || "");
+    const activeElapsed = Number.isFinite(startedAtMs)
+      ? Math.max(0, Math.round((Date.now() - startedAtMs) / 1000))
+      : Math.max(0, elapsedSeconds);
+    const seconds = event.estimatedSeconds || crawlRuntimeStageEstimatedSeconds(def.key, job.estimate);
+    return {
+      ...event,
+      seconds,
+      durationSeconds: activeElapsed,
+      status: "active",
+      progress: Math.max(1, Math.min(99, Math.round((activeElapsed / Math.max(1, seconds)) * 100))),
+      actual: true
+    };
+  });
+  const currentStage = rows.find((row) => row.status === "active") || rows.find((row) => row.status === "pending") || rows.at(-1) || null;
+  return { currentStage, stages: rows };
+}
+
+function publicCrawlStageTimings(job = {}) {
+  const events = Array.isArray(job.stageEvents) ? job.stageEvents : [];
+  return events.map((event) => ({
+    key: event.key,
+    group: event.group,
+    label: event.label,
+    status: event.status,
+    skipped: Boolean(event.skipped),
+    startedAt: event.startedAt || "",
+    endedAt: event.endedAt || "",
+    durationSeconds: Number.isFinite(Number(event.durationSeconds)) ? Number(event.durationSeconds) : null,
+    estimatedSeconds: Number.isFinite(Number(event.estimatedSeconds)) ? Number(event.estimatedSeconds) : null
+  }));
 }
 
 function b2bSubscriberFromPayload(payload = {}) {
@@ -656,6 +808,9 @@ function createCrawlJob(payload = {}, signature = "") {
     waiterCount: 1,
     clientRequestIds: new Set(clientRequestId ? [clientRequestId] : []),
     b2bSubscribers: new Map(),
+    stageEvents: [],
+    stageEventByKey: new Map(),
+    stdoutLineBuffer: "",
     promise: null,
     resolve: null,
     reject: null
@@ -705,6 +860,8 @@ function startCrawlJob(job) {
       failure = error;
     }
     const endedAt = new Date();
+    finishOpenCrawlRuntimeStage(job, endedAt);
+    const stageTimings = publicCrawlStageTimings(job);
     const estimate = activeCrawlEstimate;
     await appendCrawlTimingEntry({
       plan: estimate,
@@ -712,7 +869,8 @@ function startCrawlJob(job) {
       endedAt,
       estimate,
       result,
-      error: failure
+      error: failure,
+      stageTimings
     }).then((timing) => {
       if (result && typeof result === "object") {
         result.crawlTiming = timing;
@@ -8505,7 +8663,7 @@ function crawlTimingErrorSummary(error) {
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
 }
 
-async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, result, error }) {
+async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, result, error, stageTimings = [] }) {
   if (!startedAt || !endedAt) return { recorded: false, reason: "missing_time" };
   const durationSeconds = Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
   const success = !error;
@@ -8522,11 +8680,12 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
     recrawlContext: estimate?.recrawlContext || null,
     estimatedTotalSeconds: estimate?.estimatedTotalSeconds || null,
     estimateSource: estimate?.basis?.timing?.source || "model",
+    stageTimings: Array.isArray(stageTimings) ? stageTimings : [],
     error: success ? "" : crawlTimingErrorSummary(error)
   };
   store.entries = [...(store.entries || []), entry].slice(-CRAWL_TIMING_MAX_ENTRIES);
   await writeCrawlTimingStore(store);
-  return { recorded: true, durationSeconds, success, sampleCount: store.entries.length, file: "history/crawl_timings.json" };
+  return { recorded: true, durationSeconds, success, sampleCount: store.entries.length, stageTimings: entry.stageTimings, file: "history/crawl_timings.json" };
 }
 
 async function runCrawlerLegacySingleFlight(payload) {
@@ -8683,6 +8842,8 @@ function currentCrawlStatus(options = {}) {
     recrawlContext: activeCrawlPromise ? activeCrawlEstimate?.recrawlContext || null : null,
     currentStage: stageStatus.currentStage,
     stages: stageStatus.stages,
+    stageTimings: activeCrawlPromise ? publicCrawlStageTimings(activeCrawlJob) : [],
+    stageSource: stageStatus.stages?.some((stage) => stage.actual) ? "runtime" : "estimate",
     estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null,
     activeJob: publicCrawlJob(activeCrawlJob, 0),
     queueLength: crawlQueue.length,
@@ -8692,6 +8853,8 @@ function currentCrawlStatus(options = {}) {
 }
 
 function activeCrawlStageStatus(elapsedSeconds = 0) {
+  const runtime = crawlRuntimeStageRows(activeCrawlJob, elapsedSeconds);
+  if (runtime) return runtime;
   const stages = Array.isArray(activeCrawlEstimate?.stages) ? activeCrawlEstimate.stages : [];
   if (!stages.length) return { currentStage: null, stages: [] };
   let cursor = 0;
@@ -8777,7 +8940,9 @@ async function runCrawlerInternal(payload) {
     let stderr = "";
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      stdout += text;
+      recordCrawlRuntimeOutputChunk(activeCrawlJob, text);
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString("utf8");
@@ -8791,6 +8956,7 @@ async function runCrawlerInternal(payload) {
     });
     child.on("close", async (code) => {
       if (activeCrawlChild === child) activeCrawlChild = null;
+      recordCrawlRuntimeOutputChunk(activeCrawlJob, "", true);
       if (activeCrawlCancelRequested) {
         reject(crawlCancelledError(activeCrawlCancelReason));
         return;
@@ -8821,8 +8987,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-mobile-search-restore"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-mobile-search-restore"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-stage-timing-sync"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-stage-timing-sync"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

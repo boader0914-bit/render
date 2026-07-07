@@ -3730,6 +3730,7 @@ async function main() {
 - ONDA/떠나요: 핵심 분석 채널. 전 채널 연동 가능성이 있어도 네이버예약은 분리될 수 있으므로 전체객실수와 채널수를 별도 확인한다.
 - 떠나요: 자동수집 가능. 단, 띄어쓰기 키워드와 공백 제거 키워드의 결과 수가 다를 수 있어 둘 다 확인했다.
 `;
+  console.log("Writing outputs...");
   await fs.writeFile(path.join(OUTPUT_DIR, fileRoles.report), report, "utf8");
 
   const allWorkbook = path.join(OUTPUT_DIR, fileRoles.workbook);
