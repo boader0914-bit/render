@@ -53,6 +53,8 @@ const state = {
   b2bMyLodgeCollectStatus: "",
   b2bMyLodgeCollectResult: null,
   memberSearchHistory: [],
+  memberSearchQuota: null,
+  b2bMemberAdmin: null,
   b2bHistoryExpanded: false
 };
 
@@ -14125,6 +14127,83 @@ function adminConsoleTaskQueue(master = {}, entries = []) {
   `;
 }
 
+function adminConsoleMemberPanel() {
+  const overview = state.b2bMemberAdmin || {};
+  if (overview.error) {
+    return `
+      <section class="admin-console-panel admin-member-panel">
+        <div class="admin-console-head">
+          <div>
+            <strong>회원 사용량</strong>
+            <small>회원 DB와 검색 이력을 불러오지 못했습니다.</small>
+          </div>
+        </div>
+        <p class="empty">회원 사용량 로딩 실패: ${escapeHtml(overview.error)}</p>
+      </section>
+    `;
+  }
+  const members = overview.members || [];
+  const summary = overview.summary || {};
+  const rows = members.slice(0, 8);
+  return `
+    <section class="admin-console-panel admin-member-panel">
+      <div class="admin-console-head">
+        <div>
+          <strong>회원 사용량</strong>
+          <small>회원가입 계정별 검색 사용량과 최근 리포트를 확인합니다.</small>
+        </div>
+        <button type="button" data-drawer-tab="admin">회원 관리</button>
+      </div>
+      <div class="admin-member-summary">
+        <article>
+          <span>가입 회원</span>
+          <strong>${fmtNumber(summary.memberCount || 0)}</strong>
+          <small>활성 ${fmtNumber(summary.activeMemberCount || 0)}명</small>
+        </article>
+        <article>
+          <span>오늘 사용자</span>
+          <strong>${fmtNumber(summary.todayActiveUsers || 0)}</strong>
+          <small>새 수집 ${fmtNumber(summary.todayNewSearches || 0)}회</small>
+        </article>
+        <article>
+          <span>차감 없는 재조회</span>
+          <strong>${fmtNumber(summary.todayReuseCount || 0)}</strong>
+          <small>동일 조건/대기열 재사용</small>
+        </article>
+      </div>
+      <div class="admin-member-table">
+        <div class="admin-member-row head">
+          <span>아이디</span><span>오늘</span><span>누적</span><span>범위</span><span>최근 검색</span>
+        </div>
+        ${rows.length ? rows.map((member) => {
+          const usage = member.usage || {};
+          const policy = member.policy || {};
+          const latest = usage.latestSearch || {};
+          const limited = Boolean(policy.limited);
+          const todayText = limited
+            ? `${fmtNumber(usage.usedToday || 0)}/${fmtNumber(policy.dailyLimit || 2)}`
+            : "제한 없음";
+          const latestText = latest.keyword
+            ? `${latest.keyword}${latest.completedAt ? ` · ${compactDateTime(latest.completedAt)}` : ""}`
+            : "검색 없음";
+          return `
+            <div class="admin-member-row ${member.status === "disabled" ? "disabled" : ""}">
+              <div>
+                <strong>${escapeHtml(member.username || "아이디 없음")}</strong>
+                <small>${escapeHtml([member.profile?.companyName || member.profile?.lodgingName || "", member.profile?.ownershipStatusLabel || ""].filter(Boolean).join(" · ") || (member.lastLoginAt ? `최근 로그인 ${compactDateTime(member.lastLoginAt)}` : "최근 로그인 없음"))}</small>
+              </div>
+              <b>${escapeHtml(todayText)}</b>
+              <span>${fmtNumber(usage.countedTotal || member.searchCount || 0)}회</span>
+              <mark>${escapeHtml(policy.allowedRankRange || "1-10")}</mark>
+              <small>${escapeHtml(latestText)}</small>
+            </div>
+          `;
+        }).join("") : `<p class="empty">아직 회원가입 계정이 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!els.adminConsoleDashboard || !isAdminRole()) return;
   if (master.error) {
@@ -14155,6 +14234,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
     <section class="admin-console-layout">
       ${adminConsoleQueuePreview(entries)}
       ${adminConsoleCrawlPanel(entries)}
+      ${adminConsoleMemberPanel()}
       ${adminConsoleMasterPreview(master)}
       ${adminConsoleTaskQueue(master, entries)}
     </section>
@@ -16559,6 +16639,7 @@ function renderB2BSearchHistoryPanel() {
   if (!els.b2bSearchHistory || isAdminRole()) return;
   const rows = state.memberSearchHistory || [];
   const expanded = Boolean(state.b2bHistoryExpanded);
+  const quota = state.memberSearchQuota || {};
   const latest = rows[0] || null;
   const profile = state.session?.profile || {};
   const ownership = profile.ownershipStatusLabel || "";
@@ -16578,6 +16659,7 @@ function renderB2BSearchHistoryPanel() {
         <small>${escapeHtml(latestLabel)}</small>
       </div>
       <div class="b2b-history-actions">
+        ${quota.limited ? `<span>${fmtNumber(quota.remainingToday ?? 0)}/${fmtNumber(quota.dailyLimit || 2)}회 남음</span>` : ""}
         <span>${fmtNumber(rows.length)}건</span>
         ${rows.length ? `<button type="button" data-b2b-history-toggle aria-expanded="${expanded ? "true" : "false"}">${expanded ? "접기" : "더보기"}</button>` : ""}
       </div>
@@ -16587,12 +16669,40 @@ function renderB2BSearchHistoryPanel() {
         ${rows.slice(0, 8).map((row) => `
           <button type="button" data-b2b-history-run-id="${escapeHtml(row.runId)}">
             <strong>${escapeHtml(row.keyword || row.runLabel || "검색 리포트")}</strong>
-            <span>${escapeHtml([row.regionLabel, row.checkIn && row.checkOut ? `${row.checkIn.slice(5)}~${row.checkOut.slice(5)}` : "", row.detailRankRanges ? `${row.detailRankRanges}위` : ""].filter(Boolean).join(" · "))}</span>
+            <span>${escapeHtml([row.regionLabel, row.checkIn && row.checkOut ? `${row.checkIn.slice(5)}~${row.checkOut.slice(5)}` : "", row.detailRankRanges ? `${row.detailRankRanges}위` : "", row.quotaCounted === false ? "차감 없음" : "새 수집"].filter(Boolean).join(" · "))}</span>
             <small>${escapeHtml(row.completedAt ? compactDateTime(row.completedAt) : "")}</small>
           </button>
         `).join("")}
       </div>
     ` : rows.length ? "" : `<p>검색 완료 후 이 아이디의 최근 리포트가 여기에 쌓입니다.</p>`}
+  `;
+}
+
+function b2bSearchUsagePanelHtml() {
+  if (isAdminRole()) return "";
+  const quota = state.memberSearchQuota || {};
+  const limited = Boolean(quota.limited || isGeneralB2BMember());
+  const limit = Number(quota.dailyLimit || 2);
+  const used = Math.max(0, Number(quota.usedToday || 0));
+  const remaining = limited ? Math.max(0, Number(quota.remainingToday ?? (limit - used))) : null;
+  const percent = limited ? Math.max(0, Math.min(100, Math.round((used / Math.max(1, limit)) * 100))) : 0;
+  const resetText = quota.resetAfterSeconds ? `${formatElapsed(quota.resetAfterSeconds)} 후 초기화` : "매일 00시 초기화";
+  const title = limited ? `오늘 남은 새 리포트 ${fmtNumber(remaining)}/${fmtNumber(limit)}회` : "공용 계정 · 새 검색 제한 없음";
+  const detail = limited
+    ? `기본 분석 ${escapeHtml(quota.allowedRankRange || "1-10")}위 · 같은 조건 최근 리포트는 차감하지 않습니다.`
+    : "테스트용 계정은 운영 검증을 위해 검색 범위 제한을 적용하지 않습니다.";
+  return `
+    <div class="b2b-usage-panel ${limited && remaining <= 0 ? "exhausted" : ""}">
+      <div>
+        <span>사용량</span>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${detail}</p>
+      </div>
+      <div class="b2b-usage-meter" aria-label="오늘 새 리포트 사용량">
+        <small>${escapeHtml(limited ? resetText : `누적 새 수집 ${fmtNumber(quota.countedTotal || 0)}회`)}</small>
+        <i><b style="width:${percent}%"></b></i>
+      </div>
+    </div>
   `;
 }
 
@@ -16703,6 +16813,7 @@ function renderB2BSearchPanel() {
           ${state.b2bSearchLoading && preview ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
       </div>
+      ${b2bSearchUsagePanelHtml()}
       ${b2bSearchConflictHtml()}
     `;
   }
@@ -16842,6 +16953,9 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
     renderAll();
   } catch (error) {
     if (requestId !== state.b2bSearchRequestId) return;
+    if (error.status === 429 || error.status === 403) {
+      await loadMemberSearchHistory();
+    }
     setStatus("검색 실패");
     finalErrorMessage = error.status === 499 ? "기존 검색을 중지했습니다." : `검색 실패: ${error.message}`;
   } finally {
@@ -18125,13 +18239,28 @@ async function loadSession() {
 async function loadMemberSearchHistory() {
   if (isAdminRole()) {
     state.memberSearchHistory = [];
+    state.memberSearchQuota = null;
     return;
   }
   try {
     const data = await fetchJson("/api/member/search-history?limit=20");
     state.memberSearchHistory = data.entries || [];
+    state.memberSearchQuota = data.quota || null;
   } catch {
     state.memberSearchHistory = [];
+    state.memberSearchQuota = null;
+  }
+}
+
+async function loadB2BMemberAdminOverview() {
+  if (!isAdminRole()) {
+    state.b2bMemberAdmin = null;
+    return;
+  }
+  try {
+    state.b2bMemberAdmin = await fetchJson("/api/b2b-members");
+  } catch (error) {
+    state.b2bMemberAdmin = { error: error.message, members: [], searches: [], summary: {} };
   }
 }
 
@@ -18829,10 +18958,12 @@ async function loadRun(runId) {
   if (isAdminRole()) {
     await loadHistoryOps();
     await loadCompanyMasterSummary();
+    await loadB2BMemberAdminOverview();
   } else {
     state.historyOps = null;
     state.companyMaster = null;
     state.crawlEtaByKey = {};
+    state.b2bMemberAdmin = null;
   }
   if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
@@ -19485,7 +19616,7 @@ async function init() {
     bindEvents();
     setDefaultDates();
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests()]);
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadB2BMemberAdminOverview()]);
     } else {
       state.runs = [];
       state.activeRunId = null;

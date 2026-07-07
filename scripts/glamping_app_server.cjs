@@ -1835,6 +1835,9 @@ function publicB2BSearchHistoryEntry(entry = {}) {
     status: entry.status || "completed",
     createdAt: entry.createdAt || "",
     completedAt: entry.completedAt || "",
+    quotaCounted: entry.quotaCounted !== false,
+    reuseMode: entry.reuseMode || "",
+    reusedFromRunId: entry.reusedFromRunId || "",
     resultSummary: entry.resultSummary || {}
   };
 }
@@ -1873,26 +1876,71 @@ function secondsUntilNextKstDay(nowMs = Date.now()) {
   return Math.max(1, Math.ceil((nextUtcMs - nowMs) / 1000));
 }
 
-async function b2bMemberDailySearchQuota(session = {}) {
+function b2bSearchUsageForOwner(owner = {}, entries = []) {
   const dayKey = kstDayKeyFromValue();
-  const store = await readB2BSearchHistoryStore();
   const counted = new Set();
-  for (const entry of store.entries || []) {
-    if (!memberMatchesSession(entry, session)) continue;
-    if (entry.quotaCounted === false) continue;
-    const entryDayKey = kstDayKeyFromValue(entry.createdAt || entry.completedAt || entry.sourceCompletedAt || "");
-    if (entryDayKey !== dayKey) continue;
+  const todayCounted = new Set();
+  let reuseCount = 0;
+  let sharedCount = 0;
+  const ownerEntries = (entries || []).filter((entry) => b2bHistoryOwnerMatches(entry, owner));
+  for (const entry of ownerEntries) {
     const key = entry.runId || entry.searchSignature || entry.id;
+    if (entry.quotaCounted === false) {
+      reuseCount += 1;
+      if (String(entry.reuseMode || "").includes("shared")) sharedCount += 1;
+      continue;
+    }
     if (key) counted.add(key);
+    const entryDayKey = kstDayKeyFromValue(entry.createdAt || entry.completedAt || entry.sourceCompletedAt || "");
+    if (entryDayKey === dayKey && key) todayCounted.add(key);
   }
-  const used = counted.size;
+  const recentEntries = ownerEntries
+    .slice()
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  return {
+    dayKey,
+    usedToday: todayCounted.size,
+    countedTotal: counted.size,
+    reuseCount,
+    sharedCount,
+    latestSearch: recentEntries[0] ? publicB2BSearchHistoryEntry(recentEntries[0]) : null,
+    recentSearches: recentEntries.slice(0, 5).map(publicB2BSearchHistoryEntry)
+  };
+}
+
+async function b2bMemberDailySearchQuota(session = {}, store = null) {
+  const history = store || await readB2BSearchHistoryStore();
+  const usage = b2bSearchUsageForOwner(session, history.entries || []);
   return {
     limited: true,
     limit: B2B_MEMBER_DAILY_SEARCH_LIMIT,
-    used,
-    remaining: Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - used),
-    dayKey,
+    used: usage.usedToday,
+    remaining: Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - usage.usedToday),
+    dayKey: usage.dayKey,
     resetAfterSeconds: secondsUntilNextKstDay()
+  };
+}
+
+async function publicB2BSearchUsageForSession(session = {}, store = null) {
+  const role = normalizeUserRole(session?.role);
+  if (role !== USER_ROLES.b2b) return null;
+  const history = store || await readB2BSearchHistoryStore();
+  const usage = b2bSearchUsageForOwner(session, history.entries || []);
+  const limited = isGeneralB2BMemberSession(session);
+  return {
+    accountType: session.accountType || (session.username === B2B_USERNAME ? "demo" : "member"),
+    limited,
+    dailyLimit: limited ? B2B_MEMBER_DAILY_SEARCH_LIMIT : null,
+    usedToday: usage.usedToday,
+    remainingToday: limited ? Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - usage.usedToday) : null,
+    countedTotal: usage.countedTotal,
+    reuseCount: usage.reuseCount,
+    sharedCount: usage.sharedCount,
+    allowedRankRange: limited ? B2B_MEMBER_ALLOWED_RANK_RANGE : "1-20",
+    expandedAllowed: !limited,
+    dayKey: usage.dayKey,
+    resetAfterSeconds: secondsUntilNextKstDay(),
+    latestSearch: usage.latestSearch
   };
 }
 
@@ -1927,11 +1975,71 @@ async function publicB2BSearchHistoryForSession(session, limit = 20) {
     ? store.entries
     : store.entries.filter((entry) => memberMatchesSession(entry, session));
   return {
+    quota: await publicB2BSearchUsageForSession(session, store),
     entries: entries
       .slice()
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
       .slice(0, Math.max(1, Math.min(100, Number(limit) || 20)))
       .map(publicB2BSearchHistoryEntry)
+  };
+}
+
+async function publicB2BMembersAdminOverview() {
+  const memberStore = await readB2BMemberStore();
+  const history = await readB2BSearchHistoryStore();
+  const entries = history.entries || [];
+  const members = (memberStore.members || [])
+    .map((member) => {
+      const publicMember = publicB2BMember(member);
+      const usage = b2bSearchUsageForOwner(publicMember, entries);
+      const limited = String(publicMember.accountType || "").toLowerCase() === "member";
+      return {
+        ...publicMember,
+        policy: {
+          limited,
+          dailyLimit: limited ? B2B_MEMBER_DAILY_SEARCH_LIMIT : null,
+          allowedRankRange: limited ? B2B_MEMBER_ALLOWED_RANK_RANGE : "1-20",
+          expandedAllowed: !limited
+        },
+        usage: {
+          ...usage,
+          remainingToday: limited ? Math.max(0, B2B_MEMBER_DAILY_SEARCH_LIMIT - usage.usedToday) : null,
+          resetAfterSeconds: secondsUntilNextKstDay()
+        }
+      };
+    })
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+
+  const todayKey = kstDayKeyFromValue();
+  const todayEntries = entries.filter((entry) =>
+    kstDayKeyFromValue(entry.createdAt || entry.completedAt || entry.sourceCompletedAt || "") === todayKey
+  );
+  const todayNewSearches = new Set(todayEntries
+    .filter((entry) => entry.quotaCounted !== false)
+    .map((entry) => entry.runId || entry.searchSignature || entry.id)
+    .filter(Boolean)).size;
+  const todayReuseCount = todayEntries.filter((entry) => entry.quotaCounted === false).length;
+  const activeToday = new Set(todayEntries
+    .map((entry) => entry.memberId || normalizeLoginId(entry.username))
+    .filter(Boolean)).size;
+
+  return {
+    members,
+    searches: entries
+      .slice()
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .slice(0, 200)
+      .map(publicB2BSearchHistoryEntry),
+    summary: {
+      memberCount: members.length,
+      activeMemberCount: members.filter((member) => member.status !== "disabled").length,
+      todayActiveUsers: activeToday,
+      todayNewSearches,
+      todayReuseCount,
+      totalNewSearches: members.reduce((sum, member) => sum + Number(member.usage?.countedTotal || 0), 0),
+      dayKey: todayKey,
+      resetAfterSeconds: secondsUntilNextKstDay()
+    }
   };
 }
 
@@ -9528,8 +9636,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-member-search-limit"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-member-search-limit"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-member-usage"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-member-usage"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9678,12 +9786,7 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/b2b-members") {
       if (!requireAdminSession(session, req, res)) return;
-      const memberStore = await readB2BMemberStore();
-      const history = await readB2BSearchHistoryStore();
-      return send(res, 200, {
-        members: memberStore.members.map(publicB2BMember),
-        searches: history.entries.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))).slice(0, 200).map(publicB2BSearchHistoryEntry)
-      });
+      return send(res, 200, await publicB2BMembersAdminOverview());
     }
 
     if (routeRolePage(req, res, reqUrl, session)) return;

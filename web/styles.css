@@ -347,6 +347,76 @@ a {
   gap: 10px;
 }
 
+.b2b-usage-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.b2b-usage-panel.exhausted {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-usage-panel > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-usage-panel span,
+.b2b-usage-panel small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.b2b-usage-panel strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.b2b-usage-panel p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.45;
+  word-break: keep-all;
+}
+
+.b2b-usage-meter {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.b2b-usage-meter i {
+  display: block;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5ebf3;
+}
+
+.b2b-usage-meter b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #14b8a6, #3182f6);
+}
+
 .b2b-live-search-panel {
   min-width: 0;
   display: grid;
@@ -1458,6 +1528,112 @@ a {
   font-size: 15px;
   font-weight: 950;
   overflow-wrap: anywhere;
+}
+
+.admin-member-panel {
+  grid-column: 1 / -1;
+}
+
+.admin-member-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-member-summary article {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #edf1f5;
+  border-radius: 12px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.admin-member-summary span,
+.admin-member-summary small {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.35;
+}
+
+.admin-member-summary strong {
+  color: #0f766e;
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.admin-member-table {
+  display: grid;
+  gap: 7px;
+}
+
+.admin-member-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.25fr) 70px 70px 72px minmax(170px, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #edf1f5;
+  border-radius: 12px;
+  background: #fbfcfd;
+  padding: 9px;
+}
+
+.admin-member-row.disabled {
+  opacity: .62;
+}
+
+.admin-member-row.head {
+  min-height: 30px;
+  border-color: transparent;
+  background: transparent;
+  padding: 0 9px;
+}
+
+.admin-member-row.head span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.admin-member-row strong {
+  display: block;
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.admin-member-row small,
+.admin-member-row > span {
+  min-width: 0;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-member-row > b {
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.admin-member-row mark {
+  justify-self: start;
+  min-width: 0;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1;
 }
 
 .admin-task-list article {
@@ -14825,6 +15001,7 @@ body.role-b2b .report-card,
 body.role-b2b .report-metric-grid article,
 body.role-b2b .b2b-brief-card,
 body.role-b2b .b2b-live-search-panel,
+body.role-b2b .b2b-usage-panel,
 body.role-b2b .b2b-search-conflict,
 body.role-b2b .b2b-strategy-board,
 body.role-b2b .b2b-competition-snapshot,
@@ -14880,6 +15057,13 @@ body.role-b2b .b2b-demand-playbook {
   border-color: rgba(106, 168, 255, .28);
 }
 
+body.role-b2b .b2b-usage-panel.exhausted {
+  border-color: rgba(251, 191, 36, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .12), rgba(106, 168, 255, .04)),
+    #171b22;
+}
+
 body.role-b2b .b2b-search-form input,
 body.role-b2b .b2b-search-form select,
 body.role-b2b .b2b-my-lodge-field input,
@@ -14908,6 +15092,7 @@ body.role-b2b .b2b-search-card,
 body.role-b2b .b2b-onboarding-steps article,
 body.role-b2b .b2b-history-list button,
 body.role-b2b .b2b-live-search-panel span,
+body.role-b2b .b2b-usage-meter i,
 body.role-b2b .b2b-live-search-meta em,
 body.role-b2b .b2b-search-card-metrics em,
 body.role-b2b .b2b-search-fallbacks button,
@@ -16395,6 +16580,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-console-layout,
   .admin-stack,
   .admin-crawl-grid,
+  .admin-member-summary,
   .company-cross-metrics,
   .company-verification-metrics,
   .company-verification-grid,
@@ -16451,18 +16637,24 @@ body.role-b2b .structure-action-list li::before {
 
   .admin-queue-row,
   .admin-master-row,
+  .admin-member-row,
   .admin-task-list article {
     grid-template-columns: 1fr;
     align-items: start;
   }
 
   .admin-queue-row.head,
-  .admin-master-row.head {
+  .admin-master-row.head,
+  .admin-member-row.head {
     display: none;
   }
 
   .admin-row-actions {
     justify-content: flex-start;
+  }
+
+  .b2b-usage-panel {
+    grid-template-columns: 1fr;
   }
 
   .company-check-revenue-impact div.wide {
