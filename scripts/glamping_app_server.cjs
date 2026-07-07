@@ -3117,6 +3117,33 @@ function compactKeyword(keyword) {
   return String(keyword || "").replace(/\s+/g, "");
 }
 
+const LODGING_SEARCH_SUFFIXES = [
+  "글램핑장",
+  "오토캠핑장",
+  "캠핑장",
+  "야영장",
+  "풀빌라",
+  "카라반",
+  "글램핑",
+  "펜션",
+  "리조트",
+  "호텔",
+  "모텔",
+  "캠핑",
+  "스테이",
+  "숙소"
+];
+
+function lodgingSearchSuffix(keyword = "") {
+  const compact = compactKeyword(keyword);
+  return LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix)) || "";
+}
+
+function lodgingSearchSuffixInKeyword(keyword = "") {
+  const compact = compactKeyword(keyword);
+  return LODGING_SEARCH_SUFFIXES.find((suffix) => compact.includes(suffix)) || "";
+}
+
 const REGIONAL_KEYWORD_ALIASES = {
   gyeongnam: ["경남", "경상남도"],
   gyeongbuk: ["경북", "경상북도"],
@@ -3274,11 +3301,19 @@ function companyPlatformKey(value) {
 function normalizeSearchKeyword(keyword) {
   const compact = compactKeyword(keyword);
   if (!compact) return "";
-  return compact.endsWith("글램핑") ? compact : `${compact}글램핑`;
+  return lodgingSearchSuffix(compact) ? compact : `${compact}글램핑`;
 }
 
 function uniqueTexts(values) {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
+}
+
+function spacedLodgingKeyword(keyword = "") {
+  const compact = compactKeyword(keyword);
+  const suffix = lodgingSearchSuffix(compact);
+  if (!compact || !suffix) return compact;
+  const prefix = compact.slice(0, -suffix.length);
+  return prefix ? `${prefix} ${suffix}` : compact;
 }
 
 function normalizeCompanyIdentityName(value) {
@@ -3326,7 +3361,7 @@ function datalabKeywordVariants(keyword) {
   return uniqueTexts([
     raw,
     compact,
-    compact.replace(/글램핑$/u, " 글램핑")
+    spacedLodgingKeyword(compact)
   ]).slice(0, 5);
 }
 
@@ -3359,8 +3394,9 @@ function demandKeywordForRun(manifest, conditions, regions) {
 function trafficKeywordForRegion(keyword, region) {
   const compact = compactKeyword(keyword);
   const regionName = compactKeyword(region);
-  if (regionName && compact.includes(regionName)) return `${regionName}글램핑`;
-  return normalizeSearchKeyword(compact || `${regionName}글램핑`);
+  const suffix = lodgingSearchSuffixInKeyword(compact) || "글램핑";
+  if (regionName && compact.includes(regionName)) return normalizeSearchKeyword(compact);
+  return normalizeSearchKeyword(compact || `${regionName}${suffix}`);
 }
 
 function normalizeClusterName(value) {
@@ -4098,7 +4134,7 @@ function defaultProfile(region, provinceKey, index) {
   };
 }
 
-function summarizeRegionalRows(rows, provinceKey) {
+function summarizeRegionalRows(rows, provinceKey, fallbackKeyword = "") {
   const province = PROVINCES[provinceKey] || PROVINCES.local;
   const regions = new Map();
   let unknownIndex = 0;
@@ -4128,7 +4164,7 @@ function summarizeRegionalRows(rows, provinceKey) {
     item.count += 1;
     incrementRaw(
       item.keywordBuckets,
-      trafficKeywordForRegion(row["검색키워드"] || row["기준키워드"] || `${region}글램핑`, region)
+      trafficKeywordForRegion(row["검색키워드"] || row["기준키워드"] || fallbackKeyword || `${region}글램핑`, region)
     );
     increment(item.priceBuckets, row["가격대클러스터"]);
     increment(item.typeBuckets, row["상품유형클러스터"]);
@@ -4179,7 +4215,7 @@ function summarizeRegionalRows(rows, provinceKey) {
       dominantPrice: topKey(item.priceBuckets),
       dominantType: topKey(item.typeBuckets),
       dominantAd: topKey(item.adBuckets),
-      trafficKeyword: normalizeSearchKeyword(topRawKey(item.keywordBuckets) || `${item.region}글램핑`),
+      trafficKeyword: normalizeSearchKeyword(topRawKey(item.keywordBuckets) || fallbackKeyword || `${item.region}글램핑`),
       places: item.places.sort((a, b) => a.rank - b.rank).slice(0, 10)
     }))
     .sort((a, b) => a.region.localeCompare(b.region, "ko"));
@@ -7904,7 +7940,7 @@ async function loadRun(runId, options = {}) {
         ...yeogiManualRows
       ]
     : platformRows;
-  const regions = summarizeRegionalRows(regionalRows, provinceKey);
+  const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
   const datalabTrend = await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
@@ -8434,8 +8470,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-lodging-category-profiles"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-lodging-category-profiles"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-lodging-keyword-normalization"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-lodging-keyword-normalization"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

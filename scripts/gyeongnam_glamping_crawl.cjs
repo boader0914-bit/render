@@ -384,9 +384,55 @@ function compactKeyword(value) {
   return String(value || "").replace(/\s+/g, "");
 }
 
+const LODGING_SEARCH_SUFFIXES = [
+  "글램핑장",
+  "오토캠핑장",
+  "캠핑장",
+  "야영장",
+  "풀빌라",
+  "카라반",
+  "글램핑",
+  "펜션",
+  "리조트",
+  "호텔",
+  "모텔",
+  "캠핑",
+  "스테이",
+  "숙소"
+];
+
+function lodgingSearchSuffix(value = "") {
+  const compact = compactKeyword(value);
+  return LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix)) || "";
+}
+
+function lodgingSearchSuffixInKeyword(value = "") {
+  const compact = compactKeyword(value);
+  return LODGING_SEARCH_SUFFIXES.find((suffix) => compact.includes(suffix)) || "";
+}
+
+function stripLodgingSearchSuffix(value = "") {
+  const compact = compactKeyword(value);
+  const suffix = lodgingSearchSuffix(compact);
+  return suffix ? compact.slice(0, -suffix.length) : compact;
+}
+
+function normalizedLodgingKeyword(value = "", fallbackSuffix = "글램핑") {
+  const compact = compactKeyword(value);
+  if (!compact) return "";
+  return lodgingSearchSuffix(compact) ? compact : `${compact}${fallbackSuffix}`;
+}
+
+function spacedLodgingKeyword(value = "", fallbackSuffix = "글램핑") {
+  const normalized = normalizedLodgingKeyword(value, fallbackSuffix);
+  const suffix = lodgingSearchSuffix(normalized);
+  if (!normalized || !suffix) return normalized;
+  const base = normalized.slice(0, -suffix.length);
+  return `${base} ${suffix}`.trim();
+}
+
 function spacedGlampingKeyword(value) {
-  const normalized = compactKeyword(value).replace(/글램핑$/, "");
-  return `${normalized} 글램핑`.trim();
+  return spacedLodgingKeyword(value, "글램핑");
 }
 
 function uniqueNonEmpty(values) {
@@ -402,15 +448,16 @@ function compactName(value) {
 function companySearchQueries(keyword) {
   const raw = String(keyword || "").trim();
   const compact = compactKeyword(raw);
-  const hasGlamping = /글램핑/.test(compact);
-  const base = compact.replace(/글램핑$/, "");
+  const suffix = lodgingSearchSuffixInKeyword(compact) || "글램핑";
+  const hasLodging = Boolean(lodgingSearchSuffixInKeyword(compact));
+  const base = stripLodgingSearchSuffix(compact);
   return uniqueNonEmpty([
     raw,
     compact,
-    hasGlamping ? spacedGlampingKeyword(compact) : "",
-    !hasGlamping ? `${raw} 글램핑` : "",
-    !hasGlamping ? `${compact}글램핑` : "",
-    hasGlamping && base.length >= 3 ? base : "",
+    hasLodging ? spacedLodgingKeyword(compact, suffix) : "",
+    !hasLodging ? `${raw} ${suffix}` : "",
+    !hasLodging ? `${compact}${suffix}` : "",
+    hasLodging && base.length >= 3 ? base : "",
   ]);
 }
 
@@ -437,8 +484,9 @@ function companyNameMatchScore(name, keyword = RAW_KEYWORD) {
 
   if (candidate.includes(target)) return 50;
 
-  const glampingBase = target.replace(/글램핑$/, "");
-  return glampingBase.length >= 3 && candidate.includes(glampingBase) && candidate.includes("글램핑") ? 40 : 0;
+  const lodgingBase = stripLodgingSearchSuffix(target);
+  const lodgingSuffix = lodgingSearchSuffix(target);
+  return lodgingBase.length >= 3 && candidate.includes(lodgingBase) && (!lodgingSuffix || candidate.includes(lodgingSuffix)) ? 40 : 0;
 }
 
 function companyNameMatches(name, keyword = RAW_KEYWORD) {
@@ -460,7 +508,7 @@ function detectProvince(keyword) {
 }
 
 function localNameFromKeyword(keyword) {
-  return compactKeyword(keyword).replace(/글램핑$/, "") || compactKeyword(keyword);
+  return stripLodgingSearchSuffix(keyword) || compactKeyword(keyword);
 }
 
 function slugForRegion(region) {
@@ -505,10 +553,11 @@ function makeCompanyConfig(keyword) {
 }
 
 const province = SEARCH_MODE === "company" ? makeCompanyConfig(RAW_KEYWORD) : (detectProvince(RAW_KEYWORD) || makeLocalConfig(RAW_KEYWORD));
-const QUERY = province.mainQuery || (province.isCompany ? RAW_KEYWORD.trim() : (province.isLocal ? spacedGlampingKeyword(RAW_KEYWORD) : `${province.short} 글램핑`));
-const NAVER_QUERY = province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} 글램핑`));
-const DDNAYO_QUERY_EXACT = province.ddnayoQuery || (province.isCompany ? QUERY : spacedGlampingKeyword(RAW_KEYWORD));
-const DDNAYO_QUERY_NORMALIZED = compactKeyword(province.ddnayoQuery || (province.isCompany ? QUERY : RAW_KEYWORD));
+const RAW_KEYWORD_SUFFIX = lodgingSearchSuffixInKeyword(RAW_KEYWORD) || "글램핑";
+const QUERY = province.mainQuery || (province.isCompany ? RAW_KEYWORD.trim() : (province.isLocal ? spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX) : `${province.short} ${RAW_KEYWORD_SUFFIX}`));
+const NAVER_QUERY = province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} ${RAW_KEYWORD_SUFFIX}`));
+const DDNAYO_QUERY_EXACT = province.ddnayoQuery || (province.isCompany ? QUERY : spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX));
+const DDNAYO_QUERY_NORMALIZED = compactKeyword(province.ddnayoQuery || (province.isCompany ? QUERY : normalizedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX)));
 const RUN_DATE = CHECK_IN.replaceAll("-", "");
 const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false }).replaceAll(":", "");
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
@@ -2451,7 +2500,7 @@ async function collectNaverRegional() {
   }
   for (const region of regions) {
     const regionalPrefix = province.regionalPrefix === undefined ? province.short : province.regionalPrefix;
-    const query = province.isLocal ? QUERY : [regionalPrefix, region, "글램핑"].filter(Boolean).join(" ");
+    const query = province.isLocal ? QUERY : [regionalPrefix, region, RAW_KEYWORD_SUFFIX].filter(Boolean).join(" ");
     const { state, status } = await getNaverState(query);
     const key = pickNaverSearchKey(state, query);
     if (!key) {
@@ -2481,7 +2530,7 @@ function skippedRegional(note = "빠른 순위 모드에서 지역별 반복 수
     rows: [],
     summaries: regions.map((region) => ({
       region,
-      query: [province.short, region, "글램핑"].filter(Boolean).join(" "),
+      query: [province.short, region, RAW_KEYWORD_SUFFIX].filter(Boolean).join(" "),
       status: "skipped",
       total: 0,
       collected: 0,
