@@ -2396,33 +2396,197 @@ function loginPage(message = "") {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>숙박업 데이터랩 beta 로그인</title>
   <style>
-    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    :root { color-scheme: dark; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 420px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
-    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; margin-left: 7px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; vertical-align: .16em; }
-    p { margin: 0 0 22px; color: #667085; line-height: 1.45; }
-    label { display: grid; gap: 8px; margin-top: 14px; font-size: 13px; font-weight: 800; color: #344054; }
-    input { width: 100%; min-height: 52px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 14px; font: inherit; font-size: 17px; outline: none; }
-    input:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
-    button { width: 100%; min-height: 54px; margin-top: 20px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: #070b12;
+      color: #f7fbff;
+    }
+    main {
+      width: min(100%, 920px);
+      display: grid;
+      grid-template-columns: minmax(0, .92fr) minmax(340px, .68fr);
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, .26);
+      border-radius: 28px;
+      background: #0c121d;
+      box-shadow: 0 28px 80px rgba(0, 0, 0, .42);
+    }
+    .login-brand-panel {
+      min-height: 520px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 38px;
+      background:
+        linear-gradient(135deg, rgba(49, 130, 246, .24), rgba(20, 184, 166, .16)),
+        linear-gradient(180deg, #111c2d 0%, #0d1725 100%);
+      border-right: 1px solid rgba(148, 163, 184, .18);
+    }
+    .login-form-panel {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+      padding: 38px;
+      background: rgba(11, 18, 29, .92);
+    }
+    .brand-line {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 9px;
+      max-width: 100%;
+      color: #eaf4ff;
+      font-size: 15px;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+    .brand-beta-badge {
+      display: inline-grid;
+      place-items: center;
+      min-height: 24px;
+      padding: 0 12px;
+      border: 1px solid rgba(94, 234, 212, .42);
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(49, 130, 246, .18), rgba(20, 184, 166, .20));
+      color: #dffeff;
+      font-size: 11px;
+      font-weight: 900;
+      line-height: 1;
+      text-transform: uppercase;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 8px 18px rgba(20, 184, 166, .12);
+    }
+    h1 {
+      max-width: 560px;
+      margin: 34px 0 0;
+      color: #fff;
+      font-size: clamp(34px, 5vw, 54px);
+      font-weight: 950;
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+    .brand-note {
+      max-width: 420px;
+      margin: 18px 0 0;
+      color: #b8c4d6;
+      font-size: 17px;
+      font-weight: 700;
+      line-height: 1.55;
+    }
+    .login-context {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 28px 0 0;
+    }
+    .login-context span {
+      display: inline-grid;
+      place-items: center;
+      min-height: 30px;
+      padding: 0 12px;
+      border: 1px solid rgba(148, 163, 184, .24);
+      border-radius: 999px;
+      color: #dbeafe;
+      background: rgba(8, 13, 22, .34);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .form-head { margin-bottom: 22px; }
+    .form-head strong {
+      display: block;
+      color: #fff;
+      font-size: 28px;
+      font-weight: 950;
+      letter-spacing: 0;
+    }
+    .form-head p {
+      margin: 8px 0 0;
+      color: #95a3b8;
+      font-size: 14px;
+      font-weight: 750;
+      line-height: 1.5;
+    }
+    form { display: grid; gap: 15px; }
+    label { display: grid; gap: 8px; color: #d7e1ef; font-size: 13px; font-weight: 900; }
+    input {
+      width: 100%;
+      min-height: 54px;
+      padding: 0 15px;
+      border: 1px solid rgba(148, 163, 184, .26);
+      border-radius: 14px;
+      background: #0a111c;
+      color: #f8fbff;
+      font: inherit;
+      font-size: 16px;
+      font-weight: 800;
+      outline: none;
+    }
+    input::placeholder { color: #64748b; }
+    input:focus {
+      border-color: rgba(96, 165, 250, .9);
+      box-shadow: 0 0 0 4px rgba(49, 130, 246, .18);
+    }
+    button {
+      width: 100%;
+      min-height: 56px;
+      margin-top: 4px;
+      border: 0;
+      border-radius: 15px;
+      background: #3182f6;
+      color: #fff;
+      font: inherit;
+      font-size: 17px;
+      font-weight: 950;
+      cursor: pointer;
+      box-shadow: 0 14px 30px rgba(49, 130, 246, .28);
+    }
+    button:hover { background: #2f76df; }
     button:disabled { opacity: .6; cursor: wait; }
-    .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
-    .error { min-height: 20px; margin-top: 14px; color: #f04438; font-size: 13px; font-weight: 800; }
+    .link { display: block; margin-top: 18px; color: #91c4ff; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
+    .error { min-height: 20px; color: #ff8b8b; font-size: 13px; font-weight: 900; line-height: 1.35; }
+    @media (max-width: 760px) {
+      body { align-items: stretch; padding: 14px; }
+      main { grid-template-columns: 1fr; border-radius: 24px; }
+      .login-brand-panel { min-height: auto; padding: 26px; border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, .18); }
+      .login-form-panel { padding: 26px; }
+      h1 { margin-top: 24px; font-size: 36px; }
+      .brand-note { font-size: 15px; }
+    }
   </style>
 </head>
 <body>
   <main>
-    <h1>${brandTitleHtml("숙박업 데이터랩 beta")}</h1>
-    <p>계정 정보를 입력하면 분석 화면으로 이동합니다.</p>
-    <form method="post" action="/login">
-      <label>아이디<input name="username" autocomplete="username" autofocus required></label>
-      <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
-      <button type="submit">로그인</button>
-      <div class="error">${escapedMessage}</div>
-    </form>
-    <a class="link" href="/signup">회원가입</a>
+    <section class="login-brand-panel" aria-label="숙박업 데이터랩 beta">
+      <div>
+        <div class="brand-line">${brandTitleHtml("숙박업 데이터랩 beta")}</div>
+        <h1>숙박업 경쟁 리포트</h1>
+        <p class="brand-note">지역 내 노출, 예약율, 예상 매출 흐름을 한 화면에서 확인합니다.</p>
+      </div>
+      <div class="login-context" aria-label="로그인 권한">
+        <span>관리자</span>
+        <span>사업자</span>
+        <span>검색 이력</span>
+      </div>
+    </section>
+    <section class="login-form-panel" aria-label="로그인">
+      <div class="form-head">
+        <strong>로그인</strong>
+        <p>계정 정보를 입력하세요.</p>
+      </div>
+      <form method="post" action="/login">
+        <label>아이디<input name="username" autocomplete="username" autofocus required></label>
+        <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">로그인</button>
+        <div class="error">${escapedMessage}</div>
+      </form>
+      <a class="link" href="/signup">회원가입</a>
+    </section>
   </main>
 </body>
 </html>`;
@@ -9188,8 +9352,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-beta-badge"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-beta-badge"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-login-polish"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-login-polish"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
