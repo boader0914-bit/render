@@ -2889,6 +2889,33 @@ function loginPage(message = "") {
       font-weight: 700;
       line-height: 1.55;
     }
+    .login-security-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 28px;
+      max-width: 430px;
+    }
+    .login-security-grid article {
+      display: grid;
+      gap: 3px;
+      padding: 13px 14px;
+      border: 1px solid rgba(148, 163, 184, .20);
+      border-radius: 16px;
+      background: rgba(7, 11, 18, .30);
+    }
+    .login-security-grid strong {
+      color: #f8fbff;
+      font-size: 14px;
+      font-weight: 950;
+      line-height: 1.25;
+    }
+    .login-security-grid span {
+      color: #b8c4d6;
+      font-size: 12px;
+      font-weight: 750;
+      line-height: 1.45;
+      word-break: keep-all;
+    }
     .form-head { margin-bottom: 22px; }
     .form-head strong {
       display: block;
@@ -2941,6 +2968,20 @@ function loginPage(message = "") {
     button:hover { background: #2f76df; }
     button:disabled { opacity: .6; cursor: wait; }
     .link { display: block; margin-top: 18px; color: #91c4ff; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
+    .legal-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .legal-links a {
+      color: #8ea0b8;
+      font-size: 12px;
+      font-weight: 850;
+      text-decoration: none;
+    }
+    .legal-links a:hover { color: #d7e7ff; }
     .security-note {
       margin: 2px 0 0;
       color: #8ea0b8;
@@ -2966,6 +3007,11 @@ function loginPage(message = "") {
       <div>
         <h1>${brandTitleHtml("숙박업 데이터랩 beta")}</h1>
         <p class="brand-note">지역 내 노출, 예약율, 예상 매출 흐름을 한 화면에서 확인합니다.</p>
+        <div class="login-security-grid" aria-label="계정 보안 안내">
+          <article><strong>권한 분리</strong><span>관리자와 사업자 계정은 서로 다른 화면과 데이터 범위를 사용합니다.</span></article>
+          <article><strong>보안 저장</strong><span>비밀번호는 해시로 저장하고 IP와 세션 식별값은 원문 대신 해시로 관리합니다.</span></article>
+          <article><strong>검색 이력 관리</strong><span>사업자 계정의 리포트와 관심숙소는 로그인 아이디 기준으로 묶습니다.</span></article>
+        </div>
       </div>
     </section>
     <section class="login-form-panel" aria-label="로그인">
@@ -2981,6 +3027,10 @@ function loginPage(message = "") {
         <div class="error">${escapedMessage}</div>
       </form>
       <a class="link" href="/signup">회원가입</a>
+      <div class="legal-links" aria-label="정책 문서">
+        <a href="/terms" target="_blank" rel="noopener">이용약관</a>
+        <a href="/privacy" target="_blank" rel="noopener">개인정보 수집 및 이용</a>
+      </div>
     </section>
   </main>
 </body>
@@ -3009,6 +3059,33 @@ function signupPage(message = "", values = {}) {
     h1 { margin: 0 0 20px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
     p { margin: 0 0 18px; color: #667085; line-height: 1.45; }
     form { display: grid; gap: 14px; }
+    .signup-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+      margin: 0 0 18px;
+    }
+    .signup-summary article {
+      display: grid;
+      gap: 4px;
+      padding: 12px;
+      border: 1px solid #d5e3f7;
+      border-radius: 15px;
+      background: #f8fbff;
+    }
+    .signup-summary strong {
+      color: #175cd3;
+      font-size: 13px;
+      font-weight: 950;
+      line-height: 1.25;
+    }
+    .signup-summary span {
+      color: #475467;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.4;
+      word-break: keep-all;
+    }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
     .field-with-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
     .password-control { position: relative; display: block; }
@@ -3030,6 +3107,14 @@ function signupPage(message = "", values = {}) {
     .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #067647; }
     .field-status[data-state="error"], .password-match[data-state="error"] { color: #d92d20; }
     .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 16px; background: #f9fafb; }
+    .agreement-note {
+      margin: 0;
+      color: #475467;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.5;
+      word-break: keep-all;
+    }
     .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #182230; font-size: 13px; line-height: 1.4; }
     .check a { color: #175cd3; font-weight: 900; text-decoration: none; }
     .password-match { min-height: 18px; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
@@ -3037,7 +3122,7 @@ function signupPage(message = "", values = {}) {
     .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
     @media (max-width: 560px) {
       main { padding: 22px; }
-      .grid { grid-template-columns: 1fr; }
+      .grid, .signup-summary { grid-template-columns: 1fr; }
       .field-with-action { grid-template-columns: 1fr; }
       .inline-action { width: 100%; }
     }
@@ -3047,6 +3132,12 @@ function signupPage(message = "", values = {}) {
   <main>
     <p class="brand-kicker">${brandTitleHtml("숙박업 데이터랩 beta")}</p>
     <h1>회원가입</h1>
+    <p>가입하면 일반 회원 기준으로 시작하며, 검색 이력과 관심숙소는 로그인 아이디 기준으로 관리됩니다.</p>
+    <div class="signup-summary" aria-label="회원가입 후 이용 기준">
+      <article><strong>일반 회원</strong><span>새 리포트 하루 2회 · 기본 1~10위 검색</span></article>
+      <article><strong>고객 DB</strong><span>아이디, 연락처, 이메일, 검색 이력, 동의 이력을 보관</span></article>
+      <article><strong>보안 관리</strong><span>비밀번호는 해시 저장 · IP/세션 식별값은 해시로 관리</span></article>
+    </div>
     <form method="post" action="/signup" data-signup-form>
       <label>
         <span>아이디 <b class="required">*</b></span>
@@ -3074,6 +3165,7 @@ function signupPage(message = "", values = {}) {
         </select></label>
       </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
+        <p class="agreement-note">필수 동의 후 고객 DB에 계정 정보와 이용 이력이 저장됩니다. 업체 마스터 DB의 관리자 보정값과는 분리해 관리합니다.</p>
         <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>
@@ -9791,8 +9883,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-plan-onboarding"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-plan-onboarding"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-legal-security-onboarding"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-legal-security-onboarding"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
