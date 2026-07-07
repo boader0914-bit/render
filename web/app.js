@@ -14221,6 +14221,11 @@ function adminConsoleMemberPanel() {
           <strong>${fmtNumber(summary.todayReuseCount || 0)}</strong>
           <small>동일 조건/대기열 재사용</small>
         </article>
+        <article>
+          <span>정책 변경</span>
+          <strong>${fmtNumber(summary.todayPolicyChanges || 0)}</strong>
+          <small>${escapeHtml(summary.latestPolicyChangeAt ? `최근 ${compactDateTime(summary.latestPolicyChangeAt)}` : "최근 변경 없음")}</small>
+        </article>
       </div>
       <div class="admin-member-table">
         <div class="admin-member-row head">
@@ -14251,6 +14256,9 @@ function adminConsoleMemberPanel() {
           const statusText = member.status === "disabled" ? "정지" : "활성";
           const recentSearches = (Array.isArray(usage.recentSearches) ? usage.recentSearches : [])
             .filter((entry) => entry && (entry.keyword || entry.runLabel))
+            .slice(0, 3);
+          const policyHistory = (Array.isArray(member.adminPolicyHistory) ? member.adminPolicyHistory : [])
+            .filter((entry) => entry && entry.changedAt)
             .slice(0, 3);
           const memberId = escapeHtml(member.memberId || "");
           return `
@@ -14293,6 +14301,20 @@ function adminConsoleMemberPanel() {
                       <em>${escapeHtml([entry.detailRankRanges ? `${entry.detailRankRanges}위` : "", entry.completedAt ? compactDateTime(entry.completedAt) : "", entry.quotaCounted === false ? "재사용" : "새 수집"].filter(Boolean).join(" · "))}</em>
                     </span>
                   `).join("") : `<span><b>최근 검색 없음</b><em>회원 검색 이력이 없습니다.</em></span>`}
+                </div>
+                <div class="admin-member-history-list">
+                  <strong>관리자 변경 이력</strong>
+                  ${policyHistory.length ? policyHistory.map((entry) => {
+                    const historyPolicy = entry.policy || {};
+                    const historyAccountType = entry.accountType || member.accountType || "member";
+                    const historyStatus = entry.status === "disabled" ? "정지" : "활성";
+                    return `
+                      <span>
+                        <b>${escapeHtml(`${compactDateTime(entry.changedAt)} · ${entry.adminUsername || "관리자"}`)}</b>
+                        <em>${escapeHtml(`${b2bAccountTypeLabel(historyAccountType)} · ${historyStatus} · ${b2bPolicyLabel(historyPolicy, historyAccountType)}`)}</em>
+                      </span>
+                    `;
+                  }).join("") : `<span><b>변경 이력 없음</b><em>관리자 정책 변경 기록이 없습니다.</em></span>`}
                 </div>
               </div>
               <div class="admin-member-controls">

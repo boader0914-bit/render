@@ -1588,6 +1588,22 @@ function publicB2BMemberPolicy(member = {}) {
   return normalizeB2BMemberPolicy(member.policy || {}, member.accountType || "member");
 }
 
+function publicB2BMemberAdminPolicyHistory(member = {}) {
+  return (Array.isArray(member.adminPolicyHistory) ? member.adminPolicyHistory : [])
+    .slice(-20)
+    .reverse()
+    .map((entry) => {
+      const accountType = normalizeB2BAccountType(entry.accountType || member.accountType || "member");
+      return {
+        changedAt: entry.changedAt || "",
+        adminUsername: entry.adminUsername || "",
+        accountType,
+        status: normalizeB2BMemberStatus(entry.status || member.status || "active"),
+        policy: normalizeB2BMemberPolicy(entry.policy || {}, accountType)
+      };
+    });
+}
+
 function publicB2BMember(member = {}) {
   const profile = member.profile || {};
   const consents = member.consents || {};
@@ -1610,7 +1626,8 @@ function publicB2BMember(member = {}) {
     profile: {
       ...profile,
       ownershipStatusLabel: profile.ownershipStatusLabel || ownershipStatusLabel(profile.ownershipStatus)
-    }
+    },
+    adminPolicyHistory: publicB2BMemberAdminPolicyHistory(member)
   };
 }
 
@@ -2106,6 +2123,13 @@ async function publicB2BMembersAdminOverview() {
   const todayEntries = entries.filter((entry) =>
     kstDayKeyFromValue(entry.createdAt || entry.completedAt || entry.sourceCompletedAt || "") === todayKey
   );
+  const policyHistoryEntries = members.flatMap((member) =>
+    (Array.isArray(member.adminPolicyHistory) ? member.adminPolicyHistory : [])
+      .map((entry) => ({ ...entry, memberId: member.memberId, username: member.username }))
+  );
+  const latestPolicyChange = policyHistoryEntries
+    .slice()
+    .sort((a, b) => String(b.changedAt || "").localeCompare(String(a.changedAt || "")))[0] || null;
   const todayNewSearches = new Set(todayEntries
     .filter((entry) => entry.quotaCounted !== false)
     .map((entry) => entry.runId || entry.searchSignature || entry.id)
@@ -2128,6 +2152,8 @@ async function publicB2BMembersAdminOverview() {
       todayActiveUsers: activeToday,
       todayNewSearches,
       todayReuseCount,
+      todayPolicyChanges: policyHistoryEntries.filter((entry) => kstDayKeyFromValue(entry.changedAt || "") === todayKey).length,
+      latestPolicyChangeAt: latestPolicyChange?.changedAt || "",
       totalNewSearches: members.reduce((sum, member) => sum + Number(member.usage?.countedTotal || 0), 0),
       dayKey: todayKey,
       resetAfterSeconds: secondsUntilNextKstDay()
@@ -9929,8 +9955,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-admin-member-detail"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-admin-member-detail"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-admin-policy-history"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-admin-policy-history"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
