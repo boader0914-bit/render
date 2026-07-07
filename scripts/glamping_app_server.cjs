@@ -2928,6 +2928,14 @@ function sendLogin(res, status = 200, message = "", extraHeaders = {}) {
   return send(res, status, loginPage(message), "text/html; charset=utf-8", extraHeaders);
 }
 
+function sendRedirect(res, location) {
+  return send(res, 302, "", "text/plain; charset=utf-8", { Location: location });
+}
+
+function sendHeadRedirect(res, location) {
+  return sendHead(res, 302, "text/plain; charset=utf-8", { Location: location });
+}
+
 function requireLogin(req, res, reqUrl) {
   const hadSessionCookie = Boolean(parseCookies(req)[SESSION_COOKIE_NAME]);
   if (getSession(req)) return true;
@@ -2952,6 +2960,25 @@ function sendForbidden(req, res, message = "관리자 권한이 필요합니다.
 function requireAdminSession(session, req, res) {
   if (normalizeUserRole(session?.role) === USER_ROLES.admin) return true;
   sendForbidden(req, res);
+  return false;
+}
+
+function routeRolePage(req, res, reqUrl, session) {
+  if (!["GET", "HEAD"].includes(req.method)) return false;
+  const role = normalizeUserRole(session?.role);
+  const redirect = (location) => req.method === "HEAD" ? sendHeadRedirect(res, location) : sendRedirect(res, location);
+  if (["/", "/view"].includes(reqUrl.pathname)) {
+    redirect(redirectPathForRole(role));
+    return true;
+  }
+  if (reqUrl.pathname === "/admin" && role !== USER_ROLES.admin) {
+    redirect("/b2b");
+    return true;
+  }
+  if (reqUrl.pathname === "/b2b" && role !== USER_ROLES.b2b) {
+    redirect("/admin");
+    return true;
+  }
   return false;
 }
 
@@ -9411,8 +9438,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-auth-security-v1"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-auth-security-v1"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-role-route-guard"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-role-route-guard"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9568,6 +9595,8 @@ async function route(req, res) {
         searches: history.entries.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))).slice(0, 200).map(publicB2BSearchHistoryEntry)
       });
     }
+
+    if (routeRolePage(req, res, reqUrl, session)) return;
 
     if (reqUrl.pathname === "/admin" && !requireAdminSession(session, req, res)) return;
 
