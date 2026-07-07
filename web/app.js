@@ -40,6 +40,9 @@ const state = {
   b2bSearchRequestId: 0,
   b2bSearchActiveKeyword: "",
   b2bSearchActiveRange: "",
+  b2bSearchClientRequestId: "",
+  b2bSearchServerStatus: null,
+  b2bSearchStatusPolling: false,
   b2bSearchPending: null,
   b2bSearchCancelling: false,
   b2bMyLodgeDraft: null,
@@ -890,8 +893,75 @@ function b2bSearchStageRows(preview = {}, elapsedSeconds = 0) {
   });
 }
 
+function makeB2BSearchClientRequestId() {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `b2b_${Date.now().toString(36)}_${random}`;
+}
+
+function b2bSearchStatusUrl() {
+  const id = state.b2bSearchClientRequestId || "";
+  return id ? `/api/b2b-search/status?clientRequestId=${encodeURIComponent(id)}` : "/api/b2b-search/status";
+}
+
+async function refreshB2BSearchServerStatus() {
+  if (!state.b2bSearchLoading || state.b2bSearchStatusPolling) return;
+  state.b2bSearchStatusPolling = true;
+  try {
+    state.b2bSearchServerStatus = await fetchJson(b2bSearchStatusUrl());
+  } catch {
+    // The local estimate remains available if status polling is briefly unavailable.
+  } finally {
+    state.b2bSearchStatusPolling = false;
+  }
+}
+
 function b2bSearchProgressMeta() {
   const preview = state.b2bSearchPreview || crawlPreviewMeta(b2bLiveSearchPayload(state.b2bSearchQuery || "지역글램핑"));
+  const serverStatus = state.b2bSearchServerStatus || null;
+  const requesterJob = serverStatus?.requesterJob || null;
+  if (requesterJob?.status === "queued") {
+    const waitSeconds = Math.max(0, Math.round(Number(requesterJob.waitSeconds || 0)));
+    const ownSeconds = Math.max(1, Math.round(Number(requesterJob.estimatedTotalSeconds || preview.estimatedTotalSeconds || 1)));
+    const total = waitSeconds + ownSeconds;
+    const queueStage = {
+      key: "queue",
+      label: "검색 대기",
+      detail: "앞선 검색이 끝나면 자동으로 시작합니다.",
+      seconds: Math.max(1, waitSeconds || 1),
+      status: "active",
+      progress: waitSeconds ? 12 : 90
+    };
+    return {
+      ...preview,
+      queueStatus: "queued",
+      queuePosition: Math.max(1, Number(requesterJob.queuePosition || 1)),
+      elapsedSeconds: 0,
+      waitSeconds,
+      remainingSeconds: total,
+      delayedSeconds: 0,
+      isDelayed: false,
+      estimatedTotalSeconds: total,
+      estimatedProgress: 2,
+      estimatedCompleteAt: requesterJob.estimatedCompleteAt || new Date(Date.now() + total * 1000).toISOString(),
+      currentStage: queueStage,
+      stages: [queueStage, ...(preview.stages || []).map((stage) => ({ ...stage, status: "pending", progress: 0 }))]
+    };
+  }
+  if (requesterJob?.status === "active" && serverStatus?.active) {
+    return {
+      ...preview,
+      queueStatus: "active",
+      elapsedSeconds: Math.max(0, Math.round(Number(serverStatus.elapsedSeconds || 0))),
+      remainingSeconds: Math.max(0, Math.round(Number(serverStatus.remainingSeconds || 0))),
+      delayedSeconds: Math.max(0, Math.round(Number(serverStatus.delayedSeconds || 0))),
+      isDelayed: Boolean(serverStatus.isDelayed),
+      estimatedTotalSeconds: Math.max(1, Math.round(Number(serverStatus.estimatedTotalSeconds || preview.estimatedTotalSeconds || 1))),
+      estimatedProgress: Math.max(1, Math.min(99, Math.round(Number(serverStatus.estimatedProgress || 1)))),
+      estimatedCompleteAt: serverStatus.estimatedCompleteAt || preview.estimatedCompleteAt,
+      currentStage: serverStatus.currentStage || preview.currentStage || null,
+      stages: Array.isArray(serverStatus.stages) && serverStatus.stages.length ? serverStatus.stages : preview.stages
+    };
+  }
   const startedAt = Number(state.b2bSearchStartedAt || Date.now());
   const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
   const total = Math.max(1, Number(preview.estimatedTotalSeconds || 1));
@@ -916,6 +986,10 @@ function b2bSearchProgressMeta() {
 
 function b2bSearchProgressText(meta = b2bSearchProgressMeta()) {
   if (state.b2bSearchCancelling) return "기존 검색 중지 중";
+  if (meta.queueStatus === "queued") {
+    const position = Math.max(1, Number(meta.queuePosition || 1));
+    return `대기 ${position}번째 · 시작까지 ${formatElapsed(meta.waitSeconds) || "곧 시작"}`;
+  }
   if (meta.isDelayed) return `예상 초과 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`;
   return meta.remainingSeconds <= 0 ? "곧 완료" : `${formatElapsed(meta.remainingSeconds)} 남음`;
 }
@@ -956,11 +1030,14 @@ function clearB2BSearchTimer() {
 
 function startB2BSearchTimer() {
   clearB2BSearchTimer();
+  let tick = 0;
   state.b2bSearchTimer = setInterval(() => {
     if (!state.b2bSearchLoading) {
       clearB2BSearchTimer();
       return;
     }
+    tick += 1;
+    if (tick % 2 === 0) refreshB2BSearchServerStatus().then(() => renderB2BSearchPanel());
     renderB2BSearchPanel();
   }, 1000);
 }
@@ -16484,7 +16561,8 @@ function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
     collectionMode: "precision",
     detailRankRanges,
     bookingRangeDays: DEFAULT_BOOKING_DAYS,
-    bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges)
+    bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges),
+    clientRequestId: state.b2bSearchClientRequestId || ""
   };
 }
 
@@ -16523,10 +16601,14 @@ async function submitB2BSearch() {
 async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10") {
   const submitButton = els.b2bSearchForm?.querySelector('button[type="submit"]');
   const requestId = ++state.b2bSearchRequestId;
+  const clientRequestId = makeB2BSearchClientRequestId();
+  payload = { ...payload, clientRequestId };
   const initialPreview = crawlPreviewMeta(payload);
   state.b2bSearchLoading = true;
   state.b2bSearchCancelling = false;
   state.b2bSearchPending = null;
+  state.b2bSearchClientRequestId = clientRequestId;
+  state.b2bSearchServerStatus = null;
   state.b2bSearchActiveKeyword = keyword;
   state.b2bSearchActiveRange = range;
   state.b2bSearchQuery = keyword;
@@ -16535,6 +16617,7 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
   state.b2bSearchPreview = initialPreview;
   if (submitButton) submitButton.disabled = false;
   startB2BSearchTimer();
+  refreshB2BSearchServerStatus().then(() => renderB2BSearchPanel());
   renderB2BSearchPanel();
   setStatus("B2B 검색 중");
   if (els.b2bSearchStatus) {
@@ -16576,6 +16659,9 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
     state.b2bSearchPreview = null;
     state.b2bSearchActiveKeyword = "";
     state.b2bSearchActiveRange = "";
+    state.b2bSearchClientRequestId = "";
+    state.b2bSearchServerStatus = null;
+    state.b2bSearchStatusPolling = false;
     clearB2BSearchTimer();
     if (submitButton) submitButton.disabled = false;
     renderB2BSearchPanel();
@@ -16621,6 +16707,9 @@ async function cancelCurrentB2BSearchAndRestart() {
     state.b2bSearchPreview = null;
     state.b2bSearchActiveKeyword = "";
     state.b2bSearchActiveRange = "";
+    state.b2bSearchClientRequestId = "";
+    state.b2bSearchServerStatus = null;
+    state.b2bSearchStatusPolling = false;
     clearB2BSearchTimer();
   }
   if (canStartNext) await startB2BSearchRequest(pending.payload, pending.keyword, pending.range);

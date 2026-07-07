@@ -74,6 +74,11 @@ let activeCrawlChild = null;
 let activeCrawlCancelRequested = false;
 let activeCrawlCancelReason = "";
 let activeCrawlSourceRole = "";
+let activeCrawlJob = null;
+let crawlJobSequence = 0;
+const crawlQueue = [];
+const recentCrawlResults = new Map();
+const CRAWL_RESULT_REUSE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_NODE_MODULES = path.join(
   process.env.USERPROFILE || "C:\\Users\\User",
   ".cache",
@@ -470,6 +475,237 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     estimateBasis: estimate.basis,
     stages: estimate.stages
   };
+}
+
+function crawlQueueClientRequestId(value) {
+  return String(value || "").trim().replace(/[^a-z0-9._:-]/gi, "").slice(0, 120);
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function crawlPayloadSignature(payload = {}) {
+  const plan = crawlExecutionPlan(payload);
+  const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
+  const sourceRole = sourceRoleForCollectionSource(collectionSource, payload.sourceRole);
+  const recrawlContext = sanitizeRecrawlContext(payload.recrawlContext, plan);
+  const signaturePayload = {
+    keyword: compactKeyword(plan.keyword || "").toLowerCase(),
+    checkIn: plan.checkIn,
+    checkOut: plan.checkOut,
+    bookingRangeDays: plan.bookingRangeDays,
+    bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
+    searchMode: plan.resolvedSearchMode,
+    requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode),
+    productMode: plan.productMode,
+    collectionMode: plan.collectionMode,
+    detailRankRanges: plan.detailRankRanges,
+    collectionSource,
+    sourceRole,
+    recrawlContext
+  };
+  return crypto.createHash("sha1").update(stableJson(signaturePayload)).digest("hex");
+}
+
+function cleanupRecentCrawlResults() {
+  const now = Date.now();
+  for (const [signature, entry] of recentCrawlResults.entries()) {
+    if (!entry || now - Number(entry.createdAt || 0) > CRAWL_RESULT_REUSE_TTL_MS) {
+      recentCrawlResults.delete(signature);
+    }
+  }
+}
+
+function reusableRecentCrawlResult(signature) {
+  cleanupRecentCrawlResults();
+  const entry = recentCrawlResults.get(signature);
+  if (!entry || !entry.result?.runId) return null;
+  return entry.result;
+}
+
+function activeCrawlRemainingSeconds() {
+  if (!activeCrawlPromise) return 0;
+  const elapsedSeconds = activeCrawlStartedAt
+    ? Math.max(0, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
+    : 0;
+  const estimatedTotalSeconds = Number(activeCrawlEstimate?.estimatedTotalSeconds || activeCrawlJob?.estimate?.estimatedTotalSeconds || 0);
+  if (!estimatedTotalSeconds) return 30;
+  return Math.max(5, Math.round(estimatedTotalSeconds - elapsedSeconds));
+}
+
+function crawlJobWaitSeconds(job) {
+  if (!job || job.status === "active") return 0;
+  let seconds = activeCrawlRemainingSeconds();
+  for (const queued of crawlQueue) {
+    if (queued === job) break;
+    seconds += Math.max(1, Number(queued.estimate?.estimatedTotalSeconds || 1));
+  }
+  return Math.max(0, Math.round(seconds));
+}
+
+function publicCrawlJob(job, position = 0) {
+  if (!job) return null;
+  const waitSeconds = crawlJobWaitSeconds(job);
+  const ownSeconds = Math.max(1, Number(job.estimate?.estimatedTotalSeconds || 1));
+  return {
+    id: job.id,
+    signature: job.signature,
+    status: job.status,
+    keyword: job.plan?.keyword || "",
+    checkIn: job.plan?.checkIn || "",
+    checkOut: job.plan?.checkOut || "",
+    detailRankRanges: job.plan?.detailRankRanges || "",
+    bookingRangeDays: job.plan?.bookingRangeDays || 0,
+    bookingRangePlaceLimit: job.plan?.bookingRangePlaceLimit || 0,
+    sourceRole: job.sourceRole || "",
+    collectionSource: job.collectionSource || "",
+    queuePosition: position,
+    waiterCount: job.waiterCount || 1,
+    queuedAt: job.queuedAt ? job.queuedAt.toISOString() : null,
+    startedAt: job.startedAt ? job.startedAt.toISOString() : null,
+    estimatedTotalSeconds: ownSeconds,
+    waitSeconds,
+    estimatedStartAt: job.status === "active" && job.startedAt
+      ? job.startedAt.toISOString()
+      : new Date(Date.now() + waitSeconds * 1000).toISOString(),
+    estimatedCompleteAt: job.status === "active" && job.startedAt
+      ? new Date(job.startedAt.getTime() + ownSeconds * 1000).toISOString()
+      : new Date(Date.now() + (waitSeconds + ownSeconds) * 1000).toISOString()
+  };
+}
+
+function findReusableCrawlJob(signature) {
+  if (activeCrawlJob?.signature === signature && !activeCrawlCancelRequested) return activeCrawlJob;
+  return crawlQueue.find((job) => job.signature === signature && job.status === "queued") || null;
+}
+
+function crawlJobHasClientRequestId(job, clientRequestId) {
+  return Boolean(job && clientRequestId && job.clientRequestIds?.has(clientRequestId));
+}
+
+function findCrawlJobByClientRequestId(clientRequestId) {
+  const id = crawlQueueClientRequestId(clientRequestId);
+  if (!id) return null;
+  if (crawlJobHasClientRequestId(activeCrawlJob, id)) return activeCrawlJob;
+  return crawlQueue.find((job) => crawlJobHasClientRequestId(job, id)) || null;
+}
+
+function resolveCrawlJob(result, job, mode = "completed") {
+  if (!result || typeof result !== "object") return result;
+  return {
+    ...result,
+    queueStatus: {
+      mode,
+      jobId: job?.id || "",
+      signature: job?.signature || "",
+      waiterCount: job?.waiterCount || 1
+    }
+  };
+}
+
+function createCrawlJob(payload = {}, signature = "") {
+  const estimate = estimateCrawlCompletion(payload, readCrawlTimingStoreSync());
+  const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
+  const sourceRole = sourceRoleForCollectionSource(collectionSource, payload.sourceRole);
+  const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId);
+  const job = {
+    id: `crawl_${Date.now().toString(36)}_${(++crawlJobSequence).toString(36)}`,
+    signature,
+    payload: { ...payload },
+    plan: crawlExecutionPlan(payload),
+    estimate,
+    collectionSource,
+    sourceRole,
+    status: "queued",
+    queuedAt: new Date(),
+    startedAt: null,
+    waiterCount: 1,
+    clientRequestIds: new Set(clientRequestId ? [clientRequestId] : []),
+    promise: null,
+    resolve: null,
+    reject: null
+  };
+  job.promise = new Promise((resolve, reject) => {
+    job.resolve = resolve;
+    job.reject = reject;
+  });
+  return job;
+}
+
+function attachCrawlJobClient(job, payload = {}) {
+  if (!job) return;
+  job.waiterCount = Math.max(1, Number(job.waiterCount || 1) + 1);
+  const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId);
+  if (clientRequestId) job.clientRequestIds.add(clientRequestId);
+}
+
+function startNextCrawlJob() {
+  if (activeCrawlPromise || activeCrawlJob) return;
+  const job = crawlQueue.shift();
+  if (!job) return;
+  startCrawlJob(job);
+}
+
+function startCrawlJob(job) {
+  job.status = "active";
+  job.startedAt = new Date();
+  activeCrawlJob = job;
+  activeCrawlStartedAt = job.startedAt;
+  activeCrawlEstimate = estimateCrawlCompletion(job.payload, readCrawlTimingStoreSync());
+  job.estimate = activeCrawlEstimate;
+  activeCrawlCancelRequested = false;
+  activeCrawlCancelReason = "";
+  activeCrawlSourceRole = job.sourceRole;
+  const internalPromise = runCrawlerInternal(job.payload);
+  activeCrawlPromise = internalPromise;
+
+  (async () => {
+    let result = null;
+    let failure = null;
+    try {
+      result = await internalPromise;
+    } catch (error) {
+      failure = error;
+    }
+    const endedAt = new Date();
+    const estimate = activeCrawlEstimate;
+    await appendCrawlTimingEntry({
+      plan: estimate,
+      startedAt: activeCrawlStartedAt,
+      endedAt,
+      estimate,
+      result,
+      error: failure
+    }).then((timing) => {
+      if (result && typeof result === "object") {
+        result.crawlTiming = timing;
+        result.recrawlContext = estimate?.recrawlContext || null;
+      }
+    }).catch((error) => {
+      console.warn(`Could not record crawl timing: ${error.message || error}`);
+    });
+    if (!failure && result?.runId) {
+      cleanupRecentCrawlResults();
+      recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
+    }
+    activeCrawlPromise = null;
+    activeCrawlStartedAt = null;
+    activeCrawlEstimate = null;
+    activeCrawlChild = null;
+    activeCrawlCancelRequested = false;
+    activeCrawlCancelReason = "";
+    activeCrawlSourceRole = "";
+    activeCrawlJob = null;
+    job.status = failure ? "failed" : "completed";
+    if (failure) job.reject(failure);
+    else job.resolve(resolveCrawlJob(result, job, job.waiterCount > 1 ? "shared" : "completed"));
+    startNextCrawlJob();
+  })();
 }
 
 const PROVINCES = {
@@ -2439,7 +2675,8 @@ function b2bSearchPayload(value = {}) {
     bookingRangeDays: Number(value.bookingRangeDays) || 7,
     bookingRangePlaceLimit: Math.max(providedPlaceLimit, detailPlaceLimit),
     sourceRole: USER_ROLES.b2b,
-    collectionSource: "b2b_search"
+    collectionSource: "b2b_search",
+    clientRequestId: crawlQueueClientRequestId(value.clientRequestId)
   };
 }
 
@@ -2463,7 +2700,8 @@ function b2bMyLodgePayload(value = {}) {
     bookingRangeDays,
     bookingRangePlaceLimit: Math.max(1, Math.min(5, Math.round(Number(value.bookingRangePlaceLimit) || 3))),
     sourceRole: USER_ROLES.b2b,
-    collectionSource: "b2b_search"
+    collectionSource: "b2b_search",
+    clientRequestId: crawlQueueClientRequestId(value.clientRequestId)
   };
 }
 
@@ -8206,7 +8444,7 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
   return { recorded: true, durationSeconds, success, sampleCount: store.entries.length, file: "history/crawl_timings.json" };
 }
 
-async function runCrawler(payload) {
+async function runCrawlerLegacySingleFlight(payload) {
   if (activeCrawlPromise) {
     const elapsedSeconds = activeCrawlStartedAt
       ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
@@ -8260,6 +8498,24 @@ async function runCrawler(payload) {
   }
 }
 
+async function runCrawler(payload) {
+  const signature = crawlPayloadSignature(payload);
+  const cached = reusableRecentCrawlResult(signature);
+  if (cached) {
+    return resolveCrawlJob(cached, { signature, waiterCount: 1 }, "recent_reuse");
+  }
+  const existing = findReusableCrawlJob(signature);
+  if (existing) {
+    attachCrawlJobClient(existing, payload);
+    const result = await existing.promise;
+    return resolveCrawlJob(result, existing, "shared");
+  }
+  const job = createCrawlJob(payload, signature);
+  crawlQueue.push(job);
+  startNextCrawlJob();
+  return job.promise;
+}
+
 function crawlCancelledError(reason = "") {
   const error = new Error(reason || "수집이 중지되었습니다.");
   error.statusCode = 499;
@@ -8274,6 +8530,7 @@ function terminateActiveCrawlChild(reason = "사용자 요청으로 수집을 �
   }
   activeCrawlCancelRequested = true;
   activeCrawlCancelReason = reason;
+  if (activeCrawlJob) activeCrawlJob.status = "cancelling";
   const child = activeCrawlChild;
   if (!child || child.killed || !child.pid) {
     return { ok: true, active: true, message: "수집 중지 요청을 접수했습니다." };
@@ -8296,7 +8553,12 @@ function terminateActiveCrawlChild(reason = "사용자 요청으로 수집을 �
   return { ok: true, active: true, message: "수집 중지 요청을 보냈습니다." };
 }
 
-function currentCrawlStatus() {
+function currentCrawlStatus(options = {}) {
+  const clientRequestId = crawlQueueClientRequestId(options.clientRequestId);
+  const requesterJob = findCrawlJobByClientRequestId(clientRequestId);
+  const requesterQueueIndex = requesterJob
+    ? (requesterJob === activeCrawlJob ? 0 : crawlQueue.indexOf(requesterJob) + 1)
+    : -1;
   const elapsedSeconds = activeCrawlStartedAt
     ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
     : 0;
@@ -8336,7 +8598,11 @@ function currentCrawlStatus() {
     recrawlContext: activeCrawlPromise ? activeCrawlEstimate?.recrawlContext || null : null,
     currentStage: stageStatus.currentStage,
     stages: stageStatus.stages,
-    estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null
+    estimateBasis: activeCrawlPromise ? activeCrawlEstimate?.basis || null : null,
+    activeJob: publicCrawlJob(activeCrawlJob, 0),
+    queueLength: crawlQueue.length,
+    queuedJobs: crawlQueue.map((job, index) => publicCrawlJob(job, index + 1)),
+    requesterJob: requesterJob ? publicCrawlJob(requesterJob, requesterQueueIndex) : null
   };
 }
 
@@ -8470,8 +8736,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-lodging-keyword-normalization"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-lodging-keyword-normalization"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-search-queue-reuse"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-search-queue-reuse"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -8641,7 +8907,7 @@ async function route(req, res) {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
         return sendForbidden(req, res, "B2B 계정이 필요합니다.");
       }
-      return send(res, 200, currentCrawlStatus());
+      return send(res, 200, currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search/cancel") {
@@ -8656,7 +8922,7 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, currentCrawlStatus());
+      return send(res, 200, currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl-estimate") {
