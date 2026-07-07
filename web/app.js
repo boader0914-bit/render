@@ -16803,6 +16803,10 @@ function renderB2BAccountPanel() {
         <small>비밀번호 해시 저장 · IP/세션 식별값 해시 관리</small>
       </article>
     </div>
+    <div class="b2b-account-actions">
+      <a href="/account-request" target="_blank" rel="noopener">계정·검색 이력 삭제/정정 요청 안내</a>
+      <a href="/privacy" target="_blank" rel="noopener">개인정보 안내</a>
+    </div>
   `;
 }
 

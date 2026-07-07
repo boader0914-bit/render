@@ -2675,7 +2675,9 @@ function brandTitleHtml(text = "") {
   );
 }
 
-function legalPage(title, eyebrow, sections) {
+function legalPage(title, eyebrow, sections, options = {}) {
+  const backHref = options.backHref || "/signup";
+  const backLabel = options.backLabel || "회원가입으로 돌아가기";
   const rows = sections.map((section) => `
     <section>
       <h2>${escapeHtml(section.title)}</h2>
@@ -2710,7 +2712,7 @@ function legalPage(title, eyebrow, sections) {
     <h1>${brandTitleHtml(title)}</h1>
     <p class="meta">시행일 ${PRIVACY_VERSION.replace(/-/g, ".")} · 운영자 ${escapeHtml(SERVICE_OPERATOR_NAME)}</p>
     ${rows}
-    <a class="back" href="/signup">회원가입으로 돌아가기</a>
+    <a class="back" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>
   </main>
 </body>
 </html>`;
@@ -2784,6 +2786,37 @@ function privacyPage() {
       body: "<p>회원은 개인정보 수집 및 이용에 동의하지 않을 수 있습니다. 다만 필수 항목 동의를 거부하면 회원가입과 리포트 이용이 제한됩니다.</p>"
     }
   ]);
+}
+
+function accountRequestPage(session = {}) {
+  const publicInfo = publicSession(session);
+  const role = normalizeUserRole(session?.role);
+  const accountName = publicInfo.username || "로그인 계정";
+  const accountType = role === USER_ROLES.admin ? "관리자" : (publicInfo.accountType === "demo" ? "공용 테스트 계정" : "사업자 계정");
+  const companyName = publicInfo.profile?.companyName || publicInfo.profile?.lodgingName || "";
+  const ownerLine = [accountName, accountType, companyName].filter(Boolean).join(" · ");
+  return legalPage("계정·검색 이력 삭제/정정 요청", "회원 권리 안내", [
+    {
+      title: "현재 요청 대상",
+      body: `<p>현재 로그인 기준: <strong>${escapeHtml(ownerLine || "로그인 계정")}</strong></p><p>계정별 검색 이력, 관심숙소, 회원 정보는 로그인 아이디 기준으로 확인합니다.</p>`
+    },
+    {
+      title: "요청 가능 항목",
+      body: "<ul><li>회원 계정 삭제 또는 비활성화</li><li>연락처, 이메일, 숙소 또는 회사명 등 회원 정보 정정</li><li>내 검색 기록 삭제</li><li>관심숙소 등록 정보 삭제</li><li>개인정보 수집 및 이용 동의 철회</li></ul>"
+    },
+    {
+      title: "요청 시 필요한 정보",
+      body: "<ul><li>로그인 아이디</li><li>요청 유형: 계정 삭제, 정보 정정, 검색 이력 삭제, 관심숙소 삭제 중 선택</li><li>삭제 또는 정정할 범위</li><li>본인 확인과 처리 결과 안내를 받을 연락처</li></ul>"
+    },
+    {
+      title: "처리 기준",
+      body: "<p>운영자는 본인 확인 후 요청 범위를 확인하고 처리합니다. 법령상 보존이 필요한 정보, 보안 사고 대응에 필요한 최소 로그, 이미 비식별화된 통계성 데이터는 즉시 삭제 대상에서 제외될 수 있습니다.</p>"
+    },
+    {
+      title: "요청 방법",
+      body: `<p>운영자에게 로그인 아이디와 요청 유형을 전달하세요. 문의: ${policyContactHtml()}</p><p>처리 전 실수로 인한 데이터 손실을 막기 위해 삭제 범위는 한 번 더 확인합니다.</p>`
+    }
+  ], { backHref: role === USER_ROLES.admin ? "/admin" : "/b2b", backLabel: "서비스 화면으로 돌아가기" });
 }
 
 function forbiddenPage(message = "") {
@@ -9896,8 +9929,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-b2b-account-security-panel"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-b2b-account-security-panel"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260707-account-request-guide"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260707-account-request-guide"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -10024,6 +10057,11 @@ async function route(req, res) {
 
     if (!requireLogin(req, res, reqUrl)) return;
     const session = getSession(req);
+
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/account-request") {
+      if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
+      return send(res, 200, accountRequestPage(session), "text/html; charset=utf-8");
+    }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/session") {
       return send(res, 200, publicSession(session));

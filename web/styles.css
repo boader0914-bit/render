@@ -972,6 +972,35 @@ a {
   overflow-wrap: anywhere;
 }
 
+.b2b-account-actions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.b2b-account-actions a {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  padding: 0 11px;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1.25;
+  text-decoration: none;
+  word-break: keep-all;
+}
+
+.b2b-account-actions a:hover {
+  border-color: #3182f6;
+  background: #eff6ff;
+}
+
 .b2b-history-head {
   min-width: 0;
   display: flex;
@@ -15305,6 +15334,17 @@ body.role-b2b .b2b-account-head > span {
   color: #bbf7d0;
 }
 
+body.role-b2b .b2b-account-actions a {
+  border-color: rgba(106, 168, 255, .28);
+  background: rgba(106, 168, 255, .12);
+  color: #dcecff;
+}
+
+body.role-b2b .b2b-account-actions a:hover {
+  border-color: rgba(106, 168, 255, .48);
+  background: rgba(106, 168, 255, .18);
+}
+
 body.role-b2b .b2b-search-form input,
 body.role-b2b .b2b-search-form select,
 body.role-b2b .b2b-my-lodge-field input,
@@ -17022,7 +17062,8 @@ body.role-b2b .structure-action-list li::before {
     grid-template-columns: 1fr;
   }
 
-  .b2b-onboarding-actions {
+  .b2b-onboarding-actions,
+  .b2b-account-actions {
     display: grid;
     grid-template-columns: 1fr;
   }
