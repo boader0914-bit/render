@@ -2957,36 +2957,9 @@ function loginPage(message = "") {
       max-width: 420px;
       margin: 18px 0 0;
       color: #b8c4d6;
-      font-size: 17px;
-      font-weight: 700;
+      font-size: 18px;
+      font-weight: 800;
       line-height: 1.55;
-    }
-    .login-security-grid {
-      display: grid;
-      gap: 10px;
-      margin-top: 28px;
-      max-width: 430px;
-    }
-    .login-security-grid article {
-      display: grid;
-      gap: 3px;
-      padding: 13px 14px;
-      border: 1px solid rgba(148, 163, 184, .20);
-      border-radius: 16px;
-      background: rgba(7, 11, 18, .30);
-    }
-    .login-security-grid strong {
-      color: #f8fbff;
-      font-size: 14px;
-      font-weight: 950;
-      line-height: 1.25;
-    }
-    .login-security-grid span {
-      color: #b8c4d6;
-      font-size: 12px;
-      font-weight: 750;
-      line-height: 1.45;
-      word-break: keep-all;
     }
     .form-head { margin-bottom: 22px; }
     .form-head strong {
@@ -3078,12 +3051,7 @@ function loginPage(message = "") {
     <section class="login-brand-panel" aria-label="숙박업 데이터랩 beta">
       <div>
         <h1>${brandTitleHtml("숙박업 데이터랩 beta")}</h1>
-        <p class="brand-note">지역 내 노출, 예약율, 예상 매출 흐름을 한 화면에서 확인합니다.</p>
-        <div class="login-security-grid" aria-label="계정 보안 안내">
-          <article><strong>권한 분리</strong><span>관리자와 사업자 계정은 서로 다른 화면과 데이터 범위를 사용합니다.</span></article>
-          <article><strong>보안 저장</strong><span>비밀번호는 해시로 저장하고 IP와 세션 식별값은 원문 대신 해시로 관리합니다.</span></article>
-          <article><strong>검색 이력 관리</strong><span>사업자 계정의 리포트와 관심숙소는 로그인 아이디 기준으로 묶습니다.</span></article>
-        </div>
+        <p class="brand-note">예상매출을 확인하여 운영전략을 제안해드립니다.</p>
       </div>
     </section>
     <section class="login-form-panel" aria-label="로그인">
@@ -9955,8 +9923,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-admin-policy-history"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-admin-policy-history"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-login-copy-cleanup"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-login-copy-cleanup"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
