@@ -1684,6 +1684,106 @@ a {
   white-space: nowrap;
 }
 
+.admin-queue-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-queue-summary-grid article {
+  min-width: 0;
+  border: 1px solid #e5edf7;
+  border-radius: 13px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.admin-queue-summary-grid article.active {
+  border-color: rgba(245, 158, 11, .35);
+  background: linear-gradient(180deg, #fffdf7, #f8fbff);
+}
+
+.admin-queue-summary-grid span,
+.admin-queue-summary-grid small {
+  display: block;
+  min-width: 0;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-queue-summary-grid strong {
+  display: block;
+  margin: 4px 0 2px;
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.admin-collapse-details {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #fbfdff;
+  overflow: hidden;
+}
+
+.admin-collapse-details summary {
+  position: relative;
+  min-height: 48px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  list-style: none;
+}
+
+.admin-collapse-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-collapse-details summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.admin-collapse-details[open] summary::after {
+  content: "-";
+}
+
+.admin-collapse-details summary span,
+.admin-collapse-details summary small {
+  min-width: 0;
+}
+
+.admin-collapse-details summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.admin-collapse-details .admin-queue-table {
+  padding: 0 12px 12px;
+}
+
 .admin-queue-table,
 .admin-master-table,
 .admin-task-list {
@@ -18774,6 +18874,21 @@ body.role-b2b .structure-action-list li::before {
   body.role-admin .admin-section-nav button {
     min-height: 40px;
     font-size: 12px;
+  }
+
+  body.role-admin .admin-queue-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-collapse-details summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-collapse-details summary::after {
+    position: absolute;
+    right: 12px;
+    top: 10px;
   }
 
   body.role-b2b .bottom-nav {

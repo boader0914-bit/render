@@ -14327,44 +14327,83 @@ function adminConsoleKpis(master = {}, entries = []) {
 }
 
 function adminConsoleQueuePreview(entries = []) {
-  const rows = entries.filter((entry) => entry.workflow.key !== "done").slice(0, 6);
+  const openRows = entries.filter((entry) => entry.workflow.key !== "done");
+  const rows = openRows.slice(0, 6);
+  const manualNeeded = openRows.filter((entry) =>
+    entry.type.key === "correction" ||
+    entry.profile.needed ||
+    entry.company.adminReview?.status === "manual_needed" ||
+    (entry.decision.criteria || []).some((criterion) => criterion.key === "manual_recheck")
+  ).length;
+  const otaNeeded = openRows.filter((entry) =>
+    (entry.decision.criteria || []).some((criterion) => criterion.key === "ota") ||
+    /OTA|채널|야놀자|여기어때|떠나요/.test([entry.decision.label, entry.decision.channelText, entry.decision.gapType].filter(Boolean).join(" "))
+  ).length;
+  const recrawlNeeded = openRows.filter((entry) =>
+    entry.workflow.key === "recrawl" ||
+    entry.workflow.key === "recheck" ||
+    entry.autoRecommendation?.key === "recrawl_needed"
+  ).length;
+  const summaryCards = [
+    ["열린 큐", openRows.length, "컨택 전 사람 확인"],
+    ["보정 필요", manualNeeded, "총량·수량 구조 확인"],
+    ["OTA 확인", otaNeeded, "채널 보조 확인"],
+    ["재수집", recrawlNeeded, "조건 변경 후 재확인"]
+  ];
   return `
-    <section class="admin-console-panel admin-queue-preview">
+    <section class="admin-console-panel admin-queue-preview admin-queue-collapsed-card">
       <div class="admin-console-head">
         <div>
-          <strong>판단 큐 V2</strong>
-          <small>OTA, 수량 구조, 총량 변동, 판매 공백, 보정 재검토를 먼저 처리합니다.</small>
+          <strong>판단 큐 요약</strong>
+          <small>운영 현황에서는 확인 대상 수만 보고, 실제 처리는 별도 판단큐 화면에서 진행합니다.</small>
         </div>
-        <button type="button" data-drawer-tab="decisionQueue">전체 큐</button>
+        <button type="button" data-drawer-tab="decisionQueue">전체 큐 보기</button>
       </div>
-      <div class="admin-queue-table">
-        <div class="admin-queue-row head">
-          <span>업체</span><span>지역</span><span>진입 사유</span><span>우선</span><span>액션</span>
-        </div>
-        ${rows.length ? rows.map((entry) => {
-          const company = entry.company || {};
-          const criteria = (entry.decision.criteria || []).slice(0, 4);
-          const region = (company.regions || [])[0] || "지역 확인";
-          return `
-            <div class="admin-queue-row ${escapeHtml(entry.workflow.key)}">
-              <div>
-                <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
-                <small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 대기")}</small>
-              </div>
-              <span>${escapeHtml(region)}</span>
-              <div class="admin-reason-badges">
-                ${(criteria.length ? criteria : [{ label: entry.type.label || "확인 필요" }]).map((criterion) => `<mark>${escapeHtml(criterion.label || "확인 필요")}</mark>`).join("")}
-              </div>
-              <b>${fmtNumber(entry.priority.score || 0)}</b>
-              <div class="admin-row-actions">
-                <button type="button" data-company-review-action="check_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 확인 필요로 지정">확인</button>
-                <button type="button" data-company-review-action="manual_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보정 필요로 지정">보정</button>
-                <button type="button" data-company-review-action="hold" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보류로 지정">보류</button>
-              </div>
+      <div class="admin-queue-summary-grid">
+        ${summaryCards.map(([label, value, note]) => `
+          <article class="${value ? "active" : ""}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmtNumber(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      ${rows.length ? `
+        <details class="admin-collapse-details admin-queue-details">
+          <summary>
+            <span>상위 ${fmtNumber(rows.length)}개 미리보기</span>
+            <small>펼쳐서 업체와 진입 사유만 빠르게 확인</small>
+          </summary>
+          <div class="admin-queue-table">
+            <div class="admin-queue-row head">
+              <span>업체</span><span>지역</span><span>진입 사유</span><span>우선</span><span>액션</span>
             </div>
-          `;
-        }).join("") : `<p class="empty">현재 열린 판단 큐가 없습니다.</p>`}
-      </div>
+            ${rows.map((entry) => {
+              const company = entry.company || {};
+              const criteria = (entry.decision.criteria || []).slice(0, 4);
+              const region = (company.regions || [])[0] || "지역 확인";
+              return `
+                <div class="admin-queue-row ${escapeHtml(entry.workflow.key)}">
+                  <div>
+                    <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+                    <small>${escapeHtml(company.bestKeyword || company.latestKeyword || "키워드 대기")}</small>
+                  </div>
+                  <span>${escapeHtml(region)}</span>
+                  <div class="admin-reason-badges">
+                    ${(criteria.length ? criteria : [{ label: entry.type.label || "확인 필요" }]).map((criterion) => `<mark>${escapeHtml(criterion.label || "확인 필요")}</mark>`).join("")}
+                  </div>
+                  <b>${fmtNumber(entry.priority.score || 0)}</b>
+                  <div class="admin-row-actions">
+                    <button type="button" data-company-review-action="check_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 확인 필요로 지정">확인</button>
+                    <button type="button" data-company-review-action="manual_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보정 필요로 지정">보정</button>
+                    <button type="button" data-company-review-action="hold" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보류로 지정">보류</button>
+                  </div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </details>
+      ` : `<p class="empty">현재 열린 판단 큐가 없습니다.</p>`}
     </section>
   `;
 }
