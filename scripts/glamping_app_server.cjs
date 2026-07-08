@@ -1268,11 +1268,13 @@ const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".geojson": "application/geo+json; charset=utf-8",
   ".csv": "text/csv; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
   ".png": "image/png",
+  ".svg": "image/svg+xml",
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 };
 
@@ -3530,7 +3532,7 @@ function forbiddenPage(message = "") {
   <style>
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: #f4f6f8; color: #101828; }
     main { width: min(100% - 32px, 420px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
     h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
     p { margin: 0 0 22px; color: #667085; line-height: 1.45; }
@@ -3555,7 +3557,15 @@ function loginPage(message = "") {
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="application-name" content="숙박업 데이터랩 beta">
+  <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
+  <meta name="theme-color" content="#1457c7">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <title>숙박업 데이터랩 beta 로그인</title>
   <style>
     :root { color-scheme: dark; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
@@ -3565,7 +3575,11 @@ function loginPage(message = "") {
       min-height: 100vh;
       display: grid;
       place-items: center;
-      padding: 24px;
+      padding:
+        calc(24px + env(safe-area-inset-top))
+        calc(24px + env(safe-area-inset-right))
+        calc(24px + env(safe-area-inset-bottom))
+        calc(24px + env(safe-area-inset-left));
       background: #070b12;
       color: #f7fbff;
     }
@@ -3767,7 +3781,15 @@ function signupPage(message = "", values = {}) {
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="application-name" content="숙박업 데이터랩 beta">
+  <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
+  <meta name="theme-color" content="#1457c7">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <title>숙박업 데이터랩 beta 회원가입</title>
   <style>
     :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
@@ -10617,8 +10639,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-policy-notices"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-policy-notices"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-pwa-ready"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-pwa-ready"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -10639,6 +10661,23 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    const publicStaticPaths = new Set([
+      "/manifest.webmanifest",
+      "/sw.js",
+      "/offline.html",
+      "/favicon.svg",
+      "/icons/icon-192.png",
+      "/icons/icon-512.png",
+      "/icons/maskable-512.png"
+    ]);
+    if ((req.method === "GET" || req.method === "HEAD") && publicStaticPaths.has(reqUrl.pathname)) {
+      if (req.method === "HEAD") {
+        const ext = path.extname(reqUrl.pathname).toLowerCase();
+        return sendHead(res, 200, MIME_TYPES[ext] || "application/octet-stream");
+      }
+      return serveStatic(reqUrl, res);
+    }
+
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
       const session = getSession(req);
       if (req.method === "HEAD") return sendHead(res, 200);

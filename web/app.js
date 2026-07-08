@@ -48,6 +48,7 @@ const state = {
   b2bSearchRestored: false,
   b2bSearchPending: null,
   b2bSearchCancelling: false,
+  b2bSearchLifecycleRestoring: false,
   b2bMyLodgeDraft: null,
   b2bMyLodgeExpanded: false,
   b2bMyLodgeCollecting: false,
@@ -17709,8 +17710,27 @@ function renderAll() {
   if (roleAllowsTab("dictionary")) renderLocationDictionary();
 }
 
-function setActiveTab(tab) {
+function syncAppHistoryState(push = false) {
+  if (!window.history?.replaceState) return;
+  const nextState = {
+    app: "lodging-datalab",
+    role: state.session?.role || "",
+    tab: state.activeTab || firstRoleTab()
+  };
+  try {
+    if (push && window.history.pushState && window.history.state?.tab !== nextState.tab) {
+      window.history.pushState(nextState, "", window.location.href);
+      return;
+    }
+    window.history.replaceState(nextState, "", window.location.href);
+  } catch {
+    // Some embedded browsers can block history mutations. The app still works without it.
+  }
+}
+
+function setActiveTab(tab, options = {}) {
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  if (!options.fromHistory) syncAppHistoryState(Boolean(options.pushHistory ?? true));
   applyRoleUi();
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.panel === state.activeTab && roleAllowsTab(panel.dataset.panel));
@@ -18990,6 +19010,60 @@ async function restoreB2BActiveSearch() {
     // Keep the saved record. A short network interruption should not discard a running search.
   }
   return false;
+}
+
+function registerPwaServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  const secure = window.isSecureContext || ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  if (!secure) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  });
+}
+
+function persistB2BActiveSearchBeforeLeave() {
+  if (isAdminRole() || !state.b2bSearchLoading || !state.b2bSearchClientRequestId) return;
+  writeB2BActiveSearchRecord({
+    clientRequestId: state.b2bSearchClientRequestId,
+    keyword: state.b2bSearchActiveKeyword || state.b2bSearchQuery || "",
+    range: state.b2bSearchActiveRange || state.b2bSearchRange || "1-10",
+    payload: b2bLiveSearchPayload(state.b2bSearchActiveKeyword || state.b2bSearchQuery || ""),
+    preview: state.b2bSearchPreview || null,
+    startedAt: state.b2bSearchStartedAt || Date.now()
+  });
+}
+
+async function resumeB2BSearchAfterReturn(reason = "") {
+  if (isAdminRole() || state.b2bSearchLifecycleRestoring) return;
+  state.b2bSearchLifecycleRestoring = true;
+  try {
+    if (state.b2bSearchLoading) {
+      await refreshB2BSearchServerStatus();
+      renderB2BSearchPanel();
+      return;
+    }
+    await loadMemberSearchHistory();
+    const restored = await restoreB2BActiveSearch();
+    if (!restored && reason === "online") renderB2BSearchPanel();
+  } finally {
+    state.b2bSearchLifecycleRestoring = false;
+  }
+}
+
+function bindPwaLifecycleEvents() {
+  window.addEventListener("beforeunload", persistB2BActiveSearchBeforeLeave);
+  window.addEventListener("pagehide", persistB2BActiveSearchBeforeLeave);
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) resumeB2BSearchAfterReturn("pageshow").catch(() => {});
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") resumeB2BSearchAfterReturn("visible").catch(() => {});
+  });
+  window.addEventListener("online", () => resumeB2BSearchAfterReturn("online").catch(() => {}));
+  window.addEventListener("popstate", (event) => {
+    const tab = event.state?.tab;
+    if (tab && roleAllowsTab(tab)) setActiveTab(tab, { fromHistory: true });
+  });
 }
 
 async function loadHistoryOps() {
@@ -20352,11 +20426,14 @@ function bindEvents() {
 
 async function init() {
   ensureCrawlControls();
+  registerPwaServiceWorker();
+  bindPwaLifecycleEvents();
   try {
     await loadSession();
     syncCollectionModeInputs();
     bindEvents();
     setDefaultDates();
+    syncAppHistoryState(false);
     if (isAdminRole()) {
       await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
     } else {
