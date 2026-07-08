@@ -2398,6 +2398,9 @@ function summarizeSales(items = []) {
 function itemRevenueStats(item = {}, kind = "lodging") {
   const sales = salesStats(item, kind === "day" ? "day" : "lodging");
   const unit = kind === "day" ? "회" : "개";
+  const offlineSold = finiteNumber(sales.offlineSold, 0);
+  const rawSold = finiteNumber(sales.rawSold, 0);
+  const rawSupply = finiteNumber(sales.rawSupply, 0);
   const weeklyRevenue = optionalNumber(kind === "day" ? item.dayUseWeeklyEstimatedRevenue : item.weeklyEstimatedRevenue);
   const weeklyAdjusted = optionalNumber(kind === "day" ? item.dayUseWeeklyAdjustedRevenue : item.weeklyAdjustedRevenue);
   const weeklyGapRevenue = optionalNumber(kind === "day" ? item.dayUseWeeklyMissingPriceEstimatedRevenue : item.weeklyMissingPriceEstimatedRevenue);
@@ -2422,6 +2425,9 @@ function itemRevenueStats(item = {}, kind = "lodging") {
       pricedSoldOut,
       missingPriceSoldOut,
       avgSoldUnitPrice: Number.isFinite(weeklyAvg) ? weeklyAvg : null,
+      offlineSold,
+      rawSold,
+      rawSupply,
       label: sales.label || "기간 집계",
       unit,
       detail: weeklyDetail || "",
@@ -2452,6 +2458,9 @@ function itemRevenueStats(item = {}, kind = "lodging") {
       pricedSoldOut,
       missingPriceSoldOut,
       avgSoldUnitPrice: Number.isFinite(basisAvg) ? basisAvg : null,
+      offlineSold,
+      rawSold,
+      rawSupply,
       label: sales.label || "기준일",
       unit,
       detail: "",
@@ -2469,6 +2478,9 @@ function itemRevenueStats(item = {}, kind = "lodging") {
     pricedSoldOut: 0,
     missingPriceSoldOut: 0,
     avgSoldUnitPrice: null,
+    offlineSold,
+    rawSold,
+    rawSupply,
     label: "가격 수집 필요",
     unit,
     detail: "",
@@ -2541,6 +2553,7 @@ function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lo
   const totalMissingPriceEstimatedRevenue = finiteNumber(lodging.missingPriceEstimatedRevenue) + finiteNumber(dayUse.missingPriceEstimatedRevenue);
   const priced = finiteNumber(lodging.pricedSoldOut) + finiteNumber(dayUse.pricedSoldOut);
   const missing = finiteNumber(lodging.missingPriceSoldOut) + finiteNumber(dayUse.missingPriceSoldOut);
+  const offlineSold = finiteNumber(lodging.offlineSold) + finiteNumber(dayUse.offlineSold);
   const soldQuantity = priced + missing;
   const coverage = soldQuantity ? priced / soldQuantity : NaN;
   const confidence = inventoryConfidenceInfo(item);
@@ -2567,6 +2580,7 @@ function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lo
     hasDayType ? "평일/금/토/일 분리" : "요일별 매출 대기",
     productKnown ? "상품별 수량 확인" : "상품별 수량 미확보",
     Number.isFinite(coverage) ? `가격확보 ${fmtRate(coverage)}` : "가격확보 대기",
+    offlineSold ? `총량감소 ${fmtNumber(offlineSold)}개/회` : "",
     missing ? `가격누락 ${fmtNumber(missing)}개/회` : "가격누락 없음",
     confidence.grade ? `수량 신뢰도 ${confidence.grade}` : ""
   ].filter(Boolean);
@@ -2581,6 +2595,7 @@ function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lo
     totalMissingPriceEstimatedRevenue,
     priced,
     missing,
+    offlineSold,
     soldQuantity,
     productKnown,
     hasDayType,
@@ -2600,6 +2615,7 @@ function preciseRevenueProfile(item = {}) {
     totalRevenue: finiteNumber(lodging.revenue) + finiteNumber(dayUse.revenue),
     totalAdjustedRevenue: finiteNumber(lodging.adjustedRevenue) + finiteNumber(dayUse.adjustedRevenue),
     totalMissingPriceEstimatedRevenue: finiteNumber(lodging.missingPriceEstimatedRevenue) + finiteNumber(dayUse.missingPriceEstimatedRevenue),
+    totalOfflineSold: finiteNumber(lodging.offlineSold) + finiteNumber(dayUse.offlineSold),
     lodgingDayRows: revenueDayTypeRows(lodging),
     dayUseDayRows: revenueDayTypeRows(dayUse),
     productRows: revenueProductRows(item)
@@ -2615,11 +2631,13 @@ function summarizeRevenue(items = []) {
     acc.missingPriceEstimatedRevenue += finiteNumber(lodging.missingPriceEstimatedRevenue);
     acc.pricedSoldOut += finiteNumber(lodging.pricedSoldOut);
     acc.missingPriceSoldOut += finiteNumber(lodging.missingPriceSoldOut);
+    acc.offlineSold += finiteNumber(lodging.offlineSold);
     acc.dayRevenue += finiteNumber(day.revenue);
     acc.dayAdjustedRevenue += finiteNumber(day.adjustedRevenue);
     acc.dayMissingPriceEstimatedRevenue += finiteNumber(day.missingPriceEstimatedRevenue);
     acc.dayPricedSoldOut += finiteNumber(day.pricedSoldOut);
     acc.dayMissingPriceSoldOut += finiteNumber(day.missingPriceSoldOut);
+    acc.dayOfflineSold += finiteNumber(day.offlineSold);
     return acc;
   }, {
     revenue: 0,
@@ -2627,11 +2645,13 @@ function summarizeRevenue(items = []) {
     missingPriceEstimatedRevenue: 0,
     pricedSoldOut: 0,
     missingPriceSoldOut: 0,
+    offlineSold: 0,
     dayRevenue: 0,
     dayAdjustedRevenue: 0,
     dayMissingPriceEstimatedRevenue: 0,
     dayPricedSoldOut: 0,
-    dayMissingPriceSoldOut: 0
+    dayMissingPriceSoldOut: 0,
+    dayOfflineSold: 0
   });
 }
 
@@ -17724,6 +17744,16 @@ function revenueCoverageText(revenue = {}) {
   return `${fmtNumber(priced)}${revenue.unit} 가격확인${missing ? ` · 가격누락 ${fmtNumber(missing)}${revenue.unit}` : ""}${gapRevenue ? ` · 보정 ${fmtWon(gapRevenue)}` : ""}`;
 }
 
+function revenueOfflineQuantityText(lodging = {}, dayUse = {}) {
+  const lodgingOffline = finiteNumber(lodging.offlineSold, 0);
+  const dayUseOffline = finiteNumber(dayUse.offlineSold, 0);
+  const parts = [
+    lodgingOffline ? `숙박 ${fmtNumber(lodgingOffline)}개` : "",
+    dayUseOffline ? `데이유즈/캠프닉 ${fmtNumber(dayUseOffline)}회` : ""
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "특이 없음";
+}
+
 function revenueDayTypeGridHtml(title, rows = [], fallback = "요일별 가격과 판매수량을 같은 수집에서 확보해야 합니다.") {
   return `
     <div class="revenue-day-panel">
@@ -17780,6 +17810,7 @@ function sheetRevenuePanel(item = {}) {
     : `가격확보 ${Number.isFinite(precision.coverage) ? fmtRate(precision.coverage) : "대기"} · ${fmtNumber(precision.priced)}개/회`;
   const lodgingRevenueValue = lodging.adjustedRevenue || lodging.revenue;
   const dayUseRevenueValue = dayUse.adjustedRevenue || dayUse.revenue;
+  const offlineQuantityText = revenueOfflineQuantityText(lodging, dayUse);
   return `
     <section class="sheet-section sheet-revenue-section">
       <div class="sheet-structure-title">
@@ -17796,6 +17827,11 @@ function sheetRevenuePanel(item = {}) {
           <span>숙박 매출</span>
           <strong>${fmtWon(lodgingRevenueValue)}</strong>
           <small>${escapeHtml(`${lodging.label} · ${revenueCoverageText(lodging)}${lodgingRevenueValue > lodging.revenue ? ` · 원매출 ${fmtWon(lodging.revenue)}` : ""}`)}</small>
+        </div>
+        <div>
+          <span>오프라인 판매 추정</span>
+          <strong>${escapeHtml(offlineQuantityText)}</strong>
+          <small>총량 감소분 기준 · 실판매/운영차단 확인 필요</small>
         </div>
         <div>
           <span>숙박 평균단가</span>
