@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { URL } = require("node:url");
 const yeogiImportParser = require("./yeogi_import_parser.cjs");
+const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
@@ -45,6 +46,7 @@ const B2B_SEARCH_HISTORY_FILE = path.join(CUSTOMER_DB_DIR, "b2b_search_history.j
 const ACCOUNT_DELETE_REQUESTS_FILE = path.join(CUSTOMER_DB_DIR, "account_delete_requests.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
+const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-07-08";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
@@ -89,8 +91,15 @@ const RATE_LIMIT_POLICIES = {
   accountDelete: { limit: 10, windowMs: 60 * 60 * 1000 },
   b2bSearch: { limit: 12, windowMs: 5 * 60 * 1000 },
   b2bMyLodgeCollect: { limit: 10, windowMs: 10 * 60 * 1000 },
-  adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 }
+  adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 },
+  adminTourism: { limit: 30, windowMs: 10 * 60 * 1000 }
 };
+const tourismCollector = createTourismCollector({
+  rootDir: ROOT,
+  webDir: WEB_DIR,
+  dataDir: DATA_DIR,
+  tourismDataDir: TOURISM_DATA_DIR
+});
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
 let activeCrawlEstimate = null;
@@ -11177,8 +11186,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-tourism-region-map"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-tourism-region-map"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-tourism-collector"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-tourism-collector"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -11514,6 +11523,18 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveLocationCardRequest(payload));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/tourism-data/status") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, await tourismCollector.status());
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/collect") {
+      if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(req, "adminTourism", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await tourismCollector.collect(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/duplicates") {
