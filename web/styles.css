@@ -9414,6 +9414,58 @@ a.platform-row:hover {
   display: none;
 }
 
+.admin-mobile-nav {
+  display: none;
+}
+
+.admin-mobile-primary,
+.admin-mobile-secondary {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-mobile-primary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-mobile-secondary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 7px;
+}
+
+.admin-mobile-nav button {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid rgba(24, 119, 242, .12);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .76);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-mobile-primary button.active {
+  border-color: rgba(49, 130, 246, .42);
+  background: linear-gradient(180deg, #3b82f6 0%, #2463c8 100%);
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(49, 130, 246, .22);
+}
+
+.admin-mobile-secondary button {
+  min-height: 36px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.admin-mobile-secondary button.active {
+  border-color: rgba(16, 185, 129, .35);
+  background: #ecfdf3;
+  color: #047857;
+}
+
 .detail-sheet,
 .control-drawer {
   position: fixed;
@@ -18626,6 +18678,35 @@ body.role-b2b .structure-action-list li::before {
     min-height: 40px;
     border-radius: 11px;
     font-size: 10px;
+  }
+
+  body.role-admin .bottom-nav {
+    display: none;
+  }
+
+  body.role-admin .admin-mobile-nav {
+    position: sticky;
+    z-index: 20;
+    top: calc(10px + env(safe-area-inset-top));
+    display: block;
+    width: min(100%, 520px);
+    margin: 0 auto 18px;
+    padding: 7px;
+    border: 1px solid rgba(228, 231, 236, .86);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, .95);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, .12);
+    backdrop-filter: blur(12px);
+  }
+
+  body.role-admin .admin-mobile-secondary {
+    overflow-x: auto;
+    grid-template-columns: repeat(3, minmax(92px, 1fr));
+    scrollbar-width: none;
+  }
+
+  body.role-admin .admin-mobile-secondary::-webkit-scrollbar {
+    display: none;
   }
 
   body.role-b2b .bottom-nav {

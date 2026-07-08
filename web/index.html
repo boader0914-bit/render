@@ -72,6 +72,16 @@
         <button type="button" data-tab="admin">관리</button>
       </nav>
 
+      <nav class="admin-mobile-nav" aria-label="관리자 모바일 메뉴">
+        <div class="admin-mobile-primary">
+          <button type="button" data-admin-mobile-section="analysis">분석</button>
+          <button type="button" data-admin-mobile-section="queue">큐</button>
+          <button type="button" data-admin-mobile-section="collect">수집</button>
+          <button type="button" data-admin-mobile-section="settings">설정</button>
+        </div>
+        <div class="admin-mobile-secondary" data-admin-mobile-secondary></div>
+      </nav>
+
       <section class="tab-panel active" id="reportPanel" data-panel="report" aria-label="요약 리포트">
         <div id="reportBody" class="report-body"></div>
       </section>
@@ -242,7 +252,7 @@
             <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
           </form>
 
-          <section class="admin-card">
+          <section class="admin-card" id="runResultAdminCard">
             <div class="card-head">
               <h3>실행 결과</h3>
               <button class="small-button" id="refreshRuns" type="button">새로고침</button>
@@ -253,7 +263,7 @@
             </label>
           </section>
 
-          <section class="admin-card">
+          <section class="admin-card" id="yeogiAdminCard">
             <div class="card-head">
               <h3>여기어때 통합</h3>
               <span class="state-badge" id="yeogiManualBadge">대기</span>
@@ -288,7 +298,7 @@
             <p class="import-status" id="yeogiImportStatus">통합하면 화면이 자동 갱신됩니다.</p>
           </section>
 
-          <section class="admin-card">
+          <section class="admin-card" id="trafficAdminCard">
             <div class="card-head">
               <h3>트래픽 API</h3>
               <span class="state-badge" id="trafficApiState">미설정</span>
@@ -325,7 +335,7 @@
             </details>
           </section>
 
-          <section class="admin-card">
+          <section class="admin-card" id="companyMasterAdminCard">
             <div class="card-head">
               <h3>업체 마스터 DB</h3>
               <span class="state-badge" id="companyMasterState">대기</span>
@@ -333,7 +343,7 @@
             <div class="company-master-panel" id="companyMasterPanel"></div>
           </section>
 
-          <section class="admin-card">
+          <section class="admin-card" id="downloadAdminCard">
             <h3>파일</h3>
             <p class="legal-inline-notice">다운로드 파일과 리포트는 참고용 분석 결과입니다. <a href="/report-disclaimer" target="_blank" rel="noopener">리포트 면책 문구</a>를 함께 확인하세요.</p>
             <div class="download-list" id="downloadList"></div>

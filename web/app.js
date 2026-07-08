@@ -11,6 +11,8 @@ const state = {
   data: null,
   activeRunId: null,
   activeTab: "report",
+  adminMobileSection: "analysis",
+  adminMobileAnchor: "",
   selectedItem: null,
   selectedSheetTab: "booking",
   mapData: null,
@@ -165,6 +167,48 @@ const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
   admin: ["report", "rank", "dictionary", "target", "decisionQueue", "map", "demand", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand"]
+};
+const ADMIN_MOBILE_SECTIONS = {
+  analysis: {
+    label: "분석",
+    target: "report",
+    items: [
+      { label: "요약", tab: "report" },
+      { label: "순위", tab: "rank" },
+      { label: "지도", tab: "map" },
+      { label: "수요", tab: "demand" },
+      { label: "입지", tab: "dictionary" },
+      { label: "누적", tab: "historyOps" }
+    ]
+  },
+  queue: {
+    label: "큐",
+    target: "decisionQueue",
+    items: [
+      { label: "판단큐", tab: "decisionQueue" },
+      { label: "영업타깃", tab: "target" }
+    ]
+  },
+  collect: {
+    label: "수집",
+    target: "admin",
+    anchor: "#crawlForm",
+    items: [
+      { label: "새 수집", tab: "admin", anchor: "#crawlForm" },
+      { label: "실행 결과", tab: "admin", anchor: "#runResultAdminCard" },
+      { label: "여기어때", tab: "admin", anchor: "#yeogiAdminCard" }
+    ]
+  },
+  settings: {
+    label: "설정",
+    target: "admin",
+    anchor: "#trafficAdminCard",
+    items: [
+      { label: "API", tab: "admin", anchor: "#trafficAdminCard" },
+      { label: "마스터DB", tab: "admin", anchor: "#companyMasterAdminCard" },
+      { label: "파일", tab: "admin", anchor: "#downloadAdminCard" }
+    ]
+  }
 };
 const TAB_LABELS = {
   report: "요약 리포트",
@@ -736,6 +780,73 @@ function tabLabel(tab) {
   return !isAdminRole() && B2B_TAB_LABELS[tab] ? B2B_TAB_LABELS[tab] : (TAB_LABELS[tab] || "요약 리포트");
 }
 
+function adminMobileSectionForTab(tab, preferred = "") {
+  if (!isAdminRole()) return "";
+  const preferredSection = preferred ? ADMIN_MOBILE_SECTIONS[preferred] : null;
+  if (preferredSection) {
+    const preferredTabs = new Set([preferredSection.target, ...(preferredSection.items || []).map((item) => item.tab)]);
+    if (preferredTabs.has(tab)) return preferred;
+  }
+  if (["decisionQueue", "target"].includes(tab)) return "queue";
+  if (tab === "admin") {
+    return ["collect", "settings"].includes(state.adminMobileSection) ? state.adminMobileSection : "collect";
+  }
+  return "analysis";
+}
+
+function isAdminMobileLayout() {
+  return isAdminRole() && window.matchMedia && window.matchMedia("(max-width: 720px)").matches;
+}
+
+function scrollAdminMobileAnchor(anchor) {
+  if (!anchor || !isAdminMobileLayout()) return;
+  window.setTimeout(() => {
+    const target = document.querySelector(anchor);
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 120);
+}
+
+function syncAdminMobileNav() {
+  const isAdmin = isAdminRole();
+  const sectionKey = adminMobileSectionForTab(state.activeTab, state.adminMobileSection) || "analysis";
+  const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.analysis;
+  state.adminMobileSection = sectionKey;
+  if (state.activeTab !== "admin") state.adminMobileAnchor = "";
+  if (state.activeTab === "admin" && !state.adminMobileAnchor) state.adminMobileAnchor = section.anchor || "";
+
+  document.querySelectorAll("[data-admin-mobile-section]").forEach((button) => {
+    const key = button.dataset.adminMobileSection || "";
+    const config = ADMIN_MOBILE_SECTIONS[key];
+    button.hidden = !isAdmin || !config;
+    button.classList.toggle("active", isAdmin && key === sectionKey);
+    if (config) button.textContent = config.label;
+  });
+
+  document.querySelectorAll("[data-admin-mobile-secondary]").forEach((container) => {
+    container.hidden = !isAdmin;
+    if (!isAdmin) {
+      container.innerHTML = "";
+      return;
+    }
+    container.innerHTML = (section.items || []).map((item) => {
+      const tab = item.tab || section.target || "report";
+      const anchor = item.anchor || "";
+      const active = tab === state.activeTab && (!anchor || anchor === state.adminMobileAnchor);
+      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
+    }).join("");
+  });
+}
+
+function activateAdminMobileNav(sectionKey, tab = "", anchor = "") {
+  if (!isAdminRole()) return;
+  const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.analysis;
+  const nextTab = roleAllowsTab(tab) ? tab : section.target;
+  state.adminMobileSection = sectionKey;
+  state.adminMobileAnchor = anchor || section.anchor || "";
+  setActiveTab(nextTab, { adminMobileSection: sectionKey });
+  scrollAdminMobileAnchor(state.adminMobileAnchor);
+}
+
 function setPanelHeading(panel, title, description) {
   const root = document.querySelector(`[data-panel="${panel}"] .section-title`);
   const heading = root?.querySelector("h2");
@@ -781,6 +892,7 @@ function applyRoleUi() {
   }
   syncRoleStaticLabels();
   syncB2BSearchRangeControl();
+  syncAdminMobileNav();
 }
 
 async function fetchJson(url, options) {
@@ -17730,6 +17842,13 @@ function syncAppHistoryState(push = false) {
 
 function setActiveTab(tab, options = {}) {
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  if (isAdminRole()) {
+    state.adminMobileSection = adminMobileSectionForTab(state.activeTab, options.adminMobileSection || "");
+    if (state.activeTab !== "admin") state.adminMobileAnchor = "";
+    if (state.activeTab === "admin" && !state.adminMobileAnchor) {
+      state.adminMobileAnchor = ADMIN_MOBILE_SECTIONS[state.adminMobileSection]?.anchor || "";
+    }
+  }
   if (!options.fromHistory) syncAppHistoryState(Boolean(options.pushHistory ?? true));
   applyRoleUi();
   document.querySelectorAll(".tab-panel").forEach((panel) => {
@@ -20075,6 +20194,22 @@ function bindEvents() {
     button.addEventListener("click", () => setActiveTab(button.dataset.tab));
   });
   document.addEventListener("click", (event) => {
+    const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
+    if (adminMobileSection) {
+      const sectionKey = adminMobileSection.dataset.adminMobileSection || "analysis";
+      const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.analysis;
+      activateAdminMobileNav(sectionKey, section.target, section.anchor || "");
+      return;
+    }
+    const adminMobileTab = event.target.closest("[data-admin-mobile-tab]");
+    if (adminMobileTab) {
+      activateAdminMobileNav(
+        adminMobileTab.dataset.adminMobileSectionKey || state.adminMobileSection || "analysis",
+        adminMobileTab.dataset.adminMobileTab || "",
+        adminMobileTab.dataset.adminMobileAnchor || ""
+      );
+      return;
+    }
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
     if (event.target.closest("[data-b2b-history-toggle]")) {
