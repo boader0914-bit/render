@@ -30,6 +30,7 @@ const state = {
     checkQuery: "",
     salesGate: "all"
   },
+  adminSelectedRegionKey: "",
   crawlEtaByKey: {},
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
@@ -14367,13 +14368,219 @@ function adminRegionalSummaryCells(summary = {}) {
   ];
 }
 
-function adminRegionCardHtml(region = {}) {
+function adminRegionCompanyMatches(region = {}, company = {}) {
+  const regionLabels = [
+    region.regionLabel,
+    region.localityLabel,
+    region.provinceLabel && !region.localityLabel ? region.provinceLabel : ""
+  ].map(companyKey).filter(Boolean);
+  if (!regionLabels.length) return false;
+  const companyRegions = (company.regions || []).map(companyKey).filter(Boolean);
+  const companyAddress = companyKey((company.addresses || [])[0] || "");
+  return regionLabels.some((label) =>
+    companyRegions.includes(label) ||
+    (companyAddress && companyAddress.includes(label))
+  );
+}
+
+function adminRegionCompanyMetrics(company = {}, region = {}) {
+  const latest = company.inventory?.latest || {};
+  const signal = latest.salesSignal || {};
+  const lodging = signal.lodging || {};
+  const dayUse = signal.dayUse || {};
+  const revenue = latest.revenue || {};
+  const lodgingRevenue = finiteNumber(revenue.lodging?.adjustedRevenue, finiteNumber(revenue.lodging?.revenue, 0));
+  const dayUseRevenue = finiteNumber(revenue.dayUse?.adjustedRevenue, finiteNumber(revenue.dayUse?.revenue, 0));
+  const totalRevenue = lodgingRevenue + dayUseRevenue;
+  const lodgingRate = optionalNumber(lodging.averageRate);
+  const dayUseRate = optionalNumber(dayUse.averageRate);
+  const rate = Number.isFinite(lodgingRate)
+    ? lodgingRate
+    : (Number.isFinite(dayUseRate) ? dayUseRate : NaN);
+  const flags = [
+    ...(Array.isArray(latest.structureFlags) ? latest.structureFlags : []),
+    ...(Array.isArray(signal.structureFlags) ? signal.structureFlags : [])
+  ].filter(Boolean);
+  const stockVariance = Boolean(signal.stockVariance || lodging.stockVariance || dayUse.stockVariance || flags.includes("dynamic_capacity"));
+  const lowConfidence = ["D", "E"].includes(String(latest.confidenceGrade || "").toUpperCase());
+  const manualCorrection = Boolean(company.manualCorrection || latest.manualCorrectionApplied || signal.manualCorrectionApplied);
+  const adminReview = company.adminReview || null;
+  const couponVisible = Boolean(
+    latest.couponSignal?.visible ||
+    signal.couponSignal?.visible ||
+    company.salesTarget?.signals?.couponVisible
+  );
+  const issues = [
+    lowConfidence ? "수량 신뢰도 낮음" : "",
+    stockVariance ? "총량 변동" : "",
+    signal.structureWeak ? "상품 구조 확인" : "",
+    signal.lodgingStructuralBlockedTotal ? "미오픈/차단 확인" : "",
+    !Number.isFinite(rate) ? "예약율 표본 없음" : "",
+    !totalRevenue ? "매출 표본 없음" : "",
+    !adminReview ? "관리자 미검수" : ""
+  ].filter(Boolean);
+  const priority = issues.length * 12
+    + (lowConfidence ? 18 : 0)
+    + (stockVariance ? 14 : 0)
+    + (!totalRevenue ? 10 : 0)
+    + (!adminReview ? 8 : 0)
+    + (Number(company.salesTarget?.score || 0) / 8)
+    - (manualCorrection ? 8 : 0);
+  return {
+    latest,
+    signal,
+    lodging,
+    totalRevenue,
+    rate,
+    flags,
+    stockVariance,
+    lowConfidence,
+    manualCorrection,
+    adminReview,
+    couponVisible,
+    issues,
+    priority,
+    rank: Number(company.bestRank || 0) || null,
+    sourceLabel: company.collectionSources?.includes("b2b_search") ? "B2B 수집" : "관리자 수집",
+    regionLabel: (company.regions || [])[0] || region.regionLabel || ""
+  };
+}
+
+function adminRegionCompanyRows(region = {}, master = {}) {
+  const companies = master.companies || [];
+  const sampleIds = new Set((region.sampleCompanies || []).map((company) => company.companyId).filter(Boolean));
+  return companies
+    .filter((company) => sampleIds.has(company.companyId) || adminRegionCompanyMatches(region, company))
+    .map((company) => ({
+      company,
+      metrics: adminRegionCompanyMetrics(company, region)
+    }))
+    .sort((a, b) =>
+      b.metrics.priority - a.metrics.priority ||
+      (a.metrics.rank || 9999) - (b.metrics.rank || 9999) ||
+      String(b.company.lastSeenAt || "").localeCompare(String(a.company.lastSeenAt || ""))
+    );
+}
+
+function adminSelectedRegion(master = {}) {
+  const regions = master.adminRegionalOperations?.regions || [];
+  if (!regions.length) return null;
+  const selected = regions.find((region) => region.regionKey === state.adminSelectedRegionKey);
+  if (selected) return selected;
+  state.adminSelectedRegionKey = regions[0].regionKey || "";
+  return regions[0];
+}
+
+function adminRegionActionItems(region = {}, rows = []) {
+  const lowConfidence = rows.filter((row) => row.metrics.lowConfidence).length;
+  const stockVariance = rows.filter((row) => row.metrics.stockVariance).length;
+  const missingRevenue = rows.filter((row) => !row.metrics.totalRevenue).length;
+  const unreviewed = rows.filter((row) => !row.metrics.adminReview).length;
+  return [
+    region.revenueSampleCount < 3 ? "매출 표본 3곳 이상 확보" : "",
+    region.reservationSampleCount < 5 ? "예약율 표본 5곳 이상 확보" : "",
+    lowConfidence ? `수량 신뢰도 낮은 업체 ${fmtNumber(lowConfidence)}곳 보정` : "",
+    stockVariance ? `총량 변동 업체 ${fmtNumber(stockVariance)}곳 재검토` : "",
+    missingRevenue ? `매출 표본 없는 업체 ${fmtNumber(missingRevenue)}곳 가격 확인` : "",
+    unreviewed ? `관리자 미검수 업체 ${fmtNumber(unreviewed)}곳 판단` : "",
+    region.outsideExposureCount ? "지역 밖 노출 업체 주소/검색권 확인" : ""
+  ].filter(Boolean);
+}
+
+function adminRegionCompanyRowHtml(row = {}) {
+  const { company, metrics } = row;
+  const issueText = metrics.issues.slice(0, 3).join(" · ") || "즉시 이슈 없음";
+  const latestAt = compactDateTime(metrics.latest.collectedAt || company.lastSeenAt || "");
+  return `
+    <article class="admin-region-company-row">
+      <div>
+        <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+        <small>${escapeHtml([metrics.regionLabel, company.bestKeyword, latestAt].filter(Boolean).join(" · "))}</small>
+      </div>
+      <div class="admin-region-company-metrics">
+        <span><b>${metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위대기"}</b><small>최고 노출</small></span>
+        <span><b>${Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "대기"}</b><small>예약율</small></span>
+        <span><b>${metrics.totalRevenue ? fmtWon(metrics.totalRevenue) : "대기"}</b><small>예상 매출</small></span>
+        <span><b>${escapeHtml(metrics.latest.confidenceGrade || "대기")}</b><small>수량 신뢰도</small></span>
+      </div>
+      <p>${escapeHtml(issueText)}</p>
+      <div class="admin-region-company-tags">
+        <em>${escapeHtml(metrics.manualCorrection ? "관리자 보정" : "자동추정")}</em>
+        <em>${escapeHtml(metrics.adminReview?.label || companyAdminReviewLabel(metrics.adminReview?.status) || "미검수")}</em>
+        <em>${escapeHtml(metrics.couponVisible ? "쿠폰 노출" : "쿠폰 미확인")}</em>
+        <em>${escapeHtml(metrics.sourceLabel)}</em>
+      </div>
+      <button type="button" data-admin-region-company-focus="${escapeHtml(company.companyId || "")}" data-admin-region-company-name="${escapeHtml(company.primaryName || "")}">마스터에서 보기</button>
+    </article>
+  `;
+}
+
+function adminRegionalDetailPanel(region = null, master = {}) {
+  if (!region) return "";
+  const rows = adminRegionCompanyRows(region, master);
+  const actions = adminRegionActionItems(region, rows);
+  const statusTone = adminRegionStatusTone(region.status || {});
+  const summaryCells = [
+    ["운영 상태", adminRegionStatusLabel(region.status || {}), `${fmtNumber(region.status?.score || 0)}점`],
+    ["업체", `${fmtNumber(region.companyCount || 0)}곳`, `최고 ${region.bestRank ? `${fmtNumber(region.bestRank)}위` : "대기"}`],
+    ["예약 표본", `${fmtNumber(region.reservationSampleCount || 0)}곳`, region.averageReservationRate !== null && region.averageReservationRate !== undefined ? fmtRate(region.averageReservationRate) : "예약율 대기"],
+    ["매출 표본", `${fmtNumber(region.revenueSampleCount || 0)}곳`, region.averageRevenue ? `평균 ${fmtWon(region.averageRevenue)}` : "매출 대기"],
+    ["쿠폰", `${fmtNumber(region.couponVisibleCount || 0)}곳`, "네이버 노출 기준"],
+    ["관리자 보정", `${fmtNumber(region.manualCorrectionCount || 0)}곳`, `검수 ${fmtNumber(region.adminReviewCount || 0)}곳`]
+  ];
+  return `
+    <section class="admin-region-detail-panel ${escapeHtml(statusTone)}" data-admin-region-detail>
+      <div class="admin-region-detail-head">
+        <div>
+          <span>${escapeHtml(region.provinceLabel || "지역")}</span>
+          <strong>${escapeHtml(region.regionLabel || "지역 미확인")} 상세</strong>
+          <small>업체 마스터 기준으로 표본 품질, 보정 필요 업체, 우선 검수 대상을 묶어 봅니다.</small>
+        </div>
+        <mark>${escapeHtml(adminRegionStatusLabel(region.status || {}))}</mark>
+      </div>
+      <div class="admin-region-detail-grid">
+        ${summaryCells.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-region-detail-body">
+        <div class="admin-region-action-box">
+          <strong>관리 우선순위</strong>
+          ${actions.length ? `
+            <ol>
+              ${actions.slice(0, 6).map((action) => `<li>${escapeHtml(action)}</li>`).join("")}
+            </ol>
+          ` : `<p>현재 지역은 공개 가능 기준에 가깝습니다. 주 1회 표본 유지와 신규 노출 업체만 확인하면 됩니다.</p>`}
+          ${(region.reviewReasons || []).length ? `
+            <div class="admin-region-reasons detail">
+              ${(region.reviewReasons || []).map((reason) => `<em>${escapeHtml(reason)}</em>`).join("")}
+            </div>
+          ` : ""}
+        </div>
+        <div class="admin-region-company-list">
+          <div>
+            <strong>업체별 검수 순서</strong>
+            <small>${fmtNumber(rows.length)}곳 중 우선순위 상위 ${fmtNumber(Math.min(rows.length, 10))}곳 표시</small>
+          </div>
+          ${rows.length ? rows.slice(0, 10).map(adminRegionCompanyRowHtml).join("") : `<p class="empty">이 지역에 연결된 업체 마스터가 없습니다.</p>`}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
   const statusTone = adminRegionStatusTone(region.status || {});
   const reasons = Array.isArray(region.reviewReasons) ? region.reviewReasons.slice(0, 3) : [];
   const averageRevenue = Number(region.averageRevenue || 0);
   const rate = region.averageReservationRate;
+  const selected = selectedRegionKey && selectedRegionKey === region.regionKey;
   return `
-    <article class="admin-region-card ${escapeHtml(statusTone)}">
+    <article class="admin-region-card ${escapeHtml(statusTone)} ${selected ? "active" : ""}">
       <div class="admin-region-card-head">
         <div>
           <span>${escapeHtml(region.provinceLabel || "지역")}</span>
@@ -14396,6 +14603,7 @@ function adminRegionCardHtml(region = {}) {
           ${reasons.map((reason) => `<em>${escapeHtml(reason)}</em>`).join("")}
         </div>
       ` : ""}
+      <button type="button" data-admin-region-key="${escapeHtml(region.regionKey || "")}">${selected ? "상세 열림" : "상세 보기"}</button>
     </article>
   `;
 }
@@ -14440,6 +14648,7 @@ function adminRunRegionalOpsHtml(runOps = null) {
 function adminRegionalOperationsPanel(master = {}) {
   const { masterOps, runOps, summary, regions } = adminRegionalOpsSource(master);
   const topRegions = regions.slice(0, 9);
+  const selectedRegion = adminSelectedRegion(master);
   const generatedAt = masterOps.generatedAt ? compactDateTime(masterOps.generatedAt) : "";
   return `
     <section class="admin-console-panel admin-regional-ops-panel">
@@ -14462,7 +14671,7 @@ function adminRegionalOperationsPanel(master = {}) {
             `).join("")}
           </div>
           <div class="admin-region-card-grid">
-            ${topRegions.length ? topRegions.map(adminRegionCardHtml).join("") : `
+            ${topRegions.length ? topRegions.map((region) => adminRegionCardHtml(region, selectedRegion?.regionKey || "")).join("") : `
               <p class="empty">지역 운영 데이터가 아직 없습니다. 업체 마스터 백필 또는 수집 결과 반영 후 확인할 수 있습니다.</p>
             `}
           </div>
@@ -14472,6 +14681,7 @@ function adminRegionalOperationsPanel(master = {}) {
         </div>
         ${adminRunRegionalOpsHtml(runOps)}
       </div>
+      ${adminRegionalDetailPanel(selectedRegion, master)}
     </section>
   `;
 }
@@ -20589,6 +20799,26 @@ function bindEvents() {
     }
     if (event.target.closest("[data-b2b-my-lodge-clear]")) {
       clearB2BMyLodgeBenchmark();
+      return;
+    }
+    const adminRegionButton = event.target.closest("[data-admin-region-key]");
+    if (adminRegionButton) {
+      state.adminSelectedRegionKey = adminRegionButton.dataset.adminRegionKey || "";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector("[data-admin-region-detail]")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      return;
+    }
+    const adminRegionCompany = event.target.closest("[data-admin-region-company-focus]");
+    if (adminRegionCompany) {
+      state.companyMasterFilters.query = adminRegionCompany.dataset.adminRegionCompanyName || "";
+      setActiveTab("admin");
+      setAdminPanelSection("files");
+      renderCompanyMasterPanel();
+      window.requestAnimationFrame(() => {
+        els.companyMasterPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       return;
     }
     const duplicateAction = event.target.closest("[data-company-duplicate-action]");

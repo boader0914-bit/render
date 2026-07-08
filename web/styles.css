@@ -1770,6 +1770,11 @@ a {
   background: #f8fbff;
 }
 
+.admin-region-card.active {
+  border-color: #2f80ed;
+  box-shadow: 0 0 0 2px rgba(47, 128, 237, .12), var(--soft-shadow);
+}
+
 .admin-region-card-head {
   display: flex;
   align-items: flex-start;
@@ -1846,6 +1851,222 @@ a {
   border-radius: 999px;
   background: #fff;
   padding: 6px 8px;
+  font-style: normal;
+}
+
+.admin-region-card > button,
+.admin-region-company-row > button {
+  min-height: 36px;
+  border: 1px solid #bfd5ef;
+  border-radius: 11px;
+  background: #edf5ff;
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-region-card.active > button {
+  border-color: #2f80ed;
+  background: #2f80ed;
+  color: #fff;
+}
+
+.admin-region-detail-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #d5e3f7;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8fbff, #fff);
+  padding: 14px;
+}
+
+.admin-region-detail-panel.good {
+  border-color: #94d7bd;
+  background: linear-gradient(180deg, #f4fbf7, #fff);
+}
+
+.admin-region-detail-panel.watch {
+  border-color: #f4c47c;
+  background: linear-gradient(180deg, #fffaf0, #fff);
+}
+
+.admin-region-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.admin-region-detail-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-region-detail-head span,
+.admin-region-detail-head small,
+.admin-region-detail-grid span,
+.admin-region-detail-grid small,
+.admin-region-action-box p,
+.admin-region-action-box li,
+.admin-region-company-list > div small,
+.admin-region-company-row small,
+.admin-region-company-row p,
+.admin-region-company-tags em {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-detail-head strong {
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.admin-region-detail-head mark {
+  border: 1px solid #cfe0f5;
+  border-radius: 999px;
+  background: #fff;
+  color: #175cd3;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-region-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-region-detail-grid article {
+  min-width: 0;
+  border: 1px solid #e5edf7;
+  border-radius: 13px;
+  background: #fff;
+  padding: 12px;
+}
+
+.admin-region-detail-grid strong {
+  display: block;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-detail-body {
+  display: grid;
+  grid-template-columns: minmax(260px, .34fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.admin-region-action-box,
+.admin-region-company-list {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  border: 1px solid #e1e7ef;
+  border-radius: 14px;
+  background: #fff;
+  padding: 13px;
+}
+
+.admin-region-action-box > strong,
+.admin-region-company-list > div strong {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.admin-region-action-box ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.admin-region-reasons.detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-region-company-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.admin-region-company-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(300px, 1fr) minmax(140px, .45fr) minmax(150px, .45fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e5edf7;
+  border-radius: 13px;
+  background: #fbfdff;
+  padding: 10px;
+}
+
+.admin-region-company-row > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-region-company-row strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.admin-region-company-metrics span {
+  min-width: 0;
+  border: 1px solid #edf2f7;
+  border-radius: 10px;
+  background: #fff;
+  padding: 7px;
+}
+
+.admin-region-company-metrics b {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-row p {
+  margin: 0;
+}
+
+.admin-region-company-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.admin-region-company-tags em {
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #fff;
+  padding: 5px 7px;
   font-style: normal;
 }
 
@@ -2405,6 +2626,15 @@ a {
 
   .admin-region-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-region-detail-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-region-detail-body,
+  .admin-region-company-row {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -17950,6 +18180,10 @@ body.role-b2b .structure-action-list li::before {
   .admin-regional-summary-grid,
   .admin-region-card-grid,
   .admin-region-card-metrics,
+  .admin-region-detail-grid,
+  .admin-region-detail-body,
+  .admin-region-company-row,
+  .admin-region-company-metrics,
   .admin-run-region-grid,
   .admin-stack,
   .admin-crawl-grid,
@@ -18014,7 +18248,16 @@ body.role-b2b .structure-action-list li::before {
     display: grid;
   }
 
+  .admin-region-detail-head,
+  .admin-region-company-list > div {
+    display: grid;
+  }
+
   .admin-region-card-head mark {
+    justify-self: start;
+  }
+
+  .admin-region-detail-head mark {
     justify-self: start;
   }
 
