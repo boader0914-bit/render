@@ -14818,48 +14818,51 @@ function adminRegionAuditSummary(auditRows = []) {
 function adminRegionAuditPanel(region = {}, rows = []) {
   const auditRows = adminRegionAuditRows(region, rows);
   const summary = adminRegionAuditSummary(auditRows);
-  const cells = [
-    ["전체 이력", summary.total, "최근 저장 이력"],
-    ["관리자 판단", summary.review, "큐/공개 판단"],
-    ["수동 보정", summary.correction, "객실 총량 보정"],
-    ["컨택 기록", summary.contact, "영업 진행 상태"]
-  ];
+  const summaryText = [
+    `전체 ${fmtNumber(summary.total)}`,
+    `판단 ${fmtNumber(summary.review)}`,
+    `보정 ${fmtNumber(summary.correction)}`,
+    `컨택 ${fmtNumber(summary.contact)}`
+  ].join(" · ");
   return `
-    <div class="admin-region-audit-panel">
-      <div class="admin-region-audit-head">
+    <details class="admin-region-audit-panel">
+      <summary class="admin-region-audit-summaryline">
         <div>
           <span>지역 작업 이력</span>
           <strong>${escapeHtml(region.regionLabel || "선택 지역")} 변경 기록</strong>
-          <small>관리자 판단, 수동 보정, 컨택 기록을 시간순으로 모아 봅니다.${summary.latestAt ? ` 최근 처리 ${compactDateTime(summary.latestAt)}` : ""}</small>
+          <small>${escapeHtml(summaryText)}${summary.latestAt ? ` · 최근 ${compactDateTime(summary.latestAt)}` : ""}</small>
         </div>
-        <button type="button" data-export-admin-region-audit ${auditRows.length ? "" : "disabled"}>이력 CSV</button>
+        <mark>상세</mark>
+      </summary>
+      <div class="admin-region-audit-body">
+        <div class="admin-region-audit-head">
+          <small>관리자 판단, 수동 보정, 컨택 기록을 시간순으로 모아 봅니다.</small>
+          <button type="button" data-export-admin-region-audit ${auditRows.length ? "" : "disabled"}>이력 CSV</button>
+        </div>
+        <div class="admin-region-audit-summary">
+          <span>전체 ${fmtNumber(summary.total)}</span>
+          <span>판단 ${fmtNumber(summary.review)}</span>
+          <span>보정 ${fmtNumber(summary.correction)}</span>
+          <span>컨택 ${fmtNumber(summary.contact)}</span>
+        </div>
+        <div class="admin-region-audit-list">
+          ${auditRows.length ? auditRows.slice(0, 8).map((row) => `
+            <article class="${escapeHtml(row.tone || "watch")}">
+              <mark>${escapeHtml(row.kind)}</mark>
+              <div>
+                <strong>${escapeHtml(row.companyName)}</strong>
+                <small>${escapeHtml([row.regionLabel, row.keyword, row.rank ? `${fmtNumber(row.rank)}위` : ""].filter(Boolean).join(" · "))}</small>
+              </div>
+              <div>
+                <b>${escapeHtml(row.label)}</b>
+                <small>${escapeHtml(row.note || row.source || "처리 메모 없음")}</small>
+              </div>
+              <time>${escapeHtml(compactDateTime(row.at))}</time>
+            </article>
+          `).join("") : `<p class="empty">아직 이 지역에 저장된 작업 이력이 없습니다.</p>`}
+        </div>
       </div>
-      <div class="admin-region-audit-summary">
-        ${cells.map(([label, value, note]) => `
-          <article>
-            <span>${escapeHtml(label)}</span>
-            <strong>${fmtNumber(value)}</strong>
-            <small>${escapeHtml(note)}</small>
-          </article>
-        `).join("")}
-      </div>
-      <div class="admin-region-audit-list">
-        ${auditRows.length ? auditRows.slice(0, 10).map((row) => `
-          <article class="${escapeHtml(row.tone || "watch")}">
-            <mark>${escapeHtml(row.kind)}</mark>
-            <div>
-              <strong>${escapeHtml(row.companyName)}</strong>
-              <small>${escapeHtml([row.regionLabel, row.keyword, row.rank ? `${fmtNumber(row.rank)}위` : ""].filter(Boolean).join(" · "))}</small>
-            </div>
-            <div>
-              <b>${escapeHtml(row.label)}</b>
-              <small>${escapeHtml(row.note || row.source || "처리 메모 없음")}</small>
-            </div>
-            <time>${escapeHtml(compactDateTime(row.at))}</time>
-          </article>
-        `).join("") : `<p class="empty">아직 이 지역에 저장된 작업 이력이 없습니다.</p>`}
-      </div>
-    </div>
+    </details>
   `;
 }
 
