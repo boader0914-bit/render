@@ -80,6 +80,16 @@ const USER_ROLES = {
 };
 const sessions = new Map();
 const loginAttempts = new Map();
+const requestRateLimits = new Map();
+const RATE_LIMIT_POLICIES = {
+  login: { limit: 20, windowMs: 15 * 60 * 1000 },
+  signupCheck: { limit: 60, windowMs: 10 * 60 * 1000 },
+  signup: { limit: 8, windowMs: 60 * 60 * 1000 },
+  accountDelete: { limit: 10, windowMs: 60 * 60 * 1000 },
+  b2bSearch: { limit: 12, windowMs: 5 * 60 * 1000 },
+  b2bMyLodgeCollect: { limit: 10, windowMs: 10 * 60 * 1000 },
+  adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 }
+};
 let activeCrawlPromise = null;
 let activeCrawlStartedAt = null;
 let activeCrawlEstimate = null;
@@ -1828,6 +1838,62 @@ function clientIpHash(req) {
   return raw ? crypto.createHash("sha256").update(`ip:${raw}`).digest("hex") : "";
 }
 
+function clientUserAgentHash(req) {
+  const raw = String(req?.headers?.["user-agent"] || "");
+  return raw ? crypto.createHash("sha256").update(`ua:${raw}`).digest("hex") : "";
+}
+
+function cleanupRequestRateLimits(now = Date.now()) {
+  for (const [key, record] of requestRateLimits) {
+    if (!record?.resetAt || record.resetAt <= now) requestRateLimits.delete(key);
+  }
+}
+
+function requestRateLimitKey(req, scope = "default", identity = "") {
+  const ipHash = clientIpHash(req) || "unknown";
+  const owner = normalizeLoginId(identity) || "";
+  return `${scope}:${owner}:${ipHash}`;
+}
+
+function requestRateLimitStatus(req, scope = "default", options = {}, identity = "") {
+  const now = Date.now();
+  cleanupRequestRateLimits(now);
+  const limit = Math.max(1, Math.round(Number(options.limit || 30)));
+  const windowMs = Math.max(1000, Math.round(Number(options.windowMs || 60 * 1000)));
+  const key = requestRateLimitKey(req, scope, identity);
+  const current = requestRateLimits.get(key);
+  if (!current || current.resetAt <= now) {
+    return { key, allowed: true, limit, remaining: limit, resetAt: now + windowMs, retryAfterSeconds: 0 };
+  }
+  const count = Number(current.count || 0);
+  return {
+    key,
+    allowed: count < limit,
+    limit,
+    remaining: Math.max(0, limit - count),
+    resetAt: current.resetAt,
+    retryAfterSeconds: Math.max(1, Math.ceil((current.resetAt - now) / 1000))
+  };
+}
+
+function assertRequestRateLimit(req, scope = "default", options = {}, identity = "") {
+  const status = requestRateLimitStatus(req, scope, options, identity);
+  if (!status.allowed) {
+    const error = new Error(`요청이 잠시 많습니다. ${Math.ceil(status.retryAfterSeconds / 60)}분 후 다시 시도해 주세요.`);
+    error.statusCode = 429;
+    error.retryAfterSeconds = status.retryAfterSeconds;
+    throw error;
+  }
+  const record = requestRateLimits.get(status.key) || { count: 0, resetAt: status.resetAt };
+  record.count = Number(record.count || 0) + 1;
+  record.resetAt = status.resetAt;
+  requestRateLimits.set(status.key, record);
+  return {
+    ...status,
+    remaining: Math.max(0, status.limit - record.count)
+  };
+}
+
 function loginAttemptKey(req, username = "") {
   const loginId = normalizeLoginId(username) || "blank";
   const ipHash = clientIpHash(req) || "unknown";
@@ -2415,6 +2481,92 @@ async function updateAccountDeleteRequestStatus(requestId = "", payload = {}, ad
   return publicAccountDeleteRequestsAdminOverview();
 }
 
+function relativeDataPath(filePath = "") {
+  const relative = path.relative(DATA_DIR, filePath || "");
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+    ? relative.replace(/\\/g, "/")
+    : path.basename(filePath || "");
+}
+
+async function securityHardeningOverview() {
+  const memberStore = await readB2BMemberStore();
+  const deleteOverview = await publicAccountDeleteRequestsAdminOverview();
+  const members = Array.isArray(memberStore.members) ? memberStore.members : [];
+  const hashedPasswords = members.filter((member) => /^pbkdf2_sha256\$\d+\$/.test(String(member.passwordHash || ""))).length;
+  const weakPasswordRows = members.filter((member) => member.password && !member.passwordHash).length;
+  const activeRateLimitBuckets = [...requestRateLimits.values()].filter((record) => Number(record?.resetAt || 0) > Date.now()).length;
+  return {
+    checkedAt: new Date().toISOString(),
+    session: {
+      cookieName: SESSION_COOKIE_NAME,
+      httpOnly: true,
+      sameSite: "Lax",
+      secureInProduction: IS_PRODUCTION_RUNTIME,
+      priority: "High",
+      ttlHours: Math.round(SESSION_TTL_MS / 3600000),
+      userAgentBound: true,
+      activeSessionCount: sessions.size
+    },
+    passwordStorage: {
+      algorithm: "pbkdf2_sha256",
+      iterations: PASSWORD_HASH_ITERATIONS,
+      memberCount: members.length,
+      hashedCount: hashedPasswords,
+      weakPlaintextCount: weakPasswordRows,
+      status: weakPasswordRows ? "watch" : "ok"
+    },
+    requestLimits: {
+      login: { limit: RATE_LIMIT_POLICIES.login.limit, minutes: Math.round(RATE_LIMIT_POLICIES.login.windowMs / 60000) },
+      signup: { limit: RATE_LIMIT_POLICIES.signup.limit, minutes: Math.round(RATE_LIMIT_POLICIES.signup.windowMs / 60000) },
+      signupCheck: { limit: RATE_LIMIT_POLICIES.signupCheck.limit, minutes: Math.round(RATE_LIMIT_POLICIES.signupCheck.windowMs / 60000) },
+      accountDelete: { limit: RATE_LIMIT_POLICIES.accountDelete.limit, minutes: Math.round(RATE_LIMIT_POLICIES.accountDelete.windowMs / 60000) },
+      b2bSearch: { limit: RATE_LIMIT_POLICIES.b2bSearch.limit, minutes: Math.round(RATE_LIMIT_POLICIES.b2bSearch.windowMs / 60000) },
+      adminCrawl: { limit: RATE_LIMIT_POLICIES.adminCrawl.limit, minutes: Math.round(RATE_LIMIT_POLICIES.adminCrawl.windowMs / 60000) },
+      activeBucketCount: activeRateLimitBuckets
+    },
+    roleSeparation: {
+      adminOnlyApis: [
+        "/api/runs",
+        "/api/crawl",
+        "/api/history/summary",
+        "/api/company-master/*",
+        "/api/settings/traffic-keys",
+        "/outputs/*",
+        "/api/account-delete-requests"
+      ],
+      b2bOnlyApis: [
+        "/api/b2b-search",
+        "/api/b2b-search/status",
+        "/api/b2b-search/cancel",
+        "/api/b2b-my-lodge-collect",
+        "/api/member/search-history",
+        "/api/member/runs/:runId"
+      ],
+      b2bHiddenTabs: ["dictionary", "target", "decisionQueue", "historyOps", "admin"],
+      b2bRunListHidden: true,
+      b2bPrivateFieldsStripped: true,
+      status: "ok"
+    },
+    dataStorage: {
+      customerDbDir: relativeDataPath(CUSTOMER_DB_DIR),
+      memberDb: relativeDataPath(B2B_MEMBERS_FILE),
+      searchHistoryDb: relativeDataPath(B2B_SEARCH_HISTORY_FILE),
+      accountDeleteRequestDb: relativeDataPath(ACCOUNT_DELETE_REQUESTS_FILE),
+      companyMasterDb: relativeDataPath(COMPANY_MASTER_FILE),
+      interestLodgeStorage: "브라우저 계정 키 저장소",
+      apiKeyStorage: relativeDataPath(TRAFFIC_KEYS_FILE)
+    },
+    accountDeleteLog: {
+      totalCount: deleteOverview.summary?.totalCount || 0,
+      openCount: deleteOverview.summary?.openCount || 0,
+      completedCount: deleteOverview.summary?.completedCount || 0,
+      latestRequestedAt: deleteOverview.summary?.latestRequestedAt || "",
+      statusHistoryKept: true,
+      storage: relativeDataPath(ACCOUNT_DELETE_REQUESTS_FILE)
+    }
+  };
+}
+
 function accountDeletePage(session = null, options = {}) {
   const values = accountDeletePrefill(session, options.values || {});
   const success = options.success || null;
@@ -2902,6 +3054,7 @@ function sessionCookie(value, maxAgeSeconds = SESSION_TTL_MS / 1000) {
     "HttpOnly",
     "SameSite=Lax",
     IS_PRODUCTION_RUNTIME ? "Secure" : "",
+    "Priority=High",
     `Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`
   ].filter(Boolean).join("; ");
 }
@@ -2960,6 +3113,10 @@ function getSession(req) {
     sessions.delete(id);
     return null;
   }
+  if (!sessionMatchesRequest(session, req)) {
+    sessions.delete(id);
+    return null;
+  }
   session.expiresAt = Date.now() + SESSION_TTL_MS;
   return { id, ...session };
 }
@@ -3005,7 +3162,7 @@ async function authenticatedUserForCredentials(username, password) {
   return null;
 }
 
-function createSession(username, role = USER_ROLES.admin, meta = {}) {
+function createSession(username, role = USER_ROLES.admin, meta = {}, req = null) {
   cleanupSessions();
   const id = crypto.randomBytes(32).toString("base64url");
   sessions.set(id, {
@@ -3017,10 +3174,17 @@ function createSession(username, role = USER_ROLES.admin, meta = {}) {
     consents: meta.consents || null,
     memberCreatedAt: meta.createdAt || "",
     lastLoginAt: meta.lastLoginAt || "",
+    userAgentHash: req ? clientUserAgentHash(req) : "",
     sessionCreatedAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS
   });
   return id;
+}
+
+function sessionMatchesRequest(session = {}, req = null) {
+  if (!session || !req) return false;
+  if (!session.userAgentHash) return true;
+  return session.userAgentHash === clientUserAgentHash(req);
 }
 
 function publicSession(session) {
@@ -10422,8 +10586,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-account-delete-queue"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-account-delete-queue"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-security-hardening"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-security-hardening"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -10485,6 +10649,7 @@ async function route(req, res) {
       const session = getSession(req);
       const payload = await parseLoginBody(req);
       try {
+        assertRequestRateLimit(req, "accountDelete", RATE_LIMIT_POLICIES.accountDelete);
         const requestRow = await createAccountDeleteRequest(payload, { req, session });
         if (reqUrl.pathname === "/api/account-delete-request") {
           return send(res, 200, { ok: true, request: requestRow });
@@ -10505,6 +10670,7 @@ async function route(req, res) {
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/signup/check-username") {
       if (req.method === "HEAD") return sendHead(res, 200);
+      assertRequestRateLimit(req, "signupCheck", RATE_LIMIT_POLICIES.signupCheck);
       return send(res, 200, await checkSignupUsernameAvailability(reqUrl.searchParams.get("username") || ""));
     }
 
@@ -10517,8 +10683,9 @@ async function route(req, res) {
     if (req.method === "POST" && (reqUrl.pathname === "/signup" || reqUrl.pathname === "/api/signup")) {
       const payload = await parseLoginBody(req);
       try {
+        assertRequestRateLimit(req, "signup", RATE_LIMIT_POLICIES.signup);
         const account = await registerB2BMember(payload, { req });
-        const sessionId = createSession(account.username, account.role, account);
+        const sessionId = createSession(account.username, account.role, account, req);
         if (reqUrl.pathname === "/signup") {
           return send(res, 302, "", "text/plain; charset=utf-8", {
             "Set-Cookie": sessionCookie(sessionId),
@@ -10538,6 +10705,13 @@ async function route(req, res) {
       const payload = await parseLoginBody(req);
       const username = String(payload.username || "").trim();
       const password = String(payload.password || "").trim();
+      try {
+        assertRequestRateLimit(req, "login", RATE_LIMIT_POLICIES.login);
+      } catch (error) {
+        const headers = { "Retry-After": String(Math.max(1, Number(error.retryAfterSeconds) || 60)) };
+        if (reqUrl.pathname === "/login") return sendLogin(res, 429, error.message || "로그인 요청이 잠시 많습니다.", headers);
+        return send(res, 429, { error: error.message || "로그인 요청이 잠시 많습니다.", retryAfterSeconds: error.retryAfterSeconds || 60 }, "application/json; charset=utf-8", headers);
+      }
       const lockStatus = loginAttemptStatus(req, username);
       if (lockStatus.locked) {
         const message = loginLockMessage(lockStatus);
@@ -10559,7 +10733,7 @@ async function route(req, res) {
         return send(res, 401, { error: message });
       }
       clearLoginFailures(req, username);
-      const sessionId = createSession(account.username, account.role, account);
+      const sessionId = createSession(account.username, account.role, account, req);
       if (reqUrl.pathname === "/login") {
         return send(res, 302, "", "text/plain; charset=utf-8", {
           "Set-Cookie": sessionCookie(sessionId),
@@ -10637,6 +10811,11 @@ async function route(req, res) {
       return send(res, 200, await updateB2BMemberAdminPolicy(memberId, payload, session));
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/security-hardening") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, await securityHardeningOverview());
+    }
+
     if (routeRolePage(req, res, reqUrl, session)) return;
 
     if (reqUrl.pathname === "/admin" && !requireAdminSession(session, req, res)) return;
@@ -10653,6 +10832,7 @@ async function route(req, res) {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
         return sendForbidden(req, res, "B2B 검색 계정이 필요합니다.");
       }
+      assertRequestRateLimit(req, "b2bSearch", RATE_LIMIT_POLICIES.b2bSearch, session.username || session.memberId || "");
       const payload = await parseJsonBody(req);
       return send(res, 200, await runB2BSearch(payload, { session, req }));
     }
@@ -10661,6 +10841,7 @@ async function route(req, res) {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
         return sendForbidden(req, res, "B2B 계정이 필요합니다.");
       }
+      assertRequestRateLimit(req, "b2bMyLodgeCollect", RATE_LIMIT_POLICIES.b2bMyLodgeCollect, session.username || session.memberId || "");
       const payload = await parseJsonBody(req);
       return send(res, 200, await runB2BMyLodgeCollection(payload));
     }
@@ -10783,6 +10964,7 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl") {
       if (!requireAdminSession(session, req, res)) return;
+      assertRequestRateLimit(req, "adminCrawl", RATE_LIMIT_POLICIES.adminCrawl, session.username || "");
       const payload = await parseJsonBody(req);
       const result = await runCrawler({
         ...payload,

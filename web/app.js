@@ -57,6 +57,7 @@ const state = {
   memberSearchQuota: null,
   b2bMemberAdmin: null,
   accountDeleteAdmin: null,
+  securityHardeningAdmin: null,
   b2bHistoryExpanded: false
 };
 
@@ -14592,6 +14593,91 @@ function adminConsoleAccountDeletePanel() {
   `;
 }
 
+function adminConsoleSecurityPanel() {
+  const overview = state.securityHardeningAdmin || {};
+  if (overview.error) {
+    return `
+      <section class="admin-console-panel admin-security-panel">
+        <div class="admin-console-head">
+          <div>
+            <strong>보안 하드닝 점검</strong>
+            <small>현재 보안 상태를 불러오지 못했습니다.</small>
+          </div>
+        </div>
+        <p class="empty">보안 점검 로딩 실패: ${escapeHtml(overview.error)}</p>
+      </section>
+    `;
+  }
+  const session = overview.session || {};
+  const password = overview.passwordStorage || {};
+  const limits = overview.requestLimits || {};
+  const role = overview.roleSeparation || {};
+  const storage = overview.dataStorage || {};
+  const deleteLog = overview.accountDeleteLog || {};
+  const limitText = [
+    limits.login ? `로그인 ${fmtNumber(limits.login.limit)}회/${fmtNumber(limits.login.minutes)}분` : "",
+    limits.signup ? `회원가입 ${fmtNumber(limits.signup.limit)}회/${fmtNumber(limits.signup.minutes)}분` : "",
+    limits.b2bSearch ? `검색 ${fmtNumber(limits.b2bSearch.limit)}회/${fmtNumber(limits.b2bSearch.minutes)}분` : ""
+  ].filter(Boolean).join(" · ");
+  const cookieText = [
+    session.httpOnly ? "HttpOnly" : "",
+    session.sameSite ? `SameSite ${session.sameSite}` : "",
+    session.secureInProduction ? "Secure" : "로컬 Secure 제외",
+    session.userAgentBound ? "브라우저 바인딩" : ""
+  ].filter(Boolean).join(" · ");
+  return `
+    <section class="admin-console-panel admin-security-panel">
+      <div class="admin-console-head">
+        <div>
+          <strong>보안 하드닝 점검</strong>
+          <small>로그인, 회원가입, 검색 실행 제한과 저장 위치, 권한 분리 상태를 확인합니다.</small>
+        </div>
+        <span>${escapeHtml(overview.checkedAt ? compactDateTime(overview.checkedAt) : "점검 대기")}</span>
+      </div>
+      <div class="admin-security-grid">
+        <article class="ok">
+          <span>요청 제한</span>
+          <strong>적용</strong>
+          <small>${escapeHtml(limitText || "정책 대기")}</small>
+        </article>
+        <article class="ok">
+          <span>세션 쿠키</span>
+          <strong>${escapeHtml(`${fmtNumber(session.ttlHours || 12)}시간`)}</strong>
+          <small>${escapeHtml(cookieText || "쿠키 정책 대기")}</small>
+        </article>
+        <article class="${password.weakPlaintextCount ? "watch" : "ok"}">
+          <span>비밀번호 저장</span>
+          <strong>${escapeHtml(password.algorithm || "확인")}</strong>
+          <small>${escapeHtml(`${fmtNumber(password.hashedCount || 0)}/${fmtNumber(password.memberCount || 0)} 계정 해시 · 평문 ${fmtNumber(password.weakPlaintextCount || 0)}`)}</small>
+        </article>
+        <article class="ok">
+          <span>권한 분리</span>
+          <strong>관리자/B2B 분리</strong>
+          <small>${escapeHtml(role.b2bPrivateFieldsStripped ? "B2B 관리자 필드 제거 · 관리자 API 차단" : "점검 필요")}</small>
+        </article>
+      </div>
+      <div class="admin-security-storage">
+        <article>
+          <strong>고객 DB</strong>
+          <small>${escapeHtml([storage.memberDb, storage.searchHistoryDb, storage.accountDeleteRequestDb].filter(Boolean).join(" · ") || "경로 대기")}</small>
+        </article>
+        <article>
+          <strong>마스터/키 저장소</strong>
+          <small>${escapeHtml([storage.companyMasterDb, storage.apiKeyStorage].filter(Boolean).join(" · ") || "경로 대기")}</small>
+        </article>
+        <article>
+          <strong>관심숙소</strong>
+          <small>${escapeHtml(storage.interestLodgeStorage || "브라우저 계정 키 저장소")}</small>
+        </article>
+        <article>
+          <strong>삭제 요청 로그</strong>
+          <small>${escapeHtml(`미처리 ${fmtNumber(deleteLog.openCount || 0)}건 · 전체 ${fmtNumber(deleteLog.totalCount || 0)}건 · 상태 이력 보관`)}</small>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!els.adminConsoleDashboard || !isAdminRole()) return;
   if (master.error) {
@@ -14624,6 +14710,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
       ${adminConsoleCrawlPanel(entries)}
       ${adminConsoleMemberPanel()}
       ${adminConsoleAccountDeletePanel()}
+      ${adminConsoleSecurityPanel()}
       ${adminConsoleMasterPreview(master)}
       ${adminConsoleTaskQueue(master, entries)}
     </section>
@@ -18806,6 +18893,18 @@ async function loadAccountDeleteAdminOverview() {
   }
 }
 
+async function loadSecurityHardeningOverview() {
+  if (!isAdminRole()) {
+    state.securityHardeningAdmin = null;
+    return;
+  }
+  try {
+    state.securityHardeningAdmin = await fetchJson("/api/security-hardening");
+  } catch (error) {
+    state.securityHardeningAdmin = { error: error.message };
+  }
+}
+
 function b2bAdminMemberById(memberId = "") {
   return (state.b2bMemberAdmin?.members || []).find((member) => member.memberId === memberId) || null;
 }
@@ -19549,12 +19648,14 @@ async function loadRun(runId) {
     await loadCompanyMasterSummary();
     await loadB2BMemberAdminOverview();
     await loadAccountDeleteAdminOverview();
+    await loadSecurityHardeningOverview();
   } else {
     state.historyOps = null;
     state.companyMaster = null;
     state.crawlEtaByKey = {};
     state.b2bMemberAdmin = null;
     state.accountDeleteAdmin = null;
+    state.securityHardeningAdmin = null;
   }
   if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
@@ -20256,7 +20357,7 @@ async function init() {
     bindEvents();
     setDefaultDates();
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview()]);
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
     } else {
       state.runs = [];
       state.activeRunId = null;
