@@ -44,8 +44,10 @@ const LEGACY_B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_histor
 const B2B_SEARCH_HISTORY_FILE = path.join(CUSTOMER_DB_DIR, "b2b_search_history.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
-const TERMS_VERSION = "2026-07-06";
-const PRIVACY_VERSION = "2026-07-06";
+const LEGAL_POLICY_VERSION = "2026-07-08";
+const TERMS_VERSION = LEGAL_POLICY_VERSION;
+const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
+const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
 const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || "숙박업 데이터랩").trim();
 const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "").trim();
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
@@ -1621,6 +1623,9 @@ function publicB2BMember(member = {}) {
     consents: {
       termsVersion: consents.termsVersion || "",
       privacyVersion: consents.privacyVersion || "",
+      marketingAccepted: Boolean(consents.marketingAccepted),
+      marketingVersion: consents.marketingVersion || "",
+      marketingAcceptedAt: consents.marketingAcceptedAt || "",
       acceptedAt: consents.acceptedAt || ""
     },
     profile: {
@@ -1714,13 +1719,17 @@ function validateSignupPayload(payload = {}) {
   return { username, password };
 }
 
-function consentRecordFromRequest(req, acceptedAt) {
+function consentRecordFromRequest(req, acceptedAt, payload = {}) {
   const userAgent = String(req?.headers?.["user-agent"] || "");
+  const marketingAccepted = isConsentAccepted(payload.agreeMarketing);
   return {
     termsAccepted: true,
     termsVersion: TERMS_VERSION,
     privacyAccepted: true,
     privacyVersion: PRIVACY_VERSION,
+    marketingAccepted,
+    marketingVersion: marketingAccepted ? MARKETING_CONSENT_VERSION : "",
+    marketingAcceptedAt: marketingAccepted ? acceptedAt : "",
     ageConfirmed: true,
     acceptedAt,
     ipHash: req ? clientIpHash(req) : "",
@@ -1749,7 +1758,7 @@ async function registerB2BMember(payload = {}, context = {}) {
     lastLoginAt: "",
     searchCount: 0,
     policy: normalizeB2BMemberPolicy({}, "member"),
-    consents: consentRecordFromRequest(context.req, now),
+    consents: consentRecordFromRequest(context.req, now, payload),
     profile: memberProfileFromPayload(payload)
   };
   store.members.push(member);
@@ -2814,6 +2823,125 @@ function privacyPage() {
   ]);
 }
 
+function refundPolicyPage() {
+  return legalPage("환불·결제·해지 정책", "결제 고지", [
+    {
+      title: "요금과 제공 범위",
+      body: "<p>유료 서비스의 가격, 이용 기간, 수집 가능 횟수, 저장 기간, 제공 기능은 결제 화면 또는 견적서에 표시합니다. 베타 또는 테스트 계정에는 별도 결제 없이 제한된 검색 횟수와 기능 범위가 적용될 수 있습니다.</p>"
+    },
+    {
+      title: "환불 기준",
+      body: "<ul><li>서비스 제공 전 또는 수집 실행 전에는 결제 취소 또는 환불을 요청할 수 있습니다.</li><li>수집 실행, 리포트 생성, 파일 다운로드 등 디지털 결과물이 제공된 뒤에는 제공 범위에 따라 환불이 제한될 수 있습니다.</li><li>외부 플랫폼 장애 또는 접근 제한으로 일부 데이터가 누락된 경우에는 누락 범위와 대체 제공 가능성을 확인한 뒤 처리합니다.</li></ul>"
+    },
+    {
+      title: "해지 기준",
+      body: "<p>회원은 언제든지 해지를 요청할 수 있습니다. 월 구독 또는 정기 계약이 도입되는 경우 해지 적용일, 잔여 기간 처리, 데이터 보관 기간을 결제 화면 또는 계약서에 명시합니다.</p>"
+    },
+    {
+      title: "외부 플랫폼 수집 실패 가능성",
+      body: "<p>네이버, 여기어때, 야놀자/NOL, 떠나요 등 외부 플랫폼의 구조 변경, 접근 차단, 장애, 보안 정책 변경으로 일부 항목이 수집되지 않을 수 있습니다. 이 경우 서비스는 실패 항목을 별도 표시하고 가능한 대체 표본 또는 수동 확인 기준을 안내합니다.</p>"
+    }
+  ]);
+}
+
+function dataCollectionNoticePage() {
+  return legalPage("데이터 수집 범위 고지", "운영 고지", [
+    {
+      title: "수집 대상",
+      body: "<p>서비스는 사용자가 입력한 지역/키워드와 검색범위 기준으로 네이버 플레이스 노출, 네이버 예약 가능 여부, 공개 가격, 상품 구성, 검색량, 트렌드 지표, 보조 OTA 노출 정보를 수집·정리합니다.</p>"
+    },
+    {
+      title: "수집 기준",
+      body: "<ul><li>수집 기준일과 수집 시점은 리포트 상단에 표시합니다.</li><li>검색범위는 기본 1~10위, 확장 1~20위 등 사용자가 지정한 범위를 따릅니다.</li><li>데이유즈/캠프닉은 동일한 당일 이용 상품군으로 처리합니다.</li><li>미오픈/차단 등 총량보다 적게 확인되는 수량은 오프라인 예약 또는 운영상 차단 가능성으로 별도 해석합니다.</li></ul>"
+    },
+    {
+      title: "수동 보완",
+      body: "<p>여기어때 등 일부 채널은 자동 수집보다 수동 보완값을 우선할 수 있습니다. 관리자가 보정한 업체 고유정보는 마스터 DB에 기록되며 이후 분석의 기준값으로 활용될 수 있습니다.</p>"
+    }
+  ]);
+}
+
+function dataQualityNoticePage() {
+  return legalPage("외부 플랫폼 데이터 한계 고지", "데이터 한계", [
+    {
+      title: "외부 플랫폼 기준",
+      body: "<p>서비스는 네이버, 여기어때, 야놀자/NOL, 떠나요 등 외부 플랫폼의 공개 화면 또는 API 응답을 바탕으로 데이터를 해석합니다. 각 플랫폼의 내부 정렬 방식, 광고 노출, 재고 동기화 정책은 서비스가 통제하지 않습니다.</p>"
+    },
+    {
+      title: "정확성 한계",
+      body: "<ul><li>수집 결과는 특정 시점의 관측값입니다.</li><li>실제 예약 가능 여부, 오프라인 판매, 전화 예약, OTA별 재고 분리 판매는 화면 표시와 다를 수 있습니다.</li><li>매출과 예약율은 표본 기반 추정값이며 회계상 확정 매출이 아닙니다.</li></ul>"
+    },
+    {
+      title: "활용 기준",
+      body: "<p>리포트는 지역 경쟁 상태, 수요 흐름, 상품/채널 점검을 위한 참고 자료입니다. 가격 변경, 광고 집행, 투자, 입점, 영업 판단의 최종 책임은 사용자에게 있습니다.</p>"
+    }
+  ]);
+}
+
+function collectionFailureNoticePage() {
+  return legalPage("수집 실패 가능성 고지", "운영 고지", [
+    {
+      title: "실패 가능 원인",
+      body: "<ul><li>외부 플랫폼 구조 변경 또는 접근 제한</li><li>예약 페이지 차단, 로그인 요구, 성인/지역/기기 제한</li><li>네트워크 장애, API 장애, 서버 점검</li><li>업체명 변경, 중복 업체명, 예약 ID 미노출</li></ul>"
+    },
+    {
+      title: "표시 방식",
+      body: "<p>수집 실패 또는 누락이 발생하면 리포트와 관리자 화면에 실패 항목, 확인 필요 채널, 수동 보완 필요 여부를 표시합니다. 실패 항목은 데이터가 없다는 뜻이지 반드시 영업 또는 운영상 문제가 있다는 뜻은 아닙니다.</p>"
+    },
+    {
+      title: "재수집과 보완",
+      body: "<p>관리자는 동일 조건 재수집, 수동 보정, 보조 채널 확인으로 데이터를 보완할 수 있습니다. 단 외부 플랫폼 정책상 접근이 제한된 항목은 자동화로 보장하지 않습니다.</p>"
+    }
+  ]);
+}
+
+function apiRetentionPolicyPage() {
+  return legalPage("관리자 API 키 및 고객 데이터 보관 정책", "보안 고지", [
+    {
+      title: "API 키 보관",
+      body: "<p>네이버 데이터랩, 검색광고 API 키는 운영 서버의 설정 저장소에 보관합니다. 키 입력 화면은 관리자 권한으로 제한되며 화면에는 민감값을 마스킹해 표시합니다.</p>"
+    },
+    {
+      title: "고객 데이터 보관",
+      body: "<ul><li>고객 DB: 회원 계정, 검색 이력, 관심숙소, 동의 이력</li><li>마스터 DB: 관리자 보정 업체정보, 객실 수, 가격 기준, 채널 정보</li><li>히스토리: 수집 실행 이력, 트렌드 캐시, 관측 기록</li></ul>"
+    },
+    {
+      title: "접근 통제",
+      body: "<p>관리자 계정과 B2B 계정은 권한이 분리됩니다. 저장 자료, 원본 파일, 관리자 보정값, API 키 설정은 관리자 권한에서만 접근하도록 제한합니다.</p>"
+    }
+  ]);
+}
+
+function reportDisclaimerPage() {
+  return legalPage("리포트 결과 면책 문구", "리포트 고지", [
+    {
+      title: "분석 결과의 성격",
+      body: "<p>리포트는 외부 플랫폼 관측값, 공개 가격, 예약 가능 수량, 검색량, 내부 보정값을 조합한 참고용 분석 결과입니다. 실제 매출, 예약 완료, 광고 성과, 입점 성공, 투자 성과를 보장하지 않습니다.</p>"
+    },
+    {
+      title: "누락 데이터",
+      body: "<p>외부 플랫폼 구조 변경, 네트워크, 차단, 업체명 불일치, 예약 ID 미노출 등으로 일부 데이터가 누락될 수 있습니다. 누락/실패 데이터는 리포트 내 별도 표시를 기준으로 확인해야 합니다.</p>"
+    },
+    {
+      title: "의사결정 책임",
+      body: "<p>가격, 상품, 광고, 영업, 투자 관련 최종 의사결정은 사용자 책임입니다. 중요한 의사결정 전에는 직접 예약 화면, OTA, 전화 확인, 회계 자료 등으로 재검증해야 합니다.</p>"
+    }
+  ]);
+}
+
+function businessInfoPage() {
+  return legalPage("사업자정보", "공개 정보", [
+    {
+      title: "운영자 정보",
+      body: `<ul><li>서비스명: 숙박업 데이터랩 beta</li><li>운영자: ${escapeHtml(SERVICE_OPERATOR_NAME)}</li><li>문의: ${policyContactHtml()}</li></ul>`
+    },
+    {
+      title: "공개 전 확정 필요 항목",
+      body: "<p>유료 공개 전 회사명, 대표자명, 사업자등록번호, 통신판매업 신고번호, 사업장 주소, 고객센터 연락처, 개인정보 보호책임자, 환불 담당 연락처를 확정해 이 페이지에 게시해야 합니다.</p>"
+    }
+  ]);
+}
+
 function accountRequestPage(session = {}) {
   const publicInfo = publicSession(session);
   const role = normalizeUserRole(session?.role);
@@ -3069,7 +3197,11 @@ function loginPage(message = "") {
       <a class="link" href="/signup">회원가입</a>
       <div class="legal-links" aria-label="정책 문서">
         <a href="/terms" target="_blank" rel="noopener">이용약관</a>
-        <a href="/privacy" target="_blank" rel="noopener">개인정보 수집 및 이용</a>
+        <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
+        <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
+        <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
+        <a href="/data-quality-notice" target="_blank" rel="noopener">외부 플랫폼 한계</a>
+        <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
       </div>
     </section>
   </main>
@@ -3160,6 +3292,9 @@ function signupPage(message = "", values = {}) {
     .password-match { min-height: 18px; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
     .required { color: #f04438; font-weight: 900; }
     .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
+    .legal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 12px; }
+    .legal-links a { color: #667085; font-size: 12px; font-weight: 850; text-decoration: none; }
+    .legal-links a:hover { color: #175cd3; }
     @media (max-width: 560px) {
       main { padding: 22px; }
       .grid, .signup-summary { grid-template-columns: 1fr; }
@@ -3208,6 +3343,7 @@ function signupPage(message = "", values = {}) {
         <p class="agreement-note">필수 동의 후 고객 DB에 계정 정보와 이용 이력이 저장됩니다. 업체 마스터 DB의 관리자 보정값과는 분리해 관리합니다.</p>
         <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
+        <label class="check"><input type="checkbox" name="agreeMarketing" value="1"${checked("agreeMarketing")}><span>(선택) 서비스 업데이트, 요금제, 운영 안내 등 마케팅 수신에 동의합니다.</span><span>선택</span></label>
         <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>
       </section>
       <p class="hint"><b class="required">*</b> 표시 항목은 필수 입력입니다.</p>
@@ -3215,6 +3351,13 @@ function signupPage(message = "", values = {}) {
       <div class="error">${escapedMessage}</div>
     </form>
     <a class="link" href="/login">이미 계정이 있습니다</a>
+    <div class="legal-links" aria-label="정책 문서">
+      <a href="/terms" target="_blank" rel="noopener">이용약관</a>
+      <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
+      <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
+      <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
+      <a href="/data-quality-notice" target="_blank" rel="noopener">외부 플랫폼 한계</a>
+    </div>
   </main>
   <script src="/signup.js" defer></script>
 </body>
@@ -9923,8 +10066,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-keyword-intent-facility"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-keyword-intent-facility"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-legal-notices"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-legal-notices"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -9959,6 +10102,22 @@ async function route(req, res) {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/privacy") {
       if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
       return send(res, 200, privacyPage(), "text/html; charset=utf-8");
+    }
+
+    const legalRoutes = {
+      "/refund": refundPolicyPage,
+      "/refund-cancellation-policy": refundPolicyPage,
+      "/data-collection-notice": dataCollectionNoticePage,
+      "/data-quality-notice": dataQualityNoticePage,
+      "/external-platform-data-limit": dataQualityNoticePage,
+      "/collection-failure-notice": collectionFailureNoticePage,
+      "/api-key-retention-policy": apiRetentionPolicyPage,
+      "/report-disclaimer": reportDisclaimerPage,
+      "/business-info": businessInfoPage
+    };
+    if ((req.method === "GET" || req.method === "HEAD") && legalRoutes[reqUrl.pathname]) {
+      if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
+      return send(res, 200, legalRoutes[reqUrl.pathname](), "text/html; charset=utf-8");
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/signup.js") {

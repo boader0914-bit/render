@@ -9784,6 +9784,44 @@ function renderB2BPreSearchMyLodge() {
   `;
 }
 
+function renderB2BReportBasisNotice(platformStats = reportPlatformStats(state.data?.availability?.items || [])) {
+  const run = state.data?.run || {};
+  const completedAt = run.completedAt || run.endedAt || run.createdAt || run.startedAt || "";
+  const platformNames = (platformStats.names || ["네이버", "여기어때", "야놀자", "떠나요"]).filter(Boolean);
+  const missing = [];
+  if (platformStats.missingYeogi) missing.push(`여기어때 ${fmtNumber(platformStats.missingYeogi)}곳`);
+  if (platformStats.missingYanolja) missing.push(`야놀자 ${fmtNumber(platformStats.missingYanolja)}곳`);
+  if (platformStats.missingDdnayo) missing.push(`떠나요 ${fmtNumber(platformStats.missingDdnayo)}곳`);
+  return `
+    <section class="b2b-legal-notice report-basis">
+      <div>
+        <span>리포트 수집 기준</span>
+        <strong>${escapeHtml(b2bDateRangeLabel(run))}</strong>
+      </div>
+      <dl>
+        <div><dt>수집 시점</dt><dd>${escapeHtml(completedAt ? compactDateTime(completedAt) : "현재 표시 리포트 기준")}</dd></div>
+        <div><dt>대상 플랫폼</dt><dd>${escapeHtml(platformNames.join(" · "))}</dd></div>
+        <div><dt>누락/보완</dt><dd>${escapeHtml(missing.length ? `${missing.join(" · ")} 보조 확인 필요` : "표시된 표본 기준")}</dd></div>
+      </dl>
+    </section>
+  `;
+}
+
+function renderB2BReportDisclaimerNotice(platformStats = reportPlatformStats(state.data?.availability?.items || [])) {
+  const missingTotal = finiteNumber(platformStats.missingYeogi, 0) + finiteNumber(platformStats.missingYanolja, 0) + finiteNumber(platformStats.missingDdnayo, 0);
+  return `
+    <section class="b2b-legal-notice report-disclaimer">
+      <div>
+        <span>리포트 면책</span>
+        <strong>성과를 보장하지 않는 참고용 분석입니다.</strong>
+      </div>
+      <p>예약율, 예상 매출, 검색량, 채널 노출은 외부 플랫폼 관측값과 내부 보정값을 조합한 추정입니다. 실제 예약 가능 여부, 회계상 매출, 광고 성과, 입점·영업 성과를 보장하지 않습니다.</p>
+      ${missingTotal ? `<p>${escapeHtml(`누락/실패 가능 데이터 ${fmtNumber(missingTotal)}건은 별도 보조 확인이 필요합니다.`)}</p>` : ""}
+      <a href="/report-disclaimer" target="_blank" rel="noopener">자세한 면책 문구 보기</a>
+    </section>
+  `;
+}
+
 function renderReport() {
   if (!els.reportBody) return;
   const data = state.data || {};
@@ -9874,6 +9912,7 @@ function renderReport() {
     </section>
 
     ${publicMode ? renderB2BMarketBrief(b2bBrief) : ""}
+    ${publicMode ? renderB2BReportBasisNotice(platformStats) : ""}
 
     <section class="report-metric-grid ${publicMode ? "b2b-legacy-detail" : ""}" aria-label="보고서 핵심 지표">
       <article>
@@ -9992,6 +10031,7 @@ function renderReport() {
         }).join("") : `<div class="empty">지역 클러스터 데이터가 없습니다.</div>`}
       </div>
     </section>
+    ${publicMode ? renderB2BReportDisclaimerNotice(platformStats) : ""}
   `;
 }
 
@@ -14372,7 +14412,11 @@ function adminConsoleMemberPanel() {
           const loginText = member.lastLoginAt ? compactDateTime(member.lastLoginAt) : "최근 로그인 없음";
           const consentTerms = member.consents?.termsVersion || "";
           const consentPrivacy = member.consents?.privacyVersion || "";
-          const consentText = [consentTerms ? `약관 ${consentTerms}` : "", consentPrivacy ? `개인정보 ${consentPrivacy}` : ""].filter(Boolean).join(" · ") || "동의 기록 없음";
+          const consentText = [
+            consentTerms ? `약관 ${consentTerms}` : "",
+            consentPrivacy ? `개인정보 ${consentPrivacy}` : "",
+            member.consents?.marketingAccepted ? "마케팅 동의" : ""
+          ].filter(Boolean).join(" · ") || "동의 기록 없음";
           const consentAt = member.consents?.acceptedAt ? compactDateTime(member.consents.acceptedAt) : "동의일 없음";
           const statusText = member.status === "disabled" ? "정지" : "활성";
           const recentSearches = (Array.isArray(usage.recentSearches) ? usage.recentSearches : [])
@@ -16958,7 +17002,11 @@ function renderB2BAccountPanel() {
   const ownership = profile.ownershipStatusLabel || "보유 여부 미입력";
   const rangeText = `${b2bDisplayRankRange(policy.allowedRankRange)}위`;
   const limitText = policy.limited ? `하루 ${fmtNumber(policy.dailyLimit || 2)}회` : "새 검색 제한 없음";
-  const consentVersion = [consents.termsVersion ? `약관 ${consents.termsVersion}` : "", consents.privacyVersion ? `개인정보 ${consents.privacyVersion}` : ""].filter(Boolean).join(" · ");
+  const consentVersion = [
+    consents.termsVersion ? `약관 ${consents.termsVersion}` : "",
+    consents.privacyVersion ? `개인정보 ${consents.privacyVersion}` : "",
+    consents.marketingAccepted ? "마케팅 동의" : ""
+  ].filter(Boolean).join(" · ");
   const consentDate = consents.acceptedAt ? compactDateTime(consents.acceptedAt) : "";
   const expiresText = session.expiresAt ? `${compactDateTime(session.expiresAt)}까지 유지` : "로그인 세션 유지";
   els.b2bAccountPanel.innerHTML = `
@@ -16994,6 +17042,7 @@ function renderB2BAccountPanel() {
     <div class="b2b-account-actions">
       <a href="/account-request" target="_blank" rel="noopener">계정·검색 이력 삭제/정정 요청 안내</a>
       <a href="/privacy" target="_blank" rel="noopener">개인정보 안내</a>
+      <a href="/refund" target="_blank" rel="noopener">요금·환불 정책</a>
     </div>
   `;
 }

@@ -231,6 +231,7 @@
             </div>
             <button class="primary-button" type="submit">수집 실행</button>
             <p class="hint" id="crawlStatus">기본 분석은 1~10위, 확장 분석은 1~20위까지 재고와 가격을 확인합니다.</p>
+            <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
           </form>
 
           <section class="admin-card">
@@ -310,6 +311,7 @@
                 <button class="secondary-button" type="submit">API 키 저장</button>
                 <button class="ghost-button" id="trafficKeyVerifyButton" type="button">연결 테스트</button>
                 <p class="hint" id="trafficKeyStatus">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
+                <p class="legal-inline-notice">API 키는 관리자 권한 설정 저장소에 보관됩니다. 자세한 기준은 <a href="/api-key-retention-policy" target="_blank" rel="noopener">API 키 및 고객 데이터 보관 정책</a>을 확인하세요.</p>
                 <p class="traffic-verify-result" id="trafficKeyVerifyResult">저장 후 연결 테스트로 실제 인증 상태를 확인합니다.</p>
               </form>
             </details>
@@ -325,6 +327,7 @@
 
           <section class="admin-card">
             <h3>파일</h3>
+            <p class="legal-inline-notice">다운로드 파일과 리포트는 참고용 분석 결과입니다. <a href="/report-disclaimer" target="_blank" rel="noopener">리포트 면책 문구</a>를 함께 확인하세요.</p>
             <div class="download-list" id="downloadList"></div>
           </section>
         </div>
@@ -332,6 +335,16 @@
     </main>
 
   </div>
+
+  <footer class="app-legal-footer" aria-label="법무 및 운영 고지">
+    <a href="/terms" target="_blank" rel="noopener">이용약관</a>
+    <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
+    <a href="/refund" target="_blank" rel="noopener">환불·결제·해지 정책</a>
+    <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
+    <a href="/data-quality-notice" target="_blank" rel="noopener">외부 플랫폼 데이터 한계</a>
+    <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
+    <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
+  </footer>
 
   <div class="control-drawer" id="controlDrawer" hidden>
     <div class="drawer-backdrop" data-close-drawer></div>
