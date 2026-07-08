@@ -31,6 +31,7 @@ const state = {
     salesGate: "all"
   },
   adminSelectedRegionKey: "",
+  adminRegionCompanyFilter: "priority",
   crawlEtaByKey: {},
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
@@ -14522,6 +14523,104 @@ function adminRegionCompanyRows(region = {}, master = {}) {
     );
 }
 
+function adminRegionCompanyWorkType(row = {}) {
+  const metrics = row.metrics || {};
+  const status = metrics.adminReview?.status || "";
+  if (!metrics.adminReview) return { key: "unreviewed", label: "미검수", tone: "watch" };
+  if (status === "manual_needed" || metrics.lowConfidence) return { key: "manual", label: "보정 필요", tone: "hot" };
+  if (status === "recrawl_needed" || metrics.stockVariance) return { key: "recrawl", label: "재수집", tone: "watch" };
+  if (!metrics.totalRevenue) return { key: "missingRevenue", label: "매출 없음", tone: "watch" };
+  if (!Number.isFinite(metrics.rate)) return { key: "missingReservation", label: "예약율 없음", tone: "neutral" };
+  if (["confirmed", "contact_ready"].includes(status)) return { key: "publicReady", label: "공개 가능", tone: "good" };
+  return { key: "reviewed", label: companyAdminReviewLabel(status) || "검수됨", tone: "neutral" };
+}
+
+function adminRegionCompanyFilterOptions(rows = []) {
+  const count = (predicate) => rows.filter(predicate).length;
+  return [
+    {
+      key: "priority",
+      label: "우선순위",
+      note: "보강 필요순",
+      count: rows.length,
+      match: () => true
+    },
+    {
+      key: "unreviewed",
+      label: "미검수",
+      note: "사람 판단 전",
+      count: count((row) => !row.metrics.adminReview),
+      match: (row) => !row.metrics.adminReview
+    },
+    {
+      key: "manual",
+      label: "보정 필요",
+      note: "수량/총량",
+      count: count((row) => row.metrics.adminReview?.status === "manual_needed" || row.metrics.lowConfidence),
+      match: (row) => row.metrics.adminReview?.status === "manual_needed" || row.metrics.lowConfidence
+    },
+    {
+      key: "recrawl",
+      label: "재수집",
+      note: "조건 재확인",
+      count: count((row) => row.metrics.adminReview?.status === "recrawl_needed" || row.metrics.stockVariance),
+      match: (row) => row.metrics.adminReview?.status === "recrawl_needed" || row.metrics.stockVariance
+    },
+    {
+      key: "missingRevenue",
+      label: "매출 없음",
+      note: "가격 확인",
+      count: count((row) => !row.metrics.totalRevenue),
+      match: (row) => !row.metrics.totalRevenue
+    },
+    {
+      key: "missingReservation",
+      label: "예약율 없음",
+      note: "예약 표본",
+      count: count((row) => !Number.isFinite(row.metrics.rate)),
+      match: (row) => !Number.isFinite(row.metrics.rate)
+    },
+    {
+      key: "publicReady",
+      label: "공개 가능",
+      note: "확인 완료",
+      count: count((row) => ["confirmed", "contact_ready"].includes(row.metrics.adminReview?.status || "")),
+      match: (row) => ["confirmed", "contact_ready"].includes(row.metrics.adminReview?.status || "")
+    }
+  ];
+}
+
+function adminRegionSelectedCompanyFilter(rows = []) {
+  const options = adminRegionCompanyFilterOptions(rows);
+  const selected = options.find((option) => option.key === state.adminRegionCompanyFilter) || options[0];
+  if (selected.key !== "priority" && selected.count === 0) {
+    state.adminRegionCompanyFilter = "priority";
+    return options[0];
+  }
+  state.adminRegionCompanyFilter = selected.key;
+  return selected;
+}
+
+function adminRegionFilteredCompanyRows(rows = []) {
+  const selected = adminRegionSelectedCompanyFilter(rows);
+  return selected.key === "priority" ? rows : rows.filter(selected.match);
+}
+
+function adminRegionCompanyFilterBar(rows = [], selectedKey = "priority") {
+  const options = adminRegionCompanyFilterOptions(rows);
+  return `
+    <div class="admin-region-company-filterbar">
+      ${options.map((option) => `
+        <button type="button" class="${option.key === selectedKey ? "active" : ""}" data-admin-region-company-filter="${escapeHtml(option.key)}">
+          <span>${escapeHtml(option.label)}</span>
+          <strong>${fmtNumber(option.count)}</strong>
+          <small>${escapeHtml(option.note)}</small>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function adminSelectedRegion(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
   if (!regions.length) return null;
@@ -14659,8 +14758,9 @@ function adminRegionCompanyRowHtml(row = {}) {
   const { company, metrics } = row;
   const issueText = metrics.issues.slice(0, 3).join(" · ") || "즉시 이슈 없음";
   const latestAt = compactDateTime(metrics.latest.collectedAt || company.lastSeenAt || "");
+  const workType = adminRegionCompanyWorkType(row);
   return `
-    <article class="admin-region-company-row">
+    <article class="admin-region-company-row ${escapeHtml(workType.tone || "")}">
       <div>
         <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
         <small>${escapeHtml([metrics.regionLabel, company.bestKeyword, latestAt].filter(Boolean).join(" · "))}</small>
@@ -14673,6 +14773,7 @@ function adminRegionCompanyRowHtml(row = {}) {
       </div>
       <p>${escapeHtml(issueText)}</p>
       <div class="admin-region-company-tags">
+        <em class="${escapeHtml(workType.tone || "")}">${escapeHtml(workType.label || "확인")}</em>
         <em>${escapeHtml(metrics.manualCorrection ? "관리자 보정" : "자동추정")}</em>
         <em>${escapeHtml(metrics.adminReview?.label || companyAdminReviewLabel(metrics.adminReview?.status) || "미검수")}</em>
         <em>${escapeHtml(metrics.couponVisible ? "쿠폰 노출" : "쿠폰 미확인")}</em>
@@ -14687,6 +14788,8 @@ function adminRegionCompanyRowHtml(row = {}) {
 function adminRegionalDetailPanel(region = null, master = {}) {
   if (!region) return "";
   const rows = adminRegionCompanyRows(region, master);
+  const selectedFilter = adminRegionSelectedCompanyFilter(rows);
+  const filteredRows = adminRegionFilteredCompanyRows(rows);
   const actions = adminRegionActionItems(region, rows);
   const statusTone = adminRegionStatusTone(region.status || {});
   const maintenance = adminRegionMaintenanceProfile(region, rows);
@@ -14737,10 +14840,12 @@ function adminRegionalDetailPanel(region = null, master = {}) {
         </div>
         <div class="admin-region-company-list">
           <div>
-            <strong>업체별 검수 순서</strong>
-            <small>${fmtNumber(rows.length)}곳 중 우선순위 상위 ${fmtNumber(Math.min(rows.length, 10))}곳 표시</small>
+            <strong>업체별 작업목록</strong>
+            <small>${escapeHtml(selectedFilter.label)} ${fmtNumber(filteredRows.length)}곳 · 전체 ${fmtNumber(rows.length)}곳</small>
           </div>
-          ${rows.length ? rows.slice(0, 10).map(adminRegionCompanyRowHtml).join("") : `<p class="empty">이 지역에 연결된 업체 마스터가 없습니다.</p>`}
+          ${adminRegionCompanyFilterBar(rows, selectedFilter.key)}
+          ${filteredRows.length ? filteredRows.slice(0, 12).map(adminRegionCompanyRowHtml).join("") : `<p class="empty">선택한 조건에 해당하는 업체가 없습니다.</p>`}
+          ${filteredRows.length > 12 ? `<p class="admin-region-company-more">상위 12곳만 표시 중입니다. 더 많은 업체는 지역 마스터에서 검색하세요.</p>` : ""}
         </div>
       </div>
     </section>
@@ -21038,9 +21143,19 @@ function bindEvents() {
     const adminRegionButton = event.target.closest("[data-admin-region-key]");
     if (adminRegionButton) {
       state.adminSelectedRegionKey = adminRegionButton.dataset.adminRegionKey || "";
+      state.adminRegionCompanyFilter = "priority";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector("[data-admin-region-detail]")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      return;
+    }
+    const adminRegionCompanyFilter = event.target.closest("[data-admin-region-company-filter]");
+    if (adminRegionCompanyFilter) {
+      state.adminRegionCompanyFilter = adminRegionCompanyFilter.dataset.adminRegionCompanyFilter || "priority";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-region-company-list")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
       return;
     }

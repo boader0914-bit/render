@@ -2356,6 +2356,51 @@ a {
   align-items: flex-start;
 }
 
+.admin-region-company-filterbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.admin-region-company-filterbar button {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  align-content: center;
+  min-height: 58px;
+  border: 1px solid #d5e3f7;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 8px;
+  text-align: left;
+}
+
+.admin-region-company-filterbar button.active {
+  border-color: #2f80ed;
+  background: #edf5ff;
+  box-shadow: 0 0 0 2px rgba(47, 128, 237, .1);
+}
+
+.admin-region-company-filterbar span,
+.admin-region-company-filterbar small,
+.admin-region-company-more {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-filterbar strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 .admin-region-company-row {
   min-width: 0;
   display: grid;
@@ -2366,6 +2411,21 @@ a {
   border-radius: 13px;
   background: #fbfdff;
   padding: 10px;
+}
+
+.admin-region-company-row.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-region-company-row.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-region-company-row.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
 }
 
 .admin-region-company-row > div:first-child {
@@ -2420,6 +2480,32 @@ a {
   background: #fff;
   padding: 5px 7px;
   font-style: normal;
+}
+
+.admin-region-company-tags em.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+  color: #087443;
+}
+
+.admin-region-company-tags em.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.admin-region-company-tags em.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+  color: #b42318;
+}
+
+.admin-region-company-more {
+  margin: 0;
+  border: 1px dashed #d5e3f7;
+  border-radius: 11px;
+  background: #fbfdff;
+  padding: 9px;
 }
 
 .admin-region-company-row .company-review-control {
@@ -3015,6 +3101,10 @@ a {
 
   .admin-region-workflow-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-region-company-filterbar {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .admin-region-detail-body,
@@ -18570,6 +18660,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-card-metrics,
   .admin-region-detail-grid,
   .admin-region-workflow-grid,
+  .admin-region-company-filterbar,
   .admin-region-detail-body,
   .admin-region-company-row,
   .admin-region-company-metrics,
