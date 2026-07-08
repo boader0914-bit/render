@@ -11618,6 +11618,52 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.b2b-my-lodge-head-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.b2b-my-lodge-toggle {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #9fc5ff;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #f8fbff, #e7f1ff);
+  color: var(--blue-dark);
+  box-shadow: 0 8px 18px rgba(49, 130, 246, .12);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.b2b-my-lodge-toggle span {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--blue);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.b2b-my-lodge-toggle b {
+  font-weight: 950;
+}
+
 .b2b-interest-lodge-grid {
   min-width: 0;
   display: grid;
@@ -15729,6 +15775,18 @@ body.role-b2b .b2b-interest-lodge-tags em {
   color: #cfe4ff;
 }
 
+body.role-b2b .b2b-my-lodge-toggle {
+  border-color: rgba(106, 168, 255, .44);
+  background: linear-gradient(135deg, rgba(55, 126, 235, .42), rgba(27, 48, 79, .72));
+  color: #ffffff;
+  box-shadow: 0 14px 30px rgba(49, 130, 246, .18);
+}
+
+body.role-b2b .b2b-my-lodge-toggle span {
+  background: rgba(255, 255, 255, .16);
+  color: #ffffff;
+}
+
 body.role-b2b .b2b-interest-lodge-card-head em {
   color: #8fc2ff;
 }
@@ -17220,6 +17278,10 @@ body.role-b2b .structure-action-list li::before {
   .b2b-public-board,
   .report-layout {
     grid-template-columns: 1fr;
+  }
+
+  .b2b-my-lodge-head-actions {
+    justify-content: flex-start;
   }
 
   .b2b-room-segment-row {

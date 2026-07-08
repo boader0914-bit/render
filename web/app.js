@@ -49,6 +49,7 @@ const state = {
   b2bSearchPending: null,
   b2bSearchCancelling: false,
   b2bMyLodgeDraft: null,
+  b2bMyLodgeExpanded: false,
   b2bMyLodgeCollecting: false,
   b2bMyLodgeCollectStatus: "",
   b2bMyLodgeCollectResult: null,
@@ -2145,8 +2146,8 @@ function platformFallbackSearchUrl(platform = "", item = {}) {
     return url.toString();
   }
   if (name === "떠나요") {
-    const url = new URL("https://trip.ddnayo.com/main");
-    if (keyword) url.searchParams.set("keyword", keyword);
+    const url = new URL("https://trip.ddnayo.com/searchResult");
+    if (keyword) url.searchParams.set("searchKeyword", keyword);
     return url.toString();
   }
   return "";
@@ -8804,6 +8805,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
   const revenueModel = revenueModelOverride || b2bRevenueBenchmarkModel(brief);
   const interestLodges = readB2BInterestLodges();
   const canRegisterMore = interestLodges.length < B2B_INTEREST_LODGE_LIMIT;
+  const editorOpen = canRegisterMore && (Boolean(state.b2bMyLodgeExpanded) || collecting);
   const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
   const inputSegments = b2bMyLodgeSegmentInputRows(draft);
   const segmentRows = inputSegments.length ? inputSegments : [b2bMyLodgeBlankSegment()];
@@ -8846,10 +8848,18 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <strong>내 숙소 정보 입력</strong>
           <p>비교할 숙소를 최대 2곳까지 저장하고, 객실종류별 수량·요일 가격으로 지역 평균·상위권 매출 표본과 비교합니다.</p>
         </div>
-        <em>${fmtNumber(interestLodges.length)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)} 등록</em>
+        <div class="b2b-my-lodge-head-actions">
+          <em>${fmtNumber(interestLodges.length)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)} 등록</em>
+          ${canRegisterMore ? `
+            <button class="b2b-my-lodge-toggle" type="button" data-b2b-my-lodge-toggle aria-expanded="${editorOpen ? "true" : "false"}">
+              <span aria-hidden="true">${editorOpen ? "−" : "+"}</span>
+              <b>${editorOpen ? "접기" : "등록"}</b>
+            </button>
+          ` : ""}
+        </div>
       </div>
       ${renderB2BInterestLodgeCards(interestLodges, brief, revenueModel)}
-      ${canRegisterMore ? `
+      ${canRegisterMore && editorOpen ? `
       <form class="b2b-my-lodge-form" data-b2b-my-lodge-form>
         <label class="b2b-my-lodge-field name">
           <span>숙소명</span>
@@ -8891,13 +8901,13 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
         </div>
         ${collectStatus ? `<div class="b2b-my-lodge-collect-status ${collecting ? "loading" : ""}">${escapeHtml(collectStatus)}</div>` : ""}
       </form>
-      ` : `
+      ` : !canRegisterMore ? `
         <div class="b2b-interest-lodge-limit">
           <strong>관심숙소는 최대 ${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}곳까지 등록됩니다.</strong>
           <span>다른 숙소를 비교하려면 기존 관심숙소를 수정하거나 삭제하세요.</span>
         </div>
-      `}
-      ${canRegisterMore && model.hasInput ? `
+      ` : ""}
+      ${canRegisterMore && editorOpen && model.hasInput ? `
       <div class="b2b-my-lodge-result ${model.hasEstimateBasis ? "ready" : "empty"}">
         <article class="b2b-my-lodge-main">
           <span>${escapeHtml(`${fmtNumber(model.basisDays || DEFAULT_BOOKING_DAYS)}일 기준 예상 매출 · ${model.basisPeriod || "기간 확인"}`)}</span>
@@ -9024,11 +9034,13 @@ function saveB2BMyLodgeBenchmark() {
   const interestLodges = Array.isArray(store.interestLodges) ? store.interestLodges.slice(0, B2B_INTEREST_LODGE_LIMIT) : [];
   if (interestLodges.length >= B2B_INTEREST_LODGE_LIMIT) {
     state.b2bMyLodgeCollectStatus = `관심숙소는 최대 ${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}곳까지 등록할 수 있습니다.`;
+    state.b2bMyLodgeExpanded = false;
     renderReport();
     return;
   }
   if (!b2bMyLodgeDraftHasInput(values) || !String(values.lodgingName || "").trim()) {
     state.b2bMyLodgeCollectStatus = "관심숙소명을 먼저 입력하세요.";
+    state.b2bMyLodgeExpanded = true;
     persistB2BMyLodgeStore({ ...store, draft: values, interestLodges });
     renderReport();
     document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -9041,7 +9053,8 @@ function saveB2BMyLodgeBenchmark() {
     registeredAt: new Date().toISOString()
   });
   interestLodges.push(lodge);
-  state.b2bMyLodgeCollectStatus = `${lodge.lodgingName} 등록 완료`;
+  state.b2bMyLodgeCollectStatus = "";
+  state.b2bMyLodgeExpanded = false;
   persistB2BMyLodgeStore({ ...store, draft: {}, interestLodges });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -9058,6 +9071,7 @@ function editB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
     return;
   }
   state.b2bMyLodgeCollectStatus = `${target.lodgingName || "관심숙소"} 정보를 수정합니다. 저장하면 다시 카드로 등록됩니다.`;
+  state.b2bMyLodgeExpanded = true;
   persistB2BMyLodgeStore({
     ...store,
     draft: { ...target, id: "" },
@@ -9073,6 +9087,7 @@ function deleteB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
   const targetIndex = b2bInterestLodgeTargetIndex(interestLodges, lodgeId, fallbackIndex);
   const next = targetIndex >= 0 ? interestLodges.filter((_, index) => index !== targetIndex) : interestLodges;
   state.b2bMyLodgeCollectStatus = targetIndex < 0 ? "삭제할 관심숙소를 찾지 못했습니다." : "관심숙소를 삭제했습니다.";
+  state.b2bMyLodgeExpanded = false;
   persistB2BMyLodgeStore({ ...store, interestLodges: next });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -9080,6 +9095,7 @@ function deleteB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
 
 function updateB2BMyLodgeRoomSegments(action = "add", index = -1) {
   const values = collectB2BMyLodgeFormValues() || readB2BMyLodgeDraft() || {};
+  state.b2bMyLodgeExpanded = true;
   const displayedRows = collectB2BMyLodgeSegmentFormRows({ includeBlank: true });
   const rows = (displayedRows.length ? displayedRows : b2bMyLodgeSegmentInputRows(values)).slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
   if (!rows.length) rows.push(b2bMyLodgeBlankSegment());
@@ -9101,6 +9117,7 @@ async function collectB2BMyLodgeByName() {
   const lodgingName = String(current.lodgingName || "").trim();
   if (!lodgingName) {
     state.b2bMyLodgeCollectStatus = "숙소명을 먼저 입력하세요.";
+    state.b2bMyLodgeExpanded = true;
     renderReport();
     return;
   }
@@ -9113,8 +9130,10 @@ async function collectB2BMyLodgeByName() {
     bookingRangePlaceLimit: 3
   };
   state.b2bMyLodgeCollecting = true;
+  state.b2bMyLodgeExpanded = true;
   state.b2bMyLodgeCollectStatus = `${lodgingName} 자동 수집을 시작합니다. 네이버 업체명 검색 기준입니다.`;
   state.b2bMyLodgeCollectResult = null;
+  persistB2BMyLodgeDraft(current);
   renderReport();
   try {
     const result = await fetchJson("/api/b2b-my-lodge-collect", {
@@ -9142,6 +9161,7 @@ function clearB2BMyLodgeBenchmark() {
   const store = readB2BMyLodgeStore();
   state.b2bMyLodgeCollectStatus = "";
   state.b2bMyLodgeCollectResult = null;
+  state.b2bMyLodgeExpanded = false;
   persistB2BMyLodgeStore({ ...store, draft: {} });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -19739,6 +19759,8 @@ function bindEvents() {
     }
     if (event.target.closest("[data-b2b-onboarding-lodge]")) {
       setActiveTab("report");
+      state.b2bMyLodgeExpanded = true;
+      renderReport();
       window.setTimeout(() => {
         const target = document.querySelector(".b2b-my-lodge-board") || els.reportBody;
         target?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -19755,6 +19777,18 @@ function bindEvents() {
         if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = `검색 전환 실패: ${error.message}`;
         renderB2BSearchPanel();
       });
+      return;
+    }
+    if (event.target.closest("[data-b2b-my-lodge-toggle]")) {
+      state.b2bMyLodgeExpanded = !state.b2bMyLodgeExpanded;
+      if (!state.b2bMyLodgeExpanded && !b2bMyLodgeDraftHasInput(readB2BMyLodgeDraft())) {
+        state.b2bMyLodgeCollectStatus = "";
+        state.b2bMyLodgeCollectResult = null;
+      }
+      renderReport();
+      window.setTimeout(() => {
+        document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 40);
       return;
     }
     if (event.target.closest("[data-b2b-room-segment-add]")) {
