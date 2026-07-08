@@ -14362,11 +14362,70 @@ function adminRegionalSummaryCells(summary = {}) {
   return [
     ["관리 지역", summary.regionCount || 0, "지역 카드 후보"],
     ["업체 마스터", summary.companyCount || 0, "지역 분류 완료"],
-    ["공개 가능", summary.publicReadyRegionCount || 0, "B2B 노출 가능"],
-    ["검수 필요", summary.reviewNeededRegionCount || 0, "관리자 확인"],
-    ["수집 보강", summary.collectNeededRegionCount || 0, "표본 추가 필요"],
+    ["사전 준비", summary.preflightReadyRegionCount || summary.publicReadyRegionCount || 0, "지역카드 공개 후보"],
+    ["즉시 보강", summary.urgentMaintenanceRegionCount || 0, "오늘 확인"],
+    ["주간 유지", summary.weeklyMaintenanceRegionCount || 0, "주 1회 점검"],
     ["지역 밖 노출", summary.outsideExposureCount || 0, "검색 반경 경쟁"]
   ];
+}
+
+function adminRegionMaintenanceFallback(region = {}, rows = []) {
+  const lowConfidence = rows.filter((row) => row.metrics.lowConfidence).length || Number(region.lowConfidenceCount || 0);
+  const stockVariance = rows.filter((row) => row.metrics.stockVariance).length || Number(region.stockVarianceCount || 0);
+  const missingRevenue = Math.max(0, 3 - Number(region.revenueSampleCount || 0));
+  const missingReservation = Math.max(0, 5 - Number(region.reservationSampleCount || 0));
+  const reviewGap = Math.max(0, Math.min(Number(region.companyCount || rows.length || 0), 5) - Number(region.adminReviewCount || 0));
+  const riskCount = lowConfidence + stockVariance + Number(region.structuralBlockedCount || 0) + Number(region.outsideExposureCount || 0);
+  const readinessScore = Math.max(0, Math.min(100, Math.round(
+    Number(region.status?.score || 0)
+    + Number(region.manualCorrectionCount || 0) * 4
+    + Number(region.adminReviewCount || 0) * 3
+    - riskCount * 5
+    - missingRevenue * 10
+    - missingReservation * 8
+  )));
+  const actions = [
+    missingReservation ? { key: "reservation_sample", label: "예약 표본 보강", detail: `네이버 예약 기준 ${missingReservation}곳 이상 추가 확인`, priority: 96, tone: "hot" } : null,
+    missingRevenue ? { key: "revenue_sample", label: "매출 표본 보강", detail: `가격/판매 기준 ${missingRevenue}곳 이상 보강`, priority: 92, tone: "hot" } : null,
+    lowConfidence ? { key: "quantity_correction", label: "수량 신뢰도 보정", detail: `수량 신뢰도 낮은 업체 ${lowConfidence}곳`, priority: 86, tone: "watch" } : null,
+    stockVariance ? { key: "capacity_review", label: "총량 변동 검토", detail: `날짜별 총량 변동 ${stockVariance}곳`, priority: 82, tone: "watch" } : null,
+    region.outsideExposureCount ? { key: "boundary_check", label: "검색권 경계 확인", detail: `지역 밖 노출 ${fmtNumber(region.outsideExposureCount)}곳`, priority: 66, tone: "neutral" } : null,
+    reviewGap ? { key: "admin_review", label: "관리자 사전 검수", detail: `상위 표본 ${reviewGap}곳 추가 판단`, priority: 62, tone: "neutral" } : null
+  ].filter(Boolean);
+  if (!actions.length) actions.push({ key: "weekly_maintenance", label: "주간 유지 점검", detail: "주 1회 표본 유지와 신규 노출 업체만 확인", priority: 30, tone: "good" });
+  const status = readinessScore >= 82 && !riskCount && !missingRevenue && !missingReservation
+    ? { key: "ready", label: "공개 준비", tone: "good" }
+    : (readinessScore >= 68 && !missingRevenue && !missingReservation
+      ? { key: "review", label: "검수 후 공개", tone: "watch" }
+      : { key: "sample_needed", label: missingRevenue || missingReservation ? "표본 보강" : "공개 보류", tone: "hot" });
+  const maintenancePriority = Math.max(0, Math.min(100, 100 - readinessScore + missingReservation * 9 + missingRevenue * 10 + lowConfidence * 5 + stockVariance * 4));
+  return {
+    readinessScore,
+    preflightStatus: status,
+    maintenancePriority,
+    nextCycle: maintenancePriority >= 80 ? "즉시 보강" : (maintenancePriority >= 58 ? "이번 주 검수" : (status.key === "ready" ? "주 1회 유지" : "3일 내 재확인")),
+    primaryAction: actions[0],
+    actions,
+    coverage: {
+      reservationSampleGoal: 5,
+      reservationSampleGap: missingReservation,
+      revenueSampleGoal: 3,
+      revenueSampleGap: missingRevenue,
+      adminReviewGoal: Math.min(Number(region.companyCount || rows.length || 0), 5),
+      adminReviewGap: reviewGap,
+      riskCount
+    }
+  };
+}
+
+function adminRegionMaintenanceProfile(region = {}, rows = []) {
+  const source = region.maintenance || null;
+  if (source?.preflightStatus && Array.isArray(source.actions)) return source;
+  return adminRegionMaintenanceFallback(region, rows);
+}
+
+function adminRegionMaintenanceTone(profile = {}) {
+  return profile.preflightStatus?.tone || (Number(profile.maintenancePriority || 0) >= 80 ? "hot" : "watch");
 }
 
 function adminRegionCompanyMatches(region = {}, company = {}) {
@@ -14543,6 +14602,59 @@ function adminRegionWorkflowPanel(rows = []) {
   `;
 }
 
+function adminRegionPreflightPanel(region = {}, rows = []) {
+  const profile = adminRegionMaintenanceProfile(region, rows);
+  const tone = adminRegionMaintenanceTone(profile);
+  const actions = Array.isArray(profile.actions) ? profile.actions.slice(0, 5) : [];
+  const coverage = profile.coverage || {};
+  const reservationDone = Math.max(0, Number(region.reservationSampleCount || 0));
+  const revenueDone = Math.max(0, Number(region.revenueSampleCount || 0));
+  const reviewDone = Math.max(0, Number(region.adminReviewCount || 0));
+  const coverageRows = [
+    ["예약 표본", reservationDone, coverage.reservationSampleGoal || 5, coverage.reservationSampleGap || 0],
+    ["매출 표본", revenueDone, coverage.revenueSampleGoal || 3, coverage.revenueSampleGap || 0],
+    ["관리자 검수", reviewDone, coverage.adminReviewGoal || Math.min(Number(region.companyCount || rows.length || 0), 5), coverage.adminReviewGap || 0]
+  ];
+  return `
+    <div class="admin-region-preflight-panel ${escapeHtml(tone)}">
+      <div class="admin-region-preflight-head">
+        <div>
+          <span>지역카드 사전 검수</span>
+          <strong>${escapeHtml(profile.preflightStatus?.label || "검수 필요")}</strong>
+          <small>${escapeHtml(profile.nextCycle || "점검 주기 대기")} · 준비도 ${fmtNumber(profile.readinessScore || 0)}점</small>
+        </div>
+        <mark>${fmtNumber(profile.maintenancePriority || 0)}</mark>
+      </div>
+      <div class="admin-region-preflight-meter">
+        <span style="width: ${Math.max(5, Math.min(100, Number(profile.readinessScore || 0)))}%"></span>
+      </div>
+      <div class="admin-region-preflight-layout">
+        <div class="admin-region-coverage-list">
+          ${coverageRows.map(([label, value, goal, gap]) => {
+            const pct = goal ? Math.min(100, Math.round((value / goal) * 100)) : 0;
+            return `
+              <article class="${gap ? "watch" : "good"}">
+                <div><span>${escapeHtml(label)}</span><strong>${fmtNumber(value)}/${fmtNumber(goal)}</strong></div>
+                <i><b style="width: ${Math.max(5, pct)}%"></b></i>
+                <small>${gap ? `${fmtNumber(gap)}곳 보강` : "기준 충족"}</small>
+              </article>
+            `;
+          }).join("")}
+        </div>
+        <div class="admin-region-maintenance-actions">
+          <strong>다음 작업</strong>
+          ${actions.map((action) => `
+            <article class="${escapeHtml(action.tone || "watch")}">
+              <span>${escapeHtml(action.label || "확인")}</span>
+              <small>${escapeHtml(action.detail || "")}</small>
+            </article>
+          `).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function adminRegionCompanyRowHtml(row = {}) {
   const { company, metrics } = row;
   const issueText = metrics.issues.slice(0, 3).join(" · ") || "즉시 이슈 없음";
@@ -14577,8 +14689,11 @@ function adminRegionalDetailPanel(region = null, master = {}) {
   const rows = adminRegionCompanyRows(region, master);
   const actions = adminRegionActionItems(region, rows);
   const statusTone = adminRegionStatusTone(region.status || {});
+  const maintenance = adminRegionMaintenanceProfile(region, rows);
   const summaryCells = [
     ["운영 상태", adminRegionStatusLabel(region.status || {}), `${fmtNumber(region.status?.score || 0)}점`],
+    ["사전 준비", maintenance.preflightStatus?.label || "검수 필요", `${fmtNumber(maintenance.readinessScore || 0)}점`],
+    ["점검 주기", maintenance.nextCycle || "대기", `우선도 ${fmtNumber(maintenance.maintenancePriority || 0)}`],
     ["업체", `${fmtNumber(region.companyCount || 0)}곳`, `최고 ${region.bestRank ? `${fmtNumber(region.bestRank)}위` : "대기"}`],
     ["예약 표본", `${fmtNumber(region.reservationSampleCount || 0)}곳`, region.averageReservationRate !== null && region.averageReservationRate !== undefined ? fmtRate(region.averageReservationRate) : "예약율 대기"],
     ["매출 표본", `${fmtNumber(region.revenueSampleCount || 0)}곳`, region.averageRevenue ? `평균 ${fmtWon(region.averageRevenue)}` : "매출 대기"],
@@ -14605,6 +14720,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
         `).join("")}
       </div>
       ${adminRegionWorkflowPanel(rows)}
+      ${adminRegionPreflightPanel(region, rows)}
       <div class="admin-region-detail-body">
         <div class="admin-region-action-box">
           <strong>관리 우선순위</strong>
@@ -14633,6 +14749,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
 
 function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
   const statusTone = adminRegionStatusTone(region.status || {});
+  const maintenance = adminRegionMaintenanceProfile(region, []);
   const reasons = Array.isArray(region.reviewReasons) ? region.reviewReasons.slice(0, 3) : [];
   const averageRevenue = Number(region.averageRevenue || 0);
   const rate = region.averageReservationRate;
@@ -14655,6 +14772,7 @@ function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
       <div class="admin-region-card-foot">
         <span>${averageRevenue ? `평균 ${fmtWon(averageRevenue)}` : "매출 표본 대기"}</span>
         <span>${rate !== null && rate !== undefined ? `예약율 ${fmtRate(rate)}` : "예약율 대기"}</span>
+        <span>${escapeHtml(maintenance.nextCycle || "점검 대기")}</span>
       </div>
       ${reasons.length ? `
         <div class="admin-region-reasons">
@@ -14663,6 +14781,61 @@ function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
       ` : ""}
       <button type="button" data-admin-region-key="${escapeHtml(region.regionKey || "")}">${selected ? "상세 열림" : "상세 보기"}</button>
     </article>
+  `;
+}
+
+function adminRegionalMaintenanceBoard(regions = [], selectedRegionKey = "") {
+  const ranked = regions
+    .map((region) => ({
+      region,
+      profile: adminRegionMaintenanceProfile(region, [])
+    }))
+    .sort((a, b) =>
+      Number(b.profile.maintenancePriority || 0) - Number(a.profile.maintenancePriority || 0) ||
+      Number(a.profile.readinessScore || 0) - Number(b.profile.readinessScore || 0) ||
+      String(a.region.regionLabel || "").localeCompare(String(b.region.regionLabel || ""), "ko")
+    );
+  const urgent = ranked.filter((entry) => Number(entry.profile.maintenancePriority || 0) >= 58).slice(0, 5);
+  const ready = ranked
+    .filter((entry) => entry.profile.preflightStatus?.key === "ready" || entry.region.status?.key === "public_ready")
+    .sort((a, b) => Number(b.profile.readinessScore || 0) - Number(a.profile.readinessScore || 0))
+    .slice(0, 4);
+  const fallbackReady = ready.length ? ready : ranked.slice(-4).reverse();
+  const itemHtml = (entry, index, mode = "urgent") => {
+    const profile = entry.profile;
+    const region = entry.region;
+    const tone = adminRegionMaintenanceTone(profile);
+    const active = selectedRegionKey && selectedRegionKey === region.regionKey;
+    return `
+      <button type="button" class="${escapeHtml(tone)} ${active ? "active" : ""}" data-admin-region-key="${escapeHtml(region.regionKey || "")}">
+        <span>${fmtNumber(index + 1)}</span>
+        <strong>${escapeHtml(region.regionLabel || "지역 미확인")}</strong>
+        <em>${escapeHtml(mode === "ready" ? (profile.preflightStatus?.label || "준비") : (profile.nextCycle || "점검"))}</em>
+        <small>${escapeHtml(profile.primaryAction?.label || "주간 유지 점검")} · 준비도 ${fmtNumber(profile.readinessScore || 0)}점</small>
+      </button>
+    `;
+  };
+  return `
+    <div class="admin-regional-maintenance-board">
+      <div class="admin-maintenance-lane">
+        <div>
+          <strong>오늘 먼저 볼 지역</strong>
+          <small>표본·수량·총량·지역 밖 노출 기준</small>
+        </div>
+        ${urgent.length ? urgent.map((entry, index) => itemHtml(entry, index)).join("") : `
+          <p>즉시 보강이 필요한 지역은 없습니다. 주간 유지 점검만 진행하면 됩니다.</p>
+        `}
+      </div>
+      <div class="admin-maintenance-lane ready">
+        <div>
+          <strong>지역카드 공개 후보</strong>
+          <small>사전 검수 기준 충족 또는 공개 가능 지역</small>
+        </div>
+        ${fallbackReady.length ? fallbackReady.map((entry, index) => itemHtml(entry, index, "ready")).join("") : `
+          <p>공개 후보 지역이 아직 없습니다. 표본과 보정값을 먼저 확보하세요.</p>
+        `}
+      </div>
+    </div>
   `;
 }
 
@@ -14728,6 +14901,7 @@ function adminRegionalOperationsPanel(master = {}) {
               </article>
             `).join("")}
           </div>
+          ${adminRegionalMaintenanceBoard(regions, selectedRegion?.regionKey || "")}
           <div class="admin-region-card-grid">
             ${topRegions.length ? topRegions.map((region) => adminRegionCardHtml(region, selectedRegion?.regionKey || "")).join("") : `
               <p class="empty">지역 운영 데이터가 아직 없습니다. 업체 마스터 백필 또는 수집 결과 반영 후 확인할 수 있습니다.</p>

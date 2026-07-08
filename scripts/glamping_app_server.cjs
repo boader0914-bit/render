@@ -7986,6 +7986,97 @@ function createRegionalOpsBucket(classification = {}) {
   };
 }
 
+function regionalOpsMaintenanceProfile(bucket = {}, status = {}) {
+  const companyCount = Number(bucket.companyCount || bucket.companyKeys?.size || 0);
+  const reservationGap = Math.max(0, 5 - Number(bucket.reservationSampleCount || 0));
+  const revenueGap = Math.max(0, 3 - Number(bucket.revenueSampleCount || 0));
+  const reviewGap = Math.max(0, Math.min(companyCount, 5) - Number(bucket.adminReviewCount || 0));
+  const riskCount = Number(bucket.lowConfidenceCount || 0)
+    + Number(bucket.stockVarianceCount || 0)
+    + Number(bucket.structuralBlockedCount || 0)
+    + Number(bucket.outsideExposureCount || 0);
+  const sampleScore = Math.min(42, Number(bucket.reservationSampleCount || 0) * 4 + Number(bucket.revenueSampleCount || 0) * 5);
+  const reviewScore = Math.min(22, Number(bucket.adminReviewCount || 0) * 3 + Number(bucket.manualCorrectionCount || 0) * 5);
+  const scaleScore = Math.min(14, companyCount * 1.4);
+  const riskPenalty = Math.min(44,
+    Number(bucket.lowConfidenceCount || 0) * 7
+    + Number(bucket.stockVarianceCount || 0) * 6
+    + Number(bucket.structuralBlockedCount || 0) * 5
+    + Number(bucket.outsideExposureCount || 0) * 2
+  );
+  const readinessScore = Math.max(0, Math.min(100, Math.round(32 + sampleScore + reviewScore + scaleScore - riskPenalty)));
+  const actions = [];
+  const addAction = (key, label, detail, priority, tone = "watch") => {
+    actions.push({ key, label, detail, priority, tone });
+  };
+
+  if (reservationGap > 0) {
+    addAction("reservation_sample", "예약 표본 보강", `네이버 예약 기준 ${reservationGap}곳 이상 추가 확인`, 96, "hot");
+  }
+  if (revenueGap > 0) {
+    addAction("revenue_sample", "매출 표본 보강", `가격/판매 기준 ${revenueGap}곳 이상 보강`, 92, "hot");
+  }
+  if (bucket.lowConfidenceCount) {
+    addAction("quantity_correction", "수량 신뢰도 보정", `수량 신뢰도 낮은 업체 ${bucket.lowConfidenceCount}곳`, 86, "watch");
+  }
+  if (bucket.stockVarianceCount) {
+    addAction("capacity_review", "총량 변동 검토", `날짜별 총량 변동 ${bucket.stockVarianceCount}곳`, 82, "watch");
+  }
+  if (bucket.structuralBlockedCount) {
+    addAction("maintenance_check", "미오픈/차단 확인", `오프라인 예약 또는 운영 차단 의심 ${bucket.structuralBlockedCount}곳`, 76, "watch");
+  }
+  if (bucket.outsideExposureCount) {
+    addAction("boundary_check", "검색권 경계 확인", `지역 밖 노출 ${bucket.outsideExposureCount}곳`, 66, "neutral");
+  }
+  if (reviewGap > 0) {
+    addAction("admin_review", "관리자 사전 검수", `상위 표본 ${reviewGap}곳 추가 판단`, 62, "neutral");
+  }
+  if (!actions.length) {
+    addAction("weekly_maintenance", "주간 유지 점검", "주 1회 표본 유지와 신규 노출 업체만 확인", 30, "good");
+  }
+  actions.sort((a, b) => b.priority - a.priority);
+
+  let preflightStatus = { key: "blocked", label: "공개 보류", tone: "hot" };
+  if (readinessScore >= 82 && reservationGap === 0 && revenueGap === 0 && riskCount === 0) {
+    preflightStatus = { key: "ready", label: "공개 준비", tone: "good" };
+  } else if (readinessScore >= 68 && reservationGap === 0 && revenueGap === 0) {
+    preflightStatus = { key: "review", label: "검수 후 공개", tone: "watch" };
+  } else if (readinessScore >= 50) {
+    preflightStatus = { key: "sample_needed", label: "표본 보강", tone: "watch" };
+  }
+
+  const maintenancePriority = Math.max(0, Math.min(100, Math.round(
+    100 - readinessScore
+    + reservationGap * 9
+    + revenueGap * 10
+    + Number(bucket.lowConfidenceCount || 0) * 5
+    + Number(bucket.stockVarianceCount || 0) * 4
+    + Number(bucket.structuralBlockedCount || 0) * 3
+  )));
+  const nextCycle = maintenancePriority >= 80
+    ? "즉시 보강"
+    : (maintenancePriority >= 58 ? "이번 주 검수" : (preflightStatus.key === "ready" ? "주 1회 유지" : "3일 내 재확인"));
+
+  return {
+    readinessScore,
+    preflightStatus,
+    maintenancePriority,
+    nextCycle,
+    primaryAction: actions[0] || null,
+    actions: actions.slice(0, 6),
+    coverage: {
+      reservationSampleGoal: 5,
+      reservationSampleGap: reservationGap,
+      revenueSampleGoal: 3,
+      revenueSampleGap: revenueGap,
+      adminReviewGoal: Math.min(companyCount, 5),
+      adminReviewGap: reviewGap,
+      riskCount,
+      publicStatus: status.key || ""
+    }
+  };
+}
+
 function regionalOpsStatus(bucket = {}) {
   const sampleScore = Math.min(40, (bucket.reservationSampleCount * 3) + (bucket.revenueSampleCount * 4) + (bucket.companyCount * 1.5));
   const correctionScore = Math.min(12, bucket.manualCorrectionCount * 3);
@@ -8000,6 +8091,7 @@ function regionalOpsStatus(bucket = {}) {
 
 function finalizeRegionalOpsBucket(bucket = {}) {
   const status = regionalOpsStatus(bucket);
+  const maintenance = regionalOpsMaintenanceProfile(bucket, status);
   const averageRevenue = bucket.revenueSampleCount ? Math.round(bucket.revenueTotal / bucket.revenueSampleCount) : 0;
   const averageReservationRate = bucket.reservationRateCount
     ? Number((bucket.reservationRateSum / bucket.reservationRateCount).toFixed(4))
@@ -8038,6 +8130,12 @@ function finalizeRegionalOpsBucket(bucket = {}) {
     couponVisibleCount: bucket.couponVisibleCount,
     bestRank: bucket.bestRank,
     status,
+    preflight: {
+      status: maintenance.preflightStatus,
+      readinessScore: maintenance.readinessScore,
+      coverage: maintenance.coverage
+    },
+    maintenance,
     reviewReasons,
     sampleCompanies: bucket.sampleCompanies.slice(0, 8)
   };
@@ -8174,10 +8272,18 @@ function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {},
     adminReviewCount: regions.reduce((sum, region) => sum + region.adminReviewCount, 0),
     publicReadyRegionCount: regions.filter((region) => region.status.key === "public_ready").length,
     reviewNeededRegionCount: regions.filter((region) => region.status.key === "review_needed").length,
-    collectNeededRegionCount: regions.filter((region) => region.status.key === "collect_needed").length
+    collectNeededRegionCount: regions.filter((region) => region.status.key === "collect_needed").length,
+    preflightReadyRegionCount: regions.filter((region) => region.preflight?.status?.key === "ready").length,
+    preflightReviewRegionCount: regions.filter((region) => region.preflight?.status?.key === "review").length,
+    urgentMaintenanceRegionCount: regions.filter((region) => Number(region.maintenance?.maintenancePriority || 0) >= 80).length,
+    weeklyMaintenanceRegionCount: regions.filter((region) => region.maintenance?.nextCycle === "주 1회 유지").length,
+    maintenanceActionCount: regions.reduce((sum, region) => {
+      const actions = Array.isArray(region.maintenance?.actions) ? region.maintenance.actions : [];
+      return sum + actions.filter((action) => action.key !== "weekly_maintenance").length;
+    }, 0)
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
     basis,
     search: {
@@ -11071,8 +11177,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-admin-region-workflow"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-admin-region-workflow"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-admin-region-maintenance"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-admin-region-maintenance"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
