@@ -48,7 +48,9 @@ const LEGAL_POLICY_VERSION = "2026-07-08";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
-const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || "숙박업 데이터랩").trim();
+const SERVICE_BUSINESS_NAME = String(process.env.LODGING_DATALAB_BUSINESS_NAME || "사분").trim();
+const SERVICE_BUSINESS_REGISTRATION_NO = String(process.env.LODGING_DATALAB_BUSINESS_REGISTRATION_NO || "515-13-21899").trim();
+const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || SERVICE_BUSINESS_NAME).trim();
 const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "").trim();
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
 const CRAWL_TIMING_MAX_ENTRIES = 240;
@@ -2933,11 +2935,11 @@ function businessInfoPage() {
   return legalPage("사업자정보", "공개 정보", [
     {
       title: "운영자 정보",
-      body: `<ul><li>서비스명: 숙박업 데이터랩 beta</li><li>운영자: ${escapeHtml(SERVICE_OPERATOR_NAME)}</li><li>문의: ${policyContactHtml()}</li></ul>`
+      body: `<ul><li>서비스명: 숙박업 데이터랩 beta</li><li>상호: ${escapeHtml(SERVICE_BUSINESS_NAME)}</li><li>사업자등록번호: ${escapeHtml(SERVICE_BUSINESS_REGISTRATION_NO)}</li><li>운영자: ${escapeHtml(SERVICE_OPERATOR_NAME)}</li><li>문의: ${policyContactHtml()}</li></ul>`
     },
     {
-      title: "공개 전 확정 필요 항목",
-      body: "<p>유료 공개 전 회사명, 대표자명, 사업자등록번호, 통신판매업 신고번호, 사업장 주소, 고객센터 연락처, 개인정보 보호책임자, 환불 담당 연락처를 확정해 이 페이지에 게시해야 합니다.</p>"
+      title: "추가 확정 필요 항목",
+      body: "<p>유료 공개 전 통신판매업 신고번호, 사업장 주소, 고객센터 연락처, 개인정보 보호책임자, 환불 담당 연락처를 확정해 이 페이지에 게시해야 합니다. 사업자등록증의 생년월일 등 공개가 불필요한 개인정보는 게시하지 않습니다.</p>"
     }
   ]);
 }
@@ -10066,8 +10068,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-legal-notices"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-legal-notices"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-business-info"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-business-info"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
