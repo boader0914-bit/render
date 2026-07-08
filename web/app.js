@@ -19,6 +19,7 @@ const state = {
   mapData: null,
   mapPromise: null,
   dictionary: null,
+  tourismRegionMap: null,
   locationCardRequests: null,
   historyOps: null,
   companyMaster: null,
@@ -78,6 +79,7 @@ const CORE_COLORS = {
 };
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const LOCATION_DICTIONARY_URL = "/data/location_dictionary.json";
+const TOURISM_REGION_MAP_URL = "/data/tourism_region_map.json";
 const DEFAULT_BOOKING_DAYS = 7;
 const B2B_HIGH_RESERVATION_RATE = 0.4;
 const B2B_LOW_RESERVATION_RATE = 0.2;
@@ -17197,6 +17199,76 @@ function dictionaryAliasForCard(card) {
   return (state.dictionary?.aliases || []).find((alias) => alias.regionKey === card.regionKey) || null;
 }
 
+function tourismRegionEntries() {
+  return Array.isArray(state.tourismRegionMap?.regions) ? state.tourismRegionMap.regions : [];
+}
+
+function tourismRegionValues(region = {}) {
+  return [
+    region.regionKey,
+    region.sido,
+    region.sidoFull,
+    region.sigungu,
+    ...(region.aliases || [])
+  ].filter(Boolean);
+}
+
+function tourismRegionForLocation({ card = null, alias = null, query = "" } = {}) {
+  const regions = tourismRegionEntries();
+  if (!regions.length) return { matched: false, confidence: 0, reason: "not-loaded", region: null };
+
+  if (card?.regionKey) {
+    const direct = regions.find((region) => region.regionKey === card.regionKey);
+    if (direct) return { matched: true, confidence: 100, reason: "region-key", region: direct };
+  }
+
+  const values = [
+    query,
+    card?.searchKeyword,
+    alias?.searchKeyword,
+    alias?.sigungu,
+    ...(alias?.aliases || [])
+  ].filter(Boolean);
+
+  const scored = regions
+    .map((region) => ({
+      region,
+      score: values.reduce((best, value) => Math.max(best, locationMatchScore(value, tourismRegionValues(region), false)), 0)
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || Number(b.region.matchPriority || 0) - Number(a.region.matchPriority || 0));
+
+  const best = scored[0];
+  if (!best || best.score < 70) return { matched: false, confidence: best?.score || 0, reason: "below-threshold", region: best?.region || null };
+  return {
+    matched: best.score >= 90,
+    confidence: best.score,
+    reason: best.score >= 90 ? "alias-auto" : "alias-candidate",
+    region: best.region
+  };
+}
+
+function tourismRegionsForLocationGroup(group = {}) {
+  const seen = new Set();
+  return locationGroupCards(group)
+    .map((card) => tourismRegionForLocation({ card, alias: dictionaryAliasForCard(card), query: card.searchKeyword }))
+    .filter((match) => match.region && !seen.has(match.region.regionKey) && seen.add(match.region.regionKey))
+    .map((match) => match.region);
+}
+
+function tourismRegionDisplay(match = {}) {
+  if (!match?.region) return "관광공사 매칭 대기";
+  const region = match.region;
+  const status = region.codeStatus ? " · 코드검증" : "";
+  return `관광공사 ${region.sido || ""} ${region.sigungu || ""} · ${region.ktoSggCd || "코드대기"}${status}`.replace(/\s+/g, " ").trim();
+}
+
+function tourismRegionGroupDisplay(regions = []) {
+  if (!regions.length) return "관광공사 매칭 대기";
+  const verifyCount = regions.filter((region) => region.codeStatus).length;
+  return `관광공사 ${fmtNumber(regions.length)}개 시군구${verifyCount ? ` · 코드검증 ${fmtNumber(verifyCount)}` : ""}`;
+}
+
 function weightedLocationScore(card) {
   const indexes = Object.values(card?.indexes || {});
   const models = state.dictionary?.scoreModels || [];
@@ -17671,6 +17743,7 @@ function renderLocationGroupDictionary(group) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)
     .map(([code, count]) => ({ ...locationClusterMeta(code), count }));
+  const tourismRegions = tourismRegionsForLocationGroup(group);
   const rankedCards = cards
     .slice()
     .sort((a, b) => {
@@ -17704,6 +17777,7 @@ function renderLocationGroupDictionary(group) {
         <span>지역 카드 70%</span>
         <span>연결 ${fmtNumber(cards.length)}지역</span>
         <span>시장신호 ${fmtNumber(group.marketSignal || 0)}</span>
+        <span>${escapeHtml(tourismRegionGroupDisplay(tourismRegions))}</span>
       </div>
 
       <div class="location-cluster-row">
@@ -17830,6 +17904,7 @@ function renderLocationDictionary(match = null) {
 
   state.selectedLocationCard = card;
   const alias = result.alias || dictionaryAliasForCard(card);
+  const tourismMatch = tourismRegionForLocation({ card, alias, query: card.searchKeyword });
   const clusters = locationClusterCodes(card).map(locationClusterMeta);
   const indexes = Object.values(card.indexes || {});
   const score = weightedLocationScore(card);
@@ -17863,6 +17938,7 @@ function renderLocationDictionary(match = null) {
         <span>${escapeHtml(alias?.sigungu || "시군구")}</span>
         <span>1차권역 ${fmtNumber(alias?.primaryRadiusKm || 0)}km</span>
         <span>2차권역 ${fmtNumber(alias?.secondaryRadiusKm || 0)}km</span>
+        <span>${escapeHtml(tourismRegionDisplay(tourismMatch))}</span>
       </div>
 
       <div class="location-cluster-row">
@@ -17966,7 +18042,12 @@ function runDictionarySearch(query) {
 
 async function loadLocationDictionary() {
   try {
-    state.dictionary = await fetchJson(LOCATION_DICTIONARY_URL);
+    const [dictionary, tourismRegionMap] = await Promise.all([
+      fetchJson(LOCATION_DICTIONARY_URL),
+      fetchJson(TOURISM_REGION_MAP_URL).catch((error) => ({ error: error.message, regions: [] }))
+    ]);
+    state.dictionary = dictionary;
+    state.tourismRegionMap = tourismRegionMap;
     renderDictionaryQuickButtons();
     if (!els.dictionarySearchInput?.value && state.dictionary.cards?.[0]) {
       els.dictionarySearchInput.value = state.dictionary.cards[0].searchKeyword;
