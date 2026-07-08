@@ -8807,9 +8807,9 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
     <div class="b2b-my-lodge-board">
       <div class="b2b-my-lodge-head">
         <div>
-          <span>관심숙소 비교</span>
-          <strong>관심숙소 등록</strong>
-          <p>비교할 숙소를 최대 2곳까지 등록하고, 객실종류별 수량·요일 가격으로 지역 평균·상위권 매출 표본과 비교합니다.</p>
+          <span>비교 기준 설정</span>
+          <strong>내 숙소 정보 입력</strong>
+          <p>비교할 숙소를 최대 2곳까지 저장하고, 객실종류별 수량·요일 가격으로 지역 평균·상위권 매출 표본과 비교합니다.</p>
         </div>
         <em>${fmtNumber(interestLodges.length)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)} 등록</em>
       </div>
@@ -8851,7 +8851,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
         <div class="b2b-my-lodge-channel-note">네이버/OTA는 같은 객실 재고를 공유할 수 있어 매출 산정에는 중복 가산하지 않습니다.</div>
         <div class="b2b-my-lodge-actions">
           <button class="secondary-button collect" type="button" data-b2b-my-lodge-collect ${collecting ? "disabled" : ""}>${collecting ? "숙소명 찾는 중" : "숙소명으로 찾기"}</button>
-          <button class="primary-button" type="button" data-b2b-my-lodge-save>관심숙소 등록</button>
+          <button class="primary-button" type="button" data-b2b-my-lodge-save>등록하기</button>
           <button class="secondary-button" type="button" data-b2b-my-lodge-clear ${model.hasInput ? "" : "disabled"}>입력 초기화</button>
         </div>
         ${collectStatus ? `<div class="b2b-my-lodge-collect-status ${collecting ? "loading" : ""}">${escapeHtml(collectStatus)}</div>` : ""}
@@ -9006,7 +9006,7 @@ function saveB2BMyLodgeBenchmark() {
     registeredAt: new Date().toISOString()
   });
   interestLodges.push(lodge);
-  state.b2bMyLodgeCollectStatus = `${lodge.lodgingName} 관심숙소 등록 완료`;
+  state.b2bMyLodgeCollectStatus = `${lodge.lodgingName} 등록 완료`;
   persistB2BMyLodgeStore({ ...store, draft: {}, interestLodges });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
