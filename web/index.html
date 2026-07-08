@@ -196,9 +196,19 @@
           </div>
         </div>
 
-        <section class="admin-console-dashboard" id="adminConsoleDashboard" aria-label="관리자 운영 콘솔"></section>
+        <nav class="admin-section-nav" aria-label="관리 탭 구분">
+          <button class="active" type="button" data-admin-section="overview">운영 현황</button>
+          <button type="button" data-admin-section="collect">수집 실행</button>
+          <button type="button" data-admin-section="members">회원·삭제요청</button>
+          <button type="button" data-admin-section="files">API·파일</button>
+        </nav>
 
-        <div class="admin-stack">
+        <section class="admin-section-panel active" data-admin-section-panel="overview" aria-label="운영 현황">
+          <section class="admin-console-dashboard" id="adminConsoleDashboard" aria-label="관리자 운영 콘솔"></section>
+        </section>
+
+        <section class="admin-section-panel" data-admin-section-panel="collect" aria-label="수집 실행">
+        <div class="admin-stack admin-stack-collect">
           <form class="admin-card" id="crawlForm">
             <h3>새 수집</h3>
             <label class="field">
@@ -298,6 +308,15 @@
             <p class="import-status" id="yeogiImportStatus">통합하면 화면이 자동 갱신됩니다.</p>
           </section>
 
+        </div>
+        </section>
+
+        <section class="admin-section-panel" data-admin-section-panel="members" aria-label="회원 및 삭제 요청">
+          <section class="admin-member-request-dashboard" id="adminMemberRequestDashboard" aria-label="회원 및 삭제 요청 관리"></section>
+        </section>
+
+        <section class="admin-section-panel" data-admin-section-panel="files" aria-label="API 및 파일">
+        <div class="admin-stack admin-stack-files">
           <section class="admin-card" id="trafficAdminCard">
             <div class="card-head">
               <h3>트래픽 API</h3>
@@ -349,6 +368,7 @@
             <div class="download-list" id="downloadList"></div>
           </section>
         </div>
+        </section>
       </section>
     </main>
 

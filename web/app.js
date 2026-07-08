@@ -13,6 +13,7 @@ const state = {
   activeTab: "report",
   adminMobileSection: "analysis",
   adminMobileAnchor: "",
+  adminPanelSection: "overview",
   selectedItem: null,
   selectedSheetTab: "booking",
   mapData: null,
@@ -192,23 +193,31 @@ const ADMIN_MOBILE_SECTIONS = {
   collect: {
     label: "수집",
     target: "admin",
+    adminPanelSection: "collect",
     anchor: "#crawlForm",
     items: [
-      { label: "새 수집", tab: "admin", anchor: "#crawlForm" },
-      { label: "실행 결과", tab: "admin", anchor: "#runResultAdminCard" },
-      { label: "여기어때", tab: "admin", anchor: "#yeogiAdminCard" }
+      { label: "새 수집", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
+      { label: "실행 결과", tab: "admin", adminPanelSection: "collect", anchor: "#runResultAdminCard" },
+      { label: "여기어때", tab: "admin", adminPanelSection: "collect", anchor: "#yeogiAdminCard" }
     ]
   },
   settings: {
     label: "설정",
     target: "admin",
+    adminPanelSection: "files",
     anchor: "#trafficAdminCard",
     items: [
-      { label: "API", tab: "admin", anchor: "#trafficAdminCard" },
-      { label: "마스터DB", tab: "admin", anchor: "#companyMasterAdminCard" },
-      { label: "파일", tab: "admin", anchor: "#downloadAdminCard" }
+      { label: "API", tab: "admin", adminPanelSection: "files", anchor: "#trafficAdminCard" },
+      { label: "마스터DB", tab: "admin", adminPanelSection: "files", anchor: "#companyMasterAdminCard" },
+      { label: "파일", tab: "admin", adminPanelSection: "files", anchor: "#downloadAdminCard" }
     ]
   }
+};
+const ADMIN_PANEL_SECTIONS = {
+  overview: "운영 현황",
+  collect: "수집 실행",
+  members: "회원·삭제요청",
+  files: "API·파일"
 };
 const TAB_LABELS = {
   report: "요약 리포트",
@@ -257,6 +266,7 @@ const els = {
   historyOpsDashboard: document.getElementById("historyOpsDashboard"),
   adminStatus: document.getElementById("adminStatus"),
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
+  adminMemberRequestDashboard: document.getElementById("adminMemberRequestDashboard"),
   b2bSearchPanel: document.getElementById("b2bSearchPanel"),
   b2bOnboarding: document.getElementById("b2bOnboarding"),
   b2bSearchForm: document.getElementById("b2bSearchForm"),
@@ -789,7 +799,9 @@ function adminMobileSectionForTab(tab, preferred = "") {
   }
   if (["decisionQueue", "target"].includes(tab)) return "queue";
   if (tab === "admin") {
-    return ["collect", "settings"].includes(state.adminMobileSection) ? state.adminMobileSection : "collect";
+    if (state.adminPanelSection === "collect") return "collect";
+    if (["members", "files"].includes(state.adminPanelSection)) return "settings";
+    return "analysis";
   }
   return "analysis";
 }
@@ -831,20 +843,57 @@ function syncAdminMobileNav() {
     container.innerHTML = (section.items || []).map((item) => {
       const tab = item.tab || section.target || "report";
       const anchor = item.anchor || "";
+      const adminPanelSection = item.adminPanelSection || section.adminPanelSection || "";
       const active = tab === state.activeTab && (!anchor || anchor === state.adminMobileAnchor);
-      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
+      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
     }).join("");
   });
 }
 
-function activateAdminMobileNav(sectionKey, tab = "", anchor = "") {
+function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSection = "") {
   if (!isAdminRole()) return;
   const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.analysis;
   const nextTab = roleAllowsTab(tab) ? tab : section.target;
   state.adminMobileSection = sectionKey;
   state.adminMobileAnchor = anchor || section.anchor || "";
+  if (nextTab === "admin") {
+    state.adminPanelSection = adminPanelSection || section.adminPanelSection || "overview";
+  }
   setActiveTab(nextTab, { adminMobileSection: sectionKey });
   scrollAdminMobileAnchor(state.adminMobileAnchor);
+}
+
+function setAdminPanelSection(sectionKey = "overview", options = {}) {
+  if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
+  state.adminPanelSection = sectionKey;
+  if (isAdminRole() && state.activeTab === "admin") {
+    if (sectionKey === "collect") state.adminMobileSection = "collect";
+    else if (["members", "files"].includes(sectionKey)) state.adminMobileSection = "settings";
+    else state.adminMobileSection = "analysis";
+  }
+  syncAdminSectionPanels();
+  syncAdminMobileNav();
+  if (options.scroll) {
+    window.setTimeout(() => {
+      document.querySelector(`[data-admin-section-panel="${sectionKey}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+  }
+}
+
+function syncAdminSectionPanels() {
+  const isAdmin = isAdminRole();
+  const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "overview";
+  state.adminPanelSection = current;
+  document.querySelectorAll("[data-admin-section]").forEach((button) => {
+    button.hidden = !isAdmin;
+    button.classList.toggle("active", isAdmin && button.dataset.adminSection === current);
+    button.setAttribute("aria-pressed", isAdmin && button.dataset.adminSection === current ? "true" : "false");
+  });
+  document.querySelectorAll("[data-admin-section-panel]").forEach((panel) => {
+    const active = isAdmin && panel.dataset.adminSectionPanel === current;
+    panel.hidden = !active;
+    panel.classList.toggle("active", active);
+  });
 }
 
 function setPanelHeading(panel, title, description) {
@@ -892,6 +941,7 @@ function applyRoleUi() {
   }
   syncRoleStaticLabels();
   syncB2BSearchRangeControl();
+  syncAdminSectionPanels();
   syncAdminMobileNav();
 }
 
@@ -14342,7 +14392,7 @@ function adminConsoleCrawlPanel(entries = []) {
           <strong>수집 상태</strong>
           <small>현재 설정 기준 예상 시간과 최신 실행 품질을 함께 봅니다.</small>
         </div>
-        <button type="button" data-drawer-tab="admin">수집 실행</button>
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="collect">수집 실행</button>
       </div>
       <div class="admin-crawl-meter">
         <span style="width:${Math.max(8, Math.min(100, Math.round(preview.confidence * 100 || 48)))}%"></span>
@@ -14479,7 +14529,7 @@ function adminConsoleMemberPanel() {
           <strong>회원 사용량</strong>
           <small>회원가입 계정별 검색 사용량과 최근 리포트를 확인합니다.</small>
         </div>
-        <button type="button" data-drawer-tab="admin">회원 관리</button>
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="members">회원 관리</button>
       </div>
       <div class="admin-member-summary">
         <article>
@@ -14793,7 +14843,9 @@ function adminConsoleSecurityPanel() {
 }
 
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
-  if (!els.adminConsoleDashboard || !isAdminRole()) return;
+  if (!isAdminRole()) return;
+  renderAdminMemberRequestDashboard();
+  if (!els.adminConsoleDashboard) return;
   if (master.error) {
     els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty">관리자 콘솔 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
@@ -14822,12 +14874,18 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
     <section class="admin-console-layout">
       ${adminConsoleQueuePreview(entries)}
       ${adminConsoleCrawlPanel(entries)}
-      ${adminConsoleMemberPanel()}
-      ${adminConsoleAccountDeletePanel()}
-      ${adminConsoleSecurityPanel()}
       ${adminConsoleMasterPreview(master)}
       ${adminConsoleTaskQueue(master, entries)}
     </section>
+  `;
+}
+
+function renderAdminMemberRequestDashboard() {
+  if (!els.adminMemberRequestDashboard || !isAdminRole()) return;
+  els.adminMemberRequestDashboard.innerHTML = `
+    ${adminConsoleMemberPanel()}
+    ${adminConsoleAccountDeletePanel()}
+    ${adminConsoleSecurityPanel()}
   `;
 }
 
@@ -15182,7 +15240,7 @@ function renderTargets() {
         ${salesContactFormHtml(company)}
         ${salesContactHistoryHtml(company)}
         <div class="target-card-actions">
-          ${itemIndex >= 0 ? `<button class="secondary-button" type="button" data-open-company="${itemIndex}">상세 보기</button>` : `<button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>`}
+          ${itemIndex >= 0 ? `<button class="secondary-button" type="button" data-open-company="${itemIndex}">상세 보기</button>` : `<button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="files">관리에서 확인</button>`}
           ${url ? `<a class="secondary-button target-link-button" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">예약/플레이스</a>` : ""}
         </div>
       </article>
@@ -15238,7 +15296,7 @@ function renderTargets() {
             ${salesGateReviewActionsHtml(entry)}
             <div class="target-card-actions">
               <button class="secondary-button" type="button" data-drawer-tab="decisionQueue">판단 큐에서 처리</button>
-              <button class="secondary-button" type="button" data-drawer-tab="admin">관리에서 확인</button>
+              <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="files">관리에서 확인</button>
             </div>
           </article>
         `;
@@ -18989,6 +19047,9 @@ async function loadSession() {
     state.activeTab = "report";
   } else if (location.pathname === "/admin" && state.session.role === "admin") {
     state.activeTab = "admin";
+    state.adminPanelSection = "overview";
+    state.adminMobileSection = "analysis";
+    state.adminMobileAnchor = "";
   }
   applyRoleUi();
 }
@@ -19655,6 +19716,7 @@ function applyCollectionQualitySetting(button) {
   }
   syncCollectionModeInputs();
   setActiveTab("admin");
+  setAdminPanelSection("collect");
   if (els.crawlStatus) {
     const detail = mode === "fast" ? "빠른 순위 · 상세 생략" : `정밀분석 · 상세 ${range}위`;
     els.crawlStatus.textContent = `${keyword} 수집 설정을 적용했습니다. ${detail}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
@@ -19705,6 +19767,7 @@ function applyQueueRecrawlSetting(button) {
   }
   syncCollectionModeInputs();
   setActiveTab("admin");
+  setAdminPanelSection("collect");
   if (els.crawlStatus) {
     els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
@@ -19756,6 +19819,7 @@ function applyRecrawlBatchSetting(button) {
   }
   syncCollectionModeInputs();
   setActiveTab("admin");
+  setAdminPanelSection("collect");
   if (els.crawlStatus) {
     const saved = batch.savedSeconds ? ` · 개별 실행 대비 ${formatElapsed(batch.savedSeconds)} 절감` : "";
     const label = source === "sales_gate" ? "보류 업체" : "후보";
@@ -20198,7 +20262,7 @@ function bindEvents() {
     if (adminMobileSection) {
       const sectionKey = adminMobileSection.dataset.adminMobileSection || "analysis";
       const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.analysis;
-      activateAdminMobileNav(sectionKey, section.target, section.anchor || "");
+      activateAdminMobileNav(sectionKey, section.target, section.anchor || "", section.adminPanelSection || "");
       return;
     }
     const adminMobileTab = event.target.closest("[data-admin-mobile-tab]");
@@ -20206,8 +20270,14 @@ function bindEvents() {
       activateAdminMobileNav(
         adminMobileTab.dataset.adminMobileSectionKey || state.adminMobileSection || "analysis",
         adminMobileTab.dataset.adminMobileTab || "",
-        adminMobileTab.dataset.adminMobileAnchor || ""
+        adminMobileTab.dataset.adminMobileAnchor || "",
+        adminMobileTab.dataset.adminPanelSectionKey || ""
       );
+      return;
+    }
+    const adminSectionButton = event.target.closest("[data-admin-section]");
+    if (adminSectionButton) {
+      setAdminPanelSection(adminSectionButton.dataset.adminSection || "overview", { scroll: true });
       return;
     }
     const open = event.target.closest("[data-open-company]");
@@ -20364,7 +20434,11 @@ function bindEvents() {
     const recrawlBatch = event.target.closest("[data-recrawl-batch-key]");
     if (recrawlBatch) applyRecrawlBatchSetting(recrawlBatch);
     if (event.target.closest("[data-company-master-focus]")) {
-      els.companyMasterPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActiveTab("admin");
+      setAdminPanelSection("files");
+      window.requestAnimationFrame(() => {
+        els.companyMasterPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     }
     const memberExpanded = event.target.closest("[data-b2b-member-expanded]");
     if (memberExpanded) {
@@ -20402,7 +20476,13 @@ function bindEvents() {
     if (event.target.closest("[data-close-sheet]")) closeSheet();
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const drawerTab = event.target.closest("[data-drawer-tab]");
-    if (drawerTab) setActiveTab(drawerTab.dataset.drawerTab);
+    if (drawerTab) {
+      const targetTab = drawerTab.dataset.drawerTab || "";
+      setActiveTab(targetTab);
+      if (targetTab === "admin" && drawerTab.dataset.adminSectionLink) {
+        setAdminPanelSection(drawerTab.dataset.adminSectionLink);
+      }
+    }
   });
   document.addEventListener("submit", (event) => {
     if (event.target.closest("[data-b2b-my-lodge-form]")) {
