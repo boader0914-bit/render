@@ -56,6 +56,7 @@ const state = {
   memberSearchHistory: [],
   memberSearchQuota: null,
   b2bMemberAdmin: null,
+  accountDeleteAdmin: null,
   b2bHistoryExpanded: false
 };
 
@@ -14511,6 +14512,86 @@ function adminConsoleMemberPanel() {
   `;
 }
 
+function adminConsoleAccountDeletePanel() {
+  const overview = state.accountDeleteAdmin || {};
+  if (overview.error) {
+    return `
+      <section class="admin-console-panel admin-delete-panel">
+        <div class="admin-console-head">
+          <div>
+            <strong>계정·데이터 삭제 요청</strong>
+            <small>삭제 요청 큐를 불러오지 못했습니다.</small>
+          </div>
+        </div>
+        <p class="empty">삭제 요청 로딩 실패: ${escapeHtml(overview.error)}</p>
+      </section>
+    `;
+  }
+  const summary = overview.summary || {};
+  const requests = Array.isArray(overview.requests) ? overview.requests : [];
+  const rows = requests.slice(0, 10);
+  const statusOptions = [
+    ["received", "접수"],
+    ["verifying", "본인 확인중"],
+    ["processing", "처리중"],
+    ["completed", "처리 완료"],
+    ["rejected", "반려"]
+  ];
+  return `
+    <section class="admin-console-panel admin-delete-panel">
+      <div class="admin-console-head">
+        <div>
+          <strong>계정·데이터 삭제 요청</strong>
+          <small>고객이 요청한 계정 삭제, 검색 이력 삭제, 관심숙소 삭제를 처리 상태별로 관리합니다.</small>
+        </div>
+        <a href="/account-delete" target="_blank" rel="noopener">공개 요청 화면</a>
+      </div>
+      <div class="admin-delete-summary">
+        <article><span>미처리</span><strong>${fmtNumber(summary.openCount || 0)}</strong><small>접수·확인·처리중</small></article>
+        <article><span>전체 요청</span><strong>${fmtNumber(summary.totalCount || 0)}</strong><small>${escapeHtml(summary.latestRequestedAt ? `최근 ${compactDateTime(summary.latestRequestedAt)}` : "요청 없음")}</small></article>
+        <article><span>완료</span><strong>${fmtNumber(summary.completedCount || 0)}</strong><small>처리 완료</small></article>
+        <article><span>반려</span><strong>${fmtNumber(summary.rejectedCount || 0)}</strong><small>본인 확인 실패 등</small></article>
+      </div>
+      <div class="admin-delete-list">
+        ${rows.length ? rows.map((request) => {
+          const requestId = escapeHtml(request.requestId || "");
+          const status = request.status || "received";
+          const policyText = [
+            request.termsVersion ? `약관 ${request.termsVersion}` : "",
+            request.privacyVersion ? `개인정보 ${request.privacyVersion}` : "",
+            request.consentAcceptedAt ? `${compactDateTime(request.consentAcceptedAt)} 동의` : ""
+          ].filter(Boolean).join(" · ") || "동의 버전 대기";
+          return `
+            <article class="admin-delete-row ${escapeHtml(status)}">
+              <div>
+                <span>${escapeHtml(request.requestTypeLabel || "삭제 요청")}</span>
+                <strong>${escapeHtml(request.username || "아이디 없음")}</strong>
+                <small>${escapeHtml([request.companyName || "", request.contact || ""].filter(Boolean).join(" · ") || "연락처 없음")}</small>
+              </div>
+              <div>
+                <span>요청일</span>
+                <strong>${escapeHtml(request.requestedAt ? compactDateTime(request.requestedAt) : "대기")}</strong>
+                <small>${escapeHtml(policyText)}</small>
+              </div>
+              <div>
+                <span>처리 상태</span>
+                <select data-account-delete-status="${requestId}" aria-label="삭제 요청 처리 상태">
+                  ${statusOptions.map(([value, label]) => `<option value="${value}" ${status === value ? "selected" : ""}>${label}</option>`).join("")}
+                </select>
+                <small>${escapeHtml(request.updatedAt ? `업데이트 ${compactDateTime(request.updatedAt)}` : "변경 없음")}</small>
+              </div>
+              <div>
+                <span>상세</span>
+                <small>${escapeHtml(request.detail || "상세 메모 없음")}</small>
+              </div>
+            </article>
+          `;
+        }).join("") : `<p class="empty">아직 접수된 삭제 요청이 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!els.adminConsoleDashboard || !isAdminRole()) return;
   if (master.error) {
@@ -14542,6 +14623,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
       ${adminConsoleQueuePreview(entries)}
       ${adminConsoleCrawlPanel(entries)}
       ${adminConsoleMemberPanel()}
+      ${adminConsoleAccountDeletePanel()}
       ${adminConsoleMasterPreview(master)}
       ${adminConsoleTaskQueue(master, entries)}
     </section>
@@ -17040,7 +17122,7 @@ function renderB2BAccountPanel() {
       </article>
     </div>
     <div class="b2b-account-actions">
-      <a href="/account-request" target="_blank" rel="noopener">계정·검색 이력 삭제/정정 요청 안내</a>
+      <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
       <a href="/privacy" target="_blank" rel="noopener">개인정보 안내</a>
       <a href="/refund" target="_blank" rel="noopener">요금·환불 정책</a>
     </div>
@@ -18712,8 +18794,37 @@ async function loadB2BMemberAdminOverview() {
   }
 }
 
+async function loadAccountDeleteAdminOverview() {
+  if (!isAdminRole()) {
+    state.accountDeleteAdmin = null;
+    return;
+  }
+  try {
+    state.accountDeleteAdmin = await fetchJson("/api/account-delete-requests");
+  } catch (error) {
+    state.accountDeleteAdmin = { error: error.message, requests: [], summary: {} };
+  }
+}
+
 function b2bAdminMemberById(memberId = "") {
   return (state.b2bMemberAdmin?.members || []).find((member) => member.memberId === memberId) || null;
+}
+
+async function updateAccountDeleteRequestStatus(requestId = "", patch = {}) {
+  if (!requestId) return;
+  setStatus("삭제 요청 상태 저장 중");
+  try {
+    state.accountDeleteAdmin = await fetchJson(`/api/account-delete-requests/${encodeURIComponent(requestId)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    renderAdminConsoleDashboard();
+    setStatus("삭제 요청 상태 저장 완료");
+  } catch (error) {
+    setStatus("삭제 요청 상태 저장 실패");
+    if (els.adminStatus) els.adminStatus.textContent = `삭제 요청 상태 저장 실패: ${error.message}`;
+  }
 }
 
 async function updateB2BMemberAdminPolicy(memberId = "", patch = {}) {
@@ -19437,11 +19548,13 @@ async function loadRun(runId) {
     await loadHistoryOps();
     await loadCompanyMasterSummary();
     await loadB2BMemberAdminOverview();
+    await loadAccountDeleteAdminOverview();
   } else {
     state.historyOps = null;
     state.companyMaster = null;
     state.crawlEtaByKey = {};
     state.b2bMemberAdmin = null;
+    state.accountDeleteAdmin = null;
   }
   if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
@@ -20010,6 +20123,13 @@ function bindEvents() {
     rerenderCompanyMasterPreservingSearch();
   });
   document.addEventListener("change", (event) => {
+    const deleteStatus = event.target.closest("[data-account-delete-status]");
+    if (deleteStatus) {
+      updateAccountDeleteRequestStatus(deleteStatus.dataset.accountDeleteStatus || "", {
+        status: deleteStatus.value || "received"
+      }).catch(() => {});
+      return;
+    }
     const memberType = event.target.closest("[data-b2b-member-type]");
     if (memberType) {
       updateB2BMemberAdminPolicy(memberType.dataset.b2bMemberType || "", {
@@ -20136,7 +20256,7 @@ async function init() {
     bindEvents();
     setDefaultDates();
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadB2BMemberAdminOverview()]);
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview()]);
     } else {
       state.runs = [];
       state.activeRunId = null;

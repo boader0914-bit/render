@@ -42,6 +42,7 @@ const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json"
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
 const LEGACY_B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_history.json");
 const B2B_SEARCH_HISTORY_FILE = path.join(CUSTOMER_DB_DIR, "b2b_search_history.json");
+const ACCOUNT_DELETE_REQUESTS_FILE = path.join(CUSTOMER_DB_DIR, "account_delete_requests.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const LEGAL_POLICY_VERSION = "2026-07-08";
@@ -2170,6 +2171,359 @@ async function publicB2BMembersAdminOverview() {
       resetAfterSeconds: secondsUntilNextKstDay()
     }
   };
+}
+
+const ACCOUNT_DELETE_REQUEST_TYPES = {
+  account_delete: "계정 삭제",
+  search_history_delete: "검색 이력 삭제",
+  interest_lodge_delete: "관심숙소 삭제",
+  all_data_delete: "전체 데이터 삭제"
+};
+
+const ACCOUNT_DELETE_REQUEST_STATUSES = {
+  received: "접수",
+  verifying: "본인 확인중",
+  processing: "처리중",
+  completed: "처리 완료",
+  rejected: "반려"
+};
+
+function emptyAccountDeleteRequestStore() {
+  return {
+    schemaVersion: 1,
+    updatedAt: "",
+    requests: []
+  };
+}
+
+async function readAccountDeleteRequestStore() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(ACCOUNT_DELETE_REQUESTS_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      ...emptyAccountDeleteRequestStore(),
+      ...parsed,
+      requests: Array.isArray(parsed.requests) ? parsed.requests : []
+    };
+  } catch {
+    return emptyAccountDeleteRequestStore();
+  }
+}
+
+async function writeAccountDeleteRequestStore(store) {
+  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
+  const next = {
+    ...emptyAccountDeleteRequestStore(),
+    ...store,
+    updatedAt: new Date().toISOString(),
+    requests: Array.isArray(store.requests) ? store.requests : []
+  };
+  const tempPath = `${ACCOUNT_DELETE_REQUESTS_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tempPath, ACCOUNT_DELETE_REQUESTS_FILE);
+  return next;
+}
+
+function normalizeAccountDeleteRequestType(value = "") {
+  const key = String(value || "").trim().toLowerCase();
+  return ACCOUNT_DELETE_REQUEST_TYPES[key] ? key : "";
+}
+
+function accountDeleteRequestTypeLabel(value = "") {
+  return ACCOUNT_DELETE_REQUEST_TYPES[normalizeAccountDeleteRequestType(value)] || "삭제 요청";
+}
+
+function normalizeAccountDeleteRequestStatus(value = "") {
+  const key = String(value || "").trim().toLowerCase();
+  return ACCOUNT_DELETE_REQUEST_STATUSES[key] ? key : "received";
+}
+
+function accountDeleteRequestStatusLabel(value = "") {
+  return ACCOUNT_DELETE_REQUEST_STATUSES[normalizeAccountDeleteRequestStatus(value)] || ACCOUNT_DELETE_REQUEST_STATUSES.received;
+}
+
+function accountDeleteRequestPublicRow(request = {}) {
+  const status = normalizeAccountDeleteRequestStatus(request.status);
+  return {
+    requestId: request.requestId || "",
+    requestedAt: request.requestedAt || "",
+    updatedAt: request.updatedAt || "",
+    username: request.username || "",
+    memberId: request.memberId || "",
+    accountType: request.accountType || "",
+    companyName: request.companyName || "",
+    contact: request.contact || "",
+    requestType: normalizeAccountDeleteRequestType(request.requestType) || "account_delete",
+    requestTypeLabel: accountDeleteRequestTypeLabel(request.requestType),
+    status,
+    statusLabel: accountDeleteRequestStatusLabel(status),
+    policyVersion: request.policyVersion || LEGAL_POLICY_VERSION,
+    termsVersion: request.termsVersion || TERMS_VERSION,
+    privacyVersion: request.privacyVersion || PRIVACY_VERSION,
+    consentAcceptedAt: request.consentAcceptedAt || "",
+    detail: request.detail || "",
+    adminNote: request.adminNote || "",
+    statusHistory: Array.isArray(request.statusHistory) ? request.statusHistory.slice(-20) : []
+  };
+}
+
+async function publicAccountDeleteRequestsAdminOverview() {
+  const store = await readAccountDeleteRequestStore();
+  const requests = (store.requests || [])
+    .map(accountDeleteRequestPublicRow)
+    .sort((a, b) => String(b.requestedAt || "").localeCompare(String(a.requestedAt || "")));
+  const openStatuses = new Set(["received", "verifying", "processing"]);
+  return {
+    requests: requests.slice(0, 200),
+    summary: {
+      totalCount: requests.length,
+      openCount: requests.filter((request) => openStatuses.has(request.status)).length,
+      completedCount: requests.filter((request) => request.status === "completed").length,
+      rejectedCount: requests.filter((request) => request.status === "rejected").length,
+      latestRequestedAt: requests[0]?.requestedAt || ""
+    }
+  };
+}
+
+async function findB2BMemberByLoginId(username = "") {
+  const normalized = normalizeLoginId(username);
+  if (!normalized) return null;
+  const store = await readB2BMemberStore();
+  return (store.members || []).find((member) => normalizeLoginId(member.username) === normalized) || null;
+}
+
+function accountDeletePrefill(session = null, payload = {}) {
+  const publicInfo = publicSession(session);
+  const profile = publicInfo.profile || {};
+  const username = sanitizeMemberText(payload.username || publicInfo.username || "", 80);
+  const phone = sanitizeMemberText(payload.phone || profile.phone || "", 40);
+  const email = sanitizeMemberText(payload.email || profile.email || "", 120);
+  const contact = sanitizeMemberText(payload.contact || email || phone || "", 160);
+  return {
+    username,
+    phone,
+    email,
+    contact,
+    companyName: sanitizeMemberText(payload.companyName || profile.companyName || profile.lodgingName || "", 120),
+    requestType: normalizeAccountDeleteRequestType(payload.requestType) || "account_delete",
+    detail: sanitizeMemberText(payload.detail, 500)
+  };
+}
+
+async function createAccountDeleteRequest(payload = {}, context = {}) {
+  const session = context.session || null;
+  const prefill = accountDeletePrefill(session, payload);
+  const username = normalizeLoginId(prefill.username);
+  const requestType = normalizeAccountDeleteRequestType(payload.requestType || prefill.requestType);
+  const contact = sanitizeMemberText(payload.contact || prefill.contact || payload.email || payload.phone, 160);
+  if (!username) {
+    const error = new Error("아이디를 입력해 주세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!requestType) {
+    const error = new Error("삭제 요청 항목을 선택해 주세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!contact) {
+    const error = new Error("처리 결과를 안내받을 연락처 또는 이메일을 입력해 주세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isConsentAccepted(payload.confirmRequest)) {
+    const error = new Error("삭제 요청 내용을 확인했다는 동의가 필요합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const member = await findB2BMemberByLoginId(username);
+  const now = new Date().toISOString();
+  const userAgent = String(context.req?.headers?.["user-agent"] || "");
+  const publicInfo = publicSession(session);
+  const profile = member?.profile || publicInfo.profile || {};
+  const consents = member?.consents || publicInfo.consents || {};
+  const request = {
+    requestId: `adr_${crypto.randomBytes(9).toString("base64url")}`,
+    requestedAt: now,
+    updatedAt: now,
+    username,
+    memberId: member?.memberId || publicInfo.memberId || "",
+    accountType: member?.accountType || publicInfo.accountType || "",
+    role: publicInfo.authenticated ? publicInfo.role : "",
+    companyName: sanitizeMemberText(payload.companyName || profile.companyName || profile.lodgingName || "", 120),
+    phone: sanitizeMemberText(payload.phone || profile.phone || "", 40),
+    email: sanitizeMemberText(payload.email || profile.email || "", 120),
+    contact,
+    requestType,
+    requestTypeLabel: accountDeleteRequestTypeLabel(requestType),
+    status: "received",
+    statusLabel: accountDeleteRequestStatusLabel("received"),
+    detail: sanitizeMemberText(payload.detail, 500),
+    policyVersion: LEGAL_POLICY_VERSION,
+    termsVersion: consents.termsVersion || TERMS_VERSION,
+    privacyVersion: consents.privacyVersion || PRIVACY_VERSION,
+    consentAcceptedAt: consents.acceptedAt || "",
+    ipHash: context.req ? clientIpHash(context.req) : "",
+    userAgentHash: userAgent ? crypto.createHash("sha256").update(`ua:${userAgent}`).digest("hex") : "",
+    statusHistory: [
+      {
+        changedAt: now,
+        status: "received",
+        statusLabel: accountDeleteRequestStatusLabel("received"),
+        adminUsername: "",
+        note: "고객 요청 접수"
+      }
+    ]
+  };
+  const store = await readAccountDeleteRequestStore();
+  store.requests = [request, ...(store.requests || [])].slice(0, 1000);
+  await writeAccountDeleteRequestStore(store);
+  return accountDeleteRequestPublicRow(request);
+}
+
+async function updateAccountDeleteRequestStatus(requestId = "", payload = {}, adminSession = {}) {
+  const id = String(requestId || payload.requestId || "").trim();
+  if (!id) {
+    const error = new Error("삭제 요청 ID가 필요합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const store = await readAccountDeleteRequestStore();
+  const request = (store.requests || []).find((item) => item.requestId === id);
+  if (!request) {
+    const error = new Error("삭제 요청을 찾을 수 없습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const status = normalizeAccountDeleteRequestStatus(payload.status);
+  request.status = status;
+  request.statusLabel = accountDeleteRequestStatusLabel(status);
+  request.adminNote = sanitizeMemberText(payload.adminNote || request.adminNote || "", 500);
+  request.updatedAt = now;
+  request.statusHistory = [
+    ...(Array.isArray(request.statusHistory) ? request.statusHistory : []),
+    {
+      changedAt: now,
+      status,
+      statusLabel: accountDeleteRequestStatusLabel(status),
+      adminUsername: adminSession?.username || "",
+      note: request.adminNote
+    }
+  ].slice(-30);
+  await writeAccountDeleteRequestStore(store);
+  return publicAccountDeleteRequestsAdminOverview();
+}
+
+function accountDeletePage(session = null, options = {}) {
+  const values = accountDeletePrefill(session, options.values || {});
+  const success = options.success || null;
+  const error = options.error || "";
+  const selected = (type) => values.requestType === type ? "selected" : "";
+  const requestSummary = success ? `
+    <section class="account-delete-result success">
+      <strong>삭제 요청이 접수되었습니다.</strong>
+      <p>요청번호 ${escapeHtml(success.requestId)} · ${escapeHtml(success.requestTypeLabel)} · 상태 ${escapeHtml(success.statusLabel)}</p>
+      <p>관리자가 본인 확인과 처리 범위를 확인한 뒤 입력한 연락처로 안내합니다.</p>
+    </section>
+  ` : "";
+  const errorSummary = error ? `
+    <section class="account-delete-result error">
+      <strong>접수하지 못했습니다.</strong>
+      <p>${escapeHtml(error)}</p>
+    </section>
+  ` : "";
+  return `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>계정·데이터 삭제 요청</title>
+  <style>
+    :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f7fb; color: #101828; }
+    main { width: min(100% - 32px, 920px); margin: 34px auto; display: grid; gap: 18px; }
+    .hero, form, .notice, .account-delete-result { border: 1px solid #dbe4f0; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); padding: 26px; }
+    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 950; }
+    h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); line-height: 1.12; letter-spacing: 0; }
+    p { margin: 10px 0 0; color: #475467; font-size: 15px; font-weight: 750; line-height: 1.65; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    label { display: grid; gap: 7px; min-width: 0; color: #344054; font-size: 13px; font-weight: 950; }
+    input, select, textarea { width: 100%; min-height: 48px; border: 1px solid #d0d5dd; border-radius: 14px; background: #fff; color: #101828; padding: 0 14px; font: inherit; font-weight: 850; }
+    textarea { min-height: 112px; padding-top: 12px; resize: vertical; }
+    .full { grid-column: 1 / -1; }
+    .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 2px; color: #344054; font-size: 13px; font-weight: 850; line-height: 1.55; }
+    .check input { width: 18px; min-width: 18px; min-height: 18px; margin-top: 2px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+    button, .back { min-height: 48px; display: inline-grid; place-items: center; border: 0; border-radius: 14px; background: #3182f6; color: #fff; padding: 0 18px; font: inherit; font-weight: 950; text-decoration: none; cursor: pointer; }
+    .back { border: 1px solid #d5e3f7; background: #eef5ff; color: #175cd3; }
+    .notice ul { margin: 8px 0 0; padding-left: 20px; color: #475467; line-height: 1.7; }
+    .account-delete-result.success { border-color: #a6f4c5; background: #f6fef9; }
+    .account-delete-result.error { border-color: #fecdca; background: #fffbfa; }
+    .account-delete-result strong { color: #101828; font-size: 18px; font-weight: 950; }
+    .required { color: #d92d20; }
+    @media (max-width: 680px) { main { margin-block: 18px; } .hero, form, .notice, .account-delete-result { padding: 20px; border-radius: 20px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <p class="eyebrow">회원 권리 요청</p>
+      <h1>계정·데이터 삭제 요청</h1>
+      <p>계정 삭제, 검색 이력 삭제, 관심숙소 삭제, 전체 데이터 삭제를 요청할 수 있습니다. 요청은 고객 DB에 접수되고 관리자가 본인 확인 후 처리합니다.</p>
+    </section>
+    ${requestSummary}
+    ${errorSummary}
+    <form method="post" action="/account-delete">
+      <div class="grid">
+        <label>
+          <span>아이디 <b class="required">*</b></span>
+          <input name="username" value="${escapeHtml(values.username)}" autocomplete="username" required>
+        </label>
+        <label>
+          <span>연락처 또는 이메일 <b class="required">*</b></span>
+          <input name="contact" value="${escapeHtml(values.contact)}" autocomplete="email" required>
+        </label>
+        <label>
+          <span>숙소 또는 회사명</span>
+          <input name="companyName" value="${escapeHtml(values.companyName)}" autocomplete="organization">
+        </label>
+        <label>
+          <span>요청 항목 <b class="required">*</b></span>
+          <select name="requestType" required>
+            <option value="account_delete" ${selected("account_delete")}>계정 삭제</option>
+            <option value="search_history_delete" ${selected("search_history_delete")}>검색 이력 삭제</option>
+            <option value="interest_lodge_delete" ${selected("interest_lodge_delete")}>관심숙소 삭제</option>
+            <option value="all_data_delete" ${selected("all_data_delete")}>전체 데이터 삭제</option>
+          </select>
+        </label>
+        <label class="full">
+          <span>요청 상세</span>
+          <textarea name="detail" placeholder="삭제 범위나 확인이 필요한 내용을 적어주세요.">${escapeHtml(values.detail)}</textarea>
+        </label>
+      </div>
+      <label class="check">
+        <input name="confirmRequest" value="1" type="checkbox" required>
+        <span>삭제 요청 내용과 처리 후 일부 데이터가 복구되지 않을 수 있음을 확인했습니다.</span>
+      </label>
+      <div class="actions">
+        <button type="submit">삭제 요청 접수</button>
+        <a class="back" href="/b2b">서비스 화면으로 돌아가기</a>
+      </div>
+    </form>
+    <section class="notice">
+      <strong>처리 기준</strong>
+      <ul>
+        <li>요청 일시, 아이디, 연락처, 약관 버전, 처리 상태는 고객 DB에 보관합니다.</li>
+        <li>법령상 보관이 필요한 결제·정산·보안 로그는 별도 보관 기간 후 삭제될 수 있습니다.</li>
+        <li>처리 현황은 관리자 큐에서 접수, 본인 확인중, 처리중, 완료, 반려 상태로 관리합니다.</li>
+        <li>문의: ${policyContactHtml()}</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>`;
 }
 
 function parseBooleanOption(value, fallback = false) {
@@ -10068,8 +10422,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-business-info"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-business-info"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-account-delete-queue"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-account-delete-queue"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -10120,6 +10474,28 @@ async function route(req, res) {
     if ((req.method === "GET" || req.method === "HEAD") && legalRoutes[reqUrl.pathname]) {
       if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
       return send(res, 200, legalRoutes[reqUrl.pathname](), "text/html; charset=utf-8");
+    }
+
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/account-delete") {
+      if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
+      return send(res, 200, accountDeletePage(getSession(req)), "text/html; charset=utf-8");
+    }
+
+    if (req.method === "POST" && (reqUrl.pathname === "/account-delete" || reqUrl.pathname === "/api/account-delete-request")) {
+      const session = getSession(req);
+      const payload = await parseLoginBody(req);
+      try {
+        const requestRow = await createAccountDeleteRequest(payload, { req, session });
+        if (reqUrl.pathname === "/api/account-delete-request") {
+          return send(res, 200, { ok: true, request: requestRow });
+        }
+        return send(res, 200, accountDeletePage(session, { success: requestRow, values: payload }), "text/html; charset=utf-8");
+      } catch (error) {
+        if (reqUrl.pathname === "/api/account-delete-request") {
+          return send(res, error.statusCode || 400, { error: error.message || String(error) });
+        }
+        return send(res, error.statusCode || 400, accountDeletePage(session, { error: error.message || String(error), values: payload }), "text/html; charset=utf-8");
+      }
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/signup.js") {
@@ -10216,6 +10592,18 @@ async function route(req, res) {
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/account-request") {
       if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
       return send(res, 200, accountRequestPage(session), "text/html; charset=utf-8");
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/account-delete-requests") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, await publicAccountDeleteRequestsAdminOverview());
+    }
+
+    if (req.method === "POST" && reqUrl.pathname.startsWith("/api/account-delete-requests/") && reqUrl.pathname.endsWith("/status")) {
+      if (!requireAdminSession(session, req, res)) return;
+      const requestId = decodeURIComponent(reqUrl.pathname.replace("/api/account-delete-requests/", "").replace("/status", ""));
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      return send(res, 200, await updateAccountDeleteRequestStatus(requestId, payload, session));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/session") {
