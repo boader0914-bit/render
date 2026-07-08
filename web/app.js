@@ -14621,6 +14621,36 @@ function adminRegionCompanyFilterBar(rows = [], selectedKey = "priority") {
   `;
 }
 
+function adminRegionCompanyBulkHtml(region = {}, rows = [], selectedFilter = {}) {
+  const count = rows.length;
+  const regionLabel = region.regionLabel || "선택 지역";
+  const filterLabel = selectedFilter.label || "우선순위";
+  const actions = [
+    ["check_needed", "확인 필요"],
+    ["confirmed", "확인 완료"],
+    ["recrawl_needed", "재수집"],
+    ["manual_needed", "보정 필요"],
+    ["contact_ready", "컨택 가능"],
+    ["hold", "보류"],
+    ["exclude", "제외"]
+  ];
+  return `
+    <div class="admin-region-company-bulk" data-admin-region-company-bulk>
+      <div>
+        <strong>지역 작업 일괄 처리</strong>
+        <small>${escapeHtml(`${regionLabel} · ${filterLabel} ${fmtNumber(count)}곳 대상 · 화면에 보이는 수와 관계없이 현재 필터 결과 전체에 적용`)}</small>
+      </div>
+      <input type="text" data-admin-region-bulk-note value="${escapeHtml(`지역 일괄 처리: ${regionLabel} / ${filterLabel}`)}" placeholder="지역 일괄 처리 메모">
+      <div>
+        ${actions.map(([status, label]) => `
+          <button type="button" data-admin-region-bulk-action="${escapeHtml(status)}" ${count ? "" : "disabled"}>${escapeHtml(label)}</button>
+        `).join("")}
+      </div>
+      <small>${escapeHtml("대량 변경 전에는 선택 필터와 대상 수를 먼저 확인하세요.")}</small>
+    </div>
+  `;
+}
+
 function adminSelectedRegion(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
   if (!regions.length) return null;
@@ -14844,6 +14874,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
             <small>${escapeHtml(selectedFilter.label)} ${fmtNumber(filteredRows.length)}곳 · 전체 ${fmtNumber(rows.length)}곳</small>
           </div>
           ${adminRegionCompanyFilterBar(rows, selectedFilter.key)}
+          ${adminRegionCompanyBulkHtml(region, filteredRows, selectedFilter)}
           ${filteredRows.length ? filteredRows.slice(0, 12).map(adminRegionCompanyRowHtml).join("") : `<p class="empty">선택한 조건에 해당하는 업체가 없습니다.</p>`}
           ${filteredRows.length > 12 ? `<p class="admin-region-company-more">상위 12곳만 표시 중입니다. 더 많은 업체는 지역 마스터에서 검색하세요.</p>` : ""}
         </div>
@@ -20179,6 +20210,70 @@ async function applyCompanyCheckBulkReview(button) {
   setStatus(failed ? `${label} 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label} · 실패 ${fmtNumber(failed)}개` : `${label} 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label}`);
 }
 
+async function applyAdminRegionCompanyBulkReview(button) {
+  const status = button?.dataset?.adminRegionBulkAction || "";
+  if (!status) return;
+  const master = companyMasterSource();
+  const region = adminSelectedRegion(master);
+  if (!region) {
+    setStatus("지역 일괄 처리 대상 없음");
+    return;
+  }
+  const rows = adminRegionFilteredCompanyRows(adminRegionCompanyRows(region, master))
+    .map((row) => ({ row, companyId: row.company?.companyId || "" }))
+    .filter((row) => row.companyId);
+  if (!rows.length) {
+    setStatus("지역 일괄 처리할 업체 없음");
+    return;
+  }
+  const selectedFilter = adminRegionSelectedCompanyFilter(adminRegionCompanyRows(region, master));
+  const label = companyAdminReviewLabel(status);
+  const scopeText = `${region.regionLabel || "선택 지역"} / ${selectedFilter.label || "우선순위"}`;
+  if (rows.length > 12 && !window.confirm(`${scopeText} ${fmtNumber(rows.length)}개 업체를 '${label}' 상태로 일괄 저장할까요?`)) {
+    return;
+  }
+  const panel = button.closest("[data-admin-region-company-bulk]");
+  const buttons = panel ? Array.from(panel.querySelectorAll("button")) : [button];
+  const note = panel?.querySelector("[data-admin-region-bulk-note]")?.value || `지역 일괄 처리: ${scopeText}`;
+  buttons.forEach((item) => { item.disabled = true; });
+  setStatus(`${label} 지역 일괄 저장 중 0/${fmtNumber(rows.length)}`);
+  let latestData = null;
+  let saved = 0;
+  let failed = 0;
+  for (const { companyId } of rows) {
+    const reviewContext = companyReviewContextForCompany(companyId, status, "admin_region_bulk");
+    if (reviewContext) {
+      reviewContext.summary = compactListText([
+        `지역 일괄 ${label}: ${scopeText}`,
+        reviewContext.summary
+      ], `지역 일괄 ${label}`, 4);
+    }
+    try {
+      latestData = await fetchJson("/api/company-master/admin-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId, status, note, reviewContext })
+      });
+      saved += 1;
+      setStatus(`${label} 지역 일괄 저장 중 ${fmtNumber(saved)}/${fmtNumber(rows.length)}`);
+    } catch {
+      failed += 1;
+    }
+  }
+  if (latestData) {
+    state.companyMaster = latestData;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...latestData };
+    renderCompanyMasterPanel();
+    renderDecisionQueue();
+    renderTargets();
+    if (isAdminRole()) renderAdminConsoleDashboard();
+  } else {
+    buttons.forEach((item) => { item.disabled = false; });
+  }
+  const outcome = companyAdminReviewOutcome(status);
+  setStatus(failed ? `${label} 지역 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label} · 실패 ${fmtNumber(failed)}개` : `${label} 지역 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label}`);
+}
+
 async function saveCompanySalesContact(button) {
   const companyId = button?.dataset?.companyId || button?.closest("[data-sales-contact-form]")?.dataset?.companyId || "";
   const form = button?.closest("[data-sales-contact-form]");
@@ -21178,6 +21273,8 @@ function bindEvents() {
     if (clearCorrection) saveCompanyCorrection(clearCorrection, true);
     const reviewAction = event.target.closest("[data-company-review-action]");
     if (reviewAction) saveCompanyAdminReview(reviewAction);
+    const adminRegionBulkAction = event.target.closest("[data-admin-region-bulk-action]");
+    if (adminRegionBulkAction) applyAdminRegionCompanyBulkReview(adminRegionBulkAction);
     const bulkReviewAction = event.target.closest("[data-company-check-bulk-action]");
     if (bulkReviewAction) applyCompanyCheckBulkReview(bulkReviewAction);
     const salesGateBulkAction = event.target.closest("[data-sales-gate-bulk-action]");

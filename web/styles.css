@@ -2401,6 +2401,83 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+.admin-region-company-bulk {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, .78fr) minmax(220px, .82fr) minmax(320px, 1.25fr);
+  gap: 9px;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 13px;
+  background: linear-gradient(180deg, #f8fbff, #fff);
+  padding: 11px;
+}
+
+.admin-region-company-bulk > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-region-company-bulk strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-bulk small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-bulk input {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid #d5e3f7;
+  border-radius: 11px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.admin-region-company-bulk > div:last-of-type {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-region-company-bulk > small {
+  grid-column: 1 / -1;
+}
+
+.admin-region-company-bulk button {
+  min-height: 34px;
+  flex: 1 1 76px;
+  border: 1px solid #bfd5ef;
+  border-radius: 10px;
+  background: #edf5ff;
+  color: #175cd3;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-region-company-bulk button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
 .admin-region-company-row {
   min-width: 0;
   display: grid;
@@ -3105,6 +3182,10 @@ a {
 
   .admin-region-company-filterbar {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .admin-region-company-bulk {
+    grid-template-columns: 1fr;
   }
 
   .admin-region-detail-body,
@@ -18661,6 +18742,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-detail-grid,
   .admin-region-workflow-grid,
   .admin-region-company-filterbar,
+  .admin-region-company-bulk,
   .admin-region-detail-body,
   .admin-region-company-row,
   .admin-region-company-metrics,
