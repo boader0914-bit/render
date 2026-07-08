@@ -12484,6 +12484,7 @@ function companyReviewActionsHtml(company = {}, compact = false) {
   const note = company.adminReview?.note || "";
   const actions = [
     ["check_needed", "확인"],
+    ["confirmed", "완료"],
     ["recrawl_needed", "재수집"],
     ["manual_needed", "보정"],
     ["contact_ready", "컨택"],
@@ -14487,6 +14488,61 @@ function adminRegionActionItems(region = {}, rows = []) {
   ].filter(Boolean);
 }
 
+function adminRegionWorkflowStats(rows = []) {
+  const counts = rows.reduce((acc, row) => {
+    const status = row.metrics.adminReview?.status || "";
+    acc.total += 1;
+    if (!status) acc.unreviewed += 1;
+    if (status === "manual_needed") acc.manualNeeded += 1;
+    if (status === "recrawl_needed") acc.recrawlNeeded += 1;
+    if (status === "contact_ready") acc.contactReady += 1;
+    if (["confirmed", "contact_ready"].includes(status)) acc.publicReady += 1;
+    if (["confirmed", "contact_ready", "hold", "exclude"].includes(status)) acc.completed += 1;
+    if (["hold", "exclude"].includes(status)) acc.closed += 1;
+    return acc;
+  }, {
+    total: 0,
+    unreviewed: 0,
+    manualNeeded: 0,
+    recrawlNeeded: 0,
+    contactReady: 0,
+    publicReady: 0,
+    completed: 0,
+    closed: 0
+  });
+  counts.reviewed = Math.max(0, counts.total - counts.unreviewed);
+  counts.progress = counts.total ? counts.reviewed / counts.total : 0;
+  return counts;
+}
+
+function adminRegionWorkflowPanel(rows = []) {
+  const stats = adminRegionWorkflowStats(rows);
+  const cells = [
+    ["처리 진행률", fmtRate(stats.progress), `${fmtNumber(stats.reviewed)}/${fmtNumber(stats.total)}곳 검수`],
+    ["미검수", stats.unreviewed, "아직 판단 전"],
+    ["보정 필요", stats.manualNeeded, "수량/총량 확인"],
+    ["재수집 필요", stats.recrawlNeeded, "조건 재확인"],
+    ["공개 가능", stats.publicReady, "확인 완료/컨택 가능"],
+    ["컨택 가능", stats.contactReady, "영업 연결 후보"]
+  ];
+  return `
+    <div class="admin-region-workflow-panel">
+      <div class="admin-region-progress">
+        <span style="width: ${Math.max(4, Math.min(100, Math.round(stats.progress * 100)))}%"></span>
+      </div>
+      <div class="admin-region-workflow-grid">
+        ${cells.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(typeof value === "number" ? fmtNumber(value) : String(value))}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function adminRegionCompanyRowHtml(row = {}) {
   const { company, metrics } = row;
   const issueText = metrics.issues.slice(0, 3).join(" · ") || "즉시 이슈 없음";
@@ -14511,6 +14567,7 @@ function adminRegionCompanyRowHtml(row = {}) {
         <em>${escapeHtml(metrics.sourceLabel)}</em>
       </div>
       <button type="button" data-admin-region-company-focus="${escapeHtml(company.companyId || "")}" data-admin-region-company-name="${escapeHtml(company.primaryName || "")}">마스터에서 보기</button>
+      ${companyReviewActionsHtml(company, true)}
     </article>
   `;
 }
@@ -14547,6 +14604,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
           </article>
         `).join("")}
       </div>
+      ${adminRegionWorkflowPanel(rows)}
       <div class="admin-region-detail-body">
         <div class="admin-region-action-box">
           <strong>관리 우선순위</strong>
@@ -19736,6 +19794,7 @@ async function saveCompanyCorrection(button, clear = false) {
       renderCompanyMasterPanel();
       renderDecisionQueue();
     }
+    if (isAdminRole()) renderAdminConsoleDashboard();
     setStatus(shouldClear ? "보정 해제 완료" : "보정 저장 완료");
   } catch (error) {
     setStatus("보정 저장 실패");
@@ -19769,6 +19828,7 @@ async function saveCompanyAdminReview(button) {
     renderCompanyMasterPanel();
     renderDecisionQueue();
     renderTargets();
+    if (isAdminRole()) renderAdminConsoleDashboard();
     if (state.selectedItem && els.detailSheet && !els.detailSheet.hidden) renderSheet();
     const outcome = companyAdminReviewOutcome(status);
     setStatus(status === "clear" ? "검증 해제 완료" : `${companyAdminReviewLabel(status)} 저장 완료 · ${outcome.label}`);

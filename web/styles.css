@@ -1961,6 +1961,60 @@ a {
   overflow-wrap: anywhere;
 }
 
+.admin-region-workflow-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.admin-region-progress {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf2f7;
+}
+
+.admin-region-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f80ed, #12b76a);
+}
+
+.admin-region-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-region-workflow-grid article {
+  min-width: 0;
+  border: 1px solid #e5edf7;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 10px;
+}
+
+.admin-region-workflow-grid span,
+.admin-region-workflow-grid small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-workflow-grid strong {
+  display: block;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.08;
+}
+
 .admin-region-detail-body {
   display: grid;
   grid-template-columns: minmax(260px, .34fr) minmax(0, 1fr);
@@ -2068,6 +2122,31 @@ a {
   background: #fff;
   padding: 5px 7px;
   font-style: normal;
+}
+
+.admin-region-company-row .company-review-control {
+  grid-column: 1 / -1;
+}
+
+.admin-region-company-row .company-review-control.compact {
+  margin: 0;
+  border-color: #d8e7f8;
+  background: #f8fbff;
+}
+
+.admin-region-company-row .company-review-control.compact input {
+  min-height: 36px;
+}
+
+.admin-region-company-row .company-review-actions.compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-region-company-row .company-review-actions.compact button {
+  min-height: 32px;
+  flex: 1 1 74px;
 }
 
 .admin-run-region-panel {
@@ -2629,6 +2708,10 @@ a {
   }
 
   .admin-region-detail-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-region-workflow-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -18181,6 +18264,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-card-grid,
   .admin-region-card-metrics,
   .admin-region-detail-grid,
+  .admin-region-workflow-grid,
   .admin-region-detail-body,
   .admin-region-company-row,
   .admin-region-company-metrics,
