@@ -4441,6 +4441,8 @@ const B2B_PRIVATE_FIELD_KEYS = new Set([
   "companyProfile",
   "companyMaster",
   "companyMasterOverlay",
+  "adminRegionalOperations",
+  "regionalOperations",
   "manualCorrection",
   "manualCorrectionHistory",
   "companyManualCorrection",
@@ -7816,6 +7818,433 @@ function summarizeCompanyCrossKeyword(master) {
   };
 }
 
+function adminRegionClassification(value = "") {
+  const rawLabel = String(value || "").trim();
+  const normalizedKey = normalizeAdminRegionName(rawLabel);
+  const directGroup = ADMIN_REGION_GROUPS[normalizedKey];
+  if (directGroup) {
+    return {
+      regionKey: normalizedKey,
+      regionLabel: directGroup.label,
+      provinceKey: normalizedKey,
+      provinceLabel: directGroup.label,
+      localityKey: "",
+      localityLabel: "",
+      level: "province"
+    };
+  }
+
+  for (const [provinceKey, group] of Object.entries(ADMIN_REGION_GROUPS)) {
+    if (adminRegionContains(provinceKey, rawLabel)) {
+      const localityKey = adminRegionToken(rawLabel) || normalizedKey || "unknown";
+      return {
+        regionKey: `${provinceKey}:${localityKey}`,
+        regionLabel: rawLabel || group.label,
+        provinceKey,
+        provinceLabel: group.label,
+        localityKey,
+        localityLabel: rawLabel,
+        level: "local"
+      };
+    }
+  }
+
+  const fallbackKey = normalizedKey || adminRegionToken(rawLabel) || "unknown";
+  return {
+    regionKey: fallbackKey,
+    regionLabel: rawLabel || "지역 미확인",
+    provinceKey: "unknown",
+    provinceLabel: "기타",
+    localityKey: fallbackKey === "unknown" ? "" : fallbackKey,
+    localityLabel: rawLabel,
+    level: "unknown"
+  };
+}
+
+function regionOpsEntityKey(item = {}) {
+  return [
+    item.companyId ? `company:${item.companyId}` : "",
+    item.sourceKey || "",
+    item.placeId ? `place:${item.placeId}` : "",
+    item.place_id ? `place:${item.place_id}` : "",
+    item.bookingBusinessId ? `booking:${item.bookingBusinessId}` : "",
+    item.name ? `name:${compactKeyword(item.name)}:${compactKeyword(item.address || item.region || item.addressRegion || "")}` : ""
+  ].find(Boolean) || `row:${stableHash(JSON.stringify({
+    name: item.name || "",
+    region: item.region || item.addressRegion || "",
+    rank: item.rank || ""
+  }))}`;
+}
+
+function regionOpsItemName(item = {}) {
+  return String(item.name || item.primaryName || item.companyProfile?.primaryName || "").trim();
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return 0;
+}
+
+function regionOpsRevenueValue(item = {}) {
+  const lodging = firstPositiveNumber(
+    item.weeklyAdjustedRevenue,
+    item.basisLodgingAdjustedRevenue,
+    item.weeklyEstimatedRevenue,
+    item.basisLodgingRevenue,
+    item.companyProfile?.inventory?.latest?.revenue?.lodging?.adjustedRevenue,
+    item.companyProfile?.inventory?.latest?.revenue?.lodging?.revenue
+  );
+  const dayUse = firstPositiveNumber(
+    item.dayUseWeeklyAdjustedRevenue,
+    item.basisDayUseAdjustedRevenue,
+    item.dayUseWeeklyEstimatedRevenue,
+    item.basisDayUseRevenue,
+    item.companyProfile?.inventory?.latest?.revenue?.dayUse?.adjustedRevenue,
+    item.companyProfile?.inventory?.latest?.revenue?.dayUse?.revenue
+  );
+  return lodging + dayUse;
+}
+
+function regionOpsReservationRate(item = {}) {
+  const sold = firstPositiveNumber(item.weeklyTotalSoldOut, item.soldOutRooms);
+  const total = firstPositiveNumber(item.weeklyTotalStock, item.weeklyBasisTotal, item.totalRooms);
+  if (total > 0) return Number((sold / total).toFixed(4));
+  const average = Number(item.weeklyAvgReservationRate ?? item.companyProfile?.inventory?.latest?.salesSignal?.lodging?.averageRate);
+  return Number.isFinite(average) ? Number(average.toFixed(4)) : null;
+}
+
+function regionOpsHasReservationSample(item = {}) {
+  return firstPositiveNumber(item.weeklyTotalStock, item.weeklyBasisTotal, item.totalRooms) > 0
+    || Number.isFinite(Number(item.weeklyAvgReservationRate))
+    || Number.isFinite(Number(item.companyProfile?.inventory?.latest?.salesSignal?.lodging?.averageRate));
+}
+
+function regionOpsInventoryFlags(item = {}) {
+  return boundedUnique([
+    ...(Array.isArray(item.inventoryStructureFlags) ? item.inventoryStructureFlags : []),
+    ...(Array.isArray(item.companyProfile?.inventory?.latest?.structureFlags) ? item.companyProfile.inventory.latest.structureFlags : []),
+    ...(Array.isArray(item.companyProfile?.inventory?.latest?.salesSignal?.structureFlags) ? item.companyProfile.inventory.latest.salesSignal.structureFlags : [])
+  ], 20);
+}
+
+function regionOpsConfidenceGrade(item = {}) {
+  return String(
+    item.inventoryConfidenceGrade
+    || item.companyProfile?.inventory?.latest?.confidenceGrade
+    || item.companyProfile?.inventory?.latest?.inventoryConfidenceGrade
+    || ""
+  ).toUpperCase();
+}
+
+function regionOpsActualRegionText(item = {}) {
+  return String(
+    item.addressRegion
+    || addressRegionFromAddress(item.address || "")
+    || item.region
+    || item.companyProfile?.regions?.[0]
+    || item.searchRegion
+    || ""
+  ).trim();
+}
+
+function regionOpsSearchRegionText(item = {}, run = {}) {
+  return String(item.searchRegion || item.searchCluster || run.provinceLabel || "").trim();
+}
+
+function createRegionalOpsBucket(classification = {}) {
+  return {
+    regionKey: classification.regionKey,
+    regionLabel: classification.regionLabel,
+    provinceKey: classification.provinceKey,
+    provinceLabel: classification.provinceLabel,
+    localityKey: classification.localityKey,
+    localityLabel: classification.localityLabel,
+    level: classification.level,
+    companyKeys: new Set(),
+    companyNames: new Set(),
+    companyCount: 0,
+    exposureCount: 0,
+    inRegionExposureCount: 0,
+    outsideExposureCount: 0,
+    reservationSampleCount: 0,
+    revenueSampleCount: 0,
+    revenueTotal: 0,
+    lowConfidenceCount: 0,
+    stockVarianceCount: 0,
+    offlineReservationCount: 0,
+    structuralBlockedCount: 0,
+    manualCorrectionCount: 0,
+    adminReviewCount: 0,
+    couponVisibleCount: 0,
+    bestRank: null,
+    reservationRateSum: 0,
+    reservationRateCount: 0,
+    sampleCompanies: []
+  };
+}
+
+function regionalOpsStatus(bucket = {}) {
+  const sampleScore = Math.min(40, (bucket.reservationSampleCount * 3) + (bucket.revenueSampleCount * 4) + (bucket.companyCount * 1.5));
+  const correctionScore = Math.min(12, bucket.manualCorrectionCount * 3);
+  const riskPenalty = Math.min(35, (bucket.lowConfidenceCount * 5) + (bucket.stockVarianceCount * 4) + (bucket.outsideExposureCount * 2));
+  const score = Math.max(0, Math.min(100, Math.round(45 + sampleScore + correctionScore - riskPenalty)));
+  if (score >= 78 && bucket.reservationSampleCount >= 5 && bucket.revenueSampleCount >= 3) {
+    return { key: "public_ready", label: "공개 가능", score };
+  }
+  if (score >= 58) return { key: "review_needed", label: "검수 필요", score };
+  return { key: "collect_needed", label: "수집 보강", score };
+}
+
+function finalizeRegionalOpsBucket(bucket = {}) {
+  const status = regionalOpsStatus(bucket);
+  const averageRevenue = bucket.revenueSampleCount ? Math.round(bucket.revenueTotal / bucket.revenueSampleCount) : 0;
+  const averageReservationRate = bucket.reservationRateCount
+    ? Number((bucket.reservationRateSum / bucket.reservationRateCount).toFixed(4))
+    : null;
+  const reviewReasons = [
+    bucket.lowConfidenceCount ? `수량 신뢰도 낮음 ${bucket.lowConfidenceCount}곳` : "",
+    bucket.stockVarianceCount ? `총량 변동 ${bucket.stockVarianceCount}곳` : "",
+    bucket.outsideExposureCount ? `지역 밖 노출 ${bucket.outsideExposureCount}곳` : "",
+    bucket.structuralBlockedCount ? `메인터넌스/차단 의심 ${bucket.structuralBlockedCount}곳` : "",
+    bucket.reservationSampleCount < 5 ? "예약 표본 보강 필요" : "",
+    bucket.revenueSampleCount < 3 ? "매출 표본 보강 필요" : ""
+  ].filter(Boolean);
+  return {
+    regionKey: bucket.regionKey,
+    regionLabel: bucket.regionLabel,
+    provinceKey: bucket.provinceKey,
+    provinceLabel: bucket.provinceLabel,
+    localityKey: bucket.localityKey,
+    localityLabel: bucket.localityLabel,
+    level: bucket.level,
+    companyCount: bucket.companyCount,
+    exposureCount: bucket.exposureCount,
+    inRegionExposureCount: bucket.inRegionExposureCount,
+    outsideExposureCount: bucket.outsideExposureCount,
+    reservationSampleCount: bucket.reservationSampleCount,
+    revenueSampleCount: bucket.revenueSampleCount,
+    revenueTotal: bucket.revenueTotal,
+    averageRevenue,
+    averageReservationRate,
+    lowConfidenceCount: bucket.lowConfidenceCount,
+    stockVarianceCount: bucket.stockVarianceCount,
+    offlineReservationCount: bucket.offlineReservationCount,
+    structuralBlockedCount: bucket.structuralBlockedCount,
+    manualCorrectionCount: bucket.manualCorrectionCount,
+    adminReviewCount: bucket.adminReviewCount,
+    couponVisibleCount: bucket.couponVisibleCount,
+    bestRank: bucket.bestRank,
+    status,
+    reviewReasons,
+    sampleCompanies: bucket.sampleCompanies.slice(0, 8)
+  };
+}
+
+function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {}, collectedAt = "" } = {}) {
+  const entities = new Map();
+  for (const item of items) {
+    const key = regionOpsEntityKey(item);
+    const previous = entities.get(key) || {};
+    entities.set(key, {
+      ...previous,
+      ...item,
+      hasInventory: Boolean(previous.hasInventory || item.hasInventory || regionOpsHasReservationSample(item))
+    });
+  }
+
+  const buckets = new Map();
+  const outsideExposureItems = [];
+  for (const item of entities.values()) {
+    const actualRegion = regionOpsActualRegionText(item);
+    const searchRegion = regionOpsSearchRegionText(item, run);
+    const classification = adminRegionClassification(actualRegion || searchRegion || run.provinceLabel);
+    const boundary = item.regionBoundaryStatus
+      ? {
+          status: item.regionBoundaryStatus,
+          label: item.regionBoundaryLabel || "",
+          detail: item.regionBoundaryDetail || "",
+          outside: Boolean(item.outsideSearchRegion)
+        }
+      : regionBoundaryInfo(searchRegion, actualRegion);
+    const bucket = buckets.get(classification.regionKey) || createRegionalOpsBucket(classification);
+    const companyKey = regionOpsEntityKey(item);
+    const companyName = regionOpsItemName(item);
+    const rank = Number(item.rank || item.bestRank || 0);
+    const revenue = regionOpsRevenueValue(item);
+    const reservationRate = regionOpsReservationRate(item);
+    const flags = regionOpsInventoryFlags(item);
+    const grade = regionOpsConfidenceGrade(item);
+    const hasReservation = regionOpsHasReservationSample(item);
+    const hasRevenue = revenue > 0;
+    const manualCorrection = Boolean(
+      item.manualCorrectionApplied
+      || item.companyProfile?.manualCorrection
+      || item.companyProfile?.inventory?.latest?.manualCorrectionApplied
+    );
+    const adminReview = Boolean(item.companyProfile?.adminReview?.status || item.adminReview?.status);
+    const structuralBlocked = firstPositiveNumber(
+      item.weeklyStructuralBlockedTotal,
+      item.dayUseWeeklyStructuralBlockedTotal,
+      item.companyProfile?.inventory?.latest?.salesSignal?.lodgingStructuralBlockedTotal,
+      item.companyProfile?.inventory?.latest?.salesSignal?.dayUseStructuralBlockedTotal
+    ) > 0;
+    const offlineReservation = firstPositiveNumber(
+      item.weeklyOfflineReservedTotal,
+      item.dayUseWeeklyOfflineReservedTotal,
+      item.companyProfile?.inventory?.latest?.salesSignal?.lodgingOfflineReservedTotal,
+      item.companyProfile?.inventory?.latest?.salesSignal?.dayUseOfflineReservedTotal
+    ) > 0;
+    const couponVisible = Boolean(
+      item.naverCouponNames
+      || item.naverCouponStatus === "있음"
+      || item.companyProfile?.inventory?.latest?.couponSignal?.visible
+      || item.companyProfile?.inventory?.latest?.salesSignal?.couponSignal?.visible
+    );
+
+    bucket.companyKeys.add(companyKey);
+    if (companyName) bucket.companyNames.add(companyName);
+    bucket.exposureCount += 1;
+    if (boundary.outside) bucket.outsideExposureCount += 1;
+    else bucket.inRegionExposureCount += 1;
+    if (hasReservation) bucket.reservationSampleCount += 1;
+    if (hasRevenue) {
+      bucket.revenueSampleCount += 1;
+      bucket.revenueTotal += revenue;
+    }
+    if (["D", "E"].includes(grade)) bucket.lowConfidenceCount += 1;
+    if (flags.includes("dynamic_capacity")) bucket.stockVarianceCount += 1;
+    if (offlineReservation) bucket.offlineReservationCount += 1;
+    if (structuralBlocked) bucket.structuralBlockedCount += 1;
+    if (manualCorrection) bucket.manualCorrectionCount += 1;
+    if (adminReview) bucket.adminReviewCount += 1;
+    if (couponVisible) bucket.couponVisibleCount += 1;
+    if (Number.isFinite(rank) && rank > 0) bucket.bestRank = bucket.bestRank ? Math.min(bucket.bestRank, rank) : rank;
+    if (reservationRate !== null) {
+      bucket.reservationRateSum += reservationRate;
+      bucket.reservationRateCount += 1;
+    }
+    if (bucket.sampleCompanies.length < 12) {
+      bucket.sampleCompanies.push({
+        companyId: item.companyId || item.companyProfile?.companyId || "",
+        name: companyName || "업체명 확인",
+        rank: Number.isFinite(rank) && rank > 0 ? rank : null,
+        addressRegion: actualRegion,
+        searchRegion,
+        boundaryStatus: boundary.status,
+        boundaryLabel: boundary.label,
+        reservationRate,
+        revenue,
+        confidenceGrade: grade || "",
+        flags
+      });
+    }
+    if (boundary.outside && outsideExposureItems.length < 30) {
+      outsideExposureItems.push({
+        companyId: item.companyId || item.companyProfile?.companyId || "",
+        name: companyName || "업체명 확인",
+        rank: Number.isFinite(rank) && rank > 0 ? rank : null,
+        searchRegion,
+        addressRegion: actualRegion,
+        boundaryLabel: boundary.label,
+        boundaryDetail: boundary.detail
+      });
+    }
+    buckets.set(classification.regionKey, bucket);
+  }
+
+  const regions = [...buckets.values()]
+    .map((bucket) => {
+      bucket.companyCount = bucket.companyKeys.size;
+      return finalizeRegionalOpsBucket(bucket);
+    })
+    .sort((a, b) => b.companyCount - a.companyCount || (a.bestRank || 9999) - (b.bestRank || 9999) || a.regionLabel.localeCompare(b.regionLabel, "ko"));
+  const summary = {
+    basis,
+    regionCount: regions.length,
+    companyCount: regions.reduce((sum, region) => sum + region.companyCount, 0),
+    exposureCount: regions.reduce((sum, region) => sum + region.exposureCount, 0),
+    outsideExposureCount: regions.reduce((sum, region) => sum + region.outsideExposureCount, 0),
+    reservationSampleCount: regions.reduce((sum, region) => sum + region.reservationSampleCount, 0),
+    revenueSampleCount: regions.reduce((sum, region) => sum + region.revenueSampleCount, 0),
+    lowConfidenceCount: regions.reduce((sum, region) => sum + region.lowConfidenceCount, 0),
+    manualCorrectionCount: regions.reduce((sum, region) => sum + region.manualCorrectionCount, 0),
+    adminReviewCount: regions.reduce((sum, region) => sum + region.adminReviewCount, 0),
+    publicReadyRegionCount: regions.filter((region) => region.status.key === "public_ready").length,
+    reviewNeededRegionCount: regions.filter((region) => region.status.key === "review_needed").length,
+    collectNeededRegionCount: regions.filter((region) => region.status.key === "collect_needed").length
+  };
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    basis,
+    search: {
+      runId: run.id || "",
+      keyword: run.keyword || "",
+      provinceKey: run.province || "",
+      provinceLabel: run.provinceLabel || "",
+      detailRankRanges: run.detailRankRanges || "",
+      checkIn: run.checkIn || "",
+      checkOut: run.checkOut || ""
+    },
+    summary,
+    regions,
+    outsideExposureItems,
+    rules: [
+      "실제 주소 지역을 우선 적용하고 없으면 수집 지역, 검색 기준 지역 순서로 분류합니다.",
+      "검색 기준과 실제 소재 지역이 다르면 지역 밖 노출로 별도 집계합니다.",
+      "예약 표본, 매출 표본, 수량 신뢰도, 총량 변동, 관리자 보정 여부를 지역 공개 품질의 기초 지표로 저장합니다."
+    ]
+  };
+}
+
+function buildRunRegionalOperations(data = {}, collectedAt = "") {
+  const run = data.run || {};
+  const items = [
+    ...(data.ranking?.items || []),
+    ...(data.availability?.items || [])
+  ];
+  return buildRegionalOperationsFromItems({ basis: "run", items, run, collectedAt });
+}
+
+function summarizeCompanyMasterRegionalOperations(companies = []) {
+  const items = companies.map((company) => {
+    const latest = company.inventory?.latest || {};
+    const signal = latest.salesSignal || {};
+    const lodging = signal.lodging || {};
+    const dayUse = signal.dayUse || {};
+    return {
+      companyId: company.companyId,
+      companyProfile: company,
+      name: company.primaryName,
+      primaryName: company.primaryName,
+      rank: company.bestRank,
+      bestRank: company.bestRank,
+      region: company.regions?.[0] || "",
+      address: company.addresses?.[0] || "",
+      weeklyTotalStock: lodging.totalSupply || null,
+      weeklyTotalSoldOut: lodging.totalSold || null,
+      weeklyAvgReservationRate: lodging.averageRate ?? null,
+      weeklyBasisTotal: signal.lodgingBasisTotal || null,
+      weeklyStructuralBlockedTotal: signal.lodgingStructuralBlockedTotal || null,
+      weeklyOfflineReservedTotal: signal.lodgingOfflineReservedTotal || null,
+      dayUseWeeklyTotalStock: dayUse.totalSupply || null,
+      dayUseWeeklyTotalSoldOut: dayUse.totalSold || null,
+      dayUseWeeklyAvgReservationRate: dayUse.averageRate ?? null,
+      dayUseWeeklyBasisTotal: signal.dayUseBasisTotal || null,
+      dayUseWeeklyStructuralBlockedTotal: signal.dayUseStructuralBlockedTotal || null,
+      dayUseWeeklyOfflineReservedTotal: signal.dayUseOfflineReservedTotal || null,
+      inventoryConfidenceGrade: latest.confidenceGrade || "",
+      inventoryStructureFlags: latest.structureFlags || signal.structureFlags || [],
+      manualCorrectionApplied: Boolean(company.manualCorrection || latest.manualCorrectionApplied),
+      adminReview: company.adminReview || null
+    };
+  });
+  return buildRegionalOperationsFromItems({ basis: "company_master", items, run: {}, collectedAt: "" });
+}
+
 function salesTargetRankScore(bestRank) {
   const rank = Number(bestRank);
   if (!Number.isFinite(rank) || rank <= 0) return 6;
@@ -8766,6 +9195,7 @@ async function summarizeCompanyMaster() {
     b2bSearchCompanyCount: collectionSourceCounts.b2b_search || 0,
     crossKeyword: summarizeCompanyCrossKeyword(master),
     salesTargets,
+    adminRegionalOperations: summarizeCompanyMasterRegionalOperations(profiledCompanies),
     updatedAt: master.updatedAt || "",
     principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합",
     companies: profiledCompanies.slice(0, 300)
@@ -10162,6 +10592,8 @@ async function loadRun(runId, options = {}) {
     }
     result.history = history;
   }
+
+  result.adminRegionalOperations = buildRunRegionalOperations(result, collectedAt);
 
   return result;
 }
