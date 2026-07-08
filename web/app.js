@@ -13485,10 +13485,18 @@ function companyCheckEntryHtml(entry = {}) {
         <span>추천 판단</span>
         <strong>${escapeHtml(companyCheckRecommendation(company, profile, workflow, decision))}</strong>
       </div>
-      ${companyQueueActionPlan(company, profile, workflow, decision)}
-      ${companyQueueResolutionHtml(company, profile, workflow, decision)}
-      ${companyReviewActionsHtml(company, true)}
-      ${showCorrectionForm ? companyCorrectionFormHtml(company, true) : ""}
+      <details class="company-check-process-details">
+        <summary>
+          <span>처리</span>
+          <small>상세를 펼쳐 상태 저장, 재수집 설정, 보정 입력을 선택</small>
+        </summary>
+        <div class="company-check-process-body">
+          ${companyQueueActionPlan(company, profile, workflow, decision)}
+          ${companyQueueResolutionHtml(company, profile, workflow, decision)}
+          ${companyReviewActionsHtml(company, true)}
+          ${showCorrectionForm ? companyCorrectionFormHtml(company, true) : ""}
+        </div>
+      </details>
     </article>
   `;
 }
@@ -14394,9 +14402,7 @@ function adminConsoleQueuePreview(entries = []) {
                   </div>
                   <b>${fmtNumber(entry.priority.score || 0)}</b>
                   <div class="admin-row-actions">
-                    <button type="button" data-company-review-action="check_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 확인 필요로 지정">확인</button>
-                    <button type="button" data-company-review-action="manual_needed" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보정 필요로 지정">보정</button>
-                    <button type="button" data-company-review-action="hold" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_console" data-company-review-note="관리자 콘솔에서 보류로 지정">보류</button>
+                    <button type="button" data-drawer-tab="decisionQueue">처리</button>
                   </div>
                 </div>
               `;

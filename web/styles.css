@@ -7352,6 +7352,78 @@ a.platform-row:hover {
   font-size: 13px;
 }
 
+.company-check-process-details {
+  min-width: 0;
+  border: 1px solid #bcd7ff;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+  overflow: hidden;
+}
+
+.company-check-process-details summary {
+  position: relative;
+  min-height: 48px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--blue-dark);
+  font-size: 13px;
+  font-weight: 950;
+  list-style: none;
+}
+
+.company-check-process-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.company-check-process-details summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #eaf3ff;
+  color: var(--blue);
+  font-size: 19px;
+  line-height: 1;
+}
+
+.company-check-process-details[open] summary::after {
+  content: "-";
+}
+
+.company-check-process-details summary span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  min-height: 32px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  padding: 0 14px;
+}
+
+.company-check-process-details summary small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.company-check-process-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
 .company-check-action-plan {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -17706,6 +17778,22 @@ body.role-b2b .structure-action-list li::before {
 
   .admin-row-actions {
     justify-content: flex-start;
+  }
+
+  .company-check-process-details summary {
+    align-items: flex-start;
+    flex-direction: column;
+    padding-right: 54px;
+  }
+
+  .company-check-process-details summary::after {
+    position: absolute;
+    right: 12px;
+    top: 12px;
+  }
+
+  .company-check-process-details summary span {
+    min-width: 86px;
   }
 
   .b2b-usage-panel {
