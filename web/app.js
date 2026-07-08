@@ -14632,6 +14632,7 @@ function adminConsoleSecurityPanel() {
           <strong>보안 하드닝 점검</strong>
           <small>로그인, 회원가입, 검색 실행 제한과 저장 위치, 권한 분리 상태를 확인합니다.</small>
         </div>
+        <a href="/google-play-data-safety" target="_blank" rel="noopener">Data Safety 정리</a>
         <span>${escapeHtml(overview.checkedAt ? compactDateTime(overview.checkedAt) : "점검 대기")}</span>
       </div>
       <div class="admin-security-grid">

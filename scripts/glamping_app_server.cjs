@@ -51,6 +51,7 @@ const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
 const SERVICE_BUSINESS_NAME = String(process.env.LODGING_DATALAB_BUSINESS_NAME || "사분").trim();
 const SERVICE_BUSINESS_REGISTRATION_NO = String(process.env.LODGING_DATALAB_BUSINESS_REGISTRATION_NO || "515-13-21899").trim();
+const SERVICE_BUSINESS_ADDRESS = String(process.env.LODGING_DATALAB_BUSINESS_ADDRESS || "경상남도 진주시 도동로3번길 10, 1층 일부(상평동)").trim();
 const SERVICE_OPERATOR_NAME = String(process.env.LODGING_DATALAB_OPERATOR_NAME || process.env.GLAMPING_OPERATOR_NAME || SERVICE_BUSINESS_NAME).trim();
 const PRIVACY_CONTACT_EMAIL = String(process.env.GLAMPING_PRIVACY_EMAIL || "").trim();
 const DATALAB_TREND_CACHE_POLICY = "same_keyword_same_date";
@@ -3301,7 +3302,7 @@ function termsPage() {
     },
     {
       title: "문의와 해지",
-      body: `<p>회원은 계정 삭제, 정보 정정, 검색 이력 삭제를 운영자에게 요청할 수 있습니다. 문의: ${policyContactHtml()}</p>`
+      body: `<p>회원은 계정 삭제, 정보 정정, 검색 이력 삭제를 운영자에게 요청할 수 있습니다. 삭제 요청은 <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청 화면</a>에서도 접수할 수 있습니다. 문의: ${policyContactHtml()}</p>`
     }
   ]);
 }
@@ -3323,6 +3324,10 @@ function privacyPage() {
     {
       title: "보유 및 이용 기간",
       body: "<p>회원 정보와 검색 이력은 회원 탈퇴, 삭제 요청 또는 수집 목적 달성 시까지 보관합니다. 단, 관계 법령상 보존이 필요한 경우에는 해당 법령에서 정한 기간 동안 보관할 수 있습니다.</p>"
+    },
+    {
+      title: "계정·데이터 삭제 절차",
+      body: "<ul><li>회원은 앱 하단 또는 웹 공개 URL의 <a href=\"/account-delete\" target=\"_blank\" rel=\"noopener\">계정·데이터 삭제 요청</a> 화면에서 계정 삭제, 검색 이력 삭제, 관심숙소 삭제, 전체 데이터 삭제를 선택해 요청할 수 있습니다.</li><li>요청 시 아이디, 연락처, 요청 유형, 상세 사유, 약관·개인정보처리방침 버전, 동의 일시, 처리 상태가 고객 DB에 저장됩니다.</li><li>운영자는 본인 확인 후 접수, 확인중, 처리중, 완료, 반려 상태로 처리하며 상태 변경 이력은 삭제 요청 로그에 보관합니다.</li><li>전체 데이터 삭제는 법령상 보관이 필요한 기록과 부정 이용 방지에 필요한 최소 로그를 제외하고 처리합니다.</li></ul>"
     },
     {
       title: "제3자 제공 및 처리위탁",
@@ -3453,13 +3458,34 @@ function businessInfoPage() {
   return legalPage("사업자정보", "공개 정보", [
     {
       title: "운영자 정보",
-      body: `<ul><li>서비스명: 숙박업 데이터랩 beta</li><li>상호: ${escapeHtml(SERVICE_BUSINESS_NAME)}</li><li>사업자등록번호: ${escapeHtml(SERVICE_BUSINESS_REGISTRATION_NO)}</li><li>운영자: ${escapeHtml(SERVICE_OPERATOR_NAME)}</li><li>문의: ${policyContactHtml()}</li></ul>`
+      body: `<ul><li>서비스명: 숙박업 데이터랩 beta</li><li>상호: ${escapeHtml(SERVICE_BUSINESS_NAME)}</li><li>사업자등록번호: ${escapeHtml(SERVICE_BUSINESS_REGISTRATION_NO)}</li><li>사업장 소재지: ${escapeHtml(SERVICE_BUSINESS_ADDRESS)}</li><li>운영자: ${escapeHtml(SERVICE_OPERATOR_NAME)}</li><li>문의: ${policyContactHtml()}</li></ul>`
     },
     {
       title: "추가 확정 필요 항목",
-      body: "<p>유료 공개 전 통신판매업 신고번호, 사업장 주소, 고객센터 연락처, 개인정보 보호책임자, 환불 담당 연락처를 확정해 이 페이지에 게시해야 합니다. 사업자등록증의 생년월일 등 공개가 불필요한 개인정보는 게시하지 않습니다.</p>"
+      body: "<p>유료 공개 전 통신판매업 신고번호, 고객센터 연락처, 개인정보 보호책임자, 환불 담당 연락처를 확정해 이 페이지에 게시해야 합니다. 사업자등록증의 생년월일 등 공개가 불필요한 개인정보는 게시하지 않습니다.</p>"
     }
   ]);
+}
+
+function googlePlayDataSafetyPage() {
+  return legalPage("구글플레이 Data Safety 입력용 정리", "앱 출시 점검", [
+    {
+      title: "기본 답변",
+      body: "<ul><li>사용자 데이터 수집 여부: 예</li><li>개인정보처리방침 URL: /privacy</li><li>계정 및 데이터 삭제 요청 URL: /account-delete</li><li>전송 중 암호화: 예. 운영 URL은 HTTPS로 제공합니다.</li><li>데이터 공유: 판매 또는 광고 목적 공유 없음. 서버 호스팅, API 연동, 장애·보안 대응 등 서비스 운영에 필요한 처리만 사용합니다.</li><li>독립 보안 심사: 현재 미해당. 심사 또는 인증을 받은 뒤에만 예로 변경합니다.</li></ul>"
+    },
+    {
+      title: "수집 데이터 유형",
+      body: "<ul><li>개인 정보: 아이디, 이메일, 연락처, 선택 입력한 숙소 또는 회사명</li><li>앱 활동: 검색 키워드, 검색 기간, 순위 범위, 검색 이력, 리포트 열람·재사용 기록</li><li>기기 또는 기타 식별자: 세션 식별값, IP 해시, 브라우저 식별값 해시</li><li>사용자 콘텐츠: 관심숙소 등록 정보, 숙소명, 객실수, 객실종류, 요일별 가격, 시설 정보</li><li>위치 정보: 기기 위치는 수집하지 않습니다. 사용자가 입력한 지역명과 검색 키워드만 분석 기준으로 사용합니다.</li><li>결제 정보: 현재 앱 내부 결제 정보는 수집하지 않습니다. 유료 결제 기능 추가 시 별도 갱신해야 합니다.</li></ul>"
+    },
+    {
+      title: "사용 목적",
+      body: "<ul><li>앱 기능: 로그인, 회원 식별, 리포트 생성, 검색 이력 재사용, 관심숙소 비교</li><li>분석: 지역 경쟁 리포트 품질 개선, 검색 속도 개선, 오류 재현</li><li>보안·부정 이용 방지: 로그인 실패 제한, 검색 요청 제한, 세션 보호</li><li>고객 지원: 계정·데이터 삭제 요청, 문의 대응, 처리 상태 안내</li></ul>"
+    },
+    {
+      title: "제출 전 확인",
+      body: "<ul><li>광고 SDK, 결제 SDK, 푸시 알림, 앱 분석 SDK를 추가하면 해당 SDK의 수집 항목을 다시 반영해야 합니다.</li><li>Play Console Data Safety는 앱의 모든 배포 버전 기준으로 작성해야 하므로 TWA 패키징 전후에 최종 점검합니다.</li><li>이 페이지는 운영 초안입니다. 실제 제출 전 법무·정책 검토로 최종 문구를 확정합니다.</li></ul>"
+    }
+  ], { backHref: "/admin", backLabel: "관리자 화면으로 돌아가기" });
 }
 
 function accountRequestPage(session = {}) {
@@ -3720,8 +3746,10 @@ function loginPage(message = "") {
         <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
         <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
         <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
-        <a href="/data-quality-notice" target="_blank" rel="noopener">외부 플랫폼 한계</a>
+        <a href="/data-quality-notice" target="_blank" rel="noopener">데이터 수집 한계</a>
+        <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
         <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
+        <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
       </div>
     </section>
   </main>
@@ -3860,7 +3888,7 @@ function signupPage(message = "", values = {}) {
         </select></label>
       </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
-        <p class="agreement-note">필수 동의 후 고객 DB에 계정 정보와 이용 이력이 저장됩니다. 업체 마스터 DB의 관리자 보정값과는 분리해 관리합니다.</p>
+        <p class="agreement-note">필수 동의 후 고객 DB에 계정 정보, 동의 일시, 약관 버전 ${escapeHtml(TERMS_VERSION)}, 개인정보 버전 ${escapeHtml(PRIVACY_VERSION)}, 이용 이력이 저장됩니다. 업체 마스터 DB의 관리자 보정값과는 분리해 관리합니다.</p>
         <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreeMarketing" value="1"${checked("agreeMarketing")}><span>(선택) 서비스 업데이트, 요금제, 운영 안내 등 마케팅 수신에 동의합니다.</span><span>선택</span></label>
@@ -3876,7 +3904,10 @@ function signupPage(message = "", values = {}) {
       <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
       <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
       <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
-      <a href="/data-quality-notice" target="_blank" rel="noopener">외부 플랫폼 한계</a>
+      <a href="/data-quality-notice" target="_blank" rel="noopener">데이터 수집 한계</a>
+      <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
+      <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
+      <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
     </div>
   </main>
   <script src="/signup.js" defer></script>
@@ -10586,8 +10617,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-security-hardening"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-security-hardening"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260708-policy-notices"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260708-policy-notices"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -10633,7 +10664,8 @@ async function route(req, res) {
       "/collection-failure-notice": collectionFailureNoticePage,
       "/api-key-retention-policy": apiRetentionPolicyPage,
       "/report-disclaimer": reportDisclaimerPage,
-      "/business-info": businessInfoPage
+      "/business-info": businessInfoPage,
+      "/google-play-data-safety": googlePlayDataSafetyPage
     };
     if ((req.method === "GET" || req.method === "HEAD") && legalRoutes[reqUrl.pathname]) {
       if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
