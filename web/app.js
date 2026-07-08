@@ -7419,6 +7419,24 @@ function adminReviewAuditCsv(master = companyMasterSource()) {
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
 }
 
+function adminRegionAuditCsv(region = {}, rows = []) {
+  const headers = ["지역", "업체ID", "업체명", "작업구분", "작업상태", "상태코드", "처리시각", "검색어", "순위", "출처", "메모"];
+  const auditRows = adminRegionAuditRows(region, rows).map((row) => [
+    row.regionLabel || region.regionLabel || "",
+    row.companyId || "",
+    row.companyName || "",
+    row.kind || "",
+    row.label || "",
+    row.status || "",
+    row.at || "",
+    row.keyword || "",
+    row.rank ? `${fmtNumber(row.rank)}위` : "",
+    row.source || "",
+    row.note || ""
+  ]);
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${auditRows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
+}
+
 function reportPlatformStats(items = []) {
   const platformNames = ["네이버", "야놀자", "여기어때", "떠나요"];
   const stats = Object.fromEntries(platformNames.map((name) => [name, 0]));
@@ -14651,6 +14669,200 @@ function adminRegionCompanyBulkHtml(region = {}, rows = [], selectedFilter = {})
   `;
 }
 
+function adminRegionAuditTone(status = "", kind = "") {
+  if (kind === "보정") return "watch";
+  if (kind === "컨택") return ["interested", "high_potential"].includes(status) ? "good" : "watch";
+  if (["confirmed", "contact_ready"].includes(status)) return "good";
+  if (["exclude"].includes(status)) return "hot";
+  return "watch";
+}
+
+function adminRegionAuditRows(region = {}, rows = []) {
+  const auditRows = [];
+  const pushRow = (row, payload = {}) => {
+    const company = row.company || {};
+    const metrics = row.metrics || {};
+    const at = payload.at || payload.updatedAt || "";
+    auditRows.push({
+      kind: payload.kind || "작업",
+      label: payload.label || "상태 변경",
+      status: payload.status || "",
+      note: payload.note || "",
+      source: payload.source || "관리자",
+      at,
+      timestamp: Date.parse(at) || 0,
+      companyId: company.companyId || "",
+      companyName: company.primaryName || "업체명 확인",
+      regionLabel: metrics.regionLabel || (company.regions || [])[0] || region.regionLabel || "",
+      keyword: company.bestKeyword || company.latestKeyword || "",
+      rank: metrics.rank || company.bestRank || "",
+      tone: payload.tone || adminRegionAuditTone(payload.status, payload.kind)
+    });
+  };
+
+  for (const row of rows) {
+    const company = row.company || {};
+    const adminHistories = Array.isArray(company.adminReviewHistory) ? company.adminReviewHistory : [];
+    const correctionHistories = Array.isArray(company.manualCorrectionHistory) ? company.manualCorrectionHistory : [];
+    const contactHistories = Array.isArray(company.salesContactHistory) ? company.salesContactHistory : [];
+
+    if (adminHistories.length) {
+      for (const history of adminHistories) {
+        pushRow(row, {
+          kind: "판단",
+          label: history.action === "clear" ? "판단 해제" : (history.label || companyAdminReviewLabel(history.status)),
+          status: history.status || "",
+          note: history.note || companyReviewContextText(history.context || {}) || history.reason || "",
+          source: history.source || history.context?.source || "관리자",
+          at: history.at || history.updatedAt || ""
+        });
+      }
+    } else if (company.adminReview) {
+      pushRow(row, {
+        kind: "판단",
+        label: company.adminReview.label || companyAdminReviewLabel(company.adminReview.status),
+        status: company.adminReview.status || "",
+        note: company.adminReview.note || companyReviewContextText(company.adminReview.context || {}),
+        source: company.adminReview.source || "관리자",
+        at: company.adminReview.updatedAt || ""
+      });
+    }
+
+    if (correctionHistories.length) {
+      for (const history of correctionHistories) {
+        const basisText = [
+          history.lodgingBasisTotal ? `숙박 ${fmtNumber(history.lodgingBasisTotal)}실` : "",
+          history.dayUseBasisTotal ? `데이유즈 ${fmtNumber(history.dayUseBasisTotal)}개` : ""
+        ].filter(Boolean).join(" · ");
+        pushRow(row, {
+          kind: "보정",
+          label: history.action === "clear" ? "보정 해제" : "보정 저장",
+          status: history.action || "",
+          note: compactListText([basisText, history.note], "관리자 보정", 3),
+          source: "관리자",
+          at: history.at || history.updatedAt || "",
+          tone: history.action === "clear" ? "hot" : "watch"
+        });
+      }
+    } else if (manualCorrectionHasValue(company.manualCorrection)) {
+      const correction = company.manualCorrection || {};
+      const basisText = [
+        correction.lodgingBasisTotal ? `숙박 ${fmtNumber(correction.lodgingBasisTotal)}실` : "",
+        correction.dayUseBasisTotal ? `데이유즈 ${fmtNumber(correction.dayUseBasisTotal)}개` : ""
+      ].filter(Boolean).join(" · ");
+      pushRow(row, {
+        kind: "보정",
+        label: "현재 보정",
+        status: "active",
+        note: compactListText([basisText, correction.note], "관리자 보정", 3),
+        source: correction.source || "관리자",
+        at: correction.updatedAt || ""
+      });
+    }
+
+    if (contactHistories.length) {
+      for (const history of contactHistories) {
+        pushRow(row, {
+          kind: "컨택",
+          label: history.label || salesContactMeta(history.status).label,
+          status: history.status || "",
+          note: compactListText([
+            history.responseLabel || salesResponseMeta(history.responseStatus).label,
+            history.channel,
+            history.proposal,
+            history.note,
+            history.nextActionAt ? `다음 ${history.nextActionAt}` : ""
+          ], "컨택 기록", 4),
+          source: history.source || "영업",
+          at: history.at || history.updatedAt || ""
+        });
+      }
+    } else if (company.salesContact) {
+      const contact = company.salesContact || {};
+      pushRow(row, {
+        kind: "컨택",
+        label: contact.label || salesContactMeta(contact.status).label,
+        status: contact.status || "",
+        note: compactListText([
+          contact.responseLabel || salesResponseMeta(contact.responseStatus).label,
+          contact.channel,
+          contact.proposal,
+          contact.note,
+          contact.nextActionAt ? `다음 ${contact.nextActionAt}` : ""
+        ], "컨택 기록", 4),
+        source: contact.source || "영업",
+        at: contact.updatedAt || ""
+      });
+    }
+  }
+
+  return auditRows
+    .filter((row) => row.companyName || row.at || row.note)
+    .sort((a, b) => b.timestamp - a.timestamp || String(b.at || "").localeCompare(String(a.at || "")) || String(a.companyName).localeCompare(String(b.companyName)));
+}
+
+function adminRegionAuditSummary(auditRows = []) {
+  return auditRows.reduce((acc, row) => {
+    acc.total += 1;
+    if (row.kind === "판단") acc.review += 1;
+    if (row.kind === "보정") acc.correction += 1;
+    if (row.kind === "컨택") acc.contact += 1;
+    if (!acc.latestAt || row.timestamp > acc.latestTimestamp) {
+      acc.latestAt = row.at || "";
+      acc.latestTimestamp = row.timestamp || 0;
+    }
+    return acc;
+  }, { total: 0, review: 0, correction: 0, contact: 0, latestAt: "", latestTimestamp: 0 });
+}
+
+function adminRegionAuditPanel(region = {}, rows = []) {
+  const auditRows = adminRegionAuditRows(region, rows);
+  const summary = adminRegionAuditSummary(auditRows);
+  const cells = [
+    ["전체 이력", summary.total, "최근 저장 이력"],
+    ["관리자 판단", summary.review, "큐/공개 판단"],
+    ["수동 보정", summary.correction, "객실 총량 보정"],
+    ["컨택 기록", summary.contact, "영업 진행 상태"]
+  ];
+  return `
+    <div class="admin-region-audit-panel">
+      <div class="admin-region-audit-head">
+        <div>
+          <span>지역 작업 이력</span>
+          <strong>${escapeHtml(region.regionLabel || "선택 지역")} 변경 기록</strong>
+          <small>관리자 판단, 수동 보정, 컨택 기록을 시간순으로 모아 봅니다.${summary.latestAt ? ` 최근 처리 ${compactDateTime(summary.latestAt)}` : ""}</small>
+        </div>
+        <button type="button" data-export-admin-region-audit ${auditRows.length ? "" : "disabled"}>이력 CSV</button>
+      </div>
+      <div class="admin-region-audit-summary">
+        ${cells.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmtNumber(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-region-audit-list">
+        ${auditRows.length ? auditRows.slice(0, 10).map((row) => `
+          <article class="${escapeHtml(row.tone || "watch")}">
+            <mark>${escapeHtml(row.kind)}</mark>
+            <div>
+              <strong>${escapeHtml(row.companyName)}</strong>
+              <small>${escapeHtml([row.regionLabel, row.keyword, row.rank ? `${fmtNumber(row.rank)}위` : ""].filter(Boolean).join(" · "))}</small>
+            </div>
+            <div>
+              <b>${escapeHtml(row.label)}</b>
+              <small>${escapeHtml(row.note || row.source || "처리 메모 없음")}</small>
+            </div>
+            <time>${escapeHtml(compactDateTime(row.at))}</time>
+          </article>
+        `).join("") : `<p class="empty">아직 이 지역에 저장된 작업 이력이 없습니다.</p>`}
+      </div>
+    </div>
+  `;
+}
+
 function adminSelectedRegion(master = {}) {
   const regions = master.adminRegionalOperations?.regions || [];
   if (!regions.length) return null;
@@ -14854,6 +15066,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
       </div>
       ${adminRegionWorkflowPanel(rows)}
       ${adminRegionPreflightPanel(region, rows)}
+      ${adminRegionAuditPanel(region, rows)}
       <div class="admin-region-detail-body">
         <div class="admin-region-action-box">
           <strong>관리 우선순위</strong>
@@ -20491,6 +20704,34 @@ function exportAdminReviewAuditCsv() {
   setStatus(`관리자 판단 이력 ${fmtNumber(rows.length)}건 내보내기`);
 }
 
+function exportAdminRegionAuditCsv() {
+  const master = companyMasterSource();
+  const region = adminSelectedRegion(master);
+  if (!region) {
+    setStatus("내보낼 지역 이력이 없습니다.");
+    return;
+  }
+  const rows = adminRegionCompanyRows(region, master);
+  const auditRows = adminRegionAuditRows(region, rows);
+  if (!auditRows.length) {
+    setStatus(`${region.regionLabel || "선택 지역"} 작업 이력이 없습니다.`);
+    return;
+  }
+  const csv = adminRegionAuditCsv(region, rows);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const safeRegion = String(region.regionLabel || region.regionKey || "region").replace(/[^\w가-힣-]+/g, "-").replace(/^-+|-+$/g, "") || "region";
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `lodging-region-audit-${safeRegion}-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`${region.regionLabel || "선택 지역"} 작업 이력 ${fmtNumber(auditRows.length)}건 내보내기`);
+}
+
 async function copyTextToClipboard(text = "") {
   const value = String(text || "");
   if (!value.trim()) return false;
@@ -21291,6 +21532,7 @@ function bindEvents() {
     if (event.target.closest("[data-export-collection-quality]")) exportCollectionQualityCsv();
     if (event.target.closest("[data-export-recrawl-automation]")) exportRecrawlAutomationCsv();
     if (event.target.closest("[data-export-admin-review-audit]")) exportAdminReviewAuditCsv();
+    if (event.target.closest("[data-export-admin-region-audit]")) exportAdminRegionAuditCsv();
     const qualitySetting = event.target.closest("[data-apply-quality-setting]");
     if (qualitySetting) applyCollectionQualitySetting(qualitySetting);
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
