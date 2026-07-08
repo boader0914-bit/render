@@ -11267,6 +11267,31 @@ function keywordRecommendationSuffixPlan(categoryKey = "glamping") {
   return plans[categoryKey] || plans.glamping;
 }
 
+function keywordRecommendationModifierPlan(categoryKey = "glamping") {
+  const suffixByCategory = {
+    poolVilla: "풀빌라",
+    pension: "펜션",
+    lodging: "숙소",
+    campground: "캠핑장",
+    caravan: "카라반",
+    glamping: "글램핑"
+  };
+  const suffix = suffixByCategory[categoryKey] || "글램핑";
+  const rows = [
+    ["수영장", "시설", 82, "물놀이·여름 수요를 확인할 시설형 검색어"],
+    ["애견동반", "고객의도", 80, "반려견 동반 가능 수요와 상품 구성을 확인"],
+    ["가족", "고객의도", 78, "가족 단위 고객군의 검색 반응 확인"],
+    ["바베큐", "시설", 74, "바비큐 구성과 패키지 수요 확인"]
+  ];
+  return rows.map(([modifier, category, score, reason]) => ({
+    modifier,
+    suffix,
+    category,
+    score,
+    reason
+  }));
+}
+
 function keywordRecommendationAllowedSuffixes(categoryKey = "glamping") {
   return new Set(keywordRecommendationSuffixPlan(categoryKey).map(([suffix]) => suffix));
 }
@@ -11319,6 +11344,9 @@ function b2bKeywordRecommendationModel(traffic = demandTrafficAggregate(), playb
   add(context.keyword, "기준", "현재 검색", 90, "현재 리포트의 노출·예약·수요 기준");
   suffixPlan.forEach(([suffix, category, score, reason]) => {
     add(`${base}${suffix}`, category, `지역명 + ${suffix}`, score, reason);
+  });
+  keywordRecommendationModifierPlan(categoryKey).forEach((row) => {
+    add(`${base}${row.modifier}${row.suffix}`, row.category, `지역명 + ${row.modifier} + ${row.suffix}`, row.score, row.reason);
   });
 
   (context.group?.plannedKeywords || []).forEach((keyword, index) => {
@@ -11402,7 +11430,7 @@ function renderB2BKeywordRecommendations(traffic = demandTrafficAggregate(), pla
           `).join("")}
         </div>
       ` : ""}
-      <p>추천 키워드는 지역명과 숙박종류를 우선합니다. 풀빌라·펜션은 숙소까지 확장하고, 글램핑·캠핑장·카라반은 동일 업종 키워드를 먼저 봅니다.</p>
+      <p>추천 키워드는 지역명과 숙박종류를 우선하고, 수영장·가족·애견동반·바베큐처럼 실제 검색 의도가 큰 시설/고객군 후보를 함께 봅니다.</p>
     </div>
   `;
 }
