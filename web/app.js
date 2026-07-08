@@ -11195,13 +11195,66 @@ function keywordRecommendationContext() {
 function keywordRecommendationPurpose(keyword = "", category = "", volume = 0) {
   if (category === "기준") return "현재 리포트 기준 키워드";
   if (category === "실측 관련") return "검색광고 관련 키워드로 다음 수집 후보";
+  if (category === "대체") return "같은 지역의 대체 검색어";
+  if (category === "업종") return "지역명과 숙박종류를 붙인 기본 검색어";
   if (category === "하위지역") return "광역 검색에서 분리 수집할 지역 후보";
-  if (category === "업종") return "글램핑 외 유사 업종 수요 확인";
-  if (category === "상품") return "카라반/오토캠핑 등 상품 구성 확인";
+  if (category === "상품") return "동일 상품 유형 수요 확인";
   if (category === "시설") return "시설형 검색 의도와 상품명 점검";
   if (category === "고객의도") return "가족·커플·단체 등 고객군별 콘텐츠 점검";
   if (category === "관광") return "관광 앵커 기반 목적 방문 수요 확인";
   return volume ? "검색수요 실측 후보" : "추가 수집 후보";
+}
+
+function keywordRecommendationCategoryKey(keyword = activeKeyword()) {
+  const text = compactSearchText(keyword);
+  if (/풀빌라|개별수영장|온수풀|인피니티풀/.test(text)) return "poolVilla";
+  if (/펜션|키즈펜션|스파펜션/.test(text)) return "pension";
+  if (/숙소|숙박/.test(text)) return "lodging";
+  if (/카라반|캠핑카|트레일러/.test(text)) return "caravan";
+  if (/야영장|캠핑장|오토캠핑|캠핑사이트|캠핑존|파쇄석|차박/.test(text)) return "campground";
+  if (/글램핑|글램핑장/.test(text)) return "glamping";
+  return detectLodgingCategoryKey(text);
+}
+
+function keywordRecommendationSuffixPlan(categoryKey = "glamping") {
+  const plans = {
+    poolVilla: [
+      ["풀빌라", "기준", 92, "풀빌라 기준 검색어"],
+      ["펜션", "대체", 84, "풀빌라와 함께 비교할 펜션 수요"],
+      ["숙소", "대체", 76, "숙박 일반 수요 확인"]
+    ],
+    pension: [
+      ["펜션", "기준", 92, "펜션 기준 검색어"],
+      ["풀빌라", "대체", 84, "펜션과 함께 비교할 풀빌라 수요"],
+      ["숙소", "대체", 76, "숙박 일반 수요 확인"]
+    ],
+    lodging: [
+      ["숙소", "기준", 90, "숙박 일반 기준 검색어"],
+      ["펜션", "대체", 84, "지역 숙박 대체 수요"],
+      ["풀빌라", "대체", 78, "고가 숙박 대체 수요"]
+    ],
+    campground: [
+      ["캠핑장", "기준", 92, "캠핑장 기준 검색어"]
+    ],
+    caravan: [
+      ["카라반", "기준", 92, "카라반 기준 검색어"]
+    ],
+    glamping: [
+      ["글램핑", "기준", 92, "글램핑 기준 검색어"],
+      ["숙소", "대체", 70, "숙박 일반 수요 확인"]
+    ]
+  };
+  return plans[categoryKey] || plans.glamping;
+}
+
+function keywordRecommendationAllowedSuffixes(categoryKey = "glamping") {
+  return new Set(keywordRecommendationSuffixPlan(categoryKey).map(([suffix]) => suffix));
+}
+
+function keywordHasAllowedLodgingSuffix(keyword = "", suffixes = new Set()) {
+  const text = compactSearchText(keyword);
+  if (!text) return false;
+  return [...suffixes].some((suffix) => text.includes(compactSearchText(suffix)));
 }
 
 function b2bKeywordRecommendationModel(traffic = demandTrafficAggregate(), playbook = b2bDemandPlaybookModel(traffic)) {
@@ -11240,17 +11293,23 @@ function b2bKeywordRecommendationModel(traffic = demandTrafficAggregate(), playb
   };
 
   const base = context.base || stripLocationBusinessWords(context.keyword) || "지역";
-  add(context.keyword, "기준", "현재 검색", 88, "현재 리포트의 노출·예약·수요 기준");
-  add(`${base}글램핑`, "기준", "지역명 + 글램핑", 86, "지역명과 업종을 붙인 기본 비교 키워드");
-  ["캠핑장", "카라반", "오토캠핑장"].forEach((suffix, index) => {
-    add(`${base}${suffix}`, index === 1 ? "상품" : "업종", "지역명 + 업종/상품", 70 - index * 2);
+  const categoryKey = keywordRecommendationCategoryKey(context.keyword);
+  const suffixPlan = keywordRecommendationSuffixPlan(categoryKey);
+  const allowedSuffixes = keywordRecommendationAllowedSuffixes(categoryKey);
+  add(context.keyword, "기준", "현재 검색", 90, "현재 리포트의 노출·예약·수요 기준");
+  suffixPlan.forEach(([suffix, category, score, reason]) => {
+    add(`${base}${suffix}`, category, `지역명 + ${suffix}`, score, reason);
   });
 
   (context.group?.plannedKeywords || []).forEach((keyword, index) => {
-    add(keyword, "하위지역", "권역 plannedKeywords", 76 - Math.min(index, 4), `${context.group?.sido || base} 권역에서 분리 수집할 후보`);
+    if (keywordHasAllowedLodgingSuffix(keyword, allowedSuffixes)) {
+      add(keyword, "하위지역", "권역 plannedKeywords", 72 - Math.min(index, 4), `${context.group?.sido || base} 권역에서 분리 수집할 후보`);
+    }
   });
   (context.groupCards || []).forEach((card, index) => {
-    add(card.searchKeyword, "하위지역", "지역카드 하위지역", 74 - Math.min(index, 4), "지역카드가 연결된 하위 경쟁권");
+    if (keywordHasAllowedLodgingSuffix(card.searchKeyword, allowedSuffixes)) {
+      add(card.searchKeyword, "하위지역", "지역카드 하위지역", 70 - Math.min(index, 4), "지역카드가 연결된 하위 경쟁권");
+    }
   });
 
   [...trafficIndex.values()]
@@ -11258,7 +11317,7 @@ function b2bKeywordRecommendationModel(traffic = demandTrafficAggregate(), playb
       const keyword = row.keyword || row.relKeyword || "";
       const compact = compactSearchText(keyword);
       if (!keyword || seen.has(compact)) return false;
-      if (!/(글램핑|캠핑|카라반|펜션|캠핑장|오토캠핑)/.test(keyword)) return false;
+      if (!keywordHasAllowedLodgingSuffix(keyword, allowedSuffixes)) return false;
       const baseCompact = compactSearchText(base);
       return !baseCompact || compact.includes(baseCompact) || compactSearchText(context.keyword).includes(baseCompact);
     })
@@ -11267,27 +11326,6 @@ function b2bKeywordRecommendationModel(traffic = demandTrafficAggregate(), playb
     .forEach((row) => {
       add(row.keyword || row.relKeyword, "네이버 관련", "네이버 관련 검색어", 78, "네이버 관련 검색어 후보");
     });
-
-  const text = context.contextText || "";
-  if (/바다|해안|해변|오션|섬|서해|남해/.test(text)) {
-    add(`${base}바다글램핑`, "관광", "관광 앵커", 66);
-    add(`${base}오션뷰글램핑`, "시설", "관광 앵커", 64);
-  }
-  if (/계곡|산|숲|자연|호수|강|둘레|휴양림/.test(text)) {
-    add(`${base}계곡글램핑`, "관광", "관광 앵커", 66);
-    add(`${base}숲속글램핑`, "시설", "자연 체류", 63);
-  }
-  if (/수도권|서울|근교/.test(text)) {
-    add("서울근교글램핑", "관광", "생활권 확장", 69);
-  }
-
-  ["수영장", "개별바베큐", "애견동반", "독채"].forEach((intent, index) => {
-    add(`${base}${intent}글램핑`, "시설", "시설 의도", 62 - index);
-  });
-  ["가족", "커플", "감성", "단체"].forEach((intent, index) => {
-    const boost = text.includes(intent) ? 6 : 0;
-    add(`${base}${intent}글램핑`, "고객의도", "고객 의도", 61 - index + boost);
-  });
 
   rows.sort((a, b) => b.score - a.score || b.totalSearchVolume - a.totalSearchVolume || a.keyword.localeCompare(b.keyword, "ko"));
   const recommended = rows.slice(0, 12);
@@ -11344,7 +11382,7 @@ function renderB2BKeywordRecommendations(traffic = demandTrafficAggregate(), pla
           `).join("")}
         </div>
       ` : ""}
-      <p>추천 키워드는 네이버 관련 검색어, 지역카드, 권역 후보, 시설·고객 의도 기준입니다. 지역이 달라도 같은 수요군의 확장 후보로 볼 수 있습니다.</p>
+      <p>추천 키워드는 지역명과 숙박종류를 우선합니다. 풀빌라·펜션은 숙소까지 확장하고, 글램핑·캠핑장·카라반은 동일 업종 키워드를 먼저 봅니다.</p>
     </div>
   `;
 }
