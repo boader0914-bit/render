@@ -8559,6 +8559,17 @@ function b2bMyLodgeRate(flow = {}, key = "all", fallback = 0.25) {
   return Math.max(0, Math.min(1, fallback));
 }
 
+function b2bMyLodgeBasisRun() {
+  const run = state.data?.run || {};
+  const checkIn = run.checkIn || els.checkInInput?.value || new Date().toISOString().slice(0, 10);
+  return {
+    ...run,
+    checkIn,
+    checkOut: isoAddDays(checkIn, DEFAULT_BOOKING_DAYS - 1),
+    bookingRangeDays: DEFAULT_BOOKING_DAYS
+  };
+}
+
 function b2bMyLodgeDayTypeCounts(run = {}) {
   const days = Math.max(1, bookingDays(run) || DEFAULT_BOOKING_DAYS);
   const start = parseDate(run.checkIn) || new Date();
@@ -8613,7 +8624,9 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     saturday: b2bMyLodgeRate(revenueModel.flow, "saturday", fallbackRate),
     sunday: b2bMyLodgeRate(revenueModel.flow, "sunday", fallbackRate)
   };
-  const dayCounts = b2bMyLodgeDayTypeCounts(state.data?.run || {});
+  const basisRun = b2bMyLodgeBasisRun();
+  const basisPeriod = b2bDateRangeLabel(basisRun);
+  const dayCounts = b2bMyLodgeDayTypeCounts(basisRun);
   const basisDays = Object.values(dayCounts).reduce((sum, count) => sum + count, 0);
   const legacyWeeklyRevenue = hasEstimateBasis
     ? Math.round((
@@ -8709,6 +8722,7 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     rates,
     dayCounts,
     basisDays,
+    basisPeriod,
     cards,
     benchmarkRows,
     facilities,
@@ -8740,6 +8754,7 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
             <div class="b2b-interest-lodge-card-head">
               <span>관심숙소 ${fmtNumber(index + 1)}</span>
               <strong>${escapeHtml(name)}</strong>
+              <small>${escapeHtml(`${fmtNumber(model.basisDays || DEFAULT_BOOKING_DAYS)}일 기준 예상 매출 · ${model.basisPeriod || "기간 확인"}`)}</small>
               <em>${model.hasEstimateBasis ? fmtWon(model.weeklyRevenue) : "매출 입력 대기"}</em>
             </div>
             <div class="b2b-interest-lodge-metrics">
@@ -8865,9 +8880,9 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
       ${canRegisterMore && model.hasInput ? `
       <div class="b2b-my-lodge-result ${model.hasEstimateBasis ? "ready" : "empty"}">
         <article class="b2b-my-lodge-main">
-          <span>${escapeHtml(name || "관심숙소 미리보기")}</span>
+          <span>${escapeHtml(`${fmtNumber(model.basisDays || DEFAULT_BOOKING_DAYS)}일 기준 예상 매출 · ${model.basisPeriod || "기간 확인"}`)}</span>
           <strong>${model.hasEstimateBasis ? fmtWon(model.weeklyRevenue) : "입력 후 비교"}</strong>
-          <small>경쟁권 요일별 예약율: 평일 ${fmtRate(model.rates.weekday)} · 금 ${fmtRate(model.rates.friday)} · 토 ${fmtRate(model.rates.saturday)} · 일 ${fmtRate(model.rates.sunday)}</small>
+          <small>${escapeHtml(name || "관심숙소 미리보기")} · 객실수/요일가격 × 경쟁권 예약율: 평일 ${fmtRate(model.rates.weekday)} · 금 ${fmtRate(model.rates.friday)} · 토 ${fmtRate(model.rates.saturday)} · 일 ${fmtRate(model.rates.sunday)}</small>
           <div class="b2b-my-lodge-tags">
             <em>${fmtNumber(model.roomCount)}실</em>
             ${model.roomType ? `<em>${escapeHtml(model.roomType)}</em>` : ""}

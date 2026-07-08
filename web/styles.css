@@ -11642,6 +11642,7 @@ a.platform-row:hover {
 }
 
 .b2b-interest-lodge-card-head span,
+.b2b-interest-lodge-card-head small,
 .b2b-interest-lodge-card-head em,
 .b2b-interest-lodge-metrics span,
 .b2b-interest-lodge-limit span {
@@ -15714,6 +15715,7 @@ body.role-b2b .b2b-my-lodge-row small,
 body.role-b2b .b2b-room-segment-head span,
 body.role-b2b .b2b-room-segment-row span,
 body.role-b2b .b2b-interest-lodge-card-head span,
+body.role-b2b .b2b-interest-lodge-card-head small,
 body.role-b2b .b2b-interest-lodge-metrics span,
 body.role-b2b .b2b-interest-lodge-limit span {
   color: var(--muted);
