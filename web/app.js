@@ -14334,6 +14334,148 @@ function adminConsoleKpis(master = {}, entries = []) {
   ];
 }
 
+function adminRegionStatusTone(status = {}) {
+  const key = status.key || "";
+  if (key === "public_ready") return "good";
+  if (key === "review_needed") return "watch";
+  return "needs";
+}
+
+function adminRegionStatusLabel(status = {}) {
+  return status.label || "수집 보강";
+}
+
+function adminRegionalOpsSource(master = {}) {
+  const masterOps = master.adminRegionalOperations || {};
+  const runOps = state.data?.adminRegionalOperations || null;
+  return {
+    masterOps,
+    runOps,
+    summary: masterOps.summary || {},
+    regions: Array.isArray(masterOps.regions) ? masterOps.regions : []
+  };
+}
+
+function adminRegionalSummaryCells(summary = {}) {
+  return [
+    ["관리 지역", summary.regionCount || 0, "지역 카드 후보"],
+    ["업체 마스터", summary.companyCount || 0, "지역 분류 완료"],
+    ["공개 가능", summary.publicReadyRegionCount || 0, "B2B 노출 가능"],
+    ["검수 필요", summary.reviewNeededRegionCount || 0, "관리자 확인"],
+    ["수집 보강", summary.collectNeededRegionCount || 0, "표본 추가 필요"],
+    ["지역 밖 노출", summary.outsideExposureCount || 0, "검색 반경 경쟁"]
+  ];
+}
+
+function adminRegionCardHtml(region = {}) {
+  const statusTone = adminRegionStatusTone(region.status || {});
+  const reasons = Array.isArray(region.reviewReasons) ? region.reviewReasons.slice(0, 3) : [];
+  const averageRevenue = Number(region.averageRevenue || 0);
+  const rate = region.averageReservationRate;
+  return `
+    <article class="admin-region-card ${escapeHtml(statusTone)}">
+      <div class="admin-region-card-head">
+        <div>
+          <span>${escapeHtml(region.provinceLabel || "지역")}</span>
+          <strong>${escapeHtml(region.regionLabel || "지역 미확인")}</strong>
+        </div>
+        <mark>${escapeHtml(adminRegionStatusLabel(region.status || {}))}</mark>
+      </div>
+      <div class="admin-region-card-metrics">
+        <div><span>업체</span><strong>${fmtNumber(region.companyCount || 0)}</strong></div>
+        <div><span>예약표본</span><strong>${fmtNumber(region.reservationSampleCount || 0)}</strong></div>
+        <div><span>매출표본</span><strong>${fmtNumber(region.revenueSampleCount || 0)}</strong></div>
+        <div><span>신뢰도</span><strong>${fmtNumber(region.status?.score || 0)}</strong></div>
+      </div>
+      <div class="admin-region-card-foot">
+        <span>${averageRevenue ? `평균 ${fmtWon(averageRevenue)}` : "매출 표본 대기"}</span>
+        <span>${rate !== null && rate !== undefined ? `예약율 ${fmtRate(rate)}` : "예약율 대기"}</span>
+      </div>
+      ${reasons.length ? `
+        <div class="admin-region-reasons">
+          ${reasons.map((reason) => `<em>${escapeHtml(reason)}</em>`).join("")}
+        </div>
+      ` : ""}
+    </article>
+  `;
+}
+
+function adminRunRegionalOpsHtml(runOps = null) {
+  if (!runOps?.summary) {
+    return `
+      <aside class="admin-run-region-panel">
+        <strong>현재 수집 기준</strong>
+        <p>수집 결과를 선택하면 해당 검색의 지역 분류와 지역 밖 노출을 함께 보여줍니다.</p>
+      </aside>
+    `;
+  }
+  const summary = runOps.summary || {};
+  const search = runOps.search || {};
+  const outsideItems = Array.isArray(runOps.outsideExposureItems) ? runOps.outsideExposureItems.slice(0, 4) : [];
+  return `
+    <aside class="admin-run-region-panel active">
+      <div>
+        <span>현재 선택 수집</span>
+        <strong>${escapeHtml(search.keyword || "키워드 대기")}</strong>
+        <small>${escapeHtml([search.detailRankRanges, search.checkIn && search.checkOut ? `${search.checkIn}~${search.checkOut}` : ""].filter(Boolean).join(" · ") || "수집 조건 대기")}</small>
+      </div>
+      <div class="admin-run-region-grid">
+        <article><span>지역</span><strong>${fmtNumber(summary.regionCount || 0)}</strong></article>
+        <article><span>업체</span><strong>${fmtNumber(summary.companyCount || 0)}</strong></article>
+        <article><span>예약표본</span><strong>${fmtNumber(summary.reservationSampleCount || 0)}</strong></article>
+        <article><span>지역 밖</span><strong>${fmtNumber(summary.outsideExposureCount || 0)}</strong></article>
+      </div>
+      ${outsideItems.length ? `
+        <div class="admin-outside-region-list">
+          <strong>지역 밖 노출</strong>
+          ${outsideItems.map((item) => `
+            <span>${escapeHtml(item.name || "업체명 확인")} · ${escapeHtml(item.searchRegion || "검색권")} → ${escapeHtml(item.addressRegion || "소재지")}</span>
+          `).join("")}
+        </div>
+      ` : `<p>현재 선택 결과에서 지역 밖 노출은 크게 보이지 않습니다.</p>`}
+    </aside>
+  `;
+}
+
+function adminRegionalOperationsPanel(master = {}) {
+  const { masterOps, runOps, summary, regions } = adminRegionalOpsSource(master);
+  const topRegions = regions.slice(0, 9);
+  const generatedAt = masterOps.generatedAt ? compactDateTime(masterOps.generatedAt) : "";
+  return `
+    <section class="admin-console-panel admin-regional-ops-panel">
+      <div class="admin-console-head">
+        <div>
+          <strong>지역별 운영 현황</strong>
+          <small>업체 마스터를 지역별로 묶어 검수 상태, 표본 수, 지역 밖 노출을 먼저 확인합니다.</small>
+        </div>
+        <button type="button" data-company-master-focus>지역 마스터 보기</button>
+      </div>
+      <div class="admin-regional-layout">
+        <div class="admin-regional-main">
+          <div class="admin-regional-summary-grid">
+            ${adminRegionalSummaryCells(summary).map(([label, value, note]) => `
+              <article>
+                <span>${escapeHtml(label)}</span>
+                <strong>${fmtNumber(value)}</strong>
+                <small>${escapeHtml(note)}</small>
+              </article>
+            `).join("")}
+          </div>
+          <div class="admin-region-card-grid">
+            ${topRegions.length ? topRegions.map(adminRegionCardHtml).join("") : `
+              <p class="empty">지역 운영 데이터가 아직 없습니다. 업체 마스터 백필 또는 수집 결과 반영 후 확인할 수 있습니다.</p>
+            `}
+          </div>
+          <p class="admin-regional-rule">
+            실제 주소 지역을 우선 적용하고, 없으면 수집 지역과 검색 기준 지역 순으로 분류합니다.${generatedAt ? ` · 갱신 ${escapeHtml(generatedAt)}` : ""}
+          </p>
+        </div>
+        ${adminRunRegionalOpsHtml(runOps)}
+      </div>
+    </section>
+  `;
+}
+
 function adminConsoleQueuePreview(entries = []) {
   const openRows = entries.filter((entry) => entry.workflow.key !== "done");
   const rows = openRows.slice(0, 6);
@@ -14916,6 +15058,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
         </article>
       `).join("")}
     </section>
+    ${adminRegionalOperationsPanel(master)}
     <section class="admin-console-layout">
       ${adminConsoleQueuePreview(entries)}
       ${adminConsoleCrawlPanel(entries)}
