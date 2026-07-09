@@ -12036,6 +12036,93 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.sheet-b2b-boundary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, .72fr);
+  gap: 10px;
+  align-items: stretch;
+  border: 1px solid #d5e3f7;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, .76);
+  padding: 12px;
+}
+
+.sheet-b2b-boundary.strong {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.sheet-b2b-boundary.good {
+  border-color: #bbf7d0;
+  background: #f6fef9;
+}
+
+.sheet-b2b-boundary.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.sheet-b2b-boundary.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.sheet-b2b-boundary > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sheet-b2b-boundary span,
+.sheet-b2b-boundary small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sheet-b2b-boundary strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.sheet-b2b-boundary-chips {
+  min-width: 0;
+  display: flex;
+  align-content: flex-start;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sheet-b2b-boundary-chips em,
+.sheet-b2b-boundary-chips span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 5px 9px;
+  color: #344054;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.sheet-b2b-boundary-chips em {
+  border-color: #b8d9d3;
+  color: #0f766e;
+}
+
 .sheet-b2b-note-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -18218,6 +18305,7 @@ body.role-b2b .sheet-b2b-insight,
 body.role-b2b .sheet-b2b-platform,
 body.role-b2b .sheet-b2b-search,
 body.role-b2b .sheet-b2b-booking,
+body.role-b2b .sheet-b2b-boundary,
 body.role-b2b .sheet-booking-bars,
 body.role-b2b .sheet-decision-section {
   border-color: var(--line);
@@ -18377,6 +18465,8 @@ body.role-b2b .sheet-b2b-flow-strip div,
 body.role-b2b .sheet-b2b-evidence-grid div,
 body.role-b2b .sheet-b2b-platform-grid div,
 body.role-b2b .sheet-b2b-booking-grid div,
+body.role-b2b .sheet-b2b-boundary-chips em,
+body.role-b2b .sheet-b2b-boundary-chips span,
 body.role-b2b .sheet-flow-grid div,
 body.role-b2b .sheet-b2b-note-grid div,
 body.role-b2b .sheet-collection-grid div,
@@ -18679,6 +18769,7 @@ body.role-b2b .sheet-b2b-flow-strip strong,
 body.role-b2b .sheet-b2b-evidence-grid strong,
 body.role-b2b .sheet-b2b-platform-grid strong,
 body.role-b2b .sheet-b2b-booking-grid strong,
+body.role-b2b .sheet-b2b-boundary strong,
 body.role-b2b .sheet-flow-grid strong,
 body.role-b2b .sheet-weekday-bars strong,
 body.role-b2b .sheet-collection-grid strong,
@@ -18753,7 +18844,9 @@ body.role-b2b .sheet-b2b-detail-grid small,
 body.role-b2b .sheet-b2b-flow-strip span,
 body.role-b2b .sheet-b2b-flow-strip small,
 body.role-b2b .sheet-b2b-evidence-grid span,
-body.role-b2b .sheet-b2b-evidence-grid small {
+body.role-b2b .sheet-b2b-evidence-grid small,
+body.role-b2b .sheet-b2b-boundary span,
+body.role-b2b .sheet-b2b-boundary small {
   color: var(--muted);
 }
 
@@ -19413,7 +19506,9 @@ body.role-b2b .sheet-b2b-search.strong,
 body.role-b2b .sheet-b2b-booking.strong,
 body.role-b2b .sheet-b2b-platform.good,
 body.role-b2b .sheet-b2b-search.good,
-body.role-b2b .sheet-b2b-booking.good {
+body.role-b2b .sheet-b2b-booking.good,
+body.role-b2b .sheet-b2b-boundary.strong,
+body.role-b2b .sheet-b2b-boundary.good {
   border-color: rgba(52, 211, 153, .42);
   background:
     linear-gradient(135deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .05)),
@@ -19452,7 +19547,8 @@ body.role-b2b .b2b-company-action.watch,
 body.role-b2b .sheet-b2b-insight.watch,
 body.role-b2b .sheet-b2b-platform.watch,
 body.role-b2b .sheet-b2b-search.watch,
-body.role-b2b .sheet-b2b-booking.watch {
+body.role-b2b .sheet-b2b-booking.watch,
+body.role-b2b .sheet-b2b-boundary.watch {
   border-color: rgba(251, 191, 36, .42);
   background:
     linear-gradient(135deg, rgba(251, 191, 36, .16), rgba(251, 191, 36, .05)),
@@ -19486,7 +19582,8 @@ body.role-b2b .sheet-b2b-insight.hot,
 body.role-b2b .sheet-b2b-platform.hot,
 body.role-b2b .sheet-b2b-search.hot,
 body.role-b2b .sheet-b2b-booking.hot,
-body.role-b2b .sheet-b2b-booking.bad {
+body.role-b2b .sheet-b2b-booking.bad,
+body.role-b2b .sheet-b2b-boundary.hot {
   border-color: rgba(251, 113, 133, .42);
   background:
     linear-gradient(135deg, rgba(251, 113, 133, .16), rgba(251, 113, 133, .05)),
@@ -20851,6 +20948,7 @@ body.role-b2b .structure-action-list li::before {
   .sheet-audit-grid,
   .sheet-audit-summary,
   .sheet-audit-criteria,
+  .sheet-b2b-boundary,
   .target-board-hero,
   .history-ops-metrics,
   .history-ops-comparison {
@@ -20859,6 +20957,10 @@ body.role-b2b .structure-action-list li::before {
 
   .history-ops-company-list button {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .sheet-b2b-boundary-chips {
+    justify-content: flex-start;
   }
 
   .history-ops-spark {

@@ -3636,6 +3636,7 @@ function b2bDetailPositionModel(item = {}) {
   const audit = inventoryAuditProfile(item);
   const platforms = platformsForItem(item);
   const coupon = naverCouponInfo(item);
+  const boundary = b2bBoundaryProfile(item);
   const rank = finiteNumber(insight.rank || item.rank || item.overallRank, 0);
   const remaining = Math.max(0, finiteNumber(lodging.supply, 0) - finiteNumber(lodging.sold, 0));
   const revenueGap = revenue && marketRevenue ? (revenue - marketRevenue) / marketRevenue : NaN;
@@ -3725,9 +3726,9 @@ function b2bDetailPositionModel(item = {}) {
       note: impact.lodging.byDayType || impact.dayUse.byDayType || revenueBasis
     },
     {
-      label: "노출 권역",
-      value: rankBand,
-      note: itemLocationLine(item)
+      label: "노출권",
+      value: boundary.label,
+      note: boundary.summary
     },
     {
       label: "수량 신뢰",
@@ -3751,6 +3752,7 @@ function b2bDetailPositionModel(item = {}) {
     summary,
     cards,
     evidence,
+    boundary,
     flowRows: b2bFlowEvidenceRows(flow),
     metricText: insight.metricText,
     rankBand
@@ -3769,6 +3771,17 @@ function renderB2BDetailPositionPanel(item = {}) {
           <p>${escapeHtml(model.summary)}</p>
         </div>
         <strong>${escapeHtml(model.metricText)}</strong>
+      </div>
+      <div class="sheet-b2b-boundary ${escapeHtml(model.boundary.tone)}">
+        <div>
+          <span>노출권 해석</span>
+          <strong>${escapeHtml(model.boundary.label)}</strong>
+          <small>${escapeHtml(model.boundary.summary)}</small>
+        </div>
+        <div class="sheet-b2b-boundary-chips">
+          <em>${escapeHtml(model.boundary.value)}</em>
+          ${(model.boundary.chips || []).map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+        </div>
       </div>
       <div class="sheet-b2b-detail-grid">
         ${model.cards.map((card) => `
@@ -4147,6 +4160,65 @@ function itemLocationLine(item = {}) {
         ? `${searchRegion} 검색권 · ${addressRegion} 소재`
         : (addressRegion || searchRegion);
   return [item.searchKeyword, regionText, item.address].filter(Boolean).join(" · ") || "지역/주소 확인";
+}
+
+function b2bBoundaryProfile(item = {}) {
+  const searchRegion = item.searchRegion || item.searchCluster || activeKeyword();
+  const addressRegion = item.addressRegion || item.region || "";
+  const status = item.regionBoundaryStatus || (item.outsideSearchRegion ? "outside" : "same");
+  if (status === "outside") {
+    return {
+      status,
+      tone: "watch",
+      label: "반경 노출 경쟁권",
+      value: "검색권 밖 소재",
+      summary: item.regionBoundaryDetail || `${searchRegion || "검색 지역"} 결과에 노출되지만 실제 소재지는 ${addressRegion || "다른 지역"}입니다. 네이버 반경 노출로 같은 선택지에 포함됩니다.`,
+      chips: [
+        searchRegion ? `검색 ${searchRegion}` : "",
+        addressRegion ? `소재 ${addressRegion}` : "",
+        "반경 경쟁"
+      ].filter(Boolean)
+    };
+  }
+  if (status === "within" || status === "parent") {
+    return {
+      status,
+      tone: "good",
+      label: "인접권 노출",
+      value: "같은 생활권",
+      summary: item.regionBoundaryDetail || `${searchRegion || "검색 지역"}과 ${addressRegion || "소재 지역"}이 같은 생활권 또는 상위 권역으로 묶여 비교됩니다.`,
+      chips: [
+        searchRegion ? `검색 ${searchRegion}` : "",
+        addressRegion ? `소재 ${addressRegion}` : "",
+        "인접 경쟁"
+      ].filter(Boolean)
+    };
+  }
+  if (status === "same") {
+    return {
+      status,
+      tone: "strong",
+      label: "지역 내 노출",
+      value: "직접 경쟁",
+      summary: item.regionBoundaryDetail || "검색 지역과 업체 소재지가 같은 지역으로 해석됩니다. 순위와 예약율을 직접 경쟁 기준으로 봅니다.",
+      chips: [
+        searchRegion ? `검색 ${searchRegion}` : "",
+        addressRegion ? `소재 ${addressRegion}` : "",
+        "지역 내"
+      ].filter(Boolean)
+    };
+  }
+  return {
+    status,
+    tone: "neutral",
+    label: "검색권역 확인",
+    value: "위치 확인",
+    summary: item.regionBoundaryDetail || "검색 지역과 업체 소재지의 관계를 현재 표본 기준으로 확인합니다.",
+    chips: [
+      searchRegion ? `검색 ${searchRegion}` : "",
+      addressRegion ? `소재 ${addressRegion}` : ""
+    ].filter(Boolean)
+  };
 }
 
 function rankMetaChipRow(item = {}) {
@@ -20940,17 +21012,7 @@ function b2bSearchModel(item = {}) {
   const traffic = region?.traffic || state.data?.stats?.traffic || {};
   const insight = companyRankInsight(item, item.rank || item.overallRank || 0);
   const profile = b2bCompanyActionProfile(item, insight);
-  const status = item.regionBoundaryStatus || (item.outsideSearchRegion ? "outside" : "same");
-  const boundaryLabel = status === "outside"
-    ? "반경 노출 경쟁권"
-    : ["within", "parent"].includes(status)
-      ? "권역 내 노출"
-      : "검색권역 확인";
-  const boundaryDetail = item.regionBoundaryDetail || (
-    status === "outside"
-      ? "검색 지역 경계 밖 소재라도 네이버 플레이스 반경 노출로 함께 비교되는 업체입니다."
-      : "검색권역과 업체 소재지가 같은 생활권으로 해석됩니다."
-  );
+  const boundary = b2bBoundaryProfile(item);
   const total = finiteNumber(traffic.totalSearchVolume, 0);
   const ctr = Number(traffic.combinedCtr);
   return {
@@ -20958,13 +21020,14 @@ function b2bSearchModel(item = {}) {
     traffic,
     insight,
     profile,
-    boundaryLabel,
-    boundaryDetail,
+    boundary,
+    boundaryLabel: boundary.label,
+    boundaryDetail: boundary.summary,
     metrics: [
       { label: "월검색량", value: total ? fmtNumber(total) : "확인필요", note: traffic.relKeyword || traffic.keyword || activeKeyword() },
       { label: "클릭 반응", value: traffic.collectable || total ? fmtSearchRate(ctr) : "확인필요", note: "네이버 검색 기준" },
       { label: "노출순위", value: insight.rank ? `${fmtNumber(insight.rank)}위` : "확인필요", note: item.rankingSourceLabel || "네이버 플레이스" },
-      { label: "노출권역", value: boundaryLabel, note: regionPrimary(region || {}) }
+      { label: "노출권", value: boundary.label, note: boundary.value }
     ]
   };
 }
