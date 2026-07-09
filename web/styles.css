@@ -15077,6 +15077,140 @@ a.platform-row:hover {
   gap: 8px;
 }
 
+.b2b-my-lodge-compare-board,
+.b2b-my-lodge-offline-board {
+  min-width: 0;
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.b2b-my-lodge-compare-list {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.b2b-my-lodge-compare-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(170px, .92fr) minmax(120px, 1fr) minmax(86px, auto);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #e5ebf3;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 9px;
+}
+
+.b2b-my-lodge-compare-row div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.b2b-my-lodge-compare-row span,
+.b2b-my-lodge-compare-row small,
+.b2b-my-lodge-offline-board span,
+.b2b-my-lodge-offline-board p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-my-lodge-compare-row strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.b2b-my-lodge-compare-row i {
+  min-width: 0;
+  height: 12px;
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e9eef6;
+}
+
+.b2b-my-lodge-compare-row i b {
+  width: var(--bar);
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f74d0, #34d399);
+}
+
+.b2b-my-lodge-compare-row em {
+  color: var(--ink);
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 950;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.b2b-my-lodge-offline-board.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.b2b-my-lodge-offline-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-my-lodge-offline-summary div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(217, 119, 6, .18);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .68);
+  padding: 9px;
+}
+
+.b2b-my-lodge-offline-summary strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.b2b-my-lodge-offline-list {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.b2b-my-lodge-offline-list span {
+  max-width: 100%;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #fedf89;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #8a4b00;
+  padding: 0 9px;
+}
+
 .b2b-my-lodge-subhead {
   min-width: 0;
   display: flex;
@@ -18631,8 +18765,12 @@ body.role-b2b .b2b-revenue-row,
 body.role-b2b .b2b-revenue-guide > div:not(.b2b-revenue-subhead),
 body.role-b2b .b2b-my-lodge-main,
 body.role-b2b .b2b-my-lodge-chart,
+body.role-b2b .b2b-my-lodge-compare-board,
+body.role-b2b .b2b-my-lodge-offline-board,
 body.role-b2b .b2b-my-lodge-cards article,
 body.role-b2b .b2b-my-lodge-row,
+body.role-b2b .b2b-my-lodge-compare-row,
+body.role-b2b .b2b-my-lodge-offline-summary div,
 body.role-b2b .b2b-my-lodge-checks label,
 body.role-b2b .b2b-room-segment-panel,
 body.role-b2b .b2b-room-segment-row,
@@ -18805,6 +18943,9 @@ body.role-b2b .b2b-my-lodge-cards strong,
 body.role-b2b .b2b-my-lodge-subhead strong,
 body.role-b2b .b2b-my-lodge-row > span,
 body.role-b2b .b2b-my-lodge-row strong,
+body.role-b2b .b2b-my-lodge-compare-row strong,
+body.role-b2b .b2b-my-lodge-compare-row em,
+body.role-b2b .b2b-my-lodge-offline-summary strong,
 body.role-b2b .b2b-my-lodge-checks label,
 body.role-b2b .b2b-room-segment-head strong,
 body.role-b2b .b2b-interest-lodge-card-head strong,
@@ -18825,6 +18966,10 @@ body.role-b2b .b2b-my-lodge-cards span,
 body.role-b2b .b2b-my-lodge-cards small,
 body.role-b2b .b2b-my-lodge-subhead small,
 body.role-b2b .b2b-my-lodge-row small,
+body.role-b2b .b2b-my-lodge-compare-row span,
+body.role-b2b .b2b-my-lodge-compare-row small,
+body.role-b2b .b2b-my-lodge-offline-board span,
+body.role-b2b .b2b-my-lodge-offline-board p,
 body.role-b2b .b2b-room-segment-head span,
 body.role-b2b .b2b-room-segment-row span,
 body.role-b2b .b2b-interest-lodge-card-head span,
@@ -18843,7 +18988,8 @@ body.role-b2b .b2b-interest-lodge-limit span {
 body.role-b2b .b2b-my-lodge-head em,
 body.role-b2b .b2b-my-lodge-tags em,
 body.role-b2b .b2b-interest-lodge-tags em,
-body.role-b2b .b2b-my-lodge-decision em {
+body.role-b2b .b2b-my-lodge-decision em,
+body.role-b2b .b2b-my-lodge-offline-list span {
   border-color: rgba(106, 168, 255, .28);
   background: rgba(106, 168, 255, .13);
   color: #cfe4ff;
@@ -18887,8 +19033,13 @@ body.role-b2b .b2b-my-lodge-row i {
   background: rgba(156, 174, 204, .18);
 }
 
-body.role-b2b .b2b-my-lodge-row i b {
+body.role-b2b .b2b-my-lodge-row i b,
+body.role-b2b .b2b-my-lodge-compare-row i b {
   background: linear-gradient(90deg, #6aa8ff, #34d399);
+}
+
+body.role-b2b .b2b-my-lodge-compare-row i {
+  background: rgba(156, 174, 204, .18);
 }
 
 body.role-b2b .b2b-my-lodge-cards article.mine,
@@ -18897,6 +19048,8 @@ body.role-b2b .b2b-my-lodge-cards article.good,
 body.role-b2b .b2b-my-lodge-row.mine,
 body.role-b2b .b2b-my-lodge-row.strong,
 body.role-b2b .b2b-my-lodge-row.good,
+body.role-b2b .b2b-my-lodge-compare-row.strong,
+body.role-b2b .b2b-my-lodge-compare-row.good,
 body.role-b2b .b2b-interest-lodge-location.strong,
 body.role-b2b .b2b-interest-lodge-location.good,
 body.role-b2b .b2b-interest-lodge-decision.strong,
@@ -18911,6 +19064,8 @@ body.role-b2b .b2b-my-lodge-decision.good {
 
 body.role-b2b .b2b-my-lodge-cards article.watch,
 body.role-b2b .b2b-my-lodge-row.watch,
+body.role-b2b .b2b-my-lodge-compare-row.watch,
+body.role-b2b .b2b-my-lodge-offline-board.watch,
 body.role-b2b .b2b-interest-lodge-location.watch,
 body.role-b2b .b2b-interest-lodge-decision.watch,
 body.role-b2b .b2b-my-lodge-decision.watch,
@@ -18923,6 +19078,7 @@ body.role-b2b .b2b-my-lodge-sync-note {
 
 body.role-b2b .b2b-my-lodge-cards article.hot,
 body.role-b2b .b2b-my-lodge-row.hot,
+body.role-b2b .b2b-my-lodge-compare-row.hot,
 body.role-b2b .b2b-interest-lodge-location.hot,
 body.role-b2b .b2b-interest-lodge-decision.hot,
 body.role-b2b .b2b-my-lodge-decision.hot {
@@ -20530,6 +20686,8 @@ body.role-b2b .structure-action-list li::before {
   .b2b-interest-lodge-grid,
   .b2b-my-lodge-form,
   .b2b-my-lodge-result,
+  .b2b-my-lodge-compare-row,
+  .b2b-my-lodge-offline-summary,
   .b2b-brief-grid,
   .b2b-strategy-layout,
   .b2b-snapshot-layout,
@@ -20568,6 +20726,10 @@ body.role-b2b .structure-action-list li::before {
 
   .b2b-interest-lodge-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .b2b-my-lodge-compare-row em {
+    text-align: left;
   }
 
   .b2b-room-segment-remove {

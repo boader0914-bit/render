@@ -9134,6 +9134,180 @@ function b2bMyLodgeComparisonConclusion(input = {}) {
   return { tone, label, headline, summary, chips };
 }
 
+function b2bMyLodgeOfflineMarketModel(revenueModel = b2bRevenueBenchmarkModel()) {
+  const rows = (Array.isArray(revenueModel.rows) ? revenueModel.rows : [])
+    .map((row) => {
+      const status = collectionStatusProfile(row.item || {});
+      const offlineQuantity = finiteNumber(status.offlineQuantity, 0);
+      const blockedQuantity = finiteNumber(status.structuralBlockedQuantity, 0);
+      return {
+        name: row.name || row.item?.name || "업체명 확인",
+        rank: row.rank,
+        offlineQuantity,
+        blockedQuantity,
+        offlineEstimated: Boolean(status.offlineEstimated || offlineQuantity > 0),
+        note: status.offlineEstimated
+          ? "총량 감소·미오픈·차단 신호"
+          : blockedQuantity > 0
+            ? "운영 축소/상시 차단 신호"
+            : "특이 신호 없음"
+      };
+    });
+  const signalRows = rows
+    .filter((row) => row.offlineEstimated || row.blockedQuantity > 0)
+    .sort((a, b) => (b.offlineQuantity + b.blockedQuantity) - (a.offlineQuantity + a.blockedQuantity))
+    .slice(0, 4);
+  const offlineTotal = signalRows.reduce((sum, row) => sum + finiteNumber(row.offlineQuantity, 0), 0);
+  const blockedTotal = signalRows.reduce((sum, row) => sum + finiteNumber(row.blockedQuantity, 0), 0);
+  const signalCount = signalRows.length;
+  return {
+    tone: signalCount ? "watch" : "good",
+    signalCount,
+    offlineTotal,
+    blockedTotal,
+    signalRows,
+    summary: signalCount
+      ? `경쟁권 ${fmtNumber(signalCount)}곳에서 총량 감소 또는 차단 신호가 보입니다. 실제 판매와 운영 이슈를 구분해 해석해야 합니다.`
+      : "현재 경쟁권 표본에서는 총량 감소나 차단 신호가 크게 보이지 않습니다."
+  };
+}
+
+function b2bMyLodgeReferenceRows(revenueModel = b2bRevenueBenchmarkModel(), fallbackAverage = 0) {
+  const sortedRevenueRows = (revenueModel.revenueRows || [])
+    .filter((row) => row.revenue > 0)
+    .slice()
+    .sort((a, b) => b.revenue - a.revenue);
+  const averageRevenue = finiteNumber(revenueModel.averageRevenue, 0) || finiteNumber(fallbackAverage, 0);
+  const topSlice = sortedRevenueRows.slice(0, Math.min(3, sortedRevenueRows.length));
+  const lowSlice = sortedRevenueRows.slice(Math.max(0, sortedRevenueRows.length - Math.min(3, sortedRevenueRows.length)));
+  const topAverage = topSlice.length ? topSlice.reduce((sum, row) => sum + row.revenue, 0) / topSlice.length : 0;
+  const lowAverage = lowSlice.length ? lowSlice.reduce((sum, row) => sum + row.revenue, 0) / lowSlice.length : 0;
+  const marketAvgPriceRows = sortedRevenueRows.filter((row) => row.avgPrice > 0);
+  const marketAvgPrice = marketAvgPriceRows.length
+    ? marketAvgPriceRows.reduce((sum, row) => sum + row.avgPrice, 0) / marketAvgPriceRows.length
+    : 0;
+  return [
+    {
+      key: "top",
+      tone: "good",
+      label: "상위권 평균",
+      name: topSlice.length ? `상위 ${fmtNumber(topSlice.length)}곳` : "상위 표본 대기",
+      value: topAverage,
+      price: topSlice.length ? topSlice.reduce((sum, row) => sum + finiteNumber(row.avgPrice, 0), 0) / topSlice.filter((row) => row.avgPrice > 0).length : 0,
+      note: topAverage ? "상위 매출 표본 평균" : "매출 표본 필요"
+    },
+    {
+      key: "average",
+      tone: "strong",
+      label: "지역 평균",
+      name: `${fmtNumber(sortedRevenueRows.length)}곳 표본`,
+      value: averageRevenue,
+      price: marketAvgPrice,
+      note: averageRevenue ? "지정 검색범위 평균" : "매출 표본 대기"
+    },
+    {
+      key: "low",
+      tone: "watch",
+      label: "하위권 평균",
+      name: lowSlice.length ? `하위 ${fmtNumber(lowSlice.length)}곳` : "하위 표본 대기",
+      value: lowAverage,
+      price: lowSlice.length ? lowSlice.reduce((sum, row) => sum + finiteNumber(row.avgPrice, 0), 0) / lowSlice.filter((row) => row.avgPrice > 0).length : 0,
+      note: lowAverage ? "하위 매출 표본 평균" : "매출 표본 필요"
+    }
+  ].map((row) => ({
+    ...row,
+    price: Number.isFinite(row.price) && row.price > 0 ? row.price : 0
+  }));
+}
+
+function b2bInterestLodgeComparisonRows(interestLodges = [], brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief), previewModel = null) {
+  const lodgeRows = (Array.isArray(interestLodges) ? interestLodges : [])
+    .map((lodge, index) => {
+      const model = b2bMyLodgeBenchmarkModel(brief, revenueModel, lodge);
+      return {
+        key: `interest-${index}`,
+        tone: model.comparisonConclusion?.tone || "neutral",
+        label: `관심숙소 ${fmtNumber(index + 1)}`,
+        name: String(lodge.lodgingName || `관심숙소 ${index + 1}`).trim(),
+        value: model.weeklyRevenue,
+        price: model.avgPrice,
+        rooms: model.roomCount,
+        note: model.comparisonConclusion?.label || "비교 대기",
+        channels: model.channelLabels.join(" + ") || "채널 미입력"
+      };
+    });
+  const previewRow = previewModel?.hasInput ? [{
+    key: "preview",
+    tone: previewModel.comparisonConclusion?.tone || "mine",
+    label: "입력 중",
+    name: String(previewModel.draft?.lodgingName || "미리보기").trim(),
+    value: previewModel.weeklyRevenue,
+    price: previewModel.avgPrice,
+    rooms: previewModel.roomCount,
+    note: previewModel.hasEstimateBasis ? previewModel.comparisonConclusion?.label || "비교 중" : "매출 입력 대기",
+    channels: previewModel.channelLabels.join(" + ") || "채널 미입력"
+  }] : [];
+  const referenceRows = b2bMyLodgeReferenceRows(revenueModel, brief.averageRevenue);
+  const rows = [...lodgeRows, ...previewRow, ...referenceRows].filter((row) => row.value > 0 || row.key === "preview");
+  const maxValue = Math.max(...rows.map((row) => finiteNumber(row.value, 0)), 1);
+  return rows.map((row) => ({
+    ...row,
+    width: Math.max(row.value > 0 ? 8 : 0, Math.min(100, Math.round((finiteNumber(row.value, 0) / maxValue) * 100)))
+  }));
+}
+
+function renderB2BMyLodgeComparisonBoard(interestLodges = [], brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief), previewModel = null) {
+  if (!interestLodges.length && !previewModel?.hasInput) return "";
+  const rows = b2bInterestLodgeComparisonRows(interestLodges, brief, revenueModel, previewModel);
+  if (!rows.length) return "";
+  const basisPeriod = previewModel?.basisPeriod || b2bDateRangeLabel(state.data?.run || {}) || `${fmtNumber(DEFAULT_BOOKING_DAYS)}일 기준`;
+  return `
+    <article class="b2b-my-lodge-compare-board">
+      <div class="b2b-my-lodge-subhead">
+        <strong>7일 기준 매출 위치</strong>
+        <small>${escapeHtml(basisPeriod)} · 관심숙소와 지역 표본 비교</small>
+      </div>
+      <div class="b2b-my-lodge-compare-list">
+        ${rows.map((row) => `
+          <div class="b2b-my-lodge-compare-row ${escapeHtml(row.tone)}" style="--bar:${row.width}%">
+            <div>
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.name || row.label)}</strong>
+              <small>${escapeHtml([row.rooms ? `${fmtNumber(row.rooms)}실` : "", row.price ? `객실가 ${fmtWon(row.price)}` : "", row.channels, row.note].filter(Boolean).join(" · "))}</small>
+            </div>
+            <i><b></b></i>
+            <em>${row.value ? fmtWon(row.value) : "대기"}</em>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderB2BMyLodgeOfflineBoard(revenueModel = b2bRevenueBenchmarkModel()) {
+  const model = b2bMyLodgeOfflineMarketModel(revenueModel);
+  if (!model.signalCount) return "";
+  return `
+    <article class="b2b-my-lodge-offline-board ${escapeHtml(model.tone)}">
+      <div class="b2b-my-lodge-subhead">
+        <strong>오프라인 판매/차단 추정</strong>
+        <small>총량 감소가 보이는 경쟁업체를 별도 참고 지표로 표시합니다.</small>
+      </div>
+      <div class="b2b-my-lodge-offline-summary">
+        <div><span>신호 업체</span><strong>${fmtNumber(model.signalCount)}곳</strong></div>
+        <div><span>오프라인 추정</span><strong>${fmtNumber(model.offlineTotal)}개/회</strong></div>
+        <div><span>차단·축소 추정</span><strong>${fmtNumber(model.blockedTotal)}개/회</strong></div>
+      </div>
+      <p>${escapeHtml(model.summary)}</p>
+      <div class="b2b-my-lodge-offline-list">
+        ${model.signalRows.map((row) => `
+          <span>${escapeHtml(row.name)} · ${row.offlineQuantity ? `오프라인 ${fmtNumber(row.offlineQuantity)}개/회` : ""}${row.blockedQuantity ? `${row.offlineQuantity ? " · " : ""}차단 ${fmtNumber(row.blockedQuantity)}개/회` : ""}</span>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
 function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief), draftOverride = null) {
   const draft = draftOverride && typeof draftOverride === "object" ? draftOverride : readB2BMyLodgeDraft();
   const roomSegments = b2bMyLodgeSegmentRows(draft);
@@ -9418,6 +9592,8 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
       </div>
       ${state.b2bInterestLodgeSyncError ? `<div class="b2b-my-lodge-sync-note">${escapeHtml(state.b2bInterestLodgeSyncError)} 브라우저에는 임시 보관되어 있습니다.</div>` : ""}
       ${renderB2BInterestLodgeCards(interestLodges, brief, revenueModel)}
+      ${renderB2BMyLodgeComparisonBoard(interestLodges, brief, revenueModel, editorOpen && model.hasInput ? model : null)}
+      ${interestLodges.length || (editorOpen && model.hasInput) ? renderB2BMyLodgeOfflineBoard(revenueModel) : ""}
       ${canRegisterMore && editorOpen ? `
       <form class="b2b-my-lodge-form" data-b2b-my-lodge-form>
         <label class="b2b-my-lodge-field name">
