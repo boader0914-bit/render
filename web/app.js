@@ -3637,6 +3637,7 @@ function b2bDetailPositionModel(item = {}) {
   const platforms = platformsForItem(item);
   const coupon = naverCouponInfo(item);
   const boundary = b2bBoundaryProfile(item);
+  const locationConclusion = b2bLocationConclusion(b2bLocationScoreContext(brief), boundary);
   const rank = finiteNumber(insight.rank || item.rank || item.overallRank, 0);
   const remaining = Math.max(0, finiteNumber(lodging.supply, 0) - finiteNumber(lodging.sold, 0));
   const revenueGap = revenue && marketRevenue ? (revenue - marketRevenue) / marketRevenue : NaN;
@@ -3753,6 +3754,7 @@ function b2bDetailPositionModel(item = {}) {
     cards,
     evidence,
     boundary,
+    locationConclusion,
     flowRows: b2bFlowEvidenceRows(flow),
     metricText: insight.metricText,
     rankBand
@@ -3774,13 +3776,16 @@ function renderB2BDetailPositionPanel(item = {}) {
       </div>
       <div class="sheet-b2b-boundary ${escapeHtml(model.boundary.tone)}">
         <div>
-          <span>노출권 해석</span>
-          <strong>${escapeHtml(model.boundary.label)}</strong>
-          <small>${escapeHtml(model.boundary.summary)}</small>
+          <span>입지 판단</span>
+          <strong>${escapeHtml(model.locationConclusion.label)}</strong>
+          <small>${escapeHtml(model.locationConclusion.summary)}</small>
         </div>
         <div class="sheet-b2b-boundary-chips">
-          <em>${escapeHtml(model.boundary.value)}</em>
-          ${(model.boundary.chips || []).map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+          <em>${escapeHtml(model.locationConclusion.scoreText || model.boundary.value)}</em>
+          ${[model.boundary.label, model.boundary.value, ...(model.boundary.chips || [])]
+            .filter((chip, index, array) => chip && array.indexOf(chip) === index)
+            .map((chip) => `<span>${escapeHtml(chip)}</span>`)
+            .join("")}
         </div>
       </div>
       <div class="sheet-b2b-detail-grid">
@@ -8924,6 +8929,13 @@ function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) 
     facilities: facilities || current.facilities || "",
     naverConnected: b2bCollectedNaverConnected(item) || Boolean(current.naverConnected),
     otaConnected: Boolean(current.otaConnected),
+    searchRegion: item.searchRegion || current.searchRegion || result.keyword || activeKeyword(),
+    addressRegion: item.addressRegion || item.region || current.addressRegion || "",
+    regionBoundaryStatus: item.regionBoundaryStatus || current.regionBoundaryStatus || "",
+    regionBoundaryLabel: item.regionBoundaryLabel || current.regionBoundaryLabel || "",
+    regionBoundaryDetail: item.regionBoundaryDetail || current.regionBoundaryDetail || "",
+    outsideSearchRegion: Boolean(item.outsideSearchRegion || current.outsideSearchRegion),
+    address: item.address || current.address || "",
     savedAt: new Date().toISOString(),
     collectedAt: new Date().toISOString(),
     collectionRunId: result.runId || "",
@@ -9040,6 +9052,18 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     draft.otaConnected ? "OTA 노출" : ""
   ].filter(Boolean);
   const channelScore = (draft.naverConnected ? 1 : 0) + (draft.otaConnected ? 1 : 0);
+  const locationContext = b2bLocationScoreContext(brief);
+  const lodgeBoundary = draft.regionBoundaryStatus || draft.addressRegion
+    ? b2bBoundaryProfile({
+      searchRegion: draft.searchRegion || brief.keyword || activeKeyword(),
+      addressRegion: draft.addressRegion,
+      region: draft.addressRegion,
+      regionBoundaryStatus: draft.regionBoundaryStatus,
+      regionBoundaryDetail: draft.regionBoundaryDetail,
+      outsideSearchRegion: draft.outsideSearchRegion
+    })
+    : null;
+  const locationConclusion = b2bLocationConclusion(locationContext, lodgeBoundary);
   const facilities = b2bMyLodgeFacilities(draft.facilities);
   const segmentBasisText = hasSegmentEstimateBasis
     ? `${fmtNumber(roomSegments.length)}개 객실종류 · 요일별 가격 기준`
@@ -9086,6 +9110,12 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
       label: "판매 채널",
       value: channelLabels.length ? channelLabels.join(" + ") : "미입력",
       note: "공유 재고 가능 · 매출 중복 가산 없음"
+    },
+    {
+      tone: locationConclusion.tone,
+      label: "입지 판단",
+      value: locationConclusion.label,
+      note: locationConclusion.scoreText ? `${locationConclusion.scoreText} · ${locationConclusion.sourceLabel}` : locationConclusion.sourceLabel
     }
   ];
   return {
@@ -9105,6 +9135,7 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     basisPeriod,
     cards,
     benchmarkRows,
+    locationConclusion,
     facilities,
     channelLabels,
     savedAt: draft.savedAt || "",
@@ -9141,6 +9172,11 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
               <div><span>객실</span><strong>${model.roomCount ? `${fmtNumber(model.roomCount)}실` : "대기"}</strong></div>
               <div><span>평균 객실가</span><strong>${model.avgPrice ? fmtWon(model.avgPrice) : "대기"}</strong></div>
               <div><span>판매 채널</span><strong>${model.channelLabels.length ? escapeHtml(model.channelLabels.join(" + ")) : "미입력"}</strong></div>
+            </div>
+            <div class="b2b-interest-lodge-location ${escapeHtml(model.locationConclusion.tone)}">
+              <span>입지 비교</span>
+              <strong>${escapeHtml(model.locationConclusion.label)}</strong>
+              <small>${escapeHtml(model.locationConclusion.headline)}</small>
             </div>
             <div class="b2b-interest-lodge-tags">
               ${chips.length ? chips.map((chip) => `<em>${escapeHtml(chip)}</em>`).join("") : "<em>상세 입력 대기</em>"}
@@ -10148,6 +10184,97 @@ function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
   };
 }
 
+function b2bLocationCustomerSourceLabel(scoreModel = {}) {
+  return scoreModel?.manual?.hasAdjustment ? "확인된 지역 기준" : "현재 수집 기준";
+}
+
+function b2bLocationConclusionTone(score) {
+  if (!Number.isFinite(score)) return "watch";
+  if (score >= 78) return "strong";
+  if (score >= 62) return "good";
+  if (score >= 46) return "watch";
+  return "hot";
+}
+
+function b2bLocationComponentValue(scoreModel = {}, key = "") {
+  const found = (scoreModel.components || []).find((component) => component.key === key);
+  const value = Number(found?.value);
+  return Number.isFinite(value) ? value : NaN;
+}
+
+function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = null) {
+  const scoreModel = context.scoreModel;
+  const score = scoreModel ? clampLocationScore(scoreModel.score, 0) : NaN;
+  const searchDemand = b2bLocationComponentValue(scoreModel, "searchDemand");
+  const tourismDemand = b2bLocationComponentValue(scoreModel, "tourismDemand");
+  const booking = b2bLocationComponentValue(scoreModel, "booking");
+  const revenue = b2bLocationComponentValue(scoreModel, "revenue");
+  const sourceLabel = b2bLocationCustomerSourceLabel(scoreModel);
+  if (!context.available || !scoreModel) {
+    return {
+      tone: "watch",
+      label: "입지 기준 준비 중",
+      headline: "현재는 검색 결과와 예약·매출 표본을 먼저 확인합니다.",
+      summary: `${context.label || "검색 지역"}은 아직 지역 입지 기준이 연결되지 않았습니다. 결과가 누적되면 관광수요와 노출권을 함께 비교합니다.`,
+      scoreText: "입지 점수 대기",
+      sourceLabel,
+      chips: [context.connectedLabel, context.tourismLabel].filter(Boolean)
+    };
+  }
+  let tone = b2bLocationConclusionTone(score);
+  let label = "입지 비교 가능";
+  let headline = "예약·매출 표본과 입지 조건을 함께 볼 지역입니다.";
+  let summary = "검색 수요, 예약 반응, 매출 표본, 관광 수요를 함께 보며 경쟁권 안의 위치를 판단합니다.";
+  if (score >= 78) {
+    label = "입지 경쟁력 높음";
+    headline = "검색 수요와 예약 반응이 함께 받쳐주는 지역입니다.";
+    summary = "현재 표본 기준으로 수요 유입과 실제 예약 반응이 모두 양호합니다. 상위 노출 업체의 가격대와 상품 구성을 우선 비교하세요.";
+  } else if (score >= 62) {
+    label = "비교 가능한 경쟁권";
+    headline = "노출·예약·매출을 함께 비교할 수 있는 지역입니다.";
+    summary = "입지 자체는 비교 가능한 수준입니다. 예약율과 매출 표본의 차이를 함께 보며 운영 전략을 잡는 것이 좋습니다.";
+  } else if (score >= 46) {
+    label = "관광수요 보완 필요";
+    headline = "입지보다 상품·가격 경쟁력이 더 중요하게 보입니다.";
+    summary = "검색 또는 예약 표본이 아직 강하지 않습니다. 주변 관광수요와 실제 예약 흐름을 같이 보며 보수적으로 판단하세요.";
+  } else {
+    label = "입지 판단 보수적";
+    headline = "현재 표본만으로는 입지 장점을 강하게 보기 어렵습니다.";
+    summary = "검색 수요, 예약 반응, 매출 표본 중 일부가 약합니다. 추가 수집 또는 인접 키워드 비교 후 판단하는 편이 좋습니다.";
+  }
+  if (boundary?.status === "outside") {
+    tone = "watch";
+    label = "반경 유입 경쟁권";
+    headline = "지역 밖 업체가 같은 검색 결과에 함께 노출됩니다.";
+    summary = "네이버 검색 반경 때문에 행정구역 밖 업체도 고객 선택지에 들어옵니다. 실제 소재지보다 검색 결과 내 노출 경쟁으로 해석하세요.";
+  } else if (boundary?.status === "within" || boundary?.status === "parent") {
+    tone = tone === "hot" ? "watch" : tone;
+    label = "인접 생활권 경쟁";
+    headline = "같은 생활권 업체가 검색 결과에서 함께 비교됩니다.";
+    summary = "행정구역은 다를 수 있지만 고객은 같은 이동권으로 비교할 가능성이 있습니다. 가격과 예약율을 함께 확인하세요.";
+  } else if (boundary?.status === "same") {
+    label = score >= 78 ? "지역 내 강한 입지" : "지역 내 직접 경쟁";
+  }
+  const chips = [
+    `${fmtNumber(score)}점`,
+    Number.isFinite(searchDemand) ? `검색수요 ${fmtNumber(searchDemand)}점` : "",
+    Number.isFinite(tourismDemand) ? `관광수요 ${fmtNumber(tourismDemand)}점` : "",
+    Number.isFinite(booking) ? `예약반응 ${fmtNumber(booking)}점` : "",
+    Number.isFinite(revenue) ? `매출표본 ${fmtNumber(revenue)}점` : "",
+    context.tourismLabel
+  ].filter(Boolean);
+  return {
+    tone,
+    label,
+    headline,
+    summary,
+    score,
+    scoreText: `${fmtNumber(score)}점`,
+    sourceLabel,
+    chips
+  };
+}
+
 function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2bLocationScoreContext(brief)) {
   const runtime = context.runtime || {};
   const scoreModel = context.scoreModel;
@@ -10176,14 +10303,9 @@ function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2b
     `;
   }
   const score = clampLocationScore(scoreModel.score, 0);
-  const scoreTone = score >= 78 ? "strong" : score >= 62 ? "watch" : "caution";
-  const manual = scoreModel.manual || {};
-  const sourceLabel = manual.hasAdjustment ? "운영 검수 반영" : "자동 산식 기준";
-  const summary = score >= 78
-    ? "검색 수요와 예약·매출 표본이 함께 받쳐주는 입지입니다."
-    : score >= 62
-      ? "경쟁권 안에서 비교 가능한 입지입니다. 예약 반응과 매출 표본을 함께 확인하세요."
-      : "현재 표본만으로는 입지 판단을 보수적으로 봐야 합니다.";
+  const conclusion = b2bLocationConclusion(context);
+  const scoreTone = conclusion.tone;
+  const sourceLabel = conclusion.sourceLabel;
   const driverRows = (scoreModel.components || [])
     .slice()
     .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
@@ -10203,10 +10325,20 @@ function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2b
           <strong>${fmtNumber(score)}점</strong>
           <small>${escapeHtml(sourceLabel)}</small>
         </div>
-        <p>${escapeHtml(summary)}</p>
+        <p>${escapeHtml(conclusion.headline)}</p>
       </div>
       <div class="b2b-location-score-bar" aria-label="입지 경쟁력 ${fmtNumber(score)}점">
         <i style="width:${Math.max(0, Math.min(100, score))}%"></i>
+      </div>
+      <div class="b2b-location-conclusion ${escapeHtml(conclusion.tone)}">
+        <div>
+          <span>입지 결론</span>
+          <strong>${escapeHtml(conclusion.label)}</strong>
+          <p>${escapeHtml(conclusion.summary)}</p>
+        </div>
+        <div>
+          ${conclusion.chips.slice(0, 5).map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+        </div>
       </div>
       <div class="b2b-location-driver-grid">
         ${driverRows.map((component) => {
@@ -10323,7 +10455,7 @@ function renderB2BReportDisclaimerNotice(platformStats = reportPlatformStats(sta
         <span>리포트 면책</span>
         <strong>성과를 보장하지 않는 참고용 분석입니다.</strong>
       </div>
-      <p>예약율, 예상 매출, 검색량, 채널 노출은 외부 플랫폼 관측값과 내부 보정값을 조합한 추정입니다. 실제 예약 가능 여부, 회계상 매출, 광고 성과, 입점·영업 성과를 보장하지 않습니다.</p>
+      <p>예약율, 예상 매출, 검색량, 채널 노출은 외부 플랫폼 관측값과 확인된 수집 기준을 조합한 추정입니다. 실제 예약 가능 여부, 회계상 매출, 광고 성과, 입점·영업 성과를 보장하지 않습니다.</p>
       ${missingTotal ? `<p>${escapeHtml(`누락/실패 가능 데이터 ${fmtNumber(missingTotal)}건은 별도 보조 확인이 필요합니다.`)}</p>` : ""}
       <a href="/report-disclaimer" target="_blank" rel="noopener">자세한 면책 문구 보기</a>
     </section>
@@ -17318,8 +17450,8 @@ function renderB2BMapLocationScore(model = b2bRegionMapModel()) {
   const tone = b2bMapLocationTone(score);
   const runtime = context.runtime || {};
   const sampleCount = finiteNumber(runtime.items?.length, model.items?.length || 0);
-  const manual = scoreModel?.manual || {};
-  const sourceLabel = manual.hasAdjustment ? "운영 검수 반영" : "자동 산식 기준";
+  const conclusion = b2bLocationConclusion(context);
+  const sourceLabel = conclusion.sourceLabel;
   const driverRows = (scoreModel?.components || [])
     .slice()
     .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
@@ -17336,12 +17468,17 @@ function renderB2BMapLocationScore(model = b2bRegionMapModel()) {
       <div class="b2b-map-location-head">
         <div>
           <strong>지도 입지 판단</strong>
-          <small>${escapeHtml(context.available ? `${activeKeyword()} 경쟁권을 입지 기준과 함께 봅니다.` : "현재 검색 결과를 기준으로 지도 경쟁권을 먼저 봅니다.")}</small>
+          <small>${escapeHtml(context.available ? conclusion.headline : "현재 검색 결과를 기준으로 지도 경쟁권을 먼저 봅니다.")}</small>
         </div>
         <em>${Number.isFinite(score) ? `${fmtNumber(score)}점` : "준비 중"}</em>
       </div>
       <div class="b2b-map-location-meter">
         <i style="width:${Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 8}%"></i>
+      </div>
+      <div class="b2b-map-location-conclusion ${escapeHtml(conclusion.tone)}">
+        <span>입지 결론</span>
+        <strong>${escapeHtml(conclusion.label)}</strong>
+        <small>${escapeHtml(conclusion.summary)}</small>
       </div>
       <div class="b2b-map-location-parts">
         ${driverRows.length ? driverRows.map((component) => {
@@ -17400,12 +17537,12 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
               <small>${escapeHtml(`노출 ${fmtNumber(cluster.itemCount)} · 예약 ${Number.isFinite(cluster.salesRate) ? fmtRate(cluster.salesRate) : "대기"} · 매출표본 ${fmtNumber(cluster.revenueSampleCount || 0)}`)}</small>
             </span>
           `).join("")
-          : `<span>클러스터 대기</span>`}
+          : `<span>경쟁권 대기</span>`}
       </div>
       ${clusterDetailRows.length ? `
         <div class="b2b-map-cluster-detail">
           <div class="b2b-map-cluster-detail-head">
-            <strong>클러스터 점수 상세</strong>
+            <strong>주요 경쟁권 상세</strong>
             <small>노출 밀도 · 예약율 · 매출 표본 · 검색 수요 · 노출권 적합도 기준</small>
           </div>
           ${clusterDetailRows.map((cluster) => `

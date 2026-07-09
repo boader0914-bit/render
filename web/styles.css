@@ -10618,6 +10618,35 @@ a.platform-row:hover {
   background: linear-gradient(90deg, #fb7185, #f59e0b);
 }
 
+.b2b-map-location-conclusion {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d5e3f7;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .74);
+  padding: 11px;
+}
+
+.b2b-map-location-conclusion span,
+.b2b-map-location-conclusion small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-map-location-conclusion strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
 .b2b-map-location-parts {
   min-width: 0;
   display: grid;
@@ -13456,11 +13485,17 @@ a.platform-row:hover {
   background: linear-gradient(135deg, #f1fdf8 0%, #ffffff 100%);
 }
 
+.b2b-location-score.good {
+  border-color: #c7dcff;
+  background: linear-gradient(135deg, #f5f9ff 0%, #ffffff 100%);
+}
+
 .b2b-location-score.watch {
   border-color: #fedf89;
   background: linear-gradient(135deg, #fffbeb 0%, #ffffff 100%);
 }
 
+.b2b-location-score.hot,
 .b2b-location-score.caution,
 .b2b-location-score.pending {
   border-color: #fecaca;
@@ -13538,8 +13573,68 @@ a.platform-row:hover {
 }
 
 .b2b-location-score.caution .b2b-location-score-bar i,
+.b2b-location-score.hot .b2b-location-score-bar i,
 .b2b-location-score.pending .b2b-location-score-bar i {
   background: linear-gradient(90deg, #fb7185, #f59e0b);
+}
+
+.b2b-location-conclusion {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, .62fr);
+  gap: 10px;
+  align-items: stretch;
+  border: 1px solid #d5e3f7;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, .76);
+  padding: 12px;
+}
+
+.b2b-location-conclusion > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.b2b-location-conclusion span,
+.b2b-location-conclusion p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.b2b-location-conclusion strong {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.b2b-location-conclusion > div:last-child {
+  min-width: 0;
+  display: flex;
+  align-content: flex-start;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.b2b-location-conclusion > div:last-child span {
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 5px 9px;
+  color: #344054;
+  white-space: normal;
 }
 
 .b2b-location-driver-grid {
@@ -14473,6 +14568,35 @@ a.platform-row:hover {
   font-size: 13px;
   font-weight: 950;
   line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.b2b-interest-lodge-location {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d5e3f7;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .74);
+  padding: 9px;
+}
+
+.b2b-interest-lodge-location span,
+.b2b-interest-lodge-location small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-interest-lodge-location strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.18;
   overflow-wrap: anywhere;
 }
 
@@ -18428,6 +18552,7 @@ body.role-b2b .b2b-room-segment-panel,
 body.role-b2b .b2b-room-segment-row,
 body.role-b2b .b2b-interest-lodge-card,
 body.role-b2b .b2b-interest-lodge-metrics div,
+body.role-b2b .b2b-interest-lodge-location,
 body.role-b2b .b2b-interest-lodge-limit,
 body.role-b2b .report-channel-grid div,
 body.role-b2b .company-insight-grid div,
@@ -18595,6 +18720,7 @@ body.role-b2b .b2b-my-lodge-checks label,
 body.role-b2b .b2b-room-segment-head strong,
 body.role-b2b .b2b-interest-lodge-card-head strong,
 body.role-b2b .b2b-interest-lodge-metrics strong,
+body.role-b2b .b2b-interest-lodge-location strong,
 body.role-b2b .b2b-interest-lodge-limit strong {
   color: var(--ink);
 }
@@ -18613,6 +18739,8 @@ body.role-b2b .b2b-room-segment-row span,
 body.role-b2b .b2b-interest-lodge-card-head span,
 body.role-b2b .b2b-interest-lodge-card-head small,
 body.role-b2b .b2b-interest-lodge-metrics span,
+body.role-b2b .b2b-interest-lodge-location span,
+body.role-b2b .b2b-interest-lodge-location small,
 body.role-b2b .b2b-interest-lodge-limit span {
   color: var(--muted);
 }
@@ -18668,7 +18796,9 @@ body.role-b2b .b2b-my-lodge-cards article.strong,
 body.role-b2b .b2b-my-lodge-cards article.good,
 body.role-b2b .b2b-my-lodge-row.mine,
 body.role-b2b .b2b-my-lodge-row.strong,
-body.role-b2b .b2b-my-lodge-row.good {
+body.role-b2b .b2b-my-lodge-row.good,
+body.role-b2b .b2b-interest-lodge-location.strong,
+body.role-b2b .b2b-interest-lodge-location.good {
   border-color: rgba(52, 211, 153, .42);
   background:
     linear-gradient(135deg, rgba(52, 211, 153, .15), rgba(52, 211, 153, .05)),
@@ -18676,7 +18806,8 @@ body.role-b2b .b2b-my-lodge-row.good {
 }
 
 body.role-b2b .b2b-my-lodge-cards article.watch,
-body.role-b2b .b2b-my-lodge-row.watch {
+body.role-b2b .b2b-my-lodge-row.watch,
+body.role-b2b .b2b-interest-lodge-location.watch {
   border-color: rgba(251, 191, 36, .42);
   background:
     linear-gradient(135deg, rgba(251, 191, 36, .14), rgba(251, 191, 36, .04)),
@@ -18684,7 +18815,8 @@ body.role-b2b .b2b-my-lodge-row.watch {
 }
 
 body.role-b2b .b2b-my-lodge-cards article.hot,
-body.role-b2b .b2b-my-lodge-row.hot {
+body.role-b2b .b2b-my-lodge-row.hot,
+body.role-b2b .b2b-interest-lodge-location.hot {
   border-color: rgba(251, 113, 133, .42);
   background:
     linear-gradient(135deg, rgba(251, 113, 133, .13), rgba(251, 113, 133, .04)),
@@ -18747,6 +18879,7 @@ body.role-b2b .b2b-map-region-rank strong,
 body.role-b2b .b2b-map-radius-list > div strong,
 body.role-b2b .b2b-map-radius-list button strong,
 body.role-b2b .b2b-map-location-parts strong,
+body.role-b2b .b2b-map-location-conclusion strong,
 body.role-b2b .demand-metric-grid strong,
 body.role-b2b .demand-signal-card strong,
 body.role-b2b .demand-rule-box strong,
@@ -18940,6 +19073,8 @@ body.role-b2b .b2b-map-radius-list button small,
 body.role-b2b .b2b-map-location-head small,
 body.role-b2b .b2b-map-location-parts span,
 body.role-b2b .b2b-map-location-parts small,
+body.role-b2b .b2b-map-location-conclusion span,
+body.role-b2b .b2b-map-location-conclusion small,
 body.role-b2b .b2b-map-location-basis span {
   color: var(--muted);
 }
@@ -19053,6 +19188,7 @@ body.role-b2b .b2b-map-cluster-row span,
 body.role-b2b .b2b-map-location-score,
 body.role-b2b .b2b-map-location-head em,
 body.role-b2b .b2b-map-location-parts div,
+body.role-b2b .b2b-map-location-conclusion,
 body.role-b2b .b2b-map-location-basis span,
 body.role-b2b .b2b-map-cluster-detail,
 body.role-b2b .b2b-map-cluster-card,
@@ -19097,6 +19233,7 @@ body.role-b2b .b2b-map-score-parts i {
 }
 
 body.role-b2b .b2b-map-location-score.strong,
+body.role-b2b .b2b-map-location-conclusion.strong,
 body.role-b2b .b2b-map-location-parts div.strong,
 body.role-b2b .b2b-map-location-parts div.good {
   border-color: rgba(52, 211, 153, .42);
@@ -19106,6 +19243,8 @@ body.role-b2b .b2b-map-location-parts div.good {
 }
 
 body.role-b2b .b2b-map-location-score.watch,
+body.role-b2b .b2b-map-location-conclusion.watch,
+body.role-b2b .b2b-map-location-conclusion.good,
 body.role-b2b .b2b-map-location-parts div.watch {
   border-color: rgba(251, 191, 36, .42);
   background:
@@ -19114,6 +19253,7 @@ body.role-b2b .b2b-map-location-parts div.watch {
 }
 
 body.role-b2b .b2b-map-location-score.hot,
+body.role-b2b .b2b-map-location-conclusion.hot,
 body.role-b2b .b2b-map-location-parts div.hot {
   border-color: rgba(251, 113, 133, .42);
   background:
@@ -19246,6 +19386,8 @@ body.role-b2b .b2b-detail-pack {
 body.role-b2b .b2b-simple-card,
 body.role-b2b .b2b-simple-next button,
 body.role-b2b .b2b-location-score-main > div,
+body.role-b2b .b2b-location-conclusion,
+body.role-b2b .b2b-location-conclusion > div:last-child span,
 body.role-b2b .b2b-location-driver-grid article,
 body.role-b2b .b2b-location-basis span,
 body.role-b2b .b2b-detail-pack summary::after {
@@ -19262,6 +19404,7 @@ body.role-b2b .b2b-simple-card strong,
 body.role-b2b .b2b-simple-next > strong,
 body.role-b2b .b2b-simple-next button span,
 body.role-b2b .b2b-location-score-main strong,
+body.role-b2b .b2b-location-conclusion strong,
 body.role-b2b .b2b-location-driver-grid strong,
 body.role-b2b .b2b-detail-pack summary span {
   color: var(--ink);
@@ -19277,6 +19420,9 @@ body.role-b2b .b2b-simple-next small,
 body.role-b2b .b2b-location-score-main span,
 body.role-b2b .b2b-location-score-main small,
 body.role-b2b .b2b-location-score-main p,
+body.role-b2b .b2b-location-conclusion span,
+body.role-b2b .b2b-location-conclusion p,
+body.role-b2b .b2b-location-conclusion > div:last-child span,
 body.role-b2b .b2b-location-driver-grid span,
 body.role-b2b .b2b-location-driver-grid small,
 body.role-b2b .b2b-location-basis span,
@@ -19294,6 +19440,9 @@ body.role-b2b .b2b-simple-card.good,
 body.role-b2b .b2b-simple-next button.strong,
 body.role-b2b .b2b-simple-next button.good,
 body.role-b2b .b2b-location-score.strong,
+body.role-b2b .b2b-location-score.good,
+body.role-b2b .b2b-location-conclusion.strong,
+body.role-b2b .b2b-location-conclusion.good,
 body.role-b2b .b2b-location-driver-grid article.strong {
   border-color: rgba(52, 211, 153, .42);
   background:
@@ -19307,6 +19456,7 @@ body.role-b2b .b2b-location-driver-grid article.strong {
 body.role-b2b .b2b-simple-card.watch,
 body.role-b2b .b2b-simple-next button.watch,
 body.role-b2b .b2b-location-score.watch,
+body.role-b2b .b2b-location-conclusion.watch,
 body.role-b2b .b2b-location-driver-grid article.weak,
 body.role-b2b .b2b-location-driver-grid article.risk {
   border-color: rgba(251, 191, 36, .42);
@@ -19326,6 +19476,8 @@ body.role-b2b .b2b-location-driver-grid article.mid {
 }
 
 body.role-b2b .b2b-location-score.caution,
+body.role-b2b .b2b-location-score.hot,
+body.role-b2b .b2b-location-conclusion.hot,
 body.role-b2b .b2b-location-score.pending {
   border-color: rgba(251, 113, 133, .42);
   background:
@@ -20836,6 +20988,14 @@ body.role-b2b .structure-action-list li::before {
   .b2b-location-score-main {
     grid-template-columns: 1fr;
     gap: 10px;
+  }
+
+  .b2b-location-conclusion {
+    grid-template-columns: 1fr;
+  }
+
+  .b2b-location-conclusion > div:last-child {
+    justify-content: flex-start;
   }
 
   .b2b-location-score-main > div {
