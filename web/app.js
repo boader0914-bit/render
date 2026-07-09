@@ -1803,7 +1803,7 @@ function detectLodgingCategoryKey(value = "") {
   if (/풀빌라|개별수영장|온수풀|인피니티풀/.test(text)) return "poolVilla";
   if (/카라반|캠핑카|트레일러/.test(text)) return "caravan";
   if (/글램핑|글램핑장|글램핑캠핑장/.test(text)) return "glamping";
-  if (/야영장|캠핑장|오토캠핑|캠핑사이트|캠핑존|파쇄석|차박/.test(text)) return "campground";
+  if (/야영장|캠핑장|오토캠핑|캠핑사이트|캠핑존|캠핑|파쇄석|차박/.test(text)) return "campground";
   if (/독채|한옥|별채|프라이빗스테이|프라이빗숙소/.test(text)) return "privateStay";
   if (/펜션|키즈펜션|스파펜션/.test(text)) return "pension";
   if (/모텔|무인텔/.test(text)) return "motel";
@@ -1814,6 +1814,8 @@ function detectLodgingCategoryKey(value = "") {
 function activeLodgingCategoryProfile(data = state.data || {}) {
   const explicit = data?.run?.lodgingCategoryKey || data?.lodgingCategoryKey || data?.categoryKey;
   if (explicit) return lodgingCategoryProfile(explicit);
+  const keywordCategory = detectLodgingCategoryKey(data?.run?.keyword || activeKeyword());
+  if (keywordCategory !== DEFAULT_LODGING_CATEGORY_KEY) return lodgingCategoryProfile(keywordCategory);
   return lodgingCategoryProfile(detectLodgingCategoryKey(lodgingCategorySearchText(data) || activeKeyword()));
 }
 
@@ -23472,8 +23474,12 @@ async function loadB2BHistoryRun(runId) {
   state.b2bSearchRange = allowedB2BSearchRange(String(data.run?.detailRankRanges || "").includes("20") ? "1-20" : "1-10");
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) els.b2bSearchInput.value = state.b2bSearchQuery;
   if (els.b2bSearchRangeInput) els.b2bSearchRangeInput.value = state.b2bSearchRange;
+  state.b2bHistoryExpanded = false;
   state.activeTab = "report";
   renderAll();
+  window.requestAnimationFrame(() => {
+    document.querySelector(".b2b-report-first")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   setStatus("준비");
 }
 
