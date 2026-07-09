@@ -33,6 +33,7 @@ const state = {
     salesGate: "all"
   },
   adminSelectedRegionKey: "",
+  adminRegionReviewFilter: "all",
   adminRegionCompanyFilter: "priority",
   adminRegionCompanyQuery: "",
   adminRegionCompanySort: "priority",
@@ -15948,6 +15949,66 @@ function adminRegionEffectiveReview(region = {}) {
   return meta ? { ...meta, ...review, label: review.label || meta.label, tone: review.tone || meta.tone, fallbackNote: meta.note } : review;
 }
 
+function adminRegionPublicStatus(region = {}) {
+  const review = adminRegionEffectiveReview(region);
+  const status = String(review?.status || "").trim();
+  if (status === "public_ready") {
+    return { key: "public_ready", label: "B2B 공개 가능", tone: "good", note: "지역 기준 확인" };
+  }
+  if (status === "review_needed") {
+    return { key: "review_needed", label: "검토 표시", tone: "watch", note: "B2B 기준 검토 중" };
+  }
+  if (status === "collect_needed" || status === "hold") {
+    return { key: "collect_needed", label: "보강/보류", tone: "needs", note: status === "hold" ? "B2B 보류 기준" : "B2B 보강 기준" };
+  }
+  return { key: "unreviewed", label: "미감수", tone: "neutral", note: "공개 기준 저장 전" };
+}
+
+function adminRegionReviewFilterOptions(regions = []) {
+  const count = (key) => regions.filter((region) => key === "all" || adminRegionPublicStatus(region).key === key).length;
+  return [
+    { key: "all", label: "전체", count: count("all"), note: "전체 지역" },
+    { key: "public_ready", label: "공개 가능", count: count("public_ready"), note: "B2B 확정 표현" },
+    { key: "review_needed", label: "검토", count: count("review_needed"), note: "보수적 표현" },
+    { key: "collect_needed", label: "보강/보류", count: count("collect_needed"), note: "확정 표현 제한" },
+    { key: "unreviewed", label: "미감수", count: count("unreviewed"), note: "상태 저장 전" }
+  ];
+}
+
+function adminRegionSelectedReviewFilter(regions = []) {
+  const options = adminRegionReviewFilterOptions(regions);
+  const selected = options.find((option) => option.key === state.adminRegionReviewFilter) || options[0];
+  state.adminRegionReviewFilter = selected.key;
+  return selected;
+}
+
+function adminRegionFilteredRegions(regions = []) {
+  const selected = adminRegionSelectedReviewFilter(regions);
+  if (selected.key === "all") return regions;
+  return regions.filter((region) => adminRegionPublicStatus(region).key === selected.key);
+}
+
+function adminRegionReviewFilterBar(regions = []) {
+  const selected = adminRegionSelectedReviewFilter(regions);
+  const options = adminRegionReviewFilterOptions(regions);
+  return `
+    <div class="admin-region-review-filterbar" aria-label="지역 공개 상태 필터">
+      <div>
+        <strong>지역 공개 상태</strong>
+        <small>${escapeHtml(selected.note)} · ${fmtNumber(selected.count)}개 표시</small>
+      </div>
+      <div>
+        ${options.map((option) => `
+          <button type="button" class="${option.key === selected.key ? "active" : ""}" data-admin-region-review-filter="${escapeHtml(option.key)}">
+            <span>${escapeHtml(option.label)}</span>
+            <strong>${fmtNumber(option.count)}</strong>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function adminRegionalOpsSource(master = {}) {
   const masterOps = master.adminRegionalOperations || {};
   const runOps = state.data?.adminRegionalOperations || null;
@@ -15960,13 +16021,14 @@ function adminRegionalOpsSource(master = {}) {
 }
 
 function adminRegionalSummaryCells(summary = {}) {
+  const reviewWorkCount = Number(summary.adminReviewNeededRegionCount || 0) + Number(summary.adminCollectNeededRegionCount || 0);
   return [
     ["관리 지역", summary.regionCount || 0, "지역 카드 후보"],
     ["업체 마스터", summary.companyCount || 0, "지역 분류 완료"],
-    ["사전 준비", summary.preflightReadyRegionCount || summary.publicReadyRegionCount || 0, "지역카드 공개 후보"],
+    ["B2B 공개", summary.adminPublicReadyRegionCount || summary.preflightReadyRegionCount || summary.publicReadyRegionCount || 0, "지역 기준 확인"],
+    ["검토/보강", reviewWorkCount, "공개 전 확인"],
     ["관리자 감수", summary.regionReviewCount || 0, "지역 상태 저장"],
     ["즉시 보강", summary.urgentMaintenanceRegionCount || 0, "오늘 확인"],
-    ["주간 유지", summary.weeklyMaintenanceRegionCount || 0, "주 1회 점검"],
     ["지역 밖 노출", summary.outsideExposureCount || 0, "검색 반경 경쟁"]
   ];
 }
@@ -17342,6 +17404,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
 
 function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
   const review = adminRegionEffectiveReview(region);
+  const publicStatus = adminRegionPublicStatus(region);
   const statusTone = review ? (review.tone === "good" ? "good" : (review.tone === "watch" ? "watch" : "needs")) : adminRegionStatusTone(region.status || {});
   const maintenance = adminRegionMaintenanceProfile(region, []);
   const reasons = Array.isArray(region.reviewReasons) ? region.reviewReasons.slice(0, 3) : [];
@@ -17366,6 +17429,7 @@ function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
       <div class="admin-region-card-foot">
         <span>${averageRevenue ? `평균 ${fmtWon(averageRevenue)}` : "매출 표본 대기"}</span>
         <span>${rate !== null && rate !== undefined ? `예약율 ${fmtRate(rate)}` : "예약율 대기"}</span>
+        <span class="${escapeHtml(publicStatus.tone)}">${escapeHtml(publicStatus.label)}</span>
         <span>${escapeHtml(review ? `감수 ${review.label}` : (maintenance.nextCycle || "점검 대기"))}</span>
       </div>
       ${reasons.length ? `
@@ -17472,7 +17536,9 @@ function adminRunRegionalOpsHtml(runOps = null) {
 
 function adminRegionalOperationsPanel(master = {}) {
   const { masterOps, runOps, summary, regions } = adminRegionalOpsSource(master);
-  const topRegions = regions.slice(0, 9);
+  const filteredRegions = adminRegionFilteredRegions(regions);
+  const topRegions = filteredRegions.slice(0, 9);
+  const selectedFilter = adminRegionSelectedReviewFilter(regions);
   const selectedRegion = adminSelectedRegion(master);
   const generatedAt = masterOps.generatedAt ? compactDateTime(masterOps.generatedAt) : "";
   return `
@@ -17497,9 +17563,10 @@ function adminRegionalOperationsPanel(master = {}) {
           </div>
           ${adminLocationScoreReviewQueuePanel(master)}
           ${adminRegionalMaintenanceBoard(regions, selectedRegion?.regionKey || "")}
+          ${adminRegionReviewFilterBar(regions)}
           <div class="admin-region-card-grid">
             ${topRegions.length ? topRegions.map((region) => adminRegionCardHtml(region, selectedRegion?.regionKey || "")).join("") : `
-              <p class="empty">지역 운영 데이터가 아직 없습니다. 업체 마스터 백필 또는 수집 결과 반영 후 확인할 수 있습니다.</p>
+              <p class="empty">${escapeHtml(selectedFilter.label)} 조건에 해당하는 지역이 없습니다.</p>
             `}
           </div>
           <p class="admin-regional-rule">
@@ -24562,6 +24629,15 @@ function bindEvents() {
     }
     if (event.target.closest("[data-b2b-my-lodge-clear]")) {
       clearB2BMyLodgeBenchmark();
+      return;
+    }
+    const adminRegionReviewFilter = event.target.closest("[data-admin-region-review-filter]");
+    if (adminRegionReviewFilter) {
+      state.adminRegionReviewFilter = adminRegionReviewFilter.dataset.adminRegionReviewFilter || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-region-review-filterbar")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
       return;
     }
     const adminRegionButton = event.target.closest("[data-admin-region-key]");
