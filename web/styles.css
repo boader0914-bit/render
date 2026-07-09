@@ -10106,7 +10106,8 @@ a.platform-row:hover {
   font-weight: 900;
 }
 
-.company-manual-form input {
+.company-manual-form input,
+.company-manual-form textarea {
   width: 100%;
   min-width: 0;
   border: 1px solid #dbe4f0;
@@ -10116,6 +10117,23 @@ a.platform-row:hover {
   padding: 10px;
   font-size: 14px;
   font-weight: 850;
+}
+
+.company-manual-form textarea {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.company-manual-segments {
+  grid-column: 1 / -1;
+}
+
+.company-manual-segments small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
 }
 
 .company-manual-actions {

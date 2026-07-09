@@ -2010,9 +2010,38 @@ function b2bInterestLodgeSegmentHasInput(row = {}) {
   );
 }
 
+function sanitizeManualCorrectionRoomSegments(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((row) => sanitizeB2BInterestLodgeSegment(row))
+    .filter((row) => b2bInterestLodgeSegmentHasInput(row))
+    .slice(0, B2B_INTEREST_LODGE_SEGMENT_LIMIT);
+}
+
+function manualCorrectionRoomSegments(correction = {}) {
+  if (!correction || correction.active === false) return [];
+  return sanitizeManualCorrectionRoomSegments(correction.roomSegments);
+}
+
+function manualCorrectionRoomSegmentTotal(correction = {}) {
+  return manualCorrectionRoomSegments(correction)
+    .reduce((sum, row) => sum + Number(row.count || 0), 0);
+}
+
+function manualCorrectionLodgingBasisTotal(correction = {}) {
+  if (!correction || correction.active === false) return 0;
+  const explicit = Number(correction.lodgingBasisTotal);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.round(explicit);
+  const segmentTotal = manualCorrectionRoomSegmentTotal(correction);
+  return segmentTotal > 0 ? Math.round(segmentTotal) : 0;
+}
+
 function sanitizeB2BInterestLodge(lodge = {}) {
   const now = new Date().toISOString();
   const roomSegments = (Array.isArray(lodge.roomSegments) ? lodge.roomSegments : [])
+    .map((row) => sanitizeB2BInterestLodgeSegment(row))
+    .filter((row) => b2bInterestLodgeSegmentHasInput(row))
+    .slice(0, B2B_INTEREST_LODGE_SEGMENT_LIMIT);
+  const verifiedRoomSegments = (Array.isArray(lodge.verifiedRoomSegments) ? lodge.verifiedRoomSegments : [])
     .map((row) => sanitizeB2BInterestLodgeSegment(row))
     .filter((row) => b2bInterestLodgeSegmentHasInput(row))
     .slice(0, B2B_INTEREST_LODGE_SEGMENT_LIMIT);
@@ -2064,6 +2093,7 @@ function sanitizeB2BInterestLodge(lodge = {}) {
     verifiedCorrectionSource: sanitizeMemberText(lodge.verifiedCorrectionSource, 80),
     verifiedCorrectionNote: sanitizeMemberText(lodge.verifiedCorrectionNote, 180),
     verifiedCorrectionUpdatedAt: sanitizeMemberText(lodge.verifiedCorrectionUpdatedAt, 40),
+    verifiedRoomSegments,
     manualAdjusted: lodge.manualAdjusted === true,
     manualAdjustedAt: sanitizeMemberText(lodge.manualAdjustedAt, 40),
     searchRegion: sanitizeMemberText(lodge.searchRegion, 120),
@@ -2086,7 +2116,8 @@ function b2bInterestLodgeHasInput(lodge = {}) {
     sanitizeInterestLodgeNumberText(lodge.fridayPrice) ||
     sanitizeInterestLodgeNumberText(lodge.saturdayPrice) ||
     sanitizeInterestLodgeNumberText(lodge.sundayPrice) ||
-    (Array.isArray(lodge.roomSegments) && lodge.roomSegments.some((row) => b2bInterestLodgeSegmentHasInput(row)))
+    (Array.isArray(lodge.roomSegments) && lodge.roomSegments.some((row) => b2bInterestLodgeSegmentHasInput(row))) ||
+    (Array.isArray(lodge.verifiedRoomSegments) && lodge.verifiedRoomSegments.some((row) => b2bInterestLodgeSegmentHasInput(row)))
   );
 }
 
@@ -4933,7 +4964,7 @@ function b2bMyLodgeCandidateItems(data = {}, targetName = "") {
 function publicB2BMyLodgeVerification(item = {}) {
   const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || item.manualCorrection || {};
   if (!manualCorrectionHasValue(correction)) return {};
-  const lodging = Number(correction.lodgingBasisTotal);
+  const lodging = manualCorrectionLodgingBasisTotal(correction);
   const dayUse = Number(correction.dayUseBasisTotal);
   return {
     verifiedCorrectionApplied: true,
@@ -4942,7 +4973,8 @@ function publicB2BMyLodgeVerification(item = {}) {
     verifiedCorrectionLabel: "운영 검수값",
     verifiedCorrectionSource: "company_master",
     verifiedCorrectionNote: sanitizeMemberText(correction.note || "", 180),
-    verifiedCorrectionUpdatedAt: sanitizeMemberText(correction.updatedAt || "", 40)
+    verifiedCorrectionUpdatedAt: sanitizeMemberText(correction.updatedAt || "", 40),
+    verifiedRoomSegments: manualCorrectionRoomSegments(correction)
   };
 }
 
@@ -7196,17 +7228,15 @@ function parseReservationRateDetail(detail, checkIn) {
 
 function manualCorrectionHasValue(correction = {}) {
   if (!correction || correction.active === false) return false;
-  const lodging = Number(correction.lodgingBasisTotal);
-  const dayUse = Number(correction.dayUseBasisTotal);
   const note = String(correction.note || "").trim();
-  return manualCorrectionHasBasis(correction) || note.length > 0;
+  return manualCorrectionHasBasis(correction) || manualCorrectionRoomSegments(correction).length > 0 || note.length > 0;
 }
 
 function manualCorrectionHasBasis(correction = {}) {
   if (!correction || correction.active === false) return false;
-  const lodging = Number(correction.lodgingBasisTotal);
+  const lodging = manualCorrectionLodgingBasisTotal(correction);
   const dayUse = Number(correction.dayUseBasisTotal);
-  return (Number.isFinite(lodging) && lodging > 0)
+  return lodging > 0
     || (Number.isFinite(dayUse) && dayUse > 0);
 }
 
@@ -7930,8 +7960,11 @@ function applyManualBasisToSalesSummary(summary = {}, basisTotal) {
 
 function salesSignalWithManualCorrection(signal = {}, correction = {}) {
   if (!manualCorrectionHasBasis(correction)) return signal || {};
-  const lodging = applyManualBasisToSalesSummary(signal.lodging || {}, correction.lodgingBasisTotal);
-  const dayUse = applyManualBasisToSalesSummary(signal.dayUse || {}, correction.dayUseBasisTotal);
+  const lodgingBasisTotal = manualCorrectionLodgingBasisTotal(correction);
+  const dayUseBasisTotal = Number(correction.dayUseBasisTotal);
+  const dayUseBasis = Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : 0;
+  const lodging = applyManualBasisToSalesSummary(signal.lodging || {}, lodgingBasisTotal);
+  const dayUse = applyManualBasisToSalesSummary(signal.dayUse || {}, dayUseBasis);
   const applied = Boolean(lodging.manualCorrectionApplied || dayUse.manualCorrectionApplied);
   return {
     ...signal,
@@ -7943,8 +7976,9 @@ function salesSignalWithManualCorrection(signal = {}, correction = {}) {
     stockVariance: Boolean(signal.stockVariance || lodging.stockVariance || dayUse.stockVariance),
     manualCorrectionApplied: applied,
     manualCorrection: {
-      lodgingBasisTotal: correction.lodgingBasisTotal || null,
-      dayUseBasisTotal: correction.dayUseBasisTotal || null,
+      lodgingBasisTotal: lodgingBasisTotal || null,
+      dayUseBasisTotal: dayUseBasis || null,
+      roomSegments: manualCorrectionRoomSegments(correction),
       note: correction.note || "",
       updatedAt: correction.updatedAt || ""
     },
@@ -7968,8 +8002,9 @@ function companyInventoryWithManualCorrection(company = {}) {
       salesSignal: correctedSignal,
       manualCorrectionApplied: true,
       correctionBasis: {
-        lodgingBasisTotal: correction.lodgingBasisTotal || null,
+        lodgingBasisTotal: manualCorrectionLodgingBasisTotal(correction) || null,
         dayUseBasisTotal: correction.dayUseBasisTotal || null,
+        roomSegments: manualCorrectionRoomSegments(correction),
         note: correction.note || "",
         updatedAt: correction.updatedAt || ""
       },
@@ -7986,8 +8021,11 @@ function companyCorrectionStatus(company = {}, inventory = null) {
   const latest = (inventory || company.inventory || {}).latest || {};
   if (manualCorrectionHasValue(correction)) {
     const parts = [];
-    if (correction.lodgingBasisTotal) parts.push(`숙박 운영 ${correction.lodgingBasisTotal}개`);
+    const lodgingBasisTotal = manualCorrectionLodgingBasisTotal(correction);
+    const roomSegmentCount = manualCorrectionRoomSegments(correction).length;
+    if (lodgingBasisTotal) parts.push(`숙박 운영 ${lodgingBasisTotal}개`);
     if (correction.dayUseBasisTotal) parts.push(`데이유즈 운영 ${correction.dayUseBasisTotal}회`);
+    if (roomSegmentCount) parts.push(`객실종류 ${roomSegmentCount}개`);
     return {
       key: "admin_override",
       label: "관리자 보정",
@@ -9041,7 +9079,7 @@ function applyCompanyManualCorrection(item, company) {
     rawDayUseWeeklyBasisTotal: item.dayUseWeeklyBasisTotal ?? null,
     rawDayUseTotalStock: item.dayUseTotalStock ?? null
   };
-  const lodgingBasis = Number(correction.lodgingBasisTotal);
+  const lodgingBasis = manualCorrectionLodgingBasisTotal(correction);
   const dayUseBasis = Number(correction.dayUseBasisTotal);
   if (Number.isFinite(lodgingBasis) && lodgingBasis > 0) {
     const operating = Math.round(lodgingBasis);
@@ -9308,10 +9346,12 @@ async function saveCompanyManualCorrection(payload = {}) {
   const savedAt = new Date().toISOString();
   const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
   const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
+  const roomSegments = sanitizeManualCorrectionRoomSegments(payload.roomSegments);
   const nextCorrection = {
     active: true,
     lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
     dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
+    roomSegments,
     note: String(payload.note || "").trim(),
     source: "admin",
     updatedAt: savedAt
@@ -9329,6 +9369,7 @@ async function saveCompanyManualCorrection(payload = {}) {
       action: shouldClear ? "clear" : "save",
       lodgingBasisTotal: company.manualCorrection?.lodgingBasisTotal || null,
       dayUseBasisTotal: company.manualCorrection?.dayUseBasisTotal || null,
+      roomSegmentCount: company.manualCorrection?.roomSegments?.length || 0,
       note: company.manualCorrection?.note || ""
     }
   ].slice(-30);
@@ -11525,8 +11566,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-b2b-verified-priority"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-b2b-verified-priority"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-room-segment-correction"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-room-segment-correction"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
