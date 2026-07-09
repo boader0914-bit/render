@@ -8252,6 +8252,14 @@ function b2bInterestLodgeFingerprint(interestLodges = []) {
         facilities: lodge.facilities,
         naverConnected: lodge.naverConnected,
         otaConnected: lodge.otaConnected,
+        collectionSource: lodge.collectionSource,
+        collectionPrecisionGrade: lodge.collectionPrecisionGrade,
+        collectionPrecisionLabel: lodge.collectionPrecisionLabel,
+        collectionPrecisionScore: lodge.collectionPrecisionScore,
+        collectionPrecisionReasons: lodge.collectionPrecisionReasons,
+        collectionPrecisionWarnings: lodge.collectionPrecisionWarnings,
+        collectionBasis: lodge.collectionBasis,
+        manualAdjusted: lodge.manualAdjusted,
         registeredAt: lodge.registeredAt
       }))
   );
@@ -8336,6 +8344,28 @@ function formatB2BWonInput(input) {
 const B2B_MY_LODGE_SEGMENT_LIMIT = 8;
 const B2B_INTEREST_LODGE_LIMIT = 2;
 const B2B_MY_LODGE_PRICE_KEYS = ["weekdayPrice", "fridayPrice", "saturdayPrice", "sundayPrice"];
+const B2B_MY_LODGE_COLLECTION_META_KEYS = [
+  "collectedAt",
+  "collectionRunId",
+  "collectionSource",
+  "collectionStatus",
+  "collectionPrecisionGrade",
+  "collectionPrecisionLabel",
+  "collectionPrecisionTone",
+  "collectionPrecisionScore",
+  "collectionPrecisionReasons",
+  "collectionPrecisionWarnings",
+  "collectionBasis",
+  "manualAdjusted",
+  "manualAdjustedAt",
+  "searchRegion",
+  "addressRegion",
+  "regionBoundaryStatus",
+  "regionBoundaryLabel",
+  "regionBoundaryDetail",
+  "outsideSearchRegion",
+  "address"
+];
 
 function b2bMyLodgeBlankSegment() {
   return {
@@ -8394,6 +8424,77 @@ function b2bMyLodgeSegmentInputRows(draft = {}) {
   }
   const legacy = b2bMyLodgeLegacySegment(draft);
   return legacy ? [legacy] : [];
+}
+
+function b2bMyLodgeCollectionTextList(value, limit = 5) {
+  return (Array.isArray(value) ? value : String(value || "").split(/\s*[,·]\s*/))
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((item, index, list) => list.findIndex((other) => compactSearchText(other) === compactSearchText(item)) === index)
+    .slice(0, limit);
+}
+
+function b2bMyLodgeCollectionMetadata(draft = {}) {
+  return B2B_MY_LODGE_COLLECTION_META_KEYS.reduce((acc, key) => {
+    if (!Object.prototype.hasOwnProperty.call(draft, key)) return acc;
+    if (key === "collectionPrecisionReasons" || key === "collectionPrecisionWarnings") {
+      acc[key] = b2bMyLodgeCollectionTextList(draft[key], 5);
+    } else if (key === "manualAdjusted" || key === "outsideSearchRegion") {
+      acc[key] = Boolean(draft[key]);
+    } else if (key === "collectionPrecisionScore") {
+      const score = Math.round(b2bMyLodgeNumber(draft[key]));
+      if (score > 0) acc[key] = Math.min(100, score);
+    } else {
+      acc[key] = String(draft[key] || "").trim();
+    }
+    return acc;
+  }, {});
+}
+
+function b2bMyLodgeComparableSignature(value = {}) {
+  const rows = b2bMyLodgeSegmentInputRows(value)
+    .filter((row) => b2bMyLodgeSegmentHasInput(row))
+    .map((row) => ({
+      type: compactSearchText(row.type),
+      count: Math.round(b2bMyLodgeNumber(row.count)),
+      weekdayPrice: Math.round(b2bMyLodgeNumber(row.weekdayPrice)),
+      fridayPrice: Math.round(b2bMyLodgeNumber(row.fridayPrice)),
+      saturdayPrice: Math.round(b2bMyLodgeNumber(row.saturdayPrice)),
+      sundayPrice: Math.round(b2bMyLodgeNumber(row.sundayPrice))
+    }));
+  return JSON.stringify({
+    lodgingName: compactSearchText(value.lodgingName || ""),
+    roomCount: Math.round(b2bMyLodgeNumber(value.roomCount)),
+    dayUseCount: Math.round(b2bMyLodgeNumber(value.dayUseCount)),
+    facilities: compactSearchText(value.facilities || ""),
+    naverConnected: Boolean(value.naverConnected),
+    otaConnected: Boolean(value.otaConnected),
+    rows
+  });
+}
+
+function b2bMyLodgeWasManuallyAdjusted(previous = {}, next = {}) {
+  if (!previous.collectionSource && !previous.collectedAt) return false;
+  return b2bMyLodgeComparableSignature(previous) !== b2bMyLodgeComparableSignature(next);
+}
+
+function b2bMyLodgeCollectionPrecisionInfo(draft = {}) {
+  const label = String(draft.collectionPrecisionLabel || "").trim();
+  const source = String(draft.collectionSource || "").trim();
+  const visible = Boolean(label || source || draft.manualAdjusted);
+  return {
+    visible,
+    grade: String(draft.collectionPrecisionGrade || "").trim(),
+    label: label || (source ? "자동수집값" : draft.manualAdjusted ? "수동 보정값" : ""),
+    tone: String(draft.collectionPrecisionTone || (draft.manualAdjusted ? "strong" : "neutral")).trim() || "neutral",
+    score: Math.round(b2bMyLodgeNumber(draft.collectionPrecisionScore)),
+    reasons: b2bMyLodgeCollectionTextList(draft.collectionPrecisionReasons, 4),
+    warnings: b2bMyLodgeCollectionTextList(draft.collectionPrecisionWarnings, 3),
+    basis: String(draft.collectionBasis || draft.collectionStatus || "").trim(),
+    manualAdjusted: Boolean(draft.manualAdjusted),
+    collectedAt: draft.collectedAt || "",
+    manualAdjustedAt: draft.manualAdjustedAt || ""
+  };
 }
 
 function b2bMyLodgeDraftHasInput(draft = {}) {
@@ -8480,6 +8581,22 @@ function b2bNormalizeInterestLodge(lodge = {}) {
     collectionRunId: lodge.collectionRunId || "",
     collectionSource: lodge.collectionSource || "",
     collectionStatus: lodge.collectionStatus || "",
+    collectionPrecisionGrade: String(lodge.collectionPrecisionGrade || "").trim().slice(0, 12),
+    collectionPrecisionLabel: String(lodge.collectionPrecisionLabel || "").trim().slice(0, 60),
+    collectionPrecisionTone: String(lodge.collectionPrecisionTone || "").trim().slice(0, 20),
+    collectionPrecisionScore: Math.round(b2bMyLodgeNumber(lodge.collectionPrecisionScore)),
+    collectionPrecisionReasons: b2bMyLodgeCollectionTextList(lodge.collectionPrecisionReasons, 5),
+    collectionPrecisionWarnings: b2bMyLodgeCollectionTextList(lodge.collectionPrecisionWarnings, 5),
+    collectionBasis: String(lodge.collectionBasis || "").trim().slice(0, 220),
+    manualAdjusted: Boolean(lodge.manualAdjusted),
+    manualAdjustedAt: lodge.manualAdjustedAt || "",
+    searchRegion: String(lodge.searchRegion || "").trim().slice(0, 120),
+    addressRegion: String(lodge.addressRegion || "").trim().slice(0, 120),
+    regionBoundaryStatus: String(lodge.regionBoundaryStatus || "").trim().slice(0, 40),
+    regionBoundaryLabel: String(lodge.regionBoundaryLabel || "").trim().slice(0, 120),
+    regionBoundaryDetail: String(lodge.regionBoundaryDetail || "").trim().slice(0, 220),
+    outsideSearchRegion: Boolean(lodge.outsideSearchRegion),
+    address: String(lodge.address || "").trim().slice(0, 220),
     registeredAt: lodge.registeredAt || ""
   };
 }
@@ -8643,12 +8760,52 @@ function b2bCollectedSummaryTotal(summary = "", kind = "lodging") {
 function b2bNormalizeDailyStock(value, days = DEFAULT_BOOKING_DAYS, references = []) {
   const number = optionalNumber(value);
   if (!Number.isFinite(number) || number <= 0) return 0;
-  const refMax = Math.max(0, ...references.map((item) => optionalNumber(item)).filter((item) => Number.isFinite(item) && item > 0));
+  const refValues = references
+    .map((item) => optionalNumber(item))
+    .filter((item) => Number.isFinite(item) && item > 0);
+  const refMax = Math.max(0, ...refValues);
+  const refMin = refValues.length ? Math.min(...refValues) : 0;
+  if (days > 1 && refMin > 0 && number > refMin * 1.8) {
+    const divided = number / days;
+    if (divided > 0 && Math.abs(divided - refMin) <= Math.max(2, refMin * 0.35)) return divided;
+  }
   if (days > 1 && refMax > 0 && number > refMax * 1.8) {
     const divided = number / days;
     if (divided > 0 && Math.abs(divided - refMax) <= Math.max(2, refMax * 0.35)) return divided;
   }
   return number;
+}
+
+function b2bCollectedStockReferenceValues(item = {}, kind = "lodging") {
+  const days = b2bCollectedRunDays(item);
+  const summaryTotal = b2bCollectedSummaryTotal(item.productTypeSummary, kind);
+  const weeklyAverage = kind === "day"
+    ? (optionalNumber(item.dayUseWeeklyTotalStock) > 0 ? optionalNumber(item.dayUseWeeklyTotalStock) / days : 0)
+    : (optionalNumber(item.weeklyTotalStock) > 0 ? optionalNumber(item.weeklyTotalStock) / days : 0);
+  const candidates = kind === "day"
+    ? [
+        summaryTotal,
+        weeklyAverage,
+        item.manualDayUseBasisTotal,
+        item.dayUseTotalStock,
+        item.dayUseWeeklyOperatingTotal,
+        item.dayUseWeeklyBasisTotal,
+        item.dayUseWeeklyMaxTotal
+      ]
+    : [
+        summaryTotal,
+        weeklyAverage,
+        item.manualLodgingBasisTotal,
+        item.nightTotalStock,
+        item.totalRooms,
+        item.rawTotalStock,
+        item.weeklyOperatingTotal,
+        item.weeklyBasisTotal,
+        item.weeklyMaxTotal
+      ];
+  return candidates
+    .map((value) => optionalNumber(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
 }
 
 function b2bCollectedProductKind(row = {}) {
@@ -8712,15 +8869,35 @@ function b2bCollectedRepresentativePrice(values = []) {
 function b2bCollectedProductStockTotal(item = {}, kind = "lodging") {
   const rows = b2bCollectedProductRows(item, kind);
   if (!rows.length) return 0;
+  const days = b2bCollectedRunDays(item);
+  const stockReferences = b2bCollectedStockReferenceValues(item, kind);
   const byDate = new Map();
   rows.forEach((row) => {
     const dateKey = row.date || "basis";
     const total = optionalNumber(row.total ?? row.stock);
-    const resolved = Number.isFinite(total) && total > 0 ? total : (/객실별|객실상품/i.test(row.listType || item.listType || "") ? 1 : 0);
+    const resolved = Number.isFinite(total) && total > 0
+      ? b2bNormalizeDailyStock(total, days, stockReferences)
+      : (/객실별|객실상품/i.test(row.listType || item.listType || "") ? 1 : 0);
     if (resolved <= 0) return;
     byDate.set(dateKey, (byDate.get(dateKey) || 0) + resolved);
   });
-  return byDate.size ? Math.max(...byDate.values()) : 0;
+  const total = byDate.size ? Math.max(...byDate.values()) : 0;
+  const cap = b2bCollectedDailyStockCap(item, kind);
+  if (cap > 0 && total > cap * 1.8) return cap;
+  return total;
+}
+
+function b2bCollectedDailyStockCap(item = {}, kind = "lodging") {
+  const days = b2bCollectedRunDays(item);
+  const references = b2bCollectedStockReferenceValues(item, kind);
+  const normalized = references
+    .map((value) => b2bNormalizeDailyStock(value, days, references))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (!normalized.length) return 0;
+  const median = normalized[Math.floor(normalized.length / 2)];
+  const stable = normalized.filter((value) => value <= median * 1.5);
+  return Math.max(...(stable.length ? stable : normalized));
 }
 
 function b2bCollectedBaseRoomName(value = "") {
@@ -8773,6 +8950,8 @@ function b2bCompressCollectedSegments(segments = []) {
 function b2bCollectedProductSegments(item = {}) {
   const rows = b2bCollectedProductRows(item, "lodging");
   if (!rows.length) return [];
+  const days = b2bCollectedRunDays(item);
+  const stockReferences = b2bCollectedStockReferenceValues(item, "lodging");
   const byProduct = new Map();
   rows.forEach((row) => {
     const name = b2bCleanCollectedRoomName(b2bCollectedRoomNameFromRow(row));
@@ -8780,7 +8959,7 @@ function b2bCollectedProductSegments(item = {}) {
     const listType = row.listType || item.listType || "";
     const total = optionalNumber(row.total ?? row.stock);
     const count = Number.isFinite(total) && total > 0
-      ? total
+      ? b2bNormalizeDailyStock(total, days, stockReferences)
       : (/객실별|객실상품/i.test(listType) ? 1 : 0);
     const current = byProduct.get(key) || {
       type: name,
@@ -8799,7 +8978,7 @@ function b2bCollectedProductSegments(item = {}) {
     if (priceKey && Number.isFinite(price) && price > 0) current.prices[priceKey].push(price);
     byProduct.set(key, current);
   });
-  const segments = [...byProduct.values()]
+  const segments = b2bNormalizeCollectedSegmentCounts([...byProduct.values()]
     .map((row) => ({
       type: row.type,
       count: row.count > 0 ? String(Math.round(row.count)) : "",
@@ -8808,8 +8987,18 @@ function b2bCollectedProductSegments(item = {}) {
       saturdayPrice: b2bCollectedRepresentativePrice(row.prices.saturdayPrice),
       sundayPrice: b2bCollectedRepresentativePrice(row.prices.sundayPrice)
     }))
-    .filter((row) => b2bMyLodgeSegmentHasInput(row));
+    .filter((row) => b2bMyLodgeSegmentHasInput(row)), item);
   return b2bCompressCollectedSegments(segments);
+}
+
+function b2bNormalizeCollectedSegmentCounts(segments = [], item = {}) {
+  const cap = b2bCollectedDailyStockCap(item, "lodging");
+  if (segments.length <= 1 || cap <= 0) return segments;
+  const total = segments.reduce((sum, row) => sum + Math.round(b2bMyLodgeNumber(row.count)), 0);
+  if (total <= cap * 1.8) return segments;
+  const repeatedTotalRows = segments.filter((row) => b2bMyLodgeNumber(row.count) >= cap * 0.75).length;
+  if (repeatedTotalRows < Math.ceil(segments.length * 0.5)) return segments;
+  return segments.map((row) => ({ ...row, count: "" }));
 }
 
 function b2bCollectedRoomCount(item = {}) {
@@ -8817,7 +9006,7 @@ function b2bCollectedRoomCount(item = {}) {
   const summaryTotal = b2bCollectedSummaryTotal(item.productTypeSummary, "lodging");
   const weeklyTotalAverage = optionalNumber(item.weeklyTotalStock) > 0 ? optionalNumber(item.weeklyTotalStock) / days : 0;
   const productTotal = b2bCollectedProductStockTotal(item, "lodging");
-  const baseReferences = [summaryTotal, weeklyTotalAverage, productTotal].filter((value) => value > 0);
+  const baseReferences = b2bCollectedStockReferenceValues(item, "lodging");
   const directCandidates = [
     productTotal,
     summaryTotal,
@@ -8889,7 +9078,7 @@ function b2bCollectedDayUseCount(item = {}) {
   const summaryTotal = b2bCollectedSummaryTotal(item.productTypeSummary, "day");
   const weeklyTotalAverage = optionalNumber(item.dayUseWeeklyTotalStock) > 0 ? optionalNumber(item.dayUseWeeklyTotalStock) / days : 0;
   const productTotal = b2bCollectedProductStockTotal(item, "day");
-  const baseReferences = [summaryTotal, weeklyTotalAverage, productTotal, item.dayUseTotalStock].filter((value) => optionalNumber(value) > 0);
+  const baseReferences = b2bCollectedStockReferenceValues(item, "day");
   const candidates = [
     productTotal,
     summaryTotal,
@@ -8904,23 +9093,7 @@ function b2bCollectedDayUseCount(item = {}) {
 }
 
 function b2bCollectedPriceFields(item = {}) {
-  const profile = preciseRevenueProfile(item);
   const result = {};
-  const keyByLabel = {
-    "평일": "weekdayPrice",
-    "금요일": "fridayPrice",
-    "토요일": "saturdayPrice",
-    "일요일": "sundayPrice"
-  };
-  (profile.lodgingDayRows || []).forEach((row) => {
-    const key = keyByLabel[row.label];
-    if (!key) return;
-    const priced = finiteNumber(row.pricedSoldOut, 0);
-    const amount = b2bWonNumber(row.revenueText);
-    const price = priced > 0 ? amount / priced : 0;
-    const rounded = roundB2BLodgePrice(price);
-    if (rounded) result[key] = rounded;
-  });
   const productPrices = {
     weekdayPrice: [],
     fridayPrice: [],
@@ -8933,7 +9106,23 @@ function b2bCollectedPriceFields(item = {}) {
     if (key && Number.isFinite(price) && price > 0) productPrices[key].push(price);
   });
   B2B_MY_LODGE_PRICE_KEYS.forEach((key) => {
-    if (!result[key]) result[key] = b2bCollectedRepresentativePrice(productPrices[key]);
+    result[key] = b2bCollectedRepresentativePrice(productPrices[key]);
+  });
+  const profile = preciseRevenueProfile(item);
+  const keyByLabel = {
+    "평일": "weekdayPrice",
+    "금요일": "fridayPrice",
+    "토요일": "saturdayPrice",
+    "일요일": "sundayPrice"
+  };
+  (profile.lodgingDayRows || []).forEach((row) => {
+    const key = keyByLabel[row.label];
+    if (!key || result[key]) return;
+    const priced = finiteNumber(row.pricedSoldOut, 0);
+    const amount = b2bWonNumber(row.revenueText);
+    const price = priced > 0 ? amount / priced : 0;
+    const rounded = roundB2BLodgePrice(price);
+    if (rounded) result[key] = rounded;
   });
   return result;
 }
@@ -8991,6 +9180,88 @@ function b2bCollectedNaverConnected(item = {}) {
   );
 }
 
+function b2bCollectedWeeklyStockNormalized(item = {}, roomCount = "") {
+  const days = b2bCollectedRunDays(item);
+  const daily = b2bMyLodgeNumber(roomCount);
+  if (days <= 1 || daily <= 0) return false;
+  return [
+    item.weeklyTotalStock,
+    item.weeklyOperatingTotal,
+    item.weeklyBasisTotal,
+    item.weeklyMaxTotal,
+    item.rawTotalStock,
+    item.nightTotalStock
+  ].some((value) => {
+    const number = optionalNumber(value);
+    if (!Number.isFinite(number) || number <= daily * 1.8) return false;
+    return Math.abs(number / days - daily) <= Math.max(2, daily * 0.35);
+  });
+}
+
+function b2bCollectedPrecisionProfile(item = {}, context = {}) {
+  const roomSegments = Array.isArray(context.roomSegments) ? context.roomSegments : [];
+  const prices = context.prices || {};
+  const roomCount = context.roomCount || "";
+  const productRows = b2bCollectedProductRows(item, "lodging");
+  const namedSegments = roomSegments.filter((row) => String(row.type || "").trim()).length;
+  const countedSegments = roomSegments.filter((row) => b2bMyLodgeNumber(row.count) > 0).length;
+  const segmentPriceKeys = new Set();
+  roomSegments.forEach((row) => {
+    B2B_MY_LODGE_PRICE_KEYS.forEach((key) => {
+      if (b2bMyLodgeNumber(row[key]) > 0) segmentPriceKeys.add(key);
+    });
+  });
+  B2B_MY_LODGE_PRICE_KEYS.forEach((key) => {
+    if (b2bMyLodgeNumber(prices[key]) > 0) segmentPriceKeys.add(key);
+  });
+  const priceCoverage = segmentPriceKeys.size;
+  const weeklyNormalized = b2bCollectedWeeklyStockNormalized(item, roomCount);
+  let score = 0;
+  if (productRows.length) score += 22;
+  if (namedSegments) score += 20;
+  if (countedSegments) score += 20;
+  if (roomCount) score += 10;
+  score += Math.min(24, priceCoverage * 6);
+  if (weeklyNormalized) score += 4;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const grade = score >= 82 ? "A" : score >= 64 ? "B" : score >= 42 ? "C" : "D";
+  const label = {
+    A: "정밀 자동수집",
+    B: "자동수집 보완 필요",
+    C: "부분 자동수집",
+    D: "수동 확인 필요"
+  }[grade];
+  const tone = {
+    A: "good",
+    B: "strong",
+    C: "watch",
+    D: "hot"
+  }[grade];
+  const reasons = [
+    productRows.length ? `상품 행 ${fmtNumber(productRows.length)}개 확인` : "",
+    namedSegments ? `객실종류 ${fmtNumber(namedSegments)}개 확인` : "",
+    countedSegments ? `상품별 수량 ${fmtNumber(countedSegments)}개 확인` : "",
+    roomCount ? `하루 기준 객실 ${fmtNumber(roomCount)}실` : "",
+    priceCoverage ? `요일가격 ${fmtNumber(priceCoverage)}/4개 확인` : "",
+    weeklyNormalized ? "7일 누적 수량을 하루 기준으로 환산" : ""
+  ].filter(Boolean);
+  const warnings = [
+    !namedSegments ? "객실종류명 직접 확인 권장" : "",
+    !countedSegments ? "상품별 수량 직접 확인 필요" : "",
+    priceCoverage < 4 ? "일부 요일 가격 직접 보완 권장" : "",
+    !roomCount ? "전체 객실수 직접 입력 필요" : ""
+  ].filter(Boolean);
+  return {
+    grade,
+    label,
+    tone,
+    score,
+    reasons: b2bMyLodgeCollectionTextList(reasons, 5),
+    warnings: b2bMyLodgeCollectionTextList(warnings, 4),
+    basis: `네이버 업체명 검색 · ${fmtNumber(b2bCollectedRunDays(item))}일 상품/재고 기준`
+  };
+}
+
 function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) {
   const prices = b2bCollectedPriceFields(item);
   const roomCount = b2bCollectedRoomCount(item);
@@ -9001,6 +9272,7 @@ function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) 
   const collectedSegments = b2bCollectedRoomSegments(item, prices, current);
   const currentSegments = b2bMyLodgeSegmentInputRows(current);
   const roomSegments = collectedSegments.length ? collectedSegments : currentSegments;
+  const precision = b2bCollectedPrecisionProfile(item, { prices, roomCount, roomSegments });
   const collected = {
     ...current,
     lodgingName: name || current.lodgingName || "",
@@ -9026,7 +9298,16 @@ function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) 
     collectedAt: new Date().toISOString(),
     collectionRunId: result.runId || "",
     collectionSource: "naver_company",
-    collectionStatus: `${name || current.lodgingName || "관심숙소"} 자동 수집 완료 · 상품별 수량과 요일별 가격 근거를 반영`
+    collectionStatus: `${name || current.lodgingName || "관심숙소"} 자동 수집 완료 · ${precision.label}`,
+    collectionPrecisionGrade: precision.grade,
+    collectionPrecisionLabel: precision.label,
+    collectionPrecisionTone: precision.tone,
+    collectionPrecisionScore: precision.score,
+    collectionPrecisionReasons: precision.reasons,
+    collectionPrecisionWarnings: precision.warnings,
+    collectionBasis: precision.basis,
+    manualAdjusted: false,
+    manualAdjustedAt: ""
   };
   return collected;
 }
@@ -9310,6 +9591,7 @@ function renderB2BMyLodgeOfflineBoard(revenueModel = b2bRevenueBenchmarkModel())
 
 function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief), draftOverride = null) {
   const draft = draftOverride && typeof draftOverride === "object" ? draftOverride : readB2BMyLodgeDraft();
+  const collectionPrecision = b2bMyLodgeCollectionPrecisionInfo(draft);
   const roomSegments = b2bMyLodgeSegmentRows(draft);
   const segmentRoomCount = roomSegments.reduce((sum, row) => sum + Math.round(b2bMyLodgeNumber(row.count)), 0);
   const roomCount = Math.round(b2bMyLodgeNumber(draft.roomCount)) || segmentRoomCount;
@@ -9466,11 +9748,32 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     benchmarkRows,
     comparisonConclusion,
     locationConclusion,
+    collectionPrecision,
     facilities,
     channelLabels,
     savedAt: draft.savedAt || "",
     storageKey: b2bMyLodgeStorageKey()
   };
+}
+
+function renderB2BMyLodgePrecisionNote(precision = {}) {
+  if (!precision.visible) return "";
+  const chips = [
+    ...(precision.reasons || []),
+    precision.manualAdjusted ? "수동 보정 반영" : "",
+    ...(precision.warnings || []).map((item) => `보완: ${item}`)
+  ].filter(Boolean).slice(0, 6);
+  return `
+    <div class="b2b-my-lodge-precision ${escapeHtml(precision.tone || "neutral")}">
+      <div>
+        <span>수집 정밀도</span>
+        <strong>${escapeHtml(precision.label || "확인 필요")}${precision.grade ? ` · ${escapeHtml(precision.grade)}등급` : ""}</strong>
+        <small>${escapeHtml(precision.basis || "자동수집 근거를 확인합니다.")}</small>
+      </div>
+      ${precision.score ? `<em>${fmtNumber(precision.score)}점</em>` : ""}
+      ${chips.length ? `<p>${chips.map((chip) => `<b>${escapeHtml(chip)}</b>`).join("")}</p>` : ""}
+    </div>
+  `;
 }
 
 function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief)) {
@@ -9482,9 +9785,12 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
         const name = String(lodge.lodgingName || `관심숙소 ${index + 1}`).trim();
         const actionId = lodge.id || b2bStableInterestLodgeId(lodge) || b2bInterestLodgeMatchKey(lodge) || `index-${index}`;
         const conclusion = model.comparisonConclusion || b2bMyLodgeComparisonConclusion(model);
+        const precision = model.collectionPrecision || {};
         const facilities = model.facilities.length ? model.facilities.slice(0, 4) : [];
         const segmentLabels = model.roomSegments.map((row) => row.type).filter(Boolean).slice(0, 4);
         const chips = [
+          precision.label ? precision.label : "",
+          precision.manualAdjusted ? "수동 보정" : "",
           model.roomCount ? `${fmtNumber(model.roomCount)}실` : "",
           model.dayUseCount ? `데이유즈 ${fmtNumber(model.dayUseCount)}회` : "",
           ...segmentLabels,
@@ -9504,6 +9810,7 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
               <strong>${escapeHtml(conclusion.label)}</strong>
               <small>${escapeHtml(conclusion.headline)}</small>
             </div>
+            ${precision.visible ? `<div class="b2b-interest-lodge-source ${escapeHtml(precision.tone || "neutral")}"><span>${escapeHtml(precision.label || "수집 기준")}</span><strong>${precision.score ? `${fmtNumber(precision.score)}점` : precision.manualAdjusted ? "수동 보정" : "근거 확인"}</strong><small>${escapeHtml(precision.basis || lodge.collectionStatus || "")}</small></div>` : ""}
             <div class="b2b-interest-lodge-metrics">
               <div><span>객실</span><strong>${model.roomCount ? `${fmtNumber(model.roomCount)}실` : "대기"}</strong></div>
               <div><span>평균 객실가</span><strong>${model.avgPrice ? fmtWon(model.avgPrice) : "대기"}</strong></div>
@@ -9635,6 +9942,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <button class="secondary-button" type="button" data-b2b-my-lodge-clear ${model.hasInput ? "" : "disabled"}>입력 초기화</button>
         </div>
         ${collectStatus ? `<div class="b2b-my-lodge-collect-status ${collecting ? "loading" : ""}">${escapeHtml(collectStatus)}</div>` : ""}
+        ${renderB2BMyLodgePrecisionNote(model.collectionPrecision || {})}
       </form>
       ` : !canRegisterMore ? `
         <div class="b2b-interest-lodge-limit">
@@ -9672,6 +9980,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
             ${model.comparisonConclusion.chips.map((chip) => `<em>${escapeHtml(chip)}</em>`).join("")}
           </div>
         </article>
+        ${renderB2BMyLodgePrecisionNote(model.collectionPrecision || {})}
         <article class="b2b-my-lodge-chart">
           <div class="b2b-my-lodge-subhead">
             <strong>매출 포지션 비교</strong>
@@ -9718,6 +10027,7 @@ function collectB2BMyLodgeSegmentFormRows({ includeBlank = false } = {}) {
 function collectB2BMyLodgeFormValues() {
   const form = document.querySelector("[data-b2b-my-lodge-form]");
   if (!form) return null;
+  const currentDraft = readB2BMyLodgeDraft();
   const formData = new FormData(form);
   const value = (name) => String(formData.get(name) || "").trim();
   const numberValue = (name) => {
@@ -9728,7 +10038,7 @@ function collectB2BMyLodgeFormValues() {
   const segmentTotal = segmentRows.reduce((sum, row) => sum + Math.round(b2bMyLodgeNumber(row.count)), 0);
   const firstSegment = segmentRows[0] || {};
   const roomType = segmentRows.map((row) => row.type).filter(Boolean).slice(0, 4).join(", ");
-  return {
+  const values = {
     lodgingName: value("lodgingName").slice(0, 80),
     roomCount: numberValue("roomCount") || (segmentTotal > 0 ? String(segmentTotal) : ""),
     roomType: roomType.slice(0, 80),
@@ -9743,6 +10053,18 @@ function collectB2BMyLodgeFormValues() {
     otaConnected: Boolean(form.querySelector('input[name="otaConnected"]')?.checked),
     savedAt: new Date().toISOString()
   };
+  const metadata = b2bMyLodgeCollectionMetadata(currentDraft);
+  const manualAdjusted = b2bMyLodgeWasManuallyAdjusted(currentDraft, values);
+  const next = {
+    ...values,
+    ...metadata,
+    manualAdjusted: Boolean(metadata.manualAdjusted || manualAdjusted),
+    manualAdjustedAt: metadata.manualAdjustedAt || (manualAdjusted ? new Date().toISOString() : "")
+  };
+  if (manualAdjusted) {
+    next.collectionStatus = `${next.lodgingName || "관심숙소"} 수동 보정 반영 · 자동 수집값에서 일부 수정`;
+  }
+  return next;
 }
 
 function persistB2BMyLodgeStore(store = {}, options = {}) {
@@ -9892,7 +10214,7 @@ async function collectB2BMyLodgeByName() {
     if (!item) throw new Error("일치하는 네이버 업체를 찾지 못했습니다. 숙소명을 더 정확히 입력하세요.");
     const values = b2bMyLodgeDraftFromCollectedItem(item, result, current);
     state.b2bMyLodgeCollectResult = result;
-    state.b2bMyLodgeCollectStatus = `${values.lodgingName || lodgingName} 자동 수집 완료 · 상품별 수량과 요일별 가격 근거를 반영했습니다.`;
+    state.b2bMyLodgeCollectStatus = `${values.lodgingName || lodgingName} 자동 수집 완료 · ${values.collectionPrecisionLabel || "수집 근거 확인"}`;
     values.collectionStatus = state.b2bMyLodgeCollectStatus;
     persistB2BMyLodgeDraft(values);
   } catch (error) {

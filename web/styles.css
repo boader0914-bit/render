@@ -14600,6 +14600,83 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.b2b-interest-lodge-source,
+.b2b-my-lodge-precision {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d5e3f7;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .74);
+  padding: 10px;
+}
+
+.b2b-my-lodge-precision {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.b2b-interest-lodge-source span,
+.b2b-interest-lodge-source small,
+.b2b-my-lodge-precision span,
+.b2b-my-lodge-precision small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.b2b-interest-lodge-source strong,
+.b2b-my-lodge-precision strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.b2b-my-lodge-precision em {
+  border: 1px solid #c8dbf4;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+  line-height: 1;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+
+.b2b-my-lodge-precision p {
+  min-width: 0;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.b2b-my-lodge-precision b {
+  max-width: 100%;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1.25;
+  padding: 0 9px;
+  overflow-wrap: anywhere;
+}
+
 .b2b-interest-lodge-decision,
 .b2b-my-lodge-decision {
   min-width: 0;
@@ -18777,8 +18854,10 @@ body.role-b2b .b2b-room-segment-row,
 body.role-b2b .b2b-interest-lodge-card,
 body.role-b2b .b2b-interest-lodge-metrics div,
 body.role-b2b .b2b-interest-lodge-location,
+body.role-b2b .b2b-interest-lodge-source,
 body.role-b2b .b2b-interest-lodge-decision,
 body.role-b2b .b2b-my-lodge-decision,
+body.role-b2b .b2b-my-lodge-precision,
 body.role-b2b .b2b-interest-lodge-limit,
 body.role-b2b .b2b-my-lodge-sync-note,
 body.role-b2b .report-channel-grid div,
@@ -18951,8 +19030,10 @@ body.role-b2b .b2b-room-segment-head strong,
 body.role-b2b .b2b-interest-lodge-card-head strong,
 body.role-b2b .b2b-interest-lodge-metrics strong,
 body.role-b2b .b2b-interest-lodge-location strong,
+body.role-b2b .b2b-interest-lodge-source strong,
 body.role-b2b .b2b-interest-lodge-decision strong,
 body.role-b2b .b2b-my-lodge-decision strong,
+body.role-b2b .b2b-my-lodge-precision strong,
 body.role-b2b .b2b-interest-lodge-limit strong {
   color: var(--ink);
 }
@@ -18977,10 +19058,14 @@ body.role-b2b .b2b-interest-lodge-card-head small,
 body.role-b2b .b2b-interest-lodge-metrics span,
 body.role-b2b .b2b-interest-lodge-location span,
 body.role-b2b .b2b-interest-lodge-location small,
+body.role-b2b .b2b-interest-lodge-source span,
+body.role-b2b .b2b-interest-lodge-source small,
 body.role-b2b .b2b-interest-lodge-decision span,
 body.role-b2b .b2b-interest-lodge-decision small,
 body.role-b2b .b2b-my-lodge-decision span,
 body.role-b2b .b2b-my-lodge-decision p,
+body.role-b2b .b2b-my-lodge-precision span,
+body.role-b2b .b2b-my-lodge-precision small,
 body.role-b2b .b2b-interest-lodge-limit span {
   color: var(--muted);
 }
@@ -18989,6 +19074,8 @@ body.role-b2b .b2b-my-lodge-head em,
 body.role-b2b .b2b-my-lodge-tags em,
 body.role-b2b .b2b-interest-lodge-tags em,
 body.role-b2b .b2b-my-lodge-decision em,
+body.role-b2b .b2b-my-lodge-precision em,
+body.role-b2b .b2b-my-lodge-precision b,
 body.role-b2b .b2b-my-lodge-offline-list span {
   border-color: rgba(106, 168, 255, .28);
   background: rgba(106, 168, 255, .13);
@@ -19052,10 +19139,14 @@ body.role-b2b .b2b-my-lodge-compare-row.strong,
 body.role-b2b .b2b-my-lodge-compare-row.good,
 body.role-b2b .b2b-interest-lodge-location.strong,
 body.role-b2b .b2b-interest-lodge-location.good,
+body.role-b2b .b2b-interest-lodge-source.strong,
+body.role-b2b .b2b-interest-lodge-source.good,
 body.role-b2b .b2b-interest-lodge-decision.strong,
 body.role-b2b .b2b-interest-lodge-decision.good,
 body.role-b2b .b2b-my-lodge-decision.strong,
-body.role-b2b .b2b-my-lodge-decision.good {
+body.role-b2b .b2b-my-lodge-decision.good,
+body.role-b2b .b2b-my-lodge-precision.strong,
+body.role-b2b .b2b-my-lodge-precision.good {
   border-color: rgba(52, 211, 153, .42);
   background:
     linear-gradient(135deg, rgba(52, 211, 153, .15), rgba(52, 211, 153, .05)),
@@ -19067,8 +19158,10 @@ body.role-b2b .b2b-my-lodge-row.watch,
 body.role-b2b .b2b-my-lodge-compare-row.watch,
 body.role-b2b .b2b-my-lodge-offline-board.watch,
 body.role-b2b .b2b-interest-lodge-location.watch,
+body.role-b2b .b2b-interest-lodge-source.watch,
 body.role-b2b .b2b-interest-lodge-decision.watch,
 body.role-b2b .b2b-my-lodge-decision.watch,
+body.role-b2b .b2b-my-lodge-precision.watch,
 body.role-b2b .b2b-my-lodge-sync-note {
   border-color: rgba(251, 191, 36, .42);
   background:
@@ -19080,8 +19173,10 @@ body.role-b2b .b2b-my-lodge-cards article.hot,
 body.role-b2b .b2b-my-lodge-row.hot,
 body.role-b2b .b2b-my-lodge-compare-row.hot,
 body.role-b2b .b2b-interest-lodge-location.hot,
+body.role-b2b .b2b-interest-lodge-source.hot,
 body.role-b2b .b2b-interest-lodge-decision.hot,
-body.role-b2b .b2b-my-lodge-decision.hot {
+body.role-b2b .b2b-my-lodge-decision.hot,
+body.role-b2b .b2b-my-lodge-precision.hot {
   border-color: rgba(251, 113, 133, .42);
   background:
     linear-gradient(135deg, rgba(251, 113, 133, .13), rgba(251, 113, 133, .04)),
@@ -20715,8 +20810,13 @@ body.role-b2b .structure-action-list li::before {
   .b2b-my-lodge-checks,
   .b2b-my-lodge-channel-note,
   .b2b-my-lodge-actions,
-  .b2b-my-lodge-collect-status {
+  .b2b-my-lodge-collect-status,
+  .b2b-my-lodge-precision {
     grid-column: 1 / -1;
+  }
+
+  .b2b-my-lodge-precision {
+    grid-template-columns: 1fr;
   }
 
   .b2b-my-lodge-actions {

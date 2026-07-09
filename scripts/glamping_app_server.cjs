@@ -2044,6 +2044,21 @@ function sanitizeB2BInterestLodge(lodge = {}) {
     collectionRunId: sanitizeMemberText(lodge.collectionRunId, 120),
     collectionSource: sanitizeMemberText(lodge.collectionSource, 80),
     collectionStatus: sanitizeMemberText(lodge.collectionStatus, 260),
+    collectionPrecisionGrade: sanitizeMemberText(lodge.collectionPrecisionGrade, 12),
+    collectionPrecisionLabel: sanitizeMemberText(lodge.collectionPrecisionLabel, 80),
+    collectionPrecisionTone: sanitizeMemberText(lodge.collectionPrecisionTone, 20),
+    collectionPrecisionScore: Math.max(0, Math.min(100, Math.round(Number(lodge.collectionPrecisionScore) || 0))),
+    collectionPrecisionReasons: (Array.isArray(lodge.collectionPrecisionReasons) ? lodge.collectionPrecisionReasons : [])
+      .map((item) => sanitizeMemberText(item, 120))
+      .filter(Boolean)
+      .slice(0, 5),
+    collectionPrecisionWarnings: (Array.isArray(lodge.collectionPrecisionWarnings) ? lodge.collectionPrecisionWarnings : [])
+      .map((item) => sanitizeMemberText(item, 120))
+      .filter(Boolean)
+      .slice(0, 5),
+    collectionBasis: sanitizeMemberText(lodge.collectionBasis, 260),
+    manualAdjusted: lodge.manualAdjusted === true,
+    manualAdjustedAt: sanitizeMemberText(lodge.manualAdjustedAt, 40),
     searchRegion: sanitizeMemberText(lodge.searchRegion, 120),
     addressRegion: sanitizeMemberText(lodge.addressRegion, 120),
     regionBoundaryStatus: sanitizeMemberText(lodge.regionBoundaryStatus, 40),
@@ -11486,8 +11501,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-b2b-lodge-compare"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-b2b-lodge-compare"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-b2b-lodge-precision"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-b2b-lodge-precision"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
