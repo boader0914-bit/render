@@ -16383,6 +16383,84 @@ function adminRegionCompanyFilterBar(rows = [], selectedKey = "priority") {
   `;
 }
 
+function adminRegionCompanyInspectionConsoleHtml(rows = [], filteredRows = [], selectedFilter = {}) {
+  const summary = adminRegionCompanyInspectionSummary(rows);
+  const stats = adminRegionWorkflowStats(rows);
+  const options = adminRegionCompanyFilterOptions(rows);
+  const optionMap = new Map(options.map((option) => [option.key, option]));
+  const quickKeys = ["unreviewed", "manual", "recrawl", "missingRevenue", "publicReady"];
+  const urgentOption = quickKeys
+    .map((key) => optionMap.get(key))
+    .find((option) => option && option.count > 0) || optionMap.get("priority") || options[0];
+  const topRows = adminRegionSortedCompanyRows(rows)
+    .filter((row) => {
+      const workType = adminRegionCompanyWorkType(row);
+      return ["unreviewed", "manual", "recrawl", "missingRevenue", "missingReservation"].includes(workType.key);
+    })
+    .slice(0, 3);
+  const doneReady = stats.publicReady + stats.closed;
+  return `
+    <div class="admin-region-company-inspection">
+      <div class="admin-region-company-inspection-head">
+        <div>
+          <span>업체 검수 콘솔</span>
+          <strong>${escapeHtml(summary.label)}</strong>
+          <small>${escapeHtml(summary.note)} · 현재 화면 ${fmtNumber(filteredRows.length)}곳</small>
+        </div>
+        <mark>${fmtNumber(doneReady)}/${fmtNumber(stats.total)}곳 정리</mark>
+      </div>
+      <div class="admin-region-company-inspection-actions">
+        ${quickKeys.map((key) => {
+          const option = optionMap.get(key);
+          if (!option) return "";
+          return `
+            <button type="button" class="${option.key === selectedFilter.key ? "active" : ""}" data-admin-region-company-filter="${escapeHtml(option.key)}" ${option.count ? "" : "disabled"}>
+              <span>${escapeHtml(option.label)}</span>
+              <strong>${fmtNumber(option.count)}</strong>
+            </button>
+          `;
+        }).join("")}
+      </div>
+      <div class="admin-region-company-inspection-next">
+        ${topRows.length ? topRows.map((row) => {
+          const workType = adminRegionCompanyWorkType(row);
+          const metrics = row.metrics || {};
+          return `
+            <button type="button" class="${escapeHtml(workType.tone || "watch")}" data-admin-region-company-focus="${escapeHtml(row.company?.companyId || "")}" data-admin-region-company-name="${escapeHtml(row.company?.primaryName || "")}">
+              <b>${escapeHtml(row.company?.primaryName || "업체명 확인")}</b>
+              <small>${escapeHtml([workType.label, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "예약율 대기"].filter(Boolean).join(" · "))}</small>
+            </button>
+          `;
+        }).join("") : `<p>우선 처리할 업체 이슈가 없습니다. 공개 가능 필터로 최종 표본만 확인하세요.</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function adminRegionCompanyInspectionSummary(rows = []) {
+  const options = adminRegionCompanyFilterOptions(rows);
+  const optionMap = new Map(options.map((option) => [option.key, option]));
+  const order = ["manual", "unreviewed", "recrawl", "missingRevenue", "missingReservation", "publicReady"];
+  const option = order.map((key) => optionMap.get(key)).find((item) => item && item.count > 0) || optionMap.get("priority") || options[0];
+  if (!option) return { label: "업체 검수 대기", note: "지역 업체 표본이 없습니다." };
+  if (option.key === "publicReady") {
+    return {
+      label: "공개 가능 표본 확인",
+      note: `확인 완료 또는 컨택 가능 업체 ${fmtNumber(option.count)}곳을 최종 확인합니다.`
+    };
+  }
+  if (option.key === "priority") {
+    return {
+      label: "우선순위순 확인",
+      note: "지역 내 업체를 우선순위 기준으로 확인합니다."
+    };
+  }
+  return {
+    label: `${option.label} 우선 처리`,
+    note: `${option.label} ${fmtNumber(option.count)}곳을 먼저 처리합니다.`
+  };
+}
+
 function adminRegionCompanyToolbarHtml(rows = [], filteredRows = [], selectedFilter = {}) {
   const query = state.adminRegionCompanyQuery || "";
   const [selectedSort, selectedSortLabel] = adminRegionSelectedCompanySort();
@@ -17375,6 +17453,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
   const selectedSort = adminRegionSelectedCompanySort();
   const companyListOpen = selectedFilter.key !== "priority" || Boolean(String(state.adminRegionCompanyQuery || "").trim());
   const companyListSummary = `${selectedFilter.label} ${fmtNumber(filteredRows.length)}곳 · 전체 ${fmtNumber(rows.length)}곳`;
+  const companyInspectionSummary = adminRegionCompanyInspectionSummary(rows);
   return `
     <section class="admin-region-detail-panel ${escapeHtml(statusTone)}" data-admin-region-detail>
       <div class="admin-region-detail-head">
@@ -17414,7 +17493,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
             <div>
               <span>업체별 작업목록</span>
               <strong>${escapeHtml(companyListSummary)}</strong>
-              <small>필터별 업체와 일괄 처리 버튼은 펼쳐서 확인합니다.</small>
+              <small>${escapeHtml(companyInspectionSummary.note)}</small>
             </div>
             <mark><span class="closed-label">열기</span><span class="open-label">접기</span></mark>
           </summary>
@@ -17423,6 +17502,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
               <strong>업체별 작업목록</strong>
               <small>${escapeHtml(`${companyListSummary} · ${selectedSort[1]}`)}</small>
             </div>
+            ${adminRegionCompanyInspectionConsoleHtml(rows, filteredRows, selectedFilter)}
             ${adminRegionCompanyFilterBar(rows, selectedFilter.key)}
             ${adminRegionCompanyToolbarHtml(rows, filteredRows, selectedFilter)}
             ${adminRegionCompanyBulkHtml(region, filteredRows, selectedFilter)}

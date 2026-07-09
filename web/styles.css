@@ -3445,6 +3445,144 @@ a {
   gap: 7px;
 }
 
+.admin-region-company-inspection {
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  border: 1px solid #d5e3f7;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #f8fbff, #ffffff);
+  padding: 11px;
+}
+
+.admin-region-company-inspection-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.admin-region-company-inspection-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-region-company-inspection-head span,
+.admin-region-company-inspection-head small,
+.admin-region-company-inspection-actions span,
+.admin-region-company-inspection-next small,
+.admin-region-company-inspection-next p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-inspection-head strong,
+.admin-region-company-inspection-next b {
+  min-width: 0;
+  color: var(--ink);
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-inspection-head strong {
+  font-size: 16px;
+}
+
+.admin-region-company-inspection-head mark {
+  flex: 0 0 auto;
+  border: 1px solid #bfd5ef;
+  border-radius: 999px;
+  background: #edf5ff;
+  color: #175cd3;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-region-company-inspection-actions {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.admin-region-company-inspection-actions button,
+.admin-region-company-inspection-next button {
+  min-width: 0;
+  border: 1px solid #d5e3f7;
+  border-radius: 11px;
+  background: #fff;
+  text-align: left;
+}
+
+.admin-region-company-inspection-actions button {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+}
+
+.admin-region-company-inspection-actions button.active {
+  border-color: #2f80ed;
+  background: #edf5ff;
+  box-shadow: inset 0 0 0 1px rgba(47, 128, 237, .18);
+}
+
+.admin-region-company-inspection-actions button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.admin-region-company-inspection-actions strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.admin-region-company-inspection-next {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.admin-region-company-inspection-next button {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+}
+
+.admin-region-company-inspection-next button.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-region-company-inspection-next button.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-region-company-inspection-next button.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-region-company-inspection-next b,
+.admin-region-company-inspection-next small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .admin-region-company-filterbar button {
   min-width: 0;
   display: grid;
@@ -4337,6 +4475,14 @@ a {
 
   .admin-region-company-filterbar {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .admin-region-company-inspection-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-region-company-inspection-next {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .admin-region-company-bulk {
@@ -21582,6 +21728,8 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-audit-list article,
   .admin-region-correction-gap-list article,
   .admin-region-company-filterbar,
+  .admin-region-company-inspection-actions,
+  .admin-region-company-inspection-next,
   .admin-region-company-toolbar,
   .admin-region-company-bulk,
   .admin-region-detail-body,
