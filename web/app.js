@@ -7810,6 +7810,38 @@ function adminRegionAuditCsv(region = {}, rows = []) {
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${auditRows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
 }
 
+function adminRegionStatusCsv(regions = [], context = {}) {
+  const headers = [
+    "필터", "시도", "지역", "B2B 공개상태", "관리자 감수", "업체수", "예약표본", "매출표본",
+    "평균매출", "예약율", "신뢰도", "지역밖노출", "수량보정필요", "관리자보정", "다음점검", "우선작업", "메모"
+  ];
+  const rows = regions.map((region) => {
+    const publicStatus = adminRegionPublicStatus(region);
+    const review = adminRegionEffectiveReview(region);
+    const maintenance = adminRegionMaintenanceProfile(region, []);
+    return [
+      context.filterLabel || "",
+      region.provinceLabel || "",
+      region.regionLabel || "",
+      publicStatus.label || "",
+      review?.label || "미감수",
+      region.companyCount || 0,
+      region.reservationSampleCount || 0,
+      region.revenueSampleCount || 0,
+      region.averageRevenue ? finiteNumber(region.averageRevenue, 0) : "",
+      region.averageReservationRate !== null && region.averageReservationRate !== undefined ? fmtRate(region.averageReservationRate) : "",
+      region.status?.score || maintenance.readinessScore || "",
+      region.outsideExposureCount || 0,
+      region.lowConfidenceCount || 0,
+      region.manualCorrectionCount || 0,
+      maintenance.nextCycle || "",
+      maintenance.primaryAction?.label || "",
+      review?.note || publicStatus.note || ""
+    ];
+  });
+  return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
+}
+
 function reportPlatformStats(items = []) {
   const platformNames = ["네이버", "야놀자", "여기어때", "떠나요"];
   const stats = Object.fromEntries(platformNames.map((name) => [name, 0]));
@@ -15993,9 +16025,10 @@ function adminRegionReviewFilterBar(regions = []) {
   const options = adminRegionReviewFilterOptions(regions);
   return `
     <div class="admin-region-review-filterbar" aria-label="지역 공개 상태 필터">
-      <div>
+      <div class="admin-region-review-filter-summary">
         <strong>지역 공개 상태</strong>
         <small>${escapeHtml(selected.note)} · ${fmtNumber(selected.count)}개 표시</small>
+        <button type="button" data-export-admin-region-status ${selected.count ? "" : "disabled"}>운영목록 CSV</button>
       </div>
       <div>
         ${options.map((option) => `
@@ -23859,6 +23892,29 @@ function exportAdminRegionAuditCsv() {
   setStatus(`${region.regionLabel || "선택 지역"} 작업 이력 ${fmtNumber(auditRows.length)}건 내보내기`);
 }
 
+function exportAdminRegionStatusCsv() {
+  const master = companyMasterSource();
+  const regions = master.adminRegionalOperations?.regions || [];
+  const selected = adminRegionSelectedReviewFilter(regions);
+  const visibleRegions = adminRegionFilteredRegions(regions);
+  if (!visibleRegions.length) {
+    setStatus(`${selected.label} 지역 목록이 없습니다.`);
+    return;
+  }
+  const csv = adminRegionStatusCsv(visibleRegions, { filterLabel: selected.label });
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `lodging-region-status-${selected.key}-${date}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  setStatus(`${selected.label} 지역 운영목록 ${fmtNumber(visibleRegions.length)}건 내보내기`);
+}
+
 async function copyTextToClipboard(text = "") {
   const value = String(text || "");
   if (!value.trim()) return false;
@@ -24736,6 +24792,7 @@ function bindEvents() {
     if (event.target.closest("[data-export-recrawl-automation]")) exportRecrawlAutomationCsv();
     if (event.target.closest("[data-export-admin-review-audit]")) exportAdminReviewAuditCsv();
     if (event.target.closest("[data-export-admin-region-audit]")) exportAdminRegionAuditCsv();
+    if (event.target.closest("[data-export-admin-region-status]")) exportAdminRegionStatusCsv();
     const qualitySetting = event.target.closest("[data-apply-quality-setting]");
     if (qualitySetting) applyCollectionQualitySetting(qualitySetting);
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
