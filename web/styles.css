@@ -3500,6 +3500,58 @@ a {
   padding: 6px 8px;
 }
 
+.admin-region-audit-filters {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.admin-region-audit-filters button {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #d5e3f7;
+  border-radius: 11px;
+  background: #fbfdff;
+  padding: 8px 9px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-region-audit-filters button.active {
+  border-color: #2f80ed;
+  background: #edf5ff;
+  box-shadow: inset 0 0 0 1px rgba(47, 128, 237, .16);
+}
+
+.admin-region-audit-filters button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.admin-region-audit-filters span,
+.admin-region-audit-filters small,
+.admin-region-audit-more {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-audit-filters strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.admin-region-audit-more {
+  margin: 0;
+}
+
 .admin-region-detail-body {
   display: grid;
   grid-template-columns: minmax(260px, .34fr) minmax(0, 1fr);
@@ -4647,6 +4699,10 @@ a {
 
   .admin-region-audit-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-region-audit-filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .admin-region-company-filterbar {
@@ -21907,6 +21963,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-detail-grid,
   .admin-region-workflow-grid,
   .admin-region-audit-summary,
+  .admin-region-audit-filters,
   .admin-region-audit-list article,
   .admin-region-correction-gap-list article,
   .admin-region-company-filterbar,

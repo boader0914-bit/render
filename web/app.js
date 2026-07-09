@@ -34,6 +34,7 @@ const state = {
   },
   adminSelectedRegionKey: "",
   adminRegionReviewFilter: "all",
+  adminRegionAuditFilter: "all",
   adminRegionCompanyFilter: "priority",
   adminRegionCompanyQuery: "",
   adminRegionCompanySort: "priority",
@@ -7792,16 +7793,18 @@ function adminReviewAuditCsv(master = companyMasterSource()) {
   return `\uFEFF${headers.map(salesTargetCsvValue).join(",")}\n${rows.map((row) => row.map(salesTargetCsvValue).join(",")).join("\n")}`;
 }
 
-function adminRegionAuditCsv(region = {}, rows = []) {
-  const headers = ["지역", "업체ID", "업체명", "작업구분", "작업상태", "상태코드", "처리시각", "검색어", "순위", "출처", "메모"];
-  const auditRows = adminRegionAuditRows(region, rows).map((row) => [
+function adminRegionAuditCsv(region = {}, rows = [], sourceRows = null) {
+  const headers = ["지역", "업체ID", "업체명", "작업구분", "변경전", "변경후", "상태코드", "처리시각", "처리자", "검색어", "순위", "출처", "메모"];
+  const auditRows = (sourceRows || adminRegionAuditRows(region, rows)).map((row) => [
     row.regionLabel || region.regionLabel || "",
     row.companyId || "",
     row.companyName || "",
     row.kind || "",
-    row.label || "",
+    row.previousLabel || row.previousStatus || "",
+    row.label || row.status || "",
     row.status || "",
     row.at || "",
+    row.by || "",
     row.keyword || "",
     row.rank ? `${fmtNumber(row.rank)}위` : "",
     row.source || "",
@@ -16535,8 +16538,11 @@ function adminRegionAuditRows(region = {}, rows = []) {
       kind: "지역",
       label: history.action === "clear" ? "감수 해제" : (history.label || adminRegionReviewMeta(history.status)?.label || "지역 감수"),
       status: history.status || "",
+      previousStatus: history.previousStatus || "",
+      previousLabel: history.previousLabel || "",
       note: history.note || history.checklistSummary || "지역카드 감수 기록",
       source: history.source || "관리자",
+      by: history.by || history.updatedBy || "",
       at,
       timestamp: Date.parse(at) || 0,
       companyId: "",
@@ -16555,8 +16561,11 @@ function adminRegionAuditRows(region = {}, rows = []) {
       kind: payload.kind || "작업",
       label: payload.label || "상태 변경",
       status: payload.status || "",
+      previousStatus: payload.previousStatus || "",
+      previousLabel: payload.previousLabel || "",
       note: payload.note || "",
       source: payload.source || "관리자",
+      by: payload.by || payload.updatedBy || "",
       at,
       timestamp: Date.parse(at) || 0,
       companyId: company.companyId || "",
@@ -16580,8 +16589,11 @@ function adminRegionAuditRows(region = {}, rows = []) {
           kind: "판단",
           label: history.action === "clear" ? "판단 해제" : (history.label || companyAdminReviewLabel(history.status)),
           status: history.status || "",
+          previousStatus: history.previousStatus || "",
+          previousLabel: history.previousLabel || "",
           note: history.note || companyReviewContextText(history.context || {}) || history.reason || "",
           source: history.source || history.context?.source || "관리자",
+          by: history.by || history.updatedBy || "",
           at: history.at || history.updatedAt || ""
         });
       }
@@ -16592,6 +16604,7 @@ function adminRegionAuditRows(region = {}, rows = []) {
         status: company.adminReview.status || "",
         note: company.adminReview.note || companyReviewContextText(company.adminReview.context || {}),
         source: company.adminReview.source || "관리자",
+        by: company.adminReview.updatedBy || "",
         at: company.adminReview.updatedAt || ""
       });
     }
@@ -16606,8 +16619,11 @@ function adminRegionAuditRows(region = {}, rows = []) {
           kind: "보정",
           label: history.action === "clear" ? "보정 해제" : "보정 저장",
           status: history.action || "",
+          previousStatus: "",
+          previousLabel: "",
           note: compactListText([basisText, history.note], "관리자 보정", 3),
           source: "관리자",
+          by: history.by || history.updatedBy || "",
           at: history.at || history.updatedAt || "",
           tone: history.action === "clear" ? "hot" : "watch"
         });
@@ -16624,6 +16640,7 @@ function adminRegionAuditRows(region = {}, rows = []) {
         status: "active",
         note: compactListText([basisText, correction.note], "관리자 보정", 3),
         source: correction.source || "관리자",
+        by: correction.updatedBy || "",
         at: correction.updatedAt || ""
       });
     }
@@ -16634,6 +16651,8 @@ function adminRegionAuditRows(region = {}, rows = []) {
           kind: "컨택",
           label: history.label || salesContactMeta(history.status).label,
           status: history.status || "",
+          previousStatus: history.previousStatus || "",
+          previousLabel: history.previousLabel || "",
           note: compactListText([
             history.responseLabel || salesResponseMeta(history.responseStatus).label,
             history.channel,
@@ -16642,6 +16661,7 @@ function adminRegionAuditRows(region = {}, rows = []) {
             history.nextActionAt ? `다음 ${history.nextActionAt}` : ""
           ], "컨택 기록", 4),
           source: history.source || "영업",
+          by: history.by || history.updatedBy || "",
           at: history.at || history.updatedAt || ""
         });
       }
@@ -16659,6 +16679,7 @@ function adminRegionAuditRows(region = {}, rows = []) {
           contact.nextActionAt ? `다음 ${contact.nextActionAt}` : ""
         ], "컨택 기록", 4),
         source: contact.source || "영업",
+        by: contact.updatedBy || "",
         at: contact.updatedAt || ""
       });
     }
@@ -16672,22 +16693,58 @@ function adminRegionAuditRows(region = {}, rows = []) {
 function adminRegionAuditSummary(auditRows = []) {
   return auditRows.reduce((acc, row) => {
     acc.total += 1;
+    if (row.kind === "지역") acc.region += 1;
     if (row.kind === "판단") acc.review += 1;
     if (row.kind === "보정") acc.correction += 1;
     if (row.kind === "컨택") acc.contact += 1;
+    if (row.kind === "지역" && row.status) acc.publicChange += 1;
     if (!acc.latestAt || row.timestamp > acc.latestTimestamp) {
       acc.latestAt = row.at || "";
       acc.latestTimestamp = row.timestamp || 0;
+      acc.latestBy = row.by || row.source || "";
+      acc.latestLabel = row.label || "";
     }
     return acc;
-  }, { total: 0, review: 0, correction: 0, contact: 0, latestAt: "", latestTimestamp: 0 });
+  }, { total: 0, region: 0, review: 0, correction: 0, contact: 0, publicChange: 0, latestAt: "", latestTimestamp: 0, latestBy: "", latestLabel: "" });
+}
+
+function adminRegionAuditFilterOptions(auditRows = []) {
+  const count = (match) => auditRows.filter(match).length;
+  return [
+    { key: "all", label: "전체", count: auditRows.length, note: "모든 변경", match: () => true },
+    { key: "region", label: "지역 판단", count: count((row) => row.kind === "지역"), note: "공개 상태", match: (row) => row.kind === "지역" },
+    { key: "review", label: "업체 검수", count: count((row) => row.kind === "판단"), note: "관리자 판단", match: (row) => row.kind === "판단" },
+    { key: "correction", label: "수동 보정", count: count((row) => row.kind === "보정"), note: "객실/수량", match: (row) => row.kind === "보정" },
+    { key: "contact", label: "컨택", count: count((row) => row.kind === "컨택"), note: "영업 기록", match: (row) => row.kind === "컨택" }
+  ];
+}
+
+function adminRegionSelectedAuditFilter(auditRows = []) {
+  const options = adminRegionAuditFilterOptions(auditRows);
+  const selected = options.find((option) => option.key === state.adminRegionAuditFilter) || options[0];
+  if (selected.key !== "all" && selected.count === 0) {
+    state.adminRegionAuditFilter = "all";
+    return options[0];
+  }
+  state.adminRegionAuditFilter = selected.key;
+  return selected;
+}
+
+function adminRegionFilteredAuditRows(auditRows = []) {
+  const selected = adminRegionSelectedAuditFilter(auditRows);
+  return selected.key === "all" ? auditRows : auditRows.filter(selected.match);
 }
 
 function adminRegionAuditPanel(region = {}, rows = []) {
   const auditRows = adminRegionAuditRows(region, rows);
+  const selectedFilter = adminRegionSelectedAuditFilter(auditRows);
+  const filteredRows = adminRegionFilteredAuditRows(auditRows);
   const summary = adminRegionAuditSummary(auditRows);
+  const filteredSummary = adminRegionAuditSummary(filteredRows);
+  const options = adminRegionAuditFilterOptions(auditRows);
   const summaryText = [
     `전체 ${fmtNumber(summary.total)}`,
+    `지역 ${fmtNumber(summary.region)}`,
     `판단 ${fmtNumber(summary.review)}`,
     `보정 ${fmtNumber(summary.correction)}`,
     `컨택 ${fmtNumber(summary.contact)}`
@@ -16704,17 +16761,32 @@ function adminRegionAuditPanel(region = {}, rows = []) {
       </summary>
       <div class="admin-region-audit-body">
         <div class="admin-region-audit-head">
-          <small>관리자 판단, 수동 보정, 컨택 기록을 시간순으로 모아 봅니다.</small>
-          <button type="button" data-export-admin-region-audit ${auditRows.length ? "" : "disabled"}>이력 CSV</button>
+          <div>
+            <span>감사 로그</span>
+            <strong>${escapeHtml(selectedFilter.label)} ${fmtNumber(filteredRows.length)}건</strong>
+            <small>${escapeHtml(summary.latestAt ? `최근 ${compactDateTime(summary.latestAt)} · ${summary.latestLabel || "변경"} · ${summary.latestBy || "관리자"}` : "아직 저장된 변경이 없습니다.")}</small>
+          </div>
+          <button type="button" data-export-admin-region-audit ${filteredRows.length ? "" : "disabled"}>${escapeHtml(selectedFilter.label)} CSV</button>
         </div>
         <div class="admin-region-audit-summary">
           <span>전체 ${fmtNumber(summary.total)}</span>
-          <span>판단 ${fmtNumber(summary.review)}</span>
+          <span>공개상태 ${fmtNumber(summary.publicChange)}</span>
+          <span>업체검수 ${fmtNumber(summary.review)}</span>
           <span>보정 ${fmtNumber(summary.correction)}</span>
           <span>컨택 ${fmtNumber(summary.contact)}</span>
+          <span>현재필터 ${fmtNumber(filteredSummary.total)}</span>
+        </div>
+        <div class="admin-region-audit-filters">
+          ${options.map((option) => `
+            <button type="button" class="${option.key === selectedFilter.key ? "active" : ""}" data-admin-region-audit-filter="${escapeHtml(option.key)}" ${option.count ? "" : "disabled"}>
+              <span>${escapeHtml(option.label)}</span>
+              <strong>${fmtNumber(option.count)}</strong>
+              <small>${escapeHtml(option.note)}</small>
+            </button>
+          `).join("")}
         </div>
         <div class="admin-region-audit-list">
-          ${auditRows.length ? auditRows.slice(0, 8).map((row) => `
+          ${filteredRows.length ? filteredRows.slice(0, 10).map((row) => `
             <article class="${escapeHtml(row.tone || "watch")}">
               <mark>${escapeHtml(row.kind)}</mark>
               <div>
@@ -16723,11 +16795,12 @@ function adminRegionAuditPanel(region = {}, rows = []) {
               </div>
               <div>
                 <b>${escapeHtml(row.label)}</b>
-                <small>${escapeHtml(row.note || row.source || "처리 메모 없음")}</small>
+                <small>${escapeHtml([row.previousLabel || row.previousStatus ? `이전 ${row.previousLabel || row.previousStatus}` : "", row.note || row.source || "처리 메모 없음"].filter(Boolean).join(" · "))}</small>
               </div>
               <time>${escapeHtml(compactDateTime(row.at))}</time>
             </article>
-          `).join("") : `<p class="empty">아직 이 지역에 저장된 작업 이력이 없습니다.</p>`}
+          `).join("") : `<p class="empty">${escapeHtml(selectedFilter.label)} 조건의 작업 이력이 없습니다.</p>`}
+          ${filteredRows.length > 10 ? `<p class="admin-region-audit-more">상위 10건만 표시합니다. 전체는 CSV로 확인하세요.</p>` : ""}
         </div>
       </div>
     </details>
@@ -24148,23 +24221,25 @@ function exportAdminRegionAuditCsv() {
   }
   const rows = adminRegionCompanyRows(region, master);
   const auditRows = adminRegionAuditRows(region, rows);
-  if (!auditRows.length) {
-    setStatus(`${region.regionLabel || "선택 지역"} 작업 이력이 없습니다.`);
+  const selected = adminRegionSelectedAuditFilter(auditRows);
+  const filteredRows = adminRegionFilteredAuditRows(auditRows);
+  if (!filteredRows.length) {
+    setStatus(`${region.regionLabel || "선택 지역"} ${selected.label} 이력이 없습니다.`);
     return;
   }
-  const csv = adminRegionAuditCsv(region, rows);
+  const csv = adminRegionAuditCsv(region, rows, filteredRows);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const date = new Date().toISOString().slice(0, 10);
   const safeRegion = String(region.regionLabel || region.regionKey || "region").replace(/[^\w가-힣-]+/g, "-").replace(/^-+|-+$/g, "") || "region";
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `lodging-region-audit-${safeRegion}-${date}.csv`;
+  anchor.download = `lodging-region-audit-${safeRegion}-${selected.key}-${date}.csv`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-  setStatus(`${region.regionLabel || "선택 지역"} 작업 이력 ${fmtNumber(auditRows.length)}건 내보내기`);
+  setStatus(`${region.regionLabel || "선택 지역"} ${selected.label} 이력 ${fmtNumber(filteredRows.length)}건 내보내기`);
 }
 
 function exportAdminRegionStatusCsv() {
@@ -24975,6 +25050,7 @@ function bindEvents() {
     if (adminRegionButton) {
       state.adminSelectedRegionKey = adminRegionButton.dataset.adminRegionKey || "";
       state.adminRegionCompanyFilter = "priority";
+      state.adminRegionAuditFilter = "all";
       state.adminRegionCompanyQuery = "";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
@@ -24988,6 +25064,15 @@ function bindEvents() {
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector(".admin-region-company-list")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      return;
+    }
+    const adminRegionAuditFilter = event.target.closest("[data-admin-region-audit-filter]");
+    if (adminRegionAuditFilter) {
+      state.adminRegionAuditFilter = adminRegionAuditFilter.dataset.adminRegionAuditFilter || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-region-audit-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
       return;
     }
