@@ -10965,9 +10965,9 @@ a.platform-row:hover {
 
 .crawl-speed-panel > div:first-child {
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
 }
 
@@ -10989,7 +10989,7 @@ a.platform-row:hover {
 
 .crawl-speed-options {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -11020,12 +11020,19 @@ a.platform-row:hover {
   align-items: center;
   gap: 12px;
   overflow: hidden;
-  min-height: 156px;
+  min-height: 148px;
   border: 1px solid #d0d5dd;
   border-radius: 14px;
   background: linear-gradient(135deg, #f8fbff 0%, #ffffff 58%, #f7fef9 100%);
   box-shadow: 0 14px 28px rgba(16, 24, 40, 0.08);
   padding: 13px;
+}
+
+.crawl-progress.is-preview {
+  min-height: 138px;
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 64%, #eef6ff 100%);
+  box-shadow: none;
 }
 
 .crawl-progress[hidden] {
@@ -11047,6 +11054,11 @@ a.platform-row:hover {
   animation: crawl-sweep 1.25s ease-in-out infinite;
 }
 
+.crawl-progress.is-preview::after {
+  opacity: 0.5;
+  animation: none;
+}
+
 .crawl-progress.is-delayed::after {
   background: linear-gradient(90deg, rgba(247, 144, 9, 0.12), rgba(247, 144, 9, 0.78), rgba(247, 144, 9, 0.12));
 }
@@ -11058,6 +11070,13 @@ a.platform-row:hover {
   border-top-color: var(--blue);
   border-radius: 999px;
   animation: crawl-spin 0.8s linear infinite;
+}
+
+.crawl-progress.is-preview .crawl-spinner {
+  border-color: #bfdbfe;
+  border-top-color: #bfdbfe;
+  background: radial-gradient(circle at center, #3182f6 0 4px, transparent 5px);
+  animation: none;
 }
 
 .crawl-progress.is-delayed .crawl-spinner {
@@ -11079,13 +11098,11 @@ a.platform-row:hover {
 }
 
 .crawl-progress-copy small {
-  overflow: hidden;
   color: #475467;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .crawl-progress-stages {
@@ -11113,6 +11130,11 @@ a.platform-row:hover {
   border-color: #93c5fd;
   background: #eff6ff;
   box-shadow: inset 0 0 0 1px rgba(49, 130, 246, 0.16);
+}
+
+.crawl-progress-stages span.planned {
+  border-color: #dbeafe;
+  background: rgba(248, 251, 255, 0.9);
 }
 
 .crawl-progress-stages b,
@@ -11189,6 +11211,7 @@ a.platform-row:hover {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.78);
   padding: 8px 9px;
+  text-align: left;
 }
 
 .crawl-progress-numbers b,
@@ -11214,12 +11237,11 @@ a.platform-row:hover {
 
 .crawl-progress-basis {
   grid-column: 1 / -1;
-  overflow: hidden;
   color: #667085;
   font-size: 11px;
   font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 @keyframes crawl-spin {
@@ -20191,16 +20213,42 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .crawl-progress-stages {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+
+  .crawl-progress-stages b,
+  .crawl-progress-stages small {
+    white-space: nowrap;
+  }
+
+  .crawl-progress-stages span {
+    flex: 0 0 120px;
   }
 
   .crawl-progress-numbers {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .crawl-progress-numbers span {
+    padding: 7px 6px;
+  }
+
+  .crawl-progress-numbers b {
+    font-size: 13px;
+  }
+
+  .crawl-progress-numbers small {
+    font-size: 10px;
   }
 
   .crawl-speed-panel > div:first-child {
     align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .crawl-speed-panel span {

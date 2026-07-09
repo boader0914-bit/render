@@ -35,6 +35,9 @@ const state = {
   adminSelectedRegionKey: "",
   adminRegionCompanyFilter: "priority",
   crawlEtaByKey: {},
+  crawlEstimateTimer: null,
+  crawlEstimateRequestId: 0,
+  crawlProgressRunning: false,
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
   trafficKeyState: null,
@@ -594,6 +597,8 @@ function updateCrawlSpeedPreview() {
     const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
     els.crawlSpeedPreview.textContent = `${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}`;
   }
+  renderCrawlReadinessPreview(payload, preview);
+  scheduleCrawlEstimatePreviewRefresh(payload);
 }
 
 function applyCrawlSpeedPreset(key = "") {
@@ -997,9 +1002,8 @@ function ensureCrawlControls() {
   if (!els.crawlProgress) {
     const submitButton = els.crawlForm.querySelector('button[type="submit"]');
     const progress = document.createElement("div");
-    progress.className = "crawl-progress";
+    progress.className = "crawl-progress is-preview";
     progress.id = "crawlProgress";
-    progress.hidden = true;
     progress.innerHTML = `
       <span class="crawl-spinner" aria-hidden="true"></span>
       <div class="crawl-progress-copy">
@@ -1016,7 +1020,7 @@ function ensureCrawlControls() {
       </div>
       <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
     `;
-    submitButton?.after(progress);
+    submitButton?.before(progress);
     els.crawlProgress = progress;
     els.crawlProgressTitle = progress.querySelector("#crawlProgressTitle");
     els.crawlProgressText = progress.querySelector("#crawlProgressText");
@@ -1121,6 +1125,90 @@ function crawlPreviewMeta(payload = {}) {
       bookingRangePlaceLimit: placeLimit
     }
   };
+}
+
+function normalizeCrawlEstimate(estimate = {}, payload = {}) {
+  const fallback = crawlPreviewMeta(payload);
+  const total = Math.max(1, Math.round(Number(estimate.estimatedTotalSeconds || fallback.estimatedTotalSeconds || 1)));
+  const stages = Array.isArray(estimate.stages) && estimate.stages.length ? estimate.stages : fallback.stages;
+  return {
+    ...fallback,
+    ...estimate,
+    estimatedTotalSeconds: total,
+    remainingSeconds: total,
+    estimatedProgress: Number.isFinite(Number(estimate.estimatedProgress)) ? Number(estimate.estimatedProgress) : 1,
+    estimatedCompleteAt: estimate.estimatedCompleteAt || new Date(Date.now() + total * 1000).toISOString(),
+    currentStage: estimate.currentStage || stages?.[0] || fallback.currentStage || null,
+    stages,
+    estimateBasis: estimate.estimateBasis || fallback.estimateBasis
+  };
+}
+
+async function fetchCrawlEstimate(payload = {}) {
+  try {
+    const estimate = await fetchJson("/api/crawl-estimate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return normalizeCrawlEstimate(estimate, payload);
+  } catch {
+    return crawlPreviewMeta(payload);
+  }
+}
+
+function crawlReadinessMeta(payload = {}, preview = crawlPreviewMeta(payload)) {
+  const total = Math.max(1, Math.round(Number(preview.estimatedTotalSeconds || 1)));
+  return {
+    ...preview,
+    elapsedSeconds: 0,
+    remainingSeconds: total,
+    estimatedTotalSeconds: total,
+    estimatedProgress: 0,
+    estimatedCompleteAt: new Date(Date.now() + total * 1000).toISOString(),
+    currentStage: null,
+    stages: (Array.isArray(preview.stages) ? preview.stages : crawlStageFallbacks()).map((stage) => ({
+      ...stage,
+      status: "planned",
+      progress: 0
+    }))
+  };
+}
+
+function renderCrawlReadinessPreview(payload = currentCrawlFormPayload(), preview = crawlPreviewMeta(payload)) {
+  if (!isAdminRole() || !els.crawlProgress || state.crawlProgressRunning) return;
+  const meta = crawlReadinessMeta(payload, preview);
+  const keyword = payload.keyword || "키워드 입력 대기";
+  const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
+  els.crawlProgress.hidden = false;
+  els.crawlProgress.classList.add("is-preview");
+  els.crawlProgress.classList.remove("is-running", "is-delayed");
+  if (els.crawlProgressTitle) els.crawlProgressTitle.textContent = "예상 수집 시간";
+  if (els.crawlProgressText) {
+    els.crawlProgressText.textContent = `${keyword} · ${collectionModeLabel(payload.collectionMode)} · ${detailText} · 실행 전 조건 기준`;
+  }
+  updateCrawlProgressNumbers(meta);
+}
+
+function clearCrawlEstimateTimer() {
+  if (!state.crawlEstimateTimer) return;
+  clearTimeout(state.crawlEstimateTimer);
+  state.crawlEstimateTimer = null;
+}
+
+function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()) {
+  if (!isAdminRole() || state.crawlProgressRunning || !payload.keyword) return;
+  clearCrawlEstimateTimer();
+  const requestId = ++state.crawlEstimateRequestId;
+  state.crawlEstimateTimer = setTimeout(async () => {
+    const estimate = await fetchCrawlEstimate(payload);
+    if (requestId !== state.crawlEstimateRequestId || state.crawlProgressRunning) return;
+    renderCrawlReadinessPreview(payload, estimate);
+    if (els.crawlSpeedPreview) {
+      const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
+      els.crawlSpeedPreview.textContent = `${detailText} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}`;
+    }
+  }, 220);
 }
 
 function b2bSearchStageRows(preview = {}, elapsedSeconds = 0) {
@@ -1476,6 +1564,10 @@ function recrawlContextStatusText(context = {}) {
 
 function crawlStageStatusText(stage = {}) {
   if (stage.skipped) return "생략";
+  if (stage.status === "planned") {
+    const seconds = Number(stage.seconds);
+    return Number.isFinite(seconds) ? `예상 ${formatElapsed(seconds)}` : "예상";
+  }
   if (stage.status === "done") {
     const seconds = Number(stage.durationSeconds);
     return Number.isFinite(seconds) ? `완료 · ${formatElapsed(seconds)}` : "완료";
@@ -1531,11 +1623,18 @@ function updateCrawlProgressNumbers(meta = {}) {
 
 function setCrawlProgress(active, title = "", text = "", meta = {}) {
   if (!els.crawlProgress) return;
-  els.crawlProgress.hidden = !active;
+  state.crawlProgressRunning = Boolean(active);
+  els.crawlProgress.hidden = false;
+  els.crawlProgress.classList.toggle("is-running", Boolean(active));
+  els.crawlProgress.classList.toggle("is-preview", !active);
   els.crawlProgress.classList.toggle("is-delayed", Boolean(active && meta.isDelayed));
+  if (!active) {
+    renderCrawlReadinessPreview();
+    return;
+  }
   if (title && els.crawlProgressTitle) els.crawlProgressTitle.textContent = title;
   if (text && els.crawlProgressText) els.crawlProgressText.textContent = text;
-  if (active) updateCrawlProgressNumbers(meta);
+  updateCrawlProgressNumbers(meta);
 }
 
 function formatElapsed(seconds) {
@@ -22113,9 +22212,18 @@ async function submitCrawl(event) {
   }
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
+  clearCrawlEstimateTimer();
+  state.crawlEstimateRequestId += 1;
   const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
-  const preview = crawlPreviewMeta(payload);
+  let preview = crawlPreviewMeta(payload);
   const recrawlText = recrawlContextStatusText(payload.recrawlContext);
+  setCrawlProgress(
+    true,
+    "수집 실행 중",
+    `${recrawlText ? `${recrawlText} · ` : ""}${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
+    preview
+  );
+  preview = await fetchCrawlEstimate(payload);
   setCrawlProgress(
     true,
     "수집 실행 중",
