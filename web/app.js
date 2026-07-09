@@ -10008,6 +10008,153 @@ function renderB2BCompetitiveSnapshot(brief = b2bMarketBriefModel(), model = b2b
   `;
 }
 
+const B2B_LOCATION_COMPONENT_COPY = {
+  dictionary: { label: "지역 기본 여건", note: "교통·운영·체류 여건" },
+  tourismDemand: { label: "관광 수요", note: "방문 수요 흐름" },
+  stayFit: { label: "숙박 적합도", note: "숙박 상품 운영 적합성" },
+  searchDemand: { label: "검색 수요", note: "키워드 검색량 반영" },
+  competition: { label: "경쟁 밀도", note: "노출 업체 수와 채널 상태" },
+  booking: { label: "예약 반응", note: "네이버 예약 판매 흐름" },
+  revenue: { label: "매출 표본", note: "가격·수량 표본 기반" },
+  seasonality: { label: "계절 흐름", note: "최근 검색 추세 반영" },
+  confidence: { label: "자료 안정성", note: "표본 연결 상태" }
+};
+
+function b2bLocationComponentCopy(component = {}) {
+  const copy = B2B_LOCATION_COMPONENT_COPY[component.key] || {};
+  return {
+    label: copy.label || component.label || "입지 근거",
+    note: copy.note || component.note || "수집 표본 반영"
+  };
+}
+
+function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
+  const query = brief.keyword || activeKeyword();
+  const match = locationCardForQuery(query);
+  if (match.group) {
+    const cards = locationGroupCards(match.group);
+    const runtime = locationGroupRuntimeStats(match.group, cards);
+    const tourismRegions = tourismRegionsForLocationGroup(match.group);
+    const scoreModel = regionGroupLocationScoreModel(match.group, cards, runtime, tourismRegions);
+    return {
+      available: true,
+      kind: "권역",
+      label: match.group.searchKeyword || query,
+      connectedLabel: `지역 ${fmtNumber(cards.length)}개 연결`,
+      runtime,
+      scoreModel,
+      tourismLabel: tourismRegions.length ? `관광권 ${fmtNumber(tourismRegions.length)}곳 반영` : "관광권 연결 대기"
+    };
+  }
+  if (match.card) {
+    const alias = match.alias || dictionaryAliasForCard(match.card);
+    const runtime = locationRuntimeStats(match.card, alias);
+    const tourismMatch = tourismRegionForLocation({ card: match.card, alias, query });
+    const scoreModel = adjustedLocationScoreModel(match.card, runtime, tourismMatch);
+    return {
+      available: true,
+      kind: "지역",
+      label: match.card.searchKeyword || query,
+      connectedLabel: "지역 기준 연결",
+      runtime,
+      scoreModel,
+      tourismLabel: tourismMatch?.region ? "관광권 반영" : "관광권 연결 대기"
+    };
+  }
+  return {
+    available: false,
+    kind: "지역",
+    label: query,
+    connectedLabel: "지역 기준 준비 중",
+    runtime: {
+      items: state.data?.availability?.items || [],
+      sales: summarizeSales(state.data?.availability?.items || []),
+      searchVolume: brief.searchVolume || 0
+    },
+    scoreModel: null,
+    tourismLabel: "지역 기준 연결 대기"
+  };
+}
+
+function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2bLocationScoreContext(brief)) {
+  const runtime = context.runtime || {};
+  const scoreModel = context.scoreModel;
+  const sampleCount = finiteNumber(runtime.items?.length, brief.itemCount || 0);
+  const sales = runtime.sales || {};
+  const rate = Number.isFinite(Number(runtime.rate))
+    ? Number(runtime.rate)
+    : (sales.supply ? sales.sold / sales.supply : brief.rate);
+  if (!context.available || !scoreModel) {
+    return `
+      <section class="b2b-location-score pending">
+        <div class="b2b-location-score-main">
+          <div>
+            <span>입지 경쟁력</span>
+            <strong>준비 중</strong>
+            <small>${escapeHtml(context.connectedLabel)}</small>
+          </div>
+          <p>${escapeHtml(`${context.label || "검색 지역"}은 아직 입지 기준 정보가 연결되지 않았습니다. 현재 리포트는 검색 결과와 예약·매출 표본을 먼저 보여줍니다.`)}</p>
+        </div>
+        <div class="b2b-location-basis">
+          <span>노출 표본 ${fmtNumber(sampleCount)}곳</span>
+          <span>예약율 ${Number.isFinite(rate) ? fmtRate(rate) : "확인 대기"}</span>
+          <span>검색량 ${brief.searchVolume ? `${fmtNumber(brief.searchVolume)}회` : "확인 대기"}</span>
+        </div>
+      </section>
+    `;
+  }
+  const score = clampLocationScore(scoreModel.score, 0);
+  const scoreTone = score >= 78 ? "strong" : score >= 62 ? "watch" : "caution";
+  const manual = scoreModel.manual || {};
+  const sourceLabel = manual.hasAdjustment ? "운영 검수 반영" : "자동 산식 기준";
+  const summary = score >= 78
+    ? "검색 수요와 예약·매출 표본이 함께 받쳐주는 입지입니다."
+    : score >= 62
+      ? "경쟁권 안에서 비교 가능한 입지입니다. 예약 반응과 매출 표본을 함께 확인하세요."
+      : "현재 표본만으로는 입지 판단을 보수적으로 봐야 합니다.";
+  const driverRows = (scoreModel.components || [])
+    .slice()
+    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+    .slice(0, 4);
+  const basisRows = [
+    `${context.kind} 기준`,
+    context.connectedLabel,
+    `노출 표본 ${fmtNumber(sampleCount)}곳`,
+    Number.isFinite(rate) ? `예약율 ${fmtRate(rate)}` : "예약율 확인 대기",
+    context.tourismLabel
+  ].filter(Boolean);
+  return `
+    <section class="b2b-location-score ${escapeHtml(scoreTone)}">
+      <div class="b2b-location-score-main">
+        <div>
+          <span>입지 경쟁력</span>
+          <strong>${fmtNumber(score)}점</strong>
+          <small>${escapeHtml(sourceLabel)}</small>
+        </div>
+        <p>${escapeHtml(summary)}</p>
+      </div>
+      <div class="b2b-location-score-bar" aria-label="입지 경쟁력 ${fmtNumber(score)}점">
+        <i style="width:${Math.max(0, Math.min(100, score))}%"></i>
+      </div>
+      <div class="b2b-location-driver-grid">
+        ${driverRows.map((component) => {
+          const copy = b2bLocationComponentCopy(component);
+          return `
+            <article class="${escapeHtml(component.tone || "mid")}">
+              <span>${escapeHtml(copy.label)}</span>
+              <strong>${fmtNumber(component.value)}</strong>
+              <small>${escapeHtml(copy.note)}</small>
+            </article>
+          `;
+        }).join("")}
+      </div>
+      <div class="b2b-location-basis">
+        ${basisRows.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const snapshotModel = b2bCompetitiveSnapshotModel(brief);
   const revenueModel = b2bRevenueBenchmarkModel(brief);
@@ -10015,6 +10162,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const correlationModel = b2bCompetitionSalesCorrelationModel(snapshotModel.rankModel);
   const simpleModel = b2bSimpleSummaryModel(brief, strategyModel, revenueModel, snapshotModel);
   const myLodgeModel = b2bMyLodgeBenchmarkModel(brief, revenueModel);
+  const locationScoreContext = b2bLocationScoreContext(brief);
   const rankRange = effectiveDetailRankRange(brief.run);
   const rankRangeLabel = rankRange === "상세 생략" ? rankRange : `${rankRange}위`;
   const sampleCount = snapshotModel.rankModel?.rows?.length || brief.itemCount || 0;
@@ -10024,7 +10172,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
         <div>
           <span class="report-badge ${escapeHtml(brief.decision.tone)}">리포트 요약</span>
           <h3>${escapeHtml(brief.keyword)} 경쟁 현황</h3>
-          <p>${escapeHtml("지정 검색범위 안의 경쟁강도, 실제 예약율, 예상 평균 매출, 월별 예상 검색량만 먼저 보여줍니다.")}</p>
+          <p>${escapeHtml("지정 검색범위 안의 경쟁강도, 실제 예약율, 예상 평균 매출, 입지 경쟁력, 월별 예상 검색량을 먼저 보여줍니다.")}</p>
         </div>
         <div class="b2b-brief-score analysis-scope">
           <span>분석 조건</span>
@@ -10033,6 +10181,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
         </div>
       </div>
       ${renderB2BSimpleSummary(brief, simpleModel)}
+      ${renderB2BLocationScoreCard(brief, locationScoreContext)}
       ${renderB2BMyLodgeBenchmark(brief, myLodgeModel)}
       <details class="b2b-detail-pack">
         <summary>
