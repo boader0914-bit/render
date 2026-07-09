@@ -1812,10 +1812,10 @@ function detectLodgingCategoryKey(value = "") {
 }
 
 function activeLodgingCategoryProfile(data = state.data || {}) {
-  const explicit = data?.run?.lodgingCategoryKey || data?.lodgingCategoryKey || data?.categoryKey;
-  if (explicit) return lodgingCategoryProfile(explicit);
   const keywordCategory = detectLodgingCategoryKey(data?.run?.keyword || activeKeyword());
   if (keywordCategory !== DEFAULT_LODGING_CATEGORY_KEY) return lodgingCategoryProfile(keywordCategory);
+  const explicit = data?.run?.lodgingCategoryKey || data?.lodgingCategoryKey || data?.categoryKey;
+  if (explicit) return lodgingCategoryProfile(explicit);
   return lodgingCategoryProfile(detectLodgingCategoryKey(lodgingCategorySearchText(data) || activeKeyword()));
 }
 
@@ -23837,6 +23837,8 @@ function bindEvents() {
     }
     const b2bHistoryRun = event.target.closest("[data-b2b-history-run-id]");
     if (b2bHistoryRun) {
+      state.b2bHistoryExpanded = false;
+      renderB2BSearchHistoryPanel();
       loadB2BHistoryRun(b2bHistoryRun.dataset.b2bHistoryRunId).catch((error) => {
         if (els.b2bSearchStatus) els.b2bSearchStatus.textContent = error.message;
       });
