@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260708";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260709-b2b-history";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",
@@ -45,6 +45,19 @@ self.addEventListener("fetch", (event) => {
           return response;
         })
         .catch(() => caches.match(request).then((cached) => cached || caches.match("/offline.html")))
+    );
+    return;
+  }
+
+  if (["script", "style", "manifest"].includes(request.destination) || ["/app.js", "/styles.css", "/sw.js"].includes(url.pathname)) {
+    event.respondWith(
+      fetch(request).then((response) => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_VERSION).then((cache) => cache.put(request, clone)).catch(() => {});
+        }
+        return response;
+      }).catch(() => caches.match(request))
     );
     return;
   }
