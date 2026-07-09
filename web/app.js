@@ -2521,11 +2521,11 @@ function manualCorrectionHasBasis(correction = {}) {
 function cleanManualCorrectionSegment(row = {}) {
   return {
     type: String(row.type || row.roomType || "").trim().slice(0, 80),
-    count: Math.round(finiteNumber(row.count ?? row.roomCount, 0)),
-    weekdayPrice: Math.round(finiteNumber(row.weekdayPrice, 0)),
-    fridayPrice: Math.round(finiteNumber(row.fridayPrice, 0)),
-    saturdayPrice: Math.round(finiteNumber(row.saturdayPrice, 0)),
-    sundayPrice: Math.round(finiteNumber(row.sundayPrice, 0))
+    count: Math.round(Math.max(0, optionalNumber(row.count ?? row.roomCount) || 0)),
+    weekdayPrice: Math.round(Math.max(0, optionalNumber(row.weekdayPrice) || 0)),
+    fridayPrice: Math.round(Math.max(0, optionalNumber(row.fridayPrice) || 0)),
+    saturdayPrice: Math.round(Math.max(0, optionalNumber(row.saturdayPrice) || 0)),
+    sundayPrice: Math.round(Math.max(0, optionalNumber(row.sundayPrice) || 0))
   };
 }
 
@@ -2582,13 +2582,72 @@ function parseManualCorrectionRoomSegments(text = "") {
     .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
 }
 
-function manualCorrectionRoomSegmentsField(correction = {}) {
+function manualCorrectionSegmentInputValue(value) {
+  const number = Math.round(Math.max(0, optionalNumber(value) || 0));
+  return number > 0 ? fmtNumber(number) : "";
+}
+
+function manualCorrectionRoomSegmentsSummary(rows = []) {
+  const validRows = rows.filter((row) => manualCorrectionSegmentHasValue(row));
+  const total = validRows.reduce((sum, row) => sum + Math.round(Math.max(0, optionalNumber(row.count) || 0)), 0);
+  return [
+    validRows.length ? `객실종류 ${fmtNumber(validRows.length)}개` : "객실종류 입력 대기",
+    total ? `총 ${fmtNumber(total)}실` : "총량 미입력"
+  ].join(" · ");
+}
+
+function manualCorrectionRoomSegmentRowHtml(row = {}, index = 0, totalRows = 1) {
+  const clean = cleanManualCorrectionSegment(row);
+  const removable = totalRows > 1;
   return `
-    <label class="company-manual-segments">
-      <span>객실종류/요일가격 보정</span>
-      <textarea data-manual-room-segments rows="4" placeholder="예: 스탠다드, 4, 120000, 160000, 220000, 140000">${escapeHtml(manualCorrectionRoomSegmentsText(correction))}</textarea>
-      <small>한 줄에 객실종류, 수량, 평일, 금, 토, 일 가격 순서로 입력합니다.</small>
-    </label>
+    <div class="company-manual-segment-row" data-manual-segment-row>
+      <label class="type">
+        <span>객실종류</span>
+        <input type="text" data-manual-segment-field="type" value="${escapeHtml(clean.type)}" placeholder="예: 스탠다드">
+      </label>
+      <label>
+        <span>수량</span>
+        <input type="text" inputmode="numeric" data-manual-segment-field="count" value="${escapeHtml(manualCorrectionSegmentInputValue(clean.count))}" placeholder="4">
+      </label>
+      <label>
+        <span>평일</span>
+        <input type="text" inputmode="numeric" data-manual-segment-field="weekdayPrice" value="${escapeHtml(manualCorrectionSegmentInputValue(clean.weekdayPrice))}" placeholder="120,000">
+      </label>
+      <label>
+        <span>금</span>
+        <input type="text" inputmode="numeric" data-manual-segment-field="fridayPrice" value="${escapeHtml(manualCorrectionSegmentInputValue(clean.fridayPrice))}" placeholder="160,000">
+      </label>
+      <label>
+        <span>토</span>
+        <input type="text" inputmode="numeric" data-manual-segment-field="saturdayPrice" value="${escapeHtml(manualCorrectionSegmentInputValue(clean.saturdayPrice))}" placeholder="220,000">
+      </label>
+      <label>
+        <span>일</span>
+        <input type="text" inputmode="numeric" data-manual-segment-field="sundayPrice" value="${escapeHtml(manualCorrectionSegmentInputValue(clean.sundayPrice))}" placeholder="140,000">
+      </label>
+      <button type="button" data-manual-segment-remove="${index}" aria-label="객실종류 삭제" ${removable ? "" : "disabled"}>×</button>
+    </div>
+  `;
+}
+
+function manualCorrectionRoomSegmentsField(correction = {}) {
+  const rows = manualCorrectionRoomSegments(correction);
+  const displayRows = rows.length ? rows : [cleanManualCorrectionSegment({})];
+  return `
+    <div class="company-manual-segments" data-manual-segments>
+      <div class="company-manual-segments-head">
+        <div>
+          <strong>객실종류/요일가격 보정</strong>
+          <small data-manual-segment-summary>${escapeHtml(manualCorrectionRoomSegmentsSummary(rows))}</small>
+        </div>
+        <button type="button" data-manual-segment-add ${displayRows.length >= B2B_MY_LODGE_SEGMENT_LIMIT ? "disabled" : ""}>객실종류 +</button>
+      </div>
+      <div class="company-manual-segment-list" data-manual-segment-list>
+        ${displayRows.map((row, index) => manualCorrectionRoomSegmentRowHtml(row, index, displayRows.length)).join("")}
+      </div>
+      <textarea class="sr-only" data-manual-room-segments tabindex="-1" aria-hidden="true">${escapeHtml(manualCorrectionRoomSegmentsText(correction))}</textarea>
+      <small class="company-manual-segments-help">객실종류별 수량과 요일 가격을 입력하면 B2B 관심숙소 등록과 매출 비교에 검수값이 먼저 적용됩니다.</small>
+    </div>
   `;
 }
 
@@ -22476,6 +22535,69 @@ async function resolveCompanyDuplicate(button) {
   }
 }
 
+function collectManualCorrectionRoomSegments(form = null, options = {}) {
+  const { includeBlank = false } = options;
+  if (!form) return [];
+  const rows = Array.from(form.querySelectorAll("[data-manual-segment-row]"))
+    .map((row) => {
+      const value = (field) => String(row.querySelector(`[data-manual-segment-field="${field}"]`)?.value || "").trim();
+      return cleanManualCorrectionSegment({
+        type: value("type"),
+        count: value("count"),
+        weekdayPrice: value("weekdayPrice"),
+        fridayPrice: value("fridayPrice"),
+        saturdayPrice: value("saturdayPrice"),
+        sundayPrice: value("sundayPrice")
+      });
+    })
+    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+  const filtered = rows.filter((row) => manualCorrectionSegmentHasValue(row));
+  if (filtered.length || includeBlank) return includeBlank ? rows : filtered;
+  const legacyText = form.querySelector("[data-manual-room-segments]")?.value || "";
+  return parseManualCorrectionRoomSegments(legacyText);
+}
+
+function updateManualCorrectionSegmentPanel(panel = null) {
+  if (!panel) return;
+  const form = panel.closest("[data-company-manual-form]");
+  const rows = collectManualCorrectionRoomSegments(form, { includeBlank: true });
+  const validRows = rows.filter((row) => manualCorrectionSegmentHasValue(row));
+  const summary = panel.querySelector("[data-manual-segment-summary]");
+  if (summary) summary.textContent = manualCorrectionRoomSegmentsSummary(validRows);
+  const addButton = panel.querySelector("[data-manual-segment-add]");
+  if (addButton) addButton.disabled = rows.length >= B2B_MY_LODGE_SEGMENT_LIMIT;
+  const removeButtons = Array.from(panel.querySelectorAll("[data-manual-segment-remove]"));
+  removeButtons.forEach((button) => {
+    button.disabled = removeButtons.length <= 1;
+  });
+  const legacyTextarea = panel.querySelector("[data-manual-room-segments]");
+  if (legacyTextarea) legacyTextarea.value = manualCorrectionRoomSegmentsText({ roomSegments: validRows });
+}
+
+function addManualCorrectionSegmentRow(button = null) {
+  const panel = button?.closest("[data-manual-segments]");
+  const list = panel?.querySelector("[data-manual-segment-list]");
+  if (!panel || !list) return;
+  const rows = Array.from(list.querySelectorAll("[data-manual-segment-row]"));
+  if (rows.length >= B2B_MY_LODGE_SEGMENT_LIMIT) return;
+  list.insertAdjacentHTML("beforeend", manualCorrectionRoomSegmentRowHtml({}, rows.length, rows.length + 1));
+  updateManualCorrectionSegmentPanel(panel);
+}
+
+function removeManualCorrectionSegmentRow(button = null) {
+  const panel = button?.closest("[data-manual-segments]");
+  const list = panel?.querySelector("[data-manual-segment-list]");
+  const row = button?.closest("[data-manual-segment-row]");
+  if (!panel || !list || !row) return;
+  const rows = Array.from(list.querySelectorAll("[data-manual-segment-row]"));
+  if (rows.length <= 1) {
+    row.querySelectorAll("[data-manual-segment-field]").forEach((input) => { input.value = ""; });
+  } else {
+    row.remove();
+  }
+  updateManualCorrectionSegmentPanel(panel);
+}
+
 async function saveCompanyCorrection(button, clear = false) {
   const form = button?.closest("[data-company-manual-form]");
   const companyId = button?.dataset?.companyId || form?.dataset?.companyId || state.selectedItem?.companyId || "";
@@ -22484,8 +22606,7 @@ async function saveCompanyCorrection(button, clear = false) {
   const selectedCompanyId = state.selectedItem?.companyId || companyId;
   const lodgingBasisTotal = form?.querySelector("[data-manual-lodging]")?.value || "";
   const dayUseBasisTotal = form?.querySelector("[data-manual-dayuse]")?.value || "";
-  const roomSegmentsText = form?.querySelector("[data-manual-room-segments]")?.value || "";
-  const roomSegments = parseManualCorrectionRoomSegments(roomSegmentsText);
+  const roomSegments = collectManualCorrectionRoomSegments(form);
   const note = form?.querySelector("[data-manual-note]")?.value || "";
   const emptySave = !clear && !String(lodgingBasisTotal).trim() && !String(dayUseBasisTotal).trim() && !roomSegments.length && !String(note).trim();
   const shouldClear = clear || emptySave;
@@ -23771,6 +23892,16 @@ function bindEvents() {
       saveLocationScoreOverride(clearLocationScore, true);
       return;
     }
+    const addManualSegment = event.target.closest("[data-manual-segment-add]");
+    if (addManualSegment) {
+      addManualCorrectionSegmentRow(addManualSegment);
+      return;
+    }
+    const removeManualSegment = event.target.closest("[data-manual-segment-remove]");
+    if (removeManualSegment) {
+      removeManualCorrectionSegmentRow(removeManualSegment);
+      return;
+    }
     const saveCorrection = event.target.closest("[data-save-company-correction]");
     if (saveCorrection) saveCompanyCorrection(saveCorrection, false);
     const clearCorrection = event.target.closest("[data-clear-company-correction]");
@@ -23869,6 +24000,11 @@ function bindEvents() {
     const b2bWonInput = event.target.closest("[data-b2b-won-input]");
     if (b2bWonInput) {
       formatB2BWonInput(b2bWonInput);
+      return;
+    }
+    const manualSegmentField = event.target.closest("[data-manual-segment-field]");
+    if (manualSegmentField) {
+      updateManualCorrectionSegmentPanel(manualSegmentField.closest("[data-manual-segments]"));
       return;
     }
     const checkSearch = event.target.closest("[data-company-check-search]");
