@@ -2514,6 +2514,86 @@ a {
   height: 8px;
 }
 
+.admin-region-review-form {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(130px, .55fr) minmax(220px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  border: 1px solid #d5e3f7;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .78);
+  padding: 10px;
+}
+
+.admin-region-review-form > div:first-child,
+.admin-region-review-form label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-region-review-form span,
+.admin-region-review-form small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-review-form strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-review-form select,
+.admin-region-review-form input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid #d5e3f7;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-region-review-form > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-region-review-form button {
+  min-height: 38px;
+  border: 1px solid #d6e6ff;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: var(--blue);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.admin-region-review-form button:last-child {
+  border-color: #e8edf5;
+  color: var(--muted);
+}
+
+.admin-region-review-form button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
 .admin-region-checklist-panel {
   min-width: 0;
   display: grid;
@@ -21233,6 +21313,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-focus-panel,
   .admin-region-review-grid,
   .admin-region-preflight-layout,
+  .admin-region-review-form,
   .admin-region-checklist-grid,
   .admin-region-card-grid,
   .admin-region-card-metrics,

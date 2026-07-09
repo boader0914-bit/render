@@ -7579,7 +7579,9 @@ function emptyCompanyMaster() {
     updatedAt: "",
     companies: {},
     sourceIndex: {},
-    duplicateResolutions: {}
+    duplicateResolutions: {},
+    regionReviews: {},
+    regionReviewHistory: []
   };
 }
 
@@ -7591,7 +7593,9 @@ async function readCompanyMaster() {
       ...parsed,
       companies: parsed.companies || {},
       sourceIndex: parsed.sourceIndex || {},
-      duplicateResolutions: parsed.duplicateResolutions || {}
+      duplicateResolutions: parsed.duplicateResolutions || {},
+      regionReviews: parsed.regionReviews || {},
+      regionReviewHistory: Array.isArray(parsed.regionReviewHistory) ? parsed.regionReviewHistory : []
     };
   } catch {
     return emptyCompanyMaster();
@@ -8591,6 +8595,106 @@ function finalizeRegionalOpsBucket(bucket = {}) {
   };
 }
 
+function adminRegionReviewMeta(status = "") {
+  return {
+    public_ready: { label: "공개 가능", tone: "good", statusKey: "public_ready", scoreFloor: 82, nextCycle: "주 1회 유지" },
+    review_needed: { label: "검수 후 공개", tone: "watch", statusKey: "review_needed", scoreFloor: 68, nextCycle: "이번 주 검수" },
+    collect_needed: { label: "보강 필요", tone: "hot", statusKey: "collect_needed", scoreCap: 58, nextCycle: "즉시 보강" },
+    hold: { label: "보류", tone: "hot", statusKey: "collect_needed", scoreCap: 50, nextCycle: "보류 사유 재검토" }
+  }[String(status || "").trim()] || null;
+}
+
+function regionReviewKey(value = "") {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}:_-]+/gu, "")
+    .trim()
+    .slice(0, 120);
+}
+
+function applyAdminRegionReviewsToOperations(ops = {}, master = {}) {
+  const reviews = master.regionReviews || {};
+  const histories = Array.isArray(master.regionReviewHistory) ? master.regionReviewHistory : [];
+  const reviewValues = Object.values(reviews || {}).filter(Boolean);
+  const regionLookupKeys = (region = {}) => {
+    return [
+      region.regionKey,
+      regionReviewKey(region.regionLabel),
+      regionReviewKey(`${region.provinceKey || ""}:${region.localityKey || ""}`),
+      regionReviewKey(`${region.provinceLabel || ""}:${region.regionLabel || ""}`),
+      regionReviewKey(`${region.provinceLabel || ""}:${region.localityLabel || ""}`)
+    ].filter(Boolean);
+  };
+  const reviewFor = (region = {}) => {
+    const keys = regionLookupKeys(region);
+    const direct = keys.map((key) => reviews[key]).find(Boolean);
+    if (direct) return direct;
+    const labelKey = regionReviewKey(region.regionLabel);
+    const provinceLabelKey = regionReviewKey(`${region.provinceLabel || ""}:${region.regionLabel || ""}`);
+    return reviewValues.find((review) => {
+      const reviewKeys = [
+        review.regionKey,
+        regionReviewKey(review.regionLabel),
+        regionReviewKey(`${review.provinceLabel || ""}:${review.regionLabel || ""}`)
+      ].filter(Boolean);
+      return reviewKeys.some((key) => keys.includes(key))
+        || (labelKey && reviewKeys.includes(labelKey))
+        || (provinceLabelKey && reviewKeys.includes(provinceLabelKey));
+    }) || null;
+  };
+  const regions = (ops.regions || []).map((region) => {
+    const review = reviewFor(region);
+    const historyKeys = regionLookupKeys(region);
+    const regionHistory = histories
+      .filter((row) => {
+        const rowKeys = [
+          row.regionKey,
+          regionReviewKey(row.regionLabel),
+          regionReviewKey(`${row.provinceLabel || ""}:${row.regionLabel || ""}`)
+        ].filter(Boolean);
+        return rowKeys.some((key) => historyKeys.includes(key));
+      })
+      .slice(-20);
+    if (!review) return regionHistory.length ? { ...region, adminReviewHistory: regionHistory } : region;
+    const meta = adminRegionReviewMeta(review.status);
+    const score = Number(region.status?.score || 0);
+    const nextScore = meta?.scoreFloor ? Math.max(score, meta.scoreFloor) : (meta?.scoreCap ? Math.min(score, meta.scoreCap) : score);
+    const nextStatus = meta ? {
+      ...(region.status || {}),
+      key: meta.statusKey,
+      label: meta.label,
+      score: nextScore,
+      adminOverride: true
+    } : region.status;
+    const nextMaintenance = {
+      ...(region.maintenance || {}),
+      preflightStatus: meta ? { key: review.status, label: meta.label, tone: meta.tone, adminOverride: true } : region.maintenance?.preflightStatus,
+      nextCycle: meta?.nextCycle || region.maintenance?.nextCycle,
+      adminReview: review
+    };
+    return {
+      ...region,
+      status: nextStatus,
+      preflight: {
+        ...(region.preflight || {}),
+        status: meta ? { key: review.status, label: meta.label, tone: meta.tone, adminOverride: true } : region.preflight?.status,
+        readinessScore: Math.max(Number(region.preflight?.readinessScore || 0), meta?.scoreFloor || 0)
+      },
+      maintenance: nextMaintenance,
+      adminReview: review,
+      adminReviewHistory: regionHistory
+    };
+  });
+  const summary = { ...(ops.summary || {}) };
+  summary.regionReviewCount = Object.keys(reviews).length;
+  summary.adminPublicReadyRegionCount = regions.filter((region) => region.adminReview?.status === "public_ready").length;
+  summary.adminReviewNeededRegionCount = regions.filter((region) => region.adminReview?.status === "review_needed").length;
+  summary.adminCollectNeededRegionCount = regions.filter((region) => ["collect_needed", "hold"].includes(region.adminReview?.status)).length;
+  summary.preflightReadyRegionCount = Math.max(Number(summary.preflightReadyRegionCount || 0), summary.adminPublicReadyRegionCount);
+  summary.publicReadyRegionCount = Math.max(Number(summary.publicReadyRegionCount || 0), summary.adminPublicReadyRegionCount);
+  return { ...ops, regions, summary };
+}
+
 function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {}, collectedAt = "" } = {}) {
   const entities = new Map();
   for (const item of items) {
@@ -8781,7 +8885,7 @@ function buildRunRegionalOperations(data = {}, collectedAt = "") {
   return buildRegionalOperationsFromItems({ basis: "run", items, run, collectedAt });
 }
 
-function summarizeCompanyMasterRegionalOperations(companies = []) {
+function summarizeCompanyMasterRegionalOperations(companies = [], master = {}) {
   const items = companies.map((company) => {
     const latest = company.inventory?.latest || {};
     const signal = latest.salesSignal || {};
@@ -8814,7 +8918,10 @@ function summarizeCompanyMasterRegionalOperations(companies = []) {
       adminReview: company.adminReview || null
     };
   });
-  return buildRegionalOperationsFromItems({ basis: "company_master", items, run: {}, collectedAt: "" });
+  return applyAdminRegionReviewsToOperations(
+    buildRegionalOperationsFromItems({ basis: "company_master", items, run: {}, collectedAt: "" }),
+    master
+  );
 }
 
 function salesTargetRankScore(bestRank) {
@@ -9621,6 +9728,73 @@ async function saveCompanyAdminReview(payload = {}) {
   };
 }
 
+async function saveAdminRegionReview(payload = {}, session = {}) {
+  const regionKey = regionReviewKey(payload.regionKey || payload.key || payload.regionLabel);
+  const regionLabel = sanitizeMemberText(payload.regionLabel || payload.label || regionKey, 80);
+  const provinceLabel = sanitizeMemberText(payload.provinceLabel, 80);
+  const status = String(payload.status || "").trim();
+  const master = await readCompanyMaster();
+  if (!regionKey) {
+    const error = new Error("감수할 지역 키가 없습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const savedAt = new Date().toISOString();
+  const previous = master.regionReviews?.[regionKey] || null;
+  const note = sanitizeMemberText(payload.note, 260);
+  const checklistSummary = sanitizeMemberText(payload.checklistSummary, 260);
+  let review = null;
+  let action = "save";
+  if (!status || status === "clear") {
+    action = "clear";
+    delete master.regionReviews[regionKey];
+  } else {
+    const meta = adminRegionReviewMeta(status);
+    if (!meta) {
+      const error = new Error("지원하지 않는 지역 감수 상태입니다.");
+      error.statusCode = 400;
+      throw error;
+    }
+    review = {
+      regionKey,
+      regionLabel,
+      provinceLabel,
+      status,
+      label: meta.label,
+      tone: meta.tone,
+      note,
+      checklistSummary,
+      source: "admin",
+      updatedBy: sanitizeMemberText(session.username || session.memberId || "admin", 80),
+      updatedAt: savedAt
+    };
+    master.regionReviews[regionKey] = review;
+  }
+  master.regionReviewHistory = [
+    ...(master.regionReviewHistory || []),
+    {
+      at: savedAt,
+      action,
+      regionKey,
+      regionLabel,
+      provinceLabel,
+      previousStatus: previous?.status || "",
+      previousLabel: previous?.label || "",
+      status: review?.status || "",
+      label: review?.label || "감수 해제",
+      note,
+      checklistSummary,
+      source: "admin",
+      by: sanitizeMemberText(session.username || session.memberId || "admin", 80)
+    }
+  ].slice(-200);
+  await writeCompanyMaster(master);
+  return {
+    ...(await summarizeCompanyMaster()),
+    resolved: { action: action === "clear" ? "clearAdminRegionReview" : "saveAdminRegionReview", regionKey, status: review?.status || "clear" }
+  };
+}
+
 async function saveCompanySalesContact(payload = {}) {
   const companyId = String(payload.companyId || "").trim();
   const status = String(payload.status || "not_contacted").trim();
@@ -9780,7 +9954,7 @@ async function summarizeCompanyMaster() {
     b2bSearchCompanyCount: collectionSourceCounts.b2b_search || 0,
     crossKeyword: summarizeCompanyCrossKeyword(master),
     salesTargets,
-    adminRegionalOperations: summarizeCompanyMasterRegionalOperations(profiledCompanies),
+    adminRegionalOperations: summarizeCompanyMasterRegionalOperations(profiledCompanies, master),
     updatedAt: master.updatedAt || "",
     principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합",
     companies: profiledCompanies.slice(0, 300)
@@ -11656,8 +11830,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260710-admin-correction-meta"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260710-admin-correction-meta"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260710-region-review-state"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260710-region-review-state"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -12050,6 +12224,12 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyAdminReview(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/region-review") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveAdminRegionReview(payload, session));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/sales-contact") {

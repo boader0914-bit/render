@@ -15901,6 +15901,31 @@ function adminRegionStatusLabel(status = {}) {
   return status.label || "수집 보강";
 }
 
+function adminRegionReviewMeta(status = "") {
+  return {
+    public_ready: { label: "공개 가능", tone: "good", note: "B2B 지역카드 공개 후보" },
+    review_needed: { label: "검수 후 공개", tone: "watch", note: "일부 항목 확인 후 공개" },
+    collect_needed: { label: "보강 필요", tone: "hot", note: "표본·수량·매출 보강 필요" },
+    hold: { label: "보류", tone: "hot", note: "공개 보류 또는 판단 유보" }
+  }[String(status || "").trim()] || null;
+}
+
+function adminRegionReviewOptions() {
+  return [
+    ["public_ready", "공개 가능"],
+    ["review_needed", "검수 후 공개"],
+    ["collect_needed", "보강 필요"],
+    ["hold", "보류"]
+  ];
+}
+
+function adminRegionEffectiveReview(region = {}) {
+  const review = region.adminReview || null;
+  if (!review) return null;
+  const meta = adminRegionReviewMeta(review.status);
+  return meta ? { ...meta, ...review, label: review.label || meta.label, tone: review.tone || meta.tone, fallbackNote: meta.note } : review;
+}
+
 function adminRegionalOpsSource(master = {}) {
   const masterOps = master.adminRegionalOperations || {};
   const runOps = state.data?.adminRegionalOperations || null;
@@ -15917,6 +15942,7 @@ function adminRegionalSummaryCells(summary = {}) {
     ["관리 지역", summary.regionCount || 0, "지역 카드 후보"],
     ["업체 마스터", summary.companyCount || 0, "지역 분류 완료"],
     ["사전 준비", summary.preflightReadyRegionCount || summary.publicReadyRegionCount || 0, "지역카드 공개 후보"],
+    ["관리자 감수", summary.regionReviewCount || 0, "지역 상태 저장"],
     ["즉시 보강", summary.urgentMaintenanceRegionCount || 0, "오늘 확인"],
     ["주간 유지", summary.weeklyMaintenanceRegionCount || 0, "주 1회 점검"],
     ["지역 밖 노출", summary.outsideExposureCount || 0, "검색 반경 경쟁"]
@@ -16308,6 +16334,24 @@ function adminRegionAuditTone(status = "", kind = "") {
 
 function adminRegionAuditRows(region = {}, rows = []) {
   const auditRows = [];
+  for (const history of (region.adminReviewHistory || [])) {
+    const at = history.at || history.updatedAt || "";
+    auditRows.push({
+      kind: "지역",
+      label: history.action === "clear" ? "감수 해제" : (history.label || adminRegionReviewMeta(history.status)?.label || "지역 감수"),
+      status: history.status || "",
+      note: history.note || history.checklistSummary || "지역카드 감수 기록",
+      source: history.source || "관리자",
+      at,
+      timestamp: Date.parse(at) || 0,
+      companyId: "",
+      companyName: region.regionLabel || history.regionLabel || "지역 미확인",
+      regionLabel: history.regionLabel || region.regionLabel || "",
+      keyword: "",
+      rank: "",
+      tone: adminRegionReviewMeta(history.status)?.tone || (history.action === "clear" ? "hot" : "watch")
+    });
+  }
   const pushRow = (row, payload = {}) => {
     const company = row.company || {};
     const metrics = row.metrics || {};
@@ -16632,19 +16676,20 @@ function adminRegionWorkflowPanel(rows = []) {
 function adminRegionDetailFocusPanel(region = {}, rows = [], maintenance = {}) {
   const stats = adminRegionWorkflowStats(rows);
   const primaryAction = maintenance.primaryAction || {};
+  const regionReview = adminRegionEffectiveReview(region);
   const reinforceRows = rows.filter((row) =>
     row.metrics?.lowConfidence ||
     row.metrics?.stockVariance ||
     !row.metrics?.totalRevenue ||
     !Number.isFinite(row.metrics?.rate)
   );
-  const statusLabel = maintenance.preflightStatus?.label || adminRegionStatusLabel(region.status || {});
+  const statusLabel = regionReview?.label || maintenance.preflightStatus?.label || adminRegionStatusLabel(region.status || {});
   const cells = [
     {
       key: "status",
       label: "공개 판단",
       value: statusLabel,
-      note: `준비도 ${fmtNumber(maintenance.readinessScore || region.status?.score || 0)}점`
+      note: regionReview ? `관리자 감수 · ${compactDateTime(regionReview.updatedAt) || "저장됨"}` : `준비도 ${fmtNumber(maintenance.readinessScore || region.status?.score || 0)}점`
     },
     {
       key: "reinforce",
@@ -16680,6 +16725,14 @@ function adminRegionDetailFocusPanel(region = {}, rows = [], maintenance = {}) {
 
 function adminRegionOperationalVerdict(region = {}, rows = [], maintenance = {}) {
   const stats = adminRegionWorkflowStats(rows);
+  const regionReview = adminRegionEffectiveReview(region);
+  if (regionReview) {
+    return {
+      label: regionReview.label,
+      note: regionReview.note || regionReview.fallbackNote || "관리자가 지역카드 감수 상태를 저장했습니다.",
+      tone: regionReview.tone || "watch"
+    };
+  }
   const actionKey = maintenance.primaryAction?.key || "";
   const ready = maintenance.preflightStatus?.key === "ready" || region.status?.key === "public_ready";
   if (stats.recrawlNeeded || actionKey === "capacity_review") {
@@ -16719,6 +16772,7 @@ function adminRegionOperationalVerdict(region = {}, rows = [], maintenance = {})
 
 function adminRegionPreflightChecklistItems(region = {}, rows = [], profile = {}) {
   const coverage = profile.coverage || {};
+  const regionReview = adminRegionEffectiveReview(region);
   const companyCount = Number(region.companyCount || rows.length || 0);
   const reservationGoal = coverage.reservationSampleGoal || 5;
   const revenueGoal = coverage.revenueSampleGoal || 3;
@@ -16778,6 +16832,11 @@ function adminRegionPreflightChecklistItems(region = {}, rows = [], profile = {}
       label: "지역 밖 노출 확인",
       detail: outsideCount ? `${fmtNumber(outsideCount)}곳 검색권 경계 확인 필요` : "지역 밖 노출 없음",
       state: outsideCount ? "pending" : "done"
+    },
+    {
+      label: "지역카드 관리자 감수",
+      detail: regionReview ? `${regionReview.label} · ${compactDateTime(regionReview.updatedAt) || "저장됨"}` : "공개/보강/보류 상태 저장 필요",
+      state: regionReview ? (regionReview.status === "public_ready" ? "done" : "watch") : "pending"
     }
   ];
 }
@@ -16804,6 +16863,37 @@ function adminRegionPreflightChecklistHtml(region = {}, rows = [], profile = {})
             </div>
           </article>
         `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function adminRegionReviewFormHtml(region = {}, rows = [], profile = {}) {
+  const review = adminRegionEffectiveReview(region);
+  const checklist = adminRegionPreflightChecklistItems(region, rows, profile);
+  const doneCount = checklist.filter((item) => item.state === "done").length;
+  const summary = `${doneCount}/${checklist.length} 완료`;
+  const selectedStatus = review?.status || (profile.preflightStatus?.key === "ready" ? "public_ready" : "review_needed");
+  return `
+    <div class="admin-region-review-form" data-admin-region-review-form data-region-key="${escapeHtml(region.regionKey || "")}" data-region-label="${escapeHtml(region.regionLabel || "")}" data-province-label="${escapeHtml(region.provinceLabel || "")}" data-checklist-summary="${escapeHtml(summary)}">
+      <div>
+        <span>지역카드 감수 저장</span>
+        <strong>${escapeHtml(review ? `${review.label} 저장됨` : "관리자 판단 대기")}</strong>
+        <small>${escapeHtml(review?.updatedAt ? `${compactDateTime(review.updatedAt)} · ${review.note || review.fallbackNote || "메모 없음"}` : `체크리스트 ${summary}`)}</small>
+      </div>
+      <label>
+        <span>상태</span>
+        <select data-admin-region-review-status>
+          ${adminRegionReviewOptions().map(([value, label]) => `<option value="${escapeHtml(value)}" ${selectedStatus === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+        </select>
+      </label>
+      <label>
+        <span>감수 메모</span>
+        <input type="text" data-admin-region-review-note value="${escapeHtml(review?.note || "")}" placeholder="예: 표본 5곳 확인 후 공개 가능">
+      </label>
+      <div>
+        <button type="button" data-save-admin-region-review>감수 저장</button>
+        <button type="button" data-clear-admin-region-review ${review ? "" : "disabled"}>해제</button>
       </div>
     </div>
   `;
@@ -16838,6 +16928,7 @@ function adminRegionPreflightPanel(region = {}, rows = []) {
           `).join("")}
         </div>
       </div>
+      ${adminRegionReviewFormHtml(region, rows, profile)}
     </div>
   `;
 }
@@ -17160,7 +17251,8 @@ function adminRegionalDetailPanel(region = null, master = {}) {
   const selectedFilter = adminRegionSelectedCompanyFilter(rows);
   const filteredRows = adminRegionFilteredCompanyRows(rows);
   const actions = adminRegionActionItems(region, rows);
-  const statusTone = adminRegionStatusTone(region.status || {});
+  const regionReview = adminRegionEffectiveReview(region);
+  const statusTone = regionReview ? (regionReview.tone === "good" ? "good" : (regionReview.tone === "watch" ? "watch" : "needs")) : adminRegionStatusTone(region.status || {});
   const maintenance = adminRegionMaintenanceProfile(region, rows);
   const verdict = adminRegionOperationalVerdict(region, rows, maintenance);
   const selectedSort = adminRegionSelectedCompanySort();
@@ -17227,7 +17319,8 @@ function adminRegionalDetailPanel(region = null, master = {}) {
 }
 
 function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
-  const statusTone = adminRegionStatusTone(region.status || {});
+  const review = adminRegionEffectiveReview(region);
+  const statusTone = review ? (review.tone === "good" ? "good" : (review.tone === "watch" ? "watch" : "needs")) : adminRegionStatusTone(region.status || {});
   const maintenance = adminRegionMaintenanceProfile(region, []);
   const reasons = Array.isArray(region.reviewReasons) ? region.reviewReasons.slice(0, 3) : [];
   const averageRevenue = Number(region.averageRevenue || 0);
@@ -17240,7 +17333,7 @@ function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
           <span>${escapeHtml(region.provinceLabel || "지역")}</span>
           <strong>${escapeHtml(region.regionLabel || "지역 미확인")}</strong>
         </div>
-        <mark>${escapeHtml(adminRegionStatusLabel(region.status || {}))}</mark>
+        <mark>${escapeHtml(review?.label || adminRegionStatusLabel(region.status || {}))}</mark>
       </div>
       <div class="admin-region-card-metrics">
         <div><span>업체</span><strong>${fmtNumber(region.companyCount || 0)}</strong></div>
@@ -17251,7 +17344,7 @@ function adminRegionCardHtml(region = {}, selectedRegionKey = "") {
       <div class="admin-region-card-foot">
         <span>${averageRevenue ? `평균 ${fmtWon(averageRevenue)}` : "매출 표본 대기"}</span>
         <span>${rate !== null && rate !== undefined ? `예약율 ${fmtRate(rate)}` : "예약율 대기"}</span>
-        <span>${escapeHtml(maintenance.nextCycle || "점검 대기")}</span>
+        <span>${escapeHtml(review ? `감수 ${review.label}` : (maintenance.nextCycle || "점검 대기"))}</span>
       </div>
       ${reasons.length ? `
         <div class="admin-region-reasons">
@@ -23387,6 +23480,49 @@ async function applyAdminRegionCompanyBulkReview(button) {
   setStatus(failed ? `${label} 지역 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label} · 실패 ${fmtNumber(failed)}개` : `${label} 지역 일괄 저장 ${fmtNumber(saved)}개 완료 · ${outcome.label}`);
 }
 
+async function saveAdminRegionReview(button, clear = false) {
+  const form = button?.closest("[data-admin-region-review-form]");
+  if (!form) return;
+  const payload = clear
+    ? {
+        regionKey: form.dataset.regionKey || "",
+        regionLabel: form.dataset.regionLabel || "",
+        provinceLabel: form.dataset.provinceLabel || "",
+        status: "clear",
+        note: form.querySelector("[data-admin-region-review-note]")?.value || "",
+        checklistSummary: form.dataset.checklistSummary || ""
+      }
+    : {
+        regionKey: form.dataset.regionKey || "",
+        regionLabel: form.dataset.regionLabel || "",
+        provinceLabel: form.dataset.provinceLabel || "",
+        status: form.querySelector("[data-admin-region-review-status]")?.value || "review_needed",
+        note: form.querySelector("[data-admin-region-review-note]")?.value || "",
+        checklistSummary: form.dataset.checklistSummary || ""
+      };
+  if (!payload.regionKey) {
+    setStatus("지역 감수 저장 대상 없음");
+    return;
+  }
+  const buttons = Array.from(form.querySelectorAll("button"));
+  buttons.forEach((item) => { item.disabled = true; });
+  setStatus(clear ? "지역 감수 해제 중" : "지역 감수 저장 중");
+  try {
+    const data = await fetchJson("/api/company-master/region-review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    state.companyMaster = data;
+    if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
+    if (isAdminRole()) renderAdminConsoleDashboard();
+    setStatus(clear ? "지역 감수 해제 완료" : "지역 감수 저장 완료");
+  } catch (error) {
+    setStatus(`지역 감수 저장 실패: ${error.message}`);
+    buttons.forEach((item) => { item.disabled = false; });
+  }
+}
+
 async function saveCompanySalesContact(button) {
   const companyId = button?.dataset?.companyId || button?.closest("[data-sales-contact-form]")?.dataset?.companyId || "";
   const form = button?.closest("[data-sales-contact-form]");
@@ -24473,6 +24609,16 @@ function bindEvents() {
     if (reviewAction) saveCompanyAdminReview(reviewAction);
     const adminRegionBulkAction = event.target.closest("[data-admin-region-bulk-action]");
     if (adminRegionBulkAction) applyAdminRegionCompanyBulkReview(adminRegionBulkAction);
+    const saveRegionReview = event.target.closest("[data-save-admin-region-review]");
+    if (saveRegionReview) {
+      saveAdminRegionReview(saveRegionReview, false);
+      return;
+    }
+    const clearRegionReview = event.target.closest("[data-clear-admin-region-review]");
+    if (clearRegionReview) {
+      saveAdminRegionReview(clearRegionReview, true);
+      return;
+    }
     const bulkReviewAction = event.target.closest("[data-company-check-bulk-action]");
     if (bulkReviewAction) applyCompanyCheckBulkReview(bulkReviewAction);
     const salesGateBulkAction = event.target.closest("[data-sales-gate-bulk-action]");
