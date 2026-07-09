@@ -17036,6 +17036,105 @@ function adminRegionPreflightChecklistItems(region = {}, rows = [], profile = {}
   ];
 }
 
+function adminRegionApprovalModel(region = {}, rows = [], profile = {}) {
+  const checklist = adminRegionPreflightChecklistItems(region, rows, profile);
+  const stats = adminRegionWorkflowStats(rows);
+  const review = adminRegionEffectiveReview(region);
+  const pending = checklist.filter((item) => item.state === "pending");
+  const watch = checklist.filter((item) => item.state === "watch");
+  const criticalLabels = new Set(["예약 표본 확보", "매출 표본 확보", "수량·총량 이슈 확인", "지역 밖 노출 확인", "입지 점수 검증"]);
+  const criticalPending = pending.filter((item) => criticalLabels.has(item.label));
+  const operationalPending = pending.filter((item) => !criticalLabels.has(item.label));
+  let suggestedStatus = "public_ready";
+  if (criticalPending.length || stats.manualNeeded || stats.recrawlNeeded || profile.preflightStatus?.key === "sample_needed") {
+    suggestedStatus = "collect_needed";
+  } else if (watch.length || operationalPending.length || stats.unreviewed || profile.preflightStatus?.key === "review") {
+    suggestedStatus = "review_needed";
+  }
+  const meta = adminRegionReviewMeta(review?.status || suggestedStatus) || adminRegionReviewMeta(suggestedStatus);
+  const suggestedMeta = adminRegionReviewMeta(suggestedStatus) || meta;
+  const unresolved = [...criticalPending, ...operationalPending, ...watch].slice(0, 6);
+  const publicStatus = adminRegionPublicStatus(region);
+  const doneCount = checklist.filter((item) => item.state === "done").length;
+  const note = [
+    `${doneCount}/${checklist.length} 체크`,
+    criticalPending.length ? `핵심 보강 ${criticalPending.length}건` : "",
+    stats.unreviewed ? `미검수 ${stats.unreviewed}곳` : "",
+    stats.manualNeeded ? `보정 ${stats.manualNeeded}곳` : "",
+    stats.recrawlNeeded ? `재수집 ${stats.recrawlNeeded}곳` : ""
+  ].filter(Boolean).join(" · ");
+  return {
+    checklist,
+    doneCount,
+    pending,
+    watch,
+    unresolved,
+    suggestedStatus,
+    suggestedMeta,
+    currentMeta: meta,
+    publicStatus,
+    review,
+    note,
+    approvalNote: `${suggestedMeta.label} 판단: ${note || "공개 전 조건 확인"}`
+  };
+}
+
+function adminRegionFinalApprovalPanel(region = {}, rows = [], profile = {}) {
+  const model = adminRegionApprovalModel(region, rows, profile);
+  const actions = [
+    ["public_ready", "공개 가능", "B2B에 지역 기준 확인으로 노출"],
+    ["review_needed", "검수 후 공개", "고객에게는 기준 검토 중으로 보수 표시"],
+    ["collect_needed", "보강 필요", "표본·수량 보강 전 확정 보류"],
+    ["hold", "보류", "공개 판단을 잠시 중단"]
+  ];
+  const tone = model.currentMeta?.tone || model.suggestedMeta?.tone || "watch";
+  return `
+    <div class="admin-region-approval-panel ${escapeHtml(tone)}">
+      <div class="admin-region-approval-head">
+        <div>
+          <span>최종 공개 판단</span>
+          <strong>${escapeHtml(model.currentMeta?.label || model.suggestedMeta?.label || "검수 필요")}</strong>
+          <small>${escapeHtml(model.review ? `저장됨 · ${compactDateTime(model.review.updatedAt) || "시간 미확인"}` : `권고: ${model.suggestedMeta?.label || "검수 필요"}`)} · ${escapeHtml(model.note || "조건 확인 대기")}</small>
+        </div>
+        <mark class="${escapeHtml(model.publicStatus.tone || "neutral")}">${escapeHtml(model.publicStatus.label)}</mark>
+      </div>
+      <div class="admin-region-approval-grid">
+        <article>
+          <span>체크리스트</span>
+          <strong>${fmtNumber(model.doneCount)}/${fmtNumber(model.checklist.length)}</strong>
+          <small>공개 전 조건 완료</small>
+        </article>
+        <article>
+          <span>남은 조건</span>
+          <strong>${fmtNumber(model.pending.length + model.watch.length)}</strong>
+          <small>보강 또는 재확인 항목</small>
+        </article>
+        <article>
+          <span>업체 검수</span>
+          <strong>${fmtRate(adminRegionWorkflowStats(rows).progress)}</strong>
+          <small>관리자 판단 진행률</small>
+        </article>
+      </div>
+      <div class="admin-region-approval-missing">
+        ${model.unresolved.length ? model.unresolved.map((item) => `
+          <span class="${escapeHtml(item.state)}">${escapeHtml(item.label)} · ${escapeHtml(item.detail)}</span>
+        `).join("") : `<span class="done">남은 핵심 조건 없음 · 공개 가능 상태에 가깝습니다.</span>`}
+      </div>
+      <div class="admin-region-approval-actions">
+        ${actions.map(([status, label, detail]) => {
+          const active = (model.review?.status || model.suggestedStatus) === status;
+          return `
+            <button type="button" class="${active ? "active" : ""}" data-admin-region-approval-status="${escapeHtml(status)}" data-admin-region-approval-note="${escapeHtml(`${label} 저장: ${model.note || detail}`)}">
+              <strong>${escapeHtml(label)}</strong>
+              <small>${escapeHtml(detail)}</small>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function adminRegionPreflightChecklistHtml(region = {}, rows = [], profile = {}) {
   const items = adminRegionPreflightChecklistItems(region, rows, profile);
   const doneCount = items.filter((item) => item.state === "done").length;
@@ -17469,6 +17568,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
         </div>
       </div>
       ${adminRegionDetailFocusPanel(region, rows, maintenance)}
+      ${adminRegionFinalApprovalPanel(region, rows, maintenance)}
       ${adminRegionReviewSummaryPanel(region, rows)}
       ${adminRegionPreflightPanel(region, rows)}
       ${adminRegionCorrectionGapPanel(region, rows)}
@@ -23805,6 +23905,23 @@ async function saveAdminRegionReview(button, clear = false) {
   }
 }
 
+function applyAdminRegionApproval(button) {
+  const status = button?.dataset?.adminRegionApprovalStatus || "";
+  if (!status) return;
+  const detail = button.closest("[data-admin-region-detail]");
+  const form = detail?.querySelector("[data-admin-region-review-form]");
+  if (!form) {
+    setStatus("지역 감수 저장 폼을 찾을 수 없습니다.");
+    return;
+  }
+  const statusInput = form.querySelector("[data-admin-region-review-status]");
+  const noteInput = form.querySelector("[data-admin-region-review-note]");
+  const saveButton = form.querySelector("[data-save-admin-region-review]");
+  if (statusInput) statusInput.value = status;
+  if (noteInput) noteInput.value = button.dataset.adminRegionApprovalNote || noteInput.value || "";
+  saveAdminRegionReview(saveButton || button, false);
+}
+
 async function saveCompanySalesContact(button) {
   const companyId = button?.dataset?.companyId || button?.closest("[data-sales-contact-form]")?.dataset?.companyId || "";
   const form = button?.closest("[data-sales-contact-form]");
@@ -24923,6 +25040,11 @@ function bindEvents() {
     if (reviewAction) saveCompanyAdminReview(reviewAction);
     const adminRegionBulkAction = event.target.closest("[data-admin-region-bulk-action]");
     if (adminRegionBulkAction) applyAdminRegionCompanyBulkReview(adminRegionBulkAction);
+    const adminRegionApproval = event.target.closest("[data-admin-region-approval-status]");
+    if (adminRegionApproval) {
+      applyAdminRegionApproval(adminRegionApproval);
+      return;
+    }
     const saveRegionReview = event.target.closest("[data-save-admin-region-review]");
     if (saveRegionReview) {
       saveAdminRegionReview(saveRegionReview, false);
