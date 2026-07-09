@@ -2057,6 +2057,13 @@ function sanitizeB2BInterestLodge(lodge = {}) {
       .filter(Boolean)
       .slice(0, 5),
     collectionBasis: sanitizeMemberText(lodge.collectionBasis, 260),
+    verifiedCorrectionApplied: lodge.verifiedCorrectionApplied === true,
+    verifiedLodgingBasisTotal: sanitizeInterestLodgeNumberText(lodge.verifiedLodgingBasisTotal),
+    verifiedDayUseBasisTotal: sanitizeInterestLodgeNumberText(lodge.verifiedDayUseBasisTotal),
+    verifiedCorrectionLabel: sanitizeMemberText(lodge.verifiedCorrectionLabel, 80),
+    verifiedCorrectionSource: sanitizeMemberText(lodge.verifiedCorrectionSource, 80),
+    verifiedCorrectionNote: sanitizeMemberText(lodge.verifiedCorrectionNote, 180),
+    verifiedCorrectionUpdatedAt: sanitizeMemberText(lodge.verifiedCorrectionUpdatedAt, 40),
     manualAdjusted: lodge.manualAdjusted === true,
     manualAdjustedAt: sanitizeMemberText(lodge.manualAdjustedAt, 40),
     searchRegion: sanitizeMemberText(lodge.searchRegion, 120),
@@ -4923,6 +4930,22 @@ function b2bMyLodgeCandidateItems(data = {}, targetName = "") {
     .slice(0, 5);
 }
 
+function publicB2BMyLodgeVerification(item = {}) {
+  const correction = item.companyManualCorrection || item.companyProfile?.manualCorrection || item.manualCorrection || {};
+  if (!manualCorrectionHasValue(correction)) return {};
+  const lodging = Number(correction.lodgingBasisTotal);
+  const dayUse = Number(correction.dayUseBasisTotal);
+  return {
+    verifiedCorrectionApplied: true,
+    verifiedLodgingBasisTotal: Number.isFinite(lodging) && lodging > 0 ? Math.round(lodging) : null,
+    verifiedDayUseBasisTotal: Number.isFinite(dayUse) && dayUse > 0 ? Math.round(dayUse) : null,
+    verifiedCorrectionLabel: "운영 검수값",
+    verifiedCorrectionSource: "company_master",
+    verifiedCorrectionNote: sanitizeMemberText(correction.note || "", 180),
+    verifiedCorrectionUpdatedAt: sanitizeMemberText(correction.updatedAt || "", 40)
+  };
+}
+
 async function runB2BCrawlerWithReuse(crawlPayload = {}) {
   const signature = crawlPayloadSignature(crawlPayload);
   const cached = reusableRecentCrawlResult(signature);
@@ -5036,6 +5059,7 @@ async function runB2BMyLodgeCollection(payload = {}) {
   const publicCandidates = publicRunForRole({ items: candidates.map((row) => row.item) }, USER_ROLES.b2b)?.items || [];
   const candidateItems = publicCandidates.map((item, index) => ({
     ...item,
+    ...publicB2BMyLodgeVerification(candidates[index]?.item || {}),
     matchScore: candidates[index]?.matchScore || 0,
     matchName: candidates[index]?.name || "",
     matchSource: candidates[index]?.source || "",
@@ -11501,8 +11525,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-b2b-lodge-precision"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-b2b-lodge-precision"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-b2b-verified-priority"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-b2b-verified-priority"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

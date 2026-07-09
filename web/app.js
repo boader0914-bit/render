@@ -8259,6 +8259,13 @@ function b2bInterestLodgeFingerprint(interestLodges = []) {
         collectionPrecisionReasons: lodge.collectionPrecisionReasons,
         collectionPrecisionWarnings: lodge.collectionPrecisionWarnings,
         collectionBasis: lodge.collectionBasis,
+        verifiedCorrectionApplied: lodge.verifiedCorrectionApplied,
+        verifiedLodgingBasisTotal: lodge.verifiedLodgingBasisTotal,
+        verifiedDayUseBasisTotal: lodge.verifiedDayUseBasisTotal,
+        verifiedCorrectionLabel: lodge.verifiedCorrectionLabel,
+        verifiedCorrectionSource: lodge.verifiedCorrectionSource,
+        verifiedCorrectionNote: lodge.verifiedCorrectionNote,
+        verifiedCorrectionUpdatedAt: lodge.verifiedCorrectionUpdatedAt,
         manualAdjusted: lodge.manualAdjusted,
         registeredAt: lodge.registeredAt
       }))
@@ -8356,6 +8363,13 @@ const B2B_MY_LODGE_COLLECTION_META_KEYS = [
   "collectionPrecisionReasons",
   "collectionPrecisionWarnings",
   "collectionBasis",
+  "verifiedCorrectionApplied",
+  "verifiedLodgingBasisTotal",
+  "verifiedDayUseBasisTotal",
+  "verifiedCorrectionLabel",
+  "verifiedCorrectionSource",
+  "verifiedCorrectionNote",
+  "verifiedCorrectionUpdatedAt",
   "manualAdjusted",
   "manualAdjustedAt",
   "searchRegion",
@@ -8439,11 +8453,14 @@ function b2bMyLodgeCollectionMetadata(draft = {}) {
     if (!Object.prototype.hasOwnProperty.call(draft, key)) return acc;
     if (key === "collectionPrecisionReasons" || key === "collectionPrecisionWarnings") {
       acc[key] = b2bMyLodgeCollectionTextList(draft[key], 5);
-    } else if (key === "manualAdjusted" || key === "outsideSearchRegion") {
+    } else if (key === "manualAdjusted" || key === "outsideSearchRegion" || key === "verifiedCorrectionApplied") {
       acc[key] = Boolean(draft[key]);
     } else if (key === "collectionPrecisionScore") {
       const score = Math.round(b2bMyLodgeNumber(draft[key]));
       if (score > 0) acc[key] = Math.min(100, score);
+    } else if (key === "verifiedLodgingBasisTotal" || key === "verifiedDayUseBasisTotal") {
+      const total = Math.round(b2bMyLodgeNumber(draft[key]));
+      if (total > 0) acc[key] = total;
     } else {
       acc[key] = String(draft[key] || "").trim();
     }
@@ -8588,6 +8605,13 @@ function b2bNormalizeInterestLodge(lodge = {}) {
     collectionPrecisionReasons: b2bMyLodgeCollectionTextList(lodge.collectionPrecisionReasons, 5),
     collectionPrecisionWarnings: b2bMyLodgeCollectionTextList(lodge.collectionPrecisionWarnings, 5),
     collectionBasis: String(lodge.collectionBasis || "").trim().slice(0, 220),
+    verifiedCorrectionApplied: Boolean(lodge.verifiedCorrectionApplied),
+    verifiedLodgingBasisTotal: Math.round(b2bMyLodgeNumber(lodge.verifiedLodgingBasisTotal)),
+    verifiedDayUseBasisTotal: Math.round(b2bMyLodgeNumber(lodge.verifiedDayUseBasisTotal)),
+    verifiedCorrectionLabel: String(lodge.verifiedCorrectionLabel || "").trim().slice(0, 80),
+    verifiedCorrectionSource: String(lodge.verifiedCorrectionSource || "").trim().slice(0, 80),
+    verifiedCorrectionNote: String(lodge.verifiedCorrectionNote || "").trim().slice(0, 180),
+    verifiedCorrectionUpdatedAt: String(lodge.verifiedCorrectionUpdatedAt || "").trim().slice(0, 40),
     manualAdjusted: Boolean(lodge.manualAdjusted),
     manualAdjustedAt: lodge.manualAdjustedAt || "",
     searchRegion: String(lodge.searchRegion || "").trim().slice(0, 120),
@@ -8782,10 +8806,13 @@ function b2bCollectedStockReferenceValues(item = {}, kind = "lodging") {
   const weeklyAverage = kind === "day"
     ? (optionalNumber(item.dayUseWeeklyTotalStock) > 0 ? optionalNumber(item.dayUseWeeklyTotalStock) / days : 0)
     : (optionalNumber(item.weeklyTotalStock) > 0 ? optionalNumber(item.weeklyTotalStock) / days : 0);
+  const verified = b2bCollectedVerifiedCorrection(item);
   const candidates = kind === "day"
     ? [
+        verified.dayUse,
         summaryTotal,
         weeklyAverage,
+        item.verifiedDayUseBasisTotal,
         item.manualDayUseBasisTotal,
         item.dayUseTotalStock,
         item.dayUseWeeklyOperatingTotal,
@@ -8793,8 +8820,10 @@ function b2bCollectedStockReferenceValues(item = {}, kind = "lodging") {
         item.dayUseWeeklyMaxTotal
       ]
     : [
+        verified.lodging,
         summaryTotal,
         weeklyAverage,
+        item.verifiedLodgingBasisTotal,
         item.manualLodgingBasisTotal,
         item.nightTotalStock,
         item.totalRooms,
@@ -8806,6 +8835,38 @@ function b2bCollectedStockReferenceValues(item = {}, kind = "lodging") {
   return candidates
     .map((value) => optionalNumber(value))
     .filter((value) => Number.isFinite(value) && value > 0);
+}
+
+function b2bCollectedVerifiedCorrection(item = {}) {
+  const lodging = optionalNumber(
+    item.verifiedLodgingBasisTotal ??
+    item.manualLodgingBasisTotal ??
+    item.companyManualCorrection?.lodgingBasisTotal ??
+    item.companyProfile?.manualCorrection?.lodgingBasisTotal
+  );
+  const dayUse = optionalNumber(
+    item.verifiedDayUseBasisTotal ??
+    item.manualDayUseBasisTotal ??
+    item.companyManualCorrection?.dayUseBasisTotal ??
+    item.companyProfile?.manualCorrection?.dayUseBasisTotal
+  );
+  const applied = Boolean(
+    item.verifiedCorrectionApplied ||
+    item.manualCorrectionApplied ||
+    item.companyManualCorrection ||
+    item.companyProfile?.manualCorrection ||
+    (Number.isFinite(lodging) && lodging > 0) ||
+    (Number.isFinite(dayUse) && dayUse > 0)
+  );
+  return {
+    applied,
+    lodging: Number.isFinite(lodging) && lodging > 0 ? Math.round(lodging) : 0,
+    dayUse: Number.isFinite(dayUse) && dayUse > 0 ? Math.round(dayUse) : 0,
+    label: String(item.verifiedCorrectionLabel || "운영 검수값").trim(),
+    source: String(item.verifiedCorrectionSource || "company_master").trim(),
+    note: String(item.verifiedCorrectionNote || item.companyManualCorrection?.note || item.companyProfile?.manualCorrection?.note || "").trim(),
+    updatedAt: String(item.verifiedCorrectionUpdatedAt || item.companyManualCorrection?.updatedAt || item.companyProfile?.manualCorrection?.updatedAt || "").trim()
+  };
 }
 
 function b2bCollectedProductKind(row = {}) {
@@ -8888,6 +8949,9 @@ function b2bCollectedProductStockTotal(item = {}, kind = "lodging") {
 }
 
 function b2bCollectedDailyStockCap(item = {}, kind = "lodging") {
+  const verified = b2bCollectedVerifiedCorrection(item);
+  if (kind === "lodging" && verified.lodging > 0) return verified.lodging;
+  if (kind === "day" && verified.dayUse > 0) return verified.dayUse;
   const days = b2bCollectedRunDays(item);
   const references = b2bCollectedStockReferenceValues(item, kind);
   const normalized = references
@@ -9002,6 +9066,8 @@ function b2bNormalizeCollectedSegmentCounts(segments = [], item = {}) {
 }
 
 function b2bCollectedRoomCount(item = {}) {
+  const verified = b2bCollectedVerifiedCorrection(item);
+  if (verified.lodging > 0) return String(verified.lodging);
   const days = b2bCollectedRunDays(item);
   const summaryTotal = b2bCollectedSummaryTotal(item.productTypeSummary, "lodging");
   const weeklyTotalAverage = optionalNumber(item.weeklyTotalStock) > 0 ? optionalNumber(item.weeklyTotalStock) / days : 0;
@@ -9074,6 +9140,8 @@ function b2bCollectedRoomType(item = {}) {
 }
 
 function b2bCollectedDayUseCount(item = {}) {
+  const verified = b2bCollectedVerifiedCorrection(item);
+  if (verified.dayUse > 0) return String(verified.dayUse);
   const days = b2bCollectedRunDays(item);
   const summaryTotal = b2bCollectedSummaryTotal(item.productTypeSummary, "day");
   const weeklyTotalAverage = optionalNumber(item.dayUseWeeklyTotalStock) > 0 ? optionalNumber(item.dayUseWeeklyTotalStock) / days : 0;
@@ -9202,9 +9270,12 @@ function b2bCollectedPrecisionProfile(item = {}, context = {}) {
   const roomSegments = Array.isArray(context.roomSegments) ? context.roomSegments : [];
   const prices = context.prices || {};
   const roomCount = context.roomCount || "";
+  const verified = b2bCollectedVerifiedCorrection(item);
+  const verifiedApplied = Boolean(verified.lodging || verified.dayUse);
   const productRows = b2bCollectedProductRows(item, "lodging");
   const namedSegments = roomSegments.filter((row) => String(row.type || "").trim()).length;
   const countedSegments = roomSegments.filter((row) => b2bMyLodgeNumber(row.count) > 0).length;
+  const segmentCountTotal = roomSegments.reduce((sum, row) => sum + Math.round(b2bMyLodgeNumber(row.count)), 0);
   const segmentPriceKeys = new Set();
   roomSegments.forEach((row) => {
     B2B_MY_LODGE_PRICE_KEYS.forEach((key) => {
@@ -9223,14 +9294,19 @@ function b2bCollectedPrecisionProfile(item = {}, context = {}) {
   if (roomCount) score += 10;
   score += Math.min(24, priceCoverage * 6);
   if (weeklyNormalized) score += 4;
+  if (verifiedApplied) score += 18;
+  if (verifiedApplied && (namedSegments || priceCoverage)) score = Math.max(score, 72);
   score = Math.max(0, Math.min(100, Math.round(score)));
   const grade = score >= 82 ? "A" : score >= 64 ? "B" : score >= 42 ? "C" : "D";
-  const label = {
+  const autoLabel = {
     A: "정밀 자동수집",
     B: "자동수집 보완 필요",
     C: "부분 자동수집",
     D: "수동 확인 필요"
   }[grade];
+  const label = verifiedApplied
+    ? (priceCoverage >= 3 ? "검수값 기반 자동수집" : "검수값 우선·가격 보완")
+    : autoLabel;
   const tone = {
     A: "good",
     B: "strong",
@@ -9238,6 +9314,8 @@ function b2bCollectedPrecisionProfile(item = {}, context = {}) {
     D: "hot"
   }[grade];
   const reasons = [
+    verified.lodging ? `운영 검수 객실 ${fmtNumber(verified.lodging)}실 우선 적용` : "",
+    verified.dayUse ? `운영 검수 데이유즈 ${fmtNumber(verified.dayUse)}회 우선 적용` : "",
     productRows.length ? `상품 행 ${fmtNumber(productRows.length)}개 확인` : "",
     namedSegments ? `객실종류 ${fmtNumber(namedSegments)}개 확인` : "",
     countedSegments ? `상품별 수량 ${fmtNumber(countedSegments)}개 확인` : "",
@@ -9247,7 +9325,8 @@ function b2bCollectedPrecisionProfile(item = {}, context = {}) {
   ].filter(Boolean);
   const warnings = [
     !namedSegments ? "객실종류명 직접 확인 권장" : "",
-    !countedSegments ? "상품별 수량 직접 확인 필요" : "",
+    !countedSegments && !verifiedApplied ? "상품별 수량 직접 확인 필요" : "",
+    verified.lodging && segmentCountTotal > verified.lodging * 1.5 ? "상품별 수량은 총량 기준으로 재확인 권장" : "",
     priceCoverage < 4 ? "일부 요일 가격 직접 보완 권장" : "",
     !roomCount ? "전체 객실수 직접 입력 필요" : ""
   ].filter(Boolean);
@@ -9258,7 +9337,10 @@ function b2bCollectedPrecisionProfile(item = {}, context = {}) {
     score,
     reasons: b2bMyLodgeCollectionTextList(reasons, 5),
     warnings: b2bMyLodgeCollectionTextList(warnings, 4),
-    basis: `네이버 업체명 검색 · ${fmtNumber(b2bCollectedRunDays(item))}일 상품/재고 기준`
+    basis: verifiedApplied
+      ? `운영 검수값 + 네이버 ${fmtNumber(b2bCollectedRunDays(item))}일 상품/재고 기준`
+      : `네이버 업체명 검색 · ${fmtNumber(b2bCollectedRunDays(item))}일 상품/재고 기준`,
+    verified
   };
 }
 
@@ -9306,6 +9388,13 @@ function b2bMyLodgeDraftFromCollectedItem(item = {}, result = {}, current = {}) 
     collectionPrecisionReasons: precision.reasons,
     collectionPrecisionWarnings: precision.warnings,
     collectionBasis: precision.basis,
+    verifiedCorrectionApplied: Boolean(precision.verified?.applied),
+    verifiedLodgingBasisTotal: precision.verified?.lodging || "",
+    verifiedDayUseBasisTotal: precision.verified?.dayUse || "",
+    verifiedCorrectionLabel: precision.verified?.label || "",
+    verifiedCorrectionSource: precision.verified?.source || "",
+    verifiedCorrectionNote: precision.verified?.note || "",
+    verifiedCorrectionUpdatedAt: precision.verified?.updatedAt || "",
     manualAdjusted: false,
     manualAdjustedAt: ""
   };
