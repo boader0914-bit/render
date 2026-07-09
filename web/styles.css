@@ -2061,6 +2061,52 @@ a {
   white-space: nowrap;
 }
 
+.admin-region-focus-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-region-focus-panel article {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff, #f8fbff);
+  padding: 13px;
+}
+
+.admin-region-focus-panel article.status {
+  border-color: #b8d9d3;
+  background: linear-gradient(180deg, #f6fbfa, #fff);
+}
+
+.admin-region-focus-panel article.reinforce {
+  border-color: #fedf89;
+  background: linear-gradient(180deg, #fffbeb, #fff);
+}
+
+.admin-region-focus-panel span,
+.admin-region-focus-panel small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-focus-panel strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 19px;
+  font-weight: 950;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
 .admin-region-detail-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -2241,7 +2287,7 @@ a {
 .admin-region-preflight-layout {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, .82fr);
   gap: 10px;
 }
 
@@ -2311,6 +2357,135 @@ a {
 
 .admin-region-coverage-list i {
   height: 8px;
+}
+
+.admin-region-checklist-panel {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+
+.admin-region-checklist-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.admin-region-checklist-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-region-checklist-head span,
+.admin-region-checklist-head small,
+.admin-region-checklist-grid small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-checklist-head strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.admin-region-checklist-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-region-checklist-grid article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border: 1px solid #e5edf7;
+  border-radius: 12px;
+  background: #fff;
+  padding: 9px;
+}
+
+.admin-region-checklist-grid article.done {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-region-checklist-grid article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-region-checklist-grid article.pending {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-region-checklist-grid i {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #cfe0f5;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.admin-region-checklist-grid article.done i {
+  border-color: #12b76a;
+  background: #12b76a;
+}
+
+.admin-region-checklist-grid article.done i::before {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) translateY(-1px);
+}
+
+.admin-region-checklist-grid article.watch i {
+  border-color: #f59e0b;
+  background: #fef3c7;
+}
+
+.admin-region-checklist-grid article.watch i::before {
+  content: "";
+  width: 8px;
+  height: 2px;
+  border-radius: 999px;
+  background: #92400e;
+}
+
+.admin-region-checklist-grid article.pending i {
+  border-color: #fb7185;
+  background: #fff1f2;
+}
+
+.admin-region-checklist-grid div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-region-checklist-grid strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .admin-region-audit-panel {
@@ -20718,7 +20893,9 @@ body.role-b2b .structure-action-list li::before {
   .admin-regional-layout,
   .admin-regional-summary-grid,
   .admin-regional-maintenance-board,
+  .admin-region-focus-panel,
   .admin-region-preflight-layout,
+  .admin-region-checklist-grid,
   .admin-region-card-grid,
   .admin-region-card-metrics,
   .admin-region-detail-grid,

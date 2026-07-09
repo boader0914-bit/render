@@ -16430,19 +16430,151 @@ function adminRegionWorkflowPanel(rows = []) {
   `;
 }
 
+function adminRegionDetailFocusPanel(region = {}, rows = [], maintenance = {}) {
+  const stats = adminRegionWorkflowStats(rows);
+  const primaryAction = maintenance.primaryAction || {};
+  const reinforceRows = rows.filter((row) =>
+    row.metrics?.lowConfidence ||
+    row.metrics?.stockVariance ||
+    !row.metrics?.totalRevenue ||
+    !Number.isFinite(row.metrics?.rate)
+  );
+  const statusLabel = maintenance.preflightStatus?.label || adminRegionStatusLabel(region.status || {});
+  const cells = [
+    {
+      key: "status",
+      label: "공개 판단",
+      value: statusLabel,
+      note: `준비도 ${fmtNumber(maintenance.readinessScore || region.status?.score || 0)}점`
+    },
+    {
+      key: "reinforce",
+      label: "보강 필요",
+      value: `${fmtNumber(reinforceRows.length)}곳`,
+      note: primaryAction.detail || "표본·수량·매출 기준 확인"
+    },
+    {
+      key: "review",
+      label: "관리자 검수",
+      value: `${fmtNumber(stats.reviewed)}/${fmtNumber(stats.total)}곳`,
+      note: `${fmtRate(stats.progress)} 진행`
+    },
+    {
+      key: "next",
+      label: "다음 작업",
+      value: primaryAction.label || maintenance.nextCycle || "주간 유지 점검",
+      note: maintenance.nextCycle || "점검 주기 대기"
+    }
+  ];
+  return `
+    <div class="admin-region-focus-panel">
+      ${cells.map((cell) => `
+        <article class="${escapeHtml(cell.key)}">
+          <span>${escapeHtml(cell.label)}</span>
+          <strong>${escapeHtml(cell.value)}</strong>
+          <small>${escapeHtml(cell.note)}</small>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function adminRegionPreflightChecklistItems(region = {}, rows = [], profile = {}) {
+  const coverage = profile.coverage || {};
+  const companyCount = Number(region.companyCount || rows.length || 0);
+  const reservationGoal = coverage.reservationSampleGoal || 5;
+  const revenueGoal = coverage.revenueSampleGoal || 3;
+  const reviewGoal = coverage.adminReviewGoal || Math.min(companyCount, 5);
+  const reservationDone = Math.max(0, Number(region.reservationSampleCount || 0));
+  const revenueDone = Math.max(0, Number(region.revenueSampleCount || 0));
+  const reviewDone = Math.max(0, Number(region.adminReviewCount || 0));
+  const riskCount = Number(coverage.riskCount ?? (
+    Number(region.lowConfidenceCount || 0) +
+    Number(region.stockVarianceCount || 0) +
+    Number(region.structuralBlockedCount || 0) +
+    Number(region.outsideExposureCount || 0)
+  ));
+  const manualCount = Number(region.manualCorrectionCount || 0);
+  const outsideCount = Number(region.outsideExposureCount || 0);
+  const locationMatch = adminRegionLocationScoreMatch(region);
+  let locationState = "pending";
+  let locationDetail = "입지사전 카드 연결 대기";
+  if (locationMatch) {
+    const { scoreModel, tourismLabel } = adminLocationScoreSubjectModel(locationMatch);
+    const confidence = Number(scoreModel?.confidence || 0);
+    locationState = confidence >= 60 || scoreModel?.manual?.hasAdjustment ? "done" : "watch";
+    locationDetail = `${locationMatch.label || "지역카드"} · 신뢰도 ${fmtNumber(confidence)}점${tourismLabel ? ` · ${tourismLabel}` : ""}`;
+  }
+  return [
+    {
+      label: "업체 마스터 지역 분류",
+      detail: `${fmtNumber(companyCount)}곳 지역 연결`,
+      state: companyCount ? "done" : "pending"
+    },
+    {
+      label: "예약 표본 확보",
+      detail: `${fmtNumber(reservationDone)}/${fmtNumber(reservationGoal)}곳 · 네이버 예약 기준`,
+      state: reservationDone >= reservationGoal ? "done" : "pending"
+    },
+    {
+      label: "매출 표본 확보",
+      detail: `${fmtNumber(revenueDone)}/${fmtNumber(revenueGoal)}곳 · 가격/판매 표본 기준`,
+      state: revenueDone >= revenueGoal ? "done" : "pending"
+    },
+    {
+      label: "관리자 사전 검수",
+      detail: `${fmtNumber(reviewDone)}/${fmtNumber(reviewGoal)}곳 검수`,
+      state: reviewDone >= reviewGoal ? "done" : (reviewDone ? "watch" : "pending")
+    },
+    {
+      label: "수량·총량 이슈 확인",
+      detail: riskCount ? `이슈 ${fmtNumber(riskCount)}곳 · 보정 ${fmtNumber(manualCount)}곳` : "추가 이슈 없음",
+      state: riskCount ? (manualCount ? "watch" : "pending") : "done"
+    },
+    {
+      label: "입지 점수 검증",
+      detail: locationDetail,
+      state: locationState
+    },
+    {
+      label: "지역 밖 노출 확인",
+      detail: outsideCount ? `${fmtNumber(outsideCount)}곳 검색권 경계 확인 필요` : "지역 밖 노출 없음",
+      state: outsideCount ? "pending" : "done"
+    }
+  ];
+}
+
+function adminRegionPreflightChecklistHtml(region = {}, rows = [], profile = {}) {
+  const items = adminRegionPreflightChecklistItems(region, rows, profile);
+  const doneCount = items.filter((item) => item.state === "done").length;
+  return `
+    <div class="admin-region-checklist-panel">
+      <div class="admin-region-checklist-head">
+        <div>
+          <span>공개 전 체크리스트</span>
+          <strong>${fmtNumber(doneCount)}/${fmtNumber(items.length)} 완료</strong>
+        </div>
+        <small>자동 기준으로 완료 여부를 표시합니다.</small>
+      </div>
+      <div class="admin-region-checklist-grid">
+        ${items.map((item) => `
+          <article class="${escapeHtml(item.state)}">
+            <i aria-hidden="true"></i>
+            <div>
+              <strong>${escapeHtml(item.label)}</strong>
+              <small>${escapeHtml(item.detail)}</small>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function adminRegionPreflightPanel(region = {}, rows = []) {
   const profile = adminRegionMaintenanceProfile(region, rows);
   const tone = adminRegionMaintenanceTone(profile);
   const actions = Array.isArray(profile.actions) ? profile.actions.slice(0, 5) : [];
-  const coverage = profile.coverage || {};
-  const reservationDone = Math.max(0, Number(region.reservationSampleCount || 0));
-  const revenueDone = Math.max(0, Number(region.revenueSampleCount || 0));
-  const reviewDone = Math.max(0, Number(region.adminReviewCount || 0));
-  const coverageRows = [
-    ["예약 표본", reservationDone, coverage.reservationSampleGoal || 5, coverage.reservationSampleGap || 0],
-    ["매출 표본", revenueDone, coverage.revenueSampleGoal || 3, coverage.revenueSampleGap || 0],
-    ["관리자 검수", reviewDone, coverage.adminReviewGoal || Math.min(Number(region.companyCount || rows.length || 0), 5), coverage.adminReviewGap || 0]
-  ];
   return `
     <div class="admin-region-preflight-panel ${escapeHtml(tone)}">
       <div class="admin-region-preflight-head">
@@ -16457,18 +16589,7 @@ function adminRegionPreflightPanel(region = {}, rows = []) {
         <span style="width: ${Math.max(5, Math.min(100, Number(profile.readinessScore || 0)))}%"></span>
       </div>
       <div class="admin-region-preflight-layout">
-        <div class="admin-region-coverage-list">
-          ${coverageRows.map(([label, value, goal, gap]) => {
-            const pct = goal ? Math.min(100, Math.round((value / goal) * 100)) : 0;
-            return `
-              <article class="${gap ? "watch" : "good"}">
-                <div><span>${escapeHtml(label)}</span><strong>${fmtNumber(value)}/${fmtNumber(goal)}</strong></div>
-                <i><b style="width: ${Math.max(5, pct)}%"></b></i>
-                <small>${gap ? `${fmtNumber(gap)}곳 보강` : "기준 충족"}</small>
-              </article>
-            `;
-          }).join("")}
-        </div>
+        ${adminRegionPreflightChecklistHtml(region, rows, profile)}
         <div class="admin-region-maintenance-actions">
           <strong>다음 작업</strong>
           ${actions.map((action) => `
@@ -16744,16 +16865,6 @@ function adminRegionalDetailPanel(region = null, master = {}) {
   const actions = adminRegionActionItems(region, rows);
   const statusTone = adminRegionStatusTone(region.status || {});
   const maintenance = adminRegionMaintenanceProfile(region, rows);
-  const summaryCells = [
-    ["운영 상태", adminRegionStatusLabel(region.status || {}), `${fmtNumber(region.status?.score || 0)}점`],
-    ["사전 준비", maintenance.preflightStatus?.label || "검수 필요", `${fmtNumber(maintenance.readinessScore || 0)}점`],
-    ["점검 주기", maintenance.nextCycle || "대기", `우선도 ${fmtNumber(maintenance.maintenancePriority || 0)}`],
-    ["업체", `${fmtNumber(region.companyCount || 0)}곳`, `최고 ${region.bestRank ? `${fmtNumber(region.bestRank)}위` : "대기"}`],
-    ["예약 표본", `${fmtNumber(region.reservationSampleCount || 0)}곳`, region.averageReservationRate !== null && region.averageReservationRate !== undefined ? fmtRate(region.averageReservationRate) : "예약율 대기"],
-    ["매출 표본", `${fmtNumber(region.revenueSampleCount || 0)}곳`, region.averageRevenue ? `평균 ${fmtWon(region.averageRevenue)}` : "매출 대기"],
-    ["쿠폰", `${fmtNumber(region.couponVisibleCount || 0)}곳`, "네이버 노출 기준"],
-    ["관리자 보정", `${fmtNumber(region.manualCorrectionCount || 0)}곳`, `검수 ${fmtNumber(region.adminReviewCount || 0)}곳`]
-  ];
   const companyListOpen = selectedFilter.key !== "priority";
   const companyListSummary = `${selectedFilter.label} ${fmtNumber(filteredRows.length)}곳 · 전체 ${fmtNumber(rows.length)}곳`;
   return `
@@ -16766,16 +16877,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
         </div>
         <mark>${escapeHtml(adminRegionStatusLabel(region.status || {}))}</mark>
       </div>
-      <div class="admin-region-detail-grid">
-        ${summaryCells.map(([label, value, note]) => `
-          <article>
-            <span>${escapeHtml(label)}</span>
-            <strong>${escapeHtml(value)}</strong>
-            <small>${escapeHtml(note)}</small>
-          </article>
-        `).join("")}
-      </div>
-      ${adminRegionWorkflowPanel(rows)}
+      ${adminRegionDetailFocusPanel(region, rows, maintenance)}
       ${adminRegionPreflightPanel(region, rows)}
       ${adminRegionLocationScorePanel(region)}
       ${adminRegionAuditPanel(region, rows)}
