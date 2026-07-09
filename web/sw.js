@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260709-b2b-lodge-edit";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260709-admin-region-drawer";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

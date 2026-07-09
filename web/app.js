@@ -16754,6 +16754,8 @@ function adminRegionalDetailPanel(region = null, master = {}) {
     ["쿠폰", `${fmtNumber(region.couponVisibleCount || 0)}곳`, "네이버 노출 기준"],
     ["관리자 보정", `${fmtNumber(region.manualCorrectionCount || 0)}곳`, `검수 ${fmtNumber(region.adminReviewCount || 0)}곳`]
   ];
+  const companyListOpen = selectedFilter.key !== "priority";
+  const companyListSummary = `${selectedFilter.label} ${fmtNumber(filteredRows.length)}곳 · 전체 ${fmtNumber(rows.length)}곳`;
   return `
     <section class="admin-region-detail-panel ${escapeHtml(statusTone)}" data-admin-region-detail>
       <div class="admin-region-detail-head">
@@ -16791,16 +16793,26 @@ function adminRegionalDetailPanel(region = null, master = {}) {
             </div>
           ` : ""}
         </div>
-        <div class="admin-region-company-list">
-          <div>
-            <strong>업체별 작업목록</strong>
-            <small>${escapeHtml(selectedFilter.label)} ${fmtNumber(filteredRows.length)}곳 · 전체 ${fmtNumber(rows.length)}곳</small>
+        <details class="admin-region-company-drawer" data-admin-region-company-drawer ${companyListOpen ? "open" : ""}>
+          <summary class="admin-region-company-drawer-summary">
+            <div>
+              <span>업체별 작업목록</span>
+              <strong>${escapeHtml(companyListSummary)}</strong>
+              <small>필터별 업체와 일괄 처리 버튼은 펼쳐서 확인합니다.</small>
+            </div>
+            <mark><span class="closed-label">열기</span><span class="open-label">접기</span></mark>
+          </summary>
+          <div class="admin-region-company-list">
+            <div class="admin-region-company-list-head">
+              <strong>업체별 작업목록</strong>
+              <small>${escapeHtml(companyListSummary)}</small>
+            </div>
+            ${adminRegionCompanyFilterBar(rows, selectedFilter.key)}
+            ${adminRegionCompanyBulkHtml(region, filteredRows, selectedFilter)}
+            ${filteredRows.length ? filteredRows.slice(0, 12).map(adminRegionCompanyRowHtml).join("") : `<p class="empty">선택한 조건에 해당하는 업체가 없습니다.</p>`}
+            ${filteredRows.length > 12 ? `<p class="admin-region-company-more">상위 12곳만 표시 중입니다. 더 많은 업체는 지역 마스터에서 검색하세요.</p>` : ""}
           </div>
-          ${adminRegionCompanyFilterBar(rows, selectedFilter.key)}
-          ${adminRegionCompanyBulkHtml(region, filteredRows, selectedFilter)}
-          ${filteredRows.length ? filteredRows.slice(0, 12).map(adminRegionCompanyRowHtml).join("") : `<p class="empty">선택한 조건에 해당하는 업체가 없습니다.</p>`}
-          ${filteredRows.length > 12 ? `<p class="admin-region-company-more">상위 12곳만 표시 중입니다. 더 많은 업체는 지역 마스터에서 검색하세요.</p>` : ""}
-        </div>
+        </details>
       </div>
     </section>
   `;

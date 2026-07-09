@@ -2565,7 +2565,7 @@ a {
 }
 
 .admin-region-action-box,
-.admin-region-company-list {
+.admin-region-company-drawer {
   min-width: 0;
   display: grid;
   align-content: start;
@@ -2577,7 +2577,8 @@ a {
 }
 
 .admin-region-action-box > strong,
-.admin-region-company-list > div strong {
+.admin-region-company-list > div strong,
+.admin-region-company-drawer-summary strong {
   color: var(--ink);
   font-size: 15px;
   font-weight: 950;
@@ -2592,6 +2593,76 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.admin-region-company-drawer-summary {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-region-company-drawer-summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-region-company-drawer-summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-region-company-drawer-summary span,
+.admin-region-company-drawer-summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+.admin-region-company-drawer-summary mark {
+  flex: 0 0 auto;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #edf5ff;
+  color: #1f5ea8;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.admin-region-company-drawer-summary mark span {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+.admin-region-company-drawer-summary mark .open-label {
+  display: none;
+}
+
+.admin-region-company-drawer[open] .admin-region-company-drawer-summary mark .closed-label {
+  display: none;
+}
+
+.admin-region-company-drawer[open] .admin-region-company-drawer-summary mark .open-label {
+  display: inline;
+}
+
+.admin-region-company-drawer[open] .admin-region-company-drawer-summary mark {
+  background: #1d4f8f;
+  border-color: #1d4f8f;
+  color: #fff;
+}
+
+.admin-region-company-list {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
 }
 
 .admin-region-company-list > div {
