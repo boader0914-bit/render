@@ -11876,6 +11876,7 @@ a.platform-row:hover {
 .drawer-head > div {
   min-width: 0;
   flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .drawer-head {
@@ -11885,9 +11886,11 @@ a.platform-row:hover {
 .sheet-head h2,
 .drawer-head h2 {
   margin: 0;
+  max-width: 100%;
   font-size: 22px;
   font-weight: 900;
   line-height: 1.24;
+  white-space: normal;
   overflow-wrap: anywhere;
   word-break: normal;
 }

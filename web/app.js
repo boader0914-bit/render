@@ -4604,17 +4604,40 @@ function b2bScopedRankedCompanyItems(items = rankedCompanyItems(), run = state.d
   });
 }
 
+function naverCouponDisplayNames(value = "") {
+  const generic = new Set([
+    "\uB124\uC774\uBC84",
+    "\uB124\uC774\uBC84 \uC0C1\uD488",
+    "\uC0C1\uD488",
+    "\uC219\uBC15\uC77C\uC815",
+    "\uB370\uC774\uC720\uC988\uC77C\uC815"
+  ]);
+  return [...new Set(String(value || "")
+    .split(/\s*[·,|]\s*/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part || generic.has(part)) return false;
+      if (/^\uADFC\uAC70\s*/.test(part)) return false;
+      if (/^\uB124\uC774\uBC84\s*\uACF5\uAC1C\s*\uB178\uCD9C\s*\uCFE0\uD3F0/.test(part)) return false;
+      return true;
+    }))]
+    .slice(0, 3)
+    .join(" · ");
+}
+
 function naverCouponInfo(item = {}) {
   const latest = item.companyProfile?.inventory?.latest || {};
   const latestSignal = latest.salesSignal || {};
   const salesTargetSignals = item.companyProfile?.salesTarget?.signals || {};
   const couponSignal = latest.couponSignal || latestSignal.couponSignal || {};
   const status = String(item.naverCouponStatus || couponSignal.status || latestSignal.naverCouponStatus || salesTargetSignals.couponStatus || "").trim();
-  const names = String(item.naverCouponNames || couponSignal.names || latestSignal.naverCouponNames || salesTargetSignals.couponNames || "").trim();
+  const rawNames = String(item.naverCouponNames || couponSignal.names || latestSignal.naverCouponNames || salesTargetSignals.couponNames || "").trim();
+  const names = naverCouponDisplayNames(rawNames);
   const channel = String(item.naverCouponChannel || couponSignal.channel || latestSignal.naverCouponChannel || salesTargetSignals.couponChannel || "").trim();
   const detail = String(item.naverCouponDetail || couponSignal.detail || latestSignal.naverCouponDetail || salesTargetSignals.couponDetail || "").trim();
+  const positiveStatus = /^(?:\uC788\uC74C|\uB178\uCD9C|exposed|visible|yes|true)$/i.test(status);
   const visible = Boolean(
-    status === "있음" ||
+    positiveStatus ||
     names ||
     couponSignal.visible ||
     latestSignal.naverCouponVisible ||
@@ -4624,8 +4647,9 @@ function naverCouponInfo(item = {}) {
     visible,
     status: status || (visible ? "있음" : ""),
     names,
+    rawNames,
     channel: channel || (visible ? "네이버" : ""),
-    detail: detail || (visible ? "네이버 공개 화면 쿠폰 노출" : "자동 수집 제한 · 네이버 화면 수동 확인")
+    detail: detail || (visible ? "네이버 화면에서 쿠폰 노출 확인" : "자동 수집 제한 · 네이버 화면 수동 확인")
   };
 }
 
