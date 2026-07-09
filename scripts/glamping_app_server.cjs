@@ -2027,6 +2027,19 @@ function manualCorrectionRoomSegmentTotal(correction = {}) {
     .reduce((sum, row) => sum + Number(row.count || 0), 0);
 }
 
+function sanitizeManualCorrectionMeta(payload = {}) {
+  return {
+    regionOverride: sanitizeMemberText(payload.regionOverride, 80),
+    channelNote: sanitizeMemberText(payload.channelNote, 180),
+    couponNote: sanitizeMemberText(payload.couponNote, 180)
+  };
+}
+
+function manualCorrectionMetaHasValue(correction = {}) {
+  const meta = sanitizeManualCorrectionMeta(correction);
+  return Boolean(meta.regionOverride || meta.channelNote || meta.couponNote);
+}
+
 function manualCorrectionLodgingBasisTotal(correction = {}) {
   if (!correction || correction.active === false) return 0;
   const explicit = Number(correction.lodgingBasisTotal);
@@ -7229,7 +7242,10 @@ function parseReservationRateDetail(detail, checkIn) {
 function manualCorrectionHasValue(correction = {}) {
   if (!correction || correction.active === false) return false;
   const note = String(correction.note || "").trim();
-  return manualCorrectionHasBasis(correction) || manualCorrectionRoomSegments(correction).length > 0 || note.length > 0;
+  return manualCorrectionHasBasis(correction)
+    || manualCorrectionRoomSegments(correction).length > 0
+    || manualCorrectionMetaHasValue(correction)
+    || note.length > 0;
 }
 
 function manualCorrectionHasBasis(correction = {}) {
@@ -8007,6 +8023,7 @@ function salesSignalWithManualCorrection(signal = {}, correction = {}) {
       lodgingBasisTotal: lodgingBasisTotal || null,
       dayUseBasisTotal: dayUseBasis || null,
       roomSegments: manualCorrectionRoomSegments(correction),
+      ...sanitizeManualCorrectionMeta(correction),
       note: correction.note || "",
       updatedAt: correction.updatedAt || ""
     },
@@ -8033,6 +8050,7 @@ function companyInventoryWithManualCorrection(company = {}) {
         lodgingBasisTotal: manualCorrectionLodgingBasisTotal(correction) || null,
         dayUseBasisTotal: correction.dayUseBasisTotal || null,
         roomSegments: manualCorrectionRoomSegments(correction),
+        ...sanitizeManualCorrectionMeta(correction),
         note: correction.note || "",
         updatedAt: correction.updatedAt || ""
       },
@@ -8044,6 +8062,17 @@ function companyInventoryWithManualCorrection(company = {}) {
   };
 }
 
+function companyRegionsWithManualCorrection(company = {}) {
+  const regions = Array.isArray(company.regions) ? company.regions : [];
+  const override = sanitizeManualCorrectionMeta(company.manualCorrection || {}).regionOverride;
+  if (!override) return regions;
+  const overrideKey = normalizeCompanyIdentityName(override);
+  return [
+    override,
+    ...regions.filter((region) => normalizeCompanyIdentityName(region) !== overrideKey)
+  ];
+}
+
 function companyCorrectionStatus(company = {}, inventory = null) {
   const correction = company.manualCorrection;
   const latest = (inventory || company.inventory || {}).latest || {};
@@ -8051,14 +8080,18 @@ function companyCorrectionStatus(company = {}, inventory = null) {
     const parts = [];
     const lodgingBasisTotal = manualCorrectionLodgingBasisTotal(correction);
     const roomSegmentCount = manualCorrectionRoomSegments(correction).length;
+    const meta = sanitizeManualCorrectionMeta(correction);
     if (lodgingBasisTotal) parts.push(`숙박 운영 ${lodgingBasisTotal}개`);
     if (correction.dayUseBasisTotal) parts.push(`데이유즈 운영 ${correction.dayUseBasisTotal}회`);
     if (roomSegmentCount) parts.push(`객실종류 ${roomSegmentCount}개`);
+    if (meta.regionOverride) parts.push(`지역 ${meta.regionOverride}`);
+    if (meta.channelNote) parts.push("채널 확인");
+    if (meta.couponNote) parts.push("쿠폰 확인");
     return {
       key: "admin_override",
       label: "관리자 보정",
       detail: parts.join(" · ") || "보정 기준 저장",
-      note: correction.note || "관리자 보정값 기준",
+      note: [correction.note, meta.channelNote, meta.couponNote].filter(Boolean).join(" · ") || "관리자 보정값 기준",
       updatedAt: correction.updatedAt || ""
     };
   }
@@ -8074,6 +8107,7 @@ function companyCorrectionStatus(company = {}, inventory = null) {
 function companyRecordSummary(company = {}, activeKeywordKey = "") {
   const inventory = companyInventoryWithManualCorrection(company);
   const manualCorrection = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : null;
+  const regions = companyRegionsWithManualCorrection(company);
   const keywords = Object.values(company.keywords || {})
     .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999) || String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
     .map((row) => {
@@ -8098,7 +8132,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     aliases: (company.aliases || []).slice(0, 6),
     placeIds: company.placeIds || [],
     bookingBusinessIds: company.bookingBusinessIds || [],
-    regions: company.regions || [],
+    regions,
     addresses: (company.addresses || []).slice(0, 3),
     firstSeenAt: company.firstSeenAt,
     lastSeenAt: company.lastSeenAt,
@@ -9109,10 +9143,11 @@ async function applyCompanyMasterOverridesForRun(data, collectedAt = "") {
 
 function applyCompanyMasterIdentity(item = {}, company = {}) {
   if (!company) return item;
+  const regions = companyRegionsWithManualCorrection(company);
   return {
     ...item,
     name: company.primaryName || item.name || "",
-    region: (company.regions || []).find(Boolean) || item.region || "",
+    region: regions.find(Boolean) || item.region || "",
     address: (company.addresses || []).find(Boolean) || item.address || ""
   };
 }
@@ -9397,11 +9432,13 @@ async function saveCompanyManualCorrection(payload = {}) {
   const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
   const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
   const roomSegments = sanitizeManualCorrectionRoomSegments(payload.roomSegments);
+  const correctionMeta = sanitizeManualCorrectionMeta(payload);
   const nextCorrection = {
     active: true,
     lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
     dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
     roomSegments,
+    ...correctionMeta,
     note: String(payload.note || "").trim(),
     source: "admin",
     updatedAt: savedAt
@@ -9420,6 +9457,9 @@ async function saveCompanyManualCorrection(payload = {}) {
       lodgingBasisTotal: company.manualCorrection?.lodgingBasisTotal || null,
       dayUseBasisTotal: company.manualCorrection?.dayUseBasisTotal || null,
       roomSegmentCount: company.manualCorrection?.roomSegments?.length || 0,
+      regionOverride: company.manualCorrection?.regionOverride || "",
+      channelNote: company.manualCorrection?.channelNote || "",
+      couponNote: company.manualCorrection?.couponNote || "",
       note: company.manualCorrection?.note || ""
     }
   ].slice(-30);
@@ -11616,8 +11656,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-admin-region-company-controls"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-admin-region-company-controls"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260710-admin-correction-meta"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260710-admin-correction-meta"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

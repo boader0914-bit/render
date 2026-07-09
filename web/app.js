@@ -2513,7 +2513,24 @@ function manualCorrectionHasValue(correction = {}) {
   const lodging = finiteNumber(correction.lodgingBasisTotal, 0);
   const dayUse = finiteNumber(correction.dayUseBasisTotal, 0);
   const note = String(correction.note || "").trim();
-  return manualCorrectionHasBasis(correction) || manualCorrectionRoomSegments(correction).length > 0 || note.length > 0;
+  return manualCorrectionHasBasis(correction)
+    || manualCorrectionRoomSegments(correction).length > 0
+    || manualCorrectionMetaHasValue(correction)
+    || note.length > 0;
+}
+
+function manualCorrectionMeta(correction = {}) {
+  const text = (value, max = 160) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+  return {
+    regionOverride: text(correction.regionOverride, 80),
+    channelNote: text(correction.channelNote, 180),
+    couponNote: text(correction.couponNote, 180)
+  };
+}
+
+function manualCorrectionMetaHasValue(correction = {}) {
+  const meta = manualCorrectionMeta(correction);
+  return Boolean(meta.regionOverride || meta.channelNote || meta.couponNote);
 }
 
 function manualCorrectionHasBasis(correction = {}) {
@@ -4064,13 +4081,19 @@ function manualCorrectionInfo(item = {}) {
   if (!manualCorrectionHasValue(correction)) return null;
   const lodging = finiteNumber(correction.lodgingBasisTotal, 0);
   const dayUse = finiteNumber(correction.dayUseBasisTotal, 0);
+  const meta = manualCorrectionMeta(correction);
   const parts = [];
   if (lodging > 0) parts.push(`숙박 운영 ${fmtNumber(lodging)}개`);
   if (dayUse > 0) parts.push(`데이유즈 운영 ${fmtNumber(dayUse)}회`);
+  if (meta.regionOverride) parts.push(`지역 ${meta.regionOverride}`);
+  if (meta.channelNote) parts.push("채널 확인");
+  if (meta.couponNote) parts.push("쿠폰 확인");
   return {
     correction,
+    ...meta,
     label: parts.length ? parts.join(" · ") : "보정 기준",
-    note: correction.note || "관리자 수동 보정값 기준"
+    note: [correction.note, meta.channelNote, meta.couponNote].filter(Boolean).join(" · ") || "관리자 수동 보정값 기준",
+    updatedAt: correction.updatedAt || ""
   };
 }
 
@@ -13602,10 +13625,31 @@ function companyProfileKeywordList(profile = {}) {
   `;
 }
 
+function manualCorrectionAdminMetaFields(correction = {}, context = {}) {
+  const meta = manualCorrectionMeta(correction);
+  return `
+    <div class="company-manual-meta-grid">
+      <label>
+        <span>지역 분류 보정</span>
+        <input type="text" data-manual-region value="${escapeHtml(meta.regionOverride)}" placeholder="${escapeHtml(context.regionPlaceholder || "예: 포천")}">
+      </label>
+      <label>
+        <span>판매 채널 확인</span>
+        <input type="text" data-manual-channel-note value="${escapeHtml(meta.channelNote)}" placeholder="예: 네이버+OTA 병행, 전화예약 가능">
+      </label>
+      <label>
+        <span>쿠폰/혜택 메모</span>
+        <input type="text" data-manual-coupon-note value="${escapeHtml(meta.couponNote)}" placeholder="예: 네이버 쿠폰 노출, BBQ 패키지">
+      </label>
+    </div>
+  `;
+}
+
 function sheetManualCorrectionForm(profile = {}, item = {}) {
   if (!profile.companyId) return "";
   const candidateCorrection = profile.manualCorrection || item.companyManualCorrection || {};
   const correction = manualCorrectionHasValue(candidateCorrection) ? candidateCorrection : {};
+  const regionPlaceholder = (profile.regions || [])[0] || item.region || "예: 포천";
   return `
     <div class="company-manual-form" data-company-manual-form data-company-id="${escapeHtml(profile.companyId)}">
       <div>
@@ -13619,6 +13663,7 @@ function sheetManualCorrectionForm(profile = {}, item = {}) {
         </label>
       </div>
       ${manualCorrectionRoomSegmentsField(correction)}
+      ${manualCorrectionAdminMetaFields(correction, { regionPlaceholder })}
       <label>
         <span>보정 메모</span>
         <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
@@ -13699,6 +13744,8 @@ function sheetManualCorrectionEvidence(item = {}) {
   const rows = [
     ["숙박 기준", lodging.supply ? `${fmtNumber(lodging.sold)}/${fmtNumber(lodging.supply)}개` : "확인필요", rawLodging ? `네이버 원본 ${fmtNumber(rawLodging)}개` : "원본 총량 대기"],
     ["데이유즈 기준", day.supply ? `${fmtNumber(day.sold)}/${fmtNumber(day.supply)}회` : "없음", rawDayUse ? `네이버 원본 ${fmtNumber(rawDayUse)}회` : "원본 총량 대기"],
+    ["지역 분류", info.regionOverride || "미지정", info.regionOverride ? "관리자 지정 지역 우선" : "기존 지역 기준"],
+    ["채널/쿠폰", [info.channelNote, info.couponNote].filter(Boolean).join(" · ") || "확인 메모 없음", info.updatedAt ? `보정 ${compactDateTime(info.updatedAt)}` : "보정일 대기"],
     ["보정 메모", info.note || "메모 없음", info.label]
   ];
   return `
@@ -15552,6 +15599,7 @@ function companyMasterCheckPanel(master = {}) {
 
 function companyCorrectionFormHtml(company = {}, compact = false) {
   const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
+  const regionPlaceholder = (company.regions || [])[0] || "예: 포천";
   return `
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
       <div>
@@ -15565,6 +15613,7 @@ function companyCorrectionFormHtml(company = {}, compact = false) {
         </label>
       </div>
       ${manualCorrectionRoomSegmentsField(correction)}
+      ${manualCorrectionAdminMetaFields(correction, { regionPlaceholder })}
       <label>
         <span>보정 메모</span>
         <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
@@ -16793,6 +16842,65 @@ function adminRegionPreflightPanel(region = {}, rows = []) {
   `;
 }
 
+function adminRegionCorrectionGapReason(row = {}) {
+  const metrics = row.metrics || {};
+  const reasons = [];
+  if (metrics.lowConfidence) reasons.push("수량 신뢰도 낮음");
+  if (metrics.stockVariance) reasons.push("날짜별 총량 변동");
+  if (metrics.signal?.structureWeak) reasons.push("상품 구조 확인");
+  if (!Number.isFinite(metrics.rate)) reasons.push("예약율 표본 없음");
+  if (!metrics.totalRevenue) reasons.push("가격/매출 표본 없음");
+  if (!metrics.couponVisible) reasons.push("쿠폰 노출 미확인");
+  if (!metrics.adminReview) reasons.push("관리자 미검수");
+  return reasons.slice(0, 4);
+}
+
+function adminRegionCorrectionGapRows(rows = []) {
+  return rows
+    .map((row) => ({ ...row, correctionReasons: adminRegionCorrectionGapReason(row) }))
+    .filter((row) => row.correctionReasons.length && !row.metrics?.manualCorrection)
+    .sort((a, b) =>
+      b.metrics.priority - a.metrics.priority ||
+      (a.metrics.rank || 9999) - (b.metrics.rank || 9999) ||
+      String(a.company?.primaryName || "").localeCompare(String(b.company?.primaryName || ""), "ko")
+    );
+}
+
+function adminRegionCorrectionGapPanel(region = {}, rows = []) {
+  const queueRows = adminRegionCorrectionGapRows(rows);
+  const visibleRows = queueRows.slice(0, 8);
+  return `
+    <details class="admin-region-correction-gap">
+      <summary class="admin-region-correction-gap-summary">
+        <div>
+          <span>지역별 보정 누락 큐</span>
+          <strong>${fmtNumber(queueRows.length)}곳 확인 필요</strong>
+          <small>${escapeHtml(region.regionLabel || "선택 지역")} 업체 중 수량·가격·채널·쿠폰 보정이 필요한 곳을 먼저 봅니다.</small>
+        </div>
+        <mark>펼치기</mark>
+      </summary>
+      ${visibleRows.length ? `
+        <div class="admin-region-correction-gap-list">
+          ${visibleRows.map((row) => {
+            const metrics = row.metrics || {};
+            return `
+              <article>
+                <div>
+                  <strong>${escapeHtml(row.company?.primaryName || "업체명 확인")}</strong>
+                  <small>${escapeHtml([metrics.regionLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", metrics.latest?.confidenceGrade ? `신뢰도 ${metrics.latest.confidenceGrade}` : ""].filter(Boolean).join(" · "))}</small>
+                </div>
+                <p>${escapeHtml(row.correctionReasons.join(" · "))}</p>
+                <button type="button" data-admin-region-company-focus="${escapeHtml(row.company?.companyId || "")}" data-admin-region-company-name="${escapeHtml(row.company?.primaryName || "")}">보정 열기</button>
+              </article>
+            `;
+          }).join("")}
+          ${queueRows.length > visibleRows.length ? `<p class="admin-region-correction-gap-more">상위 ${fmtNumber(visibleRows.length)}곳만 표시합니다. 나머지는 업체별 작업목록의 보정 필요 필터에서 확인하세요.</p>` : ""}
+        </div>
+      ` : `<p class="empty">현재 지역에서 우선 보정할 누락 업체가 없습니다.</p>`}
+    </details>
+  `;
+}
+
 function adminRegionCompanyRowHtml(row = {}) {
   const { company, metrics } = row;
   const issueText = metrics.issues.slice(0, 3).join(" · ") || "즉시 이슈 없음";
@@ -17075,6 +17183,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
       ${adminRegionDetailFocusPanel(region, rows, maintenance)}
       ${adminRegionReviewSummaryPanel(region, rows)}
       ${adminRegionPreflightPanel(region, rows)}
+      ${adminRegionCorrectionGapPanel(region, rows)}
       ${adminRegionLocationScorePanel(region)}
       ${adminRegionAuditPanel(region, rows)}
       <div class="admin-region-detail-body">
@@ -23021,8 +23130,18 @@ async function saveCompanyCorrection(button, clear = false) {
   const lodgingBasisTotal = form?.querySelector("[data-manual-lodging]")?.value || "";
   const dayUseBasisTotal = form?.querySelector("[data-manual-dayuse]")?.value || "";
   const roomSegments = collectManualCorrectionRoomSegments(form);
+  const regionOverride = form?.querySelector("[data-manual-region]")?.value || "";
+  const channelNote = form?.querySelector("[data-manual-channel-note]")?.value || "";
+  const couponNote = form?.querySelector("[data-manual-coupon-note]")?.value || "";
   const note = form?.querySelector("[data-manual-note]")?.value || "";
-  const emptySave = !clear && !String(lodgingBasisTotal).trim() && !String(dayUseBasisTotal).trim() && !roomSegments.length && !String(note).trim();
+  const emptySave = !clear
+    && !String(lodgingBasisTotal).trim()
+    && !String(dayUseBasisTotal).trim()
+    && !roomSegments.length
+    && !String(regionOverride).trim()
+    && !String(channelNote).trim()
+    && !String(couponNote).trim()
+    && !String(note).trim();
   const shouldClear = clear || emptySave;
   setStatus(shouldClear ? "보정 해제 중" : "보정 저장 중");
   const payload = shouldClear
@@ -23032,6 +23151,9 @@ async function saveCompanyCorrection(button, clear = false) {
         lodgingBasisTotal,
         dayUseBasisTotal,
         roomSegments,
+        regionOverride,
+        channelNote,
+        couponNote,
         note
       };
   try {
