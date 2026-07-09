@@ -21,6 +21,7 @@ const state = {
   dictionary: null,
   tourismRegionMap: null,
   locationCardRequests: null,
+  locationScoreOverrides: null,
   historyOps: null,
   companyMaster: null,
   companyMasterFilters: {
@@ -15032,6 +15033,87 @@ function adminRegionCompanyRowHtml(row = {}) {
   `;
 }
 
+function adminRegionLocationScoreMatch(region = {}) {
+  if (!state.dictionary) return null;
+  const cards = state.dictionary.cards || [];
+  const groups = state.dictionary.regionGroups || [];
+  const regionLabels = [
+    region.regionLabel,
+    region.localityLabel,
+    region.provinceLabel
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const directCard = cards.find((card) =>
+    card.regionKey === region.regionKey ||
+    regionLabels.some((label) => compactSearchText(card.searchKeyword || "").includes(compactSearchText(label)))
+  );
+  if (directCard) return { type: "region", card: directCard, label: directCard.searchKeyword };
+  const directGroup = groups.find((group) =>
+    group.groupKey === region.regionKey ||
+    regionLabels.some((label) => compactSearchText(group.searchKeyword || group.sido || "").includes(compactSearchText(label)))
+  );
+  if (directGroup) return { type: "group", group: directGroup, label: directGroup.searchKeyword };
+  const query = `${regionLabels[0] || ""} 글램핑`.trim();
+  const match = query ? locationCardForQuery(query) : null;
+  if (match?.card) return { type: "region", card: match.card, label: match.card.searchKeyword };
+  if (match?.group) return { type: "group", group: match.group, label: match.group.searchKeyword };
+  return null;
+}
+
+function adminRegionLocationScorePanel(region = {}) {
+  const match = adminRegionLocationScoreMatch(region);
+  if (!match) {
+    return `
+      <div class="admin-region-location-score-panel empty">
+        <div>
+          <span>입지 보정 검증</span>
+          <strong>지역카드 연결 대기</strong>
+          <small>해당 지역과 연결되는 입지사전 카드가 아직 없습니다.</small>
+        </div>
+      </div>
+    `;
+  }
+  const subject = match.card || match.group;
+  let scoreModel = null;
+  let runtime = null;
+  let tourismLabel = "";
+  if (match.type === "group") {
+    const cards = locationGroupCards(match.group);
+    const tourismRegions = tourismRegionsForLocationGroup(match.group);
+    runtime = locationGroupRuntimeStats(match.group, cards);
+    scoreModel = regionGroupLocationScoreModel(match.group, cards, runtime, tourismRegions);
+    tourismLabel = tourismRegionGroupDisplay(tourismRegions);
+  } else {
+    const alias = dictionaryAliasForCard(match.card);
+    const tourismMatch = tourismRegionForLocation({ card: match.card, alias, query: match.card.searchKeyword });
+    runtime = locationRuntimeStats(match.card, alias);
+    scoreModel = adjustedLocationScoreModel(match.card, runtime, tourismMatch);
+    tourismLabel = tourismRegionDisplay(tourismMatch);
+  }
+  const autoScore = Number.isFinite(scoreModel.scoreBeforeManual) ? scoreModel.scoreBeforeManual : scoreModel.score;
+  const diff = Number.isFinite(scoreModel.score) && Number.isFinite(autoScore) ? scoreModel.score - autoScore : 0;
+  const drivers = (scoreModel.drivers || []).slice(0, 2).map((item) => `${item.label} ${fmtNumber(item.value)}`).join(" · ");
+  const risks = (scoreModel.risks || []).slice(0, 2).map((item) => `${item.label} ${fmtNumber(item.value)}`).join(" · ");
+  return `
+    <div class="admin-region-location-score-panel">
+      <div class="admin-region-location-score-head">
+        <div>
+          <span>입지 보정 검증</span>
+          <strong>${escapeHtml(match.label || "지역카드")} · ${fmtNumber(scoreModel.score)}점</strong>
+          <small>자동 ${fmtNumber(autoScore)}점${scoreModel.manual?.hasAdjustment ? ` · 보정 ${diff >= 0 ? "+" : ""}${fmtNumber(diff)}점` : ""} · ${escapeHtml(tourismLabel)}</small>
+        </div>
+        <button type="button" data-location-query="${escapeHtml(match.label || "")}">입지카드 열기</button>
+      </div>
+      <div class="admin-region-location-score-grid">
+        <article><span>강점</span><strong>${escapeHtml(drivers || "확인 필요")}</strong></article>
+        <article><span>검증</span><strong>${escapeHtml(risks || "큰 위험 없음")}</strong></article>
+        <article><span>표본</span><strong>${fmtNumber(runtime.items?.length || 0)}곳 · ${fmtNumber(runtime.sales?.supply || 0)}실</strong></article>
+        <article><span>신뢰도</span><strong>${fmtNumber(scoreModel.confidence || 0)}점</strong></article>
+      </div>
+      ${renderLocationScoreOverrideForm(subject, scoreModel, { label: match.label, type: match.type })}
+    </div>
+  `;
+}
+
 function adminRegionalDetailPanel(region = null, master = {}) {
   if (!region) return "";
   const rows = adminRegionCompanyRows(region, master);
@@ -15071,6 +15153,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
       </div>
       ${adminRegionWorkflowPanel(rows)}
       ${adminRegionPreflightPanel(region, rows)}
+      ${adminRegionLocationScorePanel(region)}
       ${adminRegionAuditPanel(region, rows)}
       <div class="admin-region-detail-body">
         <div class="admin-region-action-box">
@@ -15810,7 +15893,7 @@ function adminConsoleSecurityPanel() {
         </article>
         <article>
           <strong>마스터/키 저장소</strong>
-          <small>${escapeHtml([storage.companyMasterDb, storage.apiKeyStorage].filter(Boolean).join(" · ") || "경로 대기")}</small>
+          <small>${escapeHtml([storage.companyMasterDb, storage.locationScoreOverrideDb, storage.apiKeyStorage].filter(Boolean).join(" · ") || "경로 대기")}</small>
         </article>
         <article>
           <strong>관심숙소</strong>
@@ -17399,14 +17482,47 @@ function locationDataConfidenceScore({ runtime = {}, tourismMatch = {}, revenueM
   return clampLocationScore(score, 44);
 }
 
+function locationScoreKey(value = "") {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toLowerCase()
+    .slice(0, 120);
+}
+
+function locationScoreSubjectKeys(subject = {}) {
+  return [
+    subject.regionKey,
+    subject.groupKey,
+    subject.searchKeyword,
+    subject.label,
+    subject.name
+  ].map(locationScoreKey).filter(Boolean);
+}
+
+function locationScoreSubjectKey(subject = {}) {
+  return locationScoreSubjectKeys(subject)[0] || "";
+}
+
+function locationScoreOverrideForSubject(subject = {}) {
+  const overrides = state.locationScoreOverrides?.overrides || {};
+  const keys = locationScoreSubjectKeys(subject);
+  return keys.map((key) => overrides[key]).find(Boolean) || null;
+}
+
 function locationManualAdjustment(card = {}) {
-  const delta = Number(card.locationScoreAdjustment ?? card.adminLocationScoreDelta ?? card.manualScoreDelta);
-  const override = Number(card.locationScoreOverride ?? card.adminLocationScore);
+  const saved = locationScoreOverrideForSubject(card);
+  const activeSaved = saved && saved.active !== false ? saved : null;
+  const delta = Number(activeSaved?.scoreDelta ?? activeSaved?.adjustmentDelta ?? card.locationScoreAdjustment ?? card.adminLocationScoreDelta ?? card.manualScoreDelta);
+  const override = Number(activeSaved?.scoreOverride ?? activeSaved?.overrideScore ?? card.locationScoreOverride ?? card.adminLocationScore);
   return {
     hasAdjustment: Number.isFinite(delta) || Number.isFinite(override),
     delta: Number.isFinite(delta) ? delta : 0,
     override: Number.isFinite(override) ? override : null,
-    note: card.locationScoreNote || card.adminLocationScoreNote || ""
+    note: activeSaved?.note || card.locationScoreNote || card.adminLocationScoreNote || "",
+    key: activeSaved?.key || locationScoreSubjectKey(card),
+    updatedAt: activeSaved?.updatedAt || "",
+    source: activeSaved ? "admin" : "dictionary"
   };
 }
 
@@ -17510,7 +17626,13 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
     ? Math.max(45, 82 - tourismRegions.filter((region) => region.codeStatus).length * 6)
     : 48;
   const confidence = locationDataConfidenceScore({ runtime, tourismMatch: { matched: tourismRegions.length > 0, region: tourismRegions[0] || null } });
-  const score = clampLocationScore(averageScore * 0.55 + groupBase * 0.2 + (runtimeScore || averageScore) * 0.17 + codeScore * 0.08 + Math.max(-4, Math.min(5, (confidence - 60) * 0.08)), groupBase);
+  const rawScore = averageScore * 0.55 + groupBase * 0.2 + (runtimeScore || averageScore) * 0.17 + codeScore * 0.08;
+  const confidenceAdjustment = Math.max(-4, Math.min(5, (confidence - 60) * 0.08));
+  const scoreBeforeManual = clampLocationScore(rawScore + confidenceAdjustment, groupBase);
+  const manual = locationManualAdjustment(group);
+  const score = manual.override !== null
+    ? clampLocationScore(manual.override, scoreBeforeManual)
+    : clampLocationScore(scoreBeforeManual + manual.delta, scoreBeforeManual);
   const componentBuckets = new Map();
   cardModels.forEach((model) => {
     model.components.forEach((component) => {
@@ -17523,13 +17645,18 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
   const components = [...componentBuckets.values()].map((bucket) => ({
     ...bucket,
     value: clampLocationScore(bucket.count ? bucket.value / bucket.count : bucket.value, 50),
-    note: `${fmtNumber(bucket.count)}개 지역카드 평균`
+    note: `${fmtNumber(bucket.count)}개 지역카드 평균`,
+    tone: locationComponentTone(bucket.count ? bucket.value / bucket.count : bucket.value)
   }));
   const drivers = components.slice().sort((a, b) => b.value - a.value).slice(0, 3);
   const risks = components.filter((component) => component.value < 55).sort((a, b) => a.value - b.value).slice(0, 3);
   return {
     score,
+    scoreBeforeManual,
+    rawScore: clampLocationScore(rawScore, score),
     confidence,
+    confidenceAdjustment,
+    manual,
     components,
     drivers,
     risks,
@@ -17658,6 +17785,7 @@ function renderLocationDecisionPanel(card, clusters, runtime, scoreModel = null,
 function renderLocationScoreModel(scoreModel = null) {
   if (!scoreModel) return "";
   const confidenceTone = locationComponentTone(scoreModel.confidence);
+  const manual = scoreModel.manual || {};
   return `
     <section class="location-block location-score-model">
       <div class="location-block-head">
@@ -17675,10 +17803,10 @@ function renderLocationScoreModel(scoreModel = null) {
           <strong>${fmtNumber(scoreModel.confidence)}</strong>
           <small>${scoreModel.confidenceAdjustment >= 0 ? "+" : ""}${fmtNumber(scoreModel.confidenceAdjustment)}점 보정</small>
         </div>
-        <div class="${scoreModel.manual.hasAdjustment ? "strong" : "weak"}">
+        <div class="${manual.hasAdjustment ? "strong" : "weak"}">
           <span>관리자 보정</span>
-          <strong>${scoreModel.manual.hasAdjustment ? "적용" : "없음"}</strong>
-          <small>${escapeHtml(scoreModel.manual.note || (scoreModel.manual.hasAdjustment ? "수동 보정 반영" : "자동 보정 기준"))}</small>
+          <strong>${manual.hasAdjustment ? "적용" : "없음"}</strong>
+          <small>${escapeHtml(manual.note || (manual.hasAdjustment ? "수동 보정 반영" : "자동 보정 기준"))}</small>
         </div>
       </div>
       <div class="location-score-component-grid">
@@ -17693,6 +17821,109 @@ function renderLocationScoreModel(scoreModel = null) {
           </article>
         `).join("")}
       </div>
+    </section>
+  `;
+}
+
+function locationScoreValidationRows(scoreModel = {}, runtime = {}, tourismLabel = "") {
+  const rows = [];
+  const lowComponents = (scoreModel.risks || []).slice(0, 3);
+  if (Number(scoreModel.confidence || 0) < 60) {
+    rows.push({ tone: "risk", label: "데이터 신뢰도", value: `${fmtNumber(scoreModel.confidence || 0)}점`, note: "표본 부족 시 점수 확정 전 관리자 확인 필요" });
+  } else {
+    rows.push({ tone: "strong", label: "데이터 신뢰도", value: `${fmtNumber(scoreModel.confidence || 0)}점`, note: "현재 표본으로 자동판정 가능" });
+  }
+  rows.push({
+    tone: runtime.items?.length ? "strong" : "risk",
+    label: "노출 표본",
+    value: `${fmtNumber(runtime.items?.length || 0)}곳`,
+    note: runtime.items?.length ? "현재 수집 결과와 연결됨" : "검색 결과 연결 대기"
+  });
+  rows.push({
+    tone: runtime.sales?.supply ? "strong" : "risk",
+    label: "예약 표본",
+    value: `${fmtNumber(runtime.sales?.sold || 0)}/${fmtNumber(runtime.sales?.supply || 0)}실`,
+    note: runtime.sales?.supply ? "네이버 예약 기준 반영" : "예약율 표본 대기"
+  });
+  rows.push({
+    tone: scoreModel.revenueMetrics?.sampleCount ? "strong" : "risk",
+    label: "매출 표본",
+    value: `${fmtNumber(scoreModel.revenueMetrics?.sampleCount || 0)}곳`,
+    note: scoreModel.revenueMetrics?.sampleCount ? `평균 ${fmtWon(scoreModel.revenueMetrics.average)}` : "가격·수량 표본 대기"
+  });
+  if (tourismLabel) {
+    rows.push({
+      tone: /대기|검증 전/.test(tourismLabel) ? "mid" : "strong",
+      label: "관광공사 매칭",
+      value: tourismLabel.replace(/^관광공사\s*/, ""),
+      note: "입지 보정의 외부 지역 기준"
+    });
+  }
+  lowComponents.forEach((component) => {
+    rows.push({
+      tone: "risk",
+      label: component.label,
+      value: `${fmtNumber(component.value)}점`,
+      note: component.note || "점수 하락 요인"
+    });
+  });
+  return rows.slice(0, 8);
+}
+
+function renderLocationScoreOverrideForm(subject = {}, scoreModel = null, options = {}) {
+  if (!isAdminRole() || !scoreModel) return "";
+  const key = locationScoreSubjectKey(subject);
+  if (!key) return "";
+  const manual = scoreModel.manual || {};
+  const scoreBeforeManual = Number.isFinite(scoreModel.scoreBeforeManual) ? scoreModel.scoreBeforeManual : scoreModel.score;
+  const scoreValue = manual.override !== null && manual.override !== undefined ? manual.override : "";
+  const label = options.label || subject.searchKeyword || subject.label || key;
+  const type = options.type || (subject.groupKey ? "group" : "region");
+  const diff = Number.isFinite(scoreModel.score) && Number.isFinite(scoreBeforeManual)
+    ? scoreModel.score - scoreBeforeManual
+    : 0;
+  return `
+    <div class="location-score-admin-form" data-location-score-form data-location-score-key="${escapeHtml(key)}" data-location-score-type="${escapeHtml(type)}" data-location-score-region-key="${escapeHtml(subject.regionKey || "")}" data-location-score-group-key="${escapeHtml(subject.groupKey || "")}" data-location-score-label="${escapeHtml(label)}" data-location-score-keyword="${escapeHtml(subject.searchKeyword || label)}">
+      <div>
+        <span>자동점수</span>
+        <strong>${fmtNumber(scoreBeforeManual)}</strong>
+        <small>${manual.hasAdjustment ? `보정 후 ${fmtNumber(scoreModel.score)}점 · ${diff >= 0 ? "+" : ""}${fmtNumber(diff)}점` : "자동 산식 기준"}</small>
+      </div>
+      <label>
+        <span>관리자 보정점수</span>
+        <input type="number" min="0" max="100" inputmode="numeric" data-location-score-override value="${escapeHtml(scoreValue)}" placeholder="0~100">
+      </label>
+      <label>
+        <span>보정 사유</span>
+        <input type="text" data-location-score-note value="${escapeHtml(manual.note || "")}" placeholder="예: 관광수요는 높지만 실제 표본 부족">
+      </label>
+      <div class="location-score-admin-actions">
+        <button type="button" data-save-location-score-override>보정 저장</button>
+        <button type="button" data-clear-location-score-override ${manual.hasAdjustment ? "" : "disabled"}>보정 해제</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderLocationScoreValidationPanel(subject = {}, scoreModel = null, runtime = {}, options = {}) {
+  if (!isAdminRole() || !scoreModel) return "";
+  const rows = locationScoreValidationRows(scoreModel, runtime, options.tourismLabel || "");
+  return `
+    <section class="location-block location-score-validation">
+      <div class="location-block-head">
+        <h4>입지 보정 검증</h4>
+        <span>자동점수와 관리자 보정값을 함께 확인</span>
+      </div>
+      <div class="location-score-validation-grid">
+        ${rows.map((row) => `
+          <article class="${escapeHtml(row.tone)}">
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+            <small>${escapeHtml(row.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      ${renderLocationScoreOverrideForm(subject, scoreModel, options)}
     </section>
   `;
 }
@@ -18077,6 +18308,7 @@ function renderLocationGroupDictionary(group) {
 
       ${renderLocationGroupDecision(group, cards, clusters, runtime, score)}
       ${renderLocationScoreModel(groupScoreModel)}
+      ${renderLocationScoreValidationPanel(group, groupScoreModel, runtime, { label: group.searchKeyword, type: "group", tourismLabel: tourismRegionGroupDisplay(tourismRegions) })}
       ${renderLocationReality(runtime)}
       ${renderLocationGroupComparison(regionRows)}
       ${renderLocationGroupPriority(regionRows)}
@@ -18241,6 +18473,7 @@ function renderLocationDictionary(match = null) {
 
       ${renderLocationDecisionPanel(card, clusters, runtime, scoreModel, tourismMatch)}
       ${renderLocationScoreModel(scoreModel)}
+      ${renderLocationScoreValidationPanel(card, scoreModel, runtime, { label: card.searchKeyword, type: "region", tourismLabel: tourismRegionDisplay(tourismMatch) })}
       ${renderLocationEvidence(card)}
       ${renderLocationReality(runtime)}
       ${renderLocationTargetPreview(runtime)}
@@ -18343,6 +18576,7 @@ async function loadLocationDictionary() {
       els.dictionarySearchInput.value = state.dictionary.cards[0].searchKeyword;
     }
     runDictionarySearch(els.dictionarySearchInput?.value || state.dictionary.cards?.[0]?.searchKeyword || "");
+    if (isAdminRole() && state.companyMaster) renderAdminConsoleDashboard();
     if (!isAdminRole()) renderB2BSearchPanel();
   } catch (error) {
     if (els.dictionarySearchStatus) els.dictionarySearchStatus.textContent = `입지사전 로딩 실패: ${error.message}`;
@@ -18356,6 +18590,20 @@ async function loadLocationCardRequests() {
     if (state.activeTab === "dictionary" && state.dictionary) renderLocationDictionary();
   } catch (error) {
     state.locationCardRequests = { error: error.message, requests: {}, items: [] };
+  }
+}
+
+async function loadLocationScoreOverrides() {
+  if (!isAdminRole()) {
+    state.locationScoreOverrides = null;
+    return;
+  }
+  try {
+    state.locationScoreOverrides = await fetchJson("/api/location-score-overrides");
+    if (state.activeTab === "dictionary" && state.dictionary) renderLocationDictionary();
+    if (state.activeTab === "admin" && state.companyMaster) renderAdminConsoleDashboard();
+  } catch (error) {
+    state.locationScoreOverrides = { error: error.message, overrides: {}, items: [] };
   }
 }
 
@@ -20701,6 +20949,43 @@ async function saveCompanyCorrection(button, clear = false) {
   }
 }
 
+async function saveLocationScoreOverride(button, clear = false) {
+  const form = button?.closest("[data-location-score-form]");
+  const key = form?.dataset?.locationScoreKey || "";
+  if (!form || !key) return;
+  const scoreValue = form.querySelector("[data-location-score-override]")?.value || "";
+  const note = form.querySelector("[data-location-score-note]")?.value || "";
+  const payload = clear
+    ? { key, active: false }
+    : {
+        key,
+        type: form.dataset.locationScoreType || "region",
+        regionKey: form.dataset.locationScoreRegionKey || "",
+        groupKey: form.dataset.locationScoreGroupKey || "",
+        searchKeyword: form.dataset.locationScoreKeyword || "",
+        label: form.dataset.locationScoreLabel || "",
+        scoreOverride: scoreValue,
+        note
+      };
+  button.disabled = true;
+  setStatus(clear ? "입지 보정 해제 중" : "입지 보정 저장 중");
+  try {
+    state.locationScoreOverrides = await fetchJson("/api/location-score-overrides", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (state.activeTab === "dictionary" && state.dictionary) renderLocationDictionary();
+    if (isAdminRole() && state.companyMaster) renderAdminConsoleDashboard();
+    setStatus(clear ? "입지 보정 해제 완료" : "입지 보정 저장 완료");
+  } catch (error) {
+    setStatus(`입지 보정 실패: ${error.message}`);
+    form.insertAdjacentHTML("beforeend", `<div class="empty">입지 보정 저장 실패: ${escapeHtml(error.message)}</div>`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function saveCompanyAdminReview(button) {
   const companyId = button?.dataset?.companyId || "";
   const status = button?.dataset?.companyReviewAction || "";
@@ -21729,6 +22014,15 @@ function bindEvents() {
     }
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
+    const adminLocationQuery = event.target.closest(".admin-region-location-score-panel [data-location-query]");
+    if (adminLocationQuery) {
+      setActiveTab("dictionary");
+      runDictionarySearch(adminLocationQuery.dataset.locationQuery || "");
+      window.requestAnimationFrame(() => {
+        els.dictionaryResult?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
     if (event.target.closest("[data-b2b-history-toggle]")) {
       state.b2bHistoryExpanded = !state.b2bHistoryExpanded;
       renderB2BSearchHistoryPanel();
@@ -21882,6 +22176,16 @@ function bindEvents() {
     }
     const duplicateAction = event.target.closest("[data-company-duplicate-action]");
     if (duplicateAction) resolveCompanyDuplicate(duplicateAction);
+    const saveLocationScore = event.target.closest("[data-save-location-score-override]");
+    if (saveLocationScore) {
+      saveLocationScoreOverride(saveLocationScore, false);
+      return;
+    }
+    const clearLocationScore = event.target.closest("[data-clear-location-score-override]");
+    if (clearLocationScore) {
+      saveLocationScoreOverride(clearLocationScore, true);
+      return;
+    }
     const saveCorrection = event.target.closest("[data-save-company-correction]");
     if (saveCorrection) saveCompanyCorrection(saveCorrection, false);
     const clearCorrection = event.target.closest("[data-clear-company-correction]");
@@ -22103,6 +22407,20 @@ function bindEvents() {
     runDictionarySearch(button.dataset.locationQuery);
   });
   els.dictionaryResult?.addEventListener("click", (event) => {
+    const saveLocationScore = event.target.closest("[data-save-location-score-override]");
+    if (saveLocationScore) {
+      event.preventDefault();
+      event.stopPropagation();
+      saveLocationScoreOverride(saveLocationScore, false);
+      return;
+    }
+    const clearLocationScore = event.target.closest("[data-clear-location-score-override]");
+    if (clearLocationScore) {
+      event.preventDefault();
+      event.stopPropagation();
+      saveLocationScoreOverride(clearLocationScore, true);
+      return;
+    }
     const requestButton = event.target.closest("[data-location-request-action]");
     if (requestButton) {
       saveLocationCardRequestQueueAction(requestButton);
@@ -22130,7 +22448,7 @@ async function init() {
     setDefaultDates();
     syncAppHistoryState(false);
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
+      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
     } else {
       state.runs = [];
       state.activeRunId = null;

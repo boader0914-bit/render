@@ -5155,6 +5155,178 @@ a {
   background: var(--red);
 }
 
+.location-score-validation {
+  border-color: rgba(49, 130, 246, .24);
+}
+
+.location-score-validation-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.location-score-validation-grid article,
+.location-score-admin-form,
+.admin-region-location-score-panel {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fbfcfd;
+  padding: 13px;
+}
+
+.location-score-validation-grid span,
+.location-score-validation-grid small,
+.location-score-admin-form span,
+.location-score-admin-form small,
+.admin-region-location-score-panel span,
+.admin-region-location-score-panel small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.location-score-validation-grid strong,
+.admin-region-location-score-panel strong {
+  display: block;
+  min-width: 0;
+  margin-top: 6px;
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.location-score-validation-grid article.strong {
+  border-color: rgba(18, 183, 106, .36);
+}
+
+.location-score-validation-grid article.mid {
+  border-color: rgba(49, 130, 246, .34);
+}
+
+.location-score-validation-grid article.risk {
+  border-color: rgba(229, 72, 77, .34);
+  background: rgba(255, 245, 245, .78);
+}
+
+.location-score-admin-form {
+  display: grid;
+  grid-template-columns: minmax(130px, .8fr) minmax(110px, .65fr) minmax(220px, 1.4fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.location-score-admin-form > div:first-child {
+  min-width: 0;
+}
+
+.location-score-admin-form > div:first-child strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--blue);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.location-score-admin-form label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.location-score-admin-form input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 900;
+  padding: 11px 12px;
+  outline: none;
+}
+
+.location-score-admin-form input:focus {
+  border-color: rgba(49, 130, 246, .7);
+  box-shadow: 0 0 0 3px rgba(49, 130, 246, .14);
+}
+
+.location-score-admin-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.location-score-admin-actions button,
+.admin-region-location-score-head button {
+  border: 1px solid rgba(49, 130, 246, .32);
+  border-radius: 12px;
+  background: rgba(49, 130, 246, .1);
+  color: var(--blue);
+  font-weight: 950;
+  padding: 11px 13px;
+  white-space: nowrap;
+}
+
+.location-score-admin-actions button:last-child {
+  background: #fff;
+  color: var(--muted);
+}
+
+.location-score-admin-actions button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.admin-region-location-score-panel {
+  margin-top: 14px;
+}
+
+.admin-region-location-score-panel.empty {
+  border-style: dashed;
+}
+
+.admin-region-location-score-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.admin-region-location-score-head > div {
+  min-width: 0;
+}
+
+.admin-region-location-score-head strong {
+  color: var(--blue);
+  font-size: 22px;
+}
+
+.admin-region-location-score-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.admin-region-location-score-grid article {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 11px;
+}
+
+.admin-region-location-score-grid strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
 .location-reality-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -19647,8 +19819,22 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .location-score-model-head,
-  .location-score-component-grid {
+  .location-score-component-grid,
+  .location-score-validation-grid,
+  .location-score-admin-form,
+  .admin-region-location-score-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-region-location-score-head,
+  .location-score-admin-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-region-location-score-head button,
+  .location-score-admin-actions button {
+    width: 100%;
   }
 
   .location-score-component-grid article div {

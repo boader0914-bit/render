@@ -35,6 +35,7 @@ const CUSTOMER_DB_DIR = path.join(DATA_DIR, "customer_db");
 // Stable API key storage policy: releases may replace code, but must keep this file path.
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const LOCATION_CARD_REQUESTS_FILE = path.join(CONFIG_DIR, "location_card_requests.json");
+const LOCATION_SCORE_OVERRIDES_FILE = path.join(CONFIG_DIR, "location_score_overrides.json");
 const LEGACY_B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
 const B2B_MEMBERS_FILE = path.join(CUSTOMER_DB_DIR, "b2b_members.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
@@ -1432,6 +1433,111 @@ function publicLocationCardRequests(store = emptyLocationCardRequests()) {
   };
 }
 
+function emptyLocationScoreOverrides() {
+  return {
+    schemaVersion: 1,
+    updatedAt: "",
+    overrides: {}
+  };
+}
+
+function locationScoreOverrideKey(value = "") {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toLowerCase()
+    .slice(0, 120);
+}
+
+function sanitizeLocationScoreOverrideText(value, max = 240) {
+  return String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+async function readLocationScoreOverrides() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(LOCATION_SCORE_OVERRIDES_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      ...emptyLocationScoreOverrides(),
+      ...parsed,
+      overrides: parsed.overrides || {}
+    };
+  } catch {
+    return emptyLocationScoreOverrides();
+  }
+}
+
+function publicLocationScoreOverrides(store = emptyLocationScoreOverrides()) {
+  const overrides = store.overrides || {};
+  return {
+    schemaVersion: store.schemaVersion || 1,
+    updatedAt: store.updatedAt || "",
+    overrides,
+    items: Object.values(overrides).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
+  };
+}
+
+async function writeLocationScoreOverrides(store = emptyLocationScoreOverrides()) {
+  await fsp.mkdir(CONFIG_DIR, { recursive: true });
+  const tempPath = `${LOCATION_SCORE_OVERRIDES_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(store, null, 2), "utf8");
+  await fsp.rename(tempPath, LOCATION_SCORE_OVERRIDES_FILE);
+}
+
+async function saveLocationScoreOverride(payload = {}, session = {}) {
+  const key = locationScoreOverrideKey(payload.key || payload.regionKey || payload.groupKey || payload.searchKeyword);
+  if (!key) {
+    const error = new Error("보정할 지역 키가 없습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const store = await readLocationScoreOverrides();
+  const current = store.overrides[key] || {};
+  const history = Array.isArray(current.history) ? current.history.slice(-29) : [];
+  const shouldClear = payload.active === false || payload.clear === true;
+  const scoreRaw = payload.scoreOverride ?? payload.overrideScore ?? payload.locationScoreOverride;
+  const deltaRaw = payload.scoreDelta ?? payload.adjustmentDelta ?? payload.locationScoreAdjustment;
+  const score = String(scoreRaw ?? "").trim() ? Number(scoreRaw) : NaN;
+  const delta = String(deltaRaw ?? "").trim() ? Number(deltaRaw) : NaN;
+  const hasScore = Number.isFinite(score);
+  const hasDelta = Number.isFinite(delta);
+  if (!shouldClear && !hasScore && !hasDelta) {
+    const error = new Error("보정 점수 또는 보정 폭을 입력하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const next = {
+    ...current,
+    key,
+    type: sanitizeLocationScoreOverrideText(payload.type || payload.subjectType || current.type || "region", 40),
+    regionKey: sanitizeLocationScoreOverrideText(payload.regionKey || current.regionKey || "", 120),
+    groupKey: sanitizeLocationScoreOverrideText(payload.groupKey || current.groupKey || "", 120),
+    searchKeyword: sanitizeLocationScoreOverrideText(payload.searchKeyword || current.searchKeyword || "", 120),
+    label: sanitizeLocationScoreOverrideText(payload.label || payload.searchKeyword || current.label || key, 120),
+    active: !shouldClear,
+    scoreOverride: !shouldClear && hasScore ? Math.max(0, Math.min(100, Math.round(score))) : null,
+    scoreDelta: !shouldClear && !hasScore && hasDelta ? Math.max(-40, Math.min(40, Math.round(delta))) : null,
+    note: shouldClear ? "" : sanitizeLocationScoreOverrideText(payload.note, 500),
+    updatedAt: now,
+    updatedBy: sanitizeLocationScoreOverrideText(session.username || session.memberId || "admin", 80),
+    history: [
+      ...history,
+      {
+        at: now,
+        action: shouldClear ? "clear" : "save",
+        scoreOverride: !shouldClear && hasScore ? Math.max(0, Math.min(100, Math.round(score))) : null,
+        scoreDelta: !shouldClear && !hasScore && hasDelta ? Math.max(-40, Math.min(40, Math.round(delta))) : null,
+        note: shouldClear ? "" : sanitizeLocationScoreOverrideText(payload.note, 240),
+        by: sanitizeLocationScoreOverrideText(session.username || session.memberId || "admin", 80)
+      }
+    ]
+  };
+  store.overrides[key] = next;
+  store.updatedAt = now;
+  await writeLocationScoreOverrides(store);
+  return publicLocationScoreOverrides(store);
+}
+
 async function saveLocationCardRequest(payload = {}) {
   const allowed = new Set(["requested", "temporary", "ignored", "linked"]);
   const status = allowed.has(payload.status) ? payload.status : "requested";
@@ -2542,6 +2648,7 @@ async function securityHardeningOverview() {
         "/api/crawl",
         "/api/history/summary",
         "/api/company-master/*",
+        "/api/location-score-overrides",
         "/api/settings/traffic-keys",
         "/outputs/*",
         "/api/account-delete-requests"
@@ -2565,6 +2672,7 @@ async function securityHardeningOverview() {
       searchHistoryDb: relativeDataPath(B2B_SEARCH_HISTORY_FILE),
       accountDeleteRequestDb: relativeDataPath(ACCOUNT_DELETE_REQUESTS_FILE),
       companyMasterDb: relativeDataPath(COMPANY_MASTER_FILE),
+      locationScoreOverrideDb: relativeDataPath(LOCATION_SCORE_OVERRIDES_FILE),
       interestLodgeStorage: "브라우저 계정 키 저장소",
       apiKeyStorage: relativeDataPath(TRAFFIC_KEYS_FILE)
     },
@@ -11186,8 +11294,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-location-score-model"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-location-score-model"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-location-score-admin"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-location-score-admin"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -11523,6 +11631,17 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveLocationCardRequest(payload));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/location-score-overrides") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, publicLocationScoreOverrides(await readLocationScoreOverrides()));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/location-score-overrides") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveLocationScoreOverride(payload, session));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/tourism-data/status") {
