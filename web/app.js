@@ -61,6 +61,7 @@ const state = {
   b2bSearchLifecycleRestoring: false,
   b2bMyLodgeDraft: null,
   b2bMyLodgeExpanded: false,
+  b2bMyLodgeEditing: false,
   b2bMyLodgeCollecting: false,
   b2bMyLodgeCollectStatus: "",
   b2bMyLodgeCollectResult: null,
@@ -10172,6 +10173,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
   const interestLodges = readB2BInterestLodges();
   const canRegisterMore = interestLodges.length < B2B_INTEREST_LODGE_LIMIT;
   const editorOpen = canRegisterMore && (Boolean(state.b2bMyLodgeExpanded) || collecting);
+  const editingInterestLodge = Boolean(state.b2bMyLodgeEditing && b2bMyLodgeDraftHasInput(draft));
   const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
   const inputSegments = b2bMyLodgeSegmentInputRows(draft);
   const segmentRows = inputSegments.length ? inputSegments : [b2bMyLodgeBlankSegment()];
@@ -10266,7 +10268,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
         <div class="b2b-my-lodge-channel-note">네이버/OTA는 같은 객실 재고를 공유할 수 있어 매출 산정에는 중복 가산하지 않습니다.</div>
         <div class="b2b-my-lodge-actions">
           <button class="secondary-button collect" type="button" data-b2b-my-lodge-collect ${collecting ? "disabled" : ""}>${collecting ? "숙소명 찾는 중" : "숙소명으로 찾기"}</button>
-          <button class="primary-button" type="button" data-b2b-my-lodge-save>등록하기</button>
+          <button class="primary-button" type="button" data-b2b-my-lodge-save>${editingInterestLodge ? "수정 저장" : "등록하기"}</button>
           <button class="secondary-button" type="button" data-b2b-my-lodge-clear ${model.hasInput ? "" : "disabled"}>입력 초기화</button>
         </div>
         ${collectStatus ? `<div class="b2b-my-lodge-collect-status ${collecting ? "loading" : ""}">${escapeHtml(collectStatus)}</div>` : ""}
@@ -10452,6 +10454,7 @@ function saveB2BMyLodgeBenchmark() {
   interestLodges.push(lodge);
   state.b2bMyLodgeCollectStatus = "";
   state.b2bMyLodgeExpanded = false;
+  state.b2bMyLodgeEditing = false;
   persistB2BMyLodgeStore({ ...store, draft: {}, interestLodges });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -10469,6 +10472,7 @@ function editB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
   }
   state.b2bMyLodgeCollectStatus = `${target.lodgingName || "관심숙소"} 정보를 수정합니다. 저장하면 다시 카드로 등록됩니다.`;
   state.b2bMyLodgeExpanded = true;
+  state.b2bMyLodgeEditing = true;
   persistB2BMyLodgeStore({
     ...store,
     draft: { ...target, id: "" },
@@ -10485,6 +10489,7 @@ function deleteB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
   const next = targetIndex >= 0 ? interestLodges.filter((_, index) => index !== targetIndex) : interestLodges;
   state.b2bMyLodgeCollectStatus = targetIndex < 0 ? "삭제할 관심숙소를 찾지 못했습니다." : "관심숙소를 삭제했습니다.";
   state.b2bMyLodgeExpanded = false;
+  state.b2bMyLodgeEditing = false;
   persistB2BMyLodgeStore({ ...store, interestLodges: next });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -10559,6 +10564,7 @@ function clearB2BMyLodgeBenchmark() {
   state.b2bMyLodgeCollectStatus = "";
   state.b2bMyLodgeCollectResult = null;
   state.b2bMyLodgeExpanded = false;
+  state.b2bMyLodgeEditing = false;
   persistB2BMyLodgeStore({ ...store, draft: {} }, { syncInterestLodges: false });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -23881,6 +23887,7 @@ function bindEvents() {
     if (event.target.closest("[data-b2b-onboarding-lodge]")) {
       setActiveTab("report");
       state.b2bMyLodgeExpanded = true;
+      state.b2bMyLodgeEditing = false;
       renderReport();
       window.setTimeout(() => {
         const target = document.querySelector(".b2b-my-lodge-board") || els.reportBody;
@@ -23901,10 +23908,13 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-b2b-my-lodge-toggle]")) {
-      state.b2bMyLodgeExpanded = !state.b2bMyLodgeExpanded;
+      const willOpen = !state.b2bMyLodgeExpanded;
+      state.b2bMyLodgeExpanded = willOpen;
+      if (willOpen) state.b2bMyLodgeEditing = false;
       if (!state.b2bMyLodgeExpanded && !b2bMyLodgeDraftHasInput(readB2BMyLodgeDraft())) {
         state.b2bMyLodgeCollectStatus = "";
         state.b2bMyLodgeCollectResult = null;
+        state.b2bMyLodgeEditing = false;
       }
       renderReport();
       window.setTimeout(() => {
