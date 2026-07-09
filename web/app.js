@@ -11190,6 +11190,7 @@ function b2bLocationComponentCopy(component = {}) {
 function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
   const query = brief.keyword || activeKeyword();
   const match = locationCardForQuery(query);
+  const regionReview = state.data?.b2bRegionReviewSummary || null;
   if (match.group) {
     const cards = locationGroupCards(match.group);
     const runtime = locationGroupRuntimeStats(match.group, cards);
@@ -11202,7 +11203,8 @@ function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
       connectedLabel: `지역 ${fmtNumber(cards.length)}개 연결`,
       runtime,
       scoreModel,
-      tourismLabel: tourismRegions.length ? `관광권 ${fmtNumber(tourismRegions.length)}곳 반영` : "관광권 연결 대기"
+      tourismLabel: tourismRegions.length ? `관광권 ${fmtNumber(tourismRegions.length)}곳 반영` : "관광권 연결 대기",
+      regionReview
     };
   }
   if (match.card) {
@@ -11217,7 +11219,8 @@ function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
       connectedLabel: "지역 기준 연결",
       runtime,
       scoreModel,
-      tourismLabel: tourismMatch?.region ? "관광권 반영" : "관광권 연결 대기"
+      tourismLabel: tourismMatch?.region ? "관광권 반영" : "관광권 연결 대기",
+      regionReview
     };
   }
   return {
@@ -11231,7 +11234,8 @@ function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
       searchVolume: brief.searchVolume || 0
     },
     scoreModel: null,
-    tourismLabel: "지역 기준 연결 대기"
+    tourismLabel: "지역 기준 연결 대기",
+    regionReview
   };
 }
 
@@ -11257,16 +11261,17 @@ function b2bLocationComponentValue(scoreModel = {}, key = "") {
 function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = null) {
   const scoreModel = context.scoreModel;
   const score = scoreModel ? clampLocationScore(scoreModel.score, 0) : NaN;
-  const sourceLabel = b2bLocationCustomerSourceLabel(scoreModel);
+  const regionReview = context.regionReview || null;
+  const sourceLabel = regionReview?.sourceLabel || b2bLocationCustomerSourceLabel(scoreModel);
   if (!context.available || !scoreModel) {
     return {
-      tone: "watch",
-      label: "입지 기준 준비 중",
-      headline: "현재는 검색 결과와 예약·매출 표본을 먼저 확인합니다.",
-      summary: `${context.label || "검색 지역"}은 아직 지역 입지 기준이 연결되지 않았습니다. 결과가 누적되면 관광수요와 노출권을 함께 비교합니다.`,
+      tone: regionReview?.tone || "watch",
+      label: regionReview?.label || "입지 기준 준비 중",
+      headline: regionReview?.headline || "현재는 검색 결과와 예약·매출 표본을 먼저 확인합니다.",
+      summary: regionReview?.summary || `${context.label || "검색 지역"}은 아직 지역 입지 기준이 연결되지 않았습니다. 결과가 누적되면 관광수요와 노출권을 함께 비교합니다.`,
       scoreText: "입지 점수 대기",
       sourceLabel,
-      chips: [context.connectedLabel, context.tourismLabel].filter(Boolean)
+      chips: [regionReview?.regionLabel, context.connectedLabel, context.tourismLabel].filter(Boolean)
     };
   }
   const searchDemand = b2bLocationComponentValue(scoreModel, "searchDemand");
@@ -11307,7 +11312,22 @@ function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = n
   } else if (boundary?.status === "same") {
     label = score >= 78 ? "지역 내 강한 입지" : "지역 내 직접 경쟁";
   }
+  if (regionReview?.status === "review_needed") {
+    tone = tone === "strong" ? "good" : (tone === "hot" ? "watch" : tone);
+    label = "기준 검토 중";
+    headline = regionReview.headline || "지역 기준은 연결됐지만 일부 표본 확인이 남아 있습니다.";
+    summary = regionReview.summary || summary;
+  } else if (regionReview?.status === "limited") {
+    tone = "watch";
+    label = regionReview.label || "기준 보강 중";
+    headline = regionReview.headline || "지역 기준 보강이 필요한 상태입니다.";
+    summary = regionReview.summary || "입지 점수는 참고용으로 보고 예약율과 매출 표본을 우선 확인하세요.";
+  } else if (regionReview?.status === "verified") {
+    summary = regionReview.summary || summary;
+  }
   const chips = [
+    regionReview?.label,
+    regionReview?.regionLabel,
     `${fmtNumber(score)}점`,
     Number.isFinite(searchDemand) ? `검색수요 ${fmtNumber(searchDemand)}점` : "",
     Number.isFinite(tourismDemand) ? `관광수요 ${fmtNumber(tourismDemand)}점` : "",
@@ -11364,11 +11384,13 @@ function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2b
     .slice(0, 4);
   const basisRows = [
     `${context.kind} 기준`,
+    context.regionReview?.label,
+    context.regionReview?.regionLabel ? `${context.regionReview.regionLabel} 기준` : "",
     context.connectedLabel,
     `노출 표본 ${fmtNumber(sampleCount)}곳`,
     Number.isFinite(rate) ? `예약율 ${fmtRate(rate)}` : "예약율 확인 대기",
     context.tourismLabel
-  ].filter(Boolean);
+  ].filter(Boolean).filter((item, index, rows) => rows.indexOf(item) === index);
   return `
     <section class="b2b-location-score ${escapeHtml(scoreTone)}">
       <div class="b2b-location-score-main">
@@ -19000,10 +19022,12 @@ function renderB2BMapLocationScore(model = b2bRegionMapModel()) {
     .slice(0, 3);
   const basisRows = [
     context.available ? `${context.kind} 기준` : "지역 기준 준비 중",
+    context.regionReview?.label,
+    context.regionReview?.regionLabel ? `${context.regionReview.regionLabel} 기준` : "",
     context.connectedLabel,
     `지도 표본 ${fmtNumber(sampleCount)}곳`,
     context.tourismLabel
-  ].filter(Boolean);
+  ].filter(Boolean).filter((item, index, rows) => rows.indexOf(item) === index);
 
   return `
     <div class="b2b-map-location-score ${escapeHtml(tone)}">

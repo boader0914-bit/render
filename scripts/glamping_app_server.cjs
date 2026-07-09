@@ -8695,6 +8695,101 @@ function applyAdminRegionReviewsToOperations(ops = {}, master = {}) {
   return { ...ops, regions, summary };
 }
 
+function b2bRegionKeywordBases(value = "") {
+  const raw = String(value || "").normalize("NFKC").trim();
+  const compact = compactKeyword(raw);
+  const stripped = compact
+    .replace(/(글램핑장|글램핑|풀빌라|펜션|캠핑장|야영장|카라반|캠핑|숙소|리조트|호텔|모텔|민박)$/u, "")
+    .trim();
+  return [...new Set([raw, compact, stripped].filter((item) => item && item.length >= 2))];
+}
+
+function publicB2BRegionReviewCopy(review = null) {
+  const status = String(review?.status || "").trim();
+  if (!status) return null;
+  const map = {
+    public_ready: {
+      status: "verified",
+      label: "지역 기준 확인",
+      tone: "good",
+      headline: "사전 확인된 지역 기준으로 입지와 경쟁권을 해석합니다.",
+      summary: "지역카드와 주요 표본 기준이 확인된 상태입니다. 예약율, 매출 표본, 검색수요를 함께 비교해도 되는 기준입니다.",
+      sourceLabel: "확인된 지역 기준"
+    },
+    review_needed: {
+      status: "review_needed",
+      label: "기준 검토 중",
+      tone: "watch",
+      headline: "지역 기준은 연결됐지만 일부 표본 확인이 남아 있습니다.",
+      summary: "입지 점수는 참고할 수 있으나, 예약율·매출 표본을 함께 보고 보수적으로 판단하는 것이 좋습니다.",
+      sourceLabel: "검토 중인 지역 기준"
+    },
+    collect_needed: {
+      status: "limited",
+      label: "기준 보강 중",
+      tone: "hot",
+      headline: "지역 기준 보강이 필요한 상태입니다.",
+      summary: "현재 입지 해석은 참고용입니다. 표본이 더 쌓인 뒤 예약율과 매출 비교를 다시 확인하세요.",
+      sourceLabel: "보강 중인 지역 기준"
+    },
+    hold: {
+      status: "limited",
+      label: "기준 보류",
+      tone: "hot",
+      headline: "현재 지역 기준은 공개 판단을 보류한 상태입니다.",
+      summary: "입지 점수보다 실제 예약율, 매출 표본, 노출 순위를 우선 확인하세요.",
+      sourceLabel: "보류된 지역 기준"
+    }
+  };
+  const copy = map[status];
+  if (!copy) return null;
+  return {
+    ...copy,
+    regionKey: regionReviewKey(review.regionKey),
+    regionLabel: sanitizeMemberText(review.regionLabel, 80),
+    provinceLabel: sanitizeMemberText(review.provinceLabel, 80),
+    updatedAt: review.updatedAt || ""
+  };
+}
+
+function publicB2BRegionReviewSummary(data = {}, master = {}) {
+  const baseOps = data.adminRegionalOperations || buildRunRegionalOperations(data, new Date().toISOString());
+  const ops = applyAdminRegionReviewsToOperations(baseOps, master);
+  const reviewedRegions = (ops.regions || []).filter((region) => region.adminReview?.status);
+  if (!reviewedRegions.length) return null;
+  const run = data.run || {};
+  const searchLabels = [
+    run.keyword,
+    run.label,
+    ...(data.regions || []).map((region) => region.region || region.name || "")
+  ].flatMap(b2bRegionKeywordBases);
+  const candidateKeys = new Set();
+  for (const label of searchLabels) {
+    const classified = adminRegionClassification(label);
+    [
+      classified.regionKey,
+      regionReviewKey(classified.regionLabel),
+      regionReviewKey(`${classified.provinceLabel || ""}:${classified.regionLabel || ""}`),
+      regionReviewKey(label)
+    ].filter(Boolean).forEach((key) => candidateKeys.add(key));
+  }
+  const matched = reviewedRegions.find((region) => {
+    const keys = [
+      region.regionKey,
+      regionReviewKey(region.regionLabel),
+      regionReviewKey(`${region.provinceLabel || ""}:${region.regionLabel || ""}`)
+    ].filter(Boolean);
+    return keys.some((key) => candidateKeys.has(key));
+  }) || reviewedRegions.find((region) => region.adminReview?.status === "public_ready") || reviewedRegions[0];
+  const reviewCopy = publicB2BRegionReviewCopy(matched.adminReview);
+  if (!reviewCopy) return null;
+  return {
+    ...reviewCopy,
+    sampleRegionCount: reviewedRegions.length,
+    basis: "region_review"
+  };
+}
+
 function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {}, collectedAt = "" } = {}) {
   const entities = new Map();
   for (const item of items) {
@@ -11353,6 +11448,21 @@ async function loadRun(runId, options = {}) {
   }
 
   result.adminRegionalOperations = buildRunRegionalOperations(result, collectedAt);
+  if (options.applyCompanyMaster) {
+    await readCompanyMaster()
+      .then((master) => {
+        result.adminRegionalOperations = applyAdminRegionReviewsToOperations(result.adminRegionalOperations, master);
+        result.b2bRegionReviewSummary = publicB2BRegionReviewSummary(result, master);
+      })
+      .catch((error) => {
+        result.b2bRegionReviewSummary = {
+          status: "unavailable",
+          label: "지역 기준 확인 대기",
+          tone: "watch",
+          summary: error.message || "지역 기준 확인 정보를 불러오지 못했습니다."
+        };
+      });
+  }
 
   return result;
 }
@@ -11830,8 +11940,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260710-region-review-state"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260710-region-review-state"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260710-b2b-region-review"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260710-b2b-region-review"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
