@@ -5283,6 +5283,58 @@ a {
   cursor: not-allowed;
 }
 
+.location-score-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fbfcfd;
+  padding: 13px;
+}
+
+.location-score-history > strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.location-score-history article {
+  display: grid;
+  grid-template-columns: minmax(0, .72fr) minmax(0, 1.28fr);
+  gap: 10px;
+  align-items: center;
+  border-top: 1px solid rgba(226, 232, 240, .9);
+  padding-top: 8px;
+}
+
+.location-score-history article:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.location-score-history article div {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  align-items: center;
+}
+
+.location-score-history span,
+.location-score-history small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.location-score-history b {
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .admin-region-location-score-panel {
   margin-top: 14px;
 }
@@ -5325,6 +5377,135 @@ a {
 .admin-region-location-score-grid strong {
   color: var(--ink);
   font-size: 14px;
+}
+
+.admin-location-score-queue {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  border: 1px solid rgba(49, 130, 246, .22);
+  border-radius: 18px;
+  background: rgba(49, 130, 246, .05);
+  padding: 14px;
+}
+
+.admin-location-score-queue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.admin-location-score-queue-head div {
+  min-width: 0;
+}
+
+.admin-location-score-queue-head strong {
+  display: block;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.admin-location-score-queue-head small,
+.admin-location-score-queue-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.admin-location-score-queue-head span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.admin-location-score-queue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-location-score-queue-list article {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1.35fr) minmax(70px, .35fr) minmax(100px, .48fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-location-score-queue-list article.hot {
+  border-color: rgba(229, 72, 77, .34);
+}
+
+.admin-location-score-queue-list article.watch {
+  border-color: rgba(247, 144, 9, .34);
+}
+
+.admin-location-score-queue-list article.good {
+  border-color: rgba(18, 183, 106, .34);
+}
+
+.admin-location-score-queue-list b,
+.admin-location-score-queue-list span,
+.admin-location-score-queue-list em {
+  color: var(--blue);
+  font-weight: 950;
+  font-style: normal;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin-location-score-queue-list b {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: rgba(49, 130, 246, .1);
+  text-align: center;
+}
+
+.admin-location-score-queue-list div {
+  min-width: 0;
+}
+
+.admin-location-score-queue-list strong {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-location-score-queue-list small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.admin-location-score-queue-list em {
+  color: var(--muted);
+}
+
+.admin-location-score-queue-list button {
+  border: 1px solid rgba(49, 130, 246, .3);
+  border-radius: 12px;
+  background: rgba(49, 130, 246, .1);
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 950;
+  padding: 9px 11px;
+  white-space: nowrap;
 }
 
 .location-reality-grid {
@@ -19827,7 +20008,8 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .admin-region-location-score-head,
-  .location-score-admin-actions {
+  .location-score-admin-actions,
+  .admin-location-score-queue-head {
     align-items: stretch;
     flex-direction: column;
   }
@@ -19835,6 +20017,22 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-location-score-head button,
   .location-score-admin-actions button {
     width: 100%;
+  }
+
+  .location-score-history article,
+  .admin-location-score-queue-list article {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .admin-location-score-queue-list b,
+  .admin-location-score-queue-list span,
+  .admin-location-score-queue-list em {
+    text-align: left;
+  }
+
+  .admin-location-score-queue-head span {
+    width: fit-content;
   }
 
   .location-score-component-grid article div {

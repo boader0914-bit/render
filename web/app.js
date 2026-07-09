@@ -15059,19 +15059,7 @@ function adminRegionLocationScoreMatch(region = {}) {
   return null;
 }
 
-function adminRegionLocationScorePanel(region = {}) {
-  const match = adminRegionLocationScoreMatch(region);
-  if (!match) {
-    return `
-      <div class="admin-region-location-score-panel empty">
-        <div>
-          <span>입지 보정 검증</span>
-          <strong>지역카드 연결 대기</strong>
-          <small>해당 지역과 연결되는 입지사전 카드가 아직 없습니다.</small>
-        </div>
-      </div>
-    `;
-  }
+function adminLocationScoreSubjectModel(match = {}) {
   const subject = match.card || match.group;
   let scoreModel = null;
   let runtime = null;
@@ -15089,6 +15077,159 @@ function adminRegionLocationScorePanel(region = {}) {
     scoreModel = adjustedLocationScoreModel(match.card, runtime, tourismMatch);
     tourismLabel = tourismRegionDisplay(tourismMatch);
   }
+  return { subject, scoreModel, runtime, tourismLabel };
+}
+
+function adminLocationScoreIssueItems(scoreModel = {}, runtime = {}, tourismLabel = "") {
+  const issues = [];
+  const autoScore = Number.isFinite(scoreModel.scoreBeforeManual) ? scoreModel.scoreBeforeManual : scoreModel.score;
+  const manualGap = scoreModel.manual?.hasAdjustment && Number.isFinite(scoreModel.score) && Number.isFinite(autoScore)
+    ? Math.abs(scoreModel.score - autoScore)
+    : 0;
+  if (manualGap >= 8) {
+    issues.push({ key: "manual_gap", label: `보정차이 ${fmtNumber(manualGap)}점`, detail: "자동점수와 관리자 보정값 차이가 큼", priority: 98 + manualGap, tone: "hot" });
+  }
+  if (Number(scoreModel.confidence || 0) < 60) {
+    issues.push({ key: "low_confidence", label: "신뢰도 낮음", detail: `데이터 신뢰도 ${fmtNumber(scoreModel.confidence || 0)}점`, priority: 92, tone: "hot" });
+  }
+  if (!runtime.items?.length) {
+    issues.push({ key: "missing_exposure", label: "노출 표본 없음", detail: "현재 수집 결과와 지역카드 연결 부족", priority: 86, tone: "watch" });
+  }
+  if (!runtime.sales?.supply) {
+    issues.push({ key: "missing_reservation", label: "예약 표본 부족", detail: "네이버 예약 기준 객실 표본 대기", priority: 84, tone: "watch" });
+  } else if (runtime.sales.supply < 30) {
+    issues.push({ key: "small_reservation", label: "예약 표본 작음", detail: `${fmtNumber(runtime.sales.supply)}실 기준`, priority: 68, tone: "watch" });
+  }
+  if (Number(scoreModel.revenueMetrics?.sampleCount || 0) < 3) {
+    issues.push({ key: "small_revenue", label: "매출 표본 부족", detail: `${fmtNumber(scoreModel.revenueMetrics?.sampleCount || 0)}곳 기준`, priority: 78, tone: "watch" });
+  }
+  if (/대기|코드검증/.test(tourismLabel || "")) {
+    issues.push({ key: "tourism_match", label: "관광공사 매칭 확인", detail: tourismLabel || "외부 지역 기준 대기", priority: 74, tone: "watch" });
+  }
+  (scoreModel.risks || []).slice(0, 2).forEach((risk) => {
+    if (Number(risk.value || 0) < 55) {
+      issues.push({ key: `risk_${risk.key}`, label: `${risk.label} 낮음`, detail: `${fmtNumber(risk.value)}점 · ${risk.note || "확인 필요"}`, priority: 58, tone: "neutral" });
+    }
+  });
+  if (scoreModel.manual?.hasAdjustment && manualGap < 8) {
+    issues.push({ key: "manual_applied", label: "보정 적용", detail: scoreModel.manual.note || "관리자 보정값 반영 중", priority: 46, tone: "good" });
+  }
+  return issues.sort((a, b) => b.priority - a.priority);
+}
+
+function adminLocationScoreReviewQueueItems(master = {}) {
+  if (!state.dictionary) return [];
+  const regions = master.adminRegionalOperations?.regions || [];
+  const seen = new Set();
+  const rows = [];
+  const pushMatched = (match, region = null) => {
+    const key = locationScoreSubjectKey(match.card || match.group);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const { subject, scoreModel, runtime, tourismLabel } = adminLocationScoreSubjectModel(match);
+    if (!scoreModel) return;
+    const issues = adminLocationScoreIssueItems(scoreModel, runtime, tourismLabel);
+    if (!issues.length) return;
+    const priority = issues.reduce((max, issue) => Math.max(max, issue.priority || 0), 0);
+    const autoScore = Number.isFinite(scoreModel.scoreBeforeManual) ? scoreModel.scoreBeforeManual : scoreModel.score;
+    rows.push({
+      key,
+      type: match.type,
+      label: match.label || subject.searchKeyword || subject.label || key,
+      region,
+      score: scoreModel.score,
+      autoScore,
+      confidence: scoreModel.confidence,
+      runtime,
+      tourismLabel,
+      issues,
+      priority,
+      manual: scoreModel.manual || {}
+    });
+  };
+  regions.forEach((region) => {
+    const match = adminRegionLocationScoreMatch(region);
+    if (match) {
+      pushMatched(match, region);
+      return;
+    }
+    const key = `missing:${region.regionKey || region.regionLabel || rows.length}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rows.push({
+      key,
+      type: "missing",
+      label: region.regionLabel || "지역 미확인",
+      region,
+      score: NaN,
+      autoScore: NaN,
+      confidence: 0,
+      runtime: {},
+      tourismLabel: "",
+      priority: 88,
+      manual: {},
+      issues: [{ key: "missing_card", label: "지역카드 연결 대기", detail: "운영 지역과 입지사전 카드 매칭 필요", priority: 88, tone: "hot" }]
+    });
+  });
+  if (!rows.length) {
+    (state.dictionary.cards || []).slice(0, 12).forEach((card) => {
+      pushMatched({ type: "region", card, label: card.searchKeyword });
+    });
+  }
+  return rows.sort((a, b) => b.priority - a.priority || String(a.label || "").localeCompare(String(b.label || ""), "ko"));
+}
+
+function adminLocationScoreReviewQueuePanel(master = {}) {
+  const items = adminLocationScoreReviewQueueItems(master);
+  const urgent = items.filter((item) => item.priority >= 84).length;
+  const adjusted = items.filter((item) => item.manual?.hasAdjustment).length;
+  return `
+    <div class="admin-location-score-queue">
+      <div class="admin-location-score-queue-head">
+        <div>
+          <strong>입지 보정 검수 큐</strong>
+          <small>자동점수와 실측 표본을 비교해 먼저 확인할 지역을 정렬합니다.</small>
+        </div>
+        <span>${fmtNumber(items.length)}건 · 긴급 ${fmtNumber(urgent)} · 보정 ${fmtNumber(adjusted)}</span>
+      </div>
+      ${items.length ? `
+        <div class="admin-location-score-queue-list">
+          ${items.slice(0, 8).map((item, index) => {
+            const mainIssue = item.issues[0] || {};
+            const diff = Number.isFinite(item.score) && Number.isFinite(item.autoScore) ? item.score - item.autoScore : 0;
+            return `
+              <article class="${escapeHtml(mainIssue.tone || "watch")}">
+                <b>${fmtNumber(index + 1)}</b>
+                <div>
+                  <strong>${escapeHtml(item.label)}</strong>
+                  <small>${escapeHtml([mainIssue.label, mainIssue.detail].filter(Boolean).join(" · "))}</small>
+                </div>
+                <span>${Number.isFinite(item.score) ? `${fmtNumber(item.score)}점` : "연결대기"}</span>
+                <em>${item.manual?.hasAdjustment ? `보정 ${diff >= 0 ? "+" : ""}${fmtNumber(diff)}점` : `신뢰도 ${fmtNumber(item.confidence || 0)}점`}</em>
+                ${item.type === "missing" ? "" : `<button type="button" data-location-query="${escapeHtml(item.label)}">검수</button>`}
+              </article>
+            `;
+          }).join("")}
+        </div>
+      ` : `<p class="empty">현재 우선 검수할 입지 보정 항목이 없습니다.</p>`}
+    </div>
+  `;
+}
+
+function adminRegionLocationScorePanel(region = {}) {
+  const match = adminRegionLocationScoreMatch(region);
+  if (!match) {
+    return `
+      <div class="admin-region-location-score-panel empty">
+        <div>
+          <span>입지 보정 검증</span>
+          <strong>지역카드 연결 대기</strong>
+          <small>해당 지역과 연결되는 입지사전 카드가 아직 없습니다.</small>
+        </div>
+      </div>
+    `;
+  }
+  const { subject, scoreModel, runtime, tourismLabel } = adminLocationScoreSubjectModel(match);
   const autoScore = Number.isFinite(scoreModel.scoreBeforeManual) ? scoreModel.scoreBeforeManual : scoreModel.score;
   const diff = Number.isFinite(scoreModel.score) && Number.isFinite(autoScore) ? scoreModel.score - autoScore : 0;
   const drivers = (scoreModel.drivers || []).slice(0, 2).map((item) => `${item.label} ${fmtNumber(item.value)}`).join(" · ");
@@ -15338,6 +15479,7 @@ function adminRegionalOperationsPanel(master = {}) {
               </article>
             `).join("")}
           </div>
+          ${adminLocationScoreReviewQueuePanel(master)}
           ${adminRegionalMaintenanceBoard(regions, selectedRegion?.regionKey || "")}
           <div class="admin-region-card-grid">
             ${topRegions.length ? topRegions.map((region) => adminRegionCardHtml(region, selectedRegion?.regionKey || "")).join("") : `
@@ -17522,6 +17664,8 @@ function locationManualAdjustment(card = {}) {
     note: activeSaved?.note || card.locationScoreNote || card.adminLocationScoreNote || "",
     key: activeSaved?.key || locationScoreSubjectKey(card),
     updatedAt: activeSaved?.updatedAt || "",
+    updatedBy: activeSaved?.updatedBy || "",
+    history: Array.isArray(saved?.history) ? saved.history : [],
     source: activeSaved ? "admin" : "dictionary"
   };
 }
@@ -17626,6 +17770,7 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
     ? Math.max(45, 82 - tourismRegions.filter((region) => region.codeStatus).length * 6)
     : 48;
   const confidence = locationDataConfidenceScore({ runtime, tourismMatch: { matched: tourismRegions.length > 0, region: tourismRegions[0] || null } });
+  const revenueMetrics = locationRevenueMetrics(runtime);
   const rawScore = averageScore * 0.55 + groupBase * 0.2 + (runtimeScore || averageScore) * 0.17 + codeScore * 0.08;
   const confidenceAdjustment = Math.max(-4, Math.min(5, (confidence - 60) * 0.08));
   const scoreBeforeManual = clampLocationScore(rawScore + confidenceAdjustment, groupBase);
@@ -17660,6 +17805,7 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
     components,
     drivers,
     risks,
+    revenueMetrics,
     headline: score >= 78 ? "권역 확장 우선 입지" : score >= 64 ? "선별 확장 입지" : "보강 검토 권역",
     summary: drivers.length
       ? `${drivers.map((item) => item.label).join(" · ")}가 권역 점수를 지탱합니다.`
@@ -17786,6 +17932,12 @@ function renderLocationScoreModel(scoreModel = null) {
   if (!scoreModel) return "";
   const confidenceTone = locationComponentTone(scoreModel.confidence);
   const manual = scoreModel.manual || {};
+  const manualLabel = isAdminRole() ? "관리자 보정" : "운영 검수 반영";
+  const manualAppliedLabel = isAdminRole() ? "적용" : "반영";
+  const manualEmptyLabel = isAdminRole() ? "없음" : "자동";
+  const manualNote = isAdminRole()
+    ? (manual.note || (manual.hasAdjustment ? "수동 보정 반영" : "자동 보정 기준"))
+    : (manual.hasAdjustment ? "운영 검수값 반영" : "자동 산식 기준");
   return `
     <section class="location-block location-score-model">
       <div class="location-block-head">
@@ -17804,9 +17956,9 @@ function renderLocationScoreModel(scoreModel = null) {
           <small>${scoreModel.confidenceAdjustment >= 0 ? "+" : ""}${fmtNumber(scoreModel.confidenceAdjustment)}점 보정</small>
         </div>
         <div class="${manual.hasAdjustment ? "strong" : "weak"}">
-          <span>관리자 보정</span>
-          <strong>${manual.hasAdjustment ? "적용" : "없음"}</strong>
-          <small>${escapeHtml(manual.note || (manual.hasAdjustment ? "수동 보정 반영" : "자동 보정 기준"))}</small>
+          <span>${escapeHtml(manualLabel)}</span>
+          <strong>${manual.hasAdjustment ? escapeHtml(manualAppliedLabel) : escapeHtml(manualEmptyLabel)}</strong>
+          <small>${escapeHtml(manualNote)}</small>
         </div>
       </div>
       <div class="location-score-component-grid">
@@ -17870,6 +18022,37 @@ function locationScoreValidationRows(scoreModel = {}, runtime = {}, tourismLabel
   return rows.slice(0, 8);
 }
 
+function locationScoreHistoryActionLabel(action = "") {
+  if (action === "save") return "보정 저장";
+  if (action === "clear") return "보정 해제";
+  return "변경";
+}
+
+function renderLocationScoreOverrideHistory(manual = {}) {
+  if (!isAdminRole()) return "";
+  const rows = Array.isArray(manual.history) ? manual.history.slice().reverse().slice(0, 5) : [];
+  if (!rows.length) return "";
+  return `
+    <div class="location-score-history">
+      <strong>최근 보정 이력</strong>
+      ${rows.map((row) => {
+        const scoreText = row.scoreOverride !== null && row.scoreOverride !== undefined
+          ? `${fmtNumber(row.scoreOverride)}점`
+          : (row.scoreDelta ? `${row.scoreDelta > 0 ? "+" : ""}${fmtNumber(row.scoreDelta)}점` : "해제");
+        return `
+          <article class="${escapeHtml(row.action || "")}">
+            <div>
+              <span>${escapeHtml(locationScoreHistoryActionLabel(row.action))}</span>
+              <b>${escapeHtml(scoreText)}</b>
+            </div>
+            <small>${escapeHtml([compactDateTime(row.at), row.by, row.note].filter(Boolean).join(" · ") || "이력 정보 없음")}</small>
+          </article>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
 function renderLocationScoreOverrideForm(subject = {}, scoreModel = null, options = {}) {
   if (!isAdminRole() || !scoreModel) return "";
   const key = locationScoreSubjectKey(subject);
@@ -17902,6 +18085,7 @@ function renderLocationScoreOverrideForm(subject = {}, scoreModel = null, option
         <button type="button" data-clear-location-score-override ${manual.hasAdjustment ? "" : "disabled"}>보정 해제</button>
       </div>
     </div>
+    ${renderLocationScoreOverrideHistory(manual)}
   `;
 }
 
@@ -22014,7 +22198,7 @@ function bindEvents() {
     }
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
-    const adminLocationQuery = event.target.closest(".admin-region-location-score-panel [data-location-query]");
+    const adminLocationQuery = event.target.closest(".admin-region-location-score-panel [data-location-query], .admin-location-score-queue [data-location-query]");
     if (adminLocationQuery) {
       setActiveTab("dictionary");
       runDictionarySearch(adminLocationQuery.dataset.locationQuery || "");
