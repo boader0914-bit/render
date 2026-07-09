@@ -34,6 +34,8 @@ const state = {
   },
   adminSelectedRegionKey: "",
   adminRegionCompanyFilter: "priority",
+  adminRegionCompanyQuery: "",
+  adminRegionCompanySort: "priority",
   crawlEtaByKey: {},
   crawlEstimateTimer: null,
   crawlEstimateRequestId: 0,
@@ -16105,7 +16107,73 @@ function adminRegionSelectedCompanyFilter(rows = []) {
 
 function adminRegionFilteredCompanyRows(rows = []) {
   const selected = adminRegionSelectedCompanyFilter(rows);
-  return selected.key === "priority" ? rows : rows.filter(selected.match);
+  const filtered = selected.key === "priority" ? rows : rows.filter(selected.match);
+  const query = compactSearchText(state.adminRegionCompanyQuery || "");
+  const searched = query
+    ? filtered.filter((row) => adminRegionCompanySearchText(row).includes(query))
+    : filtered;
+  return adminRegionSortedCompanyRows(searched);
+}
+
+function adminRegionCompanySearchText(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  return compactSearchText([
+    company.primaryName,
+    company.displayName,
+    company.normalizedName,
+    company.bestKeyword,
+    company.latestKeyword,
+    metrics.regionLabel,
+    ...(company.regions || []),
+    ...(company.addresses || []),
+    metrics.adminReview?.label,
+    companyAdminReviewLabel(metrics.adminReview?.status),
+    metrics.sourceLabel,
+    metrics.latest?.confidenceGrade
+  ].filter(Boolean).join(" "));
+}
+
+function adminRegionCompanySortOptions() {
+  return [
+    ["priority", "우선순위"],
+    ["rank", "노출순"],
+    ["rate_desc", "예약율 높은순"],
+    ["revenue_desc", "예상 매출 높은순"],
+    ["updated_desc", "최근 수집순"],
+    ["name", "업체명"]
+  ];
+}
+
+function adminRegionSelectedCompanySort() {
+  const options = adminRegionCompanySortOptions();
+  const selected = options.find(([key]) => key === state.adminRegionCompanySort) || options[0];
+  state.adminRegionCompanySort = selected[0];
+  return selected;
+}
+
+function adminRegionSortedCompanyRows(rows = []) {
+  const [sortKey] = adminRegionSelectedCompanySort();
+  return [...rows].sort((a, b) => {
+    if (sortKey === "rank") {
+      return (a.metrics.rank || 9999) - (b.metrics.rank || 9999) || b.metrics.priority - a.metrics.priority;
+    }
+    if (sortKey === "rate_desc") {
+      return finiteNumber(b.metrics.rate, -1) - finiteNumber(a.metrics.rate, -1) || b.metrics.priority - a.metrics.priority;
+    }
+    if (sortKey === "revenue_desc") {
+      return finiteNumber(b.metrics.totalRevenue, -1) - finiteNumber(a.metrics.totalRevenue, -1) || b.metrics.priority - a.metrics.priority;
+    }
+    if (sortKey === "updated_desc") {
+      return String(b.metrics.latest?.collectedAt || b.company.lastSeenAt || "").localeCompare(String(a.metrics.latest?.collectedAt || a.company.lastSeenAt || ""));
+    }
+    if (sortKey === "name") {
+      return String(a.company.primaryName || "").localeCompare(String(b.company.primaryName || ""), "ko") || b.metrics.priority - a.metrics.priority;
+    }
+    return b.metrics.priority - a.metrics.priority ||
+      (a.metrics.rank || 9999) - (b.metrics.rank || 9999) ||
+      String(b.company.lastSeenAt || "").localeCompare(String(a.company.lastSeenAt || ""));
+  });
 }
 
 function adminRegionCompanyFilterBar(rows = [], selectedKey = "priority") {
@@ -16119,6 +16187,34 @@ function adminRegionCompanyFilterBar(rows = [], selectedKey = "priority") {
           <small>${escapeHtml(option.note)}</small>
         </button>
       `).join("")}
+    </div>
+  `;
+}
+
+function adminRegionCompanyToolbarHtml(rows = [], filteredRows = [], selectedFilter = {}) {
+  const query = state.adminRegionCompanyQuery || "";
+  const [selectedSort, selectedSortLabel] = adminRegionSelectedCompanySort();
+  const queryNote = query.trim() ? `"${query.trim()}" 검색` : "검색어 없음";
+  return `
+    <div class="admin-region-company-toolbar" data-admin-region-company-toolbar>
+      <label>
+        <span>업체 검색</span>
+        <input type="search" data-admin-region-company-search value="${escapeHtml(query)}" placeholder="업체명, 지역, 키워드, 주소">
+      </label>
+      <label>
+        <span>정렬</span>
+        <select data-admin-region-company-sort>
+          ${adminRegionCompanySortOptions().map(([key, label]) => `
+            <option value="${escapeHtml(key)}" ${selectedSort === key ? "selected" : ""}>${escapeHtml(label)}</option>
+          `).join("")}
+        </select>
+      </label>
+      <div>
+        <span>현재 대상</span>
+        <strong>${fmtNumber(filteredRows.length)}곳</strong>
+        <small>${escapeHtml(`${selectedFilter.label || "전체"} · ${selectedSortLabel} · ${queryNote} · 전체 ${fmtNumber(rows.length)}곳`)}</small>
+      </div>
+      ${query.trim() ? `<button type="button" data-admin-region-company-search-clear>검색 초기화</button>` : ""}
     </div>
   `;
 }
@@ -16533,6 +16629,45 @@ function adminRegionDetailFocusPanel(region = {}, rows = [], maintenance = {}) {
   `;
 }
 
+function adminRegionOperationalVerdict(region = {}, rows = [], maintenance = {}) {
+  const stats = adminRegionWorkflowStats(rows);
+  const actionKey = maintenance.primaryAction?.key || "";
+  const ready = maintenance.preflightStatus?.key === "ready" || region.status?.key === "public_ready";
+  if (stats.recrawlNeeded || actionKey === "capacity_review") {
+    return {
+      label: "재수집 필요",
+      note: "총량 변동이나 조건 재확인이 필요한 업체가 있습니다.",
+      tone: "hot"
+    };
+  }
+  if (maintenance.coverage?.reservationSampleGap || maintenance.coverage?.revenueSampleGap || ["reservation_sample", "revenue_sample", "quantity_correction"].includes(actionKey)) {
+    return {
+      label: "보강 필요",
+      note: "예약율·매출·수량 표본을 먼저 보완해야 합니다.",
+      tone: "watch"
+    };
+  }
+  if (stats.unreviewed) {
+    return {
+      label: "검수 필요",
+      note: `미검수 ${fmtNumber(stats.unreviewed)}곳을 확인하면 공개 판단이 쉬워집니다.`,
+      tone: "watch"
+    };
+  }
+  if (ready || stats.publicReady) {
+    return {
+      label: "공개 가능",
+      note: "지역카드 공개 또는 B2B 노출 기준에 가까운 상태입니다.",
+      tone: "good"
+    };
+  }
+  return {
+    label: "주간 유지",
+    note: "주 1회 표본 유지와 신규 업체 확인 중심으로 관리합니다.",
+    tone: "neutral"
+  };
+}
+
 function adminRegionPreflightChecklistItems(region = {}, rows = [], profile = {}) {
   const coverage = profile.coverage || {};
   const companyCount = Number(region.companyCount || rows.length || 0);
@@ -16919,7 +17054,9 @@ function adminRegionalDetailPanel(region = null, master = {}) {
   const actions = adminRegionActionItems(region, rows);
   const statusTone = adminRegionStatusTone(region.status || {});
   const maintenance = adminRegionMaintenanceProfile(region, rows);
-  const companyListOpen = selectedFilter.key !== "priority";
+  const verdict = adminRegionOperationalVerdict(region, rows, maintenance);
+  const selectedSort = adminRegionSelectedCompanySort();
+  const companyListOpen = selectedFilter.key !== "priority" || Boolean(String(state.adminRegionCompanyQuery || "").trim());
   const companyListSummary = `${selectedFilter.label} ${fmtNumber(filteredRows.length)}곳 · 전체 ${fmtNumber(rows.length)}곳`;
   return `
     <section class="admin-region-detail-panel ${escapeHtml(statusTone)}" data-admin-region-detail>
@@ -16929,7 +17066,11 @@ function adminRegionalDetailPanel(region = null, master = {}) {
           <strong>${escapeHtml(region.regionLabel || "지역 미확인")} 상세</strong>
           <small>업체 마스터 기준으로 표본 품질, 보정 필요 업체, 우선 검수 대상을 묶어 봅니다.</small>
         </div>
-        <mark>${escapeHtml(adminRegionStatusLabel(region.status || {}))}</mark>
+        <div class="admin-region-verdict ${escapeHtml(verdict.tone)}">
+          <span>지역 판정</span>
+          <strong>${escapeHtml(verdict.label)}</strong>
+          <small>${escapeHtml(verdict.note)}</small>
+        </div>
       </div>
       ${adminRegionDetailFocusPanel(region, rows, maintenance)}
       ${adminRegionReviewSummaryPanel(region, rows)}
@@ -16962,9 +17103,10 @@ function adminRegionalDetailPanel(region = null, master = {}) {
           <div class="admin-region-company-list">
             <div class="admin-region-company-list-head">
               <strong>업체별 작업목록</strong>
-              <small>${escapeHtml(companyListSummary)}</small>
+              <small>${escapeHtml(`${companyListSummary} · ${selectedSort[1]}`)}</small>
             </div>
             ${adminRegionCompanyFilterBar(rows, selectedFilter.key)}
+            ${adminRegionCompanyToolbarHtml(rows, filteredRows, selectedFilter)}
             ${adminRegionCompanyBulkHtml(region, filteredRows, selectedFilter)}
             ${filteredRows.length ? filteredRows.slice(0, 12).map(adminRegionCompanyRowHtml).join("") : `<p class="empty">선택한 조건에 해당하는 업체가 없습니다.</p>`}
             ${filteredRows.length > 12 ? `<p class="admin-region-company-more">상위 12곳만 표시 중입니다. 더 많은 업체는 지역 마스터에서 검색하세요.</p>` : ""}
@@ -23060,16 +23202,24 @@ async function applyAdminRegionCompanyBulkReview(button) {
     setStatus("지역 일괄 처리 대상 없음");
     return;
   }
-  const rows = adminRegionFilteredCompanyRows(adminRegionCompanyRows(region, master))
+  const regionRows = adminRegionCompanyRows(region, master);
+  const rows = adminRegionFilteredCompanyRows(regionRows)
     .map((row) => ({ row, companyId: row.company?.companyId || "" }))
     .filter((row) => row.companyId);
   if (!rows.length) {
     setStatus("지역 일괄 처리할 업체 없음");
     return;
   }
-  const selectedFilter = adminRegionSelectedCompanyFilter(adminRegionCompanyRows(region, master));
+  const selectedFilter = adminRegionSelectedCompanyFilter(regionRows);
+  const [, sortLabel] = adminRegionSelectedCompanySort();
   const label = companyAdminReviewLabel(status);
-  const scopeText = `${region.regionLabel || "선택 지역"} / ${selectedFilter.label || "우선순위"}`;
+  const queryText = String(state.adminRegionCompanyQuery || "").trim();
+  const scopeText = [
+    region.regionLabel || "선택 지역",
+    selectedFilter.label || "우선순위",
+    queryText ? `검색 ${queryText}` : "",
+    sortLabel
+  ].filter(Boolean).join(" / ");
   if (rows.length > 12 && !window.confirm(`${scopeText} ${fmtNumber(rows.length)}개 업체를 '${label}' 상태로 일괄 저장할까요?`)) {
     return;
   }
@@ -24136,6 +24286,7 @@ function bindEvents() {
     if (adminRegionButton) {
       state.adminSelectedRegionKey = adminRegionButton.dataset.adminRegionKey || "";
       state.adminRegionCompanyFilter = "priority";
+      state.adminRegionCompanyQuery = "";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector("[data-admin-region-detail]")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -24148,6 +24299,14 @@ function bindEvents() {
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector(".admin-region-company-list")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      return;
+    }
+    if (event.target.closest("[data-admin-region-company-search-clear]")) {
+      state.adminRegionCompanyQuery = "";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector("[data-admin-region-company-search]")?.focus();
       });
       return;
     }
@@ -24295,6 +24454,19 @@ function bindEvents() {
       rerenderCompanyMasterPreservingSearch();
       return;
     }
+    const regionCompanySearch = event.target.closest("[data-admin-region-company-search]");
+    if (regionCompanySearch) {
+      state.adminRegionCompanyQuery = regionCompanySearch.value || "";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        const next = document.querySelector("[data-admin-region-company-search]");
+        if (!next) return;
+        next.focus();
+        const length = next.value.length;
+        next.setSelectionRange?.(length, length);
+      });
+      return;
+    }
     const search = event.target.closest("[data-company-master-search]");
     if (!search) return;
     state.companyMasterFilters.query = search.value || "";
@@ -24330,6 +24502,15 @@ function bindEvents() {
         els.b2bSearchStatus.textContent = "이 계정은 기본 분석 1~10위만 사용할 수 있습니다.";
       }
       renderB2BSearchPanel();
+      return;
+    }
+    const regionCompanySort = event.target.closest("[data-admin-region-company-sort]");
+    if (regionCompanySort) {
+      state.adminRegionCompanySort = regionCompanySort.value || "priority";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector("[data-admin-region-company-sort]")?.focus();
+      });
       return;
     }
     const layer = event.target.closest("[data-company-master-layer]");

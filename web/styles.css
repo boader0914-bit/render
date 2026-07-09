@@ -2061,6 +2061,49 @@ a {
   white-space: nowrap;
 }
 
+.admin-region-verdict {
+  min-width: 190px;
+  max-width: 320px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #fff;
+  padding: 10px 12px;
+}
+
+.admin-region-verdict.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-region-verdict.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-region-verdict.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-region-verdict span,
+.admin-region-verdict small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-verdict strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.12;
+}
+
 .admin-region-focus-panel {
   min-width: 0;
   display: grid;
@@ -3002,6 +3045,67 @@ a {
   font-weight: 950;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+}
+
+.admin-region-company-toolbar {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, .42fr) minmax(220px, .7fr) auto;
+  gap: 8px;
+  align-items: end;
+  border: 1px solid #d5e3f7;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-region-company-toolbar label,
+.admin-region-company-toolbar > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.admin-region-company-toolbar span,
+.admin-region-company-toolbar small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-company-toolbar strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.admin-region-company-toolbar input,
+.admin-region-company-toolbar select {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid #d5e3f7;
+  border-radius: 11px;
+  background: #fbfdff;
+  color: var(--ink);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.admin-region-company-toolbar button {
+  min-height: 38px;
+  border: 1px solid #bfd5ef;
+  border-radius: 11px;
+  background: #edf5ff;
+  color: #175cd3;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
 }
 
 .admin-region-company-bulk {
@@ -21016,6 +21120,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-region-audit-summary,
   .admin-region-audit-list article,
   .admin-region-company-filterbar,
+  .admin-region-company-toolbar,
   .admin-region-company-bulk,
   .admin-region-detail-body,
   .admin-region-company-row,
@@ -21090,6 +21195,12 @@ body.role-b2b .structure-action-list li::before {
   .admin-maintenance-lane > div:first-child,
   .admin-region-company-list > div {
     display: grid;
+  }
+
+  .admin-region-verdict {
+    min-width: 0;
+    max-width: 100%;
+    justify-self: stretch;
   }
 
   .admin-region-card-head mark {
