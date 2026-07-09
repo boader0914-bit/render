@@ -8085,7 +8085,7 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
   const cards = [
     {
       tone: revenueRows.length ? "strong" : "watch",
-      label: "매출 표본 범위",
+      label: "예상 매출 범위",
       value: revenueRows.length ? `평균 ${fmtWon(revenueAverage)}` : "표본 대기",
       note: revenueRows.length ? `최고 ${fmtWon(revenueMax)} · 최저 ${fmtWon(revenueMin)} · ${fmtNumber(analysisDays)}일 기준` : "가격·수량 표본 필요"
     },
@@ -8110,7 +8110,7 @@ function b2bCompetitiveSnapshotModel(brief = b2bMarketBriefModel()) {
   ];
   const insights = [
     {
-      label: "매출 표본",
+      label: "예상 매출",
       value: revenueRows.length
         ? `${fmtNumber(revenueRows.length)}개 업체의 ${fmtNumber(analysisDays)}일 기준 예상 매출 평균·최고·최저를 비교합니다.`
         : "상위 업체의 가격·수량 표본이 확보되면 경쟁 매출을 계산합니다."
@@ -8252,18 +8252,6 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel(), data = state.da
       tone: revenueMin ? "neutral" : "watch"
     },
     {
-      label: "매출 표본",
-      value: `${fmtNumber(revenueRows.length)}/${fmtNumber(items.length)}`,
-      note: "경쟁업체 중 매출 산출 가능",
-      tone: revenueRows.length >= Math.max(2, Math.ceil(items.length * 0.2)) ? "good" : "watch"
-    },
-    {
-      label: "가격 확인률",
-      value: Number.isFinite(priceCoverage) ? fmtRate(priceCoverage) : "대기",
-      note: `${fmtNumber(pricedTotal)}건 확인 · 누락 ${fmtNumber(missingTotal)}건`,
-      tone: Number.isFinite(priceCoverage) && priceCoverage >= 0.7 ? "good" : "watch"
-    },
-    {
       label: "오프라인 판매 추정",
       value: offlineQuantityTotal ? `${fmtNumber(offlineQuantityTotal)}개` : "특이 없음",
       note: offlineQuantityTotal
@@ -8280,20 +8268,24 @@ function b2bRevenueBenchmarkModel(brief = b2bMarketBriefModel(), data = state.da
   ];
   const guideRows = [
     {
-      tone: "strong",
-      label: "정밀도",
-      value: precisionScore ? `${fmtNumber(precisionScore)}점` : "대기",
-      note: highPrecisionRows.length ? `A/B 등급 ${fmtNumber(highPrecisionRows.length)}개` : "가격·요일 표본 확보 필요"
+      tone: revenueRows.length ? "strong" : "watch",
+      label: "매출 기준",
+      value: `${fmtNumber(analysisDays)}일`,
+      note: revenueRows.length
+        ? `매출 표본 ${fmtNumber(revenueRows.length)}곳 · 네이버 예약 기준`
+        : "가격·판매수량 표본 확보 필요"
     },
     {
-      tone: "watch",
-      label: "가격 누락",
-      value: fmtNumber(missingTotal),
-      note: missingTotal ? "누락 가격은 평균가 기반 보정으로 표시" : "누락 보정 영향 낮음"
+      tone: missingTotal ? "watch" : "good",
+      label: "가격 보완",
+      value: missingTotal ? `${fmtNumber(missingTotal)}건` : "낮음",
+      note: missingTotal
+        ? `확인 ${fmtNumber(pricedTotal)}건 · 일부 평균가 보정`
+        : "가격 보완 영향 낮음"
     },
     {
       tone: offlineQuantityTotal ? "watch" : "good",
-      label: "오프라인 해석",
+      label: "오프라인 참고",
       value: offlineQuantityTotal ? `${fmtNumber(offlineQuantityTotal)}개` : "특이 없음",
       note: offlineQuantityTotal
         ? `운영 축소/상시 차단 ${fmtNumber(blockedQuantityTotal)}개 포함 가능`
@@ -10576,8 +10568,8 @@ function renderB2BRevenueBenchmark(brief = b2bMarketBriefModel(), model = b2bRev
     <div class="b2b-revenue-board ${escapeHtml(model.decision.tone)}">
       <div class="b2b-revenue-head">
         <div>
-          <span>B2B Revenue Benchmark</span>
-          <strong>경쟁 매출 정밀도</strong>
+          <span>매출 근거</span>
+          <strong>예상 매출 표본 비교</strong>
           <p>${escapeHtml(`${model.decision.summary} ${model.revenueBasisText}입니다.`)}</p>
         </div>
         <em>${escapeHtml(model.decision.label)}</em>
@@ -10606,21 +10598,22 @@ function renderB2BRevenueBenchmark(brief = b2bMarketBriefModel(), model = b2bRev
               ? `오프라인 ${fmtNumber(row.offlineQuantity)}개 추정`
               : row.blockedQuantity
                 ? `차단/운영축소 ${fmtNumber(row.blockedQuantity)}개`
-                : "오프라인 특이 없음";
+                : "";
+            const metaText = [rateText, priceTextValue, offlineText].filter(Boolean).join(" · ");
             return `
               <button class="b2b-revenue-row ${escapeHtml(row.tone)}" ${attrs}>
                 <span>${fmtNumber(row.rank)}위</span>
                 <strong>${escapeHtml(row.name)}</strong>
                 <em>${escapeHtml(revenueText)}</em>
-                <small>${escapeHtml(`${rateText} · ${priceTextValue} · ${offlineText}`)}</small>
+                <small>${escapeHtml(metaText)}</small>
               </button>
             `;
           }).join("")}
         </article>
         <article class="b2b-revenue-guide">
           <div class="b2b-revenue-subhead">
-            <strong>해석 기준</strong>
-            <small>할인 옵션은 제외하고, 오프라인 판매 추정은 별도 신호로 봅니다.</small>
+            <strong>비교 기준</strong>
+            <small>할인 옵션은 제외하고, 가격 보완과 오프라인 신호는 참고값으로 봅니다.</small>
           </div>
           ${model.guideRows.map((row) => `
             <div class="${escapeHtml(row.tone)}">
@@ -10727,7 +10720,7 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
       label: "가격 포지션",
       value: topRevenue?.revenue ? fmtWon(topRevenue.revenue) : "표본 대기",
       detail: topRevenue
-        ? `${topRevenue.name} 기준으로 평균가, 가격 확인률, 누락 보정 영향을 비교합니다.`
+        ? `${topRevenue.name} 기준으로 평균가, 요일 판매 흐름, 오프라인 신호를 함께 비교합니다.`
         : "매출 표본이 확보되면 상위 업체 가격대를 기준으로 비교합니다.",
       tab: "report",
       button: "매출 보기"
@@ -11416,7 +11409,7 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
       <details class="b2b-detail-pack">
         <summary>
           <span>매출·상관 근거 보기</span>
-          <small>매출 표본 범위와 경쟁강도·예약율 관계만 확인</small>
+          <small>평균·최고·최저 매출과 경쟁강도·예약율 관계 확인</small>
         </summary>
         <div class="b2b-detail-pack-body">
           ${renderB2BCompetitionSalesCorrelation(correlationModel)}
