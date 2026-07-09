@@ -16953,7 +16953,7 @@ function clusterScoreDetail(cluster = {}) {
     ),
     scorePart(
       "distance",
-      "거리 적합도",
+      "노출권 적합도",
       Number.isFinite(localFit) ? localFit * 14 : 0,
       14,
       Number.isFinite(localFit) ? fmtRate(localFit) : "대기",
@@ -17230,6 +17230,73 @@ function renderB2BMapCompetitionBoard(model = b2bRegionMapModel(), board = b2bMa
   `;
 }
 
+function b2bMapLocationTone(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return "watch";
+  if (score >= 78) return "strong";
+  if (score >= 62) return "good";
+  if (score >= 46) return "watch";
+  return "hot";
+}
+
+function renderB2BMapLocationScore(model = b2bRegionMapModel()) {
+  const context = b2bLocationScoreContext(b2bMarketBriefModel(state.data || {}));
+  const scoreModel = context.scoreModel;
+  const score = scoreModel ? clampLocationScore(scoreModel.score, 0) : NaN;
+  const tone = b2bMapLocationTone(score);
+  const runtime = context.runtime || {};
+  const sampleCount = finiteNumber(runtime.items?.length, model.items?.length || 0);
+  const manual = scoreModel?.manual || {};
+  const sourceLabel = manual.hasAdjustment ? "운영 검수 반영" : "자동 산식 기준";
+  const driverRows = (scoreModel?.components || [])
+    .slice()
+    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+    .slice(0, 3);
+  const basisRows = [
+    context.available ? `${context.kind} 기준` : "지역 기준 준비 중",
+    context.connectedLabel,
+    `지도 표본 ${fmtNumber(sampleCount)}곳`,
+    context.tourismLabel
+  ].filter(Boolean);
+
+  return `
+    <div class="b2b-map-location-score ${escapeHtml(tone)}">
+      <div class="b2b-map-location-head">
+        <div>
+          <strong>지도 입지 판단</strong>
+          <small>${escapeHtml(context.available ? `${activeKeyword()} 경쟁권을 입지 기준과 함께 봅니다.` : "현재 검색 결과를 기준으로 지도 경쟁권을 먼저 봅니다.")}</small>
+        </div>
+        <em>${Number.isFinite(score) ? `${fmtNumber(score)}점` : "준비 중"}</em>
+      </div>
+      <div class="b2b-map-location-meter">
+        <i style="width:${Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 8}%"></i>
+      </div>
+      <div class="b2b-map-location-parts">
+        ${driverRows.length ? driverRows.map((component) => {
+          const copy = b2bLocationComponentCopy(component);
+          return `
+            <div class="${escapeHtml(b2bMapLocationTone(component.value))}">
+              <span>${escapeHtml(copy.label)}</span>
+              <strong>${fmtNumber(component.value)}</strong>
+              <small>${escapeHtml(copy.note)}</small>
+            </div>
+          `;
+        }).join("") : `
+          <div class="watch">
+            <span>입지 기준</span>
+            <strong>대기</strong>
+            <small>지역카드 연결 후 표시</small>
+          </div>
+        `}
+      </div>
+      <div class="b2b-map-location-basis">
+        <span>${escapeHtml(sourceLabel)}</span>
+        ${basisRows.map((row) => `<span>${escapeHtml(row)}</span>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
   if (isAdminRole()) return "";
   const topRegionName = model.topRegion?.region || model.topRegion?.name || "확인필요";
@@ -17252,6 +17319,7 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
         <article><span>월 검색량</span><strong>${model.totalSearchVolume ? fmtNumber(model.totalSearchVolume) : "확인필요"}</strong><small>지역 키워드 합산</small></article>
         <article><span>권역 밖 노출</span><strong>${fmtNumber(model.outsideCount)}</strong><small>반경 노출 별도 해석</small></article>
       </div>
+      ${renderB2BMapLocationScore(model)}
       <div class="b2b-map-cluster-row">
         ${model.clusters.length
           ? model.clusters.map((cluster) => `
@@ -17266,7 +17334,7 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
         <div class="b2b-map-cluster-detail">
           <div class="b2b-map-cluster-detail-head">
             <strong>클러스터 점수 상세</strong>
-            <small>노출 밀도 · 예약율 · 매출 표본 · 검색 수요 · 거리 적합도 기준</small>
+            <small>노출 밀도 · 예약율 · 매출 표본 · 검색 수요 · 노출권 적합도 기준</small>
           </div>
           ${clusterDetailRows.map((cluster) => `
             <article class="b2b-map-cluster-card">
