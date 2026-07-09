@@ -2107,6 +2107,118 @@ a {
   overflow-wrap: anywhere;
 }
 
+.admin-region-review-summary {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+}
+
+.admin-region-review-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.admin-region-review-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-region-review-head span,
+.admin-region-review-head small,
+.admin-region-review-grid span,
+.admin-region-review-grid small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-review-head strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.18;
+}
+
+.admin-region-review-head mark {
+  min-width: 48px;
+  min-height: 38px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #b8d9d3;
+  border-radius: 12px;
+  background: #f6fbfa;
+  color: #047857;
+  padding: 0 10px;
+  font-size: 15px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-region-review-progress {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf2f7;
+}
+
+.admin-region-review-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2f80ed, #12b76a);
+}
+
+.admin-region-review-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.admin-region-review-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e5edf7;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 9px;
+}
+
+.admin-region-review-grid article.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-region-review-grid article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-region-review-grid article.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-region-review-grid strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 .admin-region-detail-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -20894,6 +21006,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-regional-summary-grid,
   .admin-regional-maintenance-board,
   .admin-region-focus-panel,
+  .admin-region-review-grid,
   .admin-region-preflight-layout,
   .admin-region-checklist-grid,
   .admin-region-card-grid,

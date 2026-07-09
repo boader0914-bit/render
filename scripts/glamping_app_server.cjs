@@ -8392,6 +8392,7 @@ function createRegionalOpsBucket(classification = {}) {
     structuralBlockedCount: 0,
     manualCorrectionCount: 0,
     adminReviewCount: 0,
+    reviewStatusCounts: {},
     couponVisibleCount: 0,
     bestRank: null,
     reservationRateSum: 0,
@@ -8541,6 +8542,7 @@ function finalizeRegionalOpsBucket(bucket = {}) {
     structuralBlockedCount: bucket.structuralBlockedCount,
     manualCorrectionCount: bucket.manualCorrectionCount,
     adminReviewCount: bucket.adminReviewCount,
+    reviewStatusCounts: bucket.reviewStatusCounts,
     couponVisibleCount: bucket.couponVisibleCount,
     bestRank: bucket.bestRank,
     status,
@@ -8596,7 +8598,8 @@ function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {},
       || item.companyProfile?.manualCorrection
       || item.companyProfile?.inventory?.latest?.manualCorrectionApplied
     );
-    const adminReview = Boolean(item.companyProfile?.adminReview?.status || item.adminReview?.status);
+    const adminReviewStatus = String(item.companyProfile?.adminReview?.status || item.adminReview?.status || "").trim();
+    const adminReview = Boolean(adminReviewStatus);
     const structuralBlocked = firstPositiveNumber(
       item.weeklyStructuralBlockedTotal,
       item.dayUseWeeklyStructuralBlockedTotal,
@@ -8637,7 +8640,10 @@ function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {},
     if (offlineReservation) bucket.offlineReservationCount += 1;
     if (structuralBlocked) bucket.structuralBlockedCount += 1;
     if (manualCorrection) bucket.manualCorrectionCount += 1;
-    if (adminReview) bucket.adminReviewCount += 1;
+    if (adminReview) {
+      bucket.adminReviewCount += 1;
+      bucket.reviewStatusCounts[adminReviewStatus] = Number(bucket.reviewStatusCounts[adminReviewStatus] || 0) + 1;
+    }
     if (couponVisible) bucket.couponVisibleCount += 1;
     if (Number.isFinite(rank) && rank > 0) bucket.bestRank = bucket.bestRank ? Math.min(bucket.bestRank, rank) : rank;
     if (reservationRate !== null) {
@@ -8690,6 +8696,12 @@ function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {},
     lowConfidenceCount: regions.reduce((sum, region) => sum + region.lowConfidenceCount, 0),
     manualCorrectionCount: regions.reduce((sum, region) => sum + region.manualCorrectionCount, 0),
     adminReviewCount: regions.reduce((sum, region) => sum + region.adminReviewCount, 0),
+    reviewStatusCounts: regions.reduce((acc, region) => {
+      for (const [status, count] of Object.entries(region.reviewStatusCounts || {})) {
+        acc[status] = Number(acc[status] || 0) + Number(count || 0);
+      }
+      return acc;
+    }, {}),
     publicReadyRegionCount: regions.filter((region) => region.status.key === "public_ready").length,
     reviewNeededRegionCount: regions.filter((region) => region.status.key === "review_needed").length,
     collectNeededRegionCount: regions.filter((region) => region.status.key === "collect_needed").length,
@@ -11604,8 +11616,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-admin-region-checklist"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-admin-region-checklist"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260709-admin-region-review-summary"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260709-admin-region-review-summary"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

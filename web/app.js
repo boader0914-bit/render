@@ -16379,10 +16379,15 @@ function adminRegionWorkflowStats(rows = []) {
   const counts = rows.reduce((acc, row) => {
     const status = row.metrics.adminReview?.status || "";
     acc.total += 1;
+    if (status) acc.statusCounts[status] = Number(acc.statusCounts[status] || 0) + 1;
     if (!status) acc.unreviewed += 1;
+    if (status === "check_needed") acc.checkNeeded += 1;
+    if (status === "confirmed") acc.confirmed += 1;
     if (status === "manual_needed") acc.manualNeeded += 1;
     if (status === "recrawl_needed") acc.recrawlNeeded += 1;
     if (status === "contact_ready") acc.contactReady += 1;
+    if (status === "hold") acc.hold += 1;
+    if (status === "exclude") acc.exclude += 1;
     if (["confirmed", "contact_ready"].includes(status)) acc.publicReady += 1;
     if (["confirmed", "contact_ready", "hold", "exclude"].includes(status)) acc.completed += 1;
     if (["hold", "exclude"].includes(status)) acc.closed += 1;
@@ -16390,16 +16395,65 @@ function adminRegionWorkflowStats(rows = []) {
   }, {
     total: 0,
     unreviewed: 0,
+    checkNeeded: 0,
+    confirmed: 0,
     manualNeeded: 0,
     recrawlNeeded: 0,
     contactReady: 0,
+    hold: 0,
+    exclude: 0,
     publicReady: 0,
     completed: 0,
-    closed: 0
+    closed: 0,
+    statusCounts: {}
   });
   counts.reviewed = Math.max(0, counts.total - counts.unreviewed);
   counts.progress = counts.total ? counts.reviewed / counts.total : 0;
   return counts;
+}
+
+function adminRegionReviewSummaryPanel(region = {}, rows = []) {
+  const stats = adminRegionWorkflowStats(rows);
+  const statusCounts = { ...(region.reviewStatusCounts || {}), ...(stats.statusCounts || {}) };
+  const statusCount = (status) => Number(statusCounts[status] || 0);
+  const items = [
+    { key: "unreviewed", label: "미검수", count: stats.unreviewed, note: "아직 판단 전", tone: "watch" },
+    { key: "check_needed", label: "확인 필요", count: statusCount("check_needed"), note: "채널/수량 확인", tone: "watch" },
+    { key: "manual_needed", label: "보정 필요", count: statusCount("manual_needed"), note: "수량·총량 보정", tone: "hot" },
+    { key: "recrawl_needed", label: "재수집", count: statusCount("recrawl_needed"), note: "조건 재확인", tone: "watch" },
+    { key: "confirmed", label: "확인 완료", count: statusCount("confirmed"), note: "공개 판단 가능", tone: "good" },
+    { key: "contact_ready", label: "컨택 가능", count: statusCount("contact_ready"), note: "영업 후보", tone: "good" },
+    { key: "closed", label: "보류·제외", count: statusCount("hold") + statusCount("exclude"), note: "대상 제외/보류", tone: "neutral" }
+  ];
+  const actionNote = stats.unreviewed
+    ? `미검수 ${fmtNumber(stats.unreviewed)}곳부터 처리`
+    : (stats.manualNeeded || stats.recrawlNeeded
+      ? "보정·재수집 대상 후속 확인"
+      : "검수 완료 상태 유지");
+  return `
+    <div class="admin-region-review-summary" data-admin-region-review-summary>
+      <div class="admin-region-review-head">
+        <div>
+          <span>지역 검수 집계</span>
+          <strong>${fmtNumber(stats.reviewed)}/${fmtNumber(stats.total)}곳 검수</strong>
+          <small>업체 마스터 저장값 기준 · ${escapeHtml(actionNote)}</small>
+        </div>
+        <mark>${fmtRate(stats.progress)}</mark>
+      </div>
+      <div class="admin-region-review-progress">
+        <span style="width: ${Math.max(4, Math.min(100, Math.round(stats.progress * 100)))}%"></span>
+      </div>
+      <div class="admin-region-review-grid">
+        ${items.map((item) => `
+          <article class="${escapeHtml(item.tone)}">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${fmtNumber(item.count)}</strong>
+            <small>${escapeHtml(item.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function adminRegionWorkflowPanel(rows = []) {
@@ -16878,6 +16932,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
         <mark>${escapeHtml(adminRegionStatusLabel(region.status || {}))}</mark>
       </div>
       ${adminRegionDetailFocusPanel(region, rows, maintenance)}
+      ${adminRegionReviewSummaryPanel(region, rows)}
       ${adminRegionPreflightPanel(region, rows)}
       ${adminRegionLocationScorePanel(region)}
       ${adminRegionAuditPanel(region, rows)}
