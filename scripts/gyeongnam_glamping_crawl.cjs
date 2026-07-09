@@ -1210,7 +1210,7 @@ function naverBookingSaleType(item) {
 
 const COUPON_SIGNAL_PATTERN = /coupon|benefit|promotion|discount|쿠폰|혜택|할인|프로모션|즉시할인/i;
 const COUPON_NEGATIVE_PATTERN = /쿠폰\s*(없음|미제공|사용\s*불가|불가)|혜택\s*(없음|미제공)|할인\s*(없음|미제공|불가)/i;
-const COUPON_GENERIC_PATTERN = /^(coupon|coupons|benefit|benefits|promotion|promotions|discount|discounts|쿠폰|쿠폰\s*(받기|다운로드|적용|적용시|사용|정보|안내|혜택|노출|확인)?|혜택|할인|프로모션|즉시할인|네이버\s*쿠폰|네이버\s*예약\s*쿠폰)$/i;
+const COUPON_GENERIC_PATTERN = /^(coupon|coupons|benefit|benefits|promotion|promotions|discount|discounts|쿠폰|쿠폰\s*(받기|다운로드|적용|적용시|사용|정보|안내|혜택|노출|확인)?|혜택|할인|프로모션|즉시할인|네이버|네이버\s*상품|네이버\s*쿠폰|네이버\s*예약\s*쿠폰|네이버\s*예약페이지|상품|일정|숙박상품|데이유즈상품|숙박일정|데이유즈일정|예약페이지)$/i;
 
 function parseJsonLike(value) {
   if (typeof value !== "string") return null;

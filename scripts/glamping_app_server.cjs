@@ -7426,18 +7426,46 @@ function companySalesSignalFromItem(item = {}, run = {}) {
   };
 }
 
+function naverCouponDisplayNames(value = "") {
+  const generic = new Set([
+    "네이버",
+    "네이버 상품",
+    "상품",
+    "일정",
+    "숙박상품",
+    "데이유즈상품",
+    "숙박일정",
+    "데이유즈일정",
+    "예약페이지"
+  ]);
+  return [...new Set(String(value || "")
+    .split(/\s*(?:·|ㆍ|\||,|\n|\r)\s*/)
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part || generic.has(part)) return false;
+      if (/^근거\s*/.test(part)) return false;
+      if (/^네이버\s*공개\s*노출\s*쿠폰/.test(part)) return false;
+      return true;
+    }))]
+    .slice(0, 5)
+    .join(" · ");
+}
+
 function naverCouponSignalFromItem(item = {}) {
   const status = String(item.naverCouponStatus || item["네이버쿠폰노출상태"] || "").trim();
-  const names = String(item.naverCouponNames || item["네이버쿠폰명"] || "").trim();
+  const rawNames = String(item.naverCouponNames || item["네이버쿠폰명"] || "").trim();
+  const names = naverCouponDisplayNames(rawNames);
   const channel = String(item.naverCouponChannel || item["네이버쿠폰확인채널"] || "").trim();
   const detail = String(item.naverCouponDetail || item["네이버쿠폰상세"] || "").trim();
-  const visible = status === "있음" || Boolean(names);
+  const visible = /^(?:있음|노출|exposed|visible|yes|true)$/i.test(status) || Boolean(names);
   return {
     visible,
+    named: Boolean(names),
     status: status || (visible ? "있음" : ""),
     names,
+    rawNames,
     channel: channel || (visible ? "네이버" : ""),
-    detail: detail || (visible ? `네이버 공개 노출 쿠폰: ${names || "쿠폰명 확인"}` : "")
+    detail: detail || (visible ? (names ? `네이버 공개 노출 쿠폰: ${names}` : "네이버 쿠폰 노출 신호 확인 · 쿠폰명 미확인") : "")
   };
 }
 
@@ -8581,12 +8609,18 @@ function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {},
       item.companyProfile?.inventory?.latest?.salesSignal?.lodgingOfflineReservedTotal,
       item.companyProfile?.inventory?.latest?.salesSignal?.dayUseOfflineReservedTotal
     ) > 0;
-    const couponVisible = Boolean(
-      item.naverCouponNames
-      || item.naverCouponStatus === "있음"
-      || item.companyProfile?.inventory?.latest?.couponSignal?.visible
-      || item.companyProfile?.inventory?.latest?.salesSignal?.couponSignal?.visible
-    );
+    const couponSignal = naverCouponSignalFromItem({
+      ...item,
+      naverCouponNames: item.naverCouponNames
+        || item.companyProfile?.inventory?.latest?.couponSignal?.names
+        || item.companyProfile?.inventory?.latest?.salesSignal?.couponSignal?.names
+        || "",
+      naverCouponStatus: item.naverCouponStatus
+        || item.companyProfile?.inventory?.latest?.couponSignal?.status
+        || item.companyProfile?.inventory?.latest?.salesSignal?.couponSignal?.status
+        || ""
+    });
+    const couponVisible = Boolean(couponSignal.named);
 
     bucket.companyKeys.add(companyKey);
     if (companyName) bucket.companyNames.add(companyName);
@@ -8770,11 +8804,15 @@ function companySalesTargetSignals(company = {}) {
   const productNamingReview = Boolean(structureWeak || bookingIdReused || signal.groupedStock);
   const dayUseMissing = Boolean(signal.dayUseMissing && (lodging.totalSupply || lodging.days));
   const otaReviewNeeded = Boolean(structureWeak || stockVariance || bookingIdReused);
+  const normalizedCouponSignal = naverCouponSignalFromItem({
+    naverCouponStatus: couponSignal.status || signal.naverCouponStatus || "",
+    naverCouponNames: couponSignal.names || signal.naverCouponNames || "",
+    naverCouponChannel: couponSignal.channel || signal.naverCouponChannel || "",
+    naverCouponDetail: couponSignal.detail || signal.naverCouponDetail || ""
+  });
   const couponVisible = Boolean(
     signal.naverCouponVisible ||
-    couponSignal.visible ||
-    couponSignal.status === "있음" ||
-    couponSignal.names
+    normalizedCouponSignal.visible
   );
   return {
     fridayWeak: Boolean(lodging.fridayWeak),
@@ -8787,10 +8825,10 @@ function companySalesTargetSignals(company = {}) {
     productNamingReview,
     otaReviewNeeded,
     couponVisible,
-    couponNames: couponSignal.names || signal.naverCouponNames || "",
-    couponStatus: couponSignal.status || signal.naverCouponStatus || "",
-    couponChannel: couponSignal.channel || signal.naverCouponChannel || "",
-    couponDetail: couponSignal.detail || signal.naverCouponDetail || "",
+    couponNames: normalizedCouponSignal.names,
+    couponStatus: normalizedCouponSignal.status,
+    couponChannel: normalizedCouponSignal.channel,
+    couponDetail: normalizedCouponSignal.detail,
     lodgingRate: lodging.averageRate ?? null,
     dayUseRate: dayUse.averageRate ?? null,
     fridayRate: lodging.fridayRate ?? null,
@@ -10737,7 +10775,7 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
       stockVarianceCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("dynamic_capacity")).length,
       dayUseMixedCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("dayuse_rotation")).length,
       bookingIdReusedCount: items.filter((item) => (item.inventoryStructureFlags || []).includes("booking_id_reused")).length,
-      naverCouponVisibleCount: items.filter((item) => item.naverCouponStatus === "있음" || item.naverCouponNames).length,
+      naverCouponVisibleCount: items.filter((item) => naverCouponSignalFromItem(item).named).length,
       confidenceCounts: items.reduce((acc, item) => {
         const grade = item.inventoryConfidenceGrade || "C";
         acc[grade] = (acc[grade] || 0) + 1;

@@ -3219,11 +3219,11 @@ function b2bPublicProductSummaryText(text = "") {
 function b2bCompanyCouponSummary(item = {}) {
   const coupon = naverCouponInfo(item);
   return {
-    value: coupon.visible ? "쿠폰 있음" : "수동확인",
+    value: coupon.named ? "쿠폰명 확인" : coupon.visible ? "노출 신호" : "수동확인",
     note: coupon.visible
-      ? (coupon.names || coupon.status || "쿠폰명 확인")
+      ? (coupon.names || "쿠폰명 미확인")
       : (coupon.detail || "네이버 화면 수동 확인"),
-    tone: coupon.visible ? "strong" : "neutral"
+    tone: coupon.named ? "strong" : coupon.visible ? "watch" : "neutral"
   };
 }
 
@@ -3874,8 +3874,8 @@ function b2bDetailPositionModel(item = {}) {
     },
     {
       label: "채널/혜택",
-      value: coupon.visible ? "쿠폰 노출" : platforms.length ? `${fmtNumber(platforms.length)}채널` : "채널 보강",
-      note: coupon.visible ? (coupon.names || coupon.status || "쿠폰명 확인") : (audit.otaCheckNeeded ? "OTA 보조 확인 필요" : "네이버 중심 판단")
+      value: coupon.named ? "쿠폰명 확인" : coupon.visible ? "쿠폰 신호" : platforms.length ? `${fmtNumber(platforms.length)}채널` : "채널 보강",
+      note: coupon.visible ? (coupon.names || "쿠폰명 미확인") : (audit.otaCheckNeeded ? "OTA 보조 확인 필요" : "네이버 중심 판단")
     },
     {
       label: "판매율 차이",
@@ -4609,8 +4609,12 @@ function naverCouponDisplayNames(value = "") {
     "\uB124\uC774\uBC84",
     "\uB124\uC774\uBC84 \uC0C1\uD488",
     "\uC0C1\uD488",
+    "\uC77C\uC815",
+    "\uC219\uBC15\uC0C1\uD488",
+    "\uB370\uC774\uC720\uC988\uC0C1\uD488",
     "\uC219\uBC15\uC77C\uC815",
-    "\uB370\uC774\uC720\uC988\uC77C\uC815"
+    "\uB370\uC774\uC720\uC988\uC77C\uC815",
+    "\uC608\uC57D\uD398\uC774\uC9C0"
   ]);
   return [...new Set(String(value || "")
     .split(/\s*[·,|]\s*/)
@@ -4645,6 +4649,7 @@ function naverCouponInfo(item = {}) {
   );
   return {
     visible,
+    named: Boolean(names),
     status: status || (visible ? "있음" : ""),
     names,
     rawNames,
@@ -9417,7 +9422,7 @@ function b2bCollectedFacilities(item = {}) {
     item.category,
     item.businessCategory,
     ...productNames,
-    coupon.visible ? `쿠폰: ${coupon.names || "노출"}` : ""
+    coupon.visible ? `쿠폰: ${coupon.names || "노출 신호"}` : ""
   ].filter(Boolean).join(", ").slice(0, 160);
 }
 
@@ -21302,9 +21307,9 @@ function sheetCollectionStatusPanel(item = {}) {
       ? `가격확인 ${fmtNumber(status.pricedQuantity)}개/회`
       : "판매/가격 대기";
   const coupon = status.coupon || naverCouponInfo(item);
-  const couponValue = coupon.visible ? "쿠폰 노출" : (coupon.status || "미노출/미확인");
+  const couponValue = coupon.named ? "쿠폰명 확인" : coupon.visible ? "쿠폰 노출 신호" : (coupon.status || "미노출/미확인");
   const couponNote = coupon.visible
-    ? compactListText([coupon.names, coupon.detail, coupon.channel].filter(Boolean), "쿠폰명 확인", 2)
+    ? compactListText([coupon.names || "쿠폰명 미확인", coupon.detail, coupon.channel].filter(Boolean), "쿠폰명 미확인", 2)
     : coupon.detail;
   const productText = status.productKnown
     ? `${status.productCount ? `${fmtNumber(status.productCount)}개 상품` : "상품구성 확인"}`
@@ -22028,11 +22033,17 @@ function b2bPlatformModel(item = {}, rows = platformsForItem(item), audit = inve
       label: "OTA 보완 확인",
       summary: "네이버 수량만으로 전체 운영을 판단하기 애매한 구간입니다. 여기어때, 야놀자, 떠나요 노출과 가격을 보조 확인합니다."
     }
-    : coupon.visible
+    : coupon.named
       ? {
         tone: "strong",
         label: "프로모션 확인",
-        summary: "네이버 쿠폰이 노출되어 가격/혜택 중심의 접근이 가능합니다. 쿠폰명과 노출 채널을 먼저 확인합니다."
+        summary: "네이버 쿠폰명이 확인되어 가격/혜택 중심의 접근이 가능합니다. 쿠폰명과 노출 채널을 먼저 확인합니다."
+      }
+      : coupon.visible
+      ? {
+        tone: "watch",
+        label: "쿠폰 신호 확인",
+        summary: "네이버 화면에서 쿠폰 노출 신호가 있으나 쿠폰명은 확인되지 않았습니다. 실제 혜택명은 수동 확인이 필요합니다."
       }
       : hasOta
         ? {
@@ -22056,7 +22067,7 @@ function b2bPlatformModel(item = {}, rows = platformsForItem(item), audit = inve
       { label: "노출 채널", value: fmtNumber(visibleRows.length), note: rows.length ? `${fmtNumber(rows.length)}개 채널 확인` : "채널 표본 대기" },
       { label: "네이버", value: naverRow ? "노출" : "확인필요", note: naverRow?.price || naverRow?.stock || item.price || "예약 화면 기준" },
       { label: "OTA", value: hasOta ? "보조 가능" : "보완 필요", note: otaRows.length ? `${fmtNumber(otaRows.length)}개 OTA 표본` : "여기어때/야놀자/떠나요" },
-      { label: "쿠폰", value: coupon.visible ? "노출" : "수동확인", note: coupon.visible ? (coupon.names || coupon.status || "쿠폰명 확인") : coupon.detail }
+      { label: "쿠폰", value: coupon.named ? "쿠폰명 확인" : coupon.visible ? "노출 신호" : "수동확인", note: coupon.visible ? (coupon.names || "쿠폰명 미확인") : coupon.detail }
     ]
   };
 }
@@ -22072,7 +22083,7 @@ function renderB2BPlatformBrief(item = {}, rows = platformsForItem(item), audit 
           <h3>채널 노출과 혜택 요약</h3>
           <p>${escapeHtml(model.decision.summary)}</p>
         </div>
-        <strong>${escapeHtml(model.coupon.visible ? "쿠폰" : "채널")}</strong>
+        <strong>${escapeHtml(model.coupon.named ? "쿠폰명" : model.coupon.visible ? "신호" : "채널")}</strong>
       </div>
       <div class="sheet-b2b-platform-grid">
         ${model.metrics.map((metric) => `
@@ -22084,8 +22095,8 @@ function renderB2BPlatformBrief(item = {}, rows = platformsForItem(item), audit 
         `).join("")}
       </div>
       <div class="sheet-b2b-coupon-line">
-        <strong>${model.coupon.visible ? "네이버 쿠폰 노출" : "쿠폰 자동수집 제한"}</strong>
-        <span>${escapeHtml([model.coupon.names, model.coupon.channel, model.coupon.detail].filter(Boolean).join(" · ") || "네이버 화면에서 쿠폰명/노출 채널 수동 확인")}</span>
+        <strong>${model.coupon.named ? "네이버 쿠폰명 확인" : model.coupon.visible ? "네이버 쿠폰 노출 신호" : "쿠폰 자동수집 제한"}</strong>
+        <span>${escapeHtml([model.coupon.names || (model.coupon.visible ? "쿠폰명 미확인" : ""), model.coupon.channel, model.coupon.detail].filter(Boolean).join(" · ") || "네이버 화면에서 쿠폰명/노출 채널 수동 확인")}</span>
       </div>
     </section>
   `;
