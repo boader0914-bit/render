@@ -64,6 +64,9 @@ const state = {
   b2bMyLodgeCollecting: false,
   b2bMyLodgeCollectStatus: "",
   b2bMyLodgeCollectResult: null,
+  b2bInterestLodgeServerLoaded: false,
+  b2bInterestLodgeSyncing: false,
+  b2bInterestLodgeSyncError: "",
   memberSearchHistory: [],
   memberSearchQuota: null,
   b2bMemberAdmin: null,
@@ -8231,6 +8234,89 @@ function readB2BInterestLodges() {
   return readB2BMyLodgeStore().interestLodges || [];
 }
 
+function b2bInterestLodgeFingerprint(interestLodges = []) {
+  return JSON.stringify(
+    (Array.isArray(interestLodges) ? interestLodges : [])
+      .map((lodge) => b2bNormalizeInterestLodge(lodge))
+      .map((lodge) => ({
+        id: lodge.id,
+        lodgingName: lodge.lodgingName,
+        roomCount: lodge.roomCount,
+        roomType: lodge.roomType,
+        dayUseCount: lodge.dayUseCount,
+        weekdayPrice: lodge.weekdayPrice,
+        fridayPrice: lodge.fridayPrice,
+        saturdayPrice: lodge.saturdayPrice,
+        sundayPrice: lodge.sundayPrice,
+        roomSegments: lodge.roomSegments,
+        facilities: lodge.facilities,
+        naverConnected: lodge.naverConnected,
+        otaConnected: lodge.otaConnected,
+        registeredAt: lodge.registeredAt
+      }))
+  );
+}
+
+async function syncB2BInterestLodgesToServer(interestLodges = readB2BInterestLodges()) {
+  if (isAdminRole()) return null;
+  state.b2bInterestLodgeSyncing = true;
+  state.b2bInterestLodgeSyncError = "";
+  try {
+    const result = await fetchJson("/api/member/interest-lodges", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ interestLodges })
+    });
+    const store = readB2BMyLodgeStore();
+    persistB2BMyLodgeStore(
+      { ...store, interestLodges: result.interestLodges || [] },
+      { syncInterestLodges: false }
+    );
+    state.b2bInterestLodgeServerLoaded = true;
+    return result;
+  } catch (error) {
+    state.b2bInterestLodgeSyncError = error.message || "관심숙소 계정 저장에 실패했습니다.";
+    return null;
+  } finally {
+    state.b2bInterestLodgeSyncing = false;
+    if (!isAdminRole() && document.querySelector(".b2b-my-lodge-board")) {
+      renderReport();
+    }
+  }
+}
+
+async function loadB2BInterestLodgesFromServer() {
+  if (isAdminRole()) {
+    state.b2bInterestLodgeServerLoaded = false;
+    state.b2bInterestLodgeSyncError = "";
+    return;
+  }
+  const localStore = readB2BMyLodgeStore();
+  try {
+    const result = await fetchJson("/api/member/interest-lodges");
+    const remoteStore = b2bMyLodgeStoreFromValue({
+      version: 2,
+      draft: {},
+      interestLodges: result.interestLodges || []
+    });
+    const merged = b2bMyLodgeMergeStoredValues(remoteStore, [localStore]);
+    const nextStore = {
+      version: 2,
+      draft: localStore.draft || {},
+      interestLodges: merged.interestLodges || []
+    };
+    persistB2BMyLodgeStore(nextStore, { syncInterestLodges: false });
+    state.b2bInterestLodgeServerLoaded = true;
+    state.b2bInterestLodgeSyncError = "";
+    if (b2bInterestLodgeFingerprint(nextStore.interestLodges) !== b2bInterestLodgeFingerprint(remoteStore.interestLodges)) {
+      await syncB2BInterestLodgesToServer(nextStore.interestLodges);
+    }
+  } catch (error) {
+    state.b2bInterestLodgeServerLoaded = false;
+    state.b2bInterestLodgeSyncError = error.message || "관심숙소를 계정에서 불러오지 못했습니다.";
+  }
+}
+
 function b2bMyLodgeNumber(value) {
   const number = optionalNumber(value);
   return Number.isFinite(number) ? Math.max(0, number) : 0;
@@ -8991,6 +9077,63 @@ function b2bMyLodgeDeltaTone(value, base) {
   return "strong";
 }
 
+function b2bMyLodgeComparisonConclusion(input = {}) {
+  const hasEstimateBasis = Boolean(input.hasEstimateBasis);
+  const weeklyRevenue = finiteNumber(input.weeklyRevenue, 0);
+  const averageRevenue = finiteNumber(input.averageRevenue, 0);
+  const topAverage = finiteNumber(input.topAverage, 0);
+  const avgPrice = finiteNumber(input.avgPrice, 0);
+  const marketAvgPrice = finiteNumber(input.marketAvgPrice, 0);
+  const channelScore = Number(input.channelScore || 0);
+  const locationLabel = input.locationConclusion?.label || "";
+  const basisPeriod = input.basisPeriod || "";
+  const basisDays = Number(input.basisDays || DEFAULT_BOOKING_DAYS);
+  if (!hasEstimateBasis) {
+    return {
+      tone: "neutral",
+      label: "입력 후 비교",
+      headline: "객실종류별 수량과 요일 가격을 입력하면 바로 비교됩니다.",
+      summary: "관심숙소의 7일 기준 예상 매출, 지역 평균, 상위권 대비 차이를 한 번에 계산합니다.",
+      chips: [`${fmtNumber(basisDays)}일 기준`, "객실·가격 입력 대기"]
+    };
+  }
+  let tone = "watch";
+  let label = "보완 필요";
+  let headline = "지역 평균 대비 보완할 항목을 확인하세요.";
+  let summary = "가격대, 판매 채널, 객실 구성을 지역 평균과 함께 비교하는 것이 좋습니다.";
+  if (topAverage > 0 && weeklyRevenue >= topAverage * 0.92) {
+    tone = "good";
+    label = "상위권 접근 가능";
+    headline = "현재 입력값 기준으로 상위권 매출 표본과 비교할 수 있습니다.";
+    summary = "주말 가격과 상위 노출 업체의 상품 구성을 우선 비교하면 운영 전략을 잡기 좋습니다.";
+  } else if (averageRevenue > 0 && weeklyRevenue >= averageRevenue) {
+    tone = "strong";
+    label = "지역 평균 이상";
+    headline = "지역 평균 매출보다 높은 조건으로 계산됩니다.";
+    summary = "가격 경쟁력은 유지하면서 채널 노출과 객실 구성을 함께 점검하세요.";
+  } else if (marketAvgPrice > 0 && avgPrice >= marketAvgPrice * 1.18) {
+    tone = "watch";
+    label = "가격 부담 점검";
+    headline = "객실가는 높은 편인데 예상 매출은 평균보다 낮게 계산됩니다.";
+    summary = "평일·일요일 가격 또는 패키지 구성을 조정할 여지가 있는지 확인하세요.";
+  } else if (channelScore === 0) {
+    tone = "watch";
+    label = "채널 입력 필요";
+    headline = "네이버와 OTA 노출 여부가 비어 있어 비교 정밀도가 낮습니다.";
+    summary = "판매 채널을 입력하면 지역 평균과의 비교가 더 명확해집니다.";
+  }
+  const chips = [
+    basisPeriod || `${fmtNumber(basisDays)}일 기준`,
+    `예상 ${fmtWon(weeklyRevenue)}`,
+    averageRevenue ? `지역 평균 ${b2bMyLodgeDeltaText(weeklyRevenue, averageRevenue)}` : "",
+    topAverage ? `상위권 ${b2bMyLodgeDeltaText(weeklyRevenue, topAverage)}` : "",
+    marketAvgPrice && avgPrice ? `객실가 ${b2bMyLodgeDeltaText(avgPrice, marketAvgPrice)}` : "",
+    channelScore >= 2 ? "네이버+OTA" : channelScore === 1 ? "채널 1개" : "채널 미입력",
+    locationLabel
+  ].filter(Boolean).slice(0, 7);
+  return { tone, label, headline, summary, chips };
+}
+
 function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief), draftOverride = null) {
   const draft = draftOverride && typeof draftOverride === "object" ? draftOverride : readB2BMyLodgeDraft();
   const roomSegments = b2bMyLodgeSegmentRows(draft);
@@ -9118,6 +9261,18 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
       note: locationConclusion.scoreText ? `${locationConclusion.scoreText} · ${locationConclusion.sourceLabel}` : locationConclusion.sourceLabel
     }
   ];
+  const comparisonConclusion = b2bMyLodgeComparisonConclusion({
+    hasEstimateBasis,
+    weeklyRevenue,
+    averageRevenue,
+    topAverage,
+    avgPrice,
+    marketAvgPrice,
+    channelScore,
+    locationConclusion,
+    basisDays,
+    basisPeriod
+  });
   return {
     draft,
     hasInput,
@@ -9135,6 +9290,7 @@ function b2bMyLodgeBenchmarkModel(brief = b2bMarketBriefModel(), revenueModel = 
     basisPeriod,
     cards,
     benchmarkRows,
+    comparisonConclusion,
     locationConclusion,
     facilities,
     channelLabels,
@@ -9151,6 +9307,7 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
         const model = b2bMyLodgeBenchmarkModel(brief, revenueModel, lodge);
         const name = String(lodge.lodgingName || `관심숙소 ${index + 1}`).trim();
         const actionId = lodge.id || b2bStableInterestLodgeId(lodge) || b2bInterestLodgeMatchKey(lodge) || `index-${index}`;
+        const conclusion = model.comparisonConclusion || b2bMyLodgeComparisonConclusion(model);
         const facilities = model.facilities.length ? model.facilities.slice(0, 4) : [];
         const segmentLabels = model.roomSegments.map((row) => row.type).filter(Boolean).slice(0, 4);
         const chips = [
@@ -9167,6 +9324,11 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
               <strong>${escapeHtml(name)}</strong>
               <small>${escapeHtml(`${fmtNumber(model.basisDays || DEFAULT_BOOKING_DAYS)}일 기준 예상 매출 · ${model.basisPeriod || "기간 확인"}`)}</small>
               <em>${model.hasEstimateBasis ? fmtWon(model.weeklyRevenue) : "매출 입력 대기"}</em>
+            </div>
+            <div class="b2b-interest-lodge-decision ${escapeHtml(conclusion.tone)}">
+              <span>비교 결론</span>
+              <strong>${escapeHtml(conclusion.label)}</strong>
+              <small>${escapeHtml(conclusion.headline)}</small>
             </div>
             <div class="b2b-interest-lodge-metrics">
               <div><span>객실</span><strong>${model.roomCount ? `${fmtNumber(model.roomCount)}실` : "대기"}</strong></div>
@@ -9244,6 +9406,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <p>비교할 숙소를 최대 2곳까지 저장하고, 객실종류별 수량·요일 가격으로 지역 평균·상위권 매출 표본과 비교합니다.</p>
         </div>
         <div class="b2b-my-lodge-head-actions">
+          <em>${state.b2bInterestLodgeSyncing ? "저장 중" : state.b2bInterestLodgeSyncError ? "저장 확인 필요" : "계정 저장"}</em>
           <em>${fmtNumber(interestLodges.length)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)} 등록</em>
           ${canRegisterMore ? `
             <button class="b2b-my-lodge-toggle" type="button" data-b2b-my-lodge-toggle aria-expanded="${editorOpen ? "true" : "false"}">
@@ -9253,6 +9416,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           ` : ""}
         </div>
       </div>
+      ${state.b2bInterestLodgeSyncError ? `<div class="b2b-my-lodge-sync-note">${escapeHtml(state.b2bInterestLodgeSyncError)} 브라우저에는 임시 보관되어 있습니다.</div>` : ""}
       ${renderB2BInterestLodgeCards(interestLodges, brief, revenueModel)}
       ${canRegisterMore && editorOpen ? `
       <form class="b2b-my-lodge-form" data-b2b-my-lodge-form>
@@ -9324,6 +9488,14 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
             </article>
           `).join("")}
         </div>
+        <article class="b2b-my-lodge-decision ${escapeHtml(model.comparisonConclusion.tone)}">
+          <span>비교 결론</span>
+          <strong>${escapeHtml(model.comparisonConclusion.label)}</strong>
+          <p>${escapeHtml(model.comparisonConclusion.summary)}</p>
+          <div>
+            ${model.comparisonConclusion.chips.map((chip) => `<em>${escapeHtml(chip)}</em>`).join("")}
+          </div>
+        </article>
         <article class="b2b-my-lodge-chart">
           <div class="b2b-my-lodge-subhead">
             <strong>매출 포지션 비교</strong>
@@ -9397,7 +9569,8 @@ function collectB2BMyLodgeFormValues() {
   };
 }
 
-function persistB2BMyLodgeStore(store = {}) {
+function persistB2BMyLodgeStore(store = {}, options = {}) {
+  const { syncInterestLodges = true } = options;
   const values = {
     version: 2,
     draft: store.draft && typeof store.draft === "object" ? store.draft : {},
@@ -9415,11 +9588,14 @@ function persistB2BMyLodgeStore(store = {}) {
   } catch {
     // The comparison still renders from memory if browser storage is blocked.
   }
+  if (syncInterestLodges && !isAdminRole()) {
+    syncB2BInterestLodgesToServer(values.interestLodges);
+  }
 }
 
 function persistB2BMyLodgeDraft(values = {}) {
   const store = readB2BMyLodgeStore();
-  persistB2BMyLodgeStore({ ...store, draft: values });
+  persistB2BMyLodgeStore({ ...store, draft: values }, { syncInterestLodges: false });
 }
 
 function saveB2BMyLodgeBenchmark() {
@@ -9436,7 +9612,7 @@ function saveB2BMyLodgeBenchmark() {
   if (!b2bMyLodgeDraftHasInput(values) || !String(values.lodgingName || "").trim()) {
     state.b2bMyLodgeCollectStatus = "관심숙소명을 먼저 입력하세요.";
     state.b2bMyLodgeExpanded = true;
-    persistB2BMyLodgeStore({ ...store, draft: values, interestLodges });
+    persistB2BMyLodgeStore({ ...store, draft: values, interestLodges }, { syncInterestLodges: false });
     renderReport();
     document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     return;
@@ -9557,7 +9733,7 @@ function clearB2BMyLodgeBenchmark() {
   state.b2bMyLodgeCollectStatus = "";
   state.b2bMyLodgeCollectResult = null;
   state.b2bMyLodgeExpanded = false;
-  persistB2BMyLodgeStore({ ...store, draft: {} });
+  persistB2BMyLodgeStore({ ...store, draft: {} }, { syncInterestLodges: false });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -10197,7 +10373,8 @@ function b2bLocationConclusionTone(score) {
 }
 
 function b2bLocationComponentValue(scoreModel = {}, key = "") {
-  const found = (scoreModel.components || []).find((component) => component.key === key);
+  const components = Array.isArray(scoreModel?.components) ? scoreModel.components : [];
+  const found = components.find((component) => component.key === key);
   const value = Number(found?.value);
   return Number.isFinite(value) ? value : NaN;
 }
@@ -10205,10 +10382,6 @@ function b2bLocationComponentValue(scoreModel = {}, key = "") {
 function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = null) {
   const scoreModel = context.scoreModel;
   const score = scoreModel ? clampLocationScore(scoreModel.score, 0) : NaN;
-  const searchDemand = b2bLocationComponentValue(scoreModel, "searchDemand");
-  const tourismDemand = b2bLocationComponentValue(scoreModel, "tourismDemand");
-  const booking = b2bLocationComponentValue(scoreModel, "booking");
-  const revenue = b2bLocationComponentValue(scoreModel, "revenue");
   const sourceLabel = b2bLocationCustomerSourceLabel(scoreModel);
   if (!context.available || !scoreModel) {
     return {
@@ -10221,6 +10394,10 @@ function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = n
       chips: [context.connectedLabel, context.tourismLabel].filter(Boolean)
     };
   }
+  const searchDemand = b2bLocationComponentValue(scoreModel, "searchDemand");
+  const tourismDemand = b2bLocationComponentValue(scoreModel, "tourismDemand");
+  const booking = b2bLocationComponentValue(scoreModel, "booking");
+  const revenue = b2bLocationComponentValue(scoreModel, "revenue");
   let tone = b2bLocationConclusionTone(score);
   let label = "입지 비교 가능";
   let headline = "예약·매출 표본과 입지 조건을 함께 볼 지역입니다.";
@@ -23162,7 +23339,7 @@ async function init() {
       state.runs = [];
       state.activeRunId = null;
       state.data = null;
-      await loadMemberSearchHistory();
+      await Promise.all([loadMemberSearchHistory(), loadB2BInterestLodgesFromServer()]);
       const restored = await restoreB2BActiveSearch();
       if (!restored) renderB2BEmptyPanels();
     }

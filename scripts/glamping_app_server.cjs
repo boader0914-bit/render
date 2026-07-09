@@ -44,6 +44,7 @@ const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json"
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
 const LEGACY_B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_history.json");
 const B2B_SEARCH_HISTORY_FILE = path.join(CUSTOMER_DB_DIR, "b2b_search_history.json");
+const B2B_INTEREST_LODGES_FILE = path.join(CUSTOMER_DB_DIR, "b2b_interest_lodges.json");
 const ACCOUNT_DELETE_REQUESTS_FILE = path.join(CUSTOMER_DB_DIR, "account_delete_requests.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
@@ -72,6 +73,8 @@ const B2B_MEMBER_DAILY_SEARCH_LIMIT = 2;
 const B2B_MEMBER_MAX_DAILY_SEARCH_LIMIT = 50;
 const B2B_MEMBER_ALLOWED_RANK_RANGE = "1-10";
 const B2B_MEMBER_EXPANDED_RANK_RANGE = "1-20";
+const B2B_INTEREST_LODGE_LIMIT = 2;
+const B2B_INTEREST_LODGE_SEGMENT_LIMIT = 8;
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
@@ -92,6 +95,7 @@ const RATE_LIMIT_POLICIES = {
   accountDelete: { limit: 10, windowMs: 60 * 60 * 1000 },
   b2bSearch: { limit: 12, windowMs: 5 * 60 * 1000 },
   b2bMyLodgeCollect: { limit: 10, windowMs: 10 * 60 * 1000 },
+  b2bInterestLodgeSave: { limit: 60, windowMs: 10 * 60 * 1000 },
   adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 },
   adminTourism: { limit: 30, windowMs: 10 * 60 * 1000 }
 };
@@ -1950,6 +1954,191 @@ async function writeB2BSearchHistoryStore(store) {
   return next;
 }
 
+function emptyB2BInterestLodgeStore() {
+  return {
+    schemaVersion: 1,
+    updatedAt: "",
+    accounts: {}
+  };
+}
+
+function b2bInterestLodgeOwnerKey(session = {}) {
+  const memberId = sanitizeMemberText(session.memberId, 120);
+  if (memberId) return `member:${memberId}`;
+  const username = normalizeLoginId(session.username);
+  return username ? `username:${username}` : "";
+}
+
+function sanitizeInterestLodgeNumberText(value) {
+  const numeric = Number(String(value ?? "").replace(/,/g, "").replace(/[^\d.]/g, ""));
+  return Number.isFinite(numeric) && numeric > 0 ? String(Math.round(numeric)) : "";
+}
+
+function stableB2BInterestLodgeId(lodge = {}) {
+  const existing = sanitizeMemberText(lodge.id, 120);
+  if (existing) return existing;
+  const basis = [
+    lodge.lodgingName,
+    lodge.savedAt,
+    lodge.collectedAt,
+    lodge.roomCount,
+    lodge.roomType
+  ].filter(Boolean).join("|");
+  const hash = crypto.createHash("sha256").update(String(basis || Date.now())).digest("base64url").slice(0, 18);
+  return `interest-${hash}`;
+}
+
+function sanitizeB2BInterestLodgeSegment(row = {}) {
+  return {
+    type: sanitizeMemberText(row.type || row.roomType, 80),
+    count: sanitizeInterestLodgeNumberText(row.count ?? row.roomCount),
+    weekdayPrice: sanitizeInterestLodgeNumberText(row.weekdayPrice),
+    fridayPrice: sanitizeInterestLodgeNumberText(row.fridayPrice),
+    saturdayPrice: sanitizeInterestLodgeNumberText(row.saturdayPrice),
+    sundayPrice: sanitizeInterestLodgeNumberText(row.sundayPrice)
+  };
+}
+
+function b2bInterestLodgeSegmentHasInput(row = {}) {
+  return Boolean(
+    sanitizeMemberText(row.type, 80) ||
+    sanitizeInterestLodgeNumberText(row.count) ||
+    sanitizeInterestLodgeNumberText(row.weekdayPrice) ||
+    sanitizeInterestLodgeNumberText(row.fridayPrice) ||
+    sanitizeInterestLodgeNumberText(row.saturdayPrice) ||
+    sanitizeInterestLodgeNumberText(row.sundayPrice)
+  );
+}
+
+function sanitizeB2BInterestLodge(lodge = {}) {
+  const now = new Date().toISOString();
+  const roomSegments = (Array.isArray(lodge.roomSegments) ? lodge.roomSegments : [])
+    .map((row) => sanitizeB2BInterestLodgeSegment(row))
+    .filter((row) => b2bInterestLodgeSegmentHasInput(row))
+    .slice(0, B2B_INTEREST_LODGE_SEGMENT_LIMIT);
+  const segmentTotal = roomSegments.reduce((sum, row) => sum + Number(row.count || 0), 0);
+  const firstSegment = roomSegments[0] || {};
+  const roomType = sanitizeMemberText(
+    lodge.roomType || roomSegments.map((row) => row.type).filter(Boolean).slice(0, 4).join(", "),
+    120
+  );
+  const savedAt = sanitizeMemberText(lodge.savedAt, 40) || now;
+  const registeredAt = sanitizeMemberText(lodge.registeredAt, 40) || savedAt;
+  return {
+    id: stableB2BInterestLodgeId(lodge),
+    lodgingName: sanitizeMemberText(lodge.lodgingName, 100),
+    roomCount: sanitizeInterestLodgeNumberText(lodge.roomCount) || (segmentTotal > 0 ? String(segmentTotal) : ""),
+    roomType,
+    dayUseCount: sanitizeInterestLodgeNumberText(lodge.dayUseCount),
+    weekdayPrice: sanitizeInterestLodgeNumberText(lodge.weekdayPrice) || firstSegment.weekdayPrice || "",
+    fridayPrice: sanitizeInterestLodgeNumberText(lodge.fridayPrice) || firstSegment.fridayPrice || "",
+    saturdayPrice: sanitizeInterestLodgeNumberText(lodge.saturdayPrice) || firstSegment.saturdayPrice || "",
+    sundayPrice: sanitizeInterestLodgeNumberText(lodge.sundayPrice) || firstSegment.sundayPrice || "",
+    roomSegments,
+    facilities: sanitizeMemberText(lodge.facilities, 220),
+    naverConnected: lodge.naverConnected === true,
+    otaConnected: lodge.otaConnected === true,
+    savedAt,
+    registeredAt,
+    collectedAt: sanitizeMemberText(lodge.collectedAt, 40),
+    collectionRunId: sanitizeMemberText(lodge.collectionRunId, 120),
+    collectionSource: sanitizeMemberText(lodge.collectionSource, 80),
+    collectionStatus: sanitizeMemberText(lodge.collectionStatus, 260),
+    searchRegion: sanitizeMemberText(lodge.searchRegion, 120),
+    addressRegion: sanitizeMemberText(lodge.addressRegion, 120),
+    regionBoundaryStatus: sanitizeMemberText(lodge.regionBoundaryStatus, 40),
+    regionBoundaryLabel: sanitizeMemberText(lodge.regionBoundaryLabel, 120),
+    regionBoundaryDetail: sanitizeMemberText(lodge.regionBoundaryDetail, 220),
+    outsideSearchRegion: lodge.outsideSearchRegion === true,
+    address: sanitizeMemberText(lodge.address, 220)
+  };
+}
+
+function b2bInterestLodgeHasInput(lodge = {}) {
+  return Boolean(
+    sanitizeMemberText(lodge.lodgingName, 100) ||
+    sanitizeInterestLodgeNumberText(lodge.roomCount) ||
+    sanitizeMemberText(lodge.roomType, 120) ||
+    sanitizeInterestLodgeNumberText(lodge.dayUseCount) ||
+    sanitizeInterestLodgeNumberText(lodge.weekdayPrice) ||
+    sanitizeInterestLodgeNumberText(lodge.fridayPrice) ||
+    sanitizeInterestLodgeNumberText(lodge.saturdayPrice) ||
+    sanitizeInterestLodgeNumberText(lodge.sundayPrice) ||
+    (Array.isArray(lodge.roomSegments) && lodge.roomSegments.some((row) => b2bInterestLodgeSegmentHasInput(row)))
+  );
+}
+
+async function readB2BInterestLodgeStore() {
+  try {
+    const parsed = JSON.parse((await fsp.readFile(B2B_INTEREST_LODGES_FILE, "utf8")).replace(/^\uFEFF/, ""));
+    return {
+      ...emptyB2BInterestLodgeStore(),
+      ...parsed,
+      accounts: parsed.accounts && typeof parsed.accounts === "object" ? parsed.accounts : {}
+    };
+  } catch {
+    return emptyB2BInterestLodgeStore();
+  }
+}
+
+async function writeB2BInterestLodgeStore(store = {}) {
+  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
+  const next = {
+    ...emptyB2BInterestLodgeStore(),
+    ...store,
+    updatedAt: new Date().toISOString(),
+    accounts: store.accounts && typeof store.accounts === "object" ? store.accounts : {}
+  };
+  const tempPath = `${B2B_INTEREST_LODGES_FILE}.${process.pid}.tmp`;
+  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
+  await fsp.rename(tempPath, B2B_INTEREST_LODGES_FILE);
+  return next;
+}
+
+async function publicB2BInterestLodgesForSession(session = {}) {
+  const ownerKey = b2bInterestLodgeOwnerKey(session);
+  if (!ownerKey) return { version: 2, interestLodges: [], updatedAt: "", storage: "customer_db" };
+  const store = await readB2BInterestLodgeStore();
+  const account = store.accounts[ownerKey] || {};
+  const interestLodges = (Array.isArray(account.interestLodges) ? account.interestLodges : [])
+    .map((lodge) => sanitizeB2BInterestLodge(lodge))
+    .filter((lodge) => b2bInterestLodgeHasInput(lodge))
+    .slice(0, B2B_INTEREST_LODGE_LIMIT);
+  return {
+    version: 2,
+    interestLodges,
+    updatedAt: account.updatedAt || store.updatedAt || "",
+    storage: "customer_db"
+  };
+}
+
+async function saveB2BInterestLodgesForSession(session = {}, payload = {}) {
+  const ownerKey = b2bInterestLodgeOwnerKey(session);
+  if (!ownerKey) {
+    const error = new Error("관심숙소를 저장할 계정 정보가 필요합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const store = await readB2BInterestLodgeStore();
+  const interestLodges = (Array.isArray(payload.interestLodges) ? payload.interestLodges : [])
+    .map((lodge) => sanitizeB2BInterestLodge(lodge))
+    .filter((lodge) => b2bInterestLodgeHasInput(lodge))
+    .slice(0, B2B_INTEREST_LODGE_LIMIT);
+  store.accounts = store.accounts && typeof store.accounts === "object" ? store.accounts : {};
+  store.accounts[ownerKey] = {
+    owner: {
+      memberId: sanitizeMemberText(session.memberId, 120),
+      username: normalizeLoginId(session.username),
+      accountType: normalizeB2BAccountType(session.accountType || "")
+    },
+    updatedAt: now,
+    interestLodges
+  };
+  await writeB2BInterestLodgeStore(store);
+  return publicB2BInterestLodgesForSession(session);
+}
+
 function clientIpHash(req) {
   const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   const raw = forwarded || req.socket?.remoteAddress || "";
@@ -2639,6 +2828,7 @@ async function securityHardeningOverview() {
       signupCheck: { limit: RATE_LIMIT_POLICIES.signupCheck.limit, minutes: Math.round(RATE_LIMIT_POLICIES.signupCheck.windowMs / 60000) },
       accountDelete: { limit: RATE_LIMIT_POLICIES.accountDelete.limit, minutes: Math.round(RATE_LIMIT_POLICIES.accountDelete.windowMs / 60000) },
       b2bSearch: { limit: RATE_LIMIT_POLICIES.b2bSearch.limit, minutes: Math.round(RATE_LIMIT_POLICIES.b2bSearch.windowMs / 60000) },
+      b2bInterestLodgeSave: { limit: RATE_LIMIT_POLICIES.b2bInterestLodgeSave.limit, minutes: Math.round(RATE_LIMIT_POLICIES.b2bInterestLodgeSave.windowMs / 60000) },
       adminCrawl: { limit: RATE_LIMIT_POLICIES.adminCrawl.limit, minutes: Math.round(RATE_LIMIT_POLICIES.adminCrawl.windowMs / 60000) },
       activeBucketCount: activeRateLimitBuckets
     },
@@ -2659,6 +2849,7 @@ async function securityHardeningOverview() {
         "/api/b2b-search/cancel",
         "/api/b2b-my-lodge-collect",
         "/api/member/search-history",
+        "/api/member/interest-lodges",
         "/api/member/runs/:runId"
       ],
       b2bHiddenTabs: ["dictionary", "target", "decisionQueue", "historyOps", "admin"],
@@ -2670,10 +2861,11 @@ async function securityHardeningOverview() {
       customerDbDir: relativeDataPath(CUSTOMER_DB_DIR),
       memberDb: relativeDataPath(B2B_MEMBERS_FILE),
       searchHistoryDb: relativeDataPath(B2B_SEARCH_HISTORY_FILE),
+      interestLodgeDb: relativeDataPath(B2B_INTEREST_LODGES_FILE),
       accountDeleteRequestDb: relativeDataPath(ACCOUNT_DELETE_REQUESTS_FILE),
       companyMasterDb: relativeDataPath(COMPANY_MASTER_FILE),
       locationScoreOverrideDb: relativeDataPath(LOCATION_SCORE_OVERRIDES_FILE),
-      interestLodgeStorage: "브라우저 계정 키 저장소",
+      interestLodgeStorage: "고객 DB 계정 저장 + 브라우저 임시 보관",
       apiKeyStorage: relativeDataPath(TRAFFIC_KEYS_FILE)
     },
     accountDeleteLog: {
@@ -11513,6 +11705,22 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/member/search-history") {
       const limit = Number(reqUrl.searchParams.get("limit") || 20);
       return send(res, 200, await publicB2BSearchHistoryForSession(session, limit));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/member/interest-lodges") {
+      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
+        return sendForbidden(req, res, "B2B 계정이 필요합니다.");
+      }
+      return send(res, 200, await publicB2BInterestLodgesForSession(session));
+    }
+
+    if ((req.method === "PUT" || req.method === "POST") && reqUrl.pathname === "/api/member/interest-lodges") {
+      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
+        return sendForbidden(req, res, "B2B 계정이 필요합니다.");
+      }
+      assertRequestRateLimit(req, "b2bInterestLodgeSave", RATE_LIMIT_POLICIES.b2bInterestLodgeSave, session.username || session.memberId || "");
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      return send(res, 200, await saveB2BInterestLodgesForSession(session, payload));
     }
 
     if (req.method === "GET" && reqUrl.pathname.startsWith("/api/member/runs/")) {
