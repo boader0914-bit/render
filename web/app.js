@@ -17530,6 +17530,83 @@ function adminRegionalMaintenanceBoard(regions = [], selectedRegionKey = "") {
   `;
 }
 
+function adminRegionOperationsQueuePanel(regions = [], selectedRegionKey = "") {
+  const buckets = {
+    ready: { label: "공개 후보", note: "B2B 노출 가능", tone: "good", rows: [] },
+    urgent: { label: "즉시 보강", note: "표본·수량 우선", tone: "hot", rows: [] },
+    sample: { label: "표본 보강", note: "예약·매출 추가", tone: "watch", rows: [] },
+    correction: { label: "수량/경계", note: "총량·지역권 확인", tone: "watch", rows: [] },
+    review: { label: "감수 대기", note: "관리자 판단 필요", tone: "neutral", rows: [] },
+    keep: { label: "유지 점검", note: "주간 확인", tone: "good", rows: [] }
+  };
+  const sampleKeys = new Set(["reservation_sample", "revenue_sample"]);
+  const correctionKeys = new Set(["quantity_correction", "capacity_review", "boundary_check"]);
+  regions.forEach((region) => {
+    const profile = adminRegionMaintenanceProfile(region, []);
+    const publicStatus = adminRegionPublicStatus(region);
+    const review = adminRegionEffectiveReview(region);
+    const priority = Number(profile.maintenancePriority || 0);
+    const actionKey = profile.primaryAction?.key || "";
+    const riskCount = Number(profile.coverage?.riskCount || 0);
+    let bucketKey = "keep";
+    if (publicStatus.key === "public_ready") bucketKey = "ready";
+    else if (priority >= 80) bucketKey = "urgent";
+    else if (sampleKeys.has(actionKey)) bucketKey = "sample";
+    else if (correctionKeys.has(actionKey) || riskCount) bucketKey = "correction";
+    else if (!review) bucketKey = "review";
+    buckets[bucketKey].rows.push({
+      region,
+      profile,
+      publicStatus,
+      priority,
+      actionLabel: profile.primaryAction?.label || profile.nextCycle || "주간 유지 점검"
+    });
+  });
+  const ordered = ["ready", "urgent", "sample", "correction", "review", "keep"]
+    .map((key) => ({ key, ...buckets[key] }));
+  const totalWork = ordered
+    .filter((bucket) => bucket.key !== "ready" && bucket.key !== "keep")
+    .reduce((sum, bucket) => sum + bucket.rows.length, 0);
+  return `
+    <div class="admin-region-ops-queue">
+      <div class="admin-region-ops-queue-head">
+        <div>
+          <strong>지역 운영 큐</strong>
+          <small>공개 가능 지역과 보강이 필요한 지역을 작업 성격별로 묶어 봅니다.</small>
+        </div>
+        <mark>${fmtNumber(totalWork)}개 보강</mark>
+      </div>
+      <div class="admin-region-ops-queue-grid">
+        ${ordered.map((bucket) => {
+          const rows = bucket.rows
+            .slice()
+            .sort((a, b) =>
+              Number(b.priority || 0) - Number(a.priority || 0) ||
+              String(a.region.regionLabel || "").localeCompare(String(b.region.regionLabel || ""), "ko")
+            );
+          return `
+            <article class="${escapeHtml(bucket.tone)}">
+              <div>
+                <span>${escapeHtml(bucket.label)}</span>
+                <strong>${fmtNumber(rows.length)}</strong>
+                <small>${escapeHtml(bucket.note)}</small>
+              </div>
+              <div class="admin-region-ops-queue-list">
+                ${rows.slice(0, 3).map((row) => `
+                  <button type="button" class="${selectedRegionKey && selectedRegionKey === row.region.regionKey ? "active" : ""}" data-admin-region-key="${escapeHtml(row.region.regionKey || "")}">
+                    <b>${escapeHtml(row.region.regionLabel || "지역 미확인")}</b>
+                    <small>${escapeHtml(row.actionLabel)} · 준비도 ${fmtNumber(row.profile.readinessScore || 0)}점</small>
+                  </button>
+                `).join("") || `<p>대상 지역 없음</p>`}
+              </div>
+            </article>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function adminRunRegionalOpsHtml(runOps = null) {
   if (!runOps?.summary) {
     return `
@@ -17595,6 +17672,7 @@ function adminRegionalOperationsPanel(master = {}) {
             `).join("")}
           </div>
           ${adminLocationScoreReviewQueuePanel(master)}
+          ${adminRegionOperationsQueuePanel(regions, selectedRegion?.regionKey || "")}
           ${adminRegionalMaintenanceBoard(regions, selectedRegion?.regionKey || "")}
           ${adminRegionReviewFilterBar(regions)}
           <div class="admin-region-card-grid">

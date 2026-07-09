@@ -1746,6 +1746,146 @@ a {
   gap: 10px;
 }
 
+.admin-region-ops-queue {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 15px;
+  background: linear-gradient(135deg, #f8fbff, #f6fbfa);
+  padding: 12px;
+}
+
+.admin-region-ops-queue-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.admin-region-ops-queue-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-region-ops-queue-head strong,
+.admin-region-ops-queue-grid article > div:first-child strong {
+  color: var(--ink);
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.admin-region-ops-queue-head strong {
+  font-size: 15px;
+}
+
+.admin-region-ops-queue-head small,
+.admin-region-ops-queue-grid span,
+.admin-region-ops-queue-grid small,
+.admin-region-ops-queue-list p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.admin-region-ops-queue-head mark {
+  flex: 0 0 auto;
+  border: 1px solid #bfd5ef;
+  border-radius: 999px;
+  background: #fff;
+  color: #175cd3;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.admin-region-ops-queue-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-region-ops-queue-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d5e3f7;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-region-ops-queue-grid article.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-region-ops-queue-grid article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-region-ops-queue-grid article.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-region-ops-queue-grid article > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-region-ops-queue-grid article > div:first-child strong {
+  font-size: 23px;
+}
+
+.admin-region-ops-queue-list {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.admin-region-ops-queue-list button {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e1e7ef;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .78);
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.admin-region-ops-queue-list button.active {
+  border-color: #2f80ed;
+  box-shadow: inset 0 0 0 1px rgba(47, 128, 237, .22);
+}
+
+.admin-region-ops-queue-list b {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-region-ops-queue-list small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .admin-region-review-filterbar {
   min-width: 0;
   display: grid;
@@ -4169,6 +4309,10 @@ a {
 
   .admin-regional-maintenance-board {
     grid-template-columns: 1fr;
+  }
+
+  .admin-region-ops-queue-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .admin-region-review-filterbar {
@@ -21423,6 +21567,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-regional-layout,
   .admin-regional-summary-grid,
   .admin-regional-maintenance-board,
+  .admin-region-ops-queue-grid,
   .admin-region-review-filterbar,
   .admin-region-focus-panel,
   .admin-region-review-grid,
