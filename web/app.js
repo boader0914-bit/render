@@ -17291,6 +17291,256 @@ function locationIndexValue(card, key, fallback = NaN) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function clampLocationScore(value, fallback = 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function locationComponentTone(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return "weak";
+  if (score >= 76) return "strong";
+  if (score >= 58) return "mid";
+  if (score >= 42) return "weak";
+  return "risk";
+}
+
+function locationScoreFromSearchVolume(volume = 0) {
+  const total = Number(volume);
+  if (!Number.isFinite(total) || total <= 0) return 50;
+  if (total >= 80000) return 96;
+  if (total >= 50000) return 90;
+  if (total >= 30000) return 82;
+  if (total >= 15000) return 72;
+  if (total >= 7000) return 62;
+  if (total >= 2500) return 54;
+  return 46;
+}
+
+function locationReservationSignalScore(runtime = {}) {
+  const supply = finiteNumber(runtime.sales?.supply, 0);
+  const sold = finiteNumber(runtime.sales?.sold, 0);
+  const rate = Number(runtime.rate);
+  if (!supply) return 50;
+  const rateScore = Number.isFinite(rate) ? Math.max(18, Math.min(96, rate * 115)) : 50;
+  const sampleBonus = Math.min(12, Math.log10(Math.max(1, supply)) * 9);
+  const soldBonus = sold ? Math.min(8, Math.log10(Math.max(1, sold)) * 6) : 0;
+  return clampLocationScore(rateScore + sampleBonus + soldBonus - 8, 50);
+}
+
+function locationCompetitionBalanceScore(runtime = {}) {
+  const count = finiteNumber(runtime.items?.length, 0);
+  const adRatio = Number(runtime.adRatio);
+  const platformGapRatio = count ? finiteNumber(runtime.platformGap, 0) / Math.max(1, count * 3) : 0;
+  let score = 50;
+  if (!count) score = 46;
+  else if (count <= 5) score = 60;
+  else if (count <= 12) score = 74;
+  else if (count <= 24) score = 68;
+  else if (count <= 40) score = 60;
+  else score = 52;
+  if (Number.isFinite(adRatio) && adRatio >= 0.35) score -= 8;
+  if (Number.isFinite(adRatio) && adRatio <= 0.08 && count >= 5) score += 4;
+  if (platformGapRatio >= 0.35) score -= 5;
+  return clampLocationScore(score, 50);
+}
+
+function locationRevenueMetrics(runtime = {}) {
+  const rows = runtime.items || [];
+  const values = rows
+    .map((item) => {
+      const profile = preciseRevenueProfile(item);
+      return finiteNumber(profile.totalAdjustedRevenue, 0) || finiteNumber(profile.totalRevenue, 0);
+    })
+    .filter((value) => value > 0);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  const average = values.length ? total / values.length : 0;
+  const max = values.length ? Math.max(...values) : 0;
+  const min = values.length ? Math.min(...values) : 0;
+  return { values, sampleCount: values.length, total, average, max, min };
+}
+
+function locationRevenueSampleScore(runtime = {}) {
+  const metrics = locationRevenueMetrics(runtime);
+  if (!metrics.sampleCount) return 50;
+  const sampleScore = Math.min(28, metrics.sampleCount * 7);
+  const averageScore = Math.min(36, Math.log10(Math.max(1, metrics.average / 100000)) * 20);
+  return clampLocationScore(38 + sampleScore + averageScore, 50);
+}
+
+function locationSeasonalityScore() {
+  const trend = demandTrendSource();
+  const stats = demandTrendStats(trend);
+  if (!trend?.hasSeries || !stats?.last) return { score: 50, note: "12개월 검색 추세 대기" };
+  const last = finiteNumber(stats.last.index, 0);
+  const avg = finiteNumber(stats.average, 0) || 50;
+  const direction = finiteNumber(stats.recentChangeRate, NaN);
+  let score = 50 + Math.max(-18, Math.min(24, (last - avg) * 0.45));
+  if (Number.isFinite(direction)) score += Math.max(-12, Math.min(12, direction * 80));
+  const note = Number.isFinite(direction)
+    ? `최근 추세 ${formatSignedRate(direction)}`
+    : "트렌드 방향 보정";
+  return { score: clampLocationScore(score, 50), note };
+}
+
+function locationDataConfidenceScore({ runtime = {}, tourismMatch = {}, revenueMetrics = null } = {}) {
+  const items = finiteNumber(runtime.items?.length, 0);
+  const supply = finiteNumber(runtime.sales?.supply, 0);
+  const revenueSample = finiteNumber((revenueMetrics || locationRevenueMetrics(runtime)).sampleCount, 0);
+  const hasSearchVolume = finiteNumber(runtime.searchVolume, 0) > 0;
+  let score = 42;
+  score += Math.min(18, items * 2);
+  score += Math.min(18, Math.log10(Math.max(1, supply)) * 10);
+  score += Math.min(18, revenueSample * 6);
+  score += hasSearchVolume ? 8 : 0;
+  score += tourismMatch?.matched ? 8 : tourismMatch?.region ? 4 : -4;
+  if (tourismMatch?.region?.codeStatus) score -= 12;
+  return clampLocationScore(score, 44);
+}
+
+function locationManualAdjustment(card = {}) {
+  const delta = Number(card.locationScoreAdjustment ?? card.adminLocationScoreDelta ?? card.manualScoreDelta);
+  const override = Number(card.locationScoreOverride ?? card.adminLocationScore);
+  return {
+    hasAdjustment: Number.isFinite(delta) || Number.isFinite(override),
+    delta: Number.isFinite(delta) ? delta : 0,
+    override: Number.isFinite(override) ? override : null,
+    note: card.locationScoreNote || card.adminLocationScoreNote || ""
+  };
+}
+
+function adjustedLocationScoreModel(card = {}, runtime = {}, tourismMatch = {}) {
+  const dictionaryScore = clampLocationScore(weightedLocationScore(card), 58);
+  const tourismIndex = locationIndexValue(card, "tourism", 50);
+  const dayUse = locationIndexValue(card, "dayUse", 50);
+  const operation = locationIndexValue(card, "operation", 50);
+  const expansionRisk = locationIndexValue(card, "expansionRisk", 50);
+  const stayFit = clampLocationScore(
+    tourismIndex * 0.38 +
+    operation * 0.24 +
+    dayUse * 0.16 +
+    (100 - expansionRisk) * 0.22,
+    dictionaryScore
+  );
+  const tourismCodeScore = tourismMatch?.region
+    ? (tourismMatch.region.codeStatus ? Math.max(48, tourismMatch.confidence - 18) : tourismMatch.confidence)
+    : 45;
+  const tourismDemand = clampLocationScore(tourismIndex * 0.68 + tourismCodeScore * 0.32, tourismIndex);
+  const searchDemand = locationScoreFromSearchVolume(runtime.searchVolume);
+  const competitionBalance = locationCompetitionBalanceScore(runtime);
+  const bookingSignal = locationReservationSignalScore(runtime);
+  const revenueMetrics = locationRevenueMetrics(runtime);
+  const revenueSample = locationRevenueSampleScore(runtime);
+  const seasonality = locationSeasonalityScore();
+  const dataConfidence = locationDataConfidenceScore({ runtime, tourismMatch, revenueMetrics });
+  const manual = locationManualAdjustment(card);
+  const components = [
+    { key: "dictionary", label: "입지사전 원점수", value: dictionaryScore, weight: 0.12, note: "지역카드 8개 지표의 기본 가중치" },
+    { key: "tourismDemand", label: "관광 수요 강도", value: tourismDemand, weight: 0.14, note: tourismMatch?.region ? "관광공사 지역코드 매칭 반영" : "관광공사 매칭 대기" },
+    { key: "stayFit", label: "숙박 적합도", value: stayFit, weight: 0.14, note: "관광·운영·데이유즈·확장위험 보정" },
+    { key: "searchDemand", label: "검색 수요", value: searchDemand, weight: 0.12, note: runtime.searchVolume ? `${fmtNumber(runtime.searchVolume)}회 검색량` : "검색량 표본 대기" },
+    { key: "competition", label: "경쟁 균형", value: competitionBalance, weight: 0.10, note: runtime.items?.length ? `${fmtNumber(runtime.items.length)}곳 노출 표본` : "경쟁 표본 대기" },
+    { key: "booking", label: "예약 전환 신호", value: bookingSignal, weight: 0.14, note: runtime.sales?.supply ? `${fmtNumber(runtime.sales.sold)}/${fmtNumber(runtime.sales.supply)}실 판매` : "예약 표본 대기" },
+    { key: "revenue", label: "매출 표본", value: revenueSample, weight: 0.10, note: revenueMetrics.sampleCount ? `${fmtNumber(revenueMetrics.sampleCount)}곳 · 평균 ${fmtWon(revenueMetrics.average)}` : "가격·수량 표본 대기" },
+    { key: "seasonality", label: "계절성", value: seasonality.score, weight: 0.07, note: seasonality.note },
+    { key: "confidence", label: "데이터 신뢰도", value: dataConfidence, weight: 0.07, note: tourismMatch?.region?.codeStatus ? "지역코드 검증 전 감점" : "표본·매칭·검색량 기준" }
+  ].map((component) => ({
+    ...component,
+    value: clampLocationScore(component.value, 50),
+    tone: locationComponentTone(component.value)
+  }));
+  const weightTotal = components.reduce((sum, component) => sum + component.weight, 0);
+  const rawScore = components.reduce((sum, component) => sum + component.value * component.weight, 0) / Math.max(0.01, weightTotal);
+  const confidenceAdjustment = Math.max(-6, Math.min(6, (dataConfidence - 60) * 0.12));
+  const scoreBeforeManual = clampLocationScore(rawScore + confidenceAdjustment, dictionaryScore);
+  const score = manual.override !== null
+    ? clampLocationScore(manual.override, scoreBeforeManual)
+    : clampLocationScore(scoreBeforeManual + manual.delta, scoreBeforeManual);
+  const drivers = components.slice().sort((a, b) => b.value - a.value).slice(0, 3);
+  const risks = components.filter((component) => component.value < 55).sort((a, b) => a.value - b.value).slice(0, 3);
+  const tone = score >= 78 ? "strong" : score >= 62 ? "watch" : "caution";
+  const headline = score >= 82
+    ? "강한 체류형 입지"
+    : score >= 70
+      ? "검증 가능한 성장 입지"
+      : score >= 58
+        ? "보정 확인형 입지"
+        : "관리자 재검토 입지";
+  const summary = risks.length
+    ? `${drivers.map((item) => item.label).join(" · ")}가 점수를 끌어올렸고, ${risks.map((item) => item.label).join(" · ")}는 확인이 필요합니다.`
+    : `${drivers.map((item) => item.label).join(" · ")}가 안정적으로 받쳐주는 입지입니다.`;
+  return {
+    score,
+    scoreBeforeManual,
+    rawScore: clampLocationScore(rawScore, score),
+    confidence: dataConfidence,
+    confidenceAdjustment,
+    manual,
+    components,
+    drivers,
+    risks,
+    revenueMetrics,
+    headline,
+    summary,
+    tone
+  };
+}
+
+function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tourismRegions = []) {
+  const cardModels = cards.map((card) => {
+    const alias = dictionaryAliasForCard(card);
+    const tourismMatch = tourismRegionForLocation({ card, alias, query: card.searchKeyword });
+    return adjustedLocationScoreModel(card, locationRuntimeStats(card, alias), tourismMatch);
+  });
+  const groupBase = clampLocationScore(regionGroupScore(group, cards), finiteNumber(group.marketSignal, 58));
+  const averageScore = cardModels.length
+    ? cardModels.reduce((sum, model) => sum + model.score, 0) / cardModels.length
+    : groupBase;
+  const runtimeScore = runtime.items?.length
+    ? reportMarketScore({
+        rate: runtime.rate,
+        targetCount: runtime.targets?.length || 0,
+        itemCount: runtime.items.length,
+        platformGapRatio: runtime.items.length ? runtime.platformGap / (runtime.items.length * 3) : 0,
+        searchVolume: runtime.searchVolume
+      })
+    : 0;
+  const codeScore = tourismRegions.length
+    ? Math.max(45, 82 - tourismRegions.filter((region) => region.codeStatus).length * 6)
+    : 48;
+  const confidence = locationDataConfidenceScore({ runtime, tourismMatch: { matched: tourismRegions.length > 0, region: tourismRegions[0] || null } });
+  const score = clampLocationScore(averageScore * 0.55 + groupBase * 0.2 + (runtimeScore || averageScore) * 0.17 + codeScore * 0.08 + Math.max(-4, Math.min(5, (confidence - 60) * 0.08)), groupBase);
+  const componentBuckets = new Map();
+  cardModels.forEach((model) => {
+    model.components.forEach((component) => {
+      const bucket = componentBuckets.get(component.key) || { ...component, value: 0, count: 0 };
+      bucket.value += component.value;
+      bucket.count += 1;
+      componentBuckets.set(component.key, bucket);
+    });
+  });
+  const components = [...componentBuckets.values()].map((bucket) => ({
+    ...bucket,
+    value: clampLocationScore(bucket.count ? bucket.value / bucket.count : bucket.value, 50),
+    note: `${fmtNumber(bucket.count)}개 지역카드 평균`
+  }));
+  const drivers = components.slice().sort((a, b) => b.value - a.value).slice(0, 3);
+  const risks = components.filter((component) => component.value < 55).sort((a, b) => a.value - b.value).slice(0, 3);
+  return {
+    score,
+    confidence,
+    components,
+    drivers,
+    risks,
+    headline: score >= 78 ? "권역 확장 우선 입지" : score >= 64 ? "선별 확장 입지" : "보강 검토 권역",
+    summary: drivers.length
+      ? `${drivers.map((item) => item.label).join(" · ")}가 권역 점수를 지탱합니다.`
+      : "연결 지역카드와 실제 수집 표본을 더 쌓아야 합니다.",
+    tone: score >= 76 ? "strong" : score >= 62 ? "watch" : "caution"
+  };
+}
+
 function locationRuntimeScope(card = {}, alias = null) {
   const allItems = state.data?.availability?.items || [];
   const regions = state.data?.regions || [];
@@ -17348,39 +17598,6 @@ function locationRuntimeStats(card = {}, alias = null) {
   };
 }
 
-function locationDecision(card = {}, clusters = [], runtime = {}) {
-  const baseScore = weightedLocationScore(card);
-  const tourism = locationIndexValue(card, "tourism", 0);
-  const dayUse = locationIndexValue(card, "dayUse", 0);
-  const operation = locationIndexValue(card, "operation", 0);
-  const expansionRisk = locationIndexValue(card, "expansionRisk", 0);
-  const runtimeScore = runtime.items?.length
-    ? reportMarketScore({
-        rate: runtime.rate,
-        targetCount: runtime.targets?.length || 0,
-        itemCount: runtime.items.length,
-        platformGapRatio: runtime.items.length ? runtime.platformGap / (runtime.items.length * 3) : 0,
-        searchVolume: runtime.searchVolume
-      })
-    : 0;
-  const confidence = Number.isFinite(baseScore)
-    ? Math.round(baseScore * (runtimeScore ? 0.68 : 1) + runtimeScore * (runtimeScore ? 0.32 : 0))
-    : runtimeScore || NaN;
-  const headline = clusters.length
-    ? clusters.map((cluster) => cluster.name).slice(0, 2).join(" + ")
-    : "입지판정 확인";
-  const chips = [];
-  chips.push(tourism >= 70 ? "숙박 중심" : "근교/당일 검증");
-  chips.push(dayUse >= 65 ? "데이유즈 강화" : "데이유즈 보조");
-  chips.push(expansionRisk >= 55 ? "확장 신중" : "확장 여지");
-  if (operation < 50) chips.push("운영 총량 검증");
-  const summary = tourism >= 70
-    ? "목적 방문 수요는 강하지만 실제 객실 총량과 운영 가능 규모를 먼저 확인해야 합니다."
-    : "생활권 수요와 상품 구성의 반응을 실제 판매율로 확인해야 합니다.";
-  const tone = expansionRisk >= 60 || operation < 45 ? "caution" : tourism >= 70 ? "strong" : "watch";
-  return { confidence, headline, chips, summary, tone };
-}
-
 function locationEvidenceRows(card = {}) {
   const rows = [
     ["tourism", "관광", "목적 방문 강도"],
@@ -17396,21 +17613,85 @@ function locationEvidenceRows(card = {}) {
   });
 }
 
-function renderLocationDecisionPanel(card, clusters, runtime) {
-  const decision = locationDecision(card, clusters, runtime);
+function locationDecision(card = {}, clusters = [], runtime = {}, scoreModel = null, tourismMatch = null) {
+  const model = scoreModel || adjustedLocationScoreModel(card, runtime, tourismMatch || {});
+  const tourism = locationIndexValue(card, "tourism", 0);
+  const dayUse = locationIndexValue(card, "dayUse", 0);
+  const operation = locationIndexValue(card, "operation", 0);
+  const expansionRisk = locationIndexValue(card, "expansionRisk", 0);
+  const headline = clusters.length
+    ? clusters.map((cluster) => cluster.name).slice(0, 2).join(" + ")
+    : model.headline;
+  const chips = [];
+  model.drivers.slice(0, 2).forEach((component) => chips.push(`${component.label} ${fmtNumber(component.value)}`));
+  chips.push(tourism >= 70 ? "숙박 중심" : "근교/당일 검증");
+  chips.push(dayUse >= 65 ? "데이유즈 강화" : "데이유즈 보조");
+  chips.push(expansionRisk >= 55 ? "확장 신중" : "확장 여지");
+  if (operation < 50) chips.push("운영 총량 검증");
+  const summary = tourism >= 70
+    ? `${model.summary} 목적 방문 수요는 강하지만 실제 객실 총량과 운영 가능 규모를 함께 봅니다.`
+    : `${model.summary} 생활권 수요와 상품 구성이 실제 판매로 이어지는지 확인합니다.`;
+  const tone = expansionRisk >= 60 || operation < 45 ? "caution" : model.tone;
+  return { confidence: model.score, headline, chips, summary, tone };
+}
+
+function renderLocationDecisionPanel(card, clusters, runtime, scoreModel = null, tourismMatch = null) {
+  const decision = locationDecision(card, clusters, runtime, scoreModel, tourismMatch);
   return `
     <section class="location-decision ${decision.tone}">
       <div class="location-decision-score">
-        <span>확신도</span>
+        <span>입지점수</span>
         <strong>${Number.isFinite(decision.confidence) ? fmtNumber(decision.confidence) : "확인"}</strong>
       </div>
       <div class="location-decision-copy">
-        <p class="eyebrow">최종 입지판정</p>
+        <p class="eyebrow">보정 입지판정</p>
         <h4>${escapeHtml(decision.headline)}</h4>
         <p>${escapeHtml(decision.summary)}</p>
         <div class="location-action-chips">
           ${decision.chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
         </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderLocationScoreModel(scoreModel = null) {
+  if (!scoreModel) return "";
+  const confidenceTone = locationComponentTone(scoreModel.confidence);
+  return `
+    <section class="location-block location-score-model">
+      <div class="location-block-head">
+        <h4>입지 보정 모델</h4>
+        <span>관광·검색·예약·매출·신뢰도 기준</span>
+      </div>
+      <div class="location-score-model-head">
+        <div>
+          <span>보정 전</span>
+          <strong>${fmtNumber(scoreModel.rawScore)}</strong>
+          <small>사전·실수집 가중 평균</small>
+        </div>
+        <div class="${escapeHtml(confidenceTone)}">
+          <span>데이터 신뢰도</span>
+          <strong>${fmtNumber(scoreModel.confidence)}</strong>
+          <small>${scoreModel.confidenceAdjustment >= 0 ? "+" : ""}${fmtNumber(scoreModel.confidenceAdjustment)}점 보정</small>
+        </div>
+        <div class="${scoreModel.manual.hasAdjustment ? "strong" : "weak"}">
+          <span>관리자 보정</span>
+          <strong>${scoreModel.manual.hasAdjustment ? "적용" : "없음"}</strong>
+          <small>${escapeHtml(scoreModel.manual.note || (scoreModel.manual.hasAdjustment ? "수동 보정 반영" : "자동 보정 기준"))}</small>
+        </div>
+      </div>
+      <div class="location-score-component-grid">
+        ${scoreModel.components.map((component) => `
+          <article class="${escapeHtml(component.tone)}">
+            <div>
+              <strong>${escapeHtml(component.label)}</strong>
+              <em>${fmtNumber(component.value)}</em>
+            </div>
+            <i><b style="width:${Math.max(0, Math.min(100, component.value))}%"></b></i>
+            <span>${escapeHtml(component.note)}</span>
+          </article>
+        `).join("")}
       </div>
     </section>
   `;
@@ -17634,7 +17915,8 @@ function locationGroupCardRows(cards = []) {
   return cards.map((card) => {
     const alias = dictionaryAliasForCard(card);
     const runtime = locationRuntimeStats(card, alias);
-    const score = weightedLocationScore(card);
+    const tourismMatch = tourismRegionForLocation({ card, alias, query: card.searchKeyword });
+    const score = adjustedLocationScoreModel(card, runtime, tourismMatch).score;
     const clusters = locationClusterCodes(card).map(locationClusterMeta);
     const targetScore = Math.min(22, (runtime.targets?.length || 0) * 4);
     const gapScore = runtime.items?.length ? Math.min(14, (runtime.platformGap / Math.max(1, runtime.items.length * 3)) * 18) : 0;
@@ -17727,7 +18009,7 @@ function renderLocationGroupActionPlan(group = {}, runtime = {}) {
 
 function renderLocationGroupDictionary(group) {
   const cards = locationGroupCards(group);
-  const score = regionGroupScore(group, cards);
+  let score = regionGroupScore(group, cards);
   const indexes = averageLocationIndexes(cards);
   const topIndexes = indexes
     .slice()
@@ -17747,11 +18029,15 @@ function renderLocationGroupDictionary(group) {
   const rankedCards = cards
     .slice()
     .sort((a, b) => {
-      const aScore = weightedLocationScore(a);
-      const bScore = weightedLocationScore(b);
+      const aAlias = dictionaryAliasForCard(a);
+      const bAlias = dictionaryAliasForCard(b);
+      const aScore = adjustedLocationScoreModel(a, locationRuntimeStats(a, aAlias), tourismRegionForLocation({ card: a, alias: aAlias, query: a.searchKeyword })).score;
+      const bScore = adjustedLocationScoreModel(b, locationRuntimeStats(b, bAlias), tourismRegionForLocation({ card: b, alias: bAlias, query: b.searchKeyword })).score;
       return (Number.isFinite(bScore) ? bScore : 0) - (Number.isFinite(aScore) ? aScore : 0);
     });
   const runtime = locationGroupRuntimeStats(group, cards);
+  const groupScoreModel = regionGroupLocationScoreModel(group, cards, runtime, tourismRegions);
+  score = groupScoreModel.score;
   const regionRows = locationGroupCardRows(cards);
 
   if (els.dictionarySearchStatus) {
@@ -17790,6 +18076,7 @@ function renderLocationGroupDictionary(group) {
       </div>
 
       ${renderLocationGroupDecision(group, cards, clusters, runtime, score)}
+      ${renderLocationScoreModel(groupScoreModel)}
       ${renderLocationReality(runtime)}
       ${renderLocationGroupComparison(regionRows)}
       ${renderLocationGroupPriority(regionRows)}
@@ -17846,7 +18133,8 @@ function renderLocationGroupDictionary(group) {
         </div>
         <div class="region-card-grid">
           ${rankedCards.length ? rankedCards.map((card) => {
-            const cardScore = weightedLocationScore(card);
+            const cardAlias = dictionaryAliasForCard(card);
+            const cardScore = adjustedLocationScoreModel(card, locationRuntimeStats(card, cardAlias), tourismRegionForLocation({ card, alias: cardAlias, query: card.searchKeyword })).score;
             const clustersForCard = locationClusterCodes(card).map(locationClusterMeta).map((cluster) => cluster.name).join(" + ");
             return `
               <button class="region-mini-card" type="button" data-location-query="${escapeHtml(card.searchKeyword)}">
@@ -17907,8 +18195,9 @@ function renderLocationDictionary(match = null) {
   const tourismMatch = tourismRegionForLocation({ card, alias, query: card.searchKeyword });
   const clusters = locationClusterCodes(card).map(locationClusterMeta);
   const indexes = Object.values(card.indexes || {});
-  const score = weightedLocationScore(card);
   const runtime = locationRuntimeStats(card, alias);
+  const scoreModel = adjustedLocationScoreModel(card, runtime, tourismMatch);
+  const score = scoreModel.score;
   const topIndexes = indexes
     .slice()
     .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
@@ -17950,7 +18239,8 @@ function renderLocationDictionary(match = null) {
         `).join("")}
       </div>
 
-      ${renderLocationDecisionPanel(card, clusters, runtime)}
+      ${renderLocationDecisionPanel(card, clusters, runtime, scoreModel, tourismMatch)}
+      ${renderLocationScoreModel(scoreModel)}
       ${renderLocationEvidence(card)}
       ${renderLocationReality(runtime)}
       ${renderLocationTargetPreview(runtime)}
