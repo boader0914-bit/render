@@ -1907,6 +1907,10 @@ a {
   background: #fff8f8;
 }
 
+.admin-db-audit-list article.active {
+  box-shadow: 0 0 0 3px rgba(47, 128, 237, .16);
+}
+
 .admin-db-audit-title {
   min-width: 0;
   display: flex;
@@ -2020,6 +2024,183 @@ a {
 
 .admin-db-audit-actions button {
   flex: 1 1 110px;
+  min-height: 34px;
+  border: 1px solid #a7d8d1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f766e;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-audit-detail {
+  min-width: 0;
+  display: grid;
+  gap: 11px;
+  border: 1px solid #cfe4df;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f6fbfa, #ffffff);
+  padding: 12px;
+}
+
+.admin-db-audit-detail-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.admin-db-audit-detail-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-audit-detail-head span,
+.admin-db-audit-detail-head small,
+.admin-db-audit-detail-grid span,
+.admin-db-audit-detail-grid small,
+.admin-db-audit-queue span,
+.admin-db-audit-queue small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 830;
+  line-height: 1.42;
+}
+
+.admin-db-audit-detail-head strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-audit-detail-head mark {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  padding: 8px 11px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-audit-detail-head mark.good {
+  border-color: #a7d8d1;
+  background: #f0fbf8;
+  color: #0f766e;
+}
+
+.admin-db-audit-detail-head mark.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.admin-db-audit-detail-head mark.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+  color: #b42318;
+}
+
+.admin-db-audit-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-audit-detail-grid article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-db-audit-detail-grid strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.14;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-audit-queue {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-db-audit-queue article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-db-audit-queue article.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-db-audit-queue article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-db-audit-queue article.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-db-audit-queue strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-audit-task-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-db-audit-task-tags em {
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #fff;
+  color: #344054;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.admin-db-audit-company-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.admin-db-audit-company-actions button {
   min-height: 34px;
   border: 1px solid #a7d8d1;
   border-radius: 10px;
@@ -23324,6 +23505,8 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-metrics,
   .admin-db-audit-list,
   .admin-db-audit-stats,
+  .admin-db-audit-detail-grid,
+  .admin-db-audit-queue article,
   .admin-db-toolbar,
   .admin-db-work-summary,
   .admin-db-work-list,
@@ -23437,18 +23620,25 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .admin-db-audit-head,
-  .admin-db-audit-title {
+  .admin-db-audit-title,
+  .admin-db-audit-detail-head {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .admin-db-audit-head mark,
-  .admin-db-audit-title b {
+  .admin-db-audit-title b,
+  .admin-db-audit-detail-head mark {
     align-self: flex-start;
   }
 
-  .admin-db-audit-actions button {
+  .admin-db-audit-actions button,
+  .admin-db-audit-company-actions button {
     width: 100%;
+  }
+
+  .admin-db-audit-company-actions {
+    justify-content: flex-start;
   }
 
   .admin-db-province summary,

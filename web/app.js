@@ -49,6 +49,7 @@ const state = {
     feature: "all"
   },
   adminDbSelectedCompanyId: "",
+  adminDbAuditRegionKey: "",
   crawlEtaByKey: {},
   crawlEstimateTimer: null,
   crawlEstimateRequestId: 0,
@@ -16446,12 +16447,95 @@ function adminDbAuditRegions(rows = []) {
   );
 }
 
+function adminDbAuditCompanyTasks(row = {}) {
+  const metrics = row.metrics || {};
+  const tasks = [];
+  if (metrics.collection?.key === "confirm_needed") tasks.push("확인 수집");
+  if (metrics.lowConfidence || metrics.confidenceScore <= 2) tasks.push("수량 신뢰 보강");
+  if (!metrics.revenue) tasks.push("매출 표본 보강");
+  if (!metrics.channels?.count) tasks.push("OTA 채널 확인");
+  if (!metrics.adminReview && !row.company?.adminReview) tasks.push("관리자 검수");
+  if (metrics.stockVariance) tasks.push("총량 변동 확인");
+  if (metrics.workType?.key === "manual" || metrics.adminReview?.status === "manual_needed") tasks.push("보정값 입력");
+  return [...new Set(tasks.length ? tasks : ["유지 관리"])];
+}
+
+function adminDbAuditDetailPanel(region = null) {
+  if (!region) return "";
+  const rows = (region.rows || [])
+    .filter((row) => {
+      const metrics = row.metrics || {};
+      return metrics.collection?.key === "confirm_needed"
+        || metrics.lowConfidence
+        || metrics.confidenceScore <= 2
+        || !metrics.revenue
+        || !metrics.channels?.count
+        || !metrics.adminReview
+        || metrics.stockVariance;
+    })
+    .sort((a, b) => adminDbWorkPriority(b) - adminDbWorkPriority(a) || (a.metrics.rank || 9999) - (b.metrics.rank || 9999));
+  const stats = region.stats || adminDbAuditStats(region.rows || []);
+  const queueRows = rows.slice(0, 8);
+  return `
+    <div class="admin-db-audit-detail" data-admin-db-audit-detail="${escapeHtml(region.key || "")}">
+      <div class="admin-db-audit-detail-head">
+        <div>
+          <span>선택 지역 감수 큐</span>
+          <strong>${escapeHtml(region.provinceLabel || "미분류")} · ${escapeHtml(region.regionLabel || "지역 미확인")}</strong>
+          <small>점수가 낮은 원인을 업체 단위로 풀어서 확인합니다. 확인 수집과 상세 수정을 여기서 바로 시작합니다.</small>
+        </div>
+        <mark class="${escapeHtml(stats.tone || "watch")}">${fmtNumber(stats.score)}점 · ${escapeHtml(stats.nextAction || "확인")}</mark>
+      </div>
+      <div class="admin-db-audit-detail-grid">
+        ${[
+          ["확인 수집", `${fmtNumber(stats.confirmNeeded)}곳`, "신뢰도 보강 대상"],
+          ["낮은 신뢰", `${fmtNumber(stats.lowConfidence)}곳`, "총량·상품 구조 확인"],
+          ["매출 표본", `${fmtNumber(stats.revenueRows)}/${fmtNumber(stats.total)}`, "가격·판매 수량 연결"],
+          ["관리자 검수", `${fmtNumber(stats.unreviewed)}곳`, "판정값 저장 대기"]
+        ].map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-audit-queue">
+        ${queueRows.length ? queueRows.map((row) => {
+          const company = row.company || {};
+          const metrics = row.metrics || {};
+          const tasks = adminDbAuditCompanyTasks(row);
+          return `
+            <article class="${escapeHtml(metrics.collection?.tone || metrics.workType?.tone || "watch")}">
+              <div>
+                <span>${escapeHtml([metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", metrics.category?.label, metrics.collection?.label].filter(Boolean).join(" · "))}</span>
+                <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+                <small>${escapeHtml(adminDbWorkReason(row))}</small>
+              </div>
+              <div class="admin-db-audit-task-tags">
+                ${tasks.map((task) => `<em>${escapeHtml(task)}</em>`).join("")}
+              </div>
+              <div class="admin-db-audit-company-actions">
+                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_region_audit_queue">확인 수집</button>
+                <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
+              </div>
+            </article>
+          `;
+        }).join("") : `<p class="admin-db-more">이 지역은 현재 우선 감수할 업체가 없습니다.</p>`}
+      </div>
+      ${rows.length > queueRows.length ? `<p class="admin-db-more">상위 ${fmtNumber(queueRows.length)}개만 먼저 표시합니다. 지역 보기로 전체 업체를 확인할 수 있습니다.</p>` : ""}
+    </div>
+  `;
+}
+
 function adminDbAuditBoard(rows = []) {
   const regions = adminDbAuditRegions(rows);
   const priority = regions.filter((region) => region.stats.score < 85 || region.stats.confirmNeeded || region.stats.lowConfidence || region.stats.unreviewed);
   const shown = (priority.length ? priority : regions).slice(0, 8);
   if (!shown.length) return "";
   const overall = adminDbAuditStats(rows);
+  const selectedRegion = regions.find((region) => region.key === state.adminDbAuditRegionKey) || shown[0] || regions[0] || null;
+  if (selectedRegion) state.adminDbAuditRegionKey = selectedRegion.key;
   return `
     <section class="admin-db-audit-panel">
       <div class="admin-db-audit-head">
@@ -16465,8 +16549,9 @@ function adminDbAuditBoard(rows = []) {
       <div class="admin-db-audit-list">
         ${shown.map((region) => {
           const stats = region.stats;
+          const active = selectedRegion && selectedRegion.key === region.key;
           return `
-            <article class="${escapeHtml(stats.tone)}">
+            <article class="${escapeHtml(stats.tone)} ${active ? "active" : ""}">
               <div class="admin-db-audit-title">
                 <div>
                   <span>${escapeHtml(region.provinceLabel)}</span>
@@ -16492,6 +16577,7 @@ function adminDbAuditBoard(rows = []) {
                 `).join("")}
               </div>
               <div class="admin-db-audit-actions">
+                <button type="button" data-admin-db-audit-select="${escapeHtml(region.key)}">감수 큐</button>
                 <button type="button" data-admin-db-region-link data-admin-db-province-key="${escapeHtml(region.provinceKey)}" data-admin-db-region-key="${escapeHtml(region.key)}">지역 보기</button>
                 <button type="button" data-admin-db-region-confirm data-admin-db-province-key="${escapeHtml(region.provinceKey)}" data-admin-db-region-key="${escapeHtml(region.key)}">확인 수집만</button>
               </div>
@@ -16499,6 +16585,7 @@ function adminDbAuditBoard(rows = []) {
           `;
         }).join("")}
       </div>
+      ${adminDbAuditDetailPanel(selectedRegion)}
     </section>
   `;
 }
@@ -26216,11 +26303,21 @@ function bindEvents() {
       });
       return;
     }
+    const adminDbAuditSelect = event.target.closest("[data-admin-db-audit-select]");
+    if (adminDbAuditSelect) {
+      state.adminDbAuditRegionKey = adminDbAuditSelect.dataset.adminDbAuditSelect || "";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-db-audit-detail")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      return;
+    }
     const adminDbRegionLink = event.target.closest("[data-admin-db-region-link], [data-admin-db-region-confirm]");
     if (adminDbRegionLink) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.province = adminDbRegionLink.dataset.adminDbProvinceKey || "all";
       state.adminDbFilters.region = adminDbRegionLink.dataset.adminDbRegionKey || "all";
+      state.adminDbAuditRegionKey = state.adminDbFilters.region;
       if (adminDbRegionLink.matches("[data-admin-db-region-confirm]")) {
         state.adminDbFilters.source = "confirm_needed";
         state.adminDbFilters.status = "needs_work";
