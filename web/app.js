@@ -6863,7 +6863,7 @@ function salesGateRevenueEvidenceHtml(entry = {}) {
     <div class="target-gate-recrawl">
       <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="sales_gate">수집 설정 적용</button>
       <small>${escapeHtml(`${plan.keyword || activeKeyword()} · ${plan.regionScope ? `지역 ${plan.regionScope} · ` : ""}${plan.keywordSource || "업체 기준"} · ${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"} · 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)}`)}</small>
-      ${recrawlRangePresetHtml({ companyId: company.companyId || "", selectedRange: plan.range || "1-20" })}
+      ${recrawlRangePresetHtml({ companyId: company.companyId || "", selectedRange: plan.range || "1-20", source: "sales_gate" })}
     </div>
   `;
 }
@@ -14940,7 +14940,7 @@ function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange =
       <span>범위 선택</span>
       ${presets.map((range) => {
         const attrs = companyId
-          ? `data-queue-recrawl-company="${escapeHtml(companyId)}" data-queue-recrawl-range="${escapeHtml(range)}"`
+          ? `data-queue-recrawl-company="${escapeHtml(companyId)}" data-queue-recrawl-range="${escapeHtml(range)}"${source ? ` data-queue-recrawl-source="${escapeHtml(source)}"` : ""}`
           : `data-recrawl-batch-key="${escapeHtml(batchKey)}" data-recrawl-batch-range="${escapeHtml(range)}"${source ? ` data-recrawl-batch-source="${escapeHtml(source)}"` : ""}`;
         return `<button type="button" class="${range === selectedRange ? "active" : ""}" ${attrs}>${escapeHtml(range)}위</button>`;
       }).join("")}
@@ -16500,6 +16500,88 @@ function adminDbConfirmCollectRows(rows = []) {
     .sort((a, b) => adminDbWorkPriority(b) - adminDbWorkPriority(a) || (a.metrics.rank || 9999) - (b.metrics.rank || 9999));
 }
 
+function adminDbConfirmCollectFocus(row = {}) {
+  const metrics = row.metrics || {};
+  const company = row.company || {};
+  const workKey = metrics.workType?.key || "";
+  const decision = companyDecisionQueueProfile(company);
+  const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
+  const focus = [];
+  if (metrics.lowConfidence || metrics.confidenceScore <= 2 || criteria.has("quantity") || criteria.has("capacity")) focus.push("객실 총량·상품 수량");
+  if (metrics.stockVariance) focus.push("날짜별 총량 변동");
+  if (!metrics.revenue || workKey === "missingRevenue" || criteria.has("revenue")) focus.push("요일별 가격·매출 표본");
+  if (!Number.isFinite(metrics.rate) || workKey === "missingReservation") focus.push("네이버 예약율 표본");
+  if (!metrics.channels?.count || criteria.has("ota")) focus.push("OTA·채널 노출");
+  if (metrics.adminReview?.status === "manual_needed") focus.push("관리자 보정값 확인");
+  return [...new Set(focus.length ? focus : ["기본 표본 재확인"])];
+}
+
+function adminDbConfirmCollectionPlan(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const decision = companyDecisionQueueProfile(company);
+  const profile = companyNeedsCorrection(company);
+  const plan = companyQueueRecrawlPlan(company, profile, decision);
+  const eta = crawlEtaForPlan(plan);
+  const dateText = plan.dateText || [plan.checkIn, plan.checkOut].filter(Boolean).join("~") || dateRangeLabel(state.data?.run || {});
+  const focus = adminDbConfirmCollectFocus(row);
+  return {
+    decision,
+    profile,
+    plan,
+    eta,
+    dateText,
+    focus,
+    tone: metrics.collection?.tone || metrics.workType?.tone || "watch"
+  };
+}
+
+function adminDbConfirmPlanLine(row = {}) {
+  const { plan, eta, dateText } = adminDbConfirmCollectionPlan(row);
+  return `기준 ${plan.keyword || activeKeyword()} · 상세 ${plan.range || "1-20"}위 · ${dateText || "최근 수집 기간"} · 예상 ${crawlEtaShortText(eta)}`;
+}
+
+function adminDbConfirmCollectPlanHtml(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const workKey = metrics.workType?.key || "";
+  const shouldShow = metrics.collection?.needsConfirm || ["manual", "recrawl", "missingRevenue", "missingReservation"].includes(workKey);
+  if (!shouldShow || !company.companyId) return "";
+  const { plan, eta, dateText, focus, tone } = adminDbConfirmCollectionPlan(row);
+  const cards = [
+    ["기준 키워드", plan.keyword || activeKeyword(), plan.keywordSource || "업체 기준"],
+    ["검색 범위", `${plan.range || "1-20"}위`, plan.regionScope ? `지역 ${plan.regionScope}` : "검색어 기준"],
+    ["수집 기간", dateText || "최근 수집 기간", `${plan.checkIn || "체크인"}~${plan.checkOut || "체크아웃"}`],
+    ["예상 시간", crawlEtaShortText(eta), crawlEtaSourceText(eta)]
+  ];
+  return `
+    <div class="admin-db-confirm-plan ${escapeHtml(tone)}">
+      <div class="admin-db-confirm-head">
+        <div>
+          <span>관리자 확인 수집</span>
+          <strong>수집 조건을 먼저 고정합니다</strong>
+          <small>신뢰도가 낮은 업체는 같은 기간·지정 범위로 다시 수집한 뒤 수량·가격·예약율 근거를 보강합니다.</small>
+        </div>
+        <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_confirm_collect">수집 설정 적용</button>
+      </div>
+      <div class="admin-db-confirm-grid">
+        ${cards.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value || "확인 필요")}</strong>
+            <small>${escapeHtml(note || "관리자 확인")}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-confirm-focus">
+        <span>확인 포인트</span>
+        <div>${focus.map((item) => `<em>${escapeHtml(item)}</em>`).join("")}</div>
+      </div>
+      ${recrawlRangePresetHtml({ companyId: company.companyId || "", selectedRange: plan.range || "1-20", source: "admin_confirm_collect" })}
+    </div>
+  `;
+}
+
 function adminDbCollectionPanel(rows = []) {
   const confirmRows = adminDbConfirmCollectRows(rows);
   const countByKey = (key) => rows.filter((row) => row.metrics?.collection?.key === key).length;
@@ -16538,6 +16620,7 @@ function adminDbCollectionPanel(rows = []) {
                 <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
                 <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", collection.note].filter(Boolean).join(" · "))}</small>
                 <p>${escapeHtml(collection.detail || adminDbWorkReason(row))}</p>
+                <span class="admin-db-collect-planline">${escapeHtml(adminDbConfirmPlanLine(row))}</span>
               </div>
               <div>
                 ${adminDbCollectionChip(collection)}
@@ -16605,6 +16688,7 @@ function adminDbSelectedDetailPanel(rows = []) {
       <div class="admin-db-selected-issues">
         ${issues.slice(0, 8).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
       </div>
+      ${adminDbConfirmCollectPlanHtml(row)}
       <div class="admin-db-selected-actions">
         <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
         <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>

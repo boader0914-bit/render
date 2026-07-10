@@ -2328,6 +2328,124 @@ a {
   white-space: nowrap;
 }
 
+.admin-db-confirm-plan {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 15px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+  padding: 12px;
+}
+
+.admin-db-confirm-plan.hot {
+  border-color: #fecaca;
+  background: linear-gradient(180deg, #fff8f8, #ffffff);
+}
+
+.admin-db-confirm-plan.watch {
+  border-color: #fedf89;
+  background: linear-gradient(180deg, #fffbeb, #ffffff);
+}
+
+.admin-db-confirm-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-confirm-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-confirm-head span,
+.admin-db-confirm-head small,
+.admin-db-confirm-grid span,
+.admin-db-confirm-grid small,
+.admin-db-confirm-focus span,
+.admin-db-collect-planline {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 830;
+  line-height: 1.42;
+}
+
+.admin-db-confirm-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-confirm-head button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border: 1px solid #a7d8d1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f766e;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-confirm-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-confirm-grid article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-db-confirm-grid strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-confirm-focus {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-db-confirm-focus > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-db-confirm-focus em {
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #fff;
+  color: #344054;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.admin-db-collect-planline {
+  display: block;
+}
+
 .admin-db-selected-layout {
   display: grid;
   grid-template-columns: minmax(260px, .45fr) minmax(0, 1fr);
@@ -22840,6 +22958,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-work-list,
   .admin-db-collect-metrics,
   .admin-db-collect-list article,
+  .admin-db-confirm-grid,
   .admin-db-selected-grid,
   .admin-db-selected-layout,
   .admin-db-company,
@@ -22949,6 +23068,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-work-head,
   .admin-db-work-title,
   .admin-db-collect-head,
+  .admin-db-confirm-head,
   .admin-db-selected-head {
     align-items: flex-start;
     flex-direction: column;
@@ -22959,6 +23079,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-work-head mark,
   .admin-db-work-title span,
   .admin-db-collect-head button,
+  .admin-db-confirm-head button,
   .admin-db-selected-head mark {
     align-self: flex-start;
   }
@@ -22969,6 +23090,7 @@ body.role-b2b .structure-action-list li::before {
 
   .admin-db-company-action button,
   .admin-db-work-actions button,
+  .admin-db-confirm-head button,
   .admin-db-selected-actions button {
     width: 100%;
   }
