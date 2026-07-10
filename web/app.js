@@ -50,6 +50,7 @@ const state = {
     ota: "all",
     feature: "all"
   },
+  adminDbViewMode: "region",
   adminDbSelectedCompanyId: "",
   adminDbOpsOpen: false,
   adminDbCorrectionFlash: null,
@@ -16638,6 +16639,29 @@ function adminDbMetricCard(label, value, note, tone = "") {
   `;
 }
 
+function adminDbViewMode() {
+  return ["region", "list", "review"].includes(state.adminDbViewMode) ? state.adminDbViewMode : "region";
+}
+
+function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], grouped = []) {
+  const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
+  const buttons = [
+    ["region", "지역 구조", `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`],
+    ["list", "업체 리스트", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
+    ["review", "검수 보드", "상세 수정 · 확인 수집"]
+  ];
+  return `
+    <div class="admin-db-view-switch" role="tablist" aria-label="전체 DB 보기 방식">
+      ${buttons.map(([value, label, note]) => `
+        <button type="button" class="${mode === value ? "active" : ""}" data-admin-db-view="${escapeHtml(value)}" role="tab" aria-selected="${mode === value ? "true" : "false"}">
+          <span>${escapeHtml(label)}</span>
+          <small>${escapeHtml(note)}</small>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function adminDbAuditStats(rows = []) {
   const total = rows.length;
   const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
@@ -17700,6 +17724,37 @@ function adminDbProvinceGroup(province = {}, index = 0, context = {}) {
   `;
 }
 
+function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
+  const limit = filters.query ? 120 : 80;
+  const shown = rows.slice(0, limit);
+  const hidden = Math.max(0, rows.length - shown.length);
+  const scopeText = [
+    filters.province !== "all" ? "광역 선택" : "",
+    filters.region !== "all" ? "지역 선택" : "",
+    filters.category !== "all" ? "카테고리 선택" : "",
+    filters.status !== "all" ? "관리 상태 선택" : "",
+    filters.confidence !== "all" ? "신뢰도 선택" : "",
+    filters.ota !== "all" ? "채널 선택" : "",
+    filters.feature !== "all" ? "시설 선택" : ""
+  ].filter(Boolean).join(" · ") || "전체 조건";
+  return `
+    <section class="admin-db-flat-list">
+      <div class="admin-db-flat-head">
+        <div>
+          <span>업체 가나다 리스트</span>
+          <strong>검색과 필터 결과를 바로 수정 가능한 목록으로 봅니다</strong>
+          <small>${escapeHtml(scopeText)} · ${fmtNumber(rows.length)}/${fmtNumber(allRows.length)}개 업체</small>
+        </div>
+        <mark>${escapeHtml(filters.sort === "name" ? "가나다순" : "선택 정렬")}</mark>
+      </div>
+      <div class="admin-db-company-list flat">
+        ${shown.length ? shown.map(adminDbCompanyRow).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
+      </div>
+      ${hidden ? `<p class="admin-db-more">먼저 ${fmtNumber(shown.length)}개를 표시합니다. 업체명이나 지역 필터로 더 좁히면 나머지도 바로 확인할 수 있습니다.</p>` : ""}
+    </section>
+  `;
+}
+
 function adminDbMasterSummary(filteredRows = [], rows = [], grouped = []) {
   const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
   return `
@@ -17743,6 +17798,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const hierarchyContext = {
     forceOpen: shouldOpenHierarchy
   };
+  const viewMode = (filters.query || "").trim() ? "list" : adminDbViewMode();
   const metricSummaryHtml = `
     <div class="admin-db-metrics">
       ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "마스터 DB 기준", "good")}
@@ -17752,6 +17808,20 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
     </div>
   `;
+  const supportPanelsHtml = `
+    ${metricSummaryHtml}
+    ${adminDbAuditBoard(filteredRows)}
+    ${adminDbWorkPanel(filteredRows)}
+    ${adminDbCollectionPanel(filteredRows)}
+    ${adminDbSelectedDetailPanel(filteredRows)}
+  `;
+  const mainViewHtml = viewMode === "review"
+    ? `<section class="admin-db-review-surface">${supportPanelsHtml}</section>`
+    : viewMode === "list"
+      ? adminDbFlatListPanel(filteredRows, rows, filters)
+      : `<div class="admin-db-hierarchy">
+          ${grouped.length ? grouped.map((province, provinceIndex) => adminDbProvinceGroup(province, provinceIndex, hierarchyContext)).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
+        </div>`;
   els.adminDatabaseDashboard.innerHTML = `
     <section class="admin-db-board" id="adminDatabaseBoard">
       <div class="admin-db-hero">
@@ -17844,23 +17914,20 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         </label>
         <button class="admin-db-filter-reset" type="button" data-admin-db-clear>필터 초기화</button>
       </div>
-      <div class="admin-db-hierarchy">
-        ${grouped.length ? grouped.map((province, provinceIndex) => adminDbProvinceGroup(province, provinceIndex, hierarchyContext)).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
-      </div>
-      <details class="admin-db-ops-drawer" ${state.adminDbOpsOpen ? "open" : ""}>
-        <summary data-admin-db-ops-summary>
-          <div>
-            <strong>검수·확인 수집 보조자료</strong>
-            <small>신뢰도, 확인 수집, 상세 수정은 필요할 때만 펼쳐서 봅니다.</small>
-          </div>
-          <span>펼치기</span>
-        </summary>
-        ${metricSummaryHtml}
-        ${adminDbAuditBoard(filteredRows)}
-        ${adminDbWorkPanel(filteredRows)}
-        ${adminDbCollectionPanel(filteredRows)}
-        ${adminDbSelectedDetailPanel(filteredRows)}
-      </details>
+      ${adminDbViewSwitchHtml(viewMode, filteredRows, rows, grouped)}
+      ${mainViewHtml}
+      ${viewMode !== "review" ? `
+        <details class="admin-db-ops-drawer" ${state.adminDbOpsOpen ? "open" : ""}>
+          <summary data-admin-db-ops-summary>
+            <div>
+              <strong>검수·확인 수집 보조자료</strong>
+              <small>신뢰도, 확인 수집, 상세 수정은 필요할 때만 펼쳐서 봅니다.</small>
+            </div>
+            <span>펼치기</span>
+          </summary>
+          ${supportPanelsHtml}
+        </details>
+      ` : ""}
     </section>
   `;
 }
@@ -26815,6 +26882,7 @@ function bindEvents() {
       const adminDbStatus = (section.items || []).find((item) => item.adminDbStatus)?.adminDbStatus || "";
       if (adminDbStatus) {
         state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatus };
+        state.adminDbViewMode = "list";
         state.adminDbOpsOpen = true;
       }
       activateAdminMobileNav(sectionKey, section.target, section.anchor || "", section.adminPanelSection || "");
@@ -26825,6 +26893,7 @@ function bindEvents() {
       const adminDbStatus = adminMobileTab.dataset.adminDbStatusKey || "";
       if (adminDbStatus) {
         state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatus };
+        state.adminDbViewMode = "list";
         state.adminDbOpsOpen = true;
       }
       activateAdminMobileNav(
@@ -26853,10 +26922,20 @@ function bindEvents() {
         ota: "all",
         feature: "all"
       };
+      state.adminDbViewMode = "region";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
+      return;
+    }
+    const adminDbView = event.target.closest("[data-admin-db-view]");
+    if (adminDbView) {
+      const mode = adminDbView.dataset.adminDbView || "region";
+      state.adminDbViewMode = ["region", "list", "review"].includes(mode) ? mode : "region";
+      state.adminDbOpsOpen = state.adminDbViewMode === "review";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-view].active")?.focus());
       return;
     }
     const adminDbOpsSummary = event.target.closest("[data-admin-db-ops-summary]");
@@ -26869,6 +26948,7 @@ function bindEvents() {
     if (adminDbSourceLink) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.source = adminDbSourceLink.dataset.adminDbSourceLink || "all";
+      state.adminDbViewMode = "list";
       state.adminDbOpsOpen = true;
       setActiveTab("admin");
       setAdminPanelSection("database");
@@ -26881,6 +26961,7 @@ function bindEvents() {
     const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
     if (adminDbCompanySelect) {
       state.adminDbSelectedCompanyId = adminDbCompanySelect.dataset.adminDbCompanySelect || "";
+      state.adminDbViewMode = "review";
       state.adminDbOpsOpen = true;
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
@@ -26904,9 +26985,11 @@ function bindEvents() {
       state.adminDbFilters.province = adminDbRegionLink.dataset.adminDbProvinceKey || "all";
       state.adminDbFilters.region = adminDbRegionLink.dataset.adminDbRegionKey || "all";
       state.adminDbAuditRegionKey = state.adminDbFilters.region;
+      state.adminDbViewMode = "region";
       if (adminDbRegionLink.matches("[data-admin-db-region-confirm]")) {
         state.adminDbFilters.source = "confirm_needed";
         state.adminDbFilters.status = "needs_work";
+        state.adminDbViewMode = "list";
       }
       setActiveTab("admin");
       setAdminPanelSection("database");
@@ -27237,6 +27320,7 @@ function bindEvents() {
       }
       if (adminDbStatusLink) {
         state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatusLink };
+        state.adminDbViewMode = "list";
         state.adminDbOpsOpen = true;
       }
       setActiveTab(targetTab);
@@ -27291,6 +27375,7 @@ function bindEvents() {
     if (adminDbQuery) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.query = adminDbQuery.value || "";
+      state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
       const selectionStart = adminDbQuery.selectionStart;
       const selectionEnd = adminDbQuery.selectionEnd;
       renderAdminConsoleDashboard();
@@ -27369,6 +27454,7 @@ function bindEvents() {
     if (adminDbCategory) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.category = adminDbCategory.value || "all";
+      state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-category]")?.focus());
       return;
@@ -27377,6 +27463,7 @@ function bindEvents() {
     if (adminDbSort) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.sort = adminDbSort.value || "name";
+      state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-sort]")?.focus());
       return;
@@ -27385,6 +27472,7 @@ function bindEvents() {
     if (adminDbStatus) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.status = adminDbStatus.value || "all";
+      state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-status]")?.focus());
       return;
@@ -27393,6 +27481,7 @@ function bindEvents() {
     if (adminDbConfidence) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.confidence = adminDbConfidence.value || "all";
+      state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-confidence]")?.focus());
       return;
@@ -27401,6 +27490,7 @@ function bindEvents() {
     if (adminDbSource) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.source = adminDbSource.value || "all";
+      state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-source]")?.focus());
       return;
@@ -27409,6 +27499,7 @@ function bindEvents() {
     if (adminDbOta) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.ota = adminDbOta.value || "all";
+      state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-ota]")?.focus());
       return;
@@ -27417,6 +27508,7 @@ function bindEvents() {
     if (adminDbFeature) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.feature = adminDbFeature.value || "all";
+      state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-feature]")?.focus());
       return;
