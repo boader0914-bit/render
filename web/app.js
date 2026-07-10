@@ -43,7 +43,9 @@ const state = {
     province: "all",
     region: "all",
     sort: "name",
+    category: "all",
     status: "all",
+    confidence: "all",
     source: "all",
     ota: "all",
     feature: "all"
@@ -16013,7 +16015,9 @@ function adminDbFilters() {
     province: "all",
     region: "all",
     sort: "name",
+    category: "all",
     status: "all",
+    confidence: "all",
     source: "all",
     ota: "all",
     feature: "all"
@@ -16327,6 +16331,59 @@ function adminDbRegionOptions(rows = [], provinceKey = "all") {
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "ko-KR"));
 }
 
+function adminDbCategoryOptions(rows = []) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const category = row.metrics?.category || {};
+    const key = category.key || "unknown";
+    const current = map.get(key) || { key, label: category.label || "카테고리 미확인", count: 0 };
+    current.count += 1;
+    map.set(key, current);
+  });
+  return Array.from(map.values()).sort((a, b) => String(a.label || "").localeCompare(String(b.label || ""), "ko-KR"));
+}
+
+function adminDbConfidenceMatches(row = {}, confidence = "all") {
+  if (!confidence || confidence === "all") return true;
+  const metrics = row.metrics || {};
+  const grade = String(metrics.confidenceGrade || "").toUpperCase();
+  const score = Number(metrics.confidenceScore);
+  const lowConfidence = Boolean(metrics.lowConfidence || (Number.isFinite(score) && score <= 2) || ["D", "E"].includes(grade));
+  if (confidence === "low") return lowConfidence;
+  if (confidence === "corrected") return Boolean(metrics.manualCorrection);
+  if (confidence === "pending") return !grade || grade === "대기";
+  if (/^[A-E]$/.test(confidence)) return grade === confidence;
+  return true;
+}
+
+function adminDbConfidenceOptions(rows = []) {
+  const gradeCount = (grade) => rows.filter((row) => adminDbConfidenceMatches(row, grade)).length;
+  const options = [
+    ["all", "전체 신뢰도", rows.length],
+    ["low", "낮은 신뢰도", rows.filter((row) => adminDbConfidenceMatches(row, "low")).length],
+    ["corrected", "관리자 보정", rows.filter((row) => adminDbConfidenceMatches(row, "corrected")).length],
+    ["pending", "신뢰도 대기", rows.filter((row) => adminDbConfidenceMatches(row, "pending")).length]
+  ];
+  ["A", "B", "C", "D", "E"].forEach((grade) => {
+    const count = gradeCount(grade);
+    if (count) options.push([grade, `${grade} 등급`, count]);
+  });
+  return options;
+}
+
+function adminDbLatestTime(row = {}) {
+  const company = row.company || {};
+  const latest = row.metrics?.latest || company.inventory?.latest || {};
+  const raw = latest.collectedAt
+    || latest.updatedAt
+    || company.updatedAt
+    || company.lastCollectedAt
+    || company.lastRunAt
+    || "";
+  const time = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
 function adminDbStatusMatches(row = {}, status = "all") {
   if (!status || status === "all") return true;
   const company = row.company || {};
@@ -16395,9 +16452,13 @@ function adminDbFilterState(master = {}) {
   const filters = adminDbFilters();
   const rows = adminDbRows(master);
   const provinceOptions = adminDbProvinceOptions(rows);
+  const categoryOptions = adminDbCategoryOptions(rows);
   const statusOptions = adminDbStatusOptions(rows);
+  const confidenceOptions = adminDbConfidenceOptions(rows);
   const sourceOptions = adminDbSourceOptions(rows);
+  if (filters.category !== "all" && !categoryOptions.some((option) => option.key === filters.category)) filters.category = "all";
   if (filters.status !== "all" && !statusOptions.some(([value]) => value === filters.status)) filters.status = "all";
+  if (filters.confidence !== "all" && !confidenceOptions.some(([value]) => value === filters.confidence)) filters.confidence = "all";
   if (filters.source !== "all" && !sourceOptions.some(([value]) => value === filters.source)) filters.source = "all";
   if (filters.province !== "all" && !provinceOptions.some((option) => option.key === filters.province)) filters.province = "all";
   const regionOptions = adminDbRegionOptions(rows, filters.province);
@@ -16406,7 +16467,9 @@ function adminDbFilterState(master = {}) {
   const filteredRows = rows.filter((row) => {
     if (filters.province !== "all" && row.provinceKey !== filters.province) return false;
     if (filters.region !== "all" && row.regionKey !== filters.region) return false;
+    if (filters.category && filters.category !== "all" && row.metrics?.category?.key !== filters.category) return false;
     if (filters.status && filters.status !== "all" && !adminDbStatusMatches(row, filters.status)) return false;
+    if (filters.confidence && filters.confidence !== "all" && !adminDbConfidenceMatches(row, filters.confidence)) return false;
     if (filters.source && filters.source !== "all" && !adminDbSourceMatches(row, filters.source)) return false;
     if (filters.ota && filters.ota !== "all") {
       if (filters.ota === "ota_missing") {
@@ -16424,12 +16487,15 @@ function adminDbFilterState(master = {}) {
     if (filters.sort === "name") return nameCompare || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "revenue_desc") return b.metrics.revenue - a.metrics.revenue || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "revenue_asc") return a.metrics.revenue - b.metrics.revenue || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
+    if (filters.sort === "rate_desc") return (Number.isFinite(b.metrics.rate) ? b.metrics.rate : -1) - (Number.isFinite(a.metrics.rate) ? a.metrics.rate : -1) || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
+    if (filters.sort === "rate_asc") return (Number.isFinite(a.metrics.rate) ? a.metrics.rate : 9999) - (Number.isFinite(b.metrics.rate) ? b.metrics.rate : 9999) || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "rooms_desc") return b.metrics.roomTotal - a.metrics.roomTotal || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "rooms_asc") return a.metrics.roomTotal - b.metrics.roomTotal || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "confidence_low") return a.metrics.confidenceScore - b.metrics.confidenceScore || b.metrics.priority - a.metrics.priority;
+    if (filters.sort === "latest_desc") return adminDbLatestTime(b) - adminDbLatestTime(a) || nameCompare;
     return (a.metrics.rank || 9999) - (b.metrics.rank || 9999) || b.metrics.revenue - a.metrics.revenue;
   });
-  return { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions, sourceOptions };
+  return { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions };
 }
 
 function adminDbGroupedRows(rows = []) {
@@ -17404,7 +17470,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">전체 DB 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
   }
-  const { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions, sourceOptions } = adminDbFilterState(master);
+  const { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = adminDbFilterState(master);
   const grouped = adminDbGroupedRows(filteredRows);
   const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
@@ -17417,7 +17483,9 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     filters.query
     || filters.province !== "all"
     || filters.region !== "all"
+    || filters.category !== "all"
     || filters.status !== "all"
+    || filters.confidence !== "all"
     || filters.source !== "all"
     || filters.ota !== "all"
     || filters.feature !== "all"
@@ -17459,6 +17527,10 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           <select data-admin-db-region>${adminDbSelectOptions(regionOptions, filters.region, "전체 지역")}</select>
         </label>
         <label>
+          <span>카테고리</span>
+          <select data-admin-db-category>${adminDbSelectOptions(categoryOptions, filters.category, "전체 카테고리")}</select>
+        </label>
+        <label>
           <span>정렬</span>
           <select data-admin-db-sort>
             ${[
@@ -17466,9 +17538,12 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
               ["rank", "노출순"],
               ["revenue_desc", "매출 높은순"],
               ["revenue_asc", "매출 낮은순"],
+              ["rate_desc", "예약율 높은순"],
+              ["rate_asc", "예약율 낮은순"],
               ["rooms_desc", "객실수 많은순"],
               ["rooms_asc", "객실수 적은순"],
-              ["confidence_low", "낮은 신뢰도순"]
+              ["confidence_low", "낮은 신뢰도순"],
+              ["latest_desc", "최근 수집일순"]
             ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
         </label>
@@ -17476,6 +17551,12 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           <span>관리 상태</span>
           <select data-admin-db-status>
             ${statusOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.status === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="admin-db-filter-wide">
+          <span>신뢰도</span>
+          <select data-admin-db-confidence>
+            ${confidenceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.confidence === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
           </select>
         </label>
         <label class="admin-db-filter-wide">
@@ -26483,7 +26564,9 @@ function bindEvents() {
         province: "all",
         region: "all",
         sort: "name",
+        category: "all",
         status: "all",
+        confidence: "all",
         source: "all",
         ota: "all",
         feature: "all"
@@ -26982,6 +27065,14 @@ function bindEvents() {
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-region]")?.focus());
       return;
     }
+    const adminDbCategory = event.target.closest("[data-admin-db-category]");
+    if (adminDbCategory) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.category = adminDbCategory.value || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-category]")?.focus());
+      return;
+    }
     const adminDbSort = event.target.closest("[data-admin-db-sort]");
     if (adminDbSort) {
       state.adminDbFilters = state.adminDbFilters || {};
@@ -26996,6 +27087,14 @@ function bindEvents() {
       state.adminDbFilters.status = adminDbStatus.value || "all";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-status]")?.focus());
+      return;
+    }
+    const adminDbConfidence = event.target.closest("[data-admin-db-confidence]");
+    if (adminDbConfidence) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.confidence = adminDbConfidence.value || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-confidence]")?.focus());
       return;
     }
     const adminDbSource = event.target.closest("[data-admin-db-source]");
