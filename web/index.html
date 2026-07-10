@@ -197,13 +197,18 @@
         </div>
 
         <nav class="admin-section-nav" aria-label="관리 탭 구분">
-          <button class="active" type="button" data-admin-section="overview">운영 현황</button>
+          <button class="active" type="button" data-admin-section="database">전체 DB</button>
+          <button type="button" data-admin-section="overview">운영 현황</button>
           <button type="button" data-admin-section="collect">수집 실행</button>
           <button type="button" data-admin-section="members">회원·삭제요청</button>
           <button type="button" data-admin-section="files">API·파일</button>
         </nav>
 
-        <section class="admin-section-panel active" data-admin-section-panel="overview" aria-label="운영 현황">
+        <section class="admin-section-panel active" data-admin-section-panel="database" aria-label="전체 DB">
+          <section class="admin-console-dashboard" id="adminDatabaseDashboard" aria-label="관리자 전체 DB"></section>
+        </section>
+
+        <section class="admin-section-panel" data-admin-section-panel="overview" aria-label="운영 현황">
           <section class="admin-console-dashboard" id="adminConsoleDashboard" aria-label="관리자 운영 콘솔"></section>
         </section>
 

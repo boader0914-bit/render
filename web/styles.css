@@ -1472,7 +1472,7 @@ a {
   width: min(960px, 100%);
   margin: 0 auto 14px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 7px;
   padding: 7px;
   border: 1px solid rgba(207, 219, 233, .9);
@@ -1682,6 +1682,338 @@ a {
   font-weight: 950;
   text-decoration: none;
   white-space: nowrap;
+}
+
+.admin-db-board {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-db-hero,
+.admin-db-toolbar,
+.admin-db-province,
+.admin-db-region,
+.admin-db-company {
+  min-width: 0;
+  border: 1px solid #dbe7f3;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  border-color: #b8d9d3;
+  background: linear-gradient(135deg, #f7fbff 0%, #f4fbf8 100%);
+  padding: 18px;
+}
+
+.admin-db-hero > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.admin-db-hero span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-hero h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-hero p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.admin-db-hero > strong {
+  flex: 0 0 auto;
+  border: 1px solid #c8e1dc;
+  border-radius: 999px;
+  background: #fff;
+  color: #0f766e;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-db-metrics article {
+  min-width: 0;
+  border: 1px solid #e1e7ef;
+  border-radius: 16px;
+  background: #fff;
+  padding: 14px;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-metrics span,
+.admin-db-metrics small,
+.admin-db-toolbar span,
+.admin-db-province summary small,
+.admin-db-region summary small,
+.admin-db-company small,
+.admin-db-more {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.4;
+}
+
+.admin-db-metrics strong {
+  display: block;
+  margin: 5px 0;
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-metrics article.good strong {
+  color: #12805c;
+}
+
+.admin-db-metrics article.watch strong {
+  color: #175cd3;
+}
+
+.admin-db-metrics article.hot strong {
+  color: #b42318;
+}
+
+.admin-db-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(5, minmax(130px, .8fr)) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+}
+
+.admin-db-toolbar label {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.admin-db-toolbar input,
+.admin-db-toolbar select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #d8e1ec;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: var(--ink);
+  padding: 0 11px;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.admin-db-toolbar button {
+  min-height: 40px;
+  border: 1px solid #cdd9e8;
+  border-radius: 12px;
+  background: #f3f7fc;
+  color: #344054;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-hierarchy,
+.admin-db-region-list,
+.admin-db-company-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-db-province,
+.admin-db-region {
+  overflow: hidden;
+}
+
+.admin-db-province summary,
+.admin-db-region summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  list-style: none;
+}
+
+.admin-db-province summary::-webkit-details-marker,
+.admin-db-region summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-province summary > div,
+.admin-db-region summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-province summary strong,
+.admin-db-region summary strong,
+.admin-db-company-main strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-province summary > span,
+.admin-db-region summary > span {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f1f7ff;
+  color: #175cd3;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-region-list {
+  padding: 0 12px 12px;
+}
+
+.admin-db-company-list {
+  padding: 0 12px 12px;
+}
+
+.admin-db-company {
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(360px, 1.45fr) minmax(220px, .9fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  box-shadow: none;
+}
+
+.admin-db-company.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-db-company.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-db-company.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-db-company-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-company-values {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.admin-db-company-values span {
+  min-width: 0;
+  border: 1px solid #edf2f7;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .82);
+  padding: 7px;
+}
+
+.admin-db-company-values b {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-company-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.admin-db-company-tags em {
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #fff;
+  color: #344054;
+  padding: 5px 7px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.admin-db-company-tags em.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+  color: #087443;
+}
+
+.admin-db-company-tags em.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.admin-db-company-tags em.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+  color: #b42318;
+}
+
+.admin-db-company-action button {
+  min-height: 36px;
+  border: 1px solid #a7d8d1;
+  border-radius: 10px;
+  background: #f6fbfa;
+  color: #0f766e;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-more {
+  margin: 0;
+  border: 1px dashed #d8e1ec;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 10px;
 }
 
 .admin-regional-ops-panel {
@@ -21944,6 +22276,10 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .company-master-metrics,
+  .admin-db-metrics,
+  .admin-db-toolbar,
+  .admin-db-company,
+  .admin-db-company-values,
   .admin-kpi-grid,
   .admin-console-layout,
   .admin-regional-layout,
@@ -22032,6 +22368,27 @@ body.role-b2b .structure-action-list li::before {
   .admin-console-hero > small {
     max-width: 100%;
     justify-self: start;
+  }
+
+  .admin-db-hero {
+    display: grid;
+    align-items: start;
+  }
+
+  .admin-db-hero > strong {
+    justify-self: start;
+    white-space: normal;
+  }
+
+  .admin-db-province summary,
+  .admin-db-region summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-db-province summary > span,
+  .admin-db-region summary > span {
+    align-self: flex-start;
   }
 
   .admin-region-card-head {
@@ -23426,7 +23783,7 @@ body.role-b2b .structure-action-list li::before {
 
   body.role-admin .admin-section-nav {
     position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
     margin: 0 0 12px;
     padding: 6px;

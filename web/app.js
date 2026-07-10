@@ -13,7 +13,7 @@ const state = {
   activeTab: "report",
   adminMobileSection: "analysis",
   adminMobileAnchor: "",
-  adminPanelSection: "overview",
+  adminPanelSection: "database",
   selectedItem: null,
   selectedSheetTab: "booking",
   mapData: null,
@@ -38,6 +38,14 @@ const state = {
   adminRegionCompanyFilter: "priority",
   adminRegionCompanyQuery: "",
   adminRegionCompanySort: "priority",
+  adminDbFilters: {
+    query: "",
+    province: "all",
+    region: "all",
+    sort: "rank",
+    ota: "all",
+    feature: "all"
+  },
   crawlEtaByKey: {},
   crawlEstimateTimer: null,
   crawlEstimateRequestId: 0,
@@ -190,6 +198,7 @@ const ADMIN_MOBILE_SECTIONS = {
     label: "분석",
     target: "report",
     items: [
+      { label: "전체DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard" },
       { label: "요약", tab: "report" },
       { label: "순위", tab: "rank" },
       { label: "지도", tab: "map" },
@@ -230,6 +239,7 @@ const ADMIN_MOBILE_SECTIONS = {
   }
 };
 const ADMIN_PANEL_SECTIONS = {
+  database: "전체 DB",
   overview: "운영 현황",
   collect: "수집 실행",
   members: "회원·삭제요청",
@@ -281,6 +291,7 @@ const els = {
   historyOpsState: document.getElementById("historyOpsState"),
   historyOpsDashboard: document.getElementById("historyOpsDashboard"),
   adminStatus: document.getElementById("adminStatus"),
+  adminDatabaseDashboard: document.getElementById("adminDatabaseDashboard"),
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
   adminMemberRequestDashboard: document.getElementById("adminMemberRequestDashboard"),
   b2bSearchPanel: document.getElementById("b2bSearchPanel"),
@@ -881,8 +892,8 @@ function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSec
   scrollAdminMobileAnchor(state.adminMobileAnchor);
 }
 
-function setAdminPanelSection(sectionKey = "overview", options = {}) {
-  if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
+function setAdminPanelSection(sectionKey = "database", options = {}) {
+  if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "database";
   state.adminPanelSection = sectionKey;
   if (isAdminRole() && state.activeTab === "admin") {
     if (sectionKey === "collect") state.adminMobileSection = "collect";
@@ -900,7 +911,7 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
 
 function syncAdminSectionPanels() {
   const isAdmin = isAdminRole();
-  const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "overview";
+  const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "database";
   state.adminPanelSection = current;
   document.querySelectorAll("[data-admin-section]").forEach((button) => {
     button.hidden = !isAdmin;
@@ -15921,6 +15932,497 @@ function adminConsoleMasterSource() {
   return { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
 }
 
+function adminDbFilters() {
+  const defaults = {
+    query: "",
+    province: "all",
+    region: "all",
+    sort: "rank",
+    ota: "all",
+    feature: "all"
+  };
+  state.adminDbFilters = { ...defaults, ...(state.adminDbFilters || {}) };
+  return state.adminDbFilters;
+}
+
+function adminDbFlattenText(value, depth = 0) {
+  if (value === null || value === undefined || depth > 4) return "";
+  if (Array.isArray(value)) return value.slice(0, 80).map((entry) => adminDbFlattenText(entry, depth + 1)).join(" ");
+  if (typeof value === "object") return Object.values(value).slice(0, 80).map((entry) => adminDbFlattenText(entry, depth + 1)).join(" ");
+  return String(value);
+}
+
+function adminDbFirstFinite(values = [], fallback = 0) {
+  for (const value of values) {
+    const number = optionalNumber(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return fallback;
+}
+
+function adminDbFallbackRegionLabels(company = {}) {
+  const raw = [
+    ...(company.regions || []),
+    ...(company.addresses || [])
+  ].find(Boolean) || "";
+  const parts = String(raw).trim().split(/\s+/).filter(Boolean);
+  const provinceLabel = parts[0] || "미분류";
+  const localityLabel = parts[1] || parts[0] || "지역 미확인";
+  return {
+    provinceLabel,
+    localityLabel,
+    regionLabel: localityLabel,
+    provinceKey: companyKey(provinceLabel) || "unknown",
+    regionKey: `${companyKey(provinceLabel) || "unknown"}:${companyKey(localityLabel) || "unknown"}`
+  };
+}
+
+function adminDbClassifyCompany(company = {}, regions = []) {
+  const matched = regions.find((region) => adminRegionCompanyMatches(region, company));
+  if (matched) {
+    const provinceLabel = matched.provinceLabel || matched.regionLabel || "미분류";
+    const localityLabel = matched.localityLabel || matched.regionLabel || provinceLabel;
+    return {
+      provinceLabel,
+      localityLabel,
+      regionLabel: matched.regionLabel || localityLabel,
+      provinceKey: matched.provinceKey || companyKey(provinceLabel) || "unknown",
+      regionKey: matched.regionKey || `${companyKey(provinceLabel) || "unknown"}:${companyKey(localityLabel) || "unknown"}`,
+      region: matched
+    };
+  }
+  return { ...adminDbFallbackRegionLabels(company), region: null };
+}
+
+function adminDbChannelProfile(company = {}, metrics = {}) {
+  const latest = metrics.latest || company.inventory?.latest || {};
+  const text = compactSearchText(adminDbFlattenText([
+    company.collectionSources,
+    company.sourceStats,
+    company.bookingBusinessIds,
+    company.keywords,
+    latest.platforms,
+    latest.channels,
+    latest.source,
+    latest.platform,
+    latest.platformText,
+    latest.channelText,
+    latest.salesSignal?.channelText,
+    latest.couponSignal?.source
+  ]));
+  const naver = /네이버|naver/.test(text) || Boolean((company.bookingBusinessIds || []).length || latest.naverBookingId || latest.bookingBusinessId);
+  const yeogi = /여기어때|yeogi|goodchoice/.test(text);
+  const yanolja = /야놀자|yanolja/.test(text);
+  const tteonayo = /떠나요|tteonayo|ddnayo/.test(text);
+  const onda = /온다|onda/.test(text);
+  const count = [naver, yeogi, yanolja, tteonayo, onda].filter(Boolean).length;
+  return { naver, yeogi, yanolja, tteonayo, onda, count };
+}
+
+function adminDbFeatureProfile(company = {}, metrics = {}) {
+  const latest = metrics.latest || company.inventory?.latest || {};
+  const text = compactSearchText(adminDbFlattenText([
+    company.primaryName,
+    company.aliases,
+    company.keywords,
+    company.facilities,
+    company.manualCorrection,
+    latest.productTypeSummary,
+    latest.inventoryProductSummary,
+    latest.facilities,
+    latest.rooms,
+    latest.products,
+    latest.salesSignal?.productTypeSummary
+  ]));
+  return {
+    pool: /수영장|풀장|온수풀|개별풀|개별수영장|인피니티풀/.test(text),
+    seminar: /세미나|회의실|연회장|워크샵|워크숍|단체실/.test(text),
+    pet: /애견|반려견|반려동물|펫/.test(text),
+    bbq: /바베큐|바비큐|bbq|숯불|그릴/.test(text)
+  };
+}
+
+function adminDbManualRoomTotal(company = {}) {
+  const segments = Array.isArray(company.manualCorrection?.segments) ? company.manualCorrection.segments : [];
+  const segmentTotal = segments.reduce((sum, segment) => {
+    const count = adminDbFirstFinite([segment.count, segment.quantity, segment.rooms, segment.roomCount, segment.basisTotal], NaN);
+    return Number.isFinite(count) ? sum + count : sum;
+  }, 0);
+  return segmentTotal || NaN;
+}
+
+function adminDbRoomTotal(company = {}, metrics = {}) {
+  const latest = metrics.latest || company.inventory?.latest || {};
+  const signal = metrics.signal || latest.salesSignal || {};
+  const lodging = metrics.lodging || signal.lodging || {};
+  return adminDbFirstFinite([
+    adminDbManualRoomTotal(company),
+    company.manualCorrection?.lodgingBasisTotal,
+    company.manualCorrection?.totalRooms,
+    company.manualCorrection?.roomTotal,
+    lodging.basisTotal,
+    lodging.total,
+    lodging.maxTotal,
+    signal.lodgingBasisTotal,
+    latest.lodgingBasisTotal,
+    latest.totalRooms,
+    latest.roomTotal,
+    company.totalRooms,
+    company.roomTotal
+  ], 0);
+}
+
+function adminDbCompanyProfile(company = {}, classification = {}) {
+  const metrics = adminRegionCompanyMetrics(company, classification.region || {});
+  const revenueImpact = companyQueueRevenueImpact(company);
+  const revenue = effectiveRevenueValue(revenueImpact) || metrics.totalRevenue || 0;
+  const category = lodgingCategoryProfile(detectLodgingCategoryKey(adminDbFlattenText([
+    company.primaryName,
+    company.aliases,
+    company.keywords,
+    metrics.latest?.productTypeSummary,
+    metrics.latest?.inventoryProductSummary
+  ])));
+  const confidenceGrade = String(metrics.latest?.confidenceGrade || "").toUpperCase();
+  const confidenceScore = queueGradeScore(confidenceGrade) || (metrics.manualCorrection ? 4 : (metrics.lowConfidence ? 2 : 3));
+  const workType = adminRegionCompanyWorkType({ company, metrics });
+  return {
+    ...metrics,
+    revenue,
+    revenueImpact,
+    roomTotal: adminDbRoomTotal(company, metrics),
+    category,
+    channels: adminDbChannelProfile(company, metrics),
+    features: adminDbFeatureProfile(company, metrics),
+    confidenceGrade: confidenceGrade || (metrics.manualCorrection ? "보정" : "대기"),
+    confidenceScore,
+    confidenceTone: metrics.lowConfidence ? "hot" : (metrics.manualCorrection || confidenceScore >= 4 ? "good" : "watch"),
+    workType,
+    classification
+  };
+}
+
+function adminDbRows(master = {}) {
+  const regions = master.adminRegionalOperations?.regions || [];
+  return (master.companies || []).map((company) => {
+    const classification = adminDbClassifyCompany(company, regions);
+    const metrics = adminDbCompanyProfile(company, classification);
+    const searchText = compactSearchText(adminDbFlattenText([
+      company.primaryName,
+      company.aliases,
+      company.companyId,
+      company.regions,
+      company.addresses,
+      company.keywords,
+      classification.provinceLabel,
+      classification.localityLabel,
+      metrics.category?.label,
+      metrics.workType?.label
+    ]));
+    return { company, metrics, ...classification, searchText };
+  });
+}
+
+function adminDbProvinceOptions(rows = []) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = row.provinceKey || "unknown";
+    const current = map.get(key) || { key, label: row.provinceLabel || "미분류", count: 0 };
+    current.count += 1;
+    map.set(key, current);
+  });
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "ko-KR"));
+}
+
+function adminDbRegionOptions(rows = [], provinceKey = "all") {
+  const map = new Map();
+  rows
+    .filter((row) => !provinceKey || provinceKey === "all" || row.provinceKey === provinceKey)
+    .forEach((row) => {
+      const key = row.regionKey || "unknown";
+      const current = map.get(key) || { key, label: row.localityLabel || row.regionLabel || "지역 미확인", count: 0 };
+      current.count += 1;
+      map.set(key, current);
+    });
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "ko-KR"));
+}
+
+function adminDbFilterState(master = {}) {
+  const filters = adminDbFilters();
+  const rows = adminDbRows(master);
+  const provinceOptions = adminDbProvinceOptions(rows);
+  if (filters.province !== "all" && !provinceOptions.some((option) => option.key === filters.province)) filters.province = "all";
+  const regionOptions = adminDbRegionOptions(rows, filters.province);
+  if (filters.region !== "all" && !regionOptions.some((option) => option.key === filters.region)) filters.region = "all";
+  const query = compactSearchText(filters.query || "");
+  const filteredRows = rows.filter((row) => {
+    if (filters.province !== "all" && row.provinceKey !== filters.province) return false;
+    if (filters.region !== "all" && row.regionKey !== filters.region) return false;
+    if (filters.ota && filters.ota !== "all") {
+      if (filters.ota === "ota_missing") {
+        if (row.metrics.channels.count) return false;
+      } else if (!row.metrics.channels[filters.ota]) {
+        return false;
+      }
+    }
+    if (filters.feature && filters.feature !== "all" && !row.metrics.features[filters.feature]) return false;
+    if (query && !row.searchText.includes(query)) return false;
+    return true;
+  });
+  filteredRows.sort((a, b) => {
+    if (filters.sort === "revenue_desc") return b.metrics.revenue - a.metrics.revenue || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
+    if (filters.sort === "revenue_asc") return a.metrics.revenue - b.metrics.revenue || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
+    if (filters.sort === "rooms_desc") return b.metrics.roomTotal - a.metrics.roomTotal || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
+    if (filters.sort === "rooms_asc") return a.metrics.roomTotal - b.metrics.roomTotal || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
+    if (filters.sort === "confidence_low") return a.metrics.confidenceScore - b.metrics.confidenceScore || b.metrics.priority - a.metrics.priority;
+    return (a.metrics.rank || 9999) - (b.metrics.rank || 9999) || b.metrics.revenue - a.metrics.revenue;
+  });
+  return { rows, filteredRows, filters, provinceOptions, regionOptions };
+}
+
+function adminDbGroupedRows(rows = []) {
+  const provinceMap = new Map();
+  rows.forEach((row) => {
+    const provinceKey = row.provinceKey || "unknown";
+    if (!provinceMap.has(provinceKey)) {
+      provinceMap.set(provinceKey, {
+        key: provinceKey,
+        label: row.provinceLabel || "미분류",
+        rows: [],
+        regions: new Map()
+      });
+    }
+    const province = provinceMap.get(provinceKey);
+    province.rows.push(row);
+    const regionKey = row.regionKey || "unknown";
+    if (!province.regions.has(regionKey)) {
+      province.regions.set(regionKey, {
+        key: regionKey,
+        label: row.localityLabel || row.regionLabel || "지역 미확인",
+        rows: []
+      });
+    }
+    province.regions.get(regionKey).rows.push(row);
+  });
+  return Array.from(provinceMap.values())
+    .map((province) => ({
+      ...province,
+      regions: Array.from(province.regions.values()).sort((a, b) => b.rows.length - a.rows.length || a.label.localeCompare(b.label, "ko-KR"))
+    }))
+    .sort((a, b) => b.rows.length - a.rows.length || a.label.localeCompare(b.label, "ko-KR"));
+}
+
+function adminDbSelectOptions(options = [], selected = "all", allLabel = "전체") {
+  return [
+    `<option value="all" ${selected === "all" ? "selected" : ""}>${escapeHtml(allLabel)}</option>`,
+    ...options.map((option) =>
+      `<option value="${escapeHtml(option.key)}" ${selected === option.key ? "selected" : ""}>${escapeHtml(option.label)} · ${fmtNumber(option.count)}</option>`
+    )
+  ].join("");
+}
+
+function adminDbMetricCard(label, value, note, tone = "") {
+  return `
+    <article class="${escapeHtml(tone)}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
+function adminDbChannelChips(channels = {}) {
+  const options = [
+    ["naver", "네이버"],
+    ["yeogi", "여기어때"],
+    ["yanolja", "야놀자"],
+    ["tteonayo", "떠나요"],
+    ["onda", "온다"]
+  ];
+  const chips = options.filter(([key]) => channels[key]).map(([, label]) => `<em class="good">${escapeHtml(label)}</em>`);
+  return chips.length ? chips.join("") : `<em class="watch">채널 확인</em>`;
+}
+
+function adminDbFeatureChips(features = {}) {
+  const options = [
+    ["pool", "수영장"],
+    ["seminar", "세미나실"],
+    ["pet", "애견동반"],
+    ["bbq", "바베큐"]
+  ];
+  const chips = options.filter(([key]) => features[key]).map(([, label]) => `<em>${escapeHtml(label)}</em>`);
+  return chips.length ? chips.join("") : `<em>시설 미분류</em>`;
+}
+
+function adminDbCompanyRow(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
+  const rateText = Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "예약율 확인";
+  const rankText = metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위 대기";
+  const roomText = metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "수량 확인";
+  return `
+    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")}">
+      <div class="admin-db-company-main">
+        <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+        <small>${escapeHtml(row.provinceLabel || "미분류")} · ${escapeHtml(row.localityLabel || "지역 미확인")} · ${escapeHtml(metrics.category?.label || "숙박업")}</small>
+      </div>
+      <div class="admin-db-company-values">
+        <span><b>${escapeHtml(rankText)}</b><small>노출순</small></span>
+        <span><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b><small>7일 매출</small></span>
+        <span><b>${escapeHtml(roomText)}</b><small>객실수</small></span>
+        <span><b>${escapeHtml(rateText)}</b><small>예약율</small></span>
+        <span><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b><small>신뢰도</small></span>
+      </div>
+      <div class="admin-db-company-tags">
+        <em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(workType.label || "검수 대기")}</em>
+        ${adminDbChannelChips(metrics.channels)}
+        ${adminDbFeatureChips(metrics.features)}
+      </div>
+      <div class="admin-db-company-action">
+        <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || company.companyId || "")}">수정</button>
+      </div>
+    </article>
+  `;
+}
+
+function adminDbRegionGroup(region = {}, index = 0) {
+  const rows = region.rows || [];
+  const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
+  const manualCount = rows.filter((row) => row.metrics.manualCorrection).length;
+  return `
+    <details class="admin-db-region" ${index < 2 ? "open" : ""}>
+      <summary>
+        <div>
+          <strong>${escapeHtml(region.label || "지역 미확인")}</strong>
+          <small>${fmtNumber(rows.length)}개 업체 · 낮은 신뢰 ${fmtNumber(lowConfidence)} · 관리자 보정 ${fmtNumber(manualCount)}</small>
+        </div>
+        <span>${fmtNumber(rows.length)}</span>
+      </summary>
+      <div class="admin-db-company-list">
+        ${rows.slice(0, 30).map(adminDbCompanyRow).join("")}
+        ${rows.length > 30 ? `<p class="admin-db-more">상위 30개만 표시 중입니다. 검색어 또는 필터로 좁혀 확인하세요.</p>` : ""}
+      </div>
+    </details>
+  `;
+}
+
+function adminDbProvinceGroup(province = {}, index = 0) {
+  const rows = province.rows || [];
+  const regionCount = (province.regions || []).length;
+  const revenueRows = rows.filter((row) => row.metrics.revenue > 0);
+  const averageRevenue = revenueRows.length
+    ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
+    : 0;
+  return `
+    <details class="admin-db-province" ${index < 2 ? "open" : ""}>
+      <summary>
+        <div>
+          <strong>${escapeHtml(province.label || "미분류")}</strong>
+          <small>${fmtNumber(regionCount)}개 지역 · ${fmtNumber(rows.length)}개 업체 · 평균 ${fmtWon(averageRevenue)}</small>
+        </div>
+        <span>${fmtNumber(rows.length)}개</span>
+      </summary>
+      <div class="admin-db-region-list">
+        ${(province.regions || []).map(adminDbRegionGroup).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
+  if (!isAdminRole() || !els.adminDatabaseDashboard) return;
+  if (master.error) {
+    els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">전체 DB 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    return;
+  }
+  const { rows, filteredRows, filters, provinceOptions, regionOptions } = adminDbFilterState(master);
+  const grouped = adminDbGroupedRows(filteredRows);
+  const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
+  const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
+  const otaLinked = filteredRows.filter((row) => row.metrics.channels.count > 0).length;
+  const revenueRows = filteredRows.filter((row) => row.metrics.revenue > 0);
+  const averageRevenue = revenueRows.length
+    ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
+    : 0;
+  els.adminDatabaseDashboard.innerHTML = `
+    <section class="admin-db-board" id="adminDatabaseBoard">
+      <div class="admin-db-hero">
+        <div>
+          <span>전체 DB</span>
+          <h3>광역·지역·업체 단위로 마스터 데이터를 확인합니다.</h3>
+          <p>자동 수집 신뢰도, 관리자 보정 여부, OTA 채널, 시설 키워드를 한 화면에서 보고 수정 대상은 기존 마스터 보정 화면으로 연결합니다.</p>
+        </div>
+        <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
+      </div>
+      <div class="admin-db-metrics">
+        ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "마스터 DB 기준", "good")}
+        ${adminDbMetricCard("낮은 신뢰도", fmtNumber(lowConfidence), "수량·매출 확인 우선", lowConfidence ? "hot" : "good")}
+        ${adminDbMetricCard("관리자 보정", fmtNumber(manualCount), "보정값 우선 적용", manualCount ? "good" : "")}
+        ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버/OTA 감지", "watch")}
+        ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
+      </div>
+      <div class="admin-db-toolbar">
+        <label>
+          <span>업체 검색</span>
+          <input type="search" data-admin-db-query value="${escapeHtml(filters.query || "")}" placeholder="업체명, 지역, 키워드">
+        </label>
+        <label>
+          <span>광역</span>
+          <select data-admin-db-province>${adminDbSelectOptions(provinceOptions, filters.province, "전체 광역")}</select>
+        </label>
+        <label>
+          <span>지역</span>
+          <select data-admin-db-region>${adminDbSelectOptions(regionOptions, filters.region, "전체 지역")}</select>
+        </label>
+        <label>
+          <span>정렬</span>
+          <select data-admin-db-sort>
+            ${[
+              ["rank", "노출순"],
+              ["revenue_desc", "매출 높은순"],
+              ["revenue_asc", "매출 낮은순"],
+              ["rooms_desc", "객실수 많은순"],
+              ["rooms_asc", "객실수 적은순"],
+              ["confidence_low", "낮은 신뢰도순"]
+            ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>OTA</span>
+          <select data-admin-db-ota>
+            ${[
+              ["all", "전체 채널"],
+              ["naver", "네이버"],
+              ["yeogi", "여기어때"],
+              ["yanolja", "야놀자"],
+              ["tteonayo", "떠나요"],
+              ["onda", "온다"],
+              ["ota_missing", "채널 확인 필요"]
+            ].map(([value, label]) => `<option value="${value}" ${filters.ota === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>시설</span>
+          <select data-admin-db-feature>
+            ${[
+              ["all", "전체 시설"],
+              ["pool", "수영장"],
+              ["seminar", "세미나실"],
+              ["pet", "애견동반"],
+              ["bbq", "바베큐"]
+            ].map(([value, label]) => `<option value="${value}" ${filters.feature === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <button type="button" data-admin-db-clear>필터 초기화</button>
+      </div>
+      <div class="admin-db-hierarchy">
+        ${grouped.length ? grouped.map(adminDbProvinceGroup).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function adminConsoleKpis(master = {}, entries = []) {
   const companies = master.companies || [];
   const todayToken = adminDateToken();
@@ -18500,6 +19002,7 @@ function adminConsoleSecurityPanel() {
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole()) return;
   renderAdminMemberRequestDashboard();
+  renderAdminDatabaseDashboard(master);
   if (!els.adminConsoleDashboard) return;
   if (master.error) {
     els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty">관리자 콘솔 로딩 실패: ${escapeHtml(master.error)}</div>`;
@@ -23351,7 +23854,7 @@ async function loadSession() {
     state.activeTab = "report";
   } else if (location.pathname === "/admin" && state.session.role === "admin") {
     state.activeTab = "admin";
-    state.adminPanelSection = "overview";
+    state.adminPanelSection = "database";
     state.adminMobileSection = "analysis";
     state.adminMobileAnchor = "";
   }
@@ -24899,6 +25402,21 @@ function bindEvents() {
       setAdminPanelSection(adminSectionButton.dataset.adminSection || "overview", { scroll: true });
       return;
     }
+    if (event.target.closest("[data-admin-db-clear]")) {
+      state.adminDbFilters = {
+        query: "",
+        province: "all",
+        region: "all",
+        sort: "rank",
+        ota: "all",
+        feature: "all"
+      };
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
     const open = event.target.closest("[data-open-company]");
     if (open) openSheet(open.dataset.openCompany);
     const adminLocationQuery = event.target.closest(".admin-region-location-score-panel [data-location-query], .admin-location-score-queue [data-location-query]");
@@ -25257,6 +25775,21 @@ function bindEvents() {
       });
       return;
     }
+    const adminDbQuery = event.target.closest("[data-admin-db-query]");
+    if (adminDbQuery) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.query = adminDbQuery.value || "";
+      const selectionStart = adminDbQuery.selectionStart;
+      const selectionEnd = adminDbQuery.selectionEnd;
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        const next = document.querySelector("[data-admin-db-query]");
+        if (!next) return;
+        next.focus();
+        if (selectionStart !== null && selectionEnd !== null) next.setSelectionRange?.(selectionStart, selectionEnd);
+      });
+      return;
+    }
     const search = event.target.closest("[data-company-master-search]");
     if (!search) return;
     state.companyMasterFilters.query = search.value || "";
@@ -25301,6 +25834,47 @@ function bindEvents() {
       window.requestAnimationFrame(() => {
         document.querySelector("[data-admin-region-company-sort]")?.focus();
       });
+      return;
+    }
+    const adminDbProvince = event.target.closest("[data-admin-db-province]");
+    if (adminDbProvince) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.province = adminDbProvince.value || "all";
+      state.adminDbFilters.region = "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-province]")?.focus());
+      return;
+    }
+    const adminDbRegion = event.target.closest("[data-admin-db-region]");
+    if (adminDbRegion) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.region = adminDbRegion.value || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-region]")?.focus());
+      return;
+    }
+    const adminDbSort = event.target.closest("[data-admin-db-sort]");
+    if (adminDbSort) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.sort = adminDbSort.value || "rank";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-sort]")?.focus());
+      return;
+    }
+    const adminDbOta = event.target.closest("[data-admin-db-ota]");
+    if (adminDbOta) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.ota = adminDbOta.value || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-ota]")?.focus());
+      return;
+    }
+    const adminDbFeature = event.target.closest("[data-admin-db-feature]");
+    if (adminDbFeature) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.feature = adminDbFeature.value || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-feature]")?.focus());
       return;
     }
     const layer = event.target.closest("[data-company-master-layer]");
