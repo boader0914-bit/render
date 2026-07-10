@@ -46,6 +46,7 @@ const state = {
     ota: "all",
     feature: "all"
   },
+  adminDbSelectedCompanyId: "",
   crawlEtaByKey: {},
   crawlEstimateTimer: null,
   crawlEstimateRequestId: 0,
@@ -16348,12 +16349,88 @@ function adminDbWorkPanel(rows = []) {
               <p>${escapeHtml(adminDbWorkReason(row))}</p>
               <div class="admin-db-work-actions">
                 <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db">확인 수집</button>
-                <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || company.companyId || "")}">보정 열기</button>
+                <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
               </div>
               ${companyReviewActionsHtml(company, true, "admin_db")}
             </article>
           `;
         }).join("") : `<p class="admin-db-more">현재 필터 조건에서는 우선 처리할 업체가 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function adminDbSelectedRow(rows = []) {
+  if (!rows.length) return null;
+  const selectedId = state.adminDbSelectedCompanyId || "";
+  const selected = selectedId ? rows.find((row) => row.company?.companyId === selectedId) : null;
+  return selected || adminDbWorkRows(rows)[0] || rows[0] || null;
+}
+
+function adminDbSelectedDetailPanel(rows = []) {
+  const row = adminDbSelectedRow(rows);
+  if (!row) {
+    return `
+      <section class="admin-db-selected-panel empty">
+        <strong>상세 수정 대기</strong>
+        <p>필터 조건에 맞는 업체가 없습니다.</p>
+      </section>
+    `;
+  }
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+  const issues = metrics.issues?.length ? metrics.issues : [adminDbWorkReason(row)];
+  const selectedId = company.companyId || "";
+  state.adminDbSelectedCompanyId = selectedId;
+  return `
+    <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}">
+      <div class="admin-db-selected-head">
+        <div>
+          <span>선택 업체 상세 수정</span>
+          <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+          <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, metrics.sourceLabel].filter(Boolean).join(" · "))}</small>
+        </div>
+        <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
+      </div>
+      <div class="admin-db-selected-grid">
+        ${[
+          ["노출순", metrics.rank ? `${fmtNumber(metrics.rank)}위` : "대기", "네이버 지정 범위"],
+          ["7일 매출", fmtWon(metrics.revenue || 0), "확인 가격 기준"],
+          ["객실수", metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "확인 필요", "관리자 보정 우선"],
+          ["예약율", Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요", "네이버 플레이스 기준"],
+          ["신뢰도", metrics.confidenceGrade || "대기", metrics.manualCorrection ? "관리자 보정 있음" : "자동 수집 기준"],
+          ["채널", `${fmtNumber(metrics.channels?.count || 0)}개`, metrics.channels?.count ? "채널 감지" : "OTA 확인 필요"]
+        ].map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-selected-issues">
+        ${issues.slice(0, 8).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
+      </div>
+      <div class="admin-db-selected-actions">
+        <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
+        <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
+      </div>
+      <div class="admin-db-selected-layout">
+        <div class="admin-db-selected-review">
+          <div>
+            <strong>관리자 판단</strong>
+            <small>검수 상태와 메모는 전체 DB와 판단 큐에 함께 반영됩니다.</small>
+          </div>
+          ${companyReviewActionsHtml(company, true, "admin_db_detail")}
+        </div>
+        <div class="admin-db-selected-correction">
+          <div>
+            <strong>수량·가격 보정</strong>
+            <small>객실종류별 수량과 요일별 금액을 입력하면 보정값이 우선 적용됩니다.</small>
+          </div>
+          ${companyCorrectionFormHtml(company, true)}
+        </div>
       </div>
     </section>
   `;
@@ -16386,7 +16463,7 @@ function adminDbCompanyRow(row = {}) {
       </div>
       <div class="admin-db-company-action">
         <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db">확인 수집</button>
-        <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || company.companyId || "")}">수정</button>
+        <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
       </div>
     </article>
   `;
@@ -16523,6 +16600,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         <button type="button" data-admin-db-clear>필터 초기화</button>
       </div>
       ${adminDbWorkPanel(filteredRows)}
+      ${adminDbSelectedDetailPanel(filteredRows)}
       <div class="admin-db-hierarchy">
         ${grouped.length ? grouped.map(adminDbProvinceGroup).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
@@ -25521,6 +25599,15 @@ function bindEvents() {
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
+    if (adminDbCompanySelect) {
+      state.adminDbSelectedCompanyId = adminDbCompanySelect.dataset.adminDbCompanySelect || "";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       return;
     }
