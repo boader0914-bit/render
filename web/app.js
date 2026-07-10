@@ -44,6 +44,7 @@ const state = {
     region: "all",
     sort: "rank",
     status: "all",
+    source: "all",
     ota: "all",
     feature: "all"
   },
@@ -15934,6 +15935,7 @@ function adminDbFilters() {
     region: "all",
     sort: "rank",
     status: "all",
+    source: "all",
     ota: "all",
     feature: "all"
   };
@@ -16068,6 +16070,66 @@ function adminDbRoomTotal(company = {}, metrics = {}) {
   ], 0);
 }
 
+function adminDbCollectionProfile(company = {}, metrics = {}) {
+  const sources = new Set([
+    ...(Array.isArray(company.collectionSources) ? company.collectionSources : []),
+    ...Object.keys(company.sourceStats || {})
+  ].map((value) => String(value || "").trim()).filter(Boolean));
+  const hasAdminSearch = sources.has("admin_search") || sources.has("master_backfill");
+  const hasB2BSearch = sources.has("b2b_search");
+  const adminReviewed = Boolean(company.adminReview?.status || metrics.adminReview?.status);
+  const manualCorrected = manualCorrectionHasValue(company.manualCorrection);
+  const lowConfidence = Boolean(metrics.lowConfidence || metrics.confidenceScore <= 2);
+  const needsConfirm = lowConfidence
+    || metrics.workType?.key === "recrawl"
+    || metrics.workType?.key === "missingRevenue"
+    || metrics.workType?.key === "missingReservation"
+    || metrics.adminReview?.status === "recrawl_needed"
+    || Boolean(metrics.stockVariance);
+  if (adminReviewed || manualCorrected) {
+    return {
+      key: "admin_verified",
+      label: "관리자 검수",
+      tone: "good",
+      note: manualCorrected ? "보정값 우선" : "판단값 저장",
+      detail: "관리자가 판단 또는 보정한 자료입니다.",
+      needsConfirm: false,
+      sources: Array.from(sources)
+    };
+  }
+  if (needsConfirm) {
+    return {
+      key: "confirm_needed",
+      label: "확인 수집 필요",
+      tone: "hot",
+      note: lowConfidence ? "신뢰도 보강" : "조건 재확인",
+      detail: "수량·매출·예약율 근거를 관리자 확인 수집으로 보강해야 합니다.",
+      needsConfirm: true,
+      sources: Array.from(sources)
+    };
+  }
+  if (hasB2BSearch && !hasAdminSearch) {
+    return {
+      key: "b2b_collected",
+      label: "B2B 수집",
+      tone: "watch",
+      note: "고객 검색 유입",
+      detail: "B2B 검색으로 마스터에 누적된 자료입니다.",
+      needsConfirm: false,
+      sources: Array.from(sources)
+    };
+  }
+  return {
+    key: "auto_collected",
+    label: "자동수집",
+    tone: "neutral",
+    note: hasAdminSearch ? "관리자 수집" : "마스터 누적",
+    detail: "자동 수집 결과를 기준으로 저장된 자료입니다.",
+    needsConfirm: false,
+    sources: Array.from(sources)
+  };
+}
+
 function adminDbCompanyProfile(company = {}, classification = {}) {
   const metrics = adminRegionCompanyMetrics(company, classification.region || {});
   const revenueImpact = companyQueueRevenueImpact(company);
@@ -16082,7 +16144,7 @@ function adminDbCompanyProfile(company = {}, classification = {}) {
   const confidenceGrade = String(metrics.latest?.confidenceGrade || "").toUpperCase();
   const confidenceScore = queueGradeScore(confidenceGrade) || (metrics.manualCorrection ? 4 : (metrics.lowConfidence ? 2 : 3));
   const workType = adminRegionCompanyWorkType({ company, metrics });
-  return {
+  const profile = {
     ...metrics,
     revenue,
     revenueImpact,
@@ -16096,6 +16158,8 @@ function adminDbCompanyProfile(company = {}, classification = {}) {
     workType,
     classification
   };
+  profile.collection = adminDbCollectionProfile(company, profile);
+  return profile;
 }
 
 function adminDbRows(master = {}) {
@@ -16113,7 +16177,9 @@ function adminDbRows(master = {}) {
       classification.provinceLabel,
       classification.localityLabel,
       metrics.category?.label,
-      metrics.workType?.label
+      metrics.workType?.label,
+      metrics.collection?.label,
+      metrics.collection?.note
     ]));
     return { company, metrics, ...classification, searchText };
   });
@@ -16191,12 +16257,30 @@ function adminDbStatusOptions(rows = []) {
   ];
 }
 
+function adminDbSourceMatches(row = {}, source = "all") {
+  if (!source || source === "all") return true;
+  return (row.metrics?.collection?.key || "auto_collected") === source;
+}
+
+function adminDbSourceOptions(rows = []) {
+  const count = (source) => rows.filter((row) => adminDbSourceMatches(row, source)).length;
+  return [
+    ["all", "전체 수집구분", rows.length],
+    ["confirm_needed", "확인 수집 필요", count("confirm_needed")],
+    ["admin_verified", "관리자 검수", count("admin_verified")],
+    ["auto_collected", "자동수집", count("auto_collected")],
+    ["b2b_collected", "B2B 수집", count("b2b_collected")]
+  ];
+}
+
 function adminDbFilterState(master = {}) {
   const filters = adminDbFilters();
   const rows = adminDbRows(master);
   const provinceOptions = adminDbProvinceOptions(rows);
   const statusOptions = adminDbStatusOptions(rows);
+  const sourceOptions = adminDbSourceOptions(rows);
   if (filters.status !== "all" && !statusOptions.some(([value]) => value === filters.status)) filters.status = "all";
+  if (filters.source !== "all" && !sourceOptions.some(([value]) => value === filters.source)) filters.source = "all";
   if (filters.province !== "all" && !provinceOptions.some((option) => option.key === filters.province)) filters.province = "all";
   const regionOptions = adminDbRegionOptions(rows, filters.province);
   if (filters.region !== "all" && !regionOptions.some((option) => option.key === filters.region)) filters.region = "all";
@@ -16205,6 +16289,7 @@ function adminDbFilterState(master = {}) {
     if (filters.province !== "all" && row.provinceKey !== filters.province) return false;
     if (filters.region !== "all" && row.regionKey !== filters.region) return false;
     if (filters.status && filters.status !== "all" && !adminDbStatusMatches(row, filters.status)) return false;
+    if (filters.source && filters.source !== "all" && !adminDbSourceMatches(row, filters.source)) return false;
     if (filters.ota && filters.ota !== "all") {
       if (filters.ota === "ota_missing") {
         if (row.metrics.channels.count) return false;
@@ -16224,7 +16309,7 @@ function adminDbFilterState(master = {}) {
     if (filters.sort === "confidence_low") return a.metrics.confidenceScore - b.metrics.confidenceScore || b.metrics.priority - a.metrics.priority;
     return (a.metrics.rank || 9999) - (b.metrics.rank || 9999) || b.metrics.revenue - a.metrics.revenue;
   });
-  return { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions };
+  return { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions, sourceOptions };
 }
 
 function adminDbGroupedRows(rows = []) {
@@ -16299,6 +16384,10 @@ function adminDbFeatureChips(features = {}) {
   ];
   const chips = options.filter(([key]) => features[key]).map(([, label]) => `<em>${escapeHtml(label)}</em>`);
   return chips.length ? chips.join("") : `<em>시설 미분류</em>`;
+}
+
+function adminDbCollectionChip(collection = {}) {
+  return `<em class="${escapeHtml(collection.tone || "neutral")}">${escapeHtml(collection.label || "자동수집")}</em>`;
 }
 
 function adminDbWorkReason(row = {}) {
@@ -16405,6 +16494,64 @@ function adminDbWorkPanel(rows = []) {
   `;
 }
 
+function adminDbConfirmCollectRows(rows = []) {
+  return rows
+    .filter((row) => row.metrics?.collection?.key === "confirm_needed")
+    .sort((a, b) => adminDbWorkPriority(b) - adminDbWorkPriority(a) || (a.metrics.rank || 9999) - (b.metrics.rank || 9999));
+}
+
+function adminDbCollectionPanel(rows = []) {
+  const confirmRows = adminDbConfirmCollectRows(rows);
+  const countByKey = (key) => rows.filter((row) => row.metrics?.collection?.key === key).length;
+  return `
+    <section class="admin-db-collect-panel">
+      <div class="admin-db-collect-head">
+        <div>
+          <span>수집 구분</span>
+          <strong>자동수집과 관리자 확인 수집을 분리합니다</strong>
+          <small>신뢰도가 낮거나 표본이 부족한 업체는 확인 수집 대상으로 묶어 수량·가격·예약율 근거를 보강합니다.</small>
+        </div>
+        <button type="button" data-admin-db-source-link="confirm_needed">확인 수집만 보기</button>
+      </div>
+      <div class="admin-db-collect-metrics">
+        ${[
+          ["확인 수집 필요", confirmRows.length, "신뢰도 보강 대상", "hot", "confirm_needed"],
+          ["관리자 검수", countByKey("admin_verified"), "판단·보정 완료", "good", "admin_verified"],
+          ["자동수집", countByKey("auto_collected"), "기본 수집 누적", "neutral", "auto_collected"],
+          ["B2B 수집", countByKey("b2b_collected"), "고객 검색 유입", "watch", "b2b_collected"]
+        ].map(([label, count, note, tone, key]) => `
+          <button type="button" class="${escapeHtml(tone)}" data-admin-db-source-link="${escapeHtml(key)}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmtNumber(count)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </button>
+        `).join("")}
+      </div>
+      <div class="admin-db-collect-list">
+        ${confirmRows.length ? confirmRows.slice(0, 5).map((row) => {
+          const company = row.company || {};
+          const metrics = row.metrics || {};
+          const collection = metrics.collection || {};
+          return `
+            <article class="${escapeHtml(collection.tone || "hot")}">
+              <div>
+                <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+                <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", collection.note].filter(Boolean).join(" · "))}</small>
+                <p>${escapeHtml(collection.detail || adminDbWorkReason(row))}</p>
+              </div>
+              <div>
+                ${adminDbCollectionChip(collection)}
+                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_confirm_collect">확인 수집</button>
+                <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
+              </div>
+            </article>
+          `;
+        }).join("") : `<p class="admin-db-more">현재 필터 조건에서 확인 수집이 필요한 업체가 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbSelectedRow(rows = []) {
   if (!rows.length) return null;
   const selectedId = state.adminDbSelectedCompanyId || "";
@@ -16445,6 +16592,7 @@ function adminDbSelectedDetailPanel(rows = []) {
           ["객실수", metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "확인 필요", "관리자 보정 우선"],
           ["예약율", Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요", "네이버 플레이스 기준"],
           ["신뢰도", metrics.confidenceGrade || "대기", metrics.manualCorrection ? "관리자 보정 있음" : "자동 수집 기준"],
+          ["수집 구분", metrics.collection?.label || "자동수집", metrics.collection?.note || "마스터 누적"],
           ["채널", `${fmtNumber(metrics.channels?.count || 0)}개`, metrics.channels?.count ? "채널 감지" : "OTA 확인 필요"]
         ].map(([label, value, note]) => `
           <article>
@@ -16503,6 +16651,7 @@ function adminDbCompanyRow(row = {}) {
       </div>
       <div class="admin-db-company-tags">
         <em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(workType.label || "검수 대기")}</em>
+        ${adminDbCollectionChip(metrics.collection)}
         ${adminDbChannelChips(metrics.channels)}
         ${adminDbFeatureChips(metrics.features)}
       </div>
@@ -16564,7 +16713,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">전체 DB 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
   }
-  const { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions } = adminDbFilterState(master);
+  const { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions, sourceOptions } = adminDbFilterState(master);
   const grouped = adminDbGroupedRows(filteredRows);
   const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
@@ -16623,6 +16772,12 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           </select>
         </label>
         <label>
+          <span>수집 구분</span>
+          <select data-admin-db-source>
+            ${sourceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.source === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
           <span>OTA</span>
           <select data-admin-db-ota>
             ${[
@@ -16651,6 +16806,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         <button type="button" data-admin-db-clear>필터 초기화</button>
       </div>
       ${adminDbWorkPanel(filteredRows)}
+      ${adminDbCollectionPanel(filteredRows)}
       ${adminDbSelectedDetailPanel(filteredRows)}
       <div class="admin-db-hierarchy">
         ${grouped.length ? grouped.map(adminDbProvinceGroup).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
@@ -25645,9 +25801,22 @@ function bindEvents() {
         region: "all",
         sort: "rank",
         status: "all",
+        source: "all",
         ota: "all",
         feature: "all"
       };
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    const adminDbSourceLink = event.target.closest("[data-admin-db-source-link]");
+    if (adminDbSourceLink) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.source = adminDbSourceLink.dataset.adminDbSourceLink || "all";
+      setActiveTab("admin");
+      setAdminPanelSection("database");
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -26117,6 +26286,14 @@ function bindEvents() {
       state.adminDbFilters.status = adminDbStatus.value || "all";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-status]")?.focus());
+      return;
+    }
+    const adminDbSource = event.target.closest("[data-admin-db-source]");
+    if (adminDbSource) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.source = adminDbSource.value || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-source]")?.focus());
       return;
     }
     const adminDbOta = event.target.closest("[data-admin-db-ota]");

@@ -1804,7 +1804,7 @@ a {
 
 .admin-db-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) repeat(6, minmax(130px, .8fr)) auto;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(7, minmax(130px, .8fr)) auto;
   gap: 10px;
   align-items: end;
   padding: 12px;
@@ -2027,6 +2027,152 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+.admin-db-collect-panel {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid #d5e3f7;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+  padding: 14px;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-collect-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-collect-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-collect-head span,
+.admin-db-collect-head small,
+.admin-db-collect-metrics small,
+.admin-db-collect-list p,
+.admin-db-collect-list small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 830;
+  line-height: 1.42;
+}
+
+.admin-db-collect-head strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.admin-db-collect-head button,
+.admin-db-collect-list button {
+  min-height: 34px;
+  border: 1px solid #a7d8d1;
+  border-radius: 11px;
+  background: #fff;
+  color: #0f766e;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-collect-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-collect-metrics button {
+  min-width: 0;
+  text-align: left;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  color: var(--ink);
+  padding: 11px;
+  cursor: pointer;
+}
+
+.admin-db-collect-metrics button.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-db-collect-metrics button.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-db-collect-metrics button.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-db-collect-metrics span,
+.admin-db-collect-metrics strong {
+  display: block;
+  min-width: 0;
+}
+
+.admin-db-collect-metrics span {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-collect-metrics strong {
+  margin: 4px 0;
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
+.admin-db-collect-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-db-collect-list article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #e8edf5;
+  border-radius: 14px;
+  background: #fff;
+  padding: 11px;
+}
+
+.admin-db-collect-list article > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-collect-list article > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.admin-db-collect-list b {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .admin-db-selected-panel {
@@ -22692,6 +22838,8 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-toolbar,
   .admin-db-work-summary,
   .admin-db-work-list,
+  .admin-db-collect-metrics,
+  .admin-db-collect-list article,
   .admin-db-selected-grid,
   .admin-db-selected-layout,
   .admin-db-company,
@@ -22800,6 +22948,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-region summary,
   .admin-db-work-head,
   .admin-db-work-title,
+  .admin-db-collect-head,
   .admin-db-selected-head {
     align-items: flex-start;
     flex-direction: column;
@@ -22809,6 +22958,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-region summary > span,
   .admin-db-work-head mark,
   .admin-db-work-title span,
+  .admin-db-collect-head button,
   .admin-db-selected-head mark {
     align-self: flex-start;
   }
