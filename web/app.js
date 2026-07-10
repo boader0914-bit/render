@@ -43,6 +43,7 @@ const state = {
     province: "all",
     region: "all",
     sort: "rank",
+    status: "all",
     ota: "all",
     feature: "all"
   },
@@ -191,7 +192,7 @@ const LODGING_CATEGORY_PROFILES = {
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
-  admin: ["report", "rank", "dictionary", "target", "decisionQueue", "map", "demand", "historyOps", "admin"],
+  admin: ["report", "rank", "dictionary", "decisionQueue", "map", "demand", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand"]
 };
 const ADMIN_MOBILE_SECTIONS = {
@@ -212,8 +213,7 @@ const ADMIN_MOBILE_SECTIONS = {
     label: "큐",
     target: "decisionQueue",
     items: [
-      { label: "판단큐", tab: "decisionQueue" },
-      { label: "영업타깃", tab: "target" }
+      { label: "판단큐", tab: "decisionQueue" }
     ]
   },
   collect: {
@@ -827,7 +827,7 @@ function adminMobileSectionForTab(tab, preferred = "") {
     const preferredTabs = new Set([preferredSection.target, ...(preferredSection.items || []).map((item) => item.tab)]);
     if (preferredTabs.has(tab)) return preferred;
   }
-  if (["decisionQueue", "target"].includes(tab)) return "queue";
+  if (tab === "decisionQueue") return "queue";
   if (tab === "admin") {
     if (state.adminPanelSection === "collect") return "collect";
     if (["members", "files"].includes(state.adminPanelSection)) return "settings";
@@ -11599,7 +11599,6 @@ function renderReport() {
   const sales = summarizeSales(items);
   const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(data.availability?.stats?.weightedSoldOutRate, NaN);
   const publicMode = !isAdminRole();
-  const targets = publicMode ? [] : targetEntries(8);
   const allTargets = publicMode ? [] : targetEntries(0);
   const platformStats = reportPlatformStats(items);
   const searchVolume = (data.regions || []).reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
@@ -11750,24 +11749,18 @@ function renderReport() {
     ${publicMode ? "" : `<section class="report-card report-target-preview">
       <div class="report-card-head">
         <div>
-          <h3>우선 컨택 후보</h3>
-          <p>노출은 있으나 판매 흐름과 상품 구성이 약한 업체</p>
+          <h3>전체 DB에서 관리 상태로 판단</h3>
+          <p>영업 후보를 별도 화면으로 분리하지 않고, 전체 DB 필터에서 컨택 가능·보정 필요·확인 수집 대상을 직접 고릅니다.</p>
         </div>
-        <button class="small-button" type="button" data-drawer-tab="target">전체 보기</button>
+        <button class="small-button" type="button" data-drawer-tab="admin" data-admin-section-link="database">전체 DB 보기</button>
       </div>
-      <div class="report-target-list">
-        ${targets.length ? targets.slice(0, 5).map(({ item, reasons }, index) => {
-          const lodging = salesStats(item, "lodging");
-          const itemIndex = items.indexOf(item);
-          return `
-            <button class="report-target-row" type="button" data-open-company="${itemIndex}">
-              <span>${index + 1}</span>
-              <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
-              <em>${fmtRate(lodging.rate)}</em>
-              <small>${reasons.map(escapeHtml).join(" · ")}</small>
-            </button>
-          `;
-        }).join("") : `<div class="empty">우선 컨택 후보가 없습니다.</div>`}
+      <div class="report-target-list compact">
+        <button class="report-target-row" type="button" data-drawer-tab="admin" data-admin-section-link="database">
+          <span>필터</span>
+          <strong>관리 상태 · OTA · 시설 · 순위/매출 정렬</strong>
+          <em>${fmtNumber(allTargets.length)}건</em>
+          <small>컨택 가능 여부는 전체 DB 상세 수정에서 관리자 판단값으로 저장합니다.</small>
+        </button>
       </div>
     </section>`}
 
@@ -15940,6 +15933,7 @@ function adminDbFilters() {
     province: "all",
     region: "all",
     sort: "rank",
+    status: "all",
     ota: "all",
     feature: "all"
   };
@@ -16149,10 +16143,60 @@ function adminDbRegionOptions(rows = [], provinceKey = "all") {
   return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "ko-KR"));
 }
 
+function adminDbStatusMatches(row = {}, status = "all") {
+  if (!status || status === "all") return true;
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const review = metrics.adminReview || company.adminReview || {};
+  const reviewStatus = String(review.status || "");
+  const workKey = metrics.workType?.key || "";
+  const salesCategory = String(company.salesTarget?.category || "");
+  const contactStatus = String(company.salesContact?.status || "");
+  const lowConfidence = Boolean(metrics.lowConfidence || metrics.confidenceScore <= 2);
+  const unreviewed = !metrics.adminReview && !company.adminReview;
+  const recrawl = workKey === "recrawl" || reviewStatus === "recrawl_needed" || Boolean(metrics.stockVariance);
+  const manual = workKey === "manual" || reviewStatus === "manual_needed" || lowConfidence;
+  const contactReady = reviewStatus === "contact_ready" || salesCategory === "contact";
+  const excluded = reviewStatus === "exclude" || salesCategory === "exclude" || contactStatus === "excluded";
+  if (status === "needs_work") {
+    return lowConfidence
+      || unreviewed
+      || recrawl
+      || manual
+      || workKey === "missingRevenue"
+      || workKey === "missingReservation";
+  }
+  if (status === "low_confidence") return lowConfidence;
+  if (status === "unreviewed") return unreviewed;
+  if (status === "recrawl") return recrawl;
+  if (status === "manual") return manual;
+  if (status === "contact_ready") return contactReady;
+  if (status === "reviewed") return Boolean(reviewStatus) && !excluded;
+  if (status === "excluded") return excluded;
+  return true;
+}
+
+function adminDbStatusOptions(rows = []) {
+  const count = (status) => rows.filter((row) => adminDbStatusMatches(row, status)).length;
+  return [
+    ["all", "전체 관리상태", rows.length],
+    ["needs_work", "처리 필요", count("needs_work")],
+    ["low_confidence", "낮은 신뢰도", count("low_confidence")],
+    ["unreviewed", "미검수", count("unreviewed")],
+    ["recrawl", "확인 수집", count("recrawl")],
+    ["manual", "보정 필요", count("manual")],
+    ["contact_ready", "컨택 가능", count("contact_ready")],
+    ["reviewed", "검수 완료", count("reviewed")],
+    ["excluded", "제외", count("excluded")]
+  ];
+}
+
 function adminDbFilterState(master = {}) {
   const filters = adminDbFilters();
   const rows = adminDbRows(master);
   const provinceOptions = adminDbProvinceOptions(rows);
+  const statusOptions = adminDbStatusOptions(rows);
+  if (filters.status !== "all" && !statusOptions.some(([value]) => value === filters.status)) filters.status = "all";
   if (filters.province !== "all" && !provinceOptions.some((option) => option.key === filters.province)) filters.province = "all";
   const regionOptions = adminDbRegionOptions(rows, filters.province);
   if (filters.region !== "all" && !regionOptions.some((option) => option.key === filters.region)) filters.region = "all";
@@ -16160,6 +16204,7 @@ function adminDbFilterState(master = {}) {
   const filteredRows = rows.filter((row) => {
     if (filters.province !== "all" && row.provinceKey !== filters.province) return false;
     if (filters.region !== "all" && row.regionKey !== filters.region) return false;
+    if (filters.status && filters.status !== "all" && !adminDbStatusMatches(row, filters.status)) return false;
     if (filters.ota && filters.ota !== "all") {
       if (filters.ota === "ota_missing") {
         if (row.metrics.channels.count) return false;
@@ -16179,7 +16224,7 @@ function adminDbFilterState(master = {}) {
     if (filters.sort === "confidence_low") return a.metrics.confidenceScore - b.metrics.confidenceScore || b.metrics.priority - a.metrics.priority;
     return (a.metrics.rank || 9999) - (b.metrics.rank || 9999) || b.metrics.revenue - a.metrics.revenue;
   });
-  return { rows, filteredRows, filters, provinceOptions, regionOptions };
+  return { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions };
 }
 
 function adminDbGroupedRows(rows = []) {
@@ -16519,7 +16564,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">전체 DB 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
   }
-  const { rows, filteredRows, filters, provinceOptions, regionOptions } = adminDbFilterState(master);
+  const { rows, filteredRows, filters, provinceOptions, regionOptions, statusOptions } = adminDbFilterState(master);
   const grouped = adminDbGroupedRows(filteredRows);
   const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
@@ -16569,6 +16614,12 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
               ["rooms_asc", "객실수 적은순"],
               ["confidence_low", "낮은 신뢰도순"]
             ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>관리 상태</span>
+          <select data-admin-db-status>
+            ${statusOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.status === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
           </select>
         </label>
         <label>
@@ -18826,7 +18877,7 @@ function adminConsoleTaskQueue(master = {}, entries = []) {
       <div class="admin-task-list">
         ${tasks.map(([label, count, note, key]) => {
           const attrs = key === "contact"
-            ? 'data-drawer-tab="target"'
+            ? 'data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="contact_ready"'
             : key === "duplicate"
               ? "data-company-master-focus"
               : `data-company-check-filter="${escapeHtml(key)}"`;
@@ -25593,6 +25644,7 @@ function bindEvents() {
         province: "all",
         region: "all",
         sort: "rank",
+        status: "all",
         ota: "all",
         feature: "all"
       };
@@ -25921,6 +25973,10 @@ function bindEvents() {
     const drawerTab = event.target.closest("[data-drawer-tab]");
     if (drawerTab) {
       const targetTab = drawerTab.dataset.drawerTab || "";
+      const adminDbStatusLink = drawerTab.dataset.adminDbStatusLink || "";
+      if (adminDbStatusLink) {
+        state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatusLink };
+      }
       setActiveTab(targetTab);
       if (targetTab === "admin" && drawerTab.dataset.adminSectionLink) {
         setAdminPanelSection(drawerTab.dataset.adminSectionLink);
@@ -26053,6 +26109,14 @@ function bindEvents() {
       state.adminDbFilters.sort = adminDbSort.value || "rank";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-sort]")?.focus());
+      return;
+    }
+    const adminDbStatus = event.target.closest("[data-admin-db-status]");
+    if (adminDbStatus) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.status = adminDbStatus.value || "all";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => document.querySelector("[data-admin-db-status]")?.focus());
       return;
     }
     const adminDbOta = event.target.closest("[data-admin-db-ota]");
