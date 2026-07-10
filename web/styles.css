@@ -2442,6 +2442,146 @@ a {
   line-height: 1.15;
 }
 
+.admin-db-recheck-panel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 15px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+  padding: 12px;
+}
+
+.admin-db-recheck-panel.good {
+  border-color: #a7d8d1;
+  background: linear-gradient(180deg, #f3fbf9, #ffffff);
+}
+
+.admin-db-recheck-panel.bad {
+  border-color: #fecaca;
+  background: linear-gradient(180deg, #fff8f8, #ffffff);
+}
+
+.admin-db-recheck-panel.watch {
+  border-color: #fedf89;
+  background: linear-gradient(180deg, #fffbeb, #ffffff);
+}
+
+.admin-db-recheck-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-recheck-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-recheck-head span,
+.admin-db-recheck-head small,
+.admin-db-recheck-summary span,
+.admin-db-recheck-summary small,
+.admin-db-recheck-grid span,
+.admin-db-recheck-grid small,
+.admin-db-recheck-panel p {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 830;
+  line-height: 1.42;
+}
+
+.admin-db-recheck-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-recheck-head mark {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-recheck-summary,
+.admin-db-recheck-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-recheck-summary article,
+.admin-db-recheck-grid article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-db-recheck-grid article.good {
+  border-color: #a7d8d1;
+  background: #f3fbf9;
+}
+
+.admin-db-recheck-grid article.bad {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-db-recheck-grid article.same {
+  border-color: #d5e3f7;
+  background: #fbfdff;
+}
+
+.admin-db-recheck-summary strong,
+.admin-db-recheck-grid strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-recheck-grid article.good strong {
+  color: #0f766e;
+}
+
+.admin-db-recheck-grid article.bad strong {
+  color: #b42318;
+}
+
+.admin-db-recheck-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.admin-db-recheck-actions button {
+  min-height: 34px;
+  border: 1px solid #a7d8d1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f766e;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .admin-db-collect-planline {
   display: block;
 }
@@ -22959,6 +23099,8 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-collect-metrics,
   .admin-db-collect-list article,
   .admin-db-confirm-grid,
+  .admin-db-recheck-summary,
+  .admin-db-recheck-grid,
   .admin-db-selected-grid,
   .admin-db-selected-layout,
   .admin-db-company,
@@ -23069,6 +23211,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-work-title,
   .admin-db-collect-head,
   .admin-db-confirm-head,
+  .admin-db-recheck-head,
   .admin-db-selected-head {
     align-items: flex-start;
     flex-direction: column;
@@ -23080,6 +23223,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-work-title span,
   .admin-db-collect-head button,
   .admin-db-confirm-head button,
+  .admin-db-recheck-head mark,
   .admin-db-selected-head mark {
     align-self: flex-start;
   }
@@ -23091,6 +23235,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-company-action button,
   .admin-db-work-actions button,
   .admin-db-confirm-head button,
+  .admin-db-recheck-actions button,
   .admin-db-selected-actions button {
     width: 100%;
   }

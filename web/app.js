@@ -16582,6 +16582,164 @@ function adminDbConfirmCollectPlanHtml(row = {}) {
   `;
 }
 
+function adminDbRecheckToneLabel(tone = "same") {
+  return {
+    good: "개선",
+    bad: "악화",
+    same: "유지",
+    watch: "대기"
+  }[tone] || "유지";
+}
+
+function adminDbRecheckComparisonRows(comparison = {}) {
+  if (!comparison.hasComparison) return [];
+  const before = comparison.before || {};
+  const current = comparison.current || {};
+  const beforeRevenue = effectiveRevenueValue(before);
+  const currentRevenue = effectiveRevenueValue(current);
+  return [
+    {
+      label: "수량 신뢰도",
+      before: before.grade ? `${before.grade} · ${before.structureLabel || "구조 확인"}` : "이전 없음",
+      current: current.grade ? `${current.grade} · ${current.structureLabel || "구조 확인"}` : "최신 없음",
+      tone: queueDeltaTone(before.gradeScore, current.gradeScore, true),
+      note: current.quantityWeak ? "구조 확인 필요" : "수량 안정"
+    },
+    {
+      label: "예약율",
+      before: Number.isFinite(before.averageRate) ? fmtRate(before.averageRate) : "확인 필요",
+      current: Number.isFinite(current.averageRate) ? fmtRate(current.averageRate) : "확인 필요",
+      tone: queueDeltaTone(before.averageRate, current.averageRate, true),
+      note: `${fmtNumber(current.totalSold)}건 판매 · ${fmtNumber(current.totalSupply)}건 기준`
+    },
+    {
+      label: "가격 표본",
+      before: `${fmtNumber(before.totalPricedSoldOut)}건 · 누락 ${fmtNumber(before.totalMissingPriceSoldOut)}`,
+      current: `${fmtNumber(current.totalPricedSoldOut)}건 · 누락 ${fmtNumber(current.totalMissingPriceSoldOut)}`,
+      tone: before.totalMissingPriceSoldOut !== current.totalMissingPriceSoldOut
+        ? queueDeltaTone(before.totalMissingPriceSoldOut, current.totalMissingPriceSoldOut, false)
+        : queueDeltaTone(before.totalPricedSoldOut, current.totalPricedSoldOut, true),
+      note: current.totalMissingPriceSoldOut ? "가격 누락 남음" : "가격 누락 없음"
+    },
+    {
+      label: "판매 공백",
+      before: `${fmtNumber(before.gapCount)}유형`,
+      current: `${fmtNumber(current.gapCount)}유형`,
+      tone: queueDeltaTone(before.gapCount, current.gapCount, false),
+      note: current.gapCount ? "요일별 공백 확인" : "공백 완화"
+    },
+    {
+      label: "총량 변동",
+      before: before.stockVariance ? "있음" : "없음",
+      current: current.stockVariance ? "있음" : "없음",
+      tone: queueBooleanResolvedTone(before.stockVariance, current.stockVariance),
+      note: current.stockVariance ? "날짜별 총량 변동" : "총량 안정"
+    },
+    {
+      label: "오프라인 추정",
+      before: before.offlineEstimated ? `${fmtNumber(before.offlineQuantity)}건` : "신호 없음",
+      current: current.offlineEstimated ? `${fmtNumber(current.offlineQuantity)}건` : "신호 없음",
+      tone: queueBooleanResolvedTone(before.offlineEstimated, current.offlineEstimated),
+      note: current.offlineDetail || (current.offlineEstimated ? "미오픈/차단·총량차 반영" : "추정 신호 없음")
+    },
+    {
+      label: "예상 매출",
+      before: fmtWon(beforeRevenue),
+      current: fmtWon(currentRevenue),
+      tone: queueDeltaTone(beforeRevenue, currentRevenue, true),
+      note: `변화 ${formatSignedWon(currentRevenue - beforeRevenue)}`
+    }
+  ];
+}
+
+function adminDbRecheckOutcomeHtml(row = {}) {
+  const company = row.company || {};
+  if (!company.companyId) return "";
+  const profile = companyNeedsCorrection(company);
+  const decision = companyDecisionQueueProfile(company);
+  const comparison = companyRecrawlComparison(company);
+  const recommendation = companyRecrawlAutoRecommendation(company, profile, decision, comparison);
+  const latestDate = comparison.latest?.collectedAt ? compactDateTime(comparison.latest.collectedAt) : "최신 수집 대기";
+  const previousDate = comparison.previous?.collectedAt ? compactDateTime(comparison.previous.collectedAt) : "이전 수집 대기";
+  const statusLabel = companyAdminReviewLabel(recommendation.status) || recommendation.label || "판정 대기";
+  const firstReason = (recommendation.reasons || []).filter(Boolean)[0] || "확인 수집 결과를 보고 관리자 처리 상태를 결정합니다.";
+  const applyButton = recommendation.status
+    ? `<button type="button" data-company-review-action="${escapeHtml(recommendation.status)}" data-company-id="${escapeHtml(company.companyId || "")}" data-company-review-source="admin_recheck_outcome">추천 적용</button>`
+    : "";
+  if (!comparison.hasComparison) {
+    return `
+      <div class="admin-db-recheck-panel watch">
+        <div class="admin-db-recheck-head">
+          <div>
+            <span>확인 수집 결과 판정</span>
+            <strong>전후 비교 대기</strong>
+            <small>${escapeHtml(`${previousDate} → ${latestDate}`)}</small>
+          </div>
+          <mark>비교 대기</mark>
+        </div>
+        <div class="admin-db-recheck-summary">
+          ${[
+            ["비교 상태", "대기", "이전/최신 수집값 필요"],
+            ["추천 처리", statusLabel, recommendation.label || "수집 후 자동 판정"],
+            ["다음 행동", "확인 수집", firstReason]
+          ].map(([label, value, note]) => `
+            <article>
+              <span>${escapeHtml(label)}</span>
+              <strong>${escapeHtml(value)}</strong>
+              <small>${escapeHtml(note)}</small>
+            </article>
+          `).join("")}
+        </div>
+        <p>확인 수집을 실행하면 이전/최신 수량·가격·예약율 근거를 비교합니다.</p>
+        <div class="admin-db-recheck-actions">
+          <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_recheck_outcome">확인 수집 설정</button>
+          ${applyButton}
+        </div>
+      </div>
+    `;
+  }
+  const rows = adminDbRecheckComparisonRows(comparison);
+  return `
+    <div class="admin-db-recheck-panel ${escapeHtml(comparison.tone || "same")}">
+      <div class="admin-db-recheck-head">
+        <div>
+          <span>확인 수집 결과 판정</span>
+          <strong>${escapeHtml(`개선 ${fmtNumber(comparison.improved || 0)} · 악화 ${fmtNumber(comparison.worsened || 0)}`)}</strong>
+          <small>${escapeHtml(`${previousDate} → ${latestDate}`)}</small>
+        </div>
+        <mark>${escapeHtml(recommendation.label || adminDbRecheckToneLabel(comparison.tone))}</mark>
+      </div>
+      <div class="admin-db-recheck-summary">
+        ${[
+          ["이전 수집", previousDate, "비교 기준"],
+          ["최신 수집", latestDate, "확인 수집 결과"],
+          ["자동 판정", statusLabel, firstReason],
+          ["다음 처리", recommendation.label || adminDbRecheckToneLabel(comparison.tone), "추천 적용 후 관리자 판단에 기록"]
+        ].map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-recheck-grid">
+        ${rows.map((item) => `
+          <article class="${escapeHtml(item.tone || "same")}">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${escapeHtml(`${item.before} → ${item.current}`)}</strong>
+            <small>${escapeHtml(item.note || adminDbRecheckToneLabel(item.tone))}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-recheck-actions">
+        ${applyButton}
+        <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_recheck_outcome">확인 수집 재설정</button>
+      </div>
+    </div>
+  `;
+}
+
 function adminDbCollectionPanel(rows = []) {
   const confirmRows = adminDbConfirmCollectRows(rows);
   const countByKey = (key) => rows.filter((row) => row.metrics?.collection?.key === key).length;
@@ -16689,6 +16847,7 @@ function adminDbSelectedDetailPanel(rows = []) {
         ${issues.slice(0, 8).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
       </div>
       ${adminDbConfirmCollectPlanHtml(row)}
+      ${adminDbRecheckOutcomeHtml(row)}
       <div class="admin-db-selected-actions">
         <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
         <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
