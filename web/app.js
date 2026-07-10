@@ -16662,6 +16662,57 @@ function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], gr
   `;
 }
 
+function adminDbProvinceQuickBoard(grouped = [], filters = {}) {
+  const totalRows = grouped.reduce((sum, province) => sum + (province.rows || []).length, 0);
+  const totalRegions = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
+  const cards = [
+    {
+      key: "all",
+      label: "전체",
+      rows: grouped.flatMap((province) => province.rows || []),
+      regions: totalRegions
+    },
+    ...grouped.map((province) => ({
+      key: province.key || "unknown",
+      label: province.label || "미분류",
+      rows: province.rows || [],
+      regions: (province.regions || []).length
+    }))
+  ];
+  return `
+    <section class="admin-db-province-board" aria-label="광역/도 빠른 분류">
+      <div class="admin-db-province-board-head">
+        <div>
+          <span>광역/도 1차 분류</span>
+          <strong>지역 카드에서 시군구와 업체 목록으로 내려갑니다</strong>
+          <small>먼저 광역을 선택하고, 필요하면 업체 검색·상태·시설 필터로 좁힙니다.</small>
+        </div>
+        <mark>${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(totalRows)}개 업체</mark>
+      </div>
+      <div class="admin-db-province-card-grid">
+        ${cards.map((card) => {
+          const rows = card.rows || [];
+          const revenueRows = rows.filter((row) => row.metrics?.revenue > 0);
+          const averageRevenue = revenueRows.length
+            ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
+            : 0;
+          const lowConfidence = rows.filter((row) => row.metrics?.lowConfidence || row.metrics?.confidenceScore <= 2).length;
+          const decisionNeeded = rows.filter((row) => adminDbStatusMatches(row, "decision_queue")).length;
+          const active = card.key === "all" ? filters.province === "all" : filters.province === card.key;
+          return `
+            <button type="button" class="${active ? "active" : ""}" data-admin-db-province-card="${escapeHtml(card.key)}">
+              <span>${escapeHtml(card.label)}</span>
+              <strong>${fmtNumber(rows.length)}곳</strong>
+              <small>${fmtNumber(card.regions || 0)}개 지역 · 평균 ${fmtWon(averageRevenue)}</small>
+              <em>낮은 신뢰 ${fmtNumber(lowConfidence)} · 판단 필요 ${fmtNumber(decisionNeeded)}</em>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbAuditStats(rows = []) {
   const total = rows.length;
   const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
@@ -17777,6 +17828,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   }
   const { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = adminDbFilterState(master);
   const grouped = adminDbGroupedRows(filteredRows);
+  const allGrouped = adminDbGroupedRows(rows);
   const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
   const otaLinked = filteredRows.filter((row) => row.metrics.channels.count > 0).length;
@@ -17833,6 +17885,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
       </div>
       ${adminDbMasterSummary(filteredRows, rows, grouped)}
+      ${adminDbProvinceQuickBoard(allGrouped, filters)}
       <div class="admin-db-toolbar">
         <label class="admin-db-filter-query">
           <span>업체 검색</span>
@@ -26936,6 +26989,20 @@ function bindEvents() {
       state.adminDbOpsOpen = state.adminDbViewMode === "review";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-view].active")?.focus());
+      return;
+    }
+    const adminDbProvinceCard = event.target.closest("[data-admin-db-province-card]");
+    if (adminDbProvinceCard) {
+      const province = adminDbProvinceCard.dataset.adminDbProvinceCard || "all";
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.query = "";
+      state.adminDbFilters.province = province;
+      state.adminDbFilters.region = "all";
+      state.adminDbViewMode = "region";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-db-hierarchy")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       return;
     }
     const adminDbOpsSummary = event.target.closest("[data-admin-db-ops-summary]");
