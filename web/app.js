@@ -608,6 +608,7 @@ function selectedCrawlSpeedPresetKey(payload = currentCrawlFormPayload()) {
 }
 
 function updateCrawlSpeedPreview() {
+  ensureCrawlControls();
   if (!els.crawlSpeedPresetRow && !els.crawlSpeedPreview) return;
   const payload = currentCrawlFormPayload();
   const preview = crawlPreviewMeta(payload);
@@ -648,6 +649,15 @@ function syncCollectionModeInputs() {
   els.detailRankRangesInput.placeholder = "예: 1-10, 1-20, 10-20";
   if (!els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = "1-10";
   updateCrawlSpeedPreview();
+}
+
+function focusAdminCrawlProgress() {
+  ensureCrawlControls();
+  setActiveTab("admin");
+  setAdminPanelSection("collect");
+  window.requestAnimationFrame(() => {
+    (els.crawlProgress || els.crawlForm)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 const REGIONAL_GLAMPING_BASES = new Set([
@@ -905,6 +915,10 @@ function setAdminPanelSection(sectionKey = "database", options = {}) {
   }
   syncAdminSectionPanels();
   syncAdminMobileNav();
+  if (sectionKey === "collect") {
+    ensureCrawlControls();
+    updateCrawlSpeedPreview();
+  }
   if (options.scroll) {
     window.setTimeout(() => {
       document.querySelector(`[data-admin-section-panel="${sectionKey}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -17295,7 +17309,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       </div>
       ${adminDbAuditBoard(filteredRows)}
       <div class="admin-db-toolbar">
-        <label>
+        <label class="admin-db-filter-query">
           <span>업체 검색</span>
           <input type="search" data-admin-db-query value="${escapeHtml(filters.query || "")}" placeholder="업체명, 지역, 키워드">
         </label>
@@ -17320,13 +17334,13 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
             ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
         </label>
-        <label>
+        <label class="admin-db-filter-wide">
           <span>관리 상태</span>
           <select data-admin-db-status>
             ${statusOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.status === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
           </select>
         </label>
-        <label>
+        <label class="admin-db-filter-wide">
           <span>수집 구분</span>
           <select data-admin-db-source>
             ${sourceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.source === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
@@ -17346,19 +17360,20 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
             ].map(([value, label]) => `<option value="${value}" ${filters.ota === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
         </label>
-        <label>
+        <label class="admin-db-filter-feature">
           <span>시설</span>
+          <small>수영장·세미나실·애견동반·바베큐 포함 여부</small>
           <select data-admin-db-feature>
             ${[
-              ["all", "전체 시설"],
-              ["pool", "수영장"],
-              ["seminar", "세미나실"],
-              ["pet", "애견동반"],
-              ["bbq", "바베큐"]
+              ["all", "시설 전체"],
+              ["pool", "시설 · 수영장"],
+              ["seminar", "시설 · 세미나실"],
+              ["pet", "시설 · 애견동반"],
+              ["bbq", "시설 · 바베큐"]
             ].map(([value, label]) => `<option value="${value}" ${filters.feature === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
         </label>
-        <button type="button" data-admin-db-clear>필터 초기화</button>
+        <button class="admin-db-filter-reset" type="button" data-admin-db-clear>필터 초기화</button>
       </div>
       ${adminDbWorkPanel(filteredRows)}
       ${adminDbCollectionPanel(filteredRows)}
@@ -25771,16 +25786,12 @@ function applyCollectionQualitySetting(button) {
     els.detailRankRangesInput.value = mode === "fast" ? "" : range;
   }
   syncCollectionModeInputs();
-  setActiveTab("admin");
-  setAdminPanelSection("collect");
+  focusAdminCrawlProgress();
   if (els.crawlStatus) {
     const detail = mode === "fast" ? "빠른 순위 · 상세 생략" : `정밀분석 · 상세 ${range}위`;
     els.crawlStatus.textContent = `${keyword} 수집 설정을 적용했습니다. ${detail}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
   setStatus("수집 품질 권장 설정 적용");
-  window.requestAnimationFrame(() => {
-    els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
 }
 
 function applyQueueRecrawlSetting(button) {
@@ -25822,15 +25833,12 @@ function applyQueueRecrawlSetting(button) {
     els.detailRankRangesInput.value = plan.range || "1-20";
   }
   syncCollectionModeInputs();
-  setActiveTab("admin");
-  setAdminPanelSection("collect");
+  focusAdminCrawlProgress();
+  renderCrawlReadinessPreview(currentCrawlFormPayload(), eta);
   if (els.crawlStatus) {
     els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
   setStatus("재수집 설정 적용");
-  window.requestAnimationFrame(() => {
-    els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
 }
 
 function applyRecrawlBatchSetting(button) {
@@ -25874,17 +25882,14 @@ function applyRecrawlBatchSetting(button) {
     els.detailRankRangesInput.value = plan.range || plan.detailRankRanges || "1-20";
   }
   syncCollectionModeInputs();
-  setActiveTab("admin");
-  setAdminPanelSection("collect");
+  focusAdminCrawlProgress();
+  renderCrawlReadinessPreview(currentCrawlFormPayload(), eta);
   if (els.crawlStatus) {
     const saved = batch.savedSeconds ? ` · 개별 실행 대비 ${formatElapsed(batch.savedSeconds)} 절감` : "";
     const label = source === "sales_gate" ? "보류 업체" : "후보";
     els.crawlStatus.textContent = `${fmtNumber(batch.count)}개 ${label} 묶음 재수집 설정을 적용했습니다. 상세 ${plan.range || plan.detailRankRanges || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
   }
   setStatus("묶음 재수집 설정 적용");
-  window.requestAnimationFrame(() => {
-    els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
 }
 
 async function backfillCompanyMaster(button) {
@@ -26233,6 +26238,7 @@ async function logout() {
 
 async function submitCrawl(event) {
   event.preventDefault();
+  ensureCrawlControls();
   const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
   const requestedMode = els.searchModeInput?.value || "keyword";
   const resolvedMode = correctedSearchMode(els.keywordInput.value.trim(), requestedMode);
