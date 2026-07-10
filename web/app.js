@@ -16901,6 +16901,170 @@ function adminDbWorkReason(row = {}) {
   return issues.slice(0, 2).join(" · ") || "추가 확인 후 상태를 확정하세요.";
 }
 
+function adminDbChannelSummary(metrics = {}) {
+  const channels = metrics.channels || {};
+  const labels = [
+    channels.naver ? "네이버" : "",
+    channels.yeogi ? "여기어때" : "",
+    channels.yanolja ? "야놀자" : "",
+    channels.tteonayo ? "떠나요" : "",
+    channels.onda ? "온다" : ""
+  ].filter(Boolean);
+  return labels.length ? labels.join(" · ") : "채널 확인 필요";
+}
+
+function adminDbReservationStockText(metrics = {}) {
+  const category = metrics.category || activeLodgingCategoryProfile();
+  const unitLabel = b2bReservationUnitLabel(category);
+  const lodging = metrics.lodging || {};
+  const sold = optionalNumber(lodging.totalSold ?? lodging.weeklyTotalSoldOut ?? lodging.soldOutRooms);
+  const supply = optionalNumber(lodging.totalSupply ?? lodging.weeklyTotalStock ?? lodging.totalRooms);
+  if (Number.isFinite(sold) && Number.isFinite(supply) && supply > 0) {
+    return `${fmtNumber(sold)}/${fmtNumber(supply)} ${unitLabel}`;
+  }
+  if (Number.isFinite(metrics.rate)) return `${fmtRate(metrics.rate)} · 수량 확인`;
+  return "예약 표본 확인";
+}
+
+function adminDbProductSummary(company = {}, metrics = {}) {
+  const latest = metrics.latest || company.inventory?.latest || {};
+  const signal = metrics.signal || latest.salesSignal || {};
+  const segments = Array.isArray(company.manualCorrection?.segments) ? company.manualCorrection.segments : [];
+  const text = String(
+    latest.productTypeSummary
+    || latest.inventoryProductSummary
+    || signal.productTypeSummary
+    || segments.map((segment) => segment.name || segment.roomType).filter(Boolean).join(" · ")
+    || ""
+  ).trim();
+  if (text) return compactListText(text.split(/\s*[·,|/]\s*/).filter(Boolean), text, 2);
+  return metrics.category?.label ? `${metrics.category.label} 상품` : "상품 구성 확인";
+}
+
+function adminDbCouponSummary(company = {}, metrics = {}) {
+  const coupon = naverCouponInfo({ companyProfile: company });
+  const visible = Boolean(coupon.visible || metrics.couponVisible);
+  return {
+    visible,
+    named: Boolean(coupon.named),
+    value: coupon.named ? "쿠폰명 확인" : visible ? "쿠폰 노출" : "미확인",
+    note: visible ? (coupon.names || coupon.detail || "네이버 쿠폰 노출 신호") : "네이버 화면 수동 확인",
+    tone: coupon.named ? "good" : visible ? "watch" : "neutral"
+  };
+}
+
+function adminDbB2BMetricCards(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const coupon = adminDbCouponSummary(company, metrics);
+  return [
+    {
+      label: "네이버 노출",
+      value: metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위 대기",
+      note: "지정 검색범위 기준",
+      tone: metrics.rank ? "good" : "watch"
+    },
+    {
+      label: "예약 판매율",
+      value: Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요",
+      note: adminDbReservationStockText(metrics),
+      tone: Number.isFinite(metrics.rate) ? b2bRateTone(metrics.rate, "neutral", metrics.category) : "watch"
+    },
+    {
+      label: "예상 7일 매출",
+      value: metrics.revenue ? fmtWon(metrics.revenue) : "대기",
+      note: metrics.revenue ? revenueAdjustmentNote(metrics.revenueImpact) : "가격·판매수량 표본 대기",
+      tone: metrics.revenue ? "good" : "watch"
+    },
+    {
+      label: "객실/상품",
+      value: metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "수량 확인",
+      note: adminDbProductSummary(company, metrics),
+      tone: metrics.roomTotal ? "neutral" : "watch"
+    },
+    {
+      label: "쿠폰",
+      value: coupon.value,
+      note: coupon.note,
+      tone: coupon.tone
+    },
+    {
+      label: "플랫폼",
+      value: `${fmtNumber(metrics.channels?.count || 0)}개`,
+      note: adminDbChannelSummary(metrics),
+      tone: metrics.channels?.count ? "neutral" : "watch"
+    }
+  ];
+}
+
+function adminDbRequiredCheckChannels(row = {}) {
+  const metrics = row.metrics || {};
+  const channels = [];
+  if (!Number.isFinite(metrics.rate) || !metrics.revenue || metrics.lowConfidence) channels.push("네이버 예약");
+  if (!metrics.channels?.count || metrics.collection?.needsConfirm) channels.push("OTA");
+  if (metrics.lowConfidence || metrics.stockVariance || metrics.signal?.lodgingStructuralBlockedTotal) channels.push("전화예약/오프라인");
+  if (adminDbCouponSummary(row.company || {}, metrics).visible) channels.push("네이버 쿠폰");
+  return Array.from(new Set(channels)).slice(0, 4);
+}
+
+function adminDbInternalJudgmentCards(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+  const collection = metrics.collection || {};
+  const review = metrics.adminReview || company.adminReview || {};
+  const channels = adminDbRequiredCheckChannels(row);
+  const correction = manualCorrectionHasValue(company.manualCorrection);
+  return [
+    {
+      label: "관리 상태",
+      value: workType.label || "확인 필요",
+      note: adminDbWorkReason(row),
+      tone: workType.tone || "watch"
+    },
+    {
+      label: "수량 신뢰도",
+      value: metrics.confidenceGrade || "대기",
+      note: correction ? "관리자 보정값 우선" : (metrics.lowConfidence ? "총량/상품 구조 확인" : "자동수집 기준"),
+      tone: metrics.confidenceTone || (metrics.lowConfidence ? "hot" : "watch")
+    },
+    {
+      label: "수집 구분",
+      value: collection.label || "자동수집",
+      note: collection.detail || collection.note || "마스터 누적",
+      tone: collection.tone || "neutral"
+    },
+    {
+      label: "필요 확인 채널",
+      value: channels.length ? `${fmtNumber(channels.length)}개` : "추가 없음",
+      note: channels.join(" · ") || "현재 표본 기준 유지",
+      tone: channels.length ? "watch" : "good"
+    },
+    {
+      label: "관리자 보정",
+      value: correction ? "적용" : "미적용",
+      note: correction ? "보정값이 전체 DB 우선값" : "자동수집값 기준",
+      tone: correction ? "good" : "neutral"
+    },
+    {
+      label: "판단 기록",
+      value: review.label || companyAdminReviewLabel(review.status),
+      note: review.note || companyReviewContextText(review.context || {}) || "상태 저장 대기",
+      tone: review.status ? "good" : "watch"
+    }
+  ];
+}
+
+function adminDbSelectedMetricCard(card = {}) {
+  return `
+    <article class="${escapeHtml(card.tone || "neutral")}">
+      <span>${escapeHtml(card.label || "")}</span>
+      <strong>${escapeHtml(card.value || "")}</strong>
+      <small>${escapeHtml(card.note || "")}</small>
+    </article>
+  `;
+}
+
 function adminDbWorkPriority(row = {}) {
   const metrics = row.metrics || {};
   const workType = metrics.workType || {};
@@ -17312,34 +17476,39 @@ function adminDbSelectedDetailPanel(rows = []) {
   const metrics = row.metrics || {};
   const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
   const issues = metrics.issues?.length ? metrics.issues : [adminDbWorkReason(row)];
+  const b2bCards = adminDbB2BMetricCards(row);
+  const internalCards = adminDbInternalJudgmentCards(row);
   const selectedId = company.companyId || "";
   state.adminDbSelectedCompanyId = selectedId;
   return `
     <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}">
       <div class="admin-db-selected-head">
         <div>
-          <span>선택 업체 상세 수정</span>
+          <span>업체 상세 · B2B 지표 + 내부 판단</span>
           <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
           <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, metrics.sourceLabel].filter(Boolean).join(" · "))}</small>
         </div>
         <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
       </div>
+      <div class="admin-db-selected-section-head">
+        <div>
+          <span>B2B 지표 보기</span>
+          <strong>노출·예약율·예상매출·상품·채널</strong>
+        </div>
+        <small>사업자 화면과 같은 해석 기준으로 먼저 봅니다.</small>
+      </div>
       <div class="admin-db-selected-grid">
-        ${[
-          ["노출순", metrics.rank ? `${fmtNumber(metrics.rank)}위` : "대기", "네이버 지정 범위"],
-          ["7일 매출", fmtWon(metrics.revenue || 0), "확인 가격 기준"],
-          ["객실수", metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "확인 필요", "관리자 보정 우선"],
-          ["예약율", Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요", "네이버 플레이스 기준"],
-          ["신뢰도", metrics.confidenceGrade || "대기", metrics.manualCorrection ? "관리자 보정 있음" : "자동 수집 기준"],
-          ["수집 구분", metrics.collection?.label || "자동수집", metrics.collection?.note || "마스터 누적"],
-          ["채널", `${fmtNumber(metrics.channels?.count || 0)}개`, metrics.channels?.count ? "채널 감지" : "OTA 확인 필요"]
-        ].map(([label, value, note]) => `
-          <article>
-            <span>${escapeHtml(label)}</span>
-            <strong>${escapeHtml(value)}</strong>
-            <small>${escapeHtml(note)}</small>
-          </article>
-        `).join("")}
+        ${b2bCards.map(adminDbSelectedMetricCard).join("")}
+      </div>
+      <div class="admin-db-selected-section-head compact">
+        <div>
+          <span>관리자 내부 판단</span>
+          <strong>신뢰도·보정·확인 채널·처리 상태</strong>
+        </div>
+        <small>고객 화면에 노출하지 않는 운영 기준입니다.</small>
+      </div>
+      <div class="admin-db-selected-grid internal">
+        ${internalCards.map(adminDbSelectedMetricCard).join("")}
       </div>
       <div class="admin-db-selected-issues">
         ${issues.slice(0, 8).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
