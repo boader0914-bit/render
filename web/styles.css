@@ -2212,6 +2212,135 @@ a {
   white-space: nowrap;
 }
 
+.admin-db-audit-gate {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #fedf89;
+  border-radius: 14px;
+  background: #fffbeb;
+  padding: 11px;
+}
+
+.admin-db-audit-gate.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-db-audit-gate-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-audit-gate-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-audit-gate-head span,
+.admin-db-audit-gate-head small,
+.admin-db-audit-gates span,
+.admin-db-audit-gates small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 830;
+  line-height: 1.42;
+}
+
+.admin-db-audit-gate-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-audit-gate-head mark {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #fff;
+  color: #175cd3;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-audit-gatebar {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .78);
+}
+
+.admin-db-audit-gatebar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f79009, #fdb022);
+}
+
+.admin-db-audit-gate.good .admin-db-audit-gatebar i {
+  background: linear-gradient(90deg, #2f80ed, #42d3a8);
+}
+
+.admin-db-audit-gates {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.admin-db-audit-gates article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 11px;
+  background: #fff;
+  padding: 8px;
+}
+
+.admin-db-audit-gates article.good {
+  border-color: #b8d9d3;
+  background: #f0fbf8;
+}
+
+.admin-db-audit-gates article.watch {
+  border-color: #fedf89;
+  background: #fffdf5;
+}
+
+.admin-db-audit-gates strong {
+  display: block;
+  margin: 2px 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-audit-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.admin-db-audit-gate-actions button {
+  min-height: 34px;
+  border: 1px solid #a7d8d1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f766e;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .admin-db-toolbar {
   display: grid;
   grid-template-columns: minmax(220px, 1.4fr) repeat(7, minmax(130px, .8fr)) auto;
@@ -23507,6 +23636,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-audit-stats,
   .admin-db-audit-detail-grid,
   .admin-db-audit-queue article,
+  .admin-db-audit-gates,
   .admin-db-toolbar,
   .admin-db-work-summary,
   .admin-db-work-list,
@@ -23621,19 +23751,22 @@ body.role-b2b .structure-action-list li::before {
 
   .admin-db-audit-head,
   .admin-db-audit-title,
-  .admin-db-audit-detail-head {
+  .admin-db-audit-detail-head,
+  .admin-db-audit-gate-head {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .admin-db-audit-head mark,
   .admin-db-audit-title b,
-  .admin-db-audit-detail-head mark {
+  .admin-db-audit-detail-head mark,
+  .admin-db-audit-gate-head mark {
     align-self: flex-start;
   }
 
   .admin-db-audit-actions button,
-  .admin-db-audit-company-actions button {
+  .admin-db-audit-company-actions button,
+  .admin-db-audit-gate-actions button {
     width: 100%;
   }
 

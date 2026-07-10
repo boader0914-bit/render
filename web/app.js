@@ -16460,6 +16460,89 @@ function adminDbAuditCompanyTasks(row = {}) {
   return [...new Set(tasks.length ? tasks : ["유지 관리"])];
 }
 
+function adminDbAuditGateRows(stats = {}) {
+  const total = stats.total || 0;
+  return [
+    {
+      key: "region",
+      label: "지역 매칭",
+      value: stats.missingRegion ? `${fmtNumber(stats.missingRegion)}곳 확인` : "완료",
+      done: !stats.missingRegion,
+      action: "지역카드 확인"
+    },
+    {
+      key: "confidence",
+      label: "수량 신뢰",
+      value: stats.lowConfidence ? `${fmtNumber(stats.lowConfidence)}곳 보강` : "완료",
+      done: !stats.lowConfidence,
+      action: "수량 보정"
+    },
+    {
+      key: "revenue",
+      label: "매출 표본",
+      value: `${fmtNumber(stats.revenueRows || 0)}/${fmtNumber(total)}`,
+      done: total ? stats.revenueRows >= total : true,
+      action: "가격·판매 보강"
+    },
+    {
+      key: "channel",
+      label: "채널 확인",
+      value: `${fmtNumber(stats.otaLinked || 0)}/${fmtNumber(total)}`,
+      done: !stats.missingOta,
+      action: "OTA 확인"
+    },
+    {
+      key: "review",
+      label: "관리자 검수",
+      value: stats.unreviewed ? `${fmtNumber(stats.unreviewed)}곳 대기` : "완료",
+      done: !stats.unreviewed,
+      action: "판정 저장"
+    },
+    {
+      key: "confirm",
+      label: "확인 수집",
+      value: stats.confirmNeeded ? `${fmtNumber(stats.confirmNeeded)}곳 필요` : "완료",
+      done: !stats.confirmNeeded,
+      action: "확인 수집"
+    }
+  ];
+}
+
+function adminDbAuditCompletionPanel(region = {}) {
+  const stats = region.stats || adminDbAuditStats(region.rows || []);
+  const gates = adminDbAuditGateRows(stats);
+  const doneCount = gates.filter((gate) => gate.done).length;
+  const ready = doneCount === gates.length;
+  const ratio = gates.length ? Math.round((doneCount / gates.length) * 100) : 100;
+  const nextGate = gates.find((gate) => !gate.done);
+  return `
+    <div class="admin-db-audit-gate ${ready ? "good" : "watch"}">
+      <div class="admin-db-audit-gate-head">
+        <div>
+          <span>지역카드 공개 전 기준</span>
+          <strong>${ready ? "감수 완료 가능" : `${fmtNumber(doneCount)}/${fmtNumber(gates.length)}개 기준 통과`}</strong>
+          <small>${escapeHtml(ready ? "지역카드와 업체 DB를 운영 기준으로 사용할 수 있습니다." : `${nextGate?.label || "남은 기준"}부터 정리하면 됩니다.`)}</small>
+        </div>
+        <mark>${fmtNumber(ratio)}%</mark>
+      </div>
+      <div class="admin-db-audit-gatebar" aria-hidden="true"><i style="width:${Math.max(4, ratio)}%"></i></div>
+      <div class="admin-db-audit-gates">
+        ${gates.map((gate) => `
+          <article class="${gate.done ? "good" : "watch"}">
+            <span>${escapeHtml(gate.label)}</span>
+            <strong>${escapeHtml(gate.value)}</strong>
+            <small>${escapeHtml(gate.done ? "통과" : gate.action)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-audit-gate-actions">
+        <button type="button" data-admin-db-region-link data-admin-db-province-key="${escapeHtml(region.provinceKey || "")}" data-admin-db-region-key="${escapeHtml(region.key || "")}">지역 전체 보기</button>
+        <button type="button" data-admin-db-region-confirm data-admin-db-province-key="${escapeHtml(region.provinceKey || "")}" data-admin-db-region-key="${escapeHtml(region.key || "")}">확인 수집 대상</button>
+      </div>
+    </div>
+  `;
+}
+
 function adminDbAuditDetailPanel(region = null) {
   if (!region) return "";
   const rows = (region.rows || [])
@@ -16500,6 +16583,7 @@ function adminDbAuditDetailPanel(region = null) {
           </article>
         `).join("")}
       </div>
+      ${adminDbAuditCompletionPanel(region)}
       <div class="admin-db-audit-queue">
         ${queueRows.length ? queueRows.map((row) => {
           const company = row.company || {};
