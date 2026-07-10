@@ -198,7 +198,7 @@ const LODGING_CATEGORY_PROFILES = {
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
-  admin: ["report", "rank", "dictionary", "decisionQueue", "map", "demand", "historyOps", "admin"],
+  admin: ["report", "rank", "dictionary", "map", "demand", "historyOps", "admin"],
   b2b: ["report", "rank", "map", "demand"]
 };
 const ADMIN_MOBILE_SECTIONS = {
@@ -217,9 +217,13 @@ const ADMIN_MOBILE_SECTIONS = {
   },
   queue: {
     label: "큐",
-    target: "decisionQueue",
+    target: "admin",
+    adminPanelSection: "database",
+    anchor: "#adminDatabaseDashboard",
     items: [
-      { label: "판단큐", tab: "decisionQueue" }
+      { label: "판단필요", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbStatus: "decision_queue" },
+      { label: "보정필요", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbStatus: "manual" },
+      { label: "컨택후보", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbStatus: "contact_ready" }
     ]
   },
   collect: {
@@ -890,8 +894,9 @@ function syncAdminMobileNav() {
       const tab = item.tab || section.target || "report";
       const anchor = item.anchor || "";
       const adminPanelSection = item.adminPanelSection || section.adminPanelSection || "";
+      const adminDbStatus = item.adminDbStatus || "";
       const active = tab === state.activeTab && (!anchor || anchor === state.adminMobileAnchor);
-      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
+      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-db-status-key="${escapeHtml(adminDbStatus)}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
     }).join("");
   });
 }
@@ -16475,15 +16480,18 @@ function adminDbStatusMatches(row = {}, status = "all") {
   const unreviewed = !metrics.adminReview && !company.adminReview;
   const recrawl = workKey === "recrawl" || reviewStatus === "recrawl_needed" || Boolean(metrics.stockVariance);
   const manual = workKey === "manual" || reviewStatus === "manual_needed" || lowConfidence;
-  const contactReady = reviewStatus === "contact_ready" || salesCategory === "contact";
   const excluded = reviewStatus === "exclude" || salesCategory === "exclude" || contactStatus === "excluded";
+  const decisionQueueActive = companyDecisionQueueProfile(company).inQueue;
+  const contactReady = (reviewStatus === "contact_ready" || salesCategory === "contact") && !decisionQueueActive && !excluded;
+  if (status === "decision_queue") return decisionQueueActive;
   if (status === "needs_work") {
     return lowConfidence
       || unreviewed
       || recrawl
       || manual
       || workKey === "missingRevenue"
-      || workKey === "missingReservation";
+      || workKey === "missingReservation"
+      || decisionQueueActive;
   }
   if (status === "low_confidence") return lowConfidence;
   if (status === "unreviewed") return unreviewed;
@@ -16499,12 +16507,13 @@ function adminDbStatusOptions(rows = []) {
   const count = (status) => rows.filter((row) => adminDbStatusMatches(row, status)).length;
   return [
     ["all", "전체 관리상태", rows.length],
+    ["decision_queue", "판단 필요", count("decision_queue")],
     ["needs_work", "처리 필요", count("needs_work")],
     ["low_confidence", "낮은 신뢰도", count("low_confidence")],
     ["unreviewed", "미검수", count("unreviewed")],
     ["recrawl", "확인 수집", count("recrawl")],
     ["manual", "보정 필요", count("manual")],
-    ["contact_ready", "컨택 가능", count("contact_ready")],
+    ["contact_ready", "컨택 후보", count("contact_ready")],
     ["reviewed", "검수 완료", count("reviewed")],
     ["excluded", "제외", count("excluded")]
   ];
@@ -17867,16 +17876,12 @@ function adminConsoleKpis(master = {}, entries = []) {
     entry.company.adminReview?.status === "manual_needed" ||
     (entry.decision.criteria || []).some((criterion) => criterion.key === "manual_recheck")
   ).length;
-  const inQueueCompanyIds = new Set(openEntries.map((entry) => entry.company.companyId).filter(Boolean));
-  const contactReady = companies.filter((company) =>
-    company.adminReview?.status === "contact_ready" ||
-    (company.salesTarget?.category === "contact" && !inQueueCompanyIds.has(company.companyId))
-  ).length;
+  const contactReady = companies.filter((company) => adminDbStatusMatches({ company }, "contact_ready")).length;
   const trend = state.data?.stats?.datalabTrend || state.data?.datalabTrend || state.data?.trend || {};
   const cacheHit = Boolean(trend.cache?.hit);
   return [
     ["오늘 수집", todayRuns, `${fmtNumber(state.runs?.length || 0)}개 실행 결과`, "neutral"],
-    ["판단 큐", openEntries.length, "컨택 전 확인", openEntries.length ? "warning" : "good"],
+    ["판단 필요", openEntries.length, "전체 DB에서 확인", openEntries.length ? "warning" : "good"],
     ["보정 필요", manualNeeded, "수량/총량 검토", manualNeeded ? "bad" : "good"],
     ["컨택 가능", contactReady, "큐 제외 후보", contactReady ? "good" : "neutral"],
     ["캐시 재사용률", trend.collectable || trend.cache ? (cacheHit ? "100%" : "0%") : "대기", cacheHit ? "동일 기준일 캐시" : "이번 실행/대기", cacheHit ? "good" : "neutral"]
@@ -19898,7 +19903,7 @@ function adminConsoleQueuePreview(entries = []) {
     entry.autoRecommendation?.key === "recrawl_needed"
   ).length;
   const summaryCards = [
-    ["열린 큐", openRows.length, "컨택 전 사람 확인"],
+    ["판단 필요", openRows.length, "컨택 전 사람 확인"],
     ["보정 필요", manualNeeded, "총량·수량 구조 확인"],
     ["OTA 확인", otaNeeded, "채널 보조 확인"],
     ["재수집", recrawlNeeded, "조건 변경 후 재확인"]
@@ -19907,10 +19912,10 @@ function adminConsoleQueuePreview(entries = []) {
     <section class="admin-console-panel admin-queue-preview admin-queue-collapsed-card">
       <div class="admin-console-head">
         <div>
-          <strong>판단 큐 요약</strong>
-          <small>운영 현황에서는 확인 대상 수만 보고, 실제 처리는 별도 판단큐 화면에서 진행합니다.</small>
+          <strong>판단 필요 요약</strong>
+          <small>운영 현황에서는 확인 대상 수만 보고, 실제 처리는 전체 DB의 판단 필요 필터에서 진행합니다.</small>
         </div>
-        <button type="button" data-drawer-tab="decisionQueue">전체 큐 보기</button>
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">전체 DB에서 보기</button>
       </div>
       <div class="admin-queue-summary-grid">
         ${summaryCards.map(([label, value, note]) => `
@@ -19947,14 +19952,14 @@ function adminConsoleQueuePreview(entries = []) {
                   </div>
                   <b>${fmtNumber(entry.priority.score || 0)}</b>
                   <div class="admin-row-actions">
-                    <button type="button" data-drawer-tab="decisionQueue">처리</button>
+                    <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">처리</button>
                   </div>
                 </div>
               `;
             }).join("")}
           </div>
         </details>
-      ` : `<p class="empty">현재 열린 판단 큐가 없습니다.</p>`}
+      ` : `<p class="empty">현재 확인할 업체가 없습니다.</p>`}
     </section>
   `;
 }
@@ -20054,7 +20059,7 @@ function adminConsoleTaskQueue(master = {}, entries = []) {
   const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
   const recrawlRows = recrawlAutomationProfile(entries).needsExecution;
   const manualRows = openEntries.filter((entry) => entry.type.key === "correction" || entry.profile.needed);
-  const contactRows = (master.companies || []).filter((company) => company.salesTarget?.category === "contact" && !companyDecisionQueueProfile(company).inQueue);
+  const contactRows = (master.companies || []).filter((company) => adminDbStatusMatches({ company }, "contact_ready"));
   const duplicateCount = master.duplicateCandidateCount || (master.duplicateCandidates || []).length;
   const tasks = [
     ["재수집 실행", recrawlRows.length, "예상 시간 기준 묶음 실행", "recrawl"],
@@ -20067,17 +20072,21 @@ function adminConsoleTaskQueue(master = {}, entries = []) {
       <div class="admin-console-head">
         <div>
           <strong>관리자 작업</strong>
-          <small>오늘 처리할 큐를 작업 단위로 모읍니다.</small>
+          <small>전체 DB에서 처리할 항목을 작업 단위로 모읍니다.</small>
         </div>
-        <button type="button" data-drawer-tab="decisionQueue">처리 화면</button>
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">전체 DB 처리</button>
       </div>
       <div class="admin-task-list">
         ${tasks.map(([label, count, note, key]) => {
-          const attrs = key === "contact"
+          const attrs = key === "recrawl"
+            ? 'data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="recrawl"'
+            : key === "correction"
+              ? 'data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="manual"'
+              : key === "contact"
             ? 'data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="contact_ready"'
             : key === "duplicate"
               ? "data-company-master-focus"
-              : `data-company-check-filter="${escapeHtml(key)}"`;
+              : 'data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work"';
           return `
           <article class="${count ? "active" : ""}">
             <div>
@@ -20860,7 +20869,7 @@ function renderTargets() {
             <p>${escapeHtml(gateReason)}</p>
             ${salesGateReviewActionsHtml(entry)}
             <div class="target-card-actions">
-              <button class="secondary-button" type="button" data-drawer-tab="decisionQueue">판단 큐에서 처리</button>
+              <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">전체 DB에서 처리</button>
               <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="files">관리에서 확인</button>
             </div>
           </article>
@@ -26803,11 +26812,21 @@ function bindEvents() {
     if (adminMobileSection) {
       const sectionKey = adminMobileSection.dataset.adminMobileSection || "analysis";
       const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.analysis;
+      const adminDbStatus = (section.items || []).find((item) => item.adminDbStatus)?.adminDbStatus || "";
+      if (adminDbStatus) {
+        state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatus };
+        state.adminDbOpsOpen = true;
+      }
       activateAdminMobileNav(sectionKey, section.target, section.anchor || "", section.adminPanelSection || "");
       return;
     }
     const adminMobileTab = event.target.closest("[data-admin-mobile-tab]");
     if (adminMobileTab) {
+      const adminDbStatus = adminMobileTab.dataset.adminDbStatusKey || "";
+      if (adminDbStatus) {
+        state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatus };
+        state.adminDbOpsOpen = true;
+      }
       activateAdminMobileNav(
         adminMobileTab.dataset.adminMobileSectionKey || state.adminMobileSection || "analysis",
         adminMobileTab.dataset.adminMobileTab || "",
@@ -27206,14 +27225,23 @@ function bindEvents() {
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const drawerTab = event.target.closest("[data-drawer-tab]");
     if (drawerTab) {
-      const targetTab = drawerTab.dataset.drawerTab || "";
-      const adminDbStatusLink = drawerTab.dataset.adminDbStatusLink || "";
+      let targetTab = drawerTab.dataset.drawerTab || "";
+      let adminDbStatusLink = drawerTab.dataset.adminDbStatusLink || "";
+      if (isAdminRole() && targetTab === "decisionQueue") {
+        targetTab = "admin";
+        adminDbStatusLink = adminDbStatusLink || "decision_queue";
+      }
+      if (isAdminRole() && targetTab === "target") {
+        targetTab = "admin";
+        adminDbStatusLink = adminDbStatusLink || "contact_ready";
+      }
       if (adminDbStatusLink) {
         state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatusLink };
+        state.adminDbOpsOpen = true;
       }
       setActiveTab(targetTab);
-      if (targetTab === "admin" && drawerTab.dataset.adminSectionLink) {
-        setAdminPanelSection(drawerTab.dataset.adminSectionLink);
+      if (targetTab === "admin") {
+        setAdminPanelSection(drawerTab.dataset.adminSectionLink || "database");
       }
     }
   });
