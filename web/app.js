@@ -16363,6 +16363,146 @@ function adminDbMetricCard(label, value, note, tone = "") {
   `;
 }
 
+function adminDbAuditStats(rows = []) {
+  const total = rows.length;
+  const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
+  const confirmNeeded = rows.filter((row) => row.metrics.collection?.key === "confirm_needed").length;
+  const manualCount = rows.filter((row) => row.metrics.manualCorrection).length;
+  const revenueRows = rows.filter((row) => row.metrics.revenue > 0).length;
+  const otaLinked = rows.filter((row) => row.metrics.channels?.count > 0).length;
+  const unreviewed = rows.filter((row) => !row.metrics.adminReview && !row.company?.adminReview).length;
+  const missingRegion = rows.filter((row) => !row.metrics.classification?.region).length;
+  const missingRevenue = Math.max(0, total - revenueRows);
+  const missingOta = Math.max(0, total - otaLinked);
+  const ratio = (count) => total ? count / total : 0;
+  const penalty = ratio(lowConfidence) * 32
+    + ratio(confirmNeeded) * 26
+    + ratio(unreviewed) * 18
+    + ratio(missingRevenue) * 14
+    + ratio(missingOta) * 6
+    + ratio(missingRegion) * 4;
+  const score = Math.max(0, Math.min(100, Math.round(100 - penalty)));
+  const tone = score >= 85 ? "good" : score >= 70 ? "watch" : "hot";
+  const nextAction = confirmNeeded
+    ? "확인 수집"
+    : lowConfidence
+      ? "수량 보정"
+      : unreviewed
+        ? "관리자 검수"
+        : missingRevenue
+          ? "매출 표본 보강"
+          : "유지 관리";
+  return {
+    total,
+    lowConfidence,
+    confirmNeeded,
+    manualCount,
+    revenueRows,
+    otaLinked,
+    unreviewed,
+    missingRegion,
+    missingRevenue,
+    missingOta,
+    score,
+    tone,
+    nextAction
+  };
+}
+
+function adminDbAuditChecklist(stats = {}) {
+  return [
+    ["지역카드", stats.missingRegion ? `${fmtNumber(stats.missingRegion)}곳 확인` : "완료", !stats.missingRegion],
+    ["수량 신뢰", stats.lowConfidence ? `${fmtNumber(stats.lowConfidence)}곳 보강` : "완료", !stats.lowConfidence],
+    ["매출 표본", stats.missingRevenue ? `${fmtNumber(stats.missingRevenue)}곳 보강` : "완료", !stats.missingRevenue],
+    ["채널", stats.missingOta ? `${fmtNumber(stats.missingOta)}곳 확인` : "완료", !stats.missingOta],
+    ["관리자 검수", stats.unreviewed ? `${fmtNumber(stats.unreviewed)}곳 대기` : "완료", !stats.unreviewed]
+  ];
+}
+
+function adminDbAuditRegions(rows = []) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = row.regionKey || "unknown";
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        provinceKey: row.provinceKey || "unknown",
+        provinceLabel: row.provinceLabel || "미분류",
+        regionLabel: row.localityLabel || row.regionLabel || "지역 미확인",
+        rows: []
+      });
+    }
+    map.get(key).rows.push(row);
+  });
+  return Array.from(map.values()).map((region) => {
+    const stats = adminDbAuditStats(region.rows);
+    return { ...region, stats };
+  }).sort((a, b) =>
+    a.stats.score - b.stats.score
+    || b.stats.confirmNeeded - a.stats.confirmNeeded
+    || b.stats.lowConfidence - a.stats.lowConfidence
+    || b.rows.length - a.rows.length
+    || a.regionLabel.localeCompare(b.regionLabel, "ko-KR")
+  );
+}
+
+function adminDbAuditBoard(rows = []) {
+  const regions = adminDbAuditRegions(rows);
+  const priority = regions.filter((region) => region.stats.score < 85 || region.stats.confirmNeeded || region.stats.lowConfidence || region.stats.unreviewed);
+  const shown = (priority.length ? priority : regions).slice(0, 8);
+  if (!shown.length) return "";
+  const overall = adminDbAuditStats(rows);
+  return `
+    <section class="admin-db-audit-panel">
+      <div class="admin-db-audit-head">
+        <div>
+          <span>지역카드 사전 감수</span>
+          <strong>지역별로 먼저 확인할 DB를 압축합니다</strong>
+          <small>낮은 신뢰도, 확인 수집, 매출 표본, OTA 연결, 관리자 검수 상태를 지역 단위로 묶어 봅니다.</small>
+        </div>
+        <mark class="${escapeHtml(overall.tone)}">${fmtNumber(overall.score)}점 · ${escapeHtml(overall.nextAction)}</mark>
+      </div>
+      <div class="admin-db-audit-list">
+        ${shown.map((region) => {
+          const stats = region.stats;
+          return `
+            <article class="${escapeHtml(stats.tone)}">
+              <div class="admin-db-audit-title">
+                <div>
+                  <span>${escapeHtml(region.provinceLabel)}</span>
+                  <strong>${escapeHtml(region.regionLabel)}</strong>
+                  <small>${fmtNumber(stats.total)}개 업체 · ${escapeHtml(stats.nextAction)}</small>
+                </div>
+                <b>${fmtNumber(stats.score)}점</b>
+              </div>
+              <div class="admin-db-audit-scorebar" aria-hidden="true"><i style="width:${Math.max(4, stats.score)}%"></i></div>
+              <div class="admin-db-audit-stats">
+                ${[
+                  ["확인 수집", `${fmtNumber(stats.confirmNeeded)}곳`],
+                  ["낮은 신뢰", `${fmtNumber(stats.lowConfidence)}곳`],
+                  ["매출 표본", `${fmtNumber(stats.revenueRows)}/${fmtNumber(stats.total)}`],
+                  ["OTA", `${fmtNumber(stats.otaLinked)}/${fmtNumber(stats.total)}`]
+                ].map(([label, value]) => `
+                  <span><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></span>
+                `).join("")}
+              </div>
+              <div class="admin-db-audit-checks">
+                ${adminDbAuditChecklist(stats).map(([label, value, done]) => `
+                  <em class="${done ? "good" : "watch"}">${escapeHtml(label)} · ${escapeHtml(value)}</em>
+                `).join("")}
+              </div>
+              <div class="admin-db-audit-actions">
+                <button type="button" data-admin-db-region-link data-admin-db-province-key="${escapeHtml(region.provinceKey)}" data-admin-db-region-key="${escapeHtml(region.key)}">지역 보기</button>
+                <button type="button" data-admin-db-region-confirm data-admin-db-province-key="${escapeHtml(region.provinceKey)}" data-admin-db-region-key="${escapeHtml(region.key)}">확인 수집만</button>
+              </div>
+            </article>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbChannelChips(channels = {}) {
   const options = [
     ["naver", "네이버"],
@@ -16982,6 +17122,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버/OTA 감지", "watch")}
         ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
       </div>
+      ${adminDbAuditBoard(filteredRows)}
       <div class="admin-db-toolbar">
         <label>
           <span>업체 검색</span>
@@ -26072,6 +26213,23 @@ function bindEvents() {
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    const adminDbRegionLink = event.target.closest("[data-admin-db-region-link], [data-admin-db-region-confirm]");
+    if (adminDbRegionLink) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.province = adminDbRegionLink.dataset.adminDbProvinceKey || "all";
+      state.adminDbFilters.region = adminDbRegionLink.dataset.adminDbRegionKey || "all";
+      if (adminDbRegionLink.matches("[data-admin-db-region-confirm]")) {
+        state.adminDbFilters.source = "confirm_needed";
+        state.adminDbFilters.status = "needs_work";
+      }
+      setActiveTab("admin");
+      setAdminPanelSection("database");
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       return;
     }
