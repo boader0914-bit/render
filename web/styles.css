@@ -1802,6 +1802,55 @@ a {
   color: #b42318;
 }
 
+.admin-db-master-guide {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid #cfe4df;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f6fbfa 0%, #ffffff 100%);
+  padding: 14px;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-master-guide > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-master-guide span,
+.admin-db-master-guide small,
+.admin-db-ops-drawer summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+
+.admin-db-master-guide strong,
+.admin-db-ops-drawer summary strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-master-guide mark {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #fff;
+  color: #175cd3;
+  padding: 8px 11px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .admin-db-audit-panel {
   min-width: 0;
   display: grid;
@@ -2420,6 +2469,60 @@ a {
 .admin-db-company-list {
   display: grid;
   gap: 10px;
+}
+
+.admin-db-hierarchy {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  align-items: start;
+}
+
+.admin-db-ops-drawer {
+  min-width: 0;
+  border: 1px solid #dbe7f3;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--soft-shadow);
+  overflow: hidden;
+}
+
+.admin-db-ops-drawer summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  list-style: none;
+}
+
+.admin-db-ops-drawer summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-ops-drawer summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-ops-drawer summary > span {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f1f7ff;
+  color: #175cd3;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-ops-drawer > .admin-db-metrics,
+.admin-db-ops-drawer > .admin-db-audit-panel,
+.admin-db-ops-drawer > .admin-db-work-panel,
+.admin-db-ops-drawer > .admin-db-collect-panel,
+.admin-db-ops-drawer > .admin-db-selected-panel {
+  margin: 0 12px 12px;
 }
 
 .admin-db-work-panel {
@@ -23788,6 +23891,18 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-toolbar button {
     grid-column: 1 / -1;
     grid-row: auto;
+  }
+
+  .admin-db-master-guide,
+  .admin-db-ops-drawer summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-db-master-guide mark,
+  .admin-db-ops-drawer summary > span {
+    align-self: flex-start;
+    white-space: normal;
   }
 
   .admin-db-audit-head,

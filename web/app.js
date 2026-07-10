@@ -42,7 +42,7 @@ const state = {
     query: "",
     province: "all",
     region: "all",
-    sort: "rank",
+    sort: "name",
     status: "all",
     source: "all",
     ota: "all",
@@ -15948,7 +15948,7 @@ function adminDbFilters() {
     query: "",
     province: "all",
     region: "all",
-    sort: "rank",
+    sort: "name",
     status: "all",
     source: "all",
     ota: "all",
@@ -16200,6 +16200,45 @@ function adminDbRows(master = {}) {
   });
 }
 
+const ADMIN_DB_PROVINCE_ORDER = [
+  ["서울", ["서울", "서울특별시", "seoul"]],
+  ["부산", ["부산", "부산광역시", "busan"]],
+  ["대구", ["대구", "대구광역시", "daegu"]],
+  ["인천", ["인천", "인천광역시", "incheon"]],
+  ["광주", ["광주", "광주광역시", "gwangju"]],
+  ["대전", ["대전", "대전광역시", "daejeon"]],
+  ["울산", ["울산", "울산광역시", "ulsan"]],
+  ["세종", ["세종", "세종특별자치시", "sejong"]],
+  ["경기", ["경기", "경기도", "gyeonggi"]],
+  ["강원", ["강원", "강원도", "강원특별자치도", "gangwon"]],
+  ["충북", ["충북", "충청북도", "chungbuk"]],
+  ["충남", ["충남", "충청남도", "chungnam"]],
+  ["전북", ["전북", "전라북도", "전북특별자치도", "jeonbuk"]],
+  ["전남", ["전남", "전라남도", "jeonnam"]],
+  ["경북", ["경북", "경상북도", "gyeongbuk"]],
+  ["경남", ["경남", "경상남도", "gyeongnam"]],
+  ["제주", ["제주", "제주도", "제주특별자치도", "jeju"]]
+];
+
+function adminDbProvinceOrderIndex(value = {}) {
+  const text = compactSearchText([
+    value.key,
+    value.label,
+    value.provinceKey,
+    value.provinceLabel
+  ].filter(Boolean).join(" "));
+  const index = ADMIN_DB_PROVINCE_ORDER.findIndex(([, aliases]) =>
+    aliases.some((alias) => text.includes(compactSearchText(alias)))
+  );
+  return index >= 0 ? index : 900;
+}
+
+function adminDbProvinceCompare(a = {}, b = {}) {
+  const orderDiff = adminDbProvinceOrderIndex(a) - adminDbProvinceOrderIndex(b);
+  if (orderDiff) return orderDiff;
+  return String(a.label || "").localeCompare(String(b.label || ""), "ko-KR", { numeric: true, sensitivity: "base" });
+}
+
 function adminDbProvinceOptions(rows = []) {
   const map = new Map();
   rows.forEach((row) => {
@@ -16208,7 +16247,7 @@ function adminDbProvinceOptions(rows = []) {
     current.count += 1;
     map.set(key, current);
   });
-  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, "ko-KR"));
+  return Array.from(map.values()).sort(adminDbProvinceCompare);
 }
 
 function adminDbRegionOptions(rows = [], provinceKey = "all") {
@@ -16317,6 +16356,8 @@ function adminDbFilterState(master = {}) {
     return true;
   });
   filteredRows.sort((a, b) => {
+    const nameCompare = String(a.company?.primaryName || "").localeCompare(String(b.company?.primaryName || ""), "ko-KR", { numeric: true, sensitivity: "base" });
+    if (filters.sort === "name") return nameCompare || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "revenue_desc") return b.metrics.revenue - a.metrics.revenue || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "revenue_asc") return a.metrics.revenue - b.metrics.revenue || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
     if (filters.sort === "rooms_desc") return b.metrics.roomTotal - a.metrics.roomTotal || (a.metrics.rank || 9999) - (b.metrics.rank || 9999);
@@ -16354,9 +16395,11 @@ function adminDbGroupedRows(rows = []) {
   return Array.from(provinceMap.values())
     .map((province) => ({
       ...province,
-      regions: Array.from(province.regions.values()).sort((a, b) => b.rows.length - a.rows.length || a.label.localeCompare(b.label, "ko-KR"))
+      regions: Array.from(province.regions.values()).sort((a, b) =>
+        String(a.label || "").localeCompare(String(b.label || ""), "ko-KR", { numeric: true, sensitivity: "base" })
+      )
     }))
-    .sort((a, b) => b.rows.length - a.rows.length || a.label.localeCompare(b.label, "ko-KR"));
+    .sort(adminDbProvinceCompare);
 }
 
 function adminDbSelectOptions(options = [], selected = "all", allLabel = "전체") {
@@ -17231,18 +17274,19 @@ function adminDbCompanyRow(row = {}) {
   `;
 }
 
-function adminDbRegionGroup(region = {}, index = 0) {
+function adminDbRegionGroup(region = {}, index = 0, context = {}) {
   const rows = region.rows || [];
   const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const manualCount = rows.filter((row) => row.metrics.manualCorrection).length;
+  const shouldOpen = Boolean(context.forceOpen || context.openRegions);
   return `
-    <details class="admin-db-region" ${index < 2 ? "open" : ""}>
+    <details class="admin-db-region" ${shouldOpen ? "open" : ""}>
       <summary>
         <div>
           <strong>${escapeHtml(region.label || "지역 미확인")}</strong>
           <small>${fmtNumber(rows.length)}개 업체 · 낮은 신뢰 ${fmtNumber(lowConfidence)} · 관리자 보정 ${fmtNumber(manualCount)}</small>
         </div>
-        <span>${fmtNumber(rows.length)}</span>
+        <span>${fmtNumber(rows.length)}개 · 업체보기</span>
       </summary>
       <div class="admin-db-company-list">
         ${rows.slice(0, 30).map(adminDbCompanyRow).join("")}
@@ -17252,26 +17296,41 @@ function adminDbRegionGroup(region = {}, index = 0) {
   `;
 }
 
-function adminDbProvinceGroup(province = {}, index = 0) {
+function adminDbProvinceGroup(province = {}, index = 0, context = {}) {
   const rows = province.rows || [];
   const regionCount = (province.regions || []).length;
   const revenueRows = rows.filter((row) => row.metrics.revenue > 0);
   const averageRevenue = revenueRows.length
     ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
     : 0;
+  const shouldOpen = Boolean(context.forceOpen || context.openProvinces);
   return `
-    <details class="admin-db-province" ${index < 2 ? "open" : ""}>
+    <details class="admin-db-province" ${shouldOpen ? "open" : ""}>
       <summary>
         <div>
           <strong>${escapeHtml(province.label || "미분류")}</strong>
           <small>${fmtNumber(regionCount)}개 지역 · ${fmtNumber(rows.length)}개 업체 · 평균 ${fmtWon(averageRevenue)}</small>
         </div>
-        <span>${fmtNumber(rows.length)}개</span>
+        <span>시군구 보기</span>
       </summary>
       <div class="admin-db-region-list">
-        ${(province.regions || []).map(adminDbRegionGroup).join("")}
+        ${(province.regions || []).map((region, regionIndex) => adminDbRegionGroup(region, regionIndex, context)).join("")}
       </div>
     </details>
+  `;
+}
+
+function adminDbMasterSummary(filteredRows = [], rows = [], grouped = []) {
+  const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
+  return `
+    <div class="admin-db-master-guide">
+      <div>
+        <span>마스터 데이터 구조</span>
+        <strong>광역/도 카드 → 시군구 → 업체 가나다 리스트</strong>
+        <small>먼저 지역 구조를 펼친 뒤 업체를 찾고, 필요한 경우 검색·필터로 좁혀 보정합니다.</small>
+      </div>
+      <mark>${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역 · ${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체</mark>
+    </div>
   `;
 }
 
@@ -17290,24 +17349,38 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const averageRevenue = revenueRows.length
     ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
     : 0;
+  const shouldOpenHierarchy = Boolean(
+    filters.query
+    || filters.province !== "all"
+    || filters.region !== "all"
+    || filters.status !== "all"
+    || filters.source !== "all"
+    || filters.ota !== "all"
+    || filters.feature !== "all"
+  );
+  const hierarchyContext = {
+    forceOpen: shouldOpenHierarchy
+  };
+  const metricSummaryHtml = `
+    <div class="admin-db-metrics">
+      ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "마스터 DB 기준", "good")}
+      ${adminDbMetricCard("낮은 신뢰도", fmtNumber(lowConfidence), "수량·매출 확인 우선", lowConfidence ? "hot" : "good")}
+      ${adminDbMetricCard("관리자 보정", fmtNumber(manualCount), "보정값 우선 적용", manualCount ? "good" : "")}
+      ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버/OTA 감지", "watch")}
+      ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
+    </div>
+  `;
   els.adminDatabaseDashboard.innerHTML = `
     <section class="admin-db-board" id="adminDatabaseBoard">
       <div class="admin-db-hero">
         <div>
           <span>전체 DB</span>
-          <h3>광역·지역·업체 단위로 마스터 데이터를 확인합니다.</h3>
-          <p>자동 수집 신뢰도, 관리자 보정 여부, OTA 채널, 시설 키워드를 한 화면에서 보고 수정 대상은 기존 마스터 보정 화면으로 연결합니다.</p>
+          <h3>전국 마스터 데이터를 지역 구조부터 정리합니다.</h3>
+          <p>광역/도 카드를 먼저 보고, 더보기에서 시군구와 업체 가나다 리스트를 확인합니다.</p>
         </div>
         <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
       </div>
-      <div class="admin-db-metrics">
-        ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "마스터 DB 기준", "good")}
-        ${adminDbMetricCard("낮은 신뢰도", fmtNumber(lowConfidence), "수량·매출 확인 우선", lowConfidence ? "hot" : "good")}
-        ${adminDbMetricCard("관리자 보정", fmtNumber(manualCount), "보정값 우선 적용", manualCount ? "good" : "")}
-        ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버/OTA 감지", "watch")}
-        ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
-      </div>
-      ${adminDbAuditBoard(filteredRows)}
+      ${adminDbMasterSummary(filteredRows, rows, grouped)}
       <div class="admin-db-toolbar">
         <label class="admin-db-filter-query">
           <span>업체 검색</span>
@@ -17325,6 +17398,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           <span>정렬</span>
           <select data-admin-db-sort>
             ${[
+              ["name", "업체 가나다순"],
               ["rank", "노출순"],
               ["revenue_desc", "매출 높은순"],
               ["revenue_asc", "매출 낮은순"],
@@ -17375,12 +17449,23 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         </label>
         <button class="admin-db-filter-reset" type="button" data-admin-db-clear>필터 초기화</button>
       </div>
-      ${adminDbWorkPanel(filteredRows)}
-      ${adminDbCollectionPanel(filteredRows)}
-      ${adminDbSelectedDetailPanel(filteredRows)}
       <div class="admin-db-hierarchy">
-        ${grouped.length ? grouped.map(adminDbProvinceGroup).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
+        ${grouped.length ? grouped.map((province, provinceIndex) => adminDbProvinceGroup(province, provinceIndex, hierarchyContext)).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
+      <details class="admin-db-ops-drawer">
+        <summary>
+          <div>
+            <strong>검수·확인 수집 보조자료</strong>
+            <small>신뢰도, 확인 수집, 상세 수정은 필요할 때만 펼쳐서 봅니다.</small>
+          </div>
+          <span>펼치기</span>
+        </summary>
+        ${metricSummaryHtml}
+        ${adminDbAuditBoard(filteredRows)}
+        ${adminDbWorkPanel(filteredRows)}
+        ${adminDbCollectionPanel(filteredRows)}
+        ${adminDbSelectedDetailPanel(filteredRows)}
+      </details>
     </section>
   `;
 }
@@ -26360,7 +26445,7 @@ function bindEvents() {
         query: "",
         province: "all",
         region: "all",
-        sort: "rank",
+        sort: "name",
         status: "all",
         source: "all",
         ota: "all",
@@ -26863,7 +26948,7 @@ function bindEvents() {
     const adminDbSort = event.target.closest("[data-admin-db-sort]");
     if (adminDbSort) {
       state.adminDbFilters = state.adminDbFilters || {};
-      state.adminDbFilters.sort = adminDbSort.value || "rank";
+      state.adminDbFilters.sort = adminDbSort.value || "name";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-sort]")?.focus());
       return;
