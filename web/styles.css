@@ -3072,6 +3072,126 @@ a {
   white-space: nowrap;
 }
 
+.admin-db-quick-edit {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #bfd7ff;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f6faff, #ffffff);
+  padding: 12px;
+}
+
+.admin-db-quick-edit-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-quick-edit-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-quick-edit-head span,
+.admin-db-quick-edit-head small,
+.admin-db-quick-edit-summary span,
+.admin-db-quick-edit-summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-quick-edit-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-correction-flash {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #a7d8d1;
+  border-radius: 999px;
+  background: #ecfdf3;
+  color: #0f766e;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.admin-db-correction-flash small {
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.admin-db-quick-edit-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-quick-edit-summary article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-db-quick-edit-summary article.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-db-quick-edit-summary article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-db-quick-edit-summary article.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-db-quick-edit-summary strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--blue);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-quick-edit-summary article.good strong {
+  color: #0f766e;
+}
+
+.admin-db-quick-edit-summary article.watch strong {
+  color: #b54708;
+}
+
+.admin-db-quick-edit-summary article.hot strong {
+  color: #b42318;
+}
+
+.admin-db-quick-edit .company-manual-form {
+  margin-top: 0;
+  border-color: #d5e3f7;
+  background: #fff;
+}
+
 .admin-db-confirm-plan {
   min-width: 0;
   display: grid;
@@ -3335,6 +3455,10 @@ a {
   grid-template-columns: minmax(260px, .45fr) minmax(0, 1fr);
   gap: 12px;
   align-items: start;
+}
+
+.admin-db-selected-layout.single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .admin-db-selected-review,
@@ -13338,6 +13462,22 @@ a.platform-row:hover {
   min-height: 96px;
   resize: vertical;
   line-height: 1.45;
+}
+
+.company-manual-feedback {
+  min-height: 18px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.45;
+}
+
+.company-manual-feedback:empty {
+  display: none;
+}
+
+.company-manual-feedback.error {
+  color: #b42318;
 }
 
 .company-manual-segments {
@@ -23901,6 +24041,7 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-recheck-summary,
   .admin-db-recheck-grid,
   .admin-db-selected-grid,
+  .admin-db-quick-edit-summary,
   .admin-db-selected-layout,
   .admin-db-company,
   .admin-db-company-values,
@@ -24055,7 +24196,8 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-confirm-head,
   .admin-db-recheck-head,
   .admin-db-selected-head,
-  .admin-db-selected-section-head {
+  .admin-db-selected-section-head,
+  .admin-db-quick-edit-head {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -24067,7 +24209,8 @@ body.role-b2b .structure-action-list li::before {
   .admin-db-collect-head button,
   .admin-db-confirm-head button,
   .admin-db-recheck-head mark,
-  .admin-db-selected-head mark {
+  .admin-db-selected-head mark,
+  .admin-db-correction-flash {
     align-self: flex-start;
   }
 

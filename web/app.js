@@ -51,6 +51,8 @@ const state = {
     feature: "all"
   },
   adminDbSelectedCompanyId: "",
+  adminDbOpsOpen: false,
+  adminDbCorrectionFlash: null,
   adminDbAuditRegionKey: "",
   crawlEtaByKey: {},
   crawlEstimateTimer: null,
@@ -15743,9 +15745,10 @@ function companyMasterCheckPanel(master = {}) {
   `;
 }
 
-function companyCorrectionFormHtml(company = {}, compact = false) {
+function companyCorrectionFormHtml(company = {}, compact = false, options = {}) {
   const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
   const regionPlaceholder = (company.regions || [])[0] || "예: 포천";
+  const feedback = String(options.feedback || "").trim();
   return `
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
       <div>
@@ -15768,7 +15771,82 @@ function companyCorrectionFormHtml(company = {}, compact = false) {
         <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">저장</button>
         <button type="button" data-clear-company-correction data-company-id="${escapeHtml(company.companyId || "")}">해제</button>
       </div>
+      <div class="company-manual-feedback" data-company-manual-feedback aria-live="polite">${escapeHtml(feedback)}</div>
     </div>
+  `;
+}
+
+function adminDbCorrectionFlashHtml(companyId = "") {
+  const flash = state.adminDbCorrectionFlash || null;
+  if (!flash || !companyId || flash.companyId !== companyId) return "";
+  const at = flash.at ? compactDateTime(flash.at) : "";
+  return `
+    <mark class="admin-db-correction-flash">
+      ${escapeHtml(flash.message || "보정 반영 완료")}
+      ${at ? `<small>${escapeHtml(at)}</small>` : ""}
+    </mark>
+  `;
+}
+
+function adminDbQuickCorrectionSummaryCards(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
+  const segments = manualCorrectionRoomSegments(correction);
+  const explicitTotal = optionalNumber(correction.lodgingBasisTotal);
+  const segmentTotal = segments.reduce((sum, item) => sum + finiteNumber(item.count, 0), 0);
+  const correctedTotal = Number.isFinite(explicitTotal) && explicitTotal > 0 ? explicitTotal : segmentTotal;
+  const roomTotal = correctedTotal || finiteNumber(metrics.roomTotal, 0);
+  const correctionApplied = manualCorrectionHasValue(company.manualCorrection);
+  return [
+    {
+      label: "현재 객실 기준",
+      value: roomTotal ? `${fmtNumber(roomTotal)}실` : "확인 필요",
+      note: correctionApplied ? "관리자 보정값 우선" : "자동수집 기준",
+      tone: roomTotal ? "neutral" : "watch"
+    },
+    {
+      label: "예약율",
+      value: Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요",
+      note: adminDbReservationStockText(metrics),
+      tone: Number.isFinite(metrics.rate) ? b2bRateTone(metrics.rate, "neutral", metrics.category) : "watch"
+    },
+    {
+      label: "보정 상태",
+      value: correctionApplied ? "적용" : "미적용",
+      note: correctedTotal
+        ? `숙박 ${fmtNumber(correctedTotal)}실${segments.length ? ` · 객실종류 ${fmtNumber(segments.length)}개` : ""}`
+        : "자동수집값 기준",
+      tone: correctionApplied ? "good" : "neutral"
+    },
+    {
+      label: "최근 저장",
+      value: correction.updatedAt ? compactDateTime(correction.updatedAt) : "대기",
+      note: correction.note || "보정 메모 없음",
+      tone: correction.updatedAt ? "good" : "neutral"
+    }
+  ];
+}
+
+function adminDbQuickCorrectionPanel(row = {}) {
+  const company = row.company || {};
+  const companyId = company.companyId || "";
+  const cards = adminDbQuickCorrectionSummaryCards(row);
+  return `
+    <section class="admin-db-quick-edit" data-admin-db-quick-edit="${escapeHtml(companyId)}">
+      <div class="admin-db-quick-edit-head">
+        <div>
+          <span>즉시 수정</span>
+          <strong>지역·채널·쿠폰·수량/가격 보정</strong>
+          <small>저장하면 전체 DB와 B2B 비교 기준에 보정값이 우선 적용됩니다.</small>
+        </div>
+        ${adminDbCorrectionFlashHtml(companyId)}
+      </div>
+      <div class="admin-db-quick-edit-summary">
+        ${cards.map(adminDbSelectedMetricCard).join("")}
+      </div>
+      ${companyCorrectionFormHtml(company, true)}
+    </section>
   `;
 }
 
@@ -17513,26 +17591,20 @@ function adminDbSelectedDetailPanel(rows = []) {
       <div class="admin-db-selected-issues">
         ${issues.slice(0, 8).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
       </div>
+      ${adminDbQuickCorrectionPanel(row)}
       ${adminDbConfirmCollectPlanHtml(row)}
       ${adminDbRecheckOutcomeHtml(row)}
       <div class="admin-db-selected-actions">
         <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
         <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
       </div>
-      <div class="admin-db-selected-layout">
+      <div class="admin-db-selected-layout single">
         <div class="admin-db-selected-review">
           <div>
             <strong>관리자 판단</strong>
             <small>검수 상태와 메모는 전체 DB와 판단 큐에 함께 반영됩니다.</small>
           </div>
           ${companyReviewActionsHtml(company, true, "admin_db_detail")}
-        </div>
-        <div class="admin-db-selected-correction">
-          <div>
-            <strong>수량·가격 보정</strong>
-            <small>객실종류별 수량과 요일별 금액을 입력하면 보정값이 우선 적용됩니다.</small>
-          </div>
-          ${companyCorrectionFormHtml(company, true)}
         </div>
       </div>
     </section>
@@ -17766,8 +17838,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       <div class="admin-db-hierarchy">
         ${grouped.length ? grouped.map((province, provinceIndex) => adminDbProvinceGroup(province, provinceIndex, hierarchyContext)).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
-      <details class="admin-db-ops-drawer">
-        <summary>
+      <details class="admin-db-ops-drawer" ${state.adminDbOpsOpen ? "open" : ""}>
+        <summary data-admin-db-ops-summary>
           <div>
             <strong>검수·확인 수집 보조자료</strong>
             <small>신뢰도, 확인 수집, 상세 수정은 필요할 때만 펼쳐서 봅니다.</small>
@@ -25511,6 +25583,7 @@ async function saveCompanyCorrection(button, clear = false) {
   const companyId = button?.dataset?.companyId || form?.dataset?.companyId || state.selectedItem?.companyId || "";
   if (!companyId) return;
   button.disabled = true;
+  const feedback = form?.querySelector("[data-company-manual-feedback]");
   const selectedCompanyId = state.selectedItem?.companyId || companyId;
   const lodgingBasisTotal = form?.querySelector("[data-manual-lodging]")?.value || "";
   const dayUseBasisTotal = form?.querySelector("[data-manual-dayuse]")?.value || "";
@@ -25528,6 +25601,10 @@ async function saveCompanyCorrection(button, clear = false) {
     && !String(couponNote).trim()
     && !String(note).trim();
   const shouldClear = clear || emptySave;
+  if (feedback) {
+    feedback.textContent = shouldClear ? "보정 해제 중입니다." : "보정 저장 중입니다.";
+    feedback.classList.remove("error");
+  }
   setStatus(shouldClear ? "보정 해제 중" : "보정 저장 중");
   const payload = shouldClear
     ? { companyId, active: false }
@@ -25548,6 +25625,13 @@ async function saveCompanyCorrection(button, clear = false) {
       body: JSON.stringify(payload)
     });
     state.companyMaster = data;
+    state.adminDbSelectedCompanyId = companyId;
+    state.adminDbOpsOpen = true;
+    state.adminDbCorrectionFlash = {
+      companyId,
+      message: shouldClear ? "보정 해제 완료" : "보정 저장 완료",
+      at: new Date().toISOString()
+    };
     if (state.activeRunId) {
       await loadRun(state.activeRunId);
       const updatedItem = (state.data?.availability?.items || []).find((item) => item.companyId === selectedCompanyId);
@@ -25558,10 +25642,20 @@ async function saveCompanyCorrection(button, clear = false) {
       renderDecisionQueue();
     }
     if (isAdminRole()) renderAdminConsoleDashboard();
+    window.requestAnimationFrame(() => {
+      const quickEdit = Array.from(document.querySelectorAll("[data-admin-db-quick-edit]"))
+        .find((element) => element.dataset.adminDbQuickEdit === companyId);
+      quickEdit?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
     setStatus(shouldClear ? "보정 해제 완료" : "보정 저장 완료");
   } catch (error) {
     setStatus("보정 저장 실패");
-    if (form) form.insertAdjacentHTML("beforeend", `<div class="empty">보정 저장 실패: ${escapeHtml(error.message)}</div>`);
+    if (feedback) {
+      feedback.textContent = `보정 저장 실패: ${error.message}`;
+      feedback.classList.add("error");
+    } else if (form) {
+      form.insertAdjacentHTML("beforeend", `<div class="empty">보정 저장 실패: ${escapeHtml(error.message)}</div>`);
+    }
   } finally {
     button.disabled = false;
   }
@@ -26746,10 +26840,17 @@ function bindEvents() {
       });
       return;
     }
+    const adminDbOpsSummary = event.target.closest("[data-admin-db-ops-summary]");
+    if (adminDbOpsSummary) {
+      window.requestAnimationFrame(() => {
+        state.adminDbOpsOpen = Boolean(adminDbOpsSummary.parentElement?.open);
+      });
+    }
     const adminDbSourceLink = event.target.closest("[data-admin-db-source-link]");
     if (adminDbSourceLink) {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.source = adminDbSourceLink.dataset.adminDbSourceLink || "all";
+      state.adminDbOpsOpen = true;
       setActiveTab("admin");
       setAdminPanelSection("database");
       renderAdminConsoleDashboard();
@@ -26761,6 +26862,7 @@ function bindEvents() {
     const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
     if (adminDbCompanySelect) {
       state.adminDbSelectedCompanyId = adminDbCompanySelect.dataset.adminDbCompanySelect || "";
+      state.adminDbOpsOpen = true;
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -26770,6 +26872,7 @@ function bindEvents() {
     const adminDbAuditSelect = event.target.closest("[data-admin-db-audit-select]");
     if (adminDbAuditSelect) {
       state.adminDbAuditRegionKey = adminDbAuditSelect.dataset.adminDbAuditSelect || "";
+      state.adminDbOpsOpen = true;
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector(".admin-db-audit-detail")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
