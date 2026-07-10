@@ -13867,6 +13867,70 @@ function companyMasterBackfillResult(master = {}) {
   `;
 }
 
+function companyMasterOpsIntro(master = {}) {
+  const duplicateCount = master.duplicateCandidateCount || (master.duplicateCandidates || []).length;
+  return `
+    <div class="company-master-ops-intro">
+      <div>
+        <span>원본 DB 관리</span>
+        <strong>업체 검색·수정은 전체 DB 콘솔에서 처리합니다</strong>
+        <small>이 영역은 저장된 수집 결과 반영, 고유키 진단, 중복 병합처럼 원본 DB 유지보수만 담당합니다.</small>
+      </div>
+      <button type="button" data-drawer-tab="admin" data-admin-section-link="database">전체 DB 콘솔 열기</button>
+    </div>
+    <div class="company-master-metrics compact">
+      <article><span>전체 업체</span><strong>${fmtNumber(master.totalCompanies || 0)}</strong><small>마스터 DB</small></article>
+      <article><span>이번 결과</span><strong>${fmtNumber(master.currentRunCompanies || 0)}</strong><small>자동 반영</small></article>
+      <article><span>중복 후보</span><strong>${fmtNumber(duplicateCount)}</strong><small>병합 검토</small></article>
+    </div>
+  `;
+}
+
+function companyMasterDuplicateOps(master = {}) {
+  const duplicates = master.duplicateCandidates || [];
+  return `
+    <details class="admin-collapse-details company-master-maintenance-details">
+      <summary>
+        <span>중복 후보 관리</span>
+        <small>${duplicates.length ? `${fmtNumber(duplicates.length)}개 후보를 펼쳐 확인` : "현재 중복 후보 없음"}</small>
+      </summary>
+      <div class="company-master-duplicates">
+        ${duplicates.length ? duplicates.slice(0, 8).map((candidate) => `
+          <article>
+            <strong>${escapeHtml(candidate.reason || "중복 후보")}</strong>
+            <small>${escapeHtml(candidate.candidateKey || "")}</small>
+            <div>
+              ${(candidate.companies || []).map((company) => `
+                <span>${escapeHtml(company.primaryName || "업체명 확인")} · ${fmtNumber(company.runCount || 0)}회</span>
+              `).join("")}
+            </div>
+            <div class="company-master-actions">
+              <button type="button" data-company-duplicate-action="merge" data-candidate-key="${escapeHtml(candidate.candidateKey || "")}" data-company-ids="${escapeHtml((candidate.companies || []).map((company) => company.companyId).filter(Boolean).join(","))}">대표로 병합</button>
+              <button type="button" data-company-duplicate-action="separate" data-candidate-key="${escapeHtml(candidate.candidateKey || "")}">분리 유지</button>
+            </div>
+          </article>
+        `).join("") : `<p>현재 수동 병합/분리 후보가 없습니다.</p>`}
+      </div>
+    </details>
+  `;
+}
+
+function companyMasterDiagnosticsPanel(master = {}) {
+  const verification = companyMasterVerificationPanel(master);
+  const crossKeyword = companyMasterCrossKeywordPanel(master);
+  if (!verification && !crossKeyword) return "";
+  return `
+    <details class="admin-collapse-details company-master-maintenance-details">
+      <summary>
+        <span>고유키·키워드 진단</span>
+        <small>업체 동일성, 광역/로컬 키워드 매칭은 필요할 때만 확인</small>
+      </summary>
+      ${verification}
+      ${crossKeyword}
+    </details>
+  `;
+}
+
 function companyMasterCrossKeywordPanel(master = {}) {
   const cross = master.crossKeyword || {};
   if (!cross.totalCompanies) return "";
@@ -20063,7 +20127,7 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
       <div>
         <span>Admin Operations</span>
         <h3>운영 콘솔</h3>
-        <p>수집 상태, 판단 큐, 업체 마스터, 관리자 작업을 한 화면에서 처리합니다.</p>
+        <p>수집 상태와 처리할 운영 작업만 압축해서 봅니다. 업체 검색·수정은 전체 DB 콘솔에서 진행합니다.</p>
       </div>
       <small>최근 실행 ${escapeHtml(latestRun.label || latestRun.id || "대기")}</small>
     </section>
@@ -20080,7 +20144,6 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
     <section class="admin-console-layout">
       ${adminConsoleQueuePreview(entries)}
       ${adminConsoleCrawlPanel(entries)}
-      ${adminConsoleMasterPreview(master)}
       ${adminConsoleTaskQueue(master, entries)}
     </section>
   `;
@@ -20164,41 +20227,15 @@ function renderCompanyMasterPanel() {
     `;
     return;
   }
-  const duplicates = master.duplicateCandidates || [];
   els.companyMasterPanel.innerHTML = `
+    ${companyMasterOpsIntro(master)}
     ${companyMasterTools()}
     ${companyMasterBackfillResult(master)}
-    <div class="company-master-metrics">
-      <article><span>전체 업체</span><strong>${fmtNumber(master.totalCompanies)}</strong><small>마스터 DB</small></article>
-      <article><span>이번 결과</span><strong>${fmtNumber(master.currentRunCompanies || 0)}</strong><small>자동 upsert</small></article>
-      <article><span>중복 후보</span><strong>${fmtNumber(master.duplicateCandidateCount || 0)}</strong><small>수동 검토</small></article>
-    </div>
-    ${companyMasterVerificationPanel(master)}
-    ${companyMasterCrossKeywordPanel(master)}
-    ${companyMasterSalesTargetsPanel(master)}
-    ${companyMasterCheckPanel(master)}
-    ${companyMasterFilterPanel(master)}
-    ${companyMasterListPanel(master)}
+    ${companyMasterDiagnosticsPanel(master)}
+    ${companyMasterDuplicateOps(master)}
     <div class="company-master-rule">
       <strong>병합 기준</strong>
       <p>${escapeHtml(master.principle || "place_id/예약ID 우선, 업체명+주소/지역 보조")}</p>
-    </div>
-    <div class="company-master-duplicates">
-      ${duplicates.length ? duplicates.slice(0, 5).map((candidate) => `
-        <article>
-          <strong>${escapeHtml(candidate.reason || "중복 후보")}</strong>
-          <small>${escapeHtml(candidate.candidateKey || "")}</small>
-          <div>
-            ${(candidate.companies || []).map((company) => `
-              <span>${escapeHtml(company.primaryName || "업체명 확인")} · ${fmtNumber(company.runCount || 0)}회</span>
-            `).join("")}
-          </div>
-          <div class="company-master-actions">
-            <button type="button" data-company-duplicate-action="merge" data-candidate-key="${escapeHtml(candidate.candidateKey || "")}" data-company-ids="${escapeHtml((candidate.companies || []).map((company) => company.companyId).filter(Boolean).join(","))}">대표로 병합</button>
-            <button type="button" data-company-duplicate-action="separate" data-candidate-key="${escapeHtml(candidate.candidateKey || "")}">분리 유지</button>
-          </div>
-        </article>
-      `).join("") : `<p>현재 수동 병합/분리 후보가 없습니다.</p>`}
     </div>
   `;
 }

@@ -11021,12 +11021,61 @@ a.platform-row:hover {
 
 .company-master-tools,
 .company-master-backfill,
+.company-master-ops-intro,
 .company-cross-panel,
 .company-cross-list,
 .company-verification-panel,
 .company-verification-lane {
   display: grid;
   gap: 10px;
+}
+
+.company-master-ops-intro {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid #cfe4df;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f6fbfa 0%, #ffffff 100%);
+  padding: 14px;
+}
+
+.company-master-ops-intro > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.company-master-ops-intro span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.company-master-ops-intro strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.company-master-ops-intro small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.45;
+}
+
+.company-master-ops-intro button {
+  min-height: 40px;
+  border: 1px solid #a7d8d1;
+  border-radius: 12px;
+  background: #fff;
+  color: #0f766e;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .company-master-tools {
@@ -23769,6 +23818,7 @@ body.role-b2b .structure-action-list li::before {
   }
 
   .company-master-metrics,
+  .company-master-ops-intro,
   .admin-db-metrics,
   .admin-db-audit-list,
   .admin-db-audit-stats,
