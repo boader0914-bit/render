@@ -14098,10 +14098,11 @@ function companyAdminReviewBadgeHtml(company = {}) {
   return `<span class="company-review-badge ${escapeHtml(status)}">${escapeHtml(label)}</span>`;
 }
 
-function companyReviewActionsHtml(company = {}, compact = false) {
+function companyReviewActionsHtml(company = {}, compact = false, source = "") {
   const companyId = company.companyId || "";
   const current = company.adminReview?.status || "";
   const note = company.adminReview?.note || "";
+  const sourceAttr = source ? ` data-company-review-source="${escapeHtml(source)}"` : "";
   const actions = [
     ["check_needed", "확인"],
     ["confirmed", "완료"],
@@ -14116,9 +14117,9 @@ function companyReviewActionsHtml(company = {}, compact = false) {
       <input type="text" data-company-review-note value="${escapeHtml(note)}" placeholder="확인 채널, 재수집 범위, 수량/가격 메모">
       <div class="company-review-actions ${compact ? "compact" : ""}">
         ${actions.map(([status, label]) => `
-          <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}">${label}</button>
+          <button type="button" class="${current === status ? "active" : ""}" data-company-review-action="${status}" data-company-id="${escapeHtml(companyId)}"${sourceAttr}>${label}</button>
         `).join("")}
-        ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}">해제</button>` : ""}
+        ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}"${sourceAttr}>해제</button>` : ""}
       </div>
     </div>
   `;
@@ -16254,6 +16255,110 @@ function adminDbFeatureChips(features = {}) {
   return chips.length ? chips.join("") : `<em>시설 미분류</em>`;
 }
 
+function adminDbWorkReason(row = {}) {
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || {};
+  const issues = metrics.issues || [];
+  if (metrics.lowConfidence) return "수량 신뢰도가 낮아 객실 총량과 상품 구성을 먼저 확인해야 합니다.";
+  if (workType.key === "manual") return "관리자 보정이 필요한 상태입니다. 객실수/상품별 수량을 확정하세요.";
+  if (workType.key === "recrawl") return "총량 변동 또는 조건 변화가 있어 같은 기간으로 재수집이 필요합니다.";
+  if (!metrics.revenue) return "매출 표본이 없어 가격 또는 판매수량 연결 상태를 확인해야 합니다.";
+  if (!Number.isFinite(metrics.rate)) return "예약율 표본이 없어 네이버 예약 기준 판매율 확인이 필요합니다.";
+  if (!metrics.adminReview) return "관리자 판단 전 업체입니다. 확인/완료/보정/보류 중 하나로 정리하세요.";
+  return issues.slice(0, 2).join(" · ") || "추가 확인 후 상태를 확정하세요.";
+}
+
+function adminDbWorkPriority(row = {}) {
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || {};
+  const order = {
+    manual: 100,
+    unreviewed: 88,
+    recrawl: 82,
+    missingRevenue: 76,
+    missingReservation: 70,
+    reviewed: 24,
+    publicReady: 10
+  };
+  return (order[workType.key] || 40)
+    + (metrics.lowConfidence ? 24 : 0)
+    + (metrics.stockVariance ? 18 : 0)
+    + (!metrics.revenue ? 12 : 0)
+    + (!metrics.adminReview ? 8 : 0);
+}
+
+function adminDbWorkRows(rows = []) {
+  return rows
+    .filter((row) => {
+      const metrics = row.metrics || {};
+      const key = metrics.workType?.key || "";
+      return metrics.lowConfidence
+        || !metrics.adminReview
+        || ["manual", "recrawl", "missingRevenue", "missingReservation"].includes(key);
+    })
+    .sort((a, b) => adminDbWorkPriority(b) - adminDbWorkPriority(a) || (a.metrics.rank || 9999) - (b.metrics.rank || 9999));
+}
+
+function adminDbWorkPanel(rows = []) {
+  const workRows = adminDbWorkRows(rows);
+  const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
+  const unreviewed = rows.filter((row) => !row.metrics.adminReview).length;
+  const recrawl = rows.filter((row) => row.metrics.workType?.key === "recrawl" || row.metrics.stockVariance).length;
+  const manual = rows.filter((row) => row.metrics.workType?.key === "manual" || row.metrics.adminReview?.status === "manual_needed").length;
+  const ready = rows.filter((row) => ["publicReady", "reviewed"].includes(row.metrics.workType?.key || "")).length;
+  return `
+    <section class="admin-db-work-panel">
+      <div class="admin-db-work-head">
+        <div>
+          <span>관리자 처리 보드</span>
+          <strong>신뢰도 낮은 업체부터 상태를 정리합니다.</strong>
+          <small>전체 DB에서 바로 검수 상태를 저장하고, 필요한 업체는 확인 수집 또는 보정 화면으로 이동합니다.</small>
+        </div>
+        <mark>${fmtNumber(workRows.length)}곳 처리 대상</mark>
+      </div>
+      <div class="admin-db-work-summary">
+        ${[
+          ["낮은 신뢰", lowConfidence, "총량/상품 확인", "hot"],
+          ["미검수", unreviewed, "상태 결정 전", "watch"],
+          ["재수집", recrawl, "조건 재확인", "watch"],
+          ["보정 필요", manual, "관리자 보정", "hot"],
+          ["정리됨", ready, "완료/컨택/보류", "good"]
+        ].map(([label, count, note, tone]) => `
+          <article class="${escapeHtml(tone)}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmtNumber(count)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-work-list">
+        ${workRows.length ? workRows.slice(0, 6).map((row) => {
+          const company = row.company || {};
+          const metrics = row.metrics || {};
+          const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+          return `
+            <article class="${escapeHtml(workType.tone || "watch")}">
+              <div class="admin-db-work-title">
+                <div>
+                  <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+                  <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", metrics.category?.label].filter(Boolean).join(" · "))}</small>
+                </div>
+                <span>${escapeHtml(workType.label || "확인 필요")}</span>
+              </div>
+              <p>${escapeHtml(adminDbWorkReason(row))}</p>
+              <div class="admin-db-work-actions">
+                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db">확인 수집</button>
+                <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || company.companyId || "")}">보정 열기</button>
+              </div>
+              ${companyReviewActionsHtml(company, true, "admin_db")}
+            </article>
+          `;
+        }).join("") : `<p class="admin-db-more">현재 필터 조건에서는 우선 처리할 업체가 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbCompanyRow(row = {}) {
   const company = row.company || {};
   const metrics = row.metrics || {};
@@ -16280,6 +16385,7 @@ function adminDbCompanyRow(row = {}) {
         ${adminDbFeatureChips(metrics.features)}
       </div>
       <div class="admin-db-company-action">
+        <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db">확인 수집</button>
         <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || company.companyId || "")}">수정</button>
       </div>
     </article>
@@ -16416,6 +16522,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         </label>
         <button type="button" data-admin-db-clear>필터 초기화</button>
       </div>
+      ${adminDbWorkPanel(filteredRows)}
       <div class="admin-db-hierarchy">
         ${grouped.length ? grouped.map(adminDbProvinceGroup).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
