@@ -1854,7 +1854,8 @@ a {
   line-height: 1.25;
 }
 
-.admin-db-province-board {
+.admin-db-province-board,
+.admin-db-region-board {
   min-width: 0;
   display: grid;
   gap: 10px;
@@ -1865,7 +1866,13 @@ a {
   box-shadow: var(--soft-shadow);
 }
 
-.admin-db-province-board-head {
+.admin-db-region-board {
+  border-color: #d8e7ff;
+  background: linear-gradient(135deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.admin-db-province-board-head,
+.admin-db-region-board-head {
   min-width: 0;
   display: flex;
   align-items: flex-start;
@@ -1873,21 +1880,25 @@ a {
   gap: 12px;
 }
 
-.admin-db-province-board-head > div {
+.admin-db-province-board-head > div,
+.admin-db-region-board-head > div {
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
 .admin-db-province-board-head span,
-.admin-db-province-board-head small {
+.admin-db-province-board-head small,
+.admin-db-region-board-head span,
+.admin-db-region-board-head small {
   color: var(--muted);
   font-size: 12px;
   font-weight: 850;
   line-height: 1.35;
 }
 
-.admin-db-province-board-head strong {
+.admin-db-province-board-head strong,
+.admin-db-region-board-head strong {
   color: var(--ink);
   font-size: 16px;
   font-weight: 950;
@@ -1895,7 +1906,8 @@ a {
   overflow-wrap: anywhere;
 }
 
-.admin-db-province-board-head mark {
+.admin-db-province-board-head mark,
+.admin-db-region-board-head mark {
   flex: 0 0 auto;
   border: 1px solid #dbeafe;
   border-radius: 999px;
@@ -1907,13 +1919,15 @@ a {
   white-space: nowrap;
 }
 
-.admin-db-province-card-grid {
+.admin-db-province-card-grid,
+.admin-db-region-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
 }
 
-.admin-db-province-card-grid button {
+.admin-db-province-card-grid button,
+.admin-db-region-card-grid button {
   min-width: 0;
   min-height: 112px;
   border: 1px solid #e3ebf6;
@@ -1925,7 +1939,12 @@ a {
   cursor: pointer;
 }
 
-.admin-db-province-card-grid button.active {
+.admin-db-region-card-grid button {
+  background: #fbfdff;
+}
+
+.admin-db-province-card-grid button.active,
+.admin-db-region-card-grid button.active {
   border-color: #2f80ed;
   background: linear-gradient(135deg, #eaf4ff 0%, #f6fbfa 100%);
   box-shadow: inset 0 0 0 1px rgba(47, 128, 237, .16);
@@ -1934,20 +1953,26 @@ a {
 .admin-db-province-card-grid span,
 .admin-db-province-card-grid strong,
 .admin-db-province-card-grid small,
-.admin-db-province-card-grid em {
+.admin-db-province-card-grid em,
+.admin-db-region-card-grid span,
+.admin-db-region-card-grid strong,
+.admin-db-region-card-grid small,
+.admin-db-region-card-grid em {
   display: block;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.admin-db-province-card-grid span {
+.admin-db-province-card-grid span,
+.admin-db-region-card-grid span {
   color: #344054;
   font-size: 12px;
   font-weight: 950;
   line-height: 1.2;
 }
 
-.admin-db-province-card-grid strong {
+.admin-db-province-card-grid strong,
+.admin-db-region-card-grid strong {
   margin-top: 7px;
   color: var(--blue);
   font-size: 22px;
@@ -1956,7 +1981,9 @@ a {
 }
 
 .admin-db-province-card-grid small,
-.admin-db-province-card-grid em {
+.admin-db-province-card-grid em,
+.admin-db-region-card-grid small,
+.admin-db-region-card-grid em {
   margin-top: 6px;
   color: var(--muted);
   font-size: 11px;
@@ -1965,7 +1992,8 @@ a {
   line-height: 1.28;
 }
 
-.admin-db-province-card-grid em {
+.admin-db-province-card-grid em,
+.admin-db-region-card-grid em {
   color: #475467;
 }
 
@@ -26144,25 +26172,30 @@ body.role-b2b .structure-action-list li::before {
     font-size: 10px;
   }
 
-  body.role-admin .admin-db-province-board-head {
+  body.role-admin .admin-db-province-board-head,
+  body.role-admin .admin-db-region-board-head {
     display: grid;
   }
 
-  body.role-admin .admin-db-province-board-head mark {
+  body.role-admin .admin-db-province-board-head mark,
+  body.role-admin .admin-db-region-board-head mark {
     justify-self: start;
     white-space: normal;
   }
 
-  body.role-admin .admin-db-province-card-grid {
+  body.role-admin .admin-db-province-card-grid,
+  body.role-admin .admin-db-region-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  body.role-admin .admin-db-province-card-grid button {
+  body.role-admin .admin-db-province-card-grid button,
+  body.role-admin .admin-db-region-card-grid button {
     min-height: 118px;
     padding: 9px;
   }
 
-  body.role-admin .admin-db-province-card-grid strong {
+  body.role-admin .admin-db-province-card-grid strong,
+  body.role-admin .admin-db-region-card-grid strong {
     font-size: 20px;
   }
 

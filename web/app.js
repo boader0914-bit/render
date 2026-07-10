@@ -16713,6 +16713,58 @@ function adminDbProvinceQuickBoard(grouped = [], filters = {}) {
   `;
 }
 
+function adminDbRegionQuickBoard(grouped = [], filters = {}) {
+  if (filters.province === "all") return "";
+  const province = grouped.find((item) => item.key === filters.province) || grouped[0] || null;
+  if (!province || !(province.regions || []).length) return "";
+  const cards = [
+    {
+      key: "all",
+      label: `${province.label || "선택 광역"} 전체`,
+      rows: province.rows || [],
+      regions: (province.regions || []).length
+    },
+    ...(province.regions || []).map((region) => ({
+      key: region.key || "unknown",
+      label: region.label || "지역 미확인",
+      rows: region.rows || [],
+      regions: 1
+    }))
+  ];
+  return `
+    <section class="admin-db-region-board" aria-label="시군구 빠른 분류">
+      <div class="admin-db-region-board-head">
+        <div>
+          <span>시군구 2차 분류</span>
+          <strong>${escapeHtml(province.label || "선택 광역")} 안에서 업체를 지역별로 좁힙니다</strong>
+          <small>시군구 카드를 누르면 해당 지역 업체 리스트와 수정 버튼을 바로 확인합니다.</small>
+        </div>
+        <mark>${fmtNumber((province.regions || []).length)}개 지역 · ${fmtNumber((province.rows || []).length)}개 업체</mark>
+      </div>
+      <div class="admin-db-region-card-grid">
+        ${cards.map((card) => {
+          const rows = card.rows || [];
+          const revenueRows = rows.filter((row) => row.metrics?.revenue > 0);
+          const averageRevenue = revenueRows.length
+            ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
+            : 0;
+          const lowConfidence = rows.filter((row) => row.metrics?.lowConfidence || row.metrics?.confidenceScore <= 2).length;
+          const confirmNeeded = rows.filter((row) => row.metrics?.collection?.key === "confirm_needed").length;
+          const active = card.key === "all" ? filters.region === "all" : filters.region === card.key;
+          return `
+            <button type="button" class="${active ? "active" : ""}" data-admin-db-region-card="${escapeHtml(card.key)}" data-admin-db-region-card-province="${escapeHtml(province.key || "all")}">
+              <span>${escapeHtml(card.label)}</span>
+              <strong>${fmtNumber(rows.length)}곳</strong>
+              <small>${fmtNumber(card.regions || 0)}개 지역 · 평균 ${fmtWon(averageRevenue)}</small>
+              <em>낮은 신뢰 ${fmtNumber(lowConfidence)} · 확인 수집 ${fmtNumber(confirmNeeded)}</em>
+            </button>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbAuditStats(rows = []) {
   const total = rows.length;
   const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
@@ -17886,6 +17938,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       </div>
       ${adminDbMasterSummary(filteredRows, rows, grouped)}
       ${adminDbProvinceQuickBoard(allGrouped, filters)}
+      ${adminDbRegionQuickBoard(grouped, filters)}
       <div class="admin-db-toolbar">
         <label class="admin-db-filter-query">
           <span>업체 검색</span>
@@ -27002,6 +27055,21 @@ function bindEvents() {
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector(".admin-db-hierarchy")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    const adminDbRegionCard = event.target.closest("[data-admin-db-region-card]");
+    if (adminDbRegionCard) {
+      const province = adminDbRegionCard.dataset.adminDbRegionCardProvince || state.adminDbFilters?.province || "all";
+      const region = adminDbRegionCard.dataset.adminDbRegionCard || "all";
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.query = "";
+      state.adminDbFilters.province = province;
+      state.adminDbFilters.region = region;
+      state.adminDbViewMode = region === "all" ? "region" : "list";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(region === "all" ? ".admin-db-hierarchy" : ".admin-db-flat-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       return;
     }
