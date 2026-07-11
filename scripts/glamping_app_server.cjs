@@ -5896,6 +5896,356 @@ function normalizeAddressKey(value) {
     .toLowerCase();
 }
 
+const COMPANY_CHANNEL_DEFINITIONS = {
+  yanolja: { key: "yanolja", label: "야놀자", automatic: true },
+  yeogi: { key: "yeogi", label: "여기어때", automatic: false },
+  tteonayo: { key: "tteonayo", label: "떠나요", automatic: true },
+  onda: { key: "onda", label: "ONDA", automatic: true },
+  airbnb: { key: "airbnb", label: "Airbnb", automatic: false }
+};
+
+function normalizeCompanyChannelKey(value = "") {
+  const text = String(value || "").trim().toLowerCase();
+  if (["yanolja", "nol", "야놀자"].includes(text)) return "yanolja";
+  if (["yeogi", "goodchoice", "여기어때"].includes(text)) return "yeogi";
+  if (["tteonayo", "ddnayo", "떠나요"].includes(text)) return "tteonayo";
+  if (["onda", "온다"].includes(text)) return "onda";
+  if (["airbnb", "에어비앤비"].includes(text)) return "airbnb";
+  return COMPANY_CHANNEL_DEFINITIONS[text] ? text : "";
+}
+
+function companyChannelStatusLabel(status = "") {
+  const key = String(status || "").trim();
+  if (key === "exposed") return "노출";
+  if (key === "not_found") return "미노출";
+  if (key === "blocked") return "수집불가";
+  if (key === "needs_manual") return "확인필요";
+  return "미확인";
+}
+
+function companyChannelStatusTone(status = "") {
+  if (status === "exposed") return "good";
+  if (status === "not_found") return "neutral";
+  return "watch";
+}
+
+function companyChannelSearchKeyword(company = {}) {
+  return String(company.primaryName || company.aliases?.[0] || "").trim();
+}
+
+function companyChannelFallbackUrl(channelKey = "", company = {}) {
+  const key = normalizeCompanyChannelKey(channelKey);
+  const keyword = companyChannelSearchKeyword(company);
+  if (!keyword) return "";
+  if (key === "yanolja") {
+    const url = new URL("https://nol.yanolja.com/discovery/s/results");
+    url.searchParams.set("keyword", keyword);
+    return url.toString();
+  }
+  if (key === "yeogi") {
+    const url = new URL("https://www.yeogi.com/domestic-accommodations");
+    url.searchParams.set("keyword", keyword);
+    return url.toString();
+  }
+  if (key === "tteonayo" || key === "onda") {
+    const url = new URL("https://trip.ddnayo.com/searchResult");
+    url.searchParams.set("searchKeyword", keyword);
+    return url.toString();
+  }
+  if (key === "airbnb") {
+    return `https://www.airbnb.co.kr/s/${encodeURIComponent(keyword)}/homes`;
+  }
+  return "";
+}
+
+function sanitizeCompanyChannelText(value = "", max = 220) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function externalHttpUrl(value = "") {
+  const text = String(value || "").trim();
+  return /^https?:\/\//i.test(text) ? text.slice(0, 500) : "";
+}
+
+function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
+  const key = normalizeCompanyChannelKey(channelKey || entry.channel || entry.channelKey);
+  if (!key) return null;
+  const status = ["exposed", "not_found", "needs_manual", "blocked", "unknown"].includes(String(entry.status || ""))
+    ? String(entry.status || "")
+    : "unknown";
+  const checkedAt = sanitizeCompanyChannelText(entry.checkedAt || entry.updatedAt || "", 40);
+  const updatedAt = sanitizeCompanyChannelText(entry.updatedAt || checkedAt || "", 40);
+  return {
+    channel: key,
+    label: COMPANY_CHANNEL_DEFINITIONS[key].label,
+    status,
+    statusLabel: companyChannelStatusLabel(status),
+    tone: companyChannelStatusTone(status),
+    url: externalHttpUrl(entry.url || entry.link || entry.href || ""),
+    price: sanitizeCompanyChannelText(entry.price, 80),
+    rank: Number.isFinite(Number(entry.rank)) && Number(entry.rank) > 0 ? Math.round(Number(entry.rank)) : null,
+    confidence: Number.isFinite(Number(entry.confidence)) ? Math.max(0, Math.min(100, Math.round(Number(entry.confidence)))) : null,
+    source: sanitizeCompanyChannelText(entry.source || "manual", 60),
+    method: sanitizeCompanyChannelText(entry.method || "", 80),
+    note: sanitizeCompanyChannelText(entry.note, 220),
+    checkedAt,
+    updatedAt
+  };
+}
+
+function publicCompanyChannelExposures(exposures = {}) {
+  return Object.fromEntries(
+    Object.keys(COMPANY_CHANNEL_DEFINITIONS)
+      .filter((key) => exposures && exposures[key])
+      .map((key) => [key, sanitizeCompanyChannelExposure(key, exposures[key])])
+      .filter(([, value]) => value)
+  );
+}
+
+function mergeCompanyChannelExposures(target = {}, source = {}) {
+  const merged = { ...(target || {}) };
+  for (const [key, value] of Object.entries(source || {})) {
+    const channelKey = normalizeCompanyChannelKey(key);
+    const next = sanitizeCompanyChannelExposure(channelKey, value);
+    if (!channelKey || !next) continue;
+    const current = sanitizeCompanyChannelExposure(channelKey, merged[channelKey]);
+    const currentTime = Date.parse(current?.updatedAt || current?.checkedAt || "") || 0;
+    const nextTime = Date.parse(next.updatedAt || next.checkedAt || "") || 0;
+    if (!current || nextTime >= currentTime) merged[channelKey] = next;
+  }
+  return merged;
+}
+
+function companyChannelCandidateScore(company = {}, candidate = {}) {
+  const candidateName = String(candidate.name || candidate.title || "").trim();
+  const candidateNameKey = normalizeCompanyIdentityName(candidateName);
+  const candidateLooseKey = normalizeCompanyLooseName(candidateName);
+  const identityNames = boundedUnique([company.primaryName, ...(company.aliases || [])], 20)
+    .map(normalizeCompanyIdentityName)
+    .filter(Boolean);
+  const looseNames = boundedUnique([company.primaryName, ...(company.aliases || [])], 20)
+    .map(normalizeCompanyLooseName)
+    .filter((value) => value && value.length >= 2);
+  let score = 0;
+  if (identityNames.some((name) => name && name === candidateNameKey)) score = Math.max(score, 96);
+  if (looseNames.some((name) => name && name === candidateLooseKey)) score = Math.max(score, 90);
+  if (looseNames.some((name) => name.length >= 3 && candidateLooseKey.includes(name))) score = Math.max(score, 82);
+  if (looseNames.some((name) => name.length >= 3 && name.includes(candidateLooseKey))) score = Math.max(score, 76);
+  const locationText = normalizeAddressKey([candidate.location, candidate.address].filter(Boolean).join(" "));
+  const regionMatch = (company.regions || []).some((region) => {
+    const regionKey = normalizeAddressKey(region);
+    return regionKey && locationText.includes(regionKey);
+  });
+  if (regionMatch && score) score += 6;
+  return Math.max(0, Math.min(100, score));
+}
+
+function nextChannelCheckDates() {
+  const checkIn = new Date();
+  checkIn.setDate(checkIn.getDate() + 7);
+  const checkOut = new Date(checkIn);
+  checkOut.setDate(checkOut.getDate() + 1);
+  const fmt = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return { checkIn: fmt(checkIn), checkOut: fmt(checkOut) };
+}
+
+function companyChannelPriceText(value) {
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return `${number.toLocaleString("ko-KR")}원`;
+  return sanitizeCompanyChannelText(value, 80);
+}
+
+function companyChannelExposureResult(channelKey, company, result = {}) {
+  const key = normalizeCompanyChannelKey(channelKey);
+  const checkedAt = new Date().toISOString();
+  const status = result.status || "unknown";
+  return sanitizeCompanyChannelExposure(key, {
+    ...result,
+    status,
+    url: result.url || companyChannelFallbackUrl(key, company),
+    checkedAt,
+    updatedAt: checkedAt
+  });
+}
+
+async function checkYanoljaCompanyExposure(company = {}) {
+  const keyword = companyChannelSearchKeyword(company);
+  if (!keyword) return companyChannelExposureResult("yanolja", company, { status: "needs_manual", source: "automatic", note: "업체명이 없어 수동 확인이 필요합니다." });
+  const { checkIn, checkOut } = nextChannelCheckDates();
+  const body = {
+    keyword,
+    category: "LOCAL_ACCOMMODATION",
+    filters: [],
+    sort: "RECOMMEND",
+    userLocation: { latitude: 37.5665, longitude: 126.978, locationType: "DEFAULT", locationTime: 0 },
+    localAccommodation: { checkInDate: checkIn, checkOutDate: checkOut, capacityAdults: 2, childrenAges: [] },
+    page: 1
+  };
+  const headers = {
+    accept: "application/json, text/plain, */*",
+    "content-type": "application/json",
+    origin: "https://nol.yanolja.com",
+    referer: companyChannelFallbackUrl("yanolja", company)
+  };
+  try {
+    const response = await requestJson("https://nol.yanolja.com/discovery/api/list/universal-search/v1/list", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      return companyChannelExposureResult("yanolja", company, {
+        status: response.status === 403 ? "blocked" : "needs_manual",
+        source: "automatic",
+        method: "yanolja_universal_search",
+        confidence: 0,
+        note: `야놀자 응답 ${response.status}`
+      });
+    }
+    const candidates = (Array.isArray(response.data?.items) ? response.data.items : [])
+      .filter((item) => item.type === "PRODUCT_ITEM")
+      .slice(0, 30)
+      .map((entry, index) => {
+        const data = entry.data || {};
+        const price = data.prices?.[0] || {};
+        return {
+          rank: index + 1,
+          name: data.title || "",
+          location: (data.locationDetails || []).join(" "),
+          price: companyChannelPriceText(price.discountPrice || price.sellingPrice || price.price || ""),
+          url: data.action?.web || "",
+          score: companyChannelCandidateScore(company, {
+            name: data.title || "",
+            location: (data.locationDetails || []).join(" ")
+          })
+        };
+      })
+      .sort((a, b) => b.score - a.score || a.rank - b.rank);
+    const best = candidates[0] || null;
+    if (!best || best.score < 62) {
+      return companyChannelExposureResult("yanolja", company, {
+        status: "not_found",
+        source: "automatic",
+        method: "yanolja_universal_search",
+        confidence: best?.score || 0,
+        note: "야놀자 검색 결과에서 동일 업체를 찾지 못했습니다."
+      });
+    }
+    return companyChannelExposureResult("yanolja", company, {
+      status: best.score >= 82 ? "exposed" : "needs_manual",
+      source: "automatic",
+      method: "yanolja_universal_search",
+      confidence: best.score,
+      rank: best.rank,
+      url: best.url,
+      price: best.price,
+      note: best.score >= 82 ? `${best.name} 자동 매칭` : `${best.name} 유사 매칭`
+    });
+  } catch (error) {
+    return companyChannelExposureResult("yanolja", company, {
+      status: "needs_manual",
+      source: "automatic",
+      method: "yanolja_universal_search",
+      confidence: 0,
+      note: `자동 확인 실패: ${error.message || String(error)}`
+    });
+  }
+}
+
+async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo") {
+  const key = normalizeCompanyChannelKey(channelKey) || "tteonayo";
+  const keyword = companyChannelSearchKeyword(company);
+  if (!keyword) return companyChannelExposureResult(key, company, { status: "needs_manual", source: "automatic", note: "업체명이 없어 수동 확인이 필요합니다." });
+  const query = compactKeyword(keyword);
+  const url = `https://trip.ddnayo.com/web-api/total-search?searchKeyword=${encodeURIComponent(query)}&pageNumber=1&pageSize=24&orderBy=recommend`;
+  try {
+    const response = await requestJson(url, {
+      headers: {
+        accept: "application/json, text/plain, */*",
+        referer: companyChannelFallbackUrl("tteonayo", company)
+      }
+    });
+    if (!response.ok) {
+      return companyChannelExposureResult(key, company, {
+        status: response.status === 403 ? "blocked" : "needs_manual",
+        source: "automatic",
+        method: "ddnayo_total_search",
+        confidence: 0,
+        note: `떠나요 응답 ${response.status}`
+      });
+    }
+    const candidates = (response.data?.data?.contents || [])
+      .slice(0, 30)
+      .map((item, index) => ({
+        rank: index + 1,
+        name: item.accommodationName || "",
+        location: item.address || "",
+        price: companyChannelPriceText(item.price || ""),
+        url: item.productUrl || "",
+        score: companyChannelCandidateScore(company, {
+          name: item.accommodationName || "",
+          location: item.address || ""
+        })
+      }))
+      .sort((a, b) => b.score - a.score || a.rank - b.rank);
+    const best = candidates[0] || null;
+    if (!best || best.score < 62) {
+      return companyChannelExposureResult(key, company, {
+        status: "not_found",
+        source: "automatic",
+        method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
+        confidence: best?.score || 0,
+        note: key === "onda" ? "떠나요/ONDA 계열 검색에서 동일 업체를 찾지 못했습니다." : "떠나요 검색 결과에서 동일 업체를 찾지 못했습니다."
+      });
+    }
+    return companyChannelExposureResult(key, company, {
+      status: best.score >= 82 ? "exposed" : "needs_manual",
+      source: "automatic",
+      method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
+      confidence: key === "onda" ? Math.max(0, best.score - 8) : best.score,
+      rank: best.rank,
+      url: best.url,
+      price: best.price,
+      note: key === "onda"
+        ? `${best.name} · 떠나요/ONDA 계열 보조 확인`
+        : (best.score >= 82 ? `${best.name} 자동 매칭` : `${best.name} 유사 매칭`)
+    });
+  } catch (error) {
+    return companyChannelExposureResult(key, company, {
+      status: "needs_manual",
+      source: "automatic",
+      method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
+      confidence: 0,
+      note: `자동 확인 실패: ${error.message || String(error)}`
+    });
+  }
+}
+
+async function autoCheckCompanyChannel(company = {}, channelKey = "") {
+  const key = normalizeCompanyChannelKey(channelKey);
+  if (key === "yanolja") return checkYanoljaCompanyExposure(company);
+  if (key === "tteonayo" || key === "onda") return checkDdnayoCompanyExposure(company, key);
+  if (key === "yeogi") {
+    return companyChannelExposureResult(key, company, {
+      status: "needs_manual",
+      source: "manual",
+      method: "manual_link",
+      confidence: 0,
+      note: "여기어때는 서버 직접 수집 차단 가능성이 높아 브라우저에서 확인합니다."
+    });
+  }
+  if (key === "airbnb") {
+    return companyChannelExposureResult(key, company, {
+      status: "needs_manual",
+      source: "manual",
+      method: "manual_link",
+      confidence: 0,
+      note: "Airbnb는 공식 공개 검색 API가 없어 검색 링크로 수동 확인합니다."
+    });
+  }
+  return null;
+}
+
 function extractNaverPlaceId(value = {}) {
   const explicit = value.placeId || value.place_id || value["place_id"] || value.naverPlaceId;
   if (explicit) return String(explicit).trim();
@@ -8195,6 +8545,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     activeKeyword,
     exposureLayer,
     inventory,
+    channelExposures: publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {}),
     correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection,
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
@@ -9602,6 +9953,13 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
     if (!manualCorrectionHasValue(target.manualCorrection) && manualCorrectionHasValue(source.manualCorrection)) {
       target.manualCorrection = source.manualCorrection;
     }
+    target.channelExposures = mergeCompanyChannelExposures(target.channelExposures || {}, source.channelExposures || source.channelExposure || {});
+    target.channelExposureHistory = [
+      ...(target.channelExposureHistory || []),
+      ...(source.channelExposureHistory || [])
+    ]
+      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
+      .slice(-80);
     target.manualCorrectionHistory = [
       ...(target.manualCorrectionHistory || []),
       ...(source.manualCorrectionHistory || [])
@@ -9733,6 +10091,97 @@ async function saveCompanyManualCorrection(payload = {}) {
     ...(await summarizeCompanyMaster()),
     company: companyRecordSummary(company),
     resolved: { action: shouldClear ? "clearManualCorrection" : "saveManualCorrection", companyId }
+  };
+}
+
+async function saveCompanyChannelExposure(payload = {}) {
+  const companyId = String(payload.companyId || "").trim();
+  const master = await readCompanyMaster();
+  const company = master.companies?.[companyId];
+  if (!company) {
+    const error = new Error("채널 확인할 업체를 찾지 못했습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const action = String(payload.action || "save").trim();
+  const now = new Date().toISOString();
+  company.channelExposures = publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {});
+  const changed = [];
+
+  if (action === "auto_check") {
+    const channels = Array.isArray(payload.channels) && payload.channels.length
+      ? payload.channels
+      : ["yanolja", "tteonayo", "onda", "yeogi", "airbnb"];
+    for (const rawChannel of channels) {
+      const channel = normalizeCompanyChannelKey(rawChannel);
+      if (!channel) continue;
+      const checked = await autoCheckCompanyChannel(company, channel);
+      if (!checked) continue;
+      company.channelExposures[channel] = checked;
+      changed.push(checked);
+      if (["yanolja", "tteonayo", "onda"].includes(channel)) await sleep(180);
+    }
+  } else if (action === "clear") {
+    const channel = normalizeCompanyChannelKey(payload.channel);
+    if (!channel) {
+      const error = new Error("삭제할 채널을 선택하세요.");
+      error.statusCode = 400;
+      throw error;
+    }
+    delete company.channelExposures[channel];
+    changed.push({ channel, label: COMPANY_CHANNEL_DEFINITIONS[channel].label, status: "clear", statusLabel: "삭제" });
+  } else {
+    const channel = normalizeCompanyChannelKey(payload.channel);
+    if (!channel) {
+      const error = new Error("저장할 채널을 선택하세요.");
+      error.statusCode = 400;
+      throw error;
+    }
+    const saved = sanitizeCompanyChannelExposure(channel, {
+      ...payload,
+      source: payload.source || "manual",
+      method: payload.method || "admin_manual",
+      checkedAt: payload.checkedAt || now,
+      updatedAt: now
+    });
+    if (!saved) {
+      const error = new Error("채널 저장값을 확인하세요.");
+      error.statusCode = 400;
+      throw error;
+    }
+    company.channelExposures[channel] = saved;
+    changed.push(saved);
+  }
+
+  company.channelExposureHistory = [
+    ...(company.channelExposureHistory || []),
+    {
+      at: now,
+      action,
+      channels: changed.map((entry) => ({
+        channel: entry.channel,
+        label: entry.label,
+        status: entry.status,
+        statusLabel: entry.statusLabel,
+        confidence: entry.confidence ?? null,
+        url: entry.url || "",
+        note: entry.note || ""
+      }))
+    }
+  ].slice(-80);
+  company.duplicateNotes = [
+    ...(company.duplicateNotes || []),
+    {
+      at: now,
+      reason: action === "auto_check" ? "채널 노출 자동 확인" : action === "clear" ? "채널 노출 삭제" : "채널 노출 수동 저장"
+    }
+  ].slice(-40);
+
+  await writeCompanyMaster(master);
+  return {
+    ...(await summarizeCompanyMaster()),
+    company: companyRecordSummary(company),
+    resolved: { action, companyId, channels: changed.map((entry) => entry.channel).filter(Boolean) }
   };
 }
 
@@ -11996,8 +12445,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260712-admin-correction-impact-pass"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260712-admin-correction-impact-pass"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260712-channel-exposure-checks"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260712-channel-exposure-checks"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -12384,6 +12833,12 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyManualCorrection(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/channel-exposure") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveCompanyChannelExposure(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/admin-review") {

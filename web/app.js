@@ -2454,8 +2454,10 @@ function platformTone(platform = "") {
   const text = String(platform);
   if (text.includes("네이버")) return "naver";
   if (text.includes("여기")) return "yeogi";
-  if (text.includes("떠나") || text.includes("ONDA")) return "ddnayo";
+  if (text.includes("ONDA") || text.includes("온다")) return "onda";
+  if (text.includes("떠나")) return "ddnayo";
   if (text.includes("야놀자") || text.includes("NOL")) return "nol";
+  if (/airbnb|에어비앤비/i.test(text)) return "airbnb";
   return "other";
 }
 
@@ -2463,8 +2465,10 @@ function platformShortName(platform = "") {
   const text = String(platform);
   if (text.includes("네이버")) return "네이버";
   if (text.includes("여기")) return "여기어때";
-  if (text.includes("떠나") || text.includes("ONDA")) return "떠나요";
+  if (text.includes("ONDA") || text.includes("온다")) return "ONDA";
+  if (text.includes("떠나")) return "떠나요";
   if (text.includes("야놀자") || text.includes("NOL")) return "야놀자";
+  if (/airbnb|에어비앤비/i.test(text)) return "Airbnb";
   return text || "기타";
 }
 
@@ -2474,6 +2478,8 @@ function platformLetter(platform = "") {
   if (name === "여기어때") return "여";
   if (name === "야놀자") return "야";
   if (name === "떠나요") return "떠";
+  if (name === "ONDA") return "온";
+  if (name === "Airbnb") return "A";
   return "기";
 }
 
@@ -2502,6 +2508,12 @@ function platformFallbackSearchUrl(platform = "", item = {}) {
     if (keyword) url.searchParams.set("searchKeyword", keyword);
     return url.toString();
   }
+  if (name === "ONDA") {
+    const url = new URL("https://trip.ddnayo.com/searchResult");
+    if (keyword) url.searchParams.set("searchKeyword", keyword);
+    return url.toString();
+  }
+  if (name === "Airbnb") return `https://www.airbnb.co.kr/s/${encodeURIComponent(keyword)}/homes`;
   return "";
 }
 
@@ -2556,6 +2568,16 @@ function platformsForItem(item) {
   }
   manualMeta.otaChannels.forEach((channel) => {
     pushManualRow(channel, "노출");
+  });
+  const exposureSource = item.companyProfile?.channelExposures || item.companyChannelExposures || {};
+  Object.entries(exposureSource).forEach(([channel, exposure]) => {
+    const status = exposure?.statusLabel || exposure?.status || "확인 필요";
+    pushManualRow(exposure?.label || channel, status, {
+      url: exposure?.url || "",
+      price: exposure?.price || "",
+      rank_or_order: exposure?.rank || "",
+      source: exposure?.source || "채널 확인"
+    });
   });
 
   const seen = new Set();
@@ -13819,7 +13841,7 @@ function companyProfileKeywordList(profile = {}) {
 
 function manualCorrectionAdminMetaFields(correction = {}, context = {}) {
   const meta = manualCorrectionMeta(correction);
-  const otaOptions = ["여기어때", "야놀자", "떠나요", "온다", "기타 OTA"];
+  const otaOptions = ["여기어때", "야놀자", "떠나요", "ONDA", "Airbnb", "기타 OTA"];
   const facilityOptions = ["수영장", "세미나실", "애견동반", "바베큐", "개별화장실", "개별수영장", "카라반", "풀빌라"];
   const selectOption = (value, label, selected) => `<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
   const checkbox = (attr, value, checked) => `
@@ -16442,8 +16464,58 @@ function adminDbClassifyCompany(company = {}, regions = []) {
   return { ...adminDbFallbackRegionLabels(company), region: null };
 }
 
+const ADMIN_DB_CHANNEL_OPTIONS = [
+  ["naver", "네이버"],
+  ["yeogi", "여기어때"],
+  ["yanolja", "야놀자"],
+  ["tteonayo", "떠나요"],
+  ["onda", "ONDA"],
+  ["airbnb", "Airbnb"]
+];
+
+const ADMIN_DB_MANAGED_CHANNELS = ADMIN_DB_CHANNEL_OPTIONS.filter(([key]) => key !== "naver");
+
+function adminDbChannelExposureMap(company = {}) {
+  return company.channelExposures || company.channelExposure || {};
+}
+
+function adminDbChannelStatusLabel(status = "") {
+  if (status === "exposed") return "노출";
+  if (status === "not_found") return "미노출";
+  if (status === "blocked") return "수집불가";
+  if (status === "needs_manual") return "확인필요";
+  return "미확인";
+}
+
+function adminDbChannelStatusTone(status = "") {
+  if (status === "exposed") return "good";
+  if (status === "not_found") return "neutral";
+  return "watch";
+}
+
+function adminDbChannelFallbackSearchUrl(channel = "", company = {}) {
+  const keyword = String(company.primaryName || company.aliases?.[0] || "").trim();
+  if (!keyword) return "";
+  if (channel === "yanolja") {
+    const url = new URL("https://nol.yanolja.com/discovery/s/results");
+    url.searchParams.set("keyword", keyword);
+    return url.toString();
+  }
+  if (channel === "yeogi") return yeogiSearchUrl(keyword);
+  if (channel === "tteonayo" || channel === "onda") {
+    const url = new URL("https://trip.ddnayo.com/searchResult");
+    url.searchParams.set("searchKeyword", keyword);
+    return url.toString();
+  }
+  if (channel === "airbnb") return `https://www.airbnb.co.kr/s/${encodeURIComponent(keyword)}/homes`;
+  return "";
+}
+
 function adminDbChannelProfile(company = {}, metrics = {}) {
   const latest = metrics.latest || company.inventory?.latest || {};
+  const exposures = adminDbChannelExposureMap(company);
+  const statusFor = (key) => exposures[key]?.status || "";
+  const exposedBySaved = (key) => statusFor(key) === "exposed";
   const text = compactSearchText(adminDbFlattenText([
     company.collectionSources,
     company.sourceStats,
@@ -16459,12 +16531,17 @@ function adminDbChannelProfile(company = {}, metrics = {}) {
     latest.couponSignal?.source
   ]));
   const naver = /네이버|naver/.test(text) || Boolean((company.bookingBusinessIds || []).length || latest.naverBookingId || latest.bookingBusinessId);
-  const yeogi = /여기어때|yeogi|goodchoice/.test(text);
-  const yanolja = /야놀자|yanolja/.test(text);
-  const tteonayo = /떠나요|tteonayo|ddnayo/.test(text);
-  const onda = /온다|onda/.test(text);
-  const count = [naver, yeogi, yanolja, tteonayo, onda].filter(Boolean).length;
-  return { naver, yeogi, yanolja, tteonayo, onda, count };
+  const yeogi = exposedBySaved("yeogi") || (!exposures.yeogi && /여기어때|yeogi|goodchoice/.test(text));
+  const yanolja = exposedBySaved("yanolja") || (!exposures.yanolja && /야놀자|yanolja|nol/.test(text));
+  const tteonayo = exposedBySaved("tteonayo") || (!exposures.tteonayo && /떠나요|tteonayo|ddnayo/.test(text));
+  const onda = exposedBySaved("onda") || (!exposures.onda && /온다|onda/.test(text));
+  const airbnb = exposedBySaved("airbnb") || (!exposures.airbnb && /airbnb|에어비앤비/.test(text));
+  const savedEntries = Object.values(exposures || {}).filter(Boolean);
+  const manualNeeded = savedEntries.filter((entry) => ["needs_manual", "blocked"].includes(entry.status)).length;
+  const notFound = savedEntries.filter((entry) => entry.status === "not_found").length;
+  const checkedCount = savedEntries.length;
+  const count = [naver, yeogi, yanolja, tteonayo, onda, airbnb].filter(Boolean).length;
+  return { naver, yeogi, yanolja, tteonayo, onda, airbnb, count, statuses: exposures, manualNeeded, notFound, checkedCount };
 }
 
 function adminDbFeatureProfile(company = {}, metrics = {}) {
@@ -16846,6 +16923,10 @@ function adminDbFilterState(master = {}) {
     if (filters.ota && filters.ota !== "all") {
       if (filters.ota === "ota_missing") {
         if (row.metrics.channels.count) return false;
+      } else if (filters.ota === "channel_needs_manual") {
+        if (!Object.values(row.metrics.channels.statuses || {}).some((entry) => ["needs_manual", "blocked"].includes(entry?.status))) return false;
+      } else if (filters.ota === "channel_not_found") {
+        if (!Object.values(row.metrics.channels.statuses || {}).some((entry) => entry?.status === "not_found")) return false;
       } else if (!row.metrics.channels[filters.ota]) {
         return false;
       }
@@ -17212,7 +17293,7 @@ function adminDbAuditStats(rows = []) {
   const confirmNeeded = rows.filter((row) => row.metrics.collection?.key === "confirm_needed").length;
   const manualCount = rows.filter((row) => row.metrics.manualCorrection).length;
   const revenueRows = rows.filter((row) => row.metrics.revenue > 0).length;
-  const otaLinked = rows.filter((row) => row.metrics.channels?.count > 0).length;
+  const otaLinked = rows.filter((row) => ADMIN_DB_MANAGED_CHANNELS.some(([key]) => row.metrics.channels?.[key])).length;
   const unreviewed = rows.filter((row) => !row.metrics.adminReview && !row.company?.adminReview).length;
   const missingRegion = rows.filter(adminDbMissingRegion).length;
   const missingRevenue = Math.max(0, total - revenueRows);
@@ -17517,14 +17598,15 @@ function adminDbAuditBoard(rows = []) {
 }
 
 function adminDbChannelChips(channels = {}) {
-  const options = [
-    ["naver", "네이버"],
-    ["yeogi", "여기어때"],
-    ["yanolja", "야놀자"],
-    ["tteonayo", "떠나요"],
-    ["onda", "온다"]
-  ];
-  const chips = options.filter(([key]) => channels[key]).map(([, label]) => `<em class="good">${escapeHtml(label)}</em>`);
+  const statuses = channels.statuses || {};
+  const saved = ADMIN_DB_CHANNEL_OPTIONS
+    .filter(([key]) => statuses[key])
+    .map(([key, label]) => {
+      const entry = statuses[key] || {};
+      return `<em class="${escapeHtml(adminDbChannelStatusTone(entry.status))}">${escapeHtml(`${label} ${entry.statusLabel || adminDbChannelStatusLabel(entry.status)}`)}</em>`;
+    });
+  if (saved.length) return saved.join("");
+  const chips = ADMIN_DB_CHANNEL_OPTIONS.filter(([key]) => channels[key]).map(([, label]) => `<em class="good">${escapeHtml(label)}</em>`);
   return chips.length ? chips.join("") : `<em class="watch">채널 확인</em>`;
 }
 
@@ -17588,14 +17670,10 @@ function adminDbWorkReason(row = {}) {
 
 function adminDbChannelSummary(metrics = {}) {
   const channels = metrics.channels || {};
-  const labels = [
-    channels.naver ? "네이버" : "",
-    channels.yeogi ? "여기어때" : "",
-    channels.yanolja ? "야놀자" : "",
-    channels.tteonayo ? "떠나요" : "",
-    channels.onda ? "온다" : ""
-  ].filter(Boolean);
-  return labels.length ? labels.join(" · ") : "채널 확인 필요";
+  if (channels.manualNeeded) return `채널 확인필요 ${fmtNumber(channels.manualNeeded)}`;
+  const labels = ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => channels[key] ? label : "").filter(Boolean);
+  if (labels.length) return labels.join(" · ");
+  return channels.naver ? "네이버만" : "채널 확인 필요";
 }
 
 function adminDbReservationStockText(metrics = {}) {
@@ -18099,6 +18177,96 @@ function adminDbRecheckOutcomeHtml(row = {}) {
   `;
 }
 
+function adminDbChannelStatusOptions(selected = "") {
+  return [
+    ["unknown", "미확인"],
+    ["exposed", "노출"],
+    ["not_found", "미노출"],
+    ["needs_manual", "확인필요"],
+    ["blocked", "수집불가"]
+  ].map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
+  const company = row.company || {};
+  const entry = adminDbChannelExposureMap(company)[channelKey] || {};
+  const status = entry.status || "unknown";
+  const searchUrl = entry.url || adminDbChannelFallbackSearchUrl(channelKey, company);
+  const checked = entry.checkedAt ? compactDateTime(entry.checkedAt) : "확인 전";
+  const confidence = Number.isFinite(Number(entry.confidence)) ? ` · 신뢰 ${fmtNumber(entry.confidence)}%` : "";
+  return `
+    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
+      <div class="admin-db-channel-row-head">
+        <div>
+          <strong>${escapeHtml(label)}</strong>
+          <small>${escapeHtml(`${adminDbChannelStatusLabel(status)} · ${checked}${confidence}`)}</small>
+        </div>
+        <span>${escapeHtml(entry.source === "automatic" ? "자동" : entry.source === "manual" ? "수동" : "대기")}</span>
+      </div>
+      <div class="admin-db-channel-fields">
+        <label>
+          <span>상태</span>
+          <select data-company-channel-status>${adminDbChannelStatusOptions(status)}</select>
+        </label>
+        <label>
+          <span>URL</span>
+          <input type="url" data-company-channel-url value="${escapeHtml(entry.url || "")}" placeholder="${escapeHtml(searchUrl || "확인 URL")}">
+        </label>
+        <label>
+          <span>가격</span>
+          <input type="text" data-company-channel-price value="${escapeHtml(entry.price || "")}" placeholder="예: 120,000원">
+        </label>
+        <label>
+          <span>메모</span>
+          <input type="text" data-company-channel-note value="${escapeHtml(entry.note || "")}" placeholder="예: 유사명 확인 필요">
+        </label>
+      </div>
+      <div class="admin-db-channel-actions">
+        ${searchUrl ? `<a href="${escapeHtml(searchUrl)}" target="_blank" rel="noreferrer">검색 열기</a>` : ""}
+        <button type="button" data-company-channel-save>저장</button>
+        <button type="button" data-company-channel-clear>삭제</button>
+      </div>
+    </div>
+  `;
+}
+
+function adminDbChannelExposurePanel(row = {}) {
+  const company = row.company || {};
+  if (!company.companyId) return "";
+  const channels = row.metrics?.channels || {};
+  const checkedCount = Object.values(channels.statuses || {}).filter(Boolean).length;
+  const exposedCount = ADMIN_DB_MANAGED_CHANNELS.filter(([key]) => channels[key]).length;
+  const manualCount = channels.manualNeeded || 0;
+  return `
+    <section class="admin-db-channel-panel">
+      <div class="admin-db-channel-head">
+        <div>
+          <span>채널 노출 확인</span>
+          <strong>네이버 외 OTA 노출을 업체별로 정리합니다.</strong>
+          <small>야놀자·떠나요·ONDA는 자동 확인, 여기어때·Airbnb는 검색 링크 기반 수동 확인으로 저장합니다.</small>
+        </div>
+        <button type="button" data-company-channel-auto data-company-id="${escapeHtml(company.companyId || "")}">자동 확인</button>
+      </div>
+      <div class="admin-db-channel-summary">
+        ${[
+          ["확인 채널", checkedCount, "저장된 상태"],
+          ["노출", exposedCount, "네이버 제외"],
+          ["확인필요", manualCount, "수동/차단 포함"]
+        ].map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${fmtNumber(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-channel-list">
+        ${ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => adminDbChannelExposureForm(row, key, label)).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbCollectionPanel(rows = []) {
   const confirmRows = adminDbConfirmCollectRows(rows);
   const countByKey = (key) => rows.filter((row) => row.metrics?.collection?.key === key).length;
@@ -18235,6 +18403,7 @@ function adminDbSelectedDetailPanel(rows = []) {
             ${adminDbQuickCorrectionPanel(row)}
           </div>
           <div class="admin-db-selected-process-column">
+            ${adminDbChannelExposurePanel(row)}
             ${adminDbConfirmCollectPlanHtml(row)}
             ${adminDbRecheckOutcomeHtml(row)}
             <div class="admin-db-selected-review">
@@ -18528,7 +18697,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const allGrouped = adminDbGroupedRows(rows);
   const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
-  const otaLinked = filteredRows.filter((row) => row.metrics.channels.count > 0).length;
+  const otaLinked = filteredRows.filter((row) => ADMIN_DB_MANAGED_CHANNELS.some(([key]) => row.metrics.channels[key])).length;
   const revenueRows = filteredRows.filter((row) => row.metrics.revenue > 0);
   const averageRevenue = revenueRows.length
     ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
@@ -18539,7 +18708,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "마스터 DB 기준", "good")}
       ${adminDbMetricCard("낮은 신뢰도", fmtNumber(lowConfidence), "수량·매출 확인 우선", lowConfidence ? "hot" : "good")}
       ${adminDbMetricCard("관리자 보정", fmtNumber(manualCount), "보정값 우선 적용", manualCount ? "good" : "")}
-      ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버/OTA 감지", "watch")}
+      ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버 제외 채널", "watch")}
       ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
     </div>
   `;
@@ -18645,7 +18814,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           </label>
           <label>
             <span>OTA 채널</span>
-            <small>네이버·여기어때·야놀자·떠나요·온다 노출 여부</small>
+            <small>야놀자·여기어때·떠나요·ONDA·Airbnb 노출 상태</small>
             <select data-admin-db-ota>
               ${[
                 ["all", "전체 채널"],
@@ -18653,8 +18822,11 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
                 ["yeogi", "여기어때"],
                 ["yanolja", "야놀자"],
                 ["tteonayo", "떠나요"],
-                ["onda", "온다"],
-                ["ota_missing", "채널 확인 필요"]
+                ["onda", "ONDA"],
+                ["airbnb", "Airbnb"],
+                ["channel_needs_manual", "확인 필요"],
+                ["channel_not_found", "미노출"],
+                ["ota_missing", "채널 미확인"]
               ].map(([value, label]) => `<option value="${value}" ${filters.ota === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
           </label>
@@ -26561,6 +26733,73 @@ async function saveCompanyCorrection(button, clear = false) {
   }
 }
 
+function companyChannelPayloadFromForm(form = null, action = "save") {
+  return {
+    action,
+    companyId: form?.dataset?.companyId || "",
+    channel: form?.dataset?.channelKey || "",
+    status: form?.querySelector("[data-company-channel-status]")?.value || "unknown",
+    url: form?.querySelector("[data-company-channel-url]")?.value || "",
+    price: form?.querySelector("[data-company-channel-price]")?.value || "",
+    note: form?.querySelector("[data-company-channel-note]")?.value || "",
+    source: "manual"
+  };
+}
+
+async function saveCompanyChannelExposure(button, action = "save") {
+  const form = button?.closest("[data-company-channel-form]");
+  const payload = companyChannelPayloadFromForm(form, action);
+  if (!payload.companyId || !payload.channel) return;
+  button.disabled = true;
+  setStatus(action === "clear" ? "채널 정보 삭제 중" : "채널 정보 저장 중");
+  try {
+    const data = await fetchJson("/api/company-master/channel-exposure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    state.companyMaster = data;
+    state.adminDbSelectedCompanyId = payload.companyId;
+    renderCompanyMasterPanel();
+    renderDecisionQueue();
+    if (isAdminRole()) renderAdminConsoleDashboard();
+    setStatus(action === "clear" ? "채널 정보 삭제 완료" : "채널 정보 저장 완료");
+  } catch (error) {
+    setStatus(`채널 정보 저장 실패: ${error.message}`);
+    form?.insertAdjacentHTML("beforeend", `<div class="empty">채널 저장 실패: ${escapeHtml(error.message)}</div>`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function autoCheckCompanyChannelExposure(button) {
+  const companyId = button?.dataset?.companyId || "";
+  if (!companyId) return;
+  button.disabled = true;
+  setStatus("네이버 외 채널 자동 확인 중");
+  try {
+    const data = await fetchJson("/api/company-master/channel-exposure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "auto_check",
+        companyId,
+        channels: ADMIN_DB_MANAGED_CHANNELS.map(([key]) => key)
+      })
+    });
+    state.companyMaster = data;
+    state.adminDbSelectedCompanyId = companyId;
+    renderCompanyMasterPanel();
+    renderDecisionQueue();
+    if (isAdminRole()) renderAdminConsoleDashboard();
+    setStatus("채널 자동 확인 완료");
+  } catch (error) {
+    setStatus(`채널 자동 확인 실패: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function saveLocationScoreOverride(button, clear = false) {
   const form = button?.closest("[data-location-score-form]");
   const key = form?.dataset?.locationScoreKey || "";
@@ -27889,6 +28128,21 @@ function bindEvents() {
       window.requestAnimationFrame(() => {
         document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
+      return;
+    }
+    const companyChannelAuto = event.target.closest("[data-company-channel-auto]");
+    if (companyChannelAuto) {
+      autoCheckCompanyChannelExposure(companyChannelAuto);
+      return;
+    }
+    const companyChannelSave = event.target.closest("[data-company-channel-save]");
+    if (companyChannelSave) {
+      saveCompanyChannelExposure(companyChannelSave, "save");
+      return;
+    }
+    const companyChannelClear = event.target.closest("[data-company-channel-clear]");
+    if (companyChannelClear) {
+      saveCompanyChannelExposure(companyChannelClear, "clear");
       return;
     }
     const adminDbAuditSelect = event.target.closest("[data-admin-db-audit-select]");

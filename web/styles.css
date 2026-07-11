@@ -4626,6 +4626,153 @@ a {
   white-space: nowrap;
 }
 
+.admin-db-channel-panel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 15px;
+  background: linear-gradient(180deg, #f8fbff, #ffffff);
+  padding: 12px;
+}
+
+.admin-db-channel-head,
+.admin-db-channel-row-head,
+.admin-db-channel-actions {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-db-channel-head > div,
+.admin-db-channel-row-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-channel-head span,
+.admin-db-channel-head small,
+.admin-db-channel-row-head small,
+.admin-db-channel-summary span,
+.admin-db-channel-summary small,
+.admin-db-channel-fields span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.42;
+}
+
+.admin-db-channel-head strong,
+.admin-db-channel-row-head strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.24;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-channel-head button,
+.admin-db-channel-actions button,
+.admin-db-channel-actions a {
+  flex: 0 0 auto;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #a7d8d1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f766e;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.admin-db-channel-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-channel-summary article,
+.admin-db-channel-row {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-db-channel-summary strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.admin-db-channel-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-db-channel-row.good {
+  border-color: #a7d8d1;
+  background: #f3fbf9;
+}
+
+.admin-db-channel-row.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-db-channel-row.neutral {
+  background: #fbfdff;
+}
+
+.admin-db-channel-row-head > span {
+  flex: 0 0 auto;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #175cd3;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-channel-fields {
+  display: grid;
+  grid-template-columns: .75fr minmax(140px, 1.2fr) minmax(100px, .9fr) minmax(140px, 1.2fr);
+  gap: 8px;
+}
+
+.admin-db-channel-fields label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-channel-fields input,
+.admin-db-channel-fields select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid #d5e3f7;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
 .admin-db-collect-planline {
   display: block;
 }
@@ -11256,6 +11403,14 @@ a.platform-row:hover {
 
 .platform-chip.ddnayo .platform-dot {
   background: #3182f6;
+}
+
+.platform-chip.onda .platform-dot {
+  background: #0f766e;
+}
+
+.platform-chip.airbnb .platform-dot {
+  background: #ff385c;
 }
 
 .more-button {
@@ -25989,6 +26144,8 @@ body.role-admin .empty {
   .admin-db-work-list,
   .admin-db-collect-metrics,
   .admin-db-collect-list article,
+  .admin-db-channel-summary,
+  .admin-db-channel-fields,
   .admin-db-confirm-grid,
   .admin-db-recheck-summary,
   .admin-db-recheck-grid,
@@ -26147,6 +26304,9 @@ body.role-admin .empty {
   .admin-db-work-head,
   .admin-db-work-title,
   .admin-db-collect-head,
+  .admin-db-channel-head,
+  .admin-db-channel-row-head,
+  .admin-db-channel-actions,
   .admin-db-confirm-head,
   .admin-db-recheck-head,
   .admin-db-selected-head,
@@ -26161,6 +26321,8 @@ body.role-admin .empty {
   .admin-db-work-head mark,
   .admin-db-work-title span,
   .admin-db-collect-head button,
+  .admin-db-channel-head button,
+  .admin-db-channel-row-head > span,
   .admin-db-confirm-head button,
   .admin-db-recheck-head mark,
   .admin-db-selected-head mark,
@@ -26174,6 +26336,8 @@ body.role-admin .empty {
 
   .admin-db-company-action button,
   .admin-db-work-actions button,
+  .admin-db-channel-actions button,
+  .admin-db-channel-actions a,
   .admin-db-confirm-head button,
   .admin-db-recheck-actions button,
   .admin-db-selected-actions button {
