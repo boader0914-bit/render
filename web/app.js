@@ -17856,6 +17856,8 @@ function adminDbSelectedDetailPanel(rows = []) {
       <div class="admin-db-selected-actions">
         <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
         <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
+        <button type="button" data-admin-db-view-link="list">목록으로 돌아가기</button>
+        <button type="button" data-admin-db-view-link="region">지역 구조 보기</button>
       </div>
       <div class="admin-db-selected-layout single">
         <div class="admin-db-selected-review">
@@ -17865,6 +17867,30 @@ function adminDbSelectedDetailPanel(rows = []) {
           </div>
           ${companyReviewActionsHtml(company, true, "admin_db_detail")}
         </div>
+      </div>
+    </section>
+  `;
+}
+
+function adminDbSelectedListBanner(rows = []) {
+  const selectedId = state.adminDbSelectedCompanyId || "";
+  if (!selectedId) return "";
+  const row = rows.find((item) => item.company?.companyId === selectedId);
+  if (!row) return "";
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
+  return `
+    <section class="admin-db-selected-mini ${escapeHtml(workType.tone || "watch")}" aria-label="선택 업체 요약">
+      <div>
+        <span>선택 업체</span>
+        <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+        <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, adminDbWorkReason(row)].filter(Boolean).join(" · "))}</small>
+      </div>
+      <div>
+        <em>${escapeHtml(workType.label || "검수 대기")}</em>
+        <button type="button" data-admin-db-company-select="${escapeHtml(selectedId)}">상세 검수</button>
+        <button type="button" data-admin-db-clear-selection>선택 해제</button>
       </div>
     </section>
   `;
@@ -17996,6 +18022,7 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
         </div>
         <mark>${fmtNumber(page)} / ${fmtNumber(totalPages)}쪽</mark>
       </div>
+      ${adminDbSelectedListBanner(rows)}
       <div class="admin-db-company-list flat">
         ${shown.length ? shown.map(adminDbCompanyRow).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
@@ -18137,10 +18164,21 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   `;
   const reviewPanelsHtml = `
     ${selectedDetailHtml}
-    ${metricSummaryHtml}
-    ${adminDbAuditBoard(filteredRows)}
-    ${adminDbWorkPanel(filteredRows)}
-    ${adminDbCollectionPanel(filteredRows)}
+    <details class="admin-db-review-support">
+      <summary>
+        <div>
+          <strong>검수 보조자료 펼치기</strong>
+          <small>전체 지표, 지역별 신뢰도, 확인 수집 대상은 필요할 때만 확인합니다.</small>
+        </div>
+        <span>보조자료</span>
+      </summary>
+      <div class="admin-db-review-support-body">
+        ${metricSummaryHtml}
+        ${adminDbAuditBoard(filteredRows)}
+        ${adminDbWorkPanel(filteredRows)}
+        ${adminDbCollectionPanel(filteredRows)}
+      </div>
+    </details>
   `;
   const mainViewHtml = viewMode === "review"
     ? `<section class="admin-db-review-surface">${reviewPanelsHtml}</section>`
@@ -27343,6 +27381,29 @@ function bindEvents() {
       state.adminDbOpsOpen = state.adminDbViewMode === "review";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-view].active")?.focus());
+      return;
+    }
+    const adminDbViewLink = event.target.closest("[data-admin-db-view-link]");
+    if (adminDbViewLink) {
+      const mode = adminDbViewLink.dataset.adminDbViewLink || "list";
+      state.adminDbViewMode = ["region", "list", "review"].includes(mode) ? mode : "list";
+      state.adminDbOpsOpen = false;
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(
+          state.adminDbViewMode === "region" ? ".admin-db-hierarchy" :
+          state.adminDbViewMode === "review" ? ".admin-db-selected-panel" :
+          ".admin-db-flat-list"
+        )?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    if (event.target.closest("[data-admin-db-clear-selection]")) {
+      state.adminDbSelectedCompanyId = "";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-db-flat-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       return;
     }
     const adminDbListPage = event.target.closest("[data-admin-db-list-page]");

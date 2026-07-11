@@ -3020,6 +3020,142 @@ a {
   opacity: .45;
 }
 
+.admin-db-selected-mini,
+.admin-db-review-support {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-selected-mini {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px;
+}
+
+.admin-db-selected-mini > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-selected-mini span,
+.admin-db-selected-mini small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-selected-mini strong {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-selected-mini > div:last-child {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-db-selected-mini em {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(49, 130, 246, .08);
+  color: var(--blue-dark);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
+}
+
+.admin-db-selected-mini button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 8px 11px;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.admin-db-selected-mini.good {
+  border-color: rgba(52, 211, 153, .42);
+}
+
+.admin-db-selected-mini.watch {
+  border-color: rgba(251, 191, 36, .46);
+}
+
+.admin-db-selected-mini.hot {
+  border-color: rgba(251, 113, 133, .46);
+}
+
+.admin-db-review-support {
+  overflow: hidden;
+}
+
+.admin-db-review-support summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  list-style: none;
+}
+
+.admin-db-review-support summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-review-support summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-review-support summary strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.admin-db-review-support summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.35;
+}
+
+.admin-db-review-support summary > span {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(49, 130, 246, .10);
+  color: var(--blue-dark);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-review-support-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
 .admin-db-ops-drawer {
   min-width: 0;
   border: 1px solid #dbe7f3;
@@ -27103,6 +27239,24 @@ body.role-admin .empty {
 
   body.role-admin .admin-db-pagination button {
     width: 100%;
+  }
+
+  body.role-admin .admin-db-selected-mini {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-db-selected-mini > div:last-child {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  body.role-admin .admin-db-selected-mini button {
+    flex: 1 1 130px;
+  }
+
+  body.role-admin .admin-db-review-support summary {
+    align-items: flex-start;
   }
 
   body.role-admin .admin-db-company {
