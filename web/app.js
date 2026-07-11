@@ -17436,13 +17436,14 @@ function adminDbCompanyCompactTags(row = {}) {
   const tags = [
     { label: workType.label || "검수 대기", tone: workType.tone || "watch" },
     { label: metrics.collection?.label || "자동수집", tone: metrics.collection?.tone || "neutral" },
+    { label: metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "", tone: "neutral" },
     { label: adminDbChannelSummary(metrics), tone: metrics.channels?.count ? "good" : "watch" },
     { label: adminDbProductSummary(company, metrics), tone: metrics.roomTotal ? "neutral" : "watch" },
     { label: adminDbFeatureSummary(metrics.features), tone: "neutral" }
   ];
   return tags
     .filter((tag) => tag.label)
-    .slice(0, 5)
+    .slice(0, 6)
     .map((tag) => `<em class="${escapeHtml(tag.tone || "neutral")}">${escapeHtml(tag.label)}</em>`)
     .join("");
 }
@@ -18137,7 +18138,6 @@ function adminDbCompanyRow(row = {}) {
   const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
   const rateText = Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "예약율 확인";
   const rankText = metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위 대기";
-  const roomText = metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "수량 확인";
   const selected = state.adminDbSelectedCompanyId && state.adminDbSelectedCompanyId === company.companyId;
   const reason = adminDbWorkReason(row);
   return `
@@ -18150,7 +18150,6 @@ function adminDbCompanyRow(row = {}) {
       <div class="admin-db-company-values">
         <span><b>${escapeHtml(rankText)}</b><small>노출순</small></span>
         <span><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b><small>7일 매출</small></span>
-        <span><b>${escapeHtml(roomText)}</b><small>객실수</small></span>
         <span><b>${escapeHtml(rateText)}</b><small>예약율</small></span>
         <span><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b><small>신뢰도</small></span>
       </div>
@@ -18158,8 +18157,8 @@ function adminDbCompanyRow(row = {}) {
         ${adminDbCompanyCompactTags(row)}
       </div>
       <div class="admin-db-company-action">
+        <button class="primary" type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세·수정</button>
         ${metrics.collection?.needsConfirm ? `<button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db">확인 수집</button>` : ""}
-        <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
       </div>
     </article>
   `;
@@ -18405,8 +18404,18 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     : viewMode === "list"
       ? adminDbFlatListPanel(filteredRows, rows, filters)
       : adminDbRegionStructurePanel(grouped, allGrouped, filters, rows, filteredRows);
+  const advancedFilterOpen = Boolean(
+    filters.category !== "all"
+    || filters.status !== "all"
+    || filters.confidence !== "all"
+    || filters.source !== "all"
+    || filters.ota !== "all"
+    || filters.feature !== "all"
+    || filters.quality !== "all"
+  );
   const filterToolbarHtml = `
-      <div class="admin-db-toolbar">
+    <div class="admin-db-filter-shell">
+      <div class="admin-db-toolbar admin-db-toolbar-main">
         <label class="admin-db-filter-query">
           <span>업체 검색</span>
           <input type="search" data-admin-db-query value="${escapeHtml(filters.query || "")}" placeholder="업체명, 지역, 키워드">
@@ -18418,10 +18427,6 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         <label>
           <span>지역</span>
           <select data-admin-db-region>${adminDbSelectOptions(regionOptions, filters.region, "전체 지역")}</select>
-        </label>
-        <label>
-          <span>카테고리</span>
-          <select data-admin-db-category>${adminDbSelectOptions(categoryOptions, filters.category, "전체 카테고리")}</select>
         </label>
         <label>
           <span>정렬</span>
@@ -18440,53 +18445,70 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
             ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
         </label>
-        <label class="admin-db-filter-wide">
-          <span>관리 상태</span>
-          <select data-admin-db-status>
-            ${statusOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.status === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
-          </select>
-        </label>
-        <label class="admin-db-filter-wide">
-          <span>신뢰도</span>
-          <select data-admin-db-confidence>
-            ${confidenceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.confidence === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
-          </select>
-        </label>
-        <label class="admin-db-filter-wide">
-          <span>수집 구분</span>
-          <select data-admin-db-source>
-            ${sourceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.source === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
-          </select>
-        </label>
-        <label>
-          <span>OTA</span>
-          <select data-admin-db-ota>
-            ${[
-              ["all", "전체 채널"],
-              ["naver", "네이버"],
-              ["yeogi", "여기어때"],
-              ["yanolja", "야놀자"],
-              ["tteonayo", "떠나요"],
-              ["onda", "온다"],
-              ["ota_missing", "채널 확인 필요"]
-            ].map(([value, label]) => `<option value="${value}" ${filters.ota === value ? "selected" : ""}>${label}</option>`).join("")}
-          </select>
-        </label>
-        <label class="admin-db-filter-feature">
-          <span>시설</span>
-          <small>수영장·세미나실·애견동반·바베큐 포함 여부</small>
-          <select data-admin-db-feature>
-            ${[
-              ["all", "시설 전체"],
-              ["pool", "시설 · 수영장"],
-              ["seminar", "시설 · 세미나실"],
-              ["pet", "시설 · 애견동반"],
-              ["bbq", "시설 · 바베큐"]
-            ].map(([value, label]) => `<option value="${value}" ${filters.feature === value ? "selected" : ""}>${label}</option>`).join("")}
-          </select>
-        </label>
-        <button class="admin-db-filter-reset" type="button" data-admin-db-clear>필터 초기화</button>
+        <button class="admin-db-filter-reset" type="button" data-admin-db-clear>초기화</button>
       </div>
+      <details class="admin-db-filter-more" ${advancedFilterOpen ? "open" : ""}>
+        <summary>
+          <div>
+            <strong>상세 필터</strong>
+            <small>관리 상태, 신뢰도, 수집 구분, OTA, 시설 조건을 추가로 좁힙니다.</small>
+          </div>
+          <span>${advancedFilterOpen ? "적용중" : "열기"}</span>
+        </summary>
+        <div class="admin-db-toolbar admin-db-toolbar-advanced">
+          <label>
+            <span>카테고리</span>
+            <select data-admin-db-category>${adminDbSelectOptions(categoryOptions, filters.category, "전체 카테고리")}</select>
+          </label>
+          <label class="admin-db-filter-wide">
+            <span>관리 상태</span>
+            <select data-admin-db-status>
+              ${statusOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.status === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="admin-db-filter-wide">
+            <span>신뢰도</span>
+            <select data-admin-db-confidence>
+              ${confidenceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.confidence === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="admin-db-filter-wide">
+            <span>수집 구분</span>
+            <select data-admin-db-source>
+              ${sourceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.source === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+            </select>
+          </label>
+          <label>
+            <span>OTA 채널</span>
+            <small>네이버·여기어때·야놀자·떠나요·온다 노출 여부</small>
+            <select data-admin-db-ota>
+              ${[
+                ["all", "전체 채널"],
+                ["naver", "네이버"],
+                ["yeogi", "여기어때"],
+                ["yanolja", "야놀자"],
+                ["tteonayo", "떠나요"],
+                ["onda", "온다"],
+                ["ota_missing", "채널 확인 필요"]
+              ].map(([value, label]) => `<option value="${value}" ${filters.ota === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+          <label class="admin-db-filter-feature">
+            <span>시설 조건</span>
+            <small>수영장, 세미나실, 애견동반, 바베큐 등 업체 시설 문구 기준</small>
+            <select data-admin-db-feature>
+              ${[
+                ["all", "시설 전체"],
+                ["pool", "수영장 포함"],
+                ["seminar", "세미나실 포함"],
+                ["pet", "애견동반 포함"],
+                ["bbq", "바베큐 포함"]
+              ].map(([value, label]) => `<option value="${value}" ${filters.feature === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+        </div>
+      </details>
+    </div>
   `;
   els.adminDatabaseDashboard.innerHTML = `
     <section class="admin-db-board" id="adminDatabaseBoard">

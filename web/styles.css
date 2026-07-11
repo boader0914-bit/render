@@ -2914,12 +2914,35 @@ a {
   white-space: nowrap;
 }
 
+.admin-db-filter-shell {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid #dbe7f3;
+  border-radius: 16px;
+  background: #fff;
+  padding: 10px;
+  box-shadow: var(--soft-shadow);
+}
+
 .admin-db-toolbar {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 10px;
   align-items: start;
-  padding: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.admin-db-toolbar-main {
+  grid-template-columns: minmax(220px, 1.8fr) repeat(3, minmax(132px, .9fr)) auto;
+}
+
+.admin-db-toolbar-advanced {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  padding-top: 8px;
 }
 
 .admin-db-toolbar label {
@@ -2957,8 +2980,8 @@ a {
 }
 
 .admin-db-toolbar .admin-db-filter-reset {
-  grid-column: 11 / span 2;
-  grid-row: 1;
+  grid-column: auto;
+  grid-row: auto;
 }
 
 .admin-db-toolbar input,
@@ -2975,7 +2998,6 @@ a {
 }
 
 .admin-db-toolbar button {
-  grid-column: span 2;
   align-self: end;
   min-height: 40px;
   border: 1px solid #cdd9e8;
@@ -2984,6 +3006,56 @@ a {
   color: #344054;
   padding: 0 12px;
   font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.admin-db-filter-more {
+  min-width: 0;
+  border-top: 1px solid #edf2f7;
+  padding-top: 8px;
+}
+
+.admin-db-filter-more summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  list-style: none;
+}
+
+.admin-db-filter-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-filter-more summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-filter-more summary strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.admin-db-filter-more summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-filter-more summary > span {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f1f7ff;
+  color: #175cd3;
+  padding: 6px 9px;
+  font-size: 11px;
   font-weight: 950;
   white-space: nowrap;
 }
@@ -3068,7 +3140,7 @@ a {
   font-weight: 950;
 }
 
-.admin-db-search-drawer .admin-db-toolbar {
+.admin-db-search-drawer .admin-db-filter-shell {
   margin: 0 12px 12px;
   box-shadow: none;
 }
@@ -4480,7 +4552,7 @@ a {
 
 .admin-db-company {
   display: grid;
-  grid-template-columns: minmax(220px, .95fr) minmax(360px, 1.35fr) minmax(220px, .9fr) auto;
+  grid-template-columns: minmax(230px, 1fr) minmax(300px, 1.08fr) minmax(220px, .9fr) minmax(120px, auto);
   gap: 10px;
   align-items: center;
   padding: 10px;
@@ -4534,7 +4606,7 @@ a {
 
 .admin-db-company-values {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -25023,6 +25095,7 @@ body.role-admin .admin-db-hero h3,
 body.role-admin .admin-db-metrics strong,
 body.role-admin .admin-db-view-switch span,
 body.role-admin .admin-db-flow-rail strong,
+body.role-admin .admin-db-filter-more summary strong,
 body.role-admin .admin-db-region-empty-panel strong,
 body.role-admin .admin-db-region-next-grid article strong,
 body.role-admin .admin-db-province-board-head strong,
@@ -25078,6 +25151,7 @@ body.role-admin .admin-db-toolbar span,
 body.role-admin .admin-db-view-switch small,
 body.role-admin .admin-db-flow-rail span,
 body.role-admin .admin-db-flow-rail small,
+body.role-admin .admin-db-filter-more summary small,
 body.role-admin .admin-db-region-empty-panel span,
 body.role-admin .admin-db-region-empty-panel small,
 body.role-admin .admin-db-region-next-grid small,
@@ -25148,6 +25222,8 @@ body.role-admin .admin-console-panel,
 body.role-admin .admin-kpi-grid article,
 body.role-admin .admin-db-hero,
 body.role-admin .admin-db-toolbar,
+body.role-admin .admin-db-filter-shell,
+body.role-admin .admin-db-filter-more,
 body.role-admin .admin-db-metrics article,
 body.role-admin .admin-db-view-switch,
 body.role-admin .admin-db-flow-rail,
@@ -25279,6 +25355,7 @@ body.role-admin .admin-task-list button,
 body.role-admin .admin-db-company-action button,
 body.role-admin .admin-db-selected-actions button,
 body.role-admin .admin-db-region-empty-actions button,
+body.role-admin .admin-db-filter-more summary > span,
 body.role-admin .admin-db-collect-metrics button,
 body.role-admin .company-master-tools button,
 body.role-admin .company-master-ops-intro button,
@@ -27489,6 +27566,15 @@ body.role-admin .empty {
 
   body.role-admin .admin-db-search-drawer summary {
     align-items: flex-start;
+  }
+
+  body.role-admin .admin-db-filter-more summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-db-filter-more summary > span {
+    align-self: flex-start;
   }
 
   body.role-admin .admin-db-pagination {
