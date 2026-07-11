@@ -14248,6 +14248,7 @@ a.platform-row:hover {
 }
 
 .company-manual-form input,
+.company-manual-form select,
 .company-manual-form textarea {
   width: 100%;
   min-width: 0;
@@ -14376,6 +14377,62 @@ a.platform-row:hover {
   gap: 8px;
 }
 
+.company-manual-structured-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.company-manual-structured-grid fieldset {
+  min-width: 0;
+  grid-column: span 3;
+  border: 1px solid #e2eaf5;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.company-manual-structured-grid legend {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 950;
+  padding: 0 4px;
+}
+
+.company-manual-structured-grid fieldset > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.company-manual-check {
+  display: inline-flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 6px !important;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f8fbff;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.company-manual-check input {
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0;
+}
+
+.company-manual-check span {
+  color: var(--ink) !important;
+  font-size: 12px !important;
+  font-weight: 900 !important;
+  white-space: nowrap;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -14417,6 +14474,14 @@ a.platform-row:hover {
 
   .company-manual-meta-grid {
     grid-template-columns: 1fr;
+  }
+
+  .company-manual-structured-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .company-manual-structured-grid fieldset {
+    grid-column: 1;
   }
 
   .company-manual-segment-row label.type {
@@ -25094,6 +25159,9 @@ body.role-admin .admin-db-toolbar input,
 body.role-admin .admin-db-toolbar select,
 body.role-admin .company-master-filter input,
 body.role-admin .company-master-filter select,
+body.role-admin .company-manual-form input,
+body.role-admin .company-manual-form select,
+body.role-admin .company-manual-form textarea,
 body.role-admin .company-review-control input,
 body.role-admin .company-review-control select,
 body.role-admin .company-review-control textarea {
@@ -25127,10 +25195,16 @@ body.role-admin .admin-db-region-card-grid button,
 body.role-admin .admin-db-quality-cards button,
 body.role-admin .admin-db-collect-metrics button,
 body.role-admin .company-master-list article,
+body.role-admin .company-manual-structured-grid fieldset,
+body.role-admin .company-manual-check,
 body.role-admin .company-review-queue article {
   border-color: rgba(156, 174, 204, .24);
   background: #121822;
   color: var(--ink);
+}
+
+body.role-admin .company-manual-check span {
+  color: var(--ink) !important;
 }
 
 body.role-admin .admin-db-company-tags em,

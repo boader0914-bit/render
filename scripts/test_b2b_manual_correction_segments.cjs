@@ -132,6 +132,11 @@ async function main() {
         { type: "스탠다드", count: 4, weekdayPrice: 120000, fridayPrice: 160000, saturdayPrice: 220000, sundayPrice: 140000 },
         { type: "프리미엄", count: 2, weekdayPrice: 180000, fridayPrice: 220000, saturdayPrice: 290000, sundayPrice: 200000 }
       ],
+      naverBookingStatus: "visible",
+      otaChannels: ["여기어때", "야놀자"],
+      facilityTags: ["수영장", "바베큐"],
+      couponVisible: "visible",
+      couponNames: "주중 할인",
       note: "테스트 검수값"
     }, cookies);
     assert.equal(correction.statusCode, 200);
@@ -144,11 +149,19 @@ async function main() {
     assert.equal(company.manualCorrection.roomSegments.length, 2);
     assert.equal(company.manualCorrection.roomSegments[0].type, "스탠다드");
     assert.equal(company.manualCorrection.roomSegments[0].count, "4");
+    assert.equal(company.manualCorrection.naverBookingStatus, "visible");
+    assert.deepEqual(company.manualCorrection.otaChannels, ["여기어때", "야놀자"]);
+    assert.deepEqual(company.manualCorrection.facilityTags, ["수영장", "바베큐"]);
+    assert.equal(company.manualCorrection.couponVisible, "visible");
+    assert.equal(company.manualCorrection.couponNames, "주중 할인");
     assert.equal(company.correctionStatus.key, "admin_override");
     assert.match(company.correctionStatus.detail, /숙박 운영 6개/);
     assert.match(company.correctionStatus.detail, /객실종류 2개/);
+    assert.match(company.correctionStatus.detail, /OTA 2개/);
+    assert.match(company.correctionStatus.detail, /시설 2개/);
     assert.equal(company.inventory.latest.correctionBasis.lodgingBasisTotal, 6);
     assert.equal(company.inventory.latest.correctionBasis.roomSegments.length, 2);
+    assert.deepEqual(company.inventory.latest.correctionBasis.otaChannels, ["여기어때", "야놀자"]);
   } finally {
     child.kill();
     await fsp.rm(tmp, { recursive: true, force: true });

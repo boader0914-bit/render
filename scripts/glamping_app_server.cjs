@@ -2028,16 +2028,43 @@ function manualCorrectionRoomSegmentTotal(correction = {}) {
 }
 
 function sanitizeManualCorrectionMeta(payload = {}) {
+  const enumValue = (value, allowed) => {
+    const clean = sanitizeMemberText(value, 24);
+    return allowed.includes(clean) ? clean : "";
+  };
+  const list = (value, limit = 12, max = 40) => {
+    const source = Array.isArray(value)
+      ? value
+      : String(value || "").split(/\s*(?:,|·|ㆍ|\||\n|\r)\s*/);
+    return boundedUnique(
+      source.map((item) => sanitizeMemberText(item, max)).filter(Boolean),
+      limit
+    );
+  };
   return {
     regionOverride: sanitizeMemberText(payload.regionOverride, 80),
     channelNote: sanitizeMemberText(payload.channelNote, 180),
-    couponNote: sanitizeMemberText(payload.couponNote, 180)
+    couponNote: sanitizeMemberText(payload.couponNote, 180),
+    naverBookingStatus: enumValue(payload.naverBookingStatus, ["visible", "hidden", "unknown"]),
+    otaChannels: list(payload.otaChannels, 8, 40),
+    facilityTags: list(payload.facilityTags, 12, 40),
+    couponVisible: enumValue(payload.couponVisible, ["visible", "hidden", "unknown"]),
+    couponNames: sanitizeMemberText(payload.couponNames, 180)
   };
 }
 
 function manualCorrectionMetaHasValue(correction = {}) {
   const meta = sanitizeManualCorrectionMeta(correction);
-  return Boolean(meta.regionOverride || meta.channelNote || meta.couponNote);
+  return Boolean(
+    meta.regionOverride ||
+    meta.channelNote ||
+    meta.couponNote ||
+    meta.naverBookingStatus ||
+    meta.otaChannels.length ||
+    meta.facilityTags.length ||
+    meta.couponVisible ||
+    meta.couponNames
+  );
 }
 
 function manualCorrectionLodgingBasisTotal(correction = {}) {
@@ -8093,13 +8120,23 @@ function companyCorrectionStatus(company = {}, inventory = null) {
     if (correction.dayUseBasisTotal) parts.push(`데이유즈 운영 ${correction.dayUseBasisTotal}회`);
     if (roomSegmentCount) parts.push(`객실종류 ${roomSegmentCount}개`);
     if (meta.regionOverride) parts.push(`지역 ${meta.regionOverride}`);
+    if (meta.naverBookingStatus) parts.push("네이버 예약");
+    if (meta.otaChannels.length) parts.push(`OTA ${meta.otaChannels.length}개`);
+    if (meta.facilityTags.length) parts.push(`시설 ${meta.facilityTags.length}개`);
     if (meta.channelNote) parts.push("채널 확인");
-    if (meta.couponNote) parts.push("쿠폰 확인");
+    if (meta.couponVisible || meta.couponNames || meta.couponNote) parts.push("쿠폰 확인");
     return {
       key: "admin_override",
       label: "관리자 보정",
       detail: parts.join(" · ") || "보정 기준 저장",
-      note: [correction.note, meta.channelNote, meta.couponNote].filter(Boolean).join(" · ") || "관리자 보정값 기준",
+      note: [
+        correction.note,
+        meta.channelNote,
+        meta.otaChannels.length ? `OTA ${meta.otaChannels.join(", ")}` : "",
+        meta.facilityTags.length ? `시설 ${meta.facilityTags.join(", ")}` : "",
+        meta.couponNames,
+        meta.couponNote
+      ].filter(Boolean).join(" · ") || "관리자 보정값 기준",
       updatedAt: correction.updatedAt || ""
     };
   }
@@ -9361,6 +9398,7 @@ function applyCompanyMasterIdentity(item = {}, company = {}) {
 function applyCompanyManualCorrection(item, company) {
   const correction = company?.manualCorrection;
   if (!manualCorrectionHasValue(correction)) return item;
+  const correctionMeta = sanitizeManualCorrectionMeta(correction);
   const next = {
     ...item,
     companyManualCorrection: correction,
@@ -9397,6 +9435,15 @@ function applyCompanyManualCorrection(item, company) {
     next.dayUseTotalStock = operating;
     next.manualDayUseBasisTotal = operating;
     next.manualCorrectionApplied = true;
+  }
+  if (correctionMeta.facilityTags.length) next.manualFacilityTags = correctionMeta.facilityTags;
+  if (correctionMeta.otaChannels.length) next.manualOtaChannels = correctionMeta.otaChannels;
+  if (correctionMeta.naverBookingStatus) next.manualNaverBookingStatus = correctionMeta.naverBookingStatus;
+  if (correctionMeta.couponVisible || correctionMeta.couponNames) {
+    next.naverCouponStatus = correctionMeta.couponVisible === "hidden" ? "미노출" : "있음";
+    next.naverCouponNames = correctionMeta.couponNames || next.naverCouponNames || "";
+    next.naverCouponChannel = "관리자 보정";
+    next.naverCouponDetail = correctionMeta.couponNote || (correctionMeta.couponNames ? `관리자 확인 쿠폰: ${correctionMeta.couponNames}` : "관리자 확인 쿠폰 노출");
   }
   return next;
 }
@@ -9666,6 +9713,11 @@ async function saveCompanyManualCorrection(payload = {}) {
       regionOverride: company.manualCorrection?.regionOverride || "",
       channelNote: company.manualCorrection?.channelNote || "",
       couponNote: company.manualCorrection?.couponNote || "",
+      naverBookingStatus: company.manualCorrection?.naverBookingStatus || "",
+      otaChannels: company.manualCorrection?.otaChannels || [],
+      facilityTags: company.manualCorrection?.facilityTags || [],
+      couponVisible: company.manualCorrection?.couponVisible || "",
+      couponNames: company.manualCorrection?.couponNames || "",
       note: company.manualCorrection?.note || ""
     }
   ].slice(-30);
@@ -11944,8 +11996,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260711-admin-detail-flow-pass"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260711-admin-detail-flow-pass"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260711-admin-master-edit-pass"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260711-admin-master-edit-pass"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

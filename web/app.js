@@ -2526,6 +2526,24 @@ function platformsForItem(item) {
       url: item.url
     });
   }
+  const manualMeta = manualCorrectionMeta(item.companyManualCorrection || item.companyProfile?.manualCorrection || {});
+  const pushManualRow = (platform, status, extra = {}) => {
+    const name = platformShortName(platform);
+    const index = rows.findIndex((row) => platformShortName(row.platform) === name);
+    const row = { platform, status, source: "관리자 보정", ...extra };
+    if (index >= 0) rows[index] = { ...rows[index], ...row };
+    else rows.push(row);
+  };
+  if (manualMeta.naverBookingStatus === "visible") {
+    pushManualRow("네이버", "노출", { price: item.price, url: item.url });
+  } else if (manualMeta.naverBookingStatus === "hidden") {
+    pushManualRow("네이버", "예약 미노출", { url: item.url });
+  } else if (manualMeta.naverBookingStatus === "unknown") {
+    pushManualRow("네이버", "확인 필요", { url: item.url });
+  }
+  manualMeta.otaChannels.forEach((channel) => {
+    pushManualRow(channel, "노출");
+  });
 
   const seen = new Set();
   return rows.filter((row) => {
@@ -2583,16 +2601,43 @@ function manualCorrectionHasValue(correction = {}) {
 
 function manualCorrectionMeta(correction = {}) {
   const text = (value, max = 160) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+  const list = (value, limit = 12, max = 40) => {
+    const source = Array.isArray(value)
+      ? value
+      : String(value || "").split(/\s*(?:,|·|ㆍ|\||\n|\r)\s*/);
+    return [...new Set(source
+      .map((item) => text(item, max))
+      .filter(Boolean))]
+      .slice(0, limit);
+  };
+  const status = (value, allowed) => {
+    const clean = text(value, 24);
+    return allowed.includes(clean) ? clean : "";
+  };
   return {
     regionOverride: text(correction.regionOverride, 80),
     channelNote: text(correction.channelNote, 180),
-    couponNote: text(correction.couponNote, 180)
+    couponNote: text(correction.couponNote, 180),
+    naverBookingStatus: status(correction.naverBookingStatus, ["visible", "hidden", "unknown"]),
+    otaChannels: list(correction.otaChannels, 8, 40),
+    facilityTags: list(correction.facilityTags, 12, 40),
+    couponVisible: status(correction.couponVisible, ["visible", "hidden", "unknown"]),
+    couponNames: text(correction.couponNames, 180)
   };
 }
 
 function manualCorrectionMetaHasValue(correction = {}) {
   const meta = manualCorrectionMeta(correction);
-  return Boolean(meta.regionOverride || meta.channelNote || meta.couponNote);
+  return Boolean(
+    meta.regionOverride ||
+    meta.channelNote ||
+    meta.couponNote ||
+    meta.naverBookingStatus ||
+    meta.otaChannels.length ||
+    meta.facilityTags.length ||
+    meta.couponVisible ||
+    meta.couponNames
+  );
 }
 
 function manualCorrectionHasBasis(correction = {}) {
@@ -4720,15 +4765,38 @@ function naverCouponDisplayNames(value = "") {
 }
 
 function naverCouponInfo(item = {}) {
+  const manualMeta = manualCorrectionMeta(item.companyManualCorrection || item.companyProfile?.manualCorrection || {});
   const latest = item.companyProfile?.inventory?.latest || {};
   const latestSignal = latest.salesSignal || {};
   const salesTargetSignals = item.companyProfile?.salesTarget?.signals || {};
   const couponSignal = latest.couponSignal || latestSignal.couponSignal || {};
   const status = String(item.naverCouponStatus || couponSignal.status || latestSignal.naverCouponStatus || salesTargetSignals.couponStatus || "").trim();
-  const rawNames = String(item.naverCouponNames || couponSignal.names || latestSignal.naverCouponNames || salesTargetSignals.couponNames || "").trim();
+  const rawNames = String(manualMeta.couponNames || item.naverCouponNames || couponSignal.names || latestSignal.naverCouponNames || salesTargetSignals.couponNames || "").trim();
   const names = naverCouponDisplayNames(rawNames);
   const channel = String(item.naverCouponChannel || couponSignal.channel || latestSignal.naverCouponChannel || salesTargetSignals.couponChannel || "").trim();
   const detail = String(item.naverCouponDetail || couponSignal.detail || latestSignal.naverCouponDetail || salesTargetSignals.couponDetail || "").trim();
+  if (manualMeta.couponVisible === "visible" || manualMeta.couponNames) {
+    return {
+      visible: true,
+      named: Boolean(names),
+      status: "있음",
+      names,
+      rawNames,
+      channel: "관리자 보정",
+      detail: manualMeta.couponNote || (names ? `관리자 확인 쿠폰: ${names}` : "관리자 확인 쿠폰 노출")
+    };
+  }
+  if (manualMeta.couponVisible === "hidden") {
+    return {
+      visible: false,
+      named: false,
+      status: "미노출",
+      names: "",
+      rawNames: "",
+      channel: "관리자 보정",
+      detail: manualMeta.couponNote || "관리자 확인: 쿠폰 미노출"
+    };
+  }
   const positiveStatus = /^(?:\uC788\uC74C|\uB178\uCD9C|exposed|visible|yes|true)$/i.test(status);
   const visible = Boolean(
     positiveStatus ||
@@ -13738,6 +13806,15 @@ function companyProfileKeywordList(profile = {}) {
 
 function manualCorrectionAdminMetaFields(correction = {}, context = {}) {
   const meta = manualCorrectionMeta(correction);
+  const otaOptions = ["여기어때", "야놀자", "떠나요", "온다", "기타 OTA"];
+  const facilityOptions = ["수영장", "세미나실", "애견동반", "바베큐", "개별화장실", "개별수영장", "카라반", "풀빌라"];
+  const selectOption = (value, label, selected) => `<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
+  const checkbox = (attr, value, checked) => `
+    <label class="company-manual-check">
+      <input type="checkbox" ${attr} value="${escapeHtml(value)}" ${checked.includes(value) ? "checked" : ""}>
+      <span>${escapeHtml(value)}</span>
+    </label>
+  `;
   return `
     <div class="company-manual-meta-grid">
       <label>
@@ -13752,6 +13829,38 @@ function manualCorrectionAdminMetaFields(correction = {}, context = {}) {
         <span>쿠폰/혜택 메모</span>
         <input type="text" data-manual-coupon-note value="${escapeHtml(meta.couponNote)}" placeholder="예: 네이버 쿠폰 노출, BBQ 패키지">
       </label>
+    </div>
+    <div class="company-manual-structured-grid">
+      <label>
+        <span>네이버 예약 여부</span>
+        <select data-manual-naver-booking>
+          ${selectOption("", "자동수집값 유지", meta.naverBookingStatus)}
+          ${selectOption("visible", "네이버 예약 노출", meta.naverBookingStatus)}
+          ${selectOption("hidden", "네이버 예약 미노출", meta.naverBookingStatus)}
+          ${selectOption("unknown", "확인 필요", meta.naverBookingStatus)}
+        </select>
+      </label>
+      <label>
+        <span>쿠폰 노출</span>
+        <select data-manual-coupon-visible>
+          ${selectOption("", "자동수집값 유지", meta.couponVisible)}
+          ${selectOption("visible", "쿠폰 노출", meta.couponVisible)}
+          ${selectOption("hidden", "쿠폰 미노출", meta.couponVisible)}
+          ${selectOption("unknown", "확인 필요", meta.couponVisible)}
+        </select>
+      </label>
+      <label>
+        <span>쿠폰명</span>
+        <input type="text" data-manual-coupon-names value="${escapeHtml(meta.couponNames)}" placeholder="예: 주중 할인, BBQ 패키지">
+      </label>
+      <fieldset>
+        <legend>OTA 노출</legend>
+        <div>${otaOptions.map((value) => checkbox("data-manual-ota-channel", value, meta.otaChannels)).join("")}</div>
+      </fieldset>
+      <fieldset>
+        <legend>시설</legend>
+        <div>${facilityOptions.map((value) => checkbox("data-manual-facility-tag", value, meta.facilityTags)).join("")}</div>
+      </fieldset>
     </div>
   `;
 }
@@ -15821,12 +15930,13 @@ function adminDbQuickCorrectionSummaryCards(row = {}) {
   const metrics = row.metrics || {};
   const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
   const segments = manualCorrectionRoomSegments(correction);
+  const meta = manualCorrectionMeta(correction);
   const explicitTotal = optionalNumber(correction.lodgingBasisTotal);
   const segmentTotal = segments.reduce((sum, item) => sum + finiteNumber(item.count, 0), 0);
   const correctedTotal = Number.isFinite(explicitTotal) && explicitTotal > 0 ? explicitTotal : segmentTotal;
   const roomTotal = correctedTotal || finiteNumber(metrics.roomTotal, 0);
   const correctionApplied = manualCorrectionHasValue(company.manualCorrection);
-  return [
+  const cards = [
     {
       label: "현재 객실 기준",
       value: roomTotal ? `${fmtNumber(roomTotal)}실` : "확인 필요",
@@ -15854,6 +15964,36 @@ function adminDbQuickCorrectionSummaryCards(row = {}) {
       tone: correction.updatedAt ? "good" : "neutral"
     }
   ];
+  if (meta.naverBookingStatus || meta.otaChannels.length) {
+    const naverLabel = {
+      visible: "네이버 예약 노출",
+      hidden: "네이버 예약 미노출",
+      unknown: "네이버 예약 확인 필요"
+    }[meta.naverBookingStatus] || "네이버 자동수집";
+    cards.push({
+      label: "채널 보정",
+      value: meta.otaChannels.length ? `${fmtNumber(meta.otaChannels.length)}개 OTA` : naverLabel,
+      note: [naverLabel, ...meta.otaChannels].filter(Boolean).join(" · "),
+      tone: "good"
+    });
+  }
+  if (meta.facilityTags.length) {
+    cards.push({
+      label: "시설 보정",
+      value: `${fmtNumber(meta.facilityTags.length)}개`,
+      note: meta.facilityTags.join(" · "),
+      tone: "good"
+    });
+  }
+  if (meta.couponVisible || meta.couponNames) {
+    cards.push({
+      label: "쿠폰 보정",
+      value: meta.couponVisible === "hidden" ? "미노출" : meta.couponNames ? "쿠폰명 확인" : "노출",
+      note: meta.couponNames || meta.couponNote || "관리자 보정값",
+      tone: meta.couponVisible === "hidden" ? "neutral" : "good"
+    });
+  }
+  return cards;
 }
 
 function adminDbQuickCorrectionPanel(row = {}) {
@@ -26084,6 +26224,11 @@ async function saveCompanyCorrection(button, clear = false) {
   const regionOverride = form?.querySelector("[data-manual-region]")?.value || "";
   const channelNote = form?.querySelector("[data-manual-channel-note]")?.value || "";
   const couponNote = form?.querySelector("[data-manual-coupon-note]")?.value || "";
+  const naverBookingStatus = form?.querySelector("[data-manual-naver-booking]")?.value || "";
+  const otaChannels = Array.from(form?.querySelectorAll("[data-manual-ota-channel]:checked") || []).map((input) => input.value);
+  const facilityTags = Array.from(form?.querySelectorAll("[data-manual-facility-tag]:checked") || []).map((input) => input.value);
+  const couponVisible = form?.querySelector("[data-manual-coupon-visible]")?.value || "";
+  const couponNames = form?.querySelector("[data-manual-coupon-names]")?.value || "";
   const note = form?.querySelector("[data-manual-note]")?.value || "";
   const emptySave = !clear
     && !String(lodgingBasisTotal).trim()
@@ -26092,6 +26237,11 @@ async function saveCompanyCorrection(button, clear = false) {
     && !String(regionOverride).trim()
     && !String(channelNote).trim()
     && !String(couponNote).trim()
+    && !String(naverBookingStatus).trim()
+    && !otaChannels.length
+    && !facilityTags.length
+    && !String(couponVisible).trim()
+    && !String(couponNames).trim()
     && !String(note).trim();
   const shouldClear = clear || emptySave;
   if (feedback) {
@@ -26109,6 +26259,11 @@ async function saveCompanyCorrection(button, clear = false) {
         regionOverride,
         channelNote,
         couponNote,
+        naverBookingStatus,
+        otaChannels,
+        facilityTags,
+        couponVisible,
+        couponNames,
         note
       };
   try {
