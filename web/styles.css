@@ -4254,6 +4254,118 @@ a {
   color: #b42318;
 }
 
+.admin-db-correction-impact {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, .95), rgba(240, 253, 250, .88));
+  padding: 11px;
+}
+
+.admin-db-correction-impact.applied {
+  border-color: #a7f3d0;
+  background: linear-gradient(135deg, rgba(236, 253, 245, .96), rgba(239, 246, 255, .9));
+}
+
+.admin-db-correction-impact-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-db-correction-impact-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-correction-impact-head span,
+.admin-db-correction-impact-head small,
+.admin-db-correction-scope span,
+.admin-db-correction-scope small,
+.admin-db-correction-flow span,
+.admin-db-correction-flow small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-correction-impact-head strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-correction-impact-head mark {
+  flex: 0 0 auto;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--blue);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.admin-db-correction-impact.applied .admin-db-correction-impact-head mark {
+  border-color: #99f6e4;
+  color: #0f766e;
+}
+
+.admin-db-correction-scope,
+.admin-db-correction-flow {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.admin-db-correction-scope {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-db-correction-flow {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-db-correction-scope article,
+.admin-db-correction-flow article {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e2eaf5;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .88);
+  padding: 9px;
+}
+
+.admin-db-correction-scope article.good {
+  border-color: #b8d9d3;
+  background: rgba(246, 251, 250, .95);
+}
+
+.admin-db-correction-scope article.watch {
+  border-color: #fedf89;
+  background: rgba(255, 251, 235, .95);
+}
+
+.admin-db-correction-scope strong,
+.admin-db-correction-flow strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .admin-db-quick-edit .company-manual-form {
   margin-top: 0;
   border-color: #d5e3f7;
@@ -25301,6 +25413,9 @@ body.role-admin .admin-db-selected-section-head strong,
 body.role-admin .admin-db-selected-grid strong,
 body.role-admin .admin-db-selected-brief strong,
 body.role-admin .admin-db-selected-fold summary strong,
+body.role-admin .admin-db-correction-impact-head strong,
+body.role-admin .admin-db-correction-scope strong,
+body.role-admin .admin-db-correction-flow strong,
 body.role-admin .admin-db-company strong,
 body.role-admin .admin-db-company b,
 body.role-admin .admin-db-company-title,
@@ -25378,6 +25493,12 @@ body.role-admin .admin-db-selected-brief span,
 body.role-admin .admin-db-selected-brief small,
 body.role-admin .admin-db-selected-fold summary span,
 body.role-admin .admin-db-selected-fold summary small,
+body.role-admin .admin-db-correction-impact-head span,
+body.role-admin .admin-db-correction-impact-head small,
+body.role-admin .admin-db-correction-scope span,
+body.role-admin .admin-db-correction-scope small,
+body.role-admin .admin-db-correction-flow span,
+body.role-admin .admin-db-correction-flow small,
 body.role-admin .admin-db-company small,
 body.role-admin .admin-db-company p,
 body.role-admin .admin-db-more,
@@ -25459,6 +25580,9 @@ body.role-admin .admin-db-selected-fold,
 body.role-admin .admin-db-selected-review,
 body.role-admin .admin-db-selected-correction,
 body.role-admin .admin-db-quick-edit,
+body.role-admin .admin-db-correction-impact,
+body.role-admin .admin-db-correction-scope article,
+body.role-admin .admin-db-correction-flow article,
 body.role-admin .admin-db-recheck-panel,
 body.role-admin .admin-db-recheck-summary article,
 body.role-admin .admin-db-recheck-grid article,
@@ -25710,6 +25834,7 @@ body.role-admin .admin-db-hero span,
 body.role-admin .admin-db-quality-head mark,
 body.role-admin .admin-db-audit-head mark,
 body.role-admin .admin-db-selected-head mark,
+body.role-admin .admin-db-correction-impact-head mark,
 body.role-admin .admin-db-master-guide mark {
   border-color: rgba(106, 168, 255, .28);
   background: rgba(106, 168, 255, .12);
@@ -25722,6 +25847,7 @@ body.role-admin .admin-db-company.good,
 body.role-admin .admin-db-selected-panel.good,
 body.role-admin .admin-db-selected-grid article.good,
 body.role-admin .admin-db-selected-brief article.good,
+body.role-admin .admin-db-correction-scope article.good,
 body.role-admin .admin-db-quality-cards button.good,
 body.role-admin .admin-db-audit-list article.good,
 body.role-admin .company-review-badge.confirmed,
@@ -25738,6 +25864,7 @@ body.role-admin .admin-db-company.watch,
 body.role-admin .admin-db-selected-panel.watch,
 body.role-admin .admin-db-selected-grid article.watch,
 body.role-admin .admin-db-selected-brief article.watch,
+body.role-admin .admin-db-correction-scope article.watch,
 body.role-admin .admin-db-quality-cards button.watch,
 body.role-admin .admin-db-audit-list article.watch,
 body.role-admin .admin-db-selected-issues em.watch,
@@ -25758,6 +25885,7 @@ body.role-admin .admin-db-company.hot,
 body.role-admin .admin-db-selected-panel.hot,
 body.role-admin .admin-db-selected-grid article.hot,
 body.role-admin .admin-db-selected-brief article.hot,
+body.role-admin .admin-db-correction-scope article.hot,
 body.role-admin .admin-db-quality-cards button.hot,
 body.role-admin .admin-db-audit-list article.hot,
 body.role-admin .admin-db-selected-issues em.hot,
@@ -25770,19 +25898,22 @@ body.role-admin .company-review-badge.exclude {
 
 body.role-admin .admin-db-metrics article.good strong,
 body.role-admin .admin-db-selected-grid article.good strong,
-body.role-admin .admin-db-selected-brief article.good strong {
+body.role-admin .admin-db-selected-brief article.good strong,
+body.role-admin .admin-db-correction-scope article.good strong {
   color: #bbf7d0;
 }
 
 body.role-admin .admin-db-metrics article.watch strong,
 body.role-admin .admin-db-selected-grid article.watch strong,
-body.role-admin .admin-db-selected-brief article.watch strong {
+body.role-admin .admin-db-selected-brief article.watch strong,
+body.role-admin .admin-db-correction-scope article.watch strong {
   color: #fde68a;
 }
 
 body.role-admin .admin-db-metrics article.hot strong,
 body.role-admin .admin-db-selected-grid article.hot strong,
-body.role-admin .admin-db-selected-brief article.hot strong {
+body.role-admin .admin-db-selected-brief article.hot strong,
+body.role-admin .admin-db-correction-scope article.hot strong {
   color: #fecdd3;
 }
 
@@ -25863,6 +25994,8 @@ body.role-admin .empty {
   .admin-db-recheck-grid,
   .admin-db-selected-grid,
   .admin-db-quick-edit-summary,
+  .admin-db-correction-scope,
+  .admin-db-correction-flow,
   .admin-db-selected-layout,
   .admin-db-company,
   .admin-db-company-values,

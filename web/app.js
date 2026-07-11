@@ -16037,6 +16037,85 @@ function adminDbQuickCorrectionSummaryCards(row = {}) {
   return cards;
 }
 
+function adminDbCorrectionImpactHtml(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
+  const applied = manualCorrectionHasValue(correction);
+  const segments = manualCorrectionRoomSegments(correction);
+  const meta = manualCorrectionMeta(correction);
+  const explicitTotal = optionalNumber(correction.lodgingBasisTotal);
+  const segmentTotal = segments.reduce((sum, item) => sum + finiteNumber(item.count, 0), 0);
+  const correctedTotal = Number.isFinite(explicitTotal) && explicitTotal > 0 ? explicitTotal : segmentTotal;
+  const autoTotal = finiteNumber(metrics.roomTotal, 0);
+  const beforeText = autoTotal ? `${fmtNumber(autoTotal)}실` : "자동수집 대기";
+  const afterText = applied
+    ? (correctedTotal ? `${fmtNumber(correctedTotal)}실` : "보정값 적용")
+    : "저장 전 대기";
+  const channelParts = [
+    meta.naverBookingStatus ? "네이버 예약" : "",
+    meta.otaChannels.length ? `OTA ${fmtNumber(meta.otaChannels.length)}개` : "",
+    meta.facilityTags.length ? `시설 ${fmtNumber(meta.facilityTags.length)}개` : "",
+    meta.couponVisible || meta.couponNames ? "쿠폰" : ""
+  ].filter(Boolean);
+  const scopeCards = [
+    {
+      label: "전체 DB",
+      value: applied ? "보정값 우선" : "자동수집 기준",
+      note: applied ? "업체 목록·지역 통계·필터에 우선 반영" : "저장하면 마스터 DB 기준값으로 반영",
+      tone: applied ? "good" : "neutral"
+    },
+    {
+      label: "판단 큐",
+      value: applied ? "재검토 기준 갱신" : "저장 후 재분류",
+      note: "수량 신뢰도와 확인 수집 우선순위에 반영",
+      tone: applied ? "good" : "watch"
+    },
+    {
+      label: "B2B 지표",
+      value: applied ? "비교 기준 반영" : "자동값 노출",
+      note: "예약율·예상매출·관심숙소 비교에 우선 적용",
+      tone: applied ? "good" : "neutral"
+    }
+  ];
+  const flowRows = [
+    ["객실 기준", `${beforeText} → ${afterText}`, applied ? "관리자 보정값을 우선 사용합니다." : "저장 전에는 자동수집값을 사용합니다."],
+    ["객실종류", segments.length ? `${fmtNumber(segments.length)}개` : "미입력", segments.length ? manualCorrectionRoomSegmentsSummary(segments) : "상품별 수량·요일가 입력 대기"],
+    ["채널·시설", channelParts.length ? channelParts.join(" · ") : "미입력", channelParts.length ? "고객 비교 지표에 같이 반영됩니다." : "네이버·OTA·시설·쿠폰 보정 대기"],
+    ["최근 저장", correction.updatedAt ? compactDateTime(correction.updatedAt) : "대기", correction.note || "보정 메모 없음"]
+  ];
+  return `
+    <section class="admin-db-correction-impact ${applied ? "applied" : "pending"}" aria-label="보정 반영 범위">
+      <div class="admin-db-correction-impact-head">
+        <div>
+          <span>${applied ? "반영 완료" : "반영 예정"}</span>
+          <strong>${applied ? "관리자 보정값이 우선 적용 중입니다" : "저장하면 아래 기준에 바로 반영됩니다"}</strong>
+          <small>전체 DB, 판단 큐, B2B 비교 지표가 같은 보정값을 기준으로 다시 계산됩니다.</small>
+        </div>
+        <mark>${escapeHtml(applied ? "적용 중" : "저장 대기")}</mark>
+      </div>
+      <div class="admin-db-correction-scope">
+        ${scopeCards.map((card) => `
+          <article class="${escapeHtml(card.tone)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+      <div class="admin-db-correction-flow">
+        ${flowRows.map(([label, value, note]) => `
+          <article>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(value)}</strong>
+            <small>${escapeHtml(note)}</small>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbQuickCorrectionPanel(row = {}) {
   const company = row.company || {};
   const companyId = company.companyId || "";
@@ -16054,6 +16133,7 @@ function adminDbQuickCorrectionPanel(row = {}) {
       <div class="admin-db-quick-edit-summary">
         ${cards.map(adminDbSelectedMetricCard).join("")}
       </div>
+      ${adminDbCorrectionImpactHtml(row)}
       ${companyCorrectionFormHtml(company, true)}
     </section>
   `;
@@ -26417,7 +26497,7 @@ async function saveCompanyCorrection(button, clear = false) {
     && !String(note).trim();
   const shouldClear = clear || emptySave;
   if (feedback) {
-    feedback.textContent = shouldClear ? "보정 해제 중입니다." : "보정 저장 중입니다.";
+    feedback.textContent = shouldClear ? "보정 해제 중입니다." : "보정 저장 중입니다. 저장 후 전체 DB·판단 큐·B2B 지표에 반영됩니다.";
     feedback.classList.remove("error");
   }
   setStatus(shouldClear ? "보정 해제 중" : "보정 저장 중");
@@ -26449,7 +26529,7 @@ async function saveCompanyCorrection(button, clear = false) {
     state.adminDbOpsOpen = true;
     state.adminDbCorrectionFlash = {
       companyId,
-      message: shouldClear ? "보정 해제 완료" : "보정 저장 완료",
+      message: shouldClear ? "보정 해제 완료 · 전체 DB 기준 갱신" : "보정 저장 완료 · 전체 DB·판단 큐·B2B 반영",
       at: new Date().toISOString()
     };
     if (state.activeRunId) {
@@ -26467,7 +26547,7 @@ async function saveCompanyCorrection(button, clear = false) {
         .find((element) => element.dataset.adminDbQuickEdit === companyId);
       quickEdit?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
-    setStatus(shouldClear ? "보정 해제 완료" : "보정 저장 완료");
+    setStatus(shouldClear ? "보정 해제 완료" : "보정 저장 완료 · 반영 범위 갱신");
   } catch (error) {
     setStatus("보정 저장 실패");
     if (feedback) {
