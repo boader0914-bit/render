@@ -28747,6 +28747,30 @@ body.role-admin .admin-db-region-card-grid button.active {
     margin-left: auto;
   }
 
+  body.role-admin .admin-section-nav {
+    display: none;
+  }
+
+  body.role-admin .admin-mobile-secondary {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(96px, 1fr);
+    grid-template-columns: none;
+    overflow-x: auto;
+    padding-top: 7px;
+    scrollbar-width: none;
+  }
+
+  body.role-admin .admin-mobile-secondary::-webkit-scrollbar {
+    display: none;
+  }
+
+  body.role-admin .admin-mobile-secondary button {
+    min-height: 38px;
+    padding: 0 12px;
+    font-size: 12px;
+  }
+
   body.role-b2b .app-header h1,
   body.role-admin .app-header h1 {
     font-size: clamp(34px, 10vw, 46px);

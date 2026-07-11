@@ -210,28 +210,43 @@ const ADMIN_MOBILE_SECTIONS = {
   summary: {
     label: "요약",
     target: "report",
-    items: []
+    items: [
+      { label: "리포트", tab: "report" },
+      { label: "순위", tab: "rank" },
+      { label: "지도", tab: "map" },
+      { label: "수요", tab: "demand" },
+      { label: "누적 DB", tab: "historyOps" }
+    ]
   },
   database: {
     label: "DB",
     target: "admin",
     adminPanelSection: "database",
     anchor: "#adminDatabaseDashboard",
-    items: []
+    items: [
+      { label: "전체 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard" },
+      { label: "운영 현황", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" },
+      { label: "입지사전", tab: "dictionary" }
+    ]
   },
   collect: {
     label: "수집",
     target: "admin",
     adminPanelSection: "collect",
     anchor: "#crawlForm",
-    items: []
+    items: [
+      { label: "수집 실행", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" }
+    ]
   },
   settings: {
     label: "설정",
     target: "admin",
     adminPanelSection: "files",
     anchor: "#trafficAdminCard",
-    items: []
+    items: [
+      { label: "회원·삭제요청", tab: "admin", adminPanelSection: "members", anchor: "#adminMemberRequestDashboard" },
+      { label: "API·파일", tab: "admin", adminPanelSection: "files", anchor: "#trafficAdminCard" }
+    ]
   }
 };
 const ADMIN_PANEL_SECTIONS = {
