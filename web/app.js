@@ -17625,6 +17625,18 @@ function adminDbSelectedMetricCard(card = {}) {
   `;
 }
 
+function adminDbSelectedSectionHead(label = "", title = "", note = "") {
+  return `
+    <div class="admin-db-selected-section-head">
+      <div>
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(note)}</small>
+      </div>
+    </div>
+  `;
+}
+
 function adminDbWorkPriority(row = {}) {
   const metrics = row.metrics || {};
   const workType = metrics.workType || {};
@@ -18056,54 +18068,66 @@ function adminDbSelectedDetailPanel(rows = []) {
         </div>
         <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
       </div>
-      <div class="admin-db-selected-brief">
-        ${briefCards.map(([label, value, note, tone]) => adminDbSelectedMetricCard({ label, value, note, tone })).join("")}
-      </div>
-      <div class="admin-db-selected-issues">
-        ${issues.slice(0, 4).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
-      </div>
-      <details class="admin-db-selected-fold" open>
-        <summary>
-          <div>
-            <span>B2B 지표 보기</span>
-            <strong>노출·예약율·예상매출·상품·채널</strong>
-          </div>
-          <small>사업자 화면과 같은 기준</small>
-        </summary>
-        <div class="admin-db-selected-grid">
-          ${b2bCards.map(adminDbSelectedMetricCard).join("")}
+      <section class="admin-db-selected-overview" aria-label="업체 상태 요약">
+        <div class="admin-db-selected-brief">
+          ${briefCards.map(([label, value, note, tone]) => adminDbSelectedMetricCard({ label, value, note, tone })).join("")}
         </div>
-      </details>
-      <details class="admin-db-selected-fold">
-        <summary>
-          <div>
-            <span>관리자 내부 판단</span>
-            <strong>신뢰도·보정·확인 채널·처리 상태</strong>
-          </div>
-          <small>운영자 전용 기준</small>
-        </summary>
-        <div class="admin-db-selected-grid internal">
-          ${internalCards.map(adminDbSelectedMetricCard).join("")}
+        <div class="admin-db-selected-issues">
+          ${issues.slice(0, 4).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
         </div>
-      </details>
-      ${adminDbQuickCorrectionPanel(row)}
-      ${adminDbConfirmCollectPlanHtml(row)}
-      ${adminDbRecheckOutcomeHtml(row)}
-      <div class="admin-db-selected-actions">
-        <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
-        <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
-        <button type="button" data-admin-db-view-link="list">목록으로 돌아가기</button>
-        <button type="button" data-admin-db-view-link="region">지역 구조 보기</button>
-      </div>
-      <div class="admin-db-selected-layout single">
-        <div class="admin-db-selected-review">
-          <div>
-            <strong>관리자 판단</strong>
-            <small>검수 상태와 메모는 전체 DB와 판단 큐에 함께 반영됩니다.</small>
+      </section>
+      <section class="admin-db-selected-readonly" aria-label="읽기 전용 지표">
+        ${adminDbSelectedSectionHead("읽기 전용 지표", "B2B 화면 기준 지표와 관리자 내부 판단을 분리해 봅니다", "아래 값은 비교·판단 기준입니다. 실제 보정은 수정·처리 영역에서 진행합니다.")}
+        <details class="admin-db-selected-fold" open>
+          <summary>
+            <div>
+              <span>B2B 지표 보기</span>
+              <strong>노출·예약율·예상매출·상품·채널</strong>
+            </div>
+            <small>사업자 화면과 같은 기준</small>
+          </summary>
+          <div class="admin-db-selected-grid">
+            ${b2bCards.map(adminDbSelectedMetricCard).join("")}
           </div>
-          ${companyReviewActionsHtml(company, true, "admin_db_detail")}
+        </details>
+        <details class="admin-db-selected-fold">
+          <summary>
+            <div>
+              <span>관리자 내부 판단</span>
+              <strong>신뢰도·보정·확인 채널·처리 상태</strong>
+            </div>
+            <small>운영자 전용 기준</small>
+          </summary>
+          <div class="admin-db-selected-grid internal">
+            ${internalCards.map(adminDbSelectedMetricCard).join("")}
+          </div>
+        </details>
+      </section>
+      <section class="admin-db-selected-workbench" aria-label="수정과 처리">
+        ${adminDbSelectedSectionHead("수정·처리", "보정값 저장, 확인 수집, 관리자 판단을 이 영역에서 처리합니다", "저장된 보정값은 전체 DB와 B2B 비교 기준에 우선 적용됩니다.")}
+        <div class="admin-db-selected-workbench-grid">
+          <div class="admin-db-selected-edit-column">
+            ${adminDbQuickCorrectionPanel(row)}
+          </div>
+          <div class="admin-db-selected-process-column">
+            ${adminDbConfirmCollectPlanHtml(row)}
+            ${adminDbRecheckOutcomeHtml(row)}
+            <div class="admin-db-selected-review">
+              <div>
+                <strong>관리자 판단</strong>
+                <small>검수 상태와 메모는 전체 DB와 판단 큐에 함께 반영됩니다.</small>
+              </div>
+              ${companyReviewActionsHtml(company, true, "admin_db_detail")}
+            </div>
+          </div>
         </div>
-      </div>
+        <div class="admin-db-selected-actions">
+          <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
+          <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
+          <button type="button" data-admin-db-view-link="list">목록으로 돌아가기</button>
+          <button type="button" data-admin-db-view-link="region">지역 구조 보기</button>
+        </div>
+      </section>
     </section>
   `;
 }

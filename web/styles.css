@@ -3821,6 +3821,37 @@ a {
   white-space: nowrap;
 }
 
+.admin-db-selected-overview,
+.admin-db-selected-readonly,
+.admin-db-selected-workbench {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e8edf5;
+  border-radius: 16px;
+  background: rgba(251, 253, 255, .88);
+  padding: 12px;
+}
+
+.admin-db-selected-overview {
+  background: #ffffff;
+}
+
+.admin-db-selected-readonly {
+  background: linear-gradient(180deg, #fbfdff, #ffffff);
+}
+
+.admin-db-selected-workbench {
+  border-color: #bfd7ff;
+  background: linear-gradient(180deg, #f6faff, #ffffff);
+}
+
+.admin-db-selected-readonly .admin-db-selected-section-head,
+.admin-db-selected-workbench .admin-db-selected-section-head {
+  border-top: 0;
+  padding-top: 0;
+}
+
 .admin-db-selected-section-head {
   min-width: 0;
   display: flex;
@@ -4038,6 +4069,9 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
+  justify-content: flex-end;
+  border-top: 1px solid #dbeafe;
+  padding-top: 10px;
 }
 
 .admin-db-selected-actions button {
@@ -4428,6 +4462,21 @@ a {
 
 .admin-db-collect-planline {
   display: block;
+}
+
+.admin-db-selected-workbench-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(280px, .9fr) minmax(320px, 1.1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.admin-db-selected-edit-column,
+.admin-db-selected-process-column {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
 }
 
 .admin-db-selected-layout {
@@ -25257,6 +25306,11 @@ body.role-admin .admin-db-collect-list article,
 body.role-admin .admin-db-confirm-plan,
 body.role-admin .admin-db-confirm-grid article,
 body.role-admin .admin-db-selected-panel,
+body.role-admin .admin-db-selected-overview,
+body.role-admin .admin-db-selected-readonly,
+body.role-admin .admin-db-selected-workbench,
+body.role-admin .admin-db-selected-edit-column,
+body.role-admin .admin-db-selected-process-column,
 body.role-admin .admin-db-selected-grid article,
 body.role-admin .admin-db-selected-brief article,
 body.role-admin .admin-db-selected-fold,
@@ -25532,6 +25586,10 @@ body.role-admin .admin-db-selected-brief article.hot strong {
 
 body.role-admin .admin-db-board,
 body.role-admin .admin-console-dashboard,
+body.role-admin .admin-db-selected-overview,
+body.role-admin .admin-db-selected-readonly,
+body.role-admin .admin-db-selected-workbench,
+body.role-admin .admin-db-selected-workbench-grid,
 body.role-admin .admin-db-selected-layout {
   color: var(--ink);
 }
@@ -27622,11 +27680,26 @@ body.role-admin .empty {
   }
 
   body.role-admin .admin-db-selected-brief,
-  body.role-admin .admin-db-selected-grid {
+  body.role-admin .admin-db-selected-grid,
+  body.role-admin .admin-db-selected-workbench-grid {
     grid-template-columns: 1fr;
+  }
+
+  body.role-admin .admin-db-selected-overview,
+  body.role-admin .admin-db-selected-readonly,
+  body.role-admin .admin-db-selected-workbench {
+    padding: 10px;
   }
 
   body.role-admin .admin-db-selected-fold summary {
     align-items: flex-start;
+  }
+
+  body.role-admin .admin-db-selected-actions {
+    justify-content: stretch;
+  }
+
+  body.role-admin .admin-db-selected-actions button {
+    flex: 1 1 150px;
   }
 }
