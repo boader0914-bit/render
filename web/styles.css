@@ -3079,6 +3079,12 @@ a {
   gap: 10px;
 }
 
+.admin-db-page-surface {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
 .admin-db-flat-list {
   border: 1px solid #dbe7f3;
   border-radius: 16px;
@@ -3224,6 +3230,54 @@ a {
 .admin-db-pagination button:disabled {
   cursor: not-allowed;
   opacity: .45;
+}
+
+.admin-db-user-view-bridge {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid #bfd7ff;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f8fbff 0%, #ffffff 66%, #f6fbfa 100%);
+  padding: 13px;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-user-view-bridge > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-user-view-bridge span,
+.admin-db-user-view-bridge small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-user-view-bridge strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-user-view-bridge button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  border: 1px solid #a7d8d1;
+  border-radius: 999px;
+  background: #f6fbfa;
+  color: #0f766e;
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 950;
+  white-space: nowrap;
 }
 
 .admin-db-selected-mini,
@@ -25185,6 +25239,7 @@ body.role-admin .admin-db-audit-list strong,
 body.role-admin .admin-db-audit-detail strong,
 body.role-admin .admin-db-work-panel strong,
 body.role-admin .admin-db-collect-panel strong,
+body.role-admin .admin-db-user-view-bridge strong,
 body.role-admin .admin-db-selected-head strong,
 body.role-admin .admin-db-selected-section-head strong,
 body.role-admin .admin-db-selected-grid strong,
@@ -25254,6 +25309,8 @@ body.role-admin .admin-db-work-panel span,
 body.role-admin .admin-db-work-panel small,
 body.role-admin .admin-db-collect-panel span,
 body.role-admin .admin-db-collect-panel small,
+body.role-admin .admin-db-user-view-bridge span,
+body.role-admin .admin-db-user-view-bridge small,
 body.role-admin .admin-db-selected-head span,
 body.role-admin .admin-db-selected-head small,
 body.role-admin .admin-db-selected-section-head span,
@@ -25322,6 +25379,7 @@ body.role-admin .admin-db-audit-gates article,
 body.role-admin .admin-db-flat-list,
 body.role-admin .admin-db-review-surface,
 body.role-admin .admin-db-ops-drawer,
+body.role-admin .admin-db-user-view-bridge,
 body.role-admin .admin-db-work-panel,
 body.role-admin .admin-db-work-summary article,
 body.role-admin .admin-db-work-list article,
@@ -25434,6 +25492,7 @@ body.role-admin .admin-task-list button,
 body.role-admin .admin-db-company-action button,
 body.role-admin .admin-db-selected-actions button,
 body.role-admin .admin-db-region-empty-actions button,
+body.role-admin .admin-db-user-view-bridge button,
 body.role-admin .admin-db-filter-more summary > span,
 body.role-admin .admin-db-collect-metrics button,
 body.role-admin .company-master-tools button,
@@ -27728,6 +27787,15 @@ body.role-admin .empty {
 
   body.role-admin .admin-db-selected-mini button {
     flex: 1 1 130px;
+  }
+
+  body.role-admin .admin-db-user-view-bridge {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-db-user-view-bridge button {
+    width: 100%;
   }
 
   body.role-admin .admin-db-review-support summary {
