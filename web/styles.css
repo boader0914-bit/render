@@ -14538,10 +14538,47 @@ a.platform-row:hover {
   padding: 12px;
 }
 
-.company-manual-form > div:first-child {
+.company-manual-total-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.company-manual-section {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e2eaf5;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .82);
+  padding: 11px;
+}
+
+.company-manual-section.save {
+  border-color: #bfd7ff;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.company-manual-section-head {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.company-manual-section-head span,
+.company-manual-section-head small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.company-manual-section-head strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .company-manual-form label {
@@ -14593,6 +14630,7 @@ a.platform-row:hover {
 }
 
 .company-manual-segments {
+  min-width: 0;
   display: grid;
   gap: 10px;
   grid-column: 1 / -1;
@@ -14636,11 +14674,13 @@ a.platform-row:hover {
 }
 
 .company-manual-segment-list {
+  min-width: 0;
   display: grid;
   gap: 8px;
 }
 
 .company-manual-segment-row {
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(130px, 1.35fr) repeat(5, minmax(76px, 1fr)) 38px;
   gap: 8px;
@@ -14652,6 +14692,7 @@ a.platform-row:hover {
 }
 
 .company-manual-segment-row label {
+  min-width: 0;
   gap: 5px;
 }
 
@@ -14672,6 +14713,19 @@ a.platform-row:hover {
   cursor: not-allowed;
 }
 
+.company-manual-form.compact .company-manual-segment-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.company-manual-form.compact .company-manual-segment-row label.type,
+.company-manual-form.compact .company-manual-segment-row button {
+  grid-column: 1 / -1;
+}
+
+.company-manual-form.compact .company-manual-segment-row button {
+  width: 100%;
+}
+
 .company-manual-segments small,
 .company-manual-segments-help {
   color: var(--muted);
@@ -14687,6 +14741,7 @@ a.platform-row:hover {
 }
 
 .company-manual-structured-grid {
+  min-width: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
@@ -14807,9 +14862,10 @@ a.platform-row:hover {
 
 @media (max-width: 520px) {
   .company-manual-segment-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
+  .company-manual-segment-row label,
   .company-manual-segment-row label.type,
   .company-manual-segment-row button {
     grid-column: 1 / -1;
@@ -25253,6 +25309,7 @@ body.role-admin .company-master-metrics strong,
 body.role-admin .company-master-rule strong,
 body.role-admin .company-master-backfill strong,
 body.role-admin .company-master-duplicates strong,
+body.role-admin .company-manual-section-head strong,
 body.role-admin .company-review-head strong,
 body.role-admin .company-review-queue b,
 body.role-admin .company-master-list-head strong,
@@ -25333,6 +25390,8 @@ body.role-admin .company-master-metrics small,
 body.role-admin .company-master-rule p,
 body.role-admin .company-master-duplicates small,
 body.role-admin .company-master-duplicates span,
+body.role-admin .company-manual-section-head span,
+body.role-admin .company-manual-section-head small,
 body.role-admin .company-review-head span,
 body.role-admin .company-review-queue p,
 body.role-admin .company-review-queue article > div span,
@@ -25411,6 +25470,7 @@ body.role-admin .company-master-ops-intro,
 body.role-admin .company-master-metrics article,
 body.role-admin .company-master-rule,
 body.role-admin .company-master-duplicates article,
+body.role-admin .company-manual-section,
 body.role-admin .company-review-panel,
 body.role-admin .company-review-queue,
 body.role-admin .company-review-queue article,
@@ -25597,6 +25657,9 @@ body.role-admin .admin-db-toolbar input:focus,
 body.role-admin .admin-db-toolbar select:focus,
 body.role-admin .company-master-filter input:focus,
 body.role-admin .company-master-filter select:focus,
+body.role-admin .company-manual-form input:focus,
+body.role-admin .company-manual-form select:focus,
+body.role-admin .company-manual-form textarea:focus,
 body.role-admin .company-review-control input:focus,
 body.role-admin .company-review-control select:focus,
 body.role-admin .company-review-control textarea:focus {
@@ -25611,11 +25674,27 @@ body.role-admin .admin-db-quality-cards button,
 body.role-admin .admin-db-collect-metrics button,
 body.role-admin .company-master-list article,
 body.role-admin .company-manual-structured-grid fieldset,
+body.role-admin .company-manual-segment-row,
 body.role-admin .company-manual-check,
 body.role-admin .company-review-queue article {
   border-color: rgba(156, 174, 204, .24);
   background: #121822;
   color: var(--ink);
+}
+
+body.role-admin .company-manual-section.save {
+  border-color: rgba(106, 168, 255, .34);
+  background:
+    linear-gradient(135deg, rgba(106, 168, 255, .12), rgba(52, 211, 153, .05)),
+    #171b22;
+}
+
+body.role-admin .company-manual-feedback {
+  color: #8cf4df;
+}
+
+body.role-admin .company-manual-feedback.error {
+  color: #ffb4ab;
 }
 
 body.role-admin .company-manual-check span {
@@ -26136,7 +26215,7 @@ body.role-admin .empty {
     text-align: left;
   }
 
-  .company-manual-form > div:first-child,
+  .company-manual-total-grid,
   .company-manual-actions,
   .company-correction-meta {
     grid-template-columns: 1fr;

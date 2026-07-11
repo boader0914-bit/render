@@ -15901,27 +15901,55 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
   const feedback = String(options.feedback || "").trim();
   return `
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
-      <div>
+      <section class="company-manual-section">
+        <div class="company-manual-section-head">
+          <span>1. 운영 총량</span>
+          <strong>실제 판매 기준 객실 수를 보정합니다</strong>
+          <small>네이버·OTA가 전체 객실 기준으로 세팅된 경우 관리자 보정값을 우선 적용합니다.</small>
+        </div>
+        <div class="company-manual-total-grid">
+          <label>
+            <span>숙박 운영 기준</span>
+            <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 26">
+          </label>
+          <label>
+            <span>데이유즈 운영 기준</span>
+            <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correction.dayUseBasisTotal || "")}" placeholder="예: 12">
+          </label>
+        </div>
+      </section>
+      <section class="company-manual-section">
+        <div class="company-manual-section-head">
+          <span>2. 객실종류·요일가격</span>
+          <strong>객실 세그먼트별 수량과 평일·금·토·일 가격</strong>
+          <small>상품 종류가 다르면 수량과 가격을 분리해 입력합니다.</small>
+        </div>
+        ${manualCorrectionRoomSegmentsField(correction)}
+      </section>
+      <section class="company-manual-section">
+        <div class="company-manual-section-head">
+          <span>3. 채널·시설·쿠폰</span>
+          <strong>노출 채널과 시설 조건을 고객용 비교 기준에 반영합니다</strong>
+          <small>네이버 예약, OTA, 쿠폰명, 수영장·세미나실 등 확인된 항목만 선택합니다.</small>
+        </div>
+        ${manualCorrectionAdminMetaFields(correction, { regionPlaceholder })}
+      </section>
+      <section class="company-manual-section save">
+        <div class="company-manual-section-head">
+          <span>4. 메모·저장</span>
+          <strong>보정 근거를 남기고 저장합니다</strong>
+          <small>저장 후 전체 DB, 판단 큐, B2B 비교 기준에 우선 반영됩니다.</small>
+        </div>
         <label>
-          <span>숙박 운영 기준</span>
-          <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 26">
+          <span>보정 메모</span>
+          <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
         </label>
-        <label>
-          <span>데이유즈 운영 기준</span>
-          <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correction.dayUseBasisTotal || "")}" placeholder="예: 12">
-        </label>
-      </div>
-      ${manualCorrectionRoomSegmentsField(correction)}
-      ${manualCorrectionAdminMetaFields(correction, { regionPlaceholder })}
-      <label>
-        <span>보정 메모</span>
-        <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
-      </label>
-      <div class="company-manual-actions">
-        <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">저장</button>
-        <button type="button" data-clear-company-correction data-company-id="${escapeHtml(company.companyId || "")}">해제</button>
-      </div>
-      <div class="company-manual-feedback" data-company-manual-feedback aria-live="polite">${escapeHtml(feedback)}</div>
+        <div class="company-manual-actions">
+          <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 저장</button>
+          <button type="button" data-clear-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 해제</button>
+        </div>
+        <div class="company-manual-feedback" data-company-manual-feedback aria-live="polite">${escapeHtml(feedback)}</div>
+      </section>
     </div>
   `;
 }
