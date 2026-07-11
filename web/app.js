@@ -52,6 +52,8 @@ const state = {
     quality: "all"
   },
   adminDbViewMode: "region",
+  adminDbListPage: 1,
+  adminDbListPageKey: "",
   adminDbSelectedCompanyId: "",
   adminDbOpsOpen: false,
   adminDbCorrectionFlash: null,
@@ -16649,8 +16651,8 @@ function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], gr
   const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
   const buttons = [
     ["region", "지역 구조", `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`],
-    ["list", "업체 리스트", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
-    ["review", "검수 보드", "상세 수정 · 확인 수집"]
+    ["list", "업체 찾기", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
+    ["review", "상세 검수", "B2B 지표 + 내부 판단"]
   ];
   return `
     <div class="admin-db-view-switch" role="tablist" aria-label="전체 DB 보기 방식">
@@ -16661,6 +16663,55 @@ function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], gr
         </button>
       `).join("")}
     </div>
+  `;
+}
+
+function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], grouped = [], filters = {}) {
+  const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
+  const activeFilterCount = [
+    filters.query,
+    filters.province !== "all" ? filters.province : "",
+    filters.region !== "all" ? filters.region : "",
+    filters.category !== "all" ? filters.category : "",
+    filters.status !== "all" ? filters.status : "",
+    filters.confidence !== "all" ? filters.confidence : "",
+    filters.source !== "all" ? filters.source : "",
+    filters.ota !== "all" ? filters.ota : "",
+    filters.feature !== "all" ? filters.feature : "",
+    filters.quality !== "all" ? filters.quality : ""
+  ].filter(Boolean).length;
+  const guide = {
+    region: {
+      label: "지역 구조",
+      title: "광역 카드에서 시군구로 내려가며 DB를 정리합니다",
+      copy: "전국 마스터를 먼저 지역 단위로 접어 보고, 필요한 광역·시군구만 펼쳐 업체를 확인합니다.",
+      metric: `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`
+    },
+    list: {
+      label: "업체 찾기",
+      title: "필터와 검색으로 업체를 바로 찾고 수정합니다",
+      copy: "업체 가나다순을 기본으로 보고, 노출순·매출순·객실수·시설·OTA 조건으로 좁힙니다.",
+      metric: `${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개`
+    },
+    review: {
+      label: "상세 검수",
+      title: "B2B 지표와 관리자 판단을 한 업체 단위로 확인합니다",
+      copy: "상세 수정, 확인 수집, 관리자 판단 상태를 한 화면에서 처리합니다.",
+      metric: state.adminDbSelectedCompanyId ? "선택 업체 검수" : "우선 검수 업체"
+    }
+  }[mode] || {};
+  return `
+    <section class="admin-db-page-guide ${escapeHtml(mode)}" aria-label="전체 DB 현재 보기 안내">
+      <div>
+        <span>${escapeHtml(guide.label || "전체 DB")}</span>
+        <strong>${escapeHtml(guide.title || "전체 DB 보기")}</strong>
+        <small>${escapeHtml(guide.copy || "")}</small>
+      </div>
+      <div class="admin-db-page-guide-meta">
+        <b>${escapeHtml(guide.metric || "")}</b>
+        <em>${activeFilterCount ? `필터 ${fmtNumber(activeFilterCount)}개 적용` : "전체 조건"}</em>
+      </div>
+    </section>
   `;
 }
 
@@ -17881,9 +17932,31 @@ function adminDbProvinceGroup(province = {}, index = 0, context = {}) {
 }
 
 function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
-  const limit = filters.query ? 120 : 80;
-  const shown = rows.slice(0, limit);
-  const hidden = Math.max(0, rows.length - shown.length);
+  const pageSize = 24;
+  const pageKey = JSON.stringify({
+    query: filters.query || "",
+    province: filters.province || "all",
+    region: filters.region || "all",
+    sort: filters.sort || "name",
+    category: filters.category || "all",
+    status: filters.status || "all",
+    confidence: filters.confidence || "all",
+    source: filters.source || "all",
+    ota: filters.ota || "all",
+    feature: filters.feature || "all",
+    quality: filters.quality || "all"
+  });
+  if (state.adminDbListPageKey !== pageKey) {
+    state.adminDbListPageKey = pageKey;
+    state.adminDbListPage = 1;
+  }
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.max(1, Math.min(totalPages, Number(state.adminDbListPage || 1)));
+  state.adminDbListPage = page;
+  const startIndex = (page - 1) * pageSize;
+  const shown = rows.slice(startIndex, startIndex + pageSize);
+  const rangeStart = rows.length ? startIndex + 1 : 0;
+  const rangeEnd = rows.length ? Math.min(rows.length, startIndex + shown.length) : 0;
   const scopeText = [
     filters.province !== "all" ? "광역 선택" : "",
     filters.region !== "all" ? "지역 선택" : "",
@@ -17900,14 +17973,18 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
         <div>
           <span>업체 가나다 리스트</span>
           <strong>검색과 필터 결과를 바로 수정 가능한 목록으로 봅니다</strong>
-          <small>${escapeHtml(scopeText)} · ${fmtNumber(rows.length)}/${fmtNumber(allRows.length)}개 업체</small>
+          <small>${escapeHtml(scopeText)} · ${fmtNumber(rows.length)}/${fmtNumber(allRows.length)}개 업체 · ${fmtNumber(rangeStart)}-${fmtNumber(rangeEnd)} 표시</small>
         </div>
-        <mark>${escapeHtml(filters.sort === "name" ? "가나다순" : "선택 정렬")}</mark>
+        <mark>${fmtNumber(page)} / ${fmtNumber(totalPages)}쪽</mark>
       </div>
       <div class="admin-db-company-list flat">
         ${shown.length ? shown.map(adminDbCompanyRow).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
-      ${hidden ? `<p class="admin-db-more">먼저 ${fmtNumber(shown.length)}개를 표시합니다. 업체명이나 지역 필터로 더 좁히면 나머지도 바로 확인할 수 있습니다.</p>` : ""}
+      <div class="admin-db-pagination">
+        <button type="button" data-admin-db-list-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>이전</button>
+        <span>${fmtNumber(rangeStart)}-${fmtNumber(rangeEnd)} / ${fmtNumber(rows.length)}개</span>
+        <button type="button" data-admin-db-list-page="${page + 1}" ${page >= totalPages ? "disabled" : ""}>다음</button>
+      </div>
     </section>
   `;
 }
@@ -18031,34 +18108,29 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
     </div>
   `;
+  const selectedDetailHtml = adminDbSelectedDetailPanel(filteredRows);
   const supportPanelsHtml = `
     ${metricSummaryHtml}
     ${adminDbAuditBoard(filteredRows)}
     ${adminDbWorkPanel(filteredRows)}
     ${adminDbCollectionPanel(filteredRows)}
-    ${adminDbSelectedDetailPanel(filteredRows)}
+    ${selectedDetailHtml}
+  `;
+  const reviewPanelsHtml = `
+    ${selectedDetailHtml}
+    ${metricSummaryHtml}
+    ${adminDbAuditBoard(filteredRows)}
+    ${adminDbWorkPanel(filteredRows)}
+    ${adminDbCollectionPanel(filteredRows)}
   `;
   const mainViewHtml = viewMode === "review"
-    ? `<section class="admin-db-review-surface">${supportPanelsHtml}</section>`
+    ? `<section class="admin-db-review-surface">${reviewPanelsHtml}</section>`
     : viewMode === "list"
       ? adminDbFlatListPanel(filteredRows, rows, filters)
       : `<div class="admin-db-hierarchy">
           ${grouped.length ? grouped.map((province, provinceIndex) => adminDbProvinceGroup(province, provinceIndex, hierarchyContext)).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
         </div>`;
-  els.adminDatabaseDashboard.innerHTML = `
-    <section class="admin-db-board" id="adminDatabaseBoard">
-      <div class="admin-db-hero">
-        <div>
-          <span>전체 DB</span>
-          <h3>전국 마스터 데이터를 지역 구조부터 정리합니다.</h3>
-          <p>광역/도 카드를 먼저 보고, 더보기에서 시군구와 업체 가나다 리스트를 확인합니다.</p>
-        </div>
-        <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
-      </div>
-      ${adminDbMasterSummary(filteredRows, rows, grouped)}
-      ${adminDbClassificationAuditStrip(rows, filteredRows, filters)}
-      ${adminDbProvinceQuickBoard(allGrouped, filters)}
-      ${adminDbRegionQuickBoard(grouped, filters)}
+  const filterToolbarHtml = `
       <div class="admin-db-toolbar">
         <label class="admin-db-filter-query">
           <span>업체 검색</span>
@@ -18140,7 +18212,36 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         </label>
         <button class="admin-db-filter-reset" type="button" data-admin-db-clear>필터 초기화</button>
       </div>
+  `;
+  els.adminDatabaseDashboard.innerHTML = `
+    <section class="admin-db-board" id="adminDatabaseBoard">
+      <div class="admin-db-hero">
+        <div>
+          <span>전체 DB</span>
+          <h3>전국 마스터 데이터를 지역 구조부터 정리합니다.</h3>
+          <p>광역/도 카드를 먼저 보고, 더보기에서 시군구와 업체 가나다 리스트를 확인합니다.</p>
+        </div>
+        <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
+      </div>
       ${adminDbViewSwitchHtml(viewMode, filteredRows, rows, grouped)}
+      ${adminDbPageGuideHtml(viewMode, filteredRows, rows, grouped, filters)}
+      ${viewMode === "region" ? `
+        ${adminDbMasterSummary(filteredRows, rows, grouped)}
+        ${adminDbClassificationAuditStrip(rows, filteredRows, filters)}
+        ${adminDbProvinceQuickBoard(allGrouped, filters)}
+        ${adminDbRegionQuickBoard(grouped, filters)}
+        <details class="admin-db-search-drawer">
+          <summary>
+            <div>
+              <strong>업체 검색·필터 열기</strong>
+              <small>지역 구조를 보다가 특정 업체를 찾을 때만 펼칩니다.</small>
+            </div>
+            <span>필터</span>
+          </summary>
+          ${filterToolbarHtml}
+        </details>
+      ` : ""}
+      ${viewMode === "list" ? filterToolbarHtml : ""}
       ${mainViewHtml}
       ${viewMode !== "review" ? `
         <details class="admin-db-ops-drawer" ${state.adminDbOpsOpen ? "open" : ""}>
@@ -27190,6 +27291,16 @@ function bindEvents() {
       state.adminDbOpsOpen = state.adminDbViewMode === "review";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => document.querySelector("[data-admin-db-view].active")?.focus());
+      return;
+    }
+    const adminDbListPage = event.target.closest("[data-admin-db-list-page]");
+    if (adminDbListPage) {
+      state.adminDbListPage = Number(adminDbListPage.dataset.adminDbListPage || 1) || 1;
+      state.adminDbViewMode = "list";
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector(".admin-db-flat-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
       return;
     }
     const adminDbProvinceCard = event.target.closest("[data-admin-db-province-card]");

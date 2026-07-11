@@ -1854,6 +1854,68 @@ a {
   line-height: 1.25;
 }
 
+.admin-db-page-guide {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 14px;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-page-guide > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-page-guide span,
+.admin-db-page-guide small,
+.admin-db-page-guide-meta em {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-page-guide strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-page-guide-meta {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  min-width: 150px;
+}
+
+.admin-db-page-guide-meta b {
+  color: var(--blue);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.1;
+  text-align: right;
+}
+
+.admin-db-page-guide-meta em {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(49, 130, 246, .08);
+  color: var(--blue-dark);
+  padding: 5px 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
 .admin-db-province-board,
 .admin-db-region-board {
   min-width: 0;
@@ -2808,6 +2870,64 @@ a {
   box-shadow: var(--soft-shadow);
 }
 
+.admin-db-search-drawer {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: var(--soft-shadow);
+  overflow: hidden;
+}
+
+.admin-db-search-drawer summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  list-style: none;
+}
+
+.admin-db-search-drawer summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-search-drawer summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-search-drawer summary strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.admin-db-search-drawer summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.35;
+}
+
+.admin-db-search-drawer summary > span {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(49, 130, 246, .10);
+  color: var(--blue-dark);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-search-drawer .admin-db-toolbar {
+  margin: 0 12px 12px;
+  box-shadow: none;
+}
+
 .admin-db-flat-head {
   min-width: 0;
   display: flex;
@@ -2852,6 +2972,41 @@ a {
 
 .admin-db-company-list.flat {
   gap: 8px;
+}
+
+.admin-db-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(49, 130, 246, .06);
+  padding: 10px;
+}
+
+.admin-db-pagination span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.admin-db-pagination button {
+  min-width: 84px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.admin-db-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
 }
 
 .admin-db-ops-drawer {
@@ -26897,6 +27052,34 @@ body.role-admin .empty {
 
   body.role-admin .admin-db-flat-head mark {
     justify-self: start;
+  }
+
+  body.role-admin .admin-db-page-guide {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-db-page-guide-meta {
+    width: 100%;
+    min-width: 0;
+    justify-items: start;
+  }
+
+  body.role-admin .admin-db-page-guide-meta b {
+    text-align: left;
+  }
+
+  body.role-admin .admin-db-search-drawer summary {
+    align-items: flex-start;
+  }
+
+  body.role-admin .admin-db-pagination {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  body.role-admin .admin-db-pagination button {
+    width: 100%;
   }
 
   body.role-admin .admin-db-company {
