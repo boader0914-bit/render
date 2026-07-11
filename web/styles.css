@@ -25088,14 +25088,27 @@ body.role-admin .admin-mobile-secondary {
   backdrop-filter: blur(14px);
 }
 
+body.role-admin .bottom-nav {
+  width: min(720px, 100%);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 body.role-admin .admin-section-nav button,
 body.role-admin .bottom-nav button,
+body.role-admin .admin-mobile-primary button,
 body.role-admin .admin-mobile-secondary button {
   color: #b8c4d6;
 }
 
+body.role-admin .admin-mobile-primary button,
+body.role-admin .admin-mobile-secondary button {
+  border-color: rgba(106, 168, 255, .18);
+  background: rgba(20, 27, 37, .72);
+}
+
 body.role-admin .admin-section-nav button.active,
 body.role-admin .bottom-nav button.active,
+body.role-admin .admin-mobile-primary button.active,
 body.role-admin .admin-mobile-secondary button.active,
 body.role-admin .admin-db-view-switch button.active,
 body.role-admin .admin-db-province-card-grid button.active,
