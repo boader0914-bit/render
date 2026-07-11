@@ -58,6 +58,7 @@ const state = {
   adminDbOpsOpen: false,
   adminDbCorrectionFlash: null,
   adminDbAuditRegionKey: "",
+  adminUserViewMode: false,
   crawlEtaByKey: {},
   crawlEstimateTimer: null,
   crawlEstimateRequestId: 0,
@@ -329,6 +330,8 @@ const els = {
   crawlForm: document.getElementById("crawlForm"),
   logoutButton: document.getElementById("logoutButton"),
   headerLogoutButton: document.getElementById("headerLogoutButton"),
+  headerUserViewButton: document.getElementById("headerUserViewButton"),
+  adminUserViewButton: document.getElementById("adminUserViewButton"),
   keywordInput: document.getElementById("keywordInput"),
   checkInInput: document.getElementById("checkInInput"),
   checkOutInput: document.getElementById("checkOutInput"),
@@ -747,7 +750,17 @@ function correctedSearchMode(keyword, mode) {
   return mode === "company" && looksLikeRegionalGlampingKeyword(keyword) ? "keyword" : mode;
 }
 
+function adminUserViewRequested() {
+  const params = new URLSearchParams(location.search || "");
+  return location.pathname === "/b2b" && params.get("userView") === "admin";
+}
+
+function isAdminUserViewMode() {
+  return Boolean(state.adminUserViewMode);
+}
+
 function currentRole() {
+  if (isAdminUserViewMode()) return "b2b";
   return state.session?.role === "b2b" ? "b2b" : "admin";
 }
 
@@ -980,6 +993,12 @@ function applyRoleUi() {
   if (!allowedTabs.has(state.activeTab)) state.activeTab = firstRoleTab();
   document.body.classList.toggle("role-b2b", !isAdminRole());
   document.body.classList.toggle("role-admin", isAdminRole());
+  document.body.classList.toggle("admin-user-view", isAdminUserViewMode());
+  const canOpenUserView = state.session?.role === "admin" && !isAdminUserViewMode();
+  [els.headerUserViewButton, els.adminUserViewButton].forEach((button) => {
+    if (!button) return;
+    button.hidden = !canOpenUserView;
+  });
   document.querySelectorAll("[data-tab]").forEach((button) => {
     const allowed = allowedTabs.has(button.dataset.tab);
     button.hidden = !allowed;
@@ -8583,7 +8602,7 @@ function b2bInterestLodgeFingerprint(interestLodges = []) {
 }
 
 async function syncB2BInterestLodgesToServer(interestLodges = readB2BInterestLodges()) {
-  if (isAdminRole()) return null;
+  if (isAdminRole() || isAdminUserViewMode()) return null;
   state.b2bInterestLodgeSyncing = true;
   state.b2bInterestLodgeSyncError = "";
   try {
@@ -8604,14 +8623,14 @@ async function syncB2BInterestLodgesToServer(interestLodges = readB2BInterestLod
     return null;
   } finally {
     state.b2bInterestLodgeSyncing = false;
-    if (!isAdminRole() && document.querySelector(".b2b-my-lodge-board")) {
+    if (!isAdminRole() && !isAdminUserViewMode() && document.querySelector(".b2b-my-lodge-board")) {
       renderReport();
     }
   }
 }
 
 async function loadB2BInterestLodgesFromServer() {
-  if (isAdminRole()) {
+  if (isAdminRole() || isAdminUserViewMode()) {
     state.b2bInterestLodgeServerLoaded = false;
     state.b2bInterestLodgeSyncError = "";
     return;
@@ -24133,6 +24152,7 @@ function renderB2BSearchPanel() {
   }
   renderB2BOnboardingPanel();
   syncB2BSearchRangeControl();
+  const previewMode = isAdminUserViewMode();
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) {
     els.b2bSearchInput.value = state.b2bSearchQuery || "";
   }
@@ -24157,16 +24177,20 @@ function renderB2BSearchPanel() {
       ? Math.max(0, Number(quota.remainingToday ?? ((policy.dailyLimit || 2) - Number(quota.usedToday || 0))))
       : null;
     const panelClass = state.b2bSearchLoading ? "loading" : hasResult ? "ready" : "idle";
-    const badge = state.b2bSearchLoading ? "검색중" : hasResult ? "결과 표시" : "새 검색";
+    const badge = previewMode ? "User View" : state.b2bSearchLoading ? "검색중" : hasResult ? "결과 표시" : "새 검색";
     const title = state.b2bSearchLoading
       ? `${keyword || "입력 지역"} 검색 중`
       : hasResult
         ? `${keyword} 검색 결과`
-        : "검색할 지역을 입력하세요";
+        : previewMode
+          ? "B2B 화면 미리보기"
+          : "검색할 지역을 입력하세요";
     const copy = state.b2bSearchLoading
       ? "네이버 노출, 예약 수량, 요일별 가격 표본을 새로 확인하고 있습니다."
       : hasResult
         ? "방금 실행한 검색 결과를 표시합니다. 다른 지역은 검색어 입력 후 새로 실행하세요."
+        : previewMode
+          ? "관리자 세션을 유지한 화면 확인 모드입니다. 실제 검색은 B2B 계정 로그인 또는 관리자 수집에서 실행합니다."
         : !policy.expandedAllowed
           ? `기본 1~10위 범위로 새 표본을 수집합니다. 확장 1~20위는 승인 계정에서 사용할 수 있습니다.`
           : "기본 1~10위 또는 확장 1~20위 범위로 새 표본을 수집합니다.";
@@ -24191,7 +24215,9 @@ function renderB2BSearchPanel() {
     `;
   }
   if (els.b2bSearchStatus) {
-    const current = state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "지역/키워드를 입력하면 현재 기준으로 새 경쟁 리포트를 수집합니다.";
+    const current = previewMode
+      ? "User View는 화면 확인용입니다. 실제 B2B 검색은 b2b / 0914 계정 또는 회원 계정에서 실행하세요."
+      : state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "지역/키워드를 입력하면 현재 기준으로 새 경쟁 리포트를 수집합니다.";
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
     els.b2bSearchStatus.textContent = state.b2bSearchLoading
       ? `${state.b2bSearchQuery || "검색"} 실행 중 · 경과 ${formatElapsed(progressMeta.elapsedSeconds) || "0초"} · ${b2bSearchProgressText(progressMeta)} · 완료 ${formatClockTime(progressMeta.estimatedCompleteAt)}`
@@ -24220,6 +24246,13 @@ function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
 
 async function submitB2BSearch() {
   if (isAdminRole()) return;
+  if (isAdminUserViewMode()) {
+    renderB2BSearchPanel();
+    if (els.b2bSearchStatus) {
+      els.b2bSearchStatus.textContent = "User View에서는 실제 검색을 실행하지 않습니다. 실제 검색은 b2b / 0914 계정 또는 회원 계정으로 로그인해 실행하세요.";
+    }
+    return;
+  }
   const keyword = els.b2bSearchInput?.value?.trim() || "";
   if (!keyword) {
     renderB2BSearchPanel();
@@ -25642,14 +25675,31 @@ function closeDrawer() {
   if (els.detailSheet.hidden) document.body.style.overflow = "";
 }
 
+function openAdminUserView() {
+  const target = "/b2b?userView=admin";
+  const opened = window.open(target, "_blank");
+  if (opened) {
+    try {
+      opened.opener = null;
+    } catch {
+      // The new window still opened; opener isolation is best effort here.
+    }
+  }
+  if (!opened && els.adminStatus) {
+    els.adminStatus.textContent = "팝업 차단으로 User View를 열지 못했습니다. 브라우저에서 새 창 허용 후 다시 시도하세요.";
+  }
+}
+
 async function loadSession() {
   const session = await fetchJson("/api/session");
+  const previewRequested = adminUserViewRequested();
   state.session = {
     authenticated: Boolean(session.authenticated),
     username: session.username || "",
     role: session.role === "b2b" ? "b2b" : "admin",
     roleLabel: session.roleLabel || (session.role === "b2b" ? "B2B" : "관리자")
   };
+  state.adminUserViewMode = Boolean(previewRequested && state.session.role === "admin");
   state.session.memberId = session.memberId || "";
   state.session.accountType = session.accountType || "";
   state.session.profile = session.profile || null;
@@ -25659,7 +25709,7 @@ async function loadSession() {
   state.session.sessionCreatedAt = session.sessionCreatedAt || "";
   state.session.expiresAt = session.expiresAt || "";
   if (state.session.role === "admin" && state.session.roleLabel !== "마스터") state.session.roleLabel = "마스터";
-  if (location.pathname === "/b2b" && state.session.role === "b2b") {
+  if (location.pathname === "/b2b" && (state.session.role === "b2b" || state.adminUserViewMode)) {
     state.activeTab = "report";
   } else if (location.pathname === "/admin" && state.session.role === "admin") {
     state.activeTab = "admin";
@@ -25671,9 +25721,11 @@ async function loadSession() {
 }
 
 async function loadMemberSearchHistory() {
-  if (isAdminRole()) {
+  if (isAdminRole() || isAdminUserViewMode()) {
     state.memberSearchHistory = [];
-    state.memberSearchQuota = null;
+    state.memberSearchQuota = isAdminUserViewMode()
+      ? { limited: false, dailyLimit: 0, expandedAllowed: true, allowedRankRange: "1-20", usedToday: 0, remainingToday: null }
+      : null;
     return;
   }
   try {
@@ -25770,7 +25822,7 @@ async function updateB2BMemberAdminPolicy(memberId = "", patch = {}) {
 }
 
 async function restoreB2BActiveSearch() {
-  if (isAdminRole()) return false;
+  if (isAdminRole() || isAdminUserViewMode()) return false;
   const record = readB2BActiveSearchRecord();
   if (!record) return false;
   state.b2bSearchClientRequestId = record.clientRequestId || "";
@@ -27958,6 +28010,8 @@ function bindEvents() {
   els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
   els.logoutButton?.addEventListener("click", logout);
   els.headerLogoutButton?.addEventListener("click", logout);
+  els.headerUserViewButton?.addEventListener("click", openAdminUserView);
+  els.adminUserViewButton?.addEventListener("click", openAdminUserView);
   els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
   els.crawlSpeedPresetRow?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-crawl-speed-preset]");

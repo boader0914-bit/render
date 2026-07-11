@@ -170,6 +170,17 @@ a {
   border-radius: 14px;
 }
 
+.header-user-view,
+#adminUserViewButton {
+  min-height: 42px;
+  border-color: rgba(52, 211, 153, .34);
+  background: rgba(52, 211, 153, .12);
+  color: #067647;
+  padding: 0 14px;
+  border-radius: 14px;
+  font-weight: 950;
+}
+
 .eyebrow {
   margin: 0 0 5px;
   color: var(--muted);
@@ -24915,6 +24926,18 @@ body.role-admin .download-item a {
   background: #202631;
   color: var(--ink);
   box-shadow: none;
+}
+
+body.role-admin .header-user-view,
+body.role-admin #adminUserViewButton {
+  border-color: rgba(52, 211, 153, .38);
+  background: rgba(52, 211, 153, .13);
+  color: #bbf7d0;
+}
+
+body.admin-user-view .brand-eyebrow {
+  border-color: rgba(52, 211, 153, .34);
+  background: rgba(52, 211, 153, .10);
 }
 
 body.role-admin .primary-button,

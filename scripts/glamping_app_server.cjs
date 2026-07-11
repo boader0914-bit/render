@@ -4537,7 +4537,11 @@ function routeRolePage(req, res, reqUrl, session) {
     redirect("/b2b");
     return true;
   }
+  const adminUserView = reqUrl.pathname === "/b2b"
+    && role === USER_ROLES.admin
+    && reqUrl.searchParams.get("userView") === "admin";
   if (reqUrl.pathname === "/b2b" && role !== USER_ROLES.b2b) {
+    if (adminUserView) return false;
     redirect("/admin");
     return true;
   }
@@ -11940,8 +11944,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260711-admin-internal-pages-pass"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260711-admin-internal-pages-pass"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260711-admin-user-view-pass"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260711-admin-user-view-pass"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
