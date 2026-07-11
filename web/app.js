@@ -331,6 +331,7 @@ const els = {
   crawlProgressEta: document.getElementById("crawlProgressEta"),
   crawlProgressBasis: document.getElementById("crawlProgressBasis"),
   crawlProgressStages: document.getElementById("crawlProgressStages"),
+  crawlSubmitMeta: document.getElementById("crawlSubmitMeta"),
   crawlStatus: document.getElementById("crawlStatus"),
   yeogiManualBadge: document.getElementById("yeogiManualBadge"),
   yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
@@ -1688,6 +1689,16 @@ function updateCrawlProgressNumbers(meta = {}) {
   }
   if (els.crawlProgressEta) els.crawlProgressEta.textContent = formatClockTime(meta.estimatedCompleteAt);
   if (els.crawlProgressBasis) els.crawlProgressBasis.textContent = crawlEstimateBasisText(meta.estimateBasis);
+  if (els.crawlSubmitMeta) {
+    const totalText = formatElapsed(meta.estimatedTotalSeconds) || "계산 중";
+    const etaText = formatClockTime(meta.estimatedCompleteAt);
+    const remainingText = meta.isDelayed
+      ? `지연 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`
+      : (Number.isFinite(remaining) ? (remaining <= 0 ? "곧 완료" : `${formatElapsed(remaining)} 남음`) : "남은 시간 계산 중");
+    els.crawlSubmitMeta.textContent = state.crawlProgressRunning
+      ? `${remainingText} · 완료 ${etaText}`
+      : `예상 ${totalText} · 완료 ${etaText}`;
+  }
   renderCrawlStages(meta);
 }
 

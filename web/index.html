@@ -268,7 +268,26 @@
                 <button type="button" data-crawl-speed-preset="mid10_20">10-20위</button>
               </div>
             </div>
-            <button class="primary-button" type="submit">수집 실행</button>
+            <div class="crawl-progress is-preview" id="crawlProgress">
+              <span class="crawl-spinner" aria-hidden="true"></span>
+              <div class="crawl-progress-copy">
+                <strong id="crawlProgressTitle">예상 수집 시간</strong>
+                <small id="crawlProgressText">수집 조건을 기준으로 예상 완료 시간을 계산합니다.</small>
+              </div>
+              <div class="crawl-progress-stages" id="crawlProgressStages" aria-label="수집 단계"></div>
+              <div class="crawl-progress-meter" aria-hidden="true"><span id="crawlProgressBar"></span></div>
+              <div class="crawl-progress-numbers" aria-label="수집 예상 시간">
+                <span><b id="crawlProgressPercent">예측중</b><small>진행률</small></span>
+                <span><b id="crawlProgressElapsed">0초</b><small>경과</small></span>
+                <span><b id="crawlProgressRemaining">계산 중</b><small>남은 시간</small></span>
+                <span><b id="crawlProgressEta">--:--</b><small>완료 예정</small></span>
+              </div>
+              <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
+            </div>
+            <div class="crawl-submit-row">
+              <button class="primary-button" type="submit">수집 실행</button>
+              <span id="crawlSubmitMeta">예상 시간 계산 중</span>
+            </div>
             <p class="hint" id="crawlStatus">기본 분석은 1~10위, 확장 분석은 1~20위까지 재고와 가격을 확인합니다.</p>
             <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
           </form>

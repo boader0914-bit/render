@@ -16084,6 +16084,31 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.crawl-submit-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.crawl-submit-row .primary-button {
+  width: 100%;
+  min-height: 44px;
+}
+
+.crawl-submit-row span {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: #175cd3;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 @keyframes crawl-spin {
   to {
     transform: rotate(360deg);
@@ -25421,6 +25446,45 @@ body.role-admin .download-item a {
   box-shadow: none;
 }
 
+body.role-admin .crawl-submit-row span {
+  border-color: rgba(106, 168, 255, .28);
+  background: rgba(106, 168, 255, .12);
+  color: #dcecff;
+}
+
+body.role-admin .crawl-progress-copy small,
+body.role-admin .crawl-progress-basis,
+body.role-admin .crawl-progress-stages small,
+body.role-admin .crawl-progress-numbers small {
+  color: var(--muted);
+}
+
+body.role-admin .crawl-progress-stages b,
+body.role-admin .crawl-progress-numbers b {
+  color: var(--ink);
+}
+
+body.role-admin .crawl-progress-stages span,
+body.role-admin .crawl-progress-numbers span {
+  border-color: rgba(156, 174, 204, .24);
+  background: #121822;
+}
+
+body.role-admin .crawl-progress-stages span.planned {
+  border-color: rgba(106, 168, 255, .24);
+  background: rgba(106, 168, 255, .08);
+}
+
+body.role-admin .crawl-progress-stages span.active {
+  border-color: rgba(106, 168, 255, .46);
+  background: rgba(106, 168, 255, .14);
+}
+
+body.role-admin .crawl-progress-stages span.done {
+  border-color: rgba(52, 211, 153, .42);
+  background: rgba(52, 211, 153, .12);
+}
+
 body.role-admin .header-user-view,
 body.role-admin #adminUserViewButton {
   border-color: rgba(52, 211, 153, .38);
@@ -26542,7 +26606,7 @@ body.role-admin .empty {
   }
 
   .crawl-progress-numbers {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -26569,6 +26633,14 @@ body.role-admin .empty {
 
   .crawl-speed-options {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .crawl-submit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .crawl-submit-row span {
+    text-align: center;
   }
 
   .summary-grid {
