@@ -1865,6 +1865,66 @@ a {
   line-height: 1.25;
 }
 
+.admin-db-flow-rail {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  border: 1px solid #dbe7f3;
+  border-radius: 16px;
+  background: #fff;
+  padding: 8px;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-flow-rail button {
+  min-width: 0;
+  min-height: 68px;
+  border: 1px solid #e3ebf6;
+  border-radius: 14px;
+  background: #f8fbff;
+  color: var(--ink);
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-db-flow-rail button.active {
+  border-color: #2f80ed;
+  background: linear-gradient(135deg, #eaf4ff 0%, #f6fbfa 100%);
+  box-shadow: inset 0 0 0 1px rgba(47, 128, 237, .16);
+}
+
+.admin-db-flow-rail span,
+.admin-db-flow-rail strong,
+.admin-db-flow-rail small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-flow-rail span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.admin-db-flow-rail strong {
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.admin-db-flow-rail small {
+  margin-top: 4px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
 .admin-db-page-guide {
   min-width: 0;
   display: flex;
@@ -2068,6 +2128,80 @@ a {
 .admin-db-province-card-grid em,
 .admin-db-region-card-grid em {
   color: #475467;
+}
+
+.admin-db-region-empty-panel {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid #dbe7f3;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  padding: 14px;
+  box-shadow: var(--soft-shadow);
+}
+
+.admin-db-region-empty-panel > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-region-empty-panel span,
+.admin-db-region-empty-panel small,
+.admin-db-region-next-grid small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-region-empty-panel strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-region-next-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-region-next-grid article {
+  min-width: 0;
+  border: 1px solid #e3ebf6;
+  border-radius: 14px;
+  background: #fff;
+  padding: 11px;
+}
+
+.admin-db-region-next-grid article strong {
+  display: block;
+  margin: 5px 0 3px;
+  color: var(--blue);
+  font-size: 20px;
+  font-weight: 950;
+}
+
+.admin-db-region-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-db-region-empty-actions button {
+  border: 1px solid #cdd9e8;
+  border-radius: 999px;
+  background: #f3f7fc;
+  color: #344054;
+  padding: 9px 13px;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
 }
 
 .admin-db-master-guide {
@@ -24888,6 +25022,9 @@ body.role-admin .admin-console-empty strong,
 body.role-admin .admin-db-hero h3,
 body.role-admin .admin-db-metrics strong,
 body.role-admin .admin-db-view-switch span,
+body.role-admin .admin-db-flow-rail strong,
+body.role-admin .admin-db-region-empty-panel strong,
+body.role-admin .admin-db-region-next-grid article strong,
 body.role-admin .admin-db-province-board-head strong,
 body.role-admin .admin-db-region-board-head strong,
 body.role-admin .admin-db-province-card-grid strong,
@@ -24939,6 +25076,11 @@ body.role-admin .admin-db-metrics span,
 body.role-admin .admin-db-metrics small,
 body.role-admin .admin-db-toolbar span,
 body.role-admin .admin-db-view-switch small,
+body.role-admin .admin-db-flow-rail span,
+body.role-admin .admin-db-flow-rail small,
+body.role-admin .admin-db-region-empty-panel span,
+body.role-admin .admin-db-region-empty-panel small,
+body.role-admin .admin-db-region-next-grid small,
 body.role-admin .admin-db-province-board-head span,
 body.role-admin .admin-db-province-board-head small,
 body.role-admin .admin-db-region-board-head span,
@@ -25008,6 +25150,10 @@ body.role-admin .admin-db-hero,
 body.role-admin .admin-db-toolbar,
 body.role-admin .admin-db-metrics article,
 body.role-admin .admin-db-view-switch,
+body.role-admin .admin-db-flow-rail,
+body.role-admin .admin-db-flow-rail button,
+body.role-admin .admin-db-region-empty-panel,
+body.role-admin .admin-db-region-next-grid article,
 body.role-admin .admin-db-province,
 body.role-admin .admin-db-region,
 body.role-admin .admin-db-company,
@@ -25111,6 +25257,7 @@ body.role-admin .bottom-nav button.active,
 body.role-admin .admin-mobile-primary button.active,
 body.role-admin .admin-mobile-secondary button.active,
 body.role-admin .admin-db-view-switch button.active,
+body.role-admin .admin-db-flow-rail button.active,
 body.role-admin .admin-db-province-card-grid button.active,
 body.role-admin .admin-db-region-card-grid button.active {
   border-color: rgba(106, 168, 255, .44);
@@ -25131,6 +25278,7 @@ body.role-admin .admin-row-actions button,
 body.role-admin .admin-task-list button,
 body.role-admin .admin-db-company-action button,
 body.role-admin .admin-db-selected-actions button,
+body.role-admin .admin-db-region-empty-actions button,
 body.role-admin .admin-db-collect-metrics button,
 body.role-admin .company-master-tools button,
 body.role-admin .company-master-ops-intro button,
@@ -27252,6 +27400,17 @@ body.role-admin .empty {
     font-size: 10px;
   }
 
+  body.role-admin .admin-db-flow-rail {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 6px;
+  }
+
+  body.role-admin .admin-db-flow-rail button {
+    min-height: 58px;
+    padding: 9px;
+  }
+
   body.role-admin .admin-db-province-board-head,
   body.role-admin .admin-db-region-board-head {
     display: grid;
@@ -27290,6 +27449,19 @@ body.role-admin .empty {
   body.role-admin .admin-db-province-card-grid strong,
   body.role-admin .admin-db-region-card-grid strong {
     font-size: 20px;
+  }
+
+  body.role-admin .admin-db-region-next-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-region-empty-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-db-region-empty-actions button {
+    width: 100%;
   }
 
   body.role-admin .admin-db-flat-head {

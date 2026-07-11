@@ -16811,9 +16811,9 @@ function adminDbViewMode() {
 function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], grouped = []) {
   const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
   const buttons = [
-    ["region", "지역 구조", `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`],
-    ["list", "업체 찾기", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
-    ["review", "상세 검수", "B2B 지표 + 내부 판단"]
+    ["region", "지역 구조", `광역 ${fmtNumber(grouped.length)} · 지역 ${fmtNumber(regionCount)}`],
+    ["list", "업체 리스트", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
+    ["review", "상세·수정", "B2B 보기 + 내부 판단"]
   ];
   return `
     <div class="admin-db-view-switch" role="tablist" aria-label="전체 DB 보기 방식">
@@ -16824,6 +16824,47 @@ function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], gr
         </button>
       `).join("")}
     </div>
+  `;
+}
+
+function adminDbFlowRailHtml(mode = "region", filteredRows = [], rows = [], grouped = [], filters = {}) {
+  const selectedProvince = filters.province !== "all"
+    ? grouped.find((province) => province.key === filters.province)
+    : null;
+  const selectedRegion = selectedProvince && filters.region !== "all"
+    ? (selectedProvince.regions || []).find((region) => region.key === filters.region)
+    : null;
+  const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
+  const steps = [
+    {
+      key: "region",
+      label: "1. 지역 구조",
+      value: selectedProvince ? selectedProvince.label : `광역 ${fmtNumber(grouped.length)}개`,
+      note: selectedRegion ? selectedRegion.label : `지역 ${fmtNumber(regionCount)}개`
+    },
+    {
+      key: "list",
+      label: "2. 업체 리스트",
+      value: `${fmtNumber(filteredRows.length)}개`,
+      note: filters.sort === "name" ? "가나다순" : "필터 정렬"
+    },
+    {
+      key: "review",
+      label: "3. 상세·수정",
+      value: state.adminDbSelectedCompanyId ? "선택됨" : "대기",
+      note: "보정·확인 수집"
+    }
+  ];
+  return `
+    <section class="admin-db-flow-rail" aria-label="전체 DB 작업 흐름">
+      ${steps.map((step) => `
+        <button type="button" class="${mode === step.key ? "active" : ""}" data-admin-db-view="${escapeHtml(step.key)}">
+          <span>${escapeHtml(step.label)}</span>
+          <strong>${escapeHtml(step.value)}</strong>
+          <small>${escapeHtml(step.note)}</small>
+        </button>
+      `).join("")}
+    </section>
   `;
 }
 
@@ -16871,6 +16912,58 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
       <div class="admin-db-page-guide-meta">
         <b>${escapeHtml(guide.metric || "")}</b>
         <em>${activeFilterCount ? `필터 ${fmtNumber(activeFilterCount)}개 적용` : "전체 조건"}</em>
+      </div>
+    </section>
+  `;
+}
+
+function adminDbRegionStructurePanel(grouped = [], allGrouped = [], filters = {}, rows = [], filteredRows = []) {
+  const selectedProvince = filters.province !== "all"
+    ? allGrouped.find((province) => province.key === filters.province)
+    : null;
+  const selectedRegion = selectedProvince && filters.region !== "all"
+    ? (selectedProvince.regions || []).find((region) => region.key === filters.region)
+    : null;
+  const provinceRows = selectedProvince?.rows || rows;
+  const lowConfidence = provinceRows.filter((row) => row.metrics?.lowConfidence || row.metrics?.confidenceScore <= 2).length;
+  const manualCount = provinceRows.filter((row) => row.metrics?.manualCorrection).length;
+  const confirmNeeded = provinceRows.filter((row) => row.metrics?.collection?.key === "confirm_needed").length;
+  const listScope = [
+    selectedProvince?.label || "전국",
+    selectedRegion?.label || (selectedProvince ? "전체 지역" : "광역 선택 전")
+  ].filter(Boolean).join(" · ");
+  return `
+    <section class="admin-db-region-empty-panel">
+      <div>
+        <span>지역 구조 기준</span>
+        <strong>${escapeHtml(selectedProvince ? `${selectedProvince.label} 지역 카드 확인 중` : "광역 카드를 먼저 선택하세요")}</strong>
+        <small>${escapeHtml("전체 DB는 광역 → 시군구 → 업체 리스트 → 상세 수정 순서로 관리합니다. 업체 목록은 별도 리스트 화면에서 페이지 단위로 봅니다.")}</small>
+      </div>
+      <div class="admin-db-region-next-grid">
+        <article>
+          <span>현재 범위</span>
+          <strong>${escapeHtml(listScope)}</strong>
+          <small>${fmtNumber(filteredRows.length)}개 업체 표시 조건</small>
+        </article>
+        <article>
+          <span>낮은 신뢰도</span>
+          <strong>${fmtNumber(lowConfidence)}곳</strong>
+          <small>자동수집값 보정 후보</small>
+        </article>
+        <article>
+          <span>관리자 보정</span>
+          <strong>${fmtNumber(manualCount)}곳</strong>
+          <small>보정값 우선 적용</small>
+        </article>
+        <article>
+          <span>확인 수집</span>
+          <strong>${fmtNumber(confirmNeeded)}곳</strong>
+          <small>상세 수집 필요</small>
+        </article>
+      </div>
+      <div class="admin-db-region-empty-actions">
+        <button type="button" data-admin-db-view-link="list">업체 리스트로 보기</button>
+        <button type="button" data-admin-db-view-link="review">상세·수정 열기</button>
       </div>
     </section>
   `;
@@ -18119,7 +18212,7 @@ function adminDbProvinceGroup(province = {}, index = 0, context = {}) {
 }
 
 function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
-  const pageSize = 24;
+  const pageSize = 16;
   const pageKey = JSON.stringify({
     query: filters.query || "",
     province: filters.province || "all",
@@ -18271,21 +18364,6 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const averageRevenue = revenueRows.length
     ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
     : 0;
-  const shouldOpenHierarchy = Boolean(
-    filters.query
-    || filters.province !== "all"
-    || filters.region !== "all"
-    || filters.category !== "all"
-    || filters.status !== "all"
-    || filters.confidence !== "all"
-    || filters.source !== "all"
-    || filters.ota !== "all"
-    || filters.feature !== "all"
-    || filters.quality !== "all"
-  );
-  const hierarchyContext = {
-    forceOpen: shouldOpenHierarchy
-  };
   const viewMode = (filters.query || "").trim() ? "list" : adminDbViewMode();
   const metricSummaryHtml = `
     <div class="admin-db-metrics">
@@ -18326,9 +18404,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     ? `<section class="admin-db-review-surface">${reviewPanelsHtml}</section>`
     : viewMode === "list"
       ? adminDbFlatListPanel(filteredRows, rows, filters)
-      : `<div class="admin-db-hierarchy">
-          ${grouped.length ? grouped.map((province, provinceIndex) => adminDbProvinceGroup(province, provinceIndex, hierarchyContext)).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
-        </div>`;
+      : adminDbRegionStructurePanel(grouped, allGrouped, filters, rows, filteredRows);
   const filterToolbarHtml = `
       <div class="admin-db-toolbar">
         <label class="admin-db-filter-query">
@@ -18423,10 +18499,9 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
       </div>
       ${adminDbViewSwitchHtml(viewMode, filteredRows, rows, grouped)}
-      ${adminDbPageGuideHtml(viewMode, filteredRows, rows, grouped, filters)}
+      ${adminDbFlowRailHtml(viewMode, filteredRows, rows, grouped, filters)}
+      ${viewMode !== "region" ? adminDbPageGuideHtml(viewMode, filteredRows, rows, grouped, filters) : ""}
       ${viewMode === "region" ? `
-        ${adminDbMasterSummary(filteredRows, rows, grouped)}
-        ${adminDbClassificationAuditStrip(rows, filteredRows, filters)}
         ${adminDbProvinceQuickBoard(allGrouped, filters)}
         ${adminDbRegionQuickBoard(grouped, filters)}
         <details class="admin-db-search-drawer">
