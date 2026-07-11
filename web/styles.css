@@ -28295,7 +28295,483 @@ body.role-admin .empty {
     justify-content: stretch;
   }
 
-  body.role-admin .admin-db-selected-actions button {
+body.role-admin .admin-db-selected-actions button {
     flex: 1 1 150px;
+  }
+}
+
+/* Visual polish layer: lodging datalab premium dashboard */
+body.role-b2b,
+body.role-admin {
+  --bg: #080d14;
+  --panel: #111923;
+  --surface: #111923;
+  --surface-soft: #0d141d;
+  --surface-elevated: #17243a;
+  --ink: #edf5ff;
+  --muted: #a8b4c5;
+  --weak: #76859a;
+  --line: rgba(139, 160, 190, .22);
+  --line-strong: rgba(139, 184, 255, .44);
+  --blue: #4a90e2;
+  --blue-dark: #79b8ff;
+  --green: #34d399;
+  --orange: #fbbf24;
+  --red: #fb923c;
+  --active-rail: #79b8ff;
+  --good-rail: #34d399;
+  --watch-rail: #fbbf24;
+  --hot-rail: #fb923c;
+  --shadow: 0 20px 42px rgba(0, 0, 0, .34);
+  --soft-shadow: 0 10px 24px rgba(0, 0, 0, .24);
+  background:
+    radial-gradient(circle at 18% -10%, rgba(74, 144, 226, .20), transparent 38%),
+    linear-gradient(180deg, #080d14 0%, #0a1018 48%, #080d14 100%);
+  color: var(--ink);
+}
+
+body.role-b2b .app-shell,
+body.role-admin .app-shell {
+  padding-top: calc(28px + env(safe-area-inset-top));
+}
+
+body.role-b2b .app-header,
+body.role-admin .app-header {
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+body.role-b2b .brand-eyebrow,
+body.role-admin .brand-eyebrow {
+  gap: 9px;
+  color: #d8e7fb;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+body.role-b2b .brand-beta-badge,
+body.role-admin .brand-beta-badge {
+  border: 1px solid rgba(121, 184, 255, .46);
+  background: rgba(121, 184, 255, .12);
+  color: #dcecff;
+  box-shadow: 0 0 0 4px rgba(121, 184, 255, .06);
+}
+
+body.role-b2b .app-header h1,
+body.role-admin .app-header h1 {
+  max-width: 760px;
+  color: #ffffff;
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 950;
+  line-height: 1.02;
+}
+
+body.role-b2b .app-header p,
+body.role-admin .app-header p {
+  max-width: 720px;
+  margin-top: 12px;
+  color: #b8c4d6;
+  font-size: clamp(15px, 1.6vw, 18px);
+  font-weight: 760;
+  line-height: 1.62;
+}
+
+body.role-b2b .summary-card,
+body.role-admin .admin-card,
+body.role-admin .admin-console-panel,
+body.role-admin .admin-db-hero,
+body.role-admin .admin-db-toolbar,
+body.role-admin .admin-db-filter-shell,
+body.role-admin .admin-db-filter-more,
+body.role-admin .admin-db-province-board,
+body.role-admin .admin-db-region-board,
+body.role-admin .admin-db-province,
+body.role-admin .admin-db-region,
+body.role-admin .admin-db-company,
+body.role-admin .admin-db-flat-list,
+body.role-admin .admin-db-review-surface,
+body.role-admin .admin-db-selected-panel,
+body.role-admin .admin-db-selected-overview,
+body.role-admin .admin-db-selected-readonly,
+body.role-admin .admin-db-selected-workbench,
+body.role-admin .admin-db-selected-grid article,
+body.role-admin .admin-db-selected-brief article,
+body.role-b2b .b2b-search-panel,
+body.role-b2b .b2b-onboarding,
+body.role-b2b .report-card,
+body.role-b2b .report-score-card,
+body.role-b2b .report-metric-grid article,
+body.role-b2b .b2b-brief-card,
+body.role-b2b .b2b-live-search-panel,
+body.role-b2b .b2b-usage-panel,
+body.role-b2b .b2b-strategy-board,
+body.role-b2b .b2b-competition-snapshot,
+body.role-b2b .b2b-correlation-card,
+body.role-b2b .b2b-revenue-board,
+body.role-b2b .b2b-my-lodge-board,
+body.role-b2b .b2b-rank-brief,
+body.role-b2b .company-card,
+body.role-b2b .b2b-map-brief,
+body.role-b2b .b2b-map-competition-board,
+body.role-b2b .map-card,
+body.role-b2b .region-card,
+body.role-b2b .b2b-demand-playbook,
+body.role-b2b .b2b-demand-outlook,
+body.role-b2b .b2b-demand-month-flow,
+body.role-b2b .b2b-keyword-recommend,
+body.role-b2b .demand-hero-card,
+body.role-b2b .demand-chart,
+body.role-b2b .demand-insight-card,
+body.role-b2b .demand-table-card,
+body.role-b2b .demand-company-card,
+body.role-b2b .structure-card,
+body.role-b2b .sheet-panel,
+body.role-b2b .drawer-panel {
+  border: 1px solid rgba(139, 160, 190, .22);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .025), rgba(255, 255, 255, 0)),
+    var(--surface);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, .22);
+}
+
+body.role-b2b .report-hero,
+body.role-b2b .b2b-brief-card,
+body.role-b2b .b2b-rank-brief,
+body.role-b2b .b2b-map-brief,
+body.role-b2b .b2b-demand-playbook,
+body.role-admin .admin-console-hero,
+body.role-admin .admin-db-hero {
+  border-color: rgba(121, 184, 255, .35);
+  background:
+    linear-gradient(135deg, rgba(74, 144, 226, .24), rgba(52, 211, 153, .08)),
+    var(--surface-elevated);
+}
+
+body.role-b2b .summary-card,
+body.role-b2b .report-metric-grid article,
+body.role-b2b .b2b-brief-metrics article,
+body.role-b2b .b2b-simple-card,
+body.role-admin .admin-db-metrics article,
+body.role-admin .admin-kpi-grid article,
+body.role-admin .company-master-metrics article {
+  min-width: 0;
+  border-left: 4px solid rgba(121, 184, 255, .38);
+}
+
+body.role-b2b .summary-card strong,
+body.role-b2b .report-metric-grid strong,
+body.role-b2b .b2b-brief-metrics strong,
+body.role-b2b .report-score-card strong,
+body.role-admin .admin-db-metrics strong,
+body.role-admin .admin-kpi-grid strong,
+body.role-admin .company-master-metrics strong {
+  color: #79b8ff;
+  font-size: clamp(26px, 3vw, 40px);
+  font-weight: 950;
+  line-height: 1.02;
+  letter-spacing: 0;
+}
+
+body.role-b2b .summary-card small,
+body.role-b2b .report-metric-grid small,
+body.role-b2b .b2b-brief-metrics small,
+body.role-admin .admin-db-metrics small,
+body.role-admin .admin-kpi-grid small {
+  color: #b8c4d6;
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.45;
+}
+
+body.role-b2b .bottom-nav,
+body.role-admin .admin-section-nav,
+body.role-admin .admin-mobile-nav,
+body.role-admin .admin-mobile-secondary {
+  border: 1px solid rgba(139, 160, 190, .24);
+  border-radius: 8px;
+  background: rgba(8, 13, 20, .86);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .25);
+  backdrop-filter: blur(14px);
+}
+
+body.role-b2b .bottom-nav button,
+body.role-admin .admin-section-nav button,
+body.role-admin .admin-mobile-primary button,
+body.role-admin .admin-mobile-secondary button,
+body.role-b2b .sheet-tabs button {
+  border-radius: 7px;
+  color: #b8c4d6;
+  font-weight: 900;
+}
+
+body.role-b2b .bottom-nav button.active,
+body.role-b2b .sheet-tabs button.active,
+body.role-admin .admin-section-nav button.active,
+body.role-admin .admin-mobile-primary button.active,
+body.role-admin .admin-mobile-secondary button.active,
+body.role-admin .admin-db-view-switch button.active,
+body.role-admin .admin-db-flow-rail button.active,
+body.role-admin .admin-db-province-card-grid button.active,
+body.role-admin .admin-db-region-card-grid button.active {
+  border-color: rgba(121, 184, 255, .58);
+  background:
+    linear-gradient(180deg, rgba(74, 144, 226, .95), rgba(30, 58, 95, .95));
+  color: #ffffff;
+  box-shadow: 0 14px 26px rgba(74, 144, 226, .28);
+}
+
+body.role-b2b .primary-button,
+body.role-admin .primary-button,
+body.role-admin .admin-db-toolbar button,
+body.role-admin .admin-db-company-action button.primary,
+body.role-b2b .more-button {
+  border-color: rgba(121, 184, 255, .56);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, #4a90e2, #2f74d0);
+  color: #ffffff;
+  font-weight: 950;
+  box-shadow: 0 14px 28px rgba(74, 144, 226, .24);
+}
+
+body.role-b2b .secondary-button,
+body.role-b2b .small-button,
+body.role-b2b .ghost-button,
+body.role-b2b .icon-button,
+body.role-admin .secondary-button,
+body.role-admin .small-button,
+body.role-admin .ghost-button,
+body.role-admin .icon-button,
+body.role-admin .close-button {
+  border-color: rgba(139, 160, 190, .28);
+  border-radius: 8px;
+  background: rgba(17, 25, 35, .92);
+  color: #e7f1ff;
+}
+
+body.role-b2b input,
+body.role-b2b select,
+body.role-b2b textarea,
+body.role-admin input,
+body.role-admin select,
+body.role-admin textarea {
+  border-color: rgba(139, 160, 190, .30);
+  border-radius: 8px;
+  background: #0d141d;
+  color: #edf5ff;
+}
+
+body.role-b2b input:focus,
+body.role-b2b select:focus,
+body.role-b2b textarea:focus,
+body.role-admin input:focus,
+body.role-admin select:focus,
+body.role-admin textarea:focus {
+  border-color: rgba(121, 184, 255, .78);
+  box-shadow: 0 0 0 4px rgba(121, 184, 255, .13);
+  outline: none;
+}
+
+body.role-b2b .state-badge,
+body.role-b2b .confidence-badge,
+body.role-b2b .structure-badge,
+body.role-b2b .b2b-plan-badge,
+body.role-b2b .b2b-search-match,
+body.role-b2b .company-rank,
+body.role-admin .state-badge,
+body.role-admin .company-review-badge,
+body.role-admin .admin-db-company-tags em,
+body.role-admin .admin-db-selected-issues em,
+body.role-admin .company-master-row-tags span,
+body.role-admin .admin-db-quality-head mark,
+body.role-admin .admin-db-audit-head mark,
+body.role-admin .admin-db-selected-head mark {
+  border: 1px solid rgba(121, 184, 255, .34);
+  border-radius: 999px;
+  background: rgba(121, 184, 255, .12);
+  color: #dcecff;
+  font-weight: 950;
+}
+
+body.role-b2b .good,
+body.role-b2b .confirmed,
+body.role-b2b .manual,
+body.role-admin .good,
+body.role-admin .confirmed,
+body.role-admin .contact_ready {
+  --status-rail: #34d399;
+}
+
+body.role-b2b .watch,
+body.role-b2b .ota-check,
+body.role-admin .watch,
+body.role-admin .check_needed,
+body.role-admin .recrawl_needed,
+body.role-admin .manual_needed {
+  --status-rail: #fbbf24;
+}
+
+body.role-b2b .hot,
+body.role-b2b .bad,
+body.role-admin .hot,
+body.role-admin .bad,
+body.role-admin .exclude {
+  --status-rail: #fb923c;
+}
+
+body.role-b2b .summary-card.good,
+body.role-b2b .company-card.good,
+body.role-b2b .report-metric-grid article.good,
+body.role-admin .admin-db-company.good,
+body.role-admin .admin-db-metrics article.good,
+body.role-admin .admin-db-selected-panel.good,
+body.role-admin .admin-db-selected-grid article.good {
+  border-left-color: #34d399;
+}
+
+body.role-b2b .summary-card.watch,
+body.role-b2b .company-card.watch,
+body.role-b2b .report-metric-grid article.watch,
+body.role-admin .admin-db-company.watch,
+body.role-admin .admin-db-metrics article.watch,
+body.role-admin .admin-db-selected-panel.watch,
+body.role-admin .admin-db-selected-grid article.watch {
+  border-left-color: #fbbf24;
+}
+
+body.role-b2b .summary-card.hot,
+body.role-b2b .summary-card.bad,
+body.role-b2b .company-card.hot,
+body.role-b2b .company-card.bad,
+body.role-b2b .report-metric-grid article.hot,
+body.role-admin .admin-db-company.hot,
+body.role-admin .admin-db-company.bad,
+body.role-admin .admin-db-metrics article.hot,
+body.role-admin .admin-db-selected-panel.hot,
+body.role-admin .admin-db-selected-grid article.hot {
+  border-left-color: #fb923c;
+}
+
+body.role-b2b .company-card,
+body.role-admin .admin-db-company,
+body.role-admin .company-master-list article {
+  transition: border-color .18s ease, transform .18s ease, background .18s ease;
+}
+
+body.role-b2b .company-card:hover,
+body.role-admin .admin-db-company:hover,
+body.role-admin .company-master-list article:hover {
+  border-color: rgba(121, 184, 255, .48);
+  background:
+    linear-gradient(180deg, rgba(121, 184, 255, .055), rgba(255, 255, 255, 0)),
+    var(--surface);
+}
+
+body.role-b2b .company-title strong,
+body.role-b2b .report-card h3,
+body.role-b2b .b2b-brief-head h3,
+body.role-b2b .b2b-rank-head h3,
+body.role-b2b .b2b-map-head h3,
+body.role-b2b .b2b-demand-head h3,
+body.role-admin .admin-db-company-title,
+body.role-admin .admin-db-selected-head strong,
+body.role-admin .admin-db-province-board-head strong,
+body.role-admin .admin-db-region-board-head strong {
+  color: #ffffff;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+body.role-b2b p,
+body.role-b2b small,
+body.role-b2b span,
+body.role-admin p,
+body.role-admin small,
+body.role-admin span {
+  min-width: 0;
+}
+
+body.role-b2b .b2b-search-card,
+body.role-b2b .b2b-history-list button,
+body.role-b2b .b2b-onboarding-steps article,
+body.role-admin .admin-db-province-card-grid button,
+body.role-admin .admin-db-region-card-grid button,
+body.role-admin .admin-db-quality-cards button,
+body.role-admin .admin-db-flow-rail button,
+body.role-admin .admin-db-view-switch button {
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+body.role-b2b .b2b-search-card.active,
+body.role-admin .admin-db-province-card-grid button.active,
+body.role-admin .admin-db-region-card-grid button.active {
+  background:
+    linear-gradient(180deg, rgba(74, 144, 226, .20), rgba(30, 58, 95, .16)),
+    var(--surface-elevated);
+}
+
+@media (max-width: 720px) {
+  body.role-b2b .app-shell,
+  body.role-admin .app-shell {
+    padding-inline:
+      calc(18px + env(safe-area-inset-right))
+      calc(18px + env(safe-area-inset-left));
+  }
+
+  body.role-b2b .app-header,
+  body.role-admin .app-header {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+    gap: 14px;
+  }
+
+  body.role-b2b .header-copy,
+  body.role-admin .header-copy,
+  body.role-b2b .header-actions,
+  body.role-admin .header-actions {
+    width: 100%;
+  }
+
+  body.role-b2b .header-actions,
+  body.role-admin .header-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  body.role-b2b .header-actions .icon-button,
+  body.role-admin .header-actions .icon-button {
+    margin-left: auto;
+  }
+
+  body.role-b2b .app-header h1,
+  body.role-admin .app-header h1 {
+    font-size: clamp(34px, 10vw, 46px);
+    line-height: 1.04;
+  }
+
+  body.role-b2b .app-header p,
+  body.role-admin .app-header p {
+    font-size: 15px;
+  }
+
+  body.role-b2b .summary-card strong,
+  body.role-b2b .report-metric-grid strong,
+  body.role-b2b .b2b-brief-metrics strong,
+  body.role-admin .admin-db-metrics strong,
+  body.role-admin .admin-kpi-grid strong {
+    font-size: clamp(24px, 8vw, 34px);
+  }
+
+  body.role-b2b .summary-card,
+  body.role-admin .admin-card,
+  body.role-admin .admin-db-company,
+  body.role-b2b .company-card,
+  body.role-b2b .report-card,
+  body.role-b2b .b2b-brief-card {
+    padding: 16px;
   }
 }
