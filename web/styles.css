@@ -24481,6 +24481,441 @@ body.role-b2b .structure-action-list li::before {
   box-shadow: 0 8px 18px rgba(106, 168, 255, .18);
 }
 
+body.role-admin {
+  color-scheme: dark;
+  --bg: #0f1117;
+  --panel: #171b22;
+  --ink: #edf3fb;
+  --muted: #9ca8b8;
+  --weak: #6f7c8f;
+  --line: rgba(156, 174, 204, .22);
+  --line-strong: rgba(176, 194, 224, .34);
+  --blue: #6aa8ff;
+  --blue-dark: #9cc4ff;
+  --green: #34d399;
+  --purple: #b69cff;
+  --orange: #fbbf24;
+  --red: #fb7185;
+  --active-rail: #6aa8ff;
+  --active-glow: rgba(106, 168, 255, .30);
+  --good-rail: #34d399;
+  --watch-rail: #fbbf24;
+  --hot-rail: #fb7185;
+  --shadow: 0 18px 48px rgba(0, 0, 0, .34);
+  --soft-shadow: 0 10px 28px rgba(0, 0, 0, .24);
+  background:
+    linear-gradient(180deg, #101319 0%, #0c1016 52%, #0f1117 100%);
+  color: var(--ink);
+}
+
+body.role-admin .app-shell {
+  width: min(100%, 1240px);
+}
+
+body.role-admin .app-header h1,
+body.role-admin .section-title h2,
+body.role-admin .admin-card h3,
+body.role-admin .admin-console-hero h3,
+body.role-admin .admin-console-head strong,
+body.role-admin .admin-console-empty strong,
+body.role-admin .admin-db-hero h3,
+body.role-admin .admin-db-metrics strong,
+body.role-admin .admin-db-view-switch span,
+body.role-admin .admin-db-province-board-head strong,
+body.role-admin .admin-db-region-board-head strong,
+body.role-admin .admin-db-province-card-grid strong,
+body.role-admin .admin-db-region-card-grid strong,
+body.role-admin .admin-db-master-guide strong,
+body.role-admin .admin-db-quality-head strong,
+body.role-admin .admin-db-quality-cards strong,
+body.role-admin .admin-db-audit-head strong,
+body.role-admin .admin-db-audit-title strong,
+body.role-admin .admin-db-audit-list strong,
+body.role-admin .admin-db-audit-detail strong,
+body.role-admin .admin-db-work-panel strong,
+body.role-admin .admin-db-collect-panel strong,
+body.role-admin .admin-db-selected-head strong,
+body.role-admin .admin-db-selected-section-head strong,
+body.role-admin .admin-db-selected-grid strong,
+body.role-admin .admin-db-selected-brief strong,
+body.role-admin .admin-db-selected-fold summary strong,
+body.role-admin .admin-db-company strong,
+body.role-admin .admin-db-company b,
+body.role-admin .admin-db-company-title,
+body.role-admin .company-master-ops-intro strong,
+body.role-admin .company-master-metrics strong,
+body.role-admin .company-master-rule strong,
+body.role-admin .company-master-backfill strong,
+body.role-admin .company-master-duplicates strong,
+body.role-admin .company-review-head strong,
+body.role-admin .company-review-queue b,
+body.role-admin .company-master-list-head strong,
+body.role-admin .company-master-list b,
+body.role-admin .download-item strong,
+body.role-admin .crawl-speed-panel strong,
+body.role-admin .crawl-progress strong,
+body.role-admin .traffic-verify-result strong {
+  color: var(--ink);
+}
+
+body.role-admin .app-header p,
+body.role-admin .eyebrow,
+body.role-admin .section-title p,
+body.role-admin .admin-card p,
+body.role-admin .admin-console-hero p,
+body.role-admin .admin-console-hero span,
+body.role-admin .admin-console-hero small,
+body.role-admin .admin-console-head small,
+body.role-admin .admin-console-empty p,
+body.role-admin .admin-db-hero p,
+body.role-admin .admin-db-metrics span,
+body.role-admin .admin-db-metrics small,
+body.role-admin .admin-db-toolbar span,
+body.role-admin .admin-db-view-switch small,
+body.role-admin .admin-db-province-board-head span,
+body.role-admin .admin-db-province-board-head small,
+body.role-admin .admin-db-region-board-head span,
+body.role-admin .admin-db-region-board-head small,
+body.role-admin .admin-db-province-card-grid span,
+body.role-admin .admin-db-province-card-grid small,
+body.role-admin .admin-db-province-card-grid em,
+body.role-admin .admin-db-region-card-grid span,
+body.role-admin .admin-db-region-card-grid small,
+body.role-admin .admin-db-region-card-grid em,
+body.role-admin .admin-db-master-guide span,
+body.role-admin .admin-db-master-guide small,
+body.role-admin .admin-db-quality-head span,
+body.role-admin .admin-db-quality-head small,
+body.role-admin .admin-db-quality-cards small,
+body.role-admin .admin-db-audit-head span,
+body.role-admin .admin-db-audit-head small,
+body.role-admin .admin-db-audit-title span,
+body.role-admin .admin-db-audit-title small,
+body.role-admin .admin-db-audit-stats small,
+body.role-admin .admin-db-audit-list small,
+body.role-admin .admin-db-work-panel span,
+body.role-admin .admin-db-work-panel small,
+body.role-admin .admin-db-collect-panel span,
+body.role-admin .admin-db-collect-panel small,
+body.role-admin .admin-db-selected-head span,
+body.role-admin .admin-db-selected-head small,
+body.role-admin .admin-db-selected-section-head span,
+body.role-admin .admin-db-selected-section-head small,
+body.role-admin .admin-db-selected-grid span,
+body.role-admin .admin-db-selected-grid small,
+body.role-admin .admin-db-selected-brief span,
+body.role-admin .admin-db-selected-brief small,
+body.role-admin .admin-db-selected-fold summary span,
+body.role-admin .admin-db-selected-fold summary small,
+body.role-admin .admin-db-company small,
+body.role-admin .admin-db-company p,
+body.role-admin .admin-db-more,
+body.role-admin .company-master-ops-intro span,
+body.role-admin .company-master-ops-intro small,
+body.role-admin .company-master-tools small,
+body.role-admin .company-master-backfill p,
+body.role-admin .company-master-metrics span,
+body.role-admin .company-master-metrics small,
+body.role-admin .company-master-rule p,
+body.role-admin .company-master-duplicates small,
+body.role-admin .company-master-duplicates span,
+body.role-admin .company-review-head span,
+body.role-admin .company-review-queue p,
+body.role-admin .company-review-queue article > div span,
+body.role-admin .company-master-filter small,
+body.role-admin .company-master-list-head span,
+body.role-admin .company-master-list article p,
+body.role-admin .company-master-list article small,
+body.role-admin .download-item small,
+body.role-admin .crawl-speed-panel p,
+body.role-admin .crawl-progress p,
+body.role-admin .traffic-verify-result p {
+  color: var(--muted);
+}
+
+body.role-admin .admin-card,
+body.role-admin .admin-console-hero,
+body.role-admin .admin-console-panel,
+body.role-admin .admin-kpi-grid article,
+body.role-admin .admin-db-hero,
+body.role-admin .admin-db-toolbar,
+body.role-admin .admin-db-metrics article,
+body.role-admin .admin-db-view-switch,
+body.role-admin .admin-db-province,
+body.role-admin .admin-db-region,
+body.role-admin .admin-db-company,
+body.role-admin .admin-db-province-board,
+body.role-admin .admin-db-region-board,
+body.role-admin .admin-db-master-guide,
+body.role-admin .admin-db-quality-strip,
+body.role-admin .admin-db-quality-cards button,
+body.role-admin .admin-db-audit-panel,
+body.role-admin .admin-db-audit-list article,
+body.role-admin .admin-db-audit-detail,
+body.role-admin .admin-db-audit-detail-grid article,
+body.role-admin .admin-db-audit-queue article,
+body.role-admin .admin-db-audit-gate,
+body.role-admin .admin-db-audit-gates article,
+body.role-admin .admin-db-flat-list,
+body.role-admin .admin-db-review-surface,
+body.role-admin .admin-db-ops-drawer,
+body.role-admin .admin-db-work-panel,
+body.role-admin .admin-db-work-summary article,
+body.role-admin .admin-db-work-list article,
+body.role-admin .admin-db-collect-panel,
+body.role-admin .admin-db-collect-metrics button,
+body.role-admin .admin-db-collect-list article,
+body.role-admin .admin-db-confirm-plan,
+body.role-admin .admin-db-confirm-grid article,
+body.role-admin .admin-db-selected-panel,
+body.role-admin .admin-db-selected-grid article,
+body.role-admin .admin-db-selected-brief article,
+body.role-admin .admin-db-selected-fold,
+body.role-admin .admin-db-selected-review,
+body.role-admin .admin-db-selected-correction,
+body.role-admin .admin-db-quick-edit,
+body.role-admin .admin-db-recheck-panel,
+body.role-admin .admin-db-recheck-summary article,
+body.role-admin .admin-db-recheck-grid article,
+body.role-admin .company-master-panel,
+body.role-admin .company-master-duplicates,
+body.role-admin .company-master-tools,
+body.role-admin .company-master-backfill,
+body.role-admin .company-master-ops-intro,
+body.role-admin .company-master-metrics article,
+body.role-admin .company-master-rule,
+body.role-admin .company-master-duplicates article,
+body.role-admin .company-review-panel,
+body.role-admin .company-review-queue,
+body.role-admin .company-review-queue article,
+body.role-admin .company-master-filter,
+body.role-admin .company-master-list-panel,
+body.role-admin .company-master-list,
+body.role-admin .company-master-list article,
+body.role-admin .download-item,
+body.role-admin .advanced-box,
+body.role-admin .crawl-speed-panel,
+body.role-admin .crawl-progress,
+body.role-admin .traffic-verify-result,
+body.role-admin .notice-card {
+  border-color: var(--line);
+  background: rgba(23, 27, 34, .96);
+  box-shadow: var(--soft-shadow);
+}
+
+body.role-admin .admin-console-hero,
+body.role-admin .admin-db-hero {
+  border-color: rgba(106, 168, 255, .28);
+  background:
+    linear-gradient(135deg, rgba(47, 116, 208, .22), rgba(52, 211, 153, .08)),
+    #171b22;
+}
+
+body.role-admin .admin-section-nav,
+body.role-admin .bottom-nav,
+body.role-admin .admin-mobile-nav,
+body.role-admin .admin-mobile-secondary {
+  border-color: var(--line);
+  background: rgba(15, 20, 28, .88);
+  box-shadow: var(--soft-shadow);
+  backdrop-filter: blur(14px);
+}
+
+body.role-admin .admin-section-nav button,
+body.role-admin .bottom-nav button,
+body.role-admin .admin-mobile-secondary button {
+  color: #b8c4d6;
+}
+
+body.role-admin .admin-section-nav button.active,
+body.role-admin .bottom-nav button.active,
+body.role-admin .admin-mobile-secondary button.active,
+body.role-admin .admin-db-view-switch button.active,
+body.role-admin .admin-db-province-card-grid button.active,
+body.role-admin .admin-db-region-card-grid button.active {
+  border-color: rgba(106, 168, 255, .44);
+  background:
+    linear-gradient(180deg, rgba(74, 144, 232, .96), rgba(47, 116, 208, .92));
+  color: #ffffff;
+  box-shadow: 0 13px 26px rgba(47, 116, 208, .30);
+}
+
+body.role-admin .small-button,
+body.role-admin .secondary-button,
+body.role-admin .ghost-button,
+body.role-admin .icon-button,
+body.role-admin .close-button,
+body.role-admin .admin-console-head button,
+body.role-admin .admin-console-head a,
+body.role-admin .admin-row-actions button,
+body.role-admin .admin-task-list button,
+body.role-admin .admin-db-company-action button,
+body.role-admin .admin-db-selected-actions button,
+body.role-admin .admin-db-collect-metrics button,
+body.role-admin .company-master-tools button,
+body.role-admin .company-master-ops-intro button,
+body.role-admin .company-review-actions button,
+body.role-admin .download-item a {
+  border-color: rgba(156, 174, 204, .26);
+  background: #202631;
+  color: var(--ink);
+  box-shadow: none;
+}
+
+body.role-admin .primary-button,
+body.role-admin .admin-db-toolbar button,
+body.role-admin .admin-db-company-action button.primary,
+body.role-admin .company-review-actions button.active,
+body.role-admin .company-review-actions button:hover {
+  border-color: rgba(106, 168, 255, .38);
+  background: #2f74d0;
+  color: #ffffff;
+  box-shadow: 0 10px 22px rgba(47, 116, 208, .22);
+}
+
+body.role-admin .field input,
+body.role-admin .field select,
+body.role-admin .field textarea,
+body.role-admin .admin-db-toolbar input,
+body.role-admin .admin-db-toolbar select,
+body.role-admin .company-master-filter input,
+body.role-admin .company-master-filter select,
+body.role-admin .company-review-control input,
+body.role-admin .company-review-control select,
+body.role-admin .company-review-control textarea {
+  border-color: rgba(156, 174, 204, .28);
+  background: #11161f;
+  color: var(--ink);
+}
+
+body.role-admin input::placeholder,
+body.role-admin textarea::placeholder {
+  color: #6f7c8f;
+}
+
+body.role-admin .field input:focus,
+body.role-admin .field select:focus,
+body.role-admin .field textarea:focus,
+body.role-admin .admin-db-toolbar input:focus,
+body.role-admin .admin-db-toolbar select:focus,
+body.role-admin .company-master-filter input:focus,
+body.role-admin .company-master-filter select:focus,
+body.role-admin .company-review-control input:focus,
+body.role-admin .company-review-control select:focus,
+body.role-admin .company-review-control textarea:focus {
+  border-color: rgba(106, 168, 255, .72);
+  box-shadow: 0 0 0 4px rgba(106, 168, 255, .13);
+  outline: none;
+}
+
+body.role-admin .admin-db-province-card-grid button,
+body.role-admin .admin-db-region-card-grid button,
+body.role-admin .admin-db-quality-cards button,
+body.role-admin .admin-db-collect-metrics button,
+body.role-admin .company-master-list article,
+body.role-admin .company-review-queue article {
+  border-color: rgba(156, 174, 204, .24);
+  background: #121822;
+  color: var(--ink);
+}
+
+body.role-admin .admin-db-company-tags em,
+body.role-admin .admin-db-selected-issues em,
+body.role-admin .company-master-row-tags span,
+body.role-admin .company-review-badge,
+body.role-admin .state-badge,
+body.role-admin .admin-db-hero span,
+body.role-admin .admin-db-quality-head mark,
+body.role-admin .admin-db-audit-head mark,
+body.role-admin .admin-db-selected-head mark,
+body.role-admin .admin-db-master-guide mark {
+  border-color: rgba(106, 168, 255, .28);
+  background: rgba(106, 168, 255, .12);
+  color: #dcecff;
+}
+
+body.role-admin .admin-kpi-grid article.good,
+body.role-admin .admin-db-metrics article.good,
+body.role-admin .admin-db-company.good,
+body.role-admin .admin-db-selected-panel.good,
+body.role-admin .admin-db-selected-grid article.good,
+body.role-admin .admin-db-selected-brief article.good,
+body.role-admin .admin-db-quality-cards button.good,
+body.role-admin .admin-db-audit-list article.good,
+body.role-admin .company-review-badge.confirmed,
+body.role-admin .company-review-badge.contact_ready {
+  border-color: rgba(52, 211, 153, .42);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .14), rgba(52, 211, 153, .04)),
+    #171b22;
+}
+
+body.role-admin .admin-kpi-grid article.watch,
+body.role-admin .admin-db-metrics article.watch,
+body.role-admin .admin-db-company.watch,
+body.role-admin .admin-db-selected-panel.watch,
+body.role-admin .admin-db-selected-grid article.watch,
+body.role-admin .admin-db-selected-brief article.watch,
+body.role-admin .admin-db-quality-cards button.watch,
+body.role-admin .admin-db-audit-list article.watch,
+body.role-admin .admin-db-selected-issues em.watch,
+body.role-admin .company-review-badge.check_needed,
+body.role-admin .company-review-badge.recrawl_needed,
+body.role-admin .company-review-badge.hold,
+body.role-admin .company-review-badge.manual_needed {
+  border-color: rgba(251, 191, 36, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .14), rgba(251, 191, 36, .04)),
+    #171b22;
+}
+
+body.role-admin .admin-kpi-grid article.hot,
+body.role-admin .admin-kpi-grid article.bad,
+body.role-admin .admin-db-metrics article.hot,
+body.role-admin .admin-db-company.hot,
+body.role-admin .admin-db-selected-panel.hot,
+body.role-admin .admin-db-selected-grid article.hot,
+body.role-admin .admin-db-selected-brief article.hot,
+body.role-admin .admin-db-quality-cards button.hot,
+body.role-admin .admin-db-audit-list article.hot,
+body.role-admin .admin-db-selected-issues em.hot,
+body.role-admin .company-review-badge.exclude {
+  border-color: rgba(251, 113, 133, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .14), rgba(251, 113, 133, .04)),
+    #171b22;
+}
+
+body.role-admin .admin-db-metrics article.good strong,
+body.role-admin .admin-db-selected-grid article.good strong,
+body.role-admin .admin-db-selected-brief article.good strong {
+  color: #bbf7d0;
+}
+
+body.role-admin .admin-db-metrics article.watch strong,
+body.role-admin .admin-db-selected-grid article.watch strong,
+body.role-admin .admin-db-selected-brief article.watch strong {
+  color: #fde68a;
+}
+
+body.role-admin .admin-db-metrics article.hot strong,
+body.role-admin .admin-db-selected-grid article.hot strong,
+body.role-admin .admin-db-selected-brief article.hot strong {
+  color: #fecdd3;
+}
+
+body.role-admin .admin-db-board,
+body.role-admin .admin-console-dashboard,
+body.role-admin .admin-db-selected-layout {
+  color: var(--ink);
+}
+
+body.role-admin .empty {
+  border-color: rgba(156, 174, 204, .22);
+  background: rgba(15, 20, 28, .64);
+  color: var(--muted);
+}
+
 @media (min-width: 860px) {
   .app-main {
     display: grid;
