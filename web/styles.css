@@ -49,6 +49,25 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+body.app-booting {
+  background: var(--bg);
+}
+
+body.app-booting::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg);
+  pointer-events: none;
+}
+
+body.app-booting .app-shell,
+body.app-booting .control-drawer,
+body.app-booting .detail-sheet {
+  opacity: 0;
+}
+
 button,
 input,
 select,

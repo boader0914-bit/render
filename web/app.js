@@ -996,6 +996,14 @@ function syncRoleStaticLabels() {
   setPanelHeading("demand", "수요 전망", "검색량·12개월 추세·피크 월로 보는 월별 예상 검색량");
 }
 
+function releaseAppBoot() {
+  if (!document.body.classList.contains("app-booting")) return;
+  window.requestAnimationFrame(() => {
+    document.body.classList.remove("app-booting");
+    document.body.classList.add("app-ready");
+  });
+}
+
 function applyRoleUi() {
   const allowedTabs = new Set(roleTabs());
   if (!allowedTabs.has(state.activeTab)) state.activeTab = firstRoleTab();
@@ -1024,6 +1032,7 @@ function applyRoleUi() {
   syncB2BSearchRangeControl();
   syncAdminSectionPanels();
   syncAdminMobileNav();
+  releaseAppBoot();
 }
 
 async function fetchJson(url, options) {
@@ -28833,6 +28842,7 @@ async function init() {
     if (isAdminRole()) pollCrawlStatusUntilIdle(false);
   } catch (error) {
     setStatus("오류");
+    releaseAppBoot();
     els.pageSubtitle.textContent = error.message;
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     if (isAdminRole()) loadLocationDictionary();
