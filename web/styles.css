@@ -172,6 +172,8 @@ a {
 
 .header-user-view,
 #adminUserViewButton {
+  display: inline-grid;
+  place-items: center;
   min-height: 42px;
   border-color: rgba(52, 211, 153, .34);
   background: rgba(52, 211, 153, .12);
@@ -179,6 +181,7 @@ a {
   padding: 0 14px;
   border-radius: 14px;
   font-weight: 950;
+  text-decoration: none;
 }
 
 .eyebrow {
@@ -1293,6 +1296,7 @@ a {
   background: var(--panel);
   color: var(--ink);
   box-shadow: var(--soft-shadow);
+  text-decoration: none;
 }
 
 .icon-button {
@@ -16588,6 +16592,48 @@ a.platform-row:hover {
   cursor: pointer;
 }
 
+.admin-files-collapsible {
+  align-content: start;
+}
+
+.admin-files-collapsible summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.admin-files-collapsible summary::after {
+  content: "+";
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--blue-dark);
+  background: rgba(49, 130, 246, .08);
+}
+
+.admin-files-collapsible[open] summary::after {
+  content: "-";
+}
+
+.admin-files-collapsible-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.admin-files-collapsible:not([open]) .admin-files-collapsible-body {
+  display: none;
+}
+
 .script-fallback {
   margin-top: 10px;
 }
@@ -25787,8 +25833,23 @@ body.role-admin .admin-mobile-secondary {
 }
 
 body.role-admin .bottom-nav {
+  display: none;
   width: min(720px, 100%);
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+body.role-admin .summary-grid,
+body.role-admin #b2bSearchPanel,
+body.role-admin #noticeCard {
+  display: none !important;
+}
+
+body.role-admin #adminPanel > .section-title {
+  display: none;
+}
+
+body.role-admin #openControlButton {
+  display: none;
 }
 
 body.role-admin .admin-section-nav button,

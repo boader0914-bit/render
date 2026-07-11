@@ -26,7 +26,7 @@
         <p id="pageSubtitle" hidden></p>
       </div>
       <div class="header-actions">
-        <button class="small-button header-user-view" id="headerUserViewButton" type="button" hidden>User View</button>
+        <a class="small-button header-user-view" id="headerUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener" hidden>User View</a>
         <button class="small-button header-logout" id="headerLogoutButton" type="button">로그아웃</button>
         <button class="icon-button" id="openControlButton" type="button" aria-label="필터 및 관리 열기">
           <span aria-hidden="true"></span>
@@ -197,7 +197,7 @@
           </div>
           <div class="admin-title-actions">
             <span id="adminStatus">준비</span>
-            <button class="small-button" id="adminUserViewButton" type="button">User View</button>
+            <a class="small-button" id="adminUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener">User View</a>
             <button class="small-button" id="logoutButton" type="button">로그아웃</button>
           </div>
         </div>
@@ -384,19 +384,25 @@
             </details>
           </section>
 
-          <section class="admin-card" id="companyMasterAdminCard">
+          <details class="admin-card admin-files-collapsible" id="companyMasterAdminCard">
+            <summary>업체 마스터 DB 유지보수</summary>
+            <div class="admin-files-collapsible-body">
             <div class="card-head">
               <h3>업체 마스터 DB</h3>
               <span class="state-badge" id="companyMasterState">대기</span>
             </div>
             <div class="company-master-panel" id="companyMasterPanel"></div>
-          </section>
+            </div>
+          </details>
 
-          <section class="admin-card" id="downloadAdminCard">
+          <details class="admin-card admin-files-collapsible" id="downloadAdminCard">
+            <summary>파일 다운로드</summary>
+            <div class="admin-files-collapsible-body">
             <h3>파일</h3>
             <p class="legal-inline-notice">다운로드 파일과 리포트는 참고용 분석 결과입니다. <a href="/report-disclaimer" target="_blank" rel="noopener">리포트 면책 문구</a>를 함께 확인하세요.</p>
             <div class="download-list" id="downloadList"></div>
-          </section>
+            </div>
+          </details>
         </div>
         </section>
       </section>

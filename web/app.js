@@ -21500,6 +21500,14 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
 function renderAdminMemberRequestDashboard() {
   if (!els.adminMemberRequestDashboard || !isAdminRole()) return;
   els.adminMemberRequestDashboard.innerHTML = `
+    <section class="admin-console-hero admin-member-request-hero">
+      <div>
+        <span>회원·삭제요청</span>
+        <h3>고객 계정과 데이터 요청을 분리해서 관리합니다.</h3>
+        <p>회원 사용량, 계정·데이터 삭제 요청, 보안 점검 상태를 순서대로 확인합니다.</p>
+      </div>
+      <small>관리자 전용</small>
+    </section>
     ${adminConsoleMemberPanel()}
     ${adminConsoleAccountDeletePanel()}
     ${adminConsoleSecurityPanel()}
@@ -26277,9 +26285,10 @@ function closeDrawer() {
   if (els.detailSheet.hidden) document.body.style.overflow = "";
 }
 
-function openAdminUserView() {
+function openAdminUserView(event) {
+  event?.preventDefault?.();
   const target = "/b2b?userView=admin";
-  const opened = window.open(target, "_blank");
+  const opened = window.open(target, "_blank", "noopener,noreferrer");
   if (opened) {
     try {
       opened.opener = null;
@@ -27980,8 +27989,9 @@ function bindEvents() {
       setAdminPanelSection(adminSectionButton.dataset.adminSection || "overview", { scroll: true });
       return;
     }
-    if (event.target.closest("[data-admin-user-view-open]")) {
-      openAdminUserView();
+    const adminUserViewOpen = event.target.closest("[data-admin-user-view-open]");
+    if (adminUserViewOpen) {
+      if (adminUserViewOpen.tagName !== "A") openAdminUserView(event);
       return;
     }
     if (event.target.closest("[data-admin-db-clear]")) {
@@ -28740,8 +28750,8 @@ function bindEvents() {
   els.trafficKeyVerifyButton?.addEventListener("click", verifyTrafficKeys);
   els.logoutButton?.addEventListener("click", logout);
   els.headerLogoutButton?.addEventListener("click", logout);
-  els.headerUserViewButton?.addEventListener("click", openAdminUserView);
-  els.adminUserViewButton?.addEventListener("click", openAdminUserView);
+  if (els.headerUserViewButton?.tagName !== "A") els.headerUserViewButton?.addEventListener("click", openAdminUserView);
+  if (els.adminUserViewButton?.tagName !== "A") els.adminUserViewButton?.addEventListener("click", openAdminUserView);
   els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
   els.crawlSpeedPresetRow?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-crawl-speed-preset]");
