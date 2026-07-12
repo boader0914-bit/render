@@ -1988,7 +1988,7 @@ a {
 .admin-db-flow-rail {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   border: 1px solid #dbe7f3;
   border-radius: 16px;

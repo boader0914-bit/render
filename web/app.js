@@ -17091,22 +17091,39 @@ function adminDbFlowRailHtml(mode = "region", filteredRows = [], rows = [], grou
     ? (selectedProvince.regions || []).find((region) => region.key === filters.region)
     : null;
   const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
+  const stage = mode === "review"
+    ? "review"
+    : mode === "list"
+      ? "list"
+      : selectedProvince
+        ? "locality"
+        : "province";
   const steps = [
     {
-      key: "region",
-      label: "1. 지역 구조",
+      key: "province",
+      view: "region",
+      label: "1. 광역",
       value: selectedProvince ? selectedProvince.label : `광역 ${fmtNumber(grouped.length)}개`,
-      note: selectedRegion ? selectedRegion.label : `지역 ${fmtNumber(regionCount)}개`
+      note: "도·광역시 카드"
+    },
+    {
+      key: "locality",
+      view: "region",
+      label: "2. 시군구",
+      value: selectedRegion ? selectedRegion.label : `지역 ${fmtNumber(regionCount)}개`,
+      note: selectedProvince ? "선택 광역 내 지역" : "광역 선택 후"
     },
     {
       key: "list",
-      label: "2. 업체 리스트",
+      view: "list",
+      label: "3. 업체 리스트",
       value: `${fmtNumber(filteredRows.length)}개`,
       note: filters.sort === "name" ? "가나다순" : "필터 정렬"
     },
     {
       key: "review",
-      label: "3. 상세·수정",
+      view: "review",
+      label: "4. 상세·수정",
       value: state.adminDbSelectedCompanyId ? "선택됨" : "대기",
       note: "보정·확인 수집"
     }
@@ -17114,7 +17131,7 @@ function adminDbFlowRailHtml(mode = "region", filteredRows = [], rows = [], grou
   return `
     <section class="admin-db-flow-rail" aria-label="전체 DB 작업 흐름">
       ${steps.map((step) => `
-        <button type="button" class="${mode === step.key ? "active" : ""}" data-admin-db-view="${escapeHtml(step.key)}">
+        <button type="button" class="${stage === step.key ? "active" : ""}" data-admin-db-view="${escapeHtml(step.view)}">
           <span>${escapeHtml(step.label)}</span>
           <strong>${escapeHtml(step.value)}</strong>
           <small>${escapeHtml(step.note)}</small>
@@ -17142,13 +17159,13 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
     region: {
       label: "지역 구조",
       title: "광역 카드에서 시군구로 내려가며 DB를 정리합니다",
-      copy: "전국 마스터를 먼저 지역 단위로 접어 보고, 필요한 광역·시군구만 펼쳐 업체를 확인합니다.",
+      copy: "광역을 선택하면 시군구 카드가 열리고, 시군구를 선택하면 업체 리스트로 이동합니다.",
       metric: `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`
     },
     list: {
       label: "업체 찾기",
       title: "필터와 검색으로 업체를 바로 찾고 수정합니다",
-      copy: "업체 가나다순을 기본으로 보고, 노출순·매출순·객실수·시설·OTA 조건으로 좁힙니다.",
+      copy: "업체 가나다순을 기본으로 보고, 노출순·매출순·객실수·시설·OTA 조건으로 좁힙니다. 목록은 페이지 단위로만 표시합니다.",
       metric: `${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개`
     },
     review: {
@@ -17192,8 +17209,8 @@ function adminDbRegionStructurePanel(grouped = [], allGrouped = [], filters = {}
     <section class="admin-db-region-empty-panel">
       <div>
         <span>지역 구조 기준</span>
-        <strong>${escapeHtml(selectedProvince ? `${selectedProvince.label} 지역 카드 확인 중` : "광역 카드를 먼저 선택하세요")}</strong>
-        <small>${escapeHtml("전체 DB는 광역 → 시군구 → 업체 리스트 → 상세 수정 순서로 관리합니다. 업체 목록은 별도 리스트 화면에서 페이지 단위로 봅니다.")}</small>
+        <strong>${escapeHtml(selectedRegion ? `${selectedRegion.label} 업체 리스트로 이동할 수 있습니다` : selectedProvince ? `${selectedProvince.label} 시군구를 선택하세요` : "광역 카드를 먼저 선택하세요")}</strong>
+        <small>${escapeHtml("전체 DB는 광역 → 시군구 → 업체 리스트 → 상세 수정 순서로 관리합니다. 업체 목록은 리스트 화면에서 페이지 단위로 봅니다.")}</small>
       </div>
       <div class="admin-db-region-next-grid">
         <article>
@@ -18902,12 +18919,11 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       <div class="admin-db-hero">
         <div>
           <span>전체 DB</span>
-          <h3>전국 마스터 데이터를 지역 구조부터 정리합니다.</h3>
-          <p>광역/도 카드를 먼저 보고, 더보기에서 시군구와 업체 가나다 리스트를 확인합니다.</p>
+          <h3>광역에서 업체 상세 수정까지 한 흐름으로 봅니다.</h3>
+          <p>광역 → 시군구 → 업체 리스트 → 상세 수정 순서로 이동하고, 업체 목록은 페이지 단위로 확인합니다.</p>
         </div>
         <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
       </div>
-      ${adminDbViewSwitchHtml(viewMode, filteredRows, rows, grouped)}
       ${adminDbFlowRailHtml(viewMode, filteredRows, rows, grouped, filters)}
       ${adminDbPageGuideHtml(viewMode, filteredRows, rows, grouped, filters)}
       ${viewMode === "region" ? `
