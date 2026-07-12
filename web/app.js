@@ -331,6 +331,7 @@ const els = {
   sheetBody: document.getElementById("sheetBody"),
   runSelect: document.getElementById("runSelect"),
   refreshRuns: document.getElementById("refreshRuns"),
+  runApplySummary: document.getElementById("runApplySummary"),
   crawlForm: document.getElementById("crawlForm"),
   logoutButton: document.getElementById("logoutButton"),
   headerLogoutButton: document.getElementById("headerLogoutButton"),
@@ -807,6 +808,107 @@ function renderCollectionPurposeRoutePreview(payload = currentCrawlFormPayload()
       <strong>${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</strong>
       <small>${escapeHtml(formatElapsed(preview.estimatedTotalSeconds || 0))}</small>
     </article>
+  `;
+}
+
+function activeRunDbRoute(data = state.data || {}) {
+  const run = data.run || {};
+  const companyMaster = data.companyMaster || {};
+  const route = run.collectionDbRoute || companyMaster.dbRoute || data.history?.collectionDbRoute || {};
+  const purpose = collectionPurposeProfile(run.collectionPurpose || route.key || "revenue_detail");
+  return {
+    key: route.key || purpose.key,
+    label: route.label || purpose.dbTarget || purpose.label,
+    note: route.note || purpose.note || "",
+    targets: Array.isArray(route.targets) && route.targets.length ? route.targets : [],
+    appliesHistory: route.appliesHistory ?? Boolean(purpose.collectWeeklyRange),
+    appliesInventory: route.appliesInventory ?? Boolean(purpose.collectBookingStock),
+    appliesDemandLocation: route.appliesDemandLocation ?? (purpose.key === "demand_location")
+  };
+}
+
+function runDbApplySummaryModel(data = state.data || {}) {
+  const run = data.run || {};
+  const companyMaster = data.companyMaster || {};
+  const history = data.history || {};
+  const items = data.availability?.items || [];
+  const route = activeRunDbRoute(data);
+  const purpose = collectionPurposeProfile(run.collectionPurpose || route.key || "revenue_detail");
+  const currentRunCompanies = Number(companyMaster.currentRunCompanies ?? items.length ?? 0);
+  const inventoryApplied = Number(companyMaster.inventoryAppliedCompanies ?? (route.appliesInventory ? currentRunCompanies : 0));
+  const demandSignalCompanies = Number(companyMaster.demandSignalCompanies ?? (route.appliesDemandLocation ? currentRunCompanies : 0));
+  const historyEligible = Boolean(companyMaster.historyEligible ?? route.appliesHistory);
+  const historyRows = Number(history.currentRunObservationCount || 0);
+  const targetText = route.targets?.length
+    ? route.targets.map((target) => String(target).replace(/^company_master\./, "마스터 ").replace(/^history\./, "누적 ").replace(/^region_operations$/, "지역 운영").replace(/^demand_structure$/, "수요 구조")).join(" · ")
+    : purpose.dbApplyText || "DB 반영";
+  return {
+    run,
+    route,
+    purpose,
+    currentRunCompanies,
+    inventoryApplied,
+    demandSignalCompanies,
+    historyEligible,
+    historyRows,
+    targetText,
+    error: companyMaster.error || ""
+  };
+}
+
+function renderRunResultApplySummary() {
+  if (!isAdminRole() || !els.runApplySummary) return;
+  if (!state.data?.run) {
+    els.runApplySummary.innerHTML = `
+      <div class="run-apply-empty">
+        <strong>결과를 선택하면 DB 반영 위치를 표시합니다.</strong>
+        <small>기본정보, 상세 매출, 수요·입지 중 어디에 반영됐는지 확인합니다.</small>
+      </div>
+    `;
+    return;
+  }
+  const model = runDbApplySummaryModel(state.data);
+  const run = model.run || {};
+  const detailText = run.detailRankRanges ? `${run.detailRankRanges}위` : "범위 미확인";
+  const dateText = dateRangeLabel(run);
+  const historyValue = model.historyEligible ? fmtNumber(model.historyRows) : "제외";
+  const historyNote = model.historyEligible ? "이번 결과 매출 관측치" : "이 수집 목적은 매출 누적 제외";
+  const demandValue = model.route.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외";
+  const demandNote = model.route.appliesDemandLocation ? "수요·입지 신호 반영" : "수요·입지 전용 수집 아님";
+  els.runApplySummary.innerHTML = `
+    <section class="run-apply-panel ${escapeHtml(model.route.key || "unknown")}">
+      <div class="run-apply-head">
+        <div>
+          <span>이번 수집 반영</span>
+          <strong>${escapeHtml(model.route.label || model.purpose.label)}</strong>
+          <small>${escapeHtml([run.keyword || run.label || "", detailText, dateText].filter(Boolean).join(" · "))}</small>
+        </div>
+        <em>${escapeHtml(model.purpose.dbApplyText || model.targetText || "DB 반영")}</em>
+      </div>
+      <div class="run-apply-grid">
+        <article>
+          <span>업체 마스터</span>
+          <strong>${fmtNumber(model.currentRunCompanies)}</strong>
+          <small>이번 결과 업체 반영</small>
+        </article>
+        <article>
+          <span>상품·가격</span>
+          <strong>${model.route.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외"}</strong>
+          <small>${model.route.appliesInventory ? "상품/가격 최신값 반영" : "노출 기록 중심"}</small>
+        </article>
+        <article>
+          <span>매출 누적</span>
+          <strong>${escapeHtml(historyValue)}</strong>
+          <small>${escapeHtml(historyNote)}</small>
+        </article>
+        <article>
+          <span>수요·입지</span>
+          <strong>${escapeHtml(demandValue)}</strong>
+          <small>${escapeHtml(demandNote)}</small>
+        </article>
+      </div>
+      <p>${escapeHtml(model.error ? `마스터 반영 오류: ${model.error}` : model.targetText)}</p>
+    </section>
   `;
 }
 
@@ -25680,11 +25782,13 @@ function renderAll() {
   applyRoleUi();
   renderB2BSearchPanel();
   if (!state.data) {
+    if (isAdminRole()) renderRunResultApplySummary();
     renderB2BEmptyPanels();
     if (roleAllowsTab("dictionary")) renderLocationDictionary();
     return;
   }
   renderHeader();
+  renderRunResultApplySummary();
   renderSummary();
   renderNotice();
   renderReport();
@@ -28150,6 +28254,8 @@ async function loadRuns(selectLatest = false) {
   state.runs = data.runs || [];
   els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
   if (!state.runs.length) {
+    state.data = null;
+    renderRunResultApplySummary();
     renderB2BSearchPanel();
     const emptyText = isAdminRole() ? "실행 결과가 없습니다. 관리 탭에서 새 수집을 실행하세요." : "검색어를 입력하면 새 경쟁 리포트를 수집합니다.";
     if (els.reportBody) {
