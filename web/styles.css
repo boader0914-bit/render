@@ -27935,17 +27935,7 @@ body.role-admin .empty {
   }
 
   body.role-admin .admin-section-nav {
-    position: static;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    width: 100%;
-    margin: 0 0 12px;
-    padding: 6px;
-    border-radius: 16px;
-  }
-
-  body.role-admin .admin-section-nav button {
-    min-height: 40px;
-    font-size: 12px;
+    display: none;
   }
 
   body.role-admin .admin-queue-summary-grid {

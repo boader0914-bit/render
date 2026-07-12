@@ -256,6 +256,13 @@ const ADMIN_PANEL_SECTIONS = {
   members: "회원·삭제요청",
   files: "API·파일"
 };
+const ADMIN_PANEL_MOBILE_TARGETS = {
+  database: { section: "database", anchor: "#adminDatabaseDashboard" },
+  overview: { section: "database", anchor: "#adminConsoleDashboard" },
+  collect: { section: "collect", anchor: "#crawlForm" },
+  members: { section: "settings", anchor: "#adminMemberRequestDashboard" },
+  files: { section: "settings", anchor: "#trafficAdminCard" }
+};
 const TAB_LABELS = {
   report: "요약 리포트",
   rank: "업체 순위",
@@ -853,6 +860,10 @@ function tabLabel(tab) {
   return !isAdminRole() && B2B_TAB_LABELS[tab] ? B2B_TAB_LABELS[tab] : (TAB_LABELS[tab] || "요약 리포트");
 }
 
+function adminPanelMobileTarget(sectionKey = "database") {
+  return ADMIN_PANEL_MOBILE_TARGETS[sectionKey] || ADMIN_PANEL_MOBILE_TARGETS.database;
+}
+
 function adminMobileSectionForTab(tab, preferred = "") {
   if (!isAdminRole()) return "";
   const preferredSection = preferred ? ADMIN_MOBILE_SECTIONS[preferred] : null;
@@ -861,9 +872,7 @@ function adminMobileSectionForTab(tab, preferred = "") {
     if (preferredTabs.has(tab)) return preferred;
   }
   if (tab === "admin") {
-    if (state.adminPanelSection === "collect") return "collect";
-    if (["members", "files"].includes(state.adminPanelSection)) return "settings";
-    return "database";
+    return adminPanelMobileTarget(state.adminPanelSection).section;
   }
   return "summary";
 }
@@ -909,11 +918,12 @@ function scrollAdminMobileAnchor(anchor) {
 
 function syncAdminMobileNav() {
   const isAdmin = isAdminRole();
-  const sectionKey = adminMobileSectionForTab(state.activeTab, state.adminMobileSection) || "summary";
+  const panelTarget = state.activeTab === "admin" ? adminPanelMobileTarget(state.adminPanelSection) : null;
+  const sectionKey = panelTarget?.section || adminMobileSectionForTab(state.activeTab, state.adminMobileSection) || "summary";
   const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.summary;
   state.adminMobileSection = sectionKey;
   if (state.activeTab !== "admin") state.adminMobileAnchor = "";
-  if (state.activeTab === "admin" && !state.adminMobileAnchor) state.adminMobileAnchor = section.anchor || "";
+  if (state.activeTab === "admin") state.adminMobileAnchor = panelTarget?.anchor || section.anchor || "";
 
   document.querySelectorAll("[data-admin-mobile-section]").forEach((button) => {
     const key = button.dataset.adminMobileSection || "";
@@ -958,9 +968,9 @@ function setAdminPanelSection(sectionKey = "database", options = {}) {
   if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "database";
   state.adminPanelSection = sectionKey;
   if (isAdminRole() && state.activeTab === "admin") {
-    if (sectionKey === "collect") state.adminMobileSection = "collect";
-    else if (["members", "files"].includes(sectionKey)) state.adminMobileSection = "settings";
-    else state.adminMobileSection = "database";
+    const panelTarget = adminPanelMobileTarget(sectionKey);
+    state.adminMobileSection = panelTarget.section;
+    state.adminMobileAnchor = panelTarget.anchor;
   }
   syncAdminSectionPanels();
   syncAdminMobileNav();
