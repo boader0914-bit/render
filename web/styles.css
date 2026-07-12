@@ -429,6 +429,52 @@ a {
   font-size: 12px;
 }
 
+.b2b-presearch-guide {
+  gap: 14px;
+}
+
+.b2b-presearch-guide .report-card-head {
+  align-items: flex-start;
+}
+
+.b2b-presearch-pill-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.b2b-presearch-pill-grid span {
+  min-width: 0;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #f7fbff;
+  color: #175cd3;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.2;
+  text-align: center;
+  word-break: keep-all;
+}
+
+.b2b-presearch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.b2b-presearch-actions button {
+  width: auto;
+  min-height: 40px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
 .b2b-search-form {
   min-width: 0;
   display: grid;
@@ -494,6 +540,57 @@ a {
 .b2b-usage-panel.exhausted {
   border-color: #fedf89;
   background: #fffbeb;
+}
+
+.b2b-usage-panel.compact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.b2b-usage-panel.compact summary {
+  min-width: 0;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px;
+  list-style: none;
+}
+
+.b2b-usage-panel.compact summary::-webkit-details-marker {
+  display: none;
+}
+
+.b2b-usage-panel.compact summary::after {
+  content: "+";
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  color: #175cd3;
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.b2b-usage-panel.compact[open] summary::after {
+  content: "-";
+}
+
+.b2b-usage-panel.compact summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.b2b-usage-panel.compact .b2b-usage-meter {
+  padding: 0 12px 12px;
 }
 
 .b2b-usage-head {
@@ -23869,7 +23966,8 @@ body.role-b2b .b2b-usage-panel.exhausted {
 
 body.role-b2b .b2b-onboarding-plan,
 body.role-b2b .b2b-onboarding-plan span,
-body.role-b2b .b2b-usage-chips span {
+body.role-b2b .b2b-usage-chips span,
+body.role-b2b .b2b-presearch-pill-grid span {
   border-color: rgba(156, 174, 204, .24);
   background: #121822;
   color: #e7f1ff;
@@ -23887,6 +23985,16 @@ body.role-b2b .b2b-onboarding-plan strong {
 
 body.role-b2b .b2b-onboarding-plan small {
   color: var(--muted);
+}
+
+body.role-b2b .b2b-usage-panel.compact summary span {
+  color: var(--muted);
+}
+
+body.role-b2b .b2b-usage-panel.compact summary::after {
+  border-color: rgba(106, 168, 255, .28);
+  background: rgba(106, 168, 255, .10);
+  color: #dcecff;
 }
 
 body.role-b2b .b2b-account-panel,

@@ -11707,17 +11707,33 @@ function renderB2BPreSearchMyLodge() {
   const brief = b2bMarketBriefModel(emptyData);
   const revenueModel = b2bRevenueBenchmarkModel(brief, emptyData);
   const myLodgeModel = b2bMyLodgeBenchmarkModel(brief, revenueModel);
+  const savedInterestLodgeCount = readB2BInterestLodges().length;
+  const memoryInterestLodgeCount = Array.isArray(state.b2bMyLodgeCards) ? state.b2bMyLodgeCards.length : 0;
+  const interestLodgeCount = savedInterestLodgeCount || memoryInterestLodgeCount || 0;
+  const showLodgeBoard = Boolean(state.b2bMyLodgeExpanded || state.b2bMyLodgeEditing || state.b2bMyLodgeCollecting);
+  const lodgeButtonText = showLodgeBoard ? "관심숙소 접기" : interestLodgeCount ? `관심숙소 ${interestLodgeCount}곳 보기` : "+ 관심숙소 등록";
   return `
-    <section class="b2b-brief-card b2b-report-first">
+    <section class="b2b-brief-card b2b-report-first b2b-presearch-guide">
       <div class="report-card-head">
         <div>
-          <h3>관심숙소 등록</h3>
-          <p>검색 전에도 관심숙소를 먼저 등록할 수 있습니다. 이후 지역을 검색하면 등록한 숙소를 지역 평균·상위권·하위권 매출 표본과 비교합니다.</p>
+          <span class="report-badge good">운영 전략 리포트</span>
+          <h3>지역과 업종을 검색하면 운영 조언을 생성합니다.</h3>
+          <p>네이버 노출, 예약 반응, 가격, 상품 구성, 채널 상태를 묶어 지금 어느 위치에 있고 무엇을 조정해야 하는지 먼저 보여줍니다.</p>
         </div>
-        <span>계정 저장</span>
+        <span>검색 전</span>
       </div>
-      ${renderB2BMyLodgeBenchmark(brief, myLodgeModel, revenueModel)}
+      <div class="b2b-presearch-pill-grid" aria-label="리포트 구성">
+        <span>지역 분석</span>
+        <span>업체 분석</span>
+        <span>수요구조</span>
+        <span>지도</span>
+      </div>
+      <div class="b2b-presearch-actions">
+        <button class="primary-button" type="button" data-b2b-onboarding-focus>검색어 입력하기</button>
+        <button class="secondary-button" type="button" data-b2b-onboarding-lodge>${escapeHtml(lodgeButtonText)}</button>
+      </div>
     </section>
+    ${showLodgeBoard ? renderB2BMyLodgeBenchmark(brief, myLodgeModel, revenueModel) : ""}
   `;
 }
 
@@ -24602,64 +24618,7 @@ function renderB2BSearchHistoryPanel() {
 
 function renderB2BAccountPanel() {
   if (!els.b2bAccountPanel) return;
-  if (isAdminRole()) {
-    els.b2bAccountPanel.innerHTML = "";
-    return;
-  }
-  const session = state.session || {};
-  const profile = session.profile || {};
-  const policy = b2bSearchPolicy();
-  const quota = state.memberSearchQuota || {};
-  const consents = session.consents || {};
-  const accountLabel = b2bPlanLabel(policy, quota.accountType || session.accountType || "member");
-  const username = session.username || "로그인 계정";
-  const company = profile.companyName || profile.lodgingName || "숙소 또는 회사명 미입력";
-  const ownership = profile.ownershipStatusLabel || "보유 여부 미입력";
-  const rangeText = `${b2bDisplayRankRange(policy.allowedRankRange)}위`;
-  const limitText = policy.limited ? `하루 ${fmtNumber(policy.dailyLimit || 2)}회` : "새 검색 제한 없음";
-  const consentVersion = [
-    consents.termsVersion ? `약관 ${consents.termsVersion}` : "",
-    consents.privacyVersion ? `개인정보 ${consents.privacyVersion}` : "",
-    consents.marketingAccepted ? "마케팅 동의" : ""
-  ].filter(Boolean).join(" · ");
-  const consentDate = consents.acceptedAt ? compactDateTime(consents.acceptedAt) : "";
-  const expiresText = session.expiresAt ? `${compactDateTime(session.expiresAt)}까지 유지` : "로그인 세션 유지";
-  els.b2bAccountPanel.innerHTML = `
-    <div class="b2b-account-head">
-      <div>
-        <strong>내 계정 기준</strong>
-        <small>${escapeHtml(`${username} · ${accountLabel}`)}</small>
-      </div>
-      <span>${escapeHtml(policy.expandedAllowed ? "확장 가능" : "기본 이용")}</span>
-    </div>
-    <div class="b2b-account-grid">
-      <article>
-        <span>계정</span>
-        <strong>${escapeHtml(company)}</strong>
-        <small>${escapeHtml(ownership)}</small>
-      </article>
-      <article>
-        <span>이용 기준</span>
-        <strong>${escapeHtml(`${rangeText} · ${limitText}`)}</strong>
-        <small>같은 조건 최근 리포트는 다시 열어도 차감하지 않습니다.</small>
-      </article>
-      <article>
-        <span>보관/동의</span>
-        <strong>고객 DB 기준</strong>
-        <small>${escapeHtml([consentVersion || "공용 계정", consentDate ? `${consentDate} 동의` : ""].filter(Boolean).join(" · "))}</small>
-      </article>
-      <article>
-        <span>보안 상태</span>
-        <strong>${escapeHtml(expiresText)}</strong>
-        <small>비밀번호 해시 저장 · IP/세션 식별값 해시 관리</small>
-      </article>
-    </div>
-    <div class="b2b-account-actions">
-      <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
-      <a href="/privacy" target="_blank" rel="noopener">개인정보 안내</a>
-      <a href="/refund" target="_blank" rel="noopener">요금·환불 정책</a>
-    </div>
-  `;
+  els.b2bAccountPanel.innerHTML = "";
 }
 
 function b2bSearchUsagePanelHtml() {
@@ -24667,111 +24626,38 @@ function b2bSearchUsagePanelHtml() {
   const quota = state.memberSearchQuota || {};
   const policy = b2bSearchPolicy();
   const limited = Boolean(policy.limited);
+  if (!limited) return "";
   const limit = Number(policy.dailyLimit || quota.dailyLimit || 2);
   const used = Math.max(0, Number(quota.usedToday || 0));
-  const remaining = limited ? Math.max(0, Number(quota.remainingToday ?? (limit - used))) : null;
-  const percent = limited ? Math.max(0, Math.min(100, Math.round((used / Math.max(1, limit)) * 100))) : 0;
+  const remaining = Math.max(0, Number(quota.remainingToday ?? (limit - used)));
+  const percent = Math.max(0, Math.min(100, Math.round((used / Math.max(1, limit)) * 100)));
   const resetText = quota.resetAfterSeconds ? `${formatElapsed(quota.resetAfterSeconds)} 후 초기화` : "매일 00시 초기화";
-  const accountLabel = b2bPlanLabel(policy, quota.accountType || state.session?.accountType || "member");
-  const usageTitle = limited
-    ? remaining <= 0
-      ? "오늘 새 리포트 사용 완료"
-      : `오늘 새 리포트 ${fmtNumber(remaining)}회 남음`
-    : "새 리포트 제한 없음";
-  const rangeText = `${policy.expandedAllowed ? "기본·확장 분석" : "기본 분석"} ${b2bDisplayRankRange(policy.allowedRankRange)}위`;
-  const usedText = limited ? `${fmtNumber(used)}/${fmtNumber(limit)}회 사용` : `누적 새 수집 ${fmtNumber(quota.countedTotal || 0)}회`;
-  const guideText = limited && remaining <= 0
+  const usageTitle = remaining <= 0
+    ? "오늘 새 리포트 사용 완료"
+    : `오늘 새 리포트 ${fmtNumber(remaining)}회 남음`;
+  const rangeText = `${b2bDisplayRankRange(policy.allowedRankRange)}위`;
+  const usedText = `${fmtNumber(used)}/${fmtNumber(limit)}회 사용`;
+  const guideText = remaining <= 0
     ? `기존 리포트는 내 검색 기록에서 다시 열 수 있습니다. ${resetText}.`
-    : !policy.expandedAllowed
-      ? "확장 1~20위는 승인 계정에서 사용할 수 있습니다."
-      : "같은 조건 최근 리포트는 다시 열어도 차감되지 않습니다.";
+    : "같은 조건 최근 리포트는 다시 열어도 차감되지 않습니다.";
   return `
-    <div class="b2b-usage-panel ${limited && remaining <= 0 ? "exhausted" : ""}">
-      <div class="b2b-usage-head">
-        <span class="b2b-plan-badge">${escapeHtml(accountLabel)}</span>
+    <details class="b2b-usage-panel compact ${remaining <= 0 ? "exhausted" : ""}">
+      <summary>
         <strong>${escapeHtml(usageTitle)}</strong>
-        <p>${escapeHtml(`${rangeText} · ${usedText}`)}</p>
-        <div class="b2b-usage-chips" aria-label="회원 검색 정책">
-          <span>${escapeHtml(rangeText)}</span>
-          <span>${escapeHtml(limited ? `하루 ${fmtNumber(limit)}회` : "검색 제한 없음")}</span>
-          <span>재조회 차감 없음</span>
-          <span>${escapeHtml(resetText)}</span>
-        </div>
-      </div>
+        <span>${escapeHtml(`${rangeText} · ${usedText}`)}</span>
+      </summary>
       <div class="b2b-usage-meter" aria-label="오늘 새 리포트 사용량">
         <small>${escapeHtml(guideText)}</small>
         <i><b style="width:${percent}%"></b></i>
       </div>
-    </div>
+    </details>
   `;
 }
 
 function renderB2BOnboardingPanel() {
   if (!els.b2bOnboarding) return;
-  const publicMode = !isAdminRole();
-  const hasResult = Boolean(state.data?.run);
-  const shouldShow = publicMode && !hasResult && !state.b2bSearchLoading;
-  els.b2bOnboarding.hidden = !shouldShow;
-  if (!shouldShow) {
-    els.b2bOnboarding.innerHTML = "";
-    return;
-  }
-  const policy = b2bSearchPolicy();
-  const quota = state.memberSearchQuota || {};
-  const accountLabel = b2bPlanLabel(policy, quota.accountType || state.session?.accountType || "member");
-  const rangeText = `${b2bDisplayRankRange(policy.allowedRankRange)}위`;
-  const dailyText = policy.limited ? `하루 ${fmtNumber(policy.dailyLimit || 2)}회` : "새 검색 제한 없음";
-  const approvalText = policy.expandedAllowed
-    ? "확장 1~20위까지 선택할 수 있습니다."
-    : "확장 1~20위는 승인 계정에서 사용할 수 있습니다.";
-  els.b2bOnboarding.innerHTML = `
-    <div class="b2b-onboarding-head">
-      <span>처음 이용하기</span>
-      <strong>내 계정 기준으로 경쟁 리포트를 수집합니다.</strong>
-      <p>검색 전 범위와 일일 수집 가능 횟수를 확인하고, 같은 조건의 최근 리포트는 차감 없이 다시 열 수 있습니다.</p>
-    </div>
-    <div class="b2b-onboarding-plan">
-      <strong>${escapeHtml(accountLabel)}</strong>
-      <span>${escapeHtml(`검색범위 ${rangeText}`)}</span>
-      <span>${escapeHtml(dailyText)}</span>
-      <span>검색 기록 재열람 차감 없음</span>
-      <small>${escapeHtml(approvalText)}</small>
-    </div>
-    <div class="b2b-onboarding-steps" aria-label="이용 순서">
-      <article>
-        <b>1</b>
-        <div>
-          <strong>검색 범위 확인</strong>
-          <span>일반 계정은 기본 1~10위</span>
-        </div>
-      </article>
-      <article>
-        <b>2</b>
-        <div>
-          <strong>지역/업종 검색</strong>
-          <span>예: 포천글램핑, 경주풀빌라</span>
-        </div>
-      </article>
-      <article>
-        <b>3</b>
-        <div>
-          <strong>리포트 재열람</strong>
-          <span>내 검색 기록에서 다시 열기</span>
-        </div>
-      </article>
-      <article>
-        <b>4</b>
-        <div>
-          <strong>관심숙소 비교</strong>
-          <span>최대 2곳을 등록해 시장 평균과 비교</span>
-        </div>
-      </article>
-    </div>
-    <div class="b2b-onboarding-actions">
-      <button class="primary-button" type="button" data-b2b-onboarding-focus>검색어 입력하기</button>
-      <button class="secondary-button" type="button" data-b2b-onboarding-lodge>관심숙소 먼저 등록</button>
-    </div>
-  `;
+  els.b2bOnboarding.hidden = true;
+  els.b2bOnboarding.innerHTML = "";
 }
 
 function renderB2BSearchPanel() {
@@ -24826,10 +24712,10 @@ function renderB2BSearchPanel() {
       : hasResult
         ? "방금 실행한 검색 결과를 표시합니다. 다른 지역은 검색어 입력 후 새로 실행하세요."
         : previewMode
-          ? "관리자 세션을 유지한 화면 확인 모드입니다. 실제 검색은 B2B 계정 로그인 또는 관리자 수집에서 실행합니다."
+          ? "관리자 세션을 유지한 화면 확인 모드입니다. 실제 검색은 B2B 계정으로 실행하세요."
         : !policy.expandedAllowed
-          ? `기본 1~10위 범위로 새 표본을 수집합니다. 확장 1~20위는 승인 계정에서 사용할 수 있습니다.`
-          : "기본 1~10위 또는 확장 1~20위 범위로 새 표본을 수집합니다.";
+          ? "지역 내 경쟁 위치와 운영 조언을 생성합니다."
+          : "검색범위를 선택하면 지역 경쟁 리포트를 새로 생성합니다.";
     els.b2bSearchResults.innerHTML = `
       <div class="b2b-live-search-panel ${escapeHtml(panelClass)}">
         <div>
@@ -24841,7 +24727,7 @@ function renderB2BSearchPanel() {
         <div class="b2b-live-search-meta">
           <em>${escapeHtml(selectedRange === "1-20" ? "확장 분석" : "기본 분석")}</em>
           <em>${escapeHtml(b2bDisplayRankRange(selectedRange))}위</em>
-          ${policy.limited ? `<em>오늘 ${fmtNumber(remaining)}/${fmtNumber(policy.dailyLimit || 2)}회 남음</em>` : `<em>검색 제한 없음</em>`}
+          ${policy.limited ? `<em>오늘 ${fmtNumber(remaining)}/${fmtNumber(policy.dailyLimit || 2)}회 남음</em>` : ""}
           ${state.b2bSearchLoading && preview ? `<em>예상 ${escapeHtml(formatElapsed(preview.estimatedTotalSeconds))}</em>` : ""}
           ${state.b2bSearchLoading && preview ? `<em>완료 ${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</em>` : ""}
         </div>
@@ -24853,7 +24739,7 @@ function renderB2BSearchPanel() {
   if (els.b2bSearchStatus) {
     const current = previewMode
       ? "User View는 화면 확인용입니다. 실제 B2B 검색은 b2b / 0914 계정 또는 회원 계정에서 실행하세요."
-      : state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "지역/키워드를 입력하면 현재 기준으로 새 경쟁 리포트를 수집합니다.";
+      : state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "지역과 업종을 입력하면 운영 전략 리포트를 생성합니다.";
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
     els.b2bSearchStatus.textContent = state.b2bSearchLoading
       ? `${state.b2bSearchQuery || "검색"} 실행 중 · 경과 ${formatElapsed(progressMeta.elapsedSeconds) || "0초"} · ${b2bSearchProgressText(progressMeta)} · 완료 ${formatClockTime(progressMeta.estimatedCompleteAt)}`
@@ -28270,11 +28156,17 @@ function bindEvents() {
     }
     if (event.target.closest("[data-b2b-onboarding-lodge]")) {
       setActiveTab("report");
-      state.b2bMyLodgeExpanded = true;
-      state.b2bMyLodgeEditing = false;
+      const willOpen = !state.b2bMyLodgeExpanded;
+      state.b2bMyLodgeExpanded = willOpen;
+      if (willOpen) state.b2bMyLodgeEditing = false;
+      if (!willOpen && !b2bMyLodgeDraftHasInput(readB2BMyLodgeDraft())) {
+        state.b2bMyLodgeCollectStatus = "";
+        state.b2bMyLodgeCollectResult = null;
+        state.b2bMyLodgeEditing = false;
+      }
       renderReport();
       window.setTimeout(() => {
-        const target = document.querySelector(".b2b-my-lodge-board") || els.reportBody;
+        const target = willOpen ? (document.querySelector(".b2b-my-lodge-board") || els.reportBody) : els.reportBody;
         target?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 80);
       return;

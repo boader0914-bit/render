@@ -12445,8 +12445,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260712-scoped-mobile-admin-menu"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260712-scoped-mobile-admin-menu"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260712-b2b-info-architecture"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260712-b2b-info-architecture"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
