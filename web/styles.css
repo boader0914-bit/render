@@ -30101,11 +30101,19 @@ body.role-admin .admin-db-selected-readonly,
 body.role-admin .admin-db-selected-workbench,
 body.role-admin .admin-db-selected-grid article,
 body.role-admin .admin-db-selected-brief article,
+body.role-admin .validation-card,
+body.role-admin .validation-metric,
+body.role-admin .collection-diagnostic-list div,
 body.role-b2b .b2b-search-panel,
 body.role-b2b .b2b-onboarding,
 body.role-b2b .report-card,
 body.role-b2b .report-score-card,
 body.role-b2b .report-metric-grid article,
+body.role-b2b .validation-card,
+body.role-b2b .validation-metric,
+body.role-b2b .collection-diagnostic-list div,
+body.role-admin .report-channel-grid div,
+body.role-b2b .report-channel-grid div,
 body.role-b2b .b2b-brief-card,
 body.role-b2b .b2b-live-search-panel,
 body.role-b2b .b2b-usage-panel,
@@ -30138,6 +30146,93 @@ body.role-b2b .drawer-panel {
     linear-gradient(180deg, rgba(255, 255, 255, .025), rgba(255, 255, 255, 0)),
     var(--surface);
   box-shadow: 0 12px 26px rgba(0, 0, 0, .22);
+}
+
+body.role-admin .validation-card-collection.good,
+body.role-b2b .validation-card-collection.good,
+body.role-admin .collection-diagnostic-list div.good,
+body.role-b2b .collection-diagnostic-list div.good {
+  border-color: rgba(52, 211, 153, .42);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .13), rgba(52, 211, 153, .04)),
+    var(--surface);
+}
+
+body.role-admin .validation-card-collection.watch,
+body.role-b2b .validation-card-collection.watch,
+body.role-admin .collection-diagnostic-list div.watch,
+body.role-b2b .collection-diagnostic-list div.watch {
+  border-color: rgba(251, 191, 36, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .14), rgba(251, 191, 36, .04)),
+    var(--surface);
+}
+
+body.role-admin .validation-card-collection.bad,
+body.role-b2b .validation-card-collection.bad,
+body.role-admin .collection-diagnostic-list div.bad,
+body.role-b2b .collection-diagnostic-list div.bad {
+  border-color: rgba(251, 113, 133, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .14), rgba(251, 113, 133, .04)),
+    var(--surface);
+}
+
+body.role-admin .validation-card-head h3,
+body.role-admin .validation-card-head .eyebrow,
+body.role-admin .validation-card-head b,
+body.role-admin .validation-card-head span,
+body.role-admin .validation-metric span,
+body.role-admin .validation-metric small,
+body.role-admin .collection-diagnostic-list strong,
+body.role-admin .collection-diagnostic-list small,
+body.role-b2b .validation-card-head h3,
+body.role-b2b .validation-card-head .eyebrow,
+body.role-b2b .validation-card-head b,
+body.role-b2b .validation-card-head span,
+body.role-b2b .validation-metric span,
+body.role-b2b .validation-metric small,
+body.role-b2b .collection-diagnostic-list strong,
+body.role-b2b .collection-diagnostic-list small,
+body.role-admin .report-channel-grid span,
+body.role-admin .report-channel-grid small,
+body.role-b2b .report-channel-grid span,
+body.role-b2b .report-channel-grid small {
+  color: #d8e4f2;
+}
+
+body.role-admin .validation-card-head h3,
+body.role-admin .collection-diagnostic-list strong,
+body.role-b2b .validation-card-head h3,
+body.role-b2b .collection-diagnostic-list strong {
+  color: #f5f9ff;
+}
+
+body.role-admin .validation-card-head .eyebrow,
+body.role-b2b .validation-card-head .eyebrow {
+  color: #9fd0ff;
+}
+
+body.role-admin .validation-metric strong,
+body.role-admin .collection-diagnostic-list b,
+body.role-b2b .validation-metric strong,
+body.role-b2b .collection-diagnostic-list b {
+  color: #78b7ff;
+  text-shadow: 0 0 18px rgba(106, 168, 255, .16);
+}
+
+body.role-admin .report-channel-grid div,
+body.role-b2b .report-channel-grid div {
+  border-color: rgba(156, 174, 204, .24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    #121822;
+}
+
+body.role-admin .report-channel-grid strong,
+body.role-b2b .report-channel-grid strong {
+  color: #78b7ff;
+  text-shadow: 0 0 18px rgba(106, 168, 255, .16);
 }
 
 body.role-b2b .report-hero,
