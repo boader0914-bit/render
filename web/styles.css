@@ -27526,6 +27526,228 @@ body.role-admin #historyOpsDashboard .history-ops-spark span {
   background: linear-gradient(180deg, #79b8ff, #3182f6);
 }
 
+body.role-admin #adminMemberRequestDashboard,
+body.role-admin [data-admin-section-panel="files"] {
+  --admin-settings-card: #151f2e;
+  --admin-settings-card-raised: #1b293d;
+  --admin-settings-line: rgba(139, 160, 190, .28);
+  --admin-settings-line-strong: rgba(121, 184, 255, .46);
+  --admin-settings-title: #f3f8ff;
+  --admin-settings-text: #d6e2f0;
+  --admin-settings-muted: #aebbd0;
+  --admin-settings-blue: #79b8ff;
+  --admin-settings-green: #7ee7b2;
+  --admin-settings-yellow: #fde68a;
+  --admin-settings-red: #fecdd3;
+  color: var(--admin-settings-title);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-console-hero,
+body.role-admin #adminMemberRequestDashboard .admin-member-request-hero,
+body.role-admin [data-admin-section-panel="files"] #trafficAdminCard {
+  border-color: var(--admin-settings-line-strong);
+  background:
+    linear-gradient(135deg, rgba(74, 144, 226, .24), rgba(52, 211, 153, .08)),
+    var(--admin-settings-card-raised);
+  color: var(--admin-settings-title);
+  box-shadow: none;
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-console-panel,
+body.role-admin #adminMemberRequestDashboard .admin-member-summary article,
+body.role-admin #adminMemberRequestDashboard .admin-member-row:not(.head),
+body.role-admin #adminMemberRequestDashboard .admin-member-meta-grid article,
+body.role-admin #adminMemberRequestDashboard .admin-member-search-list span,
+body.role-admin #adminMemberRequestDashboard .admin-member-history-list,
+body.role-admin #adminMemberRequestDashboard .admin-member-history-list span,
+body.role-admin #adminMemberRequestDashboard .admin-delete-summary article,
+body.role-admin #adminMemberRequestDashboard .admin-delete-row,
+body.role-admin #adminMemberRequestDashboard .admin-security-grid article,
+body.role-admin #adminMemberRequestDashboard .admin-security-storage article,
+body.role-admin [data-admin-section-panel="files"] .admin-card,
+body.role-admin [data-admin-section-panel="files"] .advanced-box,
+body.role-admin [data-admin-section-panel="files"] .download-item,
+body.role-admin [data-admin-section-panel="files"] .traffic-verify-result,
+body.role-admin [data-admin-section-panel="files"] .legal-inline-notice,
+body.role-admin [data-admin-section-panel="files"] .link-fallback input {
+  border-color: var(--admin-settings-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    var(--admin-settings-card);
+  color: var(--admin-settings-title);
+  box-shadow: none;
+}
+
+body.role-admin #adminMemberRequestDashboard h3,
+body.role-admin #adminMemberRequestDashboard strong,
+body.role-admin #adminMemberRequestDashboard b,
+body.role-admin #adminMemberRequestDashboard summary,
+body.role-admin [data-admin-section-panel="files"] h3,
+body.role-admin [data-admin-section-panel="files"] strong,
+body.role-admin [data-admin-section-panel="files"] b,
+body.role-admin [data-admin-section-panel="files"] summary,
+body.role-admin [data-admin-section-panel="files"] label,
+body.role-admin [data-admin-section-panel="files"] .field span {
+  color: var(--admin-settings-title);
+}
+
+body.role-admin #adminMemberRequestDashboard p,
+body.role-admin #adminMemberRequestDashboard span,
+body.role-admin #adminMemberRequestDashboard small,
+body.role-admin #adminMemberRequestDashboard em,
+body.role-admin #adminMemberRequestDashboard li,
+body.role-admin [data-admin-section-panel="files"] p,
+body.role-admin [data-admin-section-panel="files"] span,
+body.role-admin [data-admin-section-panel="files"] small,
+body.role-admin [data-admin-section-panel="files"] em,
+body.role-admin [data-admin-section-panel="files"] li {
+  color: var(--admin-settings-muted);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-console-hero p,
+body.role-admin #adminMemberRequestDashboard .admin-console-hero span,
+body.role-admin #adminMemberRequestDashboard .admin-console-hero small,
+body.role-admin #adminMemberRequestDashboard .admin-console-head small,
+body.role-admin #adminMemberRequestDashboard .admin-member-row small,
+body.role-admin #adminMemberRequestDashboard .admin-member-row > span,
+body.role-admin #adminMemberRequestDashboard .admin-member-meta-grid small,
+body.role-admin #adminMemberRequestDashboard .admin-member-search-list em,
+body.role-admin #adminMemberRequestDashboard .admin-member-history-list em,
+body.role-admin #adminMemberRequestDashboard .admin-delete-row small,
+body.role-admin #adminMemberRequestDashboard .admin-security-grid small,
+body.role-admin #adminMemberRequestDashboard .admin-security-storage small,
+body.role-admin [data-admin-section-panel="files"] .card-head span,
+body.role-admin [data-admin-section-panel="files"] .hint,
+body.role-admin [data-admin-section-panel="files"] .legal-inline-notice,
+body.role-admin [data-admin-section-panel="files"] .traffic-verify-result,
+body.role-admin [data-admin-section-panel="files"] .download-item span {
+  color: var(--admin-settings-text);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-console-hero > small {
+  border-color: rgba(121, 184, 255, .34);
+  background: rgba(13, 20, 29, .70);
+  color: var(--admin-settings-text);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-member-summary strong,
+body.role-admin #adminMemberRequestDashboard .admin-member-row > b,
+body.role-admin #adminMemberRequestDashboard .admin-member-controls select,
+body.role-admin #adminMemberRequestDashboard .admin-member-controls button,
+body.role-admin #adminMemberRequestDashboard .admin-delete-summary strong,
+body.role-admin #adminMemberRequestDashboard .admin-delete-row select,
+body.role-admin #adminMemberRequestDashboard .admin-security-panel .admin-console-head > span,
+body.role-admin [data-admin-section-panel="files"] .advanced-box summary,
+body.role-admin [data-admin-section-panel="files"] .admin-files-collapsible summary::after,
+body.role-admin [data-admin-section-panel="files"] .state-badge {
+  border-color: rgba(121, 184, 255, .34);
+  background: rgba(121, 184, 255, .12);
+  color: #dcecff;
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-member-summary strong,
+body.role-admin #adminMemberRequestDashboard .admin-member-row > b {
+  background: transparent;
+  border-color: transparent;
+  color: var(--admin-settings-green);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-delete-summary strong,
+body.role-admin #adminMemberRequestDashboard .admin-security-grid strong,
+body.role-admin #adminMemberRequestDashboard .admin-security-storage strong,
+body.role-admin [data-admin-section-panel="files"] .download-item strong,
+body.role-admin [data-admin-section-panel="files"] .traffic-verify-result strong {
+  color: var(--admin-settings-blue);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-member-row.head {
+  border-color: transparent;
+  background: transparent;
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-member-row.head span {
+  color: var(--admin-settings-text);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-member-row mark {
+  border: 1px solid rgba(121, 184, 255, .28);
+  background: rgba(121, 184, 255, .12);
+  color: #dcecff;
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-member-controls label span,
+body.role-admin #adminMemberRequestDashboard .admin-delete-row span,
+body.role-admin #adminMemberRequestDashboard .admin-security-grid span {
+  color: var(--admin-settings-muted);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-delete-row.verifying,
+body.role-admin #adminMemberRequestDashboard .admin-delete-row.processing,
+body.role-admin #adminMemberRequestDashboard .admin-security-grid article.watch {
+  border-color: rgba(251, 191, 36, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .14), rgba(121, 184, 255, .04)),
+    var(--admin-settings-card);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-delete-row.completed,
+body.role-admin #adminMemberRequestDashboard .admin-security-grid article.ok {
+  border-color: rgba(52, 211, 153, .44);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .14), rgba(121, 184, 255, .04)),
+    var(--admin-settings-card);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-delete-row.rejected {
+  border-color: rgba(251, 113, 133, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .13), rgba(121, 184, 255, .04)),
+    var(--admin-settings-card);
+}
+
+body.role-admin #adminMemberRequestDashboard .admin-member-controls select,
+body.role-admin #adminMemberRequestDashboard .admin-member-controls button,
+body.role-admin #adminMemberRequestDashboard .admin-delete-row select,
+body.role-admin [data-admin-section-panel="files"] input,
+body.role-admin [data-admin-section-panel="files"] textarea,
+body.role-admin [data-admin-section-panel="files"] select {
+  border-color: rgba(139, 160, 190, .32);
+  background: rgba(13, 20, 29, .88);
+  color: #e7f1ff;
+}
+
+body.role-admin #adminMemberRequestDashboard button,
+body.role-admin #adminMemberRequestDashboard a,
+body.role-admin [data-admin-section-panel="files"] button,
+body.role-admin [data-admin-section-panel="files"] a {
+  border-color: rgba(139, 160, 190, .32);
+  background: rgba(13, 20, 29, .88);
+  color: #e7f1ff;
+}
+
+body.role-admin #adminMemberRequestDashboard button:hover,
+body.role-admin #adminMemberRequestDashboard a:hover,
+body.role-admin [data-admin-section-panel="files"] button:hover,
+body.role-admin [data-admin-section-panel="files"] a:hover {
+  border-color: rgba(121, 184, 255, .58);
+  background:
+    linear-gradient(180deg, rgba(74, 144, 226, .82), rgba(30, 58, 95, .88));
+  color: #ffffff;
+}
+
+body.role-admin #adminMemberRequestDashboard a,
+body.role-admin [data-admin-section-panel="files"] a {
+  color: #dcecff;
+}
+
+body.role-admin [data-admin-section-panel="files"] .admin-files-collapsible summary {
+  color: var(--admin-settings-title);
+}
+
+body.role-admin [data-admin-section-panel="files"] .admin-files-collapsible summary::after {
+  box-shadow: none;
+}
+
 @media (min-width: 860px) {
   .app-main {
     display: grid;
