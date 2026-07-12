@@ -4033,6 +4033,122 @@ a {
   background: #ffffff;
 }
 
+.admin-db-selected-decision {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d5e3f7;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fbfdff, #ffffff);
+  padding: 12px;
+}
+
+.admin-db-selected-decision-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-selected-decision-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-selected-decision-head span,
+.admin-db-selected-decision-head small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-selected-decision-head strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-selected-decision-head mark {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue-dark);
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-selected-task-rail {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-db-selected-task-rail article {
+  min-width: 0;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+  padding: 10px;
+}
+
+.admin-db-selected-task-rail span,
+.admin-db-selected-task-rail small {
+  display: -webkit-box;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.admin-db-selected-task-rail strong {
+  display: block;
+  margin: 3px 0;
+  color: var(--blue);
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-selected-task-rail article.good {
+  border-color: #b8d9d3;
+  background: #f6fbfa;
+}
+
+.admin-db-selected-task-rail article.watch {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.admin-db-selected-task-rail article.hot {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.admin-db-selected-task-rail article.good strong {
+  color: #0f766e;
+}
+
+.admin-db-selected-task-rail article.watch strong {
+  color: #b54708;
+}
+
+.admin-db-selected-task-rail article.hot strong {
+  color: #b42318;
+}
+
 .admin-db-selected-readonly {
   background: linear-gradient(180deg, #fbfdff, #ffffff);
 }
@@ -4144,6 +4260,19 @@ a {
 .admin-db-selected-fold .admin-db-selected-grid {
   border-top: 1px solid #edf2f7;
   padding: 10px;
+}
+
+.admin-db-selected-fold-body {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #edf2f7;
+  padding: 10px;
+}
+
+.admin-db-selected-fold-body > .admin-db-selected-grid {
+  border-top: 0;
+  padding: 0;
 }
 
 .admin-db-selected-grid article {
@@ -4270,6 +4399,14 @@ a {
   padding-top: 10px;
 }
 
+.admin-db-selected-actions.primary {
+  justify-content: flex-start;
+  border: 1px solid #d5e3f7;
+  border-radius: 14px;
+  background: #fbfdff;
+  padding: 8px;
+}
+
 .admin-db-selected-actions button {
   min-height: 36px;
   border: 1px solid #a7d8d1;
@@ -4280,6 +4417,18 @@ a {
   font-size: 12px;
   font-weight: 950;
   white-space: nowrap;
+}
+
+.admin-db-selected-actions.primary button:first-child {
+  border-color: #2f80ed;
+  background: #2f80ed;
+  color: #fff;
+}
+
+.admin-db-selected-workbench-stack {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
 }
 
 .admin-db-quick-edit {
@@ -25784,9 +25933,11 @@ body.role-admin .admin-db-work-panel strong,
 body.role-admin .admin-db-collect-panel strong,
 body.role-admin .admin-db-user-view-bridge strong,
 body.role-admin .admin-db-selected-head strong,
+body.role-admin .admin-db-selected-decision-head strong,
 body.role-admin .admin-db-selected-section-head strong,
 body.role-admin .admin-db-selected-grid strong,
 body.role-admin .admin-db-selected-brief strong,
+body.role-admin .admin-db-selected-task-rail strong,
 body.role-admin .admin-db-selected-fold summary strong,
 body.role-admin .admin-db-correction-impact-head strong,
 body.role-admin .admin-db-correction-scope strong,
@@ -25860,12 +26011,16 @@ body.role-admin .admin-db-user-view-bridge span,
 body.role-admin .admin-db-user-view-bridge small,
 body.role-admin .admin-db-selected-head span,
 body.role-admin .admin-db-selected-head small,
+body.role-admin .admin-db-selected-decision-head span,
+body.role-admin .admin-db-selected-decision-head small,
 body.role-admin .admin-db-selected-section-head span,
 body.role-admin .admin-db-selected-section-head small,
 body.role-admin .admin-db-selected-grid span,
 body.role-admin .admin-db-selected-grid small,
 body.role-admin .admin-db-selected-brief span,
 body.role-admin .admin-db-selected-brief small,
+body.role-admin .admin-db-selected-task-rail span,
+body.role-admin .admin-db-selected-task-rail small,
 body.role-admin .admin-db-selected-fold summary span,
 body.role-admin .admin-db-selected-fold summary small,
 body.role-admin .admin-db-correction-impact-head span,
@@ -25945,13 +26100,17 @@ body.role-admin .admin-db-confirm-plan,
 body.role-admin .admin-db-confirm-grid article,
 body.role-admin .admin-db-selected-panel,
 body.role-admin .admin-db-selected-overview,
+body.role-admin .admin-db-selected-decision,
 body.role-admin .admin-db-selected-readonly,
 body.role-admin .admin-db-selected-workbench,
+body.role-admin .admin-db-selected-actions.primary,
 body.role-admin .admin-db-selected-edit-column,
 body.role-admin .admin-db-selected-process-column,
 body.role-admin .admin-db-selected-grid article,
 body.role-admin .admin-db-selected-brief article,
+body.role-admin .admin-db-selected-task-rail article,
 body.role-admin .admin-db-selected-fold,
+body.role-admin .admin-db-selected-fold-body,
 body.role-admin .admin-db-selected-review,
 body.role-admin .admin-db-selected-correction,
 body.role-admin .admin-db-quick-edit,
@@ -26231,6 +26390,7 @@ body.role-admin .admin-db-hero span,
 body.role-admin .admin-db-quality-head mark,
 body.role-admin .admin-db-audit-head mark,
 body.role-admin .admin-db-selected-head mark,
+body.role-admin .admin-db-selected-decision-head mark,
 body.role-admin .admin-db-correction-impact-head mark,
 body.role-admin .admin-db-master-guide mark {
   border-color: rgba(106, 168, 255, .28);
@@ -26244,6 +26404,7 @@ body.role-admin .admin-db-company.good,
 body.role-admin .admin-db-selected-panel.good,
 body.role-admin .admin-db-selected-grid article.good,
 body.role-admin .admin-db-selected-brief article.good,
+body.role-admin .admin-db-selected-task-rail article.good,
 body.role-admin .admin-db-correction-scope article.good,
 body.role-admin .admin-db-quality-cards button.good,
 body.role-admin .admin-db-audit-list article.good,
@@ -26261,6 +26422,7 @@ body.role-admin .admin-db-company.watch,
 body.role-admin .admin-db-selected-panel.watch,
 body.role-admin .admin-db-selected-grid article.watch,
 body.role-admin .admin-db-selected-brief article.watch,
+body.role-admin .admin-db-selected-task-rail article.watch,
 body.role-admin .admin-db-correction-scope article.watch,
 body.role-admin .admin-db-quality-cards button.watch,
 body.role-admin .admin-db-audit-list article.watch,
@@ -26282,6 +26444,7 @@ body.role-admin .admin-db-company.hot,
 body.role-admin .admin-db-selected-panel.hot,
 body.role-admin .admin-db-selected-grid article.hot,
 body.role-admin .admin-db-selected-brief article.hot,
+body.role-admin .admin-db-selected-task-rail article.hot,
 body.role-admin .admin-db-correction-scope article.hot,
 body.role-admin .admin-db-quality-cards button.hot,
 body.role-admin .admin-db-audit-list article.hot,
@@ -26296,6 +26459,7 @@ body.role-admin .company-review-badge.exclude {
 body.role-admin .admin-db-metrics article.good strong,
 body.role-admin .admin-db-selected-grid article.good strong,
 body.role-admin .admin-db-selected-brief article.good strong,
+body.role-admin .admin-db-selected-task-rail article.good strong,
 body.role-admin .admin-db-correction-scope article.good strong {
   color: #bbf7d0;
 }
@@ -26303,6 +26467,7 @@ body.role-admin .admin-db-correction-scope article.good strong {
 body.role-admin .admin-db-metrics article.watch strong,
 body.role-admin .admin-db-selected-grid article.watch strong,
 body.role-admin .admin-db-selected-brief article.watch strong,
+body.role-admin .admin-db-selected-task-rail article.watch strong,
 body.role-admin .admin-db-correction-scope article.watch strong {
   color: #fde68a;
 }
@@ -26310,6 +26475,7 @@ body.role-admin .admin-db-correction-scope article.watch strong {
 body.role-admin .admin-db-metrics article.hot strong,
 body.role-admin .admin-db-selected-grid article.hot strong,
 body.role-admin .admin-db-selected-brief article.hot strong,
+body.role-admin .admin-db-selected-task-rail article.hot strong,
 body.role-admin .admin-db-correction-scope article.hot strong {
   color: #fecdd3;
 }
@@ -26317,9 +26483,11 @@ body.role-admin .admin-db-correction-scope article.hot strong {
 body.role-admin .admin-db-board,
 body.role-admin .admin-console-dashboard,
 body.role-admin .admin-db-selected-overview,
+body.role-admin .admin-db-selected-decision,
 body.role-admin .admin-db-selected-readonly,
 body.role-admin .admin-db-selected-workbench,
 body.role-admin .admin-db-selected-workbench-grid,
+body.role-admin .admin-db-selected-workbench-stack,
 body.role-admin .admin-db-selected-layout {
   color: var(--ink);
 }
@@ -26392,6 +26560,7 @@ body.role-admin .empty {
   .admin-db-recheck-summary,
   .admin-db-recheck-grid,
   .admin-db-selected-grid,
+  .admin-db-selected-task-rail,
   .admin-db-quick-edit-summary,
   .admin-db-correction-scope,
   .admin-db-correction-flow,
@@ -28429,11 +28598,29 @@ body.role-admin .empty {
 
   body.role-admin .admin-db-selected-brief,
   body.role-admin .admin-db-selected-grid,
+  body.role-admin .admin-db-selected-task-rail,
   body.role-admin .admin-db-selected-workbench-grid {
     grid-template-columns: 1fr;
   }
 
+  body.role-admin .admin-db-selected-decision-head {
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-db-selected-decision-head mark {
+    align-self: flex-start;
+  }
+
+  body.role-admin .admin-db-selected-task-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-selected-task-rail article:first-child {
+    grid-column: 1 / -1;
+  }
+
   body.role-admin .admin-db-selected-overview,
+  body.role-admin .admin-db-selected-decision,
   body.role-admin .admin-db-selected-readonly,
   body.role-admin .admin-db-selected-workbench {
     padding: 10px;

@@ -17882,6 +17882,95 @@ function adminDbInternalJudgmentCards(row = {}) {
   ];
 }
 
+function adminDbSelectedDecisionCards(row = {}, requiredChannels = []) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+  const correction = manualCorrectionHasValue(company.manualCorrection);
+  const review = metrics.adminReview || company.adminReview || {};
+  const b2bBasis = [
+    metrics.rank ? `노출 ${fmtNumber(metrics.rank)}위` : "노출 대기",
+    Number.isFinite(metrics.rate) ? `예약율 ${fmtRate(metrics.rate)}` : "예약율 확인",
+    metrics.revenue ? `매출 ${fmtWon(metrics.revenue)}` : "매출 대기"
+  ].join(" · ");
+  return [
+    {
+      label: "1. 현재 판단",
+      value: workType.label || "확인 필요",
+      note: adminDbWorkReason(row),
+      tone: workType.tone || "watch"
+    },
+    {
+      label: "2. B2B 기준",
+      value: metrics.revenue || Number.isFinite(metrics.rate) ? "확인 가능" : "근거 보강",
+      note: b2bBasis,
+      tone: metrics.revenue && Number.isFinite(metrics.rate) ? "good" : "watch"
+    },
+    {
+      label: "3. 마스터 보정",
+      value: correction ? "적용됨" : (metrics.lowConfidence ? "필요" : "대기"),
+      note: correction ? "보정값이 전체 DB 우선값" : (metrics.lowConfidence ? "객실 총량·상품 구조 확인" : "자동수집값 기준"),
+      tone: correction ? "good" : (metrics.lowConfidence ? "hot" : "neutral")
+    },
+    {
+      label: "4. 확인 수집",
+      value: requiredChannels.length ? `${fmtNumber(requiredChannels.length)}개 채널` : "추가 없음",
+      note: requiredChannels.join(" · ") || "현재 표본 유지",
+      tone: requiredChannels.length ? "watch" : "good"
+    },
+    {
+      label: "5. 판단 저장",
+      value: review.label || companyAdminReviewLabel(review.status) || "미검수",
+      note: review.note || companyReviewContextText(review.context || {}) || "확인/보정/보류 중 하나로 확정",
+      tone: review.status ? "good" : "watch"
+    }
+  ];
+}
+
+function adminDbSelectedDecisionPanel(row = {}, issues = [], requiredChannels = []) {
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+  const issueItems = (issues.length ? issues : [adminDbWorkReason(row)]).filter(Boolean).slice(0, 3);
+  return `
+    <section class="admin-db-selected-decision ${escapeHtml(workType.tone || "watch")}" aria-label="상세 작업 요약">
+      <div class="admin-db-selected-decision-head">
+        <div>
+          <span>작업 순서</span>
+          <strong>지표 확인 → 보정 → 확인 수집 → 판단 저장</strong>
+          <small>기본 화면은 필요한 판단만 먼저 보여주고, 세부 수정은 아래에서 펼쳐 처리합니다.</small>
+        </div>
+        <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
+      </div>
+      <div class="admin-db-selected-task-rail">
+        ${adminDbSelectedDecisionCards(row, requiredChannels).map(adminDbSelectedMetricCard).join("")}
+      </div>
+      ${issueItems.length ? `
+        <div class="admin-db-selected-issues compact">
+          ${issueItems.map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function adminDbSelectedFoldBlock({ label = "", title = "", note = "", body = "", open = false, tone = "" } = {}) {
+  if (!body) return "";
+  return `
+    <details class="admin-db-selected-fold ${escapeHtml(tone || "")}" ${open ? "open" : ""}>
+      <summary>
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(title)}</strong>
+        </div>
+        <small>${escapeHtml(note)}</small>
+      </summary>
+      <div class="admin-db-selected-fold-body">
+        ${body}
+      </div>
+    </details>
+  `;
+}
+
 function adminDbSelectedMetricCard(card = {}) {
   return `
     <article class="${escapeHtml(card.tone || "neutral")}">
@@ -18408,12 +18497,22 @@ function adminDbSelectedDetailPanel(rows = []) {
   const b2bCards = adminDbB2BMetricCards(row);
   const internalCards = adminDbInternalJudgmentCards(row);
   const requiredChannels = adminDbRequiredCheckChannels(row);
-  const briefCards = [
-    ["현재 상태", workType.label || "확인 필요", adminDbWorkReason(row), workType.tone || "watch"],
-    ["수량 신뢰도", metrics.confidenceGrade || "대기", metrics.manualCorrection ? "관리자 보정값 우선" : (metrics.lowConfidence ? "총량·상품 구조 확인" : "자동수집 기준"), metrics.confidenceTone || "watch"],
-    ["확인 채널", requiredChannels.length ? `${fmtNumber(requiredChannels.length)}개` : "추가 없음", requiredChannels.join(" · ") || "현재 표본 유지", requiredChannels.length ? "watch" : "good"]
-  ];
   const selectedId = company.companyId || "";
+  const correctionBody = adminDbQuickCorrectionPanel(row);
+  const channelBody = adminDbChannelExposurePanel(row);
+  const collectBody = [
+    adminDbConfirmCollectPlanHtml(row),
+    adminDbRecheckOutcomeHtml(row)
+  ].filter(Boolean).join("");
+  const reviewBody = `
+    <div class="admin-db-selected-review">
+      <div>
+        <strong>관리자 판단</strong>
+        <small>검수 상태와 메모는 전체 DB와 판단 큐에 함께 반영됩니다.</small>
+      </div>
+      ${companyReviewActionsHtml(company, true, "admin_db_detail")}
+    </div>
+  `;
   state.adminDbSelectedCompanyId = selectedId;
   return `
     <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}">
@@ -18425,65 +18524,60 @@ function adminDbSelectedDetailPanel(rows = []) {
         </div>
         <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
       </div>
-      <section class="admin-db-selected-overview" aria-label="업체 상태 요약">
-        <div class="admin-db-selected-brief">
-          ${briefCards.map(([label, value, note, tone]) => adminDbSelectedMetricCard({ label, value, note, tone })).join("")}
-        </div>
-        <div class="admin-db-selected-issues">
-          ${issues.slice(0, 4).map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
-        </div>
-      </section>
+      ${adminDbSelectedDecisionPanel(row, issues, requiredChannels)}
       <section class="admin-db-selected-readonly" aria-label="읽기 전용 지표">
-        ${adminDbSelectedSectionHead("읽기 전용 지표", "B2B 화면 기준 지표와 관리자 내부 판단을 분리해 봅니다", "아래 값은 비교·판단 기준입니다. 실제 보정은 수정·처리 영역에서 진행합니다.")}
-        <details class="admin-db-selected-fold" open>
-          <summary>
-            <div>
-              <span>B2B 지표 보기</span>
-              <strong>노출·예약율·예상매출·상품·채널</strong>
-            </div>
-            <small>사업자 화면과 같은 기준</small>
-          </summary>
-          <div class="admin-db-selected-grid">
-            ${b2bCards.map(adminDbSelectedMetricCard).join("")}
-          </div>
-        </details>
-        <details class="admin-db-selected-fold">
-          <summary>
-            <div>
-              <span>관리자 내부 판단</span>
-              <strong>신뢰도·보정·확인 채널·처리 상태</strong>
-            </div>
-            <small>운영자 전용 기준</small>
-          </summary>
-          <div class="admin-db-selected-grid internal">
-            ${internalCards.map(adminDbSelectedMetricCard).join("")}
-          </div>
-        </details>
+        ${adminDbSelectedSectionHead("지표 확인", "B2B 보기와 내부 판단을 필요할 때 펼쳐 확인합니다", "기본 화면에는 작업 판단만 두고, 비교 지표는 접힘 카드로 분리했습니다.")}
+        ${adminDbSelectedFoldBlock({
+          label: "B2B 기준",
+          title: "노출·예약율·예상매출·상품·채널",
+          note: "사업자 화면 기준",
+          body: `<div class="admin-db-selected-grid">${b2bCards.map(adminDbSelectedMetricCard).join("")}</div>`
+        })}
+        ${adminDbSelectedFoldBlock({
+          label: "내부 판단",
+          title: "신뢰도·보정·확인 채널·처리 상태",
+          note: "관리자 전용 기준",
+          body: `<div class="admin-db-selected-grid internal">${internalCards.map(adminDbSelectedMetricCard).join("")}</div>`
+        })}
       </section>
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
-        ${adminDbSelectedSectionHead("수정·처리", "보정값 저장, 확인 수집, 관리자 판단을 이 영역에서 처리합니다", "저장된 보정값은 전체 DB와 B2B 비교 기준에 우선 적용됩니다.")}
-        <div class="admin-db-selected-workbench-grid">
-          <div class="admin-db-selected-edit-column">
-            ${adminDbQuickCorrectionPanel(row)}
-          </div>
-          <div class="admin-db-selected-process-column">
-            ${adminDbChannelExposurePanel(row)}
-            ${adminDbConfirmCollectPlanHtml(row)}
-            ${adminDbRecheckOutcomeHtml(row)}
-            <div class="admin-db-selected-review">
-              <div>
-                <strong>관리자 판단</strong>
-                <small>검수 상태와 메모는 전체 DB와 판단 큐에 함께 반영됩니다.</small>
-              </div>
-              ${companyReviewActionsHtml(company, true, "admin_db_detail")}
-            </div>
-          </div>
-        </div>
-        <div class="admin-db-selected-actions">
+        ${adminDbSelectedSectionHead("수정·처리", "필요한 작업만 펼쳐 실행합니다", "보정값은 전체 DB와 B2B 비교 기준에 우선 적용됩니다.")}
+        <div class="admin-db-selected-actions primary">
           <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
           <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
           <button type="button" data-admin-db-view-link="list">목록으로 돌아가기</button>
           <button type="button" data-admin-db-view-link="region">지역 구조 보기</button>
+        </div>
+        <div class="admin-db-selected-workbench-stack">
+          ${adminDbSelectedFoldBlock({
+            label: "1. 관리자 판단",
+            title: "검수 상태와 메모 저장",
+            note: "기본으로 열림",
+            body: reviewBody,
+            open: true,
+            tone: "review"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "2. 마스터 보정",
+            title: "지역·채널·쿠폰·수량/가격 수정",
+            note: "필요할 때 열기",
+            body: correctionBody,
+            tone: "edit"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "3. 채널 확인",
+            title: "네이버·OTA 노출과 URL 저장",
+            note: "채널별 확인",
+            body: channelBody,
+            tone: "channel"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "4. 확인 수집",
+            title: "재수집 조건과 이전/최신 비교",
+            note: collectBody ? "필요 시 실행" : "현재 추가 없음",
+            body: collectBody,
+            tone: "collect"
+          })}
         </div>
       </section>
     </section>
