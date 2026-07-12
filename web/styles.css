@@ -4539,6 +4539,65 @@ a {
   font-style: normal;
 }
 
+.admin-db-correction-next {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(15, 118, 110, .20);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .62);
+  padding: 9px;
+}
+
+.admin-db-correction-next > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-db-correction-next span,
+.admin-db-correction-next small {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-correction-next strong {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-correction-next-actions {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.admin-db-correction-next-actions button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid rgba(15, 118, 110, .24);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .82);
+  color: inherit;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 950;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.admin-db-correction-next-actions button.active,
+.admin-db-correction-next-actions button:hover {
+  border-color: rgba(15, 118, 110, .56);
+  background: #ffffff;
+}
+
 .admin-db-quick-edit-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -15647,6 +15706,10 @@ a.platform-row:hover {
     width: 100%;
     min-width: 0;
   }
+
+  .admin-db-correction-next-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .company-manual-actions {
@@ -26606,6 +26669,26 @@ body.role-admin .company-manual-feedback-card.error {
 body.role-admin .admin-db-correction-flash li,
 body.role-admin .company-manual-feedback-card li {
   background: rgba(255, 255, 255, .05);
+}
+
+body.role-admin .admin-db-correction-next {
+  border-color: rgba(52, 211, 153, .22);
+  background: rgba(255, 255, 255, .045);
+}
+
+body.role-admin .admin-db-correction-next-actions button {
+  border-color: rgba(139, 160, 190, .28);
+  background: rgba(13, 20, 29, .86);
+  color: #d8e7fb;
+}
+
+body.role-admin .admin-db-correction-next-actions button.active,
+body.role-admin .admin-db-correction-next-actions button:hover {
+  border-color: rgba(52, 211, 153, .48);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .15), rgba(121, 184, 255, .07)),
+    #111923;
+  color: #ffffff;
 }
 
 body.role-admin .company-manual-check span {

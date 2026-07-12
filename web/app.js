@@ -16059,6 +16059,7 @@ function adminDbCorrectionFlashHtml(companyId = "") {
   const flash = state.adminDbCorrectionFlash || null;
   if (!flash || !companyId || flash.companyId !== companyId) return "";
   const at = flash.at ? compactDateTime(flash.at) : "";
+  const company = (companyMasterSource().companies || []).find((row) => row.companyId === companyId) || {};
   return `
     <aside class="admin-db-correction-flash ${escapeHtml(flash.tone || "success")}" aria-live="polite">
       <div>
@@ -16069,8 +16070,41 @@ function adminDbCorrectionFlashHtml(companyId = "") {
       <ul>
         ${(flash.items || ["전체 DB 갱신", "판단 큐 기준 갱신", "B2B 비교 지표 반영"]).slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
+      ${flash.tone === "success" ? adminDbCorrectionNextActionsHtml(company, "admin_correction_feedback") : ""}
       ${at ? `<em>${escapeHtml(at)}</em>` : ""}
     </aside>
+  `;
+}
+
+function adminDbCorrectionNextActionsHtml(company = {}, source = "admin_correction") {
+  const companyId = company.companyId || "";
+  if (!companyId) return "";
+  const current = company.adminReview?.status || "";
+  const currentText = current ? `${companyAdminReviewLabel(current)} 저장됨` : "판단 대기";
+  const actions = [
+    ["confirmed", "검수 완료", "보정값 확인 완료"],
+    ["check_needed", "추가 확인", "보정값 적용 후 추가 확인 필요"],
+    ["recrawl_needed", "확인 수집", "보정값 적용 후 확인 수집 필요"],
+    ["contact_ready", "컨택 가능", "보정값 기준 컨택 가능"]
+  ];
+  return `
+    <div class="admin-db-correction-next" data-admin-db-correction-next>
+      <div>
+        <span>다음 처리</span>
+        <strong>보정 후 관리자 판단을 바로 저장합니다</strong>
+        <small>${escapeHtml(currentText)} · 버튼을 누르면 판단 큐와 전체 DB에 함께 반영됩니다.</small>
+      </div>
+      <div class="admin-db-correction-next-actions">
+        ${actions.map(([status, label, note]) => `
+          <button type="button"
+            class="${current === status ? "active" : ""}"
+            data-company-review-action="${escapeHtml(status)}"
+            data-company-id="${escapeHtml(companyId)}"
+            data-company-review-source="${escapeHtml(source)}"
+            data-company-review-note="${escapeHtml(note)}">${escapeHtml(label)}</button>
+        `).join("")}
+      </div>
+    </div>
   `;
 }
 
@@ -16220,6 +16254,7 @@ function adminDbCorrectionImpactHtml(row = {}) {
           </article>
         `).join("")}
       </div>
+      ${applied ? adminDbCorrectionNextActionsHtml(company, "admin_correction_impact") : ""}
     </section>
   `;
 }
