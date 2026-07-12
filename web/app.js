@@ -17325,20 +17325,20 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
   const guide = {
     region: {
       label: "지역 구조",
-      title: "광역 카드에서 시군구로 내려가며 DB를 정리합니다",
-      copy: "광역을 선택하면 시군구 카드가 열리고, 시군구를 선택하면 업체 리스트로 이동합니다.",
+      title: "광역과 시군구를 먼저 고릅니다",
+      copy: "업체 목록은 별도 리스트 화면에서 페이지 단위로 확인합니다.",
       metric: `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`
     },
     list: {
       label: "업체 찾기",
-      title: "필터와 검색으로 업체를 바로 찾고 수정합니다",
-      copy: "업체 가나다순을 기본으로 보고, 노출순·매출순·객실수·시설·OTA 조건으로 좁힙니다. 목록은 페이지 단위로만 표시합니다.",
+      title: "검색과 필터로 업체를 찾습니다",
+      copy: "가나다순을 기본으로 보고, 노출순·매출순·객실수·시설·OTA 조건으로 좁힙니다.",
       metric: `${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개`
     },
     review: {
       label: "상세 검수",
-      title: "B2B 지표와 관리자 판단을 한 업체 단위로 확인합니다",
-      copy: "상세 수정, 확인 수집, 관리자 판단 상태를 한 화면에서 처리합니다.",
+      title: "한 업체씩 수정하고 판단합니다",
+      copy: "B2B 기준 지표, 관리자 보정, 확인 수집, 검수 상태를 처리합니다.",
       metric: state.adminDbSelectedCompanyId ? "선택 업체 검수" : "우선 검수 업체"
     }
   }[mode] || {};
@@ -17375,15 +17375,15 @@ function adminDbRegionStructurePanel(grouped = [], allGrouped = [], filters = {}
   return `
     <section class="admin-db-region-empty-panel">
       <div>
-        <span>지역 구조 기준</span>
-        <strong>${escapeHtml(selectedRegion ? `${selectedRegion.label} 업체 리스트로 이동할 수 있습니다` : selectedProvince ? `${selectedProvince.label} 시군구를 선택하세요` : "광역 카드를 먼저 선택하세요")}</strong>
-        <small>${escapeHtml("전체 DB는 광역 → 시군구 → 업체 리스트 → 상세 수정 순서로 관리합니다. 업체 목록은 리스트 화면에서 페이지 단위로 봅니다.")}</small>
+        <span>다음 단계</span>
+        <strong>${escapeHtml(selectedRegion ? `${selectedRegion.label} 업체 리스트 확인` : selectedProvince ? `${selectedProvince.label} 시군구 선택` : "광역을 선택하세요")}</strong>
+        <small>${escapeHtml(`${listScope} · ${fmtNumber(filteredRows.length)}개 업체 조건`)}</small>
       </div>
       <div class="admin-db-region-next-grid">
         <article>
-          <span>현재 범위</span>
-          <strong>${escapeHtml(listScope)}</strong>
-          <small>${fmtNumber(filteredRows.length)}개 업체 표시 조건</small>
+          <span>업체</span>
+          <strong>${fmtNumber(filteredRows.length)}곳</strong>
+          <small>현재 조건</small>
         </article>
         <article>
           <span>낮은 신뢰도</span>
@@ -17405,6 +17405,16 @@ function adminDbRegionStructurePanel(grouped = [], allGrouped = [], filters = {}
         <button type="button" data-admin-db-view-link="list">업체 리스트로 보기</button>
         <button type="button" data-admin-db-view-link="review">상세·수정 열기</button>
       </div>
+    </section>
+  `;
+}
+
+function adminDbRegionWorkspaceHtml(grouped = [], allGrouped = [], filters = {}, rows = [], filteredRows = []) {
+  return `
+    <section class="admin-db-region-workspace" aria-label="지역 구조 내부 화면">
+      ${adminDbProvinceQuickBoard(allGrouped, filters)}
+      ${adminDbRegionQuickBoard(grouped, filters)}
+      ${adminDbRegionStructurePanel(grouped, allGrouped, filters, rows, filteredRows)}
     </section>
   `;
 }
@@ -19059,7 +19069,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     ? `<section class="admin-db-review-surface">${reviewPanelsHtml}</section>`
     : viewMode === "list"
       ? adminDbFlatListPanel(filteredRows, rows, filters)
-      : adminDbRegionStructurePanel(grouped, allGrouped, filters, rows, filteredRows);
+      : adminDbRegionWorkspaceHtml(grouped, allGrouped, filters, rows, filteredRows);
   const advancedFilterOpen = Boolean(
     filters.category !== "all"
     || filters.status !== "all"
@@ -19174,16 +19184,14 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       <div class="admin-db-hero">
         <div>
           <span>전체 DB</span>
-          <h3>광역에서 업체 상세 수정까지 한 흐름으로 봅니다.</h3>
-          <p>광역 → 시군구 → 업체 리스트 → 상세 수정 순서로 이동하고, 업체 목록은 페이지 단위로 확인합니다.</p>
+          <h3>지역·업체 DB</h3>
+          <p>지역 구조, 업체 리스트, 상세 수정을 나눠서 관리합니다.</p>
         </div>
         <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
       </div>
-      ${adminDbFlowRailHtml(viewMode, filteredRows, rows, grouped, filters)}
+      ${adminDbViewSwitchHtml(viewMode, filteredRows, rows, grouped)}
       ${adminDbPageGuideHtml(viewMode, filteredRows, rows, grouped, filters)}
       ${viewMode === "region" ? `
-        ${adminDbProvinceQuickBoard(allGrouped, filters)}
-        ${adminDbRegionQuickBoard(grouped, filters)}
         <details class="admin-db-search-drawer">
           <summary>
             <div>

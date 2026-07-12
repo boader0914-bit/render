@@ -2253,6 +2253,8 @@ a {
 .admin-db-region-empty-panel {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.2fr) auto;
+  align-items: center;
   gap: 12px;
   border: 1px solid #dbe7f3;
   border-radius: 16px;
@@ -2285,30 +2287,31 @@ a {
 }
 
 .admin-db-region-next-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .admin-db-region-next-grid article {
   min-width: 0;
   border: 1px solid #e3ebf6;
-  border-radius: 14px;
+  border-radius: 999px;
   background: #fff;
-  padding: 11px;
+  padding: 8px 10px;
 }
 
 .admin-db-region-next-grid article strong {
-  display: block;
-  margin: 5px 0 3px;
+  display: inline;
+  margin: 0 4px 0 0;
   color: var(--blue);
-  font-size: 20px;
+  font-size: 14px;
   font-weight: 950;
 }
 
 .admin-db-region-empty-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -3194,6 +3197,12 @@ a {
 
 .admin-db-flat-list,
 .admin-db-review-surface {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.admin-db-region-workspace {
   min-width: 0;
   display: grid;
   gap: 10px;
@@ -28905,7 +28914,13 @@ body.role-admin .empty {
   }
 
   body.role-admin .admin-db-region-next-grid {
+    display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-region-empty-panel {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   body.role-admin .admin-db-region-empty-actions {
