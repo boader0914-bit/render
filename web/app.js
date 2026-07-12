@@ -57,6 +57,7 @@ const state = {
   adminDbSelectedCompanyId: "",
   adminDbOpsOpen: false,
   adminDbCorrectionFlash: null,
+  adminDbReviewFlash: null,
   adminDbAuditRegionKey: "",
   adminUserViewMode: false,
   crawlEtaByKey: {},
@@ -14398,6 +14399,100 @@ function companyAdminReviewBadgeHtml(company = {}) {
   return `<span class="company-review-badge ${escapeHtml(status)}">${escapeHtml(label)}</span>`;
 }
 
+function companyAdminReviewFeedbackMeta(status = "") {
+  if (status === "clear") {
+    return {
+      title: "판단 해제 완료",
+      message: "관리자 판단을 대기 상태로 되돌렸습니다.",
+      next: "필요하면 확인, 재수집, 보정 상태를 다시 지정하세요.",
+      items: ["전체 DB 상태 해제", "판단 큐 재분류", "상세 화면 갱신"],
+      tone: "neutral"
+    };
+  }
+  const label = companyAdminReviewLabel(status);
+  const outcome = companyAdminReviewOutcome(status);
+  const fallback = {
+    title: "판단 저장 완료",
+    message: `${label} 상태로 저장했습니다.`,
+    next: outcome.detail || "저장 결과를 확인한 뒤 다음 처리를 진행하세요.",
+    items: ["전체 DB 검수 상태 갱신", "판단 큐 재분류", "상세 화면 갱신"],
+    tone: outcome.tone === "bad" ? "danger" : outcome.tone === "good" ? "success" : "watch"
+  };
+  return {
+    confirmed: {
+      title: "판단 저장 완료",
+      message: "확인 완료 상태로 저장했습니다.",
+      next: "보정값과 수집 상태가 맞으면 완료 상태로 유지하세요.",
+      items: ["전체 DB 검수 완료", "판단 큐 하향", "B2B 내부 기준 반영"],
+      tone: "success"
+    },
+    contact_ready: {
+      title: "컨택 가능 저장",
+      message: "컨택 가능한 업체로 표시했습니다.",
+      next: "리스트에서 노출, 예약율, 가격 근거를 확인해 후속 관리를 진행하세요.",
+      items: ["전체 DB 상태 갱신", "컨택 후보 표시", "상세 근거 유지"],
+      tone: "success"
+    },
+    check_needed: {
+      title: "확인 필요 저장",
+      message: "사람이 확인해야 하는 업체로 표시했습니다.",
+      next: "필요 채널과 문제 날짜를 확인한 뒤 완료 또는 재수집으로 확정하세요.",
+      items: ["판단 큐 유지", "확인 메모 저장", "채널 확인 대상 표시"],
+      tone: "watch"
+    },
+    recrawl_needed: {
+      title: "재수집 필요 저장",
+      message: "확인 수집이 필요한 업체로 표시했습니다.",
+      next: "동일 조건으로 다시 수집한 뒤 수량, 가격, 채널 상태를 비교하세요.",
+      items: ["재수집 대상 표시", "판단 큐 유지", "상세 근거 재확인"],
+      tone: "watch"
+    },
+    manual_needed: {
+      title: "보정 필요 저장",
+      message: "마스터 보정이 필요한 업체로 표시했습니다.",
+      next: "객실 총량, 상품 구성, 가격, 판매 채널을 먼저 보정하세요.",
+      items: ["보정 필요 표시", "수정 우선순위 상승", "B2B 노출 신뢰도 보호"],
+      tone: "watch"
+    },
+    hold: {
+      title: "보류 저장",
+      message: "검토를 보류할 업체로 표시했습니다.",
+      next: "보류 사유를 메모에 남기고 다음 수집 변화가 있을 때 다시 판단하세요.",
+      items: ["보류 상태 저장", "판단 큐 별도 관리", "상세 메모 유지"],
+      tone: "neutral"
+    },
+    exclude: {
+      title: "제외 저장",
+      message: "분석 대상에서 제외할 업체로 표시했습니다.",
+      next: "동일 업체, 업종 부적합, 폐업 등 제외 사유가 맞는지 한 번 더 확인하세요.",
+      items: ["제외 상태 저장", "판단 큐 제외", "상세 근거 유지"],
+      tone: "danger"
+    }
+  }[status] || fallback;
+}
+
+function adminDbReviewFlashHtml(companyId = "") {
+  const flash = state.adminDbReviewFlash || null;
+  if (!flash || !companyId || flash.companyId !== companyId) return "";
+  const at = flash.at ? compactDateTime(flash.at) : "";
+  const items = Array.isArray(flash.items) ? flash.items.filter(Boolean).slice(0, 4) : [];
+  return `
+    <aside class="admin-db-review-flash ${escapeHtml(flash.tone || "watch")}" aria-live="polite">
+      <div>
+        <span>${escapeHtml(flash.title || "판단 저장 결과")}</span>
+        <strong>${escapeHtml(flash.message || "관리자 판단을 저장했습니다.")}</strong>
+        ${flash.next ? `<small>${escapeHtml(flash.next)}</small>` : ""}
+      </div>
+      ${items.length ? `
+        <ul>
+          ${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      ` : ""}
+      ${at ? `<em>${escapeHtml(at)}</em>` : ""}
+    </aside>
+  `;
+}
+
 function companyReviewActionsHtml(company = {}, compact = false, source = "") {
   const companyId = company.companyId || "";
   const current = company.adminReview?.status || "";
@@ -14421,6 +14516,7 @@ function companyReviewActionsHtml(company = {}, compact = false, source = "") {
         `).join("")}
         ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}"${sourceAttr}>해제</button>` : ""}
       </div>
+      ${adminDbReviewFlashHtml(companyId)}
     </div>
   `;
 }
@@ -26980,6 +27076,17 @@ async function saveCompanyAdminReview(button) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ companyId, status, note, reviewContext })
     });
+    const feedback = companyAdminReviewFeedbackMeta(status);
+    state.adminDbReviewFlash = {
+      companyId,
+      status,
+      tone: feedback.tone,
+      title: feedback.title,
+      message: feedback.message,
+      next: feedback.next,
+      items: feedback.items,
+      at: new Date().toISOString()
+    };
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
     renderCompanyMasterPanel();
@@ -26990,6 +27097,17 @@ async function saveCompanyAdminReview(button) {
     const outcome = companyAdminReviewOutcome(status);
     setStatus(status === "clear" ? "검증 해제 완료" : `${companyAdminReviewLabel(status)} 저장 완료 · ${outcome.label}`);
   } catch (error) {
+    state.adminDbReviewFlash = {
+      companyId,
+      status,
+      tone: "danger",
+      title: "판단 저장 실패",
+      message: error.message || "저장 중 문제가 발생했습니다.",
+      next: "네트워크 상태와 권한을 확인한 뒤 다시 시도하세요.",
+      items: ["변경 미반영", "기존 판단 유지"],
+      at: new Date().toISOString()
+    };
+    if (isAdminRole()) renderAdminConsoleDashboard();
     setStatus("검증 저장 실패");
     if (els.companyMasterPanel) {
       els.companyMasterPanel.insertAdjacentHTML("afterbegin", `<div class="empty">검증 저장 실패: ${escapeHtml(error.message)}</div>`);

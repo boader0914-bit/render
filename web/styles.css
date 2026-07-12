@@ -14978,6 +14978,90 @@ a.platform-row:hover {
   color: #b54708;
 }
 
+.admin-db-review-flash {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(56, 189, 248, .28);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, .92), rgba(255, 255, 255, .96));
+  color: #1d4ed8;
+  padding: 10px;
+  line-height: 1.28;
+}
+
+.admin-db-review-flash.success {
+  border-color: rgba(16, 185, 129, .34);
+  background: linear-gradient(135deg, rgba(236, 253, 245, .94), rgba(255, 255, 255, .96));
+  color: #047857;
+}
+
+.admin-db-review-flash.watch {
+  border-color: rgba(245, 158, 11, .34);
+  background: linear-gradient(135deg, rgba(255, 251, 235, .95), rgba(255, 255, 255, .96));
+  color: #92400e;
+}
+
+.admin-db-review-flash.neutral {
+  border-color: rgba(148, 163, 184, .35);
+  background: linear-gradient(135deg, rgba(248, 250, 252, .95), rgba(255, 255, 255, .96));
+  color: #334155;
+}
+
+.admin-db-review-flash.danger {
+  border-color: rgba(248, 113, 113, .36);
+  background: linear-gradient(135deg, rgba(254, 242, 242, .95), rgba(255, 255, 255, .96));
+  color: #b42318;
+}
+
+.admin-db-review-flash > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-review-flash span,
+.admin-db-review-flash small,
+.admin-db-review-flash li,
+.admin-db-review-flash em {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-review-flash strong {
+  color: inherit;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-review-flash ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-db-review-flash li {
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .74);
+  padding: 5px 8px;
+  opacity: .88;
+}
+
+.admin-db-review-flash em {
+  font-style: normal;
+  opacity: .82;
+}
+
 .company-review-badge {
   border: 1px solid #e8edf5;
   border-radius: 999px;
@@ -26635,7 +26719,8 @@ body.role-admin .company-manual-feedback.error {
 }
 
 body.role-admin .company-manual-feedback-card,
-body.role-admin .admin-db-correction-flash {
+body.role-admin .admin-db-correction-flash,
+body.role-admin .admin-db-review-flash.success {
   border-color: rgba(52, 211, 153, .34);
   background:
     linear-gradient(135deg, rgba(52, 211, 153, .13), rgba(121, 184, 255, .06)),
@@ -26652,13 +26737,15 @@ body.role-admin .company-manual-feedback-card.progress {
 }
 
 body.role-admin .company-manual-feedback-card.info,
-body.role-admin .admin-db-correction-flash.neutral {
+body.role-admin .admin-db-correction-flash.neutral,
+body.role-admin .admin-db-review-flash.neutral {
   border-color: rgba(139, 160, 190, .30);
   background: #111923;
   color: #d8e7fb;
 }
 
-body.role-admin .company-manual-feedback-card.error {
+body.role-admin .company-manual-feedback-card.error,
+body.role-admin .admin-db-review-flash.danger {
   border-color: rgba(251, 146, 60, .42);
   background:
     linear-gradient(135deg, rgba(251, 146, 60, .13), rgba(251, 113, 133, .07)),
@@ -26666,7 +26753,16 @@ body.role-admin .company-manual-feedback-card.error {
   color: #ffcfba;
 }
 
+body.role-admin .admin-db-review-flash.watch {
+  border-color: rgba(245, 158, 11, .40);
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, .14), rgba(121, 184, 255, .06)),
+    #111923;
+  color: #ffe2a8;
+}
+
 body.role-admin .admin-db-correction-flash li,
+body.role-admin .admin-db-review-flash li,
 body.role-admin .company-manual-feedback-card li {
   background: rgba(255, 255, 255, .05);
 }
