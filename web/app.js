@@ -16027,8 +16027,30 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
           <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 저장</button>
           <button type="button" data-clear-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 해제</button>
         </div>
-        <div class="company-manual-feedback" data-company-manual-feedback aria-live="polite">${escapeHtml(feedback)}</div>
+        <div class="company-manual-feedback" data-company-manual-feedback aria-live="polite">${feedback ? companyManualFeedbackHtml({
+          tone: "info",
+          title: "저장 안내",
+          message: feedback
+        }) : ""}</div>
       </section>
+    </div>
+  `;
+}
+
+function companyManualFeedbackHtml({ tone = "info", title = "", message = "", items = [], next = "" } = {}) {
+  const safeItems = (Array.isArray(items) ? items : []).filter(Boolean).slice(0, 4);
+  return `
+    <div class="company-manual-feedback-card ${escapeHtml(tone)}">
+      <div>
+        <span>${escapeHtml(title || "처리 상태")}</span>
+        <strong>${escapeHtml(message || "처리 중입니다.")}</strong>
+        ${next ? `<small>${escapeHtml(next)}</small>` : ""}
+      </div>
+      ${safeItems.length ? `
+        <ul>
+          ${safeItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        </ul>
+      ` : ""}
     </div>
   `;
 }
@@ -16038,10 +16060,17 @@ function adminDbCorrectionFlashHtml(companyId = "") {
   if (!flash || !companyId || flash.companyId !== companyId) return "";
   const at = flash.at ? compactDateTime(flash.at) : "";
   return `
-    <mark class="admin-db-correction-flash">
-      ${escapeHtml(flash.message || "보정 반영 완료")}
-      ${at ? `<small>${escapeHtml(at)}</small>` : ""}
-    </mark>
+    <aside class="admin-db-correction-flash ${escapeHtml(flash.tone || "success")}" aria-live="polite">
+      <div>
+        <span>${escapeHtml(flash.title || "저장 결과")}</span>
+        <strong>${escapeHtml(flash.message || "보정 반영 완료")}</strong>
+        <small>${escapeHtml(flash.next || "반영 범위를 확인한 뒤 관리자 판단을 확정하세요.")}</small>
+      </div>
+      <ul>
+        ${(flash.items || ["전체 DB 갱신", "판단 큐 기준 갱신", "B2B 비교 지표 반영"]).slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+      ${at ? `<em>${escapeHtml(at)}</em>` : ""}
+    </aside>
   `;
 }
 
@@ -26709,7 +26738,15 @@ async function saveCompanyCorrection(button, clear = false) {
     && !String(note).trim();
   const shouldClear = clear || emptySave;
   if (feedback) {
-    feedback.textContent = shouldClear ? "보정 해제 중입니다." : "보정 저장 중입니다. 저장 후 전체 DB·판단 큐·B2B 지표에 반영됩니다.";
+    feedback.innerHTML = companyManualFeedbackHtml({
+      tone: "progress",
+      title: shouldClear ? "해제 처리 중" : "저장 처리 중",
+      message: shouldClear ? "관리자 보정값을 해제하고 있습니다." : "관리자 보정값을 저장하고 있습니다.",
+      items: shouldClear
+        ? ["보정값 제거", "자동수집 기준 복귀", "관련 지표 재계산"]
+        : ["전체 DB 기준값 갱신", "판단 큐 재분류", "B2B 비교 지표 반영"],
+      next: "처리가 끝나면 이 위치에 결과가 표시됩니다."
+    });
     feedback.classList.remove("error");
   }
   setStatus(shouldClear ? "보정 해제 중" : "보정 저장 중");
@@ -26741,7 +26778,13 @@ async function saveCompanyCorrection(button, clear = false) {
     state.adminDbOpsOpen = true;
     state.adminDbCorrectionFlash = {
       companyId,
-      message: shouldClear ? "보정 해제 완료 · 전체 DB 기준 갱신" : "보정 저장 완료 · 전체 DB·판단 큐·B2B 반영",
+      tone: shouldClear ? "neutral" : "success",
+      title: shouldClear ? "보정 해제 완료" : "보정 저장 완료",
+      message: shouldClear ? "자동수집 기준으로 다시 전환했습니다." : "관리자 보정값을 우선 기준으로 반영했습니다.",
+      items: shouldClear
+        ? ["전체 DB 자동수집 기준 복귀", "판단 큐 재검토 기준 갱신", "B2B 비교 지표 자동값 사용"]
+        : ["전체 DB 기준값 갱신", "판단 큐 재분류 기준 갱신", "B2B 예약율·예상매출 비교 기준 반영"],
+      next: shouldClear ? "필요하면 핵심 보정을 다시 입력하세요." : "관리자 판단을 확인 또는 완료로 확정하세요.",
       at: new Date().toISOString()
     };
     if (state.activeRunId) {
@@ -26763,7 +26806,13 @@ async function saveCompanyCorrection(button, clear = false) {
   } catch (error) {
     setStatus("보정 저장 실패");
     if (feedback) {
-      feedback.textContent = `보정 저장 실패: ${error.message}`;
+      feedback.innerHTML = companyManualFeedbackHtml({
+        tone: "error",
+        title: "저장 실패",
+        message: error.message || "보정값을 저장하지 못했습니다.",
+        items: ["입력값과 네트워크 상태를 확인하세요", "문제가 반복되면 새로고침 후 다시 저장하세요"],
+        next: "실패 시 기존 DB 값은 변경되지 않습니다."
+      });
       feedback.classList.add("error");
     } else if (form) {
       form.insertAdjacentHTML("beforeend", `<div class="empty">보정 저장 실패: ${escapeHtml(error.message)}</div>`);

@@ -4474,24 +4474,69 @@ a {
 }
 
 .admin-db-correction-flash {
-  flex: 0 0 auto;
+  flex: 0 1 430px;
+  min-width: min(100%, 280px);
   display: grid;
-  gap: 2px;
+  gap: 8px;
   border: 1px solid #a7d8d1;
-  border-radius: 999px;
-  background: #ecfdf3;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ecfdf3 0%, #f8fbff 100%);
   color: #0f766e;
-  padding: 7px 11px;
-  font-size: 12px;
-  font-weight: 950;
-  line-height: 1.2;
-  white-space: nowrap;
+  padding: 11px;
+  line-height: 1.25;
 }
 
-.admin-db-correction-flash small {
-  color: #0f766e;
-  font-size: 10px;
+.admin-db-correction-flash.neutral {
+  border-color: #d0d5dd;
+  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+  color: #344054;
+}
+
+.admin-db-correction-flash > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-correction-flash span,
+.admin-db-correction-flash small,
+.admin-db-correction-flash li,
+.admin-db-correction-flash em {
+  color: inherit;
+  font-size: 11px;
   font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-db-correction-flash strong {
+  color: inherit;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-correction-flash ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-db-correction-flash li {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(15, 118, 110, .22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .74);
+  padding: 5px 8px;
+}
+
+.admin-db-correction-flash em {
+  font-style: normal;
 }
 
 .admin-db-quick-edit-summary {
@@ -15281,6 +15326,77 @@ a.platform-row:hover {
   color: #b42318;
 }
 
+.company-manual-feedback-card {
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  border: 1px solid #a7d8d1;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #ecfdf3 0%, #f8fbff 100%);
+  color: #0f766e;
+  padding: 11px;
+}
+
+.company-manual-feedback-card.progress {
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fbff 100%);
+  color: #175cd3;
+}
+
+.company-manual-feedback-card.info {
+  border-color: #d5e3f7;
+  background: #f8fbff;
+  color: #344054;
+}
+
+.company-manual-feedback-card.error {
+  border-color: #fecaca;
+  background: #fff8f8;
+  color: #b42318;
+}
+
+.company-manual-feedback-card > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.company-manual-feedback-card span,
+.company-manual-feedback-card small,
+.company-manual-feedback-card li {
+  color: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.company-manual-feedback-card strong {
+  color: inherit;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.company-manual-feedback-card ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.company-manual-feedback-card li {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .70);
+  padding: 5px 8px;
+}
+
 .company-manual-segments {
   min-width: 0;
   display: grid;
@@ -15525,6 +15641,11 @@ a.platform-row:hover {
 
   .company-manual-segment-row button {
     width: 100%;
+  }
+
+  .admin-db-correction-flash {
+    width: 100%;
+    min-width: 0;
   }
 }
 
@@ -26448,6 +26569,43 @@ body.role-admin .company-manual-feedback {
 
 body.role-admin .company-manual-feedback.error {
   color: #ffb4ab;
+}
+
+body.role-admin .company-manual-feedback-card,
+body.role-admin .admin-db-correction-flash {
+  border-color: rgba(52, 211, 153, .34);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .13), rgba(121, 184, 255, .06)),
+    #111923;
+  color: #bff7e8;
+}
+
+body.role-admin .company-manual-feedback-card.progress {
+  border-color: rgba(121, 184, 255, .44);
+  background:
+    linear-gradient(135deg, rgba(121, 184, 255, .16), rgba(52, 211, 153, .06)),
+    #111923;
+  color: #cfe5ff;
+}
+
+body.role-admin .company-manual-feedback-card.info,
+body.role-admin .admin-db-correction-flash.neutral {
+  border-color: rgba(139, 160, 190, .30);
+  background: #111923;
+  color: #d8e7fb;
+}
+
+body.role-admin .company-manual-feedback-card.error {
+  border-color: rgba(251, 146, 60, .42);
+  background:
+    linear-gradient(135deg, rgba(251, 146, 60, .13), rgba(251, 113, 133, .07)),
+    #111923;
+  color: #ffcfba;
+}
+
+body.role-admin .admin-db-correction-flash li,
+body.role-admin .company-manual-feedback-card li {
+  background: rgba(255, 255, 255, .05);
 }
 
 body.role-admin .company-manual-check span {
