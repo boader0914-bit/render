@@ -15137,6 +15137,75 @@ a.platform-row:hover {
   padding: 11px;
 }
 
+.company-manual-advanced {
+  padding: 0;
+  overflow: hidden;
+}
+
+.company-manual-advanced summary {
+  cursor: pointer;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px;
+  list-style: none;
+}
+
+.company-manual-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.company-manual-advanced summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.company-manual-advanced summary span,
+.company-manual-advanced summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.company-manual-advanced summary strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.company-manual-advanced summary em {
+  flex: 0 0 auto;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f1f7ff;
+  color: #175cd3;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.company-manual-advanced[open] {
+  padding-bottom: 11px;
+}
+
+.company-manual-advanced:not([open]) .company-manual-meta-grid,
+.company-manual-advanced:not([open]) .company-manual-structured-grid {
+  display: none;
+}
+
+.company-manual-advanced[open] .company-manual-meta-grid,
+.company-manual-advanced[open] .company-manual-structured-grid {
+  margin: 0 11px;
+}
+
 .company-manual-section.save {
   border-color: #bfd7ff;
   background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
@@ -25951,6 +26020,7 @@ body.role-admin .company-master-rule strong,
 body.role-admin .company-master-backfill strong,
 body.role-admin .company-master-duplicates strong,
 body.role-admin .company-manual-section-head strong,
+body.role-admin .company-manual-advanced summary strong,
 body.role-admin .company-review-head strong,
 body.role-admin .company-review-queue b,
 body.role-admin .company-master-list-head strong,
@@ -26043,6 +26113,8 @@ body.role-admin .company-master-duplicates small,
 body.role-admin .company-master-duplicates span,
 body.role-admin .company-manual-section-head span,
 body.role-admin .company-manual-section-head small,
+body.role-admin .company-manual-advanced summary span,
+body.role-admin .company-manual-advanced summary small,
 body.role-admin .company-review-head span,
 body.role-admin .company-review-queue p,
 body.role-admin .company-review-queue article > div span,
@@ -26129,6 +26201,7 @@ body.role-admin .company-master-metrics article,
 body.role-admin .company-master-rule,
 body.role-admin .company-master-duplicates article,
 body.role-admin .company-manual-section,
+body.role-admin .company-manual-advanced summary em,
 body.role-admin .company-review-panel,
 body.role-admin .company-review-queue,
 body.role-admin .company-review-queue article,
