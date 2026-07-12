@@ -27081,6 +27081,301 @@ body.role-admin .empty {
   color: var(--muted);
 }
 
+body.role-admin #adminConsoleDashboard {
+  --ops-panel: #101826;
+  --ops-card: #151f2e;
+  --ops-card-raised: #1b293d;
+  --ops-line: rgba(139, 160, 190, .28);
+  --ops-line-strong: rgba(121, 184, 255, .46);
+  --ops-title: #f3f8ff;
+  --ops-text: #d6e2f0;
+  --ops-muted: #aebbd0;
+  --ops-blue: #79b8ff;
+  color: var(--ops-title);
+}
+
+body.role-admin #adminConsoleDashboard .admin-console-panel,
+body.role-admin #adminConsoleDashboard .admin-regional-summary-grid article,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-grid article,
+body.role-admin #adminConsoleDashboard .admin-region-review-filterbar,
+body.role-admin #adminConsoleDashboard .admin-region-review-summary,
+body.role-admin #adminConsoleDashboard .admin-region-review-grid article,
+body.role-admin #adminConsoleDashboard .admin-region-card,
+body.role-admin #adminConsoleDashboard .admin-region-card-metrics div,
+body.role-admin #adminConsoleDashboard .admin-region-focus-panel article,
+body.role-admin #adminConsoleDashboard .admin-collapse-details,
+body.role-admin #adminConsoleDashboard .admin-queue-summary-grid article,
+body.role-admin #adminConsoleDashboard .admin-queue-row,
+body.role-admin #adminConsoleDashboard .admin-master-row,
+body.role-admin #adminConsoleDashboard .admin-crawl-grid div,
+body.role-admin #adminConsoleDashboard .admin-task-list article {
+  border-color: var(--ops-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    var(--ops-card);
+  color: var(--ops-title);
+  box-shadow: none;
+}
+
+body.role-admin #adminConsoleDashboard .admin-console-hero,
+body.role-admin #adminConsoleDashboard .admin-regional-ops-panel {
+  border-color: var(--ops-line-strong);
+  background:
+    linear-gradient(135deg, rgba(74, 144, 226, .24), rgba(52, 211, 153, .08)),
+    var(--ops-card-raised);
+}
+
+body.role-admin #adminConsoleDashboard .admin-console-hero > small {
+  border-color: rgba(121, 184, 255, .34);
+  background: rgba(13, 20, 29, .70);
+  color: var(--ops-text);
+}
+
+body.role-admin #adminConsoleDashboard h3,
+body.role-admin #adminConsoleDashboard strong,
+body.role-admin #adminConsoleDashboard b {
+  color: var(--ops-title);
+}
+
+body.role-admin #adminConsoleDashboard p,
+body.role-admin #adminConsoleDashboard span,
+body.role-admin #adminConsoleDashboard small,
+body.role-admin #adminConsoleDashboard em,
+body.role-admin #adminConsoleDashboard li,
+body.role-admin #adminConsoleDashboard .admin-regional-rule,
+body.role-admin #adminConsoleDashboard .admin-region-card-foot,
+body.role-admin #adminConsoleDashboard .admin-queue-row > span,
+body.role-admin #adminConsoleDashboard .admin-master-row > span {
+  color: var(--ops-muted);
+}
+
+body.role-admin #adminConsoleDashboard .admin-console-hero p,
+body.role-admin #adminConsoleDashboard .admin-console-head small,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-head small,
+body.role-admin #adminConsoleDashboard .admin-region-review-head small,
+body.role-admin #adminConsoleDashboard .admin-collapse-details summary small,
+body.role-admin #adminConsoleDashboard .admin-queue-summary-grid small,
+body.role-admin #adminConsoleDashboard .admin-crawl-grid small,
+body.role-admin #adminConsoleDashboard .admin-task-list small {
+  color: var(--ops-text);
+}
+
+body.role-admin #adminConsoleDashboard .admin-regional-summary-grid strong,
+body.role-admin #adminConsoleDashboard .admin-region-card-metrics strong,
+body.role-admin #adminConsoleDashboard .admin-region-focus-panel strong,
+body.role-admin #adminConsoleDashboard .admin-region-review-grid strong,
+body.role-admin #adminConsoleDashboard .admin-queue-summary-grid strong,
+body.role-admin #adminConsoleDashboard .admin-crawl-grid strong,
+body.role-admin #adminConsoleDashboard .admin-task-list span,
+body.role-admin #adminConsoleDashboard .admin-queue-row > b,
+body.role-admin #adminConsoleDashboard .admin-master-row > b {
+  color: var(--ops-blue);
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-card.good,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-grid article.good,
+body.role-admin #adminConsoleDashboard .admin-region-focus-panel article.status,
+body.role-admin #adminConsoleDashboard .admin-region-review-grid article.good,
+body.role-admin #adminConsoleDashboard .admin-task-list article.active {
+  border-color: rgba(52, 211, 153, .44);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .14), rgba(121, 184, 255, .04)),
+    var(--ops-card);
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-card.watch,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-grid article.watch,
+body.role-admin #adminConsoleDashboard .admin-region-focus-panel article.reinforce,
+body.role-admin #adminConsoleDashboard .admin-region-review-grid article.watch,
+body.role-admin #adminConsoleDashboard .admin-queue-summary-grid article.active {
+  border-color: rgba(251, 191, 36, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .14), rgba(121, 184, 255, .04)),
+    var(--ops-card);
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-card.needs,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-grid article.hot,
+body.role-admin #adminConsoleDashboard .admin-region-review-grid article.hot {
+  border-color: rgba(251, 113, 133, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .13), rgba(121, 184, 255, .04)),
+    var(--ops-card);
+}
+
+body.role-admin #adminConsoleDashboard mark,
+body.role-admin #adminConsoleDashboard .admin-region-card-head mark,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-head mark,
+body.role-admin #adminConsoleDashboard .admin-region-review-head mark,
+body.role-admin #adminConsoleDashboard .admin-region-card-foot span,
+body.role-admin #adminConsoleDashboard .admin-region-reasons em,
+body.role-admin #adminConsoleDashboard .admin-reason-badges mark,
+body.role-admin #adminConsoleDashboard .admin-master-row mark {
+  border-color: rgba(121, 184, 255, .34);
+  background: rgba(121, 184, 255, .12);
+  color: #dcecff;
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-card-foot span.good,
+body.role-admin #adminConsoleDashboard .admin-master-row mark.good {
+  border-color: rgba(52, 211, 153, .42);
+  background: rgba(52, 211, 153, .13);
+  color: #bbf7d0;
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-card-foot span.watch,
+body.role-admin #adminConsoleDashboard .admin-master-row mark.watch {
+  border-color: rgba(251, 191, 36, .46);
+  background: rgba(251, 191, 36, .13);
+  color: #fde68a;
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-card-foot span.needs {
+  border-color: rgba(251, 113, 133, .46);
+  background: rgba(251, 113, 133, .13);
+  color: #fecdd3;
+}
+
+body.role-admin #adminConsoleDashboard button,
+body.role-admin #adminConsoleDashboard a {
+  border-color: rgba(139, 160, 190, .32);
+  background: rgba(13, 20, 29, .88);
+  color: #e7f1ff;
+}
+
+body.role-admin #adminConsoleDashboard button:hover,
+body.role-admin #adminConsoleDashboard a:hover,
+body.role-admin #adminConsoleDashboard button.active {
+  border-color: rgba(121, 184, 255, .58);
+  background:
+    linear-gradient(180deg, rgba(74, 144, 226, .82), rgba(30, 58, 95, .88));
+  color: #ffffff;
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-card.active,
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-list button.active {
+  border-color: rgba(121, 184, 255, .72);
+  box-shadow: 0 0 0 2px rgba(121, 184, 255, .12);
+}
+
+body.role-admin #adminConsoleDashboard .admin-region-ops-queue-list button {
+  border-color: rgba(139, 160, 190, .24);
+  background: rgba(13, 20, 29, .72);
+  color: var(--ops-title);
+}
+
+body.role-admin #adminConsoleDashboard .admin-collapse-details summary {
+  color: var(--ops-title);
+}
+
+body.role-admin #adminConsoleDashboard .admin-collapse-details summary::after {
+  background: rgba(121, 184, 255, .14);
+  color: #dcecff;
+}
+
+body.role-admin #adminConsoleDashboard .admin-crawl-meter,
+body.role-admin #adminConsoleDashboard .admin-region-review-progress {
+  background: rgba(139, 160, 190, .20);
+}
+
+body.role-admin #adminConsoleDashboard article,
+body.role-admin #adminConsoleDashboard details,
+body.role-admin #adminConsoleDashboard summary,
+body.role-admin #adminConsoleDashboard .admin-region-detail-panel,
+body.role-admin #adminConsoleDashboard .admin-region-action-box,
+body.role-admin #adminConsoleDashboard .admin-region-company-drawer,
+body.role-admin #adminConsoleDashboard .admin-region-company-drawer-summary,
+body.role-admin #adminConsoleDashboard .admin-region-company-list > div,
+body.role-admin #adminConsoleDashboard .admin-region-company-filterbar,
+body.role-admin #adminConsoleDashboard .admin-region-company-inspection,
+body.role-admin #adminConsoleDashboard .admin-region-review-filterbar button,
+body.role-admin #adminConsoleDashboard .admin-region-review-form,
+body.role-admin #adminConsoleDashboard .admin-region-approval-panel,
+body.role-admin #adminConsoleDashboard .admin-region-approval-actions,
+body.role-admin #adminConsoleDashboard .admin-region-approval-missing span,
+body.role-admin #adminConsoleDashboard .admin-region-preflight-panel,
+body.role-admin #adminConsoleDashboard .admin-maintenance-lane,
+body.role-admin #adminConsoleDashboard .admin-run-region-panel,
+body.role-admin #adminConsoleDashboard .admin-region-coverage-list,
+body.role-admin #adminConsoleDashboard .admin-region-maintenance-actions,
+body.role-admin #adminConsoleDashboard .admin-region-checklist-panel,
+body.role-admin #adminConsoleDashboard .admin-region-correction-gap-list article,
+body.role-admin #adminConsoleDashboard .admin-region-audit-panel,
+body.role-admin #adminConsoleDashboard .admin-region-audit-summaryline,
+body.role-admin #adminConsoleDashboard .admin-region-audit-summary span,
+body.role-admin #adminConsoleDashboard .admin-region-audit-filters button,
+body.role-admin #adminConsoleDashboard .admin-location-score-queue,
+body.role-admin #adminConsoleDashboard .admin-region-location-score-panel,
+body.role-admin #adminConsoleDashboard .location-score-admin-form,
+body.role-admin #adminConsoleDashboard .admin-outside-region-list span {
+  border-color: var(--ops-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    var(--ops-card);
+  color: var(--ops-title);
+}
+
+body.role-admin #adminConsoleDashboard .admin-location-score-queue-head span,
+body.role-admin #adminConsoleDashboard .admin-maintenance-lane > button span,
+body.role-admin #adminConsoleDashboard .admin-region-company-metrics span,
+body.role-admin #adminConsoleDashboard .admin-region-company-tags em,
+body.role-admin #adminConsoleDashboard .admin-region-company-more,
+body.role-admin #adminConsoleDashboard .company-review-control.compact,
+body.role-admin #adminConsoleDashboard .location-score-admin-form label,
+body.role-admin #adminConsoleDashboard .location-score-admin-form > div {
+  border-color: rgba(121, 184, 255, .28);
+  background: rgba(121, 184, 255, .12);
+  color: #dcecff;
+}
+
+body.role-admin #adminConsoleDashboard .good,
+body.role-admin #adminConsoleDashboard article.good,
+body.role-admin #adminConsoleDashboard .admin-region-approval-panel.good,
+body.role-admin #adminConsoleDashboard .admin-region-preflight-panel.good {
+  border-color: rgba(52, 211, 153, .44);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .14), rgba(121, 184, 255, .04)),
+    var(--ops-card);
+}
+
+body.role-admin #adminConsoleDashboard .watch,
+body.role-admin #adminConsoleDashboard article.watch,
+body.role-admin #adminConsoleDashboard .admin-region-approval-panel.watch,
+body.role-admin #adminConsoleDashboard .admin-region-preflight-panel.watch,
+body.role-admin #adminConsoleDashboard .admin-queue-summary-grid article.active {
+  border-color: rgba(251, 191, 36, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .14), rgba(121, 184, 255, .04)),
+    var(--ops-card);
+}
+
+body.role-admin #adminConsoleDashboard .hot,
+body.role-admin #adminConsoleDashboard .needs,
+body.role-admin #adminConsoleDashboard article.hot,
+body.role-admin #adminConsoleDashboard article.needs,
+body.role-admin #adminConsoleDashboard .admin-region-approval-panel.hot,
+body.role-admin #adminConsoleDashboard .admin-region-approval-panel.needs,
+body.role-admin #adminConsoleDashboard .admin-region-preflight-panel.hot {
+  border-color: rgba(251, 113, 133, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .13), rgba(121, 184, 255, .04)),
+    var(--ops-card);
+}
+
+body.role-admin #adminConsoleDashboard button.active,
+body.role-admin #adminConsoleDashboard .admin-region-review-filterbar button.active,
+body.role-admin #adminConsoleDashboard .admin-region-audit-filters button.active {
+  background-color: #1f4f83;
+}
+
+body.role-admin #adminConsoleDashboard button.active span,
+body.role-admin #adminConsoleDashboard button.active small,
+body.role-admin #adminConsoleDashboard button.active strong,
+body.role-admin #adminConsoleDashboard button.active em {
+  color: #ffffff;
+}
+
 @media (min-width: 860px) {
   .app-main {
     display: grid;
