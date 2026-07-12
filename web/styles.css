@@ -27376,6 +27376,156 @@ body.role-admin #adminConsoleDashboard button.active em {
   color: #ffffff;
 }
 
+body.role-admin #historyOpsDashboard {
+  --history-ops-card: #151f2e;
+  --history-ops-card-raised: #1b293d;
+  --history-ops-line: rgba(139, 160, 190, .28);
+  --history-ops-line-strong: rgba(121, 184, 255, .46);
+  --history-ops-title: #f3f8ff;
+  --history-ops-text: #d6e2f0;
+  --history-ops-muted: #aebbd0;
+  --history-ops-blue: #79b8ff;
+  color: var(--history-ops-title);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-empty,
+body.role-admin #historyOpsDashboard .history-ops-card,
+body.role-admin #historyOpsDashboard .history-ops-metrics article,
+body.role-admin #historyOpsDashboard .history-ops-keyword-list article,
+body.role-admin #historyOpsDashboard .history-ops-log button,
+body.role-admin #historyOpsDashboard .history-ops-log article,
+body.role-admin #historyOpsDashboard .history-ops-company-list button,
+body.role-admin #historyOpsDashboard .history-ops-comparison article,
+body.role-admin #historyOpsDashboard .collection-quality-panel,
+body.role-admin #historyOpsDashboard .collection-quality-metrics article,
+body.role-admin #historyOpsDashboard .collection-quality-grid > article,
+body.role-admin #historyOpsDashboard .collection-quality-alerts > div,
+body.role-admin #historyOpsDashboard .collection-quality-recrawl > div,
+body.role-admin #historyOpsDashboard .collection-quality-feedback > div {
+  border-color: var(--history-ops-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    var(--history-ops-card);
+  color: var(--history-ops-title);
+  box-shadow: none;
+}
+
+body.role-admin #historyOpsDashboard .history-ops-hero {
+  border-color: var(--history-ops-line-strong);
+  background:
+    linear-gradient(135deg, rgba(74, 144, 226, .24), rgba(52, 211, 153, .08)),
+    var(--history-ops-card-raised);
+  color: var(--history-ops-title);
+  box-shadow: none;
+}
+
+body.role-admin #historyOpsDashboard h3,
+body.role-admin #historyOpsDashboard strong,
+body.role-admin #historyOpsDashboard b {
+  color: var(--history-ops-title);
+}
+
+body.role-admin #historyOpsDashboard p,
+body.role-admin #historyOpsDashboard span,
+body.role-admin #historyOpsDashboard small,
+body.role-admin #historyOpsDashboard em,
+body.role-admin #historyOpsDashboard li {
+  color: var(--history-ops-muted);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-hero p,
+body.role-admin #historyOpsDashboard .collection-quality-head p:not(.eyebrow),
+body.role-admin #historyOpsDashboard .collection-quality-recrawl small,
+body.role-admin #historyOpsDashboard .collection-quality-recrawl p,
+body.role-admin #historyOpsDashboard .collection-quality-feedback span,
+body.role-admin #historyOpsDashboard .collection-quality-feedback small,
+body.role-admin #historyOpsDashboard .history-ops-keyword-list small,
+body.role-admin #historyOpsDashboard .history-ops-company-list small,
+body.role-admin #historyOpsDashboard .history-ops-log span,
+body.role-admin #historyOpsDashboard .history-ops-comparison small,
+body.role-admin #historyOpsDashboard .history-ops-timeline b,
+body.role-admin #historyOpsDashboard .history-ops-timeline em {
+  color: var(--history-ops-text);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-metrics strong,
+body.role-admin #historyOpsDashboard .history-ops-keyword-list article > span,
+body.role-admin #historyOpsDashboard .history-ops-comparison strong,
+body.role-admin #historyOpsDashboard .history-ops-company-list em,
+body.role-admin #historyOpsDashboard .collection-quality-metrics strong {
+  color: var(--history-ops-blue);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-keyword-list article.active,
+body.role-admin #historyOpsDashboard .history-ops-log article.good,
+body.role-admin #historyOpsDashboard .collection-quality-panel.good,
+body.role-admin #historyOpsDashboard .collection-quality-metrics article.good,
+body.role-admin #historyOpsDashboard .collection-quality-alerts > div.good {
+  border-color: rgba(52, 211, 153, .44);
+  background:
+    linear-gradient(135deg, rgba(52, 211, 153, .14), rgba(121, 184, 255, .04)),
+    var(--history-ops-card);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-log button.watch,
+body.role-admin #historyOpsDashboard .collection-quality-panel.watch,
+body.role-admin #historyOpsDashboard .collection-quality-metrics article.watch,
+body.role-admin #historyOpsDashboard .collection-quality-alerts > div.watch,
+body.role-admin #historyOpsDashboard .collection-quality-recrawl > div.watch {
+  border-color: rgba(251, 191, 36, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 191, 36, .14), rgba(121, 184, 255, .04)),
+    var(--history-ops-card);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-log button.bad,
+body.role-admin #historyOpsDashboard .collection-quality-panel.bad,
+body.role-admin #historyOpsDashboard .collection-quality-metrics article.bad,
+body.role-admin #historyOpsDashboard .collection-quality-alerts > div.bad,
+body.role-admin #historyOpsDashboard .collection-quality-recrawl > div.bad {
+  border-color: rgba(251, 113, 133, .46);
+  background:
+    linear-gradient(135deg, rgba(251, 113, 133, .13), rgba(121, 184, 255, .04)),
+    var(--history-ops-card);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-hero > span,
+body.role-admin #historyOpsDashboard .collection-quality-recrawl mark {
+  border-color: rgba(121, 184, 255, .34);
+  background: rgba(121, 184, 255, .12);
+  color: #dcecff;
+}
+
+body.role-admin #historyOpsDashboard button {
+  border-color: rgba(139, 160, 190, .32);
+  background: rgba(13, 20, 29, .88);
+  color: #e7f1ff;
+}
+
+body.role-admin #historyOpsDashboard button:hover,
+body.role-admin #historyOpsDashboard button.active {
+  border-color: rgba(121, 184, 255, .58);
+  background:
+    linear-gradient(180deg, rgba(74, 144, 226, .82), rgba(30, 58, 95, .88));
+  color: #ffffff;
+}
+
+body.role-admin #historyOpsDashboard button strong,
+body.role-admin #historyOpsDashboard button span,
+body.role-admin #historyOpsDashboard button small,
+body.role-admin #historyOpsDashboard button em {
+  color: inherit;
+}
+
+body.role-admin #historyOpsDashboard .history-ops-timeline span {
+  background: rgba(139, 160, 190, .18);
+}
+
+body.role-admin #historyOpsDashboard .history-ops-timeline i,
+body.role-admin #historyOpsDashboard .history-ops-spark span {
+  background: linear-gradient(180deg, #79b8ff, #3182f6);
+}
+
 @media (min-width: 860px) {
   .app-main {
     display: grid;
