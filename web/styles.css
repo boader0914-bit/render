@@ -30695,8 +30695,8 @@ body.role-admin .admin-db-region-card-grid button.active {
 }
 
 .run-apply-head em {
-  flex: 0 0 auto;
-  max-width: 48%;
+  flex: 0 1 auto;
+  max-width: 100%;
   border: 1px solid rgba(121, 184, 255, .30);
   border-radius: 999px;
   background: rgba(121, 184, 255, .12);
@@ -30706,6 +30706,71 @@ body.role-admin .admin-db-region-card-grid button.active {
   font-style: normal;
   font-weight: 950;
   text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.run-apply-badges {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.run-apply-status {
+  border: 1px solid rgba(139, 160, 190, .30);
+  border-radius: 999px;
+  padding: 6px 9px;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.run-apply-status.good {
+  border-color: rgba(58, 226, 164, .60);
+  background: rgba(16, 124, 94, .48);
+  color: #dffdf4;
+}
+
+.run-apply-status.watch {
+  border-color: rgba(255, 198, 75, .64);
+  background: rgba(151, 105, 19, .50);
+  color: #fff1c4;
+}
+
+.run-apply-status.bad {
+  border-color: rgba(255, 114, 139, .70);
+  background: rgba(137, 38, 59, .56);
+  color: #ffe4ea;
+}
+
+.run-apply-check {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(139, 160, 190, .24);
+  border-radius: 12px;
+  background: rgba(13, 20, 29, .72);
+  padding: 10px;
+}
+
+.run-apply-check.good {
+  border-color: rgba(58, 226, 164, .36);
+  background: rgba(10, 67, 55, .36);
+}
+
+.run-apply-check.watch {
+  border-color: rgba(255, 198, 75, .42);
+  background: rgba(88, 65, 23, .38);
+}
+
+.run-apply-check.bad {
+  border-color: rgba(255, 114, 139, .48);
+  background: rgba(72, 25, 38, .42);
+}
+
+.run-apply-check span {
+  color: #d8e3f0;
 }
 
 .run-apply-grid {
@@ -30731,6 +30796,29 @@ body.role-admin .admin-db-region-card-grid button.active {
 
 .run-apply-panel p {
   margin: 0;
+}
+
+.run-apply-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-apply-actions button {
+  min-height: 34px;
+  border: 1px solid rgba(121, 184, 255, .36);
+  border-radius: 999px;
+  background: rgba(121, 184, 255, .14);
+  color: #e8f2ff;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.run-apply-actions button:hover {
+  border-color: rgba(121, 184, 255, .72);
+  background: rgba(121, 184, 255, .24);
 }
 
 body.role-admin .crawl-purpose-panel {
@@ -30765,6 +30853,18 @@ body.role-admin .run-apply-empty {
     linear-gradient(180deg, rgba(22, 32, 46, .92), rgba(9, 14, 22, .88));
 }
 
+body.role-admin .run-apply-panel.good {
+  border-color: rgba(58, 226, 164, .42);
+}
+
+body.role-admin .run-apply-panel.watch {
+  border-color: rgba(255, 198, 75, .46);
+}
+
+body.role-admin .run-apply-panel.bad {
+  border-color: rgba(255, 114, 139, .52);
+}
+
 body.role-admin .run-apply-grid article {
   border-color: rgba(139, 160, 190, .26);
   background: rgba(8, 13, 20, .72);
@@ -30792,8 +30892,11 @@ body.role-admin .run-apply-grid article {
     display: grid;
   }
 
+  .run-apply-badges {
+    justify-content: flex-start;
+  }
+
   .run-apply-head em {
-    max-width: 100%;
     width: fit-content;
     text-align: left;
   }

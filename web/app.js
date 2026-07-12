@@ -827,6 +827,23 @@ function activeRunDbRoute(data = state.data || {}) {
   };
 }
 
+function dbRouteTargetLabel(target = "") {
+  const key = String(target || "").trim();
+  const labels = {
+    "company_master.basic": "마스터 기본정보",
+    "company_master.inventory": "상품·가격",
+    "company_master.demand_signals": "수요·입지 신호",
+    "company_master.keyword_exposure": "노출 순위",
+    "history.observations": "매출 관측",
+    region_operations: "지역 운영",
+    demand_structure: "수요 구조"
+  };
+  if (labels[key]) return labels[key];
+  if (key.startsWith("company_master.")) return `마스터 ${key.replace(/^company_master\./, "").replace(/_/g, " ")}`;
+  if (key.startsWith("history.")) return `누적 ${key.replace(/^history\./, "").replace(/_/g, " ")}`;
+  return key.replace(/_/g, " ") || "DB 반영";
+}
+
 function runDbApplySummaryModel(data = state.data || {}) {
   const run = data.run || {};
   const companyMaster = data.companyMaster || {};
@@ -840,7 +857,7 @@ function runDbApplySummaryModel(data = state.data || {}) {
   const historyEligible = Boolean(companyMaster.historyEligible ?? route.appliesHistory);
   const historyRows = Number(history.currentRunObservationCount || 0);
   const targetText = route.targets?.length
-    ? route.targets.map((target) => String(target).replace(/^company_master\./, "마스터 ").replace(/^history\./, "누적 ").replace(/^region_operations$/, "지역 운영").replace(/^demand_structure$/, "수요 구조")).join(" · ")
+    ? route.targets.map(dbRouteTargetLabel).join(" · ")
     : purpose.dbApplyText || "DB 반영";
   return {
     run,
@@ -853,6 +870,64 @@ function runDbApplySummaryModel(data = state.data || {}) {
     historyRows,
     targetText,
     error: companyMaster.error || ""
+  };
+}
+
+function runDbApplyStatusModel(model = {}) {
+  const route = model.route || {};
+  const errors = [];
+  const warnings = [];
+  const actions = [];
+  const currentRunCompanies = Number(model.currentRunCompanies || 0);
+  const inventoryApplied = Number(model.inventoryApplied || 0);
+  const demandSignalCompanies = Number(model.demandSignalCompanies || 0);
+  const historyRows = Number(model.historyRows || 0);
+
+  if (model.error) errors.push("마스터 DB 반영 오류");
+  if (!currentRunCompanies) errors.push("업체 마스터 반영 없음");
+  if (route.appliesInventory && currentRunCompanies && !inventoryApplied) warnings.push("상품·가격 반영 없음");
+  else if (route.appliesInventory && inventoryApplied > 0 && inventoryApplied < currentRunCompanies) warnings.push("상품·가격 일부 반영");
+  if (model.historyEligible && !historyRows) warnings.push("매출 누적 관측치 없음");
+  if (route.appliesDemandLocation && currentRunCompanies && !demandSignalCompanies) warnings.push("수요·입지 반영 없음");
+
+  if (errors.length) {
+    actions.push(
+      { label: "전체 DB 확인", section: "database", status: "needs_work" },
+      { label: "재수집 설정", section: "collect" }
+    );
+    return {
+      key: "failed",
+      tone: "bad",
+      label: "반영 실패",
+      message: errors.join(" · "),
+      actions
+    };
+  }
+
+  if (warnings.length) {
+    actions.push(
+      { label: "보정 대상 보기", section: "database", status: "needs_work" },
+      { label: "추가 수집", section: "collect" }
+    );
+    return {
+      key: "partial",
+      tone: "watch",
+      label: "부분 반영",
+      message: warnings.join(" · "),
+      actions
+    };
+  }
+
+  actions.push(
+    { label: "전체 DB 보기", section: "database" },
+    { label: "다음 수집 준비", section: "collect" }
+  );
+  return {
+    key: "complete",
+    tone: "good",
+    label: "정상 반영",
+    message: "선택한 수집 목적 기준으로 필요한 DB 반영이 완료되었습니다.",
+    actions
   };
 }
 
@@ -869,6 +944,7 @@ function renderRunResultApplySummary() {
   }
   const model = runDbApplySummaryModel(state.data);
   const run = model.run || {};
+  const status = runDbApplyStatusModel(model);
   const detailText = run.detailRankRanges ? `${run.detailRankRanges}위` : "범위 미확인";
   const dateText = dateRangeLabel(run);
   const historyValue = model.historyEligible ? fmtNumber(model.historyRows) : "제외";
@@ -876,14 +952,21 @@ function renderRunResultApplySummary() {
   const demandValue = model.route.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외";
   const demandNote = model.route.appliesDemandLocation ? "수요·입지 신호 반영" : "수요·입지 전용 수집 아님";
   els.runApplySummary.innerHTML = `
-    <section class="run-apply-panel ${escapeHtml(model.route.key || "unknown")}">
+    <section class="run-apply-panel ${escapeHtml(model.route.key || "unknown")} ${escapeHtml(status.tone)}">
       <div class="run-apply-head">
         <div>
           <span>이번 수집 반영</span>
           <strong>${escapeHtml(model.route.label || model.purpose.label)}</strong>
           <small>${escapeHtml([run.keyword || run.label || "", detailText, dateText].filter(Boolean).join(" · "))}</small>
         </div>
-        <em>${escapeHtml(model.purpose.dbApplyText || model.targetText || "DB 반영")}</em>
+        <div class="run-apply-badges">
+          <mark class="run-apply-status ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</mark>
+          <em>${escapeHtml(model.purpose.dbApplyText || model.targetText || "DB 반영")}</em>
+        </div>
+      </div>
+      <div class="run-apply-check ${escapeHtml(status.tone)}">
+        <strong>${escapeHtml(status.label)}</strong>
+        <span>${escapeHtml(status.message)}</span>
       </div>
       <div class="run-apply-grid">
         <article>
@@ -908,6 +991,11 @@ function renderRunResultApplySummary() {
         </article>
       </div>
       <p>${escapeHtml(model.error ? `마스터 반영 오류: ${model.error}` : model.targetText)}</p>
+      <div class="run-apply-actions">
+        ${status.actions.map((action) => `
+          <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
+        `).join("")}
+      </div>
     </section>
   `;
 }
