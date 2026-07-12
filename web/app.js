@@ -591,6 +591,33 @@ const COLLECTION_PURPOSE_PROFILES = {
   }
 };
 
+const COLLECTION_PURPOSE_EXECUTION_PROFILES = {
+  basic_db: {
+    depthLabel: "기본 DB 중심",
+    depthNote: "기간 매출 제외",
+    collectRegional: false,
+    collectOta: false,
+    collectBookingStock: true,
+    collectWeeklyRange: false
+  },
+  revenue_detail: {
+    depthLabel: "상세 매출 중심",
+    depthNote: "기간 매출 포함",
+    collectRegional: true,
+    collectOta: true,
+    collectBookingStock: true,
+    collectWeeklyRange: true
+  },
+  demand_location: {
+    depthLabel: "수요·입지 중심",
+    depthNote: "지역·클러스터 우선",
+    collectRegional: true,
+    collectOta: false,
+    collectBookingStock: true,
+    collectWeeklyRange: false
+  }
+};
+
 function normalizeCollectionPurpose(value) {
   const text = String(value || "").trim();
   if (COLLECTION_PURPOSE_PROFILES[text]) return text;
@@ -600,7 +627,11 @@ function normalizeCollectionPurpose(value) {
 }
 
 function collectionPurposeProfile(value) {
-  return COLLECTION_PURPOSE_PROFILES[normalizeCollectionPurpose(value)] || COLLECTION_PURPOSE_PROFILES.revenue_detail;
+  const key = normalizeCollectionPurpose(value);
+  return {
+    ...(COLLECTION_PURPOSE_PROFILES[key] || COLLECTION_PURPOSE_PROFILES.revenue_detail),
+    ...(COLLECTION_PURPOSE_EXECUTION_PROFILES[key] || COLLECTION_PURPOSE_EXECUTION_PROFILES.revenue_detail)
+  };
 }
 
 function collectionPurposeLabel(value) {
@@ -658,7 +689,8 @@ function currentCrawlFormPayload() {
   const resolvedMode = correctedSearchMode(keyword, requestedMode);
   const collectionMode = "precision";
   const collectionPurpose = normalizeCollectionPurpose(els.collectionPurposeInput?.value || "revenue_detail");
-  const defaultRange = collectionPurposeDefaultRange(collectionPurpose);
+  const purpose = collectionPurposeProfile(collectionPurpose);
+  const defaultRange = purpose.defaultRange || collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
   const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? defaultRange : (rawDetailRankRanges || defaultRange);
   return {
@@ -672,7 +704,7 @@ function currentCrawlFormPayload() {
     collectionMode,
     detailRankRanges,
     rankRangeCount: rankRangeCountFromText(detailRankRanges, defaultRange),
-    bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges, defaultRange)
+    bookingRangePlaceLimit: purpose.collectWeeklyRange ? rankRangePlaceLimitFromText(detailRankRanges, defaultRange) : 0
   };
 }
 
@@ -735,7 +767,11 @@ function syncCollectionModeInputs() {
     if (!els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = purpose.defaultRange;
   }
   els.crawlForm?.querySelectorAll("[data-collection-purpose]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.collectionPurpose === purpose.key);
+    const buttonPurpose = collectionPurposeProfile(button.dataset.collectionPurpose);
+    button.classList.toggle("active", buttonPurpose.key === purpose.key);
+    button.title = `${buttonPurpose.depthLabel || buttonPurpose.label} · ${buttonPurpose.depthNote || buttonPurpose.note || ""}`;
+    const helper = button.querySelector("em");
+    if (helper && buttonPurpose.depthNote) helper.textContent = buttonPurpose.depthNote;
   });
   updateCrawlSpeedPreview();
 }
@@ -1265,17 +1301,17 @@ function crawlPreviewMeta(payload = {}) {
   const fast = payload.collectionMode === "fast";
   const purpose = collectionPurposeProfile(payload.collectionPurpose || "revenue_detail");
   const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
-  const placeLimit = days > 1 && !fast
+  const placeLimit = days > 1 && !fast && purpose.collectWeeklyRange
     ? Math.max(0, Math.min(20, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange))))
     : 0;
   const searchSeconds = payload.searchMode === "company" ? 55 : 95;
   const trendSeconds = payload.searchMode === "keyword" ? (purpose.key === "demand_location" ? 55 : 25) : 10;
-  const productSeconds = fast ? 0 : (payload.productMode === "all" ? 45 : 26);
+  const productSeconds = fast || !purpose.collectBookingStock ? 0 : (payload.productMode === "all" ? 45 : 26);
   const rangeSeconds = !fast && placeLimit
     ? placeLimit * days * (payload.productMode === "all" ? 5.5 : 4.2)
     : 0;
-  const regionalSeconds = fast ? 0 : (purpose.key === "demand_location" ? 130 : 80);
-  const otaSeconds = fast ? 0 : (purpose.key === "basic_db" ? 20 : 35);
+  const regionalSeconds = !fast && purpose.collectRegional ? (purpose.key === "demand_location" ? 130 : 80) : 0;
+  const otaSeconds = !fast && purpose.collectOta ? 35 : 0;
   const ioSeconds = fast ? 18 : 35;
   const stages = [
     { key: "rank", label: "순위 수집", seconds: searchSeconds + Math.max(0, rangeCount - 20) * 1.2, detail: `${purpose.label} 기준으로 네이버 순위와 업체 기본 정보를 정리합니다.` },
@@ -1285,12 +1321,26 @@ function crawlPreviewMeta(payload = {}) {
       : { key: "inventory", label: purpose.key === "basic_db" ? "상품/금액 확인" : "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `${payload.detailRankRanges || purpose.defaultRange}위 중 상세 대상의 날짜별 수량과 요일별 가격을 확인합니다.` },
     !fast ? { key: "ota", label: purpose.key === "demand_location" ? "입지/클러스터" : "보조 채널", seconds: otaSeconds + regionalSeconds, detail: purpose.key === "demand_location" ? "지역 클러스터와 입지 보정 신호를 함께 정리합니다." : "OTA 보조 신호와 지역 수요 데이터를 정리합니다." } : null,
     { key: "save", label: "저장/분석", seconds: ioSeconds, detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다." }
-  ].filter(Boolean).map((stage, index) => ({
+  ].filter(Boolean).filter((stage) => stage.key !== "ota" || purpose.collectOta || purpose.collectRegional).map((stage, index) => ({
     ...stage,
     seconds: Math.max(4, Math.round(stage.seconds || 0)),
     status: index === 0 ? "active" : "pending",
     progress: index === 0 ? 1 : 0
   }));
+  if (!fast && !purpose.collectWeeklyRange) {
+    const inventoryStage = stages.find((stage) => stage.key === "inventory");
+    if (inventoryStage) {
+      inventoryStage.label = "상품/금액 확인";
+      inventoryStage.detail = `${payload.detailRankRanges || purpose.defaultRange}위 상품 구성과 대표 가격을 확인하고 기간별 매출 수집은 제외합니다.`;
+    }
+  }
+  if (!fast && purpose.collectRegional && !purpose.collectOta) {
+    const otaStage = stages.find((stage) => stage.key === "ota");
+    if (otaStage) {
+      otaStage.label = "입지/클러스터";
+      otaStage.detail = "지역 클러스터와 입지 보정 신호를 정리합니다.";
+    }
+  }
   const stagedSeconds = stages.reduce((sum, stage) => sum + stage.seconds, 0);
   const estimatedTotalSeconds = Math.max(fast ? 45 : 90, stagedSeconds);
   if (stages.length && estimatedTotalSeconds > stagedSeconds) {
@@ -1311,6 +1361,13 @@ function crawlPreviewMeta(payload = {}) {
       productModeLabel: productModeLabel(payload.productMode),
       collectionPurpose: purpose.key,
       collectionPurposeLabel: purpose.label,
+      collectionProfile: purpose.key === "basic_db" ? "basic_db_light" : purpose.key === "demand_location" ? "demand_location_signal" : "revenue_detail_deep",
+      collectionProfileLabel: purpose.depthLabel || purpose.label,
+      collectionProfileNote: purpose.depthNote || "",
+      collectRegional: purpose.collectRegional,
+      collectOta: purpose.collectOta,
+      collectBookingStock: purpose.collectBookingStock,
+      collectWeeklyRange: purpose.collectWeeklyRange,
       collectionMode: payload.collectionMode,
       collectionModeLabel: collectionModeLabel(payload.collectionMode),
       detailRankRanges: payload.detailRankRanges,

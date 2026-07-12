@@ -219,6 +219,53 @@ function collectionPurposeDefaultRange(value) {
   return "1-10";
 }
 
+function collectionExecutionProfile(purposeValue, modeValue = "precision") {
+  const purpose = normalizeCollectionPurpose(purposeValue);
+  const mode = normalizeCollectionMode(modeValue);
+  if (mode === "fast") {
+    return {
+      key: "fast_rank",
+      label: "빠른 순위 확인",
+      note: "순위 중심으로 빠르게 확인하고 상세 수집은 생략합니다.",
+      collectRegional: false,
+      collectOta: false,
+      collectBookingStock: false,
+      collectWeeklyRange: false
+    };
+  }
+  if (purpose === "basic_db") {
+    return {
+      key: "basic_db_light",
+      label: "기본 DB 중심",
+      note: "순위, 예약 연결, 상품 구성과 대표 가격을 넓게 확인하고 기간별 매출은 생략합니다.",
+      collectRegional: false,
+      collectOta: false,
+      collectBookingStock: true,
+      collectWeeklyRange: false
+    };
+  }
+  if (purpose === "demand_location") {
+    return {
+      key: "demand_location_signal",
+      label: "수요·입지 중심",
+      note: "지역 노출, 클러스터, 검색수요 신호를 우선하고 기간별 매출은 상세 매출 수집에서 확인합니다.",
+      collectRegional: true,
+      collectOta: false,
+      collectBookingStock: true,
+      collectWeeklyRange: false
+    };
+  }
+  return {
+    key: "revenue_detail_deep",
+    label: "상세 매출 중심",
+    note: "예약 수량, 요일별 가격, 기간별 예상 매출과 보조 채널을 함께 확인합니다.",
+    collectRegional: true,
+    collectOta: true,
+    collectBookingStock: true,
+    collectWeeklyRange: true
+  };
+}
+
 function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
@@ -296,6 +343,7 @@ function crawlExecutionPlan(payload = {}) {
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
   const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
   const collectionPurpose = normalizeCollectionPurpose(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail");
+  const executionProfile = collectionExecutionProfile(collectionPurpose, collectionMode);
   const defaultDetailRankRanges = collectionMode === "fast" ? "" : collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = collectionMode === "fast"
     ? ""
@@ -314,11 +362,13 @@ function crawlExecutionPlan(payload = {}) {
     7
   );
   const bookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingDays) ? rawBookingDays : 7)));
-  const bookingRangePlaceLimit = resolveBookingRangePlaceLimit(
-    payload.bookingRangePlaceLimit ?? process.env.BOOKING_RANGE_PLACE_LIMIT,
-    bookingRangeDays,
-    detailPlaceLimit
-  );
+  const bookingRangePlaceLimit = executionProfile.collectWeeklyRange
+    ? resolveBookingRangePlaceLimit(
+        payload.bookingRangePlaceLimit ?? process.env.BOOKING_RANGE_PLACE_LIMIT,
+        bookingRangeDays,
+        detailPlaceLimit
+      )
+    : 0;
   const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
   const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode);
   return {
@@ -332,22 +382,29 @@ function crawlExecutionPlan(payload = {}) {
     productMode,
     collectionMode,
     collectionPurpose,
+    collectionProfile: executionProfile.key,
+    collectionProfileLabel: executionProfile.label,
+    collectionProfileNote: executionProfile.note,
+    collectRegional: executionProfile.collectRegional,
+    collectOta: executionProfile.collectOta,
+    collectBookingStock: executionProfile.collectBookingStock,
+    collectWeeklyRange: executionProfile.collectWeeklyRange,
     detailRankRanges
   };
 }
 
 function estimateCrawlCompletion(payload = {}, timingStore = null) {
   const plan = crawlExecutionPlan(payload);
-  const rangePlaceCount = plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
+  const rangePlaceCount = plan.collectWeeklyRange && plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
   const fast = plan.collectionMode === "fast";
   const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
-  const productSeconds = fast ? 0 : (plan.productMode === "all" ? 45 : 26);
+  const productSeconds = fast || !plan.collectBookingStock ? 0 : (plan.productMode === "all" ? 45 : 26);
   const trendSeconds = plan.resolvedSearchMode === "keyword" ? (plan.collectionPurpose === "demand_location" ? 55 : 25) : 10;
   const rangeSeconds = !fast && rangePlaceCount
     ? rangePlaceCount * plan.bookingRangeDays * (plan.productMode === "all" ? 5.5 : 4.2)
     : 0;
-  const regionalSeconds = fast ? 0 : (plan.collectionPurpose === "demand_location" ? 130 : 80);
-  const otaSeconds = fast ? 0 : (plan.collectionPurpose === "basic_db" ? 20 : 35);
+  const regionalSeconds = !fast && plan.collectRegional ? (plan.collectionPurpose === "demand_location" ? 130 : 80) : 0;
+  const otaSeconds = !fast && plan.collectOta ? 35 : 0;
   const ioSeconds = fast ? 18 : 35;
   const stages = [
     {
@@ -389,10 +446,24 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       seconds: ioSeconds,
       detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다."
     }
-  ].filter(Boolean).map((stage) => ({
+  ].filter(Boolean).filter((stage) => stage.key !== "ota" || plan.collectOta || plan.collectRegional).map((stage) => ({
     ...stage,
     seconds: Math.max(4, Math.round(stage.seconds || 0))
   }));
+  if (!fast && !plan.collectWeeklyRange) {
+    const inventoryStage = stages.find((stage) => stage.key === "inventory");
+    if (inventoryStage) {
+      inventoryStage.label = "상품/금액 확인";
+      inventoryStage.detail = `상세 ${plan.detailRankRanges || "1-20"}위의 상품 구성과 대표 가격을 확인하고 기간별 매출 수집은 제외합니다.`;
+    }
+  }
+  if (!fast && plan.collectRegional && !plan.collectOta) {
+    const otaStage = stages.find((stage) => stage.key === "ota");
+    if (otaStage) {
+      otaStage.label = "입지/클러스터";
+      otaStage.detail = "지역 클러스터와 입지 보정 신호를 정리합니다.";
+    }
+  }
   const stagedSeconds = stages.reduce((sum, stage) => sum + stage.seconds, 0);
   const modelTotalSeconds = Math.max(
     fast ? 45 : 90,
@@ -413,6 +484,13 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       productModeLabel: PRODUCT_MODES[plan.productMode] || PRODUCT_MODES.all,
       collectionPurpose: plan.collectionPurpose,
       collectionPurposeLabel: COLLECTION_PURPOSES[plan.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+      collectionProfile: plan.collectionProfile,
+      collectionProfileLabel: plan.collectionProfileLabel,
+      collectionProfileNote: plan.collectionProfileNote,
+      collectRegional: plan.collectRegional,
+      collectOta: plan.collectOta,
+      collectBookingStock: plan.collectBookingStock,
+      collectWeeklyRange: plan.collectWeeklyRange,
       collectionMode: plan.collectionMode,
       collectionModeLabel: COLLECTION_MODES[plan.collectionMode] || COLLECTION_MODES.precision,
       detailRankRanges: plan.detailRankRanges,
@@ -444,6 +522,7 @@ function crawlTimingConditions(plan = {}) {
     productMode: normalizeProductMode(plan.productMode),
     collectionMode: normalizeCollectionMode(plan.collectionMode),
     collectionPurpose: normalizeCollectionPurpose(plan.collectionPurpose),
+    collectionProfile: plan.collectionProfile || collectionExecutionProfile(plan.collectionPurpose, plan.collectionMode).key,
     detailRankRanges: plan.detailRankRanges || "없음",
     bookingRangeDays: Math.max(1, Math.min(31, Math.round(Number(plan.bookingRangeDays) || 1))),
     bookingRangePlaceLimit: Math.max(0, Math.min(20, Math.round(Number(plan.bookingRangePlaceLimit) || 0)))
@@ -484,6 +563,7 @@ function crawlTimingSimilarityScore(plan = {}, entry = {}) {
   const right = entry.conditions || {};
   if (right.collectionMode !== left.collectionMode) return 0;
   if (right.collectionPurpose && right.collectionPurpose !== left.collectionPurpose) return 0;
+  if (right.collectionProfile && right.collectionProfile !== left.collectionProfile) return 0;
   if (right.searchMode !== left.searchMode) return 0;
   if (right.productMode !== left.productMode) return 0;
 
@@ -564,6 +644,13 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     collectionMode: estimate.collectionMode,
     collectionPurpose: estimate.collectionPurpose,
     collectionPurposeLabel: COLLECTION_PURPOSES[estimate.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+    collectionProfile: estimate.collectionProfile,
+    collectionProfileLabel: estimate.collectionProfileLabel,
+    collectionProfileNote: estimate.collectionProfileNote,
+    collectRegional: estimate.collectRegional,
+    collectOta: estimate.collectOta,
+    collectBookingStock: estimate.collectBookingStock,
+    collectWeeklyRange: estimate.collectWeeklyRange,
     detailRankRanges: estimate.detailRankRanges,
     bookingRangeDays: estimate.bookingRangeDays,
     bookingRangePlaceLimit: estimate.bookingRangePlaceLimit,
@@ -602,6 +689,7 @@ function crawlPayloadSignature(payload = {}) {
     productMode: plan.productMode,
     collectionMode: plan.collectionMode,
     collectionPurpose: plan.collectionPurpose,
+    collectionProfile: plan.collectionProfile,
     detailRankRanges: plan.detailRankRanges,
     collectionSource,
     sourceRole,
@@ -659,6 +747,13 @@ function publicCrawlJob(job, position = 0) {
     checkOut: job.plan?.checkOut || "",
     collectionPurpose: job.plan?.collectionPurpose || "revenue_detail",
     collectionPurposeLabel: COLLECTION_PURPOSES[job.plan?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+    collectionProfile: job.plan?.collectionProfile || "",
+    collectionProfileLabel: job.plan?.collectionProfileLabel || "",
+    collectionProfileNote: job.plan?.collectionProfileNote || "",
+    collectRegional: Boolean(job.plan?.collectRegional),
+    collectOta: Boolean(job.plan?.collectOta),
+    collectBookingStock: Boolean(job.plan?.collectBookingStock),
+    collectWeeklyRange: Boolean(job.plan?.collectWeeklyRange),
     detailRankRanges: job.plan?.detailRankRanges || "",
     bookingRangeDays: job.plan?.bookingRangeDays || 0,
     bookingRangePlaceLimit: job.plan?.bookingRangePlaceLimit || 0,

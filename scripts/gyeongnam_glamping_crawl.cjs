@@ -74,6 +74,61 @@ function collectionPurposeDefaultRange(value) {
   return "1-10";
 }
 
+function collectionExecutionProfile(purposeValue, modeValue = "precision") {
+  const purpose = normalizeCollectionPurpose(purposeValue);
+  const mode = normalizeCollectionMode(modeValue);
+  if (mode === "fast") {
+    return {
+      key: "fast_rank",
+      label: "빠른 순위 확인",
+      note: "순위 중심으로 빠르게 확인하고 상세 수집은 생략합니다.",
+      collectRegional: false,
+      collectOta: false,
+      collectBookingStock: false,
+      collectWeeklyRange: false,
+      regionalSkipNote: "빠른 순위 모드에서 지역별 반복 수집 생략",
+      otaSkipNote: "빠른 순위 모드에서 보조 채널 수집 생략"
+    };
+  }
+  if (purpose === "basic_db") {
+    return {
+      key: "basic_db_light",
+      label: "기본 DB 중심",
+      note: "순위, 예약 연결, 상품 구성과 대표 가격을 넓게 확인하고 기간별 매출은 생략합니다.",
+      collectRegional: false,
+      collectOta: false,
+      collectBookingStock: true,
+      collectWeeklyRange: false,
+      regionalSkipNote: "기본 DB 수집에서는 지역 반복 수집을 생략",
+      otaSkipNote: "기본 DB 수집에서는 OTA 보조 수집을 생략"
+    };
+  }
+  if (purpose === "demand_location") {
+    return {
+      key: "demand_location_signal",
+      label: "수요·입지 중심",
+      note: "지역 노출, 클러스터, 검색수요 신호를 우선하고 기간별 매출은 상세 매출 수집에서 확인합니다.",
+      collectRegional: true,
+      collectOta: false,
+      collectBookingStock: true,
+      collectWeeklyRange: false,
+      regionalSkipNote: "",
+      otaSkipNote: "수요·입지 정밀 분석에서는 OTA 보조 수집을 생략"
+    };
+  }
+  return {
+    key: "revenue_detail_deep",
+    label: "상세 매출 중심",
+    note: "예약 수량, 요일별 가격, 기간별 예상 매출과 보조 채널을 함께 확인합니다.",
+    collectRegional: true,
+    collectOta: true,
+    collectBookingStock: true,
+    collectWeeklyRange: true,
+    regionalSkipNote: "",
+    otaSkipNote: ""
+  };
+}
+
 function boundedInteger(value, fallback, min, max) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -174,10 +229,13 @@ const COLLECTION_MODE = normalizeCollectionMode(process.env.COLLECTION_MODE || "
 const COLLECTION_MODE_LABEL = COLLECTION_MODES[COLLECTION_MODE];
 const COLLECTION_PURPOSE = normalizeCollectionPurpose(process.env.COLLECTION_PURPOSE || "revenue_detail");
 const COLLECTION_PURPOSE_LABEL = COLLECTION_PURPOSES[COLLECTION_PURPOSE];
+const COLLECTION_PROFILE = collectionExecutionProfile(COLLECTION_PURPOSE, COLLECTION_MODE);
 const DETAIL_RANK_RANGES = parseRankRanges(process.env.DETAIL_RANK_RANGES, COLLECTION_MODE === "fast" ? "" : collectionPurposeDefaultRange(COLLECTION_PURPOSE));
 const DETAIL_RANK_RANGE_LABEL = rankRangeLabel(DETAIL_RANK_RANGES);
 const DETAIL_RANGE_PLACE_LIMIT = COLLECTION_MODE === "fast" ? 0 : (rankRangePlaceLimit(DETAIL_RANK_RANGES) || 10);
-const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? DETAIL_RANGE_PLACE_LIMIT : 0, 0, 20);
+const BOOKING_RANGE_PLACE_LIMIT = COLLECTION_PROFILE.collectWeeklyRange
+  ? boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? DETAIL_RANGE_PLACE_LIMIT : 0, 0, 20)
+  : 0;
 const SOURCE_ROLE = String(process.env.SOURCE_ROLE || "admin").trim() || "admin";
 const COLLECTION_SOURCE = String(process.env.COLLECTION_SOURCE || (SOURCE_ROLE === "b2b" ? "b2b_search" : "admin_search")).trim();
 const COLLECTION_SOURCE_LABEL = String(process.env.COLLECTION_SOURCE_LABEL || (COLLECTION_SOURCE === "b2b_search" ? "B2B 검색" : "관리자 수집")).trim();
@@ -2269,7 +2327,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       continue;
     }
     uniquePlaceIds.add(row.place_id);
-    const collectRange = BOOKING_RANGE_DAYS > 1 &&
+    const collectRange = COLLECTION_PROFILE.collectWeeklyRange &&
+      BOOKING_RANGE_DAYS > 1 &&
       BOOKING_RANGE_PLACE_LIMIT > 0 &&
       !alreadyKnown &&
       uniquePlaceIds.size <= BOOKING_RANGE_PLACE_LIMIT;
@@ -2424,7 +2483,12 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
     skippedByMode,
     skippedByRank,
     detailRankRanges: DETAIL_RANK_RANGE_LABEL,
-    collectionMode: COLLECTION_MODE
+    collectionMode: COLLECTION_MODE,
+    collectionPurpose: COLLECTION_PURPOSE,
+    collectionProfile: COLLECTION_PROFILE.key,
+    collectionProfileLabel: COLLECTION_PROFILE.label,
+    collectWeeklyRange: COLLECTION_PROFILE.collectWeeklyRange,
+    bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT
   };
 }
 
@@ -3131,19 +3195,19 @@ async function main() {
   console.log("Collecting Naver main...");
   const naver = await collectNaverMain();
 
-  const fastMode = COLLECTION_MODE === "fast";
+  console.log(`Collection profile: ${COLLECTION_PROFILE.label} - ${COLLECTION_PROFILE.note}`);
 
-  console.log(fastMode ? "Skipping Naver regional clusters for fast ranking..." : "Collecting Naver regional clusters...");
-  const regional = fastMode ? skippedRegional() : await collectNaverRegional();
+  console.log(COLLECTION_PROFILE.collectRegional ? "Collecting Naver regional clusters..." : `Skipping Naver regional clusters: ${COLLECTION_PROFILE.regionalSkipNote || COLLECTION_PROFILE.note}`);
+  const regional = COLLECTION_PROFILE.collectRegional ? await collectNaverRegional() : skippedRegional(COLLECTION_PROFILE.regionalSkipNote || COLLECTION_PROFILE.note);
 
-  console.log(fastMode ? "Skipping NOL for fast ranking..." : "Collecting NOL...");
-  const nol = fastMode ? skippedNol() : await collectNol();
+  console.log(COLLECTION_PROFILE.collectOta ? "Collecting NOL..." : `Skipping NOL: ${COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note}`);
+  const nol = COLLECTION_PROFILE.collectOta ? await collectNol() : skippedNol(COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note);
 
-  console.log(fastMode ? "Skipping Yeogi for fast ranking..." : "Checking Yeogi...");
-  const yeogi = fastMode ? skippedYeogi() : await collectYeogi();
+  console.log(COLLECTION_PROFILE.collectOta ? "Checking Yeogi..." : `Skipping Yeogi: ${COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note}`);
+  const yeogi = COLLECTION_PROFILE.collectOta ? await collectYeogi() : skippedYeogi(COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note);
 
-  console.log(fastMode ? "Skipping DDNayo for fast ranking..." : "Collecting DDNayo...");
-  const ddnayo = fastMode ? skippedDdnayo() : await collectDdnayo();
+  console.log(COLLECTION_PROFILE.collectOta ? "Collecting DDNayo..." : `Skipping DDNayo: ${COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note}`);
+  const ddnayo = COLLECTION_PROFILE.collectOta ? await collectDdnayo() : skippedDdnayo(COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note);
 
   applyNaverAdClusters(naver, regional.rows);
   console.log("Checking Naver booking stock...");
@@ -3640,6 +3704,9 @@ async function main() {
         .map((item) => `${item.region} ${item.collected}건`)
         .join(", ");
   const bookingConditionText = `상품범위 ${PRODUCT_MODE_LABEL}, 기준 ${ADULTS}명, ${BOOKING_RANGE_DAYS}일 기준, 체크인 ${CHECK_IN}, 종료일 ${CHECK_OUT}`;
+  const bookingRangeCollectionText = COLLECTION_PROFILE.collectWeeklyRange
+    ? (BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준")
+    : "기간별 매출 수집 제외";
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
     { 항목: "수집 모드", 값: SEARCH_MODE_LABEL },
@@ -3813,6 +3880,15 @@ async function main() {
     collectionModeLabel: COLLECTION_MODE_LABEL,
     collectionPurpose: COLLECTION_PURPOSE,
     collectionPurposeLabel: COLLECTION_PURPOSE_LABEL,
+    collectionProfile: COLLECTION_PROFILE.key,
+    collectionProfileLabel: COLLECTION_PROFILE.label,
+    collectionProfileNote: COLLECTION_PROFILE.note,
+    collectionProfileFlags: {
+      collectRegional: COLLECTION_PROFILE.collectRegional,
+      collectOta: COLLECTION_PROFILE.collectOta,
+      collectBookingStock: COLLECTION_PROFILE.collectBookingStock,
+      collectWeeklyRange: COLLECTION_PROFILE.collectWeeklyRange,
+    },
     sourceRole: SOURCE_ROLE,
     collectionSource: COLLECTION_SOURCE,
     collectionSourceLabel: COLLECTION_SOURCE_LABEL,
@@ -3829,6 +3905,7 @@ async function main() {
     productModeLabel: PRODUCT_MODE_LABEL,
     bookingRangeDays: BOOKING_RANGE_DAYS,
     bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
+    bookingRangeCollectionText,
     fileRoles,
     files: Object.values(fileRoles),
     detailJsonFiles,
