@@ -14298,6 +14298,22 @@ function companyMasterBackfillResult(master = {}) {
   `;
 }
 
+function companyMasterRouteSummary(master = {}) {
+  const rows = master.collectionRoutes?.rows || [];
+  if (!rows.length) return "";
+  return `
+    <div class="company-master-route-summary">
+      ${rows.slice(0, 4).map((row) => `
+        <article>
+          <span>${escapeHtml(row.label || row.key || "반영 경로")}</span>
+          <strong>${fmtNumber(row.latestCompanyCount || 0)}</strong>
+          <small>최근 기준 업체 · 누적 ${fmtNumber(row.runCount || 0)}회</small>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
 function companyMasterOpsIntro(master = {}) {
   const duplicateCount = master.duplicateCandidateCount || (master.duplicateCandidates || []).length;
   return `
@@ -14486,6 +14502,19 @@ function companyMasterSourceTag(company = {}) {
     return `<span class="company-source-tag b2b">B2B 검색${b2bCount ? ` ${fmtNumber(b2bCount)}회` : ""}</span>`;
   }
   return `<span class="company-source-tag admin">관리자 수집</span>`;
+}
+
+function companyMasterRouteTag(company = {}) {
+  const latest = company.latestCollection || {};
+  const key = latest.routeKey || "";
+  const label = latest.routeLabel || ({
+    basic_db: "기본 DB",
+    revenue_detail: "상세 매출",
+    demand_location: "수요·입지",
+    rank_probe: "순위 확인"
+  })[key] || "반영 경로 대기";
+  const className = key ? `route-${key}` : "route-pending";
+  return `<span class="company-route-tag ${escapeHtml(className)}">${escapeHtml(label)}</span>`;
 }
 
 function companyMasterVerificationItem(company = {}, meta = "") {
@@ -16786,6 +16815,7 @@ function companyMasterListPanel(master = {}) {
               <span>${escapeHtml(company.exposureLayer?.label || "분류 대기")}</span>
               <span>${escapeHtml(companyTargetCategoryLabel(company.salesTarget?.category))}</span>
               ${companyMasterSourceTag(company)}
+              ${companyMasterRouteTag(company)}
               ${companyMasterIdentityTag(company)}
               ${companyMasterCorrectionTag(company)}
               ${companyAdminReviewBadgeHtml(company)}
@@ -22122,6 +22152,7 @@ function renderCompanyMasterPanel() {
   }
   els.companyMasterPanel.innerHTML = `
     ${companyMasterOpsIntro(master)}
+    ${companyMasterRouteSummary(master)}
     ${companyMasterTools()}
     ${companyMasterBackfillResult(master)}
     ${companyMasterDiagnosticsPanel(master)}

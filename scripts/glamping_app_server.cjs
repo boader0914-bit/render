@@ -266,6 +266,61 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   };
 }
 
+function collectionDbRouteProfile(purposeValue, profileValue = "") {
+  const purpose = normalizeCollectionPurpose(purposeValue);
+  const profile = String(profileValue || "").trim();
+  if (purpose === "basic_db") {
+    return {
+      key: "basic_db",
+      label: "기본 DB",
+      note: "순위, 상품, 금액, 채널 기본정보를 업체 마스터에 우선 반영",
+      appliesMasterBasic: true,
+      appliesInventory: true,
+      appliesHistory: false,
+      appliesDemandLocation: false,
+      targets: ["company_master.basic", "company_master.inventory"]
+    };
+  }
+  if (purpose === "demand_location") {
+    return {
+      key: "demand_location",
+      label: "수요·입지",
+      note: "지역카드, 클러스터, 검색수요, 입지 보정 신호로 반영",
+      appliesMasterBasic: true,
+      appliesInventory: false,
+      appliesHistory: false,
+      appliesDemandLocation: true,
+      targets: ["company_master.demand_signals", "region_operations", "demand_structure"]
+    };
+  }
+  if (profile === "fast_rank") {
+    return {
+      key: "rank_probe",
+      label: "순위 확인",
+      note: "순위 확인용으로 노출 기록만 반영",
+      appliesMasterBasic: true,
+      appliesInventory: false,
+      appliesHistory: false,
+      appliesDemandLocation: false,
+      targets: ["company_master.keyword_exposure"]
+    };
+  }
+  return {
+    key: "revenue_detail",
+    label: "상세 매출",
+    note: "기간별 예약율, 가격, 예상 매출을 누적 DB에 반영",
+    appliesMasterBasic: true,
+    appliesInventory: true,
+    appliesHistory: true,
+    appliesDemandLocation: false,
+    targets: ["company_master.inventory", "history.observations"]
+  };
+}
+
+function runCollectionDbRoute(run = {}) {
+  return collectionDbRouteProfile(run.collectionPurpose, run.collectionProfile);
+}
+
 function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
@@ -8147,6 +8202,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const salesSignal = companySalesSignalFromItem(item, run);
   const couponSignal = salesSignal.couponSignal || naverCouponSignalFromItem(item);
   const revenueSnapshot = companyRevenueSnapshotFromItem(item);
+  const dbRoute = runCollectionDbRoute(run);
   return {
     name,
     nameKey,
@@ -8171,6 +8227,12 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     sourceRole: sourceRoleForCollectionSource(run.collectionSource, run.sourceRole || USER_ROLES.admin),
     collectionSource: normalizeCollectionSource(run.collectionSource, run.sourceRole || USER_ROLES.admin),
     collectionSourceLabel: run.collectionSourceLabel || collectionSourceLabel(normalizeCollectionSource(run.collectionSource, run.sourceRole || USER_ROLES.admin)),
+    collectionPurpose: normalizeCollectionPurpose(run.collectionPurpose || "revenue_detail"),
+    collectionPurposeLabel: run.collectionPurposeLabel || COLLECTION_PURPOSES[normalizeCollectionPurpose(run.collectionPurpose || "revenue_detail")] || COLLECTION_PURPOSES.revenue_detail,
+    collectionProfile: run.collectionProfile || "",
+    collectionProfileLabel: run.collectionProfileLabel || "",
+    collectionProfileNote: run.collectionProfileNote || "",
+    collectionDbRoute: dbRoute,
     runId: run.id || "",
     collectedAt,
     collectedDate: String(collectedAt || "").slice(0, 10),
@@ -8231,11 +8293,18 @@ function createCompanyRecord(companyId, entity) {
     sourceRoles: boundedUnique([entity.sourceRole], 6),
     collectionSources: boundedUnique([entity.collectionSource], 12),
     sourceStats: {},
+    collectionRouteStats: {},
+    latestCollection: null,
+    collectionRouteHistory: [],
     keywords: {},
     inventory: {
       latest: {},
       structureCounts: {},
       confidenceCounts: {}
+    },
+    demandSignals: {
+      latest: {},
+      snapshots: []
     },
     manualCorrection: null,
     duplicateNotes: []
@@ -8285,6 +8354,83 @@ function updateCompanySourceStats(company, entity) {
   if (!alreadySeenRun || !entity.runId) stat.observationCount = Number(stat.observationCount || 0) + 1;
   stat.runCount = stat.runIds.length || Number(stat.runCount || 0);
   company.sourceStats[collectionSource] = stat;
+}
+
+function updateCompanyCollectionRoute(company, entity) {
+  const route = entity.collectionDbRoute || collectionDbRouteProfile(entity.collectionPurpose, entity.collectionProfile);
+  const routeKey = route.key || "revenue_detail";
+  company.collectionRouteStats = company.collectionRouteStats || {};
+  const stat = company.collectionRouteStats[routeKey] || {
+    key: routeKey,
+    label: route.label || routeKey,
+    firstSeenAt: entity.collectedAt || "",
+    lastSeenAt: "",
+    lastRunId: "",
+    runIds: [],
+    keywords: [],
+    observationCount: 0,
+    runCount: 0,
+    targets: route.targets || []
+  };
+  const alreadySeenRun = entity.runId && (stat.runIds || []).includes(entity.runId);
+  stat.label = route.label || stat.label || routeKey;
+  stat.note = route.note || stat.note || "";
+  stat.firstSeenAt = [stat.firstSeenAt, entity.collectedAt].filter(Boolean).sort()[0] || entity.collectedAt || "";
+  stat.lastSeenAt = [stat.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt || "";
+  stat.lastRunId = entity.runId || stat.lastRunId || "";
+  stat.runIds = boundedUnique([...(stat.runIds || []), entity.runId], 80);
+  stat.keywords = boundedUnique([...(stat.keywords || []), entity.keyword], 40);
+  stat.targets = boundedUnique([...(stat.targets || []), ...(route.targets || [])], 12);
+  if (!alreadySeenRun || !entity.runId) stat.observationCount = Number(stat.observationCount || 0) + 1;
+  stat.runCount = stat.runIds.length || Number(stat.runCount || 0);
+  company.collectionRouteStats[routeKey] = stat;
+
+  const latest = {
+    runId: entity.runId || "",
+    collectedAt: entity.collectedAt || "",
+    collectionPurpose: entity.collectionPurpose || "",
+    collectionPurposeLabel: entity.collectionPurposeLabel || "",
+    collectionProfile: entity.collectionProfile || "",
+    collectionProfileLabel: entity.collectionProfileLabel || "",
+    collectionProfileNote: entity.collectionProfileNote || "",
+    routeKey,
+    routeLabel: route.label || routeKey,
+    routeNote: route.note || "",
+    appliedTargets: route.targets || []
+  };
+  const shouldReplaceLatest = !company.latestCollection?.collectedAt
+    || String(latest.collectedAt || "").localeCompare(String(company.latestCollection.collectedAt || "")) >= 0;
+  if (shouldReplaceLatest) company.latestCollection = latest;
+  company.collectionRouteHistory = [
+    latest,
+    ...(company.collectionRouteHistory || []).filter((row) => row.runId !== latest.runId || row.routeKey !== latest.routeKey)
+  ].filter((row) => row.runId || row.collectedAt).slice(0, 20);
+}
+
+function updateCompanyDemandSignals(company, entity) {
+  const signals = company.demandSignals || { latest: {}, snapshots: [] };
+  const currentLatest = signals.latest || {};
+  const isSameRun = Boolean(entity.runId && currentLatest.runId && entity.runId === currentLatest.runId);
+  if ((currentLatest.runId || currentLatest.collectedAt) && !isSameRun) {
+    signals.snapshots = [
+      currentLatest,
+      ...(signals.snapshots || []).filter((row) => row.runId !== currentLatest.runId)
+    ].filter((row) => row.runId || row.collectedAt).slice(0, 12);
+  }
+  signals.latest = {
+    runId: entity.runId || "",
+    collectedAt: entity.collectedAt || "",
+    keyword: entity.keyword || "",
+    keywordKey: entity.keywordKey || "",
+    rank: Number(entity.rank) || null,
+    region: entity.region || "",
+    provinceKey: entity.provinceKey || "",
+    keywordLayer: entity.keywordLayer || "",
+    keywordLayerLabel: entity.keywordLayerLabel || "",
+    collectionProfile: entity.collectionProfile || "",
+    collectionProfileLabel: entity.collectionProfileLabel || ""
+  };
+  company.demandSignals = signals;
 }
 
 function upsertCompanyKeywordExposure(company, entity) {
@@ -8665,6 +8811,11 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     runCount: (company.runIds || []).length,
     sourceRoles: company.sourceRoles || [],
     collectionSources: company.collectionSources || [],
+    latestCollection: company.latestCollection || null,
+    collectionRouteStats: Object.values(company.collectionRouteStats || {})
+      .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
+      .slice(0, 8),
+    collectionRouteHistory: (company.collectionRouteHistory || []).slice(0, 8),
     sourceStats: Object.values(company.sourceStats || {})
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
       .slice(0, 8),
@@ -8676,6 +8827,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     activeKeyword,
     exposureLayer,
     inventory,
+    demandSignals: company.demandSignals || null,
     channelExposures: publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {}),
     correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection,
@@ -9971,8 +10123,11 @@ function upsertCompanyRecord(master, entity) {
   company.lastRunId = entity.runId || company.lastRunId;
   mergeCompanyFieldArrays(company, entity);
   updateCompanySourceStats(company, entity);
+  updateCompanyCollectionRoute(company, entity);
   upsertCompanyKeywordExposure(company, entity);
-  updateCompanyInventory(company, entity);
+  const route = entity.collectionDbRoute || collectionDbRouteProfile(entity.collectionPurpose, entity.collectionProfile);
+  if (route.appliesInventory) updateCompanyInventory(company, entity);
+  if (route.appliesDemandLocation) updateCompanyDemandSignals(company, entity);
   for (const key of sourceKeys) master.sourceIndex[key] = companyId;
   return company;
 }
@@ -10612,6 +10767,7 @@ async function saveCompanySalesContact(payload = {}) {
 async function upsertCompanyMasterForRun(data, collectedAt) {
   const master = await readCompanyMaster();
   const run = data?.run || {};
+  const runDbRoute = runCollectionDbRoute(run);
   const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
   const items = data?.availability?.items || [];
   const beforeSnapshot = JSON.stringify({
@@ -10620,14 +10776,19 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
     duplicateResolutions: master.duplicateResolutions
   });
   let touched = 0;
+  let inventoryAppliedCompanies = 0;
+  let demandSignalCompanies = 0;
 
   for (let index = 0; index < items.length; index += 1) {
     const entity = companyEntityFromItem(items[index], run, collectedAt);
     if (!entity.nameKey || !entity.sourceKeys.length) continue;
     const company = upsertCompanyRecord(master, entity);
+    const dbRoute = entity.collectionDbRoute || collectionDbRouteProfile(entity.collectionPurpose, entity.collectionProfile);
     touched += 1;
+    if (dbRoute.appliesInventory) inventoryAppliedCompanies += 1;
+    if (dbRoute.appliesDemandLocation) demandSignalCompanies += 1;
     const correctedItem = applyCompanyMasterIdentity(applyCompanyManualCorrection(items[index], company), company);
-    if (correctedItem.manualCorrectionApplied) {
+    if (correctedItem.manualCorrectionApplied && dbRoute.appliesInventory) {
       const correctedEntity = companyEntityFromItem(correctedItem, run, collectedAt);
       updateCompanyInventory(company, {
         ...correctedEntity,
@@ -10655,6 +10816,10 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
     file: "company_master/companies.json",
     totalCompanies: Object.keys(master.companies || {}).length,
     currentRunCompanies: touched,
+    dbRoute: runDbRoute,
+    inventoryAppliedCompanies,
+    demandSignalCompanies,
+    historyEligible: Boolean(runDbRoute.appliesHistory),
     duplicateCandidateCount: duplicateCandidates.length,
     duplicateCandidates,
     updatedAt: master.updatedAt || "",
@@ -10662,9 +10827,44 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
   };
 }
 
+function summarizeCompanyCollectionRoutes(companies = []) {
+  const routeCounts = {};
+  const latestRouteCounts = {};
+  const targetCounts = {};
+  for (const company of companies) {
+    for (const stat of Object.values(company.collectionRouteStats || {})) {
+      const key = stat.key || "unknown";
+      routeCounts[key] = (routeCounts[key] || 0) + Number(stat.runCount || stat.observationCount || 0);
+      for (const target of stat.targets || []) {
+        targetCounts[target] = (targetCounts[target] || 0) + 1;
+      }
+    }
+    const latestKey = company.latestCollection?.routeKey || "";
+    if (latestKey) latestRouteCounts[latestKey] = (latestRouteCounts[latestKey] || 0) + 1;
+  }
+  const labels = {
+    basic_db: "기본 DB",
+    revenue_detail: "상세 매출",
+    demand_location: "수요·입지",
+    rank_probe: "순위 확인"
+  };
+  return {
+    routeCounts,
+    latestRouteCounts,
+    targetCounts,
+    rows: Object.keys({ ...routeCounts, ...latestRouteCounts }).map((key) => ({
+      key,
+      label: labels[key] || key,
+      runCount: routeCounts[key] || 0,
+      latestCompanyCount: latestRouteCounts[key] || 0
+    })).sort((a, b) => (b.latestCompanyCount || 0) - (a.latestCompanyCount || 0) || (b.runCount || 0) - (a.runCount || 0))
+  };
+}
+
 async function summarizeCompanyMaster() {
   const master = await readCompanyMaster();
   const duplicateCandidates = findCompanyDuplicateCandidates(master);
+  const rawCompanies = Object.values(master.companies || {});
   const companies = Object.values(master.companies || {})
     .map((company) => companyRecordSummary(company))
     .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")));
@@ -10682,6 +10882,7 @@ async function summarizeCompanyMaster() {
     duplicateCandidateCount: duplicateCandidates.length,
     duplicateCandidates,
     collectionSourceCounts,
+    collectionRoutes: summarizeCompanyCollectionRoutes(rawCompanies),
     b2bSearchCompanyCount: collectionSourceCounts.b2b_search || 0,
     crossKeyword: summarizeCompanyCrossKeyword(master),
     salesTargets,
@@ -10744,6 +10945,7 @@ async function backfillCompanyMasterFromRuns(payload = {}) {
 
 function buildHistoryObservations(data, collectedAt) {
   const run = data?.run || {};
+  const dbRoute = runCollectionDbRoute(run);
   const checkIn = run.checkIn || runDateFromId(run.id) || kstDate(0);
   const collectedDate = String(collectedAt || "").slice(0, 10) || runDateFromId(run.id) || kstDate(0);
   const keyword = run.keyword || run.label || "";
@@ -10783,6 +10985,12 @@ function buildHistoryObservations(data, collectedAt) {
           sourceRole: run.sourceRole || "",
           collectionSource: run.collectionSource || "",
           collectionSourceLabel: run.collectionSourceLabel || "",
+          collectionPurpose: normalizeCollectionPurpose(run.collectionPurpose || "revenue_detail"),
+          collectionPurposeLabel: run.collectionPurposeLabel || COLLECTION_PURPOSES[normalizeCollectionPurpose(run.collectionPurpose || "revenue_detail")] || COLLECTION_PURPOSES.revenue_detail,
+          collectionProfile: run.collectionProfile || "",
+          collectionProfileLabel: run.collectionProfileLabel || "",
+          collectionDbRoute: dbRoute.key || "",
+          collectionDbRouteLabel: dbRoute.label || "",
           collectedAt,
           collectedDate,
           stayDate: row.stayDate,
@@ -10838,6 +11046,14 @@ async function appendHistoryForRun(runId) {
   const stat = await fsp.stat(dirPath);
   const collectedAt = stat.mtime.toISOString();
   const data = await loadRun(runId, { skipHistory: true });
+  const dbRoute = runCollectionDbRoute(data?.run || {});
+  if (!dbRoute.appliesHistory) {
+    return {
+      appended: 0,
+      reason: "collection_route_excludes_history",
+      dbRoute
+    };
+  }
   const observations = buildHistoryObservations(data, collectedAt);
   if (!observations.length) return { appended: 0, reason: "no_observations" };
   await fsp.mkdir(HISTORY_DIR, { recursive: true });
@@ -12019,6 +12235,19 @@ async function loadRun(runId, options = {}) {
       collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
       collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
       collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+      collectionProfile: manifest?.collectionProfile || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").key,
+      collectionProfileLabel: manifest?.collectionProfileLabel || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").label,
+      collectionProfileNote: manifest?.collectionProfileNote || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").note,
+      collectionProfileFlags: manifest?.collectionProfileFlags || {
+        collectRegional: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectRegional,
+        collectOta: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectOta,
+        collectBookingStock: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectBookingStock,
+        collectWeeklyRange: collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").collectWeeklyRange
+      },
+      collectionDbRoute: collectionDbRouteProfile(
+        manifest?.collectionPurpose || "revenue_detail",
+        manifest?.collectionProfile || collectionExecutionProfile(manifest?.collectionPurpose || "revenue_detail", manifest?.collectionMode || "precision").key
+      ),
       detailRankRanges: manifest?.detailRankRanges || "",
       province: provinceKey,
       provinceLabel: province.label,
@@ -12082,6 +12311,7 @@ async function loadRun(runId, options = {}) {
       });
       history = await summarizeHistoryForRun(result);
     }
+    history.collectionDbRoute = runCollectionDbRoute(result.run);
     result.history = history;
   }
 

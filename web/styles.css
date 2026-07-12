@@ -13344,6 +13344,38 @@ a.platform-row:hover {
   line-height: 1.05;
 }
 
+.company-master-route-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.company-master-route-summary article {
+  min-width: 0;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.company-master-route-summary span,
+.company-master-route-summary small {
+  display: block;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.company-master-route-summary strong {
+  display: block;
+  margin: 5px 0;
+  color: #175cd3;
+  font-size: 24px;
+  font-weight: 950;
+  line-height: 1.05;
+}
+
 .company-master-rule {
   background: #f8fbff;
 }
@@ -15286,6 +15318,31 @@ a.platform-row:hover {
   border-color: #d1fadf;
   background: #f0fdf4;
   color: #166534;
+}
+
+.company-master-row-tags .company-route-tag.route-basic_db {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.company-master-row-tags .company-route-tag.route-revenue_detail {
+  border-color: #b7e4cc;
+  background: #ecfdf3;
+  color: #047857;
+}
+
+.company-master-row-tags .company-route-tag.route-demand_location {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #b54708;
+}
+
+.company-master-row-tags .company-route-tag.route-rank_probe,
+.company-master-row-tags .company-route-tag.route-pending {
+  border-color: #e5e7eb;
+  background: #f8fafc;
+  color: #475467;
 }
 
 .company-keyword-chips {
@@ -27748,6 +27805,46 @@ body.role-admin [data-admin-section-panel="files"] .admin-files-collapsible summ
   box-shadow: none;
 }
 
+body.role-admin .company-master-route-summary article {
+  border-color: rgba(121, 184, 255, .28);
+  background: linear-gradient(180deg, rgba(22, 32, 46, .96), rgba(13, 20, 29, .94));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .24);
+}
+
+body.role-admin .company-master-route-summary span,
+body.role-admin .company-master-route-summary small {
+  color: #b7c6d8;
+}
+
+body.role-admin .company-master-route-summary strong {
+  color: #8fc4ff;
+}
+
+body.role-admin .company-master-row-tags .company-route-tag.route-basic_db {
+  border-color: rgba(121, 184, 255, .48);
+  background: rgba(29, 78, 216, .22);
+  color: #dcecff;
+}
+
+body.role-admin .company-master-row-tags .company-route-tag.route-revenue_detail {
+  border-color: rgba(52, 211, 153, .48);
+  background: rgba(6, 95, 70, .24);
+  color: #c8f7e3;
+}
+
+body.role-admin .company-master-row-tags .company-route-tag.route-demand_location {
+  border-color: rgba(251, 191, 36, .52);
+  background: rgba(146, 64, 14, .24);
+  color: #ffe8a8;
+}
+
+body.role-admin .company-master-row-tags .company-route-tag.route-rank_probe,
+body.role-admin .company-master-row-tags .company-route-tag.route-pending {
+  border-color: rgba(156, 174, 204, .32);
+  background: rgba(15, 23, 42, .76);
+  color: #d7deeb;
+}
+
 @media (min-width: 860px) {
   .app-main {
     display: grid;
@@ -27792,6 +27889,7 @@ body.role-admin [data-admin-section-panel="files"] .admin-files-collapsible summ
   }
 
   .company-master-metrics,
+  .company-master-route-summary,
   .company-master-ops-intro,
   .admin-db-metrics,
   .admin-db-audit-list,
