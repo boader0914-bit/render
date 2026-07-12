@@ -30821,6 +30821,116 @@ body.role-admin .admin-db-region-card-grid button.active {
   background: rgba(121, 184, 255, .24);
 }
 
+.run-apply-actions button:disabled,
+.run-apply-linked-actions button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.run-apply-linked-queue {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(139, 160, 190, .24);
+  border-radius: 14px;
+  background: rgba(8, 13, 20, .62);
+  padding: 12px;
+}
+
+.run-apply-linked-queue.good {
+  border-color: rgba(58, 226, 164, .32);
+  background: rgba(10, 67, 55, .24);
+}
+
+.run-apply-linked-queue.watch {
+  border-color: rgba(255, 198, 75, .38);
+  background: rgba(80, 58, 22, .26);
+}
+
+.run-apply-linked-queue.bad {
+  border-color: rgba(255, 114, 139, .44);
+  background: rgba(72, 25, 38, .32);
+}
+
+.run-apply-linked-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.run-apply-linked-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.run-apply-linked-head mark {
+  flex: 0 0 auto;
+  border: 1px solid rgba(121, 184, 255, .30);
+  border-radius: 999px;
+  background: rgba(121, 184, 255, .14);
+  color: #dcecff;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.run-apply-linked-list {
+  display: grid;
+  gap: 7px;
+}
+
+.run-apply-linked-list article {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(139, 160, 190, .22);
+  border-radius: 12px;
+  background: rgba(8, 13, 20, .66);
+  padding: 10px;
+}
+
+.run-apply-linked-list article strong,
+.run-apply-linked-list article small,
+.run-apply-linked-list article p {
+  overflow-wrap: anywhere;
+}
+
+.run-apply-linked-list article p,
+.run-apply-linked-queue > p,
+.run-apply-linked-more {
+  margin: 0;
+  color: #d8e3f0;
+  font-size: 12px;
+  font-weight: 830;
+  line-height: 1.42;
+}
+
+.run-apply-linked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-apply-linked-actions button {
+  min-height: 34px;
+  border: 1px solid rgba(139, 160, 190, .30);
+  border-radius: 999px;
+  background: rgba(13, 20, 29, .78);
+  color: #e8f2ff;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
+}
+
+.run-apply-linked-actions button:hover:not(:disabled) {
+  border-color: rgba(121, 184, 255, .72);
+  background: rgba(121, 184, 255, .18);
+}
+
 body.role-admin .crawl-purpose-panel {
   border-color: rgba(139, 160, 190, .26);
   background: rgba(13, 20, 29, .78);
@@ -30894,6 +31004,14 @@ body.role-admin .run-apply-grid article {
 
   .run-apply-badges {
     justify-content: flex-start;
+  }
+
+  .run-apply-linked-head {
+    display: grid;
+  }
+
+  .run-apply-linked-head mark {
+    width: fit-content;
   }
 
   .run-apply-head em {

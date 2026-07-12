@@ -931,6 +931,133 @@ function runDbApplyStatusModel(model = {}) {
   };
 }
 
+function collectionRouteRunCount(company = {}, routeKey = "") {
+  const stats = Array.isArray(company.collectionRouteStats)
+    ? company.collectionRouteStats
+    : Object.values(company.collectionRouteStats || {});
+  const stat = stats.find((row) => row?.key === routeKey) || {};
+  return Number(stat.runCount || stat.observationCount || 0);
+}
+
+function runDbApplyCompanyMatchSets(data = state.data || {}) {
+  const items = data.availability?.items || [];
+  const ids = new Set();
+  const names = new Set();
+  items.forEach((item) => {
+    if (item.companyId) ids.add(String(item.companyId));
+    const name = compactSearchText(item.name || item.primaryName || "");
+    if (name) names.add(name);
+  });
+  return { ids, names, runId: data.run?.runId || "" };
+}
+
+function rowMatchesRunApply(row = {}, match = {}) {
+  const company = row.company || {};
+  if (company.companyId && match.ids?.has(String(company.companyId))) return true;
+  if (company.latestCollection?.runId && company.latestCollection.runId === match.runId) return true;
+  if (company.lastRunId && company.lastRunId === match.runId) return true;
+  const names = [company.primaryName, ...(company.aliases || [])]
+    .map((value) => compactSearchText(value || ""))
+    .filter(Boolean);
+  return names.some((name) => match.names?.has(name));
+}
+
+function runDbApplyLinkedQueueModel(model = {}, status = {}) {
+  const master = companyMasterSource();
+  const allRows = adminDbRows(master);
+  const match = runDbApplyCompanyMatchSets(state.data || {});
+  const runRows = allRows.filter((row) => rowMatchesRunApply(row, match));
+  const decisionMap = new Map(companyDecisionQueueEntries(master).map((entry) => [entry.company?.companyId, entry]));
+  const queueRows = runRows.map((row) => {
+    const company = row.company || {};
+    const metrics = row.metrics || {};
+    const entry = decisionMap.get(company.companyId);
+    const reasons = [];
+    const routeCount = collectionRouteRunCount(company, model.route?.key || "");
+    const lowConfidence = adminDbConfidenceMatches(row, "low");
+    const decisionActive = adminDbStatusMatches(row, "decision_queue");
+    const recrawl = adminDbStatusMatches(row, "recrawl");
+    const manual = adminDbStatusMatches(row, "manual");
+    const confirmNeeded = metrics.collection?.needsConfirm || adminDbSourceMatches(row, "confirm_needed");
+    const revenueWeak = Boolean(entry?.revenueEvidence?.weak);
+    if (routeCount >= 2 && (lowConfidence || confirmNeeded || decisionActive || revenueWeak)) reasons.push(`${fmtNumber(routeCount)}회 반복 보강`);
+    if (lowConfidence) reasons.push(`수량 신뢰도 ${metrics.confidenceGrade || "낮음"}`);
+    if (manual) reasons.push("보정 필요");
+    if (recrawl) reasons.push("재수집 필요");
+    if (decisionActive) reasons.push("판단 큐 진입");
+    if (confirmNeeded) reasons.push(metrics.collection?.note || "확인 수집 필요");
+    if (revenueWeak) reasons.push(entry.revenueEvidence.reasons?.[0] || "매출 근거 보강");
+    return {
+      row,
+      entry,
+      reasons: [...new Set(reasons)].slice(0, 4),
+      routeCount,
+      priority: Number(entry?.priority?.score || metrics.priority || 0)
+    };
+  }).filter((item) => item.reasons.length)
+    .sort((a, b) =>
+      b.priority - a.priority ||
+      b.routeCount - a.routeCount ||
+      String(a.row.company?.primaryName || "").localeCompare(String(b.row.company?.primaryName || ""), "ko")
+    );
+  const lowConfidenceCount = queueRows.filter((item) => adminDbConfidenceMatches(item.row, "low")).length;
+  const confirmNeededCount = queueRows.filter((item) => item.row.metrics?.collection?.needsConfirm || adminDbSourceMatches(item.row, "confirm_needed")).length;
+  const tone = status.key === "failed" ? "bad" : queueRows.length ? "watch" : "good";
+  return {
+    tone,
+    runRows,
+    queueRows,
+    lowConfidenceCount,
+    confirmNeededCount,
+    status,
+    summary: runRows.length
+      ? `이번 수집 ${fmtNumber(runRows.length)}곳 중 ${fmtNumber(queueRows.length)}곳을 보강 큐와 연결했습니다.`
+      : "이번 수집 업체가 아직 마스터 DB 행과 매칭되지 않았습니다."
+  };
+}
+
+function runDbApplyLinkedQueueHtml(queue = {}) {
+  const rows = queue.queueRows || [];
+  const visibleRows = rows.slice(0, 4);
+  return `
+    <div class="run-apply-linked-queue ${escapeHtml(queue.tone || "watch")}">
+      <div class="run-apply-linked-head">
+        <div>
+          <span>보강 큐 연결</span>
+          <strong>${rows.length ? `${fmtNumber(rows.length)}곳 확인 필요` : "연결된 보강 대상 없음"}</strong>
+          <small>${escapeHtml(queue.summary || "수집 결과 기준으로 보강 대상을 자동 확인합니다.")}</small>
+        </div>
+        <mark>${escapeHtml(queue.lowConfidenceCount ? `낮은 신뢰도 ${fmtNumber(queue.lowConfidenceCount)}` : queue.confirmNeededCount ? `확인 수집 ${fmtNumber(queue.confirmNeededCount)}` : "정상")}</mark>
+      </div>
+      ${visibleRows.length ? `
+        <div class="run-apply-linked-list">
+          ${visibleRows.map(({ row, reasons }) => {
+            const company = row.company || {};
+            const metrics = row.metrics || {};
+            return `
+              <article>
+                <div>
+                  <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+                  <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", metrics.collection?.label].filter(Boolean).join(" · "))}</small>
+                </div>
+                <p>${escapeHtml(reasons.join(" · "))}</p>
+              </article>
+            `;
+          }).join("")}
+          ${rows.length > visibleRows.length ? `<small class="run-apply-linked-more">외 ${fmtNumber(rows.length - visibleRows.length)}곳은 전체 DB 필터에서 이어서 확인합니다.</small>` : ""}
+        </div>
+      ` : `
+        <p>이번 실행에서 낮은 신뢰도나 보정 필요 신호가 잡힌 업체는 없습니다.</p>
+      `}
+      <div class="run-apply-linked-actions">
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">처리 필요 보기</button>
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="low_confidence" ${queue.lowConfidenceCount ? "" : "disabled"}>낮은 신뢰도</button>
+        <button type="button" data-admin-db-source-link="confirm_needed" ${queue.confirmNeededCount ? "" : "disabled"}>확인 수집 필요</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderRunResultApplySummary() {
   if (!isAdminRole() || !els.runApplySummary) return;
   if (!state.data?.run) {
@@ -945,6 +1072,7 @@ function renderRunResultApplySummary() {
   const model = runDbApplySummaryModel(state.data);
   const run = model.run || {};
   const status = runDbApplyStatusModel(model);
+  const linkedQueue = runDbApplyLinkedQueueModel(model, status);
   const detailText = run.detailRankRanges ? `${run.detailRankRanges}위` : "범위 미확인";
   const dateText = dateRangeLabel(run);
   const historyValue = model.historyEligible ? fmtNumber(model.historyRows) : "제외";
@@ -996,6 +1124,7 @@ function renderRunResultApplySummary() {
           <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
         `).join("")}
       </div>
+      ${runDbApplyLinkedQueueHtml(linkedQueue)}
     </section>
   `;
 }
