@@ -344,6 +344,7 @@ const els = {
   collectionPurposeInput: document.getElementById("collectionPurposeInput"),
   collectionModeInput: document.getElementById("collectionModeInput"),
   detailRankRangesInput: document.getElementById("detailRankRangesInput"),
+  crawlPurposeRoutePreview: document.getElementById("crawlPurposeRoutePreview"),
   crawlSpeedPresetRow: document.getElementById("crawlSpeedPresetRow"),
   crawlSpeedPreview: document.getElementById("crawlSpeedPreview"),
   crawlProgress: document.getElementById("crawlProgress"),
@@ -618,6 +619,48 @@ const COLLECTION_PURPOSE_EXECUTION_PROFILES = {
   }
 };
 
+const COLLECTION_PURPOSE_UI_COPY = {
+  basic_db: {
+    label: "기본정보 수집",
+    shortLabel: "기본정보",
+    note: "순위, 상품 구성, 대표 금액, 예약 연결 여부를 넓게 채웁니다.",
+    status: "업체 마스터 DB를 넓게 채우는 수집입니다.",
+    cardSummary: "순위·상품·대표금액·예약 연결",
+    dbTarget: "업체 마스터 DB",
+    dbApplyText: "마스터 기본정보 반영",
+    excludeText: "기간별 매출 누적 제외",
+    rangeHint: "권장 1-50위 · 최대 1-100위",
+    depthLabel: "기본정보 중심",
+    depthNote: "기간 매출 제외"
+  },
+  revenue_detail: {
+    label: "상세 매출 수집",
+    shortLabel: "상세 매출",
+    note: "요일별 수량, 가격, 예약율, 기간 예상 매출을 누적합니다.",
+    status: "매출 판단에 필요한 날짜별 수량과 가격을 확인합니다.",
+    cardSummary: "요일별 수량·가격·예약율·예상매출",
+    dbTarget: "매출 누적 DB",
+    dbApplyText: "매출 히스토리 반영",
+    excludeText: "범위 밖 업체는 매출 누적 제외",
+    rangeHint: "권장 1-10위 · 확장 1-20위",
+    depthLabel: "상세 매출 중심",
+    depthNote: "기간 매출 포함"
+  },
+  demand_location: {
+    label: "수요·입지 정밀 수집",
+    shortLabel: "수요·입지",
+    note: "검색수요, 클러스터, 입지 보정 신호를 함께 확인합니다.",
+    status: "수요 구조와 입지 보정값을 평가합니다.",
+    cardSummary: "검색수요·클러스터·입지 보정",
+    dbTarget: "수요·입지 신호 DB",
+    dbApplyText: "지역카드·클러스터 반영",
+    excludeText: "기간별 매출 누적 제외",
+    rangeHint: "권장 1-20위 · 필요 시 1-100위",
+    depthLabel: "수요·입지 중심",
+    depthNote: "지역·클러스터 우선"
+  }
+};
+
 function normalizeCollectionPurpose(value) {
   const text = String(value || "").trim();
   if (COLLECTION_PURPOSE_PROFILES[text]) return text;
@@ -630,7 +673,8 @@ function collectionPurposeProfile(value) {
   const key = normalizeCollectionPurpose(value);
   return {
     ...(COLLECTION_PURPOSE_PROFILES[key] || COLLECTION_PURPOSE_PROFILES.revenue_detail),
-    ...(COLLECTION_PURPOSE_EXECUTION_PROFILES[key] || COLLECTION_PURPOSE_EXECUTION_PROFILES.revenue_detail)
+    ...(COLLECTION_PURPOSE_EXECUTION_PROFILES[key] || COLLECTION_PURPOSE_EXECUTION_PROFILES.revenue_detail),
+    ...(COLLECTION_PURPOSE_UI_COPY[key] || COLLECTION_PURPOSE_UI_COPY.revenue_detail)
   };
 }
 
@@ -674,12 +718,29 @@ function rankRangePlaceLimitFromText(value = "", fallback = "1-10") {
   return Math.max(0, Math.min(20, rankRangeCountFromText(value, fallback)));
 }
 
-function crawlSpeedPresetOptions() {
+function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.value || "revenue_detail") {
+  const purpose = normalizeCollectionPurpose(purposeValue);
+  if (purpose === "basic_db") {
+    return [
+      { key: "top10", label: "1-20위", collectionMode: "precision", range: "1-20", note: "작은 지역 기본정보 확인", collectionPurpose: "basic_db" },
+      { key: "top20", label: "1-50위", collectionMode: "precision", range: "1-50", note: "마스터 DB 권장", collectionPurpose: "basic_db" },
+      { key: "top50", label: "1-100위", collectionMode: "precision", range: "1-100", note: "넓은 후보 확보", collectionPurpose: "basic_db" },
+      { key: "top100", label: "10-100위", collectionMode: "precision", range: "10-100", note: "상위권 제외 보강", collectionPurpose: "basic_db" }
+    ];
+  }
+  if (purpose === "demand_location") {
+    return [
+      { key: "top10", label: "1-10위", collectionMode: "precision", range: "1-10", note: "핵심 수요 신호", collectionPurpose: "demand_location" },
+      { key: "top20", label: "1-20위", collectionMode: "precision", range: "1-20", note: "수요·입지 권장", collectionPurpose: "demand_location" },
+      { key: "top50", label: "1-50위", collectionMode: "precision", range: "1-50", note: "클러스터 확장", collectionPurpose: "demand_location" },
+      { key: "top100", label: "1-100위", collectionMode: "precision", range: "1-100", note: "넓은 입지 후보", collectionPurpose: "demand_location" }
+    ];
+  }
   return [
-    { key: "top10", label: "1-10위", collectionMode: "precision", range: "1-10", note: "상세 매출 기본", collectionPurpose: "revenue_detail" },
-    { key: "top20", label: "1-20위", collectionMode: "precision", range: "1-20", note: "확장 비교", collectionPurpose: "revenue_detail" },
-    { key: "top50", label: "1-50위", collectionMode: "precision", range: "1-50", note: "기본 DB 확장", collectionPurpose: "basic_db" },
-    { key: "top100", label: "1-100위", collectionMode: "precision", range: "1-100", note: "넓은 DB 후보 확보", collectionPurpose: "basic_db" }
+    { key: "top10", label: "1-5위", collectionMode: "precision", range: "1-5", note: "핵심 경쟁사 정밀", collectionPurpose: "revenue_detail" },
+    { key: "top20", label: "1-10위", collectionMode: "precision", range: "1-10", note: "상세 매출 권장", collectionPurpose: "revenue_detail" },
+    { key: "top50", label: "1-20위", collectionMode: "precision", range: "1-20", note: "확장 매출 비교", collectionPurpose: "revenue_detail" },
+    { key: "top100", label: "10-20위", collectionMode: "precision", range: "10-20", note: "중위권 보강", collectionPurpose: "revenue_detail" }
   ];
 }
 
@@ -711,10 +772,42 @@ function currentCrawlFormPayload() {
 function selectedCrawlSpeedPresetKey(payload = currentCrawlFormPayload()) {
   if (payload.collectionMode === "fast") return "fast";
   const range = normalizedRankRangeText(payload.detailRankRanges || "");
-  return crawlSpeedPresetOptions().find((preset) => (
+  return crawlSpeedPresetOptions(payload.collectionPurpose).find((preset) => (
     normalizedRankRangeText(preset.range) === range &&
     (!preset.collectionPurpose || preset.collectionPurpose === normalizeCollectionPurpose(payload.collectionPurpose))
   ))?.key || "";
+}
+
+function renderCollectionPurposeRoutePreview(payload = currentCrawlFormPayload(), preview = crawlPreviewMeta(payload)) {
+  if (!els.crawlPurposeRoutePreview) return;
+  const purpose = collectionPurposeProfile(payload.collectionPurpose);
+  const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
+  const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
+  const weeklyText = purpose.collectWeeklyRange
+    ? `기간 매출 반영 · 상세 확인 ${fmtNumber(payload.bookingRangePlaceLimit || 0)}곳`
+    : purpose.excludeText || "기간별 매출 누적 제외";
+  els.crawlPurposeRoutePreview.innerHTML = `
+    <article>
+      <span>DB 반영 위치</span>
+      <strong>${escapeHtml(purpose.dbTarget || purpose.label)}</strong>
+      <small>${escapeHtml(purpose.dbApplyText || purpose.note || "")}</small>
+    </article>
+    <article>
+      <span>검색 범위</span>
+      <strong>${escapeHtml(detailText)}</strong>
+      <small>${escapeHtml(`${fmtNumber(rangeCount)}개 순위 · ${purpose.rangeHint || "범위 직접 지정 가능"}`)}</small>
+    </article>
+    <article>
+      <span>수집 깊이</span>
+      <strong>${escapeHtml(purpose.depthLabel || purpose.shortLabel || purpose.label)}</strong>
+      <small>${escapeHtml(weeklyText)}</small>
+    </article>
+    <article>
+      <span>예상 완료</span>
+      <strong>${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</strong>
+      <small>${escapeHtml(formatElapsed(preview.estimatedTotalSeconds || 0))}</small>
+    </article>
+  `;
 }
 
 function updateCrawlSpeedPreview() {
@@ -723,7 +816,13 @@ function updateCrawlSpeedPreview() {
   const payload = currentCrawlFormPayload();
   const preview = crawlPreviewMeta(payload);
   const selectedKey = selectedCrawlSpeedPresetKey(payload);
+  const presetOptions = crawlSpeedPresetOptions(payload.collectionPurpose);
   els.crawlSpeedPresetRow?.querySelectorAll("[data-crawl-speed-preset]").forEach((button) => {
+    const preset = presetOptions.find((row) => row.key === button.dataset.crawlSpeedPreset);
+    if (preset) {
+      button.textContent = preset.label;
+      button.title = preset.note || preset.label;
+    }
     button.classList.toggle("active", button.dataset.crawlSpeedPreset === selectedKey);
   });
   if (els.crawlSpeedPreview) {
@@ -731,14 +830,16 @@ function updateCrawlSpeedPreview() {
     const detailText = `${payload.detailRankRanges || collectionPurposeDefaultRange(payload.collectionPurpose)}위`;
     const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
     const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
-    els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}${safetyText}`;
+    els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}${safetyText}`;
   }
+  renderCollectionPurposeRoutePreview(payload, preview);
   renderCrawlReadinessPreview(payload, preview);
   scheduleCrawlEstimatePreviewRefresh(payload);
 }
 
 function applyCrawlSpeedPreset(key = "") {
-  const preset = crawlSpeedPresetOptions().find((row) => row.key === key);
+  const currentPurpose = normalizeCollectionPurpose(els.collectionPurposeInput?.value || "revenue_detail");
+  const preset = crawlSpeedPresetOptions(currentPurpose).find((row) => row.key === key);
   if (!preset) return;
   if (els.collectionPurposeInput && preset.collectionPurpose) els.collectionPurposeInput.value = preset.collectionPurpose;
   if (els.collectionModeInput) els.collectionModeInput.value = preset.collectionMode;
@@ -750,8 +851,9 @@ function applyCrawlSpeedPreset(key = "") {
   updateCrawlSpeedPreview();
   if (els.crawlStatus) {
     const payload = currentCrawlFormPayload();
+    const purpose = collectionPurposeProfile(payload.collectionPurpose);
     const detailText = `${payload.detailRankRanges || collectionPurposeDefaultRange(payload.collectionPurpose)}위`;
-    els.crawlStatus.textContent = `${collectionPurposeLabel(payload.collectionPurpose)} · ${preset.label} 적용 · ${detailText} · ${preset.note}. 예상시간은 위 카드에서 갱신됩니다.`;
+    els.crawlStatus.textContent = `${purpose.label} · ${detailText} 적용 · ${preset.note}. ${purpose.dbApplyText || "DB 반영"} 기준으로 예상시간을 다시 계산했습니다.`;
   }
 }
 
@@ -769,9 +871,14 @@ function syncCollectionModeInputs() {
   els.crawlForm?.querySelectorAll("[data-collection-purpose]").forEach((button) => {
     const buttonPurpose = collectionPurposeProfile(button.dataset.collectionPurpose);
     button.classList.toggle("active", buttonPurpose.key === purpose.key);
+    button.setAttribute("aria-pressed", buttonPurpose.key === purpose.key ? "true" : "false");
     button.title = `${buttonPurpose.depthLabel || buttonPurpose.label} · ${buttonPurpose.depthNote || buttonPurpose.note || ""}`;
+    const title = button.querySelector("strong");
+    const summary = button.querySelector("span");
     const helper = button.querySelector("em");
-    if (helper && buttonPurpose.depthNote) helper.textContent = buttonPurpose.depthNote;
+    if (title) title.textContent = buttonPurpose.label;
+    if (summary) summary.textContent = buttonPurpose.cardSummary || buttonPurpose.note || "";
+    if (helper) helper.textContent = `${buttonPurpose.dbApplyText || buttonPurpose.depthNote || ""} · ${buttonPurpose.rangeHint || buttonPurpose.defaultRange}`;
   });
   updateCrawlSpeedPreview();
 }
@@ -784,7 +891,7 @@ function selectCollectionPurpose(value = "revenue_detail") {
   }
   syncCollectionModeInputs();
   if (els.crawlStatus) {
-    els.crawlStatus.textContent = `${purpose.label} 선택 · ${purpose.status} 순위 범위는 필요에 따라 1~100위까지 조정할 수 있습니다.`;
+    els.crawlStatus.textContent = `${purpose.label} 선택 · ${purpose.status} ${purpose.rangeHint || "순위 범위는 직접 조정할 수 있습니다."}`;
   }
 }
 
@@ -1437,7 +1544,7 @@ function renderCrawlReadinessPreview(payload = currentCrawlFormPayload(), previe
   els.crawlProgress.classList.remove("is-running", "is-delayed");
   if (els.crawlProgressTitle) els.crawlProgressTitle.textContent = "예상 수집 시간";
   if (els.crawlProgressText) {
-    els.crawlProgressText.textContent = `${keyword} · ${purpose.shortLabel} · ${detailText} · 실행 전 조건 기준`;
+    els.crawlProgressText.textContent = `${keyword} · ${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} 기준`;
   }
   updateCrawlProgressNumbers(meta);
 }
@@ -1455,13 +1562,14 @@ function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()
   state.crawlEstimateTimer = setTimeout(async () => {
     const estimate = await fetchCrawlEstimate(payload);
     if (requestId !== state.crawlEstimateRequestId || state.crawlProgressRunning) return;
+    renderCollectionPurposeRoutePreview(payload, estimate);
     renderCrawlReadinessPreview(payload, estimate);
     if (els.crawlSpeedPreview) {
       const purpose = collectionPurposeProfile(payload.collectionPurpose);
       const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
       const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
       const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
-      els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}${safetyText}`;
+      els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}${safetyText}`;
     }
   }, 220);
 }
