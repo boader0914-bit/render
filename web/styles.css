@@ -1231,6 +1231,23 @@ a {
   font-weight: 950;
 }
 
+.b2b-history-complete-badge {
+  flex: 0 0 auto;
+  min-height: 25px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(18, 183, 106, .34);
+  border-radius: 999px;
+  background: #ecfdf3;
+  color: #05603a;
+  padding: 0 9px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
 .b2b-history-actions button {
   min-height: 25px;
   border: 1px solid #d5e3f7;
@@ -1292,6 +1309,12 @@ a {
 .b2b-history-list small {
   justify-self: end;
   white-space: nowrap;
+}
+
+.b2b-history-list .b2b-history-complete-badge {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
 }
 
 .b2b-search-empty {
@@ -1545,6 +1568,41 @@ a {
   background: #fffaeb;
   color: #93370d;
   font-weight: 700;
+}
+
+.notice-card.b2b-completion-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-color: rgba(18, 183, 106, .32);
+  background: #ecfdf3;
+  color: #05603a;
+}
+
+.notice-card.b2b-completion-notice strong,
+.notice-card.b2b-completion-notice span {
+  display: block;
+}
+
+.notice-card.b2b-completion-notice span {
+  margin-top: 3px;
+  font-size: 13px;
+  color: #067647;
+}
+
+.notice-card.b2b-completion-notice button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border: 1px solid rgba(18, 183, 106, .34);
+  border-radius: 999px;
+  background: #fff;
+  color: #05603a;
+  padding: 0 13px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 950;
+  cursor: pointer;
 }
 
 .tab-panel {
@@ -25410,6 +25468,23 @@ body.role-b2b .notice-card {
   color: #f8d98b;
 }
 
+body.role-b2b .notice-card.b2b-completion-notice {
+  border-color: rgba(52, 211, 153, .42);
+  background: rgba(16, 185, 129, .13);
+  color: #d1fae5;
+}
+
+body.role-b2b .notice-card.b2b-completion-notice span {
+  color: #a7f3d0;
+}
+
+body.role-b2b .notice-card.b2b-completion-notice button,
+body.role-b2b .b2b-history-complete-badge {
+  border-color: rgba(52, 211, 153, .36);
+  background: rgba(16, 185, 129, .16);
+  color: #bbf7d0;
+}
+
 body.role-b2b .b2b-map-cluster-row strong {
   color: #d8e9ff;
 }
@@ -29579,6 +29654,15 @@ body.role-admin .admin-db-region-card-grid button.active {
 }
 
 @media (max-width: 720px) {
+  .notice-card.b2b-completion-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .notice-card.b2b-completion-notice button {
+    width: 100%;
+  }
+
   body.role-b2b .app-shell,
   body.role-admin .app-shell {
     padding-inline:

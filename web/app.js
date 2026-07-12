@@ -99,7 +99,8 @@ const state = {
   b2bMemberAdmin: null,
   accountDeleteAdmin: null,
   securityHardeningAdmin: null,
-  b2bHistoryExpanded: false
+  b2bHistoryExpanded: false,
+  b2bSearchCompletionNotice: null
 };
 
 const CORE_ORDER = ["메인 관광지형", "인접 관광 흡수형", "자연 관광자원형", "생활권·도심 수요형", "복합형", "확인필요"];
@@ -1389,6 +1390,35 @@ function clearB2BActiveSearchRecord(clientRequestId = "") {
   }
 }
 
+function b2bSearchCompletionMatches(row = {}) {
+  const notice = state.b2bSearchCompletionNotice;
+  if (!notice || !row) return false;
+  return Boolean(
+    (notice.runId && row.runId && notice.runId === row.runId)
+    || (notice.clientRequestId && row.clientRequestId && notice.clientRequestId === row.clientRequestId)
+  );
+}
+
+function setB2BSearchCompletionNotice(entry = {}, fallback = {}) {
+  if (isAdminRole() || isAdminUserViewMode()) return;
+  const runId = entry.runId || fallback.runId || state.activeRunId || "";
+  const clientRequestId = entry.clientRequestId || fallback.clientRequestId || "";
+  const keyword = entry.keyword || entry.runLabel || fallback.keyword || state.b2bSearchQuery || "검색";
+  state.b2bSearchCompletionNotice = {
+    runId,
+    clientRequestId,
+    keyword,
+    range: entry.detailRankRanges || fallback.range || "",
+    completedAt: entry.completedAt || fallback.completedAt || new Date().toISOString(),
+    createdAt: Date.now(),
+    expiresAt: Date.now() + 15 * 60 * 1000
+  };
+}
+
+function clearB2BSearchCompletionNotice() {
+  state.b2bSearchCompletionNotice = null;
+}
+
 function b2bSearchStatusUrl() {
   const id = state.b2bSearchClientRequestId || "";
   return id ? `/api/b2b-search/status?clientRequestId=${encodeURIComponent(id)}` : "/api/b2b-search/status";
@@ -1399,7 +1429,7 @@ async function refreshB2BSearchServerStatus() {
   state.b2bSearchStatusPolling = true;
   try {
     state.b2bSearchServerStatus = await fetchJson(b2bSearchStatusUrl());
-    if (state.b2bSearchRestored
+    if (state.b2bSearchClientRequestId
       && !state.b2bSearchServerStatus?.requesterJob
       && !state.b2bSearchServerStatus?.active) {
       await finishRestoredB2BSearch();
@@ -1427,6 +1457,7 @@ async function finishRestoredB2BSearch() {
   clearB2BSearchTimer();
   clearB2BActiveSearchRecord(clientRequestId);
   if (match?.runId) {
+    setB2BSearchCompletionNotice(match, { clientRequestId });
     await loadB2BHistoryRun(match.runId);
     return;
   }
@@ -4457,6 +4488,24 @@ function renderSummary() {
 }
 
 function renderNotice() {
+  if (!els.noticeCard) return;
+  els.noticeCard.classList.remove("b2b-completion-notice");
+  const completionNotice = !isAdminRole() ? state.b2bSearchCompletionNotice : null;
+  if (completionNotice && Number(completionNotice.expiresAt || 0) < Date.now()) {
+    clearB2BSearchCompletionNotice();
+  } else if (completionNotice) {
+    const completedAt = completionNotice.completedAt ? compactDateTime(completionNotice.completedAt) : "방금 완료";
+    els.noticeCard.hidden = false;
+    els.noticeCard.classList.add("b2b-completion-notice");
+    els.noticeCard.innerHTML = `
+      <div>
+        <strong>${escapeHtml(completionNotice.keyword || "검색")} 수집 완료</strong>
+        <span>${escapeHtml(completedAt)} · 결과가 검색 이력에 저장되었습니다.</span>
+      </div>
+      <button type="button" data-b2b-completion-dismiss>확인</button>
+    `;
+    return;
+  }
   const run = state.data?.run || {};
   const today = new Date();
   const todayText = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -4465,6 +4514,7 @@ function renderNotice() {
     els.noticeCard.textContent = `주의: 이 결과는 ${run.checkIn} 체크인 기준입니다. 현재 직접 확인값과 다를 수 있습니다.`;
     return;
   }
+  els.noticeCard.innerHTML = "";
   els.noticeCard.hidden = true;
 }
 
@@ -24878,6 +24928,7 @@ function renderB2BSearchHistoryPanel() {
   const expanded = Boolean(state.b2bHistoryExpanded);
   const quota = state.memberSearchQuota || {};
   const latest = rows[0] || null;
+  const latestCompleted = b2bSearchCompletionMatches(latest);
   const profile = state.session?.profile || {};
   const ownership = profile.ownershipStatusLabel || "";
   const memberLabel = state.session?.accountType === "demo"
@@ -24896,6 +24947,7 @@ function renderB2BSearchHistoryPanel() {
         <small>${escapeHtml(latestLabel)}</small>
       </div>
       <div class="b2b-history-actions">
+        ${latestCompleted ? `<span class="b2b-history-complete-badge">완료</span>` : ""}
         ${quota.limited ? `<span>${fmtNumber(quota.remainingToday ?? 0)}/${fmtNumber(quota.dailyLimit || 2)}회 남음</span>` : ""}
         <span>${fmtNumber(rows.length)}건</span>
         ${rows.length ? `<button type="button" data-b2b-history-toggle aria-expanded="${expanded ? "true" : "false"}">${expanded ? "접기" : "더보기"}</button>` : ""}
@@ -24906,6 +24958,7 @@ function renderB2BSearchHistoryPanel() {
         ${rows.slice(0, 8).map((row) => `
           <button type="button" data-b2b-history-run-id="${escapeHtml(row.runId)}">
             <strong>${escapeHtml(row.keyword || row.runLabel || "검색 리포트")}</strong>
+            ${b2bSearchCompletionMatches(row) ? `<em class="b2b-history-complete-badge">완료</em>` : ""}
             <span>${escapeHtml([row.regionLabel, row.checkIn && row.checkOut ? `${row.checkIn.slice(5)}~${row.checkOut.slice(5)}` : "", row.detailRankRanges ? `${row.detailRankRanges}위` : "", row.quotaCounted === false ? "차감 없음" : "새 수집"].filter(Boolean).join(" · "))}</span>
             <small>${escapeHtml(row.completedAt ? compactDateTime(row.completedAt) : "")}</small>
           </button>
@@ -25126,6 +25179,7 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
   const clientRequestId = makeB2BSearchClientRequestId();
   payload = { ...payload, clientRequestId };
   const initialPreview = crawlPreviewMeta(payload);
+  clearB2BSearchCompletionNotice();
   state.b2bSearchLoading = true;
   state.b2bSearchCancelling = false;
   state.b2bSearchPending = null;
@@ -25188,6 +25242,10 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
     state.activeRunId = result.runId || state.data?.run?.id || null;
     state.runs = state.data?.run ? [{ ...state.data.run, id: state.activeRunId }] : [];
     await loadMemberSearchHistory();
+    const completedEntry = result.searchHistory
+      || (state.memberSearchHistory || []).find((entry) => entry.clientRequestId === clientRequestId)
+      || { runId: state.activeRunId, keyword, clientRequestId, detailRankRanges: payload.detailRankRanges, completedAt: new Date().toISOString() };
+    setB2BSearchCompletionNotice(completedEntry, { runId: state.activeRunId, keyword, range, clientRequestId });
     clearActiveSearch = true;
     state.activeTab = "report";
     setStatus("검색 완료");
@@ -25284,7 +25342,11 @@ function renderB2BEmptyPanels() {
   }
   document.title = `${APP_BRAND_NAME} · ${tabLabel(state.activeTab)}`;
   if (els.summaryGrid) els.summaryGrid.innerHTML = "";
-  if (els.noticeCard) els.noticeCard.innerHTML = "";
+  if (els.noticeCard) {
+    els.noticeCard.innerHTML = "";
+    els.noticeCard.hidden = true;
+    els.noticeCard.classList.remove("b2b-completion-notice");
+  }
   if (els.reportBody) els.reportBody.innerHTML = renderB2BPreSearchMyLodge();
   if (els.companyList) els.companyList.innerHTML = `<div class="empty">${emptyMessages.rank}</div>`;
   if (els.rankCount) els.rankCount.textContent = "0";
@@ -26671,6 +26733,7 @@ async function restoreB2BActiveSearch() {
     clearB2BActiveSearchRecord(record.clientRequestId);
     state.b2bSearchClientRequestId = "";
     if (match?.runId) {
+      setB2BSearchCompletionNotice(match, { clientRequestId: record.clientRequestId });
       await loadB2BHistoryRun(match.runId);
       return true;
     }
@@ -28449,6 +28512,12 @@ function bindEvents() {
     }
     if (event.target.closest("[data-b2b-history-toggle]")) {
       state.b2bHistoryExpanded = !state.b2bHistoryExpanded;
+      renderB2BSearchHistoryPanel();
+      return;
+    }
+    if (event.target.closest("[data-b2b-completion-dismiss]")) {
+      clearB2BSearchCompletionNotice();
+      renderNotice();
       renderB2BSearchHistoryPanel();
       return;
     }
