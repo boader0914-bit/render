@@ -244,6 +244,30 @@
                 <option value="campnic">데이유즈/캠프닉</option>
               </select>
             </label>
+            <input id="collectionPurposeInput" type="hidden" value="revenue_detail">
+            <section class="crawl-purpose-panel" aria-label="수집 목적">
+              <div class="crawl-purpose-head">
+                <strong>수집 목적</strong>
+                <span>DB를 어떤 깊이로 채울지 먼저 선택합니다.</span>
+              </div>
+              <div class="crawl-purpose-options">
+                <button type="button" data-collection-purpose="basic_db">
+                  <strong>기본 DB 수집</strong>
+                  <span>순위·상품·금액·기본 채널</span>
+                  <em>업체 목록을 넓게 확보</em>
+                </button>
+                <button type="button" data-collection-purpose="revenue_detail" class="active">
+                  <strong>상세 매출 수집</strong>
+                  <span>요일별 수량·가격·예상 매출</span>
+                  <em>운영 판단용 기본값</em>
+                </button>
+                <button type="button" data-collection-purpose="demand_location">
+                  <strong>수요·입지 정밀 분석</strong>
+                  <span>트렌드·클러스터·입지 보정</span>
+                  <em>전략 분석용 보강</em>
+                </button>
+              </div>
+            </section>
             <div class="field-grid">
               <label class="field">
                 <span>분석 방식</span>
@@ -252,8 +276,8 @@
                 </select>
               </label>
               <label class="field">
-                <span>상세 순위 범위</span>
-                <input id="detailRankRangesInput" type="text" value="1-10" placeholder="예: 1-10, 1-20, 10-20">
+                <span>순위 범위</span>
+                <input id="detailRankRangesInput" type="text" value="1-10" placeholder="예: 1-10, 1-50, 1-100">
               </label>
             </div>
             <div class="crawl-speed-panel">
@@ -262,10 +286,10 @@
                 <span id="crawlSpeedPreview">예상 계산 대기</span>
               </div>
               <div class="crawl-speed-options" id="crawlSpeedPresetRow">
-                <button type="button" data-crawl-speed-preset="top10">기본 1-10위</button>
-                <button type="button" data-crawl-speed-preset="top20">확장 1-20위</button>
-                <button type="button" data-crawl-speed-preset="top5">1-5위</button>
-                <button type="button" data-crawl-speed-preset="mid10_20">10-20위</button>
+                <button type="button" data-crawl-speed-preset="top10">1-10위</button>
+                <button type="button" data-crawl-speed-preset="top20">1-20위</button>
+                <button type="button" data-crawl-speed-preset="top50">1-50위</button>
+                <button type="button" data-crawl-speed-preset="top100">1-100위</button>
               </div>
             </div>
             <div class="crawl-progress is-preview" id="crawlProgress">

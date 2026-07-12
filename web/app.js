@@ -341,6 +341,7 @@ const els = {
   checkOutInput: document.getElementById("checkOutInput"),
   searchModeInput: document.getElementById("searchModeInput"),
   productModeInput: document.getElementById("productModeInput"),
+  collectionPurposeInput: document.getElementById("collectionPurposeInput"),
   collectionModeInput: document.getElementById("collectionModeInput"),
   detailRankRangesInput: document.getElementById("detailRankRangesInput"),
   crawlSpeedPresetRow: document.getElementById("crawlSpeedPresetRow"),
@@ -563,6 +564,53 @@ function collectionModeLabel(value) {
   return value === "fast" ? "빠른 순위" : "정밀 분석";
 }
 
+const COLLECTION_PURPOSE_PROFILES = {
+  basic_db: {
+    key: "basic_db",
+    label: "기본 DB 수집",
+    shortLabel: "기본 DB",
+    defaultRange: "1-50",
+    note: "순위·상품·금액·채널 기본정보를 넓게 확보",
+    status: "업체 기본 DB를 넓게 채우는 수집입니다."
+  },
+  revenue_detail: {
+    key: "revenue_detail",
+    label: "상세 매출 수집",
+    shortLabel: "상세 매출",
+    defaultRange: "1-10",
+    note: "요일별 수량·가격·예상 매출 확인",
+    status: "매출 판단에 필요한 날짜별 수량과 가격을 확인합니다."
+  },
+  demand_location: {
+    key: "demand_location",
+    label: "수요·입지 정밀 분석",
+    shortLabel: "수요·입지",
+    defaultRange: "1-20",
+    note: "검색수요·클러스터·입지 보정 분석",
+    status: "수요 구조와 입지 보정값을 함께 점검합니다."
+  }
+};
+
+function normalizeCollectionPurpose(value) {
+  const text = String(value || "").trim();
+  if (COLLECTION_PURPOSE_PROFILES[text]) return text;
+  if (/basic|master|db|기본/.test(text)) return "basic_db";
+  if (/demand|location|cluster|입지|수요/.test(text)) return "demand_location";
+  return "revenue_detail";
+}
+
+function collectionPurposeProfile(value) {
+  return COLLECTION_PURPOSE_PROFILES[normalizeCollectionPurpose(value)] || COLLECTION_PURPOSE_PROFILES.revenue_detail;
+}
+
+function collectionPurposeLabel(value) {
+  return collectionPurposeProfile(value).label;
+}
+
+function collectionPurposeDefaultRange(value) {
+  return collectionPurposeProfile(value).defaultRange || "1-10";
+}
+
 function normalizedRankRangeText(value = "") {
   return String(value || "")
     .normalize("NFKC")
@@ -570,34 +618,37 @@ function normalizedRankRangeText(value = "") {
     .replace(/\s+/g, "");
 }
 
-function rankRangePlaceLimitFromText(value = "", fallback = "1-10") {
+function rankRangeCountFromText(value = "", fallback = "1-10") {
   const text = normalizedRankRangeText(value);
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? normalizedRankRangeText(fallback) : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return 0;
-  if (/^(all|전체)$/i.test(source)) return 20;
+  if (/^(all|전체)$/i.test(source)) return 100;
   const ranks = new Set();
   source.split(",").forEach((part) => {
     const match = part.match(/^(\d{1,3})(?:-(\d{1,3}))?$/);
     if (!match) return;
-    const left = Math.max(1, Math.min(50, Math.floor(Number(match[1]))));
-    const right = Math.max(1, Math.min(50, Math.floor(Number(match[2] || match[1]))));
+    const left = Math.max(1, Math.min(100, Math.floor(Number(match[1]))));
+    const right = Math.max(1, Math.min(100, Math.floor(Number(match[2] || match[1]))));
     for (let rank = Math.min(left, right); rank <= Math.max(left, right); rank += 1) {
       ranks.add(rank);
-      if (ranks.size >= 20) break;
     }
   });
   if (!ranks.size && source !== normalizedRankRangeText(fallback)) {
-    return rankRangePlaceLimitFromText(fallback, "");
+    return rankRangeCountFromText(fallback, "");
   }
-  return Math.max(0, Math.min(20, ranks.size));
+  return Math.max(0, Math.min(100, ranks.size));
+}
+
+function rankRangePlaceLimitFromText(value = "", fallback = "1-10") {
+  return Math.max(0, Math.min(20, rankRangeCountFromText(value, fallback)));
 }
 
 function crawlSpeedPresetOptions() {
   return [
-    { key: "top10", label: "기본 1-10위", collectionMode: "precision", range: "1-10", note: "기본 정밀 분석" },
-    { key: "top20", label: "확장 1-20위", collectionMode: "precision", range: "1-20", note: "확장 정밀 분석" },
-    { key: "top5", label: "1-5위", collectionMode: "precision", range: "1-5", note: "최상위 구간 확인" },
-    { key: "mid10_20", label: "10-20위", collectionMode: "precision", range: "10-20", note: "중위권 보강" }
+    { key: "top10", label: "1-10위", collectionMode: "precision", range: "1-10", note: "상세 매출 기본", collectionPurpose: "revenue_detail" },
+    { key: "top20", label: "1-20위", collectionMode: "precision", range: "1-20", note: "확장 비교", collectionPurpose: "revenue_detail" },
+    { key: "top50", label: "1-50위", collectionMode: "precision", range: "1-50", note: "기본 DB 확장", collectionPurpose: "basic_db" },
+    { key: "top100", label: "1-100위", collectionMode: "precision", range: "1-100", note: "넓은 DB 후보 확보", collectionPurpose: "basic_db" }
   ];
 }
 
@@ -606,8 +657,10 @@ function currentCrawlFormPayload() {
   const requestedMode = els.searchModeInput?.value || "keyword";
   const resolvedMode = correctedSearchMode(keyword, requestedMode);
   const collectionMode = "precision";
+  const collectionPurpose = normalizeCollectionPurpose(els.collectionPurposeInput?.value || "revenue_detail");
+  const defaultRange = collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
-  const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-10" : (rawDetailRankRanges || "1-10");
+  const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? defaultRange : (rawDetailRankRanges || defaultRange);
   return {
     keyword,
     checkIn: els.checkInInput?.value || "",
@@ -615,16 +668,21 @@ function currentCrawlFormPayload() {
     searchMode: resolvedMode,
     requestedMode,
     productMode: els.productModeInput?.value || "all",
+    collectionPurpose,
     collectionMode,
     detailRankRanges,
-    bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges)
+    rankRangeCount: rankRangeCountFromText(detailRankRanges, defaultRange),
+    bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges, defaultRange)
   };
 }
 
 function selectedCrawlSpeedPresetKey(payload = currentCrawlFormPayload()) {
   if (payload.collectionMode === "fast") return "fast";
   const range = normalizedRankRangeText(payload.detailRankRanges || "");
-  return crawlSpeedPresetOptions().find((preset) => normalizedRankRangeText(preset.range) === range)?.key || "";
+  return crawlSpeedPresetOptions().find((preset) => (
+    normalizedRankRangeText(preset.range) === range &&
+    (!preset.collectionPurpose || preset.collectionPurpose === normalizeCollectionPurpose(payload.collectionPurpose))
+  ))?.key || "";
 }
 
 function updateCrawlSpeedPreview() {
@@ -637,8 +695,11 @@ function updateCrawlSpeedPreview() {
     button.classList.toggle("active", button.dataset.crawlSpeedPreset === selectedKey);
   });
   if (els.crawlSpeedPreview) {
-    const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
-    els.crawlSpeedPreview.textContent = `${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}`;
+    const purpose = collectionPurposeProfile(payload.collectionPurpose);
+    const detailText = `${payload.detailRankRanges || collectionPurposeDefaultRange(payload.collectionPurpose)}위`;
+    const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
+    const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
+    els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}${safetyText}`;
   }
   renderCrawlReadinessPreview(payload, preview);
   scheduleCrawlEstimatePreviewRefresh(payload);
@@ -647,6 +708,7 @@ function updateCrawlSpeedPreview() {
 function applyCrawlSpeedPreset(key = "") {
   const preset = crawlSpeedPresetOptions().find((row) => row.key === key);
   if (!preset) return;
+  if (els.collectionPurposeInput && preset.collectionPurpose) els.collectionPurposeInput.value = preset.collectionPurpose;
   if (els.collectionModeInput) els.collectionModeInput.value = preset.collectionMode;
   if (els.detailRankRangesInput) {
     els.detailRankRangesInput.value = preset.range;
@@ -656,19 +718,38 @@ function applyCrawlSpeedPreset(key = "") {
   updateCrawlSpeedPreview();
   if (els.crawlStatus) {
     const payload = currentCrawlFormPayload();
-    const preview = crawlPreviewMeta(payload);
-    const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
-    els.crawlStatus.textContent = `${preset.label} 프리셋 적용 · ${detailText} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · ${preset.note}`;
+    const detailText = `${payload.detailRankRanges || collectionPurposeDefaultRange(payload.collectionPurpose)}위`;
+    els.crawlStatus.textContent = `${collectionPurposeLabel(payload.collectionPurpose)} · ${preset.label} 적용 · ${detailText} · ${preset.note}. 예상시간은 위 카드에서 갱신됩니다.`;
   }
 }
 
 function syncCollectionModeInputs() {
-  if (!els.collectionModeInput || !els.detailRankRangesInput) return;
-  els.collectionModeInput.value = "precision";
-  els.detailRankRangesInput.disabled = false;
-  els.detailRankRangesInput.placeholder = "예: 1-10, 1-20, 10-20";
-  if (!els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = "1-10";
+  if (els.collectionPurposeInput) {
+    els.collectionPurposeInput.value = normalizeCollectionPurpose(els.collectionPurposeInput.value || "revenue_detail");
+  }
+  const purpose = collectionPurposeProfile(els.collectionPurposeInput?.value || "revenue_detail");
+  if (els.collectionModeInput) els.collectionModeInput.value = "precision";
+  if (els.detailRankRangesInput) {
+    els.detailRankRangesInput.disabled = false;
+    els.detailRankRangesInput.placeholder = "예: 1-10, 1-50, 1-100";
+    if (!els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = purpose.defaultRange;
+  }
+  els.crawlForm?.querySelectorAll("[data-collection-purpose]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.collectionPurpose === purpose.key);
+  });
   updateCrawlSpeedPreview();
+}
+
+function selectCollectionPurpose(value = "revenue_detail") {
+  const purpose = collectionPurposeProfile(value);
+  if (els.collectionPurposeInput) els.collectionPurposeInput.value = purpose.key;
+  if (els.detailRankRangesInput) {
+    els.detailRankRangesInput.value = purpose.defaultRange;
+  }
+  syncCollectionModeInputs();
+  if (els.crawlStatus) {
+    els.crawlStatus.textContent = `${purpose.label} 선택 · ${purpose.status} 순위 범위는 필요에 따라 1~100위까지 조정할 수 있습니다.`;
+  }
 }
 
 function focusAdminCrawlProgress() {
@@ -1167,7 +1248,8 @@ function crawlEstimateBasisText(basis = {}) {
   } else if (timing.source === "recent_result") {
     timingText = `예상 기준: 동일 조건 최근 결과${timing.ageSeconds ? ` · ${formatElapsed(timing.ageSeconds)} 전 수집` : ""}`;
   }
-  return `${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
+  const purposeLabel = basis.collectionPurposeLabel || collectionPurposeLabel(basis.collectionPurpose || "revenue_detail");
+  return `${purposeLabel} · ${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
 }
 
 function crawlStageFallbacks() {
@@ -1181,25 +1263,27 @@ function crawlStageFallbacks() {
 function crawlPreviewMeta(payload = {}) {
   const days = Math.max(1, Math.min(31, bookingDays(payload) || DEFAULT_BOOKING_DAYS));
   const fast = payload.collectionMode === "fast";
+  const purpose = collectionPurposeProfile(payload.collectionPurpose || "revenue_detail");
+  const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
   const placeLimit = days > 1 && !fast
-    ? Math.max(0, Math.min(20, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || "1-10"))))
+    ? Math.max(0, Math.min(20, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange))))
     : 0;
   const searchSeconds = payload.searchMode === "company" ? 55 : 95;
-  const trendSeconds = payload.searchMode === "keyword" ? 25 : 10;
+  const trendSeconds = payload.searchMode === "keyword" ? (purpose.key === "demand_location" ? 55 : 25) : 10;
   const productSeconds = fast ? 0 : (payload.productMode === "all" ? 45 : 26);
   const rangeSeconds = !fast && placeLimit
     ? placeLimit * days * (payload.productMode === "all" ? 5.5 : 4.2)
     : 0;
-  const regionalSeconds = fast ? 0 : 80;
-  const otaSeconds = fast ? 0 : 35;
+  const regionalSeconds = fast ? 0 : (purpose.key === "demand_location" ? 130 : 80);
+  const otaSeconds = fast ? 0 : (purpose.key === "basic_db" ? 20 : 35);
   const ioSeconds = fast ? 18 : 35;
   const stages = [
-    { key: "rank", label: "순위 수집", seconds: searchSeconds, detail: "네이버 플레이스 순위와 업체 기본 정보를 정리합니다." },
-    { key: "trend", label: "수요 확인", seconds: trendSeconds, detail: "검색수요와 트렌드 캐시를 확인합니다." },
+    { key: "rank", label: "순위 수집", seconds: searchSeconds + Math.max(0, rangeCount - 20) * 1.2, detail: `${purpose.label} 기준으로 네이버 순위와 업체 기본 정보를 정리합니다.` },
+    { key: "trend", label: purpose.key === "demand_location" ? "수요·입지 확인" : "수요 확인", seconds: trendSeconds, detail: purpose.key === "demand_location" ? "검색수요, 트렌드, 지역 클러스터 보정값을 확인합니다." : "검색수요와 트렌드 캐시를 확인합니다." },
     fast
       ? { key: "inventory", label: "상세 생략", seconds: 6, detail: "빠른 순위 모드라 날짜별 재고와 가격 확인을 건너뜁니다." }
-      : { key: "inventory", label: "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `상세 ${payload.detailRankRanges || "1-10"}위의 날짜별 수량과 요일별 가격을 확인합니다.` },
-    !fast ? { key: "ota", label: "보조 채널", seconds: otaSeconds + regionalSeconds, detail: "OTA 보조 신호와 지역 수요 데이터를 정리합니다." } : null,
+      : { key: "inventory", label: purpose.key === "basic_db" ? "상품/금액 확인" : "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `${payload.detailRankRanges || purpose.defaultRange}위 중 상세 대상의 날짜별 수량과 요일별 가격을 확인합니다.` },
+    !fast ? { key: "ota", label: purpose.key === "demand_location" ? "입지/클러스터" : "보조 채널", seconds: otaSeconds + regionalSeconds, detail: purpose.key === "demand_location" ? "지역 클러스터와 입지 보정 신호를 함께 정리합니다." : "OTA 보조 신호와 지역 수요 데이터를 정리합니다." } : null,
     { key: "save", label: "저장/분석", seconds: ioSeconds, detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다." }
   ].filter(Boolean).map((stage, index) => ({
     ...stage,
@@ -1225,11 +1309,14 @@ function crawlPreviewMeta(payload = {}) {
       searchModeLabel: searchModeLabel(payload.searchMode),
       productMode: payload.productMode,
       productModeLabel: productModeLabel(payload.productMode),
+      collectionPurpose: purpose.key,
+      collectionPurposeLabel: purpose.label,
       collectionMode: payload.collectionMode,
       collectionModeLabel: collectionModeLabel(payload.collectionMode),
       detailRankRanges: payload.detailRankRanges,
       bookingRangeDays: days,
-      bookingRangePlaceLimit: placeLimit
+      bookingRangePlaceLimit: placeLimit,
+      rankRangeCount: rangeCount
     }
   };
 }
@@ -1286,13 +1373,14 @@ function renderCrawlReadinessPreview(payload = currentCrawlFormPayload(), previe
   if (!isAdminRole() || !els.crawlProgress || state.crawlProgressRunning) return;
   const meta = crawlReadinessMeta(payload, preview);
   const keyword = payload.keyword || "키워드 입력 대기";
-  const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
+  const purpose = collectionPurposeProfile(payload.collectionPurpose);
+  const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
   els.crawlProgress.hidden = false;
   els.crawlProgress.classList.add("is-preview");
   els.crawlProgress.classList.remove("is-running", "is-delayed");
   if (els.crawlProgressTitle) els.crawlProgressTitle.textContent = "예상 수집 시간";
   if (els.crawlProgressText) {
-    els.crawlProgressText.textContent = `${keyword} · ${collectionModeLabel(payload.collectionMode)} · ${detailText} · 실행 전 조건 기준`;
+    els.crawlProgressText.textContent = `${keyword} · ${purpose.shortLabel} · ${detailText} · 실행 전 조건 기준`;
   }
   updateCrawlProgressNumbers(meta);
 }
@@ -1312,8 +1400,11 @@ function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()
     if (requestId !== state.crawlEstimateRequestId || state.crawlProgressRunning) return;
     renderCrawlReadinessPreview(payload, estimate);
     if (els.crawlSpeedPreview) {
-      const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
-      els.crawlSpeedPreview.textContent = `${detailText} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}`;
+      const purpose = collectionPurposeProfile(payload.collectionPurpose);
+      const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
+      const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
+      const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
+      els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}${safetyText}`;
     }
   }, 220);
 }
@@ -28174,18 +28265,8 @@ async function submitCrawl(event) {
     els.searchModeInput.value = resolvedMode;
     els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
-  const collectionMode = "precision";
-  const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
-  const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? "1-10" : (rawDetailRankRanges || "1-10");
-  const payload = {
-    keyword: els.keywordInput.value.trim(),
-    checkIn: els.checkInInput.value,
-    checkOut: els.checkOutInput.value,
-    searchMode: resolvedMode,
-    productMode: els.productModeInput.value,
-    collectionMode,
-    detailRankRanges
-  };
+  const payload = currentCrawlFormPayload();
+  payload.searchMode = resolvedMode;
   if (recrawlContextMatchesPayload(state.pendingRecrawlContext, payload)) {
     payload.recrawlContext = state.pendingRecrawlContext;
   }
@@ -28193,23 +28274,24 @@ async function submitCrawl(event) {
   if (submitButton) submitButton.disabled = true;
   clearCrawlEstimateTimer();
   state.crawlEstimateRequestId += 1;
-  const detailText = `상세 ${payload.detailRankRanges || "1-10"}위`;
+  const purpose = collectionPurposeProfile(payload.collectionPurpose);
+  const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
   let preview = crawlPreviewMeta(payload);
   const recrawlText = recrawlContextStatusText(payload.recrawlContext);
   setCrawlProgress(
     true,
     "수집 실행 중",
-    `${recrawlText ? `${recrawlText} · ` : ""}${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
+    `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
     preview
   );
   preview = await fetchCrawlEstimate(payload);
   setCrawlProgress(
     true,
     "수집 실행 중",
-    `${recrawlText ? `${recrawlText} · ` : ""}${collectionModeLabel(payload.collectionMode)} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
+    `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
     preview
   );
-  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${collectionModeLabel(payload.collectionMode)} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
+  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
   setStatus("수집 중");
   scheduleCrawlStatusPoll(1500, false);
   try {
@@ -29079,12 +29161,17 @@ function bindEvents() {
   if (els.headerUserViewButton?.tagName !== "A") els.headerUserViewButton?.addEventListener("click", openAdminUserView);
   if (els.adminUserViewButton?.tagName !== "A") els.adminUserViewButton?.addEventListener("click", openAdminUserView);
   els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
+  els.crawlForm?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-collection-purpose]");
+    if (!button) return;
+    selectCollectionPurpose(button.dataset.collectionPurpose || "revenue_detail");
+  });
   els.crawlSpeedPresetRow?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-crawl-speed-preset]");
     if (!button) return;
     applyCrawlSpeedPreset(button.dataset.crawlSpeedPreset || "");
   });
-  [els.keywordInput, els.checkInInput, els.checkOutInput, els.searchModeInput, els.productModeInput, els.detailRankRangesInput].forEach((input) => {
+  [els.keywordInput, els.checkInInput, els.checkOutInput, els.searchModeInput, els.productModeInput, els.collectionPurposeInput, els.detailRankRangesInput].forEach((input) => {
     input?.addEventListener("input", updateCrawlSpeedPreview);
     input?.addEventListener("change", updateCrawlSpeedPreview);
   });

@@ -24,6 +24,11 @@ const COLLECTION_MODES = {
   precision: "정밀 분석",
   fast: "빠른 순위"
 };
+const COLLECTION_PURPOSES = {
+  basic_db: "기본 DB 수집",
+  revenue_detail: "상세 매출 수집",
+  demand_location: "수요·입지 정밀 분석"
+};
 
 function kstDate(offsetDays = 0) {
   const now = new Date();
@@ -54,6 +59,21 @@ function normalizeCollectionMode(value) {
   return "precision";
 }
 
+function normalizeCollectionPurpose(value) {
+  const text = String(value || "").trim();
+  if (COLLECTION_PURPOSES[text]) return text;
+  if (/basic|master|db|기본/.test(text)) return "basic_db";
+  if (/demand|location|cluster|입지|수요/.test(text)) return "demand_location";
+  return "revenue_detail";
+}
+
+function collectionPurposeDefaultRange(value) {
+  const purpose = normalizeCollectionPurpose(value);
+  if (purpose === "basic_db") return "1-50";
+  if (purpose === "demand_location") return "1-20";
+  return "1-10";
+}
+
 function boundedInteger(value, fallback, min, max) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -64,13 +84,13 @@ function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return [];
-  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 50 }];
+  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 100 }];
   const ranges = [];
   for (const part of source.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)) {
     const match = part.match(/^(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?$/);
     if (!match) continue;
-    const left = boundedInteger(match[1], 0, 1, 50);
-    const right = boundedInteger(match[2] || match[1], left, 1, 50);
+    const left = boundedInteger(match[1], 0, 1, 100);
+    const right = boundedInteger(match[2] || match[1], left, 1, 100);
     const from = Math.min(left, right);
     const to = Math.max(left, right);
     ranges.push({ from, to });
@@ -87,8 +107,8 @@ function rankRangeLabel(ranges = []) {
 function rankRangePlaceLimit(ranges = []) {
   const ranks = new Set();
   for (const range of ranges) {
-    const from = boundedInteger(range.from, 0, 1, 50);
-    const to = boundedInteger(range.to, from, 1, 50);
+    const from = boundedInteger(range.from, 0, 1, 100);
+    const to = boundedInteger(range.to, from, 1, 100);
     for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
       ranks.add(rank);
       if (ranks.size >= 20) return 20;
@@ -152,7 +172,9 @@ const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
 const SEARCH_MODE_LABEL = SEARCH_MODES[SEARCH_MODE];
 const COLLECTION_MODE = normalizeCollectionMode(process.env.COLLECTION_MODE || "precision");
 const COLLECTION_MODE_LABEL = COLLECTION_MODES[COLLECTION_MODE];
-const DETAIL_RANK_RANGES = parseRankRanges(process.env.DETAIL_RANK_RANGES, COLLECTION_MODE === "fast" ? "" : "1-20");
+const COLLECTION_PURPOSE = normalizeCollectionPurpose(process.env.COLLECTION_PURPOSE || "revenue_detail");
+const COLLECTION_PURPOSE_LABEL = COLLECTION_PURPOSES[COLLECTION_PURPOSE];
+const DETAIL_RANK_RANGES = parseRankRanges(process.env.DETAIL_RANK_RANGES, COLLECTION_MODE === "fast" ? "" : collectionPurposeDefaultRange(COLLECTION_PURPOSE));
 const DETAIL_RANK_RANGE_LABEL = rankRangeLabel(DETAIL_RANK_RANGES);
 const DETAIL_RANGE_PLACE_LIMIT = COLLECTION_MODE === "fast" ? 0 : (rankRangePlaceLimit(DETAIL_RANK_RANGES) || 10);
 const BOOKING_RANGE_PLACE_LIMIT = boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? DETAIL_RANGE_PLACE_LIMIT : 0, 0, 20);
@@ -3621,6 +3643,7 @@ async function main() {
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
     { 항목: "수집 모드", 값: SEARCH_MODE_LABEL },
+    { 항목: "수집 목적", 값: COLLECTION_PURPOSE_LABEL },
     { 항목: "수집 방식", 값: COLLECTION_MODE_LABEL },
     { 항목: "조건", 값: bookingConditionText },
     { 항목: "상세 분석 순위", 값: COLLECTION_MODE === "fast" ? "빠른 순위 모드: 상세 분석 생략" : `${DETAIL_RANK_RANGE_LABEL}위` },
@@ -3679,6 +3702,7 @@ async function main() {
 - 네이버 전체 키워드: ${naver.usedQuery || NAVER_QUERY}
 - 네이버 업체명 후보: ${naverAttemptText || "해당없음"}
 - 수집 모드: ${SEARCH_MODE_LABEL}
+- 수집 목적: ${COLLECTION_PURPOSE_LABEL}
 - 수집 방식: ${COLLECTION_MODE_LABEL}
 - 상세 분석 순위: ${COLLECTION_MODE === "fast" ? "빠른 순위 모드: 상세 분석 생략" : `${DETAIL_RANK_RANGE_LABEL}위`}
 - 판단 유형: ${province.isCompany ? "업체명" : province.isLocal ? "지역형" : "광역형"}
@@ -3787,6 +3811,8 @@ async function main() {
     searchModeLabel: SEARCH_MODE_LABEL,
     collectionMode: COLLECTION_MODE,
     collectionModeLabel: COLLECTION_MODE_LABEL,
+    collectionPurpose: COLLECTION_PURPOSE,
+    collectionPurposeLabel: COLLECTION_PURPOSE_LABEL,
     sourceRole: SOURCE_ROLE,
     collectionSource: COLLECTION_SOURCE,
     collectionSourceLabel: COLLECTION_SOURCE_LABEL,

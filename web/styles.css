@@ -30415,3 +30415,135 @@ body.role-admin .admin-db-region-card-grid button.active {
     padding: 16px;
   }
 }
+
+/* Admin collection purpose selector */
+.crawl-purpose-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(139, 160, 190, .24);
+  border-radius: 14px;
+  background: rgba(13, 20, 29, .72);
+}
+
+.crawl-purpose-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.crawl-purpose-head strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.crawl-purpose-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.crawl-purpose-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.crawl-purpose-options button {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  min-height: 104px;
+  padding: 13px;
+  border: 1px solid rgba(139, 160, 190, .28);
+  border-radius: 12px;
+  background: rgba(8, 13, 20, .72);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+
+.crawl-purpose-options button:hover,
+.crawl-purpose-options button.active {
+  border-color: rgba(121, 184, 255, .72);
+  background:
+    linear-gradient(180deg, rgba(74, 144, 226, .24), rgba(30, 58, 95, .16)),
+    rgba(13, 20, 29, .94);
+  box-shadow: 0 12px 28px rgba(14, 111, 255, .14);
+}
+
+.crawl-purpose-options button.active {
+  transform: translateY(-1px);
+}
+
+.crawl-purpose-options strong,
+.crawl-purpose-options span,
+.crawl-purpose-options em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.crawl-purpose-options strong {
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.crawl-purpose-options span {
+  color: #d4deeb;
+  font-size: 12px;
+  font-weight: 820;
+  line-height: 1.35;
+}
+
+.crawl-purpose-options em {
+  width: fit-content;
+  align-self: end;
+  padding: 5px 8px;
+  border: 1px solid rgba(121, 184, 255, .28);
+  border-radius: 999px;
+  background: rgba(121, 184, 255, .12);
+  color: #b9dcff;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+body.role-admin .crawl-purpose-panel {
+  border-color: rgba(139, 160, 190, .26);
+  background: rgba(13, 20, 29, .78);
+}
+
+body.role-admin .crawl-purpose-options button {
+  border-color: rgba(139, 160, 190, .30);
+  background: rgba(8, 13, 20, .80);
+}
+
+body.role-admin .crawl-purpose-options button.active {
+  border-color: rgba(121, 184, 255, .76);
+  box-shadow: inset 0 0 0 1px rgba(121, 184, 255, .18), 0 12px 28px rgba(14, 111, 255, .16);
+}
+
+@media (max-width: 760px) {
+  .crawl-purpose-head {
+    display: grid;
+    gap: 4px;
+  }
+
+  .crawl-purpose-head span {
+    text-align: left;
+  }
+
+  .crawl-purpose-options {
+    grid-template-columns: 1fr;
+  }
+
+  .crawl-purpose-options button {
+    min-height: 88px;
+  }
+}

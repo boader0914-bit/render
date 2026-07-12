@@ -169,6 +169,11 @@ const COLLECTION_MODES = {
   precision: "정밀 분석",
   fast: "빠른 순위"
 };
+const COLLECTION_PURPOSES = {
+  basic_db: "기본 DB 수집",
+  revenue_detail: "상세 매출 수집",
+  demand_location: "수요·입지 정밀 분석"
+};
 
 function kstDate(offsetDays = 0) {
   const now = new Date();
@@ -199,17 +204,32 @@ function normalizeCollectionMode(value) {
   return "precision";
 }
 
+function normalizeCollectionPurpose(value) {
+  const text = String(value || "").trim();
+  if (COLLECTION_PURPOSES[text]) return text;
+  if (/basic|master|db|기본/.test(text)) return "basic_db";
+  if (/demand|location|cluster|입지|수요/.test(text)) return "demand_location";
+  return "revenue_detail";
+}
+
+function collectionPurposeDefaultRange(value) {
+  const purpose = normalizeCollectionPurpose(value);
+  if (purpose === "basic_db") return "1-50";
+  if (purpose === "demand_location") return "1-20";
+  return "1-10";
+}
+
 function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return [];
-  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 50 }];
+  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 100 }];
   const ranges = [];
   for (const part of source.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)) {
     const match = part.match(/^(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?$/);
     if (!match) continue;
-    const left = Math.max(1, Math.min(50, Math.floor(Number(match[1]))));
-    const right = Math.max(1, Math.min(50, Math.floor(Number(match[2] || match[1]))));
+    const left = Math.max(1, Math.min(100, Math.floor(Number(match[1]))));
+    const right = Math.max(1, Math.min(100, Math.floor(Number(match[2] || match[1]))));
     if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
     ranges.push({ from: Math.min(left, right), to: Math.max(left, right) });
   }
@@ -225,8 +245,8 @@ function rankRangeLabel(ranges = []) {
 function rankRangePlaceLimit(ranges = []) {
   const ranks = new Set();
   for (const range of ranges) {
-    const from = Math.max(1, Math.min(50, Math.floor(Number(range.from) || 0)));
-    const to = Math.max(1, Math.min(50, Math.floor(Number(range.to) || from)));
+    const from = Math.max(1, Math.min(100, Math.floor(Number(range.from) || 0)));
+    const to = Math.max(1, Math.min(100, Math.floor(Number(range.to) || from)));
     for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
       ranks.add(rank);
       if (ranks.size >= 20) return 20;
@@ -275,12 +295,14 @@ function crawlExecutionPlan(payload = {}) {
   const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
   const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
+  const collectionPurpose = normalizeCollectionPurpose(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail");
+  const defaultDetailRankRanges = collectionMode === "fast" ? "" : collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = collectionMode === "fast"
     ? ""
     : (payload.detailRankRanges || process.env.DETAIL_RANK_RANGES);
   const parsedDetailRankRanges = parseRankRanges(
     rawDetailRankRanges,
-    collectionMode === "fast" ? "" : "1-10"
+    defaultDetailRankRanges
   );
   const detailRankRanges = rankRangeLabel(parsedDetailRankRanges);
   const detailPlaceLimit = collectionMode === "fast" ? 0 : (rankRangePlaceLimit(parsedDetailRankRanges) || 10);
@@ -309,6 +331,7 @@ function crawlExecutionPlan(payload = {}) {
     resolvedSearchMode,
     productMode,
     collectionMode,
+    collectionPurpose,
     detailRankRanges
   };
 }
@@ -319,12 +342,12 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
   const fast = plan.collectionMode === "fast";
   const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
   const productSeconds = fast ? 0 : (plan.productMode === "all" ? 45 : 26);
-  const trendSeconds = plan.resolvedSearchMode === "keyword" ? 25 : 10;
+  const trendSeconds = plan.resolvedSearchMode === "keyword" ? (plan.collectionPurpose === "demand_location" ? 55 : 25) : 10;
   const rangeSeconds = !fast && rangePlaceCount
     ? rangePlaceCount * plan.bookingRangeDays * (plan.productMode === "all" ? 5.5 : 4.2)
     : 0;
-  const regionalSeconds = fast ? 0 : 80;
-  const otaSeconds = fast ? 0 : 35;
+  const regionalSeconds = fast ? 0 : (plan.collectionPurpose === "demand_location" ? 130 : 80);
+  const otaSeconds = fast ? 0 : (plan.collectionPurpose === "basic_db" ? 20 : 35);
   const ioSeconds = fast ? 18 : 35;
   const stages = [
     {
@@ -388,6 +411,8 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
       productMode: plan.productMode,
       productModeLabel: PRODUCT_MODES[plan.productMode] || PRODUCT_MODES.all,
+      collectionPurpose: plan.collectionPurpose,
+      collectionPurposeLabel: COLLECTION_PURPOSES[plan.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
       collectionMode: plan.collectionMode,
       collectionModeLabel: COLLECTION_MODES[plan.collectionMode] || COLLECTION_MODES.precision,
       detailRankRanges: plan.detailRankRanges,
@@ -418,6 +443,7 @@ function crawlTimingConditions(plan = {}) {
     requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode || plan.searchMode || "keyword"),
     productMode: normalizeProductMode(plan.productMode),
     collectionMode: normalizeCollectionMode(plan.collectionMode),
+    collectionPurpose: normalizeCollectionPurpose(plan.collectionPurpose),
     detailRankRanges: plan.detailRankRanges || "없음",
     bookingRangeDays: Math.max(1, Math.min(31, Math.round(Number(plan.bookingRangeDays) || 1))),
     bookingRangePlaceLimit: Math.max(0, Math.min(20, Math.round(Number(plan.bookingRangePlaceLimit) || 0)))
@@ -457,6 +483,7 @@ function crawlTimingSimilarityScore(plan = {}, entry = {}) {
   const left = crawlTimingConditions(plan);
   const right = entry.conditions || {};
   if (right.collectionMode !== left.collectionMode) return 0;
+  if (right.collectionPurpose && right.collectionPurpose !== left.collectionPurpose) return 0;
   if (right.searchMode !== left.searchMode) return 0;
   if (right.productMode !== left.productMode) return 0;
 
@@ -535,6 +562,8 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     searchMode: estimate.resolvedSearchMode,
     productMode: estimate.productMode,
     collectionMode: estimate.collectionMode,
+    collectionPurpose: estimate.collectionPurpose,
+    collectionPurposeLabel: COLLECTION_PURPOSES[estimate.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
     detailRankRanges: estimate.detailRankRanges,
     bookingRangeDays: estimate.bookingRangeDays,
     bookingRangePlaceLimit: estimate.bookingRangePlaceLimit,
@@ -572,6 +601,7 @@ function crawlPayloadSignature(payload = {}) {
     requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode),
     productMode: plan.productMode,
     collectionMode: plan.collectionMode,
+    collectionPurpose: plan.collectionPurpose,
     detailRankRanges: plan.detailRankRanges,
     collectionSource,
     sourceRole,
@@ -627,6 +657,8 @@ function publicCrawlJob(job, position = 0) {
     keyword: job.plan?.keyword || "",
     checkIn: job.plan?.checkIn || "",
     checkOut: job.plan?.checkOut || "",
+    collectionPurpose: job.plan?.collectionPurpose || "revenue_detail",
+    collectionPurposeLabel: COLLECTION_PURPOSES[job.plan?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
     detailRankRanges: job.plan?.detailRankRanges || "",
     bookingRangeDays: job.plan?.bookingRangeDays || 0,
     bookingRangePlaceLimit: job.plan?.bookingRangePlaceLimit || 0,
@@ -3322,6 +3354,8 @@ async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId
     detailRankRanges: payload.detailRankRanges || "",
     collectionMode: payload.collectionMode || "",
     collectionModeLabel: COLLECTION_MODES[payload.collectionMode] || "",
+    collectionPurpose: normalizeCollectionPurpose(payload.collectionPurpose || "revenue_detail"),
+    collectionPurposeLabel: COLLECTION_PURPOSES[normalizeCollectionPurpose(payload.collectionPurpose || "revenue_detail")] || COLLECTION_PURPOSES.revenue_detail,
     bookingRangeDays: payload.bookingRangeDays || 0,
     bookingRangePlaceLimit: payload.bookingRangePlaceLimit || 0,
     searchSignature: crawlPayloadSignature(payload),
@@ -4794,6 +4828,8 @@ async function listRuns() {
       sourceRole: sourceRoleForCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
       collectionSource: normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin),
       collectionSourceLabel: manifest?.collectionSourceLabel || collectionSourceLabel(normalizeCollectionSource(manifest?.collectionSource, manifest?.sourceRole || USER_ROLES.admin)),
+      collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
+      collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
       detailRankRanges: manifest?.detailRankRanges || "",
       bookingRangeDays: manifest?.bookingRangeDays || 1,
       bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
@@ -11886,6 +11922,8 @@ async function loadRun(runId, options = {}) {
       searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
       collectionMode: manifest?.collectionMode || "precision",
       collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
+      collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
+      collectionPurposeLabel: manifest?.collectionPurposeLabel || COLLECTION_PURPOSES[manifest?.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
       detailRankRanges: manifest?.detailRankRanges || "",
       province: provinceKey,
       provinceLabel: province.label,
@@ -12372,6 +12410,7 @@ async function runCrawlerInternal(payload) {
     SEARCH_MODE_REQUESTED: normalizeSearchMode(plan.requestedSearchMode),
     SEARCH_MODE_AUTO_CORRECTED: plan.resolvedSearchMode !== normalizeSearchMode(plan.requestedSearchMode) ? "1" : "0",
     COLLECTION_MODE: plan.collectionMode,
+    COLLECTION_PURPOSE: plan.collectionPurpose,
     DETAIL_RANK_RANGES: plan.detailRankRanges,
     PRODUCT_MODE: plan.productMode,
     BOOKING_RANGE_DAYS: String(plan.bookingRangeDays),
