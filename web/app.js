@@ -2833,20 +2833,26 @@ function manualCorrectionRoomSegmentsField(correction = {}) {
   const rows = manualCorrectionRoomSegments(correction);
   const displayRows = rows.length ? rows : [cleanManualCorrectionSegment({})];
   return `
-    <div class="company-manual-segments" data-manual-segments>
-      <div class="company-manual-segments-head">
+    <details class="company-manual-segments" data-manual-segments>
+      <summary class="company-manual-segments-head">
         <div>
           <strong>객실종류/요일가격 보정</strong>
           <small data-manual-segment-summary>${escapeHtml(manualCorrectionRoomSegmentsSummary(rows))}</small>
         </div>
-        <button type="button" data-manual-segment-add ${displayRows.length >= B2B_MY_LODGE_SEGMENT_LIMIT ? "disabled" : ""}>객실종류 +</button>
-      </div>
-      <div class="company-manual-segment-list" data-manual-segment-list>
-        ${displayRows.map((row, index) => manualCorrectionRoomSegmentRowHtml(row, index, displayRows.length)).join("")}
+        <em>${rows.length ? "수정" : "입력"}</em>
+      </summary>
+      <div class="company-manual-segments-body">
+        <div class="company-manual-segments-toolbar">
+          <span>객실 종류별 수량과 요일 가격을 입력합니다.</span>
+          <button type="button" data-manual-segment-add ${displayRows.length >= B2B_MY_LODGE_SEGMENT_LIMIT ? "disabled" : ""}>객실종류 +</button>
+        </div>
+        <div class="company-manual-segment-list" data-manual-segment-list>
+          ${displayRows.map((row, index) => manualCorrectionRoomSegmentRowHtml(row, index, displayRows.length)).join("")}
+        </div>
+        <small class="company-manual-segments-help">B2B 관심숙소 등록과 매출 비교에는 저장된 보정값이 먼저 적용됩니다.</small>
       </div>
       <textarea class="sr-only" data-manual-room-segments tabindex="-1" aria-hidden="true">${escapeHtml(manualCorrectionRoomSegmentsText(correction))}</textarea>
-      <small class="company-manual-segments-help">객실종류별 수량과 요일 가격을 입력하면 B2B 관심숙소 등록과 매출 비교에 검수값이 먼저 적용됩니다.</small>
-    </div>
+    </details>
   `;
 }
 
@@ -16082,9 +16088,9 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
       <section class="company-manual-section">
         <div class="company-manual-section-head">
-          <span>1. 핵심 보정</span>
-          <strong>객실 총량과 상품별 수량·가격만 먼저 확정합니다</strong>
-          <small>네이버·OTA가 전체 객실 기준으로 세팅된 경우 관리자 보정값을 우선 적용합니다.</small>
+          <span>1. 핵심값</span>
+          <strong>총량을 먼저 확정합니다</strong>
+          <small>객실종류와 요일가격은 필요할 때만 펼쳐 입력합니다.</small>
         </div>
         <div class="company-manual-total-grid">
           <label>
@@ -16112,16 +16118,20 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
       <section class="company-manual-section save">
         <div class="company-manual-section-head">
           <span>3. 저장</span>
-          <strong>보정 근거를 남기고 저장합니다</strong>
-          <small>저장 후 전체 DB, 판단 큐, B2B 비교 기준에 우선 반영됩니다.</small>
+          <strong>저장 후 판단 상태를 확정합니다</strong>
+          <small>보정값은 전체 DB, 판단 큐, B2B 비교 기준에 우선 반영됩니다.</small>
         </div>
         <label>
           <span>보정 메모</span>
           <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
         </label>
+        <div class="company-manual-save-hint">
+          <span>저장 다음 단계</span>
+          <strong>아래 관리자 판단에서 완료·확인·재수집 중 하나를 저장하세요.</strong>
+        </div>
         <div class="company-manual-actions">
           <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 저장</button>
-          <button type="button" data-clear-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 해제</button>
+          <button type="button" data-clear-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정값 해제</button>
         </div>
         <div class="company-manual-feedback" data-company-manual-feedback aria-live="polite">${feedback ? companyManualFeedbackHtml({
           tone: "info",
