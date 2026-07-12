@@ -3317,6 +3317,28 @@ a {
   gap: 8px;
 }
 
+.admin-db-list-guide {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-db-list-guide span {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #f1f7ff;
+  color: #175cd3;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .admin-db-pagination {
   display: flex;
   align-items: center;
@@ -5067,7 +5089,32 @@ a {
   gap: 3px;
 }
 
-.admin-db-company-main strong {
+.admin-db-company-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+
+.admin-db-company-index {
+  flex: 0 0 auto;
+  min-width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #f1f7ff;
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.admin-db-company-main strong,
+.admin-db-company-title-row strong {
+  min-width: 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -26030,6 +26077,13 @@ body.role-admin .download-item a {
   background: #202631;
   color: var(--ink);
   box-shadow: none;
+}
+
+body.role-admin .admin-db-list-guide span,
+body.role-admin .admin-db-company-index {
+  border-color: rgba(106, 168, 255, .32);
+  background: rgba(106, 168, 255, .10);
+  color: #dcecff;
 }
 
 body.role-admin .crawl-submit-row span {

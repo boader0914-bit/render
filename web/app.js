@@ -17704,20 +17704,17 @@ function adminDbCollectionChip(collection = {}) {
 }
 
 function adminDbCompanyCompactTags(row = {}) {
-  const company = row.company || {};
   const metrics = row.metrics || {};
   const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
   const tags = [
     { label: workType.label || "검수 대기", tone: workType.tone || "watch" },
     { label: metrics.collection?.label || "자동수집", tone: metrics.collection?.tone || "neutral" },
     { label: metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "", tone: "neutral" },
-    { label: adminDbChannelSummary(metrics), tone: metrics.channels?.count ? "good" : "watch" },
-    { label: adminDbProductSummary(company, metrics), tone: metrics.roomTotal ? "neutral" : "watch" },
-    { label: adminDbFeatureSummary(metrics.features), tone: "neutral" }
+    { label: adminDbChannelSummary(metrics), tone: metrics.channels?.count ? "good" : "watch" }
   ];
   return tags
     .filter((tag) => tag.label)
-    .slice(0, 6)
+    .slice(0, 4)
     .map((tag) => `<em class="${escapeHtml(tag.tone || "neutral")}">${escapeHtml(tag.label)}</em>`)
     .join("");
 }
@@ -18493,31 +18490,7 @@ function adminDbSelectedDetailPanel(rows = []) {
   `;
 }
 
-function adminDbSelectedListBanner(rows = []) {
-  const selectedId = state.adminDbSelectedCompanyId || "";
-  if (!selectedId) return "";
-  const row = rows.find((item) => item.company?.companyId === selectedId);
-  if (!row) return "";
-  const company = row.company || {};
-  const metrics = row.metrics || {};
-  const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
-  return `
-    <section class="admin-db-selected-mini ${escapeHtml(workType.tone || "watch")}" aria-label="선택 업체 요약">
-      <div>
-        <span>선택 업체</span>
-        <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
-        <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, adminDbWorkReason(row)].filter(Boolean).join(" · "))}</small>
-      </div>
-      <div>
-        <em>${escapeHtml(workType.label || "검수 대기")}</em>
-        <button type="button" data-admin-db-company-select="${escapeHtml(selectedId)}">상세 검수</button>
-        <button type="button" data-admin-db-clear-selection>선택 해제</button>
-      </div>
-    </section>
-  `;
-}
-
-function adminDbCompanyRow(row = {}) {
+function adminDbCompanyRow(row = {}, options = {}) {
   const company = row.company || {};
   const metrics = row.metrics || {};
   const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
@@ -18525,10 +18498,14 @@ function adminDbCompanyRow(row = {}) {
   const rankText = metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위 대기";
   const selected = state.adminDbSelectedCompanyId && state.adminDbSelectedCompanyId === company.companyId;
   const reason = adminDbWorkReason(row);
+  const listIndex = Number(options.index || 0);
   return `
     <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}">
       <div class="admin-db-company-main">
-        <strong title="${escapeHtml(company.primaryName || "업체명 확인")}">${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+        <div class="admin-db-company-title-row">
+          ${listIndex ? `<span class="admin-db-company-index">${fmtNumber(listIndex)}</span>` : ""}
+          <strong title="${escapeHtml(company.primaryName || "업체명 확인")}">${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+        </div>
         <small>${escapeHtml(row.provinceLabel || "미분류")} · ${escapeHtml(row.localityLabel || "지역 미확인")} · ${escapeHtml(metrics.category?.label || "숙박업")}</small>
         <p>${escapeHtml(reason)}</p>
       </div>
@@ -18596,7 +18573,7 @@ function adminDbProvinceGroup(province = {}, index = 0, context = {}) {
 }
 
 function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
-  const pageSize = 16;
+  const pageSize = 12;
   const pageKey = JSON.stringify({
     query: filters.query || "",
     province: filters.province || "all",
@@ -18631,19 +18608,36 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
     filters.feature !== "all" ? "시설 선택" : "",
     filters.quality !== "all" ? "분류 점검" : ""
   ].filter(Boolean).join(" · ") || "전체 조건";
+  const sortLabels = {
+    name: "업체 가나다순",
+    rank: "노출순",
+    revenue_desc: "매출 높은순",
+    revenue_asc: "매출 낮은순",
+    rate_desc: "예약율 높은순",
+    rate_asc: "예약율 낮은순",
+    rooms_desc: "객실수 많은순",
+    rooms_asc: "객실수 적은순",
+    confidence_low: "낮은 신뢰도순",
+    latest_desc: "최근 수집일순"
+  };
+  const sortText = sortLabels[filters.sort] || "업체 가나다순";
   return `
     <section class="admin-db-flat-list">
       <div class="admin-db-flat-head">
         <div>
-          <span>업체 가나다 리스트</span>
-          <strong>검색과 필터 결과를 바로 수정 가능한 목록으로 봅니다</strong>
+          <span>업체 리스트</span>
+          <strong>검색·필터 결과를 페이지 단위로 정리합니다</strong>
           <small>${escapeHtml(scopeText)} · ${fmtNumber(rows.length)}/${fmtNumber(allRows.length)}개 업체 · ${fmtNumber(rangeStart)}-${fmtNumber(rangeEnd)} 표시</small>
         </div>
         <mark>${fmtNumber(page)} / ${fmtNumber(totalPages)}쪽</mark>
       </div>
-      ${adminDbSelectedListBanner(rows)}
+      <div class="admin-db-list-guide" aria-label="업체 리스트 기준">
+        <span>정렬 ${escapeHtml(sortText)}</span>
+        <span>페이지당 ${fmtNumber(pageSize)}개</span>
+        <span>상세·수정에서 보정</span>
+      </div>
       <div class="admin-db-company-list flat">
-        ${shown.length ? shown.map(adminDbCompanyRow).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
+        ${shown.length ? shown.map((row, index) => adminDbCompanyRow(row, { index: startIndex + index + 1 })).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
       <div class="admin-db-pagination">
         <button type="button" data-admin-db-list-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>이전</button>
