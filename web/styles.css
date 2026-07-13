@@ -32217,3 +32217,351 @@ body.role-admin .brand-beta-badge {
   color: #f8fbff !important;
   text-shadow: none !important;
 }
+
+/* Surface token layer v1: readability follows the card surface, not the page role. */
+:where([data-surface="dark"], .surface-dark) {
+  --surface-bg-token: #111923;
+  --surface-bg-soft-token: #172233;
+  --surface-border-token: rgba(156, 174, 204, .26);
+  --surface-text-token: #f8fbff;
+  --surface-muted-token: #c8d6e8;
+  --surface-subtle-token: #9fb0c6;
+  --surface-accent-token: #8fc5ff;
+  --surface-green-token: #6ee7b7;
+  --surface-warning-token: #fcd56f;
+  --surface-danger-token: #fda4af;
+}
+
+:where([data-surface="light"], .surface-light),
+body.role-admin :where(
+  .demand-company-card,
+  .demand-company-card dl div,
+  .demand-signal-card,
+  .demand-region-row,
+  .history-ops-log button,
+  .history-ops-log article,
+  .history-ops-company-list button,
+  .report-target-row,
+  .report-region-grid div,
+  .validation-target-list button,
+  .audit-queue-list button,
+  .collection-diagnostic-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .admin-db-channel-panel,
+  .admin-db-channel-summary article,
+  .admin-db-channel-row,
+  .admin-db-audit-detail-grid article,
+  .admin-db-audit-queue article,
+  .admin-db-audit-gate,
+  .admin-db-audit-gates article
+) {
+  --surface-bg-token: #ffffff;
+  --surface-bg-soft-token: #f8fbff;
+  --surface-border-token: #cbd9ea;
+  --surface-text-token: #0f172a;
+  --surface-muted-token: #475569;
+  --surface-subtle-token: #64748b;
+  --surface-accent-token: #1d4ed8;
+  --surface-green-token: #047857;
+  --surface-warning-token: #b45309;
+  --surface-danger-token: #b91c1c;
+  border-color: var(--surface-border-token) !important;
+  background: var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :where(
+  .demand-company-card,
+  .history-ops-company-list button,
+  .report-target-row,
+  .validation-target-list button,
+  .audit-queue-list button,
+  .admin-db-audit-queue article
+) {
+  box-shadow: none !important;
+}
+
+:where([data-surface="dark"], .surface-dark) :where(h1, h2, h3, h4, strong, b, dd),
+body.role-admin :where(
+  .company-card,
+  .validation-card,
+  .validation-card-collection,
+  .validation-card-audit,
+  .decision-queue-intro,
+  .company-check-card
+) :where(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--surface-text-token, #f8fbff) !important;
+  text-shadow: none !important;
+}
+
+:where([data-surface="dark"], .surface-dark) :where(p, span, small, dt, li),
+body.role-admin :where(
+  .company-card,
+  .validation-card,
+  .validation-card-collection,
+  .validation-card-audit,
+  .decision-queue-intro,
+  .company-check-card
+) :where(p, span, small, dt, li) {
+  color: var(--surface-muted-token, #c8d6e8) !important;
+  text-shadow: none !important;
+}
+
+:where([data-surface="light"], .surface-light) :where(h1, h2, h3, h4, strong, b, dd),
+body.role-admin :where(
+  .demand-company-card,
+  .demand-company-card dl div,
+  .demand-signal-card,
+  .demand-region-row,
+  .history-ops-log button,
+  .history-ops-log article,
+  .history-ops-company-list button,
+  .report-target-row,
+  .report-region-grid div,
+  .validation-target-list button,
+  .audit-queue-list button,
+  .collection-diagnostic-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .admin-db-channel-panel,
+  .admin-db-channel-summary article,
+  .admin-db-channel-row,
+  .admin-db-audit-detail-grid article,
+  .admin-db-audit-queue article,
+  .admin-db-audit-gate,
+  .admin-db-audit-gates article
+) :where(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+:where([data-surface="light"], .surface-light) :where(p, span, small, dt, li),
+body.role-admin :where(
+  .demand-company-card,
+  .demand-company-card dl div,
+  .demand-signal-card,
+  .demand-region-row,
+  .history-ops-log button,
+  .history-ops-log article,
+  .history-ops-company-list button,
+  .report-target-row,
+  .report-region-grid div,
+  .validation-target-list button,
+  .audit-queue-list button,
+  .collection-diagnostic-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .admin-db-channel-panel,
+  .admin-db-channel-summary article,
+  .admin-db-channel-row,
+  .admin-db-audit-detail-grid article,
+  .admin-db-audit-queue article,
+  .admin-db-audit-gate,
+  .admin-db-audit-gates article
+) :where(p, span, small, dt, li) {
+  color: var(--surface-muted-token) !important;
+  text-shadow: none !important;
+}
+
+:where([data-surface="light"], .surface-light) :where(em, mark),
+body.role-admin :where(
+  .demand-company-card,
+  .demand-region-row,
+  .report-target-row,
+  .report-region-grid div,
+  .validation-target-list button,
+  .audit-queue-list button,
+  .collection-diagnostic-list div
+) :where(em, mark) {
+  color: var(--surface-accent-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :where(
+  .demand-company-card > div > span,
+  .trend-line-values span,
+  .report-target-row em,
+  .collection-diagnostic-list b
+) {
+  color: var(--surface-accent-token, #1d4ed8) !important;
+}
+
+body.role-admin :where(
+  .demand-signal-card.positive,
+  .history-ops-log article.good,
+  .collection-diagnostic-list div.good,
+  .company-insight-grid div.revenue,
+  .company-insight-grid div.good,
+  .b2b-company-card-summary div.revenue,
+  .b2b-company-card-summary div.strong,
+  .b2b-company-card-summary div.good
+) {
+  border-color: #9fd6c9 !important;
+  background: #f6fffb !important;
+}
+
+body.role-admin :where(
+  .demand-signal-card.warning,
+  .history-ops-log button.watch,
+  .collection-diagnostic-list div.watch,
+  .company-insight-grid div.watch,
+  .b2b-company-card-summary div.watch
+) {
+  border-color: #e8bd54 !important;
+  background: #fff8db !important;
+}
+
+body.role-admin :where(
+  .history-ops-log button.bad,
+  .collection-diagnostic-list div.bad,
+  .company-insight-grid div.hot,
+  .b2b-company-card-summary div.hot
+) {
+  border-color: #f3b4b4 !important;
+  background: #fff5f5 !important;
+}
+
+body.role-admin :where(
+  .demand-signal-card.positive strong,
+  .history-ops-log article.good strong,
+  .collection-diagnostic-list div.good b,
+  .company-insight-grid div.revenue strong,
+  .company-insight-grid div.good strong,
+  .b2b-company-card-summary div.revenue strong,
+  .b2b-company-card-summary div.strong strong,
+  .b2b-company-card-summary div.good strong
+) {
+  color: var(--surface-green-token, #047857) !important;
+}
+
+body.role-admin :where(
+  .demand-signal-card.warning strong,
+  .history-ops-log button.watch strong,
+  .collection-diagnostic-list div.watch b,
+  .company-insight-grid div.watch strong,
+  .b2b-company-card-summary div.watch strong
+) {
+  color: var(--surface-warning-token, #b45309) !important;
+}
+
+body.role-admin :where(
+  .history-ops-log button.bad strong,
+  .collection-diagnostic-list div.bad b,
+  .company-insight-grid div.hot strong,
+  .b2b-company-card-summary div.hot strong
+) {
+  color: var(--surface-danger-token, #b91c1c) !important;
+}
+
+body.role-admin :where(
+  .demand-hero-card,
+  .demand-chart,
+  .demand-insight-card,
+  .demand-table-card,
+  .demand-metric-grid article,
+  .structure-empty-card,
+  .structure-hero,
+  .structure-card,
+  .structure-metric-grid article,
+  .structure-submetric-row article
+) {
+  --surface-bg-token: #111923;
+  --surface-bg-soft-token: #172233;
+  --surface-border-token: rgba(156, 174, 204, .26);
+  --surface-text-token: #f8fbff;
+  --surface-muted-token: #c8d6e8;
+  --surface-subtle-token: #9fb0c6;
+  --surface-accent-token: #8fc5ff;
+  --surface-green-token: #6ee7b7;
+  --surface-warning-token: #fcd56f;
+  --surface-danger-token: #fda4af;
+  border-color: var(--surface-border-token) !important;
+  background: linear-gradient(180deg, #121a25, #0d141d) !important;
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :where(
+  .demand-hero-card,
+  .demand-chart,
+  .demand-insight-card,
+  .demand-table-card,
+  .demand-metric-grid article,
+  .structure-empty-card,
+  .structure-hero,
+  .structure-card,
+  .structure-metric-grid article,
+  .structure-submetric-row article
+) :where(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :where(
+  .demand-hero-card,
+  .demand-chart,
+  .demand-insight-card,
+  .demand-table-card,
+  .demand-metric-grid article,
+  .structure-empty-card,
+  .structure-hero,
+  .structure-card,
+  .structure-metric-grid article,
+  .structure-submetric-row article
+) :where(p, span, small, dt, li) {
+  color: var(--surface-muted-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :where(
+  .demand-hero-card > span,
+  .demand-chart-head > span,
+  .demand-card-head > span,
+  .demand-pill-row span,
+  .structure-chip-row span,
+  .risk-chip-row span
+) {
+  border-color: rgba(143, 197, 255, .35) !important;
+  background: rgba(143, 197, 255, .14) !important;
+  color: #dbeafe !important;
+}
+
+body.role-admin .structure-score {
+  background: #071a38 !important;
+  color: #ffffff !important;
+}
+
+body.role-admin .structure-score :where(span, strong, em) {
+  color: #ffffff !important;
+}
+
+body.role-admin .segment-list div {
+  --surface-bg-token: #ffffff;
+  --surface-bg-soft-token: #f8fbff;
+  --surface-border-token: #cbd9ea;
+  --surface-text-token: #0f172a;
+  --surface-muted-token: #475569;
+  --surface-accent-token: #1d4ed8;
+  border-color: var(--surface-border-token) !important;
+  background: var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .segment-list div :where(strong, b, dd) {
+  color: var(--surface-text-token) !important;
+}
+
+body.role-admin .segment-list div :where(span, small, dt) {
+  color: var(--surface-muted-token) !important;
+}
+
+body.role-admin .structure-action-list li {
+  color: var(--surface-text-token, #f8fbff) !important;
+}
+
+body.role-admin .structure-radar-labels text {
+  fill: #c8d6e8 !important;
+}
