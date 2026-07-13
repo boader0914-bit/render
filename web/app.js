@@ -59,6 +59,10 @@ const state = {
   adminDbCorrectionFlash: null,
   adminDbReviewFlash: null,
   adminDbAuditRegionKey: "",
+  adminDbQueryComposing: false,
+  adminDbQueryRenderTimer: null,
+  adminRegionCompanyQueryComposing: false,
+  adminRegionCompanyQueryRenderTimer: null,
   adminUserViewMode: false,
   crawlEtaByKey: {},
   crawlEstimateTimer: null,
@@ -19683,6 +19687,62 @@ function adminDbClassificationAuditStrip(rows = [], filteredRows = [], filters =
   `;
 }
 
+function restoreAdminSearchInput(selector = "", value = "", selectionStart = null, selectionEnd = null) {
+  if (!selector) return;
+  window.requestAnimationFrame(() => {
+    const input = document.querySelector(selector);
+    if (!input) return;
+    input.focus();
+    if (input.value !== value) input.value = value;
+    const safeStart = Number.isFinite(selectionStart) ? Math.min(selectionStart, input.value.length) : input.value.length;
+    const safeEnd = Number.isFinite(selectionEnd) ? Math.min(selectionEnd, input.value.length) : safeStart;
+    input.setSelectionRange?.(safeStart, safeEnd);
+  });
+}
+
+function commitAdminDbQueryRender(value = "", selectionStart = null, selectionEnd = null) {
+  state.adminDbFilters = state.adminDbFilters || {};
+  state.adminDbFilters.query = value || "";
+  state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
+  state.adminDbListPage = 1;
+  renderAdminConsoleDashboard();
+  restoreAdminSearchInput("[data-admin-db-query]", state.adminDbFilters.query || "", selectionStart, selectionEnd);
+}
+
+function scheduleAdminDbQueryRender(input, delay = 120) {
+  if (!input) return;
+  state.adminDbFilters = state.adminDbFilters || {};
+  state.adminDbFilters.query = input.value || "";
+  state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
+  const value = input.value || "";
+  const selectionStart = input.selectionStart;
+  const selectionEnd = input.selectionEnd;
+  if (state.adminDbQueryRenderTimer) window.clearTimeout(state.adminDbQueryRenderTimer);
+  state.adminDbQueryRenderTimer = window.setTimeout(() => {
+    state.adminDbQueryRenderTimer = null;
+    commitAdminDbQueryRender(value, selectionStart, selectionEnd);
+  }, delay);
+}
+
+function commitAdminRegionCompanyQueryRender(value = "", selectionStart = null, selectionEnd = null) {
+  state.adminRegionCompanyQuery = value || "";
+  renderAdminConsoleDashboard();
+  restoreAdminSearchInput("[data-admin-region-company-search]", state.adminRegionCompanyQuery || "", selectionStart, selectionEnd);
+}
+
+function scheduleAdminRegionCompanyQueryRender(input, delay = 120) {
+  if (!input) return;
+  state.adminRegionCompanyQuery = input.value || "";
+  const value = input.value || "";
+  const selectionStart = input.selectionStart;
+  const selectionEnd = input.selectionEnd;
+  if (state.adminRegionCompanyQueryRenderTimer) window.clearTimeout(state.adminRegionCompanyQueryRenderTimer);
+  state.adminRegionCompanyQueryRenderTimer = window.setTimeout(() => {
+    state.adminRegionCompanyQueryRenderTimer = null;
+    commitAdminRegionCompanyQueryRender(value, selectionStart, selectionEnd);
+  }, delay);
+}
+
 function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole() || !els.adminDatabaseDashboard) return;
   if (master.error) {
@@ -29469,6 +29529,30 @@ function bindEvents() {
       saveB2BMyLodgeBenchmark();
     }
   });
+  document.addEventListener("compositionstart", (event) => {
+    if (event.target.closest("[data-admin-db-query]")) {
+      state.adminDbQueryComposing = true;
+      if (state.adminDbQueryRenderTimer) window.clearTimeout(state.adminDbQueryRenderTimer);
+      return;
+    }
+    if (event.target.closest("[data-admin-region-company-search]")) {
+      state.adminRegionCompanyQueryComposing = true;
+      if (state.adminRegionCompanyQueryRenderTimer) window.clearTimeout(state.adminRegionCompanyQueryRenderTimer);
+    }
+  });
+  document.addEventListener("compositionend", (event) => {
+    const adminDbQuery = event.target.closest("[data-admin-db-query]");
+    if (adminDbQuery) {
+      state.adminDbQueryComposing = false;
+      scheduleAdminDbQueryRender(adminDbQuery, 0);
+      return;
+    }
+    const regionCompanySearch = event.target.closest("[data-admin-region-company-search]");
+    if (regionCompanySearch) {
+      state.adminRegionCompanyQueryComposing = false;
+      scheduleAdminRegionCompanyQueryRender(regionCompanySearch, 0);
+    }
+  });
   document.addEventListener("input", (event) => {
     const b2bSearch = event.target.closest("#b2bSearchInput");
     if (b2bSearch) {
@@ -29495,14 +29579,8 @@ function bindEvents() {
     const regionCompanySearch = event.target.closest("[data-admin-region-company-search]");
     if (regionCompanySearch) {
       state.adminRegionCompanyQuery = regionCompanySearch.value || "";
-      renderAdminConsoleDashboard();
-      window.requestAnimationFrame(() => {
-        const next = document.querySelector("[data-admin-region-company-search]");
-        if (!next) return;
-        next.focus();
-        const length = next.value.length;
-        next.setSelectionRange?.(length, length);
-      });
+      if (event.isComposing || state.adminRegionCompanyQueryComposing) return;
+      scheduleAdminRegionCompanyQueryRender(regionCompanySearch);
       return;
     }
     const adminDbQuery = event.target.closest("[data-admin-db-query]");
@@ -29510,15 +29588,8 @@ function bindEvents() {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.query = adminDbQuery.value || "";
       state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
-      const selectionStart = adminDbQuery.selectionStart;
-      const selectionEnd = adminDbQuery.selectionEnd;
-      renderAdminConsoleDashboard();
-      window.requestAnimationFrame(() => {
-        const next = document.querySelector("[data-admin-db-query]");
-        if (!next) return;
-        next.focus();
-        if (selectionStart !== null && selectionEnd !== null) next.setSelectionRange?.(selectionStart, selectionEnd);
-      });
+      if (event.isComposing || state.adminDbQueryComposing) return;
+      scheduleAdminDbQueryRender(adminDbQuery);
       return;
     }
     const search = event.target.closest("[data-company-master-search]");
