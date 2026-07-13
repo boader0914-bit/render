@@ -273,8 +273,8 @@ function collectionDbRouteProfile(purposeValue, profileValue = "") {
   if (purpose === "basic_db") {
     return {
       key: "basic_db",
-      label: "기본 DB",
-      note: "순위, 상품, 금액, 채널 기본정보를 업체 마스터에 우선 반영",
+      label: "기본정보",
+      note: "순위, 상품 및 상품별 금액, 예약채널을 업체 마스터에 우선 반영",
       appliesMasterBasic: true,
       appliesInventory: true,
       appliesHistory: false,
@@ -285,8 +285,8 @@ function collectionDbRouteProfile(purposeValue, profileValue = "") {
   if (purpose === "demand_location") {
     return {
       key: "demand_location",
-      label: "수요·입지",
-      note: "지역카드, 클러스터, 검색수요, 입지 보정 신호로 반영",
+      label: "지역정보",
+      note: "수요, 입지, 클러스터 신호를 지역카드와 수요구조에 반영",
       appliesMasterBasic: true,
       appliesInventory: false,
       appliesHistory: false,
@@ -308,8 +308,8 @@ function collectionDbRouteProfile(purposeValue, profileValue = "") {
   }
   return {
     key: "revenue_detail",
-    label: "상세 매출",
-    note: "기간별 예약율, 가격, 예상 매출을 누적 DB에 반영",
+    label: "상세정보",
+    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 누적 DB에 반영",
     appliesMasterBasic: true,
     appliesInventory: true,
     appliesHistory: true,
@@ -12825,8 +12825,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260713-admin-collection-purpose"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260713-admin-collection-purpose"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260713-run-purpose-results"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260713-run-purpose-results"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

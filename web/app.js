@@ -935,6 +935,112 @@ function runDbApplyStatusModel(model = {}) {
   };
 }
 
+function runResultChannelLabels(item = {}) {
+  const labels = new Set();
+  if (item.url || item.naverUrl || item.naverPlaceUrl || item.bookingUrl || item.naverBookingUrl || item.reservationUrl) {
+    labels.add("네이버");
+  }
+  [
+    item.companyChannelExposures,
+    item.channelExposures,
+    item.companyProfile?.channelExposures,
+    item.manualMeta?.channelExposures
+  ].forEach((source) => {
+    Object.entries(source || {}).forEach(([key, value]) => {
+      const label = String(value?.label || key || "").trim();
+      const status = String(value?.status || value?.result || value || "").toLowerCase();
+      if (label && !/not_found|hidden|none|없음|미노출|fail/.test(status)) labels.add(label);
+    });
+  });
+  [
+    ...(item.manualMeta?.otaChannels || []),
+    ...(item.manualCorrection?.otaChannels || [])
+  ].forEach((value) => {
+    const label = String(value || "").trim();
+    if (label) labels.add(label);
+  });
+  return [...labels].filter(Boolean);
+}
+
+function runPurposeOutcomeCards(model = {}, status = {}) {
+  const data = state.data || {};
+  const run = model.run || data.run || {};
+  const items = data.availability?.items || [];
+  const ranking = data.ranking || {};
+  const diag = collectionDiagnosticProfile(items);
+  const revenue = summarizeRevenue(items);
+  const revenueAmount = finiteNumber(revenue.adjustedRevenue) + finiteNumber(revenue.dayAdjustedRevenue)
+    || finiteNumber(revenue.revenue) + finiteNumber(revenue.dayRevenue);
+  const soldCount = finiteNumber(revenue.pricedSoldOut)
+    + finiteNumber(revenue.missingPriceSoldOut)
+    + finiteNumber(revenue.dayPricedSoldOut)
+    + finiteNumber(revenue.dayMissingPriceSoldOut);
+  const channelCompanyCount = items.filter((item) => runResultChannelLabels(item).length).length;
+  const rankCandidateCount = finiteNumber(ranking.total, 0) || finiteNumber(ranking.items?.length, 0) || finiteNumber(model.currentRunCompanies, 0) || items.length;
+  const detailRange = run.detailRankRanges ? `${run.detailRankRanges}위` : "범위 미확인";
+  const checkedText = diag.checked ? `${fmtNumber(diag.succeeded)}/${fmtNumber(diag.checked)}` : (items.length ? fmtNumber(items.length) : "대기");
+  const issueCount = finiteNumber(diag.priceMissing) + finiteNumber(diag.quantityUnclear) + finiteNumber(diag.missingDates);
+  const regionKeyword = run.keyword || run.label || "검색 지역";
+  if (model.purpose?.key === "basic_db") {
+    return {
+      key: "basic",
+      title: "기본정보 확보 결과",
+      note: "순위, 상품 및 상품별 금액, 예약채널을 업체 마스터에 반영합니다.",
+      cards: [
+        { label: "순위 후보", value: fmtNumber(rankCandidateCount), note: `${detailRange} 수집 범위` },
+        { label: "상품·금액", value: model.route?.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외", note: diag.succeeded ? `상세 확인 ${checkedText}` : "상품/가격 최신값 반영" },
+        { label: "예약채널", value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "확인 대기", note: "네이버·OTA 노출 신호" },
+        { label: "마스터 반영", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
+      ]
+    };
+  }
+  if (model.purpose?.key === "demand_location") {
+    return {
+      key: "region",
+      title: "지역정보 확보 결과",
+      note: "수요, 입지, 클러스터 신호를 지역카드와 수요구조에 반영합니다.",
+      cards: [
+        { label: "수요 신호", value: model.route?.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외", note: "검색수요·트렌드" },
+        { label: "입지·클러스터", value: model.demandSignalCompanies ? "반영" : "대기", note: `${regionKeyword} 기준` },
+        { label: "지역 범위", value: detailRange, note: "지도/클러스터 연결 범위" },
+        { label: "마스터 연결", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
+      ]
+    };
+  }
+  return {
+    key: "detail",
+    title: "상세정보 확보 결과",
+    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 누적합니다.",
+    cards: [
+      { label: "예약율 표본", value: checkedText, note: "네이버 플레이스 기준" },
+      { label: "요일별 매출", value: revenueAmount ? fmtWon(revenueAmount) : fmtNumber(model.historyRows), note: revenueAmount ? `${fmtNumber(soldCount)}개/회 판매 반영` : "매출 관측치" },
+      { label: "수량·가격 확인", value: issueCount ? `${fmtNumber(issueCount)}건` : "정상", note: `가격 ${fmtNumber(diag.priceMissing)} · 수량 ${fmtNumber(diag.quantityUnclear)}`, tone: issueCount ? "watch" : "good" },
+      { label: "OTA 취합", value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "대기", note: "보조 채널 노출 신호" }
+    ]
+  };
+}
+
+function runPurposeOutcomeHtml(outcome = {}) {
+  return `
+    <div class="run-purpose-result ${escapeHtml(outcome.key || "")}">
+      <div class="run-purpose-result-head">
+        <span>수집 목적별 결과</span>
+        <strong>${escapeHtml(outcome.title || "수집 결과")}</strong>
+        <small>${escapeHtml(outcome.note || "")}</small>
+      </div>
+      <div class="run-purpose-result-grid">
+        ${(outcome.cards || []).map((card) => `
+          <article class="${escapeHtml(card.tone || "")}">
+            <span>${escapeHtml(card.label || "")}</span>
+            <strong>${escapeHtml(String(card.value ?? ""))}</strong>
+            <small>${escapeHtml(card.note || "")}</small>
+          </article>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function collectionRouteRunCount(company = {}, routeKey = "") {
   const stats = Array.isArray(company.collectionRouteStats)
     ? company.collectionRouteStats
@@ -1068,7 +1174,7 @@ function renderRunResultApplySummary() {
     els.runApplySummary.innerHTML = `
       <div class="run-apply-empty">
         <strong>결과를 선택하면 DB 반영 위치를 표시합니다.</strong>
-        <small>기본정보, 상세 매출, 수요·입지 중 어디에 반영됐는지 확인합니다.</small>
+        <small>기본정보, 상세정보, 지역정보 중 어디에 반영됐는지 확인합니다.</small>
       </div>
     `;
     return;
@@ -1077,18 +1183,19 @@ function renderRunResultApplySummary() {
   const run = model.run || {};
   const status = runDbApplyStatusModel(model);
   const linkedQueue = runDbApplyLinkedQueueModel(model, status);
+  const outcome = runPurposeOutcomeCards(model, status);
   const detailText = run.detailRankRanges ? `${run.detailRankRanges}위` : "범위 미확인";
   const dateText = dateRangeLabel(run);
   const historyValue = model.historyEligible ? fmtNumber(model.historyRows) : "제외";
   const historyNote = model.historyEligible ? "이번 결과 매출 관측치" : "이 수집 목적은 매출 누적 제외";
   const demandValue = model.route.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외";
-  const demandNote = model.route.appliesDemandLocation ? "수요·입지 신호 반영" : "수요·입지 전용 수집 아님";
+  const demandNote = model.route.appliesDemandLocation ? "지역정보 신호 반영" : "지역정보 수집 아님";
   els.runApplySummary.innerHTML = `
     <section class="run-apply-panel ${escapeHtml(model.route.key || "unknown")} ${escapeHtml(status.tone)}">
       <div class="run-apply-head">
         <div>
           <span>이번 수집 반영</span>
-          <strong>${escapeHtml(model.route.label || model.purpose.label)}</strong>
+          <strong>${escapeHtml(model.purpose.label || model.route.label || "수집 결과")}</strong>
           <small>${escapeHtml([run.keyword || run.label || "", detailText, dateText].filter(Boolean).join(" · "))}</small>
         </div>
         <div class="run-apply-badges">
@@ -1096,6 +1203,7 @@ function renderRunResultApplySummary() {
           <em>${escapeHtml(model.purpose.dbApplyText || model.targetText || "DB 반영")}</em>
         </div>
       </div>
+      ${runPurposeOutcomeHtml(outcome)}
       <div class="run-apply-check ${escapeHtml(status.tone)}">
         <strong>${escapeHtml(status.label)}</strong>
         <span>${escapeHtml(status.message)}</span>
@@ -1117,7 +1225,7 @@ function renderRunResultApplySummary() {
           <small>${escapeHtml(historyNote)}</small>
         </article>
         <article>
-          <span>수요·입지</span>
+          <span>지역정보</span>
           <strong>${escapeHtml(demandValue)}</strong>
           <small>${escapeHtml(demandNote)}</small>
         </article>

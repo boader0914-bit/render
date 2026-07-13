@@ -30955,6 +30955,96 @@ body.role-admin .admin-db-region-card-grid button.active {
   color: #d8e3f0;
 }
 
+.run-purpose-result {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(58, 226, 164, .24);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(16, 124, 94, .22), rgba(22, 38, 62, .38)),
+    rgba(9, 15, 23, .72);
+  padding: 12px;
+}
+
+.run-purpose-result-head {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.run-purpose-result-head span {
+  color: #8ae9c8;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.run-purpose-result-head strong {
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.run-purpose-result-head small {
+  color: #d3e1ef;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.42;
+}
+
+.run-purpose-result-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.run-purpose-result-grid article {
+  min-width: 0;
+  border: 1px solid rgba(139, 160, 190, .24);
+  border-radius: 12px;
+  background: rgba(8, 13, 20, .76);
+  padding: 10px;
+}
+
+.run-purpose-result-grid article.good {
+  border-color: rgba(58, 226, 164, .36);
+  background: rgba(8, 54, 45, .48);
+}
+
+.run-purpose-result-grid article.watch {
+  border-color: rgba(255, 198, 75, .42);
+  background: rgba(75, 55, 18, .46);
+}
+
+.run-purpose-result-grid article.bad {
+  border-color: rgba(255, 114, 139, .48);
+  background: rgba(72, 25, 38, .48);
+}
+
+.run-purpose-result-grid span,
+.run-purpose-result-grid small {
+  display: block;
+  min-width: 0;
+  color: #b8c7d8;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.run-purpose-result-grid strong {
+  display: block;
+  min-width: 0;
+  margin: 4px 0;
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.16;
+  overflow-wrap: anywhere;
+}
+
 .run-apply-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -31162,6 +31252,18 @@ body.role-admin .run-apply-grid article {
   background: rgba(8, 13, 20, .72);
 }
 
+body.role-admin .run-purpose-result {
+  border-color: rgba(58, 226, 164, .30);
+  background:
+    linear-gradient(135deg, rgba(12, 80, 66, .42), rgba(16, 27, 43, .86)),
+    rgba(8, 13, 20, .76);
+}
+
+body.role-admin .run-purpose-result-grid article {
+  border-color: rgba(139, 160, 190, .28);
+  background: rgba(7, 12, 19, .78);
+}
+
 @media (max-width: 760px) {
   .crawl-purpose-head {
     display: grid;
@@ -31201,6 +31303,7 @@ body.role-admin .run-apply-grid article {
     text-align: left;
   }
 
+  .run-purpose-result-grid,
   .run-apply-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -31212,6 +31315,7 @@ body.role-admin .run-apply-grid article {
 
 @media (max-width: 420px) {
   .crawl-route-preview,
+  .run-purpose-result-grid,
   .run-apply-grid {
     grid-template-columns: 1fr;
   }
