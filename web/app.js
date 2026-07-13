@@ -55,9 +55,12 @@ const state = {
   adminDbListPage: 1,
   adminDbListPageKey: "",
   adminDbSelectedCompanyId: "",
+  adminDbRouteCompanyId: "",
   adminDbOpsOpen: false,
   adminDbCorrectionFlash: null,
   adminDbReviewFlash: null,
+  adminDbMasterEnsureLoading: false,
+  adminDbMasterEnsureRequested: false,
   adminDbAuditRegionKey: "",
   adminDbQueryComposing: false,
   adminDbQueryRenderTimer: null,
@@ -3461,6 +3464,7 @@ function manualCorrectionSegmentHasValue(row = {}) {
 }
 
 function manualCorrectionRoomSegments(correction = {}) {
+  if (!correction || typeof correction !== "object") correction = {};
   return (Array.isArray(correction.roomSegments) ? correction.roomSegments : [])
     .map((row) => cleanManualCorrectionSegment(row))
     .filter((row) => manualCorrectionSegmentHasValue(row))
@@ -9461,6 +9465,7 @@ function b2bInterestLodgeFingerprint(interestLodges = []) {
   return JSON.stringify(
     (Array.isArray(interestLodges) ? interestLodges : [])
       .map((lodge) => b2bNormalizeInterestLodge(lodge))
+      .filter((lodge) => lodge && typeof lodge === "object")
       .map((lodge) => ({
         id: lodge.id,
         lodgingName: lodge.lodgingName,
@@ -9637,6 +9642,7 @@ function b2bMyLodgeSegmentHasInput(row = {}) {
 }
 
 function b2bMyLodgeSegmentRows(draft = {}) {
+  if (!draft || typeof draft !== "object") draft = {};
   return (Array.isArray(draft.roomSegments) ? draft.roomSegments : [])
     .map((row) => b2bMyLodgeCleanSegment(row))
     .filter((row) => b2bMyLodgeSegmentHasInput(row))
@@ -9644,6 +9650,7 @@ function b2bMyLodgeSegmentRows(draft = {}) {
 }
 
 function b2bMyLodgeLegacySegment(draft = {}) {
+  if (!draft || typeof draft !== "object") draft = {};
   const row = b2bMyLodgeCleanSegment({
     type: draft.roomType,
     count: draft.roomCount,
@@ -9656,6 +9663,7 @@ function b2bMyLodgeLegacySegment(draft = {}) {
 }
 
 function b2bMyLodgeSegmentInputRows(draft = {}) {
+  if (!draft || typeof draft !== "object") draft = {};
   if (Array.isArray(draft.roomSegments) && draft.roomSegments.length) {
     return draft.roomSegments
       .map((row) => b2bMyLodgeCleanSegment(row))
@@ -9674,6 +9682,7 @@ function b2bMyLodgeCollectionTextList(value, limit = 5) {
 }
 
 function b2bMyLodgeCollectionMetadata(draft = {}) {
+  if (!draft || typeof draft !== "object") draft = {};
   return B2B_MY_LODGE_COLLECTION_META_KEYS.reduce((acc, key) => {
     if (!Object.prototype.hasOwnProperty.call(draft, key)) return acc;
     if (key === "collectionPrecisionReasons" || key === "collectionPrecisionWarnings") {
@@ -9698,6 +9707,7 @@ function b2bMyLodgeCollectionMetadata(draft = {}) {
 }
 
 function b2bMyLodgeComparableSignature(value = {}) {
+  if (!value || typeof value !== "object") value = {};
   const rows = b2bMyLodgeSegmentInputRows(value)
     .filter((row) => b2bMyLodgeSegmentHasInput(row))
     .map((row) => ({
@@ -9725,6 +9735,7 @@ function b2bMyLodgeWasManuallyAdjusted(previous = {}, next = {}) {
 }
 
 function b2bMyLodgeCollectionPrecisionInfo(draft = {}) {
+  if (!draft || typeof draft !== "object") draft = {};
   const label = String(draft.collectionPrecisionLabel || "").trim();
   const source = String(draft.collectionSource || "").trim();
   const visible = Boolean(label || source || draft.manualAdjusted);
@@ -9802,6 +9813,7 @@ function b2bNewInterestLodgeId() {
 }
 
 function b2bNormalizeInterestLodge(lodge = {}) {
+  if (!lodge || typeof lodge !== "object") lodge = {};
   const roomSegments = b2bMyLodgeSegmentInputRows(lodge)
     .filter((row) => b2bMyLodgeSegmentHasInput(row))
     .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
@@ -9871,6 +9883,7 @@ function b2bNormalizeMyLodgeDraft(draft = {}) {
 }
 
 function b2bInterestLodgeWasExplicitlyRegistered(lodge = {}) {
+  if (!lodge || typeof lodge !== "object") return false;
   const id = String(lodge.id || "").trim();
   return Boolean(lodge.registeredAt || /^interest-[a-z0-9]+-[a-z0-9]{6}$/i.test(id));
 }
@@ -9883,6 +9896,7 @@ function b2bMyLodgeStoreFromValue(value = {}) {
       draft: source.draft && typeof source.draft === "object" ? source.draft : {},
       interestLodges: (Array.isArray(source.interestLodges) ? source.interestLodges : [])
         .map((lodge) => b2bNormalizeInterestLodge(lodge))
+        .filter((lodge) => lodge && typeof lodge === "object")
         .filter((lodge) => b2bMyLodgeDraftHasInput(lodge))
         .filter((lodge) => b2bInterestLodgeWasExplicitlyRegistered(lodge))
         .slice(0, B2B_INTEREST_LODGE_LIMIT)
@@ -9899,6 +9913,7 @@ function b2bMyLodgeStoreFromValue(value = {}) {
 }
 
 function b2bMyLodgeSegmentAverage(row = {}) {
+  if (!row || typeof row !== "object") row = {};
   const weekday = b2bMyLodgeNumber(row.weekdayPrice);
   const friday = b2bMyLodgeNumber(row.fridayPrice);
   const saturday = b2bMyLodgeNumber(row.saturdayPrice);
@@ -9910,6 +9925,7 @@ function b2bMyLodgeSegmentAverage(row = {}) {
 }
 
 function b2bMyLodgeAveragePriceFromSegments(rows = []) {
+  rows = Array.isArray(rows) ? rows.filter((row) => row && typeof row === "object") : [];
   let weightedTotal = 0;
   let weightedCount = 0;
   const unweighted = [];
@@ -9929,6 +9945,7 @@ function b2bMyLodgeAveragePriceFromSegments(rows = []) {
 }
 
 function b2bMyLodgeSegmentPrice(row = {}, key = "weekdayPrice") {
+  if (!row || typeof row !== "object") row = {};
   const direct = b2bMyLodgeNumber(row[key]);
   if (direct > 0) return direct;
   const weekday = b2bMyLodgeNumber(row.weekdayPrice);
@@ -9936,6 +9953,9 @@ function b2bMyLodgeSegmentPrice(row = {}, key = "weekdayPrice") {
 }
 
 function b2bMyLodgeSegmentRevenue(rows = [], rates = {}, dayCounts = {}) {
+  rows = Array.isArray(rows) ? rows.filter((row) => row && typeof row === "object") : [];
+  rates = rates && typeof rates === "object" ? rates : {};
+  dayCounts = dayCounts && typeof dayCounts === "object" ? dayCounts : {};
   return rows.reduce((sum, row) => {
     const count = Math.round(b2bMyLodgeNumber(row.count));
     if (count <= 0) return sum;
@@ -9948,6 +9968,7 @@ function b2bMyLodgeSegmentRevenue(rows = [], rates = {}, dayCounts = {}) {
 }
 
 function b2bMyLodgeAveragePrice(draft = {}) {
+  if (!draft || typeof draft !== "object") draft = {};
   const weekday = b2bMyLodgeNumber(draft.weekdayPrice);
   const friday = b2bMyLodgeNumber(draft.fridayPrice);
   const saturday = b2bMyLodgeNumber(draft.saturdayPrice);
@@ -10848,6 +10869,7 @@ function b2bMyLodgeReferenceRows(revenueModel = b2bRevenueBenchmarkModel(), fall
 
 function b2bInterestLodgeComparisonRows(interestLodges = [], brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief), previewModel = null) {
   const lodgeRows = (Array.isArray(interestLodges) ? interestLodges : [])
+    .filter((lodge) => lodge && typeof lodge === "object")
     .map((lodge, index) => {
       const model = b2bMyLodgeBenchmarkModel(brief, revenueModel, lodge);
       return {
@@ -11122,6 +11144,8 @@ function renderB2BMyLodgePrecisionNote(precision = {}) {
 }
 
 function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBriefModel(), revenueModel = b2bRevenueBenchmarkModel(brief)) {
+  interestLodges = (Array.isArray(interestLodges) ? interestLodges : [])
+    .filter((lodge) => lodge && typeof lodge === "object");
   if (!interestLodges.length) return "";
   return `
     <div class="b2b-interest-lodge-grid" aria-label="등록된 관심숙소">
@@ -11420,6 +11444,7 @@ function persistB2BMyLodgeStore(store = {}, options = {}) {
     draft: store.draft && typeof store.draft === "object" ? store.draft : {},
     interestLodges: (Array.isArray(store.interestLodges) ? store.interestLodges : [])
       .map((lodge) => b2bNormalizeInterestLodge(lodge))
+      .filter((lodge) => lodge && typeof lodge === "object")
       .filter((lodge) => b2bMyLodgeDraftHasInput(lodge))
       .slice(0, B2B_INTEREST_LODGE_LIMIT)
   };
@@ -17458,6 +17483,31 @@ function adminConsoleMasterSource() {
   return { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
 }
 
+function adminDbMasterHasRows(master = {}) {
+  return Boolean((master.companies || []).length || master.totalCompanies);
+}
+
+function ensureAdminDbMasterLoadedForRoute(companyId = "") {
+  const selectedCompanyId = String(companyId || "").trim();
+  if (!isAdminRole() || !selectedCompanyId) return false;
+  if (state.adminDbMasterEnsureLoading || state.adminDbMasterEnsureRequested) return true;
+  state.adminDbMasterEnsureLoading = true;
+  state.adminDbMasterEnsureRequested = true;
+  loadCompanyMasterSummary()
+    .then(() => {
+      const master = adminConsoleMasterSource();
+      if (!adminDbMasterHasRows(master)) return;
+      renderAdminConsoleDashboard();
+      const routeCompanyId = adminDbCompanyIdFromRoute() || state.adminDbRouteCompanyId || selectedCompanyId;
+      if (routeCompanyId) handleAdminDbCompanyHash();
+    })
+    .catch(() => {})
+    .finally(() => {
+      state.adminDbMasterEnsureLoading = false;
+    });
+  return true;
+}
+
 function adminDbFilters() {
   const defaults = {
     query: "",
@@ -18084,6 +18134,39 @@ function adminDbCompanyDetailUrl(companyId = "") {
   return selectedCompanyId ? `/admin?adminCompany=${encodeURIComponent(selectedCompanyId)}${adminDbCompanyHash(selectedCompanyId)}` : "/admin";
 }
 
+function adminDbCompanyUseNativeLink(event = null, element = null) {
+  if (!element || element.tagName !== "A") return false;
+  if (element.hasAttribute("data-admin-db-company-select")) return true;
+  return Boolean(
+    event?.defaultPrevented ||
+    event?.button === 1 ||
+    event?.metaKey ||
+    event?.ctrlKey ||
+    event?.shiftKey ||
+    event?.altKey
+  );
+}
+
+function setAdminDbCompanyRoute(companyId = "", replace = false) {
+  const selectedCompanyId = String(companyId || "").trim();
+  if (!selectedCompanyId || !window.history?.pushState) return;
+  const target = adminDbCompanyDetailUrl(selectedCompanyId);
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (current === target) return;
+  window.history[replace ? "replaceState" : "pushState"](null, "", target);
+}
+
+function activateAdminDbCompanyDetail(companyId = "", options = {}) {
+  const selectedCompanyId = String(companyId || "").trim();
+  if (!selectedCompanyId) return false;
+  state.adminDbRouteCompanyId = selectedCompanyId;
+  state.adminDbSelectedCompanyId = selectedCompanyId;
+  state.adminDbViewMode = "review";
+  const opened = openAdminDbCompanyReview(selectedCompanyId);
+  if (options.updateRoute !== false) setAdminDbCompanyRoute(selectedCompanyId, Boolean(options.replaceRoute));
+  return opened;
+}
+
 function adminDbCompanyIdFromRoute() {
   const params = new URLSearchParams(window.location.search || "");
   return params.get("adminCompany") || adminDbCompanyIdFromHash();
@@ -18102,6 +18185,7 @@ function adminDbCompanyIdFromHash(hash = window.location.hash) {
 function clearAdminDbCompanyHash() {
   const url = new URL(window.location.href);
   const hadRoute = url.searchParams.has("adminCompany") || url.hash.startsWith("#admin-db-company=");
+  state.adminDbRouteCompanyId = "";
   if (!hadRoute) return;
   url.searchParams.delete("adminCompany");
   url.hash = "";
@@ -20117,8 +20201,19 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = adminDbFilterState(master);
   const grouped = adminDbGroupedRows(filteredRows);
   const allGrouped = adminDbGroupedRows(rows);
-  const routeCompanyId = adminDbCompanyIdFromRoute();
+  const routeCompanyId = adminDbCompanyIdFromRoute() || state.adminDbRouteCompanyId || "";
+  if (routeCompanyId && !adminDbMasterHasRows(master) && !rows.length) {
+    ensureAdminDbMasterLoadedForRoute(routeCompanyId);
+    els.adminDatabaseDashboard.innerHTML = `
+      <div class="admin-console-empty admin-db-loading-detail">
+        <strong>상세 데이터를 불러오는 중입니다.</strong>
+        <p>마스터 DB를 확인한 뒤 업체 상세 화면을 다시 엽니다.</p>
+      </div>
+    `;
+    return;
+  }
   if (routeCompanyId) {
+    state.adminDbRouteCompanyId = routeCompanyId;
     state.adminDbSelectedCompanyId = routeCompanyId;
     state.adminDbViewMode = "review";
     state.adminDbOpsOpen = true;
@@ -29047,6 +29142,7 @@ async function loadRun(runId) {
   }
   syncCollectionModeInputs();
   renderAll();
+  if (isAdminRole() && adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
   setStatus("준비");
 }
 
@@ -29406,6 +29502,7 @@ function setDefaultDates() {
 function openAdminDbCompanyReview(companyId = "") {
   const selectedCompanyId = String(companyId || "").trim();
   if (!selectedCompanyId) return false;
+  state.adminDbRouteCompanyId = selectedCompanyId;
   state.adminDbSelectedCompanyId = selectedCompanyId;
   state.adminDbViewMode = "review";
   state.adminDbOpsOpen = true;
@@ -29430,14 +29527,16 @@ function bindAdminDbCompanySelectButtons() {
     if (button.getAttribute("data-admin-db-select-bound") === "1") return;
     button.setAttribute("data-admin-db-select-bound", "1");
     button.addEventListener("click", (event) => {
-      if (button.tagName !== "A") event.preventDefault();
+      if (adminDbCompanyUseNativeLink(event, button)) return;
+      event.preventDefault();
       event.stopPropagation();
-      openAdminDbCompanyReview(button.getAttribute("data-admin-db-company-select") || "");
+      activateAdminDbCompanyDetail(button.getAttribute("data-admin-db-company-select") || "");
     });
     button.addEventListener("pointerup", (event) => {
-      if (button.tagName !== "A") event.preventDefault();
+      if (button.tagName === "A" || adminDbCompanyUseNativeLink(event, button)) return;
+      event.preventDefault();
       event.stopPropagation();
-      openAdminDbCompanyReview(button.getAttribute("data-admin-db-company-select") || "");
+      activateAdminDbCompanyDetail(button.getAttribute("data-admin-db-company-select") || "");
     });
   });
   document.querySelectorAll("[data-admin-db-company-card-select]").forEach((card) => {
@@ -29445,7 +29544,7 @@ function bindAdminDbCompanySelectButtons() {
     card.setAttribute("data-admin-db-card-select-bound", "1");
     card.addEventListener("click", (event) => {
       if (event.target.closest("button, a, input, select, textarea, label, summary")) return;
-      openAdminDbCompanyReview(card.getAttribute("data-admin-db-company-card-select") || "");
+      activateAdminDbCompanyDetail(card.getAttribute("data-admin-db-company-card-select") || "");
     });
   });
 }
@@ -29454,6 +29553,15 @@ function bindEvents() {
   window.addEventListener("hashchange", () => {
     handleAdminDbCompanyHash();
   });
+  document.addEventListener("click", (event) => {
+    const adminDbCompanySelect = event.target.closest?.("[data-admin-db-company-select]");
+    if (!adminDbCompanySelect) return;
+    if (adminDbCompanyUseNativeLink(event, adminDbCompanySelect)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
+  }, true);
   window.setInterval(() => {
     const companyId = adminDbCompanyIdFromRoute();
     if (!companyId) return;
@@ -29474,9 +29582,10 @@ function bindEvents() {
   document.addEventListener("pointerup", (event) => {
     const adminDbCompanySelect = event.target.closest?.("[data-admin-db-company-select]");
     if (!adminDbCompanySelect) return;
-    if (adminDbCompanySelect.tagName !== "A") event.preventDefault();
+    if (adminDbCompanySelect.tagName === "A" || adminDbCompanyUseNativeLink(event, adminDbCompanySelect)) return;
+    event.preventDefault();
     event.stopPropagation();
-    openAdminDbCompanyReview(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
+    activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
   }, true);
   document.addEventListener("click", (event) => {
     const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
@@ -29520,8 +29629,10 @@ function bindEvents() {
     }
     const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
     if (adminDbCompanySelect) {
-      if (adminDbCompanySelect.tagName !== "A") event.preventDefault();
-      openAdminDbCompanyReview(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
+      if (adminDbCompanyUseNativeLink(event, adminDbCompanySelect)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
       return;
     }
     if (event.target.closest("[data-admin-db-clear]")) {
@@ -29578,7 +29689,7 @@ function bindEvents() {
       const companyId = adminDbView.getAttribute("data-admin-db-company-id") || adminDbView.getAttribute("data-admin-db-company-select") || "";
       if (mode === "review" && companyId) {
         if (adminDbView.tagName !== "A") event.preventDefault();
-        openAdminDbCompanyReview(companyId);
+        activateAdminDbCompanyDetail(companyId);
         return;
       }
       if (mode !== "review") clearAdminDbCompanyHash();
@@ -30387,6 +30498,11 @@ async function init() {
     syncAppHistoryState(false);
     if (isAdminRole()) {
       await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
+      if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
+        await loadCompanyMasterSummary();
+      }
+      renderAdminConsoleDashboard();
+      if (adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
     } else {
       state.runs = [];
       state.activeRunId = null;
