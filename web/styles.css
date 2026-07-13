@@ -31636,3 +31636,176 @@ body.role-admin .admin-db-company-title-row strong {
     gap: 7px;
   }
 }
+
+/* Final contrast lock: light cards use dark text, dark admin lists use light text. */
+body.role-admin .detail-sheet {
+  --sheet-light-ink: #0f172a;
+  --sheet-light-text: #334155;
+  --sheet-light-muted: #64748b;
+  --sheet-light-blue: #1d4ed8;
+  --sheet-light-green: #047857;
+  --sheet-light-line: #d8e2ee;
+}
+
+body.role-admin .detail-sheet .sheet-decision-section,
+body.role-admin .detail-sheet .sheet-audit-section,
+body.role-admin .detail-sheet .sheet-collection-section,
+body.role-admin .detail-sheet .sheet-revenue-section,
+body.role-admin .detail-sheet .sheet-structure-section,
+body.role-admin .detail-sheet .sheet-history-section,
+body.role-admin .detail-sheet .sheet-booking-bars,
+body.role-admin .detail-sheet .sheet-b2b-detail,
+body.role-admin .detail-sheet .sheet-b2b-insight,
+body.role-admin .detail-sheet .sheet-b2b-platform,
+body.role-admin .detail-sheet .sheet-b2b-search,
+body.role-admin .detail-sheet .sheet-b2b-booking,
+body.role-admin .detail-sheet .sheet-b2b-boundary,
+body.role-admin .detail-sheet .sheet-b2b-action-list,
+body.role-admin .detail-sheet .sheet-b2b-coupon-line {
+  color: var(--sheet-light-ink) !important;
+}
+
+body.role-admin .detail-sheet .sheet-decision-section h3,
+body.role-admin .detail-sheet .sheet-audit-section h3,
+body.role-admin .detail-sheet .sheet-collection-section h3,
+body.role-admin .detail-sheet .sheet-revenue-section h3,
+body.role-admin .detail-sheet .sheet-structure-section h3,
+body.role-admin .detail-sheet .sheet-history-section h3,
+body.role-admin .detail-sheet .sheet-booking-bars h3,
+body.role-admin .detail-sheet .sheet-b2b-head h3,
+body.role-admin .detail-sheet .sheet-b2b-action-list > strong {
+  color: var(--sheet-light-ink) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet .sheet-decision-section p,
+body.role-admin .detail-sheet .sheet-audit-section p,
+body.role-admin .detail-sheet .sheet-collection-section p,
+body.role-admin .detail-sheet .sheet-revenue-section p,
+body.role-admin .detail-sheet .sheet-structure-section p,
+body.role-admin .detail-sheet .sheet-history-section p,
+body.role-admin .detail-sheet .sheet-booking-bars p,
+body.role-admin .detail-sheet .sheet-b2b-head p,
+body.role-admin .detail-sheet .sheet-b2b-action-list p {
+  color: var(--sheet-light-text) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-platform-grid div,
+body.role-admin .detail-sheet .sheet-b2b-detail-grid div,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip div,
+body.role-admin .detail-sheet .sheet-b2b-evidence-grid div,
+body.role-admin .detail-sheet .sheet-b2b-note-grid div,
+body.role-admin .detail-sheet .sheet-b2b-boundary,
+body.role-admin .detail-sheet .sheet-b2b-coupon-line {
+  border-color: var(--sheet-light-line) !important;
+  background: #ffffff !important;
+  color: var(--sheet-light-ink) !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-detail-grid div.strong,
+body.role-admin .detail-sheet .sheet-b2b-detail-grid div.good,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip div.strong,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip div.good,
+body.role-admin .detail-sheet .sheet-b2b-platform.strong,
+body.role-admin .detail-sheet .sheet-b2b-platform.good,
+body.role-admin .detail-sheet .sheet-b2b-search.strong,
+body.role-admin .detail-sheet .sheet-b2b-search.good,
+body.role-admin .detail-sheet .sheet-b2b-booking.strong,
+body.role-admin .detail-sheet .sheet-b2b-booking.good,
+body.role-admin .detail-sheet .sheet-b2b-boundary.strong,
+body.role-admin .detail-sheet .sheet-b2b-boundary.good {
+  border-color: #a7d7cc !important;
+  background: #f6fffb !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-detail-grid div.watch,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip div.watch,
+body.role-admin .detail-sheet .sheet-b2b-platform.watch,
+body.role-admin .detail-sheet .sheet-b2b-search.watch,
+body.role-admin .detail-sheet .sheet-b2b-booking.watch,
+body.role-admin .detail-sheet .sheet-b2b-boundary.watch {
+  border-color: #f3c96b !important;
+  background: #fff8db !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-detail-grid div.hot,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip div.hot,
+body.role-admin .detail-sheet .sheet-b2b-platform.hot,
+body.role-admin .detail-sheet .sheet-b2b-search.hot,
+body.role-admin .detail-sheet .sheet-b2b-booking.hot,
+body.role-admin .detail-sheet .sheet-b2b-booking.bad,
+body.role-admin .detail-sheet .sheet-b2b-boundary.hot {
+  border-color: #f4b4bd !important;
+  background: #fff3f5 !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-platform-grid span,
+body.role-admin .detail-sheet .sheet-b2b-platform-grid small,
+body.role-admin .detail-sheet .sheet-b2b-detail-grid span,
+body.role-admin .detail-sheet .sheet-b2b-detail-grid small,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip span,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip small,
+body.role-admin .detail-sheet .sheet-b2b-evidence-grid span,
+body.role-admin .detail-sheet .sheet-b2b-evidence-grid small,
+body.role-admin .detail-sheet .sheet-b2b-note-grid span,
+body.role-admin .detail-sheet .sheet-b2b-note-grid small,
+body.role-admin .detail-sheet .sheet-b2b-boundary span,
+body.role-admin .detail-sheet .sheet-b2b-boundary small,
+body.role-admin .detail-sheet .sheet-b2b-coupon-line span {
+  color: var(--sheet-light-muted) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-platform-grid strong,
+body.role-admin .detail-sheet .sheet-b2b-detail-grid strong,
+body.role-admin .detail-sheet .sheet-b2b-flow-strip strong,
+body.role-admin .detail-sheet .sheet-b2b-evidence-grid strong,
+body.role-admin .detail-sheet .sheet-b2b-note-grid strong,
+body.role-admin .detail-sheet .sheet-b2b-boundary strong,
+body.role-admin .detail-sheet .sheet-b2b-head > strong {
+  color: var(--sheet-light-blue) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-head span,
+body.role-admin .detail-sheet .sheet-b2b-coupon-line strong,
+body.role-admin .detail-sheet .sheet-b2b-boundary-chips em {
+  color: var(--sheet-light-green) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet .sheet-b2b-boundary-chips span,
+body.role-admin .detail-sheet .sheet-b2b-boundary-chips em,
+body.role-admin .detail-sheet .sheet-b2b-action-list span {
+  border-color: var(--sheet-light-line) !important;
+  background: #f8fafc !important;
+  color: var(--sheet-light-text) !important;
+}
+
+body.role-admin .admin-db-company-title-row strong,
+body.role-admin .admin-db-company-main strong,
+body.role-admin .admin-db-company-main b,
+body.role-admin .admin-db-audit-title strong,
+body.role-admin .admin-db-audit-queue strong,
+body.role-admin .admin-db-selected-head strong,
+body.role-admin .admin-db-selected-decision-head strong {
+  color: #ffffff !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-company-main small,
+body.role-admin .admin-db-company-main p,
+body.role-admin .admin-db-audit-title small,
+body.role-admin .admin-db-audit-queue small,
+body.role-admin .admin-db-selected-head small,
+body.role-admin .admin-db-selected-decision-head small {
+  color: #c9d7e8 !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-company-tags em,
+body.role-admin .admin-db-selected-issues em,
+body.role-admin .admin-db-audit-task-tags em {
+  color: #eaf3ff !important;
+}
