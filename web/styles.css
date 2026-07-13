@@ -31965,3 +31965,255 @@ body.role-admin .report-region-grid .empty {
   line-height: 1.45;
   white-space: normal;
 }
+
+/* Admin/B2B contrast guard: dark surfaces use light text, light cards use dark text. */
+body.role-admin .company-card,
+body.role-admin .validation-card,
+body.role-admin .validation-card-collection,
+body.role-admin .validation-card-audit,
+body.role-admin .decision-queue-intro,
+body.role-admin .company-check-card {
+  border-color: rgba(156, 174, 204, .28) !important;
+  background: linear-gradient(180deg, #121a25, #0d141d) !important;
+  color: #edf3fb !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .company-title strong,
+body.role-admin .company-metric strong,
+body.role-admin .validation-card-head h3,
+body.role-admin .validation-card-head strong,
+body.role-admin .decision-queue-intro h3,
+body.role-admin .decision-queue-intro strong,
+body.role-admin .company-check-card h3,
+body.role-admin .company-check-card strong {
+  color: #f8fbff !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .company-title small,
+body.role-admin .company-metric span,
+body.role-admin .company-metric small,
+body.role-admin .validation-card-head p,
+body.role-admin .validation-card-target > small,
+body.role-admin .decision-queue-intro p,
+body.role-admin .company-check-card p,
+body.role-admin .company-check-card small {
+  color: #c8d6e8 !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .rank-badge,
+body.role-admin .audit-rank {
+  border: 1px solid #bfdbfe !important;
+  background: #eaf3ff !important;
+  color: #1d4ed8 !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .company-insight-grid div,
+body.role-admin .b2b-company-card-summary div,
+body.role-admin .validation-target-list button,
+body.role-admin .collection-diagnostic-list div,
+body.role-admin .audit-status-strip span,
+body.role-admin .audit-queue-list button {
+  --admin-light-card-ink: #0f172a;
+  --admin-light-card-text: #334155;
+  --admin-light-card-muted: #475569;
+  --admin-light-card-blue: #1d4ed8;
+  --admin-light-card-line: #cbd9ea;
+  border-color: var(--admin-light-card-line) !important;
+  background: #ffffff !important;
+  color: var(--admin-light-card-ink) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .company-insight-grid div.revenue,
+body.role-admin .company-insight-grid div.good,
+body.role-admin .b2b-company-card-summary div.revenue,
+body.role-admin .b2b-company-card-summary div.strong,
+body.role-admin .b2b-company-card-summary div.good,
+body.role-admin .collection-diagnostic-list div.good {
+  border-color: #9fd6c9 !important;
+  background: #f6fffb !important;
+}
+
+body.role-admin .company-insight-grid div.watch,
+body.role-admin .b2b-company-card-summary div.watch,
+body.role-admin .collection-diagnostic-list div.watch {
+  border-color: #e8bd54 !important;
+  background: #fff8db !important;
+}
+
+body.role-admin .company-insight-grid div.hot,
+body.role-admin .b2b-company-card-summary div.hot,
+body.role-admin .collection-diagnostic-list div.bad {
+  border-color: #f3b4b4 !important;
+  background: #fff5f5 !important;
+}
+
+body.role-admin .company-insight-grid strong,
+body.role-admin .b2b-company-card-summary strong,
+body.role-admin .validation-target-list strong,
+body.role-admin .collection-diagnostic-list strong,
+body.role-admin .collection-diagnostic-list b,
+body.role-admin .audit-queue-list strong {
+  color: #0f172a !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .company-insight-grid span,
+body.role-admin .company-insight-grid small,
+body.role-admin .b2b-company-card-summary span,
+body.role-admin .b2b-company-card-summary small,
+body.role-admin .validation-target-list span,
+body.role-admin .validation-target-list p,
+body.role-admin .collection-diagnostic-list small,
+body.role-admin .audit-queue-list small,
+body.role-admin .audit-queue-list p {
+  color: #475569 !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .company-insight-grid div.revenue strong,
+body.role-admin .company-insight-grid div.good strong,
+body.role-admin .b2b-company-card-summary div.revenue strong,
+body.role-admin .b2b-company-card-summary div.strong strong,
+body.role-admin .b2b-company-card-summary div.good strong,
+body.role-admin .collection-diagnostic-list div.good b {
+  color: #047857 !important;
+}
+
+body.role-admin .company-insight-grid div.watch strong,
+body.role-admin .b2b-company-card-summary div.watch strong,
+body.role-admin .collection-diagnostic-list div.watch b {
+  color: #b45309 !important;
+}
+
+body.role-admin .company-insight-grid div.hot strong,
+body.role-admin .b2b-company-card-summary div.hot strong,
+body.role-admin .collection-diagnostic-list div.bad b {
+  color: #b91c1c !important;
+}
+
+body.role-admin .confidence-badge,
+body.role-admin .structure-badge,
+body.role-admin .b2b-company-chips em {
+  border-color: #cbd9ea !important;
+  background: #f8fafc !important;
+  color: #1e293b !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .confidence-badge.good,
+body.role-admin .confidence-badge.manual,
+body.role-admin .structure-badge.good,
+body.role-admin .structure-badge.manual-correction {
+  border-color: #86efac !important;
+  background: #f0fdf4 !important;
+  color: #047857 !important;
+}
+
+body.role-admin .confidence-badge.watch,
+body.role-admin .structure-badge.watch,
+body.role-admin .structure-badge.ota-check {
+  border-color: #fdba74 !important;
+  background: #fff7ed !important;
+  color: #b45309 !important;
+}
+
+body.role-admin .confidence-badge.bad,
+body.role-admin .structure-badge.bad {
+  border-color: #fecaca !important;
+  background: #fef2f2 !important;
+  color: #b91c1c !important;
+}
+
+body.role-admin .audit-status-strip span.good,
+body.role-admin .audit-queue-list em.good {
+  border-color: #86efac !important;
+  background: #f0fdf4 !important;
+  color: #047857 !important;
+}
+
+body.role-admin .audit-status-strip span.watch,
+body.role-admin .audit-queue-list em.watch {
+  border-color: #fdba74 !important;
+  background: #fff7ed !important;
+  color: #b45309 !important;
+}
+
+body.role-admin .audit-status-strip span.bad,
+body.role-admin .audit-queue-list em.bad {
+  border-color: #fecaca !important;
+  background: #fef2f2 !important;
+  color: #b91c1c !important;
+}
+
+body.role-b2b .company-insight-grid div,
+body.role-b2b .b2b-company-card-summary div,
+body.role-b2b .validation-target-list button,
+body.role-b2b .collection-diagnostic-list div,
+body.role-b2b .audit-queue-list button {
+  color: #edf3fb;
+}
+
+body.role-b2b .b2b-live-search-panel span,
+body.role-admin .b2b-live-search-panel span {
+  border-color: rgba(125, 211, 252, .42) !important;
+  background: rgba(59, 130, 246, .16) !important;
+  color: #cfe6ff !important;
+  text-shadow: none !important;
+}
+
+body.role-b2b .b2b-live-search-panel.ready span,
+body.role-admin .b2b-live-search-panel.ready span {
+  border-color: rgba(52, 211, 153, .44) !important;
+  background: rgba(16, 185, 129, .16) !important;
+  color: #c8f7df !important;
+}
+
+body.role-b2b .b2b-live-search-panel.loading span,
+body.role-admin .b2b-live-search-panel.loading span {
+  border-color: rgba(251, 191, 36, .48) !important;
+  background: rgba(251, 191, 36, .16) !important;
+  color: #ffe6a8 !important;
+}
+
+body.role-b2b .report-badge,
+body.role-admin .report-badge {
+  border-color: #60a5fa !important;
+  background: #1d4ed8 !important;
+  color: #ffffff !important;
+  text-shadow: none !important;
+}
+
+body.role-b2b .report-badge.strong,
+body.role-admin .report-badge.strong {
+  border-color: #34d399 !important;
+  background: #047857 !important;
+  color: #ffffff !important;
+}
+
+body.role-b2b .report-badge.watch,
+body.role-admin .report-badge.watch {
+  border-color: #fbbf24 !important;
+  background: #92400e !important;
+  color: #ffffff !important;
+}
+
+body.role-b2b .report-badge.hot,
+body.role-admin .report-badge.hot {
+  border-color: #fb7185 !important;
+  background: #9f1239 !important;
+  color: #ffffff !important;
+}
+
+body.role-b2b .brand-beta-badge,
+body.role-admin .brand-beta-badge {
+  border-color: rgba(125, 211, 252, .50) !important;
+  background: rgba(30, 64, 175, .45) !important;
+  color: #f8fbff !important;
+  text-shadow: none !important;
+}
