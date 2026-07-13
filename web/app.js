@@ -16945,9 +16945,9 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
       <section class="company-manual-section">
         <div class="company-manual-section-head">
-          <span>1. 핵심값</span>
-          <strong>총량을 먼저 확정합니다</strong>
-          <small>객실종류와 요일가격은 필요할 때만 펼쳐 입력합니다.</small>
+          <span>1. 기준값</span>
+          <strong>객실 총량과 상품 기준을 먼저 확정합니다</strong>
+          <small>객실종류와 요일가격은 필요한 경우에만 입력합니다.</small>
         </div>
         <div class="company-manual-total-grid">
           <label>
@@ -16964,9 +16964,9 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
       <details class="company-manual-section company-manual-advanced" ${advancedOpen ? "open" : ""}>
         <summary>
           <div>
-            <span>2. 고급 보정</span>
-            <strong>지역·채널·쿠폰·시설</strong>
-            <small>확인된 항목만 열어서 수정합니다.</small>
+            <span>2. 추가 기준</span>
+            <strong>지역·쿠폰·시설·판매채널 보조값</strong>
+            <small>확인한 항목만 입력합니다.</small>
           </div>
           <em>${advancedOpen ? "입력값 있음" : "선택 입력"}</em>
         </summary>
@@ -16974,17 +16974,17 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
       </details>
       <section class="company-manual-section save">
         <div class="company-manual-section-head">
-          <span>3. 저장</span>
-          <strong>저장 후 판단 상태를 확정합니다</strong>
-          <small>보정값은 업체 관리와 사업자 비교 기준에 우선 반영됩니다.</small>
+          <span>3. 저장 결과</span>
+          <strong>보정값 저장 또는 해제</strong>
+          <small>저장 후 검수 상태에서 완료·확인·보류 중 하나로 확정합니다.</small>
         </div>
         <label>
           <span>보정 메모</span>
           <input type="text" data-manual-note value="${escapeHtml(correction.note || "")}" placeholder="예: 전체 후보 28동, 현재 운영 26동">
         </label>
         <div class="company-manual-save-hint">
-          <span>저장 다음 단계</span>
-          <strong>아래 검수 상태에서 완료·확인·재수집 중 하나를 저장하세요.</strong>
+          <span>다음 단계</span>
+          <strong>보정 후에는 4번 검수 상태에서 최종 상태를 저장하세요.</strong>
         </div>
         <div class="company-manual-actions">
           <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 저장</button>
@@ -17230,12 +17230,12 @@ function adminDbQuickCorrectionPanel(row = {}) {
     <section class="admin-db-quick-edit" data-admin-db-quick-edit="${escapeHtml(companyId)}">
       <div class="admin-db-quick-edit-head">
         <div>
-          <span>즉시 수정</span>
-          <strong>지역·채널·쿠폰·수량/가격 보정</strong>
-          <small>저장하면 업체 관리와 사업자 비교 기준에 보정값이 우선 적용됩니다.</small>
+          <span>기준값 수정</span>
+          <strong>객실 총량·상품·가격 기준을 확정합니다</strong>
+          <small>저장된 보정값은 전체 DB와 사업자 비교 지표에 우선 적용됩니다.</small>
         </div>
-        ${adminDbCorrectionFlashHtml(companyId)}
       </div>
+      ${adminDbCorrectionFlashHtml(companyId)}
       <div class="admin-db-quick-edit-summary">
         ${cards.map(adminDbSelectedMetricCard).join("")}
       </div>
@@ -19026,38 +19026,27 @@ function adminDbSelectedDecisionCards(row = {}, requiredChannels = []) {
   const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
   const correction = manualCorrectionHasValue(company.manualCorrection);
   const review = metrics.adminReview || company.adminReview || {};
-  const b2bBasis = [
-    metrics.rank ? `노출 ${fmtNumber(metrics.rank)}위` : "노출 대기",
-    Number.isFinite(metrics.rate) ? `예약율 ${fmtRate(metrics.rate)}` : "예약율 확인",
-    metrics.revenue ? `매출 ${fmtWon(metrics.revenue)}` : "매출 대기"
-  ].join(" · ");
   return [
     {
-      label: "1. 현재 판단",
+      label: "1. 기준값",
       value: workType.label || "확인 필요",
-      note: adminDbWorkReason(row),
+      note: correction ? "관리자 보정값 우선" : adminDbWorkReason(row),
       tone: workType.tone || "watch"
     },
     {
-      label: "2. B2B 기준",
-      value: metrics.revenue || Number.isFinite(metrics.rate) ? "확인 가능" : "근거 보강",
-      note: b2bBasis,
-      tone: metrics.revenue && Number.isFinite(metrics.rate) ? "good" : "watch"
+      label: "2. 채널 노출",
+      value: metrics.channels?.count ? `${fmtNumber(metrics.channels.count)}개` : "확인 필요",
+      note: adminDbChannelSummary(metrics),
+      tone: metrics.channels?.count ? "good" : "watch"
     },
     {
-      label: "3. 기준값 수정",
-      value: correction ? "적용됨" : (metrics.lowConfidence ? "필요" : "대기"),
-      note: correction ? "보정값 우선" : (metrics.lowConfidence ? "객실 총량·상품 구조 확인" : "자동수집값 기준"),
-      tone: correction ? "good" : (metrics.lowConfidence ? "hot" : "neutral")
-    },
-    {
-      label: "4. 확인 수집",
+      label: "3. 확인 수집",
       value: requiredChannels.length ? `${fmtNumber(requiredChannels.length)}개 채널` : "추가 없음",
       note: requiredChannels.join(" · ") || "현재 표본 유지",
       tone: requiredChannels.length ? "watch" : "good"
     },
     {
-      label: "5. 판단 저장",
+      label: "4. 검수 상태",
       value: review.label || companyAdminReviewLabel(review.status) || "미검수",
       note: review.note || companyReviewContextText(review.context || {}) || "확인/보정/보류 중 하나로 확정",
       tone: review.status ? "good" : "watch"
@@ -19088,6 +19077,15 @@ function adminDbSelectedNextAction(row = {}, requiredChannels = []) {
       foldKey: "correction"
     };
   }
+  if (requiredChannels.length || metrics.channels?.manualNeeded) {
+    return {
+      label: "채널 노출",
+      title: "네이버 외 OTA 노출 확인",
+      note: requiredChannels.join(" · ") || "저장된 채널 상태를 확인하고 URL과 메모를 정리합니다.",
+      tone: "watch",
+      foldKey: "channel"
+    };
+  }
   if (needsCollect) {
     return {
       label: "확인 수집",
@@ -19100,7 +19098,7 @@ function adminDbSelectedNextAction(row = {}, requiredChannels = []) {
   }
   if (!review.status) {
     return {
-      label: "검수 저장",
+      label: "검수 상태",
       title: "확인/완료/보류 중 하나로 확정",
       note: "수집값이 충분하면 검수 상태를 저장해 업체 관리 목록을 정리합니다.",
       tone: workType.tone || "watch",
@@ -19129,7 +19127,7 @@ function adminDbSelectedDecisionPanel(row = {}, issues = [], requiredChannels = 
     <section class="admin-db-selected-decision ${escapeHtml(workType.tone || "watch")}" aria-label="상세 작업 요약">
       <div class="admin-db-selected-decision-head">
         <div>
-          <span>현재 판단</span>
+          <span>처리 방향</span>
           <strong>${escapeHtml(workType.label || "확인 필요")}</strong>
           <small>${escapeHtml(currentReason)}</small>
         </div>
@@ -19154,8 +19152,8 @@ function adminDbSelectedDecisionPanel(row = {}, issues = [], requiredChannels = 
       </div>
       <details class="admin-db-selected-stage-fold">
         <summary>
-          <span>처리 흐름 보기</span>
-          <small>지표 확인, 보정, 수집, 검수 저장 순서</small>
+          <span>작업 순서 보기</span>
+          <small>기준값, 채널 노출, 확인 수집, 검수 상태 순서</small>
         </summary>
         <div class="admin-db-selected-task-rail">
           ${decisionCards.map(adminDbSelectedMetricCard).join("")}
@@ -19782,12 +19780,18 @@ function adminDbSelectedDetailPanel(rows = []) {
   const selectedId = company.companyId || "";
   const correctionBody = adminDbQuickCorrectionPanel(row);
   const channelBody = adminDbChannelExposurePanel(row);
-  const collectBody = [
+  const rawCollectBody = [
     adminDbConfirmCollectPlanHtml(row),
     adminDbRecheckOutcomeHtml(row)
   ].filter(Boolean).join("");
+  const collectBody = rawCollectBody || `
+    <div class="admin-db-selected-empty-step">
+      <strong>현재 추가 확인 수집은 없습니다.</strong>
+      <small>기준값과 채널 노출을 확인한 뒤 필요하면 상단의 확인 수집 버튼으로 다시 실행할 수 있습니다.</small>
+    </div>
+  `;
   const nextAction = adminDbSelectedNextAction(row, requiredChannels);
-  const needsCollectAction = Boolean(nextAction.runCollect || collectBody || metrics.collection?.needsConfirm || requiredChannels.length);
+  const needsCollectAction = Boolean(nextAction.runCollect || rawCollectBody || metrics.collection?.needsConfirm || requiredChannels.length);
   const channelNeedsReview = Boolean(metrics.channels?.manualNeeded || requiredChannels.some((channel) => ["OTA", "네이버 쿠폰"].includes(channel)));
   const reviewBody = `
     <div class="admin-db-selected-review">
@@ -19829,27 +19833,19 @@ function adminDbSelectedDetailPanel(rows = []) {
         })}
       </section>
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
-        ${adminDbSelectedSectionHead("수정·처리", "필요한 작업만 펼쳐 실행합니다", "")}
+        ${adminDbSelectedSectionHead("상세 수정", "기준값·채널·수집·검수 상태를 순서대로 정리합니다", "")}
         ${adminDbReviewFlashHtml(selectedId)}
         <div class="admin-db-selected-actions primary">
-          ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집 실행</button>` : ""}
           <button type="button" data-admin-db-open-fold="correction">기준값 수정</button>
-          <button type="button" data-admin-db-open-fold="channel">채널 확인</button>
+          <button type="button" data-admin-db-open-fold="channel">채널 노출</button>
+          ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집</button>` : ""}
+          <button type="button" data-admin-db-open-fold="review">검수 상태</button>
           <button type="button" data-admin-db-view-link="list">목록</button>
         </div>
         <div class="admin-db-selected-workbench-stack">
           ${adminDbSelectedFoldBlock({
-            label: "1. 검수 상태",
-            title: "검수 상태와 메모 저장",
-            note: nextAction.foldKey === "review" ? "먼저 처리" : "상태 저장",
-            body: reviewBody,
-            open: nextAction.foldKey === "review",
-            tone: "review",
-            foldKey: "review"
-          })}
-          ${adminDbSelectedFoldBlock({
-            label: "2. 기준값 수정",
-            title: "지역·채널·쿠폰·수량/가격 수정",
+            label: "1. 기준값",
+            title: "객실 총량·상품·가격 기준 수정",
             note: nextAction.foldKey === "correction" ? "먼저 처리" : "필요할 때 열기",
             body: correctionBody,
             open: nextAction.foldKey === "correction",
@@ -19857,22 +19853,31 @@ function adminDbSelectedDetailPanel(rows = []) {
             foldKey: "correction"
           })}
           ${adminDbSelectedFoldBlock({
-            label: "3. 채널 확인",
-            title: "네이버·OTA 노출과 URL 저장",
+            label: "2. 채널 노출",
+            title: "네이버 외 OTA 노출과 URL 저장",
             note: channelNeedsReview ? "확인 필요" : "채널별 확인",
             body: channelBody,
-            open: channelNeedsReview && nextAction.foldKey !== "correction",
+            open: nextAction.foldKey === "channel" || (channelNeedsReview && nextAction.foldKey !== "correction" && nextAction.foldKey !== "collect"),
             tone: "channel",
             foldKey: "channel"
           })}
           ${adminDbSelectedFoldBlock({
-            label: "4. 확인 수집",
-            title: "재수집 조건과 이전/최신 비교",
+            label: "3. 확인 수집",
+            title: "요일별 매출·예약율·수량 근거 보강",
             note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
             body: collectBody,
             open: nextAction.foldKey === "collect",
             tone: "collect",
             foldKey: "collect"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "4. 검수 상태",
+            title: "완료·보류·보정 필요 상태 저장",
+            note: nextAction.foldKey === "review" ? "먼저 처리" : "최종 상태 저장",
+            body: reviewBody,
+            open: nextAction.foldKey === "review",
+            tone: "review",
+            foldKey: "review"
           })}
         </div>
       </section>
@@ -30099,9 +30104,12 @@ function bindEvents() {
     const adminDbOpenFold = event.target.closest("[data-admin-db-open-fold]");
     if (adminDbOpenFold) {
       const key = adminDbOpenFold.dataset.adminDbOpenFold || "";
-      const target = Array.from(document.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]"))
-        .find((fold) => fold.dataset.adminDbFold === key);
+      const folds = Array.from(document.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]"));
+      const target = folds.find((fold) => fold.dataset.adminDbFold === key);
       if (target) {
+        folds.forEach((fold) => {
+          fold.open = fold === target;
+        });
         target.open = true;
         target.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }

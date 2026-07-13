@@ -4671,11 +4671,17 @@ a {
 }
 
 .admin-db-selected-actions.primary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   justify-content: flex-start;
   border: 1px solid #d5e3f7;
   border-radius: 14px;
   background: #fbfdff;
   padding: 8px;
+}
+
+.admin-db-selected-actions.primary button {
+  width: 100%;
 }
 
 .admin-db-selected-actions button {
@@ -5036,6 +5042,36 @@ a {
   margin-top: 0;
   border-color: #d5e3f7;
   background: #fff;
+}
+
+.admin-db-quick-edit > .admin-db-correction-flash {
+  width: 100%;
+  min-width: 0;
+  flex: none;
+}
+
+.admin-db-selected-empty-step {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px dashed #c8d8ee;
+  border-radius: 13px;
+  background: #fbfdff;
+  padding: 12px;
+}
+
+.admin-db-selected-empty-step strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.admin-db-selected-empty-step small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
 }
 
 .admin-db-confirm-plan {
@@ -26728,6 +26764,7 @@ body.role-admin .admin-db-selected-fold summary strong,
 body.role-admin .admin-db-correction-impact-head strong,
 body.role-admin .admin-db-correction-scope strong,
 body.role-admin .admin-db-correction-flow strong,
+body.role-admin .admin-db-selected-empty-step strong,
 body.role-admin .admin-db-company strong,
 body.role-admin .admin-db-company b,
 body.role-admin .admin-db-company-title,
@@ -26816,6 +26853,7 @@ body.role-admin .admin-db-correction-scope span,
 body.role-admin .admin-db-correction-scope small,
 body.role-admin .admin-db-correction-flow span,
 body.role-admin .admin-db-correction-flow small,
+body.role-admin .admin-db-selected-empty-step small,
 body.role-admin .admin-db-company small,
 body.role-admin .admin-db-company p,
 body.role-admin .admin-db-more,
@@ -26906,6 +26944,7 @@ body.role-admin .admin-db-quick-edit,
 body.role-admin .admin-db-correction-impact,
 body.role-admin .admin-db-correction-scope article,
 body.role-admin .admin-db-correction-flow article,
+body.role-admin .admin-db-selected-empty-step,
 body.role-admin .admin-db-recheck-panel,
 body.role-admin .admin-db-recheck-summary article,
 body.role-admin .admin-db-recheck-grid article,
