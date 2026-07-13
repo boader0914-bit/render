@@ -32565,3 +32565,141 @@ body.role-admin .structure-action-list li {
 body.role-admin .structure-radar-labels text {
   fill: #c8d6e8 !important;
 }
+
+/* Surface token layer v2: components can declare their own visual surface. */
+[data-surface="light"],
+.surface-light {
+  --surface-bg-token: #ffffff;
+  --surface-bg-soft-token: #f8fbff;
+  --surface-border-token: #cbd9ea;
+  --surface-text-token: #0f172a;
+  --surface-muted-token: #475569;
+  --surface-subtle-token: #64748b;
+  --surface-accent-token: #1d4ed8;
+  --surface-green-token: #047857;
+  --surface-warning-token: #b45309;
+  --surface-danger-token: #b91c1c;
+  border-color: var(--surface-border-token) !important;
+  background: var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+[data-surface="dark"],
+.surface-dark {
+  --surface-bg-token: #111923;
+  --surface-bg-soft-token: #172233;
+  --surface-border-token: rgba(156, 174, 204, .28);
+  --surface-text-token: #f8fbff;
+  --surface-muted-token: #c8d6e8;
+  --surface-subtle-token: #9fb0c6;
+  --surface-accent-token: #8fc5ff;
+  --surface-green-token: #6ee7b7;
+  --surface-warning-token: #fcd56f;
+  --surface-danger-token: #fda4af;
+  border-color: var(--surface-border-token) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+[data-surface] :where(h1, h2, h3, h4, strong, b, dd),
+.surface-light :where(h1, h2, h3, h4, strong, b, dd),
+.surface-dark :where(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+[data-surface] :where(p, span, small, dt, li),
+.surface-light :where(p, span, small, dt, li),
+.surface-dark :where(p, span, small, dt, li) {
+  color: var(--surface-muted-token) !important;
+  text-shadow: none !important;
+}
+
+[data-surface] :where(em, mark),
+.surface-light :where(em, mark),
+.surface-dark :where(em, mark) {
+  color: var(--surface-accent-token) !important;
+  text-shadow: none !important;
+}
+
+[data-surface="light"] :where(input, select, textarea),
+.surface-light :where(input, select, textarea) {
+  border-color: #b8cbe0 !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
+}
+
+[data-surface="light"] :where(input::placeholder, textarea::placeholder),
+.surface-light :where(input::placeholder, textarea::placeholder) {
+  color: #7890aa !important;
+  opacity: 1;
+}
+
+[data-surface="dark"] :where(input, select, textarea),
+.surface-dark :where(input, select, textarea) {
+  border-color: rgba(156, 174, 204, .34) !important;
+  background: #11161f !important;
+  color: #f8fbff !important;
+  box-shadow: none !important;
+}
+
+[data-surface="dark"] :where(input::placeholder, textarea::placeholder),
+.surface-dark :where(input::placeholder, textarea::placeholder) {
+  color: #9fb0c6 !important;
+  opacity: 1;
+}
+
+[data-surface="dark"] .admin-db-company-values span {
+  border-color: rgba(121, 184, 255, .52) !important;
+  background:
+    linear-gradient(180deg, rgba(32, 51, 75, .96), rgba(10, 18, 30, .98)) !important;
+}
+
+[data-surface="dark"] .admin-db-company-values b {
+  color: #ffffff !important;
+}
+
+[data-surface="dark"] .admin-db-company-values small {
+  color: #bcd9f7 !important;
+}
+
+[data-surface="dark"] .admin-db-company-index {
+  border-color: rgba(121, 184, 255, .38) !important;
+  background: rgba(121, 184, 255, .14) !important;
+  color: #dcecff !important;
+}
+
+[data-surface="dark"] .admin-db-company-tags em,
+[data-surface="dark"] .admin-db-list-guide span,
+[data-surface="dark"] .admin-db-pagination span {
+  border-color: rgba(121, 184, 255, .42) !important;
+  background: rgba(121, 184, 255, .16) !important;
+  color: #e4f1ff !important;
+}
+
+[data-surface="light"].good,
+[data-surface="light"] .good,
+[data-surface="light"].strong,
+[data-surface="light"] .strong {
+  border-color: #9fd6c9 !important;
+  background: #f6fffb !important;
+}
+
+[data-surface="light"].watch,
+[data-surface="light"] .watch {
+  border-color: #e8bd54 !important;
+  background: #fff8db !important;
+}
+
+[data-surface="light"].hot,
+[data-surface="light"] .hot,
+[data-surface="light"].bad,
+[data-surface="light"] .bad {
+  border-color: #f3b4b4 !important;
+  background: #fff5f5 !important;
+}

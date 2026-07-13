@@ -12999,7 +12999,7 @@ function demandTrendChart() {
       ? trend.reason
       : "12개월 검색 추세 확보 후 표시";
   return `
-    <div class="demand-chart ${trend.hasSeries ? "" : "pending"}">
+    <div class="demand-chart ${trend.hasSeries ? "" : "pending"}" data-surface="dark">
       <div class="demand-chart-head">
         <div>
           <strong>네이버 검색 추이</strong>
@@ -13564,7 +13564,7 @@ function renderDemandStructure() {
     </section>
 
     <section class="structure-layout">
-      <article class="structure-card radar-card">
+      <article class="structure-card radar-card" data-surface="dark">
         <div class="demand-card-head">
           <div>
             <h3>지표 균형</h3>
@@ -13574,7 +13574,7 @@ function renderDemandStructure() {
         ${demandRadarChart(structure.radar || [])}
       </article>
 
-      <article class="structure-card">
+      <article class="structure-card" data-surface="dark">
         <div class="demand-card-head">
           <div>
             <h3>핵심 타겟</h3>
@@ -13584,7 +13584,7 @@ function renderDemandStructure() {
         </div>
         <div class="segment-list">
           ${(structure.topSegments || []).map((segment) => `
-            <div>
+            <div data-surface="light">
               <strong>${escapeHtml(segment.name)}</strong>
               <span>${escapeHtml(segment.group)} · ${fmtNumber(segment.score)}점</span>
               <small>${escapeHtml(segment.operation || "")}</small>
@@ -13595,7 +13595,7 @@ function renderDemandStructure() {
     </section>
 
     <section class="structure-action-grid">
-      <article class="structure-card">
+      <article class="structure-card" data-surface="dark">
         <div class="demand-card-head">
           <div>
             <h3>추천 운영</h3>
@@ -13606,7 +13606,7 @@ function renderDemandStructure() {
           ${(structure.recommendedOperations || []).slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
         </ol>
       </article>
-      <article class="structure-card risk">
+      <article class="structure-card risk" data-surface="dark">
         <div class="demand-card-head">
           <div>
             <h3>운영 리스크</h3>
@@ -14273,7 +14273,7 @@ function demandCompanySample() {
   const lodging = salesStats(target, "lodging");
   const index = (state.data?.availability?.items || []).indexOf(target);
   return `
-    <article class="demand-company-card">
+    <article class="demand-company-card" data-surface="light">
       <div>
         <span>경쟁업체 예시</span>
         <strong>${escapeHtml(target.name || "업체명 확인")}</strong>
@@ -19334,7 +19334,7 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
   const checked = entry.checkedAt ? compactDateTime(entry.checkedAt) : "확인 전";
   const confidence = Number.isFinite(Number(entry.confidence)) ? ` · 신뢰 ${fmtNumber(entry.confidence)}%` : "";
   return `
-    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
+    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-surface="light" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
       <div class="admin-db-channel-row-head">
         <div>
           <strong>${escapeHtml(label)}</strong>
@@ -19377,7 +19377,7 @@ function adminDbChannelExposurePanel(row = {}) {
   const exposedCount = ADMIN_DB_MANAGED_CHANNELS.filter(([key]) => channels[key]).length;
   const manualCount = channels.manualNeeded || 0;
   return `
-    <section class="admin-db-channel-panel">
+    <section class="admin-db-channel-panel" data-surface="light">
       <div class="admin-db-channel-head">
         <div>
           <span>채널 노출 확인</span>
@@ -19392,7 +19392,7 @@ function adminDbChannelExposurePanel(row = {}) {
           ["노출", exposedCount, "네이버 제외"],
           ["확인필요", manualCount, "수동/차단 포함"]
         ].map(([label, value, note]) => `
-          <article>
+          <article data-surface="light">
             <span>${escapeHtml(label)}</span>
             <strong>${fmtNumber(value)}</strong>
             <small>${escapeHtml(note)}</small>
@@ -19580,7 +19580,7 @@ function adminDbCompanyRow(row = {}, options = {}) {
   const reason = adminDbWorkReason(row);
   const listIndex = Number(options.index || 0);
   return `
-    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}">
+    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-surface="dark">
       <div class="admin-db-company-main">
         <div class="admin-db-company-title-row">
           ${listIndex ? `<span class="admin-db-company-index">${fmtNumber(listIndex)}</span>` : ""}
@@ -19589,7 +19589,7 @@ function adminDbCompanyRow(row = {}, options = {}) {
         <small>${escapeHtml(row.provinceLabel || "미분류")} · ${escapeHtml(row.localityLabel || "지역 미확인")} · ${escapeHtml(metrics.category?.label || "숙박업")}</small>
         <p>${escapeHtml(reason)}</p>
       </div>
-      <div class="admin-db-company-values">
+      <div class="admin-db-company-values" data-surface="dark">
         <span><b>${escapeHtml(rankText)}</b><small>노출순</small></span>
         <span><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b><small>7일 매출</small></span>
         <span><b>${escapeHtml(rateText)}</b><small>예약율</small></span>
@@ -19702,7 +19702,7 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
   };
   const sortText = sortLabels[filters.sort] || "업체 가나다순";
   return `
-    <section class="admin-db-flat-list">
+    <section class="admin-db-flat-list" data-surface="dark">
       <div class="admin-db-flat-head">
         <div>
           <span>업체 리스트</span>
@@ -22883,7 +22883,7 @@ function renderDemand() {
   if (els.demandState) els.demandState.textContent = demandStateText;
 
   els.demandDashboard.innerHTML = `
-    <section class="demand-hero-card">
+    <section class="demand-hero-card" data-surface="dark">
       <div>
         <p class="eyebrow">수요구조 분석</p>
         <h3>${escapeHtml(activeKeyword())}</h3>
@@ -22913,7 +22913,7 @@ function renderDemand() {
 
     <section class="demand-layout">
       ${demandTrendChart()}
-      <article class="demand-insight-card">
+      <article class="demand-insight-card" data-surface="dark">
         <div class="demand-card-head">
           <div>
             <h3>수요 해석</h3>
@@ -22931,7 +22931,7 @@ function renderDemand() {
       </article>
     </section>
 
-    <section class="demand-table-card">
+    <section class="demand-table-card" data-surface="dark">
       <div class="demand-card-head">
         <div>
           <h3>지역 비교</h3>
