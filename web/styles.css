@@ -32703,3 +32703,325 @@ body.role-admin .structure-radar-labels text {
   border-color: #f3b4b4 !important;
   background: #fff5f5 !important;
 }
+
+/* Surface contrast contract v3: audited admin/B2B cards use one contrast model. */
+:is(body.role-admin, body.role-b2b) {
+  background-color: #070b12 !important;
+  color: #edf5ff !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(.app-shell, .app-header, .app-legal-footer) {
+  color: #edf5ff !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) .app-legal-footer a {
+  color: #c8d6e8 !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .company-card,
+  .validation-card,
+  .validation-card-collection,
+  .validation-card-audit,
+  .decision-queue-intro,
+  .company-check-card,
+  .report-card,
+  .b2b-rank-brief,
+  .b2b-rank-exposure-board,
+  .b2b-rank-range-board,
+  .b2b-rank-action-board,
+  .demand-hero-card,
+  .demand-chart,
+  .demand-insight-card,
+  .demand-table-card,
+  .structure-card,
+  .admin-db-company,
+  .admin-db-flat-list,
+  .admin-console-panel,
+  .company-review-queue
+) {
+  --surface-bg-token: #111923;
+  --surface-bg-soft-token: #172233;
+  --surface-border-token: rgba(156, 174, 204, .30);
+  --surface-text-token: #f8fbff;
+  --surface-muted-token: #c8d6e8;
+  --surface-subtle-token: #9fb0c6;
+  --surface-accent-token: #8fc5ff;
+  --surface-green-token: #6ee7b7;
+  --surface-warning-token: #fcd56f;
+  --surface-danger-token: #fda4af;
+  border-color: var(--surface-border-token) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .company-card,
+  .validation-card,
+  .validation-card-collection,
+  .validation-card-audit,
+  .decision-queue-intro,
+  .company-check-card,
+  .report-card,
+  .b2b-rank-brief,
+  .b2b-rank-exposure-board,
+  .b2b-rank-range-board,
+  .b2b-rank-action-board,
+  .demand-hero-card,
+  .demand-chart,
+  .demand-insight-card,
+  .demand-table-card,
+  .structure-card,
+  .admin-db-company,
+  .admin-db-flat-list,
+  .admin-console-panel,
+  .company-review-queue
+) :is(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .company-card,
+  .validation-card,
+  .validation-card-collection,
+  .validation-card-audit,
+  .decision-queue-intro,
+  .company-check-card,
+  .report-card,
+  .b2b-rank-brief,
+  .b2b-rank-exposure-board,
+  .b2b-rank-range-board,
+  .b2b-rank-action-board,
+  .demand-hero-card,
+  .demand-chart,
+  .demand-insight-card,
+  .demand-table-card,
+  .structure-card,
+  .admin-db-company,
+  .admin-db-flat-list,
+  .admin-console-panel,
+  .company-review-queue
+) :is(p, span, small, dt, li) {
+  color: var(--surface-muted-token) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .report-target-row,
+  .report-region-grid div,
+  .demand-company-card,
+  .demand-company-card dl div,
+  .demand-signal-card,
+  .demand-region-row,
+  .segment-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .b2b-rank-metrics article,
+  .b2b-rank-board-grid article,
+  .b2b-rank-action-board div,
+  .b2b-rank-focus button,
+  .b2b-rank-range-row,
+  .b2b-map-region-rank div:not(:first-child),
+  .validation-target-list button,
+  .audit-queue-list button,
+  .audit-status-strip span,
+  .collection-diagnostic-list div,
+  .history-ops-log button,
+  .history-ops-log article,
+  .history-ops-company-list button,
+  .admin-db-channel-panel,
+  .admin-db-channel-summary article,
+  .admin-db-channel-row,
+  .admin-db-audit-detail-grid article,
+  .admin-db-audit-queue article,
+  .admin-db-audit-gate,
+  .admin-db-audit-gates article,
+  .admin-queue-summary-grid article,
+  .admin-queue-row:not(.head),
+  .admin-region-ops-queue-grid article,
+  .admin-location-score-queue-list article,
+  .company-review-queue article,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-boundary,
+  .sheet-b2b-coupon-line,
+  .search-row,
+  .platform-row
+) {
+  --surface-bg-token: #ffffff;
+  --surface-bg-soft-token: #f8fbff;
+  --surface-border-token: #cbd9ea;
+  --surface-text-token: #0f172a;
+  --surface-muted-token: #475569;
+  --surface-subtle-token: #64748b;
+  --surface-accent-token: #1d4ed8;
+  --surface-green-token: #047857;
+  --surface-warning-token: #b45309;
+  --surface-danger-token: #b91c1c;
+  border-color: var(--surface-border-token) !important;
+  background: var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .report-target-row,
+  .report-region-grid div,
+  .demand-company-card,
+  .demand-company-card dl div,
+  .demand-signal-card,
+  .demand-region-row,
+  .segment-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .b2b-rank-metrics article,
+  .b2b-rank-board-grid article,
+  .b2b-rank-action-board div,
+  .b2b-rank-focus button,
+  .b2b-rank-range-row,
+  .b2b-map-region-rank div:not(:first-child),
+  .validation-target-list button,
+  .audit-queue-list button,
+  .audit-status-strip span,
+  .collection-diagnostic-list div,
+  .history-ops-log button,
+  .history-ops-log article,
+  .history-ops-company-list button,
+  .admin-db-channel-panel,
+  .admin-db-channel-summary article,
+  .admin-db-channel-row,
+  .admin-db-audit-detail-grid article,
+  .admin-db-audit-queue article,
+  .admin-db-audit-gate,
+  .admin-db-audit-gates article,
+  .admin-queue-summary-grid article,
+  .admin-queue-row:not(.head),
+  .admin-region-ops-queue-grid article,
+  .admin-location-score-queue-list article,
+  .company-review-queue article,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-boundary,
+  .sheet-b2b-coupon-line,
+  .search-row,
+  .platform-row
+) :is(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .report-target-row,
+  .report-region-grid div,
+  .demand-company-card,
+  .demand-company-card dl div,
+  .demand-signal-card,
+  .demand-region-row,
+  .segment-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .b2b-rank-metrics article,
+  .b2b-rank-board-grid article,
+  .b2b-rank-action-board div,
+  .b2b-rank-focus button,
+  .b2b-rank-range-row,
+  .b2b-map-region-rank div:not(:first-child),
+  .validation-target-list button,
+  .audit-queue-list button,
+  .audit-status-strip span,
+  .collection-diagnostic-list div,
+  .history-ops-log button,
+  .history-ops-log article,
+  .history-ops-company-list button,
+  .admin-db-channel-panel,
+  .admin-db-channel-summary article,
+  .admin-db-channel-row,
+  .admin-db-audit-detail-grid article,
+  .admin-db-audit-queue article,
+  .admin-db-audit-gate,
+  .admin-db-audit-gates article,
+  .admin-queue-summary-grid article,
+  .admin-queue-row:not(.head),
+  .admin-region-ops-queue-grid article,
+  .admin-location-score-queue-list article,
+  .company-review-queue article,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-boundary,
+  .sheet-b2b-coupon-line,
+  .search-row,
+  .platform-row
+) :is(p, span, small, dt, li) {
+  color: var(--surface-muted-token) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .report-target-row,
+  .report-region-grid div,
+  .demand-company-card,
+  .demand-region-row,
+  .segment-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .b2b-rank-board-grid article,
+  .b2b-rank-action-board div,
+  .b2b-rank-focus button,
+  .b2b-rank-range-row,
+  .audit-queue-list button,
+  .collection-diagnostic-list div,
+  .admin-db-channel-row,
+  .admin-db-audit-queue article,
+  .admin-queue-summary-grid article,
+  .admin-region-ops-queue-grid article,
+  .admin-location-score-queue-list article,
+  .company-review-queue article,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .search-row,
+  .platform-row
+) :is(em, mark) {
+  color: var(--surface-accent-token) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .admin-queue-row.head,
+  .admin-db-audit-title,
+  .admin-db-selected-head,
+  .admin-db-selected-decision-head
+) {
+  --surface-text-token: #f8fbff;
+  --surface-muted-token: #c8d6e8;
+  color: var(--surface-text-token) !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(input, select, textarea) {
+  caret-color: currentColor;
+}
