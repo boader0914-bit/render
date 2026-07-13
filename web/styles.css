@@ -4088,6 +4088,87 @@ a {
   white-space: nowrap;
 }
 
+.admin-db-applied-values {
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  border: 1px solid #c8ddff;
+  border-radius: 15px;
+  background: linear-gradient(180deg, #f5f9ff, #ffffff);
+  padding: 11px;
+}
+
+.admin-db-applied-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-db-applied-head span {
+  color: #175cd3;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-applied-head strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.admin-db-applied-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.admin-db-applied-grid article {
+  min-width: 0;
+  border: 1px solid #e1ebf7;
+  border-radius: 12px;
+  background: #fff;
+  padding: 9px;
+}
+
+.admin-db-applied-grid span,
+.admin-db-applied-grid small {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.32;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-applied-grid strong {
+  display: block;
+  margin: 3px 0;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-applied-grid article.good {
+  border-color: #a7d7cc;
+  background: #f6fffb;
+}
+
+.admin-db-applied-grid article.watch {
+  border-color: #f3c96b;
+  background: #fff8db;
+}
+
+.admin-db-applied-grid article.hot {
+  border-color: #f4b4bd;
+  background: #fff3f5;
+}
+
 .admin-db-selected-overview,
 .admin-db-selected-readonly,
 .admin-db-selected-workbench {
@@ -33741,5 +33822,76 @@ body.role-admin .admin-db-company-action button {
 
   body.role-admin .admin-db-company-action {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Admin DB detail workflow: final applied values stay compact and high-contrast. */
+body.role-admin .admin-db-applied-values {
+  border-color: #c8ddff !important;
+  background: linear-gradient(180deg, #f5f9ff, #ffffff) !important;
+  color: #0f172a !important;
+}
+
+body.role-admin .admin-db-applied-head strong,
+body.role-admin .admin-db-applied-grid strong {
+  color: #0f172a !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-applied-head span {
+  color: #1d4ed8 !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-applied-grid span,
+body.role-admin .admin-db-applied-grid small {
+  color: #475569 !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-applied-grid article {
+  border-color: #d8e2ee !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
+body.role-admin .admin-db-applied-grid article.good {
+  border-color: #9fd6c9 !important;
+  background: #f6fffb !important;
+}
+
+body.role-admin .admin-db-applied-grid article.watch {
+  border-color: #e8bd54 !important;
+  background: #fff8db !important;
+}
+
+body.role-admin .admin-db-applied-grid article.hot {
+  border-color: #f3b4b4 !important;
+  background: #fff5f5 !important;
+}
+
+body.role-admin .admin-db-selected-actions.primary {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+body.role-admin .admin-db-selected-actions.primary button {
+  min-width: 0;
+  justify-content: center;
+}
+
+@media (max-width: 920px) {
+  body.role-admin .admin-db-applied-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  body.role-admin .admin-db-applied-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  body.role-admin .admin-db-applied-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

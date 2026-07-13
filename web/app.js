@@ -19078,6 +19078,71 @@ function adminDbSelectedSectionHead(label = "", title = "", note = "") {
   `;
 }
 
+function adminDbSelectedAppliedCards(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const review = metrics.adminReview || company.adminReview || {};
+  const correction = manualCorrectionHasValue(company.manualCorrection);
+  const correctionSegments = manualCorrectionRoomSegments(company.manualCorrection);
+  const correctionRooms = correctionSegments.reduce((sum, segment) => sum + Math.round(Math.max(0, optionalNumber(segment.count) || 0)), 0);
+  const basisRoomTotal = correctionRooms || finiteNumber(company.manualCorrection?.lodgingBasisTotal, 0) || finiteNumber(metrics.roomTotal, 0);
+  const productNote = correctionSegments.length
+    ? compactListText(correctionSegments.map((segment) => segment.type || "객실종류").filter(Boolean), "", 2)
+    : adminDbProductSummary(company, metrics);
+  return [
+    {
+      label: "최종 기준",
+      value: correction ? "관리자 보정" : (metrics.sourceLabel || "자동수집"),
+      note: correction ? "보정값 우선 적용" : "자동수집값 기준",
+      tone: correction ? "good" : "neutral"
+    },
+    {
+      label: "노출",
+      value: metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위 대기",
+      note: "네이버 플레이스 기준",
+      tone: metrics.rank ? "good" : "watch"
+    },
+    {
+      label: "예약율",
+      value: Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요",
+      note: adminDbReservationStockText(metrics),
+      tone: Number.isFinite(metrics.rate) ? b2bRateTone(metrics.rate, "neutral", metrics.category) : "watch"
+    },
+    {
+      label: "7일 매출",
+      value: metrics.revenue ? fmtWon(metrics.revenue) : "대기",
+      note: metrics.revenue ? revenueAdjustmentNote(metrics.revenueImpact) : "가격·판매수량 표본 필요",
+      tone: metrics.revenue ? "good" : "watch"
+    },
+    {
+      label: "객실·상품",
+      value: basisRoomTotal ? `${fmtNumber(basisRoomTotal)}실` : "수량 확인",
+      note: productNote,
+      tone: basisRoomTotal ? "neutral" : "watch"
+    },
+    {
+      label: "검수",
+      value: review.label || companyAdminReviewLabel(review.status) || "미검수",
+      note: review.note || companyReviewContextText(review.context || {}) || "상태 저장 대기",
+      tone: review.status ? "good" : "watch"
+    }
+  ];
+}
+
+function adminDbSelectedAppliedValuesHtml(row = {}) {
+  return `
+    <section class="admin-db-applied-values" aria-label="최종 적용값">
+      <div class="admin-db-applied-head">
+        <span>최종 적용값</span>
+        <strong>현재 B2B 반영 기준</strong>
+      </div>
+      <div class="admin-db-applied-grid">
+        ${adminDbSelectedAppliedCards(row).map(adminDbSelectedMetricCard).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbWorkPriority(row = {}) {
   const metrics = row.metrics || {};
   const workType = metrics.workType || {};
@@ -19589,6 +19654,9 @@ function adminDbSelectedDetailPanel(rows = []) {
     adminDbConfirmCollectPlanHtml(row),
     adminDbRecheckOutcomeHtml(row)
   ].filter(Boolean).join("");
+  const nextAction = adminDbSelectedNextAction(row, requiredChannels);
+  const needsCollectAction = Boolean(nextAction.runCollect || collectBody || metrics.collection?.needsConfirm || requiredChannels.length);
+  const channelNeedsReview = Boolean(metrics.channels?.manualNeeded || requiredChannels.some((channel) => ["OTA", "네이버 쿠폰"].includes(channel)));
   const reviewBody = `
     <div class="admin-db-selected-review">
       <div>
@@ -19609,14 +19677,15 @@ function adminDbSelectedDetailPanel(rows = []) {
         </div>
         <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
       </div>
+      ${adminDbSelectedAppliedValuesHtml(row)}
       ${adminDbSelectedDecisionPanel(row, issues, requiredChannels)}
       <section class="admin-db-selected-readonly" aria-label="읽기 전용 지표">
-        ${adminDbSelectedSectionHead("비교 지표", "필요할 때 펼쳐 확인합니다", "")}
         ${adminDbSelectedFoldBlock({
           label: "사업자 화면 기준",
           title: "노출·예약율·예상매출·상품·채널",
           note: "공개 지표",
           body: `<div class="admin-db-selected-grid">${b2bCards.map(adminDbSelectedMetricCard).join("")}</div>`,
+          open: nextAction.foldKey === "b2b",
           foldKey: "b2b"
         })}
         ${adminDbSelectedFoldBlock({
@@ -19630,42 +19699,45 @@ function adminDbSelectedDetailPanel(rows = []) {
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
         ${adminDbSelectedSectionHead("수정·처리", "필요한 작업만 펼쳐 실행합니다", "")}
         <div class="admin-db-selected-actions primary">
-          <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집</button>
-          <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">지역에서 보기</button>
-          <button type="button" data-admin-db-view-link="list">목록으로 돌아가기</button>
-          <button type="button" data-admin-db-view-link="region">지역별 보기</button>
+          ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집 실행</button>` : ""}
+          <button type="button" data-admin-db-open-fold="correction">기준값 수정</button>
+          <button type="button" data-admin-db-open-fold="channel">채널 확인</button>
+          <button type="button" data-admin-db-view-link="list">목록</button>
         </div>
         <div class="admin-db-selected-workbench-stack">
           ${adminDbSelectedFoldBlock({
             label: "1. 검수 상태",
             title: "검수 상태와 메모 저장",
-            note: "기본으로 열림",
+            note: nextAction.foldKey === "review" ? "먼저 처리" : "상태 저장",
             body: reviewBody,
-            open: true,
+            open: nextAction.foldKey === "review",
             tone: "review",
             foldKey: "review"
           })}
           ${adminDbSelectedFoldBlock({
             label: "2. 기준값 수정",
             title: "지역·채널·쿠폰·수량/가격 수정",
-            note: "필요할 때 열기",
+            note: nextAction.foldKey === "correction" ? "먼저 처리" : "필요할 때 열기",
             body: correctionBody,
+            open: nextAction.foldKey === "correction",
             tone: "edit",
             foldKey: "correction"
           })}
           ${adminDbSelectedFoldBlock({
             label: "3. 채널 확인",
             title: "네이버·OTA 노출과 URL 저장",
-            note: "채널별 확인",
+            note: channelNeedsReview ? "확인 필요" : "채널별 확인",
             body: channelBody,
+            open: channelNeedsReview && nextAction.foldKey !== "correction",
             tone: "channel",
             foldKey: "channel"
           })}
           ${adminDbSelectedFoldBlock({
             label: "4. 확인 수집",
             title: "재수집 조건과 이전/최신 비교",
-            note: collectBody ? "필요 시 실행" : "현재 추가 없음",
+            note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
             body: collectBody,
+            open: nextAction.foldKey === "collect",
             tone: "collect",
             foldKey: "collect"
           })}
@@ -20003,7 +20075,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const averageRevenue = revenueRows.length
     ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
     : 0;
-  const viewMode = (filters.query || "").trim() ? "list" : adminDbViewMode();
+  const currentViewMode = adminDbViewMode();
+  const viewMode = (filters.query || "").trim() && currentViewMode !== "review" ? "list" : currentViewMode;
   const metricSummaryHtml = `
     <div class="admin-db-metrics">
       ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "저장 기준", "good")}
@@ -20199,6 +20272,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       </section>
     </section>
   `;
+  bindAdminDbCompanySelectButtons();
 }
 
 function adminConsoleKpis(master = {}, entries = []) {
@@ -29208,6 +29282,34 @@ function setDefaultDates() {
   updateCrawlSpeedPreview();
 }
 
+function openAdminDbCompanyReview(companyId = "") {
+  if (!companyId) return;
+  state.adminDbSelectedCompanyId = companyId;
+  state.adminDbViewMode = "review";
+  state.adminDbOpsOpen = true;
+  renderAdminConsoleDashboard();
+  window.requestAnimationFrame(() => {
+    document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
+function bindAdminDbCompanySelectButtons() {
+  document.querySelectorAll("[data-admin-db-company-select]").forEach((button) => {
+    if (button.dataset.adminDbSelectBound === "1") return;
+    button.dataset.adminDbSelectBound = "1";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openAdminDbCompanyReview(button.dataset.adminDbCompanySelect || "");
+    });
+    button.addEventListener("pointerup", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openAdminDbCompanyReview(button.dataset.adminDbCompanySelect || "");
+    });
+  });
+}
+
 function bindEvents() {
   document.querySelectorAll(".bottom-nav button").forEach((button) => {
     button.addEventListener("click", () => {
@@ -29220,6 +29322,12 @@ function bindEvents() {
       if (button.dataset.tab) setActiveTab(button.dataset.tab);
     });
   });
+  document.addEventListener("pointerup", (event) => {
+    const adminDbCompanySelect = event.target.closest?.("[data-admin-db-company-select]");
+    if (!adminDbCompanySelect) return;
+    event.preventDefault();
+    openAdminDbCompanyReview(adminDbCompanySelect.dataset.adminDbCompanySelect || "");
+  }, true);
   document.addEventListener("click", (event) => {
     const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
     if (adminMobileSection) {
@@ -29258,6 +29366,11 @@ function bindEvents() {
     const adminUserViewOpen = event.target.closest("[data-admin-user-view-open]");
     if (adminUserViewOpen) {
       if (adminUserViewOpen.tagName !== "A") openAdminUserView(event);
+      return;
+    }
+    const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
+    if (adminDbCompanySelect) {
+      openAdminDbCompanyReview(adminDbCompanySelect.dataset.adminDbCompanySelect || "");
       return;
     }
     if (event.target.closest("[data-admin-db-clear]")) {
@@ -29392,17 +29505,6 @@ function bindEvents() {
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
-      return;
-    }
-    const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
-    if (adminDbCompanySelect) {
-      state.adminDbSelectedCompanyId = adminDbCompanySelect.dataset.adminDbCompanySelect || "";
-      state.adminDbViewMode = "review";
-      state.adminDbOpsOpen = true;
-      renderAdminConsoleDashboard();
-      window.requestAnimationFrame(() => {
-        document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       return;
     }

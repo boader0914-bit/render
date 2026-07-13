@@ -39,6 +39,8 @@ const lightSelectors = [
   ".admin-db-channel-panel",
   ".admin-db-channel-summary article",
   ".admin-db-channel-row",
+  ".admin-db-applied-values",
+  ".admin-db-applied-grid article",
   ".admin-db-selected-grid article",
   ".admin-db-selected-brief article",
   ".admin-db-selected-next-grid article",
@@ -92,6 +94,7 @@ const appSurfaceContracts = [
   'data-surface="light"',
   'data-surface="dark"',
   'class="admin-db-company',
+  'class="admin-db-applied-values',
   'class="admin-db-channel-row',
   'class="demand-company-card"',
   'class="demand-chart'

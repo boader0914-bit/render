@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260709-admin-region-company-controls";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260714-admin-db-detail-workflow-v5";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",
