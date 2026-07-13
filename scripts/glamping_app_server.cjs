@@ -4913,6 +4913,19 @@ function manifestFile(manifest, role, files, legacyMatcher) {
   return files.find(legacyMatcher);
 }
 
+function runVisibleOutputFiles(files = []) {
+  return (Array.isArray(files) ? files : []).filter((file) => /\.(csv|xlsx|md|html|png)$/i.test(file));
+}
+
+function isIncompleteRunDirectory(manifest, files = []) {
+  const visibleFiles = runVisibleOutputFiles(files);
+  if (!manifest) return visibleFiles.length === 0;
+  const manifestFiles = runVisibleOutputFiles(manifest.files || []);
+  const manifestCounts = manifest.counts && typeof manifest.counts === "object" ? Object.values(manifest.counts) : [];
+  const hasCollectedCount = manifestCounts.some((value) => Number(value) > 0);
+  return visibleFiles.length === 0 && manifestFiles.length === 0 && !hasCollectedCount;
+}
+
 function safeFilePart(value, fallback = "검색") {
   const cleaned = String(value || "")
     .normalize("NFKC")
@@ -4960,6 +4973,7 @@ async function listRuns() {
     const files = await fsp.readdir(dirPath).catch(() => []);
     const manifest = await readManifest(dirPath);
     if (!manifest && files.length === 0) continue;
+    if (isIncompleteRunDirectory(manifest, files)) continue;
     if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) continue;
     const stat = await fsp.stat(dirPath);
     const provinceKey = provinceKeyForRun(entry.name, manifest);
@@ -12178,6 +12192,7 @@ async function loadRun(runId, options = {}) {
   const collectedAt = stat.mtime.toISOString();
   const files = await fsp.readdir(dirPath);
   const manifest = await readManifest(dirPath);
+  if (isIncompleteRunDirectory(manifest, files)) return null;
   const provinceKey = provinceKeyForRun(runId, manifest);
   const province = PROVINCES[provinceKey] || PROVINCES.local;
   const regionalFile = manifestFile(manifest, "regional", files, (file) => file.endsWith("_naver_place_glamping_clusters.csv"));
