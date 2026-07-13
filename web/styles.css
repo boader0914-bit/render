@@ -33885,6 +33885,54 @@ body.role-admin .admin-db-selected-actions.primary button {
   justify-content: center;
 }
 
+body.role-admin .admin-db-selected-workbench > .admin-db-review-flash {
+  margin: 0 0 12px;
+}
+
+body.role-admin .admin-db-review-flash {
+  border-color: #b8d7ff !important;
+  background: #ffffff !important;
+  color: #0f172a !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .18);
+}
+
+body.role-admin .admin-db-review-flash.success {
+  border-color: #8fd3bd !important;
+  background: #f4fffb !important;
+  color: #064e3b !important;
+}
+
+body.role-admin .admin-db-review-flash.watch {
+  border-color: #e1bd55 !important;
+  background: #fff9e7 !important;
+  color: #713f12 !important;
+}
+
+body.role-admin .admin-db-review-flash.neutral {
+  border-color: #cbd5e1 !important;
+  background: #f8fafc !important;
+  color: #1e293b !important;
+}
+
+body.role-admin .admin-db-review-flash.danger {
+  border-color: #f0a3a3 !important;
+  background: #fff5f5 !important;
+  color: #7f1d1d !important;
+}
+
+body.role-admin .admin-db-review-flash strong,
+body.role-admin .admin-db-review-flash span,
+body.role-admin .admin-db-review-flash small,
+body.role-admin .admin-db-review-flash li,
+body.role-admin .admin-db-review-flash em {
+  color: inherit !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-review-flash li {
+  background: rgba(255, 255, 255, .72) !important;
+}
+
 @media (max-width: 920px) {
   body.role-admin .admin-db-applied-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));

@@ -15265,6 +15265,20 @@ function companyAdminReviewFeedbackMeta(status = "") {
   }[status] || fallback;
 }
 
+function setAdminDbDetailFlash(companyId = "", payload = {}) {
+  if (!companyId) return;
+  state.adminDbReviewFlash = {
+    companyId,
+    status: payload.status || "",
+    tone: payload.tone || "watch",
+    title: payload.title || "처리 결과",
+    message: payload.message || "처리 결과를 반영했습니다.",
+    next: payload.next || "",
+    items: Array.isArray(payload.items) ? payload.items.filter(Boolean).slice(0, 4) : [],
+    at: payload.at || new Date().toISOString()
+  };
+}
+
 function adminDbReviewFlashHtml(companyId = "") {
   const flash = state.adminDbReviewFlash || null;
   if (!flash || !companyId || flash.companyId !== companyId) return "";
@@ -15310,7 +15324,7 @@ function companyReviewActionsHtml(company = {}, compact = false, source = "") {
         `).join("")}
         ${current ? `<button type="button" data-company-review-action="clear" data-company-id="${escapeHtml(companyId)}"${sourceAttr}>해제</button>` : ""}
       </div>
-      ${adminDbReviewFlashHtml(companyId)}
+      ${source === "admin_db_detail" ? "" : adminDbReviewFlashHtml(companyId)}
     </div>
   `;
 }
@@ -19732,6 +19746,7 @@ function adminDbSelectedDetailPanel(rows = []) {
       </section>
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
         ${adminDbSelectedSectionHead("수정·처리", "필요한 작업만 펼쳐 실행합니다", "")}
+        ${adminDbReviewFlashHtml(selectedId)}
         <div class="admin-db-selected-actions primary">
           ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집 실행</button>` : ""}
           <button type="button" data-admin-db-open-fold="correction">기준값 수정</button>
@@ -28132,6 +28147,19 @@ async function saveCompanyChannelExposure(button, action = "save") {
     });
     state.companyMaster = data;
     state.adminDbSelectedCompanyId = payload.companyId;
+    state.adminDbOpsOpen = true;
+    setAdminDbDetailFlash(payload.companyId, {
+      status: `channel_${action}`,
+      tone: action === "clear" ? "neutral" : "success",
+      title: action === "clear" ? "채널 정보 삭제 완료" : "채널 정보 저장 완료",
+      message: action === "clear" ? "선택한 채널 정보를 삭제했습니다." : `${adminDbChannelStatusLabel(payload.status)} 상태로 저장했습니다.`,
+      next: "업체 상세의 채널 확인 목록에 바로 반영했습니다.",
+      items: [
+        payload.channel ? payload.channel.toUpperCase() : "채널",
+        payload.url ? "URL 저장" : "URL 없음",
+        payload.price ? "가격 메모 있음" : "가격 미입력"
+      ]
+    });
     renderCompanyMasterPanel();
     renderDecisionQueue();
     if (isAdminRole()) renderAdminConsoleDashboard();
@@ -28161,6 +28189,15 @@ async function autoCheckCompanyChannelExposure(button) {
     });
     state.companyMaster = data;
     state.adminDbSelectedCompanyId = companyId;
+    state.adminDbOpsOpen = true;
+    setAdminDbDetailFlash(companyId, {
+      status: "channel_auto_check",
+      tone: "success",
+      title: "채널 자동 확인 완료",
+      message: "네이버와 보조 채널 노출 상태를 다시 확인했습니다.",
+      next: "채널별 상태와 메모를 확인한 뒤 필요한 항목만 보정하세요.",
+      items: ["네이버", "OTA", "채널 상태 갱신"]
+    });
     renderCompanyMasterPanel();
     renderDecisionQueue();
     if (isAdminRole()) renderAdminConsoleDashboard();
@@ -28229,16 +28266,14 @@ async function saveCompanyAdminReview(button) {
       body: JSON.stringify({ companyId, status, note, reviewContext })
     });
     const feedback = companyAdminReviewFeedbackMeta(status);
-    state.adminDbReviewFlash = {
-      companyId,
+    setAdminDbDetailFlash(companyId, {
       status,
       tone: feedback.tone,
       title: feedback.title,
       message: feedback.message,
       next: feedback.next,
-      items: feedback.items,
-      at: new Date().toISOString()
-    };
+      items: feedback.items
+    });
     state.companyMaster = data;
     if (state.data) state.data.companyMaster = { ...(state.data.companyMaster || {}), ...data };
     renderCompanyMasterPanel();
@@ -28820,6 +28855,20 @@ function applyQueueRecrawlSetting(button) {
     etaSeconds: eta.estimatedTotalSeconds || 0,
     source: button?.dataset?.queueRecrawlSource || "decision_queue"
   };
+  state.adminDbOpsOpen = true;
+  setAdminDbDetailFlash(company.companyId || "", {
+    status: "confirm_collect_ready",
+    tone: "watch",
+    title: "확인 수집 준비 완료",
+    message: `${company.primaryName || "업체"} 확인 수집 조건을 적용했습니다.`,
+    next: `상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} 기준으로 진행합니다.`,
+    items: [
+      plan.keyword || activeKeyword() || "키워드",
+      button?.dataset?.queueRecrawlAutostart === "1" ? "자동 실행" : "수집 실행 필요",
+      plan.collectionPurpose ? collectionPurposeProfile(plan.collectionPurpose).label : "상세정보"
+    ]
+  });
+  if (isAdminRole()) renderAdminConsoleDashboard();
   const keyword = plan.keyword || activeKeyword();
   if (els.keywordInput) els.keywordInput.value = keyword;
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
@@ -29287,11 +29336,27 @@ async function submitCrawl(event) {
     state.runs = result.runs || state.runs;
     state.activeRunId = result.runId || state.runs[0]?.id;
     await loadRuns(false);
+    const completedRecrawlContext = payload.recrawlContext || null;
     clearCrawlStatusTimer();
     setCrawlProgress(false);
     els.crawlStatus.textContent = payload.recrawlContext
       ? `${recrawlContextStatusText(payload.recrawlContext)} 완료. 화면을 갱신했습니다.`
       : "수집 완료. 화면을 갱신했습니다.";
+    if (completedRecrawlContext?.type === "company" && completedRecrawlContext.companyIds?.length === 1) {
+      setAdminDbDetailFlash(completedRecrawlContext.companyIds[0], {
+        status: "confirm_collect_complete",
+        tone: "success",
+        title: "확인 수집 완료",
+        message: `${completedRecrawlContext.companyNames?.[0] || "업체"} 확인 수집을 완료했습니다.`,
+        next: "최신 예약율·가격·수량 근거를 확인하고 검수 상태를 정리하세요.",
+        items: [
+          completedRecrawlContext.keyword || "키워드",
+          completedRecrawlContext.range ? `상세 ${completedRecrawlContext.range}위` : "상세 범위",
+          "결과 갱신"
+        ]
+      });
+      if (isAdminRole()) renderAdminConsoleDashboard();
+    }
     if (payload.recrawlContext) state.pendingRecrawlContext = null;
     setActiveTab("rank");
   } catch (error) {
@@ -29303,6 +29368,22 @@ async function submitCrawl(event) {
     } else {
       clearCrawlStatusTimer();
       setCrawlProgress(false);
+      const failedRecrawlContext = payload.recrawlContext || null;
+      if (failedRecrawlContext?.type === "company" && failedRecrawlContext.companyIds?.length === 1) {
+        setAdminDbDetailFlash(failedRecrawlContext.companyIds[0], {
+          status: "confirm_collect_failed",
+          tone: "danger",
+          title: "확인 수집 실패",
+          message: error.message || "확인 수집 중 문제가 발생했습니다.",
+          next: "검색 조건과 로그인 상태를 확인한 뒤 다시 실행하세요.",
+          items: [
+            failedRecrawlContext.keyword || "키워드",
+            failedRecrawlContext.range ? `상세 ${failedRecrawlContext.range}위` : "상세 범위",
+            "결과 미반영"
+          ]
+        });
+        if (isAdminRole()) renderAdminConsoleDashboard();
+      }
       els.crawlStatus.textContent = `수집 실패: ${error.message}`;
       setStatus("수집 실패");
     }
