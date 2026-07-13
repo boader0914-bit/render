@@ -19723,6 +19723,24 @@ a.platform-row:hover {
   padding: 0 14px 14px;
 }
 
+.b2b-location-evidence-pack,
+.sheet-b2b-more-pack {
+  overflow: hidden;
+}
+
+.b2b-location-evidence-pack {
+  margin-top: 2px;
+}
+
+.sheet-b2b-more-pack {
+  margin-top: 2px;
+  background: rgba(255, 255, 255, .82);
+}
+
+.sheet-b2b-more-pack .b2b-detail-pack-body {
+  gap: 10px;
+}
+
 .b2b-brief-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

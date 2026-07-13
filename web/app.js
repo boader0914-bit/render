@@ -4825,6 +4825,15 @@ function b2bDetailPositionModel(item = {}) {
 function renderB2BDetailPositionPanel(item = {}) {
   if (isAdminRole()) return "";
   const model = b2bDetailPositionModel(item);
+  const primaryCards = model.cards.slice(0, 3);
+  const secondaryCards = model.cards.slice(3);
+  const metricCardsHtml = (cards = []) => cards.map((card) => `
+    <div class="${escapeHtml(card.tone)}">
+      <span>${escapeHtml(card.label)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      <small>${escapeHtml(card.note)}</small>
+    </div>
+  `).join("");
   return `
     <section class="sheet-section sheet-b2b-detail ${escapeHtml(model.tone)}">
       <div class="sheet-b2b-head">
@@ -4850,32 +4859,35 @@ function renderB2BDetailPositionPanel(item = {}) {
         </div>
       </div>
       <div class="sheet-b2b-detail-grid">
-        ${model.cards.map((card) => `
-          <div class="${escapeHtml(card.tone)}">
-            <span>${escapeHtml(card.label)}</span>
-            <strong>${escapeHtml(card.value)}</strong>
-            <small>${escapeHtml(card.note)}</small>
-          </div>
-        `).join("")}
+        ${metricCardsHtml(primaryCards)}
       </div>
-      <div class="sheet-b2b-flow-strip">
-        ${model.flowRows.map((row) => `
-          <div class="${escapeHtml(row.tone)}">
-            <span>${escapeHtml(row.label)}</span>
-            <strong>${escapeHtml(row.value)}</strong>
-            <small>${escapeHtml(row.note)}</small>
+      <details class="b2b-detail-pack sheet-b2b-more-pack">
+        <summary>
+          <span>세부 판매 근거 보기</span>
+          <small>예약 표본, 상품 구성, 요일별 압력, 채널 근거</small>
+        </summary>
+        <div class="b2b-detail-pack-body">
+          ${secondaryCards.length ? `<div class="sheet-b2b-detail-grid secondary">${metricCardsHtml(secondaryCards)}</div>` : ""}
+          <div class="sheet-b2b-flow-strip">
+            ${model.flowRows.map((row) => `
+              <div class="${escapeHtml(row.tone)}">
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.value)}</strong>
+                <small>${escapeHtml(row.note)}</small>
+              </div>
+            `).join("")}
           </div>
-        `).join("")}
-      </div>
-      <div class="sheet-b2b-evidence-grid">
-        ${model.evidence.map((row) => `
-          <div>
-            <span>${escapeHtml(row.label)}</span>
-            <strong>${escapeHtml(row.value)}</strong>
-            <small>${escapeHtml(row.note)}</small>
+          <div class="sheet-b2b-evidence-grid">
+            ${model.evidence.map((row) => `
+              <div>
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(row.value)}</strong>
+                <small>${escapeHtml(row.note)}</small>
+              </div>
+            `).join("")}
           </div>
-        `).join("")}
-      </div>
+        </div>
+      </details>
     </section>
   `;
 }
@@ -12393,21 +12405,29 @@ function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2b
           ${conclusion.chips.slice(0, 5).map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
         </div>
       </div>
-      <div class="b2b-location-driver-grid">
-        ${driverRows.map((component) => {
-          const copy = b2bLocationComponentCopy(component);
-          return `
-            <article class="${escapeHtml(component.tone || "mid")}">
-              <span>${escapeHtml(copy.label)}</span>
-              <strong>${fmtNumber(component.value)}</strong>
-              <small>${escapeHtml(copy.note)}</small>
-            </article>
-          `;
-        }).join("")}
-      </div>
-      <div class="b2b-location-basis">
-        ${basisRows.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
-      </div>
+      <details class="b2b-detail-pack b2b-location-evidence-pack">
+        <summary>
+          <span>입지 점수 근거 보기</span>
+          <small>수요·예약·관광·지역 기준 세부 점수</small>
+        </summary>
+        <div class="b2b-detail-pack-body">
+          <div class="b2b-location-driver-grid">
+            ${driverRows.map((component) => {
+              const copy = b2bLocationComponentCopy(component);
+              return `
+                <article class="${escapeHtml(component.tone || "mid")}">
+                  <span>${escapeHtml(copy.label)}</span>
+                  <strong>${fmtNumber(component.value)}</strong>
+                  <small>${escapeHtml(copy.note)}</small>
+                </article>
+              `;
+            }).join("")}
+          </div>
+          <div class="b2b-location-basis">
+            ${basisRows.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+          </div>
+        </div>
+      </details>
     </section>
   `;
 }
