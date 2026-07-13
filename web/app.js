@@ -19757,20 +19757,20 @@ function adminDbCompanyRow(row = {}, options = {}) {
   const reason = adminDbWorkReason(row);
   const listIndex = Number(options.index || 0);
   return `
-    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-surface="dark">
+    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-surface="dark" data-admin-db-company-card-select="${escapeHtml(company.companyId || "")}">
       <div class="admin-db-company-main">
         <div class="admin-db-company-title-row">
           ${listIndex ? `<span class="admin-db-company-index">${fmtNumber(listIndex)}</span>` : ""}
           <strong title="${escapeHtml(company.primaryName || "업체명 확인")}">${escapeHtml(company.primaryName || "업체명 확인")}</strong>
         </div>
         <small>${escapeHtml(row.provinceLabel || "미분류")} · ${escapeHtml(row.localityLabel || "지역 미확인")} · ${escapeHtml(metrics.category?.label || "숙박업")}</small>
-        <p>${escapeHtml(reason)}</p>
+        <p class="admin-db-company-reason">${escapeHtml(reason)}</p>
       </div>
       <div class="admin-db-company-values" data-surface="dark">
-        <span><b>${escapeHtml(rankText)}</b><small>노출순</small></span>
-        <span><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b><small>7일 매출</small></span>
-        <span><b>${escapeHtml(rateText)}</b><small>예약율</small></span>
-        <span><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b><small>신뢰도</small></span>
+        <span><small>노출</small><b>${escapeHtml(rankText)}</b></span>
+        <span><small>7일 매출</small><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b></span>
+        <span><small>예약율</small><b>${escapeHtml(rateText)}</b></span>
+        <span><small>신뢰도</small><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b></span>
       </div>
       <div class="admin-db-company-tags">
         ${adminDbCompanyCompactTags(row)}
@@ -19882,7 +19882,7 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
     <section class="admin-db-flat-list" data-surface="dark">
       <div class="admin-db-flat-head">
         <div>
-          <span>업체 목록</span>
+          <span>업체 리스트</span>
           <strong>${escapeHtml(sortText)}</strong>
           <small>${escapeHtml(scopeText)} · ${fmtNumber(rows.length)}/${fmtNumber(allRows.length)}개 업체 · ${fmtNumber(rangeStart)}-${fmtNumber(rangeEnd)} 표시</small>
         </div>
@@ -29306,6 +29306,14 @@ function bindAdminDbCompanySelectButtons() {
       event.preventDefault();
       event.stopPropagation();
       openAdminDbCompanyReview(button.dataset.adminDbCompanySelect || "");
+    });
+  });
+  document.querySelectorAll("[data-admin-db-company-card-select]").forEach((card) => {
+    if (card.dataset.adminDbCardSelectBound === "1") return;
+    card.dataset.adminDbCardSelectBound = "1";
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button, a, input, select, textarea, label, summary")) return;
+      openAdminDbCompanyReview(card.dataset.adminDbCompanyCardSelect || "");
     });
   });
 }
