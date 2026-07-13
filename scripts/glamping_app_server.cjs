@@ -132,7 +132,7 @@ const CRAWL_RUNTIME_STAGE_DEFS = [
   { key: "ota_yeogi", label: "여기어때 확인", group: "ota", estimatedRatio: 0.08, detail: "여기어때 보조 채널 노출을 확인합니다." },
   { key: "ota_ddnayo", label: "떠나요 확인", group: "ota", estimatedRatio: 0.08, detail: "떠나요 보조 채널 노출을 확인합니다." },
   { key: "inventory", label: "예약/가격 확인", group: "inventory", estimatedRatio: 0.36, detail: "네이버 예약 수량, 요일별 가격, 상품 구성을 확인합니다." },
-  { key: "save", label: "저장/분석", group: "save", estimatedRatio: 0.10, detail: "결과 파일, 누적 DB, 마스터 자료를 정리합니다." }
+  { key: "save", label: "저장/분석", group: "save", estimatedRatio: 0.10, detail: "수집 결과와 업체 기준값을 정리합니다." }
 ];
 const CRAWL_LOG_STAGE_RULES = [
   { key: "rank_main", pattern: /Collecting Naver main/i },
@@ -274,7 +274,7 @@ function collectionDbRouteProfile(purposeValue, profileValue = "") {
     return {
       key: "basic_db",
       label: "기본정보",
-      note: "순위, 상품 및 상품별 금액, 예약채널을 업체 마스터에 우선 반영",
+      note: "순위, 상품 및 상품별 금액, 예약채널을 업체 기준값에 우선 반영",
       appliesMasterBasic: true,
       appliesInventory: true,
       appliesHistory: false,
@@ -309,7 +309,7 @@ function collectionDbRouteProfile(purposeValue, profileValue = "") {
   return {
     key: "revenue_detail",
     label: "상세정보",
-    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 누적 DB에 반영",
+    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 수집 이력에 반영",
     appliesMasterBasic: true,
     appliesInventory: true,
     appliesHistory: true,
@@ -473,7 +473,7 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       key: "trend",
       label: "수요 확인",
       seconds: trendSeconds,
-      detail: "검색수요와 트렌드 캐시를 확인합니다."
+      detail: "검색수요와 저장된 트렌드를 확인합니다."
     },
     fast
       ? {
@@ -500,7 +500,7 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       key: "save",
       label: "저장/분석",
       seconds: ioSeconds,
-      detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다."
+      detail: "수집 결과와 업체 기준값을 갱신합니다."
     }
   ].filter(Boolean).filter((stage) => stage.key !== "ota" || plan.collectOta || plan.collectRegional).map((stage) => ({
     ...stage,
@@ -3879,7 +3879,7 @@ function termsPage() {
     },
     {
       title: "데이터 보관 구조",
-      body: "<ul><li>마스터 DB: 관리자 검토와 보정이 완료된 업체 고유정보, 객실 수, 가격 기준, 채널 정보 등을 저장합니다.</li><li>고객 DB: 회원 계정, 숙소 또는 회사명, 숙박업소 보유 여부, 검색 이력, 동의 이력 등 회원별 이용 정보를 저장합니다.</li><li>가입 단계에서 입력한 정보는 고객 DB에 보관하며, 마스터 DB 보정값과는 분리해 관리합니다.</li></ul>"
+      body: "<ul><li>업체 기준 데이터: 관리자 검토와 보정이 완료된 업체 고유정보, 객실 수, 가격 기준, 채널 정보 등을 저장합니다.</li><li>고객 데이터: 회원 계정, 숙소 또는 회사명, 숙박업소 보유 여부, 검색 이력, 동의 이력 등 회원별 이용 정보를 저장합니다.</li><li>가입 단계에서 입력한 정보는 고객 데이터에 보관하며, 업체 기준 데이터와는 분리해 관리합니다.</li></ul>"
     },
     {
       title: "회원의 의무",
@@ -3908,7 +3908,7 @@ function privacyPage() {
     },
     {
       title: "보관 위치",
-      body: "<ul><li>마스터 DB: 운영 서버의 영구 저장소 내 company_master 영역에 보관합니다.</li><li>고객 DB: 운영 서버의 영구 저장소 내 customer_db 영역에 보관합니다.</li><li>로컬 개발 환경에서는 동일한 구조로 프로젝트 데이터 폴더 아래에 보관됩니다.</li></ul>"
+      body: "<ul><li>업체 기준 데이터: 운영 서버의 영구 저장소 내 업체 기준값 영역에 보관합니다.</li><li>고객 데이터: 운영 서버의 영구 저장소 내 회원 정보 영역에 보관합니다.</li><li>로컬 개발 환경에서는 동일한 구조로 프로젝트 데이터 폴더 아래에 보관됩니다.</li></ul>"
     },
     {
       title: "보유 및 이용 기간",
@@ -3970,7 +3970,7 @@ function dataCollectionNoticePage() {
     },
     {
       title: "수동 보완",
-      body: "<p>여기어때 등 일부 채널은 자동 수집보다 수동 보완값을 우선할 수 있습니다. 관리자가 보정한 업체 고유정보는 마스터 DB에 기록되며 이후 분석의 기준값으로 활용될 수 있습니다.</p>"
+      body: "<p>여기어때 등 일부 채널은 자동 수집보다 수동 보완값을 우선할 수 있습니다. 관리자가 보정한 업체 고유정보는 업체 기준 데이터에 기록되며 이후 분석의 기준값으로 활용될 수 있습니다.</p>"
     }
   ]);
 }
@@ -4017,7 +4017,7 @@ function apiRetentionPolicyPage() {
     },
     {
       title: "고객 데이터 보관",
-      body: "<ul><li>고객 DB: 회원 계정, 검색 이력, 관심숙소, 동의 이력</li><li>마스터 DB: 관리자 보정 업체정보, 객실 수, 가격 기준, 채널 정보</li><li>히스토리: 수집 실행 이력, 트렌드 캐시, 관측 기록</li></ul>"
+      body: "<ul><li>고객 데이터: 회원 계정, 검색 이력, 관심숙소, 동의 이력</li><li>업체 기준 데이터: 관리자 보정 업체정보, 객실 수, 가격 기준, 채널 정보</li><li>수집 이력: 수집 실행 이력, 저장된 트렌드, 관측 기록</li></ul>"
     },
     {
       title: "접근 통제",
@@ -4497,7 +4497,7 @@ function signupPage(message = "", values = {}) {
         </select></label>
       </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
-        <p class="agreement-note">필수 동의 후 고객 DB에 계정 정보, 동의 일시, 약관 버전 ${escapeHtml(TERMS_VERSION)}, 개인정보 버전 ${escapeHtml(PRIVACY_VERSION)}, 이용 이력이 저장됩니다. 업체 마스터 DB의 관리자 보정값과는 분리해 관리합니다.</p>
+        <p class="agreement-note">필수 동의 후 고객 데이터에 계정 정보, 동의 일시, 약관 버전 ${escapeHtml(TERMS_VERSION)}, 개인정보 버전 ${escapeHtml(PRIVACY_VERSION)}, 이용 이력이 저장됩니다. 업체 기준 데이터와는 분리해 관리합니다.</p>
         <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
         <label class="check"><input type="checkbox" name="agreeMarketing" value="1"${checked("agreeMarketing")}><span>(선택) 서비스 업데이트, 요금제, 운영 안내 등 마케팅 수신에 동의합니다.</span><span>선택</span></label>
@@ -12825,8 +12825,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-surface-contrast-v3"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-surface-contrast-v3"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-copy-simplify-v1"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-copy-simplify-v1"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

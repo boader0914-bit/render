@@ -221,7 +221,7 @@ const ADMIN_MOBILE_SECTIONS = {
       { label: "순위", tab: "rank" },
       { label: "지도", tab: "map" },
       { label: "수요", tab: "demand" },
-      { label: "누적 DB", tab: "historyOps" }
+      { label: "수집 이력", tab: "historyOps" }
     ]
   },
   database: {
@@ -230,8 +230,8 @@ const ADMIN_MOBILE_SECTIONS = {
     adminPanelSection: "database",
     anchor: "#adminDatabaseDashboard",
     items: [
-      { label: "전체 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard" },
-      { label: "운영 현황", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" },
+      { label: "업체 관리", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard" },
+      { label: "현황", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" },
       { label: "입지사전", tab: "dictionary" }
     ]
   },
@@ -251,16 +251,16 @@ const ADMIN_MOBILE_SECTIONS = {
     anchor: "#trafficAdminCard",
     items: [
       { label: "회원·삭제요청", tab: "admin", adminPanelSection: "members", anchor: "#adminMemberRequestDashboard" },
-      { label: "API·파일", tab: "admin", adminPanelSection: "files", anchor: "#trafficAdminCard" }
+      { label: "연동·파일", tab: "admin", adminPanelSection: "files", anchor: "#trafficAdminCard" }
     ]
   }
 };
 const ADMIN_PANEL_SECTIONS = {
-  database: "전체 DB",
-  overview: "운영 현황",
+  database: "업체 관리",
+  overview: "현황",
   collect: "수집 실행",
   members: "회원·삭제요청",
-  files: "API·파일"
+  files: "연동·파일"
 };
 const ADMIN_PANEL_MOBILE_TARGETS = {
   database: { section: "database", anchor: "#adminDatabaseDashboard" },
@@ -274,10 +274,10 @@ const TAB_LABELS = {
   rank: "업체 순위",
   dictionary: "입지사전",
   target: "영업 타깃",
-  decisionQueue: "관리자 판단 큐",
+  decisionQueue: "검수 필요",
   map: "지역 클러스터 지도",
   demand: "수요구조 분석",
-  historyOps: "누적 DB 분석",
+  historyOps: "수집 이력",
   admin: "관리"
 };
 const B2B_TAB_LABELS = {
@@ -631,8 +631,8 @@ const COLLECTION_PURPOSE_UI_COPY = {
     note: "순위, 상품 및 상품별 금액, 예약채널을 넓게 채웁니다.",
     status: "업체 기본정보 DB를 채우는 수집입니다.",
     cardSummary: "순위·상품·상품별 금액·예약채널",
-    dbTarget: "업체 마스터 DB",
-    dbApplyText: "마스터 기본정보 반영",
+    dbTarget: "업체 기준값",
+    dbApplyText: "기본정보 반영",
     excludeText: "기간별 매출 누적 제외",
     rangeHint: "권장 1-50위 · 최대 1-100위",
     depthLabel: "기본정보 중심",
@@ -644,7 +644,7 @@ const COLLECTION_PURPOSE_UI_COPY = {
     note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 취합합니다.",
     status: "요일별 매출과 예약율 판단에 필요한 상세정보를 수집합니다.",
     cardSummary: "요일별 매출·예약율·수량·가격·OTA",
-    dbTarget: "매출 누적 DB",
+    dbTarget: "매출 이력",
     dbApplyText: "매출 히스토리 반영",
     excludeText: "범위 밖 업체는 매출 누적 제외",
     rangeHint: "권장 1-10위 · 확장 1-20위",
@@ -728,7 +728,7 @@ function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.valu
   if (purpose === "basic_db") {
     return [
       { key: "top10", label: "1-20위", collectionMode: "precision", range: "1-20", note: "작은 지역 기본정보 확인", collectionPurpose: "basic_db" },
-      { key: "top20", label: "1-50위", collectionMode: "precision", range: "1-50", note: "마스터 DB 권장", collectionPurpose: "basic_db" },
+      { key: "top20", label: "1-50위", collectionMode: "precision", range: "1-50", note: "기본정보 권장", collectionPurpose: "basic_db" },
       { key: "top50", label: "1-100위", collectionMode: "precision", range: "1-100", note: "넓은 후보 확보", collectionPurpose: "basic_db" },
       { key: "top100", label: "10-100위", collectionMode: "precision", range: "10-100", note: "상위권 제외 보강", collectionPurpose: "basic_db" }
     ];
@@ -887,8 +887,8 @@ function runDbApplyStatusModel(model = {}) {
   const demandSignalCompanies = Number(model.demandSignalCompanies || 0);
   const historyRows = Number(model.historyRows || 0);
 
-  if (model.error) errors.push("마스터 DB 반영 오류");
-  if (!currentRunCompanies) errors.push("업체 마스터 반영 없음");
+  if (model.error) errors.push("업체 기준값 반영 오류");
+  if (!currentRunCompanies) errors.push("업체 기준값 반영 없음");
   if (route.appliesInventory && currentRunCompanies && !inventoryApplied) warnings.push("상품·가격 반영 없음");
   else if (route.appliesInventory && inventoryApplied > 0 && inventoryApplied < currentRunCompanies) warnings.push("상품·가격 일부 반영");
   if (model.historyEligible && !historyRows) warnings.push("매출 누적 관측치 없음");
@@ -896,7 +896,7 @@ function runDbApplyStatusModel(model = {}) {
 
   if (errors.length) {
     actions.push(
-      { label: "전체 DB 확인", section: "database", status: "needs_work" },
+      { label: "업체 관리", section: "database", status: "needs_work" },
       { label: "재수집 설정", section: "collect" }
     );
     return {
@@ -923,7 +923,7 @@ function runDbApplyStatusModel(model = {}) {
   }
 
   actions.push(
-    { label: "전체 DB 보기", section: "database" },
+    { label: "업체 관리", section: "database" },
     { label: "다음 수집 준비", section: "collect" }
   );
   return {
@@ -985,12 +985,12 @@ function runPurposeOutcomeCards(model = {}, status = {}) {
     return {
       key: "basic",
       title: "기본정보 확보 결과",
-      note: "순위, 상품 및 상품별 금액, 예약채널을 업체 마스터에 반영합니다.",
+      note: "순위, 상품 및 상품별 금액, 예약채널을 업체 기준값에 반영합니다.",
       cards: [
         { label: "순위 후보", value: fmtNumber(rankCandidateCount), note: `${detailRange} 수집 범위` },
         { label: "상품·금액", value: model.route?.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외", note: diag.succeeded ? `상세 확인 ${checkedText}` : "상품/가격 최신값 반영" },
         { label: "예약채널", value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "확인 대기", note: "네이버·OTA 노출 신호" },
-        { label: "마스터 반영", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
+        { label: "기준값 반영", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
       ]
     };
   }
@@ -1003,7 +1003,7 @@ function runPurposeOutcomeCards(model = {}, status = {}) {
         { label: "수요 신호", value: model.route?.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외", note: "검색수요·트렌드" },
         { label: "입지·클러스터", value: model.demandSignalCompanies ? "반영" : "대기", note: `${regionKeyword} 기준` },
         { label: "지역 범위", value: detailRange, note: "지도/클러스터 연결 범위" },
-        { label: "마스터 연결", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
+        { label: "기준값 연결", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
       ]
     };
   }
@@ -1094,7 +1094,7 @@ function runDbApplyLinkedQueueModel(model = {}, status = {}) {
     if (lowConfidence) reasons.push(`수량 신뢰도 ${metrics.confidenceGrade || "낮음"}`);
     if (manual) reasons.push("보정 필요");
     if (recrawl) reasons.push("재수집 필요");
-    if (decisionActive) reasons.push("판단 큐 진입");
+    if (decisionActive) reasons.push("확인 대상 진입");
     if (confirmNeeded) reasons.push(metrics.collection?.note || "확인 수집 필요");
     if (revenueWeak) reasons.push(entry.revenueEvidence.reasons?.[0] || "매출 근거 보강");
     return {
@@ -1122,7 +1122,7 @@ function runDbApplyLinkedQueueModel(model = {}, status = {}) {
     status,
     summary: runRows.length
       ? `이번 수집 ${fmtNumber(runRows.length)}곳 중 ${fmtNumber(queueRows.length)}곳을 보강 큐와 연결했습니다.`
-      : "이번 수집 업체가 아직 마스터 DB 행과 매칭되지 않았습니다."
+      : "이번 수집 업체가 아직 업체 기준값과 매칭되지 않았습니다."
   };
 }
 
@@ -1154,7 +1154,7 @@ function runDbApplyLinkedQueueHtml(queue = {}) {
               </article>
             `;
           }).join("")}
-          ${rows.length > visibleRows.length ? `<small class="run-apply-linked-more">외 ${fmtNumber(rows.length - visibleRows.length)}곳은 전체 DB 필터에서 이어서 확인합니다.</small>` : ""}
+          ${rows.length > visibleRows.length ? `<small class="run-apply-linked-more">외 ${fmtNumber(rows.length - visibleRows.length)}곳은 업체 관리 필터에서 이어서 확인합니다.</small>` : ""}
         </div>
       ` : `
         <p>이번 실행에서 낮은 신뢰도나 보정 필요 신호가 잡힌 업체는 없습니다.</p>
@@ -1210,7 +1210,7 @@ function renderRunResultApplySummary() {
       </div>
       <div class="run-apply-grid">
         <article>
-          <span>업체 마스터</span>
+          <span>업체 기준값</span>
           <strong>${fmtNumber(model.currentRunCompanies)}</strong>
           <small>이번 결과 업체 반영</small>
         </article>
@@ -1220,7 +1220,7 @@ function renderRunResultApplySummary() {
           <small>${model.route.appliesInventory ? "상품/가격 최신값 반영" : "노출 기록 중심"}</small>
         </article>
         <article>
-          <span>매출 누적</span>
+          <span>매출 이력</span>
           <strong>${escapeHtml(historyValue)}</strong>
           <small>${escapeHtml(historyNote)}</small>
         </article>
@@ -1230,7 +1230,7 @@ function renderRunResultApplySummary() {
           <small>${escapeHtml(demandNote)}</small>
         </article>
       </div>
-      <p>${escapeHtml(model.error ? `마스터 반영 오류: ${model.error}` : model.targetText)}</p>
+      <p>${escapeHtml(model.error ? `업체 기준값 반영 오류: ${model.error}` : model.targetText)}</p>
       <div class="run-apply-actions">
         ${status.actions.map((action) => `
           <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
@@ -1855,12 +1855,12 @@ function crawlPreviewMeta(payload = {}) {
   const ioSeconds = fast ? 18 : 35;
   const stages = [
     { key: "rank", label: "순위 수집", seconds: searchSeconds + Math.max(0, rangeCount - 20) * 1.2, detail: `${purpose.label} 기준으로 네이버 순위와 업체 기본 정보를 정리합니다.` },
-    { key: "trend", label: purpose.key === "demand_location" ? "수요·입지 확인" : "수요 확인", seconds: trendSeconds, detail: purpose.key === "demand_location" ? "검색수요, 트렌드, 지역 클러스터 보정값을 확인합니다." : "검색수요와 트렌드 캐시를 확인합니다." },
+    { key: "trend", label: purpose.key === "demand_location" ? "수요·입지 확인" : "수요 확인", seconds: trendSeconds, detail: purpose.key === "demand_location" ? "검색수요, 트렌드, 지역 클러스터 보정값을 확인합니다." : "검색수요와 저장된 트렌드를 확인합니다." },
     fast
       ? { key: "inventory", label: "상세 생략", seconds: 6, detail: "빠른 순위 모드라 날짜별 재고와 가격 확인을 건너뜁니다." }
       : { key: "inventory", label: purpose.key === "basic_db" ? "상품/금액 확인" : "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `${payload.detailRankRanges || purpose.defaultRange}위 중 상세 대상의 날짜별 수량과 요일별 가격을 확인합니다.` },
     !fast ? { key: "ota", label: purpose.key === "demand_location" ? "입지/클러스터" : "보조 채널", seconds: otaSeconds + regionalSeconds, detail: purpose.key === "demand_location" ? "지역 클러스터와 입지 보정 신호를 함께 정리합니다." : "OTA 보조 신호와 지역 수요 데이터를 정리합니다." } : null,
-    { key: "save", label: "저장/분석", seconds: ioSeconds, detail: "결과 파일, 누적 DB, 업체 마스터를 갱신합니다." }
+    { key: "save", label: "저장/분석", seconds: ioSeconds, detail: "수집 결과와 업체 기준값을 갱신합니다." }
   ].filter(Boolean).filter((stage) => stage.key !== "ota" || purpose.collectOta || purpose.collectRegional).map((stage, index) => ({
     ...stage,
     seconds: Math.max(4, Math.round(stage.seconds || 0)),
@@ -2975,7 +2975,7 @@ function renderLocationCandidateTemporary(candidate = {}) {
       <div class="location-action-panel">
         <span><b>1</b> 정식 카드 전까지 현재 run 기준으로 판단</span>
         <span><b>2</b> 수집 결과가 반복되면 개발 요청으로 승격</span>
-        <span><b>3</b> 영업타깃은 판단큐 근거 확인 후 분리</span>
+        <span><b>3</b> 컨택 후보는 확인 근거 검토 후 분리</span>
       </div>
       <div class="location-target-list">
         ${targets.length ? targets.map(({ item, reasons }, index) => `
@@ -2984,7 +2984,7 @@ function renderLocationCandidateTemporary(candidate = {}) {
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <span>${reasons.map(escapeHtml).slice(0, 3).join(" · ")}</span>
           </button>
-        `).join("") : `<div class="location-empty-note">아직 임시 카드에서 바로 볼 영업타깃 후보가 없습니다.</div>`}
+        `).join("") : `<div class="location-empty-note">아직 임시 카드에서 바로 볼 컨택 후보가 없습니다.</div>`}
       </div>
     </section>
   `;
@@ -5938,7 +5938,7 @@ function collectionQualityRecrawlRows(diag = {}) {
     if (profile.statusKey === "ready" && !decision.inQueue) return;
     const rank = Number(item.rank || item.overallRank || index + 1);
     const reasons = [
-      decision.inQueue ? `판단 큐: ${decision.label}` : "",
+      decision.inQueue ? `확인 대상: ${decision.label}` : "",
       ...profile.reasons,
       decision.problemDateText && decision.problemDateText !== "문제 날짜 없음" ? `문제 날짜: ${decision.problemDateText}` : "",
       profile.priceMissing ? "요일/상품별 판매가 재확인" : "",
@@ -5999,10 +5999,10 @@ function collectionQualityRecrawlRows(diag = {}) {
         entry.decision?.summary,
         entry.type?.label,
         entry.profile?.issues?.[0]?.label
-      ], "관리자 판단 필요", 3);
+      ], "검수 필요", 3);
       const row = {
         key,
-        source: "판단 큐",
+        source: "확인 대상",
         name: company.primaryName || "업체명 확인",
         region: (company.regions || []).slice(0, 2).join(" / "),
         rank,
@@ -6016,9 +6016,9 @@ function collectionQualityRecrawlRows(diag = {}) {
       };
       if (existing) {
         existing.score = Math.max(existing.score, row.score);
-        existing.source = `${existing.source} + 판단 큐`;
+        existing.source = `${existing.source} + 확인 대상`;
         existing.revenue = Math.max(existing.revenue || 0, revenue);
-        existing.reason = compactListText([existing.reason, reason], "관리자 판단 필요", 3);
+        existing.reason = compactListText([existing.reason, reason], "검수 필요", 3);
       } else {
         rows.push(row);
       }
@@ -6052,7 +6052,7 @@ function collectionQualitySettingFeedback(diag = {}, quality = {}) {
     rows.push({
       label: "정밀분석으로 전환",
       value: "상세 1-20위",
-      detail: "빠른 순위 모드는 상세 재고를 생략하므로 판단 큐/예상 매출 산정에는 정밀분석이 필요합니다.",
+      detail: "빠른 순위 모드는 상세 재고를 생략하므로 확인 대상/예상 매출 산정에는 정밀분석이 필요합니다.",
       range: "1-20",
       mode: "precision",
       keyword
@@ -6531,7 +6531,7 @@ function inventoryAuditProfile(item = {}) {
     statusKey = "confirmed";
     tone = "good";
     reasons.push("현재 기간 기준 수량 구조가 안정적입니다.");
-    actions.push("영업타깃 판단에 바로 사용 가능");
+    actions.push("컨택 후보 판단에 바로 사용 가능");
   }
 
   const labelMap = {
@@ -6595,7 +6595,7 @@ function inventoryAuditProfile(item = {}) {
       key: "data",
       label: "가격/수량 미확보",
       reason: collectionStatus.reasons[0] || "정밀분석 결과만으로 컨택 판단이 불충분",
-      action: "상품별 수량과 요일별 가격을 확인한 뒤 영업타깃 여부 재판정"
+      action: "상품별 수량과 요일별 가격을 확인한 뒤 컨택 후보 여부 재판정"
     } : null,
     manualRecheckNeeded ? {
       key: "manual_recheck",
@@ -6729,7 +6729,7 @@ function renderValidationQueue(items = []) {
     <div class="validation-card validation-card-audit">
       <div class="validation-card-head compact">
         <div>
-          <span class="eyebrow">관리자 판단 큐 V2</span>
+          <span class="eyebrow">확인 대상</span>
           <h3>사람이 확인해야 할 업체</h3>
         </div>
         <span>${fmtNumber(queueCount)} 큐 진입</span>
@@ -6763,7 +6763,7 @@ function validationReasonRow(item = {}) {
   const decision = decisionQueueProfile(item);
   const reasons = decision.inQueue
     ? [
-        `판단 큐: ${decision.label}`,
+        `확인 대상: ${decision.label}`,
         `문제 날짜: ${decision.problemDateText}`,
         `수량: ${decision.quantityConfidence}`,
         `채널: ${decision.channelText}`
@@ -6853,7 +6853,7 @@ function renderValidationBoard(items = []) {
             </button>
           `).join("") : `<p>현재 기준 우선 후보가 없습니다.</p>`}
         </div>
-        <small>${missingItems ? `${fmtNumber(missingItems)}개 업체는 일부 날짜 미수집으로 판단 큐 확인` : "판단 큐를 제외한 즉시 후보"}</small>
+        <small>${missingItems ? `${fmtNumber(missingItems)}개 업체는 일부 날짜 미수집으로 확인 대상` : "확인 대상 제외 즉시 후보"}</small>
       </div>
       ${renderValidationQueue(items)}
     </section>
@@ -7359,13 +7359,13 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
 
 function companyAdminReviewOutcome(status = "") {
   return {
-    contact_ready: { label: "영업타깃 이동", detail: "바로 컨택 가능한 업체로 분리", tone: "good" },
+    contact_ready: { label: "컨택 후보", detail: "바로 컨택 가능한 업체로 분리", tone: "good" },
     confirmed: { label: "확정 타깃", detail: "관리자가 판단 맞음으로 확정", tone: "good" },
-    recrawl_needed: { label: "판단큐 유지", detail: "재수집 후 전후 비교 필요", tone: "watch" },
-    check_needed: { label: "판단큐 유지", detail: "채널/공백 확인 후 재판단", tone: "watch" },
+    recrawl_needed: { label: "확인 대상 유지", detail: "재수집 후 전후 비교 필요", tone: "watch" },
+    check_needed: { label: "확인 대상 유지", detail: "채널/공백 확인 후 재검토", tone: "watch" },
     manual_needed: { label: "보정 후 재검토", detail: "총량/상품 수량 보정 필요", tone: "bad" },
     hold: { label: "보류 유지", detail: "컨택 제외, 관찰 또는 추후 확인", tone: "hold" },
-    exclude: { label: "영업 제외", detail: "타깃/판단큐에서 제외", tone: "bad" }
+    exclude: { label: "관리 제외", detail: "컨택 후보와 확인 대상에서 제외", tone: "bad" }
   }[status] || { label: "판단 대기", detail: "관리자 처리 상태 미정", tone: "watch" };
 }
 
@@ -7448,7 +7448,7 @@ function companyReviewContextForCompany(companyId = "", status = "", sourceOverr
     decision.quantityConfidence,
     comparison?.hasComparison ? `개선 ${fmtNumber(comparison.improved)} / 악화 ${fmtNumber(comparison.worsened)}` : "",
     revenueValue ? `예상매출 ${fmtWon(revenueValue)}` : ""
-  ], "관리자 판단 저장", 4);
+  ], "검수 저장", 4);
   return {
     source: sourceOverride || (entry ? "decision_queue" : "company_master"),
     appliedStatus: status,
@@ -7751,7 +7751,7 @@ function salesGateBulkReviewHtml(entries = [], selectedFilter = "all") {
     <div class="target-gate-bulk" data-sales-gate-bulk>
       <div>
         <strong>보류 게이트 일괄 처리</strong>
-        <small>${escapeHtml(`현재 필터 ${filterLabel} · 보류 대상 ${fmtNumber(count)}개 · 저장 후 컨택 가능 업체는 영업타깃으로 이동`)}</small>
+        <small>${escapeHtml(`현재 필터 ${filterLabel} · 보류 대상 ${fmtNumber(count)}개 · 저장 후 컨택 가능 업체는 컨택 후보로 표시`)}</small>
       </div>
       <input type="text" data-sales-gate-bulk-note value="${escapeHtml(`보류 게이트 일괄 처리: ${filterLabel} ${fmtNumber(count)}개`)}" placeholder="보류 게이트 일괄 처리 메모">
       <div>
@@ -12696,17 +12696,17 @@ function renderReport() {
     ${publicMode ? "" : `<section class="report-card report-target-preview">
       <div class="report-card-head">
         <div>
-          <h3>전체 DB에서 관리 상태로 판단</h3>
-          <p>영업 후보를 별도 화면으로 분리하지 않고, 전체 DB 필터에서 컨택 가능·보정 필요·확인 수집 대상을 직접 고릅니다.</p>
+          <h3>업체 관리에서 처리</h3>
+          <p>컨택 가능, 보정 필요, 확인 수집 대상을 한 곳에서 고릅니다.</p>
         </div>
-        <button class="small-button" type="button" data-drawer-tab="admin" data-admin-section-link="database">전체 DB 보기</button>
+        <button class="small-button" type="button" data-drawer-tab="admin" data-admin-section-link="database">업체 관리</button>
       </div>
       <div class="report-target-list compact">
         <button class="report-target-row" type="button" data-drawer-tab="admin" data-admin-section-link="database">
           <span>필터</span>
           <strong>관리 상태 · OTA · 시설 · 순위/매출 정렬</strong>
           <em>${fmtNumber(allTargets.length)}건</em>
-          <small>컨택 가능 여부는 전체 DB 상세 수정에서 관리자 판단값으로 저장합니다.</small>
+          <small>컨택 가능 여부는 상세 수정에서 저장합니다.</small>
         </button>
       </div>
     </section>`}
@@ -14413,7 +14413,7 @@ function renderHistoryLab() {
       <section class="history-lab empty-state">
         <div class="demand-card-head">
           <div>
-            <h3>누적 DB</h3>
+            <h3>수집 이력</h3>
             <p>같은 키워드를 반복 수집하면 리드타임과 요일별 평균이 쌓입니다.</p>
           </div>
           <span>대기</span>
@@ -14425,7 +14425,7 @@ function renderHistoryLab() {
     <section class="history-lab">
       <div class="demand-card-head">
         <div>
-          <h3>누적 DB</h3>
+          <h3>수집 이력</h3>
           <p>동일 키워드 반복 수집 기반 리드타임·요일별·업체별 변화</p>
         </div>
         <span>${history.canAnalyzeLeadTime ? "분석 가능" : "누적 중"}</span>
@@ -14506,7 +14506,7 @@ function historyOpsTimeline(rows = []) {
   if (!items.length) return `<div class="history-empty-inline">수집 회차 데이터가 아직 없습니다.</div>`;
   const maxRate = Math.max(0.01, ...items.map((row) => Number(row.saleRate || 0)));
   return `
-    <div class="history-ops-timeline" aria-label="누적 DB 수집 회차 변화">
+    <div class="history-ops-timeline" aria-label="수집 이력 회차 변화">
       ${items.map((row) => {
         const rate = Number(row.saleRate);
         const height = Number.isFinite(rate) ? Math.max(5, Math.min(100, (rate / maxRate) * 100)) : 0;
@@ -14524,7 +14524,7 @@ function historyOpsTimeline(rows = []) {
 
 function historyOpsKeywordRows(activeKeywordRow) {
   const keywords = (historyOpsSource().keywords || []).slice(0, 8);
-  if (!keywords.length) return `<div class="empty">누적 DB 키워드가 아직 없습니다.</div>`;
+  if (!keywords.length) return `<div class="empty">저장된 키워드가 아직 없습니다.</div>`;
   return `
     <div class="history-ops-keyword-list">
       ${keywords.map((row) => {
@@ -14734,7 +14734,7 @@ function companyReviewHistoryPanel(profile = {}) {
   return `
     <div class="company-review-history">
       <div>
-        <strong>관리자 판단 이력</strong>
+        <strong>검수 이력</strong>
         <span>${current ? escapeHtml(current.label || companyAdminReviewLabel(current.status)) : "현재 판단 없음"}</span>
       </div>
       ${rows.length ? rows.map((row) => `
@@ -14816,7 +14816,7 @@ function companyMasterTools() {
   return `
     <div class="company-master-tools">
       <button type="button" data-company-backfill>기존 결과 전체 반영</button>
-      <small>저장된 수집 결과를 다시 읽어 업체 고유키, 노출 키워드, 수동 보정 재사용 기준을 마스터 DB에 누적합니다.</small>
+      <small>저장된 수집 결과를 다시 읽어 업체 고유키, 노출 키워드, 보정 재사용 기준을 정리합니다.</small>
     </div>
   `;
 }
@@ -14860,14 +14860,14 @@ function companyMasterOpsIntro(master = {}) {
   return `
     <div class="company-master-ops-intro">
       <div>
-        <span>원본 DB 관리</span>
-        <strong>업체 검색·수정은 전체 DB 콘솔에서 처리합니다</strong>
-        <small>이 영역은 저장된 수집 결과 반영, 고유키 진단, 중복 병합처럼 원본 DB 유지보수만 담당합니다.</small>
+        <span>저장 자료 관리</span>
+        <strong>업체 검색·수정은 업체 관리에서 처리합니다</strong>
+        <small>저장 결과 반영, 고유키 진단, 중복 병합을 관리합니다.</small>
       </div>
-      <button type="button" data-drawer-tab="admin" data-admin-section-link="database">전체 DB 콘솔 열기</button>
+      <button type="button" data-drawer-tab="admin" data-admin-section-link="database">업체 관리 열기</button>
     </div>
     <div class="company-master-metrics compact">
-      <article><span>전체 업체</span><strong>${fmtNumber(master.totalCompanies || 0)}</strong><small>마스터 DB</small></article>
+      <article><span>전체 업체</span><strong>${fmtNumber(master.totalCompanies || 0)}</strong><small>기준값</small></article>
       <article><span>이번 결과</span><strong>${fmtNumber(master.currentRunCompanies || 0)}</strong><small>자동 반영</small></article>
       <article><span>중복 후보</span><strong>${fmtNumber(duplicateCount)}</strong><small>병합 검토</small></article>
     </div>
@@ -15109,7 +15109,7 @@ function companyMasterVerificationPanel(master = {}) {
           <strong>업체 DB 검증</strong>
           <small>고유키, 키워드 병합, 보정 재사용 상태를 먼저 확인합니다.</small>
         </div>
-        <span>${escapeHtml(recentDate ? recentDate.slice(0, 10) : "누적 DB")}</span>
+        <span>${escapeHtml(recentDate ? recentDate.slice(0, 10) : "수집 이력")}</span>
       </div>
       <div class="company-verification-metrics">
         <article><span>고유키 안정</span><strong>${fmtNumber(trusted.length)}</strong><small>place_id/예약ID 기반</small></article>
@@ -15122,8 +15122,8 @@ function companyMasterVerificationPanel(master = {}) {
           "보정 재사용",
           "한 번 저장한 보정값이 다른 키워드 수집에도 붙는 업체",
           corrections,
-          "현재 관리자 보정값이 있는 업체가 없습니다.",
-          (company) => company.correctionStatus?.detail || "관리자 보정값 기준"
+          "현재 보정값이 있는 업체가 없습니다.",
+          (company) => company.correctionStatus?.detail || "보정값 기준"
         )}
         ${renderLane(
           "키워드 병합 확인",
@@ -15134,7 +15134,7 @@ function companyMasterVerificationPanel(master = {}) {
         )}
         ${renderLane(
           "확인 필요",
-          "판단이 흔들릴 수 있어 관리자 확인이 필요한 업체",
+          "판단이 흔들릴 수 있어 확인이 필요한 업체",
           review.map((entry) => entry.company),
           "현재 확인 필요 업체가 없습니다.",
           (company) => (company.salesTarget?.reasons || []).slice(0, 2).join(" · ") || company.identityConfidence?.reason || "추가 확인 필요"
@@ -15177,53 +15177,53 @@ function companyAdminReviewFeedbackMeta(status = "") {
   if (status === "clear") {
     return {
       title: "판단 해제 완료",
-      message: "관리자 판단을 대기 상태로 되돌렸습니다.",
+      message: "검수 상태를 대기로 되돌렸습니다.",
       next: "필요하면 확인, 재수집, 보정 상태를 다시 지정하세요.",
-      items: ["전체 DB 상태 해제", "판단 큐 재분류", "상세 화면 갱신"],
+      items: ["검수 상태 해제", "확인 대상 재분류", "상세 화면 갱신"],
       tone: "neutral"
     };
   }
   const label = companyAdminReviewLabel(status);
   const outcome = companyAdminReviewOutcome(status);
   const fallback = {
-    title: "판단 저장 완료",
+    title: "검수 저장 완료",
     message: `${label} 상태로 저장했습니다.`,
     next: outcome.detail || "저장 결과를 확인한 뒤 다음 처리를 진행하세요.",
-    items: ["전체 DB 검수 상태 갱신", "판단 큐 재분류", "상세 화면 갱신"],
+    items: ["검수 상태 갱신", "확인 대상 재분류", "상세 화면 갱신"],
     tone: outcome.tone === "bad" ? "danger" : outcome.tone === "good" ? "success" : "watch"
   };
   return {
     confirmed: {
-      title: "판단 저장 완료",
+      title: "검수 저장 완료",
       message: "확인 완료 상태로 저장했습니다.",
       next: "보정값과 수집 상태가 맞으면 완료 상태로 유지하세요.",
-      items: ["전체 DB 검수 완료", "판단 큐 하향", "B2B 내부 기준 반영"],
+      items: ["검수 완료", "확인 대상 해제", "사업자 지표 기준 반영"],
       tone: "success"
     },
     contact_ready: {
       title: "컨택 가능 저장",
       message: "컨택 가능한 업체로 표시했습니다.",
       next: "리스트에서 노출, 예약율, 가격 근거를 확인해 후속 관리를 진행하세요.",
-      items: ["전체 DB 상태 갱신", "컨택 후보 표시", "상세 근거 유지"],
+      items: ["검수 상태 갱신", "컨택 후보 표시", "상세 근거 유지"],
       tone: "success"
     },
     check_needed: {
       title: "확인 필요 저장",
       message: "사람이 확인해야 하는 업체로 표시했습니다.",
       next: "필요 채널과 문제 날짜를 확인한 뒤 완료 또는 재수집으로 확정하세요.",
-      items: ["판단 큐 유지", "확인 메모 저장", "채널 확인 대상 표시"],
+      items: ["확인 대상 유지", "확인 메모 저장", "채널 확인 대상 표시"],
       tone: "watch"
     },
     recrawl_needed: {
       title: "재수집 필요 저장",
       message: "확인 수집이 필요한 업체로 표시했습니다.",
       next: "동일 조건으로 다시 수집한 뒤 수량, 가격, 채널 상태를 비교하세요.",
-      items: ["재수집 대상 표시", "판단 큐 유지", "상세 근거 재확인"],
+      items: ["재수집 대상 표시", "확인 대상 유지", "상세 근거 재확인"],
       tone: "watch"
     },
     manual_needed: {
       title: "보정 필요 저장",
-      message: "마스터 보정이 필요한 업체로 표시했습니다.",
+      message: "기준값 보정이 필요한 업체로 표시했습니다.",
       next: "객실 총량, 상품 구성, 가격, 판매 채널을 먼저 보정하세요.",
       items: ["보정 필요 표시", "수정 우선순위 상승", "B2B 노출 신뢰도 보호"],
       tone: "watch"
@@ -15232,14 +15232,14 @@ function companyAdminReviewFeedbackMeta(status = "") {
       title: "보류 저장",
       message: "검토를 보류할 업체로 표시했습니다.",
       next: "보류 사유를 메모에 남기고 다음 수집 변화가 있을 때 다시 판단하세요.",
-      items: ["보류 상태 저장", "판단 큐 별도 관리", "상세 메모 유지"],
+      items: ["보류 상태 저장", "확인 대상 유지", "상세 메모 유지"],
       tone: "neutral"
     },
     exclude: {
       title: "제외 저장",
       message: "분석 대상에서 제외할 업체로 표시했습니다.",
       next: "동일 업체, 업종 부적합, 폐업 등 제외 사유가 맞는지 한 번 더 확인하세요.",
-      items: ["제외 상태 저장", "판단 큐 제외", "상세 근거 유지"],
+      items: ["제외 상태 저장", "확인 대상 제외", "상세 근거 유지"],
       tone: "danger"
     }
   }[status] || fallback;
@@ -15254,7 +15254,7 @@ function adminDbReviewFlashHtml(companyId = "") {
     <aside class="admin-db-review-flash ${escapeHtml(flash.tone || "watch")}" aria-live="polite">
       <div>
         <span>${escapeHtml(flash.title || "판단 저장 결과")}</span>
-        <strong>${escapeHtml(flash.message || "관리자 판단을 저장했습니다.")}</strong>
+        <strong>${escapeHtml(flash.message || "검수 상태를 저장했습니다.")}</strong>
         ${flash.next ? `<small>${escapeHtml(flash.next)}</small>` : ""}
       </div>
       ${items.length ? `
@@ -15364,7 +15364,7 @@ function companyDecisionQueueProfile(company = {}) {
   if (staleAfterReview && criteria.length) {
     criteria.unshift({
       key: "recheck",
-      label: "관리자 판단 후 재확인",
+      label: "검수 후 재확인",
       reason: "이전 판단 이후 새 수집 신호가 들어옴",
       action: "변경된 신호만 확인하고 판단을 다시 저장"
     });
@@ -15467,7 +15467,7 @@ function companyCheckReasons(company = {}, profile = {}, workflow = {}, decision
 
 function companyCheckRecommendation(company = {}, profile = {}, workflow = {}, decision = {}) {
   if (workflow.key === "recheck" && workflow.label === "보정 후 재검토") return "보정값 기준 판매율과 실제 총량을 확인한 뒤 컨택/보류/제외 판단을 다시 저장하세요.";
-  if (workflow.key === "recheck") return "기존 관리자 판단 이후 조건이 바뀌었습니다. 변경 사유만 확인하고 판단을 다시 저장하세요.";
+  if (workflow.key === "recheck") return "기존 검수 이후 조건이 바뀌었습니다. 변경 사유만 확인하고 상태를 다시 저장하세요.";
   if (workflow.key === "done") return "이미 처리된 업체입니다. 새 신호가 생기면 재확인 큐로 자동 이동합니다.";
   const issues = profile.issues || [];
   if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
@@ -16188,7 +16188,7 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
   const rows = [
     ["추천 처리", statusSuggestion, "버튼으로 처리 상태 저장"],
     ["해소 경로", resolution.outcome.label, resolution.outcome.detail],
-    ["다음 액션", resolution.nextAction, resolution.canMoveToTarget ? "영업타깃에서 후속 관리" : "판단큐에서 근거 보강"],
+    ["다음 액션", resolution.nextAction, resolution.canMoveToTarget ? "컨택 후보로 후속 관리" : "확인 대상에서 근거 보강"],
     ["자동 재검토", recheckComparison.hasComparison ? `${autoRecommendation.label} · 개선 ${fmtNumber(recheckComparison.improved)} / 악화 ${fmtNumber(recheckComparison.worsened)}` : "비교 대기", "재수집 전후 수량/가격/공백 비교"],
     ["재수집 설정", `정밀분석 · 상세 ${plan.range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
     ["예상 소요", `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`, "수집 실행 전 ETA 기준"],
@@ -16227,7 +16227,7 @@ function companyQueueResolutionHtml(company = {}, profile = {}, workflow = {}, d
     ["재수집 비교", comparisonText, resolution.comparison?.hasComparison ? "전후 변화 기준" : "다음 수집부터 비교"]
   ];
   const states = [
-    ["contact_ready", "컨택", "영업타깃 이동"],
+    ["contact_ready", "컨택", "컨택 후보"],
     ["recrawl_needed", "재수집", "큐 유지"],
     ["manual_needed", "보정", "재검토"],
     ["check_needed", "확인", "큐 유지"],
@@ -16238,7 +16238,7 @@ function companyQueueResolutionHtml(company = {}, profile = {}, workflow = {}, d
     <div class="company-resolution-panel ${escapeHtml(resolution.outcome.tone)} ${compact ? "compact" : ""}">
       <div class="company-resolution-head">
         <div>
-          <strong>판단큐 해소 흐름</strong>
+          <strong>확인 대상 처리 흐름</strong>
           <small>${escapeHtml(resolution.nextAction)}</small>
         </div>
         <span>${escapeHtml(resolution.outcome.label)}</span>
@@ -16334,7 +16334,7 @@ function companyQueueRecentLogs(entries = []) {
         at: history.at || "",
         tone: history.status === "contact_ready" ? "good" : history.status === "exclude" ? "bad" : "watch",
         name,
-        label: "관리자 판단",
+        label: "검수 상태",
         value: history.action === "clear" ? "판단 해제" : (history.label || companyAdminReviewLabel(history.status) || "상태 변경"),
         note: history.note || companyReviewContextText(history.context) || history.reason || "관리자 처리 이력"
       });
@@ -16570,7 +16570,7 @@ function recrawlAutomationBatchHtml(batches = []) {
     <article class="recrawl-batch-panel">
       <div class="history-card-head">
         <strong>0. 묶음 실행</strong>
-        <small>같은 키워드·지역·기간·범위만 한 번 수집해 여러 판단 큐 업체를 동시에 확인합니다.</small>
+        <small>같은 키워드·지역·기간·범위만 한 번 수집해 여러 확인 대상 업체를 동시에 확인합니다.</small>
       </div>
       <div class="recrawl-batch-list">
         ${rows.length ? rows.map((batch, index) => `
@@ -16648,7 +16648,7 @@ function recrawlAutomationBoardHtml(entries = []) {
     ["평균 ETA", averageEtaSeconds ? formatElapsed(averageEtaSeconds) : "대기", "실측 기록 반영"],
     ["절감 예상", totalSavedSeconds ? formatElapsed(totalSavedSeconds) : "대기", "개별 실행 대비"],
     ["비교 완료", profile.compared.length, "전후 스냅샷 확보"],
-    ["컨택 전환", profile.contactReady.length, "영업타깃 이동 추천"],
+    ["컨택 전환", profile.contactReady.length, "컨택 후보 추천"],
     ["보정 필요", profile.manualNeeded.length, "수량/총량 확인"],
     ["재수집 반복", profile.repeatNeeded.length, "가격/수량 미확보"]
   ];
@@ -16697,7 +16697,7 @@ function recrawlAutomationBoardHtml(entries = []) {
         <article>
           <div class="history-card-head">
             <strong>2. 전후 비교와 자동 추천</strong>
-            <small>추천 적용 시 판단 큐/영업타깃 상태가 갱신됩니다.</small>
+            <small>추천 적용 시 확인 대상/컨택 후보 상태가 갱신됩니다.</small>
           </div>
           <div class="recrawl-auto-list transition">
             ${transitionRows.length ? transitionRows.map((row, index) => `
@@ -16729,9 +16729,9 @@ function companyQueueOperationSummaryHtml(entries = []) {
   const worsened = open.filter((entry) => entry.comparison?.hasComparison && entry.comparison.worsened > 0);
   const logs = companyQueueRecentLogs(entries);
   const cards = [
-    ["오늘 처리", open.filter((entry) => entry.workflow.key === "open").length, "미완료 판단 큐"],
+    ["오늘 처리", open.filter((entry) => entry.workflow.key === "open").length, "미완료 확인 대상"],
     ["재검토", open.filter((entry) => entry.workflow.key === "recheck").length, "재수집/보정 후 확인"],
-    ["추천 컨택", countRecommendation("contact_ready"), "바로 영업타깃 이동 가능"],
+    ["추천 컨택", countRecommendation("contact_ready"), "바로 컨택 후보 가능"],
     ["추천 보정", countRecommendation("manual_needed"), "총량/상품 구조 확인"],
     ["매출 영향", highRevenue.length, "예상매출 200만원 이상"],
     ["매출 근거", revenueWeak.length, "요일/상품/가격 보강"],
@@ -16752,7 +16752,7 @@ function companyQueueOperationSummaryHtml(entries = []) {
       <div class="company-queue-log-panel">
         <div>
           <strong>최근 처리 로그</strong>
-          <small>관리자 판단, 보정, 재수집 이후 상태 변화를 최신순으로 표시합니다.</small>
+          <small>검수, 보정, 재수집 이후 상태 변화를 최신순으로 표시합니다.</small>
         </div>
         <button type="button" data-export-admin-review-audit>판단 이력 CSV</button>
         <div class="company-queue-log-list">
@@ -16810,11 +16810,11 @@ function companyMasterCheckPanel(master = {}) {
   const reviewStatusCount = (status) => entries.filter((entry) => entry.company.adminReview?.status === status).length;
   const revenueWeakCount = openEntries.filter((entry) => queueRevenueEvidenceProfile(entry.revenueImpact || {}).weak).length;
   const metrics = [
-    ["판단 큐", openEntries.length, "사람 확인 필요"],
+    ["확인 대상", openEntries.length, "사람 확인 필요"],
     ["재수집 필요", reviewStatusCount("recrawl_needed"), "범위/기간 재확인"],
     ["수동 보정", reviewStatusCount("manual_needed") + criterionCount("manual_recheck"), "총량 보정 후 재판정"],
     ["매출 근거", revenueWeakCount, "요일/상품/가격 보강"],
-    ["컨택 가능", reviewStatusCount("contact_ready"), "영업타깃 이동"]
+    ["컨택 가능", reviewStatusCount("contact_ready"), "컨택 후보"]
   ];
   const displayLimit = selectedFilter === "priority" ? 15 : 24;
   const displayedEntries = visibleEntries.slice(0, displayLimit);
@@ -16823,8 +16823,8 @@ function companyMasterCheckPanel(master = {}) {
     <section class="company-check-panel">
       <div class="company-check-head">
         <div>
-          <strong>관리자 판단 큐 V2</strong>
-          <small>OTA, 수량 구조, 날짜별 총량 변동, 판매 공백, 보정 후 재검토 기준으로 컨택 전 확인할 업체입니다.</small>
+          <strong>확인 대상</strong>
+          <small>OTA, 수량 구조, 날짜별 총량 변동, 판매 공백, 보정 후 재검토 기준으로 확인할 업체입니다.</small>
         </div>
         <span>${fmtNumber(displayedEntries.length)}/${fmtNumber(visibleEntries.length)}개 표시 · 필터 ${fmtNumber(filteredEntries.length)} · 전체 ${fmtNumber(entries.length)}</span>
       </div>
@@ -16844,7 +16844,7 @@ function companyMasterCheckPanel(master = {}) {
           <span>큐 검색</span>
           <input type="search" data-company-check-search value="${escapeHtml(checkQuery)}" placeholder="업체명, 지역, 키워드, 큐사유, 확인채널">
         </label>
-        <small>${escapeHtml(checkSearch ? `현재 필터 ${fmtNumber(filteredEntries.length)}개 중 ${fmtNumber(visibleEntries.length)}개 표시` : "업체명·지역·키워드·큐사유·확인채널로 빠르게 좁힙니다.")}</small>
+        <small>${escapeHtml(checkSearch ? `현재 필터 ${fmtNumber(filteredEntries.length)}개 중 ${fmtNumber(visibleEntries.length)}개 표시` : "업체명·지역·키워드·사유·확인채널로 빠르게 좁힙니다.")}</small>
         <button type="button" data-export-decision-queue>현재 큐 CSV</button>
         ${checkSearch ? `<button type="button" data-company-check-search-clear>검색 해제</button>` : ""}
       </div>
@@ -16860,8 +16860,8 @@ function companyMasterCheckPanel(master = {}) {
       <div class="company-check-list">
         ${displayedEntries.length
           ? displayedEntries.map(companyCheckEntryHtml).join("")
-          : `<p class="empty">${escapeHtml(checkSearch ? "검색 조건에 맞는 판단 큐 업체가 없습니다." : "해당 조건의 확인할 업체가 없습니다.")}</p>`}
-        ${hiddenCount ? `<p class="company-check-more">상위 ${fmtNumber(displayedEntries.length)}개를 먼저 표시합니다. 남은 ${fmtNumber(hiddenCount)}개는 아래 업체 마스터에서 검색해 확인하세요.</p>` : ""}
+          : `<p class="empty">${escapeHtml(checkSearch ? "검색 조건에 맞는 확인 대상 업체가 없습니다." : "해당 조건의 확인할 업체가 없습니다.")}</p>`}
+        ${hiddenCount ? `<p class="company-check-more">상위 ${fmtNumber(displayedEntries.length)}개를 먼저 표시합니다. 남은 ${fmtNumber(hiddenCount)}개는 아래 업체 목록에서 검색해 확인하세요.</p>` : ""}
       </div>
     </section>
   `;
@@ -16917,7 +16917,7 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
         <div class="company-manual-section-head">
           <span>3. 저장</span>
           <strong>저장 후 판단 상태를 확정합니다</strong>
-          <small>보정값은 전체 DB, 판단 큐, B2B 비교 기준에 우선 반영됩니다.</small>
+          <small>보정값은 업체 관리와 사업자 비교 기준에 우선 반영됩니다.</small>
         </div>
         <label>
           <span>보정 메모</span>
@@ -16925,7 +16925,7 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
         </label>
         <div class="company-manual-save-hint">
           <span>저장 다음 단계</span>
-          <strong>아래 관리자 판단에서 완료·확인·재수집 중 하나를 저장하세요.</strong>
+          <strong>아래 검수 상태에서 완료·확인·재수집 중 하나를 저장하세요.</strong>
         </div>
         <div class="company-manual-actions">
           <button type="button" data-save-company-correction data-company-id="${escapeHtml(company.companyId || "")}">보정 저장</button>
@@ -16969,10 +16969,10 @@ function adminDbCorrectionFlashHtml(companyId = "") {
       <div>
         <span>${escapeHtml(flash.title || "저장 결과")}</span>
         <strong>${escapeHtml(flash.message || "보정 반영 완료")}</strong>
-        <small>${escapeHtml(flash.next || "반영 범위를 확인한 뒤 관리자 판단을 확정하세요.")}</small>
+        <small>${escapeHtml(flash.next || "반영 범위를 확인한 뒤 검수 상태를 확정하세요.")}</small>
       </div>
       <ul>
-        ${(flash.items || ["전체 DB 갱신", "판단 큐 기준 갱신", "B2B 비교 지표 반영"]).slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+        ${(flash.items || ["업체 관리 갱신", "확인 대상 갱신", "사업자 지표 반영"]).slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
       </ul>
       ${flash.tone === "success" ? adminDbCorrectionNextActionsHtml(company, "admin_correction_feedback") : ""}
       ${at ? `<em>${escapeHtml(at)}</em>` : ""}
@@ -16995,8 +16995,8 @@ function adminDbCorrectionNextActionsHtml(company = {}, source = "admin_correcti
     <div class="admin-db-correction-next" data-admin-db-correction-next>
       <div>
         <span>다음 처리</span>
-        <strong>보정 후 관리자 판단을 바로 저장합니다</strong>
-        <small>${escapeHtml(currentText)} · 버튼을 누르면 판단 큐와 전체 DB에 함께 반영됩니다.</small>
+        <strong>보정 후 검수 상태를 바로 저장합니다</strong>
+        <small>${escapeHtml(currentText)} · 버튼을 누르면 업체 관리에 함께 반영됩니다.</small>
       </div>
       <div class="admin-db-correction-next-actions">
         ${actions.map(([status, label, note]) => `
@@ -17106,19 +17106,19 @@ function adminDbCorrectionImpactHtml(row = {}) {
   ].filter(Boolean);
   const scopeCards = [
     {
-      label: "전체 DB",
+      label: "업체 관리",
       value: applied ? "보정값 우선" : "자동수집 기준",
-      note: applied ? "업체 목록·지역 통계·필터에 우선 반영" : "저장하면 마스터 DB 기준값으로 반영",
+      note: applied ? "업체 목록·지역 통계·필터에 우선 반영" : "저장하면 업체 기준값으로 반영",
       tone: applied ? "good" : "neutral"
     },
     {
-      label: "판단 큐",
+      label: "확인 대상",
       value: applied ? "재검토 기준 갱신" : "저장 후 재분류",
       note: "수량 신뢰도와 확인 수집 우선순위에 반영",
       tone: applied ? "good" : "watch"
     },
     {
-      label: "B2B 지표",
+      label: "사업자 지표",
       value: applied ? "비교 기준 반영" : "자동값 노출",
       note: "예약율·예상매출·관심숙소 비교에 우선 적용",
       tone: applied ? "good" : "neutral"
@@ -17135,8 +17135,8 @@ function adminDbCorrectionImpactHtml(row = {}) {
       <div class="admin-db-correction-impact-head">
         <div>
           <span>${applied ? "반영 완료" : "반영 예정"}</span>
-          <strong>${applied ? "관리자 보정값이 우선 적용 중입니다" : "저장하면 아래 기준에 바로 반영됩니다"}</strong>
-          <small>전체 DB, 판단 큐, B2B 비교 지표가 같은 보정값을 기준으로 다시 계산됩니다.</small>
+          <strong>${applied ? "보정값이 우선 적용 중입니다" : "저장하면 아래 기준에 바로 반영됩니다"}</strong>
+          <small>업체 관리와 사업자 비교 지표가 같은 보정값을 기준으로 다시 계산됩니다.</small>
         </div>
         <mark>${escapeHtml(applied ? "적용 중" : "저장 대기")}</mark>
       </div>
@@ -17173,7 +17173,7 @@ function adminDbQuickCorrectionPanel(row = {}) {
         <div>
           <span>즉시 수정</span>
           <strong>지역·채널·쿠폰·수량/가격 보정</strong>
-          <small>저장하면 전체 DB와 B2B 비교 기준에 보정값이 우선 적용됩니다.</small>
+          <small>저장하면 업체 관리와 사업자 비교 기준에 보정값이 우선 적용됩니다.</small>
         </div>
         ${adminDbCorrectionFlashHtml(companyId)}
       </div>
@@ -17198,10 +17198,10 @@ function companyMasterSalesTargetsPanel(master = {}) {
   return `
     <div class="company-sales-panel">
       <div class="company-sales-metrics">
-        <article><span>바로 컨택</span><strong>${fmtNumber(topTargets.length)}</strong><small>판단 큐 제외</small></article>
-        <article><span>확정 타깃</span><strong>${fmtNumber(confirmedTargets.length)}</strong><small>관리자 판단 맞음</small></article>
+        <article><span>바로 컨택</span><strong>${fmtNumber(topTargets.length)}</strong><small>확인 대상 제외</small></article>
+        <article><span>확정 타깃</span><strong>${fmtNumber(confirmedTargets.length)}</strong><small>검수 완료</small></article>
         <article><span>벤치마크</span><strong>${fmtNumber(targets.benchmarkCount || 0)}</strong><small>광역+로컬 강자</small></article>
-        <article><span>판단 큐</span><strong>${fmtNumber(queueCount)}</strong><small>컨택 전 확인</small></article>
+        <article><span>확인 대상</span><strong>${fmtNumber(queueCount)}</strong><small>컨택 전 확인</small></article>
       </div>
       <div class="company-sales-list">
         <strong>바로 컨택 후보</strong>
@@ -17215,7 +17215,7 @@ function companyMasterSalesTargetsPanel(master = {}) {
             ${companySalesTargetTagHtml(company, 5)}
             <p>${escapeHtml((company.salesTarget?.reasons || []).slice(0, 3).join(" · ") || company.salesTarget?.recommendation || "추가 확인 필요")}</p>
           </article>
-        `).join("") : `<p>현재 기준 바로 컨택 후보가 없습니다. 판단 큐 항목은 아래에서 먼저 확인하세요.</p>`}
+        `).join("") : `<p>현재 기준 바로 컨택 후보가 없습니다. 확인 대상 항목을 먼저 확인하세요.</p>`}
       </div>
     </div>
   `;
@@ -17372,7 +17372,7 @@ function companyMasterListPanel(master = {}) {
   return `
     <div class="company-master-list-panel">
       <div class="company-master-list-head">
-        <strong>업체 마스터 리스트</strong>
+        <strong>업체 기준값 목록</strong>
         <span>${fmtNumber(rows.length)}개 표시</span>
       </div>
       <div class="company-master-list">
@@ -18043,12 +18043,12 @@ function adminDbPageScrollSelector(mode = "region") {
 function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], grouped = []) {
   const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
   const buttons = [
-    ["region", "지역 구조", `광역 ${fmtNumber(grouped.length)} · 지역 ${fmtNumber(regionCount)}`],
-    ["list", "업체 리스트", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
-    ["review", "상세·수정", "B2B 보기 + 내부 판단"]
+    ["region", "지역별 보기", `광역 ${fmtNumber(grouped.length)} · 지역 ${fmtNumber(regionCount)}`],
+    ["list", "업체 목록", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
+    ["review", "상세 수정", "수정·확인"]
   ];
   return `
-    <div class="admin-db-view-switch" role="tablist" aria-label="전체 DB 보기 방식">
+    <div class="admin-db-view-switch" role="tablist" aria-label="업체 관리 보기 방식">
       ${buttons.map(([value, label, note]) => `
         <button type="button" class="${mode === value ? "active" : ""}" data-admin-db-view="${escapeHtml(value)}" role="tab" aria-selected="${mode === value ? "true" : "false"}">
           <span>${escapeHtml(label)}</span>
@@ -18105,7 +18105,7 @@ function adminDbFlowRailHtml(mode = "region", filteredRows = [], rows = [], grou
     }
   ];
   return `
-    <section class="admin-db-flow-rail" aria-label="전체 DB 작업 흐름">
+    <section class="admin-db-flow-rail" aria-label="업체 관리 작업 흐름">
       ${steps.map((step) => `
         <button type="button" class="${stage === step.key ? "active" : ""}" data-admin-db-view="${escapeHtml(step.view)}">
           <span>${escapeHtml(step.label)}</span>
@@ -18133,29 +18133,29 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
   ].filter(Boolean).length;
   const guide = {
     region: {
-      label: "지역 구조",
+      label: "지역별 보기",
       title: "광역 · 시군구",
       copy: "",
       metric: `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`
     },
     list: {
       label: "업체 찾기",
-      title: "업체 리스트",
+      title: "업체 목록",
       copy: "",
       metric: `${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개`
     },
     review: {
       label: "상세 검수",
-      title: "상세 · 수정",
+      title: "상세 수정",
       copy: "",
       metric: state.adminDbSelectedCompanyId ? "선택 업체 검수" : "우선 검수 업체"
     }
   }[mode] || {};
   return `
-    <section class="admin-db-page-guide ${escapeHtml(mode)}" aria-label="전체 DB 현재 보기 안내">
+    <section class="admin-db-page-guide ${escapeHtml(mode)}" aria-label="업체 관리 현재 보기 안내">
       <div>
-        <span>${escapeHtml(guide.label || "전체 DB")}</span>
-        <strong>${escapeHtml(guide.title || "전체 DB 보기")}</strong>
+        <span>${escapeHtml(guide.label || "업체 관리")}</span>
+        <strong>${escapeHtml(guide.title || "업체 보기")}</strong>
         ${guide.copy ? `<small>${escapeHtml(guide.copy)}</small>` : ""}
       </div>
       <div class="admin-db-page-guide-meta">
@@ -18710,11 +18710,11 @@ function adminDbWorkReason(row = {}) {
   const workType = metrics.workType || {};
   const issues = metrics.issues || [];
   if (metrics.lowConfidence) return "수량 신뢰도가 낮아 객실 총량과 상품 구성을 먼저 확인해야 합니다.";
-  if (workType.key === "manual") return "관리자 보정이 필요한 상태입니다. 객실수/상품별 수량을 확정하세요.";
+  if (workType.key === "manual") return "보정이 필요한 상태입니다. 객실수/상품별 수량을 확정하세요.";
   if (workType.key === "recrawl") return "총량 변동 또는 조건 변화가 있어 같은 기간으로 재수집이 필요합니다.";
   if (!metrics.revenue) return "매출 표본이 없어 가격 또는 판매수량 연결 상태를 확인해야 합니다.";
   if (!Number.isFinite(metrics.rate)) return "예약율 표본이 없어 네이버 예약 기준 판매율 확인이 필요합니다.";
-  if (!metrics.adminReview) return "관리자 판단 전 업체입니다. 확인/완료/보정/보류 중 하나로 정리하세요.";
+  if (!metrics.adminReview) return "검수 전 업체입니다. 확인/완료/보정/보류 중 하나로 정리하세요.";
   return issues.slice(0, 2).join(" · ") || "추가 확인 후 상태를 확정하세요.";
 }
 
@@ -18844,7 +18844,7 @@ function adminDbInternalJudgmentCards(row = {}) {
     {
       label: "수집 구분",
       value: collection.label || "자동수집",
-      note: collection.detail || collection.note || "마스터 누적",
+      note: collection.detail || collection.note || "저장값 기준",
       tone: collection.tone || "neutral"
     },
     {
@@ -18854,13 +18854,13 @@ function adminDbInternalJudgmentCards(row = {}) {
       tone: channels.length ? "watch" : "good"
     },
     {
-      label: "관리자 보정",
+      label: "보정값",
       value: correction ? "적용" : "미적용",
-      note: correction ? "보정값이 전체 DB 우선값" : "자동수집값 기준",
+      note: correction ? "보정값 우선" : "자동수집값 기준",
       tone: correction ? "good" : "neutral"
     },
     {
-      label: "판단 기록",
+      label: "검수 기록",
       value: review.label || companyAdminReviewLabel(review.status),
       note: review.note || companyReviewContextText(review.context || {}) || "상태 저장 대기",
       tone: review.status ? "good" : "watch"
@@ -18893,9 +18893,9 @@ function adminDbSelectedDecisionCards(row = {}, requiredChannels = []) {
       tone: metrics.revenue && Number.isFinite(metrics.rate) ? "good" : "watch"
     },
     {
-      label: "3. 마스터 보정",
+      label: "3. 기준값 수정",
       value: correction ? "적용됨" : (metrics.lowConfidence ? "필요" : "대기"),
-      note: correction ? "보정값이 전체 DB 우선값" : (metrics.lowConfidence ? "객실 총량·상품 구조 확인" : "자동수집값 기준"),
+      note: correction ? "보정값 우선" : (metrics.lowConfidence ? "객실 총량·상품 구조 확인" : "자동수집값 기준"),
       tone: correction ? "good" : (metrics.lowConfidence ? "hot" : "neutral")
     },
     {
@@ -19023,7 +19023,7 @@ function adminDbWorkPanel(rows = []) {
         <div>
           <span>관리자 처리 보드</span>
           <strong>신뢰도 낮은 업체부터 상태를 정리합니다.</strong>
-          <small>전체 DB에서 바로 검수 상태를 저장하고, 필요한 업체는 확인 수집 또는 보정 화면으로 이동합니다.</small>
+          <small>업체 관리에서 바로 검수 상태를 저장하고, 필요한 업체는 확인 수집 또는 보정 화면으로 이동합니다.</small>
         </div>
         <mark>${fmtNumber(workRows.length)}곳 처리 대상</mark>
       </div>
@@ -19290,7 +19290,7 @@ function adminDbRecheckOutcomeHtml(row = {}) {
           ["이전 수집", previousDate, "비교 기준"],
           ["최신 수집", latestDate, "확인 수집 결과"],
           ["자동 판정", statusLabel, firstReason],
-          ["다음 처리", recommendation.label || adminDbRecheckToneLabel(comparison.tone), "추천 적용 후 관리자 판단에 기록"]
+          ["다음 처리", recommendation.label || adminDbRecheckToneLabel(comparison.tone), "추천 적용 후 검수 이력에 기록"]
         ].map(([label, value, note]) => `
           <article>
             <span>${escapeHtml(label)}</span>
@@ -19493,8 +19493,8 @@ function adminDbSelectedDetailPanel(rows = []) {
   const reviewBody = `
     <div class="admin-db-selected-review">
       <div>
-        <strong>관리자 판단</strong>
-        <small>검수 상태와 메모는 전체 DB와 판단 큐에 함께 반영됩니다.</small>
+        <strong>검수 상태</strong>
+        <small>검수 상태와 메모는 업체 관리에 함께 반영됩니다.</small>
       </div>
       ${companyReviewActionsHtml(company, true, "admin_db_detail")}
     </div>
@@ -19504,7 +19504,7 @@ function adminDbSelectedDetailPanel(rows = []) {
     <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}">
       <div class="admin-db-selected-head">
         <div>
-          <span>업체 상세 · B2B 지표 + 내부 판단</span>
+          <span>업체 상세</span>
           <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
           <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, metrics.sourceLabel].filter(Boolean).join(" · "))}</small>
         </div>
@@ -19512,31 +19512,31 @@ function adminDbSelectedDetailPanel(rows = []) {
       </div>
       ${adminDbSelectedDecisionPanel(row, issues, requiredChannels)}
       <section class="admin-db-selected-readonly" aria-label="읽기 전용 지표">
-        ${adminDbSelectedSectionHead("지표 확인", "B2B 보기와 내부 판단을 필요할 때 펼쳐 확인합니다", "기본 화면에는 작업 판단만 두고, 비교 지표는 접힘 카드로 분리했습니다.")}
+        ${adminDbSelectedSectionHead("비교 지표", "필요할 때 펼쳐 확인합니다", "")}
         ${adminDbSelectedFoldBlock({
-          label: "B2B 기준",
+          label: "사업자 화면 기준",
           title: "노출·예약율·예상매출·상품·채널",
-          note: "사업자 화면 기준",
+          note: "공개 지표",
           body: `<div class="admin-db-selected-grid">${b2bCards.map(adminDbSelectedMetricCard).join("")}</div>`
         })}
         ${adminDbSelectedFoldBlock({
-          label: "내부 판단",
+          label: "검수 기준",
           title: "신뢰도·보정·확인 채널·처리 상태",
-          note: "관리자 전용 기준",
+          note: "관리자용",
           body: `<div class="admin-db-selected-grid internal">${internalCards.map(adminDbSelectedMetricCard).join("")}</div>`
         })}
       </section>
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
-        ${adminDbSelectedSectionHead("수정·처리", "필요한 작업만 펼쳐 실행합니다", "보정값은 전체 DB와 B2B 비교 기준에 우선 적용됩니다.")}
+        ${adminDbSelectedSectionHead("수정·처리", "필요한 작업만 펼쳐 실행합니다", "")}
         <div class="admin-db-selected-actions primary">
           <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집</button>
-          <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
+          <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">지역에서 보기</button>
           <button type="button" data-admin-db-view-link="list">목록으로 돌아가기</button>
-          <button type="button" data-admin-db-view-link="region">지역 구조 보기</button>
+          <button type="button" data-admin-db-view-link="region">지역별 보기</button>
         </div>
         <div class="admin-db-selected-workbench-stack">
           ${adminDbSelectedFoldBlock({
-            label: "1. 관리자 판단",
+            label: "1. 검수 상태",
             title: "검수 상태와 메모 저장",
             note: "기본으로 열림",
             body: reviewBody,
@@ -19544,7 +19544,7 @@ function adminDbSelectedDetailPanel(rows = []) {
             tone: "review"
           })}
           ${adminDbSelectedFoldBlock({
-            label: "2. 마스터 보정",
+            label: "2. 기준값 수정",
             title: "지역·채널·쿠폰·수량/가격 수정",
             note: "필요할 때 열기",
             body: correctionBody,
@@ -19705,8 +19705,8 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
     <section class="admin-db-flat-list" data-surface="dark">
       <div class="admin-db-flat-head">
         <div>
-          <span>업체 리스트</span>
-          <strong>검색·필터 결과를 페이지 단위로 정리합니다</strong>
+          <span>업체 목록</span>
+          <strong>검색 결과</strong>
           <small>${escapeHtml(scopeText)} · ${fmtNumber(rows.length)}/${fmtNumber(allRows.length)}개 업체 · ${fmtNumber(rangeStart)}-${fmtNumber(rangeEnd)} 표시</small>
         </div>
         <mark>${fmtNumber(page)} / ${fmtNumber(totalPages)}쪽</mark>
@@ -19714,7 +19714,7 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
       <div class="admin-db-list-guide" aria-label="업체 리스트 기준">
         <span>정렬 ${escapeHtml(sortText)}</span>
         <span>페이지당 ${fmtNumber(pageSize)}개</span>
-        <span>상세·수정에서 보정</span>
+        <span>상세 수정</span>
       </div>
       <div class="admin-db-company-list flat">
         ${shown.length ? shown.map((row, index) => adminDbCompanyRow(row, { index: startIndex + index + 1 })).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
@@ -19736,15 +19736,15 @@ function adminDbUserViewBridgeHtml(row = null) {
     : "선택 업체 없음";
   const note = company.primaryName
     ? [row.provinceLabel, row.localityLabel, metrics.category?.label].filter(Boolean).join(" · ")
-    : "업체를 선택하면 상세·수정 화면에서 B2B 지표와 관리자 판단을 함께 확인합니다.";
+    : "업체를 선택하면 사업자 화면 기준 지표를 확인합니다.";
   return `
-    <section class="admin-db-user-view-bridge" aria-label="B2B 보기 분리">
+    <section class="admin-db-user-view-bridge" aria-label="사업자 화면 보기">
       <div>
-        <span>B2B 보기 분리</span>
+        <span>사업자 화면</span>
         <strong>사업자 화면은 새 창에서 확인합니다</strong>
         <small>${escapeHtml(`${label} · ${note || "사업자 공개 화면 기준만 확인"}`)}</small>
       </div>
-      <button type="button" data-admin-user-view-open>B2B 화면 새창</button>
+      <button type="button" data-admin-user-view-open>새창으로 보기</button>
     </section>
   `;
 }
@@ -19754,9 +19754,9 @@ function adminDbMasterSummary(filteredRows = [], rows = [], grouped = []) {
   return `
     <div class="admin-db-master-guide">
       <div>
-        <span>마스터 데이터 구조</span>
-        <strong>광역/도 카드 → 시군구 → 업체 가나다 리스트</strong>
-        <small>먼저 지역 구조를 펼친 뒤 업체를 찾고, 필요한 경우 검색·필터로 좁혀 보정합니다.</small>
+        <span>지역별 업체</span>
+        <strong>광역/도 → 시군구 → 업체</strong>
+        <small>가나다순 · 검색/필터 지원</small>
       </div>
       <mark>${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역 · ${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체</mark>
     </div>
@@ -19805,11 +19805,11 @@ function adminDbClassificationAuditStrip(rows = [], filteredRows = [], filters =
     filters.quality !== "all" ? "분류 점검" : ""
   ].filter(Boolean).join(" · ") || "전체";
   return `
-    <section class="admin-db-quality-strip" aria-label="전체 DB 분류 점검">
+    <section class="admin-db-quality-strip" aria-label="업체 관리 분류 점검">
       <div class="admin-db-quality-head">
         <div>
-          <span>분류 점검</span>
-          <strong>지역·신뢰도·확인 수집 대상을 먼저 정리합니다</strong>
+          <span>검수 우선순위</span>
+          <strong>보강이 필요한 업체</strong>
           <small>${escapeHtml(activeLabel)} 조건 · 현재 ${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 표시 · 점검 점수 ${fmtNumber(filteredStats.score)}점</small>
         </div>
         <mark class="${escapeHtml(filteredStats.tone || "watch")}">${escapeHtml(filteredStats.nextAction || "점검")}</mark>
@@ -19886,7 +19886,7 @@ function scheduleAdminRegionCompanyQueryRender(input, delay = 120) {
 function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole() || !els.adminDatabaseDashboard) return;
   if (master.error) {
-    els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">전체 DB 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    els.adminDatabaseDashboard.innerHTML = `<div class="admin-console-empty">업체 관리 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
   }
   const { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = adminDbFilterState(master);
@@ -19902,7 +19902,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const viewMode = (filters.query || "").trim() ? "list" : adminDbViewMode();
   const metricSummaryHtml = `
     <div class="admin-db-metrics">
-      ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "마스터 DB 기준", "good")}
+      ${adminDbMetricCard("전체 업체", fmtNumber(rows.length), "저장 기준", "good")}
       ${adminDbMetricCard("낮은 신뢰도", fmtNumber(lowConfidence), "수량·매출 확인 우선", lowConfidence ? "hot" : "good")}
       ${adminDbMetricCard("관리자 보정", fmtNumber(manualCount), "보정값 우선 적용", manualCount ? "good" : "")}
       ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버 제외 채널", "watch")}
@@ -20048,8 +20048,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     <section class="admin-db-board" id="adminDatabaseBoard">
       <div class="admin-db-hero">
         <div>
-          <span>전체 DB</span>
-          <h3>지역·업체 DB</h3>
+          <span>업체 관리</span>
+          <h3>지역·업체</h3>
         </div>
         <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
       </div>
@@ -20090,10 +20090,10 @@ function adminConsoleKpis(master = {}, entries = []) {
   const cacheHit = Boolean(trend.cache?.hit);
   return [
     ["오늘 수집", todayRuns, `${fmtNumber(state.runs?.length || 0)}개 실행 결과`, "neutral"],
-    ["판단 필요", openEntries.length, "전체 DB에서 확인", openEntries.length ? "warning" : "good"],
+    ["검수 필요", openEntries.length, "업체 관리에서 확인", openEntries.length ? "warning" : "good"],
     ["보정 필요", manualNeeded, "수량/총량 검토", manualNeeded ? "bad" : "good"],
-    ["컨택 가능", contactReady, "큐 제외 후보", contactReady ? "good" : "neutral"],
-    ["캐시 재사용률", trend.collectable || trend.cache ? (cacheHit ? "100%" : "0%") : "대기", cacheHit ? "동일 기준일 캐시" : "이번 실행/대기", cacheHit ? "good" : "neutral"]
+    ["컨택 가능", contactReady, "검수 제외 후보", contactReady ? "good" : "neutral"],
+    ["트렌드 저장값", trend.collectable || trend.cache ? (cacheHit ? "사용" : "신규") : "대기", cacheHit ? "같은 기준일 재사용" : "이번 실행 기준", cacheHit ? "good" : "neutral"]
   ];
 }
 
@@ -20209,7 +20209,7 @@ function adminRegionalSummaryCells(summary = {}) {
   const reviewWorkCount = Number(summary.adminReviewNeededRegionCount || 0) + Number(summary.adminCollectNeededRegionCount || 0);
   return [
     ["관리 지역", summary.regionCount || 0, "지역 카드 후보"],
-    ["업체 마스터", summary.companyCount || 0, "지역 분류 완료"],
+    ["업체 기준값", summary.companyCount || 0, "지역 분류 완료"],
     ["B2B 공개", summary.adminPublicReadyRegionCount || summary.preflightReadyRegionCount || summary.publicReadyRegionCount || 0, "지역 기준 확인"],
     ["검토/보강", reviewWorkCount, "공개 전 확인"],
     ["관리자 감수", summary.regionReviewCount || 0, "지역 상태 저장"],
@@ -20862,7 +20862,7 @@ function adminRegionAuditFilterOptions(auditRows = []) {
   return [
     { key: "all", label: "전체", count: auditRows.length, note: "모든 변경", match: () => true },
     { key: "region", label: "지역 판단", count: count((row) => row.kind === "지역"), note: "공개 상태", match: (row) => row.kind === "지역" },
-    { key: "review", label: "업체 검수", count: count((row) => row.kind === "판단"), note: "관리자 판단", match: (row) => row.kind === "판단" },
+    { key: "review", label: "업체 검수", count: count((row) => row.kind === "판단"), note: "검수 상태", match: (row) => row.kind === "판단" },
     { key: "correction", label: "수동 보정", count: count((row) => row.kind === "보정"), note: "객실/수량", match: (row) => row.kind === "보정" },
     { key: "contact", label: "컨택", count: count((row) => row.kind === "컨택"), note: "영업 기록", match: (row) => row.kind === "컨택" }
   ];
@@ -21042,7 +21042,7 @@ function adminRegionReviewSummaryPanel(region = {}, rows = []) {
         <div>
           <span>지역 검수 집계</span>
           <strong>${fmtNumber(stats.reviewed)}/${fmtNumber(stats.total)}곳 검수</strong>
-          <small>업체 마스터 저장값 기준 · ${escapeHtml(actionNote)}</small>
+          <small>업체 기준값 기준 · ${escapeHtml(actionNote)}</small>
         </div>
         <mark>${fmtRate(stats.progress)}</mark>
       </div>
@@ -21216,7 +21216,7 @@ function adminRegionPreflightChecklistItems(region = {}, rows = [], profile = {}
   }
   return [
     {
-      label: "업체 마스터 지역 분류",
+      label: "업체 기준값 지역 분류",
       detail: `${fmtNumber(companyCount)}곳 지역 연결`,
       state: companyCount ? "done" : "pending"
     },
@@ -21334,7 +21334,7 @@ function adminRegionFinalApprovalPanel(region = {}, rows = [], profile = {}) {
         <article>
           <span>업체 검수</span>
           <strong>${fmtRate(adminRegionWorkflowStats(rows).progress)}</strong>
-          <small>관리자 판단 진행률</small>
+          <small>검수 진행률</small>
         </article>
       </div>
       <div class="admin-region-approval-missing">
@@ -21394,7 +21394,7 @@ function adminRegionReviewFormHtml(region = {}, rows = [], profile = {}) {
     <div class="admin-region-review-form" data-admin-region-review-form data-region-key="${escapeHtml(region.regionKey || "")}" data-region-label="${escapeHtml(region.regionLabel || "")}" data-province-label="${escapeHtml(region.provinceLabel || "")}" data-checklist-summary="${escapeHtml(summary)}">
       <div>
         <span>지역카드 감수 저장</span>
-        <strong>${escapeHtml(review ? `${review.label} 저장됨` : "관리자 판단 대기")}</strong>
+        <strong>${escapeHtml(review ? `${review.label} 저장됨` : "검수 대기")}</strong>
         <small>${escapeHtml(review?.updatedAt ? `${compactDateTime(review.updatedAt)} · ${review.note || review.fallbackNote || "메모 없음"}` : `체크리스트 ${summary}`)}</small>
       </div>
       <label>
@@ -21781,7 +21781,7 @@ function adminRegionalDetailPanel(region = null, master = {}) {
         <div>
           <span>${escapeHtml(region.provinceLabel || "지역")}</span>
           <strong>${escapeHtml(region.regionLabel || "지역 미확인")} 상세</strong>
-          <small>업체 마스터 기준으로 표본 품질, 보정 필요 업체, 우선 검수 대상을 묶어 봅니다.</small>
+          <small>업체 기준값으로 표본 품질, 보정 필요 업체, 우선 검수 대상을 묶어 봅니다.</small>
         </div>
         <div class="admin-region-verdict ${escapeHtml(verdict.tone)}">
           <span>지역 판정</span>
@@ -21938,7 +21938,7 @@ function adminRegionOperationsQueuePanel(regions = [], selectedRegionKey = "") {
     urgent: { label: "즉시 보강", note: "표본·수량 우선", tone: "hot", rows: [] },
     sample: { label: "표본 보강", note: "예약·매출 추가", tone: "watch", rows: [] },
     correction: { label: "수량/경계", note: "총량·지역권 확인", tone: "watch", rows: [] },
-    review: { label: "감수 대기", note: "관리자 판단 필요", tone: "neutral", rows: [] },
+    review: { label: "감수 대기", note: "검수 필요", tone: "neutral", rows: [] },
     keep: { label: "유지 점검", note: "주간 확인", tone: "good", rows: [] }
   };
   const sampleKeys = new Set(["reservation_sample", "revenue_sample"]);
@@ -22057,8 +22057,8 @@ function adminRegionalOperationsPanel(master = {}) {
     <section class="admin-console-panel admin-regional-ops-panel">
       <div class="admin-console-head">
         <div>
-          <strong>지역별 운영 현황</strong>
-          <small>업체 마스터를 지역별로 묶어 검수 상태, 표본 수, 지역 밖 노출을 먼저 확인합니다.</small>
+          <strong>지역별 현황</strong>
+          <small>검수 상태, 표본 수, 지역 밖 노출을 확인합니다.</small>
         </div>
         <button type="button" data-company-master-focus>지역 마스터 보기</button>
       </div>
@@ -22112,7 +22112,7 @@ function adminConsoleQueuePreview(entries = []) {
     entry.autoRecommendation?.key === "recrawl_needed"
   ).length;
   const summaryCards = [
-    ["판단 필요", openRows.length, "컨택 전 사람 확인"],
+    ["검수 필요", openRows.length, "컨택 전 확인"],
     ["보정 필요", manualNeeded, "총량·수량 구조 확인"],
     ["OTA 확인", otaNeeded, "채널 보조 확인"],
     ["재수집", recrawlNeeded, "조건 변경 후 재확인"]
@@ -22121,10 +22121,10 @@ function adminConsoleQueuePreview(entries = []) {
     <section class="admin-console-panel admin-queue-preview admin-queue-collapsed-card">
       <div class="admin-console-head">
         <div>
-          <strong>판단 필요 요약</strong>
-          <small>운영 현황에서는 확인 대상 수만 보고, 실제 처리는 전체 DB의 판단 필요 필터에서 진행합니다.</small>
+          <strong>검수 필요 요약</strong>
+          <small>확인 대상 수를 먼저 보고, 처리는 업체 관리에서 진행합니다.</small>
         </div>
-        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">전체 DB에서 보기</button>
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">업체 관리에서 보기</button>
       </div>
       <div class="admin-queue-summary-grid">
         ${summaryCards.map(([label, value, note]) => `
@@ -22185,7 +22185,7 @@ function adminConsoleCrawlPanel(entries = []) {
   const cells = [
     ["예상 소요", formatElapsed(preview.estimatedTotalSeconds), crawlEstimateBasisText(preview.estimateBasis)],
     ["완료 예정", formatClockTime(preview.estimatedCompleteAt), `${purpose.shortLabel || purpose.label} · ${payload.detailRankRanges || purpose.defaultRange}위`],
-    ["API/캐시", trend.cache?.hit ? "캐시 사용" : trend.collectable ? "연동 정상" : "대기", trend.cache?.endDate || trend.reason || "동일 기준일 캐시 우선"],
+    ["트렌드 연동", trend.cache?.hit ? "저장값 사용" : trend.collectable ? "연동 정상" : "대기", trend.cache?.endDate || trend.reason || "같은 기준일 우선"],
     ["재수집 후보", fmtNumber(recrawlRows.length), openEntries.length ? "큐 기준 자동 산출" : "대기"],
     ["최근 상세", fmtNumber(counts.naverBookingStockSucceeded || 0), `${fmtNumber(counts.naverBookingStockChecked || 0)}개 시도`],
     ["범위 제외", fmtNumber(counts.naverBookingStockSkippedByRank || 0), "설정 순위 밖"]
@@ -22224,10 +22224,10 @@ function adminConsoleMasterPreview(master = {}) {
     <section class="admin-console-panel admin-master-preview">
       <div class="admin-console-head">
         <div>
-          <strong>업체 마스터</strong>
-          <small>누적 DB 기준 상위 업체와 전략 신호를 빠르게 확인합니다.</small>
+          <strong>업체 기준값</strong>
+          <small>저장된 업체와 전략 신호를 확인합니다.</small>
         </div>
-        <button type="button" data-company-master-focus>마스터 보기</button>
+        <button type="button" data-company-master-focus>업체 보기</button>
       </div>
       <div class="admin-master-table">
         <div class="admin-master-row head">
@@ -22259,7 +22259,7 @@ function adminConsoleMasterPreview(master = {}) {
               <mark class="${corrected ? "good" : latest.confidenceGrade && !["A", "B"].includes(String(latest.confidenceGrade).toUpperCase()) ? "watch" : ""}">${escapeHtml(corrected ? "보정" : (latest.confidenceGrade || "대기"))}</mark>
             </div>
           `;
-        }).join("") : `<p class="empty">업체 마스터가 아직 비어 있습니다.</p>`}
+        }).join("") : `<p class="empty">업체 기준값이 아직 비어 있습니다.</p>`}
       </div>
     </section>
   `;
@@ -22275,16 +22275,16 @@ function adminConsoleTaskQueue(master = {}, entries = []) {
     ["재수집 실행", recrawlRows.length, "예상 시간 기준 묶음 실행", "recrawl"],
     ["수동 보정 입력", manualRows.length, "총량/상품 구조 보정", "correction"],
     ["컨택 가능 전환", contactRows.length, "큐 제외 영업 후보", "contact"],
-    ["중복 병합 검토", duplicateCount, "업체 마스터 정리", "duplicate"]
+    ["중복 병합 검토", duplicateCount, "업체 기준값 정리", "duplicate"]
   ];
   return `
     <section class="admin-console-panel admin-task-panel">
       <div class="admin-console-head">
         <div>
-          <strong>관리자 작업</strong>
-          <small>전체 DB에서 처리할 항목을 작업 단위로 모읍니다.</small>
+          <strong>처리할 작업</strong>
+          <small>확인·보정·재수집 대상을 모읍니다.</small>
         </div>
-        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">전체 DB 처리</button>
+        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">업체 관리</button>
       </div>
       <div class="admin-task-list">
         ${tasks.map(([label, count, note, key]) => {
@@ -22710,7 +22710,7 @@ function renderDecisionQueue() {
   const master = companyMasterSource();
   if (master.error) {
     if (els.decisionQueueCount) els.decisionQueueCount.textContent = "오류";
-    els.decisionQueueList.innerHTML = `<div class="empty">판단 큐 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    els.decisionQueueList.innerHTML = `<div class="empty">확인 대상 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
   }
   const companies = master.companies || [];
@@ -22720,13 +22720,13 @@ function renderDecisionQueue() {
     els.decisionQueueCount.textContent = `${fmtNumber(openCount)} 대기`;
   }
   if (!companies.length) {
-    els.decisionQueueList.innerHTML = `<div class="empty">업체 마스터를 불러오는 중입니다. 관리 탭에서 수집 결과를 선택하거나 기존 결과 전체 반영을 실행하세요.</div>`;
+    els.decisionQueueList.innerHTML = `<div class="empty">업체 기준값을 불러오는 중입니다. 수집 결과를 선택하거나 기존 결과 전체 반영을 실행하세요.</div>`;
     return;
   }
   els.decisionQueueList.innerHTML = `
     <div class="decision-queue-intro">
-      <strong>영업타깃과 판단 큐 분리 기준</strong>
-      <p>영업타깃은 바로 컨택 가능한 업체만 표시하고, 판단 큐는 OTA·수량 구조·날짜별 총량·판매 공백·수동 보정 신호가 있어 사람이 확인해야 하는 업체만 모읍니다.</p>
+      <strong>확인 대상 기준</strong>
+      <p>OTA, 수량 구조, 날짜별 총량 변동, 판매 공백, 보정 신호가 있으면 컨택 전 확인 대상으로 묶습니다.</p>
     </div>
     ${companyMasterCheckPanel(master)}
   `;
@@ -22762,13 +22762,13 @@ function renderCompanyMasterPanel() {
     els.companyMasterState.textContent = master.error ? "오류" : master.totalCompanies ? `${fmtNumber(master.totalCompanies)} 업체` : "대기";
   }
   if (master.error) {
-    els.companyMasterPanel.innerHTML = `<div class="empty">업체 마스터 로딩 실패: ${escapeHtml(master.error)}</div>`;
+    els.companyMasterPanel.innerHTML = `<div class="empty">업체 기준값 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
   }
   if (!master.totalCompanies) {
     els.companyMasterPanel.innerHTML = `
       <div class="empty">
-        업체 마스터 DB가 아직 비어 있습니다. 수집 결과를 열면 업체별 고유키와 키워드 이력이 자동 저장됩니다.
+        업체 기준값이 아직 비어 있습니다. 수집 결과를 열면 업체별 고유키와 키워드 이력이 자동 저장됩니다.
       </div>
       ${companyMasterTools()}
     `;
@@ -22794,10 +22794,10 @@ function renderHistoryOps() {
   const overall = ops.overall || {};
   const activeKeywordRow = activeHistoryKeywordSummary();
   if (!ops.keywords?.length) {
-    if (els.historyOpsState) els.historyOpsState.textContent = "누적 대기";
+    if (els.historyOpsState) els.historyOpsState.textContent = "이력 대기";
     els.historyOpsDashboard.innerHTML = `
       <section class="history-ops-empty">
-        <strong>누적 DB가 아직 비어 있습니다.</strong>
+        <strong>수집 이력이 아직 비어 있습니다.</strong>
         <p>같은 키워드를 반복 수집하면 키워드별 이력, 회차 비교, 업체별 추이가 자동으로 쌓입니다.</p>
       </section>
       ${collectionQualityMonitorHtml()}
@@ -22808,7 +22808,7 @@ function renderHistoryOps() {
   els.historyOpsDashboard.innerHTML = `
     <section class="history-ops-hero">
       <div>
-        <p class="eyebrow">누적 DB 운영</p>
+        <p class="eyebrow">수집 이력</p>
         <h3>${escapeHtml(activeKeywordRow?.keyword || activeKeyword())}</h3>
       </div>
       <span>${escapeHtml(activeKeywordRow?.latestCollectedDate || overall.latestCollectedAt?.slice(0, 10) || "대기")}</span>
@@ -22980,7 +22980,7 @@ function renderTargets() {
 
   els.targetCount.textContent = `${fmtNumber(actionableCount || currentItems.length)} 타깃`;
   if (!boardEntries.length && !currentItems.length && !allGatedEntries.length) {
-    els.targetList.innerHTML = `<div class="empty">현재 기준 바로 컨택 가능한 영업 후보가 없습니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 관리 탭에서 먼저 확인하세요.</div>`;
+    els.targetList.innerHTML = `<div class="empty">현재 기준 바로 컨택 가능한 후보가 없습니다. 확인 대상 ${fmtNumber(decisionQueueCount)}개는 관리 탭에서 먼저 확인하세요.</div>`;
     return;
   }
 
@@ -23055,7 +23055,7 @@ function renderTargets() {
       <div class="target-lane-head">
         <div>
           <strong>컨택 보류 사유</strong>
-          <small>판단 큐에 남아 있어 영업타깃에서 제외된 업체와 확인 근거입니다.</small>
+          <small>확인 대상으로 남아 있어 컨택 후보에서 제외된 업체와 확인 근거입니다.</small>
         </div>
         <span>${fmtNumber(filteredRows.length)} / ${fmtNumber(allRows.length)}</span>
       </div>
@@ -23078,14 +23078,14 @@ function renderTargets() {
             <div class="target-gate-grid">
               <div><span>큐 사유</span><strong>${escapeHtml(decision.label || type?.label || "확인 필요")}</strong><small>${escapeHtml(decision.problemDateText || "문제 날짜 확인")}</small></div>
               <div><span>수량/공백</span><strong>${escapeHtml(decision.quantityConfidence || "수량 확인")}</strong><small>${escapeHtml(decision.gapType || "공백 유형 없음")}</small></div>
-              <div><span>확인 채널</span><strong>${escapeHtml(decision.channelText || "네이버 기준")}</strong><small>${escapeHtml(autoRecommendation?.label || workflow?.label || "관리자 판단")}</small></div>
+              <div><span>확인 채널</span><strong>${escapeHtml(decision.channelText || "네이버 기준")}</strong><small>${escapeHtml(autoRecommendation?.label || workflow?.label || "검수 상태")}</small></div>
               <div><span>예상매출</span><strong>${fmtWon(effectiveRevenueValue(revenueImpact || {}))}</strong><small>${escapeHtml(revenueAdjustmentNote(revenueImpact || {}))}</small></div>
             </div>
             ${salesGateRevenueEvidenceHtml(entry)}
             <p>${escapeHtml(gateReason)}</p>
             ${salesGateReviewActionsHtml(entry)}
             <div class="target-card-actions">
-              <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">전체 DB에서 처리</button>
+              <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">업체 관리에서 처리</button>
               <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="files">관리에서 확인</button>
             </div>
           </article>
@@ -23106,7 +23106,7 @@ function renderTargets() {
     <section class="target-export-bar">
       <div>
         <strong>영업 반응/성과 추적 V2</strong>
-        <small>컨택 결과와 반응 사유를 기록하고, 응답률·관심률·미팅 전환률과 제안 유형별 반응을 우선순위에 반영합니다. 판단 큐 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
+        <small>컨택 결과와 반응 사유를 기록하고, 응답률·관심률·미팅 전환률과 제안 유형별 반응을 우선순위에 반영합니다. 확인 대상 ${fmtNumber(decisionQueueCount)}개는 분리되어 있습니다.</small>
       </div>
       <div class="target-export-actions">
         <button type="button" data-export-sales-targets>컨택+반응 CSV</button>
@@ -23130,14 +23130,14 @@ function renderTargets() {
     </section>
     <section class="target-board">
       ${lane("확정 타깃", "관리자가 판단 맞음으로 확정한 업체", confirmed, "아직 확정 타깃이 없습니다. 관리 탭에서 후보를 검증하세요.")}
-      ${lane("컨택 후보", "판단 큐에 걸리지 않은 바로 컨택 가능한 업체", contact, "현재 바로 컨택 가능한 후보가 없습니다.")}
+      ${lane("컨택 후보", "확인 대상에 걸리지 않은 바로 컨택 가능한 업체", contact, "현재 바로 컨택 가능한 후보가 없습니다.")}
     </section>
     ${currentOnly.length ? `
       <section class="target-current-run">
         <div class="target-lane-head">
           <div>
             <strong>현재 수집 결과 후보</strong>
-            <small>아직 업체 마스터 검증 전인 단기 후보</small>
+            <small>아직 업체 기준값 검증 전인 단기 후보</small>
           </div>
           <span>${fmtNumber(currentOnly.length)}</span>
         </div>
@@ -26407,7 +26407,7 @@ function sheetCollectionStatusPanel(item = {}) {
         `).join("")}
       </div>
       <div class="sheet-audit-reasons">
-        ${(status.reasons.length ? status.reasons : [`판단 큐 상태: ${decision.inQueue ? decision.label : "바로 판단 가능"}`]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
+        ${(status.reasons.length ? status.reasons : [`확인 상태: ${decision.inQueue ? decision.label : "바로 판단 가능"}`]).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
       </div>
     </section>
   `;
@@ -26467,7 +26467,7 @@ function sheetAuditDetailProfile(item = {}) {
     comparison,
     revenueImpact,
     revenueEvidence: queueRevenueEvidenceProfile(revenueImpact),
-    sourceLabel: "누적 업체 DB"
+    sourceLabel: "저장된 업체 기준값"
   };
 }
 
@@ -26481,14 +26481,14 @@ function sheetAuditCriteriaForDetail(detail = {}) {
       key: `reason_${index}`,
       label: index ? "보조 근거" : (decision.label || "확인 필요"),
       reason,
-      action: (decision.actions || [])[index] || "관리자 확인 후 컨택/보류 판단"
+      action: (decision.actions || [])[index] || "확인 후 컨택/보류 판단"
     }));
   }
   return [{
     key: "clear",
     label: decision.inQueue ? (decision.label || "확인 필요") : "바로 판단 가능",
-    reason: decision.summary || (decision.inQueue ? "관리자 판단 근거 확인 필요" : "현재 기준 큐 진입 사유 없음"),
-    action: decision.inQueue ? "근거 확인 후 상태 저장" : "영업타깃 분리 기준 통과"
+    reason: decision.summary || (decision.inQueue ? "확인 근거 점검 필요" : "현재 기준 확인 사유 없음"),
+    action: decision.inQueue ? "근거 확인 후 상태 저장" : "컨택 기준 통과"
   }];
 }
 
@@ -26516,16 +26516,16 @@ function sheetAuditPanel(item = {}) {
     ["보정 상태", decision.correctionText || itemDecision.correctionText, correctionDetail]
   ];
   const summaryRows = [
-    ["큐 상태", queueActive ? (decision.label || itemDecision.label || "판단 큐") : "바로 판단 가능", detail.sourceLabel],
-    ["추천 처리", recommendation?.label || (queueActive ? "확인 필요" : "컨택 가능"), compactListText(recommendation?.reasons || decision.actions || [], "관리자 판단 기준", 2)],
-    ["관리자 판단", review.label || companyAdminReviewLabel(review.status), review.note || companyReviewContextText(review.context || {}) || "저장 메모 없음"],
+    ["확인 상태", queueActive ? (decision.label || itemDecision.label || "확인 대상") : "바로 판단 가능", detail.sourceLabel],
+    ["추천 처리", recommendation?.label || (queueActive ? "확인 필요" : "컨택 가능"), compactListText(recommendation?.reasons || decision.actions || [], "검수 기준", 2)],
+    ["검수 상태", review.label || companyAdminReviewLabel(review.status), review.note || companyReviewContextText(review.context || {}) || "저장 메모 없음"],
     ["수동 보정", hasManualCorrection ? "보정 있음" : (review.status === "manual_needed" ? "보정 필요" : "보정 없음"), correctionDetail]
   ];
   const reasonChips = (decision.reasons || []).length ? decision.reasons : (itemDecision.reasons || []);
   return `
     <section class="sheet-section sheet-audit-section ${escapeHtml(tone)}">
       <div class="sheet-structure-title">
-        <h3>관리자 판단 큐 V2</h3>
+        <h3>확인 대상</h3>
         <span class="structure-badge ${escapeHtml(audit.otaCheckNeeded ? "ota-check" : tone)}">${escapeHtml(queueActive ? (decision.label || itemDecision.label) : "바로 판단 가능")}</span>
       </div>
       <div class="sheet-audit-summary">
@@ -26743,7 +26743,7 @@ function sheetFlowOverview(item = {}) {
     <section class="sheet-section sheet-decision-section">
       <div class="sheet-decision-head">
         <div>
-          <h3>${publicMode ? "요일별 판매 흐름" : "관리자 판단 요약"}</h3>
+          <h3>${publicMode ? "요일별 판매 흐름" : "검수 요약"}</h3>
           <p>${escapeHtml(publicMode ? "평일, 금요일, 토요일, 일요일 판매 흐름을 나눠 경쟁 흐름을 봅니다." : `${analysis.label} · ${fmtNumber(analysis.score)}점 · ${structure.label}`)}</p>
         </div>
         <span class="confidence-badge ${escapeHtml(correctionStatus.tone)}">${escapeHtml(publicMode ? "판매 흐름" : correctionStatus.label)}</span>
@@ -26895,7 +26895,7 @@ function sheetHistoryPanel(item = {}) {
   return `
     <section class="sheet-section sheet-history-section">
       <div class="sheet-structure-title">
-        <h3>누적 DB 비교</h3>
+        <h3>수집 이력 비교</h3>
         <span class="structure-badge watch">${fmtNumber(cumulativeAll.runCount || 0)}회 수집</span>
       </div>
       <div class="sheet-history-grid">
@@ -27783,10 +27783,10 @@ async function saveCompanyCorrection(button, clear = false) {
     feedback.innerHTML = companyManualFeedbackHtml({
       tone: "progress",
       title: shouldClear ? "해제 처리 중" : "저장 처리 중",
-      message: shouldClear ? "관리자 보정값을 해제하고 있습니다." : "관리자 보정값을 저장하고 있습니다.",
+      message: shouldClear ? "보정값을 해제하고 있습니다." : "보정값을 저장하고 있습니다.",
       items: shouldClear
         ? ["보정값 제거", "자동수집 기준 복귀", "관련 지표 재계산"]
-        : ["전체 DB 기준값 갱신", "판단 큐 재분류", "B2B 비교 지표 반영"],
+        : ["업체 기준값 갱신", "확인 대상 재분류", "사업자 지표 반영"],
       next: "처리가 끝나면 이 위치에 결과가 표시됩니다."
     });
     feedback.classList.remove("error");
@@ -27822,11 +27822,11 @@ async function saveCompanyCorrection(button, clear = false) {
       companyId,
       tone: shouldClear ? "neutral" : "success",
       title: shouldClear ? "보정 해제 완료" : "보정 저장 완료",
-      message: shouldClear ? "자동수집 기준으로 다시 전환했습니다." : "관리자 보정값을 우선 기준으로 반영했습니다.",
+      message: shouldClear ? "자동수집 기준으로 다시 전환했습니다." : "보정값을 우선 기준으로 반영했습니다.",
       items: shouldClear
-        ? ["전체 DB 자동수집 기준 복귀", "판단 큐 재검토 기준 갱신", "B2B 비교 지표 자동값 사용"]
-        : ["전체 DB 기준값 갱신", "판단 큐 재분류 기준 갱신", "B2B 예약율·예상매출 비교 기준 반영"],
-      next: shouldClear ? "필요하면 핵심 보정을 다시 입력하세요." : "관리자 판단을 확인 또는 완료로 확정하세요.",
+        ? ["자동수집 기준 복귀", "확인 대상 재검토", "사업자 지표 자동값 사용"]
+        : ["업체 기준값 갱신", "확인 대상 재분류", "사업자 예약율·예상매출 기준 반영"],
+      next: shouldClear ? "필요하면 핵심 보정을 다시 입력하세요." : "검수 상태를 확인 또는 완료로 확정하세요.",
       at: new Date().toISOString()
     };
     if (state.activeRunId) {
@@ -28036,7 +28036,7 @@ async function applyCompanyCheckBulkReview(button) {
     .map((entry) => ({ entry, companyId: entry.company?.companyId || "" }))
     .filter((row) => row.companyId);
   if (!rows.length) {
-    setStatus("일괄 처리할 판단 큐 결과 없음");
+    setStatus("일괄 처리할 확인 대상 결과 없음");
     return;
   }
   const label = companyAdminReviewLabel(status);
@@ -28357,7 +28357,7 @@ function exportSalesGateCsv() {
 function exportDecisionQueueCsv() {
   const { visibleEntries, selectedFilter, filterLabel, checkQuery } = companyCheckVisibleEntries(companyMasterSource());
   if (!visibleEntries.length) {
-    setStatus("내보낼 판단 큐 결과 없음");
+    setStatus("내보낼 확인 대상 결과 없음");
     return;
   }
   const csv = decisionQueueCsv(visibleEntries, { filterLabel, query: checkQuery });
@@ -28371,7 +28371,7 @@ function exportDecisionQueueCsv() {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-  setStatus(`판단 큐 ${fmtNumber(visibleEntries.length)}개 내보내기`);
+  setStatus(`확인 대상 ${fmtNumber(visibleEntries.length)}개 내보내기`);
 }
 
 function exportCollectionQualityCsv() {
@@ -28418,7 +28418,7 @@ function exportRecrawlAutomationCsv() {
 function exportAdminReviewAuditCsv() {
   const rows = adminReviewAuditRows(companyMasterSource());
   if (!rows.length) {
-    setStatus("내보낼 관리자 판단 이력이 없음");
+    setStatus("내보낼 검수 이력이 없음");
     return;
   }
   const csv = adminReviewAuditCsv(companyMasterSource());
@@ -28432,7 +28432,7 @@ function exportAdminReviewAuditCsv() {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
-  setStatus(`관리자 판단 이력 ${fmtNumber(rows.length)}건 내보내기`);
+  setStatus(`검수 이력 ${fmtNumber(rows.length)}건 내보내기`);
 }
 
 function exportAdminRegionAuditCsv() {
@@ -28706,7 +28706,7 @@ async function loadRuns(selectLatest = false) {
     }
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
     if (els.decisionQueueCount) els.decisionQueueCount.textContent = "0 대기";
-    if (els.decisionQueueList) els.decisionQueueList.innerHTML = `<div class="empty">실행 결과가 없습니다. 수집 후 판단 큐가 생성됩니다.</div>`;
+    if (els.decisionQueueList) els.decisionQueueList.innerHTML = `<div class="empty">실행 결과가 없습니다. 수집 후 확인 대상이 생성됩니다.</div>`;
     setStatus("결과 없음");
     return;
   }

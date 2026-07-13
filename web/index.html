@@ -69,11 +69,11 @@
         <button class="active" type="button" data-tab="report">요약</button>
         <button type="button" data-tab="rank">업체순위</button>
         <button type="button" data-tab="dictionary">입지사전</button>
-        <button type="button" data-tab="target">영업타깃</button>
-        <button type="button" data-tab="decisionQueue">판단큐</button>
+        <button type="button" data-tab="target">컨택후보</button>
+        <button type="button" data-tab="decisionQueue">확인대상</button>
         <button type="button" data-tab="map">지역지도</button>
         <button type="button" data-tab="demand">수요구조</button>
-        <button type="button" data-tab="historyOps">누적DB</button>
+        <button type="button" data-tab="historyOps">수집이력</button>
         <button type="button" data-tab="admin">관리</button>
       </nav>
 
@@ -126,21 +126,21 @@
         <div class="dictionary-result" id="dictionaryResult"></div>
       </section>
 
-      <section class="tab-panel" id="targetPanel" data-panel="target" aria-label="영업 타깃">
+      <section class="tab-panel" id="targetPanel" data-panel="target" aria-label="컨택 후보">
         <div class="section-title">
           <div>
-            <h2>영업 타깃</h2>
-            <p>노출은 있으나 상품/채널 구성이 약한 업체</p>
+            <h2>컨택 후보</h2>
+            <p>검수 후 바로 연락 가능한 업체</p>
           </div>
           <span id="targetCount">0 후보</span>
         </div>
         <div class="target-list" id="targetList"></div>
       </section>
 
-      <section class="tab-panel" id="decisionQueuePanel" data-panel="decisionQueue" aria-label="관리자 판단 큐">
+      <section class="tab-panel" id="decisionQueuePanel" data-panel="decisionQueue" aria-label="확인 대상">
         <div class="section-title">
           <div>
-            <h2>관리자 판단 큐</h2>
+            <h2>확인 대상</h2>
             <p>사람 확인 후 컨택 여부를 결정할 업체</p>
           </div>
           <span id="decisionQueueCount">0 대기</span>
@@ -178,10 +178,10 @@
         <div class="demand-dashboard" id="demandDashboard"></div>
       </section>
 
-      <section class="tab-panel" id="historyOpsPanel" data-panel="historyOps" aria-label="누적 DB 분석">
+      <section class="tab-panel" id="historyOpsPanel" data-panel="historyOps" aria-label="수집 이력">
         <div class="section-title">
           <div>
-            <h2>누적 DB 분석</h2>
+            <h2>수집 이력</h2>
             <p>동일 키워드 반복 수집 이력, 회차 비교, 업체별 추이 관리</p>
           </div>
           <span id="historyOpsState">대기</span>
@@ -193,7 +193,7 @@
         <div class="section-title">
           <div>
             <h2>관리</h2>
-            <p>수집 실행, 여기어때 통합, 파일, API 설정</p>
+            <p>업체 관리, 수집 실행, 회원 요청, 연동 설정</p>
           </div>
           <div class="admin-title-actions">
             <span id="adminStatus">준비</span>
@@ -203,18 +203,18 @@
         </div>
 
         <nav class="admin-section-nav" aria-label="관리 탭 구분">
-          <button class="active" type="button" data-admin-section="database">전체 DB</button>
-          <button type="button" data-admin-section="overview">운영 현황</button>
+          <button class="active" type="button" data-admin-section="database">업체 관리</button>
+          <button type="button" data-admin-section="overview">현황</button>
           <button type="button" data-admin-section="collect">수집 실행</button>
           <button type="button" data-admin-section="members">회원·삭제요청</button>
-          <button type="button" data-admin-section="files">API·파일</button>
+          <button type="button" data-admin-section="files">연동·파일</button>
         </nav>
 
-        <section class="admin-section-panel active" data-admin-section-panel="database" aria-label="전체 DB">
-          <section class="admin-console-dashboard" id="adminDatabaseDashboard" aria-label="관리자 전체 DB"></section>
+        <section class="admin-section-panel active" data-admin-section-panel="database" aria-label="업체 관리">
+          <section class="admin-console-dashboard" id="adminDatabaseDashboard" aria-label="업체 관리"></section>
         </section>
 
-        <section class="admin-section-panel" data-admin-section-panel="overview" aria-label="운영 현황">
+        <section class="admin-section-panel" data-admin-section-panel="overview" aria-label="현황">
           <section class="admin-console-dashboard" id="adminConsoleDashboard" aria-label="관리자 운영 콘솔"></section>
         </section>
 
@@ -393,10 +393,10 @@
           </section>
 
           <details class="admin-card admin-files-collapsible" id="companyMasterAdminCard">
-            <summary>업체 마스터 DB 유지보수</summary>
+            <summary>업체 기준값 관리</summary>
             <div class="admin-files-collapsible-body">
             <div class="card-head">
-              <h3>업체 마스터 DB</h3>
+              <h3>업체 기준값</h3>
               <span class="state-badge" id="companyMasterState">대기</span>
             </div>
             <div class="company-master-panel" id="companyMasterPanel"></div>
@@ -441,14 +441,14 @@
         <button class="secondary-button" type="button" data-drawer-tab="report">요약 리포트 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="rank">업체순위 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="dictionary">입지사전 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database">전체 DB 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">판단 필요 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database">업체 관리 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">확인 대상 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="map">지도 보기</button>
         <button class="secondary-button" type="button" data-drawer-tab="demand">검색수요 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="historyOps">누적DB 보기</button>
+        <button class="secondary-button" type="button" data-drawer-tab="historyOps">수집 이력 보기</button>
         <button class="primary-button" type="button" data-drawer-tab="admin">관리 열기</button>
       </div>
-      <p class="hint">수집, 여기어때 통합, API 키, 파일은 관리 탭에 있습니다.</p>
+      <p class="hint">수집, 여기어때 통합, 연동 설정, 파일은 관리 탭에 있습니다.</p>
     </section>
   </div>
 
