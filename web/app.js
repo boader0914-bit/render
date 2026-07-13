@@ -17990,20 +17990,20 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
   const guide = {
     region: {
       label: "지역 구조",
-      title: "광역과 시군구를 먼저 고릅니다",
-      copy: "업체 목록은 별도 리스트 화면에서 페이지 단위로 확인합니다.",
+      title: "광역 · 시군구",
+      copy: "",
       metric: `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`
     },
     list: {
       label: "업체 찾기",
-      title: "검색과 필터로 업체를 찾습니다",
-      copy: "가나다순을 기본으로 보고, 노출순·매출순·객실수·시설·OTA 조건으로 좁힙니다.",
+      title: "업체 리스트",
+      copy: "",
       metric: `${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개`
     },
     review: {
       label: "상세 검수",
-      title: "한 업체씩 수정하고 판단합니다",
-      copy: "B2B 기준 지표, 관리자 보정, 확인 수집, 검수 상태를 처리합니다.",
+      title: "상세 · 수정",
+      copy: "",
       metric: state.adminDbSelectedCompanyId ? "선택 업체 검수" : "우선 검수 업체"
     }
   }[mode] || {};
@@ -18012,7 +18012,7 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
       <div>
         <span>${escapeHtml(guide.label || "전체 DB")}</span>
         <strong>${escapeHtml(guide.title || "전체 DB 보기")}</strong>
-        <small>${escapeHtml(guide.copy || "")}</small>
+        ${guide.copy ? `<small>${escapeHtml(guide.copy)}</small>` : ""}
       </div>
       <div class="admin-db-page-guide-meta">
         <b>${escapeHtml(guide.metric || "")}</b>
@@ -19850,7 +19850,6 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         <div>
           <span>전체 DB</span>
           <h3>지역·업체 DB</h3>
-          <p>지역 구조, 업체 리스트, 상세 수정을 나눠서 관리합니다.</p>
         </div>
         <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
       </div>
@@ -19861,7 +19860,6 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           <summary>
             <div>
               <strong>업체 검색·필터 열기</strong>
-              <small>지역 구조를 보다가 특정 업체를 찾을 때만 펼칩니다.</small>
             </div>
             <span>필터</span>
           </summary>
@@ -22467,9 +22465,8 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   els.adminConsoleDashboard.innerHTML = `
     <section class="admin-console-hero">
       <div>
-        <span>Admin Operations</span>
-        <h3>운영 콘솔</h3>
-        <p>수집 상태와 처리할 운영 작업만 압축해서 봅니다. 업체 검색·수정은 전체 DB 콘솔에서 진행합니다.</p>
+        <span>관리</span>
+        <h3>운영 현황</h3>
       </div>
       <small>최근 실행 ${escapeHtml(latestRun.label || latestRun.id || "대기")}</small>
     </section>
@@ -22497,8 +22494,7 @@ function renderAdminMemberRequestDashboard() {
     <section class="admin-console-hero admin-member-request-hero">
       <div>
         <span>회원·삭제요청</span>
-        <h3>고객 계정과 데이터 요청을 분리해서 관리합니다.</h3>
-        <p>회원 사용량, 계정·데이터 삭제 요청, 보안 점검 상태를 순서대로 확인합니다.</p>
+        <h3>계정·데이터 요청</h3>
       </div>
       <small>관리자 전용</small>
     </section>
@@ -22613,7 +22609,6 @@ function renderHistoryOps() {
       <div>
         <p class="eyebrow">누적 DB 운영</p>
         <h3>${escapeHtml(activeKeywordRow?.keyword || activeKeyword())}</h3>
-        <p>반복 수집된 관측값으로 키워드별 추이와 업체별 안정성을 확인합니다.</p>
       </div>
       <span>${escapeHtml(activeKeywordRow?.latestCollectedDate || overall.latestCollectedAt?.slice(0, 10) || "대기")}</span>
     </section>
@@ -27351,6 +27346,32 @@ async function restoreB2BActiveSearch() {
   return false;
 }
 
+function latestB2BHistoryRunEntry() {
+  const rows = state.memberSearchHistory || [];
+  return rows.find((entry) => entry?.runId && (entry.completedAt || entry.keyword || entry.runLabel))
+    || rows.find((entry) => entry?.runId)
+    || null;
+}
+
+async function restoreB2BLatestHistoryRun() {
+  if (isAdminRole() || isAdminUserViewMode() || state.data || state.b2bSearchLoading) return false;
+  const latest = latestB2BHistoryRunEntry();
+  if (!latest?.runId) return false;
+  try {
+    setStatus("최근 리포트 로딩");
+    await loadB2BHistoryRun(latest.runId);
+    if (els.b2bSearchStatus) {
+      els.b2bSearchStatus.textContent = `${latest.keyword || latest.runLabel || "최근 리포트"} 결과를 불러왔습니다.`;
+    }
+    return true;
+  } catch (error) {
+    if (els.b2bSearchStatus) {
+      els.b2bSearchStatus.textContent = `최근 리포트 로딩 실패: ${error.message}`;
+    }
+    return false;
+  }
+}
+
 function registerPwaServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   const secure = window.isSecureContext || ["localhost", "127.0.0.1"].includes(window.location.hostname);
@@ -29759,7 +29780,10 @@ async function init() {
       state.data = null;
       await Promise.all([loadMemberSearchHistory(), loadB2BInterestLodgesFromServer()]);
       const restored = await restoreB2BActiveSearch();
-      if (!restored) renderB2BEmptyPanels();
+      if (!restored) {
+        const latestLoaded = await restoreB2BLatestHistoryRun();
+        if (!latestLoaded) renderB2BEmptyPanels();
+      }
     }
     renderB2BSearchPanel();
     if (isAdminRole()) pollCrawlStatusUntilIdle(false);
