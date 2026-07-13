@@ -31202,3 +31202,228 @@ body.role-admin .run-apply-grid article {
     grid-template-columns: 1fr;
   }
 }
+
+/* Admin readability final pass: keep list metrics dark and legible. */
+body.role-admin {
+  --admin-readable-surface: #0d1624;
+  --admin-readable-surface-strong: #111d2d;
+  --admin-readable-line: rgba(132, 162, 198, .34);
+  --admin-readable-line-strong: rgba(121, 184, 255, .52);
+  --admin-readable-title: #f8fbff;
+  --admin-readable-text: #d9e7f7;
+  --admin-readable-muted: #aebfd3;
+  --admin-readable-blue: #8fc4ff;
+  --admin-readable-green: #8df0c2;
+  --admin-readable-yellow: #ffe08a;
+  --admin-readable-red: #ffb4c1;
+}
+
+body.role-admin .admin-section-nav {
+  position: relative !important;
+  top: auto !important;
+  z-index: 4;
+  width: min(980px, 100%);
+  margin: 14px auto 20px;
+  border-color: var(--admin-readable-line);
+  background: rgba(8, 13, 20, .94);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, .24);
+}
+
+body.role-admin .admin-section-nav button {
+  color: var(--admin-readable-text);
+}
+
+body.role-admin .admin-section-nav button.active {
+  color: #ffffff;
+}
+
+body.role-admin .admin-db-company,
+body.role-admin .admin-db-flat-list,
+body.role-admin #historyOpsDashboard .history-ops-keyword-list article,
+body.role-admin #adminMemberRequestDashboard .admin-member-row:not(.head),
+body.role-admin #adminMemberRequestDashboard .admin-delete-row,
+body.role-admin [data-admin-section-panel="files"] .download-item,
+body.role-admin [data-admin-section-panel="files"] .traffic-verify-result {
+  border-color: var(--admin-readable-line) !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
+    var(--admin-readable-surface) !important;
+  color: var(--admin-readable-title) !important;
+}
+
+body.role-admin .admin-db-company.good,
+body.role-admin .admin-db-company.watch,
+body.role-admin .admin-db-company.hot,
+body.role-admin .admin-db-company.bad {
+  background:
+    linear-gradient(90deg, rgba(121, 184, 255, .08), transparent 38%),
+    var(--admin-readable-surface) !important;
+}
+
+body.role-admin .admin-db-company.selected {
+  outline: 2px solid rgba(121, 184, 255, .46);
+  outline-offset: 2px;
+}
+
+body.role-admin .admin-db-company-main,
+body.role-admin .admin-db-company-title-row,
+body.role-admin .admin-db-company-values,
+body.role-admin .admin-db-company-tags,
+body.role-admin .admin-db-company-action {
+  min-width: 0;
+}
+
+body.role-admin .admin-db-company-title-row strong,
+body.role-admin .admin-db-company-main strong,
+body.role-admin .admin-db-company-main b,
+body.role-admin #adminMemberRequestDashboard .admin-member-row strong,
+body.role-admin [data-admin-section-panel="files"] .download-item strong {
+  color: var(--admin-readable-title) !important;
+}
+
+body.role-admin .admin-db-company-main small,
+body.role-admin .admin-db-company-main p,
+body.role-admin #historyOpsDashboard .history-ops-keyword-list small,
+body.role-admin #adminMemberRequestDashboard .admin-member-row small,
+body.role-admin #adminMemberRequestDashboard .admin-member-row > span,
+body.role-admin #adminMemberRequestDashboard .admin-delete-row small,
+body.role-admin [data-admin-section-panel="files"] .download-item span,
+body.role-admin [data-admin-section-panel="files"] .traffic-verify-result p {
+  color: var(--admin-readable-text) !important;
+}
+
+body.role-admin .admin-db-company-values {
+  grid-template-columns: repeat(4, minmax(82px, 1fr));
+  align-items: stretch;
+}
+
+body.role-admin .admin-db-company-values span,
+body.role-admin .admin-region-company-metrics span,
+body.role-admin #historyOpsDashboard .history-ops-comparison article,
+body.role-admin #historyOpsDashboard .history-ops-metrics article,
+body.role-admin #adminMemberRequestDashboard .admin-member-summary article,
+body.role-admin #adminMemberRequestDashboard .admin-delete-summary article {
+  min-width: 0;
+  border: 1px solid var(--admin-readable-line-strong) !important;
+  background:
+    linear-gradient(180deg, rgba(32, 51, 75, .96), rgba(10, 18, 30, .98)) !important;
+  color: var(--admin-readable-title) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .08),
+    0 12px 22px rgba(0, 0, 0, .18);
+}
+
+body.role-admin .admin-db-company-values b,
+body.role-admin .admin-region-company-metrics b,
+body.role-admin #historyOpsDashboard .history-ops-comparison strong,
+body.role-admin #historyOpsDashboard .history-ops-metrics strong,
+body.role-admin #adminMemberRequestDashboard .admin-member-summary strong,
+body.role-admin #adminMemberRequestDashboard .admin-delete-summary strong {
+  display: block;
+  color: #ffffff !important;
+  font-weight: 950;
+  letter-spacing: 0;
+  line-height: 1.08;
+  text-shadow: none;
+}
+
+body.role-admin .admin-db-company-values small,
+body.role-admin .admin-region-company-metrics small,
+body.role-admin #historyOpsDashboard .history-ops-comparison small,
+body.role-admin #historyOpsDashboard .history-ops-metrics small,
+body.role-admin #adminMemberRequestDashboard .admin-member-summary small,
+body.role-admin #adminMemberRequestDashboard .admin-delete-summary small {
+  display: block;
+  color: #bcd9f7 !important;
+  font-weight: 880;
+  line-height: 1.2;
+}
+
+body.role-admin .admin-db-company-tags em,
+body.role-admin .admin-db-list-guide span,
+body.role-admin .admin-db-pagination span,
+body.role-admin #adminMemberRequestDashboard .admin-member-row mark,
+body.role-admin [data-admin-section-panel="files"] .state-badge {
+  border-color: rgba(121, 184, 255, .42) !important;
+  background: rgba(121, 184, 255, .16) !important;
+  color: #e4f1ff !important;
+}
+
+body.role-admin .admin-db-company-tags em.good,
+body.role-admin .admin-db-company-tags em.manual,
+body.role-admin .admin-db-company-tags em.confirmed {
+  border-color: rgba(52, 211, 153, .52) !important;
+  background: rgba(52, 211, 153, .15) !important;
+  color: #d7ffef !important;
+}
+
+body.role-admin .admin-db-company-tags em.watch,
+body.role-admin .admin-db-company-tags em.check_needed,
+body.role-admin .admin-db-company-tags em.recrawl_needed {
+  border-color: rgba(251, 191, 36, .58) !important;
+  background: rgba(251, 191, 36, .16) !important;
+  color: #fff2bf !important;
+}
+
+body.role-admin .admin-db-company-tags em.hot,
+body.role-admin .admin-db-company-tags em.bad,
+body.role-admin .admin-db-company-tags em.exclude {
+  border-color: rgba(251, 113, 133, .56) !important;
+  background: rgba(251, 113, 133, .16) !important;
+  color: #ffe1e8 !important;
+}
+
+body.role-admin .admin-db-company-action {
+  justify-content: flex-end;
+}
+
+body.role-admin .admin-db-company-action button,
+body.role-admin #adminMemberRequestDashboard button,
+body.role-admin [data-admin-section-panel="files"] button,
+body.role-admin [data-admin-section-panel="files"] a {
+  border-color: rgba(132, 162, 198, .42) !important;
+  background: rgba(17, 29, 45, .95) !important;
+  color: #f0f7ff !important;
+  box-shadow: none;
+}
+
+body.role-admin .admin-db-company-action button.primary {
+  border-color: rgba(121, 184, 255, .64) !important;
+  background: linear-gradient(180deg, #4a90e2, #2f74d0) !important;
+  color: #ffffff !important;
+  box-shadow: 0 14px 26px rgba(47, 116, 208, .24);
+}
+
+body.role-admin .admin-db-company-title-row strong {
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+@media (max-width: 1180px) {
+  body.role-admin .admin-db-company {
+    grid-template-columns: minmax(220px, 1fr) minmax(300px, 1fr);
+  }
+
+  body.role-admin .admin-db-company-action {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  body.role-admin .admin-db-company {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  body.role-admin .admin-db-company-values {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-company-action {
+    justify-content: stretch;
+  }
+
+  body.role-admin .admin-db-company-action button {
+    flex: 1 1 140px;
+  }
+}
