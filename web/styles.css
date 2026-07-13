@@ -30493,6 +30493,79 @@ body.role-admin span {
   min-width: 0;
 }
 
+body.role-admin .admin-db-company-values {
+  gap: 8px;
+}
+
+body.role-admin .admin-db-company-values span {
+  min-height: 58px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  border: 1px solid rgba(121, 184, 255, .26);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(24, 38, 55, .98), rgba(13, 20, 29, .98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .06),
+    0 10px 20px rgba(0, 0, 0, .18);
+  padding: 9px 10px;
+}
+
+body.role-admin .admin-db-company-values b {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.08;
+  text-shadow: 0 0 18px rgba(121, 184, 255, .22);
+}
+
+body.role-admin .admin-db-company-values small {
+  color: #9fd0ff;
+  font-size: 11.5px;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+body.role-admin .admin-db-company-title-row strong {
+  color: #ffffff;
+  text-shadow: 0 0 14px rgba(0, 0, 0, .18);
+}
+
+body.role-admin .admin-region-company-metrics {
+  gap: 8px;
+}
+
+body.role-admin .admin-region-company-metrics span {
+  min-height: 58px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  border: 1px solid rgba(121, 184, 255, .26);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(24, 38, 55, .98), rgba(13, 20, 29, .98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .06),
+    0 10px 20px rgba(0, 0, 0, .18);
+  padding: 9px 10px;
+}
+
+body.role-admin .admin-region-company-metrics b {
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1.08;
+  text-shadow: 0 0 18px rgba(121, 184, 255, .22);
+}
+
+body.role-admin .admin-region-company-metrics small {
+  color: #9fd0ff;
+  font-size: 11.5px;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
 body.role-b2b .b2b-search-card,
 body.role-b2b .b2b-history-list button,
 body.role-b2b .b2b-onboarding-steps article,
