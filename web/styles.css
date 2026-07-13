@@ -33225,3 +33225,252 @@ body.role-admin .structure-radar-labels text {
 :is(body.role-admin, body.role-b2b) :is(input, select, textarea) {
   caret-color: currentColor;
 }
+
+/* Surface contrast contract v4: final lock for white cards embedded in admin views. */
+body.role-admin :is(
+  .b2b-correlation-card,
+  .b2b-correlation-chart,
+  .b2b-correlation-list div,
+  .b2b-revenue-board,
+  .b2b-revenue-grid article,
+  .b2b-revenue-row,
+  .b2b-revenue-guide > div:not(.b2b-revenue-subhead),
+  .b2b-demand-action-board div,
+  .b2b-demand-competitors button,
+  .b2b-keyword-focus article,
+  .b2b-keyword-list button,
+  .admin-db-selected-grid article,
+  .admin-db-selected-brief article,
+  .admin-db-selected-next-grid article,
+  .admin-db-selected-task-rail article
+) {
+  --surface-bg-token: #ffffff;
+  --surface-bg-soft-token: #f8fbff;
+  --surface-border-token: #cbd9ea;
+  --surface-text-token: #0f172a;
+  --surface-muted-token: #475569;
+  --surface-subtle-token: #64748b;
+  --surface-accent-token: #1d4ed8;
+  --surface-green-token: #047857;
+  --surface-warning-token: #b45309;
+  --surface-danger-token: #b91c1c;
+  border-color: var(--surface-border-token) !important;
+  background: var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet :is(
+  .sheet-booking-bars,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-collection-grid div,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-coupon-line,
+  .date-row,
+  .platform-row,
+  .search-row
+) {
+  --surface-bg-token: #ffffff;
+  --surface-bg-soft-token: #f8fbff;
+  --surface-border-token: #cbd9ea;
+  --surface-text-token: #0f172a;
+  --surface-muted-token: #475569;
+  --surface-subtle-token: #64748b;
+  --surface-accent-token: #1d4ed8;
+  --surface-green-token: #047857;
+  --surface-warning-token: #b45309;
+  --surface-danger-token: #b91c1c;
+  border-color: var(--surface-border-token) !important;
+  background: var(--surface-bg-token) !important;
+  color: var(--surface-text-token) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :is(
+  .b2b-correlation-card,
+  .b2b-correlation-chart,
+  .b2b-correlation-list div,
+  .b2b-revenue-board,
+  .b2b-revenue-grid article,
+  .b2b-revenue-row,
+  .b2b-revenue-guide > div:not(.b2b-revenue-subhead),
+  .b2b-demand-action-board div,
+  .b2b-demand-competitors button,
+  .b2b-keyword-focus article,
+  .b2b-keyword-list button,
+  .admin-db-selected-grid article,
+  .admin-db-selected-brief article,
+  .admin-db-selected-next-grid article,
+  .admin-db-selected-task-rail article
+) :is(h1, h2, h3, h4, strong, b, dd),
+body.role-admin .detail-sheet :is(
+  .sheet-booking-bars,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-collection-grid div,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-coupon-line,
+  .date-row,
+  .platform-row,
+  .search-row
+) :is(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--surface-text-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :is(
+  .b2b-correlation-card,
+  .b2b-correlation-chart,
+  .b2b-correlation-list div,
+  .b2b-revenue-board,
+  .b2b-revenue-grid article,
+  .b2b-revenue-row,
+  .b2b-revenue-guide > div:not(.b2b-revenue-subhead),
+  .b2b-demand-action-board div,
+  .b2b-demand-competitors button,
+  .b2b-keyword-focus article,
+  .b2b-keyword-list button,
+  .admin-db-selected-grid article,
+  .admin-db-selected-brief article,
+  .admin-db-selected-next-grid article,
+  .admin-db-selected-task-rail article
+) :is(p, span, small, dt, li),
+body.role-admin .detail-sheet :is(
+  .sheet-booking-bars,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-collection-grid div,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-coupon-line,
+  .date-row,
+  .platform-row,
+  .search-row
+) :is(p, span, small, dt, li) {
+  color: var(--surface-muted-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :is(
+  .b2b-correlation-card,
+  .b2b-correlation-chart,
+  .b2b-correlation-list div,
+  .b2b-revenue-board,
+  .b2b-revenue-grid article,
+  .b2b-revenue-row,
+  .b2b-revenue-guide > div:not(.b2b-revenue-subhead),
+  .b2b-demand-action-board div,
+  .b2b-demand-competitors button,
+  .b2b-keyword-focus article,
+  .b2b-keyword-list button,
+  .admin-db-selected-grid article,
+  .admin-db-selected-brief article,
+  .admin-db-selected-next-grid article,
+  .admin-db-selected-task-rail article
+) :is(em, mark),
+body.role-admin .detail-sheet :is(
+  .sheet-booking-bars,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-collection-grid div,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-coupon-line,
+  .date-row,
+  .platform-row,
+  .search-row
+) :is(em, mark) {
+  color: var(--surface-accent-token) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet :is(
+  .sheet-date-bar strong,
+  .sheet-date-bar em,
+  .sheet-date-bar small,
+  .sheet-weekday-bars span,
+  .sheet-weekday-bars strong,
+  .sheet-weekday-bars small
+) {
+  color: var(--surface-muted-token, #475569) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .detail-sheet :is(.sheet-date-bar strong, .sheet-weekday-bars strong),
+body.role-admin :is(
+  .b2b-correlation-head > strong,
+  .b2b-correlation-list b,
+  .b2b-demand-competitors button em,
+  .admin-db-selected-grid article.good strong,
+  .admin-db-selected-brief article.good strong,
+  .admin-db-selected-next-grid article.good strong,
+  .admin-db-selected-task-rail article.good strong
+) {
+  color: var(--surface-accent-token, #1d4ed8) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin :is(
+  .b2b-correlation-card.strong,
+  .b2b-demand-competitors button.strong,
+  .b2b-demand-competitors button.good,
+  .b2b-keyword-focus article.strong,
+  .b2b-keyword-focus article.good,
+  .b2b-keyword-list button.strong,
+  .b2b-keyword-list button.good,
+  .admin-db-selected-grid article.good,
+  .admin-db-selected-brief article.good,
+  .admin-db-selected-next-grid article.good,
+  .admin-db-selected-task-rail article.good
+) {
+  border-color: #9fd6c9 !important;
+  background: #f6fffb !important;
+}
+
+body.role-admin :is(
+  .b2b-correlation-card.watch,
+  .b2b-demand-competitors button.watch,
+  .b2b-keyword-focus article.watch,
+  .b2b-keyword-list button.watch,
+  .admin-db-selected-grid article.watch,
+  .admin-db-selected-brief article.watch,
+  .admin-db-selected-next-grid article.watch,
+  .admin-db-selected-task-rail article.watch
+) {
+  border-color: #e8bd54 !important;
+  background: #fff8db !important;
+}
+
+body.role-admin :is(
+  .b2b-demand-competitors button.hot,
+  .b2b-keyword-focus article.hot,
+  .b2b-keyword-list button.hot,
+  .admin-db-selected-grid article.hot,
+  .admin-db-selected-brief article.hot,
+  .admin-db-selected-next-grid article.hot,
+  .admin-db-selected-task-rail article.hot
+) {
+  border-color: #f3b4b4 !important;
+  background: #fff5f5 !important;
+}
