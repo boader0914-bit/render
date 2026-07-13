@@ -18933,23 +18933,102 @@ function adminDbSelectedDecisionCards(row = {}, requiredChannels = []) {
   ];
 }
 
-function adminDbSelectedDecisionPanel(row = {}, issues = [], requiredChannels = []) {
+function adminDbSelectedNextAction(row = {}, requiredChannels = []) {
+  const company = row.company || {};
   const metrics = row.metrics || {};
   const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+  const review = metrics.adminReview || company.adminReview || {};
+  const workKey = workType.key || "";
+  const needsCorrection = metrics.lowConfidence
+    || workKey === "manual"
+    || review.status === "manual_needed"
+    || metrics.confidenceScore <= 2;
+  const needsCollect = requiredChannels.length
+    || metrics.collection?.needsConfirm
+    || ["recrawl", "missingRevenue", "missingReservation"].includes(workKey)
+    || metrics.stockVariance;
+  if (needsCorrection) {
+    return {
+      label: "기준값 수정",
+      title: "객실 총량·상품 구조를 먼저 보정",
+      note: metrics.lowConfidence ? "자동 수집 신뢰도가 낮아 보정값을 우선 적용해야 합니다." : "관리자가 확인한 기준값을 저장하면 비교 지표가 다시 계산됩니다.",
+      tone: "hot",
+      foldKey: "correction"
+    };
+  }
+  if (needsCollect) {
+    return {
+      label: "확인 수집",
+      title: requiredChannels.length ? `${requiredChannels.join(" · ")} 확인` : "같은 조건으로 다시 수집",
+      note: "수량·가격·예약율 표본을 같은 기간과 검색범위로 보강합니다.",
+      tone: "watch",
+      foldKey: "collect",
+      runCollect: true
+    };
+  }
+  if (!review.status) {
+    return {
+      label: "검수 저장",
+      title: "확인/완료/보류 중 하나로 확정",
+      note: "수집값이 충분하면 검수 상태를 저장해 업체 관리 목록을 정리합니다.",
+      tone: workType.tone || "watch",
+      foldKey: "review"
+    };
+  }
+  return {
+    label: "지표 확인",
+    title: "사업자 화면 기준 최종 확인",
+    note: "보정·검수값이 반영된 노출, 예약율, 매출 지표를 확인합니다.",
+    tone: "good",
+    foldKey: "b2b"
+  };
+}
+
+function adminDbSelectedDecisionPanel(row = {}, issues = [], requiredChannels = []) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+  const currentReason = adminDbWorkReason(row);
+  const nextAction = adminDbSelectedNextAction(row, requiredChannels);
+  const selectedId = company.companyId || "";
   const issueItems = (issues.length ? issues : [adminDbWorkReason(row)]).filter(Boolean).slice(0, 3);
+  const decisionCards = adminDbSelectedDecisionCards(row, requiredChannels);
   return `
     <section class="admin-db-selected-decision ${escapeHtml(workType.tone || "watch")}" aria-label="상세 작업 요약">
       <div class="admin-db-selected-decision-head">
         <div>
-          <span>작업 순서</span>
-          <strong>지표 확인 → 보정 → 확인 수집 → 판단 저장</strong>
-          <small>기본 화면은 필요한 판단만 먼저 보여주고, 세부 수정은 아래에서 펼쳐 처리합니다.</small>
+          <span>현재 판단</span>
+          <strong>${escapeHtml(workType.label || "확인 필요")}</strong>
+          <small>${escapeHtml(currentReason)}</small>
         </div>
-        <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
+        <mark>${escapeHtml(nextAction.label)}</mark>
       </div>
-      <div class="admin-db-selected-task-rail">
-        ${adminDbSelectedDecisionCards(row, requiredChannels).map(adminDbSelectedMetricCard).join("")}
+      <div class="admin-db-selected-next-grid">
+        <article class="${escapeHtml(workType.tone || "watch")}">
+          <span>현재 상태</span>
+          <strong>${escapeHtml(workType.label || "확인 필요")}</strong>
+          <small>${escapeHtml(currentReason)}</small>
+        </article>
+        <article class="${escapeHtml(nextAction.tone || "watch")}">
+          <span>다음 행동</span>
+          <strong>${escapeHtml(nextAction.title)}</strong>
+          <small>${escapeHtml(nextAction.note)}</small>
+        </article>
       </div>
+      <div class="admin-db-selected-next-actions">
+        ${nextAction.runCollect && selectedId ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_decision" data-queue-recrawl-autostart="1">확인 수집 실행</button>` : ""}
+        <button type="button" data-admin-db-open-fold="${escapeHtml(nextAction.foldKey || "review")}">${escapeHtml(nextAction.label)} 열기</button>
+        <button type="button" data-admin-db-open-fold="b2b">비교 지표</button>
+      </div>
+      <details class="admin-db-selected-stage-fold">
+        <summary>
+          <span>처리 흐름 보기</span>
+          <small>지표 확인, 보정, 수집, 검수 저장 순서</small>
+        </summary>
+        <div class="admin-db-selected-task-rail">
+          ${decisionCards.map(adminDbSelectedMetricCard).join("")}
+        </div>
+      </details>
       ${issueItems.length ? `
         <div class="admin-db-selected-issues compact">
           ${issueItems.map((issue) => `<em class="${escapeHtml(workType.tone || "watch")}">${escapeHtml(issue)}</em>`).join("")}
@@ -18959,10 +19038,10 @@ function adminDbSelectedDecisionPanel(row = {}, issues = [], requiredChannels = 
   `;
 }
 
-function adminDbSelectedFoldBlock({ label = "", title = "", note = "", body = "", open = false, tone = "" } = {}) {
+function adminDbSelectedFoldBlock({ label = "", title = "", note = "", body = "", open = false, tone = "", foldKey = "" } = {}) {
   if (!body) return "";
   return `
-    <details class="admin-db-selected-fold ${escapeHtml(tone || "")}" ${open ? "open" : ""}>
+    <details class="admin-db-selected-fold ${escapeHtml(tone || "")}" ${foldKey ? `data-admin-db-fold="${escapeHtml(foldKey)}"` : ""} ${open ? "open" : ""}>
       <summary>
         <div>
           <span>${escapeHtml(label)}</span>
@@ -19537,13 +19616,15 @@ function adminDbSelectedDetailPanel(rows = []) {
           label: "사업자 화면 기준",
           title: "노출·예약율·예상매출·상품·채널",
           note: "공개 지표",
-          body: `<div class="admin-db-selected-grid">${b2bCards.map(adminDbSelectedMetricCard).join("")}</div>`
+          body: `<div class="admin-db-selected-grid">${b2bCards.map(adminDbSelectedMetricCard).join("")}</div>`,
+          foldKey: "b2b"
         })}
         ${adminDbSelectedFoldBlock({
           label: "검수 기준",
           title: "신뢰도·보정·확인 채널·처리 상태",
           note: "관리자용",
-          body: `<div class="admin-db-selected-grid internal">${internalCards.map(adminDbSelectedMetricCard).join("")}</div>`
+          body: `<div class="admin-db-selected-grid internal">${internalCards.map(adminDbSelectedMetricCard).join("")}</div>`,
+          foldKey: "internal"
         })}
       </section>
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
@@ -19561,28 +19642,32 @@ function adminDbSelectedDetailPanel(rows = []) {
             note: "기본으로 열림",
             body: reviewBody,
             open: true,
-            tone: "review"
+            tone: "review",
+            foldKey: "review"
           })}
           ${adminDbSelectedFoldBlock({
             label: "2. 기준값 수정",
             title: "지역·채널·쿠폰·수량/가격 수정",
             note: "필요할 때 열기",
             body: correctionBody,
-            tone: "edit"
+            tone: "edit",
+            foldKey: "correction"
           })}
           ${adminDbSelectedFoldBlock({
             label: "3. 채널 확인",
             title: "네이버·OTA 노출과 URL 저장",
             note: "채널별 확인",
             body: channelBody,
-            tone: "channel"
+            tone: "channel",
+            foldKey: "channel"
           })}
           ${adminDbSelectedFoldBlock({
             label: "4. 확인 수집",
             title: "재수집 조건과 이전/최신 비교",
             note: collectBody ? "필요 시 실행" : "현재 추가 없음",
             body: collectBody,
-            tone: "collect"
+            tone: "collect",
+            foldKey: "collect"
           })}
         </div>
       </section>
@@ -29617,6 +29702,17 @@ function bindEvents() {
     if (event.target.closest("[data-export-admin-region-status]")) exportAdminRegionStatusCsv();
     const qualitySetting = event.target.closest("[data-apply-quality-setting]");
     if (qualitySetting) applyCollectionQualitySetting(qualitySetting);
+    const adminDbOpenFold = event.target.closest("[data-admin-db-open-fold]");
+    if (adminDbOpenFold) {
+      const key = adminDbOpenFold.dataset.adminDbOpenFold || "";
+      const target = Array.from(document.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]"))
+        .find((fold) => fold.dataset.adminDbFold === key);
+      if (target) {
+        target.open = true;
+        target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+      return;
+    }
     const queueRecrawl = event.target.closest("[data-queue-recrawl-company]");
     if (queueRecrawl) applyQueueRecrawlSetting(queueRecrawl);
     const recrawlBatch = event.target.closest("[data-recrawl-batch-key]");
