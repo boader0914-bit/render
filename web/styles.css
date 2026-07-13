@@ -31809,3 +31809,96 @@ body.role-admin .admin-db-selected-issues em,
 body.role-admin .admin-db-audit-task-tags em {
   color: #eaf3ff !important;
 }
+
+body.role-admin .admin-db-channel-panel {
+  --admin-channel-ink: #0f172a;
+  --admin-channel-text: #334155;
+  --admin-channel-muted: #64748b;
+  --admin-channel-blue: #1d4ed8;
+  --admin-channel-green: #047857;
+  --admin-channel-line: #cbd9ea;
+  border-color: var(--admin-channel-line) !important;
+  background: linear-gradient(180deg, #f8fbff, #ffffff) !important;
+  color: var(--admin-channel-ink) !important;
+  box-shadow: none !important;
+}
+
+body.role-admin .admin-db-channel-head strong,
+body.role-admin .admin-db-channel-row-head strong {
+  color: var(--admin-channel-ink) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-channel-head span,
+body.role-admin .admin-db-channel-head small,
+body.role-admin .admin-db-channel-row-head small,
+body.role-admin .admin-db-channel-summary span,
+body.role-admin .admin-db-channel-summary small,
+body.role-admin .admin-db-channel-fields span {
+  color: var(--admin-channel-muted) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-channel-summary article,
+body.role-admin .admin-db-channel-row {
+  border-color: var(--admin-channel-line) !important;
+  background: #ffffff !important;
+  color: var(--admin-channel-ink) !important;
+  box-shadow: none !important;
+}
+
+body.role-admin .admin-db-channel-row.good {
+  border-color: #9fd6c9 !important;
+  background: #f6fffb !important;
+}
+
+body.role-admin .admin-db-channel-row.watch {
+  border-color: #e8bd54 !important;
+  background: #fff8db !important;
+}
+
+body.role-admin .admin-db-channel-row.neutral {
+  border-color: var(--admin-channel-line) !important;
+  background: #f8fbff !important;
+}
+
+body.role-admin .admin-db-channel-summary strong {
+  color: var(--admin-channel-blue) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-channel-row-head > span {
+  border-color: #bfdbfe !important;
+  background: #eff6ff !important;
+  color: var(--admin-channel-blue) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .admin-db-channel-fields input,
+body.role-admin .admin-db-channel-fields select {
+  border-color: #b8cbe0 !important;
+  background: #ffffff !important;
+  color: var(--admin-channel-ink) !important;
+  box-shadow: none !important;
+}
+
+body.role-admin .admin-db-channel-fields input::placeholder {
+  color: #7890aa !important;
+  opacity: 1;
+}
+
+body.role-admin .admin-db-channel-fields input:focus,
+body.role-admin .admin-db-channel-fields select:focus {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, .16) !important;
+  outline: none;
+}
+
+body.role-admin .admin-db-channel-head button,
+body.role-admin .admin-db-channel-actions button,
+body.role-admin .admin-db-channel-actions a {
+  border-color: #a7d8d1 !important;
+  background: #ffffff !important;
+  color: var(--admin-channel-green) !important;
+  box-shadow: none !important;
+}
