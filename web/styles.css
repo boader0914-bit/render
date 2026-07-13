@@ -31902,3 +31902,66 @@ body.role-admin .admin-db-channel-actions a {
   color: var(--admin-channel-green) !important;
   box-shadow: none !important;
 }
+
+/* Admin report readability lock: light summary cards always use dark text. */
+body.role-admin .report-card {
+  color: #edf3fb;
+}
+
+body.role-admin .report-card-head h3 {
+  color: #ffffff !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .report-card-head p {
+  color: #c8d6e8 !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .report-target-row,
+body.role-admin .report-region-grid div {
+  --admin-report-light-ink: #0f172a;
+  --admin-report-light-text: #334155;
+  --admin-report-light-muted: #475569;
+  --admin-report-light-blue: #1d4ed8;
+  --admin-report-light-line: #cbd9ea;
+  border-color: var(--admin-report-light-line) !important;
+  background: #ffffff !important;
+  color: var(--admin-report-light-ink) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .report-target-row span {
+  border: 1px solid #bfdbfe !important;
+  background: #eff6ff !important;
+  color: var(--admin-report-light-blue) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .report-target-row strong,
+body.role-admin .report-region-grid strong {
+  color: var(--admin-report-light-ink) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .report-target-row em {
+  color: var(--admin-report-light-blue) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .report-target-row small,
+body.role-admin .report-region-grid small {
+  color: var(--admin-report-light-muted) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin .report-region-grid .empty {
+  grid-template-columns: 1fr !important;
+  min-height: 92px;
+  align-content: center;
+  color: var(--admin-report-light-text) !important;
+  font-weight: 900;
+  line-height: 1.45;
+  white-space: normal;
+}
