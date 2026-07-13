@@ -16100,7 +16100,8 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
     checkOut: run.checkOut || els.checkOutInput?.value || "",
     searchMode: correctedSearchMode(keyword, run.searchMode || "keyword"),
     productMode: run.productMode || "all",
-    collectionMode: "precision"
+    collectionMode: "precision",
+    collectionPurpose: "revenue_detail"
   };
 }
 
@@ -16132,6 +16133,35 @@ function applyRecrawlRangeOverride(plan = {}, range = "") {
     detailRankRanges: value,
     collectionMode: "precision"
   };
+}
+
+function queueRecrawlShouldAutoStart(button) {
+  if (!button) return false;
+  if (button.dataset?.queueRecrawlAutostart === "1") return true;
+  const label = (button.textContent || "").replace(/\s+/g, " ").trim();
+  return label === "확인 수집";
+}
+
+function startQueueRecrawlIfRequested(button) {
+  if (!queueRecrawlShouldAutoStart(button) || !els.crawlForm) return;
+  if (els.crawlStatus) {
+    els.crawlStatus.textContent = (els.crawlStatus.textContent || "")
+      .replace("조건을 확인한 뒤 수집 실행을 누르세요.", "확인 수집을 바로 시작합니다.");
+  }
+  window.requestAnimationFrame(() => {
+    if (!recrawlContextMatchesPayload(state.pendingRecrawlContext, currentCrawlFormPayload())) {
+      if (els.crawlStatus) {
+        els.crawlStatus.textContent = "확인 수집 조건이 바뀌어 자동 실행을 멈췄습니다. 조건 확인 후 수집 실행을 누르세요.";
+      }
+      setStatus("확인 수집 대기");
+      return;
+    }
+    if (typeof els.crawlForm.requestSubmit === "function") {
+      els.crawlForm.requestSubmit();
+    } else {
+      els.crawlForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    }
+  });
 }
 
 function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decision = {}) {
@@ -18546,7 +18576,7 @@ function adminDbAuditDetailPanel(region = null) {
                 ${tasks.map((task) => `<em>${escapeHtml(task)}</em>`).join("")}
               </div>
               <div class="admin-db-audit-company-actions">
-                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_region_audit_queue">확인 수집</button>
+                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_region_audit_queue" data-queue-recrawl-autostart="1">확인 수집</button>
                 <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
               </div>
             </article>
@@ -19028,7 +19058,7 @@ function adminDbWorkPanel(rows = []) {
               </div>
               <p>${escapeHtml(adminDbWorkReason(row))}</p>
               <div class="admin-db-work-actions">
-                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db">확인 수집</button>
+                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db" data-queue-recrawl-autostart="1">확인 수집</button>
                 <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
               </div>
               ${companyReviewActionsHtml(company, true, "admin_db")}
@@ -19418,7 +19448,7 @@ function adminDbCollectionPanel(rows = []) {
               </div>
               <div>
                 ${adminDbCollectionChip(collection)}
-                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_confirm_collect">확인 수집</button>
+                <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_confirm_collect" data-queue-recrawl-autostart="1">확인 수집</button>
                 <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
               </div>
             </article>
@@ -19499,7 +19529,7 @@ function adminDbSelectedDetailPanel(rows = []) {
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
         ${adminDbSelectedSectionHead("수정·처리", "필요한 작업만 펼쳐 실행합니다", "보정값은 전체 DB와 B2B 비교 기준에 우선 적용됩니다.")}
         <div class="admin-db-selected-actions primary">
-          <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail">확인 수집</button>
+          <button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집</button>
           <button type="button" data-admin-region-company-focus data-admin-region-company-name="${escapeHtml(company.primaryName || selectedId)}">마스터에서 보기</button>
           <button type="button" data-admin-db-view-link="list">목록으로 돌아가기</button>
           <button type="button" data-admin-db-view-link="region">지역 구조 보기</button>
@@ -19570,7 +19600,7 @@ function adminDbCompanyRow(row = {}, options = {}) {
       </div>
       <div class="admin-db-company-action">
         <button class="primary" type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세·수정</button>
-        ${metrics.collection?.needsConfirm ? `<button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db">확인 수집</button>` : ""}
+        ${metrics.collection?.needsConfirm ? `<button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db" data-queue-recrawl-autostart="1">확인 수집</button>` : ""}
       </div>
     </article>
   `;
@@ -28555,6 +28585,7 @@ function applyQueueRecrawlSetting(button) {
   if (els.checkOutInput && plan.checkOut) els.checkOutInput.value = plan.checkOut;
   if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword");
   if (els.productModeInput) els.productModeInput.value = plan.productMode || "all";
+  if (els.collectionPurposeInput) els.collectionPurposeInput.value = plan.collectionPurpose || "revenue_detail";
   if (els.collectionModeInput) els.collectionModeInput.value = "precision";
   if (els.detailRankRangesInput) {
     els.detailRankRangesInput.disabled = false;
@@ -28567,6 +28598,7 @@ function applyQueueRecrawlSetting(button) {
     els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
   setStatus("재수집 설정 적용");
+  startQueueRecrawlIfRequested(button);
 }
 
 function applyRecrawlBatchSetting(button) {
@@ -29002,7 +29034,7 @@ async function submitCrawl(event) {
     `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
     preview
   );
-  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
+  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.shortLabel || purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
   setStatus("수집 중");
   scheduleCrawlStatusPoll(1500, false);
   try {
