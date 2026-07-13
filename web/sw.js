@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260714-admin-db-list-density-v1";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260714-admin-detail-button-v1";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

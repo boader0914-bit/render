@@ -18060,6 +18060,40 @@ function adminDbPageScrollSelector(mode = "region") {
   return ".admin-db-region-board, .admin-db-province-board, .admin-db-page-guide, #adminDatabaseBoard";
 }
 
+function adminDbCompanyHash(companyId = "") {
+  const selectedCompanyId = String(companyId || "").trim();
+  return selectedCompanyId ? `#admin-db-company=${encodeURIComponent(selectedCompanyId)}` : "#admin-db-company";
+}
+
+function adminDbCompanyDetailUrl(companyId = "") {
+  const selectedCompanyId = String(companyId || "").trim();
+  return selectedCompanyId ? `/admin?adminCompany=${encodeURIComponent(selectedCompanyId)}${adminDbCompanyHash(selectedCompanyId)}` : "/admin";
+}
+
+function adminDbCompanyIdFromRoute() {
+  const params = new URLSearchParams(window.location.search || "");
+  return params.get("adminCompany") || adminDbCompanyIdFromHash();
+}
+
+function adminDbCompanyIdFromHash(hash = window.location.hash) {
+  const match = String(hash || "").match(/^#admin-db-company=(.+)$/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1] || "");
+  } catch {
+    return match[1] || "";
+  }
+}
+
+function clearAdminDbCompanyHash() {
+  const url = new URL(window.location.href);
+  const hadRoute = url.searchParams.has("adminCompany") || url.hash.startsWith("#admin-db-company=");
+  if (!hadRoute) return;
+  url.searchParams.delete("adminCompany");
+  url.hash = "";
+  window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+}
+
 function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], grouped = []) {
   const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
   const buttons = [
@@ -18597,7 +18631,7 @@ function adminDbAuditDetailPanel(region = null) {
               </div>
               <div class="admin-db-audit-company-actions">
                 <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_region_audit_queue" data-queue-recrawl-autostart="1">확인 수집</button>
-                <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
+                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세 수정</a>
               </div>
             </article>
           `;
@@ -19223,7 +19257,7 @@ function adminDbWorkPanel(rows = []) {
               <p>${escapeHtml(adminDbWorkReason(row))}</p>
               <div class="admin-db-work-actions">
                 <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db" data-queue-recrawl-autostart="1">확인 수집</button>
-                <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
+                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세 수정</a>
               </div>
               ${companyReviewActionsHtml(company, true, "admin_db")}
             </article>
@@ -19613,7 +19647,7 @@ function adminDbCollectionPanel(rows = []) {
               <div>
                 ${adminDbCollectionChip(collection)}
                 <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_confirm_collect" data-queue-recrawl-autostart="1">확인 수집</button>
-                <button type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세 수정</button>
+                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세 수정</a>
               </div>
             </article>
           `;
@@ -19776,7 +19810,7 @@ function adminDbCompanyRow(row = {}, options = {}) {
         ${adminDbCompanyCompactTags(row)}
       </div>
       <div class="admin-db-company-action">
-        <button class="primary" type="button" data-admin-db-company-select="${escapeHtml(company.companyId || "")}">상세·수정</button>
+        <a class="primary" href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세·수정</a>
         ${metrics.collection?.needsConfirm ? `<button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db" data-queue-recrawl-autostart="1">확인 수집</button>` : ""}
       </div>
     </article>
@@ -20068,6 +20102,12 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const { rows, filteredRows, filters, provinceOptions, regionOptions, categoryOptions, statusOptions, confidenceOptions, sourceOptions } = adminDbFilterState(master);
   const grouped = adminDbGroupedRows(filteredRows);
   const allGrouped = adminDbGroupedRows(rows);
+  const routeCompanyId = adminDbCompanyIdFromRoute();
+  if (routeCompanyId) {
+    state.adminDbSelectedCompanyId = routeCompanyId;
+    state.adminDbViewMode = "review";
+    state.adminDbOpsOpen = true;
+  }
   const lowConfidence = filteredRows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const manualCount = filteredRows.filter((row) => row.metrics.manualCorrection).length;
   const otaLinked = filteredRows.filter((row) => ADMIN_DB_MANAGED_CHANNELS.some(([key]) => row.metrics.channels[key])).length;
@@ -29283,42 +29323,62 @@ function setDefaultDates() {
 }
 
 function openAdminDbCompanyReview(companyId = "") {
-  if (!companyId) return;
-  state.adminDbSelectedCompanyId = companyId;
+  const selectedCompanyId = String(companyId || "").trim();
+  if (!selectedCompanyId) return false;
+  state.adminDbSelectedCompanyId = selectedCompanyId;
   state.adminDbViewMode = "review";
   state.adminDbOpsOpen = true;
   renderAdminConsoleDashboard();
   window.requestAnimationFrame(() => {
     document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
+  return true;
+}
+
+function handleAdminDbCompanyHash() {
+  const companyId = adminDbCompanyIdFromRoute();
+  if (!companyId || !isAdminRole()) return false;
+  if (state.activeTab !== "admin") setActiveTab("admin");
+  setAdminPanelSection("database");
+  openAdminDbCompanyReview(companyId);
+  return true;
 }
 
 function bindAdminDbCompanySelectButtons() {
   document.querySelectorAll("[data-admin-db-company-select]").forEach((button) => {
-    if (button.dataset.adminDbSelectBound === "1") return;
-    button.dataset.adminDbSelectBound = "1";
+    if (button.getAttribute("data-admin-db-select-bound") === "1") return;
+    button.setAttribute("data-admin-db-select-bound", "1");
     button.addEventListener("click", (event) => {
-      event.preventDefault();
+      if (button.tagName !== "A") event.preventDefault();
       event.stopPropagation();
-      openAdminDbCompanyReview(button.dataset.adminDbCompanySelect || "");
+      openAdminDbCompanyReview(button.getAttribute("data-admin-db-company-select") || "");
     });
     button.addEventListener("pointerup", (event) => {
-      event.preventDefault();
+      if (button.tagName !== "A") event.preventDefault();
       event.stopPropagation();
-      openAdminDbCompanyReview(button.dataset.adminDbCompanySelect || "");
+      openAdminDbCompanyReview(button.getAttribute("data-admin-db-company-select") || "");
     });
   });
   document.querySelectorAll("[data-admin-db-company-card-select]").forEach((card) => {
-    if (card.dataset.adminDbCardSelectBound === "1") return;
-    card.dataset.adminDbCardSelectBound = "1";
+    if (card.getAttribute("data-admin-db-card-select-bound") === "1") return;
+    card.setAttribute("data-admin-db-card-select-bound", "1");
     card.addEventListener("click", (event) => {
       if (event.target.closest("button, a, input, select, textarea, label, summary")) return;
-      openAdminDbCompanyReview(card.dataset.adminDbCompanyCardSelect || "");
+      openAdminDbCompanyReview(card.getAttribute("data-admin-db-company-card-select") || "");
     });
   });
 }
 
 function bindEvents() {
+  window.addEventListener("hashchange", () => {
+    handleAdminDbCompanyHash();
+  });
+  window.setInterval(() => {
+    const companyId = adminDbCompanyIdFromRoute();
+    if (!companyId) return;
+    if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId) return;
+    handleAdminDbCompanyHash();
+  }, 250);
   document.querySelectorAll(".bottom-nav button").forEach((button) => {
     button.addEventListener("click", () => {
       const adminPrimary = button.dataset.adminPrimary || "";
@@ -29333,8 +29393,9 @@ function bindEvents() {
   document.addEventListener("pointerup", (event) => {
     const adminDbCompanySelect = event.target.closest?.("[data-admin-db-company-select]");
     if (!adminDbCompanySelect) return;
-    event.preventDefault();
-    openAdminDbCompanyReview(adminDbCompanySelect.dataset.adminDbCompanySelect || "");
+    if (adminDbCompanySelect.tagName !== "A") event.preventDefault();
+    event.stopPropagation();
+    openAdminDbCompanyReview(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
   }, true);
   document.addEventListener("click", (event) => {
     const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
@@ -29378,7 +29439,8 @@ function bindEvents() {
     }
     const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
     if (adminDbCompanySelect) {
-      openAdminDbCompanyReview(adminDbCompanySelect.dataset.adminDbCompanySelect || "");
+      if (adminDbCompanySelect.tagName !== "A") event.preventDefault();
+      openAdminDbCompanyReview(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
       return;
     }
     if (event.target.closest("[data-admin-db-clear]")) {
@@ -29432,6 +29494,13 @@ function bindEvents() {
     const adminDbView = event.target.closest("[data-admin-db-view]");
     if (adminDbView) {
       const mode = adminDbView.dataset.adminDbView || "region";
+      const companyId = adminDbView.getAttribute("data-admin-db-company-id") || adminDbView.getAttribute("data-admin-db-company-select") || "";
+      if (mode === "review" && companyId) {
+        if (adminDbView.tagName !== "A") event.preventDefault();
+        openAdminDbCompanyReview(companyId);
+        return;
+      }
+      if (mode !== "review") clearAdminDbCompanyHash();
       state.adminDbViewMode = ["region", "list", "review"].includes(mode) ? mode : "region";
       state.adminDbOpsOpen = state.adminDbViewMode === "review";
       renderAdminConsoleDashboard();
@@ -29441,6 +29510,7 @@ function bindEvents() {
     const adminDbViewLink = event.target.closest("[data-admin-db-view-link]");
     if (adminDbViewLink) {
       const mode = adminDbViewLink.dataset.adminDbViewLink || "list";
+      if (mode !== "review") clearAdminDbCompanyHash();
       state.adminDbViewMode = ["region", "list", "review"].includes(mode) ? mode : "list";
       state.adminDbOpsOpen = false;
       renderAdminConsoleDashboard();

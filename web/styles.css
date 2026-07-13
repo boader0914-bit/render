@@ -31825,6 +31825,7 @@ body.role-admin .admin-db-company-tags em {
 }
 
 body.role-admin .admin-db-company-action button,
+body.role-admin .admin-db-company-action a,
 body.role-admin #adminMemberRequestDashboard button,
 body.role-admin [data-admin-section-panel="files"] button,
 body.role-admin [data-admin-section-panel="files"] a {
@@ -31834,7 +31835,8 @@ body.role-admin [data-admin-section-panel="files"] a {
   box-shadow: none;
 }
 
-body.role-admin .admin-db-company-action button {
+body.role-admin .admin-db-company-action button,
+body.role-admin .admin-db-company-action a {
   max-width: 100%;
   min-width: 112px;
   white-space: normal;
@@ -31842,7 +31844,8 @@ body.role-admin .admin-db-company-action button {
   padding-block: 8px;
 }
 
-body.role-admin .admin-db-company-action button.primary {
+body.role-admin .admin-db-company-action button.primary,
+body.role-admin .admin-db-company-action a.primary {
   border-color: rgba(121, 184, 255, .64) !important;
   background: linear-gradient(180deg, #4a90e2, #2f74d0) !important;
   color: #ffffff !important;
@@ -31900,7 +31903,8 @@ body.role-admin .admin-db-company-title-row strong {
     justify-content: stretch;
   }
 
-  body.role-admin .admin-db-company-action button {
+  body.role-admin .admin-db-company-action button,
+  body.role-admin .admin-db-company-action a {
     flex: 1 1 140px;
     min-width: 0;
   }
@@ -33685,7 +33689,8 @@ body.role-admin .admin-db-company-action {
   gap: 6px;
 }
 
-body.role-admin .admin-db-company-action button {
+body.role-admin .admin-db-company-action button,
+body.role-admin .admin-db-company-action a {
   min-width: 0;
   min-height: 34px;
   padding: 7px 10px;
@@ -33802,7 +33807,8 @@ body.role-admin .admin-db-company-action button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  body.role-admin .admin-db-company-action button {
+  body.role-admin .admin-db-company-action button,
+  body.role-admin .admin-db-company-action a {
     width: 100%;
     min-height: 38px;
     font-size: 12px;
@@ -33975,12 +33981,35 @@ body.role-admin .admin-db-company-values b {
   letter-spacing: 0 !important;
 }
 
-body.role-admin .admin-db-company-action button {
+body.role-admin .admin-db-company-action button,
+body.role-admin .admin-db-company-action a {
   width: 100%;
   min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
-body.role-admin .admin-db-company-action button + button {
+body.role-admin a[data-admin-db-company-select] {
+  border: 1px solid rgba(121, 184, 255, .54);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #4a90e2, #2f74d0);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 7px 12px;
+  text-decoration: none;
+  font-weight: 800;
+  box-shadow: 0 12px 24px rgba(47, 116, 208, .22);
+}
+
+body.role-admin .admin-db-company-action button + button,
+body.role-admin .admin-db-company-action a + button,
+body.role-admin .admin-db-company-action button + a,
+body.role-admin .admin-db-company-action a + a {
   margin-top: 0;
 }
 
