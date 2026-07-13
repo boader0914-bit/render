@@ -18063,9 +18063,9 @@ function adminDbPageScrollSelector(mode = "region") {
 function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], grouped = []) {
   const regionCount = grouped.reduce((sum, province) => sum + (province.regions || []).length, 0);
   const buttons = [
-    ["region", "지역별 보기", `광역 ${fmtNumber(grouped.length)} · 지역 ${fmtNumber(regionCount)}`],
-    ["list", "업체 목록", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}개 업체`],
-    ["review", "상세 수정", "수정·확인"]
+    ["region", "지역", `광역 ${fmtNumber(grouped.length)} · 지역 ${fmtNumber(regionCount)}`],
+    ["list", "업체", `${fmtNumber(filteredRows.length)}/${fmtNumber(rows.length)}곳`],
+    ["review", "상세", "수정·확인"]
   ];
   return `
     <div class="admin-db-view-switch" role="tablist" aria-label="업체 관리 보기 방식">
@@ -18153,19 +18153,19 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
   ].filter(Boolean).length;
   const guide = {
     region: {
-      label: "지역별 보기",
-      title: "광역 · 시군구",
+      label: "지역",
+      title: "광역 · 시군구 보기",
       copy: "",
       metric: `${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(regionCount)}개 지역`
     },
     list: {
-      label: "업체 찾기",
+      label: "업체",
       title: "업체 목록",
       copy: "",
       metric: `${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개`
     },
     review: {
-      label: "상세 검수",
+      label: "상세",
       title: "상세 수정",
       copy: "",
       metric: state.adminDbSelectedCompanyId ? "선택 업체 검수" : "우선 검수 업체"
@@ -18269,9 +18269,9 @@ function adminDbProvinceQuickBoard(grouped = [], filters = {}) {
     <section class="admin-db-province-board" aria-label="광역/도 빠른 분류">
       <div class="admin-db-province-board-head">
         <div>
-          <span>광역/도 1차 분류</span>
-          <strong>지역 카드에서 시군구와 업체 목록으로 내려갑니다</strong>
-          <small>먼저 광역을 선택하고, 필요하면 업체 검색·상태·시설 필터로 좁힙니다.</small>
+          <span>광역/도</span>
+          <strong>지역 선택</strong>
+          <small>광역 선택 후 시군구와 업체 목록을 확인합니다.</small>
         </div>
         <mark>${fmtNumber(grouped.length)}개 광역 · ${fmtNumber(totalRows)}개 업체</mark>
       </div>
@@ -19811,15 +19811,14 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
       <div class="admin-db-flat-head">
         <div>
           <span>업체 목록</span>
-          <strong>검색 결과</strong>
+          <strong>${escapeHtml(sortText)}</strong>
           <small>${escapeHtml(scopeText)} · ${fmtNumber(rows.length)}/${fmtNumber(allRows.length)}개 업체 · ${fmtNumber(rangeStart)}-${fmtNumber(rangeEnd)} 표시</small>
         </div>
         <mark>${fmtNumber(page)} / ${fmtNumber(totalPages)}쪽</mark>
       </div>
       <div class="admin-db-list-guide" aria-label="업체 리스트 기준">
-        <span>정렬 ${escapeHtml(sortText)}</span>
         <span>페이지당 ${fmtNumber(pageSize)}개</span>
-        <span>상세 수정</span>
+        <span>상세는 선택 후 확인</span>
       </div>
       <div class="admin-db-company-list flat">
         ${shown.length ? shown.map((row, index) => adminDbCompanyRow(row, { index: startIndex + index + 1 })).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
@@ -20014,18 +20013,16 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
     </div>
   `;
-  const selectedRow = adminDbSelectedRow(filteredRows);
-  const selectedDetailHtml = adminDbSelectedDetailPanel(filteredRows);
-  const reviewPanelsHtml = `
-    ${adminDbUserViewBridgeHtml(selectedRow)}
-    ${selectedDetailHtml}
+  const reviewPanelsHtml = viewMode === "review" ? `
+    ${adminDbUserViewBridgeHtml(adminDbSelectedRow(filteredRows))}
+    ${adminDbSelectedDetailPanel(filteredRows)}
     <details class="admin-db-review-support">
       <summary>
         <div>
-          <strong>검수 보조자료 펼치기</strong>
-          <small>전체 지표, 지역별 신뢰도, 확인 수집 대상은 필요할 때만 확인합니다.</small>
+          <strong>검수 보조자료</strong>
+          <small>전체 지표와 확인 수집 대상은 필요할 때만 확인합니다.</small>
         </div>
-        <span>보조자료</span>
+        <span>펼치기</span>
       </summary>
       <div class="admin-db-review-support-body">
         ${metricSummaryHtml}
@@ -20034,7 +20031,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
         ${adminDbCollectionPanel(filteredRows)}
       </div>
     </details>
-  `;
+  ` : "";
   const mainViewHtml = viewMode === "review"
     ? `<section class="admin-db-review-surface">${reviewPanelsHtml}</section>`
     : viewMode === "list"
@@ -20049,6 +20046,20 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
     || filters.feature !== "all"
     || filters.quality !== "all"
   );
+  const primaryFilterOpen = Boolean(
+    (filters.query || "").trim()
+    || filters.province !== "all"
+    || filters.region !== "all"
+    || filters.sort !== "name"
+    || advancedFilterOpen
+  );
+  const activeFilterSummary = [
+    (filters.query || "").trim() ? "검색어" : "",
+    filters.province !== "all" ? "광역" : "",
+    filters.region !== "all" ? "지역" : "",
+    filters.sort !== "name" ? "정렬" : "",
+    advancedFilterOpen ? "상세" : ""
+  ].filter(Boolean).join(" · ") || "전체 조건";
   const filterToolbarHtml = `
     <div class="admin-db-filter-shell">
       <div class="admin-db-toolbar admin-db-toolbar-main">
@@ -20171,7 +20182,18 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
           ${filterToolbarHtml}
         </details>
       ` : ""}
-      ${viewMode === "list" ? filterToolbarHtml : ""}
+      ${viewMode === "list" ? `
+        <details class="admin-db-search-drawer list" ${primaryFilterOpen ? "open" : ""}>
+          <summary>
+            <div>
+              <strong>검색·필터</strong>
+              <small>${escapeHtml(activeFilterSummary)}</small>
+            </div>
+            <span>${primaryFilterOpen ? "적용중" : "열기"}</span>
+          </summary>
+          ${filterToolbarHtml}
+        </details>
+      ` : ""}
       <section class="admin-db-page-surface ${escapeHtml(viewMode)}" data-admin-db-page="${escapeHtml(viewMode)}">
         ${mainViewHtml}
       </section>

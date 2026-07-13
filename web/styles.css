@@ -33474,3 +33474,272 @@ body.role-admin :is(
   border-color: #f3b4b4 !important;
   background: #fff5f5 !important;
 }
+
+/* Admin DB page split and company-list density lock. */
+body.role-admin .admin-db-board {
+  gap: 10px;
+}
+
+body.role-admin .admin-db-view-switch {
+  width: min(760px, 100%);
+  margin-inline: auto;
+  border-radius: 10px;
+  padding: 7px;
+}
+
+body.role-admin .admin-db-view-switch button {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+body.role-admin .admin-db-view-switch span {
+  font-size: 13px;
+  line-height: 1.1;
+}
+
+body.role-admin .admin-db-view-switch small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.role-admin .admin-db-page-guide {
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+body.role-admin .admin-db-page-guide strong {
+  font-size: 15px;
+}
+
+body.role-admin .admin-db-page-guide-meta b {
+  font-size: 15px;
+}
+
+body.role-admin .admin-db-flat-list {
+  border-radius: 10px;
+  padding: 10px;
+  scroll-margin-top: 170px;
+}
+
+body.role-admin .admin-db-flat-head {
+  align-items: center;
+}
+
+body.role-admin .admin-db-list-guide {
+  gap: 5px;
+}
+
+body.role-admin .admin-db-company {
+  grid-template-columns: minmax(250px, 1.1fr) minmax(230px, .82fr) minmax(160px, .62fr) minmax(112px, auto);
+  gap: 10px;
+  border-radius: 10px;
+  padding: 10px;
+  scroll-margin-top: 170px;
+}
+
+body.role-admin .admin-db-company-main {
+  gap: 4px;
+}
+
+body.role-admin .admin-db-company-title-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+body.role-admin .admin-db-company-title-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+body.role-admin .admin-db-company-main p {
+  -webkit-line-clamp: 1;
+}
+
+body.role-admin .admin-db-company-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+body.role-admin .admin-db-company-values span {
+  min-height: 50px;
+  padding: 7px 8px;
+}
+
+body.role-admin .admin-db-company-values b {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+body.role-admin .admin-db-company-values small {
+  font-size: 10.5px;
+}
+
+body.role-admin .admin-db-company-tags {
+  max-height: 58px;
+  overflow: hidden;
+}
+
+body.role-admin .admin-db-company-tags em {
+  font-size: 10.5px;
+  line-height: 1.12;
+  padding: 4px 7px;
+}
+
+body.role-admin .admin-db-company-action {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+body.role-admin .admin-db-company-action button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+@media (max-width: 1500px) and (min-width: 761px) {
+  body.role-admin .admin-db-company {
+    grid-template-columns: minmax(250px, 1fr) minmax(230px, .95fr);
+  }
+
+  body.role-admin .admin-db-company-tags,
+  body.role-admin .admin-db-company-action {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  body.role-admin .admin-db-view-switch {
+    width: 100%;
+    gap: 5px;
+    padding: 5px;
+  }
+
+  body.role-admin .admin-db-view-switch button {
+    min-height: 42px;
+    padding: 7px 6px;
+  }
+
+  body.role-admin .admin-db-view-switch small,
+  body.role-admin .admin-db-list-guide {
+    display: none;
+  }
+
+  body.role-admin .admin-db-page-guide {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 10px;
+  }
+
+  body.role-admin .admin-db-page-guide-meta {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  body.role-admin .admin-db-flat-list {
+    padding: 10px;
+    scroll-margin-top: 150px;
+  }
+
+  body.role-admin .admin-db-flat-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  body.role-admin .admin-db-flat-head small {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  body.role-admin .admin-db-company {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 12px !important;
+    scroll-margin-top: 150px;
+  }
+
+  body.role-admin .admin-db-company-main small {
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
+  body.role-admin .admin-db-company-main p {
+    display: none;
+  }
+
+  body.role-admin .admin-db-company-index {
+    min-width: 21px;
+    height: 21px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  body.role-admin .admin-db-company-values {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-company-values span {
+    min-height: 48px;
+  }
+
+  body.role-admin .admin-db-company-values b {
+    font-size: 13.5px;
+  }
+
+  body.role-admin .admin-db-company-tags {
+    max-height: 28px;
+  }
+
+  body.role-admin .admin-db-company-tags em {
+    max-width: calc(50% - 4px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.role-admin .admin-db-company-action {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-company-action button {
+    width: 100%;
+    min-height: 38px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 420px) {
+  body.role-admin .admin-db-page-guide-meta,
+  body.role-admin .admin-db-flat-head {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  body.role-admin .admin-db-flat-head mark {
+    justify-self: start;
+  }
+
+  body.role-admin .admin-db-company-action {
+    grid-template-columns: 1fr;
+  }
+}
