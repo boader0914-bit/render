@@ -166,13 +166,13 @@ const SEARCH_MODES = {
   company: "업체명"
 };
 const COLLECTION_MODES = {
-  precision: "정밀 분석",
-  fast: "빠른 순위"
+  precision: "상세 확인",
+  fast: "순위 확인"
 };
 const COLLECTION_PURPOSES = {
-  basic_db: "기본 DB 수집",
-  revenue_detail: "상세 매출 수집",
-  demand_location: "수요·입지 정밀 분석"
+  basic_db: "기본정보 수집",
+  revenue_detail: "상세정보 수집",
+  demand_location: "지역정보 수집"
 };
 
 function kstDate(offsetDays = 0) {
@@ -200,7 +200,8 @@ function normalizeSearchMode(value) {
 function normalizeCollectionMode(value) {
   const text = String(value || "").trim();
   if (COLLECTION_MODES[text]) return text;
-  if (text === "빠른 순위" || text.toLowerCase() === "fast") return "fast";
+  if (text === "빠른 순위" || text === "순위 확인" || text.toLowerCase() === "fast") return "fast";
+  if (text === "정밀 분석" || text === "상세 확인") return "precision";
   return "precision";
 }
 
@@ -225,7 +226,7 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   if (mode === "fast") {
     return {
       key: "fast_rank",
-      label: "빠른 순위 확인",
+      label: "순위 확인",
       note: "순위 중심으로 빠르게 확인하고 상세 수집은 생략합니다.",
       collectRegional: false,
       collectOta: false,
@@ -236,8 +237,8 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   if (purpose === "basic_db") {
     return {
       key: "basic_db_light",
-      label: "기본 DB 중심",
-      note: "순위, 예약 연결, 상품 구성과 대표 가격을 넓게 확인하고 기간별 매출은 생략합니다.",
+      label: "기본정보 중심",
+      note: "순위, 상품 및 상품별 금액, 예약채널을 넓게 확인하고 기간별 매출은 생략합니다.",
       collectRegional: false,
       collectOta: false,
       collectBookingStock: true,
@@ -247,8 +248,8 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   if (purpose === "demand_location") {
     return {
       key: "demand_location_signal",
-      label: "수요·입지 중심",
-      note: "지역 노출, 클러스터, 검색수요 신호를 우선하고 기간별 매출은 상세 매출 수집에서 확인합니다.",
+      label: "지역정보 중심",
+      note: "수요, 입지, 클러스터 신호를 우선하고 기간별 매출은 상세정보 수집에서 확인합니다.",
       collectRegional: true,
       collectOta: false,
       collectBookingStock: true,
@@ -257,8 +258,8 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   }
   return {
     key: "revenue_detail_deep",
-    label: "상세 매출 중심",
-    note: "예약 수량, 요일별 가격, 기간별 예상 매출과 보조 채널을 함께 확인합니다.",
+    label: "상세정보 중심",
+    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 함께 확인합니다.",
     collectRegional: true,
     collectOta: true,
     collectBookingStock: true,
@@ -12824,8 +12825,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260713-admin-korean-input"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260713-admin-korean-input"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260713-admin-collection-purpose"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260713-admin-collection-purpose"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

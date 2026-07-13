@@ -16991,6 +16991,13 @@ a.platform-row:hover {
   font-weight: 800;
 }
 
+.field small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 780;
+  line-height: 1.35;
+}
+
 .field input,
 .field select,
 .field textarea {
@@ -17022,6 +17029,13 @@ a.platform-row:hover {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.crawl-rank-range-field {
+  padding: 11px;
+  border: 1px solid rgba(121, 184, 255, .22);
+  border-radius: 14px;
+  background: rgba(8, 13, 20, .52);
 }
 
 .crawl-speed-panel {

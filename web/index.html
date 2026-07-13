@@ -245,6 +245,7 @@
               </select>
             </label>
             <input id="collectionPurposeInput" type="hidden" value="revenue_detail">
+            <input id="collectionModeInput" type="hidden" value="precision">
             <section class="crawl-purpose-panel" aria-label="수집 목적">
               <div class="crawl-purpose-head">
                 <strong>수집 목적</strong>
@@ -252,47 +253,28 @@
               </div>
               <div class="crawl-purpose-options">
                 <button type="button" data-collection-purpose="basic_db">
-                  <strong>기본 DB 수집</strong>
-                  <span>순위·상품·금액·기본 채널</span>
-                  <em>업체 목록을 넓게 확보</em>
+                  <strong>기본정보 수집</strong>
+                  <span>순위·상품·상품별 금액·예약채널</span>
+                  <em>권장 1-50위</em>
                 </button>
                 <button type="button" data-collection-purpose="revenue_detail" class="active">
-                  <strong>상세 매출 수집</strong>
-                  <span>요일별 수량·가격·예상 매출</span>
-                  <em>운영 판단용 기본값</em>
+                  <strong>상세정보 수집</strong>
+                  <span>요일별 매출·예약율·수량·가격·OTA</span>
+                  <em>권장 1-10위</em>
                 </button>
                 <button type="button" data-collection-purpose="demand_location">
-                  <strong>수요·입지 정밀 분석</strong>
-                  <span>트렌드·클러스터·입지 보정</span>
-                  <em>전략 분석용 보강</em>
+                  <strong>지역정보 수집</strong>
+                  <span>수요·입지·클러스터</span>
+                  <em>권장 1-20위</em>
                 </button>
               </div>
             </section>
             <div class="crawl-route-preview" id="crawlPurposeRoutePreview" aria-live="polite"></div>
-            <div class="field-grid">
-              <label class="field">
-                <span>분석 방식</span>
-                <select id="collectionModeInput">
-                  <option value="precision">정밀 분석</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>순위 범위</span>
-                <input id="detailRankRangesInput" type="text" value="1-10" placeholder="예: 1-10, 1-50, 1-100">
-              </label>
-            </div>
-            <div class="crawl-speed-panel">
-              <div>
-                <strong>검색범위 프리셋</strong>
-                <span id="crawlSpeedPreview">예상 계산 대기</span>
-              </div>
-              <div class="crawl-speed-options" id="crawlSpeedPresetRow">
-                <button type="button" data-crawl-speed-preset="top10">1-10위</button>
-                <button type="button" data-crawl-speed-preset="top20">1-20위</button>
-                <button type="button" data-crawl-speed-preset="top50">1-50위</button>
-                <button type="button" data-crawl-speed-preset="top100">1-100위</button>
-              </div>
-            </div>
+            <label class="field crawl-rank-range-field">
+              <span>순위 범위</span>
+              <input id="detailRankRangesInput" type="text" value="1-10" placeholder="예: 1-10, 1-50, 1-100">
+              <small>수집 목적에 따라 자동 설정되며 직접 수정할 수 있습니다.</small>
+            </label>
             <div class="crawl-progress is-preview" id="crawlProgress">
               <span class="crawl-spinner" aria-hidden="true"></span>
               <div class="crawl-progress-copy">
@@ -313,7 +295,7 @@
               <button class="primary-button" type="submit">수집 실행</button>
               <span id="crawlSubmitMeta">예상 시간 계산 중</span>
             </div>
-            <p class="hint" id="crawlStatus">기본 분석은 1~10위, 확장 분석은 1~20위까지 재고와 가격을 확인합니다.</p>
+            <p class="hint" id="crawlStatus">수집 목적과 순위 범위를 확인한 뒤 실행하세요.</p>
             <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
           </form>
 

@@ -567,33 +567,33 @@ function productModeLabel(value) {
 }
 
 function collectionModeLabel(value) {
-  return value === "fast" ? "빠른 순위" : "정밀 분석";
+  return value === "fast" ? "순위 확인" : "상세 확인";
 }
 
 const COLLECTION_PURPOSE_PROFILES = {
   basic_db: {
     key: "basic_db",
-    label: "기본 DB 수집",
-    shortLabel: "기본 DB",
+    label: "기본정보 수집",
+    shortLabel: "기본정보",
     defaultRange: "1-50",
-    note: "순위·상품·금액·채널 기본정보를 넓게 확보",
-    status: "업체 기본 DB를 넓게 채우는 수집입니다."
+    note: "순위, 상품 및 상품별 금액, 예약채널을 넓게 확보",
+    status: "업체 기본정보 DB를 채우는 수집입니다."
   },
   revenue_detail: {
     key: "revenue_detail",
-    label: "상세 매출 수집",
-    shortLabel: "상세 매출",
+    label: "상세정보 수집",
+    shortLabel: "상세정보",
     defaultRange: "1-10",
-    note: "요일별 수량·가격·예상 매출 확인",
-    status: "매출 판단에 필요한 날짜별 수량과 가격을 확인합니다."
+    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 취합",
+    status: "요일별 매출과 예약율 판단에 필요한 상세정보를 수집합니다."
   },
   demand_location: {
     key: "demand_location",
-    label: "수요·입지 정밀 분석",
-    shortLabel: "수요·입지",
+    label: "지역정보 수집",
+    shortLabel: "지역정보",
     defaultRange: "1-20",
-    note: "검색수요·클러스터·입지 보정 분석",
-    status: "수요 구조와 입지 보정값을 함께 점검합니다."
+    note: "수요, 입지, 클러스터 신호를 함께 확인",
+    status: "지역 수요와 입지·클러스터 지표를 수집합니다."
   }
 };
 
@@ -607,7 +607,7 @@ const COLLECTION_PURPOSE_EXECUTION_PROFILES = {
     collectWeeklyRange: false
   },
   revenue_detail: {
-    depthLabel: "상세 매출 중심",
+    depthLabel: "상세정보 중심",
     depthNote: "기간 매출 포함",
     collectRegional: true,
     collectOta: true,
@@ -628,9 +628,9 @@ const COLLECTION_PURPOSE_UI_COPY = {
   basic_db: {
     label: "기본정보 수집",
     shortLabel: "기본정보",
-    note: "순위, 상품 구성, 대표 금액, 예약 연결 여부를 넓게 채웁니다.",
-    status: "업체 마스터 DB를 넓게 채우는 수집입니다.",
-    cardSummary: "순위·상품·대표금액·예약 연결",
+    note: "순위, 상품 및 상품별 금액, 예약채널을 넓게 채웁니다.",
+    status: "업체 기본정보 DB를 채우는 수집입니다.",
+    cardSummary: "순위·상품·상품별 금액·예약채널",
     dbTarget: "업체 마스터 DB",
     dbApplyText: "마스터 기본정보 반영",
     excludeText: "기간별 매출 누적 제외",
@@ -639,24 +639,24 @@ const COLLECTION_PURPOSE_UI_COPY = {
     depthNote: "기간 매출 제외"
   },
   revenue_detail: {
-    label: "상세 매출 수집",
-    shortLabel: "상세 매출",
-    note: "요일별 수량, 가격, 예약율, 기간 예상 매출을 누적합니다.",
-    status: "매출 판단에 필요한 날짜별 수량과 가격을 확인합니다.",
-    cardSummary: "요일별 수량·가격·예약율·예상매출",
+    label: "상세정보 수집",
+    shortLabel: "상세정보",
+    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 취합합니다.",
+    status: "요일별 매출과 예약율 판단에 필요한 상세정보를 수집합니다.",
+    cardSummary: "요일별 매출·예약율·수량·가격·OTA",
     dbTarget: "매출 누적 DB",
     dbApplyText: "매출 히스토리 반영",
     excludeText: "범위 밖 업체는 매출 누적 제외",
     rangeHint: "권장 1-10위 · 확장 1-20위",
-    depthLabel: "상세 매출 중심",
+    depthLabel: "상세정보 중심",
     depthNote: "기간 매출 포함"
   },
   demand_location: {
-    label: "수요·입지 정밀 수집",
-    shortLabel: "수요·입지",
-    note: "검색수요, 클러스터, 입지 보정 신호를 함께 확인합니다.",
-    status: "수요 구조와 입지 보정값을 평가합니다.",
-    cardSummary: "검색수요·클러스터·입지 보정",
+    label: "지역정보 수집",
+    shortLabel: "지역정보",
+    note: "수요, 입지, 클러스터 신호를 함께 확인합니다.",
+    status: "지역 수요와 입지·클러스터 지표를 수집합니다.",
+    cardSummary: "수요·입지·클러스터",
     dbTarget: "수요·입지 신호 DB",
     dbApplyText: "지역카드·클러스터 반영",
     excludeText: "기간별 매출 누적 제외",
@@ -1135,19 +1135,21 @@ function renderRunResultApplySummary() {
 
 function updateCrawlSpeedPreview() {
   ensureCrawlControls();
-  if (!els.crawlSpeedPresetRow && !els.crawlSpeedPreview) return;
+  if (!els.crawlForm) return;
   const payload = currentCrawlFormPayload();
   const preview = crawlPreviewMeta(payload);
   const selectedKey = selectedCrawlSpeedPresetKey(payload);
   const presetOptions = crawlSpeedPresetOptions(payload.collectionPurpose);
-  els.crawlSpeedPresetRow?.querySelectorAll("[data-crawl-speed-preset]").forEach((button) => {
-    const preset = presetOptions.find((row) => row.key === button.dataset.crawlSpeedPreset);
-    if (preset) {
-      button.textContent = preset.label;
-      button.title = preset.note || preset.label;
-    }
-    button.classList.toggle("active", button.dataset.crawlSpeedPreset === selectedKey);
-  });
+  if (els.crawlSpeedPresetRow) {
+    els.crawlSpeedPresetRow.querySelectorAll("[data-crawl-speed-preset]").forEach((button) => {
+      const preset = presetOptions.find((row) => row.key === button.dataset.crawlSpeedPreset);
+      if (preset) {
+        button.textContent = preset.label;
+        button.title = preset.note || preset.label;
+      }
+      button.classList.toggle("active", button.dataset.crawlSpeedPreset === selectedKey);
+    });
+  }
   if (els.crawlSpeedPreview) {
     const purpose = collectionPurposeProfile(payload.collectionPurpose);
     const detailText = `${payload.detailRankRanges || collectionPurposeDefaultRange(payload.collectionPurpose)}위`;
@@ -1706,7 +1708,7 @@ function crawlEstimateBasisText(basis = {}) {
   const range = Number(basis.bookingRangeDays) > 1
     ? `${fmtNumber(basis.bookingRangeDays)}일 · 상세 대상 중 최대 ${fmtNumber(basis.bookingRangePlaceLimit)}개`
     : "1일 기준";
-  const detail = basis.collectionMode === "fast" ? "상세 생략" : `상세 ${basis.detailRankRanges || "1-10"}위`;
+  const detail = `수집 범위 ${basis.detailRankRanges || "1-10"}위`;
   const timing = basis.timing || {};
   let timingText = "예상 기준: 조건 모델";
   if (timing.source === "measured") {
@@ -1715,7 +1717,7 @@ function crawlEstimateBasisText(basis = {}) {
     timingText = `예상 기준: 동일 조건 최근 결과${timing.ageSeconds ? ` · ${formatElapsed(timing.ageSeconds)} 전 수집` : ""}`;
   }
   const purposeLabel = basis.collectionPurposeLabel || collectionPurposeLabel(basis.collectionPurpose || "revenue_detail");
-  return `${purposeLabel} · ${basis.collectionModeLabel || "정밀 분석"} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
+  return `${purposeLabel} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
 }
 
 function crawlStageFallbacks() {
@@ -22036,6 +22038,7 @@ function adminConsoleQueuePreview(entries = []) {
 function adminConsoleCrawlPanel(entries = []) {
   const payload = currentCrawlFormPayload();
   const preview = crawlPreviewMeta(payload);
+  const purpose = collectionPurposeProfile(payload.collectionPurpose);
   const run = state.data?.run || {};
   const counts = run.counts || {};
   const openEntries = entries.filter((entry) => entry.workflow.key !== "done");
@@ -22043,7 +22046,7 @@ function adminConsoleCrawlPanel(entries = []) {
   const trend = state.data?.stats?.datalabTrend || state.data?.datalabTrend || {};
   const cells = [
     ["예상 소요", formatElapsed(preview.estimatedTotalSeconds), crawlEstimateBasisText(preview.estimateBasis)],
-    ["완료 예정", formatClockTime(preview.estimatedCompleteAt), `${collectionModeLabel(payload.collectionMode)} · ${payload.detailRankRanges || "상세 생략"}`],
+    ["완료 예정", formatClockTime(preview.estimatedCompleteAt), `${purpose.shortLabel || purpose.label} · ${payload.detailRankRanges || purpose.defaultRange}위`],
     ["API/캐시", trend.cache?.hit ? "캐시 사용" : trend.collectable ? "연동 정상" : "대기", trend.cache?.endDate || trend.reason || "동일 기준일 캐시 우선"],
     ["재수집 후보", fmtNumber(recrawlRows.length), openEntries.length ? "큐 기준 자동 산출" : "대기"],
     ["최근 상세", fmtNumber(counts.naverBookingStockSucceeded || 0), `${fmtNumber(counts.naverBookingStockChecked || 0)}개 시도`],
@@ -25358,7 +25361,7 @@ function runSearchDateLabel(run = {}) {
 
 function runSearchModeLabel(run = {}) {
   const parts = [
-    run.collectionModeLabel || (run.collectionMode === "fast" ? "빠른 분석" : "정밀 분석"),
+    run.collectionModeLabel || (run.collectionMode === "fast" ? "순위 확인" : "상세 확인"),
     run.detailRankRanges ? `${run.detailRankRanges}위` : "",
     Number(run.bookingRangeDays) > 1 ? `${fmtNumber(run.bookingRangeDays)}일` : ""
   ].filter(Boolean);
