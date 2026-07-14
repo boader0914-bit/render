@@ -6271,7 +6271,12 @@ function sanitizeCompanyChannelProduct(entry = {}) {
   const productName = sanitizeCompanyChannelText(entry.productName || entry.name || "", 120);
   const roomType = sanitizeCompanyChannelText(entry.roomType || entry.room || "", 120);
   const stayType = sanitizeCompanyChannelText(entry.stayType || entry.type || "", 40);
-  const quantity = Number.isFinite(Number(entry.quantity)) && Number(entry.quantity) >= 0 ? Math.round(Number(entry.quantity)) : null;
+  const rawTotalQuantity = entry.totalQuantity ?? entry.total ?? entry.quantity;
+  const totalQuantity = Number.isFinite(Number(rawTotalQuantity)) && Number(rawTotalQuantity) >= 0 ? Math.round(Number(rawTotalQuantity)) : null;
+  const soldQuantity = Number.isFinite(Number(entry.soldQuantity ?? entry.sold)) && Number(entry.soldQuantity ?? entry.sold) >= 0
+    ? Math.round(Number(entry.soldQuantity ?? entry.sold))
+    : null;
+  const quantity = totalQuantity;
   const weekdayPrice = sanitizeCompanyChannelText(entry.weekdayPrice || entry.weekday || "", 80);
   const fridayPrice = sanitizeCompanyChannelText(entry.fridayPrice || entry.friday || "", 80);
   const saturdayPrice = sanitizeCompanyChannelText(entry.saturdayPrice || entry.saturday || "", 80);
@@ -6288,13 +6293,15 @@ function sanitizeCompanyChannelProduct(entry = {}) {
     sundayPrice,
     basisPeriod,
     note
-  ].some(Boolean) || quantity !== null || entry.priceConfirmed || entry.quantityConfirmed;
+  ].some(Boolean) || totalQuantity !== null || soldQuantity !== null || entry.priceConfirmed || entry.quantityConfirmed;
   if (!hasValue) return null;
   return {
     productName,
     roomType,
     stayType,
     quantity,
+    totalQuantity,
+    soldQuantity,
     weekdayPrice,
     fridayPrice,
     saturdayPrice,
@@ -13073,8 +13080,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-onda-link-separation-v19"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-onda-link-separation-v19"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-channel-inventory-edit-v20"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-channel-inventory-edit-v20"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

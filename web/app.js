@@ -19745,6 +19745,8 @@ function adminDbChannelProductHasValue(product = {}) {
     product.roomType,
     product.stayType,
     product.quantity,
+    product.totalQuantity,
+    product.soldQuantity,
     product.weekdayPrice,
     product.fridayPrice,
     product.saturdayPrice,
@@ -19793,7 +19795,33 @@ function adminDbChannelBasisProfile(row = {}) {
     productText: adminDbProductSummary(company, metrics),
     priceText,
     avgPrice,
+    segments,
     source: segments.length || finiteNumber(correction.lodgingBasisTotal, 0) ? "관리자 보정" : "자동수집"
+  };
+}
+
+function adminDbChannelBasisProductDefaults(row = {}) {
+  const basis = adminDbChannelBasisProfile(row);
+  const primarySegment = basis.segments?.[0] || {};
+  const priceValue = (value) => {
+    const number = optionalNumber(value);
+    return Number.isFinite(number) && number > 0 ? fmtNumber(number) : "";
+  };
+  return {
+    productName: primarySegment.type || basis.productText || "",
+    roomType: primarySegment.type || "",
+    stayType: "숙박",
+    totalQuantity: primarySegment.count || basis.roomTotal || "",
+    weekdayPrice: priceValue(primarySegment.weekdayPrice),
+    fridayPrice: priceValue(primarySegment.fridayPrice),
+    saturdayPrice: priceValue(primarySegment.saturdayPrice),
+    sundayPrice: priceValue(primarySegment.sundayPrice),
+    basisText: [
+      basis.source,
+      basis.roomTotal ? `${fmtNumber(basis.roomTotal)}실` : "총량 대기",
+      basis.productText,
+      basis.priceText
+    ].filter(Boolean).join(" · ")
   };
 }
 
@@ -19812,8 +19840,10 @@ function adminDbChannelComparisonPanel(row = {}) {
     const entry = exposures[key] || {};
     const product = adminDbChannelProductEntry(entry);
     const hasProduct = adminDbChannelProductHasValue(product);
-    const quantity = optionalNumber(product.quantity);
-    const quantityText = Number.isFinite(quantity) && quantity >= 0 ? `${fmtNumber(quantity)}개` : "수량 미입력";
+    const quantity = optionalNumber(product.totalQuantity ?? product.quantity);
+    const soldQuantity = optionalNumber(product.soldQuantity);
+    const quantityText = Number.isFinite(quantity) && quantity >= 0 ? `${fmtNumber(quantity)}개` : "총량 미입력";
+    const soldText = Number.isFinite(soldQuantity) && soldQuantity >= 0 ? `${fmtNumber(soldQuantity)}개 판매` : "판매 미입력";
     const quantityGap = Number.isFinite(quantity) && basis.roomTotal
       ? quantity - basis.roomTotal
       : NaN;
@@ -19833,6 +19863,7 @@ function adminDbChannelComparisonPanel(row = {}) {
       product,
       hasProduct,
       quantityText,
+      soldText,
       quantityGap,
       priceText: adminDbChannelPriceRangeText(product),
       priceGap,
@@ -19861,9 +19892,9 @@ function adminDbChannelComparisonPanel(row = {}) {
             </div>
             <dl>
               <div>
-                <dt>수량</dt>
+                <dt>총량/판매</dt>
                 <dd>${escapeHtml(item.quantityText)}</dd>
-                <small>${Number.isFinite(item.quantityGap) ? escapeHtml(`기준 대비 ${item.quantityGap >= 0 ? "+" : ""}${fmtNumber(item.quantityGap)}개`) : "기준 비교 대기"}</small>
+                <small>${escapeHtml(`${item.soldText} · ${Number.isFinite(item.quantityGap) ? `기준 대비 ${item.quantityGap >= 0 ? "+" : ""}${fmtNumber(item.quantityGap)}개` : "기준 비교 대기"}`)}</small>
               </div>
               <div>
                 <dt>가격</dt>
@@ -19900,7 +19931,11 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
   const confidence = Number.isFinite(Number(entry.confidence)) ? ` · 신뢰 ${fmtNumber(entry.confidence)}%` : "";
   const searchKeyword = entry.searchKeyword ? ` · 검색어 ${entry.searchKeyword}` : "";
   const product = adminDbChannelProductEntry(entry);
-  const productOpen = adminDbChannelProductHasValue(product) ? "open" : "";
+  const basisDefaults = adminDbChannelBasisProductDefaults(row);
+  const productValue = (key) => String(product[key] ?? basisDefaults[key] ?? "");
+  const totalQuantityValue = String(product.totalQuantity ?? product.quantity ?? basisDefaults.totalQuantity ?? "");
+  const soldQuantityValue = String(product.soldQuantity ?? "");
+  const productOpen = "open";
   return `
     <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-surface="light" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
       <div class="admin-db-channel-row-head">
@@ -19920,8 +19955,8 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
           <input type="url" data-company-channel-url value="${escapeHtml(entry.url || "")}" placeholder="${escapeHtml(searchUrl || "확인 URL")}">
         </label>
         <label>
-          <span>가격</span>
-          <input type="text" data-company-channel-price value="${escapeHtml(entry.price || "")}" placeholder="예: 120,000원">
+          <span>채널 대표가</span>
+          <input type="text" data-company-channel-price value="${escapeHtml(entry.price || "")}" placeholder="${escapeHtml(productValue("weekdayPrice") || "네이버 기준가")}">
         </label>
         <label>
           <span>메모</span>
@@ -19930,41 +19965,45 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
       </div>
       <details class="admin-db-channel-product-box" ${productOpen}>
         <summary>
-          <strong>상품·수량·가격</strong>
-          <small>네이버 기준과 같은 방식으로 채널별 값을 입력</small>
+          <strong>네이버 기준 상품 · 채널 총량/판매</strong>
+          <small>${escapeHtml(basisDefaults.basisText || "네이버 기준 상품과 가격을 먼저 보정하세요.")}</small>
         </summary>
         <div class="admin-db-channel-product-grid">
           <label>
             <span>상품명</span>
-            <input type="text" data-company-channel-product-name value="${escapeHtml(product.productName || "")}" placeholder="예: 스탠다드 글램핑">
+            <input type="text" data-company-channel-product-name value="${escapeHtml(productValue("productName"))}" placeholder="예: 스탠다드 글램핑">
           </label>
           <label>
             <span>객실종류</span>
-            <input type="text" data-company-channel-room-type value="${escapeHtml(product.roomType || "")}" placeholder="예: 독채형 / 카라반">
+            <input type="text" data-company-channel-room-type value="${escapeHtml(productValue("roomType"))}" placeholder="예: 독채형 / 카라반">
           </label>
           <label>
             <span>구분</span>
-            <select data-company-channel-stay-type>${adminDbChannelStayTypeOptions(product.stayType || "")}</select>
+            <select data-company-channel-stay-type>${adminDbChannelStayTypeOptions(product.stayType || basisDefaults.stayType || "")}</select>
           </label>
           <label>
-            <span>수량</span>
-            <input type="number" min="0" step="1" data-company-channel-quantity value="${escapeHtml(product.quantity ?? "")}" placeholder="예: 12">
+            <span>기준 총량</span>
+            <input type="number" min="0" step="1" data-company-channel-total-quantity value="${escapeHtml(totalQuantityValue)}" placeholder="예: 12">
+          </label>
+          <label>
+            <span>판매갯수</span>
+            <input type="number" min="0" step="1" data-company-channel-sold-quantity value="${escapeHtml(soldQuantityValue)}" placeholder="예: 4">
           </label>
           <label>
             <span>평일</span>
-            <input type="text" data-company-channel-weekday-price value="${escapeHtml(product.weekdayPrice || "")}" placeholder="예: 120,000원">
+            <input type="text" data-company-channel-weekday-price value="${escapeHtml(productValue("weekdayPrice"))}" placeholder="예: 120,000원">
           </label>
           <label>
             <span>금</span>
-            <input type="text" data-company-channel-friday-price value="${escapeHtml(product.fridayPrice || "")}" placeholder="예: 160,000원">
+            <input type="text" data-company-channel-friday-price value="${escapeHtml(productValue("fridayPrice"))}" placeholder="예: 160,000원">
           </label>
           <label>
             <span>토</span>
-            <input type="text" data-company-channel-saturday-price value="${escapeHtml(product.saturdayPrice || "")}" placeholder="예: 220,000원">
+            <input type="text" data-company-channel-saturday-price value="${escapeHtml(productValue("saturdayPrice"))}" placeholder="예: 220,000원">
           </label>
           <label>
             <span>일</span>
-            <input type="text" data-company-channel-sunday-price value="${escapeHtml(product.sundayPrice || "")}" placeholder="예: 140,000원">
+            <input type="text" data-company-channel-sunday-price value="${escapeHtml(productValue("sundayPrice"))}" placeholder="예: 140,000원">
           </label>
           <label>
             <span>기준 기간</span>
@@ -28550,11 +28589,16 @@ async function saveCompanyCorrection(button, clear = false) {
 }
 
 function companyChannelPayloadFromForm(form = null, action = "save") {
+  const totalQuantity = form?.querySelector("[data-company-channel-total-quantity]")?.value
+    || form?.querySelector("[data-company-channel-quantity]")?.value
+    || "";
   const product = {
     productName: form?.querySelector("[data-company-channel-product-name]")?.value || "",
     roomType: form?.querySelector("[data-company-channel-room-type]")?.value || "",
     stayType: form?.querySelector("[data-company-channel-stay-type]")?.value || "",
-    quantity: form?.querySelector("[data-company-channel-quantity]")?.value || "",
+    quantity: totalQuantity,
+    totalQuantity,
+    soldQuantity: form?.querySelector("[data-company-channel-sold-quantity]")?.value || "",
     weekdayPrice: form?.querySelector("[data-company-channel-weekday-price]")?.value || "",
     fridayPrice: form?.querySelector("[data-company-channel-friday-price]")?.value || "",
     saturdayPrice: form?.querySelector("[data-company-channel-saturday-price]")?.value || "",
