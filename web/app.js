@@ -1094,11 +1094,11 @@ function runDbApplyLinkedQueueModel(model = {}, status = {}) {
     const confirmNeeded = metrics.collection?.needsConfirm || adminDbSourceMatches(row, "confirm_needed");
     const revenueWeak = Boolean(entry?.revenueEvidence?.weak);
     if (routeCount >= 2 && (lowConfidence || confirmNeeded || decisionActive || revenueWeak)) reasons.push(`${fmtNumber(routeCount)}회 반복 보강`);
-    if (lowConfidence) reasons.push(`수량 신뢰도 ${metrics.confidenceGrade || "낮음"}`);
+    if (lowConfidence) reasons.push(`자동 수집 신뢰도 ${metrics.confidenceGrade || "낮음"}`);
     if (manual) reasons.push("보정 필요");
     if (recrawl) reasons.push("재수집 필요");
     if (decisionActive) reasons.push("확인 대상 진입");
-    if (confirmNeeded) reasons.push(metrics.collection?.note || "확인 수집 필요");
+    if (confirmNeeded) reasons.push(metrics.collection?.note || "상세 수집 대상");
     if (revenueWeak) reasons.push(entry.revenueEvidence.reasons?.[0] || "매출 근거 보강");
     return {
       row,
@@ -1140,7 +1140,7 @@ function runDbApplyLinkedQueueHtml(queue = {}) {
           <strong>${rows.length ? `${fmtNumber(rows.length)}곳 확인 필요` : "연결된 보강 대상 없음"}</strong>
           <small>${escapeHtml(queue.summary || "수집 결과 기준으로 보강 대상을 자동 확인합니다.")}</small>
         </div>
-        <mark>${escapeHtml(queue.lowConfidenceCount ? `낮은 신뢰도 ${fmtNumber(queue.lowConfidenceCount)}` : queue.confirmNeededCount ? `확인 수집 ${fmtNumber(queue.confirmNeededCount)}` : "정상")}</mark>
+        <mark>${escapeHtml(queue.lowConfidenceCount ? `낮은 신뢰도 ${fmtNumber(queue.lowConfidenceCount)}` : queue.confirmNeededCount ? `상세 수집 ${fmtNumber(queue.confirmNeededCount)}` : "정상")}</mark>
       </div>
       ${visibleRows.length ? `
         <div class="run-apply-linked-list">
@@ -1165,7 +1165,7 @@ function runDbApplyLinkedQueueHtml(queue = {}) {
       <div class="run-apply-linked-actions">
         <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">처리 필요 보기</button>
         <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="low_confidence" ${queue.lowConfidenceCount ? "" : "disabled"}>낮은 신뢰도</button>
-        <button type="button" data-admin-db-source-link="confirm_needed" ${queue.confirmNeededCount ? "" : "disabled"}>확인 수집 필요</button>
+        <button type="button" data-admin-db-source-link="confirm_needed" ${queue.confirmNeededCount ? "" : "disabled"}>상세 수집 대상</button>
       </div>
     </div>
   `;
@@ -3917,7 +3917,7 @@ function revenuePrecisionProfile(item = {}, lodging = itemRevenueStats(item, "lo
     Number.isFinite(coverage) ? `가격확보 ${fmtRate(coverage)}` : "가격확보 대기",
     offlineSold ? `총량감소 ${fmtNumber(offlineSold)}개/회` : "",
     missing ? `가격누락 ${fmtNumber(missing)}개/회` : "가격누락 없음",
-    confidence.grade ? `수량 신뢰도 ${confidence.grade}` : ""
+    confidence.grade ? `자동 수집 신뢰도 ${confidence.grade}` : ""
   ].filter(Boolean);
   return {
     score,
@@ -5701,7 +5701,7 @@ function collectionStatusProfile(item = {}) {
   const reasons = [];
   if (!collectedRows.length) reasons.push("날짜별 재고가 확보되지 않음");
   if (missingDates.length) reasons.push(`미수집 날짜 ${fmtNumber(missingDates.length)}일`);
-  if (quantityUnclear) reasons.push(`수량 신뢰도 ${confidence.grade} · ${structure.label}`);
+  if (quantityUnclear) reasons.push(`자동 수집 신뢰도 ${confidence.grade} · ${structure.label}`);
   if (!productKnown) reasons.push("상품별 수량 구조 확인 필요");
   if (priceMissing) reasons.push(`가격 누락 판매수량 ${fmtNumber(missingPriceQuantity || soldQuantity)}개/회`);
   if (structuralBlockedQuantity > 0) reasons.push(`상시 차단/운영 축소 ${fmtNumber(structuralBlockedQuantity)}개/회`);
@@ -6592,7 +6592,7 @@ function inventoryAuditProfile(item = {}) {
     quantityUnclear ? {
       key: "quantity",
       label: "수량 구조 불명확",
-      reason: `수량 신뢰도 ${confidence.grade} · ${structure.label}`,
+      reason: `자동 수집 신뢰도 ${confidence.grade} · ${structure.label}`,
       action: structure.action || "객실별/상품별 수량 재확인"
     } : null,
     capacityVolatile ? {
@@ -6712,7 +6712,7 @@ function decisionQueueProfile(item = {}) {
     reasons,
     actions: criteria.map((criterion) => criterion.action).filter(Boolean).concat(audit.actions || []).slice(0, 4),
     problemDateText: auditProblemDateText(audit),
-    quantityConfidence: `신뢰도 ${confidence.grade} · ${structure.label}`,
+    quantityConfidence: `자동 수집 신뢰도 ${confidence.grade} · ${structure.label}`,
     gapType: compactListText(audit.gapTypes || [], "공백 특이 없음", 3),
     channelText: compactListText(channels, "네이버 기준", 4),
     correctionText: correction ? `${correction.label} · ${correction.note}` : "자동추정",
@@ -7260,7 +7260,7 @@ function companyRecrawlComparison(company = {}) {
   const cells = [
     {
       key: "confidence",
-      label: "수량 신뢰도",
+      label: "자동 수집 신뢰도",
       before: before.grade ? `${before.grade} · ${before.structureLabel}` : "대기",
       after: current.grade ? `${current.grade} · ${current.structureLabel}` : "대기",
       tone: queueDeltaTone(before.gradeScore, current.gradeScore, true),
@@ -15201,7 +15201,7 @@ function companySalesTargetTagHtml(company = {}, limit = 6) {
 
 function companyAdminReviewLabel(status) {
   return {
-    confirmed: "확인 완료",
+    confirmed: "관리자 검증 완료",
     check_needed: "확인 필요",
     recrawl_needed: "재수집 필요",
     contact_ready: "컨택 가능",
@@ -15239,10 +15239,10 @@ function companyAdminReviewFeedbackMeta(status = "") {
   };
   return {
     confirmed: {
-      title: "검수 저장 완료",
-      message: "확인 완료 상태로 저장했습니다.",
+      title: "관리자 검증 완료",
+      message: "관리자 검증 완료 상태로 저장했습니다.",
       next: "보정값과 수집 상태가 맞으면 완료 상태로 유지하세요.",
-      items: ["검수 완료", "확인 대상 해제", "사업자 지표 기준 반영"],
+      items: ["관리자 검증 완료", "최종 신뢰도 A", "사업자 지표 기준 반영"],
       tone: "success"
     },
     contact_ready: {
@@ -15392,7 +15392,7 @@ function companyDecisionQueueProfile(company = {}) {
     (signals.structureWeak || ["C", "D", "E"].includes(confidenceGrade) || structureFlags.has("grouped_range") || structureFlags.has("booking_id_reused")) ? {
       key: "quantity",
       label: "수량 구조 불명확",
-      reason: `수량 신뢰도 ${confidenceGrade} · ${structureLabel}`,
+      reason: `자동 수집 신뢰도 ${confidenceGrade} · ${structureLabel}`,
       action: "네이버 객실 탭에서 객실/상품 단위와 실제 총량 확인"
     } : null,
     (signals.stockVariance || structureFlags.has("dynamic_capacity")) ? {
@@ -15445,7 +15445,7 @@ function companyDecisionQueueProfile(company = {}) {
     reasons: criteria.map((criterion) => `${criterion.label}: ${criterion.reason}`),
     actions: criteria.map((criterion) => criterion.action).filter(Boolean),
     problemDateText: compactListText([salesSignal.checkIn, ...gapLabels].filter(Boolean), "최근 수집일 기준", 4),
-    quantityConfidence: `신뢰도 ${confidenceGrade} · ${structureLabel}`,
+    quantityConfidence: `자동 수집 신뢰도 ${confidenceGrade} · ${structureLabel}`,
     gapType: compactListText(gapLabels, "공백 특이 없음", 3),
     channelText: compactListText(channels, "네이버 기준", 4),
     correctionText: hasManualCorrection ? (company.correctionStatus?.detail || "관리자 보정") : "자동추정",
@@ -15579,7 +15579,7 @@ function companyReviewRecheckProfile(company = {}, profile = {}) {
     reasons.push(`기존 판단 이후 새 키워드 노출 ${newKeywords.slice(0, 2).map((row) => row.keyword).filter(Boolean).join(", ")}`);
   }
   if (hasNewCollection && ["D", "E"].includes(String(latest.confidenceGrade || "").toUpperCase())) {
-    reasons.push(`수량 신뢰도 ${latest.confidenceGrade} 등급으로 악화`);
+    reasons.push(`자동 수집 신뢰도 ${latest.confidenceGrade} 등급으로 악화`);
   }
   if (review.status === "exclude" && hasNewCollection && Number(company.bestRank || 9999) <= 5) {
     reasons.push("제외 후 상위권 노출이 다시 확인됨");
@@ -17045,9 +17045,9 @@ function adminDbCorrectionNextActionsHtml(company = {}, source = "admin_correcti
   const current = company.adminReview?.status || "";
   const currentText = current ? `${companyAdminReviewLabel(current)} 저장됨` : "판단 대기";
   const actions = [
-    ["confirmed", "검수 완료", "보정값 확인 완료"],
+    ["confirmed", "관리자 검증 완료", "최종 신뢰도 A"],
     ["check_needed", "추가 확인", "보정값 적용 후 추가 확인 필요"],
-    ["recrawl_needed", "확인 수집", "보정값 적용 후 확인 수집 필요"],
+    ["recrawl_needed", "확인 수집", "보정값 적용 후 상세 수집 대상"],
     ["contact_ready", "컨택 가능", "보정값 기준 컨택 가능"]
   ];
   return `
@@ -17258,7 +17258,7 @@ function companyMasterSalesTargetsPanel(master = {}) {
     <div class="company-sales-panel">
       <div class="company-sales-metrics">
         <article><span>바로 컨택</span><strong>${fmtNumber(topTargets.length)}</strong><small>확인 대상 제외</small></article>
-        <article><span>확정 타깃</span><strong>${fmtNumber(confirmedTargets.length)}</strong><small>검수 완료</small></article>
+        <article><span>확정 타깃</span><strong>${fmtNumber(confirmedTargets.length)}</strong><small>관리자 검증 완료</small></article>
         <article><span>벤치마크</span><strong>${fmtNumber(targets.benchmarkCount || 0)}</strong><small>광역+로컬 강자</small></article>
         <article><span>확인 대상</span><strong>${fmtNumber(queueCount)}</strong><small>컨택 전 확인</small></article>
       </div>
@@ -17336,7 +17336,7 @@ function companyMasterCorrectionPanel(master = {}) {
           const hasManualCorrection = manualCorrectionHasValue(company.manualCorrection);
           const correctionStatus = company.correctionStatus || {
             label: hasManualCorrection ? "관리자 보정" : "자동추정",
-            detail: latest.confidenceGrade ? `내부 신뢰도 ${latest.confidenceGrade}` : "추정 대기"
+            detail: latest.confidenceGrade ? `자동 수집 신뢰도 ${latest.confidenceGrade}` : "추정 대기"
           };
           const correctionNote = hasManualCorrection ? company.manualCorrection?.note : "";
           return `
@@ -17726,9 +17726,9 @@ function adminDbCollectionProfile(company = {}, metrics = {}) {
   if (adminReviewed || manualCorrected) {
     return {
       key: "admin_verified",
-      label: "관리자 검수",
+      label: "관리자 검증 완료",
       tone: "good",
-      note: manualCorrected ? "보정값 우선" : "판단값 저장",
+      note: "최종 신뢰도 A",
       detail: "관리자가 판단 또는 보정한 자료입니다.",
       needsConfirm: false,
       sources: Array.from(sources)
@@ -17737,7 +17737,7 @@ function adminDbCollectionProfile(company = {}, metrics = {}) {
   if (needsConfirm) {
     return {
       key: "confirm_needed",
-      label: "확인 수집 필요",
+      label: "",
       tone: "hot",
       note: lowConfidence ? "신뢰도 보강" : "조건 재확인",
       detail: "수량·매출·예약율 근거를 관리자 확인 수집으로 보강해야 합니다.",
@@ -17981,11 +17981,11 @@ function adminDbStatusOptions(rows = []) {
     ["decision_queue", "판단 필요", count("decision_queue")],
     ["needs_work", "처리 필요", count("needs_work")],
     ["low_confidence", "낮은 신뢰도", count("low_confidence")],
-    ["unreviewed", "미검수", count("unreviewed")],
+    ["unreviewed", "관리자 검수전", count("unreviewed")],
     ["recrawl", "확인 수집", count("recrawl")],
     ["manual", "보정 필요", count("manual")],
     ["contact_ready", "컨택 후보", count("contact_ready")],
-    ["reviewed", "검수 완료", count("reviewed")],
+    ["reviewed", "관리자 검증 완료", count("reviewed")],
     ["excluded", "제외", count("excluded")]
   ];
 }
@@ -17999,8 +17999,7 @@ function adminDbSourceOptions(rows = []) {
   const count = (source) => rows.filter((row) => adminDbSourceMatches(row, source)).length;
   return [
     ["all", "전체 수집구분", rows.length],
-    ["confirm_needed", "확인 수집 필요", count("confirm_needed")],
-    ["admin_verified", "관리자 검수", count("admin_verified")],
+    ["admin_verified", "관리자 검증 완료", count("admin_verified")],
     ["auto_collected", "자동수집", count("auto_collected")],
     ["b2b_collected", "B2B 수집", count("b2b_collected")]
   ];
@@ -18838,6 +18837,7 @@ function adminDbFeatureSummary(features = {}) {
 }
 
 function adminDbCollectionChip(collection = {}) {
+  if (collection.key === "confirm_needed") return "";
   return `<em class="${escapeHtml(collection.tone || "neutral")}">${escapeHtml(collection.label || "자동수집")}</em>`;
 }
 
@@ -18846,7 +18846,7 @@ function adminDbCompanyCompactTags(row = {}) {
   const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
   const tags = [
     { label: workType.label || "검수 대기", tone: workType.tone || "watch" },
-    { label: metrics.collection?.label || "자동수집", tone: metrics.collection?.tone || "neutral" },
+    { label: metrics.collection?.key === "confirm_needed" ? "" : (metrics.collection?.label || "자동수집"), tone: metrics.collection?.tone || "neutral" },
     { label: metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "", tone: "neutral" },
     { label: adminDbChannelSummary(metrics), tone: metrics.channels?.count ? "good" : "watch" }
   ];
@@ -18866,7 +18866,7 @@ function adminDbWorkReason(row = {}) {
   if (workType.key === "recrawl") return "총량 변동 또는 조건 변화가 있어 같은 기간으로 재수집이 필요합니다.";
   if (!metrics.revenue) return "매출 표본이 없어 가격 또는 판매수량 연결 상태를 확인해야 합니다.";
   if (!Number.isFinite(metrics.rate)) return "예약율 표본이 없어 네이버 예약 기준 판매율 확인이 필요합니다.";
-  if (!metrics.adminReview) return "검수 전 업체입니다. 확인/완료/보정/보류 중 하나로 정리하세요.";
+  if (!metrics.adminReview) return "";
   return issues.slice(0, 2).join(" · ") || "추가 확인 후 상태를 확정하세요.";
 }
 
@@ -18875,7 +18875,7 @@ function adminDbChannelSummary(metrics = {}) {
   if (channels.manualNeeded) return `채널 확인필요 ${fmtNumber(channels.manualNeeded)}`;
   const labels = ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => channels[key] ? label : "").filter(Boolean);
   if (labels.length) return labels.join(" · ");
-  return channels.naver ? "네이버만" : "채널 확인 필요";
+  return channels.naver ? "네이버" : "채널 확인 필요";
 }
 
 function adminDbReservationStockText(metrics = {}) {
@@ -18988,7 +18988,7 @@ function adminDbInternalJudgmentCards(row = {}) {
       tone: workType.tone || "watch"
     },
     {
-      label: "수량 신뢰도",
+      label: "자동 수집 신뢰도",
       value: metrics.confidenceGrade || "대기",
       note: correction ? "관리자 보정값 우선" : (metrics.lowConfidence ? "총량/상품 구조 확인" : "자동수집 기준"),
       tone: metrics.confidenceTone || (metrics.lowConfidence ? "hot" : "watch")
@@ -19047,7 +19047,7 @@ function adminDbSelectedDecisionCards(row = {}, requiredChannels = []) {
     },
     {
       label: "4. 검수 상태",
-      value: review.label || companyAdminReviewLabel(review.status) || "미검수",
+      value: review.label || companyAdminReviewLabel(review.status) || "관리자 검수전",
       note: review.note || companyReviewContextText(review.context || {}) || "확인/보정/보류 중 하나로 확정",
       tone: review.status ? "good" : "watch"
     }
@@ -19252,7 +19252,7 @@ function adminDbSelectedAppliedCards(row = {}) {
     },
     {
       label: "검수",
-      value: review.label || companyAdminReviewLabel(review.status) || "미검수",
+      value: review.label || companyAdminReviewLabel(review.status) || "관리자 검수전",
       note: review.note || companyReviewContextText(review.context || {}) || "상태 저장 대기",
       tone: review.status ? "good" : "watch"
     }
@@ -19324,10 +19324,10 @@ function adminDbWorkPanel(rows = []) {
       <div class="admin-db-work-summary">
         ${[
           ["낮은 신뢰", lowConfidence, "총량/상품 확인", "hot"],
-          ["미검수", unreviewed, "상태 결정 전", "watch"],
+          ["관리자 검수전", unreviewed, "상태 결정 전", "watch"],
           ["재수집", recrawl, "조건 재확인", "watch"],
           ["보정 필요", manual, "관리자 보정", "hot"],
-          ["정리됨", ready, "완료/컨택/보류", "good"]
+          ["정리됨", ready, "관리자 검증/컨택/보류", "good"]
         ].map(([label, count, note, tone]) => `
           <article class="${escapeHtml(tone)}">
             <span>${escapeHtml(label)}</span>
@@ -19715,8 +19715,8 @@ function adminDbCollectionPanel(rows = []) {
       </div>
       <div class="admin-db-collect-metrics">
         ${[
-          ["확인 수집 필요", confirmRows.length, "신뢰도 보강 대상", "hot", "confirm_needed"],
-          ["관리자 검수", countByKey("admin_verified"), "판단·보정 완료", "good", "admin_verified"],
+          ["상세 수집 대상", confirmRows.length, "신뢰도 보강 대상", "hot", "confirm_needed"],
+          ["관리자 검증 완료", countByKey("admin_verified"), "최종 신뢰도 A", "good", "admin_verified"],
           ["자동수집", countByKey("auto_collected"), "기본 수집 누적", "neutral", "auto_collected"],
           ["B2B 수집", countByKey("b2b_collected"), "고객 검색 유입", "watch", "b2b_collected"]
         ].map(([label, count, note, tone, key]) => `
@@ -19908,7 +19908,7 @@ function adminDbCompanyRow(row = {}, options = {}) {
         <span><small>노출</small><b>${escapeHtml(rankText)}</b></span>
         <span><small>7일 매출</small><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b></span>
         <span><small>예약율</small><b>${escapeHtml(rateText)}</b></span>
-        <span><small>신뢰도</small><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b></span>
+        <span><small>자동 수집 신뢰도</small><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b></span>
       </div>
       <div class="admin-db-company-tags">
         ${adminDbCompanyCompactTags(row)}
@@ -20682,7 +20682,7 @@ function adminRegionCompanyMetrics(company = {}, region = {}) {
     signal.lodgingStructuralBlockedTotal ? "미오픈/차단 확인" : "",
     !Number.isFinite(rate) ? "예약율 표본 없음" : "",
     !totalRevenue ? "매출 표본 없음" : "",
-    !adminReview ? "관리자 미검수" : ""
+    !adminReview ? "관리자 검수전" : ""
   ].filter(Boolean);
   const priority = issues.length * 12
     + (lowConfidence ? 18 : 0)
@@ -20730,7 +20730,7 @@ function adminRegionCompanyRows(region = {}, master = {}) {
 function adminRegionCompanyWorkType(row = {}) {
   const metrics = row.metrics || {};
   const status = metrics.adminReview?.status || "";
-  if (!metrics.adminReview) return { key: "unreviewed", label: "미검수", tone: "watch" };
+  if (!metrics.adminReview) return { key: "unreviewed", label: "관리자 검수전", tone: "watch" };
   if (status === "manual_needed" || metrics.lowConfidence) return { key: "manual", label: "보정 필요", tone: "hot" };
   if (status === "recrawl_needed" || metrics.stockVariance) return { key: "recrawl", label: "재수집", tone: "watch" };
   if (!metrics.totalRevenue) return { key: "missingRevenue", label: "매출 없음", tone: "watch" };
@@ -20751,7 +20751,7 @@ function adminRegionCompanyFilterOptions(rows = []) {
     },
     {
       key: "unreviewed",
-      label: "미검수",
+      label: "관리자 검수전",
       note: "사람 판단 전",
       count: count((row) => !row.metrics.adminReview),
       match: (row) => !row.metrics.adminReview
@@ -21332,7 +21332,7 @@ function adminRegionActionItems(region = {}, rows = []) {
     lowConfidence ? `수량 신뢰도 낮은 업체 ${fmtNumber(lowConfidence)}곳 보정` : "",
     stockVariance ? `총량 변동 업체 ${fmtNumber(stockVariance)}곳 재검토` : "",
     missingRevenue ? `매출 표본 없는 업체 ${fmtNumber(missingRevenue)}곳 가격 확인` : "",
-    unreviewed ? `관리자 미검수 업체 ${fmtNumber(unreviewed)}곳 판단` : "",
+    unreviewed ? `관리자 검수전 업체 ${fmtNumber(unreviewed)}곳 판단` : "",
     region.outsideExposureCount ? "지역 밖 노출 업체 주소/검색권 확인" : ""
   ].filter(Boolean);
 }
@@ -21379,19 +21379,19 @@ function adminRegionReviewSummaryPanel(region = {}, rows = []) {
   const statusCounts = { ...(region.reviewStatusCounts || {}), ...(stats.statusCounts || {}) };
   const statusCount = (status) => Number(statusCounts[status] || 0);
   const items = [
-    { key: "unreviewed", label: "미검수", count: stats.unreviewed, note: "아직 판단 전", tone: "watch" },
+    { key: "unreviewed", label: "관리자 검수전", count: stats.unreviewed, note: "아직 판단 전", tone: "watch" },
     { key: "check_needed", label: "확인 필요", count: statusCount("check_needed"), note: "채널/수량 확인", tone: "watch" },
     { key: "manual_needed", label: "보정 필요", count: statusCount("manual_needed"), note: "수량·총량 보정", tone: "hot" },
     { key: "recrawl_needed", label: "재수집", count: statusCount("recrawl_needed"), note: "조건 재확인", tone: "watch" },
-    { key: "confirmed", label: "확인 완료", count: statusCount("confirmed"), note: "공개 판단 가능", tone: "good" },
+    { key: "confirmed", label: "관리자 검증 완료", count: statusCount("confirmed"), note: "최종 신뢰도 A", tone: "good" },
     { key: "contact_ready", label: "컨택 가능", count: statusCount("contact_ready"), note: "영업 후보", tone: "good" },
     { key: "closed", label: "보류·제외", count: statusCount("hold") + statusCount("exclude"), note: "대상 제외/보류", tone: "neutral" }
   ];
   const actionNote = stats.unreviewed
-    ? `미검수 ${fmtNumber(stats.unreviewed)}곳부터 처리`
+    ? `관리자 검수전 ${fmtNumber(stats.unreviewed)}곳부터 처리`
     : (stats.manualNeeded || stats.recrawlNeeded
       ? "보정·재수집 대상 후속 확인"
-      : "검수 완료 상태 유지");
+      : "관리자 검증 완료 상태 유지");
   return `
     <div class="admin-region-review-summary" data-admin-region-review-summary>
       <div class="admin-region-review-head">
@@ -21422,10 +21422,10 @@ function adminRegionWorkflowPanel(rows = []) {
   const stats = adminRegionWorkflowStats(rows);
   const cells = [
     ["처리 진행률", fmtRate(stats.progress), `${fmtNumber(stats.reviewed)}/${fmtNumber(stats.total)}곳 검수`],
-    ["미검수", stats.unreviewed, "아직 판단 전"],
+    ["관리자 검수전", stats.unreviewed, "아직 판단 전"],
     ["보정 필요", stats.manualNeeded, "수량/총량 확인"],
     ["재수집 필요", stats.recrawlNeeded, "조건 재확인"],
-    ["공개 가능", stats.publicReady, "확인 완료/컨택 가능"],
+    ["공개 가능", stats.publicReady, "관리자 검증 완료/컨택 가능"],
     ["컨택 가능", stats.contactReady, "영업 연결 후보"]
   ];
   return `
@@ -21525,7 +21525,7 @@ function adminRegionOperationalVerdict(region = {}, rows = [], maintenance = {})
   if (stats.unreviewed) {
     return {
       label: "검수 필요",
-      note: `미검수 ${fmtNumber(stats.unreviewed)}곳을 확인하면 공개 판단이 쉬워집니다.`,
+      note: `관리자 검수전 ${fmtNumber(stats.unreviewed)}곳을 확인하면 공개 판단이 쉬워집니다.`,
       tone: "watch"
     };
   }
@@ -21637,7 +21637,7 @@ function adminRegionApprovalModel(region = {}, rows = [], profile = {}) {
   const note = [
     `${doneCount}/${checklist.length} 체크`,
     criticalPending.length ? `핵심 보강 ${criticalPending.length}건` : "",
-    stats.unreviewed ? `미검수 ${stats.unreviewed}곳` : "",
+    stats.unreviewed ? `관리자 검수전 ${stats.unreviewed}곳` : "",
     stats.manualNeeded ? `보정 ${stats.manualNeeded}곳` : "",
     stats.recrawlNeeded ? `재수집 ${stats.recrawlNeeded}곳` : ""
   ].filter(Boolean).join(" · ");
@@ -21814,7 +21814,7 @@ function adminRegionCorrectionGapReason(row = {}) {
   if (!Number.isFinite(metrics.rate)) reasons.push("예약율 표본 없음");
   if (!metrics.totalRevenue) reasons.push("가격/매출 표본 없음");
   if (!metrics.couponVisible) reasons.push("쿠폰 노출 미확인");
-  if (!metrics.adminReview) reasons.push("관리자 미검수");
+  if (!metrics.adminReview) reasons.push("관리자 검수전");
   return reasons.slice(0, 4);
 }
 
@@ -21850,7 +21850,7 @@ function adminRegionCorrectionGapPanel(region = {}, rows = []) {
               <article>
                 <div>
                   <strong>${escapeHtml(row.company?.primaryName || "업체명 확인")}</strong>
-                  <small>${escapeHtml([metrics.regionLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", metrics.latest?.confidenceGrade ? `신뢰도 ${metrics.latest.confidenceGrade}` : ""].filter(Boolean).join(" · "))}</small>
+                  <small>${escapeHtml([metrics.regionLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", metrics.latest?.confidenceGrade ? `자동 수집 신뢰도 ${metrics.latest.confidenceGrade}` : ""].filter(Boolean).join(" · "))}</small>
                 </div>
                 <p>${escapeHtml(row.correctionReasons.join(" · "))}</p>
                 <button type="button" data-admin-region-company-focus="${escapeHtml(row.company?.companyId || "")}" data-admin-region-company-name="${escapeHtml(row.company?.primaryName || "")}">보정 열기</button>
@@ -21879,13 +21879,13 @@ function adminRegionCompanyRowHtml(row = {}) {
         <span><b>${metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위대기"}</b><small>최고 노출</small></span>
         <span><b>${Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "대기"}</b><small>예약율</small></span>
         <span><b>${metrics.totalRevenue ? fmtWon(metrics.totalRevenue) : "대기"}</b><small>예상 매출</small></span>
-        <span><b>${escapeHtml(metrics.latest.confidenceGrade || "대기")}</b><small>수량 신뢰도</small></span>
+        <span><b>${escapeHtml(metrics.latest.confidenceGrade || "대기")}</b><small>자동 수집 신뢰도</small></span>
       </div>
       <p>${escapeHtml(issueText)}</p>
       <div class="admin-region-company-tags">
         <em class="${escapeHtml(workType.tone || "")}">${escapeHtml(workType.label || "확인")}</em>
         <em>${escapeHtml(metrics.manualCorrection ? "관리자 보정" : "자동추정")}</em>
-        <em>${escapeHtml(metrics.adminReview?.label || companyAdminReviewLabel(metrics.adminReview?.status) || "미검수")}</em>
+        <em>${escapeHtml(metrics.adminReview?.label || companyAdminReviewLabel(metrics.adminReview?.status) || "관리자 검수전")}</em>
         <em>${escapeHtml(metrics.couponVisible ? "쿠폰 노출" : "쿠폰 미확인")}</em>
         <em>${escapeHtml(metrics.sourceLabel)}</em>
       </div>
@@ -26741,7 +26741,7 @@ function sheetCollectionStatusPanel(item = {}) {
     ["문제 날짜", compactListText(status.missingDates, "없음", 5), status.missingDates.length ? "동일 기간 재수집 대상" : "기간 내 날짜 확보"],
     ["총량 기준", status.basisTotal ? `${fmtNumber(status.basisTotal)}개` : "확인필요", status.basisRule],
     ["운영 기준", status.operatingTotal ? `${fmtNumber(status.operatingTotal)}개` : "확인필요", status.structuralBlockedQuantity ? `상시 차단/운영 축소 ${fmtNumber(status.structuralBlockedQuantity)}개/회 분리` : "전체 후보와 동일"],
-    ["수량 신뢰도", `신뢰도 ${confidence.grade} · ${structure.label}`, structure.action || "자동 수량 판단"],
+    ["자동 수집 신뢰도", `${confidence.grade} · ${structure.label}`, structure.action || "자동 수량 판단"],
     ["상품별 수량", productText, status.productKnown ? "숙박/데이유즈 분리 기준" : "객실/상품 수량 직접 확인"],
     ["가격 확보", priceText, "할인 옵션 패키지는 산출 제외"],
     ["네이버 쿠폰", couponValue, couponNote],
@@ -26866,7 +26866,7 @@ function sheetAuditPanel(item = {}) {
   const tone = decision.tone || itemDecision.tone || audit.tone || "watch";
   const metrics = [
     ["문제 날짜", decision.problemDateText || itemDecision.problemDateText, audit.metrics.missingCount ? `미수집 ${fmtNumber(audit.metrics.missingCount)}일` : "날짜별 기준"],
-    ["수량 신뢰도", decision.quantityConfidence || itemDecision.quantityConfidence, criteria.find((criterion) => criterion.key === "quantity")?.reason || "자동 수량 판단"],
+    ["자동 수집 신뢰도", decision.quantityConfidence || itemDecision.quantityConfidence, criteria.find((criterion) => criterion.key === "quantity")?.reason || "자동 수량 판단"],
     ["공백 유형", decision.gapType || itemDecision.gapType, criteria.find((criterion) => criterion.key === "gap")?.reason || "요일별 공백"],
     ["확인 채널", decision.channelText || itemDecision.channelText, criteria.find((criterion) => criterion.key === "ota")?.action || audit.otaReason || "필요 채널"],
     ["보정 상태", decision.correctionText || itemDecision.correctionText, correctionDetail]
