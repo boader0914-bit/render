@@ -3241,6 +3241,96 @@ function platformLetter(platform = "") {
   return "기";
 }
 
+function uniqueUiTexts(values = []) {
+  return Array.from(new Set((values || []).map((value) => String(value || "").trim()).filter(Boolean)));
+}
+
+function companyChannelUiNameSearchVariants(name = "") {
+  const raw = String(name || "").normalize("NFKC").replace(/\s+/g, " ").trim();
+  const compact = raw.replace(/\s+/g, "");
+  if (!compact) return [];
+  const stripped = compact
+    .replace(/글램핑캠핑장$/u, "글램핑")
+    .replace(/카라반캠핑장$/u, "카라반")
+    .replace(/오토캠핑장$/u, "캠핑장")
+    .replace(/글램핑장$/u, "글램핑")
+    .replace(/캠핑장$/u, "")
+    .replace(/야영장$/u, "")
+    .replace(/펜션$/u, "")
+    .replace(/리조트$/u, "")
+    .replace(/호텔$/u, "")
+    .replace(/스테이$/u, "")
+    .replace(/숙소$/u, "");
+  return uniqueUiTexts([raw, compact, stripped && stripped.length >= 2 ? stripped : ""]).slice(0, 5);
+}
+
+function companyChannelUiRegionSearchVariants(source = {}) {
+  const broad = new Set([
+    "서울", "서울특별시", "부산", "부산광역시", "대구", "대구광역시", "인천", "인천광역시",
+    "광주", "광주광역시", "대전", "대전광역시", "울산", "울산광역시", "세종", "세종특별자치시",
+    "경기", "경기도", "강원", "강원도", "충북", "충청북도", "충남", "충청남도",
+    "전북", "전라북도", "전남", "전라남도", "경북", "경상북도", "경남", "경상남도",
+    "제주", "제주도", "제주특별자치도"
+  ]);
+  const texts = [
+    ...(Array.isArray(source.regions) ? source.regions : []),
+    ...(Array.isArray(source.addresses) ? source.addresses : []),
+    source.region,
+    source.regionLabel,
+    source.address,
+    source.location
+  ].filter(Boolean);
+  const values = [];
+  texts.forEach((entry) => {
+    const text = String(entry || "").normalize("NFKC").replace(/[^\p{L}\p{N}\s]+/gu, " ");
+    text.split(/\s+/).map((token) => token.trim()).filter(Boolean).forEach((token) => {
+      const clean = token.replace(/[^\p{L}\p{N}]/gu, "");
+      if (!clean || broad.has(clean)) return;
+      const area = clean.match(/^([가-힣A-Za-z0-9]{2,}(?:시|군|구))$/u)?.[1] || "";
+      if (area && !broad.has(area)) {
+        values.push(area);
+        const short = area.replace(/(?:시|군|구)$/u, "");
+        if (short.length >= 2 && !broad.has(short)) values.push(short);
+        return;
+      }
+      if (clean.length >= 2 && clean.length <= 6 && !/(?:읍|면|동|리)$/u.test(clean)) values.push(clean);
+    });
+    Array.from(text.matchAll(/([가-힣A-Za-z0-9]{2,}(?:시|군|구))/gu)).forEach((match) => {
+      const area = match[1];
+      if (!area || broad.has(area)) return;
+      values.push(area);
+      const short = area.replace(/(?:시|군|구)$/u, "");
+      if (short.length >= 2 && !broad.has(short)) values.push(short);
+    });
+  });
+  return uniqueUiTexts(values).slice(0, 6);
+}
+
+function companyChannelUiSearchKeywords(source = {}) {
+  const aliases = Array.isArray(source.aliases) ? source.aliases : [source.aliases].filter(Boolean);
+  const names = uniqueUiTexts([source.primaryName, source.name, ...aliases]).slice(0, 8);
+  const nameVariants = uniqueUiTexts(names.flatMap(companyChannelUiNameSearchVariants)).slice(0, 10);
+  const regions = companyChannelUiRegionSearchVariants(source);
+  const variants = [...nameVariants];
+  const regionalNameVariants = [...nameVariants].sort((a, b) => String(a || "").replace(/\s+/g, "").length - String(b || "").replace(/\s+/g, "").length);
+  regions.forEach((region) => {
+    const regionCompact = String(region || "").replace(/\s+/g, "");
+    if (!regionCompact) return;
+    regionalNameVariants.forEach((name) => {
+      const nameCompact = String(name || "").replace(/\s+/g, "");
+      if (!nameCompact || nameCompact.startsWith(regionCompact)) return;
+      variants.push(`${regionCompact}${nameCompact}`);
+      variants.push(`${region} ${name}`);
+    });
+  });
+  return uniqueUiTexts(variants).slice(0, 8);
+}
+
+function companyChannelUiPreferredKeyword(source = {}, keywords = companyChannelUiSearchKeywords(source)) {
+  const regions = companyChannelUiRegionSearchVariants(source).map((region) => String(region || "").replace(/\s+/g, "")).filter(Boolean);
+  return keywords.find((keyword) => regions.some((region) => String(keyword || "").replace(/\s+/g, "").startsWith(region))) || keywords[0] || "";
+}
+
 function externalPlatformUrl(url) {
   const text = String(url || "").trim();
   return /^https?:\/\//i.test(text) ? text : "";
@@ -3248,7 +3338,8 @@ function externalPlatformUrl(url) {
 
 function platformFallbackSearchUrl(platform = "", item = {}) {
   const name = platformShortName(platform);
-  const keyword = String(item.name || item.primaryName || activeKeyword() || "").trim();
+  const variants = companyChannelUiSearchKeywords(item);
+  const keyword = String((name === "네이버" ? variants[0] : companyChannelUiPreferredKeyword(item, variants)) || activeKeyword() || "").trim();
   if (!keyword && name !== "떠나요") return "";
   if (name === "네이버") {
     const url = new URL("https://search.naver.com/search.naver");
@@ -17608,7 +17699,7 @@ function adminDbChannelStatusTone(status = "") {
 }
 
 function adminDbChannelFallbackSearchUrl(channel = "", company = {}) {
-  const keyword = String(company.primaryName || company.aliases?.[0] || "").trim();
+  const keyword = companyChannelUiPreferredKeyword(company);
   if (!keyword) return "";
   if (channel === "yanolja") {
     const url = new URL("https://nol.yanolja.com/discovery/s/results");
@@ -19809,6 +19900,7 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
   const searchUrl = entry.url || adminDbChannelFallbackSearchUrl(channelKey, company);
   const checked = entry.checkedAt ? compactDateTime(entry.checkedAt) : "확인 전";
   const confidence = Number.isFinite(Number(entry.confidence)) ? ` · 신뢰 ${fmtNumber(entry.confidence)}%` : "";
+  const searchKeyword = entry.searchKeyword ? ` · 검색어 ${entry.searchKeyword}` : "";
   const product = adminDbChannelProductEntry(entry);
   const productOpen = adminDbChannelProductHasValue(product) ? "open" : "";
   return `
@@ -19816,7 +19908,7 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
       <div class="admin-db-channel-row-head">
         <div>
           <strong>${escapeHtml(label)}</strong>
-          <small>${escapeHtml(`${adminDbChannelStatusLabel(status)} · ${checked}${confidence}`)}</small>
+          <small>${escapeHtml(`${adminDbChannelStatusLabel(status)} · ${checked}${confidence}${searchKeyword}`)}</small>
         </div>
         <span>${escapeHtml(entry.source === "automatic" ? "자동" : entry.source === "manual" ? "수동" : "대기")}</span>
       </div>

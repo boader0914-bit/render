@@ -6132,12 +6132,100 @@ function companyChannelStatusTone(status = "") {
 }
 
 function companyChannelSearchKeyword(company = {}) {
-  return String(company.primaryName || company.aliases?.[0] || "").trim();
+  return companyChannelSearchKeywords(company)[0] || "";
 }
 
-function companyChannelFallbackUrl(channelKey = "", company = {}) {
+function companyChannelNameSearchVariants(name = "") {
+  const raw = String(name || "").normalize("NFKC").replace(/\s+/g, " ").trim();
+  const compact = compactKeyword(raw);
+  if (!compact) return [];
+  const stripped = compact
+    .replace(/글램핑캠핑장$/u, "글램핑")
+    .replace(/카라반캠핑장$/u, "카라반")
+    .replace(/오토캠핑장$/u, "캠핑장")
+    .replace(/글램핑장$/u, "글램핑")
+    .replace(/캠핑장$/u, "")
+    .replace(/야영장$/u, "")
+    .replace(/펜션$/u, "")
+    .replace(/리조트$/u, "")
+    .replace(/호텔$/u, "")
+    .replace(/스테이$/u, "")
+    .replace(/숙소$/u, "");
+  return uniqueTexts([
+    raw,
+    compact,
+    stripped && stripped.length >= 2 ? stripped : ""
+  ]).slice(0, 5);
+}
+
+function companyChannelRegionSearchVariants(company = {}) {
+  const broad = new Set([
+    "서울", "서울특별시", "부산", "부산광역시", "대구", "대구광역시", "인천", "인천광역시",
+    "광주", "광주광역시", "대전", "대전광역시", "울산", "울산광역시", "세종", "세종특별자치시",
+    "경기", "경기도", "강원", "강원도", "충북", "충청북도", "충남", "충청남도",
+    "전북", "전라북도", "전남", "전라남도", "경북", "경상북도", "경남", "경상남도",
+    "제주", "제주도", "제주특별자치도"
+  ]);
+  const sourceTexts = [
+    ...(Array.isArray(company.regions) ? company.regions : []),
+    ...(Array.isArray(company.addresses) ? company.addresses : []),
+    company.region,
+    company.address
+  ].filter(Boolean);
+  const values = [];
+  for (const source of sourceTexts) {
+    const text = String(source || "").normalize("NFKC").replace(/[^\p{L}\p{N}\s]+/gu, " ");
+    const tokens = text.split(/\s+/).map((token) => token.trim()).filter(Boolean);
+    for (const token of tokens) {
+      const clean = token.replace(/[^\p{L}\p{N}]/gu, "");
+      if (!clean || broad.has(clean)) continue;
+      const cityCounty = clean.match(/^([가-힣A-Za-z0-9]{2,}(?:시|군|구))$/u)?.[1] || "";
+      if (cityCounty && !broad.has(cityCounty)) {
+        values.push(cityCounty);
+        const short = cityCounty.replace(/(?:시|군|구)$/u, "");
+        if (short.length >= 2 && !broad.has(short)) values.push(short);
+        continue;
+      }
+      if (clean.length >= 2 && clean.length <= 6 && !/(?:읍|면|동|리)$/u.test(clean)) values.push(clean);
+    }
+    for (const match of text.matchAll(/([가-힣A-Za-z0-9]{2,}(?:시|군|구))/gu)) {
+      const region = match[1];
+      if (!region || broad.has(region)) continue;
+      values.push(region);
+      const short = region.replace(/(?:시|군|구)$/u, "");
+      if (short.length >= 2 && !broad.has(short)) values.push(short);
+    }
+  }
+  return uniqueTexts(values).slice(0, 6);
+}
+
+function companyChannelSearchKeywords(company = {}) {
+  const names = boundedUnique([company.primaryName, ...(company.aliases || [])], 8);
+  const nameVariants = boundedUnique(names.flatMap(companyChannelNameSearchVariants), 10);
+  const regions = companyChannelRegionSearchVariants(company);
+  const variants = [...nameVariants];
+  const regionalNameVariants = [...nameVariants].sort((a, b) => compactKeyword(a).length - compactKeyword(b).length);
+  for (const region of regions) {
+    const regionCompact = compactKeyword(region);
+    if (!regionCompact) continue;
+    for (const name of regionalNameVariants) {
+      const nameCompact = compactKeyword(name);
+      if (!nameCompact || nameCompact.startsWith(regionCompact)) continue;
+      variants.push(`${regionCompact}${nameCompact}`);
+      variants.push(`${region} ${name}`);
+    }
+  }
+  return uniqueTexts(variants).slice(0, 8);
+}
+
+function companyChannelPreferredFallbackKeyword(company = {}, keywords = companyChannelSearchKeywords(company)) {
+  const regions = companyChannelRegionSearchVariants(company).map(compactKeyword).filter(Boolean);
+  return keywords.find((keyword) => regions.some((region) => compactKeyword(keyword).startsWith(region))) || keywords[0] || "";
+}
+
+function companyChannelFallbackUrl(channelKey = "", company = {}, keywordOverride = "") {
   const key = normalizeCompanyChannelKey(channelKey);
-  const keyword = companyChannelSearchKeyword(company);
+  const keyword = String(keywordOverride || companyChannelSearchKeyword(company) || "").trim();
   if (!keyword) return "";
   if (key === "yanolja") {
     const url = new URL("https://nol.yanolja.com/discovery/s/results");
@@ -6236,6 +6324,10 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
     confidence: Number.isFinite(Number(entry.confidence)) ? Math.max(0, Math.min(100, Math.round(Number(entry.confidence)))) : null,
     source: sanitizeCompanyChannelText(entry.source || "manual", 60),
     method: sanitizeCompanyChannelText(entry.method || "", 80),
+    searchKeyword: sanitizeCompanyChannelText(entry.searchKeyword || entry.keyword || "", 120),
+    searchedKeywords: boundedUnique(Array.isArray(entry.searchedKeywords) ? entry.searchedKeywords : [], 8)
+      .map((value) => sanitizeCompanyChannelText(value, 120))
+      .filter(Boolean),
     note: sanitizeCompanyChannelText(entry.note, 220),
     products,
     checkedAt,
@@ -6270,17 +6362,36 @@ function companyChannelCandidateScore(company = {}, candidate = {}) {
   const candidateName = String(candidate.name || candidate.title || "").trim();
   const candidateNameKey = normalizeCompanyIdentityName(candidateName);
   const candidateLooseKey = normalizeCompanyLooseName(candidateName);
+  const regionKeys = companyChannelRegionSearchVariants(company).map(normalizeCompanyIdentityName).filter(Boolean);
+  const candidateNameKeys = uniqueTexts([
+    candidateNameKey,
+    ...regionKeys
+      .filter((region) => region && candidateNameKey.startsWith(region))
+      .map((region) => candidateNameKey.slice(region.length))
+  ]).filter((value) => value && value.length >= 2);
+  const candidateLooseKeys = uniqueTexts([
+    candidateLooseKey,
+    ...regionKeys
+      .filter((region) => region && candidateLooseKey.startsWith(region))
+      .map((region) => candidateLooseKey.slice(region.length))
+  ]).filter((value) => value && value.length >= 2);
   const identityNames = boundedUnique([company.primaryName, ...(company.aliases || [])], 20)
     .map(normalizeCompanyIdentityName)
     .filter(Boolean);
+  const searchIdentityNames = boundedUnique([company.primaryName, ...(company.aliases || [])], 20)
+    .flatMap(companyChannelNameSearchVariants)
+    .map(normalizeCompanyIdentityName)
+    .filter((value) => value && value.length >= 2);
   const looseNames = boundedUnique([company.primaryName, ...(company.aliases || [])], 20)
     .map(normalizeCompanyLooseName)
     .filter((value) => value && value.length >= 2);
   let score = 0;
   if (identityNames.some((name) => name && name === candidateNameKey)) score = Math.max(score, 96);
-  if (looseNames.some((name) => name && name === candidateLooseKey)) score = Math.max(score, 90);
-  if (looseNames.some((name) => name.length >= 3 && candidateLooseKey.includes(name))) score = Math.max(score, 82);
-  if (looseNames.some((name) => name.length >= 3 && name.includes(candidateLooseKey))) score = Math.max(score, 76);
+  if (searchIdentityNames.some((name) => candidateNameKeys.includes(name))) score = Math.max(score, 94);
+  if (searchIdentityNames.some((name) => name.length >= 3 && candidateNameKeys.some((candidateKey) => candidateKey.includes(name)))) score = Math.max(score, 86);
+  if (looseNames.some((name) => candidateLooseKeys.includes(name))) score = Math.max(score, 90);
+  if (looseNames.some((name) => name.length >= 3 && candidateLooseKeys.some((candidateKey) => candidateKey.includes(name)))) score = Math.max(score, 82);
+  if (looseNames.some((name) => name.length >= 3 && candidateLooseKeys.some((candidateKey) => name.includes(candidateKey)))) score = Math.max(score, 76);
   const locationText = normalizeAddressKey([candidate.location, candidate.address].filter(Boolean).join(" "));
   const regionMatch = (company.regions || []).some((region) => {
     const regionKey = normalizeAddressKey(region);
@@ -6312,73 +6423,97 @@ function companyChannelExposureResult(channelKey, company, result = {}) {
   return sanitizeCompanyChannelExposure(key, {
     ...result,
     status,
-    url: result.url || companyChannelFallbackUrl(key, company),
+    url: result.url || companyChannelFallbackUrl(key, company, result.searchKeyword || result.keyword || ""),
     checkedAt,
     updatedAt: checkedAt
   });
 }
 
 async function checkYanoljaCompanyExposure(company = {}) {
-  const keyword = companyChannelSearchKeyword(company);
-  if (!keyword) return companyChannelExposureResult("yanolja", company, { status: "auto_failed", source: "automatic", note: "업체명이 없어 자동 확인을 실행하지 못했습니다." });
+  const keywords = companyChannelSearchKeywords(company);
+  if (!keywords.length) return companyChannelExposureResult("yanolja", company, { status: "auto_failed", source: "automatic", note: "업체명이 없어 자동 확인을 실행하지 못했습니다." });
   const { checkIn, checkOut } = nextChannelCheckDates();
-  const body = {
-    keyword,
-    category: "LOCAL_ACCOMMODATION",
-    filters: [],
-    sort: "RECOMMEND",
-    userLocation: { latitude: 37.5665, longitude: 126.978, locationType: "DEFAULT", locationTime: 0 },
-    localAccommodation: { checkInDate: checkIn, checkOutDate: checkOut, capacityAdults: 2, childrenAges: [] },
-    page: 1
-  };
-  const headers = {
-    accept: "application/json, text/plain, */*",
-    "content-type": "application/json",
-    origin: "https://nol.yanolja.com",
-    referer: companyChannelFallbackUrl("yanolja", company)
-  };
+  let bestOverall = null;
+  let bestKeyword = "";
+  let lastFailure = "";
+  let requestSucceeded = false;
   try {
-    const response = await requestJson("https://nol.yanolja.com/discovery/api/list/universal-search/v1/list", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body)
-    });
-    if (!response.ok) {
+    for (const keyword of keywords) {
+      const body = {
+        keyword,
+        category: "LOCAL_ACCOMMODATION",
+        filters: [],
+        sort: "RECOMMEND",
+        userLocation: { latitude: 37.5665, longitude: 126.978, locationType: "DEFAULT", locationTime: 0 },
+        localAccommodation: { checkInDate: checkIn, checkOutDate: checkOut, capacityAdults: 2, childrenAges: [] },
+        page: 1
+      };
+      const headers = {
+        accept: "application/json, text/plain, */*",
+        "content-type": "application/json",
+        origin: "https://nol.yanolja.com",
+        referer: companyChannelFallbackUrl("yanolja", company, keyword)
+      };
+      const response = await requestJson("https://nol.yanolja.com/discovery/api/list/universal-search/v1/list", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        lastFailure = `야놀자 응답 ${response.status}`;
+        await sleep(80);
+        continue;
+      }
+      requestSucceeded = true;
+      const candidates = (Array.isArray(response.data?.items) ? response.data.items : [])
+        .filter((item) => item.type === "PRODUCT_ITEM")
+        .slice(0, 30)
+        .map((entry, index) => {
+          const data = entry.data || {};
+          const price = data.prices?.[0] || {};
+          return {
+            rank: index + 1,
+            name: data.title || "",
+            location: (data.locationDetails || []).join(" "),
+            price: companyChannelPriceText(price.discountPrice || price.sellingPrice || price.price || ""),
+            url: data.action?.web || "",
+            score: companyChannelCandidateScore(company, {
+              name: data.title || "",
+              location: (data.locationDetails || []).join(" ")
+            })
+          };
+        })
+        .sort((a, b) => b.score - a.score || a.rank - b.rank);
+      const best = candidates[0] || null;
+      if (best && (!bestOverall || best.score > bestOverall.score || (best.score === bestOverall.score && best.rank < bestOverall.rank))) {
+        bestOverall = best;
+        bestKeyword = keyword;
+      }
+      if (best && best.score >= 82) break;
+      await sleep(120);
+    }
+    if (!requestSucceeded) {
       return companyChannelExposureResult("yanolja", company, {
         status: "auto_failed",
         source: "automatic",
         method: "yanolja_universal_search",
         confidence: 0,
-        note: `야놀자 응답 ${response.status}`
+        searchKeyword: companyChannelPreferredFallbackKeyword(company, keywords),
+        searchedKeywords: keywords,
+        note: lastFailure || "야놀자 자동 확인 요청이 실패했습니다."
       });
     }
-    const candidates = (Array.isArray(response.data?.items) ? response.data.items : [])
-      .filter((item) => item.type === "PRODUCT_ITEM")
-      .slice(0, 30)
-      .map((entry, index) => {
-        const data = entry.data || {};
-        const price = data.prices?.[0] || {};
-        return {
-          rank: index + 1,
-          name: data.title || "",
-          location: (data.locationDetails || []).join(" "),
-          price: companyChannelPriceText(price.discountPrice || price.sellingPrice || price.price || ""),
-          url: data.action?.web || "",
-          score: companyChannelCandidateScore(company, {
-            name: data.title || "",
-            location: (data.locationDetails || []).join(" ")
-          })
-        };
-      })
-      .sort((a, b) => b.score - a.score || a.rank - b.rank);
-    const best = candidates[0] || null;
+    const best = bestOverall || null;
     if (!best || best.score < 62) {
+      const fallbackKeyword = companyChannelPreferredFallbackKeyword(company, keywords);
       return companyChannelExposureResult("yanolja", company, {
         status: "not_found",
         source: "automatic",
         method: "yanolja_universal_search",
         confidence: best?.score || 0,
-        note: "야놀자 검색 결과에서 동일 업체를 찾지 못했습니다."
+        searchKeyword: fallbackKeyword,
+        searchedKeywords: keywords,
+        note: `야놀자 검색 결과에서 동일 업체를 찾지 못했습니다. 검색어 ${keywords.slice(0, 4).join(" / ")}`
       });
     }
     return companyChannelExposureResult("yanolja", company, {
@@ -6389,7 +6524,9 @@ async function checkYanoljaCompanyExposure(company = {}) {
       rank: best.rank,
       url: best.url,
       price: best.price,
-      note: best.score >= 82 ? `${best.name} 자동 매칭` : `${best.name} 유사 매칭`
+      searchKeyword: bestKeyword || companyChannelPreferredFallbackKeyword(company, keywords),
+      searchedKeywords: keywords,
+      note: best.score >= 82 ? `${best.name} 자동 매칭 · 검색어 ${bestKeyword}` : `${best.name} 유사 매칭 · 검색어 ${bestKeyword}`
     });
   } catch (error) {
     return companyChannelExposureResult("yanolja", company, {
@@ -6397,6 +6534,8 @@ async function checkYanoljaCompanyExposure(company = {}) {
       source: "automatic",
       method: "yanolja_universal_search",
       confidence: 0,
+      searchKeyword: companyChannelPreferredFallbackKeyword(company, keywords),
+      searchedKeywords: keywords,
       note: `자동 확인 실패: ${error.message || String(error)}`
     });
   }
@@ -6404,48 +6543,74 @@ async function checkYanoljaCompanyExposure(company = {}) {
 
 async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo") {
   const key = normalizeCompanyChannelKey(channelKey) || "tteonayo";
-  const keyword = companyChannelSearchKeyword(company);
-  if (!keyword) return companyChannelExposureResult(key, company, { status: "auto_failed", source: "automatic", note: "업체명이 없어 자동 확인을 실행하지 못했습니다." });
-  const query = compactKeyword(keyword);
-  const url = `https://trip.ddnayo.com/web-api/total-search?searchKeyword=${encodeURIComponent(query)}&pageNumber=1&pageSize=24&orderBy=recommend`;
+  const keywords = companyChannelSearchKeywords(company);
+  if (!keywords.length) return companyChannelExposureResult(key, company, { status: "auto_failed", source: "automatic", note: "업체명이 없어 자동 확인을 실행하지 못했습니다." });
+  let bestOverall = null;
+  let bestKeyword = "";
+  let lastFailure = "";
+  let requestSucceeded = false;
   try {
-    const response = await requestJson(url, {
-      headers: {
-        accept: "application/json, text/plain, */*",
-        referer: companyChannelFallbackUrl("tteonayo", company)
+    for (const keyword of keywords) {
+      const query = compactKeyword(keyword);
+      const url = `https://trip.ddnayo.com/web-api/total-search?searchKeyword=${encodeURIComponent(query)}&pageNumber=1&pageSize=24&orderBy=recommend`;
+      const response = await requestJson(url, {
+        headers: {
+          accept: "application/json, text/plain, */*",
+          referer: companyChannelFallbackUrl("tteonayo", company, keyword)
+        }
+      });
+      if (!response.ok) {
+        lastFailure = `떠나요 응답 ${response.status}`;
+        await sleep(80);
+        continue;
       }
-    });
-    if (!response.ok) {
+      requestSucceeded = true;
+      const candidates = (response.data?.data?.contents || [])
+        .slice(0, 30)
+        .map((item, index) => ({
+          rank: index + 1,
+          name: item.accommodationName || "",
+          location: item.address || "",
+          price: companyChannelPriceText(item.price || ""),
+          url: item.productUrl || "",
+          score: companyChannelCandidateScore(company, {
+            name: item.accommodationName || "",
+            location: item.address || ""
+          })
+        }))
+        .sort((a, b) => b.score - a.score || a.rank - b.rank);
+      const best = candidates[0] || null;
+      if (best && (!bestOverall || best.score > bestOverall.score || (best.score === bestOverall.score && best.rank < bestOverall.rank))) {
+        bestOverall = best;
+        bestKeyword = keyword;
+      }
+      if (best && best.score >= 82) break;
+      await sleep(120);
+    }
+    if (!requestSucceeded) {
       return companyChannelExposureResult(key, company, {
         status: "auto_failed",
         source: "automatic",
-        method: "ddnayo_total_search",
+        method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
         confidence: 0,
-        note: `떠나요 응답 ${response.status}`
+        searchKeyword: companyChannelPreferredFallbackKeyword(company, keywords),
+        searchedKeywords: keywords,
+        note: lastFailure || "떠나요 자동 확인 요청이 실패했습니다."
       });
     }
-    const candidates = (response.data?.data?.contents || [])
-      .slice(0, 30)
-      .map((item, index) => ({
-        rank: index + 1,
-        name: item.accommodationName || "",
-        location: item.address || "",
-        price: companyChannelPriceText(item.price || ""),
-        url: item.productUrl || "",
-        score: companyChannelCandidateScore(company, {
-          name: item.accommodationName || "",
-          location: item.address || ""
-        })
-      }))
-      .sort((a, b) => b.score - a.score || a.rank - b.rank);
-    const best = candidates[0] || null;
+    const best = bestOverall || null;
     if (!best || best.score < 62) {
+      const fallbackKeyword = companyChannelPreferredFallbackKeyword(company, keywords);
       return companyChannelExposureResult(key, company, {
         status: "not_found",
         source: "automatic",
         method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
         confidence: best?.score || 0,
-        note: key === "onda" ? "떠나요/ONDA 계열 검색에서 동일 업체를 찾지 못했습니다." : "떠나요 검색 결과에서 동일 업체를 찾지 못했습니다."
+        searchKeyword: fallbackKeyword,
+        searchedKeywords: keywords,
+        note: key === "onda"
+          ? `떠나요/ONDA 계열 검색에서 동일 업체를 찾지 못했습니다. 검색어 ${keywords.slice(0, 4).join(" / ")}`
+          : `떠나요 검색 결과에서 동일 업체를 찾지 못했습니다. 검색어 ${keywords.slice(0, 4).join(" / ")}`
       });
     }
     return companyChannelExposureResult(key, company, {
@@ -6456,9 +6621,11 @@ async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo")
       rank: best.rank,
       url: best.url,
       price: best.price,
+      searchKeyword: bestKeyword || companyChannelPreferredFallbackKeyword(company, keywords),
+      searchedKeywords: keywords,
       note: key === "onda"
-        ? `${best.name} · 떠나요/ONDA 계열 보조 확인`
-        : (best.score >= 82 ? `${best.name} 자동 매칭` : `${best.name} 유사 매칭`)
+        ? `${best.name} · 떠나요/ONDA 계열 보조 확인 · 검색어 ${bestKeyword}`
+        : (best.score >= 82 ? `${best.name} 자동 매칭 · 검색어 ${bestKeyword}` : `${best.name} 유사 매칭 · 검색어 ${bestKeyword}`)
     });
   } catch (error) {
     return companyChannelExposureResult(key, company, {
@@ -6466,6 +6633,8 @@ async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo")
       source: "automatic",
       method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
       confidence: 0,
+      searchKeyword: companyChannelPreferredFallbackKeyword(company, keywords),
+      searchedKeywords: keywords,
       note: `자동 확인 실패: ${error.message || String(error)}`
     });
   }
@@ -10515,6 +10684,7 @@ async function saveCompanyChannelExposure(payload = {}) {
         statusLabel: entry.statusLabel,
         confidence: entry.confidence ?? null,
         url: entry.url || "",
+        searchKeyword: entry.searchKeyword || "",
         note: entry.note || ""
       }))
     }
@@ -12874,8 +13044,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-location-contrast-v17"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-location-contrast-v17"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-channel-region-retry-v18"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-channel-region-retry-v18"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
