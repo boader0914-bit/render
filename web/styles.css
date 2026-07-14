@@ -35258,3 +35258,82 @@ body.role-admin .admin-db-selected-fold-body {
     grid-template-columns: 1fr;
   }
 }
+
+/* Region keyword readability v22: province/locality names are primary scan targets. */
+.admin-db-province-card-grid span,
+.admin-db-region-card-grid span {
+  color: #0f172a;
+  font-size: clamp(18px, 1.8vw, 24px);
+  font-weight: 950;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.admin-db-province-card-grid strong,
+.admin-db-region-card-grid strong {
+  font-size: clamp(23px, 2vw, 28px);
+  line-height: 1;
+}
+
+.admin-db-province summary strong,
+.admin-db-region summary strong {
+  font-size: clamp(18px, 1.6vw, 22px);
+  line-height: 1.12;
+}
+
+body.role-admin .admin-db-province-card-grid span,
+body.role-admin .admin-db-region-card-grid span,
+body.role-admin .admin-db-province summary strong,
+body.role-admin .admin-db-region summary strong {
+  color: #ffffff !important;
+  text-shadow: 0 0 14px rgba(0, 0, 0, .22) !important;
+}
+
+body.role-admin .admin-db-province-card-grid strong,
+body.role-admin .admin-db-region-card-grid strong {
+  color: #8fc7ff !important;
+  text-shadow: 0 0 16px rgba(106, 168, 255, .25) !important;
+}
+
+body.role-admin .admin-db-province-card-grid small,
+body.role-admin .admin-db-province-card-grid em,
+body.role-admin .admin-db-region-card-grid small,
+body.role-admin .admin-db-region-card-grid em {
+  color: #c8d6e8 !important;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+body.role-b2b .region-card strong {
+  color: #ffffff !important;
+  font-size: clamp(22px, 5vw, 30px);
+  font-weight: 950;
+  line-height: 1.08;
+  letter-spacing: 0;
+  text-shadow: 0 0 16px rgba(0, 0, 0, .22);
+}
+
+body.role-b2b .b2b-map-region-rank strong {
+  color: #ffffff !important;
+  font-size: clamp(19px, 4vw, 24px);
+  line-height: 1.12;
+}
+
+body.role-b2b .b2b-search-card-sub {
+  color: #d4e6fb !important;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.35;
+}
+
+@media (max-width: 720px) {
+  body.role-admin .admin-db-province-card-grid span,
+  body.role-admin .admin-db-region-card-grid span {
+    font-size: 22px;
+  }
+
+  body.role-admin .admin-db-province-card-grid strong,
+  body.role-admin .admin-db-region-card-grid strong {
+    font-size: 24px;
+  }
+}
