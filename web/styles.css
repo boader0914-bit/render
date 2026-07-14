@@ -5397,7 +5397,7 @@ a {
 
 .admin-db-channel-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
 }
 
@@ -5473,6 +5473,96 @@ a {
   padding: 0 9px;
   font-size: 12px;
   font-weight: 850;
+}
+
+.admin-db-channel-product-box {
+  min-width: 0;
+  border: 1px solid #d5e3f7;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 9px;
+}
+
+.admin-db-channel-product-box summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-db-channel-product-box summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-channel-product-box summary strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.admin-db-channel-product-box summary small,
+.admin-db-channel-product-grid span,
+.admin-db-channel-product-checks label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.admin-db-channel-product-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.admin-db-channel-product-grid label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-channel-product-grid input,
+.admin-db-channel-product-grid select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid #d5e3f7;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.admin-db-channel-product-note {
+  grid-column: span 2;
+}
+
+.admin-db-channel-product-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.admin-db-channel-product-checks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d5e3f7;
+  border-radius: 999px;
+  background: #fff;
+  padding: 6px 9px;
+}
+
+.admin-db-channel-product-checks input {
+  inline-size: 14px;
+  block-size: 14px;
 }
 
 .admin-db-collect-planline {
@@ -28236,6 +28326,7 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   .admin-db-collect-list article,
   .admin-db-channel-summary,
   .admin-db-channel-fields,
+  .admin-db-channel-product-grid,
   .admin-db-confirm-grid,
   .admin-db-recheck-summary,
   .admin-db-recheck-grid,
@@ -28325,6 +28416,10 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   .sales-contact-actions,
   .company-profile-keywords {
     grid-template-columns: 1fr;
+  }
+
+  .admin-db-channel-product-note {
+    grid-column: auto;
   }
 
   .admin-console-hero {
@@ -32199,23 +32294,49 @@ body.role-admin .admin-db-channel-row-head > span {
 }
 
 body.role-admin .admin-db-channel-fields input,
-body.role-admin .admin-db-channel-fields select {
+body.role-admin .admin-db-channel-fields select,
+body.role-admin .admin-db-channel-product-grid input,
+body.role-admin .admin-db-channel-product-grid select {
   border-color: #b8cbe0 !important;
   background: #ffffff !important;
   color: var(--admin-channel-ink) !important;
   box-shadow: none !important;
 }
 
-body.role-admin .admin-db-channel-fields input::placeholder {
+body.role-admin .admin-db-channel-fields input::placeholder,
+body.role-admin .admin-db-channel-product-grid input::placeholder {
   color: #7890aa !important;
   opacity: 1;
 }
 
 body.role-admin .admin-db-channel-fields input:focus,
-body.role-admin .admin-db-channel-fields select:focus {
+body.role-admin .admin-db-channel-fields select:focus,
+body.role-admin .admin-db-channel-product-grid input:focus,
+body.role-admin .admin-db-channel-product-grid select:focus {
   border-color: #3b82f6 !important;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, .16) !important;
   outline: none;
+}
+
+body.role-admin .admin-db-channel-product-box {
+  border-color: var(--admin-channel-line) !important;
+  background: #f8fbff !important;
+  color: var(--admin-channel-ink) !important;
+}
+
+body.role-admin .admin-db-channel-product-box summary strong {
+  color: var(--admin-channel-ink) !important;
+}
+
+body.role-admin .admin-db-channel-product-box summary small,
+body.role-admin .admin-db-channel-product-grid span,
+body.role-admin .admin-db-channel-product-checks label {
+  color: var(--admin-channel-muted) !important;
+}
+
+body.role-admin .admin-db-channel-product-checks label {
+  border-color: var(--admin-channel-line) !important;
+  background: #ffffff !important;
 }
 
 body.role-admin .admin-db-channel-head button,

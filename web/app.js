@@ -17584,22 +17584,26 @@ const ADMIN_DB_CHANNEL_OPTIONS = [
 ];
 
 const ADMIN_DB_MANAGED_CHANNELS = ADMIN_DB_CHANNEL_OPTIONS.filter(([key]) => key !== "naver");
+const ADMIN_DB_AUTO_CHANNEL_KEYS = ["yanolja", "tteonayo", "onda"];
+const ADMIN_DB_MANUAL_CHANNEL_KEYS = ["yeogi", "airbnb"];
+const ADMIN_DB_CHANNEL_REVIEW_STATUSES = ["similar_name", "auto_failed", "blocked", "needs_manual"];
 
 function adminDbChannelExposureMap(company = {}) {
   return company.channelExposures || company.channelExposure || {};
 }
 
 function adminDbChannelStatusLabel(status = "") {
-  if (status === "exposed") return "노출";
-  if (status === "not_found") return "미노출";
-  if (status === "blocked") return "수집불가";
-  if (status === "needs_manual") return "확인필요";
+  if (status === "exposed") return "OTA 노출 확인";
+  if (status === "not_found") return "OTA 미사용 추정";
+  if (status === "similar_name") return "유사명 확인 필요";
+  if (status === "auto_failed" || status === "blocked") return "자동확인 실패";
+  if (status === "needs_manual" || status === "manual_only") return "수동 확인";
   return "미확인";
 }
 
 function adminDbChannelStatusTone(status = "") {
   if (status === "exposed") return "good";
-  if (status === "not_found") return "neutral";
+  if (["not_found", "manual_only"].includes(status)) return "neutral";
   return "watch";
 }
 
@@ -17646,12 +17650,13 @@ function adminDbChannelProfile(company = {}, metrics = {}) {
   const tteonayo = exposedBySaved("tteonayo") || (!exposures.tteonayo && /떠나요|tteonayo|ddnayo/.test(text));
   const onda = exposedBySaved("onda") || (!exposures.onda && /온다|onda/.test(text));
   const airbnb = exposedBySaved("airbnb") || (!exposures.airbnb && /airbnb|에어비앤비/.test(text));
-  const savedEntries = Object.values(exposures || {}).filter(Boolean);
-  const manualNeeded = savedEntries.filter((entry) => ["needs_manual", "blocked"].includes(entry.status)).length;
-  const notFound = savedEntries.filter((entry) => entry.status === "not_found").length;
+  const savedEntries = Object.entries(exposures || {}).filter(([, entry]) => entry);
+  const manualNeeded = savedEntries.filter(([key, entry]) => ADMIN_DB_AUTO_CHANNEL_KEYS.includes(key) && ADMIN_DB_CHANNEL_REVIEW_STATUSES.includes(entry.status)).length;
+  const manualOnly = savedEntries.filter(([key, entry]) => ADMIN_DB_MANUAL_CHANNEL_KEYS.includes(key) && ["needs_manual", "manual_only"].includes(entry.status)).length;
+  const notFound = savedEntries.filter(([, entry]) => entry.status === "not_found").length;
   const checkedCount = savedEntries.length;
   const count = [naver, yeogi, yanolja, tteonayo, onda, airbnb].filter(Boolean).length;
-  return { naver, yeogi, yanolja, tteonayo, onda, airbnb, count, statuses: exposures, manualNeeded, notFound, checkedCount };
+  return { naver, yeogi, yanolja, tteonayo, onda, airbnb, count, statuses: exposures, manualNeeded, manualOnly, notFound, checkedCount };
 }
 
 function adminDbFeatureProfile(company = {}, metrics = {}) {
@@ -18033,7 +18038,7 @@ function adminDbFilterState(master = {}) {
       if (filters.ota === "ota_missing") {
         if (row.metrics.channels.count) return false;
       } else if (filters.ota === "channel_needs_manual") {
-        if (!Object.values(row.metrics.channels.statuses || {}).some((entry) => ["needs_manual", "blocked"].includes(entry?.status))) return false;
+        if (!Object.entries(row.metrics.channels.statuses || {}).some(([key, entry]) => ADMIN_DB_AUTO_CHANNEL_KEYS.includes(key) && ADMIN_DB_CHANNEL_REVIEW_STATUSES.includes(entry?.status))) return false;
       } else if (filters.ota === "channel_not_found") {
         if (!Object.values(row.metrics.channels.statuses || {}).some((entry) => entry?.status === "not_found")) return false;
       } else if (!row.metrics.channels[filters.ota]) {
@@ -18807,7 +18812,7 @@ function adminDbChannelChips(channels = {}) {
     .filter(([key]) => statuses[key])
     .map(([key, label]) => {
       const entry = statuses[key] || {};
-      return `<em class="${escapeHtml(adminDbChannelStatusTone(entry.status))}">${escapeHtml(`${label} ${entry.statusLabel || adminDbChannelStatusLabel(entry.status)}`)}</em>`;
+      return `<em class="${escapeHtml(adminDbChannelStatusTone(entry.status))}">${escapeHtml(`${label} ${adminDbChannelStatusLabel(entry.status)}`)}</em>`;
     });
   if (saved.length) return saved.join("");
   const chips = ADMIN_DB_CHANNEL_OPTIONS.filter(([key]) => channels[key]).map(([, label]) => `<em class="good">${escapeHtml(label)}</em>`);
@@ -18872,10 +18877,10 @@ function adminDbWorkReason(row = {}) {
 
 function adminDbChannelSummary(metrics = {}) {
   const channels = metrics.channels || {};
-  if (channels.manualNeeded) return `채널 확인필요 ${fmtNumber(channels.manualNeeded)}`;
+  if (channels.manualNeeded) return `자동 보완 ${fmtNumber(channels.manualNeeded)}곳`;
   const labels = ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => channels[key] ? label : "").filter(Boolean);
   if (labels.length) return labels.join(" · ");
-  return channels.naver ? "네이버" : "채널 확인 필요";
+  return channels.naver ? "네이버" : "채널 미확인";
 }
 
 function adminDbReservationStockText(metrics = {}) {
@@ -19611,13 +19616,46 @@ function adminDbRecheckOutcomeHtml(row = {}) {
 }
 
 function adminDbChannelStatusOptions(selected = "") {
-  return [
+  const options = [
     ["unknown", "미확인"],
-    ["exposed", "노출"],
-    ["not_found", "미노출"],
-    ["needs_manual", "확인필요"],
-    ["blocked", "수집불가"]
-  ].map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+    ["exposed", "OTA 노출 확인"],
+    ["not_found", "OTA 미사용 추정"],
+    ["similar_name", "유사명 확인 필요"],
+    ["auto_failed", "자동확인 실패"],
+    ["manual_only", "수동 확인"]
+  ];
+  if (selected === "needs_manual") options.push(["needs_manual", "수동 확인"]);
+  if (selected === "blocked") options.push(["blocked", "자동확인 실패"]);
+  return options.map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function adminDbChannelProductEntry(entry = {}) {
+  const products = Array.isArray(entry.products) ? entry.products : [];
+  return products[0] || entry.product || {};
+}
+
+function adminDbChannelStayTypeOptions(selected = "") {
+  return [
+    ["", "미확인"],
+    ["숙박", "숙박"],
+    ["데이유즈", "데이유즈"],
+    ["혼합", "숙박+데이유즈"]
+  ].map(([value, label]) => `<option value="${escapeHtml(value)}" ${selected === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
+}
+
+function adminDbChannelProductHasValue(product = {}) {
+  return [
+    product.productName,
+    product.roomType,
+    product.stayType,
+    product.quantity,
+    product.weekdayPrice,
+    product.fridayPrice,
+    product.saturdayPrice,
+    product.sundayPrice,
+    product.basisPeriod,
+    product.note
+  ].some((value) => String(value ?? "").trim()) || product.priceConfirmed || product.quantityConfirmed;
 }
 
 function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
@@ -19627,6 +19665,8 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
   const searchUrl = entry.url || adminDbChannelFallbackSearchUrl(channelKey, company);
   const checked = entry.checkedAt ? compactDateTime(entry.checkedAt) : "확인 전";
   const confidence = Number.isFinite(Number(entry.confidence)) ? ` · 신뢰 ${fmtNumber(entry.confidence)}%` : "";
+  const product = adminDbChannelProductEntry(entry);
+  const productOpen = adminDbChannelProductHasValue(product) ? "open" : "";
   return `
     <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-surface="light" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
       <div class="admin-db-channel-row-head">
@@ -19654,6 +19694,58 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
           <input type="text" data-company-channel-note value="${escapeHtml(entry.note || "")}" placeholder="예: 유사명 확인 필요">
         </label>
       </div>
+      <details class="admin-db-channel-product-box" ${productOpen}>
+        <summary>
+          <strong>상품·수량·가격</strong>
+          <small>네이버 기준과 같은 방식으로 채널별 값을 입력</small>
+        </summary>
+        <div class="admin-db-channel-product-grid">
+          <label>
+            <span>상품명</span>
+            <input type="text" data-company-channel-product-name value="${escapeHtml(product.productName || "")}" placeholder="예: 스탠다드 글램핑">
+          </label>
+          <label>
+            <span>객실종류</span>
+            <input type="text" data-company-channel-room-type value="${escapeHtml(product.roomType || "")}" placeholder="예: 독채형 / 카라반">
+          </label>
+          <label>
+            <span>구분</span>
+            <select data-company-channel-stay-type>${adminDbChannelStayTypeOptions(product.stayType || "")}</select>
+          </label>
+          <label>
+            <span>수량</span>
+            <input type="number" min="0" step="1" data-company-channel-quantity value="${escapeHtml(product.quantity ?? "")}" placeholder="예: 12">
+          </label>
+          <label>
+            <span>평일</span>
+            <input type="text" data-company-channel-weekday-price value="${escapeHtml(product.weekdayPrice || "")}" placeholder="예: 120,000원">
+          </label>
+          <label>
+            <span>금</span>
+            <input type="text" data-company-channel-friday-price value="${escapeHtml(product.fridayPrice || "")}" placeholder="예: 160,000원">
+          </label>
+          <label>
+            <span>토</span>
+            <input type="text" data-company-channel-saturday-price value="${escapeHtml(product.saturdayPrice || "")}" placeholder="예: 220,000원">
+          </label>
+          <label>
+            <span>일</span>
+            <input type="text" data-company-channel-sunday-price value="${escapeHtml(product.sundayPrice || "")}" placeholder="예: 140,000원">
+          </label>
+          <label>
+            <span>기준 기간</span>
+            <input type="text" data-company-channel-basis-period value="${escapeHtml(product.basisPeriod || "")}" placeholder="예: 26.07.14~26.07.20">
+          </label>
+          <label class="admin-db-channel-product-note">
+            <span>상품 메모</span>
+            <input type="text" data-company-channel-product-note value="${escapeHtml(product.note || "")}" placeholder="예: 조식 포함 / 패키지 제외">
+          </label>
+        </div>
+        <div class="admin-db-channel-product-checks">
+          <label><input type="checkbox" data-company-channel-price-confirmed ${product.priceConfirmed ? "checked" : ""}> 가격 확인</label>
+          <label><input type="checkbox" data-company-channel-quantity-confirmed ${product.quantityConfirmed ? "checked" : ""}> 수량 확인</label>
+        </div>
+      </details>
       <div class="admin-db-channel-actions">
         ${searchUrl ? `<a href="${escapeHtml(searchUrl)}" target="_blank" rel="noreferrer">검색 열기</a>` : ""}
         <button type="button" data-company-channel-save>저장</button>
@@ -19670,21 +19762,23 @@ function adminDbChannelExposurePanel(row = {}) {
   const checkedCount = Object.values(channels.statuses || {}).filter(Boolean).length;
   const exposedCount = ADMIN_DB_MANAGED_CHANNELS.filter(([key]) => channels[key]).length;
   const manualCount = channels.manualNeeded || 0;
+  const manualOnlyCount = channels.manualOnly || 0;
   return `
     <section class="admin-db-channel-panel" data-surface="light">
       <div class="admin-db-channel-head">
         <div>
           <span>채널 노출 확인</span>
-          <strong>네이버 외 OTA 노출을 업체별로 정리합니다.</strong>
-          <small>야놀자·떠나요·ONDA는 자동 확인, 여기어때·Airbnb는 검색 링크 기반 수동 확인으로 저장합니다.</small>
+          <strong>OTA 노출과 채널별 상품 기준을 정리합니다.</strong>
+          <small>야놀자·떠나요·ONDA는 자동 확인, 여기어때·Airbnb는 수동 확인 채널로 분리합니다.</small>
         </div>
-        <button type="button" data-company-channel-auto data-company-id="${escapeHtml(company.companyId || "")}">자동 확인</button>
+        <button type="button" data-company-channel-auto data-company-id="${escapeHtml(company.companyId || "")}">자동 채널 확인</button>
       </div>
       <div class="admin-db-channel-summary">
         ${[
           ["확인 채널", checkedCount, "저장된 상태"],
           ["노출", exposedCount, "네이버 제외"],
-          ["확인필요", manualCount, "수동/차단 포함"]
+          ["자동 보완", manualCount, "유사명/실패"],
+          ["수동 채널", manualOnlyCount, "여기어때·Airbnb"]
         ].map(([label, value, note]) => `
           <article data-surface="light">
             <span>${escapeHtml(label)}</span>
@@ -20365,8 +20459,8 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
                 ["tteonayo", "떠나요"],
                 ["onda", "ONDA"],
                 ["airbnb", "Airbnb"],
-                ["channel_needs_manual", "확인 필요"],
-                ["channel_not_found", "미노출"],
+                ["channel_needs_manual", "자동 보완 필요"],
+                ["channel_not_found", "OTA 미사용 추정"],
                 ["ota_missing", "채널 미확인"]
               ].map(([value, label]) => `<option value="${value}" ${filters.ota === value ? "selected" : ""}>${label}</option>`).join("")}
             </select>
@@ -28221,6 +28315,21 @@ async function saveCompanyCorrection(button, clear = false) {
 }
 
 function companyChannelPayloadFromForm(form = null, action = "save") {
+  const product = {
+    productName: form?.querySelector("[data-company-channel-product-name]")?.value || "",
+    roomType: form?.querySelector("[data-company-channel-room-type]")?.value || "",
+    stayType: form?.querySelector("[data-company-channel-stay-type]")?.value || "",
+    quantity: form?.querySelector("[data-company-channel-quantity]")?.value || "",
+    weekdayPrice: form?.querySelector("[data-company-channel-weekday-price]")?.value || "",
+    fridayPrice: form?.querySelector("[data-company-channel-friday-price]")?.value || "",
+    saturdayPrice: form?.querySelector("[data-company-channel-saturday-price]")?.value || "",
+    sundayPrice: form?.querySelector("[data-company-channel-sunday-price]")?.value || "",
+    basisPeriod: form?.querySelector("[data-company-channel-basis-period]")?.value || "",
+    note: form?.querySelector("[data-company-channel-product-note]")?.value || "",
+    priceConfirmed: Boolean(form?.querySelector("[data-company-channel-price-confirmed]")?.checked),
+    quantityConfirmed: Boolean(form?.querySelector("[data-company-channel-quantity-confirmed]")?.checked)
+  };
+  const hasProduct = adminDbChannelProductHasValue(product);
   return {
     action,
     companyId: form?.dataset?.companyId || "",
@@ -28229,6 +28338,7 @@ function companyChannelPayloadFromForm(form = null, action = "save") {
     url: form?.querySelector("[data-company-channel-url]")?.value || "",
     price: form?.querySelector("[data-company-channel-price]")?.value || "",
     note: form?.querySelector("[data-company-channel-note]")?.value || "",
+    products: hasProduct ? [product] : [],
     source: "manual"
   };
 }
@@ -28257,7 +28367,8 @@ async function saveCompanyChannelExposure(button, action = "save") {
       items: [
         payload.channel ? payload.channel.toUpperCase() : "채널",
         payload.url ? "URL 저장" : "URL 없음",
-        payload.price ? "가격 메모 있음" : "가격 미입력"
+        payload.price ? "가격 메모 있음" : "가격 미입력",
+        payload.products?.length ? "상품 기준 저장" : "상품 기준 없음"
       ]
     });
     renderCompanyMasterPanel();
@@ -28284,7 +28395,7 @@ async function autoCheckCompanyChannelExposure(button) {
       body: JSON.stringify({
         action: "auto_check",
         companyId,
-        channels: ADMIN_DB_MANAGED_CHANNELS.map(([key]) => key)
+        channels: ADMIN_DB_AUTO_CHANNEL_KEYS
       })
     });
     state.companyMaster = data;
@@ -28294,9 +28405,9 @@ async function autoCheckCompanyChannelExposure(button) {
       status: "channel_auto_check",
       tone: "success",
       title: "채널 자동 확인 완료",
-      message: "네이버와 보조 채널 노출 상태를 다시 확인했습니다.",
-      next: "채널별 상태와 메모를 확인한 뒤 필요한 항목만 보정하세요.",
-      items: ["네이버", "OTA", "채널 상태 갱신"]
+      message: "야놀자·떠나요·ONDA 노출 상태를 다시 확인했습니다.",
+      next: "유사명 또는 실패 항목만 보완하고, 여기어때·Airbnb는 필요 시 수동으로 저장하세요.",
+      items: ["자동 채널", "OTA 노출", "상태 갱신"]
     });
     renderCompanyMasterPanel();
     renderDecisionQueue();
