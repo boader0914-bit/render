@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260714-channel-status-v15";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260714-channel-compare-v16";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

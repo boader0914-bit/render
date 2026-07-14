@@ -19634,6 +19634,13 @@ function adminDbChannelProductEntry(entry = {}) {
   return products[0] || entry.product || {};
 }
 
+function adminDbChannelProductEntries(entry = {}) {
+  return (Array.isArray(entry.products) ? entry.products : [entry.product || null])
+    .filter((product) => product && typeof product === "object")
+    .filter((product) => adminDbChannelProductHasValue(product))
+    .slice(0, 12);
+}
+
 function adminDbChannelStayTypeOptions(selected = "") {
   return [
     ["", "미확인"],
@@ -19656,6 +19663,143 @@ function adminDbChannelProductHasValue(product = {}) {
     product.basisPeriod,
     product.note
   ].some((value) => String(value ?? "").trim()) || product.priceConfirmed || product.quantityConfirmed;
+}
+
+function adminDbChannelProductPrices(product = {}) {
+  return [
+    product.weekdayPrice,
+    product.fridayPrice,
+    product.saturdayPrice,
+    product.sundayPrice
+  ].map(optionalNumber).filter((value) => Number.isFinite(value) && value > 0);
+}
+
+function adminDbChannelPriceRangeText(product = {}) {
+  const prices = adminDbChannelProductPrices(product);
+  if (!prices.length) return "가격 미입력";
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  return min === max ? fmtWon(min) : `${fmtWon(min)}~${fmtWon(max)}`;
+}
+
+function adminDbChannelBasisProfile(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
+  const segments = manualCorrectionRoomSegments(correction);
+  const segmentTotal = segments.reduce((sum, segment) => sum + finiteNumber(segment.count, 0), 0);
+  const roomTotal = segmentTotal || finiteNumber(correction.lodgingBasisTotal, 0) || finiteNumber(metrics.roomTotal, 0);
+  const prices = segments
+    .flatMap((segment) => [segment.weekdayPrice, segment.fridayPrice, segment.saturdayPrice, segment.sundayPrice])
+    .map(optionalNumber)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const minPrice = prices.length ? Math.min(...prices) : NaN;
+  const maxPrice = prices.length ? Math.max(...prices) : NaN;
+  const avgPrice = prices.length ? Math.round(prices.reduce((sum, value) => sum + value, 0) / prices.length) : NaN;
+  const priceText = prices.length
+    ? (minPrice === maxPrice ? fmtWon(minPrice) : `${fmtWon(minPrice)}~${fmtWon(maxPrice)}`)
+    : "기준가 미입력";
+  return {
+    roomTotal,
+    productText: adminDbProductSummary(company, metrics),
+    priceText,
+    avgPrice,
+    source: segments.length || finiteNumber(correction.lodgingBasisTotal, 0) ? "관리자 보정" : "자동수집"
+  };
+}
+
+function adminDbChannelProductCompareTone(entry = {}, product = {}) {
+  if (entry.status === "exposed" && product.priceConfirmed && product.quantityConfirmed) return "good";
+  if (["similar_name", "auto_failed", "blocked", "needs_manual"].includes(entry.status)) return "watch";
+  if (adminDbChannelProductHasValue(product)) return "neutral";
+  return "watch";
+}
+
+function adminDbChannelComparisonPanel(row = {}) {
+  const company = row.company || {};
+  const exposures = adminDbChannelExposureMap(company);
+  const basis = adminDbChannelBasisProfile(row);
+  const rows = ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => {
+    const entry = exposures[key] || {};
+    const product = adminDbChannelProductEntry(entry);
+    const hasProduct = adminDbChannelProductHasValue(product);
+    const quantity = optionalNumber(product.quantity);
+    const quantityText = Number.isFinite(quantity) && quantity >= 0 ? `${fmtNumber(quantity)}개` : "수량 미입력";
+    const quantityGap = Number.isFinite(quantity) && basis.roomTotal
+      ? quantity - basis.roomTotal
+      : NaN;
+    const prices = adminDbChannelProductPrices(product);
+    const avgPrice = prices.length ? Math.round(prices.reduce((sum, value) => sum + value, 0) / prices.length) : NaN;
+    const priceGap = Number.isFinite(avgPrice) && Number.isFinite(basis.avgPrice) ? avgPrice - basis.avgPrice : NaN;
+    const confirmText = hasProduct
+      ? [
+          product.quantityConfirmed ? "수량 확인" : "수량 대기",
+          product.priceConfirmed ? "가격 확인" : "가격 대기"
+        ].join(" · ")
+      : "상품 기준 입력 대기";
+    return {
+      key,
+      label,
+      entry,
+      product,
+      hasProduct,
+      quantityText,
+      quantityGap,
+      priceText: adminDbChannelPriceRangeText(product),
+      priceGap,
+      confirmText,
+      tone: adminDbChannelProductCompareTone(entry, product)
+    };
+  });
+  const savedProductCount = rows.filter((item) => item.hasProduct).length;
+  const visibleRows = rows.filter((item) => item.hasProduct || (item.entry.status && item.entry.status !== "unknown"));
+  return `
+    <div class="admin-db-channel-compare" data-surface="light">
+      <div class="admin-db-channel-compare-head">
+        <div>
+          <span>채널 기준 비교</span>
+          <strong>네이버 기준과 OTA 입력값을 비교합니다.</strong>
+          <small>${escapeHtml(`${basis.source} · ${basis.roomTotal ? `${fmtNumber(basis.roomTotal)}실` : "객실수 대기"} · ${basis.productText} · ${basis.priceText}`)}</small>
+        </div>
+        <em>${escapeHtml(`${fmtNumber(savedProductCount)}/${fmtNumber(ADMIN_DB_MANAGED_CHANNELS.length)} 입력`)}</em>
+      </div>
+      <div class="admin-db-channel-compare-grid">
+        ${visibleRows.length ? visibleRows.map((item) => `
+          <article class="${escapeHtml(item.tone)}" data-surface="light">
+            <div class="admin-db-channel-compare-title">
+              <strong>${escapeHtml(item.label)}</strong>
+              <span>${escapeHtml(adminDbChannelStatusLabel(item.entry.status || "unknown"))}</span>
+            </div>
+            <dl>
+              <div>
+                <dt>수량</dt>
+                <dd>${escapeHtml(item.quantityText)}</dd>
+                <small>${Number.isFinite(item.quantityGap) ? escapeHtml(`기준 대비 ${item.quantityGap >= 0 ? "+" : ""}${fmtNumber(item.quantityGap)}개`) : "기준 비교 대기"}</small>
+              </div>
+              <div>
+                <dt>가격</dt>
+                <dd>${escapeHtml(item.priceText)}</dd>
+                <small>${Number.isFinite(item.priceGap) ? escapeHtml(`평균 ${item.priceGap >= 0 ? "+" : ""}${fmtWon(Math.abs(item.priceGap))}`) : "기준가 비교 대기"}</small>
+              </div>
+              <div>
+                <dt>확인</dt>
+                <dd>${escapeHtml(item.confirmText)}</dd>
+                <small>${escapeHtml(item.product.basisPeriod || item.entry.note || "기준 기간 입력 대기")}</small>
+              </div>
+            </dl>
+          </article>
+        `).join("") : `
+          <article class="neutral admin-db-channel-compare-empty" data-surface="light">
+            <div class="admin-db-channel-compare-title">
+              <strong>채널 상품 기준 입력 대기</strong>
+              <span>미입력</span>
+            </div>
+            <p>아래 채널별 입력 섹션에서 상품명, 객실종류, 수량, 요일별 가격을 저장하면 네이버 기준과 자동으로 비교됩니다.</p>
+          </article>
+        `}
+      </div>
+    </div>
+  `;
 }
 
 function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
@@ -19787,6 +19931,7 @@ function adminDbChannelExposurePanel(row = {}) {
           </article>
         `).join("")}
       </div>
+      ${adminDbChannelComparisonPanel(row)}
       <div class="admin-db-channel-list">
         ${ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => adminDbChannelExposureForm(row, key, label)).join("")}
       </div>
