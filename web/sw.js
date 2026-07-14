@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260714-channel-inventory-edit-v20";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260714-admin-detail-simplify-v21";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

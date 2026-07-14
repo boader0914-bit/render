@@ -19366,6 +19366,85 @@ function adminDbSelectedAppliedValuesHtml(row = {}) {
   `;
 }
 
+function adminDbSelectedB2BReflectText(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const review = metrics.adminReview || company.adminReview || {};
+  if (review.status === "done" || review.status === "verified") return "반영됨";
+  if (manualCorrectionHasValue(company.manualCorrection)) return "보정 반영";
+  return "대기";
+}
+
+function adminDbSelectedKpiCardsHtml(row = {}) {
+  const pick = new Set(["노출", "예약율", "7일 매출", "객실·상품"]);
+  const cards = adminDbSelectedAppliedCards(row).filter((card) => pick.has(card.label));
+  return `
+    <div class="admin-db-detail-kpis">
+      ${cards.map((card) => `
+        <article class="${escapeHtml(card.tone || "neutral")}">
+          <span>${escapeHtml(card.label || "")}</span>
+          <strong>${escapeHtml(card.value || "")}</strong>
+          <small>${escapeHtml(card.note || "")}</small>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function adminDbSelectedStatusPanel(row = {}, nextAction = {}, requiredChannels = []) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const review = metrics.adminReview || company.adminReview || {};
+  const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
+  const currentLabel = review.status
+    ? (review.label || companyAdminReviewLabel(review.status))
+    : "관리자 검수전";
+  const reason = adminDbWorkReason(row);
+  const tags = [
+    reason,
+    ...requiredChannels.map((channel) => `${channel} 확인`)
+  ].filter(Boolean).slice(0, 4);
+  return `
+    <section class="admin-db-detail-status ${escapeHtml(workType.tone || "watch")}" aria-label="현재 판단">
+      <div class="admin-db-detail-status-main">
+        <span>현재 판단</span>
+        <strong>${escapeHtml(currentLabel || workType.label || "관리자 검수전")}</strong>
+        <small>${escapeHtml(reason || "기준값과 채널 상태를 확인합니다.")}</small>
+      </div>
+      <div class="admin-db-detail-status-next">
+        <span>다음 할 일</span>
+        <strong>${escapeHtml(nextAction.title || "검수 상태 저장")}</strong>
+        <small>${escapeHtml(nextAction.note || "확인 후 관리자 DB에 저장합니다.")}</small>
+      </div>
+      <div class="admin-db-detail-status-side">
+        <span>B2B 반영</span>
+        <strong>${escapeHtml(adminDbSelectedB2BReflectText(row))}</strong>
+      </div>
+      ${tags.length ? `
+        <div class="admin-db-detail-status-tags">
+          ${tags.map((tag) => `<em>${escapeHtml(tag)}</em>`).join("")}
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function adminDbSelectedDetailTabs(activeFold = "") {
+  const tabs = [
+    ["correction", "기준값"],
+    ["channel", "채널"],
+    ["collect", "수집"],
+    ["review", "검수"]
+  ];
+  return `
+    <div class="admin-db-detail-tabs" aria-label="상세 수정 메뉴">
+      ${tabs.map(([key, label]) => `
+        <button type="button" class="${activeFold === key ? "active" : ""}" data-admin-db-open-fold="${escapeHtml(key)}">${escapeHtml(label)}</button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function adminDbWorkPriority(row = {}) {
   const metrics = row.metrics || {};
   const workType = metrics.workType || {};
@@ -19825,6 +19904,85 @@ function adminDbChannelBasisProductDefaults(row = {}) {
   };
 }
 
+function adminDbChannelTableRows(row = {}) {
+  const company = row.company || {};
+  const exposureMap = adminDbChannelExposureMap(company);
+  const defaults = adminDbChannelBasisProductDefaults(row);
+  return ADMIN_DB_CHANNEL_OPTIONS.map(([key, label]) => {
+    const entry = key === "naver" ? {} : (exposureMap[key] || {});
+    const status = key === "naver" ? "exposed" : (entry.status || "unknown");
+    const product = key === "naver" ? defaults : adminDbChannelProductEntry(entry);
+    const totalQuantity = product.totalQuantity ?? product.quantity ?? (key === "naver" ? defaults.totalQuantity : "");
+    const soldQuantity = product.soldQuantity ?? "";
+    const url = key === "naver"
+      ? (externalPlatformUrl(company.naverPlaceUrl) || externalPlatformUrl(company.naverUrl) || externalPlatformUrl(company.bookingUrl) || platformFallbackSearchUrl("네이버", company))
+      : (entry.url || adminDbChannelFallbackSearchUrl(key, company));
+    return {
+      key,
+      label,
+      status,
+      tone: adminDbChannelStatusTone(status),
+      statusText: key === "naver" ? "기준 채널" : adminDbChannelStatusLabel(status),
+      url,
+      sourceText: key === "naver" ? "네이버 기준" : (entry.source === "automatic" ? "자동" : entry.source === "manual" ? "수동" : "대기"),
+      totalText: totalQuantity ? `${fmtNumber(totalQuantity)}실` : "대기",
+      soldText: soldQuantity !== "" ? `${fmtNumber(soldQuantity)}실` : "대기",
+      productText: product.productName || product.roomType || defaults.productName || "상품 기준 대기",
+      checkedText: entry.checkedAt ? compactDateTime(entry.checkedAt) : (key === "naver" ? "기준" : "확인 전")
+    };
+  });
+}
+
+function adminDbChannelExposureTable(row = {}) {
+  const rows = adminDbChannelTableRows(row);
+  return `
+    <section class="admin-db-channel-table-card" aria-label="채널 노출 표">
+      <div class="admin-db-channel-table-head">
+        <div>
+          <span>채널 노출</span>
+          <strong>네이버 기준과 OTA 상태를 한 번에 확인합니다.</strong>
+        </div>
+        <em>${fmtNumber(rows.filter((item) => item.status === "exposed").length)}/${fmtNumber(rows.length)} 확인</em>
+      </div>
+      <div class="admin-db-channel-table-scroll">
+        <table class="admin-db-channel-table">
+          <thead>
+            <tr>
+              <th>채널</th>
+              <th>노출 상태</th>
+              <th>상품 기준</th>
+              <th>기준총량</th>
+              <th>판매갯수</th>
+              <th>링크</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((item) => `
+              <tr class="${escapeHtml(item.tone)}">
+                <td data-label="채널">
+                  <strong>${escapeHtml(item.label)}</strong>
+                  <small>${escapeHtml(item.sourceText)}</small>
+                </td>
+                <td data-label="노출 상태">
+                  <span class="admin-db-channel-state ${escapeHtml(item.tone)}">${escapeHtml(item.statusText)}</span>
+                  <small>${escapeHtml(item.checkedText)}</small>
+                </td>
+                <td data-label="상품 기준">${escapeHtml(item.productText)}</td>
+                <td data-label="기준총량">${escapeHtml(item.totalText)}</td>
+                <td data-label="판매갯수">${escapeHtml(item.soldText)}</td>
+                <td data-label="링크">
+                  ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">보기</a>` : `<span>대기</span>`}
+                  ${item.key !== "naver" ? `<button type="button" data-admin-db-open-fold="channel">수정</button>` : ""}
+                </td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function adminDbChannelProductCompareTone(entry = {}, product = {}) {
   if (entry.status === "exposed" && product.priceConfirmed && product.quantityConfirmed) return "good";
   if (["similar_name", "auto_failed", "blocked", "needs_manual"].includes(entry.status)) return "watch";
@@ -19935,7 +20093,7 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
   const productValue = (key) => String(product[key] ?? basisDefaults[key] ?? "");
   const totalQuantityValue = String(product.totalQuantity ?? product.quantity ?? basisDefaults.totalQuantity ?? "");
   const soldQuantityValue = String(product.soldQuantity ?? "");
-  const productOpen = "open";
+  const productOpen = adminDbChannelProductHasValue(product) ? "open" : "";
   return `
     <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-surface="light" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
       <div class="admin-db-channel-row-head">
@@ -20031,36 +20189,23 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
 function adminDbChannelExposurePanel(row = {}) {
   const company = row.company || {};
   if (!company.companyId) return "";
-  const channels = row.metrics?.channels || {};
-  const checkedCount = Object.values(channels.statuses || {}).filter(Boolean).length;
-  const exposedCount = ADMIN_DB_MANAGED_CHANNELS.filter(([key]) => channels[key]).length;
-  const manualCount = channels.manualNeeded || 0;
-  const manualOnlyCount = channels.manualOnly || 0;
   return `
     <section class="admin-db-channel-panel" data-surface="light">
       <div class="admin-db-channel-head">
         <div>
-          <span>채널 노출 확인</span>
-          <strong>OTA 노출과 채널별 상품 기준을 정리합니다.</strong>
-          <small>야놀자·떠나요는 자동 확인, ONDA·여기어때·Airbnb는 공개 링크와 상품 기준을 별도로 저장합니다.</small>
+          <span>채널별 보정</span>
+          <strong>네이버 기준 상품에 맞춰 OTA 총량과 판매갯수를 저장합니다.</strong>
+          <small>야놀자·떠나요는 자동 확인 결과를 쓰고, ONDA·여기어때·Airbnb는 확인한 링크와 기준값을 직접 보정합니다.</small>
         </div>
         <button type="button" data-company-channel-auto data-company-id="${escapeHtml(company.companyId || "")}">자동 채널 확인</button>
       </div>
-      <div class="admin-db-channel-summary">
-        ${[
-          ["확인 채널", checkedCount, "저장된 상태"],
-          ["노출", exposedCount, "네이버 제외"],
-          ["자동 보완", manualCount, "유사명/실패"],
-          ["별도 확인", manualOnlyCount, "ONDA·여기어때·Airbnb"]
-        ].map(([label, value, note]) => `
-          <article data-surface="light">
-            <span>${escapeHtml(label)}</span>
-            <strong>${fmtNumber(value)}</strong>
-            <small>${escapeHtml(note)}</small>
-          </article>
-        `).join("")}
-      </div>
-      ${adminDbChannelComparisonPanel(row)}
+      <details class="admin-db-channel-compare-drawer">
+        <summary>
+          <span>상품 기준 비교 보기</span>
+          <small>네이버 기준과 OTA 입력값 차이를 확인합니다.</small>
+        </summary>
+        ${adminDbChannelComparisonPanel(row)}
+      </details>
       <div class="admin-db-channel-list">
         ${ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => adminDbChannelExposureForm(row, key, label)).join("")}
       </div>
@@ -20141,9 +20286,6 @@ function adminDbSelectedDetailPanel(rows = []) {
   const company = row.company || {};
   const metrics = row.metrics || {};
   const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
-  const issues = metrics.issues?.length ? metrics.issues : [adminDbWorkReason(row)];
-  const b2bCards = adminDbB2BMetricCards(row);
-  const internalCards = adminDbInternalJudgmentCards(row);
   const requiredChannels = adminDbRequiredCheckChannels(row);
   const selectedId = company.companyId || "";
   const correctionBody = adminDbQuickCorrectionPanel(row);
@@ -20160,7 +20302,6 @@ function adminDbSelectedDetailPanel(rows = []) {
   `;
   const nextAction = adminDbSelectedNextAction(row, requiredChannels);
   const needsCollectAction = Boolean(nextAction.runCollect || rawCollectBody || metrics.collection?.needsConfirm || requiredChannels.length);
-  const channelNeedsReview = Boolean(metrics.channels?.manualNeeded || requiredChannels.some((channel) => ["OTA", "네이버 쿠폰"].includes(channel)));
   const reviewBody = `
     <div class="admin-db-selected-review">
       <div>
@@ -20173,64 +20314,45 @@ function adminDbSelectedDetailPanel(rows = []) {
   state.adminDbSelectedCompanyId = selectedId;
   return `
     <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}">
-      <div class="admin-db-selected-head">
+      <div class="admin-db-detail-top">
         <div>
           <span>업체 상세</span>
           <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
           <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, metrics.sourceLabel].filter(Boolean).join(" · "))}</small>
         </div>
-        <mark>${escapeHtml(workType.label || "확인 필요")}</mark>
-      </div>
-      ${adminDbSelectedAppliedValuesHtml(row)}
-      ${adminDbSelectedDecisionPanel(row, issues, requiredChannels)}
-      <section class="admin-db-selected-readonly" aria-label="읽기 전용 지표">
-        ${adminDbSelectedFoldBlock({
-          label: "사업자 화면 기준",
-          title: "노출·예약율·예상매출·상품·채널",
-          note: "공개 지표",
-          body: `<div class="admin-db-selected-grid">${b2bCards.map(adminDbSelectedMetricCard).join("")}</div>`,
-          open: nextAction.foldKey === "b2b",
-          foldKey: "b2b"
-        })}
-        ${adminDbSelectedFoldBlock({
-          label: "검수 기준",
-          title: "신뢰도·보정·확인 채널·처리 상태",
-          note: "관리자용",
-          body: `<div class="admin-db-selected-grid internal">${internalCards.map(adminDbSelectedMetricCard).join("")}</div>`,
-          foldKey: "internal"
-        })}
-      </section>
-      <section class="admin-db-selected-workbench" aria-label="수정과 처리">
-        ${adminDbSelectedSectionHead("상세 수정", "기준값·채널·수집·검수 상태를 순서대로 정리합니다", "")}
-        ${adminDbReviewFlashHtml(selectedId)}
-        <div class="admin-db-selected-actions primary">
-          <button type="button" data-admin-db-open-fold="correction">기준값 수정</button>
-          <button type="button" data-admin-db-open-fold="channel">채널 노출</button>
-          ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">확인 수집</button>` : ""}
-          <button type="button" data-admin-db-open-fold="review">검수 상태</button>
-          <button type="button" data-admin-db-view-link="list">목록</button>
+        <div class="admin-db-detail-top-actions">
+          <a href="/b2b?userView=admin" target="_blank" rel="noreferrer">사업자 화면</a>
+          ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">상세 수집</button>` : ""}
+          <button type="button" data-admin-db-open-fold="review">검수 저장</button>
         </div>
+      </div>
+      ${adminDbSelectedStatusPanel(row, nextAction, requiredChannels)}
+      ${adminDbSelectedKpiCardsHtml(row)}
+      ${adminDbChannelExposureTable(row)}
+      <section class="admin-db-selected-workbench" aria-label="수정과 처리">
+        ${adminDbSelectedDetailTabs(nextAction.foldKey)}
+        ${adminDbReviewFlashHtml(selectedId)}
         <div class="admin-db-selected-workbench-stack">
           ${adminDbSelectedFoldBlock({
-            label: "1. 기준값",
+            label: "기준값",
             title: "객실 총량·상품·가격 기준 수정",
-            note: nextAction.foldKey === "correction" ? "먼저 처리" : "필요할 때 열기",
+            note: nextAction.foldKey === "correction" ? "먼저 처리" : "접어서 보관",
             body: correctionBody,
             open: nextAction.foldKey === "correction",
             tone: "edit",
             foldKey: "correction"
           })}
           ${adminDbSelectedFoldBlock({
-            label: "2. 채널 노출",
-            title: "네이버 외 OTA 노출과 URL 저장",
-            note: channelNeedsReview ? "확인 필요" : "채널별 확인",
+            label: "채널",
+            title: "OTA 노출·URL·총량·판매갯수 보정",
+            note: nextAction.foldKey === "channel" ? "먼저 처리" : "접어서 보관",
             body: channelBody,
-            open: nextAction.foldKey === "channel" || (channelNeedsReview && nextAction.foldKey !== "correction" && nextAction.foldKey !== "collect"),
+            open: nextAction.foldKey === "channel",
             tone: "channel",
             foldKey: "channel"
           })}
           ${adminDbSelectedFoldBlock({
-            label: "3. 확인 수집",
+            label: "수집",
             title: "요일별 매출·예약율·수량 근거 보강",
             note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
             body: collectBody,
@@ -20239,7 +20361,7 @@ function adminDbSelectedDetailPanel(rows = []) {
             foldKey: "collect"
           })}
           ${adminDbSelectedFoldBlock({
-            label: "4. 검수 상태",
+            label: "검수",
             title: "완료·보류·보정 필요 상태 저장",
             note: nextAction.foldKey === "review" ? "먼저 처리" : "최종 상태 저장",
             body: reviewBody,
@@ -20247,6 +20369,9 @@ function adminDbSelectedDetailPanel(rows = []) {
             tone: "review",
             foldKey: "review"
           })}
+        </div>
+        <div class="admin-db-detail-bottom-actions">
+          <button type="button" data-admin-db-view-link="list">목록으로</button>
         </div>
       </section>
     </section>
