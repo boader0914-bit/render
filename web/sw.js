@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260714-channel-region-retry-v18";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260714-onda-link-separation-v19";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

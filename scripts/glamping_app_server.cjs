@@ -6101,7 +6101,7 @@ const COMPANY_CHANNEL_DEFINITIONS = {
   yanolja: { key: "yanolja", label: "야놀자", automatic: true },
   yeogi: { key: "yeogi", label: "여기어때", automatic: false },
   tteonayo: { key: "tteonayo", label: "떠나요", automatic: true },
-  onda: { key: "onda", label: "ONDA", automatic: true },
+  onda: { key: "onda", label: "ONDA", automatic: false },
   airbnb: { key: "airbnb", label: "Airbnb", automatic: false }
 };
 
@@ -6120,6 +6120,7 @@ function companyChannelStatusLabel(status = "") {
   if (key === "exposed") return "OTA 노출 확인";
   if (key === "not_found") return "OTA 미사용 추정";
   if (key === "similar_name") return "유사명 확인 필요";
+  if (key === "onda_manual") return "ONDA 별도 확인";
   if (key === "auto_failed" || key === "blocked") return "자동확인 실패";
   if (key === "needs_manual" || key === "manual_only") return "수동 확인";
   return "미확인";
@@ -6237,7 +6238,7 @@ function companyChannelFallbackUrl(channelKey = "", company = {}, keywordOverrid
     url.searchParams.set("keyword", keyword);
     return url.toString();
   }
-  if (key === "tteonayo" || key === "onda") {
+  if (key === "tteonayo") {
     const url = new URL("https://trip.ddnayo.com/searchResult");
     url.searchParams.set("searchKeyword", keyword);
     return url.toString();
@@ -6255,6 +6256,15 @@ function sanitizeCompanyChannelText(value = "", max = 220) {
 function externalHttpUrl(value = "") {
   const text = String(value || "").trim();
   return /^https?:\/\//i.test(text) ? text.slice(0, 500) : "";
+}
+
+function isDdnayoChannelUrl(value = "") {
+  try {
+    const url = new URL(String(value || "").trim());
+    return /(?:^|\.)ddnayo\.com$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function sanitizeCompanyChannelProduct(entry = {}) {
@@ -6299,9 +6309,12 @@ function sanitizeCompanyChannelProduct(entry = {}) {
 function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
   const key = normalizeCompanyChannelKey(channelKey || entry.channel || entry.channelKey);
   if (!key) return null;
-  const status = ["exposed", "not_found", "needs_manual", "manual_only", "similar_name", "auto_failed", "blocked", "unknown"].includes(String(entry.status || ""))
+  const status = ["exposed", "not_found", "needs_manual", "manual_only", "onda_manual", "similar_name", "auto_failed", "blocked", "unknown"].includes(String(entry.status || ""))
     ? String(entry.status || "")
     : "unknown";
+  const rawUrl = externalHttpUrl(entry.url || entry.link || entry.href || "");
+  const isOndaDdnayoProxy = key === "onda" && (isDdnayoChannelUrl(rawUrl) || String(entry.method || "") === "ddnayo_onda_proxy");
+  const normalizedStatus = isOndaDdnayoProxy ? "onda_manual" : status;
   const checkedAt = sanitizeCompanyChannelText(entry.checkedAt || entry.updatedAt || "", 40);
   const updatedAt = sanitizeCompanyChannelText(entry.updatedAt || checkedAt || "", 40);
   const productEntries = [
@@ -6315,21 +6328,21 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
   return {
     channel: key,
     label: COMPANY_CHANNEL_DEFINITIONS[key].label,
-    status,
-    statusLabel: companyChannelStatusLabel(status),
-    tone: companyChannelStatusTone(status),
-    url: externalHttpUrl(entry.url || entry.link || entry.href || ""),
-    price: sanitizeCompanyChannelText(entry.price, 80),
-    rank: Number.isFinite(Number(entry.rank)) && Number(entry.rank) > 0 ? Math.round(Number(entry.rank)) : null,
-    confidence: Number.isFinite(Number(entry.confidence)) ? Math.max(0, Math.min(100, Math.round(Number(entry.confidence)))) : null,
-    source: sanitizeCompanyChannelText(entry.source || "manual", 60),
-    method: sanitizeCompanyChannelText(entry.method || "", 80),
+    status: normalizedStatus,
+    statusLabel: companyChannelStatusLabel(normalizedStatus),
+    tone: companyChannelStatusTone(normalizedStatus),
+    url: isOndaDdnayoProxy ? "" : rawUrl,
+    price: isOndaDdnayoProxy ? "" : sanitizeCompanyChannelText(entry.price, 80),
+    rank: isOndaDdnayoProxy ? null : (Number.isFinite(Number(entry.rank)) && Number(entry.rank) > 0 ? Math.round(Number(entry.rank)) : null),
+    confidence: isOndaDdnayoProxy ? 0 : (Number.isFinite(Number(entry.confidence)) ? Math.max(0, Math.min(100, Math.round(Number(entry.confidence)))) : null),
+    source: isOndaDdnayoProxy ? "manual" : sanitizeCompanyChannelText(entry.source || "manual", 60),
+    method: isOndaDdnayoProxy ? "onda_separate_required" : sanitizeCompanyChannelText(entry.method || "", 80),
     searchKeyword: sanitizeCompanyChannelText(entry.searchKeyword || entry.keyword || "", 120),
     searchedKeywords: boundedUnique(Array.isArray(entry.searchedKeywords) ? entry.searchedKeywords : [], 8)
       .map((value) => sanitizeCompanyChannelText(value, 120))
       .filter(Boolean),
-    note: sanitizeCompanyChannelText(entry.note, 220),
-    products,
+    note: isOndaDdnayoProxy ? "떠나요 링크는 ONDA 노출로 저장하지 않습니다. ONDA 공개 링크를 별도로 입력하세요." : sanitizeCompanyChannelText(entry.note, 220),
+    products: isOndaDdnayoProxy ? [] : products,
     checkedAt,
     updatedAt
   };
@@ -6543,6 +6556,16 @@ async function checkYanoljaCompanyExposure(company = {}) {
 
 async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo") {
   const key = normalizeCompanyChannelKey(channelKey) || "tteonayo";
+  if (key === "onda") {
+    return companyChannelExposureResult("onda", company, {
+      status: "onda_manual",
+      source: "manual",
+      method: "onda_separate_required",
+      confidence: 0,
+      searchKeyword: companyChannelPreferredFallbackKeyword(company, companyChannelSearchKeywords(company)),
+      note: "ONDA는 떠나요 검색 결과로 확정하지 않습니다. ONDA 공개 링크와 상품 기준을 별도로 입력하세요."
+    });
+  }
   const keywords = companyChannelSearchKeywords(company);
   if (!keywords.length) return companyChannelExposureResult(key, company, { status: "auto_failed", source: "automatic", note: "업체명이 없어 자동 확인을 실행하지 못했습니다." });
   let bestOverall = null;
@@ -6591,7 +6614,7 @@ async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo")
       return companyChannelExposureResult(key, company, {
         status: "auto_failed",
         source: "automatic",
-        method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
+        method: "ddnayo_total_search",
         confidence: 0,
         searchKeyword: companyChannelPreferredFallbackKeyword(company, keywords),
         searchedKeywords: keywords,
@@ -6604,34 +6627,30 @@ async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo")
       return companyChannelExposureResult(key, company, {
         status: "not_found",
         source: "automatic",
-        method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
+        method: "ddnayo_total_search",
         confidence: best?.score || 0,
         searchKeyword: fallbackKeyword,
         searchedKeywords: keywords,
-        note: key === "onda"
-          ? `떠나요/ONDA 계열 검색에서 동일 업체를 찾지 못했습니다. 검색어 ${keywords.slice(0, 4).join(" / ")}`
-          : `떠나요 검색 결과에서 동일 업체를 찾지 못했습니다. 검색어 ${keywords.slice(0, 4).join(" / ")}`
+        note: `떠나요 검색 결과에서 동일 업체를 찾지 못했습니다. 검색어 ${keywords.slice(0, 4).join(" / ")}`
       });
     }
     return companyChannelExposureResult(key, company, {
       status: best.score >= 82 ? "exposed" : "similar_name",
       source: "automatic",
-      method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
-      confidence: key === "onda" ? Math.max(0, best.score - 8) : best.score,
+      method: "ddnayo_total_search",
+      confidence: best.score,
       rank: best.rank,
       url: best.url,
       price: best.price,
       searchKeyword: bestKeyword || companyChannelPreferredFallbackKeyword(company, keywords),
       searchedKeywords: keywords,
-      note: key === "onda"
-        ? `${best.name} · 떠나요/ONDA 계열 보조 확인 · 검색어 ${bestKeyword}`
-        : (best.score >= 82 ? `${best.name} 자동 매칭 · 검색어 ${bestKeyword}` : `${best.name} 유사 매칭 · 검색어 ${bestKeyword}`)
+      note: best.score >= 82 ? `${best.name} 자동 매칭 · 검색어 ${bestKeyword}` : `${best.name} 유사 매칭 · 검색어 ${bestKeyword}`
     });
   } catch (error) {
     return companyChannelExposureResult(key, company, {
       status: "auto_failed",
       source: "automatic",
-      method: key === "onda" ? "ddnayo_onda_proxy" : "ddnayo_total_search",
+      method: "ddnayo_total_search",
       confidence: 0,
       searchKeyword: companyChannelPreferredFallbackKeyword(company, keywords),
       searchedKeywords: keywords,
@@ -6643,7 +6662,17 @@ async function checkDdnayoCompanyExposure(company = {}, channelKey = "tteonayo")
 async function autoCheckCompanyChannel(company = {}, channelKey = "") {
   const key = normalizeCompanyChannelKey(channelKey);
   if (key === "yanolja") return checkYanoljaCompanyExposure(company);
-  if (key === "tteonayo" || key === "onda") return checkDdnayoCompanyExposure(company, key);
+  if (key === "tteonayo") return checkDdnayoCompanyExposure(company, key);
+  if (key === "onda") {
+    return companyChannelExposureResult(key, company, {
+      status: "onda_manual",
+      source: "manual",
+      method: "onda_separate_required",
+      confidence: 0,
+      searchKeyword: companyChannelPreferredFallbackKeyword(company, companyChannelSearchKeywords(company)),
+      note: "ONDA는 떠나요와 분리해 확인합니다. 공개 링크와 상품 기준을 직접 저장하세요."
+    });
+  }
   if (key === "yeogi") {
     return companyChannelExposureResult(key, company, {
       status: "manual_only",
@@ -10630,7 +10659,7 @@ async function saveCompanyChannelExposure(payload = {}) {
   if (action === "auto_check") {
     const channels = Array.isArray(payload.channels) && payload.channels.length
       ? payload.channels
-      : ["yanolja", "tteonayo", "onda"];
+      : ["yanolja", "tteonayo"];
     for (const rawChannel of channels) {
       const channel = normalizeCompanyChannelKey(rawChannel);
       if (!channel) continue;
@@ -10638,7 +10667,7 @@ async function saveCompanyChannelExposure(payload = {}) {
       if (!checked) continue;
       company.channelExposures[channel] = checked;
       changed.push(checked);
-      if (["yanolja", "tteonayo", "onda"].includes(channel)) await sleep(180);
+      if (["yanolja", "tteonayo"].includes(channel)) await sleep(180);
     }
   } else if (action === "clear") {
     const channel = normalizeCompanyChannelKey(payload.channel);
@@ -12624,12 +12653,12 @@ function summarizePlatformRows(rows) {
     );
     const group = failed ? "실패" : manual ? "수동" : ad ? "광고" : organic ? "비광고" : "기타";
     const fallbackCoreRole =
-      platform === "여기어때" ? "보조" : platform === "떠나요" ? "핵심(떠나요/ONDA)" : "핵심";
+      platform === "여기어때" ? "보조" : platform === "떠나요" ? "핵심(떠나요)" : "핵심";
     const fallbackInventoryNote =
       platform === "네이버"
         ? "네이버예약은 전 채널 연동 재고와 분리 운영될 수 있어 날짜별 숙박재고로 독립 확인"
         : platform === "떠나요"
-          ? "떠나요/ONDA 계열 전 채널 연동 후보, 네이버 분리 여부 별도 확인"
+          ? "떠나요 검색 노출·가격 기준, ONDA는 별도 공개 링크로 확인"
           : platform === "야놀자/NOL"
             ? "야놀자/NOL 검색 노출·가격 기준, 전체 객실수와 채널수는 상세 확인 필요"
             : "";
@@ -13044,8 +13073,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-channel-region-retry-v18"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-channel-region-retry-v18"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260714-onda-link-separation-v19"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260714-onda-link-separation-v19"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

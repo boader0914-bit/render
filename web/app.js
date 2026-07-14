@@ -3357,11 +3357,7 @@ function platformFallbackSearchUrl(platform = "", item = {}) {
     if (keyword) url.searchParams.set("searchKeyword", keyword);
     return url.toString();
   }
-  if (name === "ONDA") {
-    const url = new URL("https://trip.ddnayo.com/searchResult");
-    if (keyword) url.searchParams.set("searchKeyword", keyword);
-    return url.toString();
-  }
+  if (name === "ONDA") return "";
   if (name === "Airbnb") return `https://www.airbnb.co.kr/s/${encodeURIComponent(keyword)}/homes`;
   return "";
 }
@@ -17675,9 +17671,9 @@ const ADMIN_DB_CHANNEL_OPTIONS = [
 ];
 
 const ADMIN_DB_MANAGED_CHANNELS = ADMIN_DB_CHANNEL_OPTIONS.filter(([key]) => key !== "naver");
-const ADMIN_DB_AUTO_CHANNEL_KEYS = ["yanolja", "tteonayo", "onda"];
-const ADMIN_DB_MANUAL_CHANNEL_KEYS = ["yeogi", "airbnb"];
-const ADMIN_DB_CHANNEL_REVIEW_STATUSES = ["similar_name", "auto_failed", "blocked", "needs_manual"];
+const ADMIN_DB_AUTO_CHANNEL_KEYS = ["yanolja", "tteonayo"];
+const ADMIN_DB_MANUAL_CHANNEL_KEYS = ["yeogi", "onda", "airbnb"];
+const ADMIN_DB_CHANNEL_REVIEW_STATUSES = ["similar_name", "auto_failed", "blocked", "needs_manual", "onda_manual"];
 
 function adminDbChannelExposureMap(company = {}) {
   return company.channelExposures || company.channelExposure || {};
@@ -17687,6 +17683,7 @@ function adminDbChannelStatusLabel(status = "") {
   if (status === "exposed") return "OTA 노출 확인";
   if (status === "not_found") return "OTA 미사용 추정";
   if (status === "similar_name") return "유사명 확인 필요";
+  if (status === "onda_manual") return "ONDA 별도 확인";
   if (status === "auto_failed" || status === "blocked") return "자동확인 실패";
   if (status === "needs_manual" || status === "manual_only") return "수동 확인";
   return "미확인";
@@ -17707,7 +17704,7 @@ function adminDbChannelFallbackSearchUrl(channel = "", company = {}) {
     return url.toString();
   }
   if (channel === "yeogi") return yeogiSearchUrl(keyword);
-  if (channel === "tteonayo" || channel === "onda") {
+  if (channel === "tteonayo") {
     const url = new URL("https://trip.ddnayo.com/searchResult");
     url.searchParams.set("searchKeyword", keyword);
     return url.toString();
@@ -17743,7 +17740,7 @@ function adminDbChannelProfile(company = {}, metrics = {}) {
   const airbnb = exposedBySaved("airbnb") || (!exposures.airbnb && /airbnb|에어비앤비/.test(text));
   const savedEntries = Object.entries(exposures || {}).filter(([, entry]) => entry);
   const manualNeeded = savedEntries.filter(([key, entry]) => ADMIN_DB_AUTO_CHANNEL_KEYS.includes(key) && ADMIN_DB_CHANNEL_REVIEW_STATUSES.includes(entry.status)).length;
-  const manualOnly = savedEntries.filter(([key, entry]) => ADMIN_DB_MANUAL_CHANNEL_KEYS.includes(key) && ["needs_manual", "manual_only"].includes(entry.status)).length;
+  const manualOnly = savedEntries.filter(([key, entry]) => ADMIN_DB_MANUAL_CHANNEL_KEYS.includes(key) && ["needs_manual", "manual_only", "onda_manual"].includes(entry.status)).length;
   const notFound = savedEntries.filter(([, entry]) => entry.status === "not_found").length;
   const checkedCount = savedEntries.length;
   const count = [naver, yeogi, yanolja, tteonayo, onda, airbnb].filter(Boolean).length;
@@ -19713,6 +19710,7 @@ function adminDbChannelStatusOptions(selected = "") {
     ["not_found", "OTA 미사용 추정"],
     ["similar_name", "유사명 확인 필요"],
     ["auto_failed", "자동확인 실패"],
+    ["onda_manual", "ONDA 별도 확인"],
     ["manual_only", "수동 확인"]
   ];
   if (selected === "needs_manual") options.push(["needs_manual", "수동 확인"]);
@@ -20005,7 +20003,7 @@ function adminDbChannelExposurePanel(row = {}) {
         <div>
           <span>채널 노출 확인</span>
           <strong>OTA 노출과 채널별 상품 기준을 정리합니다.</strong>
-          <small>야놀자·떠나요·ONDA는 자동 확인, 여기어때·Airbnb는 수동 확인 채널로 분리합니다.</small>
+          <small>야놀자·떠나요는 자동 확인, ONDA·여기어때·Airbnb는 공개 링크와 상품 기준을 별도로 저장합니다.</small>
         </div>
         <button type="button" data-company-channel-auto data-company-id="${escapeHtml(company.companyId || "")}">자동 채널 확인</button>
       </div>
@@ -20014,7 +20012,7 @@ function adminDbChannelExposurePanel(row = {}) {
           ["확인 채널", checkedCount, "저장된 상태"],
           ["노출", exposedCount, "네이버 제외"],
           ["자동 보완", manualCount, "유사명/실패"],
-          ["수동 채널", manualOnlyCount, "여기어때·Airbnb"]
+          ["별도 확인", manualOnlyCount, "ONDA·여기어때·Airbnb"]
         ].map(([label, value, note]) => `
           <article data-surface="light">
             <span>${escapeHtml(label)}</span>
@@ -28642,9 +28640,9 @@ async function autoCheckCompanyChannelExposure(button) {
       status: "channel_auto_check",
       tone: "success",
       title: "채널 자동 확인 완료",
-      message: "야놀자·떠나요·ONDA 노출 상태를 다시 확인했습니다.",
-      next: "유사명 또는 실패 항목만 보완하고, 여기어때·Airbnb는 필요 시 수동으로 저장하세요.",
-      items: ["자동 채널", "OTA 노출", "상태 갱신"]
+      message: "야놀자·떠나요 노출 상태를 다시 확인했습니다.",
+      next: "ONDA·여기어때·Airbnb는 공개 링크가 확인될 때 수동으로 저장하세요.",
+      items: ["야놀자", "떠나요", "ONDA 별도 확인"]
     });
     renderCompanyMasterPanel();
     renderDecisionQueue();
