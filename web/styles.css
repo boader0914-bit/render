@@ -34553,3 +34553,202 @@ body.role-admin .admin-db-company-values b {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
+
+/* Location contrast contract v5: light location cards never inherit pale dark-theme text. */
+:is(body.role-admin, body.role-b2b) :is(
+  .location-decision,
+  .location-decision-score,
+  .location-score-model-head > *,
+  .location-score-component-grid article,
+  .location-score-validation-grid article,
+  .location-score-admin-form,
+  .location-score-history article,
+  .admin-region-location-score-panel,
+  .admin-region-location-score-grid article,
+  .location-evidence,
+  .location-candidate-evidence div,
+  .location-request-row,
+  .location-reality-grid > *,
+  .location-compare-bars,
+  .location-target-row,
+  .location-empty-note,
+  .location-action-panel,
+  .location-index,
+  .location-advice-card,
+  .location-summary-grid > *,
+  .region-decision,
+  .region-priority-card,
+  .region-mini-card
+) {
+  --location-light-bg: #ffffff;
+  --location-light-soft: #f8fbff;
+  --location-light-line: #cbd9ea;
+  --location-light-ink: #0f172a;
+  --location-light-text: #334155;
+  --location-light-muted: #475569;
+  --location-light-accent: #1d4ed8;
+  --location-light-green: #047857;
+  --location-light-warning: #b45309;
+  --location-light-danger: #b91c1c;
+  border-color: var(--location-light-line) !important;
+  background: var(--location-light-bg) !important;
+  color: var(--location-light-ink) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-decision.caution,
+  .location-score-component-grid article.mid,
+  .location-score-component-grid article.weak,
+  .location-score-validation-grid article.mid,
+  .location-index.mid,
+  .location-index.weak
+) {
+  border-color: #e8bd54 !important;
+  background: #fff8db !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article.risk,
+  .location-score-validation-grid article.risk,
+  .location-index.risk
+) {
+  border-color: #f3b4b4 !important;
+  background: #fff5f5 !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article.strong,
+  .location-score-validation-grid article.strong,
+  .location-index.strong
+) {
+  border-color: #9fd6c9 !important;
+  background: #f6fffb !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-decision,
+  .location-decision-score,
+  .location-score-model-head > *,
+  .location-score-component-grid article,
+  .location-score-validation-grid article,
+  .location-score-admin-form,
+  .location-score-history article,
+  .admin-region-location-score-panel,
+  .admin-region-location-score-grid article,
+  .location-evidence,
+  .location-candidate-evidence div,
+  .location-request-row,
+  .location-reality-grid > *,
+  .location-compare-bars,
+  .location-target-row,
+  .location-empty-note,
+  .location-action-panel,
+  .location-index,
+  .location-advice-card,
+  .location-summary-grid > *,
+  .region-decision,
+  .region-priority-card,
+  .region-mini-card
+) :is(h1, h2, h3, h4, h5, strong, b, dd, label) {
+  color: var(--location-light-ink) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-decision,
+  .location-decision-score,
+  .location-score-model-head > *,
+  .location-score-component-grid article,
+  .location-score-validation-grid article,
+  .location-score-admin-form,
+  .location-score-history article,
+  .admin-region-location-score-panel,
+  .admin-region-location-score-grid article,
+  .location-evidence,
+  .location-candidate-evidence div,
+  .location-request-row,
+  .location-reality-grid > *,
+  .location-compare-bars,
+  .location-target-row,
+  .location-empty-note,
+  .location-action-panel,
+  .location-index,
+  .location-advice-card,
+  .location-summary-grid > *,
+  .region-decision,
+  .region-priority-card,
+  .region-mini-card
+) :is(p, span, small, dt, li) {
+  color: var(--location-light-muted) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-decision-score strong,
+  .location-score-model-head strong,
+  .location-score-component-grid em,
+  .location-score-validation-grid strong,
+  .location-score-admin-form strong,
+  .location-score-history b,
+  .admin-region-location-score-panel strong,
+  .admin-region-location-score-grid strong,
+  .location-evidence strong,
+  .location-candidate-evidence strong,
+  .location-reality-grid strong,
+  .location-index em,
+  .location-advice-card dt,
+  .location-target-row b
+) {
+  color: var(--location-light-accent) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article.strong em,
+  .location-score-component-grid article.strong strong,
+  .location-score-validation-grid article.strong strong,
+  .location-index.strong em
+) {
+  color: var(--location-light-green) !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article.mid em,
+  .location-score-component-grid article.weak em,
+  .location-score-component-grid article.mid strong,
+  .location-score-component-grid article.weak strong,
+  .location-score-validation-grid article.mid strong,
+  .location-index.mid em,
+  .location-index.weak em
+) {
+  color: var(--location-light-warning) !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article.risk em,
+  .location-score-component-grid article.risk strong,
+  .location-score-validation-grid article.risk strong,
+  .location-index.risk em
+) {
+  color: var(--location-light-danger) !important;
+}
+
+:is(body.role-admin, body.role-b2b) :is(
+  .location-meta-row span,
+  .location-cluster-chip,
+  .location-action-chips span,
+  .location-action-panel span,
+  .location-score-validation-grid mark,
+  .location-decision mark
+) {
+  border-color: #bfdbfe !important;
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) .location-cluster-chip b {
+  color: #334155 !important;
+}

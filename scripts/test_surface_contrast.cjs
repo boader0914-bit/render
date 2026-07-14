@@ -9,6 +9,7 @@ const app = fs.readFileSync(appPath, "utf8");
 
 const requiredMarkers = [
   "Surface contrast contract v3",
+  "Location contrast contract v5",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]"
 ];
@@ -64,7 +65,27 @@ const lightSelectors = [
   ".sheet-b2b-evidence-grid div",
   ".sheet-b2b-note-grid div",
   ".search-row",
-  ".platform-row"
+  ".platform-row",
+  ".location-decision",
+  ".location-decision-score",
+  ".location-score-model-head > *",
+  ".location-score-component-grid article",
+  ".location-score-validation-grid article",
+  ".location-score-admin-form",
+  ".location-score-history article",
+  ".admin-region-location-score-panel",
+  ".admin-region-location-score-grid article",
+  ".location-evidence",
+  ".location-candidate-evidence div",
+  ".location-request-row",
+  ".location-reality-grid > *",
+  ".location-compare-bars",
+  ".location-target-row",
+  ".location-empty-note",
+  ".location-action-panel",
+  ".location-index",
+  ".location-advice-card",
+  ".location-summary-grid > *"
 ];
 
 const darkSelectors = [
@@ -84,6 +105,8 @@ const darkSelectors = [
   ".demand-insight-card",
   ".demand-table-card",
   ".structure-card",
+  ".b2b-location-score",
+  ".b2b-map-location-score",
   ".admin-db-company",
   ".admin-db-flat-list",
   ".admin-console-panel",
