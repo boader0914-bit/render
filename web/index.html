@@ -4,9 +4,175 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>글램핑 수요 클러스터</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <div class="business-shell" id="businessShell">
+    <header class="business-topbar">
+      <div class="business-brand">
+        <strong>숙박업 데이터랩</strong>
+        <span>사업자 모드 · 관리자 원천값 비노출</span>
+      </div>
+      <div class="business-controls">
+        <label class="business-select">
+          <span>숙소 선택</span>
+          <select id="businessCompanySelect"></select>
+        </label>
+        <button class="secondary-button" id="businessReportRefreshButton" type="button">리포트 새로고침</button>
+        <button class="ghost-button theme-toggle" id="themeToggleButton" type="button" aria-pressed="false">다크 모드</button>
+      </div>
+    </header>
+
+    <main class="business-main">
+      <section class="business-hero">
+        <div>
+          <p class="business-eyebrow" id="businessReportStatus">리포트를 불러오는 중입니다.</p>
+          <h1 id="businessCompanyName">숙소 리포트</h1>
+          <div class="business-meta" id="businessCompanyMeta"></div>
+        </div>
+        <div class="business-score-strip" id="businessScoreStrip"></div>
+      </section>
+
+      <nav class="business-product-nav" aria-label="사업자 리포트 메뉴">
+        <a href="#businessFlowGrid"><span>01</span><strong>리포트</strong><em>시장·내 숙소 비교</em></a>
+        <a href="#businessRegionCard"><span>02</span><strong>지역카드</strong><em>입지·수요 근거</em></a>
+        <a href="#businessStrategySummary"><span>03</span><strong>전략 추천</strong><em>실행 카드</em></a>
+        <a href="#businessOperations"><span>04</span><strong>실행계획</strong><em>운영보드</em></a>
+        <a href="#businessRetrospective"><span>05</span><strong>월간 회고</strong><em>성과·이월</em></a>
+        <a href="#businessNextPlan"><span>06</span><strong>다음달 후보</strong><em>후보 생성</em></a>
+      </nav>
+
+      <section class="business-monthly-flow" id="businessMonthlyFlow" aria-label="월간 리포트 흐름 상태"></section>
+
+      <section class="business-section-note" aria-label="리포트 흐름 안내">
+        <span>01 리포트</span>
+        <strong>시장 위치를 먼저 봅니다.</strong>
+        <p>가격·예약률·리드타임·관심도·채널을 비교합니다.</p>
+      </section>
+
+      <section class="business-grid business-flow-grid" id="businessFlowGrid" aria-label="흐름 비교"></section>
+
+      <section class="business-grid business-indicator-grid" id="businessIndicatorGrid" aria-label="객관 지표"></section>
+
+      <section class="business-section-note" aria-label="지역카드 흐름 안내">
+        <span>02 지역카드</span>
+        <strong>입지 신호를 전략 근거로 묶습니다.</strong>
+        <p>관광·생활권·접근성·검색/SNS·OTA·리드타임을 압축합니다.</p>
+      </section>
+
+      <section class="business-region-card" id="businessRegionCard" aria-label="지역 전략 카드"></section>
+
+      <section class="business-section-note" aria-label="전략 추천 흐름 안내">
+        <span>03 전략 추천</span>
+        <strong>지표를 실행 카드로 바꿉니다.</strong>
+        <p>가격·채널·상품·콘텐츠·리드타임 전략을 저장 가능한 단위로 제안합니다.</p>
+      </section>
+
+      <section class="business-strategy" id="businessStrategySummary">
+        <div class="section-head">
+          <h2>전략 추천 · 다음달 실행 카드</h2>
+          <span id="businessTargetMonth"></span>
+        </div>
+        <div class="strategy-list" id="businessStrategyList"></div>
+      </section>
+
+      <section class="business-strategy business-experiments" id="businessExperiments" aria-label="전략 추천 서브흐름 A/B 실험">
+        <p class="subflow-eyebrow">전략 추천 서브흐름</p>
+        <div class="section-head">
+          <h2>전략 A/B 실험</h2>
+          <span>검증할 전략만 운영보드로 옮깁니다.</span>
+        </div>
+        <div class="experiment-list" id="businessExperimentList"></div>
+      </section>
+
+      <section class="business-strategy business-experiment-results" id="businessExperimentResults" aria-label="전략 추천 서브흐름 실험 결과">
+        <p class="subflow-eyebrow">전략 추천 서브흐름</p>
+        <div class="section-head">
+          <h2>실험 결과</h2>
+          <span id="businessExperimentResultSummary"></span>
+        </div>
+        <div class="experiment-result-list" id="businessExperimentResultList"></div>
+      </section>
+
+      <section class="business-section-note" aria-label="실행계획 흐름 안내">
+        <span>04 실행계획</span>
+        <strong>선택한 전략을 실행으로 옮깁니다.</strong>
+        <p>담당자·목표일·체크리스트·KPI를 운영보드에서 추적합니다.</p>
+      </section>
+
+      <section class="business-strategy business-operations" id="businessOperations">
+        <div class="section-head">
+          <h2>실행계획 · 월간 운영보드</h2>
+          <span id="businessOperationsSummary"></span>
+        </div>
+        <div class="operations-filters">
+          <label>
+            <span>상태</span>
+            <select id="businessOpsStatusFilter">
+              <option value="">전체</option>
+              <option value="not_started">대기</option>
+              <option value="in_progress">진행중</option>
+              <option value="done">완료</option>
+              <option value="blocked">보류</option>
+            </select>
+          </label>
+          <label>
+            <span>담당자</span>
+            <input id="businessOpsOwnerFilter" type="search" placeholder="담당자">
+          </label>
+          <label>
+            <span>목표일</span>
+            <select id="businessOpsDueFilter">
+              <option value="">전체</option>
+              <option value="overdue">지연</option>
+              <option value="this_week">이번 주</option>
+              <option value="no_due">목표일 없음</option>
+            </select>
+          </label>
+          <label>
+            <span>Source</span>
+            <select id="businessOpsSourceFilter">
+              <option value="">All</option>
+              <option value="auto_generated">Auto-generated</option>
+              <option value="manual">Manual</option>
+              <option value="experiment">Experiment</option>
+            </select>
+          </label>
+        </div>
+        <div class="operations-board" id="businessOperationsBoard"></div>
+      </section>
+
+      <section class="business-section-note" aria-label="월간 회고 흐름 안내">
+        <span>05 월간 회고</span>
+        <strong>실행 결과를 다음달 판단으로 넘깁니다.</strong>
+        <p>완료율·KPI·지연·이월·반복 전략을 정리합니다.</p>
+      </section>
+
+      <section class="business-strategy business-retrospective" id="businessRetrospective">
+        <div class="section-head">
+          <h2>월간 회고 · 다음달 이월</h2>
+          <span id="businessRetrospectiveSummary"></span>
+        </div>
+        <div class="retrospective-board" id="businessRetrospectiveBoard"></div>
+      </section>
+
+      <section class="business-section-note" aria-label="다음달 실행계획 후보 흐름 안내">
+        <span>06 다음달 후보</span>
+        <strong>다음달 운영 후보를 만듭니다.</strong>
+        <p>이월·반복·신규 추천 중 선택한 항목만 운영보드로 보냅니다.</p>
+      </section>
+
+      <section class="business-strategy business-next-plan" id="businessNextPlan">
+        <div class="section-head">
+          <h2>다음달 실행계획 후보</h2>
+          <span id="businessNextPlanSummary"></span>
+        </div>
+        <div class="next-plan-board" id="businessNextPlanBoard"></div>
+      </section>
+    </main>
+  </div>
+
   <div class="app-shell">
     <aside class="sidebar" aria-label="검색과 실행">
       <div class="brand">
@@ -14,7 +180,7 @@
         <span>수요 지도 분석</span>
       </div>
 
-      <section class="panel crawl-panel">
+      <section class="panel crawl-panel" id="collectionOpsPanel">
         <div class="section-head">
           <h2>새 수집</h2>
         </div>
@@ -127,7 +293,7 @@
         </div>
       </section>
 
-      <section class="panel api-panel">
+      <section class="panel api-panel" id="settingsPanel">
         <div class="section-head">
           <h2>트래픽 API</h2>
           <span class="api-state" id="trafficApiState">미설정</span>
@@ -221,6 +387,889 @@
             <h2>본질 클러스터별 수요</h2>
           </div>
           <div class="cluster-summary" id="coreSummary"></div>
+        </div>
+        <div class="panel master-db-panel" id="masterDbPanel">
+          <div class="section-head master-db-head">
+            <div>
+              <h2>운영자 관리 콘솔</h2>
+              <p>업체 마스터, 관심도 수집/검수, 데이터 신뢰도, 내부 품질관리를 한 흐름으로 관리합니다.</p>
+            </div>
+            <div class="button-pair">
+              <button class="ghost-button" id="masterDbRefreshButton" type="button">새로고침</button>
+              <button class="secondary-button" id="masterDbRebuildButton" type="button">현재 결과 적재</button>
+            </div>
+          </div>
+          <section class="operator-flow-note" aria-label="관리자 운영 흐름 안내">
+            <span>운영 흐름</span>
+            <strong>수집 결과를 업체 ID로 묶고, 관심도와 검수값을 보강한 뒤, 신뢰도 기준으로 사업자 리포트를 보호합니다.</strong>
+            <p>내부 품질관리(SLA v1.0)는 잠금 상태이며 상태 확인, 승인/반려, rollback 가능한 항목만 다룹니다.</p>
+          </section>
+          <div class="master-db-status" id="masterDbStatus">DB 상태를 불러오는 중입니다.</div>
+          <nav class="operator-product-map" aria-label="관리자 운영 메뉴">
+            <a href="#masterDbPanel">
+              <span>01 업체 DB</span>
+              <strong>마스터·검수값</strong>
+              <em>업체 ID, 대표명, 업종, 지역, 채널 URL, B2B 노출을 정리</em>
+            </a>
+            <a href="#interestSignalConsole">
+              <span>02 관심도 수집/검수</span>
+              <strong>검색·SNS 신호</strong>
+              <em>네이버 트렌드, 검색광고, SNS 언급량, 수집 큐를 관리</em>
+            </a>
+            <a href="#masterCompanyDetail">
+              <span>03 데이터 신뢰도</span>
+              <strong>수집값과 검수값 분리</strong>
+              <em>자동 관측, 관리자 확정값, 변경 이력, 신뢰도 등급을 확인</em>
+            </a>
+            <a href="#internalQualityLock">
+              <span>04 내부 품질관리</span>
+              <strong>SLA v1.0 잠금</strong>
+              <em>승인/반려, rollback, 상태 확인만 유지</em>
+            </a>
+          </nav>
+          <section class="operator-section-note operator-company-note" aria-label="업체 DB 운영 안내">
+            <span>01 업체 DB</span>
+            <strong>수집 결과를 고유 업체 ID와 검수 가능한 마스터 정보로 정리합니다.</strong>
+            <p>검색 후 업체를 선택하면 자동 관측값, 관리자 검수값, 수정 이력, 전략 산식 검수 상태를 한 곳에서 확인합니다.</p>
+          </section>
+          <div class="master-db-tools">
+            <label class="field">
+              <span>업체 검색</span>
+              <input id="masterDbSearchInput" type="search" placeholder="업체명 또는 지역">
+            </label>
+          </div>
+          <div class="master-db-layout">
+            <div class="master-company-list" id="masterCompanyList"></div>
+            <div class="master-company-detail" id="masterCompanyDetail">
+              <div class="empty">왼쪽 업체를 선택하면 자동 관측값과 관리자 검수값을 분리해 확인하고 수정할 수 있습니다.</div>
+            </div>
+          </div>
+          <section class="operator-section-note operator-interest-note" aria-label="관심도 수집 검수 운영 안내">
+            <span>02 관심도 수집/검수</span>
+            <strong>지역 키워드와 내 숙소 키워드의 검색·SNS 신호를 수집 대기열과 검수값으로 관리합니다.</strong>
+            <p>외부 API 연결 전에는 수동 입력과 관리자 검수값으로 보강하고, 사업자 화면에는 점수와 근거 요약만 노출합니다.</p>
+          </section>
+          <section class="operator-section-note operator-reliability-note" aria-label="데이터 신뢰도 운영 안내">
+            <span>03 데이터 신뢰도</span>
+            <strong>자동 수집값과 관리자 확정값을 분리해 업체별 신뢰도 기준을 올립니다.</strong>
+            <p>업체 상세의 자동 관측값, 검수 프로필, 수정 이력, 전략 산식 검수 상태를 함께 보며 리포트 노출 기준을 판단합니다.</p>
+          </section>
+          <section class="data-reliability-console" id="dataReliabilityConsole" aria-label="데이터 신뢰도 점검 콘솔">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>데이터 신뢰도 점검</h3>
+                <p>company_id 중복 후보, 수집값/검수값 충돌, 신뢰도 등급 근거, 고유 ID 품질을 관리자 전용으로 확인합니다.</p>
+              </div>
+              <button class="ghost-button" id="dataReliabilityRefreshButton" type="button">신뢰도 새로고침</button>
+            </div>
+            <div class="data-reliability-summary" id="dataReliabilitySummary"></div>
+            <div class="data-reliability-list" id="dataReliabilityList">
+              <div class="empty">데이터 신뢰도 점검 결과를 불러오는 중입니다.</div>
+            </div>
+          </section>
+          <div class="calibration-audit-queue" id="calibrationAuditQueue">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>캘리브레이션 감사 후속 조치</h3>
+                <p>캘리브레이션 감사에서 생성된 관리자 전용 후속 조치 항목을 검수합니다.</p>
+              </div>
+              <button class="ghost-button" id="calibrationAuditQueueRefreshButton" type="button">큐 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Review</span>
+                <select id="calibrationAuditQueueStatusFilter">
+                  <option value="">All</option>
+                  <option value="pending">Pending</option>
+                  <option value="in_review">In review</option>
+                  <option value="action_required">Action required</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="deferred">Deferred</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Owner</span>
+                <input id="calibrationAuditQueueOwnerFilter" type="search" placeholder="owner">
+              </label>
+              <label class="field">
+                <span>Due</span>
+                <select id="calibrationAuditQueueDueFilter">
+                  <option value="">All</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="this_week">This week</option>
+                  <option value="upcoming">Upcoming</option>
+                  <option value="no_due">No due date</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Risk</span>
+                <select id="calibrationAuditQueueRiskFilter">
+                  <option value="">All</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                  <option value="none">None</option>
+                </select>
+              </label>
+            </div>
+            <div class="calibration-audit-queue-bulk" id="calibrationAuditQueueBulkPanel">
+              <div>
+                <strong>선택 항목 일괄 검수</strong>
+                <span id="calibrationAuditQueueBulkSelectedCount">0 selected</span>
+              </div>
+              <label class="field">
+                <span>Status</span>
+                <select id="calibrationAuditQueueBulkStatus">
+                  <option value="">Keep current</option>
+                  <option value="pending">Pending</option>
+                  <option value="in_review">In review</option>
+                  <option value="action_required">Action required</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="deferred">Deferred</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Owner</span>
+                <input id="calibrationAuditQueueBulkOwner" type="text" placeholder="leave blank to keep">
+              </label>
+              <label class="field">
+                <span>Due</span>
+                <input id="calibrationAuditQueueBulkDue" type="date">
+              </label>
+              <label class="field wide">
+                <span>Memo</span>
+                <textarea id="calibrationAuditQueueBulkMemo" rows="2" placeholder="leave blank to keep"></textarea>
+              </label>
+              <div class="calibration-audit-queue-bulk-actions">
+                <button class="ghost-button" id="calibrationAuditQueueSelectAllButton" type="button">보이는 항목 선택</button>
+                <button class="ghost-button" id="calibrationAuditQueueClearSelectionButton" type="button">선택 해제</button>
+                <button class="secondary-button" id="calibrationAuditQueueBulkApplyButton" type="button" disabled>선택 항목 적용</button>
+              </div>
+            </div>
+            <div class="calibration-audit-queue-summary" id="calibrationAuditQueueSummary"></div>
+            <div class="calibration-audit-queue-list" id="calibrationAuditQueueList">
+              <div class="empty">캘리브레이션 감사 후속 조치 큐를 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="internal-quality-lock" id="internalQualityLock">
+            <div>
+              <span class="module-eyebrow">04 내부 품질관리</span>
+              <h3>SLA v1.0 잠금</h3>
+              <p>사업자 리포트 신뢰도를 보호하기 위한 관리자 전용 품질관리입니다. 신규 SLA 재귀 확장은 중단하고 현재 상태 확인, 승인/반려, rollback 가능 항목만 유지합니다.</p>
+            </div>
+            <div class="internal-quality-lock-actions" aria-label="SLA v1.0 allowed actions">
+              <span>상태 확인</span>
+              <span>승인/반려</span>
+              <span>Rollback 가능 항목</span>
+            </div>
+          </div>
+          <div class="calibration-sla-action-queue" id="calibrationSlaActionQueue">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>SLA 개선 액션 큐</h3>
+                <p>주의/위험 SLA 신호에서 생성된 관리자 전용 개선 액션을 확인합니다.</p>
+              </div>
+              <button class="ghost-button" id="calibrationSlaActionQueueRefreshButton" type="button">액션 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Status</span>
+                <select id="calibrationSlaActionQueueStatusFilter">
+                  <option value="">All</option>
+                  <option value="candidate">Candidate</option>
+                  <option value="planned">Planned</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="done">Done</option>
+                  <option value="dismissed">Dismissed</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Assignee</span>
+                <input id="calibrationSlaActionQueueOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Target</span>
+                <select id="calibrationSlaActionQueueDueFilter">
+                  <option value="">All</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="this_week">This week</option>
+                  <option value="upcoming">Upcoming</option>
+                  <option value="no_due">No due date</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Priority</span>
+                <select id="calibrationSlaActionQueuePriorityFilter">
+                  <option value="">All</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Risk</span>
+                <select id="calibrationSlaActionQueueRiskFilter">
+                  <option value="">All</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="calibrationSlaActionQueueSummary"></div>
+            <div class="calibration-sla-action-queue-list" id="calibrationSlaActionQueueList">
+              <div class="empty">SLA 개선 액션 큐를 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="calibration-sla-reassessment" id="calibrationSlaReassessment">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>SLA 액션 사후 재평가</h3>
+                <p>완료된 SLA 액션이 실제 품질 개선으로 이어졌는지 관리자 전용으로 확인합니다.</p>
+              </div>
+              <button class="ghost-button" id="calibrationSlaReassessmentRefreshButton" type="button">재평가 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Outcome</span>
+                <select id="calibrationSlaReassessmentOutcomeFilter">
+                  <option value="">All</option>
+                  <option value="improved">Improved</option>
+                  <option value="unchanged">Unchanged</option>
+                  <option value="worse">Worse</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Follow-up</span>
+                <select id="calibrationSlaReassessmentFollowUpFilter">
+                  <option value="">All</option>
+                  <option value="needed">Needed</option>
+                  <option value="none">None</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Assignee</span>
+                <input id="calibrationSlaReassessmentOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Risk</span>
+                <select id="calibrationSlaReassessmentRiskFilter">
+                  <option value="">All</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="calibrationSlaReassessmentSummary"></div>
+            <div class="calibration-sla-reassessment-list" id="calibrationSlaReassessmentList">
+              <div class="empty">SLA 액션 사후 재평가를 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="sla-reassessment-history" id="slaReassessmentHistory">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>SLA 사후 평가 히스토리</h3>
+                <p>월별, 담당자별, 원인 지표별 사후 평가 이력을 누적 확인합니다.</p>
+              </div>
+              <button class="ghost-button" id="slaReassessmentHistoryRefreshButton" type="button">히스토리 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Month</span>
+                <input id="slaReassessmentHistoryMonthFilter" type="month">
+              </label>
+              <label class="field">
+                <span>Assignee</span>
+                <input id="slaReassessmentHistoryOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Outcome</span>
+                <select id="slaReassessmentHistoryOutcomeFilter">
+                  <option value="">All</option>
+                  <option value="improved">Improved</option>
+                  <option value="unchanged">Unchanged</option>
+                  <option value="worse">Worse</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Follow-up</span>
+                <select id="slaReassessmentHistoryFollowUpFilter">
+                  <option value="">All</option>
+                  <option value="created">Created</option>
+                  <option value="needed">Needed</option>
+                  <option value="none">None</option>
+                </select>
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="slaReassessmentHistorySummary"></div>
+            <div class="sla-reassessment-history-list" id="slaReassessmentHistoryList">
+              <div class="empty">SLA 사후 평가 히스토리를 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="sla-recommendation-adjustments" id="slaRecommendationAdjustmentConsole">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>SLA 추천 보정 승인</h3>
+                <p>사후 평가 이력 기반 우선순위 보정안을 활성 추천에 반영하기 전에 승인/반려합니다.</p>
+              </div>
+              <button class="ghost-button" id="slaRecommendationAdjustmentRefreshButton" type="button">보정안 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Status</span>
+                <select id="slaRecommendationAdjustmentStatusFilter">
+                  <option value="">All</option>
+                  <option value="proposed">Proposed</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Direction</span>
+                <select id="slaRecommendationAdjustmentDirectionFilter">
+                  <option value="">All</option>
+                  <option value="boost">Boost</option>
+                  <option value="downgrade">Downgrade</option>
+                  <option value="neutral">Neutral</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Assignee</span>
+                <input id="slaRecommendationAdjustmentOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Issue</span>
+                <input id="slaRecommendationAdjustmentIssueFilter" type="search" placeholder="metric or issue">
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="slaRecommendationAdjustmentSummary"></div>
+            <div class="sla-recommendation-adjustment-policy" id="slaRecommendationAdjustmentPolicy"></div>
+            <div class="sla-recommendation-adjustment-list" id="slaRecommendationAdjustmentList">
+              <div class="empty">SLA 추천 보정안을 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="sla-auto-approval-performance" id="slaAutoApprovalPerformance">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>SLA 자동승인 성과</h3>
+                <p>자동승인된 추천 보정이 이후 SLA 결과를 실제로 개선했는지 추적합니다.</p>
+              </div>
+              <button class="ghost-button" id="slaAutoApprovalPerformanceRefreshButton" type="button">성과 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Month</span>
+                <input id="slaAutoApprovalPerformanceMonthFilter" type="month">
+              </label>
+              <label class="field">
+                <span>Assignee</span>
+                <input id="slaAutoApprovalPerformanceOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Issue</span>
+                <input id="slaAutoApprovalPerformanceIssueFilter" type="search" placeholder="metric or issue">
+              </label>
+              <label class="field">
+                <span>Outcome</span>
+                <select id="slaAutoApprovalPerformanceOutcomeFilter">
+                  <option value="">All</option>
+                  <option value="successful">Successful</option>
+                  <option value="mixed">Mixed</option>
+                  <option value="false_positive">False positive</option>
+                  <option value="rolled_back">Rolled back</option>
+                  <option value="pending">Pending</option>
+                </select>
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="slaAutoApprovalPerformanceSummary"></div>
+            <div class="sla-auto-approval-performance-list" id="slaAutoApprovalPerformanceList">
+              <div class="empty">SLA 자동승인 성과를 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="sla-auto-policy-adjustments" id="slaAutoPolicyAdjustments">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>SLA 자동승인 정책 검수</h3>
+                <p>향후 자동승인 판단 기준을 바꾸기 전에 정책 조정안을 승인/반려합니다.</p>
+              </div>
+              <button class="ghost-button" id="slaAutoPolicyAdjustmentsRefreshButton" type="button">정책 검수 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Status</span>
+                <select id="slaAutoPolicyAdjustmentStatusFilter">
+                  <option value="">All</option>
+                  <option value="proposed">Proposed</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Type</span>
+                <select id="slaAutoPolicyAdjustmentTypeFilter">
+                  <option value="">All</option>
+                  <option value="tighten_issue_policy">Tighten issue</option>
+                  <option value="consider_relaxing_issue_policy">Relax issue</option>
+                  <option value="increase_monitoring_window">Monitoring window</option>
+                  <option value="rollback_policy_adjustment">Rollback policy</option>
+                  <option value="partial_relaxation_policy">Partial relaxation</option>
+                  <option value="additional_tightening_policy">Additional tightening</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Target</span>
+                <input id="slaAutoPolicyAdjustmentTargetFilter" type="search" placeholder="issue or target">
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="slaAutoPolicyAdjustmentsSummary"></div>
+            <div class="sla-auto-policy-adjustment-list" id="slaAutoPolicyAdjustmentsList">
+              <div class="empty">SLA 자동승인 정책 조정안을 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="sla-auto-policy-effectiveness" id="slaAutoPolicyEffectiveness">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>SLA 정책 적용 후 효과</h3>
+                <p>승인된 자동승인 정책 조정 전후 성과를 비교하고 rollback 또는 후속 조정 제안을 검토합니다.</p>
+              </div>
+              <button class="ghost-button" id="slaAutoPolicyEffectivenessRefreshButton" type="button">효과 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Outcome</span>
+                <select id="slaAutoPolicyEffectivenessOutcomeFilter">
+                  <option value="">All</option>
+                  <option value="pending">Pending</option>
+                  <option value="improved">Improved</option>
+                  <option value="unchanged">Unchanged</option>
+                  <option value="worse">Worse</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Type</span>
+                <select id="slaAutoPolicyEffectivenessTypeFilter">
+                  <option value="">All</option>
+                  <option value="tighten_issue_policy">Tighten issue</option>
+                  <option value="consider_relaxing_issue_policy">Relax issue</option>
+                  <option value="increase_monitoring_window">Monitoring window</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Target</span>
+                <input id="slaAutoPolicyEffectivenessTargetFilter" type="search" placeholder="issue or target">
+              </label>
+              <label class="field">
+                <span>Window days</span>
+                <input id="slaAutoPolicyEffectivenessWindowInput" type="number" min="7" max="365" step="1" value="90">
+              </label>
+              <label class="field">
+                <span>Re-review status</span>
+                <select id="slaQualityRereviewStatusFilter">
+                  <option value="">All</option>
+                  <option value="open">Open</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="completed">Completed</option>
+                  <option value="deferred">Deferred</option>
+                  <option value="dismissed">Dismissed</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Re-review owner</span>
+                <input id="slaQualityRereviewOwnerFilter" type="search" placeholder="owner">
+              </label>
+              <label class="field">
+                <span>Re-review due</span>
+                <select id="slaQualityRereviewDueFilter">
+                  <option value="">All</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="this_week">This week</option>
+                  <option value="scheduled">Scheduled</option>
+                  <option value="no_due">No due</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Max score</span>
+                <input id="slaQualityRereviewMaxScoreFilter" type="number" min="0" max="100" step="1" placeholder="45">
+              </label>
+              <label class="field">
+                <span>Action status</span>
+                <select id="slaQualityRereviewActionStatusFilter">
+                  <option value="">All</option>
+                  <option value="candidate">Candidate</option>
+                  <option value="planned">Planned</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="done">Done</option>
+                  <option value="dismissed">Dismissed</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Action owner</span>
+                <input id="slaQualityRereviewActionOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Action due</span>
+                <select id="slaQualityRereviewActionDueFilter">
+                  <option value="">All</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="this_week">This week</option>
+                  <option value="scheduled">Scheduled</option>
+                  <option value="no_due">No due</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Priority</span>
+                <select id="slaQualityRereviewActionPriorityFilter">
+                  <option value="">All</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Risk</span>
+                <select id="slaQualityRereviewActionRiskFilter">
+                  <option value="">All</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Root metric</span>
+                <input id="slaQualityRereviewActionIssueFilter" type="search" placeholder="issue or metric">
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="slaAutoPolicyEffectivenessSummary"></div>
+            <div class="sla-auto-policy-effectiveness-list" id="slaAutoPolicyEffectivenessList">
+              <div class="empty">SLA 정책 적용 후 효과를 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="sla-recommendation-adjustments" id="slaQualityRereviewActionRecommendationAdjustmentConsole">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>재검수 액션 추천 보정 승인</h3>
+                <p>재검수 개선 액션 추천에 반영하기 전, 이력 기반 우선순위 보정안을 승인/반려합니다.</p>
+              </div>
+              <button class="ghost-button" id="slaQualityRereviewActionRecommendationAdjustmentRefreshButton" type="button">보정안 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Status</span>
+                <select id="slaQualityRereviewActionRecommendationAdjustmentStatusFilter">
+                  <option value="">All</option>
+                  <option value="proposed">Proposed</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Direction</span>
+                <select id="slaQualityRereviewActionRecommendationAdjustmentDirectionFilter">
+                  <option value="">All</option>
+                  <option value="boost">Boost</option>
+                  <option value="downgrade">Downgrade</option>
+                  <option value="neutral">Neutral</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Assignee</span>
+                <input id="slaQualityRereviewActionRecommendationAdjustmentOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Issue</span>
+                <input id="slaQualityRereviewActionRecommendationAdjustmentIssueFilter" type="search" placeholder="metric or issue">
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="slaQualityRereviewActionRecommendationAdjustmentSummary"></div>
+            <div class="sla-recommendation-adjustment-policy" id="slaQualityRereviewActionRecommendationAdjustmentPolicy"></div>
+            <div class="sla-recommendation-adjustment-list" id="slaQualityRereviewActionRecommendationAdjustmentList">
+              <div class="empty">재검수 액션 추천 보정안을 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="sla-auto-approval-performance" id="slaQualityRereviewActionRecommendationAutoApprovalPerformance">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>재검수 액션 자동승인 성과</h3>
+                <p>자동승인된 재검수 액션 보정이 이후 운영 품질을 실제로 개선했는지 추적합니다.</p>
+              </div>
+              <button class="ghost-button" id="slaQualityRereviewActionRecommendationAutoApprovalPerformanceRefreshButton" type="button">성과 새로고침</button>
+            </div>
+            <div class="calibration-audit-queue-filters">
+              <label class="field">
+                <span>Month</span>
+                <input id="slaQualityRereviewActionRecommendationAutoApprovalPerformanceMonthFilter" type="month">
+              </label>
+              <label class="field">
+                <span>Assignee</span>
+                <input id="slaQualityRereviewActionRecommendationAutoApprovalPerformanceOwnerFilter" type="search" placeholder="assignee">
+              </label>
+              <label class="field">
+                <span>Issue</span>
+                <input id="slaQualityRereviewActionRecommendationAutoApprovalPerformanceIssueFilter" type="search" placeholder="metric or issue">
+              </label>
+              <label class="field">
+                <span>Outcome</span>
+                <select id="slaQualityRereviewActionRecommendationAutoApprovalPerformanceOutcomeFilter">
+                  <option value="">All</option>
+                  <option value="successful">Successful</option>
+                  <option value="mixed">Mixed</option>
+                  <option value="false_positive">False positive</option>
+                  <option value="rolled_back">Rolled back</option>
+                  <option value="pending">Pending</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Learning status</span>
+                <select id="slaQualityRereviewActionAutoPolicyLearningRereviewStatusFilter">
+                  <option value="">All</option>
+                  <option value="open">Open</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="completed">Completed</option>
+                  <option value="deferred">Deferred</option>
+                  <option value="dismissed">Dismissed</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Learning owner</span>
+                <input id="slaQualityRereviewActionAutoPolicyLearningRereviewOwnerFilter" type="search" placeholder="owner">
+              </label>
+              <label class="field">
+                <span>Learning due</span>
+                <select id="slaQualityRereviewActionAutoPolicyLearningRereviewDueFilter">
+                  <option value="">All</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="this_week">This week</option>
+                  <option value="scheduled">Scheduled</option>
+                  <option value="no_due">No due date</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Max score</span>
+                <input id="slaQualityRereviewActionAutoPolicyLearningRereviewMaxScoreFilter" type="number" min="0" max="100" step="1" placeholder="45">
+              </label>
+              <label class="field">
+                <span>SLA action status</span>
+                <select id="slaQualityRereviewActionAutoPolicyLearningSlaActionStatusFilter">
+                  <option value="">All</option>
+                  <option value="candidate">Candidate</option>
+                  <option value="planned">Planned</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="done">Done</option>
+                  <option value="dismissed">Dismissed</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>SLA action owner</span>
+                <input id="slaQualityRereviewActionAutoPolicyLearningSlaActionOwnerFilter" type="search" placeholder="owner">
+              </label>
+              <label class="field">
+                <span>SLA action due</span>
+                <select id="slaQualityRereviewActionAutoPolicyLearningSlaActionDueFilter">
+                  <option value="">All</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="this_week">This week</option>
+                  <option value="upcoming">Upcoming</option>
+                  <option value="no_due">No due date</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>SLA action priority</span>
+                <select id="slaQualityRereviewActionAutoPolicyLearningSlaActionPriorityFilter">
+                  <option value="">All</option>
+                  <option value="urgent">Urgent</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>SLA action risk</span>
+                <select id="slaQualityRereviewActionAutoPolicyLearningSlaActionRiskFilter">
+                  <option value="">All</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Root metric</span>
+                <input id="slaQualityRereviewActionAutoPolicyLearningSlaActionIssueFilter" type="search" placeholder="metric or issue">
+              </label>
+            </div>
+            <div class="calibration-audit-queue-summary" id="slaQualityRereviewActionRecommendationAutoApprovalPerformanceSummary"></div>
+            <div class="sla-auto-approval-performance-list" id="slaQualityRereviewActionRecommendationAutoApprovalPerformanceList">
+              <div class="empty">재검수 액션 자동승인 성과를 불러오는 중입니다.</div>
+            </div>
+          </div>
+          <div class="interest-console" id="interestSignalConsole">
+            <div class="section-head interest-console-head">
+              <div>
+                <h3>검색/SNS 관심도 검수</h3>
+                <p>지역 키워드와 내 숙소 키워드별 관심도 신호를 수동 입력하거나 외부 API 수집 예정값으로 관리합니다.</p>
+              </div>
+              <div class="button-pair">
+                <button class="ghost-button" id="interestSignalRefreshButton" type="button">관심도 새로고침</button>
+                <button class="secondary-button" id="interestSignalNewButton" type="button">신규 입력</button>
+              </div>
+            </div>
+            <div class="interest-filter-grid">
+              <label class="field">
+                <span>지역 필터</span>
+                <input id="interestRegionFilterInput" type="search" placeholder="예: 산청">
+              </label>
+              <label class="field">
+                <span>업체 필터</span>
+                <select id="interestCompanyFilterSelect">
+                  <option value="">전체/지역 신호</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>신호 종류</span>
+                <select id="interestSignalTypeFilterSelect">
+                  <option value="">전체</option>
+                  <option value="naver_trend">네이버 트렌드</option>
+                  <option value="search_volume">키워드 검색량</option>
+                  <option value="sns_mentions">SNS 언급량</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>범위</span>
+                <select id="interestScopeFilterSelect">
+                  <option value="">전체</option>
+                  <option value="region_keyword">지역 키워드</option>
+                  <option value="property_keyword">내 숙소 키워드</option>
+                </select>
+              </label>
+            </div>
+            <div class="interest-queue-panel">
+              <div class="section-head interest-console-head">
+              <div>
+                <h3>수집 작업 큐</h3>
+                <p>지역/업종/업체 기준으로 수집 대상 키워드를 만들고 커넥터 대기열 상태를 관리합니다.</p>
+              </div>
+              <div class="button-pair">
+                <button class="ghost-button" id="interestJobRunQueuedButton" type="button">대기 큐 실행</button>
+                <button class="secondary-button" id="interestJobGenerateButton" type="button">큐 생성</button>
+              </div>
+            </div>
+              <div class="interest-filter-grid">
+                <label class="field">
+                  <span>큐 지역</span>
+                  <input id="interestJobRegionInput" placeholder="예: 산청">
+                </label>
+                <label class="field">
+                  <span>큐 업종</span>
+                  <input id="interestJobCategoryInput" placeholder="예: 글램핑">
+                </label>
+                <label class="field">
+                  <span>큐 업체</span>
+                  <select id="interestJobCompanySelect">
+                    <option value="">지역 키워드만</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>수집원</span>
+                  <select id="interestJobSourceSelect">
+                    <option value="naver_searchad">네이버 검색광고</option>
+                    <option value="naver_trend">네이버 트렌드</option>
+                    <option value="sns">SNS</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>직접 키워드</span>
+                  <textarea id="interestJobKeywordsInput" rows="2" placeholder="줄바꿈 또는 쉼표로 여러 키워드 입력"></textarea>
+                </label>
+                <label class="field">
+                  <span>큐 상태 필터</span>
+                  <select id="interestJobStatusFilterSelect">
+                    <option value="">전체</option>
+                    <option value="queued">대기</option>
+                    <option value="collecting">수집중</option>
+                    <option value="succeeded">수집 성공</option>
+                    <option value="failed">수집 실패</option>
+                    <option value="review_required">검수 필요</option>
+                    <option value="cancelled">취소</option>
+                  </select>
+                </label>
+                <label class="field checkbox-field">
+                  <input id="interestJobIncludeRegionInput" type="checkbox" checked>
+                  <span>지역/업종 키워드 생성</span>
+                </label>
+                <label class="field checkbox-field">
+                  <input id="interestJobIncludePropertyInput" type="checkbox" checked>
+                  <span>선택 업체 키워드 생성</span>
+                </label>
+              </div>
+              <div class="interest-job-list" id="interestJobList">
+                <div class="empty">수집 작업 큐를 불러오는 중입니다.</div>
+              </div>
+            </div>
+            <div class="interest-console-layout">
+              <form class="interest-signal-form" id="interestSignalForm">
+                <input type="hidden" name="signalId">
+                <div class="master-detail-head">
+                  <div>
+                    <h3 id="interestSignalFormTitle">관심도 신호 입력</h3>
+                    <p>사업자 화면에는 점수와 근거 요약만 노출됩니다.</p>
+                  </div>
+                  <button class="primary-button" type="submit">관심도 저장</button>
+                </div>
+                <div class="master-form-grid interest-form-grid">
+                  <label class="field"><span>지역</span><input name="region" placeholder="예: 산청"></label>
+                  <label class="field"><span>업체</span><select name="companyId" id="interestCompanyInput"><option value="">지역 키워드 신호</option></select></label>
+                  <label class="field"><span>키워드</span><input name="keyword" placeholder="예: 산청 글램핑"></label>
+                  <label class="field"><span>신호 종류</span><select name="signalType">
+                    <option value="search_volume">키워드 검색량</option>
+                    <option value="naver_trend">네이버 트렌드</option>
+                    <option value="sns_mentions">SNS 언급량</option>
+                  </select></label>
+                  <label class="field"><span>범위</span><select name="scope">
+                    <option value="region_keyword">지역 키워드</option>
+                    <option value="property_keyword">내 숙소 키워드</option>
+                  </select></label>
+                  <label class="field"><span>수집원</span><select name="source">
+                    <option value="manual_admin">관리자 수동 입력</option>
+                    <option value="verified_admin">관리자 검수 확정</option>
+                    <option value="naver_trend">네이버 트렌드 예정/수집</option>
+                    <option value="naver_searchad">네이버 검색광고 예정/수집</option>
+                    <option value="sns">SNS 예정/수집</option>
+                  </select></label>
+                  <label class="field"><span>상태</span><select name="status">
+                    <option value="manual">수동 입력</option>
+                    <option value="verified">검수 완료</option>
+                    <option value="pending_connector">외부 API 예정</option>
+                    <option value="collected">자동 수집</option>
+                  </select></label>
+                  <label class="field"><span>점수</span><input name="score" type="number" min="0" max="100" step="1" placeholder="0-100"></label>
+                  <label class="field"><span>트렌드 지수</span><input name="trendIndex" type="number" min="0" max="100" step="1"></label>
+                  <label class="field"><span>월검색량</span><input name="monthlySearchVolume" type="number" min="0" step="1"></label>
+                  <label class="field"><span>PC 검색량</span><input name="pcSearchVolume" type="number" min="0" step="1"></label>
+                  <label class="field"><span>모바일 검색량</span><input name="mobileSearchVolume" type="number" min="0" step="1"></label>
+                  <label class="field"><span>SNS 언급량</span><input name="mentionCount" type="number" min="0" step="1"></label>
+                  <label class="field"><span>긍정 언급</span><input name="positiveMentionCount" type="number" min="0" step="1"></label>
+                  <label class="field"><span>부정 언급</span><input name="negativeMentionCount" type="number" min="0" step="1"></label>
+                  <label class="field"><span>신뢰도</span><select name="confidence">
+                    <option value="">미정</option>
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="D">D</option>
+                  </select></label>
+                  <label class="field"><span>검수자</span><input name="reviewedBy" value="admin"></label>
+                  <label class="field"><span>관측시각</span><input name="observedAt" placeholder="비우면 현재 시각"></label>
+                </div>
+                <label class="field"><span>관리자 메모</span><textarea name="notes" rows="3"></textarea></label>
+              </form>
+              <div class="interest-signal-list" id="interestSignalList">
+                <div class="empty">관심도 신호를 불러오는 중입니다.</div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>

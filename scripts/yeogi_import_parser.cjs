@@ -3,6 +3,11 @@ const YEOGI_CATEGORY_START_RE = /^(?:풀빌라\s*펜션|비즈니스\s*호텔|�
 const YEOGI_PRICE_RE = /(?:\d{1,3},)*\d{1,3}\s*원\s*~?|(?:\d{1,3},)+\d{3}/g;
 const GENERIC_NAME_WORD_RE = /글램핑|캠핑|카라반|펜션|리조트|호텔|모텔|풀빌라|캠프|스테이|숙박|숙소|한옥|게스트하우스|야영장|camping|glamping|camp|glamp|stay|hotel|resort|pension/gi;
 
+const {
+  validateCsvMatrix,
+  validateImportSourceText
+} = require("./import_security.cjs");
+
 function parseCsv(text) {
   const rows = [];
   let row = [];
@@ -45,6 +50,16 @@ function parseCsv(text) {
     row.push(field);
     rows.push(row);
   }
+
+  if (quoted) {
+    const error = new Error("CSV contains an unclosed quoted field.");
+    error.code = "IMPORT_STRUCTURE_INVALID";
+    error.statusCode = 400;
+    error.publicMessage = "The import data could not be processed.";
+    throw error;
+  }
+
+  validateCsvMatrix(rows);
 
   const headers = rows.shift() || [];
   return rows.map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] || ""])));
@@ -330,7 +345,7 @@ function parseYeogiTextImport(text) {
 }
 
 function parseYeogiImport(text) {
-  const source = String(text || "").trim();
+  const source = validateImportSourceText(text).trim();
   if (!source || looksLikeYeogiExtractScript(source)) return [];
   const firstLine = source.replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0] || "";
   const csvLike = looksLikeYeogiCsvHeader(firstLine);

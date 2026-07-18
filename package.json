@@ -5,14 +5,23 @@
   "type": "commonjs",
   "scripts": {
     "start": "node scripts/glamping_app_server.cjs",
-    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs",
+    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check scripts/auth_service.cjs && node --check scripts/auth_mfa.cjs && node --check scripts/auth_delivery_service.cjs && node --check scripts/auth_key_rotation_service.cjs && node --check scripts/spreadsheet_export.cjs && node --check scripts/import_security.cjs && node --check scripts/yeogi_import_worker.cjs && node --check scripts/yeogi_import_parser.cjs && node --check scripts/render_rc_preflight.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_import_security.cjs && node --check scripts/test_auth_tenant_guardrails.cjs && node --check scripts/test_business_guardrails.cjs && node --check scripts/test_ui_visual_qa.cjs",
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
-    "test": "npm run check && npm run test:yeogi"
+    "test:business": "node scripts/test_business_guardrails.cjs",
+    "test:imports": "node scripts/test_import_security.cjs",
+    "test:auth": "node scripts/test_auth_tenant_guardrails.cjs",
+    "test:ui": "node scripts/test_ui_visual_qa.cjs",
+    "rc:preflight": "node scripts/render_rc_preflight.cjs",
+    "test": "npm run check && npm run test:yeogi && npm run test:imports && npm run test:auth && npm run test:business"
   },
   "engines": {
     "node": ">=20"
   },
+  "devDependencies": {
+    "fflate": "^0.8.2",
+    "playwright-core": "^1.61.1"
+  },
   "dependencies": {
-    "xlsx": "^0.18.5"
+    "write-excel-file": "^4.1.1"
   }
 }

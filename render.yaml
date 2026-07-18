@@ -22,7 +22,43 @@ services:
         value: /var/data/outputs
       - key: CONFIG_DIR
         value: /var/data/config
+      - key: RC_RUNTIME_ENVIRONMENT
+        value: render
       - key: APP_PIN
+        sync: false
+      - key: ADMIN_BOOTSTRAP_USER
+        sync: false
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false
+      - key: AUTH_ALLOW_LEGACY_BASIC
+        value: "false"
+      - key: AUTH_PUBLIC_BASE_URL
+        sync: false
+      - key: AUTH_CSRF_SECRET
+        sync: false
+      - key: AUTH_CSRF_ENFORCE
+        value: "true"
+      - key: AUTH_ORIGIN_ENFORCE
+        value: "true"
+      - key: AUTH_TRUST_PROXY
+        value: render
+      - key: AUTH_KEY_CURRENT_VERSION
+        value: v1
+      - key: AUTH_MFA_ENCRYPTION_KEY
+        sync: false
+      - key: AUTH_MFA_ENFORCE_ADMIN
+        value: "true"
+      - key: AUTH_EMAIL_MODE
+        sync: false
+      - key: AUTH_EMAIL_PROVIDER_URL
+        sync: false
+      - key: AUTH_EMAIL_PROVIDER_TOKEN
+        sync: false
+      - key: AUTH_EMAIL_FROM
+        sync: false
+      - key: AUTH_EMAIL_QUEUE_SECRET
+        sync: false
+      - key: AUTH_EMAIL_WEBHOOK_SECRET
         sync: false
       - key: NAVER_CLIENT_ID
         sync: false
@@ -33,4 +69,18 @@ services:
       - key: NAVER_SEARCHAD_SECRET_KEY
         sync: false
       - key: NAVER_SEARCHAD_CUSTOMER_ID
+        sync: false
+      - key: SNS_MENTION_API_KEY
+        sync: false
+      - key: SNS_MENTION_API_BASE_URL
+        sync: false
+      - key: SNS_MENTION_API_PATH
+        sync: false
+      - key: OTA_CONNECTOR_API_KEY
+        sync: false
+      - key: OTA_CONNECTOR_BASE_URL
+        sync: false
+      - key: OTA_CONNECTOR_API_PATH
+        sync: false
+      - key: OTA_CONNECTOR_PROVIDER
         sync: false
