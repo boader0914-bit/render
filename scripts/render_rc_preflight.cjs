@@ -63,7 +63,7 @@ async function main() {
   } catch {}
   const [health, anonymousAdmin, rc] = await Promise.all([
     request("/api/health"),
-    request("/admin"),
+    request("/api/admin/master-db/status"),
     request("/api/admin/master-db/commercial-launch-rc-rehearsals", { authorized: true })
   ]);
   const rcReport = rc.status === 200 && rc.body?.schema === "commercial_launch_rc_rehearsals_v1" ? rc.body : null;
@@ -76,7 +76,7 @@ async function main() {
     check("health", "Public health", health.status === 200 && health.body?.ok === true ? "passed" : "blocked", `HTTP ${health.status || 0}; ok=${Boolean(health.body?.ok)}`, "Resolve deployment or health-check failure before continuing."),
     check("render_runtime", "Render runtime response", health.headers.renderOrigin ? "passed" : "blocked", health.headers.renderOrigin ? "Render response headers detected" : "Render response headers missing", "Confirm the target belongs to the intended Render service."),
     check("transport_security", "HTTPS transport headers", health.headers.hsts ? "passed" : "warning", health.headers.hsts ? "HSTS present" : "HSTS missing", "Enable and verify HSTS on the public service."),
-    check("admin_protection", "Anonymous administrator protection", [401, 403].includes(anonymousAdmin.status) ? "passed" : "blocked", `GET /admin returned HTTP ${anonymousAdmin.status || 0}`, "Require authentication for administrator routes."),
+    check("admin_protection", "Anonymous administrator API protection", [401, 403].includes(anonymousAdmin.status) ? "passed" : "blocked", `GET /api/admin/master-db/status returned HTTP ${anonymousAdmin.status || 0}`, "Require authentication for administrator APIs."),
     check("rc_contract", "Stage 218 RC administrator contract", rcReport ? "passed" : "blocked", rcReport ? rcReport.schema : `HTTP ${rc.status || 0}; admin authorization ${authorization ? "provided" : "not provided"}`, authorization ? "Deploy the Stage 218 RC contract and verify the administrator response." : "Provide a short-lived administrator Authorization header through RC_PREFLIGHT_AUTHORIZATION; it is never stored in the report."),
     check("runtime_environment", "RC runtime environment", rcReport?.runtime?.environment === "render" ? "passed" : "blocked", rcReport?.runtime?.environment || "unverified", "Run the RC rehearsal from the Render process, not from local evidence."),
     check("source_parity", "Expected and running commit", sourceMatches ? "passed" : "blocked", `expected=${normalizedExpected ? normalizedExpected.slice(0, 12) : "missing"}; running=${detectedCommit ? detectedCommit.slice(0, 12) : "unverified"}`, "Set RC_EXPECTED_COMMIT to the tested commit and deploy that exact commit."),
