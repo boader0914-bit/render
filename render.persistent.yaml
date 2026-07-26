@@ -47,7 +47,7 @@ services:
       - key: AUTH_MFA_ENCRYPTION_KEY
         sync: false
       - key: AUTH_MFA_ENFORCE_ADMIN
-        value: "true"
+        value: "false"
       - key: AUTH_EMAIL_MODE
         sync: false
       - key: AUTH_EMAIL_PROVIDER_URL

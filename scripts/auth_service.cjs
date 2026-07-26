@@ -584,7 +584,7 @@ function createAuthService(options = {}) {
     const expiresAt = new Date(now.getTime() + sessionTtlMs).toISOString();
     const mfaEnabled = account.role === "admin" && account.mfa?.status === "enabled";
     const mfaEnrollmentRequired = account.role === "admin" && mfaEnforced && !mfaEnabled;
-    const mfaChallengeRequired = Boolean(mfaEnabled);
+    const mfaChallengeRequired = Boolean(mfaEnforced && mfaEnabled);
     let replacedSession = false;
 
     await mutate(async () => {
@@ -676,7 +676,7 @@ function createAuthService(options = {}) {
       encryptionConfigured: mfaEncryptionConfigured,
       enforcementEnabled: mfaEnforced,
       enrollmentRequired: Boolean(session.mfaEnrollmentRequired),
-      challengeRequired: Boolean(enabled && (session.mfaChallengeRequired || !verified)),
+      challengeRequired: Boolean(mfaEnforced && enabled && (session.mfaChallengeRequired || !verified)),
       verified,
       verifiedAt: verified ? session.mfaVerifiedAt || "" : "",
       expiresAt: verified ? session.mfaExpiresAt || "" : "",

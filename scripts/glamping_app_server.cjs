@@ -192,7 +192,7 @@ const AUTH_KEY_TRANSITION_REASON = !AUTH_KEY_TRANSITION_CONFIGURED
 const AUTH_MFA_ENCRYPTION_KEY = String(process.env.AUTH_MFA_ENCRYPTION_KEY || "");
 const AUTH_MFA_ENCRYPTION_READY = AUTH_MFA_ENCRYPTION_KEY.length >= 24;
 const AUTH_MFA_ENFORCE_ADMIN = process.env.AUTH_MFA_ENFORCE_ADMIN === undefined
-  ? IS_PRODUCTION_RUNTIME && AUTH_MFA_ENCRYPTION_READY
+  ? false
   : String(process.env.AUTH_MFA_ENFORCE_ADMIN).trim().toLowerCase() === "true";
 const AUTH_MFA_SESSION_TTL_MINUTES = Math.max(1, Math.min(720, Number(process.env.AUTH_MFA_SESSION_TTL_MINUTES || 30)));
 const AUTH_MFA_WINDOW_MINUTES = Math.max(1, Math.min(1440, Number(process.env.AUTH_MFA_WINDOW_MINUTES || 10)));
@@ -42461,8 +42461,8 @@ function sessionAccountContext(account = {}, session = {}) {
       verified: mfaVerified,
       verifiedAt: mfaVerified ? session.mfaVerifiedAt || "" : "",
       expiresAt: mfaVerified ? session.mfaExpiresAt || "" : "",
-      challengeRequired: Boolean(mfaEnabled && (session.mfaChallengeRequired || !mfaVerified)),
-      enrollmentRequired: Boolean(session.mfaEnrollmentRequired),
+      challengeRequired: Boolean(AUTH_MFA_ENFORCE_ADMIN && mfaEnabled && (session.mfaChallengeRequired || !mfaVerified)),
+      enrollmentRequired: Boolean(AUTH_MFA_ENFORCE_ADMIN && session.mfaEnrollmentRequired),
       recoveryCodesRemaining: Number(account.mfa?.recoveryCodesRemaining || 0)
     }
   };
@@ -45024,7 +45024,8 @@ async function route(req, res) {
       if (AUTH_MFA_ENFORCE_ADMIN && authContext.authType !== "session") reasonCode = "AUTH_MFA_REQUIRED";
       else if (authContext.mfa?.enrollmentRequired && !setupAllowed) reasonCode = "AUTH_MFA_ENROLLMENT_REQUIRED";
       else if (authContext.mfa?.challengeRequired && !setupAllowed) reasonCode = "AUTH_MFA_REQUIRED";
-      else if (isMfaSensitiveOperation(req, reqUrl.pathname)
+      else if (AUTH_MFA_ENFORCE_ADMIN
+        && isMfaSensitiveOperation(req, reqUrl.pathname)
         && (authContext.mfa?.enabled || AUTH_MFA_ENFORCE_ADMIN)
         && !authContext.mfa?.verified) reasonCode = "AUTH_MFA_REQUIRED";
       if (reasonCode) {
