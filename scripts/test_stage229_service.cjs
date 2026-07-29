@@ -21,6 +21,7 @@ const {
   ROOT,
   assertBusinessSafe,
   createMockFreshLayer,
+  observationsFor,
   session,
   stage229Fixtures,
   temporaryDirectory
@@ -28,6 +29,7 @@ const {
 
 const TARGET_COMPANY_ID = "cmp_place_stage229_tenant";
 const OTHER_COMPANY_ID = "cmp_place_stage229_other_tenant";
+const UNOWNED_COMPANY_ID = "cmp_place_stage229_unowned";
 const TENANT_ONE = "tenant_stage229_one";
 const TENANT_TWO = "tenant_stage229_two";
 
@@ -150,6 +152,17 @@ async function main() {
     const { signal } = stage229Fixtures();
     const provider = createDeterministicInsightsFixtureProvider({ fixture: signal });
     const fresh = createMockFreshLayer();
+    fresh.companies.set(UNOWNED_COMPANY_ID, {
+      companyId: UNOWNED_COMPANY_ID,
+      companyName: "Stage 229 unowned fresh identity",
+      name: "Stage 229 unowned fresh identity",
+      region: "Stage 229 synthetic region",
+      regionLabel: "Stage 229 synthetic region",
+      category: "glamping",
+      tenantCompanyIds: [],
+      synthetic: true
+    });
+    fresh.observations.set(UNOWNED_COMPANY_ID, observationsFor(fresh.readyCase, UNOWNED_COMPANY_ID));
     fresh.observations.get(TARGET_COMPANY_ID).push({
       observationId: "obs_stage229_service_ancient_irrelevant",
       companyId: TARGET_COMPANY_ID,
@@ -311,6 +324,21 @@ async function main() {
     assert.ok(expectedPeerMetricIds.every((id) => reportEvidence.internal.observationIds.includes(id)), "internal report evidence must include each eligible peer's scored metric IDs");
     assert.equal(reportEvidence.internal.observationIds.includes("obs_stage229_service_peer_ancient_irrelevant"), false);
     assert.deepEqual(reportEvidence.internal.reportLineage.scopeCompanyIds.anonymousCohort, peerIds);
+    assert.equal(
+      reportEvidence.internal.reportLineage.companyIds.includes(UNOWNED_COMPANY_ID),
+      false,
+      "an unowned fresh identity must never enter national report lineage"
+    );
+    assert.equal(
+      Object.values(reportEvidence.internal.reportLineage.scopeCompanyIds).flat().includes(UNOWNED_COMPANY_ID),
+      false,
+      "an unowned fresh identity must never enter any cohort/report scope"
+    );
+    const unownedMetricIds = fresh.observations.get(UNOWNED_COMPANY_ID).map((row) => row.observationId);
+    assert.ok(
+      unownedMetricIds.every((id) => !reportEvidence.internal.observationIds.includes(id)),
+      "an unowned fresh identity must not contribute report evidence observations"
+    );
     assert.match(reportEvidence.internal.reportLineage.cohortSnapshotHash, /^[a-f0-9]{64}$/);
     const publishedReports = await service.listMonthlyReports(businessOne, {
       companyId: TARGET_COMPANY_ID,

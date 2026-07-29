@@ -145,7 +145,12 @@ function createFreshPlatformService(options = {}) {
 
   async function tenantFor(session, requestedCompanyId = "", context = {}) {
     requireSession(session);
-    if (roleFor(session) === "admin") return "";
+    if (roleFor(session) === "admin") {
+      const requested = cleanText(requestedCompanyId, 160);
+      if (!requested) return "";
+      const access = await authService.assertCompanyAccess(session, requested, context);
+      return cleanText(access?.company?.companyId || requested, 160);
+    }
     const primary = session.memberships?.[0];
     if (!primary?.companyId) {
       throw platformError("활성 업체 소속이 필요합니다.", 403, "FRESH_MEMBERSHIP_REQUIRED");

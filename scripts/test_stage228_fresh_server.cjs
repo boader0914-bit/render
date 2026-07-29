@@ -270,6 +270,40 @@ async function main() {
     assert.equal(repeated.body.company.observationCount, 28);
     assert.equal(repeated.body.company.freshDetail.observations.repeatCount, 14);
 
+    const adminScopedClientRequestId = "stage228-admin-scoped-ownership-0001";
+    const adminScoped = await requestJson(instance, "/api/integration/fresh/runs", {
+      method: "POST",
+      jar: admin.jar,
+      body: {
+        kind: "admin-collection",
+        clientRequestId: adminScopedClientRequestId,
+        tenantCompanyId: businessOne.companyId,
+        keyword: "Stage 228 admin scoped ownership",
+        regionLabel: "Stage 228 scoped region"
+      }
+    });
+    assert.equal(adminScoped.status, 202, JSON.stringify(adminScoped.body));
+    assert.equal(
+      adminScoped.body.job.tenantCompanyId,
+      businessOne.companyId,
+      "admin-scoped fresh collection must preserve the verified requested tenant"
+    );
+    await waitForJob(instance, admin.jar, adminScopedClientRequestId, "completed");
+    const businessOwnedAfterAdminCollection = await requestJson(instance, "/api/integration/fresh/companies", {
+      jar: businessOne.jar
+    });
+    assert.equal(businessOwnedAfterAdminCollection.status, 200);
+    const adminScopedCompany = businessOwnedAfterAdminCollection.body.companies.find((row) => (
+      row.companyId !== company.companyId && row.companyName === "Stage 228 admin scoped ownership"
+    ));
+    assert.ok(adminScopedCompany, "admin-scoped collection must attach fresh identity ownership to the requested tenant");
+    const adminScopedTenantEscape = await requestJson(
+      instance,
+      `/api/integration/fresh/companies/${adminScopedCompany.companyId}`,
+      { jar: businessTwo.jar }
+    );
+    assert.equal(adminScopedTenantEscape.status, 403, "another tenant must not read the admin-scoped fresh identity");
+
     const cancellableId = "stage228-cancel-resume-0001";
     const cancellable = await requestJson(instance, "/api/integration/core/jobs", {
       method: "POST",

@@ -18,6 +18,7 @@ const SIGNAL_FIXTURE_PATH = path.join(ROOT, "test", "fixtures", "stage229", "sig
 const CASE_FIXTURE_PATH = path.join(ROOT, "test", "fixtures", "stage229", "location_forecast_cases_v1.json");
 const EXPECTED_SIGNAL_HASH = "690f783d1c79e4864ddbdbf8bf3f2a144dda703a54b3fd53713699e9af13367b";
 const EXPECTED_CASE_HASH = "1af0ab9f240195f9738b8790f38713e7027d761e9d6fab3905436adf0d3adb93";
+const EXPECTED_BASE_COMMIT = "20889063ff4cc1b016f24186bce7946dea6268d7";
 
 function readJson(filename) {
   return JSON.parse(fs.readFileSync(filename, "utf8"));
@@ -116,7 +117,8 @@ function assertCompletionEvidence(evidence, visual) {
   assert.deepEqual(evidence.blockers, []);
   assert.match(evidence.scope, /local acceptance only/i);
   assert.equal(evidence.source.branch, git("branch", "--show-current"));
-  assert.equal(evidence.source.baseCommit, git("rev-parse", "HEAD"));
+  assert.equal(evidence.source.baseCommit, EXPECTED_BASE_COMMIT);
+  assert.doesNotThrow(() => git("merge-base", "--is-ancestor", evidence.source.baseCommit, "HEAD"));
   assert.equal(evidence.source.workingTree, "uncommitted-preview-checkpoint");
   assert.equal(evidence.source.legacyDataImported, false);
   assert.deepEqual(evidence.versions, {

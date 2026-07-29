@@ -202,10 +202,14 @@ function createInsightsService(options = {}) {
   }
 
   async function allCompanyInputs() {
-    const companies = await freshRepository.listCompanies({ projection: "business-safe" });
-    return Promise.all(companies.map(async (company) => ({
-      company,
-      observations: await freshRepository.listObservations({ companyId: company.companyId, limit: 100_000 })
+    const identities = await freshRepository.listCompanies({ projection: "identity" });
+    const ownedIdentities = identities.filter((identity) => (
+      Array.isArray(identity.tenantCompanyIds)
+      && identity.tenantCompanyIds.map((value) => cleanText(value, 160)).some(Boolean)
+    ));
+    return Promise.all(ownedIdentities.map(async (identity) => ({
+      company: await freshRepository.getCompany(identity.companyId, { projection: "business-safe" }),
+      observations: await freshRepository.listObservations({ companyId: identity.companyId, limit: 100_000 })
     })));
   }
 
