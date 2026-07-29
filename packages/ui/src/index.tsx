@@ -162,7 +162,7 @@ export function AuthPanel({ eyebrow, title, description, icon, footer, children,
 }) {
   return <main className="v2-auth-shell">
     <section className="v2-auth-panel" aria-labelledby="auth-title">
-      <header className="v2-auth-brand"><span aria-hidden="true">{icon}</span><div><strong>숙박업 데이터랩 V2</strong><small>운영 인사이트</small></div></header>
+      <header className="v2-auth-brand"><span aria-hidden="true">{icon}</span><div><strong>숙박 데이터랩</strong><small>운영 인사이트</small></div></header>
       <div className="v2-auth-copy"><span className="v2-eyebrow">{eyebrow}</span><h1 id="auth-title">{title}</h1><p>{description}</p></div>
       {onSubmit ? <form className="v2-auth-form" onSubmit={onSubmit}>{children}</form> : <div className="v2-auth-form">{children}</div>}
       {footer ? <footer className="v2-auth-footer">{footer}</footer> : null}

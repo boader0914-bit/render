@@ -113,7 +113,7 @@ function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionP
     activePath={route.path}
     theme={theme}
     onThemeChange={onThemeChange}
-    brand={{ title: "숙박업 데이터랩 V2", subtitle: "V3 통합 UI", mark: "V2" }}
+    brand={{ title: "숙박 데이터랩", subtitle: "V3 통합 UI", mark: "V2" }}
     status={{
       title: workspace?.state === "ready" ? "신규 수집 결과" : workspace?.state === "partial" ? "일부 데이터 준비" : "신규 수집 대기",
       detail: workspace ? `${workspace.metrics.find((metric) => metric.id === "freshCompanyCount")?.value || "0"}개 fresh 업체` : "fresh-only 경계 확인 중"

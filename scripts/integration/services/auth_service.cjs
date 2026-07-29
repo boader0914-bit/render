@@ -425,7 +425,7 @@ function createAuthService(options = {}) {
       const now = nowIso();
       const company = {
         companyId: "v2-platform",
-        name: "숙박업 데이터랩 V2",
+        name: "숙박 데이터랩",
         kind: "platform",
         createdAt: now,
         updatedAt: now

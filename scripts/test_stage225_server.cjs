@@ -116,7 +116,7 @@ async function request(baseUrl, pathname, cookie = "") {
       assert.match(await response.text(), /data-v2-ui="v3"/);
     }
     const manifest = await request(on.baseUrl, "/manifest.webmanifest");
-    assert.equal(JSON.parse(await manifest.text()).name, "숙박업 데이터랩 V2");
+    assert.equal(JSON.parse(await manifest.text()).name, "숙박 데이터랩");
     const uiIndex = await (await request(on.baseUrl, "/login")).text();
     const assetPath = uiIndex.match(/(?:src|href)="(\/assets\/[^"]+\.(?:js|css))"/)?.[1];
     assert.ok(assetPath, "Vite asset path is missing");

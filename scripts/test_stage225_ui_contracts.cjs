@@ -65,7 +65,7 @@ for (const cssFile of ["packages/ui/src/styles.css", "apps/web/src/app.css"]) {
 }
 
 const manifest = JSON.parse(read("apps/web/public/manifest.webmanifest"));
-assert.equal(manifest.name, "숙박업 데이터랩 V2");
+assert.equal(manifest.name, "숙박 데이터랩");
 assert.equal(manifest.id, "/b2b");
 assert.equal(manifest.start_url, "/b2b");
 assert.equal(manifest.scope, "/");

@@ -1,6 +1,6 @@
 {
-  "name": "숙박업 데이터랩 V2",
-  "short_name": "숙박 데이터랩 V2",
+  "name": "숙박 데이터랩",
+  "short_name": "숙박 데이터랩",
   "description": "V2 기능을 우선하는 숙박업 운영 인사이트 웹앱",
   "id": "/b2b",
   "start_url": "/b2b",
