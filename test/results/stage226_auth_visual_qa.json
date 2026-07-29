@@ -1,0 +1,803 @@
+{
+  "stage": 226,
+  "generatedAt": "2026-07-29T09:18:07.338Z",
+  "browser": "chrome.exe",
+  "requiredScreenshots": 20,
+  "screenshotCount": 20,
+  "secretMaterialRecorded": false,
+  "minimumWidthChecked": 320,
+  "zoomCheckedPercent": 200,
+  "results": [
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/login-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/login-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/login-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/login-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "signup",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/signup-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 11,
+        "maxOutline": 2
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "signup",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/signup-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 11,
+        "maxOutline": 2
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "signup",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/signup-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 11,
+        "maxOutline": 2
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "signup",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/signup-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 11,
+        "maxOutline": 2
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "activate",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/activate-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "activate",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/activate-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "activate",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/activate-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "activate",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/activate-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "reset",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/reset-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 6,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "reset",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/reset-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 6,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "reset",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/reset-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 6,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "reset",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/reset-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 6,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "mfa",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/mfa-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "mfa",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/mfa-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "mfa",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage226/auth-visual-qa/mfa-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "mfa",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage226/auth-visual-qa/mfa-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 288,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "signup",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 288,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "activate",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 288,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "reset",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 288,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "mfa",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 288,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "signup",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "activate",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "reset",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    },
+    {
+      "surface": "mfa",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "submitMinHeight": 44,
+        "inputsLabeled": true,
+        "contrastFailures": [],
+        "secretTextVisible": false
+      },
+      "passed": true
+    }
+  ],
+  "passed": true
+}

@@ -1,0 +1,519 @@
+{
+  "stage": 225,
+  "generatedAt": "2026-07-29T09:17:19.047Z",
+  "browser": "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  "requiredScreenshots": 12,
+  "results": [
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage225/visual-qa/login-desktop-light.png",
+      "errors": [],
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 0,
+        "activeNavCount": 0,
+        "expectedNav": 0,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "inputsLabeled": true,
+        "submitHeight": 44,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage225/visual-qa/login-desktop-dark.png",
+      "errors": [],
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 0,
+        "activeNavCount": 0,
+        "expectedNav": 0,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "inputsLabeled": true,
+        "submitHeight": 44,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage225/visual-qa/login-mobile-light.png",
+      "errors": [],
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 0,
+        "activeNavCount": 0,
+        "expectedNav": 0,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "inputsLabeled": true,
+        "submitHeight": 44,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage225/visual-qa/login-mobile-dark.png",
+      "errors": [],
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 0,
+        "activeNavCount": 0,
+        "expectedNav": 0,
+        "overflowX": 0,
+        "panelWidth": 358,
+        "inputMinHeight": 42,
+        "inputsLabeled": true,
+        "submitHeight": 44,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage225/visual-qa/admin-desktop-light.png",
+      "errors": [],
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage225/visual-qa/admin-desktop-dark.png",
+      "errors": [],
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage225/visual-qa/admin-mobile-light.png",
+      "errors": [],
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage225/visual-qa/admin-mobile-dark.png",
+      "errors": [],
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage225/visual-qa/business-desktop-light.png",
+      "errors": [],
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage225/visual-qa/business-desktop-dark.png",
+      "errors": [],
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "light",
+      "screenshot": "artifacts/stage225/visual-qa/business-mobile-light.png",
+      "errors": [],
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      "theme": "dark",
+      "screenshot": "artifacts/stage225/visual-qa/business-mobile-dark.png",
+      "errors": [],
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "keyboard": {
+        "distinctFocusable": 8,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 0,
+        "activeNavCount": 0,
+        "expectedNav": 0,
+        "overflowX": 0,
+        "panelWidth": 288,
+        "inputMinHeight": 42,
+        "inputsLabeled": true,
+        "submitHeight": 44,
+        "contrastFailures": []
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "passed": true
+    },
+    {
+      "surface": "business",
+      "viewport": {
+        "id": "minimum-320",
+        "width": 320,
+        "height": 844,
+        "scale": 1
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "passed": true
+    },
+    {
+      "surface": "login",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 0,
+        "activeNavCount": 0,
+        "expectedNav": 0,
+        "overflowX": 0,
+        "panelWidth": 440,
+        "inputMinHeight": 42,
+        "inputsLabeled": true,
+        "submitHeight": 44,
+        "contrastFailures": []
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "passed": true
+    },
+    {
+      "surface": "business",
+      "viewport": {
+        "id": "zoom-200",
+        "width": 720,
+        "height": 450,
+        "scale": 2
+      },
+      "theme": "light",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "panelWidth": 0,
+        "inputMinHeight": 0,
+        "inputsLabeled": true,
+        "submitHeight": 0,
+        "contrastFailures": []
+      },
+      "passed": true
+    }
+  ],
+  "passed": true
+}

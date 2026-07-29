@@ -1,0 +1,51 @@
+{
+  "runId": "fixture_glamping_20260719_000000",
+  "manifest": {
+    "keyword": "Fixture Region Glamping",
+    "searchKeyword": "Fixture Region Glamping",
+    "naverKeyword": "Fixture Region Glamping",
+    "keywordType": "region",
+    "searchMode": "keyword",
+    "collectionMode": "precision",
+    "sourceRole": "admin",
+    "collectionSource": "admin_search",
+    "collectionPurpose": "basic_db",
+    "detailRankRanges": "1-10",
+    "bookingRangeDays": 7,
+    "bookingRangePlaceLimit": 10,
+    "checkIn": "2026-08-01",
+    "checkOut": "2026-08-08",
+    "province": "local",
+    "counts": {
+      "availability": 1,
+      "ranking": 1
+    },
+    "files": [
+      "fixture_summary.csv"
+    ],
+    "fileRoles": {
+      "platform": "fixture_summary.csv"
+    }
+  },
+  "availability": {
+    "items": [
+      {
+        "companyId": "cmp_fixture_001",
+        "name": "Fixture Stay",
+        "region": "Fixture City",
+        "rank": 1,
+        "price": "150000",
+        "totalRooms": 10,
+        "availableRooms": 4,
+        "soldRooms": 6,
+        "reservationRate": 0.6,
+        "inventoryConfidenceGrade": "A",
+        "inventoryConfidenceScore": 92,
+        "platforms": [
+          "naver"
+        ],
+        "url": "https://example.invalid/stay/fixture-001"
+      }
+    ]
+  }
+}

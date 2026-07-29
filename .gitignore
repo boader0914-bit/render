@@ -1,10 +1,14 @@
 config/*.local.json
 node_modules/
+apps/web/dist/
 logs/
 tools/
 outputs/
 history/
 company_master/
+artifacts/
+db/
+fresh-integration/
 .codex-remote-attachments/
 glamping_render_deploy_*.zip
 *.log

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "frozenAt": "2026-07-19T00:00:00.000Z",
+  "routes": [
+    {
+      "id": "health",
+      "method": "GET",
+      "path": "/api/health",
+      "access": "public",
+      "expectedStatus": 200
+    },
+    {
+      "id": "session",
+      "method": "GET",
+      "path": "/api/session",
+      "access": "authenticated",
+      "expectedStatus": 200
+    },
+    {
+      "id": "runs",
+      "method": "GET",
+      "path": "/api/runs",
+      "access": "admin",
+      "expectedStatus": 200
+    },
+    {
+      "id": "company_master_summary",
+      "method": "GET",
+      "path": "/api/company-master/summary",
+      "access": "admin",
+      "expectedStatus": 200
+    },
+    {
+      "id": "integration_company_preview",
+      "method": "GET",
+      "path": "/api/integration-preview/companies",
+      "access": "admin_feature_flag",
+      "featureFlag": "V2_INTEGRATION_COMPANY_ENABLED",
+      "defaultStatus": 404,
+      "enabledStatus": 200
+    },
+    {
+      "id": "integration_observation_preview",
+      "method": "GET",
+      "path": "/api/integration-preview/observations",
+      "access": "admin_feature_flag",
+      "featureFlag": "V2_INTEGRATION_OBSERVATION_ENABLED",
+      "defaultStatus": 404,
+      "enabledStatus": 200
+    },
+    {
+      "id": "location_card_requests",
+      "method": "GET",
+      "path": "/api/location-card-requests",
+      "access": "admin",
+      "expectedStatus": 200
+    },
+    {
+      "id": "b2b_search",
+      "method": "POST",
+      "path": "/api/b2b-search",
+      "access": "b2b",
+      "expectedStatus": 200,
+      "requestFixture": {
+        "keyword": "Fixture Region Glamping",
+        "checkIn": "2026-08-01",
+        "checkOut": "2026-08-08",
+        "productMode": "all",
+        "collectionMode": "precision",
+        "detailRankRanges": "1-10",
+        "bookingRangeDays": 7,
+        "bookingRangePlaceLimit": 10,
+        "clientRequestId": "fixture-request-001"
+      }
+    }
+  ]
+}

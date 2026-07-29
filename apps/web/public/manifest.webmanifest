@@ -1,0 +1,17 @@
+{
+  "name": "숙박업 데이터랩 V2",
+  "short_name": "숙박 데이터랩 V2",
+  "description": "V2 기능을 우선하는 숙박업 운영 인사이트 웹앱",
+  "id": "/b2b",
+  "start_url": "/b2b",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f6f8",
+  "theme_color": "#087e68",
+  "categories": ["business", "productivity"],
+  "lang": "ko-KR",
+  "icons": [
+    { "src": "/pwa-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

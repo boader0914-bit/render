@@ -1,19 +1,56 @@
 {
-  "name": "glamping-cluster-app",
+  "name": "glamping-datalab-v2",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
+  "workspaces": [
+    "apps/web",
+    "packages/ui"
+  ],
   "scripts": {
     "start": "node scripts/glamping_app_server.cjs",
-    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_surface_contrast.cjs && node scripts/test_surface_contrast.cjs",
+    "dev:ui": "npm run dev -w @glamping-datalab-v2/web",
+    "build:ui": "npm run build -w @glamping-datalab-v2/web && node scripts/check_stage225_bundle_budget.cjs",
+    "typecheck:ui": "tsc --noEmit -p apps/web/tsconfig.json",
+    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/integration_feature_flags.cjs && node --check scripts/ui_v3_feature_flag.cjs && node --check scripts/integration_contracts.cjs && node --check scripts/integration_preview_adapter.cjs && node --check scripts/integration_data_access_guard.cjs && node --check scripts/integration/contracts/auth.cjs && node --check scripts/integration/repositories/auth_store.cjs && node --check scripts/integration/services/auth_crypto.cjs && node --check scripts/integration/services/auth_email.cjs && node --check scripts/integration/services/auth_service.cjs && node --check scripts/integration/http/auth_http.cjs && node --check scripts/integration/bootstrap/auth_runtime.cjs && node --check scripts/integration/contracts/core_ui.cjs && node --check scripts/integration/repositories/core_store.cjs && node --check scripts/integration/services/core_service.cjs && node --check scripts/integration/http/core_http.cjs && node --check scripts/integration/bootstrap/core_runtime.cjs && node --check scripts/integration/contracts/fresh_data.cjs && node --check scripts/integration/repositories/fresh_store.cjs && node --check scripts/integration/services/fresh_collection_provider.cjs && node --check scripts/integration/services/fresh_collection_service.cjs && node --check scripts/integration/services/fresh_collection_worker.cjs && node --check scripts/integration/services/fresh_platform_service.cjs && node --check scripts/integration/http/fresh_data_http.cjs && node --check scripts/integration/bootstrap/fresh_data_runtime.cjs && node --check scripts/integration/bootstrap/fresh_platform_runtime.cjs && node --check scripts/stage224_inventory.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_integration_contracts.cjs && node --check scripts/test_integration_preview_adapter.cjs && node --check scripts/test_integration_data_access_guard.cjs && node --check scripts/test_stage224_inventory.cjs && node --check scripts/test_stage225_ui_contracts.cjs && node --check scripts/test_stage225_server.cjs && node --check scripts/check_stage225_bundle_budget.cjs && node --check scripts/test_stage226_auth_service.cjs && node --check scripts/test_stage226_auth_server.cjs && node --check scripts/test_stage226_auth_visual.cjs && node --check scripts/test_stage227_helpers.cjs && node --check scripts/test_stage227_core_contracts.cjs && node --check scripts/test_stage227_core_service.cjs && node --check scripts/test_stage227_core_server.cjs && node --check scripts/test_stage227_ui_contracts.cjs && node --check scripts/test_stage227_visual.cjs && node --check scripts/test_stage228_fresh_store.cjs && node --check scripts/test_stage228_fresh_collection_worker.cjs && node --check scripts/test_stage228_fresh_server.cjs && node --check scripts/test_stage228_visual.cjs && node --check scripts/test_surface_contrast.cjs && node scripts/test_surface_contrast.cjs",
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
+    "test:contracts": "node scripts/test_integration_contracts.cjs",
+    "test:integration-preview": "node scripts/test_integration_preview_adapter.cjs",
+    "stage224:inventory": "node scripts/stage224_inventory.cjs --write",
+    "test:stage224": "node scripts/stage224_inventory.cjs --verify && node scripts/test_integration_data_access_guard.cjs && node scripts/test_stage224_inventory.cjs",
+    "test:ui": "vitest run --config apps/web/vite.config.ts",
+    "test:ui-contracts": "node scripts/test_stage225_ui_contracts.cjs",
+    "test:ui-server": "node scripts/test_stage225_server.cjs",
+    "test:ui-visual": "node scripts/test_stage225_visual.cjs",
+    "test:stage225": "npm run typecheck:ui && npm run build:ui && npm run test:ui && npm run test:ui-contracts && npm run test:ui-server && npm run test:ui-visual",
+    "test:auth-security": "node scripts/test_stage226_auth_service.cjs && node scripts/test_stage226_auth_server.cjs",
+    "test:auth-visual": "node scripts/test_stage226_auth_visual.cjs",
+    "test:stage226": "npm run typecheck:ui && npm run build:ui && npm run test:ui && npm run test:auth-security && npm run test:auth-visual",
+    "test:core-parity": "node scripts/test_stage227_core_contracts.cjs && node scripts/test_stage227_core_service.cjs && node scripts/test_stage227_ui_contracts.cjs",
+    "test:core-server": "node scripts/test_stage227_core_server.cjs",
+    "test:core-visual": "node scripts/test_stage227_visual.cjs",
+    "test:stage227": "npm run typecheck:ui && npm run build:ui && npm run test:ui && npm run test:core-parity && npm run test:core-server && npm run test:core-visual",
+    "test:fresh-store": "node scripts/test_stage228_fresh_store.cjs",
+    "test:fresh-worker": "node scripts/test_stage228_fresh_collection_worker.cjs",
+    "test:fresh-server": "node scripts/test_stage228_fresh_server.cjs",
+    "test:fresh-visual": "node scripts/test_stage228_visual.cjs",
+    "test:stage228": "npm run typecheck:ui && npm run build:ui && npm run test:ui && npm run test:fresh-store && npm run test:fresh-worker && npm run test:fresh-server && npm run test:fresh-visual",
     "test:surface": "node scripts/test_surface_contrast.cjs",
-    "test": "npm run check && npm run test:yeogi"
+    "test": "npm run check && npm run test:yeogi && npm run test:contracts && npm run test:integration-preview && npm run test:stage224 && npm run test:stage225 && npm run test:stage226 && npm run test:stage227 && npm run test:stage228"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "playwright-core": "1.61.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
   }
 }

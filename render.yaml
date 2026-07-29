@@ -1,4 +1,8 @@
-services:
+# LEGACY CLUSTER REFERENCE ONLY - DO NOT DEPLOY.
+# Keep the existing service and disk identifiers unchanged for audit history.
+# Canonical V2 specifications are render.v2.yaml and render.v2.persistent.yaml.
+# The x-legacy key intentionally prevents Render from finding deployable services.
+x-legacy-cluster-services:
   - type: web
     name: glamping-cluster-app
     runtime: node

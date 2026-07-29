@@ -1,0 +1,18 @@
+{
+  "authenticated": true,
+  "username": "contract-business",
+  "role": "b2b",
+  "roleLabel": "B2B",
+  "memberId": "member_fixture_001",
+  "accountType": "member",
+  "profile": {
+    "businessName": "Fixture Stay",
+    "region": "Fixture City",
+    "category": "glamping"
+  },
+  "consents": null,
+  "memberCreatedAt": "2026-07-19T00:00:00.000Z",
+  "lastLoginAt": "2026-07-19T00:00:00.000Z",
+  "sessionCreatedAt": "2026-07-19T00:00:00.000Z",
+  "expiresAt": "2026-07-19T12:00:00.000Z"
+}

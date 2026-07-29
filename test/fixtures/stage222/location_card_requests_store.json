@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-19T00:00:00.000Z",
+  "requests": {
+    "fixturecity": {
+      "key": "fixturecity",
+      "keyword": "Fixture Region Glamping",
+      "regionBase": "Fixture City",
+      "searchKeyword": "Fixture Region Glamping",
+      "status": "requested",
+      "relatedRegion": "Fixture Neighbor City",
+      "note": "Synthetic contract fixture",
+      "runId": "fixture_glamping_20260719_000000",
+      "activeKeyword": "Fixture City Stay",
+      "evidence": {
+        "itemCount": 12,
+        "regionCount": 2,
+        "salesSupply": 120,
+        "salesSold": 72,
+        "targetCount": 4,
+        "searchVolume": 80,
+        "platformGap": 15,
+        "sampleCompanies": [
+          "Fixture Stay"
+        ]
+      },
+      "firstSeenAt": "2026-07-19T00:00:00.000Z",
+      "updatedAt": "2026-07-19T00:00:00.000Z",
+      "history": [
+        {
+          "status": "requested",
+          "relatedRegion": "Fixture Neighbor City",
+          "note": "Synthetic contract fixture",
+          "at": "2026-07-19T00:00:00.000Z"
+        }
+      ]
+    }
+  }
+}

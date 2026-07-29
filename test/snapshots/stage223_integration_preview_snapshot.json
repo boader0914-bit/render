@@ -1,0 +1,141 @@
+{
+  "access": {
+    "adminCompanyStatus": 200,
+    "adminObservationStatus": 200,
+    "b2bCompanyStatus": 403,
+    "b2bObservationStatus": 403
+  },
+  "company": {
+    "items": [
+      {
+        "address": "Fixture Province Fixture City",
+        "aliases": [
+          "Fixture Glamping"
+        ],
+        "autoConfidence": "B",
+        "b2bVisibility": "eligible",
+        "bestRank": null,
+        "canonicalName": "Fixture Stay",
+        "category": "",
+        "companyId": "cmp_fixture_001",
+        "externalIds": {
+          "naverBookingId": "fixture-booking-001",
+          "naverPlaceId": "fixture-place-001"
+        },
+        "firstSeenAt": "2026-07-19T00:00:00.000Z",
+        "identityKey": "naver_place:fixture-place-001",
+        "lastSeenAt": "2026-07-19T00:00:00.000Z",
+        "region": "Fixture City",
+        "sourceRunIds": [
+          "fixture_glamping_20260719_000000"
+        ],
+        "urls": [
+          "https://example.invalid/stay/fixture-001"
+        ],
+        "verifiedStatus": "unverified"
+      }
+    ],
+    "name": "company_master",
+    "projection": {
+      "contract": "rc_company_master_v1",
+      "matchedCount": 1,
+      "mode": "read_only",
+      "returnedCount": 1,
+      "source": "v2_company_master",
+      "sourceCompanyCount": 1,
+      "truncated": false
+    },
+    "updatedAt": "2026-07-19T00:00:00.000Z",
+    "version": 1
+  },
+  "observation": {
+    "items": [
+      {
+        "autoConfidence": "A",
+        "availableRooms": 4,
+        "channel": "naver_booking",
+        "checkIn": "",
+        "checkOut": "",
+        "collectionMode": "leadtime_observation",
+        "companyId": "cmp_fixture_001",
+        "leadTimeDays": 13,
+        "observationGroupKey": "og_ad968818915aaf",
+        "observationId": "fixture-history-observation-001",
+        "observedAt": "2026-07-19T00:00:00.000Z",
+        "price": "150000",
+        "productKey": "lodging",
+        "productMode": "lodging",
+        "province": "",
+        "provinceLabel": "",
+        "rank": 1,
+        "region": "Fixture City",
+        "reservationRate": 0.6,
+        "runId": "fixture_glamping_20260719_000000",
+        "searchScope": "property_date_product",
+        "soldOutRate": 0.6,
+        "soldOutRooms": 6,
+        "source": "v2_history",
+        "targetDate": "2026-08-01",
+        "totalRooms": 10,
+        "url": "https://example.invalid/stay/fixture-001",
+        "weeklyReservationRateDetail": "",
+        "weeklyTotalSoldOut": null,
+        "weeklyTotalStock": null
+      },
+      {
+        "autoConfidence": "C",
+        "availableRooms": 4,
+        "channel": "naver_booking",
+        "checkIn": "2026-08-01",
+        "checkOut": "2026-08-08",
+        "collectionMode": "detailed_search",
+        "companyId": "cmp_fixture_001",
+        "leadTimeDays": 13,
+        "observationGroupKey": "og_0f84edbdb451bd",
+        "observationId": "obs_f5ec5224fa564d",
+        "observedAt": "2026-07-19T00:00:00.000Z",
+        "price": "150000",
+        "productKey": "all",
+        "productMode": "",
+        "province": "local",
+        "provinceLabel": "지역",
+        "rank": 1,
+        "region": "",
+        "reservationRate": 0.6,
+        "runId": "fixture_glamping_20260719_000000",
+        "searchScope": "region_category",
+        "soldOutRate": 0.6,
+        "soldOutRooms": 6,
+        "source": "v2_run_output",
+        "targetDate": "2026-08-01",
+        "totalRooms": 10,
+        "url": "https://example.invalid/stay/fixture-001",
+        "weeklyReservationRateDetail": "",
+        "weeklyTotalSoldOut": null,
+        "weeklyTotalStock": null
+      }
+    ],
+    "name": "property_observations",
+    "projection": {
+      "contract": "rc_property_observations_v1",
+      "deduplicatedCount": 2,
+      "matchedCount": 2,
+      "mode": "read_only",
+      "projectedCount": 2,
+      "returnedCount": 2,
+      "sourceHistoryCount": 1,
+      "sourceRunCount": 1,
+      "sources": [
+        "v2_history",
+        "v2_run_output"
+      ],
+      "truncated": false,
+      "unresolvedHistoryCount": 0,
+      "unresolvedRunCount": 0
+    },
+    "updatedAt": "2026-07-19T00:00:00.000Z",
+    "version": 1
+  },
+  "sourceFilesUnchanged": true,
+  "version": 1
+}

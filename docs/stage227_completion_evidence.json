@@ -1,0 +1,157 @@
+{
+  "stage": 227,
+  "status": "complete",
+  "generatedAt": "2026-07-29T15:54:32.9474093+09:00",
+  "sourceCommit": "4e4e1906e2967fe58df66f8ad67f832043d2763b",
+  "branch": "integration/glamping-datalab-v2-stage221",
+  "precondition": {
+    "stage226Evidence": "docs/stage226_completion_evidence.json",
+    "stage226Status": "complete",
+    "stage226SecurityRegression": "pass",
+    "stage226Blockers": 0
+  },
+  "implementation": {
+    "uiFeatureFlag": {
+      "name": "V2_UI_V3_ENABLED",
+      "default": false
+    },
+    "coreFeatureFlag": {
+      "name": "V2_INTEGRATION_PLATFORM_CORE_ENABLED",
+      "default": false,
+      "requires": "V2_INTEGRATION_AUTH_ENABLED",
+      "runtimeMetadata": "lodging-v2-platform-core-enabled",
+      "disabledBehavior": "No core request; V3 shell renders an unavailable fail-closed state."
+    },
+    "targetRoutes": [
+      "/app/onboarding",
+      "/app/activity",
+      "/app/location",
+      "/admin/overview",
+      "/admin/companies",
+      "/admin/collection",
+      "/admin/settings"
+    ],
+    "businessNavigationCount": 9,
+    "adminNavigationCount": 13,
+    "pageOrder": [
+      "PageHeader",
+      "metrics",
+      "data-section"
+    ],
+    "apiPrefix": "/api/integration/core",
+    "store": "stage227-provisional-memory",
+    "defaultStoreState": "empty",
+    "fixture": "test/fixtures/stage227/fresh_collection.json",
+    "fixtureMode": "NODE_ENV=test plus explicit V2_STAGE227_FIXTURE_MODE",
+    "processRestartRecovery": false,
+    "processRestartRecoveryTargetStage": 228
+  },
+  "dataBoundary": {
+    "legacyV2RuntimeReads": 0,
+    "clusterRuntimeReads": 0,
+    "legacyOrClusterCopies": 0,
+    "legacyOrClusterWrites": 0,
+    "migrationItems": 0,
+    "backfillItems": 0,
+    "dualWriteItems": 0,
+    "providerCalls": 0,
+    "rawOutputPathsExposed": 0,
+    "durableIntegrationStoreImplemented": false,
+    "workerImplemented": false,
+    "existingLegacyWebFilesDeleted": 0
+  },
+  "compatibility": {
+    "v2BusinessValueRecalculation": 0,
+    "fixtureProjectionParity": "deep-equality pass",
+    "clientRequestIdIdempotency": "pass",
+    "searchProgressCancelRefreshRecovery": "pass within the same server process",
+    "businessTenantEscape": "server 403 pass",
+    "adminBusinessRoleRoutes": "pass",
+    "legacyUiFlagOffParity": "pass",
+    "coreApiFlagOffStatus": 404,
+    "runtimeCoreOffBrowserErrors": 0
+  },
+  "validation": {
+    "npmTest": "pass",
+    "typecheckUi": "pass",
+    "productionBuild": "pass",
+    "uiTestFiles": 7,
+    "uiTests": 19,
+    "coreParity": "pass",
+    "coreServer": "pass",
+    "authSecurity": "pass",
+    "contracts": "pass",
+    "integrationPreview": "pass",
+    "gitDiffCheck": "pass",
+    "reactVersion": "19.2.7",
+    "reactInstallations": 1,
+    "workspaceLockfiles": [
+      "package-lock.json"
+    ],
+    "bundle": {
+      "rawBytes": 291260,
+      "gzipBytes": 83521,
+      "cssGzipBytes": 4853,
+      "budget": "pass"
+    }
+  },
+  "visualQa": {
+    "report": "test/results/stage227_visual_qa.json",
+    "passed": true,
+    "durationMs": 36364,
+    "targetSurfaceCount": 7,
+    "targetMatrixScreenshots": 28,
+    "stateMatrixScreenshots": 20,
+    "screenshots": 48,
+    "stateScreenshots": {
+      "empty": 4,
+      "loading": 4,
+      "error": 4,
+      "permission": 4,
+      "partial-data": 4
+    },
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "minimumWidth": "320px pass on all 7 routes",
+    "zoom": "200% pass on all 7 routes",
+    "wcagAA": "pass",
+    "keyboardFocus": "pass",
+    "horizontalOverflow": 0,
+    "browserErrors": 0,
+    "sessionPreservedAcrossFixtureRestart": true,
+    "secretMaterialRecorded": false,
+    "rawFilesystemPathRecorded": false
+  },
+  "governance": {
+    "responsible": [
+      "FE",
+      "BE"
+    ],
+    "accountable": "PO",
+    "consulted": [
+      "QA",
+      "SE",
+      "DE"
+    ],
+    "informed": [
+      "SRE",
+      "RM"
+    ],
+    "approversMissing": 0,
+    "blockers": 0
+  },
+  "prohibitedActions": {
+    "existingUncommittedChangesAutoCommitted": false,
+    "branchSwitched": false,
+    "resetPerformed": false,
+    "stagingOrProductionDeployed": false,
+    "actualProviderCollectionPerformed": false,
+    "stage228Implemented": false
+  }
+}

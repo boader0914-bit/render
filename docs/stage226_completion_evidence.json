@@ -1,0 +1,110 @@
+{
+  "stage": 226,
+  "status": "complete",
+  "generatedAt": "2026-07-29T15:11:23.7911363+09:00",
+  "sourceHeadAtStart": "4e4e190",
+  "precondition": {
+    "stage225Evidence": "docs/stage225_completion_evidence.json",
+    "uiBuild": "pass",
+    "flagOffLegacyRegression": "pass",
+    "stage225VisualConditions": 12,
+    "stage225VisualStatus": "pass"
+  },
+  "implementation": {
+    "featureFlag": "V2_INTEGRATION_AUTH_ENABLED",
+    "defaultEnabled": false,
+    "freshAuthStoreMarker": "glamping-datalab-v2-integration-auth",
+    "schemaVersion": 1,
+    "collections": [
+      "accounts",
+      "companies",
+      "memberships",
+      "sessions",
+      "invites",
+      "passwordResets",
+      "mfaFactors",
+      "authChallenges",
+      "loginGuards",
+      "authAudit",
+      "emailOutbox"
+    ],
+    "legacyApiCompatibility": [
+      "/api/login",
+      "/api/session",
+      "/api/logout"
+    ],
+    "emailProvider": "mock-only",
+    "entitlementPlans": [
+      "free",
+      "basic",
+      "pro"
+    ],
+    "rollbackPolicy": "safe-relogin"
+  },
+  "dataBoundary": {
+    "existingAuthRecordsCopied": 0,
+    "existingPasswordHashesCopied": 0,
+    "existingSessionsCopied": 0,
+    "existingTokensCopied": 0,
+    "migrationBackfillDualWriteItems": 0,
+    "legacyWebFilesChanged": 0,
+    "clusterMergeOrWholeFileCopy": false
+  },
+  "security": {
+    "adminMfaRequired": true,
+    "totpReplayBlockedByMatchedCounter": true,
+    "recoveryCodesSingleUse": true,
+    "sessionTokenStoredAsHash": true,
+    "sessionKeyRotationTestedAcrossHttpRestart": true,
+    "passwordResetRevokesSessionsAndChallenges": true,
+    "accountAndIpLocksPersistent": true,
+    "adminUnlockAudited": true,
+    "anonymousAndSessionCsrfSeparated": true,
+    "csrfRecoveryRotatesServerAndClientToken": true,
+    "originHostAllowlist": true,
+    "tenantEscapeReturns403": true,
+    "productionMissingStoreFailsBeforeListen": true,
+    "blockers": 0
+  },
+  "validation": {
+    "npmRunTestAuthSecurity": "pass",
+    "npmRunTestStage226": "pass",
+    "npmTest": "pass",
+    "gitDiffCheck": "pass",
+    "singlePackageLock": "pass",
+    "singleReact19Installation": "pass",
+    "flagOffLegacyParity": "pass"
+  },
+  "visualQa": {
+    "report": "test/results/stage226_auth_visual_qa.json",
+    "generatedAt": "2026-07-29T06:11:15.684Z",
+    "surfaces": [
+      "login",
+      "signup",
+      "activate",
+      "reset",
+      "mfa"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "requiredScreenshots": 20,
+    "screenshotCount": 20,
+    "minimumWidthChecked": 320,
+    "zoomCheckedPercent": 200,
+    "status": "pass"
+  },
+  "mutationsNotPerformed": {
+    "commit": false,
+    "branchSwitch": false,
+    "reset": false,
+    "stagingDeployment": false,
+    "productionDeployment": false,
+    "stage227": false
+  }
+}

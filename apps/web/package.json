@@ -1,0 +1,15 @@
+{
+  "name": "@glamping-datalab-v2/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 3310 --strictPort",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@glamping-datalab-v2/ui": "0.1.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  }
+}

@@ -1,0 +1,31 @@
+[
+  {
+    "schemaVersion": 1,
+    "observationId": "fixture-history-observation-001",
+    "runId": "fixture_glamping_20260719_000000",
+    "runLabel": "Fixture Region Glamping",
+    "keyword": "Fixture Region Glamping",
+    "keywordKey": "fixtureregionglamping",
+    "searchMode": "company",
+    "productMode": "lodging",
+    "sourceRole": "admin",
+    "collectionSource": "admin_search",
+    "collectionPurpose": "revenue_detail",
+    "collectedAt": "2026-07-19T00:00:00.000Z",
+    "collectedDate": "2026-07-19",
+    "stayDate": "2026-08-01",
+    "leadTimeDays": 13,
+    "companyName": "Fixture Stay",
+    "companyKey": "cmp_fixture_001",
+    "region": "Fixture City",
+    "rank": 1,
+    "productType": "lodging",
+    "supply": 10,
+    "available": 4,
+    "sold": 6,
+    "saleRate": 0.6,
+    "price": "150000",
+    "inventoryConfidenceGrade": "A",
+    "sourceUrl": "https://example.invalid/stay/fixture-001"
+  }
+]

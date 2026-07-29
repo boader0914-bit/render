@@ -1,0 +1,64 @@
+{
+  "stage": 225,
+  "status": "complete",
+  "completedAt": "2026-07-29T05:13:03.134Z",
+  "source": {
+    "branch": "integration/glamping-datalab-v2-stage221",
+    "head": "4e4e1906e2967fe58df66f8ad67f832043d2763b",
+    "v3ReferenceCommit": "2bcdc7c0843358bb3cbb8a2025ffe873d3bf5154"
+  },
+  "precondition": {
+    "stage224Blockers": 0,
+    "stage224MigrationBackfillDualWrite": 0
+  },
+  "implementation": {
+    "reactVersion": "19.2.7",
+    "viteVersion": "8.1.5",
+    "workspaces": ["apps/web", "packages/ui"],
+    "lockfiles": ["package-lock.json"],
+    "featureFlag": "V2_UI_V3_ENABLED",
+    "featureFlagDefault": false,
+    "businessNavigationCount": 9,
+    "adminNavigationCount": 13,
+    "themeStorageKey": "lodging-v2-theme"
+  },
+  "bundle": {
+    "productionBuild": "passed",
+    "rawBytes": 224814,
+    "gzipBytes": 69558,
+    "cssGzipBytes": 3198,
+    "budgetPassed": true
+  },
+  "verification": {
+    "npmTest": "passed",
+    "typecheck": "passed",
+    "productionBuild": "passed",
+    "flagOffLegacyByteRegression": "passed",
+    "themeAndRegistryTests": "passed",
+    "cssLeakage": "passed",
+    "gitDiffCheck": "passed",
+    "legacyWebDiffCount": 0,
+    "visualReport": "test/results/stage225_visual_qa.json",
+    "requiredScreenshots": 12,
+    "passedScreenshots": 12,
+    "minimumWidth320": "passed",
+    "zoom200Percent": "passed",
+    "keyboardFocus": "passed",
+    "wcagAA": "passed",
+    "browserErrors": 0
+  },
+  "dataImpact": {
+    "legacyV2ReadsForNewUi": 0,
+    "clusterReadsForNewUi": 0,
+    "migration": 0,
+    "backfill": 0,
+    "dualWrite": 0,
+    "displayedOperatingRecords": 0
+  },
+  "deployment": {
+    "staging": false,
+    "production": false
+  },
+  "blockers": [],
+  "nextStageExecuted": false
+}

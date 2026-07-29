@@ -8,9 +8,24 @@ const { spawn } = require("node:child_process");
 const { URL } = require("node:url");
 const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
+const { flagEnabled, readIntegrationFeatureFlags } = require("./integration_feature_flags.cjs");
+const { readUiV3FeatureFlag } = require("./ui_v3_feature_flag.cjs");
+const { createIntegrationAuthRuntime } = require("./integration/bootstrap/auth_runtime.cjs");
+const { createIntegrationCoreRuntime } = require("./integration/bootstrap/core_runtime.cjs");
+const { createFreshPlatformRuntime } = require("./integration/bootstrap/fresh_platform_runtime.cjs");
+const { assertFreshAuthStoreBoundary } = require("./integration/repositories/fresh_store.cjs");
+const {
+  CONTRACT_PREVIEW_PURPOSE,
+  createIntegrationDataAccessGuard
+} = require("./integration_data_access_guard.cjs");
+const {
+  projectCompanyMaster,
+  projectPropertyObservations
+} = require("./integration_preview_adapter.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
+const UI_V3_WEB_DIR = path.join(ROOT, "apps", "web", "dist");
 const REPO_OUTPUTS_DIR = path.join(ROOT, "outputs");
 const RENDER_DISK_DIR = "/var/data";
 const IS_RENDER_RUNTIME = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
@@ -63,10 +78,14 @@ const CRAWL_TIMING_MAX_ENTRIES = 240;
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || (IS_RENDER_RUNTIME ? "0.0.0.0" : "127.0.0.1");
 const IS_PRODUCTION_RUNTIME = process.env.NODE_ENV === "production" || IS_RENDER_RUNTIME;
-const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || "admin").trim();
-const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || "0914").trim();
-const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || "b2b").trim();
-const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B_PASSWORD || "0914").trim();
+const INTEGRATION_FEATURE_FLAGS = readIntegrationFeatureFlags(process.env);
+const V2_INTEGRATION_PLATFORM_CORE_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_PLATFORM_CORE_ENABLED);
+const V2_INTEGRATION_FRESH_COMPANY_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_FRESH_COMPANY_ENABLED);
+const V2_INTEGRATION_FRESH_OBSERVATION_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_FRESH_OBSERVATION_ENABLED);
+const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "admin")).trim();
+const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "0914")).trim();
+const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "b2b")).trim();
+const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B_PASSWORD || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "0914")).trim();
 const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENABLED || "1").trim())
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
 const B2B_MEMBER_DAILY_SEARCH_LIMIT = 2;
@@ -75,6 +94,41 @@ const B2B_MEMBER_ALLOWED_RANK_RANGE = "1-10";
 const B2B_MEMBER_EXPANDED_RANK_RANGE = "1-20";
 const B2B_INTEREST_LODGE_LIMIT = 2;
 const B2B_INTEREST_LODGE_SEGMENT_LIMIT = 8;
+const V2_UI_V3_ENABLED = readUiV3FeatureFlag(process.env);
+let integrationAuthRuntime = null;
+let integrationCoreRuntime = null;
+let integrationFreshRuntime = null;
+const V2_INTEGRATION_PREVIEW_PURPOSE = String(process.env.V2_INTEGRATION_PREVIEW_PURPOSE || "").trim().toLowerCase();
+const V2_INTEGRATION_PREVIEW_FIXTURE_ROOT = String(process.env.V2_INTEGRATION_PREVIEW_FIXTURE_ROOT || "").trim();
+const INTEGRATION_PREVIEW_ACCESS_GUARD = (() => {
+  if (
+    IS_PRODUCTION_RUNTIME
+    || process.env.NODE_ENV !== "test"
+    || V2_INTEGRATION_PREVIEW_PURPOSE !== CONTRACT_PREVIEW_PURPOSE
+    || !V2_INTEGRATION_PREVIEW_FIXTURE_ROOT
+  ) return null;
+  try {
+    const fixtureRoot = path.resolve(V2_INTEGRATION_PREVIEW_FIXTURE_ROOT);
+    return createIntegrationDataAccessGuard({
+      projectRoot: ROOT,
+      freshStoreRoot: path.join(fixtureRoot, ".contract-preview-fresh-store-disabled"),
+      fixtureRoots: [fixtureRoot],
+      env: process.env
+    });
+  } catch {
+    return null;
+  }
+})();
+
+function integrationPreviewFixtureAccessAllowed(paths, sources) {
+  if (!INTEGRATION_PREVIEW_ACCESS_GUARD) return false;
+  return paths.every((targetPath) => INTEGRATION_PREVIEW_ACCESS_GUARD.evaluate({
+    kind: "test-fixture",
+    path: targetPath,
+    purpose: V2_INTEGRATION_PREVIEW_PURPOSE,
+    sources
+  }).allowed);
+}
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
@@ -1465,6 +1519,9 @@ const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".woff2": "font/woff2",
   ".webmanifest": "application/manifest+json; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".geojson": "application/geo+json; charset=utf-8",
@@ -3078,8 +3135,22 @@ async function securityHardeningOverview() {
   const hashedPasswords = members.filter((member) => /^pbkdf2_sha256\$\d+\$/.test(String(member.passwordHash || ""))).length;
   const weakPasswordRows = members.filter((member) => member.password && !member.passwordHash).length;
   const activeRateLimitBuckets = [...requestRateLimits.values()].filter((record) => Number(record?.resetAt || 0) > Date.now()).length;
+  // Stage 222 froze this response shape. Later integration flags stay internal
+  // and receive their own contracts instead of widening the legacy payload.
+  const stage222IntegrationFlags = {
+    company: INTEGRATION_FEATURE_FLAGS.company,
+    observation: INTEGRATION_FEATURE_FLAGS.observation,
+    auth: INTEGRATION_FEATURE_FLAGS.auth,
+    businessReport: INTEGRATION_FEATURE_FLAGS.businessReport
+  };
   return {
     checkedAt: new Date().toISOString(),
+    integration: {
+      version: "stage222",
+      state: Object.values(stage222IntegrationFlags).some(Boolean) ? "preview" : "disabled",
+      enabledCount: Object.values(stage222IntegrationFlags).filter(Boolean).length,
+      flags: stage222IntegrationFlags
+    },
     session: {
       cookieName: SESSION_COOKIE_NAME,
       httpOnly: true,
@@ -3695,6 +3766,9 @@ function createSession(username, role = USER_ROLES.admin) {
 }
 
 function getSession(req) {
+  if (INTEGRATION_FEATURE_FLAGS.auth) {
+    return integrationAuthRuntime ? integrationAuthRuntime.http.sessionForRequest(req) : null;
+  }
   cleanupSessions();
   const id = parseCookies(req)[SESSION_COOKIE_NAME];
   if (!id) return null;
@@ -3716,6 +3790,9 @@ function isAuthenticated(req) {
 }
 
 function publicSession(session) {
+  if (INTEGRATION_FEATURE_FLAGS.auth && integrationAuthRuntime) {
+    return integrationAuthRuntime.service.projectSession(session);
+  }
   if (!session) {
     return { authenticated: false, username: "", role: "", roleLabel: "" };
   }
@@ -3737,6 +3814,9 @@ function userRoleLabel(role) {
 }
 
 async function authenticatedUserForCredentials(username, password) {
+  if (INTEGRATION_FEATURE_FLAGS.auth) {
+    throw new Error("Legacy fallback credentials are disabled while integration auth is enabled");
+  }
   if (timingSafeTextEqual(username, ADMIN_USERNAME) && timingSafeTextEqual(password, ADMIN_PASSWORD)) {
     return { username: ADMIN_USERNAME, role: USER_ROLES.admin, roleLabel: userRoleLabel(USER_ROLES.admin), accountType: "master" };
   }
@@ -3778,6 +3858,9 @@ function sessionMatchesRequest(session = {}, req = null) {
 }
 
 function publicSession(session) {
+  if (INTEGRATION_FEATURE_FLAGS.auth && integrationAuthRuntime) {
+    return integrationAuthRuntime.service.projectSession(session);
+  }
   if (!session) {
     return { authenticated: false, username: "", role: "", roleLabel: "", memberId: "", accountType: "", profile: null, expiresAt: "" };
   }
@@ -11163,6 +11246,108 @@ async function summarizeCompanyMaster() {
   };
 }
 
+function integrationPreviewLimit(value, fallback, maximum) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(maximum, Math.floor(parsed));
+}
+
+async function integrationCompanyPreview(reqUrl) {
+  const master = await readCompanyMaster();
+  return projectCompanyMaster(master, {
+    companyId: reqUrl.searchParams.get("companyId") || "",
+    limit: integrationPreviewLimit(reqUrl.searchParams.get("limit"), 300, 1000)
+  });
+}
+
+async function integrationPreviewRunCandidates(limit) {
+  const entries = await fsp.readdir(OUTPUTS_DIR, { withFileTypes: true }).catch(() => []);
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/_glamping_\d{8}(?:_\d{6})?$/.test(entry.name)) continue;
+    const dirPath = path.join(OUTPUTS_DIR, entry.name);
+    if (!integrationPreviewFixtureAccessAllowed([dirPath], ["v2_run_output"])) continue;
+    const stat = await fsp.stat(dirPath).catch(() => null);
+    if (!stat?.isDirectory()) continue;
+    candidates.push({ id: entry.name, updatedAt: stat.mtime.toISOString() });
+  }
+  return candidates
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, limit);
+}
+
+async function integrationPreviewRunEntry(run) {
+  const dirPath = resolveRunDir(run.id);
+  if (
+    !dirPath
+    || !integrationPreviewFixtureAccessAllowed([dirPath], ["v2_run_output"])
+    || !fs.existsSync(dirPath)
+  ) return null;
+  const files = await fsp.readdir(dirPath);
+  const manifestPath = path.join(dirPath, "manifest.json");
+  if (!integrationPreviewFixtureAccessAllowed([manifestPath], ["v2_run_output"])) return null;
+  const manifest = await readManifest(dirPath);
+  if (isIncompleteRunDirectory(manifest, files)) return null;
+  const province = provinceKeyForRun(run.id, manifest);
+  const previewRun = {
+    id: run.id,
+    updatedAt: run.updatedAt,
+    keyword: manifest?.keyword || "",
+    searchMode: manifest?.searchMode || "keyword",
+    collectionMode: manifest?.collectionMode || "precision",
+    collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
+    productMode: manifest?.productMode || "",
+    checkIn: manifest?.checkIn || "",
+    checkOut: manifest?.checkOut || "",
+    province,
+    provinceLabel: (PROVINCES[province] || PROVINCES.local).label
+  };
+  const fileSpecs = [
+    ["regional", (file) => file.endsWith("_naver_place_glamping_clusters.csv")],
+    ["overall", (file) => file.endsWith("_overall_place_rank.csv")],
+    ["ads", (file) => file.endsWith("_ad_place_list.csv")],
+    ["platform", (file) => file.endsWith("_glamping_crawl_test.csv")],
+    ["yeogiManual", (file) => file.endsWith("_yeogi_manual_import.csv")]
+  ];
+  const rows = [];
+  for (const [role, predicate] of fileSpecs) {
+    const file = manifestFile(manifest, role, files, predicate);
+    if (!file) continue;
+    const filePath = path.join(dirPath, file);
+    if (!integrationPreviewFixtureAccessAllowed([filePath], ["v2_run_output"])) return null;
+    const parsed = parseCsv((await fsp.readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
+    rows.push(...(role === "yeogiManual" ? normalizeYeogiManualRows(parsed) : parsed));
+  }
+  return {
+    run: previewRun,
+    observedAt: previewRun.updatedAt || "",
+    // Contract preview never follows CSV @json-file references; only the
+    // individually guarded CSV bytes are projected.
+    availability: summarizeAvailabilityRows(rows)
+  };
+}
+
+async function integrationObservationPreview(reqUrl) {
+  const master = await readCompanyMaster();
+  const historyObservations = await readHistoryObservations();
+  const includeRunOutputs = !/^(0|false|off)$/i.test(String(reqUrl.searchParams.get("includeRunOutputs") || "1"));
+  const runLimit = integrationPreviewLimit(reqUrl.searchParams.get("runLimit"), 25, 100);
+  const runEntries = [];
+  if (includeRunOutputs && fs.existsSync(OUTPUTS_DIR)) {
+    const runs = await integrationPreviewRunCandidates(runLimit);
+    for (const run of runs) {
+      const entry = await integrationPreviewRunEntry(run);
+      if (entry) runEntries.push(entry);
+    }
+  }
+  return projectPropertyObservations({ master, historyObservations, runEntries }, {
+    companyId: reqUrl.searchParams.get("companyId") || "",
+    runId: reqUrl.searchParams.get("runId") || "",
+    collectionMode: reqUrl.searchParams.get("collectionMode") || "",
+    limit: integrationPreviewLimit(reqUrl.searchParams.get("limit"), 300, 2000)
+  });
+}
+
 async function backfillCompanyMasterFromRuns(payload = {}) {
   const requestedRunIds = Array.isArray(payload.runIds)
     ? new Set(payload.runIds.map((value) => String(value || "").trim()).filter(Boolean))
@@ -13090,6 +13275,129 @@ async function serveStatic(reqUrl, res) {
   send(res, 200, await fsp.readFile(filePath), MIME_TYPES[ext] || "application/octet-stream");
 }
 
+const UI_V3_AUTH_ROUTES = new Set(["/login", "/signup", "/activate", "/reset-password"]);
+const UI_V3_COMPATIBILITY_ROUTES = new Set(["/", "/view", "/admin", "/b2b"]);
+const UI_V3_PUBLIC_ASSETS = new Set(["/manifest.webmanifest", "/sw.js", "/offline.html", "/pwa-icon.svg", "/theme-boot.js"]);
+const LEGACY_RUNTIME_FILE_ROUTE_ROOTS = new Set([
+  "artifacts",
+  "backup",
+  "backups",
+  "cache",
+  "caches",
+  "company_master",
+  "config",
+  "customer_db",
+  "data",
+  "db",
+  "history",
+  "output",
+  "outputs",
+  "tourism_data"
+]);
+
+function isLegacyRuntimeFileRequest(pathname) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(String(pathname || ""));
+  } catch {
+    return true;
+  }
+  const normalized = path.posix.normalize(`/${decoded.replace(/\\/g, "/").replace(/^\/+/, "")}`);
+  const root = normalized.split("/").filter(Boolean)[0]?.toLowerCase() || "";
+  return LEGACY_RUNTIME_FILE_ROUTE_ROOTS.has(root);
+}
+
+function isUiV3ProtectedRoute(pathname) {
+  return UI_V3_COMPATIBILITY_ROUTES.has(pathname)
+    || pathname.startsWith("/app/")
+    || pathname.startsWith("/admin/");
+}
+
+function uiV3HomeForRole(role) {
+  return normalizeUserRole(role) === USER_ROLES.admin ? "/admin/overview" : "/app/onboarding";
+}
+
+function uiV3BuildAvailable() {
+  return fs.existsSync(path.join(UI_V3_WEB_DIR, "index.html"));
+}
+
+function sendUiV3Unavailable(req, res) {
+  const message = "V3 UI build is unavailable. Disable V2_UI_V3_ENABLED or run npm run build:ui.";
+  if (req.method === "HEAD") return sendHead(res, 503, "text/plain; charset=utf-8", { "Cache-Control": "no-store" });
+  return send(res, 503, message, "text/plain; charset=utf-8", { "Cache-Control": "no-store" });
+}
+
+async function serveUiV3Index(req, res, extraHeaders = {}) {
+  if (!uiV3BuildAvailable()) return sendUiV3Unavailable(req, res);
+  const headers = { "Cache-Control": "no-store", ...extraHeaders };
+  if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8", headers);
+  const indexHtml = await fsp.readFile(path.join(UI_V3_WEB_DIR, "index.html"), "utf8");
+  const runtimeHtml = indexHtml.replaceAll(
+    "__V2_PLATFORM_CORE_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.platformCore ? "true" : "false"
+  );
+  return send(res, 200, runtimeHtml, "text/html; charset=utf-8", headers);
+}
+
+async function serveUiV3Asset(req, reqUrl, res) {
+  if (!uiV3BuildAvailable()) return sendUiV3Unavailable(req, res);
+  const filePath = safeJoin(UI_V3_WEB_DIR, reqUrl.pathname);
+  if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
+  const ext = path.extname(filePath).toLowerCase();
+  const headers = reqUrl.pathname.startsWith("/assets/")
+    ? { "Cache-Control": "public, max-age=31536000, immutable" }
+    : { "Cache-Control": "no-cache" };
+  if (req.method === "HEAD") return sendHead(res, 200, MIME_TYPES[ext] || "application/octet-stream", headers);
+  return send(res, 200, await fsp.readFile(filePath), MIME_TYPES[ext] || "application/octet-stream", headers);
+}
+
+async function routeUiV3Page(req, res, reqUrl) {
+  if (!V2_UI_V3_ENABLED || !["GET", "HEAD"].includes(req.method) || !isUiV3ProtectedRoute(reqUrl.pathname)) return false;
+  const hadSessionCookie = Boolean(parseCookies(req)[SESSION_COOKIE_NAME]);
+  const session = getSession(req);
+  if (!session) {
+    const headers = hadSessionCookie ? { "Set-Cookie": clearSessionCookie() } : {};
+    if (reqUrl.pathname === "/" && !hadSessionCookie) {
+      await serveUiV3Index(req, res, headers);
+      return true;
+    }
+    if (req.method === "HEAD") sendHeadRedirect(res, "/login");
+    else send(res, 302, "", "text/plain; charset=utf-8", { ...headers, Location: "/login" });
+    return true;
+  }
+
+  const role = normalizeUserRole(session.role);
+  const canonicalHome = uiV3HomeForRole(role);
+  if (["/", "/view"].includes(reqUrl.pathname)) {
+    if (req.method === "HEAD") sendHeadRedirect(res, canonicalHome);
+    else sendRedirect(res, canonicalHome);
+    return true;
+  }
+  if (reqUrl.pathname === "/admin") {
+    if (role !== USER_ROLES.admin) sendForbidden(req, res, "관리자 권한이 필요합니다.");
+    else if (req.method === "HEAD") sendHeadRedirect(res, "/admin/overview");
+    else sendRedirect(res, "/admin/overview");
+    return true;
+  }
+  if (reqUrl.pathname === "/b2b") {
+    const target = role === USER_ROLES.b2b ? "/app/onboarding" : "/admin/overview";
+    if (req.method === "HEAD") sendHeadRedirect(res, target);
+    else sendRedirect(res, target);
+    return true;
+  }
+  if (reqUrl.pathname.startsWith("/admin/") && role !== USER_ROLES.admin) {
+    sendForbidden(req, res, "관리자 권한이 필요합니다.");
+    return true;
+  }
+  if (reqUrl.pathname.startsWith("/app/") && role !== USER_ROLES.b2b) {
+    if (req.method === "HEAD") sendHeadRedirect(res, "/admin/overview");
+    else sendRedirect(res, "/admin/overview");
+    return true;
+  }
+  await serveUiV3Index(req, res);
+  return true;
+}
+
 async function serveOutput(reqUrl, res) {
   const relative = reqUrl.pathname.replace(/^\/outputs\//, "");
   const filePath = safeJoin(OUTPUTS_DIR, relative);
@@ -13099,9 +13407,53 @@ async function serveOutput(reqUrl, res) {
 }
 
 async function route(req, res) {
+  if (INTEGRATION_FEATURE_FLAGS.auth) {
+    try {
+      integrationAuthRuntime.http.assertHost(req);
+    } catch (error) {
+      return send(res, error.statusCode || 403, { error: error.message || String(error) });
+    }
+  }
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    if (INTEGRATION_FEATURE_FLAGS.auth && await integrationAuthRuntime.http.handle(req, res, reqUrl)) return;
+    if (
+      INTEGRATION_FEATURE_FLAGS.freshCompany
+      && integrationFreshRuntime
+      && await integrationFreshRuntime.http.handle(req, res, reqUrl)
+    ) return;
+    if (
+      INTEGRATION_FEATURE_FLAGS.platformCore
+      && integrationCoreRuntime
+      && await integrationCoreRuntime.http.handle(req, res, reqUrl)
+    ) return;
+    if (
+      INTEGRATION_FEATURE_FLAGS.auth
+      && reqUrl.pathname !== "/api/health"
+      && (reqUrl.pathname.startsWith("/api/") || !["GET", "HEAD", "OPTIONS"].includes(req.method))
+    ) {
+      return send(res, 404, {
+        error: "통합 인증 단계에서는 신규 auth store API만 사용할 수 있습니다. 기존 V2 데이터 API는 Stage 227 이후 fresh store 경계에서 연결합니다."
+      });
+    }
+    if (
+      V2_UI_V3_ENABLED
+      && (req.method === "GET" || req.method === "HEAD")
+      && (UI_V3_PUBLIC_ASSETS.has(reqUrl.pathname) || reqUrl.pathname.startsWith("/assets/"))
+    ) {
+      return serveUiV3Asset(req, reqUrl, res);
+    }
+    if (
+      INTEGRATION_FEATURE_FLAGS.freshCompany
+      && INTEGRATION_FEATURE_FLAGS.freshObservation
+      && (req.method === "GET" || req.method === "HEAD")
+      && isLegacyRuntimeFileRequest(reqUrl.pathname)
+    ) {
+      if (req.method === "HEAD") return sendHead(res, 404, "application/json; charset=utf-8");
+      return notFound(res);
+    }
+
     const publicStaticPaths = new Set([
       "/manifest.webmanifest",
       "/sw.js",
@@ -13123,6 +13475,17 @@ async function route(req, res) {
       const session = getSession(req);
       if (req.method === "HEAD") return sendHead(res, 200);
       return send(res, 200, { ok: true, loginRequired: true, ...publicSession(session) });
+    }
+
+    if (V2_UI_V3_ENABLED && (req.method === "GET" || req.method === "HEAD") && UI_V3_AUTH_ROUTES.has(reqUrl.pathname)) {
+      const hadSessionCookie = Boolean(parseCookies(req)[SESSION_COOKIE_NAME]);
+      const session = getSession(req);
+      if (session) {
+        const location = uiV3HomeForRole(session.role);
+        return req.method === "HEAD" ? sendHeadRedirect(res, location) : sendRedirect(res, location);
+      }
+      const headers = hadSessionCookie ? { "Set-Cookie": clearSessionCookie() } : {};
+      return serveUiV3Index(req, res, headers);
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/terms") {
@@ -13271,6 +13634,8 @@ async function route(req, res) {
       if (session) return send(res, 302, "", "text/plain; charset=utf-8", { Location: redirectPathForRole(session.role) });
       return sendLogin(res, 200, hadSessionCookie ? "세션이 만료되었습니다. 다시 로그인하세요." : "", hadSessionCookie ? { "Set-Cookie": clearSessionCookie() } : {});
     }
+
+    if (await routeUiV3Page(req, res, reqUrl)) return;
 
     if (!requireLogin(req, res, reqUrl)) return;
     const session = getSession(req);
@@ -13424,6 +13789,27 @@ async function route(req, res) {
       return send(res, 200, await summarizeCompanyMaster());
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/integration-preview/companies") {
+      if (
+        !INTEGRATION_FEATURE_FLAGS.company
+        || !integrationPreviewFixtureAccessAllowed([COMPANY_MASTER_FILE], ["v2_company_master"])
+      ) return notFound(res);
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, await integrationCompanyPreview(reqUrl));
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/integration-preview/observations") {
+      if (
+        !INTEGRATION_FEATURE_FLAGS.observation
+        || !integrationPreviewFixtureAccessAllowed(
+          [COMPANY_MASTER_FILE, HISTORY_OBSERVATIONS_FILE, OUTPUTS_DIR],
+          ["v2_company_master", "v2_history", "v2_run_output"]
+        )
+      ) return notFound(res);
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, await integrationObservationPreview(reqUrl));
+    }
+
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, publicLocationCardRequests(await readLocationCardRequests()));
@@ -13552,6 +13938,7 @@ async function route(req, res) {
     }
 
     if (req.method === "GET") {
+      if (V2_UI_V3_ENABLED) return serveUiV3Asset(req, reqUrl, res);
       return serveStatic(reqUrl, res);
     }
 
@@ -13579,16 +13966,87 @@ function localNetworkUrls() {
     .map((item) => `http://${item.address}:${PORT}`);
 }
 
-seedOutputsFromRepo()
-  .catch((error) => {
-    console.warn(`Could not seed outputs from repo: ${error.message || error}`);
-  })
-  .finally(() => {
-    server.listen(PORT, HOST, () => {
-      const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
-      console.log(`Lodging datalab beta app running at ${primaryUrl}`);
-      if (HOST === "0.0.0.0") {
-        for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
-      }
+async function startServer() {
+  const stage228LegacyPaths = [
+    DATA_DIR,
+    OUTPUTS_DIR,
+    CONFIG_DIR,
+    CUSTOMER_DB_DIR,
+    HISTORY_DIR,
+    COMPANY_MASTER_DIR,
+    TOURISM_DATA_DIR
+  ];
+  if (V2_INTEGRATION_PLATFORM_CORE_REQUESTED && !INTEGRATION_FEATURE_FLAGS.auth) {
+    throw new Error("V2_INTEGRATION_PLATFORM_CORE_ENABLED requires V2_INTEGRATION_AUTH_ENABLED");
+  }
+  if (V2_INTEGRATION_FRESH_OBSERVATION_REQUESTED && !V2_INTEGRATION_FRESH_COMPANY_REQUESTED) {
+    throw new Error("V2_INTEGRATION_FRESH_OBSERVATION_ENABLED requires V2_INTEGRATION_FRESH_COMPANY_ENABLED");
+  }
+  if (V2_INTEGRATION_FRESH_COMPANY_REQUESTED !== V2_INTEGRATION_FRESH_OBSERVATION_REQUESTED) {
+    throw new Error("Stage 228 runtime requires both fresh company and fresh observation flags");
+  }
+  if (V2_INTEGRATION_FRESH_COMPANY_REQUESTED && (
+    !INTEGRATION_FEATURE_FLAGS.auth || !INTEGRATION_FEATURE_FLAGS.platformCore
+  )) {
+    throw new Error("Stage 228 fresh data requires integration auth and platform core");
+  }
+  if (V2_INTEGRATION_FRESH_COMPANY_REQUESTED) {
+    assertFreshAuthStoreBoundary({
+      authStorePath: process.env.V2_INTEGRATION_AUTH_STORE_PATH,
+      env: process.env,
+      projectRoot: ROOT,
+      legacyDataDir: DATA_DIR,
+      legacyPaths: stage228LegacyPaths
     });
+  }
+  if (INTEGRATION_FEATURE_FLAGS.auth) {
+    integrationAuthRuntime = createIntegrationAuthRuntime({
+      env: process.env,
+      send,
+      parseBody: parseLoginBody,
+      redirectPathForRole,
+      isProduction: IS_PRODUCTION_RUNTIME
+    });
+    await integrationAuthRuntime.initialize();
+  }
+  if (INTEGRATION_FEATURE_FLAGS.freshCompany && INTEGRATION_FEATURE_FLAGS.freshObservation) {
+    integrationFreshRuntime = createFreshPlatformRuntime({
+      env: process.env,
+      projectRoot: ROOT,
+      authRuntime: integrationAuthRuntime,
+      send,
+      parseBody: parseLoginBody,
+      pumpStageBudget: Number(process.env.V2_INTEGRATION_FRESH_PUMP_STAGE_BUDGET || 1),
+      pumpYieldMs: Number(process.env.V2_INTEGRATION_FRESH_PUMP_YIELD_MS || 25),
+      legacyPaths: stage228LegacyPaths
+    });
+    await integrationFreshRuntime.initialize();
+  }
+  if (INTEGRATION_FEATURE_FLAGS.platformCore) {
+    integrationCoreRuntime = createIntegrationCoreRuntime({
+      env: process.env,
+      projectRoot: ROOT,
+      authRuntime: integrationAuthRuntime,
+      freshRuntime: integrationFreshRuntime,
+      send,
+      parseBody: parseLoginBody
+    });
+    await integrationCoreRuntime.initialize();
+  } else {
+    await seedOutputsFromRepo().catch((error) => {
+      console.warn(`Could not seed outputs from repo: ${error.message || error}`);
+    });
+  }
+  server.listen(PORT, HOST, () => {
+    const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
+    console.log(`Lodging datalab beta app running at ${primaryUrl}`);
+    if (HOST === "0.0.0.0") {
+      for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
+    }
   });
+}
+
+startServer().catch((error) => {
+  console.error(`Server startup failed: ${error.message || error}`);
+  process.exitCode = 1;
+});

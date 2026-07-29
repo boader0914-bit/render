@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="숙박업 데이터랩 V2">
+  <rect width="512" height="512" rx="112" fill="#05604f"/>
+  <path d="M128 356V196l128-76 128 76v160h-64V232l-64-38-64 38v124h-64Z" fill="#fff"/>
+  <path d="M224 284h64v72h-64z" fill="#51d0ae"/>
+</svg>

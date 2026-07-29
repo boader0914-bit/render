@@ -1,0 +1,317 @@
+{
+  "stage": 228,
+  "generatedAt": "2026-07-29T09:20:20.961Z",
+  "browser": "chrome.exe",
+  "surfaces": 2,
+  "fourConditionCombinationsPerSurface": 4,
+  "screenshotCount": 8,
+  "minimumWidth": 320,
+  "zoomPercent": 200,
+  "externalProviderCalls": 0,
+  "rawPathVisible": false,
+  "results": [
+    {
+      "surface": "admin-company-detail",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "admin-company-detail-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "navCount": 13,
+        "h1Count": 1,
+        "role": "admin",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 20,
+        "expected": {
+          "theme": "light",
+          "nav": 13,
+          "role": "admin"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin-company-detail",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "admin-company-detail-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "navCount": 13,
+        "h1Count": 1,
+        "role": "admin",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 20,
+        "expected": {
+          "theme": "dark",
+          "nav": 13,
+          "role": "admin"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin-company-detail",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "admin-company-detail-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "navCount": 13,
+        "h1Count": 1,
+        "role": "admin",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 20,
+        "expected": {
+          "theme": "light",
+          "nav": 13,
+          "role": "admin"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "admin-company-detail",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "admin-company-detail-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "navCount": 13,
+        "h1Count": 1,
+        "role": "admin",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 20,
+        "expected": {
+          "theme": "dark",
+          "nav": 13,
+          "role": "admin"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business-company-detail",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "business-company-detail-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "navCount": 9,
+        "h1Count": 1,
+        "role": "business",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 21,
+        "expected": {
+          "theme": "light",
+          "nav": 9,
+          "role": "business"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business-company-detail",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "business-company-detail-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "navCount": 9,
+        "h1Count": 1,
+        "role": "business",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 21,
+        "expected": {
+          "theme": "dark",
+          "nav": 9,
+          "role": "business"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business-company-detail",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "business-company-detail-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "navCount": 9,
+        "h1Count": 1,
+        "role": "business",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 21,
+        "expected": {
+          "theme": "light",
+          "nav": 9,
+          "role": "business"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "surface": "business-company-detail",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "business-company-detail-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "navCount": 9,
+        "h1Count": 1,
+        "role": "business",
+        "state": "ready",
+        "metricCount": 3,
+        "provenance": true,
+        "observations": true,
+        "changes": true,
+        "enrichment": true,
+        "overflowX": 0,
+        "forbidden": [],
+        "focusableCount": 21,
+        "expected": {
+          "theme": "dark",
+          "nav": 9,
+          "role": "business"
+        }
+      },
+      "keyboard": {
+        "distinct": 15,
+        "maxOutline": 3
+      },
+      "passed": true
+    }
+  ],
+  "special": [
+    {
+      "id": "minimum-320",
+      "surface": "admin-company-detail",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "scale": 1,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "admin-company-detail",
+      "viewport": {
+        "width": 720,
+        "height": 450
+      },
+      "scale": 2,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "business-company-detail",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "scale": 1,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "business-company-detail",
+      "viewport": {
+        "width": 720,
+        "height": 450
+      },
+      "scale": 2,
+      "overflowX": 0,
+      "passed": true
+    }
+  ],
+  "passed": true
+}

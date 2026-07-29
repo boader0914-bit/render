@@ -1,0 +1,146 @@
+{
+  "fixtureVersion": "stage227-synthetic-v1",
+  "synthetic": true,
+  "source": "synthetic-fresh-collection",
+  "generatedAt": "2026-07-29T00:00:00.000Z",
+  "notice": "Stage 227 provisional UI acceptance only; no provider or legacy runtime data",
+  "companies": [
+    {
+      "companyId": "syn_riverside_001",
+      "companyName": "리버사이드 글램핑 (합성)",
+      "regionLabel": "강원특별자치도 평창군",
+      "category": "글램핑",
+      "status": "fresh",
+      "freshAt": "2026-07-29T00:00:00.000Z",
+      "dataQuality": "complete",
+      "missingFields": [],
+      "synthetic": true,
+      "referenceUrl": "https://lodging.example.invalid/syn_riverside_001",
+      "businessValues": {
+        "naverRank": 3,
+        "averagePrice": 178000,
+        "weeklyRevenue": 2450000,
+        "soldOutRate": 0.625,
+        "reviewCount": 184
+      }
+    },
+    {
+      "companyId": "syn_forest_002",
+      "companyName": "포레스트 캐빈 (합성)",
+      "regionLabel": "경기도 포천시",
+      "category": "카라반",
+      "status": "fresh",
+      "freshAt": "2026-07-29T00:00:00.000Z",
+      "dataQuality": "complete",
+      "missingFields": [],
+      "synthetic": true,
+      "referenceUrl": "https://lodging.example.invalid/syn_forest_002",
+      "businessValues": {
+        "naverRank": 6,
+        "averagePrice": 159000,
+        "weeklyRevenue": 1930000,
+        "soldOutRate": 0.5,
+        "reviewCount": 92
+      }
+    },
+    {
+      "companyId": "syn_lake_003",
+      "companyName": "레이크사이드 스테이 (합성)",
+      "regionLabel": "충청북도 제천시",
+      "category": "펜션",
+      "status": "fresh",
+      "freshAt": "2026-07-29T00:00:00.000Z",
+      "dataQuality": "partial",
+      "missingFields": ["weeklyRevenue"],
+      "synthetic": true,
+      "referenceUrl": "https://lodging.example.invalid/syn_lake_003",
+      "businessValues": {
+        "naverRank": 9,
+        "averagePrice": 142000,
+        "weeklyRevenue": null,
+        "soldOutRate": 0.375,
+        "reviewCount": 61
+      }
+    }
+  ],
+  "history": [
+    {
+      "id": "syn_history_001",
+      "runId": "syn_run_001",
+      "keyword": "평창 글램핑",
+      "clientRequestId": "syn_fixture_request_001",
+      "runLabel": "평창 글램핑 신규 수집 (합성)",
+      "regionLabel": "강원특별자치도 평창군",
+      "checkIn": "2026-08-01",
+      "checkOut": "2026-08-07",
+      "detailRankRanges": "1-10",
+      "collectionMode": "precision",
+      "collectionModeLabel": "정밀 분석",
+      "bookingRangeDays": 7,
+      "status": "completed",
+      "createdAt": "2026-07-29T00:00:00.000Z",
+      "completedAt": "2026-07-29T00:03:00.000Z",
+      "quotaCounted": true,
+      "reuseMode": "",
+      "reusedFromRunId": "",
+      "resultSummary": {
+        "exposureSampleCount": 4,
+        "companyCount": 3,
+        "revenueSampleCount": 2,
+        "averageRevenue": 345000,
+        "soldOutRate": 0.625
+      }
+    }
+  ],
+  "connectors": {
+    "traffic": {
+      "state": "not-configured",
+      "configured": false,
+      "verified": false,
+      "lastCheckedAt": ""
+    },
+    "tourism": {
+      "state": "fixture-ready",
+      "configured": false,
+      "verified": false,
+      "lastCheckedAt": "2026-07-29T00:00:00.000Z"
+    },
+    "ota": {
+      "state": "not-configured",
+      "configured": false,
+      "verified": false,
+      "lastCheckedAt": ""
+    }
+  },
+  "parity": {
+    "input": {
+      "availability": {
+        "items": [
+          { "companyId": "syn_riverside_001" },
+          { "companyId": "syn_forest_002" },
+          { "companyId": "syn_lake_003" }
+        ],
+        "stats": {
+          "revenueSampleCount": 2,
+          "averageAdjustedEstimatedRevenue": 345000,
+          "weightedSoldOutRate": 0.625
+        }
+      },
+      "ranking": {
+        "items": [
+          { "rank": 1 },
+          { "rank": 2 },
+          { "rank": 3 },
+          { "rank": 4 }
+        ]
+      }
+    },
+    "expectedV2ResultSummary": {
+      "exposureSampleCount": 4,
+      "companyCount": 3,
+      "revenueSampleCount": 2,
+      "averageRevenue": 345000,
+      "soldOutRate": 0.625
+    }
+  }
+}

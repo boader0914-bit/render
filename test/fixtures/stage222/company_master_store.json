@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 2,
+  "updatedAt": "2026-07-19T00:00:00.000Z",
+  "companies": {
+    "cmp_fixture_001": {
+      "companyId": "cmp_fixture_001",
+      "primaryName": "Fixture Stay",
+      "nameKey": "fixturestay",
+      "looseNameKey": "fixturestay",
+      "aliases": [
+        "Fixture Glamping"
+      ],
+      "addresses": [
+        "Fixture Province Fixture City"
+      ],
+      "regions": [
+        "Fixture City"
+      ],
+      "keywords": [
+        "Fixture Region Glamping"
+      ],
+      "placeIds": [
+        "fixture-place-001"
+      ],
+      "bookingBusinessIds": [
+        "fixture-booking-001"
+      ],
+      "urls": [
+        "https://example.invalid/stay/fixture-001"
+      ],
+      "sourceRoles": [
+        "admin"
+      ],
+      "collectionSources": [
+        "admin_search"
+      ],
+      "sourceStats": {},
+      "collectionRouteStats": {},
+      "collectionRouteHistory": [],
+      "inventory": {},
+      "manualCorrection": {},
+      "manualCorrectionHistory": [],
+      "duplicateNotes": [],
+      "runIds": [
+        "fixture_glamping_20260719_000000"
+      ],
+      "firstRunId": "fixture_glamping_20260719_000000",
+      "lastRunId": "fixture_glamping_20260719_000000",
+      "firstSeenAt": "2026-07-19T00:00:00.000Z",
+      "lastSeenAt": "2026-07-19T00:00:00.000Z",
+      "latestCollection": {
+        "routeKey": "basic_db",
+        "collectedAt": "2026-07-19T00:00:00.000Z"
+      }
+    }
+  },
+  "sourceIndex": {
+    "place:fixture-place-001": "cmp_fixture_001"
+  },
+  "duplicateResolutions": {},
+  "regionReviews": {},
+  "regionReviewHistory": []
+}

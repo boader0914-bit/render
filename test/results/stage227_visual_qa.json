@@ -1,0 +1,1724 @@
+{
+  "stage": 227,
+  "generatedAt": "2026-07-29T09:18:54.773Z",
+  "durationMs": 38151,
+  "browser": "chrome.exe",
+  "buildAsserted": true,
+  "actualEmptyStoreVerified": true,
+  "sessionPreservedAcrossFixtureRestart": true,
+  "syntheticFixtureProvenanceVerified": true,
+  "targetSurfaceCount": 7,
+  "targetMatrixScreenshotCount": 28,
+  "stateMatrixScreenshotCount": 20,
+  "expectedScreenshotCount": 48,
+  "screenshotCount": 48,
+  "stateScreenshotCounts": {
+    "empty": 4,
+    "loading": 4,
+    "error": 4,
+    "permission": 4,
+    "partial-data": 4
+  },
+  "minimumWidth": {
+    "cssPixels": 320,
+    "surfaceCount": 7,
+    "passed": true
+  },
+  "zoom": {
+    "percent": 200,
+    "surfaceCount": 7,
+    "passed": true
+  },
+  "browserErrorCount": 0,
+  "secretMaterialRecorded": false,
+  "rawFilesystemPathRecorded": false,
+  "results": [
+    {
+      "matrix": "state-empty",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "empty",
+      "screenshot": "state-empty-business-onboarding-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "empty"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-empty",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "empty",
+      "screenshot": "state-empty-business-onboarding-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "empty"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-empty",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "empty",
+      "screenshot": "state-empty-business-onboarding-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "empty"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-empty",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "empty",
+      "screenshot": "state-empty-business-onboarding-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "empty"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-business-onboarding-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-business-onboarding-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-business-onboarding-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-business-onboarding-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-activity",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-business-activity-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-activity",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-business-activity-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-activity",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-business-activity-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-activity",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-business-activity-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-location",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-business-location-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-location",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-business-location-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-location",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-business-location-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "business-location",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-business-location-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 1,
+        "labeledFormControls": 1,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-overview",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-overview-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-overview",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-overview-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-overview",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-overview-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-overview",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-overview-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-companies",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-companies-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-companies",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-companies-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-companies",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-companies-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-companies",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-companies-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-collection",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-collection-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 2,
+        "labeledFormControls": 2,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-collection",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-collection-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 2,
+        "labeledFormControls": 2,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-collection",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-collection-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 2,
+        "labeledFormControls": 2,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-collection",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-collection-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 2,
+        "labeledFormControls": 2,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-settings",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-settings-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-settings",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-settings-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-settings",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "target-admin-settings-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "target",
+      "surface": "admin-settings",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "target-admin-settings-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-loading",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "loading",
+      "screenshot": "state-loading-business-onboarding-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "loading"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-loading",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "loading",
+      "screenshot": "state-loading-business-onboarding-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "loading"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-loading",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "loading",
+      "screenshot": "state-loading-business-onboarding-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "loading"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-loading",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "loading",
+      "screenshot": "state-loading-business-onboarding-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "loading"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-error",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "error",
+      "screenshot": "state-error-business-onboarding-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "error"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-error",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "error",
+      "screenshot": "state-error-business-onboarding-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "error"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-error",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "error",
+      "screenshot": "state-error-business-onboarding-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "error"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-error",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "error",
+      "screenshot": "state-error-business-onboarding-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "error"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-permission",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "permission",
+      "screenshot": "state-permission-business-onboarding-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "permission"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-permission",
+      "surface": "business-onboarding",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "permission",
+      "screenshot": "state-permission-business-onboarding-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "permission"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-permission",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "permission",
+      "screenshot": "state-permission-business-onboarding-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "permission"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-permission",
+      "surface": "business-onboarding",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "permission",
+      "screenshot": "state-permission-business-onboarding-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 9,
+        "activeNavCount": 1,
+        "expectedNav": 9,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "permission"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-partial-data",
+      "surface": "admin-companies",
+      "viewport": "desktop",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "state-partial-data-admin-companies-desktop-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-partial-data",
+      "surface": "admin-companies",
+      "viewport": "desktop",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "state-partial-data-admin-companies-desktop-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-partial-data",
+      "surface": "admin-companies",
+      "viewport": "mobile",
+      "theme": "light",
+      "state": "partial",
+      "screenshot": "state-partial-data-admin-companies-mobile-light.png",
+      "inspection": {
+        "theme": "light",
+        "savedTheme": "light",
+        "expectedTheme": "light",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    },
+    {
+      "matrix": "state-partial-data",
+      "surface": "admin-companies",
+      "viewport": "mobile",
+      "theme": "dark",
+      "state": "partial",
+      "screenshot": "state-partial-data-admin-companies-mobile-dark.png",
+      "inspection": {
+        "theme": "dark",
+        "savedTheme": "dark",
+        "expectedTheme": "dark",
+        "h1Count": 1,
+        "navCount": 13,
+        "activeNavCount": 1,
+        "expectedNav": 13,
+        "overflowX": 0,
+        "orderValid": true,
+        "verticalOrderValid": true,
+        "formControls": 0,
+        "labeledFormControls": 0,
+        "contrastFailures": [],
+        "forbiddenVisible": [],
+        "workspaceState": "partial"
+      },
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "browserErrorCount": 0,
+      "passed": true
+    }
+  ],
+  "specialResults": [
+    {
+      "check": "minimum-320",
+      "surface": "business-onboarding",
+      "width": 320,
+      "effectiveScale": 1,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "zoom-200",
+      "surface": "business-onboarding",
+      "width": 720,
+      "effectiveScale": 2,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "minimum-320",
+      "surface": "business-activity",
+      "width": 320,
+      "effectiveScale": 1,
+      "overflowX": 0,
+      "formControls": 1,
+      "labeledFormControls": 1,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "zoom-200",
+      "surface": "business-activity",
+      "width": 720,
+      "effectiveScale": 2,
+      "overflowX": 0,
+      "formControls": 1,
+      "labeledFormControls": 1,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "minimum-320",
+      "surface": "business-location",
+      "width": 320,
+      "effectiveScale": 1,
+      "overflowX": 0,
+      "formControls": 1,
+      "labeledFormControls": 1,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "zoom-200",
+      "surface": "business-location",
+      "width": 720,
+      "effectiveScale": 2,
+      "overflowX": 0,
+      "formControls": 1,
+      "labeledFormControls": 1,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "minimum-320",
+      "surface": "admin-overview",
+      "width": 320,
+      "effectiveScale": 1,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "zoom-200",
+      "surface": "admin-overview",
+      "width": 720,
+      "effectiveScale": 2,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "minimum-320",
+      "surface": "admin-companies",
+      "width": 320,
+      "effectiveScale": 1,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "zoom-200",
+      "surface": "admin-companies",
+      "width": 720,
+      "effectiveScale": 2,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "minimum-320",
+      "surface": "admin-collection",
+      "width": 320,
+      "effectiveScale": 1,
+      "overflowX": 0,
+      "formControls": 2,
+      "labeledFormControls": 2,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "zoom-200",
+      "surface": "admin-collection",
+      "width": 720,
+      "effectiveScale": 2,
+      "overflowX": 0,
+      "formControls": 2,
+      "labeledFormControls": 2,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "minimum-320",
+      "surface": "admin-settings",
+      "width": 320,
+      "effectiveScale": 1,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    },
+    {
+      "check": "zoom-200",
+      "surface": "admin-settings",
+      "width": 720,
+      "effectiveScale": 2,
+      "overflowX": 0,
+      "formControls": 0,
+      "labeledFormControls": 0,
+      "keyboard": {
+        "distinctFocusable": 13,
+        "maxOutline": 3
+      },
+      "passed": true
+    }
+  ],
+  "passed": true
+}

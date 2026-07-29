@@ -1,0 +1,175 @@
+{
+  "stage": 228,
+  "status": "complete",
+  "generatedAt": "2026-07-29T17:08:11.7450403+09:00",
+  "sourceCommit": "4e4e1906e2967fe58df66f8ad67f832043d2763b",
+  "branch": "integration/glamping-datalab-v2-stage221",
+  "precondition": {
+    "stage227Evidence": "docs/stage227_completion_evidence.json",
+    "stage227Status": "complete",
+    "uiParity": "pass",
+    "legacyRollback": "pass",
+    "stage227VisualScreenshots": 48,
+    "blockers": 0
+  },
+  "implementation": {
+    "featureFlags": {
+      "V2_INTEGRATION_FRESH_COMPANY_ENABLED": false,
+      "V2_INTEGRATION_FRESH_OBSERVATION_ENABLED": false,
+      "requires": [
+        "V2_INTEGRATION_AUTH_ENABLED",
+        "V2_INTEGRATION_PLATFORM_CORE_ENABLED"
+      ]
+    },
+    "dataDirectory": {
+      "environmentKey": "V2_INTEGRATION_DATA_DIR",
+      "absolutePathRequired": true,
+      "legacyOverlapFailsClosed": true,
+      "realpathAndNestedSymlinkGuard": true
+    },
+    "store": {
+      "kind": "glamping-datalab-v2-fresh-integration-store",
+      "schemaVersion": 1,
+      "layers": [
+        "raw",
+        "observation",
+        "verified",
+        "derived",
+        "business-safe"
+      ],
+      "atomicTempFsyncRename": true,
+      "fileLock": true,
+      "appendOnlyJsonlChunks": true,
+      "appendOnlyAudit": true,
+      "checksumSnapshotRollback": true,
+      "sourceStoreHashStored": false
+    },
+    "identity": {
+      "rule": "v2-company-identity-v1",
+      "externalSourceIdentity": true,
+      "duplicateCandidates": true,
+      "compatibleIdStoresIdentityLinkOnly": true
+    },
+    "collection": {
+      "provider": "synthetic-stage228",
+      "allowedEndpointNamespace": "https://*.example.invalid",
+      "stages": [
+        "discovery",
+        "quick",
+        "detail",
+        "ota",
+        "finalize"
+      ],
+      "httpSubmit": "durable non-terminal 202",
+      "backgroundPumpStageBudget": 1,
+      "backgroundPumpYieldMs": 25,
+      "durableLease": true,
+      "idempotentClientRequestId": true,
+      "retryCancelResume": true,
+      "processRestartRecovery": true
+    },
+    "apiPrefix": "/api/integration/fresh",
+    "v3CompanyDetail": {
+      "roles": [
+        "admin",
+        "business"
+      ],
+      "sections": [
+        "completeness",
+        "freshness",
+        "confidence",
+        "verified-values",
+        "provenance-summary",
+        "change-history",
+        "repeat-observations",
+        "enrichment-cta"
+      ]
+    }
+  },
+  "dataBoundary": {
+    "legacyV2RuntimeReads": 0,
+    "clusterRuntimeReads": 0,
+    "legacyOrClusterCopies": 0,
+    "migrationItems": 0,
+    "backfillItems": 0,
+    "dualWriteItems": 0,
+    "externalProviderCalls": 0,
+    "rawPathsExposed": 0,
+    "nestedJunctionEscapeWrites": 0,
+    "legacyFileRoutesBlockedWhenFresh": true,
+    "freshFlagOffRestoresLegacyRoute": true,
+    "freshStoreUnchangedAcrossFlagOffRollback": true,
+    "authStoreLegacyAliasBlockedBeforeRead": true,
+    "sourceStoreSnapshotCreated": false,
+    "freshStoreSnapshotCreated": true
+  },
+  "acceptance": {
+    "companyId": "cmp_place_syn2280001",
+    "companyIdCollisions": 0,
+    "rawEvidenceRows": 3,
+    "observationRows": 10004,
+    "provenanceCoverage": 1,
+    "bulkAppendRows": 10000,
+    "bulkAppendMs": 693.65,
+    "bulkIdempotentReplayMs": 358.01,
+    "bulkPerformanceCeilingMs": 10000,
+    "verticalSliceObservationRows": 14,
+    "repeatedVerticalSliceObservationRows": 28,
+    "repeatedObservationRowsPreserved": 14,
+    "snapshotCount": 1,
+    "manualReviewApproveRejectAudit": "pass",
+    "snapshotRollback": "pass",
+    "serverTenantEscape": "403 pass",
+    "serverCsrf": "pass",
+    "serverCancelResume": "pass",
+    "serverProcessRestartRecovery": "pass",
+    "serverFlagOffRollback": "pass"
+  },
+  "validation": {
+    "npmRunTestContracts": "pass",
+    "npmRunTestIntegrationPreview": "pass",
+    "npmRunTestStage228": "pass",
+    "npmTest": "pass",
+    "typecheckUi": "pass",
+    "productionBuild": "pass",
+    "uiTestFiles": 8,
+    "uiTests": 23,
+    "freshStore": "pass",
+    "freshWorker": "pass",
+    "freshServer": "pass",
+    "gitDiffCheck": "pass"
+  },
+  "visualQa": {
+    "report": "test/results/stage228_visual_qa.json",
+    "generatedAt": "2026-07-29T08:08:07.443Z",
+    "passed": true,
+    "surfaces": 2,
+    "screenshots": 8,
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "minimumWidth": "320px pass",
+    "zoom": "200% pass",
+    "horizontalOverflow": 0,
+    "rawPathVisible": false,
+    "manualBrowserQa": "pass; verification status and enrichment CTA wording corrected"
+  },
+  "governance": {
+    "blockers": 0,
+    "realProviderApprovalGranted": false,
+    "realProviderCallAttempted": false
+  },
+  "prohibitedActions": {
+    "existingUncommittedChangesAutoCommitted": false,
+    "branchSwitched": false,
+    "resetPerformed": false,
+    "stagingOrProductionDeployed": false,
+    "actualProviderCollectionPerformed": false,
+    "stage229Implemented": false
+  }
+}

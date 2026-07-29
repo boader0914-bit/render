@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: starter
     region: singapore
-    buildCommand: npm install
+    buildCommand: npm ci && npm run build:ui
     startCommand: npm start
     healthCheckPath: /api/health
     disk:
@@ -22,6 +22,16 @@ services:
         value: /var/data/outputs
       - key: CONFIG_DIR
         value: /var/data/config
+      - key: V2_UI_V3_ENABLED
+        value: "false"
+      - key: V2_INTEGRATION_AUTH_ENABLED
+        value: "false"
+      - key: V2_INTEGRATION_PLATFORM_CORE_ENABLED
+        value: "false"
+      - key: V2_INTEGRATION_FRESH_COMPANY_ENABLED
+        value: "false"
+      - key: V2_INTEGRATION_FRESH_OBSERVATION_ENABLED
+        value: "false"
       - key: NAVER_CLIENT_ID
         sync: false
       - key: NAVER_CLIENT_SECRET

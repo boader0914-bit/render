@@ -1,0 +1,803 @@
+{
+  "access": {
+    "b2bCompanyMasterStatus": 403,
+    "b2bRunCount": 0,
+    "disabledCompanyPreviewStatus": 404,
+    "disabledObservationPreviewStatus": 404
+  },
+  "apiShapes": {
+    "adminSession": {
+      "accountType": "string",
+      "authenticated": "boolean",
+      "consents": "null",
+      "expiresAt": "string",
+      "lastLoginAt": "string",
+      "memberCreatedAt": "string",
+      "memberId": "string",
+      "profile": "null",
+      "role": "string",
+      "roleLabel": "string",
+      "sessionCreatedAt": "string",
+      "username": "string"
+    },
+    "b2bSession": {
+      "accountType": "string",
+      "authenticated": "boolean",
+      "consents": "null",
+      "expiresAt": "string",
+      "lastLoginAt": "string",
+      "memberCreatedAt": "string",
+      "memberId": "string",
+      "profile": "null",
+      "role": "string",
+      "roleLabel": "string",
+      "sessionCreatedAt": "string",
+      "username": "string"
+    },
+    "companyMaster": {
+      "adminRegionalOperations": {
+        "basis": "string",
+        "generatedAt": "string",
+        "outsideExposureItems": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "regions": {
+          "item": {
+            "adminReviewCount": "number",
+            "averageReservationRate": "null",
+            "averageRevenue": "number",
+            "bestRank": "null",
+            "companyCount": "number",
+            "couponVisibleCount": "number",
+            "exposureCount": "number",
+            "inRegionExposureCount": "number",
+            "level": "string",
+            "localityKey": "string",
+            "localityLabel": "string",
+            "lowConfidenceCount": "number",
+            "maintenance": {
+              "actions": {
+                "item": {
+                  "detail": "string",
+                  "key": "string",
+                  "label": "string",
+                  "priority": "number",
+                  "tone": "string"
+                },
+                "type": "array"
+              },
+              "coverage": {
+                "adminReviewGap": "number",
+                "adminReviewGoal": "number",
+                "publicStatus": "string",
+                "reservationSampleGap": "number",
+                "reservationSampleGoal": "number",
+                "revenueSampleGap": "number",
+                "revenueSampleGoal": "number",
+                "riskCount": "number"
+              },
+              "maintenancePriority": "number",
+              "nextCycle": "string",
+              "preflightStatus": {
+                "key": "string",
+                "label": "string",
+                "tone": "string"
+              },
+              "primaryAction": {
+                "detail": "string",
+                "key": "string",
+                "label": "string",
+                "priority": "number",
+                "tone": "string"
+              },
+              "readinessScore": "number"
+            },
+            "manualCorrectionCount": "number",
+            "offlineReservationCount": "number",
+            "outsideExposureCount": "number",
+            "preflight": {
+              "coverage": {
+                "adminReviewGap": "number",
+                "adminReviewGoal": "number",
+                "publicStatus": "string",
+                "reservationSampleGap": "number",
+                "reservationSampleGoal": "number",
+                "revenueSampleGap": "number",
+                "revenueSampleGoal": "number",
+                "riskCount": "number"
+              },
+              "readinessScore": "number",
+              "status": {
+                "key": "string",
+                "label": "string",
+                "tone": "string"
+              }
+            },
+            "provinceKey": "string",
+            "provinceLabel": "string",
+            "regionKey": "string",
+            "regionLabel": "string",
+            "reservationSampleCount": "number",
+            "revenueSampleCount": "number",
+            "revenueTotal": "number",
+            "reviewReasons": {
+              "item": "string",
+              "type": "array"
+            },
+            "reviewStatusCounts": {},
+            "sampleCompanies": {
+              "item": {
+                "addressRegion": "string",
+                "boundaryLabel": "string",
+                "boundaryStatus": "string",
+                "companyId": "string",
+                "confidenceGrade": "string",
+                "flags": {
+                  "item": "unknown",
+                  "type": "array"
+                },
+                "name": "string",
+                "rank": "null",
+                "reservationRate": "null",
+                "revenue": "number",
+                "searchRegion": "string"
+              },
+              "type": "array"
+            },
+            "status": {
+              "key": "string",
+              "label": "string",
+              "score": "number"
+            },
+            "stockVarianceCount": "number",
+            "structuralBlockedCount": "number"
+          },
+          "type": "array"
+        },
+        "rules": {
+          "item": "string",
+          "type": "array"
+        },
+        "schemaVersion": "number",
+        "search": {
+          "checkIn": "string",
+          "checkOut": "string",
+          "detailRankRanges": "string",
+          "keyword": "string",
+          "provinceKey": "string",
+          "provinceLabel": "string",
+          "runId": "string"
+        },
+        "summary": {
+          "adminCollectNeededRegionCount": "number",
+          "adminPublicReadyRegionCount": "number",
+          "adminReviewCount": "number",
+          "adminReviewNeededRegionCount": "number",
+          "basis": "string",
+          "collectNeededRegionCount": "number",
+          "companyCount": "number",
+          "exposureCount": "number",
+          "lowConfidenceCount": "number",
+          "maintenanceActionCount": "number",
+          "manualCorrectionCount": "number",
+          "outsideExposureCount": "number",
+          "preflightReadyRegionCount": "number",
+          "preflightReviewRegionCount": "number",
+          "publicReadyRegionCount": "number",
+          "regionCount": "number",
+          "regionReviewCount": "number",
+          "reservationSampleCount": "number",
+          "revenueSampleCount": "number",
+          "reviewNeededRegionCount": "number",
+          "reviewStatusCounts": {},
+          "urgentMaintenanceRegionCount": "number",
+          "weeklyMaintenanceRegionCount": "number"
+        }
+      },
+      "b2bSearchCompanyCount": "number",
+      "collectionRoutes": {
+        "latestRouteCounts": {
+          "basic_db": "number"
+        },
+        "routeCounts": {},
+        "rows": {
+          "item": {
+            "key": "string",
+            "label": "string",
+            "latestCompanyCount": "number",
+            "runCount": "number"
+          },
+          "type": "array"
+        },
+        "targetCounts": {}
+      },
+      "collectionSourceCounts": {
+        "admin_search": "number"
+      },
+      "companies": {
+        "item": {
+          "activeKeyword": "null",
+          "addresses": {
+            "item": "string",
+            "type": "array"
+          },
+          "adminReview": "null",
+          "adminReviewHistory": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "aliases": {
+            "item": "string",
+            "type": "array"
+          },
+          "bestKeyword": "string",
+          "bestRank": "null",
+          "bookingBusinessIds": {
+            "item": "string",
+            "type": "array"
+          },
+          "channelExposures": {},
+          "collectionRouteHistory": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "collectionRouteStats": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "collectionSources": {
+            "item": "string",
+            "type": "array"
+          },
+          "companyId": "string",
+          "correctionStatus": {
+            "detail": "string",
+            "key": "string",
+            "label": "string",
+            "note": "string",
+            "updatedAt": "string"
+          },
+          "demandSignals": "null",
+          "exposureLayer": {
+            "label": "string",
+            "note": "string",
+            "type": "string"
+          },
+          "firstSeenAt": "string",
+          "identityConfidence": {
+            "label": "string",
+            "level": "string",
+            "reason": "string"
+          },
+          "inventory": {},
+          "keywordCount": "number",
+          "keywords": {
+            "item": {
+              "layer": {
+                "label": "string",
+                "note": "string",
+                "type": "string"
+              },
+              "runCount": "number"
+            },
+            "type": "array"
+          },
+          "lastSeenAt": "string",
+          "latestCollection": {
+            "collectedAt": "string",
+            "routeKey": "string"
+          },
+          "latestKeyword": "string",
+          "manualCorrection": "null",
+          "manualCorrectionHistory": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "placeIds": {
+            "item": "string",
+            "type": "array"
+          },
+          "primaryName": "string",
+          "regions": {
+            "item": "string",
+            "type": "array"
+          },
+          "runCount": "number",
+          "salesContact": "null",
+          "salesContactHistory": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "salesTarget": {
+            "category": "string",
+            "categoryLabel": "string",
+            "priorityTags": {
+              "item": "unknown",
+              "type": "array"
+            },
+            "reasons": {
+              "item": "string",
+              "type": "array"
+            },
+            "recommendation": "string",
+            "score": "number",
+            "signals": {
+              "bookingIdReused": "boolean",
+              "couponChannel": "string",
+              "couponDetail": "string",
+              "couponNames": "string",
+              "couponStatus": "string",
+              "couponVisible": "boolean",
+              "dayUseDays": "number",
+              "dayUseMissing": "boolean",
+              "dayUseRate": "null",
+              "fridayRate": "null",
+              "fridayWeak": "boolean",
+              "lodgingDays": "number",
+              "lodgingRate": "null",
+              "otaReviewNeeded": "boolean",
+              "productNamingReview": "boolean",
+              "saturdayRate": "null",
+              "stockVariance": "boolean",
+              "structureWeak": "boolean",
+              "sundayRate": "null",
+              "sundayWeak": "boolean",
+              "weekdayRate": "null",
+              "weekdayWeak": "boolean"
+            }
+          },
+          "sourceRoles": {
+            "item": "string",
+            "type": "array"
+          },
+          "sourceStats": {
+            "item": "unknown",
+            "type": "array"
+          }
+        },
+        "type": "array"
+      },
+      "crossKeyword": {
+        "companyOnlyCompanies": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "companyOnlyCompanyCount": "number",
+        "confidenceCounts": {
+          "확실": "number"
+        },
+        "keywordLinks": "number",
+        "layerCounts": {
+          "unknown": "number"
+        },
+        "localExposureCompanyCount": "number",
+        "localMatchPendingCompanies": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "localMatchPendingCompanyCount": "number",
+        "localOnlyCompanies": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "localOnlyCompanyCount": "number",
+        "regionalExposureCompanyCount": "number",
+        "regionalLocalCompanies": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "regionalLocalCompanyCount": "number",
+        "reviewNeededCompanies": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "totalCompanies": "number"
+      },
+      "duplicateCandidateCount": "number",
+      "duplicateCandidates": {
+        "item": "unknown",
+        "type": "array"
+      },
+      "file": "string",
+      "principle": "string",
+      "salesTargets": {
+        "benchmarkCompanies": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "benchmarkCount": "number",
+        "contactCandidateCount": "number",
+        "observeCandidateCount": "number",
+        "observeCandidates": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "topTargets": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "totalCompanies": "number",
+        "verificationQueue": {
+          "item": "unknown",
+          "type": "array"
+        },
+        "verificationQueueCount": "number"
+      },
+      "sourceKeyCount": "number",
+      "totalCompanies": "number",
+      "updatedAt": "string"
+    },
+    "health": {
+      "accountType": "string",
+      "authenticated": "boolean",
+      "expiresAt": "string",
+      "loginRequired": "boolean",
+      "memberId": "string",
+      "ok": "boolean",
+      "profile": "null",
+      "role": "string",
+      "roleLabel": "string",
+      "username": "string"
+    },
+    "locationRequests": {
+      "items": {
+        "item": {
+          "activeKeyword": "string",
+          "evidence": {
+            "itemCount": "number",
+            "platformGap": "number",
+            "regionCount": "number",
+            "salesSold": "number",
+            "salesSupply": "number",
+            "sampleCompanies": {
+              "item": "string",
+              "type": "array"
+            },
+            "searchVolume": "number",
+            "targetCount": "number"
+          },
+          "firstSeenAt": "string",
+          "history": {
+            "item": {
+              "at": "string",
+              "note": "string",
+              "relatedRegion": "string",
+              "status": "string"
+            },
+            "type": "array"
+          },
+          "key": "string",
+          "keyword": "string",
+          "note": "string",
+          "regionBase": "string",
+          "relatedRegion": "string",
+          "runId": "string",
+          "searchKeyword": "string",
+          "status": "string",
+          "updatedAt": "string"
+        },
+        "type": "array"
+      },
+      "requests": {
+        "fixturecity": {
+          "activeKeyword": "string",
+          "evidence": {
+            "itemCount": "number",
+            "platformGap": "number",
+            "regionCount": "number",
+            "salesSold": "number",
+            "salesSupply": "number",
+            "sampleCompanies": {
+              "item": "string",
+              "type": "array"
+            },
+            "searchVolume": "number",
+            "targetCount": "number"
+          },
+          "firstSeenAt": "string",
+          "history": {
+            "item": {
+              "at": "string",
+              "note": "string",
+              "relatedRegion": "string",
+              "status": "string"
+            },
+            "type": "array"
+          },
+          "key": "string",
+          "keyword": "string",
+          "note": "string",
+          "regionBase": "string",
+          "relatedRegion": "string",
+          "runId": "string",
+          "searchKeyword": "string",
+          "status": "string",
+          "updatedAt": "string"
+        }
+      },
+      "schemaVersion": "number",
+      "updatedAt": "string"
+    },
+    "runs": {
+      "runs": {
+        "item": {
+          "bookingRangeDays": "number",
+          "bookingRangePlaceLimit": "number",
+          "checkIn": "string",
+          "checkOut": "string",
+          "collectionMode": "string",
+          "collectionModeLabel": "string",
+          "collectionPurpose": "string",
+          "collectionPurposeLabel": "string",
+          "collectionSource": "string",
+          "collectionSourceLabel": "string",
+          "counts": {
+            "availability": "number",
+            "ranking": "number"
+          },
+          "detailRankRanges": "string",
+          "files": {
+            "item": "string",
+            "type": "array"
+          },
+          "id": "string",
+          "keyword": "string",
+          "keywordType": "string",
+          "label": "string",
+          "naverKeyword": "string",
+          "province": "string",
+          "provinceLabel": "string",
+          "searchKeyword": "string",
+          "searchMode": "string",
+          "searchModeLabel": "string",
+          "sourceRole": "string",
+          "updatedAt": "string"
+        },
+        "type": "array"
+      }
+    }
+  },
+  "apiStatuses": {
+    "adminSession": 200,
+    "b2bSession": 200,
+    "companyMaster": 200,
+    "health": 200,
+    "locationRequests": 200,
+    "runs": 200,
+    "security": 200
+  },
+  "fixtureDigests": {
+    "apiContracts": "f07e7796331001ab8e6178d8b46a54784d6f8dae6f6bb2e6b354ff9d34ba070c",
+    "b2bSession": "f7bb2d9ca7d2b3520533d8dedafad61fbf39af3d46cc17820b70a2bdb45b1038",
+    "collectionRun": "50df90aa7c8fd7b17d28aa35364e41725cf36f99a60655b2a7a641f450c4b6d5",
+    "companyMaster": "50efec2b2b532c92ae074ccec4369b0bc68698c80831c454361e3c949bb4441c",
+    "locationRequests": "21eb90efaad80c9d74cef8e7e29b10dbc33fdf137bc78621ef952f9a448d8f9b"
+  },
+  "fixtureShapes": {
+    "apiContracts": {
+      "frozenAt": "string",
+      "routes": {
+        "item": {
+          "access": "string",
+          "expectedStatus": "number",
+          "id": "string",
+          "method": "string",
+          "path": "string"
+        },
+        "type": "array"
+      },
+      "version": "number"
+    },
+    "b2bSession": {
+      "accountType": "string",
+      "authenticated": "boolean",
+      "consents": "null",
+      "expiresAt": "string",
+      "lastLoginAt": "string",
+      "memberCreatedAt": "string",
+      "memberId": "string",
+      "profile": {
+        "businessName": "string",
+        "category": "string",
+        "region": "string"
+      },
+      "role": "string",
+      "roleLabel": "string",
+      "sessionCreatedAt": "string",
+      "username": "string"
+    },
+    "collectionRun": {
+      "availability": {
+        "items": {
+          "item": {
+            "availableRooms": "number",
+            "companyId": "string",
+            "inventoryConfidenceGrade": "string",
+            "inventoryConfidenceScore": "number",
+            "name": "string",
+            "platforms": {
+              "item": "string",
+              "type": "array"
+            },
+            "price": "string",
+            "rank": "number",
+            "region": "string",
+            "reservationRate": "number",
+            "soldRooms": "number",
+            "totalRooms": "number",
+            "url": "string"
+          },
+          "type": "array"
+        }
+      },
+      "manifest": {
+        "bookingRangeDays": "number",
+        "bookingRangePlaceLimit": "number",
+        "checkIn": "string",
+        "checkOut": "string",
+        "collectionMode": "string",
+        "collectionPurpose": "string",
+        "collectionSource": "string",
+        "counts": {
+          "availability": "number",
+          "ranking": "number"
+        },
+        "detailRankRanges": "string",
+        "fileRoles": {
+          "platform": "string"
+        },
+        "files": {
+          "item": "string",
+          "type": "array"
+        },
+        "keyword": "string",
+        "keywordType": "string",
+        "naverKeyword": "string",
+        "province": "string",
+        "searchKeyword": "string",
+        "searchMode": "string",
+        "sourceRole": "string"
+      },
+      "runId": "string"
+    },
+    "companyMaster": {
+      "companies": {
+        "cmp_fixture_001": {
+          "addresses": {
+            "item": "string",
+            "type": "array"
+          },
+          "aliases": {
+            "item": "string",
+            "type": "array"
+          },
+          "bookingBusinessIds": {
+            "item": "string",
+            "type": "array"
+          },
+          "collectionRouteHistory": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "collectionRouteStats": {},
+          "collectionSources": {
+            "item": "string",
+            "type": "array"
+          },
+          "companyId": "string",
+          "duplicateNotes": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "firstRunId": "string",
+          "firstSeenAt": "string",
+          "inventory": {},
+          "keywords": {
+            "item": "string",
+            "type": "array"
+          },
+          "lastRunId": "string",
+          "lastSeenAt": "string",
+          "latestCollection": {
+            "collectedAt": "string",
+            "routeKey": "string"
+          },
+          "looseNameKey": "string",
+          "manualCorrection": {},
+          "manualCorrectionHistory": {
+            "item": "unknown",
+            "type": "array"
+          },
+          "nameKey": "string",
+          "placeIds": {
+            "item": "string",
+            "type": "array"
+          },
+          "primaryName": "string",
+          "regions": {
+            "item": "string",
+            "type": "array"
+          },
+          "runIds": {
+            "item": "string",
+            "type": "array"
+          },
+          "sourceRoles": {
+            "item": "string",
+            "type": "array"
+          },
+          "sourceStats": {},
+          "urls": {
+            "item": "string",
+            "type": "array"
+          }
+        }
+      },
+      "duplicateResolutions": {},
+      "regionReviewHistory": {
+        "item": "unknown",
+        "type": "array"
+      },
+      "regionReviews": {},
+      "schemaVersion": "number",
+      "sourceIndex": {
+        "place:fixture-place-001": "string"
+      },
+      "updatedAt": "string"
+    },
+    "locationRequests": {
+      "requests": {
+        "fixturecity": {
+          "activeKeyword": "string",
+          "evidence": {
+            "itemCount": "number",
+            "platformGap": "number",
+            "regionCount": "number",
+            "salesSold": "number",
+            "salesSupply": "number",
+            "sampleCompanies": {
+              "item": "string",
+              "type": "array"
+            },
+            "searchVolume": "number",
+            "targetCount": "number"
+          },
+          "firstSeenAt": "string",
+          "history": {
+            "item": {
+              "at": "string",
+              "note": "string",
+              "relatedRegion": "string",
+              "status": "string"
+            },
+            "type": "array"
+          },
+          "key": "string",
+          "keyword": "string",
+          "note": "string",
+          "regionBase": "string",
+          "relatedRegion": "string",
+          "runId": "string",
+          "searchKeyword": "string",
+          "status": "string",
+          "updatedAt": "string"
+        }
+      },
+      "schemaVersion": "number",
+      "updatedAt": "string"
+    }
+  },
+  "integration": {
+    "enabledCount": 0,
+    "flags": {
+      "auth": false,
+      "businessReport": false,
+      "company": false,
+      "observation": false
+    },
+    "state": "disabled",
+    "version": "stage222"
+  },
+  "version": 1
+}
