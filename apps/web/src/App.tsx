@@ -29,7 +29,9 @@ import { useCoreWorkspace } from "./core/useCoreWorkspace";
 import { purgeV2UiCaches } from "./pwa";
 import { Stage229RoutePage } from "./reporting/Stage229Pages";
 import { isStage229OnlyRoute, isStage229Route } from "./reporting/stage229Client";
-import { businessReportEnabled, locationCardEnabled, platformCoreEnabled } from "./runtimeFlags";
+import { businessReportEnabled, executionEnabled, locationCardEnabled, platformCoreEnabled, retrospectiveEnabled, strategyEnabled } from "./runtimeFlags";
+import { Stage230RoutePage } from "./strategy/Stage230Pages";
+import { adminStage230Route, isStage230Route } from "./strategy/stage230Client";
 import { applyTheme, currentTheme, nextTheme } from "./theme";
 
 const renderLink: LinkRenderer = ({ href, className, children, ariaCurrent, title }) =>
@@ -111,7 +113,13 @@ function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionP
       ? locationInsightsEnabled
       : false;
   const stage229OnlyRoute = insightsEnabled && isStage229OnlyRoute(route.id) ? route.id : null;
-  const targeted = STAGE227_ROUTE_IDS.has(route.id) || (insightsEnabled && isStage229Route(route.id));
+  const stage230Route = isStage230Route(route.id) ? route.id : route.id === "admin-stage-review" ? adminStage230Route(window.location.search) : null;
+  const stage230Enabled = stage230Route?.endsWith("strategy") ? strategyEnabled()
+    : stage230Route?.endsWith("execution") ? executionEnabled()
+      : stage230Route?.endsWith("retrospective") ? retrospectiveEnabled()
+        : false;
+  const stage230Active = stage230Route && stage230Enabled ? stage230Route : null;
+  const targeted = STAGE227_ROUTE_IDS.has(route.id) || (insightsEnabled && isStage229Route(route.id)) || Boolean(stage230Active);
   const coreTargeted = STAGE227_ROUTE_IDS.has(route.id);
   const coreEnabled = platformCoreEnabled();
   const { workspace, loadState, message, reload } = useCoreWorkspace(route.id, coreEnabled && coreTargeted && !roleMismatch);
@@ -140,21 +148,22 @@ function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionP
     accountLabel={session.username}
     onLogout={doLogout}
   >
-    <div data-testid="stage227-page" data-route-id={route.id} data-workspace-state={roleMismatch ? "permission" : stage229OnlyRoute ? "stage229" : !coreEnabled && targeted ? "unavailable" : loadState === "ready" ? (workspace?.state || "empty") : loadState}>
+    <div data-testid="stage227-page" data-route-id={route.id} data-workspace-state={roleMismatch ? "permission" : stage230Active ? "stage230" : stage229OnlyRoute ? "stage229" : !coreEnabled && targeted ? "unavailable" : loadState === "ready" ? (workspace?.state || "empty") : loadState}>
     <PageHeader eyebrow={route.eyebrow} title={route.title} description={route.description} actions={<>
-      <StatusBadge tone={workspace?.source !== "empty" ? "info" : "warning"}>{workspace?.source === "synthetic-fresh-integration" ? "Stage 228 fresh store" : workspace?.source === "synthetic-fresh-collection" ? "합성 신규 수집" : "fresh-only"}</StatusBadge>
+      <StatusBadge tone={stage230Active ? "success" : workspace?.source !== "empty" ? "info" : "warning"}>{stage230Active ? "Stage 230 fresh-only" : workspace?.source === "synthetic-fresh-integration" ? "Stage 228 fresh store" : workspace?.source === "synthetic-fresh-collection" ? "합성 신규 수집" : "fresh-only"}</StatusBadge>
       {coreEnabled && coreTargeted && !roleMismatch ? <button className="v2-button v2-button--secondary" type="button" onClick={() => void reload()} disabled={loadState === "loading"}>새로고침</button> : null}
     </>} />
-    <div className="v2-metric-grid" aria-label="신규 통합 store 지표" data-testid="core-metrics">
+    {!stage230Active ? <div className="v2-metric-grid" aria-label="신규 통합 store 지표" data-testid="core-metrics">
       {metrics.length ? metrics.map((metric) => <MetricCard key={metric.id} label={metric.label} value={metric.value} detail={metric.detail} tone={metric.tone} />) : <>
         <MetricCard label="신규 업체" value="—" detail="server 값 확인 중" />
         <MetricCard label="진행 중 run" value="—" detail="server 값 확인 중" tone="info" />
         <MetricCard label="신규 요청" value="—" detail="server 값 확인 중" tone="success" />
       </>}
-    </div>
+    </div> : null}
     <div className="v2-core-content" data-testid="core-data-section">
       {roleMismatch ? <StateDataSection kind="permission" />
-        : stage229OnlyRoute ? <Stage229RoutePage routeId={stage229OnlyRoute} session={session} enabled />
+        : stage230Active ? <Stage230RoutePage routeId={stage230Active} session={session} enabled />
+          : stage229OnlyRoute ? <Stage229RoutePage routeId={stage229OnlyRoute} session={session} enabled strategyLinkEnabled={strategyEnabled()} />
           : !targeted ? <DeferredPage />
           : !coreEnabled ? <StateDataSection kind="unavailable" />
           : loadState !== "ready" ? <StateDataSection kind={loadState} message={message} />

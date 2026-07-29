@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "stage230-local-acceptance-v1",
+  "stage": 230,
+  "generatedAt": "2026-07-29T00:00:00.000Z",
+  "status": "local-component-acceptance-passed",
+  "blockers": [],
+  "scope": "Stage 230 implementation and local component acceptance before checkpoint deployment",
+  "source": {
+    "branch": "preview/lodging-datalab-v2",
+    "baseCommit": "59002d8e190af0c1f97ad627358c4b5506f27871",
+    "workingTree": "uncommitted-preview-checkpoint",
+    "legacyDataImported": false
+  },
+  "versions": {
+    "ruleVersion": "v2-stage230-deterministic-strategy-v1",
+    "fixture": "test/fixtures/stage230/strategy_workflow_cases_v1.json",
+    "fixtureHashAlgorithm": "canonical-stable-hash-sha256",
+    "fixtureHash": "4dc8c8ba984d00773a2abe0007309a7e4d4188e0888fb116637a6434f950cf50"
+  },
+  "publishedReportGate": {
+    "requiredLifecycle": "published",
+    "minimumConfidence": "medium",
+    "insufficientReportStrategyCount": 0,
+    "unpublishedReportStrategyCount": 0,
+    "domains": ["price", "channel", "product", "content", "leadtime"]
+  },
+  "workflow": {
+    "planStatuses": ["draft", "active", "completed", "cancelled"],
+    "itemStatuses": ["planned", "in-progress", "blocked", "done", "cancelled"],
+    "candidateTypes": ["carryover", "repeat", "new"],
+    "planDeletePolicy": "audited-soft-cancel",
+    "candidateDedupeKey": "tenantCompanyId+companyId+targetMonth+strategyId",
+    "candidateReuseBlocked": true,
+    "lineageMissing": 0,
+    "kpiMissingIsNotZero": true
+  },
+  "securityBoundary": {
+    "dataBoundary": "published-stage229-business-safe-only",
+    "tenantOwnershipServerEnforced": true,
+    "entitlementServerEnforced": true,
+    "businessProjectionExposesTenantCompanyId": false,
+    "externalProviderCalls": 0,
+    "credentialReads": 0,
+    "legacyRuntimeReads": 0,
+    "legacyRuntimeCopies": 0,
+    "productionMutations": 0,
+    "stage231Assets": 0
+  },
+  "automationBoundary": {
+    "learnedWeights": false,
+    "abWinner": false,
+    "calibration": false,
+    "autoApproval": false,
+    "recursiveReview": false
+  },
+  "visualAcceptance": {
+    "report": "test/results/stage230_visual_qa.json",
+    "surfaceCount": 6,
+    "screenshotCount": 24,
+    "specialCheckCount": 12,
+    "roles": ["admin", "business"],
+    "viewports": ["1440x900", "390x844"],
+    "themes": ["light", "dark"],
+    "minimumCssWidth": 320,
+    "zoomPercent": 200,
+    "normalTextMinimumContrastRatio": 4.5,
+    "largeTextMinimumContrastRatio": 3,
+    "contrastViolations": 0,
+    "horizontalOverflowViolations": 0,
+    "browserErrors": 0,
+    "externalBrowserRequests": 0,
+    "strategyToExecutionToRetrospectiveNavigation": "passed"
+  },
+  "validation": {
+    "commands": [
+      { "command": "node scripts/test_stage230_contracts.cjs", "status": "passed" },
+      { "command": "node scripts/test_stage230_service.cjs", "status": "passed" },
+      { "command": "node scripts/test_stage230_server.cjs", "status": "passed" },
+      { "command": "node scripts/test_stage230_security.cjs", "status": "passed" },
+      { "command": "node scripts/test_stage230_ui_contracts.cjs", "status": "passed" },
+      { "command": "node scripts/test_stage230_visual.cjs", "status": "passed", "trackedEvidenceMutated": false },
+      { "command": "node scripts/test_stage230_visual.cjs --write-evidence", "status": "passed", "trackedEvidenceMutated": true },
+      { "command": "npm run typecheck:ui", "status": "passed" },
+      { "command": "npm run build:ui", "status": "passed" }
+    ],
+    "preWiringRegressionSuite": {
+      "command": "npm test",
+      "status": "passed",
+      "scope": "Stages 222 through 229 before Stage 230 implementation"
+    },
+    "finalRegressionSuite": {
+      "command": "npm test",
+      "status": "passed",
+      "scope": "Stages 222 through 230 with final package wiring"
+    },
+    "packageStage230Wiring": "present-and-final-rerun-passed",
+    "evidenceValidator": "node scripts/test_stage230_evidence.cjs"
+  },
+  "artifacts": [
+    "docs/stage230_strategy_execution_retrospective.md",
+    "docs/stage230_rollback_runbook.md",
+    "scripts/test_stage230_contracts.cjs",
+    "scripts/test_stage230_service.cjs",
+    "scripts/test_stage230_server.cjs",
+    "scripts/test_stage230_security.cjs",
+    "scripts/test_stage230_ui_contracts.cjs",
+    "scripts/test_stage230_visual.cjs",
+    "scripts/test_stage230_evidence.cjs",
+    "test/fixtures/stage230/strategy_workflow_cases_v1.json",
+    "test/results/stage230_visual_qa.json"
+  ],
+  "previewDeployment": {
+    "status": "pending-verified-checkpoint",
+    "commitCreated": false,
+    "pushed": false,
+    "renderDeploymentObserved": false,
+    "renderSmokeTested": false,
+    "environmentMutationApproved": false
+  }
+}

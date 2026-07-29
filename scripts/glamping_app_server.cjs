@@ -14,6 +14,7 @@ const { createIntegrationAuthRuntime } = require("./integration/bootstrap/auth_r
 const { createIntegrationCoreRuntime } = require("./integration/bootstrap/core_runtime.cjs");
 const { createFreshPlatformRuntime } = require("./integration/bootstrap/fresh_platform_runtime.cjs");
 const { createInsightsRuntime } = require("./integration/bootstrap/insights_runtime.cjs");
+const { createStrategyRuntime } = require("./integration/bootstrap/strategy_runtime.cjs");
 const { assertFreshAuthStoreBoundary } = require("./integration/repositories/fresh_store.cjs");
 const {
   CONTRACT_PREVIEW_PURPOSE,
@@ -86,6 +87,9 @@ const V2_INTEGRATION_FRESH_OBSERVATION_REQUESTED = flagEnabled(process.env.V2_IN
 const V2_INTEGRATION_RELIABILITY_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_RELIABILITY_ENABLED);
 const V2_INTEGRATION_LOCATION_CARD_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_LOCATION_CARD_ENABLED);
 const V2_INTEGRATION_BUSINESS_REPORT_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_BUSINESS_REPORT_ENABLED);
+const V2_INTEGRATION_STRATEGY_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_STRATEGY_ENABLED);
+const V2_INTEGRATION_EXECUTION_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_EXECUTION_ENABLED);
+const V2_INTEGRATION_RETROSPECTIVE_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_RETROSPECTIVE_ENABLED);
 const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "admin")).trim();
 const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "0914")).trim();
 const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "b2b")).trim();
@@ -103,6 +107,7 @@ let integrationAuthRuntime = null;
 let integrationCoreRuntime = null;
 let integrationFreshRuntime = null;
 let integrationInsightsRuntime = null;
+let integrationStrategyRuntime = null;
 const V2_INTEGRATION_PREVIEW_PURPOSE = String(process.env.V2_INTEGRATION_PREVIEW_PURPOSE || "").trim().toLowerCase();
 const V2_INTEGRATION_PREVIEW_FIXTURE_ROOT = String(process.env.V2_INTEGRATION_PREVIEW_FIXTURE_ROOT || "").trim();
 const INTEGRATION_PREVIEW_ACCESS_GUARD = (() => {
@@ -13346,6 +13351,15 @@ async function serveUiV3Index(req, res, extraHeaders = {}) {
   ).replaceAll(
     "__V2_BUSINESS_REPORT_ENABLED__",
     INTEGRATION_FEATURE_FLAGS.businessReport ? "true" : "false"
+  ).replaceAll(
+    "__V2_STRATEGY_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.strategy ? "true" : "false"
+  ).replaceAll(
+    "__V2_EXECUTION_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.execution ? "true" : "false"
+  ).replaceAll(
+    "__V2_RETROSPECTIVE_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.retrospective ? "true" : "false"
   );
   return send(res, 200, runtimeHtml, "text/html; charset=utf-8", headers);
 }
@@ -13437,6 +13451,11 @@ async function route(req, res) {
     if (
       integrationInsightsRuntime
       && await integrationInsightsRuntime.http.handle(req, res, reqUrl)
+    ) return;
+    if (
+      INTEGRATION_FEATURE_FLAGS.strategy
+      && integrationStrategyRuntime
+      && await integrationStrategyRuntime.http.handle(req, res, reqUrl)
     ) return;
     if (
       INTEGRATION_FEATURE_FLAGS.platformCore
@@ -14014,6 +14033,15 @@ async function startServer() {
   if (V2_INTEGRATION_BUSINESS_REPORT_REQUESTED && !INTEGRATION_FEATURE_FLAGS.freshObservation) {
     throw new Error("V2_INTEGRATION_BUSINESS_REPORT_ENABLED requires V2_INTEGRATION_FRESH_OBSERVATION_ENABLED");
   }
+  if (V2_INTEGRATION_STRATEGY_REQUESTED && !INTEGRATION_FEATURE_FLAGS.businessReport) {
+    throw new Error("V2_INTEGRATION_STRATEGY_ENABLED requires V2_INTEGRATION_BUSINESS_REPORT_ENABLED");
+  }
+  if (V2_INTEGRATION_EXECUTION_REQUESTED && !INTEGRATION_FEATURE_FLAGS.strategy) {
+    throw new Error("V2_INTEGRATION_EXECUTION_ENABLED requires V2_INTEGRATION_STRATEGY_ENABLED");
+  }
+  if (V2_INTEGRATION_RETROSPECTIVE_REQUESTED && !INTEGRATION_FEATURE_FLAGS.execution) {
+    throw new Error("V2_INTEGRATION_RETROSPECTIVE_ENABLED requires V2_INTEGRATION_EXECUTION_ENABLED");
+  }
   if (V2_INTEGRATION_FRESH_COMPANY_REQUESTED) {
     assertFreshAuthStoreBoundary({
       authStorePath: process.env.V2_INTEGRATION_AUTH_STORE_PATH,
@@ -14066,6 +14094,28 @@ async function startServer() {
       legacyPaths: stage228LegacyPaths
     });
     await integrationInsightsRuntime.initialize();
+  }
+  if (
+    INTEGRATION_FEATURE_FLAGS.strategy
+    || INTEGRATION_FEATURE_FLAGS.execution
+    || INTEGRATION_FEATURE_FLAGS.retrospective
+  ) {
+    integrationStrategyRuntime = createStrategyRuntime({
+      env: process.env,
+      projectRoot: ROOT,
+      authRuntime: integrationAuthRuntime,
+      freshRuntime: integrationFreshRuntime,
+      insightsRuntime: integrationInsightsRuntime,
+      capabilities: {
+        strategy: INTEGRATION_FEATURE_FLAGS.strategy,
+        execution: INTEGRATION_FEATURE_FLAGS.execution,
+        retrospective: INTEGRATION_FEATURE_FLAGS.retrospective
+      },
+      send,
+      parseBody: parseLoginBody,
+      legacyPaths: stage228LegacyPaths
+    });
+    await integrationStrategyRuntime.initialize();
   }
   if (INTEGRATION_FEATURE_FLAGS.platformCore) {
     integrationCoreRuntime = createIntegrationCoreRuntime({

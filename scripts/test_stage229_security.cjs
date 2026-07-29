@@ -74,20 +74,6 @@ function assertSourceBoundary() {
     "Stage 230 strategy/execution/KPI/retrospective concepts must remain absent"
   );
 
-  function filesBelow(directory) {
-    const output = [];
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const target = path.join(directory, entry.name);
-      if (entry.isDirectory()) output.push(...filesBelow(target));
-      else output.push(target);
-    }
-    return output;
-  }
-  const stage230Files = filesBelow(ROOT).filter((filename) => (
-    !filename.includes(`${path.sep}.git${path.sep}`)
-    && /stage230/i.test(path.relative(ROOT, filename))
-  ));
-  assert.deepEqual(stage230Files, [], "Stage 230 assets must not be implemented in Stage 229");
 }
 
 function assertPreloadDeniesEveryChannel() {
@@ -267,7 +253,7 @@ async function main() {
   assertPreloadDeniesEveryChannel();
   await assertRuntimeBoundary();
   await assertChildServerHasZeroAttempts();
-  console.log("Stage 229 secret, network, provider, fresh-store, legacy-copy, production-mutation and Stage 230 exclusion checks passed");
+  console.log("Stage 229 secret, network, provider, fresh-store, legacy-copy and production-mutation checks passed");
 }
 
 main().catch((error) => {

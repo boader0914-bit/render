@@ -28,26 +28,6 @@ function git(...args) {
   return childProcess.execFileSync("git", args, { cwd: ROOT, encoding: "utf8", windowsHide: true }).trim();
 }
 
-function assertNoStage230Paths() {
-  const roots = [
-    path.join(ROOT, "apps", "web", "src", "reporting"),
-    path.join(ROOT, "scripts", "integration"),
-    path.join(ROOT, "test", "fixtures"),
-    path.join(ROOT, "docs")
-  ];
-  const discovered = [];
-  function walk(directory) {
-    if (!fs.existsSync(directory)) return;
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const filename = path.join(directory, entry.name);
-      if (/stage230/i.test(path.relative(ROOT, filename))) discovered.push(path.relative(ROOT, filename));
-      if (entry.isDirectory()) walk(filename);
-    }
-  }
-  roots.forEach(walk);
-  assert.deepEqual(discovered, [], `unexpected Stage 230 paths: ${discovered.join(", ")}`);
-}
-
 function assertVisualReport(visual) {
   assert.equal(visual.stage, 229);
   assert.equal(visual.passed, true);
@@ -245,7 +225,6 @@ function assertSourcesAndWiring() {
   assert.match(packageJson.scripts.check, /test_stage229_evidence\.cjs/);
   assert.match(packageJson.scripts["test:stage229"], /test:insights-evidence/);
   assert.match(packageJson.scripts.test, /test:stage229/);
-  assertNoStage230Paths();
 }
 
 function main() {

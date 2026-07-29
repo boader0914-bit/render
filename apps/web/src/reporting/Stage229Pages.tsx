@@ -152,7 +152,7 @@ const SCOPE_LABEL: Readonly<Record<ReportScopeId, string>> = {
   "anonymous-cohort": "익명 비교군"
 };
 
-export function BusinessReportView({ workspace }: { workspace: Stage229Workspace }) {
+export function BusinessReportView({ workspace, strategyLinkEnabled = false }: { workspace: Stage229Workspace; strategyLinkEnabled?: boolean }) {
   const report = workspace.monthlyReport;
   if (workspace.state !== "ready" || !report) return <>
     <ReadinessSummary workspace={workspace} />
@@ -190,7 +190,10 @@ export function BusinessReportView({ workspace }: { workspace: Stage229Workspace
       </div>
       <div className="v2-insight-footer-row">
         <small>알고리즘 {report.algorithmVersion || workspace.algorithmVersion || "확인 중"} · 공개 {report.publishedAt}</small>
-        <a className="v2-button v2-button--secondary" data-testid="stage229-report-location-link" href={report.locationCardPath}>입지카드 보기</a>
+        <div className="v2-inline-actions">
+          <a className="v2-button v2-button--quiet" data-testid="stage229-report-location-link" href={report.locationCardPath}>입지카드 보기</a>
+          {strategyLinkEnabled ? <a className="v2-button v2-button--secondary" data-testid="stage230-report-strategy-link" href="/app/strategy">전략 추천 보기</a> : null}
+        </div>
       </div>
     </InsightSection>
     <ForecastPanel forecast={report.forecast} />
@@ -348,10 +351,11 @@ function actionSuccessLabel(action: LocationCardAction): string {
   }[action];
 }
 
-export function Stage229RoutePage({ routeId, session, enabled }: {
+export function Stage229RoutePage({ routeId, session, enabled, strategyLinkEnabled = false }: {
   routeId: Stage229RouteId;
   session: SessionPayload;
   enabled: boolean;
+  strategyLinkEnabled?: boolean;
 }) {
   const { workspace, loadState, reload, selectedCompanyId, selectCompanyId } = useStage229Workspace(routeId, enabled);
   const [busy, setBusy] = useState(false);
@@ -388,7 +392,7 @@ export function Stage229RoutePage({ routeId, session, enabled }: {
 
   if (!enabled) return null;
   const view = !workspace ? null
-    : routeId === "business-report" ? <BusinessReportView workspace={workspace} />
+    : routeId === "business-report" ? <BusinessReportView workspace={workspace} strategyLinkEnabled={strategyLinkEnabled} />
       : routeId === "business-location" ? <BusinessLocationView workspace={workspace} />
         : <AdminLocationView
           workspace={workspace}

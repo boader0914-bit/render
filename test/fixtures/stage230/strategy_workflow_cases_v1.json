@@ -1,0 +1,198 @@
+{
+  "schemaVersion": "stage230-strategy-workflow-fixture-v1",
+  "stage": 230,
+  "ruleVersion": "v2-stage230-deterministic-strategy-v1",
+  "asOf": "2026-07-29T00:00:00.000Z",
+  "companyId": "cmp_place_stage230_tenant",
+  "tenantCompanyId": "tenant_stage230_one",
+  "publishedReport": {
+    "reportId": "report_stage230_published_ready",
+    "companyId": "cmp_place_stage230_tenant",
+    "month": "2026-08",
+    "lifecycle": "published",
+    "version": 6,
+    "state": "ready",
+    "resultAvailable": true,
+    "algorithmVersion": "v2-stage229-location-forecast-v1",
+    "publishedAt": "2026-07-29T00:00:00.000Z",
+    "readiness": {
+      "state": "ready",
+      "confidence": "medium",
+      "confidenceCauses": [
+        "complete D14/D7/D1 series 3/3",
+        "all four business-safe report scopes are ready"
+      ]
+    },
+    "forecast": {
+      "state": "ready",
+      "forecastMonth": "2026-08",
+      "sampleCount": 3,
+      "minimumSampleCount": 3,
+      "confidence": "medium",
+      "value": 68.4,
+      "interval": {
+        "low": 61.2,
+        "high": 75.6,
+        "unit": "score"
+      },
+      "bookingPace": {
+        "state": "ready",
+        "value": 2.4,
+        "unit": "units-per-day"
+      }
+    },
+    "scopes": [
+      {
+        "scope": "national",
+        "state": "ready",
+        "sampleCount": 12,
+        "minimumSampleCount": 3,
+        "metrics": {
+          "soldRate": 64,
+          "averagePrice": 165000,
+          "otaExposureRate": 72
+        }
+      },
+      {
+        "scope": "region",
+        "state": "ready",
+        "sampleCount": 5,
+        "minimumSampleCount": 3,
+        "metrics": {
+          "soldRate": 70,
+          "averagePrice": 172000,
+          "otaExposureRate": 75
+        }
+      },
+      {
+        "scope": "own",
+        "state": "ready",
+        "sampleCount": 1,
+        "minimumSampleCount": 1,
+        "metrics": {
+          "soldRate": 58,
+          "averagePrice": 181000,
+          "otaExposureRate": 50
+        }
+      },
+      {
+        "scope": "anonymous-cohort",
+        "state": "ready",
+        "sampleCount": 3,
+        "minimumSampleCount": 3,
+        "metrics": {
+          "soldRate": 73,
+          "averagePrice": 168000,
+          "otaExposureRate": 82
+        }
+      }
+    ]
+  },
+  "expected": {
+    "domains": [
+      "price",
+      "channel",
+      "product",
+      "content",
+      "leadtime"
+    ],
+    "strategyCount": 5,
+    "planStatus": "draft",
+    "itemStatuses": [
+      "planned",
+      "in-progress",
+      "blocked",
+      "done",
+      "cancelled"
+    ],
+    "candidateKinds": [
+      "carryover",
+      "repeat",
+      "new"
+    ],
+    "reportLineage": {
+      "reportId": "report_stage230_published_ready",
+      "reportVersion": 6,
+      "reportAlgorithmVersion": "v2-stage229-location-forecast-v1",
+      "reportPublishedAt": "2026-07-29T00:00:00.000Z"
+    }
+  },
+  "workflow": {
+    "strategyClientRequestId": "stage230-generate-0001",
+    "planClientRequestId": "stage230-plan-0001",
+    "plan": {
+      "title": "2026년 8월 실행계획",
+      "owner": "운영 담당자",
+      "dueDate": "2026-08-31",
+      "status": "draft",
+      "note": "결정적 전략 fixture 기반 실행계획"
+    },
+    "item": {
+      "clientRequestId": "stage230-plan-item-0001",
+      "title": "주중 가격·채널 노출 점검",
+      "owner": "가격 담당자",
+      "dueDate": "2026-08-07",
+      "status": "planned",
+      "note": "공개 리포트 근거만 사용",
+      "checklist": [
+        {
+          "label": "현재 주중 가격 확인",
+          "completed": false
+        },
+        {
+          "label": "OTA 채널 노출 확인",
+          "completed": false
+        }
+      ]
+    },
+    "kpi": {
+      "clientRequestId": "stage230-kpi-0001",
+      "name": "주중 판매율",
+      "unit": "percent",
+      "targetValue": 65,
+      "currentValue": null,
+      "isInput": false
+    },
+    "retrospectiveClientRequestId": "stage230-retrospective-0001",
+    "candidateClientRequestId": "stage230-candidates-0001"
+  },
+  "blockedReports": [
+    {
+      "id": "unpublished",
+      "patch": {
+        "lifecycle": "reviewed",
+        "publishedAt": ""
+      },
+      "expectedCode": "STRATEGY_REPORT_NOT_PUBLISHED"
+    },
+    {
+      "id": "insufficient-data",
+      "patch": {
+        "state": "insufficient-data",
+        "resultAvailable": false
+      },
+      "expectedCode": "STRATEGY_REPORT_CONFIDENCE_REQUIRED"
+    },
+    {
+      "id": "confidence-missing",
+      "patch": {
+        "readiness": {
+          "state": "ready",
+          "confidence": "insufficient",
+          "confidenceCauses": [
+            "minimum sample gate is not met"
+          ]
+        }
+      },
+      "expectedCode": "STRATEGY_REPORT_CONFIDENCE_REQUIRED"
+    }
+  ],
+  "sourceBoundary": {
+    "legacyRuntimeReads": 0,
+    "legacyRuntimeCopies": 0,
+    "externalProviderCalls": 0,
+    "credentialReads": 0,
+    "productionMutations": 0,
+    "stage231Assets": 0
+  }
+}

@@ -211,10 +211,13 @@ async function main() {
     company: "V2_INTEGRATION_COMPANY_ENABLED",
     freshCompany: "V2_INTEGRATION_FRESH_COMPANY_ENABLED",
     freshObservation: "V2_INTEGRATION_FRESH_OBSERVATION_ENABLED",
+    execution: "V2_INTEGRATION_EXECUTION_ENABLED",
     reliability: "V2_INTEGRATION_RELIABILITY_ENABLED",
     locationCard: "V2_INTEGRATION_LOCATION_CARD_ENABLED",
     observation: "V2_INTEGRATION_OBSERVATION_ENABLED",
-    platformCore: "V2_INTEGRATION_PLATFORM_CORE_ENABLED"
+    platformCore: "V2_INTEGRATION_PLATFORM_CORE_ENABLED",
+    retrospective: "V2_INTEGRATION_RETROSPECTIVE_ENABLED",
+    strategy: "V2_INTEGRATION_STRATEGY_ENABLED"
   };
   assert.deepEqual(
     Object.fromEntries(Object.entries(INTEGRATION_FEATURE_DEFINITIONS).map(([name, item]) => [name, item.envKey])),
@@ -229,7 +232,10 @@ async function main() {
     freshObservation: false,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "test",
@@ -244,7 +250,10 @@ async function main() {
     freshObservation: false,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "production",
@@ -261,7 +270,10 @@ async function main() {
     freshObservation: false,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "test",
@@ -277,7 +289,10 @@ async function main() {
     freshObservation: false,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "test",
@@ -292,7 +307,10 @@ async function main() {
     freshObservation: false,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.platformCore.dependsOn, ["auth"]);
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.freshCompany.dependsOn, ["auth", "platformCore"]);
@@ -300,6 +318,9 @@ async function main() {
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.reliability.dependsOn, ["freshObservation"]);
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.locationCard.dependsOn, ["reliability"]);
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.businessReport.dependsOn, ["freshObservation"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.strategy.dependsOn, ["businessReport"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.execution.dependsOn, ["strategy"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.retrospective.dependsOn, ["execution"]);
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_FRESH_OBSERVATION_ENABLED: "true"
   }), {
@@ -311,7 +332,10 @@ async function main() {
     freshObservation: false,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_FRESH_COMPANY_ENABLED: "true",
@@ -325,7 +349,10 @@ async function main() {
     freshObservation: false,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_AUTH_ENABLED: "true",
@@ -341,7 +368,10 @@ async function main() {
     freshObservation: true,
     reliability: false,
     locationCard: false,
-    businessReport: false
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_AUTH_ENABLED: "true",
@@ -350,7 +380,10 @@ async function main() {
     V2_INTEGRATION_FRESH_OBSERVATION_ENABLED: "true",
     V2_INTEGRATION_RELIABILITY_ENABLED: "true",
     V2_INTEGRATION_LOCATION_CARD_ENABLED: "true",
-    V2_INTEGRATION_BUSINESS_REPORT_ENABLED: "true"
+    V2_INTEGRATION_BUSINESS_REPORT_ENABLED: "true",
+    V2_INTEGRATION_STRATEGY_ENABLED: "true",
+    V2_INTEGRATION_EXECUTION_ENABLED: "true",
+    V2_INTEGRATION_RETROSPECTIVE_ENABLED: "true"
   }), {
     company: false,
     observation: false,
@@ -360,7 +393,10 @@ async function main() {
     freshObservation: true,
     reliability: true,
     locationCard: true,
-    businessReport: true
+    businessReport: true,
+    strategy: true,
+    execution: true,
+    retrospective: true
   });
   assert.equal(INTEGRATION_FEATURE_DEFINITIONS.company.scope, "test-only");
   assert.equal(INTEGRATION_FEATURE_DEFINITIONS.observation.scope, "test-only");

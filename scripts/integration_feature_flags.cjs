@@ -41,6 +41,21 @@ const INTEGRATION_FEATURE_DEFINITIONS = Object.freeze({
     envKey: "V2_INTEGRATION_BUSINESS_REPORT_ENABLED",
     scope: "runtime",
     dependsOn: Object.freeze(["freshObservation"])
+  }),
+  strategy: Object.freeze({
+    envKey: "V2_INTEGRATION_STRATEGY_ENABLED",
+    scope: "runtime",
+    dependsOn: Object.freeze(["businessReport"])
+  }),
+  execution: Object.freeze({
+    envKey: "V2_INTEGRATION_EXECUTION_ENABLED",
+    scope: "runtime",
+    dependsOn: Object.freeze(["strategy"])
+  }),
+  retrospective: Object.freeze({
+    envKey: "V2_INTEGRATION_RETROSPECTIVE_ENABLED",
+    scope: "runtime",
+    dependsOn: Object.freeze(["execution"])
   })
 });
 

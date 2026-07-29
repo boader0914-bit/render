@@ -1,0 +1,1279 @@
+{
+  "stage": 230,
+  "generatedAt": "2026-07-29T15:05:33.115Z",
+  "browser": "chrome.exe",
+  "artifactPolicy": "screenshots-default-to-os-temp; tracked-report-only-with---write-evidence",
+  "surfaces": [
+    {
+      "id": "business-strategy",
+      "path": "/app/strategy",
+      "role": "business"
+    },
+    {
+      "id": "business-execution",
+      "path": "/app/execution",
+      "role": "business"
+    },
+    {
+      "id": "business-retrospective",
+      "path": "/app/retrospective",
+      "role": "business"
+    },
+    {
+      "id": "admin-strategy",
+      "path": "/admin/stage-review?view=strategy&tenantCompanyId=tenant_stage230_visual&companyId=cmp_place_stage230_visual",
+      "role": "admin"
+    },
+    {
+      "id": "admin-execution",
+      "path": "/admin/stage-review?view=execution&tenantCompanyId=tenant_stage230_visual&companyId=cmp_place_stage230_visual",
+      "role": "admin"
+    },
+    {
+      "id": "admin-retrospective",
+      "path": "/admin/stage-review?view=retrospective&tenantCompanyId=tenant_stage230_visual&companyId=cmp_place_stage230_visual",
+      "role": "admin"
+    }
+  ],
+  "surfaceCount": 6,
+  "conditionCombinationsPerSurface": 4,
+  "screenshotCount": 24,
+  "accessibility": {
+    "language": "ko",
+    "oneH1PerSurface": true,
+    "mainAndNavigationLandmarks": true,
+    "normalTextMinimumContrastRatio": 4.5,
+    "largeTextMinimumContrastRatio": 3,
+    "contrastViolations": 0,
+    "keyboardFocusVisible": true
+  },
+  "responsive": {
+    "minimumCssWidth": 320,
+    "zoomPercent": 200,
+    "overflowTolerancePixels": 1
+  },
+  "externalBrowserRequests": 0,
+  "externalProviderCalls": 0,
+  "serverNetworkAttempts": 0,
+  "legacyRuntimeReads": 0,
+  "legacyRuntimeCopies": 0,
+  "productionMutations": 0,
+  "browserErrors": 0,
+  "rawOrInternalValuesVisible": false,
+  "navigation": {
+    "from": "/app/strategy",
+    "through": "/app/execution",
+    "to": "/app/retrospective",
+    "sameOrigin": true,
+    "passed": true
+  },
+  "results": [
+    {
+      "surface": "business-strategy",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "business-strategy-desktop-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-strategy",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 16,
+        "contrastSamples": 35,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-strategy"
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-strategy",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "business-strategy-desktop-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-strategy",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 16,
+        "contrastSamples": 35,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-strategy"
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-strategy",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "business-strategy-mobile-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-strategy",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 16,
+        "contrastSamples": 35,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-strategy"
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-strategy",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "business-strategy-mobile-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-strategy",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 16,
+        "contrastSamples": 35,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-strategy"
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-execution",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "business-execution-desktop-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-execution",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 33,
+        "contrastSamples": 47,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-execution"
+      },
+      "keyboard": {
+        "distinct": 21,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-execution",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "business-execution-desktop-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-execution",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 33,
+        "contrastSamples": 47,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-execution"
+      },
+      "keyboard": {
+        "distinct": 21,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-execution",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "business-execution-mobile-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-execution",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 33,
+        "contrastSamples": 47,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-execution"
+      },
+      "keyboard": {
+        "distinct": 21,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-execution",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "business-execution-mobile-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-execution",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 33,
+        "contrastSamples": 47,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-execution"
+      },
+      "keyboard": {
+        "distinct": 21,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-retrospective",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "business-retrospective-desktop-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-retrospective",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 36,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-retrospective"
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-retrospective",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "business-retrospective-desktop-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-retrospective",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 36,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-retrospective"
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-retrospective",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "business-retrospective-mobile-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-retrospective",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 36,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-retrospective"
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-retrospective",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "business-retrospective-mobile-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-retrospective",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 1,
+        "selectorState": {
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 36,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "business-retrospective"
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-strategy",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "admin-strategy-desktop-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 44,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-strategy"
+      },
+      "keyboard": {
+        "distinct": 24,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-strategy",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "admin-strategy-desktop-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 44,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-strategy"
+      },
+      "keyboard": {
+        "distinct": 24,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-strategy",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "admin-strategy-mobile-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 44,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-strategy"
+      },
+      "keyboard": {
+        "distinct": 24,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-strategy",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "admin-strategy-mobile-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-strategy",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-report-link": true,
+          "stage230-strategy-card": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [
+          "channel",
+          "content",
+          "leadtime",
+          "price",
+          "product"
+        ],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 26,
+        "contrastSamples": 44,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-strategy"
+      },
+      "keyboard": {
+        "distinct": 24,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-execution",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "admin-execution-desktop-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 43,
+        "contrastSamples": 56,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-execution"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-execution",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "admin-execution-desktop-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 43,
+        "contrastSamples": 56,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-execution"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-execution",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "admin-execution-mobile-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 43,
+        "contrastSamples": 56,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-execution"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-execution",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "admin-execution-mobile-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-execution",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-board": true,
+          "stage230-checklist": true,
+          "stage230-kpi": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [],
+        "overflowX": 0,
+        "focusableCount": 43,
+        "contrastSamples": 56,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-execution"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-retrospective",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "admin-retrospective-desktop-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 36,
+        "contrastSamples": 45,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-retrospective"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-retrospective",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "admin-retrospective-desktop-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 36,
+        "contrastSamples": 45,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-retrospective"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-retrospective",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "admin-retrospective-mobile-light.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 36,
+        "contrastSamples": 45,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-retrospective"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-retrospective",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "admin-retrospective-mobile-dark.png",
+      "inspection": {
+        "language": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-retrospective",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-stage-review",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "navLandmarks": 2,
+        "selectorState": {
+          "stage230-admin-tabs": true,
+          "stage230-admin-target": true,
+          "stage230-metrics": true,
+          "stage230-retrospective": true,
+          "stage230-candidates": true,
+          "stage230-lineage": true
+        },
+        "strategyDomains": [],
+        "candidateTypes": [
+          "carryover",
+          "new",
+          "repeat"
+        ],
+        "overflowX": 0,
+        "focusableCount": 36,
+        "contrastSamples": 45,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expectedRoute": "admin-retrospective"
+      },
+      "keyboard": {
+        "distinct": 25,
+        "visibleIndicators": 28
+      },
+      "browserErrors": [],
+      "passed": true
+    }
+  ],
+  "special": [
+    {
+      "id": "minimum-320",
+      "surface": "business-strategy",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "business-strategy",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "business-execution",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "business-execution",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "business-retrospective",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "business-retrospective",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "admin-strategy",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "admin-strategy",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "admin-execution",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "admin-execution",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "admin-retrospective",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "admin-retrospective",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "passed": true
+    }
+  ],
+  "passed": true
+}

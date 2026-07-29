@@ -5,6 +5,9 @@ interface RuntimeMetaSource {
 export const PLATFORM_CORE_META_NAME = "lodging-v2-platform-core-enabled";
 export const LOCATION_CARD_META_NAME = "lodging-v2-location-card-enabled";
 export const BUSINESS_REPORT_META_NAME = "lodging-v2-business-report-enabled";
+export const STRATEGY_META_NAME = "lodging-v2-strategy-enabled";
+export const EXECUTION_META_NAME = "lodging-v2-execution-enabled";
+export const RETROSPECTIVE_META_NAME = "lodging-v2-retrospective-enabled";
 
 function explicitRuntimeFlag(source: RuntimeMetaSource, name: string): boolean {
   const value = source.querySelector(`meta[name="${name}"]`)?.content;
@@ -24,4 +27,19 @@ export function locationCardEnabled(source: RuntimeMetaSource = document): boole
 /** Stage 229 reports are independently gated and never inferred from another feature. */
 export function businessReportEnabled(source: RuntimeMetaSource = document): boolean {
   return explicitRuntimeFlag(source, BUSINESS_REPORT_META_NAME);
+}
+
+/** Stage 230 strategy generation requires an independently approved published-report rollout. */
+export function strategyEnabled(source: RuntimeMetaSource = document): boolean {
+  return explicitRuntimeFlag(source, STRATEGY_META_NAME);
+}
+
+/** Stage 230 action plans remain independently rollbackable after strategy rollout. */
+export function executionEnabled(source: RuntimeMetaSource = document): boolean {
+  return explicitRuntimeFlag(source, EXECUTION_META_NAME);
+}
+
+/** Stage 230 retrospectives remain independently rollbackable after execution rollout. */
+export function retrospectiveEnabled(source: RuntimeMetaSource = document): boolean {
+  return explicitRuntimeFlag(source, RETROSPECTIVE_META_NAME);
 }

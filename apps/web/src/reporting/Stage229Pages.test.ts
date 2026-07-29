@@ -88,6 +88,10 @@ describe("Stage 229 V3 reporting surfaces", () => {
     expect(markup).toContain("58.2~74.8점");
     expect(markup).toContain('data-testid="stage229-report-location-link"');
     expect(markup).toContain('href="/app/location"');
+    expect(markup).not.toContain('data-testid="stage230-report-strategy-link"');
+    const enabledMarkup = renderToStaticMarkup(createElement(BusinessReportView, { workspace, strategyLinkEnabled: true }));
+    expect(enabledMarkup).toContain('data-testid="stage230-report-strategy-link"');
+    expect(enabledMarkup).toContain('href="/app/strategy"');
     expect(markup).not.toMatch(/cmp_(?:owner|peer)|card_001|sourceKey|evidenceId|internalFormula/i);
   });
 

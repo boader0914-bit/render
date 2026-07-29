@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   BUSINESS_REPORT_META_NAME,
+  EXECUTION_META_NAME,
   LOCATION_CARD_META_NAME,
   PLATFORM_CORE_META_NAME,
+  RETROSPECTIVE_META_NAME,
+  STRATEGY_META_NAME,
   businessReportEnabled,
+  executionEnabled,
   locationCardEnabled,
-  platformCoreEnabled
+  platformCoreEnabled,
+  retrospectiveEnabled,
+  strategyEnabled
 } from "./runtimeFlags";
 
 const source = (values: Partial<Record<string, string>>) => ({
@@ -48,5 +54,17 @@ describe("runtime feature metadata", () => {
     const reportOnly = source({ [LOCATION_CARD_META_NAME]: "false", [BUSINESS_REPORT_META_NAME]: "true" });
     expect(locationCardEnabled(reportOnly)).toBe(false);
     expect(businessReportEnabled(reportOnly)).toBe(true);
+  });
+
+  it("keeps all Stage 230 rollout markers explicit, false by default and independent", () => {
+    expect(strategyEnabled(source({ [STRATEGY_META_NAME]: "true" }))).toBe(true);
+    expect(executionEnabled(source({ [EXECUTION_META_NAME]: " TRUE " }))).toBe(true);
+    expect(retrospectiveEnabled(source({ [RETROSPECTIVE_META_NAME]: "true" }))).toBe(true);
+    expect(strategyEnabled(source({ [STRATEGY_META_NAME]: "1" }))).toBe(false);
+    expect(executionEnabled(source({ [STRATEGY_META_NAME]: "true" }))).toBe(false);
+    expect(retrospectiveEnabled(source({ [EXECUTION_META_NAME]: "true" }))).toBe(false);
+    expect(strategyEnabled(source({}))).toBe(false);
+    expect(executionEnabled(source({}))).toBe(false);
+    expect(retrospectiveEnabled(source({}))).toBe(false);
   });
 });
