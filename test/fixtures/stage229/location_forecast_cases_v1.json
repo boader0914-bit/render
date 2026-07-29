@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "stage229-location-forecast-cases-v1",
+  "fixtureVersion": "stage229-deterministic-signals-v1",
+  "providerId": "stage229-deterministic-signal-fixture",
+  "algorithmVersion": "v2-stage229-location-forecast-v1",
+  "asOf": "2026-07-29T00:00:00.000Z",
+  "thresholds": {
+    "minimumCompleteSeries": 3,
+    "leadDays": [14, 7, 1],
+    "minimumStockPairPoints": 9,
+    "minimumAnonymousCohort": 3,
+    "freshObservationHours": 24,
+    "freshSignalHours": 168
+  },
+  "cases": [
+    {
+      "id": "cold-start-insufficient",
+      "tenantCompanyId": "cmp_place_stage229_tenant",
+      "reportMonth": "2026-08",
+      "forecastInputMonth": "2026-07",
+      "regionCode": "KR-41-41820",
+      "collectionState": "collecting",
+      "stockSeries": [
+        {
+          "stayDate": "2026-07-27",
+          "points": [
+            { "leadDays": 14, "availableUnits": 8, "observedAt": "2026-07-13T00:00:00.000Z" },
+            { "leadDays": 7, "availableUnits": 5, "observedAt": "2026-07-20T00:00:00.000Z" },
+            { "leadDays": 1, "availableUnits": 2, "observedAt": "2026-07-26T00:00:00.000Z" }
+          ]
+        },
+        {
+          "stayDate": "2026-07-28",
+          "points": [
+            { "leadDays": 14, "availableUnits": 9, "observedAt": "2026-07-14T00:00:00.000Z" },
+            { "leadDays": 7, "availableUnits": 6, "observedAt": "2026-07-21T00:00:00.000Z" },
+            { "leadDays": 1, "availableUnits": 3, "observedAt": "2026-07-27T00:00:00.000Z" }
+          ]
+        }
+      ],
+      "freshObservations": [
+        { "kind": "quick", "observedAt": "2026-07-28T23:00:00.000Z" },
+        { "kind": "detail", "observedAt": "2026-07-28T23:05:00.000Z" },
+        { "kind": "ota", "observedAt": "2026-07-28T23:10:00.000Z" }
+      ],
+      "anonymousCohort": ["cohort-a", "cohort-b"],
+      "expected": {
+        "readiness": "insufficient-data",
+        "published": false,
+        "forecastReady": false,
+        "bookingPaceReady": false,
+        "reasonCodes": ["minimum-complete-series", "minimum-stock-pair-points", "minimum-anonymous-cohort"]
+      }
+    },
+    {
+      "id": "minimum-ready-boundary",
+      "tenantCompanyId": "cmp_place_stage229_tenant",
+      "reportMonth": "2026-08",
+      "forecastInputMonth": "2026-07",
+      "regionCode": "KR-41-41820",
+      "collectionState": "completed",
+      "stockSeries": [
+        {
+          "stayDate": "2026-07-27",
+          "points": [
+            { "leadDays": 14, "availableUnits": 8, "observedAt": "2026-07-13T00:00:00.000Z" },
+            { "leadDays": 7, "availableUnits": 5, "observedAt": "2026-07-20T00:00:00.000Z" },
+            { "leadDays": 1, "availableUnits": 2, "observedAt": "2026-07-26T00:00:00.000Z" }
+          ]
+        },
+        {
+          "stayDate": "2026-07-28",
+          "points": [
+            { "leadDays": 14, "availableUnits": 9, "observedAt": "2026-07-14T00:00:00.000Z" },
+            { "leadDays": 7, "availableUnits": 6, "observedAt": "2026-07-21T00:00:00.000Z" },
+            { "leadDays": 1, "availableUnits": 3, "observedAt": "2026-07-27T00:00:00.000Z" }
+          ]
+        },
+        {
+          "stayDate": "2026-07-29",
+          "points": [
+            { "leadDays": 14, "availableUnits": 10, "observedAt": "2026-07-15T00:00:00.000Z" },
+            { "leadDays": 7, "availableUnits": 7, "observedAt": "2026-07-22T00:00:00.000Z" },
+            { "leadDays": 1, "availableUnits": 4, "observedAt": "2026-07-28T00:00:00.000Z" }
+          ]
+        }
+      ],
+      "freshObservations": [
+        { "kind": "quick", "observedAt": "2026-07-28T23:00:00.000Z" },
+        { "kind": "detail", "observedAt": "2026-07-28T23:05:00.000Z" },
+        { "kind": "ota", "observedAt": "2026-07-28T23:10:00.000Z" }
+      ],
+      "anonymousCohort": ["cohort-a", "cohort-b", "cohort-c"],
+      "expected": {
+        "readiness": "ready",
+        "published": false,
+        "forecastReady": true,
+        "bookingPaceReady": true,
+        "sampleCount": 3,
+        "stockPairPointCount": 9,
+        "requiredReportScopes": ["national", "region", "own", "anonymous-cohort"]
+      }
+    }
+  ]
+}

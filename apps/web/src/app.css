@@ -146,6 +146,47 @@
   [data-v2-ui-root] .v2-policy-list li:first-child { border-top: 0; }
   [data-v2-ui-root] .v2-policy-list span { color: var(--v2-text-secondary); font-size: 12px; }
   [data-v2-ui-root] .v2-policy-list strong { color: var(--v2-success); font-size: 12px; text-align: right; }
+  [data-v2-ui-root] .v2-insight-state { min-width: 0; display: grid; gap: 12px; }
+  [data-v2-ui-root] .v2-insight-state > .v2-empty-state { margin-top: 0; }
+  [data-v2-ui-root] .v2-insight-reasons { min-width: 0; margin: 0; padding: 12px 12px 12px 32px; display: grid; gap: 7px; color: var(--v2-warning); background: var(--v2-warning-soft); border: 1px solid var(--v2-warning); border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 1.55; }
+  [data-v2-ui-root] .v2-insight-metrics { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  [data-v2-ui-root] .v2-insight-metrics .v2-metric-card { min-height: 112px; }
+  [data-v2-ui-root] .v2-insight-scope-grid { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  [data-v2-ui-root] .v2-insight-scope-grid article, [data-v2-ui-root] .v2-insight-score-grid article { min-width: 0; padding: 15px; display: grid; align-content: start; gap: 9px; background: var(--v2-surface-subtle); border: 1px solid var(--v2-border); border-radius: 7px; }
+  [data-v2-ui-root] .v2-insight-scope-grid article > header, [data-v2-ui-root] .v2-insight-score-grid article > header { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  [data-v2-ui-root] .v2-insight-scope-grid article > header strong, [data-v2-ui-root] .v2-insight-score-grid article > header span { color: var(--v2-text-secondary); font-size: 11px; font-weight: 800; }
+  [data-v2-ui-root] .v2-insight-scope-grid article > b, [data-v2-ui-root] .v2-insight-score-grid article > strong { overflow-wrap: anywhere; color: var(--v2-text); font-size: 22px; line-height: 1.25; }
+  [data-v2-ui-root] .v2-insight-scope-grid article > p, [data-v2-ui-root] .v2-insight-score-grid article > p { margin: 0; overflow-wrap: anywhere; color: var(--v2-text-secondary); font-size: 11px; line-height: 1.55; }
+  [data-v2-ui-root] .v2-insight-score-grid { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  [data-v2-ui-root] .v2-insight-facts { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+  [data-v2-ui-root] .v2-insight-facts > div { min-width: 0; padding: 12px; display: grid; gap: 5px; background: var(--v2-surface); border: 1px solid var(--v2-border); border-radius: 6px; }
+  [data-v2-ui-root] .v2-insight-facts span, [data-v2-ui-root] .v2-insight-cohort span, [data-v2-ui-root] .v2-insight-highlight span, [data-v2-ui-root] .v2-insight-evidence span { color: var(--v2-muted); font-size: 10px; font-weight: 750; }
+  [data-v2-ui-root] .v2-insight-facts strong, [data-v2-ui-root] .v2-insight-cohort strong, [data-v2-ui-root] .v2-insight-highlight strong, [data-v2-ui-root] .v2-insight-evidence strong { min-width: 0; overflow-wrap: anywhere; color: var(--v2-text); font-size: 13px; }
+  [data-v2-ui-root] .v2-insight-facts small, [data-v2-ui-root] .v2-insight-cohort small, [data-v2-ui-root] .v2-insight-evidence small, [data-v2-ui-root] .v2-insight-footer-row small { overflow-wrap: anywhere; color: var(--v2-muted); font-size: 10px; line-height: 1.5; }
+  [data-v2-ui-root] .v2-insight-cohort, [data-v2-ui-root] .v2-insight-evidence, [data-v2-ui-root] .v2-insight-highlight { min-width: 0; padding: 15px; display: grid; gap: 7px; background: var(--v2-accent-soft); border: 1px solid var(--v2-accent); border-radius: 7px; }
+  [data-v2-ui-root] .v2-insight-cohort > div, [data-v2-ui-root] .v2-insight-evidence > div, [data-v2-ui-root] .v2-insight-highlight > div { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  [data-v2-ui-root] .v2-insight-cohort p, [data-v2-ui-root] .v2-insight-highlight p { margin: 0; color: var(--v2-text-secondary); font-size: 11px; line-height: 1.55; }
+  [data-v2-ui-root] .v2-insight-footer-row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  [data-v2-ui-root] .v2-insight-lifecycle { min-width: 0; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; list-style: none; }
+  [data-v2-ui-root] .v2-insight-lifecycle li { min-width: 0; padding: 11px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; background: var(--v2-surface-subtle); border: 1px solid var(--v2-border); border-radius: 6px; }
+  [data-v2-ui-root] .v2-insight-lifecycle li[data-current="true"] { background: var(--v2-accent-soft); border-color: var(--v2-accent); }
+  [data-v2-ui-root] .v2-insight-lifecycle li[data-complete="true"] { border-color: var(--v2-success); }
+  [data-v2-ui-root] .v2-insight-lifecycle li > span { width: 24px; height: 24px; display: grid; place-items: center; color: var(--v2-text-secondary); background: var(--v2-surface-strong); border-radius: 50%; font-size: 10px; font-weight: 850; }
+  [data-v2-ui-root] .v2-insight-lifecycle li > div { min-width: 0; display: grid; gap: 3px; }
+  [data-v2-ui-root] .v2-insight-lifecycle strong { overflow-wrap: anywhere; color: var(--v2-text); font-size: 11px; }
+  [data-v2-ui-root] .v2-insight-lifecycle small { color: var(--v2-muted); font-size: 9px; }
+  [data-v2-ui-root] .v2-insight-editor, [data-v2-ui-root] .v2-insight-select { min-width: 0; display: grid; gap: 7px; }
+  [data-v2-ui-root] .v2-insight-editor > span, [data-v2-ui-root] .v2-insight-select > span { color: var(--v2-text-secondary); font-size: 11px; font-weight: 800; }
+  [data-v2-ui-root] .v2-insight-editor textarea, [data-v2-ui-root] .v2-insight-select select { width: 100%; min-width: 0; padding: 11px 12px; color: var(--v2-text); background: var(--v2-surface); border: 1px solid var(--v2-border-strong); border-radius: 6px; font: inherit; font-size: 12px; line-height: 1.55; }
+  [data-v2-ui-root] .v2-insight-editor textarea { min-height: 96px; resize: vertical; }
+  [data-v2-ui-root] .v2-insight-editor textarea:focus-visible, [data-v2-ui-root] .v2-insight-select select:focus-visible { outline: 2px solid var(--v2-focus); outline-offset: 2px; box-shadow: 0 0 0 3px rgb(11 143 119 / 0.2); }
+  [data-v2-ui-root] .v2-insight-audit { min-width: 0; margin: 0; padding: 0; display: grid; list-style: none; }
+  [data-v2-ui-root] .v2-insight-audit li { min-width: 0; padding: 11px 0; display: grid; gap: 6px; border-top: 1px solid var(--v2-border); }
+  [data-v2-ui-root] .v2-insight-audit li:first-child { padding-top: 0; border-top: 0; }
+  [data-v2-ui-root] .v2-insight-audit li > div { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  [data-v2-ui-root] .v2-insight-audit strong { overflow-wrap: anywhere; color: var(--v2-text); font-size: 12px; }
+  [data-v2-ui-root] .v2-insight-audit time { color: var(--v2-muted); font-size: 10px; }
+  [data-v2-ui-root] .v2-insight-audit p { margin: 0; overflow-wrap: anywhere; color: var(--v2-text-secondary); font-size: 11px; line-height: 1.55; }
 }
 
 @layer v2-responsive {
@@ -155,6 +196,7 @@
     [data-v2-ui-root] .v2-master-detail { grid-template-columns: 1fr; }
     [data-v2-ui-root] .v2-connector-grid { grid-template-columns: 1fr; }
     [data-v2-ui-root] .v2-company-detail-metrics { grid-template-columns: 1fr; }
+    [data-v2-ui-root] .v2-insight-score-grid, [data-v2-ui-root] .v2-insight-lifecycle { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 
   @media (max-width: 760px) {
@@ -173,6 +215,9 @@
     [data-v2-ui-root] .v2-company-detail-facts { grid-template-columns: 1fr; }
     [data-v2-ui-root] .v2-verified-value-list > div { grid-template-columns: 1fr; gap: 4px; }
     [data-v2-ui-root] .v2-policy-list li { align-items: flex-start; }
+    [data-v2-ui-root] .v2-insight-metrics, [data-v2-ui-root] .v2-insight-scope-grid, [data-v2-ui-root] .v2-insight-score-grid, [data-v2-ui-root] .v2-insight-facts, [data-v2-ui-root] .v2-insight-lifecycle { grid-template-columns: 1fr; }
+    [data-v2-ui-root] .v2-insight-cohort > div, [data-v2-ui-root] .v2-insight-evidence > div, [data-v2-ui-root] .v2-insight-highlight > div, [data-v2-ui-root] .v2-insight-footer-row { align-items: stretch; display: grid; }
+    [data-v2-ui-root] .v2-insight-footer-row .v2-button { width: 100%; }
   }
 
   @media (min-resolution: 1dppx) and (max-width: 640px) {

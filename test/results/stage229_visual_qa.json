@@ -1,0 +1,715 @@
+{
+  "stage": 229,
+  "generatedAt": "2026-07-29T11:23:09.893Z",
+  "browser": "chrome.exe",
+  "artifactPolicy": "screenshots-default-to-os-temp; tracked-report-only-with---write-evidence",
+  "surfaces": [
+    {
+      "id": "admin-location",
+      "path": "/admin/location",
+      "role": "admin"
+    },
+    {
+      "id": "business-location",
+      "path": "/app/location",
+      "role": "business"
+    },
+    {
+      "id": "business-report",
+      "path": "/app/report",
+      "role": "business"
+    }
+  ],
+  "surfaceCount": 3,
+  "conditionCombinationsPerSurface": 4,
+  "screenshotCount": 12,
+  "accessibility": {
+    "language": "ko",
+    "oneH1PerSurface": true,
+    "mainAndNavigationLandmarks": true,
+    "normalTextMinimumContrastRatio": 4.5,
+    "largeTextMinimumContrastRatio": 3,
+    "largeTextDefinition": "at-least-24px-or-at-least-18.66px-and-bold",
+    "contrastViolations": 0,
+    "keyboardFocusVisible": true
+  },
+  "responsive": {
+    "minimumCssWidth": 320,
+    "zoomPercent": 200,
+    "overflowTolerancePixels": 1
+  },
+  "externalBrowserRequests": 0,
+  "externalProviderCalls": 0,
+  "serverNetworkAttempts": 0,
+  "browserErrors": 0,
+  "rawOrInternalValuesVisible": false,
+  "reportToLocationNavigation": {
+    "from": "/app/report",
+    "to": "/app/location",
+    "sameOrigin": true,
+    "passed": true
+  },
+  "results": [
+    {
+      "surface": "admin-location",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "admin-location-desktop-light.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-location",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-company-select": true,
+          "stage229-lifecycle": true,
+          "stage229-location-card": true,
+          "stage229-admin-actions": true,
+          "stage229-audit": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 20,
+        "minimumCriticalContrast": 7.520132327880464,
+        "contrastSampleCount": 35,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "admin-location",
+          "theme": "light",
+          "nav": 13
+        }
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-location",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "admin-location-desktop-dark.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-location",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-company-select": true,
+          "stage229-lifecycle": true,
+          "stage229-location-card": true,
+          "stage229-admin-actions": true,
+          "stage229-audit": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 20,
+        "minimumCriticalContrast": 8.53276057772872,
+        "contrastSampleCount": 35,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "admin-location",
+          "theme": "dark",
+          "nav": 13
+        }
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-location",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "admin-location-mobile-light.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "admin-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-location",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-company-select": true,
+          "stage229-lifecycle": true,
+          "stage229-location-card": true,
+          "stage229-admin-actions": true,
+          "stage229-audit": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 20,
+        "minimumCriticalContrast": 7.520132327880464,
+        "contrastSampleCount": 35,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "admin-location",
+          "theme": "light",
+          "nav": 13
+        }
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "admin-location",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "admin-location-mobile-dark.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "admin-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "admin-location",
+        "navCount": 13,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-company-select": true,
+          "stage229-lifecycle": true,
+          "stage229-location-card": true,
+          "stage229-admin-actions": true,
+          "stage229-audit": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 20,
+        "minimumCriticalContrast": 8.53276057772872,
+        "contrastSampleCount": 35,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "admin-location",
+          "theme": "dark",
+          "nav": 13
+        }
+      },
+      "keyboard": {
+        "distinct": 20,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-location",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "business-location-desktop-light.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-location",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-location-card": true,
+          "stage229-location-scores": true,
+          "stage229-evidence-summary": true,
+          "stage229-forecast": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 15.733634720925018,
+        "contrastSampleCount": 21,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-location",
+          "theme": "light",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-location",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "business-location-desktop-dark.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-location",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-location-card": true,
+          "stage229-location-scores": true,
+          "stage229-evidence-summary": true,
+          "stage229-forecast": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 11.559566927424958,
+        "contrastSampleCount": 21,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-location",
+          "theme": "dark",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-location",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "business-location-mobile-light.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-location",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-location-card": true,
+          "stage229-location-scores": true,
+          "stage229-evidence-summary": true,
+          "stage229-forecast": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 15.733634720925018,
+        "contrastSampleCount": 21,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-location",
+          "theme": "light",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-location",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "business-location-mobile-dark.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-location",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-location",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-location-card": true,
+          "stage229-location-scores": true,
+          "stage229-evidence-summary": true,
+          "stage229-forecast": true
+        },
+        "scoreCount": 7,
+        "reportScopeCount": 0,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 11.559566927424958,
+        "contrastSampleCount": 21,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-location",
+          "theme": "dark",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 14,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-report",
+      "viewport": "desktop",
+      "theme": "light",
+      "screenshot": "business-report-desktop-light.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-report",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-report",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-monthly-report": true,
+          "stage229-report-scopes": true,
+          "stage229-anonymous-cohort": true,
+          "stage229-forecast": true,
+          "stage229-report-location-link": true
+        },
+        "scoreCount": 0,
+        "reportScopeCount": 4,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 6.8196038886170705,
+        "contrastSampleCount": 16,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-report",
+          "theme": "light",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 13,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-report",
+      "viewport": "desktop",
+      "theme": "dark",
+      "screenshot": "business-report-desktop-dark.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-report",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-report",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-monthly-report": true,
+          "stage229-report-scopes": true,
+          "stage229-anonymous-cohort": true,
+          "stage229-forecast": true,
+          "stage229-report-location-link": true
+        },
+        "scoreCount": 0,
+        "reportScopeCount": 4,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 10.247412894537392,
+        "contrastSampleCount": 16,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-report",
+          "theme": "dark",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 13,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-report",
+      "viewport": "mobile",
+      "theme": "light",
+      "screenshot": "business-report-mobile-light.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "light",
+        "savedTheme": "light",
+        "route": "business-report",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-report",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-monthly-report": true,
+          "stage229-report-scopes": true,
+          "stage229-anonymous-cohort": true,
+          "stage229-forecast": true,
+          "stage229-report-location-link": true
+        },
+        "scoreCount": 0,
+        "reportScopeCount": 4,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 6.8196038886170705,
+        "contrastSampleCount": 16,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-report",
+          "theme": "light",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 13,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    },
+    {
+      "surface": "business-report",
+      "viewport": "mobile",
+      "theme": "dark",
+      "screenshot": "business-report-mobile-dark.png",
+      "inspection": {
+        "htmlLanguage": "ko",
+        "theme": "dark",
+        "savedTheme": "dark",
+        "route": "business-report",
+        "loadState": "ready",
+        "state": "ready",
+        "appRoute": "business-report",
+        "navCount": 9,
+        "h1Count": 1,
+        "mainCount": 1,
+        "landmarkNavCount": 1,
+        "selectors": {
+          "stage229-readiness": true,
+          "stage229-monthly-report": true,
+          "stage229-report-scopes": true,
+          "stage229-anonymous-cohort": true,
+          "stage229-forecast": true,
+          "stage229-report-location-link": true
+        },
+        "scoreCount": 0,
+        "reportScopeCount": 4,
+        "overflowX": 0,
+        "focusableCount": 14,
+        "minimumCriticalContrast": 10.247412894537392,
+        "contrastSampleCount": 16,
+        "contrastViolationCount": 0,
+        "contrastViolations": [],
+        "forbidden": [],
+        "expected": {
+          "route": "business-report",
+          "theme": "dark",
+          "nav": 9
+        }
+      },
+      "keyboard": {
+        "distinct": 13,
+        "visibleIndicators": 24,
+        "maximumOutline": 3
+      },
+      "browserErrors": [],
+      "passed": true
+    }
+  ],
+  "special": [
+    {
+      "id": "minimum-320",
+      "surface": "admin-location",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "deviceScaleFactor": 1,
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "minimumCriticalContrast": 7.520132327880464,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "admin-location",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "deviceScaleFactor": 1,
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "minimumCriticalContrast": 7.520132327880464,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "business-location",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "deviceScaleFactor": 1,
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "minimumCriticalContrast": 15.733634720925018,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "business-location",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "deviceScaleFactor": 1,
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "minimumCriticalContrast": 15.733634720925018,
+      "passed": true
+    },
+    {
+      "id": "minimum-320",
+      "surface": "business-report",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "deviceScaleFactor": 1,
+      "zoomPercent": 100,
+      "computedZoom": "1",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "minimumCriticalContrast": 6.8196038886170705,
+      "passed": true
+    },
+    {
+      "id": "zoom-200",
+      "surface": "business-report",
+      "viewport": {
+        "width": 640,
+        "height": 900
+      },
+      "deviceScaleFactor": 1,
+      "zoomPercent": 200,
+      "computedZoom": "2",
+      "effectiveCssWidth": 320,
+      "overflowX": 0,
+      "minimumCriticalContrast": 6.8196038886170705,
+      "passed": true
+    }
+  ],
+  "passed": true
+}

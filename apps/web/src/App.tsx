@@ -27,7 +27,9 @@ import {
 import type { CoreMetric, CoreWorkspace as CoreWorkspacePayload } from "./core/coreClient";
 import { useCoreWorkspace } from "./core/useCoreWorkspace";
 import { purgeV2UiCaches } from "./pwa";
-import { platformCoreEnabled } from "./runtimeFlags";
+import { Stage229RoutePage } from "./reporting/Stage229Pages";
+import { isStage229OnlyRoute, isStage229Route } from "./reporting/stage229Client";
+import { businessReportEnabled, locationCardEnabled, platformCoreEnabled } from "./runtimeFlags";
 import { applyTheme, currentTheme, nextTheme } from "./theme";
 
 const renderLink: LinkRenderer = ({ href, className, children, ariaCurrent, title }) =>
@@ -46,10 +48,12 @@ const STAGE227_ROUTE_IDS = new Set([
 const METRICS_BY_ROUTE: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "business-onboarding": ["freshCompanyCount", "completedJobCount", "locationCardRequestCount"],
   "business-activity": ["freshCompanyCount", "activeJobCount", "interestCount"],
+  "business-report": ["freshCompanyCount", "completedJobCount", "locationCardRequestCount"],
   "business-location": ["freshCompanyCount", "locationCardRequestCount", "completedJobCount"],
   "admin-overview": ["freshCompanyCount", "activeJobCount", "completedJobCount"],
   "admin-companies": ["companyCount", "freshCompanyCount", "completedJobCount"],
   "admin-collection": ["activeJobCount", "completedJobCount", "tourismRequestCount"],
+  "admin-location": ["locationCardRequestCount", "freshCompanyCount", "completedJobCount"],
   "admin-settings": ["companyCount", "activeJobCount", "completedJobCount"]
 });
 
@@ -71,17 +75,21 @@ function StateDataSection({ kind, message }: { kind: "loading" | "permission" | 
   </section>;
 }
 
-function CoreRoutePage({ routeId, workspace, session, reload }: {
+function CoreRoutePage({ routeId, workspace, session, reload, insightsEnabled = false }: {
   routeId: string;
   workspace: CoreWorkspacePayload;
   session: SessionPayload;
   reload: () => Promise<unknown>;
+  insightsEnabled?: boolean;
 }) {
+  if (insightsEnabled && isStage229OnlyRoute(routeId)) {
+    return <Stage229RoutePage routeId={routeId} session={session} enabled />;
+  }
   const props = { workspace, session, reload };
   switch (routeId) {
     case "business-onboarding": return <OnboardingPage {...props} />;
     case "business-activity": return <BusinessActivityPage {...props} />;
-    case "business-location": return <LocationCardPage {...props} />;
+    case "business-location": return <><LocationCardPage {...props} />{insightsEnabled ? <Stage229RoutePage routeId="business-location" session={session} enabled /> : null}</>;
     case "admin-overview": return <AdminOverviewPage {...props} />;
     case "admin-companies": return <AdminCompaniesPage {...props} />;
     case "admin-collection": return <AdminCollectionPage {...props} />;
@@ -95,9 +103,18 @@ function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionP
   const route = routeForPath(window.location.pathname, role);
   const navigation = useMemo(() => navigationForRole(role), [role]);
   const roleMismatch = route.role !== role;
-  const targeted = STAGE227_ROUTE_IDS.has(route.id);
+  const locationInsightsEnabled = locationCardEnabled();
+  const reportInsightsEnabled = businessReportEnabled();
+  const insightsEnabled = route.id === "business-report"
+    ? reportInsightsEnabled
+    : route.id === "business-location" || route.id === "admin-location"
+      ? locationInsightsEnabled
+      : false;
+  const stage229OnlyRoute = insightsEnabled && isStage229OnlyRoute(route.id) ? route.id : null;
+  const targeted = STAGE227_ROUTE_IDS.has(route.id) || (insightsEnabled && isStage229Route(route.id));
+  const coreTargeted = STAGE227_ROUTE_IDS.has(route.id);
   const coreEnabled = platformCoreEnabled();
-  const { workspace, loadState, message, reload } = useCoreWorkspace(route.id, coreEnabled && targeted && !roleMismatch);
+  const { workspace, loadState, message, reload } = useCoreWorkspace(route.id, coreEnabled && coreTargeted && !roleMismatch);
   const metrics = workspace ? metricSelection(workspace, route.id) : [];
   const doLogout = async () => {
     try { await logout(); } finally {
@@ -123,10 +140,10 @@ function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionP
     accountLabel={session.username}
     onLogout={doLogout}
   >
-    <div data-testid="stage227-page" data-route-id={route.id} data-workspace-state={roleMismatch ? "permission" : !coreEnabled && targeted ? "unavailable" : loadState === "ready" ? (workspace?.state || "empty") : loadState}>
+    <div data-testid="stage227-page" data-route-id={route.id} data-workspace-state={roleMismatch ? "permission" : stage229OnlyRoute ? "stage229" : !coreEnabled && targeted ? "unavailable" : loadState === "ready" ? (workspace?.state || "empty") : loadState}>
     <PageHeader eyebrow={route.eyebrow} title={route.title} description={route.description} actions={<>
       <StatusBadge tone={workspace?.source !== "empty" ? "info" : "warning"}>{workspace?.source === "synthetic-fresh-integration" ? "Stage 228 fresh store" : workspace?.source === "synthetic-fresh-collection" ? "합성 신규 수집" : "fresh-only"}</StatusBadge>
-      {coreEnabled && targeted && !roleMismatch ? <button className="v2-button v2-button--secondary" type="button" onClick={() => void reload()} disabled={loadState === "loading"}>새로고침</button> : null}
+      {coreEnabled && coreTargeted && !roleMismatch ? <button className="v2-button v2-button--secondary" type="button" onClick={() => void reload()} disabled={loadState === "loading"}>새로고침</button> : null}
     </>} />
     <div className="v2-metric-grid" aria-label="신규 통합 store 지표" data-testid="core-metrics">
       {metrics.length ? metrics.map((metric) => <MetricCard key={metric.id} label={metric.label} value={metric.value} detail={metric.detail} tone={metric.tone} />) : <>
@@ -137,12 +154,13 @@ function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionP
     </div>
     <div className="v2-core-content" data-testid="core-data-section">
       {roleMismatch ? <StateDataSection kind="permission" />
-        : !targeted ? <DeferredPage />
+        : stage229OnlyRoute ? <Stage229RoutePage routeId={stage229OnlyRoute} session={session} enabled />
+          : !targeted ? <DeferredPage />
           : !coreEnabled ? <StateDataSection kind="unavailable" />
           : loadState !== "ready" ? <StateDataSection kind={loadState} message={message} />
             : workspace ? <>
               {workspace.state === "partial" ? <p className="v2-core-notice" data-tone="warning" role="status">일부 신규 수집 필드가 비어 있습니다. 있는 값을 숨기지 않되 누락 상태를 함께 표시합니다.</p> : null}
-              <CoreRoutePage routeId={route.id} workspace={workspace} session={session} reload={reload} />
+              <CoreRoutePage routeId={route.id} workspace={workspace} session={session} reload={reload} insightsEnabled={insightsEnabled} />
             </> : <StateDataSection kind="error" />}
     </div>
     </div>

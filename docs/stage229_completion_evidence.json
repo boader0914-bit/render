@@ -1,0 +1,196 @@
+{
+  "schemaVersion": "stage229-local-acceptance-v1",
+  "stage": 229,
+  "generatedAt": "2026-07-29T11:27:58.014Z",
+  "status": "local-acceptance-passed",
+  "blockers": [],
+  "scope": "Stage 229 implementation and local acceptance only",
+  "source": {
+    "branch": "preview/lodging-datalab-v2",
+    "baseCommit": "20889063ff4cc1b016f24186bce7946dea6268d7",
+    "workingTree": "uncommitted-preview-checkpoint",
+    "legacyDataImported": false
+  },
+  "versions": {
+    "providerId": "stage229-deterministic-signal-fixture",
+    "fixtureVersion": "stage229-deterministic-signals-v1",
+    "algorithmVersion": "v2-stage229-location-forecast-v1"
+  },
+  "fixtureHashes": {
+    "algorithm": "canonical-stable-hash-sha256",
+    "signalContract": "690f783d1c79e4864ddbdbf8bf3f2a144dda703a54b3fd53713699e9af13367b",
+    "locationForecastCases": "1af0ab9f240195f9738b8790f38713e7027d761e9d6fab3905436adf0d3adb93"
+  },
+  "freshnessGates": {
+    "completeLeadDays": [14, 7, 1],
+    "minimumCompleteSeries": 3,
+    "minimumStockPairPoints": 9,
+    "latestCompleteLeadtimePointMaximumAgeHours": 24,
+    "latestScoredOtaPointMaximumAgeHours": 24,
+    "everyRequiredSignalKindMaximumAgeHours": 168,
+    "forecastAndReportMonth": "exact-next-month-from-asOf",
+    "signalFixturePeriod": "asOf-current-month"
+  },
+  "cohortContract": {
+    "minimumAnonymousPeers": 3,
+    "subjectExcludedFromPeerCount": true,
+    "stalePeersExcluded": true,
+    "emptyCompaniesExcluded": true,
+    "scoredPeerMetricRowsRecordedInternally": true,
+    "deterministicCohortHashRecordedInternally": true
+  },
+  "evidenceBoundary": {
+    "internalRelation": "durable-repository-only",
+    "locationLineage": "complete-D14-D7-D1-stock-pairs-plus-scored-OTA-plus-one-latest-required-signal",
+    "reportLineage": "exact-metric-rows-for-all-fresh-eligible-scope-members",
+    "publicSummaryFields": [
+      "inputRange",
+      "observationCount",
+      "signalCount",
+      "algorithmVersion",
+      "fixtureVersion",
+      "sourceBoundary"
+    ],
+    "adminExposesInternalRelationId": false,
+    "businessExposesInternalRelationId": false,
+    "businessExposesPeerIds": false
+  },
+  "runtimeBoundary": {
+    "dataBoundary": "fresh-integration-stage229-only",
+    "externalProviderCalls": 0,
+    "credentialReads": 0,
+    "legacyRuntimeReads": 0,
+    "legacyRuntimeCopies": 0,
+    "productionMutations": 0,
+    "stage230Assets": 0
+  },
+  "lifecycle": {
+    "states": [
+      "requested",
+      "draft",
+      "in-review",
+      "changes-requested",
+      "reviewed",
+      "published"
+    ],
+    "ownershipRevalidatedOnEveryMutation": true,
+    "publishFreshnessRevalidated": true,
+    "minimumSampleGateBlocksPublish": true,
+    "collectingStatePreservedWithActiveRunAndNoReport": true
+  },
+  "rollback": {
+    "unit": "whole-stage229-store-snapshot",
+    "individualCardOrReportRollback": false,
+    "adminStepUpRequired": true,
+    "preflightBeforeLiveWrite": [
+      "filesHash",
+      "fileChecksum",
+      "fileSize",
+      "schema",
+      "storeOwnership"
+    ],
+    "isolatedSameVolumeRestore": true,
+    "renameSwapWithBackupJournal": true,
+    "restartRecovery": true,
+    "appendOnlyRollbackAudit": true,
+    "corruptSnapshotLeavesLiveStateUnchanged": true
+  },
+  "visualAcceptance": {
+    "report": "test/results/stage229_visual_qa.json",
+    "surfaceCount": 3,
+    "screenshotCount": 12,
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "minimumCssWidth": 320,
+    "zoomPercent": 200,
+    "normalTextMinimumContrastRatio": 4.5,
+    "largeTextMinimumContrastRatio": 3,
+    "contrastViolations": 0,
+    "horizontalOverflowViolations": 0,
+    "browserErrors": 0,
+    "externalBrowserRequests": 0,
+    "reportToLocationNavigation": "passed"
+  },
+  "validation": {
+    "commands": [
+      {
+        "command": "node scripts/test_stage229_contracts.cjs",
+        "status": "passed"
+      },
+      {
+        "command": "node scripts/test_stage229_service.cjs",
+        "status": "passed"
+      },
+      {
+        "command": "node scripts/test_stage229_server.cjs",
+        "status": "passed"
+      },
+      {
+        "command": "node scripts/test_stage229_security.cjs",
+        "status": "passed"
+      },
+      {
+        "command": "node scripts/test_stage229_ui_contracts.cjs",
+        "status": "passed"
+      },
+      {
+        "command": "node scripts/test_stage229_visual.cjs",
+        "status": "passed",
+        "trackedEvidenceMutated": false
+      },
+      {
+        "command": "node scripts/test_stage229_visual.cjs --write-evidence",
+        "status": "passed",
+        "trackedEvidenceMutated": true
+      },
+      {
+        "command": "npm run build:ui",
+        "status": "passed"
+      },
+      {
+        "command": "git diff --check",
+        "status": "passed-with-line-ending-warnings-only"
+      }
+    ],
+    "preWiringRegressionSuite": {
+      "command": "npm test",
+      "status": "passed",
+      "scope": "Stages 222 through 228; Stage 229 package wiring was added after this run"
+    },
+    "finalRegressionSuite": {
+      "command": "npm test",
+      "status": "passed",
+      "scope": "Stages 222 through 229 with final Stage 229 package wiring"
+    },
+    "packageStage229Wiring": "present-and-final-rerun-passed",
+    "evidenceValidator": "node scripts/test_stage229_evidence.cjs"
+  },
+  "artifacts": [
+    "docs/stage229_location_forecast_monthly_report.md",
+    "docs/stage229_rollback_runbook.md",
+    "scripts/test_stage229_contracts.cjs",
+    "scripts/test_stage229_service.cjs",
+    "scripts/test_stage229_server.cjs",
+    "scripts/test_stage229_security.cjs",
+    "scripts/test_stage229_ui_contracts.cjs",
+    "scripts/test_stage229_visual.cjs",
+    "scripts/test_stage229_evidence.cjs",
+    "test/fixtures/stage229/signal_contract_v1.json",
+    "test/fixtures/stage229/location_forecast_cases_v1.json",
+    "test/results/stage229_visual_qa.json"
+  ],
+  "previewDeployment": {
+    "status": "pending-checkpoint",
+    "commitCreated": false,
+    "pushed": false,
+    "renderDeploymentObserved": false,
+    "renderSmokeTested": false,
+    "note": "Commit, push, Render deployment and post-deploy smoke are intentionally outside this local acceptance evidence."
+  }
+}

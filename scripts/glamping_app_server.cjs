@@ -13,6 +13,7 @@ const { readUiV3FeatureFlag } = require("./ui_v3_feature_flag.cjs");
 const { createIntegrationAuthRuntime } = require("./integration/bootstrap/auth_runtime.cjs");
 const { createIntegrationCoreRuntime } = require("./integration/bootstrap/core_runtime.cjs");
 const { createFreshPlatformRuntime } = require("./integration/bootstrap/fresh_platform_runtime.cjs");
+const { createInsightsRuntime } = require("./integration/bootstrap/insights_runtime.cjs");
 const { assertFreshAuthStoreBoundary } = require("./integration/repositories/fresh_store.cjs");
 const {
   CONTRACT_PREVIEW_PURPOSE,
@@ -82,6 +83,9 @@ const INTEGRATION_FEATURE_FLAGS = readIntegrationFeatureFlags(process.env);
 const V2_INTEGRATION_PLATFORM_CORE_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_PLATFORM_CORE_ENABLED);
 const V2_INTEGRATION_FRESH_COMPANY_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_FRESH_COMPANY_ENABLED);
 const V2_INTEGRATION_FRESH_OBSERVATION_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_FRESH_OBSERVATION_ENABLED);
+const V2_INTEGRATION_RELIABILITY_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_RELIABILITY_ENABLED);
+const V2_INTEGRATION_LOCATION_CARD_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_LOCATION_CARD_ENABLED);
+const V2_INTEGRATION_BUSINESS_REPORT_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_BUSINESS_REPORT_ENABLED);
 const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "admin")).trim();
 const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "0914")).trim();
 const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "b2b")).trim();
@@ -98,6 +102,7 @@ const V2_UI_V3_ENABLED = readUiV3FeatureFlag(process.env);
 let integrationAuthRuntime = null;
 let integrationCoreRuntime = null;
 let integrationFreshRuntime = null;
+let integrationInsightsRuntime = null;
 const V2_INTEGRATION_PREVIEW_PURPOSE = String(process.env.V2_INTEGRATION_PREVIEW_PURPOSE || "").trim().toLowerCase();
 const V2_INTEGRATION_PREVIEW_FIXTURE_ROOT = String(process.env.V2_INTEGRATION_PREVIEW_FIXTURE_ROOT || "").trim();
 const INTEGRATION_PREVIEW_ACCESS_GUARD = (() => {
@@ -13335,6 +13340,12 @@ async function serveUiV3Index(req, res, extraHeaders = {}) {
   const runtimeHtml = indexHtml.replaceAll(
     "__V2_PLATFORM_CORE_ENABLED__",
     INTEGRATION_FEATURE_FLAGS.platformCore ? "true" : "false"
+  ).replaceAll(
+    "__V2_LOCATION_CARD_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.locationCard ? "true" : "false"
+  ).replaceAll(
+    "__V2_BUSINESS_REPORT_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.businessReport ? "true" : "false"
   );
   return send(res, 200, runtimeHtml, "text/html; charset=utf-8", headers);
 }
@@ -13422,6 +13433,10 @@ async function route(req, res) {
       INTEGRATION_FEATURE_FLAGS.freshCompany
       && integrationFreshRuntime
       && await integrationFreshRuntime.http.handle(req, res, reqUrl)
+    ) return;
+    if (
+      integrationInsightsRuntime
+      && await integrationInsightsRuntime.http.handle(req, res, reqUrl)
     ) return;
     if (
       INTEGRATION_FEATURE_FLAGS.platformCore
@@ -13990,6 +14005,15 @@ async function startServer() {
   )) {
     throw new Error("Stage 228 fresh data requires integration auth and platform core");
   }
+  if (V2_INTEGRATION_RELIABILITY_REQUESTED && !INTEGRATION_FEATURE_FLAGS.freshObservation) {
+    throw new Error("V2_INTEGRATION_RELIABILITY_ENABLED requires V2_INTEGRATION_FRESH_OBSERVATION_ENABLED");
+  }
+  if (V2_INTEGRATION_LOCATION_CARD_REQUESTED && !INTEGRATION_FEATURE_FLAGS.reliability) {
+    throw new Error("V2_INTEGRATION_LOCATION_CARD_ENABLED requires V2_INTEGRATION_RELIABILITY_ENABLED");
+  }
+  if (V2_INTEGRATION_BUSINESS_REPORT_REQUESTED && !INTEGRATION_FEATURE_FLAGS.freshObservation) {
+    throw new Error("V2_INTEGRATION_BUSINESS_REPORT_ENABLED requires V2_INTEGRATION_FRESH_OBSERVATION_ENABLED");
+  }
   if (V2_INTEGRATION_FRESH_COMPANY_REQUESTED) {
     assertFreshAuthStoreBoundary({
       authStorePath: process.env.V2_INTEGRATION_AUTH_STORE_PATH,
@@ -14022,12 +14046,34 @@ async function startServer() {
     });
     await integrationFreshRuntime.initialize();
   }
+  if (
+    INTEGRATION_FEATURE_FLAGS.reliability
+    || INTEGRATION_FEATURE_FLAGS.locationCard
+    || INTEGRATION_FEATURE_FLAGS.businessReport
+  ) {
+    integrationInsightsRuntime = createInsightsRuntime({
+      env: process.env,
+      projectRoot: ROOT,
+      authRuntime: integrationAuthRuntime,
+      freshRuntime: integrationFreshRuntime,
+      capabilities: {
+        reliability: INTEGRATION_FEATURE_FLAGS.reliability,
+        locationCard: INTEGRATION_FEATURE_FLAGS.locationCard,
+        businessReport: INTEGRATION_FEATURE_FLAGS.businessReport
+      },
+      send,
+      parseBody: parseLoginBody,
+      legacyPaths: stage228LegacyPaths
+    });
+    await integrationInsightsRuntime.initialize();
+  }
   if (INTEGRATION_FEATURE_FLAGS.platformCore) {
     integrationCoreRuntime = createIntegrationCoreRuntime({
       env: process.env,
       projectRoot: ROOT,
       authRuntime: integrationAuthRuntime,
       freshRuntime: integrationFreshRuntime,
+      insightsRuntime: INTEGRATION_FEATURE_FLAGS.locationCard ? integrationInsightsRuntime : null,
       send,
       parseBody: parseLoginBody
     });

@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "stage229-signal-fixture-v1",
+  "fixtureVersion": "stage229-deterministic-signals-v1",
+  "providerId": "stage229-deterministic-signal-fixture",
+  "algorithmVersion": "v2-stage229-location-forecast-v1",
+  "label": "stage229-validation-fixture",
+  "asOf": "2026-07-29T00:00:00.000Z",
+  "sourceBoundary": {
+    "synthetic": true,
+    "freshIntegrationOnly": true,
+    "externalRequests": 0,
+    "credentialReads": 0,
+    "legacyRuntimeReads": 0,
+    "legacyRuntimeCopies": 0,
+    "migrationWrites": 0,
+    "backfillWrites": 0,
+    "dualWrites": 0,
+    "productionMutations": 0
+  },
+  "expectedKinds": [
+    "tourism.visitors",
+    "tourism.resource-demand",
+    "tourism.diversity",
+    "search.volume",
+    "trend.index",
+    "sns.mentions",
+    "structure.industry",
+    "structure.catchment",
+    "structure.accessibility"
+  ],
+  "default": {
+    "tourismVisitors": 68,
+    "tourismResourceDemand": 64,
+    "tourismDiversity": 72,
+    "searchVolume": 74,
+    "trendIndex": 71,
+    "snsMentions": 65,
+    "industryIndex": 69,
+    "catchmentIndex": 67,
+    "accessibilityIndex": 78
+  },
+  "companies": {
+    "cmp_place_stage229_tenant": {
+      "tourism.visitors": 70,
+      "tourism.resource-demand": 66,
+      "tourism.diversity": 76,
+      "search.volume": 82,
+      "trend.index": 74,
+      "sns.mentions": 66,
+      "structure.industry": 70,
+      "structure.catchment": 68,
+      "structure.accessibility": 80
+    },
+    "cmp_place_stage229_cohort_a": {
+      "tourismVisitors": 67,
+      "resourceDemand": 63,
+      "diversity": 71,
+      "searchVolume": 73,
+      "trend": 69,
+      "sns": 62,
+      "industry": 68,
+      "catchment": 66,
+      "accessibility": 77
+    }
+  }
+}

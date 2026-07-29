@@ -70,6 +70,7 @@ function createIntegrationCoreRuntime(options = {}) {
     repository,
     authService: options.authRuntime.service,
     freshDataService: options.freshRuntime?.service || null,
+    insightsService: options.insightsRuntime?.service || null,
     clock: options.clock,
     idFactory: options.idFactory
   });

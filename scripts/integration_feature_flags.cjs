@@ -27,7 +27,21 @@ const INTEGRATION_FEATURE_DEFINITIONS = Object.freeze({
     scope: "runtime",
     dependsOn: Object.freeze(["freshCompany"])
   }),
-  businessReport: Object.freeze({ envKey: "V2_INTEGRATION_BUSINESS_REPORT_ENABLED", scope: "runtime" })
+  reliability: Object.freeze({
+    envKey: "V2_INTEGRATION_RELIABILITY_ENABLED",
+    scope: "runtime",
+    dependsOn: Object.freeze(["freshObservation"])
+  }),
+  locationCard: Object.freeze({
+    envKey: "V2_INTEGRATION_LOCATION_CARD_ENABLED",
+    scope: "runtime",
+    dependsOn: Object.freeze(["reliability"])
+  }),
+  businessReport: Object.freeze({
+    envKey: "V2_INTEGRATION_BUSINESS_REPORT_ENABLED",
+    scope: "runtime",
+    dependsOn: Object.freeze(["freshObservation"])
+  })
 });
 
 function flagEnabled(value) {

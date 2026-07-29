@@ -111,6 +111,25 @@ Stage 228에서는 `synthetic` provider와 `https://*.example.invalid` fixture�
 없습니다. 계층·API·snapshot rollback 계약은
 `docs/stage228_fresh_integration_store.md`를 따릅니다.
 
+Stage 229의 입지카드·예측·월간 리포트는 Stage 228 이후 새로 저장된 관측과
+`stage229-deterministic-signal-fixture`만 사용합니다. 세 플래그는 모두 기본값이 `false`이며,
+실제 관광·검색량·trend·SNS provider, credential, scheduler와 quota 트래픽은 Stage 231 전까지
+금지됩니다. 최소 반복 관측이나 익명 peer 표본이 부족하면 결과를 만들지 않고
+`insufficient-data`와 다음 수집 CTA를 반환합니다.
+
+```powershell
+npm run test:stage229
+$env:V2_INTEGRATION_RELIABILITY_ENABLED = "true"
+$env:V2_INTEGRATION_LOCATION_CARD_ENABLED = "true"
+$env:V2_INTEGRATION_BUSINESS_REPORT_ENABLED = "true"
+$env:V2_INTEGRATION_INSIGHTS_PROVIDER = "deterministic-fixture"
+# Stage 226~228의 auth, UI, platform core, fresh-store 설정도 함께 필요합니다.
+npm start
+```
+
+알고리즘·business-safe 공개 계약은 `docs/stage229_location_forecast_monthly_report.md`,
+기능 차단과 snapshot 복구 순서는 `docs/stage229_rollback_runbook.md`를 따릅니다.
+
 Stage 224 기능 원장과 신규 수집 예산을 고정 commit에서 다시 생성·검증하려면 다음을
 실행합니다.
 
@@ -142,6 +161,10 @@ npm run test:stage224
 - `V2_INTEGRATION_FRESH_OBSERVATION_ENABLED` (기본 `false`, fresh company 의존)
 - `V2_INTEGRATION_DATA_DIR` (Stage 228 활성화 시 필수인 신규 절대 경로)
 - `V2_INTEGRATION_FRESH_PROVIDER` (Stage 228에서는 `synthetic`만 허용)
+- `V2_INTEGRATION_RELIABILITY_ENABLED` (기본 `false`, fresh observation 의존)
+- `V2_INTEGRATION_LOCATION_CARD_ENABLED` (기본 `false`, reliability 의존)
+- `V2_INTEGRATION_BUSINESS_REPORT_ENABLED` (기본 `false`, fresh observation 의존)
+- `V2_INTEGRATION_INSIGHTS_PROVIDER` (Stage 229에서는 `deterministic-fixture`만 허용)
 
 실제 값은 저장소에 기록하지 않습니다. 데이터 경로와 인스턴스 유형은 선택한
 V2 정본 manifest를 따릅니다.

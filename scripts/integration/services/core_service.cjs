@@ -91,6 +91,7 @@ function createCoreService(options = {}) {
   const repository = options.repository;
   const authService = options.authService;
   const freshDataService = options.freshDataService || null;
+  const insightsService = options.insightsService || null;
   const clock = options.clock || (() => Date.now());
   const idFactory = options.idFactory || ((prefix) => `${prefix}_${crypto.randomUUID()}`);
   if (!repository || !authService) throw new Error("Core service dependencies are required");
@@ -201,7 +202,9 @@ function createCoreService(options = {}) {
       row,
       companies.find((company) => company.companyId === row.companyId) || null
     ));
-    const locationCardRequests = ownedRows(store.locationCardRequests, session).map(publicLocationCardRequest);
+    const locationCardRequests = insightsService
+      ? await insightsService.listLocationCardRequests(session, context)
+      : ownedRows(store.locationCardRequests, session).map(publicLocationCardRequest);
     const tourismRequests = role === CORE_ROLES.admin
       ? ownedRows(store.tourismRequests, session).map(publicTourismRequest)
       : [];
@@ -450,6 +453,14 @@ function createCoreService(options = {}) {
       : repository.currentUnsafe().companies.some((row) => row.companyId === companyId);
     if (!companyExists) {
       throw coreError("신규 수집 업체를 찾을 수 없습니다.", 404, "CORE_COMPANY_NOT_FOUND");
+    }
+    if (insightsService) {
+      return insightsService.requestLocationCard(session, {
+        ...payload,
+        clientRequestId,
+        companyId,
+        tenantCompanyId: tenant.companyId
+      }, context);
     }
     const existing = repository.currentUnsafe().locationCardRequests.find((row) => (
       row.actorAccountId === session.accountId && row.clientRequestId === clientRequestId
