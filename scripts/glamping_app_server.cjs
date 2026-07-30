@@ -4197,15 +4197,17 @@ function loginPage(message = "") {
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="application-name" content="숙박업 데이터랩 beta">
   <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
-  <meta name="theme-color" content="#1457c7">
+  <meta name="theme-color" content="#070b12" id="themeColor">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <title>숙박업 데이터랩 beta 로그인</title>
+  <script src="/login-theme.js"></script>
   <style>
-    :root { color-scheme: dark; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
+    :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
+    :root[data-theme="dark"] { color-scheme: dark; }
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -4219,6 +4221,23 @@ function loginPage(message = "") {
         calc(24px + env(safe-area-inset-left));
       background: #070b12;
       color: #f7fbff;
+    }
+    .theme-toggle {
+      position: fixed;
+      top: calc(16px + env(safe-area-inset-top));
+      right: calc(16px + env(safe-area-inset-right));
+      z-index: 2;
+      width: auto;
+      min-height: 42px;
+      margin: 0;
+      padding: 0 14px;
+      border: 1px solid rgba(148, 163, 184, .32);
+      border-radius: 999px;
+      background: rgba(12, 18, 29, .88);
+      color: #e8f1ff;
+      font-size: 13px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
+      backdrop-filter: blur(12px);
     }
     main {
       width: min(100%, 920px);
@@ -4361,6 +4380,26 @@ function loginPage(message = "") {
       word-break: keep-all;
     }
     .error { min-height: 20px; color: #ff8b8b; font-size: 13px; font-weight: 900; line-height: 1.35; }
+    :root[data-theme="light"] body { background: #f3f6fa; color: #101828; }
+    :root[data-theme="light"] main { border-color: #d7dee8; background: #fff; box-shadow: 0 24px 64px rgba(16, 24, 40, .13); }
+    :root[data-theme="light"] .login-brand-panel {
+      border-color: rgba(20, 87, 199, .16);
+      background: linear-gradient(135deg, #e9f2ff, #e6f8f5);
+    }
+    :root[data-theme="light"] .login-form-panel { background: #fff; }
+    :root[data-theme="light"] h1,
+    :root[data-theme="light"] .form-head strong { color: #101828; }
+    :root[data-theme="light"] .brand-note,
+    :root[data-theme="light"] .form-head p,
+    :root[data-theme="light"] .security-note { color: #475467; }
+    :root[data-theme="light"] label { color: #344054; }
+    :root[data-theme="light"] input { border-color: #cbd5e1; background: #f8fafc; color: #101828; }
+    :root[data-theme="light"] input::placeholder { color: #667085; }
+    :root[data-theme="light"] .link { color: #1457c7; }
+    :root[data-theme="light"] .legal-links a { color: #475467; }
+    :root[data-theme="light"] .legal-links a:hover { color: #1457c7; }
+    :root[data-theme="light"] .theme-toggle { border-color: #cbd5e1; background: rgba(255, 255, 255, .9); color: #344054; box-shadow: 0 8px 24px rgba(16, 24, 40, .12); }
+    :root[data-theme="light"] .error { color: #b42318; }
     @media (max-width: 760px) {
       body { align-items: stretch; padding: 14px; }
       main { grid-template-columns: 1fr; border-radius: 24px; }
@@ -4372,6 +4411,7 @@ function loginPage(message = "") {
   </style>
 </head>
 <body>
+  <button class="theme-toggle" id="themeToggle" type="button" aria-label="화면 테마 전환"></button>
   <main>
     <section class="login-brand-panel" aria-label="숙박업 데이터랩 beta">
       <div>
@@ -13154,6 +13194,7 @@ async function route(req, res) {
   try {
     const publicStaticPaths = new Set([
       "/manifest.webmanifest",
+      "/login-theme.js",
       "/sw.js",
       "/offline.html",
       "/favicon.svg",
