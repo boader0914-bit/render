@@ -9,6 +9,7 @@ const {
   assertPassword,
   cleanText,
   entitlementsForPlan,
+  entitlementsForRole,
   normalizeEmail,
   normalizeLoginId,
   normalizePlan,
@@ -1293,7 +1294,11 @@ function createAuthService(options = {}) {
     }
     const company = store.companies.find((row) => row.companyId === requested);
     const membership = session.memberships.find((row) => row.companyId === requested) || null;
-    return { company: { ...company }, membership, entitlements: entitlementsForPlan(membership?.plan || (session.account.role === AUTH_ROLES.admin ? "pro" : "free")) };
+    return {
+      company: { ...company },
+      membership,
+      entitlements: entitlementsForRole(session.account.role, membership?.plan || "free")
+    };
   }
 
   function snapshotForTests() {

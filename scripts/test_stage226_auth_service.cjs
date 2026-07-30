@@ -5,9 +5,11 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const {
+  ADMIN_ENTITLEMENTS,
   AUTH_SCHEMA_VERSION,
   PLAN_ENTITLEMENTS,
-  entitlementsForPlan
+  entitlementsForPlan,
+  entitlementsForRole
 } = require("./integration/contracts/auth.cjs");
 const {
   AUTH_STORE_KIND,
@@ -53,6 +55,7 @@ function expectedEntitlements() {
     free: {
       plan: "free",
       dailySearchLimit: 2,
+      searchUnlimited: false,
       searchWindowDays: 7,
       monthlyExportLimit: 0,
       concurrentExportLimit: 0,
@@ -61,6 +64,7 @@ function expectedEntitlements() {
     basic: {
       plan: "basic",
       dailySearchLimit: 20,
+      searchUnlimited: false,
       searchWindowDays: 14,
       monthlyExportLimit: 5,
       concurrentExportLimit: 1,
@@ -69,6 +73,7 @@ function expectedEntitlements() {
     pro: {
       plan: "pro",
       dailySearchLimit: 100,
+      searchUnlimited: false,
       searchWindowDays: 30,
       monthlyExportLimit: 30,
       concurrentExportLimit: 2,
@@ -276,6 +281,12 @@ async function main() {
       expectedEntitlements()
     );
     assert.deepEqual(JSON.parse(JSON.stringify(PLAN_ENTITLEMENTS)), expectedEntitlements());
+    assert.deepEqual(entitlementsForRole("admin", "free"), {
+      ...expectedEntitlements().pro,
+      dailySearchLimit: 0,
+      searchUnlimited: true
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(ADMIN_ENTITLEMENTS)), entitlementsForRole("admin", "pro"));
 
     const bootstrapPayload = {
       bootstrapSecret: BOOTSTRAP_SECRET,
@@ -339,6 +350,8 @@ async function main() {
     rawSecrets.add(previousKeySession.csrfToken);
     assert.equal(previousKeySession.public.authenticated, true);
     assert.equal(previousKeySession.public.role, "admin");
+    assert.equal(previousKeySession.public.entitlements.searchUnlimited, true);
+    assert.equal(previousKeySession.public.entitlements.dailySearchLimit, 0);
     const v1StoredSession = active.service.snapshotForTests().sessions.find(
       (row) => row.sessionId === previousKeySession.session.sessionId
     );
@@ -784,7 +797,7 @@ async function main() {
       ADMIN_CONTEXT
     );
     assert.equal(adminCompanyAccess.company.companyId, businessTwo.company.companyId);
-    assert.deepEqual(adminCompanyAccess.entitlements, expectedEntitlements().pro);
+    assert.deepEqual(adminCompanyAccess.entitlements, entitlementsForRole("admin", "pro"));
 
     const accountLockContext = {
       ...BUSINESS_CONTEXT,

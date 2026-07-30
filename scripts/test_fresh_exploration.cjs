@@ -18,6 +18,10 @@ const {
   createFreshDataHttpHandler
 } = require("./integration/http/fresh_data_http.cjs");
 const {
+  FRESH_MAP_BOUNDARY_SHA256,
+  canonicalizeFreshMapBoundaryPayload
+} = require("./integration/assets/fresh_map_boundary.cjs");
+const {
   ROOT,
   startServer,
   stopServer
@@ -37,7 +41,6 @@ const COMPANY_RANGE = "cmp_live_exploration_out_of_range";
 const COMPANY_EMPTY = "cmp_live_exploration_not_collected";
 const COMPANY_HIDDEN = "cmp_live_exploration_not_exposed";
 const MAP_BOUNDARY_ENDPOINT = "/api/integration/fresh/map-boundary/kostat-2013-v1";
-const MAP_BOUNDARY_SHA256 = "1cd70bc95ec6ce5cbce1a98ea49fe7a81bdaada98a536b075f25c471e998aae8";
 
 function clone(value) {
   return structuredClone(value);
@@ -471,8 +474,15 @@ async function assertBoundedExplorationReads() {
 
 async function assertVersionedBoundaryEndpoint() {
   const assetPath = path.join(ROOT, "web", "assets", "korea_municipalities.geojson");
-  const allowlistedPayload = fs.readFileSync(assetPath);
-  assert.equal(crypto.createHash("sha256").update(allowlistedPayload).digest("hex"), MAP_BOUNDARY_SHA256);
+  const sourcePayload = fs.readFileSync(assetPath);
+  const allowlistedPayload = canonicalizeFreshMapBoundaryPayload(sourcePayload);
+  const lfPayload = Buffer.from(sourcePayload.toString("utf8").replace(/\r\n|\r|\n/g, "\n"), "utf8");
+  assert.deepEqual(
+    canonicalizeFreshMapBoundaryPayload(lfPayload),
+    allowlistedPayload,
+    "boundary checksum bytes must be identical on Linux and Windows checkouts"
+  );
+  assert.equal(crypto.createHash("sha256").update(allowlistedPayload).digest("hex"), FRESH_MAP_BOUNDARY_SHA256);
 
   let enabledServer;
   let disabledServer;
@@ -490,8 +500,8 @@ async function assertVersionedBoundaryEndpoint() {
     assert.equal(response.headers.get("content-type"), "application/geo+json; charset=utf-8");
     assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
     assert.equal(response.headers.get("content-length"), String(allowlistedPayload.length));
-    assert.equal(response.headers.get("etag"), `"sha256-${MAP_BOUNDARY_SHA256}"`);
-    assert.equal(crypto.createHash("sha256").update(payload).digest("hex"), MAP_BOUNDARY_SHA256);
+    assert.equal(response.headers.get("etag"), `"sha256-${FRESH_MAP_BOUNDARY_SHA256}"`);
+    assert.equal(crypto.createHash("sha256").update(payload).digest("hex"), FRESH_MAP_BOUNDARY_SHA256);
     const parsed = JSON.parse(payload.toString("utf8"));
     assert.equal(parsed.type, "FeatureCollection");
     assert.ok(parsed.features.length > 200);
@@ -505,7 +515,7 @@ async function assertVersionedBoundaryEndpoint() {
     assert.equal(await head.text(), "");
 
     const cached = await fetch(`${enabledServer.baseUrl}${MAP_BOUNDARY_ENDPOINT}`, {
-      headers: { "If-None-Match": `"sha256-${MAP_BOUNDARY_SHA256}"` }
+      headers: { "If-None-Match": `"sha256-${FRESH_MAP_BOUNDARY_SHA256}"` }
     });
     assert.equal(cached.status, 304);
     assert.equal(await cached.text(), "");

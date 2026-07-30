@@ -311,6 +311,8 @@ async function main() {
     assert.equal(adminSession.status, 200);
     assert.equal(adminSession.body.authenticated, true);
     assert.equal(adminSession.body.mfaVerified, true);
+    assert.equal(adminSession.body.entitlements.searchUnlimited, true);
+    assert.equal(adminSession.body.entitlements.dailySearchLimit, 0);
 
     const sessionCsrfBeforeCapabilities = adminJar.lodging_v2_csrf;
     const authenticatedCapabilities = await requestJson(integration, "/api/auth/capabilities", { jar: adminJar });
@@ -378,6 +380,7 @@ async function main() {
     assert.equal(signupOne.body.role, "b2b");
     assert.equal(signupOne.body.plan, "free");
     assert.equal(signupOne.body.entitlements.dailySearchLimit, 2);
+    assert.equal(signupOne.body.entitlements.searchUnlimited, false);
     const companyOne = signupOne.body.companyId;
     assert.equal((await requestJson(integration, `/api/auth/companies/${encodeURIComponent(companyOne)}/context`, { jar: businessOneJar })).status, 200);
 
@@ -393,6 +396,14 @@ async function main() {
       }
     });
     assert.equal(signupTwo.status, 200);
+    const adminCompanyContext = await requestJson(
+      integration,
+      `/api/auth/companies/${encodeURIComponent(signupTwo.body.companyId)}/context`,
+      { jar: adminJar }
+    );
+    assert.equal(adminCompanyContext.status, 200);
+    assert.equal(adminCompanyContext.body.entitlements.searchUnlimited, true);
+    assert.equal(adminCompanyContext.body.entitlements.dailySearchLimit, 0);
     const tenantEscape = await requestJson(integration, `/api/auth/companies/${encodeURIComponent(signupTwo.body.companyId)}/context`, { jar: businessOneJar });
     assert.equal(tenantEscape.status, 403, "cross-company access must be a server-side 403");
 

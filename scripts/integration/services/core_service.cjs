@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const { entitlementsForRole } = require("../contracts/auth.cjs");
 const {
   CORE_JOB_KINDS,
   CORE_ROLES,
@@ -167,13 +168,20 @@ function createCoreService(options = {}) {
     const role = roleFor(session);
     const requested = cleanText(requestedCompanyId, 160);
     if (role === CORE_ROLES.admin) {
-      if (!requested) return { companyId: "", companyName: "", membership: null, entitlements: null };
+      if (!requested) {
+        return {
+          companyId: "",
+          companyName: "",
+          membership: null,
+          entitlements: entitlementsForRole(CORE_ROLES.admin, "pro")
+        };
+      }
       const access = await authService.assertCompanyAccess(session, requested, context);
       return {
         companyId: access.company.companyId,
         companyName: access.company.name || access.company.companyName || "",
         membership: access.membership,
-        entitlements: access.entitlements
+        entitlements: entitlementsForRole(CORE_ROLES.admin, access.membership?.plan || "pro")
       };
     }
     const primary = session.memberships?.[0];

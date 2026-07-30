@@ -238,7 +238,8 @@ function legacyHistory(workspace = {}, limit = 20, now = Date.now()) {
     .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
   const entries = terminal.slice(0, Math.max(1, Math.min(100, Number(limit) || 20))).map(legacyHistoryEntry);
   const entitlements = workspace.tenant?.entitlements || {};
-  const dailyLimit = Math.max(0, Number(entitlements.dailySearchLimit || 0));
+  const searchUnlimited = workspace.role === "admin" || entitlements.searchUnlimited === true;
+  const dailyLimit = searchUnlimited ? 0 : Math.max(0, Number(entitlements.dailySearchLimit || 0));
   const dayKey = kstDayKey(now);
   const usedToday = terminal.filter((job) => (
     job.status === "completed" && job.createdAt && kstDayKey(Date.parse(job.createdAt)) === dayKey
@@ -246,6 +247,7 @@ function legacyHistory(workspace = {}, limit = 20, now = Date.now()) {
   return {
     quota: {
       accountType: workspace.role === "admin" ? "master" : "member",
+      searchUnlimited,
       limited: dailyLimit > 0,
       dailyLimit: dailyLimit || null,
       usedToday,

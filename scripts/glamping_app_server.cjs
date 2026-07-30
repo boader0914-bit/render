@@ -16,6 +16,10 @@ const { createFreshPlatformRuntime } = require("./integration/bootstrap/fresh_pl
 const { createInsightsRuntime } = require("./integration/bootstrap/insights_runtime.cjs");
 const { createStrategyRuntime } = require("./integration/bootstrap/strategy_runtime.cjs");
 const { createSignalConnectorRuntime } = require("./integration/bootstrap/signal_connector_runtime.cjs");
+const {
+  FRESH_MAP_BOUNDARY_SHA256,
+  canonicalizeFreshMapBoundaryPayload
+} = require("./integration/assets/fresh_map_boundary.cjs");
 const { assertFreshAuthStoreBoundary } = require("./integration/repositories/fresh_store.cjs");
 const {
   CONTRACT_PREVIEW_PURPOSE,
@@ -31,7 +35,6 @@ const WEB_DIR = path.join(ROOT, "web");
 const UI_V3_WEB_DIR = path.join(ROOT, "apps", "web", "dist");
 const FRESH_MAP_BOUNDARY_ENDPOINT = "/api/integration/fresh/map-boundary/kostat-2013-v1";
 const FRESH_MAP_BOUNDARY_FILE = path.join(WEB_DIR, "assets", "korea_municipalities.geojson");
-const FRESH_MAP_BOUNDARY_SHA256 = "1cd70bc95ec6ce5cbce1a98ea49fe7a81bdaada98a536b075f25c471e998aae8";
 const REPO_OUTPUTS_DIR = path.join(ROOT, "outputs");
 const RENDER_DISK_DIR = "/var/data";
 const IS_RENDER_RUNTIME = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
@@ -13401,7 +13404,7 @@ async function serveFreshMapBoundary(req, reqUrl, res) {
     return true;
   }
   try {
-    const payload = await fsp.readFile(FRESH_MAP_BOUNDARY_FILE);
+    const payload = canonicalizeFreshMapBoundaryPayload(await fsp.readFile(FRESH_MAP_BOUNDARY_FILE));
     const checksum = crypto.createHash("sha256").update(payload).digest("hex");
     if (checksum !== FRESH_MAP_BOUNDARY_SHA256) throw new Error("boundary checksum mismatch");
     const etag = `"sha256-${FRESH_MAP_BOUNDARY_SHA256}"`;

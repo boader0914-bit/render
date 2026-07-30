@@ -93,6 +93,7 @@ async function main() {
   const entitlements = {
     plan: "free",
     dailySearchLimit: 2,
+    searchUnlimited: false,
     searchWindowDays: 7,
     monthlyExportLimit: 0,
     concurrentExportLimit: 0,
@@ -545,6 +546,7 @@ async function main() {
   assert.equal(history.status, 200);
   assert.deepEqual(history.body.entries.map((row) => row.runId), ["b2b-client-done-0001"]);
   assert.equal(history.body.quota.dailyLimit, 2);
+  assert.equal(history.body.quota.searchUnlimited, false);
   assert.equal(history.body.quota.usedToday, 1);
   assertSafePayload(history.body, "search history");
 

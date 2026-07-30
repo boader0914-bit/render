@@ -168,6 +168,8 @@ function errorCode(reason) {
   const adminWorkspace = await service.workspace(adminSession, { view: "admin-collection" });
   assert.equal(adminWorkspace.permissions.canManageCollection, true);
   assert.equal(adminWorkspace.permissions.canRequestTourism, true);
+  assert.equal(adminWorkspace.tenant.entitlements.searchUnlimited, true);
+  assert.equal(adminWorkspace.tenant.entitlements.dailySearchLimit, 0);
   assert.equal(adminWorkspace.tourismRequests.length, 1);
   assert.equal(Object.keys(adminWorkspace.connectors).length, 3);
 

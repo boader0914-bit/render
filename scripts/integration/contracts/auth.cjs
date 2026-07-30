@@ -17,6 +17,7 @@ const PLAN_ENTITLEMENTS = Object.freeze({
   free: Object.freeze({
     plan: "free",
     dailySearchLimit: 2,
+    searchUnlimited: false,
     searchWindowDays: 7,
     monthlyExportLimit: 0,
     concurrentExportLimit: 0,
@@ -25,6 +26,7 @@ const PLAN_ENTITLEMENTS = Object.freeze({
   basic: Object.freeze({
     plan: "basic",
     dailySearchLimit: 20,
+    searchUnlimited: false,
     searchWindowDays: 14,
     monthlyExportLimit: 5,
     concurrentExportLimit: 1,
@@ -33,11 +35,18 @@ const PLAN_ENTITLEMENTS = Object.freeze({
   pro: Object.freeze({
     plan: "pro",
     dailySearchLimit: 100,
+    searchUnlimited: false,
     searchWindowDays: 30,
     monthlyExportLimit: 30,
     concurrentExportLimit: 2,
     expandedSearchAllowed: true
   })
+});
+
+const ADMIN_ENTITLEMENTS = Object.freeze({
+  ...PLAN_ENTITLEMENTS.pro,
+  dailySearchLimit: 0,
+  searchUnlimited: true
 });
 
 function cleanText(value, max = 240) {
@@ -62,6 +71,12 @@ function normalizePlan(value) {
 
 function entitlementsForPlan(value) {
   return { ...PLAN_ENTITLEMENTS[normalizePlan(value)] };
+}
+
+function entitlementsForRole(role, plan) {
+  return normalizeRole(role) === AUTH_ROLES.admin
+    ? { ...ADMIN_ENTITLEMENTS }
+    : entitlementsForPlan(plan);
 }
 
 function assertPassword(password) {
@@ -128,7 +143,7 @@ function publicSession(session = null, account = null, memberships = []) {
   }
   const role = normalizeRole(account.role);
   const primaryMembership = memberships[0] || {};
-  const entitlements = entitlementsForPlan(primaryMembership.plan || "free");
+  const entitlements = entitlementsForRole(role, primaryMembership.plan || "free");
   return {
     authenticated: true,
     username: account.username || account.email || "",
@@ -155,6 +170,7 @@ function publicSession(session = null, account = null, memberships = []) {
 
 module.exports = {
   ACCOUNT_STATUSES,
+  ADMIN_ENTITLEMENTS,
   AUTH_ROLES,
   AUTH_SCHEMA_VERSION,
   PLAN_ENTITLEMENTS,
@@ -163,6 +179,7 @@ module.exports = {
   assertPassword,
   cleanText,
   entitlementsForPlan,
+  entitlementsForRole,
   normalizeEmail,
   normalizeLoginId,
   normalizePlan,
