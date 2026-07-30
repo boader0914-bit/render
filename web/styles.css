@@ -29319,6 +29319,7 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   }
 }
 
+
 @media (max-width: 560px) {
   .crawl-progress {
     grid-template-columns: 30px minmax(0, 1fr);
@@ -35324,6 +35325,39 @@ body.role-b2b .b2b-search-card-sub {
   font-size: 13px;
   font-weight: 900;
   line-height: 1.35;
+}
+
+/* Authenticated theme control: keep the switch visible in the app header. */
+.app-theme-toggle {
+  min-width: 44px;
+  white-space: nowrap;
+}
+
+:root[data-theme="light"] body.role-admin,
+:root[data-theme="light"] body.role-b2b {
+  color-scheme: light;
+  filter: invert(1) hue-rotate(180deg);
+}
+
+:root[data-theme="light"] body.role-admin :where(img, video, canvas),
+:root[data-theme="light"] body.role-b2b :where(img, video, canvas) {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+@media (max-width: 720px) {
+  .app-theme-toggle {
+    width: 44px;
+    min-width: 44px;
+    overflow: hidden;
+    padding-inline: 11px;
+    text-indent: -999px;
+  }
+
+  .app-theme-toggle::after {
+    content: "◐";
+    display: block;
+    text-indent: 0;
+  }
 }
 
 @media (max-width: 720px) {

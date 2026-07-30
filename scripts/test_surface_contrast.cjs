@@ -4,8 +4,10 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const stylesPath = path.join(root, "web", "styles.css");
 const appPath = path.join(root, "web", "app.js");
+const indexPath = path.join(root, "web", "index.html");
 const styles = fs.readFileSync(stylesPath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
+const index = fs.readFileSync(indexPath, "utf8");
 
 const requiredMarkers = [
   "Surface contrast contract v3",
@@ -170,6 +172,12 @@ for (const selector of darkSelectors) {
 for (const contract of appSurfaceContracts) {
   assert(app.includes(contract), `missing app surface contract: ${contract}`, failures);
 }
+
+assert(index.includes('id="themeToggle"'), "missing authenticated theme toggle", failures);
+assert(index.includes('src="/login-theme.js"'), "missing authenticated theme script", failures);
+assert(styles.includes('.app-theme-toggle'), "missing authenticated theme toggle styles", failures);
+assert(styles.includes(':root[data-theme="light"] body.role-admin'), "missing admin light theme contract", failures);
+assert(styles.includes(':root[data-theme="light"] body.role-b2b'), "missing B2B light theme contract", failures);
 
 const contrastChecks = [
   ["light text", "#0f172a", "#ffffff", 7],

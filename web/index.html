@@ -6,13 +6,14 @@
   <title>숙박업 데이터랩 beta</title>
   <meta name="application-name" content="숙박업 데이터랩 beta">
   <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
-  <meta name="theme-color" content="#1457c7">
+  <meta name="theme-color" content="#070b12" id="themeColor">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <script src="/login-theme.js"></script>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <link rel="stylesheet" href="/styles.css">
@@ -27,6 +28,7 @@
       </div>
       <div class="header-actions">
         <a class="small-button header-user-view" id="headerUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener" hidden>User View</a>
+        <button class="small-button app-theme-toggle" id="themeToggle" type="button" aria-label="화면 테마 전환"></button>
         <button class="small-button header-logout" id="headerLogoutButton" type="button">로그아웃</button>
         <button class="icon-button" id="openControlButton" type="button" aria-label="필터 및 관리 열기">
           <span aria-hidden="true"></span>
