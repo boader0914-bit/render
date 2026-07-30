@@ -16,20 +16,52 @@ const RENDER_DISK_DIR = "/var/data";
 const IS_RENDER_RUNTIME = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
 const HAS_RENDER_DISK = IS_RENDER_RUNTIME && fs.existsSync(RENDER_DISK_DIR);
 const isTmpDataPath = (value) => /^\/tmp(?:\/|$)/.test(String(value || "").replace(/\\/g, "/"));
+const PREVIEW_DATA_ROOT_ENV = String(process.env.V2_PREVIEW_DATA_ROOT || "").trim();
+
+function resolvePreviewDataRoot(value) {
+  if (!value) return "";
+  if (!path.isAbsolute(value)) {
+    throw new Error("V2_PREVIEW_DATA_ROOT must be an absolute path");
+  }
+
+  const resolved = path.resolve(value);
+  if (IS_RENDER_RUNTIME) {
+    if (!HAS_RENDER_DISK) {
+      throw new Error("V2_PREVIEW_DATA_ROOT requires the Render persistent disk");
+    }
+    const relative = path.relative(RENDER_DISK_DIR, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("V2_PREVIEW_DATA_ROOT must be a dedicated child of /var/data");
+    }
+  }
+  return resolved;
+}
+
+const PREVIEW_DATA_ROOT = resolvePreviewDataRoot(PREVIEW_DATA_ROOT_ENV);
 const DATA_DIR = path.resolve(
-  HAS_RENDER_DISK && (!process.env.DATA_DIR || isTmpDataPath(process.env.DATA_DIR))
-    ? RENDER_DISK_DIR
-    : (process.env.DATA_DIR || ROOT)
+  PREVIEW_DATA_ROOT || (
+    HAS_RENDER_DISK && (!process.env.DATA_DIR || isTmpDataPath(process.env.DATA_DIR))
+      ? RENDER_DISK_DIR
+      : (process.env.DATA_DIR || ROOT)
+  )
 );
 const OUTPUTS_DIR = path.resolve(
-  HAS_RENDER_DISK && (!process.env.OUTPUTS_DIR || isTmpDataPath(process.env.OUTPUTS_DIR))
+  PREVIEW_DATA_ROOT
     ? path.join(DATA_DIR, "outputs")
-    : (process.env.OUTPUTS_DIR || path.join(DATA_DIR, "outputs"))
+    : (
+        HAS_RENDER_DISK && (!process.env.OUTPUTS_DIR || isTmpDataPath(process.env.OUTPUTS_DIR))
+          ? path.join(DATA_DIR, "outputs")
+          : (process.env.OUTPUTS_DIR || path.join(DATA_DIR, "outputs"))
+      )
 );
 const CONFIG_DIR = path.resolve(
-  HAS_RENDER_DISK && (!process.env.CONFIG_DIR || isTmpDataPath(process.env.CONFIG_DIR))
+  PREVIEW_DATA_ROOT
     ? path.join(DATA_DIR, "config")
-    : (process.env.CONFIG_DIR || path.join(DATA_DIR, "config"))
+    : (
+        HAS_RENDER_DISK && (!process.env.CONFIG_DIR || isTmpDataPath(process.env.CONFIG_DIR))
+          ? path.join(DATA_DIR, "config")
+          : (process.env.CONFIG_DIR || path.join(DATA_DIR, "config"))
+      )
 );
 const CUSTOMER_DB_DIR = path.join(DATA_DIR, "customer_db");
 // Stable API key storage policy: releases may replace code, but must keep this file path.
@@ -69,6 +101,24 @@ const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USE
 const B2B_PASSWORD = String(process.env.GLAMPING_B2B_PASSWORD || process.env.B2B_PASSWORD || "0914").trim();
 const B2B_ENABLED = !/^(0|false|off)$/i.test(String(process.env.GLAMPING_B2B_ENABLED || "1").trim())
   && Boolean(B2B_USERNAME && B2B_PASSWORD);
+
+if (PREVIEW_DATA_ROOT) {
+  const hasAdminCredentials = Boolean(
+    String(process.env.GLAMPING_ADMIN_USER || "").trim()
+    && String(process.env.GLAMPING_ADMIN_PASSWORD || "").trim().length >= 12
+  );
+  if (!hasAdminCredentials) {
+    throw new Error("Preview V2 requires explicit GLAMPING_ADMIN_USER and a 12+ character GLAMPING_ADMIN_PASSWORD");
+  }
+
+  const hasB2bCredentials = Boolean(
+    String(process.env.GLAMPING_B2B_USER || "").trim()
+    && String(process.env.GLAMPING_B2B_PASSWORD || "").trim().length >= 12
+  );
+  if (B2B_ENABLED && !hasB2bCredentials) {
+    throw new Error("Preview V2 must disable B2B or configure explicit 12+ character B2B credentials");
+  }
+}
 const B2B_MEMBER_DAILY_SEARCH_LIMIT = 2;
 const B2B_MEMBER_MAX_DAILY_SEARCH_LIMIT = 50;
 const B2B_MEMBER_ALLOWED_RANK_RANGE = "1-10";
@@ -5363,7 +5413,7 @@ async function runB2BMyLodgeCollection(payload = {}) {
 async function seedOutputsFromRepo() {
   const source = path.resolve(REPO_OUTPUTS_DIR);
   const target = path.resolve(OUTPUTS_DIR);
-  if (process.env.SEED_OUTPUTS_FROM_REPO === "0" || source === target || !fs.existsSync(source)) return;
+  if (PREVIEW_DATA_ROOT || process.env.SEED_OUTPUTS_FROM_REPO === "0" || source === target || !fs.existsSync(source)) return;
 
   await fsp.mkdir(target, { recursive: true });
   const entries = await fsp.readdir(source, { withFileTypes: true });
@@ -13571,6 +13621,21 @@ const server = http.createServer((req, res) => {
   route(req, res);
 });
 
+async function verifyPreviewDataBoundary() {
+  if (!PREVIEW_DATA_ROOT) return;
+  await fsp.mkdir(PREVIEW_DATA_ROOT, { recursive: true });
+  if (!IS_RENDER_RUNTIME) return;
+
+  const [diskRealPath, previewRealPath] = await Promise.all([
+    fsp.realpath(RENDER_DISK_DIR),
+    fsp.realpath(PREVIEW_DATA_ROOT)
+  ]);
+  const relative = path.relative(diskRealPath, previewRealPath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Preview V2 data root resolved outside the Render disk boundary");
+  }
+}
+
 function localNetworkUrls() {
   const interfaces = os.networkInterfaces();
   return Object.values(interfaces)
@@ -13579,11 +13644,9 @@ function localNetworkUrls() {
     .map((item) => `http://${item.address}:${PORT}`);
 }
 
-seedOutputsFromRepo()
-  .catch((error) => {
-    console.warn(`Could not seed outputs from repo: ${error.message || error}`);
-  })
-  .finally(() => {
+verifyPreviewDataBoundary()
+  .then(() => seedOutputsFromRepo())
+  .then(() => {
     server.listen(PORT, HOST, () => {
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
@@ -13591,4 +13654,8 @@ seedOutputsFromRepo()
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
       }
     });
+  })
+  .catch((error) => {
+    console.error(`V2 startup blocked: ${error.message || error}`);
+    process.exitCode = 1;
   });
