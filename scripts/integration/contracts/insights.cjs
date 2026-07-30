@@ -212,6 +212,87 @@ function normalizeSignalObservation(record = {}) {
   };
 }
 
+function assertLiveSourceUrl(value, label = "sourceUrl") {
+  let parsed;
+  try {
+    parsed = new URL(cleanText(value, 2048));
+  } catch {
+    throw insightsError(`${label} must be an absolute HTTPS URL`, "INSIGHTS_SOURCE_URL_INVALID");
+  }
+  if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) {
+    throw insightsError(`${label} must be a credential-free HTTPS URL`, "INSIGHTS_SOURCE_URL_INVALID");
+  }
+  if (parsed.hostname === "example.invalid" || parsed.hostname.endsWith(".example.invalid")) {
+    throw insightsError(`${label} cannot use the Stage 229 fixture origin`, "INSIGHTS_LIVE_FIXTURE_ORIGIN_FORBIDDEN");
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (/(?:api[-_]?key|secret|token|authorization|signature|credential)/i.test(key)) {
+      throw insightsError(`${label} must not contain credentials`, "INSIGHTS_CREDENTIAL_FORBIDDEN");
+    }
+  }
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function normalizeLiveSignalObservation(record = {}) {
+  if (record.synthetic !== false || record.dataMode !== "live") {
+    throw insightsError("Live signals require synthetic=false and dataMode=live", "INSIGHTS_LIVE_BOUNDARY_REQUIRED");
+  }
+  const kind = cleanText(record.kind || record.signalKind, 80);
+  if (!INSIGHTS_SIGNAL_KINDS.includes(kind)) {
+    throw insightsError("Unsupported Stage 229 signal kind", "INSIGHTS_SIGNAL_KIND_INVALID");
+  }
+  const companyId = cleanId(record.companyId, "companyId");
+  const runId = cleanId(record.runId, "runId");
+  const observedAt = requiredIso(record.observedAt, "observedAt");
+  const periodMonth = requiredMonth(record.periodMonth, "periodMonth");
+  const source = cleanId(record.source || record.providerId, "source", 120);
+  const sourceUrl = assertLiveSourceUrl(record.sourceUrl);
+  const index = round(clamp(record.index ?? record.value), 2);
+  const provenance = record.provenance && typeof record.provenance === "object" ? record.provenance : {};
+  const adapterVersion = cleanText(provenance.adapterVersion || record.adapterVersion || "stage231-live-signal-v1", 120);
+  const rawProviderRequestId = cleanText(provenance.providerRequestId || record.providerRequestId, 320);
+  const providerRequestId = rawProviderRequestId ? `provider_request_${stableHash(rawProviderRequestId, 32)}` : "";
+  const rawTargetHash = cleanText(provenance.targetHash || record.targetHash, 320);
+  const targetHash = rawTargetHash ? `target_${stableHash(rawTargetHash, 32)}` : "";
+  const externalNetworkCalls = Math.max(0, Math.floor(Number(provenance.externalNetworkCalls ?? record.externalNetworkCalls ?? 0) || 0));
+  const logicalKey = `${companyId}|${kind}|${periodMonth}|${source}|${runId}`;
+  const signalId = cleanText(record.signalId, 160)
+    ? cleanId(record.signalId, "signalId")
+    : `signal_${stableHash(logicalKey, 32)}`;
+  return {
+    schemaVersion: INSIGHTS_SCHEMA_VERSION,
+    signalId,
+    synthetic: false,
+    dataMode: "live",
+    source,
+    sourceUrl,
+    fixtureVersion: "",
+    runId,
+    companyId,
+    region: cleanText(record.region, 160),
+    periodMonth,
+    observedAt,
+    kind,
+    index,
+    unit: "index-0-100",
+    provenance: {
+      source,
+      sourceUrl,
+      runId,
+      observedAt,
+      periodMonth,
+      synthetic: false,
+      dataMode: "live",
+      adapterVersion,
+      ...(providerRequestId ? { providerRequestId } : {}),
+      ...(targetHash ? { targetHash } : {}),
+      externalNetworkCalls
+    }
+  };
+}
+
 function valueOf(row) {
   return row?.values ?? row?.value;
 }
@@ -722,6 +803,7 @@ module.exports = {
   aggregateCompanyMetrics,
   allowedActionsForLifecycle,
   assertFixtureUrl,
+  assertLiveSourceUrl,
   assertLifecycleTransition,
   assertNoPrivateString,
   canonicalJson,
@@ -735,6 +817,7 @@ module.exports = {
   insightsError,
   nextMonth,
   normalizeSignalObservation,
+  normalizeLiveSignalObservation,
   requiredIso,
   requiredMonth,
   selectLocationEvidence,

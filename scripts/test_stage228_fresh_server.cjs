@@ -37,7 +37,33 @@ async function waitForJob(instance, jar, clientRequestId, expectedStatus = "comp
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error(`job ${clientRequestId} did not reach ${expectedStatus}; observed ${[...statuses].join(", ")}`);
+  throw new Error(`job ${clientRequestId} did not reach ${expectedStatus}; observed ${[...statuses].join(", ")}; server=${instance.output()}`);
+}
+
+function assertSafeJobProjection(job, options = {}) {
+  const label = options.label || "job projection";
+  assert.match(job.jobRef, /^job-ref-[a-f0-9]{24}$/, `${label} must expose an opaque jobRef`);
+  assert.equal(Object.hasOwn(job, "jobId"), false, `${label} must not expose jobId`);
+  assert.equal(Object.hasOwn(job, "runId"), false, `${label} must not expose runId`);
+  if (options.admin) {
+    assert.equal(typeof job.tenantCompanyId, "string", `${label} may expose the admin tenant scope explicitly`);
+  } else {
+    assert.equal(Object.hasOwn(job, "tenantCompanyId"), false, `${label} must not expose tenantCompanyId`);
+    assert.equal(Object.hasOwn(job.result || {}, "companyId"), false, `${label} must not expose result.companyId`);
+  }
+  if (job.result) {
+    assert.match(job.result.companyRef, /^company-ref-[a-f0-9]{24}$/, `${label} must expose an opaque companyRef`);
+    const resultKeys = Object.keys(job.result).sort();
+    const allowed = options.admin
+      ? ["companyId", "companyRef", "dataBoundary", "dataMode"]
+      : ["companyRef", "dataBoundary", "dataMode"];
+    assert.deepEqual(resultKeys, allowed.sort(), `${label} result must use the public allowlist`);
+  }
+  assert.doesNotMatch(
+    JSON.stringify(job),
+    /fresh_run_|derivedProfile|provider|rawEvidence|evidenceId|rawPath|sourceUrl|[\\/]outputs[\\/]/i,
+    `${label} must not expose internal collection material`
+  );
 }
 
 function freshStoreDigest(root) {
@@ -234,20 +260,34 @@ async function main() {
     });
     assert.equal(replay.status, 200);
     assert.equal(replay.body.idempotent, true);
-    assert.equal(replay.body.job.jobId, created.body.job.jobId);
+    assertSafeJobProjection(created.body.job, { label: "business create" });
+    assertSafeJobProjection(replay.body.job, { label: "business replay" });
+    assert.equal(replay.body.job.jobRef, created.body.job.jobRef);
 
     const completedFirst = await waitForJob(instance, businessOne.jar, request.clientRequestId);
     assert.equal(completedFirst.response.body.job.progress, 100);
+    assertSafeJobProjection(completedFirst.response.body.job, { label: "business completed core job" });
     const recovered = await requestJson(instance, `/api/integration/core/jobs/${request.clientRequestId}`, { jar: businessOne.jar });
     assert.equal(recovered.status, 200);
     assert.equal(recovered.body.job.status, "completed");
+    assert.equal(recovered.body.job.jobRef, created.body.job.jobRef);
+    assertSafeJobProjection(recovered.body.job, { label: "business recovered core job" });
+
+    const directRecovered = await requestJson(instance, `/api/integration/fresh/runs/${request.clientRequestId}`, { jar: businessOne.jar });
+    assert.equal(directRecovered.status, 200, JSON.stringify(directRecovered.body));
+    assert.equal(directRecovered.body.job.jobRef, created.body.job.jobRef);
+    assertSafeJobProjection(directRecovered.body.job, { label: "business direct fresh job" });
 
     const workspace = await requestJson(instance, "/api/integration/core/workspace?view=business-activity", { jar: businessOne.jar });
     assert.equal(workspace.status, 200);
     assert.equal(workspace.body.companies.length, 1);
+    const workspaceJob = workspace.body.jobs.find((row) => row.clientRequestId === request.clientRequestId);
+    assert.ok(workspaceJob, "core workspace must retain the completed job");
+    assert.equal(workspaceJob.jobRef, created.body.job.jobRef);
+    assertSafeJobProjection(workspaceJob, { label: "business core workspace job" });
     const company = workspace.body.companies[0];
     assert.match(company.companyId, /^cmp_place_syn\d+$/);
-    assert.equal(company.observationCount, 14);
+    assert.equal(company.observationCount, 51);
     assert.equal(company.freshDetail.completeness.displayValue, "100%");
     assert.equal(company.freshDetail.provenance.sourceCount, 1);
     assert.equal(company.freshDetail.observations.repeatCount, 0);
@@ -267,8 +307,8 @@ async function main() {
     await waitForJob(instance, businessOne.jar, "stage228-vertical-0002");
     const repeated = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}`, { jar: businessOne.jar });
     assert.equal(repeated.status, 200);
-    assert.equal(repeated.body.company.observationCount, 28);
-    assert.equal(repeated.body.company.freshDetail.observations.repeatCount, 14);
+    assert.equal(repeated.body.company.observationCount, 102);
+    assert.equal(repeated.body.company.freshDetail.observations.repeatCount, 51);
 
     const adminScopedClientRequestId = "stage228-admin-scoped-ownership-0001";
     const adminScoped = await requestJson(instance, "/api/integration/fresh/runs", {
@@ -288,7 +328,12 @@ async function main() {
       businessOne.companyId,
       "admin-scoped fresh collection must preserve the verified requested tenant"
     );
-    await waitForJob(instance, admin.jar, adminScopedClientRequestId, "completed");
+    assertSafeJobProjection(adminScoped.body.job, { admin: true, label: "admin direct fresh create" });
+    const completedAdmin = await waitForJob(instance, admin.jar, adminScopedClientRequestId, "completed");
+    assertSafeJobProjection(completedAdmin.response.body.job, { admin: true, label: "admin completed core job" });
+    const directAdminRecovered = await requestJson(instance, `/api/integration/fresh/runs/${adminScopedClientRequestId}`, { jar: admin.jar });
+    assert.equal(directAdminRecovered.status, 200, JSON.stringify(directAdminRecovered.body));
+    assertSafeJobProjection(directAdminRecovered.body.job, { admin: true, label: "admin direct fresh job" });
     const businessOwnedAfterAdminCollection = await requestJson(instance, "/api/integration/fresh/companies", {
       jar: businessOne.jar
     });
@@ -324,6 +369,8 @@ async function main() {
     );
     assert.equal(cancelRequested.status, 200, JSON.stringify(cancelRequested.body));
     assert.equal(cancelRequested.body.job.cancelling, true);
+    assert.equal(cancelRequested.body.job.jobRef, cancellable.body.job.jobRef);
+    assertSafeJobProjection(cancelRequested.body.job, { label: "business cancel projection" });
     await waitForJob(instance, businessOne.jar, cancellableId, "cancelled");
     const resumed = await requestJson(
       instance,
@@ -332,6 +379,8 @@ async function main() {
     );
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
     assert.ok(["queued", "running"].includes(resumed.body.job.status));
+    assert.equal(resumed.body.job.jobRef, cancellable.body.job.jobRef);
+    assertSafeJobProjection(resumed.body.job, { label: "business resume projection" });
     await waitForJob(instance, businessOne.jar, cancellableId, "completed");
 
     const reviewWithoutStepUp = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}/review`, {
@@ -359,6 +408,71 @@ async function main() {
     assert.equal(review.status, 201, JSON.stringify(review.body));
     assert.equal(review.body.company.freshDetail.verifiedValues.length, 3);
     assert.ok(review.body.company.freshDetail.changes.length >= 1);
+    const reviewedConfidence = review.body.company.freshDetail.confidence.displayValue;
+
+    const pendingBusinessCoordinate = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}`, { jar: businessOne.jar });
+    assert.equal(pendingBusinessCoordinate.status, 200, JSON.stringify(pendingBusinessCoordinate.body));
+    assert.deepEqual(pendingBusinessCoordinate.body.company.freshDetail.coordinateReview, {
+      state: "not-collected",
+      latitude: null,
+      longitude: null,
+      confidence: "unverified",
+      observedAt: "",
+      reviewedAt: "",
+      version: 0
+    }, "business users must not receive pending coordinates or review metadata");
+
+    const coordinateBypass = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}/review`, {
+      method: "POST",
+      jar: admin.jar,
+      body: {
+        decision: "approve",
+        reason: "full profile coordinate bypass must fail",
+        profile: { primaryName: "검수 완료 바다 글램핑", region: "경남", latitude: 35.1796, longitude: 129.0756 }
+      }
+    });
+    assert.equal(coordinateBypass.status, 400);
+    assert.equal(coordinateBypass.body.code, "FRESH_COORDINATE_REVIEW_REQUIRED");
+
+    const coordinateReviewWithoutVersion = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}/review`, {
+      method: "POST",
+      jar: admin.jar,
+      body: {
+        decision: "approve",
+        reason: "coordinate version is mandatory",
+        profilePatch: { latitude: 35.1796, longitude: 129.0756 }
+      }
+    });
+    assert.equal(coordinateReviewWithoutVersion.status, 409);
+    assert.equal(coordinateReviewWithoutVersion.body.code, "FRESH_COORDINATE_REVIEW_VERSION_REQUIRED");
+
+    const coordinateReview = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}/review`, {
+      method: "POST",
+      jar: admin.jar,
+      body: {
+        decision: "approve",
+        expectedVersion: 0,
+        reason: "Stage 231 WGS84 coordinate review",
+        profilePatch: { latitude: 35.1796, longitude: 129.0756 }
+      }
+    });
+    assert.equal(coordinateReview.status, 201, JSON.stringify(coordinateReview.body));
+    assert.equal(coordinateReview.body.company.freshDetail.coordinateReview.state, "approved");
+    assert.equal(coordinateReview.body.company.freshDetail.coordinateReview.latitude, 35.1796);
+    assert.equal(coordinateReview.body.company.freshDetail.coordinateReview.longitude, 129.0756);
+    assert.equal(coordinateReview.body.company.freshDetail.verifiedValues.length, 3, "coordinate patch must preserve approved profile fields");
+    const outOfRangeCoordinate = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}/review`, {
+      method: "POST",
+      jar: admin.jar,
+      body: {
+        decision: "approve",
+        expectedVersion: coordinateReview.body.coordinateReview.version,
+        reason: "out-of-range coordinate must fail",
+        profilePatch: { latitude: 0, longitude: 0 }
+      }
+    });
+    assert.equal(outOfRangeCoordinate.status, 400);
+    assert.equal(outOfRangeCoordinate.body.code, "FRESH_COORDINATE_REVIEW_OUT_OF_RANGE");
 
     const snapshot = await requestJson(instance, "/api/integration/fresh/snapshots", {
       method: "POST", jar: admin.jar, body: { label: "stage228-server-acceptance" }
@@ -389,10 +503,41 @@ async function main() {
     const restoredCompany = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}`, { jar: admin.jar });
     assert.equal(restoredCompany.status, 200);
     assert.equal(restoredCompany.body.company.companyName, "검수 완료 바다 글램핑");
+    assert.equal(restoredCompany.body.company.freshDetail.coordinateReview.state, "approved");
+
+    const rejectedCoordinate = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}/review`, {
+      method: "POST",
+      jar: admin.jar,
+      body: {
+        decision: "reject",
+        expectedVersion: restoredCompany.body.company.freshDetail.coordinateReview.version,
+        reason: "new candidate does not match the approved address",
+        profilePatch: { latitude: 35.2, longitude: 129.1 }
+      }
+    });
+    assert.equal(rejectedCoordinate.status, 201, JSON.stringify(rejectedCoordinate.body));
+    assert.equal(rejectedCoordinate.body.company.freshDetail.coordinateReview.state, "rejected");
+    assert.equal(rejectedCoordinate.body.company.freshDetail.coordinateReview.latitude, 35.2);
+    assert.equal(rejectedCoordinate.body.company.freshDetail.verifiedValues.length, 3, "coordinate rejection must not erase the approved profile");
+    assert.equal(rejectedCoordinate.body.company.freshDetail.confidence.displayValue, reviewedConfidence, "coordinate rejection must not downgrade full-profile confidence");
+    assert.ok(rejectedCoordinate.body.company.freshDetail.changes.some((row) => ["위도", "경도"].includes(row.fieldLabel)));
+
+    const businessCoordinate = await requestJson(instance, `/api/integration/fresh/companies/${company.companyId}`, { jar: businessOne.jar });
+    assert.equal(businessCoordinate.status, 200, JSON.stringify(businessCoordinate.body));
+    assert.deepEqual(businessCoordinate.body.company.freshDetail.coordinateReview, {
+      state: "approved",
+      latitude: 35.1796,
+      longitude: 129.0756,
+      confidence: "verified",
+      observedAt: businessCoordinate.body.company.freshDetail.coordinateReview.observedAt,
+      reviewedAt: businessCoordinate.body.company.freshDetail.coordinateReview.reviewedAt,
+      version: 0
+    });
+    assert.doesNotMatch(JSON.stringify(businessCoordinate.body), /35\.2|129\.1|rejected|coordinate_review_/i);
 
     const allPublicBodies = JSON.stringify([
       empty.body, created.body, workspace.body, repeated.body, review.body, snapshot.body, snapshots.body,
-      changedReview.body, rolledBack.body, restoredCompany.body
+      changedReview.body, rolledBack.body, restoredCompany.body, rejectedCoordinate.body, businessCoordinate.body
     ]);
     assert.equal(allPublicBodies.includes(integrationDataDir), false);
     assert.equal(allPublicBodies.includes(dataDir), false);
@@ -479,8 +624,12 @@ async function main() {
     console.log("Stage 228 server, auth/CSRF/tenant, vertical slice, business-safe detail and snapshot checks passed");
   } finally {
     if (instance) await stopServer(instance, false);
-    fs.rmSync(dataDir, { recursive: true, force: true });
-    fs.rmSync(integrationDataDir, { recursive: true, force: true });
+    if (process.env.KEEP_STAGE228_TMP === "1") {
+      console.error(`stage228 debug dataDir=${dataDir} integrationDataDir=${integrationDataDir}`);
+    } else {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(integrationDataDir, { recursive: true, force: true });
+    }
   }
 }
 

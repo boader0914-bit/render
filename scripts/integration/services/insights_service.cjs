@@ -77,6 +77,7 @@ function createInsightsService(options = {}) {
   const provider = options.provider;
   const freshRepository = options.freshRepository;
   const freshService = options.freshService;
+  const signalRepository = options.signalRepository || null;
   const authService = options.authService;
   const clock = options.clock || (() => Date.now());
   const capabilities = Object.freeze({
@@ -86,6 +87,93 @@ function createInsightsService(options = {}) {
   });
   if (!repository || !provider || !freshRepository || !freshService || !authService) {
     throw new Error("Stage 229 insights service dependencies are required");
+  }
+  const fixtureMode = provider.kind === "deterministic-fixture";
+  const providerEnabled = provider.enabled !== false && typeof provider.collect === "function";
+  const providerStatus = providerEnabled
+    ? (fixtureMode ? "test-fixture" : "configured")
+    : "provider-not-configured";
+
+  function isSyntheticSignal(row = {}) {
+    return row.synthetic === true
+      || row.provenance?.synthetic === true
+      || cleanText(row.fixtureVersion, 120) === INSIGHTS_FIXTURE_VERSION
+      || cleanText(row.source, 120) === INSIGHTS_PROVIDER_ID;
+  }
+
+  function visibleSignals(rows = []) {
+    return fixtureMode ? rows : rows.filter((row) => !isSyntheticSignal(row));
+  }
+
+  async function connectorSignals(companyId) {
+    if (fixtureMode || !signalRepository?.listSignals) return [];
+    const rows = await signalRepository.listSignals({ companyId, synthetic: false });
+    return rows.filter((row) => row?.synthetic === false && row?.dataMode === "live");
+  }
+
+  function mergeSignals(...groups) {
+    const byId = new Map();
+    for (const row of groups.flat().filter(Boolean)) {
+      if (!fixtureMode && isSyntheticSignal(row)) continue;
+      if (row?.signalId && !byId.has(row.signalId)) byId.set(row.signalId, row);
+    }
+    return [...byId.values()];
+  }
+
+  function visibleFreshRows(rows = []) {
+    return fixtureMode
+      ? rows
+      : rows.filter((row) => row?.synthetic === false && row?.dataMode === "live");
+  }
+
+  function liveProfileValue(rows, kind) {
+    const row = rows
+      .filter((entry) => (entry?.observationType || entry?.kind) === kind)
+      .sort((left, right) => String(right.observedAt || "").localeCompare(String(left.observedAt || "")))[0];
+    const value = row?.value ?? row?.values;
+    return cleanText(value, 180);
+  }
+
+  function visibleFreshCompany(company = {}, rows = []) {
+    if (fixtureMode) return company;
+    const name = liveProfileValue(rows, "profile.company-name");
+    const region = liveProfileValue(rows, "profile.region");
+    const category = liveProfileValue(rows, "profile.category");
+    return {
+      companyId: cleanText(company.companyId, 160),
+      companyName: name,
+      name,
+      region,
+      regionLabel: region,
+      category,
+      synthetic: false,
+      dataMode: "live"
+    };
+  }
+
+  function isSyntheticArtifact(row = {}) {
+    return row.synthetic === true
+      || row.analysis?.synthetic === true
+      || row.report?.synthetic === true
+      || row.report?.analysis?.synthetic === true
+      || cleanText(row.evidenceSummary?.fixtureVersion, 120) === INSIGHTS_FIXTURE_VERSION
+      || cleanText(row.analysis?.fixtureVersion, 120) === INSIGHTS_FIXTURE_VERSION
+      || cleanText(row.report?.fixtureVersion, 120) === INSIGHTS_FIXTURE_VERSION;
+  }
+
+  function businessVisibleArtifact(row = {}) {
+    return fixtureMode || (
+      !isSyntheticArtifact(row)
+      && row.synthetic === false
+      && row.dataMode === "live"
+    );
+  }
+
+  function assertVisibleArtifact(row, label) {
+    if (!businessVisibleArtifact(row)) {
+      throw insightsError(`${label}을 찾을 수 없습니다.`, "INSIGHTS_ARTIFACT_NOT_FOUND", 404);
+    }
+    return row;
   }
 
   function nowIso() {
@@ -130,9 +218,10 @@ function createInsightsService(options = {}) {
     return {
       stage: INSIGHTS_STAGE,
       algorithmVersion: INSIGHTS_ALGORITHM_VERSION,
-      fixtureVersion: INSIGHTS_FIXTURE_VERSION,
-      providerId: INSIGHTS_PROVIDER_ID,
-      fixtureMode: true,
+      fixtureVersion: fixtureMode ? INSIGHTS_FIXTURE_VERSION : "",
+      providerId: cleanText(provider.id, 120),
+      providerStatus,
+      fixtureMode,
       dataBoundary: "fresh-integration-stage229-only",
       capabilities: clone(capabilities),
       externalProviderCalls: Number(diagnostics.externalRequests || 0),
@@ -158,6 +247,9 @@ function createInsightsService(options = {}) {
     const id = cleanId(companyId, "companyId");
     if (roleFor(session) === "admin") {
       const identity = await freshRepository.getCompany(id);
+      if (!fixtureMode && (identity?.synthetic !== false || identity?.dataMode !== "live")) {
+        throw insightsError("실수집되지 않은 업체는 분석할 수 없습니다.", "INSIGHTS_COMPANY_NOT_FOUND", 404);
+      }
       const ownedTenantCompanyIds = Array.isArray(identity.tenantCompanyIds)
         ? identity.tenantCompanyIds.map((value) => cleanText(value, 160)).filter(Boolean)
         : [];
@@ -172,7 +264,7 @@ function createInsightsService(options = {}) {
         companyId: id,
         tenantCompanyId: requested || ownedTenantCompanyIds[0] || "",
         identity,
-        company: await freshRepository.getCompany(id, { projection: "business-safe" })
+        company: await freshService.getCompany(session, id, requested || "", context)
       };
     }
     const tenantCompanyId = sessionTenantId(session);
@@ -187,33 +279,54 @@ function createInsightsService(options = {}) {
   }
 
   async function companyInputs(companyId) {
-    const [company, observations, signals, runs] = await Promise.all([
+    const [company, storedObservations, storedSignals, completedConnectorSignals, runs] = await Promise.all([
       freshRepository.getCompany(companyId, { projection: "business-safe" }),
       freshRepository.listObservations({ companyId, limit: 100_000 }),
       repository.listSignals({ companyId, limit: 100_000 }),
+      connectorSignals(companyId),
       freshRepository.listRuns({ statuses: ["queued", "running", "retry-wait", "cancel-requested"] })
     ]);
     return {
-      company,
-      observations,
-      signals,
-      collecting: runs.some((run) => run.companyId === companyId || run.checkpoint?.companyId === companyId)
+      company: visibleFreshCompany(company, visibleFreshRows(storedObservations)),
+      observations: visibleFreshRows(storedObservations),
+      signals: mergeSignals(storedSignals, completedConnectorSignals),
+      collecting: visibleFreshRows(runs).some((run) => run.companyId === companyId || run.checkpoint?.companyId === companyId)
     };
+  }
+
+  async function analysisInputs(session, companyId, requestedTenantCompanyId = "", context = {}) {
+    const access = await assertCompany(session, companyId, requestedTenantCompanyId, context);
+    return companyInputs(access.companyId);
   }
 
   async function allCompanyInputs() {
     const identities = await freshRepository.listCompanies({ projection: "identity" });
     const ownedIdentities = identities.filter((identity) => (
+      (fixtureMode || (identity.synthetic === false && identity.dataMode === "live"))
+      &&
       Array.isArray(identity.tenantCompanyIds)
       && identity.tenantCompanyIds.map((value) => cleanText(value, 160)).some(Boolean)
     ));
-    return Promise.all(ownedIdentities.map(async (identity) => ({
-      company: await freshRepository.getCompany(identity.companyId, { projection: "business-safe" }),
-      observations: await freshRepository.listObservations({ companyId: identity.companyId, limit: 100_000 })
-    })));
+    return Promise.all(ownedIdentities.map(async (identity) => {
+      const [company, observations] = await Promise.all([
+        freshRepository.getCompany(identity.companyId, { projection: "business-safe" }),
+        freshRepository.listObservations({ companyId: identity.companyId, limit: 100_000 })
+      ]);
+      const visibleObservations = visibleFreshRows(observations);
+      return { company: visibleFreshCompany(company, visibleObservations), observations: visibleObservations };
+    }));
   }
 
   async function ensureSignals(companyId, periodMonth, actor) {
+    const existing = visibleSignals(await repository.listSignals({ companyId, limit: 100_000 }));
+    if (!providerEnabled) {
+      return {
+        providerStatus,
+        collected: null,
+        appended: { inserted: 0, duplicates: 0 },
+        signals: existing
+      };
+    }
     const company = await freshRepository.getCompany(companyId, { projection: "business-safe" });
     const observedAt = nowIso();
     const runId = `insights_fixture_${stableHash(`${companyId}|${periodMonth}|${observedAt.slice(0, 10)}|${INSIGHTS_FIXTURE_VERSION}`, 28)}`;
@@ -225,7 +338,12 @@ function createInsightsService(options = {}) {
       region: company.region || ""
     });
     const appended = await repository.appendSignals(collected.signals, { actor, runId });
-    return { collected, appended, signals: await repository.listSignals({ companyId, limit: 100_000 }) };
+    return {
+      providerStatus,
+      collected,
+      appended,
+      signals: visibleSignals(await repository.listSignals({ companyId, limit: 100_000 }))
+    };
   }
 
   async function evidenceFor(companyId, observations, signals, analysis, actor, options = {}) {
@@ -282,7 +400,7 @@ function createInsightsService(options = {}) {
   function evidenceSummary(evidence, analysis) {
     return {
       algorithmVersion: INSIGHTS_ALGORITHM_VERSION,
-      fixtureVersion: INSIGHTS_FIXTURE_VERSION,
+      fixtureVersion: fixtureMode ? INSIGHTS_FIXTURE_VERSION : "",
       inputRange: clone(evidence?.observedAtRange || analysis?.forecast?.inputPeriod || { from: "", to: "" }),
       observationCount: Number(evidence?.observationCount || 0),
       signalCount: Number(evidence?.signalCount || 0),
@@ -340,6 +458,7 @@ function createInsightsService(options = {}) {
     const admin = Boolean(options.admin);
     const analysis = clone(row.analysis || null);
     const ready = analysis?.state === "ready";
+    const synthetic = isSyntheticArtifact(row);
     const dimensions = (analysis?.dimensions || []).map((dimension) => ({
       key: dimension.key,
       label: dimension.label,
@@ -358,8 +477,10 @@ function createInsightsService(options = {}) {
       requestedAt: row.requestedAt,
       updatedAt: row.updatedAt,
       publishedAt: row.publishedAt,
-      synthetic: true,
-      sourceLabel: "Stage 229 결정적 합성 fixture",
+      synthetic,
+      sourceLabel: synthetic
+        ? "Stage 229 결정적 합성 fixture"
+        : (providerStatus === "provider-not-configured" ? "실제 신호 미수집" : "신규 수집 신호"),
       editorial: clone(row.editorial || {}),
       algorithmVersion: INSIGHTS_ALGORITHM_VERSION,
       overallScore: admin || ready ? (analysis?.overallScore ?? null) : null,
@@ -377,6 +498,7 @@ function createInsightsService(options = {}) {
     const admin = Boolean(options.admin);
     const content = clone(row.report || null);
     const ready = content?.state === "ready";
+    const synthetic = isSyntheticArtifact(row);
     const scopes = (content?.scopes || []).map((scope) => ({
       scope: scope.scope,
       label: scope.label,
@@ -407,8 +529,10 @@ function createInsightsService(options = {}) {
       requestedAt: row.requestedAt,
       updatedAt: row.updatedAt,
       publishedAt: row.publishedAt,
-      synthetic: true,
-      sourceLabel: "Stage 229 결정적 합성 fixture",
+      synthetic,
+      sourceLabel: synthetic
+        ? "Stage 229 결정적 합성 fixture"
+        : (providerStatus === "provider-not-configured" ? "실제 신호 미수집" : "신규 수집 신호"),
       editorial: clone(row.editorial || {}),
       algorithmVersion: INSIGHTS_ALGORITHM_VERSION,
       scopes,
@@ -432,7 +556,9 @@ function createInsightsService(options = {}) {
     const result = await repository.createLocationCardRequest({
       companyId: access.companyId,
       tenantCompanyId: access.tenantCompanyId,
-      clientRequestId: payload.clientRequestId
+      clientRequestId: payload.clientRequestId,
+      synthetic: fixtureMode,
+      dataMode: fixtureMode ? "test-fixture" : "live"
     }, actorFor(session));
     return {
       ok: true,
@@ -463,7 +589,7 @@ function createInsightsService(options = {}) {
       await authService.assertCompanyAccess(session, tenantCompanyId, context);
     }
     const rows = await repository.listLocationCards({ tenantCompanyId });
-    return rows.map((row) => ({
+    return rows.filter(businessVisibleArtifact).map((row) => ({
       requestId: row.cardId,
       cardId: row.cardId,
       clientRequestId: row.clientRequestId,
@@ -480,11 +606,12 @@ function createInsightsService(options = {}) {
     requireAdmin(session);
     const current = await repository.getLocationCard(cardId);
     if (!current) throw insightsError("입지카드를 찾을 수 없습니다.", "INSIGHTS_CARD_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "입지카드");
     const access = await assertCompany(session, current.companyId, current.tenantCompanyId);
     const asOf = nowIso();
     const month = requiredMonth(payload.month || asOf.slice(0, 7), "month");
     if (month !== asOf.slice(0, 7)) {
-      throw insightsError("signal fixture period는 기준일이 속한 달이어야 합니다.", "INSIGHTS_SIGNAL_PERIOD_INVALID", 400);
+      throw insightsError("signal period는 기준일이 속한 달이어야 합니다.", "INSIGHTS_SIGNAL_PERIOD_INVALID", 400);
     }
     const forecastMonth = assertForecastMonth(payload.forecastMonth || nextMonth(asOf), asOf);
     await ensureSignals(access.companyId, month, actorFor(session));
@@ -523,6 +650,7 @@ function createInsightsService(options = {}) {
     requireAdmin(session);
     const current = await repository.getLocationCard(cardId);
     if (!current) throw insightsError("입지카드를 찾을 수 없습니다.", "INSIGHTS_CARD_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "입지카드");
     await assertCompany(session, current.companyId, current.tenantCompanyId);
     const to = current.lifecycle === "changes-requested" ? "draft" : "draft";
     const transitioned = await repository.transitionLocationCard(cardId, {
@@ -536,6 +664,7 @@ function createInsightsService(options = {}) {
   async function createOrEditLocationDraft(session, cardId, payload = {}) {
     const current = await repository.getLocationCard(cardId);
     if (!current) throw insightsError("입지카드를 찾을 수 없습니다.", "INSIGHTS_CARD_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "입지카드");
     return current.lifecycle === "requested"
       ? createLocationDraft(session, cardId, payload)
       : editLocationDraft(session, cardId, payload);
@@ -546,6 +675,7 @@ function createInsightsService(options = {}) {
     requireAdmin(session);
     const current = await repository.getLocationCard(cardId);
     if (!current) throw insightsError("입지카드를 찾을 수 없습니다.", "INSIGHTS_CARD_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "입지카드");
     await assertCompany(session, current.companyId, current.tenantCompanyId);
     const decision = cleanText(payload.decision, 40);
     let to;
@@ -575,6 +705,7 @@ function createInsightsService(options = {}) {
     await recentStepUp(session);
     const current = await repository.getLocationCard(cardId);
     if (!current) throw insightsError("입지카드를 찾을 수 없습니다.", "INSIGHTS_CARD_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "입지카드");
     await assertCompany(session, current.companyId, current.tenantCompanyId);
     if (current.analysis?.state !== "ready" || current.analysis?.forecast?.state !== "ready") {
       throw insightsError("최소 반복 관측과 모든 입지 차원이 준비되기 전에는 공개할 수 없습니다.", "INSIGHTS_SAMPLE_GATE", 409);
@@ -597,16 +728,17 @@ function createInsightsService(options = {}) {
       companyId,
       tenantCompanyId: admin ? "" : access.tenantCompanyId
     });
-    const visible = admin ? rows : rows.filter((row) => row.lifecycle === "published");
+    const eligible = rows.filter(businessVisibleArtifact);
+    const visible = admin ? eligible : eligible.filter((row) => row.lifecycle === "published");
     const inputs = await companyInputs(companyId);
     const cards = await Promise.all(visible.map((row) => publicCard(row, { admin, collecting: inputs.collecting })));
     return {
       ok: true,
       metadata: metadata(),
-      state: cards[0]?.state || (rows.length ? "not-published" : (inputs.collecting ? "collecting" : "not-collected")),
+      state: cards[0]?.state || (eligible.length ? "not-published" : (inputs.collecting ? "collecting" : "not-collected")),
       readiness: cards[0]?.readiness || publicReadiness(null, inputs.collecting),
       cards,
-      requestState: rows[0]?.lifecycle || "not-requested"
+      requestState: eligible[0]?.lifecycle || "not-requested"
     };
   }
 
@@ -621,7 +753,9 @@ function createInsightsService(options = {}) {
       companyId: access.companyId,
       tenantCompanyId: access.tenantCompanyId,
       clientRequestId: payload.clientRequestId,
-      month
+      month,
+      synthetic: fixtureMode,
+      dataMode: fixtureMode ? "test-fixture" : "live"
     }, actorFor(session));
     return { ok: true, metadata: metadata(), idempotent: result.idempotent, report: await publicReport(result.report, { admin: true }) };
   }
@@ -631,6 +765,7 @@ function createInsightsService(options = {}) {
     requireAdmin(session);
     const current = await repository.getMonthlyReport(reportId);
     if (!current) throw insightsError("월간 리포트를 찾을 수 없습니다.", "INSIGHTS_REPORT_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "월간 리포트");
     await assertCompany(session, current.companyId, current.tenantCompanyId);
     const asOf = nowIso();
     const forecastMonth = assertForecastMonth(payload.forecastMonth || current.month, asOf, current.month);
@@ -641,7 +776,11 @@ function createInsightsService(options = {}) {
     const [inputs, companies, cards] = await Promise.all([
       companyInputs(current.companyId),
       allCompanyInputs(),
-      repository.listLocationCards({ companyId: current.companyId, lifecycle: "published" })
+      repository.listLocationCards({
+        companyId: current.companyId,
+        tenantCompanyId: current.tenantCompanyId,
+        lifecycle: "published"
+      })
     ]);
     const analysis = deriveLocationAnalysis({
       observations: inputs.observations,
@@ -650,7 +789,8 @@ function createInsightsService(options = {}) {
       forecastMonth
     });
     const scopes = deriveReportScopes(current.companyId, companies, { asOf });
-    const publishedLocationReady = Boolean(cards[0]?.cardId);
+    const visibleCards = cards.filter(businessVisibleArtifact);
+    const publishedLocationReady = Boolean(visibleCards[0]?.cardId);
     const ready = analysis.state === "ready"
       && scopes.every((scope) => scope.state === "ready")
       && publishedLocationReady;
@@ -670,7 +810,7 @@ function createInsightsService(options = {}) {
           ...(publishedLocationReady ? [] : ["공개된 입지카드가 없습니다."])
         ]
       },
-      locationCardId: cards[0]?.cardId || "",
+      locationCardId: visibleCards[0]?.cardId || "",
       cohort: deriveCohortDescriptor(inputs.company, inputs.observations)
     };
     const evidenceResult = await evidenceFor(
@@ -700,6 +840,7 @@ function createInsightsService(options = {}) {
     requireAdmin(session);
     const current = await repository.getMonthlyReport(reportId);
     if (!current) throw insightsError("월간 리포트를 찾을 수 없습니다.", "INSIGHTS_REPORT_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "월간 리포트");
     await assertCompany(session, current.companyId, current.tenantCompanyId);
     const transitioned = await repository.transitionMonthlyReport(reportId, {
       expectedVersion: payload.expectedVersion,
@@ -714,6 +855,7 @@ function createInsightsService(options = {}) {
     requireAdmin(session);
     const current = await repository.getMonthlyReport(reportId);
     if (!current) throw insightsError("월간 리포트를 찾을 수 없습니다.", "INSIGHTS_REPORT_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "월간 리포트");
     await assertCompany(session, current.companyId, current.tenantCompanyId);
     const decision = cleanText(payload.decision, 40);
     let to;
@@ -743,6 +885,7 @@ function createInsightsService(options = {}) {
     await recentStepUp(session);
     const current = await repository.getMonthlyReport(reportId);
     if (!current) throw insightsError("월간 리포트를 찾을 수 없습니다.", "INSIGHTS_REPORT_NOT_FOUND", 404);
+    assertVisibleArtifact(current, "월간 리포트");
     await assertCompany(session, current.companyId, current.tenantCompanyId);
     const content = current.report;
     const publishedCard = content?.locationCardId
@@ -755,6 +898,9 @@ function createInsightsService(options = {}) {
       || content.scopes.length !== 4
       || content.scopes.some((scope) => scope.state !== "ready")
       || publishedCard?.lifecycle !== "published"
+      || !businessVisibleArtifact(publishedCard)
+      || publishedCard?.companyId !== current.companyId
+      || publishedCard?.tenantCompanyId !== current.tenantCompanyId
     ) {
       throw insightsError("forecast, 4개 리포트 범위와 공개 입지카드 gate가 준비되기 전에는 공개할 수 없습니다.", "INSIGHTS_SAMPLE_GATE", 409);
     }
@@ -779,12 +925,13 @@ function createInsightsService(options = {}) {
       month
     });
     const inputs = await companyInputs(companyId);
-    const visible = admin ? rows : rows.filter((row) => row.lifecycle === "published");
+    const eligible = rows.filter(businessVisibleArtifact);
+    const visible = admin ? eligible : eligible.filter((row) => row.lifecycle === "published");
     const reports = await Promise.all(visible.map((row) => publicReport(row, { admin, collecting: inputs.collecting })));
     return {
       ok: true,
       metadata: metadata(),
-      state: reports[0]?.state || (rows.length ? "not-published" : (inputs.collecting ? "collecting" : "not-collected")),
+      state: reports[0]?.state || (eligible.length ? "not-published" : (inputs.collecting ? "collecting" : "not-collected")),
       readiness: reports[0]?.readiness || publicReadiness(null, inputs.collecting),
       reports,
       locationCardPath: "/app/location"
@@ -922,6 +1069,7 @@ function createInsightsService(options = {}) {
     createSnapshot,
     listSnapshots,
     rollbackSnapshot,
+    analysisInputs,
     actorFor
   });
 }

@@ -197,6 +197,7 @@ async function main() {
       algorithmVersion: INSIGHTS_ALGORITHM_VERSION,
       fixtureVersion: INSIGHTS_FIXTURE_VERSION,
       providerId: INSIGHTS_PROVIDER_ID,
+      providerStatus: "test-fixture",
       fixtureMode: true,
       dataBoundary: "fresh-integration-stage229-only",
       capabilities: { reliability: true, locationCard: true, businessReport: true },

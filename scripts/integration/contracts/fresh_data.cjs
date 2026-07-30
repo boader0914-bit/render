@@ -6,6 +6,7 @@ const FRESH_DATA_STAGE = 228;
 const FRESH_DATA_SCHEMA_VERSION = 1;
 const FRESH_DATA_STORE_KIND = "glamping-datalab-v2-fresh-integration-store";
 const FRESH_DATA_IDENTITY_RULE = "v2-company-identity-v1";
+const FRESH_KOREA_COORDINATE_BOUNDS = Object.freeze({ west: 124, south: 33, east: 132, north: 39.5 });
 const FRESH_DATA_LAYERS = Object.freeze([
   "raw",
   "observation",
@@ -14,6 +15,17 @@ const FRESH_DATA_LAYERS = Object.freeze([
   "business-safe"
 ]);
 const FRESH_OBSERVATION_MODES = Object.freeze(["quick", "detail", "ota"]);
+const FRESH_DATA_MODES = Object.freeze(["synthetic-test", "live"]);
+const FRESH_LIVE_SOURCE_HOSTS = Object.freeze([
+  "naverapihub.apigw.ntruss.com",
+  "pcmap.place.naver.com",
+  "m.place.naver.com",
+  "pcmap-api.place.naver.com",
+  "m.booking.naver.com",
+  "nol.yanolja.com",
+  "www.goodchoice.kr",
+  "trip.ddnayo.com"
+]);
 const FRESH_RUN_STATUSES = Object.freeze([
   "queued",
   "running",
@@ -62,7 +74,9 @@ function optionalIso(value, label) {
 
 function requiredDate(value, label) {
   const text = cleanText(value, 16);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(Date.parse(`${text}T00:00:00.000Z`))) {
+  const timestamp = Date.parse(`${text}T00:00:00.000Z`);
+  const canonical = Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || canonical !== text) {
     throw freshError(`${label} must be YYYY-MM-DD`, "FRESH_DATE_INVALID");
   }
   return text;
@@ -178,14 +192,75 @@ function assertExampleInvalidUrl(value, label = "sourceUrl") {
   return parsed.toString();
 }
 
-function assertSyntheticPayload(value, keyPath = "payload") {
+function normalizeFreshDataMode(record = {}) {
+  const synthetic = record.synthetic === true;
+  const mode = cleanText(record.dataMode || record.provenance?.dataMode, 32).toLowerCase()
+    || (synthetic ? "synthetic-test" : "");
+  if (synthetic && mode !== "synthetic-test") {
+    throw freshError("Synthetic records must use dataMode=synthetic-test", "FRESH_DATA_MODE_INVALID");
+  }
+  if (!synthetic && (record.synthetic !== false || mode !== "live")) {
+    throw freshError(
+      "Live records must explicitly use synthetic=false and dataMode=live",
+      "FRESH_DATA_MODE_REQUIRED"
+    );
+  }
+  return Object.freeze({ dataMode: mode, synthetic });
+}
+
+function assertPublicHttpsUrl(value, label = "sourceUrl", options = {}) {
+  const text = cleanText(value, 2048);
+  if (!text) throw freshError(`${label} is required`, "FRESH_SOURCE_URL_REQUIRED");
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    throw freshError(`${label} must be an absolute URL`, "FRESH_SOURCE_URL_INVALID");
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    throw freshError(`${label} must be credential-free HTTPS`, "FRESH_SOURCE_URL_INVALID");
+  }
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (
+    !hostname
+    || hostname === "localhost"
+    || hostname.endsWith(".localhost")
+    || hostname === "0.0.0.0"
+    || hostname === "::1"
+    || /^127\./.test(hostname)
+    || /^10\./.test(hostname)
+    || /^192\.168\./.test(hostname)
+    || /^169\.254\./.test(hostname)
+    || /^172\.(?:1[6-9]|2\d|3[01])\./.test(hostname)
+  ) {
+    throw freshError(`${label} must not target a local or private host`, "FRESH_SOURCE_HOST_FORBIDDEN");
+  }
+  const allowedHosts = Array.isArray(options.allowedHosts) ? options.allowedHosts : [];
+  if (allowedHosts.length && !allowedHosts.some((allowed) => (
+    hostname === allowed || hostname.endsWith(`.${allowed}`)
+  ))) {
+    throw freshError(`${label} host is not approved for fresh collection`, "FRESH_SOURCE_HOST_FORBIDDEN");
+  }
+  parsed.username = "";
+  parsed.password = "";
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function assertFreshSourceUrl(value, record = {}, label = "sourceUrl") {
+  const mode = normalizeFreshDataMode(record);
+  if (mode.synthetic) return assertExampleInvalidUrl(value, label);
+  return assertPublicHttpsUrl(value, label, { allowedHosts: FRESH_LIVE_SOURCE_HOSTS });
+}
+
+function assertFreshPayload(value, keyPath = "payload", mode = { synthetic: true, dataMode: "synthetic-test" }) {
   if (Array.isArray(value)) {
-    value.forEach((item, index) => assertSyntheticPayload(item, `${keyPath}[${index}]`));
+    value.forEach((item, index) => assertFreshPayload(item, `${keyPath}[${index}]`, mode));
     return;
   }
   if (value && typeof value === "object") {
     for (const [key, item] of Object.entries(value)) {
-      assertSyntheticPayload(item, `${keyPath}.${key}`);
+      assertFreshPayload(item, `${keyPath}.${key}`, mode);
     }
     return;
   }
@@ -195,30 +270,34 @@ function assertSyntheticPayload(value, keyPath = "payload") {
     /^(?:[A-Za-z]:[\\/]|\/var\/|\/tmp\/|\/home\/|\\\\)/.test(text)
     || /(?:^|[\\/])(?:outputs?|data|db|config|customer_db|web)[\\/]/i.test(text)
   ) {
-    throw freshError(`Synthetic value contains a filesystem path at ${keyPath}`, "FRESH_RAW_PATH_FORBIDDEN");
+    throw freshError(`Fresh value contains a filesystem path at ${keyPath}`, "FRESH_RAW_PATH_FORBIDDEN");
   }
   for (const match of text.matchAll(/https?:\/\/[^\s"'<>]+/gi)) {
-    assertExampleInvalidUrl(match[0], keyPath);
+    if (mode.synthetic) assertExampleInvalidUrl(match[0], keyPath);
+    else assertPublicHttpsUrl(match[0], keyPath, { allowedHosts: FRESH_LIVE_SOURCE_HOSTS });
   }
 }
 
+function assertSyntheticPayload(value, keyPath = "payload") {
+  return assertFreshPayload(value, keyPath, { synthetic: true, dataMode: "synthetic-test" });
+}
+
 function normalizeRawEvidence(record = {}, context = {}) {
-  if (record.synthetic !== true) {
-    throw freshError("Stage 228 raw evidence must be explicitly synthetic", "FRESH_SYNTHETIC_REQUIRED");
-  }
+  const recordMode = normalizeFreshDataMode(record);
   const runId = cleanId(record.runId || context.runId, "runId");
   const source = cleanText(record.source, 80);
   if (!source) throw freshError("Raw evidence source is required", "FRESH_PROVENANCE_REQUIRED");
   const capturedAt = requiredIso(record.capturedAt || record.observedAt, "capturedAt");
-  const sourceUrl = assertExampleInvalidUrl(record.sourceUrl);
+  const sourceUrl = assertFreshSourceUrl(record.sourceUrl, record);
   const payload = clone(record.payload ?? {});
-  assertSyntheticPayload(payload);
-  assertSyntheticPayload(record.provenance || {}, "raw.provenance");
+  assertFreshPayload(payload, "payload", recordMode);
+  assertFreshPayload(record.provenance || {}, "raw.provenance", recordMode);
   const companyId = cleanText(record.companyId, 160)
     ? cleanId(record.companyId, "companyId")
     : "";
   const externalId = cleanText(record.externalId, 240);
-  const evidenceKey = cleanText(record.idempotencyKey, 240) || [
+  const collectionEvidenceKey = cleanText(record.evidenceKey, 160);
+  const evidenceKey = cleanText(record.idempotencyKey, 240) || collectionEvidenceKey || [
     runId,
     source,
     companyId,
@@ -234,13 +313,15 @@ function normalizeRawEvidence(record = {}, context = {}) {
     schemaVersion: FRESH_DATA_SCHEMA_VERSION,
     evidenceId,
     rawEvidenceId: evidenceId,
-    synthetic: true,
+    synthetic: recordMode.synthetic,
+    dataMode: recordMode.dataMode,
     source,
     runId,
     companyId,
     capturedAt,
     observedAt: capturedAt,
     stage: cleanText(record.stage, 40),
+    evidenceKey: collectionEvidenceKey,
     sourceUrl,
     externalId,
     contentHash: cleanText(record.contentHash, 128) || stableHash(JSON.stringify(payload), 64, "sha256"),
@@ -253,15 +334,15 @@ function normalizeRawEvidence(record = {}, context = {}) {
       capturedAt,
       observedAt: capturedAt,
       sourceUrl,
-      synthetic: true
+      evidenceKey: collectionEvidenceKey,
+      synthetic: recordMode.synthetic,
+      dataMode: recordMode.dataMode
     }
   };
 }
 
 function normalizeObservation(record = {}, context = {}) {
-  if (record.synthetic !== true) {
-    throw freshError("Stage 228 observations must be explicitly synthetic", "FRESH_SYNTHETIC_REQUIRED");
-  }
+  const recordMode = normalizeFreshDataMode(record);
   const kind = cleanText(record.observationType || record.kind, 80);
   const inferredMode = kind.startsWith("profile.") ? "quick" : kind.startsWith("ota.") ? "ota" : "detail";
   const mode = cleanText(record.mode || record.collectionMode || inferredMode, 32).toLowerCase();
@@ -281,10 +362,10 @@ function normalizeObservation(record = {}, context = {}) {
       "FRESH_PROVENANCE_REQUIRED"
     );
   }
-  const sourceUrl = assertExampleInvalidUrl(record.sourceUrl);
+  const sourceUrl = assertFreshSourceUrl(record.sourceUrl, record);
   const values = clone(record.values ?? record.value ?? {});
-  assertSyntheticPayload(values, "observation.values");
-  assertSyntheticPayload(record.provenance || {}, "observation.provenance");
+  assertFreshPayload(values, "observation.values", recordMode);
+  assertFreshPayload(record.provenance || {}, "observation.provenance", recordMode);
   const key = cleanText(record.idempotencyKey, 240) || [
     runId,
     companyId,
@@ -304,7 +385,8 @@ function normalizeObservation(record = {}, context = {}) {
   return {
     schemaVersion: FRESH_DATA_SCHEMA_VERSION,
     observationId,
-    synthetic: true,
+    synthetic: recordMode.synthetic,
+    dataMode: recordMode.dataMode,
     mode,
     observationType: kind || `${mode}-availability`,
     kind: kind || `${mode}-availability`,
@@ -316,6 +398,8 @@ function normalizeObservation(record = {}, context = {}) {
     channel,
     productKey,
     sourceUrl,
+    requestKey: cleanText(record.requestKey || record.provenance?.requestKey, 160),
+    conditionHash: cleanText(record.conditionHash || record.provenance?.conditionHash, 128),
     evidenceId,
     rawEvidenceId: evidenceId,
     unit: cleanText(record.unit, 40),
@@ -330,7 +414,10 @@ function normalizeObservation(record = {}, context = {}) {
       channel,
       productKey,
       sourceUrl,
-      synthetic: true
+      requestKey: cleanText(record.requestKey || record.provenance?.requestKey, 160),
+      conditionHash: cleanText(record.conditionHash || record.provenance?.conditionHash, 128),
+      synthetic: recordMode.synthetic,
+      dataMode: recordMode.dataMode
     }
   };
 }
@@ -344,8 +431,34 @@ function normalizeVerifiedProfile(profile = {}) {
     website: cleanText(profile.website, 2048),
     notes: cleanText(profile.notes, 1000)
   };
-  if (allowed.website) allowed.website = assertExampleInvalidUrl(allowed.website, "verifiedProfile.website");
+  if (allowed.website) allowed.website = assertPublicHttpsUrl(allowed.website, "verifiedProfile.website");
+  const latitudeProvided = profile.latitude !== undefined && profile.latitude !== null && profile.latitude !== "";
+  const longitudeProvided = profile.longitude !== undefined && profile.longitude !== null && profile.longitude !== "";
+  if (latitudeProvided || longitudeProvided) {
+    throw freshError("Coordinates require the field-scoped coordinate review contract", "FRESH_COORDINATE_REVIEW_REQUIRED");
+  }
   return allowed;
+}
+
+function normalizeVerifiedCoordinates(value = {}) {
+  const latitudeProvided = value.latitude !== undefined && value.latitude !== null && value.latitude !== "";
+  const longitudeProvided = value.longitude !== undefined && value.longitude !== null && value.longitude !== "";
+  if (!latitudeProvided || !longitudeProvided) {
+    throw freshError("Coordinate review requires both latitude and longitude", "FRESH_VERIFIED_COORDINATE_PAIR_REQUIRED");
+  }
+  const latitude = Number(value.latitude);
+  const longitude = Number(value.longitude);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw freshError("Verified coordinates are outside the valid WGS84 range", "FRESH_VERIFIED_COORDINATE_INVALID");
+  }
+  if (latitude < FRESH_KOREA_COORDINATE_BOUNDS.south || latitude > FRESH_KOREA_COORDINATE_BOUNDS.north
+    || longitude < FRESH_KOREA_COORDINATE_BOUNDS.west || longitude > FRESH_KOREA_COORDINATE_BOUNDS.east) {
+    throw freshError("Verified coordinates are outside the supported Korea boundary", "FRESH_COORDINATE_REVIEW_OUT_OF_RANGE");
+  }
+  return {
+    latitude: Math.round(latitude * 1_000_000) / 1_000_000,
+    longitude: Math.round(longitude * 1_000_000) / 1_000_000
+  };
 }
 
 function latestTimestamp(rows = []) {
@@ -353,7 +466,46 @@ function latestTimestamp(rows = []) {
 }
 
 function deriveCompanyQuality(company = {}, observations = [], verified = null, now = Date.now()) {
-  const modes = [...new Set(observations.map((row) => row.mode).filter((mode) => FRESH_OBSERVATION_MODES.includes(mode)))];
+  function usableValue(row = {}) {
+    const value = row.values ?? row.value;
+    if (value === null || value === undefined || value === "") return false;
+    if ((row.observationType || row.kind) === "profile.location") {
+      const latitude = value?.latitude ?? value?.lat;
+      const longitude = value?.longitude ?? value?.lng ?? value?.lon;
+      return Boolean(
+        value
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && latitude !== null && latitude !== undefined && latitude !== ""
+        && longitude !== null && longitude !== undefined && longitude !== ""
+        && Number.isFinite(Number(latitude))
+        && Number.isFinite(Number(longitude))
+      );
+    }
+    if (typeof value === "number") return Number.isFinite(value);
+    if (typeof value === "string") return Boolean(cleanText(value, 1));
+    if (typeof value === "boolean") return true;
+    return Boolean(value && typeof value === "object" && Object.keys(value).length);
+  }
+  const usable = observations.filter(usableValue);
+  const kinds = new Set(usable.map((row) => row.observationType || row.kind));
+  const completeProducts = new Map();
+  for (const row of usable.filter((item) => String(item.observationType || item.kind).startsWith("product."))) {
+    const key = `${row.companyId}|${row.targetDate}|${row.channel}|${row.productKey}`;
+    const fields = completeProducts.get(key) || new Set();
+    fields.add(row.observationType || row.kind);
+    completeProducts.set(key, fields);
+  }
+  const modes = [];
+  if (["profile.company-name", "profile.region", "profile.category", "profile.location"].every((kind) => kinds.has(kind))) {
+    modes.push("quick");
+  }
+  if ([...completeProducts.values()].some((fields) => (
+    ["product.price", "product.total-stock", "product.available-stock"].every((kind) => fields.has(kind))
+  ))) {
+    modes.push("detail");
+  }
+  if (kinds.has("ota.exposure")) modes.push("ota");
   const latestObservedAt = latestTimestamp(observations);
   const ageHours = latestObservedAt
     ? Math.max(0, (Number(now) - Date.parse(latestObservedAt)) / 3_600_000)
@@ -363,7 +515,8 @@ function deriveCompanyQuality(company = {}, observations = [], verified = null, 
   if (ageHours !== null && ageHours <= 24) freshness = "fresh";
   else if (ageHours !== null && ageHours <= 168) freshness = "current";
   else if (ageHours !== null) freshness = "stale";
-  const approved = verified?.status === "approved";
+  const approved = verified?.status === "approved" && ["primaryName", "region", "address", "phone", "website"]
+    .some((field) => Boolean(cleanText(verified?.profile?.[field], 1)));
   const confidenceScore = Math.min(100, Math.round(completeness * 0.8 + (approved ? 20 : 0)));
   const confidence = confidenceScore >= 85
     ? "high"
@@ -408,6 +561,8 @@ function deriveCompanyQuality(company = {}, observations = [], verified = null, 
 
 function businessSafeProjection(company = {}, verified = null, derived = null, observations = [], options = {}) {
   const approved = verified?.status === "approved" ? verified : null;
+  const approvedProfile = Boolean(approved && ["primaryName", "region", "address", "phone", "website"]
+    .some((field) => Boolean(cleanText(approved.profile?.[field], 1))));
   const latest = observations.slice().sort((a, b) => String(b.observedAt).localeCompare(String(a.observedAt)))[0] || null;
   const quality = clone(derived || deriveCompanyQuality(company, observations, verified));
   const profileFields = [
@@ -427,6 +582,7 @@ function businessSafeProjection(company = {}, verified = null, derived = null, o
   const verifiedFields = verifiedValues.filter((row) => row.verified).length;
   const missingFields = verifiedValues.filter((row) => !row.value).map((row) => row.label);
   const sourceCount = new Set(observations.map((row) => row.source).filter(Boolean)).size;
+  const containsLiveObservations = observations.some((row) => row.synthetic === false && row.dataMode === "live");
   const repeatGroups = new Map();
   for (const row of observations) {
     const key = `${row.companyId}|${row.productKey}|${row.targetDate}`;
@@ -434,14 +590,31 @@ function businessSafeProjection(company = {}, verified = null, derived = null, o
   }
   const repeatCount = [...repeatGroups.values()].filter((count) => count > 1).reduce((sum, count) => sum + count, 0);
   const completenessState = quality.dataCompleteness.score >= 100 ? "complete" : quality.dataCompleteness.score > 0 ? "partial" : "empty";
+  const coordinateReview = options.coordinateReview && typeof options.coordinateReview === "object" ? options.coordinateReview : null;
+  const approvedCoordinate = coordinateReview?.approvedCoordinates || null;
+  const verifiedLatitude = approvedCoordinate?.latitude;
+  const verifiedLongitude = approvedCoordinate?.longitude;
+  const verifiedCoordinates = verifiedLatitude !== null && verifiedLatitude !== undefined && verifiedLatitude !== ""
+    && verifiedLongitude !== null && verifiedLongitude !== undefined && verifiedLongitude !== ""
+    && Number.isFinite(Number(verifiedLatitude)) && Number.isFinite(Number(verifiedLongitude))
+    ? {
+      latitude: Number(verifiedLatitude),
+      longitude: Number(verifiedLongitude),
+      confidence: "verified",
+      reviewedAt: coordinateReview?.approvedAt || coordinateReview?.reviewedAt || ""
+    }
+    : null;
   return {
     schemaVersion: FRESH_DATA_SCHEMA_VERSION,
     projection: "business-safe",
-    state: quality.dataCompleteness.score >= 100 && approved ? "ready" : observations.length ? "partial" : "empty",
+    state: quality.dataCompleteness.score >= 100 && approvedProfile ? "ready" : observations.length ? "partial" : "empty",
     companyId: company.companyId || "",
+    synthetic: !containsLiveObservations,
+    dataMode: containsLiveObservations ? "live" : "synthetic-test",
     name: approved?.profile?.primaryName || company.primaryName || "",
     region: approved?.profile?.region || company.region || "",
     address: approved?.profile?.address || company.address || "",
+    coordinates: verifiedCoordinates,
     identity: {
       ruleVersion: company.identityRule || FRESH_DATA_IDENTITY_RULE,
       confidence: company.identityConfidence || "review"
@@ -480,7 +653,9 @@ function businessSafeProjection(company = {}, verified = null, derived = null, o
       basis: `quick/detail/OTA ${quality.dataCompleteness.collectedModes.length}개 모드`
     },
     provenance: {
-      summary: observations.length ? "Stage 228 신규 합성 수집 provenance 100%" : "신규 수집 전",
+      summary: observations.length
+        ? (containsLiveObservations ? "V2 신규 실수집 provenance 100%" : "Stage 228 신규 합성 수집 provenance 100%")
+        : "신규 수집 전",
       sourceCount,
       lastVerifiedAt: approved?.reviewedAt || ""
     },
@@ -505,14 +680,20 @@ function businessSafeProjection(company = {}, verified = null, derived = null, o
 }
 
 module.exports = {
+  FRESH_DATA_MODES,
   FRESH_DATA_IDENTITY_RULE,
   FRESH_DATA_LAYERS,
   FRESH_DATA_SCHEMA_VERSION,
   FRESH_DATA_STAGE,
   FRESH_DATA_STORE_KIND,
+  FRESH_KOREA_COORDINATE_BOUNDS,
   FRESH_OBSERVATION_MODES,
+  FRESH_LIVE_SOURCE_HOSTS,
   FRESH_RUN_STATUSES,
   assertExampleInvalidUrl,
+  assertFreshPayload,
+  assertFreshSourceUrl,
+  assertPublicHttpsUrl,
   assertSyntheticPayload,
   businessSafeProjection,
   cleanId,
@@ -527,7 +708,9 @@ module.exports = {
   normalizeCompanyIdentityName,
   normalizeCompanyLooseName,
   normalizeObservation,
+  normalizeFreshDataMode,
   normalizeRawEvidence,
+  normalizeVerifiedCoordinates,
   normalizeVerifiedProfile,
   sourceIdentityKeys,
   stableHash

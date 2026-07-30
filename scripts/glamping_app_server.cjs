@@ -15,6 +15,7 @@ const { createIntegrationCoreRuntime } = require("./integration/bootstrap/core_r
 const { createFreshPlatformRuntime } = require("./integration/bootstrap/fresh_platform_runtime.cjs");
 const { createInsightsRuntime } = require("./integration/bootstrap/insights_runtime.cjs");
 const { createStrategyRuntime } = require("./integration/bootstrap/strategy_runtime.cjs");
+const { createSignalConnectorRuntime } = require("./integration/bootstrap/signal_connector_runtime.cjs");
 const { assertFreshAuthStoreBoundary } = require("./integration/repositories/fresh_store.cjs");
 const {
   CONTRACT_PREVIEW_PURPOSE,
@@ -28,6 +29,9 @@ const {
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
 const UI_V3_WEB_DIR = path.join(ROOT, "apps", "web", "dist");
+const FRESH_MAP_BOUNDARY_ENDPOINT = "/api/integration/fresh/map-boundary/kostat-2013-v1";
+const FRESH_MAP_BOUNDARY_FILE = path.join(WEB_DIR, "assets", "korea_municipalities.geojson");
+const FRESH_MAP_BOUNDARY_SHA256 = "1cd70bc95ec6ce5cbce1a98ea49fe7a81bdaada98a536b075f25c471e998aae8";
 const REPO_OUTPUTS_DIR = path.join(ROOT, "outputs");
 const RENDER_DISK_DIR = "/var/data";
 const IS_RENDER_RUNTIME = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
@@ -90,6 +94,8 @@ const V2_INTEGRATION_BUSINESS_REPORT_REQUESTED = flagEnabled(process.env.V2_INTE
 const V2_INTEGRATION_STRATEGY_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_STRATEGY_ENABLED);
 const V2_INTEGRATION_EXECUTION_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_EXECUTION_ENABLED);
 const V2_INTEGRATION_RETROSPECTIVE_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_RETROSPECTIVE_ENABLED);
+const V2_INTEGRATION_MAP_RANKING_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_MAP_RANKING_ENABLED);
+const V2_INTEGRATION_CONNECTOR_RUNTIME_REQUESTED = flagEnabled(process.env.V2_INTEGRATION_CONNECTOR_RUNTIME_ENABLED);
 const ADMIN_USERNAME = String(process.env.GLAMPING_ADMIN_USER || process.env.ADMIN_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "admin")).trim();
 const ADMIN_PASSWORD = String(process.env.GLAMPING_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "0914")).trim();
 const B2B_USERNAME = String(process.env.GLAMPING_B2B_USER || process.env.B2B_USER || (INTEGRATION_FEATURE_FLAGS.auth ? "" : "b2b")).trim();
@@ -108,6 +114,7 @@ let integrationCoreRuntime = null;
 let integrationFreshRuntime = null;
 let integrationInsightsRuntime = null;
 let integrationStrategyRuntime = null;
+let integrationSignalRuntime = null;
 const V2_INTEGRATION_PREVIEW_PURPOSE = String(process.env.V2_INTEGRATION_PREVIEW_PURPOSE || "").trim().toLowerCase();
 const V2_INTEGRATION_PREVIEW_FIXTURE_ROOT = String(process.env.V2_INTEGRATION_PREVIEW_FIXTURE_ROOT || "").trim();
 const INTEGRATION_PREVIEW_ACCESS_GUARD = (() => {
@@ -13360,6 +13367,12 @@ async function serveUiV3Index(req, res, extraHeaders = {}) {
   ).replaceAll(
     "__V2_RETROSPECTIVE_ENABLED__",
     INTEGRATION_FEATURE_FLAGS.retrospective ? "true" : "false"
+  ).replaceAll(
+    "__V2_MAP_RANKING_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.mapRanking ? "true" : "false"
+  ).replaceAll(
+    "__V2_CONNECTOR_RUNTIME_ENABLED__",
+    INTEGRATION_FEATURE_FLAGS.connectorRuntime ? "true" : "false"
   );
   return send(res, 200, runtimeHtml, "text/html; charset=utf-8", headers);
 }
@@ -13374,6 +13387,45 @@ async function serveUiV3Asset(req, reqUrl, res) {
     : { "Cache-Control": "no-cache" };
   if (req.method === "HEAD") return sendHead(res, 200, MIME_TYPES[ext] || "application/octet-stream", headers);
   return send(res, 200, await fsp.readFile(filePath), MIME_TYPES[ext] || "application/octet-stream", headers);
+}
+
+async function serveFreshMapBoundary(req, reqUrl, res) {
+  if (reqUrl.pathname !== FRESH_MAP_BOUNDARY_ENDPOINT) return false;
+  if (!INTEGRATION_FEATURE_FLAGS.mapRanking) {
+    if (req.method === "HEAD") sendHead(res, 404, "application/json; charset=utf-8");
+    else notFound(res);
+    return true;
+  }
+  if (!["GET", "HEAD"].includes(req.method)) {
+    send(res, 405, { error: "Method not allowed" }, "application/json; charset=utf-8", { Allow: "GET, HEAD" });
+    return true;
+  }
+  try {
+    const payload = await fsp.readFile(FRESH_MAP_BOUNDARY_FILE);
+    const checksum = crypto.createHash("sha256").update(payload).digest("hex");
+    if (checksum !== FRESH_MAP_BOUNDARY_SHA256) throw new Error("boundary checksum mismatch");
+    const etag = `"sha256-${FRESH_MAP_BOUNDARY_SHA256}"`;
+    const headers = {
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Length": String(payload.length),
+      ETag: etag
+    };
+    if (String(req.headers["if-none-match"] || "") === etag) {
+      sendHead(res, 304, "application/geo+json; charset=utf-8", { ...headers, "Content-Length": "0" });
+      return true;
+    }
+    if (req.method === "HEAD") {
+      sendHead(res, 200, "application/geo+json; charset=utf-8", headers);
+      return true;
+    }
+    send(res, 200, payload, "application/geo+json; charset=utf-8", headers);
+    return true;
+  } catch {
+    const errorBody = { error: "승인된 행정경계 자산을 제공할 수 없습니다." };
+    if (req.method === "HEAD") sendHead(res, 503, "application/json; charset=utf-8");
+    else send(res, 503, errorBody);
+    return true;
+  }
 }
 
 async function routeUiV3Page(req, res, reqUrl) {
@@ -13442,10 +13494,17 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    if (await serveFreshMapBoundary(req, reqUrl, res)) return;
     if (INTEGRATION_FEATURE_FLAGS.auth && await integrationAuthRuntime.http.handle(req, res, reqUrl)) return;
+    if (
+      INTEGRATION_FEATURE_FLAGS.connectorRuntime
+      && integrationSignalRuntime
+      && await integrationSignalRuntime.http.handle(req, res, reqUrl)
+    ) return;
     if (
       INTEGRATION_FEATURE_FLAGS.freshCompany
       && integrationFreshRuntime
+      && (!reqUrl.pathname.startsWith("/api/integration/fresh/exploration") || INTEGRATION_FEATURE_FLAGS.mapRanking)
       && await integrationFreshRuntime.http.handle(req, res, reqUrl)
     ) return;
     if (
@@ -14042,6 +14101,12 @@ async function startServer() {
   if (V2_INTEGRATION_RETROSPECTIVE_REQUESTED && !INTEGRATION_FEATURE_FLAGS.execution) {
     throw new Error("V2_INTEGRATION_RETROSPECTIVE_ENABLED requires V2_INTEGRATION_EXECUTION_ENABLED");
   }
+  if (V2_INTEGRATION_MAP_RANKING_REQUESTED && !INTEGRATION_FEATURE_FLAGS.freshObservation) {
+    throw new Error("V2_INTEGRATION_MAP_RANKING_ENABLED requires V2_INTEGRATION_FRESH_OBSERVATION_ENABLED");
+  }
+  if (V2_INTEGRATION_CONNECTOR_RUNTIME_REQUESTED && !INTEGRATION_FEATURE_FLAGS.freshObservation) {
+    throw new Error("V2_INTEGRATION_CONNECTOR_RUNTIME_ENABLED requires integration auth and fresh observation");
+  }
   if (V2_INTEGRATION_FRESH_COMPANY_REQUESTED) {
     assertFreshAuthStoreBoundary({
       authStorePath: process.env.V2_INTEGRATION_AUTH_STORE_PATH,
@@ -14074,6 +14139,18 @@ async function startServer() {
     });
     await integrationFreshRuntime.initialize();
   }
+  if (INTEGRATION_FEATURE_FLAGS.connectorRuntime) {
+    integrationSignalRuntime = createSignalConnectorRuntime({
+      env: process.env,
+      authRuntime: integrationAuthRuntime,
+      freshRepository: integrationFreshRuntime.repository,
+      integrationRoot: process.env.V2_INTEGRATION_DATA_DIR,
+      send,
+      parseBody: parseLoginBody,
+      legacyPaths: stage228LegacyPaths
+    });
+    await integrationSignalRuntime.initialize();
+  }
   if (
     INTEGRATION_FEATURE_FLAGS.reliability
     || INTEGRATION_FEATURE_FLAGS.locationCard
@@ -14084,6 +14161,7 @@ async function startServer() {
       projectRoot: ROOT,
       authRuntime: integrationAuthRuntime,
       freshRuntime: integrationFreshRuntime,
+      signalRepository: integrationSignalRuntime?.repository || null,
       capabilities: {
         reliability: INTEGRATION_FEATURE_FLAGS.reliability,
         locationCard: INTEGRATION_FEATURE_FLAGS.locationCard,

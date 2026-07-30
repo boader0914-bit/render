@@ -32,6 +32,16 @@ const detailPayload = {
     detail: "독립 출처 교차 확인",
     basis: "예약 노출과 사업자 공개정보 일치"
   },
+  coordinateReview: {
+    state: "pending",
+    latitude: 37.5665,
+    longitude: 126.978,
+    confidence: "medium",
+    observedAt: "2026-07-29T04:00:00.000Z",
+    reviewedAt: "",
+    version: 2,
+    rawPath: "C:\\private\\coordinate.json"
+  },
   provenance: {
     summary: "공개 웹과 승인된 신규 수집의 요약",
     sourceCount: 3,
@@ -73,6 +83,7 @@ describe("Stage 228 business-safe company detail contract", () => {
       completeness: { displayValue: "9 / 10", verifiedFields: "9", totalFields: "10", missingFields: ["대표 전화"] },
       freshness: { displayValue: "12시간 이내", state: "fresh" },
       confidence: { displayValue: "높음", state: "high" },
+      coordinateReview: { state: "pending", latitude: 37.5665, longitude: 126.978, version: 2 },
       provenance: { sourceCount: "3" },
       observations: { displayCount: "4회", repeatCount: "3" }
     });
@@ -177,6 +188,11 @@ describe("Stage 228 V3 company detail rendering", () => {
     expect(admin).toContain("/admin/collection?companyId=syn_detail_001");
     expect(business).toContain('data-detail-role="business"');
     expect(admin).toContain('data-detail-role="admin"');
+    expect(business).not.toContain('data-testid="company-coordinate-review"');
+    expect(admin).toContain('data-testid="company-coordinate-review"');
+    expect(admin).toContain('value="37.5665"');
+    expect(admin).toContain('value="126.978"');
+    expect(admin).not.toContain("coordinate.json");
   });
 
   it("renders explicit empty, loading, error and partial states without fallback data", () => {

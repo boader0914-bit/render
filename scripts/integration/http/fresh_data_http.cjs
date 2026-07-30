@@ -2,6 +2,22 @@
 
 const FRESH_API_BASE = "/api/integration/fresh";
 
+function sessionRole(session = {}) {
+  return String(session.account?.role || session.role || "").trim().toLowerCase();
+}
+
+function isAdminSession(session = {}) {
+  return sessionRole(session) === "admin";
+}
+
+function omitBusinessCompanyIds(value) {
+  if (Array.isArray(value)) return value.map(omitBusinessCompanyIds);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => key !== "companyId")
+    .map(([key, child]) => [key, omitBusinessCompanyIds(child)]));
+}
+
 function createFreshDataHttpHandler(options = {}) {
   const service = options.service;
   const authService = options.authService;
@@ -37,7 +53,7 @@ function createFreshDataHttpHandler(options = {}) {
     return {
       ok: true,
       idempotent: Boolean(result.idempotent),
-      outcome: result.outcome || result.run?.status || "",
+      outcome: result.outcome || result.job?.status || "",
       job: result.job,
       metadata: service.metadata()
     };
@@ -53,6 +69,31 @@ function createFreshDataHttpHandler(options = {}) {
 
       if (method === "GET" && pathname === `${FRESH_API_BASE}/metadata`) {
         send(res, 200, { ok: true, metadata: service.metadata() });
+        return true;
+      }
+      if (method === "GET" && pathname === `${FRESH_API_BASE}/exploration`) {
+        const requestedCompanyId = reqUrl.searchParams.get("companyId") || "";
+        if (requestedCompanyId && !isAdminSession(session)) {
+          const error = new Error("Business exploration selection requires an opaque companyRef");
+          error.statusCode = 400;
+          error.code = "FRESH_EXPLORATION_COMPANY_REF_REQUIRED";
+          throw error;
+        }
+        const exploration = await service.getExploration(
+          session,
+          reqUrl.searchParams.get("tenantCompanyId") || "",
+          isAdminSession(session) ? requestedCompanyId : "",
+          context,
+          reqUrl.searchParams.get("companyRef") || ""
+        );
+        send(res, 200, {
+          ok: true,
+          metadata: {
+            ...service.metadata(),
+            exploration: service.explorationMetadata()
+          },
+          exploration: isAdminSession(session) ? exploration : omitBusinessCompanyIds(exploration)
+        });
         return true;
       }
       if (method === "GET" && pathname === `${FRESH_API_BASE}/companies`) {
@@ -134,9 +175,11 @@ function createFreshDataHttpHandler(options = {}) {
       return true;
     } catch (error) {
       const headers = error.retryAfterSeconds ? { "Retry-After": String(error.retryAfterSeconds) } : {};
-      send(res, error.statusCode || 500, {
-        error: error.message || String(error),
-        code: error.code || undefined,
+      const statusCode = Number(error.statusCode || 500);
+      const internalFailure = statusCode >= 500;
+      send(res, statusCode, {
+        error: internalFailure ? "통합 데이터를 처리하지 못했습니다." : (error.message || String(error)),
+        code: internalFailure ? "FRESH_INTERNAL_ERROR" : (error.code || undefined),
         reauthenticationRequired: error.reauthenticationRequired || undefined,
         metadata: service.metadata()
       }, "application/json; charset=utf-8", headers);
@@ -149,5 +192,6 @@ function createFreshDataHttpHandler(options = {}) {
 
 module.exports = {
   FRESH_API_BASE,
-  createFreshDataHttpHandler
+  createFreshDataHttpHandler,
+  omitBusinessCompanyIds
 };

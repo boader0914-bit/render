@@ -125,6 +125,20 @@ async function main() {
         (error) => code(error) === blocked.expectedCode && error.statusCode === 409,
         `${blocked.id}: strategy generation must remain empty`
       );
+      const blockedWorkspace = await blockedService.workspace(business, {
+        view: "business-strategy",
+        month: "2026-08"
+      });
+      assert.deepEqual(blockedWorkspace.strategies, [], `${blocked.id}: stored strategies must not survive an ineligible report gate`);
+      assert.deepEqual(
+        (await blockedService.listStrategies(business, {
+          companyId: COMPANY_ID,
+          tenantCompanyId: TENANT_ONE,
+          month: "2026-08"
+        })).strategies,
+        [],
+        `${blocked.id}: direct strategy lists must enforce current published lineage`
+      );
     }
     assert.equal((await repository.listStrategies({ companyId: COMPANY_ID, tenantCompanyId: TENANT_ONE })).length, 5);
 
@@ -435,6 +449,77 @@ async function main() {
     });
     assert.ok(adminWorkspace.audit.count >= 1);
     assert.ok(adminWorkspace.audit.latest.every((row) => row.auditId && row.event && row.at && row.actorRole));
+
+    const originalPublishedReport = JSON.parse(JSON.stringify(dependencies.publishedReport));
+    const lineageDrifts = [
+      { id: "version", patch: { version: originalPublishedReport.version + 1 } },
+      { id: "published-at", patch: { publishedAt: "2026-07-30T00:00:00.000Z" } },
+      { id: "algorithm", patch: { algorithmVersion: `${originalPublishedReport.algorithmVersion}-changed` } }
+    ];
+    for (const drift of lineageDrifts) {
+      dependencies.reports.set(originalPublishedReport.reportId, {
+        ...originalPublishedReport,
+        ...drift.patch
+      });
+      assert.deepEqual(
+        (await service.listStrategies(business, { companyId: COMPANY_ID, tenantCompanyId: TENANT_ONE, month: "2026-08" })).strategies,
+        [],
+        `${drift.id}: strategies must fail closed when the published report fingerprint drifts`
+      );
+      assert.deepEqual(
+        (await service.listPlans(business, { companyId: COMPANY_ID, tenantCompanyId: TENANT_ONE, month: "2026-08" })).plans,
+        [],
+        `${drift.id}: plans must fail closed when the published report fingerprint drifts`
+      );
+      assert.deepEqual(
+        (await service.listRetrospectives(business, { companyId: COMPANY_ID, tenantCompanyId: TENANT_ONE, month: "2026-08" })).retrospectives,
+        [],
+        `${drift.id}: retrospectives must fail closed when the published report fingerprint drifts`
+      );
+      assert.deepEqual(
+        (await service.listCandidates(business, { companyId: COMPANY_ID, tenantCompanyId: TENANT_ONE, targetMonth: "2026-09" })).candidates,
+        [],
+        `${drift.id}: candidates must fail closed when the published report fingerprint drifts`
+      );
+      assert.equal(
+        (await service.board(business, { companyId: COMPANY_ID, tenantCompanyId: TENANT_ONE, month: "2026-08" })).board.items.length,
+        0,
+        `${drift.id}: board items must fail closed when the published report fingerprint drifts`
+      );
+      const driftWorkspace = await service.workspace(business, {
+        view: "business-retrospective",
+        month: "2026-08",
+        targetMonth: "2026-09"
+      });
+      assert.deepEqual([
+        driftWorkspace.strategies.length,
+        driftWorkspace.plans.length,
+        driftWorkspace.retrospectives.length,
+        driftWorkspace.candidates.length,
+        driftWorkspace.board.items.length
+      ], [0, 0, 0, 0, 0], `${drift.id}: workspace must fail closed transitively`);
+      const currentPlan = await repository.getPlan(planId);
+      await assert.rejects(
+        service.updatePlan(business, planId, {
+          tenantCompanyId: TENANT_ONE,
+          expectedVersion: currentPlan.version,
+          notes: `fingerprint drift ${drift.id}`
+        }),
+        (error) => code(error) === "STRATEGY_REPORT_NOT_PUBLISHED" && error.statusCode === 409,
+        `${drift.id}: mutations must reject stale report lineage`
+      );
+      await assert.rejects(
+        service.createPlan(business, {
+          ...planPayload,
+          strategyIds: [generated.strategies[0].strategyId],
+          title: `fingerprint drift ${drift.id}`,
+          clientRequestId: `stage230-drift-plan-${drift.id}`
+        }),
+        (error) => code(error) === "STRATEGY_REPORT_NOT_PUBLISHED" && error.statusCode === 409,
+        `${drift.id}: new plans must reject stale strategies`
+      );
+    }
+    dependencies.reports.set(originalPublishedReport.reportId, originalPublishedReport);
 
     const audit = await repository.listAudit({ companyId: COMPANY_ID, limit: 1000 });
     const completeAudit = await repository.listAudit({ limit: 1000 });

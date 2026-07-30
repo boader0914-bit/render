@@ -4,12 +4,41 @@ export type CoreWorkspaceState = "empty" | "ready" | "partial";
 export type CoreJobKind = "business-search" | "business-my-lodge" | "admin-collection";
 export type CoreJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
 export type CoreTone = "neutral" | "success" | "warning" | "info";
+export type CoreProviderMode = "real" | "test" | "unavailable";
+
+export interface CoreCollectionCapability {
+  providerMode: CoreProviderMode;
+  executionEnabled: boolean;
+  realProviderEnabled: boolean;
+  testExecutionEnabled: boolean;
+  sourceLabel: string;
+  actionLabel: string;
+  detail: string;
+}
+
+export interface CoreCollectionJobInput {
+  keyword?: string;
+  companyId?: string;
+  regionCode?: string;
+  regionLabel?: string;
+  targetDate?: string;
+  checkIn?: string;
+  checkOut?: string;
+  discoveryQuery?: string;
+  rankingQuery?: string;
+  collectionMode?: "precision" | "fast";
+  collectionPurpose?: "basic_db" | "revenue_detail" | "demand_location";
+  productMode?: "all" | "lodging" | "campnic";
+  detailRankRanges?: string;
+  bookingRangePlaceLimit?: number;
+}
 
 export interface CoreMetadata {
   stage: 227 | 228;
   provisional: boolean;
   dataBoundary: "fresh-only" | "fresh-integration-only";
-  source: "empty" | "synthetic-fresh-collection" | "synthetic-fresh-integration";
+  source: "empty" | "synthetic-fresh-collection" | "synthetic-fresh-integration" | "synthetic-test-data" | "v2-live-fresh-collection";
+  collectionCapability: CoreCollectionCapability;
 }
 
 export interface CoreMetric {
@@ -43,6 +72,15 @@ export interface CoreCompanyFreshDetail {
   completeness: CoreCompanyDetailMetric & { verifiedFields: string; totalFields: string; missingFields: readonly string[] };
   freshness: CoreCompanyDetailMetric & { observedAt: string; validUntil: string };
   confidence: CoreCompanyDetailMetric & { basis: string };
+  coordinateReview: {
+    state: "approved" | "rejected" | "pending" | "not-collected";
+    latitude: number | null;
+    longitude: number | null;
+    confidence: string;
+    observedAt: string;
+    reviewedAt: string;
+    version: number;
+  };
   provenance: { summary: string; sourceCount: string; lastVerifiedAt: string };
   verifiedValues: ReadonlyArray<{ field: string; label: string; value: string; verifiedAt: string }>;
   changes: ReadonlyArray<{ changeId: string; fieldLabel: string; previousValue: string; currentValue: string; changedAt: string }>;
@@ -145,6 +183,86 @@ const boundedProgress = (value: unknown): number => Math.max(0, Math.min(100, Nu
 const RAW_PATH_PATTERN = /(?:[A-Za-z]:[\\/]|\\\\[^\\]|file:\/\/|\/(?:var|home|Users|tmp|outputs|customer_db|company_master|tourism_data)(?:[\\/]|$)|(?:^|[\s"'(])(?:outputs|customer_db|company_master|tourism_data)[\\/])/i;
 const SENSITIVE_DETAIL_KEY = /(?:raw|path|sourceurl|evidenceid|token|secret)/i;
 
+function coordinateNumber(value: unknown, minimum: number, maximum: number): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const candidate = Number(value);
+  return Number.isFinite(candidate) && candidate >= minimum && candidate <= maximum ? candidate : null;
+}
+
+function normalizeCollectionCapability(metadata: UnknownRecord, data: UnknownRecord, source: CoreMetadata["source"]): CoreCollectionCapability {
+  const capabilities = record(metadata.capabilities ?? data.capabilities);
+  const capability = record(
+    capabilities.collection
+    ?? capabilities.freshCollection
+    ?? metadata.collectionCapability
+    ?? data.collectionCapability
+    ?? metadata.collection
+    ?? data.collection
+  );
+  const rawProviderMode = text(capability.providerMode ?? capability.mode ?? metadata.providerMode ?? data.providerMode).toLowerCase();
+  const executionAllowed = bool(capability.executionEnabled ?? capability.enabled);
+  const realProviderAllowed = bool(
+    capability.realProviderEnabled
+    ?? capability.actualProviderEnabled
+    ?? capability.providerEnabled
+    ?? capability.configured
+  );
+  const testExecutionAllowed = bool(
+    capability.testExecutionEnabled
+    ?? capability.fixtureExecutionEnabled
+    ?? capability.testOnly
+  );
+  const realMode = ["real", "live", "external"].includes(rawProviderMode);
+  const testMode = ["test", "fixture", "synthetic", "mock"].includes(rawProviderMode);
+  const realProviderEnabled = executionAllowed && realProviderAllowed && realMode;
+  const testExecutionEnabled = executionAllowed && testExecutionAllowed && testMode;
+  const providerMode: CoreProviderMode = realProviderEnabled ? "real" : testExecutionEnabled ? "test" : "unavailable";
+  const sourceLabel = source === "synthetic-fresh-integration"
+    ? "테스트 데이터 · 합성 provider"
+    : source === "synthetic-fresh-collection" || source === "synthetic-test-data"
+      ? "테스트 데이터 · fixture"
+      : source === "v2-live-fresh-collection"
+        ? "V2 신규 실수집"
+        : providerMode === "real"
+          ? "실제 수집 연결 · 데이터 대기"
+          : providerMode === "test"
+            ? "테스트 모드 · 데이터 대기"
+            : "실수집 미연결";
+
+  const capabilityReason = businessSafeDisplayText(capability.reason);
+  if (providerMode === "real") {
+    return {
+      providerMode,
+      executionEnabled: true,
+      realProviderEnabled: true,
+      testExecutionEnabled: false,
+      sourceLabel,
+      actionLabel: "실제 수집 실행",
+      detail: capabilityReason || "서버가 실제 provider 연결과 실행 권한을 명시적으로 확인했습니다."
+    };
+  }
+  if (providerMode === "test") {
+    return {
+      providerMode,
+      executionEnabled: true,
+      realProviderEnabled: false,
+      testExecutionEnabled: true,
+      sourceLabel,
+      actionLabel: "테스트 데이터 생성",
+      detail: capabilityReason || "테스트 전용 fixture 실행입니다. 실제 provider 수집이 아닙니다."
+    };
+  }
+  return {
+    providerMode,
+    executionEnabled: false,
+    realProviderEnabled: false,
+    testExecutionEnabled: false,
+    sourceLabel,
+    actionLabel: "실수집 미연결",
+    detail: capabilityReason || "서버가 실제 provider 연결을 확인하지 않아 수집 실행을 차단했습니다."
+  };
+}
+
 export function businessSafeDisplayText(value: unknown, fallback = ""): string {
   const candidate = text(value).trim();
   return candidate && !RAW_PATH_PATTERN.test(candidate) ? candidate : fallback;
@@ -174,6 +292,7 @@ export function normalizeStage228CompanyDetail(value: unknown): CoreCompanyFresh
   const completeness = record(detail.completeness);
   const freshness = record(detail.freshness);
   const confidence = record(detail.confidence);
+  const coordinateReview = record(detail.coordinateReview);
   const provenance = record(detail.provenance);
   const enrichment = record(detail.enrichment);
   const observations = record(detail.observations);
@@ -215,6 +334,21 @@ export function normalizeStage228CompanyDetail(value: unknown): CoreCompanyFresh
     confidence: {
       ...detailMetric(confidence),
       basis: businessSafeDisplayText(confidence.basis, "검증 근거 요약 없음")
+    },
+    coordinateReview: {
+      state: coordinateReview.state === "approved"
+        ? "approved"
+        : coordinateReview.state === "rejected"
+          ? "rejected"
+          : coordinateReview.state === "pending"
+            ? "pending"
+            : "not-collected",
+      latitude: coordinateNumber(coordinateReview.latitude, -90, 90),
+      longitude: coordinateNumber(coordinateReview.longitude, -180, 180),
+      confidence: businessSafeDisplayText(coordinateReview.confidence, "unverified"),
+      observedAt: businessSafeDisplayText(coordinateReview.observedAt),
+      reviewedAt: businessSafeDisplayText(coordinateReview.reviewedAt),
+      version: Math.max(0, Number(coordinateReview.version) || 0)
     },
     provenance: {
       summary: businessSafeProvenanceText(provenance.summary, "공개 가능한 출처 요약이 없습니다."),
@@ -450,9 +584,14 @@ export function normalizeCoreWorkspace(value: unknown, requestedView: string): C
     : Object.keys(record(envelope.data)).length ? record(envelope.data) : envelope;
   const metadata = { ...envelope, ...record(envelope.metadata), ...record(data.metadata) };
   const rawSource = text(metadata.source);
-  const source: CoreMetadata["source"] = rawSource === "synthetic-fresh-integration"
-    ? "synthetic-fresh-integration"
-    : rawSource === "synthetic-fresh-collection" ? "synthetic-fresh-collection" : "empty";
+  const source: CoreMetadata["source"] = rawSource === "v2-live-fresh-collection"
+    ? "v2-live-fresh-collection"
+    : rawSource === "synthetic-test-data"
+      ? "synthetic-test-data"
+      : rawSource === "synthetic-fresh-integration"
+        ? "synthetic-fresh-integration"
+        : rawSource === "synthetic-fresh-collection" ? "synthetic-fresh-collection" : "empty";
+  const collectionCapability = normalizeCollectionCapability(metadata, data, source);
   const stateEnvelope = record(data.state);
   const explicitState = text(stateEnvelope.kind ?? data.state ?? metadata.state);
   const metricEnvelope = record(data.metrics);
@@ -481,12 +620,15 @@ export function normalizeCoreWorkspace(value: unknown, requestedView: string): C
   const tenant = record(data.tenant);
   const state: CoreWorkspaceState = explicitState === "partial"
     ? "partial"
-    : explicitState === "ready" || source !== "empty" ? "ready" : "empty";
+    : explicitState === "empty"
+      ? "empty"
+      : explicitState === "ready" || source !== "empty" ? "ready" : "empty";
   return {
     stage: Number(metadata.stage) === 228 ? 228 : 227,
     provisional: metadata.provisional !== false,
     dataBoundary: text(metadata.dataBoundary) === "fresh-integration-only" ? "fresh-integration-only" : "fresh-only",
     source,
+    collectionCapability,
     state,
     view: text(data.view ?? metadata.view, requestedView),
     tenantCompanyId: text(tenant.companyId),
@@ -513,20 +655,39 @@ export async function readCoreWorkspace(view: string, signal?: AbortSignal): Pro
   return normalizeCoreWorkspace(payload, view);
 }
 
-export async function createCoreJob(input: {
+export type CoreCollectionJobRequest = CoreCollectionJobInput & {
   clientRequestId: string;
   kind: CoreJobKind;
-  keyword?: string;
-  companyId?: string;
-}): Promise<CoreJob> {
+};
+
+export function coreJobRequestBody(input: CoreCollectionJobRequest): Record<string, unknown> {
+  const optional = {
+    keyword: input.keyword,
+    regionCode: input.regionCode,
+    regionLabel: input.regionLabel,
+    targetDate: input.targetDate,
+    checkIn: input.checkIn,
+    checkOut: input.checkOut,
+    discoveryQuery: input.discoveryQuery,
+    rankingQuery: input.rankingQuery,
+    collectionMode: input.collectionMode,
+    collectionPurpose: input.collectionPurpose,
+    productMode: input.productMode,
+    detailRankRanges: input.detailRankRanges,
+    bookingRangePlaceLimit: input.bookingRangePlaceLimit
+  };
+  return {
+    clientRequestId: input.clientRequestId,
+    kind: input.kind,
+    ...Object.fromEntries(Object.entries(optional).filter(([, value]) => value !== undefined && value !== "")),
+    ...(input.companyId ? { tenantCompanyId: input.companyId } : {})
+  };
+}
+
+export async function createCoreJob(input: CoreCollectionJobRequest): Promise<CoreJob> {
   return normalizeJobEnvelope(await apiRequest<unknown>("/api/integration/core/jobs", {
     method: "POST",
-    body: JSON.stringify({
-      clientRequestId: input.clientRequestId,
-      kind: input.kind,
-      ...(input.keyword ? { keyword: input.keyword } : {}),
-      ...(input.companyId ? { tenantCompanyId: input.companyId } : {})
-    })
+    body: JSON.stringify(coreJobRequestBody(input))
   }));
 }
 
@@ -536,6 +697,13 @@ export async function readCoreJob(clientRequestId: string, signal?: AbortSignal)
 
 export async function cancelCoreJob(clientRequestId: string): Promise<CoreJob> {
   return normalizeJobEnvelope(await apiRequest<unknown>(`/api/integration/core/jobs/${encodeURIComponent(clientRequestId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ clientRequestId })
+  }));
+}
+
+export async function resumeCoreJob(clientRequestId: string): Promise<CoreJob> {
+  return normalizeJobEnvelope(await apiRequest<unknown>(`/api/integration/core/jobs/${encodeURIComponent(clientRequestId)}/resume`, {
     method: "POST",
     body: JSON.stringify({ clientRequestId })
   }));
@@ -560,6 +728,25 @@ export async function requestTourismCollection(clientRequestId: string, regionCo
   await apiRequest("/api/integration/core/admin/tourism-requests", {
     method: "POST",
     body: JSON.stringify({ clientRequestId, ...(regionCode ? { regionCode } : {}) })
+  });
+}
+
+export async function reviewFreshCompanyCoordinates(input: {
+  companyId: string;
+  latitude: number;
+  longitude: number;
+  decision: "approve" | "reject";
+  reason: string;
+  expectedVersion: number;
+}): Promise<void> {
+  await apiRequest(`/api/integration/fresh/companies/${encodeURIComponent(input.companyId)}/review`, {
+    method: "POST",
+    body: JSON.stringify({
+      decision: input.decision,
+      reason: input.reason,
+      expectedVersion: input.expectedVersion,
+      profilePatch: { latitude: input.latitude, longitude: input.longitude }
+    })
   });
 }
 

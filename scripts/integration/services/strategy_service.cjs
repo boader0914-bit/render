@@ -157,6 +157,7 @@ function createStrategyService(options = {}) {
     if (access.tenantCompanyId !== row.tenantCompanyId) {
       throw strategyError("다른 업체의 전략·실행 데이터에는 접근할 수 없습니다.", "STRATEGY_TENANT_FORBIDDEN", 403);
     }
+    await assertPublishedLineage(session, access, row, context);
     return access;
   }
 
@@ -213,6 +214,89 @@ function createStrategyService(options = {}) {
       ? reports.find((row) => row.reportId === reportId) || null
       : reports.find((row) => !query.month || row.month === query.month) || reports[0] || null;
     return { envelope, report, gate: reportGate(report) };
+  }
+
+  function normalizeReportFingerprint(value = {}, source = {}) {
+    return {
+      reportId: cleanText(value.reportId || value.sourceReportId, 160),
+      version: Number(value.version ?? value.sourceReportVersion),
+      publishedAt: cleanText(value.publishedAt || value.sourceReportPublishedAt, 64),
+      algorithmVersion: cleanText(value.algorithmVersion || value.sourceAlgorithmVersion, 120),
+      source
+    };
+  }
+
+  function lineageReportFingerprints(row = {}) {
+    const fingerprints = [];
+    const seen = new Set();
+    function add(value, source) {
+      const fingerprint = normalizeReportFingerprint(value, source);
+      if (fingerprint.reportId) fingerprints.push(fingerprint);
+    }
+    function visit(value, key = "", parent = null) {
+      if (value === null || value === undefined) return;
+      if (typeof value !== "object") return;
+      if (seen.has(value)) return;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        if (key === "sourceReports") value.forEach((entry) => add(entry, { key }));
+        value.forEach((entry) => visit(entry, "", value));
+        return;
+      }
+      if (value.sourceReportId) add(value, { key: "sourceReportId" });
+      Object.entries(value).forEach(([childKey, child]) => visit(child, childKey, value));
+    }
+    if (row.reportId && row.lineage) {
+      add({ reportId: row.reportId, ...row.lineage }, { key: "reportId" });
+    }
+    visit(row);
+    return fingerprints.filter((fingerprint, index, values) => (
+      values.findIndex((candidate) => (
+        candidate.reportId === fingerprint.reportId
+        && candidate.version === fingerprint.version
+        && candidate.publishedAt === fingerprint.publishedAt
+        && candidate.algorithmVersion === fingerprint.algorithmVersion
+      )) === index
+    ));
+  }
+
+  async function publishedLineageReports(session, access, context = {}) {
+    const envelope = await reportEnvelope(session, access, {}, context);
+    return new Map((Array.isArray(envelope?.reports) ? envelope.reports : [])
+      .filter((report) => reportGate(report).eligible)
+      .map((report) => {
+        const fingerprint = normalizeReportFingerprint(report, { key: "published-report" });
+        return [fingerprint.reportId, fingerprint];
+      })
+      .filter(([reportId]) => Boolean(reportId)));
+  }
+
+  function hasPublishedLineage(row, publishedReports) {
+    const fingerprints = lineageReportFingerprints(row);
+    return fingerprints.length > 0 && fingerprints.every((fingerprint) => {
+      const published = publishedReports.get(fingerprint.reportId);
+      return Boolean(
+        published
+        && Number.isInteger(fingerprint.version)
+        && fingerprint.version >= 1
+        && fingerprint.version === published.version
+        && fingerprint.publishedAt
+        && fingerprint.publishedAt === published.publishedAt
+        && fingerprint.algorithmVersion
+        && fingerprint.algorithmVersion === published.algorithmVersion
+      );
+    });
+  }
+
+  async function assertPublishedLineage(session, access, row, context = {}) {
+    if (!hasPublishedLineage(row, await publishedLineageReports(session, access, context))) {
+      throw strategyError("공개된 live 월간 리포트 lineage가 아닌 항목은 사용할 수 없습니다.", "STRATEGY_REPORT_NOT_PUBLISHED", 409);
+    }
+  }
+
+  async function visiblePublishedRows(session, access, rows, context = {}) {
+    const publishedReports = await publishedLineageReports(session, access, context);
+    return (Array.isArray(rows) ? rows : []).filter((row) => hasPublishedLineage(row, publishedReports));
   }
 
   function assertReportEligible(value) {
@@ -279,7 +363,8 @@ function createStrategyService(options = {}) {
       month,
       domain: cleanText(query.domain, 32)
     });
-    return { ok: true, metadata: metadata(), strategies: rows.map(publicStrategy), limits: access.plan };
+    const visible = await visiblePublishedRows(session, access, rows, context);
+    return { ok: true, metadata: metadata(), strategies: visible.map(publicStrategy), limits: access.plan };
   }
 
   async function createPlan(session, payload = {}, context = {}) {
@@ -288,6 +373,28 @@ function createStrategyService(options = {}) {
     const month = requiredMonth(payload.month);
     const strategyIds = [...new Set((payload.strategyIds || []).map((id) => cleanId(id, "strategyId")))];
     const candidateIds = [...new Set((payload.candidateIds || []).map((id) => cleanId(id, "candidateId")))];
+    const selectedStrategies = await repository.listStrategies({
+      companyId: access.companyId,
+      tenantCompanyId: access.tenantCompanyId,
+      month
+    });
+    const visibleStrategies = await visiblePublishedRows(session, access, selectedStrategies, context);
+    const visibleStrategyIds = new Set(visibleStrategies.map((row) => row.strategyId));
+    if (strategyIds.some((id) => !visibleStrategyIds.has(id))) {
+      throw strategyError("공개된 live 리포트에서 생성된 전략만 계획에 적용할 수 있습니다.", "STRATEGY_REPORT_NOT_PUBLISHED", 409);
+    }
+    if (candidateIds.length) {
+      const selectedCandidates = await repository.listCandidates({
+        companyId: access.companyId,
+        tenantCompanyId: access.tenantCompanyId,
+        targetMonth: month
+      });
+      const visibleCandidates = await visiblePublishedRows(session, access, selectedCandidates, context);
+      const visibleCandidateIds = new Set(visibleCandidates.map((row) => row.candidateId));
+      if (candidateIds.some((id) => !visibleCandidateIds.has(id))) {
+        throw strategyError("공개된 live 리포트 lineage의 다음달 후보만 계획에 적용할 수 있습니다.", "STRATEGY_REPORT_NOT_PUBLISHED", 409);
+      }
+    }
     const result = await repository.createPlan({
       ...payload,
       companyId: access.companyId,
@@ -310,7 +417,8 @@ function createStrategyService(options = {}) {
       month: query.month ? requiredMonth(query.month) : "",
       status: cleanText(query.status, 32)
     });
-    return { ok: true, metadata: metadata(), plans: rows.map(publicPlan), limits: access.plan };
+    const visible = await visiblePublishedRows(session, access, rows, context);
+    return { ok: true, metadata: metadata(), plans: visible.map(publicPlan), limits: access.plan };
   }
 
   async function updatePlan(session, planId, payload = {}, context = {}) {
@@ -392,7 +500,8 @@ function createStrategyService(options = {}) {
       tenantCompanyId: access.tenantCompanyId,
       month: query.month ? requiredMonth(query.month) : ""
     });
-    const all = plans.flatMap((plan) => plan.items.map((item) => boardRow(plan, item, nowIso())));
+    const visiblePlans = await visiblePublishedRows(session, access, plans, context);
+    const all = visiblePlans.flatMap((plan) => plan.items.map((item) => boardRow(plan, item, nowIso())));
     const items = all.filter((item) => {
       if (status && item.status !== status) return false;
       if (owner && !item.owner.toLowerCase().includes(owner)) return false;
@@ -488,7 +597,8 @@ function createStrategyService(options = {}) {
       month: query.month ? requiredMonth(query.month) : "",
       planId: cleanText(query.planId, 160)
     });
-    return { ok: true, metadata: metadata(), retrospectives: rows.map(publicRetrospective) };
+    const visible = await visiblePublishedRows(session, access, rows, context);
+    return { ok: true, metadata: metadata(), retrospectives: visible.map(publicRetrospective) };
   }
 
   function candidateRow(type, retrospective, item, strategy, targetMonth, generatedAt, actor) {
@@ -536,11 +646,12 @@ function createStrategyService(options = {}) {
       throw strategyError("다음달 후보의 targetMonth는 회고 월의 정확한 다음 달이어야 합니다.", "STRATEGY_CANDIDATE_MONTH_INVALID", 409);
     }
     const plan = await repository.getPlan(retrospective.planId);
-    const strategies = await repository.listStrategies({
+    const storedStrategies = await repository.listStrategies({
       companyId: retrospective.companyId,
       tenantCompanyId: access.tenantCompanyId,
       month: retrospective.month
     });
+    const strategies = await visiblePublishedRows(session, access, storedStrategies, context);
     const byId = new Map(strategies.map((row) => [row.strategyId, row]));
     const generatedAt = nowIso();
     const actor = actorFor(session);
@@ -591,7 +702,8 @@ function createStrategyService(options = {}) {
       type,
       retrospectiveId: cleanText(query.retrospectiveId, 160)
     });
-    return { ok: true, metadata: metadata(), candidates: rows.map(publicCandidate) };
+    const visible = await visiblePublishedRows(session, access, rows, context);
+    return { ok: true, metadata: metadata(), candidates: visible.map(publicCandidate) };
   }
 
   async function auditSummary(companyId) {
@@ -659,7 +771,33 @@ function createStrategyService(options = {}) {
       capabilities.execution ? board(session, { companyId, tenantCompanyId: access.tenantCompanyId, month, status: query.status, owner: query.owner, due: query.due }, context) : Promise.resolve({ board: { filters: {}, summary: { total: 0, planned: 0, inProgress: 0, blocked: 0, done: 0, overdue: 0, thisWeek: 0 }, items: [] } }),
       roleFor(session) === "admin" ? auditSummary(companyId) : Promise.resolve(undefined)
     ]);
-    const contentPresent = strategies.length || plans.length || retrospectives.length || candidates.length;
+    const publishedReports = await publishedLineageReports(session, access, context);
+    const visibleStrategies = strategies.filter((row) => hasPublishedLineage(row, publishedReports));
+    const visiblePlans = plans.filter((row) => hasPublishedLineage(row, publishedReports));
+    const visiblePlanIds = new Set(visiblePlans.map((row) => row.planId));
+    const visibleRetrospectives = retrospectives.filter((row) => (
+      visiblePlanIds.has(row.planId) && hasPublishedLineage(row, publishedReports)
+    ));
+    const visibleRetrospectiveIds = new Set(visibleRetrospectives.map((row) => row.retrospectiveId));
+    const visibleCandidates = candidates.filter((row) => (
+      visibleRetrospectiveIds.has(row.retrospectiveId) && hasPublishedLineage(row, publishedReports)
+    ));
+    const visibleBoardItems = (boardResult.board?.items || []).filter((row) => visiblePlanIds.has(row.planId));
+    const countStatus = (status) => visibleBoardItems.filter((row) => row.status === status).length;
+    const visibleBoard = {
+      filters: clone(boardResult.board?.filters || {}),
+      summary: {
+        total: visibleBoardItems.length,
+        planned: countStatus("planned"),
+        inProgress: countStatus("in-progress"),
+        blocked: countStatus("blocked"),
+        done: countStatus("done"),
+        overdue: visibleBoardItems.filter((row) => row.overdue).length,
+        thisWeek: visibleBoardItems.filter((row) => row.thisWeek).length
+      },
+      items: visibleBoardItems
+    };
+    const contentPresent = visibleStrategies.length || visiblePlans.length || visibleRetrospectives.length || visibleCandidates.length;
     return {
       ok: true,
       metadata: metadata(),
@@ -674,11 +812,11 @@ function createStrategyService(options = {}) {
       },
       month: month || cleanText(reportResult.report?.month, 12),
       reportGate: reportResult.gate,
-      strategies: strategies.map(publicStrategy),
-      plans: plans.map(publicPlan),
-      board: boardResult.board,
-      retrospectives: retrospectives.map(publicRetrospective),
-      candidates: candidates.map(publicCandidate),
+      strategies: visibleStrategies.map(publicStrategy),
+      plans: visiblePlans.map(publicPlan),
+      board: visibleBoard,
+      retrospectives: visibleRetrospectives.map(publicRetrospective),
+      candidates: visibleCandidates.map(publicCandidate),
       limits: access.plan,
       audit
     };

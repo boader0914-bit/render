@@ -20,6 +20,44 @@ const {
 } = require("../../integration_feature_flags.cjs");
 
 const ALLOWED_PROVIDER_MODE = "deterministic-fixture";
+const DISABLED_PROVIDER_MODE = "disabled";
+
+function flagEnabled(value) {
+  return /^(?:1|true|on|yes)$/i.test(String(value || "").trim());
+}
+
+function productionRuntime(env = process.env) {
+  return String(env.NODE_ENV || process.env.NODE_ENV || "").trim().toLowerCase() === "production"
+    || Boolean(env.RENDER || env.RENDER_EXTERNAL_URL || process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+}
+
+function fixtureProviderAllowed(env = process.env) {
+  if (productionRuntime(env)) return false;
+  return String(env.NODE_ENV || process.env.NODE_ENV || "").trim().toLowerCase() === "test"
+    || flagEnabled(env.V2_INTEGRATION_INSIGHTS_FIXTURE_TEST_ONLY);
+}
+
+function createDisabledInsightsProvider() {
+  const diagnostics = Object.freeze({
+    providerId: "",
+    providerStatus: "provider-not-configured",
+    fixtureCollections: 0,
+    generatedSignals: 0,
+    externalRequests: 0,
+    credentialReads: 0,
+    legacyRuntimeReads: 0,
+    legacyRuntimeCopies: 0,
+    productionMutations: 0
+  });
+  return Object.freeze({
+    id: "",
+    kind: DISABLED_PROVIDER_MODE,
+    enabled: false,
+    diagnostics() {
+      return { ...diagnostics };
+    }
+  });
+}
 
 function nonZero(value) {
   return Number(value || 0) !== 0;
@@ -63,14 +101,20 @@ function createInsightsRuntime(options = {}) {
     throw new Error("Stage 229 insights runtime requires the Stage 228 fresh platform runtime");
   }
 
+  const fixtureAllowed = fixtureProviderAllowed(env);
   const configuredProviderMode = String(
     env.V2_INTEGRATION_INSIGHTS_PROVIDER
     || env.V2_INTEGRATION_SIGNAL_PROVIDER
-    || ALLOWED_PROVIDER_MODE
+    || (fixtureAllowed ? ALLOWED_PROVIDER_MODE : DISABLED_PROVIDER_MODE)
   ).trim().toLowerCase();
-  if (configuredProviderMode !== ALLOWED_PROVIDER_MODE) {
+  if (![ALLOWED_PROVIDER_MODE, DISABLED_PROVIDER_MODE, "none", "off"].includes(configuredProviderMode)) {
     const error = new Error("Stage 229 real providers, credentials, scheduler and quota traffic are forbidden");
     error.code = "INSIGHTS_REAL_PROVIDER_FORBIDDEN";
+    throw error;
+  }
+  if ((configuredProviderMode === ALLOWED_PROVIDER_MODE || options.provider) && !fixtureAllowed) {
+    const error = new Error("Stage 229 deterministic fixtures are available only in an isolated test runtime");
+    error.code = "INSIGHTS_FIXTURE_PROVIDER_TEST_ONLY";
     throw error;
   }
 
@@ -107,14 +151,17 @@ function createInsightsRuntime(options = {}) {
     clock: options.clock,
     idFactory: options.storeIdFactory || options.idFactory
   });
-  const provider = assertDeterministicProvider(
-    options.provider || createDeterministicInsightsFixtureProvider({ fixture: options.fixture })
-  );
+  const provider = configuredProviderMode === ALLOWED_PROVIDER_MODE || options.provider
+    ? assertDeterministicProvider(
+      options.provider || createDeterministicInsightsFixtureProvider({ fixture: options.fixture })
+    )
+    : createDisabledInsightsProvider();
   const service = createInsightsService({
     repository,
     provider,
     freshRepository: freshRuntime.repository,
     freshService: freshRuntime.service,
+    signalRepository: options.signalRepository || null,
     authService: authRuntime.service,
     capabilities,
     clock: options.clock
@@ -184,8 +231,8 @@ function createInsightsRuntime(options = {}) {
     diagnostics,
     contract: Object.freeze({
       stage: 229,
-      providerId: INSIGHTS_PROVIDER_ID,
-      providerMode: ALLOWED_PROVIDER_MODE,
+      providerId: provider.id,
+      providerMode: provider.kind,
       dataBoundary: "fresh-integration-stage229-only",
       externalProviderCalls: 0,
       credentialReads: 0,
@@ -198,6 +245,9 @@ function createInsightsRuntime(options = {}) {
 
 module.exports = {
   ALLOWED_PROVIDER_MODE,
+  DISABLED_PROVIDER_MODE,
   assertDeterministicProvider,
+  createDisabledInsightsProvider,
+  fixtureProviderAllowed,
   createInsightsRuntime
 };

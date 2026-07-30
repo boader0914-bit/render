@@ -14,6 +14,12 @@ const {
   publicJob,
   stableRequestSignature
 } = require("../contracts/core_ui.cjs");
+const {
+  COLLECTION_MODES,
+  COLLECTION_PURPOSES,
+  PRODUCT_MODES,
+  createV2CollectionPlan
+} = require("../contracts/v2_collection_plan.cjs");
 
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running"]);
 
@@ -91,6 +97,7 @@ function createCoreService(options = {}) {
   const repository = options.repository;
   const authService = options.authService;
   const freshDataService = options.freshDataService || null;
+  const freshRepository = options.freshRepository || null;
   const insightsService = options.insightsService || null;
   const clock = options.clock || (() => Date.now());
   const idFactory = options.idFactory || ((prefix) => `${prefix}_${crypto.randomUUID()}`);
@@ -100,9 +107,41 @@ function createCoreService(options = {}) {
     return new Date(clock()).toISOString();
   }
 
+  function kstDate(offsetDays = 0) {
+    return new Date(clock() + (9 * 60 * 60 * 1000) + (Number(offsetDays || 0) * 86_400_000))
+      .toISOString()
+      .slice(0, 10);
+  }
+
   function metadata() {
     if (freshDataService) return freshDataService.metadata();
     return provisionalMetadata({ fixtureMode: repository.currentUnsafe().fixtureMode });
+  }
+
+  function assertFreshCompatibility() {
+    const current = metadata();
+    if (!freshDataService || !freshRepository) {
+      throw coreError(
+        "The V2 compatibility API is available only with the fresh integration store.",
+        404,
+        "CORE_FRESH_COMPATIBILITY_NOT_AVAILABLE"
+      );
+    }
+    if (current.fixtureMode === true || current.providerMode === "synthetic" || current.source === "synthetic-test-data") {
+      throw coreError(
+        "Synthetic collection results are not exposed through the V2 compatibility API.",
+        503,
+        "CORE_SYNTHETIC_COMPATIBILITY_DISABLED"
+      );
+    }
+    if (Number(current.legacyRuntimeReads || 0) !== 0 || Number(current.legacyRuntimeCopies || 0) !== 0) {
+      throw coreError(
+        "The fresh-only compatibility boundary is not available.",
+        503,
+        "CORE_FRESH_BOUNDARY_INVALID"
+      );
+    }
+    return current;
   }
 
   function requireSession(session) {
@@ -180,8 +219,8 @@ function createCoreService(options = {}) {
     const runtimeHistory = jobs
       .filter((job) => ["completed", "cancelled", "failed"].includes(job.status))
       .map((job) => projectV2SearchHistoryEntry({
-        id: job.jobId,
-        runId: job.jobId,
+        id: job.clientRequestId,
+        runId: job.clientRequestId,
         keyword: job.keyword,
         clientRequestId: job.clientRequestId,
         runLabel: job.keyword || job.kind,
@@ -197,7 +236,9 @@ function createCoreService(options = {}) {
       }));
     const history = [...fixtureHistoryFor(session), ...runtimeHistory]
       .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
-    const interestRows = ownedRows(store.interests, session);
+    const interestRows = freshRepository?.listInterests
+      ? await freshRepository.listInterests({ actorAccountId: session.accountId, tenantCompanyId: tenant.companyId })
+      : ownedRows(store.interests, session);
     const interests = interestRows.map((row) => publicInterest(
       row,
       companies.find((company) => company.companyId === row.companyId) || null
@@ -218,10 +259,14 @@ function createCoreService(options = {}) {
     const selectedCompany = selectedCompanyId
       ? companies.find((company) => company.companyId === selectedCompanyId) || null
       : null;
+    const runtimeMetadata = metadata();
+    const connectorProjection = freshDataService && Array.isArray(runtimeMetadata.connectors)
+      ? runtimeMetadata.connectors
+      : store.connectors;
 
     return {
       ok: true,
-      metadata: metadata(),
+      metadata: runtimeMetadata,
       role,
       view: cleanText(query.view || (role === CORE_ROLES.admin ? "admin-overview" : "business-onboarding"), 80),
       state: {
@@ -253,7 +298,7 @@ function createCoreService(options = {}) {
       interests,
       locationCardRequests,
       tourismRequests,
-      connectors: role === CORE_ROLES.admin ? JSON.parse(JSON.stringify(store.connectors)) : {},
+      connectors: role === CORE_ROLES.admin ? JSON.parse(JSON.stringify(connectorProjection)) : {},
       onboarding: {
         steps: [
           { id: "account", status: "completed" },
@@ -284,13 +329,18 @@ function createCoreService(options = {}) {
     if (kind.startsWith("business-") && !keyword) {
       throw coreError("검색어 또는 숙소명을 입력해야 합니다.", 400, "CORE_KEYWORD_REQUIRED");
     }
+    if (freshDataService && !keyword) {
+      throw coreError("실수집 대상 업체명을 입력해야 합니다.", 400, "CORE_KEYWORD_REQUIRED");
+    }
     if (freshDataService) {
       const result = await freshDataService.submitCollection(session, {
         ...payload,
         clientRequestId,
         kind,
-        keyword: keyword || "Stage 228 신규 업체",
-        targetName: keyword || "Stage 228 신규 업체",
+        keyword,
+        targetName: keyword,
+        discoveryQuery: cleanText(payload.discoveryQuery || keyword, 180),
+        rankingQuery: cleanText(payload.rankingQuery || keyword, 180),
         tenantCompanyId: tenant.companyId,
         collectionMode: normalizeV2CollectionMode(payload.collectionMode),
         productMode: normalizeV2ProductMode(payload.productMode)
@@ -350,6 +400,80 @@ function createCoreService(options = {}) {
     return { ok: true, metadata: metadata(), idempotent: false, job: publicJob(job) };
   }
 
+  async function estimateCollection(session, payload = {}, context = {}) {
+    requireSession(session);
+    await tenantFor(session, payload.tenantCompanyId, context);
+    const keyword = cleanText(payload.keyword || payload.lodgingName || payload.companyName, 180);
+    const checkIn = cleanText(payload.checkIn, 16) || kstDate(0);
+    const rawRangeDays = Number(payload.bookingDays ?? payload.bookingRangeDays);
+    const rangeDays = Math.max(1, Math.min(31, Number.isFinite(rawRangeDays) ? Math.round(rawRangeDays) : 7));
+    const checkOut = cleanText(payload.checkOut, 16) || kstDate(rangeDays - 1);
+    const searchMode = cleanText(payload.searchMode, 32).toLowerCase() === "company" ? "company" : "keyword";
+    const plan = createV2CollectionPlan({
+      ...payload,
+      keyword: keyword || "수집 대상",
+      checkIn,
+      checkOut,
+      collectionMode: normalizeV2CollectionMode(payload.collectionMode),
+      productMode: normalizeV2ProductMode(payload.productMode)
+    }, { now: clock() });
+    const stages = plan.stages.map((stage, index) => ({
+      ...stage,
+      status: index === 0 ? "active" : "pending",
+      progress: index === 0 ? 1 : 0
+    }));
+    return {
+      keyword,
+      checkIn: plan.checkIn,
+      checkOut: plan.checkOut,
+      searchMode,
+      productMode: plan.productMode,
+      collectionMode: plan.collectionMode,
+      collectionPurpose: plan.collectionPurpose,
+      collectionPurposeLabel: COLLECTION_PURPOSES[plan.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+      collectionProfile: plan.collectionProfile,
+      collectionProfileLabel: plan.collectionPurpose === "basic_db"
+        ? "기본정보 중심"
+        : (plan.collectionPurpose === "demand_location" ? "수요·입지 중심" : "상세 매출 중심"),
+      collectionProfileNote: plan.collectionPurpose === "basic_db"
+        ? "업체 기본정보와 대표 상품을 확인합니다."
+        : (plan.collectionPurpose === "demand_location"
+          ? "지역 수요와 입지 신호를 확인합니다."
+          : "날짜별 상품·재고·가격과 OTA 노출을 확인합니다."),
+      collectRegional: plan.collectRegional,
+      collectOta: plan.collectOta,
+      collectBookingStock: plan.collectBookingStock,
+      collectWeeklyRange: plan.collectWeeklyRange,
+      detailRankRanges: plan.detailRankRanges,
+      bookingRangeDays: plan.bookingRangeDays,
+      bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
+      elapsedSeconds: 0,
+      remainingSeconds: plan.estimatedTotalSeconds,
+      estimatedTotalSeconds: plan.estimatedTotalSeconds,
+      estimatedProgress: 1,
+      estimatedCompleteAt: plan.estimatedCompleteAt,
+      currentStage: stages[0] || null,
+      stages,
+      estimateBasis: {
+        searchMode,
+        searchModeLabel: searchMode === "company" ? "업체명" : "키워드",
+        productMode: plan.productMode,
+        productModeLabel: PRODUCT_MODES[plan.productMode] || PRODUCT_MODES.all,
+        collectionPurpose: plan.collectionPurpose,
+        collectionPurposeLabel: COLLECTION_PURPOSES[plan.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+        collectionProfile: plan.collectionProfile,
+        collectionMode: plan.collectionMode,
+        collectionModeLabel: COLLECTION_MODES[plan.collectionMode] || COLLECTION_MODES.precision,
+        detailRankRanges: plan.detailRankRanges,
+        bookingRangeDays: plan.bookingRangeDays,
+        bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
+        rankRangeCount: plan.detailPlaceLimit,
+        timing: plan.timing
+      },
+      dataBoundary: "fresh-only"
+    };
+  }
+
   function jobFor(session, clientRequestId) {
     requireSession(session);
     const id = cleanClientRequestId(clientRequestId);
@@ -398,6 +522,20 @@ function createCoreService(options = {}) {
     return { ok: true, metadata: metadata(), idempotent: false, job: publicJob(row) };
   }
 
+  function resumeJob(session, clientRequestId, payload = {}) {
+    requireSession(session);
+    const id = cleanClientRequestId(clientRequestId);
+    if (!freshDataService) {
+      throw coreError("영구 fresh worker가 구성되지 않아 작업을 재개할 수 없습니다.", 503, "CORE_RESUME_NOT_CONFIGURED");
+    }
+    return freshDataService.resumeJob(session, id, payload).then((result) => ({
+      ok: true,
+      idempotent: Boolean(result.idempotent),
+      job: result.job,
+      metadata: metadata()
+    }));
+  }
+
   async function addInterest(session, payload = {}, context = {}) {
     requireRole(session, CORE_ROLES.business);
     const tenant = await tenantFor(session, payload.tenantCompanyId, context);
@@ -409,6 +547,19 @@ function createCoreService(options = {}) {
       })
       : repository.currentUnsafe().companies.find((row) => row.companyId === companyId);
     if (!company) throw coreError("신규 수집 업체를 찾을 수 없습니다.", 404, "CORE_COMPANY_NOT_FOUND");
+    if (freshRepository?.addInterest) {
+      const saved = await freshRepository.addInterest({
+        actorAccountId: session.accountId,
+        tenantCompanyId: tenant.companyId,
+        companyId
+      }, { type: "account", accountId: session.accountId, role: roleFor(session) });
+      return {
+        ok: true,
+        metadata: metadata(),
+        idempotent: Boolean(saved.idempotent),
+        interest: publicInterest(saved.interest, company)
+      };
+    }
     const existing = repository.currentUnsafe().interests.find((row) => (
       row.actorAccountId === session.accountId && row.companyId === companyId
     ));
@@ -425,8 +576,16 @@ function createCoreService(options = {}) {
 
   async function removeInterest(session, companyId, payload = {}, context = {}) {
     requireRole(session, CORE_ROLES.business);
-    await tenantFor(session, payload.tenantCompanyId, context);
+    const tenant = await tenantFor(session, payload.tenantCompanyId, context);
     const target = cleanText(companyId, 160);
+    if (freshRepository?.removeInterest) {
+      const result = await freshRepository.removeInterest({
+        actorAccountId: session.accountId,
+        tenantCompanyId: tenant.companyId,
+        companyId: target
+      }, { type: "account", accountId: session.accountId, role: roleFor(session) });
+      return { ok: true, metadata: metadata(), removed: Number(result.removed || 0), idempotent: Boolean(result.idempotent) };
+    }
     let removed = 0;
     repository.transaction("core-interest-remove", (store) => {
       const before = store.interests.length;
@@ -462,6 +621,13 @@ function createCoreService(options = {}) {
         tenantCompanyId: tenant.companyId
       }, context);
     }
+    if (freshDataService) {
+      throw coreError(
+        "입지카드 분석 저장소가 구성되지 않아 요청을 실행할 수 없습니다.",
+        503,
+        "CORE_LOCATION_CARD_PROVIDER_NOT_CONFIGURED"
+      );
+    }
     const existing = repository.currentUnsafe().locationCardRequests.find((row) => (
       row.actorAccountId === session.accountId && row.clientRequestId === clientRequestId
     ));
@@ -486,6 +652,13 @@ function createCoreService(options = {}) {
 
   function createTourismRequest(session, payload = {}) {
     requireRole(session, CORE_ROLES.admin);
+    if (freshDataService) {
+      throw coreError(
+        "관광 실수집 connector가 아직 승인·구성되지 않았습니다.",
+        503,
+        "CORE_TOURISM_PROVIDER_NOT_CONFIGURED"
+      );
+    }
     const clientRequestId = cleanClientRequestId(payload.clientRequestId);
     const regionCode = cleanText(payload.regionCode || "all", 32);
     const existing = repository.currentUnsafe().tourismRequests.find((row) => (
@@ -511,10 +684,13 @@ function createCoreService(options = {}) {
 
   return Object.freeze({
     metadata,
+    assertFreshCompatibility,
     workspace,
     createJob,
+    estimateCollection,
     jobFor,
     cancelJob,
+    resumeJob,
     addInterest,
     removeInterest,
     createLocationCardRequest,

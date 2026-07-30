@@ -9,8 +9,10 @@ const {
   FRESH_DATA_LAYERS,
   FRESH_DATA_SCHEMA_VERSION,
   FRESH_DATA_STORE_KIND,
+  deriveCompanyQuality,
   deterministicCompanyId,
-  normalizeCompanyIdentity
+  normalizeCompanyIdentity,
+  normalizeVerifiedCoordinates
 } = require("./integration/contracts/fresh_data.cjs");
 const {
   assertFreshAuthStoreBoundary,
@@ -48,6 +50,22 @@ function testEnv(dataDir = freshDir) {
 
 function errorCode(error) {
   return error?.code || "";
+}
+
+function testNullObservationsDoNotSatisfyCompleteness() {
+  const quality = deriveCompanyQuality({}, [
+    { kind: "profile.company-name", value: "null guard lodging", mode: "quick" },
+    { kind: "profile.region", value: "test region", mode: "quick" },
+    { kind: "profile.category", value: "glamping", mode: "quick" },
+    { kind: "profile.location", value: { latitude: null, longitude: 127.1 }, mode: "quick" },
+    { kind: "product.price", value: 120000, companyId: "company-null", targetDate: "2026-08-01", channel: "direct", productKey: "room-1" },
+    { kind: "product.total-stock", value: null, companyId: "company-null", targetDate: "2026-08-01", channel: "direct", productKey: "room-1" },
+    { kind: "product.available-stock", value: null, companyId: "company-null", targetDate: "2026-08-01", channel: "direct", productKey: "room-1" },
+    { kind: "ota.exposure", value: null, mode: "ota" }
+  ], null, Date.parse("2026-07-30T00:00:00.000Z"));
+  assert.deepEqual(quality.dataCompleteness.collectedModes, []);
+  assert.deepEqual(quality.dataCompleteness.missingModes, ["quick", "detail", "ota"]);
+  assert.equal(quality.dataCompleteness.score, 0);
 }
 
 function authBoundaryOptions(authStorePath) {
@@ -114,6 +132,35 @@ function observationRow(runId, companyId, mode, sequence, overrides = {}) {
 }
 
 async function main() {
+  testNullObservationsDoNotSatisfyCompleteness();
+  assert.deepEqual(normalizeVerifiedCoordinates({ latitude: 35.1796, longitude: 129.0756 }), { latitude: 35.1796, longitude: 129.0756 });
+  assert.throws(
+    () => normalizeVerifiedCoordinates({ latitude: 0, longitude: 0 }),
+    (error) => errorCode(error) === "FRESH_COORDINATE_REVIEW_OUT_OF_RANGE",
+    "repository coordinate contract must enforce the supported Korea boundary"
+  );
+  const completeQualityRows = [
+    { kind: "profile.company-name", value: "검수 업체", observedAt: "2026-07-30T00:00:00.000Z" },
+    { kind: "profile.region", value: "경남", observedAt: "2026-07-30T00:00:00.000Z" },
+    { kind: "profile.category", value: "glamping", observedAt: "2026-07-30T00:00:00.000Z" },
+    { kind: "profile.location", value: { latitude: 35.1, longitude: 128.1 }, observedAt: "2026-07-30T00:00:00.000Z" },
+    { kind: "product.price", value: 100000, companyId: "cmp_quality", productKey: "room", targetDate: "2026-08-01", observedAt: "2026-07-30T00:00:00.000Z" },
+    { kind: "product.total-stock", value: 3, companyId: "cmp_quality", productKey: "room", targetDate: "2026-08-01", observedAt: "2026-07-30T00:00:00.000Z" },
+    { kind: "product.available-stock", value: 2, companyId: "cmp_quality", productKey: "room", targetDate: "2026-08-01", observedAt: "2026-07-30T00:00:00.000Z" },
+    { kind: "ota.exposure", value: true, observedAt: "2026-07-30T00:00:00.000Z" }
+  ];
+  const coordinateOnlyQuality = deriveCompanyQuality({}, completeQualityRows, {
+    status: "approved",
+    profile: { latitude: 35.1, longitude: 128.1, coordinateConfidence: "verified" }
+  }, Date.parse("2026-07-30T01:00:00.000Z"));
+  assert.equal(coordinateOnlyQuality.confidence.verified, false, "coordinate approval alone must not mark the full profile verified");
+  assert.equal(coordinateOnlyQuality.confidence.score, 80);
+  const fullProfileQuality = deriveCompanyQuality({}, completeQualityRows, {
+    status: "approved",
+    profile: { primaryName: "검수 업체", latitude: 35.1, longitude: 128.1 }
+  }, Date.parse("2026-07-30T01:00:00.000Z"));
+  assert.equal(fullProfileQuality.confidence.verified, true);
+  assert.equal(fullProfileQuality.confidence.score, 100);
   for (const manifestName of ["render.v2.yaml", "render.v2.persistent.yaml"]) {
     const manifestSource = fs.readFileSync(path.join(ROOT, manifestName), "utf8");
     for (const flag of ["V2_INTEGRATION_FRESH_COMPANY_ENABLED", "V2_INTEGRATION_FRESH_OBSERVATION_ENABLED"]) {
@@ -418,17 +465,22 @@ async function main() {
 
   const observations = [
     observationRow(runPayload.runId, expectedCompanyId, "quick", 1, { evidenceId: rawRows[0].rawEvidenceId, kind: "profile.company-name", value: "새봄 글램핑" }),
-    observationRow(runPayload.runId, expectedCompanyId, "detail", 2, { evidenceId: rawRows[1].rawEvidenceId, kind: "product.price", value: 145000 }),
-    observationRow(runPayload.runId, expectedCompanyId, "ota", 3, { evidenceId: rawRows[2].rawEvidenceId, kind: "ota.exposed", channel: "naver", value: true }),
-    observationRow(runPayload.runId, expectedCompanyId, "detail", 4, { evidenceId: rawRows[1].rawEvidenceId, kind: "product.price", value: 149000, observedAt: "2026-07-29T02:00:00.000Z" })
+    observationRow(runPayload.runId, expectedCompanyId, "quick", 2, { evidenceId: rawRows[0].rawEvidenceId, kind: "profile.region", value: "test-region" }),
+    observationRow(runPayload.runId, expectedCompanyId, "quick", 3, { evidenceId: rawRows[0].rawEvidenceId, kind: "profile.category", value: "glamping" }),
+    observationRow(runPayload.runId, expectedCompanyId, "quick", 4, { evidenceId: rawRows[0].rawEvidenceId, kind: "profile.location", value: { latitude: 35.1, longitude: 127.1 } }),
+    observationRow(runPayload.runId, expectedCompanyId, "detail", 5, { evidenceId: rawRows[1].rawEvidenceId, kind: "product.price", value: 145000 }),
+    observationRow(runPayload.runId, expectedCompanyId, "detail", 6, { evidenceId: rawRows[1].rawEvidenceId, kind: "product.total-stock", value: 5 }),
+    observationRow(runPayload.runId, expectedCompanyId, "detail", 7, { evidenceId: rawRows[1].rawEvidenceId, kind: "product.available-stock", value: 2 }),
+    observationRow(runPayload.runId, expectedCompanyId, "ota", 8, { evidenceId: rawRows[2].rawEvidenceId, kind: "ota.exposure", channel: "naver", value: true }),
+    observationRow(runPayload.runId, expectedCompanyId, "detail", 9, { evidenceId: rawRows[1].rawEvidenceId, kind: "product.price", value: 149000, observedAt: "2026-07-29T02:00:00.000Z" })
   ];
   const observationWrite = await repository.appendObservations(observations, { actor: { type: "worker", id: "worker_stage228" }, runId: runPayload.runId });
-  assert.equal(observationWrite.inserted, 4);
+  assert.equal(observationWrite.inserted, 9);
   assert.equal(observationWrite.observations[0].kind, "profile.company-name");
   assert.equal(observationWrite.observations[0].rawEvidenceId, rawRows[0].rawEvidenceId);
   assert.equal(observationWrite.observations[0].provenance.source, "stage228-synthetic-fresh-collection");
-  assert.equal((await repository.listObservations({ companyId: expectedCompanyId, targetDate: "2026-08-01" })).length, 4);
-  assert.equal((await repository.appendObservations(observations, { actor: "worker_stage228" })).duplicates, 4);
+  assert.equal((await repository.listObservations({ companyId: expectedCompanyId, targetDate: "2026-08-01" })).length, 9);
+  assert.equal((await repository.appendObservations(observations, { actor: "worker_stage228" })).duplicates, 9);
 
   const bulk = [];
   for (let index = 0; index < 10_000; index += 1) {
@@ -546,7 +598,7 @@ async function main() {
   const restarted = createFreshIntegrationRepository({ env: testEnv(), projectRoot: ROOT, clock, idFactory });
   const restartedSummary = await restarted.initialize();
   assert.equal(restartedSummary.storeId, firstBootstrap.storeId);
-  assert.equal(restartedSummary.counts.observations, 10_004);
+  assert.equal(restartedSummary.counts.observations, 10_009);
   assert.equal((await restarted.getRun(runPayload.runId)).status, "completed");
   assert.equal((await restarted.getBusinessSafeCompany(expectedCompanyId, "tenant_stage228_business")).companyId, expectedCompanyId);
   const diagnostics = await restarted.diagnostics();
@@ -555,7 +607,7 @@ async function main() {
   assert.equal(diagnostics.legacyRuntimeReads, 0);
   assert.equal(diagnostics.legacyRuntimeCopies, 0);
   assert.equal(diagnostics.layerCounts.raw, 3);
-  assert.equal(diagnostics.layerCounts.observation, 10_004);
+  assert.equal(diagnostics.layerCounts.observation, 10_009);
   assert.equal(JSON.parse(fs.readFileSync(path.join(legacyDir, "must-not-read.json"), "utf8")).secretLegacySentinel, true);
 
   const audit = await restarted.listAudit({ limit: 10_000 });

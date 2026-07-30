@@ -29,7 +29,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 20,
+        "focusableCount": 25,
         "expected": {
           "theme": "light",
           "nav": 13,
@@ -61,7 +61,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 20,
+        "focusableCount": 25,
         "expected": {
           "theme": "dark",
           "nav": 13,
@@ -93,7 +93,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 20,
+        "focusableCount": 25,
         "expected": {
           "theme": "light",
           "nav": 13,
@@ -125,7 +125,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 20,
+        "focusableCount": 25,
         "expected": {
           "theme": "dark",
           "nav": 13,
@@ -157,7 +157,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 21,
+        "focusableCount": 31,
         "expected": {
           "theme": "light",
           "nav": 9,
@@ -165,7 +165,7 @@
         }
       },
       "keyboard": {
-        "distinct": 15,
+        "distinct": 14,
         "maxOutline": 3
       },
       "passed": true
@@ -189,7 +189,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 21,
+        "focusableCount": 31,
         "expected": {
           "theme": "dark",
           "nav": 9,
@@ -197,7 +197,7 @@
         }
       },
       "keyboard": {
-        "distinct": 15,
+        "distinct": 14,
         "maxOutline": 3
       },
       "passed": true
@@ -221,7 +221,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 21,
+        "focusableCount": 31,
         "expected": {
           "theme": "light",
           "nav": 9,
@@ -229,7 +229,7 @@
         }
       },
       "keyboard": {
-        "distinct": 15,
+        "distinct": 14,
         "maxOutline": 3
       },
       "passed": true
@@ -253,7 +253,7 @@
         "enrichment": true,
         "overflowX": 0,
         "forbidden": [],
-        "focusableCount": 21,
+        "focusableCount": 31,
         "expected": {
           "theme": "dark",
           "nav": 9,
@@ -261,7 +261,7 @@
         }
       },
       "keyboard": {
-        "distinct": 15,
+        "distinct": 14,
         "maxOutline": 3
       },
       "passed": true

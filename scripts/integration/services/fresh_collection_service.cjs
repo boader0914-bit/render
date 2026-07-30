@@ -2,14 +2,21 @@
 
 const crypto = require("node:crypto");
 const {
-  SYNTHETIC_PROVIDER_ID,
-  assertSyntheticSource,
-  stableHex
-} = require("./fresh_collection_provider.cjs");
-const {
+  assertFreshSourceUrl,
   deterministicCompanyId,
-  normalizeCompanyIdentity
+  normalizeCompanyIdentity,
+  stableHash
 } = require("../contracts/fresh_data.cjs");
+const { createV2CollectionPlan } = require("../contracts/v2_collection_plan.cjs");
+
+const DEFAULT_SYNTHETIC_PROVIDER = Object.freeze({
+  id: "stage228-synthetic-fresh-collection",
+  kind: "synthetic",
+  enabled: true,
+  synthetic: true,
+  dataMode: "synthetic-test",
+  seedSourceUrl: "https://collector.example.invalid/stage228"
+});
 
 const FRESH_COLLECTION_KIND = "fresh-company-vertical-slice";
 const FRESH_COLLECTION_STAGES = Object.freeze([
@@ -46,6 +53,41 @@ function v2StableHash(value) {
   return crypto.createHash("sha1").update(String(value || "")).digest("hex").slice(0, 16);
 }
 
+function normalizeProviderDescriptor(provider = DEFAULT_SYNTHETIC_PROVIDER) {
+  const kind = cleanText(provider.kind || (provider.synthetic === true ? "synthetic" : "disabled"), 40).toLowerCase();
+  const enabled = provider.enabled !== false && kind !== "disabled";
+  if (!enabled) {
+    return Object.freeze({
+      id: cleanText(provider.id || "fresh-provider-disabled", 120),
+      kind: "disabled",
+      enabled: false,
+      synthetic: false,
+      dataMode: "live",
+      seedSourceUrl: ""
+    });
+  }
+  const synthetic = provider.synthetic === true || kind === "synthetic";
+  const descriptor = {
+    id: cleanText(provider.id, 120),
+    kind,
+    enabled: true,
+    synthetic,
+    dataMode: synthetic ? "synthetic-test" : "live",
+    seedSourceUrl: cleanText(provider.seedSourceUrl || provider.sourceUrl, 2048)
+  };
+  if (typeof provider.assertRequestScope === "function") {
+    descriptor.assertRequestScope = provider.assertRequestScope.bind(provider);
+  }
+  if (!descriptor.id || !descriptor.seedSourceUrl) {
+    throw new FreshCollectionError("Fresh collection provider identity and seedSourceUrl are required", {
+      code: "FRESH_PROVIDER_CONTRACT_INVALID",
+      statusCode: 500
+    });
+  }
+  descriptor.seedSourceUrl = assertFreshSourceUrl(descriptor.seedSourceUrl, descriptor);
+  return Object.freeze(descriptor);
+}
+
 // This is the bounded Stage 228 extraction of V2's canonical issuance rule:
 // place identity wins; otherwise stable normalized identity fields issue cmp_<sha1:16>.
 function issueV2CompanyId(candidate = {}) {
@@ -70,6 +112,19 @@ function cleanClientRequestId(value) {
   return id;
 }
 
+function strictDate(value, label = "targetDate") {
+  const text = cleanText(value, 16);
+  const timestamp = Date.parse(`${text}T00:00:00.000Z`);
+  const canonical = Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || canonical !== text) {
+    throw new FreshCollectionError(`${label} must use YYYY-MM-DD`, {
+      code: "FRESH_TARGET_DATE_INVALID",
+      statusCode: 400
+    });
+  }
+  return text;
+}
+
 function normalizeRequest(payload = {}) {
   const targetName = cleanText(payload.targetName || payload.keyword || payload.companyName, 180);
   const regionCode = cleanText(payload.regionCode || payload.regionLabel || "", 80);
@@ -80,20 +135,24 @@ function normalizeRequest(payload = {}) {
       statusCode: 400
     });
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate) || Number.isNaN(Date.parse(`${targetDate}T00:00:00.000Z`))) {
-    throw new FreshCollectionError("targetDate must use YYYY-MM-DD", {
-      code: "FRESH_TARGET_DATE_INVALID",
-      statusCode: 400
-    });
-  }
+  strictDate(targetDate);
   return {
     clientRequestId: cleanClientRequestId(payload.clientRequestId),
     targetName,
+    discoveryQuery: cleanText(payload.discoveryQuery || targetName, 180),
+    rankingQuery: cleanText(payload.rankingQuery, 180),
     regionCode,
     regionLabel: cleanText(payload.regionLabel || regionCode, 120),
     targetDate,
+    checkIn: cleanText(payload.checkIn || targetDate, 16),
+    checkOut: cleanText(payload.checkOut, 16),
     collectionMode: cleanText(payload.collectionMode || "precision", 32),
+    collectionPurpose: cleanText(payload.collectionPurpose || "revenue_detail", 40),
     productMode: cleanText(payload.productMode || "all", 32),
+    detailRankRanges: cleanText(payload.detailRankRanges, 80),
+    bookingRangePlaceLimit: Number.isFinite(Number(payload.bookingRangePlaceLimit))
+      ? Math.max(0, Math.min(20, Math.floor(Number(payload.bookingRangePlaceLimit))))
+      : null,
     tenantCompanyId: cleanText(payload.tenantCompanyId, 160),
     kind: STAGE227_JOB_KINDS.has(cleanText(payload.kind, 48))
       ? cleanText(payload.kind, 48)
@@ -105,10 +164,17 @@ function requestSignature(payload = {}) {
   const normalized = normalizeRequest(payload);
   const canonical = {
     targetName: normalizeIdentityText(normalized.targetName),
+    discoveryQuery: normalizeIdentityText(normalized.discoveryQuery),
+    rankingQuery: normalizeIdentityText(normalized.rankingQuery),
     regionCode: normalizeIdentityText(normalized.regionCode),
     targetDate: normalized.targetDate,
+    checkIn: normalized.checkIn,
+    checkOut: normalized.checkOut,
     collectionMode: normalized.collectionMode,
+    collectionPurpose: normalized.collectionPurpose,
     productMode: normalized.productMode,
+    detailRankRanges: normalized.detailRankRanges,
+    bookingRangePlaceLimit: normalized.bookingRangePlaceLimit,
     tenantCompanyId: normalized.tenantCompanyId,
     kind: normalized.kind
   };
@@ -149,7 +215,7 @@ function assertRunOwnership(run = {}, actor = {}) {
 }
 
 function observationId(input = {}) {
-  return `obs_${stableHex([
+  return `obs_${stableHash([
     input.runId,
     input.companyId,
     input.kind,
@@ -157,48 +223,66 @@ function observationId(input = {}) {
     input.channel,
     input.productKey,
     input.sequence || 0
-  ].join("|"), 32)}`;
+  ].join("|"), 32, "sha256")}`;
 }
 
 function rawEvidenceId(input = {}) {
-  return `raw_${stableHex([
+  return `raw_${stableHash([
     input.runId,
     input.companyId,
     input.stage,
-    input.sourceUrl
-  ].join("|"), 32)}`;
+    input.sourceUrl,
+    input.evidenceKey || input.targetDate || ""
+  ].join("|"), 32, "sha256")}`;
 }
 
 function createRawEvidence(input = {}) {
-  const sourceUrl = assertSyntheticSource(input.sourceUrl);
+  const synthetic = input.synthetic !== false;
+  const dataMode = synthetic ? "synthetic-test" : cleanText(input.dataMode, 32).toLowerCase();
+  const sourceUrl = assertFreshSourceUrl(input.sourceUrl, { synthetic, dataMode });
+  const provider = cleanText(input.provider || input.source || (synthetic ? DEFAULT_SYNTHETIC_PROVIDER.id : ""), 120);
+  if (!provider) throw new FreshCollectionError("Raw evidence provider is required", {
+    code: "FRESH_PROVIDER_PROVENANCE_REQUIRED",
+    statusCode: 500
+  });
   const row = {
     rawEvidenceId: rawEvidenceId({ ...input, sourceUrl }),
     evidenceId: "",
     runId: cleanText(input.runId, 160),
     companyId: cleanText(input.companyId, 160),
     stage: cleanText(input.stage, 40),
-    source: SYNTHETIC_PROVIDER_ID,
+    evidenceKey: cleanText(input.evidenceKey || input.targetDate, 160),
+    source: provider,
     sourceUrl,
     observedAt: cleanText(input.observedAt, 40),
     capturedAt: cleanText(input.observedAt, 40),
-    synthetic: true,
+    synthetic,
+    dataMode,
     payload: clone(input.payload || {})
   };
   row.evidenceId = row.rawEvidenceId;
   row.contentHash = crypto.createHash("sha256").update(JSON.stringify(row.payload)).digest("hex");
   row.provenance = {
-    provider: SYNTHETIC_PROVIDER_ID,
+    provider,
     sourceUrl,
     runId: row.runId,
     observedAt: row.observedAt,
-    synthetic: true,
+    synthetic,
+    dataMode,
     schemaVersion: 1
   };
   return row;
 }
 
 function createObservation(input = {}) {
-  const sourceUrl = assertSyntheticSource(input.sourceUrl);
+  const synthetic = input.synthetic !== false;
+  const dataMode = synthetic ? "synthetic-test" : cleanText(input.dataMode, 32).toLowerCase();
+  const sourceUrl = assertFreshSourceUrl(input.sourceUrl, { synthetic, dataMode });
+  const provider = cleanText(input.provider || input.source || (synthetic ? DEFAULT_SYNTHETIC_PROVIDER.id : ""), 120);
+  if (!provider) throw new FreshCollectionError("Observation provider is required", {
+    code: "FRESH_PROVIDER_PROVENANCE_REQUIRED",
+    statusCode: 500
+  });
   const kind = cleanText(input.kind, 80);
   const mode = cleanText(input.mode || (
     kind.startsWith("profile.") ? "quick" : (kind.startsWith("ota.") ? "ota" : "detail")
@@ -209,21 +293,24 @@ function createObservation(input = {}) {
     mode,
     observationType: kind,
     companyId: cleanText(input.companyId, 160),
-    source: SYNTHETIC_PROVIDER_ID,
+    source: provider,
     runId: cleanText(input.runId, 160),
     observedAt: cleanText(input.observedAt, 40),
     targetDate: cleanText(input.targetDate, 16),
     channel: cleanText(input.channel || "direct", 80),
     productKey: cleanText(input.productKey || "company", 120),
+    requestKey: cleanText(input.requestKey, 160),
+    conditionHash: cleanText(input.conditionHash, 128),
     value: clone(input.value),
     values: clone(input.value),
     unit: cleanText(input.unit, 40),
     rawEvidenceId: cleanText(input.rawEvidenceId, 160),
     evidenceId: cleanText(input.rawEvidenceId, 160),
     sourceUrl,
-    synthetic: true,
+    synthetic,
+    dataMode,
     provenance: {
-      provider: SYNTHETIC_PROVIDER_ID,
+      provider,
       sourceUrl,
       evidenceId: cleanText(input.rawEvidenceId, 160),
       runId: cleanText(input.runId, 160),
@@ -231,8 +318,11 @@ function createObservation(input = {}) {
       targetDate: cleanText(input.targetDate, 16),
       channel: cleanText(input.channel || "direct", 80),
       productKey: cleanText(input.productKey || "company", 120),
+      requestKey: cleanText(input.requestKey, 160),
+      conditionHash: cleanText(input.conditionHash, 128),
       collectedBy: "stage228-fresh-collection-worker",
-      synthetic: true,
+      synthetic,
+      dataMode,
       schemaVersion: 1
     }
   };
@@ -247,19 +337,57 @@ function createObservation(input = {}) {
   return row;
 }
 
-function projectStage227Job(run = {}) {
+function opaqueJobRef(runId) {
+  const value = cleanText(runId, 160);
+  return value ? `job-ref-${stableHash(`fresh-job:${value}`, 24, "sha256")}` : "";
+}
+
+function opaqueCompanyRef(companyId) {
+  const value = cleanText(companyId, 160);
+  return value ? `company-ref-${stableHash(`fresh-exploration:${value}`, 24, "sha256")}` : "";
+}
+
+function publicResultSummary(value = {}) {
+  const summary = {};
+  for (const key of [
+    "exposureSampleCount",
+    "companyCount",
+    "observationCount",
+    "revenueSampleCount",
+    "averageRevenue",
+    "soldOutRate"
+  ]) {
+    if (value[key] === null || value[key] === undefined || value[key] === "") continue;
+    const number = Number(value[key]);
+    if (Number.isFinite(number)) summary[key] = number;
+  }
+  return summary;
+}
+
+function publicCollectionResult(run = {}, options = {}) {
+  if (!run.result || typeof run.result !== "object") return null;
+  const companyId = cleanText(run.result.companyId || run.companyId || run.checkpoint?.companyId, 160);
+  const result = {
+    companyRef: opaqueCompanyRef(companyId),
+    dataBoundary: "fresh-only",
+    dataMode: run.result.dataMode === "live" ? "live" : "synthetic-test"
+  };
+  if (options.role === "admin" && companyId) result.companyId = companyId;
+  return result;
+}
+
+function projectStage227Job(run = {}, options = {}) {
   const internalStatus = cleanText(run.status, 40);
   const input = run.input || run.request || {};
   const status = internalStatus === "completed"
     ? "completed"
     : (internalStatus === "cancelled" ? "cancelled" : (internalStatus === "failed" ? "failed" : "running"));
-  return {
-    jobId: run.runId || "",
+  const projection = {
+    jobRef: opaqueJobRef(run.runId),
     clientRequestId: run.clientRequestId || "",
     kind: STAGE227_JOB_KINDS.has(run.kind) ? run.kind : "admin-collection",
     status,
     keyword: input.targetName || run.targetName || "",
-    tenantCompanyId: input.tenantCompanyId || run.tenantCompanyId || "",
     collectionMode: input.collectionMode || run.collectionMode || "precision",
     productMode: input.productMode || run.productMode || "all",
     detailRankRanges: run.detailRankRanges || "1-10",
@@ -275,17 +403,22 @@ function projectStage227Job(run = {}) {
     startedAt: run.startedAt || "",
     completedAt: run.completedAt || "",
     cancelledAt: run.cancelledAt || "",
-    resultSummary: run.resultSummary || {},
-    result: run.result || null,
+    resultSummary: publicResultSummary(run.resultSummary),
+    result: publicCollectionResult(run, options),
     provisional: false,
     dataBoundary: "fresh-only"
   };
+  if (options.role === "admin") {
+    projection.tenantCompanyId = cleanText(input.tenantCompanyId || run.tenantCompanyId, 160);
+  }
+  return projection;
 }
 
 function createFreshCollectionService(options = {}) {
   const repository = options.repository;
   const clock = options.clock || (() => Date.now());
   const idFactory = options.idFactory || ((prefix) => `${prefix}_${crypto.randomUUID()}`);
+  const provider = normalizeProviderDescriptor(options.provider || options.providerDescriptor);
   if (!repository) throw new Error("Fresh collection repository is required");
   const requiredMethods = [
     "seedTarget", "createRun", "getRun", "listRuns", "requestRunCancel", "resumeRun"
@@ -295,7 +428,22 @@ function createFreshCollectionService(options = {}) {
   }
 
   async function submit(payload = {}, actor = {}) {
+    if (!provider.enabled) {
+      throw new FreshCollectionError("실제 수집 provider가 아직 구성되지 않았습니다.", {
+        code: "FRESH_PROVIDER_NOT_CONFIGURED",
+        statusCode: 503
+      });
+    }
     const input = normalizeRequest(payload);
+    const collectionPlan = createV2CollectionPlan({
+      ...input,
+      keyword: input.targetName,
+      checkIn: input.checkIn || input.targetDate,
+      checkOut: input.checkOut || undefined
+    }, { now: clock() });
+    if (typeof provider.assertRequestScope === "function") {
+      provider.assertRequestScope(input, collectionPlan.executionStages, collectionPlan);
+    }
     const signature = requestSignature(input);
     const actorAccountId = cleanText(actor.accountId || actor.actorAccountId || actor.id, 160);
     const existingRows = await repository.listRuns({
@@ -316,14 +464,17 @@ function createFreshCollectionService(options = {}) {
       return { ok: true, idempotent: true, run: clone(existing), job: projectStage227Job(existing) };
     }
 
-    const targetId = `target_${stableHex(`${normalizeIdentityText(input.regionCode)}|${normalizeIdentityText(input.targetName)}`, 24)}`;
+    const targetId = `target_${stableHash(`${provider.id}|${normalizeIdentityText(input.regionCode)}|${normalizeIdentityText(input.targetName)}`, 24, "sha256")}`;
     const seeded = await repository.seedTarget({
       targetId,
       targetName: input.targetName,
       regionCode: input.regionCode,
       regionLabel: input.regionLabel,
-      source: "stage228-user-seed",
-      synthetic: true
+      source: provider.id,
+      seedSource: "v2-user-request",
+      sourceUrl: provider.seedSourceUrl,
+      synthetic: provider.synthetic,
+      dataMode: provider.dataMode
     }, actor);
     const target = unwrap(seeded, "target") || { targetId };
     const runPayload = {
@@ -334,10 +485,16 @@ function createFreshCollectionService(options = {}) {
       collectionKind: FRESH_COLLECTION_KIND,
       actorAccountId,
       actorRole: cleanText(actor.role || actor.actorRole || actor.account?.role, 48),
-      synthetic: true,
-      provider: "synthetic-stage228",
-      sourceUrl: "https://collector.example.invalid/stage228",
-      requestedModes: ["quick", "detail", "ota"],
+      synthetic: provider.synthetic,
+      dataMode: provider.dataMode,
+      provider: provider.id,
+      sourceUrl: provider.seedSourceUrl,
+      requestedModes: collectionPlan.executionStages.filter((stage) => ["quick", "detail", "ota"].includes(stage)),
+      executionStages: collectionPlan.executionStages,
+      estimatedTotalSeconds: collectionPlan.estimatedTotalSeconds,
+      estimatedCompleteAt: collectionPlan.estimatedCompleteAt,
+      detailRankRanges: collectionPlan.detailRankRanges,
+      collectionPlan,
       targetId: target.targetId || targetId,
       companyId: "",
       status: "queued",
@@ -422,11 +579,14 @@ function createFreshCollectionService(options = {}) {
     cancel,
     resume,
     projectStage227Job,
+    provider,
     contract: Object.freeze({
       additive: true,
       kind: FRESH_COLLECTION_KIND,
       stages: FRESH_COLLECTION_STAGES,
-      provider: SYNTHETIC_PROVIDER_ID,
+      provider: provider.id,
+      providerKind: provider.kind,
+      dataMode: provider.dataMode,
       dataBoundary: "fresh-only"
     }),
     now: () => new Date(clock()).toISOString()
@@ -434,6 +594,7 @@ function createFreshCollectionService(options = {}) {
 }
 
 module.exports = {
+  DEFAULT_SYNTHETIC_PROVIDER,
   FRESH_COLLECTION_KIND,
   FRESH_COLLECTION_STAGES,
   FreshCollectionError,
@@ -445,6 +606,7 @@ module.exports = {
   issueV2CompanyId,
   normalizeIdentityText,
   normalizeRequest,
+  normalizeProviderDescriptor,
   observationId,
   projectStage227Job,
   requestSignature,

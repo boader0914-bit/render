@@ -299,8 +299,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 1,
-        "labeledFormControls": 1,
+        "formControls": 11,
+        "labeledFormControls": 11,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -330,8 +330,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 1,
-        "labeledFormControls": 1,
+        "formControls": 11,
+        "labeledFormControls": 11,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -361,8 +361,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 1,
-        "labeledFormControls": 1,
+        "formControls": 11,
+        "labeledFormControls": 11,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -392,8 +392,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 1,
-        "labeledFormControls": 1,
+        "formControls": 11,
+        "labeledFormControls": 11,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -795,8 +795,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 2,
-        "labeledFormControls": 2,
+        "formControls": 12,
+        "labeledFormControls": 12,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -826,8 +826,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 2,
-        "labeledFormControls": 2,
+        "formControls": 12,
+        "labeledFormControls": 12,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -857,8 +857,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 2,
-        "labeledFormControls": 2,
+        "formControls": 12,
+        "labeledFormControls": 12,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -888,8 +888,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 2,
-        "labeledFormControls": 2,
+        "formControls": 12,
+        "labeledFormControls": 12,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -1557,8 +1557,8 @@
       "width": 320,
       "effectiveScale": 1,
       "overflowX": 0,
-      "formControls": 1,
-      "labeledFormControls": 1,
+      "formControls": 11,
+      "labeledFormControls": 11,
       "keyboard": {
         "distinctFocusable": 13,
         "maxOutline": 3
@@ -1571,8 +1571,8 @@
       "width": 720,
       "effectiveScale": 2,
       "overflowX": 0,
-      "formControls": 1,
-      "labeledFormControls": 1,
+      "formControls": 11,
+      "labeledFormControls": 11,
       "keyboard": {
         "distinctFocusable": 13,
         "maxOutline": 3
@@ -1669,8 +1669,8 @@
       "width": 320,
       "effectiveScale": 1,
       "overflowX": 0,
-      "formControls": 2,
-      "labeledFormControls": 2,
+      "formControls": 12,
+      "labeledFormControls": 12,
       "keyboard": {
         "distinctFocusable": 13,
         "maxOutline": 3
@@ -1683,8 +1683,8 @@
       "width": 720,
       "effectiveScale": 2,
       "overflowX": 0,
-      "formControls": 2,
-      "labeledFormControls": 2,
+      "formControls": 12,
+      "labeledFormControls": 12,
       "keyboard": {
         "distinctFocusable": 13,
         "maxOutline": 3

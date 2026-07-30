@@ -17,6 +17,9 @@ const {
 const {
   appendObservationBatches,
   createFreshCollectionWorker,
+  detailTargetDates,
+  otaObservations,
+  profileObservations,
   retryBackoffMs
 } = require("./integration/services/fresh_collection_worker.cjs");
 const { createFreshIntegrationRepository } = require("./integration/repositories/fresh_store.cjs");
@@ -294,6 +297,55 @@ function payload(suffix, overrides = {}) {
   };
 }
 
+function testNullProviderValuesAreNotConvertedIntoCompleteObservations() {
+  const run = { runId: "fresh_run_null_values", input: { targetDate: "2026-08-15" } };
+  const raw = { rawEvidenceId: "raw_null_values" };
+  const common = {
+    provider: "stage228-synthetic-fresh-collection",
+    synthetic: true,
+    dataMode: "synthetic-test",
+    source: "https://collector.example.invalid/null-values",
+    collectedAt: "2026-07-29T00:00:00.000Z"
+  };
+  const profileRows = profileObservations(run, "cmp_null_values", raw, {
+    ...common,
+    profile: {
+      companyName: "null guard lodging",
+      regionLabel: "test region",
+      category: "glamping",
+      rank: null,
+      reviewCount: null,
+      latitude: null,
+      longitude: 127.1
+    }
+  });
+  assert.equal(profileRows.some((row) => row.kind === "profile.location"), false);
+  assert.equal(profileRows.some((row) => row.kind === "profile.rank"), false);
+  const otaRows = otaObservations(run, "cmp_null_values", raw, {
+    ...common,
+    channels: [
+      { channel: "missing", productKey: "company", targetDate: "2026-08-15", exposed: null },
+      { channel: "explicit-hidden", productKey: "company", targetDate: "2026-08-15", exposed: false }
+    ]
+  });
+  assert.equal(otaRows.length, 1);
+  assert.equal(otaRows[0].value, false);
+}
+
+function testDetailTargetDateRangeIsInclusiveAndCapped() {
+  assert.deepEqual(detailTargetDates({
+    input: { targetDate: "2026-08-15" },
+    collectionPlan: { collectWeeklyRange: false }
+  }), ["2026-08-15"]);
+  const capped = detailTargetDates({
+    input: { targetDate: "2026-01-01" },
+    collectionPlan: { collectWeeklyRange: true, checkIn: "2026-01-01", checkOut: "2026-03-31" }
+  });
+  assert.equal(capped.length, 31);
+  assert.equal(capped[0], "2026-01-01");
+  assert.equal(capped.at(-1), "2026-01-31");
+}
+
 async function testVerticalSliceAndIdempotency() {
   let now = Date.parse("2026-07-29T00:00:00.000Z");
   const clock = () => now;
@@ -329,8 +381,8 @@ async function testVerticalSliceAndIdempotency() {
     assert.equal(snapshot.targets.length, 1);
     assert.equal(snapshot.companies.length, 1);
     assert.match(snapshot.companies[0].companyId, /^cmp_place_syn\d+$/);
-    assert.equal(snapshot.raw.length, 4);
-    assert.equal(snapshot.observations.length, 14);
+    assert.equal(snapshot.raw.length, 12);
+    assert.equal(snapshot.observations.length, 51);
     assert.ok(snapshot.observations.every((row) => (
       row.source && row.runId && row.observedAt && row.targetDate && row.channel && row.productKey
       && row.provenance?.provider && row.provenance?.sourceUrl.endsWith(".invalid/") === false
@@ -345,7 +397,7 @@ async function testVerticalSliceAndIdempotency() {
     assert.equal(replay.run.runId, submitted.run.runId);
     const terminalReplay = await worker.processRun(submitted.run.runId);
     assert.equal(terminalReplay.claimed, false);
-    assert.equal(memory.snapshot().observations.length, 14);
+    assert.equal(memory.snapshot().observations.length, 51);
     await assert.rejects(
       () => service.submit(payload("vertical", { targetName: "다른 업체" }), actor),
       (error) => error instanceof FreshCollectionError
@@ -363,7 +415,7 @@ async function testVerticalSliceAndIdempotency() {
     const repeated = await service.submit(payload("repeat"), actor);
     await worker.processRun(repeated.run.runId);
     const repeatedSnapshot = memory.snapshot();
-    assert.equal(repeatedSnapshot.observations.length, 28);
+    assert.equal(repeatedSnapshot.observations.length, 102);
     const firstKey = repeatedSnapshot.observations[0];
     assert.ok(repeatedSnapshot.observations.some((row) => (
       row.runId !== firstKey.runId
@@ -376,6 +428,59 @@ async function testVerticalSliceAndIdempotency() {
   }
 }
 
+async function testPlanExecutionStagesDriveExactProviderCalls() {
+  const cases = [
+    {
+      suffix: "fast-plan",
+      input: { collectionMode: "fast", collectionPurpose: "revenue_detail" },
+      stages: ["discovery", "quick", "finalize"],
+      calls: { discovery: 1, quick: 1 }
+    },
+    {
+      suffix: "basic-plan",
+      input: { collectionMode: "precision", collectionPurpose: "basic_db" },
+      stages: ["discovery", "quick", "detail", "finalize"],
+      calls: { discovery: 1, quick: 1, detail: 1 }
+    },
+    {
+      suffix: "demand-plan",
+      input: { collectionMode: "precision", collectionPurpose: "demand_location" },
+      stages: ["discovery", "quick", "detail", "finalize"],
+      calls: { discovery: 1, quick: 1, detail: 1 }
+    },
+    {
+      suffix: "revenue-plan",
+      input: { collectionMode: "precision", collectionPurpose: "revenue_detail" },
+      stages: ["discovery", "quick", "detail", "ota", "finalize"],
+      calls: { discovery: 1, quick: 1, detail: 7, ota: 1 }
+    }
+  ];
+
+  for (const row of cases) {
+    const clock = () => Date.parse("2026-07-29T00:30:00.000Z");
+    const memory = createMemoryRepository({ clock });
+    const provider = createSyntheticFreshCollectionProvider({ clock });
+    const service = createFreshCollectionService({
+      repository: memory.repository,
+      clock,
+      idFactory: () => `fresh_run_${row.suffix}`
+    });
+    const worker = createFreshCollectionWorker({
+      repository: memory.repository,
+      provider,
+      clock,
+      workerId: `worker-${row.suffix}`
+    });
+    const submitted = await service.submit(
+      payload(row.suffix, row.input),
+      { accountId: "admin_plan", role: "admin" }
+    );
+    assert.deepEqual(submitted.run.executionStages, row.stages, row.suffix);
+    assert.equal((await worker.processRun(submitted.run.runId)).outcome, "completed", row.suffix);
+    assert.deepEqual(provider.diagnostics().callsByStage, row.calls, row.suffix);
+  }
+}
+
 async function testRetryClassificationAndResume() {
   let now = Date.parse("2026-07-29T01:00:00.000Z");
   const clock = () => now;
@@ -383,7 +488,7 @@ async function testRetryClassificationAndResume() {
   const provider = createSyntheticFreshCollectionProvider({
     clock,
     failurePlan: {
-      detail: [new SyntheticProviderError("synthetic rate limit", {
+      detail: [() => null, new SyntheticProviderError("synthetic rate limit", {
         code: "PROVIDER_RATE_LIMIT",
         retryable: true,
         retryAfterMs: 2500
@@ -403,14 +508,15 @@ async function testRetryClassificationAndResume() {
   assert.equal(scheduled.outcome, "retry-scheduled");
   assert.equal(scheduled.run.status, "retry-wait");
   assert.equal(scheduled.run.lastError.code, "PROVIDER_RATE_LIMIT");
-  assert.equal(memory.snapshot().observations.length, 5);
+  assert.equal(memory.snapshot().observations.length, 12);
   now += 2499;
   assert.equal((await worker.recover()).recovered.length, 0);
   now += 1;
   assert.equal((await worker.recover()).recovered.length, 1);
   const completed = await worker.processRun(submitted.run.runId);
   assert.equal(completed.outcome, "completed");
-  assert.equal(memory.snapshot().observations.length, 14);
+  assert.equal(memory.snapshot().observations.length, 51);
+  assert.equal(provider.diagnostics().callsByStage.detail, 9, "partial detail retry must replay idempotently without duplicate observations");
   assert.equal(worker.diagnostics().retryScheduled, 1);
   assert.equal(retryBackoffMs(3, { baseMs: 1000, maximumMs: 10000 }), 4000);
 }
@@ -444,8 +550,8 @@ async function testCancelResumeAndRestartRecovery() {
   await service.resume(cancelRun.run.runId, { reason: "test-resume" }, { accountId: "admin_3" });
   const resumed = await cancelWorker.processRun(cancelRun.run.runId);
   assert.equal(resumed.outcome, "completed");
-  assert.equal(memory.snapshot().observations.length, 14);
-  assert.equal(memory.snapshot().raw.length, 4);
+  assert.equal(memory.snapshot().observations.length, 51);
+  assert.equal(memory.snapshot().raw.length, 12);
 
   now += 60_000;
   const restartRun = await service.submit(payload("restart"), { accountId: "admin_3", role: "admin" });
@@ -472,7 +578,7 @@ async function testCancelResumeAndRestartRecovery() {
   assert.equal(recovery.recovered.length, 1);
   const completed = await afterRestart.processRun(restartRun.run.runId);
   assert.equal(completed.outcome, "completed");
-  assert.equal(memory.snapshot().observations.length - observationsBeforeRestart, 9);
+  assert.equal(memory.snapshot().observations.length - observationsBeforeRestart, 45);
   assert.equal(afterRestart.diagnostics().recoveredRuns, 1);
 }
 
@@ -571,7 +677,7 @@ async function testDurableRepositoryVerticalSlice() {
     const submitted = await service.submit(payload("durable"), { accountId: "admin_durable", role: "admin" });
     const completed = await worker.processRun(submitted.run.runId);
     assert.equal(completed.outcome, "completed");
-    assert.equal((await repository.listObservations({ runId: submitted.run.runId })).length, 14);
+    assert.equal((await repository.listObservations({ runId: submitted.run.runId })).length, 51);
     const storedRun = await repository.getRun(submitted.run.runId);
     assert.equal(storedRun.status, "completed");
     assert.equal(storedRun.actorAccountId, "admin_durable");
@@ -583,7 +689,7 @@ async function testDurableRepositoryVerticalSlice() {
     now += 60_000;
     const restartedRepository = createFreshIntegrationRepository(repositoryOptions);
     const restartedBootstrap = await restartedRepository.initialize();
-    assert.equal(restartedBootstrap.counts.observations, 14);
+    assert.equal(restartedBootstrap.counts.observations, 51);
     const recoveredRun = await restartedRepository.getRun(submitted.run.runId);
     assert.equal(recoveredRun.status, "completed");
     const diagnostics = await restartedRepository.diagnostics();
@@ -624,7 +730,7 @@ async function testDurableRepositoryVerticalSlice() {
     assert.equal((await afterRestartWorker.recover()).recovered.length, 1);
     const recovered = await afterRestartWorker.processRun(interruptedRun.run.runId);
     assert.equal(recovered.outcome, "completed");
-    assert.equal((await processRestartRepository.listObservations({ runId: interruptedRun.run.runId })).length, 14);
+    assert.equal((await processRestartRepository.listObservations({ runId: interruptedRun.run.runId })).length, 51);
   } finally {
     const resolvedTemporaryRoot = path.resolve(temporaryRoot);
     if (path.basename(resolvedTemporaryRoot).startsWith("glamping-stage228-worker-")) {
@@ -649,7 +755,7 @@ function runtimeAuthBoundary() {
 
 function createRuntimeOptions(temporaryRoot, overrides = {}) {
   return {
-    env: { V2_INTEGRATION_FRESH_PROVIDER: "synthetic" },
+    env: { NODE_ENV: "test", V2_INTEGRATION_FRESH_PROVIDER: "synthetic" },
     projectRoot: path.resolve(__dirname, ".."),
     dataDir: path.join(temporaryRoot, "fresh-store"),
     legacyPaths: [path.join(temporaryRoot, "legacy-never-read")],
@@ -682,6 +788,12 @@ async function waitForTerminalRun(repository, runId, timeoutMs = 4_000) {
   throw new Error(`Timed out waiting for fresh run ${runId}; statuses=${statuses.join(",")}`);
 }
 
+async function internalRunForClientRequest(repository, clientRequestId) {
+  const rows = await repository.listRuns({ clientRequestId });
+  assert.equal(rows.length, 1, `expected one internal run for ${clientRequestId}`);
+  return rows[0];
+}
+
 async function testRuntimeQueuedProgressCancelAndCleanup() {
   let now = Date.parse("2026-07-29T05:00:00.000Z");
   const temporaryRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "glamping-stage228-runtime-flow-"));
@@ -695,40 +807,44 @@ async function testRuntimeQueuedProgressCancelAndCleanup() {
       RUNTIME_ADMIN_SESSION,
       payload("runtime-flow", { tenantCompanyId: "" })
     );
-    assert.equal(submitted.run.status, "queued", "HTTP service submission must return before collection begins");
     assert.equal(submitted.outcome, "queued");
     assert.equal(submitted.job.status, "running", "Stage 227 projection keeps queued work observable");
+    assert.equal(Object.hasOwn(submitted, "run"), false, "HTTP service submission must not expose its internal run");
+    const submittedRun = await internalRunForClientRequest(runtime.repository, submitted.job.clientRequestId);
+    assert.equal(submittedRun.status, "queued", "HTTP service submission must persist before collection begins");
     assert.equal(runtime.runner.diagnostics().wakeScheduled, true);
 
     const firstStage = await runtime.runner.pump("test-first-stage");
     assert.equal(firstStage.outcome, "stage-budget-exhausted");
-    const progressing = await runtime.repository.getRun(submitted.run.runId);
+    const progressing = await runtime.repository.getRun(submittedRun.runId);
     assert.equal(progressing.status, "running");
     assert.equal(progressing.progress, 15);
     assert.equal(progressing.checkpoint.nextStage, "quick");
 
     const cancelRequested = await runtime.service.cancelJob(
       RUNTIME_ADMIN_SESSION,
-      submitted.run.clientRequestId,
+      submitted.job.clientRequestId,
       { reason: "runtime-cancel-interleave" }
     );
-    assert.equal(cancelRequested.run.status, "cancel-requested");
+    assert.equal(cancelRequested.outcome, "cancel-requested");
+    assert.equal(Object.hasOwn(cancelRequested, "run"), false);
     await runtime.runner.pump("test-cancel");
-    assert.equal((await runtime.repository.getRun(submitted.run.runId)).status, "cancelled");
+    assert.equal((await runtime.repository.getRun(submittedRun.runId)).status, "cancelled");
 
     const resumed = await runtime.service.resumeJob(
       RUNTIME_ADMIN_SESSION,
-      submitted.run.clientRequestId,
+      submitted.job.clientRequestId,
       { reason: "runtime-resume" }
     );
-    assert.equal(resumed.run.status, "queued");
+    assert.equal(resumed.outcome, "queued");
+    assert.equal(Object.hasOwn(resumed, "run"), false);
     for (let index = 0; index < 4; index += 1) {
       await runtime.runner.pump(`test-resumed-stage-${index + 1}`);
     }
-    const completed = await runtime.repository.getRun(submitted.run.runId);
+    const completed = await runtime.repository.getRun(submittedRun.runId);
     assert.equal(completed.status, "completed");
     assert.equal(completed.progress, 100);
-    assert.equal((await runtime.repository.listObservations({ runId: completed.runId })).length, 14);
+    assert.equal((await runtime.repository.listObservations({ runId: completed.runId })).length, 51);
   } finally {
     const closed = await runtime.close();
     assert.equal(closed.runner.stopped, true);
@@ -752,9 +868,10 @@ async function testRuntimeStartupRecoveryAutomaticallyAdvancesExpiredLease() {
       RUNTIME_ADMIN_SESSION,
       payload("runtime-restart", { tenantCompanyId: "" })
     );
+    const submittedRun = await internalRunForClientRequest(beforeRestart.repository, submitted.job.clientRequestId);
     await beforeRestart.runner.pump("before-restart-discovery");
     await beforeRestart.runner.pump("before-restart-quick");
-    const interrupted = await beforeRestart.repository.getRun(submitted.run.runId);
+    const interrupted = await beforeRestart.repository.getRun(submittedRun.runId);
     assert.equal(interrupted.status, "running");
     assert.equal(interrupted.progress, 40);
     assert.equal(interrupted.checkpoint.nextStage, "detail");
@@ -769,12 +886,12 @@ async function testRuntimeStartupRecoveryAutomaticallyAdvancesExpiredLease() {
     const initialized = await afterRestart.initialize();
     assert.equal(initialized.recovery.recovered.length, 1);
     assert.equal(initialized.startupPump.claimed, true, "initialize must automatically claim recovered work");
-    const advanced = await afterRestart.repository.getRun(submitted.run.runId);
+    const advanced = await afterRestart.repository.getRun(submittedRun.runId);
     assert.equal(advanced.progress, 70);
     assert.equal(advanced.checkpoint.nextStage, "ota");
     await afterRestart.runner.pump("after-restart-ota");
     await afterRestart.runner.pump("after-restart-finalize");
-    assert.equal((await afterRestart.repository.getRun(submitted.run.runId)).status, "completed");
+    assert.equal((await afterRestart.repository.getRun(submittedRun.runId)).status, "completed");
   } finally {
     if (beforeRestart) await beforeRestart.close();
     if (afterRestart) await afterRestart.close();
@@ -806,12 +923,14 @@ async function testRuntimeBackoffTimerAutomaticallyResumesDueRetry() {
       RUNTIME_ADMIN_SESSION,
       payload("runtime-retry", { tenantCompanyId: "" })
     );
-    assert.equal(submitted.run.status, "queued");
-    const terminal = await waitForTerminalRun(runtime.repository, submitted.run.runId);
+    assert.equal(submitted.outcome, "queued");
+    const submittedRun = await internalRunForClientRequest(runtime.repository, submitted.job.clientRequestId);
+    assert.equal(submittedRun.status, "queued");
+    const terminal = await waitForTerminalRun(runtime.repository, submittedRun.runId, 20_000);
     assert.equal(terminal.run.status, "completed");
     assert.ok(terminal.statuses.includes("retry-wait"), "timer acceptance must observe the persisted retry backoff");
     assert.equal(runtime.worker.diagnostics().retryScheduled, 1);
-    assert.equal(provider.diagnostics().callsByStage.detail, 2);
+    assert.equal(provider.diagnostics().callsByStage.detail, 8);
     assert.ok(runtime.runner.diagnostics().cycles >= 6);
   } finally {
     await runtime.close();
@@ -821,7 +940,10 @@ async function testRuntimeBackoffTimerAutomaticallyResumesDueRetry() {
 }
 
 async function main() {
+  testNullProviderValuesAreNotConvertedIntoCompleteObservations();
+  testDetailTargetDateRangeIsInclusiveAndCapped();
   await testVerticalSliceAndIdempotency();
+  await testPlanExecutionStagesDriveExactProviderCalls();
   await testRetryClassificationAndResume();
   await testCancelResumeAndRestartRecovery();
   await testBatchBoundaryAndProvenanceGuard();

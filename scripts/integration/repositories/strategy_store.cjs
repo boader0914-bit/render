@@ -619,6 +619,7 @@ function createStrategyRepository(options = {}) {
           sourceReportId: strategy.reportId,
           sourceReportVersion: strategy.lineage?.sourceReportVersion || 1,
           sourceReportPublishedAt: strategy.lineage?.sourceReportPublishedAt || "",
+          sourceAlgorithmVersion: strategy.lineage?.sourceAlgorithmVersion || "",
           ruleVersion: strategy.ruleVersion,
           seededAt: at,
           seededBy: normalizeActor(actor).label

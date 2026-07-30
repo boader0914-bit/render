@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   BUSINESS_REPORT_META_NAME,
+  CONNECTOR_RUNTIME_META_NAME,
   EXECUTION_META_NAME,
   LOCATION_CARD_META_NAME,
+  MAP_RANKING_META_NAME,
   PLATFORM_CORE_META_NAME,
   RETROSPECTIVE_META_NAME,
   STRATEGY_META_NAME,
   businessReportEnabled,
+  connectorRuntimeEnabled,
   executionEnabled,
   locationCardEnabled,
+  mapRankingEnabled,
   platformCoreEnabled,
   retrospectiveEnabled,
   strategyEnabled
@@ -66,5 +70,21 @@ describe("runtime feature metadata", () => {
     expect(strategyEnabled(source({}))).toBe(false);
     expect(executionEnabled(source({}))).toBe(false);
     expect(retrospectiveEnabled(source({}))).toBe(false);
+  });
+
+  it("keeps Stage 231 map/ranking independently false until the server marker is true", () => {
+    expect(mapRankingEnabled(source({ [MAP_RANKING_META_NAME]: "true" }))).toBe(true);
+    expect(mapRankingEnabled(source({ [MAP_RANKING_META_NAME]: " TRUE " }))).toBe(true);
+    expect(mapRankingEnabled(source({ [MAP_RANKING_META_NAME]: "1" }))).toBe(false);
+    expect(mapRankingEnabled(source({ [PLATFORM_CORE_META_NAME]: "true" }))).toBe(false);
+    expect(mapRankingEnabled(source({}))).toBe(false);
+  });
+
+  it("keeps Stage 231 connector operations independently false until the server marker is true", () => {
+    expect(connectorRuntimeEnabled(source({ [CONNECTOR_RUNTIME_META_NAME]: "true" }))).toBe(true);
+    expect(connectorRuntimeEnabled(source({ [CONNECTOR_RUNTIME_META_NAME]: " TRUE " }))).toBe(true);
+    expect(connectorRuntimeEnabled(source({ [CONNECTOR_RUNTIME_META_NAME]: "1" }))).toBe(false);
+    expect(connectorRuntimeEnabled(source({ [MAP_RANKING_META_NAME]: "true" }))).toBe(false);
+    expect(connectorRuntimeEnabled(source({}))).toBe(false);
   });
 });

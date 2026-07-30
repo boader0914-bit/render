@@ -543,7 +543,9 @@ function createInsightsRepository(options = {}) {
     const tenantCompanyId = cleanId(payload.tenantCompanyId, "tenantCompanyId");
     const clientRequestId = cleanId(payload.clientRequestId, "clientRequestId");
     const key = requestKey(tenantCompanyId, clientRequestId);
-    const signature = stableHash({ companyId, tenantCompanyId }, 64);
+    const synthetic = payload.synthetic !== false;
+    const dataMode = !synthetic && cleanText(payload.dataMode, 32) === "live" ? "live" : "test-fixture";
+    const signature = stableHash({ companyId, tenantCompanyId, synthetic, dataMode }, 64);
     return mutation("insights.location-card.requested", actor, async (state) => {
       const existing = state.cards.cards.find((row) => row.requestKey === key);
       if (existing) {
@@ -559,6 +561,8 @@ function createInsightsRepository(options = {}) {
         clientRequestId,
         companyId,
         tenantCompanyId,
+        synthetic,
+        dataMode,
         requestedByAccountId: normalizeActor(actor).id,
         lifecycle: "requested",
         version: 1,
@@ -597,6 +601,8 @@ function createInsightsRepository(options = {}) {
         requestSignature: current.requestSignature,
         companyId: current.companyId,
         tenantCompanyId: current.tenantCompanyId,
+        synthetic: current.synthetic,
+        dataMode: current.dataMode,
         lifecycle: to,
         version: current.version + 1,
         updatedAt: nowIso(clock),
@@ -630,7 +636,9 @@ function createInsightsRepository(options = {}) {
     const month = cleanText(payload.month, 12);
     if (!/^\d{4}-\d{2}$/.test(month)) throw insightsError("Report month must use YYYY-MM", "INSIGHTS_MONTH_INVALID");
     const key = requestKey(tenantCompanyId, clientRequestId);
-    const signature = stableHash({ companyId, tenantCompanyId, month }, 64);
+    const synthetic = payload.synthetic !== false;
+    const dataMode = !synthetic && cleanText(payload.dataMode, 32) === "live" ? "live" : "test-fixture";
+    const signature = stableHash({ companyId, tenantCompanyId, month, synthetic, dataMode }, 64);
     return mutation("insights.monthly-report.requested", actor, async (state) => {
       const existing = state.reports.reports.find((row) => row.requestKey === key);
       if (existing) {
@@ -646,6 +654,8 @@ function createInsightsRepository(options = {}) {
         clientRequestId,
         companyId,
         tenantCompanyId,
+        synthetic,
+        dataMode,
         month,
         lifecycle: "requested",
         version: 1,
@@ -684,6 +694,8 @@ function createInsightsRepository(options = {}) {
         requestSignature: current.requestSignature,
         companyId: current.companyId,
         tenantCompanyId: current.tenantCompanyId,
+        synthetic: current.synthetic,
+        dataMode: current.dataMode,
         lifecycle: to,
         version: current.version + 1,
         updatedAt: nowIso(clock),

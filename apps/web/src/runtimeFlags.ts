@@ -8,6 +8,8 @@ export const BUSINESS_REPORT_META_NAME = "lodging-v2-business-report-enabled";
 export const STRATEGY_META_NAME = "lodging-v2-strategy-enabled";
 export const EXECUTION_META_NAME = "lodging-v2-execution-enabled";
 export const RETROSPECTIVE_META_NAME = "lodging-v2-retrospective-enabled";
+export const MAP_RANKING_META_NAME = "lodging-v2-map-ranking-enabled";
+export const CONNECTOR_RUNTIME_META_NAME = "lodging-v2-connector-runtime-enabled";
 
 function explicitRuntimeFlag(source: RuntimeMetaSource, name: string): boolean {
   const value = source.querySelector(`meta[name="${name}"]`)?.content;
@@ -42,4 +44,14 @@ export function executionEnabled(source: RuntimeMetaSource = document): boolean 
 /** Stage 230 retrospectives remain independently rollbackable after execution rollout. */
 export function retrospectiveEnabled(source: RuntimeMetaSource = document): boolean {
   return explicitRuntimeFlag(source, RETROSPECTIVE_META_NAME);
+}
+
+/** Stage 231 map/ranking reads require their own fresh-observation rollout gate. */
+export function mapRankingEnabled(source: RuntimeMetaSource = document): boolean {
+  return explicitRuntimeFlag(source, MAP_RANKING_META_NAME);
+}
+
+/** Stage 231 connector operations are visible only when the server runtime is explicitly enabled. */
+export function connectorRuntimeEnabled(source: RuntimeMetaSource = document): boolean {
+  return explicitRuntimeFlag(source, CONNECTOR_RUNTIME_META_NAME);
 }

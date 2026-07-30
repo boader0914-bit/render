@@ -95,6 +95,7 @@ function createSyntheticFreshCollectionProvider(options = {}) {
     return {
       provider: SYNTHETIC_PROVIDER_ID,
       synthetic: true,
+      dataMode: "synthetic-test",
       source: assertSyntheticSource(sourceUrl("discovery", value.identity)),
       collectedAt: new Date(clock()).toISOString(),
       candidate: {
@@ -118,6 +119,7 @@ function createSyntheticFreshCollectionProvider(options = {}) {
     return {
       provider: SYNTHETIC_PROVIDER_ID,
       synthetic: true,
+      dataMode: "synthetic-test",
       source: assertSyntheticSource(sourceUrl("quick", companyIdentity)),
       collectedAt: new Date(clock()).toISOString(),
       profile: {
@@ -140,6 +142,7 @@ function createSyntheticFreshCollectionProvider(options = {}) {
     return {
       provider: SYNTHETIC_PROVIDER_ID,
       synthetic: true,
+      dataMode: "synthetic-test",
       source: assertSyntheticSource(sourceUrl("detail", companyIdentity)),
       collectedAt: new Date(clock()).toISOString(),
       products: [
@@ -168,6 +171,7 @@ function createSyntheticFreshCollectionProvider(options = {}) {
     return {
       provider: SYNTHETIC_PROVIDER_ID,
       synthetic: true,
+      dataMode: "synthetic-test",
       source: assertSyntheticSource(sourceUrl("ota", companyIdentity)),
       collectedAt: new Date(clock()).toISOString(),
       channels: [
@@ -181,6 +185,10 @@ function createSyntheticFreshCollectionProvider(options = {}) {
   return Object.freeze({
     id: SYNTHETIC_PROVIDER_ID,
     kind: "synthetic",
+    enabled: true,
+    synthetic: true,
+    dataMode: "synthetic-test",
+    seedSourceUrl: "https://collector.example.invalid/stage228",
     discover,
     collectQuick,
     collectDetail,
@@ -191,11 +199,45 @@ function createSyntheticFreshCollectionProvider(options = {}) {
   });
 }
 
+function createDisabledFreshCollectionProvider(options = {}) {
+  const reason = cleanText(options.reason || "실제 V2 수집 provider가 구성되지 않았습니다.", 240);
+  const stats = {
+    externalNetworkCalls: 0,
+    externalRequests: 0,
+    credentialReads: 0,
+    callsByStage: {},
+    disabled: true,
+    reason
+  };
+  function unavailable(stage) {
+    stats.callsByStage[stage] = (stats.callsByStage[stage] || 0) + 1;
+    throw new SyntheticProviderError(reason, {
+      code: "FRESH_PROVIDER_NOT_CONFIGURED",
+      retryable: false,
+      statusCode: 503
+    });
+  }
+  return Object.freeze({
+    id: "fresh-provider-disabled",
+    kind: "disabled",
+    enabled: false,
+    synthetic: false,
+    dataMode: "live",
+    seedSourceUrl: "",
+    discover: () => unavailable("discovery"),
+    collectQuick: () => unavailable("quick"),
+    collectDetail: () => unavailable("detail"),
+    collectOta: () => unavailable("ota"),
+    diagnostics: () => JSON.parse(JSON.stringify(stats))
+  });
+}
+
 module.exports = {
   SYNTHETIC_PROVIDER_ID,
   SYNTHETIC_SOURCE_HOST,
   SyntheticProviderError,
   assertSyntheticSource,
+  createDisabledFreshCollectionProvider,
   createSyntheticFreshCollectionProvider,
   sourceUrl,
   stableHex

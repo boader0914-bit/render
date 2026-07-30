@@ -6,6 +6,8 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
   INTEGRATION_FEATURE_DEFINITIONS,
+  integrationFeatureFlagDiagnostics,
+  serializeIntegrationFeatureFlagDiagnostics,
   readIntegrationFeatureFlags
 } = require("./integration_feature_flags.cjs");
 const {
@@ -19,6 +21,16 @@ const ROOT = path.resolve(__dirname, "..");
 const FIXTURE_DIR = path.join(ROOT, "test", "fixtures", "stage222");
 const SNAPSHOT_FILE = path.join(ROOT, "test", "snapshots", "stage222_contract_snapshot.json");
 const SERVER_FILE = path.join(ROOT, "scripts", "glamping_app_server.cjs");
+const STAGE231_DISABLED_FLAGS = Object.freeze({
+  mapRanking: false,
+  connectorRuntime: false,
+  tourismReal: false,
+  naverSearchAdReal: false,
+  naverTrendReal: false,
+  snsReal: false,
+  otaReal: false,
+  scheduler: false
+});
 
 async function readFixture(name) {
   return JSON.parse(await fs.readFile(path.join(FIXTURE_DIR, name), "utf8"));
@@ -217,7 +229,15 @@ async function main() {
     observation: "V2_INTEGRATION_OBSERVATION_ENABLED",
     platformCore: "V2_INTEGRATION_PLATFORM_CORE_ENABLED",
     retrospective: "V2_INTEGRATION_RETROSPECTIVE_ENABLED",
-    strategy: "V2_INTEGRATION_STRATEGY_ENABLED"
+    strategy: "V2_INTEGRATION_STRATEGY_ENABLED",
+    mapRanking: "V2_INTEGRATION_MAP_RANKING_ENABLED",
+    connectorRuntime: "V2_INTEGRATION_CONNECTOR_RUNTIME_ENABLED",
+    tourismReal: "V2_CONNECTOR_TOURISM_REAL_ENABLED",
+    naverSearchAdReal: "V2_CONNECTOR_NAVER_SEARCHAD_REAL_ENABLED",
+    naverTrendReal: "V2_CONNECTOR_NAVER_TREND_REAL_ENABLED",
+    snsReal: "V2_CONNECTOR_SNS_REAL_ENABLED",
+    otaReal: "V2_CONNECTOR_OTA_REAL_ENABLED",
+    scheduler: "V2_INTEGRATION_SCHEDULER_ENABLED"
   };
   assert.deepEqual(
     Object.fromEntries(Object.entries(INTEGRATION_FEATURE_DEFINITIONS).map(([name, item]) => [name, item.envKey])),
@@ -235,7 +255,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "test",
@@ -253,7 +274,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "production",
@@ -273,7 +295,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "test",
@@ -292,7 +315,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     NODE_ENV: "test",
@@ -310,7 +334,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.platformCore.dependsOn, ["auth"]);
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.freshCompany.dependsOn, ["auth", "platformCore"]);
@@ -321,6 +346,17 @@ async function main() {
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.strategy.dependsOn, ["businessReport"]);
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.execution.dependsOn, ["strategy"]);
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.retrospective.dependsOn, ["execution"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.mapRanking.dependsOn, ["freshObservation"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.connectorRuntime.dependsOn, ["auth", "freshObservation"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.tourismReal.dependsOn, ["connectorRuntime"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.naverSearchAdReal.dependsOn, ["connectorRuntime"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.naverTrendReal.dependsOn, ["connectorRuntime"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.snsReal.dependsOn, ["connectorRuntime"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.otaReal.dependsOn, ["connectorRuntime"]);
+  assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.scheduler.dependsOn, ["connectorRuntime"]);
+  for (const name of Object.keys(STAGE231_DISABLED_FLAGS)) {
+    assert.equal(INTEGRATION_FEATURE_DEFINITIONS[name].default, false, `${name} must default false`);
+  }
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_FRESH_OBSERVATION_ENABLED: "true"
   }), {
@@ -335,7 +371,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_FRESH_COMPANY_ENABLED: "true",
@@ -352,7 +389,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_AUTH_ENABLED: "true",
@@ -371,7 +409,8 @@ async function main() {
     businessReport: false,
     strategy: false,
     execution: false,
-    retrospective: false
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
   });
   assert.deepEqual(readIntegrationFeatureFlags({
     V2_INTEGRATION_AUTH_ENABLED: "true",
@@ -396,8 +435,77 @@ async function main() {
     businessReport: true,
     strategy: true,
     execution: true,
-    retrospective: true
+    retrospective: true,
+    ...STAGE231_DISABLED_FLAGS
   });
+  assert.deepEqual(readIntegrationFeatureFlags({
+    NODE_ENV: "production",
+    V2_INTEGRATION_MAP_RANKING_ENABLED: "true",
+    V2_CONNECTOR_NAVER_SEARCHAD_REAL_ENABLED: "true",
+    V2_CONNECTOR_NAVER_TREND_REAL_ENABLED: "true",
+    V2_CONNECTOR_SNS_REAL_ENABLED: "true",
+    V2_CONNECTOR_OTA_REAL_ENABLED: "true",
+    V2_INTEGRATION_SCHEDULER_ENABLED: "true"
+  }), {
+    company: false,
+    observation: false,
+    auth: false,
+    platformCore: false,
+    freshCompany: false,
+    freshObservation: false,
+    reliability: false,
+    locationCard: false,
+    businessReport: false,
+    strategy: false,
+    execution: false,
+    retrospective: false,
+    ...STAGE231_DISABLED_FLAGS
+  });
+  const stage231Enabled = readIntegrationFeatureFlags({
+    NODE_ENV: "production",
+    V2_INTEGRATION_AUTH_ENABLED: "true",
+    V2_INTEGRATION_PLATFORM_CORE_ENABLED: "true",
+    V2_INTEGRATION_FRESH_COMPANY_ENABLED: "true",
+    V2_INTEGRATION_FRESH_OBSERVATION_ENABLED: "true",
+    V2_INTEGRATION_MAP_RANKING_ENABLED: "true",
+    V2_INTEGRATION_CONNECTOR_RUNTIME_ENABLED: "true",
+    V2_CONNECTOR_TOURISM_REAL_ENABLED: "true",
+    V2_CONNECTOR_NAVER_SEARCHAD_REAL_ENABLED: "true",
+    V2_CONNECTOR_NAVER_TREND_REAL_ENABLED: "true",
+    V2_CONNECTOR_SNS_REAL_ENABLED: "true",
+    V2_CONNECTOR_OTA_REAL_ENABLED: "true",
+    V2_INTEGRATION_SCHEDULER_ENABLED: "true"
+  });
+  assert.deepEqual(Object.fromEntries(
+    Object.keys(STAGE231_DISABLED_FLAGS).map((name) => [name, stage231Enabled[name]])
+  ), Object.fromEntries(Object.keys(STAGE231_DISABLED_FLAGS).map((name) => [name, true])));
+
+  const blockedDiagnostics = integrationFeatureFlagDiagnostics({
+    NODE_ENV: "production",
+    V2_INTEGRATION_MAP_RANKING_ENABLED: "true",
+    V2_CONNECTOR_NAVER_SEARCHAD_REAL_ENABLED: "true",
+    V2_INTEGRATION_SCHEDULER_ENABLED: "true",
+    UNRELATED_SECRET: "must-not-be-serialized"
+  });
+  assert.equal(blockedDiagnostics.schemaVersion, "integration-feature-flags-v1");
+  assert.deepEqual(blockedDiagnostics.flags.mapRanking.blockedBy, ["freshObservation"]);
+  assert.equal(blockedDiagnostics.flags.mapRanking.configured, true);
+  assert.equal(blockedDiagnostics.flags.mapRanking.effective, false);
+  assert.deepEqual(blockedDiagnostics.flags.naverSearchAdReal.blockedBy, ["connectorRuntime"]);
+  assert.deepEqual(blockedDiagnostics.flags.scheduler.blockedBy, ["connectorRuntime"]);
+  const serializedDiagnostics = serializeIntegrationFeatureFlagDiagnostics({
+    NODE_ENV: "production",
+    V2_INTEGRATION_AUTH_ENABLED: "true",
+    V2_INTEGRATION_PLATFORM_CORE_ENABLED: "true",
+    V2_INTEGRATION_FRESH_COMPANY_ENABLED: "true",
+    V2_INTEGRATION_FRESH_OBSERVATION_ENABLED: "true",
+    V2_INTEGRATION_CONNECTOR_RUNTIME_ENABLED: "true",
+    V2_CONNECTOR_NAVER_TREND_REAL_ENABLED: "true",
+    UNRELATED_SECRET: "must-not-be-serialized"
+  });
+  assert.doesNotThrow(() => JSON.parse(serializedDiagnostics));
+  assert.equal(serializedDiagnostics.includes("must-not-be-serialized"), false);
+  assert.equal(JSON.parse(serializedDiagnostics).flags.naverTrendReal.effective, true);
   assert.equal(INTEGRATION_FEATURE_DEFINITIONS.company.scope, "test-only");
   assert.equal(INTEGRATION_FEATURE_DEFINITIONS.observation.scope, "test-only");
   assert.deepEqual(INTEGRATION_FEATURE_DEFINITIONS.company.allowedEnvironments, ["test"]);

@@ -1,5 +1,6 @@
-import { EmptyState, MetricCard, StatusBadge } from "@glamping-datalab-v2/ui";
-import type { CoreCompany } from "./coreClient";
+import { useEffect, useState, type FormEvent } from "react";
+import { Button, EmptyState, MetricCard, StatusBadge } from "@glamping-datalab-v2/ui";
+import { reviewFreshCompanyCoordinates, type CoreCompany } from "./coreClient";
 
 export type CompanyDetailViewState = "loading" | "error" | "empty" | "ready" | "partial";
 
@@ -25,6 +26,80 @@ function StatePanel({ state, onRetry }: { state: "loading" | "error" | "empty"; 
         : <StatusBadge tone={state === "loading" ? "info" : "warning"}>{state === "loading" ? "확인 중" : "fresh-only"}</StatusBadge>}
     />
   </div>;
+}
+
+function CoordinateReviewForm({ company, onReviewed }: { company: CoreCompany; onReviewed?: () => void }) {
+  const coordinate = company.freshDetail?.coordinateReview;
+  const [latitude, setLatitude] = useState(coordinate?.latitude === null || coordinate?.latitude === undefined ? "" : String(coordinate.latitude));
+  const [longitude, setLongitude] = useState(coordinate?.longitude === null || coordinate?.longitude === undefined ? "" : String(coordinate.longitude));
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [feedbackTone, setFeedbackTone] = useState<"success" | "danger">("success");
+
+  useEffect(() => {
+    setLatitude(coordinate?.latitude === null || coordinate?.latitude === undefined ? "" : String(coordinate.latitude));
+    setLongitude(coordinate?.longitude === null || coordinate?.longitude === undefined ? "" : String(coordinate.longitude));
+    setReason("");
+    setFeedback("");
+    setFeedbackTone("success");
+  }, [company.companyId, coordinate?.latitude, coordinate?.longitude, coordinate?.version]);
+
+  const review = async (decision: "approve" | "reject") => {
+    const nextLatitude = Number(latitude);
+    const nextLongitude = Number(longitude);
+    if (!latitude.trim() || !longitude.trim() || !Number.isFinite(nextLatitude) || !Number.isFinite(nextLongitude)) {
+      setFeedbackTone("danger");
+      setFeedback("위도와 경도를 모두 올바르게 입력해 주세요.");
+      return;
+    }
+    if (!reason.trim()) {
+      setFeedbackTone("danger");
+      setFeedback("검수 근거를 입력해 주세요.");
+      return;
+    }
+    setBusy(true);
+    setFeedback("");
+    try {
+      await reviewFreshCompanyCoordinates({
+        companyId: company.companyId,
+        latitude: nextLatitude,
+        longitude: nextLongitude,
+        decision,
+        reason: reason.trim(),
+        expectedVersion: coordinate?.version || 0
+      });
+      setFeedbackTone("success");
+      setFeedback(decision === "approve" ? "좌표 검수를 승인했습니다." : "좌표 후보를 반려했습니다.");
+      onReviewed?.();
+    } catch (error) {
+      setFeedbackTone("danger");
+      setFeedback(error instanceof Error ? error.message : "좌표 검수를 저장하지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void review("approve");
+  };
+
+  return <section className="v2-company-detail-block" data-testid="company-coordinate-review">
+    <header><h3>좌표 검수</h3><StatusBadge tone={coordinate?.state === "approved" ? "success" : "warning"}>{coordinate?.state || "not-collected"}</StatusBadge></header>
+    <p>신규 실수집 좌표만 검수합니다. 승인 좌표는 전국·내 숙소 지도에 우선 반영되고 변경 전후는 audit에 남습니다.</p>
+    <form className="v2-action-form v2-coordinate-review-form" onSubmit={submit}>
+      <label className="v2-field"><span>위도 (WGS84)</span><input type="number" step="0.000001" min="33" max="39.5" value={latitude} onChange={(event) => setLatitude(event.target.value)} /></label>
+      <label className="v2-field"><span>경도 (WGS84)</span><input type="number" step="0.000001" min="124" max="132" value={longitude} onChange={(event) => setLongitude(event.target.value)} /></label>
+      <label className="v2-field"><span>검수 근거</span><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="예: 공식 업체 주소와 지도 위치 대조" /></label>
+      <div className="v2-inline-actions">
+        <Button type="submit" disabled={busy}>좌표 승인</Button>
+        <Button variant="quiet" type="button" disabled={busy} onClick={() => void review("reject")}>후보 반려</Button>
+      </div>
+    </form>
+    <small>관측 {coordinate?.observedAt || "미수집"} · 검수 {coordinate?.reviewedAt || "대기"} · confidence {coordinate?.confidence || "unverified"}</small>
+    {feedback ? <p className="v2-core-notice" data-tone={feedbackTone} role="status">{feedback}</p> : null}
+  </section>;
 }
 
 export function CompanyDetailPanel({ company, role, state, onRetry }: CompanyDetailPanelProps) {
@@ -101,6 +176,8 @@ export function CompanyDetailPanel({ company, role, state, onRetry }: CompanyDet
           </li>)}
         </ol> : <p className="v2-company-detail-empty">신규 수집 이후 확인된 변경 이력이 없습니다.</p>}
       </section>
+
+      {role === "admin" ? <CoordinateReviewForm company={company} onReviewed={onRetry} /> : null}
 
       <section className="v2-company-detail-enrichment" data-testid="company-enrichment-cta">
         <div><strong>{detail.enrichment.ctaLabel}</strong><p>{detail.enrichment.detail}</p>

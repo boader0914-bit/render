@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCoreWorkspace } from "./coreClient";
+import { coreJobRequestBody, normalizeCoreWorkspace } from "./coreClient";
 
 const metadata = {
   stage: 227,
@@ -9,6 +9,44 @@ const metadata = {
 };
 
 describe("Stage 227 compatibility client", () => {
+  it("sends the complete V2 collection scope required by live approval", () => {
+    expect(coreJobRequestBody({
+      clientRequestId: "live-request-0001",
+      kind: "business-search",
+      keyword: "가평 실제 숙소",
+      companyId: "tenant-live-001",
+      regionCode: "가평군",
+      regionLabel: "가평군",
+      targetDate: "2026-08-01",
+      checkIn: "2026-08-01",
+      checkOut: "2026-08-07",
+      discoveryQuery: "가평 실제 숙소",
+      rankingQuery: "가평 글램핑",
+      collectionMode: "precision",
+      collectionPurpose: "revenue_detail",
+      productMode: "all",
+      detailRankRanges: "1-10",
+      bookingRangePlaceLimit: 10
+    })).toEqual({
+      clientRequestId: "live-request-0001",
+      kind: "business-search",
+      keyword: "가평 실제 숙소",
+      tenantCompanyId: "tenant-live-001",
+      regionCode: "가평군",
+      regionLabel: "가평군",
+      targetDate: "2026-08-01",
+      checkIn: "2026-08-01",
+      checkOut: "2026-08-07",
+      discoveryQuery: "가평 실제 숙소",
+      rankingQuery: "가평 글램핑",
+      collectionMode: "precision",
+      collectionPurpose: "revenue_detail",
+      productMode: "all",
+      detailRankRanges: "1-10",
+      bookingRangePlaceLimit: 10
+    });
+  });
+
   it("maps the backend workspace envelope without recomputing V2 business values", () => {
     const workspace = normalizeCoreWorkspace({
       metadata,
@@ -66,6 +104,13 @@ describe("Stage 227 compatibility client", () => {
       expect.objectContaining({ id: "traffic", status: "disabled" }),
       expect.objectContaining({ id: "tourism", status: "ready", configured: false })
     ]));
+    expect(workspace.collectionCapability).toMatchObject({
+      providerMode: "unavailable",
+      executionEnabled: false,
+      realProviderEnabled: false,
+      sourceLabel: "테스트 데이터 · fixture",
+      actionLabel: "실수집 미연결"
+    });
   });
 
   it("keeps an empty response empty and never manufactures historical rows", () => {
@@ -85,5 +130,122 @@ describe("Stage 227 compatibility client", () => {
     expect(workspace.companies).toEqual([]);
     expect(workspace.history).toEqual([]);
     expect(workspace.interests).toEqual([]);
+    expect(workspace.collectionCapability).toMatchObject({ providerMode: "unavailable", executionEnabled: false, sourceLabel: "실수집 미연결" });
+  });
+
+  it("enables only an explicitly confirmed real provider capability", () => {
+    const workspace = normalizeCoreWorkspace({
+      metadata: {
+        ...metadata,
+        source: "empty",
+        capabilities: {
+          collection: {
+            providerMode: "real",
+            executionEnabled: true,
+            realProviderEnabled: true
+          }
+        }
+      },
+      state: { kind: "empty" }
+    }, "admin-collection");
+
+    expect(workspace.collectionCapability).toMatchObject({
+      providerMode: "real",
+      executionEnabled: true,
+      realProviderEnabled: true,
+      testExecutionEnabled: false,
+      sourceLabel: "실제 수집 연결 · 데이터 대기",
+      actionLabel: "실제 수집 실행"
+    });
+  });
+
+  it("accepts the additive Stage 228 collection capability without requiring old clients to send it", () => {
+    const workspace = normalizeCoreWorkspace({
+      metadata: {
+        stage: 228,
+        source: "v2-live-fresh-collection",
+        providerMode: "live",
+        collection: {
+          enabled: true,
+          configured: true,
+          mode: "live",
+          reason: ""
+        }
+      },
+      state: { kind: "ready" }
+    }, "business-activity");
+
+    expect(workspace.source).toBe("v2-live-fresh-collection");
+    expect(workspace.collectionCapability).toMatchObject({
+      providerMode: "real",
+      executionEnabled: true,
+      realProviderEnabled: true,
+      sourceLabel: "V2 신규 실수집",
+      actionLabel: "실제 수집 실행"
+    });
+  });
+
+  it("uses the server reason while keeping a configured synthetic provider fail-closed", () => {
+    const workspace = normalizeCoreWorkspace({
+      metadata: {
+        stage: 228,
+        source: "synthetic-test-data",
+        providerMode: "synthetic",
+        collection: {
+          enabled: false,
+          configured: true,
+          mode: "synthetic",
+          reason: "테스트 provider는 사용자 실수집에 사용할 수 없습니다."
+        }
+      },
+      state: { kind: "empty" }
+    }, "business-activity");
+
+    expect(workspace.collectionCapability).toMatchObject({
+      providerMode: "unavailable",
+      executionEnabled: false,
+      sourceLabel: "테스트 데이터 · fixture",
+      detail: "테스트 provider는 사용자 실수집에 사용할 수 없습니다."
+    });
+  });
+
+  it("keeps explicit fixture execution visibly test-only", () => {
+    const workspace = normalizeCoreWorkspace({
+      metadata: {
+        ...metadata,
+        capabilities: {
+          collection: {
+            providerMode: "fixture",
+            executionEnabled: true,
+            testExecutionEnabled: true
+          }
+        }
+      }
+    }, "business-activity");
+
+    expect(workspace.collectionCapability).toMatchObject({
+      providerMode: "test",
+      executionEnabled: true,
+      realProviderEnabled: false,
+      testExecutionEnabled: true,
+      sourceLabel: "테스트 데이터 · fixture",
+      actionLabel: "테스트 데이터 생성"
+    });
+  });
+
+  it("fails closed when an incomplete capability claims a provider mode", () => {
+    const workspace = normalizeCoreWorkspace({
+      metadata: {
+        ...metadata,
+        capabilities: { collection: { providerMode: "real", executionEnabled: true } }
+      }
+    }, "business-activity");
+
+    expect(workspace.collectionCapability).toMatchObject({
+      providerMode: "unavailable",
+      executionEnabled: false,
+      realProviderEnabled: false,
+      actionLabel: "실수집 미연결"
+    });
   });
 });

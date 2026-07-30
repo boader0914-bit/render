@@ -10,7 +10,8 @@ const {
   FRESH_DATA_SCHEMA_VERSION,
   FRESH_DATA_STORE_KIND,
   FRESH_RUN_STATUSES,
-  assertExampleInvalidUrl,
+  assertFreshPayload,
+  assertFreshSourceUrl,
   assertSyntheticPayload,
   businessSafeProjection,
   cleanId,
@@ -21,8 +22,10 @@ const {
   duplicateCandidateKey,
   freshError,
   normalizeCompanyIdentity,
+  normalizeFreshDataMode,
   normalizeObservation,
   normalizeRawEvidence,
+  normalizeVerifiedCoordinates,
   normalizeVerifiedProfile,
   stableHash
 } = require("../contracts/fresh_data.cjs");
@@ -293,11 +296,18 @@ function emptyIdentityState() {
 }
 
 function emptyOperationsState() {
-  return { schemaVersion: FRESH_DATA_SCHEMA_VERSION, runs: [] };
+  return { schemaVersion: FRESH_DATA_SCHEMA_VERSION, runs: [], interests: [], providerReservations: [] };
 }
 
 function emptyVerifiedState() {
   return { schemaVersion: FRESH_DATA_SCHEMA_VERSION, profiles: {}, reviews: [] };
+}
+
+function latestCoordinateReview(verifiedState, companyId) {
+  return (Array.isArray(verifiedState?.reviews) ? verifiedState.reviews : [])
+    .filter((row) => row.reviewKind === "coordinates" && row.companyId === companyId)
+    .sort((left, right) => Number(left.version || 0) - Number(right.version || 0))
+    .at(-1) || null;
 }
 
 function emptyProjectionState(projection) {
@@ -530,6 +540,10 @@ function createFreshIntegrationRepository(options = {}) {
     const manifest = assertManifest(await readJson(STATE_FILES.manifest));
     const identity = assertSchemaVersion(await readJson(STATE_FILES.identity), "identity");
     const operations = assertSchemaVersion(await readJson(STATE_FILES.operations), "operations");
+    operations.interests = Array.isArray(operations.interests) ? operations.interests : [];
+    operations.providerReservations = Array.isArray(operations.providerReservations)
+      ? operations.providerReservations
+      : [];
     const verified = assertSchemaVersion(await readJson(STATE_FILES.verified), "verified");
     const derived = assertSchemaVersion(await readJson(STATE_FILES.derived), "derived");
     const businessSafe = assertSchemaVersion(await readJson(STATE_FILES.businessSafe), "business-safe");
@@ -588,7 +602,7 @@ function createFreshIntegrationRepository(options = {}) {
     const audit = await appendAuditLocked(event, actor, details);
     cache.manifest.revision += 1;
     cache.manifest.updatedAt = nowIso(clock);
-    cache.manifest.providerCalls = 0;
+    cache.manifest.providerCalls = Math.max(0, Number(cache.manifest.providerCalls || 0));
     cache.manifest.legacyRuntimeReads = 0;
     cache.manifest.legacyRuntimeCopies = 0;
     await writeJson(STATE_FILES.manifest, cache.manifest);
@@ -708,7 +722,7 @@ function createFreshIntegrationRepository(options = {}) {
       },
       legacyRuntimeReads: 0,
       legacyRuntimeCopies: 0,
-      providerCalls: 0
+      providerCalls: Math.max(0, Number(cache.manifest.providerCalls || 0))
     };
   }
 
@@ -727,15 +741,18 @@ function createFreshIntegrationRepository(options = {}) {
   }
 
   async function seedTarget(payload = {}, actor = "system") {
-    if (payload.synthetic !== true) throw freshError("Stage 228 targets must be synthetic", "FRESH_SYNTHETIC_REQUIRED");
+    const recordMode = normalizeFreshDataMode(payload);
     const name = cleanText(payload.name || payload.companyName || payload.targetName, 180);
     const region = cleanText(payload.region || payload.regionLabel || payload.regionCode, 160);
     if (!name || !region) throw freshError("Target name and region are required", "FRESH_TARGET_INVALID");
-    const sourceUrl = assertExampleInvalidUrl(payload.sourceUrl || "https://seed.example.invalid/stage228");
+    const sourceUrl = assertFreshSourceUrl(
+      payload.sourceUrl || (recordMode.synthetic ? "https://seed.example.invalid/stage228" : ""),
+      payload
+    );
     const targetId = cleanText(payload.targetId, 160)
       ? cleanId(payload.targetId, "targetId")
       : `target_${stableHash(`${name}|${region}|${sourceUrl}`, 20, "sha256")}`;
-    const seedSource = cleanText(payload.seedSource || payload.source || "synthetic-seed", 80);
+    const seedSource = cleanText(payload.seedSource || payload.source || (recordMode.synthetic ? "synthetic-seed" : "v2-live-user-seed"), 80);
     const signature = requestSignature({ name, region, sourceUrl, seedSource });
     return mutate("target.seeded", actor, async (state) => {
       const existing = state.identity.targets.find((row) => row.targetId === targetId);
@@ -753,7 +770,8 @@ function createFreshIntegrationRepository(options = {}) {
         region,
         seedSource,
         sourceUrl,
-        synthetic: true,
+        synthetic: recordMode.synthetic,
+        dataMode: recordMode.dataMode,
         status: "pending-discovery",
         companyId: "",
         requestSignature: signature,
@@ -783,6 +801,7 @@ function createFreshIntegrationRepository(options = {}) {
   }
 
   function companyFromIdentity(companyId, identity, payload, at) {
+    const recordMode = normalizeFreshDataMode(payload);
     return {
       schemaVersion: FRESH_DATA_SCHEMA_VERSION,
       companyId,
@@ -801,8 +820,9 @@ function createFreshIntegrationRepository(options = {}) {
       bookingBusinessIds: identity.bookingBusinessId ? [identity.bookingBusinessId] : [],
       sourceKeys: [...identity.sourceKeys],
       identityConfidence: identity.placeId ? "certain" : identity.bookingBusinessId ? "high" : identity.addressKey ? "medium" : "review",
-      synthetic: true,
-      source: cleanText(payload.source || "synthetic-discovery", 80),
+      synthetic: recordMode.synthetic,
+      dataMode: recordMode.dataMode,
+      source: cleanText(payload.source || (recordMode.synthetic ? "synthetic-discovery" : "v2-live-discovery"), 80),
       firstSeenAt: at,
       lastSeenAt: at,
       firstRunId: cleanText(payload.runId, 160),
@@ -815,10 +835,10 @@ function createFreshIntegrationRepository(options = {}) {
   }
 
   async function discoverCompany(payload = {}, actor = "system") {
-    if (payload.synthetic !== true) throw freshError("Stage 228 discovery must be synthetic", "FRESH_SYNTHETIC_REQUIRED");
+    const recordMode = normalizeFreshDataMode(payload);
     const identity = normalizeCompanyIdentity(payload);
-    const source = cleanText(payload.source || "synthetic-discovery", 80);
-    const sourceUrl = assertExampleInvalidUrl(payload.sourceUrl);
+    const source = cleanText(payload.source || (recordMode.synthetic ? "synthetic-discovery" : "v2-live-discovery"), 80);
+    const sourceUrl = assertFreshSourceUrl(payload.sourceUrl, payload);
     const observedAt = new Date(Date.parse(cleanText(payload.observedAt, 40)) || Number(clock())).toISOString();
     const targetId = cleanText(payload.targetId, 160) ? cleanId(payload.targetId, "targetId") : "";
     const runId = cleanText(payload.runId, 160) ? cleanId(payload.runId, "runId") : "";
@@ -853,7 +873,17 @@ function createFreshIntegrationRepository(options = {}) {
         if (!state.identity.duplicateCandidates.some((row) => row.candidateId === candidateId)) {
           state.identity.duplicateCandidates.push(candidate);
         }
-        const discovery = { discoveryId, requestSignature: signature, targetId, runId, companyId: "", duplicateCandidateId: candidateId, observedAt, synthetic: true };
+        const discovery = {
+          discoveryId,
+          requestSignature: signature,
+          targetId,
+          runId,
+          companyId: "",
+          duplicateCandidateId: candidateId,
+          observedAt,
+          synthetic: recordMode.synthetic,
+          dataMode: recordMode.dataMode
+        };
         state.identity.discoveries.push(discovery);
         await writeJson(STATE_FILES.identity, state.identity);
         return {
@@ -887,6 +917,11 @@ function createFreshIntegrationRepository(options = {}) {
         mergeUnique(company, "sourceKeys", identity.sourceKeys);
         company.lastSeenAt = [company.lastSeenAt, observedAt].filter(Boolean).sort().at(-1);
         company.lastRunId = runId || company.lastRunId;
+        if (!recordMode.synthetic) {
+          company.synthetic = false;
+          company.dataMode = "live";
+          company.source = source;
+        }
       }
       const relatedRun = runId ? state.operations.runs.find((row) => row.runId === runId) : null;
       const tenantCompanyId = cleanText(payload.tenantCompanyId || relatedRun?.input?.tenantCompanyId || relatedRun?.tenantCompanyId, 160);
@@ -905,7 +940,8 @@ function createFreshIntegrationRepository(options = {}) {
             companyId: proposedId,
             source,
             firstObservedAt: observedAt,
-            synthetic: true
+            synthetic: recordMode.synthetic,
+            dataMode: recordMode.dataMode
           });
         }
       }
@@ -918,7 +954,8 @@ function createFreshIntegrationRepository(options = {}) {
         observedAt,
         source,
         sourceUrl,
-        synthetic: true
+        synthetic: recordMode.synthetic,
+        dataMode: recordMode.dataMode
       };
       state.identity.discoveries.push(discovery);
       const target = targetId ? state.identity.targets.find((row) => row.targetId === targetId) : null;
@@ -984,28 +1021,42 @@ function createFreshIntegrationRepository(options = {}) {
   }
 
   function normalizeRunPayload(payload = {}) {
-    if (payload.synthetic !== true) throw freshError("Stage 228 runs must use the synthetic provider", "FRESH_SYNTHETIC_REQUIRED");
+    const recordMode = normalizeFreshDataMode(payload);
     const clientRequestId = cleanId(payload.clientRequestId, "clientRequestId");
     const kind = cleanText(payload.kind || "fresh-company-vertical-slice", 80);
     const targetId = cleanText(payload.targetId, 160) ? cleanId(payload.targetId, "targetId") : "";
     const companyId = cleanText(payload.companyId, 160) ? cleanId(payload.companyId, "companyId") : "";
-    const sourceUrl = assertExampleInvalidUrl(payload.sourceUrl || "https://collector.example.invalid/stage228");
+    const sourceUrl = assertFreshSourceUrl(
+      payload.sourceUrl || (recordMode.synthetic ? "https://collector.example.invalid/stage228" : ""),
+      payload
+    );
     const input = clone(payload.input || payload.request || {});
-    assertSyntheticPayload(input, "run.input");
+    assertFreshPayload(input, "run.input", recordMode);
+    const collectionPlan = clone(payload.collectionPlan || null);
+    assertFreshPayload(collectionPlan, "run.collectionPlan", recordMode);
     return {
       clientRequestId,
       kind,
       targetId,
       companyId,
       sourceUrl,
-      provider: "synthetic-stage228",
-      synthetic: true,
+      provider: cleanText(payload.provider || (recordMode.synthetic ? "synthetic-stage228" : "v2-live"), 120),
+      synthetic: recordMode.synthetic,
+      dataMode: recordMode.dataMode,
       requestedModes: [...new Set((Array.isArray(payload.requestedModes) ? payload.requestedModes : ["quick", "detail", "ota"])
         .map((mode) => cleanText(mode, 20).toLowerCase()))],
+      executionStages: [...new Set((Array.isArray(payload.executionStages)
+        ? payload.executionStages
+        : ["discovery", "quick", "detail", "ota", "finalize"])
+        .map((stage) => cleanText(stage, 20).toLowerCase()))],
       input,
       actorAccountId: cleanText(payload.actorAccountId, 160),
       actorRole: cleanText(payload.actorRole, 48),
       collectionKind: cleanText(payload.collectionKind || "fresh-company-vertical-slice", 80),
+      detailRankRanges: cleanText(payload.detailRankRanges, 80),
+      estimatedTotalSeconds: Math.max(0, Math.round(Number(payload.estimatedTotalSeconds || 0))),
+      estimatedCompleteAt: cleanText(payload.estimatedCompleteAt, 40),
+      collectionPlan,
       currentStage: cleanText(payload.currentStage || "queued", 120),
       checkpoint: clone(payload.checkpoint || {}),
       request: clone(payload.request || {})
@@ -1014,7 +1065,7 @@ function createFreshIntegrationRepository(options = {}) {
 
   async function createRun(payload = {}, actor = "system") {
     const normalized = normalizeRunPayload(payload);
-    assertSyntheticPayload(normalized.request, "run.request");
+    assertFreshPayload(normalized.request, "run.request", normalizeFreshDataMode(normalized));
     const computedSignature = requestSignature(normalized);
     const signature = /^[a-f0-9]{64}$/i.test(cleanText(payload.requestSignature, 80))
       ? cleanText(payload.requestSignature, 80).toLowerCase()
@@ -1203,7 +1254,7 @@ function createFreshIntegrationRepository(options = {}) {
       }
       run.failure = {
         code: cleanText(payload.code || "FRESH_COLLECTION_FAILED", 120),
-        message: cleanText(payload.message || "Synthetic collection failed", 500),
+        message: cleanText(payload.message || "Fresh collection failed", 500),
         retryable,
         at
       };
@@ -1322,6 +1373,202 @@ function createFreshIntegrationRepository(options = {}) {
     });
   }
 
+  async function listInterests(filter = {}) {
+    await ensureReadReady();
+    const actorAccountId = cleanText(filter.actorAccountId, 160);
+    const tenantCompanyId = cleanText(filter.tenantCompanyId, 160);
+    const rows = Array.isArray(cache.operations.interests) ? cache.operations.interests : [];
+    return clone(rows.filter((row) => (
+      (!actorAccountId || row.actorAccountId === actorAccountId)
+      && (!tenantCompanyId || row.tenantCompanyId === tenantCompanyId)
+    )));
+  }
+
+  async function addInterest(payload = {}, actor = "account") {
+    const actorAccountId = cleanId(payload.actorAccountId, "actorAccountId");
+    const tenantCompanyId = cleanId(payload.tenantCompanyId, "tenantCompanyId");
+    const companyId = cleanId(payload.companyId, "companyId");
+    const interestId = `interest_${stableHash(`${actorAccountId}|${tenantCompanyId}|${companyId}`, 24, "sha256")}`;
+    return mutate("interest.added", actor, async (state) => {
+      state.operations.interests = Array.isArray(state.operations.interests) ? state.operations.interests : [];
+      const company = state.identity.companies[companyId];
+      if (!company || company.synthetic !== false || company.dataMode !== "live") {
+        throw freshError("Interest company must be a newly live-collected company", "FRESH_COMPANY_NOT_COLLECTED", 404);
+      }
+      if (!(company.tenantCompanyIds || []).includes(tenantCompanyId)) {
+        throw freshError("Interest company belongs to another tenant", "FRESH_TENANT_FORBIDDEN", 403);
+      }
+      const existing = state.operations.interests.find((row) => row.interestId === interestId);
+      if (existing) return { changed: false, value: { interest: existing, idempotent: true } };
+      const interest = {
+        schemaVersion: FRESH_DATA_SCHEMA_VERSION,
+        interestId,
+        actorAccountId,
+        tenantCompanyId,
+        companyId,
+        createdAt: nowIso(clock)
+      };
+      state.operations.interests.push(interest);
+      await writeJson(STATE_FILES.operations, state.operations);
+      return {
+        value: { interest, idempotent: false },
+        details: { interestId, actorAccountId, tenantCompanyId, companyId }
+      };
+    });
+  }
+
+  async function removeInterest(payload = {}, actor = "account") {
+    const actorAccountId = cleanId(payload.actorAccountId, "actorAccountId");
+    const tenantCompanyId = cleanId(payload.tenantCompanyId, "tenantCompanyId");
+    const companyId = cleanId(payload.companyId, "companyId");
+    return mutate("interest.removed", actor, async (state) => {
+      state.operations.interests = Array.isArray(state.operations.interests) ? state.operations.interests : [];
+      const before = state.operations.interests.length;
+      state.operations.interests = state.operations.interests.filter((row) => !(
+        row.actorAccountId === actorAccountId
+        && row.tenantCompanyId === tenantCompanyId
+        && row.companyId === companyId
+      ));
+      const removed = before - state.operations.interests.length;
+      if (!removed) return { changed: false, value: { removed: 0, idempotent: true } };
+      await writeJson(STATE_FILES.operations, state.operations);
+      return {
+        value: { removed, idempotent: false },
+        details: { actorAccountId, tenantCompanyId, companyId, removed }
+      };
+    });
+  }
+
+  async function reserveProviderRequest(payload = {}, actor = "worker") {
+    const provider = cleanText(payload.provider, 120);
+    const stage = cleanText(payload.stage, 40).toLowerCase();
+    const runId = cleanId(payload.runId, "runId");
+    const requestKey = cleanId(payload.requestKey, "requestKey");
+    const approvalId = cleanId(payload.approvalId, "approvalId");
+    const approvalDigest = cleanText(payload.approvalDigest, 64).toLowerCase();
+    const day = cleanText(payload.day, 10);
+    const dayTimestamp = Date.parse(`${day}T00:00:00.000Z`);
+    if (!provider || !stage || !/^[a-f0-9]{64}$/.test(approvalDigest) || !/^\d{4}-\d{2}-\d{2}$/.test(day)
+      || !Number.isFinite(dayTimestamp) || new Date(dayTimestamp).toISOString().slice(0, 10) !== day) {
+      throw freshError("Provider reservation identity is invalid", "FRESH_PROVIDER_RESERVATION_INVALID");
+    }
+    const caps = {
+      perRun: Math.floor(Number(payload.caps?.perRun || 0)),
+      perDay: Math.floor(Number(payload.caps?.perDay || 0)),
+      providerPerRun: Math.floor(Number(payload.caps?.providerPerRun || 0)),
+      providerPerDay: Math.floor(Number(payload.caps?.providerPerDay || 0)),
+      maximumCostMicros: Math.floor(Number(payload.caps?.maximumCostMicros ?? -1))
+    };
+    if ([caps.perRun, caps.perDay, caps.providerPerRun, caps.providerPerDay].some((value) => !Number.isInteger(value) || value < 1)
+      || !Number.isInteger(caps.maximumCostMicros) || caps.maximumCostMicros < 0) {
+      throw freshError("Provider reservation caps must be explicit positive integers with a non-negative cost cap", "FRESH_PROVIDER_QUOTA_REQUIRED", 503);
+    }
+    const costMicros = Math.max(0, Math.floor(Number(payload.costMicros || 0)));
+    const targetHash = cleanText(payload.targetHash, 128);
+    const currency = cleanText(payload.currency || "KRW", 8).toUpperCase();
+    const reservationId = cleanText(payload.reservationId, 160)
+      ? cleanId(payload.reservationId, "reservationId")
+      : `provider_reservation_${cleanText(idFactory(), 80).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 48)}`;
+    return mutate("provider.request-reserved", actor, async (state) => {
+      findRun(state, runId);
+      state.operations.providerReservations = Array.isArray(state.operations.providerReservations)
+        ? state.operations.providerReservations
+        : [];
+      const replay = state.operations.providerReservations.find((row) => row.reservationId === reservationId);
+      if (replay) {
+        const expected = { approvalId, approvalDigest, provider, stage, runId, requestKey, targetHash, day, costMicros, currency, caps };
+        const actual = {
+          approvalId: replay.approvalId,
+          approvalDigest: replay.approvalDigest,
+          provider: replay.provider,
+          stage: replay.stage,
+          runId: replay.runId,
+          requestKey: replay.requestKey,
+          targetHash: replay.targetHash,
+          day: replay.day,
+          costMicros: replay.costMicros,
+          currency: replay.currency,
+          caps: replay.caps
+        };
+        if (requestSignature(expected) !== requestSignature(actual)) {
+          throw freshError("Provider reservationId is bound to different request scope", "FRESH_PROVIDER_RESERVATION_CONFLICT", 409);
+        }
+        return { changed: false, value: { reservation: replay, idempotent: true } };
+      }
+      const rows = state.operations.providerReservations;
+      const runRows = rows.filter((row) => row.runId === runId);
+      const dayRows = rows.filter((row) => row.day === day);
+      const providerRunRows = runRows.filter((row) => row.provider === provider);
+      const providerDayRows = dayRows.filter((row) => row.provider === provider);
+      const approvedCostMicros = rows
+        .filter((row) => row.approvalId === approvalId)
+        .reduce((sum, row) => sum + Math.max(0, Number(row.costMicros || 0)), 0);
+      const exceeded = runRows.length >= caps.perRun
+        || dayRows.length >= caps.perDay
+        || providerRunRows.length >= caps.providerPerRun
+        || providerDayRows.length >= caps.providerPerDay
+        || approvedCostMicros + costMicros > caps.maximumCostMicros;
+      if (exceeded) {
+        throw freshError("Live provider request quota or approved cost cap exceeded", "FRESH_PROVIDER_QUOTA_EXCEEDED", 429);
+      }
+      const reservation = {
+        schemaVersion: FRESH_DATA_SCHEMA_VERSION,
+        reservationId,
+        approvalId,
+        approvalDigest,
+        provider,
+        stage,
+        runId,
+        requestKey,
+        targetHash,
+        day,
+        costMicros,
+        currency,
+        caps: clone(caps),
+        reservedAt: nowIso(clock)
+      };
+      rows.push(reservation);
+      state.manifest.providerCalls = Math.max(0, Number(state.manifest.providerCalls || 0)) + 1;
+      await writeJson(STATE_FILES.operations, state.operations);
+      return {
+        value: { reservation, idempotent: false, providerCalls: state.manifest.providerCalls },
+        details: {
+          reservationId,
+          approvalId,
+          approvalDigest,
+          provider,
+          stage,
+          runId,
+          requestKey,
+          day,
+          costMicros,
+          currency: reservation.currency,
+          caps: reservation.caps,
+          providerCalls: state.manifest.providerCalls
+        }
+      };
+    });
+  }
+
+  async function recordProviderUsage(payload = {}, actor = "worker") {
+    const calls = Math.max(0, Math.min(10_000, Math.floor(Number(payload.calls || 0))));
+    if (!calls) return { ok: true, recorded: 0, providerCalls: (await diagnostics()).providerCalls };
+    const provider = cleanText(payload.provider, 120);
+    const stage = cleanText(payload.stage, 40);
+    const runId = cleanText(payload.runId, 160) ? cleanId(payload.runId, "runId") : "";
+    if (!provider || !stage || !runId) {
+      throw freshError("Provider usage requires provider, stage, and runId", "FRESH_PROVIDER_USAGE_INVALID");
+    }
+    return mutate("provider.calls-recorded", actor, async (state) => {
+      findRun(state, runId);
+      state.manifest.providerCalls = Math.max(0, Number(state.manifest.providerCalls || 0)) + calls;
+      return {
+        value: { ok: true, recorded: calls, providerCalls: state.manifest.providerCalls },
+        details: { provider, stage, runId, calls, providerCalls: state.manifest.providerCalls }
+      };
+    });
+  }
+
   async function reviewVerifiedProfile(payload = {}, actor = "admin") {
     const companyId = cleanId(payload.companyId, "companyId");
     const decision = cleanText(payload.decision, 32).toLowerCase();
@@ -1377,6 +1624,77 @@ function createFreshIntegrationRepository(options = {}) {
     });
   }
 
+  async function reviewCoordinates(payload = {}, actor = "admin") {
+    const companyId = cleanId(payload.companyId, "companyId");
+    const decision = cleanText(payload.decision, 32).toLowerCase();
+    if (!["approve", "reject"].includes(decision)) throw freshError("Coordinate review decision must be approve or reject", "FRESH_COORDINATE_REVIEW_DECISION_INVALID");
+    if (payload.expectedVersion === undefined || payload.expectedVersion === null || payload.expectedVersion === "") {
+      throw freshError("Coordinate review expectedVersion is required", "FRESH_COORDINATE_REVIEW_VERSION_REQUIRED", 409);
+    }
+    const expectedVersion = Number(payload.expectedVersion);
+    if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+      throw freshError("Coordinate review expectedVersion is invalid", "FRESH_COORDINATE_REVIEW_VERSION_INVALID", 409);
+    }
+    const candidate = normalizeVerifiedCoordinates(payload.coordinates || payload.profilePatch || payload.profile || {});
+    const reason = cleanText(payload.reason, 1000);
+    if (!reason) throw freshError("Coordinate review reason is required", "FRESH_COORDINATE_REVIEW_REASON_REQUIRED");
+    const reviewRequestId = cleanText(payload.reviewRequestId, 160)
+      ? cleanId(payload.reviewRequestId, "reviewRequestId")
+      : `coordinate_review_${stableHash(`${companyId}|${decision}|${expectedVersion}|${requestSignature(candidate)}|${reason}`, 24, "sha256")}`;
+    return mutate(`coordinates.${decision === "approve" ? "approved" : "rejected"}`, actor, async (state) => {
+      if (!state.identity.companies[companyId]) throw freshError("Company not found", "FRESH_COMPANY_NOT_FOUND", 404);
+      const replay = state.verified.reviews.find((row) => row.reviewKind === "coordinates" && row.reviewRequestId === reviewRequestId);
+      if (replay) return { changed: false, value: { review: replay, coordinateReview: replay, idempotent: true } };
+      const before = latestCoordinateReview(state.verified, companyId);
+      const currentVersion = Number(before?.version || 0);
+      if (currentVersion !== expectedVersion) {
+        throw freshError("Coordinate review version conflict", "FRESH_COORDINATE_REVIEW_VERSION_CONFLICT", 409);
+      }
+      const reviewedAt = nowIso(clock);
+      const approvedCoordinates = decision === "approve" ? candidate : clone(before?.approvedCoordinates || null);
+      const approvedAt = decision === "approve" ? reviewedAt : cleanText(before?.approvedAt || before?.reviewedAt, 40);
+      const review = {
+        schemaVersion: FRESH_DATA_SCHEMA_VERSION,
+        reviewKind: "coordinates",
+        reviewRequestId,
+        companyId,
+        decision,
+        status: decision === "approve" ? "approved" : "rejected",
+        version: currentVersion + 1,
+        candidate,
+        approvedCoordinates,
+        approvedAt,
+        reason,
+        reviewedAt,
+        reviewedBy: actorLabel(actor),
+        reviewedByType: normalizeActor(actor).type,
+        reviewedByRole: normalizeActor(actor).role
+      };
+      state.verified.reviews.push(review);
+      const company = state.identity.companies[companyId];
+      const observations = state.observations.filter((row) => row.companyId === companyId);
+      const verifiedProfile = state.verified.profiles[companyId] || null;
+      const derived = state.derived.profiles[companyId] || deriveCompanyQuality(company, observations, verifiedProfile, clock());
+      const existingChanges = state.businessSafe.profiles[companyId]?.changes || [];
+      state.businessSafe.profiles[companyId] = businessSafeProjection(company, verifiedProfile, derived, observations, {
+        changes: existingChanges,
+        coordinateReview: review
+      });
+      await writeJson(STATE_FILES.verified, state.verified);
+      await writeJson(STATE_FILES.businessSafe, state.businessSafe);
+      return {
+        value: { review, coordinateReview: review, idempotent: false },
+        details: {
+          companyId,
+          decision,
+          reason,
+          before: before ? { status: before.status, version: before.version, approvedCoordinates: before.approvedCoordinates || null } : null,
+          after: { status: review.status, version: review.version, candidate, approvedCoordinates, approvedAt }
+        }
+      };
+    });
+  }
+
   async function refreshDerivedProfile(companyId, actor = "system") {
     const id = cleanId(companyId, "companyId");
     return mutate("company.projection-refreshed", actor, async (state) => {
@@ -1389,7 +1707,7 @@ function createFreshIntegrationRepository(options = {}) {
         const beforeProfile = row.before?.profile || {};
         const afterProfile = row.after?.profile || {};
         const labels = { primaryName: "업체명", region: "지역", address: "주소", phone: "전화", website: "웹사이트", notes: "검수 메모" };
-        return Object.keys(labels).filter((field) => beforeProfile[field] !== afterProfile[field]).map((field) => ({
+        return Object.keys(labels).filter((field) => cleanText(beforeProfile[field], 1000) !== cleanText(afterProfile[field], 1000)).map((field) => ({
           changeId: `${row.reviewRequestId}:${field}`,
           fieldLabel: labels[field],
           previousValue: beforeProfile[field] || "",
@@ -1397,7 +1715,10 @@ function createFreshIntegrationRepository(options = {}) {
           changedAt: row.reviewedAt
         }));
       });
-      const publicProfile = businessSafeProjection(company, verified, derived, observations, { changes });
+      const publicProfile = businessSafeProjection(company, verified, derived, observations, {
+        changes,
+        coordinateReview: latestCoordinateReview(state.verified, id)
+      });
       state.derived.profiles[id] = derived;
       state.businessSafe.profiles[id] = publicProfile;
       await writeJson(STATE_FILES.derived, state.derived);
@@ -1463,10 +1784,16 @@ function createFreshIntegrationRepository(options = {}) {
         throw freshError("Business tenant cannot access this company", "FRESH_TENANT_FORBIDDEN", 403);
       }
       return clone(cache.businessSafe.profiles[id]
-        || businessSafeProjection(company, cache.verified.profiles[id] || null, cache.derived.profiles[id] || null, cache.observations.filter((row) => row.companyId === id)));
+        || businessSafeProjection(company, cache.verified.profiles[id] || null, cache.derived.profiles[id] || null, cache.observations.filter((row) => row.companyId === id), {
+          coordinateReview: latestCoordinateReview(cache.verified, id)
+        }));
     }
     if (projection === "derived") return clone(cache.derived.profiles[id] || null);
-    if (projection === "verified") return clone(cache.verified.profiles[id] || null);
+    if (projection === "verified") {
+      const verified = clone(cache.verified.profiles[id] || null);
+      const coordinateReview = clone(latestCoordinateReview(cache.verified, id));
+      return verified ? { ...verified, coordinateReview } : (coordinateReview ? { coordinateReview } : null);
+    }
     return clone(company);
   }
 
@@ -1661,7 +1988,8 @@ function createFreshIntegrationRepository(options = {}) {
       companyCount: Object.keys(cache.identity.companies).length,
       companyIdCollisions: 0,
       duplicateCandidateCount: cache.identity.duplicateCandidates.length,
-      providerCalls: 0,
+      providerCalls: Math.max(0, Number(cache.manifest.providerCalls || 0)),
+      providerReservations: (cache.operations.providerReservations || []).length,
       legacyRuntimeReads: 0,
       legacyRuntimeCopies: 0,
       repositoryFileReads: metrics.repositoryFileReads,
@@ -1687,7 +2015,13 @@ function createFreshIntegrationRepository(options = {}) {
     completeRun,
     appendRawEvidence,
     appendObservations,
+    listInterests,
+    addInterest,
+    removeInterest,
+    reserveProviderRequest,
+    recordProviderUsage,
     listObservations,
+    reviewCoordinates,
     reviewVerifiedProfile,
     refreshDerivedProfile,
     getCompany,
@@ -1717,6 +2051,7 @@ module.exports = {
   emptyOperationsState,
   emptyProjectionState,
   emptyVerifiedState,
+  latestCoordinateReview,
   normalizeActor,
   pathsOverlap,
   projectLegacyBoundaries,

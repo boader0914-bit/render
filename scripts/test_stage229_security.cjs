@@ -9,6 +9,9 @@ const {
   createInsightsRuntime
 } = require("./integration/bootstrap/insights_runtime.cjs");
 const {
+  INSIGHTS_FIXTURE_VERSION
+} = require("./integration/contracts/insights.cjs");
+const {
   createInsightsRepository
 } = require("./integration/repositories/insights_store.cjs");
 const {
@@ -17,6 +20,7 @@ const {
   createMockFreshLayer,
   networkAttempts,
   networkGuardEnvironment,
+  session,
   startServer,
   stopServer,
   temporaryDirectory
@@ -213,6 +217,276 @@ async function assertRuntimeBoundary() {
   }
 }
 
+async function assertProductionProviderDisabled() {
+  const freshRoot = temporaryDirectory("stage229-production-disabled-fresh-");
+  const legacyRoot = temporaryDirectory("stage229-production-disabled-legacy-");
+  const fresh = createMockFreshLayer();
+  for (const company of fresh.companies.values()) {
+    company.synthetic = false;
+    company.dataMode = "live";
+  }
+  for (const rows of fresh.observations.values()) {
+    for (const row of rows) {
+      row.synthetic = false;
+      row.dataMode = "live";
+    }
+  }
+  const syntheticOnlyCompany = fresh.companies.get("cmp_place_stage229_other_tenant");
+  if (syntheticOnlyCompany) {
+    syntheticOnlyCompany.synthetic = true;
+    syntheticOnlyCompany.dataMode = "test-fixture";
+  }
+  for (const row of fresh.observations.get("cmp_place_stage229_other_tenant") || []) {
+    row.synthetic = true;
+    row.dataMode = "test-fixture";
+  }
+  const env = {
+    NODE_ENV: "production",
+    V2_INTEGRATION_DATA_DIR: freshRoot,
+    DATA_DIR: legacyRoot,
+    CONFIG_DIR: path.join(legacyRoot, "config"),
+    OUTPUTS_DIR: path.join(legacyRoot, "outputs")
+  };
+  const authRuntime = {
+    service: fresh.authService,
+    http: {
+      requestContext() { return {}; },
+      sessionForRequest() { return null; }
+    }
+  };
+  const freshRuntime = {
+    repository: fresh.freshRepository,
+    service: fresh.freshService,
+    async diagnostics() { return { storeId: "fresh_store_stage229_production_disabled" }; }
+  };
+  const clock = () => Date.parse("2026-07-29T00:00:00.000Z");
+  let serial = 0;
+  try {
+    assert.throws(
+      () => createInsightsRuntime({
+        env: { ...env, V2_INTEGRATION_INSIGHTS_PROVIDER: "deterministic-fixture" },
+        projectRoot: ROOT,
+        authRuntime,
+        freshRuntime,
+        send() {},
+        async parseBody() { return {}; }
+      }),
+      (error) => errorCode(error) === "INSIGHTS_FIXTURE_PROVIDER_TEST_ONLY",
+      "production must reject an explicitly requested deterministic fixture"
+    );
+
+    const runtime = createInsightsRuntime({
+      env,
+      projectRoot: ROOT,
+      authRuntime,
+      freshRuntime,
+      capabilities: { reliability: true, locationCard: true, businessReport: true },
+      send() {},
+      async parseBody() { return {}; },
+      clock,
+      idFactory: () => `stage229production${String(++serial).padStart(6, "0")}`,
+      legacyPaths: [legacyRoot, path.join(legacyRoot, "config"), path.join(legacyRoot, "outputs")]
+    });
+    assert.deepEqual(runtime.contract, {
+      stage: 229,
+      providerId: "",
+      providerMode: "disabled",
+      dataBoundary: "fresh-integration-stage229-only",
+      externalProviderCalls: 0,
+      credentialReads: 0,
+      legacyRuntimeReads: 0,
+      legacyRuntimeCopies: 0,
+      productionMutations: 0
+    });
+    await runtime.initialize();
+    assert.equal(runtime.provider.enabled, false);
+    assert.equal(typeof runtime.provider.collect, "undefined");
+    assert.deepEqual(runtime.service.metadata(), {
+      stage: 229,
+      algorithmVersion: "v2-stage229-location-forecast-v1",
+      fixtureVersion: "",
+      providerId: "",
+      providerStatus: "provider-not-configured",
+      fixtureMode: false,
+      dataBoundary: "fresh-integration-stage229-only",
+      capabilities: { reliability: true, locationCard: true, businessReport: true },
+      externalProviderCalls: 0,
+      credentialReads: 0,
+      legacyRuntimeReads: 0,
+      legacyRuntimeCopies: 0,
+      productionMutations: 0
+    });
+
+    const admin = session("admin", "", "production-disabled-admin");
+    const business = session("business", "tenant_stage229_one", "production-disabled-business");
+    const requested = await runtime.service.requestLocationCard(business, {
+      companyId: "cmp_place_stage229_tenant",
+      clientRequestId: "stage229-production-disabled-card-0001"
+    });
+    const draft = await runtime.service.createLocationDraft(admin, requested.request.cardId, {
+      expectedVersion: 1,
+      month: "2026-07",
+      forecastMonth: "2026-08",
+      editorial: { headline: "실제 신호 미수집 입지 초안" }
+    });
+    assert.equal(draft.card.synthetic, false);
+    assert.equal(draft.card.sourceLabel, "실제 신호 미수집");
+    assert.equal(draft.card.evidence.fixtureVersion, "");
+    assert.notEqual(draft.card.state, "ready");
+
+    const reportRequest = await runtime.service.createMonthlyReport(admin, {
+      companyId: "cmp_place_stage229_tenant",
+      tenantCompanyId: "tenant_stage229_one",
+      clientRequestId: "stage229-production-disabled-report-0001",
+      month: "2026-08"
+    });
+    const reportDraft = await runtime.service.createReportDraft(admin, reportRequest.report.reportId, {
+      expectedVersion: 1,
+      forecastMonth: "2026-08",
+      editorial: { headline: "실제 신호 미수집 월간 초안" }
+    });
+    assert.equal(reportDraft.report.synthetic, false);
+    assert.equal(reportDraft.report.sourceLabel, "실제 신호 미수집");
+    assert.equal(reportDraft.report.evidence.fixtureVersion, "");
+    assert.equal(reportDraft.report.state, "insufficient-data");
+    assert.deepEqual(await runtime.repository.listSignals({ companyId: "cmp_place_stage229_tenant" }), []);
+
+    const actor = { type: "account", id: "account_stage229_existing_fixture", role: "admin" };
+    let syntheticCard = (await runtime.repository.createLocationCardRequest({
+      companyId: "cmp_place_stage229_tenant",
+      tenantCompanyId: "tenant_stage229_one",
+      clientRequestId: "stage229-existing-synthetic-card-0001"
+    }, actor)).card;
+    syntheticCard = (await runtime.repository.transitionLocationCard(syntheticCard.cardId, {
+      expectedVersion: syntheticCard.version,
+      to: "draft",
+      patch: {
+        evidenceSummary: { fixtureVersion: INSIGHTS_FIXTURE_VERSION },
+        analysis: { state: "ready", forecast: { state: "ready" }, dimensions: [] }
+      }
+    }, actor)).card;
+    for (const to of ["in-review", "reviewed", "published"]) {
+      syntheticCard = (await runtime.repository.transitionLocationCard(syntheticCard.cardId, {
+        expectedVersion: syntheticCard.version,
+        to,
+        patch: {}
+      }, actor)).card;
+    }
+
+    let liveReportWithSyntheticCard = await runtime.repository.getMonthlyReport(reportDraft.report.reportId);
+    liveReportWithSyntheticCard = (await runtime.repository.transitionMonthlyReport(liveReportWithSyntheticCard.reportId, {
+      expectedVersion: liveReportWithSyntheticCard.version,
+      to: "in-review",
+      patch: {
+        report: {
+          state: "ready",
+          forecast: { state: "ready" },
+          scopes: ["national", "regional", "own", "anonymous-cohort"].map((scope) => ({ scope, state: "ready" })),
+          analysis: { state: "ready" },
+          locationCardId: syntheticCard.cardId
+        }
+      }
+    }, actor)).report;
+    liveReportWithSyntheticCard = (await runtime.repository.transitionMonthlyReport(liveReportWithSyntheticCard.reportId, {
+      expectedVersion: liveReportWithSyntheticCard.version,
+      to: "reviewed",
+      patch: {}
+    }, actor)).report;
+    await assert.rejects(
+      runtime.service.publishMonthlyReport(admin, liveReportWithSyntheticCard.reportId, {
+        expectedVersion: liveReportWithSyntheticCard.version
+      }),
+      (error) => errorCode(error) === "INSIGHTS_SAMPLE_GATE" && error.statusCode === 409,
+      "a live report must never publish with a synthetic location card reference"
+    );
+
+    let syntheticReport = (await runtime.repository.createMonthlyReport({
+      companyId: "cmp_place_stage229_tenant",
+      tenantCompanyId: "tenant_stage229_one",
+      clientRequestId: "stage229-existing-synthetic-report-0001",
+      month: "2026-08"
+    }, actor)).report;
+    syntheticReport = (await runtime.repository.transitionMonthlyReport(syntheticReport.reportId, {
+      expectedVersion: syntheticReport.version,
+      to: "draft",
+      patch: {
+        evidenceSummary: { fixtureVersion: INSIGHTS_FIXTURE_VERSION },
+        report: { state: "ready", forecast: { state: "ready" }, scopes: [], analysis: { state: "ready" } }
+      }
+    }, actor)).report;
+    for (const to of ["in-review", "reviewed", "published"]) {
+      syntheticReport = (await runtime.repository.transitionMonthlyReport(syntheticReport.reportId, {
+        expectedVersion: syntheticReport.version,
+        to,
+        patch: {}
+      }, actor)).report;
+    }
+
+    await assert.rejects(
+      runtime.service.editLocationDraft(admin, syntheticCard.cardId, {
+        expectedVersion: syntheticCard.version,
+        editorial: { headline: "합성 카드 수정 우회" }
+      }),
+      (error) => errorCode(error) === "INSIGHTS_ARTIFACT_NOT_FOUND" && error.statusCode === 404,
+      "production must reject ID-based mutations of stored synthetic location cards"
+    );
+    await assert.rejects(
+      runtime.service.editReportDraft(admin, syntheticReport.reportId, {
+        expectedVersion: syntheticReport.version,
+        editorial: { headline: "합성 리포트 수정 우회" }
+      }),
+      (error) => errorCode(error) === "INSIGHTS_ARTIFACT_NOT_FOUND" && error.statusCode === 404,
+      "production must reject ID-based mutations of stored synthetic reports"
+    );
+    assert.equal((await runtime.repository.getLocationCard(syntheticCard.cardId)).version, syntheticCard.version);
+    assert.equal((await runtime.repository.getMonthlyReport(syntheticReport.reportId)).version, syntheticReport.version);
+    await assert.rejects(
+      runtime.service.requestLocationCard(admin, {
+        companyId: "cmp_place_stage229_other_tenant",
+        tenantCompanyId: "tenant_stage229_two",
+        clientRequestId: "stage229-production-synthetic-company-0001"
+      }),
+      (error) => errorCode(error) === "INSIGHTS_COMPANY_NOT_FOUND" && error.statusCode === 404,
+      "admin requests must reject a synthetic-only company identity"
+    );
+
+    const businessCards = await runtime.service.listLocationCards(business, {
+      companyId: "cmp_place_stage229_tenant"
+    });
+    assert.equal(businessCards.cards.some((row) => row.cardId === syntheticCard.cardId), false);
+    const businessRequests = await runtime.service.listLocationCardRequests(business);
+    assert.equal(businessRequests.some((row) => row.cardId === syntheticCard.cardId), false);
+    const businessReports = await runtime.service.listMonthlyReports(business, {
+      companyId: "cmp_place_stage229_tenant",
+      month: "2026-08"
+    });
+    assert.equal(businessReports.reports.some((row) => row.reportId === syntheticReport.reportId), false);
+
+    const adminCards = await runtime.service.listLocationCards(admin, {
+      companyId: "cmp_place_stage229_tenant",
+      tenantCompanyId: "tenant_stage229_one"
+    });
+    assert.equal(adminCards.cards.some((row) => row.cardId === syntheticCard.cardId), false);
+    const adminRequests = await runtime.service.listLocationCardRequests(admin);
+    assert.equal(adminRequests.some((row) => row.cardId === syntheticCard.cardId), false);
+    const adminReports = await runtime.service.listMonthlyReports(admin, {
+      companyId: "cmp_place_stage229_tenant",
+      tenantCompanyId: "tenant_stage229_one",
+      month: "2026-08"
+    });
+    assert.equal(adminReports.reports.some((row) => row.reportId === syntheticReport.reportId), false);
+
+    const diagnostics = await runtime.diagnostics();
+    assert.equal(diagnostics.provider.generatedSignals, 0);
+    assert.equal(diagnostics.externalProviderCalls, 0);
+    assert.equal(diagnostics.credentialReads, 0);
+    assert.equal(fs.readdirSync(legacyRoot).length, 0);
+  } finally {
+    fs.rmSync(freshRoot, { recursive: true, force: true });
+    fs.rmSync(legacyRoot, { recursive: true, force: true });
+  }
+}
+
 async function assertChildServerHasZeroAttempts() {
   const dataDir = temporaryDirectory("stage229-security-server-auth-");
   const integrationDataDir = temporaryDirectory("stage229-security-server-fresh-");
@@ -252,6 +526,7 @@ async function main() {
   assertSourceBoundary();
   assertPreloadDeniesEveryChannel();
   await assertRuntimeBoundary();
+  await assertProductionProviderDisabled();
   await assertChildServerHasZeroAttempts();
   console.log("Stage 229 secret, network, provider, fresh-store, legacy-copy and production-mutation checks passed");
 }
