@@ -212,8 +212,229 @@ async function assertProductionFailClosed() {
   fs.rmSync(dataDir, { recursive: true, force: true });
 }
 
+async function assertAdminMfaSelfResetHttp() {
+  const instance = await startServer({ uiFlag: true });
+  const admin = {
+    username: "stage226-reset-admin",
+    email: "stage226-reset-admin@example.test",
+    password: "Stage226ResetAdmin!31"
+  };
+  try {
+    const bootstrapJar = await anonymousCsrfJar(instance);
+    const bootstrap = await requestJson(instance, "/api/auth/bootstrap", {
+      method: "POST",
+      jar: bootstrapJar,
+      headers: { "X-Bootstrap-Secret": TEST_KEYS.bootstrap },
+      body: { ...admin, displayName: "Stage 226 Reset Admin" }
+    });
+    assert.equal(bootstrap.status, 201);
+    const enrollment = await requestJson(instance, "/api/auth/mfa/enroll", {
+      method: "POST",
+      jar: bootstrapJar,
+      body: { enrollmentToken: bootstrap.body.enrollmentToken }
+    });
+    assert.equal(enrollment.status, 200);
+    const confirmation = await requestJson(instance, "/api/auth/mfa/confirm", {
+      method: "POST",
+      jar: bootstrapJar,
+      body: { enrollmentToken: bootstrap.body.enrollmentToken, code: totp(enrollment.body.secret) }
+    });
+    assert.equal(confirmation.status, 200);
+
+    const adminLogin = await requestJson(instance, "/api/login", {
+      method: "POST",
+      jar: bootstrapJar,
+      body: { username: admin.username, password: admin.password }
+    });
+    assert.equal(adminLogin.status, 200);
+    const adminJar = bootstrapJar;
+    const adminMfa = await requestJson(instance, "/api/auth/mfa/verify", {
+      method: "POST",
+      jar: adminJar,
+      body: { challengeToken: adminLogin.body.challengeToken, recoveryCode: confirmation.body.recoveryCodes[0] }
+    });
+    assert.equal(adminMfa.status, 200);
+    assert.equal(adminMfa.body.mfaVerified, true);
+
+    const businessJar = await anonymousCsrfJar(instance);
+    const businessSignup = await requestJson(instance, "/api/signup", {
+      method: "POST",
+      jar: businessJar,
+      body: {
+        username: "stage226-reset-business",
+        email: "stage226-reset-business@example.test",
+        phone: "010-2260-0231",
+        companyName: "Stage 226 Reset Business",
+        ownershipStatus: "owned",
+        password: "Stage226ResetBusiness!32",
+        passwordConfirm: "Stage226ResetBusiness!32",
+        agreeTerms: true,
+        agreePrivacy: true,
+        confirmAge: true
+      }
+    });
+    assert.equal(businessSignup.status, 200);
+    const businessDenied = await requestJson(instance, "/api/auth/mfa/reset", {
+      method: "POST",
+      jar: businessJar,
+      body: { currentPassword: "Stage226ResetBusiness!32", confirmation: "RESET_MFA" }
+    });
+    assert.equal(businessDenied.status, 403, "a business session must not reset administrator MFA");
+
+    const oldFactorLoginJar = await anonymousCsrfJar(instance);
+    const oldFactorLogin = await requestJson(instance, "/api/login", {
+      method: "POST",
+      jar: oldFactorLoginJar,
+      body: { username: admin.username, password: admin.password }
+    });
+    assert.equal(oldFactorLogin.status, 200);
+    assert.equal(oldFactorLogin.body.mfaRequired, true);
+
+    const csrfDenied = await requestJson(instance, "/api/auth/mfa/reset", {
+      method: "POST",
+      jar: { ...adminJar },
+      csrf: false,
+      body: { currentPassword: admin.password, confirmation: "RESET_MFA" }
+    });
+    assert.equal(csrfDenied.status, 403, "administrator MFA reset must require session CSRF");
+    const confirmationDenied = await requestJson(instance, "/api/auth/mfa/reset", {
+      method: "POST",
+      jar: adminJar,
+      body: { currentPassword: admin.password, confirmation: "reset_mfa" }
+    });
+    assert.equal(confirmationDenied.status, 400);
+    assert.equal(confirmationDenied.body.code, "MFA_RESET_CONFIRMATION_REQUIRED");
+    const passwordDenied = await requestJson(instance, "/api/auth/mfa/reset", {
+      method: "POST",
+      jar: adminJar,
+      body: { currentPassword: "Wrong-Reset-Password!99", confirmation: "RESET_MFA" }
+    });
+    assert.equal(passwordDenied.status, 401, "administrator MFA reset must verify the current password");
+
+    const staleAdminJar = { ...adminJar };
+    const reset = await requestJson(instance, "/api/auth/mfa/reset", {
+      method: "POST",
+      jar: adminJar,
+      body: { currentPassword: admin.password, confirmation: "RESET_MFA" }
+    });
+    assert.equal(reset.status, 200);
+    assert.deepEqual(Object.keys(reset.body).sort(), [
+      "authenticated",
+      "enrollmentToken",
+      "expiresAt",
+      "mfaEnrollmentRequired",
+      "ok"
+    ]);
+    assert.equal(reset.body.ok, true);
+    assert.equal(reset.body.authenticated, false);
+    assert.equal(reset.body.mfaEnrollmentRequired, true);
+    assert.ok(reset.body.enrollmentToken);
+    assert.ok(Date.parse(reset.body.expiresAt) > Date.now());
+    assert.equal(adminJar.glamping_datalab_session, undefined, "MFA reset must clear the session cookie");
+    assert.equal(adminJar.lodging_v2_csrf, undefined, "MFA reset must clear the session CSRF cookie");
+    assert.equal((await requestJson(instance, "/api/session", { jar: staleAdminJar })).status, 401, "the old administrator session must be invalid");
+    assert.equal((await requestJson(instance, "/api/auth/mfa/reset", {
+      method: "POST",
+      jar: staleAdminJar,
+      body: { currentPassword: admin.password, confirmation: "RESET_MFA" }
+    })).status, 401, "a stale session must not mint a second enrollment token");
+
+    const resetStore = JSON.parse(fs.readFileSync(instance.authStorePath, "utf8"));
+    const resetAccount = resetStore.accounts.find((row) => row.accountId === bootstrap.body.account.accountId);
+    assert.equal(resetAccount.status, "mfa_pending");
+    assert.equal(resetStore.security.mfaResetPendingAccountId, resetAccount.accountId);
+    assert.ok(resetStore.security.mfaResetPendingAt);
+    assert.ok(resetStore.security.bootstrapCompletedAt, "MFA reset must retain the completed-bootstrap latch");
+    assert.equal(resetStore.sessions.filter((row) => row.accountId === resetAccount.accountId && !row.revokedAt).length, 0);
+    assert.equal(resetStore.mfaFactors.filter((row) => row.accountId === resetAccount.accountId && ["active", "pending"].includes(row.status)).length, 0);
+    assert.ok(resetStore.mfaFactors.filter((row) => row.accountId === resetAccount.accountId && row.status === "revoked").every((row) => (
+      row.secretEnvelope === null && Array.isArray(row.recoveryCodeHashes) && row.recoveryCodeHashes.length === 0
+    )), "revoked MFA factors must discard the encrypted TOTP secret and recovery hashes");
+    const resetAudit = resetStore.authAudit.findLast((row) => row.event === "mfa.reset.completed");
+    assert.ok(resetAudit, "MFA reset must append a success audit");
+    assert.ok(resetStore.authAudit.some((row) => row.event === "mfa.reset.failed" && row.outcome === "failure"));
+    assert.equal(/password|token|secret|recovery|code|hash/i.test(JSON.stringify(resetAudit.metadata)), false, "MFA reset audit metadata must not contain secrets");
+    assert.equal(JSON.stringify(resetStore).includes(reset.body.enrollmentToken), false, "the raw replacement enrollment token must not be stored");
+
+    const replacementJar = await anonymousCsrfJar(instance);
+    const resetChallengeCountBeforeBootstrapRetry = resetStore.authChallenges.filter((row) => (
+      row.accountId === resetAccount.accountId && row.type === "mfa-enrollment" && !row.consumedAt
+    )).length;
+    const bootstrapDuringReset = await requestJson(instance, "/api/auth/bootstrap", {
+      method: "POST",
+      jar: replacementJar,
+      headers: { "X-Bootstrap-Secret": TEST_KEYS.bootstrap },
+      body: { ...admin, displayName: "Stage 226 Reset Admin" }
+    });
+    assert.equal(bootstrapDuringReset.status, 409, "bootstrap must not bypass a password-authenticated MFA reset");
+    assert.equal(bootstrapDuringReset.body.code, "MFA_RESET_IN_PROGRESS");
+    assert.equal(bootstrapDuringReset.body.enrollmentToken, undefined);
+    const storeAfterBootstrapRetry = JSON.parse(fs.readFileSync(instance.authStorePath, "utf8"));
+    assert.equal(storeAfterBootstrapRetry.authChallenges.filter((row) => (
+      row.accountId === resetAccount.accountId && row.type === "mfa-enrollment" && !row.consumedAt
+    )).length, resetChallengeCountBeforeBootstrapRetry, "rejected bootstrap must not mint another enrollment challenge");
+    const resumedResetLogin = await requestJson(instance, "/api/login", {
+      method: "POST",
+      jar: replacementJar,
+      body: { username: admin.email, password: admin.password }
+    });
+    assert.equal(resumedResetLogin.status, 200, "the reset-pending bootstrap administrator may resume enrollment with its current password");
+    assert.equal(resumedResetLogin.body.mfaEnrollmentRequired, true);
+    assert.ok(resumedResetLogin.body.enrollmentToken);
+    assert.notEqual(resumedResetLogin.body.enrollmentToken, reset.body.enrollmentToken);
+    const supersededResetToken = await requestJson(instance, "/api/auth/mfa/enroll", {
+      method: "POST",
+      jar: replacementJar,
+      body: { enrollmentToken: reset.body.enrollmentToken }
+    });
+    assert.equal(supersededResetToken.status, 400, "password-authenticated resume must supersede the lost reset token");
+    const replacementEnrollment = await requestJson(instance, "/api/auth/mfa/enroll", {
+      method: "POST",
+      jar: replacementJar,
+      body: { enrollmentToken: resumedResetLogin.body.enrollmentToken }
+    });
+    assert.equal(replacementEnrollment.status, 200);
+    const replacementConfirmation = await requestJson(instance, "/api/auth/mfa/confirm", {
+      method: "POST",
+      jar: replacementJar,
+      body: { enrollmentToken: resumedResetLogin.body.enrollmentToken, code: totp(replacementEnrollment.body.secret) }
+    });
+    assert.equal(replacementConfirmation.status, 200, "the reset enrollment token must activate a replacement factor");
+    const completedResetStore = JSON.parse(fs.readFileSync(instance.authStorePath, "utf8"));
+    assert.equal(completedResetStore.security.mfaResetPendingAccountId, "");
+    assert.equal(completedResetStore.security.mfaResetPendingAt, "");
+    const oldChallengeAfterReset = await requestJson(instance, "/api/auth/mfa/verify", {
+      method: "POST",
+      jar: replacementJar,
+      body: { challengeToken: oldFactorLogin.body.challengeToken, recoveryCode: confirmation.body.recoveryCodes[1] }
+    });
+    assert.equal(oldChallengeAfterReset.status, 401, "a pre-reset MFA challenge must stay invalid");
+    const replacementLogin = await requestJson(instance, "/api/login", {
+      method: "POST",
+      jar: replacementJar,
+      body: { username: admin.username, password: admin.password }
+    });
+    assert.equal(replacementLogin.status, 200);
+    const oldRecoveryAfterReset = await requestJson(instance, "/api/auth/mfa/verify", {
+      method: "POST",
+      jar: replacementJar,
+      body: { challengeToken: replacementLogin.body.challengeToken, recoveryCode: confirmation.body.recoveryCodes[1] }
+    });
+    assert.equal(oldRecoveryAfterReset.status, 401, "a recovery code from the revoked factor must be invalid");
+    const replacementMfa = await requestJson(instance, "/api/auth/mfa/verify", {
+      method: "POST",
+      jar: replacementJar,
+      body: { challengeToken: replacementLogin.body.challengeToken, recoveryCode: replacementConfirmation.body.recoveryCodes[0] }
+    });
+    assert.equal(replacementMfa.status, 200, "the replacement factor must issue a new verified administrator session");
+  } finally {
+    await stopServer(instance);
+  }
+}
+
 async function main() {
   await assertProductionFailClosed();
+  await assertAdminMfaSelfResetHttp();
   let integration;
   let legacy;
   const admin = { username: "stage226-admin", email: "admin226@example.test", password: "Stage226Admin!" };

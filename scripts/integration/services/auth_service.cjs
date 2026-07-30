@@ -247,6 +247,19 @@ function createAuthService(options = {}) {
     throw error;
   }
 
+  function resetPendingBootstrapAccount(store, identity = "") {
+    const accountId = store.security?.mfaResetPendingAccountId || "";
+    if (!accountId || accountId !== store.security?.bootstrapAccountId) return null;
+    const account = store.accounts.find((row) => (
+      row.accountId === accountId
+      && row.role === AUTH_ROLES.admin
+      && row.status === ACCOUNT_STATUSES.mfaPending
+      && row.mfaResetPendingAt
+    ));
+    if (!account) return null;
+    return identity && accountByIdentity(store, identity)?.accountId !== account.accountId ? null : account;
+  }
+
   function hashRequestFingerprint(kind, value) {
     return crypto.createHmac("sha256", config.fingerprintSecret)
       .update(`${String(kind || "request")}:${String(value || "")}`)
@@ -402,6 +415,15 @@ function createAuthService(options = {}) {
         if (account.username !== username || account.email !== emailAddress) {
           const error = new Error("Bootstrap administrator already exists");
           error.statusCode = 409;
+          throw error;
+        }
+        if (
+          store.security?.mfaResetPendingAccountId === account.accountId
+          && account.mfaResetPendingAt
+        ) {
+          const error = new Error("MFA 재설정이 진행 중입니다. 현재 비밀번호로 로그인을 다시 시도하세요.");
+          error.statusCode = 409;
+          error.code = "MFA_RESET_IN_PROGRESS";
           throw error;
         }
         const result = { created: false, account: publicAccount(account), mfaEnrollmentRequired: account.status === ACCOUNT_STATUSES.mfaPending };
@@ -643,8 +665,8 @@ function createAuthService(options = {}) {
   }
 
   async function authenticate(identity, password, context = {}) {
-    assertBootstrapReady();
     const snapshot = repository.currentUnsafe();
+    if (!bootstrapReady(snapshot) && !resetPendingBootstrapAccount(snapshot, identity)) assertBootstrapReady();
     const account = accountByIdentity(snapshot, identity);
     const descriptors = securityGuardDescriptors("login", account?.accountId || "", identity, context);
     assertSecurityGuardsAvailable(descriptors, "로그인 시도가 많습니다. 잠시 후 다시 시도하세요.", snapshot);
@@ -671,6 +693,16 @@ function createAuthService(options = {}) {
       audit(store, "login.password.verified", { ...context, accountId: current.accountId }, { accountId: current.accountId });
       if (current.role === AUTH_ROLES.admin && !factor) {
         current.status = ACCOUNT_STATUSES.mfaPending;
+        if (resetPendingBootstrapAccount(store)?.accountId === current.accountId) {
+          for (const row of store.authChallenges.filter((item) => (
+            item.accountId === current.accountId
+            && item.type === "mfa-enrollment"
+            && !item.consumedAt
+          ))) {
+            row.consumedAt = nowIso();
+            row.consumeReason = "mfa-reset-enrollment-resumed";
+          }
+        }
         const challenge = appendChallenge(store, current.accountId, "mfa-enrollment", CHALLENGE_TTL_MS);
         return {
           account: publicAccount(current),
@@ -787,8 +819,13 @@ function createAuthService(options = {}) {
         row.consumeReason = "mfa-enrollment-confirmed";
       }
       account.status = ACCOUNT_STATUSES.active;
+      account.mfaResetPendingAt = "";
       account.updatedAt = nowIso();
-      if (store.security.bootstrapAccountId === account.accountId) store.security.bootstrapCompletedAt = nowIso();
+      if (store.security.bootstrapAccountId === account.accountId) {
+        store.security.bootstrapCompletedAt = nowIso();
+        store.security.mfaResetPendingAccountId = "";
+        store.security.mfaResetPendingAt = "";
+      }
       const clearKeys = new Set(descriptors.map((item) => item.guardKey));
       store.loginGuards = store.loginGuards.filter((row) => !clearKeys.has(row.guardKey));
       audit(store, "mfa.enrollment.confirmed", { ...context, accountId: account.accountId }, { accountId: account.accountId });
@@ -996,6 +1033,136 @@ function createAuthService(options = {}) {
       store.loginGuards = store.loginGuards.filter((item) => !clearKeys.has(item.guardKey));
       audit(store, "session.reauthenticated", { ...context, accountId: account.accountId }, { accountId: account.accountId, sessionId: row.sessionId });
       return { ok: true, reauthenticatedAt: row.reauthenticatedAt };
+    });
+  }
+
+  async function resetMfa(session, payload = {}, context = {}) {
+    assertAdmin(session);
+    if (String(payload.confirmation || "") !== "RESET_MFA") {
+      const error = new Error("MFA 재설정을 확인하려면 RESET_MFA를 입력하세요.");
+      error.statusCode = 400;
+      error.code = "MFA_RESET_CONFIRMATION_REQUIRED";
+      throw error;
+    }
+
+    const snapshot = repository.currentUnsafe();
+    const accountSnapshot = snapshot.accounts.find((row) => row.accountId === session.accountId);
+    const sessionSnapshot = snapshot.sessions.find((row) => (
+      row.sessionId === session.sessionId
+      && !row.revokedAt
+      && timeMs(row.expiresAt) > clock()
+    ));
+    const descriptors = securityGuardDescriptors("mfa-reset", session.accountId, "", context);
+    assertSecurityGuardsAvailable(descriptors, "MFA 재설정 시도가 많습니다. 잠시 후 다시 시도하세요.", snapshot);
+    const currentSessionValid = Boolean(
+      accountSnapshot
+      && accountSnapshot.role === AUTH_ROLES.admin
+      && accountSnapshot.status === ACCOUNT_STATUSES.active
+      && sessionSnapshot
+      && sessionSnapshot.mfaVerifiedAt
+      && Math.max(1, Number(sessionSnapshot.authVersion) || 1) === Math.max(1, Number(accountSnapshot.authVersion) || 1)
+    );
+    if (!currentSessionValid || !verifyPassword(String(payload.currentPassword || ""), accountSnapshot?.passwordHash || dummyPasswordHash)) {
+      const failure = await recordSecurityFailures(descriptors, context, "mfa.reset.failed", {
+        accountId: session.accountId,
+        method: "password",
+        sessionValid: currentSessionValid
+      });
+      throw securityFailureError(failure, "현재 비밀번호가 올바르지 않습니다.", "MFA 재설정 시도가 많습니다. 잠시 후 다시 시도하세요.");
+    }
+
+    return repository.transaction("mfa-self-reset", (store) => {
+      prune(store);
+      const currentSession = store.sessions.find((row) => (
+        row.sessionId === session.sessionId
+        && !row.revokedAt
+        && timeMs(row.expiresAt) > clock()
+      ));
+      const account = currentSession && store.accounts.find((row) => row.accountId === currentSession.accountId);
+      const authVersionBefore = Math.max(1, Number(account?.authVersion) || 1);
+      if (
+        !currentSession
+        || !currentSession.mfaVerifiedAt
+        || !account
+        || account.role !== AUTH_ROLES.admin
+        || account.status !== ACCOUNT_STATUSES.active
+        || Math.max(1, Number(currentSession.authVersion) || 1) !== authVersionBefore
+      ) {
+        const error = new Error("MFA를 완료한 현재 관리자 세션이 더 이상 유효하지 않습니다.");
+        error.statusCode = 401;
+        error.code = "MFA_RESET_SESSION_INVALID";
+        throw error;
+      }
+      if (!verifyPassword(String(payload.currentPassword || ""), account.passwordHash)) {
+        const error = new Error("인증 정보가 변경되었습니다. 다시 로그인하세요.");
+        error.statusCode = 401;
+        error.code = "AUTH_VERSION_CHANGED";
+        throw error;
+      }
+
+      const activeFactors = store.mfaFactors.filter((row) => (
+        row.accountId === account.accountId && (row.status === "active" || row.status === "pending")
+      ));
+      if (!activeFactors.some((row) => row.status === "active")) {
+        const error = new Error("재설정할 활성 MFA를 찾을 수 없습니다.");
+        error.statusCode = 409;
+        error.code = "MFA_RESET_FACTOR_MISSING";
+        throw error;
+      }
+      const activeSessions = store.sessions.filter((row) => row.accountId === account.accountId && !row.revokedAt);
+      const pendingChallenges = store.authChallenges.filter((row) => row.accountId === account.accountId && !row.consumedAt);
+      const resetAt = nowIso();
+
+      for (const factor of activeFactors) {
+        factor.status = "revoked";
+        factor.revokedAt = resetAt;
+        factor.revokeReason = "admin-self-mfa-reset";
+        factor.secretEnvelope = null;
+        factor.recoveryCodeHashes = [];
+        factor.lastVerifiedStep = -1;
+      }
+      for (const row of activeSessions) {
+        row.revokedAt = resetAt;
+        row.revokeReason = "mfa-reset";
+      }
+      for (const challenge of pendingChallenges) {
+        challenge.consumedAt = resetAt;
+        challenge.consumeReason = "mfa-reset";
+      }
+
+      account.authVersion = authVersionBefore + 1;
+      account.status = ACCOUNT_STATUSES.mfaPending;
+      account.mfaResetPendingAt = resetAt;
+      account.updatedAt = resetAt;
+      if (store.security.bootstrapAccountId === account.accountId) {
+        store.security.mfaResetPendingAccountId = account.accountId;
+        store.security.mfaResetPendingAt = resetAt;
+      }
+      const enrollment = appendChallenge(store, account.accountId, "mfa-enrollment", CHALLENGE_TTL_MS);
+      const clearKeys = new Set(descriptors.map((item) => item.guardKey));
+      store.loginGuards = store.loginGuards.filter((row) => !clearKeys.has(row.guardKey));
+      audit(store, "mfa.reset.completed", {
+        ...context,
+        accountId: account.accountId,
+        actorAccountId: account.accountId
+      }, {
+        accountId: account.accountId,
+        statusBefore: ACCOUNT_STATUSES.active,
+        statusAfter: ACCOUNT_STATUSES.mfaPending,
+        authVersionBefore,
+        authVersionAfter: account.authVersion,
+        activeOrPendingFactorCountBefore: activeFactors.length,
+        activeOrPendingFactorCountAfter: 0,
+        activeSessionCountBefore: activeSessions.length,
+        activeSessionCountAfter: 0,
+        challengeCountBefore: pendingChallenges.length,
+        challengeCountAfter: 1
+      });
+      return {
+        enrollmentToken: enrollment.rawToken,
+        expiresAt: enrollment.expiresAt,
+        mfaEnrollmentRequired: true
+      };
     });
   }
 
@@ -1330,6 +1497,7 @@ function createAuthService(options = {}) {
     rotateSessionCsrf,
     logout,
     reauthenticate,
+    resetMfa,
     assertRecentReauthentication,
     createInvite,
     cancelInvite,

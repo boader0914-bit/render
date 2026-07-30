@@ -919,8 +919,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 0,
-        "labeledFormControls": 0,
+        "formControls": 2,
+        "labeledFormControls": 2,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -950,8 +950,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 0,
-        "labeledFormControls": 0,
+        "formControls": 2,
+        "labeledFormControls": 2,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -981,8 +981,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 0,
-        "labeledFormControls": 0,
+        "formControls": 2,
+        "labeledFormControls": 2,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -1012,8 +1012,8 @@
         "overflowX": 0,
         "orderValid": true,
         "verticalOrderValid": true,
-        "formControls": 0,
-        "labeledFormControls": 0,
+        "formControls": 2,
+        "labeledFormControls": 2,
         "contrastFailures": [],
         "forbiddenVisible": [],
         "workspaceState": "partial"
@@ -1697,8 +1697,8 @@
       "width": 320,
       "effectiveScale": 1,
       "overflowX": 0,
-      "formControls": 0,
-      "labeledFormControls": 0,
+      "formControls": 2,
+      "labeledFormControls": 2,
       "keyboard": {
         "distinctFocusable": 13,
         "maxOutline": 3
@@ -1711,8 +1711,8 @@
       "width": 720,
       "effectiveScale": 2,
       "overflowX": 0,
-      "formControls": 0,
-      "labeledFormControls": 0,
+      "formControls": 2,
+      "labeledFormControls": 2,
       "keyboard": {
         "distinctFocusable": 13,
         "maxOutline": 3

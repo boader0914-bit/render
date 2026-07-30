@@ -28,6 +28,7 @@ const AUTH_MUTATION_PATHS = Object.freeze(new Set([
   "/api/auth/invitations/activate",
   "/api/auth/password-reset/request",
   "/api/auth/password-reset/confirm",
+  "/api/auth/mfa/reset",
   "/api/auth/reauth",
   "/api/auth/invitations",
   "/api/auth/session-keys/retire",
@@ -277,6 +278,17 @@ function createAuthHttpHandler(options = {}) {
       }
       if (method === "POST" && pathname === "/api/auth/reauth") {
         send(res, 200, await service.reauthenticate(session, await parseBody(req), context));
+        return true;
+      }
+      if (method === "POST" && pathname === "/api/auth/mfa/reset") {
+        const result = await service.resetMfa(session, await parseBody(req), context);
+        send(res, 200, {
+          ok: true,
+          authenticated: false,
+          mfaEnrollmentRequired: true,
+          enrollmentToken: result.enrollmentToken,
+          expiresAt: result.expiresAt
+        }, "application/json; charset=utf-8", { "Set-Cookie": clearCookies() });
         return true;
       }
       if (method === "POST" && pathname === "/api/auth/invitations") {

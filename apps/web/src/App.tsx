@@ -11,7 +11,7 @@ import {
   type ThemeMode
 } from "@glamping-datalab-v2/ui";
 import { ApiError, logout, readSession, type SessionPayload } from "./apiClient";
-import { AuthFooter, AuthRoutePage } from "./auth/AuthPages";
+import { AuthFooter, AuthRoutePage, MfaResetSection } from "./auth/AuthPages";
 import type { AuthPath } from "./auth/authContracts";
 import { ConnectorOperations } from "./connectors/ConnectorOperations";
 import { AUTH_ROUTES, homeForRole, navigationForRole, routeForPath } from "./routeRegistry";
@@ -104,7 +104,19 @@ function CoreRoutePage({ routeId, workspace, session, reload, insightsEnabled = 
   }
 }
 
-function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionPayload; theme: ThemeMode; onThemeChange: () => void }) {
+export function AdminMfaResetCard() {
+  return <section className="v2-data-section" data-testid="admin-mfa-reset">
+    <header className="v2-section-header">
+      <div>
+        <h2>관리자 MFA 다시 설정</h2>
+        <p>Google Authenticator를 교체하거나 등록 키가 맞지 않을 때 현재 비밀번호로 기존 MFA를 폐기하고 다시 등록합니다.</p>
+      </div>
+    </header>
+    <MfaResetSection />
+  </section>;
+}
+
+export function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionPayload; theme: ThemeMode; onThemeChange: () => void }) {
   const role: ProductRole = session.role === "admin" ? "admin" : "business";
   const route = routeForPath(window.location.pathname, role);
   const navigation = useMemo(() => navigationForRole(role), [role]);
@@ -168,6 +180,7 @@ function ProductWorkspace({ session, theme, onThemeChange }: { session: SessionP
       </>}
     </div> : null}
     <div className="v2-core-content" data-testid="core-data-section">
+      {role === "admin" && route.id === "admin-settings" && !roleMismatch ? <AdminMfaResetCard /> : null}
       {roleMismatch ? <StateDataSection kind="permission" />
         : stage230Active ? <Stage230RoutePage routeId={stage230Active} session={session} enabled />
           : explorationRoute ? <ExplorationRoutePage routeId={explorationRoute} session={session} enabled={explorationEnabled} />

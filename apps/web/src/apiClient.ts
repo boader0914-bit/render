@@ -2,6 +2,7 @@ import {
   DISABLED_AUTH_CAPABILITIES,
   normalizeAuthCapabilities,
   type AuthCapabilities,
+  type AuthChallengeResult,
   type AuthCompletionResult,
   type LoginResult,
   type MfaEnrollmentSetup,
@@ -154,6 +155,28 @@ export function confirmMfaEnrollment(challengeToken: string, code: string, enrol
     method: "POST",
     body: JSON.stringify({ challengeToken, enrollmentToken, code })
   });
+}
+
+export async function resetMfaEnrollment(currentPassword: string): Promise<AuthChallengeResult> {
+  const payload = await apiRequest<JsonPayload>("/api/auth/mfa/reset", {
+    method: "POST",
+    body: JSON.stringify({ currentPassword, confirmation: "RESET_MFA" })
+  });
+  // Reset revokes the authenticated session and its CSRF cookie. Do not reuse
+  // the old in-memory token for the anonymous enrollment-token flow.
+  inMemoryCsrfToken = "";
+  const challengeToken = String(payload.enrollmentToken || payload.challengeToken || "");
+  if (payload.ok !== true || payload.authenticated !== false || payload.mfaEnrollmentRequired !== true || !challengeToken) {
+    throw new ApiError(502, "MFA 재등록 응답을 안전하게 확인하지 못했습니다.", payload);
+  }
+  const challenge = {
+    ...payload,
+    ok: true,
+    authenticated: false,
+    mfaEnrollmentRequired: true,
+    challengeToken
+  };
+  return challenge as AuthChallengeResult;
 }
 
 export function checkSignupUsername(username: string): Promise<UsernameAvailability> {

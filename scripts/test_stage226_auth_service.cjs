@@ -18,6 +18,7 @@ const {
 } = require("./integration/repositories/auth_store.cjs");
 const { totp } = require("./integration/services/auth_crypto.cjs");
 const {
+  CHALLENGE_TTL_MS,
   LOGIN_FAILURE_LIMIT,
   createAuthService
 } = require("./integration/services/auth_service.cjs");
@@ -109,7 +110,12 @@ function assertEmptySchema(store) {
   assert.equal(store.schemaVersion, AUTH_SCHEMA_VERSION);
   assert.match(store.storeId, /^authstore_/);
   assert.equal(store.revision, 0);
-  assert.deepEqual(store.security, { bootstrapCompletedAt: "", bootstrapAccountId: "" });
+  assert.deepEqual(store.security, {
+    bootstrapCompletedAt: "",
+    bootstrapAccountId: "",
+    mfaResetPendingAccountId: "",
+    mfaResetPendingAt: ""
+  });
   for (const field of [
     "accounts",
     "companies",
@@ -958,6 +964,167 @@ async function main() {
       "the 10-per-60-minute reset limit must survive a service restart"
     );
 
+    const resetAdminSession = active.service.getSession(currentAdminSessionResult.token, ADMIN_CONTEXT);
+    assert.ok(resetAdminSession?.mfaVerifiedAt, "MFA reset requires the current verified administrator session");
+    const resetBusinessSession = active.service.getSession(businessSessionAfterReset.token, BUSINESS_CONTEXT);
+    assert.ok(resetBusinessSession, "the business control session must be active");
+    await rejectsStatus(
+      () => active.service.resetMfa(resetBusinessSession, {
+        currentPassword: BUSINESS_PASSWORD_NEXT,
+        confirmation: "RESET_MFA"
+      }, BUSINESS_CONTEXT),
+      403,
+      "a business account must not reset administrator MFA"
+    );
+    await rejectsStatusAndCode(
+      () => active.service.resetMfa(resetAdminSession, {
+        currentPassword: ADMIN_PASSWORD,
+        confirmation: "reset_mfa"
+      }, ADMIN_CONTEXT),
+      400,
+      "MFA_RESET_CONFIRMATION_REQUIRED",
+      "MFA reset requires the exact destructive-action confirmation"
+    );
+    await rejectsStatus(
+      () => active.service.resetMfa(resetAdminSession, {
+        currentPassword: "Wrong-Admin-Password!99",
+        confirmation: "RESET_MFA"
+      }, ADMIN_CONTEXT),
+      401,
+      "MFA reset must reject an incorrect current password"
+    );
+    assert.ok(
+      active.service.snapshotForTests().authAudit.some((row) => row.event === "mfa.reset.failed" && row.outcome === "failure"),
+      "an incorrect MFA reset password must leave a secret-free failure audit"
+    );
+
+    const preResetLogin = await active.service.authenticate(
+      bootstrapPayload.username,
+      ADMIN_PASSWORD,
+      ADMIN_CONTEXT
+    );
+    rawSecrets.add(preResetLogin.challengeToken);
+    const authVersionBeforeMfaReset = resetAdminSession.account.authVersion;
+    const resetResult = await active.service.resetMfa(resetAdminSession, {
+      currentPassword: ADMIN_PASSWORD,
+      confirmation: "RESET_MFA"
+    }, ADMIN_CONTEXT);
+    assert.equal(resetResult.mfaEnrollmentRequired, true);
+    assert.ok(resetResult.enrollmentToken);
+    assert.ok(Date.parse(resetResult.expiresAt) > clock());
+    rawSecrets.add(resetResult.enrollmentToken);
+
+    const resetSnapshot = active.service.snapshotForTests();
+    const resetAccount = resetSnapshot.accounts.find((row) => row.accountId === resetAdminSession.accountId);
+    assert.equal(resetAccount.status, "mfa_pending");
+    assert.equal(resetAccount.authVersion, authVersionBeforeMfaReset + 1);
+    assert.equal(resetSnapshot.security.mfaResetPendingAccountId, resetAccount.accountId);
+    assert.ok(resetSnapshot.security.mfaResetPendingAt);
+    assert.ok(resetSnapshot.security.bootstrapCompletedAt, "MFA reset must keep the completed-bootstrap latch intact");
+    assert.equal(
+      resetSnapshot.mfaFactors.filter((row) => row.accountId === resetAccount.accountId && ["active", "pending"].includes(row.status)).length,
+      0,
+      "all prior active and pending MFA factors must be revoked"
+    );
+    assert.equal(
+      resetSnapshot.sessions.filter((row) => row.accountId === resetAccount.accountId && !row.revokedAt).length,
+      0,
+      "MFA reset must revoke every administrator session"
+    );
+    assert.equal(
+      resetSnapshot.authChallenges.filter((row) => row.accountId === resetAccount.accountId && !row.consumedAt && row.type !== "mfa-enrollment").length,
+      0,
+      "all prior MFA challenges must be consumed"
+    );
+    assert.equal(active.service.getSession(currentAdminSessionResult.token, ADMIN_CONTEXT), null);
+    const resetEnrollmentChallengeCount = resetSnapshot.authChallenges.filter((row) => (
+      row.accountId === resetAccount.accountId && row.type === "mfa-enrollment" && !row.consumedAt
+    )).length;
+    await rejectsStatusAndCode(
+      () => active.service.bootstrapAdmin(bootstrapPayload, ADMIN_CONTEXT),
+      409,
+      "MFA_RESET_IN_PROGRESS",
+      "the bootstrap secret must not mint an enrollment token during self-service MFA reset"
+    );
+    assert.equal(
+      active.service.snapshotForTests().authChallenges.filter((row) => (
+        row.accountId === resetAccount.accountId && row.type === "mfa-enrollment" && !row.consumedAt
+      )).length,
+      resetEnrollmentChallengeCount,
+      "rejected bootstrap recovery must not mint an additional enrollment challenge"
+    );
+    const completedResetAudit = resetSnapshot.authAudit.findLast((row) => row.event === "mfa.reset.completed");
+    assert.ok(completedResetAudit, "MFA reset must be audited");
+    assert.equal(completedResetAudit.metadata.authVersionBefore, authVersionBeforeMfaReset);
+    assert.equal(completedResetAudit.metadata.authVersionAfter, authVersionBeforeMfaReset + 1);
+    assert.equal(completedResetAudit.metadata.activeSessionCountAfter, 0);
+    assert.equal(/password|token|secret|recovery|code|hash/i.test(JSON.stringify(completedResetAudit.metadata)), false);
+    await rejectsStatus(
+      () => active.service.resetMfa(resetAdminSession, {
+        currentPassword: ADMIN_PASSWORD,
+        confirmation: "RESET_MFA"
+      }, ADMIN_CONTEXT),
+      401,
+      "a revoked session must not issue a second enrollment token"
+    );
+
+    advance(CHALLENGE_TTL_MS + 1);
+    const resumedResetLogin = await active.service.authenticate(
+      bootstrapPayload.email,
+      ADMIN_PASSWORD,
+      ADMIN_CONTEXT
+    );
+    assert.equal(resumedResetLogin.mfaEnrollmentRequired, true, "the reset-pending bootstrap admin may resume with its current password");
+    assert.ok(resumedResetLogin.enrollmentToken);
+    assert.notEqual(resumedResetLogin.enrollmentToken, resetResult.enrollmentToken);
+    rawSecrets.add(resumedResetLogin.enrollmentToken);
+    await rejectsStatus(
+      () => active.service.beginMfaEnrollment(resetResult.enrollmentToken, ADMIN_CONTEXT),
+      400,
+      "an expired reset enrollment token must stay invalid after password-authenticated resume"
+    );
+    const replacementEnrollment = await active.service.beginMfaEnrollment(resumedResetLogin.enrollmentToken, ADMIN_CONTEXT);
+    rawSecrets.add(replacementEnrollment.secret);
+    const replacementConfirmation = await active.service.confirmMfaEnrollment(
+      resumedResetLogin.enrollmentToken,
+      totp(replacementEnrollment.secret, clock()),
+      ADMIN_CONTEXT
+    );
+    const completedReplacementSnapshot = active.service.snapshotForTests();
+    assert.equal(completedReplacementSnapshot.security.mfaResetPendingAccountId, "");
+    assert.equal(completedReplacementSnapshot.security.mfaResetPendingAt, "");
+    replacementConfirmation.recoveryCodes.forEach((code) => rawSecrets.add(code));
+    await rejectsStatus(
+      () => active.service.verifyMfaLogin(
+        preResetLogin.challengeToken,
+        enrollmentConfirmation.recoveryCodes[1],
+        ADMIN_CONTEXT
+      ),
+      401,
+      "a pre-reset MFA login challenge must stay invalid after re-enrollment"
+    );
+    const postResetLogin = await active.service.authenticate(
+      bootstrapPayload.username,
+      ADMIN_PASSWORD,
+      ADMIN_CONTEXT
+    );
+    rawSecrets.add(postResetLogin.challengeToken);
+    await rejectsStatus(
+      () => active.service.verifyMfaLogin(
+        postResetLogin.challengeToken,
+        enrollmentConfirmation.recoveryCodes[1],
+        ADMIN_CONTEXT
+      ),
+      401,
+      "a recovery code from the revoked factor must not verify the replacement factor"
+    );
+    const replacementMfa = await active.service.verifyMfaLogin(
+      postResetLogin.challengeToken,
+      replacementConfirmation.recoveryCodes[0],
+      ADMIN_CONTEXT
+    );
+    assert.equal(replacementMfa.mfaVerified, true, "the replacement recovery code must complete login");
+
     const finalStore = active.service.snapshotForTests();
     assertNoPlainSecretKeys(finalStore);
     const serializedStore = await fsp.readFile(storePath, "utf8");
@@ -977,7 +1144,12 @@ async function main() {
     for (const invite of finalStore.invites) assert.match(invite.tokenHash, /^[A-Za-z0-9_-]{40,}$/);
     for (const reset of finalStore.passwordResets) assert.match(reset.tokenHash, /^[A-Za-z0-9_-]{40,}$/);
     for (const factor of finalStore.mfaFactors) {
-      assert.equal(typeof factor.secretEnvelope?.ciphertext, "string");
+      if (factor.status === "revoked") {
+        assert.equal(factor.secretEnvelope, null, "a revoked MFA factor must not retain its encrypted TOTP secret");
+        assert.deepEqual(factor.recoveryCodeHashes, [], "a revoked MFA factor must not retain recovery-code hashes");
+      } else {
+        assert.equal(typeof factor.secretEnvelope?.ciphertext, "string");
+      }
       assert.equal(Array.isArray(factor.recoveryCodeHashes), true);
       factor.recoveryCodeHashes.forEach((row) => assert.match(row.hash, /^[A-Za-z0-9_-]{40,}$/));
     }

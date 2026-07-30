@@ -63,6 +63,62 @@ describe("Stage 226 API client", () => {
     });
   });
 
+  it("resets MFA with explicit confirmation and bootstraps a fresh anonymous CSRF token before enrollment", async () => {
+    vi.stubGlobal("document", { cookie: "", querySelector: () => null });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-authenticated" }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        authenticated: false,
+        mfaEnrollmentRequired: true,
+        enrollmentToken: "reset-enrollment-once",
+        expiresAt: "2026-07-30T12:00:00.000Z"
+      }))
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-anonymous" }))
+      .mockResolvedValueOnce(jsonResponse({
+        ok: true,
+        secret: "SETUPKEYONLYINMEMORY",
+        enrollmentToken: "mfa-confirm-once"
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { resetMfaEnrollment, startMfaEnrollment } = await import("./apiClient");
+
+    const challenge = await resetMfaEnrollment("CurrentPassword1!");
+    expect(challenge).toMatchObject({
+      mfaEnrollmentRequired: true,
+      challengeToken: "reset-enrollment-once"
+    });
+    await expect(startMfaEnrollment(challenge.challengeToken)).resolves.toMatchObject({
+      secret: "SETUPKEYONLYINMEMORY",
+      enrollmentToken: "mfa-confirm-once"
+    });
+
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/auth/csrf",
+      "/api/auth/mfa/reset",
+      "/api/auth/csrf",
+      "/api/auth/mfa/enroll"
+    ]);
+    const resetInit = fetchMock.mock.calls[1][1] as RequestInit;
+    expect(JSON.parse(String(resetInit.body))).toEqual({
+      currentPassword: "CurrentPassword1!",
+      confirmation: "RESET_MFA"
+    });
+    expect(new Headers(resetInit.headers).get("X-CSRF-Token")).toBe("csrf-authenticated");
+    const enrollInit = fetchMock.mock.calls[3][1] as RequestInit;
+    expect(new Headers(enrollInit.headers).get("X-CSRF-Token")).toBe("csrf-anonymous");
+  });
+
+  it("fails closed when the MFA reset response does not carry the exact enrollment challenge contract", async () => {
+    vi.stubGlobal("document", { cookie: "", querySelector: () => null });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ csrfToken: "csrf-authenticated" }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true, enrollmentToken: "unexpected-token" })));
+    const { resetMfaEnrollment } = await import("./apiClient");
+
+    await expect(resetMfaEnrollment("CurrentPassword1!")).rejects.toMatchObject({ status: 502 });
+  });
+
   it("fails closed when capabilities are absent and preserves structured lockout errors", async () => {
     vi.stubGlobal("document", { cookie: "", querySelector: () => null });
     const capabilityFetch = vi.fn().mockResolvedValue(jsonResponse({ error: "Not found" }, { status: 404 }));

@@ -30,7 +30,9 @@ function emptyAuthStore(clock = Date.now) {
     revision: 0,
     security: {
       bootstrapCompletedAt: "",
-      bootstrapAccountId: ""
+      bootstrapAccountId: "",
+      mfaResetPendingAccountId: "",
+      mfaResetPendingAt: ""
     },
     accounts: [],
     companies: [],

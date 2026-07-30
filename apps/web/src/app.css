@@ -150,6 +150,15 @@
   [data-v2-ui-root] .v2-policy-list li:first-child { border-top: 0; }
   [data-v2-ui-root] .v2-policy-list span { color: var(--v2-text-secondary); font-size: 12px; }
   [data-v2-ui-root] .v2-policy-list strong { color: var(--v2-success); font-size: 12px; text-align: right; }
+  [data-v2-ui-root] .v2-mfa-reset-form, [data-v2-ui-root] .v2-mfa-enrollment { min-width: 0; display: grid; gap: 15px; }
+  [data-v2-ui-root] .v2-mfa-reset-form { max-width: 680px; }
+  [data-v2-ui-root] .v2-mfa-reset-warning { margin: 0; padding: 13px; overflow-wrap: anywhere; color: var(--v2-danger); background: color-mix(in srgb, var(--v2-danger) 9%, var(--v2-surface)); border: 1px solid var(--v2-danger); border-radius: 6px; font-size: 12px; font-weight: 750; line-height: 1.6; }
+  [data-v2-ui-root] .v2-mfa-reset-confirmation, [data-v2-ui-root] .v2-recovery-acknowledgement { padding: 12px; color: var(--v2-text-secondary); background: var(--v2-surface-subtle); border: 1px solid var(--v2-border); border-radius: 6px; }
+  [data-v2-ui-root] .v2-mfa-reset-submit { width: max-content; color: var(--v2-danger); background: var(--v2-surface); border-color: var(--v2-danger); }
+  [data-v2-ui-root] .v2-mfa-enrollment { max-width: 680px; padding: 17px; background: var(--v2-surface-subtle); border: 1px solid var(--v2-border); border-radius: 7px; }
+  [data-v2-ui-root] .v2-mfa-enrollment > header { min-width: 0; display: grid; gap: 5px; }
+  [data-v2-ui-root] .v2-mfa-enrollment > header h3 { margin: 0; overflow-wrap: anywhere; color: var(--v2-text); font-size: 16px; line-height: 1.4; }
+  [data-v2-ui-root] .v2-mfa-enrollment > header p { margin: 0; overflow-wrap: anywhere; color: var(--v2-text-secondary); font-size: 12px; line-height: 1.6; }
   [data-v2-ui-root] .v2-insight-state { min-width: 0; display: grid; gap: 12px; }
   [data-v2-ui-root] .v2-insight-state > .v2-empty-state { margin-top: 0; }
   [data-v2-ui-root] .v2-insight-reasons { min-width: 0; margin: 0; padding: 12px 12px 12px 32px; display: grid; gap: 7px; color: var(--v2-warning); background: var(--v2-warning-soft); border: 1px solid var(--v2-warning); border-radius: 6px; font-size: 11px; font-weight: 700; line-height: 1.55; }
@@ -447,6 +456,8 @@
     [data-v2-ui-root] .v2-company-detail-facts { grid-template-columns: 1fr; }
     [data-v2-ui-root] .v2-verified-value-list > div { grid-template-columns: 1fr; gap: 4px; }
     [data-v2-ui-root] .v2-policy-list li { align-items: flex-start; }
+    [data-v2-ui-root] .v2-mfa-reset-form, [data-v2-ui-root] .v2-mfa-enrollment { max-width: none; }
+    [data-v2-ui-root] .v2-mfa-reset-submit { width: 100%; }
     [data-v2-ui-root] .v2-insight-metrics, [data-v2-ui-root] .v2-insight-scope-grid, [data-v2-ui-root] .v2-insight-score-grid, [data-v2-ui-root] .v2-insight-facts, [data-v2-ui-root] .v2-insight-lifecycle { grid-template-columns: 1fr; }
     [data-v2-ui-root] .v2-insight-cohort > div, [data-v2-ui-root] .v2-insight-evidence > div, [data-v2-ui-root] .v2-insight-highlight > div, [data-v2-ui-root] .v2-insight-footer-row { align-items: stretch; display: grid; }
     [data-v2-ui-root] .v2-insight-footer-row .v2-button { width: 100%; }

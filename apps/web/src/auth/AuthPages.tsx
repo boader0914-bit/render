@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import { AuthPanel, Button, type ThemeMode } from "@glamping-datalab-v2/ui";
 import {
   activateInvitation,
@@ -9,6 +9,7 @@ import {
   login,
   readAuthCapabilities,
   requestPasswordReset,
+  resetMfaEnrollment,
   signup,
   startMfaEnrollment,
   verifyMfa
@@ -29,7 +30,7 @@ import {
   type SignupPayload
 } from "./authContracts";
 
-interface AuthPageProps {
+export interface AuthPageProps {
   theme: ThemeMode;
   onThemeChange: () => void;
 }
@@ -68,7 +69,7 @@ function messageForError(reason: unknown, fallback: string): string {
   return reason instanceof ApiError ? reason.message : fallback;
 }
 
-function navigateAfterAuthentication(result: unknown): boolean {
+export function navigateAfterAuthentication(result: unknown, options: { replaceLoginRequired?: boolean } = {}): boolean {
   const role = roleFromAuthResult(result);
   if (role) {
     window.location.assign(homeForRole(role === "admin" ? "admin" : "business"));
@@ -76,7 +77,8 @@ function navigateAfterAuthentication(result: unknown): boolean {
   }
   const payload = result && typeof result === "object" ? result as Record<string, unknown> : {};
   if (payload.loginRequired === true) {
-    window.location.assign("/login");
+    if (options.replaceLoginRequired) replaceSensitiveMfaFlowWithLogin();
+    else window.location.assign("/login");
     return true;
   }
   return false;
@@ -146,11 +148,76 @@ function MfaVerifyStep({ challenge, onComplete, onCancel, page }: {
   </AuthPanel>;
 }
 
-function MfaEnrollmentStep({ challenge, onComplete, onCancel, page }: {
+function MfaEnrollmentFrame({ embedded, eyebrow, title, description, onSubmit, page, children }: {
+  embedded: boolean;
+  eyebrow: string;
+  title: string;
+  description: string;
+  onSubmit?: (event: FormEvent<HTMLFormElement>) => void;
+  page?: AuthPageProps;
+  children: ReactNode;
+}) {
+  const titleId = useId();
+  if (!embedded) {
+    return <AuthPanel
+      eyebrow={eyebrow}
+      title={title}
+      description={description}
+      icon={eyebrow === "Recovery codes" ? "RC" : "2F"}
+      onSubmit={onSubmit}
+      footer={page ? <AuthFooter {...page} links={false} /> : undefined}
+    >{children}</AuthPanel>;
+  }
+  return <section className="v2-mfa-enrollment" aria-labelledby={titleId} data-testid="mfa-enrollment-step">
+    <header>
+      <span className="v2-eyebrow">{eyebrow}</span>
+      <h3 id={titleId}>{title}</h3>
+      <p>{description}</p>
+    </header>
+    {onSubmit
+      ? <form className="v2-auth-form" onSubmit={onSubmit}>{children}</form>
+      : <div className="v2-auth-form">{children}</div>}
+  </section>;
+}
+
+export function MfaRecoveryCodeStep({ recoveryCodes, onComplete, embedded = false, page }: {
+  recoveryCodes: readonly string[];
+  onComplete: () => void;
+  embedded?: boolean;
+  page?: AuthPageProps;
+}) {
+  const [acknowledged, setAcknowledged] = useState(false);
+  return <MfaEnrollmentFrame
+    embedded={embedded}
+    eyebrow="Recovery codes"
+    title="새 복구 코드를 안전하게 보관하세요"
+    description="각 코드는 한 번만 사용할 수 있습니다. 이 화면을 닫으면 다시 표시하지 않습니다."
+    page={page}
+  >
+    <ul className="v2-recovery-list" aria-label="관리자 MFA 복구 코드">
+      {recoveryCodes.map((recoveryCode) => <li key={recoveryCode}><code>{recoveryCode}</code></li>)}
+    </ul>
+    <label className="v2-check v2-recovery-acknowledgement">
+      <input
+        type="checkbox"
+        checked={acknowledged}
+        onChange={(event) => setAcknowledged(event.target.checked)}
+        autoFocus
+      />
+      <span>복구 코드를 안전한 곳에 별도로 저장했으며, 이 화면을 닫으면 다시 볼 수 없음을 확인했습니다.</span>
+    </label>
+    <Button className="v2-auth-submit" type="button" disabled={!acknowledged} onClick={onComplete}>
+      {embedded ? "확인하고 새로 로그인" : "안전하게 보관했습니다"}
+    </Button>
+  </MfaEnrollmentFrame>;
+}
+
+export function MfaEnrollmentStep({ challenge, onComplete, onCancel, page, embedded = false }: {
   challenge: AuthChallengeResult;
   onComplete: (result: AuthCompletionResult) => void;
   onCancel: () => void;
-  page: AuthPageProps;
+  page?: AuthPageProps;
+  embedded?: boolean;
 }) {
   const [setup, setSetup] = useState<MfaEnrollmentSetup | null>(null);
   const [code, setCode] = useState("");
@@ -181,8 +248,10 @@ function MfaEnrollmentStep({ challenge, onComplete, onCancel, page }: {
     try {
       const result = await confirmMfaEnrollment(challenge.challengeToken, code.trim(), setup.enrollmentToken);
       const codes = recoveryCodesFromResult(result);
-      if (codes.length) setCompletion(result);
-      else onComplete(result);
+      if (!codes.length) throw new Error("새 복구 코드를 받지 못했습니다.");
+      setSetup(null);
+      setCode("");
+      setCompletion(result);
     } catch (reason) {
       setError(messageForError(reason, "MFA 등록 코드를 확인하지 못했습니다."));
     } finally {
@@ -191,33 +260,32 @@ function MfaEnrollmentStep({ challenge, onComplete, onCancel, page }: {
   };
 
   if (completion && recoveryCodes.length) {
-    return <AuthPanel
-      eyebrow="Recovery codes"
-      title="복구 코드를 안전하게 보관하세요"
-      description="각 코드는 한 번만 사용할 수 있습니다. 이 화면을 닫으면 다시 표시하지 않습니다."
-      icon="RC"
-      footer={<AuthFooter {...page} links={false} />}
-    >
-      <ul className="v2-recovery-list" aria-label="관리자 MFA 복구 코드">
-        {recoveryCodes.map((recoveryCode) => <li key={recoveryCode}><code>{recoveryCode}</code></li>)}
-      </ul>
-      <Button className="v2-auth-submit" type="button" onClick={() => onComplete(completion)}>안전하게 보관했습니다</Button>
-    </AuthPanel>;
+    return <MfaRecoveryCodeStep
+      recoveryCodes={recoveryCodes}
+      embedded={embedded}
+      page={page}
+      onComplete={() => {
+        const result = completion;
+        setCompletion(null);
+        onComplete(result);
+      }}
+    />;
   }
 
-  return <AuthPanel
+  return <MfaEnrollmentFrame
+    embedded={embedded}
     eyebrow="MFA enrollment"
-    title="관리자 MFA를 등록하세요"
-    description="인증 앱에 수동 등록한 뒤 생성된 6자리 코드를 확인합니다. secret은 완료 전 이 화면에서만 유지됩니다."
-    icon="2F"
+    title={embedded ? "Google Authenticator에 MFA를 다시 등록하세요" : "관리자 MFA를 등록하세요"}
+    description="Google Authenticator에 수동 설정 키를 추가한 뒤 생성된 6자리 코드를 확인합니다. 설정 키와 token은 완료 전 이 화면의 메모리에서만 유지됩니다."
     onSubmit={setup ? confirm : undefined}
-    footer={<AuthFooter {...page} links={false} />}
+    page={page}
   >
     {setup ? <>
       <div className="v2-sensitive-value">
         <span>수동 등록 키</span>
         <code>{setup.secret}</code>
       </div>
+      <p className="v2-auth-note" role="status">Google Authenticator에서 <strong>+</strong> → <strong>설정 키 입력</strong>을 선택하고 위 키를 등록하세요. 키 유형은 <strong>시간 기반</strong>입니다.</p>
       <label className="v2-field">
         <span>6자리 인증 코드</span>
         <input name="mfaEnrollmentCode" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} minLength={6} required autoFocus />
@@ -225,12 +293,89 @@ function MfaEnrollmentStep({ challenge, onComplete, onCancel, page }: {
       {error ? <p className="v2-form-error" role="alert">{error}</p> : null}
       <Button className="v2-auth-submit" type="submit" disabled={busy}>{busy ? "등록 확인 중…" : "MFA 등록 완료"}</Button>
     </> : <>
-      <p className="v2-auth-note" role="status">관리자 계정은 MFA 등록을 완료해야 운영 화면에 접근할 수 있습니다.</p>
+      <p className="v2-auth-note" role="status">관리자 계정은 MFA 등록을 완료해야 운영 화면에 접근할 수 있습니다. 등록 정보는 브라우저 저장소에 남기지 않습니다.</p>
       {error ? <p className="v2-form-error" role="alert">{error}</p> : null}
-      <Button className="v2-auth-submit" type="button" onClick={begin} disabled={busy}>{busy ? "등록 준비 중…" : "MFA 등록 시작"}</Button>
+      <Button className="v2-auth-submit" type="button" onClick={begin} disabled={busy} autoFocus={embedded}>{busy ? "등록 준비 중…" : embedded ? "MFA 재등록 시작" : "MFA 등록 시작"}</Button>
     </>}
-    <Button type="button" variant="quiet" onClick={onCancel}>로그인 취소</Button>
-  </AuthPanel>;
+    <Button type="button" variant="quiet" onClick={() => {
+      setSetup(null);
+      setCode("");
+      setCompletion(null);
+      onCancel();
+    }}>{embedded ? "로그인 화면에서 MFA 등록 계속하기" : "로그인 취소"}</Button>
+  </MfaEnrollmentFrame>;
+}
+
+export function MfaResetSection({ onSessionRevoked }: { onSessionRevoked?: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [challenge, setChallenge] = useState<AuthChallengeResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const warningId = useId();
+  const finish = () => {
+    setChallenge(null);
+    if (onSessionRevoked) onSessionRevoked();
+    else replaceSensitiveMfaFlowWithLogin();
+  };
+
+  if (challenge) {
+    return <MfaEnrollmentStep challenge={challenge} onComplete={finish} onCancel={finish} embedded />;
+  }
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!confirmed) {
+      setError("MFA 재설정의 영향을 확인해 주세요.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await resetMfaEnrollment(currentPassword);
+      setCurrentPassword("");
+      setConfirmed(false);
+      setChallenge(result);
+    } catch (reason) {
+      setError(messageForError(reason, "MFA 재설정을 시작하지 못했습니다."));
+      setCurrentPassword("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <form className="v2-mfa-reset-form" onSubmit={submit} data-testid="admin-mfa-reset-form">
+    <p className="v2-mfa-reset-warning" id={warningId} role="alert">
+      재설정을 실행하면 현재 MFA 등록, 기존 복구 코드와 로그인된 모든 세션이 즉시 폐기됩니다. 이 브라우저도 로그아웃되며 새 MFA 등록 후 다시 로그인해야 합니다.
+    </p>
+    <label className="v2-field">
+      <span>현재 비밀번호</span>
+      <input
+        name="currentPassword"
+        type="password"
+        autoComplete="current-password"
+        value={currentPassword}
+        onChange={(event) => setCurrentPassword(event.target.value)}
+        aria-describedby={warningId}
+        required
+        autoFocus
+      />
+    </label>
+    <label className="v2-check v2-mfa-reset-confirmation">
+      <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} required />
+      <span>현재 인증 수단·복구 코드·모든 세션의 폐기를 이해했으며 MFA를 다시 설정하겠습니다.</span>
+    </label>
+    {error ? <p className="v2-form-error" role="alert">{error}</p> : null}
+    <Button className="v2-mfa-reset-submit" type="submit" disabled={busy || !confirmed || currentPassword.length === 0}>
+      {busy ? "MFA 재설정 중…" : "MFA 폐기 후 다시 설정"}
+    </Button>
+  </form>;
+}
+
+export function replaceSensitiveMfaFlowWithLogin(location: Pick<Location, "replace" | "assign"> = window.location): void {
+  // Replacing this history entry prevents setup keys and one-time recovery
+  // codes from being revisited through Back/BFCache after the flow ends.
+  location.replace("/login");
 }
 
 function LoginPage(page: AuthPageProps) {
@@ -242,7 +387,7 @@ function LoginPage(page: AuthPageProps) {
   const [notice, setNotice] = useState("");
 
   const finishChallenge = (result: AuthCompletionResult) => {
-    if (!navigateAfterAuthentication(result)) {
+    if (!navigateAfterAuthentication(result, { replaceLoginRequired: true })) {
       setChallenge(null);
       setPassword("");
       setNotice("MFA 등록을 완료했습니다. 새 로그인에서 MFA 확인을 계속하세요.");

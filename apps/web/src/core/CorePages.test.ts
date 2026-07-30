@@ -5,6 +5,7 @@ import type { SessionPayload } from "../apiClient";
 import { normalizeCoreWorkspace } from "./coreClient";
 import {
   AdminCollectionPage,
+  AdminSettingsPage,
   BusinessActivityPage,
   OnboardingPage,
   adminLodgingCollectionBlockReason,
@@ -146,5 +147,17 @@ describe("V3 core collection capability UI", () => {
     expect(markup).toContain("관광 실수집 미연결");
     expect(markup).toContain("숙소 수집 provider와 관광 provider는 별도입니다.");
     expect(markup).not.toContain("테스트 데이터 생성");
+  });
+
+  it("keeps workspace-dependent settings free of the independently rendered MFA reset card", () => {
+    const markup = renderToStaticMarkup(createElement(AdminSettingsPage, {
+      workspace: workspaceWithCollectionCapability(),
+      session: adminSession,
+      reload: async () => undefined
+    }));
+
+    expect(markup).toContain('data-testid="connector-status"');
+    expect(markup).not.toContain('data-testid="admin-mfa-reset"');
+    expect(markup).not.toContain('data-testid="admin-mfa-reset-form"');
   });
 });
