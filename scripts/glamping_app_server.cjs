@@ -8,6 +8,21 @@ const { spawn } = require("node:child_process");
 const { URL } = require("node:url");
 const yeogiImportParser = require("./yeogi_import_parser.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
+const {
+  assertSupportedSearchIntent,
+  resolveSearchIntentContract
+} = require("./lodging_search_contract.cjs");
+const {
+  applyObservationToCompany,
+  decideCompanyMatch,
+  mergeCompanyCategoryProfiles,
+  standardizeCompanyObservation
+} = require("./lodging_company_identity.cjs");
+const {
+  categorySummary: summarizeLodgingCategories,
+  normalizeCompanyCategory
+} = require("./lodging_category_profile.cjs");
+const TOURISM_REGION_MAP = require("../web/data/tourism_region_map.json");
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
@@ -476,7 +491,12 @@ function crawlExecutionPlan(payload = {}) {
       )
     : 0;
   const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
-  const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode);
+  const intentContract = resolveSearchIntentContract({
+    ...payload,
+    keyword,
+    searchMode: resolveSearchModeForCrawl(keyword, requestedSearchMode)
+  }, { regionMap: TOURISM_REGION_MAP });
+  const resolvedSearchMode = intentContract.resolvedSearchMode;
   return {
     keyword,
     checkIn,
@@ -485,6 +505,7 @@ function crawlExecutionPlan(payload = {}) {
     bookingRangePlaceLimit,
     requestedSearchMode,
     resolvedSearchMode,
+    ...intentContract,
     productMode,
     collectionMode,
     collectionPurpose,
@@ -746,6 +767,12 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     checkIn: estimate.checkIn,
     checkOut: estimate.checkOut,
     searchMode: estimate.resolvedSearchMode,
+    requestedSearchIntentMode: estimate.requestedSearchIntentMode,
+    resolvedIntent: estimate.resolvedIntent,
+    resolvedSearchMode: estimate.resolvedSearchMode,
+    selectedSearchCandidate: estimate.selectedSearchCandidate,
+    intentSupported: estimate.intentSupported,
+    intentWarning: estimate.intentWarning,
     productMode: estimate.productMode,
     collectionMode: estimate.collectionMode,
     collectionPurpose: estimate.collectionPurpose,
@@ -2354,6 +2381,28 @@ function sanitizeManualCorrectionMeta(payload = {}) {
     facilityTags: list(payload.facilityTags, 12, 40),
     couponVisible: enumValue(payload.couponVisible, ["visible", "hidden", "unknown"]),
     couponNames: sanitizeMemberText(payload.couponNames, 180)
+  };
+}
+
+function sanitizeManualCategoryCorrection(payload = {}, fallback = {}) {
+  const allowed = new Set(["glamping", "campground", "caravan", "pension", "poolVilla", "privateStay"]);
+  const requestedPrimary = sanitizeMemberText(payload.primaryCategoryKey, 32);
+  const fallbackPrimary = sanitizeMemberText(fallback.primaryCategoryKey, 32);
+  const primaryCategoryKey = allowed.has(requestedPrimary)
+    ? requestedPrimary
+    : (allowed.has(fallbackPrimary) ? fallbackPrimary : "");
+  const requestedTags = Array.isArray(payload.categoryTags) ? payload.categoryTags : [];
+  const fallbackTags = Array.isArray(fallback.categoryTags) ? fallback.categoryTags : [];
+  const categoryTags = boundedUnique(
+    [primaryCategoryKey, ...requestedTags, ...fallbackTags]
+      .map((value) => sanitizeMemberText(value, 32))
+      .filter((value) => allowed.has(value)),
+    10
+  );
+  return {
+    primaryCategoryKey,
+    categoryTags,
+    categoryNote: sanitizeMemberText(payload.categoryNote || fallback.categoryNote, 180)
   };
 }
 
@@ -5273,7 +5322,8 @@ function b2bSearchPayload(value = {}) {
     keyword,
     checkIn: value.checkIn || kstDate(0),
     checkOut: value.checkOut || kstDate(6),
-    searchMode: "keyword",
+    searchMode: normalizeSearchMode(value.searchMode || "keyword"),
+    searchIntentMode: value.searchIntentMode === "auto" ? "auto" : "legacy",
     productMode: normalizeProductMode(value.productMode || "all"),
     collectionMode: normalizeCollectionMode(value.collectionMode || "precision"),
     detailRankRanges,
@@ -5434,6 +5484,8 @@ function b2bSearchResultReusedCollection(result = {}) {
 
 async function runB2BSearch(payload = {}, context = {}) {
   const crawlPayload = b2bSearchPayload(payload);
+  const searchPlan = crawlExecutionPlan(crawlPayload);
+  assertSupportedSearchIntent(searchPlan);
   const signature = crawlPayloadSignature(crawlPayload);
   const completedReuse = await findReusableCompletedB2BSearch(crawlPayload, { signature }).catch(() => null);
   const sameSearchReuse = completedReuse || reusableRecentCrawlResult(signature) || findReusableCrawlJob(signature);
@@ -5470,6 +5522,11 @@ async function runB2BSearch(payload = {}, context = {}) {
   return {
     ok: true,
     runId,
+    resolvedIntent: searchPlan.resolvedIntent,
+    resolvedSearchMode: searchPlan.resolvedSearchMode,
+    selectedSearchCandidate: searchPlan.selectedSearchCandidate,
+    intentSupported: searchPlan.intentSupported,
+    intentWarning: searchPlan.intentWarning,
     data: publicRunForRole(data, USER_ROLES.b2b),
     crawlTiming: result.crawlTiming || null,
     reuse: result.reuse || null,
@@ -8239,9 +8296,11 @@ function parseReservationRateDetail(detail, checkIn) {
 function manualCorrectionHasValue(correction = {}) {
   if (!correction || correction.active === false) return false;
   const note = String(correction.note || "").trim();
+  const category = sanitizeManualCategoryCorrection(correction);
   return manualCorrectionHasBasis(correction)
     || manualCorrectionRoomSegments(correction).length > 0
     || manualCorrectionMetaHasValue(correction)
+    || Boolean(category.primaryCategoryKey || category.categoryTags.length || category.categoryNote)
     || note.length > 0;
 }
 
@@ -8612,8 +8671,9 @@ function companySourceKeys(entity = {}) {
   const keys = [];
   if (entity.placeId) keys.push(`place:${entity.placeId}`);
   if (entity.bookingBusinessId) keys.push(`booking:${entity.bookingBusinessId}`);
+  if (entity.observation?.sourcePlatform && entity.observation?.sourceId) keys.push(`source:${entity.observation.sourcePlatform}:${entity.observation.sourceId}`);
+  if (entity.observation?.phoneKey) keys.push(`phone:${entity.observation.phoneKey}`);
   if (entity.nameKey && entity.addressKey) keys.push(`name_addr:${entity.nameKey}:${entity.addressKey}`);
-  if (entity.nameKey && entity.regionKey) keys.push(`name_region:${entity.nameKey}:${entity.regionKey}`);
   return boundedUnique(keys, 10);
 }
 
@@ -8627,7 +8687,23 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const looseNameKey = normalizeCompanyLooseName(name);
   const addressKey = normalizeAddressKey(address);
   const regionKey = normalizeCompanyIdentityName(region);
-  const sourceKeys = companySourceKeys({ placeId, bookingBusinessId, nameKey, addressKey, regionKey });
+  const observation = standardizeCompanyObservation({
+    sourcePlatform: item.sourcePlatform || item.channel || (placeId ? "naver" : ""),
+    sourceId: item.sourceId || item.platformId || placeId || bookingBusinessId,
+    name,
+    address,
+    region,
+    phone: item.phone || item.telephone || item.tel,
+    latitude: item.latitude ?? item.lat,
+    longitude: item.longitude ?? item.lng,
+    requestedCategoryKey: item.requestedLodgingCategoryKey || run.lodgingCategoryKey,
+    detectedCategoryKey: item.detectedLodgingCategoryKey || item.lodgingCategoryKey,
+    categoryTags: item.detectedLodgingCategoryTags || item.categoryTags,
+    categoryConfidence: item.categoryConfidence,
+    categoryEvidence: item.categoryEvidence,
+    observedAt: collectedAt
+  });
+  const sourceKeys = companySourceKeys({ placeId, bookingBusinessId, nameKey, addressKey, regionKey, observation });
   const keywordLayer = keywordLayerFromRunLike(run);
   const salesSignal = companySalesSignalFromItem(item, run);
   const couponSignal = salesSignal.couponSignal || naverCouponSignalFromItem(item);
@@ -8643,6 +8719,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     addressKey,
     placeId,
     bookingBusinessId,
+    observation,
     sourceKeys,
     url: item.url || "",
     rank: item.rank ?? null,
@@ -8737,6 +8814,14 @@ function createCompanyRecord(companyId, entity) {
       snapshots: []
     },
     manualCorrection: null,
+    primaryCategoryKey: "",
+    categoryTags: [],
+    categoryConfidence: 0,
+    categoryEvidence: [],
+    sourcePlatforms: [],
+    sourcePlatformIds: {},
+    phones: [],
+    coordinates: [],
     duplicateNotes: []
   };
 }
@@ -9228,6 +9313,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
   const best = keywords.find((row) => row.bestRank) || keywords[0] || null;
   const activeKeyword = activeKeywordKey ? keywords.find((row) => row.keywordKey === activeKeywordKey) : null;
   const exposureLayer = companyExposureLayerFromKeywords(keywords);
+  const categoryProfile = normalizeCompanyCategory(company);
   return {
     companyId: company.companyId,
     primaryName: company.primaryName,
@@ -9241,6 +9327,9 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     runCount: (company.runIds || []).length,
     sourceRoles: company.sourceRoles || [],
     collectionSources: company.collectionSources || [],
+    ...categoryProfile,
+    categoryEvidence: categoryProfile.categoryEvidenceSummary,
+    duplicateReview: categoryProfile.duplicateReviewStatus ? { status: categoryProfile.duplicateReviewStatus } : null,
     latestCollection: company.latestCollection || null,
     collectionRouteStats: Object.values(company.collectionRouteStats || {})
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
@@ -10529,15 +10618,34 @@ function upsertCompanyRecord(master, entity) {
   const sourceKeys = entity.sourceKeys || [];
   const matchedIds = boundedUnique(sourceKeys.map((key) => master.sourceIndex[key]).filter(Boolean), 10);
   let companyId = matchedIds[0];
+  let identityDecision = companyId
+    ? { decision: "merge", score: 100, confidence: 1, matchedCompanyId: companyId, evidence: ["source index 일치"], conflicts: [] }
+    : decideCompanyMatch(entity.observation || {}, Object.values(master.companies || {}));
+  if (!companyId && identityDecision.decision === "merge") companyId = identityDecision.matchedCompanyId;
   if (!companyId) {
     companyId = entity.placeId
       ? `cmp_place_${entity.placeId}`
       : `cmp_${stableHash([entity.nameKey, entity.addressKey, entity.regionKey, entity.bookingBusinessId].filter(Boolean).join("|"))}`;
   }
   let company = master.companies[companyId];
+  if (company && identityDecision.decision === "create") {
+    identityDecision = { decision: "merge", score: 100, confidence: 1, matchedCompanyId: companyId, evidence: ["안정적 company ID 일치"], conflicts: [] };
+  }
   if (!company) {
     company = createCompanyRecord(companyId, entity);
     master.companies[companyId] = company;
+  }
+  if (identityDecision.decision === "review" && identityDecision.matchedCompanyId) {
+    company.duplicateReview = company.duplicateReview?.status === "pending"
+      ? company.duplicateReview
+      : {
+          status: "pending",
+          candidateCompanyIds: [identityDecision.matchedCompanyId],
+          topScore: identityDecision.score,
+          evidence: identityDecision.evidence,
+          conflicts: identityDecision.conflicts,
+          createdAt: entity.collectedAt || new Date().toISOString()
+        };
   }
   if (matchedIds.length > 1) {
     company.duplicateNotes = [
@@ -10552,6 +10660,11 @@ function upsertCompanyRecord(master, entity) {
   company.lastSeenAt = [company.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt;
   company.lastRunId = entity.runId || company.lastRunId;
   mergeCompanyFieldArrays(company, entity);
+  const categoryMerge = applyObservationToCompany(company, entity.observation || {});
+  company = categoryMerge.company;
+  master.companies[companyId] = company;
+  entity.identityDecision = identityDecision;
+  entity.categoryFieldsChanged = categoryMerge.fieldsChanged;
   updateCompanySourceStats(company, entity);
   updateCompanyCollectionRoute(company, entity);
   upsertCompanyKeywordExposure(company, entity);
@@ -10669,6 +10782,7 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
     if (!manualCorrectionHasValue(target.manualCorrection) && manualCorrectionHasValue(source.manualCorrection)) {
       target.manualCorrection = source.manualCorrection;
     }
+    Object.assign(target, mergeCompanyCategoryProfiles(target, source));
     target.channelExposures = mergeCompanyChannelExposures(target.channelExposures || {}, source.channelExposures || source.channelExposure || {});
     target.channelExposureHistory = [
       ...(target.channelExposureHistory || []),
@@ -10760,12 +10874,14 @@ async function saveCompanyManualCorrection(payload = {}) {
   const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
   const roomSegments = sanitizeManualCorrectionRoomSegments(payload.roomSegments);
   const correctionMeta = sanitizeManualCorrectionMeta(payload);
+  const categoryCorrection = sanitizeManualCategoryCorrection(payload, company.manualCorrection || {});
   const nextCorrection = {
     active: true,
     lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
     dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
     roomSegments,
     ...correctionMeta,
+    ...categoryCorrection,
     note: String(payload.note || "").trim(),
     source: "admin",
     updatedAt: savedAt
@@ -10792,6 +10908,9 @@ async function saveCompanyManualCorrection(payload = {}) {
       facilityTags: company.manualCorrection?.facilityTags || [],
       couponVisible: company.manualCorrection?.couponVisible || "",
       couponNames: company.manualCorrection?.couponNames || "",
+      primaryCategoryKey: company.manualCorrection?.primaryCategoryKey || "",
+      categoryTags: company.manualCorrection?.categoryTags || [],
+      categoryNote: company.manualCorrection?.categoryNote || "",
       note: company.manualCorrection?.note || ""
     }
   ].slice(-30);
@@ -11209,11 +11328,19 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
   let touched = 0;
   let inventoryAppliedCompanies = 0;
   let demandSignalCompanies = 0;
+  let matchedExistingCompanies = 0;
+  let duplicateReviewCompanies = 0;
+  let newIdentityCompanies = 0;
+  let categoryUpdatedCompanies = 0;
 
   for (let index = 0; index < items.length; index += 1) {
     const entity = companyEntityFromItem(items[index], run, collectedAt);
     if (!entity.nameKey || !entity.sourceKeys.length) continue;
     const company = upsertCompanyRecord(master, entity);
+    if (entity.identityDecision?.decision === "merge") matchedExistingCompanies += 1;
+    if (entity.identityDecision?.decision === "review") duplicateReviewCompanies += 1;
+    if (entity.identityDecision?.decision === "create") newIdentityCompanies += 1;
+    if (entity.categoryFieldsChanged?.length) categoryUpdatedCompanies += 1;
     const dbRoute = entity.collectionDbRoute || collectionDbRouteProfile(entity.collectionPurpose, entity.collectionProfile);
     touched += 1;
     if (dbRoute.appliesInventory) inventoryAppliedCompanies += 1;
@@ -11250,6 +11377,10 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
     dbRoute: runDbRoute,
     inventoryAppliedCompanies,
     demandSignalCompanies,
+    matchedExistingCompanies,
+    duplicateReviewCompanies,
+    newIdentityCompanies,
+    categoryUpdatedCompanies,
     historyEligible: Boolean(runDbRoute.appliesHistory),
     duplicateCandidateCount: duplicateCandidates.length,
     duplicateCandidates,
@@ -11314,6 +11445,7 @@ async function summarizeCompanyMaster() {
     duplicateCandidates,
     collectionSourceCounts,
     collectionRoutes: summarizeCompanyCollectionRoutes(rawCompanies),
+    categorySummary: summarizeLodgingCategories(profiledCompanies),
     b2bSearchCompanyCount: collectionSourceCounts.b2b_search || 0,
     crossKeyword: summarizeCompanyCrossKeyword(master),
     salesTargets,
@@ -12996,21 +13128,31 @@ async function runCrawlerLegacySingleFlight(payload) {
 }
 
 async function runCrawler(payload) {
+  const plan = crawlExecutionPlan(payload);
+  assertSupportedSearchIntent(plan);
+  const withIntent = (result) => ({
+    ...(result && typeof result === "object" ? result : { output: result }),
+    resolvedIntent: plan.resolvedIntent,
+    resolvedSearchMode: plan.resolvedSearchMode,
+    selectedSearchCandidate: plan.selectedSearchCandidate,
+    intentSupported: plan.intentSupported,
+    intentWarning: plan.intentWarning
+  });
   const signature = crawlPayloadSignature(payload);
   const cached = reusableRecentCrawlResult(signature);
   if (cached) {
-    return resolveCrawlJob(cached, { signature, waiterCount: 1 }, "recent_reuse");
+    return withIntent(resolveCrawlJob(cached, { signature, waiterCount: 1 }, "recent_reuse"));
   }
   const existing = findReusableCrawlJob(signature);
   if (existing) {
     attachCrawlJobClient(existing, payload);
     const result = await existing.promise;
-    return resolveCrawlJob(result, existing, "shared");
+    return withIntent(resolveCrawlJob(result, existing, "shared"));
   }
   const job = createCrawlJob(payload, signature);
   crawlQueue.push(job);
   startNextCrawlJob();
-  return job.promise;
+  return withIntent(await job.promise);
 }
 
 function crawlCancelledError(reason = "") {
@@ -13166,6 +13308,15 @@ async function runCrawlerInternal(payload) {
     SEARCH_MODE: plan.resolvedSearchMode,
     SEARCH_MODE_REQUESTED: normalizeSearchMode(plan.requestedSearchMode),
     SEARCH_MODE_AUTO_CORRECTED: plan.resolvedSearchMode !== normalizeSearchMode(plan.requestedSearchMode) ? "1" : "0",
+    SEARCH_INTENT: plan.resolvedIntent?.intent || "",
+    SEARCH_INTENT_CONFIDENCE: String(plan.resolvedIntent?.confidence || 0),
+    LODGING_CATEGORY_KEY: plan.resolvedIntent?.lodgingCategoryKey || "",
+    SEARCH_REGION_KEY: plan.resolvedIntent?.region?.key || "",
+    SEARCH_REGION_QUERY: plan.resolvedIntent?.region?.query || "",
+    SEARCH_COMPANY_NAME: plan.resolvedIntent?.companyName || "",
+    SEARCH_PLATFORM_KEY: plan.resolvedIntent?.platformKey || "",
+    SEARCH_CANDIDATE_MODE: plan.selectedSearchCandidate?.mode || "",
+    SEARCH_CANDIDATE_QUERY: plan.selectedSearchCandidate?.query || "",
     COLLECTION_MODE: plan.collectionMode,
     COLLECTION_PURPOSE: plan.collectionPurpose,
     DETAIL_RANK_RANGES: plan.detailRankRanges,
@@ -13251,6 +13402,18 @@ async function serveStatic(reqUrl, res) {
   send(res, 200, await fsp.readFile(filePath), MIME_TYPES[ext] || "application/octet-stream");
 }
 
+async function serveLodgingSearchIntentScript(res, headOnly = false) {
+  const contentType = "application/javascript; charset=utf-8";
+  if (headOnly) return sendHead(res, 200, contentType);
+  return send(res, 200, await fsp.readFile(path.join(ROOT, "scripts", "lodging_search_intent.cjs")), contentType);
+}
+
+async function serveLodgingCategoryProfileScript(res, headOnly = false) {
+  const contentType = "application/javascript; charset=utf-8";
+  if (headOnly) return sendHead(res, 200, contentType);
+  return send(res, 200, await fsp.readFile(path.join(ROOT, "scripts", "lodging_category_profile.cjs")), contentType);
+}
+
 async function serveOutput(reqUrl, res) {
   const relative = reqUrl.pathname.replace(/^\/outputs\//, "");
   const filePath = safeJoin(OUTPUTS_DIR, relative);
@@ -13263,6 +13426,12 @@ async function route(req, res) {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
 
   try {
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/lodging-search-intent.js") {
+      return serveLodgingSearchIntentScript(res, req.method === "HEAD");
+    }
+    if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/lodging-category-profile.js") {
+      return serveLodgingCategoryProfileScript(res, req.method === "HEAD");
+    }
     const publicStaticPaths = new Set([
       "/manifest.webmanifest",
       "/login-theme.js",

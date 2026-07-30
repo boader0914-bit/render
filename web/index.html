@@ -52,6 +52,7 @@
         </label>
         <button class="primary-button" type="submit">검색 실행</button>
       </form>
+      <p class="search-intent-hint" id="b2bSearchIntentHint" aria-live="polite"></p>
       <div class="b2b-search-results" id="b2bSearchResults"></div>
       <p class="b2b-search-status" id="b2bSearchStatus">지역과 업종을 입력하세요.</p>
       <div class="b2b-account-panel" id="b2bAccountPanel"></div>
@@ -228,6 +229,7 @@
               <span>키워드</span>
               <input id="keywordInput" type="text" value="경북글램핑" autocomplete="off">
             </label>
+            <p class="search-intent-hint" id="crawlSearchIntentHint" aria-live="polite"></p>
             <div class="field-grid">
               <label class="field">
                 <span>체크인</span>
@@ -474,6 +476,8 @@
     </section>
   </div>
 
+  <script src="/lodging-search-intent.js"></script>
+  <script src="/lodging-category-profile.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

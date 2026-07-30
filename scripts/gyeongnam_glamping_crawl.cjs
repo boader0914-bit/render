@@ -1,6 +1,11 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const {
+  collectionContextFromEnv,
+  decorateLodgingResult,
+  evaluateLodgingRelevance
+} = require("./lodging_collection_context.cjs");
 let XLSX = null;
 let ArtifactWorkbook = null;
 let ArtifactSpreadsheetFile = null;
@@ -223,6 +228,8 @@ const PRODUCT_MODE = normalizeProductMode(process.env.PRODUCT_MODE || "all");
 const PRODUCT_MODE_LABEL = PRODUCT_MODES[PRODUCT_MODE];
 const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 7, 1, 31);
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
+const COLLECTION_SEARCH_CONTEXT = collectionContextFromEnv(process.env, RAW_KEYWORD);
+const HAS_COLLECTION_SEARCH_CONTEXT = Boolean(COLLECTION_SEARCH_CONTEXT.intent);
 const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
 const SEARCH_MODE_LABEL = SEARCH_MODES[SEARCH_MODE];
 const COLLECTION_MODE = normalizeCollectionMode(process.env.COLLECTION_MODE || "precision");
@@ -634,10 +641,17 @@ function makeCompanyConfig(keyword) {
 
 const province = SEARCH_MODE === "company" ? makeCompanyConfig(RAW_KEYWORD) : (detectProvince(RAW_KEYWORD) || makeLocalConfig(RAW_KEYWORD));
 const RAW_KEYWORD_SUFFIX = lodgingSearchSuffixInKeyword(RAW_KEYWORD) || "글램핑";
-const QUERY = province.mainQuery || (province.isCompany ? RAW_KEYWORD.trim() : (province.isLocal ? spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX) : `${province.short} ${RAW_KEYWORD_SUFFIX}`));
-const NAVER_QUERY = province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} ${RAW_KEYWORD_SUFFIX}`));
-const DDNAYO_QUERY_EXACT = province.ddnayoQuery || (province.isCompany ? QUERY : spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX));
-const DDNAYO_QUERY_NORMALIZED = compactKeyword(province.ddnayoQuery || (province.isCompany ? QUERY : normalizedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX)));
+const LEGACY_QUERY = province.mainQuery || (province.isCompany ? RAW_KEYWORD.trim() : (province.isLocal ? spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX) : `${province.short} ${RAW_KEYWORD_SUFFIX}`));
+const QUERY = HAS_COLLECTION_SEARCH_CONTEXT ? COLLECTION_SEARCH_CONTEXT.primaryQuery : LEGACY_QUERY;
+const NAVER_QUERY = HAS_COLLECTION_SEARCH_CONTEXT
+  ? (COLLECTION_SEARCH_CONTEXT.platformQueries.naver[0] || QUERY)
+  : (province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} ${RAW_KEYWORD_SUFFIX}`)));
+const DDNAYO_QUERY_EXACT = HAS_COLLECTION_SEARCH_CONTEXT
+  ? COLLECTION_SEARCH_CONTEXT.platformQueries.ddnayo.exact
+  : (province.ddnayoQuery || (province.isCompany ? QUERY : spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX)));
+const DDNAYO_QUERY_NORMALIZED = HAS_COLLECTION_SEARCH_CONTEXT
+  ? COLLECTION_SEARCH_CONTEXT.platformQueries.ddnayo.normalized
+  : compactKeyword(province.ddnayoQuery || (province.isCompany ? QUERY : normalizedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX)));
 const RUN_DATE = CHECK_IN.replaceAll("-", "");
 const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false }).replaceAll(":", "");
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
@@ -929,6 +943,35 @@ function isRelevantOtaAccommodation(row) {
   const hasOutdoorSignal = /글램핑|카라반|캠핑|오토캠핑|야영|펜션|풀빌라|리조트|스테이|camp|glamp/i.test(text);
   const hasHotelOnlySignal = /모텔|호텔|비즈니스호텔|레지던스호텔/i.test(text);
   return hasOutdoorSignal || !hasHotelOnlySignal;
+}
+
+function lodgingRelevanceInput(row = {}) {
+  return {
+    ...row,
+    name: row.name || row["\uC5C5\uCCB4\uBA85"] || "",
+    category: row.category || row["\uCE74\uD14C\uACE0\uB9AC"] || "",
+    location: row.location || row["\uC8FC\uC18C"] || "",
+    roomName: row.roomName || row["\uAC1D\uC2E4\uBA85(\uC77C\uBD80)"] || "",
+    description: row.description || row["\uD2B9\uC9D5"] || ""
+  };
+}
+
+function decorateCollectionRow(row = {}, sourceQuery = QUERY) {
+  const decorated = decorateLodgingResult(lodgingRelevanceInput(row), COLLECTION_SEARCH_CONTEXT, sourceQuery);
+  return {
+    ...decorated,
+    detectedLodgingCategoryTags: JSON.stringify(decorated.detectedLodgingCategoryTags || []),
+    categoryEvidence: JSON.stringify(decorated.categoryEvidence || [])
+  };
+}
+
+function filterCollectionRows(rows = [], sourceQuery = QUERY, options = {}) {
+  if (!HAS_COLLECTION_SEARCH_CONTEXT) {
+    return options.legacyOtaFilter ? rows.filter(isRelevantOtaAccommodation) : rows;
+  }
+  return rows
+    .map((row) => decorateCollectionRow(row, sourceQuery))
+    .filter((row) => evaluateLodgingRelevance(row, COLLECTION_SEARCH_CONTEXT).relevant);
 }
 
 function priceCluster(row) {
@@ -2493,7 +2536,9 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
 }
 
 async function collectNaverMain() {
-  const queries = province.isCompany ? companySearchQueries(RAW_KEYWORD) : [NAVER_QUERY];
+  const queries = HAS_COLLECTION_SEARCH_CONTEXT
+    ? COLLECTION_SEARCH_CONTEXT.platformQueries.naver
+    : (province.isCompany ? companySearchQueries(RAW_KEYWORD) : [NAVER_QUERY]);
   const attemptedQueries = [];
   let lastStatus = 0;
   let lastUrl = "";
@@ -2555,6 +2600,10 @@ async function collectNaverMain() {
       if (!attempt.matched) continue;
     }
 
+    overall = filterCollectionRows(overall, query);
+    ads = filterCollectionRows(ads, query);
+    attempt.relevanceMatched = overall.length + ads.length;
+
     return {
       status,
       url,
@@ -2614,7 +2663,7 @@ async function collectNaverRegional() {
     }
     const result = state.ROOT_QUERY[key].business;
     const refs = result.items || [];
-    const regionRows = refs.slice(0, REGIONAL_LIMIT).map((ref, index) => {
+    const regionRows = filterCollectionRows(refs.slice(0, REGIONAL_LIMIT).map((ref, index) => {
       const item = state[ref.__ref];
       return mapNaverItem(state, item, {
         지역: region,
@@ -2622,10 +2671,18 @@ async function collectNaverRegional() {
         순위: index + 1,
         구분: "비광고",
       });
-    });
+    }), query);
     return {
       rows: regionRows,
-      summary: { region, query, status, total: result.total, collected: Math.min(refs.length, REGIONAL_LIMIT), note: "" }
+      summary: {
+        region,
+        query,
+        status,
+        total: result.total,
+        collected: regionRows.length,
+        filteredOut: Math.min(refs.length, REGIONAL_LIMIT) - regionRows.length,
+        note: ""
+      }
     };
   });
   for (const item of regionalResults) {
@@ -2750,7 +2807,7 @@ async function collectNol() {
       url: data.action?.web || "",
     };
   });
-  const relevantRows = rawRows.filter(isRelevantOtaAccommodation);
+  const relevantRows = filterCollectionRows(rawRows, QUERY, { legacyOtaFilter: true });
   const matchedRows = province.isCompany
     ? filterCompanyRows(relevantRows, (row) => row.name)
     : relevantRows;
@@ -2816,7 +2873,7 @@ async function collectDdnayo() {
     section: usedQuery === DDNAYO_QUERY_NORMALIZED ? "검색결과(공백제거 키워드)" : "검색결과",
     rank_or_order: index + 1,
     name: item.accommodationName || "",
-    category: "펜션/글램핑",
+    category: item.categoryName || item.accommodationType || item.category || "",
     location: item.address || "",
     rating: "",
     reviews: "",
@@ -2824,9 +2881,10 @@ async function collectDdnayo() {
     ad_flag: "확인불가",
     url: item.productUrl || "",
   }));
+  const relevantRows = filterCollectionRows(rawRows, usedQuery, { legacyOtaFilter: false });
   const rows = province.isCompany
-    ? filterCompanyRows(rawRows, (row) => row.name).map((row, index) => ({ ...row, rank_or_order: index + 1 }))
-    : rawRows;
+    ? filterCompanyRows(relevantRows, (row) => row.name).map((row, index) => ({ ...row, rank_or_order: index + 1 }))
+    : relevantRows;
 
   return {
     exactTotal: exact.data?.data?.totalSize ?? 0,
@@ -3255,6 +3313,21 @@ async function main() {
     "dayUseWeeklyOfflineReservationDetail",
   ];
 
+  const lodgingSearchDiagnosticColumns = [
+    "requestedLodgingCategoryKey",
+    "detectedLodgingCategoryKey",
+    "detectedLodgingCategoryTags",
+    "categoryConfidence",
+    "categoryEvidence",
+    "relevanceScore",
+    "relevanceStatus",
+    "relevanceRejectionReason",
+    "searchIntent",
+    "searchRegionKey",
+    "searchRegionQuery",
+    "searchCompanyName",
+    "sourceQuery"
+  ];
   const platformColumns = [
     "기준키워드",
     "검색키워드",
@@ -3280,6 +3353,7 @@ async function main() {
     "price",
     "ad_flag",
     "url",
+    ...lodgingSearchDiagnosticColumns,
     "예약리스트유형",
     "네이버상품구성",
     "숙박상품수",
@@ -3374,6 +3448,7 @@ async function main() {
     "채널수확인상태",
     "네이버분리확인",
     "query",
+    ...lodgingSearchDiagnosticColumns,
     "overall_rank",
     "구분",
     "place_id",
@@ -3486,6 +3561,7 @@ async function main() {
     "채널수확인상태",
     "네이버분리확인",
     "query",
+    ...lodgingSearchDiagnosticColumns,
     "ad_order",
     "구분",
     "ad_id",
@@ -3586,6 +3662,7 @@ async function main() {
     "url",
   ];
   const regionalColumns = [
+    ...lodgingSearchDiagnosticColumns,
     "기준키워드",
     "검색키워드",
     "검색클러스터",
@@ -3876,6 +3953,14 @@ async function main() {
     keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),
     searchMode: SEARCH_MODE,
     searchModeLabel: SEARCH_MODE_LABEL,
+    searchIntent: COLLECTION_SEARCH_CONTEXT.intent,
+    searchIntentConfidence: Number(process.env.SEARCH_INTENT_CONFIDENCE || 0),
+    lodgingCategoryKey: COLLECTION_SEARCH_CONTEXT.categoryKey,
+    searchRegionKey: COLLECTION_SEARCH_CONTEXT.regionKey,
+    searchRegionQuery: COLLECTION_SEARCH_CONTEXT.regionQuery,
+    searchCompanyName: COLLECTION_SEARCH_CONTEXT.companyName,
+    searchCandidate: COLLECTION_SEARCH_CONTEXT.selectedCandidate,
+    searchQueryEvidence: COLLECTION_SEARCH_CONTEXT.queryEvidence,
     collectionMode: COLLECTION_MODE,
     collectionModeLabel: COLLECTION_MODE_LABEL,
     collectionPurpose: COLLECTION_PURPOSE,

@@ -325,6 +325,7 @@ const els = {
   b2bOnboarding: document.getElementById("b2bOnboarding"),
   b2bSearchForm: document.getElementById("b2bSearchForm"),
   b2bSearchInput: document.getElementById("b2bSearchInput"),
+  b2bSearchIntentHint: document.getElementById("b2bSearchIntentHint"),
   b2bSearchRangeInput: document.getElementById("b2bSearchRangeInput"),
   b2bSearchResults: document.getElementById("b2bSearchResults"),
   b2bSearchStatus: document.getElementById("b2bSearchStatus"),
@@ -345,6 +346,7 @@ const els = {
   headerUserViewButton: document.getElementById("headerUserViewButton"),
   adminUserViewButton: document.getElementById("adminUserViewButton"),
   keywordInput: document.getElementById("keywordInput"),
+  crawlSearchIntentHint: document.getElementById("crawlSearchIntentHint"),
   checkInInput: document.getElementById("checkInInput"),
   checkOutInput: document.getElementById("checkOutInput"),
   searchModeInput: document.getElementById("searchModeInput"),
@@ -754,8 +756,8 @@ function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.valu
 
 function currentCrawlFormPayload() {
   const keyword = els.keywordInput?.value?.trim() || "";
-  const requestedMode = els.searchModeInput?.value || "keyword";
-  const resolvedMode = correctedSearchMode(keyword, requestedMode);
+  const intent = clientSearchIntent(keyword);
+  const resolvedMode = clientSearchMode(intent);
   const collectionMode = "precision";
   const collectionPurpose = normalizeCollectionPurpose(els.collectionPurposeInput?.value || "revenue_detail");
   const purpose = collectionPurposeProfile(collectionPurpose);
@@ -767,7 +769,8 @@ function currentCrawlFormPayload() {
     checkIn: els.checkInInput?.value || "",
     checkOut: els.checkOutInput?.value || "",
     searchMode: resolvedMode,
-    requestedMode,
+    searchIntentMode: "auto",
+    clientIntentPreview: clientIntentPreview(intent),
     productMode: els.productModeInput?.value || "all",
     collectionPurpose,
     collectionMode,
@@ -1751,7 +1754,7 @@ function setStatus(text) {
 function ensureCrawlControls() {
   if (!els.crawlForm) return;
 
-  if (!els.searchModeInput) {
+  if (!els.searchModeInput && false) {
     const keywordLabel = els.keywordInput?.closest(".field");
     const modeLabel = document.createElement("label");
     modeLabel.className = "field";
@@ -2960,6 +2963,73 @@ function renderLocationCandidateEvidence(candidate = {}) {
       <div><span>채널공백</span><strong>${fmtNumber(evidence.platformGap)}</strong><small>OTA 보완 신호</small></div>
     </div>
   `;
+}
+
+function clientSearchIntent(keyword = "") {
+  const resolver = globalThis.LodgingSearchIntent?.resolveLodgingSearchIntent;
+  if (typeof resolver !== "function") return null;
+  return resolver(keyword, { regionMap: state.tourismRegionMap || {} });
+}
+
+function clientSearchMode(intent = {}) {
+  return intent?.intent === "company_search" || intent?.intent === "company_in_region" ? "company" : "keyword";
+}
+
+function clientIntentPreview(intent = {}) {
+  if (!intent) return null;
+  return {
+    intent: intent.intent || "unknown",
+    regionKey: intent.region?.key || "",
+    lodgingCategoryKey: intent.lodgingCategoryKey || "",
+    platformKey: intent.platformKey || "",
+    confidence: Number(intent.confidence || 0)
+  };
+}
+
+function lodgingCategoryIntentLabel(key = "") {
+  return ({
+    glamping: "글램핑",
+    campground: "캠핑장",
+    caravan: "카라반",
+    pension: "펜션",
+    poolVilla: "풀빌라",
+    privateStay: "독채스테이",
+    hotelResort: "호텔·리조트",
+    motel: "모텔"
+  })[key] || "숙소";
+}
+
+function searchIntentHintMeta(keyword = "") {
+  const intent = clientSearchIntent(keyword);
+  if (!intent || intent.intent === "unknown") {
+    return { text: keyword ? "검색 의도를 자동 판정하지 못했습니다. 검색어를 더 구체적으로 입력하세요." : "지역명 또는 업체명을 입력하면 검색 방식을 자동 판정합니다.", supported: false };
+  }
+  const region = intent.region?.query || intent.region?.canonicalName || "";
+  const category = lodgingCategoryIntentLabel(intent.lodgingCategoryKey);
+  if (intent.intent === "platform_search") {
+    return { text: "스테이폴리오 플랫폼 검색으로 판정 — 수집 연결 전", supported: false };
+  }
+  if (intent.intent === "company_in_region") {
+    return { text: `${region} 지역 내 ‘${intent.companyName}’ 업체 검색으로 판정`, supported: true };
+  }
+  if (intent.intent === "company_search") {
+    return { text: `‘${intent.companyName}’ 업체명 검색으로 ${intent.confidence < 0.8 ? "추정 — 검색 결과로 재확인" : "판정"}`, supported: true };
+  }
+  const uncertainty = intent.confidence < 0.8 ? " — 검색 결과로 재확인" : "";
+  return { text: `${region} 지역의 ${intent.lodgingCategoryKey ? category : "전체 숙소"} 검색으로 판정${uncertainty}`, supported: true };
+}
+
+function renderSearchIntentHints() {
+  const rows = [
+    [els.crawlSearchIntentHint, els.keywordInput?.value || ""],
+    [els.b2bSearchIntentHint, els.b2bSearchInput?.value || ""]
+  ];
+  for (const [element, keyword] of rows) {
+    if (!element) continue;
+    const meta = searchIntentHintMeta(keyword.trim());
+    element.textContent = meta.text;
+    element.dataset.supported = String(meta.supported);
+  }
 }
 
 function renderLocationCandidatePublicData(saved = {}) {
@@ -5488,6 +5558,7 @@ function renderCompanies() {
           <span class="rank-badge">${escapeHtml(item.rank || index + 1)}</span>
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
+            ${lodgingCategoryBadgesHtml(item.companyProfile || item, { compact: true })}
             <small>${escapeHtml(categoryText(item))}</small>
             <div class="company-badges">${companyBadges(item, linked, stockStatus)}</div>
           </div>
@@ -7121,6 +7192,50 @@ function targetEntries(limit = 15, options = {}) {
 
 function companyMasterSource() {
   return { ...(state.data?.companyMaster || {}), ...(state.companyMaster || {}) };
+}
+
+function lodgingCategoryProfile(company = {}) {
+  return window.LodgingCategoryProfile?.normalizeCompanyCategory(company) || {
+    primaryCategoryKey: "", primaryCategoryLabel: "유형 미확인", categoryTags: [], categoryLabels: [],
+    categoryConfidence: 0, categoryEvidenceSummary: [], sourcePlatforms: [], sourcePlatformLabels: [],
+    manualCategoryOverride: false, duplicateReviewStatus: "", confidenceProfile: { key: "unknown", label: "미확인", confidence: 0 }
+  };
+}
+
+function lodgingCategoryBadgesHtml(company = {}, options = {}) {
+  const profile = lodgingCategoryProfile(company);
+  const secondary = profile.categoryTags.filter((key) => key !== profile.primaryCategoryKey).slice(0, options.compact ? 2 : 5);
+  return `<div class="lodging-category-badges ${options.compact ? "compact" : ""}">
+    <span class="lodging-category-primary ${profile.primaryCategoryKey ? "known" : "unknown"}">${escapeHtml(profile.primaryCategoryLabel)}</span>
+    ${secondary.map((key) => `<span>${escapeHtml(window.LodgingCategoryProfile.CATEGORY_PROFILES[key].label)}</span>`).join("")}
+    ${profile.manualCategoryOverride ? `<em title="관리자 수동 유형 적용">수동 적용</em>` : ""}
+  </div>`;
+}
+
+function lodgingCategoryDetailHtml(company = {}) {
+  const profile = lodgingCategoryProfile(company);
+  const confidence = profile.confidenceProfile || {};
+  return `<section class="lodging-category-detail">
+    <div class="sheet-structure-title"><h3>숙소 유형</h3><span class="structure-badge category-${escapeHtml(confidence.key || "unknown")}">${escapeHtml(confidence.label || "미확인")}${profile.categoryConfidence ? ` · ${Math.round(profile.categoryConfidence * 100)}%` : ""}</span></div>
+    ${lodgingCategoryBadgesHtml(company)}
+    ${profile.sourcePlatformLabels.length ? `<p><strong>확인 출처</strong><span>${escapeHtml(profile.sourcePlatformLabels.join(" · "))}</span></p>` : ""}
+    ${profile.categoryEvidenceSummary.length ? `<div class="lodging-category-evidence">${profile.categoryEvidenceSummary.slice(0, 5).map((row) => `<article><strong>${escapeHtml(row.categoryLabel)}</strong><span>${escapeHtml(row.reason || "판정 근거")}</span><small>${escapeHtml([window.LodgingCategoryProfile.PLATFORM_LABELS[row.source] || row.source, row.observedAt ? compactDateTime(row.observedAt) : ""].filter(Boolean).join(" · "))}</small></article>`).join("")}</div>` : ""}
+    ${profile.duplicateReviewStatus === "pending" && isAdminRole() ? `<p class="lodging-category-review"><strong>중복 검토</strong><span>유사 업체 후보 확인 필요</span></p>` : ""}
+  </section>`;
+}
+
+function lodgingCategorySummaryHtml(master = {}) {
+  const summary = master.categorySummary || window.LodgingCategoryProfile?.categorySummary(master.companies || []) || {};
+  const profiles = window.LodgingCategoryProfile?.CATEGORY_PROFILES || {};
+  const primary = summary.primaryCounts || {};
+  return `<section class="lodging-category-summary">
+    <div><strong>숙소 유형 분석</strong><span>대표 유형 기준 · 복수 태그 포함 집계 별도</span></div>
+    <div class="lodging-category-summary-grid">
+      ${Object.entries(profiles).map(([key, meta]) => `<button type="button" data-company-category-filter="${escapeHtml(key)}"><span>${escapeHtml(meta.label)}</span><strong>${fmtNumber(primary[key] || 0)}</strong><small>태그 포함 ${fmtNumber(summary.tagCounts?.[key] || 0)}</small></button>`).join("")}
+      <button type="button" data-company-category-filter="unknown"><span>유형 미확인</span><strong>${fmtNumber(primary.unknown || 0)}</strong><small>확인 필요</small></button>
+    </div>
+    <p>수동 보정 ${fmtNumber(summary.manualOverrideCount || 0)}개 · 중복 검토 ${fmtNumber(summary.duplicateReviewCount || 0)}개</p>
+  </section>`;
 }
 
 function companyItemFromCurrentRun(company = {}) {
@@ -14812,7 +14927,14 @@ function manualCorrectionAdminMetaFields(correction = {}, context = {}) {
       <span>${escapeHtml(value)}</span>
     </label>
   `;
+  const category = lodgingCategoryProfile({ manualCorrection: correction });
+  const categoryOptions = Object.entries(window.LodgingCategoryProfile?.CATEGORY_PROFILES || {});
   return `
+    <div class="company-manual-category-fields">
+      <label><span>대표 숙소 유형</span><select data-manual-primary-category><option value="">자동 판정 유지</option>${categoryOptions.map(([key, meta]) => `<option value="${escapeHtml(key)}" ${category.primaryCategoryKey === key ? "selected" : ""}>${escapeHtml(meta.label)}</option>`).join("")}</select></label>
+      <fieldset><legend>복수 숙소 유형</legend><div>${categoryOptions.map(([key, meta]) => `<label class="company-manual-check"><input type="checkbox" data-manual-category-tag value="${escapeHtml(key)}" ${category.categoryTags.includes(key) ? "checked" : ""}><span>${escapeHtml(meta.label)}</span></label>`).join("")}</div></fieldset>
+      <label><span>유형 보정 메모</span><input type="text" data-manual-category-note value="${escapeHtml(correction.categoryNote || "")}" placeholder="예: 관리자 현장 확인"></label>
+    </div>
     <div class="company-manual-meta-grid">
       <label>
         <span>지역 분류 보정</span>
@@ -14942,6 +15064,7 @@ function sheetCompanyProfile(item = {}) {
           </div>
         `).join("")}
       </div>
+      ${lodgingCategoryDetailHtml(profile)}
       ${companyProfileKeywordList(profile)}
       ${companyReviewHistoryPanel(profile)}
       ${companyReviewActionsHtml(profile, true)}
@@ -17053,6 +17176,10 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
   const feedback = String(options.feedback || "").trim();
   const meta = manualCorrectionMeta(correction);
   const advancedOpen = Boolean(
+    correction.primaryCategoryKey
+    || (Array.isArray(correction.categoryTags) && correction.categoryTags.length)
+    || correction.categoryNote
+    ||
     meta.regionOverride
     || meta.channelNote
     || meta.couponNote
@@ -17523,6 +17650,11 @@ function companyMasterFilterPanel(master = {}) {
           ].map(([value, label]) => `<option value="${value}" ${filters.target === value ? "selected" : ""}>${label}</option>`).join("")}
         </select>
       </label>
+      <label><span>숙소 유형</span><select data-company-master-category>
+        <option value="all">전체</option>
+        ${Object.entries(window.LodgingCategoryProfile?.CATEGORY_PROFILES || {}).map(([key, meta]) => `<option value="${escapeHtml(key)}" ${filters.category === key ? "selected" : ""}>${escapeHtml(meta.label)}</option>`).join("")}
+        <option value="unknown" ${filters.category === "unknown" ? "selected" : ""}>유형 미확인</option>
+      </select></label>
       <small>${fmtNumber(total)}개 업체 기준</small>
     </div>
   `;
@@ -17534,6 +17666,9 @@ function companyMasterFilteredCompanies(master = {}) {
   return (master.companies || []).filter((company) => {
     if (filters.layer && filters.layer !== "all" && company.exposureLayer?.type !== filters.layer) return false;
     if (filters.target && filters.target !== "all" && company.salesTarget?.category !== filters.target) return false;
+    const category = lodgingCategoryProfile(company);
+    if (filters.category === "unknown" && category.primaryCategoryKey) return false;
+    if (filters.category && !["all", "unknown"].includes(filters.category) && !category.categoryTags.includes(filters.category)) return false;
     if (!query) return true;
     const text = compactSearchText([
       company.primaryName,
@@ -17560,6 +17695,7 @@ function companyMasterListPanel(master = {}) {
           <article>
             <div class="company-master-row-main">
               <b>${escapeHtml(company.primaryName || "업체명 확인")}</b>
+              ${lodgingCategoryBadgesHtml(company, { compact: true })}
               <small>${escapeHtml((company.regions || []).slice(0, 2).join(" · ") || "지역 확인")} · ${escapeHtml(company.companyId || "고유키 대기")}</small>
             </div>
             <div class="company-master-row-tags">
@@ -23659,6 +23795,7 @@ function renderCompanyMasterPanel() {
   }
   els.companyMasterPanel.innerHTML = `
     ${companyMasterOpsIntro(master)}
+    ${lodgingCategorySummaryHtml(master)}
     ${companyMasterRouteSummary(master)}
     ${companyMasterTools()}
     ${companyMasterBackfillResult(master)}
@@ -23884,6 +24021,7 @@ function renderTargets() {
           <span>${index + 1}</span>
           <div>
             <strong>${escapeHtml(company.primaryName || item?.name || "업체명 확인")}</strong>
+            ${lodgingCategoryBadgesHtml(company.companyId ? company : (item?.companyProfile || item || {}), { compact: true })}
             <small>${escapeHtml(regionText)} · ${escapeHtml(stage.label)} · 우선순위 ${fmtNumber(priorityScore)}</small>
           </div>
           <div class="target-badge-stack">
@@ -26294,6 +26432,7 @@ async function loadLocationDictionary() {
     ]);
     state.dictionary = dictionary;
     state.tourismRegionMap = tourismRegionMap;
+    renderSearchIntentHints();
     renderDictionaryQuickButtons();
     if (!els.dictionarySearchInput?.value && state.dictionary.cards?.[0]) {
       els.dictionarySearchInput.value = state.dictionary.cards[0].searchKeyword;
@@ -26789,11 +26928,14 @@ function renderB2BSearchPanel() {
 function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
   const range = allowedB2BSearchRange(els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10");
   const detailRankRanges = range === "1-20" ? "1-20" : "1-10";
+  const intent = clientSearchIntent(keyword);
   return {
     keyword: String(keyword || "").trim(),
     checkIn: els.checkInInput?.value || "",
     checkOut: els.checkOutInput?.value || "",
-    searchMode: "keyword",
+    searchMode: clientSearchMode(intent),
+    searchIntentMode: "auto",
+    clientIntentPreview: clientIntentPreview(intent),
     productMode: "all",
     collectionMode: "precision",
     detailRankRanges,
@@ -26896,6 +27038,11 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
   let clearActiveSearch = false;
   try {
     const preview = await fetchB2BCrawlEstimate(payload);
+    if (preview.intentSupported === false) {
+      const intentError = new Error(preview.intentWarning || "현재 지원하지 않는 검색입니다.");
+      intentError.status = 400;
+      throw intentError;
+    }
     if (requestId !== state.b2bSearchRequestId) return;
     state.b2bSearchStartedAt = Date.now();
     state.b2bSearchPreview = preview;
@@ -28647,6 +28794,9 @@ async function saveCompanyCorrection(button, clear = false) {
   const facilityTags = Array.from(form?.querySelectorAll("[data-manual-facility-tag]:checked") || []).map((input) => input.value);
   const couponVisible = form?.querySelector("[data-manual-coupon-visible]")?.value || "";
   const couponNames = form?.querySelector("[data-manual-coupon-names]")?.value || "";
+  const primaryCategoryKey = form?.querySelector("[data-manual-primary-category]")?.value || "";
+  const categoryTags = Array.from(form?.querySelectorAll("[data-manual-category-tag]:checked") || []).map((input) => input.value);
+  const categoryNote = form?.querySelector("[data-manual-category-note]")?.value || "";
   const note = form?.querySelector("[data-manual-note]")?.value || "";
   const emptySave = !clear
     && !String(lodgingBasisTotal).trim()
@@ -28660,6 +28810,9 @@ async function saveCompanyCorrection(button, clear = false) {
     && !facilityTags.length
     && !String(couponVisible).trim()
     && !String(couponNames).trim()
+    && !String(primaryCategoryKey).trim()
+    && !categoryTags.length
+    && !String(categoryNote).trim()
     && !String(note).trim();
   const shouldClear = clear || emptySave;
   if (feedback) {
@@ -28690,6 +28843,9 @@ async function saveCompanyCorrection(button, clear = false) {
         facilityTags,
         couponVisible,
         couponNames,
+        primaryCategoryKey,
+        categoryTags,
+        categoryNote,
         note
       };
   try {
@@ -29942,14 +30098,14 @@ async function submitCrawl(event) {
   event.preventDefault();
   ensureCrawlControls();
   const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
-  const requestedMode = els.searchModeInput?.value || "keyword";
-  const resolvedMode = correctedSearchMode(els.keywordInput.value.trim(), requestedMode);
+  const requestedMode = "auto";
+  const resolvedMode = clientSearchMode(clientSearchIntent(els.keywordInput.value.trim()));
   if (els.searchModeInput && resolvedMode !== requestedMode) {
     els.searchModeInput.value = resolvedMode;
     els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
   const payload = currentCrawlFormPayload();
-  payload.searchMode = resolvedMode;
+  payload.searchIntentMode = "auto";
   if (recrawlContextMatchesPayload(state.pendingRecrawlContext, payload)) {
     payload.recrawlContext = state.pendingRecrawlContext;
   }
@@ -29968,6 +30124,13 @@ async function submitCrawl(event) {
     preview
   );
   preview = await fetchCrawlEstimate(payload);
+  if (preview.intentSupported === false) {
+    setCrawlProgress(false);
+    if (els.crawlStatus) els.crawlStatus.textContent = preview.intentWarning || "현재 지원하지 않는 검색입니다.";
+    if (submitButton) submitButton.disabled = false;
+    renderSearchIntentHints();
+    return;
+  }
   setCrawlProgress(
     true,
     "수집 실행 중",
@@ -30295,6 +30458,14 @@ function bindEvents() {
       window.requestAnimationFrame(() => {
         document.querySelector(adminDbPageScrollSelector("region"))?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
+      return;
+    }
+    const categoryFilterButton = event.target.closest("[data-company-category-filter]");
+    if (categoryFilterButton) {
+      state.companyMasterFilters = state.companyMasterFilters || {};
+      state.companyMasterFilters.category = categoryFilterButton.dataset.companyCategoryFilter || "all";
+      renderCompanyMasterPanel();
+      document.querySelector("[data-company-master-category]")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       return;
     }
     const adminDbRegionCard = event.target.closest("[data-admin-db-region-card]");
@@ -30940,6 +31111,12 @@ function bindEvents() {
       renderCompanyMasterPanel();
       renderDecisionQueue();
     }
+    const category = event.target.closest("[data-company-master-category]");
+    if (category) {
+      state.companyMasterFilters.category = category.value || "all";
+      renderCompanyMasterPanel();
+      renderDecisionQueue();
+    }
   });
   els.openControlButton.addEventListener("click", openDrawer);
   document.querySelectorAll(".sheet-tabs button").forEach((button) => {
@@ -30982,6 +31159,8 @@ function bindEvents() {
   if (els.headerUserViewButton?.tagName !== "A") els.headerUserViewButton?.addEventListener("click", openAdminUserView);
   if (els.adminUserViewButton?.tagName !== "A") els.adminUserViewButton?.addEventListener("click", openAdminUserView);
   els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
+  els.keywordInput?.addEventListener("input", renderSearchIntentHints);
+  els.b2bSearchInput?.addEventListener("input", renderSearchIntentHints);
   els.crawlForm?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-collection-purpose]");
     if (!button) return;

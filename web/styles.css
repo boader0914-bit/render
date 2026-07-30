@@ -29319,6 +29319,27 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   }
 }
 
+.search-intent-hint {
+  min-width: 0;
+  margin: 6px 0 12px;
+  color: var(--muted, #98a2b3);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.search-intent-hint[data-supported="false"] {
+  color: #f79009;
+}
+
+@media (max-width: 720px) {
+  .search-intent-hint {
+    width: 100%;
+    margin-block: 4px 10px;
+  }
+}
+
 
 @media (max-width: 560px) {
   .crawl-progress {
@@ -35370,4 +35391,32 @@ body.role-b2b .b2b-search-card-sub {
   body.role-admin .admin-db-region-card-grid strong {
     font-size: 24px;
   }
+}
+/* Lodging category profile: shared result, detail and analytics surfaces. */
+.lodging-category-badges { display:flex; flex-wrap:wrap; gap:6px; align-items:center; min-width:0; }
+.lodging-category-badges span, .lodging-category-badges em { display:inline-flex; align-items:center; min-height:26px; padding:3px 9px; border:1px solid var(--line, #d8dee8); border-radius:999px; background:var(--panel, #fff); color:var(--text, #172033); font-size:12px; font-style:normal; font-weight:700; line-height:1.25; }
+.lodging-category-badges .lodging-category-primary.known { border-color:color-mix(in srgb, var(--accent, #2563eb) 48%, var(--line, #d8dee8)); background:color-mix(in srgb, var(--accent, #2563eb) 10%, var(--panel, #fff)); }
+.lodging-category-badges .lodging-category-primary.unknown { color:var(--muted, #667085); }
+.lodging-category-badges em::before { content:"✓"; margin-right:4px; }
+.lodging-category-detail, .lodging-category-summary { margin-top:14px; padding:16px; border:1px solid var(--line, #d8dee8); border-radius:16px; background:var(--panel, #fff); color:var(--text, #172033); overflow-wrap:anywhere; }
+.lodging-category-detail > p { display:flex; flex-wrap:wrap; gap:8px 12px; margin:12px 0 0; }
+.lodging-category-evidence { display:grid; gap:8px; margin-top:12px; }
+.lodging-category-evidence article { display:grid; grid-template-columns:minmax(80px, auto) 1fr auto; gap:10px; align-items:center; padding:9px 10px; border-radius:10px; background:var(--surface-soft, #f4f6f9); }
+.lodging-category-evidence small { color:var(--muted, #667085); }
+.lodging-category-summary > div:first-child { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; }
+.lodging-category-summary-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-top:12px; }
+.lodging-category-summary-grid button { min-height:76px; padding:10px; border:1px solid var(--line, #d8dee8); border-radius:12px; background:var(--surface-soft, #f4f6f9); color:inherit; text-align:left; cursor:pointer; }
+.lodging-category-summary-grid button:focus-visible { outline:3px solid color-mix(in srgb, var(--accent, #2563eb) 40%, transparent); outline-offset:2px; }
+.lodging-category-summary-grid button strong, .lodging-category-summary-grid button small { display:block; margin-top:3px; }
+.company-manual-category-fields { display:grid; grid-template-columns:minmax(180px, .7fr) minmax(260px, 1.3fr); gap:12px; margin-bottom:14px; }
+.company-manual-category-fields > label:last-child { grid-column:1/-1; }
+.company-manual-category-fields fieldset { min-width:0; }
+.company-manual-category-fields fieldset > div { display:flex; flex-wrap:wrap; gap:6px; }
+body.theme-dark .lodging-category-detail, body.theme-dark .lodging-category-summary, body.theme-dark .lodging-category-badges span, body.theme-dark .lodging-category-badges em { background:var(--panel, #172033); color:var(--text, #f2f5fa); }
+@media (max-width: 390px) {
+  .lodging-category-badges { align-items:flex-start; }
+  .lodging-category-badges span, .lodging-category-badges em { white-space:normal; }
+  .lodging-category-evidence article { grid-template-columns:1fr; gap:3px; }
+  .lodging-category-summary-grid, .company-manual-category-fields { grid-template-columns:1fr; }
+  .company-manual-category-fields > label:last-child { grid-column:auto; }
 }
