@@ -2962,6 +2962,38 @@ function renderLocationCandidateEvidence(candidate = {}) {
   `;
 }
 
+function renderLocationCandidatePublicData(saved = {}) {
+  const base = saved.baseInfo || {};
+  const publicData = saved.publicData || {};
+  const sources = Object.values(publicData.sources || {});
+  if (!base.matched && !sources.length) return "";
+  const regionLabel = [base.sidoFull || base.sido, base.sigungu].filter(Boolean).join(" ") || saved.regionBase || "지역 확인";
+  return `
+    <section class="location-block location-public-data-draft">
+      <div class="location-block-head">
+        <h4>지역 기본정보 · 공공데이터</h4>
+        <span>${escapeHtml(publicData.yearMonth ? `${publicData.yearMonth} 기준` : "연결 상태 확인")}</span>
+      </div>
+      <div class="location-meta-row">
+        <span>${escapeHtml(regionLabel)}</span>
+        ${base.administrativeCode ? `<span>시군구 코드 ${escapeHtml(base.administrativeCode)}</span>` : ""}
+        <span>${base.codeStatus === "verified" ? "코드 확인" : "코드 검증 필요"}</span>
+        ${Number(publicData.matchConfidence) ? `<span>지역 매칭 ${fmtNumber(publicData.matchConfidence)}%</span>` : ""}
+      </div>
+      <div class="location-candidate-evidence">
+        ${sources.length ? sources.map((source) => `
+          <div>
+            <span>${escapeHtml(source.label || "공공데이터")}</span>
+            <strong>${source.status === "ok" ? fmtNumber(source.rowCount) : "대기"}</strong>
+            <small>${escapeHtml(source.status === "ok" ? "수집 row" : source.reason || source.status || "연결 필요")}</small>
+          </div>
+        `).join("") : `<div><span>관광 데이터</span><strong>대기</strong><small>공식 API 연결 필요</small></div>`}
+      </div>
+      <p class="hint">한국관광공사·공공데이터포털의 지역 방문자, 관광자원 수요, 관광 다양성 자료를 사용합니다. 키나 검증된 지역코드가 없으면 외부 호출 없이 초안으로 저장합니다.</p>
+    </section>
+  `;
+}
+
 function renderLocationCandidateTemporary(candidate = {}) {
   const runtime = candidate.runtime || {};
   const targets = (runtime.targets || []).slice(0, 3);
@@ -3042,6 +3074,7 @@ function renderMissingLocationCandidate(query, cards = []) {
         </div>
       </section>
       ${renderLocationCandidateEvidence(candidate)}
+      ${renderLocationCandidatePublicData(saved)}
       <div class="location-candidate-actions" data-location-candidate-key="${escapeHtml(candidate.key)}">
         <button class="secondary-button" type="button" data-location-candidate-action="temporary">임시 카드로 보기</button>
         <button class="primary-button" type="button" data-location-candidate-action="requested">지역카드 개발 요청</button>
@@ -3088,7 +3121,8 @@ async function saveLocationCardCandidateAction(button) {
         relatedRegion,
         runId: candidate.runId,
         activeKeyword: candidate.activeKeyword,
-        evidence: candidate.evidence
+        evidence: candidate.evidence,
+        collectPublicData: status === "requested" || status === "temporary"
       })
     });
     setStatus(`${label} 저장 완료`);

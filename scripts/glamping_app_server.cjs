@@ -1660,6 +1660,56 @@ function sanitizeLocationRequestEvidence(value = {}) {
   };
 }
 
+function publicLocationBaseInfo(region = null, fallback = {}) {
+  if (!region) {
+    return {
+      matched: false,
+      regionKey: "",
+      sido: "",
+      sidoFull: "",
+      sigungu: sanitizeLocationRequestText(fallback.regionBase || fallback.keyword, 80),
+      administrativeCode: "",
+      codeStatus: "unmatched",
+      aliases: []
+    };
+  }
+  return {
+    matched: true,
+    regionKey: sanitizeLocationRequestText(region.regionKey, 120),
+    sido: sanitizeLocationRequestText(region.sido, 40),
+    sidoFull: sanitizeLocationRequestText(region.sidoFull, 40),
+    sigungu: sanitizeLocationRequestText(region.sigungu, 80),
+    administrativeCode: sanitizeLocationRequestText(region.ktoSggCd, 40),
+    codeStatus: sanitizeLocationRequestText(region.codeStatus || "verified", 40),
+    aliases: Array.isArray(region.aliases)
+      ? region.aliases.map((item) => sanitizeLocationRequestText(item, 80)).filter(Boolean).slice(0, 12)
+      : []
+  };
+}
+
+function publicTourismDraft(snapshot = {}) {
+  const sources = Object.fromEntries(Object.entries(snapshot.sources || {}).map(([key, source]) => [key, {
+    label: sanitizeLocationRequestText(source.label, 120),
+    referenceUrl: sanitizeLocationRequestText(source.referenceUrl, 240),
+    status: sanitizeLocationRequestText(source.status || source.configStatus, 40),
+    reason: sanitizeLocationRequestText(source.reason, 120),
+    rowCount: Array.isArray(source.rows) ? source.rows.length : 0
+  }]));
+  return {
+    status: sanitizeLocationRequestText(snapshot.status || (snapshot.ok ? "ready" : "unavailable"), 40),
+    collectedAt: sanitizeLocationRequestText(snapshot.collectedAt, 80),
+    yearMonth: sanitizeLocationRequestText(snapshot.yearMonth, 12),
+    matchConfidence: sanitizeLocationRequestNumber(snapshot.match?.confidence ?? snapshot.confidence),
+    cacheHit: Boolean(snapshot.cache?.hit),
+    sourcePolicy: {
+      serviceKeyConfigured: Boolean(snapshot.sourcePolicy?.serviceKeyConfigured),
+      allowUnverifiedCodes: Boolean(snapshot.sourcePolicy?.allowUnverifiedCodes),
+      noSidoSigunguAggregation: snapshot.sourcePolicy?.noSidoSigunguAggregation !== false
+    },
+    sources
+  };
+}
+
 function publicLocationCardRequests(store = emptyLocationCardRequests()) {
   const requests = store.requests || {};
   return {
@@ -1785,6 +1835,20 @@ async function saveLocationCardRequest(payload = {}) {
   const store = await readLocationCardRequests();
   const current = store.requests[key] || {};
   const history = Array.isArray(current.history) ? current.history.slice(-19) : [];
+  const regionMatch = await tourismCollector.resolveRegion({
+    regionKey: payload.regionKey || current.baseInfo?.regionKey || "",
+    keyword: keyword || regionBase
+  });
+  const baseInfo = publicLocationBaseInfo(regionMatch.region, { keyword, regionBase });
+  let publicData = current.publicData || {};
+  if (payload.collectPublicData !== false && regionMatch.region && ["requested", "temporary"].includes(status)) {
+    publicData = publicTourismDraft(await tourismCollector.collect({
+      regionKey: regionMatch.region.regionKey,
+      keyword,
+      yearMonth: payload.yearMonth,
+      force: Boolean(payload.forcePublicData)
+    }));
+  }
   const next = {
     ...current,
     key,
@@ -1797,6 +1861,13 @@ async function saveLocationCardRequest(payload = {}) {
     runId: sanitizeLocationRequestText(payload.runId, 120),
     activeKeyword: sanitizeLocationRequestText(payload.activeKeyword, 120),
     evidence: sanitizeLocationRequestEvidence(payload.evidence),
+    baseInfo,
+    publicData,
+    dataSources: [
+      { key: "visitors", label: "지역 방문자", provider: "한국관광공사", referenceUrl: "https://www.data.go.kr/data/15101972/openapi.do" },
+      { key: "resourceDemand", label: "관광자원 수요", provider: "한국관광공사", referenceUrl: "https://www.data.go.kr/data/15152138/openapi.do" },
+      { key: "diversity", label: "관광 다양성", provider: "한국관광공사", referenceUrl: "https://www.data.go.kr/data/15151365/openapi.do" }
+    ],
     firstSeenAt: current.firstSeenAt || now,
     updatedAt: now,
     history: [

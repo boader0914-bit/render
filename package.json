@@ -7,9 +7,10 @@
     "start": "node scripts/glamping_app_server.cjs",
     "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check web/login-theme.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_surface_contrast.cjs && node scripts/test_surface_contrast.cjs",
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
+    "test:tourism": "node scripts/test_tourism_collector.cjs",
     "test:surface": "node scripts/test_surface_contrast.cjs",
     "test:preview-boundary": "node scripts/test_preview_boundary.cjs",
-    "test": "npm run check && npm run test:yeogi && npm run test:preview-boundary"
+    "test": "npm run check && npm run test:yeogi && npm run test:tourism && npm run test:preview-boundary"
   },
   "engines": {
     "node": ">=20"
