@@ -54,6 +54,7 @@ for (const hook of preservedHooks) assert.ok(app.includes(hook), `${hook} must r
 for (const endpoint of ["/api/member/interest-lodges", "/api/b2b-my-lodge-collect"]) {
   assert.ok(app.includes(endpoint), `${endpoint} API contract must remain unchanged`);
 }
+assert.doesNotMatch(app, /\bb2b\s*\/\s*\d{4}\b/i, "B2B UI must not expose credential-like demo login text");
 assert.match(app, /const B2B_INTEREST_LODGE_LIMIT = 2/);
 assert.match(app, /const B2B_MY_LODGE_SEGMENT_LIMIT = 8/);
 assert.match(app, /method:\s*"PUT"[\s\S]*JSON\.stringify\(\{ interestLodges \}\)/);

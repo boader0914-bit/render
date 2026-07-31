@@ -27052,7 +27052,7 @@ function renderB2BSearchPanel() {
   }
   if (els.b2bSearchStatus) {
     const current = previewMode
-      ? "User View는 화면 확인용입니다. 실제 B2B 검색은 b2b / 0914 계정 또는 회원 계정에서 실행하세요."
+      ? "User View는 화면 확인용입니다. 실제 검색은 승인된 B2B 계정 또는 회원 계정에서 실행하세요."
       : state.data?.run ? `현재 표시: ${activeKeyword()} · ${dateRangeLabel(state.data.run)}` : "지역과 업종을 입력하면 운영 전략 리포트를 생성합니다.";
     const progressMeta = state.b2bSearchLoading ? b2bSearchProgressMeta() : null;
     els.b2bSearchStatus.textContent = state.b2bSearchLoading
@@ -27088,7 +27088,7 @@ async function submitB2BSearch() {
   if (isAdminUserViewMode()) {
     renderB2BSearchPanel();
     if (els.b2bSearchStatus) {
-      els.b2bSearchStatus.textContent = "User View에서는 실제 검색을 실행하지 않습니다. 실제 검색은 b2b / 0914 계정 또는 회원 계정으로 로그인해 실행하세요.";
+      els.b2bSearchStatus.textContent = "User View에서는 실제 검색을 실행하지 않습니다. 승인된 B2B 계정 또는 회원 계정으로 로그인해 실행하세요.";
     }
     return;
   }
