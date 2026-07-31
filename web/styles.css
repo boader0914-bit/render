@@ -35354,9 +35354,22 @@ body.role-b2b .b2b-search-card-sub {
   white-space: nowrap;
 }
 
+:is(body.role-admin, body.role-b2b) .app-header :where(button, a):focus-visible {
+  outline: 3px solid #8bc2ff !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(106, 168, 255, .34) !important;
+}
+
 :root[data-theme="light"] body.role-admin,
 :root[data-theme="light"] body.role-b2b {
   color-scheme: light;
+  background: #eef3f9 !important;
+}
+
+:root[data-theme="light"] body.role-admin > :where(.app-shell, .app-legal-footer),
+:root[data-theme="light"] body.role-b2b > :where(.app-shell, .app-legal-footer),
+:root[data-theme="light"] body.role-admin > :where(.control-drawer, .detail-sheet) :where(.drawer-panel, .sheet-panel),
+:root[data-theme="light"] body.role-b2b > :where(.control-drawer, .detail-sheet) :where(.drawer-panel, .sheet-panel) {
   filter: invert(1) hue-rotate(180deg);
 }
 
@@ -35419,4 +35432,1806 @@ body.theme-dark .lodging-category-detail, body.theme-dark .lodging-category-summ
   .lodging-category-evidence article { grid-template-columns:1fr; gap:3px; }
   .lodging-category-summary-grid, .company-manual-category-fields { grid-template-columns:1fr; }
   .company-manual-category-fields > label:last-child { grid-column:auto; }
+}
+
+/* Design system v1: shared rhythm and the administrator workspace shell. */
+:root {
+  --ui-color-canvas: var(--bg);
+  --ui-color-surface: var(--panel);
+  --ui-color-surface-subtle: color-mix(in srgb, var(--panel) 88%, var(--bg));
+  --ui-color-text: var(--ink);
+  --ui-color-text-muted: var(--muted);
+  --ui-color-border: var(--line);
+  --ui-color-accent: var(--blue);
+  --ui-color-success: var(--green);
+  --ui-color-warning: var(--orange);
+  --ui-color-danger: var(--red);
+  --ui-font-sans: var(--font-sans);
+  --ui-font-size-xs: 11px;
+  --ui-font-size-sm: 13px;
+  --ui-font-size-md: 15px;
+  --ui-font-size-lg: 20px;
+  --ui-font-size-xl: 28px;
+  --ui-shadow-sm: var(--soft-shadow);
+  --ui-shadow-md: var(--shadow);
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 20px;
+  --ui-space-6: 24px;
+  --ui-space-8: 32px;
+  --ui-radius-sm: 10px;
+  --ui-radius-md: 14px;
+  --ui-radius-lg: 20px;
+  --ui-radius-xl: 26px;
+  --ui-control-height: 44px;
+  --ui-focus-ring: 0 0 0 3px rgba(106, 168, 255, .34);
+  --admin-shell-sidebar: 232px;
+}
+
+body.role-admin {
+  --ui-color-canvas: #0f1117;
+  --ui-color-surface: #171b22;
+  --ui-color-surface-subtle: #111c2b;
+  --ui-color-text: #f5f9ff;
+  --ui-color-text-muted: #9eb1c8;
+  --ui-color-border: rgba(142, 170, 207, .22);
+  --ui-color-accent: #73b1ff;
+  --ui-color-success: #5ee0ae;
+  --ui-color-warning: #fbbf24;
+  --ui-color-danger: #fb7185;
+  --ui-shadow-sm: 0 10px 28px rgba(0, 0, 0, .24);
+  --ui-shadow-md: 0 24px 58px rgba(0, 0, 0, .28);
+  --admin-shell-surface: color-mix(in srgb, var(--ui-color-surface) 94%, transparent);
+  --admin-shell-surface-soft: color-mix(in srgb, var(--ui-color-surface-subtle) 82%, transparent);
+  --admin-shell-border: var(--ui-color-border);
+  --admin-shell-border-strong: rgba(126, 183, 255, .42);
+  --admin-shell-copy: var(--ui-color-text);
+  --admin-shell-muted: var(--ui-color-text-muted);
+  --admin-shell-accent: var(--ui-color-accent);
+  --admin-shell-accent-soft: rgba(83, 151, 236, .16);
+}
+
+body.role-admin .app-shell {
+  width: min(100%, 1500px);
+  padding-inline: clamp(16px, 2vw, 30px);
+}
+
+body.role-admin #adminPanel {
+  min-width: 0;
+}
+
+body.role-admin .admin-workspace-shell {
+  display: grid;
+  grid-template-columns: var(--admin-shell-sidebar) minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(16px, 2vw, 28px);
+  min-width: 0;
+}
+
+body.role-admin .admin-workspace-sidebar {
+  position: sticky;
+  top: calc(18px + env(safe-area-inset-top));
+  z-index: 18;
+  display: grid;
+  align-content: start;
+  gap: var(--ui-space-5);
+  min-width: 0;
+  min-height: min(680px, calc(100vh - 36px - env(safe-area-inset-top)));
+  max-height: calc(100vh - 36px - env(safe-area-inset-top));
+  overflow-y: auto;
+  padding: var(--ui-space-5);
+  border: 1px solid var(--admin-shell-border);
+  border-radius: var(--ui-radius-xl);
+  background:
+    radial-gradient(circle at 14% 0%, rgba(88, 157, 244, .18), transparent 38%),
+    linear-gradient(180deg, rgba(19, 31, 48, .98), rgba(10, 17, 28, .98));
+  box-shadow: var(--ui-shadow-md);
+  scrollbar-width: thin;
+}
+
+.admin-workspace-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  min-width: 0;
+  padding-bottom: var(--ui-space-5);
+  border-bottom: 1px solid var(--admin-shell-border);
+}
+
+.admin-workspace-mark {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(139, 194, 255, .44);
+  border-radius: var(--ui-radius-md);
+  background: linear-gradient(145deg, #4f96ea, #2b68bd);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: .08em;
+  box-shadow: 0 12px 24px rgba(29, 78, 216, .22);
+}
+
+.admin-workspace-brand-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-workspace-brand-copy strong {
+  color: var(--admin-shell-copy) !important;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.admin-workspace-brand-copy small {
+  color: var(--admin-shell-muted) !important;
+  font-size: var(--ui-font-size-xs);
+  font-weight: 750;
+}
+
+.admin-workspace-kicker,
+.admin-workspace-eyebrow {
+  margin: 0;
+  color: var(--admin-shell-accent) !important;
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .14em;
+  line-height: 1.2;
+}
+
+body.role-admin #adminPanel .admin-section-nav {
+  position: static !important;
+  inset: auto !important;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--ui-space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+body.role-admin #adminPanel .admin-section-nav button {
+  position: relative;
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ui-space-3);
+  overflow: visible;
+  padding: 9px 11px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  color: var(--admin-shell-muted);
+  text-align: left;
+  white-space: normal;
+  box-shadow: none;
+  transition: border-color .16s ease, background-color .16s ease, color .16s ease, transform .16s ease;
+}
+
+body.role-admin #adminPanel .admin-section-nav button::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+body.role-admin #adminPanel .admin-section-nav button:hover {
+  border-color: rgba(126, 183, 255, .22);
+  background: rgba(88, 157, 244, .08);
+  color: var(--admin-shell-copy);
+  transform: translateX(2px);
+}
+
+body.role-admin #adminPanel .admin-section-nav button.active,
+body.role-admin #adminPanel .admin-section-nav button[aria-current="page"] {
+  border-color: var(--admin-shell-border-strong);
+  background: var(--admin-shell-accent-soft);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+
+body.role-admin #adminPanel .admin-section-nav button.active::before,
+body.role-admin #adminPanel .admin-section-nav button[aria-current="page"]::before {
+  background: var(--admin-shell-accent);
+  box-shadow: 0 0 14px rgba(115, 177, 255, .46);
+}
+
+.admin-nav-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(142, 170, 207, .24);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .035);
+  color: #a8bad0;
+  font-size: 9px;
+  font-weight: 950;
+  letter-spacing: .06em;
+}
+
+.admin-section-nav button.active .admin-nav-icon,
+.admin-section-nav button[aria-current="page"] .admin-nav-icon {
+  border-color: rgba(139, 194, 255, .48);
+  background: rgba(86, 157, 244, .20);
+  color: #dcecff;
+}
+
+.admin-nav-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-nav-copy strong,
+.admin-nav-copy small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-nav-copy strong {
+  color: inherit !important;
+  font-size: var(--ui-font-size-sm);
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.admin-nav-copy small {
+  color: inherit !important;
+  font-size: 10px;
+  font-weight: 720;
+  opacity: .72;
+  line-height: 1.25;
+}
+
+.admin-workspace-utility {
+  display: grid;
+  gap: var(--ui-space-3);
+  margin-top: auto;
+  padding-top: var(--ui-space-5);
+  border-top: 1px solid var(--admin-shell-border);
+}
+
+.admin-environment-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  color: var(--admin-shell-muted) !important;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.admin-environment-badge > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ui-color-success);
+  box-shadow: 0 0 0 4px rgba(94, 224, 174, .10);
+}
+
+body.role-admin .admin-workspace-utility .small-button {
+  width: 100%;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+}
+
+.admin-workspace-main {
+  min-width: 0;
+}
+
+body.role-admin #adminPanel .admin-workspace-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--ui-space-6);
+  margin: 0 0 var(--ui-space-5);
+  padding: 4px 2px var(--ui-space-5);
+  border-bottom: 1px solid var(--admin-shell-border);
+}
+
+.admin-workspace-heading > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+body.role-admin .admin-workspace-heading h2 {
+  margin: 0;
+  color: var(--admin-shell-copy) !important;
+  font-size: clamp(24px, 2.4vw, 34px);
+  font-weight: 900;
+  letter-spacing: -.035em;
+  line-height: 1.12;
+}
+
+body.role-admin .admin-workspace-heading > div:first-child > p:last-child {
+  max-width: 720px;
+  margin: 0;
+  color: var(--admin-shell-muted) !important;
+  font-size: var(--ui-font-size-sm);
+  font-weight: 650;
+}
+
+body.role-admin .admin-workspace-heading .admin-title-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+}
+
+body.role-admin .admin-workspace-heading #adminStatus {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  max-width: min(340px, 36vw);
+  overflow: hidden;
+  padding: 0 11px;
+  border: 1px solid var(--admin-shell-border);
+  border-radius: 999px;
+  background: var(--admin-shell-surface-soft);
+  color: #c7d6e7 !important;
+  font-size: 11px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.role-admin .admin-workspace-heading #logoutButton {
+  min-height: 36px;
+  border-radius: 11px;
+}
+
+body.role-admin .admin-workspace-main > .admin-section-panel {
+  min-width: 0;
+  animation: admin-panel-enter .18s ease-out;
+}
+
+@keyframes admin-panel-enter {
+  from { opacity: .65; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+body.role-admin .admin-workspace-shell :where(button, a, input, select, textarea, summary):focus-visible,
+body.role-admin .admin-mobile-nav :where(button, a):focus-visible {
+  outline: 2px solid #8bc2ff !important;
+  outline-offset: 2px;
+  box-shadow: var(--ui-focus-ring) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.role-admin .admin-workspace-main > .admin-section-panel {
+    animation: none;
+  }
+
+  body.role-admin #adminPanel .admin-section-nav button {
+    transition: none;
+  }
+}
+
+@media (max-width: 1120px) and (min-width: 721px) {
+  :root {
+    --admin-shell-sidebar: 184px;
+  }
+
+  body.role-admin .admin-workspace-sidebar {
+    padding: var(--ui-space-4);
+  }
+
+  .admin-workspace-brand-copy strong {
+    font-size: 12px;
+  }
+
+  body.role-admin #adminPanel .admin-section-nav button {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 9px;
+    padding-inline: 8px;
+  }
+
+  .admin-nav-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .admin-nav-copy small {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  body.role-admin .app-shell {
+    padding-inline: calc(14px + env(safe-area-inset-left)) calc(14px + env(safe-area-inset-right));
+    padding-bottom: calc(48px + env(safe-area-inset-bottom));
+  }
+
+  body.role-admin .admin-workspace-shell {
+    display: block;
+  }
+
+  body.role-admin .admin-workspace-sidebar {
+    display: none;
+  }
+
+  body.role-admin #adminPanel .admin-workspace-heading {
+    align-items: flex-start;
+    margin-bottom: var(--ui-space-4);
+    padding-bottom: var(--ui-space-4);
+  }
+
+  body.role-admin .admin-workspace-heading h2 {
+    font-size: 24px;
+  }
+
+  body.role-admin .admin-workspace-heading > div:first-child > p:last-child {
+    font-size: 12px;
+  }
+
+  body.role-admin .admin-workspace-heading .admin-title-actions {
+    display: grid;
+    justify-items: end;
+  }
+
+  body.role-admin .admin-workspace-heading #adminStatus {
+    max-width: 148px;
+  }
+
+  body.role-admin .admin-mobile-nav {
+    display: block;
+    position: sticky;
+    z-index: 45;
+    top: calc(8px + env(safe-area-inset-top));
+    right: auto;
+    bottom: auto;
+    left: auto;
+    width: min(100%, 520px);
+    max-width: 520px;
+    margin: 0 auto 18px;
+    padding: 7px;
+    border-color: rgba(127, 158, 198, .34);
+    border-radius: 20px;
+    background: rgba(11, 18, 29, .96);
+    box-shadow: 0 22px 54px rgba(0, 0, 0, .42);
+    backdrop-filter: blur(18px);
+  }
+
+  body.role-admin .admin-mobile-primary button,
+  body.role-admin .admin-mobile-secondary button {
+    min-height: var(--ui-control-height);
+    border-radius: 13px;
+    color: #b8c8da;
+  }
+
+  body.role-admin .admin-mobile-secondary {
+    padding-bottom: 1px;
+  }
+
+  body.role-admin .admin-mobile-secondary button {
+    min-height: var(--ui-control-height);
+  }
+}
+
+@media (max-width: 390px) {
+  body.role-admin .app-shell {
+    padding-inline: calc(10px + env(safe-area-inset-left)) calc(10px + env(safe-area-inset-right));
+  }
+
+  body.role-admin #adminPanel .admin-workspace-heading {
+    display: grid;
+    gap: var(--ui-space-3);
+  }
+
+  body.role-admin .admin-workspace-heading .admin-title-actions {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-items: stretch;
+  }
+
+  body.role-admin .admin-workspace-heading #adminStatus {
+    max-width: none;
+  }
+
+  body.role-admin .admin-mobile-primary,
+  body.role-admin .admin-mobile-secondary {
+    gap: 4px;
+  }
+
+  body.role-admin .admin-mobile-nav button {
+    padding-inline: 6px;
+    font-size: 11px;
+  }
+}
+
+/* Admin company management workbench v1: scan-first list and guided detail editing. */
+body.role-admin #adminDatabaseDashboard {
+  --admin-company-surface: #101a28;
+  --admin-company-surface-raised: #142237;
+  --admin-company-surface-soft: rgba(17, 31, 49, .74);
+  --admin-company-border: rgba(126, 183, 255, .28);
+  --admin-company-border-strong: rgba(115, 177, 255, .58);
+  --admin-company-muted: #aebfd4;
+  --admin-company-copy: #f7fbff;
+  min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-flat-list[data-admin-db-list-workbench="true"] {
+  gap: var(--ui-space-4);
+  border-color: var(--admin-company-border) !important;
+  border-radius: var(--ui-radius-lg) !important;
+  background: linear-gradient(180deg, rgba(17, 29, 46, .98), rgba(10, 18, 29, .98)) !important;
+  box-shadow: var(--ui-shadow-sm);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-flat-head {
+  align-items: flex-start;
+  gap: var(--ui-space-4);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-flat-head mark {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--admin-company-border);
+  border-radius: 999px;
+  background: rgba(87, 156, 244, .12);
+  color: #dcecff !important;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-list-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ui-space-2);
+  min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-list-overview > span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--admin-company-border);
+  border-radius: var(--ui-radius-md);
+  background: rgba(8, 18, 30, .72);
+  padding: 10px 12px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-list-overview small {
+  color: var(--admin-company-muted) !important;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-list-overview strong {
+  color: var(--admin-company-copy) !important;
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"] {
+  grid-template-columns: minmax(290px, 1.15fr) minmax(270px, .88fr) minmax(144px, .42fr) !important;
+  grid-template-areas:
+    "main values action"
+    "main tags action";
+  gap: 10px 14px !important;
+  padding: 15px !important;
+  border: 1px solid var(--admin-company-border) !important;
+  border-radius: var(--ui-radius-lg) !important;
+  background: linear-gradient(135deg, rgba(21, 35, 55, .98), rgba(12, 22, 35, .98)) !important;
+  box-shadow: 0 10px 28px rgba(1, 6, 15, .20) !important;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"]:hover {
+  border-color: var(--admin-company-border-strong) !important;
+  box-shadow: 0 16px 34px rgba(1, 6, 15, .30) !important;
+  transform: translateY(-1px);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"].selected,
+body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"][aria-current="true"] {
+  border-color: #73b1ff !important;
+  box-shadow: 0 0 0 2px rgba(115, 177, 255, .18), 0 18px 38px rgba(1, 6, 15, .34) !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-identity {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-title-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-title-row strong {
+  color: var(--admin-company-copy) !important;
+  font-size: 16px !important;
+  line-height: 1.28 !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-status {
+  flex: 0 0 auto;
+  min-height: 27px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(191, 219, 254, .48);
+  border-radius: 999px;
+  background: rgba(219, 234, 254, .96);
+  color: #1e3a8a !important;
+  padding: 4px 9px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 950;
+  line-height: 1.1;
+  white-space: nowrap;
+  text-shadow: none !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-status.good {
+  border-color: #99f6e4;
+  background: #ecfdf5;
+  color: #047857 !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-status.watch {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-status.hot,
+body.role-admin #adminDatabaseDashboard .admin-db-company-status.bad {
+  border-color: #fecdd3;
+  background: #fff1f2;
+  color: #be123c !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-location {
+  display: block;
+  margin-top: 6px;
+  color: var(--admin-company-muted) !important;
+  font-size: 11px !important;
+  font-weight: 800;
+  line-height: 1.35 !important;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-categories {
+  margin-top: 8px;
+  min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-categories .lodging-category-badges {
+  gap: 5px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-categories .lodging-category-badges span,
+body.role-admin #adminDatabaseDashboard .admin-db-company-categories .lodging-category-badges em,
+body.role-admin #adminDatabaseDashboard .admin-db-detail-badges .lodging-category-badges span,
+body.role-admin #adminDatabaseDashboard .admin-db-detail-badges .lodging-category-badges em {
+  min-height: 24px;
+  border-color: rgba(126, 183, 255, .38);
+  background: rgba(29, 49, 75, .92);
+  color: #e8f2ff !important;
+  padding: 3px 8px;
+  font-size: 10px;
+  text-shadow: none !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-next-action {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-top: 10px;
+  border-left: 2px solid rgba(115, 177, 255, .74);
+  border-radius: 0 10px 10px 0;
+  background: rgba(44, 83, 132, .16);
+  padding: 8px 9px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-next-action > span {
+  color: #9fc7ff !important;
+  font-size: 9px;
+  font-weight: 950;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-next-action .admin-db-company-reason {
+  min-width: 0;
+  margin: 0 !important;
+  color: #d4dfec !important;
+  font-size: 10.5px !important;
+  font-weight: 760 !important;
+  line-height: 1.42 !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-values {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 7px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-values span {
+  min-height: 54px !important;
+  border-color: rgba(126, 183, 255, .26) !important;
+  border-radius: 11px !important;
+  background: rgba(7, 16, 28, .64) !important;
+  padding: 8px 9px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-values small {
+  font-size: 10px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-values b {
+  font-size: 13.5px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-tags {
+  max-height: none !important;
+  gap: 5px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-tags em {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px !important;
+  font-size: 9.5px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-action {
+  grid-template-columns: 1fr !important;
+  align-content: start;
+  gap: 7px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-action button,
+body.role-admin #adminDatabaseDashboard .admin-db-company-action a {
+  min-height: var(--ui-control-height) !important;
+  border-radius: 12px !important;
+  padding: 8px 11px !important;
+  font-size: 12px !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-company-action a.primary {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-pagination {
+  min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-pagination button {
+  min-height: var(--ui-control-height);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-selected-panel[data-admin-db-company-workbench="true"] {
+  gap: var(--ui-space-4) !important;
+  border-radius: var(--ui-radius-xl) !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-detail-identity {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-detail-back {
+  width: fit-content;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(147, 197, 253, .34);
+  border-radius: 999px;
+  background: rgba(8, 18, 30, .44);
+  color: #cfe3fb !important;
+  padding: 0 10px;
+  font-size: 10px;
+  font-weight: 900;
+  box-shadow: none;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-detail-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-detail-top-actions a,
+body.role-admin #adminDatabaseDashboard .admin-db-detail-top-actions button,
+body.role-admin #adminDatabaseDashboard .admin-db-detail-bottom-actions button {
+  min-height: var(--ui-control-height);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ui-space-4);
+  min-width: 0;
+  border-bottom: 1px solid var(--admin-company-border);
+  padding: 2px 2px var(--ui-space-3);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading span {
+  color: #9fc7ff !important;
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .06em;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading strong {
+  color: var(--admin-company-copy) !important;
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading small {
+  color: var(--admin-company-muted) !important;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.4;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading > em {
+  flex: 0 0 auto;
+  border: 1px solid rgba(147, 197, 253, .4);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, .14);
+  color: #dcecff !important;
+  padding: 7px 10px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs {
+  gap: var(--ui-space-2);
+  border-color: var(--admin-company-border);
+  border-radius: var(--ui-radius-md);
+  background: rgba(6, 14, 24, .68);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs button {
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border-radius: 12px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-step-index {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(147, 197, 253, .28);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .035);
+  color: #9fc7ff !important;
+  font-size: 9px;
+  font-weight: 950;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-step-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-step-copy strong {
+  color: inherit !important;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-workbench-step-copy small {
+  color: inherit !important;
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1.15;
+  opacity: .72;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs button.active .admin-db-workbench-step-index,
+body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs button[aria-pressed="true"] .admin-db-workbench-step-index {
+  border-color: rgba(255, 255, 255, .46);
+  background: rgba(255, 255, 255, .14);
+  color: #ffffff !important;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-selected-workbench-stack {
+  gap: 10px;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-selected-fold {
+  border-radius: var(--ui-radius-md) !important;
+  overflow: clip;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-selected-fold[open] {
+  border-color: var(--admin-company-border-strong) !important;
+  box-shadow: 0 12px 30px rgba(1, 6, 15, .22);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-selected-fold summary {
+  min-height: 68px;
+  padding: 12px 14px !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"] {
+    transition: none;
+  }
+}
+
+@media (max-width: 1120px) and (min-width: 721px) {
+  body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"] {
+    grid-template-columns: minmax(0, 1fr) minmax(146px, .38fr) !important;
+    grid-template-areas:
+      "main action"
+      "values values"
+      "tags tags";
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-values {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 720px) {
+  body.role-admin #adminDatabaseDashboard .admin-db-selected-panel,
+  body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading,
+  body.role-admin #adminDatabaseDashboard .admin-db-selected-fold {
+    scroll-margin-top: calc(136px + env(safe-area-inset-top));
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-list-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"] {
+    grid-template-columns: 1fr !important;
+    grid-template-areas:
+      "main"
+      "values"
+      "tags"
+      "action";
+    gap: 9px !important;
+    padding: 12px !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-identity {
+    align-items: flex-start;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-next-action .admin-db-company-reason {
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-values {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-values span {
+    min-height: 50px !important;
+    padding: 8px !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-values small {
+    font-size: 9.5px !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-values b {
+    font-size: 13px !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-tags {
+    max-height: none !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-action {
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)) !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-action button,
+  body.role-admin #adminDatabaseDashboard .admin-db-company-action a {
+    min-height: var(--ui-control-height) !important;
+    font-size: 12px !important;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-top {
+    padding: 14px;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-top strong {
+    font-size: clamp(22px, 8vw, 30px);
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-top-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-top-actions > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-top-actions a,
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-top-actions button {
+    width: 100%;
+    min-height: var(--ui-control-height);
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading {
+    display: grid;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading > em {
+    width: fit-content;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 390px) {
+  body.role-admin #adminDatabaseDashboard .admin-db-flat-head {
+    display: grid;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-identity {
+    display: grid;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-status {
+    width: fit-content;
+    margin-left: 27px;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-company-next-action {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs button {
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 7px;
+    padding-inline: 7px;
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-workbench-step-index {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+/* B2B home and interest lodge workbench v1 */
+body.role-b2b {
+  --b2b-workbench-surface: rgba(17, 25, 35, .94);
+  --b2b-workbench-surface-soft: rgba(10, 17, 27, .72);
+  --b2b-workbench-border: rgba(139, 177, 224, .24);
+  --b2b-workbench-border-strong: rgba(121, 184, 255, .48);
+  --b2b-workbench-copy: #f5f9ff;
+  --b2b-workbench-muted: #aabbd0;
+  --b2b-workbench-accent: #79b8ff;
+}
+
+body.role-b2b .b2b-home-status-strip {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(210px, .7fr) minmax(0, 2fr);
+  gap: var(--ui-space-4);
+  margin-top: var(--ui-space-4);
+  padding: var(--ui-space-4);
+  border: 1px solid var(--b2b-workbench-border);
+  border-radius: var(--ui-radius-lg);
+  background:
+    radial-gradient(circle at 0 0, rgba(91, 160, 244, .14), transparent 38%),
+    var(--b2b-workbench-surface-soft);
+}
+
+body.role-b2b .b2b-home-status-head {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+body.role-b2b .b2b-home-status-head > span,
+body.role-b2b .b2b-simple-summary-head span,
+body.role-b2b .b2b-my-lodge-editor-head span,
+body.role-b2b .b2b-my-lodge-subhead div > span {
+  color: var(--b2b-workbench-accent) !important;
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: .08em;
+}
+
+body.role-b2b .b2b-home-status-head strong,
+body.role-b2b .b2b-simple-summary-head strong,
+body.role-b2b .b2b-my-lodge-editor-head strong {
+  color: var(--b2b-workbench-copy) !important;
+  font-size: 17px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+body.role-b2b .b2b-home-status-head small,
+body.role-b2b .b2b-simple-summary-head small,
+body.role-b2b .b2b-my-lodge-editor-head small {
+  color: var(--b2b-workbench-muted) !important;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.42;
+}
+
+body.role-b2b .b2b-home-status-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ui-space-2);
+}
+
+body.role-b2b .b2b-home-status-grid article {
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 10px 11px;
+  border: 1px solid var(--b2b-workbench-border);
+  border-radius: var(--ui-radius-md);
+  background: rgba(17, 27, 40, .88);
+}
+
+body.role-b2b .b2b-home-status-grid span,
+body.role-b2b .b2b-home-status-grid small {
+  color: var(--b2b-workbench-muted) !important;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+body.role-b2b .b2b-home-status-grid strong {
+  min-width: 0;
+  color: var(--b2b-workbench-copy) !important;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+body.role-b2b .b2b-home-status-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+  flex-wrap: wrap;
+}
+
+body.role-b2b .b2b-home-status-actions button {
+  min-height: var(--ui-control-height);
+}
+
+body.role-b2b .b2b-home-workspace {
+  overflow: clip;
+}
+
+body.role-b2b .b2b-home-hero-head h3 {
+  max-width: 820px;
+  font-size: clamp(25px, 3vw, 38px);
+  letter-spacing: -.025em;
+}
+
+body.role-b2b .b2b-home-journey {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ui-space-3);
+}
+
+body.role-b2b .b2b-home-journey article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 3px 10px;
+  align-content: center;
+  min-height: 112px;
+  padding: 13px;
+  border: 1px solid var(--b2b-workbench-border);
+  border-radius: var(--ui-radius-md);
+  background: rgba(14, 22, 34, .86);
+}
+
+body.role-b2b .b2b-home-journey article.active,
+body.role-b2b .b2b-home-journey article.done {
+  border-color: var(--b2b-workbench-border-strong);
+  background: linear-gradient(145deg, rgba(66, 133, 216, .18), rgba(14, 22, 34, .9));
+}
+
+body.role-b2b .b2b-home-journey b {
+  grid-row: 1 / span 3;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(121, 184, 255, .38);
+  border-radius: 11px;
+  background: rgba(121, 184, 255, .12);
+  color: #b9dcff;
+  font-size: 10px;
+  font-weight: 950;
+}
+
+body.role-b2b .b2b-home-journey span,
+body.role-b2b .b2b-home-journey small {
+  color: var(--b2b-workbench-muted) !important;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+body.role-b2b .b2b-home-journey strong {
+  color: var(--b2b-workbench-copy) !important;
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+body.role-b2b .b2b-simple-summary-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding-bottom: var(--ui-space-3);
+  border-bottom: 1px solid var(--b2b-workbench-border);
+}
+
+body.role-b2b .b2b-simple-summary-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+body.role-b2b .b2b-simple-summary-head > small {
+  max-width: 280px;
+  text-align: right;
+}
+
+body.role-b2b .b2b-simple-next {
+  padding-top: var(--ui-space-3);
+  border-top: 1px solid var(--b2b-workbench-border);
+}
+
+body.role-b2b .b2b-simple-next button {
+  min-height: 84px;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-content: center;
+  column-gap: 9px;
+  cursor: pointer;
+}
+
+body.role-b2b .b2b-simple-next button b {
+  grid-row: 1 / span 2;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(121, 184, 255, .14);
+  color: #b9dcff;
+  font-size: 9px;
+  font-weight: 950;
+}
+
+body.role-b2b .b2b-simple-next button span,
+body.role-b2b .b2b-simple-next button small {
+  grid-column: 2;
+}
+
+body.role-b2b .b2b-interest-workbench {
+  gap: var(--ui-space-4);
+  border-radius: var(--ui-radius-lg);
+  padding: clamp(14px, 2vw, 20px);
+  scroll-margin-top: calc(104px + env(safe-area-inset-top));
+}
+
+body.role-b2b .b2b-interest-workbench .b2b-my-lodge-head {
+  padding-bottom: var(--ui-space-4);
+  border-bottom: 1px solid var(--b2b-workbench-border);
+}
+
+body.role-b2b .b2b-interest-workflow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ui-space-2);
+}
+
+body.role-b2b .b2b-interest-workflow > span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 2px 8px;
+  align-content: center;
+  min-height: 68px;
+  padding: 9px 10px;
+  border: 1px solid var(--b2b-workbench-border);
+  border-radius: var(--ui-radius-md);
+  background: rgba(10, 18, 29, .72);
+}
+
+body.role-b2b .b2b-interest-workflow > span.active,
+body.role-b2b .b2b-interest-workflow > span.done {
+  border-color: var(--b2b-workbench-border-strong);
+}
+
+body.role-b2b .b2b-interest-workflow b {
+  grid-row: 1 / span 2;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(121, 184, 255, .12);
+  color: #b9dcff;
+  font-size: 9px;
+  font-weight: 950;
+}
+
+body.role-b2b .b2b-interest-workflow strong {
+  color: var(--b2b-workbench-copy) !important;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+body.role-b2b .b2b-interest-workflow small {
+  color: var(--b2b-workbench-muted) !important;
+  font-size: 10px;
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+body.role-b2b .b2b-interest-empty {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-4);
+  padding: var(--ui-space-4);
+  border: 1px dashed rgba(121, 184, 255, .42);
+  border-radius: var(--ui-radius-md);
+  background: rgba(121, 184, 255, .07);
+}
+
+body.role-b2b .b2b-interest-empty > div,
+body.role-b2b .b2b-my-lodge-subhead > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+body.role-b2b .b2b-interest-empty span,
+body.role-b2b .b2b-interest-empty small {
+  color: var(--b2b-workbench-muted) !important;
+  font-size: 11px;
+  font-weight: 780;
+  line-height: 1.4;
+}
+
+body.role-b2b .b2b-interest-empty strong {
+  color: var(--b2b-workbench-copy) !important;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+body.role-b2b .b2b-interest-empty button {
+  flex: 0 0 auto;
+  min-height: var(--ui-control-height);
+}
+
+body.role-b2b .b2b-interest-lodge-card {
+  align-content: start;
+  gap: var(--ui-space-3);
+  border-radius: var(--ui-radius-lg);
+  background:
+    linear-gradient(145deg, rgba(70, 135, 218, .10), rgba(255, 255, 255, 0)),
+    var(--b2b-workbench-surface-soft);
+}
+
+body.role-b2b .b2b-interest-lodge-card-index {
+  width: fit-content;
+  min-height: 25px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid rgba(121, 184, 255, .3);
+  border-radius: 999px;
+  background: rgba(121, 184, 255, .11);
+  color: #b9dcff !important;
+}
+
+body.role-b2b .b2b-interest-lodge-insights {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-space-2);
+}
+
+body.role-b2b .b2b-interest-region-note {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(251, 191, 36, .34);
+  border-radius: 12px;
+  background: rgba(251, 191, 36, .09);
+  color: #f8d98b;
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1.4;
+}
+
+body.role-b2b .b2b-interest-region-note span {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, .16);
+  color: #fde68a !important;
+  font-weight: 950;
+}
+
+body.role-b2b .b2b-interest-lodge-actions {
+  margin-top: auto;
+  padding-top: var(--ui-space-2);
+  border-top: 1px solid var(--b2b-workbench-border);
+}
+
+body.role-b2b .b2b-interest-lodge-actions button,
+body.role-b2b .b2b-my-lodge-toggle,
+body.role-b2b .b2b-room-segment-remove,
+body.role-b2b .b2b-room-segment-head button,
+body.role-b2b .b2b-my-lodge-actions button {
+  min-height: var(--ui-control-height);
+}
+
+body.role-b2b .header-logout,
+body.role-b2b .bottom-nav button,
+body.role-b2b .b2b-home-workspace .b2b-presearch-actions button,
+body.role-b2b .b2b-interest-workbench input:not([type="checkbox"]) {
+  min-height: var(--ui-control-height);
+}
+
+body.role-b2b .b2b-interest-workbench .b2b-my-lodge-checks label {
+  min-height: var(--ui-control-height);
+}
+
+body.role-b2b .b2b-interest-delete {
+  border-color: rgba(251, 113, 133, .30);
+  color: #fecdd3;
+}
+
+body.role-b2b .b2b-my-lodge-compare-board {
+  border-radius: var(--ui-radius-lg);
+}
+
+body.role-b2b .b2b-my-lodge-editor-head {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-3);
+  border: 1px solid var(--b2b-workbench-border-strong);
+  border-radius: var(--ui-radius-md);
+  background: rgba(80, 148, 235, .10);
+}
+
+body.role-b2b .b2b-my-lodge-editor-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+body.role-b2b .b2b-my-lodge-editor-head > em {
+  flex: 0 0 auto;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid rgba(52, 211, 153, .34);
+  border-radius: 999px;
+  background: rgba(52, 211, 153, .10);
+  color: #a7f3d0;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 950;
+}
+
+body.role-b2b .b2b-my-lodge-editor-grid {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.35fr) minmax(110px, .72fr) minmax(110px, .72fr) minmax(220px, 1.4fr);
+  gap: var(--ui-space-2);
+  align-items: end;
+}
+
+body.role-b2b .b2b-interest-workbench :where(button, input, summary):focus-visible,
+body.role-b2b .b2b-home-status-strip :where(button, a):focus-visible,
+body.role-b2b .b2b-simple-summary :where(button, a):focus-visible,
+body.role-b2b .b2b-home-workspace :where(button, a):focus-visible {
+  outline: none;
+  box-shadow: var(--ui-focus-ring) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.role-b2b .b2b-home-workspace *,
+  body.role-b2b .b2b-home-status-strip *,
+  body.role-b2b .b2b-interest-workbench * {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+@media (max-width: 900px) {
+  body.role-b2b .b2b-home-status-strip {
+    grid-template-columns: 1fr;
+  }
+
+  body.role-b2b .b2b-home-status-actions {
+    grid-column: auto;
+  }
+
+  body.role-b2b .b2b-home-status-grid,
+  body.role-b2b .b2b-my-lodge-editor-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  body.role-b2b .b2b-home-status-grid,
+  body.role-b2b .b2b-home-journey,
+  body.role-b2b .b2b-interest-workflow,
+  body.role-b2b .b2b-interest-lodge-insights {
+    grid-template-columns: 1fr;
+  }
+
+  body.role-b2b .b2b-home-status-actions,
+  body.role-b2b .b2b-interest-empty,
+  body.role-b2b .b2b-simple-summary-head,
+  body.role-b2b .b2b-my-lodge-editor-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  body.role-b2b .b2b-home-status-actions button,
+  body.role-b2b .b2b-interest-empty button,
+  body.role-b2b .b2b-interest-lodge-actions button,
+  body.role-b2b .b2b-my-lodge-editor-head > em {
+    width: 100%;
+  }
+
+  body.role-b2b .b2b-simple-summary-head > small {
+    max-width: none;
+    text-align: left;
+  }
+
+  body.role-b2b .b2b-interest-workbench {
+    scroll-margin-top: calc(136px + env(safe-area-inset-top));
+  }
+
+  body.role-b2b .b2b-my-lodge-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body.role-b2b .b2b-my-lodge-editor-grid > * {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 390px) {
+  body.role-b2b .b2b-home-status-strip,
+  body.role-b2b .b2b-interest-workbench {
+    padding: 12px;
+    border-radius: var(--ui-radius-md);
+  }
+
+  body.role-b2b .b2b-home-journey article {
+    min-height: 104px;
+  }
+
+  body.role-b2b .b2b-interest-lodge-card,
+  body.role-b2b .b2b-my-lodge-compare-board,
+  body.role-b2b .b2b-room-segment-panel {
+    padding: 10px;
+  }
+
+  body.role-b2b .b2b-interest-lodge-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  body.role-b2b .b2b-interest-lodge-card :where(strong, small, span, em, p),
+  body.role-b2b .b2b-my-lodge-compare-board :where(strong, small, span, em),
+  body.role-b2b .b2b-my-lodge-form :where(strong, small, span, em) {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Light mode corrective layer: preserve fixed overlays and strengthen controls. */
+:root[data-theme="light"] body.role-admin,
+:root[data-theme="light"] body.role-b2b {
+  --light-mode-component-border: rgba(196, 210, 232, .68);
+  --light-mode-component-border-strong: rgba(139, 194, 255, .94);
+  --light-mode-control-surface: #11161f;
+  --light-mode-panel-surface: #111923;
+  --light-mode-placeholder: #a8b4c5;
+  --light-mode-focus-color: #8bc2ff;
+  --light-mode-warning-border: rgba(251, 191, 36, .72);
+  --light-mode-danger-border: rgba(253, 164, 175, .75);
+  --line: var(--light-mode-component-border);
+  --line-strong: var(--light-mode-component-border-strong);
+  --ui-color-border: var(--light-mode-component-border);
+  --ui-focus-ring: 0 0 0 4px rgba(106, 168, 255, .56);
+}
+
+:root[data-theme="light"] body.role-b2b {
+  --b2b-workbench-border: var(--light-mode-component-border);
+  --b2b-workbench-border-strong: var(--light-mode-component-border-strong);
+}
+
+:root[data-theme="light"] body.role-admin :where(input, textarea)::placeholder,
+:root[data-theme="light"] body.role-b2b :where(input, textarea)::placeholder {
+  color: var(--light-mode-placeholder) !important;
+  opacity: 1;
+}
+
+:root[data-theme="light"] body.role-admin :where(input, select, textarea),
+:root[data-theme="light"] body.role-b2b :where(input, select, textarea) {
+  border-color: var(--light-mode-component-border) !important;
+  background: var(--light-mode-control-surface) !important;
+}
+
+:root[data-theme="light"] body.role-admin > .app-shell :where(
+  .admin-workspace-sidebar,
+  .admin-db-hero,
+  .admin-db-view-switch,
+  .admin-db-page-guide,
+  .admin-db-search-drawer,
+  .admin-db-filter-shell,
+  .admin-card,
+  .admin-console-dashboard article,
+  .admin-member-request-dashboard article
+),
+:root[data-theme="light"] body.role-b2b > .app-shell :where(
+  .b2b-home-status-strip,
+  .b2b-home-journey article,
+  .b2b-simple-summary,
+  .b2b-interest-workbench,
+  .b2b-interest-lodge-card,
+  .b2b-my-lodge-editor-head,
+  .b2b-my-lodge-compare-board,
+  .b2b-my-lodge-result-card,
+  .b2b-my-lodge-stat-grid article
+) {
+  border-color: var(--light-mode-component-border) !important;
+}
+
+:root[data-theme="light"] body.role-b2b .b2b-interest-region-note {
+  border-color: var(--light-mode-warning-border) !important;
+}
+
+:root[data-theme="light"] body.role-b2b .b2b-interest-delete {
+  border-color: var(--light-mode-danger-border) !important;
+}
+
+:root[data-theme="light"] body.role-admin .admin-db-page-guide b {
+  color: #8fc4ff !important;
+}
+
+:root[data-theme="light"] body.role-b2b .b2b-interest-workbench :where(button, input, summary):focus-visible,
+:root[data-theme="light"] body.role-b2b .b2b-home-status-strip :where(button, a):focus-visible,
+:root[data-theme="light"] body.role-b2b .b2b-simple-summary :where(button, a):focus-visible,
+:root[data-theme="light"] body.role-b2b .b2b-home-workspace :where(button, a):focus-visible {
+  outline: 3px solid var(--light-mode-focus-color) !important;
+  outline-offset: 2px;
+  box-shadow: var(--ui-focus-ring) !important;
+}
+
+:root[data-theme="light"] body.role-b2b .b2b-room-segment-remove:disabled {
+  opacity: .68;
+}
+
+@media (min-width: 721px) and (max-width: 1120px) {
+  body.role-admin .admin-db-toolbar-main {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-toolbar-main > label {
+    grid-column: auto;
+  }
+
+  body.role-admin .admin-db-toolbar-main > .admin-db-filter-query {
+    grid-column: 1 / -1;
+  }
+
+  body.role-admin .admin-db-toolbar-main > .admin-db-filter-reset {
+    grid-column: auto;
+    width: 100%;
+  }
 }

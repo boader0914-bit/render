@@ -1654,10 +1654,20 @@ function syncAdminSectionPanels() {
   const isAdmin = isAdminRole();
   const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "database";
   state.adminPanelSection = current;
+  if (isAdmin && state.activeTab === "admin" && els.pageTitle) els.pageTitle.textContent = "관리자 콘솔";
+  if (isAdmin && state.activeTab === "admin" && els.pageSubtitle) {
+    els.pageSubtitle.hidden = false;
+    els.pageSubtitle.textContent = `${ADMIN_PANEL_SECTIONS[current]} · 데이터 운영 워크스페이스`;
+  }
+  const adminPanel = document.getElementById("adminPanel");
+  if (adminPanel) adminPanel.dataset.activeSection = current;
   document.querySelectorAll("[data-admin-section]").forEach((button) => {
+    const active = isAdmin && button.dataset.adminSection === current;
     button.hidden = !isAdmin;
-    button.classList.toggle("active", isAdmin && button.dataset.adminSection === current);
-    button.setAttribute("aria-pressed", isAdmin && button.dataset.adminSection === current ? "true" : "false");
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   document.querySelectorAll("[data-admin-section-panel]").forEach((panel) => {
     const active = isAdmin && panel.dataset.adminSectionPanel === current;
@@ -11146,10 +11156,13 @@ function renderB2BMyLodgeComparisonBoard(interestLodges = [], brief = b2bMarketB
   if (!rows.length) return "";
   const basisPeriod = previewModel?.basisPeriod || b2bDateRangeLabel(state.data?.run || {}) || `${fmtNumber(DEFAULT_BOOKING_DAYS)}일 기준`;
   return `
-    <article class="b2b-my-lodge-compare-board">
+    <article class="b2b-my-lodge-compare-board" data-b2b-interest-comparison="true">
       <div class="b2b-my-lodge-subhead">
-        <strong>7일 기준 매출 위치</strong>
-        <small>${escapeHtml(basisPeriod)} · 관심숙소와 지역 표본 비교</small>
+        <div>
+          <span>현재 리포트 기준</span>
+          <strong>관심숙소 매출 위치</strong>
+        </div>
+        <small>${escapeHtml(`${brief.keyword || "현재 검색 지역"} · ${basisPeriod} · ${fmtNumber(brief.itemCount || 0)}곳 표본`)}</small>
       </div>
       <div class="b2b-my-lodge-compare-list">
         ${rows.map((row) => `
@@ -11402,36 +11415,50 @@ function renderB2BInterestLodgeCards(interestLodges = [], brief = b2bMarketBrief
           ...model.channelLabels,
           ...facilities
         ].filter(Boolean).slice(0, 8);
+        const headingId = `b2bInterestLodgeTitle-${index}`;
+        const regionLabel = String(lodge.searchRegion || lodge.addressRegion || "").trim();
+        const currentRegion = String(brief.keyword || "").trim();
+        const currentRegionKey = compactSearchText(currentRegion);
+        const savedRegionTokens = b2bMeaningfulSearchTokens(regionLabel)
+          .map((token) => compactSearchText(token).replace(/[도시군구]$/u, ""))
+          .filter((token) => token.length >= 2);
+        const sameRegionSignal = savedRegionTokens.some((token) => currentRegionKey.includes(token));
+        const crossRegionNote = regionLabel && currentRegion && savedRegionTokens.length && !sameRegionSignal
+          ? `${regionLabel} 숙소를 ${currentRegion} 리포트 기준으로 비교 중`
+          : "";
         return `
-          <article class="b2b-interest-lodge-card">
+          <article class="b2b-interest-lodge-card" data-b2b-interest-card="true" aria-labelledby="${headingId}">
             <div class="b2b-interest-lodge-card-head">
-              <span>관심숙소 ${fmtNumber(index + 1)}</span>
-              <strong>${escapeHtml(name)}</strong>
+              <span class="b2b-interest-lodge-card-index">관심숙소 ${fmtNumber(index + 1)} · 계정 저장</span>
+              <strong id="${headingId}">${escapeHtml(name)}</strong>
               <small>${escapeHtml(`${fmtNumber(model.basisDays || DEFAULT_BOOKING_DAYS)}일 기준 예상 매출 · ${model.basisPeriod || "기간 확인"}`)}</small>
               <em>${model.hasEstimateBasis ? fmtWon(model.weeklyRevenue) : "매출 입력 대기"}</em>
             </div>
-            <div class="b2b-interest-lodge-decision ${escapeHtml(conclusion.tone)}">
-              <span>비교 결론</span>
-              <strong>${escapeHtml(conclusion.label)}</strong>
-              <small>${escapeHtml(conclusion.headline)}</small>
+            ${crossRegionNote ? `<p class="b2b-interest-region-note"><span aria-hidden="true">!</span>${escapeHtml(crossRegionNote)}</p>` : ""}
+            <div class="b2b-interest-lodge-insights">
+              <div class="b2b-interest-lodge-decision ${escapeHtml(conclusion.tone)}">
+                <span>비교 결론</span>
+                <strong>${escapeHtml(conclusion.label)}</strong>
+                <small>${escapeHtml(conclusion.headline)}</small>
+              </div>
+              <div class="b2b-interest-lodge-location ${escapeHtml(model.locationConclusion.tone)}">
+                <span>입지 비교</span>
+                <strong>${escapeHtml(model.locationConclusion.label)}</strong>
+                <small>${escapeHtml(model.locationConclusion.headline)}</small>
+              </div>
             </div>
-            ${precision.visible ? `<div class="b2b-interest-lodge-source ${escapeHtml(precision.tone || "neutral")}"><span>${escapeHtml(precision.label || "수집 기준")}</span><strong>${precision.score ? `${fmtNumber(precision.score)}점` : precision.manualAdjusted ? "수동 보정" : "근거 확인"}</strong><small>${escapeHtml(precision.basis || lodge.collectionStatus || "")}</small></div>` : ""}
             <div class="b2b-interest-lodge-metrics">
               <div><span>객실</span><strong>${model.roomCount ? `${fmtNumber(model.roomCount)}실` : "대기"}</strong></div>
               <div><span>평균 객실가</span><strong>${model.avgPrice ? fmtWon(model.avgPrice) : "대기"}</strong></div>
               <div><span>판매 채널</span><strong>${model.channelLabels.length ? escapeHtml(model.channelLabels.join(" + ")) : "미입력"}</strong></div>
             </div>
-            <div class="b2b-interest-lodge-location ${escapeHtml(model.locationConclusion.tone)}">
-              <span>입지 비교</span>
-              <strong>${escapeHtml(model.locationConclusion.label)}</strong>
-              <small>${escapeHtml(model.locationConclusion.headline)}</small>
-            </div>
+            ${precision.visible ? `<div class="b2b-interest-lodge-source ${escapeHtml(precision.tone || "neutral")}"><span>${escapeHtml(precision.label || "수집 기준")}</span><strong>${precision.score ? `${fmtNumber(precision.score)}점` : precision.manualAdjusted ? "수동 보정" : "근거 확인"}</strong><small>${escapeHtml(precision.basis || lodge.collectionStatus || "")}</small></div>` : ""}
             <div class="b2b-interest-lodge-tags">
               ${chips.length ? chips.map((chip) => `<em>${escapeHtml(chip)}</em>`).join("") : "<em>상세 입력 대기</em>"}
             </div>
             <div class="b2b-interest-lodge-actions">
-              <button class="secondary-button" type="button" data-b2b-interest-lodge-edit="${escapeHtml(actionId)}" data-b2b-interest-lodge-index="${index}">수정</button>
-              <button class="ghost-button" type="button" data-b2b-interest-lodge-delete="${escapeHtml(actionId)}" data-b2b-interest-lodge-index="${index}">삭제</button>
+              <button class="secondary-button" type="button" data-b2b-interest-lodge-edit="${escapeHtml(actionId)}" data-b2b-interest-lodge-index="${index}" aria-label="${escapeHtml(`${name} 수정`)}">수정</button>
+              <button class="ghost-button b2b-interest-delete" type="button" data-b2b-interest-lodge-delete="${escapeHtml(actionId)}" data-b2b-interest-lodge-index="${index}" data-b2b-interest-lodge-name="${escapeHtml(name)}" aria-label="${escapeHtml(`${name} 삭제`)}">삭제</button>
             </div>
           </article>
         `;
@@ -11448,8 +11475,11 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
   const revenueModel = revenueModelOverride || b2bRevenueBenchmarkModel(brief);
   const interestLodges = readB2BInterestLodges();
   const canRegisterMore = interestLodges.length < B2B_INTEREST_LODGE_LIMIT;
-  const editorOpen = canRegisterMore && (Boolean(state.b2bMyLodgeExpanded) || collecting);
-  const editingInterestLodge = Boolean(state.b2bMyLodgeEditing && b2bMyLodgeDraftHasInput(draft));
+  const editingId = typeof state.b2bMyLodgeEditing === "string" ? state.b2bMyLodgeEditing : "";
+  const editingTargetExists = editingId && b2bInterestLodgeTargetIndex(interestLodges, editingId, -1) >= 0;
+  const editorAvailable = canRegisterMore || Boolean(editingTargetExists);
+  const editorOpen = editorAvailable && (Boolean(state.b2bMyLodgeExpanded) || collecting);
+  const editingInterestLodge = Boolean(editingTargetExists && b2bMyLodgeDraftHasInput(draft));
   const facilities = model.facilities.length ? model.facilities : ["시설 입력 대기"];
   const inputSegments = b2bMyLodgeSegmentInputRows(draft);
   const segmentRows = inputSegments.length ? inputSegments : [b2bMyLodgeBlankSegment()];
@@ -11485,46 +11515,63 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
     </div>
   `).join("");
   return `
-    <div class="b2b-my-lodge-board">
+    <section class="b2b-my-lodge-board b2b-interest-workbench" data-b2b-interest-workbench="true" aria-labelledby="b2bInterestWorkbenchTitle">
       <div class="b2b-my-lodge-head">
         <div>
-          <span>비교 기준 설정</span>
-          <strong>내 숙소 정보 입력</strong>
-          <p>비교할 숙소를 최대 2곳까지 저장하고, 객실종류별 수량·요일 가격으로 지역 평균·상위권 매출 표본과 비교합니다.</p>
+          <span>INTEREST LODGE WORKBENCH</span>
+          <strong id="b2bInterestWorkbenchTitle">관심숙소 비교 워크벤치</strong>
+          <p>관심숙소를 최대 2곳까지 저장하고 현재 열린 지역 리포트의 예약·매출 표본과 비교합니다. 실제 회계 매출이 아닌 경쟁권 기반 예상치입니다.</p>
         </div>
         <div class="b2b-my-lodge-head-actions">
           <em>${state.b2bInterestLodgeSyncing ? "저장 중" : state.b2bInterestLodgeSyncError ? "저장 확인 필요" : "계정 저장"}</em>
           <em>${fmtNumber(interestLodges.length)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)} 등록</em>
-          ${canRegisterMore ? `
-            <button class="b2b-my-lodge-toggle" type="button" data-b2b-my-lodge-toggle aria-expanded="${editorOpen ? "true" : "false"}">
+          ${editorAvailable ? `
+            <button class="b2b-my-lodge-toggle" type="button" data-b2b-my-lodge-toggle aria-expanded="${editorOpen ? "true" : "false"}" aria-controls="b2bInterestLodgeEditor">
               <span aria-hidden="true">${editorOpen ? "−" : "+"}</span>
               <b>${editorOpen ? "접기" : "등록"}</b>
             </button>
           ` : ""}
         </div>
       </div>
-      ${state.b2bInterestLodgeSyncError ? `<div class="b2b-my-lodge-sync-note">${escapeHtml(state.b2bInterestLodgeSyncError)} 브라우저에는 임시 보관되어 있습니다.</div>` : ""}
+      <div class="b2b-interest-workflow" aria-label="관심숙소 비교 흐름">
+        <span class="${interestLodges.length ? "done" : "active"}"><b>01</b><strong>숙소 등록</strong><small>${interestLodges.length ? `${fmtNumber(interestLodges.length)}곳 저장됨` : "기본 정보 입력"}</small></span>
+        <span class="${interestLodges.length ? "active" : ""}"><b>02</b><strong>지역 비교</strong><small>${interestLodges.length ? `${brief.keyword || "현재 지역"} 표본 적용` : "리포트 기준 선택"}</small></span>
+        <span class="${interestLodges.length ? "active" : ""}"><b>03</b><strong>운영 판단</strong><small>${interestLodges.length ? "예상 매출·입지 확인" : "비교 결과 확인"}</small></span>
+      </div>
+      ${state.b2bInterestLodgeSyncError ? `<div class="b2b-my-lodge-sync-note" role="status" aria-live="polite">${escapeHtml(state.b2bInterestLodgeSyncError)} 브라우저에는 임시 보관되어 있습니다.</div>` : ""}
+      ${!interestLodges.length && !editorOpen ? `
+        <div class="b2b-interest-empty">
+          <div><span>관심숙소 0/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}</span><strong>비교할 숙소를 먼저 등록하세요.</strong><small>숙소명만 입력해 자동 확인하거나 객실·요일 가격을 직접 입력할 수 있습니다.</small></div>
+          <button class="primary-button" type="button" data-b2b-my-lodge-toggle aria-controls="b2bInterestLodgeEditor" aria-expanded="false">첫 관심숙소 등록</button>
+        </div>
+      ` : ""}
       ${renderB2BInterestLodgeCards(interestLodges, brief, revenueModel)}
       ${renderB2BMyLodgeComparisonBoard(interestLodges, brief, revenueModel, editorOpen && model.hasInput ? model : null)}
       ${interestLodges.length || (editorOpen && model.hasInput) ? renderB2BMyLodgeOfflineBoard(revenueModel) : ""}
-      ${canRegisterMore && editorOpen ? `
-      <form class="b2b-my-lodge-form" data-b2b-my-lodge-form>
-        <label class="b2b-my-lodge-field name">
-          <span>숙소명</span>
-          <input name="lodgingName" type="text" maxlength="80" value="${escapeHtml(name)}" placeholder="지역명 + 운영업체명">
-        </label>
-        <label class="b2b-my-lodge-field">
-          <span>객실 수(총량)</span>
-          <input name="roomCount" type="number" min="0" step="1" value="${escapeHtml(roomCountValue)}" placeholder="12">
-        </label>
-        <label class="b2b-my-lodge-field">
-          <span>데이유즈</span>
-          <input name="dayUseCount" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(draft.dayUseCount ?? "")}" placeholder="예: 6">
-        </label>
-        <label class="b2b-my-lodge-field facilities">
-          <span>시설</span>
-          <input name="facilities" type="text" maxlength="160" value="${escapeHtml(draft.facilities || "")}" placeholder="개별화장실, 수영장, 바비큐">
-        </label>
+      ${editorAvailable && editorOpen ? `
+      <form class="b2b-my-lodge-form" id="b2bInterestLodgeEditor" data-b2b-my-lodge-form>
+        <div class="b2b-my-lodge-editor-head">
+          <div><span>${editingInterestLodge ? "관심숙소 수정" : "새 관심숙소"}</span><strong>${editingInterestLodge ? "저장된 정보를 안전하게 수정합니다." : "기본 정보부터 비교 기준을 만듭니다."}</strong><small>숙소명 → 객실·가격 → 채널 확인 순서로 입력하세요.</small></div>
+          <em>${editingInterestLodge ? "원본 유지 중" : "등록 준비"}</em>
+        </div>
+        <div class="b2b-my-lodge-editor-grid">
+          <label class="b2b-my-lodge-field name">
+            <span>숙소명</span>
+            <input name="lodgingName" type="text" maxlength="80" value="${escapeHtml(name)}" placeholder="지역명 + 운영업체명">
+          </label>
+          <label class="b2b-my-lodge-field">
+            <span>객실 수(총량)</span>
+            <input name="roomCount" type="number" min="0" step="1" value="${escapeHtml(roomCountValue)}" placeholder="12">
+          </label>
+          <label class="b2b-my-lodge-field">
+            <span>데이유즈</span>
+            <input name="dayUseCount" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(draft.dayUseCount ?? "")}" placeholder="예: 6">
+          </label>
+          <label class="b2b-my-lodge-field facilities">
+            <span>시설</span>
+            <input name="facilities" type="text" maxlength="160" value="${escapeHtml(draft.facilities || "")}" placeholder="개별화장실, 수영장, 바비큐">
+          </label>
+        </div>
         <div class="b2b-room-segment-panel" data-b2b-room-segments>
           <div class="b2b-room-segment-head">
             <div>
@@ -11547,16 +11594,16 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
           <button class="primary-button" type="button" data-b2b-my-lodge-save>${editingInterestLodge ? "수정 저장" : "등록하기"}</button>
           <button class="secondary-button" type="button" data-b2b-my-lodge-clear ${model.hasInput ? "" : "disabled"}>입력 초기화</button>
         </div>
-        ${collectStatus ? `<div class="b2b-my-lodge-collect-status ${collecting ? "loading" : ""}">${escapeHtml(collectStatus)}</div>` : ""}
+        ${collectStatus ? `<div class="b2b-my-lodge-collect-status ${collecting ? "loading" : ""}" role="status" aria-live="polite">${escapeHtml(collectStatus)}</div>` : ""}
         ${renderB2BMyLodgePrecisionNote(model.collectionPrecision || {})}
       </form>
-      ` : !canRegisterMore ? `
+      ` : !editorAvailable ? `
         <div class="b2b-interest-lodge-limit">
           <strong>관심숙소는 최대 ${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}곳까지 등록됩니다.</strong>
           <span>다른 숙소를 비교하려면 기존 관심숙소를 수정하거나 삭제하세요.</span>
         </div>
       ` : ""}
-      ${canRegisterMore && editorOpen && model.hasInput ? `
+      ${editorAvailable && editorOpen && model.hasInput ? `
       <div class="b2b-my-lodge-result ${model.hasEstimateBasis ? "ready" : "empty"}">
         <article class="b2b-my-lodge-main">
           <span>${escapeHtml(`${fmtNumber(model.basisDays || DEFAULT_BOOKING_DAYS)}일 기준 예상 매출 · ${model.basisPeriod || "기간 확인"}`)}</span>
@@ -11603,7 +11650,7 @@ function renderB2BMyLodgeBenchmark(brief = b2bMarketBriefModel(), model = b2bMyL
         </article>
       </div>
       ` : ""}
-    </div>
+    </section>
   `;
 }
 
@@ -11708,7 +11755,10 @@ function saveB2BMyLodgeBenchmark() {
   if (!values) return;
   const store = readB2BMyLodgeStore();
   const interestLodges = Array.isArray(store.interestLodges) ? store.interestLodges.slice(0, B2B_INTEREST_LODGE_LIMIT) : [];
-  if (interestLodges.length >= B2B_INTEREST_LODGE_LIMIT) {
+  const editingId = typeof state.b2bMyLodgeEditing === "string" ? state.b2bMyLodgeEditing : "";
+  const editingIndex = editingId ? b2bInterestLodgeTargetIndex(interestLodges, editingId, -1) : -1;
+  const editingLodge = editingIndex >= 0 ? interestLodges[editingIndex] : null;
+  if (interestLodges.length >= B2B_INTEREST_LODGE_LIMIT && !editingLodge) {
     state.b2bMyLodgeCollectStatus = `관심숙소는 최대 ${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}곳까지 등록할 수 있습니다.`;
     state.b2bMyLodgeExpanded = false;
     renderReport();
@@ -11724,11 +11774,12 @@ function saveB2BMyLodgeBenchmark() {
   }
   const lodge = b2bNormalizeInterestLodge({
     ...values,
-    id: b2bNewInterestLodgeId(),
+    id: editingLodge?.id || b2bNewInterestLodgeId(),
     savedAt: new Date().toISOString(),
-    registeredAt: new Date().toISOString()
+    registeredAt: editingLodge?.registeredAt || new Date().toISOString()
   });
-  interestLodges.push(lodge);
+  if (editingLodge) interestLodges.splice(editingIndex, 1, lodge);
+  else interestLodges.push(lodge);
   state.b2bMyLodgeCollectStatus = "";
   state.b2bMyLodgeExpanded = false;
   state.b2bMyLodgeEditing = false;
@@ -11747,14 +11798,15 @@ function editB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
     renderReport();
     return;
   }
-  state.b2bMyLodgeCollectStatus = `${target.lodgingName || "관심숙소"} 정보를 수정합니다. 저장하면 다시 카드로 등록됩니다.`;
+  const editingId = target.id || b2bStableInterestLodgeId(target) || lodgeId;
+  state.b2bMyLodgeCollectStatus = `${target.lodgingName || "관심숙소"} 정보를 수정합니다. 저장 전까지 기존 카드는 그대로 유지됩니다.`;
   state.b2bMyLodgeExpanded = true;
-  state.b2bMyLodgeEditing = true;
+  state.b2bMyLodgeEditing = editingId;
   persistB2BMyLodgeStore({
     ...store,
-    draft: { ...target, id: "" },
-    interestLodges: interestLodges.filter((_, index) => index !== targetIndex)
-  });
+    draft: { ...target },
+    interestLodges
+  }, { syncInterestLodges: false });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -11764,10 +11816,14 @@ function deleteB2BInterestLodge(lodgeId = "", fallbackIndex = -1) {
   const interestLodges = Array.isArray(store.interestLodges) ? store.interestLodges : [];
   const targetIndex = b2bInterestLodgeTargetIndex(interestLodges, lodgeId, fallbackIndex);
   const next = targetIndex >= 0 ? interestLodges.filter((_, index) => index !== targetIndex) : interestLodges;
+  const editingId = typeof state.b2bMyLodgeEditing === "string" ? state.b2bMyLodgeEditing : "";
+  const deletingEditedLodge = targetIndex >= 0 && editingId
+    ? b2bInterestLodgeTargetIndex([interestLodges[targetIndex]], editingId, -1) === 0
+    : false;
   state.b2bMyLodgeCollectStatus = targetIndex < 0 ? "삭제할 관심숙소를 찾지 못했습니다." : "관심숙소를 삭제했습니다.";
-  state.b2bMyLodgeExpanded = false;
-  state.b2bMyLodgeEditing = false;
-  persistB2BMyLodgeStore({ ...store, interestLodges: next });
+  state.b2bMyLodgeExpanded = Boolean(editingId && !deletingEditedLodge);
+  state.b2bMyLodgeEditing = deletingEditedLodge ? false : editingId;
+  persistB2BMyLodgeStore({ ...store, draft: deletingEditedLodge ? {} : store.draft, interestLodges: next });
   renderReport();
   document.querySelector(".b2b-my-lodge-board")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -12188,7 +12244,14 @@ function b2bSimpleSummaryModel(
 
 function renderB2BSimpleSummary(brief = b2bMarketBriefModel(), model = b2bSimpleSummaryModel(brief)) {
   return `
-    <div class="b2b-simple-summary ${escapeHtml(model.decision.tone || "neutral")}">
+    <div class="b2b-simple-summary ${escapeHtml(model.decision.tone || "neutral")}" data-b2b-performance-summary="true" aria-label="경쟁권 핵심 성과 요약">
+      <div class="b2b-simple-summary-head">
+        <div>
+          <span>PERFORMANCE SNAPSHOT</span>
+          <strong>경쟁권 성과 한눈에</strong>
+        </div>
+        <small>예약·노출·가격 표본 기반 예상 지표</small>
+      </div>
       <div class="b2b-simple-answer">
         <span>먼저 볼 결론</span>
         <strong>${escapeHtml(model.headline)}</strong>
@@ -12206,6 +12269,18 @@ function renderB2BSimpleSummary(brief = b2bMarketBriefModel(), model = b2bSimple
             ${Number.isFinite(Number(card.barValue)) ? `<div class="b2b-simple-meter" style="--meter:${Math.max(0, Math.min(100, Number(card.barValue)))}%"><i></i><em>${escapeHtml(card.meterLabel || `${Math.round(Number(card.barValue))}%`)}</em></div>` : ""}
           </article>
         `).join("")}
+      </div>
+      <div class="b2b-simple-next" aria-label="성과 확인 다음 행동">
+        <strong>다음으로 확인할 항목</strong>
+        <div>
+          ${model.actions.map((action, index) => `
+            <button class="${escapeHtml(action.tone)}" type="button" data-drawer-tab="${escapeHtml(action.tab)}" aria-label="${escapeHtml(`${action.label}: ${action.detail}`)}">
+              <b aria-hidden="true">0${index + 1}</b>
+              <span>${escapeHtml(action.label)}</span>
+              <small>${escapeHtml(action.detail)}</small>
+            </button>
+          `).join("")}
+        </div>
       </div>
     </div>
   `;
@@ -12705,10 +12780,10 @@ function renderB2BMarketBrief(brief = b2bMarketBriefModel()) {
   const rankRangeLabel = rankRange === "상세 생략" ? rankRange : `${rankRange}위`;
   const sampleCount = snapshotModel.rankModel?.rows?.length || brief.itemCount || 0;
   return `
-    <section class="b2b-brief-card b2b-report-first">
-      <div class="b2b-brief-head">
+    <section class="b2b-brief-card b2b-report-first b2b-home-workspace" data-b2b-home-workbench="ready">
+      <div class="b2b-brief-head b2b-home-hero-head">
         <div>
-          <span class="report-badge ${escapeHtml(brief.decision.tone)}">리포트 요약</span>
+          <span class="report-badge ${escapeHtml(brief.decision.tone)}">사업자 홈 · 성과 요약</span>
           <h3>${escapeHtml(brief.keyword)} 경쟁 현황</h3>
           <p>${escapeHtml("지정 검색범위 안의 경쟁강도, 실제 예약율, 예상 평균 매출, 입지 경쟁력, 월별 예상 검색량을 먼저 보여줍니다.")}</p>
         </div>
@@ -12745,25 +12820,23 @@ function renderB2BPreSearchMyLodge() {
   const revenueModel = b2bRevenueBenchmarkModel(brief, emptyData);
   const myLodgeModel = b2bMyLodgeBenchmarkModel(brief, revenueModel);
   const savedInterestLodgeCount = readB2BInterestLodges().length;
-  const memoryInterestLodgeCount = Array.isArray(state.b2bMyLodgeCards) ? state.b2bMyLodgeCards.length : 0;
-  const interestLodgeCount = savedInterestLodgeCount || memoryInterestLodgeCount || 0;
+  const interestLodgeCount = savedInterestLodgeCount;
   const showLodgeBoard = Boolean(state.b2bMyLodgeExpanded || state.b2bMyLodgeEditing || state.b2bMyLodgeCollecting);
   const lodgeButtonText = showLodgeBoard ? "관심숙소 접기" : interestLodgeCount ? `관심숙소 ${interestLodgeCount}곳 보기` : "+ 관심숙소 등록";
   return `
-    <section class="b2b-brief-card b2b-report-first b2b-presearch-guide">
-      <div class="report-card-head">
+    <section class="b2b-brief-card b2b-report-first b2b-presearch-guide b2b-home-workspace" data-b2b-home-workbench="empty">
+      <div class="report-card-head b2b-home-hero-head">
         <div>
-          <span class="report-badge good">운영 전략 리포트</span>
-          <h3>지역과 업종을 검색하면 운영 조언을 생성합니다.</h3>
-          <p>네이버 노출, 예약 반응, 가격, 상품 구성, 채널 상태를 묶어 지금 어느 위치에 있고 무엇을 조정해야 하는지 먼저 보여줍니다.</p>
+          <span class="report-badge good">사업자 홈</span>
+          <h3>검색 한 번으로 경쟁 현황과 관심숙소 성과를 비교하세요.</h3>
+          <p>지역 경쟁권의 노출·예약·예상 매출을 확인하고, 관심숙소를 등록해 같은 기준으로 운영 위치와 다음 행동을 비교합니다.</p>
         </div>
-        <span>검색 전</span>
+        <span>${interestLodgeCount ? `관심숙소 ${fmtNumber(interestLodgeCount)}곳` : "시작 준비"}</span>
       </div>
-      <div class="b2b-presearch-pill-grid" aria-label="리포트 구성">
-        <span>지역 분석</span>
-        <span>업체 분석</span>
-        <span>수요구조</span>
-        <span>지도</span>
+      <div class="b2b-home-journey" aria-label="사업자 홈 이용 흐름">
+        <article class="active"><b>01</b><span>지역 검색</span><strong>경쟁권 리포트 생성</strong><small>지역명과 업종을 한 번에 입력</small></article>
+        <article class="${interestLodgeCount ? "done" : ""}"><b>02</b><span>관심숙소</span><strong>${interestLodgeCount ? `${fmtNumber(interestLodgeCount)}곳 등록됨` : "최대 2곳 등록"}</strong><small>객실·요일 가격과 판매 채널 입력</small></article>
+        <article><b>03</b><span>운영 판단</span><strong>성과와 다음 행동 확인</strong><small>현재 지역 표본과 동일 기준 비교</small></article>
       </div>
       <div class="b2b-presearch-actions">
         <button class="primary-button" type="button" data-b2b-onboarding-focus>검색어 입력하기</button>
@@ -19106,9 +19179,7 @@ function adminDbCollectionChip(collection = {}) {
 
 function adminDbCompanyCompactTags(row = {}) {
   const metrics = row.metrics || {};
-  const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
   const tags = [
-    { label: workType.label || "검수 대기", tone: workType.tone || "watch" },
     { label: metrics.collection?.key === "confirm_needed" ? "" : (metrics.collection?.label || "자동수집"), tone: metrics.collection?.tone || "neutral" },
     { label: metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "", tone: "neutral" },
     { label: adminDbChannelSummary(metrics), tone: metrics.channels?.count ? "good" : "watch" }
@@ -19434,7 +19505,7 @@ function adminDbSelectedDecisionPanel(row = {}, issues = [], requiredChannels = 
 function adminDbSelectedFoldBlock({ label = "", title = "", note = "", body = "", open = false, tone = "", foldKey = "" } = {}) {
   if (!body) return "";
   return `
-    <details class="admin-db-selected-fold ${escapeHtml(tone || "")}" ${foldKey ? `data-admin-db-fold="${escapeHtml(foldKey)}"` : ""} ${open ? "open" : ""}>
+    <details class="admin-db-selected-fold ${escapeHtml(tone || "")}" ${foldKey ? `id="adminDbFold-${escapeHtml(foldKey)}" data-admin-db-fold="${escapeHtml(foldKey)}"` : ""} ${open ? "open" : ""}>
       <summary>
         <div>
           <span>${escapeHtml(label)}</span>
@@ -19601,17 +19672,20 @@ function adminDbSelectedStatusPanel(row = {}, nextAction = {}, requiredChannels 
 
 function adminDbSelectedDetailTabs(activeFold = "") {
   const tabs = [
-    ["correction", "기준값"],
-    ["channel", "채널"],
-    ["collect", "수집"],
-    ["review", "검수"]
+    ["correction", "01", "기준값", "객실·상품"],
+    ["channel", "02", "채널", "OTA 노출"],
+    ["collect", "03", "수집", "근거 보강"],
+    ["review", "04", "검수", "상태 저장"]
   ];
   return `
     <div class="admin-db-detail-tabs" aria-label="상세 수정 메뉴">
-      ${tabs.map(([key, label]) => `
-        <button type="button" class="${activeFold === key ? "active" : ""}" data-admin-db-open-fold="${escapeHtml(key)}">${escapeHtml(label)}</button>
+      ${tabs.map(([key, step, label, note]) => `
+        <button type="button" class="${activeFold === key ? "active" : ""}" data-admin-db-open-fold="${escapeHtml(key)}" data-admin-db-workbench-step="${escapeHtml(key)}" aria-controls="adminDbFold-${escapeHtml(key)}" aria-pressed="${activeFold === key ? "true" : "false"}">
+          <span class="admin-db-workbench-step-index" aria-hidden="true">${escapeHtml(step)}</span>
+          <span class="admin-db-workbench-step-copy"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(note)}</small></span>
+        </button>
       `).join("")}
-    </div>
+    </section>
   `;
 }
 
@@ -20483,23 +20557,36 @@ function adminDbSelectedDetailPanel(rows = []) {
   `;
   state.adminDbSelectedCompanyId = selectedId;
   return `
-    <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}">
+    <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}" data-admin-db-company-workbench="true">
       <div class="admin-db-detail-top">
-        <div>
-          <span>업체 상세</span>
+        <div class="admin-db-detail-identity">
+          <button type="button" class="admin-db-detail-back" data-admin-db-view-link="list" aria-label="업체 목록으로 돌아가기">← 업체 목록</button>
+          <span>업체 상세 워크벤치</span>
           <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
           <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, metrics.sourceLabel].filter(Boolean).join(" · "))}</small>
+          <div class="admin-db-detail-badges">
+            ${lodgingCategoryBadgesHtml(company, { compact: true })}
+            <em class="admin-db-company-status ${escapeHtml(workType.tone || "watch")}">${escapeHtml(workType.label || "검수 대기")}</em>
+          </div>
         </div>
         <div class="admin-db-detail-top-actions">
           <a href="/b2b?userView=admin" target="_blank" rel="noreferrer">사업자 화면</a>
           ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">상세 수집</button>` : ""}
-          <button type="button" data-admin-db-open-fold="review">검수 저장</button>
+          <button type="button" data-admin-db-open-fold="review">검수 상태 열기</button>
         </div>
       </div>
       ${adminDbSelectedStatusPanel(row, nextAction, requiredChannels)}
       ${adminDbSelectedKpiCardsHtml(row)}
       ${adminDbChannelExposureTable(row)}
       <section class="admin-db-selected-workbench" aria-label="수정과 처리">
+        <div class="admin-db-workbench-heading">
+          <div>
+            <span>수정 워크벤치</span>
+            <strong>기준 확인부터 검수 저장까지</strong>
+            <small>추천 단계부터 처리해도 다른 입력값과 자동 판정 근거는 유지됩니다.</small>
+          </div>
+          <em class="${escapeHtml(nextAction.tone || "watch")}">추천 · ${escapeHtml(nextAction.label || "검수")}</em>
+        </div>
         ${adminDbSelectedDetailTabs(nextAction.foldKey)}
         ${adminDbReviewFlashHtml(selectedId)}
         <div class="admin-db-selected-workbench-stack">
@@ -20557,27 +20644,34 @@ function adminDbCompanyRow(row = {}, options = {}) {
   const selected = state.adminDbSelectedCompanyId && state.adminDbSelectedCompanyId === company.companyId;
   const reason = adminDbWorkReason(row);
   const listIndex = Number(options.index || 0);
+  const companyName = company.primaryName || "업체명 확인";
+  const categoryLabel = company.primaryCategoryLabel || company.categoryLabels?.[0] || metrics.category?.label || "숙박업";
+  const locationLabel = [row.provinceLabel || "미분류", row.localityLabel || "지역 미확인", categoryLabel].filter(Boolean).join(" · ");
   return `
-    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-surface="dark" data-admin-db-company-card-select="${escapeHtml(company.companyId || "")}">
+    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-surface="dark" data-admin-db-company-card-select="${escapeHtml(company.companyId || "")}" data-admin-db-company-workbench-row="true" aria-label="${escapeHtml(`${companyName} 업체 관리`)}" ${selected ? 'aria-current="true"' : ""}>
       <div class="admin-db-company-main">
-        <div class="admin-db-company-title-row">
-          ${listIndex ? `<span class="admin-db-company-index">${fmtNumber(listIndex)}</span>` : ""}
-          <strong title="${escapeHtml(company.primaryName || "업체명 확인")}">${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+        <div class="admin-db-company-identity">
+          <div class="admin-db-company-title-row">
+            ${listIndex ? `<span class="admin-db-company-index">${fmtNumber(listIndex)}</span>` : ""}
+            <strong title="${escapeHtml(companyName)}">${escapeHtml(companyName)}</strong>
+          </div>
+          <em class="admin-db-company-status ${escapeHtml(workType.tone || "watch")}">${escapeHtml(workType.label || "검수 대기")}</em>
         </div>
-        <small>${escapeHtml(row.provinceLabel || "미분류")} · ${escapeHtml(row.localityLabel || "지역 미확인")} · ${escapeHtml(metrics.category?.label || "숙박업")}</small>
-        <p class="admin-db-company-reason">${escapeHtml(reason)}</p>
+        <small class="admin-db-company-location">${escapeHtml(locationLabel)}</small>
+        <div class="admin-db-company-categories">${lodgingCategoryBadgesHtml(company, { compact: true })}</div>
+        ${reason ? `<div class="admin-db-company-next-action"><span>다음 작업</span><p class="admin-db-company-reason">${escapeHtml(reason)}</p></div>` : ""}
       </div>
-      <div class="admin-db-company-values" data-surface="dark">
+      <div class="admin-db-company-values" data-surface="dark" aria-label="업체 핵심 지표">
         <span><small>노출</small><b>${escapeHtml(rankText)}</b></span>
         <span><small>7일 매출</small><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b></span>
         <span><small>예약율</small><b>${escapeHtml(rateText)}</b></span>
         <span><small>자동 수집 신뢰도</small><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b></span>
       </div>
-      <div class="admin-db-company-tags">
+      <div class="admin-db-company-tags" aria-label="업체 운영 정보">
         ${adminDbCompanyCompactTags(row)}
       </div>
       <div class="admin-db-company-action">
-        <a class="primary" href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세·수정</a>
+        <a class="primary" href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}" aria-label="${escapeHtml(`${companyName} 상세 및 수정 열기`)}"><span>상세·수정</span><span aria-hidden="true">→</span></a>
         ${metrics.collection?.needsConfirm ? `<button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db" data-queue-recrawl-autostart="1">확인 수집</button>` : ""}
       </div>
     </article>
@@ -20679,8 +20773,11 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
     latest_desc: "최근 수집일순"
   };
   const sortText = sortLabels[filters.sort] || "업체 가나다순";
+  const workQueueCount = rows.filter((row) => Boolean(adminDbWorkReason(row))).length;
+  const manualCorrectionCount = rows.filter((row) => Boolean(row.metrics?.manualCorrection || manualCorrectionHasValue(row.company?.manualCorrection))).length;
+  const confirmCollectionCount = rows.filter((row) => Boolean(row.metrics?.collection?.needsConfirm)).length;
   return `
-    <section class="admin-db-flat-list" data-surface="dark">
+    <section class="admin-db-flat-list" data-surface="dark" data-admin-db-list-workbench="true">
       <div class="admin-db-flat-head">
         <div>
           <span>업체 리스트</span>
@@ -20693,14 +20790,20 @@ function adminDbFlatListPanel(rows = [], allRows = [], filters = {}) {
         <span>페이지당 ${fmtNumber(pageSize)}개</span>
         <span>상세는 선택 후 확인</span>
       </div>
+      <div class="admin-db-list-overview" aria-label="현재 업체 작업 요약">
+        <span><small>현재 결과</small><strong>${fmtNumber(rows.length)}개</strong></span>
+        <span><small>조치 안내</small><strong>${fmtNumber(workQueueCount)}개</strong></span>
+        <span><small>관리자 보정</small><strong>${fmtNumber(manualCorrectionCount)}개</strong></span>
+        <span><small>확인 수집</small><strong>${fmtNumber(confirmCollectionCount)}개</strong></span>
+      </div>
       <div class="admin-db-company-list flat">
         ${shown.length ? shown.map((row, index) => adminDbCompanyRow(row, { index: startIndex + index + 1 })).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
       </div>
-      <div class="admin-db-pagination">
-        <button type="button" data-admin-db-list-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>이전</button>
+      <nav class="admin-db-pagination" aria-label="업체 목록 페이지 이동">
+        <button type="button" data-admin-db-list-page="${page - 1}" aria-label="이전 업체 목록 페이지" ${page <= 1 ? "disabled" : ""}>이전</button>
         <span>${fmtNumber(rangeStart)}-${fmtNumber(rangeEnd)} / ${fmtNumber(rows.length)}개</span>
-        <button type="button" data-admin-db-list-page="${page + 1}" ${page >= totalPages ? "disabled" : ""}>다음</button>
-      </div>
+        <button type="button" data-admin-db-list-page="${page + 1}" aria-label="다음 업체 목록 페이지" ${page >= totalPages ? "disabled" : ""}>다음</button>
+      </nav>
     </section>
   `;
 }
@@ -26794,7 +26897,42 @@ function renderB2BSearchHistoryPanel() {
 
 function renderB2BAccountPanel() {
   if (!els.b2bAccountPanel) return;
-  els.b2bAccountPanel.innerHTML = "";
+  if (isAdminRole()) {
+    els.b2bAccountPanel.innerHTML = "";
+    return;
+  }
+  const profile = state.session?.profile || {};
+  const history = Array.isArray(state.memberSearchHistory) ? state.memberSearchHistory : [];
+  const latest = history[0] || null;
+  const interestCount = readB2BInterestLodges().length;
+  const policy = b2bSearchPolicy();
+  const quota = state.memberSearchQuota || {};
+  const remaining = policy.limited
+    ? Math.max(0, Number(quota.remainingToday ?? ((policy.dailyLimit || 2) - Number(quota.usedToday || 0))))
+    : null;
+  const accountLabel = state.session?.accountType === "demo"
+    ? "공용 B2B 계정"
+    : (profile.businessName || state.session?.username || "사업자 계정");
+  const latestLabel = latest?.keyword || latest?.runLabel || "아직 없음";
+  els.b2bAccountPanel.innerHTML = `
+    <section class="b2b-home-status-strip" data-b2b-home-workbench="true" aria-label="사업자 홈 현황">
+      <div class="b2b-home-status-head">
+        <span>BUSINESS HOME</span>
+        <strong>오늘의 운영 워크스페이스</strong>
+        <small>계정에 저장된 검색 기록과 관심숙소를 빠르게 이어서 확인합니다.</small>
+      </div>
+      <div class="b2b-home-status-grid">
+        <article><span>계정</span><strong>${escapeHtml(accountLabel)}</strong><small>${escapeHtml(profile.ownershipStatusLabel || "로그인 계정 기준")}</small></article>
+        <article><span>새 리포트</span><strong>${policy.limited ? `${fmtNumber(remaining)}회 남음` : "이용 가능"}</strong><small>${policy.limited ? `오늘 ${fmtNumber(policy.dailyLimit || quota.dailyLimit || 2)}회 기준` : "계정 정책 기준"}</small></article>
+        <article><span>최근 분석</span><strong>${escapeHtml(latestLabel)}</strong><small>${latest?.completedAt ? escapeHtml(compactDateTime(latest.completedAt)) : "검색 후 자동 저장"}</small></article>
+        <article><span>관심숙소</span><strong>${fmtNumber(interestCount)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}곳</strong><small>현재 리포트와 비교</small></article>
+      </div>
+      <div class="b2b-home-status-actions">
+        ${latest?.runId ? `<button class="secondary-button" type="button" data-b2b-history-run-id="${escapeHtml(latest.runId)}">최근 리포트 열기</button>` : ""}
+        <button class="secondary-button" type="button" data-b2b-onboarding-lodge>${interestCount ? "관심숙소 관리" : "관심숙소 등록"}</button>
+      </div>
+    </section>
+  `;
 }
 
 function b2bSearchUsagePanelHtml() {
@@ -27195,6 +27333,16 @@ function renderB2BEmptyPanels() {
 function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
+  if (isAdminRole() && state.activeTab === "admin") {
+    const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "database";
+    els.pageTitle.textContent = "관리자 콘솔";
+    if (els.pageSubtitle) {
+      els.pageSubtitle.hidden = false;
+      els.pageSubtitle.textContent = `${ADMIN_PANEL_SECTIONS[current]} · 데이터 운영 워크스페이스`;
+    }
+    document.title = `${APP_BRAND_NAME} · 관리자 콘솔`;
+    return;
+  }
   els.pageTitle.textContent = tabLabel(state.activeTab);
   if (els.pageSubtitle) els.pageSubtitle.hidden = false;
   if (state.activeTab === "dictionary") {
@@ -30617,7 +30765,6 @@ function bindEvents() {
       setActiveTab("report");
       const willOpen = !state.b2bMyLodgeExpanded;
       state.b2bMyLodgeExpanded = willOpen;
-      if (willOpen) state.b2bMyLodgeEditing = false;
       if (!willOpen && !b2bMyLodgeDraftHasInput(readB2BMyLodgeDraft())) {
         state.b2bMyLodgeCollectStatus = "";
         state.b2bMyLodgeCollectResult = null;
@@ -30645,7 +30792,6 @@ function bindEvents() {
     if (event.target.closest("[data-b2b-my-lodge-toggle]")) {
       const willOpen = !state.b2bMyLodgeExpanded;
       state.b2bMyLodgeExpanded = willOpen;
-      if (willOpen) state.b2bMyLodgeEditing = false;
       if (!state.b2bMyLodgeExpanded && !b2bMyLodgeDraftHasInput(readB2BMyLodgeDraft())) {
         state.b2bMyLodgeCollectStatus = "";
         state.b2bMyLodgeCollectResult = null;
@@ -30676,6 +30822,8 @@ function bindEvents() {
     }
     const interestLodgeDelete = event.target.closest("[data-b2b-interest-lodge-delete]");
     if (interestLodgeDelete) {
+      const lodgeName = interestLodgeDelete.dataset.b2bInterestLodgeName || "이 관심숙소";
+      if (!window.confirm(`${lodgeName} 정보를 삭제할까요?`)) return;
       deleteB2BInterestLodge(
         interestLodgeDelete.dataset.b2bInterestLodgeDelete || "",
         Number(interestLodgeDelete.dataset.b2bInterestLodgeIndex)
@@ -30829,6 +30977,11 @@ function bindEvents() {
       if (target) {
         folds.forEach((fold) => {
           fold.open = fold === target;
+        });
+        document.querySelectorAll("[data-admin-db-workbench-step]").forEach((button) => {
+          const active = button.dataset.adminDbWorkbenchStep === key;
+          button.classList.toggle("active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
         });
         target.open = true;
         target.scrollIntoView({ behavior: "smooth", block: "nearest" });

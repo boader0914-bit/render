@@ -54,7 +54,7 @@
       </form>
       <p class="search-intent-hint" id="b2bSearchIntentHint" aria-live="polite"></p>
       <div class="b2b-search-results" id="b2bSearchResults"></div>
-      <p class="b2b-search-status" id="b2bSearchStatus">지역과 업종을 입력하세요.</p>
+      <p class="b2b-search-status" id="b2bSearchStatus" role="status" aria-live="polite">지역과 업종을 입력하세요.</p>
       <div class="b2b-account-panel" id="b2bAccountPanel"></div>
       <div class="b2b-search-history" id="b2bSearchHistory"></div>
     </section>
@@ -193,25 +193,58 @@
       </section>
 
       <section class="tab-panel" id="adminPanel" data-panel="admin" aria-label="관리">
-        <div class="section-title">
-          <div>
-            <h2>관리</h2>
-            <p>업체 관리, 수집 실행, 회원 요청, 연동 설정</p>
-          </div>
-          <div class="admin-title-actions">
-            <span id="adminStatus">준비</span>
-            <a class="small-button" id="adminUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener">User View</a>
-            <button class="small-button" id="logoutButton" type="button">로그아웃</button>
-          </div>
-        </div>
+        <div class="admin-workspace-shell">
+          <aside class="admin-workspace-sidebar" aria-label="관리자 작업공간">
+            <div class="admin-workspace-brand">
+              <span class="admin-workspace-mark" aria-hidden="true">DL</span>
+              <span class="admin-workspace-brand-copy">
+                <strong>운영 워크스페이스</strong>
+                <small>숙박 데이터랩</small>
+              </span>
+            </div>
 
-        <nav class="admin-section-nav" aria-label="관리 탭 구분">
-          <button class="active" type="button" data-admin-section="database">업체 관리</button>
-          <button type="button" data-admin-section="overview">현황</button>
-          <button type="button" data-admin-section="collect">수집 실행</button>
-          <button type="button" data-admin-section="members">회원·삭제요청</button>
-          <button type="button" data-admin-section="files">연동·파일</button>
-        </nav>
+            <p class="admin-workspace-kicker">관리 메뉴</p>
+            <nav class="admin-section-nav" aria-label="관리 탭 구분">
+              <button class="active" type="button" data-admin-section="database" aria-current="page">
+                <span class="admin-nav-icon" aria-hidden="true">01</span>
+                <span class="admin-nav-copy"><strong>업체 관리</strong><small>마스터 · 검토</small></span>
+              </button>
+              <button type="button" data-admin-section="overview">
+                <span class="admin-nav-icon" aria-hidden="true">02</span>
+                <span class="admin-nav-copy"><strong>운영 현황</strong><small>지표 · 작업</small></span>
+              </button>
+              <button type="button" data-admin-section="collect">
+                <span class="admin-nav-icon" aria-hidden="true">03</span>
+                <span class="admin-nav-copy"><strong>수집 실행</strong><small>검색 · 결과</small></span>
+              </button>
+              <button type="button" data-admin-section="members">
+                <span class="admin-nav-icon" aria-hidden="true">04</span>
+                <span class="admin-nav-copy"><strong>회원 관리</strong><small>권한 · 삭제 요청</small></span>
+              </button>
+              <button type="button" data-admin-section="files">
+                <span class="admin-nav-icon" aria-hidden="true">05</span>
+                <span class="admin-nav-copy"><strong>연동 · 파일</strong><small>API · 내보내기</small></span>
+              </button>
+            </nav>
+
+            <div class="admin-workspace-utility">
+              <span class="admin-environment-badge"><span aria-hidden="true"></span>관리자 전용</span>
+              <a class="small-button" id="adminUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener">사업자 화면 열기</a>
+            </div>
+          </aside>
+
+          <div class="admin-workspace-main">
+            <div class="section-title admin-workspace-heading">
+              <div>
+                <p class="admin-workspace-eyebrow">ADMIN CONSOLE</p>
+                <h2>관리 워크스페이스</h2>
+                <p>업체 데이터부터 수집, 회원, 연동 상태까지 한 흐름으로 관리합니다.</p>
+              </div>
+              <div class="admin-title-actions">
+                <span id="adminStatus">준비</span>
+                <button class="small-button" id="logoutButton" type="button">로그아웃</button>
+              </div>
+            </div>
 
         <section class="admin-section-panel active" data-admin-section-panel="database" aria-label="업체 관리">
           <section class="admin-console-dashboard" id="adminDatabaseDashboard" aria-label="업체 관리"></section>
@@ -417,6 +450,8 @@
           </details>
         </div>
         </section>
+          </div>
+        </div>
       </section>
     </main>
 
