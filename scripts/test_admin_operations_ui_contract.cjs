@@ -127,6 +127,16 @@ assert.doesNotMatch(openingTagById("adminRegionOverview"), /aria-live=/, "large 
 assert.doesNotMatch(openingTagById("adminSettingsOverview"), /aria-live=/, "secret input changes must not announce the entire settings summary");
 assert.match(openingTagById("crawlForm"), /aria-describedby="[^"]*adminCollectionOverview[^"]*crawlStatus/);
 assert.match(openingTagById("trafficKeyForm"), /aria-describedby="[^"]*trafficKeyStatus[^"]*trafficKeyVerifyResult[^"]*adminSettingsOverview/);
+assert.match(openingTagById("trafficKeyForm"), /autocomplete="off"/, "credential form must opt out of login autofill");
+for (const id of [
+  "naverClientIdInput",
+  "naverClientSecretInput",
+  "searchadApiKeyInput",
+  "searchadSecretKeyInput",
+  "searchadCustomerIdInput",
+]) {
+  assert.match(openingTagById(id), /autocomplete="new-password"/, `${id} must not reuse login credentials`);
+}
 assert.match(functionBlock("renderAdminCollectionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
 assert.match(functionBlock("renderAdminRegionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
 assert.match(functionBlock("renderAdminSettingsOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
@@ -151,6 +161,18 @@ for (const value of [null, undefined, "", "   ", false, true, [], {}, Number.NaN
 assert.equal(countValueState(0), "zero");
 assert.equal(countValueState("0"), "zero");
 assert.equal(countValueState(4), "ready");
+
+const renderLocationCandidatePublicData = vm.runInNewContext(
+  `(${functionSource("renderLocationCandidatePublicData")})`,
+  { escapeHtml: String, fmtNumber: String }
+);
+assert.equal(renderLocationCandidatePublicData(null), "", "a missing saved location request must render safely");
+assert.equal(renderLocationCandidatePublicData(undefined), "", "an undefined saved location request must render safely");
+assert.equal(
+  renderLocationCandidatePublicData({ baseInfo: null, publicData: null }),
+  "",
+  "nullable saved location sections must render safely"
+);
 
 const collectionContext = {
   state: { crawlProgressRunning: false },

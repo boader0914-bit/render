@@ -3499,11 +3499,12 @@ function renderSearchIntentHints() {
 }
 
 function renderLocationCandidatePublicData(saved = {}) {
-  const base = saved.baseInfo || {};
-  const publicData = saved.publicData || {};
+  const source = saved && typeof saved === "object" ? saved : {};
+  const base = source.baseInfo || {};
+  const publicData = source.publicData || {};
   const sources = Object.values(publicData.sources || {});
   if (!base.matched && !sources.length) return "";
-  const regionLabel = [base.sidoFull || base.sido, base.sigungu].filter(Boolean).join(" ") || saved.regionBase || "지역 확인";
+  const regionLabel = [base.sidoFull || base.sido, base.sigungu].filter(Boolean).join(" ") || source.regionBase || "지역 확인";
   return `
     <section class="location-block location-public-data-draft">
       <div class="location-block-head">
