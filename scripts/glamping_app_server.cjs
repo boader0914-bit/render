@@ -3331,14 +3331,14 @@ function accountDeletePage(session = null, options = {}) {
   const error = options.error || "";
   const selected = (type) => values.requestType === type ? "selected" : "";
   const requestSummary = success ? `
-    <section class="account-delete-result success">
+    <section class="public-card account-delete-result success" role="status" aria-live="polite">
       <strong>삭제 요청이 접수되었습니다.</strong>
       <p>요청번호 ${escapeHtml(success.requestId)} · ${escapeHtml(success.requestTypeLabel)} · 상태 ${escapeHtml(success.statusLabel)}</p>
       <p>관리자가 본인 확인과 처리 범위를 확인한 뒤 입력한 연락처로 안내합니다.</p>
     </section>
   ` : "";
   const errorSummary = error ? `
-    <section class="account-delete-result error">
+    <section class="public-card account-delete-result error" role="alert" aria-live="assertive" id="accountDeleteError">
       <strong>접수하지 못했습니다.</strong>
       <p>${escapeHtml(error)}</p>
     </section>
@@ -3346,46 +3346,19 @@ function accountDeletePage(session = null, options = {}) {
   return `<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>계정·데이터 삭제 요청</title>
-  <style>
-    :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f4f7fb; color: #101828; }
-    main { width: min(100% - 32px, 920px); margin: 34px auto; display: grid; gap: 18px; }
-    .hero, form, .notice, .account-delete-result { border: 1px solid #dbe4f0; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); padding: 26px; }
-    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 950; }
-    h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); line-height: 1.12; letter-spacing: 0; }
-    p { margin: 10px 0 0; color: #475467; font-size: 15px; font-weight: 750; line-height: 1.65; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    label { display: grid; gap: 7px; min-width: 0; color: #344054; font-size: 13px; font-weight: 950; }
-    input, select, textarea { width: 100%; min-height: 48px; border: 1px solid #d0d5dd; border-radius: 14px; background: #fff; color: #101828; padding: 0 14px; font: inherit; font-weight: 850; }
-    textarea { min-height: 112px; padding-top: 12px; resize: vertical; }
-    .full { grid-column: 1 / -1; }
-    .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 2px; color: #344054; font-size: 13px; font-weight: 850; line-height: 1.55; }
-    .check input { width: 18px; min-width: 18px; min-height: 18px; margin-top: 2px; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
-    button, .back { min-height: 48px; display: inline-grid; place-items: center; border: 0; border-radius: 14px; background: #3182f6; color: #fff; padding: 0 18px; font: inherit; font-weight: 950; text-decoration: none; cursor: pointer; }
-    .back { border: 1px solid #d5e3f7; background: #eef5ff; color: #175cd3; }
-    .notice ul { margin: 8px 0 0; padding-left: 20px; color: #475467; line-height: 1.7; }
-    .account-delete-result.success { border-color: #a6f4c5; background: #f6fef9; }
-    .account-delete-result.error { border-color: #fecdca; background: #fffbfa; }
-    .account-delete-result strong { color: #101828; font-size: 18px; font-weight: 950; }
-    .required { color: #d92d20; }
-    @media (max-width: 680px) { main { margin-block: 18px; } .hero, form, .notice, .account-delete-result { padding: 20px; border-radius: 20px; } .grid { grid-template-columns: 1fr; } }
-  </style>
+${publicPageHead("계정·데이터 삭제 요청")}
 </head>
-<body>
-  <main>
-    <section class="hero">
+<body class="public-page public-account-delete-page">
+${publicPageHeaderHtml()}
+  <main class="public-main public-delete-shell" id="mainContent" tabindex="-1">
+    <section class="public-card public-hero">
       <p class="eyebrow">회원 권리 요청</p>
       <h1>계정·데이터 삭제 요청</h1>
       <p>계정 삭제, 검색 이력 삭제, 관심숙소 삭제, 전체 데이터 삭제를 요청할 수 있습니다. 요청은 고객 DB에 접수되고 관리자가 본인 확인 후 처리합니다.</p>
     </section>
     ${requestSummary}
     ${errorSummary}
-    <form method="post" action="/account-delete">
+    <form class="public-card" method="post" action="/account-delete" data-public-submit aria-describedby="accountDeleteHelp${error ? " accountDeleteError" : ""}">
       <div class="grid">
         <label>
           <span>아이디 <b class="required">*</b></span>
@@ -3418,11 +3391,11 @@ function accountDeletePage(session = null, options = {}) {
         <span>삭제 요청 내용과 처리 후 일부 데이터가 복구되지 않을 수 있음을 확인했습니다.</span>
       </label>
       <div class="actions">
-        <button type="submit">삭제 요청 접수</button>
+        <button type="submit" data-submitting-label="접수 중">삭제 요청 접수</button>
         <a class="back" href="/b2b">서비스 화면으로 돌아가기</a>
       </div>
     </form>
-    <section class="notice">
+    <section class="public-card notice" id="accountDeleteHelp">
       <strong>처리 기준</strong>
       <ul>
         <li>요청 일시, 아이디, 연락처, 약관 버전, 처리 상태는 고객 DB에 보관합니다.</li>
@@ -3432,6 +3405,7 @@ function accountDeletePage(session = null, options = {}) {
       </ul>
     </section>
   </main>
+${publicPageFooterHtml("/account-delete")}
 </body>
 </html>`;
 }
@@ -3990,45 +3964,78 @@ function brandTitleHtml(text = "") {
   );
 }
 
+function publicPageHead(title = "숙박업 데이터랩 beta") {
+  return `
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="application-name" content="숙박업 데이터랩 beta">
+  <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
+  <meta name="theme-color" content="#f3f6fa" id="themeColor">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <title>${escapeHtml(title)}</title>
+  <script src="/login-theme.js"></script>
+  <link rel="stylesheet" href="/public-ui.css">`;
+}
+
+function publicPageHeaderHtml() {
+  return `
+  <a class="skip-link" href="#mainContent">본문 바로가기</a>
+  <header class="public-topbar" aria-label="공개 페이지 헤더">
+    <a class="public-brand-link" href="/login">${brandTitleHtml("숙박업 데이터랩 beta")}</a>
+    <button class="theme-toggle" id="themeToggle" type="button" aria-label="화면 테마 전환" aria-pressed="false"></button>
+  </header>`;
+}
+
+function publicPageFooterHtml(currentPath = "") {
+  const current = (pathName) => currentPath === pathName ? ' aria-current="page"' : "";
+  return `
+  <footer class="public-footer">
+    <nav class="public-policy-nav" aria-label="정책 문서">
+      <a href="/terms"${current("/terms")}>이용약관</a>
+      <a href="/privacy"${current("/privacy")}>개인정보처리방침</a>
+      <a href="/refund"${current("/refund")}>환불·결제·해지</a>
+      <a href="/data-collection-notice"${current("/data-collection-notice")}>데이터 수집 범위</a>
+      <a href="/data-quality-notice"${current("/data-quality-notice")}>데이터 수집 한계</a>
+      <a href="/collection-failure-notice"${current("/collection-failure-notice")}>수집 실패 가능성</a>
+      <a href="/business-info"${current("/business-info")}>사업자정보</a>
+      <a href="/account-delete"${current("/account-delete")}>계정·데이터 삭제 요청</a>
+    </nav>
+  </footer>`;
+}
+
 function legalPage(title, eyebrow, sections, options = {}) {
   const backHref = options.backHref || "/signup";
   const backLabel = options.backLabel || "회원가입으로 돌아가기";
+  const currentPath = options.currentPath || (
+    title.includes("이용약관") ? "/terms"
+      : title.includes("개인정보") ? "/privacy"
+        : title.includes("환불") ? "/refund"
+          : ""
+  );
   const rows = sections.map((section) => `
-    <section>
+    <section class="public-policy-section">
       <h2>${escapeHtml(section.title)}</h2>
       ${section.body}
     </section>`).join("");
   return `<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)}</title>
-  <style>
-    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 860px); margin: 36px auto; padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    .eyebrow { margin: 0 0 8px; color: #175cd3; font-size: 13px; font-weight: 900; }
-    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; margin-left: 7px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; vertical-align: .16em; }
-    h1 { margin: 0 0 10px; font-size: 30px; line-height: 1.2; letter-spacing: 0; }
-    h2 { margin: 26px 0 10px; font-size: 18px; letter-spacing: 0; }
-    p, li { color: #344054; font-size: 15px; line-height: 1.7; }
-    ul { margin: 8px 0 0; padding-left: 20px; }
-    a { color: #175cd3; font-weight: 900; text-decoration: none; }
-    .meta { margin: 0 0 18px; color: #667085; font-size: 13px; font-weight: 700; }
-    .back { display: inline-grid; place-items: center; min-height: 42px; margin-top: 24px; padding: 0 16px; border-radius: 12px; background: #3182f6; color: #fff; }
-    @media (max-width: 560px) { main { margin-block: 18px; padding: 22px; } h1 { font-size: 25px; } }
-  </style>
+${publicPageHead(title)}
 </head>
-<body>
-  <main>
+<body class="public-page public-policy-page">
+${publicPageHeaderHtml()}
+  <main class="public-main public-policy-shell" id="mainContent" tabindex="-1">
     <p class="eyebrow">${escapeHtml(eyebrow)}</p>
     <h1>${brandTitleHtml(title)}</h1>
     <p class="meta">시행일 ${PRIVACY_VERSION.replace(/-/g, ".")} · 운영자 ${escapeHtml(SERVICE_OPERATOR_NAME)}</p>
     ${rows}
     <a class="back" href="${escapeHtml(backHref)}">${escapeHtml(backLabel)}</a>
   </main>
+${publicPageFooterHtml(currentPath)}
 </body>
 </html>`;
 }
@@ -4142,7 +4149,7 @@ function dataCollectionNoticePage() {
       title: "수동 보완",
       body: "<p>여기어때 등 일부 채널은 자동 수집보다 수동 보완값을 우선할 수 있습니다. 관리자가 보정한 업체 고유정보는 업체 기준 데이터에 기록되며 이후 분석의 기준값으로 활용될 수 있습니다.</p>"
     }
-  ]);
+  ], { currentPath: "/data-collection-notice" });
 }
 
 function dataQualityNoticePage() {
@@ -4159,7 +4166,7 @@ function dataQualityNoticePage() {
       title: "활용 기준",
       body: "<p>리포트는 지역 경쟁 상태, 수요 흐름, 상품/채널 점검을 위한 참고 자료입니다. 가격 변경, 광고 집행, 투자, 입점, 영업 판단의 최종 책임은 사용자에게 있습니다.</p>"
     }
-  ]);
+  ], { currentPath: "/data-quality-notice" });
 }
 
 function collectionFailureNoticePage() {
@@ -4176,7 +4183,7 @@ function collectionFailureNoticePage() {
       title: "재수집과 보완",
       body: "<p>관리자는 동일 조건 재수집, 수동 보정, 보조 채널 확인으로 데이터를 보완할 수 있습니다. 단 외부 플랫폼 정책상 접근이 제한된 항목은 자동화로 보장하지 않습니다.</p>"
     }
-  ]);
+  ], { currentPath: "/collection-failure-notice" });
 }
 
 function apiRetentionPolicyPage() {
@@ -4223,7 +4230,7 @@ function businessInfoPage() {
       title: "추가 확정 필요 항목",
       body: "<p>유료 공개 전 통신판매업 신고번호, 고객센터 연락처, 개인정보 보호책임자, 환불 담당 연락처를 확정해 이 페이지에 게시해야 합니다. 사업자등록증의 생년월일 등 공개가 불필요한 개인정보는 게시하지 않습니다.</p>"
     }
-  ]);
+  ], { currentPath: "/business-info" });
 }
 
 function googlePlayDataSafetyPage() {
@@ -4283,25 +4290,16 @@ function forbiddenPage(message = "") {
   return `<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>숙박업 데이터랩 beta 권한 없음</title>
-  <style>
-    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 420px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
-    p { margin: 0 0 22px; color: #667085; line-height: 1.45; }
-    a, button { display: inline-grid; place-items: center; width: 100%; min-height: 50px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-weight: 900; text-decoration: none; cursor: pointer; }
-  </style>
+${publicPageHead("숙박업 데이터랩 beta 권한 없음")}
 </head>
-<body>
-  <main>
+<body class="public-page public-status-page">
+${publicPageHeaderHtml()}
+  <main class="public-main public-status-shell" id="mainContent" tabindex="-1">
     <h1>접근 권한 없음</h1>
-    <p>${escapedMessage}</p>
-    <a href="/">분석 화면으로 이동</a>
+    <p role="alert">${escapedMessage}</p>
+    <a class="public-button" href="/">분석 화면으로 이동</a>
   </main>
+${publicPageFooterHtml()}
 </body>
 </html>`;
 }
@@ -4313,257 +4311,33 @@ function loginPage(message = "") {
   return `<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="application-name" content="숙박업 데이터랩 beta">
-  <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
-  <meta name="theme-color" content="#070b12" id="themeColor">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <title>숙박업 데이터랩 beta 로그인</title>
-  <script src="/login-theme.js"></script>
-  <style>
-    :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
-    :root[data-theme="dark"] { color-scheme: dark; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding:
-        calc(24px + env(safe-area-inset-top))
-        calc(24px + env(safe-area-inset-right))
-        calc(24px + env(safe-area-inset-bottom))
-        calc(24px + env(safe-area-inset-left));
-      background: #070b12;
-      color: #f7fbff;
-    }
-    .theme-toggle {
-      position: fixed;
-      top: calc(16px + env(safe-area-inset-top));
-      right: calc(16px + env(safe-area-inset-right));
-      z-index: 2;
-      width: auto;
-      min-height: 42px;
-      margin: 0;
-      padding: 0 14px;
-      border: 1px solid rgba(148, 163, 184, .32);
-      border-radius: 999px;
-      background: rgba(12, 18, 29, .88);
-      color: #e8f1ff;
-      font-size: 13px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
-      backdrop-filter: blur(12px);
-    }
-    main {
-      width: min(100%, 920px);
-      display: grid;
-      grid-template-columns: minmax(0, .92fr) minmax(340px, .68fr);
-      overflow: hidden;
-      border: 1px solid rgba(148, 163, 184, .26);
-      border-radius: 28px;
-      background: #0c121d;
-      box-shadow: 0 28px 80px rgba(0, 0, 0, .42);
-    }
-    .login-brand-panel {
-      min-height: 520px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      padding: 38px;
-      background:
-        linear-gradient(135deg, rgba(49, 130, 246, .24), rgba(20, 184, 166, .16)),
-        linear-gradient(180deg, #111c2d 0%, #0d1725 100%);
-      border-right: 1px solid rgba(148, 163, 184, .18);
-    }
-    .login-form-panel {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      min-width: 0;
-      padding: 38px;
-      background: rgba(11, 18, 29, .92);
-    }
-    .brand-beta-badge {
-      display: inline-grid;
-      place-items: center;
-      min-height: 24px;
-      padding: 0 12px;
-      border: 1px solid rgba(94, 234, 212, .42);
-      border-radius: 999px;
-      background: linear-gradient(135deg, rgba(49, 130, 246, .18), rgba(20, 184, 166, .20));
-      color: #dffeff;
-      font-size: 11px;
-      font-weight: 900;
-      line-height: 1;
-      text-transform: uppercase;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 8px 18px rgba(20, 184, 166, .12);
-    }
-    h1 {
-      max-width: 560px;
-      margin: 0;
-      color: #fff;
-      font-size: clamp(34px, 5vw, 54px);
-      font-weight: 950;
-      line-height: 1.02;
-      letter-spacing: 0;
-    }
-    h1 .brand-beta-badge {
-      margin-left: 8px;
-      transform: translateY(-.18em);
-      vertical-align: middle;
-    }
-    .brand-note {
-      max-width: 420px;
-      margin: 18px 0 0;
-      color: #b8c4d6;
-      font-size: 18px;
-      font-weight: 800;
-      line-height: 1.55;
-    }
-    .form-head { margin-bottom: 22px; }
-    .form-head strong {
-      display: block;
-      color: #fff;
-      font-size: 28px;
-      font-weight: 950;
-      letter-spacing: 0;
-    }
-    .form-head p {
-      margin: 8px 0 0;
-      color: #95a3b8;
-      font-size: 14px;
-      font-weight: 750;
-      line-height: 1.5;
-    }
-    form { display: grid; gap: 15px; }
-    label { display: grid; gap: 8px; color: #d7e1ef; font-size: 13px; font-weight: 900; }
-    input {
-      width: 100%;
-      min-height: 54px;
-      padding: 0 15px;
-      border: 1px solid rgba(148, 163, 184, .26);
-      border-radius: 14px;
-      background: #0a111c;
-      color: #f8fbff;
-      font: inherit;
-      font-size: 16px;
-      font-weight: 800;
-      outline: none;
-    }
-    input::placeholder { color: #64748b; }
-    input:focus {
-      border-color: rgba(96, 165, 250, .9);
-      box-shadow: 0 0 0 4px rgba(49, 130, 246, .18);
-    }
-    button {
-      width: 100%;
-      min-height: 56px;
-      margin-top: 4px;
-      border: 0;
-      border-radius: 15px;
-      background: #3182f6;
-      color: #fff;
-      font: inherit;
-      font-size: 17px;
-      font-weight: 950;
-      cursor: pointer;
-      box-shadow: 0 14px 30px rgba(49, 130, 246, .28);
-    }
-    button:hover { background: #2f76df; }
-    button:disabled { opacity: .6; cursor: wait; }
-    .link { display: block; margin-top: 18px; color: #91c4ff; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
-    .legal-links {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 10px;
-      margin-top: 12px;
-    }
-    .legal-links a {
-      color: #8ea0b8;
-      font-size: 12px;
-      font-weight: 850;
-      text-decoration: none;
-    }
-    .legal-links a:hover { color: #d7e7ff; }
-    .security-note {
-      margin: 2px 0 0;
-      color: #8ea0b8;
-      font-size: 12px;
-      font-weight: 750;
-      line-height: 1.5;
-      word-break: keep-all;
-    }
-    .error { min-height: 20px; color: #ff8b8b; font-size: 13px; font-weight: 900; line-height: 1.35; }
-    :root[data-theme="light"] body { background: #f3f6fa; color: #101828; }
-    :root[data-theme="light"] main { border-color: #d7dee8; background: #fff; box-shadow: 0 24px 64px rgba(16, 24, 40, .13); }
-    :root[data-theme="light"] .login-brand-panel {
-      border-color: rgba(20, 87, 199, .16);
-      background: linear-gradient(135deg, #e9f2ff, #e6f8f5);
-    }
-    :root[data-theme="light"] .login-form-panel { background: #fff; }
-    :root[data-theme="light"] h1,
-    :root[data-theme="light"] .form-head strong { color: #101828; }
-    :root[data-theme="light"] .brand-note,
-    :root[data-theme="light"] .form-head p,
-    :root[data-theme="light"] .security-note { color: #475467; }
-    :root[data-theme="light"] label { color: #344054; }
-    :root[data-theme="light"] input { border-color: #cbd5e1; background: #f8fafc; color: #101828; }
-    :root[data-theme="light"] input::placeholder { color: #667085; }
-    :root[data-theme="light"] .link { color: #1457c7; }
-    :root[data-theme="light"] .legal-links a { color: #475467; }
-    :root[data-theme="light"] .legal-links a:hover { color: #1457c7; }
-    :root[data-theme="light"] .theme-toggle { border-color: #cbd5e1; background: rgba(255, 255, 255, .9); color: #344054; box-shadow: 0 8px 24px rgba(16, 24, 40, .12); }
-    :root[data-theme="light"] .error { color: #b42318; }
-    @media (max-width: 760px) {
-      body { align-items: stretch; padding: 14px; }
-      main { grid-template-columns: 1fr; border-radius: 24px; }
-      .login-brand-panel { min-height: auto; padding: 26px; border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, .18); }
-      .login-form-panel { padding: 26px; }
-      h1 { font-size: 36px; }
-      .brand-note { font-size: 15px; }
-    }
-  </style>
+${publicPageHead("숙박업 데이터랩 beta 로그인")}
 </head>
-<body>
-  <button class="theme-toggle" id="themeToggle" type="button" aria-label="화면 테마 전환"></button>
-  <main>
+<body class="public-page public-login-page">
+${publicPageHeaderHtml()}
+  <main class="public-main" id="mainContent" tabindex="-1">
     <section class="login-brand-panel" aria-label="숙박업 데이터랩 beta">
       <div>
         <h1>${brandTitleHtml("숙박업 데이터랩 beta")}</h1>
         <p class="brand-note">운영전략을 제안해드립니다</p>
       </div>
     </section>
-    <section class="login-form-panel" aria-label="로그인">
+    <section class="login-form-panel" aria-labelledby="loginTitle">
       <div class="form-head">
-        <strong>로그인</strong>
+        <h2 id="loginTitle">로그인</h2>
         <p>계정 정보를 입력하세요.</p>
       </div>
-      <form method="post" action="/login">
+      <form method="post" action="/login" data-public-submit aria-describedby="loginSecurity loginError">
         <label>아이디<input name="username" autocomplete="username" autofocus required></label>
         <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
-        <button type="submit">로그인</button>
-        <p class="security-note">보안을 위해 ${LOGIN_FAILURE_LIMIT}회 이상 실패하면 ${lockMinutes}분간 로그인이 제한됩니다. 로그인 세션은 최대 ${sessionHours}시간 유지됩니다.</p>
-        <div class="error">${escapedMessage}</div>
+        <button type="submit" data-submitting-label="로그인 중">로그인</button>
+        <p class="security-note" id="loginSecurity">보안을 위해 ${LOGIN_FAILURE_LIMIT}회 이상 실패하면 ${lockMinutes}분간 로그인이 제한됩니다. 로그인 세션은 최대 ${sessionHours}시간 유지됩니다.</p>
+        <div class="error" id="loginError" role="alert" aria-live="assertive">${escapedMessage}</div>
       </form>
       <a class="link" href="/signup">회원가입</a>
-      <div class="legal-links" aria-label="정책 문서">
-        <a href="/terms" target="_blank" rel="noopener">이용약관</a>
-        <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
-        <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
-        <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
-        <a href="/data-quality-notice" target="_blank" rel="noopener">데이터 수집 한계</a>
-        <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
-        <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
-        <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
-      </div>
     </section>
   </main>
+${publicPageFooterHtml()}
 </body>
 </html>`;
 }
@@ -4577,101 +4351,11 @@ function signupPage(message = "", values = {}) {
   return `<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="application-name" content="숙박업 데이터랩 beta">
-  <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
-  <meta name="theme-color" content="#1457c7">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <title>숙박업 데이터랩 beta 회원가입</title>
-  <style>
-    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 640px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    .brand-kicker { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 8px; color: #667085; font-size: 13px; font-weight: 900; }
-    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; }
-    h1 { margin: 0 0 20px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
-    p { margin: 0 0 18px; color: #667085; line-height: 1.45; }
-    form { display: grid; gap: 14px; }
-    .signup-summary {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 9px;
-      margin: 0 0 18px;
-    }
-    .signup-summary article {
-      display: grid;
-      gap: 4px;
-      padding: 12px;
-      border: 1px solid #d5e3f7;
-      border-radius: 15px;
-      background: #f8fbff;
-    }
-    .signup-summary strong {
-      color: #175cd3;
-      font-size: 13px;
-      font-weight: 950;
-      line-height: 1.25;
-    }
-    .signup-summary span {
-      color: #475467;
-      font-size: 11px;
-      font-weight: 800;
-      line-height: 1.4;
-      word-break: keep-all;
-    }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
-    .field-with-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-    .password-control { position: relative; display: block; }
-    .password-control input { padding-right: 56px; }
-    label { display: grid; gap: 7px; font-size: 13px; font-weight: 850; color: #344054; }
-    label > span:first-child { display: flex; min-height: 18px; align-items: center; gap: 3px; }
-    input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d0d5dd; border-radius: 13px; font: inherit; outline: none; }
-    input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3182f6; }
-    textarea { min-height: 82px; padding-block: 11px; resize: vertical; }
-    input:focus, select:focus, textarea:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
-    button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
-    .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; color: #175cd3; font-size: 13px; }
-    .inline-action:hover { border-color: #3182f6; background: #eff6ff; }
-    .icon-action { position: absolute; top: 4px; right: 5px; display: inline-grid; place-items: center; width: 40px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 11px; background: transparent; color: #344054; }
-    .icon-action:hover, .icon-action:focus-visible, .icon-action[data-active="true"] { background: #eff6ff; color: #175cd3; }
-    .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-    .error { min-height: 20px; color: #f04438; font-size: 13px; font-weight: 850; }
-    .hint, .field-status { min-height: 18px; margin: 0; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
-    .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #067647; }
-    .field-status[data-state="error"], .password-match[data-state="error"] { color: #d92d20; }
-    .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 16px; background: #f9fafb; }
-    .agreement-note {
-      margin: 0;
-      color: #475467;
-      font-size: 12px;
-      font-weight: 800;
-      line-height: 1.5;
-      word-break: keep-all;
-    }
-    .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #182230; font-size: 13px; line-height: 1.4; }
-    .check a { color: #175cd3; font-weight: 900; text-decoration: none; }
-    .password-match { min-height: 18px; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
-    .required { color: #f04438; font-weight: 900; }
-    .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
-    .legal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 12px; }
-    .legal-links a { color: #667085; font-size: 12px; font-weight: 850; text-decoration: none; }
-    .legal-links a:hover { color: #175cd3; }
-    @media (max-width: 560px) {
-      main { padding: 22px; }
-      .grid, .signup-summary { grid-template-columns: 1fr; }
-      .field-with-action { grid-template-columns: 1fr; }
-      .inline-action { width: 100%; }
-    }
-  </style>
+${publicPageHead("숙박업 데이터랩 beta 회원가입")}
 </head>
-<body>
-  <main>
+<body class="public-page public-signup-page">
+${publicPageHeaderHtml()}
+  <main class="public-main public-signup-shell" id="mainContent" tabindex="-1">
     <p class="brand-kicker">${brandTitleHtml("숙박업 데이터랩 beta")}</p>
     <h1>회원가입</h1>
     <p>가입하면 일반 회원 기준으로 시작하며, 검색 이력과 관심숙소는 로그인 아이디 기준으로 관리됩니다.</p>
@@ -4680,17 +4364,17 @@ function signupPage(message = "", values = {}) {
       <article><strong>고객 DB</strong><span>아이디, 연락처, 이메일, 검색 이력, 동의 이력을 보관</span></article>
       <article><strong>보안 관리</strong><span>비밀번호는 해시 저장 · IP/세션 식별값은 해시로 관리</span></article>
     </div>
-    <form method="post" action="/signup" data-signup-form>
-      <label>
-        <span>아이디 <b class="required">*</b></span>
+    <form method="post" action="/signup" data-signup-form aria-describedby="signupHelp signupError">
+      <div class="field-group">
+        <label for="signupUsername">아이디 <b class="required">*</b></label>
         <span class="field-with-action">
-          <input name="username" autocomplete="username" required value="${value("username")}" data-username>
+          <input id="signupUsername" name="username" autocomplete="username" required value="${value("username")}" data-username>
           <button class="inline-action" type="button" data-check-username>중복 확인</button>
         </span>
         <small class="field-status" data-username-status aria-live="polite"></small>
-      </label>
+      </div>
       <div class="grid">
-        <label><span>비밀번호 <b class="required">*</b></span><span class="password-control"><input name="password" type="password" autocomplete="new-password" required data-password><button class="icon-action" type="button" data-hold-password aria-label="누르는 동안 비밀번호 보기" title="누르는 동안 보기">${eyeIcon}</button></span><small class="field-status" data-password-status>8자 이상 · 영문+숫자 · 대문자 또는 특수문자</small></label>
+        <div class="field-group"><label for="signupPassword">비밀번호 <b class="required">*</b></label><span class="password-control"><input id="signupPassword" name="password" type="password" autocomplete="new-password" required data-password><button class="icon-action" type="button" data-hold-password aria-label="누르는 동안 비밀번호 보기" aria-pressed="false" title="누르는 동안 보기">${eyeIcon}</button></span><small class="field-status" data-password-status>8자 이상 · 영문+숫자 · 대문자 또는 특수문자</small></div>
         <label><span>비밀번호 확인 <b class="required">*</b></span><input name="passwordConfirm" type="password" autocomplete="new-password" required data-password-confirm><small class="password-match" data-password-match aria-live="polite"></small></label>
       </div>
       <div class="grid">
@@ -4707,28 +4391,19 @@ function signupPage(message = "", values = {}) {
         </select></label>
       </div>
       <section class="agreements" aria-label="회원가입 필수 동의">
-        <p class="agreement-note">필수 동의 후 고객 데이터에 계정 정보, 동의 일시, 약관 버전 ${escapeHtml(TERMS_VERSION)}, 개인정보 버전 ${escapeHtml(PRIVACY_VERSION)}, 이용 이력이 저장됩니다. 업체 기준 데이터와는 분리해 관리합니다.</p>
-        <label class="check"><input type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><span>(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</span><a href="/terms" target="_blank" rel="noopener">보기</a></label>
-        <label class="check"><input type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><span>(필수) 개인정보 수집 및 이용에 동의합니다.</span><a href="/privacy" target="_blank" rel="noopener">보기</a></label>
-        <label class="check"><input type="checkbox" name="agreeMarketing" value="1"${checked("agreeMarketing")}><span>(선택) 서비스 업데이트, 요금제, 운영 안내 등 마케팅 수신에 동의합니다.</span><span>선택</span></label>
-        <label class="check"><input type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><span>(필수) 만 14세 이상입니다.</span><span></span></label>
+        <p class="agreement-note" id="signupHelp">필수 동의 후 고객 데이터에 계정 정보, 동의 일시, 약관 버전 ${escapeHtml(TERMS_VERSION)}, 개인정보 버전 ${escapeHtml(PRIVACY_VERSION)}, 이용 이력이 저장됩니다. 업체 기준 데이터와는 분리해 관리합니다.</p>
+        <div class="check"><input id="agreeTerms" type="checkbox" name="agreeTerms" value="1" required${checked("agreeTerms")}><label for="agreeTerms">(필수) 숙박업 데이터랩 beta 사업자(개인) 이용약관에 동의합니다.</label><a href="/terms" target="_blank" rel="noopener">보기</a></div>
+        <div class="check"><input id="agreePrivacy" type="checkbox" name="agreePrivacy" value="1" required${checked("agreePrivacy")}><label for="agreePrivacy">(필수) 개인정보 수집 및 이용에 동의합니다.</label><a href="/privacy" target="_blank" rel="noopener">보기</a></div>
+        <div class="check"><input id="agreeMarketing" type="checkbox" name="agreeMarketing" value="1"${checked("agreeMarketing")}><label for="agreeMarketing">(선택) 서비스 업데이트, 요금제, 운영 안내 등 마케팅 수신에 동의합니다.</label><span class="agreement-kind">선택</span></div>
+        <div class="check"><input id="confirmAge" type="checkbox" name="confirmAge" value="1" required${checked("confirmAge")}><label for="confirmAge">(필수) 만 14세 이상입니다.</label><span aria-hidden="true"></span></div>
       </section>
       <p class="hint"><b class="required">*</b> 표시 항목은 필수 입력입니다.</p>
-      <button type="submit">가입하고 시작</button>
-      <div class="error">${escapedMessage}</div>
+      <button type="submit" data-signup-submit data-submitting-label="가입 처리 중">가입하고 시작</button>
+      <div class="error" id="signupError" role="alert" aria-live="assertive">${escapedMessage}</div>
     </form>
     <a class="link" href="/login">이미 계정이 있습니다</a>
-    <div class="legal-links" aria-label="정책 문서">
-      <a href="/terms" target="_blank" rel="noopener">이용약관</a>
-      <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>
-      <a href="/refund" target="_blank" rel="noopener">환불·결제·해지</a>
-      <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>
-      <a href="/data-quality-notice" target="_blank" rel="noopener">데이터 수집 한계</a>
-      <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
-      <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
-      <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
-    </div>
   </main>
+${publicPageFooterHtml()}
   <script src="/signup.js" defer></script>
 </body>
 </html>`;
@@ -4748,10 +4423,23 @@ function signupScript() {
   const matchStatus = form.querySelector("[data-password-match]");
   const email = form.querySelector("[data-email]");
   const emailStatus = form.querySelector("[data-email-status]");
+  const submitButton = form.querySelector("[data-signup-submit]");
   if (!username || !password || !confirm || !matchStatus) return;
 
   let checkedUsername = "";
   let usernameAvailable = false;
+  let signupPending = false;
+  const submitIdleLabel = submitButton ? submitButton.textContent : "가입하고 시작";
+
+  const setSubmitPending = (pending) => {
+    signupPending = pending;
+    if (!submitButton) return;
+    submitButton.disabled = pending;
+    submitButton.setAttribute("aria-busy", String(pending));
+    submitButton.textContent = pending
+      ? (submitButton.dataset.submittingLabel || "가입 처리 중")
+      : submitIdleLabel;
+  };
 
   const setStatus = (element, text, state = "") => {
     if (!element) return;
@@ -4895,12 +4583,25 @@ function signupScript() {
   form.addEventListener("submit", async (event) => {
     updatePassword();
     updateEmail();
+    if (signupPending) {
+      event.preventDefault();
+      return;
+    }
     const normalizedUsername = username.value.trim().toLowerCase();
     if (!usernameAvailable || checkedUsername !== normalizedUsername) {
       event.preventDefault();
+      setSubmitPending(true);
       const ok = await checkUsername();
-      if (ok && form.reportValidity()) form.requestSubmit();
+      const valid = ok && form.reportValidity();
+      setSubmitPending(false);
+      if (valid) form.requestSubmit();
+      return;
     }
+    if (!form.reportValidity()) {
+      event.preventDefault();
+      return;
+    }
+    setSubmitPending(true);
   });
   updatePassword();
   updateEmail();
@@ -13392,8 +13093,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260730-theme-control-v23"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260730-theme-control-v23"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260801-ui-release-v26"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260801-ui-release-v26"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -13435,6 +13136,7 @@ async function route(req, res) {
     const publicStaticPaths = new Set([
       "/manifest.webmanifest",
       "/login-theme.js",
+      "/public-ui.css",
       "/sw.js",
       "/offline.html",
       "/favicon.svg",

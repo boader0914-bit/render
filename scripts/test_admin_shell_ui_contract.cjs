@@ -14,10 +14,10 @@ const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8");
 
 assert.match(html, /class="admin-workspace-shell"/);
-assert.match(html, /class="admin-workspace-sidebar"[^>]*aria-label="관리자 작업공간"/);
+assert.match(html, /class="admin-workspace-sidebar"[^>]*aria-label="관리자 작업공간"[^>]*aria-hidden="true"[^>]*hidden[^>]*data-legacy-navigation/);
 assert.match(html, /class="admin-workspace-main"/);
 assert.match(html, /class="section-title admin-workspace-heading"/);
-assert.match(html, /class="admin-mobile-nav"[^>]*aria-label="관리자 모바일 메뉴"/);
+assert.match(html, /class="admin-mobile-nav"[^>]*aria-label="관리자 모바일 메뉴"[^>]*aria-hidden="true"[^>]*hidden[^>]*data-legacy-navigation/);
 assert.match(html, /id="adminUserViewButton"[^>]*>사업자 화면 열기</);
 
 const adminSections = ["database", "overview", "collect", "members", "files"];
@@ -98,16 +98,17 @@ assert.match(css, /--ui-shadow-sm:/);
 assert.match(css, /--ui-shadow-md:/);
 assert.match(css, /--ui-space-1:/);
 assert.match(css, /--ui-radius-xl:/);
-assert.match(css, /--ui-control-height:\s*44px/);
+assert.match(css, /--control-height-default:\s*44px/);
+assert.match(css, /--ui-control-height:\s*var\(--control-height-default\)/);
 assert.match(css, /--ui-focus-ring:/);
 assert.match(css, /--admin-shell-sidebar:/);
-assert.match(css, /\.admin-workspace-shell\s*\{[\s\S]*grid-template-columns:\s*var\(--admin-shell-sidebar\) minmax\(0, 1fr\)/);
-assert.match(css, /\.admin-workspace-sidebar\s*\{[\s\S]*position:\s*sticky/);
+assert.match(css, /\[data-legacy-navigation\]\s*\{[\s\S]*display:\s*none\s*!important/);
+assert.match(css, /@media\s*\(min-width:\s*1024px\)[\s\S]*\.app-frame\s*\{[\s\S]*grid-template-columns:\s*minmax\(220px, 248px\) minmax\(0, 1fr\)/);
+assert.match(css, /body\.role-admin \.admin-workspace-shell\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
 assert.match(css, /#adminPanel \.admin-section-nav button\[aria-current="page"\]/);
 assert.match(css, /\.admin-workspace-shell :where\(button, a, input, select, textarea, summary\):focus-visible/);
 assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
 assert.match(css, /@media \(max-width: 720px\)[\s\S]*\.admin-workspace-sidebar\s*\{\s*display:\s*none/);
-assert.match(css, /@media \(max-width: 720px\)[\s\S]*\.admin-mobile-nav\s*\{[\s\S]*display:\s*block;[\s\S]*position:\s*sticky/);
 assert.match(css, /\.admin-mobile-secondary button\s*\{\s*min-height:\s*var\(--ui-control-height\)/);
 assert.match(css, /@media \(max-width: 390px\)[\s\S]*\.admin-workspace-heading/);
 

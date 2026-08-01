@@ -44,6 +44,8 @@ const listHooks = [
   "data-admin-db-list-page",
   "data-admin-db-company-card-select",
   "data-admin-db-company-select",
+  "data-admin-db-filter-remove",
+  "data-admin-db-reveal-selected",
 ];
 for (const hook of listHooks) assert.ok(app.includes(hook), `${hook} list contract must remain available`);
 
@@ -55,11 +57,16 @@ assert.match(app, /class="admin-db-company-location"/);
 assert.match(app, /class="admin-db-company-categories"/);
 assert.match(app, /class="admin-db-company-next-action"/);
 assert.match(app, /class="admin-db-list-overview"[^>]*aria-label="현재 업체 작업 요약"/);
+assert.match(app, /class="admin-db-master-detail"/);
+assert.match(app, /class="admin-db-list-preview/);
+assert.match(app, /data-admin-db-selection-state="\$\{outsideFilter \? "outside-filter" : "selected"\}"/);
 assert.match(app, /class="admin-db-pagination"[^>]*aria-label="업체 목록 페이지 이동"/);
 assert.match(app, /aria-label="이전 업체 목록 페이지"/);
 assert.match(app, /aria-label="다음 업체 목록 페이지"/);
 assert.match(app, /aria-label="\$\{escapeHtml\(`\$\{companyName\} 상세 및 수정 열기`\)\}"/);
 assert.match(app, /lodgingCategoryBadgesHtml\(company, \{ compact: true \}\)/);
+assert.match(app, /const localizedSourceLabels = Array\.isArray\(company\.sourcePlatformLabels\)/);
+assert.match(app, /localizedSourceLabels\.length \? localizedSourceLabels : rawSourceLabels/);
 
 assert.match(app, /data-admin-db-company-workbench="true"/);
 assert.match(app, /class="admin-db-detail-back"[^>]*data-admin-db-view-link="list"/);
@@ -75,15 +82,18 @@ for (const key of workbenchSteps) {
 }
 assert.match(app, /data-admin-db-workbench-step="\$\{escapeHtml\(key\)\}"/);
 assert.match(app, /aria-controls="adminDbFold-\$\{escapeHtml\(key\)\}"/);
-assert.match(app, /aria-pressed="\$\{activeFold === key \? "true" : "false"\}"/);
+assert.match(app, /aria-current="\$\{activeFold === key \? "step" : "false"\}"/);
 assert.match(app, /id="adminDbFold-\$\{escapeHtml\(foldKey\)\}" data-admin-db-fold=/);
 assert.match(app, /button\.classList\.toggle\("active", active\)/);
-assert.match(app, /button\.setAttribute\("aria-pressed", active \? "true" : "false"\)/);
+assert.match(app, /button\.setAttribute\("aria-current", active \? "step" : "false"\)/);
 
 const mutationHooks = [
   "data-company-manual-form",
   "data-save-company-correction",
   "data-clear-company-correction",
+  "data-cancel-company-correction",
+  "data-company-manual-dirty-status",
+  "data-company-manual-draft-summary",
   "data-company-manual-feedback",
   "data-manual-lodging",
   "data-manual-dayuse",
@@ -104,6 +114,22 @@ const mutationHooks = [
 ];
 for (const hook of mutationHooks) assert.ok(app.includes(hook), `${hook} mutation contract must remain available`);
 assert.match(app, /data-company-manual-feedback aria-live="polite"/);
+assert.match(app, /data-company-manual-dirty="false"/);
+assert.match(app, /const shouldClear = Boolean\(clear\)/);
+assert.doesNotMatch(app, /const shouldClear = clear \|\| emptySave/);
+assert.match(app, /빈 입력은 보정 해제로 처리되지 않습니다/);
+assert.match(app, /setCompanyManualFormPending\(form, true\)/);
+assert.match(app, /window\.confirm\("저장된 관리자 보정값을 해제하고 자동수집 기준으로 되돌릴까요\?"\)/);
+assert.match(app, /function confirmAdminDbCorrectionNavigation/);
+assert.match(app, /function focusAdminDbDetailHeading/);
+assert.match(app, /id="adminDbDetailTitle" tabindex="-1"/);
+assert.match(app, /return rows\.find\(\(row\) => row\.company\?\.companyId === selectedId\) \|\| null/);
+assert.doesNotMatch(app, /return selected \|\| adminDbWorkRows\(rows\)\[0\]/);
+assert.match(app, /manualCorrectionRoomSegments\(correction = \{\}\)[\s\S]*correction\.roomSegments[\s\S]*correction\.segments/);
+assert.equal((app.match(/function lodgingCategoryProfile\(/g) || []).length, 1, "generic lodging category profile name must remain unique");
+assert.match(app, /function companyLodgingCategoryProfile\(/);
+assert.match(app, /사업자 공통 화면은 새 창에서 확인합니다/);
+assert.doesNotMatch(app, /\$\{company\.primaryName\} 기준/);
 
 for (const endpoint of [
   "/api/company-master/manual-correction",
@@ -119,6 +145,14 @@ assert.match(css, /#adminDatabaseDashboard \.admin-db-company\[data-admin-db-com
 assert.match(css, /#adminDatabaseDashboard \.admin-db-company-status[\s\S]*border-radius:\s*999px/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-company-action button,[\s\S]*min-height:\s*var\(--ui-control-height\)\s*!important/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-workbench-heading/);
+assert.match(css, /#adminDatabaseDashboard \.admin-db-master-detail[\s\S]*grid-template-columns:\s*minmax\(0, 1\.55fr\) minmax\(280px, \.55fr\)/);
+assert.match(css, /#adminDatabaseDashboard \.admin-db-list-preview[\s\S]*position:\s*sticky/);
+assert.match(css, /#adminDatabaseDashboard \.admin-db-active-filter-chips button[\s\S]*min-height:\s*var\(--touch-target-min\)/);
+assert.match(css, /\.company-manual-actions button[\s\S]*min-height:\s*var\(--touch-target-min\)/);
+assert.match(css, /\.company-manual-segments-toolbar button[\s\S]*min-height:\s*var\(--touch-target-min\)/);
+assert.match(css, /#adminDatabaseDashboard \.admin-db-detail-back[\s\S]*min-height:\s*var\(--touch-target-min\)/);
+assert.match(css, /\.company-manual-form[\s\S]*background:\s*var\(--color-surface-subtle\)/);
+assert.match(css, /\.company-manual-dirty-status:not\(\[hidden\]\)/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-detail-tabs button[\s\S]*grid-template-columns:\s*30px minmax\(0, 1fr\)/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-selected-fold\[open\]/);
 assert.match(css, /@media \(max-width: 720px\)[\s\S]*#adminDatabaseDashboard \.admin-db-list-overview[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);

@@ -14,11 +14,10 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <script src="/login-theme.js"></script>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="app-booting">
+  <a class="skip-link" href="#appMain">본문 바로가기</a>
   <div class="app-shell">
     <header class="app-header">
       <div class="header-copy">
@@ -27,6 +26,7 @@
         <p id="pageSubtitle" hidden></p>
       </div>
       <div class="header-actions">
+        <span class="app-role-badge" id="appRoleBadge" aria-live="polite"></span>
         <a class="small-button header-user-view" id="headerUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener" hidden>User View</a>
         <button class="small-button app-theme-toggle" id="themeToggle" type="button" aria-label="화면 테마 전환"></button>
         <button class="small-button header-logout" id="headerLogoutButton" type="button">로그아웃</button>
@@ -36,9 +36,23 @@
       </div>
     </header>
 
-    <section class="b2b-search-panel" id="b2bSearchPanel" hidden>
-      <div class="b2b-onboarding" id="b2bOnboarding" hidden></div>
-      <form class="b2b-search-form" id="b2bSearchForm">
+    <div class="app-frame">
+      <nav class="app-primary-nav bottom-nav" id="appPrimaryNav" aria-label="주요 화면"></nav>
+
+      <div class="app-content">
+        <main class="app-main" id="appMain" tabindex="-1">
+        <aside class="admin-user-view-banner" id="adminUserViewBanner" role="status" aria-live="polite" hidden>
+          <div>
+            <strong>관리자 미리보기 · 읽기 전용</strong>
+            <span>사업자 화면의 구성만 확인합니다. 검색·저장·자동수집은 실행되지 않습니다.</span>
+          </div>
+          <a class="secondary-button" href="/admin">관리자 화면으로 돌아가기</a>
+        </aside>
+
+        <section class="b2b-search-panel" id="b2bSearchPanel" hidden>
+          <div class="b2b-onboarding" id="b2bOnboarding" hidden></div>
+          <div class="b2b-account-panel" id="b2bAccountPanel"></div>
+          <form class="b2b-search-form" id="b2bSearchForm">
         <label>
           <span>지역/키워드</span>
           <input id="b2bSearchInput" type="search" placeholder="예: 포천글램핑, 경주풀빌라, 하동펜션" autocomplete="off">
@@ -51,36 +65,18 @@
           </select>
         </label>
         <button class="primary-button" type="submit">검색 실행</button>
-      </form>
-      <p class="search-intent-hint" id="b2bSearchIntentHint" aria-live="polite"></p>
-      <div class="b2b-search-results" id="b2bSearchResults"></div>
-      <p class="b2b-search-status" id="b2bSearchStatus" role="status" aria-live="polite">지역과 업종을 입력하세요.</p>
-      <div class="b2b-account-panel" id="b2bAccountPanel"></div>
-      <div class="b2b-search-history" id="b2bSearchHistory"></div>
-    </section>
+          </form>
+          <p class="search-intent-hint" id="b2bSearchIntentHint" aria-live="polite"></p>
+          <div class="b2b-search-results" id="b2bSearchResults"></div>
+          <p class="b2b-search-status" id="b2bSearchStatus" role="status" aria-live="polite">지역과 업종을 입력하세요.</p>
+          <div class="b2b-search-history" id="b2bSearchHistory"></div>
+        </section>
 
-    <main class="app-main">
       <section class="summary-grid" id="summaryGrid" aria-label="핵심 지표"></section>
 
       <section class="notice-card" id="noticeCard" hidden></section>
 
-      <nav class="bottom-nav" aria-label="주요 화면">
-        <button type="button" data-admin-primary="summary">요약</button>
-        <button type="button" data-admin-primary="database">DB</button>
-        <button type="button" data-admin-primary="collect">수집</button>
-        <button type="button" data-admin-primary="settings">설정</button>
-        <button class="active" type="button" data-tab="report">요약</button>
-        <button type="button" data-tab="rank">업체순위</button>
-        <button type="button" data-tab="dictionary">입지사전</button>
-        <button type="button" data-tab="target">컨택후보</button>
-        <button type="button" data-tab="decisionQueue">확인대상</button>
-        <button type="button" data-tab="map">지역지도</button>
-        <button type="button" data-tab="demand">수요구조</button>
-        <button type="button" data-tab="historyOps">수집이력</button>
-        <button type="button" data-tab="admin">관리</button>
-      </nav>
-
-      <nav class="admin-mobile-nav" aria-label="관리자 모바일 메뉴">
+      <nav class="admin-mobile-nav" aria-label="관리자 모바일 메뉴" aria-hidden="true" hidden data-legacy-navigation>
         <div class="admin-mobile-primary">
           <button type="button" data-admin-mobile-section="summary">요약</button>
           <button type="button" data-admin-mobile-section="database">DB</button>
@@ -102,6 +98,8 @@
           </div>
           <span id="rankCount">0 업체</span>
         </div>
+        <div class="b2b-competition-context" id="b2bCompetitionContext" hidden></div>
+        <div class="b2b-competition-toolbar" id="b2bCompetitionToolbar" hidden></div>
         <div class="company-list" id="companyList"></div>
       </section>
 
@@ -113,6 +111,8 @@
           </div>
           <span id="dictionaryCount">0 지역</span>
         </div>
+
+        <section class="admin-operations-context admin-region-context" id="adminRegionOverview" aria-label="지역 데이터 운영 상태"></section>
 
         <section class="dictionary-search-card">
           <form class="dictionary-search" id="dictionarySearchForm">
@@ -159,14 +159,17 @@
           </div>
           <span id="mapCount">0 지역</span>
         </div>
+        <div class="b2b-map-view-controls" id="b2bMapViewControls" hidden></div>
+        <p class="b2b-map-status" id="b2bMapStatus" role="status" aria-live="polite" hidden></p>
         <div class="map-card">
           <div class="map-layer-row" id="mapLayerRow"></div>
           <div class="map-frame">
-            <svg id="clusterMap" viewBox="0 0 720 620" role="img" aria-label="지역 클러스터 지도"></svg>
+            <svg id="clusterMap" viewBox="0 0 720 620" role="group" aria-label="지역 클러스터 지도와 검증 좌표 업체"></svg>
             <div class="map-caption">로컬 행정구역 지도 · 결과 범위 자동 줌 · 외부 지도 실패 시 대체 표시</div>
           </div>
           <div class="map-legend" id="mapLegend"></div>
         </div>
+        <section class="b2b-map-company-list" id="b2bMapCompanyList" aria-label="지도 숙소 목록" hidden></section>
         <div class="region-list" id="regionList"></div>
       </section>
 
@@ -179,6 +182,17 @@
           <span id="demandState">대기</span>
         </div>
         <div class="demand-dashboard" id="demandDashboard"></div>
+      </section>
+
+      <section class="tab-panel" id="b2bAccountWorkspace" data-panel="account" aria-labelledby="b2bAccountWorkspaceTitle">
+        <div class="section-title">
+          <div>
+            <h2 id="b2bAccountWorkspaceTitle" tabindex="-1">계정</h2>
+            <p>가입 정보, 이용 상태와 연결 정책을 읽기 전용으로 확인합니다.</p>
+          </div>
+          <span>읽기 전용</span>
+        </div>
+        <div class="b2b-account-workspace-body" id="b2bAccountWorkspaceBody"></div>
       </section>
 
       <section class="tab-panel" id="historyOpsPanel" data-panel="historyOps" aria-label="수집 이력">
@@ -194,7 +208,7 @@
 
       <section class="tab-panel" id="adminPanel" data-panel="admin" aria-label="관리">
         <div class="admin-workspace-shell">
-          <aside class="admin-workspace-sidebar" aria-label="관리자 작업공간">
+          <aside class="admin-workspace-sidebar" aria-label="관리자 작업공간" aria-hidden="true" hidden data-legacy-navigation>
             <div class="admin-workspace-brand">
               <span class="admin-workspace-mark" aria-hidden="true">DL</span>
               <span class="admin-workspace-brand-copy">
@@ -256,7 +270,8 @@
 
         <section class="admin-section-panel" data-admin-section-panel="collect" aria-label="수집 실행">
         <div class="admin-stack admin-stack-collect">
-          <form class="admin-card" id="crawlForm">
+          <section class="admin-operations-context admin-collection-context" id="adminCollectionOverview" aria-label="수집 실행 전 점검"></section>
+          <form class="admin-card" id="crawlForm" aria-describedby="adminCollectionOverview crawlStatus">
             <h3>새 수집</h3>
             <label class="field">
               <span>키워드</span>
@@ -391,6 +406,7 @@
         </section>
 
         <section class="admin-section-panel" data-admin-section-panel="files" aria-label="API 및 파일">
+        <section class="admin-operations-context admin-settings-context" id="adminSettingsOverview" aria-label="설정 및 연동 상태"></section>
         <div class="admin-stack admin-stack-files">
           <section class="admin-card" id="trafficAdminCard">
             <div class="card-head">
@@ -399,7 +415,7 @@
             </div>
             <details class="advanced-box">
               <summary>API 키 입력</summary>
-              <form id="trafficKeyForm" class="traffic-key-form">
+              <form id="trafficKeyForm" class="traffic-key-form" data-admin-settings-form aria-describedby="trafficKeyStatus trafficKeyVerifyResult adminSettingsOverview">
                 <label class="field">
                   <span>데이터랩 Client ID</span>
                   <input id="naverClientIdInput" type="password" autocomplete="off">
@@ -420,11 +436,15 @@
                   <span>검색광고 Customer ID</span>
                   <input id="searchadCustomerIdInput" type="password" autocomplete="off">
                 </label>
-                <button class="secondary-button" type="submit">API 키 저장</button>
-                <button class="ghost-button" id="trafficKeyVerifyButton" type="button">연결 테스트</button>
-                <p class="hint" id="trafficKeyStatus">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
+                <div class="admin-settings-actions">
+                  <button class="secondary-button" type="submit">입력한 새 키 저장</button>
+                  <button class="ghost-button" id="trafficKeyCancelButton" type="button">입력 취소</button>
+                  <button class="ghost-button" id="trafficKeyVerifyButton" type="button" aria-describedby="trafficVerifyExternalNotice">외부 연결 테스트</button>
+                </div>
+                <p class="hint" id="trafficVerifyExternalNotice">연결 테스트는 저장된 자격정보로 외부 API 인증 요청을 실행합니다.</p>
+                <p class="hint" id="trafficKeyStatus" role="status" aria-live="polite">키워드 입력창이 아니라 이 설정창에 입력합니다.</p>
                 <p class="legal-inline-notice">API 키는 관리자 권한 설정 저장소에 보관됩니다. 자세한 기준은 <a href="/api-key-retention-policy" target="_blank" rel="noopener">API 키 및 고객 데이터 보관 정책</a>을 확인하세요.</p>
-                <p class="traffic-verify-result" id="trafficKeyVerifyResult">저장 후 연결 테스트로 실제 인증 상태를 확인합니다.</p>
+                <p class="traffic-verify-result" id="trafficKeyVerifyResult" role="status" aria-live="polite">저장 후 외부 연결 테스트로 실제 인증 상태를 확인합니다.</p>
               </form>
             </details>
           </section>
@@ -453,7 +473,9 @@
           </div>
         </div>
       </section>
-    </main>
+        </main>
+      </div>
+    </div>
 
   </div>
 
@@ -465,35 +487,25 @@
     <a href="/data-quality-notice" target="_blank" rel="noopener">데이터 수집 한계</a>
     <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>
     <a href="/business-info" target="_blank" rel="noopener">사업자정보</a>
-    <a href="/account-delete" target="_blank" rel="noopener">계정·데이터 삭제 요청</a>
+    <a href="/account-delete" target="_blank" rel="noopener" data-b2b-account-destructive>계정·데이터 삭제 요청</a>
   </footer>
 
   <div class="control-drawer" id="controlDrawer" hidden>
     <div class="drawer-backdrop" data-close-drawer></div>
-    <section class="drawer-panel" role="dialog" aria-modal="true" aria-label="필터 및 관리">
+    <section class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="controlDrawerTitle" tabindex="-1">
       <div class="drawer-handle"></div>
       <div class="drawer-head">
-        <h2>필터 및 관리</h2>
+        <h2 id="controlDrawerTitle">빠른 이동</h2>
         <button class="close-button" type="button" data-close-drawer aria-label="닫기">×</button>
       </div>
-      <div class="drawer-actions">
-        <button class="secondary-button" type="button" data-drawer-tab="report">요약 리포트 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="rank">업체순위 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="dictionary">입지사전 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database">업체 관리 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="decision_queue">확인 대상 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="map">지도 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="demand">검색수요 보기</button>
-        <button class="secondary-button" type="button" data-drawer-tab="historyOps">수집 이력 보기</button>
-        <button class="primary-button" type="button" data-drawer-tab="admin">관리 열기</button>
-      </div>
-      <p class="hint">수집, 여기어때 통합, 연동 설정, 파일은 관리 탭에 있습니다.</p>
+      <div class="drawer-actions" id="drawerActions"></div>
+      <p class="hint">현재 역할에서 사용할 수 있는 화면만 표시합니다.</p>
     </section>
   </div>
 
   <div class="detail-sheet" id="detailSheet" hidden>
     <div class="sheet-backdrop" data-close-sheet></div>
-    <section class="sheet-panel" role="dialog" aria-modal="true" aria-label="업체 상세">
+    <section class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1">
       <div class="sheet-handle"></div>
       <div class="sheet-head">
         <div>
@@ -503,11 +515,11 @@
         <button class="close-button" type="button" data-close-sheet aria-label="상세 닫기">×</button>
       </div>
       <div class="sheet-tabs" role="tablist" aria-label="상세 구분">
-        <button class="active" type="button" data-sheet-tab="booking">예약</button>
-        <button type="button" data-sheet-tab="platform">플랫폼</button>
-        <button type="button" data-sheet-tab="search">검색수요</button>
+        <button class="active" id="sheetTabBooking" type="button" role="tab" data-sheet-tab="booking" aria-selected="true" aria-controls="sheetBody" tabindex="0">예약</button>
+        <button id="sheetTabPlatform" type="button" role="tab" data-sheet-tab="platform" aria-selected="false" aria-controls="sheetBody" tabindex="-1">플랫폼</button>
+        <button id="sheetTabSearch" type="button" role="tab" data-sheet-tab="search" aria-selected="false" aria-controls="sheetBody" tabindex="-1">검색수요</button>
       </div>
-      <div class="sheet-body" id="sheetBody"></div>
+      <div class="sheet-body" id="sheetBody" role="tabpanel" aria-labelledby="sheetTabBooking" tabindex="0"></div>
     </section>
   </div>
 

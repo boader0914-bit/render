@@ -1,8 +1,9 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260714-region-keyword-readability-v22";
+const UI_ASSET_VERSION = "v2-20260801-ui-release-v26";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v26";
 const APP_SHELL = [
   "/offline.html",
-  "/styles.css",
-  "/app.js",
+  `/styles.css?v=${UI_ASSET_VERSION}`,
+  `/app.js?v=${UI_ASSET_VERSION}`,
   "/favicon.svg",
   "/manifest.webmanifest",
   "/icons/icon-192.png",

@@ -1,22 +1,72 @@
-const fs = require("fs");
-const path = require("path");
+"use strict";
+
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+global.fetch = (url) => {
+  throw new Error(`Network calls are forbidden in surface contrast tests: ${url}`);
+};
 
 const root = path.resolve(__dirname, "..");
-const stylesPath = path.join(root, "web", "styles.css");
-const appPath = path.join(root, "web", "app.js");
-const indexPath = path.join(root, "web", "index.html");
-const styles = fs.readFileSync(stylesPath, "utf8");
-const app = fs.readFileSync(appPath, "utf8");
-const index = fs.readFileSync(indexPath, "utf8");
+const styles = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8");
+const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
+const index = fs.readFileSync(path.join(root, "web", "index.html"), "utf8");
+const css = styles.replace(/\/\*[\s\S]*?\*\//g, "");
 
-const requiredMarkers = [
+const REQUIRED_COLOR_TOKENS = [
+  "color-canvas",
+  "color-surface-default",
+  "color-surface-subtle",
+  "color-surface-raised",
+  "color-text-primary",
+  "color-text-secondary",
+  "color-text-tertiary",
+  "color-text-inverse",
+  "color-border-default",
+  "color-border-strong",
+  "color-border-focus",
+  "color-action-primary",
+  "color-action-primary-hover",
+  "color-action-primary-pressed",
+  "color-status-info",
+  "color-status-success",
+  "color-status-warning",
+  "color-status-danger",
+  "color-disabled-surface",
+  "color-disabled-text",
+  "color-disabled-border",
+  "color-overlay-backdrop",
+];
+
+const REQUIRED_STYLE_MARKERS = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
   "[data-surface=\"light\"]",
-  "[data-surface=\"dark\"]"
+  "[data-surface=\"dark\"]",
 ];
 
-const lightSelectors = [
+const LIGHT_SURFACE_SELECTORS = [
+  ".b2b-secondary-context",
+  ".b2b-competition-toolbar",
+  ".b2b-competition-selection",
+  ".b2b-map-view-controls",
+  ".b2b-map-status",
+  ".b2b-map-company-list",
+  ".b2b-map-company-row",
+  ".b2b-demand-observed-grid > article",
+  ".b2b-demand-text-alternative",
+  ".b2b-account-workbench",
+  ".b2b-account-summary > article",
+  ".b2b-account-section",
+  ".admin-operations-context",
+  ".admin-operations-context-grid > div",
+  ".admin-member-option",
+  ".admin-member-detail-workbench",
+  ".admin-member-feedback",
+  ".admin-operation-status",
+  ".run-apply-linked-queue",
+  ".run-apply-linked-list article",
   ".report-target-row",
   ".report-region-grid div",
   ".demand-company-card",
@@ -87,10 +137,25 @@ const lightSelectors = [
   ".location-action-panel",
   ".location-index",
   ".location-advice-card",
-  ".location-summary-grid > *"
+  ".location-summary-grid > *",
 ];
 
-const darkSelectors = [
+const DARK_SURFACE_SELECTORS = [
+  ".b2b-secondary-context",
+  ".b2b-competition-toolbar",
+  ".b2b-competition-selection",
+  ".b2b-map-company-list",
+  ".b2b-demand-text-alternative",
+  ".b2b-account-workbench",
+  ".b2b-account-section",
+  ".admin-operations-context",
+  ".admin-operations-context-grid > div",
+  ".admin-member-option",
+  ".admin-member-detail-workbench",
+  ".admin-member-feedback",
+  ".admin-operation-status",
+  ".run-apply-linked-queue",
+  ".run-apply-linked-list article",
   ".b2b-home-status-strip",
   ".b2b-home-journey article",
   ".b2b-simple-summary",
@@ -118,200 +183,232 @@ const darkSelectors = [
   ".admin-db-company",
   ".admin-db-flat-list",
   ".admin-console-panel",
-  ".company-review-queue"
+  ".company-review-queue",
 ];
 
-const appSurfaceContracts = [
+const APP_SURFACE_CONTRACTS = [
+  'class="b2b-secondary-context',
+  'class="b2b-map-company-list-head',
+  'data-b2b-demand-context="true"',
+  'data-b2b-account-workbench="true"',
+  'class="admin-operations-context',
   'data-surface="light"',
   'data-surface="dark"',
   'class="admin-db-company',
   'class="admin-db-applied-values',
   'class="admin-db-channel-row',
   'class="demand-company-card"',
-  'class="demand-chart'
+  'class="demand-chart',
 ];
 
-function hexToRgb(hex) {
-  const normalized = String(hex || "").replace("#", "").trim();
-  if (!/^[0-9a-f]{6}$/i.test(normalized)) return null;
+for (const marker of REQUIRED_STYLE_MARKERS) {
+  assert.ok(styles.includes(marker), `missing style marker: ${marker}`);
+}
+for (const selector of LIGHT_SURFACE_SELECTORS) {
+  assert.ok(styles.includes(selector), `missing light surface selector: ${selector}`);
+}
+for (const selector of DARK_SURFACE_SELECTORS) {
+  assert.ok(styles.includes(selector), `missing dark surface selector: ${selector}`);
+}
+for (const contract of APP_SURFACE_CONTRACTS) {
+  assert.ok(app.includes(contract), `missing app surface contract: ${contract}`);
+}
+
+function rules(source) {
+  return [...source.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
+    selector: match[1].trim(),
+    body: match[2],
+  }));
+}
+
+function declarations(body) {
+  const result = new Map();
+  for (const match of body.matchAll(/--([\w-]+)\s*:\s*([^;{}]+);/g)) {
+    result.set(match[1], match[2].trim());
+  }
+  return result;
+}
+
+function exactRootSelector(selector) {
+  return selector.split(",").some((part) => part.trim() === ":root");
+}
+
+function exactThemeRootSelector(selector, theme) {
+  const matcher = new RegExp(`^:root\\[data-theme=(?:["']${theme}["']|${theme})\\]$`);
+  return selector.split(",").some((part) => matcher.test(part.trim()));
+}
+
+function propertiesFor(selectorPredicate) {
+  const result = new Map();
+  for (const rule of rules(css)) {
+    if (!selectorPredicate(rule.selector)) continue;
+    for (const [name, value] of declarations(rule.body)) result.set(name, value);
+  }
+  return result;
+}
+
+const sharedProperties = propertiesFor(exactRootSelector);
+const themeProperties = Object.fromEntries(["light", "dark"].map((theme) => [
+  theme,
+  propertiesFor((selector) => exactThemeRootSelector(selector, theme)),
+]));
+
+for (const theme of ["light", "dark"]) {
+  for (const token of REQUIRED_COLOR_TOKENS) {
+    assert.ok(themeProperties[theme].has(token), `${theme} theme must explicitly define --${token}`);
+  }
+}
+
+const lightColorSet = [...themeProperties.light.keys()].filter((name) => name.startsWith("color-")).sort();
+const darkColorSet = [...themeProperties.dark.keys()].filter((name) => name.startsWith("color-")).sort();
+assert.deepEqual(lightColorSet, darkColorSet, "light and dark themes must expose the same semantic color-token set");
+
+assert.doesNotMatch(css, /\b(?:invert|hue-rotate)\s*\(/i, "native themes must not use invert or hue-rotate filters");
+assert.doesNotMatch(
+  css,
+  /:root\[data-theme=[^\]]+\][^{]*(?:img|video|canvas|svg)[^{]*\{[^{}]*\bfilter\s*:/i,
+  "media and graphics must not need theme-specific re-inversion",
+);
+
+const REQUIRED_ALIASES = new Map([
+  ["bg", "color-canvas"],
+  ["panel", "color-surface-default"],
+  ["ink", "color-text-primary"],
+  ["muted", "color-text-secondary"],
+  ["weak", "color-text-tertiary"],
+  ["line", "color-border-default"],
+  ["line-strong", "color-border-strong"],
+  ["blue", "color-action-primary"],
+  ["blue-dark", ["color-action-primary-hover", "color-action-primary-pressed"]],
+  ["green", "color-status-success"],
+  ["orange", "color-status-warning"],
+  ["red", "color-status-danger"],
+  ["ui-color-canvas", "color-canvas"],
+  ["ui-color-surface", "color-surface-default"],
+  ["ui-color-surface-subtle", "color-surface-subtle"],
+  ["ui-color-text", "color-text-primary"],
+  ["ui-color-text-muted", "color-text-secondary"],
+  ["ui-color-border", "color-border-default"],
+  ["ui-color-accent", "color-action-primary"],
+  ["ui-color-success", "color-status-success"],
+  ["ui-color-warning", "color-status-warning"],
+  ["ui-color-danger", "color-status-danger"],
+]);
+
+function allPropertyValues(name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [...css.matchAll(new RegExp(`--${escaped}\\s*:\\s*([^;{}]+);`, "g"))].map((match) => match[1].trim());
+}
+
+for (const [alias, semanticContract] of REQUIRED_ALIASES) {
+  const semanticTokens = Array.isArray(semanticContract) ? semanticContract : [semanticContract];
+  const values = allPropertyValues(alias);
+  assert.ok(values.length, `missing legacy compatibility alias --${alias}`);
+  for (const value of values) {
+    const matched = semanticTokens.some((semantic) => new RegExp(`var\\(\\s*--${semantic}(?:\\s*[,)]|\\s*\\))`).test(value));
+    assert.ok(matched, `--${alias} must reference ${semanticTokens.map((name) => `--${name}`).join(" or ")}, received ${value}`);
+  }
+}
+
+function hexToRgba(value) {
+  const source = String(value || "").trim();
+  const short = source.match(/^#([0-9a-f]{3}|[0-9a-f]{4})$/i);
+  if (short) {
+    const chars = short[1].split("").map((char) => char + char);
+    return {
+      r: parseInt(chars[0], 16),
+      g: parseInt(chars[1], 16),
+      b: parseInt(chars[2], 16),
+      a: chars[3] ? parseInt(chars[3], 16) / 255 : 1,
+    };
+  }
+  const long = source.match(/^#([0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (!long) return null;
   return {
-    r: parseInt(normalized.slice(0, 2), 16),
-    g: parseInt(normalized.slice(2, 4), 16),
-    b: parseInt(normalized.slice(4, 6), 16)
+    r: parseInt(long[1].slice(0, 2), 16),
+    g: parseInt(long[1].slice(2, 4), 16),
+    b: parseInt(long[1].slice(4, 6), 16),
+    a: long[1].length === 8 ? parseInt(long[1].slice(6, 8), 16) / 255 : 1,
   };
+}
+
+function rgbToRgba(value) {
+  const match = String(value || "").trim().match(
+    /^rgba?\(\s*([\d.]+)\s*[, ]\s*([\d.]+)\s*[, ]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i,
+  );
+  if (!match) return null;
+  const alpha = match[4]
+    ? (match[4].endsWith("%") ? Number(match[4].slice(0, -1)) / 100 : Number(match[4]))
+    : 1;
+  return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]), a: alpha };
+}
+
+function resolveCustomProperty(name, properties, seen = new Set()) {
+  assert.ok(!seen.has(name), `circular CSS custom property: --${[...seen, name].join(" -> --")}`);
+  seen.add(name);
+  const value = properties.get(name);
+  assert.ok(value, `missing CSS custom property --${name}`);
+  const variable = value.match(/^var\(\s*--([\w-]+)(?:\s*,[\s\S]*)?\)$/);
+  if (!variable) return value;
+  return resolveCustomProperty(variable[1], properties, seen);
+}
+
+function colorFor(theme, token) {
+  const properties = new Map([...sharedProperties, ...themeProperties[theme]]);
+  const raw = resolveCustomProperty(token, properties);
+  const color = hexToRgba(raw) || rgbToRgba(raw);
+  assert.ok(color, `${theme} --${token} must resolve to a literal hex/rgb color, received ${raw}`);
+  assert.equal(color.a, 1, `${theme} --${token} must be opaque for contrast calculation`);
+  return color;
 }
 
 function luminancePart(value) {
   const channel = value / 255;
-  return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
 }
 
 function contrastRatio(foreground, background) {
-  const fg = hexToRgb(foreground);
-  const bg = hexToRgb(background);
-  if (!fg || !bg) return 0;
-  const fgLum = 0.2126 * luminancePart(fg.r) + 0.7152 * luminancePart(fg.g) + 0.0722 * luminancePart(fg.b);
-  const bgLum = 0.2126 * luminancePart(bg.r) + 0.7152 * luminancePart(bg.g) + 0.0722 * luminancePart(bg.b);
-  const lighter = Math.max(fgLum, bgLum);
-  const darker = Math.min(fgLum, bgLum);
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-function assert(condition, message, failures) {
-  if (!condition) failures.push(message);
-}
-
-const failures = [];
-
-for (const marker of requiredMarkers) {
-  assert(styles.includes(marker), `missing style marker: ${marker}`, failures);
-}
-
-for (const selector of lightSelectors) {
-  assert(styles.includes(selector), `missing light surface selector: ${selector}`, failures);
-}
-
-for (const selector of darkSelectors) {
-  assert(styles.includes(selector), `missing dark surface selector: ${selector}`, failures);
-}
-
-for (const contract of appSurfaceContracts) {
-  assert(app.includes(contract), `missing app surface contract: ${contract}`, failures);
-}
-
-function cssColorToRgba(value) {
-  const source = String(value || "").trim();
-  const hex = hexToRgb(source);
-  if (hex) return { ...hex, a: 1 };
-  const match = source.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i);
-  if (!match) return null;
-  return {
-    r: Number(match[1]),
-    g: Number(match[2]),
-    b: Number(match[3]),
-    a: match[4] === undefined ? 1 : Number(match[4])
-  };
-}
-
-function composite(foreground, background) {
-  const alpha = Math.max(0, Math.min(1, foreground.a));
-  return {
-    r: foreground.r * alpha + background.r * (1 - alpha),
-    g: foreground.g * alpha + background.g * (1 - alpha),
-    b: foreground.b * alpha + background.b * (1 - alpha)
-  };
-}
-
-function filteredLightColor(color) {
-  const r = 255 - color.r;
-  const g = 255 - color.g;
-  const b = 255 - color.b;
-  const clamp = (channel) => Math.max(0, Math.min(255, channel));
-  return {
-    r: clamp(-0.574 * r + 1.43 * g + 0.144 * b),
-    g: clamp(0.426 * r + 0.43 * g + 0.144 * b),
-    b: clamp(0.426 * r + 1.43 * g - 0.856 * b)
-  };
-}
-
-function rgbContrastRatio(foreground, background) {
-  const relativeLuminance = (color) => (
+  const luminance = (color) => (
     0.2126 * luminancePart(color.r)
     + 0.7152 * luminancePart(color.g)
     + 0.0722 * luminancePart(color.b)
   );
-  const foregroundLuminance = relativeLuminance(foreground);
-  const backgroundLuminance = relativeLuminance(background);
+  const foregroundLuminance = luminance(foreground);
+  const backgroundLuminance = luminance(background);
   const lighter = Math.max(foregroundLuminance, backgroundLuminance);
   const darker = Math.min(foregroundLuminance, backgroundLuminance);
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-function lastCustomProperty(name) {
-  const matches = [...styles.matchAll(new RegExp(`--${name}:\\s*([^;]+);`, "g"))];
-  return matches.length ? matches[matches.length - 1][1].trim() : "";
+const TEXT_BACKGROUNDS = ["color-canvas", "color-surface-default", "color-surface-subtle", "color-surface-raised"];
+const contrastContracts = [];
+for (const foreground of ["color-text-primary", "color-text-secondary", "color-text-tertiary"]) {
+  for (const background of TEXT_BACKGROUNDS) contrastContracts.push([foreground, background, 4.5]);
 }
-
-assert(index.includes('id="themeToggle"'), "missing authenticated theme toggle", failures);
-assert(index.includes('src="/login-theme.js"'), "missing authenticated theme script", failures);
-assert(styles.includes('.app-theme-toggle'), "missing authenticated theme toggle styles", failures);
-assert(styles.includes(':is(body.role-admin, body.role-b2b) .app-header :where(button, a):focus-visible'), "missing authenticated header focus contract", failures);
-assert(styles.includes('outline: 3px solid #8bc2ff !important'), "missing authenticated header focus outline", failures);
-assert(styles.includes(':root[data-theme="light"] body.role-admin'), "missing admin light theme contract", failures);
-assert(styles.includes(':root[data-theme="light"] body.role-b2b'), "missing B2B light theme contract", failures);
-
-const directLightBodyBlocks = [...styles.matchAll(
-  /:root\[data-theme="light"\] body\.role-admin,\s*:root\[data-theme="light"\] body\.role-b2b\s*\{([^{}]*)\}/g
-)];
-assert(directLightBodyBlocks.length > 0, "missing exact light body rule", failures);
-for (const [, declarations] of directLightBodyBlocks) {
-  assert(!/\bfilter\s*:/.test(declarations), "light body must not establish a filtered fixed-position containing block", failures);
+for (const background of ["color-action-primary", "color-action-primary-hover", "color-action-primary-pressed"]) {
+  contrastContracts.push(["color-text-inverse", background, 4.5]);
 }
-assert(
-  styles.includes('body.role-admin > :where(.app-shell, .app-legal-footer)')
-    && styles.includes('body.role-b2b > :where(.app-shell, .app-legal-footer)'),
-  "missing segmented light application filter",
-  failures
-);
-assert(
-  styles.includes('body.role-admin > :where(.control-drawer, .detail-sheet) :where(.drawer-panel, .sheet-panel)')
-    && styles.includes('body.role-b2b > :where(.control-drawer, .detail-sheet) :where(.drawer-panel, .sheet-panel)'),
-  "missing segmented light overlay panel filter",
-  failures
-);
-assert(
-  /\.detail-sheet,\s*\.control-drawer\s*\{[^{}]*position:\s*fixed;[^{}]*inset:\s*0;/s.test(styles),
-  "drawer and detail sheet must remain fixed to the viewport",
-  failures
-);
-
-const lightTokens = Object.fromEntries([
-  "light-mode-component-border",
-  "light-mode-component-border-strong",
-  "light-mode-control-surface",
-  "light-mode-panel-surface",
-  "light-mode-placeholder",
-  "light-mode-focus-color",
-  "light-mode-warning-border",
-  "light-mode-danger-border"
-].map((name) => [name, cssColorToRgba(lastCustomProperty(name))]));
-for (const [name, value] of Object.entries(lightTokens)) {
-  assert(Boolean(value), `missing or invalid light mode color token: --${name}`, failures);
+for (const foreground of ["color-status-info", "color-status-success", "color-status-warning", "color-status-danger"]) {
+  contrastContracts.push([foreground, "color-surface-default", 4.5]);
 }
+for (const foreground of ["color-border-default", "color-border-strong", "color-border-focus"]) {
+  contrastContracts.push([foreground, "color-canvas", 3]);
+  contrastContracts.push([foreground, "color-surface-default", 3]);
+}
+contrastContracts.push(["color-disabled-text", "color-disabled-surface", 3]);
+contrastContracts.push(["color-disabled-border", "color-disabled-surface", 3]);
 
-if (Object.values(lightTokens).every(Boolean)) {
-  const panel = lightTokens["light-mode-panel-surface"];
-  const control = lightTokens["light-mode-control-surface"];
-  const displayedPanel = filteredLightColor(panel);
-  const displayedControl = filteredLightColor(control);
-  const displayedPlaceholder = filteredLightColor(lightTokens["light-mode-placeholder"]);
-  const displayedFocus = filteredLightColor(lightTokens["light-mode-focus-color"]);
-  const tokenChecks = [
-    ["light placeholder", rgbContrastRatio(displayedPlaceholder, displayedControl), 4.5],
-    ["light component border", rgbContrastRatio(filteredLightColor(composite(lightTokens["light-mode-component-border"], panel)), displayedPanel), 3],
-    ["light component border against control", rgbContrastRatio(filteredLightColor(composite(lightTokens["light-mode-component-border"], control)), displayedControl), 3],
-    ["light strong border", rgbContrastRatio(filteredLightColor(composite(lightTokens["light-mode-component-border-strong"], panel)), displayedPanel), 3],
-    ["light warning border", rgbContrastRatio(filteredLightColor(composite(lightTokens["light-mode-warning-border"], panel)), displayedPanel), 3],
-    ["light danger border", rgbContrastRatio(filteredLightColor(composite(lightTokens["light-mode-danger-border"], panel)), displayedPanel), 3],
-    ["light focus against panel", rgbContrastRatio(displayedFocus, displayedPanel), 3],
-    ["light focus against control", rgbContrastRatio(displayedFocus, displayedControl), 3]
-  ];
-  for (const [label, ratio, minimum] of tokenChecks) {
-    assert(ratio >= minimum, `${label} contrast ${ratio.toFixed(2)} below ${minimum}`, failures);
+for (const theme of ["light", "dark"]) {
+  for (const [foregroundToken, backgroundToken, minimum] of contrastContracts) {
+    const ratio = contrastRatio(colorFor(theme, foregroundToken), colorFor(theme, backgroundToken));
+    assert.ok(
+      ratio >= minimum,
+      `${theme} ${foregroundToken} on ${backgroundToken} contrast ${ratio.toFixed(2)} is below ${minimum}:1`,
+    );
   }
 }
 
-for (const marker of [
-  "background: #eef3f9 !important",
-  "border-color: var(--light-mode-component-border) !important",
-  "border-color: var(--light-mode-warning-border) !important",
-  "border-color: var(--light-mode-danger-border) !important",
-  "outline: 3px solid var(--light-mode-focus-color) !important"
-]) {
-  assert(styles.includes(marker), `missing verified light token usage: ${marker}`, failures);
-}
-
-const contrastChecks = [
+const LEGACY_REFERENCE_CONTRASTS = [
   ["light text", "#0f172a", "#ffffff", 7],
   ["light muted", "#475569", "#ffffff", 4.5],
   ["light accent", "#1d4ed8", "#ffffff", 4.5],
@@ -321,18 +418,18 @@ const contrastChecks = [
   ["dark muted", "#c8d6e8", "#111923", 4.5],
   ["dark accent", "#8fc5ff", "#111923", 4.5],
   ["dark warning", "#fcd56f", "#111923", 4.5],
-  ["dark danger", "#fda4af", "#111923", 4.5]
+  ["dark danger", "#fda4af", "#111923", 4.5],
 ];
-
-for (const [label, foreground, background, minimum] of contrastChecks) {
-  const ratio = contrastRatio(foreground, background);
-  assert(ratio >= minimum, `${label} contrast ${ratio.toFixed(2)} below ${minimum}`, failures);
+for (const [label, foreground, background, minimum] of LEGACY_REFERENCE_CONTRASTS) {
+  const ratio = contrastRatio(hexToRgba(foreground), hexToRgba(background));
+  assert.ok(ratio >= minimum, `${label} reference contrast ${ratio.toFixed(2)} is below ${minimum}:1`);
 }
 
-if (failures.length) {
-  console.error("Surface contrast checks failed:");
-  for (const failure of failures) console.error(`- ${failure}`);
-  process.exit(1);
-}
+assert.ok(index.includes('id="themeToggle"'), "authenticated shell must retain its theme toggle");
+assert.ok(index.indexOf('src="/login-theme.js"') < index.indexOf('href="/styles.css"'), "theme bootstrap must run before application CSS loads");
+assert.match(styles, /:focus-visible/);
+assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 
-console.log(`Surface contrast checks passed (${lightSelectors.length} light, ${darkSelectors.length} dark selectors)`);
+console.log(
+  `Native semantic theme contrast checks passed (${LIGHT_SURFACE_SELECTORS.length} light, ${DARK_SURFACE_SELECTORS.length} dark selectors; ${REQUIRED_COLOR_TOKENS.length} shared color tokens)`,
+);
