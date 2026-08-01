@@ -1968,6 +1968,7 @@ a {
 .admin-console-head {
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
@@ -1975,6 +1976,7 @@ a {
 
 .admin-console-head > div {
   min-width: 0;
+  flex: 1 1 220px;
   display: grid;
   gap: 3px;
 }
@@ -18056,6 +18058,24 @@ a.platform-row:hover {
   white-space: nowrap;
 }
 
+.admin-console-head > :is(button, a) {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: auto;
+  padding-block: 8px;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.admin-console-head > span {
+  max-width: 100%;
+}
+
 :is(body.role-admin, body.role-b2b) button:is(.primary-button, .secondary-button, .ghost-button, .small-button):disabled {
   border-color: var(--color-disabled-border);
   background: var(--color-disabled-surface);
@@ -18090,6 +18110,10 @@ a.platform-row:hover {
   border-radius: 12px;
   background: #fbfcfd;
   padding: 12px;
+}
+
+.advanced-box:not([open]) > :not(summary) {
+  display: none;
 }
 
 .advanced-box summary {
@@ -30601,6 +30625,18 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  body.role-admin .admin-db-region-next-grid article {
+    display: grid;
+    align-content: start;
+    gap: 2px;
+    border-radius: var(--ui-radius-md);
+  }
+
+  body.role-admin .admin-db-region-next-grid article strong {
+    display: block;
+    margin-right: 0;
+  }
+
   body.role-admin .admin-db-region-empty-panel {
     grid-template-columns: 1fr;
     align-items: stretch;
@@ -37430,6 +37466,14 @@ body.role-admin #adminDatabaseDashboard .admin-db-selected-fold summary {
     display: grid;
   }
 
+  body.role-admin #adminDatabaseDashboard .admin-db-region-next-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.role-admin #adminDatabaseDashboard .admin-db-region-next-grid article {
+    border-radius: var(--ui-radius-md);
+  }
+
   body.role-admin #adminDatabaseDashboard .admin-db-company-identity {
     display: grid;
   }
@@ -38904,6 +38948,15 @@ body.role-admin [data-admin-section-panel="files"] :is(button, input, select, te
     padding: 12px;
   }
 
+  body.role-admin #adminMemberRequestDashboard .admin-security-panel .admin-console-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.role-admin #adminMemberRequestDashboard .admin-security-panel .admin-console-head > span {
+    justify-self: start;
+  }
+
   body.role-admin .admin-member-option {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -39762,6 +39815,135 @@ body.role-b2b :is(
     scroll-behavior: auto;
     transition: none;
   }
+}
+
+/* Dark transparent card contract v7: cards never reintroduce light surfaces. */
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell :is(
+  article,
+  [data-surface="light"],
+  .admin-card,
+  .admin-console-panel,
+  .admin-db-hero,
+  .admin-db-toolbar,
+  .admin-db-filter-shell,
+  .admin-db-applied-values,
+  .admin-db-review-flash,
+  .admin-db-channel-panel,
+  .admin-db-channel-compare,
+  .admin-db-channel-row,
+  .admin-db-channel-product-box,
+  .admin-db-channel-product-checks label,
+  .admin-operations-context,
+  .admin-member-detail-workbench,
+  .admin-operation-status,
+  .advanced-box,
+  .summary-card,
+  .report-card,
+  .report-score-card,
+  .company-card,
+  .company-cross-list,
+  .company-verification-lane,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .b2b-search-panel,
+  .b2b-onboarding,
+  .b2b-live-search-panel,
+  .b2b-home-workspace,
+  .b2b-interest-workbench,
+  .b2b-account-workbench,
+  .b2b-secondary-context,
+  .b2b-simple-card,
+  .b2b-brief-card,
+  .b2b-correlation-card,
+  .map-card,
+  .region-card,
+  .demand-chart,
+  .demand-table-card,
+  .demand-company-card,
+  .demand-rule-box,
+  .history-card,
+  .notice-card,
+  .location-card,
+  .run-apply-linked-queue,
+  .collection-diagnostic-list div,
+  .audit-status-strip span,
+  .sheet-b2b-detail,
+  .sheet-b2b-insight,
+  .sheet-b2b-platform,
+  .sheet-b2b-search,
+  .sheet-b2b-booking,
+  .sheet-b2b-boundary
+) {
+  --surface-bg-token: transparent;
+  --surface-bg-soft-token: transparent;
+  --sheet-light-bg: transparent;
+  --sheet-light-soft: transparent;
+  --sheet-light-text: var(--color-text-primary);
+  --sheet-light-muted: var(--color-text-secondary);
+  --admin-channel-bg: transparent;
+  --admin-channel-soft: transparent;
+  --admin-channel-text: var(--color-text-primary);
+  --admin-channel-muted: var(--color-text-secondary);
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  color: var(--color-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell :is(
+  .admin-db-applied-values,
+  .admin-db-review-flash,
+  .admin-db-channel-panel,
+  .admin-db-channel-compare,
+  .admin-db-channel-row,
+  .company-cross-list,
+  .company-verification-lane,
+  .demand-rule-box,
+  .history-card
+) :is(h1, h2, h3, h4, strong, b, dd) {
+  color: var(--color-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell :is(
+  .admin-db-applied-values,
+  .admin-db-review-flash,
+  .admin-db-channel-panel,
+  .admin-db-channel-compare,
+  .admin-db-channel-row,
+  .company-cross-list,
+  .company-verification-lane,
+  .demand-rule-box,
+  .history-card
+) :is(p, small, dt) {
+  color: var(--color-text-secondary) !important;
+  text-shadow: none !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell :is(
+  .good,
+  .success,
+  .positive
+) {
+  border-color: var(--color-status-success) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell :is(
+  .watch,
+  .warning,
+  .pending
+) {
+  border-color: var(--color-status-warning) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell :is(
+  .hot,
+  .bad,
+  .danger,
+  .error
+) {
+  border-color: var(--color-status-danger) !important;
 }
 
 /* Light theme compatibility: legacy role selectors consume real light surfaces. */

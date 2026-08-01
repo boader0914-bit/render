@@ -157,8 +157,11 @@ assert.match(css, /#adminDatabaseDashboard \.admin-db-detail-tabs button[\s\S]*g
 assert.match(css, /#adminDatabaseDashboard \.admin-db-selected-fold\[open\]/);
 assert.match(css, /@media \(max-width: 720px\)[\s\S]*#adminDatabaseDashboard \.admin-db-list-overview[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
 assert.match(css, /@media \(max-width: 720px\)[\s\S]*#adminDatabaseDashboard \.admin-db-company-values[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)\s*!important/);
+assert.match(css, /@media \(max-width: 720px\)[\s\S]*body\.role-admin \.admin-db-region-next-grid article\s*\{[^}]*display:\s*grid[^}]*border-radius:\s*var\(--ui-radius-md\)/s, "narrow next-step cards must use a stable rectangular card layout");
 assert.match(css, /@media \(max-width: 720px\)[\s\S]*#adminDatabaseDashboard \.admin-db-workbench-heading[\s\S]*scroll-margin-top:\s*calc\(136px \+ env\(safe-area-inset-top\)\)/);
 assert.match(css, /@media \(max-width: 390px\)[\s\S]*#adminDatabaseDashboard \.admin-db-company-identity/);
+assert.match(css, /@media \(max-width: 390px\)[\s\S]*#adminDatabaseDashboard \.admin-db-region-next-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s, "mobile next-step cards must use one column instead of narrow multi-line pills");
+assert.match(css, /@media \(max-width: 390px\)[\s\S]*#adminDatabaseDashboard \.admin-db-region-next-grid article\s*\{[^}]*border-radius:\s*var\(--ui-radius-md\)/s, "multi-line mobile next-step cards must use a card radius rather than an oval pill");
 assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*data-admin-db-company-workbench-row/);
 
 const tabletMediaMarker = "@media (min-width: 721px) and (max-width: 1120px)";

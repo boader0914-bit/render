@@ -47,9 +47,9 @@ for (const asset of ["/login-theme.js", "/public-ui.css", "/manifest.webmanifest
 }
 
 const shellAssetVersions = [...server.matchAll(/(?:styles\.css|app\.js)\?v=([^"']+)/g)].map((match) => match[1]);
-assert.deepEqual(shellAssetVersions, ["v2-20260801-ui-release-v26", "v2-20260801-ui-release-v26"], "app CSS and JS must share the current release cache version");
-assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260801-ui-release-v26";/, "service worker must share the current UI asset version");
-assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v26";/, "service worker cache must rotate with the UI release");
+assert.deepEqual(shellAssetVersions, ["v2-20260801-ui-release-v27", "v2-20260801-ui-release-v27"], "app CSS and JS must share the current release cache version");
+assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260801-ui-release-v27";/, "service worker must share the current UI asset version");
+assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v27";/, "service worker cache must rotate with the UI release");
 assert.match(serviceWorker, /`\/styles\.css\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app stylesheet");
 assert.match(serviceWorker, /`\/app\.js\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app script");
 

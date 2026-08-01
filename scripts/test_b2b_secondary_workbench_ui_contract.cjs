@@ -316,8 +316,8 @@ assert.match(accountRenderer, /model\.previewMode \? ` role="link" aria-disabled
 assert.match(functionBlock("bindEvents"), /b2bAccountDestructive[\s\S]*isAdminUserViewMode\(\)[\s\S]*preventDefault/);
 
 const stage6Start = css.indexOf("/* Stage 6 B2B competition, map, demand, and account workbenches */");
-const stage6End = css.indexOf("/* Light theme compatibility", stage6Start);
-assert.ok(stage6Start >= 0 && stage6End > stage6Start, "Stage 6 CSS must be bounded before light compatibility rules");
+const stage6End = css.indexOf("/* Dark transparent card contract v7", stage6Start);
+assert.ok(stage6Start >= 0 && stage6End > stage6Start, "Stage 6 CSS must be bounded before the dark-card release contract");
 const stage6Css = css.slice(stage6Start, stage6End);
 for (const selector of [
   ".b2b-secondary-context",

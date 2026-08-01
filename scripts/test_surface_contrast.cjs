@@ -42,6 +42,7 @@ const REQUIRED_COLOR_TOKENS = [
 const REQUIRED_STYLE_MARKERS = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
+  "Dark transparent card contract v7",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]",
 ];
@@ -186,6 +187,47 @@ const DARK_SURFACE_SELECTORS = [
   ".company-review-queue",
 ];
 
+const DARK_TRANSPARENT_CARD_SELECTORS = [
+  "article",
+  "[data-surface=\"light\"]",
+  ".admin-card",
+  ".admin-console-panel",
+  ".admin-db-applied-values",
+  ".admin-db-review-flash",
+  ".admin-db-channel-panel",
+  ".admin-db-channel-compare",
+  ".admin-db-channel-row",
+  ".admin-operations-context",
+  ".admin-member-detail-workbench",
+  ".advanced-box",
+  ".summary-card",
+  ".report-card",
+  ".report-score-card",
+  ".company-card",
+  ".company-cross-list",
+  ".company-verification-lane",
+  ".b2b-search-panel",
+  ".b2b-onboarding",
+  ".b2b-live-search-panel",
+  ".b2b-home-workspace",
+  ".b2b-interest-workbench",
+  ".b2b-account-workbench",
+  ".b2b-secondary-context",
+  ".b2b-simple-card",
+  ".b2b-brief-card",
+  ".b2b-correlation-card",
+  ".map-card",
+  ".region-card",
+  ".demand-chart",
+  ".demand-table-card",
+  ".demand-company-card",
+  ".demand-rule-box",
+  ".history-card",
+  ".notice-card",
+  ".location-card",
+  ".run-apply-linked-queue",
+];
+
 const APP_SURFACE_CONTRACTS = [
   'class="b2b-secondary-context',
   'class="b2b-map-company-list-head',
@@ -209,6 +251,30 @@ for (const selector of LIGHT_SURFACE_SELECTORS) {
 }
 for (const selector of DARK_SURFACE_SELECTORS) {
   assert.ok(styles.includes(selector), `missing dark surface selector: ${selector}`);
+}
+const darkTransparentMarker = "/* Dark transparent card contract v7: cards never reintroduce light surfaces. */";
+const lightCompatibilityMarker = "/* Light theme compatibility: legacy role selectors consume real light surfaces. */";
+const darkTransparentStart = styles.indexOf(darkTransparentMarker);
+const lightCompatibilityStart = styles.indexOf(lightCompatibilityMarker);
+assert.ok(darkTransparentStart > styles.indexOf("Surface contrast contract v4"), "transparent dark-card contract must follow legacy surface overrides");
+assert.ok(lightCompatibilityStart > darkTransparentStart, "light compatibility rules must remain separate from the dark-card contract");
+const darkTransparentContract = styles.slice(darkTransparentStart, lightCompatibilityStart);
+assert.match(darkTransparentContract, /:root\[data-theme="dark"\]/, "transparent card rules must be dark-theme scoped");
+assert.match(darkTransparentContract, /background:\s*transparent\s*!important\s*;/, "dark cards must reset background shorthand");
+assert.match(darkTransparentContract, /background-color:\s*transparent\s*!important\s*;/, "dark cards must explicitly expose a transparent color");
+assert.match(darkTransparentContract, /background-image:\s*none\s*!important\s*;/, "dark cards must remove legacy gradients");
+assert.doesNotMatch(darkTransparentContract, /linear-gradient\s*\(/i, "dark transparent cards must not retain gradients");
+assert.doesNotMatch(darkTransparentContract, /background[^;{}]*(?:#fff|rgb\s*\(\s*255|rgba\s*\(\s*255|var\(\s*--color-surface)/i, "dark transparent cards must not reintroduce a light or opaque semantic surface");
+const darkTransparentBaseEnd = darkTransparentContract.indexOf("\n}\n\n");
+assert.ok(darkTransparentBaseEnd > 0, "transparent dark-card base rule must be bounded");
+const darkTransparentBaseRule = darkTransparentContract.slice(0, darkTransparentBaseEnd + 2);
+assert.doesNotMatch(darkTransparentBaseRule, /\bborder-color\s*:/, "transparent cards must preserve selected and active border cues");
+assert.doesNotMatch(darkTransparentBaseRule, /\bbox-shadow\s*:/, "transparent cards must preserve inset selection cues");
+assert.match(styles, /\.b2b-interest-lodge-card\.is-selected\s*\{[^}]*border-color:[^}]*box-shadow:/s, "selected interest cards must retain border and inset cues");
+assert.match(styles, /\.admin-task-list article\.active\s*\{[^}]*border-color:/s, "active administrator task cards must retain a border cue");
+assert.match(styles, /\.b2b-home-journey article\.active,\s*body\.role-b2b \.b2b-home-journey article\.done\s*\{[^}]*border-color:/s, "active and completed journey cards must retain a border cue");
+for (const selector of DARK_TRANSPARENT_CARD_SELECTORS) {
+  assert.ok(darkTransparentContract.includes(selector), `missing transparent dark-card selector: ${selector}`);
 }
 for (const contract of APP_SURFACE_CONTRACTS) {
   assert.ok(app.includes(contract), `missing app surface contract: ${contract}`);
@@ -390,6 +456,7 @@ for (const background of ["color-action-primary", "color-action-primary-hover", 
 }
 for (const foreground of ["color-status-info", "color-status-success", "color-status-warning", "color-status-danger"]) {
   contrastContracts.push([foreground, "color-surface-default", 4.5]);
+  contrastContracts.push([foreground, "color-canvas", 4.5]);
 }
 for (const foreground of ["color-border-default", "color-border-strong", "color-border-focus"]) {
   contrastContracts.push([foreground, "color-canvas", 3]);
@@ -431,5 +498,5 @@ assert.match(styles, /:focus-visible/);
 assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 
 console.log(
-  `Native semantic theme contrast checks passed (${LIGHT_SURFACE_SELECTORS.length} light, ${DARK_SURFACE_SELECTORS.length} dark selectors; ${REQUIRED_COLOR_TOKENS.length} shared color tokens)`,
+  `Native semantic theme contrast checks passed (${LIGHT_SURFACE_SELECTORS.length} light, ${DARK_SURFACE_SELECTORS.length} dark, ${DARK_TRANSPARENT_CARD_SELECTORS.length} transparent dark-card selectors; ${REQUIRED_COLOR_TOKENS.length} shared color tokens)`,
 );

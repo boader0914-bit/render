@@ -496,6 +496,11 @@ assert.match(stageCss, /button\.danger:not\(:disabled\)/, "member account suspen
 assert.match(stageCss, /button\.restore:not\(:disabled\)/, "member account restoration must remain visually distinct");
 assert.match(stageCss, /data-admin-member-back/, "member mobile return action must meet the shared touch-target contract");
 assert.match(stageCss, /advanced-box > summary/, "settings disclosure must meet the shared touch-target contract");
+assert.match(css, /\.advanced-box:not\(\[open\]\) > :not\(summary\)\s*\{[^}]*display:\s*none/s, "closed disclosures must not leak grid children into following card content");
+assert.match(css, /\.admin-console-head\s*\{[^}]*flex-wrap:\s*wrap/s, "administrator card headings must wrap before action labels overflow");
+assert.match(css, /\.admin-console-head > div\s*\{[^}]*flex:\s*1 1 220px/s, "administrator card copy must keep a usable responsive width");
+assert.match(css, /\.admin-console-head > :is\(button, a\)\s*\{[^}]*flex:\s*0 0 auto[^}]*max-width:\s*100%[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s, "administrator card actions must wrap safely without escaping the card");
+assert.match(stageCss, /@media \(max-width: 390px\)[\s\S]*#adminMemberRequestDashboard \.admin-security-panel \.admin-console-head[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/, "the security summary must stack before its description collapses at 320px");
 assert.match(stageCss, /@media \(max-width: 720px\)[\s\S]*\.admin-member-option[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/, "member rows must collapse before common 393-540px mobile widths");
 assert.match(stageCss, /\.admin-region-detail-actions[\s\S]*data-admin-region-back|\.admin-region-detail-actions/, "region detail must expose a bounded return-action layout");
 assert.doesNotMatch(stageCss, /#[0-9a-f]{3,8}\b/i, "Stage 5 workbench styles must use semantic tokens instead of new hex colors");

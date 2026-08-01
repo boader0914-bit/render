@@ -1,5 +1,5 @@
-const UI_ASSET_VERSION = "v2-20260801-ui-release-v26";
-const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v26";
+const UI_ASSET_VERSION = "v2-20260801-ui-release-v27";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v27";
 const APP_SHELL = [
   "/offline.html",
   `/styles.css?v=${UI_ASSET_VERSION}`,
