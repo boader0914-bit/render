@@ -11,7 +11,10 @@ const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 const server = fs.readFileSync(path.join(root, "scripts", "glamping_app_server.cjs"), "utf8");
 const intentScript = fs.readFileSync(path.join(root, "scripts", "lodging_search_intent.cjs"), "utf8");
 
-assert.match(html, /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js"><\/script>/);
+assert.match(
+  html,
+  /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js\?v=v2-20260801-ui-release-v28"><\/script>/,
+);
 assert.doesNotMatch(html, /id="searchModeInput"/);
 assert.match(html, /id="crawlSearchIntentHint"/);
 assert.match(html, /id="b2bSearchIntentHint"/);

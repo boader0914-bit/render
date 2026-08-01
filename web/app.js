@@ -25218,8 +25218,16 @@ function adminConsoleSecurityPanel() {
   const role = overview.roleSeparation || {};
   const storage = overview.dataStorage || {};
   const deleteLog = overview.accountDeleteLog || {};
-  const customerStorageConfigured = [storage.memberDb, storage.searchHistoryDb, storage.accountDeleteRequestDb].filter(Boolean).length;
-  const operationsStorageConfigured = [storage.companyMasterDb, storage.locationScoreOverrideDb, storage.apiKeyStorage].filter(Boolean).length;
+  const customerStorageConfigured = [
+    storage.memberDbConfigured,
+    storage.searchHistoryDbConfigured,
+    storage.accountDeleteRequestDbConfigured
+  ].filter(Boolean).length;
+  const operationsStorageConfigured = [
+    storage.companyMasterDbConfigured,
+    storage.locationScoreOverrideDbConfigured,
+    storage.trafficKeyConfigured
+  ].filter(Boolean).length;
   const limitText = [
     limits.login ? `로그인 ${fmtNumber(limits.login.limit)}회/${fmtNumber(limits.login.minutes)}분` : "",
     limits.signup ? `회원가입 ${fmtNumber(limits.signup.limit)}회/${fmtNumber(limits.signup.minutes)}분` : "",
@@ -32052,6 +32060,16 @@ async function backfillCompanyMaster(button) {
   }
 }
 
+function preferredRunForAutoSelection(runs = []) {
+  const items = Array.isArray(runs) ? runs.filter(Boolean) : [];
+  return items.find((run) => run.autoSelectable !== false) || items[0] || null;
+}
+
+function runOptionLabel(run = {}) {
+  const label = String(run.label || run.id || "실행 결과");
+  return run.resultState === "empty" ? `${label} · 수집 표본 없음` : label;
+}
+
 async function loadRuns(selectLatest = false) {
   if (!isAdminRole()) {
     state.runs = [];
@@ -32066,7 +32084,7 @@ async function loadRuns(selectLatest = false) {
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
   state.runs = data.runs || [];
-  els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
+  els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(runOptionLabel(run))}</option>`).join("");
   if (!state.runs.length) {
     state.data = null;
     renderRunResultApplySummary();
@@ -32084,7 +32102,7 @@ async function loadRuns(selectLatest = false) {
     return;
   }
   if (selectLatest || !state.activeRunId || !state.runs.some((run) => run.id === state.activeRunId)) {
-    state.activeRunId = state.runs[0].id;
+    state.activeRunId = preferredRunForAutoSelection(state.runs)?.id || state.runs[0].id;
   }
   els.runSelect.value = state.activeRunId;
   renderB2BSearchPanel();

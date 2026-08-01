@@ -1,15 +1,38 @@
-const UI_ASSET_VERSION = "v2-20260801-ui-release-v27";
-const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v27";
+const UI_ASSET_VERSION = "v2-20260801-ui-release-v28";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v28";
+const CACHE_PREFIX = "lodging-datalab-pwa-";
 const APP_SHELL = [
   "/offline.html",
   `/styles.css?v=${UI_ASSET_VERSION}`,
   `/app.js?v=${UI_ASSET_VERSION}`,
+  "/login-theme.js",
+  "/public-ui.css",
   "/favicon.svg",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/maskable-512.png"
 ];
+const STATIC_CACHE_PATHS = new Set([
+  "/offline.html",
+  "/styles.css",
+  "/app.js",
+  "/login-theme.js",
+  "/public-ui.css",
+  "/favicon.svg",
+  "/manifest.webmanifest",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+  "/icons/maskable-512.png"
+]);
+const SENSITIVE_NAVIGATION_PATHS = new Set([
+  "/admin",
+  "/b2b",
+  "/login",
+  "/signup",
+  "/account-delete",
+  "/account-request"
+]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -24,7 +47,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys
-        .filter((key) => key !== CACHE_VERSION)
+        .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_VERSION)
         .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   );
@@ -37,20 +60,19 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/outputs/")) return;
 
-  if (request.mode === "navigate") {
+  if (request.mode === "navigate" || SENSITIVE_NAVIGATION_PATHS.has(url.pathname)) {
+    // Navigation HTML can contain authentication or personal state. It is always
+    // fetched from the network and is never written to Cache API. The explicit
+    // set documents the routes that must remain network-only; all other HTML is
+    // treated with the same privacy-preserving policy.
     event.respondWith(
       fetch(request)
-        .then((response) => {
-          const clone = response.clone();
-          caches.open(CACHE_VERSION).then((cache) => cache.put(request, clone)).catch(() => {});
-          return response;
-        })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match("/offline.html")))
+        .catch(() => caches.open(CACHE_VERSION).then((cache) => cache.match("/offline.html")))
     );
     return;
   }
 
-  if (["script", "style", "manifest"].includes(request.destination) || ["/app.js", "/styles.css", "/sw.js"].includes(url.pathname)) {
+  if (STATIC_CACHE_PATHS.has(url.pathname)) {
     event.respondWith(
       fetch(request).then((response) => {
         if (response.ok) {
@@ -58,18 +80,8 @@ self.addEventListener("fetch", (event) => {
           caches.open(CACHE_VERSION).then((cache) => cache.put(request, clone)).catch(() => {});
         }
         return response;
-      }).catch(() => caches.match(request))
+      }).catch(() => caches.open(CACHE_VERSION).then((cache) => cache.match(request)))
     );
     return;
   }
-
-  event.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-      if (response.ok && ["style", "script", "image", "manifest"].includes(request.destination)) {
-        const clone = response.clone();
-        caches.open(CACHE_VERSION).then((cache) => cache.put(request, clone)).catch(() => {});
-      }
-      return response;
-    }))
-  );
 });

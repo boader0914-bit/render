@@ -22,13 +22,28 @@ const {
   categorySummary: summarizeLodgingCategories,
   normalizeCompanyCategory
 } = require("./lodging_category_profile.cjs");
+const {
+  assertV2PreviewRuntimeEnv,
+  isRenderRuntime,
+  isV2PreviewRuntime,
+  projectB2BPublicPayload,
+  trustedClientAddress
+} = require("./runtime_security.cjs");
+const {
+  NO_JSON_WRITE,
+  readJsonFile: readSecureJsonFile,
+  updateJsonFile: updateSecureJsonFile
+} = require("./secure_json_store.cjs");
+const { runResultSelectionProfile } = require("./lodging_run_selection.cjs");
 const TOURISM_REGION_MAP = require("../web/data/tourism_region_map.json");
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
 const REPO_OUTPUTS_DIR = path.join(ROOT, "outputs");
 const RENDER_DISK_DIR = "/var/data";
-const IS_RENDER_RUNTIME = Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+const IS_RENDER_RUNTIME = isRenderRuntime(process.env);
+const IS_V2_PREVIEW_RUNTIME = isV2PreviewRuntime(process.env);
+if (IS_V2_PREVIEW_RUNTIME) assertV2PreviewRuntimeEnv(process.env);
 const HAS_RENDER_DISK = IS_RENDER_RUNTIME && fs.existsSync(RENDER_DISK_DIR);
 const isTmpDataPath = (value) => /^\/tmp(?:\/|$)/.test(String(value || "").replace(/\\/g, "/"));
 const PREVIEW_DATA_ROOT_ENV = String(process.env.V2_PREVIEW_DATA_ROOT || "").trim();
@@ -97,6 +112,7 @@ const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-07-08";
+const UI_ASSET_VERSION = "v2-20260801-ui-release-v28";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -1560,24 +1576,23 @@ const trafficKeyFields = [
   "searchadCustomerId"
 ];
 
-function maskSecret(value) {
-  const text = String(value || "");
-  if (!text) return "";
-  if (text.length <= 6) return "*".repeat(text.length);
-  return `${text.slice(0, 3)}${"*".repeat(Math.max(3, text.length - 6))}${text.slice(-3)}`;
-}
-
 function normalizeApiKey(value) {
   return String(value || "").replace(/\s+/g, "").trim();
 }
 
+function isPlainJsonRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function validateTrafficKeyStore(value) {
+  return isPlainJsonRecord(value);
+}
+
 async function readTrafficKeys() {
-  let saved = {};
-  try {
-    saved = JSON.parse((await fsp.readFile(TRAFFIC_KEYS_FILE, "utf8")).replace(/^\uFEFF/, ""));
-  } catch {
-    saved = {};
-  }
+  const saved = await readSecureJsonFile(TRAFFIC_KEYS_FILE, {
+    defaultValue: {},
+    validator: validateTrafficKeyStore
+  });
 
   return {
     naverClientId: normalizeApiKey(process.env.NAVER_CLIENT_ID || saved.naverClientId || ""),
@@ -1600,18 +1615,14 @@ function trafficKeyStatus(keys) {
     datalabConfigured: Boolean(keys.naverClientId && keys.naverClientSecret),
     searchadConfigured: Boolean(keys.searchadApiKey && keys.searchadSecretKey && keys.searchadCustomerId),
     storage: {
-      configDir: CONFIG_DIR,
-      file: TRAFFIC_KEYS_FILE,
       persistent: HAS_RENDER_DISK || !isTmpDataPath(CONFIG_DIR),
-      envOverride: Object.values(envFields).some(Boolean),
-      envFields
+      envOverride: Object.values(envFields).some(Boolean)
     },
     fields: Object.fromEntries(
       trafficKeyFields.map((field) => [
         field,
         {
-          configured: Boolean(keys[field]),
-          masked: maskSecret(keys[field])
+          configured: Boolean(keys[field])
         }
       ])
     )
@@ -1619,19 +1630,20 @@ function trafficKeyStatus(keys) {
 }
 
 async function saveTrafficKeys(payload) {
-  await fsp.mkdir(CONFIG_DIR, { recursive: true });
-  const current = await readTrafficKeys();
-  const next = { ...current };
-
-  for (const field of trafficKeyFields) {
-    if (Object.prototype.hasOwnProperty.call(payload, field)) {
-      const value = normalizeApiKey(payload[field]);
-      if (value) next[field] = value;
+  await updateSecureJsonFile(TRAFFIC_KEYS_FILE, (stored) => {
+    const next = { ...stored };
+    for (const field of trafficKeyFields) {
+      if (Object.prototype.hasOwnProperty.call(payload, field)) {
+        const value = normalizeApiKey(payload[field]);
+        if (value) next[field] = value;
+      }
     }
-  }
-
-  await fsp.writeFile(TRAFFIC_KEYS_FILE, JSON.stringify(next, null, 2), "utf8");
-  return trafficKeyStatus(next);
+    return next;
+  }, {
+    defaultValue: {},
+    validator: validateTrafficKeyStore
+  });
+  return trafficKeyStatus(await readTrafficKeys());
 }
 
 function emptyLocationCardRequests() {
@@ -1933,34 +1945,47 @@ function emptyB2BMemberStore() {
   };
 }
 
-async function readB2BMemberStore() {
-  for (const file of [B2B_MEMBERS_FILE, LEGACY_B2B_MEMBERS_FILE]) {
-    try {
-      const parsed = JSON.parse((await fsp.readFile(file, "utf8")).replace(/^\uFEFF/, ""));
-      return {
-        ...emptyB2BMemberStore(),
-        ...parsed,
-        members: Array.isArray(parsed.members) ? parsed.members : []
-      };
-    } catch {
-      // Try the next known location before falling back to an empty store.
-    }
-  }
-  return emptyB2BMemberStore();
+function normalizeB2BMemberStore(store = {}) {
+  return {
+    ...emptyB2BMemberStore(),
+    ...(isPlainJsonRecord(store) ? store : {}),
+    members: Array.isArray(store?.members) ? store.members : []
+  };
 }
 
-async function writeB2BMemberStore(store) {
-  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
-  const next = {
-    ...emptyB2BMemberStore(),
-    ...store,
-    updatedAt: new Date().toISOString(),
-    members: Array.isArray(store.members) ? store.members : []
-  };
-  const tempPath = `${B2B_MEMBERS_FILE}.${process.pid}.tmp`;
-  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
-  await fsp.rename(tempPath, B2B_MEMBERS_FILE);
-  return next;
+function validateB2BMemberStore(store) {
+  return isPlainJsonRecord(store) && Array.isArray(store.members);
+}
+
+function assertStoreRowsPreserved(before = [], after = [], idKey = "id", label = "JSON store") {
+  if (after.length < before.length) throw new Error(`${label} update cannot remove existing rows`);
+  const previousIds = before.map((row) => String(row?.[idKey] || "")).filter(Boolean);
+  const nextIdList = after.map((row) => String(row?.[idKey] || "")).filter(Boolean);
+  const nextIds = new Set(nextIdList);
+  if (previousIds.some((id) => !nextIds.has(id))) throw new Error(`${label} update cannot remove existing identifiers`);
+  if (nextIds.size !== nextIdList.length) throw new Error(`${label} update cannot create duplicate identifiers`);
+}
+
+const B2B_MEMBER_STORE_OPTIONS = {
+  defaultValue: emptyB2BMemberStore,
+  fallbackPaths: [LEGACY_B2B_MEMBERS_FILE],
+  validator: validateB2BMemberStore
+};
+
+async function readB2BMemberStore() {
+  return normalizeB2BMemberStore(await readSecureJsonFile(B2B_MEMBERS_FILE, B2B_MEMBER_STORE_OPTIONS));
+}
+
+async function updateB2BMemberStore(updater) {
+  return updateSecureJsonFile(B2B_MEMBERS_FILE, async (stored) => {
+    const current = normalizeB2BMemberStore(stored);
+    const updated = await updater(current);
+    if (updated === NO_JSON_WRITE) return NO_JSON_WRITE;
+    const next = normalizeB2BMemberStore(updated === undefined ? current : updated);
+    assertStoreRowsPreserved(current.members, next.members, "memberId", "member store");
+    next.updatedAt = new Date().toISOString();
+    return next;
+  }, B2B_MEMBER_STORE_OPTIONS);
 }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("base64url")) {
@@ -2205,46 +2230,54 @@ function consentRecordFromRequest(req, acceptedAt, payload = {}) {
 
 async function registerB2BMember(payload = {}, context = {}) {
   const { username, password } = validateSignupPayload(payload);
-  const store = await readB2BMemberStore();
-  if (store.members.some((member) => normalizeLoginId(member.username) === username)) {
-    const error = new Error("이미 가입된 아이디입니다.");
-    error.statusCode = 409;
-    throw error;
-  }
-  const now = new Date().toISOString();
-  const member = {
-    memberId: `m_${crypto.randomBytes(9).toString("base64url")}`,
-    username,
-    passwordHash: hashPassword(password),
-    role: USER_ROLES.b2b,
-    accountType: "member",
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-    lastLoginAt: "",
-    searchCount: 0,
-    policy: normalizeB2BMemberPolicy({}, "member"),
-    consents: consentRecordFromRequest(context.req, now, payload),
-    profile: memberProfileFromPayload(payload)
-  };
-  store.members.push(member);
-  await writeB2BMemberStore(store);
-  return { ...publicB2BMember(member), passwordHash: member.passwordHash };
+  let member = null;
+  await updateB2BMemberStore((store) => {
+    if (store.members.some((item) => normalizeLoginId(item.username) === username)) {
+      const error = new Error("이미 가입된 아이디입니다.");
+      error.statusCode = 409;
+      throw error;
+    }
+    const now = new Date().toISOString();
+    member = {
+      memberId: `m_${crypto.randomBytes(9).toString("base64url")}`,
+      username,
+      passwordHash: hashPassword(password),
+      role: USER_ROLES.b2b,
+      accountType: "member",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: "",
+      searchCount: 0,
+      policy: normalizeB2BMemberPolicy({}, "member"),
+      consents: consentRecordFromRequest(context.req, now, payload),
+      profile: memberProfileFromPayload(payload)
+    };
+    store.members.push(member);
+    return store;
+  });
+  return publicB2BMember(member);
 }
 
 async function authenticateB2BMember(username, password) {
   const normalized = normalizeLoginId(username);
   if (!normalized) return null;
-  const store = await readB2BMemberStore();
-  const member = store.members.find((item) => normalizeLoginId(item.username) === normalized);
-  if (!member || member.status === "disabled" || !verifyPassword(password, member.passwordHash)) return null;
-  member.lastLoginAt = new Date().toISOString();
-  member.updatedAt = member.updatedAt || member.lastLoginAt;
-  await writeB2BMemberStore(store);
-  return {
-    ...publicB2BMember(member),
-    roleLabel: userRoleLabel(USER_ROLES.b2b)
-  };
+  const rejected = new Error("authentication rejected");
+  let authenticatedMember = null;
+  try {
+    await updateB2BMemberStore((store) => {
+      const member = store.members.find((item) => normalizeLoginId(item.username) === normalized);
+      if (!member || member.status === "disabled" || !verifyPassword(password, member.passwordHash)) throw rejected;
+      member.lastLoginAt = new Date().toISOString();
+      member.updatedAt = member.lastLoginAt;
+      authenticatedMember = publicB2BMember(member);
+      return store;
+    });
+  } catch (error) {
+    if (error === rejected) return null;
+    throw error;
+  }
+  return { ...authenticatedMember, roleLabel: userRoleLabel(USER_ROLES.b2b) };
 }
 
 function emptyB2BSearchHistoryStore() {
@@ -2255,34 +2288,40 @@ function emptyB2BSearchHistoryStore() {
   };
 }
 
-async function readB2BSearchHistoryStore() {
-  for (const file of [B2B_SEARCH_HISTORY_FILE, LEGACY_B2B_SEARCH_HISTORY_FILE]) {
-    try {
-      const parsed = JSON.parse((await fsp.readFile(file, "utf8")).replace(/^\uFEFF/, ""));
-      return {
-        ...emptyB2BSearchHistoryStore(),
-        ...parsed,
-        entries: Array.isArray(parsed.entries) ? parsed.entries : []
-      };
-    } catch {
-      // Try the next known location before falling back to an empty store.
-    }
-  }
-  return emptyB2BSearchHistoryStore();
+function normalizeB2BSearchHistoryStore(store = {}) {
+  return {
+    ...emptyB2BSearchHistoryStore(),
+    ...(isPlainJsonRecord(store) ? store : {}),
+    entries: Array.isArray(store?.entries) ? store.entries : []
+  };
 }
 
-async function writeB2BSearchHistoryStore(store) {
-  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
-  const next = {
-    ...emptyB2BSearchHistoryStore(),
-    ...store,
-    updatedAt: new Date().toISOString(),
-    entries: Array.isArray(store.entries) ? store.entries : []
-  };
-  const tempPath = `${B2B_SEARCH_HISTORY_FILE}.${process.pid}.tmp`;
-  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
-  await fsp.rename(tempPath, B2B_SEARCH_HISTORY_FILE);
-  return next;
+function validateB2BSearchHistoryStore(store) {
+  return isPlainJsonRecord(store) && Array.isArray(store.entries);
+}
+
+const B2B_SEARCH_HISTORY_STORE_OPTIONS = {
+  defaultValue: emptyB2BSearchHistoryStore,
+  fallbackPaths: [LEGACY_B2B_SEARCH_HISTORY_FILE],
+  validator: validateB2BSearchHistoryStore
+};
+
+async function readB2BSearchHistoryStore() {
+  return normalizeB2BSearchHistoryStore(
+    await readSecureJsonFile(B2B_SEARCH_HISTORY_FILE, B2B_SEARCH_HISTORY_STORE_OPTIONS)
+  );
+}
+
+async function updateB2BSearchHistoryStore(updater) {
+  return updateSecureJsonFile(B2B_SEARCH_HISTORY_FILE, async (stored) => {
+    const current = normalizeB2BSearchHistoryStore(stored);
+    const updated = await updater(current);
+    if (updated === NO_JSON_WRITE) return NO_JSON_WRITE;
+    const next = normalizeB2BSearchHistoryStore(updated === undefined ? current : updated);
+    assertStoreRowsPreserved(current.entries, next.entries, "id", "search history store");
+    next.updatedAt = new Date().toISOString();
+    return next;
+  }, B2B_SEARCH_HISTORY_STORE_OPTIONS);
 }
 
 function emptyB2BInterestLodgeStore() {
@@ -2406,6 +2445,23 @@ function sanitizeManualCategoryCorrection(payload = {}, fallback = {}) {
   };
 }
 
+function normalizeB2BInterestLodgeStore(store = {}) {
+  return {
+    ...emptyB2BInterestLodgeStore(),
+    ...(isPlainJsonRecord(store) ? store : {}),
+    accounts: isPlainJsonRecord(store?.accounts) ? store.accounts : {}
+  };
+}
+
+function validateB2BInterestLodgeStore(store) {
+  return isPlainJsonRecord(store) && isPlainJsonRecord(store.accounts);
+}
+
+const B2B_INTEREST_LODGE_STORE_OPTIONS = {
+  defaultValue: emptyB2BInterestLodgeStore,
+  validator: validateB2BInterestLodgeStore
+};
+
 function manualCorrectionMetaHasValue(correction = {}) {
   const meta = sanitizeManualCorrectionMeta(correction);
   return Boolean(
@@ -2515,30 +2571,25 @@ function b2bInterestLodgeHasInput(lodge = {}) {
 }
 
 async function readB2BInterestLodgeStore() {
-  try {
-    const parsed = JSON.parse((await fsp.readFile(B2B_INTEREST_LODGES_FILE, "utf8")).replace(/^\uFEFF/, ""));
-    return {
-      ...emptyB2BInterestLodgeStore(),
-      ...parsed,
-      accounts: parsed.accounts && typeof parsed.accounts === "object" ? parsed.accounts : {}
-    };
-  } catch {
-    return emptyB2BInterestLodgeStore();
-  }
+  return normalizeB2BInterestLodgeStore(
+    await readSecureJsonFile(B2B_INTEREST_LODGES_FILE, B2B_INTEREST_LODGE_STORE_OPTIONS)
+  );
 }
 
-async function writeB2BInterestLodgeStore(store = {}) {
-  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
-  const next = {
-    ...emptyB2BInterestLodgeStore(),
-    ...store,
-    updatedAt: new Date().toISOString(),
-    accounts: store.accounts && typeof store.accounts === "object" ? store.accounts : {}
-  };
-  const tempPath = `${B2B_INTEREST_LODGES_FILE}.${process.pid}.tmp`;
-  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
-  await fsp.rename(tempPath, B2B_INTEREST_LODGES_FILE);
-  return next;
+async function updateB2BInterestLodgeStore(updater) {
+  return updateSecureJsonFile(B2B_INTEREST_LODGES_FILE, async (stored) => {
+    const current = normalizeB2BInterestLodgeStore(stored);
+    const updated = await updater(current);
+    if (updated === NO_JSON_WRITE) return NO_JSON_WRITE;
+    const next = normalizeB2BInterestLodgeStore(updated === undefined ? current : updated);
+    for (const ownerKey of Object.keys(current.accounts)) {
+      if (!Object.prototype.hasOwnProperty.call(next.accounts, ownerKey)) {
+        throw new Error("interest lodge store update cannot remove existing accounts");
+      }
+    }
+    next.updatedAt = new Date().toISOString();
+    return next;
+  }, B2B_INTEREST_LODGE_STORE_OPTIONS);
 }
 
 async function publicB2BInterestLodgesForSession(session = {}) {
@@ -2566,28 +2617,39 @@ async function saveB2BInterestLodgesForSession(session = {}, payload = {}) {
     throw error;
   }
   const now = new Date().toISOString();
-  const store = await readB2BInterestLodgeStore();
   const interestLodges = (Array.isArray(payload.interestLodges) ? payload.interestLodges : [])
     .map((lodge) => sanitizeB2BInterestLodge(lodge))
     .filter((lodge) => b2bInterestLodgeHasInput(lodge))
     .slice(0, B2B_INTEREST_LODGE_LIMIT);
-  store.accounts = store.accounts && typeof store.accounts === "object" ? store.accounts : {};
-  store.accounts[ownerKey] = {
-    owner: {
-      memberId: sanitizeMemberText(session.memberId, 120),
-      username: normalizeLoginId(session.username),
-      accountType: normalizeB2BAccountType(session.accountType || "")
-    },
-    updatedAt: now,
-    interestLodges
-  };
-  await writeB2BInterestLodgeStore(store);
+  await updateB2BInterestLodgeStore((store) => {
+    const currentAccount = isPlainJsonRecord(store.accounts[ownerKey]) ? store.accounts[ownerKey] : {};
+    const currentOwner = isPlainJsonRecord(currentAccount.owner) ? currentAccount.owner : {};
+    const currentLodgesById = new Map(
+      (Array.isArray(currentAccount.interestLodges) ? currentAccount.interestLodges : [])
+        .filter((lodge) => isPlainJsonRecord(lodge))
+        .map((lodge) => [stableB2BInterestLodgeId(lodge), lodge])
+    );
+    store.accounts[ownerKey] = {
+      ...currentAccount,
+      owner: {
+        ...currentOwner,
+        memberId: sanitizeMemberText(session.memberId, 120),
+        username: normalizeLoginId(session.username),
+        accountType: normalizeB2BAccountType(session.accountType || "")
+      },
+      updatedAt: now,
+      interestLodges: interestLodges.map((lodge) => ({
+        ...(currentLodgesById.get(lodge.id) || {}),
+        ...lodge
+      }))
+    };
+    return store;
+  });
   return publicB2BInterestLodgesForSession(session);
 }
 
 function clientIpHash(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  const raw = forwarded || req.socket?.remoteAddress || "";
+  const raw = trustedClientAddress(req, { isRenderRuntime: IS_RENDER_RUNTIME });
   return raw ? crypto.createHash("sha256").update(`ip:${raw}`).digest("hex") : "";
 }
 
@@ -2602,18 +2664,23 @@ function cleanupRequestRateLimits(now = Date.now()) {
   }
 }
 
-function requestRateLimitKey(req, scope = "default", identity = "") {
+function requestRateLimitKey(req, scope = "default", identity = "", options = {}) {
+  const owner = String(identity || "").trim();
+  if (options.identityOnly && owner) {
+    const identityHash = crypto.createHash("sha256").update(`rate-limit:${scope}:${owner}`).digest("hex");
+    return `${scope}:identity:${identityHash}`;
+  }
   const ipHash = clientIpHash(req) || "unknown";
-  const owner = normalizeLoginId(identity) || "";
-  return `${scope}:${owner}:${ipHash}`;
+  const normalizedOwner = normalizeLoginId(owner) || "";
+  return `${scope}:${normalizedOwner}:${ipHash}`;
 }
 
-function requestRateLimitStatus(req, scope = "default", options = {}, identity = "") {
+function requestRateLimitStatus(req, scope = "default", options = {}, identity = "", keyOptions = {}) {
   const now = Date.now();
   cleanupRequestRateLimits(now);
   const limit = Math.max(1, Math.round(Number(options.limit || 30)));
   const windowMs = Math.max(1000, Math.round(Number(options.windowMs || 60 * 1000)));
-  const key = requestRateLimitKey(req, scope, identity);
+  const key = requestRateLimitKey(req, scope, identity, keyOptions);
   const current = requestRateLimits.get(key);
   if (!current || current.resetAt <= now) {
     return { key, allowed: true, limit, remaining: limit, resetAt: now + windowMs, retryAfterSeconds: 0 };
@@ -2629,8 +2696,8 @@ function requestRateLimitStatus(req, scope = "default", options = {}, identity =
   };
 }
 
-function assertRequestRateLimit(req, scope = "default", options = {}, identity = "") {
-  const status = requestRateLimitStatus(req, scope, options, identity);
+function assertRequestRateLimit(req, scope = "default", options = {}, identity = "", keyOptions = {}) {
+  const status = requestRateLimitStatus(req, scope, options, identity, keyOptions);
   if (!status.allowed) {
     const error = new Error(`요청이 잠시 많습니다. ${Math.ceil(status.retryAfterSeconds / 60)}분 후 다시 시도해 주세요.`);
     error.statusCode = 429;
@@ -3015,31 +3082,38 @@ function emptyAccountDeleteRequestStore() {
   };
 }
 
-async function readAccountDeleteRequestStore() {
-  try {
-    const parsed = JSON.parse((await fsp.readFile(ACCOUNT_DELETE_REQUESTS_FILE, "utf8")).replace(/^\uFEFF/, ""));
-    return {
-      ...emptyAccountDeleteRequestStore(),
-      ...parsed,
-      requests: Array.isArray(parsed.requests) ? parsed.requests : []
-    };
-  } catch {
-    return emptyAccountDeleteRequestStore();
-  }
+function normalizeAccountDeleteRequestStore(store = {}) {
+  return {
+    ...emptyAccountDeleteRequestStore(),
+    ...(isPlainJsonRecord(store) ? store : {}),
+    requests: Array.isArray(store?.requests) ? store.requests : []
+  };
 }
 
-async function writeAccountDeleteRequestStore(store) {
-  await fsp.mkdir(CUSTOMER_DB_DIR, { recursive: true });
-  const next = {
-    ...emptyAccountDeleteRequestStore(),
-    ...store,
-    updatedAt: new Date().toISOString(),
-    requests: Array.isArray(store.requests) ? store.requests : []
-  };
-  const tempPath = `${ACCOUNT_DELETE_REQUESTS_FILE}.${process.pid}.tmp`;
-  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
-  await fsp.rename(tempPath, ACCOUNT_DELETE_REQUESTS_FILE);
-  return next;
+function validateAccountDeleteRequestStore(store) {
+  return isPlainJsonRecord(store) && Array.isArray(store.requests);
+}
+
+const ACCOUNT_DELETE_REQUEST_STORE_OPTIONS = {
+  defaultValue: emptyAccountDeleteRequestStore,
+  validator: validateAccountDeleteRequestStore
+};
+
+async function readAccountDeleteRequestStore() {
+  return normalizeAccountDeleteRequestStore(
+    await readSecureJsonFile(ACCOUNT_DELETE_REQUESTS_FILE, ACCOUNT_DELETE_REQUEST_STORE_OPTIONS)
+  );
+}
+
+async function updateAccountDeleteRequestStore(updater) {
+  return updateSecureJsonFile(ACCOUNT_DELETE_REQUESTS_FILE, async (stored) => {
+    const current = normalizeAccountDeleteRequestStore(stored);
+    const updated = await updater(current);
+    if (updated === NO_JSON_WRITE) return NO_JSON_WRITE;
+    const next = normalizeAccountDeleteRequestStore(updated === undefined ? current : updated);
+    next.updatedAt = new Date().toISOString();
+    return next;
+  }, ACCOUNT_DELETE_REQUEST_STORE_OPTIONS);
 }
 
 function normalizeAccountDeleteRequestType(value = "") {
@@ -3103,17 +3177,11 @@ async function publicAccountDeleteRequestsAdminOverview() {
   };
 }
 
-async function findB2BMemberByLoginId(username = "") {
-  const normalized = normalizeLoginId(username);
-  if (!normalized) return null;
-  const store = await readB2BMemberStore();
-  return (store.members || []).find((member) => normalizeLoginId(member.username) === normalized) || null;
-}
-
 function accountDeletePrefill(session = null, payload = {}) {
   const publicInfo = publicSession(session);
   const profile = publicInfo.profile || {};
-  const username = sanitizeMemberText(payload.username || publicInfo.username || "", 80);
+  const authenticated = Boolean(publicInfo.authenticated);
+  const username = sanitizeMemberText(authenticated ? publicInfo.username : (payload.username || ""), 80);
   const phone = sanitizeMemberText(payload.phone || profile.phone || "", 40);
   const email = sanitizeMemberText(payload.email || profile.email || "", 120);
   const contact = sanitizeMemberText(payload.contact || email || phone || "", 160);
@@ -3122,7 +3190,9 @@ function accountDeletePrefill(session = null, payload = {}) {
     phone,
     email,
     contact,
-    companyName: sanitizeMemberText(payload.companyName || profile.companyName || profile.lodgingName || "", 120),
+    companyName: sanitizeMemberText(authenticated
+      ? (profile.companyName || profile.lodgingName || "")
+      : (payload.companyName || ""), 120),
     requestType: normalizeAccountDeleteRequestType(payload.requestType) || "account_delete",
     detail: sanitizeMemberText(payload.detail, 500)
   };
@@ -3130,8 +3200,10 @@ function accountDeletePrefill(session = null, payload = {}) {
 
 async function createAccountDeleteRequest(payload = {}, context = {}) {
   const session = context.session || null;
+  const publicInfo = publicSession(session);
+  const authenticated = Boolean(publicInfo.authenticated);
   const prefill = accountDeletePrefill(session, payload);
-  const username = normalizeLoginId(prefill.username);
+  const username = normalizeLoginId(authenticated ? publicInfo.username : prefill.username);
   const requestType = normalizeAccountDeleteRequestType(payload.requestType || prefill.requestType);
   const contact = sanitizeMemberText(payload.contact || prefill.contact || payload.email || payload.phone, 160);
   if (!username) {
@@ -3155,23 +3227,21 @@ async function createAccountDeleteRequest(payload = {}, context = {}) {
     throw error;
   }
 
-  const member = await findB2BMemberByLoginId(username);
   const now = new Date().toISOString();
   const userAgent = String(context.req?.headers?.["user-agent"] || "");
-  const publicInfo = publicSession(session);
-  const profile = member?.profile || publicInfo.profile || {};
-  const consents = member?.consents || publicInfo.consents || {};
+  const profile = authenticated && publicInfo.profile && typeof publicInfo.profile === "object" ? publicInfo.profile : {};
+  const consents = authenticated && publicInfo.consents && typeof publicInfo.consents === "object" ? publicInfo.consents : {};
   const request = {
     requestId: `adr_${crypto.randomBytes(9).toString("base64url")}`,
     requestedAt: now,
     updatedAt: now,
     username,
-    memberId: member?.memberId || publicInfo.memberId || "",
-    accountType: member?.accountType || publicInfo.accountType || "",
-    role: publicInfo.authenticated ? publicInfo.role : "",
-    companyName: sanitizeMemberText(payload.companyName || profile.companyName || profile.lodgingName || "", 120),
-    phone: sanitizeMemberText(payload.phone || profile.phone || "", 40),
-    email: sanitizeMemberText(payload.email || profile.email || "", 120),
+    memberId: authenticated ? sanitizeMemberText(publicInfo.memberId || "", 120) : "",
+    accountType: authenticated ? sanitizeMemberText(publicInfo.accountType || "", 40) : "",
+    role: authenticated ? publicInfo.role : "",
+    companyName: authenticated ? sanitizeMemberText(profile.companyName || profile.lodgingName || "", 120) : "",
+    phone: authenticated ? sanitizeMemberText(profile.phone || "", 40) : "",
+    email: authenticated ? sanitizeMemberText(profile.email || "", 120) : "",
     contact,
     requestType,
     requestTypeLabel: accountDeleteRequestTypeLabel(requestType),
@@ -3179,9 +3249,10 @@ async function createAccountDeleteRequest(payload = {}, context = {}) {
     statusLabel: accountDeleteRequestStatusLabel("received"),
     detail: sanitizeMemberText(payload.detail, 500),
     policyVersion: LEGAL_POLICY_VERSION,
-    termsVersion: consents.termsVersion || TERMS_VERSION,
-    privacyVersion: consents.privacyVersion || PRIVACY_VERSION,
-    consentAcceptedAt: consents.acceptedAt || "",
+    termsVersion: authenticated ? (consents.termsVersion || TERMS_VERSION) : TERMS_VERSION,
+    privacyVersion: authenticated ? (consents.privacyVersion || PRIVACY_VERSION) : PRIVACY_VERSION,
+    consentAcceptedAt: authenticated ? (consents.acceptedAt || "") : now,
+    identityVerified: authenticated,
     ipHash: context.req ? clientIpHash(context.req) : "",
     userAgentHash: userAgent ? crypto.createHash("sha256").update(`ua:${userAgent}`).digest("hex") : "",
     statusHistory: [
@@ -3194,10 +3265,34 @@ async function createAccountDeleteRequest(payload = {}, context = {}) {
       }
     ]
   };
-  const store = await readAccountDeleteRequestStore();
-  store.requests = [request, ...(store.requests || [])].slice(0, 1000);
-  await writeAccountDeleteRequestStore(store);
-  return accountDeleteRequestPublicRow(request);
+  await updateAccountDeleteRequestStore((store) => {
+    store.requests = [request, ...store.requests].slice(0, 1000);
+    return store;
+  });
+  return accountDeleteRequestReceipt(request);
+}
+
+function normalizeAccountDeleteRateLimitContact(value = "") {
+  const text = sanitizeMemberText(value, 160).toLowerCase();
+  if (!text) return "";
+  if (text.includes("@")) return text.replace(/\s+/g, "");
+  const digits = text.replace(/\D/g, "");
+  if (digits.length >= 7) return digits;
+  return text.replace(/[^\p{L}\p{N}@._+-]+/gu, "");
+}
+
+function accountDeleteRateLimitIdentities(payload = {}, session = null) {
+  const publicInfo = publicSession(session);
+  if (publicInfo.authenticated) {
+    const memberIdentity = sanitizeMemberText(publicInfo.memberId, 120) || normalizeLoginId(publicInfo.username);
+    return memberIdentity ? [{ scope: "accountDeleteMember", identity: `member:${memberIdentity}` }] : [];
+  }
+  const username = normalizeLoginId(payload.username);
+  const contact = normalizeAccountDeleteRateLimitContact(payload.contact || payload.email || payload.phone || "");
+  return [
+    username ? { scope: "accountDeleteUsername", identity: `username:${username}` } : null,
+    contact ? { scope: "accountDeleteContact", identity: `contact:${contact}` } : null
+  ].filter(Boolean);
 }
 
 async function updateAccountDeleteRequestStatus(requestId = "", payload = {}, adminSession = {}) {
@@ -3207,38 +3302,32 @@ async function updateAccountDeleteRequestStatus(requestId = "", payload = {}, ad
     error.statusCode = 400;
     throw error;
   }
-  const store = await readAccountDeleteRequestStore();
-  const request = (store.requests || []).find((item) => item.requestId === id);
-  if (!request) {
-    const error = new Error("삭제 요청을 찾을 수 없습니다.");
-    error.statusCode = 404;
-    throw error;
-  }
-  const now = new Date().toISOString();
-  const status = normalizeAccountDeleteRequestStatus(payload.status);
-  request.status = status;
-  request.statusLabel = accountDeleteRequestStatusLabel(status);
-  request.adminNote = sanitizeMemberText(payload.adminNote || request.adminNote || "", 500);
-  request.updatedAt = now;
-  request.statusHistory = [
-    ...(Array.isArray(request.statusHistory) ? request.statusHistory : []),
-    {
-      changedAt: now,
-      status,
-      statusLabel: accountDeleteRequestStatusLabel(status),
-      adminUsername: adminSession?.username || "",
-      note: request.adminNote
+  await updateAccountDeleteRequestStore((store) => {
+    const request = store.requests.find((item) => item.requestId === id);
+    if (!request) {
+      const error = new Error("삭제 요청을 찾을 수 없습니다.");
+      error.statusCode = 404;
+      throw error;
     }
-  ].slice(-30);
-  await writeAccountDeleteRequestStore(store);
+    const now = new Date().toISOString();
+    const status = normalizeAccountDeleteRequestStatus(payload.status);
+    request.status = status;
+    request.statusLabel = accountDeleteRequestStatusLabel(status);
+    request.adminNote = sanitizeMemberText(payload.adminNote || request.adminNote || "", 500);
+    request.updatedAt = now;
+    request.statusHistory = [
+      ...(Array.isArray(request.statusHistory) ? request.statusHistory : []),
+      {
+        changedAt: now,
+        status,
+        statusLabel: accountDeleteRequestStatusLabel(status),
+        adminUsername: adminSession?.username || "",
+        note: request.adminNote
+      }
+    ].slice(-30);
+    return store;
+  });
   return publicAccountDeleteRequestsAdminOverview();
-}
-
-function relativeDataPath(filePath = "") {
-  const relative = path.relative(DATA_DIR, filePath || "");
-  return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
-    ? relative.replace(/\\/g, "/")
-    : path.basename(filePath || "");
 }
 
 async function securityHardeningOverview() {
@@ -3304,15 +3393,20 @@ async function securityHardeningOverview() {
       status: "ok"
     },
     dataStorage: {
-      customerDbDir: relativeDataPath(CUSTOMER_DB_DIR),
-      memberDb: relativeDataPath(B2B_MEMBERS_FILE),
-      searchHistoryDb: relativeDataPath(B2B_SEARCH_HISTORY_FILE),
-      interestLodgeDb: relativeDataPath(B2B_INTEREST_LODGES_FILE),
-      accountDeleteRequestDb: relativeDataPath(ACCOUNT_DELETE_REQUESTS_FILE),
-      companyMasterDb: relativeDataPath(COMPANY_MASTER_FILE),
-      locationScoreOverrideDb: relativeDataPath(LOCATION_SCORE_OVERRIDES_FILE),
-      interestLodgeStorage: "고객 DB 계정 저장 + 브라우저 임시 보관",
-      apiKeyStorage: relativeDataPath(TRAFFIC_KEYS_FILE)
+      customerDbConfigured: fs.existsSync(CUSTOMER_DB_DIR),
+      memberDbConfigured: fs.existsSync(B2B_MEMBERS_FILE) || fs.existsSync(LEGACY_B2B_MEMBERS_FILE),
+      searchHistoryDbConfigured: fs.existsSync(B2B_SEARCH_HISTORY_FILE) || fs.existsSync(LEGACY_B2B_SEARCH_HISTORY_FILE),
+      interestLodgeDbConfigured: fs.existsSync(B2B_INTEREST_LODGES_FILE),
+      accountDeleteRequestDbConfigured: fs.existsSync(ACCOUNT_DELETE_REQUESTS_FILE),
+      companyMasterDbConfigured: fs.existsSync(COMPANY_MASTER_FILE),
+      locationScoreOverrideDbConfigured: fs.existsSync(LOCATION_SCORE_OVERRIDES_FILE),
+      trafficKeyConfigured: fs.existsSync(TRAFFIC_KEYS_FILE) || Boolean(
+        process.env.NAVER_CLIENT_ID
+        || process.env.NAVER_CLIENT_SECRET
+        || process.env.NAVER_SEARCHAD_API_KEY
+        || process.env.NAVER_SEARCHAD_SECRET_KEY
+        || process.env.NAVER_SEARCHAD_CUSTOMER_ID
+      )
     },
     accountDeleteLog: {
       totalCount: deleteOverview.summary?.totalCount || 0,
@@ -3320,7 +3414,7 @@ async function securityHardeningOverview() {
       completedCount: deleteOverview.summary?.completedCount || 0,
       latestRequestedAt: deleteOverview.summary?.latestRequestedAt || "",
       statusHistoryKept: true,
-      storage: relativeDataPath(ACCOUNT_DELETE_REQUESTS_FILE)
+      storageConfigured: fs.existsSync(ACCOUNT_DELETE_REQUESTS_FILE)
     }
   };
 }
@@ -3424,54 +3518,56 @@ async function updateB2BMemberAdminPolicy(memberId = "", payload = {}, adminSess
     error.statusCode = 400;
     throw error;
   }
-  const store = await readB2BMemberStore();
-  const member = (store.members || []).find((item) => item.memberId === targetId);
-  if (!member) {
-    const error = new Error("회원을 찾을 수 없습니다.");
-    error.statusCode = 404;
-    throw error;
-  }
-  const now = new Date().toISOString();
-  const nextAccountType = normalizeB2BAccountType(payload.accountType || member.accountType || "member");
-  const accountTypeChanged = nextAccountType !== normalizeB2BAccountType(member.accountType || "member");
-  const currentPolicy = normalizeB2BMemberPolicy(member.policy || {}, member.accountType || "member");
-  const defaultPolicyForType = normalizeB2BMemberPolicy({}, nextAccountType);
-  const hasDailyLimit = Object.prototype.hasOwnProperty.call(payload, "dailySearchLimit");
-  const hasExpandedAllowed = Object.prototype.hasOwnProperty.call(payload, "expandedSearchAllowed");
-  const nextDailyLimit = normalizeB2BMemberDailyLimit(
-    hasDailyLimit ? payload.dailySearchLimit : (accountTypeChanged ? defaultPolicyForType.dailySearchLimit : currentPolicy.dailySearchLimit),
-    accountTypeChanged ? defaultPolicyForType.dailySearchLimit : currentPolicy.dailySearchLimit
-  );
-  const nextExpandedAllowed = parseBooleanOption(
-    hasExpandedAllowed ? payload.expandedSearchAllowed : (accountTypeChanged ? defaultPolicyForType.expandedSearchAllowed : currentPolicy.expandedSearchAllowed),
-    accountTypeChanged ? defaultPolicyForType.expandedSearchAllowed : currentPolicy.expandedSearchAllowed
-  );
-  const nextStatus = Object.prototype.hasOwnProperty.call(payload, "status")
-    ? normalizeB2BMemberStatus(payload.status)
-    : normalizeB2BMemberStatus(member.status || "active");
-
-  member.accountType = nextAccountType;
-  member.status = nextStatus;
-  member.policy = normalizeB2BMemberPolicy({
-    dailySearchLimit: nextDailyLimit,
-    expandedSearchAllowed: nextExpandedAllowed
-  }, nextAccountType);
-  member.updatedAt = now;
-  member.adminPolicyHistory = [
-    ...(Array.isArray(member.adminPolicyHistory) ? member.adminPolicyHistory : []),
-    {
-      changedAt: now,
-      adminUsername: adminSession?.username || "",
-      accountType: member.accountType,
-      status: member.status,
-      policy: member.policy
+  let updatedMember = null;
+  await updateB2BMemberStore((store) => {
+    const member = store.members.find((item) => item.memberId === targetId);
+    if (!member) {
+      const error = new Error("회원을 찾을 수 없습니다.");
+      error.statusCode = 404;
+      throw error;
     }
-  ].slice(-20);
+    const now = new Date().toISOString();
+    const nextAccountType = normalizeB2BAccountType(payload.accountType || member.accountType || "member");
+    const accountTypeChanged = nextAccountType !== normalizeB2BAccountType(member.accountType || "member");
+    const currentPolicy = normalizeB2BMemberPolicy(member.policy || {}, member.accountType || "member");
+    const defaultPolicyForType = normalizeB2BMemberPolicy({}, nextAccountType);
+    const hasDailyLimit = Object.prototype.hasOwnProperty.call(payload, "dailySearchLimit");
+    const hasExpandedAllowed = Object.prototype.hasOwnProperty.call(payload, "expandedSearchAllowed");
+    const nextDailyLimit = normalizeB2BMemberDailyLimit(
+      hasDailyLimit ? payload.dailySearchLimit : (accountTypeChanged ? defaultPolicyForType.dailySearchLimit : currentPolicy.dailySearchLimit),
+      accountTypeChanged ? defaultPolicyForType.dailySearchLimit : currentPolicy.dailySearchLimit
+    );
+    const nextExpandedAllowed = parseBooleanOption(
+      hasExpandedAllowed ? payload.expandedSearchAllowed : (accountTypeChanged ? defaultPolicyForType.expandedSearchAllowed : currentPolicy.expandedSearchAllowed),
+      accountTypeChanged ? defaultPolicyForType.expandedSearchAllowed : currentPolicy.expandedSearchAllowed
+    );
+    const nextStatus = Object.prototype.hasOwnProperty.call(payload, "status")
+      ? normalizeB2BMemberStatus(payload.status)
+      : normalizeB2BMemberStatus(member.status || "active");
 
-  await writeB2BMemberStore(store);
-  if (member.status === "disabled") {
+    member.accountType = nextAccountType;
+    member.status = nextStatus;
+    member.policy = normalizeB2BMemberPolicy({
+      dailySearchLimit: nextDailyLimit,
+      expandedSearchAllowed: nextExpandedAllowed
+    }, nextAccountType);
+    member.updatedAt = now;
+    member.adminPolicyHistory = [
+      ...(Array.isArray(member.adminPolicyHistory) ? member.adminPolicyHistory : []),
+      {
+        changedAt: now,
+        adminUsername: adminSession?.username || "",
+        accountType: member.accountType,
+        status: member.status,
+        policy: member.policy
+      }
+    ].slice(-20);
+    updatedMember = publicB2BMember(member);
+    return store;
+  });
+  if (updatedMember.status === "disabled") {
     for (const [sessionId, session] of sessions.entries()) {
-      if (session.memberId === member.memberId || normalizeLoginId(session.username) === normalizeLoginId(member.username)) {
+      if (session.memberId === updatedMember.memberId || normalizeLoginId(session.username) === normalizeLoginId(updatedMember.username)) {
         sessions.delete(sessionId);
       }
     }
@@ -3623,15 +3719,8 @@ function b2bSearchResultSummary(data = {}) {
 
 async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId, data, crawlTiming, quotaCounted = true }) {
   const now = new Date().toISOString();
-  const store = await readB2BSearchHistoryStore();
   const owner = subscriber || session || {};
   const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId || subscriber?.clientRequestId);
-  const existing = clientRequestId
-    ? store.entries.find((entry) => entry.runId === runId
-        && entry.clientRequestId === clientRequestId
-        && b2bHistoryOwnerMatches(entry, owner))
-    : null;
-  if (existing) return publicB2BSearchHistoryEntry(existing);
   const entry = {
     id: `s_${crypto.randomBytes(9).toString("base64url")}`,
     memberId: owner?.memberId || "",
@@ -3667,20 +3756,34 @@ async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId
     crawlTiming: crawlTiming || null,
     resultSummary: b2bSearchResultSummary(data)
   };
-  store.entries.push(entry);
-  await writeB2BSearchHistoryStore(store);
+  let persistedEntry = entry;
+  let created = false;
+  await updateB2BSearchHistoryStore((store) => {
+    const existing = clientRequestId
+      ? store.entries.find((item) => item.runId === runId
+          && item.clientRequestId === clientRequestId
+          && b2bHistoryOwnerMatches(item, owner))
+      : null;
+    if (existing) {
+      persistedEntry = existing;
+      return NO_JSON_WRITE;
+    }
+    store.entries.push(entry);
+    created = true;
+    return store;
+  });
 
-  if (owner?.memberId && quotaCounted !== false) {
-    const memberStore = await readB2BMemberStore();
-    const member = memberStore.members.find((item) => item.memberId === owner.memberId);
-    if (member) {
+  if (created && owner?.memberId && quotaCounted !== false) {
+    await updateB2BMemberStore((memberStore) => {
+      const member = memberStore.members.find((item) => item.memberId === owner.memberId);
+      if (!member) return NO_JSON_WRITE;
       member.searchCount = Number(member.searchCount || 0) + 1;
       member.updatedAt = now;
-      await writeB2BMemberStore(memberStore);
-    }
+      return memberStore;
+    });
   }
 
-  return publicB2BSearchHistoryEntry(entry);
+  return publicB2BSearchHistoryEntry(persistedEntry);
 }
 
 const appendB2BSearchHistory = ensureB2BSearchHistory;
@@ -4889,6 +4992,7 @@ async function listRuns() {
     if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) continue;
     const stat = await fsp.stat(dirPath);
     const provinceKey = provinceKeyForRun(entry.name, manifest);
+    const resultSelection = runResultSelectionProfile(manifest?.counts);
 
     runs.push({
       id: entry.name,
@@ -4915,7 +5019,8 @@ async function listRuns() {
       provinceLabel: (PROVINCES[provinceKey] || PROVINCES.local).label,
       updatedAt: stat.mtime.toISOString(),
       counts: manifest?.counts || {},
-      files: manifest?.files || files
+      files: manifest?.files || files,
+      ...resultSelection
     });
   }
 
@@ -4948,56 +5053,6 @@ function collectionSourceLabel(collectionSource) {
   }[normalizeCollectionSource(collectionSource)] || "관리자 수집";
 }
 
-const B2B_PRIVATE_FIELD_KEYS = new Set([
-  "sourceKey",
-  "placeId",
-  "place_id",
-  "bookingBusinessId",
-  "bookingBusinessIds",
-  "placeIds",
-  "companyId",
-  "companyProfile",
-  "companyMaster",
-  "companyMasterOverlay",
-  "adminRegionalOperations",
-  "regionalOperations",
-  "manualCorrection",
-  "manualCorrectionHistory",
-  "companyManualCorrection",
-  "manualCorrectionApplied",
-  "adminReview",
-  "adminReviewHistory",
-  "salesContact",
-  "salesContactHistory",
-  "duplicateCandidates",
-  "sourceIndex",
-  "sourceRoles",
-  "collectionSources",
-  "sourceStats",
-  "downloads",
-  "files",
-  "file",
-  "history",
-  "urls",
-  "url"
-]);
-
-function stripB2BPrivateFields(value) {
-  if (Array.isArray(value)) {
-    value.forEach(stripB2BPrivateFields);
-    return value;
-  }
-  if (!value || typeof value !== "object") return value;
-  for (const key of Object.keys(value)) {
-    if (B2B_PRIVATE_FIELD_KEYS.has(key)) {
-      delete value[key];
-    } else {
-      stripB2BPrivateFields(value[key]);
-    }
-  }
-  return value;
-}
-
 function publicRunsForRole(runs = [], role = USER_ROLES.admin) {
   if (normalizeUserRole(role) === USER_ROLES.admin) return runs;
   return [];
@@ -5005,8 +5060,7 @@ function publicRunsForRole(runs = [], role = USER_ROLES.admin) {
 
 function publicRunForRole(runData, role = USER_ROLES.admin) {
   if (normalizeUserRole(role) === USER_ROLES.admin || !runData) return runData;
-  const copy = cloneJson(runData);
-  return stripB2BPrivateFields(copy);
+  return projectB2BPublicPayload(runData);
 }
 
 function b2bSearchPayload(value = {}) {
@@ -8524,6 +8578,17 @@ function createCompanyRecord(companyId, entity) {
     phones: [],
     coordinates: [],
     duplicateNotes: []
+  };
+}
+
+function accountDeleteRequestReceipt(request = {}) {
+  const status = normalizeAccountDeleteRequestStatus(request.status);
+  return {
+    requestId: request.requestId || "",
+    requestType: normalizeAccountDeleteRequestType(request.requestType) || "account_delete",
+    requestTypeLabel: accountDeleteRequestTypeLabel(request.requestType),
+    status,
+    statusLabel: accountDeleteRequestStatusLabel(status)
   };
 }
 
@@ -13093,8 +13158,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260801-ui-release-v27"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260801-ui-release-v27"');
+      .replace(/href="\/styles\.css(?:\?v=[^"]*)?"/, `href="/styles.css?v=${UI_ASSET_VERSION}"`)
+      .replace(/src="\/app\.js(?:\?v=[^"]*)?"/, `src="/app.js?v=${UI_ASSET_VERSION}"`);
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -13153,9 +13218,8 @@ async function route(req, res) {
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/api/health") {
-      const session = getSession(req);
       if (req.method === "HEAD") return sendHead(res, 200);
-      return send(res, 200, { ok: true, loginRequired: true, ...publicSession(session) });
+      return send(res, 200, { ok: true, loginRequired: true });
     }
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/terms") {
@@ -13194,7 +13258,16 @@ async function route(req, res) {
       const session = getSession(req);
       const payload = await parseLoginBody(req);
       try {
-        assertRequestRateLimit(req, "accountDelete", RATE_LIMIT_POLICIES.accountDelete);
+        assertRequestRateLimit(req, "accountDeleteIp", RATE_LIMIT_POLICIES.accountDelete);
+        for (const requestIdentity of accountDeleteRateLimitIdentities(payload, session)) {
+          assertRequestRateLimit(
+            req,
+            requestIdentity.scope,
+            RATE_LIMIT_POLICIES.accountDelete,
+            requestIdentity.identity,
+            { identityOnly: true }
+          );
+        }
         const requestRow = await createAccountDeleteRequest(payload, { req, session });
         if (reqUrl.pathname === "/api/account-delete-request") {
           return send(res, 200, { ok: true, request: requestRow });

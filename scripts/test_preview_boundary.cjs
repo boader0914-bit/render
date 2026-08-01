@@ -4,6 +4,11 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const {
+  assertV2PreviewRuntimeEnv,
+  isRenderRuntime,
+  isV2PreviewRuntime
+} = require("./runtime_security.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const SERVER_PATH = path.join(ROOT, "scripts", "glamping_app_server.cjs");
@@ -29,6 +34,9 @@ function spawnV2(envOverrides = {}) {
       HOST: "127.0.0.1",
       RENDER: "",
       RENDER_EXTERNAL_URL: "",
+      RENDER_EXTERNAL_HOSTNAME: "",
+      RENDER_SERVICE_NAME: "",
+      V2_PREVIEW_DATA_ROOT: "",
       ...envOverrides
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -75,8 +83,90 @@ async function stopChild(child) {
 }
 
 async function main() {
+  const previewMarker = {
+    RENDER: "true",
+    RENDER_SERVICE_NAME: "lodging-datalab-preview",
+    RENDER_EXTERNAL_HOSTNAME: "sa-labs-datalab-v4-preview.onrender.com"
+  };
+  assert.equal(isV2PreviewRuntime(previewMarker), true);
+  assert.equal(isV2PreviewRuntime({ RENDER_SERVICE_NAME: "lodging-datalab-preview" }), true, "exact Preview service name is independently fail-closed");
+  assert.equal(isV2PreviewRuntime({ RENDER_EXTERNAL_URL: "https://sa-labs-datalab-v4-preview.onrender.com" }), true, "exact Preview URL is independently fail-closed");
+  assert.equal(isRenderRuntime({ RENDER: "false" }), false, "RENDER=false is not a Render runtime");
+  assert.equal(isRenderRuntime({ RENDER: "0" }), false, "RENDER=0 is not a Render runtime");
+  assert.equal(isV2PreviewRuntime({ RENDER: "false", RENDER_SERVICE_NAME: "lodging-datalab-preview" }), true, "exact Preview identity remains fail-closed even with a contradictory flag");
+  assert.throws(() => assertV2PreviewRuntimeEnv(previewMarker), /requires V2_PREVIEW_DATA_ROOT/);
+  assert.throws(() => assertV2PreviewRuntimeEnv({
+    ...previewMarker,
+    V2_PREVIEW_DATA_ROOT: "/var/data",
+    GLAMPING_ADMIN_USER: "preview-admin",
+    GLAMPING_ADMIN_PASSWORD: "PreviewOnlyTest!123",
+    GLAMPING_B2B_ENABLED: "0"
+  }), /dedicated child/);
+  assert.throws(() => assertV2PreviewRuntimeEnv({
+    ...previewMarker,
+    V2_PREVIEW_DATA_ROOT: "/srv/preview-runtime",
+    GLAMPING_ADMIN_USER: "preview-admin",
+    GLAMPING_ADMIN_PASSWORD: "PreviewOnlyTest!123",
+    GLAMPING_B2B_ENABLED: "0"
+  }), /dedicated child/);
+  assert.throws(() => assertV2PreviewRuntimeEnv({
+    ...previewMarker,
+    V2_PREVIEW_DATA_ROOT: "/var/data/v2-preview-runtime",
+    GLAMPING_ADMIN_USER: "",
+    GLAMPING_ADMIN_PASSWORD: "",
+    GLAMPING_B2B_ENABLED: "0"
+  }), /explicit GLAMPING_ADMIN_USER/);
+  assert.throws(() => assertV2PreviewRuntimeEnv({
+    ...previewMarker,
+    V2_PREVIEW_DATA_ROOT: "/var/data/v2-preview-runtime",
+    GLAMPING_ADMIN_USER: "preview-admin",
+    GLAMPING_ADMIN_PASSWORD: "short",
+    GLAMPING_B2B_ENABLED: "0"
+  }), /12\+ character/);
+  assert.throws(() => assertV2PreviewRuntimeEnv({
+    ...previewMarker,
+    V2_PREVIEW_DATA_ROOT: "/var/data/v2-preview-runtime",
+    GLAMPING_ADMIN_USER: "preview-admin",
+    GLAMPING_ADMIN_PASSWORD: "PreviewOnlyTest!123",
+    GLAMPING_B2B_ENABLED: "1"
+  }), /GLAMPING_B2B_ENABLED=0/);
+  assert.deepEqual(assertV2PreviewRuntimeEnv({
+    ...previewMarker,
+    V2_PREVIEW_DATA_ROOT: "/var/data/v2-preview-runtime",
+    GLAMPING_ADMIN_USER: "preview-admin",
+    GLAMPING_ADMIN_PASSWORD: "PreviewOnlyTest!123",
+    GLAMPING_B2B_ENABLED: "0"
+  }), { preview: true, dataRoot: "/var/data/v2-preview-runtime" });
+  assert.deepEqual(assertV2PreviewRuntimeEnv({
+    RENDER: "true",
+    RENDER_SERVICE_NAME: "glamping-datalab-v2"
+  }), { preview: false });
+  assert.deepEqual(assertV2PreviewRuntimeEnv({ NODE_ENV: "test" }), { preview: false });
+
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "v2-preview-boundary-"));
   try {
+    const serviceOnlyMissingRoot = spawnV2({
+      RENDER_SERVICE_NAME: "lodging-datalab-preview"
+    });
+    assert.notEqual(await waitForExit(serviceOnlyMissingRoot.child), 0);
+    assert.match(serviceOnlyMissingRoot.output().stderr, /requires V2_PREVIEW_DATA_ROOT/);
+
+    const hostOnlyMissingRoot = spawnV2({
+      RENDER_EXTERNAL_HOSTNAME: "sa-labs-datalab-v4-preview.onrender.com"
+    });
+    assert.notEqual(await waitForExit(hostOnlyMissingRoot.child), 0);
+    assert.match(hostOnlyMissingRoot.output().stderr, /requires V2_PREVIEW_DATA_ROOT/);
+
+    const previewShortSecret = spawnV2({
+      RENDER_SERVICE_NAME: "lodging-datalab-preview",
+      V2_PREVIEW_DATA_ROOT: "/var/data/v2-preview-runtime",
+      GLAMPING_ADMIN_USER: "preview-admin",
+      GLAMPING_ADMIN_PASSWORD: "short",
+      GLAMPING_B2B_ENABLED: "0"
+    });
+    assert.notEqual(await waitForExit(previewShortSecret.child), 0);
+    assert.match(previewShortSecret.output().stderr, /12\+ character/);
+
     const relativeRoot = spawnV2({
       V2_PREVIEW_DATA_ROOT: "relative-preview-root",
       GLAMPING_ADMIN_USER: "preview-admin",

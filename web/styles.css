@@ -22839,12 +22839,13 @@ a.platform-row:hover {
 .report-target-row strong {
   grid-area: name;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--ink);
   font-size: 15px;
   font-weight: 950;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .report-target-row em {
@@ -22859,12 +22860,13 @@ a.platform-row:hover {
 .report-target-row small {
   grid-area: reason;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--muted);
   font-size: 12px;
   font-weight: 750;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .report-region-grid {
@@ -38332,7 +38334,8 @@ body.role-b2b .b2b-interest-workbench :where(button, input, summary, [tabindex="
 body.role-b2b .b2b-home-status-strip :where(button, a):focus-visible,
 body.role-b2b .b2b-simple-summary :where(button, a):focus-visible,
 body.role-b2b .b2b-home-workspace :where(button, a):focus-visible {
-  outline: none;
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
   box-shadow: var(--ui-focus-ring) !important;
 }
 
@@ -38870,6 +38873,35 @@ body.role-admin [data-admin-section-panel="files"] :is(button, input, select, te
 }
 
 @media (min-width: 721px) and (max-width: 1120px) {
+  body.role-admin .admin-console-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.role-admin .admin-queue-row {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, .55fr) minmax(0, 1fr) 52px minmax(70px, auto);
+  }
+
+  body.role-admin .admin-queue-row > * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  body.role-admin :is(
+    .admin-region-company-toolbar,
+    .admin-region-company-bulk,
+    .location-score-admin-form
+  ) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-region-company-bulk > div:last-of-type {
+    grid-column: 1 / -1;
+  }
+
+  body.role-admin .admin-region-company-toolbar button {
+    width: 100%;
+  }
+
   body.role-admin .admin-operations-context-grid,
   body.role-admin .report-metric-grid,
   body.role-admin .history-ops-metrics,
@@ -38934,6 +38966,45 @@ body.role-admin [data-admin-section-panel="files"] :is(button, input, select, te
 
   body.role-admin .admin-settings-actions button {
     width: 100%;
+  }
+
+  body.role-admin :is(
+    .admin-db-view-switch button,
+    .admin-db-audit-company-actions button,
+    .admin-db-audit-gate-actions button,
+    .admin-region-audit-filters button,
+    .admin-region-review-filter-summary button,
+    .admin-region-audit-head button,
+    [data-admin-region-company-focus],
+    .admin-region-company-row > button,
+    .admin-region-company-row .correction-gap button,
+    .company-review-actions button,
+    .target-gate-filters button,
+    .target-gate-recrawl > button,
+    .company-check-filters button,
+    .recrawl-auto-head button,
+    .recrawl-auto-list button,
+    .recrawl-batch-list button,
+    .recrawl-range-presets button
+  ),
+  :is(body.role-admin, body.role-b2b) .dictionary-chip,
+  body.role-admin #adminConsoleDashboard :is(
+    .admin-console-head button,
+    .admin-console-head a,
+    .admin-row-actions button,
+    .admin-region-company-toolbar input,
+    .admin-region-company-toolbar select,
+    .admin-region-company-toolbar button,
+    .admin-region-company-bulk input,
+    .admin-region-company-bulk button,
+    .location-candidate-actions button,
+    .location-request-actions button
+  ) {
+    min-height: var(--touch-target-min);
+  }
+
+  body.role-admin .admin-db-company-action :is(button, a) {
+    min-height: var(--touch-target-min) !important;
   }
 
   body.role-admin :is(.admin-member-detail-workbench, .admin-region-detail-panel, .admin-region-company-drawer, .admin-region-review-form) {
@@ -39781,6 +39852,17 @@ body.role-b2b :is(
   body.role-b2b :is(.b2b-account-actions, .b2b-secondary-actions) :is(a, button) {
     width: 100%;
   }
+
+  body.role-b2b .map-caption {
+    position: static;
+    width: 100%;
+    max-width: 100%;
+    transform: none;
+    border-radius: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
+  }
 }
 
 @media (max-width: 390px) {
@@ -39833,6 +39915,8 @@ body.role-b2b :is(
   .admin-db-channel-row,
   .admin-db-channel-product-box,
   .admin-db-channel-product-checks label,
+  .admin-db-audit-gate,
+  .admin-region-ops-queue,
   .admin-operations-context,
   .admin-member-detail-workbench,
   .admin-operation-status,
@@ -39864,6 +39948,8 @@ body.role-b2b :is(
   .history-card,
   .notice-card,
   .location-card,
+  .location-candidate-temp,
+  .location-request-queue,
   .run-apply-linked-queue,
   .collection-diagnostic-list div,
   .audit-status-strip span,
@@ -39889,6 +39975,41 @@ body.role-b2b :is(
   background-image: none !important;
   color: var(--color-text-primary) !important;
   text-shadow: none !important;
+}
+
+:root[data-theme="dark"] body.role-admin .app-shell :is(
+  .admin-db-audit-company-actions button,
+  .admin-db-audit-gate-head mark,
+  .admin-db-audit-gate-actions button
+) {
+  border-color: color-mix(in srgb, var(--color-action-primary) 48%, transparent) !important;
+  background: color-mix(in srgb, var(--color-action-primary) 12%, transparent) !important;
+  color: var(--color-action-primary) !important;
+}
+
+:root[data-theme="dark"] body.role-admin .app-shell .admin-db-audit-gatebar {
+  background: color-mix(in srgb, var(--color-border-default) 34%, transparent) !important;
+}
+
+:root[data-theme="dark"] body.role-b2b .app-shell .b2b-interest-lodge-card.is-selected,
+:root[data-theme="dark"] body.role-admin .app-shell .admin-db-applied-values,
+:root[data-theme="dark"] body.role-admin #adminConsoleDashboard :is(
+  .admin-region-card.active,
+  .admin-region-ops-queue-list button.active
+) {
+  border-color: var(--color-border-focus) !important;
+  box-shadow: inset 4px 0 0 var(--color-action-primary), var(--focus-ring) !important;
+}
+
+:root[data-theme="dark"] body.role-b2b .app-shell .b2b-home-journey article.active {
+  border-color: var(--color-action-primary) !important;
+  box-shadow: inset 4px 0 0 var(--color-action-primary) !important;
+}
+
+:root[data-theme="dark"] body.role-b2b .app-shell .b2b-home-journey article.done,
+:root[data-theme="dark"] body.role-admin #adminConsoleDashboard .admin-task-list article.active {
+  border-color: var(--color-status-success) !important;
+  box-shadow: inset 4px 0 0 var(--color-status-success) !important;
 }
 
 :root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell :is(

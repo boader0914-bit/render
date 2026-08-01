@@ -464,7 +464,7 @@ async function main() {
     assert.equal(systemThemeHarness.root.dataset.theme, "dark", "system theme applies without stored preference");
 
     const health = await requestLocal(baseUrl, "/api/health");
-    assert.equal(JSON.parse(health.body).authenticated, false, "health must not expose an authenticated fixture session");
+    assert.deepEqual(JSON.parse(health.body), { ok: true, loginRequired: true }, "health must expose only liveness metadata");
     const anonymousSession = await requestLocal(baseUrl, "/api/session");
     assert.equal(anonymousSession.response.status, 401, "anonymous session API remains protected");
     assert.match(String(anonymousSession.response.headers.get("content-type") || ""), /^application\/json\b/i, "anonymous session response type");

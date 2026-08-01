@@ -192,6 +192,8 @@ const DARK_TRANSPARENT_CARD_SELECTORS = [
   "[data-surface=\"light\"]",
   ".admin-card",
   ".admin-console-panel",
+  ".admin-db-audit-gate",
+  ".admin-region-ops-queue",
   ".admin-db-applied-values",
   ".admin-db-review-flash",
   ".admin-db-channel-panel",
@@ -225,6 +227,8 @@ const DARK_TRANSPARENT_CARD_SELECTORS = [
   ".history-card",
   ".notice-card",
   ".location-card",
+  ".location-candidate-temp",
+  ".location-request-queue",
   ".run-apply-linked-queue",
 ];
 
@@ -273,6 +277,12 @@ assert.doesNotMatch(darkTransparentBaseRule, /\bbox-shadow\s*:/, "transparent ca
 assert.match(styles, /\.b2b-interest-lodge-card\.is-selected\s*\{[^}]*border-color:[^}]*box-shadow:/s, "selected interest cards must retain border and inset cues");
 assert.match(styles, /\.admin-task-list article\.active\s*\{[^}]*border-color:/s, "active administrator task cards must retain a border cue");
 assert.match(styles, /\.b2b-home-journey article\.active,\s*body\.role-b2b \.b2b-home-journey article\.done\s*\{[^}]*border-color:/s, "active and completed journey cards must retain a border cue");
+assert.match(darkTransparentContract, /\.admin-db-audit-company-actions button,[\s\S]*?background:\s*color-mix\(in srgb, var\(--color-action-primary\) 12%, transparent\)/s, "dark audit actions must use a semantic translucent surface instead of legacy white");
+assert.match(darkTransparentContract, /\.admin-db-audit-gatebar\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--color-border-default\) 34%, transparent\)/s, "dark audit progress tracks must not retain a bright legacy surface");
+assert.match(darkTransparentContract, /\.b2b-interest-lodge-card\.is-selected,[\s\S]*?border-color:\s*var\(--color-border-focus\)[^}]*box-shadow:\s*inset 4px 0 0 var\(--color-action-primary\), var\(--focus-ring\)/s, "dark selected cards must retain border and inset focus cues");
+assert.match(darkTransparentContract, /\.b2b-home-journey article\.active\s*\{[^}]*border-color:[^}]*box-shadow:\s*inset/s, "dark active journey cards must retain a non-background cue");
+assert.match(darkTransparentContract, /\.b2b-home-journey article\.done,[\s\S]*?\.admin-task-list article\.active\s*\{[^}]*border-color:[^}]*box-shadow:\s*inset/s, "dark completed cards must retain a success border and inset cue");
+assert.match(styles, /body\.role-b2b \.b2b-home-workspace :where\(button, a\):focus-visible\s*\{[^}]*outline:\s*2px solid var\(--color-border-focus\)[^}]*outline-offset:\s*2px/s, "B2B home focus must expose a solid 3:1-capable outline");
 for (const selector of DARK_TRANSPARENT_CARD_SELECTORS) {
   assert.ok(darkTransparentContract.includes(selector), `missing transparent dark-card selector: ${selector}`);
 }
@@ -493,7 +503,7 @@ for (const [label, foreground, background, minimum] of LEGACY_REFERENCE_CONTRAST
 }
 
 assert.ok(index.includes('id="themeToggle"'), "authenticated shell must retain its theme toggle");
-assert.ok(index.indexOf('src="/login-theme.js"') < index.indexOf('href="/styles.css"'), "theme bootstrap must run before application CSS loads");
+assert.ok(index.indexOf('src="/login-theme.js"') < index.indexOf('href="/styles.css'), "theme bootstrap must run before versioned application CSS loads");
 assert.match(styles, /:focus-visible/);
 assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 

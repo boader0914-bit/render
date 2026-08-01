@@ -46,12 +46,22 @@ for (const asset of ["/login-theme.js", "/public-ui.css", "/manifest.webmanifest
   assert.match(server, new RegExp(`"${asset.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`), `public asset missing: ${asset}`);
 }
 
-const shellAssetVersions = [...server.matchAll(/(?:styles\.css|app\.js)\?v=([^"']+)/g)].map((match) => match[1]);
-assert.deepEqual(shellAssetVersions, ["v2-20260801-ui-release-v27", "v2-20260801-ui-release-v27"], "app CSS and JS must share the current release cache version");
-assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260801-ui-release-v27";/, "service worker must share the current UI asset version");
-assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v27";/, "service worker cache must rotate with the UI release");
+const expectedAssetVersion = "v2-20260801-ui-release-v28";
+const shellAssetVersions = [...indexHtml.matchAll(/(?:styles\.css|app\.js)\?v=([^"']+)/g)].map((match) => match[1]);
+assert.deepEqual(shellAssetVersions, [expectedAssetVersion, expectedAssetVersion], "index CSS and JS must share the current release cache version");
+assert.match(server, /const UI_ASSET_VERSION = "v2-20260801-ui-release-v28";/, "server must enforce the current UI asset version");
+assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260801-ui-release-v28";/, "service worker must share the current UI asset version");
+assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260801-ui-release-v28";/, "service worker cache must rotate with the UI release");
 assert.match(serviceWorker, /`\/styles\.css\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app stylesheet");
 assert.match(serviceWorker, /`\/app\.js\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app script");
+assert.match(serviceWorker, /const SENSITIVE_NAVIGATION_PATHS = new Set\(/, "service worker must declare sensitive navigation routes");
+assert.match(serviceWorker, /request\.mode === "navigate" \|\| SENSITIVE_NAVIGATION_PATHS\.has\(url\.pathname\)/, "navigation and sensitive HTML must remain network-only");
+assert.doesNotMatch(serviceWorker, /caches\.match\(request\).*caches\.match\("\/offline\.html"\)/s, "navigation fallback must not reuse cached personalized HTML");
+assert.match(
+  serviceWorker,
+  /\.catch\(\(\) => caches\.open\(CACHE_VERSION\)\.then\(\(cache\) => cache\.match\("\/offline\.html"\)\)\)/,
+  "navigation failure must use only the current release cache's static offline page",
+);
 
 for (const route of [
   "/login", "/signup", "/account-delete", "/terms", "/privacy", "/refund",
@@ -77,6 +87,11 @@ assert.match(themeScript, /"#070b12"\s*:\s*"#f3f6fa"/, "browser theme colors mus
 assert.doesNotMatch(appCss, /filter\s*:\s*(?:invert|hue-rotate)/i, "application shell must not use whole-page inversion");
 assert.doesNotMatch(publicCss, /filter\s*:\s*(?:invert|hue-rotate)/i, "public shell must not use whole-page inversion");
 assert.doesNotMatch(indexHtml, /<(?:link|script)\b[^>]+(?:href|src)="https?:\/\//i, "application shell must not auto-load external assets");
+assert.match(appCss, /@media \(min-width: 721px\) and \(max-width: 1120px\)[\s\S]*?body\.role-admin \.admin-console-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s, "release CSS must prevent tablet administrator queue clipping");
+assert.match(appCss, /@media \(min-width: 721px\) and \(max-width: 1120px\)[\s\S]*?body\.role-admin \.admin-queue-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.25fr\) minmax\(0, \.55fr\) minmax\(0, 1fr\)/s, "release queue columns must shrink before parent overflow can hide them");
+assert.match(appCss, /@media \(max-width: 720px\)[\s\S]*?body\.role-b2b \.map-caption\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s, "release CSS must keep mobile map captions visible");
+assert.match(appCss, /@media \(max-width: 720px\)[\s\S]*?\.admin-db-audit-gate-actions button[\s\S]*?min-height:\s*var\(--touch-target-min\)/s, "release CSS must keep primary mobile administrator actions at least 44px high");
+assert.match(appCss, /\.report-target-row strong\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s, "release CSS must keep long report names readable");
 
 function themeTokenNames(css, marker) {
   const markerIndex = css.indexOf(marker);

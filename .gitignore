@@ -1,4 +1,16 @@
 config/*.local.json
+.env
+.env.*
+!.env.example
+credentials/
+*.credential.json
+*.credentials.json
+/config/b2b_members.json
+/customer_db/
+/customer_db/b2b_members.json
+/customer_db/b2b_search_history.json
+/customer_db/b2b_interest_lodges.json
+/customer_db/account_delete_requests.json
 node_modules/
 logs/
 tools/

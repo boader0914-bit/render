@@ -365,6 +365,11 @@ assert.match(stage6Css, /:is\(body\.role-b2b, body\.role-admin\) \.b2b-demand-te
 assert.match(stage6Css, /@media \(max-width:\s*1120px\)/);
 assert.match(stage6Css, /@media \(max-width:\s*720px\)/);
 assert.match(stage6Css, /@media \(max-width:\s*390px\)/);
+assert.match(
+  stage6Css,
+  /@media \(max-width:\s*720px\)[\s\S]*?body\.role-b2b \.map-caption\s*\{[^}]*position:\s*static[^}]*max-width:\s*100%[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s,
+  "mobile map captions must remain fully visible instead of being clipped by the map frame",
+);
 assert.match(stage6Css, /prefers-reduced-motion:\s*reduce/);
 assert.match(stage6Css, /overflow-wrap:\s*anywhere/);
 

@@ -6,15 +6,7 @@ const {
   decorateLodgingResult,
   evaluateLodgingRelevance
 } = require("./lodging_collection_context.cjs");
-let XLSX = null;
-let ArtifactWorkbook = null;
-let ArtifactSpreadsheetFile = null;
-
-try {
-  XLSX = require("xlsx");
-} catch {
-  ({ Workbook: ArtifactWorkbook, SpreadsheetFile: ArtifactSpreadsheetFile } = require("@oai/artifact-tool"));
-}
+const { buildWorkbook } = require("./workbook_export.cjs");
 
 const PRODUCT_MODES = {
   all: "전체",
@@ -205,13 +197,6 @@ function safeFilePart(value, fallback = "검색") {
     .replace(/\s+/g, "_")
     .replace(/^_+|_+$/g, "");
   return (cleaned || fallback).slice(0, 80);
-}
-
-function safeCellValue(value) {
-  if (value === null || value === undefined) return "";
-  if (typeof value !== "string") return value;
-  if (value.length <= XLSX_CELL_TEXT_LIMIT) return value;
-  return `${value.slice(0, XLSX_CELL_TEXT_LIMIT - 48)}...(truncated ${value.length} chars)`;
 }
 
 function detailJsonRelativePath(meta = {}, jsonText = "") {
@@ -659,7 +644,6 @@ const OUTPUT_ROOT = process.env.OUTPUTS_DIR || process.env.DATA_DIR || "outputs"
 const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${province.slug}_glamping_${RUN_STAMP}`);
 const DETAIL_JSON_DIR_NAME = "details";
 const DETAIL_JSON_INLINE_LIMIT = 28000;
-const XLSX_CELL_TEXT_LIMIT = 32000;
 const detailJsonFiles = [];
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const REGIONAL_SEARCH_CONCURRENCY = boundedInteger(process.env.REGIONAL_SEARCH_CONCURRENCY, 4, 1, 8);
@@ -3198,53 +3182,6 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
     Object.assign(row, platformInventoryAuditFields(row.channel, row));
   }
   return rows;
-}
-
-function aoaFromRows(rows, columns) {
-  return [columns.map(safeCellValue), ...rows.map((row) => columns.map((column) => safeCellValue(row[column] ?? "")))];
-}
-
-function colName(index) {
-  let name = "";
-  let n = index + 1;
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    name = String.fromCharCode(65 + rem) + name;
-    n = Math.floor((n - 1) / 26);
-  }
-  return name;
-}
-
-function safeSheetName(name) {
-  return String(name || "Sheet").replace(/[\\/?*[\]:]/g, " ").slice(0, 31) || "Sheet";
-}
-
-function writeXlsxSheet(workbook, name, rows, columns) {
-  const data = aoaFromRows(rows, columns);
-  const sheet = XLSX.utils.aoa_to_sheet(data.length ? data : [columns]);
-  XLSX.utils.book_append_sheet(workbook, sheet, safeSheetName(name));
-}
-
-async function buildWorkbook(filePath, sheets) {
-  if (!XLSX) {
-    const workbook = ArtifactWorkbook.create();
-    for (const sheet of sheets) {
-      const data = aoaFromRows(sheet.rows, sheet.columns);
-      const worksheet = workbook.worksheets.add(safeSheetName(sheet.name));
-      if (data.length && sheet.columns.length) {
-        worksheet.getRange(`A1:${colName(sheet.columns.length - 1)}${data.length}`).values = data;
-      }
-    }
-    const output = await ArtifactSpreadsheetFile.exportXlsx(workbook);
-    await output.save(filePath);
-    return;
-  }
-
-  const workbook = XLSX.utils.book_new();
-  for (const sheet of sheets) {
-    writeXlsxSheet(workbook, sheet.name, sheet.rows, sheet.columns);
-  }
-  XLSX.writeFile(workbook, filePath);
 }
 
 async function main() {

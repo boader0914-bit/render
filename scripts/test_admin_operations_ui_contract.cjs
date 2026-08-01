@@ -490,6 +490,60 @@ assert.match(stageCss, /@media \(min-width: 721px\) and \(max-width: 1120px\)/);
 assert.match(stageCss, /@media \(max-width: 720px\)/);
 assert.match(stageCss, /@media \(max-width: 390px\)/);
 assert.match(stageCss, /overflow-wrap:\s*anywhere/);
+assert.match(
+  stageCss,
+  /@media \(min-width: 721px\) and \(max-width: 1120px\)[\s\S]*?body\.role-admin \.admin-console-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/s,
+  "administrator queues must collapse to one column before fixed queue columns are clipped",
+);
+assert.match(
+  stageCss,
+  /@media \(min-width: 721px\) and \(max-width: 1120px\)[\s\S]*?body\.role-admin \.admin-queue-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.25fr\) minmax\(0, \.55fr\) minmax\(0, 1fr\)/s,
+  "administrator queue columns must be allowed to shrink within the available content width",
+);
+assert.match(
+  stageCss,
+  /body\.role-admin \.admin-queue-row > \*\s*\{[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/s,
+  "administrator queue cells must wrap rather than disappear behind their details container",
+);
+assert.match(
+  stageCss,
+  /@media \(min-width: 721px\) and \(max-width: 1120px\)[\s\S]*?\.admin-region-company-toolbar,[\s\S]*?\.location-score-admin-form[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/s,
+  "region toolbars and score forms must use bounded two-column layouts at tablet widths",
+);
+assert.match(
+  stageCss,
+  /@media \(max-width: 720px\)[\s\S]*?\.admin-db-audit-gate-actions button[\s\S]*?min-height:\s*var\(--touch-target-min\)/s,
+  "mobile administrator queue and audit actions must meet the shared touch target",
+);
+for (const selector of [
+  ".admin-region-review-filter-summary button",
+  ".admin-region-audit-head button",
+  "[data-admin-region-company-focus]",
+  ".admin-region-company-row > button",
+  ".target-gate-filters button",
+  ".target-gate-recrawl > button",
+  ".company-check-filters button",
+  ".recrawl-auto-head button",
+  ".recrawl-auto-list button",
+  ".recrawl-batch-list button",
+  ".recrawl-range-presets button",
+]) {
+  assert.equal(
+    stageCss.includes(selector),
+    true,
+    `mobile operations touch-target rule must include ${selector}`,
+  );
+}
+assert.match(
+  css,
+  /\.report-target-row strong\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s,
+  "long report company names must wrap instead of becoming inaccessible ellipses",
+);
+assert.match(
+  css,
+  /\.report-target-row small\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s,
+  "long report reasons must wrap instead of becoming inaccessible ellipses",
+);
 assert.match(stageCss, /#adminMemberRequestDashboard \.admin-member-option\[aria-pressed="true"\]/, "selected member styling must outrank the dashboard button base rule");
 assert.match(stageCss, /#adminMemberRequestDashboard[\s\S]*:disabled[\s\S]*--color-disabled-surface/, "member and settings disabled controls must retain a semantic disabled surface");
 assert.match(stageCss, /button\.danger:not\(:disabled\)/, "member account suspension must remain visually distinct");
