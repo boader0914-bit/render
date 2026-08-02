@@ -17639,6 +17639,7 @@ a.platform-row:hover {
   position: relative;
   min-width: 0;
   display: block;
+  min-height: var(--control-height-default);
   overflow: hidden;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
@@ -17646,42 +17647,101 @@ a.platform-row:hover {
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.field-date-control input[type="date"] {
+.field .field-date-control input[type="date"] {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   min-height: var(--control-height-default);
   border: 0;
   border-radius: 0;
   background: transparent;
-  color: var(--color-text-primary);
-  padding: 0 12px;
+  color: transparent;
+  padding: 0 42px 0 12px;
   cursor: pointer;
-  -webkit-text-fill-color: currentColor;
+  caret-color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.field .field-date-control input[type="date"]::-webkit-datetime-edit {
+  color: transparent;
+  opacity: 0;
+}
+
+.field .field-date-control input[type="date"]::-webkit-calendar-picker-indicator {
+  position: relative;
+  z-index: 4;
+  cursor: pointer;
+  opacity: 1;
 }
 
 .field-date-control:focus-within {
   border-color: var(--color-border-focus);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-border-focus) 24%, transparent);
 }
 
-.field-date-control input[type="date"]:focus-visible {
+.field .field-date-control input[type="date"]:focus-visible {
   outline: none;
   box-shadow: none;
 }
 
+.field .field-date-control[data-keyboard-editing="true"] input[type="date"] {
+  color: var(--color-text-primary);
+  caret-color: auto;
+  -webkit-text-fill-color: currentColor;
+}
+
+.field .field-date-control[data-keyboard-editing="true"] input[type="date"]::-webkit-datetime-edit {
+  color: currentColor;
+  opacity: 1;
+}
+
 .field .field-date-control .field-date-weekday {
-  position: static;
-  display: block;
-  min-height: 28px;
-  border-top: 1px solid var(--color-border-default);
-  background: color-mix(in srgb, var(--color-action-primary) 5%, var(--color-surface-raised));
-  color: var(--color-text-secondary);
-  padding: 7px 12px;
-  font-size: 12px;
+  position: absolute;
+  z-index: 2;
+  inset: 1px 42px 1px 12px;
+  display: flex;
+  align-items: center;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  padding: 0;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   font-weight: 850;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
+  line-height: 1;
+  overflow: hidden;
+  overflow-wrap: normal;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field .field-date-control[data-keyboard-editing="true"] .field-date-weekday {
+  visibility: hidden;
+}
+
+.field-date-control:has(input[type="date"]:disabled) {
+  border-color: var(--color-disabled-border);
+  background: var(--color-disabled-surface);
+}
+
+.field .field-date-control input[type="date"]:disabled {
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.field .field-date-control input[type="date"]:disabled + .field-date-weekday {
+  color: var(--color-disabled-text);
+}
+
+@media (forced-colors: active) {
+  .field-date-control:focus-within {
+    outline-color: Highlight;
+  }
 }
 
 .field input,

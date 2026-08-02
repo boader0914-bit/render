@@ -14,7 +14,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <script src="/login-theme.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=v2-20260802-ui-release-v31">
+  <link rel="stylesheet" href="/styles.css?v=v2-20260802-ui-release-v32">
 </head>
 <body class="app-booting">
   <a class="skip-link" href="#appMain">본문 바로가기</a>
@@ -280,17 +280,19 @@
             <p class="search-intent-hint" id="crawlSearchIntentHint" aria-live="polite"></p>
             <div class="field-grid">
               <label class="field collection-date-field">
-                <span>시작일</span>
+                <span id="checkInLabel">시작일</span>
                 <span class="field-date-control">
-                  <input id="checkInInput" type="date" aria-describedby="checkInWeekday">
-                  <small class="field-date-weekday" id="checkInWeekday" aria-live="polite"></small>
+                  <input id="checkInInput" type="date" aria-labelledby="checkInLabel" aria-describedby="checkInWeekdayA11y">
+                  <small class="field-date-weekday" id="checkInWeekday" aria-hidden="true"></small>
+                  <small class="sr-only" id="checkInWeekdayA11y" aria-live="polite" aria-atomic="true"></small>
                 </span>
               </label>
               <label class="field collection-date-field">
-                <span>종료일</span>
+                <span id="checkOutLabel">종료일</span>
                 <span class="field-date-control">
-                  <input id="checkOutInput" type="date" aria-describedby="checkOutWeekday">
-                  <small class="field-date-weekday" id="checkOutWeekday" aria-live="polite"></small>
+                  <input id="checkOutInput" type="date" aria-labelledby="checkOutLabel" aria-describedby="checkOutWeekdayA11y">
+                  <small class="field-date-weekday" id="checkOutWeekday" aria-hidden="true"></small>
+                  <small class="sr-only" id="checkOutWeekdayA11y" aria-live="polite" aria-atomic="true"></small>
                 </span>
               </label>
             </div>
@@ -531,6 +533,6 @@
 
   <script src="/lodging-search-intent.js"></script>
   <script src="/lodging-category-profile.js"></script>
-  <script src="/app.js?v=v2-20260802-ui-release-v31"></script>
+  <script src="/app.js?v=v2-20260802-ui-release-v32"></script>
 </body>
 </html>

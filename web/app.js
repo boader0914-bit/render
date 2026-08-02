@@ -448,6 +448,8 @@ const els = {
   checkOutInput: document.getElementById("checkOutInput"),
   checkInWeekday: document.getElementById("checkInWeekday"),
   checkOutWeekday: document.getElementById("checkOutWeekday"),
+  checkInWeekdayA11y: document.getElementById("checkInWeekdayA11y"),
+  checkOutWeekdayA11y: document.getElementById("checkOutWeekdayA11y"),
   searchModeInput: document.getElementById("searchModeInput"),
   productModeInput: document.getElementById("productModeInput"),
   collectionPurposeInput: document.getElementById("collectionPurposeInput"),
@@ -579,6 +581,7 @@ function fmtSearchRate(value) {
 }
 
 const COLLECTION_WEEKDAY_LABELS = Object.freeze(["일", "월", "화", "수", "목", "금", "토"]);
+const COLLECTION_WEEKDAY_FULL_LABELS = Object.freeze(["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"]);
 
 function collectionDateWeekdayLabel(value = "") {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
@@ -595,11 +598,40 @@ function collectionDateWeekdayLabel(value = "") {
   return `${match[1]}-${match[2]}-${match[3]}(${COLLECTION_WEEKDAY_LABELS[date.getUTCDay()]})`;
 }
 
+function collectionDateWeekdayA11yLabel(value = "") {
+  const formatted = collectionDateWeekdayLabel(value);
+  const match = /\(([일월화수목금토])\)$/.exec(formatted);
+  const weekdayIndex = match ? COLLECTION_WEEKDAY_LABELS.indexOf(match[1]) : -1;
+  return weekdayIndex >= 0 ? `선택 요일: ${COLLECTION_WEEKDAY_FULL_LABELS[weekdayIndex]}` : "";
+}
+
 function syncCollectionDateWeekdays() {
-  const checkInText = collectionDateWeekdayLabel(els.checkInInput?.value);
-  const checkOutText = collectionDateWeekdayLabel(els.checkOutInput?.value);
+  const checkInText = collectionDateWeekdayLabel(els.checkInInput?.value) || "날짜 선택";
+  const checkOutText = collectionDateWeekdayLabel(els.checkOutInput?.value) || "날짜 선택";
+  const checkInA11yText = collectionDateWeekdayA11yLabel(els.checkInInput?.value);
+  const checkOutA11yText = collectionDateWeekdayA11yLabel(els.checkOutInput?.value);
   if (els.checkInWeekday && els.checkInWeekday.textContent !== checkInText) els.checkInWeekday.textContent = checkInText;
   if (els.checkOutWeekday && els.checkOutWeekday.textContent !== checkOutText) els.checkOutWeekday.textContent = checkOutText;
+  if (els.checkInWeekdayA11y && els.checkInWeekdayA11y.textContent !== checkInA11yText) els.checkInWeekdayA11y.textContent = checkInA11yText;
+  if (els.checkOutWeekdayA11y && els.checkOutWeekdayA11y.textContent !== checkOutA11yText) els.checkOutWeekdayA11y.textContent = checkOutA11yText;
+}
+
+function requestCollectionDatePicker(input) {
+  if (!input || input.disabled || input.readOnly || typeof input.showPicker !== "function") return false;
+  try {
+    input.showPicker();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function setCollectionDateKeyboardEditing(input, active) {
+  const control = input?.closest?.(".field-date-control");
+  if (!control) return false;
+  if (active) control.setAttribute("data-keyboard-editing", "true");
+  else control.removeAttribute("data-keyboard-editing");
+  return true;
 }
 
 function parseDate(value) {
@@ -34023,6 +34055,24 @@ function bindEvents() {
   [els.keywordInput, els.checkInInput, els.checkOutInput, els.searchModeInput, els.productModeInput, els.collectionPurposeInput, els.detailRankRangesInput].forEach((input) => {
     input?.addEventListener("input", updateCrawlSpeedPreview);
     input?.addEventListener("change", updateCrawlSpeedPreview);
+  });
+  [els.checkInInput, els.checkOutInput].forEach((input) => {
+    input?.addEventListener("pointerdown", () => {
+      setCollectionDateKeyboardEditing(input, false);
+    });
+    input?.addEventListener("click", () => {
+      requestCollectionDatePicker(input);
+    });
+    input?.addEventListener("keydown", (event) => {
+      setCollectionDateKeyboardEditing(input, true);
+      if (event.repeat) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const pickerOpened = requestCollectionDatePicker(input);
+      if (pickerOpened || event.key === "Enter") event.preventDefault();
+    });
+    input?.addEventListener("blur", () => {
+      setCollectionDateKeyboardEditing(input, false);
+    });
   });
   els.dictionarySearchForm?.addEventListener("submit", (event) => {
     event.preventDefault();

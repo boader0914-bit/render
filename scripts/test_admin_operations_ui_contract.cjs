@@ -141,14 +141,23 @@ for (const id of [
 const crawlFormMatch = html.match(/<form\b[^>]*\bid="crawlForm"[^>]*>[\s\S]*?<\/form>/i);
 assert.ok(crawlFormMatch, "collection form must remain available");
 const crawlFormHtml = crawlFormMatch[0];
-assert.match(crawlFormHtml, /<span>시작일<\/span>/, "collection check-in label must use 시작일");
-assert.match(crawlFormHtml, /<span>종료일<\/span>/);
+assert.match(crawlFormHtml, /<span id="checkInLabel">시작일<\/span>/, "collection check-in label must use 시작일");
+assert.match(crawlFormHtml, /<span id="checkOutLabel">종료일<\/span>/);
 assert.match(openingTagById("checkInInput"), /type="date"/);
-assert.match(openingTagById("checkInInput"), /aria-describedby="checkInWeekday"/);
+assert.match(openingTagById("checkInInput"), /aria-labelledby="checkInLabel"/);
+assert.match(openingTagById("checkInInput"), /aria-describedby="checkInWeekdayA11y"/, "the input must announce only the weekday-only accessible description");
 assert.match(openingTagById("checkOutInput"), /type="date"/);
-assert.match(openingTagById("checkOutInput"), /aria-describedby="checkOutWeekday"/);
-assert.match(openingTagById("checkInWeekday"), /aria-live="polite"/);
-assert.match(openingTagById("checkOutWeekday"), /aria-live="polite"/);
+assert.match(openingTagById("checkOutInput"), /aria-labelledby="checkOutLabel"/);
+assert.match(openingTagById("checkOutInput"), /aria-describedby="checkOutWeekdayA11y"/, "the input must announce only the weekday-only accessible description");
+assert.match(openingTagById("checkInWeekday"), /aria-hidden="true"/);
+assert.match(openingTagById("checkOutWeekday"), /aria-hidden="true"/);
+assert.doesNotMatch(openingTagById("checkInWeekday"), /aria-live=/);
+assert.doesNotMatch(openingTagById("checkOutWeekday"), /aria-live=/);
+for (const id of ["checkInWeekdayA11y", "checkOutWeekdayA11y"]) {
+  assert.match(openingTagById(id), /class="sr-only"/);
+  assert.match(openingTagById(id), /aria-live="polite"/);
+  assert.match(openingTagById(id), /aria-atomic="true"/);
+}
 assert.equal((crawlFormHtml.match(/class="field-date-control"/g) || []).length, 2, "both collection dates must use the in-card date control");
 assert.match(crawlFormHtml, /<span class="field-date-control">\s*<input id="checkInInput"[\s\S]*?<small class="field-date-weekday" id="checkInWeekday"[\s\S]*?<\/span>/);
 assert.match(crawlFormHtml, /<span class="field-date-control">\s*<input id="checkOutInput"[\s\S]*?<small class="field-date-weekday" id="checkOutWeekday"[\s\S]*?<\/span>/);
@@ -176,6 +185,42 @@ assert.equal(weekdayLabel("2026-02-30"), "");
 assert.equal(weekdayLabel(""), "");
 assert.match(functionBlock("updateCrawlSpeedPreview"), /syncCollectionDateWeekdays\(\)/);
 
+const weekdayA11yLabel = vm.runInNewContext(`(() => {
+  const collectionDateWeekdayLabel = ${functionSource("collectionDateWeekdayLabel")};
+  return ${functionSource("collectionDateWeekdayA11yLabel")};
+})()`, {
+  COLLECTION_WEEKDAY_LABELS: ["일", "월", "화", "수", "목", "금", "토"],
+  COLLECTION_WEEKDAY_FULL_LABELS: ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"],
+});
+assert.equal(weekdayA11yLabel("2026-08-03"), "선택 요일: 월요일");
+assert.equal(weekdayA11yLabel("2026-08-08"), "선택 요일: 토요일");
+assert.equal(weekdayA11yLabel(""), "");
+assert.match(functionBlock("syncCollectionDateWeekdays"), /\|\|\s*"날짜 선택"[\s\S]*?collectionDateWeekdayA11yLabel[\s\S]*?checkInWeekdayA11y[\s\S]*?checkOutWeekdayA11y/, "empty dates need one visible fallback and weekday-only accessible updates");
+
+const requestDatePicker = vm.runInNewContext(`(${functionSource("requestCollectionDatePicker")})`);
+let pickerCalls = 0;
+assert.equal(requestDatePicker({ disabled: false, readOnly: false, showPicker() { pickerCalls += 1; } }), true);
+assert.equal(pickerCalls, 1);
+assert.equal(requestDatePicker({ disabled: true, readOnly: false, showPicker() { pickerCalls += 1; } }), false);
+assert.equal(requestDatePicker({ disabled: false, readOnly: true, showPicker() { pickerCalls += 1; } }), false);
+assert.equal(requestDatePicker({ disabled: false, readOnly: false }), false);
+assert.equal(requestDatePicker({ disabled: false, readOnly: false, showPicker() { throw new Error("picker unavailable"); } }), false);
+assert.equal(pickerCalls, 1, "disabled, read-only, missing and failing pickers must not count as opened");
+
+const keyboardControl = {
+  attributes: new Map(),
+  setAttribute(name, value) { this.attributes.set(name, value); },
+  removeAttribute(name) { this.attributes.delete(name); },
+};
+const keyboardInput = { closest(selector) { return selector === ".field-date-control" ? keyboardControl : null; } };
+const setKeyboardEditing = vm.runInNewContext(`(${functionSource("setCollectionDateKeyboardEditing")})`);
+assert.equal(setKeyboardEditing(keyboardInput, true), true);
+assert.equal(keyboardControl.attributes.get("data-keyboard-editing"), "true");
+assert.equal(setKeyboardEditing(keyboardInput, false), true);
+assert.equal(keyboardControl.attributes.has("data-keyboard-editing"), false);
+assert.equal(setKeyboardEditing(null, true), false);
+assert.match(functionBlock("bindEvents"), /\[els\.checkInInput,\s*els\.checkOutInput\][\s\S]*?addEventListener\("pointerdown"[\s\S]*?setCollectionDateKeyboardEditing\(input,\s*false\)[\s\S]*?addEventListener\("click"[\s\S]*?requestCollectionDatePicker\(input\)[\s\S]*?addEventListener\("keydown"[\s\S]*?setCollectionDateKeyboardEditing\(input,\s*true\)[\s\S]*?event\.repeat[\s\S]*?event\.key !== "Enter"[\s\S]*?event\.key !== " "[\s\S]*?pickerOpened\s*=\s*requestCollectionDatePicker\(input\)[\s\S]*?pickerOpened\s*\|\|\s*event\.key === "Enter"[\s\S]*?event\.preventDefault\(\)[\s\S]*?addEventListener\("blur"[\s\S]*?setCollectionDateKeyboardEditing\(input,\s*false\)/, "pointer/touch must keep the exact mirror, keyboard editing must be explicit, and Enter must not submit the collection form");
+
 for (const functionName of [
   "ensureCrawlControls",
   "renderCollectionPurposeRoutePreview",
@@ -201,12 +246,18 @@ assert.match(functionBlock("crawlPreviewMeta"), /source:\s*"client_fallback"[\s\
 assert.match(functionBlock("crawlEstimateBasisText"), /최근 실측[\s\S]*confidenceLabel/);
 assert.match(functionBlock("crawlEstimateBasisText"), /uncertaintySeconds[\s\S]*오차범위/);
 assert.match(css, /\.field\s+\.field-date-weekday\s*\{[^}]*font-variant-numeric:\s*tabular-nums[^}]*overflow-wrap:\s*anywhere/s);
-assert.match(css, /\.field-date-control\s*\{[^}]*position:\s*relative[^}]*min-width:\s*0[^}]*overflow:\s*hidden[^}]*border:\s*1px\s+solid\s+var\(--color-border-default\)[^}]*border-radius:\s*var\(--radius-md\)[^}]*background:\s*var\(--color-surface-raised\)/s);
-assert.match(css, /\.field-date-control\s+input\[type="date"\]\s*\{[^}]*display:\s*block[^}]*border:\s*0[^}]*background:\s*transparent[^}]*color:\s*var\(--color-text-primary\)[^}]*cursor:\s*pointer[^}]*-webkit-text-fill-color:\s*currentColor/s);
-assert.match(css, /\.field-date-control:focus-within\s*\{[^}]*border-color:\s*var\(--color-border-focus\)[^}]*box-shadow:/s);
-assert.match(css, /\.field\s+\.field-date-control\s+\.field-date-weekday\s*\{[^}]*position:\s*static[^}]*display:\s*block[^}]*border-top:\s*1px\s+solid\s+var\(--color-border-default\)[^}]*padding:\s*7px\s+12px[^}]*overflow-wrap:\s*anywhere/s);
-assert.doesNotMatch(css, /\.field-date-control(?:\s+input\[type="date"\])?[^}]*color:\s*transparent/s, "date controls must keep the native input visible and interactive");
-assert.doesNotMatch(css, /\.field-date-control\s+input\[type="date"\]::\-webkit-calendar-picker-indicator\s*\{[^}]*opacity:\s*0/s, "native calendar controls must not be hidden");
+assert.match(css, /\.field-date-control\s*\{[^}]*position:\s*relative[^}]*min-width:\s*0[^}]*min-height:\s*var\(--control-height-default\)[^}]*overflow:\s*hidden[^}]*border:\s*1px\s+solid\s+var\(--color-border-default\)[^}]*border-radius:\s*var\(--radius-md\)[^}]*background:\s*var\(--color-surface-raised\)/s);
+assert.match(css, /\.field\s+\.field-date-control\s+input\[type="date"\]\s*\{[^}]*position:\s*relative[^}]*display:\s*block[^}]*border:\s*0[^}]*background:\s*transparent[^}]*color:\s*transparent[^}]*padding:\s*0\s+42px\s+0\s+12px[^}]*cursor:\s*pointer[^}]*-webkit-text-fill-color:\s*transparent/s, "the scoped selector must outrank the later administrator input color rule in Firefox");
+assert.doesNotMatch(css, /\.field\s+\.field-date-control\s+input\[type="date"\]\s*\{[^}]*opacity:\s*0/s, "the real date input must remain a full interactive control");
+assert.match(css, /\.field\s+\.field-date-control\s+input\[type="date"\]::\-webkit-calendar-picker-indicator\s*\{[^}]*cursor:\s*pointer[^}]*opacity:\s*1/s, "the native calendar indicator must stay visible and interactive");
+assert.match(css, /\.field-date-control:focus-within\s*\{[^}]*border-color:\s*var\(--color-border-focus\)[^}]*outline:\s*2px\s+solid\s+transparent[^}]*box-shadow:/s);
+assert.match(css, /\.field\s+\.field-date-control\[data-keyboard-editing="true"\]\s+input\[type="date"\]\s*\{[^}]*color:\s*var\(--color-text-primary\)[^}]*-webkit-text-fill-color:\s*currentColor/s, "actual keyboard editing must restore the native editable date text");
+assert.match(css, /\.field\s+\.field-date-control\s+\.field-date-weekday\s*\{[^}]*position:\s*absolute[^}]*inset:\s*1px\s+42px\s+1px\s+12px[^}]*display:\s*flex[^}]*border:\s*0[^}]*background:\s*transparent[^}]*font-size:\s*14px[^}]*pointer-events:\s*none[^}]*white-space:\s*nowrap/s);
+assert.match(css, /\.field\s+\.field-date-control\[data-keyboard-editing="true"\]\s+\.field-date-weekday\s*\{[^}]*visibility:\s*hidden/s, "only one date representation may be visible during actual keyboard editing");
+assert.doesNotMatch(css, /input\[type="date"\]:focus-visible\s*\+\s*\.field-date-weekday/, "pointer and touch focus must not hide the exact formatted date");
+assert.doesNotMatch(css, /\.field\s+\.field-date-control\s+\.field-date-weekday\s*\{[^}]*border-top:/s, "the duplicate second date row must not return");
+assert.match(css, /\.field-date-control:has\(input\[type="date"\]:disabled\)\s*\{[^}]*border-color:\s*var\(--color-disabled-border\)[^}]*background:\s*var\(--color-disabled-surface\)/s);
+assert.match(css, /@media\s*\(forced-colors:\s*active\)[\s\S]*?\.field-date-control:focus-within\s*\{[^}]*outline-color:\s*Highlight/s);
 
 assert.match(functionBlock("renderAdminCollectionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
 assert.match(functionBlock("renderAdminRegionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
