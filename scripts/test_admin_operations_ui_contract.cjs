@@ -201,12 +201,12 @@ assert.match(functionBlock("crawlPreviewMeta"), /source:\s*"client_fallback"[\s\
 assert.match(functionBlock("crawlEstimateBasisText"), /최근 실측[\s\S]*confidenceLabel/);
 assert.match(functionBlock("crawlEstimateBasisText"), /uncertaintySeconds[\s\S]*오차범위/);
 assert.match(css, /\.field\s+\.field-date-weekday\s*\{[^}]*font-variant-numeric:\s*tabular-nums[^}]*overflow-wrap:\s*anywhere/s);
-assert.match(css, /\.field-date-control\s*\{[^}]*position:\s*relative[^}]*min-width:\s*0[^}]*display:\s*block/s);
-assert.match(css, /\.field-date-control::after\s*\{[^}]*right:\s*13px[^}]*width:\s*16px[^}]*height:\s*16px[^}]*pointer-events:\s*none[^}]*translateY\(-50%\)/s);
-assert.match(css, /\.field-date-control\s+input\[type="date"\]\s*\{[^}]*padding-right:\s*42px[^}]*color:\s*transparent[^}]*-webkit-text-fill-color:\s*transparent/s);
-assert.match(css, /\.field-date-control\s+input\[type="date"\]::\-webkit-datetime-edit\s*\{[^}]*opacity:\s*0/s);
-assert.match(css, /\.field-date-control\s+input\[type="date"\]::\-webkit-calendar-picker-indicator\s*\{[^}]*cursor:\s*pointer[^}]*opacity:\s*0/s);
-assert.match(css, /\.field\s+\.field-date-control\s+\.field-date-weekday\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0\s+42px\s+0\s+12px[^}]*align-items:\s*center[^}]*pointer-events:\s*none[^}]*white-space:\s*nowrap/s);
+assert.match(css, /\.field-date-control\s*\{[^}]*position:\s*relative[^}]*min-width:\s*0[^}]*overflow:\s*hidden[^}]*border:\s*1px\s+solid\s+var\(--color-border-default\)[^}]*border-radius:\s*var\(--radius-md\)[^}]*background:\s*var\(--color-surface-raised\)/s);
+assert.match(css, /\.field-date-control\s+input\[type="date"\]\s*\{[^}]*display:\s*block[^}]*border:\s*0[^}]*background:\s*transparent[^}]*color:\s*var\(--color-text-primary\)[^}]*cursor:\s*pointer[^}]*-webkit-text-fill-color:\s*currentColor/s);
+assert.match(css, /\.field-date-control:focus-within\s*\{[^}]*border-color:\s*var\(--color-border-focus\)[^}]*box-shadow:/s);
+assert.match(css, /\.field\s+\.field-date-control\s+\.field-date-weekday\s*\{[^}]*position:\s*static[^}]*display:\s*block[^}]*border-top:\s*1px\s+solid\s+var\(--color-border-default\)[^}]*padding:\s*7px\s+12px[^}]*overflow-wrap:\s*anywhere/s);
+assert.doesNotMatch(css, /\.field-date-control(?:\s+input\[type="date"\])?[^}]*color:\s*transparent/s, "date controls must keep the native input visible and interactive");
+assert.doesNotMatch(css, /\.field-date-control\s+input\[type="date"\]::\-webkit-calendar-picker-indicator\s*\{[^}]*opacity:\s*0/s, "native calendar controls must not be hidden");
 
 assert.match(functionBlock("renderAdminCollectionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
 assert.match(functionBlock("renderAdminRegionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);

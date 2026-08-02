@@ -17639,65 +17639,49 @@ a.platform-row:hover {
   position: relative;
   min-width: 0;
   display: block;
-}
-
-.field-date-control::after {
-  content: "";
-  position: absolute;
-  z-index: 4;
-  top: 50%;
-  right: 13px;
-  width: 16px;
-  height: 16px;
-  box-sizing: border-box;
-  border: 1.5px solid var(--color-text-secondary);
-  border-radius: 3px;
-  background:
-    linear-gradient(var(--color-text-secondary), var(--color-text-secondary)) 0 4px / 100% 1.5px no-repeat,
-    linear-gradient(var(--color-text-secondary), var(--color-text-secondary)) 3px 0 / 1.5px 4px no-repeat,
-    linear-gradient(var(--color-text-secondary), var(--color-text-secondary)) calc(100% - 3px) 0 / 1.5px 4px no-repeat;
-  pointer-events: none;
-  transform: translateY(-50%);
+  overflow: hidden;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .field-date-control input[type="date"] {
-  position: relative;
-  z-index: 1;
-  padding-right: 42px;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  caret-color: transparent;
-}
-
-.field-date-control input[type="date"]::-webkit-datetime-edit {
-  color: transparent;
-  opacity: 0;
-}
-
-.field-date-control input[type="date"]::-webkit-calendar-picker-indicator {
-  position: relative;
-  z-index: 3;
+  display: block;
+  width: 100%;
+  min-height: var(--control-height-default);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  padding: 0 12px;
   cursor: pointer;
-  opacity: 0;
+  -webkit-text-fill-color: currentColor;
+}
+
+.field-date-control:focus-within {
+  border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-border-focus) 24%, transparent);
+}
+
+.field-date-control input[type="date"]:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .field .field-date-control .field-date-weekday {
-  position: absolute;
-  z-index: 2;
-  inset: 0 42px 0 12px;
-  display: flex;
-  align-items: center;
-  color: var(--color-text-primary);
-  background: var(--color-surface-raised);
-  font-size: 14px;
+  position: static;
+  display: block;
+  min-height: 28px;
+  border-top: 1px solid var(--color-border-default);
+  background: color-mix(in srgb, var(--color-action-primary) 5%, var(--color-surface-raised));
+  color: var(--color-text-secondary);
+  padding: 7px 12px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-weight: 850;
-  line-height: 1;
-  overflow: hidden;
-  overflow-wrap: normal;
-  pointer-events: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .field input,
