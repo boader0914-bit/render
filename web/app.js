@@ -2163,9 +2163,14 @@ function crawlEstimateBasisText(basis = {}) {
   const timing = basis.timing || {};
   let timingText = "예상 기준: 조건 모델";
   if (timing.source === "measured") {
-    timingText = `예상 기준: 최근 유사 수집 ${fmtNumber(timing.sampleCount)}건 평균 ${formatElapsed(timing.averageSeconds)}`;
+    const uncertaintyText = Number(timing.uncertaintySeconds) > 0
+      ? ` · 오차범위 ±${formatElapsed(timing.uncertaintySeconds)}`
+      : "";
+    timingText = `예상 기준: 최근 실측 ${fmtNumber(timing.sampleCount)}건 보정 · 신뢰도 ${timing.confidenceLabel || "낮음"}${uncertaintyText}`;
   } else if (timing.source === "recent_result") {
     timingText = `예상 기준: 동일 조건 최근 결과${timing.ageSeconds ? ` · ${formatElapsed(timing.ageSeconds)} 전 수집` : ""}`;
+  } else if (timing.source === "client_fallback") {
+    timingText = "예상 기준: 서버 실측 확인 중";
   }
   const purposeLabel = basis.collectionPurposeLabel || collectionPurposeLabel(basis.collectionPurpose || "revenue_detail");
   return `${purposeLabel} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
@@ -2184,27 +2189,40 @@ function crawlPreviewMeta(payload = {}) {
   const fast = payload.collectionMode === "fast";
   const purpose = collectionPurposeProfile(payload.collectionPurpose || "revenue_detail");
   const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
+  const detailPlaceCount = fast || !purpose.collectBookingStock
+    ? 0
+    : Math.max(0, Math.min(20, rangeCount));
   const placeLimit = days > 1 && !fast && purpose.collectWeeklyRange
     ? Math.max(0, Math.min(20, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange))))
     : 0;
   const searchSeconds = payload.searchMode === "company" ? 55 : 95;
-  const trendSeconds = payload.searchMode === "keyword" ? (purpose.key === "demand_location" ? 55 : 25) : 10;
-  const productSeconds = fast || !purpose.collectBookingStock ? 0 : (payload.productMode === "all" ? 45 : 26);
+  const productSeconds = detailPlaceCount ? 12 + detailPlaceCount * 3.3 : 6;
   const rangeSeconds = !fast && placeLimit
-    ? placeLimit * days * (payload.productMode === "all" ? 5.5 : 4.2)
+    ? placeLimit * days * 4.8
     : 0;
-  const regionalSeconds = !fast && purpose.collectRegional ? (purpose.key === "demand_location" ? 130 : 80) : 0;
+  const willCollectRegional = !fast && purpose.collectRegional && payload.searchMode !== "company";
+  const regionalSeconds = willCollectRegional ? (purpose.key === "demand_location" ? 130 : 80) : 0;
   const otaSeconds = !fast && purpose.collectOta ? 35 : 0;
   const ioSeconds = fast ? 18 : 35;
   const stages = [
-    { key: "rank", label: "순위 수집", seconds: searchSeconds + Math.max(0, rangeCount - 20) * 1.2, detail: `${purpose.label} 기준으로 네이버 순위와 업체 기본 정보를 정리합니다.` },
-    { key: "trend", label: purpose.key === "demand_location" ? "수요·입지 확인" : "수요 확인", seconds: trendSeconds, detail: purpose.key === "demand_location" ? "검색수요, 트렌드, 지역 클러스터 보정값을 확인합니다." : "검색수요와 저장된 트렌드를 확인합니다." },
+    { key: "rank", label: "순위 수집", seconds: searchSeconds, detail: `${purpose.label} 기준으로 네이버 순위와 업체 기본 정보를 정리합니다.` },
+    regionalSeconds || otaSeconds
+      ? {
+          key: "ota",
+          label: regionalSeconds && otaSeconds ? "지역/보조 채널" : regionalSeconds ? "지역권 노출" : "보조 채널",
+          seconds: regionalSeconds + otaSeconds,
+          detail: regionalSeconds && otaSeconds
+            ? "지역권 노출과 OTA 보조 채널을 순서대로 확인합니다."
+            : regionalSeconds
+              ? "검색 기준 지역과 인접 권역 노출을 확인합니다."
+              : "OTA 보조 채널 노출을 확인합니다."
+        }
+      : null,
     fast
       ? { key: "inventory", label: "상세 생략", seconds: 6, detail: "빠른 순위 모드라 날짜별 재고와 가격 확인을 건너뜁니다." }
       : { key: "inventory", label: purpose.key === "basic_db" ? "상품/금액 확인" : "재고/가격 확인", seconds: productSeconds + rangeSeconds, detail: `${payload.detailRankRanges || purpose.defaultRange}위 중 상세 대상의 날짜별 수량과 요일별 가격을 확인합니다.` },
-    !fast ? { key: "ota", label: purpose.key === "demand_location" ? "입지/클러스터" : "보조 채널", seconds: otaSeconds + regionalSeconds, detail: purpose.key === "demand_location" ? "지역 클러스터와 입지 보정 신호를 함께 정리합니다." : "OTA 보조 신호와 지역 수요 데이터를 정리합니다." } : null,
     { key: "save", label: "저장/분석", seconds: ioSeconds, detail: "수집 결과와 업체 기준값을 갱신합니다." }
-  ].filter(Boolean).filter((stage) => stage.key !== "ota" || purpose.collectOta || purpose.collectRegional).map((stage, index) => ({
+  ].filter(Boolean).map((stage, index) => ({
     ...stage,
     seconds: Math.max(4, Math.round(stage.seconds || 0)),
     status: index === 0 ? "active" : "pending",
@@ -2217,7 +2235,7 @@ function crawlPreviewMeta(payload = {}) {
       inventoryStage.detail = `${payload.detailRankRanges || purpose.defaultRange}위 상품 구성과 대표 가격을 확인하고 기간별 매출 수집은 제외합니다.`;
     }
   }
-  if (!fast && purpose.collectRegional && !purpose.collectOta) {
+  if (!fast && willCollectRegional && !purpose.collectOta) {
     const otaStage = stages.find((stage) => stage.key === "ota");
     if (otaStage) {
       otaStage.label = "입지/클러스터";
@@ -2247,7 +2265,7 @@ function crawlPreviewMeta(payload = {}) {
       collectionProfile: purpose.key === "basic_db" ? "basic_db_light" : purpose.key === "demand_location" ? "demand_location_signal" : "revenue_detail_deep",
       collectionProfileLabel: purpose.depthLabel || purpose.label,
       collectionProfileNote: purpose.depthNote || "",
-      collectRegional: purpose.collectRegional,
+      collectRegional: willCollectRegional,
       collectOta: purpose.collectOta,
       collectBookingStock: purpose.collectBookingStock,
       collectWeeklyRange: purpose.collectWeeklyRange,
@@ -2256,7 +2274,14 @@ function crawlPreviewMeta(payload = {}) {
       detailRankRanges: payload.detailRankRanges,
       bookingRangeDays: days,
       bookingRangePlaceLimit: placeLimit,
-      rankRangeCount: rangeCount
+      rankRangeCount: rangeCount,
+      detailPlaceLimit: detailPlaceCount,
+      timing: {
+        source: "client_fallback",
+        label: "서버 실측 확인 중",
+        confidence: "low",
+        confidenceLabel: "낮음"
+      }
     }
   };
 }

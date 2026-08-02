@@ -159,6 +159,7 @@ for (const label of ["기본정보 수집", "상세정보 수집", "지역정보
 }
 assert.doesNotMatch(purposeOptionsHtml, /<(?:span|em)\b/, "purpose cards must show their names only");
 assert.match(crawlFormHtml, /<details class="crawl-purpose-details">[\s\S]*?<summary>[\s\S]*?세부내용[\s\S]*?id="crawlPurposeRoutePreview"[\s\S]*?<\/details>/);
+assert.match(crawlFormHtml, /<span class="crawl-purpose-details-icon" aria-hidden="true">\+<\/span>/, "purpose details must keep one decorative toggle mount");
 assert.doesNotMatch(openingTagById("crawlPurposeRoutePreview"), /aria-live=/, "collapsed purpose details must not announce hidden updates");
 assert.doesNotMatch(crawlFormHtml, /crawlProgressEta|완료 예정/, "the collection form must show remaining time without an absolute completion clock");
 
@@ -186,6 +187,16 @@ for (const functionName of [
 assert.match(css, /\.crawl-progress-numbers\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
 assert.match(css, /\.crawl-purpose-details\s*>\s*summary\s*\{[^}]*min-height:\s*var\(--touch-target-min\)[^}]*list-style:\s*none/s);
 assert.match(css, /\.crawl-purpose-details\s*>\s*summary:focus-visible\s*\{[^}]*outline:/s);
+assert.match(css, /\.crawl-purpose-details-icon\s*\{[^}]*position:\s*relative[^}]*width:\s*28px[^}]*height:\s*28px[^}]*box-sizing:\s*border-box[^}]*align-self:\s*center[^}]*justify-self:\s*center[^}]*border-radius:\s*8px[^}]*font-size:\s*0[^}]*transform-origin:\s*50%\s+50%/s);
+assert.match(css, /\.crawl-purpose-details-icon::before,\s*\.crawl-purpose-details-icon::after\s*\{[^}]*top:\s*50%[^}]*left:\s*50%[^}]*width:\s*12px[^}]*height:\s*2px[^}]*transform:\s*translate\(-50%,\s*-50%\)/s);
+assert.match(css, /\.crawl-purpose-details-icon::after\s*\{[^}]*rotate\(90deg\)/s);
+assert.match(css, /\.crawl-purpose-details\[open\]\s+\.crawl-purpose-details-icon::before\s*\{[^}]*rotate\(45deg\)/s);
+assert.match(css, /\.crawl-purpose-details\[open\]\s+\.crawl-purpose-details-icon::after\s*\{[^}]*rotate\(135deg\)/s);
+assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.crawl-purpose-details-icon::before,\s*\.crawl-purpose-details-icon::after\s*\{[^}]*transition:\s*none/s);
+assert.doesNotMatch(functionBlock("crawlPreviewMeta"), /trendSeconds/, "client ETA must model only work the collector actually executes");
+assert.match(functionBlock("crawlPreviewMeta"), /source:\s*"client_fallback"[\s\S]*confidence:\s*"low"/);
+assert.match(functionBlock("crawlEstimateBasisText"), /최근 실측[\s\S]*confidenceLabel/);
+assert.match(functionBlock("crawlEstimateBasisText"), /uncertaintySeconds[\s\S]*오차범위/);
 assert.match(css, /\.field\s+\.field-date-weekday\s*\{[^}]*font-variant-numeric:\s*tabular-nums[^}]*overflow-wrap:\s*anywhere/s);
 
 assert.match(functionBlock("renderAdminCollectionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);

@@ -35,6 +35,11 @@ const {
   updateJsonFile: updateSecureJsonFile
 } = require("./secure_json_store.cjs");
 const { runResultSelectionProfile } = require("./lodging_run_selection.cjs");
+const {
+  calibrateCrawlTiming,
+  rankRangeCount: crawlRankRangeCount,
+  timingSimilarityScore
+} = require("./crawl_eta_model.cjs");
 const TOURISM_REGION_MAP = require("../web/data/tourism_region_map.json");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -112,7 +117,7 @@ const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260801-ui-release-v28";
+const UI_ASSET_VERSION = "v2-20260802-ui-release-v29";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -532,6 +537,8 @@ function crawlExecutionPlan(payload = {}) {
     collectOta: executionProfile.collectOta,
     collectBookingStock: executionProfile.collectBookingStock,
     collectWeeklyRange: executionProfile.collectWeeklyRange,
+    detailPlaceLimit,
+    rankRangeCount: crawlRankRangeCount(detailRankRanges),
     detailRankRanges
   };
 }
@@ -541,12 +548,13 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
   const rangePlaceCount = plan.collectWeeklyRange && plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
   const fast = plan.collectionMode === "fast";
   const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
-  const productSeconds = fast || !plan.collectBookingStock ? 0 : (plan.productMode === "all" ? 45 : 26);
-  const trendSeconds = plan.resolvedSearchMode === "keyword" ? (plan.collectionPurpose === "demand_location" ? 55 : 25) : 10;
+  const detailPlaceCount = fast || !plan.collectBookingStock ? 0 : plan.detailPlaceLimit;
+  const productSeconds = detailPlaceCount ? 12 + detailPlaceCount * 3.3 : 6;
   const rangeSeconds = !fast && rangePlaceCount
-    ? rangePlaceCount * plan.bookingRangeDays * (plan.productMode === "all" ? 5.5 : 4.2)
+    ? rangePlaceCount * plan.bookingRangeDays * 4.8
     : 0;
-  const regionalSeconds = !fast && plan.collectRegional ? (plan.collectionPurpose === "demand_location" ? 130 : 80) : 0;
+  const willCollectRegional = !fast && plan.collectRegional && plan.resolvedSearchMode !== "company";
+  const regionalSeconds = willCollectRegional ? (plan.collectionPurpose === "demand_location" ? 130 : 80) : 0;
   const otaSeconds = !fast && plan.collectOta ? 35 : 0;
   const ioSeconds = fast ? 18 : 35;
   const stages = [
@@ -556,12 +564,18 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       seconds: searchSeconds,
       detail: "네이버 플레이스 순위와 업체 기본 정보를 정리합니다."
     },
-    {
-      key: "trend",
-      label: "수요 확인",
-      seconds: trendSeconds,
-      detail: "검색수요와 저장된 트렌드를 확인합니다."
-    },
+    regionalSeconds || otaSeconds
+      ? {
+          key: "ota",
+          label: regionalSeconds && otaSeconds ? "지역/보조 채널" : regionalSeconds ? "지역권 노출" : "보조 채널",
+          seconds: regionalSeconds + otaSeconds,
+          detail: regionalSeconds && otaSeconds
+            ? "지역권 노출과 OTA 보조 채널을 순서대로 확인합니다."
+            : regionalSeconds
+              ? "검색 기준 지역과 인접 권역 노출을 확인합니다."
+              : "OTA 보조 채널 노출을 확인합니다."
+        }
+      : null,
     fast
       ? {
           key: "inventory",
@@ -575,21 +589,13 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
           seconds: productSeconds + rangeSeconds,
           detail: `상세 ${plan.detailRankRanges || "1-20"}위의 날짜별 수량과 요일별 가격을 확인합니다.`
         },
-    !fast
-      ? {
-          key: "ota",
-          label: "보조 채널",
-          seconds: otaSeconds + regionalSeconds,
-          detail: "OTA 보조 신호와 지역 수요 데이터를 정리합니다."
-        }
-      : null,
     {
       key: "save",
       label: "저장/분석",
       seconds: ioSeconds,
       detail: "수집 결과와 업체 기준값을 갱신합니다."
     }
-  ].filter(Boolean).filter((stage) => stage.key !== "ota" || plan.collectOta || plan.collectRegional).map((stage) => ({
+  ].filter(Boolean).map((stage) => ({
     ...stage,
     seconds: Math.max(4, Math.round(stage.seconds || 0))
   }));
@@ -600,7 +606,7 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       inventoryStage.detail = `상세 ${plan.detailRankRanges || "1-20"}위의 상품 구성과 대표 가격을 확인하고 기간별 매출 수집은 제외합니다.`;
     }
   }
-  if (!fast && plan.collectRegional && !plan.collectOta) {
+  if (!fast && willCollectRegional && !plan.collectOta) {
     const otaStage = stages.find((stage) => stage.key === "ota");
     if (otaStage) {
       otaStage.label = "입지/클러스터";
@@ -619,7 +625,7 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
     ...plan,
     estimatedTotalSeconds,
     recrawlContext,
-    stages: scaleCrawlStages(stages, estimatedTotalSeconds),
+    stages: scaleCrawlStages(stages, estimatedTotalSeconds, timing.stageFactors),
     basis: {
       searchMode: plan.resolvedSearchMode,
       searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
@@ -630,13 +636,15 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       collectionProfile: plan.collectionProfile,
       collectionProfileLabel: plan.collectionProfileLabel,
       collectionProfileNote: plan.collectionProfileNote,
-      collectRegional: plan.collectRegional,
+      collectRegional: willCollectRegional,
       collectOta: plan.collectOta,
       collectBookingStock: plan.collectBookingStock,
       collectWeeklyRange: plan.collectWeeklyRange,
       collectionMode: plan.collectionMode,
       collectionModeLabel: COLLECTION_MODES[plan.collectionMode] || COLLECTION_MODES.precision,
       detailRankRanges: plan.detailRankRanges,
+      detailPlaceLimit: plan.detailPlaceLimit,
+      rankRangeCount: plan.rankRangeCount,
       bookingRangeDays: plan.bookingRangeDays,
       bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
       timing
@@ -644,14 +652,18 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
   };
 }
 
-function scaleCrawlStages(stages = [], targetTotalSeconds = 0) {
+function scaleCrawlStages(stages = [], targetTotalSeconds = 0, stageFactors = {}) {
   const rows = stages.map((stage) => ({ ...stage, seconds: Math.max(4, Math.round(stage.seconds || 0)) }));
   if (!rows.length) return rows;
-  const baseTotal = rows.reduce((sum, stage) => sum + stage.seconds, 0);
-  const target = Math.max(rows.length * 4, Math.round(Number(targetTotalSeconds) || baseTotal));
-  const scaled = rows.map((stage) => ({
+  const weightedRows = rows.map((stage) => ({
     ...stage,
-    seconds: Math.max(4, Math.round((stage.seconds / Math.max(1, baseTotal)) * target))
+    calibratedSeconds: stage.seconds * Math.max(0.4, Math.min(2.5, Number(stageFactors?.[stage.key]) || 1))
+  }));
+  const baseTotal = weightedRows.reduce((sum, stage) => sum + stage.calibratedSeconds, 0);
+  const target = Math.max(rows.length * 4, Math.round(Number(targetTotalSeconds) || baseTotal));
+  const scaled = weightedRows.map(({ calibratedSeconds, ...stage }) => ({
+    ...stage,
+    seconds: Math.max(4, Math.round((calibratedSeconds / Math.max(1, baseTotal)) * target))
   }));
   const delta = target - scaled.reduce((sum, stage) => sum + stage.seconds, 0);
   scaled[scaled.length - 1].seconds = Math.max(4, scaled[scaled.length - 1].seconds + delta);
@@ -666,7 +678,15 @@ function crawlTimingConditions(plan = {}) {
     collectionMode: normalizeCollectionMode(plan.collectionMode),
     collectionPurpose: normalizeCollectionPurpose(plan.collectionPurpose),
     collectionProfile: plan.collectionProfile || collectionExecutionProfile(plan.collectionPurpose, plan.collectionMode).key,
+    searchIntent: String(plan.resolvedIntent?.intent || "").trim(),
+    regionKey: String(plan.resolvedIntent?.region?.key || "").trim(),
+    collectRegional: Boolean(plan.collectRegional && (plan.resolvedSearchMode || plan.searchMode) !== "company"),
+    collectOta: Boolean(plan.collectOta),
+    collectBookingStock: Boolean(plan.collectBookingStock),
+    collectWeeklyRange: Boolean(plan.collectWeeklyRange),
     detailRankRanges: plan.detailRankRanges || "없음",
+    detailPlaceLimit: Math.max(0, Math.min(20, Math.round(Number(plan.detailPlaceLimit) || 0))),
+    rankRangeCount: Math.max(0, Math.min(100, Math.round(Number(plan.rankRangeCount) || crawlRankRangeCount(plan.detailRankRanges)))),
     bookingRangeDays: Math.max(1, Math.min(31, Math.round(Number(plan.bookingRangeDays) || 1))),
     bookingRangePlaceLimit: Math.max(0, Math.min(20, Math.round(Number(plan.bookingRangePlaceLimit) || 0)))
   };
@@ -701,79 +721,15 @@ function sanitizeRecrawlContext(value = {}, plan = {}) {
 }
 
 function crawlTimingSimilarityScore(plan = {}, entry = {}) {
-  if (!entry?.success || !Number.isFinite(Number(entry.durationSeconds))) return 0;
-  const left = crawlTimingConditions(plan);
-  const right = entry.conditions || {};
-  if (right.collectionMode !== left.collectionMode) return 0;
-  if (right.collectionPurpose && right.collectionPurpose !== left.collectionPurpose) return 0;
-  if (right.collectionProfile && right.collectionProfile !== left.collectionProfile) return 0;
-  if (right.searchMode !== left.searchMode) return 0;
-  if (right.productMode !== left.productMode) return 0;
-
-  let score = 9;
-  const dayDelta = Math.abs(Number(right.bookingRangeDays || 1) - left.bookingRangeDays);
-  if (dayDelta === 0) score += 4;
-  else if (dayDelta <= 2) score += 3;
-  else if (dayDelta <= 7) score += 1;
-  else return 0;
-
-  const limitDelta = Math.abs(Number(right.bookingRangePlaceLimit || 0) - left.bookingRangePlaceLimit);
-  if (limitDelta === 0) score += 2;
-  else if (limitDelta <= 5) score += 1;
-
-  if ((right.detailRankRanges || "없음") === left.detailRankRanges) score += 2;
-  return score;
+  return timingSimilarityScore(crawlTimingConditions(plan), entry);
 }
 
 function crawlTimingAdjustment(plan = {}, modelTotalSeconds = 0, timingStore = null) {
-  const model = Math.max(1, Math.round(Number(modelTotalSeconds) || 1));
-  const entries = Array.isArray(timingStore?.entries) ? timingStore.entries : [];
-  const matches = entries
-    .map((entry) => ({
-      entry,
-      score: crawlTimingSimilarityScore(plan, entry),
-      endedAtMs: Date.parse(entry.endedAt || entry.startedAt || "")
-    }))
-    .filter((row) => row.score > 0 && Number.isFinite(row.endedAtMs))
-    .sort((a, b) => (b.score - a.score) || (b.endedAtMs - a.endedAtMs))
-    .slice(0, 12);
-
-  if (!matches.length) {
-    return {
-      source: "model",
-      label: "조건 모델",
-      sampleCount: 0,
-      modelTotalSeconds: model,
-      estimatedTotalSeconds: model,
-      averageSeconds: null
-    };
-  }
-
-  const weighted = matches.reduce((acc, row, index) => {
-    const duration = Math.max(1, Number(row.entry.durationSeconds) || 1);
-    const recencyWeight = Math.max(0.35, 1 - index * 0.045);
-    const weight = row.score * recencyWeight;
-    acc.weight += weight;
-    acc.seconds += duration * weight;
-    return acc;
-  }, { weight: 0, seconds: 0 });
-  const averageSeconds = Math.round(weighted.seconds / Math.max(1, weighted.weight));
-  const blend = matches.length >= 3 ? 0.72 : matches.length === 2 ? 0.62 : 0.52;
-  const blended = Math.round(model * (1 - blend) + averageSeconds * blend);
-  const estimatedTotalSeconds = Math.max(
-    Math.round(model * 0.45),
-    Math.min(Math.round(model * 2.6), blended)
-  );
-
-  return {
-    source: "measured",
-    label: "최근 유사 수집",
-    sampleCount: matches.length,
-    modelTotalSeconds: model,
-    estimatedTotalSeconds,
-    averageSeconds,
-    latestEndedAt: new Date(Math.max(...matches.map((row) => row.endedAtMs))).toISOString()
-  };
+  return calibrateCrawlTiming({
+    conditions: crawlTimingConditions(plan),
+    modelTotalSeconds,
+    entries: Array.isArray(timingStore?.entries) ? timingStore.entries : []
+  });
 }
 
 function publicCrawlEstimate(payload = {}, timingStore = null) {
@@ -870,6 +826,8 @@ function activeCrawlRemainingSeconds() {
     : 0;
   const estimatedTotalSeconds = Number(activeCrawlEstimate?.estimatedTotalSeconds || activeCrawlJob?.estimate?.estimatedTotalSeconds || 0);
   if (!estimatedTotalSeconds) return 30;
+  const stageRemainingSeconds = crawlRuntimeRemainingSeconds(activeCrawlJob, elapsedSeconds);
+  if (Number.isFinite(stageRemainingSeconds)) return Math.max(5, Math.round(stageRemainingSeconds));
   return Math.max(5, Math.round(estimatedTotalSeconds - elapsedSeconds));
 }
 
@@ -960,7 +918,15 @@ function crawlRuntimeStageDef(key) {
 function crawlRuntimeStageEstimatedSeconds(key, estimate = activeCrawlEstimate) {
   const def = crawlRuntimeStageDef(key);
   const total = Math.max(1, Number(estimate?.estimatedTotalSeconds || activeCrawlEstimate?.estimatedTotalSeconds || 1));
-  return Math.max(4, Math.round(total * Number(def.estimatedRatio || 0.1)));
+  const stageFactors = estimate?.basis?.timing?.stageFactors || {};
+  const weightedDefs = CRAWL_RUNTIME_STAGE_DEFS.map((stage) => ({
+    ...stage,
+    weight: Number(stage.estimatedRatio || 0.1)
+      * Math.max(0.4, Math.min(2.5, Number(stageFactors[stage.group]) || 1))
+  }));
+  const totalWeight = weightedDefs.reduce((sum, stage) => sum + stage.weight, 0);
+  const row = weightedDefs.find((stage) => stage.key === def.key);
+  return Math.max(4, Math.round(total * Number(row?.weight || 0.1) / Math.max(0.1, totalWeight)));
 }
 
 function ensureCrawlRuntimeState(job) {
@@ -1065,6 +1031,21 @@ function crawlRuntimeStageRows(job = activeCrawlJob, elapsedSeconds = 0) {
   });
   const currentStage = rows.find((row) => row.status === "active") || rows.find((row) => row.status === "pending") || rows.at(-1) || null;
   return { currentStage, stages: rows };
+}
+
+function crawlRuntimeRemainingSeconds(job = activeCrawlJob, elapsedSeconds = 0) {
+  if (!job || !Array.isArray(job.stageEvents) || !job.stageEvents.length) return null;
+  const runtime = crawlRuntimeStageRows(job, elapsedSeconds);
+  if (!runtime?.stages?.length) return null;
+  return runtime.stages.reduce((sum, stage) => {
+    if (stage.status === "done") return sum;
+    const expected = Math.max(1, Number(stage.seconds) || 1);
+    if (stage.status !== "active") return sum + expected;
+    const activeElapsed = Math.max(0, Number(stage.durationSeconds) || 0);
+    if (activeElapsed < expected) return sum + Math.max(1, expected - activeElapsed);
+    const overrun = activeElapsed - expected;
+    return sum + Math.max(5, Math.round(expected * 0.25 + overrun * 0.35));
+  }, 0);
 }
 
 function publicCrawlStageTimings(job = {}) {
@@ -12830,6 +12811,7 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
     conditions: crawlTimingConditions(plan),
     recrawlContext: estimate?.recrawlContext || null,
     estimatedTotalSeconds: estimate?.estimatedTotalSeconds || null,
+    modelTotalSeconds: estimate?.basis?.timing?.modelTotalSeconds || null,
     estimateSource: estimate?.basis?.timing?.source || "model",
     stageTimings: Array.isArray(stageTimings) ? stageTimings : [],
     error: success ? "" : crawlTimingErrorSummary(error)
@@ -12968,14 +12950,23 @@ function currentCrawlStatus(options = {}) {
     ? Math.max(1, Math.round((Date.now() - activeCrawlStartedAt.getTime()) / 1000))
     : 0;
   const estimatedTotalSeconds = activeCrawlEstimate?.estimatedTotalSeconds || 0;
-  const remainingSeconds = activeCrawlPromise && estimatedTotalSeconds
+  const modelRemainingSeconds = activeCrawlPromise && estimatedTotalSeconds
     ? Math.max(0, Math.round(estimatedTotalSeconds - elapsedSeconds))
     : null;
-  const estimatedProgress = activeCrawlPromise && estimatedTotalSeconds
-    ? Math.max(1, Math.min(99, Math.round((elapsedSeconds / estimatedTotalSeconds) * 100)))
+  const measuredStageRemainingSeconds = activeCrawlPromise
+    ? crawlRuntimeRemainingSeconds(activeCrawlJob, elapsedSeconds)
     : null;
-  const estimatedCompleteAt = activeCrawlStartedAt && estimatedTotalSeconds
-    ? new Date(activeCrawlStartedAt.getTime() + estimatedTotalSeconds * 1000).toISOString()
+  const remainingSeconds = Number.isFinite(measuredStageRemainingSeconds)
+    ? Math.max(0, Math.round(measuredStageRemainingSeconds))
+    : modelRemainingSeconds;
+  const projectedTotalSeconds = activeCrawlPromise && Number.isFinite(remainingSeconds)
+    ? Math.max(1, elapsedSeconds + remainingSeconds)
+    : estimatedTotalSeconds;
+  const estimatedProgress = activeCrawlPromise && projectedTotalSeconds
+    ? Math.max(1, Math.min(99, Math.round((elapsedSeconds / projectedTotalSeconds) * 100)))
+    : null;
+  const estimatedCompleteAt = activeCrawlStartedAt && Number.isFinite(remainingSeconds)
+    ? new Date(Date.now() + remainingSeconds * 1000).toISOString()
     : null;
   const delayThresholdSeconds = estimatedTotalSeconds
     ? Math.max(30, Math.round(estimatedTotalSeconds * 0.15))
@@ -12992,6 +12983,9 @@ function currentCrawlStatus(options = {}) {
     elapsedSeconds,
     estimatedTotalSeconds: activeCrawlPromise ? estimatedTotalSeconds : null,
     remainingSeconds,
+    remainingEstimateSource: activeCrawlPromise
+      ? (Number.isFinite(measuredStageRemainingSeconds) ? "runtime_stage" : "initial_estimate")
+      : null,
     estimatedProgress,
     estimatedCompleteAt,
     isDelayed: delayedSeconds > 0,
@@ -13700,18 +13694,39 @@ function localNetworkUrls() {
     .map((item) => `http://${item.address}:${PORT}`);
 }
 
-verifyPreviewDataBoundary()
-  .then(() => seedOutputsFromRepo())
-  .then(() => {
+async function startServer() {
+  await verifyPreviewDataBoundary();
+  await seedOutputsFromRepo();
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
     server.listen(PORT, HOST, () => {
+      server.off("error", reject);
       const primaryUrl = HOST === "0.0.0.0" ? `http://127.0.0.1:${PORT}` : `http://${HOST}:${PORT}`;
       console.log(`Lodging datalab beta app running at ${primaryUrl}`);
       if (HOST === "0.0.0.0") {
         for (const url of localNetworkUrls()) console.log(`Mobile/LAN URL: ${url}`);
       }
+      resolve(server);
     });
-  })
-  .catch((error) => {
+  });
+}
+
+if (require.main === module) {
+  startServer().catch((error) => {
     console.error(`V2 startup blocked: ${error.message || error}`);
     process.exitCode = 1;
   });
+}
+
+module.exports = {
+  startServer,
+  __test: {
+    CRAWL_RUNTIME_STAGE_DEFS,
+    crawlExecutionPlan,
+    crawlRuntimeRemainingSeconds,
+    crawlRuntimeStageRows,
+    crawlTimingConditions,
+    estimateCrawlCompletion,
+    scaleCrawlStages
+  }
+};

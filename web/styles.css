@@ -31560,7 +31560,7 @@ body.role-admin .admin-db-region-card-grid button.active {
 .crawl-purpose-details > summary {
   min-height: var(--touch-target-min);
   display: grid;
-  grid-template-columns: 24px minmax(0, auto) minmax(0, 1fr);
+  grid-template-columns: 28px minmax(0, auto) minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   color: var(--color-text-primary);
@@ -31593,21 +31593,60 @@ body.role-admin .admin-db-region-card-grid button.active {
 }
 
 .crawl-purpose-details-icon {
-  width: 24px;
-  height: 24px;
+  position: relative;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
   display: inline-grid;
   place-items: center;
-  border-radius: 999px;
+  align-self: center;
+  justify-self: center;
+  border: 1px solid color-mix(in srgb, var(--color-action-primary) 46%, var(--color-border-default));
+  border-radius: 8px;
   background: color-mix(in srgb, var(--color-action-primary) 14%, var(--color-surface-default));
   color: var(--color-action-primary);
-  font-size: 19px;
+  font-size: 0;
   font-weight: 900;
   line-height: 1;
+  transform-origin: 50% 50%;
+}
+
+.crawl-purpose-details-icon::before,
+.crawl-purpose-details-icon::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+  transform: translate(-50%, -50%);
   transition: transform .18s ease;
 }
 
+.crawl-purpose-details-icon::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.crawl-purpose-details[open] .crawl-purpose-details-icon::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.crawl-purpose-details[open] .crawl-purpose-details-icon::after {
+  transform: translate(-50%, -50%) rotate(135deg);
+}
+
 .crawl-purpose-details[open] .crawl-purpose-details-icon {
-  transform: rotate(45deg);
+  border-color: color-mix(in srgb, var(--color-action-primary) 74%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-action-primary) 22%, var(--color-surface-default));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crawl-purpose-details-icon::before,
+  .crawl-purpose-details-icon::after {
+    transition: none;
+  }
 }
 
 .crawl-purpose-details .crawl-route-preview {
@@ -32221,7 +32260,7 @@ body.role-admin .run-purpose-result-grid article {
 
 @media (max-width: 420px) {
   .crawl-purpose-details > summary {
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: 28px minmax(0, 1fr);
   }
 
   .crawl-purpose-details > summary small {
