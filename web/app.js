@@ -34065,10 +34065,13 @@ function bindEvents() {
     });
     input?.addEventListener("keydown", (event) => {
       setCollectionDateKeyboardEditing(input, true);
+      const isEnter = event.key === "Enter";
+      const isSpace = event.key === " ";
+      if (!isEnter && !isSpace) return;
+      if (isEnter) event.preventDefault();
       if (event.repeat) return;
-      if (event.key !== "Enter" && event.key !== " ") return;
       const pickerOpened = requestCollectionDatePicker(input);
-      if (pickerOpened || event.key === "Enter") event.preventDefault();
+      if (pickerOpened) event.preventDefault();
     });
     input?.addEventListener("blur", () => {
       setCollectionDateKeyboardEditing(input, false);
