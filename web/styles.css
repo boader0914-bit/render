@@ -17635,6 +17635,71 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.field-date-control {
+  position: relative;
+  min-width: 0;
+  display: block;
+}
+
+.field-date-control::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  right: 13px;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--color-text-secondary);
+  border-radius: 3px;
+  background:
+    linear-gradient(var(--color-text-secondary), var(--color-text-secondary)) 0 4px / 100% 1.5px no-repeat,
+    linear-gradient(var(--color-text-secondary), var(--color-text-secondary)) 3px 0 / 1.5px 4px no-repeat,
+    linear-gradient(var(--color-text-secondary), var(--color-text-secondary)) calc(100% - 3px) 0 / 1.5px 4px no-repeat;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.field-date-control input[type="date"] {
+  position: relative;
+  z-index: 1;
+  padding-right: 42px;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: transparent;
+}
+
+.field-date-control input[type="date"]::-webkit-datetime-edit {
+  color: transparent;
+  opacity: 0;
+}
+
+.field-date-control input[type="date"]::-webkit-calendar-picker-indicator {
+  position: relative;
+  z-index: 3;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.field .field-date-control .field-date-weekday {
+  position: absolute;
+  z-index: 2;
+  inset: 0 42px 0 12px;
+  display: flex;
+  align-items: center;
+  color: var(--color-text-primary);
+  background: var(--color-surface-raised);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  line-height: 1;
+  overflow: hidden;
+  overflow-wrap: normal;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .field input,
 .field select,
 .field textarea {

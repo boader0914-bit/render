@@ -84,7 +84,7 @@ async function main() {
   assert.ok(listeners.has("fetch"), "fetch handler registered");
   assert.ok(listeners.has("activate"), "activate handler registered");
 
-  const currentCache = "lodging-datalab-pwa-v20260802-ui-release-v29";
+  const currentCache = "lodging-datalab-pwa-v20260802-ui-release-v30";
   stores.set("lodging-datalab-pwa-v20260801-ui-release-v27", new Map([["https://fixture.local/admin", new Response("old-private")]]));
   stores.set("unrelated-app-cache-v4", new Map([
     ["/unrelated", new Response("must-survive")],
@@ -118,12 +118,12 @@ async function main() {
     method: "GET",
     mode: "cors",
     destination: "script",
-    url: "https://fixture.local/app.js?v=v2-20260802-ui-release-v29"
+    url: "https://fixture.local/app.js?v=v2-20260802-ui-release-v30"
   });
-  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260802-ui-release-v29");
+  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260802-ui-release-v30");
   await Promise.resolve();
   await Promise.resolve();
-  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260802-ui-release-v29")), "allowlisted static asset is cached");
+  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260802-ui-release-v30")), "allowlisted static asset is cached");
 
   fetchImpl = async () => { throw new Error("offline"); };
   const unrelatedStaticFallback = await dispatchFetch({

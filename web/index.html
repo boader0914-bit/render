@@ -14,7 +14,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <script src="/login-theme.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=v2-20260802-ui-release-v29">
+  <link rel="stylesheet" href="/styles.css?v=v2-20260802-ui-release-v30">
 </head>
 <body class="app-booting">
   <a class="skip-link" href="#appMain">본문 바로가기</a>
@@ -279,15 +279,19 @@
             </label>
             <p class="search-intent-hint" id="crawlSearchIntentHint" aria-live="polite"></p>
             <div class="field-grid">
-              <label class="field">
+              <label class="field collection-date-field">
                 <span>시작일</span>
-                <input id="checkInInput" type="date" aria-describedby="checkInWeekday">
-                <small class="field-date-weekday" id="checkInWeekday" aria-live="polite"></small>
+                <span class="field-date-control">
+                  <input id="checkInInput" type="date" aria-describedby="checkInWeekday">
+                  <small class="field-date-weekday" id="checkInWeekday" aria-live="polite"></small>
+                </span>
               </label>
-              <label class="field">
+              <label class="field collection-date-field">
                 <span>종료일</span>
-                <input id="checkOutInput" type="date" aria-describedby="checkOutWeekday">
-                <small class="field-date-weekday" id="checkOutWeekday" aria-live="polite"></small>
+                <span class="field-date-control">
+                  <input id="checkOutInput" type="date" aria-describedby="checkOutWeekday">
+                  <small class="field-date-weekday" id="checkOutWeekday" aria-live="polite"></small>
+                </span>
               </label>
             </div>
             <label class="field">
@@ -527,6 +531,6 @@
 
   <script src="/lodging-search-intent.js"></script>
   <script src="/lodging-category-profile.js"></script>
-  <script src="/app.js?v=v2-20260802-ui-release-v29"></script>
+  <script src="/app.js?v=v2-20260802-ui-release-v30"></script>
 </body>
 </html>
