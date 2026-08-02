@@ -280,12 +280,14 @@
             <p class="search-intent-hint" id="crawlSearchIntentHint" aria-live="polite"></p>
             <div class="field-grid">
               <label class="field">
-                <span>체크인</span>
-                <input id="checkInInput" type="date">
+                <span>시작일</span>
+                <input id="checkInInput" type="date" aria-describedby="checkInWeekday">
+                <small class="field-date-weekday" id="checkInWeekday" aria-live="polite"></small>
               </label>
               <label class="field">
                 <span>종료일</span>
-                <input id="checkOutInput" type="date">
+                <input id="checkOutInput" type="date" aria-describedby="checkOutWeekday">
+                <small class="field-date-weekday" id="checkOutWeekday" aria-live="polite"></small>
               </label>
             </div>
             <label class="field">
@@ -304,24 +306,25 @@
                 <span>DB를 어떤 깊이로 채울지 먼저 선택합니다.</span>
               </div>
               <div class="crawl-purpose-options">
-                <button type="button" data-collection-purpose="basic_db">
+                <button type="button" data-collection-purpose="basic_db" aria-pressed="false">
                   <strong>기본정보 수집</strong>
-                  <span>순위·상품·상품별 금액·예약채널</span>
-                  <em>권장 1-50위</em>
                 </button>
-                <button type="button" data-collection-purpose="revenue_detail" class="active">
+                <button type="button" data-collection-purpose="revenue_detail" class="active" aria-pressed="true">
                   <strong>상세정보 수집</strong>
-                  <span>요일별 매출·예약율·수량·가격·OTA</span>
-                  <em>권장 1-10위</em>
                 </button>
-                <button type="button" data-collection-purpose="demand_location">
+                <button type="button" data-collection-purpose="demand_location" aria-pressed="false">
                   <strong>지역정보 수집</strong>
-                  <span>수요·입지·클러스터</span>
-                  <em>권장 1-20위</em>
                 </button>
               </div>
             </section>
-            <div class="crawl-route-preview" id="crawlPurposeRoutePreview" aria-live="polite"></div>
+            <details class="crawl-purpose-details">
+              <summary>
+                <span class="crawl-purpose-details-icon" aria-hidden="true">+</span>
+                <strong>세부내용</strong>
+                <small>선택한 수집 범위와 DB 반영 위치 확인</small>
+              </summary>
+              <div class="crawl-route-preview" id="crawlPurposeRoutePreview"></div>
+            </details>
             <label class="field crawl-rank-range-field">
               <span>순위 범위</span>
               <input id="detailRankRangesInput" type="text" value="1-10" placeholder="예: 1-10, 1-50, 1-100">
@@ -331,7 +334,7 @@
               <span class="crawl-spinner" aria-hidden="true"></span>
               <div class="crawl-progress-copy">
                 <strong id="crawlProgressTitle">예상 수집 시간</strong>
-                <small id="crawlProgressText">수집 조건을 기준으로 예상 완료 시간을 계산합니다.</small>
+                <small id="crawlProgressText">수집 조건을 기준으로 예상 소요 시간을 계산합니다.</small>
               </div>
               <div class="crawl-progress-stages" id="crawlProgressStages" aria-label="수집 단계"></div>
               <div class="crawl-progress-meter" aria-hidden="true"><span id="crawlProgressBar"></span></div>
@@ -339,7 +342,6 @@
                 <span><b id="crawlProgressPercent">예측중</b><small>진행률</small></span>
                 <span><b id="crawlProgressElapsed">0초</b><small>경과</small></span>
                 <span><b id="crawlProgressRemaining">계산 중</b><small>남은 시간</small></span>
-                <span><b id="crawlProgressEta">--:--</b><small>완료 예정</small></span>
               </div>
               <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
             </div>

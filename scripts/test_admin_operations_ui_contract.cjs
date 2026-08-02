@@ -137,6 +137,57 @@ for (const id of [
 ]) {
   assert.match(openingTagById(id), /autocomplete="new-password"/, `${id} must not reuse login credentials`);
 }
+
+const crawlFormMatch = html.match(/<form\b[^>]*\bid="crawlForm"[^>]*>[\s\S]*?<\/form>/i);
+assert.ok(crawlFormMatch, "collection form must remain available");
+const crawlFormHtml = crawlFormMatch[0];
+assert.match(crawlFormHtml, /<span>시작일<\/span>/, "collection check-in label must use 시작일");
+assert.match(crawlFormHtml, /<span>종료일<\/span>/);
+assert.match(openingTagById("checkInInput"), /type="date"/);
+assert.match(openingTagById("checkInInput"), /aria-describedby="checkInWeekday"/);
+assert.match(openingTagById("checkOutInput"), /type="date"/);
+assert.match(openingTagById("checkOutInput"), /aria-describedby="checkOutWeekday"/);
+assert.match(openingTagById("checkInWeekday"), /aria-live="polite"/);
+assert.match(openingTagById("checkOutWeekday"), /aria-live="polite"/);
+
+const purposeOptionsMatch = crawlFormHtml.match(/<div class="crawl-purpose-options">([\s\S]*?)<\/div>/);
+assert.ok(purposeOptionsMatch, "collection purpose choices must remain grouped");
+const purposeOptionsHtml = purposeOptionsMatch[1];
+assert.equal((purposeOptionsHtml.match(/data-collection-purpose=/g) || []).length, 3, "exactly three collection purposes must be shown");
+for (const label of ["기본정보 수집", "상세정보 수집", "지역정보 수집"]) {
+  assert.match(purposeOptionsHtml, new RegExp(`<strong>${label}<\\/strong>`));
+}
+assert.doesNotMatch(purposeOptionsHtml, /<(?:span|em)\b/, "purpose cards must show their names only");
+assert.match(crawlFormHtml, /<details class="crawl-purpose-details">[\s\S]*?<summary>[\s\S]*?세부내용[\s\S]*?id="crawlPurposeRoutePreview"[\s\S]*?<\/details>/);
+assert.doesNotMatch(openingTagById("crawlPurposeRoutePreview"), /aria-live=/, "collapsed purpose details must not announce hidden updates");
+assert.doesNotMatch(crawlFormHtml, /crawlProgressEta|완료 예정/, "the collection form must show remaining time without an absolute completion clock");
+
+const weekdayLabel = vm.runInNewContext(`(${functionSource("collectionDateWeekdayLabel")})`, {
+  COLLECTION_WEEKDAY_LABELS: ["일", "월", "화", "수", "목", "금", "토"],
+});
+assert.equal(weekdayLabel("2026-08-03"), "2026-08-03(월)");
+assert.equal(weekdayLabel("2026-08-20"), "2026-08-20(목)");
+assert.equal(weekdayLabel("2028-02-29"), "2028-02-29(화)");
+assert.equal(weekdayLabel("2026-02-30"), "");
+assert.equal(weekdayLabel(""), "");
+assert.match(functionBlock("updateCrawlSpeedPreview"), /syncCollectionDateWeekdays\(\)/);
+
+for (const functionName of [
+  "ensureCrawlControls",
+  "renderCollectionPurposeRoutePreview",
+  "updateCrawlSpeedPreview",
+  "scheduleCrawlEstimatePreviewRefresh",
+  "updateCrawlProgressNumbers",
+  "crawlEstimateInlineText",
+  "adminConsoleCrawlPanel",
+]) {
+  assert.doesNotMatch(functionBlock(functionName), /crawlProgressEta|estimatedCompleteAt|완료 예정|예상 완료/, `${functionName} must not render an absolute completion clock`);
+}
+assert.match(css, /\.crawl-progress-numbers\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+assert.match(css, /\.crawl-purpose-details\s*>\s*summary\s*\{[^}]*min-height:\s*var\(--touch-target-min\)[^}]*list-style:\s*none/s);
+assert.match(css, /\.crawl-purpose-details\s*>\s*summary:focus-visible\s*\{[^}]*outline:/s);
+assert.match(css, /\.field\s+\.field-date-weekday\s*\{[^}]*font-variant-numeric:\s*tabular-nums[^}]*overflow-wrap:\s*anywhere/s);
+
 assert.match(functionBlock("renderAdminCollectionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
 assert.match(functionBlock("renderAdminRegionOverview"), /role="status" aria-live="polite" aria-atomic="true"/);
 assert.match(functionBlock("renderAdminSettingsOverview"), /role="status" aria-live="polite" aria-atomic="true"/);

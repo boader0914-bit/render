@@ -104,19 +104,32 @@ assert.match(navigationModelSource, /\badmin\s*:\s*\{/);
 assert.match(navigationModelSource, /\bb2b\s*:\s*\{/);
 assert.match(navigationModelSource, /\bmobile\s*:/);
 assert.match(navigationModelSource, /\baction\s*:\s*["'](?:drawer|account)["']/);
+for (const icon of ["home", "company", "collect", "analytics", "region", "members", "settings", "more", "competition", "demand", "account"]) {
+  assert.match(navigationModelSource, new RegExp(`\\bicon\\s*:\\s*["']${icon}["']`), `navigation must use the semantic ${icon} icon`);
+}
+assert.doesNotMatch(navigationModelSource, /\bicon\s*:\s*["'](?:⌂|업|수|분|지|회|설|경|나|＋)["']/, "navigation icons must not fall back to menu initials");
 
 const navigationFunctions = [
   "navigationModel",
   "navigationEntries",
   "navigationItemByKey",
   "navigationItemIsActive",
+  "navigationIconSvg",
   "renderPrimaryNavigation",
   "renderControlDrawerNavigation",
+  "resolveAnalysisReturnTab",
+  "rememberAnalysisTab",
   "activateAppNavigation",
+  "restoreAppHistoryState",
+  "restoreAppHistoryNavigation",
 ];
 for (const name of navigationFunctions) functionBlock(name);
 assert.match(functionBlock("navigationModel"), /APP_NAVIGATION/);
 assert.match(functionBlock("navigationEntries"), /navigationModel|APP_NAVIGATION/);
+assert.match(functionBlock("navigationIconSvg"), /NAVIGATION_ICON_PATHS/);
+assert.match(functionBlock("navigationIconSvg"), /viewBox="0 0 24 24"/);
+assert.match(functionBlock("navigationIconSvg"), /focusable="false"/);
+assert.match(functionBlock("primaryNavigationButtonHtml"), /navigationIconSvg\(item\.icon\)/);
 assert.match(functionBlock("renderPrimaryNavigation"), /navigationEntries/);
 assert.match(functionBlock("renderPrimaryNavigation"), /appPrimaryNav/);
 assert.match(functionBlock("renderPrimaryNavigation"), /aria-current/);
@@ -125,6 +138,65 @@ assert.match(functionBlock("renderControlDrawerNavigation"), /drawerActions/);
 assert.match(functionBlock("renderControlDrawerNavigation"), /data-drawer-tab/);
 assert.match(functionBlock("activateAppNavigation"), /navigationItemByKey/);
 assert.match(functionBlock("activateAppNavigation"), /setActiveTab/);
+assert.match(functionBlock("activateAppNavigation"), /item\.key === "analytics"[\s\S]*resolveAnalysisReturnTab\(state\.lastAnalysisTab\)/, "analysis navigation must reopen its last child view");
+assert.match(app, /lastAnalysisTab:\s*"report"/, "application state must remember the last analysis view");
+assert.match(navigationModelSource, /matchTabs:\s*ADMIN_ANALYSIS_TABS/, "analysis highlighting and restoration must share one tab registry");
+assert.match(functionBlock("setActiveTab"), /rememberAnalysisTab\(state\.activeTab\)/);
+assert.match(functionBlock("setActiveTab"), /state\.activeTab === "rank"\) renderCompanies\(\)/, "rank re-entry must rebuild the collected company list");
+assert.match(functionBlock("syncAppHistoryState"), /runId:\s*state\.activeRunId/);
+assert.match(functionBlock("syncAppHistoryState"), /lastAnalysisTab:/);
+assert.match(functionBlock("restoreAppHistoryState"), /historyState\.runId/);
+assert.match(functionBlock("restoreAppHistoryState"), /roleAllowsTab\(historyTab\)/);
+assert.match(functionBlock("restoreAppHistoryNavigation"), /loadRun\(restoredRunId\)/);
+assert.match(functionBlock("bindPwaLifecycleEvents"), /restoreAppHistoryNavigation\(event\.state/);
+assert.match(functionBlock("loadRun"), /syncAppHistoryState\(false\)/);
+assert.match(functionBlock("init"), /restoreAppHistoryState\(\)/);
+assert.match(functionBlock("init"), /loadRuns\(false\)/, "boot must respect a restored collection run instead of forcing the latest run");
+const resolveAnalysisReturnTab = vm.runInNewContext(
+  `(function(lastTab = "", allowedTabs = []) {${functionBlock("resolveAnalysisReturnTab")}})`,
+  { ADMIN_ANALYSIS_TABS: ["report", "rank", "map", "demand", "historyOps"] }
+);
+assert.equal(resolveAnalysisReturnTab("rank", ["report", "rank", "map"]), "rank");
+assert.equal(resolveAnalysisReturnTab("historyOps", ["report", "historyOps"]), "historyOps");
+assert.equal(resolveAnalysisReturnTab("rank", ["report"]), "report");
+assert.equal(resolveAnalysisReturnTab("unknown", ["report", "rank"]), "report");
+const analysisNavigationHarness = {
+  selectedTab: "",
+  state: {
+    adminSettingsDirty: false,
+    activeTab: "admin",
+    lastAnalysisTab: "rank",
+    primaryNavKey: "",
+    adminPanelSection: "database"
+  }
+};
+const activateAppNavigation = vm.runInNewContext(
+  `(function(key = "") {${functionBlock("activateAppNavigation")}})`,
+  {
+    state: analysisNavigationHarness.state,
+    navigationItemByKey: (key) => key === "analytics" ? { key: "analytics", tab: "report" } : null,
+    confirmAdminSettingsNavigation: () => true,
+    openDrawer: () => {},
+    isAdminRole: () => true,
+    resolveAnalysisReturnTab: (tab) => resolveAnalysisReturnTab(tab, ["report", "rank", "map", "demand", "historyOps"]),
+    firstRoleTab: () => "report",
+    setActiveTab: (tab) => { analysisNavigationHarness.selectedTab = tab; },
+    setAdminPanelSection: () => {},
+    window: { setTimeout: () => {} },
+    els: {}
+  }
+);
+activateAppNavigation("analytics");
+assert.equal(analysisNavigationHarness.selectedTab, "rank", "returning to analysis must reopen the collected Place ranking");
+assert.match(functionBlock("rankedCompanyItems"), /if \(rankingItems\.length\) return rankingItems;/, "rank re-entry must preserve the collected Place order without another sort");
+const runResultSummarySource = functionBlock("renderRunResultApplySummary");
+assert.match(runResultSummarySource, /aria-label="수집 결과 확인 순서"/);
+assert.match(runResultSummarySource, /data-drawer-tab="rank" data-run-result-resume="rank"/);
+assert.match(runResultSummarySource, /플레이스 순서 다시 보기/);
+assert.match(runResultSummarySource, /data-drawer-tab="historyOps" data-run-result-resume="historyOps"/);
+assert.match(css, /\.run-result-flow\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*?\.run-result-flow\s*\{[^}]*grid-template-columns:\s*1fr/s, "collection result flow must stack without mobile overflow");
+assert.match(css, /\.app-nav-icon-svg\s*\{[^}]*width:\s*18px[^}]*height:\s*18px[^}]*stroke-width:\s*1\.9/s, "semantic navigation icons must remain inside their mobile and desktop wrappers");
 assert.match(app, /const\s+ROLE_TABS\s*=\s*Object\.fromEntries\([\s\S]*APP_NAVIGATION/, "role tab compatibility must derive from APP_NAVIGATION");
 
 assert.match(app, /function\s+canMutateB2B\s*\(/);

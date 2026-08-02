@@ -17626,6 +17626,15 @@ a.platform-row:hover {
   line-height: 1.35;
 }
 
+.field .field-date-weekday {
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
 .field input,
 .field select,
 .field textarea {
@@ -17914,7 +17923,7 @@ a.platform-row:hover {
 .crawl-progress-numbers {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -29580,7 +29589,7 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   }
 
   .crawl-progress-numbers {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -31502,10 +31511,10 @@ body.role-admin .admin-db-region-card-grid button.active {
 
 .crawl-purpose-options button {
   min-width: 0;
+  min-height: 56px;
   display: grid;
-  gap: 5px;
-  min-height: 104px;
-  padding: 13px;
+  place-items: center start;
+  padding: 11px 13px;
   border: 1px solid rgba(139, 160, 190, .28);
   border-radius: 12px;
   background: rgba(8, 13, 20, .72);
@@ -31528,9 +31537,7 @@ body.role-admin .admin-db-region-card-grid button.active {
   transform: translateY(-1px);
 }
 
-.crawl-purpose-options strong,
-.crawl-purpose-options span,
-.crawl-purpose-options em {
+.crawl-purpose-options strong {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -31542,29 +31549,76 @@ body.role-admin .admin-db-region-card-grid button.active {
   line-height: 1.2;
 }
 
-.crawl-purpose-options span {
-  color: #d4deeb;
-  font-size: 12px;
-  font-weight: 820;
-  line-height: 1.35;
+.crawl-purpose-details {
+  min-width: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-default);
+  padding: 0 11px;
 }
 
-.crawl-purpose-options em {
-  width: fit-content;
-  align-self: end;
-  padding: 5px 8px;
-  border: 1px solid rgba(121, 184, 255, .28);
-  border-radius: 999px;
-  background: rgba(121, 184, 255, .12);
-  color: #b9dcff;
+.crawl-purpose-details > summary {
+  min-height: var(--touch-target-min);
+  display: grid;
+  grid-template-columns: 24px minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.crawl-purpose-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.crawl-purpose-details > summary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 3px solid color-mix(in srgb, var(--color-border-focus) 72%, transparent);
+  outline-offset: 2px;
+}
+
+.crawl-purpose-details > summary strong {
+  font-size: 13px;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.crawl-purpose-details > summary small {
+  min-width: 0;
+  color: var(--color-text-secondary);
   font-size: 11px;
-  font-style: normal;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.crawl-purpose-details-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-action-primary) 14%, var(--color-surface-default));
+  color: var(--color-action-primary);
+  font-size: 19px;
   font-weight: 900;
+  line-height: 1;
+  transition: transform .18s ease;
+}
+
+.crawl-purpose-details[open] .crawl-purpose-details-icon {
+  transform: rotate(45deg);
+}
+
+.crawl-purpose-details .crawl-route-preview {
+  margin: 0 0 11px;
+  padding-top: 11px;
+  border-top: 1px solid var(--color-border-default);
 }
 
 .crawl-route-preview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -31838,6 +31892,84 @@ body.role-admin .admin-db-region-card-grid button.active {
   margin: 0;
 }
 
+.run-result-flow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.run-result-flow > span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 12px;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+  padding: 9px 10px;
+}
+
+.run-result-flow > span > b {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.run-result-flow > span > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.run-result-flow strong,
+.run-result-flow small {
+  min-width: 0;
+  color: inherit;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.run-result-flow strong {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.run-result-flow small {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.run-result-flow > span.complete {
+  border-color: color-mix(in srgb, var(--color-status-success) 42%, var(--color-border-default));
+  color: var(--color-status-success);
+}
+
+.run-result-flow > span.current {
+  border-color: color-mix(in srgb, var(--color-action-primary) 52%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-action-primary) 10%, var(--color-surface-default));
+  color: var(--color-action-primary);
+}
+
+.run-result-flow > span.complete > b {
+  background: var(--color-status-success);
+  color: var(--color-surface-default);
+}
+
+.run-result-flow > span.current > b {
+  background: var(--color-action-primary);
+  color: var(--color-text-inverse);
+}
+
 .run-apply-actions {
   display: flex;
   flex-wrap: wrap;
@@ -31854,6 +31986,12 @@ body.role-admin .admin-db-region-card-grid button.active {
   font-size: 12px;
   font-weight: 950;
   cursor: pointer;
+}
+
+.run-apply-actions .primary-button {
+  border-color: var(--color-action-primary);
+  background: var(--color-action-primary);
+  color: var(--color-text-inverse);
 }
 
 .run-apply-actions button:hover {
@@ -32043,7 +32181,7 @@ body.role-admin .run-purpose-result-grid article {
   }
 
   .crawl-route-preview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .run-apply-head {
@@ -32072,12 +32210,24 @@ body.role-admin .run-purpose-result-grid article {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .run-result-flow {
+    grid-template-columns: 1fr;
+  }
+
   .crawl-purpose-options button {
-    min-height: 88px;
+    min-height: 52px;
   }
 }
 
 @media (max-width: 420px) {
+  .crawl-purpose-details > summary {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .crawl-purpose-details > summary small {
+    display: none;
+  }
+
   .crawl-route-preview,
   .run-purpose-result-grid,
   .run-apply-grid {
@@ -35796,6 +35946,17 @@ body.theme-dark .lodging-category-detail, body.theme-dark .lodging-category-summ
   color: currentColor;
   font-size: 13px;
   font-weight: 950;
+}
+
+:is(body.role-admin, body.role-b2b) .app-primary-nav .app-nav-icon-svg {
+  width: 18px;
+  height: 18px;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 :is(body.role-admin, body.role-b2b) .app-primary-nav .app-nav-copy {
@@ -40378,6 +40539,124 @@ body.role-b2b :is(
 
   body.role-admin .admin-db-toolbar-main > .admin-db-filter-reset {
     grid-column: auto;
+    width: 100%;
+  }
+}
+
+/* Company ranking mobile overflow and chip contrast contract v1. */
+:is(body.role-admin, body.role-b2b) #companyList .company-card > *,
+:is(body.role-admin, body.role-b2b) #companyList .company-chart,
+:is(body.role-admin, body.role-b2b) #companyList .company-action,
+:is(body.role-admin, body.role-b2b) #companyList .company-price-platform {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:is(body.role-admin, body.role-b2b) #companyList [data-card-scroll] {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+:is(body.role-admin, body.role-b2b) #companyList [data-card-scroll]::-webkit-scrollbar {
+  height: 6px;
+}
+
+:is(body.role-admin, body.role-b2b) #companyList [data-card-scroll]::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--color-border-strong);
+}
+
+:is(body.role-admin, body.role-b2b) #companyList [data-card-scroll]:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+:is(body.role-admin, body.role-b2b) #companyList .mini-bars {
+  width: 100%;
+}
+
+body.role-admin #companyList :is(
+  .flow-chip-row span,
+  .reason-chip-row span,
+  .platform-chip,
+  .more-button
+) {
+  border-color: var(--color-border-default) !important;
+  background: var(--color-surface-raised) !important;
+  color: var(--color-text-secondary) !important;
+  text-shadow: none !important;
+}
+
+body.role-admin #companyList .flow-chip-row span.hot,
+body.role-admin #companyList .reason-chip-row span {
+  color: var(--color-status-info) !important;
+}
+
+body.role-admin #companyList .flow-chip-row span.history {
+  color: var(--color-status-success) !important;
+}
+
+body.role-admin #companyList .company-action .more-button {
+  color: var(--color-action-primary) !important;
+}
+
+@media (max-width: 720px) {
+  :is(body.role-admin, body.role-b2b) #companyList .company-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "main metric"
+      "chart chart"
+      "action action";
+  }
+
+  :is(body.role-admin, body.role-b2b) #companyList :is(.flow-chip-row, .reason-chip-row) {
+    flex-wrap: nowrap;
+    padding-bottom: 5px;
+    scroll-snap-type: inline proximity;
+  }
+
+  :is(body.role-admin, body.role-b2b) #companyList :is(.flow-chip-row, .reason-chip-row) > span {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+
+  :is(body.role-admin, body.role-b2b) #companyList .company-action {
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    justify-items: stretch;
+  }
+
+  :is(body.role-admin, body.role-b2b) #companyList .company-price-platform,
+  :is(body.role-admin, body.role-b2b) #companyList .price-block {
+    width: 100%;
+    justify-items: start;
+  }
+
+  :is(body.role-admin, body.role-b2b) #companyList .platform-chips {
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+}
+
+@media (max-width: 390px) {
+  :is(body.role-admin, body.role-b2b) #companyList .company-action {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :is(body.role-admin, body.role-b2b) #companyList .more-button {
     width: 100%;
   }
 }

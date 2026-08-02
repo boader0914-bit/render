@@ -11,6 +11,7 @@ const state = {
   data: null,
   activeRunId: null,
   activeTab: "report",
+  lastAnalysisTab: "report",
   primaryNavKey: "",
   adminMobileSection: "summary",
   adminMobileAnchor: "",
@@ -250,21 +251,22 @@ const LODGING_CATEGORY_PROFILES = {
   }
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
+const ADMIN_ANALYSIS_TABS = Object.freeze(["report", "rank", "map", "demand", "historyOps"]);
 const APP_NAVIGATION = {
   admin: {
     allowedTabs: ["report", "rank", "dictionary", "map", "demand", "historyOps", "admin"],
     items: [
-      { key: "home", label: "홈", description: "운영 현황", icon: "⌂", tab: "admin", adminPanelSection: "overview", mobile: true },
-      { key: "companies", label: "업체", description: "목록 · 검토", icon: "업", tab: "admin", adminPanelSection: "database", mobile: true },
-      { key: "collect", label: "수집", description: "실행 · 결과", icon: "수", tab: "admin", adminPanelSection: "collect", mobile: true },
+      { key: "home", label: "홈", description: "운영 현황", icon: "home", tab: "admin", adminPanelSection: "overview", mobile: true },
+      { key: "companies", label: "업체", description: "목록 · 검토", icon: "company", tab: "admin", adminPanelSection: "database", mobile: true },
+      { key: "collect", label: "수집", description: "실행 · 결과", icon: "collect", tab: "admin", adminPanelSection: "collect", mobile: true },
       {
         key: "analytics",
         label: "분석",
         description: "시장 · 수요",
-        icon: "분",
+        icon: "analytics",
         tab: "report",
         mobile: true,
-        matchTabs: ["report", "rank", "map", "demand", "historyOps"],
+        matchTabs: ADMIN_ANALYSIS_TABS,
         children: [
           { key: "market-summary", label: "시장 요약", tab: "report" },
           { key: "ranking", label: "업체 순위", tab: "rank" },
@@ -273,20 +275,20 @@ const APP_NAVIGATION = {
           { key: "history", label: "수집 이력", tab: "historyOps" }
         ]
       },
-      { key: "regions", label: "지역", description: "입지 · 카드", icon: "지", tab: "dictionary", mobile: false },
-      { key: "members", label: "회원", description: "권한 · 요청", icon: "회", tab: "admin", adminPanelSection: "members", mobile: false },
-      { key: "settings", label: "설정", description: "연동 · 보안", icon: "설", tab: "admin", adminPanelSection: "files", mobile: false },
-      { key: "more", label: "더보기", description: "전체 메뉴", icon: "＋", action: "drawer", mobileOnly: true }
+      { key: "regions", label: "지역", description: "입지 · 카드", icon: "region", tab: "dictionary", mobile: false },
+      { key: "members", label: "회원", description: "권한 · 요청", icon: "members", tab: "admin", adminPanelSection: "members", mobile: false },
+      { key: "settings", label: "설정", description: "연동 · 보안", icon: "settings", tab: "admin", adminPanelSection: "files", mobile: false },
+      { key: "more", label: "더보기", description: "전체 메뉴", icon: "more", action: "drawer", mobileOnly: true }
     ]
   },
   b2b: {
     allowedTabs: ["report", "rank", "map", "demand", "account"],
     items: [
-      { key: "home", label: "홈", description: "검색 · 요약", icon: "⌂", tab: "report", mobile: true },
-      { key: "competition", label: "경쟁", description: "노출 · 매출", icon: "경", tab: "rank", mobile: true },
-      { key: "map", label: "지도", description: "경쟁권", icon: "지", tab: "map", mobile: true },
-      { key: "demand", label: "수요", description: "검색 추이", icon: "수", tab: "demand", mobile: true },
-      { key: "account", label: "계정", description: "이용 · 정책", icon: "나", tab: "account", action: "account", mobile: true }
+      { key: "home", label: "홈", description: "검색 · 요약", icon: "home", tab: "report", mobile: true },
+      { key: "competition", label: "경쟁", description: "노출 · 매출", icon: "competition", tab: "rank", mobile: true },
+      { key: "map", label: "지도", description: "경쟁권", icon: "region", tab: "map", mobile: true },
+      { key: "demand", label: "수요", description: "검색 추이", icon: "demand", tab: "demand", mobile: true },
+      { key: "account", label: "계정", description: "이용 · 정책", icon: "account", tab: "account", action: "account", mobile: true }
     ]
   }
 };
@@ -444,6 +446,8 @@ const els = {
   crawlSearchIntentHint: document.getElementById("crawlSearchIntentHint"),
   checkInInput: document.getElementById("checkInInput"),
   checkOutInput: document.getElementById("checkOutInput"),
+  checkInWeekday: document.getElementById("checkInWeekday"),
+  checkOutWeekday: document.getElementById("checkOutWeekday"),
   searchModeInput: document.getElementById("searchModeInput"),
   productModeInput: document.getElementById("productModeInput"),
   collectionPurposeInput: document.getElementById("collectionPurposeInput"),
@@ -459,7 +463,6 @@ const els = {
   crawlProgressPercent: document.getElementById("crawlProgressPercent"),
   crawlProgressElapsed: document.getElementById("crawlProgressElapsed"),
   crawlProgressRemaining: document.getElementById("crawlProgressRemaining"),
-  crawlProgressEta: document.getElementById("crawlProgressEta"),
   crawlProgressBasis: document.getElementById("crawlProgressBasis"),
   crawlProgressStages: document.getElementById("crawlProgressStages"),
   crawlSubmitMeta: document.getElementById("crawlSubmitMeta"),
@@ -573,6 +576,30 @@ function fmtSearchRate(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "확인필요";
   return `${number.toFixed(2)}%`;
+}
+
+const COLLECTION_WEEKDAY_LABELS = Object.freeze(["일", "월", "화", "수", "목", "금", "토"]);
+
+function collectionDateWeekdayLabel(value = "") {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return "";
+  return `${match[1]}-${match[2]}-${match[3]}(${COLLECTION_WEEKDAY_LABELS[date.getUTCDay()]})`;
+}
+
+function syncCollectionDateWeekdays() {
+  const checkInText = collectionDateWeekdayLabel(els.checkInInput?.value);
+  const checkOutText = collectionDateWeekdayLabel(els.checkOutInput?.value);
+  if (els.checkInWeekday && els.checkInWeekday.textContent !== checkInText) els.checkInWeekday.textContent = checkInText;
+  if (els.checkOutWeekday && els.checkOutWeekday.textContent !== checkOutText) els.checkOutWeekday.textContent = checkOutText;
 }
 
 function parseDate(value) {
@@ -908,11 +935,6 @@ function renderCollectionPurposeRoutePreview(payload = currentCrawlFormPayload()
       <span>수집 깊이</span>
       <strong>${escapeHtml(purpose.depthLabel || purpose.shortLabel || purpose.label)}</strong>
       <small>${escapeHtml(weeklyText)}</small>
-    </article>
-    <article>
-      <span>예상 완료</span>
-      <strong>${escapeHtml(formatClockTime(preview.estimatedCompleteAt))}</strong>
-      <small>${escapeHtml(formatElapsed(preview.estimatedTotalSeconds || 0))}</small>
     </article>
   `;
 }
@@ -1333,7 +1355,14 @@ function renderRunResultApplySummary() {
         </article>
       </div>
       <p>${escapeHtml(model.error ? `업체 기준값 반영 오류: ${model.error}` : model.targetText)}</p>
+      <div class="run-result-flow" aria-label="수집 결과 확인 순서">
+        <span class="complete"><b>1</b><span><strong>수집 실행</strong><small>선택한 실행 결과</small></span></span>
+        <span class="current"><b>2</b><span><strong>플레이스 순서</strong><small>수집 당시 순서 유지</small></span></span>
+        <span><b>3</b><span><strong>상세·이력</strong><small>근거와 진행 흐름 확인</small></span></span>
+      </div>
       <div class="run-apply-actions">
+        <button class="primary-button" type="button" data-drawer-tab="rank" data-run-result-resume="rank">플레이스 순서 다시 보기</button>
+        <button type="button" data-drawer-tab="historyOps" data-run-result-resume="historyOps">수집 흐름·이력 보기</button>
         ${status.actions.map((action) => `
           <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
         `).join("")}
@@ -1345,6 +1374,7 @@ function renderRunResultApplySummary() {
 
 function updateCrawlSpeedPreview() {
   ensureCrawlControls();
+  syncCollectionDateWeekdays();
   if (!els.crawlForm) return;
   const payload = currentCrawlFormPayload();
   const preview = crawlPreviewMeta(payload);
@@ -1365,7 +1395,7 @@ function updateCrawlSpeedPreview() {
     const detailText = `${payload.detailRankRanges || collectionPurposeDefaultRange(payload.collectionPurpose)}위`;
     const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
     const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
-    els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}${safetyText}`;
+    els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)}${safetyText}`;
   }
   renderCollectionPurposeRoutePreview(payload, preview);
   renderCrawlReadinessPreview(payload, preview);
@@ -1408,13 +1438,9 @@ function syncCollectionModeInputs() {
     const buttonPurpose = collectionPurposeProfile(button.dataset.collectionPurpose);
     button.classList.toggle("active", buttonPurpose.key === purpose.key);
     button.setAttribute("aria-pressed", buttonPurpose.key === purpose.key ? "true" : "false");
-    button.title = `${buttonPurpose.depthLabel || buttonPurpose.label} · ${buttonPurpose.depthNote || buttonPurpose.note || ""}`;
+    button.title = buttonPurpose.label;
     const title = button.querySelector("strong");
-    const summary = button.querySelector("span");
-    const helper = button.querySelector("em");
     if (title) title.textContent = buttonPurpose.label;
-    if (summary) summary.textContent = buttonPurpose.cardSummary || buttonPurpose.note || "";
-    if (helper) helper.textContent = `${buttonPurpose.dbApplyText || buttonPurpose.depthNote || ""} · ${buttonPurpose.rangeHint || buttonPurpose.defaultRange}`;
   });
   updateCrawlSpeedPreview();
 }
@@ -1729,11 +1755,30 @@ function navigationItemIsActive(item = {}) {
   return true;
 }
 
+const NAVIGATION_ICON_PATHS = Object.freeze({
+  home: '<path d="M3.5 10.5 12 3.5l8.5 7"/><path d="M5.5 9.5V20h13V9.5"/><path d="M9.5 20v-6h5v6"/>',
+  company: '<path d="M5 10h14"/><path d="m6 10 1-5h10l1 5"/><path d="M6 10v9h12v-9"/><path d="M9 19v-5h6v5"/>',
+  collect: '<path d="M12 3v11"/><path d="m8 10 4 4 4-4"/><path d="M5 17v3h14v-3"/>',
+  analytics: '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+  region: '<path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+  members: '<path d="M16 20v-1.5a4.5 4.5 0 0 0-4.5-4.5h-3A4.5 4.5 0 0 0 4 18.5V20"/><circle cx="10" cy="7" r="4"/><path d="M17 11a3.5 3.5 0 0 1 3 3.5V20"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
+  more: '<path d="M12 5v14M5 12h14"/>',
+  competition: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M22 12h-3M12 22v-3M2 12h3"/>',
+  demand: '<path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/><path d="M16 7h3v3"/>',
+  account: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="9" r="3"/><path d="M6.5 19a6 6 0 0 1 11 0"/>'
+});
+
+function navigationIconSvg(iconKey = "home") {
+  const paths = NAVIGATION_ICON_PATHS[String(iconKey || "")] || NAVIGATION_ICON_PATHS.home;
+  return `<svg class="app-nav-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor">${paths}</svg>`;
+}
+
 function primaryNavigationButtonHtml(item = {}) {
   const placementClass = item.mobileOnly ? " mobile-only" : item.mobile === false ? " desktop-only" : "";
   return `
     <button class="app-nav-item${placementClass}" type="button" data-app-nav-key="${escapeHtml(item.key || "")}" aria-label="${escapeHtml(`${item.label || "화면"}${item.description ? ` · ${item.description}` : ""}`)}">
-      <span class="app-nav-icon" aria-hidden="true">${escapeHtml(item.icon || "·")}</span>
+      <span class="app-nav-icon" aria-hidden="true">${navigationIconSvg(item.icon)}</span>
       <span class="app-nav-copy"><strong>${escapeHtml(item.label || "")}</strong><small>${escapeHtml(item.description || "")}</small></span>
     </button>
   `;
@@ -1779,6 +1824,16 @@ function renderControlDrawerNavigation() {
   });
 }
 
+function resolveAnalysisReturnTab(lastTab = "", allowedTabs = roleTabs()) {
+  const allowed = new Set(Array.isArray(allowedTabs) ? allowedTabs : []);
+  return ADMIN_ANALYSIS_TABS.includes(lastTab) && allowed.has(lastTab) ? lastTab : "report";
+}
+
+function rememberAnalysisTab(tab = state.activeTab) {
+  if (!isAdminRole() || !ADMIN_ANALYSIS_TABS.includes(tab) || !roleAllowsTab(tab)) return;
+  state.lastAnalysisTab = tab;
+}
+
 function activateAppNavigation(key = "") {
   const item = navigationItemByKey(key);
   if (!item) return;
@@ -1798,7 +1853,10 @@ function activateAppNavigation(key = "") {
   }
   state.primaryNavKey = item.parentKey || item.key || "";
   if (item.adminPanelSection && isAdminRole()) state.adminPanelSection = item.adminPanelSection;
-  setActiveTab(item.tab || firstRoleTab(), { navigationKey: state.primaryNavKey });
+  const targetTab = isAdminRole() && item.key === "analytics"
+    ? resolveAnalysisReturnTab(state.lastAnalysisTab)
+    : (item.tab || firstRoleTab());
+  setActiveTab(targetTab, { navigationKey: state.primaryNavKey });
   if (item.adminPanelSection && isAdminRole()) {
     setAdminPanelSection(item.adminPanelSection, { scroll: true });
   }
@@ -2067,7 +2125,6 @@ function ensureCrawlControls() {
         <span><b id="crawlProgressPercent">예측중</b><small>진행률</small></span>
         <span><b id="crawlProgressElapsed">0초</b><small>경과</small></span>
         <span><b id="crawlProgressRemaining">계산 중</b><small>남은 시간</small></span>
-        <span><b id="crawlProgressEta">--:--</b><small>완료 예정</small></span>
       </div>
       <small class="crawl-progress-basis" id="crawlProgressBasis">조건 기반 예상값입니다.</small>
     `;
@@ -2079,7 +2136,6 @@ function ensureCrawlControls() {
     els.crawlProgressPercent = progress.querySelector("#crawlProgressPercent");
     els.crawlProgressElapsed = progress.querySelector("#crawlProgressElapsed");
     els.crawlProgressRemaining = progress.querySelector("#crawlProgressRemaining");
-    els.crawlProgressEta = progress.querySelector("#crawlProgressEta");
     els.crawlProgressBasis = progress.querySelector("#crawlProgressBasis");
     els.crawlProgressStages = progress.querySelector("#crawlProgressStages");
   }
@@ -2294,7 +2350,7 @@ function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()
       const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
       const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
       const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
-      els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}${safetyText}`;
+      els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)}${safetyText}`;
     }
   }, 220);
 }
@@ -2734,17 +2790,15 @@ function updateCrawlProgressNumbers(meta = {}) {
           ? (remaining <= 0 ? "곧 완료" : formatElapsed(remaining))
           : "계산 중");
   }
-  if (els.crawlProgressEta) els.crawlProgressEta.textContent = formatClockTime(meta.estimatedCompleteAt);
   if (els.crawlProgressBasis) els.crawlProgressBasis.textContent = crawlEstimateBasisText(meta.estimateBasis);
   if (els.crawlSubmitMeta) {
     const totalText = formatElapsed(meta.estimatedTotalSeconds) || "계산 중";
-    const etaText = formatClockTime(meta.estimatedCompleteAt);
     const remainingText = meta.isDelayed
       ? `지연 ${formatElapsed(meta.delayedSeconds) || "확인 중"}`
       : (Number.isFinite(remaining) ? (remaining <= 0 ? "곧 완료" : `${formatElapsed(remaining)} 남음`) : "남은 시간 계산 중");
     els.crawlSubmitMeta.textContent = state.crawlProgressRunning
-      ? `${remainingText} · 완료 ${etaText}`
-      : `예상 ${totalText} · 완료 ${etaText}`;
+      ? remainingText
+      : `예상 ${totalText}`;
   }
   renderCrawlStages(meta);
 }
@@ -2849,14 +2903,12 @@ function scheduleCrawlStatusPoll(delay = 5000, notifyIdle = false) {
 function crawlEstimateInlineText(status = {}) {
   const percent = Number(status.estimatedProgress);
   const remaining = Number(status.remainingSeconds);
-  const eta = formatClockTime(status.estimatedCompleteAt);
   const stage = crawlCurrentStageText(status);
   const parts = [];
   if (status.isDelayed) parts.push(`지연 ${formatElapsed(status.delayedSeconds) || "확인 중"}`);
   if (stage) parts.push(stage);
   if (Number.isFinite(percent)) parts.push(`예상 ${Math.round(percent)}%`);
   if (Number.isFinite(remaining)) parts.push(`남은 ${remaining <= 0 ? "곧 완료" : formatElapsed(remaining)}`);
-  if (eta !== "--:--") parts.push(`완료 ${eta}`);
   return parts.join(" · ");
 }
 
@@ -2874,7 +2926,7 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
         true,
         delayed ? "예상보다 지연 중" : (stage.label ? `${stage.label} 진행 중` : "수집 진행 중"),
         delayed
-          ? `예상 완료 시간을 ${formatElapsed(status.delayedSeconds) || "초과"} 넘겼습니다. 마지막 단계와 저장 처리를 계속 확인하고 있습니다.`
+          ? `예상 시간을 ${formatElapsed(status.delayedSeconds) || "초과"} 넘겼습니다. 마지막 단계와 저장 처리를 계속 확인하고 있습니다.`
           : `${recrawlText ? `${recrawlText} · ` : ""}${stage.detail || `네이버·NOL·떠나요를 확인하고 있습니다${elapsed ? ` · ${elapsed} 경과` : ""}${estimate ? ` · ${estimate}` : ""}.`}`,
         status
       );
@@ -5791,7 +5843,7 @@ function miniBars(item) {
   const first = visible[0]?.label || monthDay(state.data?.run?.checkIn) || "";
   const last = visible[visible.length - 1]?.label || "";
   return `
-    <div class="mini-bars" aria-label="날짜별 판매 흐름" style="--bar-count:${Math.max(1, visible.length)}">
+    <div class="mini-bars" data-card-scroll="chart" role="region" tabindex="0" aria-label="날짜별 판매 흐름, 좌우로 스크롤할 수 있습니다" style="--bar-count:${Math.max(1, visible.length)}">
       <div class="bar-row">
         ${visible.map((row) => {
           const rangeHeight = row.total ? Math.max(18, Math.round((row.total / maxTotal) * 32)) : 32;
@@ -6308,7 +6360,7 @@ function flowChipRow(item = {}) {
     ? `누적평일 ${fmtRate(historyWeekday.saleRate)}`
     : "";
   return `
-    <div class="flow-chip-row" aria-label="7일 판매 흐름 요약">
+    <div class="flow-chip-row" data-card-scroll="flow" role="region" tabindex="0" aria-label="7일 판매 흐름 요약, 좌우로 스크롤할 수 있습니다">
       <span>${escapeHtml(flowMetricText("전체", flow.all))}</span>
       <span>${escapeHtml(`${flow.weekday.label} ${Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요"}${flow.weekday.count ? ` · ${flow.weekday.count}일` : ""}`)}</span>
       <span>${escapeHtml(flowMetricText("금", flow.friday))}</span>
@@ -7618,7 +7670,7 @@ function validationReasonRow(item = {}) {
   const visibleReasons = reasons.filter(Boolean).slice(0, 4);
   if (!visibleReasons.length) return "";
   return `
-    <div class="reason-chip-row" aria-label="판단 근거">
+    <div class="reason-chip-row" data-card-scroll="reason" role="region" tabindex="0" aria-label="판단 근거, 좌우로 스크롤할 수 있습니다">
       ${visibleReasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}
     </div>
   `;
@@ -24596,7 +24648,7 @@ function adminConsoleCrawlPanel(entries = []) {
   const trend = state.data?.stats?.datalabTrend || state.data?.datalabTrend || {};
   const cells = [
     ["예상 소요", formatElapsed(preview.estimatedTotalSeconds), crawlEstimateBasisText(preview.estimateBasis)],
-    ["완료 예정", formatClockTime(preview.estimatedCompleteAt), `${purpose.shortLabel || purpose.label} · ${payload.detailRankRanges || purpose.defaultRange}위`],
+    ["수집 목적", purpose.shortLabel || purpose.label, `${payload.detailRankRanges || purpose.defaultRange}위`],
     ["트렌드 연동", trend.cache?.hit ? "저장값 사용" : trend.collectable ? "연동 정상" : "대기", trend.cache?.endDate || trend.reason || "같은 기준일 우선"],
     ["재수집 후보", fmtNumber(recrawlRows.length), openEntries.length ? "큐 기준 자동 산출" : "대기"],
     ["최근 상세", fmtNumber(counts.naverBookingStockSucceeded || 0), `${fmtNumber(counts.naverBookingStockChecked || 0)}개 시도`],
@@ -29306,7 +29358,10 @@ function syncAppHistoryState(push = false) {
   const nextState = {
     app: "lodging-datalab",
     role: state.session?.role || "",
-    tab: state.activeTab || firstRoleTab()
+    tab: state.activeTab || firstRoleTab(),
+    runId: state.activeRunId || "",
+    lastAnalysisTab: resolveAnalysisReturnTab(state.lastAnalysisTab),
+    adminPanelSection: isAdminRole() ? state.adminPanelSection : ""
   };
   try {
     if (push && window.history.pushState && window.history.state?.tab !== nextState.tab) {
@@ -29319,9 +29374,39 @@ function syncAppHistoryState(push = false) {
   }
 }
 
+function restoreAppHistoryState(historyState = window.history?.state) {
+  if (!historyState || historyState.app !== "lodging-datalab") return false;
+  const historyRole = String(historyState.role || "");
+  if (historyRole && historyRole !== currentRole()) return false;
+  state.lastAnalysisTab = resolveAnalysisReturnTab(String(historyState.lastAnalysisTab || state.lastAnalysisTab || "report"));
+  const historyTab = String(historyState.tab || "");
+  if (historyTab && roleAllowsTab(historyTab)) state.activeTab = historyTab;
+  const historyRunId = String(historyState.runId || "").trim();
+  if (isAdminRole() && historyRunId) state.activeRunId = historyRunId;
+  const historyAdminPanel = String(historyState.adminPanelSection || "");
+  if (isAdminRole() && Object.prototype.hasOwnProperty.call(ADMIN_PANEL_SECTIONS, historyAdminPanel)) {
+    state.adminPanelSection = historyAdminPanel;
+  }
+  return true;
+}
+
+async function restoreAppHistoryNavigation(historyState = {}) {
+  const previousRunId = state.activeRunId;
+  if (!restoreAppHistoryState(historyState)) return false;
+  const targetTab = state.activeTab;
+  const restoredRunId = state.activeRunId;
+  if (isAdminRole() && restoredRunId && restoredRunId !== previousRunId) {
+    if (state.runs.some((run) => run.id === restoredRunId)) await loadRun(restoredRunId);
+    else state.activeRunId = previousRunId;
+  }
+  setActiveTab(targetTab, { fromHistory: true });
+  return true;
+}
+
 function setActiveTab(tab, options = {}) {
   if (state.adminSettingsDirty && state.activeTab === "admin" && tab !== "admin" && !confirmAdminSettingsNavigation("leave")) return false;
   state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  rememberAnalysisTab(state.activeTab);
   if (options.navigationKey) state.primaryNavKey = options.navigationKey;
   else state.primaryNavKey = "";
   if (isAdminRole()) {
@@ -29347,6 +29432,7 @@ function setActiveTab(tab, options = {}) {
     return true;
   }
   if (state.activeTab === "report") renderReport();
+  if (state.activeTab === "rank") renderCompanies();
   if (state.activeTab === "account") renderB2BAccountWorkspace();
   if (state.activeTab === "decisionQueue") renderDecisionQueue();
   if (state.activeTab === "map") renderMap();
@@ -30897,8 +30983,10 @@ function bindPwaLifecycleEvents() {
   });
   window.addEventListener("online", () => resumeB2BSearchAfterReturn("online").catch(() => {}));
   window.addEventListener("popstate", (event) => {
-    const tab = event.state?.tab;
-    if (tab && roleAllowsTab(tab)) setActiveTab(tab, { fromHistory: true });
+    restoreAppHistoryNavigation(event.state || {}).catch((error) => {
+      setStatus("화면 복원 실패");
+      console.warn("Failed to restore application navigation", error);
+    });
   });
 }
 
@@ -32115,6 +32203,7 @@ async function loadRun(runId) {
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
   state.data = data;
   state.activeRunId = runId;
+  syncAppHistoryState(false);
   if (isAdminRole()) {
     await loadHistoryOps();
     await loadCompanyMasterSummary();
@@ -32536,7 +32625,7 @@ async function submitCrawl(event) {
     preview,
     payload
   );
-  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.shortLabel || purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}.`;
+  els.crawlStatus.textContent = `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.shortLabel || purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
   setStatus("수집 중");
   scheduleCrawlStatusPoll(1500, false);
   try {
@@ -33966,9 +34055,10 @@ async function init() {
     syncCollectionModeInputs();
     bindEvents();
     setDefaultDates();
+    restoreAppHistoryState();
     syncAppHistoryState(false);
     if (isAdminRole()) {
-      await Promise.all([loadRuns(true), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
+      await Promise.all([loadRuns(false), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
       if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
         await loadCompanyMasterSummary();
       }

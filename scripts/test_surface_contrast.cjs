@@ -43,6 +43,7 @@ const REQUIRED_STYLE_MARKERS = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
   "Dark transparent card contract v7",
+  "Company ranking mobile overflow and chip contrast contract v1",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]",
 ];
@@ -290,6 +291,22 @@ for (const contract of APP_SURFACE_CONTRACTS) {
   assert.ok(app.includes(contract), `missing app surface contract: ${contract}`);
 }
 
+for (const scrollContract of [
+  'data-card-scroll="chart" role="region" tabindex="0"',
+  'data-card-scroll="flow" role="region" tabindex="0"',
+  'data-card-scroll="reason" role="region" tabindex="0"',
+]) {
+  assert.ok(app.includes(scrollContract), `missing keyboard-scroll contract: ${scrollContract}`);
+}
+
+const companyRankingMarker = "/* Company ranking mobile overflow and chip contrast contract v1. */";
+const companyRankingContract = styles.slice(styles.indexOf(companyRankingMarker));
+assert.match(companyRankingContract, /#companyList \[data-card-scroll\]\s*\{[^}]*max-width:\s*100%[^}]*overflow-x:\s*auto[^}]*overflow-y:\s*hidden[^}]*scrollbar-width:\s*thin/s, "company card overflow must stay inside a visible horizontal scroller");
+assert.match(companyRankingContract, /#companyList \[data-card-scroll\]:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--color-border-focus\)/s, "company card scrollers must expose keyboard focus");
+assert.match(companyRankingContract, /@media \(max-width: 720px\)[\s\S]*?#companyList \.company-card\s*\{[^}]*grid-template-areas:[^}]*"chart chart"[^}]*"action action"/s, "mobile ranking cards must place actions below charts");
+assert.match(companyRankingContract, /@media \(max-width: 720px\)[\s\S]*?#companyList :is\(\.flow-chip-row, \.reason-chip-row\)\s*\{[^}]*flex-wrap:\s*nowrap[^}]*scroll-snap-type:\s*inline proximity/s, "mobile chip lanes must scroll instead of overflowing the viewport");
+assert.match(companyRankingContract, /body\.role-admin #companyList :is\([\s\S]*?\.flow-chip-row span,[\s\S]*?\.reason-chip-row span,[\s\S]*?\.platform-chip,[\s\S]*?\.more-button[\s\S]*?\)\s*\{[^}]*background:\s*var\(--color-surface-raised\)\s*!important[^}]*color:\s*var\(--color-text-secondary\)\s*!important/s, "ranking controls must use an explicit semantic surface and readable text in both themes");
+
 function rules(source) {
   return [...source.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((match) => ({
     selector: match[1].trim(),
@@ -481,6 +498,21 @@ for (const theme of ["light", "dark"]) {
     assert.ok(
       ratio >= minimum,
       `${theme} ${foregroundToken} on ${backgroundToken} contrast ${ratio.toFixed(2)} is below ${minimum}:1`,
+    );
+  }
+}
+
+for (const theme of ["light", "dark"]) {
+  for (const [foregroundToken, backgroundToken] of [
+    ["color-text-secondary", "color-surface-raised"],
+    ["color-status-info", "color-surface-raised"],
+    ["color-status-success", "color-surface-raised"],
+    ["color-action-primary", "color-surface-raised"],
+  ]) {
+    const ratio = contrastRatio(colorFor(theme, foregroundToken), colorFor(theme, backgroundToken));
+    assert.ok(
+      ratio >= 4.5,
+      `${theme} ranking chip ${foregroundToken} on ${backgroundToken} contrast ${ratio.toFixed(2)} is below 4.5:1`,
     );
   }
 }
