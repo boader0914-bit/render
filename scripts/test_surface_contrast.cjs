@@ -29,6 +29,7 @@ const REQUIRED_COLOR_TOKENS = [
   "color-action-primary",
   "color-action-primary-hover",
   "color-action-primary-pressed",
+  "color-accent-secondary",
   "color-status-info",
   "color-status-success",
   "color-status-warning",
@@ -43,6 +44,7 @@ const REQUIRED_STYLE_MARKERS = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
   "Dark transparent card contract v7",
+  "Summary report semantic cards v1",
   "Company ranking mobile overflow and chip contrast contract v1",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]",
@@ -283,6 +285,8 @@ assert.match(darkTransparentContract, /\.admin-db-audit-gatebar\s*\{[^}]*backgro
 assert.match(darkTransparentContract, /\.b2b-interest-lodge-card\.is-selected,[\s\S]*?border-color:\s*var\(--color-border-focus\)[^}]*box-shadow:\s*inset 4px 0 0 var\(--color-action-primary\), var\(--focus-ring\)/s, "dark selected cards must retain border and inset focus cues");
 assert.match(darkTransparentContract, /\.b2b-home-journey article\.active\s*\{[^}]*border-color:[^}]*box-shadow:\s*inset/s, "dark active journey cards must retain a non-background cue");
 assert.match(darkTransparentContract, /\.b2b-home-journey article\.done,[\s\S]*?\.admin-task-list article\.active\s*\{[^}]*border-color:[^}]*box-shadow:\s*inset/s, "dark completed cards must retain a success border and inset cue");
+assert.match(styles, /Report semantic surfaces intentionally restore low-chroma meaning[\s\S]*?:root\[data-theme="dark"\][^{]*\.report-semantic-card\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--report-tone[^}]*9%, var\(--color-surface-default\)\)\s*!important/s, "dark report cards must use only a low-chroma semantic tint after the transparent reset");
+assert.match(styles, /:root\[data-theme="light"\][^{]*\.report-semantic-card\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--report-tone[^}]*7%, var\(--color-surface-default\)\)\s*!important/s, "light report cards must retain semantic tint and a visible boundary");
 assert.match(styles, /body\.role-b2b \.b2b-home-workspace :where\(button, a\):focus-visible\s*\{[^}]*outline:\s*2px solid var\(--color-border-focus\)[^}]*outline-offset:\s*2px/s, "B2B home focus must expose a solid 3:1-capable outline");
 for (const selector of DARK_TRANSPARENT_CARD_SELECTORS) {
   assert.ok(darkTransparentContract.includes(selector), `missing transparent dark-card selector: ${selector}`);
@@ -481,7 +485,7 @@ for (const foreground of ["color-text-primary", "color-text-secondary", "color-t
 for (const background of ["color-action-primary", "color-action-primary-hover", "color-action-primary-pressed"]) {
   contrastContracts.push(["color-text-inverse", background, 4.5]);
 }
-for (const foreground of ["color-status-info", "color-status-success", "color-status-warning", "color-status-danger"]) {
+for (const foreground of ["color-status-info", "color-status-success", "color-status-warning", "color-status-danger", "color-accent-secondary"]) {
   contrastContracts.push([foreground, "color-surface-default", 4.5]);
   contrastContracts.push([foreground, "color-canvas", 4.5]);
 }

@@ -569,9 +569,122 @@ function summaryIcon(type) {
         <path d="M12 8v5" />
         <path d="M12 17h.01" />
       </svg>
+    `,
+    tag: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h7l9 9-6 6-9-9z" />
+        <path d="M8 9h.01" />
+      </svg>
+    `,
+    platform: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
+      </svg>
+    `,
+    candidate: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21a8 8 0 0 1 16 0" />
+      </svg>
+    `,
+    package: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m4 7 8-4 8 4-8 4z" />
+        <path d="M4 7v10l8 4 8-4V7M12 11v10" />
+      </svg>
+    `,
+    search: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="m16 16 5 5" />
+      </svg>
+    `,
+    opportunity: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 8v8M8 12h8" />
+      </svg>
+    `,
+    history: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 3h9l4 4v14H6z" />
+        <path d="M15 3v5h5M9 12h7M9 16h7" />
+      </svg>
+    `,
+    tourism: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m3 19 6-9 3 4 3-6 6 11z" />
+        <path d="M7 19h10" />
+      </svg>
+    `,
+    operation: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19 13.5v-3l-2-.7-.7-1.7.9-1.9-2.1-2.1-1.9.9-1.7-.7-.7-2h-3l-.7 2-1.7.7-1.9-.9-2.1 2.1.9 1.9-.7 1.7-2 .7v3l2 .7.7 1.7-.9 1.9 2.1 2.1 1.9-.9 1.7.7.7 2h3l.7-2 1.7-.7 1.9.9 2.1-2.1-.9-1.9.7-1.7z" />
+      </svg>
+    `,
+    dayuse: `
+      <svg class="summary-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 21V8M19 21V8M3 8h18M7 8l5-5 5 5" />
+        <path d="M8 21v-7h8v7" />
+      </svg>
     `
   };
   return icons[type] || icons.sales;
+}
+
+const REPORT_TONES = new Set(["neutral", "info", "success", "warning", "danger", "opportunity"]);
+
+function normalizedReportTone(value, fallback = "neutral") {
+  const tone = String(value || "").trim().toLowerCase();
+  return REPORT_TONES.has(tone) ? tone : fallback;
+}
+
+function decisionReportTone(value, fallback = "info") {
+  const tone = String(value || "").trim().toLowerCase();
+  if (["strong", "good", "hot", "success", "positive"].includes(tone)) return "success";
+  if (["watch", "warning", "pending", "caution"].includes(tone)) return "warning";
+  if (["bad", "danger", "error", "risk"].includes(tone)) return "danger";
+  if (["opportunity", "growth"].includes(tone)) return "opportunity";
+  return normalizedReportTone(fallback);
+}
+
+function reportSemanticIconHtml(icon = "trust", tone = "neutral") {
+  const safeTone = normalizedReportTone(tone);
+  return `<i class="report-semantic-icon report-tone-${safeTone}" aria-hidden="true">${summaryIcon(icon)}</i>`;
+}
+
+function reportMetricCardHtml({ key = "metric", label = "지표", value = "미수집", note = "", state: metricState = "unavailable", statusLabel = "", tone = "neutral", icon = "trust" } = {}) {
+  const safeState = ["ready", "zero", "unavailable", "error"].includes(metricState) ? metricState : "unavailable";
+  const safeTone = normalizedReportTone(tone);
+  const fallbackStatus = { ready: "확인됨", zero: "실제 0", unavailable: "확인 필요", error: "오류" }[safeState];
+  return `
+    <article class="report-semantic-card report-tone-${safeTone}" data-report-card="${escapeHtml(key)}" data-report-tone="${safeTone}" data-metric-state="${safeState}">
+      ${reportSemanticIconHtml(icon, safeTone)}
+      <div class="report-semantic-copy">
+        <span class="report-semantic-label">${escapeHtml(label)}</span>
+        <strong>${escapeHtml(String(value))}</strong>
+        ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+        <em class="report-semantic-status">${escapeHtml(statusLabel || fallbackStatus)}</em>
+      </div>
+    </article>
+  `;
+}
+
+function reportInsightItemHtml({ key = "insight", label = "지표", value = "확인 필요", note = "", statusLabel = "", tone = "neutral", icon = "trust" } = {}) {
+  const safeTone = normalizedReportTone(tone);
+  return `
+    <div class="report-insight-item report-tone-${safeTone}" data-report-insight="${escapeHtml(key)}" data-report-tone="${safeTone}">
+      ${reportSemanticIconHtml(icon, safeTone)}
+      <div class="report-insight-copy">
+        <b>${escapeHtml(label)}</b>
+        ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+      </div>
+      <strong>${escapeHtml(String(value))}</strong>
+      ${statusLabel ? `<em class="report-semantic-status">${escapeHtml(statusLabel)}</em>` : ""}
+    </div>
+  `;
 }
 
 function fmtSearchRate(value) {
@@ -13853,22 +13966,7 @@ function renderB2BReportDisclaimerNotice(platformStats = reportPlatformStats(sta
   `;
 }
 
-function adminAnalyticsValueCell(label, value, note, options = {}) {
-  const stateKey = options.state || adminValueState(value);
-  const display = stateKey === "unavailable"
-    ? (options.unavailableLabel || "미수집")
-    : (typeof options.format === "function" ? options.format(value) : fmtNumber(value));
-  const stateLabels = { ready: "수집값", zero: "실제 0", unavailable: "확인 필요" };
-  return `
-    <div data-admin-metric-state="${escapeHtml(stateKey)}">
-      <dt>${escapeHtml(label)}</dt>
-      <dd><strong>${escapeHtml(String(display))}</strong><small>${escapeHtml(note || stateLabels[stateKey] || "데이터 상태 확인")}</small><span>${escapeHtml(stateLabels[stateKey] || "상태 확인")}</span></dd>
-    </div>
-  `;
-}
-
-function adminAnalyticsOverviewHtml(section = "summary") {
-  if (!isAdminRole()) return "";
+function adminAnalyticsOverviewModel(section = "summary") {
   const data = state.data || {};
   const run = data.run || {};
   const items = Array.isArray(data.availability?.items) ? data.availability.items : [];
@@ -13900,25 +13998,50 @@ function adminAnalyticsOverviewHtml(section = "summary") {
     history: ["이력 분석 기준", "반복 수집·회차 비교"]
   };
   const [eyebrow, title] = sectionLabels[section] || sectionLabels.summary;
+  return {
+    section,
+    eyebrow,
+    title,
+    run,
+    items,
+    sales,
+    salesObserved,
+    categoryCount,
+    categorySummaryObserved,
+    platformStats,
+    observedPlatforms,
+    completedAt,
+    hasRun
+  };
+}
+
+function adminAnalyticsOverviewHtml(section = "summary", overview = adminAnalyticsOverviewModel(section)) {
+  if (!isAdminRole()) return "";
   return `
-    <section class="admin-operations-context admin-analytics-context" data-admin-analysis-context="${escapeHtml(section)}" aria-label="${escapeHtml(title)} 데이터 기준">
+    <section class="admin-operations-context admin-analytics-context report-basis-card" data-admin-analysis-context="${escapeHtml(section)}" aria-label="${escapeHtml(overview.title)} 데이터 기준">
       <div class="admin-operations-context-head">
         <div>
-          <span>${escapeHtml(eyebrow)}</span>
+          <span>${escapeHtml(overview.eyebrow)}</span>
           <strong>${escapeHtml(activeKeyword() || "검색 결과 대기")}</strong>
-          <small>${escapeHtml(hasRun ? `${dateRangeLabel(run)} · 기준 ${completedAt ? compactDateTime(completedAt) : "완료 시각 미확인"}` : "수집 결과가 없어 분석 기준을 확정할 수 없습니다.")}</small>
+          <small>${escapeHtml(overview.hasRun ? `${dateRangeLabel(overview.run)} · 기준 ${overview.completedAt ? compactDateTime(overview.completedAt) : "완료 시각 미확인"}` : "수집 결과가 없어 분석 기준을 확정할 수 없습니다.")}</small>
         </div>
-        <mark class="admin-operation-status ${hasRun ? "ready" : "blocked"}" role="status" aria-live="polite" aria-atomic="true">${hasRun ? "수집 결과 기준" : "미수집"}</mark>
+        <mark class="admin-operation-status ${overview.hasRun ? "ready" : "blocked"}" role="status" aria-live="polite" aria-atomic="true">${overview.hasRun ? "수집 결과 기준" : "미수집"}</mark>
       </div>
-      <dl class="admin-operations-context-grid">
-        ${adminAnalyticsValueCell("분석 업체", hasRun ? items.length : null, items.length ? "현재 선택 결과" : "업체 표본 없음")}
-        ${adminAnalyticsValueCell("판매 표본", hasRun && salesObserved ? sales.supply : null, salesObserved ? `${fmtNumber(sales.sold)}개 판매 추정` : "수량 표본 없음")}
-        ${adminAnalyticsValueCell("대표 유형", categorySummaryObserved ? categoryCount : null, categorySummaryObserved ? (categoryCount ? "대표 유형별 집계" : "확인된 대표 유형 0개") : "유형 집계 미수집")}
-        ${adminAnalyticsValueCell("확인 플랫폼", observedPlatforms.length ? observedPlatforms.length : null, observedPlatforms.length ? observedPlatforms.join(" · ") : "플랫폼 표본 없음")}
-      </dl>
-      <p class="admin-operation-scope"><strong>표시 원칙</strong><span>0은 실제 0으로, 수집하지 않은 값은 미수집·확인 필요로 구분합니다. 분석 공식은 서버 결과를 그대로 사용합니다.</span></p>
     </section>
   `;
+}
+
+function adminReportKpiCardsHtml({ items = [], sales = {}, overview = {}, candidateCount = 0, productGapCount = 0 } = {}) {
+  const candidateState = candidateCount === 0 ? "zero" : "ready";
+  const candidateTone = candidateCount ? "opportunity" : "neutral";
+  return [
+    reportMetricCardHtml({ key: "companies", label: "분석 업체", value: fmtNumber(items.length), note: "현재 선택 결과", state: "ready", statusLabel: "수집 결과", tone: "info", icon: "company" }),
+    reportMetricCardHtml({ key: "sales-sample", label: "판매 표본", value: overview.salesObserved ? fmtNumber(sales.supply) : "미수집", note: overview.salesObserved ? `${fmtNumber(sales.sold)}개 판매 추정` : "수량 표본 없음", state: overview.salesObserved ? (sales.supply === 0 ? "zero" : "ready") : "unavailable", statusLabel: overview.salesObserved ? (sales.supply === 0 ? "실제 0" : "판매 관측") : "미수집", tone: overview.salesObserved ? (sales.supply === 0 ? "neutral" : "success") : "warning", icon: "sales" }),
+    reportMetricCardHtml({ key: "primary-category", label: "대표 유형", value: overview.categorySummaryObserved ? fmtNumber(overview.categoryCount) : "미수집", note: overview.categorySummaryObserved ? (overview.categoryCount ? "대표 유형별 집계" : "확인된 대표 유형 0개") : "유형 집계 미수집", state: overview.categorySummaryObserved ? (overview.categoryCount === 0 ? "zero" : "ready") : "unavailable", statusLabel: overview.categorySummaryObserved ? (overview.categoryCount ? "유형 확인" : "유형 미확인") : "미수집", tone: overview.categoryCount ? "info" : "warning", icon: "tag" }),
+    reportMetricCardHtml({ key: "platforms", label: "확인 플랫폼", value: overview.observedPlatforms?.length ? fmtNumber(overview.observedPlatforms.length) : "미수집", note: overview.observedPlatforms?.length ? overview.observedPlatforms.join(" · ") : "플랫폼 표본 없음", state: overview.observedPlatforms?.length ? "ready" : "unavailable", statusLabel: overview.observedPlatforms?.length ? "채널 확인" : "미수집", tone: overview.observedPlatforms?.length ? "info" : "warning", icon: "platform" }),
+    reportMetricCardHtml({ key: "contact-candidates", label: "컨택 후보", value: fmtNumber(candidateCount), note: "판매흐름/상품 약점 감지", state: candidateState, statusLabel: candidateCount ? "후보 감지" : "후보 없음", tone: candidateTone, icon: "candidate" }),
+    reportMetricCardHtml({ key: "product-gap", label: "상품 공백", value: fmtNumber(productGapCount), note: "데이유즈/캠프닉 미확인", state: productGapCount === 0 ? "zero" : "ready", statusLabel: productGapCount ? "확인 필요" : "구성 확인", tone: productGapCount ? "warning" : "success", icon: "package" })
+  ].join("");
 }
 
 function renderReport() {
@@ -13938,7 +14061,8 @@ function renderReport() {
   const rate = sales.supply ? sales.sold / sales.supply : finiteNumber(data.availability?.stats?.weightedSoldOutRate, NaN);
   const publicMode = !isAdminRole();
   const allTargets = publicMode ? [] : targetEntries(0);
-  const platformStats = reportPlatformStats(items);
+  const adminOverview = publicMode ? null : adminAnalyticsOverviewModel("summary");
+  const platformStats = adminOverview?.platformStats || reportPlatformStats(items);
   const searchVolume = (data.regions || []).reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
   const platformGapRatio = platformStats.otaCheckCount ? (platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo) / (platformStats.otaCheckCount * 3) : 0;
   const score = reportMarketScore({
@@ -13950,6 +14074,7 @@ function renderReport() {
   });
   const decision = reportDecision(score, rate, allTargets.length);
   const dayUseCount = items.filter((item) => salesStats(item, "day").supply > 0).length;
+  const productGapCount = Math.max(0, items.length - dayUseCount);
   const lowSalesCount = items.filter((item) => {
     const lodging = salesStats(item, "lodging");
     return Number.isFinite(lodging.rate) && lodging.rate < 0.25;
@@ -13992,12 +14117,27 @@ function renderReport() {
       },
       {
         title: "데이유즈/캠프닉 공백 제안",
-        detail: `${fmtNumber(items.length - dayUseCount)}개 업체는 당일상품 확인 필요`
+        detail: `${fmtNumber(productGapCount)}개 업체는 당일상품 확인 필요`
       }
     ];
+  const rateState = Number.isFinite(rate) ? (rate === 0 ? "zero" : "ready") : "unavailable";
+  const rateTone = Number.isFinite(rate) ? decisionReportTone(heroDecision.tone, "info") : "warning";
+  const candidateCount = publicMode && b2bBrief ? b2bBrief.salesSampleCount : allTargets.length;
+  const candidateState = candidateCount === 0 ? "zero" : "ready";
+  const candidateTone = publicMode
+    ? (candidateCount ? "info" : "neutral")
+    : (candidateCount ? "opportunity" : "neutral");
+  const reportKpiMarkup = publicMode
+    ? [
+        reportMetricCardHtml({ key: "sales-rate", label: "객실 판매율", value: fmtRate(rate), note: `${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}개 추정`, state: rateState, statusLabel: Number.isFinite(rate) ? (rate === 0 ? "실제 0" : "판매 관측") : "확인 필요", tone: rateTone, icon: "rate" }),
+        reportMetricCardHtml({ key: "companies", label: "경쟁업체", value: fmtNumber(items.length), note: "상위 노출 기준", state: "ready", statusLabel: "수집 결과", tone: "info", icon: "company" }),
+        reportMetricCardHtml({ key: "reservation-sample", label: "예약 표본", value: fmtNumber(candidateCount), note: "예약율 산출 가능", state: candidateState, statusLabel: candidateCount ? "표본 확인" : "후보 없음", tone: candidateTone, icon: "candidate" }),
+        reportMetricCardHtml({ key: "product-gap", label: "상품 구성", value: fmtNumber(productGapCount), note: "데이유즈/캠프닉 표본", state: productGapCount === 0 ? "zero" : "ready", statusLabel: productGapCount ? "확인 필요" : "구성 확인", tone: productGapCount ? "warning" : "success", icon: "package" })
+      ].join("")
+    : adminReportKpiCardsHtml({ items, sales, overview: adminOverview, candidateCount, productGapCount });
 
   els.reportBody.innerHTML = `
-    ${publicMode ? "" : adminAnalyticsOverviewHtml("summary")}
+    ${publicMode ? "" : adminAnalyticsOverviewHtml("summary", adminOverview)}
     <section class="report-hero">
       <div class="report-hero-copy">
         <span class="report-badge ${escapeHtml(heroDecision.tone)}">${escapeHtml(heroDecision.label)}</span>
@@ -14015,30 +14155,11 @@ function renderReport() {
     ${publicMode ? renderB2BReportBasisNotice(platformStats) : ""}
 
     <section class="report-metric-grid ${publicMode ? "b2b-legacy-detail" : ""}" aria-label="보고서 핵심 지표">
-      <article>
-        <span>객실 판매율</span>
-        <strong>${fmtRate(rate)}</strong>
-        <small>${fmtNumber(sales.sold)}/${fmtNumber(sales.supply)}개 추정</small>
-      </article>
-      <article>
-        <span>${publicMode ? "경쟁업체" : "분석 업체"}</span>
-        <strong>${fmtNumber(items.length)}</strong>
-        <small>상위 노출 기준</small>
-      </article>
-      <article>
-        <span>${publicMode ? "예약 표본" : "컨택 후보"}</span>
-        <strong>${fmtNumber(publicMode && b2bBrief ? b2bBrief.salesSampleCount : allTargets.length)}</strong>
-        <small>${publicMode ? "예약율 산출 가능" : "판매흐름/상품 약점 감지"}</small>
-      </article>
-      <article>
-        <span>${publicMode ? "상품 구성" : "상품 공백"}</span>
-        <strong>${fmtNumber(items.length - dayUseCount)}</strong>
-        <small>${publicMode ? "데이유즈/캠프닉 표본" : "데이유즈/캠프닉 미확인"}</small>
-      </article>
+      ${reportKpiMarkup}
     </section>
 
     <section class="report-layout ${publicMode ? "b2b-legacy-detail" : ""}">
-      <article class="report-card market">
+      <article class="report-card market report-semantic-section report-tone-info" data-report-tone="info">
         <div class="report-card-head">
           <div>
             <h3>${publicMode ? "경쟁 해석" : "시장 해석"}</h3>
@@ -14047,14 +14168,14 @@ function renderReport() {
           <span>${fmtNumber(bookingDays(run))}일 기준</span>
         </div>
         <div class="report-insight-list">
-          <div><b>판매 강도</b><span>${Number.isFinite(rate) ? `${fmtRate(rate)} 객실 판매율` : "확인필요"}</span></div>
-          <div><b>${publicMode ? "예약 표본" : "저판매 후보"}</b><span>${publicMode && b2bBrief ? `${fmtNumber(b2bBrief.salesSampleCount)}개 업체` : `${fmtNumber(lowSalesCount)}개 업체`}</span></div>
-          <div><b>검색 수요</b><span>${searchVolume ? `월 ${fmtNumber(searchVolume)}회` : "API 확인필요"}</span></div>
-          <div><b>${publicMode ? "상품 구성" : "상품 확장"}</b><span>${fmtNumber(dayUseCount)}개 업체 데이유즈/캠프닉 확인</span></div>
+          ${reportInsightItemHtml({ key: "sales-strength", label: "판매 강도", value: Number.isFinite(rate) ? `${fmtRate(rate)} 객실 판매율` : "확인 필요", note: "현재 판매 표본 기준", statusLabel: Number.isFinite(rate) ? "판매 관측" : "미수집", tone: rateTone, icon: "rate" })}
+          ${reportInsightItemHtml({ key: publicMode ? "reservation-sample" : "low-sales", label: publicMode ? "예약 표본" : "저판매 후보", value: publicMode && b2bBrief ? `${fmtNumber(b2bBrief.salesSampleCount)}개 업체` : `${fmtNumber(lowSalesCount)}개 업체`, note: publicMode ? "예약율 산출 표본" : "영업 우선순위 참고", statusLabel: (publicMode && b2bBrief ? b2bBrief.salesSampleCount : lowSalesCount) ? "대상 있음" : "대상 없음", tone: (publicMode && b2bBrief ? b2bBrief.salesSampleCount : lowSalesCount) ? (publicMode ? "info" : "warning") : "neutral", icon: "candidate" })}
+          ${reportInsightItemHtml({ key: "search-demand", label: "검색 수요", value: searchVolume ? `월 ${fmtNumber(searchVolume)}회` : "API 확인 필요", note: searchVolume ? "지역 검색량 합계" : "공공·관광 연동 확인", statusLabel: searchVolume ? "수요 관측" : "미수집", tone: searchVolume ? "info" : "warning", icon: "search" })}
+          ${reportInsightItemHtml({ key: "product-expansion", label: publicMode ? "상품 구성" : "상품 확장", value: `${fmtNumber(dayUseCount)}개 업체 데이유즈/캠프닉 확인`, note: "현재 상품 구성 표본", statusLabel: dayUseCount ? "확장 표본" : "확인 필요", tone: dayUseCount ? "opportunity" : "warning", icon: "opportunity" })}
         </div>
       </article>
 
-      <article class="report-card">
+      <article class="report-card report-semantic-section report-tone-neutral" data-report-tone="neutral">
         <div class="report-card-head">
           <div>
             <h3>${publicMode ? "경쟁 채널 표본" : "OTA 보조 확인"}</h3>
@@ -14062,17 +14183,19 @@ function renderReport() {
           </div>
         </div>
         <div class="report-channel-grid">
-          ${platformStats.names.map((name) => `
-            <div>
-              <span>${escapeHtml(name)}</span>
-              <strong>${fmtNumber(platformStats.counts[name])}</strong>
-              <small>${name === "네이버" ? "기준 채널" : `${fmtNumber(Math.max(0, (platformStats.otaCheckCount || 0) - (platformStats.otaCounts[name] || 0)))}개 보조확인`}</small>
-            </div>
-          `).join("")}
+          ${platformStats.names.map((name) => {
+            const count = finiteNumber(platformStats.counts[name], 0);
+            const isPrimaryChannel = name === "네이버";
+            const note = isPrimaryChannel
+              ? "기준 채널"
+              : `${fmtNumber(Math.max(0, (platformStats.otaCheckCount || 0) - (platformStats.otaCounts[name] || 0)))}개 보조확인`;
+            const tone = isPrimaryChannel ? "info" : (count ? "success" : (platformStats.otaCheckCount ? "warning" : "neutral"));
+            return reportMetricCardHtml({ key: `channel-${name}`, label: name, value: fmtNumber(count), note, state: count === 0 ? "zero" : "ready", statusLabel: isPrimaryChannel ? "기준 채널" : (count ? "채널 확인" : "보조 확인"), tone, icon: "platform" });
+          }).join("")}
         </div>
       </article>
 
-      <article class="report-card report-action-card">
+      <article class="report-card report-action-card report-semantic-section report-tone-opportunity" data-report-tone="opportunity">
         <div class="report-card-head">
           <div>
             <h3>${reportActionTitle}</h3>
@@ -27476,6 +27599,16 @@ function locationEvidenceRows(card = {}) {
   });
 }
 
+function locationEvidencePresentation(key = "") {
+  const presentations = {
+    tourism: { tone: "info", icon: "tourism" },
+    operation: { tone: "warning", icon: "operation" },
+    expansionRisk: { tone: "opportunity", icon: "opportunity" },
+    dayUse: { tone: "success", icon: "dayuse" }
+  };
+  return presentations[String(key || "")] || { tone: "neutral", icon: "trust" };
+}
+
 function locationDecision(card = {}, clusters = [], runtime = {}, scoreModel = null, tourismMatch = null) {
   const model = scoreModel || adjustedLocationScoreModel(card, runtime, tourismMatch || {});
   const tourism = locationIndexValue(card, "tourism", 0);
@@ -27623,19 +27756,21 @@ function renderLocationScoreOverrideHistory(manual = {}) {
   const rows = Array.isArray(manual.history) ? manual.history.slice().reverse().slice(0, 5) : [];
   if (!rows.length) return "";
   return `
-    <div class="location-score-history">
+    <div class="location-score-history report-tone-neutral" data-report-tone="neutral" aria-label="최근 보정 이력">
       <strong>최근 보정 이력</strong>
       ${rows.map((row) => {
         const scoreText = row.scoreOverride !== null && row.scoreOverride !== undefined
           ? `${fmtNumber(row.scoreOverride)}점`
           : (row.scoreDelta ? `${row.scoreDelta > 0 ? "+" : ""}${fmtNumber(row.scoreDelta)}점` : "해제");
+        const tone = row.action === "save" ? "info" : "neutral";
         return `
-          <article class="${escapeHtml(row.action || "")}">
-            <div>
+          <article class="${escapeHtml(row.action || "")} report-semantic-card report-tone-${tone}" data-report-history-action="${escapeHtml(row.action || "change")}" data-report-tone="${tone}">
+            ${reportSemanticIconHtml("history", tone)}
+            <div class="report-semantic-copy">
               <span>${escapeHtml(locationScoreHistoryActionLabel(row.action))}</span>
               <b>${escapeHtml(scoreText)}</b>
+              <small>${escapeHtml([compactDateTime(row.at), row.by, row.note].filter(Boolean).join(" · ") || "이력 정보 없음")}</small>
             </div>
-            <small>${escapeHtml([compactDateTime(row.at), row.by, row.note].filter(Boolean).join(" · ") || "이력 정보 없음")}</small>
           </article>
         `;
       }).join("")}
@@ -27710,14 +27845,21 @@ function renderLocationEvidence(card) {
         <h4>판단 근거</h4>
         <span>핵심 지수만 먼저 확인</span>
       </div>
-      <div class="location-evidence-list">
-        ${rows.map((row) => `
-          <div class="location-evidence ${row.tone}">
-            <b>${escapeHtml(row.label)}</b>
-            <strong>${fmtNumber(row.value)}</strong>
-            <span>${escapeHtml(row.band)} · ${escapeHtml(row.note)}</span>
-          </div>
-        `).join("")}
+      <div class="location-evidence-list" aria-label="입지 판단 근거">
+        ${rows.map((row) => {
+          const presentation = locationEvidencePresentation(row.key);
+          const tone = normalizedReportTone(presentation.tone, "neutral");
+          return `
+            <div class="location-evidence ${row.tone} report-semantic-card report-tone-${tone}" data-location-evidence-key="${escapeHtml(row.key)}" data-report-tone="${tone}">
+              ${reportSemanticIconHtml(presentation.icon, tone)}
+              <div class="location-evidence-copy report-semantic-copy">
+                <b>${escapeHtml(row.label)}</b>
+                <span>${escapeHtml(row.band)} · ${escapeHtml(row.note)}</span>
+              </div>
+              <strong>${fmtNumber(row.value)}<small>/100</small></strong>
+            </div>
+          `;
+        }).join("")}
       </div>
     </section>
   `;
@@ -27727,6 +27869,10 @@ function renderLocationReality(runtime = {}) {
   const salesRate = Number.isFinite(runtime.rate) ? fmtRate(runtime.rate) : "확인필요";
   const adRatio = Number.isFinite(runtime.adRatio) ? fmtRate(runtime.adRatio) : "확인필요";
   const salesBar = Number.isFinite(runtime.rate) ? Math.round(Math.max(0, Math.min(1, runtime.rate)) * 100) : 0;
+  const itemCount = Math.max(0, finiteNumber(runtime.items?.length, 0));
+  const salesTone = Number.isFinite(runtime.rate) ? (runtime.rate > 0 ? "success" : "neutral") : "warning";
+  const adTone = Number.isFinite(runtime.adRatio) ? "info" : "neutral";
+  const searchTone = finiteNumber(runtime.searchVolume, 0) > 0 ? "opportunity" : "warning";
   const dictionaryStrength = runtime.regions?.length
     ? Math.min(100, Math.round((runtime.searchVolume ? 65 : 45) + Math.min(25, runtime.items.length)))
     : 55;
@@ -27736,11 +27882,11 @@ function renderLocationReality(runtime = {}) {
         <h4>사전판단 × 수집결과</h4>
         <span>실제 노출/판매와 비교</span>
       </div>
-      <div class="location-reality-grid">
-        <div><span>상위노출</span><strong>${fmtNumber(runtime.items?.length || 0)}</strong><small>업체</small></div>
-        <div><span>객실판매율</span><strong>${salesRate}</strong><small>${fmtNumber(runtime.sales?.sold || 0)}/${fmtNumber(runtime.sales?.supply || 0)}개</small></div>
-        <div><span>광고비중</span><strong>${adRatio}</strong><small>${fmtNumber(runtime.adCount || 0)}개 광고</small></div>
-        <div><span>월검색</span><strong>${runtime.searchVolume ? fmtNumber(runtime.searchVolume) : "API"}</strong><small>${runtime.searchVolume ? "검색량" : "확인필요"}</small></div>
+      <div class="location-reality-grid" aria-label="사전판단과 수집결과 핵심 지표">
+        ${reportMetricCardHtml({ key: "top-exposure", label: "상위노출", value: fmtNumber(itemCount), note: "업체", state: itemCount ? "ready" : "zero", statusLabel: itemCount ? "노출 관측" : "노출 없음", tone: itemCount ? "info" : "neutral", icon: "company" })}
+        ${reportMetricCardHtml({ key: "room-sales-rate", label: "객실판매율", value: salesRate, note: `${fmtNumber(runtime.sales?.sold || 0)}/${fmtNumber(runtime.sales?.supply || 0)}개`, state: Number.isFinite(runtime.rate) ? (runtime.rate === 0 ? "zero" : "ready") : "unavailable", statusLabel: Number.isFinite(runtime.rate) ? "판매 관측" : "확인 필요", tone: salesTone, icon: "rate" })}
+        ${reportMetricCardHtml({ key: "ad-ratio", label: "광고비중", value: adRatio, note: `${fmtNumber(runtime.adCount || 0)}개 광고`, state: Number.isFinite(runtime.adRatio) ? (runtime.adRatio === 0 ? "zero" : "ready") : "unavailable", statusLabel: Number.isFinite(runtime.adRatio) ? "광고 관측" : "확인 필요", tone: adTone, icon: "platform" })}
+        ${reportMetricCardHtml({ key: "monthly-search", label: "월검색", value: runtime.searchVolume ? fmtNumber(runtime.searchVolume) : "API", note: runtime.searchVolume ? "검색량" : "확인필요", state: runtime.searchVolume ? "ready" : "unavailable", statusLabel: runtime.searchVolume ? "수요 관측" : "미수집", tone: searchTone, icon: "search" })}
       </div>
       <div class="location-compare-bars">
         <div>

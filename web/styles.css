@@ -10696,18 +10696,19 @@ a {
 .location-evidence {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 10px;
-  align-items: baseline;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 8px 11px;
+  align-items: center;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fbfcfd;
+  background: var(--color-surface-subtle);
   padding: 13px;
 }
 
 .location-evidence b,
 .location-evidence strong,
-.location-evidence span {
+.location-evidence span,
+.location-evidence-copy {
   min-width: 0;
 }
 
@@ -10718,17 +10719,36 @@ a {
 }
 
 .location-evidence strong {
-  color: var(--blue);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  color: var(--report-tone, var(--blue));
   font-size: 22px;
   line-height: 1;
   font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.location-evidence span {
-  grid-column: 1 / -1;
+.location-evidence strong small {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.location-evidence-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.location-evidence-copy span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 850;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
 }
 
 .location-evidence.strong strong {
@@ -11022,7 +11042,7 @@ a {
   margin-top: 10px;
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: #fbfcfd;
+  background: var(--color-surface-subtle);
   padding: 13px;
 }
 
@@ -11033,22 +11053,23 @@ a {
 
 .location-score-history article {
   display: grid;
-  grid-template-columns: minmax(0, .72fr) minmax(0, 1.28fr);
+  grid-template-columns: 40px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
-  border-top: 1px solid rgba(226, 232, 240, .9);
-  padding-top: 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 14px;
+  padding: 10px;
 }
 
 .location-score-history article:first-of-type {
-  border-top: 0;
-  padding-top: 0;
+  padding-top: 10px;
 }
 
-.location-score-history article div {
-  display: flex;
+.location-score-history article .report-semantic-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
-  gap: 8px;
+  gap: 4px 8px;
   align-items: center;
 }
 
@@ -11247,14 +11268,20 @@ a {
   gap: 9px;
 }
 
-.location-reality-grid div {
+.location-reality-grid > .report-semantic-card {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 9px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fbfcfd;
   padding: 12px;
+}
+
+.location-reality-grid .report-semantic-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
 }
 
 .location-reality-grid span,
@@ -11264,7 +11291,7 @@ a {
   font-weight: 850;
 }
 
-.location-reality-grid strong {
+.location-reality-grid .report-semantic-copy > strong {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--blue);
@@ -11278,7 +11305,7 @@ a {
   gap: 8px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fff;
+  background: var(--color-surface-default);
   padding: 13px;
 }
 
@@ -17635,6 +17662,10 @@ a.platform-row:hover {
   overflow-wrap: anywhere;
 }
 
+.location-score-history small {
+  grid-column: 1 / -1;
+}
+
 .field-date-control {
   position: relative;
   min-width: 0;
@@ -19829,13 +19860,11 @@ a.platform-row:hover {
   gap: 18px;
   align-items: stretch;
   padding: 24px;
-  border: 1px solid #182b49;
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 42%, var(--color-border-default));
   border-radius: 22px;
-  background:
-    linear-gradient(135deg, rgba(49, 130, 246, .28), rgba(18, 183, 106, .08)),
-    #0b1526;
-  color: #ffffff;
-  box-shadow: 0 18px 46px rgba(16, 24, 40, .18);
+  background: color-mix(in srgb, var(--color-status-info) 8%, var(--color-surface-raised));
+  color: var(--color-text-primary);
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--color-status-info) 70%, transparent);
   overflow: hidden;
 }
 
@@ -19886,7 +19915,7 @@ a.platform-row:hover {
 .report-hero p {
   max-width: 700px;
   margin: 12px 0 0;
-  color: rgba(255, 255, 255, .78);
+  color: var(--color-text-secondary);
   font-size: 15px;
   font-weight: 700;
 }
@@ -19897,15 +19926,15 @@ a.platform-row:hover {
   align-content: center;
   gap: 6px;
   padding: 18px;
-  border: 1px solid rgba(255, 255, 255, .18);
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 36%, var(--color-border-default));
   border-radius: 18px;
-  background: rgba(255, 255, 255, .12);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12);
+  background: color-mix(in srgb, var(--color-status-info) 7%, var(--color-surface-default));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-status-info) 28%, transparent);
 }
 
 .report-score-card span,
 .report-score-card small {
-  color: rgba(255, 255, 255, .75);
+  color: var(--color-text-secondary);
   font-size: 13px;
   font-weight: 800;
 }
@@ -22707,9 +22736,46 @@ a.platform-row:hover {
   line-height: 1.08;
 }
 
+/* Summary report semantic cards v1 */
+:root .report-tone-neutral {
+  --report-tone: var(--color-border-strong);
+}
+
+:root .report-tone-info {
+  --report-tone: var(--color-status-info);
+}
+
+:root .report-tone-success {
+  --report-tone: var(--color-status-success);
+}
+
+:root .report-tone-warning {
+  --report-tone: var(--color-status-warning);
+}
+
+:root .report-tone-danger {
+  --report-tone: var(--color-status-danger);
+}
+
+:root .report-tone-opportunity {
+  --report-tone: var(--color-accent-secondary);
+}
+
+:root[data-theme="light"] .report-tone-warning {
+  --report-tone: color-mix(in srgb, var(--color-status-warning) 88%, #000000);
+}
+
+:root[data-theme="light"] .report-tone-neutral {
+  --report-tone: color-mix(in srgb, var(--color-border-strong) 88%, #000000);
+}
+
+:root[data-theme="light"] .report-tone-opportunity {
+  --report-tone: color-mix(in srgb, var(--color-accent-secondary) 84%, #000000);
+}
+
 .report-metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -22722,25 +22788,100 @@ a.platform-row:hover {
   box-shadow: var(--soft-shadow);
 }
 
-.report-metric-grid article {
+.report-semantic-card {
+  --report-tone: var(--color-border-strong);
+  min-width: 0;
   display: grid;
-  gap: 3px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  border-color: color-mix(in srgb, var(--report-tone) 48%, var(--color-border-default));
+  background: color-mix(in srgb, var(--report-tone) 7%, var(--color-surface-default));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--report-tone) 76%, transparent);
+}
+
+.report-basis-card {
+  border-color: color-mix(in srgb, var(--color-status-info) 40%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-info) 4%, var(--color-surface-default));
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--color-status-info) 68%, transparent);
+}
+
+.report-basis-card .admin-operations-context-head > div {
+  min-width: 0;
+}
+
+.report-basis-card .admin-operations-context-head strong,
+.report-basis-card .admin-operations-context-head small {
+  overflow-wrap: anywhere;
+}
+
+.report-metric-grid > .report-semantic-card {
   padding: 17px;
 }
 
-.report-metric-grid span,
-.report-metric-grid small {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 800;
+.report-semantic-icon {
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 40px;
+  border: 1px solid color-mix(in srgb, var(--report-tone) 42%, var(--color-border-default));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--report-tone) 13%, var(--color-surface-default));
+  color: var(--report-tone);
 }
 
-.report-metric-grid strong {
-  color: var(--blue);
+.report-semantic-icon > .summary-icon-svg {
+  width: 21px;
+  height: 21px;
+}
+
+.report-semantic-copy,
+.report-insight-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.report-semantic-label,
+.report-semantic-copy small,
+.report-insight-copy small {
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.report-semantic-copy > strong {
+  min-width: 0;
+  color: var(--report-tone);
   font-size: clamp(22px, 3vw, 30px);
   line-height: 1.05;
   font-weight: 950;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.report-semantic-status {
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-top: 3px;
+  border: 1px solid color-mix(in srgb, var(--report-tone) 38%, var(--color-border-default));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--report-tone) 9%, var(--color-surface-default));
+  color: var(--report-tone);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
@@ -22755,6 +22896,13 @@ a.platform-row:hover {
   display: grid;
   gap: 15px;
   padding: 18px;
+}
+
+.report-semantic-section {
+  --report-tone: var(--color-border-strong);
+  border-color: color-mix(in srgb, var(--report-tone) 44%, var(--color-border-default));
+  background: color-mix(in srgb, var(--report-tone) 4%, var(--color-surface-default));
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--report-tone) 70%, transparent);
 }
 
 .report-card-head {
@@ -22785,10 +22933,10 @@ a.platform-row:hover {
   display: inline-flex;
   align-items: center;
   padding: 0 10px;
-  border: 1px solid #c7dcff;
+  border: 1px solid color-mix(in srgb, var(--report-tone, var(--color-status-info)) 42%, var(--color-border-default));
   border-radius: 999px;
-  background: #f5f9ff;
-  color: var(--blue-dark);
+  background: color-mix(in srgb, var(--report-tone, var(--color-status-info)) 9%, var(--color-surface-default));
+  color: var(--report-tone, var(--color-status-info));
   font-size: 12px;
   font-weight: 900;
   white-space: nowrap;
@@ -22799,35 +22947,52 @@ a.platform-row:hover {
   gap: 8px;
 }
 
-.report-insight-list div {
+.report-insight-list > .report-insight-item {
+  --report-tone: var(--color-border-strong);
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: 40px minmax(0, .85fr) minmax(7rem, 1.15fr);
+  grid-template-areas:
+    "icon copy value"
+    "icon copy status";
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid #eef2f7;
+  gap: 4px 11px;
+  border: 1px solid color-mix(in srgb, var(--report-tone) 42%, var(--color-border-default));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--report-tone) 6%, var(--color-surface-default));
+  padding: 11px;
 }
 
-.report-insight-list div:last-child {
-  border-bottom: 0;
+.report-insight-item > .report-semantic-icon {
+  grid-area: icon;
+}
+
+.report-insight-copy {
+  grid-area: copy;
 }
 
 .report-insight-list b,
-.report-insight-list span {
+.report-insight-list strong {
   min-width: 0;
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .report-insight-list b {
-  color: #344054;
+  color: var(--color-text-primary);
   font-weight: 900;
 }
 
-.report-insight-list span {
-  color: var(--ink);
-  font-weight: 850;
+.report-insight-list > .report-insight-item > strong {
+  grid-area: value;
+  color: var(--color-text-primary);
+  font-weight: 900;
   text-align: right;
+}
+
+.report-insight-item > .report-semantic-status {
+  grid-area: status;
+  justify-self: end;
 }
 
 .report-channel-grid {
@@ -22836,29 +23001,13 @@ a.platform-row:hover {
   gap: 8px;
 }
 
-.report-channel-grid div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
+.report-channel-grid > .report-semantic-card {
   padding: 12px;
-  border: 1px solid #eef2f7;
   border-radius: 14px;
-  background: #fbfcfd;
 }
 
-.report-channel-grid span,
-.report-channel-grid small {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.report-channel-grid strong {
-  color: var(--ink);
+.report-channel-grid .report-semantic-copy > strong {
   font-size: 24px;
-  line-height: 1;
-  font-weight: 950;
-  font-variant-numeric: tabular-nums;
 }
 
 .report-action-list {
@@ -22887,8 +23036,9 @@ a.platform-row:hover {
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: #eef5ff;
-  color: var(--blue-dark);
+  border: 1px solid color-mix(in srgb, var(--report-tone, var(--color-accent-secondary)) 42%, var(--color-border-default));
+  background: color-mix(in srgb, var(--report-tone, var(--color-accent-secondary)) 10%, var(--color-surface-default));
+  color: var(--report-tone, var(--color-accent-secondary));
   font-size: 13px;
   font-weight: 950;
 }
@@ -22910,6 +23060,72 @@ a.platform-row:hover {
   color: var(--muted);
   font-size: 12px;
   font-weight: 750;
+}
+
+@media (min-width: 361px) and (max-width: 720px) {
+  body.role-admin .report-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-insight-list > .report-insight-item {
+    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-areas:
+      "icon copy"
+      "icon value"
+      "icon status";
+  }
+
+  .report-insight-list > .report-insight-item > strong {
+    text-align: left;
+  }
+
+  .report-insight-item > .report-semantic-status {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 360px) {
+  body.role-admin .report-metric-grid,
+  .report-channel-grid,
+  .location-reality-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .report-semantic-card {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .report-semantic-icon {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  .report-insight-list > .report-insight-item {
+    grid-template-columns: 36px minmax(0, 1fr);
+    grid-template-areas:
+      "icon copy"
+      "icon value"
+      "icon status";
+  }
+
+  .report-insight-list > .report-insight-item > strong {
+    text-align: left;
+  }
+
+  .report-insight-item > .report-semantic-status {
+    justify-self: start;
+  }
+
+  .location-score-history article .report-semantic-copy {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .location-score-history b,
+  .location-score-history small {
+    grid-column: 1;
+  }
 }
 
 .report-target-preview,
@@ -25650,7 +25866,6 @@ body.role-b2b .b2b-my-lodge-decision,
 body.role-b2b .b2b-my-lodge-precision,
 body.role-b2b .b2b-interest-lodge-limit,
 body.role-b2b .b2b-my-lodge-sync-note,
-body.role-b2b .report-channel-grid div,
 body.role-b2b .company-insight-grid div,
 body.role-b2b .b2b-company-card-summary div,
 body.role-b2b .b2b-company-action,
@@ -25985,7 +26200,6 @@ body.role-b2b .b2b-search-missing-copy strong,
 body.role-b2b .b2b-search-fallbacks b,
 body.role-b2b .summary-card strong,
 body.role-b2b .report-metric-grid strong,
-body.role-b2b .report-channel-grid strong,
 body.role-b2b .b2b-brief-metrics strong,
 body.role-b2b .b2b-brief-score strong,
 body.role-b2b .b2b-strategy-head strong,
@@ -26925,7 +27139,7 @@ body.role-b2b .b2b-priority-list span {
   color: #acd0ff;
 }
 
-body.role-b2b .report-insight-list div,
+body.role-b2b .report-insight-list > .report-insight-item,
 body.role-b2b .b2b-demand-actions,
 body.role-b2b .region-card-metrics,
 body.role-b2b .region-card-note,
@@ -31012,8 +31226,6 @@ body.role-b2b .report-metric-grid article,
 body.role-b2b .validation-card,
 body.role-b2b .validation-metric,
 body.role-b2b .collection-diagnostic-list div,
-body.role-admin .report-channel-grid div,
-body.role-b2b .report-channel-grid div,
 body.role-b2b .b2b-brief-card,
 body.role-b2b .b2b-live-search-panel,
 body.role-b2b .b2b-usage-panel,
@@ -31093,11 +31305,7 @@ body.role-b2b .validation-card-head span,
 body.role-b2b .validation-metric span,
 body.role-b2b .validation-metric small,
 body.role-b2b .collection-diagnostic-list strong,
-body.role-b2b .collection-diagnostic-list small,
-body.role-admin .report-channel-grid span,
-body.role-admin .report-channel-grid small,
-body.role-b2b .report-channel-grid span,
-body.role-b2b .report-channel-grid small {
+body.role-b2b .collection-diagnostic-list small {
   color: #d8e4f2;
 }
 
@@ -31121,20 +31329,6 @@ body.role-b2b .collection-diagnostic-list b {
   text-shadow: 0 0 18px rgba(106, 168, 255, .16);
 }
 
-body.role-admin .report-channel-grid div,
-body.role-b2b .report-channel-grid div {
-  border-color: rgba(156, 174, 204, .24);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0)),
-    #121822;
-}
-
-body.role-admin .report-channel-grid strong,
-body.role-b2b .report-channel-grid strong {
-  color: #78b7ff;
-  text-shadow: 0 0 18px rgba(106, 168, 255, .16);
-}
-
 body.role-b2b .report-hero,
 body.role-b2b .b2b-brief-card,
 body.role-b2b .b2b-rank-brief,
@@ -31146,6 +31340,12 @@ body.role-admin .admin-db-hero {
   background:
     linear-gradient(135deg, rgba(74, 144, 226, .24), rgba(52, 211, 153, .08)),
     var(--surface-elevated);
+}
+
+body.role-b2b .report-hero {
+  border-color: color-mix(in srgb, var(--color-status-info) 42%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-info) 8%, var(--color-surface-raised));
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--color-status-info) 70%, transparent);
 }
 
 body.role-b2b .summary-card,
@@ -40443,6 +40643,42 @@ body.role-b2b :is(
   border-color: var(--color-border-default) !important;
   background-color: var(--color-surface-default) !important;
   color: var(--color-text-primary) !important;
+}
+
+/* Report semantic surfaces intentionally restore low-chroma meaning after the generic dark-card reset. */
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .report-semantic-card {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 54%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 9%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 9%, var(--color-surface-default)) !important;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 82%, transparent) !important;
+  color: var(--color-text-primary) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .report-semantic-section {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 46%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 5%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 5%, var(--color-surface-default)) !important;
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 74%, transparent) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .report-semantic-icon {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 48%, var(--color-border-default));
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 14%, var(--color-surface-raised));
+  color: var(--report-tone, var(--color-text-secondary)) !important;
+}
+
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .report-semantic-card {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 48%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 7%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 7%, var(--color-surface-default)) !important;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 76%, transparent) !important;
+}
+
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .report-semantic-section {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 44%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 4%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 4%, var(--color-surface-default)) !important;
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 70%, transparent) !important;
 }
 
 :root[data-theme="light"] :is(body.role-admin, body.role-b2b) :where(

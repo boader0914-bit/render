@@ -24,6 +24,7 @@ const requiredScripts = {
   "test:admin-operations": "node scripts/test_admin_operations_ui_contract.cjs",
   "test:crawl-eta": "node scripts/test_crawl_eta_model.cjs",
   "test:b2b-secondary-workbench": "node scripts/test_b2b_secondary_workbench_ui_contract.cjs",
+  "test:report-semantic-cards": "node scripts/test_report_semantic_cards_ui_contract.cjs",
   "test:public-auth-policy": "node scripts/test_public_auth_policy_ui_contract.cjs",
   "test:ui-release-static": "node scripts/test_ui_release_gate.cjs",
   "test:search-ui": "node scripts/test_lodging_search_ui_contract.cjs",
@@ -39,7 +40,7 @@ for (const [name, command] of Object.entries(requiredScripts)) {
   }
 }
 
-for (const testFile of ["test_crawl_eta_model.cjs", "test_public_auth_policy_ui_contract.cjs", "test_ui_release_gate.cjs"]) {
+for (const testFile of ["test_crawl_eta_model.cjs", "test_report_semantic_cards_ui_contract.cjs", "test_public_auth_policy_ui_contract.cjs", "test_ui_release_gate.cjs"]) {
   assert.ok(pkg.scripts.check.includes(`node --check scripts/${testFile}`), `check must parse ${testFile}`);
 }
 

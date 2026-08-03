@@ -407,37 +407,39 @@ for (const endpoint of [
 }
 
 assert.match(app, /data-admin-metric-state=/);
-assert.match(functionBlock("adminAnalyticsOverviewHtml"), /categorySummary\.primaryCounts/);
-assert.match(functionBlock("adminAnalyticsOverviewHtml"), /observedPlatforms/);
-assert.doesNotMatch(functionBlock("adminAnalyticsOverviewHtml"), /platformStats\.names\.length\s*:/);
+const analyticsModelSource = functionBlock("adminAnalyticsOverviewModel");
+const analyticsBasisSource = functionBlock("adminAnalyticsOverviewHtml");
+const analyticsKpiSource = functionBlock("adminReportKpiCardsHtml");
+assert.match(analyticsModelSource, /categorySummary\.primaryCounts/);
+assert.match(analyticsModelSource, /observedPlatforms/);
+assert.doesNotMatch(analyticsModelSource, /platformStats\.names\.length\s*:/);
+assert.match(analyticsBasisSource, /report-basis-card/);
+assert.doesNotMatch(analyticsBasisSource, /adminAnalyticsValueCell|reportMetricCardHtml/, "analysis basis must remain a flat context card");
+for (const key of ["companies", "sales-sample", "primary-category", "platforms", "contact-candidates", "product-gap"]) {
+  assert.match(analyticsKpiSource, new RegExp(`key:\\s*"${key}"`), `${key} KPI must remain in the report KPI renderer`);
+}
 
 const analyticsContext = {
   state: { data: {}, companyMaster: null },
-  isAdminRole: () => true,
   summarizeSales: () => ({ sold: 0, supply: 0 }),
   reportPlatformStats: () => ({ names: ["네이버", "NOL"], counts: { 네이버: 0, NOL: 0 } }),
-  activeKeyword: () => "fixture",
-  dateRangeLabel: () => "기간 확인",
-  compactDateTime: () => "2026-07-31",
-  escapeHtml: (value) => String(value ?? ""),
-  fmtNumber: (value) => String(value),
-  adminAnalyticsValueCell: (label, value, note) => `<metric data-label="${label}" data-value="${value === null ? "NULL" : value}">${note}</metric>`,
 };
 vm.createContext(analyticsContext);
-vm.runInContext(functionSource("adminAnalyticsOverviewHtml"), analyticsContext);
+vm.runInContext(functionSource("adminAnalyticsOverviewModel"), analyticsContext);
 analyticsContext.state.data = { run: { id: "run-1" }, availability: { items: [{}] } };
-let analyticsHtml = analyticsContext.adminAnalyticsOverviewHtml("summary");
-assert.match(analyticsHtml, /data-label="판매 표본" data-value="NULL"/);
-assert.match(analyticsHtml, /data-label="대표 유형" data-value="NULL"/);
-assert.match(analyticsHtml, /data-label="확인 플랫폼" data-value="NULL"/);
+let analyticsModel = analyticsContext.adminAnalyticsOverviewModel("summary");
+assert.equal(analyticsModel.salesObserved, false, "missing inventory fields must remain uncollected");
+assert.equal(analyticsModel.categorySummaryObserved, false, "missing category summary must remain uncollected");
+assert.deepEqual(Array.from(analyticsModel.observedPlatforms), [], "zero-count platforms must not be reported as observed");
 analyticsContext.state.data = {
   run: { id: "run-2" },
   availability: { items: [{ nightTotalStock: 0, nightAvailableStock: 0 }] },
   companyMaster: { categorySummary: { totalCompanies: 0, primaryCounts: {} } },
 };
-analyticsHtml = analyticsContext.adminAnalyticsOverviewHtml("summary");
-assert.match(analyticsHtml, /data-label="판매 표본" data-value="0"/);
-assert.match(analyticsHtml, /data-label="대표 유형" data-value="0"/);
+analyticsModel = analyticsContext.adminAnalyticsOverviewModel("summary");
+assert.equal(analyticsModel.salesObserved, true, "an observed zero inventory must remain a real zero");
+assert.equal(analyticsModel.categorySummaryObserved, true, "an observed zero category summary must remain a real zero");
+assert.equal(analyticsModel.categoryCount, 0);
 
 assert.match(functionBlock("renderAdminRegionOverview"), /waiting:[\s\S]*error:/);
 assert.match(functionBlock("renderAdminRegionOverview"), /API 미신청·미연결은 지역 오류가 아님/);
