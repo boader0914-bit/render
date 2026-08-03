@@ -1,5 +1,5 @@
-const UI_ASSET_VERSION = "v2-20260802-ui-release-v32";
-const CACHE_VERSION = "lodging-datalab-pwa-v20260802-ui-release-v32";
+const UI_ASSET_VERSION = "v2-20260803-ui-release-v33";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260803-ui-release-v33";
 const CACHE_PREFIX = "lodging-datalab-pwa-";
 const APP_SHELL = [
   "/offline.html",

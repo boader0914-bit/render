@@ -194,7 +194,7 @@ assert.match(runResultSummarySource, /aria-label="수집 결과 확인 순서"/)
 assert.match(runResultSummarySource, /data-drawer-tab="rank" data-run-result-resume="rank"/);
 assert.match(runResultSummarySource, /플레이스 순서 다시 보기/);
 assert.match(runResultSummarySource, /data-drawer-tab="historyOps" data-run-result-resume="historyOps"/);
-assert.match(css, /\.run-result-flow\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+assert.match(css, /\.run-result-flow\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*150px\),\s*1fr\)\)/s, "collection result flow must adapt to the actual panel width before copy clips");
 assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*?\.run-result-flow\s*\{[^}]*grid-template-columns:\s*1fr/s, "collection result flow must stack without mobile overflow");
 assert.match(css, /\.app-nav-icon-svg\s*\{[^}]*width:\s*18px[^}]*height:\s*18px[^}]*stroke-width:\s*1\.9/s, "semantic navigation icons must remain inside their mobile and desktop wrappers");
 assert.match(app, /const\s+ROLE_TABS\s*=\s*Object\.fromEntries\([\s\S]*APP_NAVIGATION/, "role tab compatibility must derive from APP_NAVIGATION");

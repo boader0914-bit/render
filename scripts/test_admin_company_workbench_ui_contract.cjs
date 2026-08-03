@@ -25,6 +25,18 @@ function balancedBlockFrom(source, startIndex) {
   assert.fail("expected balanced CSS block");
 }
 
+function cssRuleBlock(selector) {
+  const startIndex = css.indexOf(selector);
+  assert.notEqual(startIndex, -1, `expected CSS selector: ${selector}`);
+  return balancedBlockFrom(css, startIndex);
+}
+
+function lastCssRuleBlock(selector) {
+  const startIndex = css.lastIndexOf(selector);
+  assert.notEqual(startIndex, -1, `expected final CSS selector: ${selector}`);
+  return balancedBlockFrom(css, startIndex);
+}
+
 assert.equal((html.match(/id="adminDatabaseDashboard"/g) || []).length, 1, "company management mount must remain unique");
 assert.match(html, /data-admin-section-panel="database"/);
 assert.match(html, /class="admin-workspace-shell"/);
@@ -142,12 +154,68 @@ for (const endpoint of [
 
 assert.match(css, /Admin company management workbench v1/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-company\[data-admin-db-company-workbench-row="true"\][\s\S]*grid-template-areas:/);
-assert.match(css, /#adminDatabaseDashboard \.admin-db-company-status[\s\S]*border-radius:\s*999px/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-company-action button,[\s\S]*min-height:\s*var\(--ui-control-height\)\s*!important/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-workbench-heading/);
+
+const companyDashboardTokens = cssRuleBlock("body.role-admin #adminDatabaseDashboard {");
+assert.match(companyDashboardTokens, /--admin-company-panel-radius:\s*var\(--ui-radius-lg\)/);
+assert.match(companyDashboardTokens, /--admin-company-card-radius:\s*var\(--ui-radius-md\)/);
+assert.match(companyDashboardTokens, /--admin-company-control-radius:\s*var\(--ui-radius-sm\)/);
+assert.match(companyDashboardTokens, /--admin-company-pill-radius:\s*var\(--radius-pill\)/);
+
+const companyHeroLabel = cssRuleBlock("body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {");
+for (const declaration of [
+  /border:\s*0/,
+  /border-radius:\s*0/,
+  /background:\s*transparent/,
+  /box-shadow:\s*none/,
+  /padding:\s*0/,
+]) {
+  assert.match(companyHeroLabel, declaration, "company management eyebrow must remain plain text instead of a decorative card");
+}
+assert.ok(!css.includes("body.role-admin .admin-db-hero span,"), "dark badge surfaces must not leak onto the company management eyebrow");
+assert.ok(!css.includes(".admin-db-hero > div > span,"), "light badge surfaces must not leak onto the company management eyebrow");
+
+const companyMajorPanels = cssRuleBlock("body.role-admin #adminDatabaseDashboard :is(\n  .admin-db-hero,");
+assert.match(companyMajorPanels, /border-radius:\s*var\(--admin-company-panel-radius\)/);
+assert.match(
+  cssRuleBlock('body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-workbench-row="true"] {'),
+  /border-radius:\s*var\(--admin-company-card-radius\)\s*!important/,
+  "repeated company rows must use the card radius"
+);
+assert.match(
+  cssRuleBlock('body.role-admin #adminDatabaseDashboard .admin-db-selected-panel[data-admin-db-company-workbench="true"] {'),
+  /border-radius:\s*var\(--admin-company-panel-radius\)\s*!important/,
+  "selected company workbench must use the major panel radius"
+);
+assert.match(
+  cssRuleBlock("body.role-admin #adminDatabaseDashboard .admin-db-company-status {"),
+  /border-radius:\s*var\(--admin-company-pill-radius\)/,
+  "short company status labels must keep the pill radius"
+);
+assert.match(
+  cssRuleBlock(".admin-db-region-next-grid article {"),
+  /border-radius:\s*var\(--ui-radius-md\)/,
+  "multi-line next-step content must use a card radius at every viewport"
+);
+assert.match(
+  cssRuleBlock(".admin-db-region-empty-actions button {"),
+  /border-radius:\s*var\(--ui-radius-sm\)/,
+  "region empty-state actions must use a control radius instead of a pill"
+);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-master-detail[\s\S]*grid-template-columns:\s*minmax\(0, 1\.55fr\) minmax\(280px, \.55fr\)/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-list-preview[\s\S]*position:\s*sticky/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-active-filter-chips button[\s\S]*min-height:\s*var\(--touch-target-min\)/);
+assert.match(
+  cssRuleBlock("body.role-admin #adminDatabaseDashboard .admin-db-active-filter-chips button {"),
+  /border-radius:\s*var\(--admin-company-pill-radius\)/,
+  "removable filter chips must keep the pill shape"
+);
+assert.match(
+  lastCssRuleBlock("body.role-admin #adminDatabaseDashboard .admin-db-active-filters > button,\nbody.role-admin #adminDatabaseDashboard .admin-db-empty-actions button {"),
+  /border-radius:\s*var\(--admin-company-control-radius\)/,
+  "general workspace actions must use the small rounded-rectangle radius instead of a pill"
+);
 assert.match(css, /\.company-manual-actions button[\s\S]*min-height:\s*var\(--touch-target-min\)/);
 assert.match(css, /\.company-manual-segments-toolbar button[\s\S]*min-height:\s*var\(--touch-target-min\)/);
 assert.match(css, /#adminDatabaseDashboard \.admin-db-detail-back[\s\S]*min-height:\s*var\(--touch-target-min\)/);

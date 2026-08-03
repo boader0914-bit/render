@@ -2044,8 +2044,14 @@ a {
   gap: 5px;
 }
 
-.admin-db-hero span {
-  color: #0f766e;
+body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
+  justify-self: start;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: var(--color-action-primary);
   font-size: 12px;
   font-weight: 950;
 }
@@ -2491,7 +2497,7 @@ a {
 .admin-db-region-next-grid article {
   min-width: 0;
   border: 1px solid #e3ebf6;
-  border-radius: 999px;
+  border-radius: var(--ui-radius-md);
   background: #fff;
   padding: 8px 10px;
 }
@@ -2514,7 +2520,7 @@ a {
 
 .admin-db-region-empty-actions button {
   border: 1px solid #cdd9e8;
-  border-radius: 999px;
+  border-radius: var(--ui-radius-sm);
   background: #f3f7fc;
   color: #344054;
   padding: 9px 13px;
@@ -28061,7 +28067,6 @@ body.role-admin .admin-db-selected-issues em,
 body.role-admin .company-master-row-tags span,
 body.role-admin .company-review-badge,
 body.role-admin .state-badge,
-body.role-admin .admin-db-hero span,
 body.role-admin .admin-db-quality-head mark,
 body.role-admin .admin-db-audit-head mark,
 body.role-admin .admin-db-selected-head mark,
@@ -32009,15 +32014,21 @@ body.role-admin .admin-db-region-card-grid button.active {
   display: grid;
   gap: 10px;
   margin-top: 10px;
-  border: 1px solid rgba(121, 184, 255, .24);
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 42%, var(--color-border-default));
   border-radius: 14px;
-  background: rgba(8, 13, 20, .62);
+  background: color-mix(in srgb, var(--color-status-info) 5%, var(--color-surface-default));
   padding: 12px;
+}
+
+.run-apply-panel,
+.run-purpose-result {
+  container-name: collection-results;
+  container-type: inline-size;
 }
 
 .run-apply-empty strong,
 .run-apply-panel strong {
-  color: #ffffff;
+  color: var(--color-text-primary);
   font-weight: 950;
   line-height: 1.2;
 }
@@ -32026,7 +32037,7 @@ body.role-admin .admin-db-region-card-grid button.active {
 .run-apply-panel span,
 .run-apply-panel small,
 .run-apply-panel p {
-  color: #b7c6d8;
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 830;
   line-height: 1.42;
@@ -32046,13 +32057,26 @@ body.role-admin .admin-db-region-card-grid button.active {
   gap: 3px;
 }
 
+.run-apply-head > .run-apply-title {
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+}
+
+.run-apply-title-copy,
+.run-apply-check-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
 .run-apply-head em {
   flex: 0 1 auto;
   max-width: 100%;
-  border: 1px solid rgba(121, 184, 255, .30);
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 46%, var(--color-border-default));
   border-radius: 999px;
-  background: rgba(121, 184, 255, .12);
-  color: #dcecff;
+  background: color-mix(in srgb, var(--color-status-info) 9%, var(--color-surface-default));
+  color: var(--color-status-info);
   padding: 6px 9px;
   font-size: 11px;
   font-style: normal;
@@ -32070,70 +32094,69 @@ body.role-admin .admin-db-region-card-grid button.active {
 }
 
 .run-apply-status {
-  border: 1px solid rgba(139, 160, 190, .30);
+  border: 1px solid var(--color-border-default);
   border-radius: 999px;
+  background: var(--color-surface-subtle);
   padding: 6px 9px;
-  color: #ffffff;
+  color: var(--color-text-primary);
   font-size: 11px;
   font-weight: 950;
 }
 
 .run-apply-status.good {
-  border-color: rgba(58, 226, 164, .60);
-  background: rgba(16, 124, 94, .48);
-  color: #dffdf4;
+  border-color: color-mix(in srgb, var(--color-status-success) 56%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-success) 11%, var(--color-surface-default));
+  color: var(--color-status-success);
 }
 
 .run-apply-status.watch {
-  border-color: rgba(255, 198, 75, .64);
-  background: rgba(151, 105, 19, .50);
-  color: #fff1c4;
+  border-color: color-mix(in srgb, var(--color-status-warning) 58%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-warning) 11%, var(--color-surface-default));
+  color: var(--color-status-warning);
 }
 
 .run-apply-status.bad {
-  border-color: rgba(255, 114, 139, .70);
-  background: rgba(137, 38, 59, .56);
-  color: #ffe4ea;
+  border-color: color-mix(in srgb, var(--color-status-danger) 60%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-danger) 11%, var(--color-surface-default));
+  color: var(--color-status-danger);
 }
 
 .run-apply-check {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid rgba(139, 160, 190, .24);
+  border: 1px solid var(--color-border-default);
   border-radius: 12px;
-  background: rgba(13, 20, 29, .72);
+  background: var(--color-surface-subtle);
   padding: 10px;
 }
 
 .run-apply-check.good {
-  border-color: rgba(58, 226, 164, .36);
-  background: rgba(10, 67, 55, .36);
+  border-color: color-mix(in srgb, var(--color-status-success) 50%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-success) 9%, var(--color-surface-default));
 }
 
 .run-apply-check.watch {
-  border-color: rgba(255, 198, 75, .42);
-  background: rgba(88, 65, 23, .38);
+  border-color: color-mix(in srgb, var(--color-status-warning) 52%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-warning) 9%, var(--color-surface-default));
 }
 
 .run-apply-check.bad {
-  border-color: rgba(255, 114, 139, .48);
-  background: rgba(72, 25, 38, .42);
+  border-color: color-mix(in srgb, var(--color-status-danger) 54%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-danger) 9%, var(--color-surface-default));
 }
 
 .run-apply-check span {
-  color: #d8e3f0;
+  color: var(--color-text-secondary);
 }
 
 .run-purpose-result {
   min-width: 0;
   display: grid;
   gap: 10px;
-  border: 1px solid rgba(58, 226, 164, .24);
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 42%, var(--color-border-default));
   border-radius: 14px;
-  background:
-    linear-gradient(135deg, rgba(16, 124, 94, .22), rgba(22, 38, 62, .38)),
-    rgba(9, 15, 23, .72);
+  background: color-mix(in srgb, var(--color-status-info) 6%, var(--color-surface-default));
   padding: 12px;
 }
 
@@ -32144,20 +32167,20 @@ body.role-admin .admin-db-region-card-grid button.active {
 }
 
 .run-purpose-result-head span {
-  color: #8ae9c8;
+  color: var(--color-status-info);
   font-size: 11px;
   font-weight: 950;
 }
 
 .run-purpose-result-head strong {
-  color: #ffffff;
+  color: var(--color-text-primary);
   font-size: 18px;
   font-weight: 950;
   line-height: 1.2;
 }
 
 .run-purpose-result-head small {
-  color: #d3e1ef;
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 850;
   line-height: 1.42;
@@ -32170,48 +32193,120 @@ body.role-admin .admin-db-region-card-grid button.active {
   gap: 8px;
 }
 
-.run-purpose-result-grid article {
+.collection-result-card {
+  --report-tone: var(--color-status-info);
   min-width: 0;
-  border: 1px solid rgba(139, 160, 190, .24);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--report-tone) 48%, var(--color-border-default));
   border-radius: 12px;
-  background: rgba(8, 13, 20, .76);
+  background: var(--color-surface-raised);
+  background: color-mix(in srgb, var(--report-tone) 7%, var(--color-surface-default));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--report-tone) 76%, transparent);
   padding: 10px;
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
 }
 
-.run-purpose-result-grid article.good {
-  border-color: rgba(58, 226, 164, .36);
-  background: rgba(8, 54, 45, .48);
+.collection-result-card.report-tone-neutral {
+  --report-tone: var(--color-border-strong);
 }
 
-.run-purpose-result-grid article.watch {
-  border-color: rgba(255, 198, 75, .42);
-  background: rgba(75, 55, 18, .46);
+.collection-result-card.report-tone-info {
+  --report-tone: var(--color-status-info);
 }
 
-.run-purpose-result-grid article.bad {
-  border-color: rgba(255, 114, 139, .48);
-  background: rgba(72, 25, 38, .48);
+.collection-result-card.report-tone-success,
+.collection-result-card.good {
+  --report-tone: var(--color-status-success);
 }
 
-.run-purpose-result-grid span,
-.run-purpose-result-grid small {
+.collection-result-card.report-tone-warning,
+.collection-result-card.watch {
+  --report-tone: var(--color-status-warning);
+}
+
+.collection-result-card.report-tone-danger,
+.collection-result-card.bad {
+  --report-tone: var(--color-status-danger);
+}
+
+.collection-result-card.report-tone-opportunity {
+  --report-tone: var(--color-accent-secondary);
+}
+
+.collection-result-icon {
+  width: 36px;
+  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--report-tone) 46%, var(--color-border-default));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--report-tone) 13%, var(--color-surface-raised));
+  color: var(--report-tone);
+}
+
+.collection-result-icon > .summary-icon-svg {
+  width: 19px;
+  height: 19px;
+}
+
+.collection-result-card-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  align-content: start;
+}
+
+.collection-result-card-copy > span,
+.collection-result-card-copy > small {
   display: block;
   min-width: 0;
-  color: #b8c7d8;
+  color: var(--color-text-secondary);
   font-size: 11px;
   font-weight: 850;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
-.run-purpose-result-grid strong {
+.collection-result-card-copy > small {
+  padding-top: 3px;
+}
+
+.collection-result-card-copy > strong {
   display: block;
   min-width: 0;
-  margin: 4px 0;
-  color: #ffffff;
+  margin: 0;
+  color: var(--report-tone);
   font-size: 20px;
   font-weight: 950;
   line-height: 1.16;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.collection-result-state,
+.collection-result-card-status {
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-top: 3px;
+  border: 1px solid color-mix(in srgb, var(--report-tone) 42%, var(--color-border-default));
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-raised);
+  background: color-mix(in srgb, var(--report-tone) 9%, var(--color-surface-default));
+  color: var(--report-tone);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
@@ -32221,21 +32316,6 @@ body.role-admin .admin-db-region-card-grid button.active {
   gap: 8px;
 }
 
-.run-apply-grid article {
-  min-width: 0;
-  border: 1px solid var(--color-border-default);
-  border-radius: 12px;
-  background: var(--color-surface-subtle);
-  padding: 10px;
-}
-
-.run-apply-grid strong {
-  display: block;
-  margin: 3px 0;
-  color: var(--color-action-primary);
-  font-size: 22px;
-}
-
 .run-apply-panel p {
   margin: 0;
 }
@@ -32243,7 +32323,7 @@ body.role-admin .admin-db-region-card-grid button.active {
 .run-result-flow {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   gap: 8px;
 }
 
@@ -32349,11 +32429,15 @@ body.role-admin .admin-db-region-card-grid button.active {
 
 .run-apply-actions button:disabled,
 .run-apply-linked-actions button:disabled {
-  opacity: .45;
+  border-color: var(--color-disabled-border);
+  background: var(--color-disabled-surface);
+  color: var(--color-disabled-text);
+  opacity: 1;
   cursor: not-allowed;
 }
 
 .run-apply-linked-queue {
+  --run-linked-tone: var(--color-status-info);
   min-width: 0;
   display: grid;
   gap: 10px;
@@ -32364,16 +32448,19 @@ body.role-admin .admin-db-region-card-grid button.active {
 }
 
 .run-apply-linked-queue.good {
+  --run-linked-tone: var(--color-status-success);
   border-color: color-mix(in srgb, var(--color-status-success) 44%, var(--color-border-default));
   background: color-mix(in srgb, var(--color-status-success) 9%, var(--color-surface-default));
 }
 
 .run-apply-linked-queue.watch {
+  --run-linked-tone: var(--color-status-warning);
   border-color: color-mix(in srgb, var(--color-status-warning) 48%, var(--color-border-default));
   background: color-mix(in srgb, var(--color-status-warning) 9%, var(--color-surface-default));
 }
 
 .run-apply-linked-queue.bad {
+  --run-linked-tone: var(--color-status-danger);
   border-color: color-mix(in srgb, var(--color-status-danger) 50%, var(--color-border-default));
   background: color-mix(in srgb, var(--color-status-danger) 9%, var(--color-surface-default));
 }
@@ -32488,30 +32575,20 @@ body.role-admin .run-apply-empty {
 }
 
 body.role-admin .run-apply-panel.good {
-  border-color: rgba(58, 226, 164, .42);
+  border-color: color-mix(in srgb, var(--color-status-success) 54%, var(--color-border-default));
 }
 
 body.role-admin .run-apply-panel.watch {
-  border-color: rgba(255, 198, 75, .46);
+  border-color: color-mix(in srgb, var(--color-status-warning) 56%, var(--color-border-default));
 }
 
 body.role-admin .run-apply-panel.bad {
-  border-color: rgba(255, 114, 139, .52);
-}
-
-body.role-admin .run-apply-grid article {
-  border-color: var(--color-border-default);
-  background: var(--color-surface-subtle);
+  border-color: color-mix(in srgb, var(--color-status-danger) 58%, var(--color-border-default));
 }
 
 body.role-admin .run-purpose-result {
-  border-color: color-mix(in srgb, var(--color-status-success) 42%, var(--color-border-default));
-  background: color-mix(in srgb, var(--color-status-success) 8%, var(--color-surface-default));
-}
-
-body.role-admin .run-purpose-result-grid article {
-  border-color: var(--color-border-default);
-  background: var(--color-surface-subtle);
+  border-color: color-mix(in srgb, var(--color-status-info) 42%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-info) 6%, var(--color-surface-default));
 }
 
 @media (max-width: 760px) {
@@ -32553,11 +32630,6 @@ body.role-admin .run-purpose-result-grid article {
     text-align: left;
   }
 
-  .run-purpose-result-grid,
-  .run-apply-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .run-result-flow {
     grid-template-columns: 1fr;
   }
@@ -32576,10 +32648,44 @@ body.role-admin .run-purpose-result-grid article {
     display: none;
   }
 
-  .crawl-route-preview,
-  .run-purpose-result-grid,
-  .run-apply-grid {
+  .crawl-route-preview {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Result grids respond to the actual card width, not the browser viewport. */
+.collection-result-grid {
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr));
+}
+
+@container collection-results (min-width: 520px) {
+  .collection-result-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container collection-results (min-width: 760px) {
+  .collection-result-card {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+  }
+}
+
+@container collection-results (min-width: 240px) and (max-width: 519px) {
+  .collection-result-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .run-result-flow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container collection-results (max-width: 239px) {
+  .collection-result-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -33893,7 +33999,7 @@ body.role-admin .structure-action-list li {
 }
 
 body.role-admin .structure-radar-labels text {
-  fill: #c8d6e8 !important;
+  fill: var(--color-text-secondary) !important;
 }
 
 /* Surface token layer v2: components can declare their own visual surface. */
@@ -37129,13 +37235,30 @@ body.role-admin #adminDatabaseDashboard {
   --admin-company-border-strong: var(--color-border-strong);
   --admin-company-muted: var(--color-text-secondary);
   --admin-company-copy: var(--color-text-primary);
+  --admin-company-panel-radius: var(--ui-radius-lg);
+  --admin-company-card-radius: var(--ui-radius-md);
+  --admin-company-control-radius: var(--ui-radius-sm);
+  --admin-company-pill-radius: var(--radius-pill);
   min-width: 0;
+}
+
+body.role-admin #adminDatabaseDashboard :is(
+  .admin-db-hero,
+  .admin-db-toolbar,
+  .admin-db-filter-shell,
+  .admin-db-filter-more,
+  .admin-db-province-board,
+  .admin-db-region-board,
+  .admin-db-province,
+  .admin-db-region
+) {
+  border-radius: var(--admin-company-panel-radius);
 }
 
 body.role-admin #adminDatabaseDashboard .admin-db-flat-list[data-admin-db-list-workbench="true"] {
   gap: var(--ui-space-4);
   border-color: var(--admin-company-border) !important;
-  border-radius: var(--ui-radius-lg) !important;
+  border-radius: var(--admin-company-panel-radius) !important;
   background: linear-gradient(180deg, var(--admin-company-surface-raised), var(--admin-company-surface)) !important;
   box-shadow: var(--ui-shadow-sm);
 }
@@ -37161,7 +37284,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-list-preview {
   display: grid;
   gap: var(--ui-space-3);
   border: 1px solid var(--admin-company-border);
-  border-radius: var(--ui-radius-lg);
+  border-radius: var(--admin-company-panel-radius);
   background: var(--admin-company-surface-raised);
   color: var(--admin-company-copy);
   padding: var(--ui-space-4);
@@ -37221,7 +37344,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-list-preview > a {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--color-border-default);
-  border-radius: var(--ui-radius-sm);
+  border-radius: var(--admin-company-control-radius);
   background: var(--color-surface-raised);
   color: var(--color-text-primary);
   padding: 8px 12px;
@@ -37247,7 +37370,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-list-preview-metrics > div {
   display: grid;
   gap: 4px;
   border: 1px solid var(--admin-company-border);
-  border-radius: var(--ui-radius-sm);
+  border-radius: var(--admin-company-control-radius);
   background: var(--admin-company-surface-soft);
   padding: 9px;
 }
@@ -37276,7 +37399,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-list-preview-reason {
 
 body.role-admin #adminDatabaseDashboard .admin-db-list-preview-sources em {
   border: 1px solid var(--admin-company-border);
-  border-radius: 999px;
+  border-radius: var(--admin-company-pill-radius);
   background: var(--admin-company-surface-soft);
   color: var(--admin-company-copy);
   padding: 4px 7px;
@@ -37304,7 +37427,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-active-filter-chips {
 body.role-admin #adminDatabaseDashboard .admin-db-active-filters {
   justify-content: space-between;
   border: 1px solid var(--admin-company-border);
-  border-radius: var(--ui-radius-md);
+  border-radius: var(--admin-company-card-radius);
   background: var(--admin-company-surface-soft);
   padding: var(--ui-space-3);
 }
@@ -37314,11 +37437,19 @@ body.role-admin #adminDatabaseDashboard .admin-db-active-filters > button,
 body.role-admin #adminDatabaseDashboard .admin-db-empty-actions button {
   min-height: var(--touch-target-min);
   border: 1px solid var(--color-border-default);
-  border-radius: 999px;
   background: var(--color-surface-raised);
   color: var(--color-text-primary);
   padding: 8px 12px;
   font-weight: 850;
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-active-filter-chips button {
+  border-radius: var(--admin-company-pill-radius);
+}
+
+body.role-admin #adminDatabaseDashboard .admin-db-active-filters > button,
+body.role-admin #adminDatabaseDashboard .admin-db-empty-actions button {
+  border-radius: var(--admin-company-control-radius);
 }
 
 body.role-admin #adminDatabaseDashboard .admin-db-empty-actions {
@@ -37337,7 +37468,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-flat-head mark {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--admin-company-border);
-  border-radius: 999px;
+  border-radius: var(--admin-company-pill-radius);
   background: color-mix(in srgb, var(--color-action-primary) 12%, var(--color-surface-default));
   color: var(--color-action-primary) !important;
   padding: 0 10px;
@@ -37356,7 +37487,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-list-overview > span {
   display: grid;
   gap: 4px;
   border: 1px solid var(--admin-company-border);
-  border-radius: var(--ui-radius-md);
+  border-radius: var(--admin-company-card-radius);
   background: var(--admin-company-surface-soft);
   padding: 10px 12px;
 }
@@ -37383,7 +37514,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-company[data-admin-db-company-
   gap: 10px 14px !important;
   padding: 15px !important;
   border: 1px solid var(--admin-company-border) !important;
-  border-radius: var(--ui-radius-lg) !important;
+  border-radius: var(--admin-company-card-radius) !important;
   background: linear-gradient(135deg, var(--admin-company-surface-raised), var(--admin-company-surface)) !important;
   box-shadow: var(--elevation-sm) !important;
   transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
@@ -37427,7 +37558,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-company-status {
   align-items: center;
   gap: 6px;
   border: 1px solid color-mix(in srgb, var(--color-status-info) 50%, var(--color-border-default));
-  border-radius: 999px;
+  border-radius: var(--admin-company-pill-radius);
   background: color-mix(in srgb, var(--color-status-info) 10%, var(--color-surface-default));
   color: var(--color-status-info) !important;
   padding: 4px 9px;
@@ -37443,7 +37574,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-company-status::before {
   content: "";
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--admin-company-pill-radius);
   background: currentColor;
 }
 
@@ -37507,7 +37638,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-company-next-action {
   gap: 8px;
   margin-top: 10px;
   border-left: 2px solid var(--color-action-primary);
-  border-radius: 0 10px 10px 0;
+  border-radius: 0 var(--admin-company-control-radius) var(--admin-company-control-radius) 0;
   background: color-mix(in srgb, var(--color-action-primary) 10%, var(--color-surface-default));
   padding: 8px 9px;
 }
@@ -37537,7 +37668,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-company-values {
 body.role-admin #adminDatabaseDashboard .admin-db-company-values span {
   min-height: 54px !important;
   border-color: var(--color-border-default) !important;
-  border-radius: 11px !important;
+  border-radius: var(--admin-company-control-radius) !important;
   background: var(--color-surface-subtle) !important;
   padding: 8px 9px !important;
 }
@@ -37572,7 +37703,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-company-action {
 body.role-admin #adminDatabaseDashboard .admin-db-company-action button,
 body.role-admin #adminDatabaseDashboard .admin-db-company-action a {
   min-height: var(--ui-control-height) !important;
-  border-radius: 12px !important;
+  border-radius: var(--admin-company-control-radius) !important;
   padding: 8px 11px !important;
   font-size: 12px !important;
 }
@@ -37592,7 +37723,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-pagination button {
 
 body.role-admin #adminDatabaseDashboard .admin-db-selected-panel[data-admin-db-company-workbench="true"] {
   gap: var(--ui-space-4) !important;
-  border-radius: var(--ui-radius-xl) !important;
+  border-radius: var(--admin-company-panel-radius) !important;
 }
 
 body.role-admin #adminDatabaseDashboard .admin-db-detail-identity {
@@ -37607,7 +37738,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-detail-back {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--color-border-default);
-  border-radius: 999px;
+  border-radius: var(--admin-company-control-radius);
   background: var(--color-surface-subtle);
   color: var(--color-text-secondary) !important;
   padding: 0 10px;
@@ -37643,7 +37774,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-detail-information > .lodging-
 body.role-admin #adminDatabaseDashboard .admin-db-detail-history {
   min-width: 0;
   border: 1px solid var(--admin-company-border);
-  border-radius: var(--ui-radius-md);
+  border-radius: var(--admin-company-card-radius);
   background: var(--admin-company-surface-raised);
   color: var(--admin-company-copy);
   padding: var(--ui-space-3);
@@ -37732,7 +37863,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading small {
 body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading > em {
   flex: 0 0 auto;
   border: 1px solid var(--color-border-default);
-  border-radius: 999px;
+  border-radius: var(--admin-company-pill-radius);
   background: color-mix(in srgb, var(--color-action-primary) 12%, var(--color-surface-default));
   color: var(--color-action-primary) !important;
   padding: 7px 10px;
@@ -37745,7 +37876,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-workbench-heading > em {
 body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs {
   gap: var(--ui-space-2);
   border-color: var(--admin-company-border);
-  border-radius: var(--ui-radius-md);
+  border-radius: var(--admin-company-card-radius);
   background: var(--color-surface-subtle);
 }
 
@@ -37755,7 +37886,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-detail-tabs button {
   grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
-  border-radius: 12px;
+  border-radius: var(--admin-company-control-radius);
   padding: 8px 10px;
   text-align: left;
 }
@@ -37766,7 +37897,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-workbench-step-index {
   display: grid;
   place-items: center;
   border: 1px solid var(--color-border-default);
-  border-radius: 10px;
+  border-radius: var(--admin-company-control-radius);
   background: var(--color-surface-default);
   color: var(--color-action-primary) !important;
   font-size: 9px;
@@ -37806,7 +37937,7 @@ body.role-admin #adminDatabaseDashboard .admin-db-selected-workbench-stack {
 }
 
 body.role-admin #adminDatabaseDashboard .admin-db-selected-fold {
-  border-radius: var(--ui-radius-md) !important;
+  border-radius: var(--admin-company-card-radius) !important;
   overflow: clip;
 }
 
@@ -40654,6 +40785,29 @@ body.role-b2b :is(
   color: var(--color-text-primary) !important;
 }
 
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .collection-result-card[data-collection-result-key] {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 54%, var(--color-border-default)) !important;
+  background: var(--color-surface-raised) !important;
+  background-color: var(--color-surface-raised) !important;
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 9%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 9%, var(--color-surface-default)) !important;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 82%, transparent) !important;
+  color: var(--color-text-primary) !important;
+}
+
+:root[data-theme="dark"] body.role-admin .app-shell .run-apply-linked-queue {
+  border-color: color-mix(in srgb, var(--run-linked-tone, var(--color-status-info)) 50%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--run-linked-tone, var(--color-status-info)) 7%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--run-linked-tone, var(--color-status-info)) 7%, var(--color-surface-default)) !important;
+}
+
+:root[data-theme="dark"] body.role-admin .app-shell .run-apply-linked-list article {
+  border-color: color-mix(in srgb, var(--run-linked-tone, var(--color-status-info)) 38%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--run-linked-tone, var(--color-status-info)) 4%, var(--color-surface-raised)) !important;
+  background-color: color-mix(in srgb, var(--run-linked-tone, var(--color-status-info)) 4%, var(--color-surface-raised)) !important;
+  color: var(--color-text-primary) !important;
+}
+
 :root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .report-semantic-section {
   border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 46%, var(--color-border-default)) !important;
   background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 5%, var(--color-surface-default)) !important;
@@ -40667,8 +40821,23 @@ body.role-b2b :is(
   color: var(--report-tone, var(--color-text-secondary)) !important;
 }
 
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .collection-result-icon {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 48%, var(--color-border-default));
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 14%, var(--color-surface-raised));
+  color: var(--report-tone, var(--color-text-secondary)) !important;
+}
+
 :root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .report-semantic-card {
   border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 48%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 7%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 7%, var(--color-surface-default)) !important;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 76%, transparent) !important;
+}
+
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .collection-result-card[data-collection-result-key] {
+  border-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 48%, var(--color-border-default)) !important;
+  background: var(--color-surface-raised) !important;
+  background-color: var(--color-surface-raised) !important;
   background: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 7%, var(--color-surface-default)) !important;
   background-color: color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 7%, var(--color-surface-default)) !important;
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--report-tone, var(--color-border-strong)) 76%, transparent) !important;
@@ -40750,7 +40919,6 @@ body.role-b2b :is(
 }
 
 :root[data-theme="light"] body.role-admin :where(
-  .admin-db-hero > div > span,
   .admin-db-filter-more summary span,
   .admin-console-head > a,
   .admin-console-head > button,
@@ -40906,6 +41074,14 @@ body.role-b2b :is(
   background: var(--color-disabled-surface);
   color: var(--color-disabled-text);
   opacity: .68;
+}
+
+/* Authenticated controls keep readable disabled tokens after component-level legacy opacity rules. */
+:is(body.role-admin, body.role-b2b) .app-shell button:disabled {
+  border-color: var(--color-disabled-border) !important;
+  background: var(--color-disabled-surface) !important;
+  color: var(--color-disabled-text) !important;
+  opacity: 1 !important;
 }
 
 @media (min-width: 721px) and (max-width: 1120px) {

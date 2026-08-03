@@ -1117,6 +1117,75 @@ function dbRouteTargetLabel(target = "") {
   return key.replace(/_/g, " ") || "DB 반영";
 }
 
+const COLLECTION_RESULT_STATES = new Set(["ready", "zero", "unavailable", "error", "complete", "partial", "failed"]);
+
+function collectionResultMetricState(value, { applicable = true, observed = true, error = false } = {}) {
+  if (error) return "error";
+  if (!applicable || !observed) return "unavailable";
+  const number = Number(value);
+  return Number.isFinite(number) && number === 0 ? "zero" : "ready";
+}
+
+function collectionResultCardMeta(card = {}) {
+  const state = COLLECTION_RESULT_STATES.has(card.state) ? card.state : "unavailable";
+  const inferredTone = {
+    complete: "success",
+    partial: "warning",
+    failed: "danger",
+    error: "danger",
+    ready: "info",
+    zero: "neutral",
+    unavailable: "neutral"
+  }[state] || "neutral";
+  const tone = normalizedReportTone(card.tone, inferredTone);
+  const legacyTone = ["good", "watch", "bad"].includes(card.legacyTone)
+    ? card.legacyTone
+    : ({ success: "good", warning: "watch", danger: "bad" }[tone] || "");
+  const defaultStatusLabel = {
+    complete: "완료",
+    partial: "확인 필요",
+    failed: "실패",
+    error: "오류",
+    ready: "확인됨",
+    zero: "실제 0",
+    unavailable: "미수집"
+  }[state] || "확인 필요";
+  return {
+    ...card,
+    key: String(card.key || "metric"),
+    label: String(card.label || "지표"),
+    value: String(card.value ?? "미수집"),
+    note: String(card.note || ""),
+    state,
+    tone,
+    legacyTone,
+    icon: String(card.icon || "trust"),
+    statusLabel: String(card.statusLabel || defaultStatusLabel)
+  };
+}
+
+function collectionResultIconHtml(icon = "trust", tone = "neutral") {
+  const safeTone = normalizedReportTone(tone);
+  return `<i class="collection-result-icon report-tone-${safeTone}" aria-hidden="true">${summaryIcon(icon)}</i>`;
+}
+
+function collectionResultCardHtml(card = {}, variant = "metric") {
+  const meta = collectionResultCardMeta(card);
+  const variantKey = String(variant || "metric").replace(/[^a-z0-9_-]/gi, "") || "metric";
+  const legacyClass = meta.legacyTone ? ` ${meta.legacyTone}` : "";
+  return `
+    <article class="collection-result-card collection-result-card-${escapeHtml(variantKey)} report-tone-${escapeHtml(meta.tone)}${legacyClass}" data-collection-result-key="${escapeHtml(meta.key)}" data-collection-result-tone="${escapeHtml(meta.tone)}" data-collection-result-state="${escapeHtml(meta.state)}">
+      ${collectionResultIconHtml(meta.icon, meta.tone)}
+      <div class="collection-result-card-copy">
+        <span>${escapeHtml(meta.label)}</span>
+        <strong>${escapeHtml(meta.value)}</strong>
+        ${meta.note ? `<small>${escapeHtml(meta.note)}</small>` : ""}
+        <em class="collection-result-state">${escapeHtml(meta.statusLabel)}</em>
+      </div>
+    </article>
+  `;
+}
+
 function runDbApplySummaryModel(data = state.data || {}) {
   const run = data.run || {};
   const companyMaster = data.companyMaster || {};
@@ -1170,7 +1239,10 @@ function runDbApplyStatusModel(model = {}) {
     );
     return {
       key: "failed",
+      state: "failed",
       tone: "bad",
+      semanticTone: "danger",
+      icon: "trust",
       label: "반영 실패",
       message: errors.join(" · "),
       actions
@@ -1184,7 +1256,10 @@ function runDbApplyStatusModel(model = {}) {
     );
     return {
       key: "partial",
+      state: "partial",
       tone: "watch",
+      semanticTone: "warning",
+      icon: "operation",
       label: "부분 반영",
       message: warnings.join(" · "),
       actions
@@ -1197,7 +1272,10 @@ function runDbApplyStatusModel(model = {}) {
   );
   return {
     key: "complete",
+    state: "complete",
     tone: "good",
+    semanticTone: "success",
+    icon: "rate",
     label: "정상 반영",
     message: "선택한 수집 목적 기준으로 필요한 DB 반영이 완료되었습니다.",
     actions
@@ -1250,61 +1328,171 @@ function runPurposeOutcomeCards(model = {}, status = {}) {
   const checkedText = diag.checked ? `${fmtNumber(diag.succeeded)}/${fmtNumber(diag.checked)}` : (items.length ? fmtNumber(items.length) : "대기");
   const issueCount = finiteNumber(diag.priceMissing) + finiteNumber(diag.quantityUnclear) + finiteNumber(diag.missingDates);
   const regionKeyword = run.keyword || run.label || "검색 지역";
+  const statusState = COLLECTION_RESULT_STATES.has(status.state)
+    ? status.state
+    : COLLECTION_RESULT_STATES.has(status.key) ? status.key : "unavailable";
+  const statusTone = normalizedReportTone(status.semanticTone, decisionReportTone(status.tone, "neutral"));
+  const statusIcon = status.icon || "operation";
+  const runObserved = Boolean(Object.keys(run).length);
+  const detailObserved = Boolean(diag.checked || items.length);
+  const channelState = collectionResultMetricState(channelCompanyCount, { observed: channelCompanyCount > 0 });
+  const statusCardMeta = (key, label, value, note, icon = statusIcon) => collectionResultCardMeta({
+    key,
+    label,
+    value,
+    note,
+    state: statusState,
+    tone: statusTone,
+    legacyTone: status.tone,
+    icon,
+    statusLabel: status.label || "반영 상태"
+  });
   if (model.purpose?.key === "basic_db") {
+    const inventoryState = collectionResultMetricState(model.inventoryApplied, { applicable: Boolean(model.route?.appliesInventory) });
     return {
       key: "basic",
       title: "기본정보 확보 결과",
       note: "순위, 상품 및 상품별 금액, 예약채널을 업체 기준값에 반영합니다.",
       cards: [
-        { label: "순위 후보", value: fmtNumber(rankCandidateCount), note: `${detailRange} 수집 범위` },
-        { label: "상품·금액", value: model.route?.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외", note: diag.succeeded ? `상세 확인 ${checkedText}` : "상품/가격 최신값 반영" },
-        { label: "예약채널", value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "확인 대기", note: "네이버·OTA 노출 신호" },
-        { label: "기준값 반영", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
+        collectionResultCardMeta({
+          key: "rank-candidates",
+          label: "순위 후보",
+          value: fmtNumber(rankCandidateCount),
+          note: `${detailRange} 수집 범위`,
+          state: collectionResultMetricState(rankCandidateCount, { observed: runObserved }),
+          tone: rankCandidateCount ? "info" : "neutral",
+          icon: "search",
+          statusLabel: rankCandidateCount ? "후보 확인" : "후보 없음"
+        }),
+        collectionResultCardMeta({
+          key: "inventory-applied",
+          label: "상품·금액",
+          value: model.route?.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외",
+          note: diag.succeeded ? `상세 확인 ${checkedText}` : "상품/가격 최신값 반영",
+          state: inventoryState,
+          tone: inventoryState === "ready" ? "success" : "neutral",
+          icon: "package",
+          statusLabel: inventoryState === "ready" ? "반영됨" : inventoryState === "zero" ? "실제 0" : "수집 대상 제외"
+        }),
+        collectionResultCardMeta({
+          key: "booking-channels",
+          label: "예약채널",
+          value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "확인 대기",
+          note: "네이버·OTA 노출 신호",
+          state: channelState,
+          tone: channelState === "ready" ? "info" : "neutral",
+          icon: "platform",
+          statusLabel: channelState === "ready" ? "채널 확인" : "확인 대기"
+        }),
+        statusCardMeta("company-baseline", "기준값 반영", fmtNumber(model.currentRunCompanies), status.label || "반영 상태", "company")
       ]
     };
   }
   if (model.purpose?.key === "demand_location") {
+    const demandState = collectionResultMetricState(model.demandSignalCompanies, { applicable: Boolean(model.route?.appliesDemandLocation) });
+    const locationState = collectionResultMetricState(model.demandSignalCompanies, { observed: Number(model.demandSignalCompanies || 0) > 0 });
+    const rangeState = run.detailRankRanges ? "ready" : "unavailable";
     return {
       key: "region",
       title: "지역정보 확보 결과",
       note: "수요, 입지, 클러스터 신호를 지역카드와 수요구조에 반영합니다.",
       cards: [
-        { label: "수요 신호", value: model.route?.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외", note: "검색수요·트렌드" },
-        { label: "입지·클러스터", value: model.demandSignalCompanies ? "반영" : "대기", note: `${regionKeyword} 기준` },
-        { label: "지역 범위", value: detailRange, note: "지도/클러스터 연결 범위" },
-        { label: "기준값 연결", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
+        collectionResultCardMeta({
+          key: "demand-signals",
+          label: "수요 신호",
+          value: model.route?.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외",
+          note: "검색수요·트렌드",
+          state: demandState,
+          tone: demandState === "ready" ? "info" : "neutral",
+          icon: "search",
+          statusLabel: demandState === "ready" ? "신호 확인" : demandState === "zero" ? "신호 없음" : "수집 대상 제외"
+        }),
+        collectionResultCardMeta({
+          key: "location-cluster",
+          label: "입지·클러스터",
+          value: model.demandSignalCompanies ? "반영" : "대기",
+          note: `${regionKeyword} 기준`,
+          state: locationState,
+          tone: locationState === "ready" ? "success" : "neutral",
+          icon: "tourism",
+          statusLabel: locationState === "ready" ? "연결됨" : "확인 대기"
+        }),
+        collectionResultCardMeta({
+          key: "region-range",
+          label: "지역 범위",
+          value: detailRange,
+          note: "지도/클러스터 연결 범위",
+          state: rangeState,
+          tone: rangeState === "ready" ? "info" : "neutral",
+          icon: "tourism",
+          statusLabel: rangeState === "ready" ? "범위 확인" : "범위 미확인"
+        }),
+        statusCardMeta("region-baseline", "기준값 연결", fmtNumber(model.currentRunCompanies), status.label || "반영 상태", "company")
       ]
     };
   }
+  const revenueValue = revenueAmount || finiteNumber(model.historyRows, 0);
+  const revenueState = collectionResultMetricState(revenueValue, { applicable: Boolean(model.historyEligible || revenueAmount) });
+  const qualityState = detailObserved ? "ready" : "unavailable";
   return {
     key: "detail",
     title: "상세정보 확보 결과",
     note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 누적합니다.",
     cards: [
-      { label: "예약율 표본", value: checkedText, note: "네이버 플레이스 기준" },
-      { label: "요일별 매출", value: revenueAmount ? fmtWon(revenueAmount) : fmtNumber(model.historyRows), note: revenueAmount ? `${fmtNumber(soldCount)}개/회 판매 반영` : "매출 관측치" },
-      { label: "수량·가격 확인", value: issueCount ? `${fmtNumber(issueCount)}건` : "정상", note: `가격 ${fmtNumber(diag.priceMissing)} · 수량 ${fmtNumber(diag.quantityUnclear)}`, tone: issueCount ? "watch" : "good" },
-      { label: "OTA 취합", value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "대기", note: "보조 채널 노출 신호" }
+      collectionResultCardMeta({
+        key: "booking-sample",
+        label: "예약율 표본",
+        value: checkedText,
+        note: "네이버 플레이스 기준",
+        state: detailObserved ? "ready" : "unavailable",
+        tone: detailObserved ? "info" : "neutral",
+        icon: "rate",
+        statusLabel: detailObserved ? "표본 확인" : "확인 대기"
+      }),
+      collectionResultCardMeta({
+        key: "weekday-revenue",
+        label: "요일별 매출",
+        value: revenueAmount ? fmtWon(revenueAmount) : fmtNumber(model.historyRows),
+        note: revenueAmount ? `${fmtNumber(soldCount)}개/회 판매 반영` : "매출 관측치",
+        state: revenueState,
+        tone: revenueState === "ready" ? (revenueAmount ? "success" : "info") : "neutral",
+        icon: "money",
+        statusLabel: revenueState === "ready" ? "관측됨" : revenueState === "zero" ? "실제 0" : "수집 대상 제외"
+      }),
+      collectionResultCardMeta({
+        key: "inventory-quality",
+        label: "수량·가격 확인",
+        value: detailObserved ? (issueCount ? `${fmtNumber(issueCount)}건` : "정상") : "미수집",
+        note: `가격 ${fmtNumber(diag.priceMissing)} · 수량 ${fmtNumber(diag.quantityUnclear)}`,
+        state: qualityState,
+        tone: !detailObserved ? "neutral" : issueCount ? "warning" : "success",
+        icon: issueCount ? "trust" : "package",
+        statusLabel: !detailObserved ? "확인 대기" : issueCount ? "확인 필요" : "정상 확인"
+      }),
+      collectionResultCardMeta({
+        key: "ota-coverage",
+        label: "OTA 취합",
+        value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "대기",
+        note: "보조 채널 노출 신호",
+        state: channelState,
+        tone: channelState === "ready" ? "info" : "neutral",
+        icon: "platform",
+        statusLabel: channelState === "ready" ? "채널 확인" : "확인 대기"
+      })
     ]
   };
 }
 
 function runPurposeOutcomeHtml(outcome = {}) {
   return `
-    <div class="run-purpose-result ${escapeHtml(outcome.key || "")}">
+    <div class="run-purpose-result ${escapeHtml(outcome.key || "")}" data-collection-result-group="${escapeHtml(outcome.key || "unknown")}">
       <div class="run-purpose-result-head">
         <span>수집 목적별 결과</span>
         <strong>${escapeHtml(outcome.title || "수집 결과")}</strong>
         <small>${escapeHtml(outcome.note || "")}</small>
       </div>
-      <div class="run-purpose-result-grid">
-        ${(outcome.cards || []).map((card) => `
-          <article class="${escapeHtml(card.tone || "")}">
-            <span>${escapeHtml(card.label || "")}</span>
-            <strong>${escapeHtml(String(card.value ?? ""))}</strong>
-            <small>${escapeHtml(card.note || "")}</small>
-          </article>
-        `).join("")}
+      <div class="run-purpose-result-grid collection-result-grid">
+        ${(outcome.cards || []).map((card) => collectionResultCardHtml(card, "purpose")).join("")}
       </div>
     </div>
   `;
@@ -1441,9 +1629,12 @@ function renderRunResultApplySummary() {
   if (!isAdminRole() || !els.runApplySummary) return;
   if (!state.data?.run) {
     els.runApplySummary.innerHTML = `
-      <div class="run-apply-empty">
-        <strong>결과를 선택하면 DB 반영 위치를 표시합니다.</strong>
-        <small>기본정보, 상세정보, 지역정보 중 어디에 반영됐는지 확인합니다.</small>
+      <div class="run-apply-empty" data-collection-result-key="empty" data-collection-result-tone="neutral" data-collection-result-state="unavailable">
+        ${collectionResultIconHtml("history", "neutral")}
+        <div class="run-apply-empty-copy">
+          <strong>결과를 선택하면 DB 반영 위치를 표시합니다.</strong>
+          <small>기본정보, 상세정보, 지역정보 중 어디에 반영됐는지 확인합니다.</small>
+        </div>
       </div>
     `;
     return;
@@ -1459,45 +1650,80 @@ function renderRunResultApplySummary() {
   const historyNote = model.historyEligible ? "이번 결과 매출 관측치" : "이 수집 목적은 매출 누적 제외";
   const demandValue = model.route.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외";
   const demandNote = model.route.appliesDemandLocation ? "지역정보 신호 반영" : "지역정보 수집 아님";
+  const statusTone = normalizedReportTone(status.semanticTone, decisionReportTone(status.tone, "neutral"));
+  const statusState = COLLECTION_RESULT_STATES.has(status.state) ? status.state : "unavailable";
+  const companyState = collectionResultMetricState(model.currentRunCompanies, { error: Boolean(model.error) });
+  const inventoryState = collectionResultMetricState(model.inventoryApplied, { applicable: Boolean(model.route.appliesInventory) });
+  const historyState = collectionResultMetricState(model.historyRows, { applicable: Boolean(model.historyEligible) });
+  const demandState = collectionResultMetricState(model.demandSignalCompanies, { applicable: Boolean(model.route.appliesDemandLocation) });
+  const applyCards = [
+    collectionResultCardMeta({
+      key: "company-baseline",
+      label: "업체 기준값",
+      value: fmtNumber(model.currentRunCompanies),
+      note: "이번 결과 업체 반영",
+      state: companyState,
+      tone: companyState === "error" ? "danger" : companyState === "ready" ? "info" : "neutral",
+      icon: "company",
+      statusLabel: companyState === "error" ? "반영 오류" : companyState === "ready" ? "반영됨" : "실제 0"
+    }),
+    collectionResultCardMeta({
+      key: "inventory",
+      label: "상품·가격",
+      value: model.route.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외",
+      note: model.route.appliesInventory ? "상품/가격 최신값 반영" : "노출 기록 중심",
+      state: inventoryState,
+      tone: inventoryState === "ready" ? "success" : "neutral",
+      icon: "package",
+      statusLabel: inventoryState === "ready" ? "반영됨" : inventoryState === "zero" ? "실제 0" : "수집 대상 제외"
+    }),
+    collectionResultCardMeta({
+      key: "revenue-history",
+      label: "매출 이력",
+      value: historyValue,
+      note: historyNote,
+      state: historyState,
+      tone: historyState === "ready" ? "info" : "neutral",
+      icon: "money",
+      statusLabel: historyState === "ready" ? "관측됨" : historyState === "zero" ? "실제 0" : "수집 대상 제외"
+    }),
+    collectionResultCardMeta({
+      key: "region-signals",
+      label: "지역정보",
+      value: demandValue,
+      note: demandNote,
+      state: demandState,
+      tone: demandState === "ready" ? "info" : "neutral",
+      icon: "tourism",
+      statusLabel: demandState === "ready" ? "반영됨" : demandState === "zero" ? "신호 없음" : "수집 대상 제외"
+    })
+  ];
   els.runApplySummary.innerHTML = `
-    <section class="run-apply-panel ${escapeHtml(model.route.key || "unknown")} ${escapeHtml(status.tone)}">
+    <section class="run-apply-panel ${escapeHtml(model.route.key || "unknown")} ${escapeHtml(status.tone)} report-tone-${escapeHtml(statusTone)}" data-collection-result-key="run-apply" data-collection-result-tone="${escapeHtml(statusTone)}" data-collection-result-state="${escapeHtml(statusState)}">
       <div class="run-apply-head">
-        <div>
-          <span>이번 수집 반영</span>
-          <strong>${escapeHtml(model.purpose.label || model.route.label || "수집 결과")}</strong>
-          <small>${escapeHtml([run.keyword || run.label || "", detailText, dateText].filter(Boolean).join(" · "))}</small>
+        <div class="run-apply-title">
+          ${collectionResultIconHtml("history", statusTone)}
+          <div class="run-apply-title-copy">
+            <span>이번 수집 반영</span>
+            <strong>${escapeHtml(model.purpose.label || model.route.label || "수집 결과")}</strong>
+            <small>${escapeHtml([run.keyword || run.label || "", detailText, dateText].filter(Boolean).join(" · "))}</small>
+          </div>
         </div>
         <div class="run-apply-badges">
-          <mark class="run-apply-status ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</mark>
+          <mark class="run-apply-status ${escapeHtml(status.tone)} report-tone-${escapeHtml(statusTone)}" data-collection-result-tone="${escapeHtml(statusTone)}" data-collection-result-state="${escapeHtml(statusState)}">${escapeHtml(status.label)}</mark>
           <em>${escapeHtml(model.purpose.dbApplyText || model.targetText || "DB 반영")}</em>
         </div>
       </div>
       ${runPurposeOutcomeHtml(outcome)}
-      <div class="run-apply-check ${escapeHtml(status.tone)}">
-        <strong>${escapeHtml(status.label)}</strong>
-        <span>${escapeHtml(status.message)}</span>
+      <div class="run-apply-check ${escapeHtml(status.tone)} report-tone-${escapeHtml(statusTone)}" data-collection-result-tone="${escapeHtml(statusTone)}" data-collection-result-state="${escapeHtml(statusState)}">
+        ${collectionResultIconHtml(status.icon || "operation", statusTone)}
+        <div class="run-apply-check-copy">
+          <strong>${escapeHtml(status.label)}</strong>
+          <span>${escapeHtml(status.message)}</span>
+        </div>
       </div>
-      <div class="run-apply-grid">
-        <article>
-          <span>업체 기준값</span>
-          <strong>${fmtNumber(model.currentRunCompanies)}</strong>
-          <small>이번 결과 업체 반영</small>
-        </article>
-        <article>
-          <span>상품·가격</span>
-          <strong>${model.route.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외"}</strong>
-          <small>${model.route.appliesInventory ? "상품/가격 최신값 반영" : "노출 기록 중심"}</small>
-        </article>
-        <article>
-          <span>매출 이력</span>
-          <strong>${escapeHtml(historyValue)}</strong>
-          <small>${escapeHtml(historyNote)}</small>
-        </article>
-        <article>
-          <span>지역정보</span>
-          <strong>${escapeHtml(demandValue)}</strong>
-          <small>${escapeHtml(demandNote)}</small>
-        </article>
+      <div class="run-apply-grid collection-result-grid">
+        ${applyCards.map((card) => collectionResultCardHtml(card, "apply")).join("")}
       </div>
       <p>${escapeHtml(model.error ? `업체 기준값 반영 오류: ${model.error}` : model.targetText)}</p>
       <div class="run-result-flow" aria-label="수집 결과 확인 순서">
