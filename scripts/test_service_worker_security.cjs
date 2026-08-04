@@ -121,12 +121,12 @@ async function main() {
     method: "GET",
     mode: "cors",
     destination: "script",
-    url: "https://fixture.local/app.js?v=v2-20260804-detail-sheet-v40"
+    url: "https://fixture.local/app.js?v=v2-20260804-search-period-v41"
   });
-  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260804-detail-sheet-v40");
+  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260804-search-period-v41");
   await Promise.resolve();
   await Promise.resolve();
-  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260804-detail-sheet-v40")), "allowlisted static asset is cached");
+  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260804-search-period-v41")), "allowlisted static asset is cached");
 
   fetchImpl = async () => { throw new Error("offline"); };
   const unrelatedStaticFallback = await dispatchFetch({

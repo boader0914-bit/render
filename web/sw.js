@@ -1,4 +1,4 @@
-const UI_ASSET_VERSION = "v2-20260804-detail-sheet-v40";
+const UI_ASSET_VERSION = "v2-20260804-search-period-v41";
 const CACHE_VERSION = "lodging-datalab-pwa-v20260804-detail-sheet-v40";
 const CACHE_PREFIX = "lodging-datalab-pwa-";
 const APP_SHELL = [

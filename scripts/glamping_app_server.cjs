@@ -138,7 +138,7 @@ const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260804-detail-sheet-v40";
+const UI_ASSET_VERSION = "v2-20260804-search-period-v41";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -504,8 +504,19 @@ function resolveSearchModeForCrawl(keyword, value) {
 
 function crawlExecutionPlan(payload = {}) {
   const keyword = String(payload.keyword || "").trim();
+  const requestedBookingDaysValue = [
+    payload.bookingDays,
+    payload.bookingRangeDays,
+    process.env.BOOKING_RANGE_DAYS
+  ]
+    .map((value) => Number(value))
+    .find((value) => Number.isFinite(value) && value > 0);
+  const requestedBookingDays = Math.max(
+    1,
+    Math.min(31, Math.round(Number.isFinite(requestedBookingDaysValue) && requestedBookingDaysValue > 0 ? requestedBookingDaysValue : 7))
+  );
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
-  const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
+  const checkOut = payload.checkOut || process.env.CHECK_OUT || isoDateAddDays(checkIn, requestedBookingDays - 1) || kstDate(requestedBookingDays - 1);
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
   const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
   const collectionPurpose = normalizeCollectionPurpose(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail");
@@ -520,14 +531,7 @@ function crawlExecutionPlan(payload = {}) {
   );
   const detailRankRanges = rankRangeLabel(parsedDetailRankRanges);
   const detailPlaceLimit = collectionMode === "fast" ? 0 : (rankRangePlaceLimit(parsedDetailRankRanges) || 10);
-  const rawBookingDays = Number(
-    payload.bookingDays ||
-    payload.bookingRangeDays ||
-    bookingDaysFromRange(checkIn, checkOut) ||
-    process.env.BOOKING_RANGE_DAYS ||
-    7
-  );
-  const bookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingDays) ? rawBookingDays : 7)));
+  const bookingRangeDays = bookingDaysFromRange(checkIn, checkOut) || requestedBookingDays;
   const bookingRangePlaceLimit = executionProfile.collectWeeklyRange
     ? resolveBookingRangePlaceLimit(
         payload.bookingRangePlaceLimit ?? process.env.BOOKING_RANGE_PLACE_LIMIT,
@@ -5130,16 +5134,20 @@ function b2bSearchPayload(value = {}) {
   const detailRankRanges = String(value.detailRankRanges || "1-10").trim() || "1-10";
   const detailPlaceLimit = rankRangePlaceLimit(parseRankRanges(detailRankRanges, "1-10")) || 10;
   const providedPlaceLimit = Math.max(0, Math.min(20, Math.round(Number(value.bookingRangePlaceLimit) || 0)));
+  const rawBookingRangeDays = Number(value.bookingRangeDays);
+  const fallbackBookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingRangeDays) && rawBookingRangeDays > 0 ? rawBookingRangeDays : 7)));
+  const checkIn = value.checkIn || kstDate(0);
+  const checkOut = value.checkOut || isoDateAddDays(checkIn, fallbackBookingRangeDays - 1) || kstDate(fallbackBookingRangeDays - 1);
   return {
     keyword,
-    checkIn: value.checkIn || kstDate(0),
-    checkOut: value.checkOut || kstDate(6),
+    checkIn,
+    checkOut,
     searchMode: normalizeSearchMode(value.searchMode || "keyword"),
     searchIntentMode: value.searchIntentMode === "auto" ? "auto" : "legacy",
     productMode: normalizeProductMode(value.productMode || "all"),
     collectionMode: normalizeCollectionMode(value.collectionMode || "precision"),
     detailRankRanges,
-    bookingRangeDays: Number(value.bookingRangeDays) || 7,
+    bookingRangeDays: bookingDaysFromRange(checkIn, checkOut) || fallbackBookingRangeDays,
     bookingRangePlaceLimit: Math.max(providedPlaceLimit, detailPlaceLimit),
     sourceRole: USER_ROLES.b2b,
     collectionSource: "b2b_search",
@@ -5155,11 +5163,14 @@ function b2bMyLodgePayload(value = {}) {
     throw error;
   }
   const rawBookingRangeDays = Number(value.bookingRangeDays);
-  const bookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingRangeDays) ? rawBookingRangeDays : 7)));
+  const fallbackBookingRangeDays = Math.max(1, Math.min(31, Math.round(Number.isFinite(rawBookingRangeDays) && rawBookingRangeDays > 0 ? rawBookingRangeDays : 7)));
+  const checkIn = value.checkIn || kstDate(0);
+  const checkOut = value.checkOut || isoDateAddDays(checkIn, fallbackBookingRangeDays - 1) || kstDate(fallbackBookingRangeDays - 1);
+  const bookingRangeDays = bookingDaysFromRange(checkIn, checkOut) || fallbackBookingRangeDays;
   return {
     keyword: lodgingName,
-    checkIn: value.checkIn || kstDate(0),
-    checkOut: value.checkOut || kstDate(Math.max(1, bookingRangeDays) - 1),
+    checkIn,
+    checkOut,
     searchMode: "company",
     productMode: normalizeProductMode(value.productMode || "all"),
     collectionMode: normalizeCollectionMode(value.collectionMode || "precision"),
@@ -7870,9 +7881,19 @@ function dateDiffDays(startDate, endDate) {
   return Math.round((end - start) / 86400000);
 }
 
+function isoDateAddDays(value, offset) {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "";
+  date.setUTCDate(date.getUTCDate() + Number(offset || 0));
+  return date.toISOString().slice(0, 10);
+}
+
 function bookingDaysFromRange(checkIn, checkOut) {
+  const start = new Date(`${checkIn}T00:00:00Z`);
+  const end = new Date(`${checkOut}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
   const diff = dateDiffDays(checkIn, checkOut);
-  return diff > 1 ? Math.min(31, diff + 1) : 1;
+  return Number.isFinite(diff) && diff >= 0 ? Math.min(31, diff + 1) : 0;
 }
 
 function resolveBookingRangePlaceLimit(value, bookingRangeDays, fallbackLimit = 10) {

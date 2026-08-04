@@ -838,14 +838,27 @@ function b2bDateRangeLabel(run = {}) {
 }
 
 function bookingDays(run = {}) {
+  const periodDays = bookingPeriodDays(run);
+  if (periodDays) return periodDays;
   const explicit = Number(run.bookingRangeDays);
   if (Number.isFinite(explicit) && explicit > 0) return Math.min(31, Math.round(explicit));
+  return 1;
+}
+
+function bookingPeriodDays(run = {}) {
+  const hasCheckIn = Boolean(String(run.checkIn || "").trim());
+  const hasCheckOut = Boolean(String(run.checkOut || "").trim());
   const start = parseDate(run.checkIn);
   const end = parseDate(run.checkOut);
-  if (!start || !end) return 1;
-  const diff = Math.round((end - start) / 86400000);
-  if (diff > 1) return Math.min(31, diff + 1);
-  return 1;
+  if (hasCheckIn || hasCheckOut) {
+    if (!start || !end) return null;
+    const diff = Math.round((end - start) / 86400000);
+    if (diff >= 0) return Math.min(31, diff + 1);
+    return null;
+  }
+  const explicit = Number(run.bookingRangeDays);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.min(31, Math.round(explicit));
+  return null;
 }
 
 function productModeLabel(value) {
@@ -12260,11 +12273,12 @@ function b2bMyLodgeRate(flow = {}, key = "all", fallback = 0.25) {
 function b2bMyLodgeBasisRun() {
   const run = state.data?.run || {};
   const checkIn = run.checkIn || els.checkInInput?.value || new Date().toISOString().slice(0, 10);
+  const checkOut = run.checkOut || els.checkOutInput?.value || isoAddDays(checkIn, DEFAULT_BOOKING_DAYS - 1);
   return {
     ...run,
     checkIn,
-    checkOut: isoAddDays(checkIn, DEFAULT_BOOKING_DAYS - 1),
-    bookingRangeDays: DEFAULT_BOOKING_DAYS
+    checkOut,
+    bookingRangeDays: bookingDays({ ...run, checkIn, checkOut, bookingRangeDays: DEFAULT_BOOKING_DAYS })
   };
 }
 
@@ -13344,12 +13358,14 @@ async function collectB2BMyLodgeByName() {
     renderReport();
     return;
   }
+  const checkIn = state.data?.run?.checkIn || els.checkInInput?.value || "";
+  const checkOut = state.data?.run?.checkOut || els.checkOutInput?.value || "";
   const payload = {
     lodgingName,
-    checkIn: state.data?.run?.checkIn || els.checkInInput?.value || "",
-    checkOut: state.data?.run?.checkOut || els.checkOutInput?.value || "",
+    checkIn,
+    checkOut,
     detailRankRanges: "1-5",
-    bookingRangeDays: DEFAULT_BOOKING_DAYS,
+    bookingRangeDays: bookingDays({ checkIn, checkOut, bookingRangeDays: DEFAULT_BOOKING_DAYS }),
     bookingRangePlaceLimit: 3
   };
   state.b2bMyLodgeCollecting = true;
@@ -21078,10 +21094,68 @@ function adminDbCouponSummary(company = {}, metrics = {}) {
   };
 }
 
+function adminDbRevenuePeriodProfile(row = {}) {
+  const company = row.company || {};
+  const metrics = row.metrics || {};
+  const currentItem = companyItemFromCurrentRun(company);
+  const runDays = currentItem ? bookingPeriodDays(state.data?.run || {}) : null;
+  const currentObservedDays = currentItem
+    ? Math.max(
+        0,
+        finiteNumber(currentItem.weeklyDays, 0),
+        finiteNumber(currentItem.dayUseWeeklyDays, 0),
+        weeklyRows(currentItem).length,
+        weeklyRows(currentItem, "day").length
+      )
+    : 0;
+  const signal = metrics.signal || metrics.latest?.salesSignal || company.inventory?.latest?.salesSignal || {};
+  const storedObservedDays = Math.max(
+    0,
+    finiteNumber(signal.lodgingDays, 0),
+    finiteNumber(signal.dayUseDays, 0)
+  );
+  const observedDays = currentItem ? currentObservedDays : storedObservedDays;
+  const revenueImpact = metrics.revenueImpact || {};
+  const basisValues = [revenueImpact.lodging?.basis, revenueImpact.dayUse?.basis].filter(Boolean);
+  const rangeBased = basisValues.includes("range");
+  const basisOnly = basisValues.length > 0 && !rangeBased && basisValues.every((value) => value === "basis");
+  let days = null;
+  if (currentItem && rangeBased) days = runDays || observedDays || null;
+  else if (observedDays > 0) days = observedDays;
+  else if (basisOnly) days = 1;
+  else if (currentItem) days = runDays || null;
+  const label = days ? `${fmtNumber(days)}일 매출` : "검색기간 매출";
+  const coverageLabel = runDays && observedDays && runDays !== observedDays
+    ? `${fmtNumber(runDays)}일 검색 · ${fmtNumber(observedDays)}/${fmtNumber(runDays)}일 확보`
+    : days
+      ? `${fmtNumber(days)}일 검색기간 기준`
+      : "검색기간 확인 필요";
+  return {
+    days,
+    requestedDays: runDays,
+    observedDays,
+    label,
+    expectedLabel: `예상 ${label}`,
+    coverageLabel
+  };
+}
+
+function adminDbAverageRevenuePeriodProfile(rows = []) {
+  const profiles = rows.map((row) => adminDbRevenuePeriodProfile(row));
+  const knownDays = profiles.map((profile) => profile.days).filter((value) => Number.isFinite(value) && value > 0);
+  const distinctDays = [...new Set(knownDays)];
+  const sameKnownPeriod = rows.length > 0 && knownDays.length === rows.length && distinctDays.length === 1;
+  return {
+    label: sameKnownPeriod ? `평균 ${fmtNumber(distinctDays[0])}일 매출` : "평균 검색기간 매출",
+    note: `${fmtNumber(rows.length)}개 표본${sameKnownPeriod ? "" : " · 기간 혼합 또는 미확인"}`
+  };
+}
+
 function adminDbB2BMetricCards(row = {}) {
   const company = row.company || {};
   const metrics = row.metrics || {};
   const coupon = adminDbCouponSummary(company, metrics);
+  const revenuePeriod = adminDbRevenuePeriodProfile(row);
   return [
     {
       label: "네이버 노출",
@@ -21096,9 +21170,9 @@ function adminDbB2BMetricCards(row = {}) {
       tone: Number.isFinite(metrics.rate) ? b2bRateTone(metrics.rate, "neutral", metrics.category) : "watch"
     },
     {
-      label: "예상 7일 매출",
+      label: revenuePeriod.expectedLabel,
       value: metrics.revenue ? fmtWon(metrics.revenue) : "대기",
-      note: metrics.revenue ? revenueAdjustmentNote(metrics.revenueImpact) : "가격·판매수량 표본 대기",
+      note: metrics.revenue ? `${revenueAdjustmentNote(metrics.revenueImpact)} · ${revenuePeriod.coverageLabel}` : "가격·판매수량 표본 대기",
       tone: metrics.revenue ? "good" : "watch"
     },
     {
@@ -21376,41 +21450,48 @@ function adminDbSelectedAppliedCards(row = {}) {
   const correctionSegments = manualCorrectionRoomSegments(company.manualCorrection);
   const correctionRooms = correctionSegments.reduce((sum, segment) => sum + Math.round(Math.max(0, optionalNumber(segment.count) || 0)), 0);
   const basisRoomTotal = correctionRooms || finiteNumber(company.manualCorrection?.lodgingBasisTotal, 0) || finiteNumber(metrics.roomTotal, 0);
+  const revenuePeriod = adminDbRevenuePeriodProfile(row);
   const productNote = correctionSegments.length
     ? compactListText(correctionSegments.map((segment) => segment.type || "객실종류").filter(Boolean), "", 2)
     : adminDbProductSummary(company, metrics);
   return [
     {
+      key: "basis",
       label: "최종 기준",
       value: correction ? "관리자 보정" : (metrics.sourceLabel || "자동수집"),
       note: correction ? "보정값 우선 적용" : "자동수집값 기준",
       tone: correction ? "good" : "neutral"
     },
     {
+      key: "rank",
       label: "노출",
       value: metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위 대기",
       note: "네이버 플레이스 기준",
       tone: metrics.rank ? "good" : "watch"
     },
     {
+      key: "rate",
       label: "예약율",
       value: Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요",
       note: adminDbReservationStockText(metrics),
       tone: Number.isFinite(metrics.rate) ? b2bRateTone(metrics.rate, "neutral", metrics.category) : "watch"
     },
     {
-      label: "7일 매출",
+      key: "revenue",
+      label: revenuePeriod.label,
       value: metrics.revenue ? fmtWon(metrics.revenue) : "대기",
-      note: metrics.revenue ? revenueAdjustmentNote(metrics.revenueImpact) : "가격·판매수량 표본 필요",
+      note: metrics.revenue ? `${revenueAdjustmentNote(metrics.revenueImpact)} · ${revenuePeriod.coverageLabel}` : "가격·판매수량 표본 필요",
       tone: metrics.revenue ? "good" : "watch"
     },
     {
+      key: "inventory",
       label: "객실·상품",
       value: basisRoomTotal ? `${fmtNumber(basisRoomTotal)}실` : "수량 확인",
       note: productNote,
       tone: basisRoomTotal ? "neutral" : "watch"
     },
     {
+      key: "review",
       label: "검수",
       value: review.label || companyAdminReviewLabel(review.status) || "관리자 검수전",
       note: review.note || companyReviewContextText(review.context || {}) || "상태 저장 대기",
@@ -21443,8 +21524,8 @@ function adminDbSelectedB2BReflectText(row = {}) {
 }
 
 function adminDbSelectedKpiCardsHtml(row = {}) {
-  const pick = new Set(["노출", "예약율", "7일 매출", "객실·상품"]);
-  const cards = adminDbSelectedAppliedCards(row).filter((card) => pick.has(card.label));
+  const pick = new Set(["rank", "rate", "revenue", "inventory"]);
+  const cards = adminDbSelectedAppliedCards(row).filter((card) => pick.has(card.key));
   return `
     <div class="admin-db-detail-kpis">
       ${cards.map((card) => `
@@ -22533,6 +22614,7 @@ function adminDbCompanyRow(row = {}, options = {}) {
   const companyName = company.primaryName || "업체명 확인";
   const categoryLabel = company.primaryCategoryLabel || company.categoryLabels?.[0] || metrics.category?.label || "숙박업";
   const locationLabel = [row.provinceLabel || "미분류", row.localityLabel || "지역 미확인", categoryLabel].filter(Boolean).join(" · ");
+  const revenuePeriod = adminDbRevenuePeriodProfile(row);
   return `
     <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-surface="dark" data-admin-db-company-workbench-row="true" aria-label="${escapeHtml(`${companyName} 업체 관리`)}" ${selected ? 'aria-current="true"' : ""}>
       <div class="admin-db-company-main">
@@ -22549,7 +22631,7 @@ function adminDbCompanyRow(row = {}, options = {}) {
       </div>
       <div class="admin-db-company-values" data-surface="dark" aria-label="업체 핵심 지표">
         <span><small>노출</small><b>${escapeHtml(rankText)}</b></span>
-        <span><small>7일 매출</small><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b></span>
+        <span><small>${escapeHtml(revenuePeriod.label)}</small><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b></span>
         <span><small>예약율</small><b>${escapeHtml(rateText)}</b></span>
         <span><small>자동 수집 신뢰도</small><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b></span>
       </div>
@@ -22592,6 +22674,7 @@ function adminDbListPreviewPanel(row = null, options = {}) {
     localizedSourceLabels.length ? localizedSourceLabels : rawSourceLabels
   )).slice(0, 5);
   const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
+  const revenuePeriod = adminDbRevenuePeriodProfile(row);
   return `
     <aside class="admin-db-list-preview ${outsideFilter ? "outside-filter" : ""}" aria-label="선택 업체 요약" data-admin-db-selection-state="${outsideFilter ? "outside-filter" : "selected"}">
       <div class="admin-db-list-preview-head">
@@ -22609,7 +22692,7 @@ function adminDbListPreviewPanel(row = null, options = {}) {
         <button type="button" data-admin-db-reveal-selected>선택 업체 필터 해제</button>
       ` : `
         <dl class="admin-db-list-preview-metrics">
-          <div><dt>7일 매출</dt><dd>${escapeHtml(fmtWon(metrics.revenue || 0))}</dd></div>
+          <div><dt>${escapeHtml(revenuePeriod.label)}</dt><dd>${escapeHtml(fmtWon(metrics.revenue || 0))}</dd></div>
           <div><dt>예약율</dt><dd>${escapeHtml(Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "확인 필요")}</dd></div>
           <div><dt>신뢰도</dt><dd>${escapeHtml(metrics.confidenceGrade || "대기")}</dd></div>
           <div><dt>최근 관측</dt><dd>${escapeHtml(latestLabel)}</dd></div>
@@ -22943,6 +23026,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const averageRevenue = revenueRows.length
     ? revenueRows.reduce((sum, row) => sum + row.metrics.revenue, 0) / revenueRows.length
     : 0;
+  const averageRevenuePeriod = adminDbAverageRevenuePeriodProfile(revenueRows);
   const totalCompanies = Math.max(rows.length, Number(master.totalCompanies || 0));
   const sampleNote = totalCompanies > rows.length ? `현재 응답 ${fmtNumber(rows.length)}개 기준` : "저장 기준";
   const currentViewMode = adminDbViewMode();
@@ -22956,7 +23040,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       ${adminDbMetricCard("확인 수집", fmtNumber(confirmNeededCount), "근거 보강 필요", confirmNeededCount ? "watch" : "good")}
       ${adminDbMetricCard("중복 검토", fmtNumber(duplicateReviewCount), "병합 전 확인", duplicateReviewCount ? "watch" : "good")}
       ${adminDbMetricCard("OTA 연결", `${fmtNumber(otaLinked)}곳`, "네이버 제외 채널", "watch")}
-      ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
+      ${adminDbMetricCard(averageRevenuePeriod.label, fmtWon(averageRevenue), averageRevenuePeriod.note, "good")}
     </div>
   `;
   const reviewPanelsHtml = viewMode === "review" ? `
@@ -30238,17 +30322,19 @@ function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
   const range = allowedB2BSearchRange(els.b2bSearchRangeInput?.value || state.b2bSearchRange || "1-10");
   const detailRankRanges = range === "1-20" ? "1-20" : "1-10";
   const intent = clientSearchIntent(keyword);
+  const checkIn = els.checkInInput?.value || "";
+  const checkOut = els.checkOutInput?.value || "";
   return {
     keyword: String(keyword || "").trim(),
-    checkIn: els.checkInInput?.value || "",
-    checkOut: els.checkOutInput?.value || "",
+    checkIn,
+    checkOut,
     searchMode: clientSearchMode(intent),
     searchIntentMode: "auto",
     clientIntentPreview: clientIntentPreview(intent),
     productMode: "all",
     collectionMode: "precision",
     detailRankRanges,
-    bookingRangeDays: DEFAULT_BOOKING_DAYS,
+    bookingRangeDays: bookingDays({ checkIn, checkOut, bookingRangeDays: DEFAULT_BOOKING_DAYS }),
     bookingRangePlaceLimit: rankRangePlaceLimitFromText(detailRankRanges),
     clientRequestId: state.b2bSearchClientRequestId || ""
   };
