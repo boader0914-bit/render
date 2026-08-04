@@ -1,5 +1,5 @@
-const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v36";
-const CACHE_VERSION = "lodging-datalab-pwa-v20260804-admin-preview-geocode-v35";
+const UI_ASSET_VERSION = "v2-20260804-region-hierarchy-v37";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260804-region-hierarchy-v37";
 const CACHE_PREFIX = "lodging-datalab-pwa-";
 const APP_SHELL = [
   "/offline.html",

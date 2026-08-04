@@ -11579,23 +11579,134 @@ body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
   padding-top: 14px;
 }
 
+/* Region group semantic surface contrast contract v1. */
 .region-group-card {
-  border-color: #c7dcff;
+  --region-group-info: var(--color-status-info);
+  --region-group-success: var(--color-status-success);
+  --region-group-warning: var(--color-status-warning);
+  --region-group-opportunity: var(--color-accent-secondary);
+  min-width: 0;
+  border-color: color-mix(in srgb, var(--region-group-info) 52%, var(--color-border-default));
+  background: color-mix(in srgb, var(--region-group-info) 3%, var(--color-surface-default));
+  color: var(--color-text-primary);
+  box-shadow: var(--elevation-sm);
 }
 
 .region-decision {
-  border-color: #b7e4cc;
-  background:
-    linear-gradient(135deg, rgba(18, 183, 106, .12), rgba(49, 130, 246, .07)),
-    #fbfffd;
+  --region-surface-tone: var(--region-group-success);
+  border-color: color-mix(in srgb, var(--region-surface-tone) 58%, var(--color-border-default));
+  background: color-mix(in srgb, var(--region-surface-tone) 9%, var(--color-surface-default));
+  box-shadow: inset 4px 0 0 color-mix(in srgb, var(--region-surface-tone) 84%, transparent);
 }
 
 .region-group-hero {
-  padding: 18px;
+  --region-surface-tone: var(--region-group-info);
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--region-surface-tone) 58%, var(--color-border-default));
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--region-surface-tone) 11%, var(--color-surface-raised));
+  color: var(--color-text-primary);
+  box-shadow: inset 5px 0 0 color-mix(in srgb, var(--region-surface-tone) 88%, transparent);
+}
+
+.region-group-hero > div:first-child,
+.region-group-hero :is(h3, p) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.region-group-hero .location-score {
+  border: 1px solid color-mix(in srgb, var(--region-surface-tone) 62%, var(--color-border-default));
+  background: color-mix(in srgb, var(--region-surface-tone) 15%, var(--color-surface-default));
+  color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--region-surface-tone) 18%, transparent);
+}
+
+.region-group-section {
+  --region-section-tone: var(--region-group-info);
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--region-section-tone) 48%, var(--color-border-default));
   border-radius: 18px;
-  background:
-    linear-gradient(135deg, rgba(49, 130, 246, .12), rgba(18, 183, 106, .08)),
-    #fbfcfd;
+  background: color-mix(in srgb, var(--region-section-tone) 6%, var(--color-surface-subtle));
+  padding: 16px;
+  box-shadow: inset 4px 0 0 color-mix(in srgb, var(--region-section-tone) 76%, transparent);
+}
+
+.region-group-summary-section {
+  --region-section-tone: var(--region-group-opportunity);
+}
+
+.region-group-section-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.region-group-section-title > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.region-group-section-title h4,
+.region-group-section-title small {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.region-group-section-title h4 {
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.region-group-section-title small {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+
+.region-group-section-icon,
+.region-compare-icon,
+.region-group-summary-icon {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, currentColor 52%, var(--color-border-default));
+  background: color-mix(in srgb, currentColor 12%, var(--color-surface-raised));
+  color: var(--region-section-tone, var(--region-surface-tone, var(--color-status-info)));
+  font-style: normal;
+}
+
+.region-group-section-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+}
+
+.region-group-section-status {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--region-section-tone) 48%, var(--color-border-default));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--region-section-tone) 10%, var(--color-surface-raised));
+  color: var(--color-text-primary);
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.3;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .region-group-summary {
@@ -11604,30 +11715,66 @@ body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
   gap: 12px;
 }
 
-.region-group-summary div,
+.region-group-summary-item,
 .region-mini-card {
   min-width: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--color-border-default);
   border-radius: 15px;
-  background: #fbfcfd;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
 }
 
-.region-group-summary div {
+.region-group-summary-item {
+  --region-summary-tone: var(--region-group-info);
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  border-color: color-mix(in srgb, var(--region-summary-tone) 52%, var(--color-border-default));
+  background: color-mix(in srgb, var(--region-summary-tone) 8%, var(--color-surface-raised));
+  padding: 15px;
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--region-summary-tone) 82%, transparent);
+}
+
+.region-group-summary-item.is-method {
+  --region-summary-tone: var(--region-group-opportunity);
+}
+
+.region-group-summary-item.is-sales {
+  --region-summary-tone: var(--region-group-success);
+}
+
+.region-group-summary-icon {
+  --region-section-tone: var(--region-summary-tone);
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+}
+
+.region-group-summary-copy {
+  min-width: 0;
   display: grid;
   gap: 6px;
-  padding: 14px;
+}
+
+.region-group-summary strong,
+.region-group-summary p {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .region-group-summary strong {
+  color: var(--color-text-primary);
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 950;
 }
 
 .region-group-summary p {
   margin: 0;
-  color: var(--muted);
+  color: var(--color-text-secondary);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 800;
+  line-height: 1.5;
 }
 
 .region-card-grid {
@@ -11638,56 +11785,157 @@ body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
 
 .region-compare-list {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .region-compare-row {
+  --region-compare-tone: var(--region-group-info);
   width: 100%;
   min-width: 0;
+  min-height: 104px;
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
-  gap: 4px 12px;
+  grid-template-columns: 40px minmax(0, 1fr) minmax(68px, auto);
+  grid-template-areas:
+    "icon copy score"
+    "metrics metrics metrics";
+  gap: 10px 12px;
   align-items: center;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--region-compare-tone) 52%, var(--color-border-default));
   border-radius: 15px;
-  background: #fbfcfd;
-  padding: 13px;
+  background: color-mix(in srgb, var(--region-compare-tone) 7%, var(--color-surface-raised));
+  color: var(--color-text-primary);
+  padding: 14px;
   text-align: left;
+  box-shadow: inset 4px 0 0 color-mix(in srgb, var(--region-compare-tone) 84%, transparent);
+  transition: border-color var(--motion-fast), background-color var(--motion-fast), transform var(--motion-fast);
 }
 
-.region-compare-row b,
-.region-compare-row span,
-.region-compare-row strong,
-.region-compare-row small {
+.region-compare-row.tone-strong {
+  --region-compare-tone: var(--region-group-success);
+}
+
+.region-compare-row.tone-mid,
+.region-compare-row.tone-weak {
+  --region-compare-tone: var(--region-group-warning);
+}
+
+.region-compare-row.tone-risk {
+  --region-compare-tone: var(--color-status-danger);
+}
+
+.region-compare-row:hover {
+  border-color: color-mix(in srgb, var(--region-compare-tone) 76%, var(--color-border-strong));
+  background: color-mix(in srgb, var(--region-compare-tone) 11%, var(--color-surface-raised));
+}
+
+.region-compare-row:active {
+  transform: translateY(1px);
+}
+
+.region-compare-row:focus-visible,
+.region-priority-card:focus-visible,
+.region-mini-card:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 3px;
+}
+
+.region-compare-icon {
+  --region-section-tone: var(--region-compare-tone);
+  grid-area: icon;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+}
+
+.region-compare-copy {
+  grid-area: copy;
   min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
-.region-compare-row b {
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 900;
+.region-compare-copy b,
+.region-compare-copy em,
+.region-compare-score,
+.region-compare-metrics,
+.region-compare-metrics > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.region-compare-row span {
-  overflow: hidden;
-  color: var(--blue-dark);
+.region-compare-copy b {
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1.25;
+}
+
+.region-compare-copy em {
+  color: var(--region-compare-tone);
   font-size: 12px;
   font-weight: 900;
-  text-overflow: ellipsis;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.region-compare-score {
+  grid-area: score;
+  min-height: 56px;
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--region-compare-tone) 48%, var(--color-border-default));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--region-compare-tone) 13%, var(--color-surface-default));
+  padding: 8px 10px;
+}
+
+.region-compare-score > b {
+  color: var(--color-text-primary);
+  font-size: 22px;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.region-compare-score > small {
+  color: var(--region-compare-tone);
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1.2;
   white-space: nowrap;
 }
 
-.region-compare-row strong {
-  color: var(--blue);
-  font-size: 17px;
-  font-weight: 900;
+.region-compare-metrics {
+  grid-area: metrics;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
 }
 
-.region-compare-row small {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: 12px;
+.region-compare-metrics > span {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--region-compare-tone) 4%, var(--color-surface-default));
+  padding: 7px 9px;
+}
+
+.region-compare-metrics b {
+  color: var(--color-text-secondary);
+  font-size: 11px;
   font-weight: 850;
+}
+
+.region-compare-metrics em {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 950;
 }
 
 .region-priority-grid {
@@ -11697,16 +11945,19 @@ body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
 }
 
 .region-priority-card {
+  --region-surface-tone: var(--region-group-info);
   min-width: 0;
   min-height: 116px;
   display: grid;
   gap: 7px;
   align-content: start;
-  border: 1px solid #c7dcff;
+  border: 1px solid color-mix(in srgb, var(--region-surface-tone) 50%, var(--color-border-default));
   border-radius: 16px;
-  background: #f5f9ff;
+  background: color-mix(in srgb, var(--region-surface-tone) 7%, var(--color-surface-raised));
+  color: var(--color-text-primary);
   padding: 13px;
   text-align: left;
+  box-shadow: inset 0 3px 0 color-mix(in srgb, var(--region-surface-tone) 80%, transparent);
 }
 
 .region-priority-card em {
@@ -11714,9 +11965,10 @@ body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
   height: 28px;
   display: inline-grid;
   place-items: center;
+  border: 1px solid color-mix(in srgb, var(--region-surface-tone) 48%, var(--color-border-default));
   border-radius: 10px;
-  background: #fff;
-  color: var(--blue);
+  background: color-mix(in srgb, var(--region-surface-tone) 14%, var(--color-surface-default));
+  color: var(--region-surface-tone);
   font-size: 14px;
   font-style: normal;
   font-weight: 900;
@@ -11725,66 +11977,62 @@ body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
 .region-priority-card strong,
 .region-priority-card span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .region-priority-card strong {
-  color: var(--ink);
+  color: var(--color-text-primary);
   font-size: 15px;
-  font-weight: 900;
-  white-space: nowrap;
+  font-weight: 950;
+  line-height: 1.3;
 }
 
 .region-priority-card span {
-  display: -webkit-box;
-  color: var(--muted);
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 850;
-  line-height: 1.35;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  line-height: 1.45;
 }
 
 .region-mini-card {
+  --region-surface-tone: var(--region-group-info);
   display: grid;
   gap: 5px;
   width: 100%;
   min-height: 104px;
+  border-color: color-mix(in srgb, var(--region-surface-tone) 44%, var(--color-border-default));
+  background: color-mix(in srgb, var(--region-surface-tone) 5%, var(--color-surface-raised));
   padding: 13px;
   text-align: left;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--region-surface-tone) 72%, transparent);
 }
 
 .region-mini-card strong,
 .region-mini-card span,
 .region-mini-card small {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .region-mini-card strong {
-  color: var(--ink);
+  color: var(--color-text-primary);
   font-size: 16px;
-  font-weight: 900;
-  white-space: nowrap;
+  font-weight: 950;
+  line-height: 1.3;
 }
 
 .region-mini-card span {
-  color: var(--blue-dark);
+  color: var(--region-surface-tone);
   font-size: 12px;
-  font-weight: 900;
-  white-space: nowrap;
+  font-weight: 950;
+  line-height: 1.4;
 }
 
 .region-mini-card small {
-  display: -webkit-box;
-  color: var(--muted);
+  color: var(--color-text-secondary);
   font-size: 12px;
-  font-weight: 750;
-  line-height: 1.35;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  font-weight: 800;
+  line-height: 1.45;
 }
 
 .company-card {
@@ -29872,12 +30120,8 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .region-compare-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .region-compare-row span {
-    grid-column: 1 / -1;
+  .region-group-section {
+    padding: 14px;
   }
 
   .location-block-head {
@@ -30778,12 +31022,56 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   }
 
   .region-compare-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 36px minmax(0, 1fr) minmax(62px, auto);
+    grid-template-areas:
+      "icon copy score"
+      "metrics metrics metrics";
+    gap: 9px;
+    padding: 12px;
   }
 
-  .region-compare-row small,
-  .region-compare-row span {
-    grid-column: auto;
+  .region-compare-icon,
+  .region-group-summary-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+  }
+
+  .region-compare-copy b {
+    font-size: 14px;
+  }
+
+  .region-compare-copy em,
+  .region-compare-metrics :is(b, em) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .region-compare-score {
+    min-height: 52px;
+    padding: 7px 8px;
+  }
+
+  .region-compare-score > b {
+    font-size: 20px;
+  }
+
+  .region-compare-metrics {
+    gap: 5px;
+  }
+
+  .region-compare-metrics > span {
+    min-height: 44px;
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 7px;
+  }
+
+  .region-group-summary-item {
+    grid-template-columns: 36px minmax(0, 1fr);
+    padding: 13px;
   }
 
   .location-action-chips span,
@@ -35579,10 +35867,7 @@ body.role-admin .admin-db-company-values b {
   .location-action-panel,
   .location-index,
   .location-advice-card,
-  .location-summary-grid > *,
-  .region-decision,
-  .region-priority-card,
-  .region-mini-card
+  .location-summary-grid > *
 ) {
   --location-light-bg: var(--color-surface-default);
   --location-light-soft: var(--color-surface-subtle);
@@ -35651,10 +35936,7 @@ body.role-admin .admin-db-company-values b {
   .location-action-panel,
   .location-index,
   .location-advice-card,
-  .location-summary-grid > *,
-  .region-decision,
-  .region-priority-card,
-  .region-mini-card
+  .location-summary-grid > *
 ) :is(h1, h2, h3, h4, h5, strong, b, dd, label) {
   color: var(--location-light-ink) !important;
   text-shadow: none !important;
@@ -35680,10 +35962,7 @@ body.role-admin .admin-db-company-values b {
   .location-action-panel,
   .location-index,
   .location-advice-card,
-  .location-summary-grid > *,
-  .region-decision,
-  .region-priority-card,
-  .region-mini-card
+  .location-summary-grid > *
 ) :is(p, span, small, dt, li) {
   color: var(--location-light-muted) !important;
   text-shadow: none !important;
@@ -41230,6 +41509,57 @@ body.role-b2b :is(
   border-color: var(--color-border-default) !important;
   background: var(--color-surface-default) !important;
   color: var(--color-text-primary) !important;
+}
+
+/* Region group high-visibility hierarchy contract v2: restore deliberate hierarchy after generic card normalization. */
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .location-card.region-group-card {
+  border-color: color-mix(in srgb, var(--color-status-info) 58%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--color-status-info) 4%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--color-status-info) 4%, var(--color-surface-default)) !important;
+  box-shadow: var(--elevation-sm) !important;
+  color: var(--color-text-primary) !important;
+}
+
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .location-card.region-group-card {
+  border-color: color-mix(in srgb, var(--color-status-info) 52%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--color-status-info) 2%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--color-status-info) 2%, var(--color-surface-default)) !important;
+  box-shadow: var(--elevation-sm) !important;
+  color: var(--color-text-primary) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-hero,
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-hero {
+  border-color: color-mix(in srgb, var(--color-status-info) 62%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--color-status-info) 11%, var(--color-surface-raised)) !important;
+  background-color: color-mix(in srgb, var(--color-status-info) 11%, var(--color-surface-raised)) !important;
+  box-shadow: inset 5px 0 0 color-mix(in srgb, var(--color-status-info) 88%, transparent) !important;
+  color: var(--color-text-primary) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-hero .location-score,
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-hero .location-score {
+  border-color: color-mix(in srgb, var(--color-status-info) 64%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--color-status-info) 15%, var(--color-surface-default)) !important;
+  color: var(--color-text-primary) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-status-info) 20%, transparent) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-card .region-decision,
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-card .region-decision {
+  border-color: color-mix(in srgb, var(--color-status-success) 60%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--color-status-success) 9%, var(--color-surface-default)) !important;
+  background-color: color-mix(in srgb, var(--color-status-success) 9%, var(--color-surface-default)) !important;
+  box-shadow: inset 4px 0 0 color-mix(in srgb, var(--color-status-success) 84%, transparent) !important;
+  color: var(--color-text-primary) !important;
+}
+
+:root[data-theme="dark"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-card .region-decision .location-decision-score,
+:root[data-theme="light"] :is(body.role-admin, body.role-b2b) .app-shell .region-group-card .region-decision .location-decision-score {
+  border: 1px solid color-mix(in srgb, var(--color-status-success) 52%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--color-status-success) 13%, var(--color-surface-raised)) !important;
+  color: var(--color-text-primary) !important;
+  box-shadow: none !important;
 }
 
 /* Report semantic surfaces intentionally restore low-chroma meaning after the generic dark-card reset. */

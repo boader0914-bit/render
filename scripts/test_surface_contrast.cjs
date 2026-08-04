@@ -43,6 +43,8 @@ const REQUIRED_COLOR_TOKENS = [
 const REQUIRED_STYLE_MARKERS = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
+  "Region group semantic surface contrast contract v1",
+  "Region group high-visibility hierarchy contract v2",
   "Dark transparent card contract v7",
   "Summary report semantic cards v1",
   "Detail sheet semantic contrast and state contract v1",
@@ -143,6 +145,13 @@ const LIGHT_SURFACE_SELECTORS = [
   ".location-index",
   ".location-advice-card",
   ".location-summary-grid > *",
+  ".region-group-card",
+  ".region-decision",
+  ".region-group-hero",
+  ".region-group-summary-item",
+  ".region-compare-row",
+  ".region-priority-card",
+  ".region-priority-card em",
 ];
 
 const DARK_SURFACE_SELECTORS = [
@@ -189,6 +198,13 @@ const DARK_SURFACE_SELECTORS = [
   ".admin-db-flat-list",
   ".admin-console-panel",
   ".company-review-queue",
+  ".region-group-card",
+  ".region-decision",
+  ".region-group-hero",
+  ".region-group-summary-item",
+  ".region-compare-row",
+  ".region-priority-card",
+  ".region-priority-card em",
 ];
 
 const DARK_TRANSPARENT_CARD_SELECTORS = [
@@ -291,6 +307,27 @@ assert.match(styles, /:root\[data-theme="light"\][^{]*\.report-semantic-card\s*\
 assert.match(styles, /body\.role-admin \.structure-radar-labels text\s*\{[^}]*fill:\s*var\(--color-text-secondary\)\s*!important/s, "light analysis radar labels must consume the readable semantic text token");
 assert.match(styles, /Authenticated controls keep readable disabled tokens[\s\S]*?:is\(body\.role-admin, body\.role-b2b\) \.app-shell button:disabled\s*\{[^}]*border-color:\s*var\(--color-disabled-border\)\s*!important[^}]*background:\s*var\(--color-disabled-surface\)\s*!important[^}]*color:\s*var\(--color-disabled-text\)\s*!important[^}]*opacity:\s*1\s*!important/s, "authenticated disabled buttons must not be faded below semantic contrast");
 assert.match(styles, /body\.role-b2b \.b2b-home-workspace :where\(button, a\):focus-visible\s*\{[^}]*outline:\s*2px solid var\(--color-border-focus\)[^}]*outline-offset:\s*2px/s, "B2B home focus must expose a solid 3:1-capable outline");
+assert.match(styles, /\.region-group-hero\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--region-surface-tone\) 11%, var\(--color-surface-raised\)\)[^}]*color:\s*var\(--color-text-primary\)[^}]*box-shadow:\s*inset 5px 0 0/s, "region group hero must use a strong semantic surface, readable text, and a non-color-only inset cue");
+assert.match(styles, /\.region-group-summary-item\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--region-summary-tone\) 8%, var\(--color-surface-raised\)\)[^}]*box-shadow:\s*inset 0 3px 0/s, "region summary cards must retain individual semantic surfaces and accent cues");
+assert.match(styles, /\.region-mini-card\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--region-surface-tone\) 5%, var\(--color-surface-raised\)\)[^}]*box-shadow:\s*inset 3px 0 0/s, "linked-region cards must not retain a near-white legacy surface");
+assert.match(styles, /\.region-compare-row\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--region-compare-tone\) 7%, var\(--color-surface-raised\)\)[^}]*color:\s*var\(--color-text-primary\)[^}]*box-shadow:\s*inset 4px 0 0/s, "region comparison cards must pair semantic surfaces with a strong non-background cue");
+assert.match(styles, /\.region-compare-metrics b\s*\{[^}]*color:\s*var\(--color-text-secondary\)/s, "region comparison supporting labels must use the readable secondary token");
+assert.match(styles, /\.region-priority-card em\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--region-surface-tone\) 14%, var\(--color-surface-default\)\)[^}]*color:\s*var\(--region-surface-tone\)/s, "region priority numbers must use a semantic tile instead of a low-contrast white badge");
+const regionSurfaceMarker = "/* Region group semantic surface contrast contract v1. */";
+const regionSurfaceStart = styles.indexOf(regionSurfaceMarker);
+const regionSurfaceEnd = styles.indexOf(".company-card {", regionSurfaceStart);
+assert.ok(regionSurfaceStart >= 0 && regionSurfaceEnd > regionSurfaceStart, "region semantic surface contract must be bounded");
+const regionSurfaceContract = styles.slice(regionSurfaceStart, regionSurfaceEnd);
+assert.doesNotMatch(regionSurfaceContract, /(?:#fff(?:fff)?|#fbfcfd|#fbfffd|#f5f9ff|rgba\(\s*255\s*,)/i, "region semantic cards must not restore near-white legacy surfaces");
+const regionHierarchyMarker = "/* Region group high-visibility hierarchy contract v2: restore deliberate hierarchy after generic card normalization. */";
+const regionHierarchyStart = styles.indexOf(regionHierarchyMarker);
+assert.ok(regionHierarchyStart > darkTransparentStart, "region hierarchy restoration must follow the generic dark-card normalization");
+const regionHierarchyEnd = styles.indexOf("/* Report semantic surfaces intentionally restore", regionHierarchyStart);
+assert.ok(regionHierarchyEnd > regionHierarchyStart, "region hierarchy restoration must be bounded before the report surface contract");
+const regionHierarchyContract = styles.slice(regionHierarchyStart, regionHierarchyEnd);
+assert.match(regionHierarchyContract, /:root\[data-theme="dark"\][\s\S]*?\.region-group-card\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--color-status-info\) 4%, var\(--color-surface-default\)\)\s*!important/s, "dark region group cards must restore a low-chroma readable surface after the transparent reset");
+assert.match(regionHierarchyContract, /:root\[data-theme="light"\][\s\S]*?\.region-group-card\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--color-status-info\) 2%, var\(--color-surface-default\)\)\s*!important/s, "light region group cards must preserve a visible boundary and subtle surface");
+assert.match(regionHierarchyContract, /\.region-decision\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--color-status-success\) 9%, var\(--color-surface-default\)\)\s*!important[^}]*box-shadow:\s*inset 4px 0 0/s, "region decisions must restore a success surface and inset cue in both themes");
 for (const selector of DARK_TRANSPARENT_CARD_SELECTORS) {
   assert.ok(darkTransparentContract.includes(selector), `missing transparent dark-card selector: ${selector}`);
 }

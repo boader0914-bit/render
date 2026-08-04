@@ -29096,20 +29096,36 @@ function locationGroupCardRows(cards = []) {
 
 function renderLocationGroupComparison(rows = []) {
   return `
-    <section class="location-block">
+    <section class="location-block region-group-section region-group-comparison-section" aria-labelledby="regionGroupComparisonTitle">
       <div class="location-block-head">
-        <h4>하위 지역 비교</h4>
-        <span>사전점수 + 실제수집 연결</span>
+        <div class="region-group-section-title">
+          <i class="region-group-section-icon" aria-hidden="true">${summaryIcon("rate")}</i>
+          <div>
+            <h4 id="regionGroupComparisonTitle">하위 지역 비교</h4>
+            <small>사전점수 + 실제수집 연결</small>
+          </div>
+        </div>
+        <span class="region-group-section-status">지역별 우선순위</span>
       </div>
-      <div class="region-compare-list">
+      <div class="region-compare-list" role="list" aria-label="하위 지역별 점수와 실제 수집 결과">
         ${rows.slice(0, 6).map((row) => {
           const rate = Number.isFinite(row.runtime.rate) ? fmtRate(row.runtime.rate) : "확인필요";
+          const scoreValue = Number.isFinite(row.score) ? fmtNumber(row.score) : "확인";
+          const scoreUnit = Number.isFinite(row.score) ? "점" : "필요";
+          const [scoreTone, scoreLabel] = locationScoreBand(row.score);
           return `
-            <button class="region-compare-row" type="button" data-location-query="${escapeHtml(row.card.searchKeyword)}">
-              <b>${escapeHtml(row.card.searchKeyword)}</b>
-              <span>${escapeHtml(row.primaryCluster)}</span>
-              <strong>${Number.isFinite(row.score) ? `${fmtNumber(row.score)}점` : "확인"}</strong>
-              <small>업체 ${fmtNumber(row.runtime.items?.length || 0)} · 판매 ${rate} · 후보 ${fmtNumber(row.runtime.targets?.length || 0)}</small>
+            <button class="region-compare-row tone-${scoreTone}" type="button" role="listitem" data-score-tone="${scoreTone}" data-location-query="${escapeHtml(row.card.searchKeyword)}">
+              <i class="region-compare-icon" aria-hidden="true">${summaryIcon("company")}</i>
+              <span class="region-compare-copy">
+                <b>${escapeHtml(row.card.searchKeyword)}</b>
+                <em>${escapeHtml(row.primaryCluster)}</em>
+              </span>
+              <strong class="region-compare-score"><b>${scoreValue}</b><small>${scoreUnit} · ${escapeHtml(scoreLabel)}</small></strong>
+              <span class="region-compare-metrics">
+                <span><b>업체</b><em>${fmtNumber(row.runtime.items?.length || 0)}</em></span>
+                <span><b>판매</b><em>${rate}</em></span>
+                <span><b>후보</b><em>${fmtNumber(row.runtime.targets?.length || 0)}</em></span>
+              </span>
             </button>
           `;
         }).join("") || `<div class="location-empty-note">비교할 하위 지역 카드가 없습니다.</div>`}
@@ -29242,23 +29258,38 @@ function renderLocationGroupDictionary(group) {
       ${renderLocationGroupComparison(regionRows)}
       ${renderLocationGroupPriority(regionRows)}
 
-      <section class="location-block">
+      <section class="location-block region-group-section region-group-summary-section" aria-labelledby="regionGroupSummaryTitle">
         <div class="location-block-head">
-          <h4>권역 해석</h4>
-          <span>${escapeHtml(group.sido || "광역")} · ${escapeHtml(group.strategy || "권역 먼저, 지역 카드로 검증")}</span>
+          <div class="region-group-section-title">
+            <i class="region-group-section-icon" aria-hidden="true">${summaryIcon("trust")}</i>
+            <div>
+              <h4 id="regionGroupSummaryTitle">권역 해석</h4>
+              <small>${escapeHtml(group.sido || "광역")} · ${escapeHtml(group.strategy || "권역 먼저, 지역 카드로 검증")}</small>
+            </div>
+          </div>
+          <span class="region-group-section-status">판단 근거와 영업 방향</span>
         </div>
-        <div class="region-group-summary">
-          <div>
-            <strong>권역 역할</strong>
-            <p>${escapeHtml(group.role || "광역 검색량과 노출 분포로 시장 크기를 파악합니다.")}</p>
+        <div class="region-group-summary" role="list" aria-label="권역 해석 요약">
+          <div class="region-group-summary-item is-role" role="listitem">
+            <i class="region-group-summary-icon" aria-hidden="true">${summaryIcon("tourism")}</i>
+            <span class="region-group-summary-copy">
+              <strong>권역 역할</strong>
+              <p>${escapeHtml(group.role || "광역 검색량과 노출 분포로 시장 크기를 파악합니다.")}</p>
+            </span>
           </div>
-          <div>
-            <strong>판단 방식</strong>
-            <p>권역 시장신호 30%와 연결 지역 카드 평균 70%를 합산해 우선순위를 봅니다.</p>
+          <div class="region-group-summary-item is-method" role="listitem">
+            <i class="region-group-summary-icon" aria-hidden="true">${summaryIcon("trust")}</i>
+            <span class="region-group-summary-copy">
+              <strong>판단 방식</strong>
+              <p>권역 시장신호 30%와 연결 지역 카드 평균 70%를 합산해 우선순위를 봅니다.</p>
+            </span>
           </div>
-          <div>
-            <strong>영업 관점</strong>
-            <p>${escapeHtml(group.salesFocus || "상위 노출은 있으나 상품/채널 구성이 약한 업체를 우선 확인합니다.")}</p>
+          <div class="region-group-summary-item is-sales" role="listitem">
+            <i class="region-group-summary-icon" aria-hidden="true">${summaryIcon("opportunity")}</i>
+            <span class="region-group-summary-copy">
+              <strong>영업 관점</strong>
+              <p>${escapeHtml(group.salesFocus || "상위 노출은 있으나 상품/채널 구성이 약한 업체를 우선 확인합니다.")}</p>
+            </span>
           </div>
         </div>
       </section>
