@@ -407,10 +407,14 @@ for (const grid of [
   "sheet-b2b-evidence-grid",
   "sheet-b2b-note-grid",
   "sheet-b2b-insight .company-insight-grid",
+  "revenue-day-grid",
+  "manual-correction-evidence",
 ]) {
   assert.ok(visibilityContract.includes(`.${grid}`), `${grid} must own direct semantic surface and text rules`);
 }
 assert.match(visibilityContract, /background:\s*color-mix\([^;]*var\(--sheet-card-surface\)[^;]*!important/);
+assert.match(css, /:root\[data-theme="light"\] \.detail-sheet\s*\{[^}]*--sheet-warning-tone:\s*color-mix\([^;]*var\(--color-status-warning\)[^;]*var\(--color-text-primary\)/s, "light detail warning tone must remain readable on its tinted card surface");
+assert.match(css, /\.detail-sheet :is\(\.watch, \.missing\)\s*\{[^}]*--sheet-tone:\s*var\(--sheet-warning-tone\)/s);
 assert.match(visibilityContract, /> div > strong\s*\{[^}]*color:\s*var\(--sheet-value-tone,\s*var\(--sheet-tone,\s*var\(--color-action-primary\)\)\)\s*!important[^}]*white-space:\s*normal[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip[^}]*overflow-wrap:\s*anywhere/s);
 assert.match(visibilityContract, /> div > :is\(span, small\)\s*\{[^}]*white-space:\s*normal[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip[^}]*overflow-wrap:\s*anywhere/s);
 assert.match(visibilityContract, /:is\(\.reason-chip-row, \.sheet-audit-reasons\) > span\s*\{[^}]*background:\s*color-mix\([^;]*var\(--sheet-card-surface\)[^;]*!important/s);

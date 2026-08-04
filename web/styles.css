@@ -18761,9 +18761,14 @@ a.platform-row:hover {
   --sheet-section-surface: var(--color-surface-default);
   --sheet-card-surface: var(--color-surface-subtle);
   --sheet-card-border: var(--color-border-default);
+  --sheet-warning-tone: var(--color-status-warning);
   --sheet-tone: var(--color-text-secondary);
   --sheet-tone-border: var(--sheet-card-border);
   --sheet-tone-surface: var(--sheet-section-surface);
+}
+
+:root[data-theme="light"] .detail-sheet {
+  --sheet-warning-tone: color-mix(in srgb, var(--color-status-warning) 82%, var(--color-text-primary));
 }
 
 .detail-sheet :is(.info, .strong, .good, .watch, .missing, .manual, .hot, .bad, .error) {
@@ -18780,7 +18785,7 @@ a.platform-row:hover {
 }
 
 .detail-sheet :is(.watch, .missing) {
-  --sheet-tone: var(--color-status-warning);
+  --sheet-tone: var(--sheet-warning-tone);
 }
 
 .detail-sheet .hot {
@@ -35176,7 +35181,9 @@ body.role-admin :is(
   .sheet-b2b-flow-strip,
   .sheet-b2b-evidence-grid,
   .sheet-b2b-note-grid,
-  .sheet-b2b-insight .company-insight-grid
+  .sheet-b2b-insight .company-insight-grid,
+  .revenue-day-grid,
+  .manual-correction-evidence
 ) > div {
   min-width: 0;
   border-color: color-mix(in srgb, var(--sheet-value-tone, var(--sheet-tone, var(--color-status-info))) 34%, var(--sheet-card-border)) !important;
@@ -35196,7 +35203,9 @@ body.role-admin :is(
   .sheet-b2b-flow-strip,
   .sheet-b2b-evidence-grid,
   .sheet-b2b-note-grid,
-  .sheet-b2b-insight .company-insight-grid
+  .sheet-b2b-insight .company-insight-grid,
+  .revenue-day-grid,
+  .manual-correction-evidence
 ) > div > strong {
   color: var(--sheet-value-tone, var(--sheet-tone, var(--color-action-primary))) !important;
   white-space: normal;
@@ -35217,7 +35226,9 @@ body.role-admin :is(
   .sheet-b2b-flow-strip,
   .sheet-b2b-evidence-grid,
   .sheet-b2b-note-grid,
-  .sheet-b2b-insight .company-insight-grid
+  .sheet-b2b-insight .company-insight-grid,
+  .revenue-day-grid,
+  .manual-correction-evidence
 ) > div > :is(span, small) {
   color: var(--color-text-secondary) !important;
   white-space: normal;

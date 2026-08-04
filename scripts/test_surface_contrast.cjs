@@ -123,6 +123,8 @@ const LIGHT_SURFACE_SELECTORS = [
   ".sheet-b2b-flow-strip div",
   ".sheet-b2b-evidence-grid div",
   ".sheet-b2b-note-grid div",
+  ".revenue-day-grid div",
+  ".manual-correction-evidence div",
   ".search-row",
   ".platform-row",
   ".location-decision",
@@ -600,10 +602,13 @@ for (const selector of [
   ".sheet-b2b-note-grid",
   ".sheet-audit-summary",
   ".sheet-b2b-insight .company-insight-grid",
+  ".revenue-day-grid",
+  ".manual-correction-evidence",
 ]) {
   assert.ok(detailVisibilityContract.includes(selector), `detail contrast contract must include ${selector}`);
 }
 assert.doesNotMatch(detailVisibilityContract, /#f5f9ff|#dbe7ff|#fff(?:fff)?\b/i, "detail cards and chips must not depend on pale light-only colors");
+assert.match(styles, /:root\[data-theme="light"\] \.detail-sheet\s*\{[^}]*--sheet-warning-tone:\s*color-mix\([^;]*var\(--color-status-warning\)[^;]*var\(--color-text-primary\)/s, "light warning text must be strengthened against tinted detail-card surfaces");
 
 console.log(
   `Native semantic theme contrast checks passed (${LIGHT_SURFACE_SELECTORS.length} light, ${DARK_SURFACE_SELECTORS.length} dark, ${DARK_TRANSPARENT_CARD_SELECTORS.length} transparent dark-card selectors; ${REQUIRED_COLOR_TOKENS.length} shared color tokens)`,
