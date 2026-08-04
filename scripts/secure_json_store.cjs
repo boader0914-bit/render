@@ -115,7 +115,20 @@ function createSecureJsonStore(dependencies = {}) {
 
       const persisted = JSON.parse((await fsApi.readFile(tempPath, "utf8")).replace(/^\uFEFF/, ""));
       validateValue(persisted, options.validator, tempPath);
-      await fsApi.rename(tempPath, target);
+      if (options.noReplace === true) {
+        // Creating a hard link is an atomic, no-replace commit on the same
+        // filesystem. Unlike an exists-then-rename sequence, a competing
+        // writer cannot claim the target between the check and commit.
+        await fsApi.link(tempPath, target);
+        // The temp inode was already hardened before linking. The target is
+        // the same inode, so a second chmod after the commit point is both
+        // redundant and capable of producing a false commit failure.
+        // `link` is the no-replace commit point. A later inability to unlink
+        // the private temp hard link must not report a false commit failure.
+        await fsApi.rm(tempPath, { force: true }).catch(() => {});
+      } else {
+        await fsApi.rename(tempPath, target);
+      }
       await syncDirectory(directory);
       return persisted;
     } catch (error) {

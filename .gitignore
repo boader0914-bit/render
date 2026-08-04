@@ -20,3 +20,5 @@ company_master/
 .codex-remote-attachments/
 glamping_render_deploy_*.zip
 *.log
+/.tmp-geocoding/
+*.geocoding.lock

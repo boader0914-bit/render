@@ -45,6 +45,7 @@ const REQUIRED_STYLE_MARKERS = [
   "Location contrast contract v5",
   "Dark transparent card contract v7",
   "Summary report semantic cards v1",
+  "Detail sheet semantic contrast and state contract v1",
   "Company ranking mobile overflow and chip contrast contract v1",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]",

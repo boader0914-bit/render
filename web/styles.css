@@ -12231,8 +12231,8 @@ body.role-admin #adminDatabaseDashboard .admin-db-hero > div > span {
 }
 
 .search-row.confidence-row.manual {
-  border-color: #bbf7d0;
-  background: #f6fef9;
+  border-color: color-mix(in srgb, var(--color-status-success) 48%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-success) 8%, var(--color-surface-default));
 }
 
 .company-chart {
@@ -12483,8 +12483,8 @@ a.platform-row {
 
 a.platform-chip:hover,
 a.platform-row:hover {
-  border-color: rgba(49, 130, 246, 0.45);
-  background: #f5f9ff;
+  border-color: color-mix(in srgb, var(--color-action-primary) 54%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-action-primary) 8%, var(--color-surface-default));
 }
 
 .platform-dot {
@@ -18459,6 +18459,41 @@ a.platform-row:hover {
   z-index: var(--z-index-overlay);
 }
 
+.detail-sheet {
+  --sheet-canvas-surface: var(--color-surface-raised);
+  --sheet-section-surface: var(--color-surface-default);
+  --sheet-card-surface: var(--color-surface-subtle);
+  --sheet-card-border: var(--color-border-default);
+  --sheet-tone: var(--color-text-secondary);
+  --sheet-tone-border: var(--sheet-card-border);
+  --sheet-tone-surface: var(--sheet-section-surface);
+}
+
+.detail-sheet :is(.info, .strong, .good, .watch, .missing, .manual, .hot, .bad, .error) {
+  --sheet-tone-border: color-mix(in srgb, var(--sheet-tone) 48%, var(--color-border-default));
+  --sheet-tone-surface: color-mix(in srgb, var(--sheet-tone) 8%, var(--sheet-section-surface));
+}
+
+.detail-sheet .info {
+  --sheet-tone: var(--color-status-info);
+}
+
+.detail-sheet :is(.strong, .good, .manual) {
+  --sheet-tone: var(--color-status-success);
+}
+
+.detail-sheet :is(.watch, .missing) {
+  --sheet-tone: var(--color-status-warning);
+}
+
+.detail-sheet .hot {
+  --sheet-tone: var(--color-accent-secondary);
+}
+
+.detail-sheet :is(.bad, .error) {
+  --sheet-tone: var(--color-status-danger);
+}
+
 .sheet-backdrop,
 .drawer-backdrop {
   position: absolute;
@@ -18480,7 +18515,7 @@ a.platform-row:hover {
   border: 1px solid var(--color-border-default);
   border-bottom: 0;
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  background: var(--color-surface-raised);
+  background: var(--sheet-canvas-surface, var(--color-surface-raised));
   color: var(--color-text-primary);
   box-shadow: var(--elevation-lg);
   overflow: hidden;
@@ -18536,10 +18571,7 @@ a.platform-row:hover {
 }
 
 .sheet-head h2 {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  overflow: visible;
 }
 
 .sheet-head p {
@@ -18602,97 +18634,102 @@ a.platform-row:hover {
   font-weight: 900;
 }
 
+/* Detail sheet semantic contrast and state contract v1. */
 .sheet-decision-section {
   gap: 12px;
-  border: 1px solid #dbe7ff;
+  border: 1px solid var(--sheet-tone-border);
   border-radius: 16px;
-  background: #f8fbff;
+  background: var(--sheet-tone-surface);
+  color: var(--color-text-primary);
   padding: 14px;
 }
 
 .sheet-b2b-insight {
   gap: 12px;
-  border: 1px solid #d5e3f7;
+  border: 1px solid var(--sheet-tone-border);
   border-radius: 18px;
-  background: #ffffff;
+  background: var(--sheet-tone-surface);
+  color: var(--color-text-primary);
   padding: 14px;
 }
 
 .sheet-b2b-detail {
   gap: 12px;
-  border: 1px solid #d5e3f7;
+  border: 1px solid var(--sheet-tone-border);
   border-radius: 18px;
-  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  background: var(--sheet-tone-surface);
+  color: var(--color-text-primary);
   padding: 14px;
 }
 
 .sheet-b2b-detail.strong {
-  border-color: #b8d9d3;
-  background: #f6fbfa;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-detail.watch {
-  border-color: #fedf89;
-  background: #fffbeb;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-detail.hot {
-  border-color: #fecaca;
-  background: #fff8f8;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-insight.strong {
-  border-color: #b8d9d3;
-  background: #f6fbfa;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-insight.watch {
-  border-color: #fedf89;
-  background: #fffbeb;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-insight.hot {
-  border-color: #fecaca;
-  background: #fff8f8;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-platform,
 .sheet-b2b-search,
 .sheet-b2b-booking {
   gap: 12px;
-  border: 1px solid #d5e3f7;
+  border: 1px solid var(--sheet-tone-border);
   border-radius: 18px;
-  background: #ffffff;
+  background: var(--sheet-tone-surface);
+  color: var(--color-text-primary);
   padding: 14px;
 }
 
 .sheet-b2b-platform.strong,
 .sheet-b2b-search.strong,
 .sheet-b2b-booking.strong {
-  border-color: #b8d9d3;
-  background: #f6fbfa;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-platform.good,
 .sheet-b2b-search.good,
 .sheet-b2b-booking.good {
-  border-color: #bbf7d0;
-  background: #f6fef9;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-platform.watch,
 .sheet-b2b-search.watch,
 .sheet-b2b-booking.watch {
-  border-color: #fedf89;
-  background: #fffbeb;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-platform.hot,
 .sheet-b2b-search.hot,
 .sheet-b2b-booking.hot,
 .sheet-b2b-booking.bad {
-  border-color: #fecaca;
-  background: #fff8f8;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-platform-grid {
@@ -18724,9 +18761,9 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #fff;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -18736,9 +18773,9 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #fff;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -18746,20 +18783,20 @@ a.platform-row:hover {
 .sheet-b2b-flow-strip div.strong,
 .sheet-b2b-detail-grid div.good,
 .sheet-b2b-flow-strip div.good {
-  border-color: #b8d9d3;
-  background: #f6fbfa;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-detail-grid div.watch,
 .sheet-b2b-flow-strip div.watch {
-  border-color: #fedf89;
-  background: #fffbeb;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-detail-grid div.hot,
 .sheet-b2b-flow-strip div.hot {
-  border-color: #fecaca;
-  background: #fff8f8;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-platform-grid span,
@@ -18794,14 +18831,15 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 4px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 14px;
-  background: rgba(255, 255, 255, .76);
+  background: var(--sheet-card-surface);
+  color: var(--color-text-primary);
   padding: 11px;
 }
 
 .sheet-b2b-coupon-line strong {
-  color: #0f766e;
+  color: var(--color-status-success);
   font-size: 13px;
   font-weight: 950;
 }
@@ -18821,14 +18859,14 @@ a.platform-row:hover {
 }
 
 .sheet-b2b-head span {
-  color: #0f766e;
+  color: var(--sheet-tone);
   font-size: 11px;
   font-weight: 950;
 }
 
 .sheet-b2b-head h3 {
   margin: 0;
-  color: var(--ink);
+  color: var(--color-text-primary);
   font-size: 20px;
   line-height: 1.18;
   font-weight: 950;
@@ -18836,7 +18874,7 @@ a.platform-row:hover {
 
 .sheet-b2b-head p {
   margin: 0;
-  color: #475467;
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 800;
   line-height: 1.4;
@@ -18845,10 +18883,10 @@ a.platform-row:hover {
 
 .sheet-b2b-head > strong {
   min-width: 78px;
-  border: 1px solid #b8d9d3;
+  border: 1px solid var(--sheet-tone-border);
   border-radius: 14px;
-  background: #fff;
-  color: #0f766e;
+  background: var(--sheet-card-surface);
+  color: var(--sheet-tone);
   padding: 10px;
   text-align: center;
   font-size: 24px;
@@ -18863,30 +18901,30 @@ a.platform-row:hover {
   grid-template-columns: minmax(0, 1fr) minmax(180px, .72fr);
   gap: 10px;
   align-items: stretch;
-  border: 1px solid #d5e3f7;
+  border: 1px solid var(--sheet-tone-border);
   border-radius: 15px;
-  background: rgba(255, 255, 255, .76);
+  background: var(--sheet-tone-surface);
   padding: 12px;
 }
 
 .sheet-b2b-boundary.strong {
-  border-color: #b8d9d3;
-  background: #f6fbfa;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-boundary.good {
-  border-color: #bbf7d0;
-  background: #f6fef9;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-boundary.watch {
-  border-color: #fedf89;
-  background: #fffbeb;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-boundary.hot {
-  border-color: #fecaca;
-  background: #fff8f8;
+  border-color: var(--sheet-tone-border);
+  background: var(--sheet-tone-surface);
 }
 
 .sheet-b2b-boundary > div:first-child {
@@ -18928,11 +18966,11 @@ a.platform-row:hover {
   min-height: 28px;
   display: inline-flex;
   align-items: center;
-  border: 1px solid #d5e3f7;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--sheet-card-surface);
   padding: 5px 9px;
-  color: #344054;
+  color: var(--color-text-primary);
   font-size: 11px;
   font-style: normal;
   font-weight: 900;
@@ -18940,8 +18978,8 @@ a.platform-row:hover {
 }
 
 .sheet-b2b-boundary-chips em {
-  border-color: #b8d9d3;
-  color: #0f766e;
+  border-color: color-mix(in srgb, var(--color-status-success) 48%, var(--color-border-default));
+  color: var(--color-status-success);
 }
 
 .sheet-b2b-note-grid {
@@ -18954,9 +18992,9 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #fff;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -18980,21 +19018,21 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 7px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 14px;
-  background: rgba(255, 255, 255, .72);
+  background: var(--sheet-card-surface);
   padding: 11px;
 }
 
 .sheet-b2b-action-list > strong {
-  color: #0f766e;
+  color: var(--color-status-success);
   font-size: 14px;
   font-weight: 950;
 }
 
 .sheet-b2b-action-list p {
   margin: 0;
-  color: #475467;
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 800;
   line-height: 1.45;
@@ -19012,9 +19050,10 @@ a.platform-row:hover {
   display: inline-flex;
   align-items: center;
   padding: 0 8px;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 999px;
-  background: #f5f9ff;
-  color: var(--blue-dark);
+  background: var(--sheet-section-surface, var(--color-surface-subtle));
+  color: var(--color-action-primary);
   font-size: 11px;
   font-weight: 900;
 }
@@ -19042,9 +19081,9 @@ a.platform-row:hover {
 
 .sheet-flow-grid div {
   min-width: 0;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #fff;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -19061,7 +19100,7 @@ a.platform-row:hover {
 .sheet-flow-grid strong {
   display: block;
   margin: 3px 0;
-  color: var(--blue);
+  color: var(--color-action-primary);
   font-size: 18px;
   font-weight: 900;
   line-height: 1.05;
@@ -19074,7 +19113,7 @@ a.platform-row:hover {
 
 .sheet-history-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
 }
 
@@ -19082,9 +19121,9 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -19097,20 +19136,21 @@ a.platform-row:hover {
 }
 
 .sheet-history-grid strong {
-  color: var(--blue);
+  color: var(--color-action-primary);
   font-size: 17px;
   line-height: 1.08;
   font-weight: 950;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .revenue-day-panel,
 .revenue-product-panel {
   display: grid;
   gap: 9px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 14px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface);
   padding: 12px;
 }
 
@@ -19125,7 +19165,7 @@ a.platform-row:hover {
 
 .revenue-day-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
   gap: 8px;
 }
 
@@ -19133,9 +19173,9 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--sheet-section-surface);
   padding: 10px;
 }
 
@@ -19151,7 +19191,7 @@ a.platform-row:hover {
 }
 
 .revenue-day-grid strong {
-  color: var(--blue);
+  color: var(--color-action-primary);
   font-size: 16px;
   font-weight: 950;
   line-height: 1.08;
@@ -19169,9 +19209,9 @@ a.platform-row:hover {
   grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(64px, .5fr)) minmax(74px, .55fr);
   align-items: center;
   gap: 8px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--sheet-section-surface);
   padding: 9px;
 }
 
@@ -19182,7 +19222,7 @@ a.platform-row:hover {
 }
 
 .revenue-product-list b {
-  color: var(--blue-dark);
+  color: var(--color-action-primary);
   font-size: 12px;
   font-weight: 950;
   text-align: right;
@@ -19199,15 +19239,15 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 4px;
-  border: 1px solid #bbf7d0;
+  border: 1px solid color-mix(in srgb, var(--color-status-success) 48%, var(--color-border-default));
   border-radius: 13px;
-  background: #f7fef9;
+  background: color-mix(in srgb, var(--color-status-success) 8%, var(--sheet-card-surface, var(--color-surface-subtle)));
   padding: 10px;
 }
 
 .manual-correction-evidence span,
 .manual-correction-evidence small {
-  color: #047857;
+  color: var(--color-status-success);
   font-size: 11px;
   font-weight: 850;
   line-height: 1.35;
@@ -19215,7 +19255,7 @@ a.platform-row:hover {
 }
 
 .manual-correction-evidence strong {
-  color: #064e3b;
+  color: var(--color-text-primary);
   font-size: 16px;
   font-weight: 950;
   line-height: 1.12;
@@ -19225,9 +19265,9 @@ a.platform-row:hover {
 .company-review-history {
   display: grid;
   gap: 8px;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--sheet-card-border, var(--color-border-default));
   border-radius: 14px;
-  background: #f8fbff;
+  background: var(--sheet-card-surface, var(--color-surface-subtle));
   padding: 12px;
 }
 
@@ -19250,8 +19290,9 @@ a.platform-row:hover {
 .company-review-history > div:first-child span {
   flex: 0 0 auto;
   border-radius: 999px;
-  background: #eaf3ff;
-  color: var(--blue);
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 48%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-info) 8%, var(--sheet-section-surface, var(--color-surface-default)));
+  color: var(--color-status-info);
   padding: 5px 8px;
   font-size: 11px;
   font-weight: 950;
@@ -19263,7 +19304,7 @@ a.platform-row:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 3px 8px;
-  border-top: 1px solid #e8edf5;
+  border-top: 1px solid var(--sheet-card-border, var(--color-border-default));
   padding-top: 8px;
 }
 
@@ -19285,15 +19326,15 @@ a.platform-row:hover {
 }
 
 .sheet-audit-section.good {
-  border-color: #b7ebcf;
+  border-color: var(--sheet-tone-border);
 }
 
 .sheet-audit-section.watch {
-  border-color: #fedf89;
+  border-color: var(--sheet-tone-border);
 }
 
 .sheet-audit-section.bad {
-  border-color: #fecaca;
+  border-color: var(--sheet-tone-border);
 }
 
 .sheet-audit-summary,
@@ -19303,16 +19344,16 @@ a.platform-row:hover {
 }
 
 .sheet-audit-summary {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
 }
 
 .sheet-audit-summary div {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #f8fbff;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -19329,7 +19370,7 @@ a.platform-row:hover {
 
 .sheet-audit-summary strong {
   min-width: 0;
-  color: var(--blue-dark);
+  color: var(--color-action-primary);
   font-size: 15px;
   line-height: 1.08;
   font-weight: 950;
@@ -19345,9 +19386,9 @@ a.platform-row:hover {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 8px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 14px;
-  background: #fff;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -19357,8 +19398,9 @@ a.platform-row:hover {
   display: inline-grid;
   place-items: center;
   border-radius: 999px;
-  background: #eaf3ff;
-  color: var(--blue);
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 48%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-info) 8%, var(--sheet-section-surface));
+  color: var(--color-status-info);
   font-size: 11px;
   font-weight: 950;
 }
@@ -19387,20 +19429,20 @@ a.platform-row:hover {
 }
 
 .sheet-collection-section.good {
-  border-color: #b7ebcf;
+  border-color: var(--sheet-tone-border);
 }
 
 .sheet-collection-section.watch {
-  border-color: #fedf89;
+  border-color: var(--sheet-tone-border);
 }
 
 .sheet-collection-section.bad {
-  border-color: #fecaca;
+  border-color: var(--sheet-tone-border);
 }
 
 .sheet-collection-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
 }
 
@@ -19408,9 +19450,9 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -19433,7 +19475,7 @@ a.platform-row:hover {
 
 .sheet-audit-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
   gap: 8px;
 }
 
@@ -19441,9 +19483,9 @@ a.platform-row:hover {
   min-width: 0;
   display: grid;
   gap: 3px;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 13px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface);
   padding: 10px;
 }
 
@@ -19471,10 +19513,10 @@ a.platform-row:hover {
 }
 
 .sheet-audit-reasons span {
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 999px;
-  background: #fff;
-  color: var(--muted);
+  background: var(--sheet-card-surface);
+  color: var(--color-text-secondary);
   padding: 7px 9px;
   font-size: 12px;
   font-weight: 850;
@@ -19504,9 +19546,9 @@ a.platform-row:hover {
   grid-template-columns: 82px minmax(0, 1fr);
   gap: 4px 10px;
   align-items: baseline;
-  border: 1px solid var(--line);
+  border: 1px solid var(--sheet-card-border);
   border-radius: 12px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface);
   padding: 11px 12px;
 }
 
@@ -19545,10 +19587,10 @@ a.platform-row:hover {
   min-height: 25px;
   display: inline-flex;
   align-items: center;
-  border: 1px solid #e4eaf3;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 999px;
-  background: #fff;
-  color: #344054;
+  background: var(--sheet-card-surface);
+  color: var(--color-text-primary);
   padding: 5px 8px;
   font-size: 11px;
   font-weight: 850;
@@ -19564,9 +19606,9 @@ a.platform-row:hover {
   align-items: center;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--sheet-card-border);
   border-radius: 12px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface);
 }
 
 .date-row strong,
@@ -19574,9 +19616,7 @@ a.platform-row:hover {
 .search-row strong {
   display: block;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .date-row strong {
@@ -19600,7 +19640,7 @@ a.platform-row:hover {
 .progress {
   height: 8px;
   border-radius: 999px;
-  background: #eef2f6;
+  background: var(--sheet-section-surface, var(--color-surface-subtle));
   overflow: hidden;
 }
 
@@ -19626,9 +19666,9 @@ a.platform-row:hover {
 
 .sheet-booking-bars {
   min-width: 0;
-  border: 1px solid #e8edf5;
+  border: 1px solid var(--sheet-card-border);
   border-radius: 16px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface);
   padding: 14px;
   gap: 12px;
 }
@@ -19663,10 +19703,10 @@ a.platform-row:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #dbe7ff;
+  border: 1px solid color-mix(in srgb, var(--color-status-info) 48%, var(--color-border-default));
   border-radius: 999px;
-  background: #f5f9ff;
-  color: var(--blue-dark);
+  background: color-mix(in srgb, var(--color-status-info) 8%, var(--sheet-section-surface));
+  color: var(--color-status-info);
   padding: 0 10px;
   font-size: 12px;
   font-weight: 950;
@@ -19834,6 +19874,58 @@ a.platform-row:hover {
 .platform-row.bad em {
   color: var(--red);
 }
+
+.detail-sheet [data-sheet-value-state] {
+  --sheet-value-tone: var(--color-status-info);
+  border-color: color-mix(in srgb, var(--sheet-value-tone) 46%, var(--sheet-card-border));
+  background: color-mix(in srgb, var(--sheet-value-tone) 7%, var(--sheet-card-surface));
+}
+
+.detail-sheet [data-sheet-value-state="zero"] {
+  --sheet-value-tone: var(--color-text-secondary);
+}
+
+.detail-sheet [data-sheet-value-state="missing"] {
+  --sheet-value-tone: var(--color-text-secondary);
+}
+
+.detail-sheet [data-sheet-value-state="pending"] {
+  --sheet-value-tone: var(--color-status-warning);
+}
+
+.detail-sheet [data-sheet-value-state="unavailable"] {
+  --sheet-value-tone: var(--color-text-tertiary);
+}
+
+.detail-sheet [data-sheet-value-state="error"] {
+  --sheet-value-tone: var(--color-status-danger);
+}
+
+.detail-sheet .sheet-value-status {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: start;
+  border: 1px solid color-mix(in srgb, var(--sheet-value-tone, var(--color-border-strong)) 48%, var(--color-border-default));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sheet-value-tone, var(--color-text-secondary)) 9%, var(--sheet-section-surface));
+  color: var(--sheet-value-tone, var(--color-text-secondary));
+  padding: 3px 8px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.platform-row.unavailable em,
+.platform-row.neutral em {
+  color: var(--color-text-secondary);
+}
+
+/* End detail sheet semantic contrast and state contract v1. */
 
 .drawer-actions {
   min-height: 0;
@@ -20493,9 +20585,9 @@ a.platform-row:hover {
 
 .b2b-detail-pack {
   min-width: 0;
-  border: 1px solid #d5e3f7;
+  border: 1px solid var(--sheet-card-border, var(--color-border-default));
   border-radius: 16px;
-  background: #fbfcfd;
+  background: var(--sheet-card-surface, var(--color-surface-subtle));
 }
 
 .b2b-detail-pack summary {
@@ -20522,10 +20614,10 @@ a.platform-row:hover {
   place-items: center;
   width: 28px;
   height: 28px;
-  border: 1px solid #d5e3f7;
+  border: 1px solid var(--sheet-card-border, var(--color-border-default));
   border-radius: 10px;
-  background: #ffffff;
-  color: var(--blue-dark);
+  background: var(--sheet-section-surface, var(--color-surface-default));
+  color: var(--color-action-primary);
   font-size: 18px;
   font-weight: 950;
   line-height: 1;
@@ -20566,7 +20658,7 @@ a.platform-row:hover {
 
 .sheet-b2b-more-pack {
   margin-top: 2px;
-  background: rgba(255, 255, 255, .82);
+  background: var(--sheet-card-surface, var(--color-surface-subtle));
 }
 
 .sheet-b2b-more-pack .b2b-detail-pack-body {
@@ -25720,16 +25812,7 @@ body.role-b2b .history-lab,
 body.role-b2b .history-card,
 body.role-b2b .history-metric-grid article,
 body.role-b2b .history-company-table button,
-body.role-b2b .sheet-panel,
-body.role-b2b .drawer-panel,
-body.role-b2b .sheet-b2b-detail,
-body.role-b2b .sheet-b2b-insight,
-body.role-b2b .sheet-b2b-platform,
-body.role-b2b .sheet-b2b-search,
-body.role-b2b .sheet-b2b-booking,
-body.role-b2b .sheet-b2b-boundary,
-body.role-b2b .sheet-booking-bars,
-body.role-b2b .sheet-decision-section {
+body.role-b2b .drawer-panel {
   border-color: var(--line);
   background: rgba(23, 27, 34, .96);
   box-shadow: var(--soft-shadow);
@@ -25896,26 +25979,10 @@ body.role-b2b .demand-pill-row span,
 body.role-b2b .history-card,
 body.role-b2b .history-metric-grid article,
 body.role-b2b .history-company-table button,
-body.role-b2b .sheet-date-bar > span,
-body.role-b2b .sheet-weekday-bars b,
 body.role-b2b .b2b-map-board-grid article,
 body.role-b2b .b2b-map-action-board div,
 body.role-b2b .b2b-map-region-rank div:not(:first-child),
 body.role-b2b .b2b-map-radius-list button,
-body.role-b2b .sheet-b2b-detail-grid div,
-body.role-b2b .sheet-b2b-flow-strip div,
-body.role-b2b .sheet-b2b-evidence-grid div,
-body.role-b2b .sheet-b2b-platform-grid div,
-body.role-b2b .sheet-b2b-booking-grid div,
-body.role-b2b .sheet-b2b-boundary-chips em,
-body.role-b2b .sheet-b2b-boundary-chips span,
-body.role-b2b .sheet-flow-grid div,
-body.role-b2b .sheet-b2b-note-grid div,
-body.role-b2b .sheet-collection-grid div,
-body.role-b2b .sheet-audit-grid div,
-body.role-b2b .date-row,
-body.role-b2b .platform-row,
-body.role-b2b .search-row,
 body.role-b2b .demand-metric-grid article,
 body.role-b2b .demand-region-row,
 body.role-b2b .demand-company-card dl div {
@@ -26286,9 +26353,7 @@ body.role-b2b .b2b-brief-score strong,
 body.role-b2b .demand-signal-card strong,
 body.role-b2b .history-metric-grid strong,
 body.role-b2b .history-day-bars strong,
-body.role-b2b .history-timeline b,
-body.role-b2b .sheet-date-bar small,
-body.role-b2b .sheet-weekday-bars strong {
+body.role-b2b .history-timeline b {
   color: #8fc7ff;
 }
 
@@ -26763,8 +26828,7 @@ body.role-b2b .b2b-legacy-detail {
 }
 
 body.role-b2b .b2b-simple-summary,
-body.role-b2b .b2b-location-score,
-body.role-b2b .b2b-detail-pack {
+body.role-b2b .b2b-location-score {
   border-color: rgba(106, 168, 255, .26);
   background: rgba(18, 24, 34, .96);
   box-shadow: none;
@@ -26776,8 +26840,7 @@ body.role-b2b .b2b-location-score-main > div,
 body.role-b2b .b2b-location-conclusion,
 body.role-b2b .b2b-location-conclusion > div:last-child span,
 body.role-b2b .b2b-location-driver-grid article,
-body.role-b2b .b2b-location-basis span,
-body.role-b2b .b2b-detail-pack summary::after {
+body.role-b2b .b2b-location-basis span {
   border-color: rgba(156, 174, 204, .20);
   background: #121822;
 }
@@ -26792,8 +26855,7 @@ body.role-b2b .b2b-simple-next > strong,
 body.role-b2b .b2b-simple-next button span,
 body.role-b2b .b2b-location-score-main strong,
 body.role-b2b .b2b-location-conclusion strong,
-body.role-b2b .b2b-location-driver-grid strong,
-body.role-b2b .b2b-detail-pack summary span {
+body.role-b2b .b2b-location-driver-grid strong {
   color: var(--ink);
 }
 
@@ -26812,8 +26874,7 @@ body.role-b2b .b2b-location-conclusion p,
 body.role-b2b .b2b-location-conclusion > div:last-child span,
 body.role-b2b .b2b-location-driver-grid span,
 body.role-b2b .b2b-location-driver-grid small,
-body.role-b2b .b2b-location-basis span,
-body.role-b2b .b2b-detail-pack summary small {
+body.role-b2b .b2b-location-basis span {
   color: var(--muted);
 }
 
@@ -27020,11 +27081,6 @@ body.role-b2b .company-insight-grid div.good,
 body.role-b2b .b2b-company-card-summary div.revenue,
 body.role-b2b .b2b-company-card-summary div.strong,
 body.role-b2b .b2b-company-card-summary div.good,
-body.role-b2b .sheet-b2b-detail.strong,
-body.role-b2b .sheet-b2b-detail-grid div.strong,
-body.role-b2b .sheet-b2b-detail-grid div.good,
-body.role-b2b .sheet-b2b-flow-strip div.strong,
-body.role-b2b .sheet-b2b-flow-strip div.good,
 body.role-b2b .b2b-rank-board-grid article.strong,
 body.role-b2b .b2b-rank-board-grid article.good,
 body.role-b2b .b2b-rank-range-row.strong,
@@ -27038,16 +27094,7 @@ body.role-b2b .b2b-map-board-grid article.good,
 body.role-b2b .b2b-map-region-rank div.strong,
 body.role-b2b .b2b-map-radius-list button.strong,
 body.role-b2b .b2b-map-radius-list button.good,
-body.role-b2b .b2b-company-action.strong,
-body.role-b2b .sheet-b2b-insight.strong,
-body.role-b2b .sheet-b2b-platform.strong,
-body.role-b2b .sheet-b2b-search.strong,
-body.role-b2b .sheet-b2b-booking.strong,
-body.role-b2b .sheet-b2b-platform.good,
-body.role-b2b .sheet-b2b-search.good,
-body.role-b2b .sheet-b2b-booking.good,
-body.role-b2b .sheet-b2b-boundary.strong,
-body.role-b2b .sheet-b2b-boundary.good {
+body.role-b2b .b2b-company-action.strong {
   border-color: rgba(52, 211, 153, .42);
   background:
     linear-gradient(135deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .05)),
@@ -27072,9 +27119,6 @@ body.role-b2b .b2b-revenue-row.bad,
 body.role-b2b .b2b-revenue-guide > div.watch,
 body.role-b2b .company-insight-grid div.watch,
 body.role-b2b .b2b-company-card-summary div.watch,
-body.role-b2b .sheet-b2b-detail.watch,
-body.role-b2b .sheet-b2b-detail-grid div.watch,
-body.role-b2b .sheet-b2b-flow-strip div.watch,
 body.role-b2b .b2b-rank-board-grid article.watch,
 body.role-b2b .b2b-rank-range-row.watch,
 body.role-b2b .b2b-rank-action-board div.watch,
@@ -27082,12 +27126,7 @@ body.role-b2b .b2b-rank-focus button.watch,
 body.role-b2b .b2b-map-board-grid article.watch,
 body.role-b2b .b2b-map-region-rank div.watch,
 body.role-b2b .b2b-map-radius-list button.watch,
-body.role-b2b .b2b-company-action.watch,
-body.role-b2b .sheet-b2b-insight.watch,
-body.role-b2b .sheet-b2b-platform.watch,
-body.role-b2b .sheet-b2b-search.watch,
-body.role-b2b .sheet-b2b-booking.watch,
-body.role-b2b .sheet-b2b-boundary.watch {
+body.role-b2b .b2b-company-action.watch {
   border-color: rgba(251, 191, 36, .42);
   background:
     linear-gradient(135deg, rgba(251, 191, 36, .16), rgba(251, 191, 36, .05)),
@@ -27108,21 +27147,12 @@ body.role-b2b .b2b-revenue-grid article.hot,
 body.role-b2b .b2b-revenue-row.hot,
 body.role-b2b .company-insight-grid div.hot,
 body.role-b2b .b2b-company-card-summary div.hot,
-body.role-b2b .sheet-b2b-detail.hot,
-body.role-b2b .sheet-b2b-detail-grid div.hot,
-body.role-b2b .sheet-b2b-flow-strip div.hot,
 body.role-b2b .b2b-rank-board-grid article.hot,
 body.role-b2b .b2b-rank-range-row.hot,
 body.role-b2b .b2b-rank-action-board div.hot,
 body.role-b2b .b2b-rank-focus button.hot,
 body.role-b2b .b2b-map-radius-list button.hot,
-body.role-b2b .b2b-company-action.hot,
-body.role-b2b .sheet-b2b-insight.hot,
-body.role-b2b .sheet-b2b-platform.hot,
-body.role-b2b .sheet-b2b-search.hot,
-body.role-b2b .sheet-b2b-booking.hot,
-body.role-b2b .sheet-b2b-booking.bad,
-body.role-b2b .sheet-b2b-boundary.hot {
+body.role-b2b .b2b-company-action.hot {
   border-color: rgba(251, 113, 133, .42);
   background:
     linear-gradient(135deg, rgba(251, 113, 133, .16), rgba(251, 113, 133, .05)),
@@ -27249,14 +27279,26 @@ body.role-b2b .progress span {
   background: #6aa8ff;
 }
 
+body.role-b2b .detail-sheet .progress {
+  background: var(--color-surface-subtle);
+}
+
+body.role-b2b .detail-sheet .progress span {
+  background: var(--color-action-primary);
+}
+
 body.role-b2b .sheet-booking-bars-head > span {
-  border-color: rgba(106, 168, 255, .34);
-  background: rgba(106, 168, 255, .13);
-  color: #dcecff;
+  border-color: color-mix(in srgb, var(--color-status-info) 48%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-info) 8%, var(--color-surface-default));
+  color: var(--color-status-info);
 }
 
 body.role-b2b .sheet-date-bar > span,
-body.role-b2b .sheet-weekday-bars b,
+body.role-b2b .sheet-weekday-bars b {
+  border-color: color-mix(in srgb, var(--color-status-info) 32%, var(--color-border-default));
+  background: var(--color-surface-subtle);
+}
+
 body.role-b2b .history-lead-chart span,
 body.role-b2b .history-timeline span,
 body.role-b2b .history-day-bars i {
@@ -30110,7 +30152,6 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
 
   .validation-metric-grid,
   .sheet-flow-grid,
-  .sheet-history-grid,
   .manual-correction-evidence,
   .company-decision-evidence,
   .company-check-action-plan,
@@ -30153,11 +30194,7 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   .recrawl-auto-metrics,
   .recrawl-auto-eta,
   .recrawl-auto-cells,
-  .revenue-day-grid,
   .revenue-product-list > div,
-  .sheet-collection-grid,
-  .sheet-audit-grid,
-  .sheet-audit-summary,
   .sheet-audit-criteria,
   .sheet-b2b-boundary,
   .target-board-hero,
@@ -30707,6 +30744,33 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
     align-self: end;
   }
 
+  .detail-sheet .sheet-head {
+    padding-inline: 14px;
+  }
+
+  .detail-sheet .sheet-tabs {
+    margin-inline: 14px;
+  }
+
+  .detail-sheet .sheet-tabs button {
+    padding-inline: 6px;
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .detail-sheet .sheet-body {
+    padding-inline: 14px;
+  }
+
+  .detail-sheet .sheet-body :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+    select,
+    textarea:not(.sr-only)
+  ) {
+    min-height: var(--touch-target-min);
+  }
+
   .date-row {
     grid-template-columns: 1fr;
   }
@@ -30715,6 +30779,23 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   .crawl-speed-options,
   .field-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 340px) {
+  .detail-sheet :is(
+    .sheet-history-grid,
+    .revenue-day-grid,
+    .sheet-collection-grid,
+    .sheet-audit-grid,
+    .sheet-audit-summary
+  ) {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-sheet .search-row {
+    grid-template-columns: 1fr;
+    align-items: start;
   }
 }
 
@@ -31254,9 +31335,7 @@ body.role-b2b .demand-chart,
 body.role-b2b .demand-insight-card,
 body.role-b2b .demand-table-card,
 body.role-b2b .demand-company-card,
-body.role-b2b .structure-card,
-body.role-b2b .sheet-panel,
-body.role-b2b .drawer-panel {
+body.role-b2b .structure-card {
   border: 1px solid rgba(139, 160, 190, .22);
   border-radius: 8px;
   background:
@@ -31403,15 +31482,13 @@ body.role-admin .admin-mobile-secondary {
 body.role-b2b .bottom-nav button,
 body.role-admin .admin-section-nav button,
 body.role-admin .admin-mobile-primary button,
-body.role-admin .admin-mobile-secondary button,
-body.role-b2b .sheet-tabs button {
+body.role-admin .admin-mobile-secondary button {
   border-radius: 7px;
   color: #b8c4d6;
   font-weight: 900;
 }
 
 body.role-b2b .bottom-nav button.active,
-body.role-b2b .sheet-tabs button.active,
 body.role-admin .admin-section-nav button.active,
 body.role-admin .admin-mobile-primary button.active,
 body.role-admin .admin-mobile-secondary button.active,
@@ -33007,7 +33084,7 @@ body.role-admin .admin-db-company-title-row strong {
 }
 
 /* Final contrast lock: light cards use dark text, dark admin lists use light text. */
-body.role-admin .detail-sheet {
+:root[data-theme="light"] body.role-admin .detail-sheet {
   --sheet-light-ink: #0f172a;
   --sheet-light-text: #334155;
   --sheet-light-muted: #64748b;
@@ -33016,137 +33093,137 @@ body.role-admin .detail-sheet {
   --sheet-light-line: #d8e2ee;
 }
 
-body.role-admin .detail-sheet .sheet-decision-section,
-body.role-admin .detail-sheet .sheet-audit-section,
-body.role-admin .detail-sheet .sheet-collection-section,
-body.role-admin .detail-sheet .sheet-revenue-section,
-body.role-admin .detail-sheet .sheet-structure-section,
-body.role-admin .detail-sheet .sheet-history-section,
-body.role-admin .detail-sheet .sheet-booking-bars,
-body.role-admin .detail-sheet .sheet-b2b-detail,
-body.role-admin .detail-sheet .sheet-b2b-insight,
-body.role-admin .detail-sheet .sheet-b2b-platform,
-body.role-admin .detail-sheet .sheet-b2b-search,
-body.role-admin .detail-sheet .sheet-b2b-booking,
-body.role-admin .detail-sheet .sheet-b2b-boundary,
-body.role-admin .detail-sheet .sheet-b2b-action-list,
-body.role-admin .detail-sheet .sheet-b2b-coupon-line {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-decision-section,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-audit-section,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-collection-section,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-revenue-section,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-structure-section,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-history-section,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-booking-bars,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-insight,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-search,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-booking,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-action-list,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-coupon-line {
   color: var(--sheet-light-ink) !important;
 }
 
-body.role-admin .detail-sheet .sheet-decision-section h3,
-body.role-admin .detail-sheet .sheet-audit-section h3,
-body.role-admin .detail-sheet .sheet-collection-section h3,
-body.role-admin .detail-sheet .sheet-revenue-section h3,
-body.role-admin .detail-sheet .sheet-structure-section h3,
-body.role-admin .detail-sheet .sheet-history-section h3,
-body.role-admin .detail-sheet .sheet-booking-bars h3,
-body.role-admin .detail-sheet .sheet-b2b-head h3,
-body.role-admin .detail-sheet .sheet-b2b-action-list > strong {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-decision-section h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-audit-section h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-collection-section h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-revenue-section h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-structure-section h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-history-section h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-booking-bars h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-head h3,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-action-list > strong {
   color: var(--sheet-light-ink) !important;
   text-shadow: none !important;
 }
 
-body.role-admin .detail-sheet .sheet-decision-section p,
-body.role-admin .detail-sheet .sheet-audit-section p,
-body.role-admin .detail-sheet .sheet-collection-section p,
-body.role-admin .detail-sheet .sheet-revenue-section p,
-body.role-admin .detail-sheet .sheet-structure-section p,
-body.role-admin .detail-sheet .sheet-history-section p,
-body.role-admin .detail-sheet .sheet-booking-bars p,
-body.role-admin .detail-sheet .sheet-b2b-head p,
-body.role-admin .detail-sheet .sheet-b2b-action-list p {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-decision-section p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-audit-section p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-collection-section p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-revenue-section p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-structure-section p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-history-section p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-booking-bars p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-head p,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-action-list p {
   color: var(--sheet-light-text) !important;
   text-shadow: none !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-platform-grid div,
-body.role-admin .detail-sheet .sheet-b2b-detail-grid div,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip div,
-body.role-admin .detail-sheet .sheet-b2b-evidence-grid div,
-body.role-admin .detail-sheet .sheet-b2b-note-grid div,
-body.role-admin .detail-sheet .sheet-b2b-boundary,
-body.role-admin .detail-sheet .sheet-b2b-coupon-line {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform-grid div,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid div,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip div,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-evidence-grid div,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-note-grid div,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-coupon-line {
   border-color: var(--sheet-light-line) !important;
   background: #ffffff !important;
   color: var(--sheet-light-ink) !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-detail-grid div.strong,
-body.role-admin .detail-sheet .sheet-b2b-detail-grid div.good,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip div.strong,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip div.good,
-body.role-admin .detail-sheet .sheet-b2b-platform.strong,
-body.role-admin .detail-sheet .sheet-b2b-platform.good,
-body.role-admin .detail-sheet .sheet-b2b-search.strong,
-body.role-admin .detail-sheet .sheet-b2b-search.good,
-body.role-admin .detail-sheet .sheet-b2b-booking.strong,
-body.role-admin .detail-sheet .sheet-b2b-booking.good,
-body.role-admin .detail-sheet .sheet-b2b-boundary.strong,
-body.role-admin .detail-sheet .sheet-b2b-boundary.good {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid div.strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid div.good,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip div.strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip div.good,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform.strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform.good,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-search.strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-search.good,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-booking.strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-booking.good,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary.strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary.good {
   border-color: #a7d7cc !important;
   background: #f6fffb !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-detail-grid div.watch,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip div.watch,
-body.role-admin .detail-sheet .sheet-b2b-platform.watch,
-body.role-admin .detail-sheet .sheet-b2b-search.watch,
-body.role-admin .detail-sheet .sheet-b2b-booking.watch,
-body.role-admin .detail-sheet .sheet-b2b-boundary.watch {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid div.watch,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip div.watch,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform.watch,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-search.watch,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-booking.watch,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary.watch {
   border-color: #f3c96b !important;
   background: #fff8db !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-detail-grid div.hot,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip div.hot,
-body.role-admin .detail-sheet .sheet-b2b-platform.hot,
-body.role-admin .detail-sheet .sheet-b2b-search.hot,
-body.role-admin .detail-sheet .sheet-b2b-booking.hot,
-body.role-admin .detail-sheet .sheet-b2b-booking.bad,
-body.role-admin .detail-sheet .sheet-b2b-boundary.hot {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid div.hot,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip div.hot,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform.hot,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-search.hot,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-booking.hot,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-booking.bad,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary.hot {
   border-color: #f4b4bd !important;
   background: #fff3f5 !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-platform-grid span,
-body.role-admin .detail-sheet .sheet-b2b-platform-grid small,
-body.role-admin .detail-sheet .sheet-b2b-detail-grid span,
-body.role-admin .detail-sheet .sheet-b2b-detail-grid small,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip span,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip small,
-body.role-admin .detail-sheet .sheet-b2b-evidence-grid span,
-body.role-admin .detail-sheet .sheet-b2b-evidence-grid small,
-body.role-admin .detail-sheet .sheet-b2b-note-grid span,
-body.role-admin .detail-sheet .sheet-b2b-note-grid small,
-body.role-admin .detail-sheet .sheet-b2b-boundary span,
-body.role-admin .detail-sheet .sheet-b2b-boundary small,
-body.role-admin .detail-sheet .sheet-b2b-coupon-line span {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform-grid span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform-grid small,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid small,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip small,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-evidence-grid span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-evidence-grid small,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-note-grid span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-note-grid small,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary small,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-coupon-line span {
   color: var(--sheet-light-muted) !important;
   text-shadow: none !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-platform-grid strong,
-body.role-admin .detail-sheet .sheet-b2b-detail-grid strong,
-body.role-admin .detail-sheet .sheet-b2b-flow-strip strong,
-body.role-admin .detail-sheet .sheet-b2b-evidence-grid strong,
-body.role-admin .detail-sheet .sheet-b2b-note-grid strong,
-body.role-admin .detail-sheet .sheet-b2b-boundary strong,
-body.role-admin .detail-sheet .sheet-b2b-head > strong {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-platform-grid strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-detail-grid strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-flow-strip strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-evidence-grid strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-note-grid strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-head > strong {
   color: var(--sheet-light-blue) !important;
   text-shadow: none !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-head span,
-body.role-admin .detail-sheet .sheet-b2b-coupon-line strong,
-body.role-admin .detail-sheet .sheet-b2b-boundary-chips em {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-head span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-coupon-line strong,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary-chips em {
   color: var(--sheet-light-green) !important;
   text-shadow: none !important;
 }
 
-body.role-admin .detail-sheet .sheet-b2b-boundary-chips span,
-body.role-admin .detail-sheet .sheet-b2b-boundary-chips em,
-body.role-admin .detail-sheet .sheet-b2b-action-list span {
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary-chips span,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-boundary-chips em,
+:root[data-theme="light"] body.role-admin .detail-sheet .sheet-b2b-action-list span {
   border-color: var(--sheet-light-line) !important;
   background: #f8fafc !important;
   color: var(--sheet-light-text) !important;
@@ -34638,6 +34715,44 @@ body.role-admin .detail-sheet :is(
 ) :is(em, mark) {
   color: var(--surface-accent-token) !important;
   text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet [data-sheet-value-state] {
+  border-color: color-mix(in srgb, var(--sheet-value-tone) 46%, var(--sheet-card-border)) !important;
+  background: color-mix(in srgb, var(--sheet-value-tone) 7%, var(--sheet-card-surface)) !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet .structure-badge[data-sheet-value-state] {
+  color: var(--sheet-value-tone, var(--color-text-secondary)) !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet .structure-badge:is(
+  [data-sheet-value-state="ready"],
+  [data-sheet-value-state="zero"]
+) {
+  color: var(--sheet-tone, var(--sheet-value-tone, var(--color-text-secondary))) !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet :is(.info, .strong, .good, .watch, .missing, .manual, .hot, .bad, .error) {
+  border-color: var(--sheet-tone-border) !important;
+  background: var(--sheet-tone-surface) !important;
+}
+
+:is(body.role-admin, body.role-b2b) #detailSheet [data-sheet-value-state] em.sheet-value-status {
+  border-color: color-mix(in srgb, var(--sheet-value-tone, var(--color-border-strong)) 48%, var(--color-border-default)) !important;
+  background: color-mix(in srgb, var(--sheet-value-tone, var(--color-text-secondary)) 9%, var(--sheet-section-surface)) !important;
+  color: var(--sheet-value-tone, var(--color-text-secondary)) !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet a.platform-row[data-sheet-value-state]:hover {
+  border-color: color-mix(in srgb, var(--color-action-primary) 64%, var(--sheet-card-border)) !important;
+  background: color-mix(in srgb, var(--color-action-primary) 12%, var(--sheet-card-surface)) !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet a.platform-row[data-sheet-value-state]:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
 }
 
 body.role-admin .detail-sheet :is(
@@ -39952,6 +40067,7 @@ body.role-b2b .company-card.b2b-public-company.is-selected {
 
 body.role-b2b .b2b-map-view-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--ui-space-3);
@@ -39966,6 +40082,60 @@ body.role-b2b .b2b-map-view-controls > div {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ui-space-2);
+}
+
+body.role-b2b .b2b-map-transient-action {
+  flex: 1 1 100%;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--ui-space-2) var(--ui-space-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--ui-radius-sm);
+  background: color-mix(in srgb, var(--color-status-info) 7%, var(--color-surface-default));
+}
+
+body.role-b2b .b2b-map-transient-action small {
+  flex: 1 1 280px;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+}
+
+body.role-b2b .b2b-map-transient-action button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-space-2);
+}
+
+body.role-b2b .b2b-map-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  flex: 1 1 620px;
+}
+
+body.role-b2b .b2b-map-filter-fields label {
+  min-width: 0;
+  display: grid;
+  gap: var(--ui-space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--ui-font-size-sm);
+  font-weight: 800;
+}
+
+body.role-b2b .b2b-map-filter-fields select {
+  min-width: 0;
+  min-height: var(--ui-control-height);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--ui-radius-sm);
+  background: var(--color-surface-default);
+  color: var(--color-text-primary);
+}
+
+body.role-b2b .b2b-map-filter-summary {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
 }
 
 body.role-b2b .b2b-map-view-controls button {
@@ -40022,6 +40192,21 @@ body.role-b2b .b2b-map-company-row.is-selected {
   outline-offset: -3px;
 }
 
+body.role-b2b .b2b-map-company-row[data-location-status="approximate"] {
+  border-inline-start: 4px solid var(--color-status-warning);
+}
+
+body.role-b2b .b2b-map-company-row[data-location-status="verified"],
+body.role-b2b .b2b-map-company-row[data-location-status="resolved"] {
+  border-inline-start: 4px solid var(--color-status-success);
+}
+
+body.role-b2b .b2b-map-company-row .ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-1);
+}
+
 body.role-b2b .b2b-map-company-row > button:first-child {
   min-width: 0;
   min-height: var(--touch-target-min);
@@ -40075,23 +40260,29 @@ body.role-b2b :is(.map-layer-row, .map-legend) span {
   color: var(--color-text-secondary);
 }
 
-body.role-b2b :is([data-map-layer-tone="1"], [data-map-core-tone="1"], [data-map-core-tone="company"]) b {
+body.role-b2b :is([data-map-layer-tone="1"], [data-map-layer-tone="search"], [data-map-core-tone="1"], [data-map-core-tone="company"]) b {
   background: var(--color-action-primary);
 }
 
-body.role-b2b :is([data-map-layer-tone="2"], [data-map-core-tone="2"]) b {
+body.role-b2b :is([data-map-layer-tone="2"], [data-map-layer-tone="radius"], [data-map-core-tone="2"]) b {
   background: var(--color-status-info);
 }
 
-body.role-b2b :is([data-map-layer-tone="3"], [data-map-core-tone="3"]) b {
+body.role-b2b :is([data-map-layer-tone="3"], [data-map-layer-tone="verified"], [data-map-core-tone="3"]) b {
   background: var(--color-status-success);
 }
 
-body.role-b2b :is([data-map-layer-tone="4"], [data-map-core-tone="4"]) b {
+body.role-b2b :is([data-map-layer-tone="4"], [data-map-layer-tone="approximate"], [data-map-core-tone="4"], [data-map-core-tone="approximate"]) b {
   background: var(--color-status-warning);
+  border-radius: 2px;
+  transform: rotate(45deg);
 }
 
-body.role-b2b :is([data-map-layer-tone="5"], [data-map-core-tone="5"]) b {
+body.role-b2b :is([data-map-layer-tone="5"], [data-map-layer-tone="missing"]) b {
+  background: var(--color-border-strong);
+}
+
+body.role-b2b [data-map-core-tone="5"] b {
   background: var(--color-status-danger);
 }
 
@@ -40202,6 +40393,20 @@ body.role-b2b .company-map-hit {
   stroke-width: 0;
 }
 
+body.role-b2b .company-map-duplicate-leader {
+  pointer-events: none;
+  stroke: var(--color-border-strong);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+
+body.role-b2b .company-map-duplicate-anchor {
+  pointer-events: none;
+  fill: var(--color-surface-raised);
+  stroke: var(--color-border-focus);
+  stroke-width: 2;
+}
+
 body.role-b2b .company-map-halo {
   fill: color-mix(in srgb, var(--color-action-primary) 18%, transparent);
   stroke: var(--color-surface-default);
@@ -40222,6 +40427,123 @@ body.role-b2b .company-map-marker.unknown .company-map-halo {
 
 body.role-b2b .company-map-dot {
   stroke: var(--color-surface-default);
+  stroke-width: 2;
+}
+
+body.role-b2b .company-map-marker.location-resolved .company-map-dot {
+  fill: var(--color-status-info);
+}
+
+body.role-b2b .company-map-marker.location-approximate .company-map-dot {
+  fill: var(--color-status-warning);
+  stroke: var(--color-text-primary);
+  stroke-dasharray: 3 2;
+}
+
+body.role-b2b .company-map-marker.location-approximate .company-map-halo {
+  fill: color-mix(in srgb, var(--color-status-warning) 18%, transparent);
+  stroke: var(--color-status-warning);
+  stroke-dasharray: 4 3;
+}
+
+body.role-b2b .company-map-duplicate circle {
+  fill: var(--color-surface-raised);
+  stroke: var(--color-border-focus);
+  stroke-width: 2;
+}
+
+body.role-b2b .company-map-duplicate text {
+  fill: var(--color-text-primary);
+  font-size: 9px;
+  font-weight: 900;
+}
+
+body.role-b2b .b2b-sheet-location {
+  border-inline-start: 4px solid var(--color-border-strong);
+  background: var(--color-surface-default);
+}
+
+body.role-b2b .b2b-sheet-location[data-location-status="verified"],
+body.role-b2b .b2b-sheet-location[data-location-status="resolved"] {
+  border-inline-start-color: var(--color-status-success);
+}
+
+body.role-b2b .b2b-sheet-location[data-location-status="approximate"],
+body.role-b2b .b2b-sheet-location[data-location-status="ambiguous"],
+body.role-b2b .b2b-sheet-location[data-location-status="pending"] {
+  border-inline-start-color: var(--color-status-warning);
+}
+
+body.role-b2b .b2b-sheet-location[data-location-status="invalid"],
+body.role-b2b .b2b-sheet-location[data-location-status="error"] {
+  border-inline-start-color: var(--color-status-danger);
+}
+
+body.role-b2b .b2b-sheet-location-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--ui-space-3);
+}
+
+body.role-b2b .b2b-sheet-location-head h3,
+body.role-b2b .b2b-sheet-location-head p {
+  margin: 0;
+}
+
+body.role-b2b .b2b-sheet-location-head p {
+  margin-top: var(--ui-space-1);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+body.role-b2b .b2b-sheet-location-icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--ui-radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-action-primary);
+}
+
+body.role-b2b .b2b-sheet-location-icon .app-nav-icon-svg {
+  width: 22px;
+  height: 22px;
+}
+
+body.role-b2b .b2b-sheet-location-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ui-space-2);
+  margin: var(--ui-space-4) 0 0;
+}
+
+body.role-b2b .b2b-sheet-location-details > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--ui-space-1);
+  padding: var(--ui-space-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--ui-radius-sm);
+  background: var(--color-surface-subtle);
+}
+
+body.role-b2b .b2b-sheet-location-details :is(dt, dd) {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+body.role-b2b .b2b-sheet-location-details dt {
+  color: var(--color-text-tertiary);
+  font-size: var(--ui-font-size-sm);
+  font-weight: 800;
+}
+
+body.role-b2b .b2b-sheet-location-details dd {
+  color: var(--color-text-primary);
+  font-weight: 800;
 }
 
 body.role-b2b #companyList .more-button {
@@ -40442,6 +40764,10 @@ body.role-b2b :is(
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  body.role-b2b .b2b-map-filter-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   body.role-b2b .b2b-competition-selection {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -40471,8 +40797,33 @@ body.role-b2b :is(
   body.role-b2b .b2b-secondary-toolbar-fields,
   body.role-b2b .b2b-demand-observed-grid,
   body.role-b2b .b2b-account-summary,
-  body.role-b2b .b2b-account-layout {
+  body.role-b2b .b2b-account-layout,
+  body.role-b2b .b2b-map-filter-fields,
+  body.role-b2b .b2b-sheet-location-details {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  body.role-b2b .b2b-map-view-toggle {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-b2b .b2b-map-view-toggle button {
+    width: 100%;
+  }
+
+  body.role-b2b .b2b-map-transient-action,
+  body.role-b2b .b2b-map-transient-action button {
+    width: 100%;
+  }
+
+  body.role-b2b .b2b-sheet-location-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  body.role-b2b .b2b-sheet-location-head .ui-badge {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
 
   body.role-b2b .b2b-map-company-row {
@@ -40772,7 +41123,7 @@ body.role-b2b :is(
   .demand-table-card
 ) {
   border-color: var(--color-border-default) !important;
-  background-color: var(--color-surface-default) !important;
+  background: var(--color-surface-default) !important;
   color: var(--color-text-primary) !important;
 }
 

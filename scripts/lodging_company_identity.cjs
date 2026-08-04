@@ -1,5 +1,13 @@
 "use strict";
 
+const {
+  coordinatePair,
+  effectiveCompanyLocation,
+  locationCandidateFromObservation,
+  mergeCompanyLocation,
+  mergeCompanyLocationProfiles: mergeLocationProfiles
+} = require("./lodging_geocoding_contract.cjs");
+
 const CATEGORY_KEYS = new Set(["glamping", "campground", "caravan", "pension", "poolVilla", "privateStay", "hotelResort", "motel"]);
 const SOURCE_KEYS = new Set(["naver", "nol", "ddnayo", "yeogi_manual", "tourism_public", "manual"]);
 const MAX_EVIDENCE = 40;
@@ -50,9 +58,40 @@ function categoryKeys(values) {
   return unique(array(values)).filter((value) => CATEGORY_KEYS.has(value));
 }
 
-function finiteCoordinate(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+function normalizedCoordinatePoint(value = {}) {
+  if (!value || typeof value !== "object") return null;
+  const pair = coordinatePair(
+    value.latitude ?? value.lat,
+    value.longitude ?? value.lon ?? value.lng
+  );
+  return pair ? { ...value, ...pair } : null;
+}
+
+function coordinatePointKey(value = {}) {
+  const point = normalizedCoordinatePoint(value);
+  return point ? `${point.latitude.toFixed(7)}|${point.longitude.toFixed(7)}` : "";
+}
+
+function mergeCoordinatePoints(existing = [], incoming = [], limit = 10) {
+  const merged = Array.isArray(existing) ? existing.filter(Boolean).map((point) => ({ ...point })) : [];
+  const indexes = new Map();
+  merged.forEach((point, index) => {
+    const key = coordinatePointKey(point);
+    if (key) indexes.set(key, index);
+  });
+  for (const rawPoint of Array.isArray(incoming) ? incoming : []) {
+    const point = normalizedCoordinatePoint(rawPoint);
+    if (!point) continue;
+    const key = coordinatePointKey(point);
+    const existingIndex = indexes.get(key);
+    if (existingIndex !== undefined) {
+      merged[existingIndex] = { ...merged[existingIndex], ...point };
+      continue;
+    }
+    indexes.set(key, merged.length);
+    merged.push(point);
+  }
+  return merged.slice(-limit);
 }
 
 function sanitizeEvidence(value, fallback = {}) {
@@ -85,6 +124,15 @@ function standardizeCompanyObservation(value = {}, defaults = {}) {
   const tags = categoryKeys([detectedCategoryKey, ...categoryKeys(value.categoryTags || value.detectedCategoryTags)]);
   const confidence = Math.max(0, Math.min(1, Number(value.categoryConfidence || 0)));
   const observedAt = text(value.observedAt || defaults.observedAt);
+  // Only an explicit company `location` or top-level company coordinates are
+  // considered. Search-origin context such as `userLocation` is intentionally
+  // outside this contract.
+  const location = locationCandidateFromObservation(value, {
+    address: value.address || value.location,
+    defaultSource: sourcePlatform ? "provider" : "legacy",
+    defaultStatus: "resolved",
+    observedAt
+  });
   const rawEvidence = array(value.categoryEvidence);
   const categoryEvidence = rawEvidence
     .map((item) => sanitizeEvidence(item, { categoryKey: detectedCategoryKey, source: sourcePlatform, confidence, observedAt }))
@@ -98,6 +146,10 @@ function standardizeCompanyObservation(value = {}, defaults = {}) {
       observedAt
     });
   }
+  const directCoordinate = coordinatePair(
+    value.latitude ?? value.lat,
+    value.longitude ?? value.lon ?? value.lng
+  );
   return {
     sourcePlatform,
     sourceId: text(value.sourceId || value.placeId || value.platformId),
@@ -109,14 +161,61 @@ function standardizeCompanyObservation(value = {}, defaults = {}) {
     regionKey: key(value.region),
     phone: text(value.phone || value.telephone),
     phoneKey: phoneKey(value.phone || value.telephone),
-    latitude: finiteCoordinate(value.latitude ?? value.lat),
-    longitude: finiteCoordinate(value.longitude ?? value.lng),
+    latitude: location?.latitude ?? directCoordinate?.latitude ?? null,
+    longitude: location?.longitude ?? directCoordinate?.longitude ?? null,
+    location,
     requestedCategoryKey: CATEGORY_KEYS.has(value.requestedCategoryKey) ? value.requestedCategoryKey : "",
     detectedCategoryKey,
     categoryTags: tags,
     categoryConfidence: confidence,
     categoryEvidence,
     observedAt
+  };
+}
+
+function sameCoordinatePoint(left = {}, right = {}) {
+  const leftPoint = normalizedCoordinatePoint(left);
+  const rightPoint = normalizedCoordinatePoint(right);
+  return Boolean(
+    leftPoint
+    && rightPoint
+    && Math.abs(leftPoint.latitude - rightPoint.latitude) <= 1e-7
+    && Math.abs(leftPoint.longitude - rightPoint.longitude) <= 1e-7
+  );
+}
+
+function automaticLocationMergeBase(company = {}) {
+  const base = { ...company, manualCorrection: null };
+  if (String(base.location?.source || "").toLowerCase() === "manual") delete base.location;
+  if (String(base.geocoding?.source || "").toLowerCase() === "manual") delete base.geocoding;
+  if (Array.isArray(base.coordinates)) {
+    base.coordinates = base.coordinates.filter((point) => String(point?.source || "").toLowerCase() !== "manual");
+  }
+  return base;
+}
+
+function automaticLocationConflict(current = null, incoming = null) {
+  const currentPoint = normalizedCoordinatePoint(current);
+  const incomingPoint = normalizedCoordinatePoint(incoming);
+  if (!currentPoint || !incomingPoint) return null;
+  const distance = distanceMeters(currentPoint, incomingPoint);
+  if (distance === null || distance <= 3000) return null;
+  return {
+    status: "pending",
+    reason: "automatic_coordinate_conflict",
+    distanceMeters: Math.round(distance),
+    current: {
+      latitude: currentPoint.latitude,
+      longitude: currentPoint.longitude,
+      source: current.source || "legacy",
+      observedAt: current.geocodedAt || current.observedAt || ""
+    },
+    candidate: {
+      latitude: incomingPoint.latitude,
+      longitude: incomingPoint.longitude,
+      source: incoming.source || "legacy",
+      observedAt: incoming.geocodedAt || incoming.observedAt || ""
+    }
   };
 }
 
@@ -186,10 +285,21 @@ function scoreCompanyCandidate(observation, company = {}) {
     score -= 45;
     conflicts.push("지역 불일치");
   }
-  const companyPoint = company.coordinates?.[0] || {};
-  const meters = distanceMeters(observation, companyPoint);
+  const companyPoints = [
+    effectiveCompanyLocation(company),
+    ...(Array.isArray(company.coordinates) ? company.coordinates : [])
+  ].map(normalizedCoordinatePoint).filter(Boolean);
+  const distances = companyPoints
+    .map((point) => distanceMeters(observation, point))
+    .filter((value) => value !== null);
+  const meters = distances.length ? Math.min(...distances) : null;
   if (meters !== null && meters <= 150) { score += 35; evidence.push(`좌표 ${Math.round(meters)}m`); }
-  if (meters !== null && meters > 3000) { score -= 40; conflicts.push(`좌표 ${Math.round(meters)}m 불일치`); }
+  if (meters !== null && meters > 3000) {
+    // Exact identity evidence outranks a stale historical coordinate. Keep
+    // the conflict visible for review, but never force a duplicate create.
+    if (!(nameMatched && addressMatched && regionMatched)) score -= 40;
+    conflicts.push(`좌표 ${Math.round(meters)}m 불일치`);
+  }
   score = Math.max(0, Math.min(100, score));
   return { companyId: company.companyId || "", score, confidence: score / 100, evidence: unique(evidence), conflicts: unique(conflicts) };
 }
@@ -260,6 +370,12 @@ function categoryResult(company, fields) {
 function applyObservationToCompany(companyInput = {}, observationInput = {}) {
   const before = JSON.stringify(companyInput);
   const observation = observationInput.nameKey ? observationInput : standardizeCompanyObservation(observationInput);
+  const incomingLocation = observation.location || locationCandidateFromObservation(observation, {
+    address: observation.address,
+    defaultSource: observation.sourcePlatform ? "provider" : "legacy",
+    defaultStatus: "resolved",
+    observedAt: observation.observedAt
+  });
   const fields = normalizeCategoryFields(companyInput);
   fields.categoryTags = categoryKeys([...fields.categoryTags, ...observation.categoryTags]);
   fields.categoryEvidence = mergeEvidence(fields.categoryEvidence, observation.categoryEvidence);
@@ -270,12 +386,21 @@ function applyObservationToCompany(companyInput = {}, observationInput = {}) {
   }
   fields.phones = unique([...fields.phones, observation.phone]);
   if (Number.isFinite(observation.latitude) && Number.isFinite(observation.longitude)) {
-    const point = { latitude: observation.latitude, longitude: observation.longitude };
-    fields.coordinates = [...fields.coordinates.filter((item) => distanceMeters(item, point) !== 0), point].slice(-10);
+    const point = incomingLocation || { latitude: observation.latitude, longitude: observation.longitude };
+    fields.coordinates = mergeCoordinatePoints(fields.coordinates, [point]);
   }
   const selected = categoryResult(companyInput, fields);
   const company = { ...companyInput, ...fields, ...selected };
-  return { company, changed: before !== JSON.stringify(company), fieldsChanged: ["primaryCategoryKey", "categoryTags", "categoryConfidence", "categoryEvidence", "sourcePlatforms"].filter((field) => JSON.stringify(companyInput[field]) !== JSON.stringify(company[field])) };
+  // Manual corrections remain authoritative through `manualCorrection`, but
+  // must not be copied into the automatic top-level location projection.
+  const locationBase = automaticLocationMergeBase(companyInput);
+  const currentAutomaticLocation = effectiveCompanyLocation(locationBase);
+  const locationConflict = automaticLocationConflict(currentAutomaticLocation, incomingLocation);
+  const location = mergeCompanyLocation(locationBase, incomingLocation);
+  if (location) company.location = location;
+  else if (companyInput.location && !locationBase.location) delete company.location;
+  if (locationConflict) company.locationReview = locationConflict;
+  return { company, changed: before !== JSON.stringify(company), fieldsChanged: ["primaryCategoryKey", "categoryTags", "categoryConfidence", "categoryEvidence", "sourcePlatforms", "locationReview"].filter((field) => JSON.stringify(companyInput[field]) !== JSON.stringify(company[field])) };
 }
 
 function mergeCompanyCategoryProfiles(target = {}, source = {}) {
@@ -293,6 +418,16 @@ function mergeCompanyCategoryProfiles(target = {}, source = {}) {
   for (const [platform, ids] of Object.entries(sourceFields.sourcePlatformIds || {})) {
     merged.company.sourcePlatformIds[platform] = unique([...(merged.company.sourcePlatformIds[platform] || []), ...(ids || [])], 20);
   }
+  const locationTarget = automaticLocationMergeBase(merged.company);
+  const locationSource = automaticLocationMergeBase(source);
+  const targetAutomatic = effectiveCompanyLocation(locationTarget);
+  const sourceAutomatic = effectiveCompanyLocation(locationSource);
+  const locationConflict = automaticLocationConflict(targetAutomatic, sourceAutomatic);
+  const location = mergeLocationProfiles(locationTarget, locationSource);
+  merged.company.coordinates = mergeCoordinatePoints(target.coordinates, source.coordinates);
+  if (location) merged.company.location = location;
+  else if (merged.company.location && !locationTarget.location) delete merged.company.location;
+  if (locationConflict) merged.company.locationReview = locationConflict;
   return merged.company;
 }
 

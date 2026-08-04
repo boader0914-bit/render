@@ -170,19 +170,35 @@ assert.match(functionBlock("renderCompanies"), /item\.rank \|\| sourceIndex \+ 1
 assert.match(functionBlock("renderCompanies"), /aria-controls="companyList"/);
 assert.doesNotMatch(functionBlock("renderCompanies"), /aria-controls="b2bCompetitionSelectionTitle"/);
 
-const coordinateContext = {};
+const coordinateContext = {
+  B2B_LOCATION_STATUS_META: {
+    verified: { label: "검증 위치", tone: "ready", icon: "●", mappable: true },
+    resolved: { label: "확인 위치", tone: "info", icon: "●", mappable: true },
+    approximate: { label: "근사 위치", tone: "warning", icon: "◆", mappable: true },
+    ambiguous: { label: "위치 검토 필요", tone: "warning", icon: "?", mappable: false },
+    not_found: { label: "좌표 미수집", tone: "unavailable", icon: "—", mappable: false },
+    invalid: { label: "좌표 오류", tone: "error", icon: "!", mappable: false },
+    pending: { label: "좌표 확인 대기", tone: "pending", icon: "…", mappable: false },
+    error: { label: "좌표 확인 실패", tone: "error", icon: "!", mappable: false }
+  }
+};
 vm.createContext(coordinateContext);
+vm.runInContext(functionSource("coordinatePairsFromValue"), coordinateContext);
 vm.runInContext(functionSource("coordinateFromValue"), coordinateContext);
+vm.runInContext(functionSource("explicitLocationContract"), coordinateContext);
+vm.runInContext(functionSource("normalizedLocationStatus"), coordinateContext);
 vm.runInContext(functionSource("coordinateStatusFromValue"), coordinateContext);
 const coordinate = coordinateContext.coordinateFromValue;
 const coordinateStatus = coordinateContext.coordinateStatusFromValue;
 assert.equal(coordinate({ longitude: 127.1, latitude: 37.5 }).source, "exact");
-assert.equal(coordinateStatus({}).status, "missing");
+assert.equal(coordinateStatus({}).status, "not_found");
 assert.equal(coordinateStatus({ lon: 127.1 }).status, "invalid");
 assert.equal(coordinateStatus({ lon: 0, lat: 0 }).status, "invalid");
 assert.equal(coordinateStatus({ lon: 37.5, lat: 127.1 }).status, "invalid");
 assert.equal(coordinateStatus({ lon: 140, lat: 37 }).status, "invalid");
-assert.equal(coordinateStatus({ x: 127.1, y: 37.5 }).status, "missing");
+assert.equal(coordinateStatus({ x: 127.1, y: 37.5 }).status, "not_found");
+assert.equal(coordinateStatus({ companyProfile: { location: { status: "resolved", lat: 37.5, lon: 127.1 } } }).status, "resolved");
+assert.equal(coordinateStatus({ companyProfile: { location: { status: "approximate", lat: 37.5, lon: 127.1 } } }).status, "approximate");
 assert.doesNotMatch(app, /fallbackCompanyCoordinate/);
 assert.doesNotMatch(app, /source:\s*"estimated"/);
 assert.match(functionBlock("companyMapPointRows"), /coordinateStatusFromValue/);
@@ -191,11 +207,12 @@ assert.match(functionBlock("regionBounds"), /coordinateFromValue\(region\)/);
 assert.match(functionBlock("renderB2BMapCompanyList"), /role="list"/);
 assert.match(functionBlock("renderB2BMapCompanyList"), /data-b2b-map-company-key/);
 assert.match(functionBlock("renderB2BMapCompanyList"), /aria-pressed=/);
-assert.doesNotMatch(functionBlock("renderB2BMapCompanyList"), /data-open-company="\$\{row\.itemIndex\}" data-b2b-map-company-key/);
+assert.match(functionBlock("renderB2BMapCompanyList"), /data-open-company="\$\{row\.itemIndex\}" data-b2b-map-company-key/);
 assert.match(functionBlock("syncB2BMapSelectionDom"), /matches\("\[data-b2b-map-select\]"\)/);
 assert.match(functionBlock("renderMapControls"), /CORE_ORDER\.map/);
 assert.doesNotMatch(functionBlock("renderMapControls"), /CORE_ORDER\.slice\(0,\s*5\)/);
-assert.match(functionBlock("renderMap"), /company-map-hit" r="22"/);
+assert.match(functionBlock("renderMap"), /companyMapHitRadius\(\)/);
+assert.match(functionBlock("renderMap"), /company-map-hit" r="\$\{companyMarkerHitRadius\.toFixed\(1\)\}"/);
 assert.match(functionBlock("renderB2BMapViewControls"), /data-b2b-map-view="map"/);
 assert.match(functionBlock("renderB2BMapViewControls"), /data-b2b-map-view="list"/);
 assert.match(functionBlock("renderB2BMapViewControls"), /state\.mapLoadState === "unavailable"/);

@@ -9,6 +9,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { spawn } = require("node:child_process");
 const { runResultSelectionProfile } = require("./lodging_run_selection.cjs");
+const { projectB2BPublicPayload } = require("./runtime_security.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const APP_SOURCE = fs.readFileSync(path.join(ROOT, "web", "app.js"), "utf8");
@@ -105,10 +106,12 @@ async function writeRun(outputsDir, id, manifest, mtime) {
   await fsp.mkdir(dir, { recursive: true });
   await fsp.writeFile(path.join(dir, "report.md"), "# isolated run fixture\n", "utf8");
   if (manifest) {
+    const overallFile = manifest.overallCsv ? "fixture_overall_place_rank.csv" : "";
+    if (overallFile) await fsp.writeFile(path.join(dir, overallFile), manifest.overallCsv, "utf8");
     await fsp.writeFile(path.join(dir, "manifest.json"), JSON.stringify({
       keyword: manifest.keyword,
-      fileRoles: { report: "report.md" },
-      files: ["report.md"],
+      fileRoles: { report: "report.md", ...(overallFile ? { overall: overallFile } : {}) },
+      files: ["report.md", ...(overallFile ? [overallFile] : [])],
       counts: manifest.counts,
     }), "utf8");
   }
@@ -129,8 +132,54 @@ async function integrationCheck() {
     await writeRun(outputsDir, "pocheon_glamping_20260801_143532", {
       keyword: "포천 글램핑",
       counts: { naverOverall: 44, naverAds: 0, naverRegional: 0 },
+      overallCsv: [
+        "place_id,name,location,availableRooms,totalRooms,overall_rank,category",
+        "1234567,Map Fixture Lodge,경기 포천시 fixture 1,3,5,1,glamping"
+      ].join("\n")
     }, new Date("2026-08-01T05:35:32.000Z"));
     await writeRun(outputsDir, "legacy_glamping_20260731_100000", null, new Date("2026-07-31T01:00:00.000Z"));
+
+    const companyMasterDir = path.join(runtimeRoot, "company_master");
+    await fsp.mkdir(companyMasterDir, { recursive: true });
+    await fsp.writeFile(path.join(companyMasterDir, "companies.json"), JSON.stringify({
+      schemaVersion: 1,
+      updatedAt: "2026-08-01T05:35:32.000Z",
+      companies: {
+        company_map_fixture: {
+          companyId: "company_map_fixture",
+          primaryName: "Map Fixture Lodge",
+          nameKey: "mapfixturelodge",
+          aliases: ["Map Fixture Lodge"],
+          regions: ["포천"],
+          addresses: ["경기 포천시 fixture 1"],
+          placeIds: ["1234567"],
+          sourcePlatformIds: { naver: ["1234567"] },
+          keywords: {},
+          sourceStats: {},
+          runIds: [],
+          sourceRoles: [],
+          collectionSources: [],
+          inventory: {},
+          manualCorrection: {
+            active: true,
+            location: {
+              latitude: 37.9,
+              longitude: 127.2,
+              status: "verified",
+              source: "manual",
+              precision: "rooftop",
+              resolvedAddress: "경기 포천시 fixture 1",
+              geocodedAt: "2026-08-01T05:35:32.000Z"
+            }
+          },
+          createdAt: "2026-08-01T05:35:32.000Z"
+        }
+      },
+      sourceIndex: { "place:1234567": "company_map_fixture" },
+      duplicateResolutions: {},
+      regionReviews: {},
+      regionReviewHistory: []
+    }, null, 2), "utf8");
 
     child = spawn(process.execPath, [path.join(ROOT, "scripts", "glamping_app_server.cjs")], {
       cwd: ROOT,
@@ -175,6 +224,16 @@ async function integrationCheck() {
     ]);
     const emptyRun = await fetch(`${baseUrl}/api/runs/empty_glamping_20260802_120000`, { headers: { cookie } });
     assert.equal(emptyRun.status, 200, "known-empty runs must remain explicitly inspectable");
+    const mapRunResponse = await fetch(`${baseUrl}/api/runs/pocheon_glamping_20260801_143532`, { headers: { cookie } });
+    assert.equal(mapRunResponse.status, 200);
+    const mapRun = await mapRunResponse.json();
+    const availabilityLocation = mapRun.availability.items[0]?.companyProfile?.location;
+    const rankingLocation = mapRun.ranking.items[0]?.companyProfile?.location;
+    assert.equal(availabilityLocation?.lat, 37.9, "company-master location must be applied to availability");
+    assert.equal(rankingLocation?.lat, 37.9, "ranking must be rebuilt after the company-master overlay so the map receives coordinates");
+    const publicMapRun = projectB2BPublicPayload(mapRun);
+    assert.equal(publicMapRun.ranking.items[0]?.companyProfile?.location?.lat, 37.9, "the public projection must preserve the approved map coordinate contract");
+    assert.equal("providerKey" in publicMapRun.ranking.items[0].companyProfile.location, false);
   } finally {
     if (child && child.exitCode === null) {
       child.kill();

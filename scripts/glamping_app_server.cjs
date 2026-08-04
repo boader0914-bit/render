@@ -23,6 +23,17 @@ const {
   normalizeCompanyCategory
 } = require("./lodging_category_profile.cjs");
 const {
+  coordinatePair,
+  locationCandidateFromObservation,
+  publicCompanyLocationSummary
+} = require("./lodging_geocoding_contract.cjs");
+const {
+  createNaverMapsTransientGeocodingService
+} = require("./naver_maps_transient_geocoding.cjs");
+const {
+  createPersistentMonthlyRequestBudget
+} = require("./naver_maps_geocoding_quota.cjs");
+const {
   assertV2PreviewRuntimeEnv,
   isRenderRuntime,
   isV2PreviewRuntime,
@@ -34,6 +45,10 @@ const {
   readJsonFile: readSecureJsonFile,
   updateJsonFile: updateSecureJsonFile
 } = require("./secure_json_store.cjs");
+const {
+  CompanyMasterLockBusyError,
+  withCompanyMasterSharedLock
+} = require("./company_master_shared_lock.cjs");
 const { runResultSelectionProfile } = require("./lodging_run_selection.cjs");
 const {
   calibrateCrawlTiming,
@@ -103,6 +118,7 @@ const CUSTOMER_DB_DIR = path.join(DATA_DIR, "customer_db");
 const TRAFFIC_KEYS_FILE = path.join(CONFIG_DIR, "traffic_api_keys.local.json");
 const LOCATION_CARD_REQUESTS_FILE = path.join(CONFIG_DIR, "location_card_requests.json");
 const LOCATION_SCORE_OVERRIDES_FILE = path.join(CONFIG_DIR, "location_score_overrides.json");
+const NAVER_MAPS_GEOCODING_USAGE_FILE = path.join(CONFIG_DIR, "naver_maps_geocoding_usage.json");
 const LEGACY_B2B_MEMBERS_FILE = path.join(CONFIG_DIR, "b2b_members.json");
 const B2B_MEMBERS_FILE = path.join(CUSTOMER_DB_DIR, "b2b_members.json");
 const HISTORY_DIR = path.join(DATA_DIR, "history");
@@ -115,6 +131,7 @@ const B2B_INTEREST_LODGES_FILE = path.join(CUSTOMER_DB_DIR, "b2b_interest_lodges
 const ACCOUNT_DELETE_REQUESTS_FILE = path.join(CUSTOMER_DB_DIR, "account_delete_requests.json");
 const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
+const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-07-08";
 const UI_ASSET_VERSION = "v2-20260803-ui-release-v33";
@@ -181,6 +198,7 @@ const RATE_LIMIT_POLICIES = {
   accountDelete: { limit: 10, windowMs: 60 * 60 * 1000 },
   b2bSearch: { limit: 12, windowMs: 5 * 60 * 1000 },
   b2bMyLodgeCollect: { limit: 10, windowMs: 10 * 60 * 1000 },
+  b2bMapGeocoding: { limit: 4, windowMs: 10 * 60 * 1000 },
   b2bInterestLodgeSave: { limit: 60, windowMs: 10 * 60 * 1000 },
   adminCrawl: { limit: 20, windowMs: 10 * 60 * 1000 },
   adminTourism: { limit: 30, windowMs: 10 * 60 * 1000 }
@@ -3344,6 +3362,7 @@ async function securityHardeningOverview() {
       signupCheck: { limit: RATE_LIMIT_POLICIES.signupCheck.limit, minutes: Math.round(RATE_LIMIT_POLICIES.signupCheck.windowMs / 60000) },
       accountDelete: { limit: RATE_LIMIT_POLICIES.accountDelete.limit, minutes: Math.round(RATE_LIMIT_POLICIES.accountDelete.windowMs / 60000) },
       b2bSearch: { limit: RATE_LIMIT_POLICIES.b2bSearch.limit, minutes: Math.round(RATE_LIMIT_POLICIES.b2bSearch.windowMs / 60000) },
+      b2bMapGeocoding: { limit: RATE_LIMIT_POLICIES.b2bMapGeocoding.limit, minutes: Math.round(RATE_LIMIT_POLICIES.b2bMapGeocoding.windowMs / 60000) },
       b2bInterestLodgeSave: { limit: RATE_LIMIT_POLICIES.b2bInterestLodgeSave.limit, minutes: Math.round(RATE_LIMIT_POLICIES.b2bInterestLodgeSave.windowMs / 60000) },
       adminCrawl: { limit: RATE_LIMIT_POLICIES.adminCrawl.limit, minutes: Math.round(RATE_LIMIT_POLICIES.adminCrawl.windowMs / 60000) },
       activeBucketCount: activeRateLimitBuckets
@@ -3364,6 +3383,7 @@ async function securityHardeningOverview() {
         "/api/b2b-search/status",
         "/api/b2b-search/cancel",
         "/api/b2b-my-lodge-collect",
+        "/api/b2b-map/geocode",
         "/api/member/search-history",
         "/api/member/interest-lodges",
         "/api/member/runs/:runId"
@@ -8033,11 +8053,138 @@ function manualCorrectionHasValue(correction = {}) {
   if (!correction || correction.active === false) return false;
   const note = String(correction.note || "").trim();
   const category = sanitizeManualCategoryCorrection(correction);
+  const hasLocationInput = Boolean(
+    correction.location && typeof correction.location === "object" && !Array.isArray(correction.location)
+  ) || ["latitude", "longitude", "lat", "lon", "lng"].some((key) => (
+    Object.prototype.hasOwnProperty.call(correction, key)
+    && correction[key] !== null
+    && correction[key] !== undefined
+    && correction[key] !== ""
+  ));
   return manualCorrectionHasBasis(correction)
     || manualCorrectionRoomSegments(correction).length > 0
     || manualCorrectionMetaHasValue(correction)
     || Boolean(category.primaryCategoryKey || category.categoryTags.length || category.categoryNote)
+    || hasLocationInput
     || note.length > 0;
+}
+
+function manualCorrectionCoordinate(correction = {}) {
+  if (!correction || typeof correction !== "object") return null;
+  const raw = correction.location && typeof correction.location === "object" && !Array.isArray(correction.location)
+    ? correction.location
+    : correction;
+  return coordinatePair(
+    raw.latitude ?? raw.lat,
+    raw.longitude ?? raw.lon ?? raw.lng
+  );
+}
+
+function sameCompanyCoordinate(left = {}, right = {}) {
+  const leftPoint = coordinatePair(
+    left?.latitude ?? left?.lat,
+    left?.longitude ?? left?.lon ?? left?.lng
+  );
+  return Boolean(
+    leftPoint
+    && right
+    && Math.abs(leftPoint.latitude - right.latitude) <= 1e-7
+    && Math.abs(leftPoint.longitude - right.longitude) <= 1e-7
+  );
+}
+
+function clearMirroredManualCompanyLocation(company = {}, correction = {}) {
+  for (const field of ["location", "geocoding"]) {
+    const value = company[field];
+    if (value && String(value.source || "").toLowerCase() === "manual") {
+      delete company[field];
+    }
+  }
+  if (Array.isArray(company.coordinates)) {
+    company.coordinates = company.coordinates.filter((value) => String(value?.source || "").toLowerCase() !== "manual");
+  }
+}
+
+function legacyManualCorrection(company = {}) {
+  if (company.manualCorrection?.active === false) return null;
+  const candidates = [
+    company.location,
+    company.geocoding,
+    ...([...(company.coordinates || [])].reverse())
+  ];
+  const raw = candidates.find((candidate) => (
+    candidate
+    && String(candidate.source || "").toLowerCase() === "manual"
+    && manualCorrectionCoordinate(candidate)
+  ));
+  if (!raw) return null;
+  const point = manualCorrectionCoordinate(raw);
+  return {
+    active: true,
+    location: {
+      ...raw,
+      ...point,
+      status: "verified",
+      source: "manual"
+    },
+    updatedAt: raw.geocodedAt || raw.observedAt || raw.updatedAt || ""
+  };
+}
+
+function companyManualCorrectionRecord(company = {}) {
+  const explicit = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : null;
+  const legacy = legacyManualCorrection(company);
+  return mergeManualCorrectionRecords(explicit, legacy);
+}
+
+const MANUAL_LOCATION_FIELDS = Object.freeze([
+  "location",
+  "latitude",
+  "longitude",
+  "lat",
+  "lon",
+  "lng",
+  "locationPrecision",
+  "resolvedAddress",
+  "locationUpdatedAt"
+]);
+
+function manualCorrectionFieldHasValue(value) {
+  if (value === null || value === undefined || value === "") return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function mergeManualCorrectionRecords(targetValue = null, sourceValue = null) {
+  const target = manualCorrectionHasValue(targetValue) ? targetValue : null;
+  const source = manualCorrectionHasValue(sourceValue) ? sourceValue : null;
+  if (!target && !source) return null;
+  if (!target) return { ...source };
+  if (!source) return { ...target };
+
+  const targetPoint = manualCorrectionCoordinate(target);
+  const sourcePoint = manualCorrectionCoordinate(source);
+  if (targetPoint && sourcePoint && !sameCompanyCoordinate(targetPoint, sourcePoint)) {
+    const error = new Error("conflicting manual company locations require explicit duplicate review");
+    error.statusCode = 409;
+    throw error;
+  }
+
+  const merged = { ...target, active: true };
+  for (const [key, value] of Object.entries(source)) {
+    if (MANUAL_LOCATION_FIELDS.includes(key)) continue;
+    if (!manualCorrectionFieldHasValue(merged[key]) && manualCorrectionFieldHasValue(value)) {
+      merged[key] = value;
+    }
+  }
+  if (!targetPoint && sourcePoint) {
+    for (const key of MANUAL_LOCATION_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(source, key)) merged[key] = source[key];
+    }
+  }
+  merged.updatedAt = [target.updatedAt, source.updatedAt].filter(Boolean).sort().at(-1) || "";
+  return merged;
 }
 
 function manualCorrectionHasBasis(correction = {}) {
@@ -8377,30 +8524,95 @@ function emptyCompanyMaster() {
   };
 }
 
-async function readCompanyMaster() {
-  try {
-    const parsed = JSON.parse((await fsp.readFile(COMPANY_MASTER_FILE, "utf8")).replace(/^\uFEFF/, ""));
-    return {
-      ...emptyCompanyMaster(),
-      ...parsed,
-      companies: parsed.companies || {},
-      sourceIndex: parsed.sourceIndex || {},
-      duplicateResolutions: parsed.duplicateResolutions || {},
-      regionReviews: parsed.regionReviews || {},
-      regionReviewHistory: Array.isArray(parsed.regionReviewHistory) ? parsed.regionReviewHistory : []
-    };
-  } catch {
-    return emptyCompanyMaster();
+function normalizeCompanyMasterDocument(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("company master must be a JSON object");
   }
+  if (value.companies !== undefined && (!value.companies || typeof value.companies !== "object" || Array.isArray(value.companies))) {
+    throw new Error("company master companies must be an object");
+  }
+  return {
+    ...emptyCompanyMaster(),
+    ...value,
+    companies: value.companies || {},
+    sourceIndex: value.sourceIndex || {},
+    duplicateResolutions: value.duplicateResolutions || {},
+    regionReviews: value.regionReviews || {},
+    regionReviewHistory: Array.isArray(value.regionReviewHistory) ? value.regionReviewHistory : []
+  };
+}
+
+function validateCompanyMasterDocument(value) {
+  const normalized = normalizeCompanyMasterDocument(value);
+  for (const [companyId, company] of Object.entries(normalized.companies)) {
+    if (!company || typeof company !== "object" || Array.isArray(company)) {
+      throw new Error(`company master entry ${companyId} must be an object`);
+    }
+  }
+  return true;
+}
+
+function companyMasterDocumentHash(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(normalizeCompanyMasterDocument(value))).digest("hex");
+}
+
+function attachCompanyMasterReadHash(master, hash) {
+  Object.defineProperty(master, COMPANY_MASTER_READ_HASH, {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: hash
+  });
+  return master;
+}
+
+async function readCompanyMaster() {
+  const parsed = await readSecureJsonFile(COMPANY_MASTER_FILE, {
+    defaultValue: emptyCompanyMaster,
+    validator: validateCompanyMasterDocument
+  });
+  const master = normalizeCompanyMasterDocument(parsed);
+  return attachCompanyMasterReadHash(master, companyMasterDocumentHash(master));
 }
 
 async function writeCompanyMaster(master) {
+  const expectedHash = master?.[COMPANY_MASTER_READ_HASH];
+  if (!expectedHash) throw new Error("company master update requires a verified read snapshot");
   await fsp.mkdir(COMPANY_MASTER_DIR, { recursive: true });
-  const next = { ...master, updatedAt: new Date().toISOString() };
-  master.updatedAt = next.updatedAt;
-  const tempPath = `${COMPANY_MASTER_FILE}.${process.pid}.tmp`;
-  await fsp.writeFile(tempPath, JSON.stringify(next, null, 2), "utf8");
-  await fsp.rename(tempPath, COMPANY_MASTER_FILE);
+  try {
+    return await withCompanyMasterSharedLock(COMPANY_MASTER_FILE, {
+      allowedRoot: PREVIEW_DATA_ROOT || DATA_DIR,
+      allowMissingTarget: true,
+      purpose: "server-company-master-write",
+      timeoutMs: 3000,
+      pollIntervalMs: 50
+    }, async () => {
+      const nextUpdatedAt = new Date().toISOString();
+      const persisted = await updateSecureJsonFile(COMPANY_MASTER_FILE, (currentValue) => {
+        const current = normalizeCompanyMasterDocument(currentValue);
+        if (companyMasterDocumentHash(current) !== expectedHash) {
+          const error = new Error("company master changed during update; retry with a fresh snapshot");
+          error.statusCode = 409;
+          throw error;
+        }
+        const next = normalizeCompanyMasterDocument({ ...master, updatedAt: nextUpdatedAt });
+        validateCompanyMasterDocument(next);
+        return next;
+      }, {
+        defaultValue: emptyCompanyMaster,
+        validator: validateCompanyMasterDocument
+      });
+      Object.assign(master, persisted);
+      attachCompanyMasterReadHash(master, companyMasterDocumentHash(persisted));
+      return master;
+    });
+  } catch (error) {
+    if (error instanceof CompanyMasterLockBusyError || error?.code === "COMPANY_MASTER_LOCK_BUSY") {
+      error.statusCode = 503;
+      error.retryAfterSeconds = 1;
+    }
+    throw error;
+  }
 }
 
 function companySourceKeys(entity = {}) {
@@ -8423,6 +8635,30 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const looseNameKey = normalizeCompanyLooseName(name);
   const addressKey = normalizeAddressKey(address);
   const regionKey = normalizeCompanyIdentityName(region);
+  const itemLocation = item.location && typeof item.location === "object" && !Array.isArray(item.location)
+    ? item.location
+    : {};
+  // Only coordinates explicitly attached to the collected company item are
+  // eligible. In particular, request context such as NOL's `userLocation`
+  // describes the search origin and must never become an accommodation point.
+  const location = locationCandidateFromObservation({
+    location: {
+      latitude: itemLocation.latitude ?? itemLocation.lat ?? item.latitude ?? item.lat,
+      longitude: itemLocation.longitude ?? itemLocation.lon ?? itemLocation.lng ?? item.longitude ?? item.lon ?? item.lng,
+      status: itemLocation.status || item.locationStatus || "resolved",
+      precision: itemLocation.precision || item.locationPrecision || "unknown",
+      source: "provider",
+      confidence: itemLocation.confidence ?? item.locationConfidence,
+      resolvedAddress: itemLocation.resolvedAddress || address,
+      addressFingerprint: itemLocation.addressFingerprint || "",
+      geocodedAt: itemLocation.geocodedAt || itemLocation.observedAt || item.locationObservedAt || collectedAt
+    }
+  }, {
+    address,
+    defaultSource: "provider",
+    defaultStatus: "resolved",
+    observedAt: collectedAt
+  });
   const observation = standardizeCompanyObservation({
     sourcePlatform: item.sourcePlatform || item.channel || (placeId ? "naver" : ""),
     sourceId: item.sourceId || item.platformId || placeId || bookingBusinessId,
@@ -8430,8 +8666,9 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     address,
     region,
     phone: item.phone || item.telephone || item.tel,
-    latitude: item.latitude ?? item.lat,
-    longitude: item.longitude ?? item.lng,
+    latitude: location?.latitude ?? item.latitude ?? item.lat,
+    longitude: location?.longitude ?? item.longitude ?? item.lon ?? item.lng,
+    location,
     requestedCategoryKey: item.requestedLodgingCategoryKey || run.lodgingCategoryKey,
     detectedCategoryKey: item.detectedLodgingCategoryKey || item.lodgingCategoryKey,
     categoryTags: item.detectedLodgingCategoryTags || item.categoryTags,
@@ -8456,6 +8693,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     placeId,
     bookingBusinessId,
     observation,
+    location,
     sourceKeys,
     url: item.url || "",
     rank: item.rank ?? null,
@@ -8517,6 +8755,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
 
 function createCompanyRecord(companyId, entity) {
   const now = entity.collectedAt || new Date().toISOString();
+  const location = entity.location || null;
   return {
     companyId,
     primaryName: entity.name || "업체명 확인",
@@ -8527,6 +8766,7 @@ function createCompanyRecord(companyId, entity) {
     bookingBusinessIds: boundedUnique([entity.bookingBusinessId]),
     regions: boundedUnique([entity.region]),
     addresses: boundedUnique([entity.address]),
+    location,
     urls: boundedUnique([entity.url]),
     firstSeenAt: now,
     lastSeenAt: now,
@@ -8557,7 +8797,7 @@ function createCompanyRecord(companyId, entity) {
     sourcePlatforms: [],
     sourcePlatformIds: {},
     phones: [],
-    coordinates: [],
+    coordinates: location ? [{ ...location }] : [],
     duplicateNotes: []
   };
 }
@@ -8742,7 +8982,13 @@ function upsertCompanyKeywordExposure(company, entity) {
 }
 
 function updateCompanyInventory(company, entity) {
-  const inventory = company.inventory || { latest: {}, structureCounts: {}, confidenceCounts: {}, runIds: [] };
+  const inventory = {
+    ...(company.inventory && typeof company.inventory === "object" ? company.inventory : {}),
+    latest: company.inventory?.latest && typeof company.inventory.latest === "object" ? company.inventory.latest : {},
+    structureCounts: company.inventory?.structureCounts && typeof company.inventory.structureCounts === "object" ? company.inventory.structureCounts : {},
+    confidenceCounts: company.inventory?.confidenceCounts && typeof company.inventory.confidenceCounts === "object" ? company.inventory.confidenceCounts : {},
+    runIds: Array.isArray(company.inventory?.runIds) ? company.inventory.runIds : []
+  };
   const alreadyCounted = entity.runId && (inventory.runIds || []).includes(entity.runId);
   const currentLatest = inventory.latest || {};
   const isSameRun = Boolean(entity.runId && currentLatest.runId && entity.runId === currentLatest.runId);
@@ -9061,6 +9307,38 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
   const activeKeyword = activeKeywordKey ? keywords.find((row) => row.keywordKey === activeKeywordKey) : null;
   const exposureLayer = companyExposureLayerFromKeywords(keywords);
   const categoryProfile = normalizeCompanyCategory(company);
+  const rawLocationReview = company.locationReview && typeof company.locationReview === "object"
+    ? company.locationReview
+    : null;
+  const currentReviewPoint = coordinatePair(
+    rawLocationReview?.current?.latitude,
+    rawLocationReview?.current?.longitude
+  );
+  const candidateReviewPoint = coordinatePair(
+    rawLocationReview?.candidate?.latitude,
+    rawLocationReview?.candidate?.longitude
+  );
+  const locationReview = rawLocationReview?.reason === "automatic_coordinate_conflict"
+    ? {
+        status: rawLocationReview.status === "pending" ? "pending" : "pending",
+        reason: "automatic_coordinate_conflict",
+        distanceMeters: Number.isFinite(rawLocationReview.distanceMeters)
+          ? Math.max(0, Math.round(rawLocationReview.distanceMeters))
+          : null,
+        current: currentReviewPoint ? {
+          lat: currentReviewPoint.latitude,
+          lon: currentReviewPoint.longitude,
+          source: String(rawLocationReview.current?.source || "legacy").slice(0, 32),
+          observedAt: String(rawLocationReview.current?.observedAt || "").slice(0, 40)
+        } : null,
+        candidate: candidateReviewPoint ? {
+          lat: candidateReviewPoint.latitude,
+          lon: candidateReviewPoint.longitude,
+          source: String(rawLocationReview.candidate?.source || "legacy").slice(0, 32),
+          observedAt: String(rawLocationReview.candidate?.observedAt || "").slice(0, 40)
+        } : null
+      }
+    : null;
   return {
     companyId: company.companyId,
     primaryName: company.primaryName,
@@ -9069,6 +9347,8 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     bookingBusinessIds: company.bookingBusinessIds || [],
     regions,
     addresses: (company.addresses || []).slice(0, 3),
+    location: publicCompanyLocationSummary(company),
+    locationReview,
     firstSeenAt: company.firstSeenAt,
     lastSeenAt: company.lastSeenAt,
     runCount: (company.runIds || []).length,
@@ -10495,6 +10775,12 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
   for (const sourceId of ids.slice(1)) {
     const source = master.companies[sourceId];
     if (!source) continue;
+    // Resolve all manual-field conflicts before mutating either company. A
+    // source record must never be deleted while holding the only manual point.
+    const mergedManualCorrection = mergeManualCorrectionRecords(
+      companyManualCorrectionRecord(target),
+      companyManualCorrectionRecord(source)
+    );
     target.aliases = boundedUnique([...(target.aliases || []), ...(source.aliases || []), source.primaryName], 40);
     target.placeIds = boundedUnique([...(target.placeIds || []), ...(source.placeIds || [])], 30);
     target.bookingBusinessIds = boundedUnique([...(target.bookingBusinessIds || []), ...(source.bookingBusinessIds || [])], 30);
@@ -10526,9 +10812,8 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
       target.keywords[keywordKey] = mergeCompanyKeyword(target.keywords[keywordKey], sourceKeyword);
     }
     target.inventory = mergeCompanyInventory(target.inventory || {}, source.inventory || {});
-    if (!manualCorrectionHasValue(target.manualCorrection) && manualCorrectionHasValue(source.manualCorrection)) {
-      target.manualCorrection = source.manualCorrection;
-    }
+    if (mergedManualCorrection) target.manualCorrection = mergedManualCorrection;
+    clearMirroredManualCompanyLocation(target, mergedManualCorrection || {});
     Object.assign(target, mergeCompanyCategoryProfiles(target, source));
     target.channelExposures = mergeCompanyChannelExposures(target.channelExposures || {}, source.channelExposures || source.channelExposure || {});
     target.channelExposureHistory = [
@@ -10621,8 +10906,19 @@ async function saveCompanyManualCorrection(payload = {}) {
   const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
   const roomSegments = sanitizeManualCorrectionRoomSegments(payload.roomSegments);
   const correctionMeta = sanitizeManualCorrectionMeta(payload);
-  const categoryCorrection = sanitizeManualCategoryCorrection(payload, company.manualCorrection || {});
+  const storedCorrection = company.manualCorrection && typeof company.manualCorrection === "object"
+    ? company.manualCorrection
+    : {};
+  const categoryCorrection = sanitizeManualCategoryCorrection(payload, storedCorrection);
+  const existingCorrection = storedCorrection.active !== false
+    ? storedCorrection
+    : {};
+  const preservedLocation = {};
+  for (const key of ["location", "latitude", "longitude", "lat", "lon", "lng", "locationPrecision", "resolvedAddress", "locationUpdatedAt"]) {
+    if (Object.prototype.hasOwnProperty.call(existingCorrection, key)) preservedLocation[key] = existingCorrection[key];
+  }
   const nextCorrection = {
+    ...preservedLocation,
     active: true,
     lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
     dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
@@ -10635,6 +10931,7 @@ async function saveCompanyManualCorrection(payload = {}) {
   };
   const shouldClear = payload.active === false || !manualCorrectionHasValue(nextCorrection);
   if (shouldClear) {
+    clearMirroredManualCompanyLocation(company, storedCorrection);
     company.manualCorrection = null;
   } else {
     company.manualCorrection = nextCorrection;
@@ -12521,7 +12818,9 @@ async function loadRun(runId, options = {}) {
       ]
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
-  const datalabTrend = await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
+  const datalabTrend = options.skipTraffic === true
+    ? null
+    : await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
@@ -12613,6 +12912,11 @@ async function loadRun(runId, options = {}) {
       corrected: 0
     }));
   }
+
+  // Company-master overlays are applied to availability items. Rebuild the
+  // ranking projection afterwards so the B2B map, list, and detail views all
+  // receive the same public companyProfile/location contract.
+  result.ranking = summarizeRankingRows(overallRows, adRows, regionalRows, result.availability);
 
   if (!options.skipHistory) {
     let history = await summarizeHistoryForRun(result);
@@ -13417,6 +13721,42 @@ async function route(req, res) {
       return send(res, 200, await saveB2BInterestLodgesForSession(session, payload));
     }
 
+    if (req.method === "POST" && reqUrl.pathname === "/api/b2b-map/geocode") {
+      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
+        return sendForbidden(req, res, "B2B 계정의 명시적 지도 조회에서만 사용할 수 있습니다.");
+      }
+      assertRequestRateLimit(
+        req,
+        "b2bMapGeocoding",
+        RATE_LIMIT_POLICIES.b2bMapGeocoding,
+        session.username || session.memberId || ""
+      );
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      const runId = String(payload.runId || "").trim();
+      if (!/^[a-z0-9._-]{1,160}$/i.test(runId)) {
+        return send(res, 400, { error: "지도 조회 실행 ID가 올바르지 않습니다." });
+      }
+      const history = await readB2BSearchHistoryStore();
+      const allowed = history.entries.some((entry) => entry.runId === runId && memberMatchesSession(entry, session));
+      if (!allowed) return sendForbidden(req, res, "본인 검색 이력의 지도만 조회할 수 있습니다.");
+      const data = await loadRun(runId, {
+        skipCompanyMaster: true,
+        skipHistory: true,
+        applyCompanyMaster: true,
+        skipTraffic: true,
+      });
+      if (!data) return notFound(res);
+      const result = await naverMapsTransientGeocoding.resolveRunItemsForDisplay({
+        runData: data,
+        itemIndexes: payload.itemIndexes
+      });
+      return send(res, 200, result, "application/json; charset=utf-8", {
+        Pragma: "no-cache",
+        Expires: "0",
+        "X-Naver-Maps-Usage": "single-display"
+      });
+    }
+
     if (req.method === "GET" && reqUrl.pathname.startsWith("/api/member/runs/")) {
       const runId = decodeURIComponent(reqUrl.pathname.replace("/api/member/runs/", ""));
       const history = await readB2BSearchHistoryStore();
@@ -13670,6 +14010,16 @@ async function route(req, res) {
 const server = http.createServer((req, res) => {
   route(req, res);
 });
+const naverMapsGeocodingBudget = createPersistentMonthlyRequestBudget({
+  filePath: NAVER_MAPS_GEOCODING_USAGE_FILE,
+  limit: process.env.NAVER_MAPS_GEOCODING_MONTHLY_LIMIT
+});
+const naverMapsTransientGeocoding = createNaverMapsTransientGeocodingService({
+  env: process.env,
+  request: (...args) => fetch(...args),
+  budget: naverMapsGeocodingBudget,
+  monthlyLimit: process.env.NAVER_MAPS_GEOCODING_MONTHLY_LIMIT
+});
 
 async function verifyPreviewDataBoundary() {
   if (!PREVIEW_DATA_ROOT) return;
@@ -13722,11 +14072,17 @@ module.exports = {
   startServer,
   __test: {
     CRAWL_RUNTIME_STAGE_DEFS,
+    companyMasterFile: COMPANY_MASTER_FILE,
+    companyRecordSummary,
     crawlExecutionPlan,
     crawlRuntimeRemainingSeconds,
     crawlRuntimeStageRows,
     crawlTimingConditions,
     estimateCrawlCompletion,
-    scaleCrawlStages
+    mergeCompanyRecords,
+    mergeManualCorrectionRecords,
+    readCompanyMaster,
+    scaleCrawlStages,
+    writeCompanyMaster
   }
 };

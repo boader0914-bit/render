@@ -94,6 +94,14 @@ const B2B_PUBLIC_NESTED_FIELDS = new Set([
   "fridayPrice", "saturdayPrice", "sundayPrice"
 ]);
 
+// Location metadata is intentionally scoped to a `location` object. Keeping
+// these names out of the generic nested allowlist prevents a future object
+// with a coincidentally named field from becoming public without review.
+const B2B_PUBLIC_LOCATION_FIELDS = new Set([
+  "status", "statusLabel", "source", "precision", "confidence", "crs",
+  "lat", "lon", "resolvedAddress", "displayAddress", "geocodedAt"
+]);
+
 const B2B_PUBLIC_NUMERIC_MAP_FIELDS = new Set([
   "counts",
   "byCore",
@@ -246,6 +254,24 @@ function trustedClientAddress(req = {}, options = {}) {
 }
 
 function projectB2BPublicValue(value, parentKey = "") {
+  if (parentKey === "location") {
+    if (value === null || ["number", "boolean"].includes(typeof value)) return value;
+    if (typeof value === "string") return B2B_LOCAL_PATH_VALUE.test(value.trim()) ? undefined : value;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const location = {};
+    for (const [key, entryValue] of Object.entries(value)) {
+      if (!B2B_PUBLIC_LOCATION_FIELDS.has(key) || B2B_FORBIDDEN_PUBLIC_KEY.test(key)) continue;
+      if (entryValue === null || typeof entryValue === "boolean") {
+        location[key] = entryValue;
+      } else if (typeof entryValue === "number" && Number.isFinite(entryValue)) {
+        location[key] = entryValue;
+      } else if (typeof entryValue === "string" && !B2B_LOCAL_PATH_VALUE.test(entryValue.trim())) {
+        location[key] = entryValue;
+      }
+    }
+    return location;
+  }
+
   if (B2B_PUBLIC_NUMERIC_MAP_FIELDS.has(parentKey)) {
     const allowedKeys = B2B_PUBLIC_NUMERIC_MAP_KEYS.get(parentKey);
     if (!allowedKeys || !value || typeof value !== "object" || Array.isArray(value)) return {};

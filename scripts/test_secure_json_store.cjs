@@ -170,6 +170,51 @@ async function main() {
       "a best-effort directory fsync failure after rename must not report a false write failure"
     );
 
+    const noReplaceCleanupTarget = path.join(tempRoot, "customer_db", "no-replace-cleanup.json");
+    let linkedTempPath = "";
+    const noReplaceCleanupFs = {
+      ...fsp,
+      async link(tempPath, targetPath) {
+        linkedTempPath = String(tempPath);
+        return fsp.link(tempPath, targetPath);
+      },
+      async rm(filePath, options) {
+        if (String(filePath) === linkedTempPath) {
+          const error = new Error("injected post-link temp cleanup failure");
+          error.code = "EIO";
+          throw error;
+        }
+        return fsp.rm(filePath, options);
+      }
+    };
+    const noReplaceCleanupStore = createSecureJsonStore({ fs: noReplaceCleanupFs });
+    await noReplaceCleanupStore.atomicWriteJson(noReplaceCleanupTarget, initial, { validator, noReplace: true });
+    assert.deepEqual(
+      await readJsonFile(noReplaceCleanupTarget, { validator }),
+      initial,
+      "post-link temp cleanup failure must not report a false no-replace commit failure"
+    );
+
+    const noReplaceChmodTarget = path.join(tempRoot, "customer_db", "no-replace-target-chmod.json");
+    const noReplaceChmodFs = {
+      ...fsp,
+      async chmod(filePath, mode) {
+        if (path.resolve(String(filePath)) === path.resolve(noReplaceChmodTarget)) {
+          const error = new Error("injected post-link target chmod failure");
+          error.code = "EIO";
+          throw error;
+        }
+        return fsp.chmod(filePath, mode);
+      }
+    };
+    const noReplaceChmodStore = createSecureJsonStore({ fs: noReplaceChmodFs });
+    await noReplaceChmodStore.atomicWriteJson(noReplaceChmodTarget, initial, { validator, noReplace: true });
+    assert.deepEqual(
+      await readJsonFile(noReplaceChmodTarget, { validator }),
+      initial,
+      "no-replace commit must not perform a failure-prone chmod after the hard-link commit point"
+    );
+
     await assert.rejects(
       () => atomicWriteJson(target, { counter: -1, events: [] }, { validator }),
       /AssertionError|failed validation/

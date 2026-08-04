@@ -58,6 +58,127 @@ const sameByAddress = standardizeCompanyObservation({
 });
 assert.equal(decideCompanyMatch(sameByAddress, [baseCompany]).decision, "merge");
 
+const coordinateObservation = standardizeCompanyObservation({
+  sourcePlatform: "nol",
+  sourceId: "nol-coordinate",
+  name: baseCompany.primaryName,
+  address: baseCompany.addresses[0],
+  region: baseCompany.regions[0],
+  latitude: 35.5001,
+  longitude: 128.1001,
+  observedAt: at
+});
+const outsideServiceCoordinate = standardizeCompanyObservation({
+  sourcePlatform: "nol",
+  sourceId: "nol-outside-service-area",
+  name: baseCompany.primaryName,
+  address: baseCompany.addresses[0],
+  region: baseCompany.regions[0],
+  latitude: 37.7749,
+  longitude: -122.4194,
+  observedAt: at
+});
+assert.equal(outsideServiceCoordinate.location, null);
+assert.equal(outsideServiceCoordinate.latitude, null);
+assert.equal(outsideServiceCoordinate.longitude, null);
+const outsideApplied = applyObservationToCompany(baseCompany, outsideServiceCoordinate).company;
+assert.equal((outsideApplied.coordinates || []).length, 0, "coordinates rejected by the shared Korea service boundary must not be resurrected by identity storage");
+
+const manualLocationCompany = {
+  ...baseCompany,
+  manualCorrection: {
+    active: true,
+    location: {
+      latitude: 37.9001,
+      longitude: 127.2001,
+      status: "verified",
+      source: "manual"
+    }
+  },
+  location: {
+    latitude: 37.9001,
+    longitude: 127.2001,
+    status: "verified",
+    source: "manual"
+  }
+};
+const manualLocationApplied = applyObservationToCompany(manualLocationCompany, coordinateObservation).company;
+assert.equal(manualLocationApplied.manualCorrection.location.source, "manual");
+assert.equal(manualLocationApplied.location.source, "provider", "an active manual correction must not be mirrored into the automatic top-level location projection");
+const farAutomaticObservation = standardizeCompanyObservation({
+  sourcePlatform: "naver",
+  sourceId: "far-automatic-coordinate",
+  name: baseCompany.primaryName,
+  address: baseCompany.addresses[0],
+  region: baseCompany.regions[0],
+  latitude: 35.82,
+  longitude: 128.42,
+  observedAt: "2026-07-31T10:00:00.000Z"
+});
+const automaticThenManual = {
+  ...baseCompany,
+  location: {
+    latitude: 35.5001,
+    longitude: 128.1001,
+    status: "resolved",
+    source: "provider",
+    geocodedAt: "2026-07-29T00:00:00.000Z"
+  },
+  coordinates: [
+    { latitude: 35.5001, longitude: 128.1001, status: "resolved", source: "provider", observedAt: "2026-07-29T00:00:00.000Z" },
+    { latitude: 37.9002, longitude: 127.2002, status: "verified", source: "manual", observedAt: "2026-07-30T00:00:00.000Z" }
+  ],
+  manualCorrection: {
+    active: true,
+    location: { latitude: 37.9, longitude: 127.2, status: "verified", source: "manual" }
+  }
+};
+const farAutomaticApplied = applyObservationToCompany(automaticThenManual, farAutomaticObservation).company;
+assert.equal(farAutomaticApplied.location.latitude, 35.5001, "a far automatic candidate must not silently move the stored automatic marker");
+assert.equal(farAutomaticApplied.location.source, "provider");
+assert.equal(farAutomaticApplied.locationReview.status, "pending", "a rejected far automatic coordinate must create an explicit review state");
+assert.equal(farAutomaticApplied.locationReview.reason, "automatic_coordinate_conflict");
+assert.equal(farAutomaticApplied.manualCorrection.location.source, "manual");
+const olderNearObservation = standardizeCompanyObservation({
+  name: baseCompany.primaryName,
+  address: baseCompany.addresses[0],
+  region: baseCompany.regions[0],
+  latitude: 35.5002,
+  longitude: 128.1002,
+  observedAt: "2025-01-01T00:00:00.000Z"
+});
+const afterOlderNearObservation = applyObservationToCompany(farAutomaticApplied, olderNearObservation).company;
+assert.equal(afterOlderNearObservation.location.latitude, 35.5001, "an older lower-priority nearby point must not replace the current provider point");
+assert.equal(afterOlderNearObservation.locationReview.reason, "automatic_coordinate_conflict", "an unrelated unaccepted observation must not erase a pending far-coordinate review");
+const staleFirstCoordinateCompany = {
+  ...baseCompany,
+  coordinates: [
+    { latitude: 37.5, longitude: 127.1, observedAt: "2026-07-01T00:00:00.000Z" },
+    { latitude: 35.5002, longitude: 128.1002, observedAt: "2026-07-29T00:00:00.000Z" }
+  ],
+  location: {
+    latitude: 35.5002,
+    longitude: 128.1002,
+    status: "resolved",
+    source: "provider",
+    resolvedAddress: baseCompany.addresses[0],
+    geocodedAt: "2026-07-29T00:00:00.000Z"
+  }
+};
+assert.equal(decideCompanyMatch(coordinateObservation, [staleFirstCoordinateCompany]).decision, "merge", "a stale first coordinate must not hide the latest effective company point");
+const farCoordinateCompany = {
+  ...baseCompany,
+  coordinates: [{ latitude: 37.5, longitude: 127.1 }],
+  location: {
+    latitude: 37.5,
+    longitude: 127.1,
+    status: "resolved",
+    source: "legacy",
+    resolvedAddress: baseCompany.addresses[0]
+  }
+};
+assert.equal(decideCompanyMatch(coordinateObservation, [farCoordinateCompany]).decision, "review", "exact name/address/region with a distant coordinate conflict must be reviewed rather than duplicated");
+
 const phoneCompany = { ...baseCompany, companyId: "cmp_phone", placeIds: [], phones: ["054-123-4567"] };
 const phoneObservation = standardizeCompanyObservation({ sourcePlatform: "ddnayo", name: "블루 풀빌라", phone: "0541234567", region: "경주" });
 assert.equal(phoneKey("+82 54-123-4567"), phoneKey("054-123-4567"));

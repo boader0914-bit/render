@@ -123,6 +123,18 @@ const state = {
   b2bMapViewMode: "map",
   b2bMapSelectedKey: "",
   b2bMapReturnFocusKey: "",
+  b2bMapReturnFocusSurface: "",
+  b2bMapTransientLocations: {},
+  b2bMapGeocodingState: "idle",
+  b2bMapGeocodingMessage: "",
+  b2bMapHitResizeObserver: null,
+  b2bMapHitResizeFrame: 0,
+  b2bMapFilters: {
+    locationStatus: "all",
+    boundary: "all",
+    category: "all",
+    platform: "all"
+  },
   memberSearchHistory: [],
   memberSearchQuota: null,
   b2bMemberAdmin: null,
@@ -1124,6 +1136,72 @@ function collectionResultMetricState(value, { applicable = true, observed = true
   if (!applicable || !observed) return "unavailable";
   const number = Number(value);
   return Number.isFinite(number) && number === 0 ? "zero" : "ready";
+}
+
+function sheetMetricPresentation(value, options = {}) {
+  const {
+    observed = false,
+    applicable = true,
+    pending = false,
+    error = false,
+    formatValue,
+    readyText = "",
+    zeroText = "",
+    missingText = "미수집",
+    pendingText = "계산 대기",
+    unavailableText = "해당 없음",
+    errorText = "오류",
+    readyStatus = "확인됨",
+    zeroStatus = "실제 0",
+    missingStatus = "미수집",
+    pendingStatus = "계산 대기",
+    unavailableStatus = "계산 불가",
+    errorStatus = "오류"
+  } = options;
+  const hasValue = value !== null && value !== undefined && value !== "";
+  const number = hasValue ? Number(String(value).replace(/,/g, "")) : NaN;
+  const state = error
+    ? "error"
+    : !applicable
+      ? "unavailable"
+      : pending
+        ? "pending"
+        : !observed || !Number.isFinite(number)
+          ? "missing"
+          : number === 0
+            ? "zero"
+            : "ready";
+  const tone = {
+    ready: "info",
+    zero: "neutral",
+    missing: "neutral",
+    pending: "warning",
+    unavailable: "neutral",
+    error: "danger"
+  }[state] || "neutral";
+  const stateText = {
+    missing: missingText,
+    pending: pendingText,
+    unavailable: unavailableText,
+    error: errorText
+  }[state];
+  const formatted = Number.isFinite(number)
+    ? (typeof formatValue === "function" ? formatValue(number) : String(number))
+    : "";
+  const valueText = state === "ready"
+    ? (readyText || formatted)
+    : state === "zero"
+      ? (zeroText || formatted)
+      : stateText;
+  const statusLabel = {
+    ready: readyStatus,
+    zero: zeroStatus,
+    missing: missingStatus,
+    pending: pendingStatus,
+    unavailable: unavailableStatus,
+    error: errorStatus
+  }[state];
+  return { state, tone, value: Number.isFinite(number) ? number : null, valueText, statusLabel };
 }
 
 function collectionResultCardMeta(card = {}) {
@@ -3759,6 +3837,16 @@ function renderLocationCandidateEvidence(candidate = {}) {
   `;
 }
 
+function knownLodgingCategoryKey(value = "") {
+  const raw = String(value || "").trim();
+  if (LODGING_CATEGORY_PROFILES[raw]) return raw;
+  const compact = compactSearchText(raw);
+  if (!compact) return "";
+  const matched = Object.entries(LODGING_CATEGORY_PROFILES)
+    .find(([key, profile]) => compactSearchText(key) === compact || compactSearchText(profile.label) === compact);
+  return matched ? matched[0] : "";
+}
+
 function clientSearchIntent(keyword = "") {
   const resolver = globalThis.LodgingSearchIntent?.resolveLodgingSearchIntent;
   if (typeof resolver !== "function") return null;
@@ -4428,14 +4516,14 @@ function platformsForItem(item) {
     else rows.push(row);
   };
   if (manualMeta.naverBookingStatus === "visible") {
-    pushManualRow("네이버", "노출", { price: item.price, url: item.url });
+    pushManualRow("네이버", "노출", { price: item.price, url: item.url, sourceStatus: "exposed" });
   } else if (manualMeta.naverBookingStatus === "hidden") {
-    pushManualRow("네이버", "예약 미노출", { url: item.url });
+    pushManualRow("네이버", "예약 미노출", { url: item.url, sourceStatus: "not_found" });
   } else if (manualMeta.naverBookingStatus === "unknown") {
-    pushManualRow("네이버", "확인 필요", { url: item.url });
+    pushManualRow("네이버", "확인 필요", { url: item.url, sourceStatus: "needs_manual" });
   }
   manualMeta.otaChannels.forEach((channel) => {
-    pushManualRow(channel, "노출");
+    pushManualRow(channel, "노출", { sourceStatus: "exposed" });
   });
   const exposureSource = item.companyProfile?.channelExposures || item.companyChannelExposures || {};
   Object.entries(exposureSource).forEach(([channel, exposure]) => {
@@ -4444,6 +4532,7 @@ function platformsForItem(item) {
       url: exposure?.url || "",
       price: exposure?.price || "",
       rank_or_order: exposure?.rank || "",
+      sourceStatus: exposure?.status || "unknown",
       source: exposure?.source || "채널 확인"
     });
   });
@@ -4845,6 +4934,84 @@ function summarizeSales(items = []) {
   }, { sold: 0, supply: 0, daySold: 0, daySupply: 0 });
 }
 
+function revenueObservationProfile(item = {}, kind = "lodging", sales = salesStats(item, kind), basis = "missing") {
+  const isDayUse = kind === "day";
+  const rangeRevenueKeys = isDayUse
+    ? ["dayUseWeeklyEstimatedRevenue", "dayUseWeeklyAdjustedRevenue", "dayUseWeeklyMissingPriceEstimatedRevenue"]
+    : ["weeklyEstimatedRevenue", "weeklyAdjustedRevenue", "weeklyMissingPriceEstimatedRevenue"];
+  const basisRevenueKeys = isDayUse
+    ? ["basisDayUseRevenue", "basisDayUseAdjustedRevenue", "basisDayUseMissingPriceEstimatedRevenue"]
+    : ["basisLodgingRevenue", "basisLodgingAdjustedRevenue", "basisLodgingMissingPriceEstimatedRevenue"];
+  const rangeMissingPriceKey = isDayUse ? "dayUseWeeklyMissingPriceSoldOut" : "weeklyMissingPriceSoldOut";
+  const basisMissingPriceKey = isDayUse ? "basisDayUseMissingPriceSoldOut" : "basisLodgingMissingPriceSoldOut";
+  const selectedRevenueKeys = basis === "range"
+    ? rangeRevenueKeys
+    : basis === "basis"
+      ? basisRevenueKeys
+      : [...rangeRevenueKeys, ...basisRevenueKeys];
+  const selectedMissingPriceKeys = basis === "range"
+    ? [rangeMissingPriceKey]
+    : basis === "basis"
+      ? [basisMissingPriceKey]
+      : [rangeMissingPriceKey, basisMissingPriceKey];
+  const sourceValues = selectedRevenueKeys.map((key) => item[key]);
+  const numericRevenueValues = sourceValues.map(optionalNumber).filter(Number.isFinite);
+  const invalidSource = sourceValues.some((value) => value !== null && value !== undefined && value !== "" && !Number.isFinite(optionalNumber(value)));
+  const positiveRevenue = numericRevenueValues.some((value) => value > 0);
+  const explicitRevenueZero = numericRevenueValues.some((value) => value === 0);
+  const missingPriceQuantity = selectedMissingPriceKeys.reduce((sum, key) => sum + finiteNumber(item[key], 0), 0);
+  const weeklySold = optionalNumber(isDayUse ? item.dayUseWeeklyTotalSoldOut : item.weeklyTotalSoldOut);
+  const weeklySupply = optionalNumber(isDayUse ? item.dayUseWeeklyTotalStock : item.weeklyTotalStock);
+  const weeklyQuantityObserved = Number.isFinite(weeklySold) && Number.isFinite(weeklySupply) && weeklySupply > 0;
+  const rangeRows = weeklyRows(item, isDayUse ? "day" : "lodging");
+  const rangeQuantityObserved = rangeRows
+    .some((row) => finiteNumber(row.total, 0) > 0 && Number.isFinite(optionalNumber(row.sold)));
+  const basisTotal = optionalNumber(isDayUse
+    ? item.dayUseTotalStock
+    : (item.nightTotalStock ?? item.totalRooms));
+  const basisAvailable = optionalNumber(isDayUse
+    ? item.dayUseAvailableStock
+    : (item.nightAvailableStock ?? item.availableRooms));
+  const basisQuantityObserved = Number.isFinite(basisTotal) && basisTotal > 0 && Number.isFinite(basisAvailable);
+  const manualDayUseBasis = optionalNumber(
+    item.companyManualCorrection?.dayUseBasisTotal ?? item.companyProfile?.manualCorrection?.dayUseBasisTotal
+  );
+  const rangeScopeObserved = Boolean(
+    finiteNumber(isDayUse ? item.dayUseWeeklyDays : item.weeklyDays, 0) > 0 ||
+    (Number.isFinite(weeklySupply) && weeklySupply > 0) ||
+    rangeRows.length > 0
+  );
+  const basisScopeObserved = Boolean(
+    finiteNumber(isDayUse ? item.dayUseItemCount : item.nightItemCount, 0) > 0 ||
+    finiteNumber(isDayUse ? item.dayUseCountedItemCount : item.countedItemCount, 0) > 0 ||
+    (Number.isFinite(basisTotal) && basisTotal > 0) ||
+    (isDayUse && Number.isFinite(manualDayUseBasis) && manualDayUseBasis > 0)
+  );
+  const scopeObserved = basis === "range"
+    ? rangeScopeObserved
+    : basis === "basis"
+      ? basisScopeObserved
+      : rangeScopeObserved || basisScopeObserved;
+  const quantityObserved = basis === "range"
+    ? weeklyQuantityObserved || rangeQuantityObserved
+    : basis === "basis"
+      ? basisQuantityObserved
+      : weeklyQuantityObserved || rangeQuantityObserved || basisQuantityObserved;
+  const sold = finiteNumber(sales.sold, 0);
+  const soldObservedZero = scopeObserved && quantityObserved && sold === 0 && explicitRevenueZero && missingPriceQuantity === 0;
+  const revenueObserved = positiveRevenue || soldObservedZero;
+  const revenuePending = !invalidSource && scopeObserved && !revenueObserved;
+  return {
+    revenueObserved,
+    quantityObserved,
+    applicable: true,
+    soldObservedZero,
+    revenuePending,
+    revenueError: invalidSource,
+    scopeObserved
+  };
+}
+
 function itemRevenueStats(item = {}, kind = "lodging") {
   const sales = salesStats(item, kind === "day" ? "day" : "lodging");
   const unit = kind === "day" ? "회" : "개";
@@ -4883,7 +5050,8 @@ function itemRevenueStats(item = {}, kind = "lodging") {
       detail: weeklyDetail || "",
       byDayType: weeklyByDay || "",
       offlineDetail: weeklyOffline || "",
-      basis: "range"
+      basis: "range",
+      ...revenueObservationProfile(item, kind, sales, "range")
     };
   }
 
@@ -4916,7 +5084,8 @@ function itemRevenueStats(item = {}, kind = "lodging") {
       detail: "",
       byDayType: "",
       offlineDetail: "",
-      basis: "basis"
+      basis: "basis",
+      ...revenueObservationProfile(item, kind, sales, "basis")
     };
   }
 
@@ -4936,7 +5105,8 @@ function itemRevenueStats(item = {}, kind = "lodging") {
     detail: "",
     byDayType: "",
     offlineDetail: "",
-    basis: "missing"
+    basis: "missing",
+    ...revenueObservationProfile(item, kind, sales, "missing")
   };
 }
 
@@ -13265,12 +13435,6 @@ function b2bStrategyBoardModel(brief = b2bMarketBriefModel(), revenueModel = b2b
   const revenueReady = revenueModel.revenueRows.length > 0;
   const priceCoverage = revenueModel.priceCoverage;
   const offlineQuantity = finiteNumber(revenueModel.offlineQuantityTotal, 0);
-  const sampleCount = Math.max(0, Math.round(finiteNumber(rankModel.rows?.length || brief.itemCount, 0)));
-  const competitionReady = sampleCount > 0;
-  const reservationReady = Number.isFinite(actualReservationRate) && finiteNumber(brief.salesSampleCount, 0) > 0;
-  const demandReady = Boolean(trend.hasSeries && String(nextDemand.value || "").trim());
-  const completedAt = brief.run?.completedAt || brief.run?.endedAt || brief.run?.createdAt || brief.run?.startedAt || "";
-  const analysisPeriod = brief.longRange || brief.range || b2bDateRangeLabel(brief.run || {}) || "기간 확인 필요";
   const weekendRate = revenueModel.weekend?.rate;
   const weekdayRate = revenueModel.flow?.weekday?.rate;
   let decision = {
@@ -13434,6 +13598,12 @@ function b2bSimpleSummaryModel(
   const actualReservationRate = Number.isFinite(brief.rate)
     ? brief.rate
     : (Number.isFinite(rankModel.rate) ? rankModel.rate : NaN);
+  const sampleCount = Math.max(0, Math.round(finiteNumber(rankModel.rows?.length || brief.itemCount, 0)));
+  const competitionReady = sampleCount > 0;
+  const reservationReady = Number.isFinite(actualReservationRate) && finiteNumber(brief.salesSampleCount, 0) > 0;
+  const demandReady = Boolean(trend.hasSeries && String(nextDemand.value || "").trim());
+  const completedAt = brief.run?.completedAt || brief.run?.endedAt || brief.run?.createdAt || brief.run?.startedAt || "";
+  const analysisPeriod = brief.longRange || brief.range || b2bDateRangeLabel(brief.run || {}) || "기간 확인 필요";
   const analysisDays = finiteNumber(brief.analysisDays, b2bAnalysisDays(brief.run || {}));
   const reservationBasisText = brief.reservationBasisText || b2bReservationBasisText(brief.run || {});
   const offlineQuantity = finiteNumber(revenueModel.offlineQuantityTotal, 0);
@@ -26867,14 +27037,20 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
 }
 
 function renderMapControls() {
-  els.mapLayerRow.innerHTML = ["검색 중심", "50/100km 반경", "지역 내 업체", "인접권", "권역 밖"].map((name, index) => `
-    <span data-map-layer-tone="${index + 1}"><b aria-hidden="true"></b>${name}</span>
+  els.mapLayerRow.innerHTML = [
+    ["search", "검색 기준점"],
+    ["radius", "50/100km 반경"],
+    ["verified", "검증·확인 위치"],
+    ["approximate", "근사 위치"],
+    ["missing", "좌표 미수집은 목록"]
+  ].map(([tone, name]) => `
+    <span data-map-layer-tone="${tone}"><b aria-hidden="true"></b>${name}</span>
   `).join("");
   els.mapLegend.innerHTML = CORE_ORDER.map((name, index) => `
     <span data-map-core-tone="${index + 1}"><b aria-hidden="true"></b>${name}</span>
-  `).join("") + `<span data-map-core-tone="company"><b aria-hidden="true"></b>검증 좌표 업체</span>`;
+  `).join("") + `<span data-map-core-tone="company"><b aria-hidden="true"></b>실제 업체 위치</span><span data-map-core-tone="approximate"><b aria-hidden="true"></b>근사 위치</span>`;
   const caption = document.querySelector(".map-caption");
-  if (caption) caption.textContent = "검색 기준 지역 중심 · 50/100km 반경 · 검증 좌표 업체 · 좌표 미수집은 목록에서 확인";
+  if (caption) caption.textContent = "검색 기준점은 업체 위치가 아닙니다 · 검증·확인 좌표만 실제 위치로 표시 · 근사·미수집 상태는 별도 안내";
 }
 
 async function loadLocalMap() {
@@ -26924,27 +27100,39 @@ function project(lon, lat, bounds) {
   return [x, y];
 }
 
-function coordinateFromValue(value = {}) {
-  const pairs = [
-    [value.lon, value.lat],
-    [value.lng, value.lat],
-    [value.longitude, value.latitude],
-    [value.geo?.lon, value.geo?.lat],
-    [value.geo?.lng, value.geo?.lat],
-    [value.geo?.longitude, value.geo?.latitude],
-    [value.location?.lon, value.location?.lat],
-    [value.location?.lng, value.location?.lat],
-    [value.location?.longitude, value.location?.latitude],
-    [value.companyProfile?.location?.lon, value.companyProfile?.location?.lat],
-    [value.companyProfile?.location?.lng, value.companyProfile?.location?.lat],
-    [value.companyProfile?.location?.longitude, value.companyProfile?.location?.latitude],
-    [value.companyProfile?.geo?.lon, value.companyProfile?.geo?.lat],
-    [value.companyProfile?.geo?.longitude, value.companyProfile?.geo?.latitude]
+const B2B_LOCATION_STATUS_META = Object.freeze({
+  verified: { label: "검증 위치", tone: "ready", icon: "●", mappable: true },
+  resolved: { label: "확인 위치", tone: "info", icon: "●", mappable: true },
+  approximate: { label: "근사 위치", tone: "warning", icon: "◆", mappable: true },
+  ambiguous: { label: "위치 검토 필요", tone: "warning", icon: "?", mappable: false },
+  not_found: { label: "좌표 미수집", tone: "unavailable", icon: "—", mappable: false },
+  invalid: { label: "좌표 오류", tone: "error", icon: "!", mappable: false },
+  pending: { label: "좌표 확인 대기", tone: "pending", icon: "…", mappable: false },
+  error: { label: "좌표 확인 실패", tone: "error", icon: "!", mappable: false }
+});
+
+function coordinatePairsFromValue(value = {}) {
+  return [
+    [value.companyProfile?.location?.lon, value.companyProfile?.location?.lat, value.companyProfile?.location?.source],
+    [value.companyProfile?.location?.longitude, value.companyProfile?.location?.latitude, value.companyProfile?.location?.source],
+    [value.location?.lon, value.location?.lat, value.location?.source],
+    [value.location?.longitude, value.location?.latitude, value.location?.source],
+    [value.geo?.lon, value.geo?.lat, value.geo?.source],
+    [value.geo?.longitude, value.geo?.latitude, value.geo?.source],
+    [value.lon, value.lat, value.source],
+    [value.lng, value.lat, value.source],
+    [value.longitude, value.latitude, value.source],
+    [value.companyProfile?.geo?.lon, value.companyProfile?.geo?.lat, value.companyProfile?.geo?.source],
+    [value.companyProfile?.geo?.longitude, value.companyProfile?.geo?.latitude, value.companyProfile?.geo?.source]
   ];
-  for (const [rawLon, rawLat] of pairs) {
+}
+
+function coordinateFromValue(value = {}) {
+  for (const [rawLon, rawLat, rawSource] of coordinatePairsFromValue(value)) {
     if (rawLon === null || rawLon === undefined || rawLon === "" || rawLat === null || rawLat === undefined || rawLat === "") continue;
-    const lon = Number(rawLon);
-    const lat = Number(rawLat);
+    if (typeof rawLon !== "number" || typeof rawLat !== "number") continue;
+    const lon = rawLon;
+    const lat = rawLat;
     const valid = Number.isFinite(lon)
       && Number.isFinite(lat)
       && lon >= 124
@@ -26952,33 +27140,60 @@ function coordinateFromValue(value = {}) {
       && lat >= 32
       && lat <= 39.5
       && !(lon === 0 && lat === 0);
-    if (valid) return { lon, lat, source: "exact" };
+    if (valid) return { lon, lat, source: String(rawSource || "exact") };
   }
   return null;
 }
 
+function explicitLocationContract(value = {}) {
+  const candidates = [value.companyProfile?.location, value.location, value.geocoding];
+  return candidates.find((entry) => entry && typeof entry === "object" && (
+    Object.prototype.hasOwnProperty.call(entry, "status")
+    || Object.prototype.hasOwnProperty.call(entry, "precision")
+    || Object.prototype.hasOwnProperty.call(entry, "crs")
+    || Object.prototype.hasOwnProperty.call(entry, "resolvedAddress")
+  )) || null;
+}
+
+function normalizedLocationStatus(value = "") {
+  const status = String(value || "").trim().toLowerCase();
+  if (status === "exact") return "verified";
+  if (status === "missing") return "not_found";
+  return B2B_LOCATION_STATUS_META[status] ? status : "pending";
+}
+
 function coordinateStatusFromValue(value = {}) {
-  const rawPairs = [
-    [value.lon, value.lat],
-    [value.lng, value.lat],
-    [value.longitude, value.latitude],
-    [value.geo?.lon, value.geo?.lat],
-    [value.geo?.lng, value.geo?.lat],
-    [value.geo?.longitude, value.geo?.latitude],
-    [value.location?.lon, value.location?.lat],
-    [value.location?.lng, value.location?.lat],
-    [value.location?.longitude, value.location?.latitude],
-    [value.companyProfile?.location?.lon, value.companyProfile?.location?.lat],
-    [value.companyProfile?.location?.lng, value.companyProfile?.location?.lat],
-    [value.companyProfile?.location?.longitude, value.companyProfile?.location?.latitude],
-    [value.companyProfile?.geo?.lon, value.companyProfile?.geo?.lat],
-    [value.companyProfile?.geo?.longitude, value.companyProfile?.geo?.latitude]
-  ];
-  const hasAnyValue = rawPairs.some(([lon, lat]) => ![lon, lat].every((entry) => entry === null || entry === undefined || entry === ""));
-  const coordinate = coordinateFromValue(value);
-  if (coordinate) return { status: "exact", label: "지도에 표시됨", coordinate };
-  if (hasAnyValue) return { status: "invalid", label: "좌표 확인 필요", coordinate: null };
-  return { status: "missing", label: "위치 정보 미수집", coordinate: null };
+  const contract = explicitLocationContract(value);
+  const coordinate = coordinateFromValue(contract ? { companyProfile: { location: contract } } : value);
+  const hasAnyValue = coordinatePairsFromValue(contract ? { companyProfile: { location: contract } } : value)
+    .some(([lon, lat]) => ![lon, lat].every((entry) => entry === null || entry === undefined || entry === ""));
+  const status = contract
+    ? normalizedLocationStatus(contract.status)
+    : coordinate
+      ? "resolved"
+      : hasAnyValue
+        ? "invalid"
+        : "not_found";
+  const normalizedStatus = coordinate && B2B_LOCATION_STATUS_META[status]?.mappable
+    ? status
+    : coordinate && !contract
+      ? "resolved"
+      : !coordinate && B2B_LOCATION_STATUS_META[status]?.mappable
+        ? "invalid"
+        : status;
+  const meta = B2B_LOCATION_STATUS_META[normalizedStatus] || B2B_LOCATION_STATUS_META.pending;
+  return {
+    status: normalizedStatus,
+    label: meta.label,
+    tone: meta.tone,
+    icon: meta.icon,
+    coordinate: meta.mappable ? coordinate : null,
+    precision: String(contract?.precision || "unknown"),
+    source: String(contract?.source || coordinate?.source || "legacy"),
+    confidence: typeof contract?.confidence === "number" ? contract.confidence : null,
+    displayAddress: String(contract?.displayAddress || contract?.resolvedAddress || value.address || value.companyProfile?.address || ""),
+    geocodedAt: String(contract?.geocodedAt || contract?.observedAt || "")
+  };
 }
 
 function regionCoordinate(region = {}) {
@@ -27029,8 +27244,24 @@ function regionForCompanyMapItem(item = {}, regions = []) {
 
 function companyMapPointRows(regions = []) {
   const rankRows = b2bRankBoardModel().rows.slice(0, 30);
-  return rankRows.map((row, index) => {
+  const sourceItems = rankedCompanyItems();
+  const rows = rankRows.map((row, index) => {
     const coordinateProfile = coordinateStatusFromValue(row.item);
+    const categoryProfile = itemLodgingCategoryProfile(row.item);
+    const explicitPrimaryCategory = row.item?.lodgingCategoryKey
+      || row.item?.categoryKey
+      || row.item?.companyProfile?.primaryCategoryKey
+      || "";
+    const primaryCategoryKey = explicitPrimaryCategory
+      ? knownLodgingCategoryKey(explicitPrimaryCategory)
+      : knownLodgingCategoryKey(categoryProfile.key);
+    const categoryKeys = Array.from(new Set([
+      primaryCategoryKey,
+      ...(Array.isArray(row.item?.companyProfile?.categoryTags)
+        ? row.item.companyProfile.categoryTags.map(knownLodgingCategoryKey)
+        : [])
+    ].filter(Boolean)));
+    const platformNames = platformsForItem(row.item).map((platform) => platformShortName(platform.platform)).filter(Boolean);
     const itemIndex = Number.isFinite(row.itemIndex)
       ? row.itemIndex
       : (row.linked ? finiteNumber(row.item?.availabilityIndex, -1) : (state.data?.availability?.items || []).indexOf(row.item));
@@ -27048,12 +27279,71 @@ function companyMapPointRows(regions = []) {
       coordinate: coordinateProfile.coordinate,
       coordinateStatus: coordinateProfile.status,
       coordinateLabel: coordinateProfile.label,
+      coordinateTone: coordinateProfile.tone,
+      coordinateIcon: coordinateProfile.icon,
+      coordinatePrecision: coordinateProfile.precision,
+      coordinateSource: coordinateProfile.source,
+      coordinateConfidence: coordinateProfile.confidence,
+      coordinateAddress: coordinateProfile.displayAddress,
+      coordinateObservedAt: coordinateProfile.geocodedAt,
+      categoryKeys,
+      categoryLabel: primaryCategoryKey ? lodgingCategoryProfile(primaryCategoryKey).label : "유형 미확인",
+      platformNames,
       itemIndex,
+      providerIndex: sourceItems.indexOf(row.item),
       bucket,
       tone: bucketProfile.tone,
       label: bucketProfile.label
     };
   });
+  return rows.map((row) => {
+    const transient = state.b2bMapTransientLocations?.[row.providerIndex];
+    if (!transient || transient.transient !== true) return row;
+    const coordinate = typeof transient.lon === "number" && Number.isFinite(transient.lon)
+      && typeof transient.lat === "number" && Number.isFinite(transient.lat)
+      ? { lon: transient.lon, lat: transient.lat, source: "naver-transient" }
+      : null;
+    const status = coordinate ? normalizedLocationStatus(transient.status || "resolved") : normalizedLocationStatus(transient.status || "pending");
+    const meta = B2B_LOCATION_STATUS_META[status] || B2B_LOCATION_STATUS_META.pending;
+    return {
+      ...row,
+      coordinate: meta.mappable ? coordinate : null,
+      coordinateStatus: status,
+      coordinateLabel: coordinate ? `${meta.label} · 이번 화면에서만 사용` : meta.label,
+      coordinateTone: meta.tone,
+      coordinateIcon: meta.icon,
+      coordinatePrecision: String(transient.precision || "unknown"),
+      coordinateSource: "naver-transient",
+      coordinateObservedAt: "",
+      transientLocation: true
+    };
+  });
+}
+
+function b2bMapFilteredRows(rows = []) {
+  const filters = state.b2bMapFilters || {};
+  return rows.filter((row) => {
+    const locationMatch = filters.locationStatus === "located"
+      ? ["verified", "resolved"].includes(row.coordinateStatus)
+      : filters.locationStatus === "approximate"
+        ? row.coordinateStatus === "approximate"
+        : filters.locationStatus === "unresolved"
+          ? !["verified", "resolved", "approximate"].includes(row.coordinateStatus)
+          : true;
+    const boundaryMatch = !filters.boundary || filters.boundary === "all" || row.bucket === filters.boundary;
+    const categoryMatch = !filters.category || filters.category === "all" || row.categoryKeys.includes(filters.category);
+    const platformMatch = !filters.platform || filters.platform === "all" || row.platformNames.includes(filters.platform);
+    return locationMatch && boundaryMatch && categoryMatch && platformMatch;
+  });
+}
+
+function b2bMapLocationCounts(rows = []) {
+  return rows.reduce((counts, row) => {
+    counts[row.coordinateStatus] = (counts[row.coordinateStatus] || 0) + 1;
+    if (["verified", "resolved", "approximate"].includes(row.coordinateStatus)) counts.mappable += 1;
+    else counts.unresolved += 1;
+    return counts;
+  }, { verified: 0, resolved: 0, approximate: 0, ambiguous: 0, not_found: 0, invalid: 0, pending: 0, error: 0, mappable: 0, unresolved: 0 });
 }
 
 function syncB2BMapSelectionDom() {
@@ -27068,13 +27358,74 @@ function syncB2BMapSelectionDom() {
 
 function selectB2BMapCompany(key = "", trigger = null, options = {}) {
   state.b2bMapSelectedKey = String(key || "");
-  state.b2bMapReturnFocusKey = state.b2bMapSelectedKey;
   syncB2BMapSelectionDom();
   const itemIndex = Number(trigger?.dataset?.openCompany);
-  if (options.openDetail && Number.isFinite(itemIndex) && itemIndex >= 0) openSheet(itemIndex);
+  if (options.openDetail && Number.isFinite(itemIndex) && itemIndex >= 0) {
+    state.b2bMapReturnFocusKey = state.b2bMapSelectedKey;
+    state.b2bMapReturnFocusSurface = trigger?.matches?.(".company-map-marker") ? "marker" : "list";
+    trigger?.focus?.({ preventScroll: true });
+    openSheet(itemIndex, {
+      returnFocusKey: state.b2bMapReturnFocusKey,
+      returnFocusSurface: state.b2bMapReturnFocusSurface
+    });
+  }
 }
 
-function renderB2BMapViewControls(rows = []) {
+async function loadNaverMapLocationsForDisplay(trigger = null) {
+  if (isAdminRole() || isAdminUserViewMode()) {
+    state.b2bMapGeocodingState = "error";
+    state.b2bMapGeocodingMessage = "관리자 미리보기에서는 외부 위치 조회를 실행하지 않습니다.";
+    return;
+  }
+  if (!state.activeRunId) return;
+  const allRows = companyMapPointRows(state.data?.regions || []);
+  const visibleRows = b2bMapFilteredRows(allRows);
+  const itemIndexes = visibleRows
+    .filter((row) => row.providerIndex >= 0 && !["verified", "resolved", "approximate"].includes(row.coordinateStatus))
+    .map((row) => row.providerIndex)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .slice(0, 25);
+  if (!itemIndexes.length) {
+    state.b2bMapGeocodingState = "idle";
+    state.b2bMapGeocodingMessage = "현재 조건에는 네이버 위치 확인이 필요한 업체가 없습니다.";
+    renderB2BMapViewControls(allRows, visibleRows);
+    return;
+  }
+
+  state.b2bMapGeocodingState = "loading";
+  state.b2bMapGeocodingMessage = "네이버에서 현재 화면용 위치를 확인하고 있습니다.";
+  if (trigger) trigger.disabled = true;
+  renderB2BMapViewControls(allRows, visibleRows);
+  try {
+    const result = await fetchJson("/api/b2b-map/geocode", {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ runId: state.activeRunId, itemIndexes })
+    });
+    if (result?.usage !== "single-display" || result?.cacheable !== false || result?.persistable !== false) {
+      throw new Error("네이버 위치 응답의 일시 사용 계약을 확인할 수 없습니다.");
+    }
+    const next = { ...(state.b2bMapTransientLocations || {}) };
+    for (const row of Array.isArray(result.items) ? result.items : []) {
+      if (!Number.isInteger(row?.itemIndex) || !row.location || row.location.transient !== true) continue;
+      next[row.itemIndex] = { ...row.location };
+    }
+    state.b2bMapTransientLocations = next;
+    const located = (result.items || []).filter((row) => ["verified", "resolved", "approximate"].includes(row?.location?.status)).length;
+    state.b2bMapGeocodingState = "ready";
+    state.b2bMapGeocodingMessage = `이번 화면에서만 사용할 위치 ${fmtNumber(located)}곳을 확인했습니다. 새로고침하면 폐기됩니다.`;
+  } catch (error) {
+    state.b2bMapGeocodingState = "error";
+    state.b2bMapGeocodingMessage = error?.message || "네이버 위치를 확인하지 못했습니다.";
+  }
+  await renderMap();
+}
+
+function renderB2BMapViewControls(rows = [], visibleRows = b2bMapFilteredRows(rows)) {
   if (!els.b2bMapViewControls || !els.b2bMapStatus || !els.b2bMapCompanyList) return;
   const publicMode = !isAdminRole();
   els.b2bMapViewControls.hidden = !publicMode;
@@ -27086,23 +27437,44 @@ function renderB2BMapViewControls(rows = []) {
     els.b2bMapCompanyList.innerHTML = "";
     return;
   }
-  const exactCount = rows.filter((row) => row.coordinateStatus === "exact").length;
-  const missingCount = rows.filter((row) => row.coordinateStatus === "missing").length;
-  const invalidCount = rows.filter((row) => row.coordinateStatus === "invalid").length;
+  const counts = b2bMapLocationCounts(rows);
+  const filters = state.b2bMapFilters || { locationStatus: "all", boundary: "all" };
+  const lookupCandidates = visibleRows.filter((row) => (
+    row.providerIndex >= 0
+    && !["verified", "resolved", "approximate"].includes(row.coordinateStatus)
+  )).slice(0, 25);
+  const geocodingBusy = state.b2bMapGeocodingState === "loading";
+  const categoryOptions = Array.from(new Set(rows.flatMap((row) => row.categoryKeys || [])))
+    .map((key) => ({ key, label: lodgingCategoryProfile(key).label || key }))
+    .sort((a, b) => a.label.localeCompare(b.label, "ko"));
+  const platformOptions = Array.from(new Set(rows.flatMap((row) => row.platformNames || []))).sort((a, b) => a.localeCompare(b, "ko"));
   els.b2bMapViewControls.innerHTML = `
-    <div role="group" aria-label="지도 보기 방식">
+    <div class="b2b-map-view-toggle" role="group" aria-label="지도 보기 방식">
       <button class="secondary-button" type="button" data-b2b-map-view="map" aria-pressed="${state.b2bMapViewMode === "map" ? "true" : "false"}">지도와 목록</button>
       <button class="secondary-button" type="button" data-b2b-map-view="list" aria-pressed="${state.b2bMapViewMode === "list" ? "true" : "false"}">목록만 보기</button>
     </div>
-    <p>지도 ${fmtNumber(exactCount)}곳 · 위치 미수집 ${fmtNumber(missingCount)}곳 · 좌표 확인 ${fmtNumber(invalidCount)}곳</p>
+    <div class="b2b-map-transient-action">
+      <button class="secondary-button" type="button" data-b2b-map-geocode${geocodingBusy || !lookupCandidates.length ? " disabled" : ""}>
+        <span aria-hidden="true">⌖</span>${geocodingBusy ? "네이버 위치 확인 중" : `네이버 위치 확인 (${fmtNumber(lookupCandidates.length)})`}
+      </button>
+      <small>명시적으로 누를 때만 조회하며 좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다.</small>
+    </div>
+    <div class="b2b-map-filter-fields" aria-label="지도 업체 필터">
+      <label><span>위치 상태</span><select id="b2bMapLocationStatus"><option value="all"${filters.locationStatus === "all" ? " selected" : ""}>전체</option><option value="located"${filters.locationStatus === "located" ? " selected" : ""}>검증·확인 위치</option><option value="approximate"${filters.locationStatus === "approximate" ? " selected" : ""}>근사 위치</option><option value="unresolved"${filters.locationStatus === "unresolved" ? " selected" : ""}>좌표 미확인</option></select></label>
+      <label><span>경쟁 권역</span><select id="b2bMapBoundary"><option value="all"${filters.boundary === "all" ? " selected" : ""}>전체 권역</option><option value="local"${filters.boundary === "local" ? " selected" : ""}>지역 내</option><option value="adjacent"${filters.boundary === "adjacent" ? " selected" : ""}>인접권</option><option value="outside"${filters.boundary === "outside" ? " selected" : ""}>권역 밖</option></select></label>
+      <label><span>숙소 유형</span><select id="b2bMapCategory"><option value="all"${filters.category === "all" ? " selected" : ""}>전체 유형</option>${categoryOptions.map((option) => `<option value="${escapeHtml(option.key)}"${filters.category === option.key ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></label>
+      <label><span>플랫폼</span><select id="b2bMapPlatform"><option value="all"${filters.platform === "all" ? " selected" : ""}>전체 플랫폼</option>${platformOptions.map((name) => `<option value="${escapeHtml(name)}"${filters.platform === name ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select></label>
+    </div>
+    <p class="b2b-map-filter-summary">표시 ${fmtNumber(visibleRows.length)}/${fmtNumber(rows.length)}곳 · 검증 ${fmtNumber(counts.verified)} · 확인 ${fmtNumber(counts.resolved)} · 근사 ${fmtNumber(counts.approximate)} · 미확인 ${fmtNumber(counts.unresolved)}</p>
   `;
   els.mapPanel?.classList.toggle("b2b-map-list-only", state.b2bMapViewMode === "list");
-  els.b2bMapStatus.dataset.state = state.mapLoadState;
-  els.b2bMapStatus.textContent = state.mapLoadState === "loading"
+  els.b2bMapStatus.dataset.state = state.b2bMapGeocodingState === "error" ? "unavailable" : state.mapLoadState;
+  const baseMapStatus = state.mapLoadState === "loading"
     ? "로컬 행정구역 지도를 불러오는 중입니다. 숙소 목록은 계속 사용할 수 있습니다."
     : state.mapLoadState === "unavailable"
       ? `지도를 사용할 수 없습니다. 목록 대체 보기를 이용하세요.${state.mapLoadError ? ` ${state.mapLoadError}` : ""}`
-      : `검증된 원 좌표 ${fmtNumber(exactCount)}곳만 지도에 표시합니다. 임의 좌표는 생성하지 않습니다.`;
+      : `검증·확인 좌표 ${fmtNumber(counts.verified + counts.resolved)}곳과 별도 표시한 근사 좌표 ${fmtNumber(counts.approximate)}곳을 사용합니다. 지역 중심을 업체 위치로 대체하지 않습니다.`;
+  els.b2bMapStatus.textContent = [baseMapStatus, state.b2bMapGeocodingMessage].filter(Boolean).join(" ");
 }
 
 function renderB2BMapCompanyList(rows = []) {
@@ -27115,15 +27487,15 @@ function renderB2BMapCompanyList(rows = []) {
       ${rows.length ? rows.map((row) => {
         const selected = row.key === state.b2bMapSelectedKey;
         const detailAvailable = row.itemIndex >= 0;
-        const positionTone = row.coordinateStatus === "exact" ? "ready" : row.coordinateStatus === "invalid" ? "warning" : "unavailable";
+        const positionTone = row.coordinateTone || "unavailable";
         return `
-          <article role="listitem" class="b2b-map-company-row${selected ? " is-selected" : ""}" data-b2b-map-company-key="${escapeHtml(row.key)}">
+          <article role="listitem" class="b2b-map-company-row${selected ? " is-selected" : ""}" data-location-status="${escapeHtml(row.coordinateStatus)}" data-b2b-map-company-key="${escapeHtml(row.key)}">
             <button type="button" data-b2b-map-select="${escapeHtml(row.key)}" data-b2b-map-company-key="${escapeHtml(row.key)}" aria-pressed="${selected ? "true" : "false"}">
               <span>${row.rank ? `${fmtNumber(row.rank)}위` : "순위 미수집"}</span>
               <strong>${escapeHtml(row.item?.name || "업체명 확인")}</strong>
-              <small>${escapeHtml(`${itemLocationLine(row.item)} · ${row.label}`)}</small>
+              <small>${escapeHtml(`${row.coordinateAddress || itemLocationLine(row.item)} · ${row.label}`)}</small>
             </button>
-            <div><span class="ui-badge ${positionTone}">${escapeHtml(row.coordinateLabel)}</span>${detailAvailable ? `<button class="secondary-button" type="button" data-open-company="${row.itemIndex}">상세 보기</button>` : `<button class="secondary-button" type="button" disabled title="예약 상세 미수집">상세 미수집</button>`}</div>
+            <div><span class="ui-badge ${positionTone}"><span aria-hidden="true">${escapeHtml(row.coordinateIcon)}</span>${escapeHtml(row.coordinateLabel)}</span>${detailAvailable ? `<button class="secondary-button" type="button" data-open-company="${row.itemIndex}" data-b2b-map-company-key="${escapeHtml(row.key)}">상세 보기</button>` : `<button class="secondary-button" type="button" disabled title="예약 상세 미수집">상세 미수집</button>`}</div>
           </article>
         `;
       }).join("") : `<div class="empty">표시할 경쟁 숙소가 없습니다.</div>`}
@@ -27133,9 +27505,11 @@ function renderB2BMapCompanyList(rows = []) {
 }
 
 function svgRadiusForKm(lon, lat, km, bounds) {
-  const [, y1] = project(lon, lat, bounds);
-  const [, y2] = project(lon, lat + km / 111, bounds);
-  return Math.abs(y2 - y1);
+  const [x1, y1] = project(lon, lat, bounds);
+  const longitudeKm = Math.max(1, 111.32 * Math.cos((lat * Math.PI) / 180));
+  const [x2] = project(lon + km / longitudeKm, lat, bounds);
+  const [, y2] = project(lon, lat + km / 110.574, bounds);
+  return { rx: Math.abs(x2 - x1), ry: Math.abs(y2 - y1) };
 }
 
 function featurePath(feature, bounds) {
@@ -27151,15 +27525,14 @@ function featurePath(feature, bounds) {
   }).join(" ");
 }
 
-function regionBounds(regions = [], features = [], items = []) {
+function regionBounds(regions = [], features = [], companyRows = []) {
   const pairs = [];
   for (const region of regions) {
     const coordinate = coordinateFromValue(region);
     if (coordinate) pairs.push([coordinate.lon, coordinate.lat]);
   }
-  for (const item of items) {
-    const coordinate = coordinateFromValue(item);
-    if (coordinate) pairs.push([coordinate.lon, coordinate.lat]);
+  for (const row of companyRows) {
+    if (row.coordinate) pairs.push([row.coordinate.lon, row.coordinate.lat]);
   }
   if (!pairs.length) {
     features.slice(0, 80).forEach((feature) => pairs.push(...coordinatePairs(feature.geometry)));
@@ -27185,22 +27558,95 @@ function featureName(feature) {
   return feature.properties?.name || feature.properties?.SIG_KOR_NM || feature.properties?.adm_nm || "";
 }
 
+function mapDuplicateLayout(rows = []) {
+  const groups = new Map();
+  rows.forEach((row) => {
+    if (!row.coordinate) return;
+    const key = `${row.coordinate.lon.toFixed(5)}:${row.coordinate.lat.toFixed(5)}`;
+    const group = groups.get(key) || [];
+    group.push(row);
+    groups.set(key, group);
+  });
+  return rows.map((row) => {
+    if (!row.coordinate) return { ...row, duplicateCount: 0, duplicateIndex: -1, duplicateOffsetX: 0, duplicateOffsetY: 0 };
+    const key = `${row.coordinate.lon.toFixed(5)}:${row.coordinate.lat.toFixed(5)}`;
+    const group = groups.get(key) || [row];
+    const index = group.indexOf(row);
+    const angle = group.length > 1 ? (Math.PI * 2 * index) / group.length : 0;
+    const distance = group.length > 1 ? Math.min(18, 8 + group.length * 1.5) : 0;
+    return {
+      ...row,
+      duplicateCount: group.length,
+      duplicateIndex: index,
+      duplicateOffsetX: Math.cos(angle) * distance,
+      duplicateOffsetY: Math.sin(angle) * distance
+    };
+  });
+}
+
+function companyMapHitRadius(svg = els.clusterMap) {
+  const rendered = svg?.getBoundingClientRect?.();
+  const viewBox = svg?.viewBox?.baseVal;
+  const scaleX = Number(rendered?.width) > 0 && Number(viewBox?.width) > 0
+    ? Number(rendered.width) / Number(viewBox.width)
+    : NaN;
+  const scaleY = Number(rendered?.height) > 0 && Number(viewBox?.height) > 0
+    ? Number(rendered.height) / Number(viewBox.height)
+    : NaN;
+  const renderedScale = Math.min(scaleX, scaleY);
+  // Keep a small sub-pixel safety margin above the 44 CSS-pixel target.
+  // SVG scaling and device-pixel rounding can otherwise render a nominal
+  // 44px diameter a fraction below the accessible touch-target contract.
+  return Number.isFinite(renderedScale) && renderedScale > 0
+    ? 22.5 / renderedScale
+    : 22.5;
+}
+
+function syncCompanyMapHitTargets() {
+  const radius = companyMapHitRadius();
+  els.clusterMap?.querySelectorAll?.(".company-map-hit").forEach((target) => {
+    target.setAttribute("r", radius.toFixed(1));
+  });
+}
+
+function observeCompanyMapHitTargets() {
+  if (!els.clusterMap || state.b2bMapHitResizeHandler) return;
+  const scheduleSync = () => {
+    if (state.b2bMapHitResizeFrame) window.cancelAnimationFrame(state.b2bMapHitResizeFrame);
+    state.b2bMapHitResizeFrame = window.requestAnimationFrame(() => {
+      // A second frame lets responsive grid/breakpoint layout settle before
+      // converting the CSS-pixel touch target back into SVG user units.
+      state.b2bMapHitResizeFrame = window.requestAnimationFrame(() => {
+        state.b2bMapHitResizeFrame = 0;
+        syncCompanyMapHitTargets();
+      });
+    });
+  };
+  state.b2bMapHitResizeHandler = scheduleSync;
+  window.addEventListener("resize", scheduleSync, { passive: true });
+  if (typeof ResizeObserver === "function") {
+    state.b2bMapHitResizeObserver = new ResizeObserver(scheduleSync);
+    state.b2bMapHitResizeObserver.observe(els.clusterMap);
+  }
+  scheduleSync();
+}
+
 async function renderMap() {
   const renderRequestId = ++state.mapRenderRequestId;
   renderMapControls();
   const regions = state.data?.regions || [];
-  const items = state.data?.availability?.items || [];
   els.mapCount.textContent = `${fmtNumber(regions.length)} 지역`;
-  const companyPoints = companyMapPointRows(regions);
+  const allCompanyPoints = companyMapPointRows(regions);
+  const companyPoints = b2bMapFilteredRows(allCompanyPoints);
   renderB2BMapCompanyList(companyPoints);
   const mapPromise = loadLocalMap();
-  renderB2BMapViewControls(companyPoints);
+  renderB2BMapViewControls(allCompanyPoints, companyPoints);
   const geojson = await mapPromise;
   if (renderRequestId !== state.mapRenderRequestId) return;
-  renderB2BMapViewControls(companyPoints);
+  renderB2BMapViewControls(allCompanyPoints, companyPoints);
   const features = geojson?.features || [];
   const activeNames = new Set(regions.map((region) => String(region.region || region.name || "").replace(/\s+/g, "")));
-  const bounds = regionBounds(regions, features, items);
+  const bounds = regionBounds(regions, features, companyPoints);
   const model = b2bRegionMapModel();
   const centerRegion = model.topRegion || regions[0] || null;
   const centerCoordinate = regionCoordinate(centerRegion || {});
@@ -27224,8 +27670,8 @@ async function renderMap() {
     const centerName = centerRegion?.region || centerRegion?.name || activeKeyword();
     return `
       <g class="map-radius-layer" aria-label="검색 기준 반경">
-        <circle class="map-radius-ring ring-100" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r100.toFixed(1)}"></circle>
-        <circle class="map-radius-ring ring-50" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r50.toFixed(1)}"></circle>
+        <ellipse class="map-radius-ring ring-100" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="${r100.rx.toFixed(1)}" ry="${r100.ry.toFixed(1)}"></ellipse>
+        <ellipse class="map-radius-ring ring-50" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" rx="${r50.rx.toFixed(1)}" ry="${r50.ry.toFixed(1)}"></ellipse>
         <g class="map-search-center" transform="translate(${cx.toFixed(1)} ${cy.toFixed(1)})">
           <circle r="10"></circle>
           <path d="M-15 0H15M0-15V15"></path>
@@ -27238,6 +27684,7 @@ async function renderMap() {
   const markers = regions.map((region) => {
     const coordinate = coordinateFromValue(region);
     if (!coordinate) return "";
+    if (centerRegion && region === centerRegion) return "";
     const [x, y] = project(coordinate.lon, coordinate.lat, bounds);
     const primary = regionPrimary(region);
     const coreIndex = Math.max(0, CORE_ORDER.indexOf(primary));
@@ -27252,7 +27699,8 @@ async function renderMap() {
     `;
   }).join("");
 
-  const companyMarkers = companyPoints.filter((row) => row.coordinateStatus === "exact" && row.coordinate).map((row) => {
+  const companyMarkerHitRadius = companyMapHitRadius();
+  const companyMarkers = mapDuplicateLayout(companyPoints.filter((row) => row.coordinate)).map((row) => {
     const [x, y] = project(row.coordinate.lon, row.coordinate.lat, bounds);
     const rank = finiteNumber(row.rank, row.index + 1);
     const radius = rank <= 5 ? 9 : rank <= 10 ? 7 : 5.5;
@@ -27263,13 +27711,28 @@ async function renderMap() {
     const label = rank <= 5 || row.bucket !== "local"
       ? `<text class="company-map-label" x="12" y="-10">${escapeHtml(name.slice(0, 10))}</text>`
       : "";
+    const pointShape = row.coordinateStatus === "approximate"
+      ? `<rect class="company-map-dot company-map-dot-approximate" x="${(-radius).toFixed(1)}" y="${(-radius).toFixed(1)}" width="${(radius * 2).toFixed(1)}" height="${(radius * 2).toFixed(1)}" rx="2" transform="rotate(45)"></rect>`
+      : `<circle class="company-map-dot" r="${radius.toFixed(1)}"></circle>`;
+    const duplicateBadge = row.duplicateCount > 1
+      ? `<g class="company-map-duplicate" transform="translate(${(radius + 7).toFixed(1)} ${(-radius - 6).toFixed(1)})"><circle r="8"></circle><text y="3" text-anchor="middle">${fmtNumber(row.duplicateCount)}</text></g>`
+      : "";
+    const duplicateLeader = row.duplicateCount > 1
+      ? `<line class="company-map-duplicate-leader" x1="${(-row.duplicateOffsetX).toFixed(1)}" y1="${(-row.duplicateOffsetY).toFixed(1)}" x2="0" y2="0"></line>`
+      : "";
+    const duplicateAnchor = row.duplicateCount > 1 && row.duplicateIndex === 0
+      ? `<circle class="company-map-duplicate-anchor" cx="${(-row.duplicateOffsetX).toFixed(1)}" cy="${(-row.duplicateOffsetY).toFixed(1)}" r="3.5"></circle>`
+      : "";
     return `
-      <g class="company-map-marker ${escapeHtml(row.bucket)} ${escapeHtml(row.tone)}${selected ? " is-selected" : ""}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})" ${attrs} aria-label="${escapeHtml(`${fmtNumber(rank)}위 ${name}, ${row.label}, ${rateText}, 검증 좌표`)}">
-        <title>${escapeHtml(`${fmtNumber(rank)}위 · ${name} · ${row.label} · ${rateText} · 검증 좌표`)}</title>
-        <circle class="company-map-hit" r="22"></circle>
+      <g class="company-map-marker ${escapeHtml(row.bucket)} ${escapeHtml(row.tone)} location-${escapeHtml(row.coordinateStatus)}${selected ? " is-selected" : ""}" transform="translate(${(x + row.duplicateOffsetX).toFixed(1)} ${(y + row.duplicateOffsetY).toFixed(1)})" ${attrs} aria-label="${escapeHtml(`${fmtNumber(rank)}위 ${name}, ${row.label}, ${rateText}, ${row.coordinateLabel}`)}">
+        <title>${escapeHtml(`${fmtNumber(rank)}위 · ${name} · ${row.label} · ${rateText} · ${row.coordinateLabel}`)}</title>
+        ${duplicateLeader}
+        ${duplicateAnchor}
+        <circle class="company-map-hit" r="${companyMarkerHitRadius.toFixed(1)}"></circle>
         <circle class="company-map-halo" r="${(radius + 7).toFixed(1)}"></circle>
-        <circle class="company-map-dot" r="${radius.toFixed(1)}"></circle>
+        ${pointShape}
         <text class="company-map-rank" y="3" text-anchor="middle">${rank <= 20 ? fmtNumber(rank) : ""}</text>
+        ${duplicateBadge}
         ${label}
       </g>
     `;
@@ -29565,6 +30028,9 @@ async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10")
       body: JSON.stringify(payload)
     });
     if (requestId !== state.b2bSearchRequestId) return;
+    state.b2bMapTransientLocations = {};
+    state.b2bMapGeocodingState = "idle";
+    state.b2bMapGeocodingMessage = "";
     state.data = result.data || null;
     state.activeRunId = result.runId || state.data?.run?.id || null;
     state.runs = state.data?.run ? [{ ...state.data.run, id: state.activeRunId }] : [];
@@ -30240,6 +30706,7 @@ function revenueProductRowsHtml(rows = []) {
 function sheetRevenuePanel(item = {}) {
   const profile = preciseRevenueProfile(item);
   const { lodging, dayUse, precision } = profile;
+  const collectionStatus = collectionStatusProfile(item);
   const lodgingDetail = lodging.byDayType || lodging.detail || "요일별 매출은 다음 수집부터 표시됩니다.";
   const dayUseDetail = dayUse.byDayType || dayUse.detail || "데이유즈/캠프닉 매출은 상품 가격과 판매수량이 함께 확인될 때 표시됩니다.";
   const offlineRows = [
@@ -30254,44 +30721,129 @@ function sheetRevenuePanel(item = {}) {
     : `가격확보 ${Number.isFinite(precision.coverage) ? fmtRate(precision.coverage) : "대기"} · ${fmtNumber(precision.priced)}개/회`;
   const lodgingRevenueValue = lodging.adjustedRevenue || lodging.revenue;
   const dayUseRevenueValue = dayUse.adjustedRevenue || dayUse.revenue;
+  const lodgingError = lodging.revenueError;
+  const dayUseError = dayUse.revenueError;
+  const lodgingObserved = !lodgingError && (lodging.revenueObserved || lodging.soldObservedZero);
+  const dayUseObserved = !dayUseError && (dayUse.revenueObserved || dayUse.soldObservedZero);
+  const lodgingPending = lodging.revenuePending;
+  const dayUsePending = dayUse.revenuePending;
+  const totalError = lodgingError || dayUseError;
+  const totalPending = !totalError && (lodgingPending || dayUsePending);
+  const totalObserved = !totalError && !totalPending && (lodgingObserved || dayUseObserved);
+  const totalPresentation = sheetMetricPresentation(totalRevenueValue, {
+    observed: totalObserved,
+    pending: totalPending,
+    error: totalError,
+    formatValue: fmtWon,
+    missingText: "미수집",
+    pendingText: "계산 대기"
+  });
+  const lodgingPresentation = sheetMetricPresentation(lodgingRevenueValue, {
+    observed: lodgingObserved,
+    pending: lodgingPending,
+    error: lodgingError,
+    formatValue: fmtWon,
+    missingText: "미수집",
+    pendingText: "계산 대기"
+  });
+  const dayUsePresentation = sheetMetricPresentation(dayUseRevenueValue, {
+    observed: dayUseObserved,
+    applicable: dayUse.applicable,
+    pending: dayUsePending,
+    error: dayUseError,
+    formatValue: fmtWon,
+    missingText: "미수집",
+    pendingText: "계산 대기"
+  });
+  const lodgingAverageKnown = Number.isFinite(optionalNumber(lodging.avgSoldUnitPrice));
+  const lodgingPricedQuantity = finiteNumber(lodging.pricedSoldOut, 0);
+  const lodgingAverageApplicable = lodging.applicable && !(
+    lodgingObserved && lodgingRevenueValue === 0 && lodgingPricedQuantity === 0
+  );
+  const lodgingAveragePresentation = sheetMetricPresentation(lodging.avgSoldUnitPrice, {
+    observed: lodgingAverageKnown,
+    applicable: lodgingAverageApplicable,
+    pending: !lodgingAverageKnown && (lodgingPending || (lodgingObserved && lodgingPricedQuantity > 0)),
+    formatValue: fmtWon,
+    missingText: "미수집",
+    pendingText: "계산 대기",
+    unavailableText: "계산 불가"
+  });
+  const offlineQuantity = finiteNumber(lodging.offlineSold, 0) + finiteNumber(dayUse.offlineSold, 0);
   const offlineQuantityText = revenueOfflineQuantityText(lodging, dayUse);
+  const offlinePresentation = sheetMetricPresentation(offlineQuantity, {
+    observed: collectionStatus.statusKey !== "missing",
+    formatValue: () => offlineQuantityText,
+    zeroText: "특이 없음",
+    missingText: "미수집",
+    zeroStatus: "신호 없음"
+  });
+  const precisionPresentation = sheetMetricPresentation(precision.score, {
+    observed: totalObserved,
+    pending: totalPending,
+    error: totalError,
+    formatValue: (value) => `${fmtNumber(value)}점`,
+    missingText: "평가 대기",
+    pendingText: "평가 대기"
+  });
+  const precisionTone = ["ready", "zero"].includes(precisionPresentation.state)
+    ? precision.tone
+    : precisionPresentation.state === "pending"
+      ? "watch"
+      : "neutral";
+  const metricCards = [
+    {
+      label: "전체 예상매출",
+      presentation: totalPresentation,
+      note: totalObserved ? totalRevenueNote : totalPresentation.state === "pending" ? "가격·판매수량 계산 대기" : "매출 표본 미수집"
+    },
+    {
+      label: "숙박 매출",
+      presentation: lodgingPresentation,
+      note: lodgingObserved ? `${lodging.label} · ${revenueCoverageText(lodging)}${lodgingRevenueValue > lodging.revenue ? ` · 원매출 ${fmtWon(lodging.revenue)}` : ""}` : lodgingPresentation.state === "pending" ? "숙박 가격·판매수량 계산 대기" : "숙박 매출 표본 미수집"
+    },
+    {
+      label: "오프라인 판매 추정",
+      presentation: offlinePresentation,
+      note: collectionStatus.statusKey === "missing" ? "수량 표본 미수집" : "총량 감소분 기준 · 실판매/운영차단 확인 필요"
+    },
+    {
+      label: "숙박 평균단가",
+      presentation: lodgingAveragePresentation,
+      note: lodgingAveragePresentation.state === "unavailable" ? "가격 확인 판매가 없어 평균 계산 불가" : "상품별 가격×판매수량 가중 평균"
+    },
+    {
+      label: "데이유즈/캠프닉",
+      presentation: dayUsePresentation,
+      note: dayUseObserved
+        ? `${dayUse.label} · ${revenueCoverageText(dayUse)}${dayUseRevenueValue > dayUse.revenue ? ` · 원매출 ${fmtWon(dayUse.revenue)}` : ""}`
+        : dayUsePresentation.state === "pending"
+          ? "상품 가격·판매수량 계산 대기"
+          : dayUsePresentation.state === "unavailable"
+            ? "데이유즈/캠프닉 상품 비대상"
+            : "데이유즈/캠프닉 매출 미수집"
+    },
+    {
+      label: "매출 신뢰도",
+      presentation: precisionPresentation,
+      note: totalObserved ? precision.reasons.slice(0, 2).join(" · ") : "가격·판매수량 표본 확보 후 평가"
+    }
+  ];
   return `
     <section class="sheet-section sheet-revenue-section">
       <div class="sheet-structure-title">
         <h3>예상 매출 정밀 산정</h3>
-        <span class="structure-badge ${escapeHtml(precision.tone)}">${escapeHtml(`${precision.grade} · ${precision.label}`)}</span>
+        <span class="structure-badge ${escapeHtml(precisionTone)} sheet-value-state-${precisionPresentation.state}" data-sheet-value-state="${precisionPresentation.state}">${escapeHtml(totalObserved ? `${precision.grade} · ${precision.label}` : precisionPresentation.valueText)}</span>
       </div>
       <div class="sheet-history-grid">
-        <div>
-          <span>전체 예상매출</span>
-          <strong>${fmtWon(totalRevenueValue)}</strong>
-          <small>${escapeHtml(totalRevenueNote)}</small>
-        </div>
-        <div>
-          <span>숙박 매출</span>
-          <strong>${fmtWon(lodgingRevenueValue)}</strong>
-          <small>${escapeHtml(`${lodging.label} · ${revenueCoverageText(lodging)}${lodgingRevenueValue > lodging.revenue ? ` · 원매출 ${fmtWon(lodging.revenue)}` : ""}`)}</small>
-        </div>
-        <div>
-          <span>오프라인 판매 추정</span>
-          <strong>${escapeHtml(offlineQuantityText)}</strong>
-          <small>총량 감소분 기준 · 실판매/운영차단 확인 필요</small>
-        </div>
-        <div>
-          <span>숙박 평균단가</span>
-          <strong>${lodging.avgSoldUnitPrice ? fmtWon(lodging.avgSoldUnitPrice) : "확인필요"}</strong>
-          <small>상품별 가격×판매수량 가중 평균</small>
-        </div>
-        <div>
-          <span>데이유즈/캠프닉</span>
-          <strong>${fmtWon(dayUseRevenueValue)}</strong>
-          <small>${escapeHtml(`${dayUse.label} · ${revenueCoverageText(dayUse)}${dayUseRevenueValue > dayUse.revenue ? ` · 원매출 ${fmtWon(dayUse.revenue)}` : ""}`)}</small>
-        </div>
-        <div>
-          <span>매출 신뢰도</span>
-          <strong>${fmtNumber(precision.score)}점</strong>
-          <small>${escapeHtml(precision.reasons.slice(0, 2).join(" · "))}</small>
-        </div>
+        ${metricCards.map(({ label, presentation, note }) => `
+          <div class="sheet-value-state-${presentation.state}" data-sheet-value-state="${presentation.state}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(presentation.valueText)}</strong>
+            <small>${escapeHtml(note)}</small>
+            <em class="sheet-value-status">${escapeHtml(presentation.statusLabel)}</em>
+          </div>
+        `).join("")}
       </div>
       ${revenueDayTypeGridHtml("숙박 요일별 가격/판매금", profile.lodgingDayRows)}
       ${revenueDayTypeGridHtml("데이유즈/캠프닉 요일별 가격/판매금", profile.dayUseDayRows, "데이유즈/캠프닉은 숙박과 같은 카테고리로 보되, 회차 가격과 판매수량이 확인될 때 산정합니다.")}
@@ -30302,19 +30854,36 @@ function sheetRevenuePanel(item = {}) {
         </div>
         ${revenueProductRowsHtml(profile.productRows)}
       </div>
-      <div class="search-row">
+      <div class="search-row sheet-value-state-${lodgingPresentation.state}" data-sheet-value-state="${lodgingPresentation.state}">
         <div>
           <strong>숙박 요일별 매출</strong>
           <small>${escapeHtml(lodgingDetail)}</small>
+          <em class="sheet-value-status">${escapeHtml(lodgingPresentation.statusLabel)}</em>
         </div>
-        <strong>${fmtWon(lodging.revenue)}</strong>
+        <strong>${escapeHtml(sheetMetricPresentation(lodging.revenue, {
+          observed: lodgingObserved,
+          pending: lodgingPending,
+          error: lodgingError,
+          formatValue: fmtWon,
+          missingText: "미수집",
+          pendingText: "계산 대기"
+        }).valueText)}</strong>
       </div>
-      <div class="search-row">
+      <div class="search-row sheet-value-state-${dayUsePresentation.state}" data-sheet-value-state="${dayUsePresentation.state}">
         <div>
           <strong>데이유즈/캠프닉 매출</strong>
           <small>${escapeHtml(dayUseDetail)}</small>
+          <em class="sheet-value-status">${escapeHtml(dayUsePresentation.statusLabel)}</em>
         </div>
-        <strong>${fmtWon(dayUse.revenue)}</strong>
+        <strong>${escapeHtml(sheetMetricPresentation(dayUse.revenue, {
+          observed: dayUseObserved,
+          applicable: dayUse.applicable,
+          pending: dayUsePending,
+          error: dayUseError,
+          formatValue: fmtWon,
+          missingText: "미수집",
+          pendingText: "계산 대기"
+        }).valueText)}</strong>
       </div>
       ${offlineRows.map(([label, detail, revenue]) => `
         <div class="search-row">
@@ -30680,24 +31249,88 @@ function renderSheetBooking(item) {
   `;
 }
 
+function renderB2BLocationPanel(item = {}) {
+  const profile = coordinateStatusFromValue(item);
+  const precisionLabel = {
+    rooftop: "건물 단위",
+    parcel: "필지 단위",
+    street: "도로 단위",
+    locality: "지역 단위",
+    region: "권역 단위",
+    unknown: "정밀도 미확인"
+  }[profile.precision] || "정밀도 미확인";
+  const sourceLabel = {
+    manual: "관리자 확인",
+    provider: "주소 확인 결과",
+    legacy: "기존 좌표",
+    none: "좌표 미수집"
+  }[profile.source] || "좌표 출처 미확인";
+  const note = profile.status === "approximate"
+    ? "근사 위치입니다. 업체의 정확한 출입구나 건물 위치와 다를 수 있습니다."
+    : ["verified", "resolved"].includes(profile.status)
+      ? "주소와 연결된 좌표를 사용합니다. 검색 기준점과는 별개의 업체 위치입니다."
+      : "업체 주소의 검증 좌표가 없어 지도에는 임의 위치를 표시하지 않습니다.";
+  return `
+    <section class="sheet-section b2b-sheet-location" data-location-status="${escapeHtml(profile.status)}" aria-labelledby="b2bSheetLocationTitle">
+      <div class="b2b-sheet-location-head">
+        <span class="b2b-sheet-location-icon" aria-hidden="true">${navigationIconSvg("region")}</span>
+        <div><h3 id="b2bSheetLocationTitle">업체 위치</h3><p>${escapeHtml(note)}</p></div>
+        <span class="ui-badge ${escapeHtml(profile.tone)}"><span aria-hidden="true">${escapeHtml(profile.icon)}</span>${escapeHtml(profile.label)}</span>
+      </div>
+      <dl class="b2b-sheet-location-details">
+        <div><dt>표시 주소</dt><dd>${escapeHtml(profile.displayAddress || itemLocationLine(item) || "주소 미수집")}</dd></div>
+        <div><dt>좌표 기준</dt><dd>${escapeHtml(`${precisionLabel} · ${sourceLabel}`)}</dd></div>
+        <div><dt>최근 확인</dt><dd>${escapeHtml(profile.geocodedAt ? compactDateTime(profile.geocodedAt) : "확인 시각 미수집")}</dd></div>
+      </dl>
+    </section>
+  `;
+}
+
 function platformStatus(row) {
   const status = String(row.status || row.group || "");
-  if (status.includes("미노출") || status.includes("실패") || status.includes("차단")) return ["bad", status || "미노출"];
-  if (status.includes("OTA 확인")) return ["warn", "OTA 확인 필요"];
-  if (status.includes("보조")) return ["good", "보조"];
-  if (status.includes("확인") || status.includes("수동")) return ["warn", status || "확인 필요"];
-  return ["good", status || "노출"];
+  const sourceStatus = String(row.sourceStatus || "").trim().toLowerCase();
+  if (row.uiPlaceholder) return ["neutral", "미수집 · 수동 확인", "missing", "미수집"];
+  if (["auto_failed", "blocked", "failed", "error"].includes(sourceStatus) || /실패|차단|오류/.test(status)) {
+    return ["bad", status || "확인 실패", "error", "오류"];
+  }
+  if (["not_found", "hidden", "not_exposed"].includes(sourceStatus) || /미노출|미사용/.test(status)) {
+    return ["warn", status || "미노출", "zero", "미노출"];
+  }
+  if (["exposed", "visible", "confirmed"].includes(sourceStatus) || /(?:^|\s)(?:노출|광고|비광고)(?:\s|$)|검색\s*결과/.test(status)) {
+    return ["good", status || "노출", "ready", "확인됨"];
+  }
+  if (["needs_manual", "manual_only", "onda_manual", "similar_name", "unknown"].includes(sourceStatus) || /확인|수동|별도|유사명|미확인|검토|보조/.test(status)) {
+    return ["warn", status || "확인 필요", "pending", "확인 필요"];
+  }
+  return ["warn", status || "확인 필요", "pending", "확인 필요"];
 }
 
 function b2bPlatformModel(item = {}, rows = platformsForItem(item), audit = inventoryAuditProfile(item)) {
   const coupon = naverCouponInfo(item);
-  const visibleRows = rows.filter((row) => {
-    const status = String(row.status || row.group || "");
-    return !/미노출|실패|차단/.test(status);
+  const observedRows = rows.filter((row) => !row.uiPlaceholder);
+  const platformRowsWithState = observedRows.map((row) => ({ row, state: platformStatus(row)[2] }));
+  const visibleRows = platformRowsWithState.filter(({ state: valueState }) => valueState === "ready").map(({ row }) => row);
+  const pendingRows = platformRowsWithState.filter(({ state: valueState }) => valueState === "pending").map(({ row }) => row);
+  const errorRows = platformRowsWithState.filter(({ state: valueState }) => valueState === "error").map(({ row }) => row);
+  const naverRow = observedRows.find((row) => platformShortName(row.platform) === "네이버") || null;
+  const otaRows = observedRows.filter((row) => platformShortName(row.platform) !== "네이버");
+  const otaRowsWithState = otaRows.map((row) => ({ row, state: platformStatus(row)[2] }));
+  const hasOta = otaRowsWithState.some(({ state: valueState }) => valueState === "ready");
+  const channelPresentation = sheetMetricPresentation(visibleRows.length, {
+    observed: visibleRows.length > 0 || (observedRows.length > 0 && !pendingRows.length && !errorRows.length),
+    pending: visibleRows.length === 0 && pendingRows.length > 0,
+    error: visibleRows.length === 0 && pendingRows.length === 0 && errorRows.length > 0,
+    formatValue: fmtNumber
   });
-  const naverRow = rows.find((row) => platformShortName(row.platform) === "네이버") || null;
-  const otaRows = rows.filter((row) => platformShortName(row.platform) !== "네이버");
-  const hasOta = otaRows.some((row) => !/미노출|실패|차단/.test(String(row.status || row.group || "")));
+  const [, , naverState = "missing", naverStatus = "미수집"] = naverRow
+    ? platformStatus(naverRow)
+    : [];
+  const otaError = otaRowsWithState.some(({ state: valueState }) => valueState === "error");
+  const otaPending = otaRowsWithState.some(({ state: valueState }) => valueState === "pending");
+  const otaState = hasOta ? "ready" : otaError ? "error" : otaPending ? "pending" : otaRows.length ? "zero" : "missing";
+  const otaStatus = { error: "오류", ready: "확인됨", pending: "확인 필요", zero: "미노출", missing: "미수집" }[otaState];
+  const couponState = coupon.visible ? "ready" : observedRows.length ? "pending" : "missing";
+  const couponStatus = coupon.visible ? "확인됨" : observedRows.length ? "수동 확인" : "미수집";
   const decision = audit.otaCheckNeeded
     ? {
       tone: "watch",
@@ -30735,10 +31368,10 @@ function b2bPlatformModel(item = {}, rows = platformsForItem(item), audit = inve
     hasOta,
     decision,
     metrics: [
-      { label: "노출 채널", value: fmtNumber(visibleRows.length), note: rows.length ? `${fmtNumber(rows.length)}개 채널 확인` : "채널 표본 대기" },
-      { label: "네이버", value: naverRow ? "노출" : "확인필요", note: naverRow?.price || naverRow?.stock || item.price || "예약 화면 기준" },
-      { label: "OTA", value: hasOta ? "보조 가능" : "보완 필요", note: otaRows.length ? `${fmtNumber(otaRows.length)}개 OTA 표본` : "여기어때/야놀자/떠나요" },
-      { label: "쿠폰", value: coupon.named ? "쿠폰명 확인" : coupon.visible ? "노출 신호" : "수동확인", note: coupon.visible ? (coupon.names || "쿠폰명 미확인") : coupon.detail }
+      { label: "노출 채널", value: channelPresentation.valueText, note: observedRows.length ? `${fmtNumber(observedRows.length)}개 채널 확인` : "채널 표본 대기", state: channelPresentation.state, statusLabel: channelPresentation.statusLabel },
+      { label: "네이버", value: naverRow ? (naverState === "zero" ? "미노출" : naverState === "error" ? "확인 실패" : naverState === "pending" ? "확인 필요" : "노출") : "미수집", note: naverRow?.price || naverRow?.stock || item.price || "예약 화면 기준", state: naverState, statusLabel: naverStatus },
+      { label: "OTA", value: hasOta ? "보조 가능" : otaRows.length ? (otaState === "error" ? "확인 실패" : otaState === "zero" ? "미노출" : "확인 필요") : "미수집", note: otaRows.length ? `${fmtNumber(otaRows.length)}개 OTA 표본` : "여기어때/야놀자/떠나요", state: otaState, statusLabel: otaStatus },
+      { label: "쿠폰", value: coupon.named ? "쿠폰명 확인" : coupon.visible ? "노출 신호" : observedRows.length ? "수동 확인" : "미수집", note: coupon.visible ? (coupon.names || "쿠폰명 미확인") : coupon.detail, state: couponState, statusLabel: couponStatus }
     ]
   };
 }
@@ -30758,10 +31391,11 @@ function renderB2BPlatformBrief(item = {}, rows = platformsForItem(item), audit 
       </div>
       <div class="sheet-b2b-platform-grid">
         ${model.metrics.map((metric) => `
-          <div>
+          <div class="sheet-value-state-${escapeHtml(metric.state || "missing")}" data-sheet-value-state="${escapeHtml(metric.state || "missing")}">
             <span>${escapeHtml(metric.label)}</span>
             <strong>${escapeHtml(metric.value)}</strong>
             <small>${escapeHtml(metric.note || "")}</small>
+            <em class="sheet-value-status">${escapeHtml(metric.statusLabel || "확인 필요")}</em>
           </div>
         `).join("")}
       </div>
@@ -30782,27 +31416,65 @@ function sheetRegionForItem(item = {}) {
   }) || null;
 }
 
+function sheetSearchTrafficPresentation(traffic = {}) {
+  const total = optionalNumber(traffic.totalSearchVolume);
+  const ctr = optionalNumber(traffic.combinedCtr);
+  const status = optionalNumber(traffic.status);
+  const reason = String(traffic.reason || "").trim();
+  const observed = demandTrafficObserved(traffic) || (Number.isFinite(total) && total > 0);
+  const error = !observed && (
+    (Number.isFinite(status) && status >= 400) ||
+    /실패|오류|차단/.test(reason)
+  );
+  const totalMetric = sheetMetricPresentation(total, {
+    observed,
+    error,
+    formatValue: fmtNumber,
+    missingText: "미수집",
+    errorText: "확인 실패"
+  });
+  const zeroDenominator = observed && Number.isFinite(total) && total === 0 && !Number.isFinite(ctr);
+  const ctrMetric = sheetMetricPresentation(ctr, {
+    observed: observed && Number.isFinite(ctr),
+    applicable: !zeroDenominator,
+    pending: observed && Number.isFinite(total) && total > 0 && !Number.isFinite(ctr),
+    error,
+    formatValue: fmtSearchRate,
+    missingText: "미수집",
+    pendingText: "계산 대기",
+    unavailableText: "계산 불가",
+    unavailableStatus: "분모 0",
+    errorText: "확인 실패"
+  });
+  return { observed, error, reason, total: totalMetric, ctr: ctrMetric };
+}
+
 function b2bSearchModel(item = {}) {
   const region = sheetRegionForItem(item);
   const traffic = region?.traffic || state.data?.stats?.traffic || {};
   const insight = companyRankInsight(item, item.rank || item.overallRank || 0);
   const profile = b2bCompanyActionProfile(item, insight);
   const boundary = b2bBoundaryProfile(item);
-  const total = finiteNumber(traffic.totalSearchVolume, 0);
-  const ctr = optionalNumber(traffic.combinedCtr);
+  const trafficPresentation = sheetSearchTrafficPresentation(traffic);
+  const rankPresentation = sheetMetricPresentation(insight.rank, {
+    observed: finiteNumber(insight.rank, 0) > 0,
+    formatValue: (value) => `${fmtNumber(value)}위`,
+    missingText: "미수집"
+  });
   return {
     region,
     traffic,
+    trafficPresentation,
     insight,
     profile,
     boundary,
     boundaryLabel: boundary.label,
     boundaryDetail: boundary.summary,
     metrics: [
-      { label: "월검색량", value: total ? fmtNumber(total) : "확인필요", note: traffic.relKeyword || traffic.keyword || activeKeyword() },
-      { label: "클릭 반응", value: traffic.collectable || total ? fmtSearchRate(ctr) : "확인필요", note: "네이버 검색 기준" },
-      { label: "노출순위", value: insight.rank ? `${fmtNumber(insight.rank)}위` : "확인필요", note: item.rankingSourceLabel || "네이버 플레이스" },
-      { label: "노출권", value: boundary.label, note: boundary.value }
+      { label: "월검색량", value: trafficPresentation.total.valueText, note: traffic.relKeyword || traffic.keyword || activeKeyword(), state: trafficPresentation.total.state, statusLabel: trafficPresentation.total.statusLabel },
+      { label: "클릭 반응", value: trafficPresentation.ctr.valueText, note: "네이버 검색 기준", state: trafficPresentation.ctr.state, statusLabel: trafficPresentation.ctr.statusLabel },
+      { label: "노출순위", value: rankPresentation.valueText, note: item.rankingSourceLabel || "네이버 플레이스", state: rankPresentation.state, statusLabel: rankPresentation.statusLabel },
+      { label: "노출권", value: boundary.label, note: boundary.value, state: "ready", statusLabel: "확인됨" }
     ]
   };
 }
@@ -30822,10 +31494,11 @@ function renderB2BSearchBrief(item = {}) {
       </div>
       <div class="sheet-b2b-platform-grid">
         ${model.metrics.map((metric) => `
-          <div>
+          <div class="sheet-value-state-${escapeHtml(metric.state || "missing")}" data-sheet-value-state="${escapeHtml(metric.state || "missing")}">
             <span>${escapeHtml(metric.label)}</span>
             <strong>${escapeHtml(metric.value)}</strong>
             <small>${escapeHtml(metric.note || "")}</small>
+            <em class="sheet-value-status">${escapeHtml(metric.statusLabel || "확인 필요")}</em>
           </div>
         `).join("")}
       </div>
@@ -30849,7 +31522,7 @@ function renderSheetPlatform(item) {
         : audit.otaCheckNeeded
           ? "OTA 확인 필요"
           : "보조 확인";
-      baseRows.push({ platform: name, status });
+      baseRows.push({ platform: name, status, uiPlaceholder: true });
     }
   });
   return `
@@ -30857,7 +31530,7 @@ function renderSheetPlatform(item) {
     <section class="sheet-section">
       <h3>플랫폼 비교</h3>
       ${baseRows.map((row) => {
-        const [tone, label] = platformStatus(row);
+        const [tone, label, valueState, statusLabel] = platformStatus(row);
         const url = platformRowUrl(row, item);
         const rowContent = `
           <b class="platform-dot">${platformLetter(row.platform)}</b>
@@ -30865,12 +31538,12 @@ function renderSheetPlatform(item) {
             <strong>${escapeHtml(platformShortName(row.platform))}</strong>
             <small>${escapeHtml(row.price || row.stock || row.inventoryNote || "상세 확인")}</small>
           </div>
-          <em>${escapeHtml(url ? "이동" : label)}</em>
+          <em class="sheet-value-status">${escapeHtml(url ? `${label} · 이동` : label)}</em>
         `;
         return `
           ${url
-            ? `<a class="platform-row ${tone}" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(`${platformShortName(row.platform)} 채널로 이동`)}" aria-label="${escapeHtml(`${platformShortName(row.platform)}에서 ${item.name || "업체"} 보기`)}">${rowContent}</a>`
-            : `<div class="platform-row ${tone}">${rowContent}</div>`}
+            ? `<a class="platform-row ${tone} sheet-value-state-${valueState}" data-sheet-value-state="${valueState}" href="${escapeHtml(url)}" target="_blank" rel="noreferrer" title="${escapeHtml(`${platformShortName(row.platform)} · ${label}`)}" aria-label="${escapeHtml(`${platformShortName(row.platform)} ${statusLabel}. ${item.name || "업체"} 채널로 이동`)}">${rowContent}</a>`
+            : `<div class="platform-row ${tone} sheet-value-state-${valueState}" data-sheet-value-state="${valueState}" aria-label="${escapeHtml(`${platformShortName(row.platform)} ${statusLabel}`)}">${rowContent}</div>`}
         `;
       }).join("")}
     </section>
@@ -30896,28 +31569,33 @@ function renderSheetPlatform(item) {
 function renderSheetSearch(item) {
   const region = sheetRegionForItem(item);
   const traffic = region?.traffic || state.data?.stats?.traffic || {};
+  const trafficPresentation = sheetSearchTrafficPresentation(traffic);
+  const clusterState = region && regionPrimary(region) !== "확인필요" ? "ready" : "missing";
   return `
     ${renderB2BSearchBrief(item)}
     <section class="sheet-section">
       <h3>검색량 데이터</h3>
-      <div class="search-row">
+      <div class="search-row sheet-value-state-${trafficPresentation.total.state}" data-sheet-value-state="${trafficPresentation.total.state}">
         <div>
           <strong>${escapeHtml(traffic.relKeyword || traffic.keyword || activeKeyword())}</strong>
           <small>PC+모바일 월검색량</small>
+          <em class="sheet-value-status">${escapeHtml(trafficPresentation.total.statusLabel)}</em>
         </div>
-        <strong>${traffic.totalSearchVolume ? fmtNumber(traffic.totalSearchVolume) : "확인필요"}</strong>
+        <strong>${escapeHtml(trafficPresentation.total.valueText)}</strong>
       </div>
-      <div class="search-row">
+      <div class="search-row sheet-value-state-${trafficPresentation.ctr.state}" data-sheet-value-state="${trafficPresentation.ctr.state}">
         <div>
           <strong>종합 클릭률</strong>
           <small>네이버 검색 기준</small>
+          <em class="sheet-value-status">${escapeHtml(trafficPresentation.ctr.statusLabel)}</em>
         </div>
-        <strong>${traffic.collectable || traffic.totalSearchVolume ? fmtSearchRate(traffic.combinedCtr) : "확인필요"}</strong>
+        <strong>${escapeHtml(trafficPresentation.ctr.valueText)}</strong>
       </div>
-      <div class="search-row">
+      <div class="search-row sheet-value-state-${clusterState}" data-sheet-value-state="${clusterState}">
         <div>
           <strong>클러스터</strong>
           <small>${escapeHtml(region?.note || "지역별 본질 클러스터 기준")}</small>
+          <em class="sheet-value-status">${clusterState === "ready" ? "확인됨" : "미수집"}</em>
         </div>
         <strong>${escapeHtml(regionPrimary(region || {}))}</strong>
       </div>
@@ -30937,11 +31615,12 @@ function renderSheet() {
     button.setAttribute("tabindex", active ? "0" : "-1");
     if (active && els.sheetBody) els.sheetBody.setAttribute("aria-labelledby", button.id || "sheetTitle");
   });
-  els.sheetBody.innerHTML = state.selectedSheetTab === "platform"
+  const tabContent = state.selectedSheetTab === "platform"
     ? renderSheetPlatform(item)
     : state.selectedSheetTab === "search"
       ? renderSheetSearch(item)
       : renderSheetBooking(item);
+  els.sheetBody.innerHTML = `${!isAdminRole() ? renderB2BLocationPanel(item) : ""}${tabContent}`;
 }
 
 const overlayInteractionState = new WeakMap();
@@ -31011,7 +31690,7 @@ function openAccessibleOverlay(overlay, { initialFocus = "" } = {}) {
 }
 
 function closeAccessibleOverlay(overlay, { restoreFocus = true } = {}) {
-  if (!overlay || overlay.hidden) return;
+  if (!overlay || overlay.hidden) return false;
   const interaction = overlayInteractionState.get(overlay) || {};
   overlay.hidden = true;
   overlayInteractionState.delete(overlay);
@@ -31019,14 +31698,16 @@ function closeAccessibleOverlay(overlay, { restoreFocus = true } = {}) {
   const anotherOverlay = [els.detailSheet, els.controlDrawer].find((candidate) => candidate && !candidate.hidden);
   if (anotherOverlay) {
     activeAccessibleOverlay = anotherOverlay;
-    return;
+    return true;
   }
   document.body.style.overflow = interaction.bodyOverflow || "";
   document.body.classList.remove("overlay-open");
   setAccessibleOverlayBackgroundInactive(false);
   if (restoreFocus && interaction.trigger?.isConnected) {
     window.requestAnimationFrame(() => interaction.trigger.focus({ preventScroll: true }));
+    return true;
   }
+  return false;
 }
 
 function handleAccessibleOverlayKeydown(event) {
@@ -31060,9 +31741,11 @@ function handleAccessibleOverlayKeydown(event) {
   return false;
 }
 
-function openSheet(index) {
+function openSheet(index, options = {}) {
   const item = (state.data?.availability?.items || [])[Number(index)];
   if (!item) return;
+  state.b2bMapReturnFocusKey = String(options.returnFocusKey || "");
+  state.b2bMapReturnFocusSurface = String(options.returnFocusSurface || "");
   state.selectedItem = item;
   state.selectedSheetTab = "booking";
   renderSheet();
@@ -31070,7 +31753,21 @@ function openSheet(index) {
 }
 
 function closeSheet() {
-  closeAccessibleOverlay(els.detailSheet);
+  const returnFocusKey = state.b2bMapReturnFocusKey;
+  const returnFocusSurface = state.b2bMapReturnFocusSurface;
+  state.b2bMapReturnFocusKey = "";
+  state.b2bMapReturnFocusSurface = "";
+  const restored = closeAccessibleOverlay(els.detailSheet);
+  if (!restored && returnFocusKey) {
+    window.requestAnimationFrame(() => {
+      const candidates = Array.from(document.querySelectorAll("[data-b2b-map-select]"));
+      const matching = candidates.filter((candidate) => candidate.dataset.b2bMapSelect === returnFocusKey);
+      const preferred = returnFocusSurface === "marker"
+        ? matching.find((candidate) => candidate.matches(".company-map-marker"))
+        : matching.find((candidate) => !candidate.matches(".company-map-marker"));
+      (preferred || matching[0])?.focus?.({ preventScroll: true });
+    });
+  }
 }
 
 function openDrawer() {
@@ -32588,7 +33285,7 @@ function runOptionLabel(run = {}) {
 }
 
 async function loadRuns(selectLatest = false) {
-  if (!isAdminRole()) {
+  if (!isAdminRole() && !isAdminUserViewMode()) {
     state.runs = [];
     state.activeRunId = null;
     state.data = null;
@@ -32630,6 +33327,9 @@ async function loadRun(runId) {
   if (!runId) return;
   setStatus("데이터 로딩");
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
+  state.b2bMapTransientLocations = {};
+  state.b2bMapGeocodingState = "idle";
+  state.b2bMapGeocodingMessage = "";
   state.data = data;
   state.activeRunId = runId;
   syncAppHistoryState(false);
@@ -32674,6 +33374,9 @@ async function loadB2BHistoryRun(runId) {
   if (!runId || isAdminRole()) return;
   setStatus("검색 기록 로딩");
   const data = await fetchJson(`/api/member/runs/${encodeURIComponent(runId)}`);
+  state.b2bMapTransientLocations = {};
+  state.b2bMapGeocodingState = "idle";
+  state.b2bMapGeocodingMessage = "";
   state.data = data;
   state.activeRunId = runId;
   state.runs = data.run ? [{ ...data.run, id: runId }] : [];
@@ -33328,10 +34031,16 @@ function bindEvents() {
     const b2bMapView = event.target.closest("[data-b2b-map-view]");
     if (b2bMapView) {
       state.b2bMapViewMode = b2bMapView.dataset.b2bMapView === "list" ? "list" : "map";
-      const rows = companyMapPointRows(state.data?.regions || []);
-      renderB2BMapViewControls(rows);
+      const allRows = companyMapPointRows(state.data?.regions || []);
+      const rows = b2bMapFilteredRows(allRows);
+      renderB2BMapViewControls(allRows, rows);
       renderB2BMapCompanyList(rows);
       window.requestAnimationFrame(() => document.querySelector(`[data-b2b-map-view="${state.b2bMapViewMode}"]`)?.focus());
+      return;
+    }
+    const b2bMapGeocode = event.target.closest("[data-b2b-map-geocode]");
+    if (b2bMapGeocode) {
+      loadNaverMapLocationsForDisplay(b2bMapGeocode);
       return;
     }
     const b2bMapSelect = event.target.closest("[data-b2b-map-select]");
@@ -33343,8 +34052,7 @@ function bindEvents() {
     }
     const b2bMapDetail = event.target.closest("[data-open-company][data-b2b-map-company-key]");
     if (b2bMapDetail) {
-      selectB2BMapCompany(b2bMapDetail.dataset.b2bMapCompanyKey || "", b2bMapDetail);
-      openSheet(b2bMapDetail.dataset.openCompany);
+      selectB2BMapCompany(b2bMapDetail.dataset.b2bMapCompanyKey || "", b2bMapDetail, { openDetail: true });
       return;
     }
     const adminDbCompanySelect = event.target.closest("[data-admin-db-company-select]");
@@ -34157,6 +34865,42 @@ function bindEvents() {
   document.addEventListener("change", (event) => {
     const companyManualField = event.target.closest("[data-company-manual-form] input, [data-company-manual-form] select, [data-company-manual-form] textarea");
     if (companyManualField) markCompanyManualFormDirty(companyManualField.closest("[data-company-manual-form]"));
+    const b2bMapLocationStatus = event.target.closest("#b2bMapLocationStatus");
+    if (b2bMapLocationStatus) {
+      state.b2bMapFilters = {
+        ...(state.b2bMapFilters || {}),
+        locationStatus: b2bMapLocationStatus.value || "all"
+      };
+      renderMap().then(() => window.requestAnimationFrame(() => document.getElementById("b2bMapLocationStatus")?.focus()));
+      return;
+    }
+    const b2bMapBoundary = event.target.closest("#b2bMapBoundary");
+    if (b2bMapBoundary) {
+      state.b2bMapFilters = {
+        ...(state.b2bMapFilters || {}),
+        boundary: b2bMapBoundary.value || "all"
+      };
+      renderMap().then(() => window.requestAnimationFrame(() => document.getElementById("b2bMapBoundary")?.focus()));
+      return;
+    }
+    const b2bMapCategory = event.target.closest("#b2bMapCategory");
+    if (b2bMapCategory) {
+      state.b2bMapFilters = {
+        ...(state.b2bMapFilters || {}),
+        category: b2bMapCategory.value || "all"
+      };
+      renderMap().then(() => window.requestAnimationFrame(() => document.getElementById("b2bMapCategory")?.focus()));
+      return;
+    }
+    const b2bMapPlatform = event.target.closest("#b2bMapPlatform");
+    if (b2bMapPlatform) {
+      state.b2bMapFilters = {
+        ...(state.b2bMapFilters || {}),
+        platform: b2bMapPlatform.value || "all"
+      };
+      renderMap().then(() => window.requestAnimationFrame(() => document.getElementById("b2bMapPlatform")?.focus()));
+      return;
+    }
     const b2bCompetitionBoundary = event.target.closest("#b2bCompetitionBoundary");
     if (b2bCompetitionBoundary) {
       state.b2bCompetitionFilters = {
@@ -34504,6 +35248,7 @@ async function init() {
     await loadSession();
     syncCollectionModeInputs();
     bindEvents();
+    observeCompanyMapHitTargets();
     setDefaultDates();
     restoreAppHistoryState();
     syncAppHistoryState(false);
@@ -34514,6 +35259,11 @@ async function init() {
       }
       renderAdminConsoleDashboard();
       if (adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
+    } else if (isAdminUserViewMode()) {
+      state.runs = [];
+      state.activeRunId = null;
+      state.data = null;
+      await loadRuns(false);
     } else {
       state.runs = [];
       state.activeRunId = null;

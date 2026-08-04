@@ -87,6 +87,41 @@ async function main() {
         sourceRoles: ["admin"],
         collectionSources: ["test"],
         keywords: {},
+        manualCorrection: {
+          active: true,
+          location: {
+            latitude: 37.9001,
+            longitude: 127.2001,
+            status: "verified",
+            source: "manual",
+            precision: "rooftop",
+            resolvedAddress: "경기 포천시 fixture 1"
+          },
+          updatedAt: "2026-08-02T00:00:00.000Z"
+        },
+        location: {
+          latitude: 37.9002,
+          longitude: 127.2002,
+          status: "verified",
+          source: "manual",
+          precision: "rooftop",
+          resolvedAddress: "fixture manual address"
+        },
+        coordinates: [{
+          latitude: 37.9003,
+          longitude: 127.2003,
+          status: "verified",
+          source: "manual",
+          precision: "rooftop",
+          resolvedAddress: "legacy mirrored manual coordinate"
+        }, {
+          latitude: 37.9101,
+          longitude: 127.2101,
+          status: "resolved",
+          source: "provider",
+          precision: "parcel",
+          resolvedAddress: "fixture provider address"
+        }],
         inventory: {
           latest: {
             salesSignal: {
@@ -154,6 +189,9 @@ async function main() {
     assert.deepEqual(company.manualCorrection.facilityTags, ["수영장", "바베큐"]);
     assert.equal(company.manualCorrection.couponVisible, "visible");
     assert.equal(company.manualCorrection.couponNames, "주중 할인");
+    assert.equal(company.manualCorrection.location.latitude, 37.9001, "saving non-location corrections must preserve an active manual location");
+    assert.equal(company.manualCorrection.location.longitude, 127.2001);
+    assert.equal(company.manualCorrection.location.source, "manual");
     assert.equal(company.correctionStatus.key, "admin_override");
     assert.match(company.correctionStatus.detail, /숙박 운영 6개/);
     assert.match(company.correctionStatus.detail, /객실종류 2개/);
@@ -161,6 +199,26 @@ async function main() {
     assert.match(company.correctionStatus.detail, /시설 2개/);
     assert.equal(company.inventory.latest.correctionBasis.lodgingBasisTotal, 6);
     assert.equal(company.inventory.latest.correctionBasis.roomSegments.length, 2);
+    const cleared = await request(baseUrl, "POST", "/api/company-master/manual-correction", {
+      companyId,
+      active: false
+    }, cookies);
+    assert.equal(cleared.statusCode, 200);
+    assert.equal(cleared.body.resolved.action, "clearManualCorrection");
+
+    const clearedSummary = await request(baseUrl, "GET", "/api/company-master/summary", null, cookies);
+    assert.equal(clearedSummary.statusCode, 200);
+    const clearedCompany = clearedSummary.body.companies.find((row) => row.companyId === companyId);
+    assert.ok(clearedCompany);
+    assert.equal(clearedCompany.manualCorrection, null);
+    assert.equal(clearedCompany.location.source, "provider", "clearing a manual correction must reveal the preserved automatic coordinate instead of a stale mirrored manual point");
+    assert.equal(clearedCompany.location.lat, 37.9101);
+    assert.equal(clearedCompany.location.lon, 127.2101);
+
+    const storedMaster = JSON.parse(await fsp.readFile(path.join(companyMasterDir, "companies.json"), "utf8"));
+    assert.equal(storedMaster.companies[companyId].location, undefined, "the mirrored top-level manual location must be removed on explicit correction clear");
+    assert.equal(storedMaster.companies[companyId].coordinates.length, 1);
+    assert.equal(storedMaster.companies[companyId].coordinates[0].source, "provider");
     assert.deepEqual(company.inventory.latest.correctionBasis.otaChannels, ["여기어때", "야놀자"]);
   } finally {
     child.kill();

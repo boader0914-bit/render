@@ -127,6 +127,7 @@ assert.match(app, /Number\.isFinite\(card\.barValue\)/);
 assert.doesNotMatch(functionBlock("b2bSimpleSummaryModel"), /value:\s*revenueModel\.averageRevenue\s*\?[^\n]+:\s*fmtWon\(brief\.averageRevenue\)/);
 assert.match(functionBlock("b2bSimpleSummaryModel"), /revenueReady \? fmtWon\(revenueModel\.averageRevenue \|\| 0\) : "매출 표본 대기"/);
 assert.match(functionBlock("b2bSimpleSummaryModel"), /reservationReady \? \(actualReservationRate === 0 \? "zero" : "ready"\) : "unavailable"/);
+assert.match(functionBlock("b2bSimpleSummaryModel"), /const actualReservationRate[\s\S]*?const sampleCount[\s\S]*?const competitionReady[\s\S]*?const reservationReady[\s\S]*?const demandReady[\s\S]*?const completedAt[\s\S]*?const analysisPeriod/, "summary readiness variables must be declared in the same function before card construction");
 assert.match(app, /data-b2b-interest-workbench="true"[^>]*aria-labelledby="b2bInterestWorkbenchTitle"/);
 assert.match(app, /data-b2b-interest-master-detail="true"/);
 assert.match(app, /data-b2b-interest-detail-state="no-selection"/);

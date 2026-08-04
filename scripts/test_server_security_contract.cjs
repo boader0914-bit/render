@@ -171,6 +171,25 @@ async function main() {
           addresses: ["경기 가평군"],
           primaryCategoryKey: "glamping",
           categoryTags: ["glamping"],
+          location: {
+            status: "verified",
+            statusLabel: "검증 위치",
+            source: "manual",
+            precision: "rooftop",
+            confidence: 1,
+            crs: "EPSG:4326",
+            lat: 37.1,
+            lon: 127.2,
+            resolvedAddress: "경기 가평군 fixture 1",
+            displayAddress: "경기 가평군 fixture 1",
+            geocodedAt: "2026-08-03T00:00:00.000Z",
+            providerKey: "drop",
+            addressFingerprint: "drop",
+            rawProviderResponse: { secret: "drop" },
+            unknownFutureLocationField: "drop"
+          },
+          resolvedAddress: "must stay private outside location",
+          precision: "must stay private outside location",
           passwordHash: "drop"
         },
         price: "100000",
@@ -207,8 +226,26 @@ async function main() {
     regions: ["가평"],
     addresses: ["경기 가평군"],
     primaryCategoryKey: "glamping",
-    categoryTags: ["glamping"]
+    categoryTags: ["glamping"],
+    location: {
+      status: "verified",
+      statusLabel: "검증 위치",
+      source: "manual",
+      precision: "rooftop",
+      confidence: 1,
+      crs: "EPSG:4326",
+      lat: 37.1,
+      lon: 127.2,
+      resolvedAddress: "경기 가평군 fixture 1",
+      displayAddress: "경기 가평군 fixture 1",
+      geocodedAt: "2026-08-03T00:00:00.000Z"
+    }
   }, "reviewed public company identity and category fields remain available to the B2B UI");
+  assert.equal("resolvedAddress" in publicPayload.availability.items[0].companyProfile, false, "location metadata names are not globally allowlisted");
+  assert.equal("precision" in publicPayload.availability.items[0].companyProfile, false, "location precision is scoped to the location object");
+  assert.equal("providerKey" in publicPayload.availability.items[0].companyProfile.location, false, "provider identity remains private");
+  assert.equal("addressFingerprint" in publicPayload.availability.items[0].companyProfile.location, false, "address fingerprints remain private");
+  assert.equal("rawProviderResponse" in publicPayload.availability.items[0].companyProfile.location, false, "raw provider payloads remain private");
   assert.equal(publicPayload.availability.items[0].verifiedCorrectionApplied, true, "reviewed B2B correction remains public");
   assert.equal(publicPayload.availability.items[0].verifiedRoomSegments[0].weekdayPrice, 120000);
   assert.equal(publicPayload.availability.items[0].itemDetails[0].bizItemId, "room-1");
