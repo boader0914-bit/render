@@ -49,12 +49,12 @@ for (const asset of ["/login-theme.js", "/public-ui.css", "/manifest.webmanifest
   assert.match(server, new RegExp(`"${asset.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`), `public asset missing: ${asset}`);
 }
 
-const expectedAssetVersion = "v2-20260804-detail-sheet-v38";
+const expectedAssetVersion = "v2-20260804-detail-sheet-v39";
 const shellAssetVersions = [...indexHtml.matchAll(/(?:styles\.css|app\.js)\?v=([^"']+)/g)].map((match) => match[1]);
 assert.deepEqual(shellAssetVersions, [expectedAssetVersion, expectedAssetVersion], "index CSS and JS must share the current release cache version");
-assert.match(server, /const UI_ASSET_VERSION = "v2-20260804-detail-sheet-v38";/, "server must enforce the current UI asset version");
-assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260804-detail-sheet-v38";/, "service worker must share the current UI asset version");
-assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260804-detail-sheet-v38";/, "service worker cache must rotate with the UI release");
+assert.match(server, /const UI_ASSET_VERSION = "v2-20260804-detail-sheet-v39";/, "server must enforce the current UI asset version");
+assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260804-detail-sheet-v39";/, "service worker must share the current UI asset version");
+assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260804-detail-sheet-v39";/, "service worker cache must rotate with the UI release");
 assert.match(serviceWorker, /`\/styles\.css\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app stylesheet");
 assert.match(serviceWorker, /`\/app\.js\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app script");
 assert.match(serviceWorker, /const SENSITIVE_NAVIGATION_PATHS = new Set\(/, "service worker must declare sensitive navigation routes");

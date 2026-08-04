@@ -148,8 +148,10 @@ assert.match(functionBlock("handleAccessibleOverlayKeydown"), /event\.key\s*!==\
 assert.match(functionBlock("openSheet"), /renderSheet\(\)[\s\S]*openAccessibleOverlay\(els\.detailSheet/);
 assert.match(functionBlock("resetDetailSheetScroll"), /els\.sheetBody\.scrollTop\s*=\s*0/);
 assert.match(functionBlock("resetDetailSheetScroll"), /els\.sheetBody\.scrollLeft\s*=\s*0/);
-assert.match(functionBlock("openSheet"), /renderSheet\(\);[\s\S]*resetDetailSheetScroll\(\);[\s\S]*openAccessibleOverlay\(els\.detailSheet/);
-assert.ok((app.match(/renderSheet\(\);\s*resetDetailSheetScroll\(\);/g) || []).length >= 3, "opening and both pointer/keyboard tab changes must reveal the first detail metric");
+assert.match(functionBlock("resetDetailSheetScroll"), /requestAnimationFrame\(applyReset\)/, "scroll anchoring must be cleared again after the new detail layout settles");
+assert.match(functionBlock("openSheet"), /renderSheet\(\);[\s\S]*openAccessibleOverlay\(els\.detailSheet[\s\S]*resetDetailSheetScroll\(\);/);
+assert.ok((app.match(/resetDetailSheetScroll\(\);/g) || []).length >= 3, "opening and both pointer/keyboard tab changes must reveal the first detail metric");
+assert.match(app, /state\.selectedSheetTab\s*=\s*nextTab[^;]*;[\s\S]*renderSheet\(\);[\s\S]*nextTab\?\.focus\(\);[\s\S]*resetDetailSheetScroll\(\);/, "keyboard tab focus must settle before the sheet scroll is reset");
 assert.match(functionBlock("closeSheet"), /closeAccessibleOverlay\(els\.detailSheet\)/);
 assert.match(functionBlock("renderSheet"), /aria-selected/);
 assert.match(functionBlock("renderSheet"), /tabindex/);

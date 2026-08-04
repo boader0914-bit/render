@@ -84,7 +84,8 @@ async function main() {
   assert.ok(listeners.has("fetch"), "fetch handler registered");
   assert.ok(listeners.has("activate"), "activate handler registered");
 
-  const currentCache = "lodging-datalab-pwa-v20260804-detail-sheet-v38";
+  const currentCache = "lodging-datalab-pwa-v20260804-detail-sheet-v39";
+  stores.set("lodging-datalab-pwa-v20260804-detail-sheet-v38", new Map([["https://fixture.local/b2b", new Response("old-v38-private")]]));
   stores.set("lodging-datalab-pwa-v20260804-region-hierarchy-v37", new Map([["https://fixture.local/b2b", new Response("old-v37-private")]]));
   stores.set("lodging-datalab-pwa-v20260801-ui-release-v27", new Map([["https://fixture.local/admin", new Response("old-private")]]));
   stores.set("unrelated-app-cache-v4", new Map([
@@ -95,7 +96,7 @@ async function main() {
   let activation;
   listeners.get("activate")({ waitUntil(value) { activation = Promise.resolve(value); } });
   await activation;
-  assert.deepEqual(deletedCaches.sort(), ["lodging-datalab-pwa-v20260801-ui-release-v27", "lodging-datalab-pwa-v20260804-region-hierarchy-v37"].sort(), "activate removes previous caches");
+  assert.deepEqual(deletedCaches.sort(), ["lodging-datalab-pwa-v20260801-ui-release-v27", "lodging-datalab-pwa-v20260804-region-hierarchy-v37", "lodging-datalab-pwa-v20260804-detail-sheet-v38"].sort(), "activate removes previous caches");
   assert.equal(stores.has("unrelated-app-cache-v4"), true, "activate preserves caches owned by unrelated applications");
 
   const privateNavigation = {
@@ -119,12 +120,12 @@ async function main() {
     method: "GET",
     mode: "cors",
     destination: "script",
-    url: "https://fixture.local/app.js?v=v2-20260804-detail-sheet-v38"
+    url: "https://fixture.local/app.js?v=v2-20260804-detail-sheet-v39"
   });
-  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260804-detail-sheet-v38");
+  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260804-detail-sheet-v39");
   await Promise.resolve();
   await Promise.resolve();
-  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260804-detail-sheet-v38")), "allowlisted static asset is cached");
+  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260804-detail-sheet-v39")), "allowlisted static asset is cached");
 
   fetchImpl = async () => { throw new Error("offline"); };
   const unrelatedStaticFallback = await dispatchFetch({

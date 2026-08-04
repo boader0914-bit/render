@@ -31976,8 +31976,13 @@ function renderSheet() {
 
 function resetDetailSheetScroll() {
   if (!els.sheetBody) return;
-  els.sheetBody.scrollTop = 0;
-  els.sheetBody.scrollLeft = 0;
+  const applyReset = () => {
+    if (!els.sheetBody) return;
+    els.sheetBody.scrollTop = 0;
+    els.sheetBody.scrollLeft = 0;
+  };
+  applyReset();
+  window.requestAnimationFrame(applyReset);
 }
 
 const overlayInteractionState = new WeakMap();
@@ -32108,8 +32113,8 @@ function openSheet(index, options = {}) {
   state.selectedItem = item;
   state.selectedSheetTab = "booking";
   renderSheet();
-  resetDetailSheetScroll();
   openAccessibleOverlay(els.detailSheet, { initialFocus: "button[data-close-sheet]" });
+  resetDetailSheetScroll();
 }
 
 function closeSheet() {
@@ -35510,8 +35515,8 @@ function bindEvents() {
       const nextTab = tabs[nextIndex];
       state.selectedSheetTab = nextTab?.dataset.sheetTab || "booking";
       renderSheet();
-      resetDetailSheetScroll();
       nextTab?.focus();
+      resetDetailSheetScroll();
       return;
     }
     const mapCompany = event.target.closest?.(".company-map-marker[data-b2b-map-select]");
