@@ -146,6 +146,10 @@ assert.match(functionBlock("setAccessibleOverlayBackgroundInactive"), /aria-hidd
 assert.match(functionBlock("handleAccessibleOverlayKeydown"), /event\.key\s*===\s*["']Escape["']/);
 assert.match(functionBlock("handleAccessibleOverlayKeydown"), /event\.key\s*!==\s*["']Tab["']/);
 assert.match(functionBlock("openSheet"), /renderSheet\(\)[\s\S]*openAccessibleOverlay\(els\.detailSheet/);
+assert.match(functionBlock("resetDetailSheetScroll"), /els\.sheetBody\.scrollTop\s*=\s*0/);
+assert.match(functionBlock("resetDetailSheetScroll"), /els\.sheetBody\.scrollLeft\s*=\s*0/);
+assert.match(functionBlock("openSheet"), /renderSheet\(\);[\s\S]*resetDetailSheetScroll\(\);[\s\S]*openAccessibleOverlay\(els\.detailSheet/);
+assert.ok((app.match(/renderSheet\(\);\s*resetDetailSheetScroll\(\);/g) || []).length >= 3, "opening and both pointer/keyboard tab changes must reveal the first detail metric");
 assert.match(functionBlock("closeSheet"), /closeAccessibleOverlay\(els\.detailSheet\)/);
 assert.match(functionBlock("renderSheet"), /aria-selected/);
 assert.match(functionBlock("renderSheet"), /tabindex/);
@@ -384,6 +388,33 @@ assert.match(css, /\.structure-badge\[data-sheet-value-state\]\s*\{[^}]*color:\s
 assert.match(css, /\.structure-badge:is\([\s\S]*?data-sheet-value-state="ready"[\s\S]*?data-sheet-value-state="zero"[\s\S]*?\)\s*\{[^}]*color:\s*var\(--sheet-tone,[^;]*!important/s, "observed sheet status badges must preserve their semantic quality tone");
 assert.match(css, /\.progress\s*\{[^}]*background:\s*var\(--sheet-section-surface,\s*var\(--color-surface-subtle\)\)/s);
 assert.match(css, /\.sheet-history-grid strong\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);
+
+const visibilityMarker = css.indexOf("/* Detail sheet numeric-card visibility and full-text contract v2. */");
+const visibilityEnd = css.indexOf("/* End detail sheet numeric-card visibility and full-text contract v2. */");
+assert.ok(visibilityMarker >= 0 && visibilityEnd > visibilityMarker, "missing bounded detail-sheet numeric visibility contract");
+const visibilityContract = css.slice(visibilityMarker, visibilityEnd);
+for (const grid of [
+  "sheet-flow-grid",
+  "sheet-history-grid",
+  "sheet-collection-grid",
+  "sheet-audit-grid",
+  "sheet-audit-summary",
+  "sheet-b2b-platform-grid",
+  "sheet-b2b-detail-grid",
+  "sheet-b2b-flow-strip",
+  "sheet-b2b-evidence-grid",
+  "sheet-b2b-note-grid",
+  "sheet-b2b-insight .company-insight-grid",
+]) {
+  assert.ok(visibilityContract.includes(`.${grid}`), `${grid} must own direct semantic surface and text rules`);
+}
+assert.match(visibilityContract, /background:\s*color-mix\([^;]*var\(--sheet-card-surface\)[^;]*!important/);
+assert.match(visibilityContract, /> div > strong\s*\{[^}]*color:\s*var\(--sheet-value-tone,\s*var\(--sheet-tone,\s*var\(--color-action-primary\)\)\)\s*!important[^}]*white-space:\s*normal[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip[^}]*overflow-wrap:\s*anywhere/s);
+assert.match(visibilityContract, /> div > :is\(span, small\)\s*\{[^}]*white-space:\s*normal[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip[^}]*overflow-wrap:\s*anywhere/s);
+assert.match(visibilityContract, /:is\(\.reason-chip-row, \.sheet-audit-reasons\) > span\s*\{[^}]*background:\s*color-mix\([^;]*var\(--sheet-card-surface\)[^;]*!important/s);
+assert.match(visibilityContract, /:is\(\.reason-chip-row, \.sheet-audit-reasons\) > span\s*\{[^}]*color:\s*var\(--color-text-primary\)\s*!important/s);
+assert.match(visibilityContract, /:is\(\.reason-chip-row, \.sheet-audit-reasons\) > span\s*\{[^}]*white-space:\s*normal[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip[^}]*overflow-wrap:\s*anywhere/s);
+assert.doesNotMatch(visibilityContract, /#fff(?:fff)?\b|rgba?\(\s*255\s*,\s*255\s*,\s*255/i, "detail visibility contract must not reintroduce a light-only card");
 assert.match(css, /\[data-sheet-value-state="missing"\]\s*\{[^}]*--sheet-value-tone:\s*var\(--color-text-secondary\)/s);
 assert.match(css, /\[data-sheet-value-state="pending"\]\s*\{[^}]*--sheet-value-tone:\s*var\(--color-status-warning\)/s);
 assert.match(css, /a\.platform-row\[data-sheet-value-state\]:hover\s*\{[^}]*background:\s*color-mix/s);

@@ -35164,6 +35164,83 @@ body.role-admin :is(
   background: #fff5f5 !important;
 }
 
+/* Detail sheet numeric-card visibility and full-text contract v2. */
+:is(body.role-admin, body.role-b2b) .detail-sheet :is(
+  .sheet-flow-grid,
+  .sheet-history-grid,
+  .sheet-collection-grid,
+  .sheet-audit-grid,
+  .sheet-audit-summary,
+  .sheet-b2b-platform-grid,
+  .sheet-b2b-detail-grid,
+  .sheet-b2b-flow-strip,
+  .sheet-b2b-evidence-grid,
+  .sheet-b2b-note-grid,
+  .sheet-b2b-insight .company-insight-grid
+) > div {
+  min-width: 0;
+  border-color: color-mix(in srgb, var(--sheet-value-tone, var(--sheet-tone, var(--color-status-info))) 34%, var(--sheet-card-border)) !important;
+  background: color-mix(in srgb, var(--sheet-value-tone, var(--sheet-tone, var(--color-status-info))) 5%, var(--sheet-card-surface)) !important;
+  color: var(--color-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet :is(
+  .sheet-flow-grid,
+  .sheet-history-grid,
+  .sheet-collection-grid,
+  .sheet-audit-grid,
+  .sheet-audit-summary,
+  .sheet-b2b-platform-grid,
+  .sheet-b2b-detail-grid,
+  .sheet-b2b-flow-strip,
+  .sheet-b2b-evidence-grid,
+  .sheet-b2b-note-grid,
+  .sheet-b2b-insight .company-insight-grid
+) > div > strong {
+  color: var(--sheet-value-tone, var(--sheet-tone, var(--color-action-primary))) !important;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet :is(
+  .sheet-flow-grid,
+  .sheet-history-grid,
+  .sheet-collection-grid,
+  .sheet-audit-grid,
+  .sheet-audit-summary,
+  .sheet-b2b-platform-grid,
+  .sheet-b2b-detail-grid,
+  .sheet-b2b-flow-strip,
+  .sheet-b2b-evidence-grid,
+  .sheet-b2b-note-grid,
+  .sheet-b2b-insight .company-insight-grid
+) > div > :is(span, small) {
+  color: var(--color-text-secondary) !important;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  text-shadow: none !important;
+}
+
+:is(body.role-admin, body.role-b2b) .detail-sheet :is(.reason-chip-row, .sheet-audit-reasons) > span {
+  max-width: 100%;
+  border-color: color-mix(in srgb, var(--color-status-info) 38%, var(--sheet-card-border)) !important;
+  background: color-mix(in srgb, var(--color-status-info) 7%, var(--sheet-card-surface)) !important;
+  color: var(--color-text-primary) !important;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  text-shadow: none !important;
+}
+
+/* End detail sheet numeric-card visibility and full-text contract v2. */
+
 /* Admin DB page split and company-list density lock. */
 body.role-admin .admin-db-board {
   gap: 10px;

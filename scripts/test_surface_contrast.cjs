@@ -583,6 +583,28 @@ assert.ok(index.indexOf('src="/login-theme.js"') < index.indexOf('href="/styles.
 assert.match(styles, /:focus-visible/);
 assert.match(styles, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
 
+const detailVisibilityStart = styles.indexOf("/* Detail sheet numeric-card visibility and full-text contract v2. */");
+const detailVisibilityEnd = styles.indexOf("/* End detail sheet numeric-card visibility and full-text contract v2. */");
+assert.ok(detailVisibilityStart >= 0 && detailVisibilityEnd > detailVisibilityStart, "detail numeric-card contrast contract must be bounded");
+const detailVisibilityContract = styles.slice(detailVisibilityStart, detailVisibilityEnd);
+assert.match(detailVisibilityContract, /:is\(body\.role-admin, body\.role-b2b\) \.detail-sheet/);
+assert.match(detailVisibilityContract, /var\(--color-text-primary\)/);
+assert.match(detailVisibilityContract, /var\(--color-text-secondary\)/);
+assert.match(detailVisibilityContract, /var\(--color-action-primary\)/);
+assert.match(detailVisibilityContract, /var\(--sheet-card-surface\)/);
+assert.match(detailVisibilityContract, /:is\(\.reason-chip-row, \.sheet-audit-reasons\) > span[\s\S]*white-space:\s*normal[\s\S]*overflow-wrap:\s*anywhere/);
+for (const selector of [
+  ".sheet-b2b-platform-grid",
+  ".sheet-b2b-flow-strip",
+  ".sheet-b2b-evidence-grid",
+  ".sheet-b2b-note-grid",
+  ".sheet-audit-summary",
+  ".sheet-b2b-insight .company-insight-grid",
+]) {
+  assert.ok(detailVisibilityContract.includes(selector), `detail contrast contract must include ${selector}`);
+}
+assert.doesNotMatch(detailVisibilityContract, /#f5f9ff|#dbe7ff|#fff(?:fff)?\b/i, "detail cards and chips must not depend on pale light-only colors");
+
 console.log(
   `Native semantic theme contrast checks passed (${LIGHT_SURFACE_SELECTORS.length} light, ${DARK_SURFACE_SELECTORS.length} dark, ${DARK_TRANSPARENT_CARD_SELECTORS.length} transparent dark-card selectors; ${REQUIRED_COLOR_TOKENS.length} shared color tokens)`,
 );

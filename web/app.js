@@ -31974,6 +31974,12 @@ function renderSheet() {
   els.sheetBody.innerHTML = `${!isAdminRole() ? renderB2BLocationPanel(item) : ""}${tabContent}`;
 }
 
+function resetDetailSheetScroll() {
+  if (!els.sheetBody) return;
+  els.sheetBody.scrollTop = 0;
+  els.sheetBody.scrollLeft = 0;
+}
+
 const overlayInteractionState = new WeakMap();
 const overlayBackgroundState = new WeakMap();
 let activeAccessibleOverlay = null;
@@ -32102,6 +32108,7 @@ function openSheet(index, options = {}) {
   state.selectedItem = item;
   state.selectedSheetTab = "booking";
   renderSheet();
+  resetDetailSheetScroll();
   openAccessibleOverlay(els.detailSheet, { initialFocus: "button[data-close-sheet]" });
 }
 
@@ -35485,6 +35492,7 @@ function bindEvents() {
     button.addEventListener("click", () => {
       state.selectedSheetTab = button.dataset.sheetTab;
       renderSheet();
+      resetDetailSheetScroll();
     });
   });
   document.addEventListener("keydown", (event) => {
@@ -35502,6 +35510,7 @@ function bindEvents() {
       const nextTab = tabs[nextIndex];
       state.selectedSheetTab = nextTab?.dataset.sheetTab || "booking";
       renderSheet();
+      resetDetailSheetScroll();
       nextTab?.focus();
       return;
     }
