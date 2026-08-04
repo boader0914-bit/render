@@ -302,6 +302,10 @@ assert.match(mapControlsBlock, /counts\.unresolved/);
 assert.match(mapControlsBlock, /data-b2b-map-geocode/);
 assert.match(mapControlsBlock, /좌표는 저장·캐시하지 않고 이번 화면에서만 사용/);
 assert.match(mapControlsBlock, /지역 중심.*업체 위치로 대체하지 않습니다/);
+assert.match(mapControlsBlock, /const geocodingReadOnly = isAdminRole\(\) \|\| isAdminUserViewMode\(\)/);
+assert.match(mapControlsBlock, /geocodingBusy \|\| geocodingReadOnly \|\| !lookupCandidates\.length/);
+assert.match(mapControlsBlock, /관리자 미리보기에서는 위치 조회를 실행할 수 없습니다/);
+assert.match(mapControlsBlock, /aria-describedby="b2bMapGeocodeHelp"/);
 
 const transientLookupBlock = functionBlock(app, "loadNaverMapLocationsForDisplay");
 assert.match(transientLookupBlock, /isAdminRole\(\) \|\| isAdminUserViewMode\(\)/);

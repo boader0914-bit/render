@@ -27444,6 +27444,7 @@ function renderB2BMapViewControls(rows = [], visibleRows = b2bMapFilteredRows(ro
     && !["verified", "resolved", "approximate"].includes(row.coordinateStatus)
   )).slice(0, 25);
   const geocodingBusy = state.b2bMapGeocodingState === "loading";
+  const geocodingReadOnly = isAdminRole() || isAdminUserViewMode();
   const categoryOptions = Array.from(new Set(rows.flatMap((row) => row.categoryKeys || [])))
     .map((key) => ({ key, label: lodgingCategoryProfile(key).label || key }))
     .sort((a, b) => a.label.localeCompare(b.label, "ko"));
@@ -27454,10 +27455,10 @@ function renderB2BMapViewControls(rows = [], visibleRows = b2bMapFilteredRows(ro
       <button class="secondary-button" type="button" data-b2b-map-view="list" aria-pressed="${state.b2bMapViewMode === "list" ? "true" : "false"}">목록만 보기</button>
     </div>
     <div class="b2b-map-transient-action">
-      <button class="secondary-button" type="button" data-b2b-map-geocode${geocodingBusy || !lookupCandidates.length ? " disabled" : ""}>
+      <button class="secondary-button" type="button" data-b2b-map-geocode${geocodingBusy || geocodingReadOnly || !lookupCandidates.length ? " disabled" : ""}${geocodingReadOnly ? ' aria-describedby="b2bMapGeocodeHelp"' : ""}>
         <span aria-hidden="true">⌖</span>${geocodingBusy ? "네이버 위치 확인 중" : `네이버 위치 확인 (${fmtNumber(lookupCandidates.length)})`}
       </button>
-      <small>명시적으로 누를 때만 조회하며 좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다.</small>
+      <small id="b2bMapGeocodeHelp">${geocodingReadOnly ? "관리자 미리보기에서는 위치 조회를 실행할 수 없습니다." : "명시적으로 누를 때만 조회하며 좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다."}</small>
     </div>
     <div class="b2b-map-filter-fields" aria-label="지도 업체 필터">
       <label><span>위치 상태</span><select id="b2bMapLocationStatus"><option value="all"${filters.locationStatus === "all" ? " selected" : ""}>전체</option><option value="located"${filters.locationStatus === "located" ? " selected" : ""}>검증·확인 위치</option><option value="approximate"${filters.locationStatus === "approximate" ? " selected" : ""}>근사 위치</option><option value="unresolved"${filters.locationStatus === "unresolved" ? " selected" : ""}>좌표 미확인</option></select></label>
