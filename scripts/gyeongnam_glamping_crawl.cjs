@@ -7,6 +7,16 @@ const {
   evaluateLodgingRelevance
 } = require("./lodging_collection_context.cjs");
 const { buildWorkbook } = require("./workbook_export.cjs");
+const {
+  extractApolloState,
+  looksLikeAccessBlock,
+  parseRootKey,
+  selectNaverOrganicResult
+} = require("./naver_place_apollo_parser.cjs");
+const {
+  createCrawlFailure,
+  serializeCollectorFailure
+} = require("./crawl_failure_contract.cjs");
 
 const PRODUCT_MODES = {
   all: "전체",
@@ -773,38 +783,6 @@ async function getHistoricalNaverBookingBusiness(placeId) {
   return map.get(String(placeId || "")) || null;
 }
 
-function jsonEnd(s, start) {
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < s.length; i += 1) {
-    const c = s[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-    } else if (c === '"') {
-      inStr = true;
-    } else if (c === "{") {
-      depth += 1;
-    } else if (c === "}") {
-      depth -= 1;
-      if (depth === 0) return i + 1;
-    }
-  }
-  return -1;
-}
-
-function extractApolloState(html) {
-  const marker = "window.__APOLLO_STATE__ = ";
-  const markerIndex = html.indexOf(marker);
-  if (markerIndex < 0) throw new Error("Naver Apollo state was not found.");
-  const start = markerIndex + marker.length;
-  const end = jsonEnd(html, start);
-  if (end < 0) throw new Error("Naver Apollo state JSON did not terminate.");
-  return JSON.parse(html.slice(start, end));
-}
-
 async function fetchText(url, options = {}) {
   const res = await fetch(url, {
     ...options,
@@ -829,42 +807,12 @@ async function fetchJson(url, options = {}) {
   return { res, data, text };
 }
 
-function parseRootKey(key) {
-  const start = key.indexOf("(");
-  const end = key.lastIndexOf(")");
-  if (start < 0 || end < 0) return null;
-  try {
-    return JSON.parse(key.slice(start + 1, end));
-  } catch {
-    return null;
-  }
-}
-
-function pickNaverSearchKey(state, query) {
-  const keys = Object.keys(state.ROOT_QUERY || {});
-  return keys.find((key) => {
-    if (!key.startsWith("accommodationSearch(")) return false;
-    if (key.includes("filterOpening")) return false;
-    const parsed = parseRootKey(key);
-    return parsed?.input?.query === query && parsed?.input?.display === 50;
-  });
-}
-
-function pickNaverPlaceListKey(state, query) {
-  const keys = Object.keys(state.ROOT_QUERY || {});
-  return keys.find((key) => {
-    if (!key.startsWith("placeList(")) return false;
-    const parsed = parseRootKey(key);
-    return parsed?.input?.query === query && parsed?.input?.display === 50;
-  });
-}
-
 function pickNaverAdKey(state, query, businessTypes = ["accommodation"]) {
   const keys = Object.keys(state.ROOT_QUERY || {});
   return keys.find((key) => {
     if (!key.startsWith("adBusinesses(")) return false;
     if (key.includes('"channel":"openingPlace"')) return false;
-    const parsed = parseRootKey(key);
+    const parsed = parseRootKey(key)?.args;
     return parsed?.input?.query === query && businessTypes.includes(parsed?.input?.businessType);
   });
 }
@@ -1056,6 +1004,12 @@ function mapNaverItem(state, item, extras = {}) {
 async function getNaverState(query) {
   const url = `https://pcmap.place.naver.com/accommodation/list?query=${encodeURIComponent(query)}`;
   const { res, text } = await fetchText(url);
+  if (res.status === 403 || res.status === 429 || looksLikeAccessBlock(text)) {
+    throw createCrawlFailure("NAVER_ACCESS_BLOCKED");
+  }
+  if (!res.ok) {
+    throw createCrawlFailure(res.status >= 500 ? "NAVER_TEMPORARY_UNAVAILABLE" : "NAVER_HTTP_ERROR");
+  }
   const state = extractApolloState(text);
   return { status: res.status, state, url };
 }
@@ -2531,9 +2485,10 @@ async function collectNaverMain() {
     const { state, status, url } = await getNaverState(query);
     lastStatus = status;
     lastUrl = url;
-    const searchKey = pickNaverSearchKey(state, query) || (province.isCompany ? pickNaverPlaceListKey(state, query) : "");
+    const organicResult = selectNaverOrganicResult(state, query, { allowPlaceList: true, required: false });
+    const searchKey = organicResult?.key || "";
     const adKey = pickNaverAdKey(state, query, province.isCompany ? ["accommodation", "place"] : ["accommodation"]);
-    const isPlaceList = Boolean(searchKey && searchKey.startsWith("placeList("));
+    const isPlaceList = organicResult?.type === "placeList";
     const attempt = {
       query,
       status,
@@ -2549,14 +2504,10 @@ async function collectNaverMain() {
       continue;
     }
 
-    const searchResult = searchKey ? state.ROOT_QUERY[searchKey] : null;
-    const overallRefs = searchResult
-      ? (isPlaceList ? searchResult.businesses?.items || [] : searchResult.business?.items || [])
-      : [];
+    const overallItems = organicResult?.items || [];
     const adRefs = adKey ? state.ROOT_QUERY[adKey].items || [] : [];
 
-    let overall = overallRefs.map((ref, index) => {
-      const item = state[ref.__ref];
+    let overall = overallItems.map((item, index) => {
       return mapNaverItem(state, item, {
         query,
         overall_rank: index + 1,
@@ -2591,7 +2542,7 @@ async function collectNaverMain() {
     return {
       status,
       url,
-      total: searchResult ? (isPlaceList ? searchResult.businesses?.total || 0 : searchResult.business?.total || 0) : 0,
+      total: organicResult?.total || 0,
       adTotal: adKey ? state.ROOT_QUERY[adKey].total : 0,
       overall,
       ads,
@@ -2613,7 +2564,7 @@ async function collectNaverMain() {
       attemptedQueries,
     };
   }
-  throw new Error("Naver main search key not found.");
+  throw createCrawlFailure("NAVER_SEARCH_CONTRACT_UNAVAILABLE");
 }
 
 async function collectNaverRegional() {
@@ -2638,17 +2589,15 @@ async function collectNaverRegional() {
     const regionalPrefix = province.regionalPrefix === undefined ? province.short : province.regionalPrefix;
     const query = province.isLocal ? QUERY : [regionalPrefix, region, RAW_KEYWORD_SUFFIX].filter(Boolean).join(" ");
     const { state, status } = await getNaverState(query);
-    const key = pickNaverSearchKey(state, query);
-    if (!key) {
+    const result = selectNaverOrganicResult(state, query, { allowPlaceList: true, required: false });
+    if (!result) {
       return {
         rows: [],
-        summary: { region, query, status, total: 0, collected: 0, note: "검색 상태 키 없음" }
+        summary: { region, query, status, total: 0, collected: 0, note: "검색 결과 구조 없음" }
       };
     }
-    const result = state.ROOT_QUERY[key].business;
-    const refs = result.items || [];
-    const regionRows = filterCollectionRows(refs.slice(0, REGIONAL_LIMIT).map((ref, index) => {
-      const item = state[ref.__ref];
+    const items = result.items || [];
+    const regionRows = filterCollectionRows(items.slice(0, REGIONAL_LIMIT).map((item, index) => {
       return mapNaverItem(state, item, {
         지역: region,
         검색키워드: query,
@@ -2664,7 +2613,7 @@ async function collectNaverRegional() {
         status,
         total: result.total,
         collected: regionRows.length,
-        filteredOut: Math.min(refs.length, REGIONAL_LIMIT) - regionRows.length,
+        filteredOut: Math.min(items.length, REGIONAL_LIMIT) - regionRows.length,
         note: ""
       }
     };
@@ -3951,6 +3900,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(serializeCollectorFailure(error));
   process.exit(1);
 });

@@ -2525,6 +2525,9 @@ async function fetchJson(url, options) {
   if (!response.ok) {
     const error = new Error(data.error || `요청 실패: ${response.status}`);
     error.status = response.status;
+    error.code = typeof data.code === "string" ? data.code : "";
+    error.retryable = data.retryable === true;
+    error.diagnosticId = typeof data.diagnosticId === "string" ? data.diagnosticId : "";
     if (response.status === 401 && !url.includes("/api/logout")) {
       location.replace("/login");
     } else if (response.status === 403) {
@@ -2533,6 +2536,27 @@ async function fetchJson(url, options) {
     throw error;
   }
   return data;
+}
+
+const COLLECTION_FAILURE_MESSAGES = Object.freeze({
+  NAVER_APOLLO_STATE_MISSING: "네이버 검색 응답을 확인하지 못해 수집을 중단했습니다.",
+  NAVER_APOLLO_STATE_INVALID: "네이버 검색 응답 형식이 올바르지 않아 수집을 중단했습니다.",
+  NAVER_SEARCH_CONTRACT_UNAVAILABLE: "네이버 검색 결과 형식이 변경되어 수집을 시작하지 못했습니다.",
+  NAVER_SEARCH_AMBIGUOUS: "네이버 검색 결과를 안전하게 구분할 수 없어 수집을 중단했습니다.",
+  NAVER_ACCESS_BLOCKED: "네이버 검색 접근이 일시적으로 제한되어 수집을 중단했습니다.",
+  NAVER_TEMPORARY_UNAVAILABLE: "네이버 검색 응답이 지연되어 수집을 완료하지 못했습니다.",
+  NAVER_HTTP_ERROR: "네이버 검색 응답을 받지 못해 수집을 중단했습니다.",
+  COLLECTOR_START_FAILED: "수집 프로세스를 시작하지 못했습니다.",
+  COLLECTION_FAILED: "수집 중 문제가 발생해 실행을 중단했습니다."
+});
+
+function safeCollectionFailureMessage(error = {}) {
+  const code = typeof error.code === "string" && COLLECTION_FAILURE_MESSAGES[error.code] ? error.code : "";
+  const message = code ? COLLECTION_FAILURE_MESSAGES[code] : COLLECTION_FAILURE_MESSAGES.COLLECTION_FAILED;
+  const details = [];
+  if (code) details.push(`오류 코드 ${code}`);
+  if (/^crawl-[a-f0-9]{12}$/.test(String(error.diagnosticId || ""))) details.push(`문의 번호 ${error.diagnosticId}`);
+  return details.length ? `${message} (${details.join(" · ")})` : message;
 }
 
 function setStatus(text) {
@@ -29956,7 +29980,7 @@ function b2bSearchFailureMessage(error = {}) {
   if (error.status === 403) {
     return "현재 계정 권한으로는 선택한 검색범위를 사용할 수 없습니다. 기본 1~10위로 검색하거나 관리자 승인 후 확장 분석을 사용하세요.";
   }
-  return `검색 실패: ${error.message}`;
+  return `검색 실패: ${safeCollectionFailureMessage(error)}`;
 }
 
 async function startB2BSearchRequest(payload = {}, keyword = "", range = "1-10") {
@@ -33808,7 +33832,7 @@ async function submitCrawl(event) {
           status: "confirm_collect_failed",
           tone: "danger",
           title: "확인 수집 실패",
-          message: error.message || "확인 수집 중 문제가 발생했습니다.",
+          message: safeCollectionFailureMessage(error),
           next: "검색 조건과 로그인 상태를 확인한 뒤 다시 실행하세요.",
           items: [
             failedRecrawlContext.keyword || "키워드",
@@ -33818,7 +33842,7 @@ async function submitCrawl(event) {
         });
         if (isAdminRole()) renderAdminConsoleDashboard();
       }
-      els.crawlStatus.textContent = `수집 실패: ${error.message}`;
+      els.crawlStatus.textContent = `수집 실패: ${safeCollectionFailureMessage(error)}`;
       setStatus("수집 실패");
     }
   } finally {

@@ -96,6 +96,10 @@ function assertNoSensitiveKey(value) {
 }
 
 async function main() {
+  assert.match(SERVER_SOURCE, /classifyCollectorProcessFailure\(\{ stderr, stdout, exitCode: code \}\)/, "collector failures are classified before crossing the API boundary");
+  assert.doesNotMatch(SERVER_SOURCE, /new Error\(stderr \|\| stdout/, "raw collector stderr cannot become a public Error message");
+  assert.match(SERVER_SOURCE, /const publicFailure = publicErrorPayload\(error\)/, "the final JSON error boundary is fail-closed");
+  assert.match(SERVER_SOURCE, /stderr = \(stderr \+ chunk\.toString\("utf8"\)\)\.slice\(-64 \* 1024\)/, "collector stderr retention is bounded");
   assert.match(SERVER_SOURCE, /updateSecureJsonFile\(B2B_MEMBERS_FILE/);
   assert.match(SERVER_SOURCE, /updateSecureJsonFile\(B2B_SEARCH_HISTORY_FILE/);
   assert.match(SERVER_SOURCE, /updateSecureJsonFile\(B2B_INTEREST_LODGES_FILE/);

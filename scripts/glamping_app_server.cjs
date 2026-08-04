@@ -55,6 +55,10 @@ const {
   rankRangeCount: crawlRankRangeCount,
   timingSimilarityScore
 } = require("./crawl_eta_model.cjs");
+const {
+  classifyCollectorProcessFailure,
+  publicErrorPayload
+} = require("./crawl_failure_contract.cjs");
 const TOURISM_REGION_MAP = require("../web/data/tourism_region_map.json");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -13095,7 +13099,7 @@ async function writeCrawlTimingStore(store) {
 }
 
 function crawlTimingErrorSummary(error) {
-  const text = String(error?.message || error || "").replace(/\s+/g, " ").trim();
+  const text = publicErrorPayload(error).error;
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
 }
 
@@ -13118,7 +13122,9 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
     modelTotalSeconds: estimate?.basis?.timing?.modelTotalSeconds || null,
     estimateSource: estimate?.basis?.timing?.source || "model",
     stageTimings: Array.isArray(stageTimings) ? stageTimings : [],
-    error: success ? "" : crawlTimingErrorSummary(error)
+    error: success ? "" : crawlTimingErrorSummary(error),
+    errorCode: success ? "" : String(error?.code || "COLLECTION_FAILED"),
+    diagnosticId: success ? "" : String(error?.diagnosticId || "")
   };
   store.entries = [...(store.entries || []), entry].slice(-CRAWL_TIMING_MAX_ENTRIES);
   await writeCrawlTimingStore(store);
@@ -13410,18 +13416,20 @@ async function runCrawlerInternal(payload) {
 
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString("utf8");
-      stdout += text;
+      stdout = (stdout + text).slice(-2 * 1024 * 1024);
       recordCrawlRuntimeOutputChunk(activeCrawlJob, text);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
+      stderr = (stderr + chunk.toString("utf8")).slice(-64 * 1024);
     });
     child.on("error", (error) => {
       if (activeCrawlCancelRequested) {
         reject(crawlCancelledError(activeCrawlCancelReason));
         return;
       }
-      reject(error);
+      const failure = classifyCollectorProcessFailure({ spawnError: error });
+      console.warn(`[crawl-failure] diagnosticId=${failure.diagnosticId} code=${failure.code} exitCode=spawn`);
+      reject(failure);
     });
     child.on("close", async (code) => {
       if (activeCrawlChild === child) activeCrawlChild = null;
@@ -13431,7 +13439,9 @@ async function runCrawlerInternal(payload) {
         return;
       }
       if (code !== 0) {
-        reject(new Error(stderr || stdout || `수집 실행 실패: ${code}`));
+        const failure = classifyCollectorProcessFailure({ stderr, stdout, exitCode: code });
+        console.warn(`[crawl-failure] diagnosticId=${failure.diagnosticId} code=${failure.code} exitCode=${Number.isInteger(code) ? code : "unknown"}`);
+        reject(failure);
         return;
       }
 
@@ -13997,11 +14007,12 @@ async function route(req, res) {
 
     send(res, 405, { error: "Method not allowed" });
   } catch (error) {
+    const publicFailure = publicErrorPayload(error);
     const headers = error.retryAfterSeconds
       ? { "Retry-After": String(Math.max(1, Number(error.retryAfterSeconds) || 1)) }
       : {};
     send(res, error.statusCode || 500, {
-      error: error.message || String(error),
+      ...publicFailure,
       retryAfterSeconds: error.retryAfterSeconds || undefined
     }, "application/json; charset=utf-8", headers);
   }
