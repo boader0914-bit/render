@@ -615,7 +615,15 @@ assert.match(geocodeRouteBlock, /\(await listRuns\(\)\)\.some\(\(run\) => run\.i
 assert.match(geocodeRouteBlock, /isAdminPreviewMapGeocodingItemEligible\(item, rankingSource\)/);
 assert.match(geocodeRouteBlock, /adminPreviewMapGeocodingAttempts\.has\(attemptKey\)/);
 assert.match(geocodeRouteBlock, /adminPreviewMapGeocodingAttempts\.add\(attemptKey\)/);
+assert.match(geocodeRouteBlock, /preflightRunItemsForDisplay\([\s\S]*?providerCandidateCount < 1[\s\S]*?existingMappableCount < 1[\s\S]*?send\(res, 422/, "admin Preview geocoding must preflight detailed addresses before consuming the one-time attempt");
+assert.ok(geocodeRouteBlock.indexOf("preflightRunItemsForDisplay") < geocodeRouteBlock.indexOf("adminPreviewMapGeocodingAttempts.add(attemptKey)"), "preflight rejection must happen before the one-time attempt is consumed");
 assert.doesNotMatch(geocodeRouteBlock, /enrichRegionsWithTraffic|collectSearchAdMetric|collectDatalabTrend/);
+const memberRunRouteEnd = server.indexOf('if (req.method === "GET" && reqUrl.pathname === "/api/b2b-members")', geocodeRouteEnd);
+assert.notEqual(memberRunRouteEnd, -1, "missing route boundary after member run loader");
+const memberRunRouteBlock = server.slice(geocodeRouteEnd, memberRunRouteEnd);
+assert.match(memberRunRouteBlock, /loadRun\(runId,\s*\{[\s\S]*?skipCompanyMaster:\s*true[\s\S]*?skipHistory:\s*true[\s\S]*?skipTraffic:\s*true[\s\S]*?applyCompanyMaster:\s*true/, "member and Admin User View run loading must stay read-only");
+assert.match(app, /function isPreviewCollectionReadOnlyMode\(\)[\s\S]*?collectionReadOnly[\s\S]*?function shouldLoadRunReadOnly\(\)/, "Preview collection must expose an explicit read-only result-loading mode");
+assert.match(app, /const runEndpoint = shouldLoadRunReadOnly\(\) \? "\/api\/member\/runs\/" : "\/api\/runs\/"/, "Admin User View and read-only collection mode must avoid the mutating admin run endpoint");
 assert.match(server, /request context such as NOL's `userLocation`[\s\S]*must never become an accommodation point/);
 assert.match(geocodingContract, /const LOCATION_STATUSES = new Set\(\[[\s\S]*?"verified"[\s\S]*?"resolved"[\s\S]*?"approximate"[\s\S]*?"ambiguous"[\s\S]*?"not_found"[\s\S]*?"invalid"[\s\S]*?"pending"[\s\S]*?"error"/);
 assert.match(geocodingContract, /const MAPPABLE_LOCATION_STATUSES = new Set\(\["verified", "resolved", "approximate"\]\)/);

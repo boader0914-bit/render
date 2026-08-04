@@ -138,7 +138,7 @@ const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v35";
+const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v36";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -12157,6 +12157,15 @@ function rowDisplayRegion(row = {}) {
   return rowAddressRegion(row) || rowSearchRegion(row) || "";
 }
 
+function rowCollectionAddress(row = {}) {
+  for (const value of [row["주소"], row.address, row.location]) {
+    if (typeof value !== "string") continue;
+    const address = value.trim();
+    if (address) return address;
+  }
+  return "";
+}
+
 function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
   const overallRank = numericField(row, ["overall_rank"]);
   const regionalRank = numericField(row, ["순위"]);
@@ -12191,7 +12200,7 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
     name: row["업체명"] || row.name || "확인불가",
     category: row["카테고리"] || row.category || "",
     region: rowDisplayRegion(row),
-    address: row["주소"] || row.location || "",
+    address: rowCollectionAddress(row),
     price: row["예약최저가"] || row["금액"] || row.price || "",
     bookingStatus: row["네이버예약재고수집상태"] || row["예약가능근거"] || "",
     naverCouponStatus: row["네이버쿠폰노출상태"] || row.naverCouponStatus || "",
@@ -12250,6 +12259,7 @@ function summarizeRankingRows(overallRows = [], adRows = [], regionalRows = [], 
       return {
         ...(linked?.item || {}),
         ...base,
+        address: base.address || linked?.item?.address || "",
         rank: base.rank || linked?.item?.rank || index + 1,
         hasInventory: Boolean(linked),
         availabilityIndex: Number.isInteger(linked?.index) ? linked.index : -1,
@@ -12403,7 +12413,7 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
       regionBoundaryLabel: boundary.label,
       regionBoundaryDetail: boundary.detail,
       outsideSearchRegion: boundary.outside,
-      address: row["주소"] || row.location || "",
+      address: rowCollectionAddress(row),
       roomNamePreview: row["객실명(일부)"] || row.roomNamePreview || row.roomNames || "",
       listType: row["예약리스트유형"] || "",
       productTypeSummary: row["네이버상품구성"] || "",
@@ -13839,6 +13849,13 @@ async function route(req, res) {
         if (adminPreviewMapGeocodingAttempts.has(attemptKey)) {
           return send(res, 409, { error: "현재 Preview 런타임에서는 해당 실행의 위치를 이미 조회했습니다." });
         }
+        const geocodingPreflight = naverMapsTransientGeocoding.preflightRunItemsForDisplay({
+          runData: data,
+          itemIndexes: payload.itemIndexes
+        });
+        if (geocodingPreflight.providerCandidateCount < 1 && geocodingPreflight.existingMappableCount < 1) {
+          return send(res, 422, { error: "상세 주소가 확인된 업체가 없어 네이버 위치 조회를 시작하지 않았습니다." });
+        }
         adminPreviewMapGeocodingAttempts.add(attemptKey);
       }
       const result = await naverMapsTransientGeocoding.resolveRunItemsForDisplay({
@@ -13859,7 +13876,12 @@ async function route(req, res) {
       const allowed = normalizeUserRole(session.role) === USER_ROLES.admin
         || history.entries.some((entry) => entry.runId === runId && memberMatchesSession(entry, session));
       if (!allowed) return sendForbidden(req, res, "본인 검색 이력에 있는 리포트만 열람할 수 있습니다.");
-      const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true });
+      const data = await loadRun(runId, {
+        skipCompanyMaster: true,
+        skipHistory: true,
+        skipTraffic: true,
+        applyCompanyMaster: true
+      });
       return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
     }
 
@@ -14181,8 +14203,11 @@ module.exports = {
     isSameOriginMapGeocodingRequest,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
+    rankingRowBase,
     readCompanyMaster,
+    rowCollectionAddress,
     scaleCrawlStages,
+    summarizeRankingRows,
     validAdminPreviewMapGeocodingIndexes,
     writeCompanyMaster
   }

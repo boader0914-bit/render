@@ -49,11 +49,11 @@ for (const asset of ["/login-theme.js", "/public-ui.css", "/manifest.webmanifest
   assert.match(server, new RegExp(`"${asset.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`), `public asset missing: ${asset}`);
 }
 
-const expectedAssetVersion = "v2-20260804-admin-preview-geocode-v35";
+const expectedAssetVersion = "v2-20260804-admin-preview-geocode-v36";
 const shellAssetVersions = [...indexHtml.matchAll(/(?:styles\.css|app\.js)\?v=([^"']+)/g)].map((match) => match[1]);
 assert.deepEqual(shellAssetVersions, [expectedAssetVersion, expectedAssetVersion], "index CSS and JS must share the current release cache version");
-assert.match(server, /const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v35";/, "server must enforce the current UI asset version");
-assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v35";/, "service worker must share the current UI asset version");
+assert.match(server, /const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v36";/, "server must enforce the current UI asset version");
+assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v36";/, "service worker must share the current UI asset version");
 assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260804-admin-preview-geocode-v35";/, "service worker cache must rotate with the UI release");
 assert.match(serviceWorker, /`\/styles\.css\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app stylesheet");
 assert.match(serviceWorker, /`\/app\.js\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app script");

@@ -93,6 +93,37 @@ function isExistingMappable(location = {}) {
   return displayLocationProjection(location).mappable;
 }
 
+function preflightRunItemsForDisplay({ runData, itemIndexes } = {}) {
+  const indexes = requestedIndexes(itemIndexes);
+  const items = candidateItems(runData);
+  if (!items.length) {
+    throw serviceError("NAVER_GEOCODING_RUN_ITEMS_MISSING", 404, "NAVER map display source items not found");
+  }
+  let existingMappableCount = 0;
+  let providerCandidateCount = 0;
+  let excludedCount = 0;
+  for (const itemIndex of indexes) {
+    const item = items[itemIndex];
+    if (!item || typeof item !== "object") {
+      excludedCount += 1;
+      continue;
+    }
+    if (isExistingMappable(publicCompanyLocationSummary(item))) {
+      existingMappableCount += 1;
+    } else if (itemAddress(item)) {
+      providerCandidateCount += 1;
+    } else {
+      excludedCount += 1;
+    }
+  }
+  return Object.freeze({
+    requestedCount: indexes.length,
+    existingMappableCount,
+    providerCandidateCount,
+    excludedCount
+  });
+}
+
 function publicTransientLocation(location = {}) {
   const projection = displayLocationProjection(location);
   return Object.freeze({
@@ -204,6 +235,7 @@ function createNaverMapsTransientGeocodingService(options = {}) {
   return Object.freeze({
     enabled: adapter.enabled,
     configuration,
+    preflightRunItemsForDisplay,
     resolveRunItemsForDisplay
   });
 }
@@ -214,6 +246,7 @@ module.exports = {
   candidateItems,
   createNaverMapsTransientGeocodingService,
   itemAddress,
+  preflightRunItemsForDisplay,
   publicTransientLocation,
   requestedIndexes
 };

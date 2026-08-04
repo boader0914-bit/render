@@ -6,6 +6,7 @@ const path = require("node:path");
 const {
   NaverPlaceParseError,
   extractApolloState,
+  naverPlaceAddress,
   normalizeQuery,
   parseRootKey,
   selectNaverOrganicResult
@@ -58,6 +59,17 @@ function main() {
 
     assert.equal(normalizeQuery("  포천   글램핑  "), "포천 글램핑");
     assert.equal(normalizeQuery("포천"), "포천");
+    assert.equal(naverPlaceAddress({
+      commonAddress: "경남 거창군",
+      roadAddress: "경상남도 거창군 가조면 가조가야로 1",
+      address: "경상남도 거창군 가조면 1-1"
+    }), "경상남도 거창군 가조면 가조가야로 1", "the full road address must not be hidden by a locality-only common address");
+    assert.equal(naverPlaceAddress({
+      commonAddress: "경남 거창군",
+      jibunAddress: "경상남도 거창군 가조면 1-1"
+    }), "경상남도 거창군 가조면 1-1", "a full parcel address must be preferred over the common locality");
+    assert.equal(naverPlaceAddress({ commonAddress: "  경남   거창군  " }), "경남 거창군");
+    assert.equal(naverPlaceAddress({ roadAddress: { unsafe: true }, commonAddress: "경남 거창군" }), "경남 거창군", "non-string address values must be ignored");
     assert.equal(parseRootKey(operationKey("placeList", { query: "q" })).operation, "placeList");
     assert.equal(parseRootKey("bad-key"), null);
 
@@ -130,6 +142,7 @@ function main() {
 
     assert.doesNotMatch(CRAWLER_SOURCE, /display\s*===\s*50/);
     assert.match(CRAWLER_SOURCE, /selectNaverOrganicResult\(state, query, \{ allowPlaceList: true/);
+    assert.match(CRAWLER_SOURCE, /주소:\s*naverPlaceAddress\(item\)/, "the collector must use the tested NAVER address precedence helper");
     assert.ok((CRAWLER_SOURCE.match(/selectNaverOrganicResult\(state, query, \{ allowPlaceList: true, required: false \}\)/g) || []).length >= 2, "main and regional collection share a soft-select parser before their own failure policy");
     assert.doesNotMatch(CRAWLER_SOURCE, /Naver main search key not found/);
   } finally {

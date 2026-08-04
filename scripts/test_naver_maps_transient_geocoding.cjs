@@ -21,8 +21,16 @@ const {
   createNaverMapsTransientGeocodingAdapter
 } = require("./naver_maps_geocoding_adapter.cjs");
 const {
-  createNaverMapsTransientGeocodingService
+  createNaverMapsTransientGeocodingService,
+  preflightRunItemsForDisplay
 } = require("./naver_maps_transient_geocoding.cjs");
+const {
+  __test: {
+    rankingRowBase,
+    rowCollectionAddress,
+    summarizeRankingRows
+  }
+} = require("./glamping_app_server.cjs");
 const {
   createPersistentMonthlyRequestBudget
 } = require("./naver_maps_geocoding_quota.cjs");
@@ -138,6 +146,21 @@ async function main() {
     return response(200, naverPayload([naverRow()]));
   });
   const service = createNaverMapsTransientGeocodingService({ adapter: serviceAdapter, timeoutMs: 500 });
+  assert.equal(rowCollectionAddress({ address: ADDRESS }), ADDRESS, "English address columns must survive run normalization");
+  assert.equal(rankingRowBase({ name: "english-address", address: ADDRESS, overall_rank: 1 }, 1, "overall").address, ADDRESS);
+  const mergedRanking = summarizeRankingRows([
+    { name: "linked-address", place_id: "linked-1", overall_rank: 1 }
+  ], [], [], {
+    items: [{ sourceKey: "place:linked-1", placeId: "linked-1", address: ADDRESS }]
+  });
+  assert.equal(mergedRanking.items[0].address, ADDRESS, "a blank ranking address must not overwrite the linked inventory address");
+  const currentAddress = `${ADDRESS} 2`;
+  const preferredRanking = summarizeRankingRows([
+    { name: "current-address", place_id: "linked-2", overall_rank: 1, address: currentAddress }
+  ], [], [], {
+    items: [{ sourceKey: "place:linked-2", placeId: "linked-2", address: "경남 합천군" }]
+  });
+  assert.equal(preferredRanking.items[0].address, currentAddress, "the current detailed ranking address must win over an older linked locality");
   const runData = {
     ranking: {
       items: [
@@ -149,6 +172,22 @@ async function main() {
     }
   };
   const before = JSON.stringify(runData);
+  assert.deepEqual(preflightRunItemsForDisplay({ runData, itemIndexes: [0, 1, 2, 3] }), {
+    requestedCount: 4,
+    existingMappableCount: 1,
+    providerCandidateCount: 2,
+    excludedCount: 1
+  });
+  assert.deepEqual(preflightRunItemsForDisplay({
+    runData: { ranking: { items: [{ name: "locality-only", address: "경남 합천군 가야면" }] } },
+    itemIndexes: [0]
+  }), {
+    requestedCount: 1,
+    existingMappableCount: 0,
+    providerCandidateCount: 0,
+    excludedCount: 1
+  }, "locality-only rows must be excluded before provider usage is consumed");
+  assert.equal(serviceCalls, 0, "preflight must never call or reserve provider usage");
   const display = await service.resolveRunItemsForDisplay({ runData, itemIndexes: [0, 1, 2, 3] });
   assert.equal(display.version, "naver-maps-geocoding-transient-display/v2");
   assert.equal(display.usage, "single-display");

@@ -118,12 +118,12 @@ async function main() {
     method: "GET",
     mode: "cors",
     destination: "script",
-    url: "https://fixture.local/app.js?v=v2-20260804-admin-preview-geocode-v35"
+    url: "https://fixture.local/app.js?v=v2-20260804-admin-preview-geocode-v36"
   });
-  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260804-admin-preview-geocode-v35");
+  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260804-admin-preview-geocode-v36");
   await Promise.resolve();
   await Promise.resolve();
-  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260804-admin-preview-geocode-v35")), "allowlisted static asset is cached");
+  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260804-admin-preview-geocode-v36")), "allowlisted static asset is cached");
 
   fetchImpl = async () => { throw new Error("offline"); };
   const unrelatedStaticFallback = await dispatchFetch({

@@ -10,6 +10,7 @@ const { buildWorkbook } = require("./workbook_export.cjs");
 const {
   extractApolloState,
   looksLikeAccessBlock,
+  naverPlaceAddress,
   parseRootKey,
   selectNaverOrganicResult
 } = require("./naver_place_apollo_parser.cjs");
@@ -988,7 +989,7 @@ function mapNaverItem(state, item, extras = {}) {
     place_id: item.id || "",
     업체명: item.name || "",
     카테고리: item.category || "",
-    주소: item.commonAddress || item.roadAddress || item.address || "",
+    주소: naverPlaceAddress(item),
     "객실수(노출)": (item.roomImages || []).length,
     "객실명(일부)": roomNamesFromItem(state, item),
     금액: priceFromRooms(state, item),

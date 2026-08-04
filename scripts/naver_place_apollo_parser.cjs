@@ -88,6 +88,16 @@ function normalizeQuery(value) {
   return String(value || "").normalize("NFC").trim().replace(/\s+/gu, " ");
 }
 
+function naverPlaceAddress(item = {}) {
+  if (!isObject(item)) return "";
+  for (const value of [item.roadAddress, item.jibunAddress, item.address, item.commonAddress]) {
+    if (typeof value !== "string") continue;
+    const address = value.normalize("NFC").trim().replace(/\s+/gu, " ").slice(0, 320);
+    if (address) return address;
+  }
+  return "";
+}
+
 function containsForbiddenArgument(value) {
   if (Array.isArray(value)) return value.some(containsForbiddenArgument);
   if (!isObject(value)) return false;
@@ -239,6 +249,7 @@ module.exports = {
   NaverPlaceParseError,
   extractApolloState,
   looksLikeAccessBlock,
+  naverPlaceAddress,
   normalizeQuery,
   parseRootKey,
   selectNaverOrganicResult

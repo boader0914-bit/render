@@ -2002,6 +2002,15 @@ function isAdminUserViewMode() {
   return Boolean(state.adminUserViewMode);
 }
 
+function isPreviewCollectionReadOnlyMode() {
+  const params = new URLSearchParams(location.search || "");
+  return state.session?.role === "admin" && params.get("collectionReadOnly") === "1";
+}
+
+function shouldLoadRunReadOnly() {
+  return isAdminUserViewMode() || isPreviewCollectionReadOnlyMode();
+}
+
 function canMutateB2B() {
   return !isAdminUserViewMode();
 }
@@ -33661,7 +33670,8 @@ async function loadRuns(selectLatest = false) {
 async function loadRun(runId) {
   if (!runId) return;
   setStatus("데이터 로딩");
-  const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
+  const runEndpoint = shouldLoadRunReadOnly() ? "/api/member/runs/" : "/api/runs/";
+  const data = await fetchJson(`${runEndpoint}${encodeURIComponent(runId)}`);
   state.b2bMapTransientLocations = {};
   state.b2bMapGeocodingState = "idle";
   state.b2bMapGeocodingMessage = "";
