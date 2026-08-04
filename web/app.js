@@ -127,6 +127,7 @@ const state = {
   b2bMapTransientLocations: {},
   b2bMapGeocodingState: "idle",
   b2bMapGeocodingMessage: "",
+  b2bMapAdminPreviewGeocodingAttemptedRunId: "",
   b2bMapHitResizeObserver: null,
   b2bMapHitResizeFrame: 0,
   b2bMapFilters: {
@@ -2001,6 +2002,11 @@ function isAdminUserViewMode() {
 
 function canMutateB2B() {
   return !isAdminUserViewMode();
+}
+
+function canUseB2BMapTransientGeocoding() {
+  const sessionRole = String(state.session?.role || "").trim().toLowerCase();
+  return sessionRole === "b2b" || (sessionRole === "admin" && isAdminUserViewMode());
 }
 
 function syncAdminUserViewReadOnlyControls() {
@@ -27565,9 +27571,11 @@ function selectB2BMapCompany(key = "", trigger = null, options = {}) {
 }
 
 async function loadNaverMapLocationsForDisplay(trigger = null) {
-  if (isAdminRole() || isAdminUserViewMode()) {
+  const adminPreviewLookup = String(state.session?.role || "").trim().toLowerCase() === "admin"
+    && isAdminUserViewMode();
+  if (!canUseB2BMapTransientGeocoding()) {
     state.b2bMapGeocodingState = "error";
-    state.b2bMapGeocodingMessage = "관리자 미리보기에서는 외부 위치 조회를 실행하지 않습니다.";
+    state.b2bMapGeocodingMessage = "현재 계정에서는 외부 위치 조회를 실행할 수 없습니다.";
     return;
   }
   if (!state.activeRunId) return;
@@ -27577,12 +27585,26 @@ async function loadNaverMapLocationsForDisplay(trigger = null) {
     .filter((row) => row.mapRankEligible && row.providerIndex >= 0 && !["verified", "resolved", "approximate"].includes(row.coordinateStatus))
     .map((row) => row.providerIndex)
     .filter((value, index, values) => values.indexOf(value) === index)
-    .slice(0, 25);
+    .slice(0, adminPreviewLookup ? 18 : 25);
   if (!itemIndexes.length) {
     state.b2bMapGeocodingState = "idle";
     state.b2bMapGeocodingMessage = "현재 조건에는 네이버 위치 확인이 필요한 업체가 없습니다.";
     renderB2BMapViewControls(allRows, visibleRows);
     return;
+  }
+
+  if (adminPreviewLookup) {
+    const confirmed = window.confirm(
+      `관리자 Preview에서 네이버 위치 ${fmtNumber(itemIndexes.length)}곳을 한 번 조회합니다. `
+      + "좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다. 계속하시겠습니까?"
+    );
+    if (!confirmed) {
+      state.b2bMapGeocodingState = "idle";
+      state.b2bMapGeocodingMessage = "네이버 위치 조회를 취소했습니다.";
+      renderB2BMapViewControls(allRows, visibleRows);
+      return;
+    }
+    state.b2bMapAdminPreviewGeocodingAttemptedRunId = state.activeRunId;
   }
 
   state.b2bMapGeocodingState = "loading";
@@ -27597,7 +27619,12 @@ async function loadNaverMapLocationsForDisplay(trigger = null) {
         Accept: "application/json",
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ runId: state.activeRunId, itemIndexes })
+      body: JSON.stringify({
+        runId: state.activeRunId,
+        itemIndexes,
+        requestContext: adminPreviewLookup ? "admin-user-view" : "b2b-map",
+        explicitConsent: true
+      })
     });
     if (result?.usage !== "single-display" || result?.cacheable !== false || result?.persistable !== false) {
       throw new Error("네이버 위치 응답의 일시 사용 계약을 확인할 수 없습니다.");
@@ -27657,7 +27684,11 @@ function renderB2BMapViewControls(rows = [], visibleRows = b2bMapFilteredRows(ro
     && !["verified", "resolved", "approximate"].includes(row.coordinateStatus)
   )).slice(0, 25);
   const geocodingBusy = state.b2bMapGeocodingState === "loading";
-  const geocodingReadOnly = isAdminRole() || isAdminUserViewMode();
+  const geocodingAllowed = canUseB2BMapTransientGeocoding();
+  const adminPreviewLookup = String(state.session?.role || "").trim().toLowerCase() === "admin"
+    && isAdminUserViewMode();
+  const adminPreviewAttempted = adminPreviewLookup
+    && state.b2bMapAdminPreviewGeocodingAttemptedRunId === state.activeRunId;
   const categoryOptions = Array.from(new Set(rows.flatMap((row) => row.categoryKeys || [])))
     .map((key) => ({ key, label: lodgingCategoryProfile(key).label || key }))
     .sort((a, b) => a.label.localeCompare(b.label, "ko"));
@@ -27668,10 +27699,14 @@ function renderB2BMapViewControls(rows = [], visibleRows = b2bMapFilteredRows(ro
       <button class="secondary-button" type="button" data-b2b-map-view="list" aria-pressed="${state.b2bMapViewMode === "list" ? "true" : "false"}">목록만 보기</button>
     </div>
     <div class="b2b-map-transient-action">
-      <button class="secondary-button" type="button" data-b2b-map-geocode${geocodingBusy || geocodingReadOnly || !lookupCandidates.length ? " disabled" : ""}${geocodingReadOnly ? ' aria-describedby="b2bMapGeocodeHelp"' : ""}>
-        <span aria-hidden="true">⌖</span>${geocodingBusy ? "네이버 위치 확인 중" : `네이버 위치 확인 (${fmtNumber(lookupCandidates.length)})`}
+      <button class="secondary-button" type="button" data-b2b-map-geocode${geocodingBusy || adminPreviewAttempted || !geocodingAllowed || !lookupCandidates.length ? " disabled" : ""} aria-describedby="b2bMapGeocodeHelp">
+        <span aria-hidden="true">⌖</span>${geocodingBusy ? "네이버 위치 확인 중" : adminPreviewAttempted ? "네이버 위치 확인 완료" : `${adminPreviewLookup ? "외부 조회 · " : ""}네이버 위치 확인 (${fmtNumber(Math.min(lookupCandidates.length, adminPreviewLookup ? 18 : 25))})`}
       </button>
-      <small id="b2bMapGeocodeHelp">${geocodingReadOnly ? "관리자 미리보기에서는 위치 조회를 실행할 수 없습니다." : "명시적으로 누를 때만 조회하며 좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다."}</small>
+      <small id="b2bMapGeocodeHelp">${geocodingAllowed
+        ? adminPreviewAttempted
+          ? "이번 Preview 실행의 위치 조회를 완료했습니다. 좌표는 새로고침하면 폐기됩니다."
+          : `${adminPreviewLookup ? "관리자 Preview 전용입니다. 확인 후 " : "명시적으로 누를 때만 "}조회하며 좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다.`
+        : "현재 계정에서는 위치 조회를 실행할 수 없습니다."}</small>
     </div>
     <div class="b2b-map-filter-fields" aria-label="지도 업체 필터">
       <label><span>위치 상태</span><select id="b2bMapLocationStatus"><option value="all"${filters.locationStatus === "all" ? " selected" : ""}>전체</option><option value="located"${filters.locationStatus === "located" ? " selected" : ""}>검증·확인 위치</option><option value="approximate"${filters.locationStatus === "approximate" ? " selected" : ""}>근사 위치</option><option value="unresolved"${filters.locationStatus === "unresolved" ? " selected" : ""}>좌표 미확인</option></select></label>

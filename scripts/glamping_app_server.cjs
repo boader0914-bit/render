@@ -138,7 +138,7 @@ const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260803-ui-release-v33";
+const UI_ASSET_VERSION = "v2-20260804-admin-preview-geocode-v34";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -182,6 +182,7 @@ const B2B_MEMBER_ALLOWED_RANK_RANGE = "1-10";
 const B2B_MEMBER_EXPANDED_RANK_RANGE = "1-20";
 const B2B_INTEREST_LODGE_LIMIT = 2;
 const B2B_INTEREST_LODGE_SEGMENT_LIMIT = 8;
+const ADMIN_PREVIEW_MAP_GEOCODING_MAX = 18;
 const SESSION_COOKIE_NAME = "glamping_datalab_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
@@ -195,6 +196,7 @@ const USER_ROLES = {
 const sessions = new Map();
 const loginAttempts = new Map();
 const requestRateLimits = new Map();
+const adminPreviewMapGeocodingAttempts = new Set();
 const RATE_LIMIT_POLICIES = {
   login: { limit: 20, windowMs: 15 * 60 * 1000 },
   signupCheck: { limit: 60, windowMs: 10 * 60 * 1000 },
@@ -3387,11 +3389,15 @@ async function securityHardeningOverview() {
         "/api/b2b-search/status",
         "/api/b2b-search/cancel",
         "/api/b2b-my-lodge-collect",
-        "/api/b2b-map/geocode",
         "/api/member/search-history",
         "/api/member/interest-lodges",
         "/api/member/runs/:runId"
       ],
+      previewAdminConditionalApis: [{
+        path: "/api/b2b-map/geocode",
+        roles: [USER_ROLES.b2b, USER_ROLES.admin],
+        adminRequirements: ["v2-preview-runtime", "admin-user-view", "explicit-consent", "organic-top-20", "max-18", "once-per-runtime-run"]
+      }],
       b2bHiddenTabs: ["dictionary", "target", "decisionQueue", "historyOps", "admin"],
       b2bRunListHidden: true,
       b2bPrivateFieldsStripped: true,
@@ -4754,6 +4760,52 @@ function requireAdminSession(session, req, res) {
   if (normalizeUserRole(session?.role) === USER_ROLES.admin) return true;
   sendForbidden(req, res);
   return false;
+}
+
+function isAdminPreviewMapGeocodingRequest(sessionRole, payload = {}, previewRuntime = IS_V2_PREVIEW_RUNTIME) {
+  return previewRuntime === true
+    && sessionRole === USER_ROLES.admin
+    && payload?.requestContext === "admin-user-view"
+    && payload?.explicitConsent === true;
+}
+
+function validAdminPreviewMapGeocodingIndexes(value) {
+  return Array.isArray(value)
+    && value.length >= 1
+    && value.length <= ADMIN_PREVIEW_MAP_GEOCODING_MAX
+    && value.every((itemIndex) => Number.isInteger(itemIndex) && itemIndex >= 0)
+    && new Set(value).size === value.length;
+}
+
+function isAdminPreviewMapGeocodingItemEligible(item = {}, rankingSource = "") {
+  const itemSource = String(item?.rankingSource || "").trim().toLowerCase();
+  const runSource = String(rankingSource || "").trim().toLowerCase();
+  const itemIsOverall = ["overall", "naver_overall"].includes(itemSource);
+  const runIsOverall = ["overall", "naver_overall"].includes(runSource);
+  if ((itemSource && !itemIsOverall) || (!itemIsOverall && !runIsOverall)) return false;
+  const rawRank = item?.overallRank;
+  if (typeof rawRank === "string" && !/^[1-9]\d*$/.test(rawRank.trim())) return false;
+  if (typeof rawRank !== "number" && typeof rawRank !== "string") return false;
+  const rank = Number(rawRank);
+  return Number.isInteger(rank) && rank >= 1 && rank <= 20;
+}
+
+function isSameOriginMapGeocodingRequest(req = {}) {
+  const headers = req?.headers || {};
+  const fetchSite = String(headers["sec-fetch-site"] || "").trim().toLowerCase();
+  if (fetchSite && !["same-origin", "same-site", "none"].includes(fetchSite)) return false;
+  const origin = String(headers.origin || "").trim();
+  if (!origin) return true;
+  try {
+    const originHost = new URL(origin).host.toLowerCase();
+    const requestHost = String(headers["x-forwarded-host"] || headers.host || "")
+      .split(",")[0]
+      .trim()
+      .toLowerCase();
+    return Boolean(requestHost && originHost === requestHost);
+  } catch {
+    return false;
+  }
 }
 
 function routeRolePage(req, res, reqUrl, session) {
@@ -13732,8 +13784,15 @@ async function route(req, res) {
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-map/geocode") {
-      if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
-        return sendForbidden(req, res, "B2B 계정의 명시적 지도 조회에서만 사용할 수 있습니다.");
+      const sessionRole = String(session?.role || "").trim().toLowerCase();
+      if (![USER_ROLES.admin, USER_ROLES.b2b].includes(sessionRole)) {
+        return sendForbidden(req, res, "권한이 있는 명시적 지도 조회에서만 사용할 수 있습니다.");
+      }
+      if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] || ""))) {
+        return send(res, 415, { error: "지도 위치 조회는 JSON 요청만 허용됩니다." });
+      }
+      if (!isSameOriginMapGeocodingRequest(req)) {
+        return sendForbidden(req, res, "동일 출처의 지도 위치 조회만 허용됩니다.");
       }
       assertRequestRateLimit(
         req,
@@ -13742,12 +13801,21 @@ async function route(req, res) {
         session.username || session.memberId || ""
       );
       const payload = await parseJsonBody(req).catch(() => ({}));
+      const adminPreviewRequest = isAdminPreviewMapGeocodingRequest(sessionRole, payload);
+      if (sessionRole === USER_ROLES.admin && !adminPreviewRequest) {
+        return sendForbidden(req, res, "관리자 Preview의 명시적 확인을 거친 지도 조회만 허용됩니다.");
+      }
+      if (adminPreviewRequest && !validAdminPreviewMapGeocodingIndexes(payload.itemIndexes)) {
+        return send(res, 400, { error: `관리자 Preview 위치 조회는 중복 없는 1~${ADMIN_PREVIEW_MAP_GEOCODING_MAX}개 항목만 허용됩니다.` });
+      }
       const runId = String(payload.runId || "").trim();
       if (!/^[a-z0-9._-]{1,160}$/i.test(runId)) {
         return send(res, 400, { error: "지도 조회 실행 ID가 올바르지 않습니다." });
       }
-      const history = await readB2BSearchHistoryStore();
-      const allowed = history.entries.some((entry) => entry.runId === runId && memberMatchesSession(entry, session));
+      const allowed = adminPreviewRequest
+        ? (await listRuns()).some((run) => run.id === runId)
+        : (await readB2BSearchHistoryStore()).entries
+          .some((entry) => entry.runId === runId && memberMatchesSession(entry, session));
       if (!allowed) return sendForbidden(req, res, "본인 검색 이력의 지도만 조회할 수 있습니다.");
       const data = await loadRun(runId, {
         skipCompanyMaster: true,
@@ -13756,6 +13824,23 @@ async function route(req, res) {
         skipTraffic: true,
       });
       if (!data) return notFound(res);
+      if (adminPreviewRequest) {
+        const rankingSource = String(data?.ranking?.source || "").trim().toLowerCase();
+        const rankingItems = Array.isArray(data?.ranking?.items) ? data.ranking.items : [];
+        const itemIndexes = Array.isArray(payload.itemIndexes) ? payload.itemIndexes : [];
+        const allEligible = itemIndexes.every((itemIndex) => {
+          const item = rankingItems[itemIndex];
+          return Boolean(item && isAdminPreviewMapGeocodingItemEligible(item, rankingSource));
+        });
+        if (!allEligible) {
+          return send(res, 400, { error: "관리자 Preview에서는 네이버 메인 유기순위 1~20위만 조회할 수 있습니다." });
+        }
+        const attemptKey = `${session.username || "admin"}:${runId}`;
+        if (adminPreviewMapGeocodingAttempts.has(attemptKey)) {
+          return send(res, 409, { error: "현재 Preview 런타임에서는 해당 실행의 위치를 이미 조회했습니다." });
+        }
+        adminPreviewMapGeocodingAttempts.add(attemptKey);
+      }
       const result = await naverMapsTransientGeocoding.resolveRunItemsForDisplay({
         runData: data,
         itemIndexes: payload.itemIndexes
@@ -13763,7 +13848,8 @@ async function route(req, res) {
       return send(res, 200, result, "application/json; charset=utf-8", {
         Pragma: "no-cache",
         Expires: "0",
-        "X-Naver-Maps-Usage": "single-display"
+        "X-Naver-Maps-Usage": "single-display",
+        "X-Naver-Maps-Requester": adminPreviewRequest ? "admin-user-view" : "b2b"
       });
     }
 
@@ -14090,10 +14176,14 @@ module.exports = {
     crawlRuntimeStageRows,
     crawlTimingConditions,
     estimateCrawlCompletion,
+    isAdminPreviewMapGeocodingItemEligible,
+    isAdminPreviewMapGeocodingRequest,
+    isSameOriginMapGeocodingRequest,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
     readCompanyMaster,
     scaleCrawlStages,
+    validAdminPreviewMapGeocodingIndexes,
     writeCompanyMaster
   }
 };

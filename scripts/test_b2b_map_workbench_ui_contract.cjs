@@ -16,6 +16,7 @@ const css = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8");
 const server = fs.readFileSync(path.join(root, "scripts", "glamping_app_server.cjs"), "utf8");
 const runtimeSecurity = fs.readFileSync(path.join(root, "scripts", "runtime_security.cjs"), "utf8");
 const geocodingContract = fs.readFileSync(path.join(root, "scripts", "lodging_geocoding_contract.cjs"), "utf8");
+const { __test: serverTest } = require(path.join(root, "scripts", "glamping_app_server.cjs"));
 
 function balancedRange(source, startIndex) {
   const open = source.indexOf("{", startIndex);
@@ -109,6 +110,45 @@ function openingTagById(id) {
   assert.ok(match, `missing #${id}`);
   return match[0];
 }
+
+const geocodingPermissionContext = vm.createContext({
+  state: { session: { role: "b2b" } },
+  isAdminUserViewMode: () => false
+});
+vm.runInContext(functionSource(app, "canUseB2BMapTransientGeocoding"), geocodingPermissionContext);
+assert.equal(vm.runInContext("canUseB2BMapTransientGeocoding()", geocodingPermissionContext), true, "B2B can explicitly request transient map coordinates");
+geocodingPermissionContext.state.session.role = "admin";
+assert.equal(vm.runInContext("canUseB2BMapTransientGeocoding()", geocodingPermissionContext), false, "ordinary admin mode cannot request B2B transient coordinates");
+geocodingPermissionContext.isAdminUserViewMode = () => true;
+assert.equal(vm.runInContext("canUseB2BMapTransientGeocoding()", geocodingPermissionContext), true, "Admin User View can use the approved Preview-only client path");
+
+assert.equal(serverTest.isAdminPreviewMapGeocodingRequest("admin", {
+  requestContext: "admin-user-view",
+  explicitConsent: true
+}, true), true, "Preview admin request requires explicit User View consent");
+assert.equal(serverTest.isAdminPreviewMapGeocodingRequest("admin", {
+  requestContext: "admin-user-view",
+  explicitConsent: true
+}, false), false, "non-Preview runtime must reject the admin exception");
+assert.equal(serverTest.isAdminPreviewMapGeocodingRequest("admin", {
+  requestContext: "admin-user-view",
+  explicitConsent: false
+}, true), false, "missing consent must fail closed");
+assert.equal(serverTest.isAdminPreviewMapGeocodingRequest("unknown", {
+  requestContext: "admin-user-view",
+  explicitConsent: true
+}, true), false, "unknown roles must fail closed");
+assert.equal(serverTest.validAdminPreviewMapGeocodingIndexes([]), false, "empty admin batches are rejected");
+assert.equal(serverTest.validAdminPreviewMapGeocodingIndexes([0, 0]), false, "duplicate admin indexes are rejected");
+assert.equal(serverTest.validAdminPreviewMapGeocodingIndexes(Array.from({ length: 19 }, (_, index) => index)), false, "admin batches cannot exceed 18");
+assert.equal(serverTest.validAdminPreviewMapGeocodingIndexes([0, 1, 17]), true, "unique admin indexes within the limit are accepted");
+assert.equal(serverTest.isAdminPreviewMapGeocodingItemEligible({ rankingSource: "overall", overallRank: 1 }, "naver_overall"), true);
+assert.equal(serverTest.isAdminPreviewMapGeocodingItemEligible({ rankingSource: "naver_overall", overallRank: 20 }, "naver_overall"), true);
+assert.equal(serverTest.isAdminPreviewMapGeocodingItemEligible({ rankingSource: "naver_overall", overallRank: 21 }, "naver_overall"), false, "rank 21 is never an admin Preview marker candidate");
+assert.equal(serverTest.isAdminPreviewMapGeocodingItemEligible({ rankingSource: "regional", overallRank: 1 }, "naver_regional"), false, "regional ranks cannot be promoted to organic map ranks");
+assert.equal(serverTest.isSameOriginMapGeocodingRequest({ headers: { host: "preview.example", origin: "https://preview.example", "sec-fetch-site": "same-origin" } }), true);
+assert.equal(serverTest.isSameOriginMapGeocodingRequest({ headers: { host: "preview.example", origin: "https://evil.example", "sec-fetch-site": "cross-site" } }), false, "cross-site provider-cost requests are rejected");
+assert.equal(serverTest.isSameOriginMapGeocodingRequest({ headers: { host: "preview.example", origin: "not-a-url" } }), false, "malformed origins fail closed");
 
 const expectedStatuses = [
   "verified",
@@ -435,17 +475,25 @@ assert.match(mapControlsBlock, /지도 상위 20위/);
 assert.match(mapControlsBlock, /data-b2b-map-geocode/);
 assert.match(mapControlsBlock, /좌표는 저장·캐시하지 않고 이번 화면에서만 사용/);
 assert.match(mapControlsBlock, /지역 중심.*업체 위치로 대체하지 않습니다/);
-assert.match(mapControlsBlock, /const geocodingReadOnly = isAdminRole\(\) \|\| isAdminUserViewMode\(\)/);
-assert.match(mapControlsBlock, /geocodingBusy \|\| geocodingReadOnly \|\| !lookupCandidates\.length/);
-assert.match(mapControlsBlock, /관리자 미리보기에서는 위치 조회를 실행할 수 없습니다/);
+assert.match(mapControlsBlock, /const geocodingAllowed = canUseB2BMapTransientGeocoding\(\)/);
+assert.match(mapControlsBlock, /const adminPreviewAttempted = adminPreviewLookup[\s\S]*state\.b2bMapAdminPreviewGeocodingAttemptedRunId === state\.activeRunId/);
+assert.match(mapControlsBlock, /geocodingBusy \|\| adminPreviewAttempted \|\| !geocodingAllowed \|\| !lookupCandidates\.length/);
+assert.match(mapControlsBlock, /관리자 Preview 전용입니다/);
+assert.match(mapControlsBlock, /외부 조회 ·/);
+assert.match(mapControlsBlock, /네이버 위치 확인 완료/);
 assert.match(mapControlsBlock, /aria-describedby="b2bMapGeocodeHelp"/);
 
 const transientLookupBlock = functionBlock(app, "loadNaverMapLocationsForDisplay");
-assert.match(transientLookupBlock, /isAdminRole\(\) \|\| isAdminUserViewMode\(\)/);
+assert.match(transientLookupBlock, /canUseB2BMapTransientGeocoding\(\)/);
+assert.match(transientLookupBlock, /adminPreviewLookup \? 18 : 25/);
+assert.match(transientLookupBlock, /window\.confirm\(/);
+assert.match(transientLookupBlock, /state\.b2bMapAdminPreviewGeocodingAttemptedRunId = state\.activeRunId/);
+assert.match(transientLookupBlock, /requestContext: adminPreviewLookup \? "admin-user-view" : "b2b-map"/);
+assert.match(transientLookupBlock, /explicitConsent: true/);
 assert.match(transientLookupBlock, /fetchJson\("\/api\/b2b-map\/geocode"/);
 assert.match(transientLookupBlock, /method:\s*"POST"/);
 assert.match(transientLookupBlock, /cache:\s*"no-store"/);
-assert.match(transientLookupBlock, /JSON\.stringify\(\{ runId: state\.activeRunId, itemIndexes \}\)/);
+assert.match(transientLookupBlock, /JSON\.stringify\(\{[\s\S]*runId: state\.activeRunId,[\s\S]*itemIndexes/);
 assert.doesNotMatch(transientLookupBlock, /localStorage|sessionStorage|indexedDB|caches\./i);
 assert.doesNotMatch(transientLookupBlock, /address\s*:/i, "the browser must not submit a raw address to the provider endpoint");
 assert.match(transientLookupBlock, /result\?\.usage !== "single-display"/);
@@ -524,10 +572,21 @@ for (const block of [pointRowsBlock, renderMapBlock, mapControlsBlock, listBlock
 assert.match(server, /locationCandidateFromObservation\s*\(/);
 assert.match(server, /location:\s*publicCompanyLocationSummary\(company\)/);
 assert.match(server, /req\.method === "POST" && reqUrl\.pathname === "\/api\/b2b-map\/geocode"/);
-assert.match(server, /normalizeUserRole\(session\.role\) !== USER_ROLES\.b2b/);
+assert.match(server, /const ADMIN_PREVIEW_MAP_GEOCODING_MAX = 18/);
+assert.match(server, /const adminPreviewMapGeocodingAttempts = new Set\(\)/);
+assert.match(server, /const sessionRole = String\(session\?\.role \|\| ""\)\.trim\(\)\.toLowerCase\(\)/);
+assert.match(server, /\[USER_ROLES\.admin, USER_ROLES\.b2b\]\.includes\(sessionRole\)/);
+assert.match(server, /const adminPreviewRequest = isAdminPreviewMapGeocodingRequest\(sessionRole, payload\)/);
+assert.match(server, /payload\?\.requestContext === "admin-user-view"/);
+assert.match(server, /payload\?\.explicitConsent === true/);
+assert.match(server, /!validAdminPreviewMapGeocodingIndexes\(payload\.itemIndexes\)/);
+assert.match(server, /application\\\/json/);
+assert.match(server, /!isSameOriginMapGeocodingRequest\(req\)/);
 assert.match(server, /memberMatchesSession\(entry, session\)/);
 assert.match(server, /Pragma:\s*"no-cache"/);
 assert.match(server, /"X-Naver-Maps-Usage":\s*"single-display"/);
+assert.match(server, /"X-Naver-Maps-Requester":\s*adminPreviewRequest \? "admin-user-view" : "b2b"/);
+assert.match(server, /previewAdminConditionalApis:[\s\S]*\/api\/b2b-map\/geocode[\s\S]*once-per-runtime-run/);
 const serverLoadRunBlock = functionBlock(server, "loadRun");
 assert.match(serverLoadRunBlock, /options\.skipTraffic === true\s*\? null\s*:\s*await enrichRegionsWithTraffic\(/);
 const geocodeRouteStart = server.indexOf('if (req.method === "POST" && reqUrl.pathname === "/api/b2b-map/geocode")');
@@ -536,6 +595,11 @@ const geocodeRouteEnd = server.indexOf('if (req.method === "GET" && reqUrl.pathn
 assert.notEqual(geocodeRouteEnd, -1, "missing route boundary after B2B map geocoding");
 const geocodeRouteBlock = server.slice(geocodeRouteStart, geocodeRouteEnd);
 assert.match(geocodeRouteBlock, /loadRun\(runId,\s*\{[\s\S]*?skipTraffic:\s*true/);
+assert.match(geocodeRouteBlock, /const allowed = adminPreviewRequest[\s\S]*\? \(await listRuns\(\)\)\.some[\s\S]*: \(await readB2BSearchHistoryStore\(\)\)\.entries/);
+assert.match(geocodeRouteBlock, /\(await listRuns\(\)\)\.some\(\(run\) => run\.id === runId\)/);
+assert.match(geocodeRouteBlock, /isAdminPreviewMapGeocodingItemEligible\(item, rankingSource\)/);
+assert.match(geocodeRouteBlock, /adminPreviewMapGeocodingAttempts\.has\(attemptKey\)/);
+assert.match(geocodeRouteBlock, /adminPreviewMapGeocodingAttempts\.add\(attemptKey\)/);
 assert.doesNotMatch(geocodeRouteBlock, /enrichRegionsWithTraffic|collectSearchAdMetric|collectDatalabTrend/);
 assert.match(server, /request context such as NOL's `userLocation`[\s\S]*must never become an accommodation point/);
 assert.match(geocodingContract, /const LOCATION_STATUSES = new Set\(\[[\s\S]*?"verified"[\s\S]*?"resolved"[\s\S]*?"approximate"[\s\S]*?"ambiguous"[\s\S]*?"not_found"[\s\S]*?"invalid"[\s\S]*?"pending"[\s\S]*?"error"/);

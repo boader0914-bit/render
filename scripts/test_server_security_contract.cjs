@@ -311,6 +311,20 @@ async function main() {
     assert.ok(hardening.body.dataStorage && typeof hardening.body.dataStorage === "object");
     assert.doesNotMatch(JSON.stringify(hardening.body.dataStorage), /customer_db|\.json|\\|\/var\/|storageFile|storagePath/i);
     assert.equal("storage" in (hardening.body.accountDeleteLog || {}), false, "account deletion diagnostics do not expose a storage path");
+    assert.deepEqual(
+      hardening.body.roleSeparation?.previewAdminConditionalApis,
+      [{
+        path: "/api/b2b-map/geocode",
+        roles: ["b2b", "admin"],
+        adminRequirements: ["v2-preview-runtime", "admin-user-view", "explicit-consent", "organic-top-20", "max-18", "once-per-runtime-run"]
+      }],
+      "security diagnostics must disclose the narrowly scoped Preview admin geocoding exception"
+    );
+    assert.equal(
+      hardening.body.roleSeparation?.b2bOnlyApis?.includes("/api/b2b-map/geocode"),
+      false,
+      "conditionally shared Preview endpoint must not be reported as B2B-only"
+    );
 
     const trafficStatus = await jsonRequest(baseUrl, "/api/settings/traffic-keys", {
       headers: { cookie, "user-agent": "security-contract-test" }
