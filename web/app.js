@@ -443,6 +443,8 @@ const els = {
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
   drawerActions: document.getElementById("drawerActions"),
+  previewGeocodeConfirm: document.getElementById("previewGeocodeConfirm"),
+  previewGeocodeConfirmCount: document.getElementById("previewGeocodeConfirmCount"),
   detailSheet: document.getElementById("detailSheet"),
   sheetTitle: document.getElementById("sheetTitle"),
   sheetSubtitle: document.getElementById("sheetSubtitle"),
@@ -27594,14 +27596,12 @@ async function loadNaverMapLocationsForDisplay(trigger = null) {
   }
 
   if (adminPreviewLookup) {
-    const confirmed = window.confirm(
-      `관리자 Preview에서 네이버 위치 ${fmtNumber(itemIndexes.length)}곳을 한 번 조회합니다. `
-      + "좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다. 계속하시겠습니까?"
-    );
+    const confirmed = await requestPreviewGeocodeConfirmation(itemIndexes.length);
     if (!confirmed) {
       state.b2bMapGeocodingState = "idle";
       state.b2bMapGeocodingMessage = "네이버 위치 조회를 취소했습니다.";
       renderB2BMapViewControls(allRows, visibleRows);
+      window.requestAnimationFrame(() => document.querySelector("[data-b2b-map-geocode]:not([disabled])")?.focus({ preventScroll: true }));
       return;
     }
     state.b2bMapAdminPreviewGeocodingAttemptedRunId = state.activeRunId;
@@ -27611,6 +27611,7 @@ async function loadNaverMapLocationsForDisplay(trigger = null) {
   state.b2bMapGeocodingMessage = "네이버에서 현재 화면용 위치를 확인하고 있습니다.";
   if (trigger) trigger.disabled = true;
   renderB2BMapViewControls(allRows, visibleRows);
+  window.requestAnimationFrame(() => els.b2bMapStatus?.focus({ preventScroll: true }));
   try {
     const result = await fetchJson("/api/b2b-map/geocode", {
       method: "POST",
@@ -31936,6 +31937,7 @@ function renderSheet() {
 const overlayInteractionState = new WeakMap();
 const overlayBackgroundState = new WeakMap();
 let activeAccessibleOverlay = null;
+let previewGeocodeConfirmationResolve = null;
 
 function accessibleOverlayBackgroundElements() {
   return [document.querySelector(".skip-link"), document.querySelector(".app-shell"), document.querySelector(".app-legal-footer")].filter(Boolean);
@@ -32005,7 +32007,7 @@ function closeAccessibleOverlay(overlay, { restoreFocus = true } = {}) {
   overlay.hidden = true;
   overlayInteractionState.delete(overlay);
   if (activeAccessibleOverlay === overlay) activeAccessibleOverlay = null;
-  const anotherOverlay = [els.detailSheet, els.controlDrawer].find((candidate) => candidate && !candidate.hidden);
+  const anotherOverlay = [els.detailSheet, els.controlDrawer, els.previewGeocodeConfirm].find((candidate) => candidate && !candidate.hidden);
   if (anotherOverlay) {
     activeAccessibleOverlay = anotherOverlay;
     return true;
@@ -32026,6 +32028,7 @@ function handleAccessibleOverlayKeydown(event) {
   if (event.key === "Escape") {
     event.preventDefault();
     if (overlay === els.detailSheet) closeSheet();
+    else if (overlay === els.previewGeocodeConfirm) closePreviewGeocodeConfirmation(false);
     else closeDrawer();
     return true;
   }
@@ -32087,6 +32090,28 @@ function openDrawer() {
 
 function closeDrawer() {
   closeAccessibleOverlay(els.controlDrawer);
+}
+
+function requestPreviewGeocodeConfirmation(candidateCount) {
+  if (!els.previewGeocodeConfirm) return Promise.resolve(false);
+  if (previewGeocodeConfirmationResolve) {
+    previewGeocodeConfirmationResolve(false);
+    previewGeocodeConfirmationResolve = null;
+  }
+  if (els.previewGeocodeConfirmCount) {
+    els.previewGeocodeConfirmCount.textContent = `${fmtNumber(candidateCount)}곳`;
+  }
+  return new Promise((resolve) => {
+    previewGeocodeConfirmationResolve = resolve;
+    openAccessibleOverlay(els.previewGeocodeConfirm, { initialFocus: "[data-preview-geocode-choice='cancel']" });
+  });
+}
+
+function closePreviewGeocodeConfirmation(confirmed = false) {
+  const resolve = previewGeocodeConfirmationResolve;
+  previewGeocodeConfirmationResolve = null;
+  closeAccessibleOverlay(els.previewGeocodeConfirm, { restoreFocus: false });
+  resolve?.(Boolean(confirmed));
 }
 
 function openAdminUserView(event) {
@@ -35036,6 +35061,11 @@ function bindEvents() {
     if (backfillButton) backfillCompanyMaster(backfillButton);
     if (event.target.closest("[data-close-sheet]")) closeSheet();
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
+    const previewGeocodeChoice = event.target.closest("[data-preview-geocode-choice]");
+    if (previewGeocodeChoice) {
+      closePreviewGeocodeConfirmation(previewGeocodeChoice.dataset.previewGeocodeChoice === "confirm");
+      return;
+    }
     const drawerTab = event.target.closest("[data-drawer-tab]");
     if (drawerTab) {
       let targetTab = drawerTab.dataset.drawerTab || "";

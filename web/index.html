@@ -14,7 +14,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <script src="/login-theme.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=v2-20260804-admin-preview-geocode-v34">
+  <link rel="stylesheet" href="/styles.css?v=v2-20260804-admin-preview-geocode-v35">
 </head>
 <body class="app-booting">
   <a class="skip-link" href="#appMain">본문 바로가기</a>
@@ -160,7 +160,7 @@
           <span id="mapCount">0 지역</span>
         </div>
         <div class="b2b-map-view-controls" id="b2bMapViewControls" hidden></div>
-        <p class="b2b-map-status" id="b2bMapStatus" role="status" aria-live="polite" hidden></p>
+        <p class="b2b-map-status" id="b2bMapStatus" role="status" aria-live="polite" tabindex="-1" hidden></p>
         <div class="map-card">
           <div class="map-layer-row" id="mapLayerRow"></div>
           <div class="map-frame">
@@ -511,6 +511,26 @@
     </section>
   </div>
 
+  <div class="control-drawer" id="previewGeocodeConfirm" hidden>
+    <div class="drawer-backdrop" data-preview-geocode-choice="cancel"></div>
+    <section class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="previewGeocodeConfirmTitle" aria-describedby="previewGeocodeConfirmDescription" tabindex="-1">
+      <div class="drawer-handle"></div>
+      <div class="drawer-head">
+        <div>
+          <h2 id="previewGeocodeConfirmTitle">네이버 위치를 확인할까요?</h2>
+          <p id="previewGeocodeConfirmDescription">관리자 Preview에서 선택한 후보를 한 번만 조회합니다.</p>
+        </div>
+        <button class="close-button" type="button" data-preview-geocode-choice="cancel" aria-label="위치 확인 취소">×</button>
+      </div>
+      <div class="drawer-actions">
+        <p class="hint"><strong id="previewGeocodeConfirmCount">0곳</strong>의 위치를 확인합니다. 좌표는 저장·캐시하지 않고 이번 화면에서만 사용합니다.</p>
+        <button class="secondary-button" type="button" data-preview-geocode-choice="cancel">취소</button>
+        <button class="primary-button" type="button" data-preview-geocode-choice="confirm">한 번만 위치 확인</button>
+      </div>
+      <p class="hint">확인 후에는 같은 실행에서 다시 요청할 수 없습니다.</p>
+    </section>
+  </div>
+
   <div class="detail-sheet" id="detailSheet" hidden>
     <div class="sheet-backdrop" data-close-sheet></div>
     <section class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" tabindex="-1">
@@ -533,6 +553,6 @@
 
   <script src="/lodging-search-intent.js"></script>
   <script src="/lodging-category-profile.js"></script>
-  <script src="/app.js?v=v2-20260804-admin-preview-geocode-v34"></script>
+  <script src="/app.js?v=v2-20260804-admin-preview-geocode-v35"></script>
 </body>
 </html>
