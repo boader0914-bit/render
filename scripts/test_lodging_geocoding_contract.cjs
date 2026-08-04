@@ -183,6 +183,21 @@ async function main() {
   assert.equal(ambiguous.status, "ambiguous");
   assert.equal(ambiguous.latitude, null, "ambiguous provider matches must never create a marker");
 
+  const aliasAmbiguous = await geocodeAddress({ address: fullAddress }, {
+    enabled: true,
+    adapter: async () => ({
+      status: "ambiguous",
+      lat: 35.566,
+      lon: 128.165,
+      precision: "locality",
+      source: "provider",
+      resolvedAddress: fullAddress
+    })
+  });
+  assert.equal(aliasAmbiguous.status, "ambiguous", "coordinate aliases must not re-promote an ambiguous result");
+  assert.equal(aliasAmbiguous.latitude, null);
+  assert.equal(aliasAmbiguous.longitude, null);
+
   const notFound = await geocodeAddress({ address: "경상남도 합천군 쌍책면 없는길 12" }, { enabled: true, adapter: fixture });
   assert.equal(notFound.status, "not_found");
   const failed = await geocodeAddress({ address: "경상남도 합천군 봉산면 오류로 9" }, { enabled: true, adapter: fixture });

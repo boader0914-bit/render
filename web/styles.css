@@ -16690,8 +16690,8 @@ a.platform-row:hover {
 }
 
 .map-layer-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   padding: 14px;
   border-bottom: 1px solid var(--line);
@@ -16699,6 +16699,7 @@ a.platform-row:hover {
 
 .map-layer-row span,
 .map-legend span {
+  min-width: 0;
   min-height: 30px;
   display: inline-flex;
   align-items: center;
@@ -16710,7 +16711,8 @@ a.platform-row:hover {
   color: #344054;
   font-size: 12px;
   font-weight: 800;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .map-layer-row b,
@@ -16754,6 +16756,17 @@ a.platform-row:hover {
 
 .map-marker {
   filter: drop-shadow(0 8px 14px rgba(16, 24, 40, .22));
+}
+
+.region-map-spot circle {
+  fill: rgba(49, 130, 246, .14);
+  stroke: #2f80ed;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.region-map-spot .map-marker-label {
+  pointer-events: none;
 }
 
 .map-radius-ring {
@@ -16857,6 +16870,14 @@ a.platform-row:hover {
   pointer-events: none;
 }
 
+.company-map-marker.rank-top .company-map-rank {
+  font-size: 10px;
+}
+
+.company-map-marker.rank-top .company-map-halo {
+  opacity: .5;
+}
+
 .company-map-label {
   fill: #1d2939;
   font-size: 11px;
@@ -16883,11 +16904,39 @@ a.platform-row:hover {
 }
 
 .map-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: block;
   padding: 14px;
   border-top: 1px solid var(--line);
+}
+
+.map-legend-disclosure > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink);
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.map-legend-disclosure > summary span {
+  min-height: 26px;
+  padding-inline: 8px;
+}
+
+.map-legend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .map-layer-row,
+  .map-legend-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .region-card {
@@ -24344,7 +24393,9 @@ a.platform-row:hover {
 }
 
 .structure-radar {
+  display: block;
   width: 100%;
+  max-width: 100%;
   height: 260px;
   overflow: visible;
 }
@@ -40133,9 +40184,15 @@ body.role-b2b .b2b-map-filter-fields select {
 
 body.role-b2b .b2b-map-filter-summary {
   flex: 1 0 100%;
+  display: grid;
+  gap: var(--ui-space-1);
   margin: 0;
   color: var(--color-text-secondary);
   line-height: 1.5;
+}
+
+body.role-b2b .b2b-map-filter-summary strong {
+  color: var(--color-text-primary);
 }
 
 body.role-b2b .b2b-map-view-controls button {
@@ -40260,7 +40317,15 @@ body.role-b2b :is(.map-layer-row, .map-legend) span {
   color: var(--color-text-secondary);
 }
 
-body.role-b2b :is([data-map-layer-tone="1"], [data-map-layer-tone="search"], [data-map-core-tone="1"], [data-map-core-tone="company"]) b {
+body.role-b2b .map-legend-disclosure > summary {
+  color: var(--color-text-primary);
+}
+
+body.role-b2b .map-legend-grid {
+  min-width: 0;
+}
+
+body.role-b2b :is([data-map-layer-tone="1"], [data-map-layer-tone="search"], [data-map-layer-tone="company"], [data-map-core-tone="1"], [data-map-core-tone="company"]) b {
   background: var(--color-action-primary);
 }
 
@@ -40362,6 +40427,24 @@ body.role-b2b .map-marker.core-6 circle {
   fill: var(--color-border-strong);
 }
 
+body.role-b2b .region-map-spot circle {
+  fill: color-mix(in srgb, var(--color-surface-raised) 82%, transparent);
+  stroke-width: 2;
+  opacity: .92;
+}
+
+body.role-b2b .region-map-spot.core-1 circle { stroke: var(--color-action-primary); }
+body.role-b2b .region-map-spot.core-2 circle { stroke: var(--color-status-info); }
+body.role-b2b .region-map-spot.core-3 circle { stroke: var(--color-status-success); }
+body.role-b2b .region-map-spot.core-4 circle { stroke: var(--color-status-warning); }
+body.role-b2b .region-map-spot.core-5 circle { stroke: var(--color-status-danger); }
+body.role-b2b .region-map-spot.core-6 circle { stroke: var(--color-border-strong); }
+
+body.role-b2b .region-map-spot .map-marker-label {
+  font-size: 10px;
+  font-weight: 850;
+}
+
 body.role-b2b .map-marker circle {
   stroke: var(--color-surface-default);
   stroke-width: 3;
@@ -40444,6 +40527,14 @@ body.role-b2b .company-map-marker.location-approximate .company-map-halo {
   fill: color-mix(in srgb, var(--color-status-warning) 18%, transparent);
   stroke: var(--color-status-warning);
   stroke-dasharray: 4 3;
+}
+
+body.role-b2b .company-map-marker.rank-top .company-map-halo {
+  stroke-width: 3;
+}
+
+body.role-b2b .company-map-marker.rank-base .company-map-halo {
+  opacity: .2;
 }
 
 body.role-b2b .company-map-duplicate circle {
@@ -40627,6 +40718,20 @@ body.role-b2b .b2b-demand-observed-grid [data-demand-value-state="error"] {
   min-width: 560px;
   border-collapse: collapse;
   color: var(--color-text-primary);
+}
+
+:is(body.role-b2b, body.role-admin) .radar-table-scroll {
+  overflow-x: visible;
+}
+
+:is(body.role-b2b, body.role-admin) .radar-table-scroll .b2b-demand-radar-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+:is(body.role-b2b, body.role-admin) .b2b-demand-radar-table :is(th, td) {
+  overflow-wrap: anywhere;
 }
 
 :is(body.role-b2b, body.role-admin) .b2b-demand-table-scroll caption {

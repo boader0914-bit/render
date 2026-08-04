@@ -10,7 +10,7 @@ const NAVER_MAPS_GEOCODING_ENABLED_ENV = "NAVER_MAPS_GEOCODING_ENABLED";
 const NAVER_MAPS_GEOCODING_MONTHLY_LIMIT_ENV = "NAVER_MAPS_GEOCODING_MONTHLY_LIMIT";
 const NAVER_MAPS_PROVIDER_KEY = "naver_maps";
 const CAPTURE_ARTIFACT_VERSION = "naver-maps-geocoding-capture/v1";
-const TRANSIENT_DISPLAY_VERSION = "naver-maps-geocoding-transient-display/v1";
+const TRANSIENT_DISPLAY_VERSION = "naver-maps-geocoding-transient-display/v2";
 const MAX_PROVIDER_REQUESTS = 25;
 const MAX_TRANSIENT_MONTHLY_REQUESTS = 10000;
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -170,6 +170,13 @@ function conservativePrecision(row = {}) {
   return "unknown";
 }
 
+function conservativeLocationStatus(precision, hasCoordinatePair) {
+  if (!hasCoordinatePair) return "invalid";
+  if (precision === "parcel") return "resolved";
+  if (precision === "street") return "approximate";
+  return "ambiguous";
+}
+
 function normalizeObservedAt(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) {
@@ -181,13 +188,17 @@ function normalizeObservedAt(value) {
 function normalizeNaverAddress(row = {}, options = {}) {
   const latitude = numericCoordinate(row.y);
   const longitude = numericCoordinate(row.x);
+  const hasCoordinatePair = latitude !== null && longitude !== null;
+  const precision = conservativePrecision(row);
+  const status = conservativeLocationStatus(precision, hasCoordinatePair);
+  const mappable = status === "resolved" || status === "approximate";
   const observedAt = normalizeObservedAt(options.observedAt ?? new Date());
   return Object.freeze({
-    status: "resolved",
-    latitude,
-    longitude,
+    status,
+    latitude: mappable ? latitude : null,
+    longitude: mappable ? longitude : null,
     crs: "EPSG:4326",
-    precision: conservativePrecision(row),
+    precision,
     source: "provider",
     providerKey: NAVER_MAPS_PROVIDER_KEY,
     confidence: null,

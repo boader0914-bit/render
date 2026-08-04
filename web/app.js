@@ -15452,8 +15452,8 @@ function demandRadarChart(items = []) {
   const table = sourceAxes.length ? `
     <details class="b2b-demand-text-alternative">
       <summary>지표 값을 표로 보기</summary>
-      <div class="b2b-demand-table-scroll" tabindex="0" aria-label="수요구조 지표 표 가로 스크롤 영역">
-        <table><caption>수요구조 지표 점수</caption><thead><tr><th scope="col">지표</th><th scope="col">점수</th></tr></thead><tbody>${sourceAxes.map((axis) => {
+      <div class="b2b-demand-table-scroll radar-table-scroll">
+        <table class="b2b-demand-radar-table"><caption>수요구조 지표 점수</caption><thead><tr><th scope="col">지표</th><th scope="col">점수</th></tr></thead><tbody>${sourceAxes.map((axis) => {
           const score = optionalNumber(axis.score);
           return `<tr><th scope="row">${escapeHtml(axis.label)}</th><td>${Number.isFinite(score) ? `${fmtNumber(score)}점` : "미수집"}</td></tr>`;
         }).join("")}</tbody></table>
@@ -15466,8 +15466,8 @@ function demandRadarChart(items = []) {
   const width = 320;
   const height = 260;
   const cx = width / 2;
-  const cy = 132;
-  const radius = 92;
+  const cy = 126;
+  const radius = 80;
   const pointFor = (index, score = 100) => {
     const angle = -Math.PI / 2 + (Math.PI * 2 * index) / axes.length;
     const r = radius * Math.max(0, Math.min(100, Number(score) || 0)) / 100;
@@ -15485,8 +15485,11 @@ function demandRadarChart(items = []) {
     const point = pointFor(index, axis.score);
     return `${point.x.toFixed(1)},${point.y.toFixed(1)}`;
   }).join(" ");
+  const accessibleSummary = axes.map((axis) => `${axis.label} ${fmtNumber(axis.score)}점`).join(", ");
   return `
-    <svg class="structure-radar" viewBox="0 0 ${width} ${height}" role="img" aria-label="수요구조 레이더 차트. 아래 표에서 같은 값을 확인할 수 있습니다.">
+    <svg class="structure-radar" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="demandRadarTitle demandRadarDescription">
+      <title id="demandRadarTitle">수요구조 지표 균형</title>
+      <desc id="demandRadarDescription">${escapeHtml(accessibleSummary)}. 아래 표에서 같은 값을 확인할 수 있습니다.</desc>
       <g class="structure-radar-grid">
         ${grid.map((points) => `<polygon points="${points}"></polygon>`).join("")}
         ${axes.map((_, index) => {
@@ -15496,10 +15499,12 @@ function demandRadarChart(items = []) {
       </g>
       <polygon class="structure-radar-fill" points="${polygon}"></polygon>
       <polyline class="structure-radar-line" points="${polygon} ${polygon.split(" ")[0] || ""}"></polyline>
-      <g class="structure-radar-labels">
+      <g class="structure-radar-labels" aria-hidden="true">
         ${axes.map((axis, index) => {
-          const point = pointFor(index, 118);
-          return `<text x="${point.x.toFixed(1)}" y="${point.y.toFixed(1)}">${escapeHtml(axis.label)}</text>`;
+          const point = pointFor(index, 132.5);
+          const lines = svgLabelLines(axis.label, 6, 2);
+          const firstY = point.y - (lines.length > 1 ? 6 : 0);
+          return `<text x="${point.x.toFixed(1)}" y="${firstY.toFixed(1)}">${lines.map((line, lineIndex) => `<tspan x="${point.x.toFixed(1)}" dy="${lineIndex ? 13 : 0}">${escapeHtml(line)}</tspan>`).join("")}</text>`;
         }).join("")}
       </g>
     </svg>
@@ -27062,17 +27067,21 @@ function renderB2BRegionMapBrief(model = b2bRegionMapModel()) {
 
 function renderMapControls() {
   els.mapLayerRow.innerHTML = [
-    ["search", "검색 기준점"],
-    ["radius", "50/100km 반경"],
-    ["verified", "검증·확인 위치"],
+    ["search", "검색 기준점·반경"],
+    ["company", "네이버 순위 업체"],
     ["approximate", "근사 위치"],
     ["missing", "좌표 미수집은 목록"]
   ].map(([tone, name]) => `
     <span data-map-layer-tone="${tone}"><b aria-hidden="true"></b>${name}</span>
   `).join("");
-  els.mapLegend.innerHTML = CORE_ORDER.map((name, index) => `
-    <span data-map-core-tone="${index + 1}"><b aria-hidden="true"></b>${name}</span>
-  `).join("") + `<span data-map-core-tone="company"><b aria-hidden="true"></b>실제 업체 위치</span><span data-map-core-tone="approximate"><b aria-hidden="true"></b>근사 위치</span>`;
+  els.mapLegend.innerHTML = `
+    <details class="map-legend-disclosure">
+      <summary>지역 유형 범례 <span>${fmtNumber(CORE_ORDER.length)}개</span></summary>
+      <div class="map-legend-grid">
+        ${CORE_ORDER.map((name, index) => `<span data-map-core-tone="${index + 1}"><b aria-hidden="true"></b>${escapeHtml(name)}</span>`).join("")}
+      </div>
+    </details>
+  `;
   const caption = document.querySelector(".map-caption");
   if (caption) caption.textContent = "검색 기준점은 업체 위치가 아닙니다 · 검증·확인 좌표만 실제 위치로 표시 · 근사·미수집 상태는 별도 안내";
 }
@@ -27122,6 +27131,95 @@ function project(lon, lat, bounds) {
   const x = pad + ((lon - bounds.minLon) / (bounds.maxLon - bounds.minLon || 1)) * (width - pad * 2);
   const y = pad + ((bounds.maxLat - lat) / (bounds.maxLat - bounds.minLat || 1)) * (height - pad * 2);
   return [x, y];
+}
+
+function svgLabelLines(value = "", maxLineLength = 8, maxLines = 2) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  const limit = Math.max(2, Number(maxLineLength) || 8);
+  const lineLimit = Math.max(1, Number(maxLines) || 2);
+  const characters = Array.from(text);
+  if (characters.length <= limit) return [text];
+  const words = text.split(" ").filter(Boolean);
+  const lines = [];
+  if (words.length > 1) {
+    let current = "";
+    for (const word of words) {
+      const next = current ? `${current} ${word}` : word;
+      if (Array.from(next).length <= limit || !current) current = next;
+      else {
+        lines.push(current);
+        current = word;
+      }
+    }
+    if (current) lines.push(current);
+  } else {
+    for (let index = 0; index < characters.length; index += limit) {
+      lines.push(characters.slice(index, index + limit).join(""));
+    }
+  }
+  if (lines.length > lineLimit) {
+    const visible = lines.slice(0, lineLimit);
+    const tail = Array.from(visible[lineLimit - 1]);
+    visible[lineLimit - 1] = `${tail.slice(0, Math.max(1, limit - 1)).join("")}…`;
+    return visible;
+  }
+  return lines;
+}
+
+function svgLabelBox(x, y, anchor, lines = []) {
+  const width = Math.max(32, ...lines.map((line) => Array.from(line).length * 9 + 10));
+  const height = Math.max(18, lines.length * 14 + 4);
+  const left = anchor === "start" ? x : anchor === "end" ? x - width : x - width / 2;
+  return { left, right: left + width, top: y - 11, bottom: y - 11 + height };
+}
+
+function svgLabelBoxesOverlap(a, b, gap = 4) {
+  return !(a.right + gap <= b.left || b.right + gap <= a.left || a.bottom + gap <= b.top || b.bottom + gap <= a.top);
+}
+
+function regionMapMarkerModels(regions = [], bounds = {}) {
+  const viewWidth = 720;
+  const viewHeight = 620;
+  const inset = 12;
+  const occupied = [];
+  const source = (Array.isArray(regions) ? regions : []).map((region, sourceIndex) => {
+    const coordinate = coordinateFromValue(region);
+    if (!coordinate) return null;
+    const [x, y] = project(coordinate.lon, coordinate.lat, bounds);
+    const rawCount = optionalNumber(region.topPlaces?.length ?? region.placeCount ?? region.naverTopCount);
+    const count = Number.isFinite(rawCount) && rawCount >= 0 ? rawCount : null;
+    const radius = Math.min(10, 8 + Math.log2((count || 0) + 1) * 0.45);
+    const name = String(region.region || region.name || "").trim();
+    return { region, sourceIndex, x, y, name, count, radius, labelLines: svgLabelLines(name, 8, 2) };
+  }).filter(Boolean).sort((a, b) => (b.count || 0) - (a.count || 0) || a.sourceIndex - b.sourceIndex);
+
+  source.forEach((model) => {
+    const horizontal = model.x < viewWidth / 2 ? -1 : 1;
+    const vertical = model.y < viewHeight / 2 ? -1 : 1;
+    const distanceX = model.radius + 7;
+    const distanceY = model.radius + 12;
+    const candidates = [
+      { x: model.x + horizontal * distanceX, y: model.y + vertical * distanceY, anchor: horizontal < 0 ? "end" : "start" },
+      { x: model.x + horizontal * distanceX, y: model.y - vertical * distanceY, anchor: horizontal < 0 ? "end" : "start" },
+      { x: model.x - horizontal * distanceX, y: model.y + vertical * distanceY, anchor: horizontal < 0 ? "start" : "end" },
+      { x: model.x - horizontal * distanceX, y: model.y - vertical * distanceY, anchor: horizontal < 0 ? "start" : "end" },
+      { x: model.x, y: model.y + vertical * (model.radius + 18), anchor: "middle" }
+    ];
+    const placement = candidates.find((candidate) => {
+      const box = svgLabelBox(candidate.x, candidate.y, candidate.anchor, model.labelLines);
+      const inside = box.left >= inset && box.right <= viewWidth - inset && box.top >= inset && box.bottom <= viewHeight - inset;
+      if (!inside || occupied.some((current) => svgLabelBoxesOverlap(box, current))) return false;
+      candidate.box = box;
+      return true;
+    });
+    model.labelVisible = Boolean(placement && model.labelLines.length);
+    model.labelX = placement?.x ?? model.x;
+    model.labelY = placement?.y ?? model.y;
+    model.textAnchor = placement?.anchor || "middle";
+    if (placement?.box) occupied.push(placement.box);
+  });
+  return source.sort((a, b) => a.sourceIndex - b.sourceIndex);
 }
 
 const B2B_LOCATION_STATUS_META = Object.freeze({
@@ -27198,13 +27296,22 @@ function coordinateStatusFromValue(value = {}) {
       : hasAnyValue
         ? "invalid"
         : "not_found";
-  const normalizedStatus = coordinate && B2B_LOCATION_STATUS_META[status]?.mappable
-    ? status
-    : coordinate && !contract
-      ? "resolved"
-      : !coordinate && B2B_LOCATION_STATUS_META[status]?.mappable
-        ? "invalid"
-        : status;
+  const precision = String(contract?.precision || "unknown").trim().toLowerCase();
+  const source = String(contract?.source || coordinate?.source || "legacy");
+  const precisionAllowsResolved = ["rooftop", "parcel"].includes(precision);
+  const precisionAllowsApproximate = ["rooftop", "parcel", "street"].includes(precision);
+  let normalizedStatus = status;
+  if (!coordinate && B2B_LOCATION_STATUS_META[status]?.mappable) {
+    normalizedStatus = "invalid";
+  } else if (coordinate && status === "verified") {
+    normalizedStatus = "verified";
+  } else if (coordinate && status === "resolved") {
+    normalizedStatus = precisionAllowsResolved ? "resolved" : precision === "street" ? "approximate" : "ambiguous";
+  } else if (coordinate && status === "approximate") {
+    normalizedStatus = precisionAllowsApproximate ? "approximate" : "ambiguous";
+  } else if (coordinate && !B2B_LOCATION_STATUS_META[status]?.mappable) {
+    normalizedStatus = status;
+  }
   const meta = B2B_LOCATION_STATUS_META[normalizedStatus] || B2B_LOCATION_STATUS_META.pending;
   return {
     status: normalizedStatus,
@@ -27212,8 +27319,8 @@ function coordinateStatusFromValue(value = {}) {
     tone: meta.tone,
     icon: meta.icon,
     coordinate: meta.mappable ? coordinate : null,
-    precision: String(contract?.precision || "unknown"),
-    source: String(contract?.source || coordinate?.source || "legacy"),
+    precision,
+    source,
     confidence: typeof contract?.confidence === "number" ? contract.confidence : null,
     displayAddress: String(contract?.displayAddress || contract?.resolvedAddress || value.address || value.companyProfile?.address || ""),
     geocodedAt: String(contract?.geocodedAt || contract?.observedAt || "")
@@ -27266,10 +27373,69 @@ function regionForCompanyMapItem(item = {}, regions = []) {
   return best || regions[0] || null;
 }
 
+function b2bMapExplicitOverallRank(item = {}, rankingSource = "") {
+  const itemSource = String(item.rankingSource || "").trim().toLowerCase();
+  const runSource = String(rankingSource || "").trim().toLowerCase();
+  const itemIsOverall = ["overall", "naver_overall"].includes(itemSource);
+  const runIsOverall = ["overall", "naver_overall"].includes(runSource);
+  if ((itemSource && !itemIsOverall) || (!itemIsOverall && !runIsOverall)) return null;
+  const rawRank = item.overallRank;
+  if (typeof rawRank === "string" && !/^[1-9]\d*$/.test(rawRank.trim())) return null;
+  if (typeof rawRank !== "number" && typeof rawRank !== "string") return null;
+  const rank = Number(rawRank);
+  return Number.isInteger(rank) && rank > 0 ? rank : null;
+}
+
+function b2bMapCompanyIdentityKey(item = {}, sourceIndex = -1) {
+  const placeId = String(item.placeId || item.place_id || item.naverPlaceId || "").trim();
+  if (placeId) return `place:${placeId}`;
+  const companyId = String(item.companyId || item.companyProfile?.companyId || "").trim();
+  if (companyId) return `company:${companyId}`;
+  const bookingId = String(item.bookingBusinessId || item.accommodationId || "").trim();
+  if (bookingId) return `booking:${bookingId}`;
+  const name = companyKey(item.name || item.companyName || "");
+  const address = companyKey(item.address || item.companyProfile?.addresses?.[0] || item.region || item.addressRegion || "");
+  if (name) return `name:${name}|address:${address}`;
+  return Number.isInteger(sourceIndex) && sourceIndex >= 0 ? `source:${sourceIndex}` : "";
+}
+
+function b2bMapOverallRows(items = [], rankingSource = "", maxRank = 20) {
+  const limit = Number.isInteger(maxRank) && maxRank > 0 ? maxRank : 20;
+  const byIdentity = new Map();
+  (Array.isArray(items) ? items : []).forEach((item, sourceIndex) => {
+    if (!item || typeof item !== "object") return;
+    const identityKey = b2bMapCompanyIdentityKey(item, sourceIndex);
+    const rank = b2bMapExplicitOverallRank(item, rankingSource);
+    const candidate = { item, identityKey, sourceIndex, rank, mapRankEligible: rank !== null && rank <= limit };
+    const current = byIdentity.get(identityKey);
+    if (!current || (rank !== null && (current.rank === null || rank < current.rank))) byIdentity.set(identityKey, candidate);
+  });
+  return Array.from(byIdentity.values()).sort((a, b) => {
+    if (a.rank !== null && b.rank !== null) return a.rank - b.rank || a.sourceIndex - b.sourceIndex;
+    if (a.rank !== null) return -1;
+    if (b.rank !== null) return 1;
+    return a.sourceIndex - b.sourceIndex;
+  });
+}
+
 function companyMapPointRows(regions = []) {
-  const rankRows = b2bRankBoardModel().rows.slice(0, 30);
   const sourceItems = rankedCompanyItems();
-  const rows = rankRows.map((row, index) => {
+  const mapRows = b2bMapOverallRows(sourceItems, state.data?.ranking?.source, 20);
+  const rows = mapRows.map((mapRow, index) => {
+    const insight = companyRankInsight(mapRow.item, mapRow.rank || 0);
+    const linked = inventoryLinked(mapRow.item);
+    const row = {
+      item: mapRow.item,
+      index,
+      sourceIndex: mapRow.sourceIndex,
+      insight,
+      linked,
+      rate: Number(insight.rate),
+      rank: mapRow.rank,
+      remaining: finiteNumber(insight.remaining, 0),
+      mapRankEligible: mapRow.mapRankEligible,
+      identityKey: mapRow.identityKey
+    };
     const coordinateProfile = coordinateStatusFromValue(row.item);
     const categoryProfile = itemLodgingCategoryProfile(row.item);
     const explicitPrimaryCategory = row.item?.lodgingCategoryKey
@@ -27299,7 +27465,7 @@ function companyMapPointRows(regions = []) {
           : { label: "권역 미확인", tone: "unknown" };
     return {
       ...row,
-      key: b2bCompetitionRowKey(row.item, index),
+      key: `map:${row.identityKey}`,
       coordinate: coordinateProfile.coordinate,
       coordinateStatus: coordinateProfile.status,
       coordinateLabel: coordinateProfile.label,
@@ -27314,7 +27480,7 @@ function companyMapPointRows(regions = []) {
       categoryLabel: primaryCategoryKey ? lodgingCategoryProfile(primaryCategoryKey).label : "유형 미확인",
       platformNames,
       itemIndex,
-      providerIndex: sourceItems.indexOf(row.item),
+      providerIndex: row.sourceIndex,
       bucket,
       tone: bucketProfile.tone,
       label: bucketProfile.label
@@ -27323,20 +27489,23 @@ function companyMapPointRows(regions = []) {
   return rows.map((row) => {
     const transient = state.b2bMapTransientLocations?.[row.providerIndex];
     if (!transient || transient.transient !== true) return row;
-    const coordinate = typeof transient.lon === "number" && Number.isFinite(transient.lon)
-      && typeof transient.lat === "number" && Number.isFinite(transient.lat)
-      ? { lon: transient.lon, lat: transient.lat, source: "naver-transient" }
-      : null;
-    const status = coordinate ? normalizedLocationStatus(transient.status || "resolved") : normalizedLocationStatus(transient.status || "pending");
-    const meta = B2B_LOCATION_STATUS_META[status] || B2B_LOCATION_STATUS_META.pending;
+    const transientProfile = coordinateStatusFromValue({
+      location: {
+        status: transient.status || "pending",
+        latitude: transient.lat,
+        longitude: transient.lon,
+        precision: transient.precision || "unknown",
+        source: "provider"
+      }
+    });
     return {
       ...row,
-      coordinate: meta.mappable ? coordinate : null,
-      coordinateStatus: status,
-      coordinateLabel: coordinate ? `${meta.label} · 이번 화면에서만 사용` : meta.label,
-      coordinateTone: meta.tone,
-      coordinateIcon: meta.icon,
-      coordinatePrecision: String(transient.precision || "unknown"),
+      coordinate: transientProfile.coordinate,
+      coordinateStatus: transientProfile.status,
+      coordinateLabel: transientProfile.coordinate ? `${transientProfile.label} · 이번 화면에서만 사용` : transientProfile.label,
+      coordinateTone: transientProfile.tone,
+      coordinateIcon: transientProfile.icon,
+      coordinatePrecision: transientProfile.precision,
       coordinateSource: "naver-transient",
       coordinateObservedAt: "",
       transientLocation: true
@@ -27405,7 +27574,7 @@ async function loadNaverMapLocationsForDisplay(trigger = null) {
   const allRows = companyMapPointRows(state.data?.regions || []);
   const visibleRows = b2bMapFilteredRows(allRows);
   const itemIndexes = visibleRows
-    .filter((row) => row.providerIndex >= 0 && !["verified", "resolved", "approximate"].includes(row.coordinateStatus))
+    .filter((row) => row.mapRankEligible && row.providerIndex >= 0 && !["verified", "resolved", "approximate"].includes(row.coordinateStatus))
     .map((row) => row.providerIndex)
     .filter((value, index, values) => values.indexOf(value) === index)
     .slice(0, 25);
@@ -27439,12 +27608,31 @@ async function loadNaverMapLocationsForDisplay(trigger = null) {
       next[row.itemIndex] = { ...row.location };
     }
     state.b2bMapTransientLocations = next;
-    const located = (result.items || []).filter((row) => ["verified", "resolved", "approximate"].includes(row?.location?.status)).length;
+    const located = (result.items || []).filter((row) => {
+      const location = row?.location || {};
+      return Boolean(coordinateStatusFromValue({
+        location: {
+          status: location.status,
+          latitude: location.lat,
+          longitude: location.lon,
+          precision: location.precision,
+          source: location.source
+        }
+      }).coordinate);
+    }).length;
     state.b2bMapGeocodingState = "ready";
     state.b2bMapGeocodingMessage = `이번 화면에서만 사용할 위치 ${fmtNumber(located)}곳을 확인했습니다. 새로고침하면 폐기됩니다.`;
   } catch (error) {
     state.b2bMapGeocodingState = "error";
-    state.b2bMapGeocodingMessage = error?.message || "네이버 위치를 확인하지 못했습니다.";
+    const messages = {
+      NAVER_GEOCODING_DISABLED: "네이버 위치 확인 기능이 현재 비활성화되어 있습니다.",
+      NAVER_GEOCODING_MONTHLY_BUDGET_EXHAUSTED: "이번 달 위치 확인 한도에 도달했습니다.",
+      NAVER_GEOCODING_RATE_LIMITED: "네이버 위치 확인 요청이 잠시 제한되었습니다. 잠시 후 다시 시도해 주세요.",
+      NAVER_GEOCODING_TIMEOUT: "네이버 위치 확인 응답이 지연되어 중단했습니다.",
+      NAVER_GEOCODING_UPSTREAM_ERROR: "네이버 위치 확인 서비스가 일시적으로 응답하지 않습니다.",
+      NAVER_GEOCODING_TRANSPORT_ERROR: "네이버 위치 확인 서비스에 연결하지 못했습니다."
+    };
+    state.b2bMapGeocodingMessage = messages[error?.code] || "네이버 위치를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
   }
   await renderMap();
 }
@@ -27464,7 +27652,8 @@ function renderB2BMapViewControls(rows = [], visibleRows = b2bMapFilteredRows(ro
   const counts = b2bMapLocationCounts(rows);
   const filters = state.b2bMapFilters || { locationStatus: "all", boundary: "all" };
   const lookupCandidates = visibleRows.filter((row) => (
-    row.providerIndex >= 0
+    row.mapRankEligible
+    && row.providerIndex >= 0
     && !["verified", "resolved", "approximate"].includes(row.coordinateStatus)
   )).slice(0, 25);
   const geocodingBusy = state.b2bMapGeocodingState === "loading";
@@ -27490,7 +27679,7 @@ function renderB2BMapViewControls(rows = [], visibleRows = b2bMapFilteredRows(ro
       <label><span>숙소 유형</span><select id="b2bMapCategory"><option value="all"${filters.category === "all" ? " selected" : ""}>전체 유형</option>${categoryOptions.map((option) => `<option value="${escapeHtml(option.key)}"${filters.category === option.key ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></label>
       <label><span>플랫폼</span><select id="b2bMapPlatform"><option value="all"${filters.platform === "all" ? " selected" : ""}>전체 플랫폼</option>${platformOptions.map((name) => `<option value="${escapeHtml(name)}"${filters.platform === name ? " selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select></label>
     </div>
-    <p class="b2b-map-filter-summary">표시 ${fmtNumber(visibleRows.length)}/${fmtNumber(rows.length)}곳 · 검증 ${fmtNumber(counts.verified)} · 확인 ${fmtNumber(counts.resolved)} · 근사 ${fmtNumber(counts.approximate)} · 미확인 ${fmtNumber(counts.unresolved)}</p>
+    <p class="b2b-map-filter-summary"><strong>네이버 메인 유기순위 · ${escapeHtml(activeKeyword() || "현재 검색어")}</strong><span>목록 ${fmtNumber(visibleRows.length)}/${fmtNumber(rows.length)}곳 · 지도 상위 20위 ${fmtNumber(visibleRows.filter((row) => row.mapRankEligible && row.coordinate).length)}곳 · 검증 ${fmtNumber(counts.verified)} · 확인 ${fmtNumber(counts.resolved)} · 근사 ${fmtNumber(counts.approximate)} · 미확인 ${fmtNumber(counts.unresolved)}</span></p>
   `;
   els.mapPanel?.classList.toggle("b2b-map-list-only", state.b2bMapViewMode === "list");
   els.b2bMapStatus.dataset.state = state.b2bMapGeocodingState === "error" ? "unavailable" : state.mapLoadState;
@@ -27516,7 +27705,7 @@ function renderB2BMapCompanyList(rows = []) {
         return `
           <article role="listitem" class="b2b-map-company-row${selected ? " is-selected" : ""}" data-location-status="${escapeHtml(row.coordinateStatus)}" data-b2b-map-company-key="${escapeHtml(row.key)}">
             <button type="button" data-b2b-map-select="${escapeHtml(row.key)}" data-b2b-map-company-key="${escapeHtml(row.key)}" aria-pressed="${selected ? "true" : "false"}">
-              <span>${row.rank ? `${fmtNumber(row.rank)}위` : "순위 미수집"}</span>
+              <span>${row.rank ? `네이버 메인 ${fmtNumber(row.rank)}위` : "네이버 메인 순위 미수집"}</span>
               <strong>${escapeHtml(row.item?.name || "업체명 확인")}</strong>
               <small>${escapeHtml(`${row.coordinateAddress || itemLocationLine(row.item)} · ${row.label}`)}</small>
             </button>
@@ -27609,6 +27798,66 @@ function mapDuplicateLayout(rows = []) {
   });
 }
 
+function companyMapMarkerModels(rows = [], bounds = {}) {
+  const viewWidth = 720;
+  const viewHeight = 620;
+  const inset = 12;
+  const occupiedLabels = [];
+  const models = mapDuplicateLayout(rows).map((row, sourceIndex) => {
+    const [projectedX, projectedY] = project(row.coordinate.lon, row.coordinate.lat, bounds);
+    const rank = Number(row.rank);
+    const radius = rank <= 3 ? 10 : rank <= 10 ? 7.5 : 5.5;
+    return {
+      ...row,
+      sourceIndex,
+      x: projectedX + row.duplicateOffsetX,
+      y: projectedY + row.duplicateOffsetY,
+      radius,
+      labelLines: rank <= 5 ? svgLabelLines(row.item?.name || "업체명 확인", 8, 2) : [],
+      labelVisible: false,
+      labelX: radius + 7,
+      labelY: -10,
+      labelAnchor: "start"
+    };
+  });
+
+  models.slice().sort((a, b) => a.rank - b.rank || a.sourceIndex - b.sourceIndex).forEach((model) => {
+    if (!model.labelLines.length) return;
+    const distanceX = model.radius + 7;
+    const distanceY = model.radius + 12;
+    const candidates = [
+      { x: distanceX, y: -10, anchor: "start" },
+      { x: -distanceX, y: -10, anchor: "end" },
+      { x: 0, y: -distanceY, anchor: "middle" },
+      { x: 0, y: distanceY + 8, anchor: "middle" },
+      { x: distanceX, y: distanceY, anchor: "start" },
+      { x: -distanceX, y: distanceY, anchor: "end" }
+    ];
+    const placement = candidates.find((candidate) => {
+      const box = svgLabelBox(
+        model.x + candidate.x,
+        model.y + candidate.y,
+        candidate.anchor,
+        model.labelLines
+      );
+      const inside = box.left >= inset
+        && box.right <= viewWidth - inset
+        && box.top >= inset
+        && box.bottom <= viewHeight - inset;
+      if (!inside || occupiedLabels.some((current) => svgLabelBoxesOverlap(box, current, 6))) return false;
+      candidate.box = box;
+      return true;
+    });
+    if (!placement) return;
+    model.labelVisible = true;
+    model.labelX = placement.x;
+    model.labelY = placement.y;
+    model.labelAnchor = placement.anchor;
+    occupiedLabels.push(placement.box);
+  });
+  return models.sort((a, b) => a.sourceIndex - b.sourceIndex);
+}
+
 function companyMapHitRadius(svg = els.clusterMap) {
   const rendered = svg?.getBoundingClientRect?.();
   const viewBox = svg?.viewBox?.baseVal;
@@ -27660,9 +27909,11 @@ async function renderMap() {
   const renderRequestId = ++state.mapRenderRequestId;
   renderMapControls();
   const regions = state.data?.regions || [];
-  els.mapCount.textContent = `${fmtNumber(regions.length)} 지역`;
   const allCompanyPoints = companyMapPointRows(regions);
   const companyPoints = b2bMapFilteredRows(allCompanyPoints);
+  if (state.b2bMapSelectedKey && !companyPoints.some((row) => row.key === state.b2bMapSelectedKey)) state.b2bMapSelectedKey = "";
+  const markerCompanyPoints = companyPoints.filter((row) => row.mapRankEligible && row.coordinate);
+  els.mapCount.textContent = `${fmtNumber(markerCompanyPoints.length)} 업체 · ${fmtNumber(regions.length)} 지역`;
   renderB2BMapCompanyList(companyPoints);
   const mapPromise = loadLocalMap();
   renderB2BMapViewControls(allCompanyPoints, companyPoints);
@@ -27671,7 +27922,7 @@ async function renderMap() {
   renderB2BMapViewControls(allCompanyPoints, companyPoints);
   const features = geojson?.features || [];
   const activeNames = new Set(regions.map((region) => String(region.region || region.name || "").replace(/\s+/g, "")));
-  const bounds = regionBounds(regions, features, companyPoints);
+  const bounds = regionBounds(regions, features, markerCompanyPoints);
   const model = b2bRegionMapModel();
   const centerRegion = model.topRegion || regions[0] || null;
   const centerCoordinate = regionCoordinate(centerRegion || {});
@@ -27706,35 +27957,34 @@ async function renderMap() {
     `;
   })() : "";
 
-  const markers = regions.map((region) => {
-    const coordinate = coordinateFromValue(region);
-    if (!coordinate) return "";
-    if (centerRegion && region === centerRegion) return "";
-    const [x, y] = project(coordinate.lon, coordinate.lat, bounds);
-    const primary = regionPrimary(region);
+  const markers = regionMapMarkerModels(regions.filter((region) => !centerRegion || region !== centerRegion), bounds).map((marker) => {
+    const primary = regionPrimary(marker.region);
     const coreIndex = Math.max(0, CORE_ORDER.indexOf(primary));
-    const rawCount = optionalNumber(region.topPlaces?.length ?? region.placeCount ?? region.naverTopCount);
-    const count = Number.isFinite(rawCount) ? fmtNumber(rawCount) : "";
+    const countText = Number.isFinite(marker.count) ? ` · 업체 ${fmtNumber(marker.count)}곳` : "";
+    const label = marker.labelVisible ? `
+      <text class="map-marker-label" x="${marker.labelX.toFixed(1)}" y="${marker.labelY.toFixed(1)}" text-anchor="${marker.textAnchor}">
+        ${marker.labelLines.map((line, index) => `<tspan x="${marker.labelX.toFixed(1)}" dy="${index ? 14 : 0}">${escapeHtml(line)}</tspan>`).join("")}
+      </text>
+    ` : "";
     return `
-      <g class="map-marker core-${coreIndex + 1}" transform="translate(${x.toFixed(1)} ${y.toFixed(1)})">
-        <circle r="17"></circle>
-        <text class="map-marker-count" y="5" text-anchor="middle">${count}</text>
-        <text class="map-marker-label" y="33" text-anchor="middle">${escapeHtml(region.region || region.name || "")}</text>
+      <g class="map-marker region-map-spot core-${coreIndex + 1}" aria-label="${escapeHtml(`${marker.name || "지역"} 지역 기준점${countText}`)}">
+        <title>${escapeHtml(`${marker.name || "지역"} · 지역 기준점${countText}`)}</title>
+        <circle cx="${marker.x.toFixed(1)}" cy="${marker.y.toFixed(1)}" r="${marker.radius.toFixed(1)}"></circle>
+        ${label}
       </g>
     `;
   }).join("");
 
   const companyMarkerHitRadius = companyMapHitRadius();
-  const companyMarkers = mapDuplicateLayout(companyPoints.filter((row) => row.coordinate)).map((row) => {
-    const [x, y] = project(row.coordinate.lon, row.coordinate.lat, bounds);
-    const rank = finiteNumber(row.rank, row.index + 1);
-    const radius = rank <= 5 ? 9 : rank <= 10 ? 7 : 5.5;
+  const companyMarkers = companyMapMarkerModels(markerCompanyPoints, bounds).map((row) => {
+    const rank = row.rank;
+    const radius = row.radius;
     const rateText = Number.isFinite(row.rate) ? fmtRate(row.rate) : "예약율 대기";
     const selected = row.key === state.b2bMapSelectedKey;
     const attrs = `data-b2b-map-company-key="${escapeHtml(row.key)}" data-b2b-map-select="${escapeHtml(row.key)}" tabindex="0" role="button" aria-pressed="${selected ? "true" : "false"}"${row.itemIndex >= 0 ? ` data-open-company="${row.itemIndex}"` : ""}`;
     const name = row.item?.name || "업체명 확인";
-    const label = rank <= 5 || row.bucket !== "local"
-      ? `<text class="company-map-label" x="12" y="-10">${escapeHtml(name.slice(0, 10))}</text>`
+    const label = row.labelVisible
+      ? `<text class="company-map-label" x="${row.labelX.toFixed(1)}" y="${row.labelY.toFixed(1)}" text-anchor="${row.labelAnchor}">${row.labelLines.map((line, index) => `<tspan x="${row.labelX.toFixed(1)}" dy="${index ? 13 : 0}">${escapeHtml(line)}</tspan>`).join("")}</text>`
       : "";
     const pointShape = row.coordinateStatus === "approximate"
       ? `<rect class="company-map-dot company-map-dot-approximate" x="${(-radius).toFixed(1)}" y="${(-radius).toFixed(1)}" width="${(radius * 2).toFixed(1)}" height="${(radius * 2).toFixed(1)}" rx="2" transform="rotate(45)"></rect>`
@@ -27749,8 +27999,8 @@ async function renderMap() {
       ? `<circle class="company-map-duplicate-anchor" cx="${(-row.duplicateOffsetX).toFixed(1)}" cy="${(-row.duplicateOffsetY).toFixed(1)}" r="3.5"></circle>`
       : "";
     return `
-      <g class="company-map-marker ${escapeHtml(row.bucket)} ${escapeHtml(row.tone)} location-${escapeHtml(row.coordinateStatus)}${selected ? " is-selected" : ""}" transform="translate(${(x + row.duplicateOffsetX).toFixed(1)} ${(y + row.duplicateOffsetY).toFixed(1)})" ${attrs} aria-label="${escapeHtml(`${fmtNumber(rank)}위 ${name}, ${row.label}, ${rateText}, ${row.coordinateLabel}`)}">
-        <title>${escapeHtml(`${fmtNumber(rank)}위 · ${name} · ${row.label} · ${rateText} · ${row.coordinateLabel}`)}</title>
+      <g class="company-map-marker rank-${rank <= 3 ? "top" : rank <= 10 ? "mid" : "base"} ${escapeHtml(row.bucket)} ${escapeHtml(row.tone)} location-${escapeHtml(row.coordinateStatus)}${selected ? " is-selected" : ""}" transform="translate(${row.x.toFixed(1)} ${row.y.toFixed(1)})" ${attrs} aria-label="${escapeHtml(`네이버 메인 유기순위 ${fmtNumber(rank)}위 ${name}, ${row.coordinateLabel}, ${row.label}`)}">
+        <title>${escapeHtml(`네이버 메인 유기순위 ${fmtNumber(rank)}위 · ${name} · ${row.coordinateLabel} · ${row.label} · ${rateText}`)}</title>
         ${duplicateLeader}
         ${duplicateAnchor}
         <circle class="company-map-hit" r="${companyMarkerHitRadius.toFixed(1)}"></circle>

@@ -197,8 +197,10 @@ assert.equal(coordinateStatus({ lon: 0, lat: 0 }).status, "invalid");
 assert.equal(coordinateStatus({ lon: 37.5, lat: 127.1 }).status, "invalid");
 assert.equal(coordinateStatus({ lon: 140, lat: 37 }).status, "invalid");
 assert.equal(coordinateStatus({ x: 127.1, y: 37.5 }).status, "not_found");
-assert.equal(coordinateStatus({ companyProfile: { location: { status: "resolved", lat: 37.5, lon: 127.1 } } }).status, "resolved");
-assert.equal(coordinateStatus({ companyProfile: { location: { status: "approximate", lat: 37.5, lon: 127.1 } } }).status, "approximate");
+assert.equal(coordinateStatus({ companyProfile: { location: { status: "resolved", lat: 37.5, lon: 127.1, precision: "parcel", source: "provider" } } }).status, "resolved");
+assert.equal(coordinateStatus({ companyProfile: { location: { status: "resolved", lat: 37.5, lon: 127.1, precision: "street", source: "provider" } } }).status, "approximate");
+assert.equal(coordinateStatus({ companyProfile: { location: { status: "approximate", lat: 37.5, lon: 127.1, precision: "street", source: "provider" } } }).status, "approximate");
+assert.equal(coordinateStatus({ companyProfile: { location: { status: "resolved", lat: 37.5, lon: 127.1, precision: "locality", source: "provider" } } }).status, "ambiguous");
 assert.doesNotMatch(app, /fallbackCompanyCoordinate/);
 assert.doesNotMatch(app, /source:\s*"estimated"/);
 assert.match(functionBlock("companyMapPointRows"), /coordinateStatusFromValue/);
@@ -234,6 +236,7 @@ vm.runInContext(functionSource("demandMobileShare"), demandContext);
 vm.runInContext(functionSource("demandPriorityLabel"), demandContext);
 vm.runInContext(functionSource("demandTone"), demandContext);
 vm.runInContext(functionSource("demandMetricValue"), demandContext);
+vm.runInContext(functionSource("svgLabelLines"), demandContext);
 vm.runInContext(functionSource("demandRadarChart"), demandContext);
 vm.runInContext(functionSource("b2bDemandValueState"), demandContext);
 vm.runInContext(functionSource("demandTrendQualityCard"), demandContext);
@@ -253,6 +256,17 @@ const partialRadar = demandContext.demandRadarChart([
 ]);
 assert.match(partialRadar, /<svg/);
 assert.match(partialRadar, /미수집/);
+assert.match(partialRadar, /<title id="demandRadarTitle">/);
+assert.match(partialRadar, /<desc id="demandRadarDescription">/);
+assert.match(partialRadar, /b2b-demand-radar-table/);
+assert.match(partialRadar, /radar-table-scroll/);
+const longLabelRadar = demandContext.demandRadarChart([
+  { label: "월간 검색 수요", score: 80 },
+  { label: "핵심 고객군 적합도", score: 70 },
+  { label: "평일 확장 가능성", score: 60 },
+]);
+assert.match(longLabelRadar, /<tspan/);
+assert.match(longLabelRadar, /월간 검색 수요 80점/);
 const unavailableRadar = demandContext.demandRadarChart([
   { label: "A", score: 80 }, { label: "B", score: null },
 ]);
@@ -285,6 +299,8 @@ assert.match(functionBlock("demandTrendChart"), /b2b-demand-text-alternative/);
 assert.match(functionBlock("demandTrendChart"), /<caption>/);
 assert.match(functionBlock("demandRadarChart"), /structure-radar-unavailable/);
 assert.match(functionBlock("demandRadarChart"), /b2b-demand-text-alternative/);
+assert.match(functionBlock("demandRadarChart"), /svgLabelLines\(axis\.label, 6, 2\)/);
+assert.match(functionBlock("demandRadarChart"), /pointFor\(index, 132\.5\)/);
 assert.match(functionBlock("renderDemand"), /demand-region-table b2b-demand-table-scroll/);
 assert.match(functionBlock("renderDemand"), /<table><caption>/);
 assert.match(functionBlock("renderDemand"), /demandContext\.period/);
@@ -389,6 +405,9 @@ assert.match(
 );
 assert.match(stage6Css, /prefers-reduced-motion:\s*reduce/);
 assert.match(stage6Css, /overflow-wrap:\s*anywhere/);
+assert.match(stage6Css, /\.radar-table-scroll\s*\{[^}]*overflow-x:\s*visible/s);
+assert.match(stage6Css, /\.radar-table-scroll \.b2b-demand-radar-table\s*\{[^}]*min-width:\s*0[^}]*table-layout:\s*fixed/s);
+assert.match(css, /\.structure-radar\s*\{[^}]*display:\s*block[^}]*max-width:\s*100%/s);
 
 assert.equal(pkg.scripts["test:b2b-secondary-workbench"], "node scripts/test_b2b_secondary_workbench_ui_contract.cjs");
 assert.ok(pkg.scripts.check.includes("node --check scripts/test_b2b_secondary_workbench_ui_contract.cjs"));

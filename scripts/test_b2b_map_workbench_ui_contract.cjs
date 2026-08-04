@@ -150,7 +150,7 @@ for (const status of expectedStatuses) {
         status,
         lat: 37.5665,
         lon: 126.978,
-        precision: status === "approximate" ? "locality" : "rooftop",
+        precision: status === "approximate" ? "street" : status === "resolved" ? "parcel" : "rooftop",
         source: "provider",
         resolvedAddress: "서울특별시 중구 세종대로 110",
         geocodedAt: "2026-08-03T00:00:00.000Z",
@@ -165,7 +165,14 @@ for (const status of expectedStatuses) {
 assert.equal(coordinateContext.normalizedLocationStatus("exact"), "verified");
 assert.equal(coordinateContext.normalizedLocationStatus("missing"), "not_found");
 assert.equal(coordinateContext.normalizedLocationStatus("future_status"), "pending");
-assert.equal(coordinateContext.coordinateStatusFromValue({ longitude: 127.1, latitude: 37.5 }).status, "resolved");
+assert.equal(coordinateContext.coordinateStatusFromValue({ longitude: 127.1, latitude: 37.5 }).status, "ambiguous");
+assert.equal(coordinateContext.coordinateStatusFromValue({ companyProfile: { location: { status: "resolved", longitude: 127.1, latitude: 37.5, precision: "parcel", source: "provider" } } }).status, "resolved");
+assert.equal(coordinateContext.coordinateStatusFromValue({ companyProfile: { location: { status: "resolved", longitude: 127.1, latitude: 37.5, precision: "street", source: "provider" } } }).status, "approximate");
+for (const precision of ["locality", "region", "unknown"]) {
+  const profile = coordinateContext.coordinateStatusFromValue({ companyProfile: { location: { status: "resolved", longitude: 127.1, latitude: 37.5, precision, source: "provider" } } });
+  assert.equal(profile.status, "ambiguous", `${precision} must remain a list-only location`);
+  assert.equal(profile.coordinate, null, `${precision} must not create a company marker coordinate`);
+}
 assert.equal(coordinateContext.coordinateStatusFromValue({ longitude: "127.1", latitude: "37.5" }).status, "invalid");
 assert.equal(coordinateContext.coordinateStatusFromValue({ longitude: 140, latitude: 37.5 }).status, "invalid");
 assert.equal(coordinateContext.coordinateStatusFromValue({ companyProfile: { location: { status: "verified" } } }).status, "invalid");
@@ -227,6 +234,71 @@ assert.equal(duplicateRows[2].duplicateOffsetX, 0);
 assert.equal(duplicateRows[3].duplicateCount, 0);
 assert.equal(duplicateRows[3].duplicateIndex, -1);
 
+const regionMarkerContext = {
+  coordinateFromValue: (region) => region.coordinate || null,
+  optionalNumber: (value) => value === null || value === undefined || value === "" ? Number.NaN : Number(value),
+};
+vm.createContext(regionMarkerContext);
+for (const name of ["project", "svgLabelLines", "svgLabelBox", "svgLabelBoxesOverlap", "regionMapMarkerModels"]) {
+  vm.runInContext(functionSource(app, name), regionMarkerContext);
+}
+const denseRegionModels = regionMarkerContext.regionMapMarkerModels([
+  { name: "창원시 의창구", placeCount: 40, coordinate: { lon: 127.48, lat: 36.52 } },
+  { name: "창원시 성산구", placeCount: 30, coordinate: { lon: 127.49, lat: 36.51 } },
+  { name: "창원시 마산합포구", placeCount: 20, coordinate: { lon: 127.50, lat: 36.50 } },
+  { name: "창원시 진해구", placeCount: 10, coordinate: { lon: 127.51, lat: 36.49 } },
+], { minLon: 127, maxLon: 128, minLat: 36, maxLat: 37 });
+assert.equal(denseRegionModels.length, 4);
+for (const model of denseRegionModels) {
+  assert.ok(model.radius >= 8 && model.radius <= 10, "region spots must remain compact");
+  assert.ok(model.labelLines.length <= 2, "region labels must use at most two lines");
+}
+const visibleRegionBoxes = denseRegionModels.filter((model) => model.labelVisible).map((model) => (
+  regionMarkerContext.svgLabelBox(model.labelX, model.labelY, model.textAnchor, model.labelLines)
+));
+for (let left = 0; left < visibleRegionBoxes.length; left += 1) {
+  for (let right = left + 1; right < visibleRegionBoxes.length; right += 1) {
+    assert.equal(regionMarkerContext.svgLabelBoxesOverlap(visibleRegionBoxes[left], visibleRegionBoxes[right]), false, "visible region labels must not collide");
+  }
+}
+
+const companyMarkerContext = {};
+vm.createContext(companyMarkerContext);
+for (const name of ["project", "svgLabelLines", "svgLabelBox", "svgLabelBoxesOverlap", "mapDuplicateLayout", "companyMapMarkerModels"]) {
+  vm.runInContext(functionSource(app, name), companyMarkerContext);
+}
+const denseCompanyModels = companyMarkerContext.companyMapMarkerModels(
+  Array.from({ length: 8 }, (_, index) => ({
+    rank: index + 1,
+    coordinate: { lon: 127.48 + index * 0.004, lat: 36.52 - index * 0.003 },
+    item: { name: `${index + 1}위 아주 긴 업체명 지도 충돌 검수` },
+    duplicateOffsetX: 0,
+    duplicateOffsetY: 0,
+  })),
+  { minLon: 127, maxLon: 128, minLat: 36, maxLat: 37 },
+);
+assert.equal(denseCompanyModels.length, 8);
+assert.equal(denseCompanyModels[0].labelVisible, true, "the highest rank must receive first label priority");
+assert.ok(denseCompanyModels.filter((model) => model.labelVisible).length <= 5, "only non-colliding top-five labels may be visible");
+assert.equal(denseCompanyModels.some((model) => model.rank > 5 && model.labelLines.length), false, "ranks below the top five must remain marker-only");
+const visibleCompanyBoxes = denseCompanyModels.filter((model) => model.labelVisible).map((model) => (
+  companyMarkerContext.svgLabelBox(
+    model.x + model.labelX,
+    model.y + model.labelY,
+    model.labelAnchor,
+    model.labelLines,
+  )
+));
+for (let left = 0; left < visibleCompanyBoxes.length; left += 1) {
+  for (let right = left + 1; right < visibleCompanyBoxes.length; right += 1) {
+    assert.equal(
+      companyMarkerContext.svgLabelBoxesOverlap(visibleCompanyBoxes[left], visibleCompanyBoxes[right], 6),
+      false,
+      "visible company labels must not collide",
+    );
+  }
+}
+
 const markerHitContext = {};
 vm.createContext(markerHitContext);
 vm.runInContext(functionSource(app, "companyMapHitRadius"), markerHitContext);
@@ -255,7 +327,51 @@ vm.runInContext(functionSource(app, "knownLodgingCategoryKey"), categoryContext)
 assert.equal(categoryContext.knownLodgingCategoryKey("펜션"), "pension");
 assert.equal(categoryContext.knownLodgingCategoryKey("future-unknown-category"), "");
 
+const rankContext = {
+  companyKey: (value) => String(value || "").toLowerCase().replace(/[^a-z0-9가-힣]+/g, ""),
+};
+vm.createContext(rankContext);
+for (const name of ["b2bMapExplicitOverallRank", "b2bMapCompanyIdentityKey", "b2bMapOverallRows"]) {
+  vm.runInContext(functionSource(app, name), rankContext);
+}
+const rankFixtures = [
+  { placeId: "no-source", overallRank: 1 },
+  { placeId: "regional", overallRank: 1, regionalRank: 1, rankingSource: "regional" },
+  { placeId: "ad", overallRank: 1, adRank: 1, rankingSource: "ad" },
+  { placeId: "rank-only", rank: 1, rankingSource: "overall" },
+  { placeId: "over", overallRank: 21, rankingSource: "overall" },
+  { placeId: "b", overallRank: 4, rank: 1, rankingSource: "overall" },
+  { placeId: "a", overallRank: 8, rankingSource: "overall" },
+  { placeId: "a", overallRank: 2, rank: 99, rankingSource: "overall" },
+  { placeId: "c", overallRank: "4", rankingSource: "naver_overall" },
+  { placeId: "decimal", overallRank: 2.5, rankingSource: "overall" },
+];
+const rankFixtureSnapshot = JSON.stringify(rankFixtures);
+const mapRows = rankContext.b2bMapOverallRows(rankFixtures, "", 20);
+const markerRows = mapRows.filter((row) => row.mapRankEligible);
+assert.equal(markerRows.map((row) => `${row.rank}:${row.identityKey}`).join(","), "2:place:a,4:place:b,4:place:c");
+assert.equal(markerRows[0].sourceIndex, 7, "duplicate companies must retain the current run's best explicit rank row");
+assert.equal(mapRows.find((row) => row.identityKey === "place:rank-only").rank, null, "generic rank must never become a map rank");
+assert.equal(mapRows.find((row) => row.identityKey === "place:regional").rank, null, "regional rank must remain list-only");
+assert.equal(mapRows.find((row) => row.identityKey === "place:ad").rank, null, "ad rank must remain list-only");
+assert.equal(JSON.stringify(rankFixtures), rankFixtureSnapshot, "map rank projection must not mutate API data");
+assert.equal(rankContext.b2bMapExplicitOverallRank({ overallRank: 3 }, "naver_overall"), 3, "the current run's overall source may authorize an item without a duplicate source label");
+assert.equal(rankContext.b2bMapExplicitOverallRank({ overallRank: 3, rankingSource: "regional" }, "naver_overall"), null, "an explicit non-overall item source must fail closed");
+const topTwenty = rankContext.b2bMapOverallRows(
+  Array.from({ length: 25 }, (_, index) => ({ placeId: `p-${index + 1}`, overallRank: index + 1, rankingSource: "overall" })),
+  "naver_overall",
+  20,
+).filter((row) => row.mapRankEligible);
+assert.equal(topTwenty.length, 20);
+assert.equal(topTwenty[0].rank, 1);
+assert.equal(topTwenty.at(-1).rank, 20);
+
 const pointRowsBlock = functionBlock(app, "companyMapPointRows");
+assert.match(pointRowsBlock, /b2bMapOverallRows\(sourceItems, state\.data\?\.ranking\?\.source, 20\)/);
+assert.match(pointRowsBlock, /rank:\s*mapRow\.rank/);
+assert.match(pointRowsBlock, /mapRankEligible:\s*mapRow\.mapRankEligible/);
+assert.match(pointRowsBlock, /providerIndex:\s*row\.sourceIndex/);
+assert.doesNotMatch(pointRowsBlock, /b2bRankBoardModel\(\)\.rows|sourceItems\.indexOf|index\s*\+\s*1/);
 assert.match(pointRowsBlock, /coordinateStatusFromValue\(row\.item\)/);
 assert.match(pointRowsBlock, /categoryKeys/);
 assert.match(pointRowsBlock, /explicitPrimaryCategory[\s\S]*?knownLodgingCategoryKey\(explicitPrimaryCategory\)/);
@@ -275,7 +391,16 @@ const renderMapBlock = functionBlock(app, "renderMap");
 assert.match(renderMapBlock, /const companyPoints = b2bMapFilteredRows\(allCompanyPoints\)/);
 assert.match(renderMapBlock, /renderB2BMapCompanyList\(companyPoints\)/);
 assert.match(renderMapBlock, /renderB2BMapViewControls\(allCompanyPoints, companyPoints\)/);
-assert.match(renderMapBlock, /mapDuplicateLayout\(companyPoints\.filter\(\(row\) => row\.coordinate\)\)/);
+assert.match(renderMapBlock, /const markerCompanyPoints = companyPoints\.filter\(\(row\) => row\.mapRankEligible && row\.coordinate\)/);
+assert.match(renderMapBlock, /companyMapMarkerModels\(markerCompanyPoints, bounds\)/);
+assert.match(renderMapBlock, /regionMapMarkerModels\(/);
+assert.doesNotMatch(renderMapBlock, /<circle r="17"/);
+assert.doesNotMatch(renderMapBlock, /finiteNumber\(row\.rank,\s*row\.index\s*\+\s*1\)/);
+assert.doesNotMatch(renderMapBlock, /name\.slice\(0,\s*10\)/);
+assert.match(renderMapBlock, /네이버 메인 유기순위/);
+assert.match(renderMapBlock, /rank <= 3 \? "top" : rank <= 10 \? "mid" : "base"/);
+assert.match(renderMapBlock, /row\.labelVisible/);
+assert.match(renderMapBlock, /text-anchor="\$\{row\.labelAnchor\}"/);
 assert.match(renderMapBlock, /company-map-dot-approximate/);
 assert.match(renderMapBlock, /company-map-duplicate/);
 assert.match(renderMapBlock, /companyMapHitRadius\(\)/);
@@ -284,8 +409,13 @@ assert.match(renderMapBlock, /company-map-duplicate-anchor/);
 assert.match(renderMapBlock, /data-b2b-map-select/);
 assert.match(renderMapBlock, /tabindex="0" role="button" aria-pressed=/);
 assert.match(renderMapBlock, /company-map-hit" r="\$\{companyMarkerHitRadius\.toFixed\(1\)\}"/);
-assert.match(renderMapBlock, /if \(centerRegion && region === centerRegion\) return ""/);
 assert.doesNotMatch(renderMapBlock, /regionForCompanyMapItem|fallbackCompanyCoordinate|estimated/i);
+
+const mapLegendBlock = functionBlock(app, "renderMapControls");
+assert.match(mapLegendBlock, /네이버 순위 업체/);
+assert.match(mapLegendBlock, /map-legend-disclosure/);
+assert.match(mapLegendBlock, /map-legend-grid/);
+assert.equal((mapLegendBlock.match(/\["(?:search|company|approximate|missing)"/g) || []).length, 4, "the primary map legend must remain compact");
 
 const mapControlsBlock = functionBlock(app, "renderB2BMapViewControls");
 assert.match(mapControlsBlock, /role="group" aria-label=/);
@@ -299,6 +429,9 @@ assert.match(mapControlsBlock, /locationStatus === "unresolved"/);
 assert.match(mapControlsBlock, /counts\.verified \+ counts\.resolved/);
 assert.match(mapControlsBlock, /counts\.approximate/);
 assert.match(mapControlsBlock, /counts\.unresolved/);
+assert.match(mapControlsBlock, /row\.mapRankEligible && row\.coordinate/);
+assert.match(mapControlsBlock, /네이버 메인 유기순위/);
+assert.match(mapControlsBlock, /지도 상위 20위/);
 assert.match(mapControlsBlock, /data-b2b-map-geocode/);
 assert.match(mapControlsBlock, /좌표는 저장·캐시하지 않고 이번 화면에서만 사용/);
 assert.match(mapControlsBlock, /지역 중심.*업체 위치로 대체하지 않습니다/);
@@ -319,6 +452,12 @@ assert.match(transientLookupBlock, /result\?\.usage !== "single-display"/);
 assert.match(transientLookupBlock, /result\?\.cacheable !== false/);
 assert.match(transientLookupBlock, /result\?\.persistable !== false/);
 assert.match(transientLookupBlock, /state\.b2bMapTransientLocations = next/);
+assert.match(transientLookupBlock, /row\.mapRankEligible/);
+assert.doesNotMatch(transientLookupBlock, /providerKey|providerCalls|providerCall/);
+assert.match(transientLookupBlock, /coordinateStatusFromValue/);
+assert.match(transientLookupBlock, /NAVER_GEOCODING_RATE_LIMITED/);
+assert.match(transientLookupBlock, /NAVER_GEOCODING_TRANSPORT_ERROR/);
+assert.doesNotMatch(transientLookupBlock, /error\?\.message/, "provider or proxy diagnostics must not be rendered in the map UI");
 assert.match(functionBlock(app, "loadRun"), /state\.b2bMapTransientLocations = \{\}/);
 assert.match(functionBlock(app, "loadB2BHistoryRun"), /state\.b2bMapTransientLocations = \{\}/);
 
@@ -332,6 +471,7 @@ assert.match(listBlock, /aria-pressed=/);
 assert.match(listBlock, /row\.coordinateAddress \|\| itemLocationLine\(row\.item\)/);
 assert.match(listBlock, /row\.coordinateIcon/);
 assert.match(listBlock, /row\.coordinateLabel/);
+assert.match(listBlock, /네이버 메인 순위 미수집/);
 assert.match(listBlock, /data-open-company="\$\{row\.itemIndex\}" data-b2b-map-company-key/);
 
 assert.match(functionBlock(app, "syncB2BMapSelectionDom"), /aria-pressed/);
@@ -504,5 +644,11 @@ assert.match(
 );
 assert.match(stage6Css, /@media \(max-width:\s*390px\)/);
 assert.match(stage6Css, /prefers-reduced-motion:\s*reduce/);
+assert.match(css, /\.map-layer-row\s*\{[^}]*display:\s*grid[^}]*repeat\(4, minmax\(0, 1fr\)\)/s);
+assert.match(css, /\.map-layer-row span,[\s\S]*?\.map-legend span\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);
+assert.match(css, /\.map-legend-disclosure > summary\s*\{[^}]*min-height:\s*44px/s);
+assert.match(css, /\.map-legend-grid\s*\{[^}]*repeat\(3, minmax\(0, 1fr\)\)/s);
+assert.match(stage6Css, /\.region-map-spot circle\s*\{[^}]*var\(--color-surface-raised\)/s);
+assert.match(stage6Css, /\.company-map-marker\.rank-top \.company-map-halo\s*\{[^}]*stroke-width:\s*3/s);
 
 console.log("B2B map workbench UI contract tests passed.");

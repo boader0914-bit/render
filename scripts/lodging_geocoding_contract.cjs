@@ -385,23 +385,53 @@ async function geocodeAddress(input = {}, options = {}) {
       signal: controller.signal
     });
     const rows = (Array.isArray(rawResults) ? rawResults : rawResults ? [rawResults] : []).slice(0, 5);
-    const results = rows
-      .map((row) => normalizeLocationContract({ ...row, addressFingerprint: address.fingerprint }, {
+    if (rows.length > 1) {
+      return normalizeLocationContract({ status: "ambiguous", source: "provider", resolvedAddress: address.normalizedAddress }, { address: address.normalizedAddress, defaultStatus: "ambiguous" });
+    }
+    if (String(rows[0]?.status || "").trim().toLowerCase() === "ambiguous") {
+      const ambiguousRow = rows[0] || {};
+      return normalizeLocationContract({
+        status: "ambiguous",
+        latitude: null,
+        longitude: null,
+        crs: "EPSG:4326",
+        precision: ambiguousRow.precision || "unknown",
+        source: ambiguousRow.source || "provider",
+        providerKey: ambiguousRow.providerKey || null,
+        confidence: typeof ambiguousRow.confidence === "number" ? ambiguousRow.confidence : null,
+        resolvedAddress: ambiguousRow.resolvedAddress || address.normalizedAddress,
+        addressFingerprint: address.fingerprint,
+        geocodedAt: ambiguousRow.geocodedAt || null
+      }, { address: address.normalizedAddress, defaultSource: "provider", defaultStatus: "ambiguous" });
+    }
+    const results = rows.map((row) => normalizeLocationContract({ ...row, addressFingerprint: address.fingerprint }, {
         address: address.normalizedAddress,
         defaultSource: "provider",
         defaultStatus: "resolved"
-      }))
-      .filter((row) => rawCoordinatePair(row) && MAPPABLE_LOCATION_STATUSES.has(row.status));
-    if (!results.length) {
-      if (rows.length) {
-        return normalizeLocationContract({ status: "invalid", source: "provider", resolvedAddress: address.normalizedAddress }, { address: address.normalizedAddress, defaultStatus: "invalid" });
-      }
+      }));
+    if (!rows.length) {
       return normalizeLocationContract({ status: "not_found", source: "provider", resolvedAddress: address.normalizedAddress }, { address: address.normalizedAddress, defaultStatus: "not_found" });
     }
-    if (results.length > 1) {
-      return normalizeLocationContract({ status: "ambiguous", source: "provider", resolvedAddress: address.normalizedAddress }, { address: address.normalizedAddress, defaultStatus: "ambiguous" });
+    const result = results[0];
+    if (result.status === "ambiguous") {
+      return normalizeLocationContract({
+        ...result,
+        status: "ambiguous",
+        latitude: null,
+        longitude: null
+      }, { address: address.normalizedAddress, defaultSource: "provider", defaultStatus: "ambiguous" });
     }
-    return results[0];
+    if (rawCoordinatePair(result) && MAPPABLE_LOCATION_STATUSES.has(result.status)) return result;
+    return normalizeLocationContract({
+      ...result,
+      status: result.status === "not_found" ? "not_found" : "invalid",
+      latitude: null,
+      longitude: null
+    }, {
+      address: address.normalizedAddress,
+      defaultSource: "provider",
+      defaultStatus: result.status === "not_found" ? "not_found" : "invalid"
+    });
   } catch (error) {
     const externallyAborted = Boolean(options.signal?.aborted);
     const statusCode = Number(error?.statusCode || error?.status || 0);

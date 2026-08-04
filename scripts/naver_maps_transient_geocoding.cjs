@@ -7,7 +7,6 @@ const {
   publicCompanyLocationSummary
 } = require("./lodging_geocoding_contract.cjs");
 const {
-  NAVER_MAPS_PROVIDER_KEY,
   TRANSIENT_DISPLAY_VERSION,
   createNaverMapsTransientGeocodingAdapter
 } = require("./naver_maps_geocoding_adapter.cjs");
@@ -62,28 +61,47 @@ function itemAddress(item = {}) {
   return null;
 }
 
+function displayLocationProjection(location = {}) {
+  const latitude = typeof location.latitude === "number" ? location.latitude : location.lat;
+  const longitude = typeof location.longitude === "number" ? location.longitude : location.lon;
+  const hasCoordinatePair = Number.isFinite(latitude) && Number.isFinite(longitude);
+  const requestedStatus = String(location.status || (hasCoordinatePair ? "resolved" : "invalid")).trim().toLowerCase();
+  const precision = String(location.precision || "unknown").trim().toLowerCase();
+  let status = requestedStatus;
+  if (!hasCoordinatePair && MAPPABLE_LOCATION_STATUSES.has(status)) {
+    status = "invalid";
+  } else if (hasCoordinatePair && status === "resolved") {
+    status = ["rooftop", "parcel"].includes(precision)
+      ? "resolved"
+      : precision === "street"
+        ? "approximate"
+        : "ambiguous";
+  } else if (hasCoordinatePair && status === "approximate" && !["rooftop", "parcel", "street"].includes(precision)) {
+    status = "ambiguous";
+  }
+  const mappable = hasCoordinatePair && MAPPABLE_LOCATION_STATUSES.has(status);
+  return Object.freeze({
+    status,
+    lat: mappable ? latitude : null,
+    lon: mappable ? longitude : null,
+    precision,
+    mappable
+  });
+}
+
 function isExistingMappable(location = {}) {
-  return MAPPABLE_LOCATION_STATUSES.has(location.status)
-    && typeof location.lat === "number"
-    && Number.isFinite(location.lat)
-    && typeof location.lon === "number"
-    && Number.isFinite(location.lon);
+  return displayLocationProjection(location).mappable;
 }
 
 function publicTransientLocation(location = {}) {
-  const mappable = ["verified", "resolved", "approximate"].includes(location.status)
-    && typeof location.latitude === "number"
-    && Number.isFinite(location.latitude)
-    && typeof location.longitude === "number"
-    && Number.isFinite(location.longitude);
+  const projection = displayLocationProjection(location);
   return Object.freeze({
-    status: String(location.status || "error"),
-    lat: mappable ? location.latitude : null,
-    lon: mappable ? location.longitude : null,
+    status: projection.status || "error",
+    lat: projection.lat,
+    lon: projection.lon,
     crs: "EPSG:4326",
-    precision: String(location.precision || "unknown"),
-    source: mappable ? "naver-transient" : "none",
-    providerKey: mappable ? NAVER_MAPS_PROVIDER_KEY : "",
+    precision: projection.precision,
+    source: projection.mappable ? "naver-transient" : "none",
     errorCode: String(location.errorCode || ""),
     transient: true,
     cacheable: false,
@@ -92,21 +110,20 @@ function publicTransientLocation(location = {}) {
 }
 
 function existingLocationResult(itemIndex, location) {
+  const projection = displayLocationProjection(location);
   return Object.freeze({
     itemIndex,
     location: Object.freeze({
-      status: location.status,
-      lat: location.lat,
-      lon: location.lon,
+      status: projection.status,
+      lat: projection.lat,
+      lon: projection.lon,
       crs: "EPSG:4326",
-      precision: location.precision || "unknown",
+      precision: projection.precision,
       source: location.source || "legacy",
-      providerKey: location.providerKey || "",
       transient: false,
       cacheable: false,
       persistable: true
-    }),
-    providerCall: false
+    })
   });
 }
 
@@ -135,14 +152,12 @@ function createNaverMapsTransientGeocodingService(options = {}) {
     }
 
     const results = [];
-    let providerCalls = 0;
     for (const itemIndex of indexes) {
       const item = items[itemIndex];
       if (!item || typeof item !== "object") {
         results.push(Object.freeze({
           itemIndex,
-          location: publicTransientLocation({ status: "invalid" }),
-          providerCall: false
+          location: publicTransientLocation({ status: "invalid" })
         }));
         continue;
       }
@@ -157,13 +172,11 @@ function createNaverMapsTransientGeocodingService(options = {}) {
       if (!address) {
         results.push(Object.freeze({
           itemIndex,
-          location: publicTransientLocation({ status: "invalid" }),
-          providerCall: false
+          location: publicTransientLocation({ status: "invalid" })
         }));
         continue;
       }
 
-      providerCalls += 1;
       const location = await geocodeAddress({
         originalAddress: address.originalAddress,
         requestId: `display-${itemIndex}`
@@ -175,8 +188,7 @@ function createNaverMapsTransientGeocodingService(options = {}) {
       });
       results.push(Object.freeze({
         itemIndex,
-        location: publicTransientLocation(location),
-        providerCall: true
+        location: publicTransientLocation(location)
       }));
     }
 
@@ -185,8 +197,6 @@ function createNaverMapsTransientGeocodingService(options = {}) {
       usage: "single-display",
       cacheable: false,
       persistable: false,
-      providerKey: NAVER_MAPS_PROVIDER_KEY,
-      providerCalls,
       items: Object.freeze(results)
     });
   };

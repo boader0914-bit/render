@@ -105,6 +105,7 @@ async function main() {
   assert.equal(first.cacheable, false);
   assert.equal(first.persistable, false);
   assert.equal(first.results.length, 1);
+  assert.equal(first.results[0].status, "approximate");
   assert.equal(first.results[0].latitude, 35.566);
   assert.equal(first.results[0].longitude, 128.165);
   assert.equal("rawProviderSecret" in first.results[0], false);
@@ -142,25 +143,31 @@ async function main() {
       items: [
         { name: "fixture", address: ADDRESS },
         { name: "missing-address" },
-        { name: "stored", address: ADDRESS, location: { status: "resolved", lat: 37.5, lon: 127.1, source: "legacy", precision: "rooftop" } }
+        { name: "stored", address: ADDRESS, location: { status: "resolved", lat: 37.5, lon: 127.1, source: "legacy", precision: "rooftop" } },
+        { name: "stored-low-precision", address: ADDRESS, location: { status: "resolved", lat: 37.6, lon: 127.2, source: "legacy", precision: "unknown" } }
       ]
     }
   };
   const before = JSON.stringify(runData);
-  const display = await service.resolveRunItemsForDisplay({ runData, itemIndexes: [0, 1, 2] });
+  const display = await service.resolveRunItemsForDisplay({ runData, itemIndexes: [0, 1, 2, 3] });
+  assert.equal(display.version, "naver-maps-geocoding-transient-display/v2");
   assert.equal(display.usage, "single-display");
   assert.equal(display.cacheable, false);
   assert.equal(display.persistable, false);
-  assert.equal(display.providerCalls, 1);
-  assert.equal(serviceCalls, 1);
+  assert.equal(serviceCalls, 2, "resolved coordinates with unknown precision must be re-checked instead of treated as display-ready");
+  assert.equal("providerKey" in display, false, "public service responses must not expose provider identity");
+  assert.equal("providerCalls" in display, false, "public service responses must not expose internal call accounting");
   assert.equal(display.items[0].location.transient, true);
+  assert.equal(display.items[0].location.status, "approximate");
   assert.equal(display.items[0].location.lat, 35.566);
   assert.equal(display.items[0].location.lon, 128.165);
   assert.equal(display.items[0].location.source, "naver-transient");
   assert.equal(display.items[1].location.status, "invalid");
-  assert.equal(display.items[1].providerCall, false);
   assert.equal(display.items[2].location.transient, false);
-  assert.equal(display.items[2].providerCall, false);
+  assert.equal(display.items[3].location.transient, true);
+  assert.equal(display.items[3].location.status, "approximate");
+  assert.equal(display.items.every((item) => !("providerCall" in item)), true, "public item rows must not expose provider call metadata");
+  assert.equal(display.items.every((item) => !("providerKey" in item.location)), true, "public locations must not expose provider identity");
   assert.equal(JSON.stringify(runData), before, "transient display resolution must not mutate run or company data");
   const serialized = JSON.stringify(display);
   for (const forbidden of [ADDRESS, "rawProviderSecret", TEST_KEY_ID, TEST_KEY, "addressElements", "resolvedAddress", "addressFingerprint"]) {

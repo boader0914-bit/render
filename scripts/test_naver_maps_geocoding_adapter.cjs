@@ -217,7 +217,7 @@ async function main() {
   const rawRows = await successAdapter({ normalizedAddress: ADDRESS, requestId: "company-success", signal: new AbortController().signal });
   assert.equal(rawRows.length, 1);
   assert.deepEqual(rawRows[0], {
-    status: "resolved",
+    status: "approximate",
     latitude: 35.566,
     longitude: 128.165,
     crs: "EPSG:4326",
@@ -230,6 +230,34 @@ async function main() {
   });
   assert.equal(Object.isFrozen(rawRows), true);
   assert.equal("privateProviderPayload" in rawRows[0], false);
+
+  const parcel = normalizeNaverAddress(naverRow({
+    addressElements: [{ types: ["LAND_NUMBER"], longName: "1" }]
+  }), { observedAt: FIXED_OBSERVED_AT });
+  assert.equal(parcel.status, "resolved");
+  assert.equal(parcel.precision, "parcel");
+  assert.equal(parcel.latitude, 35.566);
+  assert.equal(parcel.longitude, 128.165);
+
+  const street = normalizeNaverAddress(naverRow(), { observedAt: FIXED_OBSERVED_AT });
+  assert.equal(street.status, "approximate");
+  assert.equal(street.precision, "street");
+  assert.equal(street.latitude, 35.566);
+  assert.equal(street.longitude, 128.165);
+
+  for (const [precision, types] of [
+    ["locality", ["DONGMYUN"]],
+    ["region", ["SIDO", "SIGUGUN"]],
+    ["unknown", ["BUILDING_NUMBER"]]
+  ]) {
+    const nonMappable = normalizeNaverAddress(naverRow({
+      addressElements: [{ types, longName: "fixture" }]
+    }), { observedAt: FIXED_OBSERVED_AT });
+    assert.equal(nonMappable.status, "ambiguous", `${precision} provider evidence must require review`);
+    assert.equal(nonMappable.precision, precision);
+    assert.equal(nonMappable.latitude, null, `${precision} must not create a marker`);
+    assert.equal(nonMappable.longitude, null, `${precision} must not create a marker`);
+  }
   const requested = new URL(capturedUrl);
   assert.equal(requested.origin + requested.pathname, NAVER_MAPS_GEOCODING_ENDPOINT);
   assert.equal(requested.hostname, "maps.apigw.ntruss.com");
@@ -277,13 +305,39 @@ async function main() {
     adapter: pipelineAdapter,
     timeoutMs: 500
   });
-  assert.equal(resolved.status, "resolved");
+  assert.equal(resolved.status, "approximate");
   assert.equal(resolved.providerKey, NAVER_MAPS_PROVIDER_KEY);
   assert.equal(resolved.latitude, 35.566);
   assert.equal(resolved.longitude, 128.165);
   assert.equal(resolved.geocodedAt, FIXED_OBSERVED_AT);
   assert.equal("privateProviderPayload" in resolved, false);
   assert.equal(pipelineCalls, 1);
+
+  const localityAdapter = configuredAdapter(async () => response(200, okPayload([
+    naverRow({ addressElements: [{ types: ["DONGMYUN"], longName: "가회면" }] })
+  ])));
+  const locality = await geocodeAddress({ address: ADDRESS, requestId: "company-locality" }, {
+    enabled: localityAdapter.enabled,
+    adapter: localityAdapter
+  });
+  assert.equal(locality.status, "ambiguous", "common contract must preserve provider ambiguity");
+  assert.equal(locality.precision, "locality");
+  assert.equal(locality.latitude, null);
+  assert.equal(locality.longitude, null);
+
+  const ambiguousCoordinate = await geocodeAddress({ address: ADDRESS, requestId: "company-ambiguous-coordinate" }, {
+    enabled: true,
+    adapter: async () => [{
+      status: "ambiguous",
+      latitude: 35.566,
+      longitude: 128.165,
+      precision: "locality",
+      source: "provider"
+    }]
+  });
+  assert.equal(ambiguousCoordinate.status, "ambiguous", "an explicit provider ambiguity must never be promoted to resolved");
+  assert.equal(ambiguousCoordinate.latitude, null);
+  assert.equal(ambiguousCoordinate.longitude, null);
 
   const ambiguousAdapter = configuredAdapter(async () => response(200, okPayload([
     naverRow(),
@@ -414,8 +468,9 @@ async function main() {
   const invalidCoordinate = normalizeNaverAddress(naverRow({ x: "not-a-number", y: "35.566" }), {
     observedAt: FIXED_OBSERVED_AT
   });
+  assert.equal(invalidCoordinate.status, "invalid");
   assert.equal(invalidCoordinate.longitude, null);
-  assert.equal(invalidCoordinate.latitude, 35.566);
+  assert.equal(invalidCoordinate.latitude, null);
   assert.equal("privateProviderPayload" in invalidCoordinate, false);
 
   assert.equal(forbiddenGlobalFetchCalls, 0, "the adapter must never fall back to global fetch");
