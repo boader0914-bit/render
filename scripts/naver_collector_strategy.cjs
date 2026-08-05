@@ -593,16 +593,33 @@ function staticFixtureResponse(value) {
   });
 }
 
-function createStaticNaverFixtureTransport(response) {
+function createStaticNaverFixtureTransport(response, options = {}) {
   const fixtureResponse = staticFixtureResponse(response);
+  const maxCalls = options.maxCalls === undefined ? Number.POSITIVE_INFINITY : Number(options.maxCalls);
+  if (!(maxCalls === Number.POSITIVE_INFINITY || (Number.isInteger(maxCalls) && maxCalls >= 1))) {
+    throw strategyError("NAVER_FIXTURE_CALL_BUDGET_INVALID", "NAVER fixture call budget is invalid");
+  }
+  const budgetErrorCode = String(options.budgetErrorCode || "NAVER_FIXTURE_CALL_BUDGET_EXCEEDED").trim();
+  if (!/^[A-Z][A-Z0-9_]{2,79}$/u.test(budgetErrorCode)) {
+    throw strategyError("NAVER_FIXTURE_CALL_BUDGET_INVALID", "NAVER fixture call budget error code is invalid");
+  }
   let callCount = 0;
   const transport = async function registeredStaticFixtureTransport(request) {
+    if (callCount >= maxCalls) {
+      throw strategyError(budgetErrorCode, "NAVER fixture transport call budget was exceeded", 409);
+    }
     callCount += 1;
     if (fixtureResponse instanceof Error) throw fixtureResponse;
     return fixtureResponse;
   };
   Object.defineProperty(transport, "fixtureCallCount", {
     value: () => callCount,
+    configurable: false,
+    enumerable: false,
+    writable: false
+  });
+  Object.defineProperty(transport, "maxFixtureCalls", {
+    value: maxCalls,
     configurable: false,
     enumerable: false,
     writable: false

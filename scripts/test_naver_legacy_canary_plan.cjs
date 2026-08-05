@@ -67,6 +67,17 @@ function main() {
   assert.equal(plan.rollbackStrategy, "current");
   assert.equal(plan.approvals.externalCallApproved, false);
   assert.equal(plan.approvals.previewWriteApproved, false);
+  assert.deepEqual(plan.executionIdentity.requiredStores, []);
+  assert.deepEqual(plan.executionIdentity.forbiddenStores, [
+    "job_signature",
+    "success_manifest",
+    "history",
+    "snapshot",
+    "fallback_provenance"
+  ]);
+  assert.equal(plan.dataWrite.mode, "no_store_canary");
+  assert.equal(plan.freshnessEvidence.requiredEvidence.includes("new_run_id"), false);
+  assert.equal(plan.freshnessEvidence.requiredEvidence.includes("success_manifest_with_matching_execution_identity"), false);
   assert.ok(Object.isFrozen(plan));
   assert.ok(Object.isFrozen(plan.approvals));
 

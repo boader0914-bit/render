@@ -10,6 +10,13 @@ const FAILURE_CATALOG = Object.freeze({
   NAVER_SEARCH_AMBIGUOUS: { message: "네이버 검색 결과를 안전하게 구분할 수 없어 수집을 중단했습니다.", retryable: false, statusCode: 502 },
   NAVER_ACCESS_BLOCKED: { message: "네이버 검색 접근이 일시적으로 제한되어 수집을 중단했습니다.", retryable: false, statusCode: 502 },
   NAVER_PROVIDER_COOLDOWN_ACTIVE: { message: "네이버 검색 연결을 보호하기 위해 재시도를 잠시 중단했습니다.", retryable: true, statusCode: 503 },
+  NAVER_LEGACY_CANARY_DISABLED: { message: "네이버 단일 검증 수집은 현재 비활성 상태입니다.", retryable: false, statusCode: 503 },
+  NAVER_LEGACY_CANARY_APPROVAL_REQUIRED: { message: "네이버 단일 검증 수집에는 별도 승인이 필요합니다.", retryable: false, statusCode: 409 },
+  NAVER_LEGACY_CANARY_APPROVAL_EXPIRED: { message: "네이버 단일 검증 수집 승인이 만료되었습니다.", retryable: false, statusCode: 409 },
+  NAVER_LEGACY_CANARY_APPROVAL_USED: { message: "네이버 단일 검증 수집 승인이 이미 사용되었습니다.", retryable: false, statusCode: 409 },
+  NAVER_LEGACY_CANARY_CONTRACT_MISMATCH: { message: "네이버 단일 검증 수집 계약이 승인 내용과 일치하지 않습니다.", retryable: false, statusCode: 409 },
+  NAVER_LEGACY_CANARY_CALL_BUDGET_EXCEEDED: { message: "네이버 단일 검증 수집의 요청 한도를 초과했습니다.", retryable: false, statusCode: 409 },
+  NAVER_LEGACY_CANARY_BUSY: { message: "다른 네이버 단일 검증 수집이 진행 중입니다.", retryable: false, statusCode: 409 },
   NAVER_TEMPORARY_UNAVAILABLE: { message: "네이버 검색 응답이 지연되어 수집을 완료하지 못했습니다.", retryable: true, statusCode: 503 },
   NAVER_HTTP_ERROR: { message: "네이버 검색 응답을 받지 못해 수집을 중단했습니다.", retryable: true, statusCode: 502 },
   COLLECTOR_START_FAILED: { message: "수집 프로세스를 시작하지 못했습니다.", retryable: false, statusCode: 500 },
@@ -119,11 +126,12 @@ function unsafePublicText(value) {
 }
 
 function publicErrorPayload(error) {
-  if (error?.publicMessage && FAILURE_CATALOG[error.code]) {
+  if (FAILURE_CATALOG[error?.code]) {
+    const entry = catalogEntry(error.code);
     return {
-      error: error.publicMessage,
+      error: error.publicMessage || entry.message,
       code: error.code,
-      retryable: Boolean(error.retryable),
+      retryable: Boolean(error.retryable ?? entry.retryable),
       diagnosticId: error.diagnosticId || undefined
     };
   }

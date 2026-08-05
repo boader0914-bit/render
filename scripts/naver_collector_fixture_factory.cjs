@@ -59,8 +59,8 @@ function apolloHtml(state, marker = "window.__APOLLO_STATE__ = ") {
   return `<!doctype html><html><head></head><body><script>${marker}${JSON.stringify(state)};</script></body></html>`;
 }
 
-function staticFixtureTransport(response) {
-  return createStaticNaverFixtureTransport(response);
+function staticFixtureTransport(response, options) {
+  return createStaticNaverFixtureTransport(response, options);
 }
 
 function fixtureProviderReservation(now = "2026-08-05T08:00:00.000Z") {

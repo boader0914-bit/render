@@ -270,7 +270,8 @@ function buildDisabledLegacyCanaryPlan(overrides = {}) {
       requiredBeforeActivation: true,
       productionIntegrationImplemented: false,
       requiredFields: ["strategy", "strategyVersion", "queryPlanVersion", "parserVersion", "rankingContractVersion", "executionIdentityHash"],
-      requiredStores: ["job_signature", "success_manifest", "history", "fallback_provenance"]
+      requiredStores: [],
+      forbiddenStores: ["job_signature", "success_manifest", "history", "snapshot", "fallback_provenance"]
     },
     operatorCount: 1,
     explicitAdminActionRequired: true,
@@ -298,15 +299,15 @@ function buildDisabledLegacyCanaryPlan(overrides = {}) {
       sharedReuseAllowed: false,
       completedReuseAllowed: false,
       fallbackCanSatisfyCanary: false,
-      requiredEvidence: ["new_run_id", "collection_started_at", "provider_transport_attempt_started", "success_manifest_with_matching_execution_identity"]
+      requiredEvidence: ["provider_transport_attempt_started", "safe_count_summary", "execution_identity", "started_at", "completed_at"]
     },
     approvals: {
       externalCallApproved: false,
       previewWriteApproved: false
     },
-    dataWrite: { previewWriteApproved: false, mode: "requires_separate_approval" },
+    dataWrite: { previewWriteApproved: false, mode: "no_store_canary" },
     rollback: { strategy: "current", automaticLegacyEnablement: false, migrationRequired: false },
-    remainingApprovals: ["candidate_commit_sha", "preview_deployment", "single_provider_attempt", "preview_snapshot_write_or_no_write_choice"]
+    remainingApprovals: ["candidate_commit_sha", "preview_deployment", "single_provider_attempt", "one_shot_approval_and_provider_health_metadata"]
   });
 }
 

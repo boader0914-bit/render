@@ -74,6 +74,9 @@ const {
   decideNaverQuotaConsumption,
   projectNaverCollectionFallbackForB2B
 } = require("./naver_collection_fallback.cjs");
+const {
+  createNaverLegacyCanaryRunner
+} = require("./naver_legacy_canary_runner.cjs");
 const { createLocationRegionMatcher } = require("./location_region_matcher.cjs");
 const {
   createRegionInsightRuntime,
@@ -166,6 +169,9 @@ const NAVER_PROVIDER_HEALTH_FILE = path.join(DATA_DIR, "provider_health", "naver
 const naverProviderHealthStore = createNaverProviderHealthStore({
   filePath: NAVER_PROVIDER_HEALTH_FILE,
   runtimeRoot: DATA_DIR
+});
+const naverLegacyCanaryRunner = createNaverLegacyCanaryRunner({
+  releaseEnabled: false
 });
 const regionInsightRuntime = createRegionInsightRuntime({
   filePath: REGION_INSIGHT_STORE_FILE,
@@ -14799,6 +14805,21 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const providerState = await naverProviderHealthStore.read();
       return send(res, 200, adminNaverProviderHealthProjection(providerState), "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/admin/provider-canary/naver-place-main/status") {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(res, 200, naverLegacyCanaryRunner.status(), "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/admin/provider-canary/naver-place-main/execute") {
+      if (!requireAdminSession(session, req, res)) return;
+      const result = await naverLegacyCanaryRunner.execute();
+      return send(res, 200, result, "application/json; charset=utf-8", {
         "Cache-Control": "no-store"
       });
     }
