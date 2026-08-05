@@ -10,8 +10,25 @@ const state = {
   runs: [],
   data: null,
   activeRunId: null,
+  runRequestId: 0,
   activeTab: "report",
   lastAnalysisTab: "report",
+  lastRegionAnalysisTab: "map",
+  activeRegionAnalysisTab: "map",
+  regionAnalysisRegionKey: "",
+  regionAnalysisMeasurementPeriod: null,
+  regionAnalysisAsOf: "",
+  regionAnalysisPublicationVersion: "",
+  adminRegionInsightRecord: null,
+  adminRegionInsightLoadedRegionKey: "",
+  adminRegionInsightRequestId: 0,
+  adminRegionInsightLoading: false,
+  adminRegionInsightSaving: false,
+  adminRegionInsightDirty: false,
+  adminRegionInsightDraftDirty: false,
+  adminRegionInsightDirtyRevision: 0,
+  adminRegionInsightError: "",
+  adminRegionInsightMessage: "",
   primaryNavKey: "",
   adminMobileSection: "summary",
   adminMobileAnchor: "",
@@ -264,10 +281,14 @@ const LODGING_CATEGORY_PROFILES = {
   }
 };
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
-const ADMIN_ANALYSIS_TABS = Object.freeze(["report", "rank", "map", "demand", "historyOps"]);
+const ADMIN_ANALYSIS_TABS = Object.freeze(["report", "rank", "historyOps"]);
+const REGION_ANALYSIS_TABS = Object.freeze({
+  admin: Object.freeze(["map", "demand", "dictionary", "reviewPublish"]),
+  b2b: Object.freeze(["map", "demand", "regionInsight"])
+});
 const APP_NAVIGATION = {
   admin: {
-    allowedTabs: ["report", "rank", "dictionary", "map", "demand", "historyOps", "admin"],
+    allowedTabs: ["report", "rank", "map", "demand", "dictionary", "reviewPublish", "historyOps", "admin"],
     items: [
       { key: "home", label: "홈", description: "운영 현황", icon: "home", tab: "admin", adminPanelSection: "overview", mobile: true },
       { key: "companies", label: "업체", description: "목록 · 검토", icon: "company", tab: "admin", adminPanelSection: "database", mobile: true },
@@ -283,24 +304,50 @@ const APP_NAVIGATION = {
         children: [
           { key: "market-summary", label: "시장 요약", tab: "report" },
           { key: "ranking", label: "업체 순위", tab: "rank" },
-          { key: "map", label: "지역 지도", tab: "map" },
-          { key: "demand", label: "수요구조", tab: "demand" },
           { key: "history", label: "수집 이력", tab: "historyOps" }
         ]
       },
-      { key: "regions", label: "지역", description: "입지 · 카드", icon: "region", tab: "dictionary", mobile: false },
+      {
+        key: "region-analysis",
+        label: "지역 분석",
+        description: "지도 · 수요 · 입지",
+        icon: "region",
+        tab: "map",
+        mobile: false,
+        matchTabs: REGION_ANALYSIS_TABS.admin,
+        drawerChildren: false,
+        children: [
+          { key: "region-map", label: "지역 지도", icon: "region", tab: "map" },
+          { key: "region-demand", label: "수요 구조", icon: "demand", tab: "demand" },
+          { key: "region-insight-admin", label: "입지 인사이트", icon: "analytics", tab: "dictionary" },
+          { key: "region-review-publish", label: "검수·발행", icon: "collect", tab: "reviewPublish" }
+        ]
+      },
       { key: "members", label: "회원", description: "권한 · 요청", icon: "members", tab: "admin", adminPanelSection: "members", mobile: false },
       { key: "settings", label: "설정", description: "연동 · 보안", icon: "settings", tab: "admin", adminPanelSection: "files", mobile: false },
       { key: "more", label: "더보기", description: "전체 메뉴", icon: "more", action: "drawer", mobileOnly: true }
     ]
   },
   b2b: {
-    allowedTabs: ["report", "rank", "map", "demand", "account"],
+    allowedTabs: ["report", "rank", "map", "demand", "regionInsight", "account"],
     items: [
       { key: "home", label: "홈", description: "검색 · 요약", icon: "home", tab: "report", mobile: true },
       { key: "competition", label: "경쟁", description: "노출 · 매출", icon: "competition", tab: "rank", mobile: true },
-      { key: "map", label: "지도", description: "경쟁권", icon: "region", tab: "map", mobile: true },
-      { key: "demand", label: "수요", description: "검색 추이", icon: "demand", tab: "demand", mobile: true },
+      {
+        key: "region-analysis",
+        label: "지역 분석",
+        description: "지도 · 수요 · 입지",
+        icon: "region",
+        tab: "map",
+        mobile: true,
+        matchTabs: REGION_ANALYSIS_TABS.b2b,
+        drawerChildren: false,
+        children: [
+          { key: "region-map", label: "지역 지도", icon: "region", tab: "map" },
+          { key: "region-demand", label: "수요 구조", icon: "demand", tab: "demand" },
+          { key: "region-insight", label: "지역 인사이트", icon: "analytics", tab: "regionInsight" }
+        ]
+      },
       { key: "account", label: "계정", description: "이용 · 정책", icon: "account", tab: "account", action: "account", mobile: true }
     ]
   }
@@ -368,11 +415,13 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
 const TAB_LABELS = {
   report: "요약 리포트",
   rank: "업체 순위",
-  dictionary: "입지사전",
+  dictionary: "입지 인사이트",
   target: "영업 타깃",
   decisionQueue: "검수 필요",
   map: "지역 클러스터 지도",
   demand: "수요구조 분석",
+  regionInsight: "지역 인사이트",
+  reviewPublish: "검수·발행",
   historyOps: "수집 이력",
   admin: "관리"
 };
@@ -381,6 +430,7 @@ const B2B_TAB_LABELS = {
   rank: "순위",
   map: "지도",
   demand: "수요",
+  regionInsight: "지역 인사이트",
   account: "계정"
 };
 
@@ -389,6 +439,11 @@ const els = {
   pageSubtitle: document.getElementById("pageSubtitle"),
   appMain: document.getElementById("appMain"),
   appPrimaryNav: document.getElementById("appPrimaryNav"),
+  regionAnalysisNav: document.getElementById("regionAnalysisNav"),
+  regionAnalysisContext: document.getElementById("regionAnalysisContext"),
+  regionAnalysisTabs: document.getElementById("regionAnalysisTabs"),
+  regionInsightBody: document.getElementById("regionInsightBody"),
+  reviewPublishBody: document.getElementById("reviewPublishBody"),
   appRoleBadge: document.getElementById("appRoleBadge"),
   adminUserViewBanner: document.getElementById("adminUserViewBanner"),
   summaryGrid: document.getElementById("summaryGrid"),
@@ -2216,6 +2271,14 @@ function navigationEntries(role = currentRole(), { includeChildren = false } = {
   ]);
 }
 
+function drawerNavigationEntries(role = currentRole()) {
+  return navigationEntries(role).flatMap((item) => {
+    if (item.action === "drawer") return [];
+    if (!Array.isArray(item.children) || !item.children.length || item.drawerChildren === false) return [item];
+    return item.children.map((child) => ({ ...child, parentKey: item.key, drawerChild: true }));
+  });
+}
+
 function navigationItemByKey(key = "", role = currentRole()) {
   return navigationEntries(role, { includeChildren: true }).find((item) => item.key === key) || null;
 }
@@ -2287,8 +2350,7 @@ function renderControlDrawerNavigation() {
   const role = currentRole();
   if (els.drawerActions.dataset.navigationRole !== role) {
     els.drawerActions.dataset.navigationRole = role;
-    const entries = navigationEntries(role, { includeChildren: true })
-      .filter((item) => item.action !== "drawer" && (!item.children || item.drawerChild));
+    const entries = drawerNavigationEntries(role);
     els.drawerActions.innerHTML = entries.map((item) => `
       <button class="secondary-button${item.drawerChild ? " drawer-child" : ""}" type="button" data-app-nav-key="${escapeHtml(item.key || "")}"${item.tab ? ` data-drawer-tab="${escapeHtml(item.tab)}"` : ""}${item.adminPanelSection ? ` data-admin-section-link="${escapeHtml(item.adminPanelSection)}"` : ""}>
         <strong>${escapeHtml(item.label || "")}</strong>
@@ -2301,6 +2363,319 @@ function renderControlDrawerNavigation() {
     if (active) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
+}
+
+function regionAnalysisTabIds(role = currentRole()) {
+  const configured = REGION_ANALYSIS_TABS[role] || [];
+  const allowed = new Set(navigationModel(role).allowedTabs || []);
+  return configured.filter((tab) => allowed.has(tab));
+}
+
+function regionAnalysisTabItems(role = currentRole()) {
+  const allowed = new Set(regionAnalysisTabIds(role));
+  const parent = navigationEntries(role).find((item) => item.key === "region-analysis");
+  return (parent?.children || []).filter((item) => allowed.has(item.tab));
+}
+
+function resolveRegionAnalysisReturnTab(lastTab = "", allowedTabs = regionAnalysisTabIds()) {
+  const allowed = Array.isArray(allowedTabs) ? allowedTabs : [];
+  return allowed.includes(lastTab) ? lastTab : (allowed[0] || firstRoleTab());
+}
+
+function resolveHistoryTabForRole(tab = "", allowedTabs = roleTabs(), allowedRegionTabs = regionAnalysisTabIds()) {
+  const requested = String(tab || "");
+  if (!requested) return "";
+  if ((Array.isArray(allowedTabs) ? allowedTabs : []).includes(requested)) return requested;
+  const knownRegionTabs = new Set(Object.values(REGION_ANALYSIS_TABS).flat());
+  if (knownRegionTabs.has(requested)) return resolveRegionAnalysisReturnTab("", allowedRegionTabs);
+  return firstRoleTab();
+}
+
+function rememberRegionAnalysisTab(tab = state.activeTab) {
+  if (!regionAnalysisTabIds().includes(tab) || !roleAllowsTab(tab)) return;
+  state.lastRegionAnalysisTab = tab;
+  state.activeRegionAnalysisTab = tab;
+}
+
+function normalizeRegionAnalysisRegionKey(regionKey = "") {
+  return String(regionKey || "").trim().slice(0, 160);
+}
+
+function matchedRegionContextKey(regionContext = {}) {
+  if (!regionContext || typeof regionContext !== "object" || Array.isArray(regionContext)) return "";
+  const canonicalKey = normalizeRegionAnalysisRegionKey(regionContext.regionKey);
+  if (Object.prototype.hasOwnProperty.call(regionContext, "matchStatus")) {
+    return regionContext.matchStatus === "matched" && canonicalKey ? canonicalKey : "";
+  }
+  const legacyKey = canonicalKey || normalizeRegionAnalysisRegionKey(regionContext.region?.regionKey);
+  return regionContext.status === "matched" && regionContext.matched === true && legacyKey ? legacyKey : "";
+}
+
+function regionAnalysisSharedContext(data = {}, options = {}) {
+  const source = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+  const run = source.run && typeof source.run === "object" && !Array.isArray(source.run) ? source.run : {};
+  const regionContext = source.regionContext && typeof source.regionContext === "object" && !Array.isArray(source.regionContext)
+    ? source.regionContext
+    : {};
+  const regionKey = matchedRegionContextKey(regionContext);
+  const matchStatus = String(regionContext.matchStatus || regionContext.status || (regionKey ? "matched" : "unmatched"));
+  const storedPeriod = run.measurementPeriod && typeof run.measurementPeriod === "object" && !Array.isArray(run.measurementPeriod)
+    ? run.measurementPeriod
+    : null;
+  const periodStart = String(storedPeriod?.start || run.checkIn || "").trim();
+  const periodEnd = String(storedPeriod?.end || run.checkOut || "").trim();
+  const measurementPeriod = periodStart && periodEnd
+    ? {
+        start: periodStart,
+        end: periodEnd,
+        label: String(storedPeriod?.label || `${periodStart}~${periodEnd}`)
+      }
+    : null;
+  const adminRecord = options.adminRegionInsightRecord && typeof options.adminRegionInsightRecord === "object"
+    ? options.adminRegionInsightRecord
+    : null;
+  const adminState = adminRecord?.state && typeof adminRecord.state === "object" ? adminRecord.state : null;
+  const b2bState = source.b2bRegionInsight && typeof source.b2bRegionInsight === "object" ? source.b2bRegionInsight : null;
+  const candidate = adminState || b2bState;
+  const insight = regionKey && candidate?.regionKey === regionKey ? candidate : null;
+  const quality = insight?.dataQuality && typeof insight.dataQuality === "object" ? insight.dataQuality : null;
+  const freshness = quality?.freshness && typeof quality.freshness === "object" ? quality.freshness : null;
+  const coverage = quality?.coverage && typeof quality.coverage === "object" ? quality.coverage : null;
+  const publication = insight?.publication && typeof insight.publication === "object" ? insight.publication : null;
+  const sourceAsOf = String(source.asOf || run.asOf || run.collectedAt || run.completedAt || run.generatedAt || "").trim();
+  return {
+    regionKey,
+    displayLabel: regionKey
+      ? String(regionContext.displayLabel || [regionContext.sido, regionContext.sigungu].filter(Boolean).join(" ") || regionKey)
+      : "지역 분석 미연결",
+    matchStatus,
+    runId: String(options.activeRunId || run.id || run.runId || "").trim(),
+    measurementPeriod,
+    asOf: regionKey ? String(freshness?.asOf || sourceAsOf || "").trim() || null : null,
+    publicationVersion: publication?.version ? String(publication.version) : null,
+    publicationStatus: publication?.status ? String(publication.status) : null,
+    status: quality?.status ? String(quality.status) : null,
+    freshness,
+    coverage,
+    sampleCount: Number.isInteger(quality?.sampleCount) ? quality.sampleCount : null,
+    workflowRevision: Number.isSafeInteger(Number(adminRecord?.workflowRevision)) ? Number(adminRecord.workflowRevision) : null
+  };
+}
+
+function sameRegionAnalysisHistoryState(left = {}, right = {}) {
+  const periodKey = (value) => {
+    const period = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    return period ? `${String(period.start || "")}\u0000${String(period.end || "")}\u0000${String(period.label || "")}` : "";
+  };
+  const fields = [
+    "app",
+    "role",
+    "tab",
+    "activeRegionAnalysisTab",
+    "runId",
+    "lastAnalysisTab",
+    "lastRegionAnalysisTab",
+    "regionKey",
+    "asOf",
+    "publicationVersion",
+    "adminPanelSection"
+  ];
+  return fields.every((field) => String(left?.[field] || "") === String(right?.[field] || ""))
+    && periodKey(left?.measurementPeriod) === periodKey(right?.measurementPeriod);
+}
+
+function resolveRegionAnalysisHistoryState(historyState = {}, options = {}) {
+  const source = historyState && typeof historyState === "object" && !Array.isArray(historyState) ? historyState : {};
+  const currentRole = String(options.currentRole || "");
+  const historyRole = String(source.role || "");
+  const sameRole = !historyRole || historyRole === currentRole;
+  const allowedTabs = Array.isArray(options.allowedTabs) ? options.allowedTabs : [];
+  const allowedRegionTabs = Array.isArray(options.allowedRegionTabs) ? options.allowedRegionTabs : [];
+  const firstTab = allowedTabs[0] || "report";
+  const firstRegionTab = allowedRegionTabs[0] || firstTab;
+  const knownRegionTabs = new Set(["map", "demand", "dictionary", "reviewPublish", "regionInsight"]);
+  const resolveTab = (value, fallback = firstTab) => {
+    const requested = String(value || "");
+    if (allowedTabs.includes(requested)) return requested;
+    if (knownRegionTabs.has(requested)) return firstRegionTab;
+    return fallback;
+  };
+  const requestedTab = resolveTab(source.tab, firstTab);
+  const requestedLastRegionTab = resolveTab(source.lastRegionAnalysisTab, firstRegionTab);
+  const lastRegionAnalysisTab = allowedRegionTabs.includes(requestedLastRegionTab) ? requestedLastRegionTab : firstRegionTab;
+  const canonicalRegionKey = normalizeRegionAnalysisRegionKey(options.canonicalRegionKey);
+  const historyRegionKey = normalizeRegionAnalysisRegionKey(source.regionKey);
+  const runId = sameRole
+    ? String(source.runId || options.currentRunId || "").trim()
+    : String(options.currentRunId || "").trim();
+  const measurementPeriod = sameRole && source.measurementPeriod && typeof source.measurementPeriod === "object" && !Array.isArray(source.measurementPeriod)
+    ? {
+        start: String(source.measurementPeriod.start || ""),
+        end: String(source.measurementPeriod.end || ""),
+        label: String(source.measurementPeriod.label || "")
+      }
+    : null;
+  return {
+    ...source,
+    role: currentRole,
+    tab: requestedTab,
+    activeRegionAnalysisTab: allowedRegionTabs.includes(requestedTab) ? requestedTab : lastRegionAnalysisTab,
+    lastRegionAnalysisTab,
+    runId,
+    regionKey: historyRegionKey && historyRegionKey === canonicalRegionKey ? historyRegionKey : "",
+    measurementPeriod,
+    asOf: sameRole ? String(source.asOf || "") : "",
+    publicationVersion: sameRole ? String(source.publicationVersion || "") : ""
+  };
+}
+
+function setRegionAnalysisRegionKey(regionKey = "", { syncHistory = false } = {}) {
+  state.regionAnalysisRegionKey = normalizeRegionAnalysisRegionKey(regionKey);
+  if (syncHistory) syncAppHistoryState(false);
+  return state.regionAnalysisRegionKey;
+}
+
+function regionAnalysisTabPresentation(tabIds = [], activeTab = "", visible = true) {
+  const ids = Array.isArray(tabIds) ? tabIds : [];
+  return ids.map((tab) => {
+    const active = Boolean(visible && tab === activeTab);
+    return { tab, active, ariaSelected: active ? "true" : "false", tabIndex: active ? 0 : -1 };
+  });
+}
+
+function regionAnalysisTabIndexForKey(key = "", currentIndex = 0, tabCount = 0) {
+  const count = Math.max(0, Number.isFinite(Number(tabCount)) ? Math.trunc(Number(tabCount)) : 0);
+  if (!count || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(key)) return -1;
+  const current = Math.min(count - 1, Math.max(0, Number.isFinite(Number(currentIndex)) ? Math.trunc(Number(currentIndex)) : 0));
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return (current + (key === "ArrowRight" ? 1 : -1) + count) % count;
+}
+
+function regionAnalysisContextStatusLabel(value = "") {
+  const labels = {
+    ready: "준비됨",
+    zero: "관측값 0",
+    missing: "미수집",
+    partial: "일부 확보",
+    stale: "오래됨",
+    conflict: "근거 충돌",
+    fresh: "최신",
+    aging: "갱신 임박",
+    unknown: "미확인",
+    published: "발행",
+    superseded: "대체됨",
+    unpublished: "미발행"
+  };
+  return labels[value] || value || "미확인";
+}
+
+function renderRegionAnalysisContext() {
+  if (!els.regionAnalysisContext) return;
+  const model = regionAnalysisSharedContext(state.data || {}, {
+    activeRunId: state.activeRunId,
+    adminRegionInsightRecord: isAdminRole() ? state.adminRegionInsightRecord : null
+  });
+  const measurementPeriod = model.measurementPeriod;
+  const asOf = model.asOf;
+  const publicationVersion = model.publicationVersion;
+  const freshness = model.freshness;
+  const coverage = model.coverage;
+  const matchStatus = model.matchStatus;
+  const exactMatch = Boolean(model.regionKey && matchStatus === "matched");
+  const periodLabel = measurementPeriod?.label || "분석 기간 미확인";
+  const asOfLabel = asOf ? regionInsightDateLabel(asOf) : "데이터 기준일 미확인";
+  const publicationLabel = publicationVersion || "발행본 없음";
+  const statusLabel = exactMatch ? regionAnalysisContextStatusLabel(model.status) : "지역 분석 미연결";
+  const freshnessLabel = freshness?.status
+    ? regionAnalysisContextStatusLabel(freshness.status)
+    : "freshness 미확인";
+  const coverageLabel = Number.isInteger(coverage?.numerator) && Number.isInteger(coverage?.denominator)
+    ? regionInsightCoverageLabel(coverage)
+    : Number.isInteger(model.sampleCount)
+      ? `${fmtNumber(model.sampleCount)}개 표본`
+      : "표본 범위 미확인";
+  state.activeRegionAnalysisTab = regionAnalysisTabIds().includes(state.activeTab)
+    ? state.activeTab
+    : resolveRegionAnalysisReturnTab(state.lastRegionAnalysisTab);
+  state.regionAnalysisRegionKey = model.regionKey;
+  state.regionAnalysisMeasurementPeriod = measurementPeriod;
+  state.regionAnalysisAsOf = asOf || "";
+  state.regionAnalysisPublicationVersion = publicationVersion || "";
+  els.regionAnalysisContext.dataset.regionKey = model.regionKey;
+  els.regionAnalysisContext.dataset.runId = model.runId;
+  els.regionAnalysisContext.dataset.matchStatus = matchStatus || "unmatched";
+  els.regionAnalysisContext.dataset.publicationVersion = publicationVersion || "";
+  els.regionAnalysisContext.innerHTML = `
+    <header class="region-analysis-context-head">
+      <div>
+        <p class="eyebrow">공통 지역 분석 기준</p>
+        <h2>${escapeHtml(model.displayLabel)}</h2>
+        <span>${exactMatch ? `canonical regionKey · ${escapeHtml(model.regionKey)}` : "unmatched · ambiguous · inactive 지역은 다른 카드로 대체하지 않습니다."}</span>
+      </div>
+      <span class="state-badge ${exactMatch ? "ready" : "warning"}">${exactMatch ? "정확 지역 연결" : "지역 분석 미연결"}</span>
+    </header>
+    <dl class="region-analysis-context-grid">
+      <div><dt>선택 run</dt><dd>${escapeHtml(model.runId || "선택 없음")}</dd></div>
+      <div><dt>분석 기간</dt><dd>${escapeHtml(periodLabel)}</dd></div>
+      <div><dt>데이터 기준일</dt><dd>${escapeHtml(asOfLabel)}</dd></div>
+      <div><dt>발행 버전</dt><dd>${escapeHtml(publicationLabel)}</dd></div>
+      <div><dt>데이터 상태</dt><dd>${escapeHtml(statusLabel)}</dd></div>
+      <div><dt>freshness</dt><dd>${escapeHtml(freshnessLabel)}</dd></div>
+      <div><dt>표본·coverage</dt><dd>${escapeHtml(coverageLabel)}</dd></div>
+      <div><dt>지역 매칭</dt><dd>${escapeHtml(matchStatus || "unmatched")}</dd></div>
+    </dl>
+  `;
+}
+
+function renderRegionAnalysisNavigation() {
+  if (!els.regionAnalysisNav || !els.regionAnalysisTabs) return;
+  const role = currentRole();
+  const items = regionAnalysisTabItems(role);
+  const visible = items.some((item) => item.tab === state.activeTab);
+  els.regionAnalysisNav.hidden = !visible;
+  els.regionAnalysisNav.setAttribute("aria-hidden", visible ? "false" : "true");
+  if (els.regionAnalysisTabs.dataset.navigationRole !== role) {
+    els.regionAnalysisTabs.dataset.navigationRole = role;
+    els.regionAnalysisTabs.innerHTML = items.map((item) => `
+      <button type="button" role="tab" id="regionAnalysisTab-${escapeHtml(item.tab)}" aria-controls="${escapeHtml(item.tab)}Panel" data-region-analysis-tab="${escapeHtml(item.tab)}">
+        ${escapeHtml(item.label || tabLabel(item.tab))}
+      </button>
+    `).join("");
+  }
+  const presentation = new Map(
+    regionAnalysisTabPresentation(items.map((item) => item.tab), state.activeTab, visible)
+      .map((item) => [item.tab, item])
+  );
+  els.regionAnalysisTabs.querySelectorAll("[data-region-analysis-tab]").forEach((button) => {
+    const tabState = presentation.get(button.dataset.regionAnalysisTab) || { active: false, ariaSelected: "false", tabIndex: -1 };
+    button.classList.toggle("active", tabState.active);
+    button.setAttribute("aria-selected", tabState.ariaSelected);
+    button.tabIndex = tabState.tabIndex;
+  });
+  renderRegionAnalysisContext();
+}
+
+function activateRegionAnalysisTab(tab = "", { focus = false } = {}) {
+  if (!regionAnalysisTabIds().includes(tab)) return false;
+  if (!setActiveTab(tab, { navigationKey: "region-analysis" })) return false;
+  if (focus) {
+    window.requestAnimationFrame(() => {
+      els.regionAnalysisTabs?.querySelector(`[data-region-analysis-tab="${tab}"]`)?.focus();
+    });
+  }
+  return true;
+}
+
+function handleRegionAnalysisTabKeydown(event) {
+  const current = event.target.closest?.("[data-region-analysis-tab]");
+  if (!current || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return false;
+  const tabs = Array.from(els.regionAnalysisTabs?.querySelectorAll("[data-region-analysis-tab]") || []);
+  if (!tabs.length) return false;
+  const nextIndex = regionAnalysisTabIndexForKey(event.key, tabs.indexOf(current), tabs.length);
+  if (nextIndex < 0) return false;
+  event.preventDefault();
+  return activateRegionAnalysisTab(tabs[nextIndex]?.dataset.regionAnalysisTab || "", { focus: true });
 }
 
 function resolveAnalysisReturnTab(lastTab = "", allowedTabs = roleTabs()) {
@@ -2334,7 +2709,9 @@ function activateAppNavigation(key = "") {
   if (item.adminPanelSection && isAdminRole()) state.adminPanelSection = item.adminPanelSection;
   const targetTab = isAdminRole() && item.key === "analytics"
     ? resolveAnalysisReturnTab(state.lastAnalysisTab)
-    : (item.tab || firstRoleTab());
+    : item.key === "region-analysis"
+      ? resolveRegionAnalysisReturnTab(state.lastRegionAnalysisTab)
+      : (item.tab || firstRoleTab());
   setActiveTab(targetTab, { navigationKey: state.primaryNavKey });
   if (item.adminPanelSection && isAdminRole()) {
     setAdminPanelSection(item.adminPanelSection, { scroll: true });
@@ -2530,6 +2907,7 @@ function applyRoleUi() {
     panel.hidden = !allowed;
     panel.classList.toggle("active", allowed && panel.dataset.panel === state.activeTab);
   });
+  renderRegionAnalysisNavigation();
   const roleLabel = state.session?.roleLabel || (isAdminRole() ? "관리자" : "B2B");
   if (els.adminStatus) {
     els.adminStatus.textContent = `${roleLabel} 모드`;
@@ -3727,26 +4105,65 @@ function bestLocationCardMatch(query, exactOnly = false) {
 
 function locationDictionaryMatchForQuery(query) {
   if (!state.dictionary) return null;
-  const groupExact = bestLocationGroupMatch(query, true);
-  if (groupExact?.score >= 94) {
-    return { card: null, group: groupExact.group, alias: null, reason: "group-exact" };
+  const queryFull = compactSearchText(query);
+  const queryBase = stripLocationBusinessWords(query);
+  if (!queryFull) return null;
+  const exactValue = (value) => {
+    const candidateFull = compactSearchText(value);
+    const candidateBase = stripLocationBusinessWords(value);
+    return Boolean(
+      candidateFull
+      && (
+        candidateFull === queryFull
+        || (queryBase && candidateBase && candidateBase === queryBase)
+      )
+    );
+  };
+  const aliases = state.dictionary.aliases || [];
+  const cardMatches = (state.dictionary.cards || [])
+    .map((card) => {
+      const alias = aliases.find((entry) => entry.regionKey === card.regionKey) || null;
+      const values = [
+        card.regionKey,
+        card.searchKeyword,
+        alias?.searchKeyword,
+        alias?.sigungu,
+        ...(alias?.aliases || [])
+      ];
+      return values.some(exactValue) ? { card, alias } : null;
+    })
+    .filter(Boolean);
+  const uniqueCardMatches = [...new Map(cardMatches.map((entry) => [entry.card.regionKey, entry])).values()];
+  if (uniqueCardMatches.length > 1) {
+    return {
+      card: null,
+      group: null,
+      alias: null,
+      candidates: uniqueCardMatches.map((entry) => entry.card.regionKey),
+      reason: "ambiguous"
+    };
   }
-
-  const cardExact = bestLocationCardMatch(query, true);
-  if (cardExact?.score >= 94) {
-    return { card: cardExact.card, group: null, alias: cardExact.alias, reason: "card-exact" };
+  if (uniqueCardMatches.length === 1) {
+    return { ...uniqueCardMatches[0], group: null, reason: "card-exact" };
   }
-
-  const cardMatch = bestLocationCardMatch(query, false);
-  if (cardMatch?.score >= 74) {
-    return { card: cardMatch.card, group: null, alias: cardMatch.alias, reason: "card-match" };
+  const groupMatches = (state.dictionary.regionGroups || []).filter((group) => [
+    group.groupKey,
+    group.searchKeyword,
+    group.sido,
+    ...(group.aliases || [])
+  ].some(exactValue));
+  if (groupMatches.length > 1) {
+    return {
+      card: null,
+      group: null,
+      alias: null,
+      candidates: groupMatches.map((group) => group.groupKey || group.searchKeyword),
+      reason: "ambiguous"
+    };
   }
-
-  const groupMatch = bestLocationGroupMatch(query, false);
-  if (groupMatch?.score >= 74) {
-    return { card: null, group: groupMatch.group, alias: null, reason: "group-match" };
+  if (groupMatches.length === 1) {
+    return { card: null, group: groupMatches[0], alias: null, reason: "group-exact" };
   }
-
   return null;
 }
 
@@ -3790,34 +4207,31 @@ function locationCardForQuery(query) {
   const compact = compactSearchText(query);
   if (!compact) return { card: null, group: null, alias: null, reason: "empty" };
 
+  const run = state.data?.run || {};
+  const authoritativeContext = state.data?.regionContext;
+  const isRunQuery = [run.keyword, run.searchKeyword, run.label, activeKeyword()]
+    .filter(Boolean)
+    .some((value) => compactSearchText(value) === compact);
+  if (isRunQuery && authoritativeContext && Object.prototype.hasOwnProperty.call(authoritativeContext, "matchStatus")) {
+    const regionKey = matchedRegionContextKey(authoritativeContext);
+    if (!regionKey) {
+      return {
+        card: null,
+        group: null,
+        alias: null,
+        reason: authoritativeContext.matchStatus === "ambiguous" ? "ambiguous" : "unmatched"
+      };
+    }
+    const card = (dictionary.cards || []).find((entry) => entry.regionKey === regionKey) || null;
+    const alias = (dictionary.aliases || []).find((entry) => entry.regionKey === regionKey) || null;
+    return card
+      ? { card, group: null, alias, reason: "canonical-region-context" }
+      : { card: null, group: null, alias: null, reason: "unregistered-region" };
+  }
+
   const orderedMatch = locationDictionaryMatchForQuery(query);
   if (orderedMatch) return orderedMatch;
-
-  const matchedGroup = locationGroupForQuery(query);
-  if (matchedGroup) return { card: null, group: matchedGroup, alias: null, reason: "group" };
-
-  const aliases = dictionary.aliases || [];
-  const cards = dictionary.cards || [];
-  const matchedAlias = aliases.find((alias) => {
-    const candidates = [
-      alias.searchKeyword,
-      alias.sigungu,
-      ...(alias.aliases || [])
-    ].map(compactSearchText).filter(Boolean);
-    const regionOnly = compact.replace(/글램핑|카라반|캠핑장|캠핑|펜션/g, "");
-    return candidates.some((candidate) => {
-      const candidateRegion = candidate.replace(/글램핑|카라반|캠핑장|캠핑|펜션|시|군|구/g, "");
-      return compact.includes(candidate) ||
-        candidate.includes(compact) ||
-        (regionOnly && (candidate.includes(regionOnly) || regionOnly.includes(candidateRegion)));
-    });
-  });
-
-  const card = matchedAlias
-    ? cards.find((item) => item.regionKey === matchedAlias.regionKey)
-    : cards.find((item) => compactSearchText(item.searchKeyword) === compact || compact.includes(compactSearchText(item.searchKeyword)));
-
-  return { card: card || null, alias: matchedAlias || null, reason: card ? "matched" : "missing" };
+  return { card: null, group: null, alias: null, reason: "missing" };
 }
 
 function locationCardRequestStatusMeta(status) {
@@ -14050,38 +14464,65 @@ function b2bLocationComponentCopy(component = {}) {
 
 function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
   const query = brief.keyword || activeKeyword();
-  const match = locationCardForQuery(query);
-  const regionReview = state.data?.b2bRegionReviewSummary || null;
-  if (match.group) {
-    const cards = locationGroupCards(match.group);
-    const runtime = locationGroupRuntimeStats(match.group, cards);
-    const tourismRegions = tourismRegionsForLocationGroup(match.group);
-    const scoreModel = regionGroupLocationScoreModel(match.group, cards, runtime, tourismRegions);
-    return {
-      available: true,
-      kind: "권역",
-      label: match.group.searchKeyword || query,
-      connectedLabel: `지역 ${fmtNumber(cards.length)}개 연결`,
-      runtime,
-      scoreModel,
-      tourismLabel: tourismRegions.length ? `관광권 ${fmtNumber(tourismRegions.length)}곳 반영` : "관광권 연결 대기",
-      regionReview
+  const regionContext = state.data?.regionContext || {};
+  const canonicalKey = matchedRegionContextKey(regionContext);
+  const insight = state.data?.b2bRegionInsight || null;
+  const exactPublication = Boolean(
+    canonicalKey
+    && insight
+    && insight.regionKey === canonicalKey
+    && ["published", "stale", "superseded"].includes(insight.publication?.status)
+  );
+  if (exactPublication) {
+    const attractiveness = insight.locationAttractiveness || {};
+    const quality = insight.dataQuality || {};
+    const components = (attractiveness.components || []).map((component) => {
+      const copy = b2bLocationComponentCopy(component);
+      const value = finiteRegionInsightNumber(component.value);
+      return {
+        ...component,
+        label: copy.label,
+        note: copy.note,
+        value,
+        observed: value !== null,
+        tone: locationComponentTone(value)
+      };
+    });
+    const scoredComponents = components.filter((component) => component.observed);
+    const score = finiteRegionInsightNumber(attractiveness.value);
+    const scoreModel = {
+      score: score === null ? NaN : score,
+      scoreBeforeManual: score === null ? NaN : score,
+      rawScore: score,
+      confidence: finiteRegionInsightNumber(quality.score) ?? NaN,
+      confidenceAdjustment: 0,
+      dataQuality: quality,
+      manual: { hasAdjustment: false, delta: 0, override: null, note: "", source: "publication" },
+      components,
+      drivers: scoredComponents.slice().sort((a, b) => b.value - a.value).slice(0, 3),
+      risks: scoredComponents.filter((component) => component.value < 55).sort((a, b) => a.value - b.value).slice(0, 3),
+      revenueMetrics: { sampleCount: 0, values: [], total: 0, average: 0, max: 0, min: 0 },
+      headline: score !== null ? "발행된 지역 입지 인사이트" : "발행된 데이터 품질 인사이트",
+      summary: "관리자가 검수하고 명시적으로 발행한 불변 스냅샷입니다.",
+      tone: score !== null && score >= 76 ? "strong" : score !== null && score >= 60 ? "watch" : "caution",
+      modelVersion: attractiveness.modelVersion || ""
     };
-  }
-  if (match.card) {
-    const alias = match.alias || dictionaryAliasForCard(match.card);
-    const runtime = locationRuntimeStats(match.card, alias);
-    const tourismMatch = tourismRegionForLocation({ card: match.card, alias, query });
-    const scoreModel = adjustedLocationScoreModel(match.card, runtime, tourismMatch);
     return {
       available: true,
       kind: "지역",
-      label: match.card.searchKeyword || query,
-      connectedLabel: "지역 기준 연결",
-      runtime,
+      label: regionContext.displayLabel || query,
+      connectedLabel: "canonical 지역·발행본 연결",
+      runtime: {
+        items: [],
+        sales: { supply: 0, sold: 0 },
+        rate: NaN,
+        searchVolume: 0
+      },
       scoreModel,
-      tourismLabel: tourismMatch?.region ? "관광권 반영" : "관광권 연결 대기",
-      regionReview
+      tourismLabel: "발행 스냅샷 근거",
+      regionReview: null,
+      publication: insight.publication,
+      dataQuality: quality
     };
   }
   return {
@@ -14096,11 +14537,14 @@ function b2bLocationScoreContext(brief = b2bMarketBriefModel()) {
     },
     scoreModel: null,
     tourismLabel: "지역 기준 연결 대기",
-    regionReview
+    regionReview: null,
+    publication: null,
+    dataQuality: null
   };
 }
 
 function b2bLocationCustomerSourceLabel(scoreModel = {}) {
+  if (scoreModel?.manual?.source === "publication") return "검수·발행본 기준";
   return scoreModel?.manual?.hasAdjustment ? "확인된 지역 기준" : "현재 수집 기준";
 }
 
@@ -14115,13 +14559,12 @@ function b2bLocationConclusionTone(score) {
 function b2bLocationComponentValue(scoreModel = {}, key = "") {
   const components = Array.isArray(scoreModel?.components) ? scoreModel.components : [];
   const found = components.find((component) => component.key === key);
-  const value = Number(found?.value);
-  return Number.isFinite(value) ? value : NaN;
+  return typeof found?.value === "number" && Number.isFinite(found.value) ? found.value : NaN;
 }
 
 function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = null) {
   const scoreModel = context.scoreModel;
-  const score = scoreModel ? clampLocationScore(scoreModel.score, 0) : NaN;
+  const score = scoreModel ? clampLocationScore(scoreModel.score, NaN) : NaN;
   const regionReview = context.regionReview || null;
   const sourceLabel = regionReview?.sourceLabel || b2bLocationCustomerSourceLabel(scoreModel);
   if (!context.available || !scoreModel) {
@@ -14133,6 +14576,18 @@ function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = n
       scoreText: "입지 점수 대기",
       sourceLabel,
       chips: [regionReview?.regionLabel, context.connectedLabel, context.tourismLabel].filter(Boolean)
+    };
+  }
+  if (!Number.isFinite(score)) {
+    return {
+      tone: "watch",
+      label: "입지점수 미수집",
+      headline: "발행본에 입지 매력도 점수가 아직 없습니다.",
+      summary: "데이터 품질과 부족한 근거를 확인하고, 다음 검수·발행본에서 점수를 보완합니다.",
+      score: null,
+      scoreText: "미수집",
+      sourceLabel,
+      chips: [context.dataQuality?.grade ? `품질 ${context.dataQuality.grade}` : "", context.connectedLabel].filter(Boolean)
     };
   }
   const searchDemand = b2bLocationComponentValue(scoreModel, "searchDemand");
@@ -14211,9 +14666,12 @@ function b2bLocationConclusion(context = b2bLocationScoreContext(), boundary = n
 function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2bLocationScoreContext(brief)) {
   const runtime = context.runtime || {};
   const scoreModel = context.scoreModel;
-  const sampleCount = finiteNumber(runtime.items?.length, brief.itemCount || 0);
+  const publishedOnly = Boolean(context.publication);
+  const sampleCount = publishedOnly ? NaN : finiteNumber(runtime.items?.length, brief.itemCount || 0);
   const sales = runtime.sales || {};
-  const rate = Number.isFinite(Number(runtime.rate))
+  const rate = publishedOnly
+    ? NaN
+    : Number.isFinite(Number(runtime.rate))
     ? Number(runtime.rate)
     : (sales.supply ? sales.sold / sales.supply : brief.rate);
   if (!context.available || !scoreModel) {
@@ -14235,15 +14693,23 @@ function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2b
       </section>
     `;
   }
-  const score = clampLocationScore(scoreModel.score, 0);
+  const score = clampLocationScore(scoreModel.score, NaN);
+  const hasScore = Number.isFinite(score);
   const conclusion = b2bLocationConclusion(context);
   const scoreTone = conclusion.tone;
   const sourceLabel = conclusion.sourceLabel;
   const driverRows = (scoreModel.components || [])
     .slice()
-    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+    .filter((component) => typeof component.value === "number" && Number.isFinite(component.value))
+    .sort((a, b) => b.value - a.value)
     .slice(0, 4);
-  const basisRows = [
+  const basisRows = (publishedOnly ? [
+    `발행본 ${context.publication.version || "버전 미확인"}`,
+    `발행 상태 ${context.publication.status || "미확인"}`,
+    context.dataQuality?.grade ? `데이터 품질 ${context.dataQuality.grade} · ${context.dataQuality.status}` : "데이터 품질 미확인",
+    `커버리지 ${regionInsightCoverageLabel(context.dataQuality?.coverage || {})}`,
+    context.connectedLabel
+  ] : [
     `${context.kind} 기준`,
     context.regionReview?.label,
     context.regionReview?.regionLabel ? `${context.regionReview.regionLabel} 기준` : "",
@@ -14251,19 +14717,19 @@ function renderB2BLocationScoreCard(brief = b2bMarketBriefModel(), context = b2b
     `노출 표본 ${fmtNumber(sampleCount)}곳`,
     Number.isFinite(rate) ? `예약율 ${fmtRate(rate)}` : "예약율 확인 대기",
     context.tourismLabel
-  ].filter(Boolean).filter((item, index, rows) => rows.indexOf(item) === index);
+  ]).filter(Boolean).filter((item, index, rows) => rows.indexOf(item) === index);
   return `
     <section class="b2b-location-score ${escapeHtml(scoreTone)}">
       <div class="b2b-location-score-main">
         <div>
           <span>입지 경쟁력</span>
-          <strong>${fmtNumber(score)}점</strong>
+          <strong>${hasScore ? `${fmtNumber(score)}점` : "미수집"}</strong>
           <small>${escapeHtml(sourceLabel)}</small>
         </div>
         <p>${escapeHtml(conclusion.headline)}</p>
       </div>
-      <div class="b2b-location-score-bar" aria-label="입지 경쟁력 ${fmtNumber(score)}점">
-        <i style="width:${Math.max(0, Math.min(100, score))}%"></i>
+      <div class="b2b-location-score-bar" aria-label="입지 경쟁력 ${hasScore ? `${fmtNumber(score)}점` : "미수집"}">
+        <i style="width:${hasScore ? Math.max(0, Math.min(100, score)) : 0}%"></i>
       </div>
       <div class="b2b-location-conclusion ${escapeHtml(conclusion.tone)}">
         <div>
@@ -24710,25 +25176,12 @@ function adminRegionLocationScoreMatch(region = {}) {
   if (!state.dictionary) return null;
   const cards = state.dictionary.cards || [];
   const groups = state.dictionary.regionGroups || [];
-  const regionLabels = [
-    region.regionLabel,
-    region.localityLabel,
-    region.provinceLabel
-  ].map((value) => String(value || "").trim()).filter(Boolean);
-  const directCard = cards.find((card) =>
-    card.regionKey === region.regionKey ||
-    regionLabels.some((label) => compactSearchText(card.searchKeyword || "").includes(compactSearchText(label)))
-  );
+  const regionKey = normalizeRegionAnalysisRegionKey(region.regionKey);
+  if (!regionKey) return null;
+  const directCard = cards.find((card) => card.regionKey === regionKey);
   if (directCard) return { type: "region", card: directCard, label: directCard.searchKeyword };
-  const directGroup = groups.find((group) =>
-    group.groupKey === region.regionKey ||
-    regionLabels.some((label) => compactSearchText(group.searchKeyword || group.sido || "").includes(compactSearchText(label)))
-  );
+  const directGroup = groups.find((group) => group.groupKey === regionKey);
   if (directGroup) return { type: "group", group: directGroup, label: directGroup.searchKeyword };
-  const query = `${regionLabels[0] || ""} 글램핑`.trim();
-  const match = query ? locationCardForQuery(query) : null;
-  if (match?.card) return { type: "region", card: match.card, label: match.card.searchKeyword };
-  if (match?.group) return { type: "group", group: match.group, label: match.group.searchKeyword };
   return null;
 }
 
@@ -26326,6 +26779,99 @@ function renderB2BDemandContext(traffic = demandTrafficAggregate(), trend = dema
   `;
 }
 
+function regionalDemandSourceCards(traffic = demandTrafficAggregate(), trend = demandTrendSource(), data = state.data || {}) {
+  const allowedStatuses = new Set(["ready", "zero", "missing", "partial", "stale", "conflict"]);
+  const observations = [
+    ...(Array.isArray(data.regionSignalObservations) ? data.regionSignalObservations : []),
+    ...(Array.isArray(data.locationSignals?.observations) ? data.locationSignals.observations : [])
+  ];
+  const observationFor = (pattern) => observations.find((entry) => pattern.test(String(entry?.metricKey || entry?.dataCategory || entry?.sourceId || ""))) || null;
+  const fromObservation = (label, pattern, missingNote) => {
+    const observation = observationFor(pattern);
+    if (!observation) return { label, status: "missing", value: "미수집", note: missingNote };
+    const status = allowedStatuses.has(observation.status) ? observation.status : "missing";
+    const sampleCount = Number.isInteger(observation.sampleCount) ? observation.sampleCount : null;
+    return {
+      label,
+      status,
+      value: ["missing", "conflict"].includes(status)
+        ? regionAnalysisContextStatusLabel(status)
+        : sampleCount === null
+          ? regionAnalysisContextStatusLabel(status)
+          : `${fmtNumber(sampleCount)}개 표본`,
+      note: observation.measurementPeriod?.label || observation.source?.provider || observation.sourceId || "저장 관측"
+    };
+  };
+  const total = optionalNumber(traffic.totalSearchVolume);
+  const searchObserved = demandTrafficObserved(traffic) && Number.isFinite(total);
+  const searchStatus = searchObserved ? (total === 0 ? "zero" : trend.hasSeries ? "ready" : "partial") : "missing";
+  const hasAvailability = Object.prototype.hasOwnProperty.call(data, "availability") && Array.isArray(data.availability?.items);
+  const supplyCount = hasAvailability ? data.availability.items.length : null;
+  const supplyStatus = supplyCount === null ? "missing" : supplyCount === 0 ? "zero" : "ready";
+  const history = data.history && typeof data.history === "object" ? data.history : {};
+  const leadRows = Array.isArray(history.leadTime) ? history.leadTime : [];
+  const leadStatus = leadRows.length ? "ready" : Number(history.observationCount) > 0 ? "partial" : "missing";
+  const maintenance = data.maintenanceForecast && typeof data.maintenanceForecast === "object"
+    ? data.maintenanceForecast
+    : null;
+  const maintenanceStatus = allowedStatuses.has(maintenance?.status) ? maintenance.status : "missing";
+  const maintenancePressure = typeof maintenance?.demandPressure === "number" && Number.isFinite(maintenance.demandPressure)
+    ? maintenance.demandPressure
+    : null;
+  return [
+    {
+      label: "검색·관심도",
+      status: searchStatus,
+      value: searchObserved ? `${fmtNumber(total)}회` : "미수집",
+      note: trend.hasSeries ? `${fmtNumber(trend.validMonthCount || trend.series?.length || 0)}개월 추이` : "검색 추이 미수집"
+    },
+    fromObservation("관광·행사", /tour|visitor|event|festival|관광|행사/i, "공공 관광·행사 관측 미수집"),
+    {
+      label: "숙박·야영장 공급",
+      status: supplyStatus,
+      value: supplyCount === null ? "미수집" : `${fmtNumber(supplyCount)}곳`,
+      note: hasAvailability ? "선택 run 저장 표본" : "공급 snapshot 미수집"
+    },
+    {
+      label: "예약·리드타임",
+      status: leadStatus,
+      value: leadRows.length ? `${fmtNumber(leadRows.length)}개 구간` : "미수집",
+      note: leadRows.length ? "반복수집 관측" : "반복수집 후 계산"
+    },
+    {
+      label: "계절성",
+      status: trend.hasSeries ? "ready" : "missing",
+      value: trend.hasSeries ? demandTrendLabel() : "미수집",
+      note: trend.hasSeries ? "저장된 검색 추이" : "계절 시계열 미수집"
+    },
+    {
+      label: "maintenance 수요 압력",
+      status: maintenanceStatus,
+      value: maintenancePressure === null ? "미수집" : fmtNumber(maintenancePressure),
+      note: maintenance?.forecastHorizon || "운영 예측 미생성"
+    }
+  ];
+}
+
+function renderRegionalDemandSourceCards(traffic = demandTrafficAggregate(), trend = demandTrendSource()) {
+  return `
+    <section class="region-demand-source-section" aria-labelledby="regionDemandSourceTitle">
+      <div class="region-insight-section-head">
+        <div><h3 id="regionDemandSourceTitle">수요 근거 상태</h3><span>결측은 0점이나 50점으로 대체하지 않습니다.</span></div>
+      </div>
+      <div class="region-demand-source-grid">
+        ${regionalDemandSourceCards(traffic, trend).map((card) => `
+          <article data-region-demand-status="${escapeHtml(card.status)}">
+            <span>${escapeHtml(card.label)}</span>
+            <strong>${escapeHtml(card.value)}</strong>
+            <small>${escapeHtml(regionAnalysisContextStatusLabel(card.status))} · ${escapeHtml(card.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderDemand() {
   if (!els.demandDashboard) return;
   const data = state.data || {};
@@ -26350,6 +26896,7 @@ function renderDemand() {
   els.demandDashboard.innerHTML = `
     ${isAdminRole() ? adminAnalyticsOverviewHtml("demand") : ""}
     ${renderB2BDemandContext(traffic, trend)}
+    ${renderRegionalDemandSourceCards(traffic, trend)}
     <section class="demand-hero-card" data-surface="dark">
       <div>
         <p class="eyebrow">수요구조 분석</p>
@@ -27037,24 +27584,33 @@ function b2bMapLocationTone(value) {
 function renderB2BMapLocationScore(model = b2bRegionMapModel()) {
   const context = b2bLocationScoreContext(b2bMarketBriefModel(state.data || {}));
   const scoreModel = context.scoreModel;
-  const score = scoreModel ? clampLocationScore(scoreModel.score, 0) : NaN;
+  const score = scoreModel ? clampLocationScore(scoreModel.score, NaN) : NaN;
+  const hasScore = Number.isFinite(score);
   const tone = b2bMapLocationTone(score);
   const runtime = context.runtime || {};
-  const sampleCount = finiteNumber(runtime.items?.length, model.items?.length || 0);
+  const publishedOnly = Boolean(context.publication);
+  const sampleCount = publishedOnly ? NaN : finiteNumber(runtime.items?.length, model.items?.length || 0);
   const conclusion = b2bLocationConclusion(context);
   const sourceLabel = conclusion.sourceLabel;
   const driverRows = (scoreModel?.components || [])
     .slice()
-    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+    .filter((component) => typeof component.value === "number" && Number.isFinite(component.value))
+    .sort((a, b) => b.value - a.value)
     .slice(0, 3);
-  const basisRows = [
+  const basisRows = (publishedOnly ? [
+    `발행본 ${context.publication.version || "버전 미확인"}`,
+    `발행 상태 ${context.publication.status || "미확인"}`,
+    context.dataQuality?.grade ? `데이터 품질 ${context.dataQuality.grade} · ${context.dataQuality.status}` : "데이터 품질 미확인",
+    `커버리지 ${regionInsightCoverageLabel(context.dataQuality?.coverage || {})}`,
+    context.connectedLabel
+  ] : [
     context.available ? `${context.kind} 기준` : "지역 기준 준비 중",
     context.regionReview?.label,
     context.regionReview?.regionLabel ? `${context.regionReview.regionLabel} 기준` : "",
     context.connectedLabel,
     `지도 표본 ${fmtNumber(sampleCount)}곳`,
     context.tourismLabel
-  ].filter(Boolean).filter((item, index, rows) => rows.indexOf(item) === index);
+  ]).filter(Boolean).filter((item, index, rows) => rows.indexOf(item) === index);
 
   return `
     <div class="b2b-map-location-score ${escapeHtml(tone)}">
@@ -27063,10 +27619,10 @@ function renderB2BMapLocationScore(model = b2bRegionMapModel()) {
           <strong>지도 입지 판단</strong>
           <small>${escapeHtml(context.available ? conclusion.headline : "현재 검색 결과를 기준으로 지도 경쟁권을 먼저 봅니다.")}</small>
         </div>
-        <em>${Number.isFinite(score) ? `${fmtNumber(score)}점` : "준비 중"}</em>
+        <em>${hasScore ? `${fmtNumber(score)}점` : (context.available ? "미수집" : "준비 중")}</em>
       </div>
       <div class="b2b-map-location-meter">
-        <i style="width:${Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 8}%"></i>
+        <i style="width:${hasScore ? Math.max(0, Math.min(100, score)) : 0}%"></i>
       </div>
       <div class="b2b-map-location-conclusion ${escapeHtml(conclusion.tone)}">
         <span>입지 결론</span>
@@ -28328,6 +28884,13 @@ function clampLocationScore(value, fallback = 0) {
   return Math.max(0, Math.min(100, Math.round(number)));
 }
 
+function weightedAvailableLocationScore(entries = []) {
+  const available = entries.filter((entry) => Number.isFinite(Number(entry?.value)) && Number(entry?.weight) > 0);
+  const totalWeight = available.reduce((sum, entry) => sum + Number(entry.weight), 0);
+  if (!totalWeight) return NaN;
+  return available.reduce((sum, entry) => sum + Number(entry.value) * Number(entry.weight), 0) / totalWeight;
+}
+
 function locationComponentTone(value) {
   const score = Number(value);
   if (!Number.isFinite(score)) return "weak";
@@ -28337,9 +28900,10 @@ function locationComponentTone(value) {
   return "risk";
 }
 
-function locationScoreFromSearchVolume(volume = 0) {
+function locationScoreFromSearchVolume(volume = NaN, observed = false) {
   const total = Number(volume);
-  if (!Number.isFinite(total) || total <= 0) return 50;
+  if (!Number.isFinite(total) || total < 0) return NaN;
+  if (total === 0) return observed ? 0 : NaN;
   if (total >= 80000) return 96;
   if (total >= 50000) return 90;
   if (total >= 30000) return 82;
@@ -28353,20 +28917,20 @@ function locationReservationSignalScore(runtime = {}) {
   const supply = finiteNumber(runtime.sales?.supply, 0);
   const sold = finiteNumber(runtime.sales?.sold, 0);
   const rate = Number(runtime.rate);
-  if (!supply) return 50;
-  const rateScore = Number.isFinite(rate) ? Math.max(18, Math.min(96, rate * 115)) : 50;
+  if (!supply || !Number.isFinite(rate)) return NaN;
+  const rateScore = Math.max(18, Math.min(96, rate * 115));
   const sampleBonus = Math.min(12, Math.log10(Math.max(1, supply)) * 9);
   const soldBonus = sold ? Math.min(8, Math.log10(Math.max(1, sold)) * 6) : 0;
-  return clampLocationScore(rateScore + sampleBonus + soldBonus - 8, 50);
+  return clampLocationScore(rateScore + sampleBonus + soldBonus - 8, NaN);
 }
 
 function locationCompetitionBalanceScore(runtime = {}) {
   const count = finiteNumber(runtime.items?.length, 0);
   const adRatio = Number(runtime.adRatio);
   const platformGapRatio = count ? finiteNumber(runtime.platformGap, 0) / Math.max(1, count * 3) : 0;
+  if (!count) return NaN;
   let score = 50;
-  if (!count) score = 46;
-  else if (count <= 5) score = 60;
+  if (count <= 5) score = 60;
   else if (count <= 12) score = 74;
   else if (count <= 24) score = 68;
   else if (count <= 40) score = 60;
@@ -28374,7 +28938,7 @@ function locationCompetitionBalanceScore(runtime = {}) {
   if (Number.isFinite(adRatio) && adRatio >= 0.35) score -= 8;
   if (Number.isFinite(adRatio) && adRatio <= 0.08 && count >= 5) score += 4;
   if (platformGapRatio >= 0.35) score -= 5;
-  return clampLocationScore(score, 50);
+  return clampLocationScore(score, NaN);
 }
 
 function locationRevenueMetrics(runtime = {}) {
@@ -28394,16 +28958,16 @@ function locationRevenueMetrics(runtime = {}) {
 
 function locationRevenueSampleScore(runtime = {}) {
   const metrics = locationRevenueMetrics(runtime);
-  if (!metrics.sampleCount) return 50;
+  if (!metrics.sampleCount) return NaN;
   const sampleScore = Math.min(28, metrics.sampleCount * 7);
   const averageScore = Math.min(36, Math.log10(Math.max(1, metrics.average / 100000)) * 20);
-  return clampLocationScore(38 + sampleScore + averageScore, 50);
+  return clampLocationScore(38 + sampleScore + averageScore, NaN);
 }
 
 function locationSeasonalityScore() {
   const trend = demandTrendSource();
   const stats = demandTrendStats(trend);
-  if (!trend?.hasSeries || !stats?.last) return { score: 50, note: "12개월 검색 추세 대기" };
+  if (!trend?.hasSeries || !stats?.last) return { score: NaN, note: "12개월 검색 추세 미수집" };
   const last = finiteNumber(stats.last.index, 0);
   const avg = finiteNumber(stats.average, 0) || 50;
   const direction = finiteNumber(stats.recentChangeRate, NaN);
@@ -28419,7 +28983,7 @@ function locationDataConfidenceScore({ runtime = {}, tourismMatch = {}, revenueM
   const items = finiteNumber(runtime.items?.length, 0);
   const supply = finiteNumber(runtime.sales?.supply, 0);
   const revenueSample = finiteNumber((revenueMetrics || locationRevenueMetrics(runtime)).sampleCount, 0);
-  const hasSearchVolume = finiteNumber(runtime.searchVolume, 0) > 0;
+  const hasSearchVolume = runtime.searchObserved === true || finiteNumber(runtime.searchVolume, 0) > 0;
   let score = 42;
   score += Math.min(18, items * 2);
   score += Math.min(18, Math.log10(Math.max(1, supply)) * 10);
@@ -28477,23 +29041,25 @@ function locationManualAdjustment(card = {}) {
 }
 
 function adjustedLocationScoreModel(card = {}, runtime = {}, tourismMatch = {}) {
-  const dictionaryScore = clampLocationScore(weightedLocationScore(card), 58);
-  const tourismIndex = locationIndexValue(card, "tourism", 50);
-  const dayUse = locationIndexValue(card, "dayUse", 50);
-  const operation = locationIndexValue(card, "operation", 50);
-  const expansionRisk = locationIndexValue(card, "expansionRisk", 50);
-  const stayFit = clampLocationScore(
-    tourismIndex * 0.38 +
-    operation * 0.24 +
-    dayUse * 0.16 +
-    (100 - expansionRisk) * 0.22,
-    dictionaryScore
-  );
+  const dictionaryScore = clampLocationScore(weightedLocationScore(card), NaN);
+  const tourismIndex = locationIndexValue(card, "tourism");
+  const dayUse = locationIndexValue(card, "dayUse");
+  const operation = locationIndexValue(card, "operation");
+  const expansionRisk = locationIndexValue(card, "expansionRisk");
+  const stayFit = clampLocationScore(weightedAvailableLocationScore([
+    { value: tourismIndex, weight: 0.38 },
+    { value: operation, weight: 0.24 },
+    { value: dayUse, weight: 0.16 },
+    { value: Number.isFinite(expansionRisk) ? 100 - expansionRisk : NaN, weight: 0.22 }
+  ]), NaN);
   const tourismCodeScore = tourismMatch?.region
     ? (tourismMatch.region.codeStatus ? Math.max(48, tourismMatch.confidence - 18) : tourismMatch.confidence)
-    : 45;
-  const tourismDemand = clampLocationScore(tourismIndex * 0.68 + tourismCodeScore * 0.32, tourismIndex);
-  const searchDemand = locationScoreFromSearchVolume(runtime.searchVolume);
+    : NaN;
+  const tourismDemand = clampLocationScore(weightedAvailableLocationScore([
+    { value: tourismIndex, weight: 0.68 },
+    { value: tourismCodeScore, weight: 0.32 }
+  ]), NaN);
+  const searchDemand = locationScoreFromSearchVolume(runtime.searchVolume, runtime.searchObserved === true);
   const competitionBalance = locationCompetitionBalanceScore(runtime);
   const bookingSignal = locationReservationSignalScore(runtime);
   const revenueMetrics = locationRevenueMetrics(runtime);
@@ -28505,26 +29071,45 @@ function adjustedLocationScoreModel(card = {}, runtime = {}, tourismMatch = {}) 
     { key: "dictionary", label: "입지사전 원점수", value: dictionaryScore, weight: 0.12, note: "지역카드 8개 지표의 기본 가중치" },
     { key: "tourismDemand", label: "관광 수요 강도", value: tourismDemand, weight: 0.14, note: tourismMatch?.region ? "관광공사 지역코드 매칭 반영" : "관광공사 매칭 대기" },
     { key: "stayFit", label: "숙박 적합도", value: stayFit, weight: 0.14, note: "관광·운영·데이유즈·확장위험 보정" },
-    { key: "searchDemand", label: "검색 수요", value: searchDemand, weight: 0.12, note: runtime.searchVolume ? `${fmtNumber(runtime.searchVolume)}회 검색량` : "검색량 표본 대기" },
+    { key: "searchDemand", label: "검색 수요", value: searchDemand, weight: 0.12, note: runtime.searchObserved ? `${fmtNumber(runtime.searchVolume)}회 검색량` : "검색량 표본 대기" },
     { key: "competition", label: "경쟁 균형", value: competitionBalance, weight: 0.10, note: runtime.items?.length ? `${fmtNumber(runtime.items.length)}곳 노출 표본` : "경쟁 표본 대기" },
     { key: "booking", label: "예약 전환 신호", value: bookingSignal, weight: 0.14, note: runtime.sales?.supply ? `${fmtNumber(runtime.sales.sold)}/${fmtNumber(runtime.sales.supply)}실 판매` : "예약 표본 대기" },
     { key: "revenue", label: "매출 표본", value: revenueSample, weight: 0.10, note: revenueMetrics.sampleCount ? `${fmtNumber(revenueMetrics.sampleCount)}곳 · 평균 ${fmtWon(revenueMetrics.average)}` : "가격·수량 표본 대기" },
-    { key: "seasonality", label: "계절성", value: seasonality.score, weight: 0.07, note: seasonality.note },
-    { key: "confidence", label: "데이터 신뢰도", value: dataConfidence, weight: 0.07, note: tourismMatch?.region?.codeStatus ? "지역코드 검증 전 감점" : "표본·매칭·검색량 기준" }
+    { key: "seasonality", label: "계절성", value: seasonality.score, weight: 0.07, note: seasonality.note }
   ].map((component) => ({
     ...component,
-    value: clampLocationScore(component.value, 50),
+    value: Number.isFinite(Number(component.value)) ? clampLocationScore(component.value, NaN) : null,
+    observed: Number.isFinite(Number(component.value)),
     tone: locationComponentTone(component.value)
   }));
-  const weightTotal = components.reduce((sum, component) => sum + component.weight, 0);
-  const rawScore = components.reduce((sum, component) => sum + component.value * component.weight, 0) / Math.max(0.01, weightTotal);
-  const confidenceAdjustment = Math.max(-6, Math.min(6, (dataConfidence - 60) * 0.12));
-  const scoreBeforeManual = clampLocationScore(rawScore + confidenceAdjustment, dictionaryScore);
+  const scoredComponents = components.filter((component) => component.observed);
+  const rawScore = weightedAvailableLocationScore(scoredComponents);
+  const scoreBeforeManual = clampLocationScore(rawScore, NaN);
   const score = manual.override !== null
     ? clampLocationScore(manual.override, scoreBeforeManual)
-    : clampLocationScore(scoreBeforeManual + manual.delta, scoreBeforeManual);
-  const drivers = components.slice().sort((a, b) => b.value - a.value).slice(0, 3);
-  const risks = components.filter((component) => component.value < 55).sort((a, b) => a.value - b.value).slice(0, 3);
+    : Number.isFinite(scoreBeforeManual)
+      ? clampLocationScore(scoreBeforeManual + manual.delta, scoreBeforeManual)
+      : NaN;
+  const drivers = scoredComponents.slice().sort((a, b) => b.value - a.value).slice(0, 3);
+  const risks = scoredComponents.filter((component) => component.value < 55).sort((a, b) => a.value - b.value).slice(0, 3);
+  const qualityPenalties = [
+    !runtime.searchObserved ? { code: "search_missing", message: "검색량 미수집", points: 8 } : null,
+    !runtime.items?.length ? { code: "ota_missing", message: "OTA·경쟁 표본 미수집", points: 14 } : null,
+    !runtime.sales?.supply ? { code: "booking_missing", message: "예약 표본 미수집", points: 14 } : null,
+    !revenueMetrics.sampleCount ? { code: "revenue_missing", message: "매출 표본 미수집", points: 14 } : null,
+    !tourismMatch?.matched ? { code: "tourism_unverified", message: "관광 지역코드 미확정", points: 8 } : null
+  ].filter(Boolean);
+  const dataQuality = {
+    status: scoredComponents.length === components.length ? "ready" : (scoredComponents.length ? "partial" : "missing"),
+    score: scoredComponents.length ? dataConfidence : null,
+    grade: scoredComponents.length ? (dataConfidence >= 85 ? "A" : dataConfidence >= 70 ? "B" : dataConfidence >= 50 ? "C" : "D") : "U",
+    penalties: qualityPenalties,
+    coverage: {
+      numerator: scoredComponents.length,
+      denominator: components.length,
+      ratio: components.length ? scoredComponents.length / components.length : null
+    }
+  };
   const tone = score >= 78 ? "strong" : score >= 62 ? "watch" : "caution";
   const headline = score >= 82
     ? "강한 체류형 입지"
@@ -28535,13 +29120,16 @@ function adjustedLocationScoreModel(card = {}, runtime = {}, tourismMatch = {}) 
         : "관리자 재검토 입지";
   const summary = risks.length
     ? `${drivers.map((item) => item.label).join(" · ")}가 점수를 끌어올렸고, ${risks.map((item) => item.label).join(" · ")}는 확인이 필요합니다.`
-    : `${drivers.map((item) => item.label).join(" · ")}가 안정적으로 받쳐주는 입지입니다.`;
+    : drivers.length
+      ? `${drivers.map((item) => item.label).join(" · ")}가 안정적으로 받쳐주는 입지입니다.`
+      : "관측된 입지 근거가 없어 점수를 계산하지 않았습니다.";
   return {
     score,
     scoreBeforeManual,
-    rawScore: clampLocationScore(rawScore, score),
+    rawScore: Number.isFinite(rawScore) ? clampLocationScore(rawScore, NaN) : null,
     confidence: dataConfidence,
-    confidenceAdjustment,
+    confidenceAdjustment: 0,
+    dataQuality,
     manual,
     components,
     drivers,
@@ -28559,10 +29147,11 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
     const tourismMatch = tourismRegionForLocation({ card, alias, query: card.searchKeyword });
     return adjustedLocationScoreModel(card, locationRuntimeStats(card, alias), tourismMatch);
   });
-  const groupBase = clampLocationScore(regionGroupScore(group, cards), finiteNumber(group.marketSignal, 58));
-  const averageScore = cardModels.length
-    ? cardModels.reduce((sum, model) => sum + model.score, 0) / cardModels.length
-    : groupBase;
+  const groupBase = clampLocationScore(regionGroupScore(group, cards), NaN);
+  const availableCardScores = cardModels.map((model) => Number(model.score)).filter(Number.isFinite);
+  const averageScore = availableCardScores.length
+    ? availableCardScores.reduce((sum, score) => sum + score, 0) / availableCardScores.length
+    : NaN;
   const runtimeScore = runtime.items?.length
     ? reportMarketScore({
         rate: runtime.rate,
@@ -28571,22 +29160,29 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
         platformGapRatio: runtime.items.length ? runtime.platformGap / (runtime.items.length * 3) : 0,
         searchVolume: runtime.searchVolume
       })
-    : 0;
+    : NaN;
   const codeScore = tourismRegions.length
     ? Math.max(45, 82 - tourismRegions.filter((region) => region.codeStatus).length * 6)
-    : 48;
+    : NaN;
   const confidence = locationDataConfidenceScore({ runtime, tourismMatch: { matched: tourismRegions.length > 0, region: tourismRegions[0] || null } });
   const revenueMetrics = locationRevenueMetrics(runtime);
-  const rawScore = averageScore * 0.55 + groupBase * 0.2 + (runtimeScore || averageScore) * 0.17 + codeScore * 0.08;
-  const confidenceAdjustment = Math.max(-4, Math.min(5, (confidence - 60) * 0.08));
-  const scoreBeforeManual = clampLocationScore(rawScore + confidenceAdjustment, groupBase);
+  const rawScore = weightedAvailableLocationScore([
+    { value: averageScore, weight: 0.55 },
+    { value: groupBase, weight: 0.20 },
+    { value: runtimeScore, weight: 0.17 },
+    { value: codeScore, weight: 0.08 }
+  ]);
+  const scoreBeforeManual = clampLocationScore(rawScore, NaN);
   const manual = locationManualAdjustment(group);
   const score = manual.override !== null
     ? clampLocationScore(manual.override, scoreBeforeManual)
-    : clampLocationScore(scoreBeforeManual + manual.delta, scoreBeforeManual);
+    : Number.isFinite(scoreBeforeManual)
+      ? clampLocationScore(scoreBeforeManual + manual.delta, scoreBeforeManual)
+      : NaN;
   const componentBuckets = new Map();
   cardModels.forEach((model) => {
     model.components.forEach((component) => {
+      if (!Number.isFinite(Number(component.value))) return;
       const bucket = componentBuckets.get(component.key) || { ...component, value: 0, count: 0 };
       bucket.value += component.value;
       bucket.count += 1;
@@ -28595,7 +29191,7 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
   });
   const components = [...componentBuckets.values()].map((bucket) => ({
     ...bucket,
-    value: clampLocationScore(bucket.count ? bucket.value / bucket.count : bucket.value, 50),
+    value: clampLocationScore(bucket.count ? bucket.value / bucket.count : bucket.value, NaN),
     note: `${fmtNumber(bucket.count)}개 지역카드 평균`,
     tone: locationComponentTone(bucket.count ? bucket.value / bucket.count : bucket.value)
   }));
@@ -28604,9 +29200,20 @@ function regionGroupLocationScoreModel(group = {}, cards = [], runtime = {}, tou
   return {
     score,
     scoreBeforeManual,
-    rawScore: clampLocationScore(rawScore, score),
+    rawScore: Number.isFinite(rawScore) ? clampLocationScore(rawScore, NaN) : null,
     confidence,
-    confidenceAdjustment,
+    confidenceAdjustment: 0,
+    dataQuality: {
+      status: components.length ? "partial" : "missing",
+      score: components.length ? confidence : null,
+      grade: components.length ? (confidence >= 85 ? "A" : confidence >= 70 ? "B" : confidence >= 50 ? "C" : "D") : "U",
+      penalties: components.length ? [] : [{ code: "region_samples_missing", message: "권역 표본 미수집", points: 20 }],
+      coverage: {
+        numerator: availableCardScores.length,
+        denominator: cards.length,
+        ratio: cards.length ? availableCardScores.length / cards.length : null
+      }
+    },
     manual,
     components,
     drivers,
@@ -28630,9 +29237,10 @@ function locationRuntimeScope(card = {}, alias = null) {
   ]
     .map(stripLocationBusinessWords)
     .filter((term) => term.length >= 2);
-  const activeBase = stripLocationBusinessWords(activeKeyword());
-  const cardBase = stripLocationBusinessWords(card.searchKeyword);
-  const exactActive = activeBase && cardBase && (activeBase === cardBase || activeBase.includes(cardBase) || cardBase.includes(activeBase));
+  const exactActive = Boolean(
+    card.regionKey
+    && matchedRegionContextKey(state.data?.regionContext) === card.regionKey
+  );
 
   const itemMatches = (item) => {
     const haystack = compactSearchText([item.region, item.address, item.location, item.name, item.category].filter(Boolean).join(" "));
@@ -28661,6 +29269,7 @@ function locationRuntimeStats(card = {}, alias = null) {
   const targets = targetEntries(0).filter((entry) => itemSet.has(entry.item));
   const adCount = items.filter((item) => /광고/.test(String(item.ad || item.adFlag || item.adStatus || ""))).length;
   const searchVolume = scope.regions.reduce((sum, region) => sum + finiteNumber(region.traffic?.totalSearchVolume, 0), 0);
+  const searchObserved = scope.regions.some((region) => demandTrafficObserved(region.traffic || {}));
   const platformGap = items.length
     ? platformStats.missingYeogi + platformStats.missingYanolja + platformStats.missingDdnayo
     : 0;
@@ -28673,6 +29282,7 @@ function locationRuntimeStats(card = {}, alias = null) {
     adCount,
     adRatio: items.length ? adCount / items.length : NaN,
     searchVolume,
+    searchObserved,
     platformGap
   };
 }
@@ -28747,6 +29357,12 @@ function renderLocationDecisionPanel(card, clusters, runtime, scoreModel = null,
 function renderLocationScoreModel(scoreModel = null) {
   if (!scoreModel) return "";
   const confidenceTone = locationComponentTone(scoreModel.confidence);
+  const dataQuality = scoreModel.dataQuality || {};
+  const dataQualityLabel = dataQuality.status === "missing"
+    ? "미수집"
+    : [dataQuality.grade, regionAnalysisContextStatusLabel(dataQuality.status)].filter(Boolean).join(" · ") || "확인 필요";
+  const dataQualityReason = (dataQuality.penalties || []).map((penalty) => penalty?.message).filter(Boolean).join(" · ")
+    || "입지점수와 독립";
   const manual = scoreModel.manual || {};
   const manualLabel = isAdminRole() ? "관리자 보정" : "운영 검수 반영";
   const manualAppliedLabel = isAdminRole() ? "적용" : "반영";
@@ -28757,19 +29373,19 @@ function renderLocationScoreModel(scoreModel = null) {
   return `
     <section class="location-block location-score-model">
       <div class="location-block-head">
-        <h4>입지 보정 모델</h4>
-        <span>관광·검색·예약·매출·신뢰도 기준</span>
+        <h4>입지 매력도 모델</h4>
+        <span>관광·검색·예약·매출 관측값 기준</span>
       </div>
       <div class="location-score-model-head">
         <div>
           <span>보정 전</span>
-          <strong>${fmtNumber(scoreModel.rawScore)}</strong>
-          <small>사전·실수집 가중 평균</small>
+          <strong>${Number.isFinite(Number(scoreModel.rawScore)) ? fmtNumber(scoreModel.rawScore) : "미수집"}</strong>
+          <small>관측된 지표만 가중치 재정규화</small>
         </div>
         <div class="${escapeHtml(confidenceTone)}">
           <span>데이터 신뢰도</span>
-          <strong>${fmtNumber(scoreModel.confidence)}</strong>
-          <small>${scoreModel.confidenceAdjustment >= 0 ? "+" : ""}${fmtNumber(scoreModel.confidenceAdjustment)}점 보정</small>
+          <strong>${escapeHtml(dataQualityLabel)}</strong>
+          <small>${escapeHtml(dataQualityReason)}</small>
         </div>
         <div class="${manual.hasAdjustment ? "strong" : "weak"}">
           <span>${escapeHtml(manualLabel)}</span>
@@ -28778,16 +29394,19 @@ function renderLocationScoreModel(scoreModel = null) {
         </div>
       </div>
       <div class="location-score-component-grid">
-        ${scoreModel.components.map((component) => `
-          <article class="${escapeHtml(component.tone)}">
-            <div>
-              <strong>${escapeHtml(component.label)}</strong>
-              <em>${fmtNumber(component.value)}</em>
-            </div>
-            <i><b style="width:${Math.max(0, Math.min(100, component.value))}%"></b></i>
-            <span>${escapeHtml(component.note)}</span>
-          </article>
-        `).join("")}
+        ${scoreModel.components.map((component) => {
+          const observed = component?.observed === true && Number.isFinite(Number(component.value));
+          return `
+            <article class="${escapeHtml(component.tone)}">
+              <div>
+                <strong>${escapeHtml(component.label)}</strong>
+                <em>${observed ? fmtNumber(component.value) : "미수집"}</em>
+              </div>
+              <i><b style="width:${observed ? Math.max(0, Math.min(100, component.value)) : 0}%"></b></i>
+              <span>${escapeHtml(component.note)}</span>
+            </article>
+          `;
+        }).join("")}
       </div>
     </section>
   `;
@@ -28796,11 +29415,18 @@ function renderLocationScoreModel(scoreModel = null) {
 function locationScoreValidationRows(scoreModel = {}, runtime = {}, tourismLabel = "") {
   const rows = [];
   const lowComponents = (scoreModel.risks || []).slice(0, 3);
-  if (Number(scoreModel.confidence || 0) < 60) {
-    rows.push({ tone: "risk", label: "데이터 신뢰도", value: `${fmtNumber(scoreModel.confidence || 0)}점`, note: "표본 부족 시 점수 확정 전 관리자 확인 필요" });
-  } else {
-    rows.push({ tone: "strong", label: "데이터 신뢰도", value: `${fmtNumber(scoreModel.confidence || 0)}점`, note: "현재 표본으로 자동판정 가능" });
-  }
+  const dataQuality = scoreModel.dataQuality || {};
+  const dataQualityValue = dataQuality.status === "missing"
+    ? "미수집"
+    : [dataQuality.grade, regionAnalysisContextStatusLabel(dataQuality.status)].filter(Boolean).join(" · ") || "확인 필요";
+  const dataQualityNote = (dataQuality.penalties || []).map((penalty) => penalty?.message).filter(Boolean).join(" · ")
+    || (dataQuality.status === "ready" ? "현재 표본으로 자동판정 가능" : "표본 부족 시 점수 확정 전 관리자 확인 필요");
+  rows.push({
+    tone: dataQuality.status === "ready" ? "strong" : "risk",
+    label: "데이터 신뢰도",
+    value: dataQualityValue,
+    note: dataQualityNote
+  });
   rows.push({
     tone: runtime.items?.length ? "strong" : "risk",
     label: "노출 표본",
@@ -29474,6 +30100,39 @@ function renderAdminRegionOverview() {
   `;
 }
 
+function locationInsightInformationArchitectureHtml(card = {}, scoreModel = {}, runtime = {}) {
+  const textList = (value) => {
+    const items = Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    return items.length ? items.join(" · ") : "구조화 근거 미수집";
+  };
+  const quality = scoreModel.dataQuality || {};
+  const penalties = Array.isArray(quality.penalties) ? quality.penalties : [];
+  const marketSampleCount = Array.isArray(runtime.items) ? runtime.items.length : null;
+  const accessAreas = card.accessCatchments || card.accessAreas || [];
+  const demandOrigins = card.demandOrigins || card.hinterlandDemandAreas || [];
+  const administrativeNeighbors = card.administrativeNeighbors || [];
+  const demandKeywords = card.demandKeywords || card.representativeKeywords || [card.searchKeyword].filter(Boolean);
+  return `
+    <section class="location-block region-insight-architecture" aria-labelledby="regionInsightArchitectureTitle">
+      <div class="location-block-head">
+        <h4 id="regionInsightArchitectureTitle">지역 입지 인사이트 구조</h4>
+        <span>자원·상품·인접·수요권역을 분리</span>
+      </div>
+      <dl class="region-insight-architecture-grid">
+        <div><dt>입지 자원</dt><dd>${escapeHtml(textList(card.locationResources || card.naturalResources))}</dd></div>
+        <div><dt>상품·운영 특징</dt><dd>${escapeHtml(textList(card.productFeatures || card.operationFeatures))}</dd></div>
+        <div><dt>행정 인접 지역</dt><dd>${escapeHtml(textList(administrativeNeighbors))}<small>서울 등 배후 수요지는 행정 인접으로 분류하지 않음</small></dd></div>
+        <div><dt>접근 권역</dt><dd>${escapeHtml(textList(accessAreas))}</dd></div>
+        <div><dt>주요 배후 수요지</dt><dd>${escapeHtml(textList(demandOrigins))}</dd></div>
+        <div><dt>대표 수요 키워드</dt><dd>${escapeHtml(textList(demandKeywords))}</dd></div>
+        <div><dt>시장 신호</dt><dd>${marketSampleCount === null ? "표본 미수집" : `${fmtNumber(marketSampleCount)}곳 저장 표본`}<small>검색·SNS·OTA·리드타임은 각 상태 계약으로 분리</small></dd></div>
+        <div><dt>권장 전략</dt><dd>${escapeHtml(card.recommendedProduct || "전략 근거 미수집")}<small>${escapeHtml(card.caution || "주의사항 미수집")}</small></dd></div>
+        <div><dt>데이터 품질</dt><dd>${escapeHtml(quality.grade || "U")} · ${escapeHtml(quality.status || "missing")}<small>${penalties.length ? escapeHtml(penalties.map((penalty) => penalty.message || penalty.code).join(" · ")) : "등록된 감점 사유 없음"}</small></dd></div>
+      </dl>
+    </section>
+  `;
+}
+
 function renderLocationDictionary(match = null) {
   if (!els.dictionaryResult) return;
   renderAdminRegionOverview();
@@ -29491,19 +30150,30 @@ function renderLocationDictionary(match = null) {
 
   const query = els.dictionarySearchInput?.value?.trim() || "";
   const requestQueueHtml = renderLocationCardRequestQueue();
-  const result = match || locationCardForQuery(query || cards[0]?.searchKeyword || "");
+  const canonicalRegionKey = matchedRegionContextKey(state.data?.regionContext);
+  const canonicalCard = canonicalRegionKey
+    ? cards.find((candidate) => candidate.regionKey === canonicalRegionKey) || null
+    : null;
+  const result = match || (canonicalCard
+    ? { card: canonicalCard, group: null, alias: dictionaryAliasForCard(canonicalCard), reason: "canonical_region_key" }
+    : { card: null, group: null, alias: null, reason: canonicalRegionKey ? "canonical_card_missing" : "canonical_region_unmatched" });
   if (result.group) {
     renderLocationGroupDictionary(result.group);
     return;
   }
-  const card = result.card || state.selectedLocationCard;
+  const card = result.card || null;
   if (!card) {
+    const regionContextBlocked = ["context-mismatch", "unmatched", "ambiguous", "inactive", "canonical_region_unmatched"].includes(result.reason);
     if (els.dictionarySearchStatus) {
-      els.dictionarySearchStatus.textContent = query
-        ? `"${query}"에 맞는 저장 지역 카드가 없습니다. 신규 지역 후보로 확인합니다.`
-        : "지역명과 업종을 입력하면 저장된 지역 카드를 호출합니다.";
+      els.dictionarySearchStatus.textContent = regionContextBlocked
+        ? "선택 run의 canonical 지역과 정확히 일치하는 입지카드만 연결합니다."
+        : query
+          ? `"${query}"에 맞는 저장 지역 카드가 없습니다. 신규 지역 후보로 확인합니다.`
+          : "지역명과 업종을 입력하면 저장된 지역 카드를 호출합니다.";
     }
-    els.dictionaryResult.innerHTML = `${requestQueueHtml}${renderMissingLocationCandidate(query, cards)}`;
+    els.dictionaryResult.innerHTML = regionContextBlocked
+      ? `${requestQueueHtml}<article class="region-analysis-placeholder" data-region-analysis-state="${escapeHtml(result.reason || "unmatched")}" role="status"><strong>지역 분석 미연결</strong><p>다른 지역카드로 대체하지 않습니다. 정확한 canonical 지역이 연결된 run을 선택하세요.</p></article>`
+      : `${requestQueueHtml}${renderMissingLocationCandidate(query, cards)}`;
     return;
   }
 
@@ -29557,6 +30227,7 @@ function renderLocationDictionary(match = null) {
       </div>
 
       ${renderLocationDecisionPanel(card, clusters, runtime, scoreModel, tourismMatch)}
+      ${locationInsightInformationArchitectureHtml(card, scoreModel, runtime)}
       ${renderLocationScoreModel(scoreModel)}
       ${renderLocationScoreValidationPanel(card, scoreModel, runtime, { label: card.searchKeyword, type: "region", tourismLabel: tourismRegionDisplay(tourismMatch) })}
       ${renderLocationEvidence(card)}
@@ -29644,8 +30315,25 @@ function syncDictionaryInputToActiveRun(force = false) {
 function runDictionarySearch(query) {
   if (query && els.dictionarySearchInput) els.dictionarySearchInput.value = query;
   const result = locationCardForQuery(els.dictionarySearchInput?.value || "");
-  state.selectedLocationCard = result.card;
-  renderLocationDictionary(result);
+  const authoritativeContext = state.data?.regionContext;
+  const canonicalRegionKey = matchedRegionContextKey(authoritativeContext);
+  const hasRunRegionContext = Boolean(authoritativeContext && typeof authoritativeContext === "object");
+  const contextMismatch = Boolean(
+    hasRunRegionContext
+    && result.card
+    && (!canonicalRegionKey || result.card.regionKey !== canonicalRegionKey)
+  );
+  const visibleResult = contextMismatch
+    ? {
+        card: null,
+        group: null,
+        alias: null,
+        reason: canonicalRegionKey ? "context-mismatch" : (authoritativeContext.matchStatus || "unmatched")
+      }
+    : result;
+  state.selectedLocationCard = visibleResult.card;
+  setRegionAnalysisRegionKey(canonicalRegionKey, { syncHistory: state.activeTab === "dictionary" });
+  renderLocationDictionary(visibleResult);
 }
 
 async function loadLocationDictionary() {
@@ -29658,10 +30346,20 @@ async function loadLocationDictionary() {
     state.tourismRegionMap = tourismRegionMap;
     renderSearchIntentHints();
     renderDictionaryQuickButtons();
-    if (!els.dictionarySearchInput?.value && state.dictionary.cards?.[0]) {
-      els.dictionarySearchInput.value = state.dictionary.cards[0].searchKeyword;
+    const canonicalRegionKey = matchedRegionContextKey(state.data?.regionContext);
+    const restoredCard = state.activeTab === "dictionary" && canonicalRegionKey
+      ? (state.dictionary.cards || []).find((card) => card.regionKey === canonicalRegionKey)
+      : null;
+    if (restoredCard && els.dictionarySearchInput) {
+      els.dictionarySearchInput.value = restoredCard.searchKeyword || "";
     }
-    runDictionarySearch(els.dictionarySearchInput?.value || state.dictionary.cards?.[0]?.searchKeyword || "");
+    if (restoredCard) {
+      runDictionarySearch(restoredCard.searchKeyword || "");
+    } else {
+      state.selectedLocationCard = null;
+      setRegionAnalysisRegionKey(canonicalRegionKey);
+      renderLocationDictionary({ card: null, group: null, alias: null, reason: canonicalRegionKey ? "canonical_card_missing" : "canonical_region_unmatched" });
+    }
     if (isAdminRole() && state.companyMaster) renderAdminConsoleDashboard();
     if (!isAdminRole()) renderB2BSearchPanel();
   } catch (error) {
@@ -30557,6 +31255,818 @@ async function cancelCurrentB2BSearchAndRestart() {
   if (canStartNext) await startB2BSearchRequest(pending.payload, pending.keyword, pending.range);
 }
 
+function finiteRegionInsightNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function publicRegionInsightProjection(value = null) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const publication = value.publication || {};
+  if (!["published", "stale", "superseded"].includes(publication.status)) return null;
+  const snapshot = publication.snapshot && typeof publication.snapshot === "object"
+    ? publication.snapshot
+    : value;
+  const regionKey = String(snapshot.regionKey || value.regionKey || "").trim();
+  if (!regionKey || !snapshot.locationAttractiveness || !snapshot.dataQuality) return null;
+  const locationAttractiveness = snapshot.locationAttractiveness;
+  const dataQuality = snapshot.dataQuality;
+  return {
+    contractVersion: value.contractVersion || "",
+    regionKey,
+    locationAttractiveness: {
+      value: finiteRegionInsightNumber(locationAttractiveness.value),
+      modelVersion: String(locationAttractiveness.modelVersion || ""),
+      components: (locationAttractiveness.components || []).map((component) => ({
+        key: String(component.key || ""),
+        value: finiteRegionInsightNumber(component.value),
+        weight: finiteRegionInsightNumber(component.weight),
+        evidenceIds: Array.isArray(component.evidenceIds) ? component.evidenceIds.map(String) : []
+      }))
+    },
+    dataQuality: {
+      status: String(dataQuality.status || "missing"),
+      score: finiteRegionInsightNumber(dataQuality.score),
+      grade: String(dataQuality.grade || "U"),
+      penalties: (dataQuality.penalties || []).map((penalty) => ({
+        code: String(penalty.code || ""),
+        message: String(penalty.message || ""),
+        points: finiteRegionInsightNumber(penalty.points)
+      })),
+      coverage: {
+        numerator: Number.isInteger(dataQuality.coverage?.numerator) ? dataQuality.coverage.numerator : null,
+        denominator: Number.isInteger(dataQuality.coverage?.denominator) ? dataQuality.coverage.denominator : null,
+        ratio: finiteRegionInsightNumber(dataQuality.coverage?.ratio)
+      },
+      freshness: {
+        status: String(dataQuality.freshness?.status || "unknown"),
+        asOf: String(dataQuality.freshness?.asOf || ""),
+        updatedAt: String(dataQuality.freshness?.updatedAt || ""),
+        ageDays: finiteRegionInsightNumber(dataQuality.freshness?.ageDays)
+      }
+    },
+    publication: {
+      status: String(publication.status || ""),
+      publicationId: String(publication.publicationId || ""),
+      version: String(publication.version || ""),
+      publishedAt: String(publication.publishedAt || ""),
+      supersededAt: String(publication.supersededAt || ""),
+      staleAt: String(publication.staleAt || "")
+    }
+  };
+}
+
+function adminRegionInsightPreviewProjection(value = null) {
+  const published = publicRegionInsightProjection(value);
+  if (published) return published;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const reviewedCurrent = value.review?.status === "reviewed"
+    && value.draftHash
+    && value.review.reviewedDraftHash === value.draftHash;
+  if (!reviewedCurrent || !value.regionKey || !value.locationAttractiveness || !value.dataQuality) return null;
+  const sanitized = publicRegionInsightProjection({
+    contractVersion: value.contractVersion || "",
+    regionKey: value.regionKey,
+    locationAttractiveness: value.locationAttractiveness,
+    dataQuality: value.dataQuality,
+    publication: {
+      status: "published",
+      publicationId: "preview",
+      version: "발행 전 미리보기",
+      publishedAt: "",
+      snapshot: {
+        regionKey: value.regionKey,
+        locationAttractiveness: value.locationAttractiveness,
+        dataQuality: value.dataQuality
+      }
+    }
+  });
+  return sanitized
+    ? { ...sanitized, publication: { ...sanitized.publication, status: "preview", publicationId: "" } }
+    : null;
+}
+
+function b2bRegionInsightViewModel(data = state.data) {
+  const regionContext = data?.regionContext || {};
+  const canonicalRegionKey = regionContext.matchStatus === "matched"
+    ? String(regionContext.regionKey || "").trim()
+    : "";
+  if (!canonicalRegionKey) {
+    return {
+      available: false,
+      state: regionContext.matchStatus === "ambiguous" ? "ambiguous" : "unmatched",
+      reason: regionContext.matchStatus === "ambiguous" ? "ambiguous" : "unmatched",
+      message: regionContext.matchStatus === "ambiguous"
+        ? "동명 지역이 있어 지역 확인이 필요합니다."
+        : "지역이 canonical registry에 정확히 연결되지 않았습니다."
+    };
+  }
+  const insight = publicRegionInsightProjection(data?.b2bRegionInsight || null);
+  if (!insight) {
+    return {
+      available: false,
+      state: "unpublished",
+      reason: "unpublished",
+      regionKey: canonicalRegionKey,
+      message: "발행된 지역 인사이트가 없습니다."
+    };
+  }
+  if (insight.regionKey !== canonicalRegionKey) {
+    return {
+      available: false,
+      state: "unmatched",
+      reason: "region-mismatch",
+      regionKey: canonicalRegionKey,
+      message: "현재 지역과 발행본의 canonical regionKey가 일치하지 않아 카드를 연결하지 않았습니다."
+    };
+  }
+  return {
+    available: true,
+    state: insight.publication.status,
+    regionKey: canonicalRegionKey,
+    displayLabel: regionContext.displayLabel || [regionContext.sido, regionContext.sigungu].filter(Boolean).join(" ") || canonicalRegionKey,
+    locationAttractiveness: insight.locationAttractiveness,
+    dataQuality: insight.dataQuality,
+    publication: insight.publication,
+    stale: insight.publication.status === "stale"
+  };
+}
+
+function regionInsightCoverageLabel(coverage = {}) {
+  if (!Number.isInteger(coverage.numerator) || !Number.isInteger(coverage.denominator)) return "표본 범위 미확인";
+  const ratio = coverage.denominator > 0 ? coverage.numerator / coverage.denominator : null;
+  return `${fmtNumber(coverage.numerator)}/${fmtNumber(coverage.denominator)}${ratio === null ? "" : ` · ${Math.round(ratio * 100)}%`}`;
+}
+
+function regionInsightDateLabel(value = "") {
+  if (!value) return "미확인";
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleDateString("ko-KR") : String(value);
+}
+
+function b2bRegionInsightHtml(model = b2bRegionInsightViewModel(), options = {}) {
+  if (!model.available) {
+    return `
+      <article class="region-analysis-placeholder" data-region-analysis-state="${escapeHtml(model.reason || "unpublished")}" role="status">
+        <strong>${escapeHtml(model.message || "발행된 지역 인사이트가 없습니다.")}</strong>
+        <p>다른 지역의 카드로 대체하지 않습니다. 정확한 지역 연결과 명시적 발행이 완료되면 표시합니다.</p>
+      </article>
+    `;
+  }
+  const attractiveness = model.locationAttractiveness || {};
+  const quality = model.dataQuality || {};
+  const publication = model.publication || {};
+  const headingTag = ["h3", "h4", "h5"].includes(options.headingTag) ? options.headingTag : "h3";
+  const score = finiteRegionInsightNumber(attractiveness.value);
+  const qualityScore = finiteRegionInsightNumber(quality.score);
+  const freshness = quality.freshness || {};
+  return `
+    <div class="region-insight-publication" data-region-insight-region-key="${escapeHtml(model.regionKey)}">
+      ${model.stale ? `
+        <div class="region-insight-warning" role="status">
+          <strong>재검수 필요</strong>
+          <span>현재 초안은 변경되었지만 아래 값은 마지막 발행 스냅샷입니다.</span>
+        </div>
+      ` : ""}
+      <header class="region-insight-publication-head">
+        <div>
+          <p class="eyebrow">발행된 지역 인사이트</p>
+          <${headingTag}>${escapeHtml(model.displayLabel)}</${headingTag}>
+          <span>canonical regionKey · ${escapeHtml(model.regionKey)}</span>
+        </div>
+        <span class="state-badge ${model.stale ? "warning" : "ready"}">${escapeHtml(publication.status)}</span>
+      </header>
+      <div class="region-insight-kpi-grid">
+        <article>
+          <span>입지 매력도</span>
+          <strong>${score === null ? "미수집" : fmtNumber(score)}</strong>
+          <small>${escapeHtml(attractiveness.modelVersion || "모델 버전 미확인")}</small>
+        </article>
+        <article>
+          <span>데이터 품질</span>
+          <strong>${escapeHtml(quality.grade || "U")}${qualityScore === null ? "" : ` · ${fmtNumber(qualityScore)}`}</strong>
+          <small>${escapeHtml(quality.status || "missing")} · 입지점수와 독립</small>
+        </article>
+        <article>
+          <span>표본 커버리지</span>
+          <strong>${escapeHtml(regionInsightCoverageLabel(quality.coverage))}</strong>
+          <small>부족한 근거는 50점으로 채우지 않음</small>
+        </article>
+        <article>
+          <span>발행본</span>
+          <strong>${escapeHtml(publication.version || "버전 미확인")}</strong>
+          <small>${escapeHtml(regionInsightDateLabel(publication.publishedAt))}</small>
+        </article>
+      </div>
+      <section class="region-insight-section">
+        <div class="region-insight-section-head">
+          <h4>입지 매력도 구성</h4>
+          <span>발행 스냅샷 원문</span>
+        </div>
+        <div class="region-insight-component-grid">
+          ${(attractiveness.components || []).length ? attractiveness.components.map((component) => `
+            <article>
+              <span>${escapeHtml(B2B_LOCATION_COMPONENT_COPY[component.key]?.label || component.key || "근거")}</span>
+              <strong>${component.value === null ? "미수집" : fmtNumber(component.value)}</strong>
+              <small>근거 ${fmtNumber(component.evidenceIds?.length || 0)}건 · 가중치 ${component.weight === null ? "미확인" : component.weight}</small>
+            </article>
+          `).join("") : '<div class="empty">발행된 구성 지표가 없습니다.</div>'}
+        </div>
+      </section>
+      <section class="region-insight-section">
+        <div class="region-insight-section-head">
+          <h4>데이터 품질</h4>
+          <span>${escapeHtml(freshness.status || "unknown")} · 기준일 ${escapeHtml(regionInsightDateLabel(freshness.asOf))}</span>
+        </div>
+        <div class="region-insight-penalties">
+          ${(quality.penalties || []).length ? quality.penalties.map((penalty) => `
+            <span><b>${escapeHtml(penalty.message || penalty.code)}</b>${penalty.points === null ? "" : ` · -${fmtNumber(penalty.points)}`}</span>
+          `).join("") : "<span><b>등록된 품질 감점 없음</b></span>"}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderB2BRegionInsight() {
+  if (!els.regionInsightBody) return;
+  els.regionInsightBody.innerHTML = b2bRegionInsightHtml(b2bRegionInsightViewModel(state.data));
+}
+
+function adminRegionInsightCurrentState() {
+  return state.adminRegionInsightRecord?.state || state.data?.regionInsight || null;
+}
+
+function regionInsightFreshnessFromRun() {
+  const run = state.data?.run || {};
+  const raw = run.collectedAt || run.completedAt || run.generatedAt || state.data?.collectedAt || "";
+  const parsed = raw ? new Date(raw) : null;
+  const valid = Boolean(parsed && Number.isFinite(parsed.getTime()));
+  const ageDays = valid ? Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 86400000)) : null;
+  return {
+    status: ageDays === null ? "unknown" : ageDays <= 7 ? "fresh" : ageDays <= 30 ? "aging" : "stale",
+    asOf: valid ? parsed.toISOString() : "",
+    updatedAt: valid ? parsed.toISOString() : "",
+    ageDays
+  };
+}
+
+function adminRegionInsightDraftSeed() {
+  const regionKey = matchedRegionContextKey(state.data?.regionContext);
+  const card = (state.dictionary?.cards || []).find((entry) => entry.regionKey === regionKey) || null;
+  let scoreModel = null;
+  if (card) {
+    const alias = dictionaryAliasForCard(card);
+    scoreModel = adjustedLocationScoreModel(
+      card,
+      locationRuntimeStats(card, alias),
+      tourismRegionForLocation({ card, alias, query: card.searchKeyword })
+    );
+  }
+  const components = (scoreModel?.components || []).map((component) => ({
+    key: component.key,
+    value: finiteRegionInsightNumber(component.value),
+    weight: finiteRegionInsightNumber(component.weight),
+    evidenceIds: []
+  }));
+  const quality = scoreModel?.dataQuality || {};
+  const qualityStatus = quality.status || "missing";
+  return {
+    regionKey,
+    locationAttractiveness: {
+      value: finiteRegionInsightNumber(scoreModel?.score),
+      components,
+      modelVersion: "location-attractiveness-ui-v1"
+    },
+    dataQuality: {
+      status: qualityStatus,
+      score: qualityStatus === "missing" ? null : finiteRegionInsightNumber(quality.score),
+      grade: qualityStatus === "missing" ? "U" : (quality.grade || "D"),
+      penalties: quality.penalties || [{ code: "draft_evidence_missing", message: "연결 근거 부족", points: 20 }],
+      coverage: qualityStatus === "missing"
+        ? { numerator: null, denominator: null, ratio: null }
+        : (quality.coverage || { numerator: null, denominator: null, ratio: null }),
+      freshness: regionInsightFreshnessFromRun()
+    },
+    review: { status: "draft" },
+    publication: { status: "unpublished" },
+    draftHash: ""
+  };
+}
+
+function adminRegionInsightEvidenceRows(seed = adminRegionInsightDraftSeed()) {
+  const run = state.data?.run || {};
+  const items = state.data?.availability?.items || [];
+  const sales = summarizeSales(items);
+  const revenue = locationRevenueMetrics({ items });
+  const traffic = demandTrafficAggregate();
+  const searchVolume = finiteNumber(traffic.totalSearchVolume, 0);
+  const searchObserved = demandTrafficObserved(traffic) || searchVolume > 0;
+  const period = dateRangeLabel(run) || "측정 기간 미확인";
+  return [
+    { source: "검색·트렌드", period, sample: searchObserved ? `월 ${fmtNumber(searchVolume)}회` : "미수집", status: searchObserved ? (searchVolume ? "ready" : "zero") : "missing" },
+    { source: "SNS", period: "별도 측정기간 없음", sample: "미수집", status: "missing" },
+    { source: "OTA·예약", period, sample: `${fmtNumber(items.length)}곳 · ${fmtNumber(sales.supply)}실`, status: items.length ? (sales.supply ? "ready" : "partial") : "missing" },
+    { source: "매출 표본", period, sample: `${fmtNumber(revenue.sampleCount)}곳`, status: revenue.sampleCount ? "ready" : "missing" },
+    { source: "지역·관광", period: seed.dataQuality?.freshness?.asOf ? regionInsightDateLabel(seed.dataQuality.freshness.asOf) : "기준일 미확인", sample: "canonical 지역 연결", status: seed.regionKey ? "ready" : "missing" }
+  ];
+}
+
+function adminRegionInsightWorkbenchModel() {
+  const regionContext = state.data?.regionContext || {};
+  const regionKey = matchedRegionContextKey(regionContext);
+  const persisted = adminRegionInsightCurrentState();
+  const draft = persisted || adminRegionInsightDraftSeed();
+  return {
+    available: Boolean(regionKey),
+    regionKey,
+    displayLabel: regionContext.displayLabel || [regionContext.sido, regionContext.sigungu].filter(Boolean).join(" ") || regionKey,
+    persisted,
+    draft,
+    review: draft?.review || { status: "draft" },
+    publication: draft?.publication || { status: "unpublished" },
+    workflowRevision: Number.isSafeInteger(Number(state.adminRegionInsightRecord?.workflowRevision))
+      ? Number(state.adminRegionInsightRecord.workflowRevision)
+      : null,
+    publicationHistory: Array.isArray(state.adminRegionInsightRecord?.publicationHistory)
+      ? state.adminRegionInsightRecord.publicationHistory
+      : [],
+    publicPreview: adminRegionInsightPreviewProjection(draft),
+    evidenceRows: adminRegionInsightEvidenceRows(draft)
+  };
+}
+
+function adminRegionInsightStatusLabel(value = "") {
+  const labels = {
+    draft: "초안",
+    review_required: "검수 필요",
+    reviewed: "검수 완료",
+    changes_requested: "수정 요청",
+    unpublished: "미발행",
+    published: "발행",
+    stale: "오래됨·재검수",
+    superseded: "대체됨"
+  };
+  return labels[value] || value || "미확인";
+}
+
+function renderAdminRegionInsightWorkbench() {
+  if (!els.reviewPublishBody || !isAdminRole()) return;
+  const model = adminRegionInsightWorkbenchModel();
+  if (!model.available) {
+    els.reviewPublishBody.innerHTML = `
+      <article class="region-analysis-placeholder" data-region-analysis-state="unmatched" role="status">
+        <strong>정확한 지역 연결이 필요합니다.</strong>
+        <p>미등록·동명 지역에는 다른 지역카드를 대신 표시하거나 발행하지 않습니다.</p>
+      </article>
+    `;
+    return;
+  }
+  if (state.adminRegionInsightLoading) {
+    els.reviewPublishBody.innerHTML = '<div class="empty" role="status">지역 검수 상태를 불러오는 중입니다.</div>';
+    return;
+  }
+  const draft = model.draft;
+  const attractiveness = draft.locationAttractiveness || {};
+  const quality = draft.dataQuality || {};
+  const coverage = quality.coverage || {};
+  const review = model.review || {};
+  const publication = model.publication || {};
+  const publicationHistory = model.publicationHistory || [];
+  const reviewedCurrent = review.status === "reviewed" && review.reviewedDraftHash === draft.draftHash;
+  const readOnly = isAdminUserViewMode() || state.adminRegionInsightSaving;
+  const previewModel = model.publicPreview?.publication?.status === "preview"
+    ? {
+        available: true,
+        state: "preview",
+        regionKey: model.regionKey,
+        displayLabel: model.displayLabel,
+        locationAttractiveness: model.publicPreview.locationAttractiveness,
+        dataQuality: model.publicPreview.dataQuality,
+        publication: model.publicPreview.publication,
+        stale: false
+      }
+    : model.publicPreview
+      ? b2bRegionInsightViewModel({
+          regionContext: { ...state.data.regionContext, matchStatus: "matched", regionKey: model.regionKey },
+          b2bRegionInsight: model.publicPreview
+        })
+      : null;
+  els.reviewPublishBody.innerHTML = `
+    <div class="region-review-workbench" data-region-review-region-key="${escapeHtml(model.regionKey)}">
+      ${state.adminRegionInsightError ? `<div class="region-insight-warning error" role="alert">${escapeHtml(state.adminRegionInsightError)}</div>` : ""}
+      ${state.adminRegionInsightMessage ? `<div class="region-insight-feedback" role="status" tabindex="-1">${escapeHtml(state.adminRegionInsightMessage)}</div>` : ""}
+      <header class="region-review-head">
+        <div>
+          <p class="eyebrow">canonical 지역</p>
+          <h3>${escapeHtml(model.displayLabel)}</h3>
+          <span>${escapeHtml(model.regionKey)}</span>
+        </div>
+        <div class="region-review-statuses">
+          <span>검수 · <b>${escapeHtml(adminRegionInsightStatusLabel(review.status))}</b></span>
+          <span>발행 · <b>${escapeHtml(adminRegionInsightStatusLabel(publication.status))}</b></span>
+          <span>workflowRevision · <b>${model.workflowRevision === null ? "신규" : escapeHtml(model.workflowRevision)}</b></span>
+        </div>
+        <button class="secondary-button" type="button" data-region-insight-refresh ${state.adminRegionInsightSaving ? "disabled" : ""}>최신 상태 확인</button>
+      </header>
+      <form class="region-draft-form" data-region-insight-draft-form>
+        <div class="region-insight-kpi-grid">
+          <label>
+            <span>입지 매력도 점수</span>
+            <input type="number" min="0" max="100" step="1" name="attractivenessValue" value="${attractiveness.value === null ? "" : escapeHtml(attractiveness.value)}" placeholder="미수집" ${readOnly ? "disabled" : ""}>
+            <small>데이터 품질·검수 상태와 독립</small>
+          </label>
+          <label>
+            <span>품질 상태</span>
+            <select name="qualityStatus" ${readOnly ? "disabled" : ""}>
+              ${["ready", "zero", "missing", "partial", "stale", "conflict"].map((status) => `<option value="${status}" ${quality.status === status ? "selected" : ""}>${status}</option>`).join("")}
+            </select>
+            <small>missing은 품질점수 null·등급 U</small>
+          </label>
+          <label>
+            <span>품질 점수</span>
+            <input type="number" min="0" max="100" step="1" name="qualityScore" value="${quality.score === null ? "" : escapeHtml(quality.score)}" placeholder="미수집" ${readOnly ? "disabled" : ""}>
+          </label>
+          <label>
+            <span>품질 등급</span>
+            <select name="qualityGrade" ${readOnly ? "disabled" : ""}>
+              ${["A", "B", "C", "D", "U"].map((grade) => `<option value="${grade}" ${quality.grade === grade ? "selected" : ""}>${grade}</option>`).join("")}
+            </select>
+          </label>
+          <label>
+            <span>확보 표본</span>
+            <input type="number" min="0" step="1" name="coverageNumerator" value="${coverage.numerator ?? ""}" ${readOnly ? "disabled" : ""}>
+          </label>
+          <label>
+            <span>전체 표본</span>
+            <input type="number" min="0" step="1" name="coverageDenominator" value="${coverage.denominator ?? ""}" ${readOnly ? "disabled" : ""}>
+          </label>
+        </div>
+        <div class="region-draft-actions">
+          <span>모델 ${escapeHtml(attractiveness.modelVersion || "미확인")} · 구성지표 ${fmtNumber(attractiveness.components?.length || 0)}개</span>
+          <button class="primary-button" type="button" data-region-insight-save-draft ${readOnly ? "disabled" : ""}>초안 저장</button>
+        </div>
+      </form>
+      <section class="region-insight-section">
+        <div class="region-insight-section-head"><h4>출처·기간·표본·상태</h4><span>현재 실행 근거</span></div>
+        <div class="region-evidence-table" role="table" aria-label="지역 인사이트 근거" tabindex="0">
+          <div role="row" class="region-evidence-header">
+            <strong role="columnheader">출처</strong>
+            <strong role="columnheader">측정 기간</strong>
+            <strong role="columnheader">표본</strong>
+            <strong role="columnheader">상태</strong>
+          </div>
+          ${model.evidenceRows.map((row) => `
+            <div role="row">
+              <strong role="cell">${escapeHtml(row.source)}</strong>
+              <span role="cell">${escapeHtml(row.period)}</span>
+              <span role="cell">${escapeHtml(row.sample)}</span>
+              <em role="cell" class="${escapeHtml(row.status)}">${escapeHtml(row.status)}</em>
+            </div>
+          `).join("")}
+        </div>
+        <div class="region-insight-penalties">
+          ${(quality.penalties || []).length ? quality.penalties.map((penalty) => `<span><b>${escapeHtml(penalty.message || penalty.code)}</b>${penalty.points === null ? "" : ` · -${fmtNumber(penalty.points)}`}</span>`).join("") : "<span><b>등록된 품질 감점 없음</b></span>"}
+        </div>
+      </section>
+      <section class="region-review-actions">
+        <label>
+          <span>관리자 메모</span>
+          <textarea rows="3" data-region-insight-admin-memo ${readOnly ? "disabled" : ""}>${escapeHtml(review.adminMemo || "")}</textarea>
+          <small>최근 검수자 · ${escapeHtml(review.reviewer?.displayName || review.reviewer?.id || "미검수")} ${review.reviewedAt ? `· ${escapeHtml(regionInsightDateLabel(review.reviewedAt))}` : ""}</small>
+        </label>
+        <div>
+          <button class="secondary-button" type="button" data-region-insight-review="review_required" ${!model.persisted || readOnly ? "disabled" : ""}>검수 필요</button>
+          <button class="secondary-button" type="button" data-region-insight-review="changes_requested" ${!model.persisted || readOnly ? "disabled" : ""}>수정 요청</button>
+          <button class="primary-button" type="button" data-region-insight-review="reviewed" ${!model.persisted || readOnly ? "disabled" : ""}>검수 완료</button>
+        </div>
+      </section>
+      <section class="region-publish-actions">
+        <div>
+          <span>현재 발행본</span>
+          <strong>${escapeHtml(publication.version || "미발행")}</strong>
+          <small>${publication.publishedAt ? escapeHtml(regionInsightDateLabel(publication.publishedAt)) : "명시적 발행 전"}</small>
+        </div>
+        <label>
+          <span>새 발행 버전</span>
+          <input type="text" maxlength="80" data-region-insight-version value="${escapeHtml(`region-${new Date().toISOString().slice(0, 10)}`)}" ${readOnly ? "disabled" : ""}>
+        </label>
+        <button class="primary-button" type="button" data-region-insight-publish ${!reviewedCurrent || readOnly ? "disabled" : ""}>명시적으로 발행</button>
+      </section>
+      <section class="region-insight-section">
+        <div class="region-insight-section-head"><h4>사업자 공개 미리보기</h4><span>비공개 검수 필드 제외</span></div>
+        ${previewModel ? b2bRegionInsightHtml(previewModel, { headingTag: "h5" }) : '<div class="empty">검수 완료 후 발행하면 사업자 공개본을 미리 볼 수 있습니다.</div>'}
+      </section>
+      <section class="region-insight-section region-publication-history" aria-labelledby="regionPublicationHistoryTitle">
+        <div class="region-insight-section-head">
+          <h4 id="regionPublicationHistoryTitle">발행 이력</h4>
+          <span>${fmtNumber(publicationHistory.length)}개 불변 snapshot</span>
+        </div>
+        ${publicationHistory.length ? `
+          <ol class="region-publication-history-list">
+            ${publicationHistory.slice().reverse().map((entry) => {
+              const historyPublication = entry.publication || {};
+              const snapshot = historyPublication.snapshot || {};
+              return `
+                <li>
+                  <div>
+                    <strong>${escapeHtml(entry.version || historyPublication.version || "버전 미확인")}</strong>
+                    <span>${escapeHtml(snapshot.displayLabel || [snapshot.sido, snapshot.sigungu].filter(Boolean).join(" ") || model.displayLabel)}</span>
+                  </div>
+                  <dl>
+                    <div><dt>상태</dt><dd>${escapeHtml(adminRegionInsightStatusLabel(historyPublication.status || "published"))}</dd></div>
+                    <div><dt>발행일</dt><dd>${escapeHtml(regionInsightDateLabel(entry.publishedAt || historyPublication.publishedAt))}</dd></div>
+                    <div><dt>발행자</dt><dd>${escapeHtml(entry.publishedBy || historyPublication.publishedBy || "미확인")}</dd></div>
+                    <div><dt>publicationId</dt><dd>${escapeHtml(entry.publicationId || historyPublication.publicationId || "미확인")}</dd></div>
+                  </dl>
+                </li>
+              `;
+            }).join("")}
+          </ol>
+        ` : '<div class="empty">아직 발행 이력이 없습니다.</div>'}
+      </section>
+    </div>
+  `;
+}
+
+function captureAdminRegionInsightFormState() {
+  const root = els.reviewPublishBody;
+  if (!root) return null;
+  const controls = Array.from(root.querySelectorAll("input, select, textarea"));
+  const values = controls.map((control, index) => ({
+    key: control.name
+      || (control.hasAttribute("data-region-insight-admin-memo") ? "adminMemo" : "")
+      || (control.hasAttribute("data-region-insight-version") ? "publicationVersion" : "")
+      || `control-${index}`,
+    value: control.value,
+    checked: Boolean(control.checked),
+    type: control.type || control.tagName.toLowerCase()
+  }));
+  const activeControl = controls.includes(document.activeElement) ? controls.indexOf(document.activeElement) : -1;
+  return { values, activeControl };
+}
+
+function restoreAdminRegionInsightFormState(snapshot = null) {
+  if (!snapshot || !els.reviewPublishBody) return;
+  const controls = Array.from(els.reviewPublishBody.querySelectorAll("input, select, textarea"));
+  const valueByKey = new Map((snapshot.values || []).map((item) => [item.key, item]));
+  controls.forEach((control, index) => {
+    const key = control.name
+      || (control.hasAttribute("data-region-insight-admin-memo") ? "adminMemo" : "")
+      || (control.hasAttribute("data-region-insight-version") ? "publicationVersion" : "")
+      || `control-${index}`;
+    const saved = valueByKey.get(key);
+    if (!saved) return;
+    control.value = saved.value;
+    if (["checkbox", "radio"].includes(saved.type)) control.checked = saved.checked;
+  });
+  if (Number.isInteger(snapshot.activeControl) && snapshot.activeControl >= 0) {
+    controls[snapshot.activeControl]?.focus();
+  }
+}
+
+async function refreshAdminRegionInsightPreservingForm() {
+  const formSnapshot = captureAdminRegionInsightFormState();
+  const dirty = state.adminRegionInsightDirty;
+  const draftDirty = state.adminRegionInsightDraftDirty;
+  const dirtyRevision = state.adminRegionInsightDirtyRevision;
+  const loaded = await loadAdminRegionInsight({
+    force: true,
+    successMessage: "최신 workflowRevision과 발행 상태를 확인했습니다. 입력 중인 값은 보존했습니다."
+  });
+  restoreAdminRegionInsightFormState(formSnapshot);
+  state.adminRegionInsightDirty = dirty;
+  state.adminRegionInsightDraftDirty = draftDirty;
+  state.adminRegionInsightDirtyRevision = dirtyRevision;
+  if (loaded) window.requestAnimationFrame(() => els.reviewPublishBody?.querySelector(".region-insight-feedback")?.focus());
+}
+
+async function loadAdminRegionInsight({ force = false, successMessage = "" } = {}) {
+  if (!isAdminRole()) return false;
+  const regionKey = matchedRegionContextKey(state.data?.regionContext);
+  if (!regionKey || state.adminRegionInsightLoading) return false;
+  if (!force && state.adminRegionInsightLoadedRegionKey === regionKey) return false;
+  const requestId = ++state.adminRegionInsightRequestId;
+  state.adminRegionInsightLoading = true;
+  state.adminRegionInsightError = "";
+  renderAdminRegionInsightWorkbench();
+  try {
+    const result = await fetchJson(`/api/region-insights/${encodeURIComponent(regionKey)}`);
+    if (
+      requestId !== state.adminRegionInsightRequestId
+      || matchedRegionContextKey(state.data?.regionContext) !== regionKey
+    ) return false;
+    if (matchedRegionContextKey(result.regionContext) !== regionKey) {
+      throw new Error("지역 검수 응답의 canonical regionKey가 일치하지 않습니다.");
+    }
+    state.adminRegionInsightRecord = result.regionInsight || null;
+    state.adminRegionInsightLoadedRegionKey = regionKey;
+    if (successMessage) state.adminRegionInsightMessage = successMessage;
+  } catch (error) {
+    if (requestId !== state.adminRegionInsightRequestId) return false;
+    state.adminRegionInsightError = error.message || "지역 검수 상태를 불러오지 못했습니다.";
+  } finally {
+    if (requestId !== state.adminRegionInsightRequestId) return false;
+    state.adminRegionInsightLoading = false;
+    renderAdminRegionInsightWorkbench();
+    renderRegionAnalysisContext();
+  }
+  return !state.adminRegionInsightError;
+}
+
+function optionalRegionInsightNumber(value = "") {
+  const textValue = String(value ?? "").trim();
+  if (!textValue) return null;
+  const number = Number(textValue);
+  if (!Number.isFinite(number)) throw new Error("점수는 숫자로 입력하세요.");
+  return number;
+}
+
+function regionInsightDraftPayloadFromForm() {
+  const form = els.reviewPublishBody?.querySelector("[data-region-insight-draft-form]");
+  if (!form) throw new Error("지역 초안 입력 화면을 찾지 못했습니다.");
+  const base = adminRegionInsightCurrentState() || adminRegionInsightDraftSeed();
+  const status = form.elements.qualityStatus.value;
+  const numerator = optionalRegionInsightNumber(form.elements.coverageNumerator.value);
+  const denominator = optionalRegionInsightNumber(form.elements.coverageDenominator.value);
+  if (numerator !== null && !Number.isInteger(numerator)) throw new Error("확보 표본은 정수여야 합니다.");
+  if (denominator !== null && !Number.isInteger(denominator)) throw new Error("전체 표본은 정수여야 합니다.");
+  if (numerator !== null && denominator !== null && numerator > denominator) throw new Error("확보 표본은 전체 표본보다 클 수 없습니다.");
+  const qualityScore = status === "missing" ? null : optionalRegionInsightNumber(form.elements.qualityScore.value);
+  const qualityGrade = status === "missing" ? "U" : form.elements.qualityGrade.value;
+  if (status !== "missing" && qualityScore === null) throw new Error("missing 외 품질 상태에는 품질 점수가 필요합니다.");
+  if (status !== "missing" && qualityGrade === "U") throw new Error("missing 외 품질 상태에는 A~D 등급이 필요합니다.");
+  const workflowRevision = Number(state.adminRegionInsightRecord?.workflowRevision);
+  return {
+    ...(Number.isSafeInteger(workflowRevision) && workflowRevision >= 0
+      ? { expectedWorkflowRevision: workflowRevision }
+      : {}),
+    expectedDraftHash: base.draftHash || "",
+    locationAttractiveness: {
+      ...base.locationAttractiveness,
+      value: optionalRegionInsightNumber(form.elements.attractivenessValue.value)
+    },
+    dataQuality: {
+      ...base.dataQuality,
+      status,
+      score: qualityScore,
+      grade: qualityGrade,
+      coverage: {
+        ...(base.dataQuality.coverage || {}),
+        numerator,
+        denominator,
+        ratio: numerator !== null && denominator !== null && denominator > 0 ? numerator / denominator : null
+      }
+    }
+  };
+}
+
+function showAdminRegionInsightInlineError(message = "") {
+  if (!els.reviewPublishBody) return;
+  let alert = els.reviewPublishBody.querySelector(".region-insight-warning.error");
+  if (!alert) {
+    alert = document.createElement("div");
+    alert.className = "region-insight-warning error";
+    alert.setAttribute("role", "alert");
+    els.reviewPublishBody.querySelector(".region-review-workbench")?.prepend(alert);
+  }
+  if (alert) alert.textContent = message || "지역 인사이트 작업에 실패했습니다.";
+}
+
+function confirmAdminRegionInsightNavigation({ discard = true } = {}) {
+  if (!state.adminRegionInsightDirty) return true;
+  if (!window.confirm("저장하지 않은 지역 인사이트 입력이 있습니다. 이동할까요?")) return false;
+  if (discard) {
+    state.adminRegionInsightDirty = false;
+    state.adminRegionInsightDraftDirty = false;
+  }
+  return true;
+}
+
+async function mutateAdminRegionInsight(action, payload = {}) {
+  if (blockAdminUserViewMutation("지역 인사이트 검수·발행")) return;
+  const regionKey = matchedRegionContextKey(state.data?.regionContext);
+  if (!regionKey || state.adminRegionInsightSaving) return;
+  const memoInput = els.reviewPublishBody?.querySelector("[data-region-insight-admin-memo]");
+  const versionInput = els.reviewPublishBody?.querySelector("[data-region-insight-version]");
+  const auxiliaryDraft = {
+    memo: memoInput?.value || "",
+    memoDirty: Boolean(memoInput && memoInput.value !== memoInput.defaultValue),
+    version: versionInput?.value || "",
+    versionDirty: Boolean(versionInput && versionInput.value !== versionInput.defaultValue)
+  };
+  const requestId = ++state.adminRegionInsightRequestId;
+  const lockedControls = [...(els.reviewPublishBody?.querySelectorAll("button, input, select, textarea") || [])]
+    .map((element) => ({ element, disabled: element.disabled }));
+  state.adminRegionInsightSaving = true;
+  state.adminRegionInsightError = "";
+  state.adminRegionInsightMessage = "";
+  els.reviewPublishBody?.querySelector(".region-insight-warning.error")?.remove();
+  lockedControls.forEach(({ element }) => {
+    element.disabled = true;
+  });
+  let completed = false;
+  try {
+    const result = await fetchJson(`/api/region-insights/${encodeURIComponent(regionKey)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (
+      requestId !== state.adminRegionInsightRequestId
+      || matchedRegionContextKey(state.data?.regionContext) !== regionKey
+    ) return;
+    if (matchedRegionContextKey(result.regionContext) !== regionKey) {
+      throw new Error("지역 검수 응답의 canonical regionKey가 일치하지 않습니다.");
+    }
+    state.adminRegionInsightRecord = result.regionInsight || null;
+    state.adminRegionInsightLoadedRegionKey = regionKey;
+    if (state.data) state.data.regionInsight = result.regionInsight?.state || null;
+    state.adminRegionInsightMessage = action === "draft"
+      ? "초안을 저장했습니다. 검수 상태와 발행 상태는 별도로 유지됩니다."
+      : action === "review"
+        ? "검수 상태를 저장했습니다."
+        : "불변 발행 스냅샷을 생성했습니다.";
+    state.adminRegionInsightDirty = false;
+    state.adminRegionInsightDraftDirty = false;
+    completed = true;
+  } catch (error) {
+    if (requestId !== state.adminRegionInsightRequestId) return;
+    const workflowConflict = error.status === 409 && [
+      "REGION_WORKFLOW_REVISION_REQUIRED",
+      "REGION_WORKFLOW_REVISION_CONFLICT"
+    ].includes(error.code);
+    state.adminRegionInsightError = workflowConflict
+      ? `${error.message || "지역 인사이트 상태가 변경되었습니다."} 입력한 초안·메모·버전은 보존했습니다. 최신 데이터를 다시 확인한 뒤 재시도하세요.`
+      : error.message || "지역 인사이트 작업에 실패했습니다.";
+    lockedControls.forEach(({ element, disabled }) => {
+      if (element.isConnected) element.disabled = disabled;
+    });
+    showAdminRegionInsightInlineError(state.adminRegionInsightError);
+  } finally {
+    if (requestId !== state.adminRegionInsightRequestId) return;
+    state.adminRegionInsightSaving = false;
+    if (completed) {
+      renderAdminRegionInsightWorkbench();
+      if (typeof renderRegionAnalysisContext === "function") renderRegionAnalysisContext();
+      const nextMemo = els.reviewPublishBody?.querySelector("[data-region-insight-admin-memo]");
+      const nextVersion = els.reviewPublishBody?.querySelector("[data-region-insight-version]");
+      if (action === "draft" && nextMemo) nextMemo.value = auxiliaryDraft.memo;
+      if (action !== "publish" && nextVersion) nextVersion.value = auxiliaryDraft.version;
+      state.adminRegionInsightDirty = action === "draft"
+        ? auxiliaryDraft.memoDirty || auxiliaryDraft.versionDirty
+        : action === "review"
+          ? auxiliaryDraft.versionDirty
+          : false;
+      window.requestAnimationFrame(() => els.reviewPublishBody?.querySelector(".region-insight-feedback")?.focus());
+    }
+  }
+}
+
+async function saveAdminRegionInsightDraft() {
+  try {
+    await mutateAdminRegionInsight("draft", regionInsightDraftPayloadFromForm());
+  } catch (error) {
+    state.adminRegionInsightError = error.message;
+    showAdminRegionInsightInlineError(state.adminRegionInsightError);
+  }
+}
+
+async function reviewAdminRegionInsight(status = "reviewed") {
+  if (state.adminRegionInsightDraftDirty) {
+    showAdminRegionInsightInlineError("입지 매력도·품질 초안을 먼저 저장한 뒤 검수하세요.");
+    return;
+  }
+  const current = adminRegionInsightCurrentState();
+  if (!current?.draftHash) return;
+  const workflowRevision = Number(state.adminRegionInsightRecord?.workflowRevision);
+  const memo = els.reviewPublishBody?.querySelector("[data-region-insight-admin-memo]")?.value || "";
+  await mutateAdminRegionInsight("review", {
+    status,
+    expectedWorkflowRevision: workflowRevision,
+    expectedDraftHash: current.draftHash,
+    adminMemo: memo
+  });
+}
+
+async function publishAdminRegionInsight() {
+  if (state.adminRegionInsightDraftDirty) {
+    showAdminRegionInsightInlineError("입지 매력도·품질 초안을 먼저 저장하고 검수 완료한 뒤 발행하세요.");
+    return;
+  }
+  const current = adminRegionInsightCurrentState();
+  const workflowRevision = Number(state.adminRegionInsightRecord?.workflowRevision);
+  const version = els.reviewPublishBody?.querySelector("[data-region-insight-version]")?.value?.trim() || "";
+  const memo = els.reviewPublishBody?.querySelector("[data-region-insight-admin-memo]")?.value || "";
+  if (!current?.draftHash || !version) return;
+  if (!window.confirm(`${state.data?.regionContext?.displayLabel || current.regionKey} 지역 인사이트를 ${version} 버전으로 발행할까요?`)) return;
+  await mutateAdminRegionInsight("publish", {
+    version,
+    expectedWorkflowRevision: workflowRevision,
+    expectedDraftHash: current.draftHash,
+    adminMemo: memo
+  });
+}
+
 function renderB2BEmptyPanels() {
   if (isAdminRole()) return;
   const emptyMessages = {
@@ -30564,6 +32074,7 @@ function renderB2BEmptyPanels() {
     rank: "검색 후 업체 순위를 표시합니다.",
     map: "검색 후 지역 지도와 경쟁권을 표시합니다.",
     demand: "검색 후 수요 데이터를 표시합니다.",
+    regionInsight: "검수된 지역 인사이트가 아직 없습니다.",
     account: "가입 정보와 이용 정책을 확인합니다."
   };
   const activeMessage = emptyMessages[state.activeTab] || emptyMessages.report;
@@ -30605,12 +32116,14 @@ function renderB2BEmptyPanels() {
   if (els.b2bMapStatus) els.b2bMapStatus.hidden = true;
   if (els.demandState) els.demandState.textContent = "검색 대기";
   if (els.demandDashboard) els.demandDashboard.innerHTML = `<div class="empty">${emptyMessages.demand}</div>`;
+  renderB2BRegionInsight();
   renderB2BAccountWorkspace();
 }
 
 function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
+  const regionAnalysisActive = regionAnalysisTabIds().includes(state.activeTab);
   if (isAdminRole() && state.activeTab === "admin") {
     const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "database";
     els.pageTitle.textContent = "관리자 콘솔";
@@ -30630,10 +32143,14 @@ function renderHeader() {
     document.title = `${APP_BRAND_NAME} · 계정`;
     return;
   }
-  els.pageTitle.textContent = tabLabel(state.activeTab);
+  els.pageTitle.textContent = regionAnalysisActive ? "지역 분석" : tabLabel(state.activeTab);
   if (els.pageSubtitle) els.pageSubtitle.hidden = false;
   if (state.activeTab === "dictionary") {
-    els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
+    els.pageSubtitle.textContent = "입지 인사이트 · 저장된 지역 카드 · 8대 지수 · 클러스터 판정";
+  } else if (state.activeTab === "regionInsight") {
+    els.pageSubtitle.textContent = `${title} · 발행된 지역 인사이트`;
+  } else if (state.activeTab === "reviewPublish") {
+    els.pageSubtitle.textContent = "입지 인사이트 · 관리자 검수 · 명시적 발행";
   } else if (state.activeTab === "decisionQueue") {
     els.pageSubtitle.textContent = `${title} · 컨택 전 사람 확인 · OTA/수량/공백/보정 재검토`;
   } else if (state.activeTab === "historyOps") {
@@ -30653,7 +32170,9 @@ function renderHeader() {
   } else {
     els.pageSubtitle.textContent = `${title} · ${dateRangeLabel(run)}`;
   }
-  document.title = `${APP_BRAND_NAME} · ${title}`;
+  document.title = regionAnalysisActive
+    ? `${APP_BRAND_NAME} · 지역 분석 · ${tabLabel(state.activeTab)}`
+    : `${APP_BRAND_NAME} · ${title}`;
 }
 
 function renderAll() {
@@ -30676,6 +32195,7 @@ function renderAll() {
   if (roleAllowsTab("decisionQueue")) renderDecisionQueue();
   if (roleAllowsTab("map")) renderMap();
   if (roleAllowsTab("demand")) renderDemand();
+  if (roleAllowsTab("regionInsight")) renderB2BRegionInsight();
   if (roleAllowsTab("historyOps")) renderHistoryOps();
   if (isAdminRole()) {
     renderCompanyMasterPanel();
@@ -30683,20 +32203,33 @@ function renderAll() {
     syncYeogiManualInterface();
   }
   if (roleAllowsTab("dictionary")) renderLocationDictionary();
+  if (isAdminRole()) renderAdminRegionInsightWorkbench();
 }
 
 function syncAppHistoryState(push = false) {
   if (!window.history?.replaceState) return;
+  const context = regionAnalysisSharedContext(state.data || {}, {
+    activeRunId: state.activeRunId,
+    adminRegionInsightRecord: isAdminRole() ? state.adminRegionInsightRecord : null
+  });
   const nextState = {
     app: "lodging-datalab",
     role: state.session?.role || "",
     tab: state.activeTab || firstRoleTab(),
+    activeRegionAnalysisTab: regionAnalysisTabIds().includes(state.activeTab)
+      ? state.activeTab
+      : resolveRegionAnalysisReturnTab(state.lastRegionAnalysisTab),
     runId: state.activeRunId || "",
     lastAnalysisTab: resolveAnalysisReturnTab(state.lastAnalysisTab),
+    lastRegionAnalysisTab: resolveRegionAnalysisReturnTab(state.lastRegionAnalysisTab),
+    regionKey: context.regionKey,
+    measurementPeriod: context.measurementPeriod,
+    asOf: context.asOf || "",
+    publicationVersion: context.publicationVersion || "",
     adminPanelSection: isAdminRole() ? state.adminPanelSection : ""
   };
   try {
-    if (push && window.history.pushState && window.history.state?.tab !== nextState.tab) {
+    if (push && window.history.pushState && !sameRegionAnalysisHistoryState(window.history.state || {}, nextState)) {
       window.history.pushState(nextState, "", window.location.href);
       return;
     }
@@ -30708,14 +32241,29 @@ function syncAppHistoryState(push = false) {
 
 function restoreAppHistoryState(historyState = window.history?.state) {
   if (!historyState || historyState.app !== "lodging-datalab") return false;
-  const historyRole = String(historyState.role || "");
-  if (historyRole && historyRole !== currentRole()) return false;
-  state.lastAnalysisTab = resolveAnalysisReturnTab(String(historyState.lastAnalysisTab || state.lastAnalysisTab || "report"));
-  const historyTab = String(historyState.tab || "");
-  if (historyTab && roleAllowsTab(historyTab)) state.activeTab = historyTab;
-  const historyRunId = String(historyState.runId || "").trim();
-  if (isAdminRole() && historyRunId) state.activeRunId = historyRunId;
-  const historyAdminPanel = String(historyState.adminPanelSection || "");
+  const restored = resolveRegionAnalysisHistoryState({
+    ...historyState,
+    lastRegionAnalysisTab: historyState.lastRegionAnalysisTab,
+    regionKey: historyState.regionKey
+  }, {
+    currentRole: currentRole(),
+    allowedTabs: roleTabs(),
+    allowedRegionTabs: regionAnalysisTabIds(),
+    canonicalRegionKey: matchedRegionContextKey(state.data?.regionContext),
+    currentRunId: state.activeRunId || state.data?.run?.id || ""
+  });
+  state.lastAnalysisTab = resolveAnalysisReturnTab(String(restored.lastAnalysisTab || state.lastAnalysisTab || "report"));
+  state.lastRegionAnalysisTab = resolveRegionAnalysisReturnTab(String(restored.lastRegionAnalysisTab || state.lastRegionAnalysisTab || "map"));
+  state.activeRegionAnalysisTab = resolveRegionAnalysisReturnTab(String(restored.activeRegionAnalysisTab || restored.lastRegionAnalysisTab || "map"));
+  state.regionAnalysisRegionKey = normalizeRegionAnalysisRegionKey(restored.regionKey);
+  state.regionAnalysisMeasurementPeriod = restored.measurementPeriod || null;
+  state.regionAnalysisAsOf = String(restored.asOf || "");
+  state.regionAnalysisPublicationVersion = String(restored.publicationVersion || "");
+  const restoredTab = resolveHistoryTabForRole(String(restored.tab || ""));
+  if (restoredTab) state.activeTab = restoredTab;
+  const historyRunId = String(restored.runId || "").trim();
+  if (historyRunId) state.activeRunId = historyRunId;
+  const historyAdminPanel = String(restored.adminPanelSection || "");
   if (isAdminRole() && Object.prototype.hasOwnProperty.call(ADMIN_PANEL_SECTIONS, historyAdminPanel)) {
     state.adminPanelSection = historyAdminPanel;
   }
@@ -30723,22 +32271,91 @@ function restoreAppHistoryState(historyState = window.history?.state) {
 }
 
 async function restoreAppHistoryNavigation(historyState = {}) {
-  const previousRunId = state.activeRunId;
+  const previousNavigation = {
+    activeRunId: state.activeRunId,
+    activeTab: state.activeTab,
+    lastAnalysisTab: state.lastAnalysisTab,
+    lastRegionAnalysisTab: state.lastRegionAnalysisTab,
+    activeRegionAnalysisTab: state.activeRegionAnalysisTab,
+    regionAnalysisRegionKey: state.regionAnalysisRegionKey,
+    regionAnalysisMeasurementPeriod: state.regionAnalysisMeasurementPeriod,
+    regionAnalysisAsOf: state.regionAnalysisAsOf,
+    regionAnalysisPublicationVersion: state.regionAnalysisPublicationVersion,
+    adminPanelSection: state.adminPanelSection
+  };
   if (!restoreAppHistoryState(historyState)) return false;
-  const targetTab = state.activeTab;
-  const restoredRunId = state.activeRunId;
-  if (isAdminRole() && restoredRunId && restoredRunId !== previousRunId) {
-    if (state.runs.some((run) => run.id === restoredRunId)) await loadRun(restoredRunId);
-    else state.activeRunId = previousRunId;
+  const targetNavigation = {
+    activeRunId: state.activeRunId,
+    activeTab: state.activeTab,
+    lastAnalysisTab: state.lastAnalysisTab,
+    lastRegionAnalysisTab: state.lastRegionAnalysisTab,
+    activeRegionAnalysisTab: state.activeRegionAnalysisTab,
+    regionAnalysisRegionKey: state.regionAnalysisRegionKey,
+    regionAnalysisMeasurementPeriod: state.regionAnalysisMeasurementPeriod,
+    regionAnalysisAsOf: state.regionAnalysisAsOf,
+    regionAnalysisPublicationVersion: state.regionAnalysisPublicationVersion,
+    adminPanelSection: state.adminPanelSection
+  };
+  Object.assign(state, previousNavigation);
+  const targetTab = targetNavigation.activeTab;
+  const restoredRunId = targetNavigation.activeRunId;
+  if (restoredRunId && restoredRunId !== previousNavigation.activeRunId) {
+    if (state.adminSettingsDirty && state.activeTab === "admin" && targetTab !== "admin" && !confirmAdminSettingsNavigation("leave")) {
+      syncAppHistoryState(false);
+      return false;
+    }
+    if (!isAdminRole() || state.runs.some((run) => run.id === restoredRunId)) {
+      let restored;
+      try {
+        restored = await loadRun(restoredRunId);
+      } catch (error) {
+        Object.assign(state, previousNavigation);
+        if (els.runSelect) els.runSelect.value = previousNavigation.activeRunId || "";
+        syncAppHistoryState(false);
+        throw error;
+      }
+      if (restored === false) {
+        Object.assign(state, previousNavigation);
+        if (els.runSelect) els.runSelect.value = previousNavigation.activeRunId || "";
+        syncAppHistoryState(false);
+        return false;
+      }
+    } else {
+      Object.assign(state, previousNavigation);
+      if (els.runSelect) els.runSelect.value = previousNavigation.activeRunId || "";
+      syncAppHistoryState(false);
+      return false;
+    }
   }
-  setActiveTab(targetTab, { fromHistory: true });
+  const loadedContext = regionAnalysisSharedContext(state.data || {}, {
+    activeRunId: state.activeRunId,
+    adminRegionInsightRecord: isAdminRole() ? state.adminRegionInsightRecord : null
+  });
+  state.lastAnalysisTab = targetNavigation.lastAnalysisTab;
+  state.lastRegionAnalysisTab = targetNavigation.lastRegionAnalysisTab;
+  state.activeRegionAnalysisTab = targetNavigation.activeRegionAnalysisTab;
+  state.regionAnalysisRegionKey = loadedContext.regionKey;
+  state.regionAnalysisMeasurementPeriod = loadedContext.measurementPeriod;
+  state.regionAnalysisAsOf = loadedContext.asOf || "";
+  state.regionAnalysisPublicationVersion = loadedContext.publicationVersion || "";
+  state.adminPanelSection = targetNavigation.adminPanelSection;
+  if (!setActiveTab(targetTab, { fromHistory: true })) {
+    Object.assign(state, previousNavigation);
+    if (els.runSelect) els.runSelect.value = previousNavigation.activeRunId || "";
+    syncAppHistoryState(false);
+    return false;
+  }
   return true;
 }
 
 function setActiveTab(tab, options = {}) {
-  if (state.adminSettingsDirty && state.activeTab === "admin" && tab !== "admin" && !confirmAdminSettingsNavigation("leave")) return false;
-  state.activeTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  const nextTab = roleAllowsTab(tab) ? tab : firstRoleTab();
+  if (state.adminRegionInsightDirty && state.activeTab === "reviewPublish" && nextTab === "reviewPublish") return true;
+  if (state.adminSettingsDirty && state.activeTab === "admin" && nextTab !== "admin" && !confirmAdminSettingsNavigation("leave")) return false;
+  if (state.activeTab === "reviewPublish" && nextTab !== "reviewPublish" && !confirmAdminRegionInsightNavigation()) return false;
+  state.activeTab = nextTab;
   rememberAnalysisTab(state.activeTab);
+  rememberRegionAnalysisTab(state.activeTab);
   if (options.navigationKey) state.primaryNavKey = options.navigationKey;
   else state.primaryNavKey = "";
   if (isAdminRole()) {
@@ -30760,6 +32377,7 @@ function setActiveTab(tab, options = {}) {
   if (!state.data) {
     renderB2BEmptyPanels();
     if (state.activeTab === "dictionary") renderLocationDictionary();
+    if (state.activeTab === "reviewPublish") renderAdminRegionInsightWorkbench();
     syncAdminUserViewReadOnlyControls();
     return true;
   }
@@ -30769,6 +32387,7 @@ function setActiveTab(tab, options = {}) {
   if (state.activeTab === "decisionQueue") renderDecisionQueue();
   if (state.activeTab === "map") renderMap();
   if (state.activeTab === "demand") renderDemand();
+  if (state.activeTab === "regionInsight") renderB2BRegionInsight();
   if (state.activeTab === "historyOps") renderHistoryOps();
   if (state.activeTab === "admin" && isAdminRole()) {
     renderCompanyMasterPanel();
@@ -30776,6 +32395,10 @@ function setActiveTab(tab, options = {}) {
     syncYeogiManualInterface();
   }
   if (state.activeTab === "dictionary") renderLocationDictionary();
+  if (state.activeTab === "reviewPublish") {
+    renderAdminRegionInsightWorkbench();
+    loadAdminRegionInsight().catch(() => {});
+  }
   syncAdminUserViewReadOnlyControls();
   return true;
 }
@@ -33797,15 +35420,60 @@ async function loadRuns(selectLatest = false) {
 }
 
 async function loadRun(runId) {
-  if (!runId) return;
+  if (!runId) return false;
+  const loadedRunId = String(state.data?.run?.id || "");
+  const dirtySnapshot = {
+    dirty: state.adminRegionInsightDirty,
+    revision: state.adminRegionInsightDirtyRevision
+  };
+  if (loadedRunId && state.adminRegionInsightDirty && !confirmAdminRegionInsightNavigation({ discard: false })) {
+    state.activeRunId = loadedRunId;
+    if (els.runSelect) els.runSelect.value = loadedRunId;
+    return false;
+  }
+  const requestId = ++state.runRequestId;
   setStatus("데이터 로딩");
   const runEndpoint = shouldLoadRunReadOnly() ? "/api/member/runs/" : "/api/runs/";
-  const data = await fetchJson(`${runEndpoint}${encodeURIComponent(runId)}`);
+  let data;
+  try {
+    data = await fetchJson(`${runEndpoint}${encodeURIComponent(runId)}`);
+  } catch (error) {
+    if (requestId === state.runRequestId) {
+      state.activeRunId = loadedRunId || state.activeRunId;
+      if (els.runSelect && loadedRunId) els.runSelect.value = loadedRunId;
+    }
+    throw error;
+  }
+  if (requestId !== state.runRequestId) return null;
+  if (state.adminRegionInsightDirty && state.adminRegionInsightDirtyRevision !== dirtySnapshot.revision) {
+    state.activeRunId = loadedRunId || state.activeRunId;
+    if (els.runSelect && loadedRunId) els.runSelect.value = loadedRunId;
+    setStatus("이동 취소");
+    return false;
+  }
+  const previousRegionKey = matchedRegionContextKey(state.data?.regionContext);
+  const nextRegionKey = matchedRegionContextKey(data.regionContext);
   state.b2bMapTransientLocations = {};
   state.b2bMapGeocodingState = "idle";
   state.b2bMapGeocodingMessage = "";
   state.data = data;
   state.activeRunId = runId;
+  if (dirtySnapshot.dirty) {
+    state.adminRegionInsightDirty = false;
+    state.adminRegionInsightDraftDirty = false;
+  }
+  setRegionAnalysisRegionKey(nextRegionKey);
+  if (previousRegionKey !== nextRegionKey) {
+    state.adminRegionInsightRequestId += 1;
+    state.adminRegionInsightRecord = null;
+    state.adminRegionInsightLoadedRegionKey = "";
+    state.adminRegionInsightLoading = false;
+    state.adminRegionInsightSaving = false;
+    state.adminRegionInsightError = "";
+    state.adminRegionInsightMessage = "";
+    state.adminRegionInsightDirty = false;
+    state.adminRegionInsightDraftDirty = false;
+  }
   syncAppHistoryState(false);
   if (isAdminRole()) {
     await loadHistoryOps();
@@ -33821,6 +35489,7 @@ async function loadRun(runId) {
     state.accountDeleteAdmin = null;
     state.securityHardeningAdmin = null;
   }
+  if (requestId !== state.runRequestId) return null;
   if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
   const run = data.run || {};
@@ -33842,29 +35511,36 @@ async function loadRun(runId) {
   renderAll();
   if (isAdminRole() && adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
   setStatus("준비");
+  return true;
 }
 
-async function loadB2BHistoryRun(runId) {
-  if (!runId || isAdminRole()) return;
+async function loadB2BHistoryRun(runId, { preserveTab = false } = {}) {
+  if (!runId || isAdminRole()) return false;
+  const requestId = ++state.runRequestId;
   setStatus("검색 기록 로딩");
   const data = await fetchJson(`/api/member/runs/${encodeURIComponent(runId)}`);
+  if (requestId !== state.runRequestId) return null;
   state.b2bMapTransientLocations = {};
   state.b2bMapGeocodingState = "idle";
   state.b2bMapGeocodingMessage = "";
   state.data = data;
   state.activeRunId = runId;
+  setRegionAnalysisRegionKey(matchedRegionContextKey(data.regionContext));
   state.runs = data.run ? [{ ...data.run, id: runId }] : [];
   state.b2bSearchQuery = data.run?.keyword || state.b2bSearchQuery || "";
   state.b2bSearchRange = allowedB2BSearchRange(String(data.run?.detailRankRanges || "").includes("20") ? "1-20" : "1-10");
   if (els.b2bSearchInput && document.activeElement !== els.b2bSearchInput) els.b2bSearchInput.value = state.b2bSearchQuery;
   if (els.b2bSearchRangeInput) els.b2bSearchRangeInput.value = state.b2bSearchRange;
   state.b2bHistoryExpanded = false;
-  state.activeTab = "report";
+  if (!preserveTab) state.activeTab = "report";
+  syncAppHistoryState(false);
   renderAll();
+  if (requestId !== state.runRequestId) return null;
   window.requestAnimationFrame(() => {
-    document.querySelector(".b2b-report-first")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.querySelector(preserveTab ? ".tab-panel.active" : ".b2b-report-first")?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   setStatus("준비");
+  return true;
 }
 
 function syncYeogiManualInterface() {
@@ -34387,7 +36063,7 @@ function bindAdminDbCompanySelectButtons() {
 
 function bindEvents() {
   window.addEventListener("beforeunload", (event) => {
-    if (!adminDbHasUnsavedCorrection() && !state.adminSettingsDirty) return;
+    if (!adminDbHasUnsavedCorrection() && !state.adminSettingsDirty && !state.adminRegionInsightDirty) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -34436,6 +36112,32 @@ function bindEvents() {
     activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
   }, true);
   document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-region-insight-refresh]")) {
+      refreshAdminRegionInsightPreservingForm().catch((error) => {
+        state.adminRegionInsightError = error.message || "최신 지역 인사이트 상태를 불러오지 못했습니다.";
+        showAdminRegionInsightInlineError(state.adminRegionInsightError);
+      });
+      return;
+    }
+    if (event.target.closest("[data-region-insight-save-draft]")) {
+      saveAdminRegionInsightDraft().catch(() => {});
+      return;
+    }
+    const regionInsightReview = event.target.closest("[data-region-insight-review]");
+    if (regionInsightReview) {
+      reviewAdminRegionInsight(regionInsightReview.dataset.regionInsightReview || "reviewed").catch(() => {});
+      return;
+    }
+    if (event.target.closest("[data-region-insight-publish]")) {
+      publishAdminRegionInsight().catch(() => {});
+      return;
+    }
+    const regionAnalysisTab = event.target.closest("[data-region-analysis-tab]");
+    if (regionAnalysisTab) {
+      event.preventDefault();
+      activateRegionAnalysisTab(regionAnalysisTab.dataset.regionAnalysisTab || "");
+      return;
+    }
     const appNavigation = event.target.closest("[data-app-nav-key]");
     if (appNavigation) {
       event.preventDefault();
@@ -35269,6 +36971,14 @@ function bindEvents() {
     }
   });
   document.addEventListener("input", (event) => {
+    if (event.target.closest("[data-region-insight-draft-form] input, [data-region-insight-draft-form] select")) {
+      state.adminRegionInsightDirty = true;
+      state.adminRegionInsightDraftDirty = true;
+      state.adminRegionInsightDirtyRevision += 1;
+    } else if (event.target.closest("[data-region-insight-admin-memo], [data-region-insight-version]")) {
+      state.adminRegionInsightDirty = true;
+      state.adminRegionInsightDirtyRevision += 1;
+    }
     const companyManualField = event.target.closest("[data-company-manual-form] input, [data-company-manual-form] select, [data-company-manual-form] textarea");
     if (companyManualField) markCompanyManualFormDirty(companyManualField.closest("[data-company-manual-form]"));
     const trafficKeyField = event.target.closest("[data-admin-settings-form] input");
@@ -35588,6 +37298,7 @@ function bindEvents() {
   });
   document.addEventListener("keydown", (event) => {
     if (handleAccessibleOverlayKeydown(event)) return;
+    if (handleRegionAnalysisTabKeydown(event)) return;
     const sheetTab = event.target.closest?.(".sheet-tabs [role='tab']");
     if (sheetTab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       const tabs = Array.from(document.querySelectorAll(".sheet-tabs [role='tab']"));

@@ -119,7 +119,7 @@ assert.match(openingTagById("b2bAccountWorkspace"), /class="[^"]*tab-panel[^"]*"
 assert.match(openingTagById("b2bAccountWorkspace"), /data-panel="account"/);
 assert.match(openingTagById("b2bAccountWorkspace"), /aria-labelledby="b2bAccountWorkspaceTitle"/);
 assert.match(openingTagById("b2bMapStatus"), /role="status"[^>]*aria-live="polite"/);
-assert.match(app, /b2b:\s*\{[\s\S]*?allowedTabs:\s*\["report",\s*"rank",\s*"map",\s*"demand",\s*"account"\]/);
+assert.match(app, /b2b:\s*\{[\s\S]*?allowedTabs:\s*\["report",\s*"rank",\s*"map",\s*"demand",\s*"regionInsight",\s*"account"\]/);
 assert.match(functionBlock("renderAll"), /renderB2BAccountWorkspace\(\)/);
 assert.match(functionBlock("setActiveTab"), /state\.activeTab === "account"[\s\S]*renderB2BAccountWorkspace\(\)/);
 

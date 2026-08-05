@@ -4,6 +4,10 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
+global.fetch = async (url) => {
+  throw new Error(`Network requests are forbidden in the static UI release gate: ${url}`);
+};
+
 const ROOT = path.resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(path.join(ROOT, relative), "utf8");
 const pkg = JSON.parse(read("package.json"));
@@ -27,6 +31,8 @@ const requiredScripts = {
   "test:b2b-detail-sheet": "node scripts/test_b2b_detail_sheet_ui_contract.cjs",
   "test:report-semantic-cards": "node scripts/test_report_semantic_cards_ui_contract.cjs",
   "test:public-auth-policy": "node scripts/test_public_auth_policy_ui_contract.cjs",
+  "test:region-analysis-navigation": "node scripts/test_region_analysis_navigation_ui_contract.cjs",
+  "test:region-analysis-publication-ui": "node scripts/test_region_analysis_publication_ui_contract.cjs",
   "test:ui-release-static": "node scripts/test_ui_release_gate.cjs",
   "test:search-ui": "node scripts/test_lodging_search_ui_contract.cjs",
   "test:preview-boundary": "node scripts/test_preview_boundary.cjs",
@@ -36,12 +42,15 @@ for (const [name, command] of Object.entries(requiredScripts)) {
   assert.equal(pkg.scripts[name], command, `${name} command must remain explicit`);
   if (name === "test:surface") {
     assert.ok(pkg.scripts.check.includes("node scripts/test_surface_contrast.cjs"), "npm check must execute the surface contrast gate");
+  } else if (["test:region-analysis-navigation", "test:region-analysis-publication-ui"].includes(name)) {
+    assert.ok(pkg.scripts["test:region-analysis-fixtures"].includes(`npm run ${name}`), `${name} must be included in the region analysis fixture aggregate`);
+    assert.ok(pkg.scripts.test.includes("npm run test:region-analysis-fixtures"), "npm test must include the region analysis fixture aggregate");
   } else {
     assert.ok(pkg.scripts.test.includes(`npm run ${name}`), `npm test must include ${name}`);
   }
 }
 
-for (const testFile of ["test_crawl_eta_model.cjs", "test_b2b_detail_sheet_ui_contract.cjs", "test_report_semantic_cards_ui_contract.cjs", "test_public_auth_policy_ui_contract.cjs", "test_ui_release_gate.cjs"]) {
+for (const testFile of ["test_crawl_eta_model.cjs", "test_b2b_detail_sheet_ui_contract.cjs", "test_report_semantic_cards_ui_contract.cjs", "test_public_auth_policy_ui_contract.cjs", "test_region_analysis_publication_ui_contract.cjs", "test_ui_release_gate.cjs"]) {
   assert.ok(pkg.scripts.check.includes(`node --check scripts/${testFile}`), `check must parse ${testFile}`);
 }
 
@@ -49,12 +58,12 @@ for (const asset of ["/login-theme.js", "/public-ui.css", "/manifest.webmanifest
   assert.match(server, new RegExp(`"${asset.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`), `public asset missing: ${asset}`);
 }
 
-const expectedAssetVersion = "v2-20260804-search-period-v41";
+const expectedAssetVersion = "v2-20260805-region-analysis-v42";
 const shellAssetVersions = [...indexHtml.matchAll(/(?:styles\.css|app\.js)\?v=([^"']+)/g)].map((match) => match[1]);
 assert.deepEqual(shellAssetVersions, [expectedAssetVersion, expectedAssetVersion], "index CSS and JS must share the current release cache version");
-assert.match(server, /const UI_ASSET_VERSION = "v2-20260804-search-period-v41";/, "server must enforce the current UI asset version");
-assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260804-search-period-v41";/, "service worker must share the current UI asset version");
-assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260804-detail-sheet-v40";/, "service worker cache must rotate with the UI release");
+assert.match(server, /const UI_ASSET_VERSION = "v2-20260805-region-analysis-v42";/, "server must enforce the current UI asset version");
+assert.match(serviceWorker, /const UI_ASSET_VERSION = "v2-20260805-region-analysis-v42";/, "service worker must share the current UI asset version");
+assert.match(serviceWorker, /const CACHE_VERSION = "lodging-datalab-pwa-v20260805-region-analysis-v42";/, "service worker cache must rotate with the UI release");
 assert.match(serviceWorker, /`\/styles\.css\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app stylesheet");
 assert.match(serviceWorker, /`\/app\.js\?v=\$\{UI_ASSET_VERSION\}`/, "service worker must precache the versioned app script");
 assert.match(serviceWorker, /const SENSITIVE_NAVIGATION_PATHS = new Set\(/, "service worker must declare sensitive navigation routes");
