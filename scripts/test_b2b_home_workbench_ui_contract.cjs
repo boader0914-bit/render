@@ -85,7 +85,7 @@ for (const id of requiredIds) {
 }
 assert.match(html, /id="b2bSearchStatus"[^>]*role="status"[^>]*aria-live="polite"/);
 assert.ok(html.indexOf('id="b2bAccountPanel"') < html.indexOf('id="b2bSearchForm"'), "business context must precede search actions in DOM order");
-assert.match(app, /b2b:\s*\{[\s\S]*?allowedTabs:\s*\["report",\s*"rank",\s*"map",\s*"demand",\s*"regionInsight",\s*"account"\]/);
+assert.match(app, /b2b:\s*\{[\s\S]*?allowedTabs:\s*\["report",\s*"rank",\s*"map",\s*"demand",\s*"account"\]/);
 
 const preservedHooks = [
   "data-b2b-onboarding-focus",

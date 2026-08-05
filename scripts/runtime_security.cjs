@@ -17,6 +17,7 @@ const B2B_PUBLIC_TOP_LEVEL_FIELDS = new Set([
   "availability",
   "platform",
   "companyPlatforms",
+  "b2bRegionReviewSummary",
   "items"
 ]);
 

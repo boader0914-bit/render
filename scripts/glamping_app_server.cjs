@@ -59,16 +59,7 @@ const {
   classifyCollectorProcessFailure,
   publicErrorPayload
 } = require("./crawl_failure_contract.cjs");
-const { createLocationRegionMatcher } = require("./location_region_matcher.cjs");
-const {
-  createRegionInsightRuntime,
-  projectB2BRegionInsight,
-  publicRegionContext,
-  resolveRunRegionContext
-} = require("./region_insight_runtime.cjs");
 const TOURISM_REGION_MAP = require("../web/data/tourism_region_map.json");
-const LOCATION_REGION_REGISTRY = require("../web/data/location_region_registry.json");
-const matchCanonicalLocationRegion = createLocationRegionMatcher(LOCATION_REGION_REGISTRY);
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_DIR = path.join(ROOT, "web");
@@ -146,14 +137,8 @@ const COMPANY_MASTER_DIR = path.join(DATA_DIR, "company_master");
 const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
-const REGION_INSIGHT_STORE_FILE = path.join(DATA_DIR, "region_insights", "regions.json");
-const regionInsightRuntime = createRegionInsightRuntime({
-  filePath: REGION_INSIGHT_STORE_FILE,
-  registry: LOCATION_REGION_REGISTRY,
-  matcher: matchCanonicalLocationRegion
-});
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260805-region-analysis-v42";
+const UI_ASSET_VERSION = "v2-20260804-search-period-v41";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -1707,12 +1692,6 @@ function sanitizeLocationRequestNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function sanitizeLocationRequestNullableNumber(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
 function sanitizeLocationRequestEvidence(value = {}) {
   const sampleCompanies = Array.isArray(value.sampleCompanies)
     ? value.sampleCompanies.map((item) => sanitizeLocationRequestText(item, 80)).filter(Boolean).slice(0, 8)
@@ -1757,56 +1736,19 @@ function publicLocationBaseInfo(region = null, fallback = {}) {
 }
 
 function publicTourismDraft(snapshot = {}) {
-  const sources = Object.fromEntries(Object.entries(snapshot.sources || {}).map(([key, source]) => {
-    const observation = source.collectionObservation || {};
-    const quality = source.quality || {};
-    return [key, {
-      sourceKey: sanitizeLocationRequestText(source.sourceKey || observation.sourceKey, 120),
-      label: sanitizeLocationRequestText(source.label, 120),
-      provider: sanitizeLocationRequestText(source.provider || observation.provider, 120),
-      datasetId: sanitizeLocationRequestText(source.datasetId || observation.datasetId, 160),
-      operation: sanitizeLocationRequestText(observation.operation, 120),
-      referenceUrl: sanitizeLocationRequestText(source.referenceUrl || observation.sourceUrl, 240),
-      status: sanitizeLocationRequestText(quality.status || observation.status || source.status || source.configStatus, 40),
-      reason: sanitizeLocationRequestText(source.reason, 120),
-      observedFrom: sanitizeLocationRequestText(observation.observedFrom, 80),
-      observedTo: sanitizeLocationRequestText(observation.observedTo, 80),
-      fetchedAt: sanitizeLocationRequestText(observation.fetchedAt, 80),
-      rowCount: Array.isArray(source.rows) ? source.rows.length : 0,
-      sampleN: sanitizeLocationRequestNullableNumber(observation.sample?.n),
-      coverage: {
-        numerator: sanitizeLocationRequestNullableNumber(observation.coverage?.numerator),
-        denominator: sanitizeLocationRequestNullableNumber(observation.coverage?.denominator),
-        ratio: sanitizeLocationRequestNullableNumber(observation.coverage?.ratio),
-        note: sanitizeLocationRequestText(observation.coverage?.note, 240)
-      },
-      confidence: {
-        grade: sanitizeLocationRequestText(observation.confidence?.grade || quality.confidenceGrade, 8),
-        score: sanitizeLocationRequestNullableNumber(observation.confidence?.score ?? quality.confidenceScore),
-        penaltyReasons: (observation.confidence?.penalties || quality.penaltyReasons || [])
-          .map((item) => sanitizeLocationRequestText(typeof item === "string" ? item : item?.code, 120))
-          .filter(Boolean)
-          .slice(0, 8)
-      }
-    }];
-  }));
+  const sources = Object.fromEntries(Object.entries(snapshot.sources || {}).map(([key, source]) => [key, {
+    label: sanitizeLocationRequestText(source.label, 120),
+    referenceUrl: sanitizeLocationRequestText(source.referenceUrl, 240),
+    status: sanitizeLocationRequestText(source.status || source.configStatus, 40),
+    reason: sanitizeLocationRequestText(source.reason, 120),
+    rowCount: Array.isArray(source.rows) ? source.rows.length : 0
+  }]));
   return {
-    documentType: sanitizeLocationRequestText(snapshot.documentType || "tourism-collection-snapshot", 80),
-    schemaVersion: sanitizeLocationRequestNumber(snapshot.schemaVersion),
-    contractVersion: sanitizeLocationRequestText(snapshot.contractVersion, 120),
     status: sanitizeLocationRequestText(snapshot.status || (snapshot.ok ? "ready" : "unavailable"), 40),
     collectedAt: sanitizeLocationRequestText(snapshot.collectedAt, 80),
     yearMonth: sanitizeLocationRequestText(snapshot.yearMonth, 12),
     matchConfidence: sanitizeLocationRequestNumber(snapshot.match?.confidence ?? snapshot.confidence),
     cacheHit: Boolean(snapshot.cache?.hit),
-    quality: {
-      status: sanitizeLocationRequestText(snapshot.quality?.status || snapshot.status, 40),
-      sourceCount: sanitizeLocationRequestNumber(snapshot.quality?.sourceCount),
-      counts: Object.fromEntries(Object.entries(snapshot.quality?.counts || {}).map(([key, value]) => [
-        sanitizeLocationRequestText(key, 40),
-        sanitizeLocationRequestNumber(value)
-      ]))
-    },
     sourcePolicy: {
       serviceKeyConfigured: Boolean(snapshot.sourcePolicy?.serviceKeyConfigured),
       allowUnverifiedCodes: Boolean(snapshot.sourcePolicy?.allowUnverifiedCodes),
@@ -3981,9 +3923,7 @@ function cleanupSessions() {
 }
 
 function normalizeUserRole(role) {
-  if (role === USER_ROLES.admin) return USER_ROLES.admin;
-  if (role === USER_ROLES.b2b) return USER_ROLES.b2b;
-  return "";
+  return role === USER_ROLES.b2b ? USER_ROLES.b2b : USER_ROLES.admin;
 }
 
 function userRoleLabel(role) {
@@ -4022,10 +3962,6 @@ function getSession(req) {
   if (!id) return null;
   const session = sessions.get(id);
   if (!session || session.expiresAt <= Date.now()) {
-    sessions.delete(id);
-    return null;
-  }
-  if (!normalizeUserRole(session.role)) {
     sessions.delete(id);
     return null;
   }
@@ -5185,27 +5121,7 @@ function publicRunsForRole(runs = [], role = USER_ROLES.admin) {
 
 function publicRunForRole(runData, role = USER_ROLES.admin) {
   if (normalizeUserRole(role) === USER_ROLES.admin || !runData) return runData;
-  const projected = projectB2BPublicPayload(runData);
-  // Region analysis uses narrow projectors instead of opening generic nested
-  // allowlist keys. This keeps reviewer, memo, draft hash, and audit history
-  // private even when the stored admin record grows new fields later.
-  projected.regionContext = publicRegionContext(runData.regionContext || {}, matchCanonicalLocationRegion);
-  const publicInsight = projected.regionContext.matchStatus === "matched"
-    ? projectB2BRegionInsight(runData.regionInsight || null)
-    : null;
-  projected.b2bRegionInsight = publicInsight?.regionKey === projected.regionContext.regionKey
-    ? publicInsight
-    : null;
-  return projected;
-}
-
-function parseRegionInsightApiPath(pathname = "") {
-  const match = String(pathname || "").match(/^\/api\/region-insights\/([^/]+?)(?:\/(draft|review|publish))?$/);
-  if (!match) return null;
-  return {
-    regionKey: decodeURIComponent(match[1]),
-    action: match[2] || "read"
-  };
+  return projectB2BPublicPayload(runData);
 }
 
 function b2bSearchPayload(value = {}) {
@@ -5925,8 +5841,7 @@ async function importYeogiSupplement(payload) {
     throw new Error("여기어때 숙소 행을 찾지 못했습니다. CSV 헤더 또는 페이지 텍스트를 다시 확인하세요.");
   }
 
-  const importedAtIso = new Date().toISOString();
-  const importedAt = new Date(importedAtIso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+  const importedAt = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
   const importedRows = normalizeYeogiManualRows(parsedRows.map((row, index) => ({
     channel: "여기어때",
     section: row.section,
@@ -5964,9 +5879,7 @@ async function importYeogiSupplement(payload) {
   manifest.files = Array.from(new Set([...(manifest.files || []), importFile]));
   manifest.fileRoles = { ...(manifest.fileRoles || {}), yeogiManual: importFile };
   manifest.counts = { ...(manifest.counts || {}), yeogiManual: importedRows.length };
-  manifest.dataAvailableAt = importedAtIso;
-  manifest.lastSupplementedAt = importedAtIso;
-  manifest.yeogiImport = { importedAt, importedAtIso, count: importedRows.length, method: "browser_or_manual" };
+  manifest.yeogiImport = { importedAt, count: importedRows.length, method: "browser_or_manual" };
   await fsp.writeFile(path.join(dirPath, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   await appendHistoryForRun(runId).catch((error) => {
     console.warn(`Could not append history for ${runId}: ${error.message || error}`);
@@ -9982,10 +9895,10 @@ function finalizeRegionalOpsBucket(bucket = {}) {
 
 function adminRegionReviewMeta(status = "") {
   return {
-    public_ready: { label: "공개 가능", tone: "good", nextCycle: "주 1회 유지" },
-    review_needed: { label: "검수 후 공개", tone: "watch", nextCycle: "이번 주 검수" },
-    collect_needed: { label: "보강 필요", tone: "hot", nextCycle: "즉시 보강" },
-    hold: { label: "보류", tone: "hot", nextCycle: "보류 사유 재검토" }
+    public_ready: { label: "공개 가능", tone: "good", statusKey: "public_ready", scoreFloor: 82, nextCycle: "주 1회 유지" },
+    review_needed: { label: "검수 후 공개", tone: "watch", statusKey: "review_needed", scoreFloor: 68, nextCycle: "이번 주 검수" },
+    collect_needed: { label: "보강 필요", tone: "hot", statusKey: "collect_needed", scoreCap: 58, nextCycle: "즉시 보강" },
+    hold: { label: "보류", tone: "hot", statusKey: "collect_needed", scoreCap: 50, nextCycle: "보류 사유 재검토" }
   }[String(status || "").trim()] || null;
 }
 
@@ -9997,128 +9910,75 @@ function regionReviewKey(value = "") {
     .slice(0, 120);
 }
 
-function regionReviewLabelKey(value = {}) {
-  return regionReviewKey(value.regionLabel || value.localityLabel || "");
-}
-
-function canonicalRegionReviewMatch(value = {}, fallbackProvinceLabel = "") {
-  const rawRegionKey = String(value.regionKey || "").trim();
-  const provinceLabel = String(
-    value.provinceLabel
-    || ADMIN_REGION_GROUPS[value.provinceKey]?.label
-    || fallbackProvinceLabel
-    || ""
-  ).trim();
-  const keyword = String(
-    value.keyword
-    || value.searchKeyword
-    || value.localityLabel
-    || value.regionLabel
-    || value.label
-    || ""
-  ).trim();
-  return matchCanonicalLocationRegion({
-    ...(rawRegionKey.startsWith("kr_") ? { regionKey: rawRegionKey } : {}),
-    ...(provinceLabel ? { sido: provinceLabel } : {}),
-    ...(keyword ? { keyword } : {})
-  });
-}
-
-function regionReviewLabelIsGloballyAmbiguous(value = {}) {
-  const keyword = String(value.regionLabel || value.localityLabel || value.keyword || value || "").trim();
-  if (!keyword) return false;
-  const match = matchCanonicalLocationRegion({ keyword });
-  return match.status === "ambiguous" || (match.candidates || []).length > 1;
-}
-
-function regionReviewQualifiedKeys(value = {}, alternateRegionKey = "") {
-  const keys = new Set();
-  for (const regionKey of [value.regionKey, alternateRegionKey].map(regionReviewKey).filter(Boolean)) {
-    keys.add(`region:${regionKey}`);
-  }
-
-  const provinceKey = regionReviewKey(value.provinceKey);
-  const provinceLabel = regionReviewKey(value.provinceLabel);
-  const localityKey = regionReviewKey(value.localityKey);
-  const labels = [value.regionLabel, value.localityLabel].map(regionReviewKey).filter(Boolean);
-  if (provinceKey && localityKey) keys.add(`province-locality:${provinceKey}:${localityKey}`);
-  for (const label of labels) {
-    if (provinceKey) keys.add(`province-key-label:${provinceKey}:${label}`);
-    if (provinceLabel) keys.add(`province-label-label:${provinceLabel}:${label}`);
-  }
-  return keys;
-}
-
-function regionReviewKeysIntersect(left = new Set(), right = new Set()) {
-  for (const key of left) {
-    if (right.has(key)) return true;
-  }
-  return false;
-}
-
-function regionReviewCandidateIdentity(value = {}, alternateRegionKey = "") {
-  const qualified = [...regionReviewQualifiedKeys(value, alternateRegionKey)].sort();
-  if (qualified.length) return qualified.join("|");
-  const label = regionReviewLabelKey(value);
-  return label ? `unqualified-label:${label}` : "";
-}
-
 function applyAdminRegionReviewsToOperations(ops = {}, master = {}) {
   const reviews = master.regionReviews || {};
   const histories = Array.isArray(master.regionReviewHistory) ? master.regionReviewHistory : [];
-  const sourceRegions = Array.isArray(ops.regions) ? ops.regions : [];
-  const reviewEntries = Object.entries(reviews)
-    .filter(([, review]) => review && typeof review === "object")
-    .map(([storeKey, review]) => ({ storeKey, review }));
-  const operationLabelCounts = new Map();
-  for (const region of sourceRegions) {
-    const label = regionReviewLabelKey(region);
-    if (label) operationLabelCounts.set(label, Number(operationLabelCounts.get(label) || 0) + 1);
-  }
-  const historyLabelIdentities = new Map();
-  for (const row of histories) {
-    const label = regionReviewLabelKey(row);
-    if (!label) continue;
-    const identities = historyLabelIdentities.get(label) || new Set();
-    const identity = regionReviewCandidateIdentity(row);
-    if (identity) identities.add(identity);
-    historyLabelIdentities.set(label, identities);
-  }
-  const reviewFor = (region = {}) => {
-    const regionKeys = regionReviewQualifiedKeys(region);
-    const exactMatches = reviewEntries.filter(({ storeKey, review }) => (
-      regionReviewKeysIntersect(regionKeys, regionReviewQualifiedKeys(review, storeKey))
-    ));
-    if (exactMatches.length === 1) return exactMatches[0].review;
-    if (exactMatches.length > 1) return null;
-
-    const label = regionReviewLabelKey(region);
-    if (!label || operationLabelCounts.get(label) !== 1 || regionReviewLabelIsGloballyAmbiguous(region)) return null;
-    const labelMatches = reviewEntries.filter(({ review }) => regionReviewLabelKey(review) === label);
-    return labelMatches.length === 1 ? labelMatches[0].review : null;
+  const reviewValues = Object.values(reviews || {}).filter(Boolean);
+  const regionLookupKeys = (region = {}) => {
+    return [
+      region.regionKey,
+      regionReviewKey(region.regionLabel),
+      regionReviewKey(`${region.provinceKey || ""}:${region.localityKey || ""}`),
+      regionReviewKey(`${region.provinceLabel || ""}:${region.regionLabel || ""}`),
+      regionReviewKey(`${region.provinceLabel || ""}:${region.localityLabel || ""}`)
+    ].filter(Boolean);
   };
-  const regions = sourceRegions.map((region) => {
+  const reviewFor = (region = {}) => {
+    const keys = regionLookupKeys(region);
+    const direct = keys.map((key) => reviews[key]).find(Boolean);
+    if (direct) return direct;
+    const labelKey = regionReviewKey(region.regionLabel);
+    const provinceLabelKey = regionReviewKey(`${region.provinceLabel || ""}:${region.regionLabel || ""}`);
+    return reviewValues.find((review) => {
+      const reviewKeys = [
+        review.regionKey,
+        regionReviewKey(review.regionLabel),
+        regionReviewKey(`${review.provinceLabel || ""}:${review.regionLabel || ""}`)
+      ].filter(Boolean);
+      return reviewKeys.some((key) => keys.includes(key))
+        || (labelKey && reviewKeys.includes(labelKey))
+        || (provinceLabelKey && reviewKeys.includes(provinceLabelKey));
+    }) || null;
+  };
+  const regions = (ops.regions || []).map((region) => {
     const review = reviewFor(region);
-    const regionKeys = regionReviewQualifiedKeys(region);
-    const label = regionReviewLabelKey(region);
-    const allowUnqualifiedHistory = Boolean(
-      label
-      && operationLabelCounts.get(label) === 1
-      && historyLabelIdentities.get(label)?.size === 1
-      && !regionReviewLabelIsGloballyAmbiguous(region)
-    );
+    const historyKeys = regionLookupKeys(region);
     const regionHistory = histories
       .filter((row) => {
-        if (regionReviewKeysIntersect(regionKeys, regionReviewQualifiedKeys(row))) return true;
-        return allowUnqualifiedHistory && regionReviewLabelKey(row) === label;
+        const rowKeys = [
+          row.regionKey,
+          regionReviewKey(row.regionLabel),
+          regionReviewKey(`${row.provinceLabel || ""}:${row.regionLabel || ""}`)
+        ].filter(Boolean);
+        return rowKeys.some((key) => historyKeys.includes(key));
       })
       .slice(-20);
     if (!review) return regionHistory.length ? { ...region, adminReviewHistory: regionHistory } : region;
     const meta = adminRegionReviewMeta(review.status);
+    const score = Number(region.status?.score || 0);
+    const nextScore = meta?.scoreFloor ? Math.max(score, meta.scoreFloor) : (meta?.scoreCap ? Math.min(score, meta.scoreCap) : score);
+    const nextStatus = meta ? {
+      ...(region.status || {}),
+      key: meta.statusKey,
+      label: meta.label,
+      score: nextScore,
+      adminOverride: true
+    } : region.status;
+    const nextMaintenance = {
+      ...(region.maintenance || {}),
+      preflightStatus: meta ? { key: review.status, label: meta.label, tone: meta.tone, adminOverride: true } : region.maintenance?.preflightStatus,
+      nextCycle: meta?.nextCycle || region.maintenance?.nextCycle,
+      adminReview: review
+    };
     return {
       ...region,
-      reviewWorkflowStatus: meta ? { key: review.status, label: meta.label, tone: meta.tone } : null,
-      nextReviewCycle: meta?.nextCycle || "",
+      status: nextStatus,
+      preflight: {
+        ...(region.preflight || {}),
+        status: meta ? { key: review.status, label: meta.label, tone: meta.tone, adminOverride: true } : region.preflight?.status,
+        readinessScore: Math.max(Number(region.preflight?.readinessScore || 0), meta?.scoreFloor || 0)
+      },
+      maintenance: nextMaintenance,
       adminReview: review,
       adminReviewHistory: regionHistory
     };
@@ -10128,6 +9988,8 @@ function applyAdminRegionReviewsToOperations(ops = {}, master = {}) {
   summary.adminPublicReadyRegionCount = regions.filter((region) => region.adminReview?.status === "public_ready").length;
   summary.adminReviewNeededRegionCount = regions.filter((region) => region.adminReview?.status === "review_needed").length;
   summary.adminCollectNeededRegionCount = regions.filter((region) => ["collect_needed", "hold"].includes(region.adminReview?.status)).length;
+  summary.preflightReadyRegionCount = Math.max(Number(summary.preflightReadyRegionCount || 0), summary.adminPublicReadyRegionCount);
+  summary.publicReadyRegionCount = Math.max(Number(summary.publicReadyRegionCount || 0), summary.adminPublicReadyRegionCount);
   return { ...ops, regions, summary };
 }
 
@@ -10191,26 +10053,16 @@ function publicB2BRegionReviewCopy(review = null) {
 function publicB2BRegionReviewSummary(data = {}, master = {}) {
   const baseOps = data.adminRegionalOperations || buildRunRegionalOperations(data, new Date().toISOString());
   const ops = applyAdminRegionReviewsToOperations(baseOps, master);
-  const operationRegions = ops.regions || [];
-  const reviewedRegions = operationRegions.filter((region) => region.adminReview?.status);
+  const reviewedRegions = (ops.regions || []).filter((region) => region.adminReview?.status);
   if (!reviewedRegions.length) return null;
   const run = data.run || {};
   const searchLabels = [
-    run.regionKey,
     run.keyword,
     run.label,
     ...(data.regions || []).map((region) => region.region || region.name || "")
   ].flatMap(b2bRegionKeywordBases);
   const candidateKeys = new Set();
-  const canonicalCandidateKeys = new Set();
-  const runProvinceLabel = run.provinceLabel || ADMIN_REGION_GROUPS[run.province]?.label || "";
   for (const label of searchLabels) {
-    const canonicalMatch = canonicalRegionReviewMatch({
-      regionKey: String(label || "").startsWith("kr_") ? label : "",
-      keyword: label
-    }, runProvinceLabel);
-    if (canonicalMatch.status === "matched") canonicalCandidateKeys.add(canonicalMatch.region.regionKey);
-    if (canonicalMatch.status === "ambiguous" || (canonicalMatch.candidates || []).length > 1) continue;
     const classified = adminRegionClassification(label);
     [
       classified.regionKey,
@@ -10219,19 +10071,14 @@ function publicB2BRegionReviewSummary(data = {}, master = {}) {
       regionReviewKey(label)
     ].filter(Boolean).forEach((key) => candidateKeys.add(key));
   }
-  const matchedRegions = operationRegions.filter((region) => {
-    const canonicalRegionKey = canonicalRegionReviewMatch(region).region?.regionKey || "";
-    if (canonicalRegionKey && canonicalCandidateKeys.has(canonicalRegionKey)) return true;
+  const matched = reviewedRegions.find((region) => {
     const keys = [
       region.regionKey,
       regionReviewKey(region.regionLabel),
       regionReviewKey(`${region.provinceLabel || ""}:${region.regionLabel || ""}`)
     ].filter(Boolean);
     return keys.some((key) => candidateKeys.has(key));
-  });
-  if (matchedRegions.length !== 1) return null;
-  const matched = matchedRegions[0];
-  if (!matched.adminReview?.status) return null;
+  }) || reviewedRegions.find((region) => region.adminReview?.status === "public_ready") || reviewedRegions[0];
   const reviewCopy = publicB2BRegionReviewCopy(matched.adminReview);
   if (!reviewCopy) return null;
   return {
@@ -11784,17 +11631,9 @@ function buildHistoryObservations(data, collectedAt) {
   const run = data?.run || {};
   const dbRoute = runCollectionDbRoute(run);
   const checkIn = run.checkIn || runDateFromId(run.id) || kstDate(0);
-  const collectedDate = kstDayKeyFromValue(collectedAt) || runDateFromId(run.id) || kstDate(0);
+  const collectedDate = String(collectedAt || "").slice(0, 10) || runDateFromId(run.id) || kstDate(0);
   const keyword = run.keyword || run.label || "";
   const keywordKey = compactKeyword(keyword).toLowerCase();
-  const collectionTimeBasis = run.collectionTimeBasis
-    || (run.dataAvailableAt
-      ? "manifest_data_available_at"
-      : run.collectionCompletedAt
-        ? "manifest_completed_at"
-        : run.collectionStartedAt
-          ? "manifest_started_at"
-          : "legacy_directory_mtime_fallback");
   const items = data?.availability?.items || [];
   const observations = [];
 
@@ -11819,7 +11658,6 @@ function buildHistoryObservations(data, collectedAt) {
         ].join("|"));
 
         observations.push({
-          documentType: "lodging-inventory-history-observation",
           schemaVersion: 1,
           observationId,
           runId: run.id,
@@ -11839,15 +11677,6 @@ function buildHistoryObservations(data, collectedAt) {
           collectionDbRouteLabel: dbRoute.label || "",
           collectedAt,
           collectedDate,
-          dataAvailableAt: run.dataAvailableAt || collectedAt,
-          collectionStartedAt: run.collectionStartedAt || "",
-          collectionCompletedAt: run.collectionCompletedAt || "",
-          collectionTimeBasis,
-          collectorVersion: run.collectorVersion || "legacy",
-          dataQualityStatus: collectionTimeBasis === "legacy_directory_mtime_fallback" ? "partial" : "ready",
-          dataQualityPenaltyReasons: collectionTimeBasis === "legacy_directory_mtime_fallback"
-            ? [collectionTimeBasis]
-            : [],
           stayDate: row.stayDate,
           leadTimeDays,
           companyName: item.name || "",
@@ -11899,11 +11728,8 @@ async function appendHistoryForRun(runId) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
   const stat = await fsp.stat(dirPath);
+  const collectedAt = stat.mtime.toISOString();
   const data = await loadRun(runId, { skipHistory: true });
-  const collectedAt = data?.run?.dataAvailableAt
-    || data?.run?.collectionCompletedAt
-    || data?.run?.collectionStartedAt
-    || stat.mtime.toISOString();
   const dbRoute = runCollectionDbRoute(data?.run || {});
   if (!dbRoute.appliesHistory) {
     return {
@@ -13043,13 +12869,9 @@ async function loadRun(runId, options = {}) {
   if (!dirPath || !fs.existsSync(dirPath)) return null;
 
   const stat = await fsp.stat(dirPath);
-  const legacyCollectedAt = stat.mtime.toISOString();
+  const collectedAt = stat.mtime.toISOString();
   const files = await fsp.readdir(dirPath);
   const manifest = await readManifest(dirPath);
-  const collectedAt = manifest?.dataAvailableAt
-    || manifest?.collectionCompletedAt
-    || manifest?.collectionStartedAt
-    || legacyCollectedAt;
   if (isIncompleteRunDirectory(manifest, files)) return null;
   const provinceKey = provinceKeyForRun(runId, manifest);
   const province = PROVINCES[provinceKey] || PROVINCES.local;
@@ -13101,24 +12923,8 @@ async function loadRun(runId, options = {}) {
   const result = {
     run: {
       id: runId,
-      documentType: manifest?.documentType || "lodging-collection-manifest",
-      schemaVersion: manifest?.schemaVersion || 1,
-      collectorVersion: manifest?.collectorVersion || "legacy",
-      collectionStartedAt: manifest?.collectionStartedAt || "",
-      collectionCompletedAt: manifest?.collectionCompletedAt || "",
-      dataAvailableAt: manifest?.dataAvailableAt || collectedAt,
-      lastSupplementedAt: manifest?.lastSupplementedAt || "",
-      collectionTimeBasis: manifest?.dataAvailableAt
-        ? "manifest_data_available_at"
-        : manifest?.collectionCompletedAt
-          ? "manifest_completed_at"
-          : manifest?.collectionStartedAt
-            ? "manifest_started_at"
-            : "legacy_directory_mtime_fallback",
       label: displayNameForRun(runId, manifest),
       keyword: manifest?.keyword || conditions.keyword || "",
-      regionKey: manifest?.searchRegionKey || manifest?.regionKey || conditions.searchRegionKey || conditions.regionKey || "",
-      searchRegionKey: manifest?.searchRegionKey || conditions.searchRegionKey || "",
       keywordType: manifest?.keywordType || "province",
       searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
       searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
@@ -13210,14 +13016,6 @@ async function loadRun(runId, options = {}) {
     history.collectionDbRoute = runCollectionDbRoute(result.run);
     result.history = history;
   }
-
-  result.regionContext = resolveRunRegionContext(result, { matcher: matchCanonicalLocationRegion });
-  result.regionInsight = result.regionContext.matchStatus === "matched" && result.regionContext.regionKey
-    ? await regionInsightRuntime.stateForRegion(result.regionContext.regionKey).catch((error) => {
-        console.warn(`Could not load region insight for ${result.regionContext.regionKey}: ${error.message || error}`);
-        return null;
-      })
-    : null;
 
   result.adminRegionalOperations = buildRunRegionalOperations(result, collectedAt);
   if (options.applyCompanyMaster) {
@@ -14105,10 +13903,7 @@ async function route(req, res) {
         skipTraffic: true,
         applyCompanyMaster: true
       });
-      // The member endpoint is also used by Admin User View. Always apply the
-      // B2B projector so the preview is byte-for-byte aligned with customer
-      // visibility and never receives raw admin region insight state.
-      return data ? send(res, 200, publicRunForRole(data, USER_ROLES.b2b)) : notFound(res);
+      return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/b2b-members") {
@@ -14208,30 +14003,6 @@ async function route(req, res) {
       return send(res, 200, await summarizeCompanyMaster());
     }
 
-    const regionInsightRoute = parseRegionInsightApiPath(reqUrl.pathname);
-    if (regionInsightRoute && req.method === "GET" && regionInsightRoute.action === "read") {
-      if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, await regionInsightRuntime.readAdminRegion(regionInsightRoute.regionKey));
-    }
-
-    if (regionInsightRoute && req.method === "POST" && regionInsightRoute.action !== "read") {
-      if (!requireAdminSession(session, req, res)) return;
-      const payload = await parseJsonBody(req);
-      const actor = {
-        id: session.username || session.memberId || "admin",
-        displayName: session.roleLabel || session.username || "관리자"
-      };
-      if (regionInsightRoute.action === "draft") {
-        return send(res, 200, await regionInsightRuntime.saveDraft(regionInsightRoute.regionKey, payload, actor));
-      }
-      if (regionInsightRoute.action === "review") {
-        return send(res, 200, await regionInsightRuntime.reviewDraft(regionInsightRoute.regionKey, payload, actor));
-      }
-      if (regionInsightRoute.action === "publish") {
-        return send(res, 200, await regionInsightRuntime.publishDraft(regionInsightRoute.regionKey, payload, actor));
-      }
-    }
-
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, publicLocationCardRequests(await readLocationCardRequests()));
@@ -14240,9 +14011,6 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/location-card-request") {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
-      if (payload.collectPublicData !== false) {
-        assertRequestRateLimit(req, "adminTourism", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
-      }
       return send(res, 200, await saveLocationCardRequest(payload));
     }
 
@@ -14444,8 +14212,6 @@ module.exports = {
   startServer,
   __test: {
     CRAWL_RUNTIME_STAGE_DEFS,
-    adminRegionReviewMeta,
-    applyAdminRegionReviewsToOperations,
     companyMasterFile: COMPANY_MASTER_FILE,
     companyRecordSummary,
     crawlExecutionPlan,
@@ -14458,13 +14224,8 @@ module.exports = {
     isSameOriginMapGeocodingRequest,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
-    parseRegionInsightApiPath,
-    publicB2BRegionReviewSummary,
-    publicRunForRole,
     rankingRowBase,
     readCompanyMaster,
-    regionInsightStoreFile: REGION_INSIGHT_STORE_FILE,
-    resolveRunRegionContext: (data) => resolveRunRegionContext(data, { matcher: matchCanonicalLocationRegion }),
     rowCollectionAddress,
     scaleCrawlStages,
     summarizeRankingRows,

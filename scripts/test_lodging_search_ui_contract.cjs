@@ -13,7 +13,7 @@ const intentScript = fs.readFileSync(path.join(root, "scripts", "lodging_search_
 
 assert.match(
   html,
-  /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js\?v=v2-20260805-region-analysis-v42"><\/script>/,
+  /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js\?v=v2-20260804-search-period-v41"><\/script>/,
 );
 assert.doesNotMatch(html, /id="searchModeInput"/);
 assert.match(html, /id="crawlSearchIntentHint"/);
