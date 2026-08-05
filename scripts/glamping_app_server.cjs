@@ -57,8 +57,23 @@ const {
 } = require("./crawl_eta_model.cjs");
 const {
   classifyCollectorProcessFailure,
+  createCrawlFailure,
   publicErrorPayload
 } = require("./crawl_failure_contract.cjs");
+const {
+  PROVIDER_ATTEMPT_HEARTBEAT_SECONDS,
+  PROVIDER_ATTEMPT_LEASE_SECONDS,
+  providerAvailability
+} = require("./naver_provider_resilience.cjs");
+const {
+  createNaverProviderHealthStore
+} = require("./naver_provider_health_store.cjs");
+const {
+  buildNaverCollectionFallbackState,
+  createNaverSearchContractSignature,
+  decideNaverQuotaConsumption,
+  projectNaverCollectionFallbackForB2B
+} = require("./naver_collection_fallback.cjs");
 const { createLocationRegionMatcher } = require("./location_region_matcher.cjs");
 const {
   createRegionInsightRuntime,
@@ -147,6 +162,11 @@ const COMPANY_MASTER_FILE = path.join(COMPANY_MASTER_DIR, "companies.json");
 const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const REGION_INSIGHT_STORE_FILE = path.join(DATA_DIR, "region_insights", "regions.json");
+const NAVER_PROVIDER_HEALTH_FILE = path.join(DATA_DIR, "provider_health", "naver_place_search.json");
+const naverProviderHealthStore = createNaverProviderHealthStore({
+  filePath: NAVER_PROVIDER_HEALTH_FILE,
+  runtimeRoot: DATA_DIR
+});
 const regionInsightRuntime = createRegionInsightRuntime({
   filePath: REGION_INSIGHT_STORE_FILE,
   registry: LOCATION_REGION_REGISTRY,
@@ -241,6 +261,7 @@ let activeCrawlJob = null;
 let crawlJobSequence = 0;
 const crawlQueue = [];
 const recentCrawlResults = new Map();
+const crawlReservationPromises = new Map();
 const CRAWL_RESULT_REUSE_TTL_MS = 5 * 60 * 1000;
 const B2B_COMPLETED_SEARCH_REUSE_TTL_MS = Math.max(
   0,
@@ -846,6 +867,456 @@ function crawlPayloadSignature(payload = {}) {
   return crypto.createHash("sha1").update(stableJson(signaturePayload)).digest("hex");
 }
 
+function canonicalNaverRegionForPlan(plan = {}) {
+  const rawKey = String(plan.resolvedIntent?.region?.key || "").trim();
+  const keyword = String(plan.resolvedIntent?.region?.query || plan.keyword || "").trim();
+  const match = matchCanonicalLocationRegion({
+    ...(rawKey.startsWith("kr_") ? { regionKey: rawKey } : {}),
+    ...(keyword ? { keyword } : {})
+  });
+  return match.status === "matched" ? match.region : null;
+}
+
+function naverSearchContractForPlan(plan = {}) {
+  const searchMode = plan.resolvedSearchMode || plan.searchMode || "";
+  const keyword = naverFallbackKeywordIdentity(plan.keyword || "", {
+    searchMode,
+    regionKey: plan.resolvedIntent?.region?.key || "",
+    categoryKey: plan.resolvedIntent?.lodgingCategoryKey || ""
+  });
+  return {
+    keyword,
+    searchMode,
+    collectionPurpose: plan.collectionPurpose || "",
+    productMode: plan.productMode || "",
+    collectionMode: plan.collectionMode || "",
+    collectionProfile: plan.collectionProfile || "",
+    detailRankRanges: plan.detailRankRanges || "",
+    checkIn: plan.checkIn || "",
+    checkOut: plan.checkOut || "",
+    bookingRangeDays: plan.bookingRangeDays,
+    bookingRangePlaceLimit: plan.bookingRangePlaceLimit
+  };
+}
+
+function reconciledStoredFallbackValue(values = [], normalize = (value) => String(value || "").trim()) {
+  const supplied = values
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== "")
+    .map((value) => normalize(value));
+  if (!supplied.length) return { valid: true, value: "" };
+  if (supplied.some((value) => value === "" || value !== supplied[0])) return { valid: false, value: "" };
+  return { valid: true, value: supplied[0] };
+}
+
+function normalizedStoredFallbackText(value) {
+  if (value !== null && value !== undefined && !["string", "number"].includes(typeof value)) return "";
+  const text = String(value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
+  return text.length <= 300 && !/[\u0000-\u001f\u007f]/u.test(text) ? text : "";
+}
+
+function naverFallbackKeywordIdentity(value, context = {}) {
+  const text = normalizedStoredFallbackText(value).toLowerCase();
+  if (!text) return "";
+  const searchMode = normalizedStoredFallbackText(context.searchMode).toLowerCase();
+  if (searchMode !== "keyword") return searchMode === "company" ? text : "";
+  const regionKey = String(context.regionKey || "").trim();
+  const categoryKey = String(context.categoryKey || "").trim();
+  if (!regionKey || !categoryKey) return text;
+  let resolvedIntent;
+  try {
+    resolvedIntent = resolveSearchIntentContract({
+      keyword: text,
+      searchMode: "keyword",
+      searchIntentMode: "auto"
+    }, { regionMap: TOURISM_REGION_MAP }).resolvedIntent;
+  } catch {
+    return "";
+  }
+  if (
+    resolvedIntent?.intent !== "region_search"
+    || resolvedIntent?.region?.key !== regionKey
+    || resolvedIntent?.lodgingCategoryKey !== categoryKey
+  ) return "";
+  return `region:${regionKey}:category:${categoryKey}`;
+}
+
+function reconciledStoredFallbackKeyword(values = [], context = {}) {
+  const supplied = values
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== "")
+    .map((value) => naverFallbackKeywordIdentity(value, context));
+  if (!supplied.length) return { valid: true, value: "" };
+  if (supplied.some((value) => value === "")) return { valid: false, value: "" };
+  if (supplied.some((value) => value !== supplied[0])) return { valid: false, value: "" };
+  return { valid: true, value: supplied[0] };
+}
+
+const REQUIRED_NAVER_FALLBACK_MANIFEST_FIELDS = Object.freeze([
+  "collectorVersion",
+  "collectionStartedAt",
+  "collectionCompletedAt",
+  "searchRegionKey",
+  "lodgingCategoryKey",
+  "keyword",
+  "searchKeyword",
+  "searchMode",
+  "collectionPurpose",
+  "productMode",
+  "collectionMode",
+  "collectionProfile",
+  "detailRankRanges",
+  "checkIn",
+  "checkOut",
+  "bookingRangeDays",
+  "bookingRangePlaceLimit"
+]);
+
+function hasExactNaverFallbackManifestContract(manifest = {}) {
+  if (
+    !manifest
+    || typeof manifest !== "object"
+    || Array.isArray(manifest)
+    || manifest.documentType !== "lodging-collection-manifest"
+    || manifest.schemaVersion !== 2
+  ) return false;
+  if (!REQUIRED_NAVER_FALLBACK_MANIFEST_FIELDS.every((key) => Object.prototype.hasOwnProperty.call(manifest, key))) {
+    return false;
+  }
+  const collectorVersion = normalizedStoredFallbackText(manifest.collectorVersion);
+  const regionKey = String(manifest.searchRegionKey || "").trim();
+  const categoryKey = String(manifest.lodgingCategoryKey || "").trim();
+  const startedText = typeof manifest.collectionStartedAt === "string" ? manifest.collectionStartedAt : "";
+  const completedText = typeof manifest.collectionCompletedAt === "string" ? manifest.collectionCompletedAt : "";
+  const startedAt = Date.parse(startedText);
+  const completedAt = Date.parse(completedText);
+  return Boolean(
+    collectorVersion
+    && collectorVersion.length <= 120
+    && /^[A-Za-z0-9._:-]+$/.test(collectorVersion)
+    && /^kr_[a-z0-9_]+$/.test(regionKey)
+    && /^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(categoryKey)
+    && Number.isFinite(startedAt)
+    && Number.isFinite(completedAt)
+    && startedAt <= completedAt
+  );
+}
+
+function storedNaverFallbackSearchContract(_run = {}, manifest = {}) {
+  if (!hasExactNaverFallbackManifestContract(manifest)) return null;
+  const text = (values) => reconciledStoredFallbackValue(values, normalizedStoredFallbackText);
+  const lower = (values) => reconciledStoredFallbackValue(values, (value) => normalizedStoredFallbackText(value).toLowerCase());
+  const compact = (values) => reconciledStoredFallbackValue(values, (value) => normalizedStoredFallbackText(value).replace(/\s+/g, ""));
+  const integer = (values) => reconciledStoredFallbackValue(values, (value) => {
+    if (!["string", "number"].includes(typeof value)) return "";
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 0 ? String(number) : "";
+  });
+  const keywordContext = {
+    searchMode: manifest.searchMode,
+    regionKey: manifest.searchRegionKey,
+    categoryKey: manifest.lodgingCategoryKey
+  };
+  const fields = {
+    keyword: reconciledStoredFallbackKeyword([manifest.keyword, manifest.searchKeyword], keywordContext),
+    searchMode: lower([manifest.searchMode]),
+    collectionPurpose: lower([manifest.collectionPurpose]),
+    productMode: lower([manifest.productMode]),
+    collectionMode: lower([manifest.collectionMode]),
+    collectionProfile: lower([manifest.collectionProfile]),
+    detailRankRanges: compact([manifest.detailRankRanges]),
+    checkIn: text([manifest.checkIn]),
+    checkOut: text([manifest.checkOut]),
+    bookingRangeDays: integer([manifest.bookingRangeDays]),
+    bookingRangePlaceLimit: integer([manifest.bookingRangePlaceLimit])
+  };
+  if (Object.values(fields).some((entry) => !entry.valid || entry.value === "")) return null;
+  return {
+    keyword: fields.keyword.value,
+    searchMode: fields.searchMode.value,
+    collectionPurpose: fields.collectionPurpose.value,
+    productMode: fields.productMode.value,
+    collectionMode: fields.collectionMode.value,
+    collectionProfile: fields.collectionProfile.value,
+    detailRankRanges: fields.detailRankRanges.value,
+    checkIn: fields.checkIn.value,
+    checkOut: fields.checkOut.value,
+    bookingRangeDays: fields.bookingRangeDays.value === "" ? null : Number(fields.bookingRangeDays.value),
+    bookingRangePlaceLimit: fields.bookingRangePlaceLimit.value === "" ? null : Number(fields.bookingRangePlaceLimit.value)
+  };
+}
+
+function naverFallbackRequestForPayload(payload = {}) {
+  const plan = crawlExecutionPlan(payload);
+  const region = canonicalNaverRegionForPlan(plan);
+  if (!region?.regionKey) return null;
+  const searchContract = naverSearchContractForPlan(plan);
+  try {
+    return {
+      regionKey: region.regionKey,
+      searchContract,
+      searchSignature: createNaverSearchContractSignature(searchContract)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function canonicalNaverRegionForStoredRun(run = {}, manifest = {}) {
+  const searchContract = storedNaverFallbackSearchContract(run, manifest);
+  if (!searchContract) return null;
+  const rawKey = String(manifest.searchRegionKey || "").trim();
+  if (!/^kr_[a-z0-9_]+$/.test(rawKey) || rawKey.length > 100) return null;
+  const match = matchCanonicalLocationRegion({ regionKey: rawKey });
+  return match.status === "matched" ? match.region : null;
+}
+
+function naverFallbackCandidateFromRun(run = {}, manifest = {}) {
+  const region = canonicalNaverRegionForStoredRun(run, manifest);
+  if (!region?.regionKey) return null;
+  const searchContract = storedNaverFallbackSearchContract(run, manifest);
+  if (!searchContract) return null;
+  const collectionCompletedAt = String(manifest.collectionCompletedAt || "").trim();
+  const naverOverallFile = String(manifest.fileRoles?.overall || "").trim();
+  const manifestFiles = Array.isArray(manifest.files) ? manifest.files.map(String) : [];
+  const naverOverallCount = Number(manifest.counts?.naverOverall);
+  if (
+    manifest.documentType !== "lodging-collection-manifest"
+    || !Number.isFinite(Date.parse(collectionCompletedAt))
+    || !naverOverallFile
+    || !manifestFiles.includes(naverOverallFile)
+    || !Number.isInteger(naverOverallCount)
+    || naverOverallCount < 0
+  ) return null;
+  let searchSignature;
+  try {
+    searchSignature = createNaverSearchContractSignature(searchContract);
+  } catch {
+    return null;
+  }
+  const asOf = new Date(collectionCompletedAt).toISOString();
+  const collectionStatus = naverOverallCount === 0 ? "zero" : "ready";
+  const snapshot = {
+    runId: run.id,
+    regionKey: region.regionKey,
+    searchSignature,
+    status: collectionStatus,
+    collectionStatus,
+    asOf,
+    label: run.label || manifest.keyword || run.id
+  };
+  return {
+    runId: run.id,
+    regionKey: region.regionKey,
+    searchSignature,
+    completedAt: asOf,
+    collectionStatus,
+    snapshot,
+    publicProjection: {
+      runId: run.id,
+      regionKey: region.regionKey,
+      status: collectionStatus,
+      asOf,
+      label: run.label || manifest.keyword || run.id
+    }
+  };
+}
+
+async function naverFallbackCandidates(options = {}) {
+  const allowedRunIds = options.allowedRunIds instanceof Set ? options.allowedRunIds : null;
+  const runs = await listRuns();
+  const candidates = [];
+  for (const run of runs) {
+    if (allowedRunIds && !allowedRunIds.has(run.id)) continue;
+    const dirPath = resolveRunDir(run.id);
+    if (!dirPath) continue;
+    const manifest = await readManifest(dirPath);
+    const overallPath = (() => {
+      try {
+        return safeJoin(dirPath, String(manifest?.fileRoles?.overall || ""));
+      } catch {
+        return null;
+      }
+    })();
+    if (!overallPath) continue;
+    const [runRealPath, overallRealPath, overallStat] = await Promise.all([
+      fsp.realpath(dirPath).catch(() => null),
+      fsp.realpath(overallPath).catch(() => null),
+      fsp.stat(overallPath).catch(() => null)
+    ]);
+    if (!runRealPath || !overallRealPath || !overallStat?.isFile()) continue;
+    const relativeOverallPath = path.relative(runRealPath, overallRealPath);
+    if (!relativeOverallPath || relativeOverallPath.startsWith("..") || path.isAbsolute(relativeOverallPath)) continue;
+    const candidate = naverFallbackCandidateFromRun(run, manifest || {});
+    if (candidate) candidates.push(candidate);
+  }
+  return candidates;
+}
+
+async function attachNaverFallbackToError(error, payload = {}, options = {}) {
+  if (!error || !["NAVER_ACCESS_BLOCKED", "NAVER_PROVIDER_COOLDOWN_ACTIVE"].includes(error.code)) return error;
+  const request = naverFallbackRequestForPayload(payload);
+  if (!request) {
+    error.fallbackAvailable = false;
+    return error;
+  }
+  let allowedRunIds = null;
+  if (normalizeUserRole(options.role) === USER_ROLES.b2b) {
+    const history = await readB2BSearchHistoryStore().catch(() => ({ entries: [] }));
+    allowedRunIds = new Set((history.entries || [])
+      .filter((entry) => memberMatchesSession(entry, options.session || {}))
+      .map((entry) => entry.runId)
+      .filter(Boolean));
+  }
+  const candidates = await naverFallbackCandidates({ allowedRunIds }).catch(() => []);
+  const fallbackState = buildNaverCollectionFallbackState({
+    request,
+    currentFailure: {
+      code: error.code,
+      providerFailureSubtype: error.providerFailureSubtype,
+      diagnosticId: error.diagnosticId,
+      occurredAt: error.occurredAt || new Date().toISOString()
+    },
+    candidates,
+    asOf: new Date().toISOString()
+  });
+  error.naverFallbackState = fallbackState;
+  error.fallbackAvailable = Boolean(fallbackState.fallbackSnapshot);
+  error.fallbackRunId = fallbackState.fallbackRunId || null;
+  error.fallbackAsOf = fallbackState.fallbackAsOf || null;
+  error.fallbackFreshness = fallbackState.fallbackFreshness || null;
+  return error;
+}
+
+function requestScopedNaverFailure(error) {
+  if (!error || !["NAVER_ACCESS_BLOCKED", "NAVER_PROVIDER_COOLDOWN_ACTIVE"].includes(error.code)) return error;
+  const scoped = createCrawlFailure(error.code, {
+    diagnosticId: error.diagnosticId,
+    providerFailureSubtype: error.providerFailureSubtype,
+    providerHttpStatus: error.providerHttpStatus,
+    retryAfterSeconds: error.retryAfterSeconds,
+    retryable: error.retryable,
+    statusCode: error.statusCode
+  });
+  for (const field of ["occurredAt", "retryAt"]) {
+    const value = String(error[field] || "");
+    if (Number.isFinite(Date.parse(value))) scoped[field] = new Date(value).toISOString();
+  }
+  if (["closed", "open", "probe_allowed"].includes(error.providerState)) {
+    scoped.providerState = error.providerState;
+  }
+  if ([
+    "attempt_lease_lost",
+    "concurrent_attempt",
+    "cooldown_active",
+    "explicit_probe_required",
+    "probe_in_flight"
+  ].includes(error.providerDecisionReason)) {
+    scoped.providerDecisionReason = error.providerDecisionReason;
+  }
+  return scoped;
+}
+
+function adminNaverFallbackProjection(state = {}) {
+  const fallbackAvailable = Boolean(state.fallbackSnapshot);
+  return {
+    currentCollectionFailure: state.currentCollectionFailure || null,
+    fallbackSnapshot: fallbackAvailable ? state.fallbackSnapshot : null,
+    fallbackRunId: fallbackAvailable ? state.fallbackRunId : null,
+    fallbackAsOf: fallbackAvailable ? state.fallbackAsOf : null,
+    fallbackReason: state.fallbackReason || "no_exact_last_known_good",
+    fallbackFreshness: state.fallbackFreshness || null,
+    fallbackAvailable
+  };
+}
+
+function adminNaverProviderHealthProjection(state = {}, options = {}) {
+  const availability = providerAvailability(state, { now: options.now || new Date() });
+  return {
+    providerId: state.providerId,
+    state: state.state,
+    retryAt: availability.retryAt,
+    retryAfterSeconds: availability.retryAfterSeconds,
+    consecutiveBlocks: state.consecutiveBlocks,
+    safeFailureSubtype: state.lastFailureSubtype,
+    lastDiagnosticId: state.lastDiagnosticId,
+    lastAttemptAt: state.lastAttemptAt,
+    lastSuccessAt: state.lastSuccessAt,
+    fallbackAvailable: options.fallbackAvailable === true,
+    cooldownPolicyVersion: state.cooldownPolicyVersion,
+    workflowRevision: state.workflowRevision,
+    probeRequired: availability.probeRequired,
+    attemptInFlight: availability.attemptInFlight
+  };
+}
+
+function memberNaverProviderHealthProjection(state = {}, options = {}) {
+  const availability = providerAvailability(state, { now: options.now || new Date() });
+  const available = availability.available || availability.probeRequired;
+  return {
+    available,
+    coolingDown: availability.coolingDown,
+    retryAt: availability.retryAt,
+    fallbackAvailable: options.fallbackAvailable === true,
+    message: availability.coolingDown
+      ? "현재 네이버 검색 연결을 보호하기 위해 재시도를 잠시 중단했습니다."
+      : availability.attemptInFlight
+        ? "현재 한 건의 검색 연결을 확인하고 있습니다."
+        : availability.probeRequired
+          ? "재시도 가능 시각이 지났습니다. 명시적으로 검색을 실행해 연결을 확인할 수 있습니다."
+          : "검색을 실행할 수 있습니다."
+  };
+}
+
+function naverProviderCooldownError(state = {}, reason = "cooldown_active") {
+  const availability = providerAvailability(state);
+  const retryAfterSeconds = Math.max(1, Number(availability.retryAfterSeconds) || 30);
+  const error = createCrawlFailure("NAVER_PROVIDER_COOLDOWN_ACTIVE", { retryAfterSeconds });
+  error.retryAt = availability.retryAt || new Date(Date.now() + retryAfterSeconds * 1000).toISOString();
+  error.providerState = state.state;
+  error.providerDecisionReason = reason;
+  return error;
+}
+
+async function reserveNaverProviderAttempt(payload = {}) {
+  const current = await naverProviderHealthStore.read();
+  const decision = await naverProviderHealthStore.beginAttempt({
+    expectedWorkflowRevision: current.workflowRevision,
+    explicit: payload.providerAttemptExplicit === true,
+    now: new Date()
+  }).catch(async (error) => {
+    if (error?.code !== "NAVER_PROVIDER_WORKFLOW_REVISION_CONFLICT") throw error;
+    const latest = await naverProviderHealthStore.read();
+    return { allowed: false, reason: "concurrent_attempt", state: latest, retryAt: latest.retryAt };
+  });
+  if (!decision.allowed) throw naverProviderCooldownError(decision.state, decision.reason);
+  return decision;
+}
+
+async function reserveAndCreateCrawlJob(payload = {}, signature = "") {
+  const pending = crawlReservationPromises.get(signature);
+  if (pending) {
+    const job = await pending;
+    attachCrawlJobClient(job, payload);
+    return { job, shared: true };
+  }
+  const reservation = (async () => {
+    const providerAttempt = await reserveNaverProviderAttempt(payload);
+    const job = createCrawlJob(payload, signature);
+    job.providerAttemptRevision = providerAttempt.state.workflowRevision;
+    job.providerAttemptKind = providerAttempt.attemptKind;
+    crawlQueue.push(job);
+    startNextCrawlJob();
+    return job;
+  })();
+  crawlReservationPromises.set(signature, reservation);
+  try {
+    return { job: await reservation, shared: false };
+  } finally {
+    if (crawlReservationPromises.get(signature) === reservation) {
+      crawlReservationPromises.delete(signature);
+    }
+  }
+}
+
 function cleanupRecentCrawlResults() {
   const now = Date.now();
   for (const [signature, entry] of recentCrawlResults.entries()) {
@@ -1133,7 +1604,13 @@ function addB2BSubscriberToJob(job, payload = {}) {
   if (!subscriber) return;
   const key = b2bSubscriberKey(subscriber);
   if (!key.trim()) return;
-  job.b2bSubscribers.set(key, subscriber);
+  const existing = job.b2bSubscribers.get(key);
+  job.b2bSubscribers.set(key, {
+    ...subscriber,
+    quotaCounted: existing
+      ? existing.quotaCounted !== false || subscriber.quotaCounted !== false
+      : subscriber.quotaCounted !== false
+  });
 }
 
 function createCrawlJob(payload = {}, signature = "") {
@@ -1158,6 +1635,12 @@ function createCrawlJob(payload = {}, signature = "") {
     stageEvents: [],
     stageEventByKey: new Map(),
     stdoutLineBuffer: "",
+    providerAttemptRevision: null,
+    providerAttemptKind: "",
+    providerHeartbeatTimer: null,
+    providerHeartbeatPromise: null,
+    providerHeartbeatStopped: true,
+    providerHeartbeatFailure: null,
     promise: null,
     resolve: null,
     reject: null
@@ -1170,12 +1653,73 @@ function createCrawlJob(payload = {}, signature = "") {
   return job;
 }
 
+function stopNaverProviderAttemptHeartbeat(job) {
+  if (!job) return Promise.resolve(null);
+  job.providerHeartbeatStopped = true;
+  if (job.providerHeartbeatTimer) {
+    clearTimeout(job.providerHeartbeatTimer);
+    job.providerHeartbeatTimer = null;
+  }
+  return Promise.resolve(job.providerHeartbeatPromise)
+    .catch(() => null)
+    .then(() => job.providerAttemptRevision);
+}
+
+function startNaverProviderAttemptHeartbeat(job) {
+  if (!job || !Number.isInteger(job.providerAttemptRevision)) return;
+  job.providerHeartbeatStopped = false;
+  const intervalMs = PROVIDER_ATTEMPT_HEARTBEAT_SECONDS * 1000;
+  const schedule = () => {
+    if (job.providerHeartbeatStopped || job.status !== "active") return;
+    job.providerHeartbeatTimer = setTimeout(async () => {
+      job.providerHeartbeatTimer = null;
+      if (job.providerHeartbeatStopped || job.status !== "active") return;
+      const expectedWorkflowRevision = job.providerAttemptRevision;
+      job.providerHeartbeatPromise = naverProviderHealthStore.refreshAttempt({
+        expectedWorkflowRevision,
+        now: new Date()
+      }).then((state) => {
+        job.providerAttemptRevision = state.workflowRevision;
+      }).catch((error) => {
+        job.providerHeartbeatFailure = createCrawlFailure("NAVER_PROVIDER_COOLDOWN_ACTIVE", {
+          retryAfterSeconds: PROVIDER_ATTEMPT_LEASE_SECONDS
+        });
+        job.providerHeartbeatFailure.providerDecisionReason = "attempt_lease_lost";
+        job.providerHeartbeatStopped = true;
+        console.warn(`[naver-provider] heartbeat-failed code=${String(error?.code || "NAVER_PROVIDER_HEARTBEAT_FAILED")}`);
+        const child = activeCrawlChild;
+        if (activeCrawlJob === job && child && !child.killed) {
+          try {
+            child.kill();
+          } catch {
+            // The close handler will finish the job if the child already exited.
+          }
+        }
+      }).finally(() => {
+        job.providerHeartbeatPromise = null;
+        schedule();
+      });
+    }, intervalMs);
+    job.providerHeartbeatTimer.unref?.();
+  };
+  schedule();
+}
+
 function attachCrawlJobClient(job, payload = {}) {
   if (!job) return;
   job.waiterCount = Math.max(1, Number(job.waiterCount || 1) + 1);
   const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId);
   if (clientRequestId) job.clientRequestIds.add(clientRequestId);
-  addB2BSubscriberToJob(job, payload);
+  const sharedQuota = decideNaverQuotaConsumption({ reused: true });
+  addB2BSubscriberToJob(job, payload.b2bSubscriber
+    ? {
+        ...payload,
+        b2bSubscriber: {
+          ...payload.b2bSubscriber,
+          quotaCounted: sharedQuota.consumeQuota
+        }
+      }
+    : payload);
 }
 
 function startNextCrawlJob() {
@@ -1195,6 +1739,7 @@ function startCrawlJob(job) {
   activeCrawlCancelRequested = false;
   activeCrawlCancelReason = "";
   activeCrawlSourceRole = job.sourceRole;
+  startNaverProviderAttemptHeartbeat(job);
   const internalPromise = runCrawlerInternal(job.payload);
   activeCrawlPromise = internalPromise;
 
@@ -1206,7 +1751,50 @@ function startCrawlJob(job) {
     } catch (error) {
       failure = error;
     }
+    await stopNaverProviderAttemptHeartbeat(job);
+    if (job.providerHeartbeatFailure) {
+      result = null;
+      failure = job.providerHeartbeatFailure;
+    }
     const endedAt = new Date();
+    if (Number.isInteger(job.providerAttemptRevision)) {
+      try {
+        if (failure?.providerDecisionReason === "attempt_lease_lost") {
+          const providerState = await naverProviderHealthStore.read();
+          const availability = providerAvailability(providerState, { now: endedAt });
+          failure.retryAt = availability.retryAt;
+          failure.retryAfterSeconds = Math.max(1, availability.retryAfterSeconds || PROVIDER_ATTEMPT_LEASE_SECONDS);
+        } else if (failure?.code === "NAVER_ACCESS_BLOCKED") {
+          const providerState = await naverProviderHealthStore.recordBlock({
+            expectedWorkflowRevision: job.providerAttemptRevision,
+            failure: {
+              subtype: failure.providerFailureSubtype || "unknown_access_block",
+              httpStatus: failure.providerHttpStatus,
+              retryAfterSeconds: failure.retryAfterSeconds,
+              diagnosticId: failure.diagnosticId
+            },
+            now: endedAt
+          });
+          const availability = providerAvailability(providerState, { now: endedAt });
+          failure.retryAt = providerState.retryAt;
+          failure.retryAfterSeconds = Math.max(1, availability.retryAfterSeconds);
+          failure.occurredAt = endedAt.toISOString();
+          console.warn(`[naver-provider] providerId=${providerState.providerId} state=${providerState.state} subtype=${providerState.lastFailureSubtype || "unknown_access_block"} diagnosticId=${providerState.lastDiagnosticId || failure.diagnosticId} retryAt=${providerState.retryAt}`);
+        } else if (!failure) {
+          await naverProviderHealthStore.recordSuccess({
+            expectedWorkflowRevision: job.providerAttemptRevision,
+            now: endedAt
+          });
+        } else {
+          await naverProviderHealthStore.releaseAttempt({
+            expectedWorkflowRevision: job.providerAttemptRevision,
+            now: endedAt
+          });
+        }
+      } catch (providerStateError) {
+        console.warn(`[naver-provider] state-update-failed code=${String(providerStateError?.code || "NAVER_PROVIDER_STATE_UPDATE_FAILED")}`);
+      }
+    }
     finishOpenCrawlRuntimeStage(job, endedAt);
     const stageTimings = publicCrawlStageTimings(job);
     const estimate = activeCrawlEstimate;
@@ -3442,6 +4030,7 @@ async function securityHardeningOverview() {
         "/api/history/summary",
         "/api/company-master/*",
         "/api/location-score-overrides",
+        "/api/provider-health/naver-place-search",
         "/api/settings/traffic-keys",
         "/outputs/*",
         "/api/account-delete-requests"
@@ -3455,6 +4044,7 @@ async function securityHardeningOverview() {
         "/api/member/interest-lodges",
         "/api/member/runs/:runId"
       ],
+      sharedAuthenticatedReadApis: ["/api/member/provider-health/naver-place-search"],
       previewAdminConditionalApis: [{
         path: "/api/b2b-map/geocode",
         roles: [USER_ROLES.b2b, USER_ROLES.admin],
@@ -3790,10 +4380,25 @@ function b2bSearchResultSummary(data = {}) {
   };
 }
 
+function mergeB2BSearchHistoryQuota(existingQuotaCounted, incomingQuotaCounted) {
+  const incomingCounts = incomingQuotaCounted !== false;
+  return Object.freeze({
+    quotaCounted: existingQuotaCounted === true || incomingCounts,
+    incrementNeeded: existingQuotaCounted !== true && incomingCounts
+  });
+}
+
+function b2bHistoryPayloadForSubscriber(payload = {}, subscriber = {}) {
+  return {
+    ...payload,
+    clientRequestId: crawlQueueClientRequestId(subscriber.clientRequestId || payload.clientRequestId)
+  };
+}
+
 async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId, data, crawlTiming, quotaCounted = true }) {
   const now = new Date().toISOString();
   const owner = subscriber || session || {};
-  const clientRequestId = crawlQueueClientRequestId(payload.clientRequestId || subscriber?.clientRequestId);
+  const clientRequestId = crawlQueueClientRequestId(subscriber?.clientRequestId || payload.clientRequestId);
   const entry = {
     id: `s_${crypto.randomBytes(9).toString("base64url")}`,
     memberId: owner?.memberId || "",
@@ -3830,23 +4435,30 @@ async function ensureB2BSearchHistory({ session, subscriber, req, payload, runId
     resultSummary: b2bSearchResultSummary(data)
   };
   let persistedEntry = entry;
-  let created = false;
+  let quotaIncrementNeeded = false;
   await updateB2BSearchHistoryStore((store) => {
-    const existing = clientRequestId
-      ? store.entries.find((item) => item.runId === runId
-          && item.clientRequestId === clientRequestId
-          && b2bHistoryOwnerMatches(item, owner))
-      : null;
+    const existing = store.entries.find((item) => item.runId === runId
+      && b2bHistoryOwnerMatches(item, owner)
+      && (clientRequestId
+        ? item.clientRequestId === clientRequestId
+        : item.searchSignature === entry.searchSignature));
     if (existing) {
+      const quotaMerge = mergeB2BSearchHistoryQuota(existing.quotaCounted, quotaCounted);
+      if (quotaMerge.incrementNeeded) {
+        existing.quotaCounted = quotaMerge.quotaCounted;
+        persistedEntry = existing;
+        quotaIncrementNeeded = true;
+        return store;
+      }
       persistedEntry = existing;
       return NO_JSON_WRITE;
     }
     store.entries.push(entry);
-    created = true;
+    quotaIncrementNeeded = quotaCounted !== false;
     return store;
   });
 
-  if (created && owner?.memberId && quotaCounted !== false) {
+  if (quotaIncrementNeeded && owner?.memberId) {
     await updateB2BMemberStore((memberStore) => {
       const member = memberStore.members.find((item) => item.memberId === owner.memberId);
       if (!member) return NO_JSON_WRITE;
@@ -3868,7 +4480,7 @@ async function ensureB2BSearchHistoryForJob(job = {}, result = {}) {
   for (const subscriber of job.b2bSubscribers.values()) {
     await ensureB2BSearchHistory({
       subscriber,
-      payload: job.payload || {},
+      payload: b2bHistoryPayloadForSubscriber(job.payload || {}, subscriber),
       runId: result.runId,
       data,
       crawlTiming: result.crawlTiming || null,
@@ -5391,18 +6003,32 @@ function b2bSearchResultReusedCollection(result = {}) {
 
 async function runB2BSearch(payload = {}, context = {}) {
   const crawlPayload = b2bSearchPayload(payload);
+  crawlPayload.providerAttemptExplicit = context.explicitProviderAttempt === true;
   const searchPlan = crawlExecutionPlan(crawlPayload);
   assertSupportedSearchIntent(searchPlan);
   const signature = crawlPayloadSignature(crawlPayload);
   const completedReuse = await findReusableCompletedB2BSearch(crawlPayload, { signature }).catch(() => null);
-  const sameSearchReuse = completedReuse || reusableRecentCrawlResult(signature) || findReusableCrawlJob(signature);
+  const sameSearchReuse = completedReuse
+    || reusableRecentCrawlResult(signature)
+    || findReusableCrawlJob(signature)
+    || crawlReservationPromises.has(signature);
   await assertB2BMemberSearchPolicy(crawlPayload, context.session || {}, sameSearchReuse);
   const b2bSubscriber = b2bSubscriberFromContext({
     ...context,
     quotaCounted: !sameSearchReuse
   }, crawlPayload);
   if (b2bSubscriber) crawlPayload.b2bSubscriber = b2bSubscriber;
-  const result = await runB2BCrawlerWithReuse(crawlPayload);
+  let result;
+  try {
+    result = await runB2BCrawlerWithReuse(crawlPayload);
+  } catch (error) {
+    const requestError = requestScopedNaverFailure(error);
+    await attachNaverFallbackToError(requestError, crawlPayload, {
+      role: USER_ROLES.b2b,
+      session: context.session || {}
+    });
+    throw requestError;
+  }
   const runId = result?.runId || "";
   if (!runId) {
     const error = new Error("검색 결과를 저장하지 못했습니다.");
@@ -5443,7 +6069,10 @@ async function runB2BSearch(payload = {}, context = {}) {
 }
 
 async function runB2BMyLodgeCollection(payload = {}) {
-  const crawlPayload = b2bMyLodgePayload(payload);
+  const crawlPayload = {
+    ...b2bMyLodgePayload(payload),
+    providerAttemptExplicit: payload.providerAttemptExplicit === true
+  };
   const result = await runCrawler(crawlPayload);
   const runId = result?.runId || "";
   if (!runId) {
@@ -13392,6 +14021,7 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
   if (!startedAt || !endedAt) return { recorded: false, reason: "missing_time" };
   const durationSeconds = Math.max(1, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000));
   const success = !error;
+  const providerAccessFailure = ["NAVER_ACCESS_BLOCKED", "NAVER_PROVIDER_COOLDOWN_ACTIVE"].includes(String(error?.code || ""));
   const store = await readCrawlTimingStore();
   const entry = {
     id: crypto.randomUUID(),
@@ -13400,9 +14030,9 @@ async function appendCrawlTimingEntry({ plan, startedAt, endedAt, estimate, resu
     durationSeconds,
     success,
     runId: result?.runId || null,
-    keyword: plan?.keyword || "",
+    keyword: providerAccessFailure ? "" : (plan?.keyword || ""),
     conditions: crawlTimingConditions(plan),
-    recrawlContext: estimate?.recrawlContext || null,
+    recrawlContext: providerAccessFailure ? null : (estimate?.recrawlContext || null),
     estimatedTotalSeconds: estimate?.estimatedTotalSeconds || null,
     modelTotalSeconds: estimate?.basis?.timing?.modelTotalSeconds || null,
     estimateSource: estimate?.basis?.timing?.source || "model",
@@ -13492,10 +14122,25 @@ async function runCrawler(payload) {
     const result = await existing.promise;
     return withIntent(resolveCrawlJob(result, existing, "shared"));
   }
-  const job = createCrawlJob(payload, signature);
-  crawlQueue.push(job);
-  startNextCrawlJob();
-  return withIntent(await job.promise);
+  let reservedJob;
+  try {
+    reservedJob = await reserveAndCreateCrawlJob(payload, signature);
+  } catch (error) {
+    if (normalizeUserRole(payload.sourceRole) === USER_ROLES.admin) {
+      await attachNaverFallbackToError(error, payload, { role: USER_ROLES.admin });
+    }
+    throw error;
+  }
+  const job = reservedJob.job;
+  try {
+    const result = await job.promise;
+    return withIntent(resolveCrawlJob(result, job, reservedJob.shared ? "shared" : "completed"));
+  } catch (error) {
+    if (normalizeUserRole(payload.sourceRole) === USER_ROLES.admin) {
+      await attachNaverFallbackToError(error, payload, { role: USER_ROLES.admin });
+    }
+    throw error;
+  }
 }
 
 function crawlCancelledError(reason = "") {
@@ -13782,9 +14427,19 @@ async function serveOutput(reqUrl, res) {
 }
 
 async function route(req, res) {
-  const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+  let session = null;
 
   try {
+    let reqUrl;
+    try {
+      const requestHost = String(req.headers.host || "local.invalid");
+      reqUrl = new URL(String(req.url || "/"), `http://${requestHost}`);
+    } catch {
+      const invalidRequest = new Error("Invalid HTTP request target");
+      invalidRequest.code = "INVALID_HTTP_REQUEST";
+      invalidRequest.statusCode = 400;
+      throw invalidRequest;
+    }
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/lodging-search-intent.js") {
       return serveLodgingSearchIntentScript(res, req.method === "HEAD");
     }
@@ -13972,7 +14627,7 @@ async function route(req, res) {
     }
 
     if (!requireLogin(req, res, reqUrl)) return;
-    const session = getSession(req);
+    session = getSession(req);
 
     if ((req.method === "GET" || req.method === "HEAD") && reqUrl.pathname === "/account-request") {
       if (req.method === "HEAD") return sendHead(res, 200, "text/html; charset=utf-8");
@@ -14140,13 +14795,31 @@ async function route(req, res) {
       return send(res, 200, { runs: publicRunsForRole(await listRuns(), session.role) });
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/provider-health/naver-place-search") {
+      if (!requireAdminSession(session, req, res)) return;
+      const providerState = await naverProviderHealthStore.read();
+      return send(res, 200, adminNaverProviderHealthProjection(providerState), "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/member/provider-health/naver-place-search") {
+      if (![USER_ROLES.admin, USER_ROLES.b2b].includes(normalizeUserRole(session.role))) {
+        return sendForbidden(req, res, "로그인이 필요합니다.");
+      }
+      const providerState = await naverProviderHealthStore.read();
+      return send(res, 200, memberNaverProviderHealthProjection(providerState), "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-search") {
       if (normalizeUserRole(session.role) !== USER_ROLES.b2b) {
         return sendForbidden(req, res, "B2B 검색 계정이 필요합니다.");
       }
       assertRequestRateLimit(req, "b2bSearch", RATE_LIMIT_POLICIES.b2bSearch, session.username || session.memberId || "");
       const payload = await parseJsonBody(req);
-      return send(res, 200, await runB2BSearch(payload, { session, req }));
+      return send(res, 200, await runB2BSearch(payload, { session, req, explicitProviderAttempt: true }));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/b2b-my-lodge-collect") {
@@ -14155,6 +14828,7 @@ async function route(req, res) {
       }
       assertRequestRateLimit(req, "b2bMyLodgeCollect", RATE_LIMIT_POLICIES.b2bMyLodgeCollect, session.username || session.memberId || "");
       const payload = await parseJsonBody(req);
+      payload.providerAttemptExplicit = true;
       return send(res, 200, await runB2BMyLodgeCollection(payload));
     }
 
@@ -14342,6 +15016,7 @@ async function route(req, res) {
       const payload = await parseJsonBody(req);
       const result = await runCrawler({
         ...payload,
+        providerAttemptExplicit: true,
         sourceRole: USER_ROLES.admin,
         collectionSource: normalizeCollectionSource(payload.collectionSource, USER_ROLES.admin)
       });
@@ -14369,18 +15044,34 @@ async function route(req, res) {
     send(res, 405, { error: "Method not allowed" });
   } catch (error) {
     const publicFailure = publicErrorPayload(error);
+    const fallbackProjection = error.naverFallbackState
+      ? (normalizeUserRole(session?.role) === USER_ROLES.admin
+          ? adminNaverFallbackProjection(error.naverFallbackState)
+          : projectNaverCollectionFallbackForB2B(error.naverFallbackState))
+      : {};
     const headers = error.retryAfterSeconds
       ? { "Retry-After": String(Math.max(1, Number(error.retryAfterSeconds) || 1)) }
       : {};
     send(res, error.statusCode || 500, {
       ...publicFailure,
-      retryAfterSeconds: error.retryAfterSeconds || undefined
+      retryAt: error.retryAt || undefined,
+      retryAfterSeconds: error.retryAfterSeconds || undefined,
+      fallbackAvailable: error.fallbackAvailable ?? fallbackProjection.fallbackAvailable,
+      ...fallbackProjection
     }, "application/json; charset=utf-8", headers);
   }
 }
 
 const server = http.createServer((req, res) => {
-  route(req, res);
+  route(req, res).catch((error) => {
+    if (res.writableEnded) return;
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    const publicFailure = publicErrorPayload(error);
+    send(res, error?.statusCode || 500, publicFailure);
+  });
 });
 const naverMapsGeocodingBudget = createPersistentMonthlyRequestBudget({
   filePath: NAVER_MAPS_GEOCODING_USAGE_FILE,
@@ -14458,6 +15149,7 @@ module.exports = {
     isSameOriginMapGeocodingRequest,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
+    naverFallbackKeywordIdentity,
     parseRegionInsightApiPath,
     publicB2BRegionReviewSummary,
     publicRunForRole,
@@ -14467,6 +15159,7 @@ module.exports = {
     resolveRunRegionContext: (data) => resolveRunRegionContext(data, { matcher: matchCanonicalLocationRegion }),
     rowCollectionAddress,
     scaleCrawlStages,
+    storedNaverFallbackSearchContract,
     summarizeRankingRows,
     validAdminPreviewMapGeocodingIndexes,
     writeCompanyMaster

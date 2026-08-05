@@ -31,6 +31,29 @@ function main() {
   assert.match(marker, /^CRAWL_ERROR_V1:/);
   assertSafeFailure(classifyCollectorProcessFailure({ stderr: marker, exitCode: 1 }), "NAVER_SEARCH_CONTRACT_UNAVAILABLE");
 
+  const blockedMarker = serializeCollectorFailure(createCrawlFailure("NAVER_ACCESS_BLOCKED", {
+    providerFailureSubtype: "http_429",
+    providerHttpStatus: 429,
+    retryAfterSeconds: 900
+  }));
+  const blockedFailure = classifyCollectorProcessFailure({ stderr: blockedMarker, exitCode: 1 });
+  assert.equal(blockedFailure.providerFailureSubtype, "http_429");
+  assert.equal(blockedFailure.providerHttpStatus, 429);
+  assert.equal(blockedFailure.retryAfterSeconds, 900);
+  assert.equal("providerFailureSubtype" in publicErrorPayload(blockedFailure), false, "provider subtype remains internal");
+  const cooldown = createCrawlFailure("NAVER_PROVIDER_COOLDOWN_ACTIVE", { retryAfterSeconds: 120 });
+  assert.equal(cooldown.statusCode, 503);
+  assert.equal(cooldown.retryAfterSeconds, 120);
+  assert.equal(publicErrorPayload(cooldown).code, "NAVER_PROVIDER_COOLDOWN_ACTIVE");
+  const challengeMarker = serializeCollectorFailure(createCrawlFailure("NAVER_ACCESS_BLOCKED", {
+    providerFailureSubtype: "challenge_html",
+    providerHttpStatus: 200
+  }));
+  const challengeFailure = classifyCollectorProcessFailure({ stderr: challengeMarker, exitCode: 1 });
+  assert.equal(challengeFailure.providerFailureSubtype, "challenge_html");
+  assert.equal(challengeFailure.providerHttpStatus, 200);
+  assert.equal("providerHttpStatus" in publicErrorPayload(challengeFailure), false);
+
   assertSafeFailure(classifyCollectorProcessFailure({
     stderr: "Error: Naver main search key not found.\n    at collectNaverMain (/opt/render/project/src/scripts/gyeongnam_glamping_crawl.cjs:2616:9)\nAuthorization: secret-value",
     exitCode: 1

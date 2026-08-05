@@ -9,7 +9,6 @@ const {
 const { buildWorkbook } = require("./workbook_export.cjs");
 const {
   extractApolloState,
-  looksLikeAccessBlock,
   naverPlaceAddress,
   parseRootKey,
   selectNaverOrganicResult
@@ -18,6 +17,9 @@ const {
   createCrawlFailure,
   serializeCollectorFailure
 } = require("./crawl_failure_contract.cjs");
+const {
+  classifyNaverAccessResponse
+} = require("./naver_provider_resilience.cjs");
 
 const PRODUCT_MODES = {
   all: "전체",
@@ -1005,15 +1007,25 @@ function mapNaverItem(state, item, extras = {}) {
 
 async function getNaverState(query) {
   const url = `https://pcmap.place.naver.com/accommodation/list?query=${encodeURIComponent(query)}`;
+  assertNaverTransportAvailable();
   const { res, text } = await fetchText(url);
-  if (res.status === 403 || res.status === 429 || looksLikeAccessBlock(text)) {
-    throw createCrawlFailure("NAVER_ACCESS_BLOCKED");
-  }
+  throwIfNaverAccessBlocked({ status: res.status, headers: res.headers, body: text });
   if (!res.ok) {
     throw createCrawlFailure(res.status >= 500 ? "NAVER_TEMPORARY_UNAVAILABLE" : "NAVER_HTTP_ERROR");
   }
-  const state = extractApolloState(text);
-  return { status: res.status, state, url };
+  let state;
+  try {
+    state = extractApolloState(text);
+  } catch (error) {
+    throwIfNaverAccessBlocked({
+      status: res.status,
+      headers: res.headers,
+      body: text,
+      apolloStateValidated: false
+    });
+    throw error;
+  }
+  return { status: res.status, state, url, responseBody: text };
 }
 
 const naverBookingBusinessQuery = `
@@ -1083,6 +1095,24 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+let naverAccessFailure = null;
+
+function assertNaverTransportAvailable() {
+  if (naverAccessFailure) throw naverAccessFailure;
+}
+
+function throwIfNaverAccessBlocked(response = {}) {
+  assertNaverTransportAvailable();
+  const access = classifyNaverAccessResponse(response);
+  if (!access.blocked) return;
+  naverAccessFailure = createCrawlFailure("NAVER_ACCESS_BLOCKED", {
+    providerFailureSubtype: access.subtype,
+    providerHttpStatus: access.httpStatus,
+    retryAfterSeconds: access.retryAfterSeconds
+  });
+  throw naverAccessFailure;
+}
+
 async function mapWithConcurrency(items, limit, mapper) {
   const rows = Array.from(items || []);
   const results = new Array(rows.length);
@@ -1105,6 +1135,7 @@ async function getNaverBookingBusiness(placeId) {
   let lastResult = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (attempt) await delay(450);
+    assertNaverTransportAvailable();
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -1121,6 +1152,7 @@ async function getNaverBookingBusiness(placeId) {
       }),
     });
     const text = await response.text();
+    throwIfNaverAccessBlocked({ status: response.status, headers: response.headers, body: text });
     let data = null;
     try {
       data = JSON.parse(text);
@@ -1173,12 +1205,14 @@ async function getNaverBookingBusinessFromPlacePage(placeId) {
 
   for (const route of routes) {
     try {
+      assertNaverTransportAvailable();
       const { res, text } = await fetchText(route.url, {
         headers: {
           accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           referer: `https://pcmap.place.naver.com/accommodation/${placeId}`,
         },
       });
+      throwIfNaverAccessBlocked({ status: res.status, headers: res.headers, body: text });
       const bookingBusinessId = extractNaverBookingBusinessIds(text)[0] || "";
       if (bookingBusinessId) {
         return {
@@ -1191,7 +1225,8 @@ async function getNaverBookingBusinessFromPlacePage(placeId) {
           sourceRoute: route.label,
         };
       }
-    } catch {
+    } catch (error) {
+      if (error?.code === "NAVER_ACCESS_BLOCKED") throw error;
       // Keep the fallback best-effort. The original GraphQL status remains authoritative.
     }
     await delay(120);
@@ -1201,6 +1236,7 @@ async function getNaverBookingBusinessFromPlacePage(placeId) {
 
 async function postNaverBookingGraphql(operationName, query, variables, businessId, date = CHECK_IN) {
   const checkOut = addDays(date, 1);
+  assertNaverTransportAvailable();
   const response = await fetch(NAVER_BOOKING_GRAPHQL_URL, {
     method: "POST",
     headers: {
@@ -1212,7 +1248,14 @@ async function postNaverBookingGraphql(operationName, query, variables, business
     },
     body: JSON.stringify({ operationName, query, variables }),
   });
-  const data = await response.json().catch(() => null);
+  const text = await response.text();
+  throwIfNaverAccessBlocked({ status: response.status, headers: response.headers, body: text });
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
   return { status: response.status, data };
 }
 
@@ -1459,12 +1502,14 @@ async function getNaverBookingPageCouponSignal(bookingBusinessId, bookingUrl = "
   if (!NAVER_COUPON_PAGE_FALLBACK || !bookingBusinessId) return null;
   const url = naverBookingSearchUrl(bookingBusinessId, bookingUrl, date);
   try {
+    assertNaverTransportAvailable();
     const { res, text } = await fetchText(url, {
       headers: {
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         referer: url,
       },
     });
+    throwIfNaverAccessBlocked({ status: res.status, headers: res.headers, body: text });
     const signal = summarizeNaverCouponExposure([couponSource("예약페이지", text)]);
     const hasPageCouponName = Boolean(signal.couponNames);
     return {
@@ -1476,6 +1521,7 @@ async function getNaverBookingPageCouponSignal(bookingBusinessId, bookingUrl = "
         : `예약페이지 보조 확인(${res.status}) · 쿠폰명 미노출`,
     };
   } catch (error) {
+    if (error?.code === "NAVER_ACCESS_BLOCKED") throw error;
     return {
       couponStatus: "없음",
       couponNames: "",
@@ -2453,6 +2499,7 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.dayUseWeeklyAvgReservationRate = result.dayUseWeekly?.avgReservationRate ?? "";
       row.dayUseWeeklyReservationRateDetail = result.dayUseWeekly?.reservationRateDetail || "";
     } catch (error) {
+      if (error?.code === "NAVER_ACCESS_BLOCKED") throw error;
       if (!alreadyKnown) collected += 1;
       row.네이버예약재고수집상태 = `실패: ${error.message || error}`;
     }
@@ -2484,10 +2531,19 @@ async function collectNaverMain() {
   let lastUrl = "";
 
   for (const query of queries) {
-    const { state, status, url } = await getNaverState(query);
+    const { state, status, url, responseBody } = await getNaverState(query);
     lastStatus = status;
     lastUrl = url;
-    const organicResult = selectNaverOrganicResult(state, query, { allowPlaceList: true, required: false });
+    let organicResult;
+    try {
+      organicResult = selectNaverOrganicResult(state, query, { allowPlaceList: true, required: false });
+    } catch (error) {
+      throwIfNaverAccessBlocked({ status, body: responseBody, apolloStateValidated: false });
+      throw error;
+    }
+    if (!organicResult) {
+      throwIfNaverAccessBlocked({ status, body: responseBody, apolloStateValidated: false });
+    }
     const searchKey = organicResult?.key || "";
     const adKey = pickNaverAdKey(state, query, province.isCompany ? ["accommodation", "place"] : ["accommodation"]);
     const isPlaceList = organicResult?.type === "placeList";
@@ -2590,8 +2646,17 @@ async function collectNaverRegional() {
   const regionalResults = await mapWithConcurrency(regions, REGIONAL_SEARCH_CONCURRENCY, async (region) => {
     const regionalPrefix = province.regionalPrefix === undefined ? province.short : province.regionalPrefix;
     const query = province.isLocal ? QUERY : [regionalPrefix, region, RAW_KEYWORD_SUFFIX].filter(Boolean).join(" ");
-    const { state, status } = await getNaverState(query);
-    const result = selectNaverOrganicResult(state, query, { allowPlaceList: true, required: false });
+    const { state, status, responseBody } = await getNaverState(query);
+    let result;
+    try {
+      result = selectNaverOrganicResult(state, query, { allowPlaceList: true, required: false });
+    } catch (error) {
+      throwIfNaverAccessBlocked({ status, body: responseBody, apolloStateValidated: false });
+      throw error;
+    }
+    if (!result) {
+      throwIfNaverAccessBlocked({ status, body: responseBody, apolloStateValidated: false });
+    }
     if (!result) {
       return {
         rows: [],

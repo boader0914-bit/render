@@ -9,6 +9,7 @@ const FAILURE_CATALOG = Object.freeze({
   NAVER_SEARCH_CONTRACT_UNAVAILABLE: { message: "네이버 검색 결과 형식이 변경되어 수집을 시작하지 못했습니다.", retryable: false, statusCode: 502 },
   NAVER_SEARCH_AMBIGUOUS: { message: "네이버 검색 결과를 안전하게 구분할 수 없어 수집을 중단했습니다.", retryable: false, statusCode: 502 },
   NAVER_ACCESS_BLOCKED: { message: "네이버 검색 접근이 일시적으로 제한되어 수집을 중단했습니다.", retryable: false, statusCode: 502 },
+  NAVER_PROVIDER_COOLDOWN_ACTIVE: { message: "네이버 검색 연결을 보호하기 위해 재시도를 잠시 중단했습니다.", retryable: true, statusCode: 503 },
   NAVER_TEMPORARY_UNAVAILABLE: { message: "네이버 검색 응답이 지연되어 수집을 완료하지 못했습니다.", retryable: true, statusCode: 503 },
   NAVER_HTTP_ERROR: { message: "네이버 검색 응답을 받지 못해 수집을 중단했습니다.", retryable: true, statusCode: 502 },
   COLLECTOR_START_FAILED: { message: "수집 프로세스를 시작하지 못했습니다.", retryable: false, statusCode: 500 },
@@ -34,6 +35,18 @@ function createCrawlFailure(code, options = {}) {
   error.retryable = options.retryable ?? entry.retryable;
   error.statusCode = options.statusCode ?? entry.statusCode;
   error.diagnosticId = options.diagnosticId || diagnosticId();
+  const subtype = String(options.providerFailureSubtype || "");
+  if (["http_403", "http_429", "challenge_html", "unknown_access_block"].includes(subtype)) {
+    error.providerFailureSubtype = subtype;
+  }
+  const providerHttpStatus = Number(options.providerHttpStatus);
+  if (Number.isInteger(providerHttpStatus) && providerHttpStatus >= 100 && providerHttpStatus <= 599) {
+    error.providerHttpStatus = providerHttpStatus;
+  }
+  const retryAfterSeconds = Number(options.retryAfterSeconds);
+  if (Number.isInteger(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    error.retryAfterSeconds = Math.min(retryAfterSeconds, 120 * 60);
+  }
   return error;
 }
 
@@ -55,7 +68,21 @@ function collectorFailureCode(error) {
 function serializeCollectorFailure(error) {
   const code = collectorFailureCode(error);
   const entry = catalogEntry(code);
-  return `${COLLECTOR_ERROR_PREFIX}${JSON.stringify({ version: 1, code, retryable: entry.retryable })}`;
+  const payload = { version: 1, code, retryable: error?.retryable ?? entry.retryable };
+  if (code === "NAVER_ACCESS_BLOCKED") {
+    const subtype = String(error?.providerFailureSubtype || "");
+    if (["http_403", "http_429", "challenge_html", "unknown_access_block"].includes(subtype)) {
+      payload.providerFailureSubtype = subtype;
+    }
+    const providerHttpStatus = Number(error?.providerHttpStatus);
+    if (Number.isInteger(providerHttpStatus) && providerHttpStatus >= 100 && providerHttpStatus <= 599) {
+      payload.providerHttpStatus = providerHttpStatus;
+    }
+    if (Number.isInteger(error?.retryAfterSeconds) && error.retryAfterSeconds >= 0) {
+      payload.retryAfterSeconds = Math.min(error.retryAfterSeconds, 120 * 60);
+    }
+  }
+  return `${COLLECTOR_ERROR_PREFIX}${JSON.stringify(payload)}`;
 }
 
 function parseCollectorFailureMarker(text) {
@@ -65,7 +92,12 @@ function parseCollectorFailureMarker(text) {
   try {
     const payload = JSON.parse(line.slice(COLLECTOR_ERROR_PREFIX.length));
     if (!payload || payload.version !== 1 || !FAILURE_CATALOG[payload.code]) return null;
-    return createCrawlFailure(payload.code, { retryable: Boolean(payload.retryable) });
+    return createCrawlFailure(payload.code, {
+      retryable: Boolean(payload.retryable),
+      providerFailureSubtype: payload.providerFailureSubtype,
+      providerHttpStatus: payload.providerHttpStatus,
+      retryAfterSeconds: payload.retryAfterSeconds
+    });
   } catch {
     return null;
   }
