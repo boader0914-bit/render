@@ -37,6 +37,7 @@ const COLLECTION_PURPOSES = {
   revenue_detail: "상세 매출 수집",
   demand_location: "수요·입지 정밀 분석"
 };
+const COLLECTOR_VERSION = "lodging-collector-v2-observation-fields-1";
 
 function kstDate(offsetDays = 0) {
   const now = new Date();
@@ -3135,6 +3136,7 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
 }
 
 async function main() {
+  const collectionStartedAt = new Date().toISOString();
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
 
   console.log("Collecting Naver main...");
@@ -3834,7 +3836,15 @@ async function main() {
     { name: "광고순위", rows: naver.ads, columns: adColumns },
   ]);
 
+  const collectionCompletedAt = new Date().toISOString();
   const manifest = {
+    documentType: "lodging-collection-manifest",
+    schemaVersion: 2,
+    collectorVersion: COLLECTOR_VERSION,
+    collectionStartedAt,
+    collectionCompletedAt,
+    dataAvailableAt: collectionCompletedAt,
+    timezone: "Asia/Seoul",
     outputDir: OUTPUT_DIR,
     keyword: RAW_KEYWORD,
     keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),

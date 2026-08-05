@@ -6,6 +6,7 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { installFixtureNetworkGuard } = require("./fixture_network_guard.cjs");
 const {
   isRenderRuntime,
   isV2PreviewRuntime,
@@ -13,6 +14,11 @@ const {
   projectB2BPublicPayload,
   trustedClientAddress
 } = require("./runtime_security.cjs");
+
+const networkGuard = installFixtureNetworkGuard({
+  allowLocalhost: true,
+  label: "server security fixtures"
+});
 
 const ROOT = path.resolve(__dirname, "..");
 const SERVER_PATH = path.join(ROOT, "scripts", "glamping_app_server.cjs");
@@ -30,11 +36,34 @@ async function availablePort() {
   return port;
 }
 
-function spawnServer(port, runtimeRoot) {
-  const child = spawn(process.execPath, [SERVER_PATH], {
+function safeChildEnvironment(overrides) {
+  const env = {};
+  for (const key of ["SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR", "ComSpec", "PATHEXT", "PATH"]) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  return { ...env, ...overrides };
+}
+
+async function writeChildPreload(runtimeRoot) {
+  const preloadPath = path.join(runtimeRoot, "server_security_preload.cjs");
+  const guardPath = path.join(ROOT, "scripts", "fixture_network_guard.cjs");
+  const source = [
+    '"use strict";',
+    `require(${JSON.stringify(guardPath)}).installFixtureNetworkGuard({ allowLocalhost: true, label: "server security child" });`,
+    'const crypto = require("node:crypto");',
+    "const nativeRandomUUID = crypto.randomUUID.bind(crypto);",
+    "crypto.randomUUID = (...args) => String(new Error().stack || '').includes('region_insight_runtime.cjs')",
+    "  ? '00000000-0000-4000-8000-000000000001'",
+    "  : nativeRandomUUID(...args);"
+  ].join("\n");
+  await fsp.writeFile(preloadPath, `${source}\n`, "utf8");
+  return preloadPath;
+}
+
+function spawnServer(port, runtimeRoot, preloadPath) {
+  const child = spawn(process.execPath, ["--require", preloadPath, SERVER_PATH], {
     cwd: ROOT,
-    env: {
-      ...process.env,
+    env: safeChildEnvironment({
       NODE_ENV: "test",
       HOST: "127.0.0.1",
       PORT: String(port),
@@ -46,8 +75,10 @@ function spawnServer(port, runtimeRoot) {
       SEED_OUTPUTS_FROM_REPO: "0",
       GLAMPING_ADMIN_USER: "security-test-admin",
       GLAMPING_ADMIN_PASSWORD: "SecurityTestOnly!123",
-      GLAMPING_B2B_ENABLED: "0"
-    },
+      GLAMPING_B2B_ENABLED: "1",
+      GLAMPING_B2B_USER: "security-test-b2b",
+      GLAMPING_B2B_PASSWORD: "SecurityB2BOnly!123"
+    }),
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
   });
@@ -284,12 +315,36 @@ async function main() {
   const originalMemberText = await fsp.readFile(memberFile, "utf8");
   const port = await availablePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const server = spawnServer(port, tempRoot);
+  const childPreload = await writeChildPreload(tempRoot);
+  const server = spawnServer(port, tempRoot, childPreload);
 
   try {
     await waitForHealth(baseUrl, server.child);
     const anonymousHealth = await jsonRequest(baseUrl, "/api/health");
     assert.deepEqual(anonymousHealth.body, { ok: true, loginRequired: true });
+
+    const anonymousRegionInsight = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon");
+    assert.equal(anonymousRegionInsight.response.status, 401, "region insight APIs require authentication");
+
+    const b2bLogin = await jsonRequest(baseUrl, "/api/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "user-agent": "security-contract-test" },
+      body: JSON.stringify({ username: "security-test-b2b", password: "SecurityB2BOnly!123" })
+    });
+    assert.equal(b2bLogin.response.status, 200);
+    const b2bCookie = String(b2bLogin.response.headers.get("set-cookie") || "").split(";")[0];
+    const b2bRegionInsight = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon", {
+      headers: { cookie: b2bCookie, "user-agent": "security-contract-test" }
+    });
+    assert.equal(b2bRegionInsight.response.status, 403, "B2B sessions cannot read the admin region workbench API");
+    for (const action of ["review", "publish"]) {
+      const forbiddenMutation = await jsonRequest(baseUrl, `/api/region-insights/kr_gyeonggi_pocheon/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: b2bCookie, "user-agent": "security-contract-test" },
+        body: JSON.stringify({ expectedWorkflowRevision: 0 })
+      });
+      assert.equal(forbiddenMutation.response.status, 403, `B2B sessions cannot call the admin ${action} API`);
+    }
 
     const login = await jsonRequest(baseUrl, "/api/login", {
       method: "POST",
@@ -303,6 +358,137 @@ async function main() {
       headers: { cookie, "user-agent": "security-contract-test" }
     });
     assert.deepEqual(authenticatedHealth.body, anonymousHealth.body, "health shape is independent of authentication");
+
+    const emptyRegionInsight = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon", {
+      headers: { cookie, "user-agent": "security-contract-test" }
+    });
+    assert.equal(emptyRegionInsight.response.status, 200);
+    assert.equal(emptyRegionInsight.body.regionInsight, null);
+    const invalidRegionInsight = await jsonRequest(baseUrl, "/api/region-insights/kr_unknown_missing", {
+      headers: { cookie, "user-agent": "security-contract-test" }
+    });
+    assert.equal(invalidRegionInsight.response.status, 400);
+    const missingDraftReview = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeongnam_sancheong/review", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({ status: "reviewed", expectedWorkflowRevision: 0, expectedDraftHash: "0".repeat(64) })
+    });
+    assert.equal(missingDraftReview.response.status, 404);
+    assert.equal(missingDraftReview.body.code, "REGION_DRAFT_NOT_FOUND");
+
+    const regionDraftPayload = {
+      locationAttractiveness: {
+        value: 73,
+        modelVersion: "security-http-fixture-v1",
+        components: [{ key: "market_demand", value: 73, weight: 1, evidenceIds: ["fixture-demand"] }]
+      },
+      dataQuality: {
+        status: "partial",
+        score: 78,
+        grade: "B",
+        penalties: [{ code: "ota_partial", message: "OTA 일부", points: 8 }],
+        coverage: { numerator: 4, denominator: 6, note: "fixture coverage" },
+        freshness: { status: "fresh", asOf: "2026-08-05", updatedAt: "2026-08-05T00:00:00.000Z", ageDays: 0 }
+      }
+    };
+    const savedRegionDraft = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/draft", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify(regionDraftPayload)
+    });
+    assert.equal(savedRegionDraft.response.status, 200);
+    const regionDraftHash = savedRegionDraft.body.regionInsight?.state?.draftHash;
+    assert.match(regionDraftHash, /^[a-f0-9]{64}$/);
+    assert.equal(savedRegionDraft.body.regionInsight?.workflowRevision, 1);
+    const missingRevisionReview = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/review", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({ status: "reviewed", expectedDraftHash: regionDraftHash })
+    });
+    assert.equal(missingRevisionReview.response.status, 409);
+    assert.equal(missingRevisionReview.body.code, "REGION_WORKFLOW_REVISION_REQUIRED");
+    const conflictingRevisionReview = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/review", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({ status: "reviewed", expectedDraftHash: regionDraftHash, expectedWorkflowRevision: 0 })
+    });
+    assert.equal(conflictingRevisionReview.response.status, 409);
+    assert.equal(conflictingRevisionReview.body.code, "REGION_WORKFLOW_REVISION_CONFLICT");
+    const missingHashReview = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/review", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({ status: "reviewed", expectedWorkflowRevision: 1 })
+    });
+    assert.equal(missingHashReview.response.status, 409);
+    const reviewedRegionDraft = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/review", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({
+        status: "reviewed",
+        expectedDraftHash: regionDraftHash,
+        expectedWorkflowRevision: 1,
+        adminMemo: "private-review-note"
+      })
+    });
+    assert.equal(reviewedRegionDraft.response.status, 200);
+    const missingVersionPublish = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({ expectedDraftHash: regionDraftHash, expectedWorkflowRevision: 2 })
+    });
+    assert.equal(missingVersionPublish.response.status, 400);
+    const publishedRegionDraft = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({
+        expectedDraftHash: regionDraftHash,
+        expectedWorkflowRevision: 2,
+        version: "security-http-v1",
+        adminMemo: "private-publish-note"
+      })
+    });
+    assert.equal(publishedRegionDraft.response.status, 200);
+    assert.equal(publishedRegionDraft.body.regionInsight?.state?.publication?.status, "published");
+    const duplicateVersionPublish = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeonggi_pocheon/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({
+        expectedDraftHash: regionDraftHash,
+        expectedWorkflowRevision: 3,
+        version: "security-http-v1"
+      })
+    });
+    assert.equal(duplicateVersionPublish.response.status, 409);
+    assert.equal(duplicateVersionPublish.body.code, "REGION_PUBLICATION_VERSION_CONFLICT");
+
+    const secondRegionDraft = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeongnam_sancheong/draft", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify(regionDraftPayload)
+    });
+    assert.equal(secondRegionDraft.response.status, 200);
+    const secondRegionHash = secondRegionDraft.body.regionInsight?.state?.draftHash;
+    const secondRegionReview = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeongnam_sancheong/review", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({
+        status: "reviewed",
+        expectedDraftHash: secondRegionHash,
+        expectedWorkflowRevision: 1
+      })
+    });
+    assert.equal(secondRegionReview.response.status, 200);
+    const duplicatePublicationId = await jsonRequest(baseUrl, "/api/region-insights/kr_gyeongnam_sancheong/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, "user-agent": "security-contract-test" },
+      body: JSON.stringify({
+        expectedDraftHash: secondRegionHash,
+        expectedWorkflowRevision: 2,
+        version: "security-http-sancheong-v1"
+      })
+    });
+    assert.equal(duplicatePublicationId.response.status, 409);
+    assert.equal(duplicatePublicationId.body.code, "REGION_PUBLICATION_ID_CONFLICT");
 
     const hardening = await jsonRequest(baseUrl, "/api/security-hardening", {
       headers: { cookie, "user-agent": "security-contract-test" }
@@ -411,6 +597,8 @@ async function main() {
     const relative = path.relative(path.resolve(os.tmpdir()), resolvedRoot);
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`unsafe temp cleanup: ${resolvedRoot}`);
     await fsp.rm(resolvedRoot, { recursive: true, force: true });
+    assert.equal(networkGuard.blockedAttempts(), 0);
+    networkGuard.restore();
   }
 
   console.log("Server fail-closed, privacy, enumeration, IP trust, and B2B allowlist tests passed");

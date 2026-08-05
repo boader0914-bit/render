@@ -97,7 +97,7 @@ const navigationModelSource = balancedBlockFrom(app, navigationStart, "{", "}");
 for (const field of ["key", "label", "tab"]) {
   assert.match(navigationModelSource, new RegExp(`\\b${field}\\s*:`), `APP_NAVIGATION items must expose ${field}`);
 }
-for (const label of ["홈", "업체", "수집", "분석", "지역", "회원", "설정", "경쟁", "지도", "수요", "계정"]) {
+for (const label of ["홈", "업체", "수집", "분석", "지역 분석", "회원", "설정", "경쟁", "지역 지도", "수요 구조", "계정"]) {
   assert.ok(navigationModelSource.includes(`label: "${label}"`) || navigationModelSource.includes(`label: '${label}'`), `APP_NAVIGATION must include ${label}`);
 }
 assert.match(navigationModelSource, /\badmin\s*:\s*\{/);
@@ -112,11 +112,13 @@ assert.doesNotMatch(navigationModelSource, /\bicon\s*:\s*["'](?:⌂|업|수|분|
 const navigationFunctions = [
   "navigationModel",
   "navigationEntries",
+  "drawerNavigationEntries",
   "navigationItemByKey",
   "navigationItemIsActive",
   "navigationIconSvg",
   "renderPrimaryNavigation",
   "renderControlDrawerNavigation",
+  "renderRegionAnalysisNavigation",
   "resolveAnalysisReturnTab",
   "rememberAnalysisTab",
   "activateAppNavigation",
@@ -133,7 +135,7 @@ assert.match(functionBlock("primaryNavigationButtonHtml"), /navigationIconSvg\(i
 assert.match(functionBlock("renderPrimaryNavigation"), /navigationEntries/);
 assert.match(functionBlock("renderPrimaryNavigation"), /appPrimaryNav/);
 assert.match(functionBlock("renderPrimaryNavigation"), /aria-current/);
-assert.match(functionBlock("renderControlDrawerNavigation"), /navigationEntries/);
+assert.match(functionBlock("renderControlDrawerNavigation"), /drawerNavigationEntries/);
 assert.match(functionBlock("renderControlDrawerNavigation"), /drawerActions/);
 assert.match(functionBlock("renderControlDrawerNavigation"), /data-drawer-tab/);
 assert.match(functionBlock("activateAppNavigation"), /navigationItemByKey/);
@@ -145,8 +147,10 @@ assert.match(functionBlock("setActiveTab"), /rememberAnalysisTab\(state\.activeT
 assert.match(functionBlock("setActiveTab"), /state\.activeTab === "rank"\) renderCompanies\(\)/, "rank re-entry must rebuild the collected company list");
 assert.match(functionBlock("syncAppHistoryState"), /runId:\s*state\.activeRunId/);
 assert.match(functionBlock("syncAppHistoryState"), /lastAnalysisTab:/);
-assert.match(functionBlock("restoreAppHistoryState"), /historyState\.runId/);
-assert.match(functionBlock("restoreAppHistoryState"), /roleAllowsTab\(historyTab\)/);
+assert.match(functionBlock("restoreAppHistoryState"), /resolveRegionAnalysisHistoryState/);
+assert.match(functionBlock("restoreAppHistoryState"), /restored\.runId/);
+assert.match(functionBlock("restoreAppHistoryState"), /resolveHistoryTabForRole\(String\(restored\.tab/);
+assert.match(functionBlock("resolveHistoryTabForRole"), /allowedTabs[\s\S]*knownRegionTabs[\s\S]*resolveRegionAnalysisReturnTab/);
 assert.match(functionBlock("restoreAppHistoryNavigation"), /loadRun\(restoredRunId\)/);
 assert.match(functionBlock("bindPwaLifecycleEvents"), /restoreAppHistoryNavigation\(event\.state/);
 assert.match(functionBlock("loadRun"), /syncAppHistoryState\(false\)/);
@@ -154,7 +158,7 @@ assert.match(functionBlock("init"), /restoreAppHistoryState\(\)/);
 assert.match(functionBlock("init"), /loadRuns\(false\)/, "boot must respect a restored collection run instead of forcing the latest run");
 const resolveAnalysisReturnTab = vm.runInNewContext(
   `(function(lastTab = "", allowedTabs = []) {${functionBlock("resolveAnalysisReturnTab")}})`,
-  { ADMIN_ANALYSIS_TABS: ["report", "rank", "map", "demand", "historyOps"] }
+  { ADMIN_ANALYSIS_TABS: ["report", "rank", "historyOps"] }
 );
 assert.equal(resolveAnalysisReturnTab("rank", ["report", "rank", "map"]), "rank");
 assert.equal(resolveAnalysisReturnTab("historyOps", ["report", "historyOps"]), "historyOps");
@@ -178,7 +182,7 @@ const activateAppNavigation = vm.runInNewContext(
     confirmAdminSettingsNavigation: () => true,
     openDrawer: () => {},
     isAdminRole: () => true,
-    resolveAnalysisReturnTab: (tab) => resolveAnalysisReturnTab(tab, ["report", "rank", "map", "demand", "historyOps"]),
+    resolveAnalysisReturnTab: (tab) => resolveAnalysisReturnTab(tab, ["report", "rank", "historyOps"]),
     firstRoleTab: () => "report",
     setActiveTab: (tab) => { analysisNavigationHarness.selectedTab = tab; },
     setAdminPanelSection: () => {},

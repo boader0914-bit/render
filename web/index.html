@@ -14,7 +14,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <script src="/login-theme.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=v2-20260804-search-period-v41">
+  <link rel="stylesheet" href="/styles.css?v=v2-20260805-region-analysis-v42">
 </head>
 <body class="app-booting">
   <a class="skip-link" href="#appMain">본문 바로가기</a>
@@ -76,7 +76,13 @@
 
       <section class="notice-card" id="noticeCard" hidden></section>
 
-      <nav class="admin-mobile-nav" aria-label="관리자 모바일 메뉴" aria-hidden="true" hidden data-legacy-navigation>
+      <nav class="region-analysis-navigation" id="regionAnalysisNav" aria-label="지역 분석 화면" aria-hidden="true" hidden>
+        <section class="region-analysis-context" id="regionAnalysisContext" role="status" aria-live="polite" aria-label="현재 지역 분석 기준"></section>
+        <div class="region-analysis-tabs" id="regionAnalysisTabs" role="tablist" aria-label="지역 분석 세부 화면"></div>
+        <p>같은 지역과 분석 기간을 기준으로 지도·수요·입지 근거를 전환합니다.</p>
+      </nav>
+
+      <nav class="admin-mobile-nav" aria-label="관리자 모바일 메뉴" aria-hidden="true" hidden inert data-legacy-navigation>
         <div class="admin-mobile-primary">
           <button type="button" data-admin-mobile-section="summary">요약</button>
           <button type="button" data-admin-mobile-section="database">DB</button>
@@ -103,11 +109,11 @@
         <div class="company-list" id="companyList"></div>
       </section>
 
-      <section class="tab-panel" id="dictionaryPanel" data-panel="dictionary" aria-label="입지사전">
+      <section class="tab-panel" id="dictionaryPanel" data-panel="dictionary" role="tabpanel" aria-label="입지 인사이트" aria-labelledby="regionAnalysisTab-dictionary">
         <div class="section-title">
           <div>
-            <h2>입지사전</h2>
-            <p>저장된 지역 카드로 클러스터와 상품 방향 판단</p>
+            <h2>입지 인사이트</h2>
+            <p>저장된 지역 카드로 클러스터와 상품 방향을 판단</p>
           </div>
           <span id="dictionaryCount">0 지역</span>
         </div>
@@ -118,7 +124,7 @@
           <form class="dictionary-search" id="dictionarySearchForm">
             <label class="field">
               <span>지역명 + 업종</span>
-              <input id="dictionarySearchInput" type="text" value="포천글램핑" autocomplete="off">
+              <input id="dictionarySearchInput" type="text" placeholder="예: 포천글램핑" autocomplete="off">
             </label>
             <button class="primary-button" type="submit">지역 카드 호출</button>
           </form>
@@ -151,7 +157,7 @@
         <div class="decision-queue-list" id="decisionQueueList"></div>
       </section>
 
-      <section class="tab-panel" id="mapPanel" data-panel="map" aria-label="지역지도">
+      <section class="tab-panel" id="mapPanel" data-panel="map" role="tabpanel" aria-label="지역지도" aria-labelledby="regionAnalysisTab-map">
         <div class="section-title">
           <div>
             <h2>지역 클러스터 지도</h2>
@@ -173,7 +179,7 @@
         <div class="region-list" id="regionList"></div>
       </section>
 
-      <section class="tab-panel" id="demandPanel" data-panel="demand" aria-label="수요구조">
+      <section class="tab-panel" id="demandPanel" data-panel="demand" role="tabpanel" aria-label="수요구조" aria-labelledby="regionAnalysisTab-demand">
         <div class="section-title">
           <div>
             <h2>수요구조 분석</h2>
@@ -182,6 +188,28 @@
           <span id="demandState">대기</span>
         </div>
         <div class="demand-dashboard" id="demandDashboard"></div>
+      </section>
+
+      <section class="tab-panel" id="regionInsightPanel" data-panel="regionInsight" role="tabpanel" aria-labelledby="regionAnalysisTab-regionInsight">
+        <div class="section-title">
+          <div>
+            <h2 id="regionInsightTitle">지역 인사이트</h2>
+            <p>관리자가 명시적으로 발행한 지역 분석만 사업자에게 제공합니다.</p>
+          </div>
+          <span>발행본 전용</span>
+        </div>
+        <div id="regionInsightBody" class="region-insight-body" aria-live="polite"></div>
+      </section>
+
+      <section class="tab-panel" id="reviewPublishPanel" data-panel="reviewPublish" role="tabpanel" aria-labelledby="regionAnalysisTab-reviewPublish">
+        <div class="section-title">
+          <div>
+            <h2 id="reviewPublishTitle">지역 검수·발행</h2>
+            <p>입지 점수·데이터 품질·검수 상태·발행 상태를 분리해 확인합니다.</p>
+          </div>
+          <span>관리자 전용</span>
+        </div>
+        <div id="reviewPublishBody" class="region-review-publish-body" aria-live="polite"></div>
       </section>
 
       <section class="tab-panel" id="b2bAccountWorkspace" data-panel="account" aria-labelledby="b2bAccountWorkspaceTitle">
@@ -208,7 +236,7 @@
 
       <section class="tab-panel" id="adminPanel" data-panel="admin" aria-label="관리">
         <div class="admin-workspace-shell">
-          <aside class="admin-workspace-sidebar" aria-label="관리자 작업공간" aria-hidden="true" hidden data-legacy-navigation>
+          <aside class="admin-workspace-sidebar" aria-label="관리자 작업공간" aria-hidden="true" hidden inert data-legacy-navigation>
             <div class="admin-workspace-brand">
               <span class="admin-workspace-mark" aria-hidden="true">DL</span>
               <span class="admin-workspace-brand-copy">
@@ -553,6 +581,6 @@
 
   <script src="/lodging-search-intent.js"></script>
   <script src="/lodging-category-profile.js"></script>
-  <script src="/app.js?v=v2-20260804-search-period-v41"></script>
+  <script src="/app.js?v=v2-20260805-region-analysis-v42"></script>
 </body>
 </html>

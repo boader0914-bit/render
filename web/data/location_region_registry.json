@@ -1,0 +1,1540 @@
+{
+  "registryVersion": "location-region-registry-v1.0.0",
+  "active": true,
+  "effectiveFrom": "2026-08-05",
+  "effectiveTo": null,
+  "codeSystem": {
+    "canonicalRegionKey": "lodging-datalab.region-key.v1",
+    "legalDongCode10": "MOIS_LEGAL_DONG_CODE_10",
+    "sigunguCode5": "MOIS_LEGAL_DONG_CODE_PREFIX_5",
+    "ktoSggCd": "KTO_DATALAB_SGG_CD",
+    "independenceRule": "legalDongCode10 and ktoSggCd are independent identifiers and must never be derived from one another"
+  },
+  "source": {
+    "migratedFrom": "web/data/tourism_region_map.json",
+    "sourceVersion": "tourism-region-map-v0.1",
+    "generatedAt": "2026-07-09T00:00:00.000+09:00"
+  },
+  "sidoAliases": {
+    "seoul": [
+      "서울",
+      "서울특별시",
+      "서울시"
+    ],
+    "busan": [
+      "부산",
+      "부산광역시",
+      "부산시"
+    ],
+    "daegu": [
+      "대구",
+      "대구광역시",
+      "대구시"
+    ],
+    "incheon": [
+      "인천",
+      "인천광역시",
+      "인천시"
+    ],
+    "gwangju": [
+      "광주",
+      "광주광역시",
+      "광주시"
+    ],
+    "daejeon": [
+      "대전",
+      "대전광역시",
+      "대전시"
+    ],
+    "ulsan": [
+      "울산",
+      "울산광역시",
+      "울산시"
+    ],
+    "sejong": [
+      "세종",
+      "세종특별자치시",
+      "세종시"
+    ],
+    "gyeonggi": [
+      "경기",
+      "경기도",
+      "수도권"
+    ],
+    "gangwon": [
+      "강원",
+      "강원특별자치도",
+      "강원도"
+    ],
+    "chungbuk": [
+      "충북",
+      "충청북도"
+    ],
+    "chungnam": [
+      "충남",
+      "충청남도"
+    ],
+    "jeonbuk": [
+      "전북",
+      "전북특별자치도",
+      "전라북도"
+    ],
+    "jeonnam": [
+      "전남",
+      "전라남도"
+    ],
+    "gyeongbuk": [
+      "경북",
+      "경상북도"
+    ],
+    "gyeongnam": [
+      "경남",
+      "경상남도"
+    ],
+    "jeju": [
+      "제주",
+      "제주특별자치도",
+      "제주도"
+    ]
+  },
+  "regions": [
+    {
+      "regionKey": "kr_gyeonggi_pocheon",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41650",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "포천시",
+      "aliases": [
+        "포천",
+        "포천시",
+        "포천글램핑",
+        "포천 캠핑장",
+        "포천 카라반",
+        "포천 펜션",
+        "포천 풀빌라"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeonggi_gapyeong",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41820",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "가평군",
+      "aliases": [
+        "가평",
+        "가평군",
+        "가평글램핑",
+        "가평 펜션",
+        "가평 풀빌라",
+        "가평 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeonggi_yangpyeong",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41830",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "양평군",
+      "aliases": [
+        "양평",
+        "양평군",
+        "양평글램핑",
+        "양평 펜션",
+        "양평 풀빌라",
+        "양평 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeonggi_anseong",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41550",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "안성시",
+      "aliases": [
+        "안성",
+        "안성시",
+        "안성글램핑",
+        "안성 캠핑장",
+        "안성 펜션"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeonggi_icheon",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41500",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "이천시",
+      "aliases": [
+        "이천",
+        "이천시",
+        "이천글램핑",
+        "이천 캠핑장",
+        "이천 펜션"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeonggi_paju",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41480",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "파주시",
+      "aliases": [
+        "파주",
+        "파주시",
+        "파주글램핑",
+        "파주 캠핑장",
+        "파주 펜션"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeonggi_yeoju",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41670",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "여주시",
+      "aliases": [
+        "여주",
+        "여주시",
+        "여주글램핑",
+        "여주 캠핑장",
+        "여주 펜션"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeonggi_hwaseong",
+      "sidoKey": "gyeonggi",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "41590",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경기",
+      "sidoFull": "경기도",
+      "sigungu": "화성시",
+      "aliases": [
+        "화성",
+        "화성시",
+        "화성글램핑",
+        "화성 캠핑장",
+        "화성 펜션"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gangwon_chuncheon",
+      "sidoKey": "gangwon",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "42110",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "춘천시",
+      "aliases": [
+        "춘천",
+        "춘천시",
+        "춘천글램핑",
+        "춘천 펜션",
+        "춘천 풀빌라",
+        "춘천 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_gangwon_hongcheon",
+      "sidoKey": "gangwon",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "42720",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "홍천군",
+      "aliases": [
+        "홍천",
+        "홍천군",
+        "홍천글램핑",
+        "홍천 펜션",
+        "홍천 풀빌라",
+        "홍천 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_gangwon_pyeongchang",
+      "sidoKey": "gangwon",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "42760",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "평창군",
+      "aliases": [
+        "평창",
+        "평창군",
+        "평창글램핑",
+        "평창 펜션",
+        "평창 풀빌라",
+        "평창 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_gangwon_gangneung",
+      "sidoKey": "gangwon",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "42150",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "강릉시",
+      "aliases": [
+        "강릉",
+        "강릉시",
+        "강릉글램핑",
+        "강릉 펜션",
+        "강릉 풀빌라",
+        "강릉 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_gangwon_sokcho",
+      "sidoKey": "gangwon",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "42210",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "속초시",
+      "aliases": [
+        "속초",
+        "속초시",
+        "속초글램핑",
+        "속초 펜션",
+        "속초 풀빌라",
+        "속초 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_chungbuk_danyang",
+      "sidoKey": "chungbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "43800",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "단양군",
+      "aliases": [
+        "단양",
+        "단양군",
+        "단양글램핑",
+        "단양 펜션",
+        "단양 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungbuk_jecheon",
+      "sidoKey": "chungbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "43150",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "제천시",
+      "aliases": [
+        "제천",
+        "제천시",
+        "제천글램핑",
+        "제천 펜션",
+        "제천 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungbuk_chungju",
+      "sidoKey": "chungbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "43130",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "충주시",
+      "aliases": [
+        "충주",
+        "충주시",
+        "충주글램핑",
+        "충주 펜션",
+        "충주 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungbuk_goesan",
+      "sidoKey": "chungbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "43760",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충북",
+      "sidoFull": "충청북도",
+      "sigungu": "괴산군",
+      "aliases": [
+        "괴산",
+        "괴산군",
+        "괴산글램핑",
+        "괴산 펜션",
+        "괴산 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungnam_taean",
+      "sidoKey": "chungnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "44825",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "태안군",
+      "aliases": [
+        "태안",
+        "태안군",
+        "태안글램핑",
+        "태안 펜션",
+        "태안 풀빌라",
+        "태안 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungnam_gongju",
+      "sidoKey": "chungnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "44150",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "공주시",
+      "aliases": [
+        "공주",
+        "공주시",
+        "공주글램핑",
+        "공주 펜션",
+        "공주 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungnam_asan",
+      "sidoKey": "chungnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "44200",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "아산시",
+      "aliases": [
+        "아산",
+        "아산시",
+        "아산글램핑",
+        "아산 펜션",
+        "아산 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungnam_boryeong",
+      "sidoKey": "chungnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "44180",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "보령시",
+      "aliases": [
+        "보령",
+        "보령시",
+        "보령글램핑",
+        "보령 펜션",
+        "보령 캠핑장",
+        "대천"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_chungnam_geumsan",
+      "sidoKey": "chungnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "44710",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "충남",
+      "sidoFull": "충청남도",
+      "sigungu": "금산군",
+      "aliases": [
+        "금산",
+        "금산군",
+        "금산글램핑",
+        "금산 펜션",
+        "금산 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_jeonbuk_muju",
+      "sidoKey": "jeonbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "45730",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "무주군",
+      "aliases": [
+        "무주",
+        "무주군",
+        "무주글램핑",
+        "무주 펜션",
+        "무주 풀빌라",
+        "무주 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_jeonbuk_wanju",
+      "sidoKey": "jeonbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "45710",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "완주군",
+      "aliases": [
+        "완주",
+        "완주군",
+        "완주글램핑",
+        "완주 펜션",
+        "완주 풀빌라",
+        "완주 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_jeonbuk_namwon",
+      "sidoKey": "jeonbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "45190",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "남원시",
+      "aliases": [
+        "남원",
+        "남원시",
+        "남원글램핑",
+        "남원 펜션",
+        "남원 풀빌라",
+        "남원 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_jeonbuk_buan",
+      "sidoKey": "jeonbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "45800",
+      "ktoSggCdStatus": "verify-before-api-call",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전북",
+      "sidoFull": "전북특별자치도",
+      "sigungu": "부안군",
+      "aliases": [
+        "부안",
+        "부안군",
+        "부안글램핑",
+        "부안 펜션",
+        "부안 풀빌라",
+        "부안 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call"
+    },
+    {
+      "regionKey": "kr_jeonnam_yeosu",
+      "sidoKey": "jeonnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "46130",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전남",
+      "sidoFull": "전라남도",
+      "sigungu": "여수시",
+      "aliases": [
+        "여수",
+        "여수시",
+        "여수글램핑",
+        "여수 펜션",
+        "여수 풀빌라",
+        "여수 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_jeonnam_damyang",
+      "sidoKey": "jeonnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "46710",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전남",
+      "sidoFull": "전라남도",
+      "sigungu": "담양군",
+      "aliases": [
+        "담양",
+        "담양군",
+        "담양글램핑",
+        "담양 펜션",
+        "담양 풀빌라",
+        "담양 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_jeonnam_suncheon",
+      "sidoKey": "jeonnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "46150",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전남",
+      "sidoFull": "전라남도",
+      "sigungu": "순천시",
+      "aliases": [
+        "순천",
+        "순천시",
+        "순천글램핑",
+        "순천 펜션",
+        "순천 풀빌라",
+        "순천 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_jeonnam_gurye",
+      "sidoKey": "jeonnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "46730",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "전남",
+      "sidoFull": "전라남도",
+      "sigungu": "구례군",
+      "aliases": [
+        "구례",
+        "구례군",
+        "구례글램핑",
+        "구례 펜션",
+        "구례 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongbuk_gyeongju",
+      "sidoKey": "gyeongbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "47130",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "경주시",
+      "aliases": [
+        "경주",
+        "경주시",
+        "경주글램핑",
+        "경주 펜션",
+        "경주 풀빌라",
+        "경주 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongbuk_cheongdo",
+      "sidoKey": "gyeongbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "47820",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "청도군",
+      "aliases": [
+        "청도",
+        "청도군",
+        "청도글램핑",
+        "청도 펜션",
+        "청도 풀빌라",
+        "청도 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongbuk_pohang",
+      "sidoKey": "gyeongbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "47110",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "포항시",
+      "aliases": [
+        "포항",
+        "포항시",
+        "포항글램핑",
+        "포항 펜션",
+        "포항 풀빌라",
+        "포항 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongbuk_andong",
+      "sidoKey": "gyeongbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "47170",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "안동시",
+      "aliases": [
+        "안동",
+        "안동시",
+        "안동글램핑",
+        "안동 펜션",
+        "안동 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongbuk_mungyeong",
+      "sidoKey": "gyeongbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "47280",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "문경시",
+      "aliases": [
+        "문경",
+        "문경시",
+        "문경글램핑",
+        "문경 펜션",
+        "문경 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongbuk_yeongdeok",
+      "sidoKey": "gyeongbuk",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "47770",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경북",
+      "sidoFull": "경상북도",
+      "sigungu": "영덕군",
+      "aliases": [
+        "영덕",
+        "영덕군",
+        "영덕글램핑",
+        "영덕 펜션",
+        "영덕 캠핑장",
+        "영덕 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_hadong",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48850",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "하동군",
+      "aliases": [
+        "하동",
+        "하동군",
+        "하동글램핑",
+        "하동 풀빌라",
+        "하동 펜션",
+        "하동 숙소",
+        "하동 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_sancheong",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48860",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "산청군",
+      "aliases": [
+        "산청",
+        "산청군",
+        "산청글램핑",
+        "산청 펜션",
+        "산청 풀빌라",
+        "산청 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_hapcheon",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48890",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "합천군",
+      "aliases": [
+        "합천",
+        "합천군",
+        "합천글램핑",
+        "합천 펜션",
+        "합천 풀빌라",
+        "합천 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_sacheon",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48240",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "사천시",
+      "aliases": [
+        "사천",
+        "사천시",
+        "사천글램핑",
+        "사천 펜션",
+        "사천 풀빌라",
+        "사천 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_miryang",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48270",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "밀양시",
+      "aliases": [
+        "밀양",
+        "밀양시",
+        "밀양글램핑",
+        "밀양 펜션",
+        "밀양 풀빌라",
+        "밀양 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_namhae",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48840",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "남해군",
+      "aliases": [
+        "남해",
+        "남해군",
+        "남해글램핑",
+        "남해 펜션",
+        "남해 풀빌라",
+        "남해 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_geoje",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48310",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "거제시",
+      "aliases": [
+        "거제",
+        "거제시",
+        "거제글램핑",
+        "거제 펜션",
+        "거제 풀빌라",
+        "거제 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gyeongnam_jinju",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "48170",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "진주시",
+      "aliases": [
+        "진주",
+        "진주시",
+        "진주글램핑",
+        "진주 펜션",
+        "진주 풀빌라",
+        "진주 숙소"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_jeju_jeju",
+      "sidoKey": "jeju",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "50110",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "제주",
+      "sidoFull": "제주특별자치도",
+      "sigungu": "제주시",
+      "aliases": [
+        "제주",
+        "제주시",
+        "제주글램핑",
+        "제주 펜션",
+        "제주 풀빌라",
+        "제주 숙소",
+        "제주 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_jeju_seogwipo",
+      "sidoKey": "jeju",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": "50130",
+      "ktoSggCdStatus": "mapped",
+      "ktoSggCdSource": {
+        "file": "web/data/tourism_region_map.json",
+        "version": "tourism-region-map-v0.1"
+      },
+      "ktoSggCdEffectiveFrom": "2026-07-09",
+      "sido": "제주",
+      "sidoFull": "제주특별자치도",
+      "sigungu": "서귀포시",
+      "aliases": [
+        "서귀포",
+        "서귀포시",
+        "서귀포글램핑",
+        "서귀포 펜션",
+        "서귀포 풀빌라",
+        "서귀포 숙소",
+        "서귀포 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu"
+    },
+    {
+      "regionKey": "kr_gangwon_goseong",
+      "sidoKey": "gangwon",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": null,
+      "ktoSggCdStatus": "unverified",
+      "ktoSggCdSource": null,
+      "ktoSggCdEffectiveFrom": null,
+      "sido": "강원",
+      "sidoFull": "강원특별자치도",
+      "sigungu": "고성군",
+      "aliases": [
+        "고성",
+        "고성군",
+        "고성글램핑",
+        "고성 펜션",
+        "고성 풀빌라",
+        "고성 숙소",
+        "고성 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call",
+      "registryEntryStatus": "manual-ambiguity-seed-requires-code-verification"
+    },
+    {
+      "regionKey": "kr_gyeongnam_goseong",
+      "sidoKey": "gyeongnam",
+      "legalDongCode10": null,
+      "legalDongCodeStatus": "unverified",
+      "legalDongCodeSource": null,
+      "legalDongCodeEffectiveFrom": null,
+      "ktoSggCd": null,
+      "ktoSggCdStatus": "unverified",
+      "ktoSggCdSource": null,
+      "ktoSggCdEffectiveFrom": null,
+      "sido": "경남",
+      "sidoFull": "경상남도",
+      "sigungu": "고성군",
+      "aliases": [
+        "고성",
+        "고성군",
+        "고성글램핑",
+        "고성 펜션",
+        "고성 풀빌라",
+        "고성 숙소",
+        "고성 캠핑장"
+      ],
+      "active": true,
+      "effectiveFrom": "2026-08-05",
+      "effectiveTo": null,
+      "unit": "sigungu",
+      "codeStatus": "verify-before-api-call",
+      "registryEntryStatus": "manual-ambiguity-seed-requires-code-verification"
+    }
+  ]
+}
