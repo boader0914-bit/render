@@ -76,6 +76,11 @@ const RESTART_REJECTED_JOB_STATES = new Set(["artifact_received", "validated"]);
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/u;
+const CANCELLATION_FAILURE_CODES = new Set([
+  "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED",
+  "V2_TOP20_COLLECTION_ABORTED",
+  "V2_TOP20_PROVIDER_CALL_HEARTBEAT_FAILED"
+]);
 const SAFE_SUBTYPE_PATTERN = /^(?:http_403|http_429|challenge_html|unknown_access_block)$/u;
 const DIAGNOSTIC_PATTERN = /^crawl-[a-f0-9]{12}$/u;
 const CLAIM_KEYS = Object.freeze(["workerId", "workerPoolId", "workerCommit"]);
@@ -571,6 +576,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     const candidate = snapshot.jobs.find((job) => (
       job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID
       && job.state === "queued"
+      && job.cancellationRequested !== true
       && payloads.has(job.jobId)
     ));
     if (!candidate) return Object.freeze({ status: "empty", job: null });
@@ -620,6 +626,26 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     await reconcileFirstUse();
     const job = await readJob(input.body.jobId);
     const entry = job ? payloads.get(job.jobId) : null;
+    const identityMatches = Boolean(
+      job
+      && entry
+      && job.state === "collecting"
+      && job.workerId === COLLECTION_WORKER_V2_TOP20_WORKER_ID
+      && job.attemptId === input.body.attemptId
+      && input.body.workerCommit === targetWorkerCommit
+      && input.body.runtimeId === runtimeIdForCommit(targetWorkerCommit)
+    );
+    if (
+      identityMatches
+      && job.cancellationRequested === true
+      && job.workflowRevision === Number(input.body.workflowRevision) + 1
+    ) {
+      throw fail(
+        "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED",
+        "top20 Worker collection cancellation was requested",
+        409
+      );
+    }
     if (
       !job
       || !entry
@@ -678,6 +704,27 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
     let job = await readJob(input.body.jobId);
     const entry = job ? payloads.get(job.jobId) : null;
+    const identityMatches = Boolean(
+      job
+      && entry
+      && job.state === "collecting"
+      && job.workerId === COLLECTION_WORKER_V2_TOP20_WORKER_ID
+      && job.attemptId === input.body.attemptId
+      && input.body.workerCommit === targetWorkerCommit
+      && input.body.runtimeId === runtimeIdForCommit(targetWorkerCommit)
+      && entry.providerWorkflowRevision === Number(input.body.providerWorkflowRevision)
+    );
+    if (
+      identityMatches
+      && job.cancellationRequested === true
+      && job.workflowRevision === Number(input.body.workflowRevision) + 1
+    ) {
+      throw fail(
+        "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED",
+        "top20 Worker collection cancellation was requested",
+        409
+      );
+    }
     if (
       !job
       || !entry
@@ -1085,9 +1132,24 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || !entry
       || job.workerId !== COLLECTION_WORKER_V2_TOP20_WORKER_ID
       || job.attemptId !== body.attemptId
-      || !["collecting", "failure_received", "failed"].includes(job.state)
+      || !["collecting", "failure_received", "failed", "cancelled"].includes(job.state)
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_FAILURE_CONFLICT", "top20 failure receipt is stale", 409);
+    }
+    if (job.state === "cancelled") {
+      if (job.failureReceiptHash !== receiptHash || job.failureCode !== "COLLECTION_WORKER_V2_TOP20_CANCELLED") {
+        throw fail("COLLECTION_WORKER_V2_TOP20_FAILURE_CONFLICT", "top20 cancellation receipt conflicts", 409);
+      }
+      return Object.freeze({
+        status: "cancelled",
+        code: job.failureCode,
+        jobState: job.state,
+        providerAttemptCount: Number(body.providerAttemptCount),
+        executedCallCount: body.executedCallCount,
+        resultStored: false,
+        writeCount: 0,
+        replayed: true
+      });
     }
     if (job.state === "failed") {
       if (job.failureReceiptHash !== receiptHash || job.failureCode !== body.code) {
@@ -1102,6 +1164,35 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         resultStored: false,
         writeCount: 0,
         replayed: true
+      });
+    }
+    const cancellationReceipt = job.state === "collecting"
+      && job.cancellationRequested === true
+      && CANCELLATION_FAILURE_CODES.has(body.code)
+      && job.workflowRevision === Number(body.workflowRevision) + 1
+      && entry.providerWorkflowRevision === Number(body.providerWorkflowRevision);
+    if (cancellationReceipt) {
+      assertActiveLease(job);
+      await settleFailureProvider(body, receiptHash);
+      job = await jobStore.transitionJob({
+        jobId: job.jobId,
+        expectedWorkflowRevision: job.workflowRevision,
+        workerId: job.workerId,
+        nextState: "cancelled",
+        failureCode: "COLLECTION_WORKER_V2_TOP20_CANCELLED",
+        failureReceiptHash: receiptHash,
+        providerAttemptCount: Number(body.providerAttemptCount),
+        now: now()
+      });
+      return Object.freeze({
+        status: "cancelled",
+        code: job.failureCode,
+        jobState: job.state,
+        providerAttemptCount: Number(body.providerAttemptCount),
+        executedCallCount: body.executedCallCount,
+        resultStored: false,
+        writeCount: 0,
+        replayed: false
       });
     }
     if (job.state === "collecting") {

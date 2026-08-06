@@ -8,6 +8,7 @@ const {
   buildV2Top20CollectorEnvironment,
   executeV2Top20Collector,
   normalizeProviderCallMessage,
+  runCollectorChild,
   selectV2Top20ChildBaseEnvironment
 } = require("./collection_worker_v2_top20_collector.cjs");
 const {
@@ -161,6 +162,20 @@ async function verifyRealDetailManifestShape(root) {
     });
     assert.equal(sanitizedCollectorEnvironment.PATH, "synthetic-path");
     assert.equal(Object.hasOwn(sanitizedCollectorEnvironment, "COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64"), false);
+    const preAborted = new AbortController();
+    preAborted.abort();
+    let preAbortedSpawnCount = 0;
+    await assert.rejects(
+      () => runCollectorChild({
+        signal: preAborted.signal,
+        spawnImpl() {
+          preAbortedSpawnCount += 1;
+          throw new Error("spawn must not run after abort");
+        }
+      }),
+      { code: "V2_TOP20_COLLECTION_ABORTED" }
+    );
+    assert.equal(preAbortedSpawnCount, 0, "an already-aborted signal must prevent child start");
     assert.deepEqual(normalizeProviderCallMessage({
       type: "v2_top20_provider_call_heartbeat_request.v1",
       requestId: "provider-call-123-1-abcdef12",

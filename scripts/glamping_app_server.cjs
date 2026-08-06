@@ -14889,6 +14889,17 @@ async function cancelActiveTop20WorkerCollection(reason = "관리자 요청으�
         message: job.state === "cancelled" ? "Worker 수집을 중지했습니다." : "Worker 수집이 이미 종료되었습니다."
       });
     }
+    if (!["queued", "leased", "collecting"].includes(job.state)) {
+      return Object.freeze({
+        ok: false,
+        active: true,
+        cancelling: false,
+        cancelled: false,
+        worker: true,
+        workerJobId: jobId,
+        message: "Worker 수집 결과를 확정하는 중에는 취소할 수 없습니다."
+      });
+    }
     try {
       if (!job.cancellationRequested) {
         job = await collectionWorkerJobStore.requestCancellation({
@@ -14897,20 +14908,29 @@ async function cancelActiveTop20WorkerCollection(reason = "관리자 요청으�
           now: new Date()
         });
       }
-      const providerState = await naverProviderHealthStore.read();
-      if (providerState.state === "probe_allowed") {
-        if (providerState.workflowRevision !== Number(job.providerWorkflowRevision)) {
-          continue;
-        }
-        await naverProviderHealthStore.releaseAttempt({
-          expectedWorkflowRevision: providerState.workflowRevision,
-          outcomeReceiptHash: crypto
-            .createHash("sha256")
-            .update(`collection-worker-v2-top20-cancel.v1\0${jobId}\0${providerState.workflowRevision}`)
-            .digest("hex"),
-          now: new Date()
+      if (job.state !== "queued") {
+        return Object.freeze({
+          ok: true,
+          active: true,
+          cancelling: true,
+          cancelled: false,
+          worker: true,
+          workerJobId: jobId,
+          message: "Worker 수집 중지를 요청했습니다. 실행 중인 호출이 종료되면 안전하게 중단합니다."
         });
       }
+      const providerState = await naverProviderHealthStore.read();
+      if (providerState.state !== "probe_allowed" || providerState.workflowRevision !== Number(job.providerWorkflowRevision)) {
+        continue;
+      }
+      await naverProviderHealthStore.releaseAttempt({
+        expectedWorkflowRevision: providerState.workflowRevision,
+        outcomeReceiptHash: crypto
+          .createHash("sha256")
+          .update(`collection-worker-v2-top20-cancel.v1\0${jobId}\0${providerState.workflowRevision}`)
+          .digest("hex"),
+        now: new Date()
+      });
       job = await collectionWorkerJobStore.transitionJob({
         jobId,
         expectedWorkflowRevision: job.workflowRevision,

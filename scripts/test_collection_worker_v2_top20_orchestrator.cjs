@@ -486,6 +486,53 @@ async function failureScenario(root, keys) {
   assert.equal(system.callbackCount(), 0);
 }
 
+async function cancellationScenario(root, keys) {
+  const system = await createSystem(root, keys);
+  const flow = await prepareClaimPreflight(system, keys, "Synthetic top20 cancellation lodging");
+  const cancelledRequest = await system.jobStore.requestCancellation({
+    jobId: flow.prepared.jobId,
+    expectedWorkflowRevision: flow.claimed.job.workflowRevision,
+    now: system.clock.tick()
+  });
+  assert.equal(cancelledRequest.cancellationRequested, true);
+  const heartbeatFixture = heartbeatState(system, keys, flow);
+  await assert.rejects(
+    () => system.orchestrator.heartbeat({
+      body: heartbeatFixture.body,
+      signedRequest: heartbeatFixture.request
+    }),
+    { code: "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED" },
+    "a cancellation request must stop the next provider heartbeat without releasing early"
+  );
+  assert.equal((await system.providerStore.read()).state, "probe_allowed");
+  const body = {
+    jobId: flow.prepared.jobId,
+    attemptId: flow.claimed.job.signedJob.attemptId,
+    workflowRevision: flow.claimed.job.workflowRevision,
+    providerWorkflowRevision: flow.claimed.job.providerWorkflowRevision,
+    providerAttemptCount: 0,
+    executedCallCount: 0,
+    code: "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED",
+    providerFailureSubtype: null,
+    diagnosticId: null
+  };
+  const result = await system.orchestrator.recordFailure({
+    body,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_FAILURE_PATH, body, keys, system.clock.now())
+  });
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.jobState, "cancelled");
+  assert.equal(result.resultStored, false);
+  assert.equal(result.writeCount, 0);
+  assert.equal(system.callbackCount(), 0);
+  assert.equal((await system.providerStore.read()).state, "closed", "provider lease releases only after Worker stop receipt");
+  const replay = await system.orchestrator.recordFailure({
+    body,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_FAILURE_PATH, body, keys, system.clock.now())
+  });
+  assert.equal(replay.replayed, true);
+}
+
 async function identityScenario(root, keys) {
   const system = await createSystem(root, keys);
   await system.orchestrator.prepare({
@@ -609,6 +656,7 @@ async function main() {
     await readyScenario(path.join(root, "ready"), keys);
     await blockedScenario(path.join(root, "blocked"), keys);
     await failureScenario(path.join(root, "failed"), keys);
+    await cancellationScenario(path.join(root, "cancelled"), keys);
     await identityScenario(path.join(root, "identity"), keys);
     await queuedRestartScenario(path.join(root, "restart-queued"), keys);
     await collectingRestartScenario(path.join(root, "restart-collecting"), keys);

@@ -225,13 +225,31 @@ function runCollectorChild(input = {}) {
     ? Math.min(input.maxRuntimeMs, DEFAULT_MAX_RUNTIME_MS)
     : DEFAULT_MAX_RUNTIME_MS;
   return new Promise((resolve, reject) => {
+    let child = null;
+    const onAbort = () => child?.kill?.("SIGTERM");
+    if (input.signal?.aborted) {
+      reject(Object.assign(new Error("top20 Worker collection was aborted before child start"), {
+        code: "V2_TOP20_COLLECTION_ABORTED",
+        statusCode: 499,
+        retryable: false
+      }));
+      return;
+    }
+    input.signal?.addEventListener?.("abort", onAbort, { once: true });
     const spawnOptions = {
       cwd: input.cwd,
       env: input.environment,
       windowsHide: true
     };
     if (providerCallHook) spawnOptions.stdio = ["ignore", "pipe", "pipe", "ipc"];
-    const child = spawnImpl(process.execPath, [input.scriptPath, input.keyword], spawnOptions);
+    try {
+      child = spawnImpl(process.execPath, [input.scriptPath, input.keyword], spawnOptions);
+    } catch (error) {
+      input.signal?.removeEventListener?.("abort", onAbort);
+      reject(classifyCollectorProcessFailure({ spawnError: error }));
+      return;
+    }
+    if (input.signal?.aborted) onAbort();
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -312,12 +330,13 @@ function runCollectorChild(input = {}) {
         }));
         authorizedRequest = null;
         sendProviderCallAck(request, true, V2_TOP20_PROVIDER_CALL_STARTED_ACK_TYPE);
-      } catch {
+      } catch (error) {
         if (!providerHeartbeatFailure) {
+          const cancelled = error?.code === "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED";
           providerHeartbeatFailure = collectorError(
-            "V2_TOP20_PROVIDER_CALL_HEARTBEAT_FAILED",
-            "top20 provider call heartbeat failed",
-            503
+            cancelled ? error.code : "V2_TOP20_PROVIDER_CALL_HEARTBEAT_FAILED",
+            cancelled ? "top20 Worker collection cancellation was requested" : "top20 provider call heartbeat failed",
+            cancelled ? 409 : 503
           );
         }
         const ackType = message?.type === V2_TOP20_PROVIDER_CALL_STARTED_REQUEST_TYPE
@@ -339,8 +358,6 @@ function runCollectorChild(input = {}) {
       reject(createCrawlFailure("NAVER_TEMPORARY_UNAVAILABLE"));
     }, maxRuntimeMs);
     timeout.unref?.();
-    const onAbort = () => child.kill?.("SIGTERM");
-    input.signal?.addEventListener?.("abort", onAbort, { once: true });
     child.stdout?.on?.("data", (chunk) => {
       stdout = (stdout + chunk.toString("utf8")).slice(-2 * 1024 * 1024);
     });
@@ -419,6 +436,10 @@ async function executeV2Top20Collector(input = {}) {
   const tempBase = path.resolve(rawTempBase);
   await fs.mkdir(tempBase, { recursive: true });
   const tempRoot = await fs.mkdtemp(path.join(tempBase, "v2-top20-"));
+  const collectorController = new AbortController();
+  const onExternalAbort = () => collectorController.abort();
+  if (input.signal?.aborted) collectorController.abort();
+  else input.signal?.addEventListener?.("abort", onExternalAbort, { once: true });
   let heartbeatFlight = null;
   let heartbeatError = null;
   let timer = null;
@@ -430,6 +451,7 @@ async function executeV2Top20Collector(input = {}) {
         await input.heartbeat();
       } catch (error) {
         heartbeatError = error;
+        collectorController.abort();
         throw error;
       }
     })();
@@ -466,7 +488,7 @@ async function executeV2Top20Collector(input = {}) {
         outputRoot,
         tempRoot,
         runStamp,
-        signal: input.signal,
+        signal: collectorController.signal,
         authorizeProviderCall: async (metadata) => {
           const operation = String(metadata?.operation || "");
           if (metadata?.providerId !== "naver_place_search" || !V2_TOP20_SAFE_PROVIDER_OPERATIONS.has(operation)) {
@@ -505,7 +527,7 @@ async function executeV2Top20Collector(input = {}) {
       collectorResult = await runCollectorChild({
         spawnImpl: input.spawnImpl,
         maxRuntimeMs: input.maxRuntimeMs,
-        signal: input.signal,
+        signal: collectorController.signal,
         scriptPath: path.resolve(input.scriptPath || path.join(__dirname, "gyeongnam_glamping_crawl.cjs")),
         cwd: path.resolve(input.cwd || path.join(__dirname, "..")),
         keyword: contract.keyword,
@@ -547,6 +569,7 @@ async function executeV2Top20Collector(input = {}) {
     });
   } finally {
     if (timer) clearInterval(timer);
+    input.signal?.removeEventListener?.("abort", onExternalAbort);
     await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
   }
 }

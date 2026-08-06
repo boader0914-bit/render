@@ -60,6 +60,8 @@ assert.match(serverSource, /&& isV2Top20WorkerEligible\(payload\)/u);
 assert.match(serverSource, /reqUrl\.pathname === "\/api\/crawl\/cancel"/u);
 assert.match(serverSource, /collectionWorkerJobStore\.requestCancellation/u);
 assert.match(serverSource, /nextState: "cancelled"/u);
+assert.match(serverSource, /message: "Worker 수집 중지를 요청했습니다\. 실행 중인 호출이 종료되면 안전하게 중단합니다\."/u);
+assert.match(serverSource, /job\.state !== "queued"/u);
 assert.match(serverSource, /workerOutcome\.job\.cancellationRequested === true/u);
 assert.match(appSource, /result\.queued && result\.worker/u);
 assert.match(appSource, /상위 20곳의 재고·가격·예상매출/u);

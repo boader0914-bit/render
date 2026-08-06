@@ -247,6 +247,7 @@ function createCollectionJobStore(options = {}) {
         : null;
       const job = store.jobs.find((candidate) => (
         candidate.state === "queued"
+        && candidate.cancellationRequested !== true
         && candidate.workerPoolId === workerPoolId
         && (!requestedJobId || candidate.jobId === requestedJobId)
       ));
