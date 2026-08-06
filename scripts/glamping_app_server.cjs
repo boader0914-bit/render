@@ -69,6 +69,20 @@ const {
   createNaverProviderHealthStore
 } = require("./naver_provider_health_store.cjs");
 const {
+  createCollectionJobStore
+} = require("./collection_job_store.cjs");
+const {
+  createCollectionWorkerCanaryOrchestrator
+} = require("./collection_worker_canary_orchestrator.cjs");
+const {
+  CLAIM_PATH: COLLECTION_WORKER_CLAIM_PATH,
+  FAILURE_PATH: COLLECTION_WORKER_FAILURE_PATH,
+  FINALIZE_PATH: COLLECTION_WORKER_FINALIZE_PATH,
+  OPERATOR_TOKEN_HEADER: COLLECTION_WORKER_OPERATOR_TOKEN_HEADER,
+  PREFLIGHT_PATH: COLLECTION_WORKER_PREFLIGHT_PATH,
+  PREPARE_PATH: COLLECTION_WORKER_PREPARE_PATH
+} = require("./collection_worker_canary_protocol.cjs");
+const {
   buildNaverCollectionFallbackState,
   createNaverSearchContractSignature,
   decideNaverQuotaConsumption,
@@ -188,9 +202,24 @@ const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const REGION_INSIGHT_STORE_FILE = path.join(DATA_DIR, "region_insights", "regions.json");
 const NAVER_PROVIDER_HEALTH_FILE = path.join(DATA_DIR, "provider_health", "naver_place_search.json");
+const COLLECTION_WORKER_JOB_STORE_FILE = path.join(DATA_DIR, "collector_worker", "jobs.json");
 const naverProviderHealthStore = createNaverProviderHealthStore({
   filePath: NAVER_PROVIDER_HEALTH_FILE,
   runtimeRoot: DATA_DIR
+});
+const collectionWorkerJobStore = createCollectionJobStore({
+  filePath: COLLECTION_WORKER_JOB_STORE_FILE,
+  runtimeRoot: DATA_DIR
+});
+const collectionWorkerCanaryOrchestrator = createCollectionWorkerCanaryOrchestrator({
+  enabled: String(process.env.COLLECTION_WORKER_CANARY_ENABLED || "false").toLowerCase() === "true",
+  jobStore: collectionWorkerJobStore,
+  providerStore: naverProviderHealthStore,
+  targetWorkerCommit: process.env.COLLECTION_WORKER_TARGET_COMMIT,
+  dispatchPrivateKeyBase64: process.env.COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64,
+  artifactPublicKeyBase64: process.env.COLLECTION_WORKER_ARTIFACT_PUBLIC_KEY_B64,
+  requestPublicKeyBase64: process.env.COLLECTION_WORKER_REQUEST_PUBLIC_KEY_B64,
+  operatorTokenSha256: process.env.COLLECTION_WORKER_OPERATOR_TOKEN_SHA256
 });
 const naverLegacyCanaryRunner = createNaverLegacyCanaryRunner({
   releaseEnabled: false
@@ -15118,6 +15147,64 @@ async function route(req, res) {
       const session = getSession(req);
       if (session) return send(res, 302, "", "text/plain; charset=utf-8", { Location: redirectPathForRole(session.role) });
       return sendLogin(res, 200, hadSessionCookie ? "세션이 만료되었습니다. 다시 로그인하세요." : "", hadSessionCookie ? { "Set-Cookie": clearSessionCookie() } : {});
+    }
+
+    // Render Worker requests use short-lived Ed25519 request authentication and
+    // intentionally do not carry a browser session cookie. Keep this narrow
+    // protocol ahead of the interactive login boundary.
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_PREPARE_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerCanaryOrchestrator.prepare({
+        operatorToken: req.headers[COLLECTION_WORKER_OPERATOR_TOKEN_HEADER],
+        contract: payload
+      });
+      return send(res, 201, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_CLAIM_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerCanaryOrchestrator.claim({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return send(res, 200, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_PREFLIGHT_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerCanaryOrchestrator.preflight({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return send(res, 200, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FINALIZE_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerCanaryOrchestrator.finalize({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return send(res, 200, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FAILURE_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerCanaryOrchestrator.recordFailure({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return send(res, 200, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
     }
 
     if (!requireLogin(req, res, reqUrl)) return;

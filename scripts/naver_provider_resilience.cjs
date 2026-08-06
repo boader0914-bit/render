@@ -11,6 +11,8 @@ const PROVIDER_ATTEMPT_LEASE_SECONDS = 30 * 60;
 const PROVIDER_ATTEMPT_HEARTBEAT_SECONDS = 60;
 const PROBE_ESCALATION_SECONDS = Object.freeze([30 * 60, 60 * 60, 120 * 60]);
 const PROVIDER_STATES = Object.freeze(["closed", "open", "probe_allowed"]);
+const PROVIDER_OUTCOME_KINDS = Object.freeze(["success", "block", "release"]);
+const OUTCOME_RECEIPT_PATTERN = /^[a-f0-9]{64}$/u;
 const FAILURE_SUBTYPES = Object.freeze([
   "http_403",
   "http_429",
@@ -172,6 +174,8 @@ function createInitialProviderCircuitState(options = {}) {
     lastDiagnosticId: null,
     lastAttemptAt: null,
     lastSuccessAt: null,
+    lastOutcomeKind: null,
+    lastOutcomeReceiptHash: null,
     cooldownPolicyVersion: COOLDOWN_POLICY_VERSION,
     workflowRevision: 0,
     updatedAt: now
@@ -186,7 +190,7 @@ function isCanonicalInstant(value) {
 
 function validateProviderCircuitState(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const expectedKeys = [
+  const requiredKeys = [
     "schemaVersion",
     "providerId",
     "state",
@@ -200,8 +204,14 @@ function validateProviderCircuitState(value) {
     "cooldownPolicyVersion",
     "workflowRevision",
     "updatedAt"
-  ].sort();
-  if (JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(expectedKeys)) return false;
+  ];
+  const optionalKeys = ["lastOutcomeKind", "lastOutcomeReceiptHash"];
+  const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+  if (!requiredKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key))) return false;
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+  const hasOutcomeKind = Object.prototype.hasOwnProperty.call(value, "lastOutcomeKind");
+  const hasOutcomeReceipt = Object.prototype.hasOwnProperty.call(value, "lastOutcomeReceiptHash");
+  if (hasOutcomeKind !== hasOutcomeReceipt) return false;
   if (value.schemaVersion !== PROVIDER_HEALTH_SCHEMA_VERSION) return false;
   if (value.providerId !== NAVER_PROVIDER_ID) return false;
   if (!PROVIDER_STATES.includes(value.state)) return false;
@@ -214,6 +224,12 @@ function validateProviderCircuitState(value) {
   }
   if (value.lastFailureSubtype !== null && !FAILURE_SUBTYPES.includes(value.lastFailureSubtype)) return false;
   if (value.lastDiagnosticId !== null && !safeDiagnosticId(value.lastDiagnosticId)) return false;
+  if (hasOutcomeKind) {
+    const noOutcomeReceipt = value.lastOutcomeKind === null && value.lastOutcomeReceiptHash === null;
+    const validOutcomeReceipt = PROVIDER_OUTCOME_KINDS.includes(value.lastOutcomeKind)
+      && OUTCOME_RECEIPT_PATTERN.test(String(value.lastOutcomeReceiptHash || ""));
+    if (!noOutcomeReceipt && !validOutcomeReceipt) return false;
+  }
   const hasIncidentWindow = value.openedAt !== null || value.retryAt !== null || value.consecutiveBlocks > 0;
   if (value.state === "closed" && (
     hasIncidentWindow
@@ -287,6 +303,17 @@ function nextState(state, updates, now) {
   return assertProviderCircuitState(next);
 }
 
+function outcomeReceiptUpdates(kind, value) {
+  if (value == null || value === "") {
+    return Object.freeze({ lastOutcomeKind: null, lastOutcomeReceiptHash: null });
+  }
+  const receiptHash = String(value);
+  if (!PROVIDER_OUTCOME_KINDS.includes(kind) || !OUTCOME_RECEIPT_PATTERN.test(receiptHash)) {
+    throw new TypeError("provider outcome receipt is invalid");
+  }
+  return Object.freeze({ lastOutcomeKind: kind, lastOutcomeReceiptHash: receiptHash });
+}
+
 function computeProviderCooldownSeconds({ subtype, retryAfterSeconds, consecutiveBlocks } = {}) {
   const count = Number.isInteger(consecutiveBlocks) && consecutiveBlocks > 0 ? consecutiveBlocks : 1;
   if (subtype === "http_429" && Number.isInteger(retryAfterSeconds) && retryAfterSeconds >= 0) {
@@ -326,7 +353,10 @@ function beginProviderAttempt(state, options = {}) {
       });
     }
     const attemptKind = interruptedProbe ? "probe" : "normal";
-    const reserved = nextState(state, { lastAttemptAt: nowIso }, nowIso);
+    const reserved = nextState(state, {
+      lastAttemptAt: nowIso,
+      ...outcomeReceiptUpdates(null, null)
+    }, nowIso);
     return Object.freeze({
       allowed: true,
       reason: "stale_attempt_recovered",
@@ -359,7 +389,8 @@ function beginProviderAttempt(state, options = {}) {
   const attemptKind = state.state === "open" ? "probe" : "normal";
   const reserved = nextState(state, {
     state: "probe_allowed",
-    lastAttemptAt: nowIso
+    lastAttemptAt: nowIso,
+    ...outcomeReceiptUpdates(null, null)
   }, nowIso);
   return Object.freeze({
     allowed: true,
@@ -390,7 +421,8 @@ function recordProviderBlock(state, failure = {}, options = {}) {
     consecutiveBlocks,
     lastFailureSubtype: safe.subtype,
     lastDiagnosticId: safe.diagnosticId,
-    lastAttemptAt: state.lastAttemptAt ?? openedAt
+    lastAttemptAt: state.lastAttemptAt ?? openedAt,
+    ...outcomeReceiptUpdates("block", options.outcomeReceiptHash)
   }, openedAt);
 }
 
@@ -421,7 +453,8 @@ function recordProviderSuccess(state, options = {}) {
     lastFailureSubtype: null,
     lastDiagnosticId: null,
     lastAttemptAt: state.lastAttemptAt ?? succeededAt,
-    lastSuccessAt: succeededAt
+    lastSuccessAt: succeededAt,
+    ...outcomeReceiptUpdates("success", options.outcomeReceiptHash)
   }, succeededAt);
 }
 
@@ -431,13 +464,17 @@ function releaseProviderAttempt(state, options = {}) {
   if (state.state !== "probe_allowed") return state;
   const nowIso = canonicalInstant(options.now ?? new Date(), "now");
   if (state.openedAt && state.retryAt && state.consecutiveBlocks > 0) {
-    return nextState(state, { state: "open" }, nowIso);
+    return nextState(state, {
+      state: "open",
+      ...outcomeReceiptUpdates("release", options.outcomeReceiptHash)
+    }, nowIso);
   }
   return nextState(state, {
     state: "closed",
     openedAt: null,
     retryAt: null,
-    consecutiveBlocks: 0
+    consecutiveBlocks: 0,
+    ...outcomeReceiptUpdates("release", options.outcomeReceiptHash)
   }, nowIso);
 }
 

@@ -305,6 +305,7 @@ function createNaverProviderHealthStore(options = {}) {
     const expected = validateExpectedRevision(input.expectedWorkflowRevision);
     return transition(expected, (current) => recordProviderBlock(current, input.failure, {
       expectedWorkflowRevision: expected,
+      outcomeReceiptHash: input.outcomeReceiptHash,
       now: input.now ?? now()
     }));
   }
@@ -321,6 +322,7 @@ function createNaverProviderHealthStore(options = {}) {
     const expected = validateExpectedRevision(input.expectedWorkflowRevision);
     return transition(expected, (current) => recordProviderSuccess(current, {
       expectedWorkflowRevision: expected,
+      outcomeReceiptHash: input.outcomeReceiptHash,
       now: input.now ?? now()
     }));
   }
@@ -332,6 +334,7 @@ function createNaverProviderHealthStore(options = {}) {
     if (current.state !== "probe_allowed") return current;
     return transition(expected, (value) => releaseProviderAttempt(value, {
       expectedWorkflowRevision: expected,
+      outcomeReceiptHash: input.outcomeReceiptHash,
       now: input.now ?? now()
     }));
   }

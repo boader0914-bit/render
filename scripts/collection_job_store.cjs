@@ -14,6 +14,7 @@ const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{2,127}$/u;
 const FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/u;
 const TERMINAL_JOB_STATES = new Set([
+  "validated_no_store",
   "blocked",
   "failed",
   "rejected",
@@ -22,12 +23,14 @@ const TERMINAL_JOB_STATES = new Set([
   "committed"
 ]);
 const TRANSITIONS = Object.freeze({
-  queued: new Set(["leased", "cancelled"]),
+  queued: new Set(["leased", "cancelled", "indeterminate"]),
   leased: new Set(["collecting", "cancelled", "indeterminate"]),
-  collecting: new Set(["artifact_received", "blocked", "failed", "cancelled", "indeterminate"]),
-  artifact_received: new Set(["validated", "rejected"]),
+  collecting: new Set(["artifact_received", "failure_received", "blocked", "failed", "cancelled", "indeterminate"]),
+  artifact_received: new Set(["validated", "validated_no_store", "blocked", "failed", "rejected"]),
+  failure_received: new Set(["failed", "indeterminate"]),
   validated: new Set(["effects_applied", "rejected"]),
   effects_applied: new Set(["committed", "indeterminate"]),
+  validated_no_store: new Set(),
   blocked: new Set(),
   failed: new Set(),
   rejected: new Set(),
@@ -104,6 +107,10 @@ function validateStoredJob(job) {
   if (!Number.isInteger(job.workflowRevision) || job.workflowRevision < 1) return false;
   if (!Number.isInteger(job.attemptNo) || job.attemptNo < 0 || job.attemptNo > 1) return false;
   if (!Number.isInteger(job.maxProviderCalls) || ![0, 1].includes(job.maxProviderCalls)) return false;
+  if (
+    job.providerWorkflowRevision !== undefined
+    && (!Number.isInteger(job.providerWorkflowRevision) || job.providerWorkflowRevision < 0)
+  ) return false;
   if (job.automaticRetry !== false || job.automaticFallback !== false) return false;
   if (job.externalCallOnRead !== false) return false;
   if (!Number.isFinite(Date.parse(String(job.createdAt || "")))) return false;
@@ -113,6 +120,11 @@ function validateStoredJob(job) {
   if (job.attemptId && !ID_PATTERN.test(String(job.attemptId))) return false;
   if (job.leaseExpiresAt && !Number.isFinite(Date.parse(String(job.leaseExpiresAt)))) return false;
   if (job.artifactHash && !HASH_PATTERN.test(String(job.artifactHash))) return false;
+  if (job.failureReceiptHash && !HASH_PATTERN.test(String(job.failureReceiptHash))) return false;
+  if (
+    job.providerAttemptCount !== undefined
+    && (!Number.isInteger(job.providerAttemptCount) || ![0, 1].includes(job.providerAttemptCount))
+  ) return false;
   return true;
 }
 
@@ -166,6 +178,11 @@ function createCollectionJobStore(options = {}) {
       backendId: nonEmptyId(input.backendId, "backendId"),
       backendVersion: nonEmptyId(input.backendVersion, "backendVersion"),
       workerPoolId: nonEmptyId(input.workerPoolId, "workerPoolId"),
+      attemptId: input.attemptId ? nonEmptyId(input.attemptId, "attemptId") : "",
+      providerWorkflowRevision: nonNegativeInteger(
+        input.providerWorkflowRevision ?? 0,
+        "providerWorkflowRevision"
+      ),
       maxProviderCalls: boundedProviderCalls(input.maxProviderCalls)
     };
     let selected = null;
@@ -178,6 +195,8 @@ function createCollectionJobStore(options = {}) {
           || existingByKey.backendId !== normalized.backendId
           || existingByKey.backendVersion !== normalized.backendVersion
           || existingByKey.workerPoolId !== normalized.workerPoolId
+          || existingByKey.attemptId !== normalized.attemptId
+          || Number(existingByKey.providerWorkflowRevision ?? 0) !== normalized.providerWorkflowRevision
         ) {
           throw storeError("COLLECTION_JOB_IDEMPOTENCY_CONFLICT", "collection job idempotency key conflicts with an existing job");
         }
@@ -193,10 +212,12 @@ function createCollectionJobStore(options = {}) {
         state: "queued",
         workflowRevision: 1,
         attemptNo: 0,
-        attemptId: "",
+        attemptId: normalized.attemptId,
         workerId: "",
         leaseExpiresAt: "",
         artifactHash: "",
+        failureReceiptHash: "",
+        providerAttemptCount: 0,
         failureCode: "",
         cancellationRequested: false,
         automaticRetry: false,
@@ -216,14 +237,25 @@ function createCollectionJobStore(options = {}) {
     const workerId = nonEmptyId(input.workerId, "workerId");
     const workerPoolId = nonEmptyId(input.workerPoolId, "workerPoolId");
     const leaseMs = Number.isInteger(input.leaseMs) && input.leaseMs > 0 ? input.leaseMs : defaultLeaseMs;
+    const providerWorkflowRevision = input.providerWorkflowRevision === undefined
+      ? null
+      : nonNegativeInteger(input.providerWorkflowRevision, "providerWorkflowRevision");
     let claimed = null;
     await secureStore.updateJsonFile(filePath, (store) => {
-      const job = store.jobs.find((candidate) => candidate.state === "queued" && candidate.workerPoolId === workerPoolId);
+      const requestedJobId = input.jobId
+        ? nonEmptyId(input.jobId, "jobId", JOB_ID_PATTERN)
+        : null;
+      const job = store.jobs.find((candidate) => (
+        candidate.state === "queued"
+        && candidate.workerPoolId === workerPoolId
+        && (!requestedJobId || candidate.jobId === requestedJobId)
+      ));
       if (!job) return store;
       job.state = "leased";
       job.workerId = workerId;
       job.attemptNo = 1;
-      job.attemptId = `attempt:${crypto.randomUUID()}`;
+      job.attemptId = job.attemptId || `attempt:${crypto.randomUUID()}`;
+      if (providerWorkflowRevision !== null) job.providerWorkflowRevision = providerWorkflowRevision;
       job.leaseExpiresAt = new Date(Date.parse(now) + leaseMs).toISOString();
       job.workflowRevision += 1;
       job.updatedAt = now;
@@ -256,6 +288,12 @@ function createCollectionJobStore(options = {}) {
       job.workflowRevision += 1;
       job.updatedAt = now;
       if (input.artifactHash) job.artifactHash = nonEmptyId(input.artifactHash, "artifactHash", HASH_PATTERN);
+      if (input.failureReceiptHash) {
+        job.failureReceiptHash = nonEmptyId(input.failureReceiptHash, "failureReceiptHash", HASH_PATTERN);
+      }
+      if (input.providerAttemptCount !== undefined) {
+        job.providerAttemptCount = boundedProviderCalls(input.providerAttemptCount);
+      }
       if (input.failureCode) job.failureCode = nonEmptyId(input.failureCode, "failureCode", FAILURE_CODE_PATTERN);
       if (TERMINAL_JOB_STATES.has(nextState)) job.leaseExpiresAt = "";
       store.workflowRevision += 1;

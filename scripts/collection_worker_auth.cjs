@@ -13,6 +13,7 @@ const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{2,127}$/u;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
 const ALLOWED_PATH_SCOPES = Object.freeze({
   "/api/internal/collection-worker/jobs/claim": "collection:claim",
+  "/api/internal/collection-worker/jobs/preflight": "collection:preflight",
   "/api/internal/collection-worker/jobs/heartbeat": "collection:heartbeat",
   "/api/internal/collection-worker/artifacts": "collection:artifact:write",
   "/api/internal/collection-worker/failures": "collection:failure:write",

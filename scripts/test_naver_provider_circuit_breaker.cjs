@@ -25,6 +25,11 @@ function main() {
   const t0 = "2026-08-05T09:00:00.000Z";
   const initial = createInitialProviderCircuitState({ now: t0 });
   assert.equal(validateProviderCircuitState(initial), true);
+  const legacyInitial = { ...initial };
+  delete legacyInitial.lastOutcomeKind;
+  delete legacyInitial.lastOutcomeReceiptHash;
+  assert.equal(validateProviderCircuitState(legacyInitial), true,
+    "pre-receipt provider health documents must remain readable");
   assert.equal(initial.state, "closed");
   assert.equal(initial.workflowRevision, 0);
 
