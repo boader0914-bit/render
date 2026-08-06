@@ -9,7 +9,7 @@ global.fetch = (url) => {
 };
 
 const root = path.resolve(__dirname, "..");
-const styles = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8");
+const styles = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8").replace(/\r\n?/g, "\n");
 const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 const index = fs.readFileSync(path.join(root, "web", "index.html"), "utf8");
 const css = styles.replace(/\/\*[\s\S]*?\*\//g, "");
