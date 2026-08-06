@@ -16,6 +16,29 @@ const OPERATION_LIMITS = Object.freeze({
   naver_booking_items: 3,
   naver_booking_schedule: 24
 });
+const TOP20_OPERATION_LIMITS = Object.freeze({
+  naver_booking_business: 20,
+  naver_booking_items: 20,
+  naver_booking_schedule: 160
+});
+const BOUNDED_INVENTORY_PROFILES = Object.freeze({
+  top3_v1: Object.freeze({
+    profileId: "top3_v1",
+    operationLimits: OPERATION_LIMITS,
+    totalCallBudget: 30,
+    maxCompanies: 3,
+    maxProductsPerCompany: 8,
+    strictCompanyOrder: false
+  }),
+  top20_v1: Object.freeze({
+    profileId: "top20_v1",
+    operationLimits: TOP20_OPERATION_LIMITS,
+    totalCallBudget: 200,
+    maxCompanies: 20,
+    maxProductsPerCompany: 8,
+    strictCompanyOrder: true
+  })
+});
 const GRAPHQL_DOCUMENTS = Object.freeze({
   naver_booking_business: `
   query naverBookingBusiness($id: String!, $isNx: Boolean) {
@@ -125,10 +148,18 @@ function exactObjectKeys(value, expectedKeys) {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function safeCompanyOrdinal(value) {
+function safeCompanyOrdinal(value, maximum = MAX_COMPANIES) {
   const ordinal = Number(value);
-  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > MAX_COMPANIES) {
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > maximum) {
     throw transportError("NAVER_BOUNDED_INVENTORY_REQUEST_INVALID", "The NAVER inventory company ordinal is invalid", 400);
+  }
+  return ordinal;
+}
+
+function safeProductOrdinal(value, maximum = MAX_PRODUCTS_PER_COMPANY) {
+  const ordinal = Number(value);
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > maximum) {
+    throw transportError("NAVER_BOUNDED_INVENTORY_REQUEST_INVALID", "The NAVER inventory product ordinal is invalid", 400);
   }
   return ordinal;
 }
@@ -201,14 +232,14 @@ function assertGraphqlBody(request, normalized) {
   normalized.bizItemId = safeIdentifier(params.bizItemId, "item ID");
 }
 
-function assertRequest(request = {}) {
+function assertRequest(request = {}, budgetProfile = BOUNDED_INVENTORY_PROFILES.top3_v1) {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw transportError("NAVER_BOUNDED_INVENTORY_REQUEST_INVALID", "The NAVER inventory request is invalid", 400);
   }
   const operation = String(request.operation || "");
   if (
     request.providerId !== NAVER_PROVIDER_ID
-    || !Object.prototype.hasOwnProperty.call(OPERATION_LIMITS, operation)
+    || !Object.prototype.hasOwnProperty.call(budgetProfile.operationLimits, operation)
     || !request.body
     || typeof request.body !== "object"
     || Array.isArray(request.body)
@@ -228,7 +259,10 @@ function assertRequest(request = {}) {
     date,
     bookingDate: safeBookingDate(request.bookingDate),
     bookingAdults: safeBookingAdults(request.bookingAdults),
-    companyOrdinal: safeCompanyOrdinal(request.companyOrdinal),
+    companyOrdinal: safeCompanyOrdinal(request.companyOrdinal, budgetProfile.maxCompanies),
+    productOrdinal: operation === "naver_booking_schedule"
+      ? safeProductOrdinal(request.productOrdinal, budgetProfile.maxProductsPerCompany)
+      : null,
     bizItemId: ""
   };
   assertGraphqlBody(request, normalized);
@@ -254,27 +288,45 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
     DEFAULT_MAX_RESPONSE_BYTES
   );
   const allowTextFallback = options.allowTextFallback === true;
+  const beforeProviderCall = typeof options.beforeProviderCall === "function"
+    ? options.beforeProviderCall
+    : null;
+  const onProviderCallStarted = typeof options.onProviderCallStarted === "function"
+    ? options.onProviderCallStarted
+    : null;
+  const profileId = String(options.budgetProfileId || "top3_v1");
+  const budgetProfile = BOUNDED_INVENTORY_PROFILES[profileId];
+  if (!budgetProfile) {
+    throw transportError(
+      "NAVER_BOUNDED_INVENTORY_TRANSPORT_INVALID",
+      "The NAVER inventory transport budget profile is invalid",
+      400
+    );
+  }
   const counts = {
     naver_booking_business: 0,
     naver_booking_items: 0,
     naver_booking_schedule: 0
   };
-  const companyCalls = Object.fromEntries(Array.from({ length: MAX_COMPANIES }, (_, index) => [
+  const companyCalls = Object.fromEntries(Array.from({ length: budgetProfile.maxCompanies }, (_, index) => [
     String(index + 1),
     { bookingBusiness: 0, bookingItems: 0, dailySchedule: 0 }
   ]));
   let total = 0;
   let active = false;
+  let authorizing = false;
   let maxObservedConcurrency = 0;
   let halted = false;
   let highestBusinessOrdinal = 0;
 
-  function reserveCompanyCall(normalized) {
+  function assertCompanyCallAvailable(normalized) {
     const ordinal = normalized.companyOrdinal;
     const state = companyCalls[String(ordinal)];
     if (normalized.operation === "naver_booking_business") {
       if (
-        ordinal <= highestBusinessOrdinal
+        (budgetProfile.strictCompanyOrder
+          ? ordinal !== highestBusinessOrdinal + 1
+          : ordinal <= highestBusinessOrdinal)
         || state.bookingBusiness !== 0
         || state.bookingItems !== 0
         || state.dailySchedule !== 0
@@ -282,8 +334,6 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
         halted = true;
         throw transportError("NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID", "The NAVER inventory company call sequence is invalid", 409);
       }
-      highestBusinessOrdinal = ordinal;
-      state.bookingBusiness += 1;
       return;
     }
     if (ordinal !== highestBusinessOrdinal || state.bookingBusiness !== 1) {
@@ -295,32 +345,73 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
         halted = true;
         throw transportError("NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID", "The NAVER inventory company call sequence is invalid", 409);
       }
-      state.bookingItems += 1;
       return;
     }
-    if (state.bookingItems !== 1 || state.dailySchedule >= MAX_PRODUCTS_PER_COMPANY) {
+    if (state.bookingItems !== 1 || normalized.productOrdinal !== state.dailySchedule + 1) {
+      halted = true;
+      throw transportError("NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID", "The NAVER inventory product call sequence is invalid", 409);
+    }
+    if (state.dailySchedule >= budgetProfile.maxProductsPerCompany) {
       halted = true;
       throw transportError("NAVER_BOUNDED_INVENTORY_CALL_BUDGET_EXCEEDED", "The NAVER inventory company call budget was exceeded", 409);
+    }
+  }
+
+  function reserveCompanyCall(normalized) {
+    const ordinal = normalized.companyOrdinal;
+    const state = companyCalls[String(ordinal)];
+    if (normalized.operation === "naver_booking_business") {
+      highestBusinessOrdinal = ordinal;
+      state.bookingBusiness += 1;
+      return;
+    }
+    if (normalized.operation === "naver_booking_items") {
+      state.bookingItems += 1;
+      return;
     }
     state.dailySchedule += 1;
   }
 
   const transport = async function naverBoundedInventoryLiveTransport(request, context = {}) {
-    const normalized = assertRequest(request);
+    const normalized = assertRequest(request, budgetProfile);
     if (halted) {
       throw transportError("NAVER_BOUNDED_INVENTORY_HALTED", "The NAVER inventory transport is halted", 409);
     }
     if (context.signal?.aborted) {
       throw transportError("NAVER_BOUNDED_INVENTORY_ABORTED", "The NAVER inventory request was aborted", 499);
     }
-    if (active) {
+    if (active || authorizing) {
       throw transportError("NAVER_BOUNDED_INVENTORY_CONCURRENCY_EXCEEDED", "The NAVER inventory concurrency limit was exceeded", 409);
     }
-    if (total >= TOTAL_CALL_BUDGET || counts[normalized.operation] >= OPERATION_LIMITS[normalized.operation]) {
+    if (
+      total >= budgetProfile.totalCallBudget
+      || counts[normalized.operation] >= budgetProfile.operationLimits[normalized.operation]
+    ) {
       halted = true;
       throw transportError("NAVER_BOUNDED_INVENTORY_CALL_BUDGET_EXCEEDED", "The NAVER inventory call budget was exceeded", 409);
     }
 
+    assertCompanyCallAvailable(normalized);
+    if (beforeProviderCall) {
+      authorizing = true;
+      try {
+        await beforeProviderCall(Object.freeze({
+          providerId: NAVER_PROVIDER_ID,
+          operation: normalized.operation,
+          companyOrdinal: normalized.companyOrdinal,
+          productOrdinal: normalized.productOrdinal
+        }));
+      } catch (error) {
+        halted = true;
+        throw error;
+      } finally {
+        authorizing = false;
+      }
+      if (context.signal?.aborted) {
+        halted = true;
+        throw transportError("NAVER_BOUNDED_INVENTORY_ABORTED", "The NAVER inventory request was aborted", 499);
+      }
+    }
     reserveCompanyCall(normalized);
 
     const endpoint = normalized.operation === "naver_booking_business" ? PCMAP_GRAPHQL_URL : BOOKING_GRAPHQL_URL;
@@ -332,13 +423,11 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
     context.signal?.addEventListener?.("abort", onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
-    counts[normalized.operation] += 1;
-    total += 1;
     active = true;
     maxObservedConcurrency = Math.max(maxObservedConcurrency, 1);
 
     try {
-      const response = await options.fetchImpl(endpoint, {
+      const responsePromise = Promise.resolve(options.fetchImpl(endpoint, {
         method: "POST",
         headers: {
           ...FIXED_LEGACY_HEADERS,
@@ -352,7 +441,24 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
         redirect: "manual",
         signal: controller.signal,
         body: JSON.stringify(request.body)
-      });
+      }));
+      counts[normalized.operation] += 1;
+      total += 1;
+      if (onProviderCallStarted) {
+        try {
+          await onProviderCallStarted(Object.freeze({
+            providerId: NAVER_PROVIDER_ID,
+            operation: normalized.operation,
+            companyOrdinal: normalized.companyOrdinal,
+            productOrdinal: normalized.productOrdinal
+          }));
+        } catch (error) {
+          controller.abort();
+          await responsePromise.catch(() => {});
+          throw error;
+        }
+      }
+      const response = await responsePromise;
       const status = Number(response?.status);
       if (!Number.isInteger(status) || status < 100 || status > 599) {
         throw transportError("NAVER_BOUNDED_INVENTORY_RESPONSE_INVALID", "The NAVER inventory response is invalid", 502);
@@ -367,7 +473,7 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
         body
       });
     } catch (error) {
-      if (error instanceof NaverBoundedInventoryTransportError) throw error;
+      if (error instanceof NaverBoundedInventoryTransportError || error?.code === "V2_TOP20_PROVIDER_CALL_HEARTBEAT_FAILED") throw error;
       if (controller.signal.aborted) {
         halted = true;
         throw transportError(
@@ -398,7 +504,11 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
       enumerable: false
     },
     maxCalls: {
-      value: TOTAL_CALL_BUDGET,
+      value: budgetProfile.totalCallBudget,
+      enumerable: false
+    },
+    budgetProfileId: {
+      value: budgetProfile.profileId,
       enumerable: false
     },
     maxObservedConcurrency: {
@@ -423,6 +533,7 @@ function isRegisteredNaverBoundedInventoryLiveTransport(value) {
 }
 
 module.exports = {
+  BOUNDED_INVENTORY_PROFILES,
   BOOKING_GRAPHQL_URL,
   DEFAULT_MAX_RESPONSE_BYTES,
   DEFAULT_TIMEOUT_MS,
@@ -432,6 +543,7 @@ module.exports = {
   MAX_PRODUCTS_PER_COMPANY,
   NaverBoundedInventoryTransportError,
   OPERATION_LIMITS,
+  TOP20_OPERATION_LIMITS,
   PCMAP_GRAPHQL_URL,
   TOTAL_CALL_BUDGET,
   createNaverBoundedInventoryLiveTransport,

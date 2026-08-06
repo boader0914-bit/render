@@ -3852,6 +3852,23 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
       scheduleCrawlStatusPoll(Number(status.remainingSeconds) <= 60 ? 5000 : 10000, true);
       return;
     }
+    if (status.lastWorkerOutcome) {
+      const workerOutcome = status.lastWorkerOutcome;
+      setCrawlProgress(false);
+      if (workerOutcome.status === "ready" && workerOutcome.runId) {
+        setStatus("준비");
+        if (els.crawlStatus) {
+          els.crawlStatus.textContent = "상위 20곳 수집이 성공해 run을 저장했습니다. 결과를 갱신했습니다.";
+        }
+      } else {
+        setStatus("수집 실패");
+        if (els.crawlStatus) {
+          els.crawlStatus.textContent = `Worker 수집이 중단되었습니다. ${workerOutcome.code || "수집 결과가 완결되지 않았습니다."}`;
+        }
+      }
+      await loadRuns(true);
+      return;
+    }
     setCrawlProgress(false);
     setStatus("준비");
     if (notifyIdle && els.crawlStatus) els.crawlStatus.textContent = "진행 중인 수집이 끝났습니다. 결과를 갱신했습니다.";
@@ -35916,10 +35933,22 @@ async function submitCrawl(event) {
     preview,
     payload
   );
+  if (preview.workerTop20) {
+    setCrawlProgress(
+      true,
+      "상위 20곳 Worker 수집 중",
+      `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 201요청`,
+      preview,
+      payload
+    );
+  }
   els.crawlStatus.textContent = preview.boundedInventory
     ? `제한 수집을 시작했습니다. 메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 최대 31요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`
     : `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.shortLabel || purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
   setStatus("수집 중");
+  if (preview.workerTop20) {
+    els.crawlStatus.textContent = `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 201요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
+  }
   scheduleCrawlStatusPoll(1500, false);
   try {
     const result = await fetchJson("/api/crawl", {
@@ -35928,6 +35957,14 @@ async function submitCrawl(event) {
       body: JSON.stringify(payload)
     });
     state.runs = result.runs || state.runs;
+    if (result.queued && result.worker) {
+      if (els.crawlStatus) {
+        els.crawlStatus.textContent = "Worker가 네이버 1~50위와 상위 20곳의 재고·가격·예상매출을 순서대로 수집하고 있습니다.";
+      }
+      setStatus("수집 중");
+      scheduleCrawlStatusPoll(1500, true);
+      return;
+    }
     state.activeRunId = result.runId || state.runs[0]?.id;
     await loadRuns(false);
     const completedRecrawlContext = payload.recrawlContext || null;

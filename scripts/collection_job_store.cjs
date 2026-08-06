@@ -308,6 +308,9 @@ function createCollectionJobStore(options = {}) {
     const now = isoInstant(input.now || new Date(), "now");
     const jobId = nonEmptyId(input.jobId, "jobId", JOB_ID_PATTERN);
     const expectedWorkflowRevision = nonNegativeInteger(input.expectedWorkflowRevision, "expectedWorkflowRevision");
+    const providerWorkflowRevision = input.providerWorkflowRevision === undefined
+      ? null
+      : nonNegativeInteger(input.providerWorkflowRevision, "providerWorkflowRevision");
     let heartbeat = null;
     await secureStore.updateJsonFile(filePath, (store) => {
       const job = store.jobs.find((candidate) => candidate.jobId === jobId);
@@ -321,7 +324,18 @@ function createCollectionJobStore(options = {}) {
       if (!["leased", "collecting"].includes(job.state)) {
         throw storeError("COLLECTION_JOB_HEARTBEAT_INVALID", "collection job cannot accept a heartbeat", 409);
       }
+      if (
+        providerWorkflowRevision !== null
+        && providerWorkflowRevision < Number(job.providerWorkflowRevision ?? 0)
+      ) {
+        throw storeError(
+          "COLLECTION_JOB_PROVIDER_REVISION_CONFLICT",
+          "collection job provider workflow revision cannot move backwards",
+          409
+        );
+      }
       job.leaseExpiresAt = new Date(Date.parse(now) + leaseMs).toISOString();
+      if (providerWorkflowRevision !== null) job.providerWorkflowRevision = providerWorkflowRevision;
       job.workflowRevision += 1;
       job.updatedAt = now;
       store.workflowRevision += 1;

@@ -51,6 +51,7 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
     bookingAdults: 2,
     operation: "naver_booking_schedule",
     companyOrdinal,
+    productOrdinal: itemOrdinal,
     businessId,
     date: "2026-08-06",
     body: {
@@ -106,7 +107,7 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
       calls.find((call) => call.hostname === "m.booking.naver.com")?.referer,
       "https://m.booking.naver.com/booking/3/bizes/2001/search?startDate=2026-08-06&endDate=2026-08-07&adult=2"
     );
-    await assert.rejects(() => transport(scheduleRequest(3, 9)), { code: "NAVER_BOUNDED_INVENTORY_CALL_BUDGET_EXCEEDED" });
+    await assert.rejects(() => transport(scheduleRequest(3, 8)), { code: "NAVER_BOUNDED_INVENTORY_CALL_BUDGET_EXCEEDED" });
     assert.equal(calls.length, TOTAL_CALL_BUDGET, "a budget rejection must not start fetch");
 
     let releaseFirst;
@@ -154,9 +155,105 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
     }
     await assert.rejects(
       () => companyCap(scheduleRequest(1, 9)),
-      { code: "NAVER_BOUNDED_INVENTORY_CALL_BUDGET_EXCEEDED" }
+      { code: "NAVER_BOUNDED_INVENTORY_REQUEST_INVALID" }
     );
     assert.equal(companyCap.callCounts().total, 10, "the ninth company schedule must not start fetch");
+
+    let heartbeatFetchCount = 0;
+    let heartbeatMetadata = null;
+    const heartbeatFailure = Object.assign(new Error("synthetic heartbeat failure"), {
+      code: "V2_TOP20_PROVIDER_CALL_HEARTBEAT_FAILED"
+    });
+    const heartbeatGuarded = createNaverBoundedInventoryLiveTransport({
+      enabled: true,
+      budgetProfileId: "top20_v1",
+      beforeProviderCall: async (metadata) => {
+        heartbeatMetadata = metadata;
+        throw heartbeatFailure;
+      },
+      fetchImpl: async () => {
+        heartbeatFetchCount += 1;
+        return new Response("{}", { status: 200 });
+      }
+    });
+    await assert.rejects(
+      () => heartbeatGuarded(businessRequest(1)),
+      (error) => error === heartbeatFailure
+    );
+    assert.deepEqual(heartbeatMetadata, {
+      providerId: "naver_place_search",
+      operation: "naver_booking_business",
+      companyOrdinal: 1,
+      productOrdinal: null
+    });
+    assert.deepEqual(Object.keys(heartbeatMetadata).sort(), ["companyOrdinal", "operation", "productOrdinal", "providerId"]);
+    assert.equal(JSON.stringify(heartbeatMetadata).includes("1001"), false, "place IDs must not enter heartbeat metadata");
+    assert.equal(heartbeatFetchCount, 0, "a failed heartbeat must prevent the inventory fetch");
+    assert.equal(heartbeatGuarded.callCounts().total, 0, "a failed heartbeat is not an executed provider call");
+    assert.equal(heartbeatGuarded.isHalted(), true);
+
+    const skippedCompany = createNaverBoundedInventoryLiveTransport({
+      enabled: true,
+      budgetProfileId: "top20_v1",
+      fetchImpl: async () => new Response("{}", { status: 200 })
+    });
+    await skippedCompany(businessRequest(1));
+    await assert.rejects(
+      () => skippedCompany(businessRequest(3)),
+      { code: "NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID" }
+    );
+    assert.equal(skippedCompany.callCounts().total, 1, "a skipped company ordinal must not start fetch");
+
+    const legacyExposureZeroSkip = createNaverBoundedInventoryLiveTransport({
+      enabled: true,
+      budgetProfileId: "top3_v1",
+      fetchImpl: async () => new Response("{}", { status: 200 })
+    });
+    await legacyExposureZeroSkip(businessRequest(3));
+    assert.equal(
+      legacyExposureZeroSkip.callCounts().total,
+      1,
+      "the legacy top-three profile may skip provider-confirmed exposure-zero companies"
+    );
+
+    const duplicateProduct = createNaverBoundedInventoryLiveTransport({
+      enabled: true,
+      budgetProfileId: "top20_v1",
+      fetchImpl: async () => new Response("{}", { status: 200 })
+    });
+    await duplicateProduct(businessRequest(1));
+    await duplicateProduct(itemsRequest(1));
+    await duplicateProduct(scheduleRequest(1, 1));
+    await assert.rejects(
+      () => duplicateProduct(scheduleRequest(1, 1)),
+      { code: "NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID" }
+    );
+    assert.equal(duplicateProduct.callCounts().total, 3, "a duplicate product ordinal must not start fetch");
+
+    let fetchStarted = false;
+    let startedMetadata = null;
+    const startedGuard = createNaverBoundedInventoryLiveTransport({
+      enabled: true,
+      budgetProfileId: "top20_v1",
+      beforeProviderCall: async () => {
+        assert.equal(fetchStarted, false, "authorization must precede fetch");
+      },
+      onProviderCallStarted: async (metadata) => {
+        assert.equal(fetchStarted, true, "executed-call notification must follow fetch start");
+        startedMetadata = metadata;
+      },
+      fetchImpl: async () => {
+        fetchStarted = true;
+        return new Response("{}", { status: 200 });
+      }
+    });
+    await startedGuard(businessRequest(1));
+    assert.deepEqual(startedMetadata, {
+      providerId: "naver_place_search",
+      operation: "naver_booking_business",
+      companyOrdinal: 1,
+      productOrdinal: null
+    });
 
     let textRead = false;
     const blocked = createNaverBoundedInventoryLiveTransport({

@@ -135,6 +135,12 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
   const timeoutMs = normalizedTimeout(options.timeoutMs);
   const maxResponseBytes = normalizedResponseLimit(options.maxResponseBytes);
   const allowTextFallback = options.allowTextFallback === true;
+  const beforeProviderCall = typeof options.beforeProviderCall === "function"
+    ? options.beforeProviderCall
+    : null;
+  const onProviderCallStarted = typeof options.onProviderCallStarted === "function"
+    ? options.onProviderCallStarted
+    : null;
   let callCount = 0;
 
   const transport = async function naverLegacyCanaryLiveTransport(request, context = {}) {
@@ -145,6 +151,17 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
     if (context.signal?.aborted) {
       throw transportError("NAVER_LEGACY_CANARY_ABORTED", "The NAVER canary was aborted", 499);
     }
+    if (beforeProviderCall) {
+      await beforeProviderCall(Object.freeze({
+        providerId: NAVER_PROVIDER_ID,
+        operation: "main_place",
+        companyOrdinal: null,
+        productOrdinal: null
+      }));
+      if (context.signal?.aborted) {
+        throw transportError("NAVER_LEGACY_CANARY_ABORTED", "The NAVER canary was aborted", 499);
+      }
+    }
 
     const url = new URL(NAVER_PLACE_LIST_PATH, NAVER_PLACE_LIST_ORIGIN);
     url.searchParams.set("query", query);
@@ -153,15 +170,29 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
     context.signal?.addEventListener?.("abort", onAbort, { once: true });
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
-    callCount += 1;
-
     try {
-      const response = await options.fetchImpl(url, {
+      const responsePromise = Promise.resolve(options.fetchImpl(url, {
         method: "GET",
         headers: FIXED_LEGACY_HEADERS,
         redirect: "manual",
         signal: controller.signal
-      });
+      }));
+      callCount += 1;
+      if (onProviderCallStarted) {
+        try {
+          await onProviderCallStarted(Object.freeze({
+            providerId: NAVER_PROVIDER_ID,
+            operation: "main_place",
+            companyOrdinal: null,
+            productOrdinal: null
+          }));
+        } catch (error) {
+          controller.abort();
+          await responsePromise.catch(() => {});
+          throw error;
+        }
+      }
+      const response = await responsePromise;
       const status = Number(response?.status);
       if (!Number.isInteger(status) || status < 100 || status > 599) {
         throw transportError("NAVER_LEGACY_CANARY_RESPONSE_INVALID", "The NAVER canary response is invalid", 502);
@@ -178,7 +209,7 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
         body
       });
     } catch (error) {
-      if (error instanceof NaverLegacyCanaryTransportError) throw error;
+      if (error instanceof NaverLegacyCanaryTransportError || error?.code === "V2_TOP20_PROVIDER_CALL_HEARTBEAT_FAILED") throw error;
       if (controller.signal.aborted) {
         throw transportError(
           context.signal?.aborted ? "NAVER_LEGACY_CANARY_ABORTED" : "NAVER_LEGACY_CANARY_TIMEOUT",

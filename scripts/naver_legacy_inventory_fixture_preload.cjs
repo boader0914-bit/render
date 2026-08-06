@@ -75,6 +75,7 @@ function jsonResponse(value, status = 200, extraHeaders = {}) {
 }
 
 function mainFixture(query) {
+  const inventoryTargetCount = process.env.V2_TOP20_WORKER_ACTIVATION === "1" ? 20 : 3;
   const items = Array.from({ length: 50 }, (_, index) => {
     const item = {
       id: String(1001 + index),
@@ -83,7 +84,9 @@ function mainFixture(query) {
       roadAddress: `Synthetic road ${index + 1}`,
       placeReviewCount: index + 1,
       placeReviewScore: 4.5,
-      hasBooking: mode === "zero_two" ? index === 2 : index < 3
+      hasBooking: mode === "zero_two"
+        ? (inventoryTargetCount === 20 ? index !== 1 && index < inventoryTargetCount : index === 2)
+        : index < inventoryTargetCount
     };
     if (mode === "has_booking_omitted" && index === 0) delete item.hasBooking;
     return item;
@@ -201,6 +204,9 @@ async function fixtureFetch(input, init = {}) {
   if (operation === "booking_business") {
     if (url.hostname !== "pcmap-api.place.naver.com" || url.pathname !== "/graphql") throw new Error("unexpected business endpoint");
     const placeId = String(body.variables?.id || "");
+    if (mode === "zero_two" && process.env.V2_TOP20_WORKER_ACTIVATION === "1" && placeId === "1002") {
+      return jsonResponse({ data: { business: { naverBooking: null } } });
+    }
     if (mode === "business_booking_omitted") {
       return jsonResponse({ data: { business: { base: { id: placeId, name: "Synthetic" } } } });
     }

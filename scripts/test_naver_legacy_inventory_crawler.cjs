@@ -109,7 +109,11 @@ function runDirectories(root) {
     const successRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "naver-inventory-success-"));
     roots.push(successRoot);
     const success = runFixture(successRoot, "success", "20260806_130000");
-    assert.equal(success.child.status, 0, success.child.stderr || success.child.stdout);
+    assert.equal(
+      success.child.status,
+      0,
+      JSON.stringify({ stderr: success.child.stderr, stdout: success.child.stdout, audit: success.audit })
+    );
     assert.deepEqual(success.audit?.operationCounts, {
       main_place: 1,
       booking_business: 3,

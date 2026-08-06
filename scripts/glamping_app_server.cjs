@@ -75,6 +75,12 @@ const {
   createCollectionWorkerCanaryOrchestrator
 } = require("./collection_worker_canary_orchestrator.cjs");
 const {
+  createCollectionWorkerV2Top20Orchestrator
+} = require("./collection_worker_v2_top20_orchestrator.cjs");
+const {
+  createCollectionWorkerRunTransactionStore
+} = require("./collection_worker_run_transaction.cjs");
+const {
   CLAIM_PATH: COLLECTION_WORKER_CLAIM_PATH,
   FAILURE_PATH: COLLECTION_WORKER_FAILURE_PATH,
   FINALIZE_PATH: COLLECTION_WORKER_FINALIZE_PATH,
@@ -82,6 +88,15 @@ const {
   PREFLIGHT_PATH: COLLECTION_WORKER_PREFLIGHT_PATH,
   PREPARE_PATH: COLLECTION_WORKER_PREPARE_PATH
 } = require("./collection_worker_canary_protocol.cjs");
+const {
+  COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
+  COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
+  COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
+  COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
+  COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
+  COLLECTION_WORKER_V2_TOP20_PREPARE_PATH,
+  COLLECTION_WORKER_V2_TOP20_WORKER_ID
+} = require("./collection_worker_v2_top20_protocol.cjs");
 const {
   buildNaverCollectionFallbackState,
   createNaverSearchContractSignature,
@@ -211,6 +226,9 @@ const collectionWorkerJobStore = createCollectionJobStore({
   filePath: COLLECTION_WORKER_JOB_STORE_FILE,
   runtimeRoot: DATA_DIR
 });
+const collectionWorkerRunTransactionStore = createCollectionWorkerRunTransactionStore({
+  runtimeRoot: DATA_DIR
+});
 const collectionWorkerCanaryOrchestrator = createCollectionWorkerCanaryOrchestrator({
   enabled: String(process.env.COLLECTION_WORKER_CANARY_ENABLED || "false").toLowerCase() === "true",
   jobStore: collectionWorkerJobStore,
@@ -221,6 +239,41 @@ const collectionWorkerCanaryOrchestrator = createCollectionWorkerCanaryOrchestra
   requestPublicKeyBase64: process.env.COLLECTION_WORKER_REQUEST_PUBLIC_KEY_B64,
   operatorTokenSha256: process.env.COLLECTION_WORKER_OPERATOR_TOKEN_SHA256
 });
+const collectionWorkerV2Top20Orchestrator = createCollectionWorkerV2Top20Orchestrator({
+  enabled: String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true",
+  externalCallApproved: String(process.env.COLLECTION_WORKER_V2_TOP20_EXTERNAL_CALL_APPROVED || "false").toLowerCase() === "true",
+  previewWriteApproved: String(process.env.COLLECTION_WORKER_V2_TOP20_PREVIEW_WRITE_APPROVED || "false").toLowerCase() === "true",
+  jobStore: collectionWorkerJobStore,
+  providerStore: naverProviderHealthStore,
+  targetWorkerCommit: process.env.COLLECTION_WORKER_TARGET_COMMIT,
+  dispatchPrivateKeyBase64: process.env.COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64,
+  artifactPublicKeyBase64: process.env.COLLECTION_WORKER_ARTIFACT_PUBLIC_KEY_B64,
+  requestPublicKeyBase64: process.env.COLLECTION_WORKER_REQUEST_PUBLIC_KEY_B64,
+  operatorTokenSha256: process.env.COLLECTION_WORKER_OPERATOR_TOKEN_SHA256,
+  applyReadyTransaction: async (input) => {
+    const receipt = await collectionWorkerRunTransactionStore.finalizeVerifiedRunBundle({
+      signedArtifact: input.signedArtifact,
+      verifier: (candidate) => {
+        if (candidate !== input.signedArtifact) {
+          const error = new Error("collection worker artifact identity changed during transaction");
+          error.code = "COLLECTION_RUN_ARTIFACT_VERIFICATION_FAILED";
+          throw error;
+        }
+        return input.verifiedArtifact;
+      }
+    });
+    if (receipt.state !== "committed" || receipt.outputValid !== true) {
+      const error = new Error("collection worker run transaction did not commit");
+      error.code = "COLLECTION_WORKER_V2_TOP20_TRANSACTION_INVALID";
+      throw error;
+    }
+    return Object.freeze({
+      receiptId: input.receiptId,
+      committed: true,
+      writeCount: receipt.fileCount
+    });
+  }
+});
 const naverLegacyCanaryRunner = createNaverLegacyCanaryRunner({
   releaseEnabled: false
 });
@@ -230,7 +283,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260806-v2-collector-map-v44";
+const UI_ASSET_VERSION = "v2-20260806-worker-top20-v45";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -315,6 +368,8 @@ let activeCrawlCancelRequested = false;
 let activeCrawlCancelReason = "";
 let activeCrawlSourceRole = "";
 let activeCrawlJob = null;
+let activeTop20WorkerJob = null;
+let lastTop20WorkerOutcome = null;
 let crawlJobSequence = 0;
 const crawlQueue = [];
 const recentCrawlResults = new Map();
@@ -4785,6 +4840,42 @@ function completedB2BSearchReuseEstimate(base = {}, reuse = {}) {
 
 async function publicCrawlEstimateForSession(payload = {}, timingStore = null, session = {}) {
   const base = publicCrawlEstimate(payload, timingStore);
+  if (
+    normalizeUserRole(session?.role) === USER_ROLES.admin
+    && IS_V2_PREVIEW_RUNTIME
+    && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
+    && isV2Top20WorkerEligible(payload)
+  ) {
+    return {
+      ...base,
+      workerTop20: true,
+      detailRankRanges: "1-20",
+      bookingRangeDays: 1,
+      bookingRangePlaceLimit: 20,
+      boundedInventory: {
+        profile: "preview-v2-place-top20-inventory-revenue.v1",
+        mainRankRange: "1-50",
+        inventoryRankRange: "1-20",
+        inventoryPlaceLimit: 20,
+        observationDays: 1,
+        maxProductsPerCompany: 8,
+        totalCallBudget: 201,
+        naverCallBudget: 201,
+        otaCallBudget: 0,
+        concurrency: 1,
+        automaticRetry: false,
+        automaticFallback: false,
+        revenueBasis: "naver_booking_public_inventory_estimate_not_settled_revenue"
+      },
+      stages: (base.stages || []).map((stage) => stage.key === "inventory"
+        ? {
+            ...stage,
+            label: "상위 20곳 재고·가격·예상매출",
+            detail: "Worker가 1위부터 20위까지 한 곳씩 순서대로 확인합니다. 최대 NAVER 요청은 201건입니다."
+          }
+        : stage)
+    };
+  }
   if (normalizeUserRole(session?.role) !== USER_ROLES.b2b) return base;
   let crawlPayload = null;
   try {
@@ -6142,13 +6233,43 @@ function downloadLabelForFile(file, manifest = {}) {
   return file;
 }
 
+function isPreviewWorkerRunId(value) {
+  return /^preview-worker-run-[a-f0-9]{20}$/u.test(String(value || ""));
+}
+
+async function isVisibleCommittedWorkerRun(runId) {
+  if (!isPreviewWorkerRunId(runId)) return true;
+  const journal = await collectionWorkerRunTransactionStore.readRunOutputJournal();
+  const committed = journal.committed.find((candidate) => candidate.runId === runId) || null;
+  if (
+    !committed
+    || !await collectionWorkerRunTransactionStore.isCommittedRunOutputValid({
+      transactionId: committed.transactionId,
+      runId
+    })
+  ) return false;
+  const jobSnapshot = await collectionWorkerJobStore.readSnapshot();
+  const job = jobSnapshot.jobs.find((candidate) => candidate.jobId === committed.jobId) || null;
+  return Boolean(
+    job
+    && job.state === "committed"
+    && job.artifactHash === committed.artifactHash
+    && job.contractHash === committed.contractHash
+    && job.executionIdentityHash === committed.executionIdentityHash
+  );
+}
+
 async function listRuns() {
   await fsp.mkdir(OUTPUTS_DIR, { recursive: true });
   const entries = await fsp.readdir(OUTPUTS_DIR, { withFileTypes: true });
   const runs = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory() || !/_glamping_\d{8}(?:_\d{6})?$/.test(entry.name)) continue;
+    if (
+      !entry.isDirectory()
+      || !(/_glamping_\d{8}(?:_\d{6})?$/u.test(entry.name) || isPreviewWorkerRunId(entry.name))
+    ) continue;
+    if (!await isVisibleCommittedWorkerRun(entry.name)) continue;
     const dirPath = path.join(OUTPUTS_DIR, entry.name);
     const files = await fsp.readdir(dirPath).catch(() => []);
     const manifest = await readManifest(dirPath);
@@ -14098,6 +14219,7 @@ function resolveRunDir(runId) {
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
+  if (!await isVisibleCommittedWorkerRun(path.basename(runId))) return null;
 
   const stat = await fsp.stat(dirPath);
   const legacyCollectedAt = stat.mtime.toISOString();
@@ -14584,6 +14706,283 @@ async function runCrawler(payload) {
   }
 }
 
+function v2Top20WorkerContract(payload = {}) {
+  const plan = crawlExecutionPlan(payload);
+  assertSupportedSearchIntent(plan);
+  const requestedSearchMode = String(payload.searchMode || process.env.SEARCH_MODE || "keyword").trim();
+  const requestedCollectionMode = String(payload.collectionMode || process.env.COLLECTION_MODE || "precision").trim();
+  const requestedCollectionPurpose = String(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail").trim();
+  const requestedProductMode = String(payload.productMode || process.env.PRODUCT_MODE || "all").trim();
+  if (
+    requestedSearchMode !== "keyword"
+    || requestedCollectionMode !== "precision"
+    || requestedCollectionPurpose !== "revenue_detail"
+    || requestedProductMode !== "all"
+    || plan.resolvedSearchMode !== "keyword"
+    || plan.collectionMode !== "precision"
+    || plan.collectionPurpose !== "revenue_detail"
+    || plan.productMode !== "all"
+    || plan.checkIn !== plan.checkOut
+  ) {
+    const error = new Error("Worker 상위 20곳 수집은 키워드·정밀·상세정보·전체상품·1일 조건만 지원합니다.");
+    error.code = "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID";
+    error.statusCode = 422;
+    error.retryable = false;
+    throw error;
+  }
+  return Object.freeze({
+    keyword: plan.keyword,
+    searchMode: "keyword",
+    collectionMode: "precision",
+    collectionPurpose: "revenue_detail",
+    productMode: "all",
+    checkIn: plan.checkIn,
+    checkOut: plan.checkOut,
+    rankStart: 1,
+    rankEnd: 50,
+    detailRankStart: 1,
+    detailRankEnd: 20
+  });
+}
+
+function isV2Top20WorkerEligible(payload = {}) {
+  try {
+    v2Top20WorkerContract(payload);
+    return true;
+  } catch (error) {
+    if (error?.code === "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID") return false;
+    return false;
+  }
+}
+
+const TOP20_WORKER_TERMINAL_STATES = new Set([
+  "committed",
+  "blocked",
+  "failed",
+  "rejected",
+  "indeterminate",
+  "cancelled",
+  "validated_no_store"
+]);
+
+async function restoreActiveTop20WorkerJob() {
+  if (activeTop20WorkerJob) return activeTop20WorkerJob;
+  const snapshot = await collectionWorkerJobStore.readSnapshot();
+  const job = snapshot.jobs
+    .filter((candidate) => (
+      String(candidate.jobId || "").startsWith("job-top20-")
+      && !TOP20_WORKER_TERMINAL_STATES.has(candidate.state)
+    ))
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))[0] || null;
+  if (!job) return null;
+  activeTop20WorkerJob = Object.freeze({
+    jobId: job.jobId,
+    startedAt: job.createdAt || job.updatedAt,
+    contract: null
+  });
+  return activeTop20WorkerJob;
+}
+
+async function refreshTop20WorkerOutcome() {
+  await restoreActiveTop20WorkerJob();
+  if (!activeTop20WorkerJob) return lastTop20WorkerOutcome;
+  const snapshot = await collectionWorkerJobStore.readSnapshot();
+  const job = snapshot.jobs.find((candidate) => candidate.jobId === activeTop20WorkerJob.jobId) || null;
+  if (!job) {
+    lastTop20WorkerOutcome = Object.freeze({
+      status: "failed",
+      code: "COLLECTION_WORKER_V2_TOP20_JOB_MISSING",
+      jobId: activeTop20WorkerJob.jobId,
+      runId: null
+    });
+    activeTop20WorkerJob = null;
+    return lastTop20WorkerOutcome;
+  }
+  if (!TOP20_WORKER_TERMINAL_STATES.has(job.state)) {
+    return Object.freeze({ status: "active", job });
+  }
+  let runId = null;
+  if (job.state === "committed") {
+    const journal = await collectionWorkerRunTransactionStore.readRunOutputJournal();
+    const committed = journal.committed.find((candidate) => candidate.jobId === job.jobId) || null;
+    if (!committed || !await collectionWorkerRunTransactionStore.isCommittedRunOutputValid({
+      transactionId: committed.transactionId,
+      runId: committed.runId
+    })) {
+      lastTop20WorkerOutcome = Object.freeze({
+        status: "failed",
+        code: "COLLECTION_WORKER_V2_TOP20_RUN_NOT_COMMITTED",
+        jobId: job.jobId,
+        runId: null
+      });
+      activeTop20WorkerJob = null;
+      return lastTop20WorkerOutcome;
+    }
+    runId = committed.runId;
+  }
+  lastTop20WorkerOutcome = Object.freeze({
+    status: job.state === "committed"
+      ? "ready"
+      : job.state === "blocked"
+        ? "blocked"
+        : job.state === "cancelled"
+          ? "cancelled"
+          : "failed",
+    code: job.failureCode || null,
+    jobId: job.jobId,
+    runId
+  });
+  activeTop20WorkerJob = null;
+  return lastTop20WorkerOutcome;
+}
+
+async function queueV2Top20WorkerCollection(payload = {}) {
+  await restoreActiveTop20WorkerJob();
+  if (activeCrawlPromise || activeTop20WorkerJob) {
+    const error = new Error("이미 진행 중인 수집이 있습니다.");
+    error.code = "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB";
+    error.statusCode = 409;
+    throw error;
+  }
+  const contract = v2Top20WorkerContract(payload);
+  const prepared = await collectionWorkerV2Top20Orchestrator.prepareTrustedAdmin({
+    trustedAdmin: true,
+    contract
+  });
+  activeTop20WorkerJob = Object.freeze({
+    jobId: prepared.jobId,
+    startedAt: new Date().toISOString(),
+    contract
+  });
+  lastTop20WorkerOutcome = null;
+  return Object.freeze({
+    queued: true,
+    worker: true,
+    workerJobId: prepared.jobId,
+    top20ContractHash: prepared.top20ContractHash,
+    maximumProviderCalls: prepared.maximumProviderCalls,
+    automaticRetry: false,
+    automaticFallback: false
+  });
+}
+
+async function cancelActiveTop20WorkerCollection(reason = "관리자 요청으로 Worker 수집을 중지합니다.") {
+  await restoreActiveTop20WorkerJob();
+  if (!activeTop20WorkerJob) {
+    return Object.freeze({ ok: false, active: false, message: "진행 중인 Worker 수집이 없습니다." });
+  }
+  const jobId = activeTop20WorkerJob.jobId;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const snapshot = await collectionWorkerJobStore.readSnapshot();
+    let job = snapshot.jobs.find((candidate) => candidate.jobId === jobId) || null;
+    if (!job) {
+      activeTop20WorkerJob = null;
+      return Object.freeze({ ok: false, active: false, message: "Worker 수집 작업을 찾을 수 없습니다." });
+    }
+    if (TOP20_WORKER_TERMINAL_STATES.has(job.state)) {
+      await refreshTop20WorkerOutcome();
+      return Object.freeze({
+        ok: job.state === "cancelled",
+        active: false,
+        cancelled: job.state === "cancelled",
+        workerJobId: jobId,
+        message: job.state === "cancelled" ? "Worker 수집을 중지했습니다." : "Worker 수집이 이미 종료되었습니다."
+      });
+    }
+    try {
+      if (!job.cancellationRequested) {
+        job = await collectionWorkerJobStore.requestCancellation({
+          jobId,
+          expectedWorkflowRevision: job.workflowRevision,
+          now: new Date()
+        });
+      }
+      const providerState = await naverProviderHealthStore.read();
+      if (providerState.state === "probe_allowed") {
+        if (providerState.workflowRevision !== Number(job.providerWorkflowRevision)) {
+          continue;
+        }
+        await naverProviderHealthStore.releaseAttempt({
+          expectedWorkflowRevision: providerState.workflowRevision,
+          outcomeReceiptHash: crypto
+            .createHash("sha256")
+            .update(`collection-worker-v2-top20-cancel.v1\0${jobId}\0${providerState.workflowRevision}`)
+            .digest("hex"),
+          now: new Date()
+        });
+      }
+      job = await collectionWorkerJobStore.transitionJob({
+        jobId,
+        expectedWorkflowRevision: job.workflowRevision,
+        nextState: "cancelled",
+        failureCode: "COLLECTION_WORKER_V2_TOP20_CANCELLED",
+        now: new Date()
+      });
+      lastTop20WorkerOutcome = Object.freeze({
+        status: "cancelled",
+        code: job.failureCode,
+        jobId,
+        runId: null,
+        reason: String(reason || "").slice(0, 240)
+      });
+      activeTop20WorkerJob = null;
+      return Object.freeze({
+        ok: true,
+        active: false,
+        cancelled: true,
+        worker: true,
+        workerJobId: jobId,
+        message: "Worker 수집을 중지했습니다."
+      });
+    } catch (error) {
+      if (error?.code !== "COLLECTION_JOB_REVISION_CONFLICT") throw error;
+    }
+  }
+  const error = new Error("Worker 수집 상태가 계속 변경되어 중지 요청을 확정하지 못했습니다.");
+  error.code = "COLLECTION_WORKER_V2_TOP20_CANCEL_CONFLICT";
+  error.statusCode = 409;
+  throw error;
+}
+
+async function currentCrawlStatusForRequest(options = {}) {
+  const workerOutcome = await refreshTop20WorkerOutcome();
+  if (activeTop20WorkerJob && workerOutcome?.status === "active") {
+    const elapsedSeconds = Math.max(
+      1,
+      Math.round((Date.now() - Date.parse(activeTop20WorkerJob.startedAt)) / 1000)
+    );
+    return {
+      active: true,
+      worker: true,
+      workerJobId: activeTop20WorkerJob.jobId,
+      startedAt: activeTop20WorkerJob.startedAt,
+      elapsedSeconds,
+      estimatedTotalSeconds: null,
+      remainingSeconds: null,
+      estimatedProgress: null,
+      estimatedCompleteAt: null,
+      isDelayed: false,
+      delayedSeconds: 0,
+      sourceRole: USER_ROLES.admin,
+      currentStage: {
+        key: "worker_top20",
+        label: "상위 20곳 재고·가격·예상매출 수집",
+        detail: "Worker가 1위부터 20위까지 순서대로 확인하고 있습니다.",
+        status: "active",
+        progress: null
+      },
+      stages: [],
+      workerState: workerOutcome.job.state,
+      cancelling: workerOutcome.job.cancellationRequested === true,
+      cancelReason: "",
+      lastWorkerOutcome: null
+    };
+  }
+  const local = currentCrawlStatus(options);
+  if (!local.active && lastTop20WorkerOutcome) local.lastWorkerOutcome = lastTop20WorkerOutcome;
+  return local;
+}
+
 function crawlCancelledError(reason = "") {
   const error = new Error(reason || "수집이 중지되었습니다.");
   error.statusCode = 499;
@@ -14943,6 +15342,13 @@ async function serveLodgingCategoryProfileScript(res, headOnly = false) {
 
 async function serveOutput(reqUrl, res) {
   const relative = reqUrl.pathname.replace(/^\/outputs\//, "");
+  let runId = "";
+  try {
+    runId = decodeURIComponent(relative.split("/")[0] || "");
+  } catch {
+    return notFound(res);
+  }
+  if (!await isVisibleCommittedWorkerRun(runId)) return notFound(res);
   const filePath = safeJoin(OUTPUTS_DIR, relative);
   if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
   const ext = path.extname(filePath).toLowerCase();
@@ -15163,9 +15569,23 @@ async function route(req, res) {
       });
     }
 
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_PREPARE_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerV2Top20Orchestrator.prepare({
+        operatorToken: req.headers[COLLECTION_WORKER_OPERATOR_TOKEN_HEADER],
+        contract: payload
+      });
+      return send(res, 201, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_CLAIM_PATH) {
       const payload = await parseJsonBody(req);
-      const result = await collectionWorkerCanaryOrchestrator.claim({
+      const orchestrator = payload?.body?.workerId === COLLECTION_WORKER_V2_TOP20_WORKER_ID
+        ? collectionWorkerV2Top20Orchestrator
+        : collectionWorkerCanaryOrchestrator;
+      const result = await orchestrator.claim({
         signedRequest: payload.signedRequest,
         body: payload.body
       });
@@ -15176,7 +15596,21 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_PREFLIGHT_PATH) {
       const payload = await parseJsonBody(req);
-      const result = await collectionWorkerCanaryOrchestrator.preflight({
+      const orchestrator = String(payload?.body?.jobId || "").startsWith("job-top20-")
+        ? collectionWorkerV2Top20Orchestrator
+        : collectionWorkerCanaryOrchestrator;
+      const result = await orchestrator.preflight({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return send(res, 200, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerV2Top20Orchestrator.heartbeat({
         signedRequest: payload.signedRequest,
         body: payload.body
       });
@@ -15187,7 +15621,10 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FINALIZE_PATH) {
       const payload = await parseJsonBody(req);
-      const result = await collectionWorkerCanaryOrchestrator.finalize({
+      const orchestrator = String(payload?.body?.jobId || "").startsWith("job-top20-")
+        ? collectionWorkerV2Top20Orchestrator
+        : collectionWorkerCanaryOrchestrator;
+      const result = await orchestrator.finalize({
         signedRequest: payload.signedRequest,
         body: payload.body
       });
@@ -15198,7 +15635,10 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FAILURE_PATH) {
       const payload = await parseJsonBody(req);
-      const result = await collectionWorkerCanaryOrchestrator.recordFailure({
+      const orchestrator = String(payload?.body?.jobId || "").startsWith("job-top20-")
+        ? collectionWorkerV2Top20Orchestrator
+        : collectionWorkerCanaryOrchestrator;
+      const result = await orchestrator.recordFailure({
         signedRequest: payload.signedRequest,
         body: payload.body
       });
@@ -15391,6 +15831,21 @@ async function route(req, res) {
       });
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/status") {
+      if (!requireAdminSession(session, req, res)) return;
+      const outcome = await refreshTop20WorkerOutcome();
+      return send(res, 200, {
+        ...collectionWorkerV2Top20Orchestrator.status(),
+        activeJob: activeTop20WorkerJob ? {
+          jobId: activeTop20WorkerJob.jobId,
+          startedAt: activeTop20WorkerJob.startedAt
+        } : null,
+        lastOutcome: outcome?.status === "active" ? null : outcome || null
+      }, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/provider-canary/naver-place-main/execute") {
       if (!requireAdminSession(session, req, res)) return;
       const result = await naverLegacyCanaryRunner.execute();
@@ -15447,7 +15902,22 @@ async function route(req, res) {
 
     if (req.method === "GET" && reqUrl.pathname === "/api/crawl-status") {
       if (!requireAdminSession(session, req, res)) return;
-      return send(res, 200, currentCrawlStatus({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }));
+      return send(res, 200, await currentCrawlStatusForRequest({ clientRequestId: reqUrl.searchParams.get("clientRequestId") }));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/crawl/cancel") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req).catch(() => ({}));
+      const reason = String(payload.reason || "관리자 요청으로 수집을 중지합니다.").trim();
+      await restoreActiveTop20WorkerJob();
+      const result = activeTop20WorkerJob
+        ? await cancelActiveTop20WorkerCollection(reason)
+        : terminateActiveCrawlChild(reason, session.role);
+      return send(res, result.blocked ? 409 : 200, {
+        ...result,
+        error: result.blocked ? result.message : undefined,
+        status: await currentCrawlStatusForRequest()
+      });
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/crawl-estimate") {
@@ -15618,12 +16088,18 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       assertRequestRateLimit(req, "adminCrawl", RATE_LIMIT_POLICIES.adminCrawl, session.username || "");
       const payload = await parseJsonBody(req);
-      const result = await runCrawler({
+      const trustedPayload = {
         ...trustedPreviewAdminCrawlPayload(payload),
         providerAttemptExplicit: true
-      });
+      };
+      const useTop20Worker = IS_V2_PREVIEW_RUNTIME
+        && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
+        && isV2Top20WorkerEligible(trustedPayload);
+      const result = useTop20Worker
+        ? await queueV2Top20WorkerCollection(trustedPayload)
+        : await runCrawler(trustedPayload);
       const runs = publicRunsForRole(await listRuns(), session.role);
-      return send(res, 200, { ...result, runs });
+      return send(res, useTop20Worker ? 202 : 200, { ...result, runs });
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/yeogi-import") {
@@ -15752,6 +16228,7 @@ module.exports = {
     isAdminPreviewMapGeocodingItemEligible,
     isAdminPreviewMapGeocodingRequest,
     isSameOriginMapGeocodingRequest,
+    isV2Top20WorkerEligible,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
     naverFallbackKeywordIdentity,
@@ -15766,6 +16243,7 @@ module.exports = {
     scaleCrawlStages,
     storedNaverFallbackSearchContract,
     trustedPreviewAdminCrawlPayload,
+    v2Top20WorkerContract,
     validateNaverLegacyLimitedRunManifest,
     summarizeRankingRows,
     validAdminPreviewMapGeocodingIndexes,

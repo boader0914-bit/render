@@ -90,14 +90,30 @@ async function main() {
       jobId: collecting.jobId,
       expectedWorkflowRevision: collecting.workflowRevision,
       workerId: collecting.workerId,
+      providerWorkflowRevision: 2,
       now: "2026-08-06T01:01:01.500Z",
       leaseMs: 1000
     });
     assert.equal(heartbeat.state, "collecting");
     assert.equal(heartbeat.leaseExpiresAt, "2026-08-06T01:01:02.500Z");
+    assert.equal(heartbeat.providerWorkflowRevision, 2, "provider lease revision must survive a process restart");
+    await assert.rejects(
+      () => store.heartbeatJob({
+        jobId: heartbeat.jobId,
+        expectedWorkflowRevision: heartbeat.workflowRevision,
+        workerId: heartbeat.workerId,
+        providerWorkflowRevision: 1,
+        now: "2026-08-06T01:01:01.750Z",
+        leaseMs: 1000
+      }),
+      { code: "COLLECTION_JOB_PROVIDER_REVISION_CONFLICT", statusCode: 409 },
+      "a stale provider heartbeat must not move the durable revision backwards"
+    );
 
     const restarted = createCollectionJobStore({ runtimeRoot: tempRoot, defaultLeaseMs: 1000 });
-    assert.equal((await restarted.readSnapshot()).jobs[0].state, "collecting", "restart must reload the durable lease");
+    const reloaded = (await restarted.readSnapshot()).jobs[0];
+    assert.equal(reloaded.state, "collecting", "restart must reload the durable lease");
+    assert.equal(reloaded.providerWorkflowRevision, 2, "restart must reload the provider lease revision");
     const expired = await restarted.expireWorkerLeases({ now: "2026-08-06T01:01:03.000Z" });
     assert.equal(expired.length, 1);
     assert.equal(expired[0].state, "indeterminate");

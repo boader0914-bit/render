@@ -77,6 +77,63 @@ function response(body = "fixture body", options = {}) {
   );
   assert.equal(transport.callCount(), 1);
 
+  let heartbeatFetchCount = 0;
+  let heartbeatMetadata = null;
+  const heartbeatFailure = Object.assign(new Error("synthetic heartbeat failure"), {
+    code: "V2_TOP20_PROVIDER_CALL_HEARTBEAT_FAILED"
+  });
+  const heartbeatGuarded = createNaverLegacyCanaryLiveTransport({
+    enabled: true,
+    allowTextFallback: true,
+    beforeProviderCall: async (metadata) => {
+      heartbeatMetadata = metadata;
+      throw heartbeatFailure;
+    },
+    fetchImpl: async () => {
+      heartbeatFetchCount += 1;
+      return response();
+    }
+  });
+  await assert.rejects(
+    () => heartbeatGuarded(request()),
+    (error) => error === heartbeatFailure
+  );
+  assert.deepEqual(heartbeatMetadata, {
+    providerId: "naver_place_search",
+    operation: "main_place",
+    companyOrdinal: null,
+    productOrdinal: null
+  });
+  assert.deepEqual(Object.keys(heartbeatMetadata).sort(), ["companyOrdinal", "operation", "productOrdinal", "providerId"]);
+  assert.equal(JSON.stringify(heartbeatMetadata).includes(SENTINEL_QUERY), false);
+  assert.equal(heartbeatFetchCount, 0, "a failed heartbeat must prevent the main Place fetch");
+  assert.equal(heartbeatGuarded.callCount(), 0, "a failed heartbeat is not an executed provider call");
+
+  let startedFetch = false;
+  let startedMetadata = null;
+  const startedGuard = createNaverLegacyCanaryLiveTransport({
+    enabled: true,
+    allowTextFallback: true,
+    beforeProviderCall: async () => {
+      assert.equal(startedFetch, false, "authorization must precede fetch");
+    },
+    onProviderCallStarted: async (metadata) => {
+      assert.equal(startedFetch, true, "executed-call notification must follow fetch start");
+      startedMetadata = metadata;
+    },
+    fetchImpl: async () => {
+      startedFetch = true;
+      return response();
+    }
+  });
+  await startedGuard(request());
+  assert.deepEqual(startedMetadata, {
+    providerId: "naver_place_search",
+    operation: "main_place",
+    companyOrdinal: null,
+    productOrdinal: null
+  });
+
   const oversized = createNaverLegacyCanaryLiveTransport({
     enabled: true,
     allowTextFallback: true,
