@@ -5,8 +5,10 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const {
+  buildV2Top20CollectorEnvironment,
   executeV2Top20Collector,
-  normalizeProviderCallMessage
+  normalizeProviderCallMessage,
+  selectV2Top20ChildBaseEnvironment
 } = require("./collection_worker_v2_top20_collector.cjs");
 const {
   SUMMARY_PATH,
@@ -139,6 +141,26 @@ async function verifyRealDetailManifestShape(root) {
 (async () => {
   const roots = [];
   try {
+    const sanitizedBase = selectV2Top20ChildBaseEnvironment({
+      PATH: "synthetic-path",
+      NODE_ENV: "production",
+      COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64: "must-not-reach-child",
+      COLLECTION_WORKER_REQUEST_PRIVATE_KEY_B64: "must-not-reach-child"
+    });
+    assert.equal(sanitizedBase.PATH, "synthetic-path");
+    assert.equal(Object.hasOwn(sanitizedBase, "COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64"), false);
+    assert.equal(Object.hasOwn(sanitizedBase, "COLLECTION_WORKER_REQUEST_PRIVATE_KEY_B64"), false);
+    const sanitizedCollectorEnvironment = buildV2Top20CollectorEnvironment({
+      contract: contract(),
+      outputRoot: path.join(os.tmpdir(), "v2-top20-sanitized-environment"),
+      runStamp: "20260806_000000_abcdef12",
+      baseEnvironment: {
+        PATH: "synthetic-path",
+        COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64: "must-not-reach-child"
+      }
+    });
+    assert.equal(sanitizedCollectorEnvironment.PATH, "synthetic-path");
+    assert.equal(Object.hasOwn(sanitizedCollectorEnvironment, "COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64"), false);
     assert.deepEqual(normalizeProviderCallMessage({
       type: "v2_top20_provider_call_heartbeat_request.v1",
       requestId: "provider-call-123-1-abcdef12",

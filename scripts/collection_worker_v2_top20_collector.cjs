@@ -59,6 +59,43 @@ function safeRunStamp(value) {
   return text;
 }
 
+const SAFE_CHILD_ENVIRONMENT_KEYS = Object.freeze([
+  "PATH",
+  "Path",
+  "SystemRoot",
+  "ComSpec",
+  "PATHEXT",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "NODE_ENV",
+  "TZ",
+  "LANG",
+  "LC_ALL"
+]);
+
+const FIXTURE_CHILD_ENVIRONMENT_KEYS = Object.freeze([
+  "NODE_OPTIONS",
+  "NAVER_INVENTORY_FIXTURE_ROOT",
+  "NAVER_INVENTORY_FIXTURE_MODE",
+  "NAVER_INVENTORY_FIXTURE_AUDIT_FILE",
+  "SEARCH_INTENT",
+  "SEARCH_INTENT_CONFIDENCE"
+]);
+
+function selectV2Top20ChildBaseEnvironment(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  const keys = source.NODE_ENV === "test"
+    ? [...SAFE_CHILD_ENVIRONMENT_KEYS, ...FIXTURE_CHILD_ENVIRONMENT_KEYS]
+    : SAFE_CHILD_ENVIRONMENT_KEYS;
+  const selected = {};
+  for (const key of keys) {
+    if (typeof source[key] === "string") selected[key] = source[key];
+  }
+  return selected;
+}
+
 function buildV2Top20CollectorEnvironment(input = {}) {
   const contract = normalizeV2Top20PrepareContract(input.contract || {});
   const outputRoot = path.resolve(String(input.outputRoot || ""));
@@ -67,7 +104,7 @@ function buildV2Top20CollectorEnvironment(input = {}) {
   }
   const runStamp = safeRunStamp(input.runStamp);
   return Object.freeze({
-    ...input.baseEnvironment,
+    ...selectV2Top20ChildBaseEnvironment(input.baseEnvironment),
     CHECK_IN: contract.checkIn,
     CHECK_OUT: contract.checkOut,
     ADULTS: "2",
@@ -527,5 +564,6 @@ module.exports = {
   executeV2Top20Collector,
   findSingleFinalOutput,
   normalizeProviderCallMessage,
-  runCollectorChild
+  runCollectorChild,
+  selectV2Top20ChildBaseEnvironment
 };

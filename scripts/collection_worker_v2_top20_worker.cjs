@@ -67,8 +67,8 @@ const DIAGNOSTIC_PATTERN = /^crawl-[a-f0-9]{12}$/u;
 const ENV = Object.freeze({
   artifactPrivateKey: "COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64",
   dispatchPublicKey: "COLLECTION_WORKER_DISPATCH_PUBLIC_KEY_B64",
+  executionEnabled: "COLLECTION_WORKER_V2_TOP20_EXECUTION_ENABLED",
   externalCalls: "COLLECTOR_EXTERNAL_CALLS_ENABLED",
-  oneShotEnabled: "COLLECTION_WORKER_ONE_SHOT_ENABLED",
   previewBaseUrl: "COLLECTION_WORKER_PREVIEW_BASE_URL",
   requestPrivateKey: "COLLECTION_WORKER_REQUEST_PRIVATE_KEY_B64",
   resultWrites: "COLLECTOR_RESULT_WRITE_ENABLED",
@@ -143,9 +143,9 @@ function assertWorkerEnvironment(environment) {
     || env.RENDER_SERVICE_ID !== COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID
     || !COMMIT_PATTERN.test(commit)
     || env[ENV.workerMode] !== "v2_top20_once"
+    || env[ENV.executionEnabled] !== "true"
     || env[ENV.externalCalls] !== "true"
     || env[ENV.resultWrites] !== "true"
-    || env[ENV.oneShotEnabled] !== "true"
     || env[ENV.top20Enabled] !== "true"
     || baseUrl !== TARGET_PREVIEW_BASE_URL
   ) {

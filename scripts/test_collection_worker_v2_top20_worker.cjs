@@ -98,7 +98,7 @@ function workerEnvironment(keys, overrides = {}) {
     [ENV.workerMode]: "v2_top20_once",
     [ENV.externalCalls]: "true",
     [ENV.resultWrites]: "true",
-    [ENV.oneShotEnabled]: "true",
+    [ENV.executionEnabled]: "true",
     [ENV.top20Enabled]: "true",
     [ENV.previewBaseUrl]: TARGET_PREVIEW_BASE_URL,
     [ENV.dispatchPublicKey]: publicBase64(keys.dispatch.publicKey),
@@ -362,7 +362,7 @@ async function gateScenario(keys) {
     [ENV.workerMode, "disabled"],
     [ENV.externalCalls, "false"],
     [ENV.resultWrites, "false"],
-    [ENV.oneShotEnabled, "false"],
+    [ENV.executionEnabled, "false"],
     [ENV.top20Enabled, "false"],
     ["RENDER_GIT_COMMIT", "not-a-commit"]
   ]) {
