@@ -29,7 +29,11 @@ async function main() {
     const crawlerSource = fs.readFileSync(path.join(ROOT, "scripts", "gyeongnam_glamping_crawl.cjs"), "utf8");
     const webSource = fs.readFileSync(path.join(ROOT, "web", "app.js"), "utf8");
     assert.doesNotMatch(serverSource, /require\(["']\.\/naver_collector_strategy\.cjs["']\)/);
-    assert.doesNotMatch(crawlerSource, /legacy_candidate|NAVER_COLLECTOR_STRATEGY/);
+    assert.match(crawlerSource, /NAVER_LEGACY_LIMITED_ACTIVATION/);
+    assert.match(crawlerSource, /NAVER_COLLECTOR_STRATEGY/);
+    assert.doesNotMatch(crawlerSource, /collectNaverPlaceSnapshot/, "the fixture-only adapter must not enter the live crawler");
+    assert.match(crawlerSource, /createNaverLegacyCanaryLiveTransport/);
+    assert.match(crawlerSource, /NAVER_PROVIDER_CALL_BUDGET === 1/);
     assert.doesNotMatch(webSource, /legacy_candidate|NAVER_COLLECTOR_STRATEGY/);
     assert.equal((serverSource.match(/runCrawlerLegacySingleFlight\s*\(/g) || []).length, 1, "legacy single-flight is defined but never called");
 

@@ -77,6 +77,10 @@ const {
 const {
   createNaverLegacyCanaryRunner
 } = require("./naver_legacy_canary_runner.cjs");
+const {
+  NAVER_LEGACY_LIMITED_ACTIVATION_PREVIEW_ROOT,
+  resolveNaverLegacyLimitedActivationForTrustedServer
+} = require("./naver_legacy_limited_activation.cjs");
 const { createLocationRegionMatcher } = require("./location_region_matcher.cjs");
 const {
   createRegionInsightRuntime,
@@ -422,6 +426,18 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
 function collectionDbRouteProfile(purposeValue, profileValue = "") {
   const purpose = normalizeCollectionPurpose(purposeValue);
   const profile = String(profileValue || "").trim();
+  if (profile === "fast_rank") {
+    return {
+      key: "rank_probe",
+      label: "순위 확인",
+      note: "순위 확인용으로 노출 기록만 반영",
+      appliesMasterBasic: true,
+      appliesInventory: false,
+      appliesHistory: false,
+      appliesDemandLocation: false,
+      targets: ["company_master.keyword_exposure"]
+    };
+  }
   if (purpose === "basic_db") {
     return {
       key: "basic_db",
@@ -444,18 +460,6 @@ function collectionDbRouteProfile(purposeValue, profileValue = "") {
       appliesHistory: false,
       appliesDemandLocation: true,
       targets: ["company_master.demand_signals", "region_operations", "demand_structure"]
-    };
-  }
-  if (profile === "fast_rank") {
-    return {
-      key: "rank_probe",
-      label: "순위 확인",
-      note: "순위 확인용으로 노출 기록만 반영",
-      appliesMasterBasic: true,
-      appliesInventory: false,
-      appliesHistory: false,
-      appliesDemandLocation: false,
-      targets: ["company_master.keyword_exposure"]
     };
   }
   return {
@@ -611,6 +615,112 @@ function crawlExecutionPlan(payload = {}) {
     rankRangeCount: crawlRankRangeCount(detailRankRanges),
     detailRankRanges
   };
+}
+
+function naverLegacyLimitedActivationEnvironment() {
+  return {
+    EXACT_V2_PREVIEW_RUNTIME: IS_V2_PREVIEW_RUNTIME,
+    RENDER: IS_RENDER_RUNTIME ? "true" : "false",
+    PREVIEW_DATA_ROOT: PREVIEW_DATA_ROOT_ENV
+  };
+}
+
+function trustedPreviewAdminCrawlPayload(payload = {}) {
+  const trustedPayload = {
+    ...payload,
+    sourceRole: USER_ROLES.admin,
+    collectionSource: "admin_search",
+    naverLegacyLimitedActivation: false,
+    naverCollectorStrategy: "current",
+    naverCollectorScope: "current",
+    naverLimitedActivationProfile: "",
+    naverProviderCallBudget: 0,
+    naverAutomaticRetry: false,
+    naverAutomaticFallback: false
+  };
+  const requestedPlan = crawlExecutionPlan(trustedPayload);
+  const activation = resolveNaverLegacyLimitedActivationForTrustedServer({
+    environment: naverLegacyLimitedActivationEnvironment(),
+    collectionSource: "admin_search",
+    sourceRole: USER_ROLES.admin,
+    searchMode: requestedPlan.resolvedSearchMode,
+    collectionMode: requestedPlan.collectionMode
+  });
+
+  if (!IS_V2_PREVIEW_RUNTIME) return trustedPayload;
+  if (PREVIEW_DATA_ROOT_ENV !== NAVER_LEGACY_LIMITED_ACTIVATION_PREVIEW_ROOT) {
+    const error = new Error("Preview 제한 수집은 관리자 지역 키워드 검색에서만 사용할 수 있습니다.");
+    error.code = "NAVER_LEGACY_LIMITED_ACTIVATION_SCOPE_REQUIRED";
+    error.statusCode = 422;
+    error.retryable = false;
+    throw error;
+  }
+  if (activation.activationEnabled !== true) return trustedPayload;
+
+  return {
+    ...trustedPayload,
+    collectionMode: activation.effectiveCollectionMode,
+    detailRankRanges: "",
+    bookingRangePlaceLimit: 0,
+    requestedCollectionMode: requestedPlan.collectionMode,
+    requestedCollectionPurpose: requestedPlan.collectionPurpose,
+    naverLegacyLimitedActivation: true,
+    naverCollectorStrategy: activation.strategy,
+    naverCollectorScope: activation.collectorScope,
+    naverLimitedActivationProfile: activation.activationProfile,
+    naverProviderCallBudget: activation.callBudget,
+    naverAutomaticRetry: activation.automaticRetry,
+    naverAutomaticFallback: activation.automaticFallback
+  };
+}
+
+function validateNaverLegacyLimitedRunManifest(manifest, payload = {}) {
+  if (payload.naverLegacyLimitedActivation !== true) return null;
+  const outputDir = path.resolve(String(manifest?.outputDir || ""));
+  const relativeOutputDir = path.relative(OUTPUTS_DIR, outputDir);
+  const runId = path.basename(outputDir);
+  const counts = manifest?.counts && typeof manifest.counts === "object" ? manifest.counts : {};
+  const zeroCountFields = [
+    "naverRegional",
+    "naverBookingStockChecked",
+    "nolFirstPage",
+    "nolRawFirstPage",
+    "ddnayo"
+  ];
+  const validOutputDir = Boolean(String(manifest?.outputDir || "").trim())
+    && relativeOutputDir
+    && path.dirname(outputDir) === path.resolve(OUTPUTS_DIR)
+    && !relativeOutputDir.startsWith(`..${path.sep}`)
+    && relativeOutputDir !== ".."
+    && !path.isAbsolute(relativeOutputDir)
+    && /^[a-z0-9_]+_glamping_\d{8}(?:_\d{6})?$/u.test(runId);
+  const validCounts = Number.isInteger(counts.naverOverall)
+    && counts.naverOverall >= 0
+    && counts.naverOverall <= 50
+    && zeroCountFields.every((field) => Number.isInteger(counts[field]) && counts[field] === 0);
+  const valid = manifest
+    && typeof manifest === "object"
+    && manifest.documentType === "lodging-collection-manifest"
+    && manifest.collectorStrategy === "legacy_candidate"
+    && manifest.collectorScope === "main_place_only"
+    && manifest.collectorActivationProfile === "preview-admin-keyword-fast-main-place.v1"
+    && manifest.collectionMode === "fast"
+    && manifest.collectionProfile === "fast_rank"
+    && Number(manifest.providerCallBudget) === 1
+    && Number(manifest.providerRequestCount) === 1
+    && manifest.automaticRetry === false
+    && manifest.automaticFallback === false
+    && manifest.saveRunOnSuccessOnly === true
+    && validCounts
+    && validOutputDir;
+  if (!valid) {
+    const error = new Error("NAVER 제한 수집의 성공 결과를 검증할 수 없습니다.");
+    error.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
+    error.statusCode = 502;
+    error.retryable = false;
+    throw error;
+  }
+  return { outputDir, runId };
 }
 
 function estimateCrawlCompletion(payload = {}, timingStore = null) {
@@ -868,6 +978,15 @@ function crawlPayloadSignature(payload = {}) {
     detailRankRanges: plan.detailRankRanges,
     collectionSource,
     sourceRole,
+    naverCollectorStrategy: payload.naverLegacyLimitedActivation === true
+      ? String(payload.naverCollectorStrategy || "")
+      : "current",
+    naverCollectorScope: payload.naverLegacyLimitedActivation === true
+      ? String(payload.naverCollectorScope || "")
+      : "current",
+    naverLimitedActivationProfile: payload.naverLegacyLimitedActivation === true
+      ? String(payload.naverLimitedActivationProfile || "")
+      : "",
     recrawlContext
   };
   return crypto.createHash("sha1").update(stableJson(signaturePayload)).digest("hex");
@@ -14332,6 +14451,23 @@ async function runCrawlerInternal(payload) {
     SOURCE_ROLE: sourceRole,
     COLLECTION_SOURCE: collectionSource,
     COLLECTION_SOURCE_LABEL: collectionSourceLabel(collectionSource),
+    NAVER_LEGACY_LIMITED_ACTIVATION: payload.naverLegacyLimitedActivation === true ? "1" : "0",
+    NAVER_COLLECTOR_STRATEGY: payload.naverLegacyLimitedActivation === true
+      ? String(payload.naverCollectorStrategy || "")
+      : "current",
+    NAVER_COLLECTOR_SCOPE: payload.naverLegacyLimitedActivation === true
+      ? String(payload.naverCollectorScope || "")
+      : "current",
+    NAVER_LIMITED_ACTIVATION_PROFILE: payload.naverLegacyLimitedActivation === true
+      ? String(payload.naverLimitedActivationProfile || "")
+      : "",
+    NAVER_PROVIDER_CALL_BUDGET: payload.naverLegacyLimitedActivation === true
+      ? String(payload.naverProviderCallBudget || 0)
+      : "0",
+    NAVER_AUTOMATIC_RETRY: payload.naverLegacyLimitedActivation === true && payload.naverAutomaticRetry === true ? "1" : "0",
+    NAVER_AUTOMATIC_FALLBACK: payload.naverLegacyLimitedActivation === true && payload.naverAutomaticFallback === true ? "1" : "0",
+    REQUESTED_COLLECTION_MODE: String(payload.requestedCollectionMode || plan.collectionMode),
+    REQUESTED_COLLECTION_PURPOSE: String(payload.requestedCollectionPurpose || plan.collectionPurpose),
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,
@@ -14385,13 +14521,44 @@ async function runCrawlerInternal(payload) {
         const trimmed = stdout.trim();
         const jsonStart = trimmed.indexOf("{");
         const parsed = jsonStart >= 0 ? JSON.parse(trimmed.slice(jsonStart)) : null;
-        const outputDir = parsed?.outputDir || "";
-        const runId = outputDir ? path.basename(outputDir) : null;
+        const limitedRun = validateNaverLegacyLimitedRunManifest(parsed, payload);
+        const outputDir = limitedRun?.outputDir || parsed?.outputDir || "";
+        const runId = limitedRun?.runId || (outputDir ? path.basename(outputDir) : null);
+        if (limitedRun) {
+          const outputStat = await fsp.stat(outputDir);
+          if (!outputStat.isDirectory()) {
+            const invalidRun = new Error("NAVER 제한 수집의 최종 run 디렉터리가 없습니다.");
+            invalidRun.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
+            invalidRun.statusCode = 502;
+            invalidRun.retryable = false;
+            throw invalidRun;
+          }
+          const storedManifest = JSON.parse(await fsp.readFile(path.join(outputDir, "manifest.json"), "utf8"));
+          const storedRun = validateNaverLegacyLimitedRunManifest(storedManifest, payload);
+          if (
+            storedRun.runId !== runId
+            || storedManifest.collectorContractHash !== parsed.collectorContractHash
+            || storedManifest.executionIdentityHash !== parsed.executionIdentityHash
+          ) {
+            const invalidRun = new Error("NAVER 제한 수집의 저장 결과가 실행 결과와 일치하지 않습니다.");
+            invalidRun.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
+            invalidRun.statusCode = 502;
+            invalidRun.retryable = false;
+            throw invalidRun;
+          }
+        }
         const history = runId
           ? await appendHistoryForRun(runId).catch((error) => ({ appended: 0, error: error.message || String(error) }))
           : null;
         resolve({ output: parsed, runId, history });
-      } catch {
+      } catch (error) {
+        if (payload.naverLegacyLimitedActivation === true) {
+          if (!error.code) error.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
+          if (!error.statusCode) error.statusCode = 502;
+          error.retryable = false;
+          reject(error);
+          return;
+        }
         resolve({ output: stdout, runId: null });
       }
     });
@@ -14886,11 +15053,19 @@ async function route(req, res) {
         return send(res, 200, {
           items: await Promise.all(items.map(async (item) => ({
             clientKey: item.clientKey || "",
-            estimate: await publicCrawlEstimateForSession(item, timingStore, session)
+            estimate: await publicCrawlEstimateForSession(
+              normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewAdminCrawlPayload(item) : item,
+              timingStore,
+              session
+            )
           })))
         });
       }
-      return send(res, 200, await publicCrawlEstimateForSession(payload, timingStore, session));
+      return send(res, 200, await publicCrawlEstimateForSession(
+        normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewAdminCrawlPayload(payload) : payload,
+        timingStore,
+        session
+      ));
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/history/summary") {
@@ -15036,10 +15211,8 @@ async function route(req, res) {
       assertRequestRateLimit(req, "adminCrawl", RATE_LIMIT_POLICIES.adminCrawl, session.username || "");
       const payload = await parseJsonBody(req);
       const result = await runCrawler({
-        ...payload,
-        providerAttemptExplicit: true,
-        sourceRole: USER_ROLES.admin,
-        collectionSource: normalizeCollectionSource(payload.collectionSource, USER_ROLES.admin)
+        ...trustedPreviewAdminCrawlPayload(payload),
+        providerAttemptExplicit: true
       });
       const runs = publicRunsForRole(await listRuns(), session.role);
       return send(res, 200, { ...result, runs });
@@ -15160,7 +15333,9 @@ module.exports = {
     applyAdminRegionReviewsToOperations,
     companyMasterFile: COMPANY_MASTER_FILE,
     companyRecordSummary,
+    collectionDbRouteProfile,
     crawlExecutionPlan,
+    crawlPayloadSignature,
     crawlRuntimeRemainingSeconds,
     crawlRuntimeStageRows,
     crawlTimingConditions,
@@ -15181,6 +15356,8 @@ module.exports = {
     rowCollectionAddress,
     scaleCrawlStages,
     storedNaverFallbackSearchContract,
+    trustedPreviewAdminCrawlPayload,
+    validateNaverLegacyLimitedRunManifest,
     summarizeRankingRows,
     validAdminPreviewMapGeocodingIndexes,
     writeCompanyMaster

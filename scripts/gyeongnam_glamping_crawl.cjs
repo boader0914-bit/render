@@ -20,6 +20,17 @@ const {
 const {
   classifyNaverAccessResponse
 } = require("./naver_provider_resilience.cjs");
+const {
+  buildCollectorStrategyPlan
+} = require("./naver_collector_strategy.cjs");
+const {
+  createNaverLegacyCanaryLiveTransport
+} = require("./naver_legacy_canary_live_transport.cjs");
+const {
+  NAVER_LEGACY_LIMITED_ACTIVATION_SCOPE,
+  NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY,
+  chooseLegacyMainQuery
+} = require("./naver_legacy_limited_activation.cjs");
 
 const PRODUCT_MODES = {
   all: "전체",
@@ -245,6 +256,15 @@ const BOOKING_RANGE_PLACE_LIMIT = COLLECTION_PROFILE.collectWeeklyRange
 const SOURCE_ROLE = String(process.env.SOURCE_ROLE || "admin").trim() || "admin";
 const COLLECTION_SOURCE = String(process.env.COLLECTION_SOURCE || (SOURCE_ROLE === "b2b" ? "b2b_search" : "admin_search")).trim();
 const COLLECTION_SOURCE_LABEL = String(process.env.COLLECTION_SOURCE_LABEL || (COLLECTION_SOURCE === "b2b_search" ? "B2B 검색" : "관리자 수집")).trim();
+const REQUESTED_COLLECTION_MODE = normalizeCollectionMode(process.env.REQUESTED_COLLECTION_MODE || COLLECTION_MODE);
+const REQUESTED_COLLECTION_PURPOSE = normalizeCollectionPurpose(process.env.REQUESTED_COLLECTION_PURPOSE || COLLECTION_PURPOSE);
+const NAVER_LEGACY_LIMITED_ACTIVATION = String(process.env.NAVER_LEGACY_LIMITED_ACTIVATION || "0") === "1";
+const NAVER_COLLECTOR_STRATEGY = String(process.env.NAVER_COLLECTOR_STRATEGY || "current").trim();
+const NAVER_COLLECTOR_SCOPE = String(process.env.NAVER_COLLECTOR_SCOPE || "current").trim();
+const NAVER_LIMITED_ACTIVATION_PROFILE = String(process.env.NAVER_LIMITED_ACTIVATION_PROFILE || "").trim();
+const NAVER_PROVIDER_CALL_BUDGET = boundedInteger(process.env.NAVER_PROVIDER_CALL_BUDGET, 0, 0, 1);
+const NAVER_AUTOMATIC_RETRY = String(process.env.NAVER_AUTOMATIC_RETRY || "0") === "1";
+const NAVER_AUTOMATIC_FALLBACK = String(process.env.NAVER_AUTOMATIC_FALLBACK || "0") === "1";
 
 const regionSlugMap = {
   거제: "geoje",
@@ -645,6 +665,30 @@ const QUERY = HAS_COLLECTION_SEARCH_CONTEXT ? COLLECTION_SEARCH_CONTEXT.primaryQ
 const NAVER_QUERY = HAS_COLLECTION_SEARCH_CONTEXT
   ? (COLLECTION_SEARCH_CONTEXT.platformQueries.naver[0] || QUERY)
   : (province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} ${RAW_KEYWORD_SUFFIX}`)));
+const LEGACY_NAVER_MAIN_QUERY_4E4 = province.naverQuery
+  || (province.isCompany
+    ? RAW_KEYWORD.trim()
+    : (province.isLocal ? spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX) : `${province.full} ${RAW_KEYWORD_SUFFIX}`));
+const NAVER_LEGACY_QUERY_SELECTION = NAVER_LEGACY_LIMITED_ACTIVATION
+  ? chooseLegacyMainQuery({ explicitLegacyQuery: LEGACY_NAVER_MAIN_QUERY_4E4 })
+  : null;
+const NAVER_LEGACY_STRATEGY_PLAN = NAVER_LEGACY_LIMITED_ACTIVATION
+  ? buildCollectorStrategyPlan({
+      strategy: NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY,
+      callBudget: 1,
+      contract: {
+        keyword: RAW_KEYWORD,
+        searchMode: SEARCH_MODE,
+        rankStart: 1,
+        rankEnd: 50,
+        regionKey: COLLECTION_SEARCH_CONTEXT.regionKey || null,
+        categoryKey: COLLECTION_SEARCH_CONTEXT.categoryKey || null,
+        measurementPeriod: null,
+        currentQueryCandidates: [NAVER_QUERY],
+        legacyNaverQuery: NAVER_LEGACY_QUERY_SELECTION.query
+      }
+    })
+  : null;
 const DDNAYO_QUERY_EXACT = HAS_COLLECTION_SEARCH_CONTEXT
   ? COLLECTION_SEARCH_CONTEXT.platformQueries.ddnayo.exact
   : (province.ddnayoQuery || (province.isCompany ? QUERY : spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX)));
@@ -655,7 +699,10 @@ const RUN_DATE = CHECK_IN.replaceAll("-", "");
 const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false }).replaceAll(":", "");
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
 const OUTPUT_ROOT = process.env.OUTPUTS_DIR || process.env.DATA_DIR || "outputs";
-const OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${province.slug}_glamping_${RUN_STAMP}`);
+const FINAL_OUTPUT_DIR = path.resolve(OUTPUT_ROOT, `${province.slug}_glamping_${RUN_STAMP}`);
+const OUTPUT_DIR = NAVER_LEGACY_LIMITED_ACTIVATION
+  ? `${FINAL_OUTPUT_DIR}.pending-${process.pid}-${crypto.randomBytes(4).toString("hex")}`
+  : FINAL_OUTPUT_DIR;
 const DETAIL_JSON_DIR_NAME = "details";
 const DETAIL_JSON_INLINE_LIMIT = 28000;
 const detailJsonFiles = [];
@@ -675,11 +722,19 @@ const headers = {
   "accept-language": "ko-KR,ko;q=0.9",
 };
 
+const NAVER_LEGACY_LIMITED_TRANSPORT = NAVER_LEGACY_LIMITED_ACTIVATION
+  ? createNaverLegacyCanaryLiveTransport({
+      enabled: true,
+      fetchImpl: (...args) => fetch(...args)
+    })
+  : null;
+
 const regions = province.regions;
 
 function csvEscape(value) {
   if (value === null || value === undefined) return "";
-  const s = String(value);
+  const raw = String(value);
+  const s = /^[\t\r\n ]*[=+\-@]/u.test(raw) ? `'${raw}` : raw;
   if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
@@ -1006,6 +1061,50 @@ function mapNaverItem(state, item, extras = {}) {
 }
 
 async function getNaverState(query) {
+  if (NAVER_LEGACY_LIMITED_ACTIVATION) {
+    let response;
+    try {
+      response = await NAVER_LEGACY_LIMITED_TRANSPORT({
+        providerId: "naver_place_search",
+        providerOperation: "naver_place_accommodation_search_snapshot",
+        query,
+        requestOrdinal: 1,
+        callBudget: 1,
+        actualCallsEnabled: true,
+        fixtureOnly: false
+      });
+    } catch (error) {
+      if (error?.code === "NAVER_LEGACY_CANARY_CALL_BUDGET_EXCEEDED") {
+        throw createCrawlFailure("NAVER_LEGACY_CANARY_CALL_BUDGET_EXCEEDED");
+      }
+      if ([
+        "NAVER_LEGACY_CANARY_TIMEOUT",
+        "NAVER_LEGACY_CANARY_TRANSPORT_FAILED",
+        "NAVER_LEGACY_CANARY_RESPONSE_TOO_LARGE",
+        "NAVER_LEGACY_CANARY_RESPONSE_INVALID"
+      ].includes(String(error?.code || ""))) {
+        throw createCrawlFailure("NAVER_TEMPORARY_UNAVAILABLE");
+      }
+      throw error;
+    }
+    throwIfNaverAccessBlocked({ status: response.status, headers: response.headers, body: response.body });
+    if (response.status < 200 || response.status >= 300) {
+      throw createCrawlFailure(response.status >= 500 ? "NAVER_TEMPORARY_UNAVAILABLE" : "NAVER_HTTP_ERROR");
+    }
+    let state;
+    try {
+      state = extractApolloState(response.body);
+    } catch (error) {
+      throwIfNaverAccessBlocked({
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+        apolloStateValidated: false
+      });
+      throw error;
+    }
+    return { status: response.status, state, url: "", responseBody: response.body };
+  }
   const url = `https://pcmap.place.naver.com/accommodation/list?query=${encodeURIComponent(query)}`;
   assertNaverTransportAvailable();
   const { res, text } = await fetchText(url);
@@ -1026,6 +1125,29 @@ async function getNaverState(query) {
     throw error;
   }
   return { status: res.status, state, url, responseBody: text };
+}
+
+function assertNaverLegacyLimitedActivationContract() {
+  if (!NAVER_LEGACY_LIMITED_ACTIVATION) return;
+  const valid = NAVER_COLLECTOR_STRATEGY === NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY
+    && NAVER_COLLECTOR_SCOPE === NAVER_LEGACY_LIMITED_ACTIVATION_SCOPE
+    && Boolean(NAVER_LIMITED_ACTIVATION_PROFILE)
+    && NAVER_PROVIDER_CALL_BUDGET === 1
+    && NAVER_AUTOMATIC_RETRY === false
+    && NAVER_AUTOMATIC_FALLBACK === false
+    && SOURCE_ROLE === "admin"
+    && COLLECTION_SOURCE === "admin_search"
+    && SEARCH_MODE === "keyword"
+    && COLLECTION_MODE === "fast"
+    && COLLECTION_PROFILE.key === "fast_rank"
+    && COLLECTION_PROFILE.collectRegional === false
+    && COLLECTION_PROFILE.collectOta === false
+    && COLLECTION_PROFILE.collectBookingStock === false
+    && COLLECTION_PROFILE.collectWeeklyRange === false
+    && NAVER_LEGACY_STRATEGY_PLAN?.plannedRequestCount === 1
+    && NAVER_LEGACY_STRATEGY_PLAN?.executableRequestCount === 1
+    && NAVER_LEGACY_QUERY_SELECTION?.requestOrdinal === 1;
+  if (!valid) throw createCrawlFailure("NAVER_LEGACY_CANARY_CONTRACT_MISMATCH");
 }
 
 const naverBookingBusinessQuery = `
@@ -2523,9 +2645,11 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
 }
 
 async function collectNaverMain() {
-  const queries = HAS_COLLECTION_SEARCH_CONTEXT
-    ? COLLECTION_SEARCH_CONTEXT.platformQueries.naver
-    : (province.isCompany ? companySearchQueries(RAW_KEYWORD) : [NAVER_QUERY]);
+  const queries = NAVER_LEGACY_LIMITED_ACTIVATION
+    ? [NAVER_LEGACY_QUERY_SELECTION.query]
+    : (HAS_COLLECTION_SEARCH_CONTEXT
+        ? COLLECTION_SEARCH_CONTEXT.platformQueries.naver
+        : (province.isCompany ? companySearchQueries(RAW_KEYWORD) : [NAVER_QUERY]));
   const attemptedQueries = [];
   let lastStatus = 0;
   let lastUrl = "";
@@ -2562,7 +2686,9 @@ async function collectNaverMain() {
       continue;
     }
 
-    const overallItems = organicResult?.items || [];
+    const overallItems = NAVER_LEGACY_LIMITED_ACTIVATION
+      ? (organicResult?.items || []).slice(0, 50)
+      : (organicResult?.items || []);
     const adRefs = adKey ? state.ROOT_QUERY[adKey].items || [] : [];
 
     let overall = overallItems.map((item, index) => {
@@ -2593,8 +2719,10 @@ async function collectNaverMain() {
       if (!attempt.matched) continue;
     }
 
-    overall = filterCollectionRows(overall, query);
-    ads = filterCollectionRows(ads, query);
+    if (!NAVER_LEGACY_LIMITED_ACTIVATION) {
+      overall = filterCollectionRows(overall, query);
+      ads = filterCollectionRows(ads, query);
+    }
     attempt.relevanceMatched = overall.length + ads.length;
 
     return {
@@ -3202,10 +3330,17 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
 
 async function main() {
   const collectionStartedAt = new Date().toISOString();
-  await fs.mkdir(OUTPUT_DIR, { recursive: true });
+  assertNaverLegacyLimitedActivationContract();
+  if (!NAVER_LEGACY_LIMITED_ACTIVATION) {
+    await fs.mkdir(OUTPUT_DIR, { recursive: true });
+  }
 
   console.log("Collecting Naver main...");
   const naver = await collectNaverMain();
+  if (NAVER_LEGACY_LIMITED_ACTIVATION) {
+    await fs.mkdir(path.dirname(OUTPUT_DIR), { recursive: true });
+    await fs.mkdir(OUTPUT_DIR, { recursive: false });
+  }
 
   console.log(`Collection profile: ${COLLECTION_PROFILE.label} - ${COLLECTION_PROFILE.note}`);
 
@@ -3910,7 +4045,7 @@ async function main() {
     collectionCompletedAt,
     dataAvailableAt: collectionCompletedAt,
     timezone: "Asia/Seoul",
-    outputDir: OUTPUT_DIR,
+    outputDir: FINAL_OUTPUT_DIR,
     keyword: RAW_KEYWORD,
     keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),
     searchMode: SEARCH_MODE,
@@ -3936,6 +4071,22 @@ async function main() {
       collectBookingStock: COLLECTION_PROFILE.collectBookingStock,
       collectWeeklyRange: COLLECTION_PROFILE.collectWeeklyRange,
     },
+    requestedCollectionMode: REQUESTED_COLLECTION_MODE,
+    requestedCollectionPurpose: REQUESTED_COLLECTION_PURPOSE,
+    collectorStrategy: NAVER_LEGACY_STRATEGY_PLAN?.strategy || "current",
+    collectorStrategyVersion: NAVER_LEGACY_STRATEGY_PLAN?.strategyVersion || "current",
+    collectorScope: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_COLLECTOR_SCOPE : "current",
+    collectorActivationProfile: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_LIMITED_ACTIVATION_PROFILE : "",
+    collectorQueryPlanVersion: NAVER_LEGACY_STRATEGY_PLAN?.queryPlanVersion || "",
+    collectorParserVersion: NAVER_LEGACY_STRATEGY_PLAN?.parserVersion || "",
+    rankingContractVersion: NAVER_LEGACY_STRATEGY_PLAN?.rankingContractVersion || "",
+    executionIdentityHash: NAVER_LEGACY_STRATEGY_PLAN?.executionIdentityHash || "",
+    collectorContractHash: NAVER_LEGACY_STRATEGY_PLAN?.contractHash || "",
+    providerCallBudget: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_PROVIDER_CALL_BUDGET : null,
+    providerRequestCount: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_LEGACY_LIMITED_TRANSPORT.callCount() : null,
+    automaticRetry: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_AUTOMATIC_RETRY : null,
+    automaticFallback: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_AUTOMATIC_FALLBACK : null,
+    saveRunOnSuccessOnly: NAVER_LEGACY_LIMITED_ACTIVATION || undefined,
     sourceRole: SOURCE_ROLE,
     collectionSource: COLLECTION_SOURCE,
     collectionSourceLabel: COLLECTION_SOURCE_LABEL,
@@ -3972,10 +4123,16 @@ async function main() {
     },
   };
   await fs.writeFile(path.join(OUTPUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+  if (NAVER_LEGACY_LIMITED_ACTIVATION) {
+    await fs.rename(OUTPUT_DIR, FINAL_OUTPUT_DIR);
+  }
   console.log(JSON.stringify(manifest, null, 2));
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  if (NAVER_LEGACY_LIMITED_ACTIVATION) {
+    await fs.rm(OUTPUT_DIR, { recursive: true, force: true }).catch(() => {});
+  }
   console.error(serializeCollectorFailure(error));
   process.exit(1);
 });
