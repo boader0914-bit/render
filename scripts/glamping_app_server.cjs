@@ -283,7 +283,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260806-worker-top20-v45";
+const UI_ASSET_VERSION = "v2-20260807-worker-top20-ui-v46";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -4846,26 +4846,31 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
     && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
     && isV2Top20WorkerEligible(payload)
   ) {
+    const top20BoundedInventory = {
+      profile: "preview-v2-place-top20-inventory-revenue.v1",
+      mainRankRange: "1-50",
+      inventoryRankRange: "1-20",
+      inventoryPlaceLimit: 20,
+      observationDays: 1,
+      maxProductsPerCompany: 8,
+      totalCallBudget: 201,
+      naverCallBudget: 201,
+      otaCallBudget: 0,
+      concurrency: 1,
+      automaticRetry: false,
+      automaticFallback: false,
+      revenueBasis: "naver_booking_public_inventory_estimate_not_settled_revenue"
+    };
     return {
       ...base,
       workerTop20: true,
       detailRankRanges: "1-20",
       bookingRangeDays: 1,
       bookingRangePlaceLimit: 20,
-      boundedInventory: {
-        profile: "preview-v2-place-top20-inventory-revenue.v1",
-        mainRankRange: "1-50",
-        inventoryRankRange: "1-20",
-        inventoryPlaceLimit: 20,
-        observationDays: 1,
-        maxProductsPerCompany: 8,
-        totalCallBudget: 201,
-        naverCallBudget: 201,
-        otaCallBudget: 0,
-        concurrency: 1,
-        automaticRetry: false,
-        automaticFallback: false,
-        revenueBasis: "naver_booking_public_inventory_estimate_not_settled_revenue"
+      boundedInventory: top20BoundedInventory,
+      estimateBasis: {
+        ...(base.estimateBasis || {}),
+        boundedInventory: top20BoundedInventory
       },
       stages: (base.stages || []).map((stage) => stage.key === "inventory"
         ? {

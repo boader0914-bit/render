@@ -13,7 +13,7 @@ const intentScript = fs.readFileSync(path.join(root, "scripts", "lodging_search_
 
 assert.match(
   html,
-  /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js\?v=v2-20260806-worker-top20-v45"><\/script>/,
+  /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js\?v=v2-20260807-worker-top20-ui-v46"><\/script>/,
 );
 assert.doesNotMatch(html, /id="searchModeInput"/);
 assert.match(html, /id="crawlSearchIntentHint"/);
@@ -21,6 +21,8 @@ assert.match(html, /id="b2bSearchIntentHint"/);
 assert.match(app, /searchIntentMode:\s*"auto"/);
 assert.match(app, /clientIntentPreview:\s*clientIntentPreview/);
 assert.match(app, /preview\.intentSupported === false/);
+assert.match(app, /재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 201요청/);
+assert.match(server, /estimateBasis:[\s\S]*boundedInventory: top20BoundedInventory/);
 assert.match(server, /resolveSearchIntentContract/);
 assert.match(server, /assertSupportedSearchIntent/);
 assert.match(server, /requestedSearchIntentMode:/);
