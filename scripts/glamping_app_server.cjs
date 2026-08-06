@@ -88,6 +88,17 @@ const {
   resolveNaverLegacyInventoryActivation,
   validateNaverLegacyInventoryRunManifest
 } = require("./naver_legacy_inventory_activation.cjs");
+const {
+  FIXED_V2_COLLECTOR_COMPATIBILITY,
+  V2_COLLECTOR_COMPATIBILITY_PROFILE,
+  V2_COLLECTOR_COMPATIBILITY_SCOPE,
+  resolveV2CollectorCompatibilityActivation,
+  validateV2CollectorCompatibilityRunManifest
+} = require("./v2_collector_compatibility.cjs");
+const {
+  assertV2MapCompatibilityReady,
+  normalizeV2MapCompatibility
+} = require("./v2_map_compatibility.cjs");
 const { createLocationRegionMatcher } = require("./location_region_matcher.cjs");
 const {
   createRegionInsightRuntime,
@@ -190,7 +201,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260806-bounded-inventory-v43";
+const UI_ASSET_VERSION = "v2-20260806-v2-collector-map-v44";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -578,17 +589,25 @@ function crawlExecutionPlan(payload = {}) {
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
   const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
   const collectionPurpose = normalizeCollectionPurpose(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail");
+  const v2CollectorCompatibilityActivation = payload.v2CollectorCompatibilityActivation === true
+    && String(payload.naverLimitedActivationProfile || "") === V2_COLLECTOR_COMPATIBILITY_PROFILE
+    && String(payload.naverCollectorScope || "") === V2_COLLECTOR_COMPATIBILITY_SCOPE;
   const boundedInventoryActivation = payload.naverLegacyLimitedActivation === true
     && payload.naverLegacyInventoryActivation === true
-    && String(payload.naverLimitedActivationProfile || "") === NAVER_LEGACY_INVENTORY_PROFILE
-    && String(payload.naverCollectorScope || "") === NAVER_LEGACY_INVENTORY_SCOPE
+    && (
+      (
+        String(payload.naverLimitedActivationProfile || "") === NAVER_LEGACY_INVENTORY_PROFILE
+        && String(payload.naverCollectorScope || "") === NAVER_LEGACY_INVENTORY_SCOPE
+      )
+      || v2CollectorCompatibilityActivation
+    )
     && normalizeUserRole(payload.sourceRole) === USER_ROLES.admin
     && normalizeCollectionSource(payload.collectionSource, payload.sourceRole) === "admin_search";
   const executionProfile = boundedInventoryActivation
     ? {
         ...collectionExecutionProfile(collectionPurpose, collectionMode),
         collectRegional: false,
-        collectOta: false,
+        collectOta: v2CollectorCompatibilityActivation,
         collectBookingStock: true,
         collectWeeklyRange: false,
         note: "Preview 제한 검증: 메인 순위 1~50, 재고 상위 3곳, 기준일 1일, 최대 31요청"
@@ -641,7 +660,8 @@ function crawlExecutionPlan(payload = {}) {
     detailPlaceLimit,
     rankRangeCount: crawlRankRangeCount(detailRankRanges),
     detailRankRanges,
-    boundedInventoryActivation
+    boundedInventoryActivation,
+    v2CollectorCompatibilityActivation
   };
 }
 
@@ -669,6 +689,8 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
     collectionSource: "admin_search",
     naverLegacyLimitedActivation: false,
     naverLegacyInventoryActivation: false,
+    v2CollectorCompatibilityActivation: false,
+    v2CollectorCompatibilityStrategy: "",
     naverCollectorStrategy: "current",
     naverCollectorScope: "current",
     naverLimitedActivationProfile: "",
@@ -682,6 +704,22 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
     naverAutomaticFallback: false
   };
   const requestedPlan = crawlExecutionPlan(trustedPayload);
+  const v2CompatibilityActivation = requestedPlan.bookingRangeDays === 1
+    && requestedPlan.checkIn === requestedPlan.checkOut
+    && requestedPlan.productMode === "all"
+    ? resolveV2CollectorCompatibilityActivation({
+        environment: activationEnvironment,
+        collectionSource: "admin_search",
+        sourceRole: USER_ROLES.admin,
+        keyword: requestedPlan.keyword,
+        searchMode: requestedPlan.resolvedSearchMode,
+        collectionMode: requestedPlan.collectionMode,
+        collectionPurpose: requestedPlan.collectionPurpose,
+        productMode: requestedPlan.productMode,
+        checkIn: requestedPlan.checkIn,
+        checkOut: requestedPlan.checkOut
+      })
+    : { activationEnabled: false };
   const inventoryActivation = resolveNaverLegacyInventoryActivation({
     environment: activationEnvironment,
     collectionSource: "admin_search",
@@ -705,6 +743,37 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
     error.statusCode = 422;
     error.retryable = false;
     throw error;
+  }
+  if (v2CompatibilityActivation.activationEnabled === true) {
+    return {
+      ...trustedPayload,
+      checkIn: requestedPlan.checkIn,
+      checkOut: requestedPlan.checkIn,
+      bookingDays: FIXED_V2_COLLECTOR_COMPATIBILITY.observationDays,
+      bookingRangeDays: FIXED_V2_COLLECTOR_COMPATIBILITY.observationDays,
+      collectionMode: FIXED_V2_COLLECTOR_COMPATIBILITY.collectionMode,
+      collectionPurpose: FIXED_V2_COLLECTOR_COMPATIBILITY.collectionPurpose,
+      productMode: FIXED_V2_COLLECTOR_COMPATIBILITY.productMode,
+      detailRankRanges: `${FIXED_V2_COLLECTOR_COMPATIBILITY.inventoryRankStart}-${FIXED_V2_COLLECTOR_COMPATIBILITY.inventoryRankEnd}`,
+      bookingRangePlaceLimit: 0,
+      requestedCollectionMode: requestedPlan.collectionMode,
+      requestedCollectionPurpose: requestedPlan.collectionPurpose,
+      naverLegacyLimitedActivation: true,
+      naverLegacyInventoryActivation: true,
+      v2CollectorCompatibilityActivation: true,
+      v2CollectorCompatibilityStrategy: v2CompatibilityActivation.strategy,
+      naverCollectorStrategy: v2CompatibilityActivation.transportStrategy,
+      naverCollectorScope: v2CompatibilityActivation.collectorScope,
+      naverLimitedActivationProfile: v2CompatibilityActivation.activationProfile,
+      naverProviderCallBudget: v2CompatibilityActivation.mainPlaceCallBudget,
+      naverInventoryCallBudget: v2CompatibilityActivation.inventoryCallBudget,
+      naverTotalCallBudget: v2CompatibilityActivation.naverCallBudget,
+      naverInventoryPlaceLimit: v2CompatibilityActivation.maxInventoryCompanies,
+      naverInventoryItemLimit: v2CompatibilityActivation.maxProductsPerCompany,
+      naverProviderConcurrency: v2CompatibilityActivation.concurrency,
+      naverAutomaticRetry: v2CompatibilityActivation.automaticRetry,
+      naverAutomaticFallback: v2CompatibilityActivation.automaticFallback
+    };
   }
   if (inventoryActivation.activationEnabled === true) {
     return {
@@ -792,6 +861,36 @@ function validateNaverLegacyLimitedRunManifest(manifest, payload = {}) {
     && relativeOutputDir !== ".."
     && !path.isAbsolute(relativeOutputDir)
     && /^[a-z0-9_]+_glamping_\d{8}(?:_\d{6})?$/u.test(runId);
+  const compatibilityPayload = payload.v2CollectorCompatibilityActivation === true;
+  const compatibilityManifest = manifest?.collectorActivationProfile === V2_COLLECTOR_COMPATIBILITY_PROFILE;
+  if (compatibilityPayload !== compatibilityManifest) {
+    const error = new Error("V2 수집 호환 결과와 실행 프로필이 일치하지 않습니다.");
+    error.code = "V2_COLLECTOR_COMPATIBILITY_RESULT_INVALID";
+    error.statusCode = 502;
+    error.retryable = false;
+    throw error;
+  }
+  if (compatibilityManifest) {
+    try {
+      if (!validOutputDir || payload.naverLegacyInventoryActivation !== true) {
+        throw new Error("invalid V2 compatibility output boundary");
+      }
+      const validated = validateV2CollectorCompatibilityRunManifest(manifest);
+      return {
+        outputDir,
+        runId,
+        inventoryActivation: true,
+        v2CollectorCompatibility: true,
+        validation: validated
+      };
+    } catch {
+      const error = new Error("V2 수집 호환 결과를 안전하게 검증할 수 없습니다.");
+      error.code = "V2_COLLECTOR_COMPATIBILITY_RESULT_INVALID";
+      error.statusCode = 502;
+      error.retryable = false;
+      throw error;
+    }
+  }
   const inventoryPayload = payload.naverLegacyInventoryActivation === true;
   const inventoryManifest = manifest?.collectorActivationProfile === NAVER_LEGACY_INVENTORY_PROFILE;
   if (inventoryPayload !== inventoryManifest) {
@@ -909,7 +1008,9 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
     const inventoryStage = stages.find((stage) => stage.key === "inventory");
     if (inventoryStage) {
       inventoryStage.label = "상위 3곳 재고/예상매출";
-      inventoryStage.detail = "기준일 1일의 네이버예약 공개 재고와 가격을 순차 확인합니다. 전체 NAVER 요청은 최대 31건입니다.";
+      inventoryStage.detail = plan.v2CollectorCompatibilityActivation
+        ? "기준일 1일의 네이버예약 공개 재고와 가격을 순차 확인합니다. NAVER 최대 31건과 V2 보조 OTA 5건을 분리 실행합니다."
+        : "기준일 1일의 네이버예약 공개 재고와 가격을 순차 확인합니다. 전체 NAVER 요청은 최대 31건입니다.";
     }
   } else if (!fast && !plan.collectWeeklyRange) {
     const inventoryStage = stages.find((stage) => stage.key === "inventory");
@@ -961,13 +1062,21 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
       boundedInventory: boundedInventory
         ? {
-            profile: NAVER_LEGACY_INVENTORY_PROFILE,
+            profile: plan.v2CollectorCompatibilityActivation
+              ? V2_COLLECTOR_COMPATIBILITY_PROFILE
+              : NAVER_LEGACY_INVENTORY_PROFILE,
             mainRankRange: "1-50",
             inventoryRankRange: "1-3",
             inventoryPlaceLimit: FIXED_INVENTORY_ACTIVATION.maxInventoryCompanies,
             observationDays: FIXED_INVENTORY_ACTIVATION.observationDays,
             maxProductsPerCompany: FIXED_INVENTORY_ACTIVATION.maxProductsPerCompany,
-            totalCallBudget: FIXED_INVENTORY_ACTIVATION.totalCallBudget,
+            totalCallBudget: plan.v2CollectorCompatibilityActivation
+              ? FIXED_V2_COLLECTOR_COMPATIBILITY.totalExternalCallBudget
+              : FIXED_INVENTORY_ACTIVATION.totalCallBudget,
+            naverCallBudget: FIXED_INVENTORY_ACTIVATION.totalCallBudget,
+            otaCallBudget: plan.v2CollectorCompatibilityActivation
+              ? FIXED_V2_COLLECTOR_COMPATIBILITY.otaCallBudget
+              : 0,
             concurrency: FIXED_INVENTORY_ACTIVATION.concurrency,
             automaticRetry: false,
             automaticFallback: false,
@@ -1136,6 +1245,10 @@ function crawlPayloadSignature(payload = {}) {
       ? String(payload.naverLimitedActivationProfile || "")
       : "",
     naverLegacyInventoryActivation: payload.naverLegacyInventoryActivation === true,
+    v2CollectorCompatibilityActivation: payload.v2CollectorCompatibilityActivation === true,
+    v2CollectorCompatibilityStrategy: payload.v2CollectorCompatibilityActivation === true
+      ? String(payload.v2CollectorCompatibilityStrategy || "")
+      : "",
     naverInventoryCallBudget: payload.naverLegacyInventoryActivation === true
       ? Number(payload.naverInventoryCallBudget || 0)
       : 0,
@@ -14127,6 +14240,19 @@ async function loadRun(runId, options = {}) {
   }
 
   result.regionContext = resolveRunRegionContext(result, { matcher: matchCanonicalLocationRegion });
+  if (manifest?.collectorActivationProfile === V2_COLLECTOR_COMPATIBILITY_PROFILE) {
+    const mapCompatibility = assertV2MapCompatibilityReady(normalizeV2MapCompatibility({
+      ranking: result.ranking,
+      availability: result.availability,
+      regionContext: result.regionContext
+    }));
+    result.ranking = mapCompatibility.ranking;
+    result.availability = {
+      ...result.availability,
+      items: mapCompatibility.availability.items
+    };
+    result.mapCompatibility = mapCompatibility.mapCompatibility;
+  }
   result.regionInsight = result.regionContext.matchStatus === "matched" && result.regionContext.regionKey
     ? await regionInsightRuntime.stateForRegion(result.regionContext.regionKey).catch((error) => {
         console.warn(`Could not load region insight for ${result.regionContext.regionKey}: ${error.message || error}`);
@@ -14615,6 +14741,7 @@ async function runCrawlerInternal(payload) {
     COLLECTION_SOURCE_LABEL: collectionSourceLabel(collectionSource),
     NAVER_LEGACY_LIMITED_ACTIVATION: payload.naverLegacyLimitedActivation === true ? "1" : "0",
     NAVER_LEGACY_INVENTORY_ACTIVATION: payload.naverLegacyInventoryActivation === true ? "1" : "0",
+    V2_COLLECTOR_COMPATIBILITY_ACTIVATION: payload.v2CollectorCompatibilityActivation === true ? "1" : "0",
     NAVER_COLLECTOR_STRATEGY: payload.naverLegacyLimitedActivation === true
       ? String(payload.naverCollectorStrategy || "")
       : "current",

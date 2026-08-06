@@ -9,6 +9,8 @@ const auditFile = String(process.env.NAVER_INVENTORY_FIXTURE_AUDIT_FILE || "").t
 const fixtureRoot = path.resolve(String(process.env.NAVER_INVENTORY_FIXTURE_ROOT || ""));
 const mode = String(process.env.NAVER_INVENTORY_FIXTURE_MODE || "success").trim();
 const calls = [];
+let activeCalls = 0;
+let maxConcurrentCalls = 0;
 
 function assertFixturePath(filePath, label) {
   const resolved = path.resolve(String(filePath || ""));
@@ -46,17 +48,23 @@ Module._load = function inventoryFixtureModuleLoad(request, parent, isMain) {
   return originalModuleLoad.call(this, request, parent, isMain);
 };
 
-function record(operation, method) {
-  calls.push({ ordinal: calls.length + 1, operation, method });
+function writeAudit() {
   if (!auditFile) throw new Error("fixture audit file is required");
   fs.writeFileSync(assertFixturePath(auditFile, "fixture audit file"), JSON.stringify({
     callCount: calls.length,
+    activeCalls,
+    maxConcurrentCalls,
     calls,
     operationCounts: calls.reduce((result, call) => {
       result[call.operation] = (result[call.operation] || 0) + 1;
       return result;
     }, {})
   }), "utf8");
+}
+
+function record(operation, method) {
+  calls.push({ ordinal: calls.length + 1, operation, method });
+  writeAudit();
 }
 
 function jsonResponse(value, status = 200, extraHeaders = {}) {
@@ -103,7 +111,7 @@ function fixtureBlock(operation) {
   return null;
 }
 
-globalThis.fetch = async (input, init = {}) => {
+async function fixtureFetch(input, init = {}) {
   const url = input instanceof URL ? input : new URL(String(input));
   const method = String(init.method || "GET").toUpperCase();
   if (url.hostname === "pcmap.place.naver.com" && url.pathname === "/accommodation/list") {
@@ -113,6 +121,61 @@ globalThis.fetch = async (input, init = {}) => {
       status: 200,
       headers: { "content-type": "text/html; charset=utf-8" }
     });
+  }
+
+  if (process.env.V2_COLLECTOR_COMPATIBILITY_ACTIVATION === "1") {
+    if (url.hostname === "nol.yanolja.com" && url.pathname.endsWith("/count")) {
+      record("nol_count", method);
+      if (method !== "POST") throw new Error("unexpected NOL count fixture request");
+      if (mode === "malformed_ota_json") return jsonResponse({ count: null });
+      return jsonResponse({ count: 1 });
+    }
+    if (url.hostname === "nol.yanolja.com" && url.pathname.endsWith("/list")) {
+      record("nol_list", method);
+      if (method !== "POST") throw new Error("unexpected NOL list fixture request");
+      if (mode === "malformed_ota_json") return jsonResponse({ unexpected: [] });
+      return jsonResponse({
+        items: [{
+          type: "PRODUCT_ITEM",
+          data: {
+            title: "Synthetic regional glamping auxiliary",
+            category: "Synthetic lodging",
+            locationDetails: ["Synthetic region"],
+            prices: [{ discountPrice: 100000, discountPriceUnit: "KRW" }],
+            action: { web: "" }
+          },
+          serverLogMeta: {}
+        }]
+      });
+    }
+    if (url.hostname === "www.goodchoice.kr" && url.pathname === "/product/result") {
+      record("yeogi_status", method);
+      if (method !== "GET") throw new Error("unexpected Yeogi fixture request");
+      return new Response("Sorry, you have been blocked", {
+        status: 403,
+        headers: { "content-type": "text/html; charset=utf-8" }
+      });
+    }
+    if (url.hostname === "trip.ddnayo.com" && url.pathname === "/web-api/total-search") {
+      const compact = !String(url.searchParams.get("searchKeyword") || "").includes(" ");
+      record(compact ? "ddnayo_normalized" : "ddnayo_exact", method);
+      if (method !== "GET") throw new Error("unexpected DDNayo fixture request");
+      if (mode === "malformed_ota_json") return compact
+        ? new Response("not-json", { status: 200, headers: { "content-type": "application/json" } })
+        : jsonResponse({ data: { totalSize: 0 } });
+      return jsonResponse({
+        data: {
+          totalSize: 1,
+          contents: [{
+            accommodationName: "Synthetic regional glamping auxiliary",
+            categoryName: "Synthetic lodging",
+            address: "Synthetic region",
+            price: 100000,
+            productUrl: ""
+          }]
+        }
+      });
+    }
   }
 
   const body = parsedBody(init);
@@ -235,4 +298,17 @@ globalThis.fetch = async (input, init = {}) => {
     });
   }
   throw new Error("unexpected fixture provider operation");
+}
+
+globalThis.fetch = async (input, init = {}) => {
+  activeCalls += 1;
+  maxConcurrentCalls = Math.max(maxConcurrentCalls, activeCalls);
+  writeAudit();
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    return await fixtureFetch(input, init);
+  } finally {
+    activeCalls -= 1;
+    writeAudit();
+  }
 };

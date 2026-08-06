@@ -1,5 +1,5 @@
-const UI_ASSET_VERSION = "v2-20260806-bounded-inventory-v43";
-const CACHE_VERSION = "lodging-datalab-pwa-v20260806-bounded-inventory-v43";
+const UI_ASSET_VERSION = "v2-20260806-v2-collector-map-v44";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260806-v2-collector-map-v44";
 const CACHE_PREFIX = "lodging-datalab-pwa-";
 const APP_SHELL = [
   "/offline.html",

@@ -13,6 +13,8 @@ const guard = installFixtureNetworkGuard({ label: "NAVER bounded inventory trans
 function businessRequest(index = 1) {
   return {
     providerId: "naver_place_search",
+    bookingDate: "2026-08-06",
+    bookingAdults: 2,
     operation: "naver_booking_business",
     companyOrdinal: index,
     placeId: String(1000 + index),
@@ -27,6 +29,8 @@ function businessRequest(index = 1) {
 function itemsRequest(index = 1) {
   return {
     providerId: "naver_place_search",
+    bookingDate: "2026-08-06",
+    bookingAdults: 2,
     operation: "naver_booking_items",
     companyOrdinal: index,
     businessId: String(2000 + index),
@@ -43,6 +47,8 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
   const bizItemId = String(companyOrdinal * 100 + itemOrdinal);
   return {
     providerId: "naver_place_search",
+    bookingDate: "2026-08-06",
+    bookingAdults: 2,
     operation: "naver_booking_schedule",
     companyOrdinal,
     businessId,
@@ -69,7 +75,7 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
     const transport = createNaverBoundedInventoryLiveTransport({
       enabled: true,
       fetchImpl: async (url, init) => {
-        calls.push({ hostname: new URL(url).hostname, method: init.method });
+        calls.push({ hostname: new URL(url).hostname, method: init.method, referer: init.headers.referer });
         return new Response(JSON.stringify({ data: {} }), {
           status: 200,
           headers: { "content-type": "application/json" }
@@ -96,6 +102,10 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
       3: { bookingBusiness: 1, bookingItems: 1, dailySchedule: 8 }
     });
     assert.equal(transport.maxObservedConcurrency(), 1);
+    assert.equal(
+      calls.find((call) => call.hostname === "m.booking.naver.com")?.referer,
+      "https://m.booking.naver.com/booking/3/bizes/2001/search?startDate=2026-08-06&endDate=2026-08-07&adult=2"
+    );
     await assert.rejects(() => transport(scheduleRequest(3, 9)), { code: "NAVER_BOUNDED_INVENTORY_CALL_BUDGET_EXCEEDED" });
     assert.equal(calls.length, TOTAL_CALL_BUDGET, "a budget rejection must not start fetch");
 

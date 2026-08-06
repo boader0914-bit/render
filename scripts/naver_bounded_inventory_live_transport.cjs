@@ -133,6 +133,28 @@ function safeCompanyOrdinal(value) {
   return ordinal;
 }
 
+function safeBookingDate(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(text) || Number.isNaN(Date.parse(`${text}T00:00:00Z`))) {
+    throw transportError("NAVER_BOUNDED_INVENTORY_REQUEST_INVALID", "The NAVER inventory booking date is invalid", 400);
+  }
+  return text;
+}
+
+function nextBookingDate(value) {
+  const date = new Date(`${safeBookingDate(value)}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function safeBookingAdults(value) {
+  const adults = Number(value);
+  if (!Number.isInteger(adults) || adults < 1 || adults > 20) {
+    throw transportError("NAVER_BOUNDED_INVENTORY_REQUEST_INVALID", "The NAVER inventory adult count is invalid", 400);
+  }
+  return adults;
+}
+
 function assertGraphqlBody(request, normalized) {
   const body = request.body;
   if (
@@ -204,6 +226,8 @@ function assertRequest(request = {}) {
     placeId,
     businessId,
     date,
+    bookingDate: safeBookingDate(request.bookingDate),
+    bookingAdults: safeBookingAdults(request.bookingAdults),
     companyOrdinal: safeCompanyOrdinal(request.companyOrdinal),
     bizItemId: ""
   };
@@ -302,7 +326,7 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
     const endpoint = normalized.operation === "naver_booking_business" ? PCMAP_GRAPHQL_URL : BOOKING_GRAPHQL_URL;
     const referer = normalized.operation === "naver_booking_business"
       ? `https://pcmap.place.naver.com/accommodation/${normalized.placeId}`
-      : `https://m.booking.naver.com/booking/3/bizes/${normalized.businessId}/search`;
+      : `https://m.booking.naver.com/booking/3/bizes/${normalized.businessId}/search?startDate=${normalized.bookingDate}&endDate=${nextBookingDate(normalized.bookingDate)}&adult=${normalized.bookingAdults}`;
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     context.signal?.addEventListener?.("abort", onAbort, { once: true });

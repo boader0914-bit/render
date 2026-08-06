@@ -38,6 +38,15 @@ const {
   validateNaverLegacyInventoryRunManifest
 } = require("./naver_legacy_inventory_activation.cjs");
 const {
+  FIXED_V2_COLLECTOR_COMPATIBILITY,
+  V2_COLLECTOR_COMPATIBILITY_PROFILE,
+  V2_COLLECTOR_COMPATIBILITY_SCOPE,
+  V2_COLLECTOR_COMPATIBILITY_SCHEMA_VERSION,
+  V2_COLLECTOR_COMPATIBILITY_STRATEGY,
+  V2_COLLECTOR_TRANSPORT_STRATEGY,
+  validateV2CollectorCompatibilityRunManifest
+} = require("./v2_collector_compatibility.cjs");
+const {
   GRAPHQL_DOCUMENTS,
   createNaverBoundedInventoryLiveTransport
 } = require("./naver_bounded_inventory_live_transport.cjs");
@@ -112,6 +121,19 @@ function collectionPurposeDefaultRange(value) {
 function collectionExecutionProfile(purposeValue, modeValue = "precision", activationProfile = "") {
   const purpose = normalizeCollectionPurpose(purposeValue);
   const mode = normalizeCollectionMode(modeValue);
+  if (String(activationProfile || "") === V2_COLLECTOR_COMPATIBILITY_PROFILE) {
+    return {
+      key: "revenue_detail_deep",
+      label: "V2 수집 호환",
+      note: "V2 메인 순위 1~50, 상위 3곳의 기준일 공개 재고·가격과 기존 보조 OTA 신호만 확인합니다.",
+      collectRegional: false,
+      collectOta: true,
+      collectBookingStock: true,
+      collectWeeklyRange: false,
+      regionalSkipNote: "일반 숙박 수집에서 지역카드·지역 반복 수집을 분리했습니다.",
+      otaSkipNote: ""
+    };
+  }
   if (String(activationProfile || "") === NAVER_LEGACY_INVENTORY_PROFILE) {
     return {
       key: "revenue_detail_deep",
@@ -293,9 +315,15 @@ const NAVER_COLLECTOR_STRATEGY = String(process.env.NAVER_COLLECTOR_STRATEGY || 
 const NAVER_COLLECTOR_SCOPE = String(process.env.NAVER_COLLECTOR_SCOPE || "current").trim();
 const NAVER_LIMITED_ACTIVATION_PROFILE = String(process.env.NAVER_LIMITED_ACTIVATION_PROFILE || "").trim();
 const NAVER_PROVIDER_CALL_BUDGET = boundedInteger(process.env.NAVER_PROVIDER_CALL_BUDGET, 0, 0, 1);
+const V2_COLLECTOR_COMPATIBILITY_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
+  && String(process.env.V2_COLLECTOR_COMPATIBILITY_ACTIVATION || "0") === "1"
+  && NAVER_LIMITED_ACTIVATION_PROFILE === V2_COLLECTOR_COMPATIBILITY_PROFILE;
 const NAVER_LEGACY_INVENTORY_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
   && String(process.env.NAVER_LEGACY_INVENTORY_ACTIVATION || "0") === "1"
-  && NAVER_LIMITED_ACTIVATION_PROFILE === NAVER_LEGACY_INVENTORY_PROFILE;
+  && (
+    NAVER_LIMITED_ACTIVATION_PROFILE === NAVER_LEGACY_INVENTORY_PROFILE
+    || V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+  );
 const NAVER_INVENTORY_CALL_BUDGET = boundedInteger(process.env.NAVER_INVENTORY_CALL_BUDGET, 0, 0, 30);
 const NAVER_TOTAL_CALL_BUDGET = boundedInteger(process.env.NAVER_TOTAL_CALL_BUDGET, 0, 0, 31);
 const NAVER_INVENTORY_PLACE_LIMIT = boundedInteger(process.env.NAVER_INVENTORY_PLACE_LIMIT, 0, 0, 3);
@@ -1178,9 +1206,18 @@ async function getNaverState(query) {
 function assertNaverLegacyLimitedActivationContract() {
   if (!NAVER_LEGACY_LIMITED_ACTIVATION) return;
   if (NAVER_LEGACY_INVENTORY_ACTIVATION) {
-    const inventoryValid = NAVER_COLLECTOR_STRATEGY === FIXED_INVENTORY_ACTIVATION.strategy
-      && NAVER_COLLECTOR_SCOPE === NAVER_LEGACY_INVENTORY_SCOPE
-      && NAVER_LIMITED_ACTIVATION_PROFILE === NAVER_LEGACY_INVENTORY_PROFILE
+    const expectedInventoryProfile = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? V2_COLLECTOR_COMPATIBILITY_PROFILE
+      : NAVER_LEGACY_INVENTORY_PROFILE;
+    const expectedInventoryScope = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? V2_COLLECTOR_COMPATIBILITY_SCOPE
+      : NAVER_LEGACY_INVENTORY_SCOPE;
+    const expectedTransportStrategy = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? V2_COLLECTOR_TRANSPORT_STRATEGY
+      : FIXED_INVENTORY_ACTIVATION.strategy;
+    const inventoryValid = NAVER_COLLECTOR_STRATEGY === expectedTransportStrategy
+      && NAVER_COLLECTOR_SCOPE === expectedInventoryScope
+      && NAVER_LIMITED_ACTIVATION_PROFILE === expectedInventoryProfile
       && NAVER_PROVIDER_CALL_BUDGET === FIXED_INVENTORY_ACTIVATION.mainPlaceCallBudget
       && NAVER_INVENTORY_CALL_BUDGET === FIXED_INVENTORY_ACTIVATION.inventoryCallBudget
       && NAVER_TOTAL_CALL_BUDGET === FIXED_INVENTORY_ACTIVATION.totalCallBudget
@@ -1195,9 +1232,10 @@ function assertNaverLegacyLimitedActivationContract() {
       && COLLECTION_PURPOSE === "revenue_detail"
       && COLLECTION_PROFILE.key === "revenue_detail_deep"
       && COLLECTION_PROFILE.collectRegional === false
-      && COLLECTION_PROFILE.collectOta === false
+      && COLLECTION_PROFILE.collectOta === V2_COLLECTOR_COMPATIBILITY_ACTIVATION
       && COLLECTION_PROFILE.collectBookingStock === true
       && COLLECTION_PROFILE.collectWeeklyRange === false
+      && (!V2_COLLECTOR_COMPATIBILITY_ACTIVATION || PRODUCT_MODE === "all")
       && DETAIL_RANK_RANGE_LABEL === "1-3"
       && BOOKING_RANGE_DAYS === 1
       && NAVER_BOOKING_STOCK_LIMIT === FIXED_INVENTORY_ACTIVATION.maxInventoryCompanies
@@ -1279,6 +1317,8 @@ async function executeBoundedInventoryGraphql(request) {
   try {
     response = await NAVER_BOUNDED_INVENTORY_TRANSPORT({
       providerId: "naver_place_search",
+      bookingDate: CHECK_IN,
+      bookingAdults: ADULTS,
       ...request
     });
   } catch (error) {
@@ -2754,7 +2794,11 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       if (!alreadyKnown && result.observationStatus === "ready") ready += 1;
       if (!alreadyKnown && result.observationStatus === "zero") zero += 1;
       if (NAVER_LEGACY_INVENTORY_ACTIVATION) {
-        targetResults.push({ companyOrdinal, status: result.observationStatus });
+        targetResults.push({
+          companyOrdinal,
+          placeId: String(row.place_id || ""),
+          status: result.observationStatus
+        });
       }
 
       row.네이버예약재고수집상태 = result.status || "확인불가";
@@ -3150,6 +3194,47 @@ function skippedDdnayo(note = "빠른 순위 모드에서 떠나요 수집 생�
   };
 }
 
+function v2OtaObservationStatus(httpStatus, observedCount, options = {}) {
+  if (options.providerBlocked === true) return "provider_blocked";
+  const status = Number(httpStatus);
+  if (!Number.isInteger(status) || status < 200 || status >= 300) return "missing";
+  if (options.observationValid !== true) return "missing";
+  if (options.statusOnly === true) return "ready";
+  const count = nonnegativeIntegerObservation(observedCount);
+  if (count === null) return "missing";
+  return count > 0 ? "ready" : "zero";
+}
+
+function nonnegativeIntegerObservation(value) {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value.trim())) return null;
+  const number = Number(value.trim());
+  return Number.isSafeInteger(number) ? number : null;
+}
+
+function validNolCountPayload(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.parseError === true) return false;
+  if (!Object.prototype.hasOwnProperty.call(data, "count")) return false;
+  return nonnegativeIntegerObservation(data.count) !== null;
+}
+
+function validNolListPayload(data) {
+  return Boolean(
+    data
+    && typeof data === "object"
+    && !Array.isArray(data)
+    && data.parseError !== true
+    && Array.isArray(data.items)
+  );
+}
+
+function validDdnayoPayload(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.parseError === true) return false;
+  const payload = data.data;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  return nonnegativeIntegerObservation(payload.totalSize) !== null && Array.isArray(payload.contents);
+}
+
 async function collectNol() {
   const url = "https://nol.yanolja.com/discovery/api/list/universal-search/v1/list";
   const countUrl = "https://nol.yanolja.com/discovery/api/list/universal-search/v1/count";
@@ -3180,20 +3265,20 @@ async function collectNol() {
       QUERY,
     )}&verticalCategory=PRODUCT_CATEGORY_KOREA_ACCOMMODATION&checkInDate=${CHECK_IN}&checkOutDate=${CHECK_OUT}&capacityAdults=${ADULTS}`,
   };
-  const [count, list] = await Promise.all([
-    fetchJson(countUrl, {
-      method: "POST",
-      headers: commonHeaders,
-      body: JSON.stringify(body),
-    }),
-    fetchJson(url, {
-      method: "POST",
-      headers: commonHeaders,
-      body: JSON.stringify(body),
-    })
-  ]);
+  const count = await fetchJson(countUrl, {
+    method: "POST",
+    headers: commonHeaders,
+    body: JSON.stringify(body),
+  });
+  const list = await fetchJson(url, {
+    method: "POST",
+    headers: commonHeaders,
+    body: JSON.stringify(body),
+  });
+  const countObservationValid = validNolCountPayload(count.data);
+  const listObservationValid = validNolListPayload(list.data);
 
-  const items = Array.isArray(list.data?.items) ? list.data.items.filter((item) => item.type === "PRODUCT_ITEM") : [];
+  const items = listObservationValid ? list.data.items.filter((item) => item.type === "PRODUCT_ITEM") : [];
   const rawRows = items.map((entry, index) => {
     const data = entry.data || {};
     const meta = entry.serverLogMeta || {};
@@ -3224,7 +3309,11 @@ async function collectNol() {
 
   return {
     status: list.res.status,
-    total: count.data?.count ?? "",
+    countStatus: count.res.status,
+    listStatus: list.res.status,
+    countObservationValid,
+    listObservationValid,
+    total: countObservationValid ? nonnegativeIntegerObservation(count.data.count) : null,
     rawFirstPage: rawRows.length,
     firstPage: rows.length,
     filteredOut: rawRows.length - rows.length,
@@ -3267,13 +3356,17 @@ async function collectDdnayo() {
     });
   }
 
-  const [exact, normalized] = await Promise.all([
-    search(DDNAYO_QUERY_EXACT, 10),
-    search(DDNAYO_QUERY_NORMALIZED, 24)
-  ]);
-  const source = normalized.data?.data?.totalSize > 0 ? normalized : exact;
+  const exact = await search(DDNAYO_QUERY_EXACT, 10);
+  const normalized = await search(DDNAYO_QUERY_NORMALIZED, 24);
+  const exactObservationValid = validDdnayoPayload(exact.data);
+  const normalizedObservationValid = validDdnayoPayload(normalized.data);
+  const normalizedTotal = normalizedObservationValid
+    ? nonnegativeIntegerObservation(normalized.data.data.totalSize)
+    : null;
+  const source = normalizedObservationValid && normalizedTotal > 0 ? normalized : exact;
   const usedQuery = source === normalized ? DDNAYO_QUERY_NORMALIZED : DDNAYO_QUERY_EXACT;
-  const contents = source.data?.data?.contents || [];
+  const sourceObservationValid = source === normalized ? normalizedObservationValid : exactObservationValid;
+  const contents = sourceObservationValid ? source.data.data.contents : [];
   const rawRows = contents.map((item, index) => ({
     channel: "떠나요",
     section: usedQuery === DDNAYO_QUERY_NORMALIZED ? "검색결과(공백제거 키워드)" : "검색결과",
@@ -3293,8 +3386,12 @@ async function collectDdnayo() {
     : relevantRows;
 
   return {
-    exactTotal: exact.data?.data?.totalSize ?? 0,
-    normalizedTotal: normalized.data?.data?.totalSize ?? 0,
+    exactStatus: exact.res.status,
+    normalizedStatus: normalized.res.status,
+    exactObservationValid,
+    normalizedObservationValid,
+    exactTotal: exactObservationValid ? nonnegativeIntegerObservation(exact.data.data.totalSize) : null,
+    normalizedTotal,
     usedQuery,
     rawFirstPage: rawRows.length,
     companyFilteredOut: province.isCompany ? rawRows.length - rows.length : 0,
@@ -4329,7 +4426,16 @@ async function main() {
   const boundedInventoryCompanyCallCounts = NAVER_LEGACY_INVENTORY_ACTIVATION
     ? NAVER_BOUNDED_INVENTORY_TRANSPORT.companyCallCounts()
     : {};
-  const providerCallCounts = {
+  const v2OtaResults = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+    ? [
+        { operation: "nol_count", requestOrdinal: 1, requestCount: 1, status: v2OtaObservationStatus(nol.countStatus, nol.total, { observationValid: nol.countObservationValid }) },
+        { operation: "nol_list", requestOrdinal: 2, requestCount: 1, status: v2OtaObservationStatus(nol.listStatus, nol.rawFirstPage, { observationValid: nol.listObservationValid }) },
+        { operation: "yeogi_status", requestOrdinal: 3, requestCount: 1, status: v2OtaObservationStatus(yeogi.status, 0, { providerBlocked: yeogi.blocked, observationValid: true, statusOnly: true }) },
+        { operation: "ddnayo_exact", requestOrdinal: 4, requestCount: 1, status: v2OtaObservationStatus(ddnayo.exactStatus, ddnayo.exactTotal, { observationValid: ddnayo.exactObservationValid }) },
+        { operation: "ddnayo_normalized", requestOrdinal: 5, requestCount: 1, status: v2OtaObservationStatus(ddnayo.normalizedStatus, ddnayo.normalizedTotal, { observationValid: ddnayo.normalizedObservationValid }) }
+      ]
+    : [];
+  const naverProviderCallCounts = {
     mainPlace: mainPlaceRequestCount,
     inventory: {
       bookingBusiness: boundedInventoryTransportCounts.naver_booking_business,
@@ -4339,6 +4445,13 @@ async function main() {
     },
     total: mainPlaceRequestCount + boundedInventoryTransportCounts.total
   };
+  const providerCallCounts = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+    ? {
+        ...naverProviderCallCounts,
+        ota: v2OtaResults.length,
+        total: naverProviderCallCounts.total + v2OtaResults.length
+      }
+    : naverProviderCallCounts;
   const manifest = {
     documentType: "lodging-collection-manifest",
     schemaVersion: 2,
@@ -4375,7 +4488,15 @@ async function main() {
     },
     requestedCollectionMode: REQUESTED_COLLECTION_MODE,
     requestedCollectionPurpose: REQUESTED_COLLECTION_PURPOSE,
-    collectorStrategy: NAVER_LEGACY_STRATEGY_PLAN?.strategy || "current",
+    compatibilitySchemaVersion: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? V2_COLLECTOR_COMPATIBILITY_SCHEMA_VERSION
+      : undefined,
+    collectorStrategy: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? V2_COLLECTOR_COMPATIBILITY_STRATEGY
+      : (NAVER_LEGACY_STRATEGY_PLAN?.strategy || "current"),
+    collectorTransportStrategy: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? V2_COLLECTOR_TRANSPORT_STRATEGY
+      : undefined,
     collectorStrategyVersion: NAVER_LEGACY_STRATEGY_PLAN?.strategyVersion || "current",
     collectorScope: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_COLLECTOR_SCOPE : "current",
     collectorActivationProfile: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_LIMITED_ACTIVATION_PROFILE : "",
@@ -4384,9 +4505,26 @@ async function main() {
     rankingContractVersion: NAVER_LEGACY_STRATEGY_PLAN?.rankingContractVersion || "",
     executionIdentityHash: NAVER_LEGACY_STRATEGY_PLAN?.executionIdentityHash || "",
     collectorContractHash: NAVER_LEGACY_STRATEGY_PLAN?.contractHash || "",
+    historicalSourceCommit: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? FIXED_V2_COLLECTOR_COMPATIBILITY.historicalSourceCommit
+      : undefined,
+    historicalCollectorBlob: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? FIXED_V2_COLLECTOR_COMPATIBILITY.historicalCollectorBlob
+      : undefined,
+    keywordHash: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? crypto.createHash("sha256").update(String(RAW_KEYWORD || "").normalize("NFC").trim().replace(/\s+/gu, " ")).digest("hex")
+      : undefined,
     providerCallBudget: NAVER_LEGACY_LIMITED_ACTIVATION
-      ? (NAVER_LEGACY_INVENTORY_ACTIVATION ? NAVER_TOTAL_CALL_BUDGET : NAVER_PROVIDER_CALL_BUDGET)
+      ? (V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+          ? FIXED_V2_COLLECTOR_COMPATIBILITY.totalExternalCallBudget
+          : (NAVER_LEGACY_INVENTORY_ACTIVATION ? NAVER_TOTAL_CALL_BUDGET : NAVER_PROVIDER_CALL_BUDGET))
       : null,
+    naverCallBudget: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? FIXED_V2_COLLECTOR_COMPATIBILITY.naverCallBudget
+      : undefined,
+    otaCallBudget: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? FIXED_V2_COLLECTOR_COMPATIBILITY.otaCallBudget
+      : undefined,
     mainPlaceCallBudget: NAVER_LEGACY_INVENTORY_ACTIVATION ? NAVER_PROVIDER_CALL_BUDGET : null,
     inventoryCallBudget: NAVER_LEGACY_INVENTORY_ACTIVATION ? NAVER_INVENTORY_CALL_BUDGET : null,
     totalCallBudget: NAVER_LEGACY_INVENTORY_ACTIVATION ? NAVER_TOTAL_CALL_BUDGET : null,
@@ -4412,12 +4550,19 @@ async function main() {
     inventoryTargetResults: NAVER_LEGACY_INVENTORY_ACTIVATION
       ? naverBookingStock.targets.map((target) => ({
           companyOrdinal: target.companyOrdinal,
+          placeId: target.placeId,
           status: target.status,
-          ...boundedInventoryCompanyCallCounts[String(target.companyOrdinal)]
+          ...boundedInventoryCompanyCallCounts[String(target.companyOrdinal)],
+          calls: boundedInventoryCompanyCallCounts[String(target.companyOrdinal)]
         }))
       : null,
+    otaResultCounts: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? { planned: v2OtaResults.length, terminal: v2OtaResults.length, providerBlockedObserved: yeogi.blocked === true }
+      : undefined,
+    otaResults: V2_COLLECTOR_COMPATIBILITY_ACTIVATION ? v2OtaResults : undefined,
     automaticRetry: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_AUTOMATIC_RETRY : null,
     automaticFallback: NAVER_LEGACY_LIMITED_ACTIVATION ? NAVER_AUTOMATIC_FALLBACK : null,
+    externalRequestConcurrency: V2_COLLECTOR_COMPATIBILITY_ACTIVATION ? 1 : undefined,
     saveRunOnSuccessOnly: NAVER_LEGACY_LIMITED_ACTIVATION || undefined,
     saveFailureRun: NAVER_LEGACY_INVENTORY_ACTIVATION ? false : undefined,
     sourceRole: SOURCE_ROLE,
@@ -4455,10 +4600,13 @@ async function main() {
       nolRawFirstPage: nol.rawFirstPage,
       nolFilteredOut: nol.filteredOut,
       ddnayo: ddnayo.rows.length,
+      otaRequests: V2_COLLECTOR_COMPATIBILITY_ACTIVATION ? v2OtaResults.length : undefined,
       detailJsonFiles: detailJsonFiles.length,
     },
   };
-  if (NAVER_LEGACY_INVENTORY_ACTIVATION) {
+  if (V2_COLLECTOR_COMPATIBILITY_ACTIVATION) {
+    validateV2CollectorCompatibilityRunManifest(manifest);
+  } else if (NAVER_LEGACY_INVENTORY_ACTIVATION) {
     validateNaverLegacyInventoryRunManifest(manifest, {
       expectedOutputDir: FINAL_OUTPUT_DIR,
       outputPathIsFinal: true
