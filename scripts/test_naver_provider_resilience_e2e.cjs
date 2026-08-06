@@ -561,7 +561,14 @@ async function assertClosedCircuitSingleFlight(baseUrl, adminCookie, crawlerAtte
     postCrawl(baseUrl, "/api/crawl", adminCookie, ADMIN_AGENT, "산청글램핑"),
     postCrawl(baseUrl, "/api/crawl", adminCookie, ADMIN_AGENT, "하동글램핑")
   ]);
-  assert.equal(results.filter((result) => result.response.status === 200).length, 1, "one explicit request owns the provider attempt");
+  assert.equal(
+    results.filter((result) => result.response.status === 200).length,
+    1,
+    `one explicit request owns the provider attempt: ${JSON.stringify(results.map((result) => ({
+      status: result.response.status,
+      code: result.body?.code || ""
+    })))}`
+  );
   const suppressed = results.filter((result) => result.response.status !== 200);
   assert.equal(suppressed.length, 2);
   suppressed.forEach((result) => {

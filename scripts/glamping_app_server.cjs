@@ -81,6 +81,13 @@ const {
   NAVER_LEGACY_LIMITED_ACTIVATION_PREVIEW_ROOT,
   resolveNaverLegacyLimitedActivationForTrustedServer
 } = require("./naver_legacy_limited_activation.cjs");
+const {
+  FIXED_INVENTORY_ACTIVATION,
+  NAVER_LEGACY_INVENTORY_PROFILE,
+  NAVER_LEGACY_INVENTORY_SCOPE,
+  resolveNaverLegacyInventoryActivation,
+  validateNaverLegacyInventoryRunManifest
+} = require("./naver_legacy_inventory_activation.cjs");
 const { createLocationRegionMatcher } = require("./location_region_matcher.cjs");
 const {
   createRegionInsightRuntime,
@@ -183,7 +190,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260805-region-analysis-v42";
+const UI_ASSET_VERSION = "v2-20260806-bounded-inventory-v43";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -336,6 +343,11 @@ function kstDate(offsetDays = 0) {
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   kst.setUTCDate(kst.getUTCDate() + offsetDays);
   return kst.toISOString().slice(0, 10);
+}
+
+function kstRunStamp(value = Date.now()) {
+  const kst = new Date(Number(value) + 9 * 60 * 60 * 1000).toISOString();
+  return `${kst.slice(0, 10).replaceAll("-", "")}_${kst.slice(11, 19).replaceAll(":", "")}`;
 }
 
 function normalizeProductMode(value) {
@@ -566,7 +578,22 @@ function crawlExecutionPlan(payload = {}) {
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
   const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
   const collectionPurpose = normalizeCollectionPurpose(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail");
-  const executionProfile = collectionExecutionProfile(collectionPurpose, collectionMode);
+  const boundedInventoryActivation = payload.naverLegacyLimitedActivation === true
+    && payload.naverLegacyInventoryActivation === true
+    && String(payload.naverLimitedActivationProfile || "") === NAVER_LEGACY_INVENTORY_PROFILE
+    && String(payload.naverCollectorScope || "") === NAVER_LEGACY_INVENTORY_SCOPE
+    && normalizeUserRole(payload.sourceRole) === USER_ROLES.admin
+    && normalizeCollectionSource(payload.collectionSource, payload.sourceRole) === "admin_search";
+  const executionProfile = boundedInventoryActivation
+    ? {
+        ...collectionExecutionProfile(collectionPurpose, collectionMode),
+        collectRegional: false,
+        collectOta: false,
+        collectBookingStock: true,
+        collectWeeklyRange: false,
+        note: "Preview 제한 검증: 메인 순위 1~50, 재고 상위 3곳, 기준일 1일, 최대 31요청"
+      }
+    : collectionExecutionProfile(collectionPurpose, collectionMode);
   const defaultDetailRankRanges = collectionMode === "fast" ? "" : collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = collectionMode === "fast"
     ? ""
@@ -613,7 +640,8 @@ function crawlExecutionPlan(payload = {}) {
     collectWeeklyRange: executionProfile.collectWeeklyRange,
     detailPlaceLimit,
     rankRangeCount: crawlRankRangeCount(detailRankRanges),
-    detailRankRanges
+    detailRankRanges,
+    boundedInventoryActivation
   };
 }
 
@@ -625,35 +653,86 @@ function naverLegacyLimitedActivationEnvironment() {
   };
 }
 
-function trustedPreviewAdminCrawlPayload(payload = {}) {
+function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
+  const previewRuntime = Object.prototype.hasOwnProperty.call(runtime, "previewRuntime")
+    ? runtime.previewRuntime === true
+    : IS_V2_PREVIEW_RUNTIME;
+  const previewDataRoot = Object.prototype.hasOwnProperty.call(runtime, "previewDataRoot")
+    ? String(runtime.previewDataRoot || "")
+    : PREVIEW_DATA_ROOT_ENV;
+  const activationEnvironment = runtime.activationEnvironment && typeof runtime.activationEnvironment === "object"
+    ? runtime.activationEnvironment
+    : naverLegacyLimitedActivationEnvironment();
   const trustedPayload = {
     ...payload,
     sourceRole: USER_ROLES.admin,
     collectionSource: "admin_search",
     naverLegacyLimitedActivation: false,
+    naverLegacyInventoryActivation: false,
     naverCollectorStrategy: "current",
     naverCollectorScope: "current",
     naverLimitedActivationProfile: "",
     naverProviderCallBudget: 0,
+    naverInventoryCallBudget: 0,
+    naverTotalCallBudget: 0,
+    naverInventoryPlaceLimit: 0,
+    naverInventoryItemLimit: 0,
+    naverProviderConcurrency: 0,
     naverAutomaticRetry: false,
     naverAutomaticFallback: false
   };
   const requestedPlan = crawlExecutionPlan(trustedPayload);
+  const inventoryActivation = resolveNaverLegacyInventoryActivation({
+    environment: activationEnvironment,
+    collectionSource: "admin_search",
+    sourceRole: USER_ROLES.admin,
+    searchMode: requestedPlan.resolvedSearchMode,
+    collectionMode: requestedPlan.collectionMode,
+    collectionPurpose: requestedPlan.collectionPurpose
+  });
   const activation = resolveNaverLegacyLimitedActivationForTrustedServer({
-    environment: naverLegacyLimitedActivationEnvironment(),
+    environment: activationEnvironment,
     collectionSource: "admin_search",
     sourceRole: USER_ROLES.admin,
     searchMode: requestedPlan.resolvedSearchMode,
     collectionMode: requestedPlan.collectionMode
   });
 
-  if (!IS_V2_PREVIEW_RUNTIME) return trustedPayload;
-  if (PREVIEW_DATA_ROOT_ENV !== NAVER_LEGACY_LIMITED_ACTIVATION_PREVIEW_ROOT) {
+  if (!previewRuntime) return trustedPayload;
+  if (previewDataRoot !== NAVER_LEGACY_LIMITED_ACTIVATION_PREVIEW_ROOT) {
     const error = new Error("Preview 제한 수집은 관리자 지역 키워드 검색에서만 사용할 수 있습니다.");
     error.code = "NAVER_LEGACY_LIMITED_ACTIVATION_SCOPE_REQUIRED";
     error.statusCode = 422;
     error.retryable = false;
     throw error;
+  }
+  if (inventoryActivation.activationEnabled === true) {
+    return {
+      ...trustedPayload,
+      checkIn: requestedPlan.checkIn,
+      checkOut: requestedPlan.checkIn,
+      bookingDays: FIXED_INVENTORY_ACTIVATION.observationDays,
+      bookingRangeDays: FIXED_INVENTORY_ACTIVATION.observationDays,
+      collectionMode: FIXED_INVENTORY_ACTIVATION.effectiveCollectionMode,
+      collectionPurpose: FIXED_INVENTORY_ACTIVATION.collectionPurpose,
+      detailRankRanges: `${FIXED_INVENTORY_ACTIVATION.inventoryRankStart}-${FIXED_INVENTORY_ACTIVATION.inventoryRankEnd}`,
+      bookingRangePlaceLimit: 0,
+      requestedCollectionMode: requestedPlan.collectionMode,
+      requestedCollectionPurpose: requestedPlan.collectionPurpose,
+      naverLegacyLimitedActivation: true,
+      naverLegacyInventoryActivation: true,
+      naverCollectorStrategy: inventoryActivation.strategy,
+      naverCollectorScope: inventoryActivation.collectorScope,
+      naverLimitedActivationProfile: inventoryActivation.activationProfile,
+      naverProviderCallBudget: inventoryActivation.mainPlaceCallBudget,
+      naverInventoryCallBudget: inventoryActivation.inventoryCallBudget,
+      naverTotalCallBudget: inventoryActivation.totalCallBudget,
+      naverInventoryPlaceLimit: inventoryActivation.maxInventoryCompanies,
+      naverInventoryItemLimit: inventoryActivation.maxProductsPerCompany,
+      naverProviderConcurrency: inventoryActivation.concurrency,
+      naverAutomaticRetry: inventoryActivation.automaticRetry,
+      naverAutomaticFallback: inventoryActivation.automaticFallback
+    };
   }
   if (activation.activationEnabled !== true) return trustedPayload;
 
@@ -672,6 +751,25 @@ function trustedPreviewAdminCrawlPayload(payload = {}) {
     naverAutomaticRetry: activation.automaticRetry,
     naverAutomaticFallback: activation.automaticFallback
   };
+}
+
+async function cleanupLimitedRunArtifactsForStamp(outputsDir, runStamp) {
+  const normalizedStamp = String(runStamp || "").trim();
+  if (!/^\d{8}_\d{6}$/u.test(normalizedStamp)) return Object.freeze({ removed: 0 });
+  const resolvedRoot = path.resolve(String(outputsDir || ""));
+  const artifactPattern = new RegExp(
+    `^[a-z0-9_]+_glamping_${normalizedStamp}(?:\\.pending-\\d+-[a-f0-9]{8})?$`,
+    "u"
+  );
+  const entries = await fsp.readdir(resolvedRoot, { withFileTypes: true }).catch(() => []);
+  const targets = entries.filter((entry) => entry.isDirectory() && artifactPattern.test(entry.name));
+  const outcomes = await Promise.allSettled(targets.map((entry) => {
+    const target = path.resolve(resolvedRoot, entry.name);
+    if (path.dirname(target) !== resolvedRoot) return Promise.resolve();
+    return fsp.rm(target, { recursive: true, force: true });
+  }));
+  const failed = outcomes.filter((outcome) => outcome.status === "rejected").length;
+  return Object.freeze({ removed: targets.length - failed, failed });
 }
 
 function validateNaverLegacyLimitedRunManifest(manifest, payload = {}) {
@@ -694,6 +792,33 @@ function validateNaverLegacyLimitedRunManifest(manifest, payload = {}) {
     && relativeOutputDir !== ".."
     && !path.isAbsolute(relativeOutputDir)
     && /^[a-z0-9_]+_glamping_\d{8}(?:_\d{6})?$/u.test(runId);
+  const inventoryPayload = payload.naverLegacyInventoryActivation === true;
+  const inventoryManifest = manifest?.collectorActivationProfile === NAVER_LEGACY_INVENTORY_PROFILE;
+  if (inventoryPayload !== inventoryManifest) {
+    const error = new Error("NAVER 제한 재고 수집 결과의 실행 프로필이 일치하지 않습니다.");
+    error.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
+    error.statusCode = 502;
+    error.retryable = false;
+    throw error;
+  }
+  if (inventoryManifest) {
+    try {
+      if (!validOutputDir || payload.naverLegacyInventoryActivation !== true) {
+        throw new Error("invalid inventory activation output boundary");
+      }
+      const validated = validateNaverLegacyInventoryRunManifest(manifest, {
+        expectedOutputDir: outputDir,
+        outputPathIsFinal: true
+      });
+      return { outputDir, runId, inventoryActivation: true, validation: validated };
+    } catch {
+      const error = new Error("NAVER 제한 재고 수집의 성공 결과를 검증할 수 없습니다.");
+      error.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
+      error.statusCode = 502;
+      error.retryable = false;
+      throw error;
+    }
+  }
   const validCounts = Number.isInteger(counts.naverOverall)
     && counts.naverOverall >= 0
     && counts.naverOverall <= 50
@@ -725,6 +850,7 @@ function validateNaverLegacyLimitedRunManifest(manifest, payload = {}) {
 
 function estimateCrawlCompletion(payload = {}, timingStore = null) {
   const plan = crawlExecutionPlan(payload);
+  const boundedInventory = plan.boundedInventoryActivation === true;
   const rangePlaceCount = plan.collectWeeklyRange && plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
   const fast = plan.collectionMode === "fast";
   const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
@@ -779,7 +905,13 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
     ...stage,
     seconds: Math.max(4, Math.round(stage.seconds || 0))
   }));
-  if (!fast && !plan.collectWeeklyRange) {
+  if (boundedInventory) {
+    const inventoryStage = stages.find((stage) => stage.key === "inventory");
+    if (inventoryStage) {
+      inventoryStage.label = "상위 3곳 재고/예상매출";
+      inventoryStage.detail = "기준일 1일의 네이버예약 공개 재고와 가격을 순차 확인합니다. 전체 NAVER 요청은 최대 31건입니다.";
+    }
+  } else if (!fast && !plan.collectWeeklyRange) {
     const inventoryStage = stages.find((stage) => stage.key === "inventory");
     if (inventoryStage) {
       inventoryStage.label = "상품/금액 확인";
@@ -827,6 +959,21 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       rankRangeCount: plan.rankRangeCount,
       bookingRangeDays: plan.bookingRangeDays,
       bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
+      boundedInventory: boundedInventory
+        ? {
+            profile: NAVER_LEGACY_INVENTORY_PROFILE,
+            mainRankRange: "1-50",
+            inventoryRankRange: "1-3",
+            inventoryPlaceLimit: FIXED_INVENTORY_ACTIVATION.maxInventoryCompanies,
+            observationDays: FIXED_INVENTORY_ACTIVATION.observationDays,
+            maxProductsPerCompany: FIXED_INVENTORY_ACTIVATION.maxProductsPerCompany,
+            totalCallBudget: FIXED_INVENTORY_ACTIVATION.totalCallBudget,
+            concurrency: FIXED_INVENTORY_ACTIVATION.concurrency,
+            automaticRetry: false,
+            automaticFallback: false,
+            revenueBasis: "naver_booking_public_inventory_estimate_not_settled_revenue"
+          }
+        : null,
       timing
     }
   };
@@ -939,6 +1086,7 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     detailRankRanges: estimate.detailRankRanges,
     bookingRangeDays: estimate.bookingRangeDays,
     bookingRangePlaceLimit: estimate.bookingRangePlaceLimit,
+    boundedInventory: estimate.basis?.boundedInventory || null,
     estimatedTotalSeconds: estimate.estimatedTotalSeconds,
     estimatedCompleteAt: new Date(Date.now() + Math.max(0, estimate.estimatedTotalSeconds || 0) * 1000).toISOString(),
     estimateBasis: estimate.basis,
@@ -987,6 +1135,19 @@ function crawlPayloadSignature(payload = {}) {
     naverLimitedActivationProfile: payload.naverLegacyLimitedActivation === true
       ? String(payload.naverLimitedActivationProfile || "")
       : "",
+    naverLegacyInventoryActivation: payload.naverLegacyInventoryActivation === true,
+    naverInventoryCallBudget: payload.naverLegacyInventoryActivation === true
+      ? Number(payload.naverInventoryCallBudget || 0)
+      : 0,
+    naverTotalCallBudget: payload.naverLegacyInventoryActivation === true
+      ? Number(payload.naverTotalCallBudget || 0)
+      : 0,
+    naverInventoryPlaceLimit: payload.naverLegacyInventoryActivation === true
+      ? Number(payload.naverInventoryPlaceLimit || 0)
+      : 0,
+    naverInventoryItemLimit: payload.naverLegacyInventoryActivation === true
+      ? Number(payload.naverInventoryItemLimit || 0)
+      : 0,
     recrawlContext
   };
   return crypto.createHash("sha1").update(stableJson(signaturePayload)).digest("hex");
@@ -14424,6 +14585,7 @@ async function runCrawlerInternal(payload) {
   const keyword = plan.keyword;
   const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
   const sourceRole = sourceRoleForCollectionSource(collectionSource, payload.sourceRole);
+  const limitedRunStamp = payload.naverLegacyLimitedActivation === true ? kstRunStamp() : "";
   if (!keyword) throw new Error("키워드를 입력해야 합니다.");
   const env = {
     ...process.env,
@@ -14452,6 +14614,7 @@ async function runCrawlerInternal(payload) {
     COLLECTION_SOURCE: collectionSource,
     COLLECTION_SOURCE_LABEL: collectionSourceLabel(collectionSource),
     NAVER_LEGACY_LIMITED_ACTIVATION: payload.naverLegacyLimitedActivation === true ? "1" : "0",
+    NAVER_LEGACY_INVENTORY_ACTIVATION: payload.naverLegacyInventoryActivation === true ? "1" : "0",
     NAVER_COLLECTOR_STRATEGY: payload.naverLegacyLimitedActivation === true
       ? String(payload.naverCollectorStrategy || "")
       : "current",
@@ -14464,10 +14627,31 @@ async function runCrawlerInternal(payload) {
     NAVER_PROVIDER_CALL_BUDGET: payload.naverLegacyLimitedActivation === true
       ? String(payload.naverProviderCallBudget || 0)
       : "0",
+    NAVER_INVENTORY_CALL_BUDGET: payload.naverLegacyInventoryActivation === true
+      ? String(payload.naverInventoryCallBudget || 0)
+      : "0",
+    NAVER_TOTAL_CALL_BUDGET: payload.naverLegacyInventoryActivation === true
+      ? String(payload.naverTotalCallBudget || 0)
+      : "0",
+    NAVER_INVENTORY_PLACE_LIMIT: payload.naverLegacyInventoryActivation === true
+      ? String(payload.naverInventoryPlaceLimit || 0)
+      : "0",
+    NAVER_INVENTORY_ITEM_LIMIT: payload.naverLegacyInventoryActivation === true
+      ? String(payload.naverInventoryItemLimit || 0)
+      : "0",
+    NAVER_BOOKING_STOCK_LIMIT: payload.naverLegacyInventoryActivation === true
+      ? String(payload.naverInventoryPlaceLimit || 0)
+      : String(process.env.NAVER_BOOKING_STOCK_LIMIT || 20),
+    NAVER_BOOKING_DETAIL_CONCURRENCY: payload.naverLegacyInventoryActivation === true ? "1" : String(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY || 2),
+    NAVER_SCHEDULE_CONCURRENCY: payload.naverLegacyInventoryActivation === true ? "1" : String(process.env.NAVER_SCHEDULE_CONCURRENCY || 4),
+    NAVER_SCHEDULE_DELAY_MS: payload.naverLegacyInventoryActivation === true ? "0" : String(process.env.NAVER_SCHEDULE_DELAY_MS || 35),
+    NAVER_BOOKING_ID_FALLBACK: payload.naverLegacyInventoryActivation === true ? "0" : String(process.env.NAVER_BOOKING_ID_FALLBACK || 1),
+    NAVER_COUPON_PAGE_FALLBACK: payload.naverLegacyInventoryActivation === true ? "0" : String(process.env.NAVER_COUPON_PAGE_FALLBACK || 1),
     NAVER_AUTOMATIC_RETRY: payload.naverLegacyLimitedActivation === true && payload.naverAutomaticRetry === true ? "1" : "0",
     NAVER_AUTOMATIC_FALLBACK: payload.naverLegacyLimitedActivation === true && payload.naverAutomaticFallback === true ? "1" : "0",
     REQUESTED_COLLECTION_MODE: String(payload.requestedCollectionMode || plan.collectionMode),
     REQUESTED_COLLECTION_PURPOSE: String(payload.requestedCollectionPurpose || plan.collectionPurpose),
+    RUN_STAMP: limitedRunStamp,
     DATA_DIR,
     OUTPUTS_DIR,
     CONFIG_DIR,
@@ -14507,10 +14691,12 @@ async function runCrawlerInternal(payload) {
       if (activeCrawlChild === child) activeCrawlChild = null;
       recordCrawlRuntimeOutputChunk(activeCrawlJob, "", true);
       if (activeCrawlCancelRequested) {
+        await cleanupLimitedRunArtifactsForStamp(OUTPUTS_DIR, limitedRunStamp);
         reject(crawlCancelledError(activeCrawlCancelReason));
         return;
       }
       if (code !== 0) {
+        await cleanupLimitedRunArtifactsForStamp(OUTPUTS_DIR, limitedRunStamp);
         const failure = classifyCollectorProcessFailure({ stderr, stdout, exitCode: code });
         console.warn(`[crawl-failure] diagnosticId=${failure.diagnosticId} code=${failure.code} exitCode=${Number.isInteger(code) ? code : "unknown"}`);
         reject(failure);
@@ -14525,6 +14711,13 @@ async function runCrawlerInternal(payload) {
         const outputDir = limitedRun?.outputDir || parsed?.outputDir || "";
         const runId = limitedRun?.runId || (outputDir ? path.basename(outputDir) : null);
         if (limitedRun) {
+          if (!runId.endsWith(`_${limitedRunStamp}`)) {
+            const invalidRun = new Error("NAVER limited collection run identity does not match the current execution");
+            invalidRun.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
+            invalidRun.statusCode = 502;
+            invalidRun.retryable = false;
+            throw invalidRun;
+          }
           const outputStat = await fsp.stat(outputDir);
           if (!outputStat.isDirectory()) {
             const invalidRun = new Error("NAVER 제한 수집의 최종 run 디렉터리가 없습니다.");
@@ -14553,6 +14746,7 @@ async function runCrawlerInternal(payload) {
         resolve({ output: parsed, runId, history });
       } catch (error) {
         if (payload.naverLegacyLimitedActivation === true) {
+          await cleanupLimitedRunArtifactsForStamp(OUTPUTS_DIR, limitedRunStamp);
           if (!error.code) error.code = "NAVER_LEGACY_LIMITED_RESULT_INVALID";
           if (!error.statusCode) error.statusCode = 502;
           error.retryable = false;
@@ -15334,6 +15528,7 @@ module.exports = {
     companyMasterFile: COMPANY_MASTER_FILE,
     companyRecordSummary,
     collectionDbRouteProfile,
+    cleanupLimitedRunArtifactsForStamp,
     crawlExecutionPlan,
     crawlPayloadSignature,
     crawlRuntimeRemainingSeconds,

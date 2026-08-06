@@ -84,7 +84,7 @@ async function main() {
   assert.ok(listeners.has("fetch"), "fetch handler registered");
   assert.ok(listeners.has("activate"), "activate handler registered");
 
-  const currentCache = "lodging-datalab-pwa-v20260805-region-analysis-v42";
+  const currentCache = "lodging-datalab-pwa-v20260806-bounded-inventory-v43";
   stores.set("lodging-datalab-pwa-v20260804-detail-sheet-v40", new Map([["https://fixture.local/b2b", new Response("old-v40-private")]]));
   stores.set("lodging-datalab-pwa-v20260804-detail-sheet-v39", new Map([["https://fixture.local/b2b", new Response("old-v39-private")]]));
   stores.set("lodging-datalab-pwa-v20260804-detail-sheet-v38", new Map([["https://fixture.local/b2b", new Response("old-v38-private")]]));
@@ -122,12 +122,12 @@ async function main() {
     method: "GET",
     mode: "cors",
     destination: "script",
-    url: "https://fixture.local/app.js?v=v2-20260805-region-analysis-v42"
+    url: "https://fixture.local/app.js?v=v2-20260806-bounded-inventory-v43"
   });
-  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260805-region-analysis-v42");
+  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260806-bounded-inventory-v43");
   await Promise.resolve();
   await Promise.resolve();
-  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260805-region-analysis-v42")), "allowlisted static asset is cached");
+  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260806-bounded-inventory-v43")), "allowlisted static asset is cached");
 
   fetchImpl = async () => { throw new Error("offline"); };
   const unrelatedStaticFallback = await dispatchFetch({
