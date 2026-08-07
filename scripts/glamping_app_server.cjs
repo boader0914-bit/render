@@ -13195,6 +13195,8 @@ function buildHistoryObservations(data, collectedAt) {
           collectionCompletedAt: run.collectionCompletedAt || "",
           collectionTimeBasis,
           collectorVersion: run.collectorVersion || "legacy",
+          collectorStrategy: run.collectorStrategy || "",
+          frozenSourceBlob: run.frozenSourceBlob || "",
           dataQualityStatus: collectionTimeBasis === "legacy_directory_mtime_fallback" ? "partial" : "ready",
           dataQualityPenaltyReasons: collectionTimeBasis === "legacy_directory_mtime_fallback"
             ? [collectionTimeBasis]
@@ -13250,6 +13252,8 @@ async function readHistoryObservations() {
       if (runDirectory && fs.existsSync(runDirectory)) {
         const manifest = await readManifest(runDirectory);
         visible = await isVisibleCommittedFrozenRun(runDirectory, manifest);
+      } else if (row?.collectorStrategy === FROZEN_V2_COLLECTOR_STRATEGY || row?.frozenSourceBlob === FROZEN_V2_COLLECTOR_BLOB) {
+        visible = false;
       }
       visibleFrozenRuns.set(runId, visible);
     }
@@ -14502,6 +14506,8 @@ async function loadRun(runId, options = {}) {
       documentType: manifest?.documentType || "lodging-collection-manifest",
       schemaVersion: manifest?.schemaVersion || 1,
       collectorVersion: manifest?.collectorVersion || "legacy",
+      collectorStrategy: manifest?.collectorStrategy || "",
+      frozenSourceBlob: manifest?.frozenCollector?.sourceBlob || "",
       collectionStartedAt: manifest?.collectionStartedAt || "",
       collectionCompletedAt: manifest?.collectionCompletedAt || "",
       dataAvailableAt: manifest?.dataAvailableAt || collectedAt,

@@ -641,8 +641,6 @@ async function safeCopyPriorNaverOverallFallbackInputs(options = {}) {
     } catch {
       continue;
     }
-    const commitState = await readFrozenRunCommitState({ runDirectory: sourceRun, manifest: priorManifest });
-    if (!commitState.frozen || !commitState.visible || commitState.reason !== "committed") continue;
     const sameSearchContract = (
       priorManifest
       && typeof priorManifest === "object"
@@ -659,6 +657,8 @@ async function safeCopyPriorNaverOverallFallbackInputs(options = {}) {
     if (!isSafeOverallFileName(overallFileName)) continue;
     const overall = files.find((file) => file.name === overallFileName && file.isFile() && !file.isSymbolicLink());
     if (!overall) continue;
+    const commitState = await readFrozenRunCommitState({ runDirectory: sourceRun, manifest: priorManifest });
+    if (!commitState.frozen || !commitState.visible || commitState.reason !== "committed") continue;
     const sourceFile = path.resolve(sourceRun, overall.name);
     resolvedInside(sourceRunReal, await fsp.realpath(sourceFile));
     const sourceStat = await fsp.lstat(sourceFile);
@@ -1464,6 +1464,25 @@ function isFrozenV2RunManifest(manifest) {
   );
 }
 
+function isRecognizedLegacyRunManifest(manifest, runDirectory) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest) || isFrozenV2RunManifest(manifest)) return false;
+  const outputDir = String(manifest.outputDir || "").trim();
+  const keyword = String(manifest.keyword || "").trim();
+  const overallFile = String(manifest.fileRoles?.overall || "");
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const naverOverall = Number(manifest.counts?.naverOverall);
+  return Boolean(
+    outputDir
+    && path.basename(path.resolve(outputDir)) === path.basename(path.resolve(runDirectory))
+    && keyword
+    && isSafeOverallFileName(overallFile)
+    && files.includes(overallFile)
+    && Number.isInteger(naverOverall)
+    && naverOverall >= 0
+    && naverOverall <= 50
+  );
+}
+
 function frozenCommitMarkerPath(runDirectory) {
   const root = path.resolve(runDirectory);
   const markerPath = path.resolve(root, FROZEN_V2_COMMIT_MARKER_FILE);
@@ -1485,10 +1504,11 @@ async function readFrozenRunCommitState(options = {}) {
       return Object.freeze({ frozen: true, visible: false, reason: "manifest_invalid" });
     }
     if (!isFrozenV2RunManifest(manifest)) {
+      const legacyValid = !markerStat && isRecognizedLegacyRunManifest(manifest, runDirectory);
       return Object.freeze({
-        frozen: Boolean(markerStat),
-        visible: !markerStat,
-        reason: markerStat ? "frozen_manifest_invalid" : "not_frozen"
+        frozen: !legacyValid,
+        visible: legacyValid,
+        reason: legacyValid ? "not_frozen" : "manifest_invalid"
       });
     }
     if (!markerStat) {
@@ -1716,6 +1736,7 @@ module.exports = {
   validateStoredFrozenRunManifest,
   promoteValidatedFrozenRun,
   isFrozenV2RunManifest,
+  isRecognizedLegacyRunManifest,
   readFrozenRunCommitState,
   isVisibleCommittedFrozenRun,
   commitPromotedFrozenRun,

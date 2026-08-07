@@ -101,6 +101,11 @@ async function main() {
       /const manifest = await readManifest\(runDirectory\);\s*visible = await isVisibleCommittedFrozenRun\(runDirectory, manifest\);/u,
       "history reads must validate the canonical run manifest even when parsing returned null"
     );
+    assert.match(
+      serverSource,
+      /else if \(row\?\.collectorStrategy === FROZEN_V2_COLLECTOR_STRATEGY \|\| row\?\.frozenSourceBlob === FROZEN_V2_COLLECTOR_BLOB\) \{\s*visible = false;/u,
+      "orphaned frozen history rows must fail closed after a rollback or crash"
+    );
     assert.equal(guard.blockedAttempts(), 0);
     console.log("Frozen V2 server integration fixture passed");
   } finally {

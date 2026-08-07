@@ -156,7 +156,10 @@ async function main() {
       keyword: payload.keyword,
       searchMode: payload.searchMode,
       productMode: payload.productMode,
-      collectionSource: payload.collectionSource
+      collectionSource: payload.collectionSource,
+      fileRoles: { overall: `prior${FROZEN_V2_OVERALL_SUFFIX}` },
+      files: [`prior${FROZEN_V2_OVERALL_SUFFIX}`],
+      counts: { naverOverall: 1 }
     }, null, 2), "utf8");
     const otherContractRun = path.join(outputsRoot, "other_glamping_20260802_010101");
     await fsp.mkdir(otherContractRun);
@@ -180,6 +183,14 @@ async function main() {
       await isVisibleCommittedFrozenRun(corruptManifestRun, null),
       false,
       "a missing or corrupt canonical manifest must fail closed even when the caller passes null"
+    );
+    const semanticCorruptRun = path.join(outputsRoot, "semantic_glamping_20260804_010101");
+    await fsp.mkdir(semanticCorruptRun);
+    await fsp.writeFile(path.join(semanticCorruptRun, "manifest.json"), "{}\n", "utf8");
+    assert.equal(
+      await isVisibleCommittedFrozenRun(semanticCorruptRun, {}),
+      false,
+      "a parseable but unrecognized manifest must not be reclassified as a visible legacy run"
     );
     const sameContractLater = buildFixturePayload({ ...payload, runStamp: "20260807_111213" });
     assert.equal(
