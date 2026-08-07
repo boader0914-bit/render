@@ -603,7 +603,11 @@ assert.match(server, /"X-Naver-Maps-Usage":\s*"single-display"/);
 assert.match(server, /"X-Naver-Maps-Requester":\s*adminPreviewRequest \? "admin-user-view" : "b2b"/);
 assert.match(server, /previewAdminConditionalApis:[\s\S]*\/api\/b2b-map\/geocode[\s\S]*once-per-runtime-run/);
 const serverLoadRunBlock = functionBlock(server, "loadRun");
-assert.match(serverLoadRunBlock, /options\.skipTraffic === true\s*\? null\s*:\s*await enrichRegionsWithTraffic\(/);
+assert.match(
+  serverLoadRunBlock,
+  /options\.skipTraffic === true \|\| frozenCollectorRun\s*\? null\s*:\s*await enrichRegionsWithTraffic\(/,
+  "stored Frozen V2 runs must never trigger external traffic enrichment during map reads"
+);
 const geocodeRouteStart = server.indexOf('if (req.method === "POST" && reqUrl.pathname === "/api/b2b-map/geocode")');
 assert.notEqual(geocodeRouteStart, -1, "missing B2B map geocoding route");
 const geocodeRouteEnd = server.indexOf('if (req.method === "GET" && reqUrl.pathname.startsWith("/api/member/runs/"))', geocodeRouteStart);

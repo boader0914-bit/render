@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "frozen-v2-collector-manifest.v1",
+  "sourceCommit": "4e4e1906e2967fe58df66f8ad67f832043d2763b",
+  "sourceDeployId": "dep-d9atqu5ckfvc73bubmgg",
+  "sourceServiceId": "srv-d8rjrmojs32c73c4tmhg",
+  "sourceRegion": "Singapore",
+  "sourcePath": "scripts/gyeongnam_glamping_crawl.cjs",
+  "sourceBlob": "bcbe229998da3afa6f31ee04375fb0766019e56f",
+  "collectorStrategy": "frozen_v2_4e4e190",
+  "contractVersion": "frozen-v2-collector.v1",
+  "restoredAt": "2026-08-07T01:44:01.552Z",
+  "immutable": true,
+  "dependencies": [
+    {
+      "id": "node-builtins",
+      "modules": ["node:fs/promises", "node:path", "node:crypto", "node:module"]
+    },
+    {
+      "id": "safe-workbook-bridge",
+      "module": "@oai/artifact-tool",
+      "dependencyPath": "scripts/frozen_v2_4e4e190/runtime/@oai/artifact-tool/index.js",
+      "dependencyBlob": "d19583d7d93703d304dd3590f824efb6cb653e74",
+      "reason": "Preserves the historical source blob without restoring vulnerable xlsx@0.18.5"
+    },
+    {
+      "id": "fetch-safety-preload",
+      "dependencyPath": "scripts/frozen_v2_4e4e190/runtime/fetch_safety_preload.cjs",
+      "dependencyBlob": "35f1881ebf083ea34045c050dd8eae152dcbd705",
+      "reason": "Applies the current outbound allowlist plus 403, 429, and challenge fail-closed boundary outside the immutable source"
+    },
+    {
+      "id": "locked-workbook-dependency",
+      "module": "write-excel-file",
+      "version": "4.1.1",
+      "dependencyPath": "package-lock.json",
+      "dependencyBlob": "6c9f3b2346031a6364b8e27822d009934f41b915",
+      "reason": "Uses the currently locked non-xlsx workbook dependency without a dependency rollback"
+    }
+  ]
+}

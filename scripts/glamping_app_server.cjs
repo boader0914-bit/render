@@ -125,6 +125,29 @@ const {
   validateV2CollectorCompatibilityRunManifest
 } = require("./v2_collector_compatibility.cjs");
 const {
+  FROZEN_V2_ADAPTER_VERSION,
+  FROZEN_V2_CHILD_TIMEOUT_MS,
+  FROZEN_V2_COLLECTOR_BLOB,
+  FROZEN_V2_COLLECTOR_STRATEGY,
+  FROZEN_V2_CONTRACT_VERSION,
+  FROZEN_V2_SOURCE_COMMIT,
+  FROZEN_V2_STAGING_DIRECTORY,
+  buildTrustedFrozenPayload,
+  buildFrozenContractSignature,
+  commitPromotedFrozenRun,
+  isFrozenV2RunManifest,
+  isVisibleCommittedFrozenRun,
+  isTrustedFrozenPayload,
+  locateSingleFrozenRunDirectory,
+  parseFrozenCollectorStdoutManifest,
+  prepareFrozenCollectorExecution,
+  promoteValidatedFrozenRun,
+  rollbackPromotedFrozenRun,
+  sanitizeFrozenRunArtifacts,
+  safeCleanupFrozenStaging,
+  validateStoredFrozenRunManifest
+} = require("./v2_frozen_collector_adapter.cjs");
+const {
   assertV2MapCompatibilityReady,
   normalizeV2MapCompatibility
 } = require("./v2_map_compatibility.cjs");
@@ -207,6 +230,8 @@ const HISTORY_DIR = path.join(DATA_DIR, "history");
 const HISTORY_OBSERVATIONS_FILE = path.join(HISTORY_DIR, "observations.jsonl");
 const HISTORY_DATALAB_TRENDS_FILE = path.join(HISTORY_DIR, "datalab_trends.json");
 const HISTORY_CRAWL_TIMINGS_FILE = path.join(HISTORY_DIR, "crawl_timings.json");
+let historyObservationAppendQueue = Promise.resolve();
+const FROZEN_V2_UNCOMMITTED_READ = Symbol("frozenV2UncommittedRead");
 const LEGACY_B2B_SEARCH_HISTORY_FILE = path.join(HISTORY_DIR, "b2b_search_history.json");
 const B2B_SEARCH_HISTORY_FILE = path.join(CUSTOMER_DB_DIR, "b2b_search_history.json");
 const B2B_INTEREST_LODGES_FILE = path.join(CUSTOMER_DB_DIR, "b2b_interest_lodges.json");
@@ -906,6 +931,78 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
   };
 }
 
+function trustedPreviewFrozenCrawlPayload(payload = {}, runtime = {}) {
+  const previewRuntime = Object.prototype.hasOwnProperty.call(runtime, "previewRuntime")
+    ? runtime.previewRuntime === true
+    : IS_V2_PREVIEW_RUNTIME;
+  if (!previewRuntime) return trustedPreviewAdminCrawlPayload(payload, runtime);
+  const previewDataRoot = Object.prototype.hasOwnProperty.call(runtime, "previewDataRoot")
+    ? String(runtime.previewDataRoot || "")
+    : PREVIEW_DATA_ROOT_ENV;
+  if (previewDataRoot !== NAVER_LEGACY_LIMITED_ACTIVATION_PREVIEW_ROOT) {
+    const error = new Error("Frozen V2 수집은 격리된 Preview 데이터 루트에서만 사용할 수 있습니다.");
+    error.code = "FROZEN_V2_PREVIEW_SCOPE_REQUIRED";
+    error.statusCode = 422;
+    error.retryable = false;
+    throw error;
+  }
+  return buildTrustedFrozenPayload({
+    ...payload,
+    sourceRole: USER_ROLES.admin,
+    collectionSource: "admin_search",
+    collectionSourceLabel: "관리자 수집"
+  }, { asOf: runtime.asOf || new Date() });
+}
+
+function frozenV2ExecutionPlan(payload = {}) {
+  if (!isTrustedFrozenPayload(payload)) {
+    const error = new Error("Frozen V2 수집 입력이 신뢰 경계를 통과하지 못했습니다.");
+    error.code = "FROZEN_V2_PAYLOAD_UNTRUSTED";
+    error.statusCode = 403;
+    error.retryable = false;
+    throw error;
+  }
+  const executionProfile = collectionExecutionProfile(payload.collectionPurpose, payload.collectionMode);
+  const detailPlaceLimit = payload.collectionMode === "fast"
+    ? 0
+    : Math.max(0, Math.min(20, crawlRankRangeCount(payload.detailRankRanges)));
+  return {
+    keyword: payload.keyword,
+    checkIn: payload.checkIn,
+    checkOut: payload.checkOut,
+    bookingRangeDays: payload.bookingRangeDays,
+    bookingRangePlaceLimit: payload.bookingRangePlaceLimit,
+    requestedSearchMode: payload.requestedSearchMode || payload.searchMode,
+    resolvedSearchMode: payload.searchMode,
+    requestedSearchIntentMode: payload.searchMode,
+    resolvedIntent: null,
+    selectedSearchCandidate: null,
+    intentSupported: true,
+    intentWarning: "",
+    productMode: payload.productMode,
+    collectionMode: payload.collectionMode,
+    collectionPurpose: payload.collectionPurpose,
+    collectionProfile: executionProfile.key,
+    collectionProfileLabel: executionProfile.label,
+    collectionProfileNote: executionProfile.note,
+    collectRegional: executionProfile.collectRegional,
+    collectOta: executionProfile.collectOta,
+    collectBookingStock: executionProfile.collectBookingStock,
+    collectWeeklyRange: executionProfile.collectWeeklyRange,
+    detailPlaceLimit,
+    rankRangeCount: detailPlaceLimit,
+    detailRankRanges: payload.detailRankRanges,
+    boundedInventoryActivation: false,
+    v2CollectorCompatibilityActivation: false,
+    frozenV2Collector: true,
+    collectorStrategy: FROZEN_V2_COLLECTOR_STRATEGY,
+    collectorSourceCommit: FROZEN_V2_SOURCE_COMMIT,
+    collectorSourceBlob: FROZEN_V2_COLLECTOR_BLOB,
+    collectorAdapterVersion: FROZEN_V2_ADAPTER_VERSION,
+    collectorContractVersion: FROZEN_V2_CONTRACT_VERSION
+  };
+}
+
 async function cleanupLimitedRunArtifactsForStamp(outputsDir, runStamp) {
   const normalizedStamp = String(runStamp || "").trim();
   if (!/^\d{8}_\d{6}$/u.test(normalizedStamp)) return Object.freeze({ removed: 0 });
@@ -1031,7 +1128,73 @@ function validateNaverLegacyLimitedRunManifest(manifest, payload = {}) {
   return { outputDir, runId };
 }
 
+function estimateFrozenV2CrawlCompletion(payload = {}, timingStore = null) {
+  const plan = frozenV2ExecutionPlan(payload);
+  const rangePlaceCount = plan.collectWeeklyRange && plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
+  const fast = plan.collectionMode === "fast";
+  const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
+  const productSeconds = fast || !plan.collectBookingStock ? 0 : (plan.productMode === "all" ? 45 : 26);
+  const trendSeconds = plan.resolvedSearchMode === "keyword" ? (plan.collectionPurpose === "demand_location" ? 55 : 25) : 10;
+  const rangeSeconds = !fast && rangePlaceCount
+    ? rangePlaceCount * plan.bookingRangeDays * (plan.productMode === "all" ? 5.5 : 4.2)
+    : 0;
+  const regionalSeconds = !fast && plan.collectRegional ? (plan.collectionPurpose === "demand_location" ? 130 : 80) : 0;
+  const otaSeconds = !fast && plan.collectOta ? 35 : 0;
+  const stages = [
+    { key: "rank", label: "순위 수집", seconds: searchSeconds, detail: "Frozen V2 기준으로 네이버 플레이스 순위와 업체 기본 정보를 수집합니다." },
+    { key: "trend", label: "수요 확인", seconds: trendSeconds, detail: "Frozen V2 실행 순서에 따라 저장된 수요 신호를 확인합니다." },
+    fast
+      ? { key: "inventory", label: "상세 생략", seconds: 6, detail: "빠른 순위 모드에서는 재고·가격 상세 단계를 생략합니다." }
+      : { key: "inventory", label: "재고·가격 확인", seconds: productSeconds + rangeSeconds, detail: `상세 ${plan.detailRankRanges || "1-20"}위를 Frozen V2 순서대로 확인합니다.` },
+    !fast
+      ? { key: "ota", label: "보조 채널", seconds: otaSeconds + regionalSeconds, detail: "Frozen V2에서 사용하던 지역·OTA 보조 흐름을 실행합니다." }
+      : null,
+    { key: "save", label: "검증·저장", seconds: fast ? 18 : 35, detail: "완료된 staging 결과를 검증한 뒤 성공 run만 저장합니다." }
+  ].filter(Boolean).map((stage) => ({ ...stage, seconds: Math.max(4, Math.round(stage.seconds || 0)) }));
+  const modelTotalSeconds = Math.max(fast ? 45 : 90, stages.reduce((sum, stage) => sum + stage.seconds, 0));
+  const timing = crawlTimingAdjustment(plan, modelTotalSeconds, timingStore);
+  const estimatedTotalSeconds = timing.estimatedTotalSeconds;
+  return {
+    ...plan,
+    estimatedTotalSeconds,
+    recrawlContext: null,
+    stages: scaleCrawlStages(stages, estimatedTotalSeconds, timing.stageFactors),
+    basis: {
+      searchMode: plan.resolvedSearchMode,
+      searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
+      productMode: plan.productMode,
+      productModeLabel: PRODUCT_MODES[plan.productMode] || PRODUCT_MODES.all,
+      collectionPurpose: plan.collectionPurpose,
+      collectionPurposeLabel: COLLECTION_PURPOSES[plan.collectionPurpose] || COLLECTION_PURPOSES.revenue_detail,
+      collectionProfile: plan.collectionProfile,
+      collectionProfileLabel: plan.collectionProfileLabel,
+      collectionProfileNote: plan.collectionProfileNote,
+      collectRegional: plan.collectRegional,
+      collectOta: plan.collectOta,
+      collectBookingStock: plan.collectBookingStock,
+      collectWeeklyRange: plan.collectWeeklyRange,
+      collectionMode: plan.collectionMode,
+      collectionModeLabel: COLLECTION_MODES[plan.collectionMode] || COLLECTION_MODES.precision,
+      detailRankRanges: plan.detailRankRanges,
+      detailPlaceLimit: plan.detailPlaceLimit,
+      rankRangeCount: plan.rankRangeCount,
+      bookingRangeDays: plan.bookingRangeDays,
+      bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
+      boundedInventory: null,
+      frozenV2: {
+        collectorStrategy: FROZEN_V2_COLLECTOR_STRATEGY,
+        sourceCommit: FROZEN_V2_SOURCE_COMMIT,
+        sourceBlob: FROZEN_V2_COLLECTOR_BLOB,
+        successOnlyPromotion: true,
+        workerBypassed: true
+      },
+      timing
+    }
+  };
+}
+
 function estimateCrawlCompletion(payload = {}, timingStore = null) {
+  if (isTrustedFrozenPayload(payload)) return estimateFrozenV2CrawlCompletion(payload, timingStore);
   const plan = crawlExecutionPlan(payload);
   const boundedInventory = plan.boundedInventoryActivation === true;
   const rangePlaceCount = plan.collectWeeklyRange && plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
@@ -1300,6 +1463,7 @@ function stableJson(value) {
 }
 
 function crawlPayloadSignature(payload = {}) {
+  if (isTrustedFrozenPayload(payload)) return buildFrozenContractSignature(payload);
   const plan = crawlExecutionPlan(payload);
   const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
   const sourceRole = sourceRoleForCollectionSource(collectionSource, payload.sourceRole);
@@ -1863,6 +2027,8 @@ function publicCrawlJob(job, position = 0) {
     bookingRangePlaceLimit: job.plan?.bookingRangePlaceLimit || 0,
     sourceRole: job.sourceRole || "",
     collectionSource: job.collectionSource || "",
+    collectorStrategy: job.plan?.collectorStrategy || "current",
+    frozenV2Collector: job.plan?.frozenV2Collector === true,
     queuePosition: position,
     waiterCount: job.waiterCount || 1,
     queuedAt: job.queuedAt ? job.queuedAt.toISOString() : null,
@@ -2104,8 +2270,8 @@ function createCrawlJob(payload = {}, signature = "") {
   const job = {
     id: `crawl_${Date.now().toString(36)}_${(++crawlJobSequence).toString(36)}`,
     signature,
-    payload: { ...payload },
-    plan: crawlExecutionPlan(payload),
+    payload: isTrustedFrozenPayload(payload) ? payload : { ...payload },
+    plan: isTrustedFrozenPayload(payload) ? frozenV2ExecutionPlan(payload) : crawlExecutionPlan(payload),
     estimate,
     collectionSource,
     sourceRole,
@@ -2297,7 +2463,7 @@ function startCrawlJob(job) {
     }).catch((error) => {
       console.warn(`Could not record crawl timing: ${error.message || error}`);
     });
-    if (!failure && result?.runId) {
+    if (!failure && result?.runId && !isTrustedFrozenPayload(job.payload)) {
       cleanupRecentCrawlResults();
       recentCrawlResults.set(job.signature, { createdAt: Date.now(), result });
       await ensureB2BSearchHistoryForJob(job, result).catch((error) => {
@@ -4843,6 +5009,7 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
   if (
     normalizeUserRole(session?.role) === USER_ROLES.admin
     && IS_V2_PREVIEW_RUNTIME
+    && !isTrustedFrozenPayload(payload)
     && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
     && isV2Top20WorkerEligible(payload)
   ) {
@@ -6278,6 +6445,7 @@ async function listRuns() {
     const dirPath = path.join(OUTPUTS_DIR, entry.name);
     const files = await fsp.readdir(dirPath).catch(() => []);
     const manifest = await readManifest(dirPath);
+    if (!await isVisibleCommittedFrozenRun(dirPath, manifest)) continue;
     if (!manifest && files.length === 0) continue;
     if (isIncompleteRunDirectory(manifest, files)) continue;
     if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) continue;
@@ -13072,38 +13240,81 @@ async function readHistoryObservations() {
         // Keep reading even if one historical line was partially written.
       }
     }
-    return [...deduped.values()];
+    const observations = [...deduped.values()];
+    const visibleFrozenRuns = new Map();
+    for (const row of observations) {
+      const runId = String(row?.runId || "").trim();
+      if (!runId || visibleFrozenRuns.has(runId)) continue;
+      let visible = true;
+      const runDirectory = resolveRunDir(runId);
+      if (runDirectory && fs.existsSync(runDirectory)) {
+        const manifest = await readManifest(runDirectory);
+        visible = await isVisibleCommittedFrozenRun(runDirectory, manifest);
+      }
+      visibleFrozenRuns.set(runId, visible);
+    }
+    return observations.filter((row) => visibleFrozenRuns.get(String(row?.runId || "").trim()) !== false);
   } catch {
     return [];
   }
 }
 
-async function appendHistoryForRun(runId) {
+async function appendHistoryForRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
   const stat = await fsp.stat(dirPath);
-  const data = await loadRun(runId, { skipHistory: true });
+  const frozenCommitRead = options.frozenCommitRead === FROZEN_V2_UNCOMMITTED_READ
+    ? FROZEN_V2_UNCOMMITTED_READ
+    : undefined;
+  const data = await loadRun(runId, {
+    skipHistory: true,
+    skipCompanyMaster: options.skipCompanyMaster === true,
+    skipTraffic: options.skipTraffic === true,
+    frozenCommitRead
+  });
+  if (!data && frozenCommitRead) {
+    const error = new Error("Frozen V2 promoted run could not be loaded before commit");
+    error.code = "FROZEN_V2_PROMOTED_RUN_UNREADABLE";
+    error.statusCode = 502;
+    throw error;
+  }
+  const finalizeWithoutAppend = async (result) => {
+    if (typeof options.afterAppend === "function") await options.afterAppend(result);
+    return result;
+  };
   const collectedAt = data?.run?.dataAvailableAt
     || data?.run?.collectionCompletedAt
     || data?.run?.collectionStartedAt
     || stat.mtime.toISOString();
   const dbRoute = runCollectionDbRoute(data?.run || {});
   if (!dbRoute.appliesHistory) {
-    return {
+    return finalizeWithoutAppend({
       appended: 0,
       reason: "collection_route_excludes_history",
       dbRoute
-    };
+    });
   }
   const observations = buildHistoryObservations(data, collectedAt);
-  if (!observations.length) return { appended: 0, reason: "no_observations" };
-  await fsp.mkdir(HISTORY_DIR, { recursive: true });
-  await fsp.appendFile(
-    HISTORY_OBSERVATIONS_FILE,
-    `${observations.map((row) => JSON.stringify(row)).join("\n")}\n`,
-    "utf8"
-  );
-  return { appended: observations.length, file: "history/observations.jsonl" };
+  if (!observations.length) return finalizeWithoutAppend({ appended: 0, reason: "no_observations" });
+  const appendPayload = `${observations.map((row) => JSON.stringify(row)).join("\n")}\n`;
+  const historyResult = { appended: observations.length, file: "history/observations.jsonl" };
+  const operation = historyObservationAppendQueue.catch(() => {}).then(async () => {
+    await fsp.mkdir(HISTORY_DIR, { recursive: true });
+    const priorStat = await fsp.stat(HISTORY_OBSERVATIONS_FILE).catch((error) => (
+      error?.code === "ENOENT" ? null : Promise.reject(error)
+    ));
+    try {
+      await fsp.appendFile(HISTORY_OBSERVATIONS_FILE, appendPayload, "utf8");
+      if (typeof options.afterAppend === "function") await options.afterAppend(historyResult);
+      return historyResult;
+    } catch (error) {
+      if (priorStat?.isFile()) await fsp.truncate(HISTORY_OBSERVATIONS_FILE, priorStat.size).catch(() => {});
+      else await fsp.rm(HISTORY_OBSERVATIONS_FILE, { force: true }).catch(() => {});
+      throw error;
+    }
+  });
+  historyObservationAppendQueue = operation.catch(() => {});
+  return operation;
 }
 
 function historyDayIndex(dateText) {
@@ -14230,6 +14441,8 @@ async function loadRun(runId, options = {}) {
   const legacyCollectedAt = stat.mtime.toISOString();
   const files = await fsp.readdir(dirPath);
   const manifest = await readManifest(dirPath);
+  const allowUncommittedFrozenRead = options.frozenCommitRead === FROZEN_V2_UNCOMMITTED_READ;
+  if (!allowUncommittedFrozenRead && !await isVisibleCommittedFrozenRun(dirPath, manifest)) return null;
   const collectedAt = manifest?.dataAvailableAt
     || manifest?.collectionCompletedAt
     || manifest?.collectionStartedAt
@@ -14267,7 +14480,8 @@ async function loadRun(runId, options = {}) {
       ]
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
-  const datalabTrend = options.skipTraffic === true
+  const frozenCollectorRun = manifest?.collectorStrategy === FROZEN_V2_COLLECTOR_STRATEGY;
+  const datalabTrend = options.skipTraffic === true || frozenCollectorRun
     ? null
     : await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
@@ -14669,18 +14883,21 @@ async function runCrawlerLegacySingleFlight(payload) {
 }
 
 async function runCrawler(payload) {
-  const plan = crawlExecutionPlan(payload);
-  assertSupportedSearchIntent(plan);
+  const frozenV2 = isTrustedFrozenPayload(payload);
+  const plan = frozenV2 ? frozenV2ExecutionPlan(payload) : crawlExecutionPlan(payload);
+  if (!frozenV2) assertSupportedSearchIntent(plan);
   const withIntent = (result) => ({
     ...(result && typeof result === "object" ? result : { output: result }),
     resolvedIntent: plan.resolvedIntent,
     resolvedSearchMode: plan.resolvedSearchMode,
     selectedSearchCandidate: plan.selectedSearchCandidate,
     intentSupported: plan.intentSupported,
-    intentWarning: plan.intentWarning
+    intentWarning: plan.intentWarning,
+    collectorStrategy: plan.collectorStrategy || "current",
+    frozenV2Collector: frozenV2
   });
   const signature = crawlPayloadSignature(payload);
-  const cached = reusableRecentCrawlResult(signature);
+  const cached = frozenV2 ? null : reusableRecentCrawlResult(signature);
   if (cached) {
     return withIntent(resolveCrawlJob(cached, { signature, waiterCount: 1 }, "recent_reuse"));
   }
@@ -14694,7 +14911,7 @@ async function runCrawler(payload) {
   try {
     reservedJob = await reserveAndCreateCrawlJob(payload, signature);
   } catch (error) {
-    if (normalizeUserRole(payload.sourceRole) === USER_ROLES.admin) {
+    if (!frozenV2 && normalizeUserRole(payload.sourceRole) === USER_ROLES.admin) {
       await attachNaverFallbackToError(error, payload, { role: USER_ROLES.admin });
     }
     throw error;
@@ -14704,7 +14921,7 @@ async function runCrawler(payload) {
     const result = await job.promise;
     return withIntent(resolveCrawlJob(result, job, reservedJob.shared ? "shared" : "completed"));
   } catch (error) {
-    if (normalizeUserRole(payload.sourceRole) === USER_ROLES.admin) {
+    if (!frozenV2 && normalizeUserRole(payload.sourceRole) === USER_ROLES.admin) {
       await attachNaverFallbackToError(error, payload, { role: USER_ROLES.admin });
     }
     throw error;
@@ -14970,6 +15187,7 @@ async function cancelActiveTop20WorkerCollection(reason = "관리자 요청으�
 }
 
 async function currentCrawlStatusForRequest(options = {}) {
+  if (activeCrawlPromise || activeCrawlJob || activeCrawlChild) return currentCrawlStatus(options);
   const workerOutcome = await refreshTop20WorkerOutcome();
   if (activeTop20WorkerJob && workerOutcome?.status === "active") {
     const elapsedSeconds = Math.max(
@@ -15159,7 +15377,165 @@ function activeCrawlStageStatus(elapsedSeconds = 0) {
   return { currentStage, stages: rendered };
 }
 
+async function runFrozenV2CrawlerInternal(payload) {
+  if (!isTrustedFrozenPayload(payload)) {
+    const error = new Error("Frozen V2 수집 입력이 신뢰 경계를 통과하지 못했습니다.");
+    error.code = "FROZEN_V2_PAYLOAD_UNTRUSTED";
+    error.statusCode = 403;
+    error.retryable = false;
+    throw error;
+  }
+  const prepared = await prepareFrozenCollectorExecution({
+    payload,
+    rootDir: ROOT,
+    outputsRoot: OUTPUTS_DIR,
+    configDir: CONFIG_DIR,
+    taskId: activeCrawlJob?.id || `frozen-${crypto.randomUUID()}`
+  });
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(prepared.command, prepared.args, {
+      cwd: prepared.cwd,
+      env: prepared.env,
+      windowsHide: prepared.windowsHide
+    });
+    activeCrawlChild = child;
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    const childTimeout = setTimeout(() => {
+      if (settled || child.killed) return;
+      timedOut = true;
+      try {
+        child.kill();
+      } catch {
+        // The close/error handlers own the final fail-closed result.
+      }
+    }, FROZEN_V2_CHILD_TIMEOUT_MS);
+    childTimeout.unref?.();
+
+    const rejectAfterCleanup = async (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(childTimeout);
+      await safeCleanupFrozenStaging({ outputsRoot: OUTPUTS_DIR, stagingRoot: prepared.stagingRoot }).catch(() => {});
+      reject(error);
+    };
+
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString("utf8");
+      stdout = (stdout + text).slice(-2 * 1024 * 1024);
+      recordCrawlRuntimeOutputChunk(activeCrawlJob, text);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = (stderr + chunk.toString("utf8")).slice(-64 * 1024);
+    });
+    child.once("error", (spawnError) => {
+      clearTimeout(childTimeout);
+      if (activeCrawlCancelRequested) {
+        void rejectAfterCleanup(crawlCancelledError(activeCrawlCancelReason));
+        return;
+      }
+      const failure = classifyCollectorProcessFailure({ spawnError });
+      console.warn(`[crawl-failure] diagnosticId=${failure.diagnosticId} code=${failure.code} exitCode=spawn strategy=${FROZEN_V2_COLLECTOR_STRATEGY}`);
+      void rejectAfterCleanup(failure);
+    });
+    child.once("close", async (code) => {
+      clearTimeout(childTimeout);
+      if (activeCrawlChild === child) activeCrawlChild = null;
+      recordCrawlRuntimeOutputChunk(activeCrawlJob, "", true);
+      if (settled) return;
+      if (activeCrawlCancelRequested) {
+        await rejectAfterCleanup(crawlCancelledError(activeCrawlCancelReason));
+        return;
+      }
+      if (code !== 0 || timedOut) {
+        const failure = timedOut
+          ? createCrawlFailure("NAVER_TEMPORARY_UNAVAILABLE")
+          : classifyCollectorProcessFailure({ stderr, stdout, exitCode: code });
+        if (timedOut) failure.providerDecisionReason = "frozen_child_timeout";
+        console.warn(`[crawl-failure] diagnosticId=${failure.diagnosticId} code=${failure.code} exitCode=${Number.isInteger(code) ? code : "unknown"} strategy=${FROZEN_V2_COLLECTOR_STRATEGY}`);
+        await rejectAfterCleanup(failure);
+        return;
+      }
+
+      try {
+        await stopNaverProviderAttemptHeartbeat(activeCrawlJob);
+        if (activeCrawlJob?.providerHeartbeatFailure) throw activeCrawlJob.providerHeartbeatFailure;
+        const printedManifest = parseFrozenCollectorStdoutManifest(stdout);
+        const located = await locateSingleFrozenRunDirectory({
+          stagingRoot: prepared.stagingRoot,
+          runStamp: payload.runStamp,
+          seededDirectoryNames: prepared.fallbackInputs.seededDirectoryNames
+        });
+        if (path.resolve(String(printedManifest.outputDir || "")) !== located.runDirectory) {
+          const error = new Error("Frozen V2 stdout manifest와 staging run이 일치하지 않습니다.");
+          error.code = "FROZEN_V2_RESULT_IDENTITY_MISMATCH";
+          error.statusCode = 502;
+          error.retryable = false;
+          throw error;
+        }
+        await sanitizeFrozenRunArtifacts({
+          stagingRoot: prepared.stagingRoot,
+          runDirectory: located.runDirectory
+        });
+        const validation = await validateStoredFrozenRunManifest({
+          payload,
+          stagingRoot: prepared.stagingRoot,
+          runId: located.runId,
+          runDirectory: located.runDirectory,
+          seededDirectoryNames: prepared.fallbackInputs.seededDirectoryNames
+        });
+        if (activeCrawlCancelRequested) throw crawlCancelledError(activeCrawlCancelReason);
+        if (activeCrawlJob?.providerHeartbeatFailure) throw activeCrawlJob.providerHeartbeatFailure;
+        const promoted = await promoteValidatedFrozenRun({ validation, outputsRoot: OUTPUTS_DIR });
+        let history;
+        let frozenCommit;
+        try {
+          history = await appendHistoryForRun(promoted.runId, {
+            skipCompanyMaster: true,
+            skipTraffic: true,
+            frozenCommitRead: FROZEN_V2_UNCOMMITTED_READ,
+            afterAppend: async (historyResult) => {
+              frozenCommit = await commitPromotedFrozenRun({
+                promoted,
+                outputsRoot: OUTPUTS_DIR,
+                history: historyResult
+              });
+            }
+          });
+          if (!frozenCommit?.committed) {
+            const error = new Error("Frozen V2 promoted run commit marker was not created");
+            error.code = "FROZEN_V2_COMMIT_MARKER_MISSING";
+            error.statusCode = 502;
+            throw error;
+          }
+        } catch (error) {
+          await rollbackPromotedFrozenRun({ promoted, outputsRoot: OUTPUTS_DIR });
+          throw error;
+        }
+        settled = true;
+        clearTimeout(childTimeout);
+        resolve({
+          output: promoted.manifest,
+          runId: promoted.runId,
+          history,
+          collectorStrategy: FROZEN_V2_COLLECTOR_STRATEGY,
+          executionIdentityHash: promoted.executionIdentityHash,
+          promoted: true,
+          committed: frozenCommit.committed,
+          committedAt: frozenCommit.committedAt
+        });
+      } catch (error) {
+        await rejectAfterCleanup(error);
+      }
+    });
+  });
+}
+
 async function runCrawlerInternal(payload) {
+  if (isTrustedFrozenPayload(payload)) return runFrozenV2CrawlerInternal(payload);
   const plan = crawlExecutionPlan(payload);
   const keyword = plan.keyword;
   const collectionSource = normalizeCollectionSource(payload.collectionSource, payload.sourceRole);
@@ -15373,7 +15749,19 @@ async function serveOutput(reqUrl, res) {
   } catch {
     return notFound(res);
   }
+  if (
+    !runId
+    || runId === FROZEN_V2_STAGING_DIRECTORY
+    || runId.startsWith(".")
+    || path.basename(runId) !== runId
+  ) return notFound(res);
   if (!await isVisibleCommittedWorkerRun(runId)) return notFound(res);
+  const runDirectory = resolveRunDir(runId);
+  if (!runDirectory || !fs.existsSync(runDirectory) || !(await fsp.stat(runDirectory)).isDirectory()) {
+    return notFound(res);
+  }
+  const manifest = await readManifest(runDirectory);
+  if (!await isVisibleCommittedFrozenRun(runDirectory, manifest)) return notFound(res);
   const filePath = safeJoin(OUTPUTS_DIR, relative);
   if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
   const ext = path.extname(filePath).toLowerCase();
@@ -15934,10 +16322,15 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req).catch(() => ({}));
       const reason = String(payload.reason || "관리자 요청으로 수집을 중지합니다.").trim();
-      await restoreActiveTop20WorkerJob();
-      const result = activeTop20WorkerJob
-        ? await cancelActiveTop20WorkerCollection(reason)
-        : terminateActiveCrawlChild(reason, session.role);
+      let result;
+      if (activeCrawlPromise || activeCrawlJob || activeCrawlChild) {
+        result = terminateActiveCrawlChild(reason, session.role);
+      } else {
+        await restoreActiveTop20WorkerJob();
+        result = activeTop20WorkerJob
+          ? await cancelActiveTop20WorkerCollection(reason)
+          : terminateActiveCrawlChild(reason, session.role);
+      }
       return send(res, result.blocked ? 409 : 200, {
         ...result,
         error: result.blocked ? result.message : undefined,
@@ -15957,7 +16350,7 @@ async function route(req, res) {
           items: await Promise.all(items.map(async (item) => ({
             clientKey: item.clientKey || "",
             estimate: await publicCrawlEstimateForSession(
-              normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewAdminCrawlPayload(item) : item,
+              normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewFrozenCrawlPayload(item) : item,
               timingStore,
               session
             )
@@ -15965,7 +16358,7 @@ async function route(req, res) {
         });
       }
       return send(res, 200, await publicCrawlEstimateForSession(
-        normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewAdminCrawlPayload(payload) : payload,
+        normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewFrozenCrawlPayload(payload) : payload,
         timingStore,
         session
       ));
@@ -16113,11 +16506,12 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       assertRequestRateLimit(req, "adminCrawl", RATE_LIMIT_POLICIES.adminCrawl, session.username || "");
       const payload = await parseJsonBody(req);
-      const trustedPayload = {
-        ...trustedPreviewAdminCrawlPayload(payload),
+      const trustedPayload = trustedPreviewFrozenCrawlPayload({
+        ...payload,
         providerAttemptExplicit: true
-      };
+      });
       const useTop20Worker = IS_V2_PREVIEW_RUNTIME
+        && !isTrustedFrozenPayload(trustedPayload)
         && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
         && isV2Top20WorkerEligible(trustedPayload);
       const result = useTop20Worker
@@ -16250,6 +16644,7 @@ module.exports = {
     crawlRuntimeStageRows,
     crawlTimingConditions,
     estimateCrawlCompletion,
+    frozenV2ExecutionPlan,
     isAdminPreviewMapGeocodingItemEligible,
     isAdminPreviewMapGeocodingRequest,
     isSameOriginMapGeocodingRequest,
@@ -16268,6 +16663,7 @@ module.exports = {
     scaleCrawlStages,
     storedNaverFallbackSearchContract,
     trustedPreviewAdminCrawlPayload,
+    trustedPreviewFrozenCrawlPayload,
     v2Top20WorkerContract,
     validateNaverLegacyLimitedRunManifest,
     summarizeRankingRows,
