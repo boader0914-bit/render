@@ -3,8 +3,11 @@
 const crypto = require("node:crypto");
 
 const COLLECTION_WORKER_CANARY_PROTOCOL_SCHEMA_VERSION = "collection-worker-canary-protocol.v1";
-const COLLECTION_WORKER_CANARY_WORKER_ID = "collector_worker_preview_01";
-const COLLECTION_WORKER_CANARY_WORKER_POOL_ID = "collector_pool_preview_01";
+// Stage 16 uses a distinct execution identity so an immutable terminal receipt
+// from an earlier Preview canary cannot be mistaken for this environment-parity
+// worker. The service-global NAVER circuit remains shared.
+const COLLECTION_WORKER_CANARY_WORKER_ID = "collector_worker_v2_env_preview_01";
+const COLLECTION_WORKER_CANARY_WORKER_POOL_ID = "collector_pool_v2_env_preview_01";
 const COLLECTION_WORKER_CANARY_REQUEST_KEY_ID = "collector_worker_request_v1";
 const COLLECTION_WORKER_CANARY_DISPATCH_KEY_ID = "preview_dispatch_v1";
 const COLLECTION_WORKER_CANARY_ARTIFACT_KEY_ID = "collector_artifact_v1";

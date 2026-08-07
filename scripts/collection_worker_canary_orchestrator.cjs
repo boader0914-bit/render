@@ -55,7 +55,10 @@ const {
 const {
   assertPrivateExecutionContract
 } = require("./v2_env_worker_job_adapter.cjs");
-const COLLECTION_WORKER_CANARY_BACKEND_ID = "naver_place_search";
+// Keep prior one-shot receipts immutable while giving the V2 environment
+// worker its own backend identity. Provider health is still governed by the
+// shared naver_place_search circuit store.
+const COLLECTION_WORKER_CANARY_BACKEND_ID = "naver_place_first_request_v2_env";
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/u;

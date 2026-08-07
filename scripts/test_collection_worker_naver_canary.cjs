@@ -27,6 +27,7 @@ const {
 } = require("./naver_legacy_canary_live_transport.cjs");
 const {
   CLAIM_PATH,
+  COLLECTION_WORKER_CANARY_BACKEND_ID,
   COLLECTION_WORKER_CANARY_REQUEST_KEY_ID,
   COLLECTION_WORKER_CANARY_TARGET_SERVICE_ID,
   COLLECTION_WORKER_CANARY_WORKER_ID,
@@ -483,6 +484,32 @@ async function main() {
       () => successSystem.orchestrator.prepare({ operatorToken: OPERATOR_TOKEN, contract: contract() }),
       (error) => error?.code === "COLLECTION_WORKER_CANARY_ALREADY_CREATED"
     );
+
+    const historicalReceiptRoot = path.join(root, "historical-receipt-isolation");
+    await fsp.mkdir(historicalReceiptRoot, { recursive: true });
+    const historicalReceiptSystem = await createFixtureSystem(historicalReceiptRoot, keySet);
+    await historicalReceiptSystem.jobStore.createOrReuseJob({
+      jobId: "job-canary-historical-receipt",
+      attemptId: "attempt:canary-historical-receipt",
+      idempotencyKey: "b".repeat(64),
+      contractHash: "c".repeat(64),
+      executionIdentityHash: "d".repeat(64),
+      backendId: "naver_place_search",
+      backendVersion: "e".repeat(40),
+      workerPoolId: "collector_pool_preview_01",
+      providerWorkflowRevision: 0,
+      maxProviderCalls: 1,
+      now: NOW
+    });
+    const isolatedPrepared = await historicalReceiptSystem.orchestrator.prepare({
+      operatorToken: OPERATOR_TOKEN,
+      contract: contract()
+    });
+    assert.equal(isolatedPrepared.status, "queued");
+    const isolatedSnapshot = await historicalReceiptSystem.jobStore.readSnapshot();
+    assert.equal(isolatedSnapshot.jobs.length, 2, "historical receipts must be preserved");
+    assert.equal(isolatedSnapshot.jobs[0].backendId, "naver_place_search");
+    assert.equal(isolatedSnapshot.jobs[1].backendId, COLLECTION_WORKER_CANARY_BACKEND_ID);
 
     const restartQueuedRoot = path.join(root, "restart-queued");
     await fsp.mkdir(restartQueuedRoot, { recursive: true });
