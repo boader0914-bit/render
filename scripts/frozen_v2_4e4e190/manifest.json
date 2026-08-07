@@ -25,8 +25,8 @@
     {
       "id": "fetch-safety-preload",
       "dependencyPath": "scripts/frozen_v2_4e4e190/runtime/fetch_safety_preload.cjs",
-      "dependencyBlob": "35f1881ebf083ea34045c050dd8eae152dcbd705",
-      "reason": "Applies the current outbound allowlist plus 403, 429, and challenge fail-closed boundary outside the immutable source"
+      "dependencyBlob": "cd5aa4cb532d1a87649c61c8e4026041a1a9ae6a",
+      "reason": "Applies the current outbound allowlist, the verified Goodchoice-to-Yeogi redirect, and the 403, 429, and challenge fail-closed boundary outside the immutable source"
     },
     {
       "id": "locked-workbook-dependency",

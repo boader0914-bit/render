@@ -311,7 +311,10 @@ try {
     ["internal-address", "http://127.0.0.1/search?query=synthetic-secret-query-value"],
     ["booking-host-confusion", "https://m.booking.naver.com.fixture.invalid/booking/3/bizes/123/search"],
     ["booking-wrong-path", "https://m.booking.naver.com/booking/3/bizes/123/admin"],
-    ["booking-credentials", "https://user:pass@m.booking.naver.com/booking/3/bizes/123/search"]
+    ["booking-credentials", "https://user:pass@m.booking.naver.com/booking/3/bizes/123/search"],
+    ["yeogi-direct-target", "https://www.yeogi.com/domestic-accommodations?query=synthetic-secret-query-value"],
+    ["yeogi-wrong-path", "https://www.yeogi.com/admin?query=synthetic-secret-query-value"],
+    ["yeogi-host-confusion", "https://www.yeogi.com.fixture.invalid/domestic-accommodations?query=synthetic-secret-query-value"]
   ]) {
     const rejected = runScenario(tempRoot, id, {
       url,
@@ -349,6 +352,55 @@ try {
   });
   assert.equal(allowedRedirect.status, 0, allowedRedirect.stderr || "allowlisted redirect must complete");
   assert.deepEqual(JSON.parse(allowedRedirect.stdout), { blocked: false, status: 200, calls: 2 });
+
+  const verifiedYeogiRedirect = runScenario(tempRoot, "verified-yeogi-redirect", {
+    url: "https://www.goodchoice.kr/product/result?keyword=synthetic-secret-query-value",
+    status: 403,
+    body: "Sorry, you have been blocked synthetic-sensitive-response-body",
+    expectedBlocked: false,
+    responses: [
+      {
+        status: 302,
+        headers: {
+          location: "https://www.yeogi.com/domestic-accommodations?keyword=synthetic-secret-query-value"
+        },
+        body: ""
+      },
+      {
+        status: 403,
+        headers: { "content-type": "text/html" },
+        body: "Sorry, you have been blocked synthetic-sensitive-response-body"
+      }
+    ]
+  });
+  assert.equal(
+    verifiedYeogiRedirect.status,
+    0,
+    verifiedYeogiRedirect.stderr || "verified Goodchoice to Yeogi redirect must remain a nonfatal OTA response"
+  );
+  assert.equal(verifiedYeogiRedirect.stderr.includes("CRAWL_ERROR_V1:"), false);
+  assert.deepEqual(JSON.parse(verifiedYeogiRedirect.stdout), { blocked: false, status: 403, calls: 2 });
+
+  const rejectedYeogiRedirect = runScenario(tempRoot, "rejected-yeogi-redirect-path", {
+    url: "https://www.goodchoice.kr/product/result?keyword=synthetic-secret-query-value",
+    expectedFailureCode: "FROZEN_V2_REDIRECT_NOT_ALLOWED",
+    body: "synthetic-sensitive-response-body",
+    responses: [
+      {
+        status: 302,
+        headers: { location: "https://www.yeogi.com/admin" },
+        body: ""
+      }
+    ]
+  });
+  assert.equal(rejectedYeogiRedirect.status, 1, "unverified Yeogi redirect path must fail closed");
+  assert.equal(markerPayload(rejectedYeogiRedirect.stderr).code, "NAVER_TEMPORARY_UNAVAILABLE");
+  assert.deepEqual(JSON.parse(rejectedYeogiRedirect.stdout), {
+    failed: true,
+    code: "FROZEN_V2_REDIRECT_NOT_ALLOWED",
+    retryable: false,
+    calls: 1
+  });
 
   const rejectedRedirect = runScenario(tempRoot, "rejected-redirect", {
     url: "https://www.goodchoice.kr/product/result?keyword=synthetic-secret-query-value",

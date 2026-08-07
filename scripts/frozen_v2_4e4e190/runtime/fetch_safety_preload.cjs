@@ -30,6 +30,14 @@ const FROZEN_REQUEST_ALLOWLIST = Object.freeze(new Map([
   ["www.goodchoice.kr", Object.freeze([/^\/product\/result$/u])],
   ["trip.ddnayo.com", Object.freeze([/^\/web-api\/total-search$/u])]
 ]));
+const FROZEN_VERIFIED_REDIRECTS = Object.freeze([
+  Object.freeze({
+    fromHostname: "www.goodchoice.kr",
+    fromPathname: /^\/product\/result$/u,
+    toHostname: "www.yeogi.com",
+    toPathname: /^\/domestic-accommodations$/u
+  })
+]);
 
 function requestUrl(input) {
   try {
@@ -50,13 +58,30 @@ function requestHostname(input) {
   return requestUrl(input)?.hostname.toLowerCase() || null;
 }
 
-function isAllowedFrozenRequest(input) {
-  const url = requestUrl(input);
+function isSafeFrozenUrl(url) {
   if (!url || url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") || url.hash) {
     return false;
   }
+  return true;
+}
+
+function isAllowedFrozenRequest(input) {
+  const url = requestUrl(input);
+  if (!isSafeFrozenUrl(url)) return false;
   const patterns = FROZEN_REQUEST_ALLOWLIST.get(url.hostname.toLowerCase());
   return Boolean(patterns?.some((pattern) => pattern.test(url.pathname)));
+}
+
+function isAllowedVerifiedRedirect(fromInput, toInput) {
+  const fromUrl = requestUrl(fromInput);
+  const toUrl = requestUrl(toInput);
+  if (!isSafeFrozenUrl(fromUrl) || !isSafeFrozenUrl(toUrl)) return false;
+  return FROZEN_VERIFIED_REDIRECTS.some((transition) => (
+    fromUrl.hostname.toLowerCase() === transition.fromHostname
+    && transition.fromPathname.test(fromUrl.pathname)
+    && toUrl.hostname.toLowerCase() === transition.toHostname
+    && transition.toPathname.test(toUrl.pathname)
+  ));
 }
 
 function isRedirectStatus(status) {
@@ -220,9 +245,10 @@ function installFetchSafetyPreload(target = globalThis) {
     if (latchedFailure) return stopWithFailure(latchedFailure);
     let currentUrl = requestUrl(args[0]);
     let currentInit = { ...(args[1] || {}), redirect: "manual" };
+    let currentUrlAllowedByVerifiedRedirect = false;
     let response = null;
     for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
-      if (!isAllowedFrozenRequest(currentUrl)) {
+      if (!isAllowedFrozenRequest(currentUrl) && !currentUrlAllowedByVerifiedRedirect) {
         return stopWithFailure(safeFailure("FROZEN_V2_REQUEST_NOT_ALLOWED"));
       }
       try {
@@ -241,11 +267,13 @@ function installFetchSafetyPreload(target = globalThis) {
       } catch {
         nextUrl = null;
       }
-      if (!isAllowedFrozenRequest(nextUrl)) {
+      const allowedByVerifiedRedirect = isAllowedVerifiedRedirect(currentUrl, nextUrl);
+      if (!isAllowedFrozenRequest(nextUrl) && !allowedByVerifiedRedirect) {
         return stopWithFailure(safeFailure("FROZEN_V2_REDIRECT_NOT_ALLOWED"));
       }
       currentInit = redirectedFetchInit(currentInit, response.status, currentUrl, nextUrl);
       currentUrl = nextUrl;
+      currentUrlAllowedByVerifiedRedirect = allowedByVerifiedRedirect;
     }
     if (latchedFailure) return stopWithFailure(latchedFailure);
     const hostname = requestHostname(currentUrl);
@@ -284,6 +312,7 @@ function installFetchSafetyPreload(target = globalThis) {
     installed: true,
     version: 1,
     isAllowedFrozenRequest,
+    isAllowedVerifiedRedirect,
     isNaverHostname,
     xlsxGuard: installXlsxResolutionGuard()
   });
