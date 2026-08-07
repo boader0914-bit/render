@@ -15,6 +15,7 @@ const COLLECTION_WORKER_CANARY_TARGET_SERVICE_ID = "srv-d9q6mrfavr4c73atllf0";
 const COLLECTION_WORKER_CANARY_RUNTIME_ID_PREFIX = `runtime:${COLLECTION_WORKER_CANARY_TARGET_SERVICE_ID}:`;
 const OPERATOR_TOKEN_HEADER = "x-collector-canary-token";
 const PREPARE_PATH = "/api/internal/collection-worker/canary/prepare";
+const SIGNED_PREPARE_PATH = "/api/internal/collection-worker/canary/prepare-signed";
 const CLAIM_PATH = "/api/internal/collection-worker/jobs/claim";
 const PREFLIGHT_PATH = "/api/internal/collection-worker/jobs/preflight";
 const FINALIZE_PATH = "/api/internal/collection-worker/results/finalize";
@@ -130,6 +131,7 @@ module.exports = {
   OPERATOR_TOKEN_HEADER,
   PREFLIGHT_PATH,
   PREPARE_PATH,
+  SIGNED_PREPARE_PATH,
   artifactKeyProofPayload,
   buildArtifactKeyProof,
   decodeEd25519Key,

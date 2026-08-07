@@ -92,7 +92,8 @@ const {
   FINALIZE_PATH: COLLECTION_WORKER_FINALIZE_PATH,
   OPERATOR_TOKEN_HEADER: COLLECTION_WORKER_OPERATOR_TOKEN_HEADER,
   PREFLIGHT_PATH: COLLECTION_WORKER_PREFLIGHT_PATH,
-  PREPARE_PATH: COLLECTION_WORKER_PREPARE_PATH
+  PREPARE_PATH: COLLECTION_WORKER_PREPARE_PATH,
+  SIGNED_PREPARE_PATH: COLLECTION_WORKER_SIGNED_PREPARE_PATH
 } = require("./collection_worker_canary_protocol.cjs");
 const {
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
@@ -16242,6 +16243,17 @@ async function route(req, res) {
         "text/html; charset=utf-8",
         { "Cache-Control": "no-store" }
       );
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_SIGNED_PREPARE_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerCanaryOrchestrator.prepareFromSignedWorkerRequest({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return send(res, 201, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
     }
 
     if (req.method === "POST" && reqUrl.pathname === V2_ENV_WORKER_OPERATOR_PATH) {

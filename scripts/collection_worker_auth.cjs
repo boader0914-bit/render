@@ -12,6 +12,7 @@ const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{2,127}$/u;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
 const ALLOWED_PATH_SCOPES = Object.freeze({
+  "/api/internal/collection-worker/canary/prepare-signed": "collection:prepare",
   "/api/internal/collection-worker/jobs/claim": "collection:claim",
   "/api/internal/collection-worker/jobs/preflight": "collection:preflight",
   "/api/internal/collection-worker/jobs/heartbeat": "collection:heartbeat",

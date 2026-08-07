@@ -35,6 +35,7 @@ const {
   FAILURE_PATH,
   FINALIZE_PATH,
   PREFLIGHT_PATH,
+  SIGNED_PREPARE_PATH,
   createCollectionWorkerCanaryOrchestrator,
   stableJson
 } = require("./collection_worker_canary_orchestrator.cjs");
@@ -180,8 +181,10 @@ function internalFetch(orchestrator, counters) {
         counters.failureRequests = Number(counters.failureRequests || 0) + 1;
         counters.lastFailureBody = structuredClone(payload.body);
       }
-      const result = pathname === CLAIM_PATH
-        ? await orchestrator.claim({ signedRequest: payload.signedRequest, body: payload.body })
+      const result = pathname === SIGNED_PREPARE_PATH
+        ? await orchestrator.prepareFromSignedWorkerRequest({ signedRequest: payload.signedRequest, body: payload.body })
+        : pathname === CLAIM_PATH
+          ? await orchestrator.claim({ signedRequest: payload.signedRequest, body: payload.body })
         : pathname === PREFLIGHT_PATH
           ? await orchestrator.preflight({ signedRequest: payload.signedRequest, body: payload.body })
         : pathname === FINALIZE_PATH
@@ -296,6 +299,29 @@ async function main() {
     assert.equal(serializedResult.includes(KEYWORD), false);
     assert.equal(serializedResult.includes("Fixture lodging"), false);
     assert.equal(serializedResult.includes("pcmap.place.naver.com"), false);
+
+    const signedPrepareRoot = path.join(root, "signed-worker-prepare");
+    await fsp.mkdir(signedPrepareRoot, { recursive: true });
+    const signedPrepareSystem = await createFixtureSystem(signedPrepareRoot, keySet);
+    let signedPrepareProviderCalls = 0;
+    const signedPrepareCounters = { internal: 0 };
+    const signedPrepareResult = await runWorker(
+      signedPrepareSystem,
+      keySet,
+      liveTransport(async () => {
+        signedPrepareProviderCalls += 1;
+        return providerResponse(successBody());
+      }),
+      signedPrepareCounters,
+      {},
+      null,
+      { prepareContract: contract() }
+    );
+    assert.equal(signedPrepareProviderCalls, 1);
+    assert.equal(signedPrepareCounters.internal, 4, "signed prepare, claim, preflight, and finalize are expected");
+    assert.equal(signedPrepareResult.status, "ready");
+    assert.equal((await signedPrepareSystem.jobStore.readSnapshot()).jobs.length, 1);
+    assert.equal((await storedText(signedPrepareRoot)).includes(KEYWORD), false);
 
     const replayedFinalize = await successSystem.orchestrator.finalize({
       signedRequest: signedWorkerRequest(FINALIZE_PATH, counters.lastFinalizeBody, keySet, NOW),

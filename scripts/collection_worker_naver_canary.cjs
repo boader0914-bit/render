@@ -49,6 +49,7 @@ const {
   FAILURE_PATH,
   FINALIZE_PATH,
   PREFLIGHT_PATH,
+  SIGNED_PREPARE_PATH,
   buildArtifactKeyProof,
   decodeEd25519Key,
   stableJson
@@ -407,6 +408,22 @@ async function runCollectionWorkerNaverCanary(input = {}) {
   const internalFetchImpl = fixtureMode ? input.internalFetchImpl : globalThis.fetch;
   if (typeof internalFetchImpl !== "function") {
     throw fail("COLLECTION_WORKER_INTERNAL_TRANSPORT_INVALID", "Preview transport is unavailable", 500);
+  }
+
+  if (input.prepareContract) {
+    await postSignedWorkerRequest({
+      baseUrl: worker.baseUrl,
+      body: {
+        workerId: COLLECTION_WORKER_CANARY_WORKER_ID,
+        workerPoolId: COLLECTION_WORKER_CANARY_WORKER_POOL_ID,
+        workerCommit: worker.commit,
+        contract: input.prepareContract
+      },
+      fetchImpl: internalFetchImpl,
+      now,
+      path: SIGNED_PREPARE_PATH,
+      requestPrivateKey: worker.requestPrivateKey
+    });
   }
 
   const claim = await postSignedWorkerRequest({

@@ -42,6 +42,7 @@ const {
   OPERATOR_TOKEN_HEADER,
   PREFLIGHT_PATH,
   PREPARE_PATH,
+  SIGNED_PREPARE_PATH,
   decodeEd25519Key,
   stableJson,
   verifyArtifactKeyProof
@@ -77,6 +78,7 @@ const PREPARE_CONTRACT_KEYS = Object.freeze([
   "detailRankStart",
   "detailRankEnd"
 ]);
+const SIGNED_PREPARE_BODY_KEYS = Object.freeze(["workerId", "workerPoolId", "workerCommit", "contract"]);
 const CLAIM_BODY_KEYS = Object.freeze(["workerId", "workerPoolId", "workerCommit"]);
 const PREFLIGHT_BODY_KEYS = Object.freeze([
   "jobId",
@@ -550,6 +552,19 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
 
   async function prepareFromAdminSession(input = {}) {
     return prepareValidatedContract(input.contract);
+  }
+
+  async function prepareFromSignedWorkerRequest(input = {}) {
+    exactKeys(input.body, SIGNED_PREPARE_BODY_KEYS, "Collection worker signed prepare body");
+    verifyWorkerAuth(input.signedRequest, input.body, SIGNED_PREPARE_PATH);
+    if (
+      input.body.workerId !== COLLECTION_WORKER_CANARY_WORKER_ID
+      || input.body.workerPoolId !== COLLECTION_WORKER_CANARY_WORKER_POOL_ID
+      || input.body.workerCommit !== targetWorkerCommit
+    ) {
+      throw fail("COLLECTION_WORKER_CANARY_WORKER_MISMATCH", "Collection worker identity is invalid", 403);
+    }
+    return prepareValidatedContract(input.body.contract);
   }
 
   async function claim(input = {}) {
@@ -1043,6 +1058,7 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
     preflight,
     prepare,
     prepareFromAdminSession,
+    prepareFromSignedWorkerRequest,
     recordFailure,
     status() {
       return Object.freeze({
@@ -1076,6 +1092,7 @@ module.exports = {
   OPERATOR_TOKEN_HEADER,
   PREFLIGHT_PATH,
   PREPARE_PATH,
+  SIGNED_PREPARE_PATH,
   createCollectionWorkerCanaryOrchestrator,
   decodeKey: decodeEd25519Key,
   stableJson

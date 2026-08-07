@@ -20,6 +20,7 @@ assert.equal(PRESERVED_PREVIEW_ENDPOINTS.length, 7);
 assert.match(source, /reqUrl\.pathname === V2_ENV_WORKER_STATUS_PATH/u);
 assert.match(source, /reqUrl\.pathname === V2_ENV_WORKER_OPERATOR_PATH/u);
 assert.match(source, /prepareFromAdminSession/u);
+assert.match(source, /prepareFromSignedWorkerRequest/u);
 const status = projectV2EnvWorkerStatus({ enabled: true, targetWorkerCommit: "e".repeat(40), internalSecret: "forbidden", query: "forbidden" });
 assert.equal(V2_ENV_WORKER_STATUS_PATH, "/api/admin/collection-worker/v2-env-canary/status");
 assert.equal(V2_ENV_WORKER_OPERATOR_PATH, "/admin/collection-worker/v2-env-canary");

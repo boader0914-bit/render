@@ -11,7 +11,11 @@ const {
 async function main() {
   let result;
   try {
-    result = await runCollectionWorkerNaverCanary();
+    const encodedArg = process.argv.find((value) => value.startsWith("--prepare-b64="));
+    const prepareContract = encodedArg
+      ? JSON.parse(Buffer.from(encodedArg.slice("--prepare-b64=".length), "base64url").toString("utf8"))
+      : null;
+    result = await runCollectionWorkerNaverCanary(prepareContract ? { prepareContract } : {});
     if (
       result.status !== "ready"
       || result.organicCount !== 50
