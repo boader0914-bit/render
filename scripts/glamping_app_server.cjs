@@ -81,7 +81,9 @@ const {
   createCollectionWorkerRunTransactionStore
 } = require("./collection_worker_run_transaction.cjs");
 const {
+  V2_ENV_WORKER_OPERATOR_PATH,
   V2_ENV_WORKER_STATUS_PATH,
+  v2EnvWorkerOperatorPage,
   projectV2EnvWorkerStatus
 } = require("./v2_env_worker_preview_api_bridge.cjs");
 const {
@@ -16230,6 +16232,58 @@ async function route(req, res) {
     if (routeRolePage(req, res, reqUrl, session)) return;
 
     if (reqUrl.pathname === "/admin" && !requireAdminSession(session, req, res)) return;
+
+    if (req.method === "GET" && reqUrl.pathname === V2_ENV_WORKER_OPERATOR_PATH) {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(
+        res,
+        200,
+        v2EnvWorkerOperatorPage(),
+        "text/html; charset=utf-8",
+        { "Cache-Control": "no-store" }
+      );
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === V2_ENV_WORKER_OPERATOR_PATH) {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!isSameOriginMapGeocodingRequest(req)) {
+        return send(res, 403, { error: "Same-origin admin action required" });
+      }
+      const payload = await parseLoginBody(req).catch(() => ({}));
+      const date = String(payload.date || "").trim();
+      try {
+        const result = await collectionWorkerCanaryOrchestrator.prepareFromAdminSession({
+          contract: {
+            keyword: String(payload.keyword || "").trim(),
+            searchMode: "keyword",
+            collectionMode: "precision",
+            collectionPurpose: "revenue_detail",
+            productMode: "all",
+            checkIn: date,
+            checkOut: date,
+            rankStart: 1,
+            rankEnd: 50,
+            detailRankStart: 1,
+            detailRankEnd: 3
+          }
+        });
+        return send(
+          res,
+          201,
+          v2EnvWorkerOperatorPage({ date, result }),
+          "text/html; charset=utf-8",
+          { "Cache-Control": "no-store" }
+        );
+      } catch (error) {
+        return send(
+          res,
+          Number(error?.statusCode || 409),
+          v2EnvWorkerOperatorPage({ date, errorCode: String(error?.code || "COLLECTION_WORKER_CANARY_PREPARE_FAILED") }),
+          "text/html; charset=utf-8",
+          { "Cache-Control": "no-store" }
+        );
+      }
+    }
 
     if (req.method === "HEAD" && ["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
       return sendHead(res, 200, "text/html; charset=utf-8");

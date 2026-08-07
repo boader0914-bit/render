@@ -443,11 +443,10 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
     );
   }
 
-  async function prepare(input = {}) {
+  async function prepareValidatedContract(contract) {
     assertReady();
-    normalizeOperatorToken(input.operatorToken, options.operatorTokenSha256);
-    exactKeys(input.contract, PREPARE_CONTRACT_KEYS, "Collection worker canary contract");
-    assertPrivateExecutionContract(input.contract);
+    exactKeys(contract, PREPARE_CONTRACT_KEYS, "Collection worker canary contract");
+    assertPrivateExecutionContract(contract);
     await reconcileFirstUse();
     const existing = await jobStore.readSnapshot();
     if (existing.jobs.some((job) => job.backendId === COLLECTION_WORKER_CANARY_BACKEND_ID)) {
@@ -480,7 +479,7 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
         workerId: COLLECTION_WORKER_CANARY_WORKER_ID,
         workerPoolId: COLLECTION_WORKER_CANARY_WORKER_POOL_ID,
         nonce: crypto.randomBytes(18).toString("base64url"),
-        contract: input.contract,
+        contract,
         authorization: {
           enabled: true,
           actualCallsEnabled: true,
@@ -496,7 +495,7 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
       const executionPayload = buildCollectionWorkerExecutionPayload({
         jobId,
         attemptId,
-        contract: input.contract
+        contract
       }, signedJob);
       const storedJob = await jobStore.createOrReuseJob({
         jobId,
@@ -542,6 +541,15 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
       }
       throw error;
     }
+  }
+
+  async function prepare(input = {}) {
+    normalizeOperatorToken(input.operatorToken, options.operatorTokenSha256);
+    return prepareValidatedContract(input.contract);
+  }
+
+  async function prepareFromAdminSession(input = {}) {
+    return prepareValidatedContract(input.contract);
   }
 
   async function claim(input = {}) {
@@ -1034,6 +1042,7 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
     finalize,
     preflight,
     prepare,
+    prepareFromAdminSession,
     recordFailure,
     status() {
       return Object.freeze({

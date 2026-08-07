@@ -511,6 +511,20 @@ async function main() {
     assert.equal(isolatedSnapshot.jobs[0].backendId, "naver_place_search");
     assert.equal(isolatedSnapshot.jobs[1].backendId, COLLECTION_WORKER_CANARY_BACKEND_ID);
 
+    const adminSessionRoot = path.join(root, "trusted-admin-session-prepare");
+    await fsp.mkdir(adminSessionRoot, { recursive: true });
+    const adminSessionSystem = await createFixtureSystem(adminSessionRoot, keySet);
+    const adminPrepared = await adminSessionSystem.orchestrator.prepareFromAdminSession({
+      contract: contract()
+    });
+    assert.equal(adminPrepared.status, "queued");
+    assert.equal(adminPrepared.maxProviderAttempts, 1);
+    assert.equal(adminPrepared.resultWriteApproved, false);
+    await assert.rejects(
+      () => adminSessionSystem.orchestrator.prepareFromAdminSession({ contract: contract() }),
+      (error) => error?.code === "COLLECTION_WORKER_CANARY_ALREADY_CREATED"
+    );
+
     const restartQueuedRoot = path.join(root, "restart-queued");
     await fsp.mkdir(restartQueuedRoot, { recursive: true });
     const restartQueuedOriginal = await createFixtureSystem(restartQueuedRoot, keySet);
