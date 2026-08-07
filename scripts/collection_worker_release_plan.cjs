@@ -4,10 +4,11 @@ const {
   FIXED_V2_WORKER_RUNTIME_FINGERPRINT
 } = require("./collection_worker_contract.cjs");
 
-const COLLECTION_WORKER_RELEASE_PLAN_VERSION = "collector-worker-disabled-release.v1";
+const COLLECTION_WORKER_RELEASE_PLAN_VERSION = "collector-worker-disabled-release.v2";
 const COLLECTION_WORKER_SERVICE_TYPE = "background_worker";
 const COLLECTION_WORKER_REGION = "singapore";
 const COLLECTION_WORKER_START_COMMAND = "npm run start:collector-worker";
+const COLLECTION_WORKER_BUILD_COMMAND = "npm install";
 
 function buildDisabledCollectorWorkerReleasePlan(input = {}) {
   const repository = String(input.repository || "boader0914-bit/render").trim();
@@ -25,7 +26,7 @@ function buildDisabledCollectorWorkerReleasePlan(input = {}) {
     repository,
     branch,
     sourceCommit,
-    buildCommand: "npm ci --omit=dev",
+    buildCommand: COLLECTION_WORKER_BUILD_COMMAND,
     startCommand: COLLECTION_WORKER_START_COMMAND,
     autoDeploy: false,
     persistentDisk: false,
@@ -45,6 +46,7 @@ function buildDisabledCollectorWorkerReleasePlan(input = {}) {
 }
 
 module.exports = {
+  COLLECTION_WORKER_BUILD_COMMAND,
   COLLECTION_WORKER_REGION,
   COLLECTION_WORKER_RELEASE_PLAN_VERSION,
   COLLECTION_WORKER_SERVICE_TYPE,

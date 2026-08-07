@@ -48,6 +48,13 @@ const {
 } = require("./collection_worker_canary_protocol.cjs");
 
 const COLLECTION_WORKER_CANARY_ORCHESTRATOR_SCHEMA_VERSION = "collection-worker-canary-orchestrator.v1";
+const {
+  V2_ENV_WORKER_PHASE,
+  V2_ENV_WORKER_STRATEGY
+} = require("./v2_env_worker_contract.cjs");
+const {
+  assertPrivateExecutionContract
+} = require("./v2_env_worker_job_adapter.cjs");
 const COLLECTION_WORKER_CANARY_BACKEND_ID = "naver_place_search";
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -437,6 +444,7 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
     assertReady();
     normalizeOperatorToken(input.operatorToken, options.operatorTokenSha256);
     exactKeys(input.contract, PREPARE_CONTRACT_KEYS, "Collection worker canary contract");
+    assertPrivateExecutionContract(input.contract);
     await reconcileFirstUse();
     const existing = await jobStore.readSnapshot();
     if (existing.jobs.some((job) => job.backendId === COLLECTION_WORKER_CANARY_BACKEND_ID)) {
@@ -511,6 +519,8 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
       return Object.freeze({
         schemaVersion: COLLECTION_WORKER_CANARY_ORCHESTRATOR_SCHEMA_VERSION,
         status: "queued",
+        strategy: V2_ENV_WORKER_STRATEGY,
+        phase: V2_ENV_WORKER_PHASE,
         jobId,
         contractHash: signedJob.contractHash,
         executionIdentityHash: signedJob.executionIdentityHash,
@@ -1026,6 +1036,8 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
       return Object.freeze({
         schemaVersion: COLLECTION_WORKER_CANARY_ORCHESTRATOR_SCHEMA_VERSION,
         enabled,
+        strategy: V2_ENV_WORKER_STRATEGY,
+        phase: V2_ENV_WORKER_PHASE,
         targetWorkerCommit: COMMIT_PATTERN.test(targetWorkerCommit) ? targetWorkerCommit : null,
         inMemoryPayloadCount: payloads.size,
         resultWriteApproved: false,

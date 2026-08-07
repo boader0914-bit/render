@@ -24,6 +24,10 @@ const {
   NAVER_LEGACY_CANARY_STRATEGY_VERSION
 } = require("./naver_legacy_canary_contract.cjs");
 const {
+  V2_ENV_WORKER_PHASE,
+  V2_ENV_WORKER_STRATEGY
+} = require("./v2_env_worker_contract.cjs");
+const {
   buildLiveCanaryPlan,
   parseLiveCanaryResponse,
   safeCanaryErrorResult
@@ -501,9 +505,10 @@ async function runCollectionWorkerNaverCanary(input = {}) {
   if (!isRegisteredNaverLegacyCanaryLiveTransport(providerTransport)) {
     throw fail("COLLECTION_WORKER_CANARY_TRANSPORT_INVALID", "NAVER canary transport is invalid", 500);
   }
+  const providerStartedAt = clock().toISOString();
   const provider = createProviderExecutor({
     transport: providerTransport,
-    startedAt: clock().toISOString(),
+    startedAt: providerStartedAt,
     afterProviderExecution: fixtureMode ? input.afterProviderExecution : null
   });
   const runtime = createCollectionWorkerRuntime({
@@ -577,6 +582,8 @@ async function runCollectionWorkerNaverCanary(input = {}) {
     code: finalized.code,
     targetServiceId: COLLECTION_WORKER_CANARY_TARGET_SERVICE_ID,
     targetCommit: worker.commit,
+    strategy: V2_ENV_WORKER_STRATEGY,
+    phase: V2_ENV_WORKER_PHASE,
     strategyVersion: NAVER_LEGACY_CANARY_STRATEGY_VERSION,
     executionIdentityHash: claimed.signedJob.executionIdentityHash,
     runtimeFingerprint,
@@ -591,6 +598,8 @@ async function runCollectionWorkerNaverCanary(input = {}) {
     observedRankCount: finalized.observedRankCount,
     providerFailureSubtype: finalized.providerFailureSubtype,
     diagnosticId: finalized.diagnosticId,
+    startedAt: providerStartedAt,
+    completedAt: clock().toISOString(),
     providerState: finalized.providerState,
     retryAt: finalized.retryAt,
     retryAfterSeconds: finalized.retryAfterSeconds,

@@ -435,7 +435,8 @@ async function verifyFrozenCollectorIntegrity(options = {}) {
     throw adapterError("FROZEN_V2_SOURCE_MISSING", "Frozen V2 source file is unavailable");
   }
   const content = await fsp.readFile(collectorPath);
-  const actualBlob = gitBlobHash(content);
+  const canonicalContent = Buffer.from(content.toString("utf8").replace(/\r\n/gu, "\n"), "utf8");
+  const actualBlob = gitBlobHash(canonicalContent);
   if (actualBlob !== FROZEN_V2_COLLECTOR_BLOB) {
     throw adapterError("FROZEN_V2_SOURCE_INTEGRITY_FAILED", "Frozen V2 source integrity check failed");
   }
@@ -453,8 +454,7 @@ async function verifyFrozenCollectorIntegrity(options = {}) {
     {
       id: "locked-workbook-dependency",
       relativePath: "package-lock.json",
-      expectedBlob: FROZEN_V2_PACKAGE_LOCK_BLOB,
-      canonicalLf: true
+      expectedBlob: FROZEN_V2_PACKAGE_LOCK_BLOB
     }
   ];
   const dependencyClosure = [];
@@ -469,13 +469,10 @@ async function verifyFrozenCollectorIntegrity(options = {}) {
       throw adapterError("FROZEN_V2_DEPENDENCY_MISSING", "Frozen V2 dependency is unavailable");
     }
     const dependencyContent = await fsp.readFile(dependencyPath);
-    const rawDependencyBlob = gitBlobHash(dependencyContent);
-    const canonicalDependencyBlob = dependency.canonicalLf
-      ? gitBlobHash(Buffer.from(dependencyContent.toString("utf8").replace(/\r\n/gu, "\n"), "utf8"))
-      : rawDependencyBlob;
-    const dependencyBlob = rawDependencyBlob === dependency.expectedBlob
-      ? rawDependencyBlob
-      : canonicalDependencyBlob;
+    const canonicalDependencyBlob = gitBlobHash(
+      Buffer.from(dependencyContent.toString("utf8").replace(/\r\n/gu, "\n"), "utf8")
+    );
+    const dependencyBlob = canonicalDependencyBlob;
     if (dependencyBlob !== dependency.expectedBlob) {
       throw adapterError("FROZEN_V2_DEPENDENCY_INTEGRITY_FAILED", "Frozen V2 dependency integrity check failed");
     }

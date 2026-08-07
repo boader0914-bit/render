@@ -81,6 +81,10 @@ const {
   createCollectionWorkerRunTransactionStore
 } = require("./collection_worker_run_transaction.cjs");
 const {
+  V2_ENV_WORKER_STATUS_PATH,
+  projectV2EnvWorkerStatus
+} = require("./v2_env_worker_preview_api_bridge.cjs");
+const {
   CLAIM_PATH: COLLECTION_WORKER_CLAIM_PATH,
   FAILURE_PATH: COLLECTION_WORKER_FAILURE_PATH,
   FINALIZE_PATH: COLLECTION_WORKER_FINALIZE_PATH,
@@ -258,7 +262,7 @@ const collectionWorkerCanaryOrchestrator = createCollectionWorkerCanaryOrchestra
   enabled: String(process.env.COLLECTION_WORKER_CANARY_ENABLED || "false").toLowerCase() === "true",
   jobStore: collectionWorkerJobStore,
   providerStore: naverProviderHealthStore,
-  targetWorkerCommit: process.env.COLLECTION_WORKER_TARGET_COMMIT,
+  targetWorkerCommit: IS_RENDER_RUNTIME ? process.env.RENDER_GIT_COMMIT : process.env.COLLECTION_WORKER_TARGET_COMMIT,
   dispatchPrivateKeyBase64: process.env.COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64,
   artifactPublicKeyBase64: process.env.COLLECTION_WORKER_ARTIFACT_PUBLIC_KEY_B64,
   requestPublicKeyBase64: process.env.COLLECTION_WORKER_REQUEST_PUBLIC_KEY_B64,
@@ -270,7 +274,7 @@ const collectionWorkerV2Top20Orchestrator = createCollectionWorkerV2Top20Orchest
   previewWriteApproved: String(process.env.COLLECTION_WORKER_V2_TOP20_PREVIEW_WRITE_APPROVED || "false").toLowerCase() === "true",
   jobStore: collectionWorkerJobStore,
   providerStore: naverProviderHealthStore,
-  targetWorkerCommit: process.env.COLLECTION_WORKER_TARGET_COMMIT,
+  targetWorkerCommit: IS_RENDER_RUNTIME ? process.env.RENDER_GIT_COMMIT : process.env.COLLECTION_WORKER_TARGET_COMMIT,
   dispatchPrivateKeyBase64: process.env.COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64,
   artifactPublicKeyBase64: process.env.COLLECTION_WORKER_ARTIFACT_PUBLIC_KEY_B64,
   requestPublicKeyBase64: process.env.COLLECTION_WORKER_REQUEST_PUBLIC_KEY_B64,
@@ -16248,6 +16252,17 @@ async function route(req, res) {
       return send(res, 200, naverLegacyCanaryRunner.status(), "application/json; charset=utf-8", {
         "Cache-Control": "no-store"
       });
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === V2_ENV_WORKER_STATUS_PATH) {
+      if (!requireAdminSession(session, req, res)) return;
+      return send(
+        res,
+        200,
+        projectV2EnvWorkerStatus(collectionWorkerCanaryOrchestrator.status()),
+        "application/json; charset=utf-8",
+        { "Cache-Control": "no-store" }
+      );
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/status") {

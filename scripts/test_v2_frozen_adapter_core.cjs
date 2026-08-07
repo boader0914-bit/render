@@ -129,7 +129,11 @@ async function main() {
 
     const integrity = await verifyFrozenCollectorIntegrity({ rootDir: ROOT });
     assert.equal(integrity.actualBlob, FROZEN_V2_COLLECTOR_BLOB);
-    assert.equal(gitBlobHash(await fsp.readFile(integrity.collectorPath)), FROZEN_V2_COLLECTOR_BLOB);
+    const collectorText = await fsp.readFile(integrity.collectorPath, "utf8");
+    assert.equal(
+      gitBlobHash(Buffer.from(collectorText.replace(/\r\n/gu, "\n"), "utf8")),
+      FROZEN_V2_COLLECTOR_BLOB
+    );
 
     const payload = buildFixturePayload({
       keyword: "합성 지역 글램핑",

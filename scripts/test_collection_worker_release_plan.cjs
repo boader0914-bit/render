@@ -17,6 +17,7 @@ const plan = buildDisabledCollectorWorkerReleasePlan({
 });
 assert.equal(plan.serviceType, "background_worker");
 assert.equal(plan.region, "singapore");
+assert.equal(plan.buildCommand, "npm install");
 assert.equal(plan.nodeVersion, "26.5.0");
 assert.equal(plan.autoDeploy, false);
 assert.equal(plan.persistentDisk, false);

@@ -20,6 +20,7 @@ const B2B_PASSWORD = "NaverResilienceB2B!123";
 const ADMIN_AGENT = "naver-resilience-admin-e2e";
 const B2B_AGENT = "naver-resilience-b2b-e2e";
 const RUN_ID = "pocheon_glamping_20260701_090000";
+const OVERALL_FILE = `${RUN_ID}_네이버전체순위.csv`;
 const CHECK_IN = "2026-08-07";
 const CHECK_OUT = "2026-08-13";
 
@@ -285,13 +286,14 @@ async function writeRun(runtimeRoot) {
     collectionStartedAt: "2026-07-01T00:00:00.000Z",
     collectionCompletedAt: "2026-07-01T00:01:00.000Z",
     dataAvailableAt: "2026-07-01T00:01:00.000Z",
-    fileRoles: { report: "report.md", overall: "overall.csv" },
-    files: ["report.md", "overall.csv"],
+    outputDir: runDir,
+    fileRoles: { report: "report.md", overall: OVERALL_FILE },
+    files: ["report.md", OVERALL_FILE],
     counts: { naverOverall: 1, naverAds: 0, naverRegional: 1 }
   };
   await fsp.writeFile(path.join(runDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   await fsp.writeFile(path.join(runDir, "report.md"), "# Pocheon last-known-good isolated fixture\n", "utf8");
-  await fsp.writeFile(path.join(runDir, "overall.csv"), "rank,name\n1,fixture lodge\n", "utf8");
+  await fsp.writeFile(path.join(runDir, OVERALL_FILE), "rank,name\n1,fixture lodge\n", "utf8");
 }
 
 async function writeB2BHistory(runtimeRoot) {
@@ -520,8 +522,8 @@ async function assertCooldownAndFallbackBoundaries(baseUrl, adminCookie, b2bCook
 async function assertCorruptFallbackArtifactsFailClosed(baseUrl, adminCookie, runtimeRoot) {
   const runDir = path.join(runtimeRoot, "outputs", RUN_ID);
   const manifestPath = path.join(runDir, "manifest.json");
-  const overallPath = path.join(runDir, "overall.csv");
-  const missingPath = path.join(runDir, "overall.csv.fixture-missing");
+  const overallPath = path.join(runDir, OVERALL_FILE);
+  const missingPath = path.join(runDir, `${OVERALL_FILE}.fixture-missing`);
   const originalManifestText = await fsp.readFile(manifestPath, "utf8");
   const originalManifest = JSON.parse(originalManifestText);
 
