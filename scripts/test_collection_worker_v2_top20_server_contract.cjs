@@ -55,8 +55,18 @@ assert.match(serverSource, /naverProviderHealthStore\.releaseAttempt/u);
 assert.match(serverSource, /collection-worker-v2-top20-cancel\.v1/u);
 assert.match(serverSource, /String\(payload\?\.body\?\.jobId \|\| ""\)\.startsWith\("job-top20-"\)/u);
 assert.match(serverSource, /useTop20Worker \? 202 : 200/u);
-assert.match(serverSource, /&& isV2Top20WorkerEligible\(trustedPayload\)/u);
-assert.match(serverSource, /&& isV2Top20WorkerEligible\(payload\)/u);
+assert.match(serverSource, /const adminPayload = trustedPreviewAdminCrawlPayload\(/u);
+assert.match(serverSource, /&& isV2Top20WorkerEligible\(adminPayload\)/u);
+assert.match(serverSource, /const trustedPayload = useTop20Worker[\s\S]{0,120}trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
+assert.equal(
+  serverSource.includes("isV2Top20WorkerEligible(trustedPayload)"),
+  false,
+  "Top20 eligibility must be evaluated before frozen wrapping"
+);
+assert.ok(
+  serverSource.indexOf("const useTop20Worker =") < serverSource.indexOf("trustedPreviewFrozenCrawlPayload(adminPayload)"),
+  "Top20 Worker branch must be selected before the frozen V2 route is constructed"
+);
 assert.match(serverSource, /reqUrl\.pathname === "\/api\/crawl\/cancel"/u);
 assert.match(serverSource, /collectionWorkerJobStore\.requestCancellation/u);
 assert.match(serverSource, /nextState: "cancelled"/u);

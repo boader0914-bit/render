@@ -82,8 +82,13 @@ async function main() {
 
     const serverSource = await fsp.readFile(path.join(ROOT, "scripts", "glamping_app_server.cjs"), "utf8");
     assert.match(serverSource, /async function runCrawlerInternal\(payload\)\s*\{\s*if \(isTrustedFrozenPayload\(payload\)\) return runFrozenV2CrawlerInternal\(payload\);/u);
-    assert.match(serverSource, /const trustedPayload = trustedPreviewFrozenCrawlPayload\(/u);
-    assert.match(serverSource, /&& !isTrustedFrozenPayload\(trustedPayload\)[\s\S]{0,180}COLLECTION_WORKER_V2_TOP20_ENABLED/u);
+    assert.match(serverSource, /const trustedPayload = useTop20Worker[\s\S]{0,120}trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
+    assert.match(serverSource, /&& isV2Top20WorkerEligible\(adminPayload\)/u);
+    assert.equal(
+      serverSource.includes("isV2Top20WorkerEligible(trustedPayload)"),
+      false,
+      "frozen payloads must not make Top20 Worker eligibility fail closed"
+    );
     assert.match(serverSource, /const cached = frozenV2 \? null : reusableRecentCrawlResult\(signature\);/u);
     assert.match(serverSource, /if \(!failure && result\?\.runId && !isTrustedFrozenPayload\(job\.payload\)\)/u);
     assert.equal(typeof commitPromotedFrozenRun, "function");

@@ -39,6 +39,7 @@ const {
   COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION,
   COLLECTION_WORKER_V2_TOP20_RUNTIME_ID_PREFIX,
   COLLECTION_WORKER_V2_TOP20_SUMMARY_PATH,
+  COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
   buildV2Top20DispatchCompatibilityContract,
@@ -183,6 +184,25 @@ function runtimeIdForCommit(commit) {
   return `${COLLECTION_WORKER_V2_TOP20_RUNTIME_ID_PREFIX}${canonicalCommit(commit).slice(0, 12)}`;
 }
 
+function shortCommit(value) {
+  const commit = String(value || "").trim();
+  return COMMIT_PATTERN.test(commit) ? commit.slice(0, 12) : "";
+}
+
+function logWorkerMismatch(fields = {}) {
+  console.warn(`[top20-worker-mismatch] ${stableJson({
+    expectedWorkerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+    actualWorkerId: String(fields.actualWorkerId || ""),
+    expectedWorkerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+    actualWorkerPoolId: String(fields.actualWorkerPoolId || ""),
+    expectedWorkerCommit: shortCommit(fields.expectedWorkerCommit),
+    actualWorkerCommit: shortCommit(fields.actualWorkerCommit),
+    expectedTargetServiceId: COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
+    actualTargetServiceId: String(fields.actualTargetServiceId || "unreported"),
+    mismatchField: String(fields.mismatchField || "unknown")
+  })}`);
+}
+
 function retryMeta(state, now) {
   const availability = providerAvailability(state, { now });
   return Object.freeze({
@@ -303,11 +323,24 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   }
 
   function assertWorkerBody(body) {
+    const mismatchField = body.workerId !== COLLECTION_WORKER_V2_TOP20_WORKER_ID
+      ? "workerId"
+      : body.workerPoolId !== COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID
+        ? "workerPoolId"
+        : body.workerCommit !== targetWorkerCommit
+          ? "workerCommit"
+          : "";
     if (
-      body.workerId !== COLLECTION_WORKER_V2_TOP20_WORKER_ID
-      || body.workerPoolId !== COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID
-      || body.workerCommit !== targetWorkerCommit
+      mismatchField
     ) {
+      logWorkerMismatch({
+        actualWorkerId: body.workerId,
+        actualWorkerPoolId: body.workerPoolId,
+        expectedWorkerCommit: targetWorkerCommit,
+        actualWorkerCommit: body.workerCommit,
+        actualTargetServiceId: body.targetServiceId,
+        mismatchField
+      });
       throw fail("COLLECTION_WORKER_V2_TOP20_WORKER_MISMATCH", "top20 worker identity is invalid", 403);
     }
   }

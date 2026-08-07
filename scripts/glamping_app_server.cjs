@@ -16593,14 +16593,16 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       assertRequestRateLimit(req, "adminCrawl", RATE_LIMIT_POLICIES.adminCrawl, session.username || "");
       const payload = await parseJsonBody(req);
-      const trustedPayload = trustedPreviewFrozenCrawlPayload({
+      const adminPayload = trustedPreviewAdminCrawlPayload({
         ...payload,
         providerAttemptExplicit: true
       });
       const useTop20Worker = IS_V2_PREVIEW_RUNTIME
-        && !isTrustedFrozenPayload(trustedPayload)
         && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
-        && isV2Top20WorkerEligible(trustedPayload);
+        && isV2Top20WorkerEligible(adminPayload);
+      const trustedPayload = useTop20Worker
+        ? adminPayload
+        : trustedPreviewFrozenCrawlPayload(adminPayload);
       const result = useTop20Worker
         ? await queueV2Top20WorkerCollection(trustedPayload)
         : await runCrawler(trustedPayload);

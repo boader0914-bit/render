@@ -544,14 +544,29 @@ async function identityScenario(root, keys) {
     workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
     workerCommit: COMMIT
   };
-  await assert.rejects(
-    () => system.orchestrator.claim({
-      body,
-      signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_CLAIM_PATH, body, keys, system.clock.now())
-    }),
-    { code: "COLLECTION_WORKER_V2_TOP20_WORKER_MISMATCH" },
-    "the body must match the exact top20 worker identity"
-  );
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => warnings.push(String(line));
+  try {
+    await assert.rejects(
+      () => system.orchestrator.claim({
+        body,
+        signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_CLAIM_PATH, body, keys, system.clock.now())
+      }),
+      { code: "COLLECTION_WORKER_V2_TOP20_WORKER_MISMATCH" },
+      "the body must match the exact top20 worker identity"
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /top20-worker-mismatch/u);
+  assert.match(warnings[0], /"expectedWorkerId":"collector_worker_preview_top20_01"/u);
+  assert.match(warnings[0], /"actualWorkerId":"collector_worker_preview_top20_02"/u);
+  assert.match(warnings[0], /"expectedWorkerCommit":"dddddddddddd"/u);
+  assert.match(warnings[0], /"actualWorkerCommit":"dddddddddddd"/u);
+  assert.match(warnings[0], /"expectedTargetServiceId":"srv-d9q6mrfavr4c73atllf0"/u);
+  assert.match(warnings[0], /"mismatchField":"workerId"/u);
 }
 
 async function claimAfterRestart(system, keys) {

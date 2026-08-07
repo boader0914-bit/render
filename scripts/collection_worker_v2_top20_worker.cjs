@@ -134,6 +134,23 @@ function normalizeWorkerAbortSignal(value) {
   return value;
 }
 
+function responseHeader(response, name) {
+  try {
+    return String(response?.headers?.get?.(name) || "").slice(0, 120);
+  } catch {
+    return "";
+  }
+}
+
+function logInternalResponseParseFailure(response, byteLength) {
+  console.warn(`[top20-worker-internal-response] ${stableJson({
+    statusCode: Number(response?.status || 0) || null,
+    contentType: responseHeader(response, "content-type"),
+    responseLength: Number.isInteger(byteLength) ? byteLength : null,
+    jsonParseSuccess: false
+  })}`);
+}
+
 function assertWorkerEnvironment(environment) {
   const env = environment || {};
   const commit = String(env.RENDER_GIT_COMMIT || "").trim();
@@ -246,6 +263,7 @@ async function readBoundedJsonResponse(response) {
   try {
     payload = JSON.parse(text);
   } catch {
+    logInternalResponseParseFailure(response, Buffer.byteLength(text, "utf8"));
     throw fail("COLLECTION_WORKER_V2_TOP20_INTERNAL_RESPONSE_INVALID", "Preview response is invalid", 502);
   }
   if (!response.ok) {

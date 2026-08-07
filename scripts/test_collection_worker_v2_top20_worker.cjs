@@ -41,6 +41,7 @@ const {
   ENV,
   TARGET_PREVIEW_BASE_URL,
   assertWorkerEnvironment,
+  postSignedWorkerRequest,
   postReceiptWithOneInternalRecovery,
   resolveWorkerEnvironment,
   runCollectionWorkerV2Top20,
@@ -378,6 +379,49 @@ async function gateScenario(keys) {
   const fatal = safeFatalResult(Object.assign(new Error("secret detail"), { code: "UNSAFE lowercase" }));
   assert.equal(fatal.code, "COLLECTION_WORKER_V2_TOP20_EXECUTION_FAILED");
   assert.equal(JSON.stringify(fatal).includes("secret detail"), false);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => warnings.push(String(line));
+  try {
+    await assert.rejects(
+      () => postSignedWorkerRequest({
+        baseUrl: TARGET_PREVIEW_BASE_URL,
+        body: {
+          workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+          workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+          workerCommit: COMMIT
+        },
+        fetchImpl: async () => {
+          const text = "<html><body>synthetic internal page</body></html>";
+          return {
+            ok: false,
+            status: 403,
+            headers: {
+              get(name) {
+                if (String(name).toLowerCase() === "content-type") return "text/html; charset=utf-8";
+                if (String(name).toLowerCase() === "content-length") return String(Buffer.byteLength(text));
+                return null;
+              }
+            },
+            async text() { return text; }
+          };
+        },
+        now: () => NOW,
+        path: COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
+        requestPrivateKey: keys.request.privateKey
+      }),
+      (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_INTERNAL_RESPONSE_INVALID"
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /top20-worker-internal-response/u);
+  assert.match(warnings[0], /"statusCode":403/u);
+  assert.match(warnings[0], /"contentType":"text\/html; charset=utf-8"/u);
+  assert.match(warnings[0], /"jsonParseSuccess":false/u);
+  assert.equal(warnings[0].includes("synthetic internal page"), false, "internal response body must not be logged");
 
   let receiptAttempts = 0;
   await assert.rejects(
