@@ -15183,6 +15183,10 @@ async function cancelActiveTop20WorkerCollection(reason = "관리자 요청으�
         failureCode: "COLLECTION_WORKER_V2_TOP20_CANCELLED",
         now: new Date()
       });
+      collectionWorkerV2Top20Orchestrator.markTerminalPayload({
+        jobId,
+        terminalState: "cancelled"
+      });
       lastTop20WorkerOutcome = Object.freeze({
         status: "cancelled",
         code: job.failureCode,

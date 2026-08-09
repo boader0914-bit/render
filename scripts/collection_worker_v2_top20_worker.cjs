@@ -102,6 +102,41 @@ function fail(code, message, statusCode = 409, meta = {}) {
   return new CollectionWorkerV2Top20WorkerError(code, message, statusCode, meta);
 }
 
+function shortCommit(value) {
+  const commit = String(value || "").trim();
+  return COMMIT_PATTERN.test(commit) ? commit.slice(0, 12) : "";
+}
+
+function shortSafeHash(value) {
+  const hash = String(value || "").trim();
+  return /^[a-f0-9]{64}$/u.test(hash) ? hash.slice(0, 12) : "";
+}
+
+function maskJobId(value) {
+  const text = String(value || "");
+  const match = text.match(/^job-top20-([a-f0-9]{24})$/u);
+  return match ? `job-top20-${match[1].slice(0, 12)}…` : "";
+}
+
+function safeTop20WorkerLog(event, fields = {}) {
+  console.warn(`[top20-provenance] ${stableJson({
+    timestamp: fields.timestamp || new Date().toISOString(),
+    event: String(event || "top20_worker_event"),
+    jobId: maskJobId(fields.jobId),
+    contractHash: shortSafeHash(fields.contractHash),
+    executionIdentityHash: shortSafeHash(fields.executionIdentityHash),
+    workerCommit: shortCommit(fields.workerCommit),
+    providerOperation: String(fields.providerOperation || ""),
+    requestOrdinal: Number.isInteger(fields.requestOrdinal) ? fields.requestOrdinal : null,
+    jobState: String(fields.jobState || ""),
+    failureCode: String(fields.failureCode || ""),
+    pid: process.pid,
+    hostname: os.hostname(),
+    renderServiceId: String(process.env.RENDER_SERVICE_ID || ""),
+    renderServiceName: String(process.env.RENDER_SERVICE_NAME || "")
+  })}`);
+}
+
 function fixtureModeFor(input) {
   const fixtureMode = input.fixtureMode === true;
   const processIsProduction = process.env.RENDER === "true" || process.env.NODE_ENV === "production";
@@ -614,7 +649,25 @@ async function runCollectionWorkerV2Top20(input = {}) {
             { providerAttemptCount: providerCallCount > 0 ? 1 : 0, executedCallCount: providerCallCount }
           );
         }
+        safeTop20WorkerLog("top20_provider_call_authorized", {
+          jobId: verifiedJob.jobId,
+          contractHash: verifiedJob.contractHash,
+          executionIdentityHash: verifiedJob.executionIdentityHash,
+          workerCommit: worker.commit,
+          providerOperation: String(metadata.operation || ""),
+          requestOrdinal,
+          jobState: "collecting"
+        });
         await heartbeat();
+        safeTop20WorkerLog("top20_provider_call_started", {
+          jobId: verifiedJob.jobId,
+          contractHash: verifiedJob.contractHash,
+          executionIdentityHash: verifiedJob.executionIdentityHash,
+          workerCommit: worker.commit,
+          providerOperation: String(metadata.operation || ""),
+          requestOrdinal,
+          jobState: "collecting"
+        });
         providerCallCount = requestOrdinal;
         return Object.freeze({ requestOrdinal, providerWorkflowRevision, jobWorkflowRevision });
       },

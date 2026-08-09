@@ -168,6 +168,8 @@ async function prepareClaimPreflight(system, keys, keyword) {
   assert.equal(prepared.status, "queued");
   assert.equal(prepared.maximumProviderCalls, 201);
   assert.equal(prepared.maxProviderAttempts, 1);
+  assert.equal(system.orchestrator.status().activePayloadCount, 1);
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 0);
 
   const claimBody = {
     workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
@@ -408,6 +410,8 @@ async function readyScenario(root, keys) {
   assert.equal(first.writeCount, 1);
   assert.equal(first.replayed, false);
   assert.equal(system.callbackCount(), 1);
+  assert.equal(system.orchestrator.status().activePayloadCount, 0, "committed payload must not count as active");
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 1, "committed payload is retained only for replay");
 
   // Simulate a lost HTTP response: the worker resubmits the same immutable
   // signed artifact with fresh request authentication. No transaction repeats.
@@ -422,6 +426,21 @@ async function readyScenario(root, keys) {
   assert.equal(system.callbackCount(), 1, "response-loss replay must not call the transaction twice");
   assert.equal((await system.providerStore.read()).state, "closed");
   assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "committed");
+
+  const emptyClaimBody = {
+    workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+    workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+    workerCommit: COMMIT
+  };
+  const terminalClaim = await system.orchestrator.claim({
+    body: emptyClaimBody,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_CLAIM_PATH, emptyClaimBody, keys, system.clock.now())
+  });
+  assert.equal(terminalClaim.status, "empty", "terminal payloads must never be claimable");
+
+  system.clock.tick(16 * 60 * 1000);
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 0, "terminal payload replay retention expires");
 }
 
 async function blockedScenario(root, keys) {
@@ -450,6 +469,8 @@ async function blockedScenario(root, keys) {
   assert.equal(result.resultStored, false);
   assert.equal(result.writeCount, 0);
   assert.equal(system.callbackCount(), 0);
+  assert.equal(system.orchestrator.status().activePayloadCount, 0, "blocked payload must not count as active");
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 1);
   const provider = await system.providerStore.read();
   assert.equal(provider.state, "open");
   assert.equal(provider.lastFailureSubtype, "challenge_html");
@@ -477,6 +498,8 @@ async function failureScenario(root, keys) {
   assert.equal(result.resultStored, false);
   assert.equal(result.writeCount, 0);
   assert.equal(system.callbackCount(), 0);
+  assert.equal(system.orchestrator.status().activePayloadCount, 0, "failed payload must not count as active");
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 1);
   assert.equal((await system.providerStore.read()).state, "closed");
   const replay = await system.orchestrator.recordFailure({
     body,
@@ -484,6 +507,8 @@ async function failureScenario(root, keys) {
   });
   assert.equal(replay.replayed, true);
   assert.equal(system.callbackCount(), 0);
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 1);
 }
 
 async function cancellationScenario(root, keys) {
@@ -526,11 +551,15 @@ async function cancellationScenario(root, keys) {
   assert.equal(result.writeCount, 0);
   assert.equal(system.callbackCount(), 0);
   assert.equal((await system.providerStore.read()).state, "closed", "provider lease releases only after Worker stop receipt");
+  assert.equal(system.orchestrator.status().activePayloadCount, 0, "cancelled payload must not count as active");
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 1);
   const replay = await system.orchestrator.recordFailure({
     body,
     signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_FAILURE_PATH, body, keys, system.clock.now())
   });
   assert.equal(replay.replayed, true);
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 1);
 }
 
 async function identityScenario(root, keys) {

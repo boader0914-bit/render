@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const os = require("node:os");
 const {
   COLLECTION_WORKER_JOB_AUDIENCE,
   buildSignedJobEnvelope
@@ -84,6 +85,7 @@ const CANCELLATION_FAILURE_CODES = new Set([
 ]);
 const SAFE_SUBTYPE_PATTERN = /^(?:http_403|http_429|challenge_html|unknown_access_block)$/u;
 const DIAGNOSTIC_PATTERN = /^crawl-[a-f0-9]{12}$/u;
+const TERMINAL_PAYLOAD_REPLAY_GRACE_MS = 15 * 60 * 1000;
 const CLAIM_KEYS = Object.freeze(["workerId", "workerPoolId", "workerCommit"]);
 const PREFLIGHT_KEYS = Object.freeze([
   "jobId",
@@ -187,6 +189,38 @@ function runtimeIdForCommit(commit) {
 function shortCommit(value) {
   const commit = String(value || "").trim();
   return COMMIT_PATTERN.test(commit) ? commit.slice(0, 12) : "";
+}
+
+function shortSafeHash(value) {
+  const hash = String(value || "").trim();
+  return HASH_PATTERN.test(hash) ? hash.slice(0, 12) : "";
+}
+
+function maskJobId(value) {
+  const text = String(value || "");
+  const match = text.match(/^job-top20-([a-f0-9]{24})$/u);
+  return match ? `job-top20-${match[1].slice(0, 12)}…` : "";
+}
+
+function safeTop20Log(event, fields = {}) {
+  console.warn(`[top20-provenance] ${stableJson({
+    timestamp: fields.timestamp || new Date().toISOString(),
+    event: String(event || "top20_event"),
+    jobId: maskJobId(fields.jobId),
+    contractHash: shortSafeHash(fields.contractHash),
+    executionIdentityHash: shortSafeHash(fields.executionIdentityHash),
+    workerCommit: shortCommit(fields.workerCommit),
+    sourceRole: String(fields.sourceRole || ""),
+    sourceRoute: String(fields.sourceRoute || ""),
+    providerOperation: String(fields.providerOperation || ""),
+    requestOrdinal: Number.isInteger(fields.requestOrdinal) ? fields.requestOrdinal : null,
+    jobState: String(fields.jobState || ""),
+    failureCode: String(fields.failureCode || ""),
+    pid: process.pid,
+    hostname: os.hostname(),
+    renderServiceId: String(process.env.RENDER_SERVICE_ID || ""),
+    renderServiceName: String(process.env.RENDER_SERVICE_NAME || "")
+  })}`);
 }
 
 function logWorkerMismatch(fields = {}) {
@@ -345,6 +379,82 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
   }
 
+  function currentTimeMs() {
+    return new Date(now()).getTime();
+  }
+
+  function pruneExpiredTerminalPayloads() {
+    const cutoff = currentTimeMs() - TERMINAL_PAYLOAD_REPLAY_GRACE_MS;
+    for (const [jobId, entry] of payloads.entries()) {
+      if (
+        entry?.lifecycle === "terminal"
+        && entry.terminalAt
+        && Date.parse(entry.terminalAt) <= cutoff
+      ) {
+        safeTop20Log("top20_payload_pruned", {
+          timestamp: new Date(now()).toISOString(),
+          jobId,
+          contractHash: entry.signedJob?.contractHash,
+          executionIdentityHash: entry.signedJob?.executionIdentityHash,
+          workerCommit: targetWorkerCommit,
+          jobState: entry.terminalState || "terminal"
+        });
+        payloads.delete(jobId);
+      }
+    }
+  }
+
+  function isActivePayload(jobId) {
+    pruneExpiredTerminalPayloads();
+    const entry = payloads.get(jobId);
+    return Boolean(entry && entry.lifecycle === "active");
+  }
+
+  function activePayloadCount() {
+    pruneExpiredTerminalPayloads();
+    let count = 0;
+    for (const entry of payloads.values()) {
+      if (entry?.lifecycle === "active") count += 1;
+    }
+    return count;
+  }
+
+  function retainedTerminalPayloadCount() {
+    pruneExpiredTerminalPayloads();
+    let count = 0;
+    for (const entry of payloads.values()) {
+      if (entry?.lifecycle === "terminal") count += 1;
+    }
+    return count;
+  }
+
+  function markPayloadTerminal(jobId, terminalState = "terminal") {
+    pruneExpiredTerminalPayloads();
+    const entry = payloads.get(jobId);
+    if (!entry) return false;
+    if (entry.lifecycle !== "terminal") {
+      entry.lifecycle = "terminal";
+      entry.terminalAt = new Date(now()).toISOString();
+      entry.terminalState = String(terminalState || "terminal");
+      safeTop20Log("top20_payload_retained", {
+        timestamp: entry.terminalAt,
+        jobId,
+        contractHash: entry.signedJob?.contractHash,
+        executionIdentityHash: entry.signedJob?.executionIdentityHash,
+        workerCommit: targetWorkerCommit,
+        jobState: entry.terminalState
+      });
+    }
+    return true;
+  }
+
+  function forgetTerminalPayloadEntry(jobId) {
+    const entry = payloads.get(jobId);
+    if (!entry || entry.lifecycle !== "terminal") return false;
+    payloads.delete(jobId);
+    return true;
+  }
+
   async function readJob(jobId) {
     const snapshot = await jobStore.readSnapshot();
     return snapshot.jobs.find((candidate) => candidate.jobId === jobId) || null;
@@ -423,7 +533,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         if (
           job.backendId !== COLLECTION_WORKER_V2_TOP20_BACKEND_ID
           || !RESTART_RECOVERABLE_JOB_STATES.has(job.state)
-          || payloads.has(job.jobId)
+          || isActivePayload(job.jobId)
         ) continue;
         await abandonJobAfterRestart(job);
       }
@@ -448,6 +558,13 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     const normalized = normalizeV2Top20PrepareContract(input.contract);
     const top20Contract = buildV2Top20ExecutionContract(input.contract);
     const top20ContractHash = computeV2Top20ContractHash(top20Contract);
+    safeTop20Log("top20_job_prepare_requested", {
+      timestamp: new Date(now()).toISOString(),
+      contractHash: top20ContractHash,
+      workerCommit: targetWorkerCommit,
+      sourceRole: input.trustedAdmin === true ? "admin" : "operator",
+      sourceRoute: input.trustedAdmin === true ? "/api/crawl" : "operator"
+    });
     const snapshot = await jobStore.readSnapshot();
     const active = snapshot.jobs.find((job) => (
       job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID && ACTIVE_JOB_STATES.has(job.state)
@@ -560,7 +677,20 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         executionPayload,
         top20ContractHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
-        preflighted: false
+        preflighted: false,
+        lifecycle: "active",
+        terminalAt: null,
+        terminalState: null
+      });
+      safeTop20Log("top20_job_queued", {
+        timestamp: createdAt.toISOString(),
+        jobId,
+        contractHash: signedJob.contractHash,
+        executionIdentityHash: signedJob.executionIdentityHash,
+        workerCommit: targetWorkerCommit,
+        sourceRole: input.trustedAdmin === true ? "admin" : "operator",
+        sourceRoute: input.trustedAdmin === true ? "/api/crawl" : "operator",
+        jobState: "queued"
       });
       return Object.freeze({
         schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
@@ -610,7 +740,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID
       && job.state === "queued"
       && job.cancellationRequested !== true
-      && payloads.has(job.jobId)
+      && isActivePayload(job.jobId)
     ));
     if (!candidate) return Object.freeze({ status: "empty", job: null });
     const entry = payloads.get(candidate.jobId);
@@ -637,6 +767,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
       nextState: "collecting",
       now: now()
+    });
+    safeTop20Log("top20_job_claimed", {
+      timestamp: new Date(now()).toISOString(),
+      jobId: collecting.jobId,
+      contractHash: collecting.contractHash,
+      executionIdentityHash: collecting.executionIdentityHash,
+      workerCommit: targetWorkerCommit,
+      providerOperation: "naver_place_top20",
+      requestOrdinal: 1,
+      jobState: collecting.state
     });
     return Object.freeze({
       status: "claimed",
@@ -713,6 +853,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       top20ContractHash: entry.top20ContractHash
     }, artifactPublicKey());
     entry.preflighted = true;
+    safeTop20Log("top20_preflight_completed", {
+      timestamp: new Date(now()).toISOString(),
+      jobId: job.jobId,
+      contractHash: job.contractHash,
+      executionIdentityHash: job.executionIdentityHash,
+      workerCommit: targetWorkerCommit,
+      providerOperation: "naver_place_top20",
+      requestOrdinal: 1,
+      jobState: job.state
+    });
     return Object.freeze({
       status: "preflighted",
       jobId: job.jobId,
@@ -983,6 +1133,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
     if (["committed", "blocked", "failed"].includes(job.state)) {
       assertTerminalArtifact(job, summary, artifactHash);
+      markPayloadTerminal(job.jobId, job.state);
       const providerState = await providerStore.read();
       const receiptId = transactionReceiptId(job, artifactHash);
       return finalizationResponse(
@@ -1036,6 +1187,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         failureCode,
         now: now()
       });
+      markPayloadTerminal(job.jobId, nextState);
+      safeTop20Log("top20_job_terminal", {
+        timestamp: new Date(now()).toISOString(),
+        jobId: job.jobId,
+        contractHash: job.contractHash,
+        executionIdentityHash: job.executionIdentityHash,
+        workerCommit: targetWorkerCommit,
+        jobState: job.state,
+        failureCode
+      });
       return finalizationResponse(job, summary, providerState, artifactHash, null, false);
     }
 
@@ -1083,6 +1244,15 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     if (job.state !== "committed") {
       throw fail("COLLECTION_WORKER_V2_TOP20_TRANSACTION_INVALID", "top20 transaction did not commit", 500);
     }
+    markPayloadTerminal(job.jobId, "committed");
+    safeTop20Log("top20_job_terminal", {
+      timestamp: new Date(now()).toISOString(),
+      jobId: job.jobId,
+      contractHash: job.contractHash,
+      executionIdentityHash: job.executionIdentityHash,
+      workerCommit: targetWorkerCommit,
+      jobState: job.state
+    });
     return finalizationResponse(job, summary, providerState, artifactHash, transactionResult, false);
   }
 
@@ -1173,6 +1343,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       if (job.failureReceiptHash !== receiptHash || job.failureCode !== "COLLECTION_WORKER_V2_TOP20_CANCELLED") {
         throw fail("COLLECTION_WORKER_V2_TOP20_FAILURE_CONFLICT", "top20 cancellation receipt conflicts", 409);
       }
+      markPayloadTerminal(job.jobId, "cancelled");
+      safeTop20Log("top20_job_terminal", {
+        timestamp: new Date(now()).toISOString(),
+        jobId: job.jobId,
+        contractHash: job.contractHash,
+        executionIdentityHash: job.executionIdentityHash,
+        workerCommit: targetWorkerCommit,
+        jobState: job.state,
+        failureCode: job.failureCode
+      });
       return Object.freeze({
         status: "cancelled",
         code: job.failureCode,
@@ -1188,6 +1368,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       if (job.failureReceiptHash !== receiptHash || job.failureCode !== body.code) {
         throw fail("COLLECTION_WORKER_V2_TOP20_FAILURE_CONFLICT", "top20 failure receipt conflicts", 409);
       }
+      markPayloadTerminal(job.jobId, "failed");
       return Object.freeze({
         status: "failed",
         code: body.code,
@@ -1217,6 +1398,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         providerAttemptCount: Number(body.providerAttemptCount),
         now: now()
       });
+      markPayloadTerminal(job.jobId, "cancelled");
       return Object.freeze({
         status: "cancelled",
         code: job.failureCode,
@@ -1260,6 +1442,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         now: now()
       });
     }
+    markPayloadTerminal(job.jobId, "failed");
+    safeTop20Log("top20_job_terminal", {
+      timestamp: new Date(now()).toISOString(),
+      jobId: job.jobId,
+      contractHash: job.contractHash,
+      executionIdentityHash: job.executionIdentityHash,
+      workerCommit: targetWorkerCommit,
+      jobState: job.state,
+      failureCode: body.code
+    });
     return Object.freeze({
       status: "failed",
       code: body.code,
@@ -1280,6 +1472,14 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     prepare,
     prepareTrustedAdmin,
     recordFailure,
+    markTerminalPayload(input = {}) {
+      const jobId = String(input.jobId || "");
+      const terminalState = String(input.terminalState || "terminal");
+      return markPayloadTerminal(jobId, terminalState);
+    },
+    forgetTerminalPayload(input = {}) {
+      return forgetTerminalPayloadEntry(String(input.jobId || ""));
+    },
     status() {
       return Object.freeze({
         schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
@@ -1289,7 +1489,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         targetWorkerCommit: COMMIT_PATTERN.test(targetWorkerCommit) ? targetWorkerCommit : null,
         workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
         workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
-        activePayloadCount: payloads.size,
+        activePayloadCount: activePayloadCount(),
+        retainedTerminalPayloadCount: retainedTerminalPayloadCount(),
         maxProviderAttempts: 1,
         maximumProviderCalls: V2_TOP20_CONTRACT.maximumProviderCalls,
         automaticRetry: false,
