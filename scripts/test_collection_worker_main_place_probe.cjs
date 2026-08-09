@@ -1,10 +1,12 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 const os = require("node:os");
 const path = require("node:path");
 const {
   buildV2Top20MainPlaceProbeEnvironment,
+  executeV2Top20MainPlaceRecoveryProbe,
   parseMainPlaceProbeResult
 } = require("./collection_worker_v2_top20_collector.cjs");
 const { installFixtureNetworkGuard } = require("./fixture_network_guard.cjs");
@@ -24,7 +26,8 @@ const contract = Object.freeze({
   detailRankEnd: 20
 });
 
-try {
+async function main() {
+  try {
   const environment = buildV2Top20MainPlaceProbeEnvironment({
     contract,
     outputRoot: path.join(os.tmpdir(), "main-place-probe-fixture"),
@@ -40,8 +43,34 @@ try {
   assert.equal(valid.organicCount, 50);
   assert.throws(() => parseMainPlaceProbeResult("MAIN_PLACE_RECOVERY_PROBE_RESULT={}"), /invalid/i);
   assert.throws(() => parseMainPlaceProbeResult("MAIN_PLACE_RECOVERY_PROBE_RESULT={\"schemaVersion\":\"main-place-recovery-probe-result.v1\",\"organicCount\":50,\"observedRankCount\":50,\"adCount\":0,\"providerSubtype\":\"apollo_success\"}\nMAIN_PLACE_RECOVERY_PROBE_RESULT={\"schemaVersion\":\"main-place-recovery-probe-result.v1\",\"organicCount\":50,\"observedRankCount\":50,\"adCount\":0,\"providerSubtype\":\"apollo_success\"}"), /invalid/i);
+  await assert.rejects(
+    executeV2Top20MainPlaceRecoveryProbe({
+      contract,
+      tempBase: os.tmpdir(),
+      heartbeat: async () => {},
+      onProviderCall: async () => {},
+      spawnImpl() {
+        const child = new EventEmitter();
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => {};
+        process.nextTick(() => child.emit("close", 1));
+        return child;
+      }
+    }),
+    (error) => {
+      assert.notEqual(error?.name, "ReferenceError");
+      return true;
+    }
+  );
   assert.equal(guard.blockedAttempts(), 0);
   console.log("main-place recovery probe fixtures passed");
-} finally {
-  guard.restore();
+  } finally {
+    guard.restore();
+  }
 }
+
+main().catch((error) => {
+  console.error(error?.stack || error);
+  process.exitCode = 1;
+});
