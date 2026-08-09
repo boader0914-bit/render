@@ -29,6 +29,7 @@ const COLLECTION_WORKER_V2_TOP20_SUMMARY_PATH = "top20-summary.json";
 const COLLECTION_WORKER_V2_TOP20_ARTIFACT_PROOF_DOMAIN = "lodging-datalab.collection-worker.top20-artifact-key-proof.v1";
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{86}$/u;
+const EXECUTION_REQUEST_ID_PATTERN = /^[a-zA-Z0-9._:-]{8,128}$/u;
 
 class CollectionWorkerV2Top20ProtocolError extends Error {
   constructor(code, message, statusCode = 400) {
@@ -194,6 +195,48 @@ function computeV2Top20ContractHash(input = {}) {
   }));
 }
 
+function normalizeV2Top20ExecutionRequestId(value) {
+  const executionRequestId = String(value || "").trim();
+  if (!EXECUTION_REQUEST_ID_PATTERN.test(executionRequestId)) {
+    throw protocolError(
+      "COLLECTION_WORKER_V2_TOP20_EXECUTION_REQUEST_INVALID",
+      "top20 execution request ID is invalid",
+      400
+    );
+  }
+  return executionRequestId;
+}
+
+function computeV2Top20ExecutionRequestHash(value) {
+  const executionRequestId = normalizeV2Top20ExecutionRequestId(value);
+  return sha256Hex(stableJson({
+    domain: "lodging-datalab.top20-execution-request.v1",
+    executionRequestId
+  }));
+}
+
+function buildV2Top20ExecutionIdempotencyKey(input = {}) {
+  const contractIdempotencyKey = String(input.contractIdempotencyKey || "");
+  const executionRequestHash = String(input.executionRequestHash || "");
+  const jobId = String(input.jobId || "");
+  const attemptId = String(input.attemptId || "");
+  if (
+    !HASH_PATTERN.test(contractIdempotencyKey)
+    || !HASH_PATTERN.test(executionRequestHash)
+    || !/^job-top20-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(jobId)
+    || !/^attempt:top20-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(attemptId)
+  ) {
+    throw protocolError("COLLECTION_WORKER_V2_TOP20_INPUT_INVALID", "top20 execution idempotency input is invalid");
+  }
+  return sha256Hex(stableJson({
+    domain: "lodging-datalab.top20-job-execution.v1",
+    contractIdempotencyKey,
+    executionRequestHash,
+    jobId,
+    attemptId
+  }));
+}
+
 // collection_worker_contract.v1 currently signs the fixed top-three compatibility
 // shape. The full top20 hash is therefore included in the signed approvalId and
 // is rechecked in the signed artifact. This bridge does not reduce the top20
@@ -215,12 +258,16 @@ function buildV2Top20DispatchCompatibilityContract(input = {}) {
   });
 }
 
-function top20ApprovalId(contractHash) {
+function top20ApprovalId(contractHash, executionRequestHash = null) {
   const hash = String(contractHash || "");
   if (!HASH_PATTERN.test(hash)) {
     throw protocolError("COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID", "top20 contract hash is invalid");
   }
-  return `approval:top20:${hash}`;
+  if (executionRequestHash === null) return `approval:top20:${hash}`;
+  if (!HASH_PATTERN.test(String(executionRequestHash || ""))) {
+    throw protocolError("COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID", "top20 execution request hash is invalid");
+  }
+  return `approval:top20-${String(executionRequestHash).slice(0, 12)}`;
 }
 
 function decodeEd25519Key(value, type) {
@@ -318,10 +365,13 @@ module.exports = {
   artifactKeyProofPayload,
   buildV2Top20ArtifactKeyProof,
   buildV2Top20DispatchCompatibilityContract,
+  buildV2Top20ExecutionIdempotencyKey,
   buildV2Top20ExecutionContract,
+  computeV2Top20ExecutionRequestHash,
   computeV2Top20ContractHash,
   decodeEd25519Key,
   normalizeV2Top20PrepareContract,
+  normalizeV2Top20ExecutionRequestId,
   sha256Hex,
   stableJson,
   top20ApprovalId,

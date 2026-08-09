@@ -3044,14 +3044,26 @@ function isTop20CrawlPreview(value = {}) {
   const boundedInventory = value?.boundedInventory || value?.estimateBasis?.boundedInventory || null;
   return value?.workerTop20 === true
     || Number(boundedInventory?.inventoryPlaceLimit || 0) === 20
-    || Number(boundedInventory?.totalCallBudget || 0) === 201;
+    || Number(boundedInventory?.totalCallBudget || 0) >= 1;
+}
+
+function top20MaximumProviderCalls(value = {}) {
+  const boundedInventory = value?.boundedInventory || value?.estimateBasis?.boundedInventory || null;
+  const maximum = Number(
+    value?.maximumProviderCalls
+    || boundedInventory?.maximumProviderCalls
+    || boundedInventory?.totalCallBudget
+    || 0
+  );
+  return Number.isInteger(maximum) && maximum > 0 ? maximum : null;
 }
 
 function crawlEstimateBasisText(basis = {}) {
   if (!basis || !Object.keys(basis).length) return "조건 기반 예상값입니다.";
   if (basis.boundedInventory) {
     if (isTop20CrawlPreview(basis)) {
-      return "메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 순차 수집 · 최대 201요청 · 자동 재시도 없음 · 네이버예약 공개 재고 기반 추정(실제 정산매출 아님)";
+      const maximumProviderCalls = top20MaximumProviderCalls(basis);
+      return `메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 순차 수집 · 최대 ${maximumProviderCalls || "—"}요청 · 자동 재시도 없음 · 네이버예약 공개 재고 기반 추정(실제 정산매출 아님)`;
     }
     return "메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 순차 수집 · 최대 31요청 · 자동 재시도 없음 · 네이버예약 공개 재고 기반 추정(실제 정산매출 아님)";
   }
@@ -3249,7 +3261,7 @@ function renderCrawlReadinessPreview(payload = currentCrawlFormPayload(), previe
   if (els.crawlProgressTitle) els.crawlProgressTitle.textContent = "예상 수집 시간";
   if (els.crawlProgressText) {
     els.crawlProgressText.textContent = isTop20CrawlPreview(preview)
-      ? `${keyword} · 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 201요청 · 실제 정산매출 아님`
+      ? `${keyword} · 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님`
       : preview.boundedInventory
       ? `${keyword} · 메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 최대 31요청 · 실제 정산매출 아님`
       : `${keyword} · ${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} 기준`;
@@ -3279,7 +3291,7 @@ function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()
       const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
       const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
       els.crawlSpeedPreview.textContent = isTop20CrawlPreview(estimate)
-        ? `메인 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 201요청 · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 실매출 아님`
+        ? `메인 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 ${top20MaximumProviderCalls(estimate) || "—"}요청 · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 실매출 아님`
         : estimate.boundedInventory
         ? `메인 1~50 · 재고 상위 3곳 · 1일 · 최대 31요청 · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 실매출 아님`
         : `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)}${safetyText}`;
@@ -35917,6 +35929,9 @@ async function submitCrawl(event) {
     els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
   const payload = currentCrawlFormPayload();
+  payload.clientRequestId = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `crawl-${Date.now()}-${Math.random().toString(16).slice(2, 14)}`;
   payload.searchIntentMode = "auto";
   if (recrawlContextMatchesPayload(state.pendingRecrawlContext, payload)) {
     payload.recrawlContext = state.pendingRecrawlContext;
@@ -35947,7 +35962,7 @@ async function submitCrawl(event) {
     true,
     "수집 실행 중",
     isTop20CrawlPreview(preview)
-      ? `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 201요청`
+      ? `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청`
       : preview.boundedInventory
       ? `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 최대 31요청`
       : `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
@@ -35958,19 +35973,19 @@ async function submitCrawl(event) {
     setCrawlProgress(
       true,
       "상위 20곳 Worker 수집 중",
-      `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 201요청`,
+      `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청`,
       preview,
       payload
     );
   }
   els.crawlStatus.textContent = isTop20CrawlPreview(preview)
-    ? `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 201요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`
+    ? `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`
     : preview.boundedInventory
     ? `제한 수집을 시작했습니다. 메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 최대 31요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`
     : `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.shortLabel || purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
   setStatus("수집 중");
   if (preview.workerTop20) {
-    els.crawlStatus.textContent = `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 201요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
+    els.crawlStatus.textContent = `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
   }
   scheduleCrawlStatusPoll(1500, false);
   try {

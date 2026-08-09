@@ -243,6 +243,7 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     "contractHash",
     "executionIdentityHash",
     "top20ContractHash",
+    "executionRequestHash",
     "contract",
     "top20Contract",
     "providerSession",
@@ -268,8 +269,9 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     || value.contractHash !== verifiedJob.contractHash
     || value.executionIdentityHash !== verifiedJob.executionIdentityHash
     || value.top20ContractHash !== expectedTop20Hash
+    || !/^[a-f0-9]{64}$/u.test(String(value.executionRequestHash || ""))
     || stableJson(value.top20Contract) !== stableJson(expectedTop20Contract)
-    || verifiedJob.approvalId !== top20ApprovalId(expectedTop20Hash)
+    || verifiedJob.approvalId !== top20ApprovalId(expectedTop20Hash, value.executionRequestHash)
     || verifiedJob.contract.keywordHash !== normalized.keywordHash
     || verifiedJob.contract.checkIn !== normalized.checkIn
     || verifiedJob.contract.checkOut !== normalized.checkOut
@@ -290,6 +292,7 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     contract: Object.freeze({ ...value.contract }),
     top20Contract: expectedTop20Contract,
     top20ContractHash: expectedTop20Hash,
+    executionRequestHash: value.executionRequestHash,
     detailProviderSession: Object.freeze({ ...value.detailProviderSession })
   });
 }

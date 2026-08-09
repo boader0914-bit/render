@@ -182,14 +182,15 @@ async function prepareClaimPreflight(system, keys, keyword) {
   });
   assert.equal(claimed.status, "claimed");
   assert.equal(claimed.job.executionPayload.top20ContractHash, prepared.top20ContractHash);
+  assert.equal(claimed.job.executionPayload.executionRequestHash, prepared.executionRequestHash);
   assert.equal(claimed.job.executionPayload.providerSession.maximumProviderCalls, 241);
   assert.equal(claimed.job.executionPayload.providerSession.concurrency, 1);
   assert.equal(claimed.job.executionPayload.providerSession.automaticRetry, false);
   assert.equal(claimed.job.executionPayload.providerSession.automaticFallback, false);
   assert.equal(
     claimed.job.signedJob.approvalId,
-    `approval:top20:${prepared.top20ContractHash}`,
-    "the legacy signed-job envelope must bind the full top20 hash"
+    `approval:top20-${prepared.executionRequestHash.slice(0, 12)}`,
+    "the signed-job envelope must bind the execution request hash"
   );
 
   const runtimeId = runtimeIdForCommit(COMMIT);
@@ -693,6 +694,63 @@ async function validatedRestartScenario(root, keys) {
   assert.equal(system.callbackCount(), 0, "restart reconciliation must never apply the write transaction");
 }
 
+async function repeatExecutionScenario(root, keys) {
+  const system = await createSystem(root, keys);
+  const repeatedContract = contract("Synthetic repeat contract lodging");
+  const firstRequestId = "repeat-request-0001";
+  const first = await system.orchestrator.prepare({
+    operatorToken: OPERATOR_TOKEN,
+    contract: repeatedContract,
+    executionRequestId: firstRequestId
+  });
+  const replay = await system.orchestrator.prepare({
+    operatorToken: OPERATOR_TOKEN,
+    contract: repeatedContract,
+    executionRequestId: firstRequestId
+  });
+  assert.equal(replay.reused, true, "the same execution request must reuse its job");
+  assert.equal(replay.jobId, first.jobId);
+  assert.equal((await system.providerStore.read()).workflowRevision, first.providerWorkflowRevision);
+  await assert.rejects(
+    () => system.orchestrator.prepare({
+      operatorToken: OPERATOR_TOKEN,
+      contract: repeatedContract,
+      executionRequestId: "repeat-request-0002"
+    }),
+    { code: "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB" },
+    "a distinct execution must not bypass an active job"
+  );
+  const terminal = await system.jobStore.transitionJob({
+    jobId: first.jobId,
+    expectedWorkflowRevision: first.workflowRevision,
+    nextState: "indeterminate",
+    now: system.clock.tick()
+  });
+  await system.providerStore.releaseAttempt({
+    expectedWorkflowRevision: first.providerWorkflowRevision,
+    now: system.clock.tick()
+  });
+  assert.equal(terminal.state, "indeterminate");
+  const next = await system.orchestrator.prepare({
+    operatorToken: OPERATOR_TOKEN,
+    contract: repeatedContract,
+    executionRequestId: "repeat-request-0003"
+  });
+  assert.equal(next.status, "queued");
+  assert.equal(next.top20ContractHash, first.top20ContractHash);
+  assert.notEqual(next.jobId, first.jobId);
+  assert.notEqual(next.executionIdentityHash, first.executionIdentityHash);
+  const dryRun = await system.orchestrator.prepareDryRunTrustedAdmin({
+    trustedAdmin: true,
+    contract: repeatedContract,
+    executionRequestId: "repeat-request-0004"
+  });
+  assert.equal(dryRun.providerReservationCreated, false);
+  assert.equal(dryRun.workerClaimStarted, false);
+  assert.equal(dryRun.writeCount, 0);
+  assert.equal(dryRun.conflictCode, "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB");
+}
+
 async function main() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "collection-worker-top20-orchestrator-"));
   const keys = keySet();
@@ -705,6 +763,7 @@ async function main() {
     await queuedRestartScenario(path.join(root, "restart-queued"), keys);
     await collectingRestartScenario(path.join(root, "restart-collecting"), keys);
     await validatedRestartScenario(path.join(root, "restart-validated"), keys);
+    await repeatExecutionScenario(path.join(root, "repeat-execution"), keys);
     assert.equal(unexpectedNetworkCalls, 0, "top20 orchestrator fixtures must not use external networking");
     console.log("collection worker V2 top20 orchestrator fixtures passed");
   } finally {

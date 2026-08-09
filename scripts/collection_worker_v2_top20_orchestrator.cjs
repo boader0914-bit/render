@@ -47,9 +47,12 @@ const {
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
   buildV2Top20DispatchCompatibilityContract,
+  buildV2Top20ExecutionIdempotencyKey,
   buildV2Top20ExecutionContract,
+  computeV2Top20ExecutionRequestHash,
   computeV2Top20ContractHash,
   decodeEd25519Key,
+  normalizeV2Top20ExecutionRequestId,
   normalizeV2Top20PrepareContract,
   sha256Hex,
   stableJson,
@@ -217,12 +220,19 @@ function maskJobId(value) {
   return match ? `job-top20-${match[1].slice(0, 12)}…` : "";
 }
 
+function maskTop20ExecutionJobId(value) {
+  const text = String(value || "");
+  const match = text.match(/^job-top20-([a-f0-9]{12})-([a-f0-9]{12})$/u);
+  return match ? `job-top20-${match[1]}-${match[2]}` : "";
+}
+
 function safeTop20Log(event, fields = {}) {
   console.warn(`[top20-provenance] ${stableJson({
     timestamp: fields.timestamp || new Date().toISOString(),
     event: String(event || "top20_event"),
-    jobId: maskJobId(fields.jobId),
+    jobId: maskTop20ExecutionJobId(fields.jobId) || maskJobId(fields.jobId),
     contractHash: shortSafeHash(fields.contractHash),
+    executionRequestHash: shortSafeHash(fields.executionRequestHash),
     executionIdentityHash: shortSafeHash(fields.executionIdentityHash),
     workerCommit: shortCommit(fields.workerCommit),
     sourceRole: String(fields.sourceRole || ""),
@@ -234,6 +244,8 @@ function safeTop20Log(event, fields = {}) {
     requestOrdinal: Number.isInteger(fields.requestOrdinal) ? fields.requestOrdinal : null,
     jobState: String(fields.jobState || ""),
     failureCode: String(fields.failureCode || ""),
+    existingJobId: maskTop20ExecutionJobId(fields.existingJobId) || maskJobId(fields.existingJobId),
+    existingJobState: String(fields.existingJobState || ""),
     pid: process.pid,
     hostname: os.hostname(),
     renderServiceId: String(process.env.RENDER_SERVICE_ID || ""),
@@ -579,11 +591,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     assertReady();
     await reconcileFirstUse();
     const normalized = normalizeV2Top20PrepareContract(input.contract);
+    const executionRequestId = input.executionRequestId === undefined || input.executionRequestId === null
+      ? crypto.randomUUID()
+      : normalizeV2Top20ExecutionRequestId(input.executionRequestId);
+    const executionRequestHash = computeV2Top20ExecutionRequestHash(executionRequestId);
     const top20Contract = buildV2Top20ExecutionContract(input.contract);
     const top20ContractHash = computeV2Top20ContractHash(top20Contract);
     safeTop20Log("top20_job_prepare_requested", {
       timestamp: new Date(now()).toISOString(),
       contractHash: top20ContractHash,
+      executionRequestHash,
       workerCommit: targetWorkerCommit,
       sourceRole: "admin",
       sourceRoute: "/api/crawl",
@@ -592,18 +609,51 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       collectionProfile: "top20_inventory_revenue"
     });
     const snapshot = await jobStore.readSnapshot();
+    const contractPrefix = top20ContractHash.slice(0, 12);
+    const executionPrefix = executionRequestHash.slice(0, 12);
+    const jobId = `job-top20-${contractPrefix}-${executionPrefix}`;
+    const attemptId = `attempt:top20-${contractPrefix}-${executionPrefix}`;
+    const existingExecution = snapshot.jobs.find((job) => job.jobId === jobId) || null;
+    if (existingExecution) {
+      safeTop20Log("top20_job_prepare_reused", {
+        timestamp: new Date(now()).toISOString(),
+        jobId: existingExecution.jobId,
+        contractHash: top20ContractHash,
+        executionRequestHash,
+        executionIdentityHash: existingExecution.executionIdentityHash,
+        workerCommit: targetWorkerCommit,
+        sourceRole: input.provenance?.sourceRole || "admin",
+        sourceRoute: input.provenance?.sourceRoute || "/api/crawl",
+        actorKind: input.provenance?.actorKind || "operator",
+        collectorBackend: input.provenance?.collectorBackend || "v2_top20_worker",
+        collectionProfile: "top20_inventory_revenue",
+        jobState: existingExecution.state
+      });
+      return Object.freeze({
+        schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
+        status: existingExecution.state,
+        reused: true,
+        jobId: existingExecution.jobId,
+        workflowRevision: existingExecution.workflowRevision,
+        contractHash: existingExecution.contractHash,
+        executionIdentityHash: existingExecution.executionIdentityHash,
+        top20ContractHash,
+        executionRequestHash,
+        providerWorkflowRevision: existingExecution.providerWorkflowRevision,
+        maxProviderAttempts: 1,
+        maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+        automaticRetry: false,
+        automaticFallback: false
+      });
+    }
     const active = snapshot.jobs.find((job) => (
       job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID && ACTIVE_JOB_STATES.has(job.state)
     ));
     if (active) {
-      throw fail("COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB", "another top20 job is active", 409);
-    }
-
-    const suffix = top20ContractHash.slice(0, 24);
-    const jobId = `job-top20-${suffix}`;
-    const attemptId = `attempt:top20-${suffix}`;
-    if (snapshot.jobs.some((job) => job.jobId === jobId)) {
-      throw fail("COLLECTION_WORKER_V2_TOP20_ALREADY_FINALIZED", "this top20 contract was already executed", 409);
+      const error = fail("COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB", "another top20 job is active", 409);
+      error.existingJobId = active.jobId;
+      error.existingJobState = active.state;
+      throw error;
     }
 
     const createdAt = new Date(now());
@@ -636,7 +686,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       const signedJob = buildSignedJobEnvelope({
         jobId,
         attemptId,
-        approvalId: top20ApprovalId(top20ContractHash),
+        approvalId: top20ApprovalId(top20ContractHash, executionRequestHash),
         audience: COLLECTION_WORKER_JOB_AUDIENCE,
         workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
         workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
@@ -657,7 +707,12 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       const job = await jobStore.createOrReuseJob({
         jobId,
         attemptId,
-        idempotencyKey: signedJob.idempotencyKey,
+        idempotencyKey: buildV2Top20ExecutionIdempotencyKey({
+          contractIdempotencyKey: signedJob.idempotencyKey,
+          executionRequestHash,
+          jobId,
+          attemptId
+        }),
         contractHash: signedJob.contractHash,
         executionIdentityHash: signedJob.executionIdentityHash,
         backendId: COLLECTION_WORKER_V2_TOP20_BACKEND_ID,
@@ -675,6 +730,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         contractHash: signedJob.contractHash,
         executionIdentityHash: signedJob.executionIdentityHash,
         top20ContractHash,
+        executionRequestHash,
         contract: Object.freeze({
           keyword: normalized.keyword,
           searchMode: normalized.searchMode,
@@ -708,6 +764,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         signedJob,
         executionPayload,
         top20ContractHash,
+        executionRequestHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
         preflighted: false,
         lifecycle: "active",
@@ -718,6 +775,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         timestamp: createdAt.toISOString(),
         jobId,
         contractHash: signedJob.contractHash,
+        executionRequestHash,
         executionIdentityHash: signedJob.executionIdentityHash,
         workerCommit: targetWorkerCommit,
         sourceRole: "admin",
@@ -735,6 +793,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         contractHash: signedJob.contractHash,
         executionIdentityHash: signedJob.executionIdentityHash,
         top20ContractHash,
+        executionRequestHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
         maxProviderAttempts: 1,
         maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
@@ -752,16 +811,117 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
   }
 
+  async function prepareWithAudit(input = {}) {
+    try {
+      return await prepareCore(input);
+    } catch (error) {
+      let contractHash = "";
+      let executionRequestHash = "";
+      try {
+        contractHash = computeV2Top20ContractHash(buildV2Top20ExecutionContract(input.contract));
+      } catch {}
+      try {
+        executionRequestHash = computeV2Top20ExecutionRequestHash(input.executionRequestId);
+      } catch {}
+      safeTop20Log("top20_job_prepare_rejected", {
+        timestamp: new Date(now()).toISOString(),
+        contractHash,
+        executionRequestHash,
+        existingJobId: error?.existingJobId,
+        existingJobState: error?.existingJobState,
+        workerCommit: targetWorkerCommit,
+        sourceRole: input.provenance?.sourceRole || "admin",
+        sourceRoute: input.provenance?.sourceRoute || "/api/crawl",
+        actorKind: input.provenance?.actorKind || "operator",
+        collectorBackend: input.provenance?.collectorBackend || "v2_top20_worker",
+        failureCode: error?.code || "COLLECTION_WORKER_V2_TOP20_PREPARE_FAILED"
+      });
+      throw error;
+    }
+  }
+
   async function prepare(input = {}) {
-    normalizeOperatorToken(input.operatorToken, options.operatorTokenSha256);
-    return prepareCore(input);
+    try {
+      normalizeOperatorToken(input.operatorToken, options.operatorTokenSha256);
+    } catch (error) {
+      safeTop20Log("top20_job_prepare_rejected", {
+        timestamp: new Date(now()).toISOString(),
+        sourceRole: input.provenance?.sourceRole || "operator",
+        sourceRoute: input.provenance?.sourceRoute || "",
+        actorKind: input.provenance?.actorKind || "operator",
+        collectorBackend: input.provenance?.collectorBackend || "v2_top20_worker",
+        failureCode: error?.code || "COLLECTION_WORKER_V2_TOP20_PREPARE_FAILED"
+      });
+      throw error;
+    }
+    return prepareWithAudit(input);
   }
 
   async function prepareTrustedAdmin(input = {}) {
     if (input.trustedAdmin !== true) {
       throw fail("COLLECTION_WORKER_V2_TOP20_ADMIN_PREPARE_FORBIDDEN", "trusted admin preparation is required", 403);
     }
-    return prepareCore({ contract: input.contract });
+    return prepareWithAudit({
+      contract: input.contract,
+      executionRequestId: input.executionRequestId,
+      provenance: input.provenance
+    });
+  }
+
+  async function prepareDryRunTrustedAdmin(input = {}) {
+    if (input.trustedAdmin !== true) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_ADMIN_PREPARE_FORBIDDEN", "trusted admin preparation is required", 403);
+    }
+    assertReady();
+    await reconcileFirstUse();
+    const executionRequestId = normalizeV2Top20ExecutionRequestId(input.executionRequestId);
+    const executionRequestHash = computeV2Top20ExecutionRequestHash(executionRequestId);
+    const top20ContractHash = computeV2Top20ContractHash(buildV2Top20ExecutionContract(input.contract));
+    const contractPrefix = top20ContractHash.slice(0, 12);
+    const executionPrefix = executionRequestHash.slice(0, 12);
+    const jobId = `job-top20-${contractPrefix}-${executionPrefix}`;
+    const snapshot = await jobStore.readSnapshot();
+    const existingExecution = snapshot.jobs.find((job) => job.jobId === jobId) || null;
+    const active = snapshot.jobs.find((job) => (
+      job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID && ACTIVE_JOB_STATES.has(job.state)
+    )) || null;
+    const providerState = await providerStore.read();
+    const conflictCode = existingExecution
+      ? "COLLECTION_WORKER_V2_TOP20_EXECUTION_ALREADY_EXISTS"
+      : active
+        ? "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB"
+        : providerState.state !== "closed"
+          ? "NAVER_PROVIDER_COOLDOWN_ACTIVE"
+          : null;
+    safeTop20Log("top20_job_prepare_dry_run", {
+      timestamp: new Date(now()).toISOString(),
+      jobId,
+      contractHash: top20ContractHash,
+      executionRequestHash,
+      workerCommit: targetWorkerCommit,
+      sourceRole: input.provenance?.sourceRole || "admin",
+      sourceRoute: input.provenance?.sourceRoute || "/api/admin/collection-worker/v2-top20/prepare-dry-run",
+      actorKind: input.provenance?.actorKind || "operator",
+      collectorBackend: input.provenance?.collectorBackend || "v2_top20_worker",
+      jobState: existingExecution?.state || "",
+      failureCode: conflictCode || ""
+    });
+    return Object.freeze({
+      schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
+      wouldCreate: conflictCode === null,
+      conflictCode,
+      reused: Boolean(existingExecution),
+      generatedJobId: jobId,
+      contractHash: top20ContractHash,
+      executionRequestHash,
+      existingJobId: existingExecution?.jobId || null,
+      existingJobState: existingExecution?.state || null,
+      activeJobId: active?.jobId || null,
+      providerState: providerState.state,
+      providerReservationCreated: false,
+      workerClaimStarted: false,
+      writeCount: 0
+    });
   }
 
   async function claim(input = {}) {
@@ -1537,6 +1697,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     preflight,
     prepare,
     prepareTrustedAdmin,
+    prepareDryRunTrustedAdmin,
     recordFailure,
     markTerminalPayload(input = {}) {
       const jobId = String(input.jobId || "");

@@ -102,8 +102,12 @@ const {
   COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREPARE_PATH,
-  COLLECTION_WORKER_V2_TOP20_WORKER_ID
+  COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+  normalizeV2Top20ExecutionRequestId
 } = require("./collection_worker_v2_top20_protocol.cjs");
+const {
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+} = require("./collection_worker_v2_top20_resilience.cjs");
 const {
   buildNaverCollectionFallbackState,
   createNaverSearchContractSignature,
@@ -5044,8 +5048,8 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
       inventoryPlaceLimit: 20,
       observationDays: 1,
       maxProductsPerCompany: 8,
-      totalCallBudget: 201,
-      naverCallBudget: 201,
+      totalCallBudget: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+      naverCallBudget: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
       otaCallBudget: 0,
       concurrency: 1,
       automaticRetry: false,
@@ -5067,7 +5071,7 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
         ? {
             ...stage,
             label: "상위 20곳 재고·가격·예상매출",
-            detail: "Worker가 1위부터 20위까지 한 곳씩 순서대로 확인합니다. 최대 NAVER 요청은 201건입니다."
+            detail: `Worker가 1위부터 20위까지 한 곳씩 순서대로 확인합니다. 최대 NAVER 요청은 ${V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS}건입니다.`
           }
         : stage)
     };
@@ -15014,6 +15018,33 @@ function isExplicitLegacyFrozenCrawlRequest(payload = {}) {
   return String(payload.collectorBackend || "").trim() === "legacy_frozen";
 }
 
+function top20ExecutionRequestIdFromPayload(payload = {}) {
+  const supplied = payload?.clientRequestId;
+  if (supplied === undefined || supplied === null || String(supplied).trim() === "") {
+    return crypto.randomUUID();
+  }
+  try {
+    return normalizeV2Top20ExecutionRequestId(supplied);
+  } catch {
+    const error = new Error("수집 실행 ID 형식이 올바르지 않습니다.");
+    error.code = "COLLECTION_WORKER_V2_TOP20_EXECUTION_REQUEST_INVALID";
+    error.statusCode = 400;
+    error.retryable = false;
+    throw error;
+  }
+}
+
+function top20PrepareFailureMessage(code = "") {
+  if (code === "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB") return "이미 진행 중인 수집이 있습니다.";
+  if (code === "NAVER_PROVIDER_COOLDOWN_ACTIVE") return "네이버 연결 안정화 대기 중입니다.";
+  if ([
+    "COLLECTION_WORKER_V2_TOP20_EXECUTION_ALREADY_EXISTS",
+    "COLLECTION_JOB_IDEMPOTENCY_CONFLICT",
+    "COLLECTION_WORKER_V2_TOP20_EXECUTION_REQUEST_INVALID"
+  ].includes(code)) return "수집 실행 ID를 준비하지 못했습니다.";
+  return "수집 실행 준비를 완료하지 못했습니다.";
+}
+
 const TOP20_WORKER_TERMINAL_STATES = new Set([
   "committed",
   "blocked",
@@ -15097,28 +15128,40 @@ async function refreshTop20WorkerOutcome() {
 
 async function queueV2Top20WorkerCollection(payload = {}) {
   await restoreActiveTop20WorkerJob();
-  if (activeCrawlPromise || activeTop20WorkerJob) {
+  if (activeCrawlPromise) {
     const error = new Error("이미 진행 중인 수집이 있습니다.");
     error.code = "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB";
     error.statusCode = 409;
     throw error;
   }
   const contract = v2Top20WorkerContract(payload);
+  const executionRequestId = top20ExecutionRequestIdFromPayload(payload);
   const prepared = await collectionWorkerV2Top20Orchestrator.prepareTrustedAdmin({
     trustedAdmin: true,
-    contract
+    contract,
+    executionRequestId,
+    provenance: {
+      sourceRoute: "/api/crawl",
+      sourceRole: "admin",
+      actorKind: "operator",
+      collectorBackend: "v2_top20_worker"
+    }
   });
-  activeTop20WorkerJob = Object.freeze({
-    jobId: prepared.jobId,
-    startedAt: new Date().toISOString(),
-    contract
-  });
-  lastTop20WorkerOutcome = null;
+  if (!prepared.reused && !TOP20_WORKER_TERMINAL_STATES.has(prepared.status)) {
+    activeTop20WorkerJob = Object.freeze({
+      jobId: prepared.jobId,
+      startedAt: new Date().toISOString(),
+      contract
+    });
+    lastTop20WorkerOutcome = null;
+  }
   return Object.freeze({
-    queued: true,
+    queued: prepared.status === "queued",
+    reused: prepared.reused === true,
     worker: true,
     workerJobId: prepared.jobId,
     top20ContractHash: prepared.top20ContractHash,
+    executionRequestHash: prepared.executionRequestHash,
     maximumProviderCalls: prepared.maximumProviderCalls,
     automaticRetry: false,
     automaticFallback: false
@@ -16376,6 +16419,26 @@ async function route(req, res) {
       });
     }
 
+    if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/prepare-dry-run") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      const contract = v2Top20WorkerContract(payload);
+      const result = await collectionWorkerV2Top20Orchestrator.prepareDryRunTrustedAdmin({
+        trustedAdmin: true,
+        contract,
+        executionRequestId: top20ExecutionRequestIdFromPayload(payload),
+        provenance: {
+          sourceRoute: "/api/admin/collection-worker/v2-top20/prepare-dry-run",
+          sourceRole: "admin",
+          actorKind: "operator",
+          collectorBackend: "v2_top20_worker"
+        }
+      });
+      return send(res, 200, result, "application/json; charset=utf-8", {
+        "Cache-Control": "no-store"
+      });
+    }
+
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/provider-canary/naver-place-main/execute") {
       if (!requireAdminSession(session, req, res)) return;
       const result = await naverLegacyCanaryRunner.execute();
@@ -16639,9 +16702,26 @@ async function route(req, res) {
       const trustedPayload = useTop20Worker
         ? adminPayload
         : trustedPreviewFrozenCrawlPayload(adminPayload);
-      const result = useTop20Worker
-        ? await queueV2Top20WorkerCollection(trustedPayload)
-        : await runCrawler(trustedPayload);
+      let result;
+      if (useTop20Worker) {
+        try {
+          result = await queueV2Top20WorkerCollection({
+            ...trustedPayload,
+            clientRequestId: payload.clientRequestId
+          });
+        } catch (error) {
+          return send(res, Number(error?.statusCode || 409), {
+            error: top20PrepareFailureMessage(error?.code),
+            code: String(error?.code || "COLLECTION_WORKER_V2_TOP20_PREPARE_FAILED"),
+            stage: "prepare",
+            retryable: false,
+            retryAt: error?.retryAt || undefined,
+            retryAfterSeconds: error?.retryAfterSeconds || undefined
+          }, "application/json; charset=utf-8");
+        }
+      } else {
+        result = await runCrawler(trustedPayload);
+      }
       const runs = publicRunsForRole(await listRuns(), session.role);
       return send(res, useTop20Worker ? 202 : 200, { ...result, runs });
     }
