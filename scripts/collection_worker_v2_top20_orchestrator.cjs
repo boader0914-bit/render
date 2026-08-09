@@ -35,6 +35,8 @@ const {
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_DISPATCH_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
+  COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH,
+  COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE,
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
   COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
@@ -123,6 +125,11 @@ const FAILURE_KEYS = Object.freeze([
   "code",
   "providerFailureSubtype",
   "diagnosticId"
+]);
+const MAIN_PLACE_PROBE_FINALIZE_KEYS = Object.freeze([
+  "jobId", "attemptId", "workflowRevision", "providerWorkflowRevision",
+  "providerAttemptCount", "executedCallCount", "organicCount", "observedRankCount",
+  "providerSubtype", "diagnosticId", "outcome"
 ]);
 const SUMMARY_KEYS = Object.freeze([
   "schemaVersion",
@@ -654,7 +661,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       sourceRoute: "/api/crawl",
       actorKind: "operator",
       collectorBackend: "v2_top20_worker",
-      collectionProfile: "top20_inventory_revenue"
+      collectionProfile: input.recoveryProbe === true ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue"
     });
     const snapshot = await jobStore.readSnapshot();
     const contractPrefix = top20ContractHash.slice(0, 12);
@@ -674,7 +681,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         sourceRoute: input.provenance?.sourceRoute || "/api/crawl",
         actorKind: input.provenance?.actorKind || "operator",
         collectorBackend: input.provenance?.collectorBackend || "v2_top20_worker",
-        collectionProfile: "top20_inventory_revenue",
+        collectionProfile: input.recoveryProbe === true ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue",
         jobState: existingExecution.state
       });
       return Object.freeze({
@@ -707,7 +714,19 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     const createdAt = new Date(now());
     const providerState = await providerStore.read();
     const detailProviderState = await detailProviderStore.read();
-    if (providerState.state !== "closed") {
+    const recoveryProbe = input.recoveryProbe === true;
+    const availability = providerAvailability(providerState, { now: createdAt });
+    if (recoveryProbe && (providerState.state !== "open" || !availability.probeRequired || availability.attemptInFlight)) {
+      throw fail(
+        providerState.state === "open" && availability.coolingDown
+          ? "COLLECTION_WORKER_MAIN_PLACE_PROBE_COOLDOWN_ACTIVE"
+          : "COLLECTION_WORKER_MAIN_PLACE_PROBE_NOT_REQUIRED",
+        "main-place recovery probe is not eligible for this provider state",
+        409,
+        retryMeta(providerState, createdAt)
+      );
+    }
+    if (!recoveryProbe && providerState.state !== "closed") {
       throw fail(
         "NAVER_PROVIDER_COOLDOWN_ACTIVE",
         "NAVER provider must be closed before a top20 job can reserve its session",
@@ -799,14 +818,15 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
           concurrency: 1,
           automaticRetry: false,
           automaticFallback: false,
-          circuitStateAtReservation: "closed",
+          circuitStateAtReservation: recoveryProbe ? "open" : "closed",
           serviceGlobalLockHeld: true
         }),
         detailProviderSession: Object.freeze({
           state: detailProviderState.state,
           retryAt: detailProviderState.retryAt || null,
           liveCallsAllowed: detailProviderState.state === "closed"
-        })
+        }),
+        executionProfile: recoveryProbe ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue"
       });
       payloads.set(jobId, {
         signedJob,
@@ -830,7 +850,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         sourceRoute: "/api/crawl",
         actorKind: "operator",
         collectorBackend: "v2_top20_worker",
-        collectionProfile: "top20_inventory_revenue",
+        collectionProfile: recoveryProbe ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue",
         jobState: "queued"
       });
       return Object.freeze({
@@ -913,6 +933,18 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       contract: input.contract,
       executionRequestId: input.executionRequestId,
       provenance: input.provenance
+    });
+  }
+
+  async function prepareMainPlaceRecoveryProbeTrustedAdmin(input = {}) {
+    if (input.trustedAdmin !== true) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_ADMIN_PREPARE_FORBIDDEN", "trusted admin preparation is required", 403);
+    }
+    return prepareWithAudit({
+      contract: input.contract,
+      executionRequestId: input.executionRequestId,
+      provenance: { ...input.provenance, sourceRoute: "/api/admin/collection-worker/v2-top20/main-place-recovery-probe" },
+      recoveryProbe: true
     });
   }
 
@@ -1738,6 +1770,66 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     });
   }
 
+  async function finalizeMainPlaceRecoveryProbe(input = {}) {
+    assertReady();
+    exactKeys(input.body, MAIN_PLACE_PROBE_FINALIZE_KEYS, "main-place recovery probe receipt");
+    verifyWorkerAuth(input.signedRequest, input.body, COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH);
+    await reconcileFirstUse();
+    const body = input.body;
+    const outcome = String(body.outcome || "");
+    const providerSubtype = body.providerSubtype === null ? null : String(body.providerSubtype || "");
+    const diagnosticId = body.diagnosticId === null ? null : String(body.diagnosticId || "");
+    if (
+      !["ready", "blocked", "indeterminate"].includes(outcome)
+      || !Number.isInteger(Number(body.providerAttemptCount)) || ![0, 1].includes(Number(body.providerAttemptCount))
+      || !Number.isInteger(Number(body.executedCallCount)) || ![0, 1].includes(Number(body.executedCallCount))
+      || !Number.isInteger(Number(body.organicCount)) || Number(body.organicCount) < 0 || Number(body.organicCount) > 50
+      || !Number.isInteger(Number(body.observedRankCount)) || Number(body.observedRankCount) < 0 || Number(body.observedRankCount) > 50
+      || (outcome === "ready" && (body.executedCallCount !== 1 || body.organicCount !== 50 || body.observedRankCount !== 50 || providerSubtype !== "apollo_success"))
+      || (outcome === "blocked" && (body.executedCallCount !== 1 || !SAFE_SUBTYPE_PATTERN.test(providerSubtype)))
+      || (outcome === "indeterminate" && (![0, 1].includes(Number(body.executedCallCount)) || providerSubtype !== null))
+      || (diagnosticId !== null && !DIAGNOSTIC_PATTERN.test(diagnosticId))
+    ) throw fail("COLLECTION_WORKER_MAIN_PLACE_PROBE_RECEIPT_INVALID", "main-place recovery probe receipt is invalid", 409);
+    let job = await readJob(body.jobId);
+    const entry = job ? payloads.get(job.jobId) : null;
+    if (!job || !entry || entry.executionPayload.executionProfile !== COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE || job.attemptId !== body.attemptId) {
+      throw fail("COLLECTION_WORKER_MAIN_PLACE_PROBE_CONFLICT", "main-place recovery probe is stale", 409);
+    }
+    const receiptHash = sha256Hex(stableJson(body));
+    if (job.state === "validated_no_store" || job.state === "blocked" || job.state === "indeterminate") {
+      if (job.failureReceiptHash && job.failureReceiptHash !== receiptHash) throw fail("COLLECTION_WORKER_MAIN_PLACE_PROBE_CONFLICT", "main-place recovery probe receipt conflicts", 409);
+      const state = await providerStore.read();
+      return Object.freeze({ status: outcome, jobState: job.state, mainPlaceProviderState: state.state, providerAttemptCount: Number(body.providerAttemptCount), executedCallCount: Number(body.executedCallCount), resultStored: false, writeCount: 0, replayed: true });
+    }
+    if (job.state !== "collecting" || job.workflowRevision !== Number(body.workflowRevision) || entry.providerWorkflowRevision !== Number(body.providerWorkflowRevision)) {
+      throw fail("COLLECTION_WORKER_MAIN_PLACE_PROBE_CONFLICT", "main-place recovery probe is stale", 409);
+    }
+    assertActiveLease(job);
+    let state = await providerStore.read();
+    if (state.state !== "probe_allowed" || state.workflowRevision !== Number(body.providerWorkflowRevision)) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_PROVIDER_LEASE_LOST", "main-place provider lease is unavailable", 409);
+    }
+    if (outcome === "ready") {
+      state = await providerStore.recordSuccess({ expectedWorkflowRevision: state.workflowRevision, outcomeReceiptHash: receiptHash, now: now() });
+    } else if (outcome === "blocked") {
+      state = await providerStore.recordBlock({ expectedWorkflowRevision: state.workflowRevision, outcomeReceiptHash: receiptHash, failure: { subtype: providerSubtype, diagnosticId }, now: now() });
+    } else {
+      state = await providerStore.releaseAttempt({ expectedWorkflowRevision: state.workflowRevision, outcomeReceiptHash: receiptHash, now: now() });
+    }
+    job = await jobStore.transitionJob({
+      jobId: job.jobId,
+      expectedWorkflowRevision: job.workflowRevision,
+      workerId: job.workerId,
+      nextState: outcome === "ready" ? "validated_no_store" : outcome === "blocked" ? "blocked" : "indeterminate",
+      failureCode: outcome === "blocked" ? "NAVER_ACCESS_BLOCKED" : outcome === "indeterminate" ? "COLLECTION_WORKER_MAIN_PLACE_PROBE_TRANSPORT_UNAVAILABLE" : undefined,
+      failureReceiptHash: receiptHash,
+      providerAttemptCount: Number(body.providerAttemptCount),
+      now: now()
+    });
+    markPayloadTerminal(job.jobId, job.state);
+    return Object.freeze({ status: outcome, jobState: job.state, mainPlaceProviderState: state.state, providerAttemptCount: Number(body.providerAttemptCount), executedCallCount: Number(body.executedCallCount), organicCount: Number(body.organicCount), observedRankCount: Number(body.observedRankCount), providerSubtype, resultStored: false, writeCount: 0, replayed: false });
+  }
+
   return Object.freeze({
     attestRuntime,
     claim,
@@ -1746,8 +1838,10 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     preflight,
     prepare,
     prepareTrustedAdmin,
+    prepareMainPlaceRecoveryProbeTrustedAdmin,
     prepareDryRunTrustedAdmin,
     recordFailure,
+    finalizeMainPlaceRecoveryProbe,
     markTerminalPayload(input = {}) {
       const jobId = String(input.jobId || "");
       const terminalState = String(input.terminalState || "terminal");

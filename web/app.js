@@ -540,6 +540,7 @@ const els = {
   crawlProgressStages: document.getElementById("crawlProgressStages"),
   crawlSubmitMeta: document.getElementById("crawlSubmitMeta"),
   crawlStatus: document.getElementById("crawlStatus"),
+  mainPlaceRecoveryProbeButton: document.getElementById("mainPlaceRecoveryProbeButton"),
   yeogiManualBadge: document.getElementById("yeogiManualBadge"),
   yeogiCurrentKeyword: document.getElementById("yeogiCurrentKeyword"),
   yeogiOpenButton: document.getElementById("yeogiOpenButton"),
@@ -35944,6 +35945,25 @@ async function logout() {
   }
 }
 
+async function submitMainPlaceRecoveryProbe() {
+  const button = els.mainPlaceRecoveryProbeButton;
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    const result = await fetchJson("/api/admin/collection-worker/v2-top20/main-place-recovery-probe", { method: "POST" });
+    if (els.crawlStatus) {
+      els.crawlStatus.textContent = result.reused
+        ? "같은 회로 버전의 Main Place 복구 확인 결과를 다시 표시합니다. 새 요청은 실행하지 않았습니다."
+        : "Main Place 복구 확인을 시작했습니다. 결과는 저장하지 않으며 요청은 1회로 제한됩니다.";
+    }
+    scheduleCrawlStatusPoll(1500, true);
+  } catch (error) {
+    if (els.crawlStatus) els.crawlStatus.textContent = error?.message || "Main Place 복구 확인을 시작하지 못했습니다.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function submitCrawl(event) {
   event.preventDefault();
   ensureCrawlControls();
@@ -37448,6 +37468,7 @@ function bindEvents() {
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }));
   els.crawlForm.addEventListener("submit", submitCrawl);
+  els.mainPlaceRecoveryProbeButton?.addEventListener("click", submitMainPlaceRecoveryProbe);
   els.yeogiOpenButton.addEventListener("click", openYeogiSearch);
   els.yeogiCopyLinkButton.addEventListener("click", copyYeogiSearchLink);
   els.yeogiScriptButton.addEventListener("click", copyYeogiScript);

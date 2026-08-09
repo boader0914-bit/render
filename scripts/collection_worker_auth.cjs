@@ -19,7 +19,8 @@ const ALLOWED_PATH_SCOPES = Object.freeze({
   "/api/internal/collection-worker/jobs/heartbeat": "collection:heartbeat",
   "/api/internal/collection-worker/artifacts": "collection:artifact:write",
   "/api/internal/collection-worker/failures": "collection:failure:write",
-  "/api/internal/collection-worker/results/finalize": "collection:result:finalize"
+  "/api/internal/collection-worker/results/finalize": "collection:result:finalize",
+  "/api/internal/collection-worker/v2-top20/main-place-recovery-probe/finalize": "collection:main-place-probe:finalize"
 });
 
 class CollectionWorkerAuthError extends Error {

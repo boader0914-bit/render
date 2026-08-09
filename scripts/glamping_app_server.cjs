@@ -103,6 +103,8 @@ const {
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREPARE_PATH,
   COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+  COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH,
+  COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE,
   COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
   COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
@@ -336,7 +338,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260809-basic-collection-v47";
+const UI_ASSET_VERSION = "v2-20260810-main-place-probe-v48";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -15043,7 +15045,8 @@ function isCollectionWorkerInternalPath(pathname) {
     COLLECTION_WORKER_PREFLIGHT_PATH,
     COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
     COLLECTION_WORKER_FINALIZE_PATH,
-    COLLECTION_WORKER_FAILURE_PATH
+    COLLECTION_WORKER_FAILURE_PATH,
+    COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH
   ].includes(pathname);
 }
 
@@ -16217,7 +16220,8 @@ async function route(req, res) {
       COLLECTION_WORKER_PREFLIGHT_PATH,
       COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
       COLLECTION_WORKER_FINALIZE_PATH,
-      COLLECTION_WORKER_FAILURE_PATH
+      COLLECTION_WORKER_FAILURE_PATH,
+      COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH
     ].includes(reqUrl.pathname)) {
       return sendCollectionWorkerJson(res, 503, {
         code: "COLLECTION_WORKER_PREVIEW_DRAINING",
@@ -16281,6 +16285,15 @@ async function route(req, res) {
         ? collectionWorkerV2Top20Orchestrator
         : collectionWorkerCanaryOrchestrator;
       const result = await orchestrator.finalize({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return sendCollectionWorkerJson(res, 200, result);
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerV2Top20Orchestrator.finalizeMainPlaceRecoveryProbe({
         signedRequest: payload.signedRequest,
         body: payload.body
       });
@@ -16575,6 +16588,34 @@ async function route(req, res) {
       }, "application/json; charset=utf-8", {
         "Cache-Control": "no-store"
       });
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/main-place-recovery-probe/status") {
+      if (!requireAdminSession(session, req, res)) return;
+      const snapshot = await collectionWorkerJobStore.readSnapshot();
+      const latest = snapshot.jobs
+        .filter((job) => String(job.jobId || "").startsWith("job-top20-"))
+        .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || 0) - Date.parse(left.updatedAt || left.createdAt || 0))[0] || null;
+      const provider = await naverPlaceMainProviderHealthStore.read();
+      return send(res, 200, {
+        collectionProfile: COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE,
+        active: Boolean(activeTop20WorkerJob),
+        mainPlaceProviderState: provider.state,
+        mainPlaceWorkflowRevision: provider.workflowRevision,
+        retryAt: provider.retryAt || null,
+        latestJobState: latest?.state || null,
+        resultStored: false,
+        writeCount: 0,
+        maximumProviderCalls: 1,
+        automaticRetry: false,
+        automaticFallback: false
+      }, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/main-place-recovery-probe") {
+      if (!requireAdminSession(session, req, res)) return;
+      const result = await queueMainPlaceRecoveryProbe();
+      return send(res, 202, result, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/prepare-dry-run") {
@@ -16926,6 +16967,72 @@ async function route(req, res) {
     }
     send(res, error.statusCode || 500, body, "application/json; charset=utf-8", headers);
   }
+}
+
+function mainPlaceRecoveryProbeContract() {
+  return Object.freeze({
+    keyword: "경남 글램핑",
+    searchMode: "keyword",
+    collectionMode: "precision",
+    collectionPurpose: "revenue_detail",
+    productMode: "all",
+    checkIn: "2026-08-18",
+    checkOut: "2026-08-18",
+    rankStart: 1,
+    rankEnd: 50,
+    // The signed fixed Top20 contract remains intact; the recovery profile
+    // exits before any detail operation and exposes 0 detail coverage.
+    detailRankStart: 1,
+    detailRankEnd: 20
+  });
+}
+
+async function queueMainPlaceRecoveryProbe() {
+  assertTop20WorkerTransportReady();
+  await restoreActiveTop20WorkerJob();
+  if (activeCrawlPromise || activeTop20WorkerJob) {
+    const error = new Error("다른 Worker 수집 작업이 진행 중입니다.");
+    error.code = "COLLECTION_WORKER_MAIN_PLACE_PROBE_ACTIVE_JOB";
+    error.statusCode = 409;
+    throw error;
+  }
+  const state = await naverPlaceMainProviderHealthStore.read();
+  const availability = providerAvailability(state, { now: new Date() });
+  if (state.state !== "open" || availability.attemptInFlight || !availability.probeRequired) {
+    const error = new Error("Main Place 복구 Probe가 현재 실행 조건을 충족하지 않습니다.");
+    error.code = availability.coolingDown
+      ? "COLLECTION_WORKER_MAIN_PLACE_PROBE_COOLDOWN_ACTIVE"
+      : "COLLECTION_WORKER_MAIN_PLACE_PROBE_NOT_REQUIRED";
+    error.statusCode = 409;
+    throw error;
+  }
+  const executionRequestId = `main-place-probe:${state.workflowRevision}:${String(process.env.RENDER_GIT_COMMIT || "").slice(0, 12)}`;
+  const prepared = await collectionWorkerV2Top20Orchestrator.prepareMainPlaceRecoveryProbeTrustedAdmin({
+    trustedAdmin: true,
+    contract: mainPlaceRecoveryProbeContract(),
+    executionRequestId,
+    provenance: {
+      sourceRoute: "/api/admin/collection-worker/v2-top20/main-place-recovery-probe",
+      sourceRole: "admin",
+      actorKind: "operator",
+      collectorBackend: "v2_top20_worker"
+    }
+  });
+  if (!prepared.reused && !TOP20_WORKER_TERMINAL_STATES.has(prepared.status)) {
+    activeTop20WorkerJob = Object.freeze({ jobId: prepared.jobId, startedAt: new Date().toISOString(), contract: mainPlaceRecoveryProbeContract() });
+    lastTop20WorkerOutcome = null;
+  }
+  return Object.freeze({
+    queued: prepared.status === "queued",
+    reused: prepared.reused === true,
+    workerJobId: prepared.jobId,
+    collectionProfile: COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE,
+    maximumProviderCalls: 1,
+    automaticRetry: false,
+    automaticFallback: false,
+    resultStored: false,
+    writeCount: 0
+  });
 }
 
 const server = http.createServer((req, res) => {

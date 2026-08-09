@@ -84,7 +84,8 @@ async function main() {
   assert.ok(listeners.has("fetch"), "fetch handler registered");
   assert.ok(listeners.has("activate"), "activate handler registered");
 
-  const currentCache = "lodging-datalab-pwa-v20260809-basic-collection-v47";
+  const currentCache = "lodging-datalab-pwa-v20260810-main-place-probe-v48";
+  stores.set("lodging-datalab-pwa-v20260809-basic-collection-v47", new Map([["https://fixture.local/b2b", new Response("old-v47-private")]]));
   stores.set("lodging-datalab-pwa-v20260806-bounded-inventory-v43", new Map([["https://fixture.local/b2b", new Response("old-v43-private")]]));
   stores.set("lodging-datalab-pwa-v20260804-detail-sheet-v40", new Map([["https://fixture.local/b2b", new Response("old-v40-private")]]));
   stores.set("lodging-datalab-pwa-v20260804-detail-sheet-v39", new Map([["https://fixture.local/b2b", new Response("old-v39-private")]]));
@@ -99,7 +100,7 @@ async function main() {
   let activation;
   listeners.get("activate")({ waitUntil(value) { activation = Promise.resolve(value); } });
   await activation;
-  assert.deepEqual(deletedCaches.sort(), ["lodging-datalab-pwa-v20260801-ui-release-v27", "lodging-datalab-pwa-v20260804-region-hierarchy-v37", "lodging-datalab-pwa-v20260804-detail-sheet-v38", "lodging-datalab-pwa-v20260804-detail-sheet-v39", "lodging-datalab-pwa-v20260804-detail-sheet-v40", "lodging-datalab-pwa-v20260806-bounded-inventory-v43"].sort(), "activate removes previous caches");
+  assert.deepEqual(deletedCaches.sort(), ["lodging-datalab-pwa-v20260801-ui-release-v27", "lodging-datalab-pwa-v20260804-region-hierarchy-v37", "lodging-datalab-pwa-v20260804-detail-sheet-v38", "lodging-datalab-pwa-v20260804-detail-sheet-v39", "lodging-datalab-pwa-v20260804-detail-sheet-v40", "lodging-datalab-pwa-v20260806-bounded-inventory-v43", "lodging-datalab-pwa-v20260809-basic-collection-v47"].sort(), "activate removes previous caches");
   assert.equal(stores.has("unrelated-app-cache-v4"), true, "activate preserves caches owned by unrelated applications");
 
   const privateNavigation = {
@@ -123,12 +124,12 @@ async function main() {
     method: "GET",
     mode: "cors",
     destination: "script",
-    url: "https://fixture.local/app.js?v=v2-20260809-basic-collection-v47"
+    url: "https://fixture.local/app.js?v=v2-20260810-main-place-probe-v48"
   });
-  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260809-basic-collection-v47");
+  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260810-main-place-probe-v48");
   await Promise.resolve();
   await Promise.resolve();
-  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260809-basic-collection-v47")), "allowlisted static asset is cached");
+  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260810-main-place-probe-v48")), "allowlisted static asset is cached");
 
   fetchImpl = async () => { throw new Error("offline"); };
   const unrelatedStaticFallback = await dispatchFetch({

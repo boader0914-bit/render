@@ -4162,6 +4162,17 @@ async function main() {
 
   console.log("Collecting Naver main...");
   const naver = await collectNaverMain();
+  if (process.env.NAVER_MAIN_PLACE_RECOVERY_PROBE === "1") {
+    const observedRanks = new Set((naver.overall || []).map((row) => Number(row.overall_rank)).filter((rank) => rank >= 1 && rank <= 50));
+    console.log(`MAIN_PLACE_RECOVERY_PROBE_RESULT=${JSON.stringify({
+      schemaVersion: "main-place-recovery-probe-result.v1",
+      organicCount: (naver.overall || []).length,
+      observedRankCount: observedRanks.size,
+      adCount: (naver.ads || []).length,
+      providerSubtype: "apollo_success"
+    })}`);
+    return;
+  }
   if (NAVER_LEGACY_LIMITED_ACTIVATION) {
     await fs.mkdir(path.dirname(OUTPUT_DIR), { recursive: true });
     await fs.mkdir(OUTPUT_DIR, { recursive: false });

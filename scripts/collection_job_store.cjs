@@ -25,7 +25,7 @@ const TERMINAL_JOB_STATES = new Set([
 const TRANSITIONS = Object.freeze({
   queued: new Set(["leased", "cancelled", "indeterminate"]),
   leased: new Set(["collecting", "cancelled", "indeterminate"]),
-  collecting: new Set(["artifact_received", "failure_received", "blocked", "failed", "cancelled", "indeterminate"]),
+  collecting: new Set(["artifact_received", "validated_no_store", "failure_received", "blocked", "failed", "cancelled", "indeterminate"]),
   artifact_received: new Set(["validated", "validated_no_store", "blocked", "failed", "rejected"]),
   failure_received: new Set(["failed", "indeterminate"]),
   validated: new Set(["effects_applied", "rejected"]),

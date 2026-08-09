@@ -21,7 +21,8 @@ const {
   observeRuntimeFingerprint
 } = require("./collection_worker_runtime.cjs");
 const {
-  executeV2Top20Collector
+  executeV2Top20Collector,
+  executeV2Top20MainPlaceRecoveryProbe
 } = require("./collection_worker_v2_top20_collector.cjs");
 const {
   buildV2Top20FinalArtifactFiles
@@ -40,6 +41,8 @@ const {
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_DISPATCH_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
+  COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH,
+  COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE,
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
   COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
@@ -278,7 +281,8 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     "contract",
     "top20Contract",
     "providerSession",
-    "detailProviderSession"
+    "detailProviderSession",
+    "executionProfile"
   ], "top20 execution payload");
   exactKeys(value.providerSession, [
     "maximumProviderCalls",
@@ -311,11 +315,14 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     || value.providerSession.concurrency !== 1
     || value.providerSession.automaticRetry !== false
     || value.providerSession.automaticFallback !== false
-    || value.providerSession.circuitStateAtReservation !== "closed"
+    || !["closed", "open"].includes(value.providerSession.circuitStateAtReservation)
     || value.providerSession.serviceGlobalLockHeld !== true
     || !["closed", "open", "probe_allowed"].includes(value.detailProviderSession.state)
     || typeof value.detailProviderSession.liveCallsAllowed !== "boolean"
     || value.detailProviderSession.liveCallsAllowed !== (value.detailProviderSession.state === "closed")
+    || !["top20_inventory_revenue", COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE].includes(value.executionProfile)
+    || (value.executionProfile === COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE && value.providerSession.circuitStateAtReservation !== "open")
+    || (value.executionProfile === "top20_inventory_revenue" && value.providerSession.circuitStateAtReservation !== "closed")
   ) {
     throw fail("COLLECTION_WORKER_V2_TOP20_PAYLOAD_INVALID", "top20 execution payload is not authorized", 409);
   }
@@ -324,7 +331,8 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     top20Contract: expectedTop20Contract,
     top20ContractHash: expectedTop20Hash,
     executionRequestHash: value.executionRequestHash,
-    detailProviderSession: Object.freeze({ ...value.detailProviderSession })
+    detailProviderSession: Object.freeze({ ...value.detailProviderSession }),
+    executionProfile: value.executionProfile
   });
 }
 
@@ -719,6 +727,97 @@ async function runCollectionWorkerV2Top20(input = {}) {
       if (heartbeatFlight === task) heartbeatFlight = null;
     }
   };
+
+  if (execution.executionProfile === COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE) {
+    async function finalizeProbe(body) {
+      return postSignedWorkerRequest({
+        baseUrl: worker.baseUrl,
+        body,
+        fetchImpl: internalFetchImpl,
+        now: clock,
+        path: COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH,
+        requestPrivateKey: worker.requestPrivateKey
+      });
+    }
+    try {
+      const probe = await executeV2Top20MainPlaceRecoveryProbe({
+        baseEnvironment: environment,
+        contract: execution.contract,
+        heartbeat,
+        async onProviderCall(metadata) {
+          if (metadata?.providerId !== providerIdForOperation("main_place") || metadata?.operation !== "main_place" || Number(metadata?.requestOrdinal) !== 1 || providerCallCount !== 0) {
+            throw fail("COLLECTION_WORKER_V2_TOP20_PROVIDER_CALL_SEQUENCE_INVALID", "main-place recovery probe call sequence is invalid", 409);
+          }
+          await heartbeat();
+          providerCallCount = 1;
+        },
+        signal,
+        tempBase: fixtureMode ? path.resolve(String(input.tempBase || os.tmpdir())) : os.tmpdir()
+      });
+      if (probe.organicCount !== 50 || probe.observedRankCount !== 50 || probe.providerSubtype !== "apollo_success") {
+        throw fail(
+          "COLLECTION_WORKER_MAIN_PLACE_PROBE_RESULT_INCOMPLETE",
+          "main-place recovery probe did not satisfy the full-rank success contract",
+          502,
+          { providerAttemptCount: 1, executedCallCount: 1 }
+        );
+      }
+      const finalized = await finalizeProbe({
+        jobId: verifiedJob.jobId,
+        attemptId: verifiedJob.attemptId,
+        workflowRevision: jobWorkflowRevision,
+        providerWorkflowRevision,
+        providerAttemptCount: 1,
+        executedCallCount: 1,
+        organicCount: probe.organicCount,
+        observedRankCount: probe.observedRankCount,
+        providerSubtype: probe.providerSubtype,
+        diagnosticId: null,
+        outcome: "ready"
+      });
+      if (finalized?.jobState !== "validated_no_store" || finalized?.resultStored !== false || finalized?.writeCount !== 0) {
+        throw fail("COLLECTION_WORKER_MAIN_PLACE_PROBE_FINALIZE_INVALID", "main-place recovery probe finalization is invalid", 409, { providerAttemptCount: 1, executedCallCount: 1 });
+      }
+      return Object.freeze({
+        schemaVersion: COLLECTION_WORKER_V2_TOP20_WORKER_SCHEMA_VERSION,
+        status: "validated_no_store",
+        code: null,
+        targetServiceId: COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
+        targetCommit: worker.commit,
+        executionIdentityHash: verifiedJob.executionIdentityHash,
+        runtimeFingerprint,
+        providerAttemptCount: 1,
+        executedCallCount: 1,
+        automaticRetry: false,
+        automaticFallback: false,
+        jobState: "validated_no_store",
+        resultStored: false,
+        writeCount: 0
+      });
+    } catch (error) {
+      const failure = safeFailureMeta(error, providerCallCount);
+      const blocked = failure.executedCallCount === 1 && SAFE_SUBTYPE_PATTERN.test(String(failure.providerFailureSubtype || ""));
+      await finalizeProbe({
+        jobId: verifiedJob.jobId,
+        attemptId: verifiedJob.attemptId,
+        workflowRevision: jobWorkflowRevision,
+        providerWorkflowRevision,
+        providerAttemptCount: failure.providerAttemptCount,
+        executedCallCount: failure.executedCallCount,
+        organicCount: 0,
+        observedRankCount: 0,
+        providerSubtype: blocked ? failure.providerFailureSubtype : null,
+        diagnosticId: blocked ? failure.diagnosticId : null,
+        outcome: blocked ? "blocked" : "indeterminate"
+      }).catch(() => {});
+      throw fail(
+        blocked ? "NAVER_ACCESS_BLOCKED" : failure.code,
+        "main-place recovery probe failed",
+        Number(error?.statusCode || 502),
+        failure
+      );
+    }
+  }
 
   const collectorExecutor = fixtureMode && typeof input.collectorExecutor === "function"
     ? input.collectorExecutor

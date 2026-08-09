@@ -159,6 +159,52 @@ function buildV2Top20CollectorEnvironment(input = {}) {
   });
 }
 
+function buildV2Top20MainPlaceProbeEnvironment(input = {}) {
+  normalizeV2Top20PrepareContract(input.contract || {});
+  return Object.freeze({
+    ...buildV2Top20CollectorEnvironment({
+      ...input,
+      contract: input.contract,
+      outputRoot: path.resolve(String(input.outputRoot || path.join(os.tmpdir(), "v2-top20-probe-unused"))),
+      runStamp: input.runStamp || "20260818_000000_deadbeef"
+    }),
+    // The crawler exits immediately after a single main-place response. No
+    // booking, detail, output, or result-persistence code is reachable.
+    COLLECTION_MODE: "fast",
+    COLLECTION_PURPOSE: "basic_db",
+    DETAIL_RANK_RANGES: "",
+    NAVER_LEGACY_INVENTORY_ACTIVATION: "0",
+    NAVER_INVENTORY_CALL_BUDGET: "0",
+    NAVER_TOTAL_CALL_BUDGET: "1",
+    NAVER_MAIN_PLACE_RECOVERY_PROBE: "1"
+  });
+}
+
+function parseMainPlaceProbeResult(stdout) {
+  const marker = "MAIN_PLACE_RECOVERY_PROBE_RESULT=";
+  const lines = String(stdout || "").split(/\r?\n/u).filter((line) => line.startsWith(marker));
+  if (lines.length !== 1) {
+    throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_RESULT_INVALID", "main-place recovery probe result is invalid", 502);
+  }
+  let result;
+  try { result = JSON.parse(lines[0].slice(marker.length)); } catch {
+    throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_RESULT_INVALID", "main-place recovery probe result is invalid", 502);
+  }
+  const keys = Object.keys(result || {}).sort();
+  const expected = ["adCount", "observedRankCount", "organicCount", "providerSubtype", "schemaVersion"];
+  if (
+    keys.length !== expected.length || !keys.every((key, index) => key === expected[index])
+    || result.schemaVersion !== "main-place-recovery-probe-result.v1"
+    || result.providerSubtype !== "apollo_success"
+    || !Number.isInteger(result.organicCount) || result.organicCount < 0 || result.organicCount > 50
+    || !Number.isInteger(result.observedRankCount) || result.observedRankCount < 0 || result.observedRankCount > 50
+    || !Number.isInteger(result.adCount) || result.adCount < 0 || result.adCount > 50
+  ) {
+    throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_RESULT_INVALID", "main-place recovery probe result is invalid", 502);
+  }
+  return Object.freeze({ ...result });
+}
+
 function normalizeProviderCallMessage(message, expectedRequestOrdinal, expectedType = V2_TOP20_PROVIDER_CALL_REQUEST_TYPE) {
   const expectedKeys = [
     "companyOrdinal",
@@ -401,13 +447,15 @@ function runCollectorChild(input = {}) {
       } else {
         try {
           const normalizedTrace = normalizeV2Top20ProviderCallTrace(providerCallTrace);
+          const probeResult = typeof input.parseResult === "function" ? input.parseResult(stdout) : null;
           resolve({
             code,
             stdoutLength: Buffer.byteLength(stdout),
             stderrLength: Buffer.byteLength(stderr),
             executedCallCount,
             providerCallTrace: normalizedTrace,
-            providerCallTraceHash: computeV2Top20ProviderCallTraceHash(normalizedTrace)
+            providerCallTraceHash: computeV2Top20ProviderCallTraceHash(normalizedTrace),
+            probeResult
           });
         } catch (error) {
           reject(error);
@@ -415,6 +463,53 @@ function runCollectorChild(input = {}) {
       }
     });
   });
+}
+
+async function executeV2Top20MainPlaceRecoveryProbe(input = {}) {
+  const contract = normalizeV2Top20PrepareContract(input.contract || {});
+  if (typeof input.heartbeat !== "function" || typeof input.onProviderCall !== "function") {
+    throw collectorError("V2_TOP20_HEARTBEAT_REQUIRED", "main-place recovery probe heartbeat is required", 500);
+  }
+  const tempBase = path.resolve(String(input.tempBase || os.tmpdir()));
+  if (!path.isAbsolute(tempBase)) throw collectorError("V2_TOP20_RUNTIME_PATH_INVALID", "probe temp base must be absolute", 400);
+  const tempRoot = await fs.mkdtemp(path.join(tempBase, "v2-top20-main-place-probe-"));
+  try {
+    const environment = buildV2Top20MainPlaceProbeEnvironment({
+      contract,
+      outputRoot: path.join(tempRoot, "unused-output"),
+      runStamp: `20260818_000000_${crypto.randomBytes(4).toString("hex")}`,
+      baseEnvironment: input.baseEnvironment || process.env
+    });
+    await input.heartbeat();
+    const collected = await runCollectorChild({
+      spawnImpl: input.spawnImpl,
+      maxRuntimeMs: input.maxRuntimeMs,
+      signal: input.signal,
+      scriptPath: path.resolve(input.scriptPath || path.join(__dirname, "gyeongnam_glamping_crawl.cjs")),
+      cwd: path.resolve(input.cwd || path.join(__dirname, "..")),
+      keyword: contract.keyword,
+      environment,
+      authorizeProviderCall: async (metadata) => {
+        if (metadata?.providerId !== providerIdForOperation("main_place") || metadata?.operation !== "main_place") {
+          throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_SEQUENCE_INVALID", "probe may only authorize main place", 409);
+        }
+        await input.heartbeat();
+      },
+      onProviderCall: async (metadata) => {
+        if (metadata?.providerId !== providerIdForOperation("main_place") || metadata?.operation !== "main_place" || metadata?.requestOrdinal !== 1) {
+          throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_SEQUENCE_INVALID", "probe may only start one main-place call", 409);
+        }
+        await input.onProviderCall(metadata);
+      },
+      parseResult: parseMainPlaceProbeResult
+    });
+    if (collected.executedCallCount !== 1 || collected.providerCallTrace.length !== 1 || collected.providerCallTrace[0].operation !== "main_place") {
+      throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_SEQUENCE_INVALID", "probe did not execute exactly one main-place call", 409);
+    }
+    return Object.freeze({ ...collected.probeResult, providerCallCount: 1 });
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function findSingleFinalOutput(outputRoot) {
@@ -598,9 +693,12 @@ module.exports = {
   V2_TOP20_PROVIDER_CALL_STARTED_REQUEST_TYPE,
   V2_TOP20_COLLECTOR_SCHEMA_VERSION,
   buildV2Top20CollectorEnvironment,
+  buildV2Top20MainPlaceProbeEnvironment,
+  executeV2Top20MainPlaceRecoveryProbe,
   executeV2Top20Collector,
   findSingleFinalOutput,
   normalizeProviderCallMessage,
   runCollectorChild,
+  parseMainPlaceProbeResult,
   selectV2Top20ChildBaseEnvironment
 };

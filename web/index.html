@@ -14,7 +14,7 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <script src="/login-theme.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=v2-20260809-basic-collection-v47">
+  <link rel="stylesheet" href="/styles.css?v=v2-20260810-main-place-probe-v48">
 </head>
 <body class="app-booting">
   <a class="skip-link" href="#appMain">본문 바로가기</a>
@@ -381,9 +381,10 @@
             </div>
             <div class="crawl-submit-row">
               <button class="primary-button" type="submit">수집 실행</button>
+              <button class="secondary-button" id="mainPlaceRecoveryProbeButton" type="button">Main Place 복구 확인</button>
               <span id="crawlSubmitMeta">예상 시간 계산 중</span>
             </div>
-            <p class="hint" id="crawlStatus">수집 목적과 순위 범위를 확인한 뒤 실행하세요.</p>
+            <p class="hint" id="crawlStatus">수집 목적과 순위 범위를 확인한 뒤 실행하세요. 복구 확인은 결과를 저장하지 않고 Main Place 요청 1회만 검증합니다.</p>
             <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
           </form>
 
@@ -581,6 +582,6 @@
 
   <script src="/lodging-search-intent.js"></script>
   <script src="/lodging-category-profile.js"></script>
-  <script src="/app.js?v=v2-20260809-basic-collection-v47"></script>
+  <script src="/app.js?v=v2-20260810-main-place-probe-v48"></script>
 </body>
 </html>
