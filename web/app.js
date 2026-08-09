@@ -99,6 +99,7 @@ const state = {
   selectedLocationCard: null,
   dictionarySyncedRunId: null,
   trafficKeyState: null,
+  top20WorkerTransport: null,
   crawlStatusTimer: null,
   pendingRecrawlContext: null,
   b2bSearchQuery: "",
@@ -3045,6 +3046,31 @@ function isTop20CrawlPreview(value = {}) {
   return value?.workerTop20 === true
     || Number(boundedInventory?.inventoryPlaceLimit || 0) === 20
     || Number(boundedInventory?.totalCallBudget || 0) >= 1;
+}
+
+function applyTop20WorkerTransportStatus(status = null) {
+  state.top20WorkerTransport = status && typeof status === "object" ? status : null;
+  if (!isAdminRole()) return;
+  const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
+  if (!submitButton) return;
+  const ready = state.top20WorkerTransport?.workerTransportReady === true;
+  submitButton.disabled = !ready;
+  submitButton.setAttribute("aria-disabled", ready ? "false" : "true");
+  if (!ready && els.crawlStatus) {
+    els.crawlStatus.textContent = "수집 서버 연결을 준비하고 있습니다.";
+  }
+}
+
+async function loadTop20WorkerTransportStatus() {
+  if (!isAdminRole()) return null;
+  try {
+    const status = await fetchJson("/api/admin/collection-worker/v2-top20/status");
+    applyTop20WorkerTransportStatus(status);
+    return status;
+  } catch {
+    applyTop20WorkerTransportStatus(null);
+    return null;
+  }
 }
 
 function top20MaximumProviderCalls(value = {}) {
@@ -35921,6 +35947,10 @@ async function logout() {
 async function submitCrawl(event) {
   event.preventDefault();
   ensureCrawlControls();
+  if (state.top20WorkerTransport?.workerTransportReady !== true) {
+    applyTop20WorkerTransportStatus(state.top20WorkerTransport);
+    return;
+  }
   const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
   const requestedMode = "auto";
   const resolvedMode = clientSearchMode(clientSearchIntent(els.keywordInput.value.trim()));
@@ -37534,7 +37564,7 @@ async function init() {
     restoreAppHistoryState();
     syncAppHistoryState(false);
     if (isAdminRole()) {
-      await Promise.all([loadRuns(false), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
+      await Promise.all([loadRuns(false), loadTop20WorkerTransportStatus(), loadLocationDictionary(), loadTrafficState(), loadLocationCardRequests(), loadLocationScoreOverrides(), loadB2BMemberAdminOverview(), loadAccountDeleteAdminOverview(), loadSecurityHardeningOverview()]);
       if (!state.companyMaster || !((state.companyMaster.companies || []).length || state.companyMaster.totalCompanies || state.companyMaster.error)) {
         await loadCompanyMasterSummary();
       }

@@ -38,12 +38,15 @@ const {
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
   COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
+  COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+  COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
   COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION,
   COLLECTION_WORKER_V2_TOP20_REQUEST_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION,
   COLLECTION_WORKER_V2_TOP20_RUNTIME_ID_PREFIX,
   COLLECTION_WORKER_V2_TOP20_SUMMARY_PATH,
   COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
+  COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
   buildV2Top20DispatchCompatibilityContract,
@@ -389,6 +392,51 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       throw fail("COLLECTION_WORKER_AUTH_SCOPE_INVALID", "top20 worker request route is invalid", 403);
     }
     return request;
+  }
+
+  function attestRuntime(input = {}) {
+    assertReady();
+    const body = input.body;
+    verifyWorkerAuth(input.signedRequest, body, COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH);
+    exactKeys(body, [
+      "workerId",
+      "workerPoolId",
+      "workerCommit",
+      "targetServiceId",
+      "targetCommit",
+      "runtimeFingerprintHash",
+      "protocolVersion"
+    ], "top20 runtime attestation");
+    const workerCommit = canonicalCommit(body.workerCommit);
+    const targetCommit = canonicalCommit(body.targetCommit);
+    const fingerprint = String(body.runtimeFingerprintHash || "");
+    if (
+      body.workerId !== COLLECTION_WORKER_V2_TOP20_WORKER_ID
+      || body.workerPoolId !== COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID
+      || body.targetServiceId !== COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID
+      || !HASH_PATTERN.test(fingerprint)
+      || body.protocolVersion !== COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+      || workerCommit !== targetWorkerCommit
+      || targetCommit !== targetWorkerCommit
+    ) {
+      throw fail(
+        "COLLECTION_WORKER_PREVIEW_GENERATION_MISMATCH",
+        "top20 worker and Preview generation do not match",
+        409
+      );
+    }
+    return Object.freeze({
+      schemaVersion: "collection-worker-runtime-attestation.v1",
+      status: "ready",
+      previewServiceId: COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
+      previewCommit: targetWorkerCommit,
+      expectedWorkerCommit: targetWorkerCommit,
+      workerCommit,
+      commitMatched: true,
+      protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+      draining: false,
+      attestedAt: new Date(now()).toISOString()
+    });
   }
 
   function assertWorkerBody(body) {
@@ -1691,6 +1739,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   }
 
   return Object.freeze({
+    attestRuntime,
     claim,
     finalize,
     heartbeat,

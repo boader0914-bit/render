@@ -17,7 +17,7 @@ const {
     COLLECTION_WORKER_V2_TOP20_EXECUTION_ENABLED: "true",
     COLLECTOR_EXTERNAL_CALLS_ENABLED: "true",
     COLLECTOR_RESULT_WRITE_ENABLED: "true",
-    COLLECTION_WORKER_PREVIEW_BASE_URL: "https://sa-labs-datalab-v4-preview.onrender.com",
+    COLLECTION_WORKER_PREVIEW_INTERNAL_BASE_URL: "http://preview-internal:10000",
     COLLECTION_WORKER_REQUEST_PRIVATE_KEY_B64: "configured",
     COLLECTION_WORKER_DISPATCH_PUBLIC_KEY_B64: "configured",
     COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64: "configured"
@@ -43,7 +43,8 @@ const {
     executionEnabled: true,
     externalCallsEnabled: true,
     resultWriteEnabled: true,
-    previewBaseUrlMatched: true,
+    internalTransport: "private",
+    privateBaseUrlConfigured: true,
     requestPrivateKeyConfigured: true,
     dispatchPublicKeyConfigured: true,
     artifactPrivateKeyConfigured: true

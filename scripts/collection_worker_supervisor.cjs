@@ -14,7 +14,6 @@ const {
 const TOP20_MODE = "v2_top20_once";
 const DEFAULT_POLL_MS = 15_000;
 const FAILURE_POLL_MS = 30_000;
-const TARGET_PREVIEW_BASE_URL = "https://sa-labs-datalab-v4-preview.onrender.com";
 
 function envFlag(environment, name) {
   return String(environment?.[name] || "false").trim().toLowerCase() === "true";
@@ -25,7 +24,7 @@ function envConfigured(environment, name) {
 }
 
 function collectorStartupDiagnostics(environment = process.env, runtime = observeRuntimeFingerprint()) {
-  const previewBaseUrl = String(environment.COLLECTION_WORKER_PREVIEW_BASE_URL || "").replace(/\/+$/u, "");
+  const privateBaseUrlConfigured = Boolean(String(environment.COLLECTION_WORKER_PREVIEW_INTERNAL_BASE_URL || "").trim());
   return Object.freeze({
     event: "collector_worker_startup",
     serviceId: String(environment.RENDER_SERVICE_ID || ""),
@@ -41,7 +40,8 @@ function collectorStartupDiagnostics(environment = process.env, runtime = observ
     executionEnabled: envFlag(environment, "COLLECTION_WORKER_V2_TOP20_EXECUTION_ENABLED"),
     externalCallsEnabled: envFlag(environment, "COLLECTOR_EXTERNAL_CALLS_ENABLED"),
     resultWriteEnabled: envFlag(environment, "COLLECTOR_RESULT_WRITE_ENABLED"),
-    previewBaseUrlMatched: previewBaseUrl === TARGET_PREVIEW_BASE_URL,
+    internalTransport: "private",
+    privateBaseUrlConfigured,
     requestPrivateKeyConfigured: envConfigured(environment, "COLLECTION_WORKER_REQUEST_PRIVATE_KEY_B64"),
     dispatchPublicKeyConfigured: envConfigured(environment, "COLLECTION_WORKER_DISPATCH_PUBLIC_KEY_B64"),
     artifactPrivateKeyConfigured: envConfigured(environment, "COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64")
@@ -69,15 +69,16 @@ async function runTop20WorkerLoop(options = {}) {
   const pollMs = Number.isInteger(options.pollMs) && options.pollMs >= 10
     ? options.pollMs
     : DEFAULT_POLL_MS;
+  const attestationState = options.attestationState || { consecutiveMatches: 0, lastAttestedAt: null };
   while (!signal?.aborted) {
     try {
-      const result = await runner({ environment, signal });
+      const result = await runner({ environment, signal, attestationState });
       if (signal?.aborted) break;
       logger(JSON.stringify(result));
       await wait(pollMs, signal);
     } catch (error) {
       if (signal?.aborted) break;
-      if (error?.code !== "COLLECTION_WORKER_V2_TOP20_NO_JOB") {
+      if (error?.code !== "COLLECTION_WORKER_V2_TOP20_NO_JOB" && error?.code !== "COLLECTION_WORKER_PREVIEW_ATTESTATION_PENDING") {
         logger(JSON.stringify(safeFatalResult(error)));
       }
       await wait(error?.code === "COLLECTION_WORKER_V2_TOP20_NO_JOB" ? pollMs : FAILURE_POLL_MS, signal);

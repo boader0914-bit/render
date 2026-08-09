@@ -35,6 +35,9 @@ const {
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
   COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
+  COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+  COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+  COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_REQUEST_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
@@ -751,6 +754,33 @@ async function repeatExecutionScenario(root, keys) {
   assert.equal(dryRun.conflictCode, "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB");
 }
 
+async function runtimeAttestationScenario(root, keys) {
+  const system = await createSystem(root, keys);
+  const body = {
+    workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+    workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+    workerCommit: COMMIT,
+    targetServiceId: COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
+    targetCommit: COMMIT,
+    runtimeFingerprintHash: "f".repeat(64),
+    protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+  };
+  const result = await system.orchestrator.attestRuntime({
+    body,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH, body, keys, system.clock.now())
+  });
+  assert.equal(result.status, "ready");
+  assert.equal(result.commitMatched, true);
+  const mismatch = { ...body, workerCommit: "e".repeat(40) };
+  assert.throws(
+    () => system.orchestrator.attestRuntime({
+      body: mismatch,
+      signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH, mismatch, keys, system.clock.now())
+    }),
+    { code: "COLLECTION_WORKER_PREVIEW_GENERATION_MISMATCH" }
+  );
+}
+
 async function main() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "collection-worker-top20-orchestrator-"));
   const keys = keySet();
@@ -764,6 +794,7 @@ async function main() {
     await collectingRestartScenario(path.join(root, "restart-collecting"), keys);
     await validatedRestartScenario(path.join(root, "restart-validated"), keys);
     await repeatExecutionScenario(path.join(root, "repeat-execution"), keys);
+    await runtimeAttestationScenario(path.join(root, "runtime-attestation"), keys);
     assert.equal(unexpectedNetworkCalls, 0, "top20 orchestrator fixtures must not use external networking");
     console.log("collection worker V2 top20 orchestrator fixtures passed");
   } finally {

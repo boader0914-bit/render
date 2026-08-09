@@ -58,7 +58,11 @@ const serverSource = fs.readFileSync(path.join(__dirname, "glamping_app_server.c
 const appSource = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 assert.match(serverSource, /collectionWorkerV2Top20Orchestrator\.prepareTrustedAdmin/u);
 assert.match(serverSource, /executionRequestId: top20ExecutionRequestIdFromPayload\(payload\)/u);
-assert.match(serverSource, /stage: "prepare"/u);
+assert.match(serverSource, /\? "dispatch-readiness"\s*:\s*"prepare"/u);
+assert.match(serverSource, /assertTop20WorkerTransportReady\(\)/u);
+assert.match(serverSource, /COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH/u);
+assert.match(serverSource, /sendCollectionWorkerJson\(/u);
+assert.match(serverSource, /COLLECTION_WORKER_V2_TOP20_DISPATCH_TIMEOUT/u);
 assert.match(serverSource, /prepareDryRunTrustedAdmin/u);
 assert.match(serverSource, /collectionWorkerRunTransactionStore\.finalizeVerifiedRunBundle/u);
 assert.match(serverSource, /naverProviderHealthStore\.releaseAttempt/u);

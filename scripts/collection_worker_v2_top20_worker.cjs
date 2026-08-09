@@ -43,12 +43,15 @@ const {
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
   COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
+  COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+  COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
   COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION,
   COLLECTION_WORKER_V2_TOP20_REQUEST_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION,
   COLLECTION_WORKER_V2_TOP20_RUNTIME_ID_PREFIX,
   COLLECTION_WORKER_V2_TOP20_SUMMARY_PATH,
   COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
+  COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
   buildV2Top20ArtifactKeyProof,
@@ -61,7 +64,6 @@ const {
 } = require("./collection_worker_v2_top20_protocol.cjs");
 
 const COLLECTION_WORKER_V2_TOP20_WORKER_SCHEMA_VERSION = "collection-worker-v2-top20-worker.v1";
-const TARGET_PREVIEW_BASE_URL = "https://sa-labs-datalab-v4-preview.onrender.com";
 const MAX_INTERNAL_RESPONSE_BYTES = 2 * 1024 * 1024;
 const INTERNAL_REQUEST_TIMEOUT_MS = 30_000;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -73,6 +75,7 @@ const ENV = Object.freeze({
   dispatchPublicKey: "COLLECTION_WORKER_DISPATCH_PUBLIC_KEY_B64",
   executionEnabled: "COLLECTION_WORKER_V2_TOP20_EXECUTION_ENABLED",
   externalCalls: "COLLECTOR_EXTERNAL_CALLS_ENABLED",
+  previewInternalBaseUrl: "COLLECTION_WORKER_PREVIEW_INTERNAL_BASE_URL",
   previewBaseUrl: "COLLECTION_WORKER_PREVIEW_BASE_URL",
   requestPrivateKey: "COLLECTION_WORKER_REQUEST_PRIVATE_KEY_B64",
   resultWrites: "COLLECTOR_RESULT_WRITE_ENABLED",
@@ -181,19 +184,47 @@ function responseHeader(response, name) {
   }
 }
 
-function logInternalResponseParseFailure(response, byteLength) {
-  console.warn(`[top20-worker-internal-response] ${stableJson({
+function validatePrivatePreviewBaseUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(String(value || ""));
+  } catch {
+    throw fail("COLLECTION_WORKER_PREVIEW_TRANSPORT_UNAVAILABLE", "Preview private transport is not configured", 503);
+  }
+  if (
+    parsed.protocol !== "http:"
+    || !parsed.hostname
+    || parsed.hostname.endsWith(".onrender.com")
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+    || parsed.pathname !== "/"
+  ) {
+    throw fail("COLLECTION_WORKER_PREVIEW_TRANSPORT_UNAVAILABLE", "Preview private transport is invalid", 503);
+  }
+  return parsed.toString().replace(/\/$/u, "");
+}
+
+function logInternalTransportFailure(response, byteLength, expected = {}) {
+  console.warn(`[collection-worker-preview-transport-failure] ${stableJson({
+    event: "collection_worker_preview_transport_failure",
     statusCode: Number(response?.status || 0) || null,
     contentType: responseHeader(response, "content-type"),
     responseLength: Number.isInteger(byteLength) ? byteLength : null,
-    jsonParseSuccess: false
+    expectedCommitShort: shortCommit(expected.commit),
+    observedCommitShort: shortCommit(responseHeader(response, "x-lodging-datalab-commit")) || null,
+    protocolMatched: responseHeader(response, "x-lodging-datalab-protocol") === expected.protocol,
+    bodyLogged: false
   })}`);
 }
 
 function assertWorkerEnvironment(environment) {
   const env = environment || {};
   const commit = String(env.RENDER_GIT_COMMIT || "").trim();
-  const baseUrl = String(env[ENV.previewBaseUrl] || "").replace(/\/+$/u, "");
+  const baseUrl = env.RENDER === "true"
+    ? validatePrivatePreviewBaseUrl(env[ENV.previewInternalBaseUrl])
+    : String(env[ENV.previewInternalBaseUrl] || env[ENV.previewBaseUrl] || "").replace(/\/+$/u, "");
   if (
     env.RENDER !== "true"
     || env.RENDER_SERVICE_ID !== COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID
@@ -203,7 +234,7 @@ function assertWorkerEnvironment(environment) {
     || env[ENV.externalCalls] !== "true"
     || env[ENV.resultWrites] !== "true"
     || env[ENV.top20Enabled] !== "true"
-    || baseUrl !== TARGET_PREVIEW_BASE_URL
+    || !baseUrl
   ) {
     throw fail("COLLECTION_WORKER_V2_TOP20_RUNTIME_INVALID", "top20 Worker runtime is not explicitly approved", 403);
   }
@@ -297,7 +328,23 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
   });
 }
 
-async function readBoundedJsonResponse(response) {
+async function readBoundedJsonResponse(response, expectedGeneration = null) {
+  const statusCode = Number(response?.status || 0);
+  const contentType = responseHeader(response, "content-type");
+  const byteLength = Number(response?.headers?.get?.("content-length"));
+  const generationMatches = !expectedGeneration || (
+    responseHeader(response, "x-lodging-datalab-service-id") === COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID
+    && responseHeader(response, "x-lodging-datalab-commit") === expectedGeneration.commit
+    && responseHeader(response, "x-lodging-datalab-protocol") === expectedGeneration.protocol
+  );
+  if ([502, 503, 504].includes(statusCode) || !/^application\/json(?:;|$)/iu.test(contentType)) {
+    logInternalTransportFailure(response, Number.isFinite(byteLength) ? byteLength : null, expectedGeneration || {});
+    throw fail("COLLECTION_WORKER_PREVIEW_RESPONSE_NOT_JSON", "Preview private transport did not return JSON", 502);
+  }
+  if (!generationMatches) {
+    logInternalTransportFailure(response, Number.isFinite(byteLength) ? byteLength : null, expectedGeneration || {});
+    throw fail("COLLECTION_WORKER_PREVIEW_GENERATION_MISMATCH", "Preview response generation does not match", 409);
+  }
   const contentLength = Number(response?.headers?.get?.("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_INTERNAL_RESPONSE_BYTES) {
     await response?.body?.cancel?.().catch(() => {});
@@ -311,7 +358,7 @@ async function readBoundedJsonResponse(response) {
   try {
     payload = JSON.parse(text);
   } catch {
-    logInternalResponseParseFailure(response, Buffer.byteLength(text, "utf8"));
+    logInternalTransportFailure(response, Buffer.byteLength(text, "utf8"), expectedGeneration || {});
     throw fail("COLLECTION_WORKER_V2_TOP20_INTERNAL_RESPONSE_INVALID", "Preview response is invalid", 502);
   }
   if (!response.ok) {
@@ -350,7 +397,13 @@ async function postSignedWorkerRequest(input) {
       signal: controller.signal,
       body: JSON.stringify({ signedRequest, body: input.body })
     });
-    return await readBoundedJsonResponse(response);
+    const expectedGeneration = input.expectedGeneration || (process.env.RENDER === "true"
+      ? {
+          commit: String(process.env.RENDER_GIT_COMMIT || "").trim(),
+          protocol: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+        }
+      : null);
+    return await readBoundedJsonResponse(response, expectedGeneration);
   } catch (error) {
     if (error instanceof CollectionWorkerV2Top20WorkerError) throw error;
     throw fail(
@@ -484,6 +537,47 @@ async function runCollectionWorkerV2Top20(input = {}) {
     throw fail("COLLECTION_WORKER_V2_TOP20_INTERNAL_TRANSPORT_INVALID", "Preview transport is unavailable", 500);
   }
 
+  const generation = Object.freeze({
+    commit: worker.commit,
+    protocol: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+  });
+  if (!fixtureMode || input.requireAttestation === true) {
+    const attestation = await postSignedWorkerRequest({
+      baseUrl: worker.baseUrl,
+      body: {
+        workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+        workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+        workerCommit: worker.commit,
+        targetServiceId: COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
+        targetCommit: worker.commit,
+        runtimeFingerprintHash: sha256Hex(stableJson(runtimeFingerprint)),
+        protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+      },
+      expectedGeneration: generation,
+      fetchImpl: internalFetchImpl,
+      now: clock,
+      path: COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+      requestPrivateKey: worker.requestPrivateKey
+    });
+    if (
+      attestation?.status !== "ready"
+      || attestation.commitMatched !== true
+      || attestation.previewCommit !== worker.commit
+      || attestation.workerCommit !== worker.commit
+      || attestation.protocolVersion !== COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+      || attestation.draining === true
+    ) {
+      throw fail("COLLECTION_WORKER_PREVIEW_GENERATION_MISMATCH", "Preview runtime attestation is not ready", 409);
+    }
+    if (input.attestationState && typeof input.attestationState === "object") {
+      input.attestationState.consecutiveMatches = Number(input.attestationState.consecutiveMatches || 0) + 1;
+      input.attestationState.lastAttestedAt = attestation.attestedAt;
+      if (input.attestationState.consecutiveMatches < 2) {
+        throw fail("COLLECTION_WORKER_PREVIEW_ATTESTATION_PENDING", "Preview runtime attestation needs a second confirmation", 503);
+      }
+    }
+  }
+
   const claim = await postSignedWorkerRequest({
     baseUrl: worker.baseUrl,
     body: {
@@ -491,6 +585,7 @@ async function runCollectionWorkerV2Top20(input = {}) {
       workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
       workerCommit: worker.commit
     },
+    expectedGeneration: !fixtureMode ? generation : null,
     fetchImpl: internalFetchImpl,
     now: clock,
     path: COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
@@ -790,12 +885,12 @@ module.exports = {
   COLLECTION_WORKER_V2_TOP20_WORKER_SCHEMA_VERSION,
   CollectionWorkerV2Top20WorkerError,
   ENV,
-  TARGET_PREVIEW_BASE_URL,
   assertWorkerEnvironment,
   postReceiptWithOneInternalRecovery,
   postSignedWorkerRequest,
   resolveWorkerEnvironment,
   runCollectionWorkerV2Top20,
   safeFatalResult,
+  validatePrivatePreviewBaseUrl,
   verifyTop20ExecutionPayload
 };

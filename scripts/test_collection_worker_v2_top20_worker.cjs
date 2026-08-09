@@ -39,7 +39,6 @@ const {
 } = require("./collection_worker_v2_top20_orchestrator.cjs");
 const {
   ENV,
-  TARGET_PREVIEW_BASE_URL,
   assertWorkerEnvironment,
   postSignedWorkerRequest,
   postReceiptWithOneInternalRecovery,
@@ -101,7 +100,7 @@ function workerEnvironment(keys, overrides = {}) {
     [ENV.resultWrites]: "true",
     [ENV.executionEnabled]: "true",
     [ENV.top20Enabled]: "true",
-    [ENV.previewBaseUrl]: TARGET_PREVIEW_BASE_URL,
+    [ENV.previewInternalBaseUrl]: "http://preview-internal:10000",
     [ENV.dispatchPublicKey]: publicBase64(keys.dispatch.publicKey),
     [ENV.artifactPrivateKey]: privateBase64(keys.artifact.privateKey),
     [ENV.requestPrivateKey]: privateBase64(keys.request.privateKey),
@@ -114,7 +113,14 @@ function response(body, status = 200) {
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers: { get(name) { return String(name).toLowerCase() === "content-length" ? String(Buffer.byteLength(text)) : null; } },
+    headers: {
+      get(name) {
+        const key = String(name).toLowerCase();
+        if (key === "content-length") return String(Buffer.byteLength(text));
+        if (key === "content-type") return "application/json; charset=utf-8";
+        return null;
+      }
+    },
     async text() { return text; }
   };
 }
@@ -386,7 +392,7 @@ async function gateScenario(keys) {
   try {
     await assert.rejects(
       () => postSignedWorkerRequest({
-        baseUrl: TARGET_PREVIEW_BASE_URL,
+        baseUrl: "http://preview-internal:10000",
         body: {
           workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
           workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
@@ -411,22 +417,22 @@ async function gateScenario(keys) {
         path: COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
         requestPrivateKey: keys.request.privateKey
       }),
-      (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_INTERNAL_RESPONSE_INVALID"
+      (error) => error?.code === "COLLECTION_WORKER_PREVIEW_RESPONSE_NOT_JSON"
     );
   } finally {
     console.warn = originalWarn;
   }
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /top20-worker-internal-response/u);
+  assert.match(warnings[0], /collection-worker-preview-transport-failure/u);
   assert.match(warnings[0], /"statusCode":403/u);
   assert.match(warnings[0], /"contentType":"text\/html; charset=utf-8"/u);
-  assert.match(warnings[0], /"jsonParseSuccess":false/u);
+  assert.match(warnings[0], /"bodyLogged":false/u);
   assert.equal(warnings[0].includes("synthetic internal page"), false, "internal response body must not be logged");
 
   let receiptAttempts = 0;
   await assert.rejects(
     () => postReceiptWithOneInternalRecovery({
-      baseUrl: TARGET_PREVIEW_BASE_URL,
+      baseUrl: "http://preview-internal:10000",
       body: { fixture: true },
       fetchImpl: async () => {
         receiptAttempts += 1;

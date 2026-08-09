@@ -102,6 +102,9 @@ const {
   COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
   COLLECTION_WORKER_V2_TOP20_PREPARE_PATH,
+  COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+  COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+  COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
   normalizeV2Top20ExecutionRequestId
 } = require("./collection_worker_v2_top20_protocol.cjs");
@@ -420,6 +423,9 @@ let activeCrawlSourceRole = "";
 let activeCrawlJob = null;
 let activeTop20WorkerJob = null;
 let lastTop20WorkerOutcome = null;
+let previewDraining = false;
+let lastTop20WorkerAttestation = null;
+const TOP20_WORKER_ATTESTATION_MAX_AGE_MS = 45 * 1000;
 let crawlJobSequence = 0;
 const crawlQueue = [];
 const recentCrawlResults = new Map();
@@ -15018,6 +15024,29 @@ function isExplicitLegacyFrozenCrawlRequest(payload = {}) {
   return String(payload.collectorBackend || "").trim() === "legacy_frozen";
 }
 
+function sendCollectionWorkerJson(res, status, body, extraHeaders = {}) {
+  return send(res, status, body, "application/json; charset=utf-8", {
+    "Cache-Control": "no-store",
+    "X-Lodging-Datalab-Service-Id": COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
+    "X-Lodging-Datalab-Commit": String(process.env.RENDER_GIT_COMMIT || "").trim(),
+    "X-Lodging-Datalab-Protocol": COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+    ...extraHeaders
+  });
+}
+
+function isCollectionWorkerInternalPath(pathname) {
+  return [
+    COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+    COLLECTION_WORKER_PREPARE_PATH,
+    COLLECTION_WORKER_V2_TOP20_PREPARE_PATH,
+    COLLECTION_WORKER_CLAIM_PATH,
+    COLLECTION_WORKER_PREFLIGHT_PATH,
+    COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
+    COLLECTION_WORKER_FINALIZE_PATH,
+    COLLECTION_WORKER_FAILURE_PATH
+  ].includes(pathname);
+}
+
 function top20ExecutionRequestIdFromPayload(payload = {}) {
   const supplied = payload?.clientRequestId;
   if (supplied === undefined || supplied === null || String(supplied).trim() === "") {
@@ -15035,6 +15064,8 @@ function top20ExecutionRequestIdFromPayload(payload = {}) {
 }
 
 function top20PrepareFailureMessage(code = "") {
+  if (code === "COLLECTION_WORKER_V2_TOP20_DISPATCH_NOT_READY") return "수집 Worker 연결을 준비하고 있습니다.";
+  if (code === "COLLECTION_WORKER_PREVIEW_DRAINING") return "수집 서버가 배포 전환 중입니다.";
   if (code === "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB") return "이미 진행 중인 수집이 있습니다.";
   if (code === "NAVER_PROVIDER_COOLDOWN_ACTIVE") return "네이버 연결 안정화 대기 중입니다.";
   if ([
@@ -15043,6 +15074,50 @@ function top20PrepareFailureMessage(code = "") {
     "COLLECTION_WORKER_V2_TOP20_EXECUTION_REQUEST_INVALID"
   ].includes(code)) return "수집 실행 ID를 준비하지 못했습니다.";
   return "수집 실행 준비를 완료하지 못했습니다.";
+}
+
+function top20WorkerTransportStatus() {
+  const now = Date.now();
+  const previewCommit = String(process.env.RENDER_GIT_COMMIT || "").trim();
+  const attestation = lastTop20WorkerAttestation;
+  const ageMs = attestation ? Math.max(0, now - Date.parse(attestation.attestedAt)) : null;
+  const workerTransportReady = Boolean(
+    !previewDraining
+    && attestation
+    && attestation.workerCommit === previewCommit
+    && attestation.protocolVersion === COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+    && attestation.consecutiveMatches >= 2
+    && Number.isFinite(ageMs)
+    && ageMs <= TOP20_WORKER_ATTESTATION_MAX_AGE_MS
+  );
+  return Object.freeze({
+    previewCommit: /^[a-f0-9]{40}$/u.test(previewCommit) ? previewCommit : null,
+    attestedWorkerCommit: attestation?.workerCommit || null,
+    workerTransportReady,
+    workerAttestedAt: attestation?.attestedAt || null,
+    workerAttestationAgeSeconds: Number.isFinite(ageMs) ? Math.floor(ageMs / 1000) : null,
+    workerAttestationConsecutiveMatches: Number(attestation?.consecutiveMatches || 0),
+    internalTransport: "private",
+    protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+    previewDraining
+  });
+}
+
+function assertTop20WorkerTransportReady() {
+  const status = top20WorkerTransportStatus();
+  if (status.previewDraining) {
+    const error = new Error("Preview is draining");
+    error.code = "COLLECTION_WORKER_PREVIEW_DRAINING";
+    error.statusCode = 503;
+    throw error;
+  }
+  if (!status.workerTransportReady) {
+    const error = new Error("Top20 worker transport is not ready");
+    error.code = "COLLECTION_WORKER_V2_TOP20_DISPATCH_NOT_READY";
+    error.statusCode = 503;
+    throw error;
+  }
+  return status;
 }
 
 const TOP20_WORKER_TERMINAL_STATES = new Set([
@@ -15054,6 +15129,42 @@ const TOP20_WORKER_TERMINAL_STATES = new Set([
   "cancelled",
   "validated_no_store"
 ]);
+const TOP20_WORKER_UNCLAIMED_TIMEOUT_MS = 5 * 60 * 1000;
+
+async function expireUnclaimedTop20WorkerJob(job) {
+  if (
+    !job
+    || job.state !== "queued"
+    || Number(job.providerAttemptCount || 0) !== 0
+    || Number(job.executedCallCount || 0) !== 0
+    || Date.now() - Date.parse(job.createdAt || job.updatedAt || 0) < TOP20_WORKER_UNCLAIMED_TIMEOUT_MS
+  ) return null;
+  const providerState = await naverPlaceMainProviderHealthStore.read();
+  if (
+    providerState.state !== "probe_allowed"
+    || providerState.workflowRevision !== Number(job.providerWorkflowRevision)
+  ) return null;
+  await naverPlaceMainProviderHealthStore.releaseAttempt({
+    expectedWorkflowRevision: providerState.workflowRevision,
+    outcomeReceiptHash: crypto
+      .createHash("sha256")
+      .update(`collection-worker-v2-top20-dispatch-timeout.v1\0${job.jobId}\0${providerState.workflowRevision}`)
+      .digest("hex"),
+    now: new Date()
+  });
+  const terminal = await collectionWorkerJobStore.transitionJob({
+    jobId: job.jobId,
+    expectedWorkflowRevision: job.workflowRevision,
+    nextState: "indeterminate",
+    failureCode: "COLLECTION_WORKER_V2_TOP20_DISPATCH_TIMEOUT",
+    now: new Date()
+  });
+  collectionWorkerV2Top20Orchestrator.markTerminalPayload({
+    jobId: terminal.jobId,
+    terminalState: "indeterminate"
+  });
+  return terminal;
+}
 
 async function restoreActiveTop20WorkerJob() {
   if (activeTop20WorkerJob) return activeTop20WorkerJob;
@@ -15083,6 +15194,17 @@ async function refreshTop20WorkerOutcome() {
       status: "failed",
       code: "COLLECTION_WORKER_V2_TOP20_JOB_MISSING",
       jobId: activeTop20WorkerJob.jobId,
+      runId: null
+    });
+    activeTop20WorkerJob = null;
+    return lastTop20WorkerOutcome;
+  }
+  const expired = await expireUnclaimedTop20WorkerJob(job);
+  if (expired) {
+    lastTop20WorkerOutcome = Object.freeze({
+      status: "failed",
+      code: expired.failureCode,
+      jobId: expired.jobId,
       runId: null
     });
     activeTop20WorkerJob = null;
@@ -15854,9 +15976,9 @@ async function serveOutput(reqUrl, res) {
 
 async function route(req, res) {
   let session = null;
+  let reqUrl = null;
 
   try {
-    let reqUrl;
     try {
       const requestHost = String(req.headers.host || "local.invalid");
       reqUrl = new URL(String(req.url || "/"), `http://${requestHost}`);
@@ -16055,15 +16177,60 @@ async function route(req, res) {
     // Render Worker requests use short-lived Ed25519 request authentication and
     // intentionally do not carry a browser session cookie. Keep this narrow
     // protocol ahead of the interactive login boundary.
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH) {
+      const payload = await parseJsonBody(req);
+      if (previewDraining) {
+        return sendCollectionWorkerJson(res, 503, {
+          code: "COLLECTION_WORKER_PREVIEW_DRAINING",
+          status: "draining"
+        });
+      }
+      try {
+        const result = collectionWorkerV2Top20Orchestrator.attestRuntime({
+          signedRequest: payload.signedRequest,
+          body: payload.body
+        });
+        const prior = lastTop20WorkerAttestation;
+        const sameGeneration = prior
+          && prior.workerCommit === result.workerCommit
+          && prior.protocolVersion === result.protocolVersion;
+        lastTop20WorkerAttestation = Object.freeze({
+          workerCommit: result.workerCommit,
+          protocolVersion: result.protocolVersion,
+          consecutiveMatches: sameGeneration ? prior.consecutiveMatches + 1 : 1,
+          attestedAt: result.attestedAt
+        });
+        return sendCollectionWorkerJson(res, 200, result);
+      } catch (error) {
+        lastTop20WorkerAttestation = null;
+        return sendCollectionWorkerJson(res, Number(error?.statusCode || 503), {
+          code: String(error?.code || "COLLECTION_WORKER_PREVIEW_GENERATION_MISMATCH"),
+          status: "not_ready"
+        });
+      }
+    }
+
+    if (previewDraining && req.method === "POST" && [
+      COLLECTION_WORKER_PREPARE_PATH,
+      COLLECTION_WORKER_V2_TOP20_PREPARE_PATH,
+      COLLECTION_WORKER_CLAIM_PATH,
+      COLLECTION_WORKER_PREFLIGHT_PATH,
+      COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
+      COLLECTION_WORKER_FINALIZE_PATH,
+      COLLECTION_WORKER_FAILURE_PATH
+    ].includes(reqUrl.pathname)) {
+      return sendCollectionWorkerJson(res, 503, {
+        code: "COLLECTION_WORKER_PREVIEW_DRAINING",
+        status: "draining"
+      });
+    }
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_PREPARE_PATH) {
       const payload = await parseJsonBody(req);
       const result = await collectionWorkerCanaryOrchestrator.prepare({
         operatorToken: req.headers[COLLECTION_WORKER_OPERATOR_TOKEN_HEADER],
         contract: payload
       });
-      return send(res, 201, result, "application/json; charset=utf-8", {
-        "Cache-Control": "no-store"
-      });
+      return sendCollectionWorkerJson(res, 201, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_PREPARE_PATH) {
@@ -16072,9 +16239,7 @@ async function route(req, res) {
         operatorToken: req.headers[COLLECTION_WORKER_OPERATOR_TOKEN_HEADER],
         contract: payload
       });
-      return send(res, 201, result, "application/json; charset=utf-8", {
-        "Cache-Control": "no-store"
-      });
+      return sendCollectionWorkerJson(res, 201, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_CLAIM_PATH) {
@@ -16086,9 +16251,7 @@ async function route(req, res) {
         signedRequest: payload.signedRequest,
         body: payload.body
       });
-      return send(res, 200, result, "application/json; charset=utf-8", {
-        "Cache-Control": "no-store"
-      });
+      return sendCollectionWorkerJson(res, 200, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_PREFLIGHT_PATH) {
@@ -16100,9 +16263,7 @@ async function route(req, res) {
         signedRequest: payload.signedRequest,
         body: payload.body
       });
-      return send(res, 200, result, "application/json; charset=utf-8", {
-        "Cache-Control": "no-store"
-      });
+      return sendCollectionWorkerJson(res, 200, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH) {
@@ -16111,9 +16272,7 @@ async function route(req, res) {
         signedRequest: payload.signedRequest,
         body: payload.body
       });
-      return send(res, 200, result, "application/json; charset=utf-8", {
-        "Cache-Control": "no-store"
-      });
+      return sendCollectionWorkerJson(res, 200, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FINALIZE_PATH) {
@@ -16125,9 +16284,7 @@ async function route(req, res) {
         signedRequest: payload.signedRequest,
         body: payload.body
       });
-      return send(res, 200, result, "application/json; charset=utf-8", {
-        "Cache-Control": "no-store"
-      });
+      return sendCollectionWorkerJson(res, 200, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FAILURE_PATH) {
@@ -16409,6 +16566,7 @@ async function route(req, res) {
       return send(res, 200, {
         ...collectionWorkerV2Top20Orchestrator.status(),
         ...providerStatus,
+        ...top20WorkerTransportStatus(),
         activeJob: activeTop20WorkerJob ? {
           jobId: activeTop20WorkerJob.jobId,
           startedAt: activeTop20WorkerJob.startedAt
@@ -16434,9 +16592,7 @@ async function route(req, res) {
           collectorBackend: "v2_top20_worker"
         }
       });
-      return send(res, 200, result, "application/json; charset=utf-8", {
-        "Cache-Control": "no-store"
-      });
+      return sendCollectionWorkerJson(res, 200, result);
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/provider-canary/naver-place-main/execute") {
@@ -16705,6 +16861,7 @@ async function route(req, res) {
       let result;
       if (useTop20Worker) {
         try {
+          assertTop20WorkerTransportReady();
           result = await queueV2Top20WorkerCollection({
             ...trustedPayload,
             clientRequestId: payload.clientRequestId
@@ -16713,7 +16870,10 @@ async function route(req, res) {
           return send(res, Number(error?.statusCode || 409), {
             error: top20PrepareFailureMessage(error?.code),
             code: String(error?.code || "COLLECTION_WORKER_V2_TOP20_PREPARE_FAILED"),
-            stage: "prepare",
+            stage: String(error?.code || "").startsWith("COLLECTION_WORKER_V2_TOP20_DISPATCH_")
+              || String(error?.code || "").startsWith("COLLECTION_WORKER_PREVIEW_")
+              ? "dispatch-readiness"
+              : "prepare",
             retryable: false,
             retryAt: error?.retryAt || undefined,
             retryAfterSeconds: error?.retryAfterSeconds || undefined
@@ -16754,13 +16914,17 @@ async function route(req, res) {
     const headers = error.retryAfterSeconds
       ? { "Retry-After": String(Math.max(1, Number(error.retryAfterSeconds) || 1)) }
       : {};
-    send(res, error.statusCode || 500, {
+    const body = {
       ...publicFailure,
       retryAt: error.retryAt || undefined,
       retryAfterSeconds: error.retryAfterSeconds || undefined,
       fallbackAvailable: error.fallbackAvailable ?? fallbackProjection.fallbackAvailable,
       ...fallbackProjection
-    }, "application/json; charset=utf-8", headers);
+    };
+    if (isCollectionWorkerInternalPath(reqUrl?.pathname)) {
+      return sendCollectionWorkerJson(res, error.statusCode || 500, body, headers);
+    }
+    send(res, error.statusCode || 500, body, "application/json; charset=utf-8", headers);
   }
 }
 
@@ -16827,6 +16991,9 @@ async function startServer() {
 }
 
 if (require.main === module) {
+  process.once("SIGTERM", () => {
+    previewDraining = true;
+  });
   startServer().catch((error) => {
     console.error(`V2 startup blocked: ${error.message || error}`);
     process.exitCode = 1;
