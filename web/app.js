@@ -192,7 +192,7 @@ const CORE_COLORS = {
 const LOCAL_MAP_URL = "/assets/korea_municipalities.geojson";
 const LOCATION_DICTIONARY_URL = "/data/location_dictionary.json";
 const TOURISM_REGION_MAP_URL = "/data/tourism_region_map.json";
-const DEFAULT_BOOKING_DAYS = 7;
+const DEFAULT_BOOKING_DAYS = 1;
 const B2B_HIGH_RESERVATION_RATE = 0.4;
 const B2B_LOW_RESERVATION_RATE = 0.2;
 const B2B_HIGH_RESERVATION_LABEL = "수집기간 예약율 40% 이상";
@@ -939,7 +939,7 @@ const COLLECTION_PURPOSE_PROFILES = {
     key: "revenue_detail",
     label: "상세정보 수집",
     shortLabel: "상세정보",
-    defaultRange: "1-10",
+    defaultRange: "1-20",
     note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 취합",
     status: "요일별 매출과 예약율 판단에 필요한 상세정보를 수집합니다."
   },
@@ -1098,9 +1098,9 @@ function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.valu
     ];
   }
   return [
-    { key: "top10", label: "1-5위", collectionMode: "precision", range: "1-5", note: "핵심 경쟁사 정밀", collectionPurpose: "revenue_detail" },
-    { key: "top20", label: "1-10위", collectionMode: "precision", range: "1-10", note: "상세 매출 권장", collectionPurpose: "revenue_detail" },
-    { key: "top50", label: "1-20위", collectionMode: "precision", range: "1-20", note: "확장 매출 비교", collectionPurpose: "revenue_detail" },
+    { key: "top10", label: "1-10위", collectionMode: "precision", range: "1-10", note: "소규모 점검", collectionPurpose: "revenue_detail" },
+    { key: "top20", label: "1-20위", collectionMode: "precision", range: "1-20", note: "기본 Worker 수집", collectionPurpose: "revenue_detail" },
+    { key: "top50", label: "1-50위", collectionMode: "precision", range: "1-50", note: "확장 매출 비교", collectionPurpose: "revenue_detail" },
     { key: "top100", label: "10-20위", collectionMode: "precision", range: "10-20", note: "중위권 보강", collectionPurpose: "revenue_detail" }
   ];
 }
@@ -1118,7 +1118,7 @@ function currentCrawlFormPayload() {
   return {
     keyword,
     checkIn: els.checkInInput?.value || "",
-    checkOut: els.checkOutInput?.value || "",
+    checkOut: els.checkOutInput?.value || els.checkInInput?.value || "",
     searchMode: resolvedMode,
     searchIntentMode: "auto",
     clientIntentPreview: clientIntentPreview(intent),
@@ -1127,6 +1127,7 @@ function currentCrawlFormPayload() {
     collectionMode,
     detailRankRanges,
     rankRangeCount: rankRangeCountFromText(detailRankRanges, defaultRange),
+    bookingRangeDays: DEFAULT_BOOKING_DAYS,
     bookingRangePlaceLimit: purpose.collectWeeklyRange ? rankRangePlaceLimitFromText(detailRankRanges, defaultRange) : 0
   };
 }
@@ -3019,6 +3020,10 @@ function ensureCrawlControls() {
     els.crawlProgressRemaining = progress.querySelector("#crawlProgressRemaining");
     els.crawlProgressBasis = progress.querySelector("#crawlProgressBasis");
     els.crawlProgressStages = progress.querySelector("#crawlProgressStages");
+  }
+  if (els.checkOutInput) {
+    els.checkOutInput.readOnly = true;
+    els.checkOutInput.setAttribute("aria-readonly", "true");
   }
 }
 
@@ -31059,7 +31064,7 @@ function b2bLiveSearchPayload(keyword = state.b2bSearchQuery) {
   const detailRankRanges = range === "1-20" ? "1-20" : "1-10";
   const intent = clientSearchIntent(keyword);
   const checkIn = els.checkInInput?.value || "";
-  const checkOut = els.checkOutInput?.value || "";
+  const checkOut = els.checkOutInput?.value || checkIn;
   return {
     keyword: String(keyword || "").trim(),
     checkIn,
@@ -36049,10 +36054,9 @@ function setDefaultDates() {
   const now = new Date();
   const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   const start = new Date(kst);
-  const end = new Date(kst);
-  end.setUTCDate(end.getUTCDate() + (DEFAULT_BOOKING_DAYS > 1 ? DEFAULT_BOOKING_DAYS - 1 : 1));
-  if (els.checkInInput && !els.checkInInput.value) els.checkInInput.value = start.toISOString().slice(0, 10);
-  if (els.checkOutInput && !els.checkOutInput.value) els.checkOutInput.value = end.toISOString().slice(0, 10);
+  const date = start.toISOString().slice(0, 10);
+  if (els.checkInInput && !els.checkInInput.value) els.checkInInput.value = date;
+  if (els.checkOutInput) els.checkOutInput.value = els.checkInInput?.value || date;
   updateCrawlSpeedPreview();
 }
 
@@ -37416,6 +37420,10 @@ function bindEvents() {
   els.collectionModeInput?.addEventListener("change", syncCollectionModeInputs);
   els.keywordInput?.addEventListener("input", renderSearchIntentHints);
   els.b2bSearchInput?.addEventListener("input", renderSearchIntentHints);
+  els.checkInInput?.addEventListener("change", () => {
+    if (els.checkOutInput) els.checkOutInput.value = els.checkInInput.value || els.checkOutInput.value;
+    updateCrawlSpeedPreview();
+  });
   els.crawlForm?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-collection-purpose]");
     if (!button) return;

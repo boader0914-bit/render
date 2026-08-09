@@ -147,7 +147,7 @@
     "test:collection-worker-readiness-fixtures": "npm run test:collection-worker-contract-fixtures && npm run test:collection-worker-artifact-fixtures && npm run test:collection-worker-runtime-fixtures && npm run test:collection-worker-no-store-canary-fixtures && npm run test:collection-worker-naver-canary-fixtures && npm run test:collection-worker-v2-top20-fixtures"
   },
   "engines": {
-    "node": ">=20"
+    "node": "26.5.0"
   },
   "dependencies": {
     "write-excel-file": "4.1.1"

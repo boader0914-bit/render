@@ -33,7 +33,7 @@
       "module": "write-excel-file",
       "version": "4.1.1",
       "dependencyPath": "package-lock.json",
-      "dependencyBlob": "6c9f3b2346031a6364b8e27822d009934f41b915",
+      "dependencyBlob": "dabce1c6a80a4541af98f521e9596ddc4c8f9c69",
       "reason": "Uses the currently locked non-xlsx workbook dependency without a dependency rollback"
     }
   ]

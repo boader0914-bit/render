@@ -82,7 +82,8 @@ async function main() {
 
     const serverSource = await fsp.readFile(path.join(ROOT, "scripts", "glamping_app_server.cjs"), "utf8");
     assert.match(serverSource, /async function runCrawlerInternal\(payload\)\s*\{\s*if \(isTrustedFrozenPayload\(payload\)\) return runFrozenV2CrawlerInternal\(payload\);/u);
-    assert.match(serverSource, /const trustedPayload = useTop20Worker[\s\S]{0,120}trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
+    assert.match(serverSource, /const explicitLegacyFrozen = isExplicitLegacyFrozenCrawlRequest\(payload\)/u);
+    assert.match(serverSource, /const trustedPayload = useTop20Worker[\s\S]{0,160}trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
     assert.match(serverSource, /&& isV2Top20WorkerEligible\(adminPayload\)/u);
     assert.equal(
       serverSource.includes("isV2Top20WorkerEligible(trustedPayload)"),

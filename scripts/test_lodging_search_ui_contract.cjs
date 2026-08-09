@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -13,7 +13,7 @@ const intentScript = fs.readFileSync(path.join(root, "scripts", "lodging_search_
 
 assert.match(
   html,
-  /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js\?v=v2-20260807-worker-top20-ui-v46"><\/script>/,
+  /<script src="\/lodging-search-intent\.js"><\/script>[\s\S]*<script src="\/app\.js\?v=v2-20260809-basic-collection-v47"><\/script>/,
 );
 assert.doesNotMatch(html, /id="searchModeInput"/);
 assert.match(html, /id="crawlSearchIntentHint"/);

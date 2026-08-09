@@ -13,8 +13,8 @@ const request = {
   productMode: "all",
   collectionMode: "precision",
   collectionPurpose: "revenue_detail",
-  detailRankRanges: "1-3",
-  bookingRangePlaceLimit: 3
+  detailRankRanges: "1-20",
+  bookingRangePlaceLimit: 0
 };
 
 const contract = __test.v2Top20WorkerContract(request);
@@ -39,12 +39,19 @@ assert.throws(
   () => __test.v2Top20WorkerContract({ ...request, collectionMode: "fast" }),
   (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID"
 );
+assert.throws(
+  () => __test.v2Top20WorkerContract({ ...request, detailRankRanges: "1-10" }),
+  (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID"
+);
 assert.equal(__test.isV2Top20WorkerEligible(request), true);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, searchMode: "company" }), false);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, checkOut: "2026-08-07" }), false);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, collectionMode: "fast" }), false);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, collectionPurpose: "basic_db" }), false);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, productMode: "lodging" }), false);
+assert.equal(__test.isV2Top20WorkerEligible({ ...request, detailRankRanges: "1-10" }), false);
+assert.equal(__test.isExplicitLegacyFrozenCrawlRequest({ collectorBackend: "legacy_frozen" }), true);
+assert.equal(__test.isExplicitLegacyFrozenCrawlRequest({}), false);
 
 const root = path.resolve(__dirname, "..");
 const serverSource = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
@@ -57,7 +64,9 @@ assert.match(serverSource, /String\(payload\?\.body\?\.jobId \|\| ""\)\.startsWi
 assert.match(serverSource, /useTop20Worker \? 202 : 200/u);
 assert.match(serverSource, /const adminPayload = trustedPreviewAdminCrawlPayload\(/u);
 assert.match(serverSource, /&& isV2Top20WorkerEligible\(adminPayload\)/u);
-assert.match(serverSource, /const trustedPayload = useTop20Worker[\s\S]{0,120}trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
+assert.match(serverSource, /const explicitLegacyFrozen = isExplicitLegacyFrozenCrawlRequest\(payload\)/u);
+assert.match(serverSource, /top20WorkerEnabled && !explicitLegacyFrozen && !useTop20Worker[\s\S]{0,80}v2Top20WorkerContract\(adminPayload\)/u);
+assert.match(serverSource, /const trustedPayload = useTop20Worker[\s\S]{0,160}trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
 assert.equal(
   serverSource.includes("isV2Top20WorkerEligible(trustedPayload)"),
   false,

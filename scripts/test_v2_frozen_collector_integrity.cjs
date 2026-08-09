@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 const assert = require("node:assert/strict");
 const fsp = require("node:fs/promises");
@@ -20,12 +20,12 @@ const ROOT = path.resolve(__dirname, "..");
 const FROZEN_ROOT = path.join(ROOT, "scripts", "frozen_v2_4e4e190");
 
 const UI_BASELINE_BLOBS = Object.freeze({
-  "web/app.js": "b01941439045030a7bae81c4086c37b5bf790de8",
-  "web/index.html": "b0e92308ff28edb4d8de76e0f886d257530904b1",
+  "web/app.js": "b3340a55417c0ed900e4a325a2b9433e32e10981",
+  "web/index.html": "f436df1d543dc6f1c574a35ef25f442fd1a52c2b",
   "web/styles.css": "6e8c1413d845b256b5cb0e20249f5e8749f8cd6e",
   "web/public-ui.css": "988eed0436ac6d34a779ee6a85b0af5a7bbaf5c8",
   "web/login-theme.js": "5ee22ec02d65a314243cbaa6ad31303f2a129793",
-  "web/sw.js": "21c3b283773b4c1240a8593fbd88f1204040cb35"
+  "web/sw.js": "34854c8000353992b6e9a5fb0ffc5ce019b7f50e"
 });
 
 async function blobFor(relativePath) {
@@ -77,7 +77,7 @@ async function main() {
     assert.equal(await blobFor(relativePath), expectedBlob, `${relativePath} must remain byte-identical to v46`);
   }
   const serviceWorker = await fsp.readFile(path.join(ROOT, "web", "sw.js"), "utf8");
-  assert.match(serviceWorker, /lodging-datalab-pwa-v20260807-worker-top20-ui-v46/u);
+  assert.match(serviceWorker, /lodging-datalab-pwa-v20260809-basic-collection-v47/u);
 
   console.log("Frozen V2 collector integrity fixture passed");
 }

@@ -1,4 +1,4 @@
-const fs = require("node:fs");
+﻿const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const crypto = require("node:crypto");
 const http = require("node:http");
@@ -315,7 +315,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260807-worker-top20-ui-v46";
+const UI_ASSET_VERSION = "v2-20260809-basic-collection-v47";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -698,7 +698,7 @@ function crawlExecutionPlan(payload = {}) {
     .find((value) => Number.isFinite(value) && value > 0);
   const requestedBookingDays = Math.max(
     1,
-    Math.min(31, Math.round(Number.isFinite(requestedBookingDaysValue) && requestedBookingDaysValue > 0 ? requestedBookingDaysValue : 7))
+    Math.min(31, Math.round(Number.isFinite(requestedBookingDaysValue) && requestedBookingDaysValue > 0 ? requestedBookingDaysValue : 1))
   );
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
   const checkOut = payload.checkOut || process.env.CHECK_OUT || isoDateAddDays(checkIn, requestedBookingDays - 1) || kstDate(requestedBookingDays - 1);
@@ -799,6 +799,9 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
   const activationEnvironment = runtime.activationEnvironment && typeof runtime.activationEnvironment === "object"
     ? runtime.activationEnvironment
     : naverLegacyLimitedActivationEnvironment();
+  const preferTop20Worker = previewRuntime
+    && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
+    && !isExplicitLegacyFrozenCrawlRequest(payload);
   const trustedPayload = {
     ...payload,
     sourceRole: USER_ROLES.admin,
@@ -820,7 +823,7 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
     naverAutomaticFallback: false
   };
   const requestedPlan = crawlExecutionPlan(trustedPayload);
-  const v2CompatibilityActivation = requestedPlan.bookingRangeDays === 1
+  const v2CompatibilityActivation = !preferTop20Worker && requestedPlan.bookingRangeDays === 1
     && requestedPlan.checkIn === requestedPlan.checkOut
     && requestedPlan.productMode === "all"
     ? resolveV2CollectorCompatibilityActivation({
@@ -836,7 +839,7 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
         checkOut: requestedPlan.checkOut
       })
     : { activationEnabled: false };
-  const inventoryActivation = resolveNaverLegacyInventoryActivation({
+  const inventoryActivation = preferTop20Worker ? { activationEnabled: false } : resolveNaverLegacyInventoryActivation({
     environment: activationEnvironment,
     collectionSource: "admin_search",
     sourceRole: USER_ROLES.admin,
@@ -844,7 +847,7 @@ function trustedPreviewAdminCrawlPayload(payload = {}, runtime = {}) {
     collectionMode: requestedPlan.collectionMode,
     collectionPurpose: requestedPlan.collectionPurpose
   });
-  const activation = resolveNaverLegacyLimitedActivationForTrustedServer({
+  const activation = preferTop20Worker ? { activationEnabled: false } : resolveNaverLegacyLimitedActivationForTrustedServer({
     environment: activationEnvironment,
     collectionSource: "admin_search",
     sourceRole: USER_ROLES.admin,
@@ -14948,18 +14951,21 @@ function v2Top20WorkerContract(payload = {}) {
   const requestedCollectionMode = String(payload.collectionMode || process.env.COLLECTION_MODE || "precision").trim();
   const requestedCollectionPurpose = String(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail").trim();
   const requestedProductMode = String(payload.productMode || process.env.PRODUCT_MODE || "all").trim();
+  const requestedDetailRankRanges = rankRangeLabel(parseRankRanges(payload.detailRankRanges || process.env.DETAIL_RANK_RANGES || "1-20", "1-20"));
   if (
     requestedSearchMode !== "keyword"
     || requestedCollectionMode !== "precision"
     || requestedCollectionPurpose !== "revenue_detail"
     || requestedProductMode !== "all"
+    || requestedDetailRankRanges !== "1-20"
     || plan.resolvedSearchMode !== "keyword"
     || plan.collectionMode !== "precision"
     || plan.collectionPurpose !== "revenue_detail"
     || plan.productMode !== "all"
+    || plan.detailRankRanges !== "1-20"
     || plan.checkIn !== plan.checkOut
   ) {
-    const error = new Error("Worker 상위 20곳 수집은 키워드·정밀·상세정보·전체상품·1일 조건만 지원합니다.");
+    const error = new Error("기본 Worker 수집은 체크인과 체크아웃이 같은 1일 기준으로 실행됩니다.");
     error.code = "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID";
     error.statusCode = 422;
     error.retryable = false;
@@ -14988,6 +14994,10 @@ function isV2Top20WorkerEligible(payload = {}) {
     if (error?.code === "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID") return false;
     return false;
   }
+}
+
+function isExplicitLegacyFrozenCrawlRequest(payload = {}) {
+  return String(payload.collectorBackend || "").trim() === "legacy_frozen";
 }
 
 const TOP20_WORKER_TERMINAL_STATES = new Set([
@@ -16597,9 +16607,15 @@ async function route(req, res) {
         ...payload,
         providerAttemptExplicit: true
       });
-      const useTop20Worker = IS_V2_PREVIEW_RUNTIME
-        && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
+      const top20WorkerEnabled = IS_V2_PREVIEW_RUNTIME
+        && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true";
+      const explicitLegacyFrozen = isExplicitLegacyFrozenCrawlRequest(payload);
+      const useTop20Worker = top20WorkerEnabled
+        && !explicitLegacyFrozen
         && isV2Top20WorkerEligible(adminPayload);
+      if (top20WorkerEnabled && !explicitLegacyFrozen && !useTop20Worker) {
+        v2Top20WorkerContract(adminPayload);
+      }
       const trustedPayload = useTop20Worker
         ? adminPayload
         : trustedPreviewFrozenCrawlPayload(adminPayload);
@@ -16737,6 +16753,7 @@ module.exports = {
     isAdminPreviewMapGeocodingItemEligible,
     isAdminPreviewMapGeocodingRequest,
     isSameOriginMapGeocodingRequest,
+    isExplicitLegacyFrozenCrawlRequest,
     isV2Top20WorkerEligible,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
