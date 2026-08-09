@@ -136,7 +136,20 @@ const SUMMARY_KEYS = Object.freeze([
   "providerFailureSubtype",
   "diagnosticId"
 ]);
-const ARTIFACT_TERMINAL_STATES = new Set(["validated_no_store", "blocked", "failed"]);
+const ARTIFACT_TERMINAL_STATES = new Set([
+  "validated_no_store",
+  "blocked",
+  "failed",
+  "indeterminate",
+  "cancelled"
+]);
+const ACTIVE_CANARY_JOB_STATES = new Set([
+  "queued",
+  "leased",
+  "collecting",
+  "artifact_received",
+  "failure_received"
+]);
 
 class CollectionWorkerCanaryOrchestratorError extends Error {
   constructor(code, message, statusCode = 409, meta = {}) {
@@ -264,6 +277,16 @@ function failureReceiptHash(body) {
     workflowRevision: Number(body.workflowRevision),
     code: String(body.code || ""),
     providerAttemptCount: Number(body.providerAttemptCount)
+  }));
+}
+
+function durableCanaryIdempotencyKey(signedJob) {
+  return sha256Hex(stableJson({
+    schemaVersion: "collection-worker-canary-durable-idempotency.v1",
+    signedIdempotencyKey: signedJob.idempotencyKey,
+    jobId: signedJob.jobId,
+    attemptId: signedJob.attemptId,
+    backendId: COLLECTION_WORKER_CANARY_BACKEND_ID
   }));
 }
 
@@ -451,8 +474,12 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
     assertPrivateExecutionContract(contract);
     await reconcileFirstUse();
     const existing = await jobStore.readSnapshot();
-    if (existing.jobs.some((job) => job.backendId === COLLECTION_WORKER_CANARY_BACKEND_ID)) {
-      throw fail("COLLECTION_WORKER_CANARY_ALREADY_CREATED", "Collection worker canary already exists", 409);
+    const activeCanaryJob = existing.jobs.find((job) => (
+      job.backendId === COLLECTION_WORKER_CANARY_BACKEND_ID
+      && ACTIVE_CANARY_JOB_STATES.has(String(job.state || ""))
+    ));
+    if (activeCanaryJob) {
+      throw fail("COLLECTION_WORKER_CANARY_ACTIVE_JOB", "Collection worker canary is already active", 409);
     }
 
     const createdAt = new Date(now());
@@ -502,7 +529,7 @@ function createCollectionWorkerCanaryOrchestrator(options = {}) {
       const storedJob = await jobStore.createOrReuseJob({
         jobId,
         attemptId,
-        idempotencyKey: signedJob.idempotencyKey,
+        idempotencyKey: durableCanaryIdempotencyKey(signedJob),
         contractHash: signedJob.contractHash,
         executionIdentityHash: signedJob.executionIdentityHash,
         backendId: COLLECTION_WORKER_CANARY_BACKEND_ID,

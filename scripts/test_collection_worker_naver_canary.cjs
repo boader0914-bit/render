@@ -506,10 +506,12 @@ async function main() {
       (error) => error?.code === "COLLECTION_WORKER_CANARY_NO_JOB"
     );
     assert.equal(replayProviderCalls, 0, "a new process cannot replay a durable terminal job");
-    await assert.rejects(
-      () => successSystem.orchestrator.prepare({ operatorToken: OPERATOR_TOKEN, contract: contract() }),
-      (error) => error?.code === "COLLECTION_WORKER_CANARY_ALREADY_CREATED"
-    );
+    const terminalHistoryPrepared = await successSystem.orchestrator.prepare({
+      operatorToken: OPERATOR_TOKEN,
+      contract: contract()
+    });
+    assert.equal(terminalHistoryPrepared.status, "queued",
+      "terminal canary history must not block a new explicit recovery probe");
 
     const historicalReceiptRoot = path.join(root, "historical-receipt-isolation");
     await fsp.mkdir(historicalReceiptRoot, { recursive: true });
@@ -548,7 +550,7 @@ async function main() {
     assert.equal(adminPrepared.resultWriteApproved, false);
     await assert.rejects(
       () => adminSessionSystem.orchestrator.prepareFromAdminSession({ contract: contract() }),
-      (error) => error?.code === "COLLECTION_WORKER_CANARY_ALREADY_CREATED"
+      (error) => error?.code === "COLLECTION_WORKER_CANARY_ACTIVE_JOB"
     );
 
     const restartQueuedRoot = path.join(root, "restart-queued");
@@ -556,13 +558,16 @@ async function main() {
     const restartQueuedOriginal = await createFixtureSystem(restartQueuedRoot, keySet);
     await restartQueuedOriginal.orchestrator.prepare({ operatorToken: OPERATOR_TOKEN, contract: contract() });
     const restartQueuedSystem = await createFixtureSystem(restartQueuedRoot, keySet);
-    await assert.rejects(
-      () => restartQueuedSystem.orchestrator.prepare({ operatorToken: OPERATOR_TOKEN, contract: contract() }),
-      (error) => error?.code === "COLLECTION_WORKER_CANARY_ALREADY_CREATED"
-    );
-    assert.equal((await restartQueuedSystem.jobStore.readSnapshot()).jobs[0].state, "indeterminate");
-    assert.equal((await restartQueuedSystem.providerStore.read()).state, "closed",
-      "a lost queued payload has not started provider work and may release its reservation");
+    const restartQueuedPrepared = await restartQueuedSystem.orchestrator.prepare({
+      operatorToken: OPERATOR_TOKEN,
+      contract: contract()
+    });
+    assert.equal(restartQueuedPrepared.status, "queued");
+    const restartQueuedSnapshot = await restartQueuedSystem.jobStore.readSnapshot();
+    assert.equal(restartQueuedSnapshot.jobs[0].state, "indeterminate");
+    assert.equal(restartQueuedSnapshot.jobs[1].backendId, COLLECTION_WORKER_CANARY_BACKEND_ID);
+    assert.equal((await restartQueuedSystem.providerStore.read()).state, "probe_allowed",
+      "a lost queued payload may be released and replaced by a new explicit probe reservation");
 
     const restartCollectingRoot = path.join(root, "restart-collecting");
     await fsp.mkdir(restartCollectingRoot, { recursive: true });
@@ -589,7 +594,7 @@ async function main() {
     const restartCollectingSystem = await createFixtureSystem(restartCollectingRoot, keySet);
     await assert.rejects(
       () => restartCollectingSystem.orchestrator.prepare({ operatorToken: OPERATOR_TOKEN, contract: contract() }),
-      (error) => error?.code === "COLLECTION_WORKER_CANARY_ALREADY_CREATED"
+      (error) => error?.code === "NAVER_PROVIDER_COOLDOWN_ACTIVE"
     );
     assert.equal((await restartCollectingSystem.jobStore.readSnapshot()).jobs[0].state, "indeterminate");
     assert.equal((await restartCollectingSystem.providerStore.read()).state, "open",
