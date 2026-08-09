@@ -33,7 +33,7 @@ const BOUNDED_INVENTORY_PROFILES = Object.freeze({
   top20_v1: Object.freeze({
     profileId: "top20_v1",
     operationLimits: TOP20_OPERATION_LIMITS,
-    totalCallBudget: 200,
+    totalCallBudget: 240,
     maxCompanies: 20,
     maxProductsPerCompany: 8,
     strictCompanyOrder: true
@@ -232,13 +232,13 @@ function assertGraphqlBody(request, normalized) {
   normalized.bizItemId = safeIdentifier(params.bizItemId, "item ID");
 }
 
-function assertRequest(request = {}, budgetProfile = BOUNDED_INVENTORY_PROFILES.top3_v1) {
+function assertRequest(request = {}, budgetProfile = BOUNDED_INVENTORY_PROFILES.top3_v1, expectedProviderId = NAVER_PROVIDER_ID) {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw transportError("NAVER_BOUNDED_INVENTORY_REQUEST_INVALID", "The NAVER inventory request is invalid", 400);
   }
   const operation = String(request.operation || "");
   if (
-    request.providerId !== NAVER_PROVIDER_ID
+    request.providerId !== expectedProviderId
     || !Object.prototype.hasOwnProperty.call(budgetProfile.operationLimits, operation)
     || !request.body
     || typeof request.body !== "object"
@@ -295,6 +295,10 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
     ? options.onProviderCallStarted
     : null;
   const profileId = String(options.budgetProfileId || "top3_v1");
+  const providerId = String(options.providerId || NAVER_PROVIDER_ID);
+  if (!/^[a-z0-9_]{3,80}$/u.test(providerId)) {
+    throw transportError("NAVER_BOUNDED_INVENTORY_TRANSPORT_INVALID", "The NAVER inventory provider identity is invalid", 400);
+  }
   const budgetProfile = BOUNDED_INVENTORY_PROFILES[profileId];
   if (!budgetProfile) {
     throw transportError(
@@ -373,7 +377,7 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
   }
 
   const transport = async function naverBoundedInventoryLiveTransport(request, context = {}) {
-    const normalized = assertRequest(request, budgetProfile);
+    const normalized = assertRequest(request, budgetProfile, providerId);
     if (halted) {
       throw transportError("NAVER_BOUNDED_INVENTORY_HALTED", "The NAVER inventory transport is halted", 409);
     }
@@ -396,7 +400,7 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
       authorizing = true;
       try {
         await beforeProviderCall(Object.freeze({
-          providerId: NAVER_PROVIDER_ID,
+          providerId,
           operation: normalized.operation,
           companyOrdinal: normalized.companyOrdinal,
           productOrdinal: normalized.productOrdinal
@@ -447,7 +451,7 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
       if (onProviderCallStarted) {
         try {
           await onProviderCallStarted(Object.freeze({
-            providerId: NAVER_PROVIDER_ID,
+            providerId,
             operation: normalized.operation,
             companyOrdinal: normalized.companyOrdinal,
             productOrdinal: normalized.productOrdinal

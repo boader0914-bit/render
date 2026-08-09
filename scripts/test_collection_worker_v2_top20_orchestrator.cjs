@@ -166,7 +166,7 @@ async function prepareClaimPreflight(system, keys, keyword) {
     contract: contract(keyword)
   });
   assert.equal(prepared.status, "queued");
-  assert.equal(prepared.maximumProviderCalls, 201);
+  assert.equal(prepared.maximumProviderCalls, 241);
   assert.equal(prepared.maxProviderAttempts, 1);
   assert.equal(system.orchestrator.status().activePayloadCount, 1);
   assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 0);
@@ -182,7 +182,7 @@ async function prepareClaimPreflight(system, keys, keyword) {
   });
   assert.equal(claimed.status, "claimed");
   assert.equal(claimed.job.executionPayload.top20ContractHash, prepared.top20ContractHash);
-  assert.equal(claimed.job.executionPayload.providerSession.maximumProviderCalls, 201);
+  assert.equal(claimed.job.executionPayload.providerSession.maximumProviderCalls, 241);
   assert.equal(claimed.job.executionPayload.providerSession.concurrency, 1);
   assert.equal(claimed.job.executionPayload.providerSession.automaticRetry, false);
   assert.equal(claimed.job.executionPayload.providerSession.automaticFallback, false);

@@ -249,9 +249,22 @@ const COMPANY_MASTER_READ_HASH = Symbol("companyMasterReadHash");
 const TOURISM_DATA_DIR = path.join(DATA_DIR, "tourism_data");
 const REGION_INSIGHT_STORE_FILE = path.join(DATA_DIR, "region_insights", "regions.json");
 const NAVER_PROVIDER_HEALTH_FILE = path.join(DATA_DIR, "provider_health", "naver_place_search.json");
+const NAVER_PLACE_MAIN_PROVIDER_HEALTH_FILE = path.join(DATA_DIR, "provider_health", "naver_place_main.json");
+const NAVER_BOOKING_DETAIL_PROVIDER_HEALTH_FILE = path.join(DATA_DIR, "provider_health", "naver_booking_detail.json");
 const COLLECTION_WORKER_JOB_STORE_FILE = path.join(DATA_DIR, "collector_worker", "jobs.json");
 const naverProviderHealthStore = createNaverProviderHealthStore({
   filePath: NAVER_PROVIDER_HEALTH_FILE,
+  runtimeRoot: DATA_DIR
+});
+// Keep the legacy generic circuit untouched for the existing collector.
+// Top20 Worker runs use intentionally separate persisted circuits so a
+// Booking-detail block cannot suppress a successful main Place collection.
+const naverPlaceMainProviderHealthStore = createNaverProviderHealthStore({
+  filePath: NAVER_PLACE_MAIN_PROVIDER_HEALTH_FILE,
+  runtimeRoot: DATA_DIR
+});
+const naverBookingDetailProviderHealthStore = createNaverProviderHealthStore({
+  filePath: NAVER_BOOKING_DETAIL_PROVIDER_HEALTH_FILE,
   runtimeRoot: DATA_DIR
 });
 const collectionWorkerJobStore = createCollectionJobStore({
@@ -276,7 +289,8 @@ const collectionWorkerV2Top20Orchestrator = createCollectionWorkerV2Top20Orchest
   externalCallApproved: String(process.env.COLLECTION_WORKER_V2_TOP20_EXTERNAL_CALL_APPROVED || "false").toLowerCase() === "true",
   previewWriteApproved: String(process.env.COLLECTION_WORKER_V2_TOP20_PREVIEW_WRITE_APPROVED || "false").toLowerCase() === "true",
   jobStore: collectionWorkerJobStore,
-  providerStore: naverProviderHealthStore,
+  providerStore: naverPlaceMainProviderHealthStore,
+  detailProviderStore: naverBookingDetailProviderHealthStore,
   targetWorkerCommit: IS_RENDER_RUNTIME ? process.env.RENDER_GIT_COMMIT : process.env.COLLECTION_WORKER_TARGET_COMMIT,
   dispatchPrivateKeyBase64: process.env.COLLECTION_WORKER_DISPATCH_PRIVATE_KEY_B64,
   artifactPublicKeyBase64: process.env.COLLECTION_WORKER_ARTIFACT_PUBLIC_KEY_B64,
@@ -15164,11 +15178,11 @@ async function cancelActiveTop20WorkerCollection(reason = "관리자 요청으�
           message: "Worker 수집 중지를 요청했습니다. 실행 중인 호출이 종료되면 안전하게 중단합니다."
         });
       }
-      const providerState = await naverProviderHealthStore.read();
+      const providerState = await naverPlaceMainProviderHealthStore.read();
       if (providerState.state !== "probe_allowed" || providerState.workflowRevision !== Number(job.providerWorkflowRevision)) {
         continue;
       }
-      await naverProviderHealthStore.releaseAttempt({
+      await naverPlaceMainProviderHealthStore.releaseAttempt({
         expectedWorkflowRevision: providerState.workflowRevision,
         outcomeReceiptHash: crypto
           .createHash("sha256")
@@ -16348,8 +16362,10 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/status") {
       if (!requireAdminSession(session, req, res)) return;
       const outcome = await refreshTop20WorkerOutcome();
+      const providerStatus = await collectionWorkerV2Top20Orchestrator.providerStatus();
       return send(res, 200, {
         ...collectionWorkerV2Top20Orchestrator.status(),
+        ...providerStatus,
         activeJob: activeTop20WorkerJob ? {
           jobId: activeTop20WorkerJob.jobId,
           startedAt: activeTop20WorkerJob.startedAt

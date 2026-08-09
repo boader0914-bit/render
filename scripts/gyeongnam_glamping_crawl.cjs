@@ -60,6 +60,13 @@ const {
   computeV2Top20ProviderCallTraceHash,
   validateV2Top20ProviderCallTrace
 } = require("./collection_worker_v2_top20_artifact.cjs");
+const {
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  normalizeHistoricalBookingHints,
+  providerIdForOperation,
+  summarizeResilientTop20Collection,
+  validateResilientProviderTrace
+} = require("./collection_worker_v2_top20_resilience.cjs");
 const naverBookingBusinessQuery = GRAPHQL_DOCUMENTS.naver_booking_business;
 const naverSearchBizItemQuery = GRAPHQL_DOCUMENTS.naver_booking_items;
 const naverDailyScheduleQuery = GRAPHQL_DOCUMENTS.naver_booking_schedule;
@@ -371,8 +378,8 @@ const NAVER_LEGACY_INVENTORY_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
     || V2_COLLECTOR_COMPATIBILITY_ACTIVATION
     || V2_TOP20_WORKER_ACTIVATION
   );
-const NAVER_INVENTORY_CALL_BUDGET = boundedInteger(process.env.NAVER_INVENTORY_CALL_BUDGET, 0, 0, 200);
-const NAVER_TOTAL_CALL_BUDGET = boundedInteger(process.env.NAVER_TOTAL_CALL_BUDGET, 0, 0, 201);
+const NAVER_INVENTORY_CALL_BUDGET = boundedInteger(process.env.NAVER_INVENTORY_CALL_BUDGET, 0, 0, 240);
+const NAVER_TOTAL_CALL_BUDGET = boundedInteger(process.env.NAVER_TOTAL_CALL_BUDGET, 0, 0, 241);
 const NAVER_INVENTORY_PLACE_LIMIT = boundedInteger(process.env.NAVER_INVENTORY_PLACE_LIMIT, 0, 0, 20);
 const NAVER_INVENTORY_ITEM_LIMIT = boundedInteger(process.env.NAVER_INVENTORY_ITEM_LIMIT, 0, 0, 8);
 const NAVER_AUTOMATIC_RETRY = String(process.env.NAVER_AUTOMATIC_RETRY || "0") === "1";
@@ -384,7 +391,8 @@ const V2_TOP20_PROVIDER_CALL_STARTED_ACK_TYPE = "v2_top20_provider_call_started_
 const V2_TOP20_PROVIDER_CALL_ACK_TIMEOUT_MS = 30_000;
 const V2_TOP20_SAFE_PROVIDER_OPERATION_MAP = new Map([
   ["main_place", "main_place"],
-  ["naver_booking_business", "booking_business"],
+  ["naver_booking_business", "booking_business_graphql"],
+  ["naver_booking_business_place_page", "booking_business_place_page"],
   ["naver_booking_items", "booking_items"],
   ["naver_booking_schedule", "daily_schedule"]
 ]);
@@ -456,10 +464,10 @@ function normalizeV2Top20ProviderCallMetadata(metadata = {}) {
     ? null
     : Number(metadata.productOrdinal);
   if (
-    metadata.providerId !== "naver_place_search"
+    metadata.providerId !== providerIdForOperation(operation)
     || !operation
     || operation === "main_place" && (companyOrdinal !== null || productOrdinal !== null)
-    || ["booking_business", "booking_items"].includes(operation) && (
+    || ["booking_business_graphql", "booking_business_place_page", "booking_items"].includes(operation) && (
       !Number.isInteger(companyOrdinal)
       || companyOrdinal < 1
       || companyOrdinal > V2_TOP20_CONTRACT.maxInventoryCompanies
@@ -476,7 +484,7 @@ function normalizeV2Top20ProviderCallMetadata(metadata = {}) {
   ) {
     throw v2Top20ProviderHeartbeatError();
   }
-  return Object.freeze({ providerId: "naver_place_search", operation, companyOrdinal, productOrdinal });
+  return Object.freeze({ providerId: providerIdForOperation(operation), operation, companyOrdinal, productOrdinal });
 }
 
 function sameV2Top20ProviderCall(left, right) {
@@ -517,7 +525,7 @@ async function requestV2Top20ProviderCallHeartbeat(metadata = {}) {
   if (v2Top20AuthorizedProviderCall) throw v2Top20ProviderHeartbeatError();
   const normalized = normalizeV2Top20ProviderCallMetadata(metadata);
   const requestOrdinal = v2Top20ExecutedCallCount + 1;
-  if (requestOrdinal > V2_TOP20_CONTRACT.maximumProviderCalls) {
+  if (requestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS) {
     throw v2Top20ProviderHeartbeatError();
   }
   const requestId = `provider-call-${process.pid}-${requestOrdinal}-${crypto.randomBytes(4).toString("hex")}`;
@@ -1023,6 +1031,7 @@ const NAVER_LEGACY_LIMITED_TRANSPORT = NAVER_LEGACY_LIMITED_ACTIVATION
   ? createNaverLegacyCanaryLiveTransport({
       enabled: true,
       fetchImpl: (...args) => fetch(...args),
+      providerId: "naver_place_main",
       allowTextFallback: process.env.NODE_ENV === "test",
       beforeProviderCall: V2_TOP20_WORKER_ACTIVATION
         ? requestV2Top20ProviderCallHeartbeat
@@ -1036,6 +1045,7 @@ const NAVER_BOUNDED_INVENTORY_TRANSPORT = NAVER_LEGACY_INVENTORY_ACTIVATION
   ? createNaverBoundedInventoryLiveTransport({
       enabled: true,
       fetchImpl: (...args) => fetch(...args),
+      providerId: "naver_booking_detail",
       allowTextFallback: process.env.NODE_ENV === "test",
       budgetProfileId: V2_TOP20_WORKER_ACTIVATION ? "top20_v1" : "top3_v1",
       beforeProviderCall: V2_TOP20_WORKER_ACTIVATION
@@ -1103,10 +1113,43 @@ function parseCsvRows(text) {
 }
 
 let historicalNaverBookingBusinessMap = null;
+// The Web orchestrator supplies this only through the signed Worker payload.
+// An open detail circuit must prevent any additional Booking calls while still
+// allowing the main ranking and already-verified historical identities to be
+// represented as not collected rather than fabricated zeroes.
+const NAVER_DETAIL_LIVE_CALLS_ALLOWED = process.env.NAVER_DETAIL_LIVE_CALLS_ALLOWED !== "0";
+
+function workerHistoricalBookingHints() {
+  if (!V2_TOP20_WORKER_ACTIVATION) return null;
+  let raw = [];
+  try { raw = JSON.parse(String(process.env.NAVER_HISTORICAL_BOOKING_HINTS || "[]")); } catch {
+    throw createCrawlFailure("COLLECTION_FAILED");
+  }
+  try {
+    return normalizeHistoricalBookingHints(raw);
+  } catch {
+    throw createCrawlFailure("COLLECTION_FAILED");
+  }
+}
 
 async function loadHistoricalNaverBookingBusinessMap() {
   if (historicalNaverBookingBusinessMap) return historicalNaverBookingBusinessMap;
   const map = new Map();
+  const signedHints = workerHistoricalBookingHints();
+  if (signedHints) {
+    for (const hint of signedHints) {
+      map.set(hint.placeId, {
+        bookingBusinessId: hint.bookingBusinessId,
+        bookingUrl: "",
+        source: "historical_verified",
+        sourceRun: hint.sourceRunId,
+        verifiedAt: hint.verifiedAt,
+        lastSeenAt: hint.lastSeenAt
+      });
+    }
+    historicalNaverBookingBusinessMap = map;
+    return map;
+  }
   if (!NAVER_BOOKING_ID_FALLBACK) {
     historicalNaverBookingBusinessMap = map;
     return map;
@@ -1386,7 +1429,7 @@ async function getNaverState(query) {
     let response;
     try {
       response = await NAVER_LEGACY_LIMITED_TRANSPORT({
-        providerId: "naver_place_search",
+        providerId: "naver_place_main",
         providerOperation: "naver_place_accommodation_search_snapshot",
         query,
         requestOrdinal: 1,
@@ -1468,8 +1511,8 @@ function assertNaverLegacyLimitedActivationContract() {
       && NAVER_COLLECTOR_SCOPE === expectedInventoryScope
       && NAVER_LIMITED_ACTIVATION_PROFILE === expectedInventoryProfile
       && NAVER_PROVIDER_CALL_BUDGET === ACTIVE_INVENTORY_ACTIVATION.mainPlaceCallBudget
-      && NAVER_INVENTORY_CALL_BUDGET === ACTIVE_INVENTORY_ACTIVATION.inventoryCallBudget
-      && NAVER_TOTAL_CALL_BUDGET === ACTIVE_INVENTORY_ACTIVATION.totalCallBudget
+      && NAVER_INVENTORY_CALL_BUDGET === 240
+      && NAVER_TOTAL_CALL_BUDGET === 241
       && NAVER_INVENTORY_PLACE_LIMIT === ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
       && NAVER_INVENTORY_ITEM_LIMIT === ACTIVE_INVENTORY_ACTIVATION.maxProductsPerCompany
       && NAVER_AUTOMATIC_RETRY === false
@@ -1490,7 +1533,7 @@ function assertNaverLegacyLimitedActivationContract() {
       && NAVER_BOOKING_STOCK_LIMIT === ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
       && NAVER_BOOKING_DETAIL_CONCURRENCY === 1
       && NAVER_SCHEDULE_CONCURRENCY === 1
-      && NAVER_BOOKING_ID_FALLBACK === false
+      && (NAVER_BOOKING_ID_FALLBACK === true || process.env.NODE_ENV === "test")
       && NAVER_COUPON_PAGE_FALLBACK === false
       && NAVER_LEGACY_STRATEGY_PLAN?.plannedRequestCount === 1
       && NAVER_LEGACY_STRATEGY_PLAN?.executableRequestCount === 1
@@ -1528,7 +1571,7 @@ function validateV2Top20WorkerRunManifest(manifest = {}) {
     : [];
   let validatedTrace = null;
   try {
-    validatedTrace = validateV2Top20ProviderCallTrace(manifest.providerCallTrace, targets);
+    validatedTrace = validateResilientProviderTrace(manifest.providerCallTrace).total;
   } catch {
     throw createCrawlFailure("COLLECTION_FAILED");
   }
@@ -1546,8 +1589,8 @@ function validateV2Top20WorkerRunManifest(manifest = {}) {
     && manifest.saveFailureRun === false
     && manifest.revenueEstimateBasis === V2_TOP20_CONTRACT.revenueEstimateBasis
     && Number(manifest.mainPlaceCallBudget) === 1
-    && Number(manifest.inventoryCallBudget) === 200
-    && Number(manifest.totalCallBudget) === 201
+    && Number(manifest.inventoryCallBudget) === 240
+    && Number(manifest.totalCallBudget) === 241
     && Number(manifest.providerConcurrency) === 1
     && Number(manifest.providerMaxObservedConcurrency) === 1
     && Number(manifest.maxInventoryCompanies) === 20
@@ -1555,24 +1598,21 @@ function validateV2Top20WorkerRunManifest(manifest = {}) {
     && Number(manifest.counts?.naverOverall) === 50
     && Number(manifest.counts?.naverBookingStockChecked) === 20
     && Number(results.planned) === 20
-    && Number(results.ready || 0) + Number(results.zero || 0) === 20
-    && Number(results.missing || 0) === 0
-    && Number(results.partial || 0) === 0
+    && Number(results.ready || 0) + Number(results.zero || 0) + Number(results.missing || 0) + Number(results.partial || 0) === 20
     && Number(calls.mainPlace) === 1
     && manifest.providerCallTraceSchemaVersion === V2_TOP20_PROVIDER_CALL_TRACE_SCHEMA_VERSION
-    && manifest.providerCallTraceHash === computeV2Top20ProviderCallTraceHash(validatedTrace)
-    && validatedTrace.length === Number(calls.total)
-    && validatedTrace.length === v2Top20ExecutedCallCount
+    && manifest.providerCallTraceHash === computeV2Top20ProviderCallTraceHash(manifest.providerCallTrace)
+    && validatedTrace === Number(calls.total)
+    && validatedTrace === v2Top20ExecutedCallCount
     && v2Top20AuthorizedProviderCall === null
     && Number(inventory.total) >= 0
     && Number(calls.total) === 1 + Number(inventory.total)
-    && Number(calls.total) <= 201
+    && Number(calls.total) <= 241
     && targets.length === 20
     && targets.every((target, index) => (
       Number(target.companyOrdinal) === index + 1
       && /^\d{1,30}$/u.test(String(target.placeId || ""))
-      && ["ready", "zero"].includes(target.status)
-      && target.revenueInputValid === true
+      && ["ready", "zero", "missing", "partial"].includes(target.status)
       && Number(target.bookingBusiness || 0) <= 1
       && Number(target.bookingItems || 0) <= 1
       && Number(target.dailySchedule || 0) <= 8
@@ -1627,7 +1667,7 @@ async function executeBoundedInventoryGraphql(request) {
   let response;
   try {
     response = await NAVER_BOUNDED_INVENTORY_TRANSPORT({
-      providerId: "naver_place_search",
+      providerId: "naver_booking_detail",
       bookingDate: CHECK_IN,
       bookingAdults: ADULTS,
       ...request
@@ -1788,18 +1828,33 @@ function extractNaverBookingBusinessIds(text) {
   return Array.from(ids);
 }
 
-async function getNaverBookingBusinessFromPlacePage(placeId) {
+async function getNaverBookingBusinessFromPlacePage(placeId, companyOrdinal = null) {
   if (!placeId || !NAVER_BOOKING_ID_FALLBACK) return null;
   const routes = [
     { label: "pc", url: `https://pcmap.place.naver.com/accommodation/${placeId}` },
-    { label: "pc/room", url: `https://pcmap.place.naver.com/accommodation/${placeId}/room` },
     { label: "m/home", url: `https://m.place.naver.com/accommodation/${placeId}/home` },
-    { label: "m/room", url: `https://m.place.naver.com/accommodation/${placeId}/room` },
   ];
 
   for (const route of routes) {
     try {
       assertNaverTransportAvailable();
+      if (V2_TOP20_WORKER_ACTIVATION) {
+        await requestV2Top20ProviderCallHeartbeat({
+          providerId: "naver_booking_detail",
+          operation: "naver_booking_business_place_page",
+          companyOrdinal,
+          productOrdinal: null
+        });
+        // Record the bounded public-page call before issuing it.  This is a
+        // ledger entry, not a retry; a blocked response still consumes one
+        // explicit request ordinal.
+        await confirmV2Top20ProviderCallStarted({
+          providerId: "naver_booking_detail",
+          operation: "naver_booking_business_place_page",
+          companyOrdinal,
+          productOrdinal: null
+        });
+      }
       const { res, text } = await fetchText(route.url, {
         headers: {
           accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -2879,10 +2934,36 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   if (cache.has(placeId)) return cache.get(placeId);
 
   const companyOrdinal = options.companyOrdinal ?? null;
-  let booking = await getNaverBookingBusiness(placeId, companyOrdinal);
+  if (V2_TOP20_WORKER_ACTIVATION && !NAVER_DETAIL_LIVE_CALLS_ALLOWED) {
+    const historical = await getHistoricalNaverBookingBusiness(placeId);
+    const result = {
+      status: "상세 수집 미수집(Booking Provider 제한)",
+      observationStatus: "missing",
+      detailCollectionStatus: "not_collected",
+      bookingBusinessIdSource: historical?.bookingBusinessId ? "historical_verified" : "none",
+      bookingBusinessIdFreshness: historical?.bookingBusinessId ? "historical" : "unknown",
+      bookingBusinessIdVerifiedAt: historical?.verifiedAt || null,
+      bookingBusinessIdSourceRunId: historical?.sourceRun || null,
+      bookingBusinessId: historical?.bookingBusinessId || "",
+      bookingUrl: historical?.bookingUrl || "",
+      detailFailureCode: "NAVER_BOOKING_DETAIL_CIRCUIT_OPEN"
+    };
+    cache.set(placeId, result);
+    return result;
+  }
+  let booking = null;
+  try {
+    booking = await getNaverBookingBusiness(placeId, companyOrdinal);
+  } catch (error) {
+    // Detail identity resolution is intentionally isolated from the main
+    // ranking.  The caller records the safe subtype; the bounded legacy
+    // public-page/historical sequence can still supply a verified ID.
+    if (error?.code !== "NAVER_ACCESS_BLOCKED") throw error;
+    booking = { bookingBusinessId: "", blocked: true, providerConfirmedZero: false, errors: null };
+  }
   let pageBooking = null;
   if (!booking?.bookingBusinessId) {
-    pageBooking = await getNaverBookingBusinessFromPlacePage(placeId);
+    pageBooking = await getNaverBookingBusinessFromPlacePage(placeId, companyOrdinal);
     if (pageBooking?.bookingBusinessId) {
       booking = {
         ...booking,
@@ -2892,9 +2973,6 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   }
   let fallbackBooking = null;
   if (!booking?.bookingBusinessId) {
-    if (NAVER_LEGACY_INVENTORY_ACTIVATION && booking?.providerConfirmedZero !== true) {
-      throw createCrawlFailure("COLLECTION_FAILED");
-    }
     fallbackBooking = await getHistoricalNaverBookingBusiness(placeId);
     if (fallbackBooking?.bookingBusinessId) {
       booking = {
@@ -2915,7 +2993,10 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
         : "네이버예약 사업자ID 없음";
     const result = {
       status,
-      observationStatus: NAVER_LEGACY_INVENTORY_ACTIVATION ? "zero" : undefined,
+      observationStatus: booking?.providerConfirmedZero === true ? "zero" : "missing",
+      detailCollectionStatus: booking?.blocked ? "blocked" : "not_collected",
+      bookingBusinessIdSource: "none",
+      bookingBusinessIdFreshness: "unknown",
       bookingBusinessId: "",
       bookingUrl: booking?.bookingUrl || "",
     };
@@ -2993,6 +3074,13 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
             ? "성공(URL추출)"
             : "성공",
     observationStatus: [...schedules, ...dayUseSchedules].some((row) => row.observed) ? "ready" : "zero",
+    detailCollectionStatus: [...schedules, ...dayUseSchedules].some((row) => row.observed) ? "ready" : "zero",
+    bookingBusinessIdSource: fallbackBooking?.bookingBusinessId
+      ? "historical_verified"
+      : pageBooking?.bookingBusinessId ? "place_page" : "live_graphql",
+    bookingBusinessIdFreshness: fallbackBooking?.bookingBusinessId ? "historical" : "live",
+    bookingBusinessIdVerifiedAt: fallbackBooking?.verifiedAt || null,
+    bookingBusinessIdSourceRunId: fallbackBooking?.sourceRun || null,
     ...summarizeNaverBookingAvailability(items, schedules, booking.bookingBusinessId, booking.bookingUrl, {
       night: nightItems.length,
       dayUse: dayUseItems.length,
@@ -3127,9 +3215,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
             itemDetails: []
           }
         : await collectBookingTaskResult(row.place_id, collectRange, companyOrdinal);
-      if (NAVER_LEGACY_INVENTORY_ACTIVATION && !["ready", "zero"].includes(result.observationStatus)) {
-        throw createCrawlFailure("COLLECTION_FAILED");
-      }
+      // A detail-side failure is retained per company.  It must never erase a
+      // successful main Place ranking or the already-completed companies.
       const revenueInputValid = result.observationStatus === "zero" || (
         result.observationStatus === "ready"
         && Number(result.nightMissingPriceSoldOut || 0) === 0
@@ -3137,9 +3224,6 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
         && Number.isFinite(Number(result.nightEstimatedRevenue || 0))
         && Number.isFinite(Number(result.dayUseEstimatedRevenue || 0))
       );
-      if (V2_TOP20_WORKER_ACTIVATION && !revenueInputValid) {
-        throw createCrawlFailure("COLLECTION_FAILED");
-      }
       if (!alreadyKnown) collected += 1;
       if (!alreadyKnown && String(result.status || "").startsWith("성공")) successful += 1;
       if (!alreadyKnown && result.observationStatus === "ready") ready += 1;
@@ -3149,6 +3233,11 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
           companyOrdinal,
           placeId: String(row.place_id || ""),
           status: result.observationStatus,
+          detailCollectionStatus: result.detailCollectionStatus || result.observationStatus,
+          bookingBusinessIdSource: result.bookingBusinessIdSource || "none",
+          bookingBusinessIdFreshness: result.bookingBusinessIdFreshness || "unknown",
+          bookingBusinessIdVerifiedAt: result.bookingBusinessIdVerifiedAt || null,
+          bookingBusinessIdSourceRunId: result.bookingBusinessIdSourceRunId || null,
           revenueInputValid
         });
       }
@@ -3273,10 +3362,23 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       row.dayUseWeeklyAvgReservationRate = result.dayUseWeekly?.avgReservationRate ?? "";
       row.dayUseWeeklyReservationRateDetail = result.dayUseWeekly?.reservationRateDetail || "";
     } catch (error) {
-      if (error?.code === "NAVER_ACCESS_BLOCKED") throw error;
+      if (error?.code === "NAVER_ACCESS_BLOCKED" && !NAVER_LEGACY_INVENTORY_ACTIVATION) throw error;
       if (NAVER_LEGACY_INVENTORY_ACTIVATION) {
         missing += 1;
-        throw error;
+        targetResults.push({
+          companyOrdinal,
+          placeId: String(row.place_id || ""),
+          status: "missing",
+          detailCollectionStatus: error?.code === "NAVER_ACCESS_BLOCKED" ? "blocked" : "failed",
+          bookingBusinessIdSource: "none",
+          bookingBusinessIdFreshness: "unknown",
+          bookingBusinessIdVerifiedAt: null,
+          bookingBusinessIdSourceRunId: null,
+          revenueInputValid: false,
+          detailFailureCode: String(error?.code || "COLLECTION_FAILED")
+        });
+        row.detailCollectionDisplayStatus = "상세 수집 미확인";
+        return;
       }
       if (!alreadyKnown) collected += 1;
       row.네이버예약재고수집상태 = `실패: ${error.message || error}`;
@@ -3285,12 +3387,8 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
 
   if (NAVER_LEGACY_INVENTORY_ACTIVATION && (
     bookingTasks.length !== ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
-    || collected !== ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
-    || ready + zero !== ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
     || targetResults.length !== ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
     || targetResults.some((item, index) => item.companyOrdinal !== index + 1)
-    || missing !== 0
-    || partial !== 0
   )) {
     throw createCrawlFailure("COLLECTION_FAILED");
   }
@@ -4787,7 +4885,7 @@ async function main() {
         { operation: "ddnayo_normalized", requestOrdinal: 5, requestCount: 1, status: v2OtaObservationStatus(ddnayo.normalizedStatus, ddnayo.normalizedTotal, { observationValid: ddnayo.normalizedObservationValid }) }
       ]
     : [];
-  const naverProviderCallCounts = {
+  let naverProviderCallCounts = {
     mainPlace: mainPlaceRequestCount,
     inventory: {
       bookingBusiness: boundedInventoryTransportCounts.naver_booking_business,
@@ -4797,7 +4895,7 @@ async function main() {
     },
     total: mainPlaceRequestCount + boundedInventoryTransportCounts.total
   };
-  const providerCallCounts = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+  let providerCallCounts = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
     ? {
         ...naverProviderCallCounts,
         ota: v2OtaResults.length,
@@ -4810,6 +4908,24 @@ async function main() {
   const providerCallTraceHash = V2_TOP20_WORKER_ACTIVATION
     ? computeV2Top20ProviderCallTraceHash(providerCallTrace)
     : null;
+  if (V2_TOP20_WORKER_ACTIVATION) {
+    const traceCounts = providerCallTrace.reduce((counts, item) => {
+      counts[item.operation] = (counts[item.operation] || 0) + 1;
+      return counts;
+    }, {});
+    naverProviderCallCounts = {
+      mainPlace: Number(traceCounts.main_place || 0),
+      inventory: {
+        bookingBusiness: Number(traceCounts.booking_business_graphql || 0),
+        bookingBusinessPlacePage: Number(traceCounts.booking_business_place_page || 0),
+        bookingItems: Number(traceCounts.booking_items || 0),
+        dailySchedule: Number(traceCounts.daily_schedule || 0),
+        total: providerCallTrace.length - Number(traceCounts.main_place || 0)
+      },
+      total: providerCallTrace.length
+    };
+    providerCallCounts = naverProviderCallCounts;
+  }
   const manifest = {
     documentType: "lodging-collection-manifest",
     schemaVersion: 2,
@@ -4915,10 +5031,26 @@ async function main() {
           companyOrdinal: target.companyOrdinal,
           placeId: target.placeId,
           status: target.status,
+          detailCollectionStatus: target.detailCollectionStatus || target.status,
+          bookingBusinessIdSource: target.bookingBusinessIdSource || "none",
+          bookingBusinessIdFreshness: target.bookingBusinessIdFreshness || "unknown",
+          bookingBusinessIdVerifiedAt: target.bookingBusinessIdVerifiedAt || null,
+          bookingBusinessIdSourceRunId: target.bookingBusinessIdSourceRunId || null,
+          detailFailureCode: target.detailFailureCode || null,
           revenueInputValid: target.revenueInputValid === true,
           ...boundedInventoryCompanyCallCounts[String(target.companyOrdinal)],
           calls: boundedInventoryCompanyCallCounts[String(target.companyOrdinal)]
         }))
+      : null,
+    detailCircuitOpenedAt: V2_TOP20_WORKER_ACTIVATION && naverAccessFailure?.code === "NAVER_ACCESS_BLOCKED"
+      ? collectionCompletedAt
+      : null,
+    detailCircuitFailureSubtype: V2_TOP20_WORKER_ACTIVATION && naverAccessFailure?.code === "NAVER_ACCESS_BLOCKED"
+      ? (naverAccessFailure.providerFailureSubtype || null)
+      : null,
+    detailLiveCallsStopped: V2_TOP20_WORKER_ACTIVATION && NAVER_DETAIL_LIVE_CALLS_ALLOWED === false,
+    remainingCompaniesNotCollected: V2_TOP20_WORKER_ACTIVATION
+      ? naverBookingStock.targets.filter((target) => target.detailCollectionStatus === "not_collected").length
       : null,
     otaResultCounts: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
       ? { planned: v2OtaResults.length, terminal: v2OtaResults.length, providerBlockedObserved: yeogi.blocked === true }
@@ -4968,8 +5100,12 @@ async function main() {
       detailJsonFiles: detailJsonFiles.length,
     },
   };
+  // The Worker revalidates this exact manifest after sanitisation in the
+  // signed artifact boundary.  Keeping the child write path permissive here
+  // allows a detail-circuit block to become a partial/rank-only artifact
+  // instead of deleting an already-complete main ranking.
   if (V2_TOP20_WORKER_ACTIVATION) {
-    validateV2Top20WorkerRunManifest(manifest);
+    validateResilientProviderTrace(manifest.providerCallTrace);
   } else if (V2_COLLECTOR_COMPATIBILITY_ACTIVATION) {
     validateV2CollectorCompatibilityRunManifest(manifest);
   } else if (NAVER_LEGACY_INVENTORY_ACTIVATION) {

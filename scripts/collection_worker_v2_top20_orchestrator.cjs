@@ -27,6 +27,9 @@ const {
   validateExecutionState
 } = require("./collection_worker_v2_top20_contract.cjs");
 const {
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+} = require("./collection_worker_v2_top20_resilience.cjs");
+const {
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_BACKEND_ID,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
@@ -124,6 +127,9 @@ const SUMMARY_KEYS = Object.freeze([
   "contractHash",
   "executionIdentityHash",
   "status",
+  "collectionStatus",
+  "mainPlaceStatus",
+  "detailStatus",
   "providerAttemptCount",
   "executedCallCount",
   "providerWorkflowRevision",
@@ -131,8 +137,17 @@ const SUMMARY_KEYS = Object.freeze([
   "automaticFallback",
   "providerFailureSubtype",
   "diagnosticId",
-  "executionState"
+  "executionState",
+  "targetCompanyCount",
+  "detailReadyCompanyCount",
+  "revenueReadyCompanyCount",
+  "detailCoverageRate",
+  "revenueCoverageRate"
 ]);
+const LEGACY_SUMMARY_KEYS = Object.freeze(SUMMARY_KEYS.filter((key) => ![
+  "collectionStatus", "mainPlaceStatus", "detailStatus", "targetCompanyCount",
+  "detailReadyCompanyCount", "revenueReadyCompanyCount", "detailCoverageRate", "revenueCoverageRate"
+].includes(key)));
 
 class CollectionWorkerV2Top20OrchestratorError extends Error {
   constructor(code, message, statusCode = 409, meta = {}) {
@@ -212,6 +227,9 @@ function safeTop20Log(event, fields = {}) {
     workerCommit: shortCommit(fields.workerCommit),
     sourceRole: String(fields.sourceRole || ""),
     sourceRoute: String(fields.sourceRoute || ""),
+    actorKind: String(fields.actorKind || ""),
+    collectorBackend: String(fields.collectorBackend || ""),
+    collectionProfile: String(fields.collectionProfile || ""),
     providerOperation: String(fields.providerOperation || ""),
     requestOrdinal: Number.isInteger(fields.requestOrdinal) ? fields.requestOrdinal : null,
     jobState: String(fields.jobState || ""),
@@ -297,6 +315,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   const targetWorkerCommit = String(options.targetWorkerCommit || "").trim();
   const jobStore = options.jobStore;
   const providerStore = options.providerStore;
+  const detailProviderStore = options.detailProviderStore || providerStore;
   const applyReadyTransaction = options.applyReadyTransaction;
   const nonceRegistry = options.nonceRegistry || createWorkerNonceRegistry();
   const now = typeof options.now === "function" ? options.now : () => new Date();
@@ -333,6 +352,10 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || typeof providerStore.recordSuccess !== "function"
       || typeof providerStore.recordBlock !== "function"
       || typeof providerStore.releaseAttempt !== "function"
+      || !detailProviderStore
+      || typeof detailProviderStore.read !== "function"
+      || typeof detailProviderStore.beginAttempt !== "function"
+      || typeof detailProviderStore.recordBlock !== "function"
       || typeof applyReadyTransaction !== "function"
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_DEPENDENCY_INVALID", "top20 workflow dependency is invalid", 500);
@@ -562,8 +585,11 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       timestamp: new Date(now()).toISOString(),
       contractHash: top20ContractHash,
       workerCommit: targetWorkerCommit,
-      sourceRole: input.trustedAdmin === true ? "admin" : "operator",
-      sourceRoute: input.trustedAdmin === true ? "/api/crawl" : "operator"
+      sourceRole: "admin",
+      sourceRoute: "/api/crawl",
+      actorKind: "operator",
+      collectorBackend: "v2_top20_worker",
+      collectionProfile: "top20_inventory_revenue"
     });
     const snapshot = await jobStore.readSnapshot();
     const active = snapshot.jobs.find((job) => (
@@ -582,6 +608,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
 
     const createdAt = new Date(now());
     const providerState = await providerStore.read();
+    const detailProviderState = await detailProviderStore.read();
     if (providerState.state !== "closed") {
       throw fail(
         "NAVER_PROVIDER_COOLDOWN_ACTIVE",
@@ -663,13 +690,18 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         }),
         top20Contract,
         providerSession: Object.freeze({
-          maximumProviderCalls: V2_TOP20_CONTRACT.maximumProviderCalls,
+          maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
           providerAttemptCount: 1,
           concurrency: 1,
           automaticRetry: false,
           automaticFallback: false,
           circuitStateAtReservation: "closed",
           serviceGlobalLockHeld: true
+        }),
+        detailProviderSession: Object.freeze({
+          state: detailProviderState.state,
+          retryAt: detailProviderState.retryAt || null,
+          liveCallsAllowed: detailProviderState.state === "closed"
         })
       });
       payloads.set(jobId, {
@@ -688,8 +720,11 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         contractHash: signedJob.contractHash,
         executionIdentityHash: signedJob.executionIdentityHash,
         workerCommit: targetWorkerCommit,
-        sourceRole: input.trustedAdmin === true ? "admin" : "operator",
-        sourceRoute: input.trustedAdmin === true ? "/api/crawl" : "operator",
+        sourceRole: "admin",
+        sourceRoute: "/api/crawl",
+        actorKind: "operator",
+        collectorBackend: "v2_top20_worker",
+        collectionProfile: "top20_inventory_revenue",
         jobState: "queued"
       });
       return Object.freeze({
@@ -702,7 +737,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         top20ContractHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
         maxProviderAttempts: 1,
-        maximumProviderCalls: V2_TOP20_CONTRACT.maximumProviderCalls,
+        maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
         automaticRetry: false,
         automaticFallback: false
       });
@@ -966,7 +1001,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     } catch {
       throw fail("COLLECTION_WORKER_V2_TOP20_ARTIFACT_INVALID", "top20 summary artifact is invalid", 400);
     }
-    exactKeys(document, SUMMARY_KEYS, "top20 summary");
+    exactKeys(document, Object.hasOwn(document, "collectionStatus") ? SUMMARY_KEYS : LEGACY_SUMMARY_KEYS, "top20 summary");
     if (
       document.schemaVersion !== COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION
       || document.top20SchemaVersion !== V2_TOP20_SCHEMA_VERSION
@@ -978,7 +1013,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || document.providerAttemptCount !== 1
       || !Number.isInteger(document.executedCallCount)
       || document.executedCallCount < 1
-      || document.executedCallCount > V2_TOP20_CONTRACT.maximumProviderCalls
+      || document.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
       || !Number.isInteger(document.providerWorkflowRevision)
       || document.providerWorkflowRevision < 0
       || document.automaticRetry !== false
@@ -987,16 +1022,19 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_ARTIFACT_INVALID", "top20 summary identity or budget is invalid", 409);
     }
-    const state = validateExecutionState(document.executionState);
-    if (state.callLedger.total !== document.executedCallCount) {
+    const resilient = document.executionState === null;
+    const state = resilient ? null : validateExecutionState(document.executionState);
+    if (!resilient && state.callLedger.total !== document.executedCallCount) {
       throw fail("COLLECTION_WORKER_V2_TOP20_ARTIFACT_INVALID", "top20 provider ledger does not match", 409);
     }
-    const decision = decideV2Top20Persistence(state);
+    const decision = resilient
+      ? { saveRun: ["complete", "partial", "rank_only"].includes(document.collectionStatus) }
+      : decideV2Top20Persistence(state);
     if (document.status === "ready") {
       if (
         decision.saveRun !== true
-        || state.phase !== "ready_to_persist"
-        || document.providerFailureSubtype !== null
+        || !resilient && state.phase !== "ready_to_persist"
+        || !resilient && document.providerFailureSubtype !== null
         || document.diagnosticId !== null
       ) {
         throw fail("COLLECTION_WORKER_V2_TOP20_NOT_READY", "top20 artifact is not persistable", 409);
@@ -1060,6 +1098,28 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     return providerState;
   }
 
+  async function settleDetailProviderArtifact(summary, artifactHash) {
+    if (summary.detailStatus !== "blocked") return detailProviderStore.read();
+    let state = await detailProviderStore.read();
+    if (state.state === "open") return state;
+    if (state.state !== "closed") return state;
+    const reservation = await detailProviderStore.beginAttempt({
+      expectedWorkflowRevision: state.workflowRevision,
+      explicit: true,
+      now: now()
+    });
+    if (!reservation.allowed || reservation.state.state !== "probe_allowed") return reservation.state;
+    return detailProviderStore.recordBlock({
+      expectedWorkflowRevision: reservation.state.workflowRevision,
+      outcomeReceiptHash: artifactHash,
+      failure: {
+        subtype: summary.providerFailureSubtype || "unknown_access_block",
+        diagnosticId: summary.diagnosticId || null
+      },
+      now: now()
+    });
+  }
+
   function assertTerminalArtifact(job, summary, artifactHash) {
     const expectedState = summary.status === "ready" ? "committed" : summary.status === "blocked" ? "blocked" : "failed";
     const expectedCode = summary.status === "blocked"
@@ -1074,10 +1134,11 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
   }
 
-  function finalizationResponse(job, summary, providerState, artifactHash, transactionResult, replayed) {
+  function finalizationResponse(job, summary, providerState, detailProviderState, artifactHash, transactionResult, replayed) {
     return Object.freeze({
       schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
       status: summary.status,
+      collectionStatus: summary.collectionStatus || (summary.status === "ready" ? "complete" : summary.status),
       code: summary.status === "blocked"
         ? "NAVER_ACCESS_BLOCKED"
         : summary.status === "failed" ? "COLLECTION_WORKER_V2_TOP20_NOT_READY" : null,
@@ -1087,6 +1148,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       artifactHash,
       transactionReceiptId: summary.status === "ready" ? transactionReceiptId(job, artifactHash) : null,
       providerState: providerState.state,
+      mainPlaceProviderState: providerState.state,
+      bookingDetailProviderState: detailProviderState?.state || null,
       providerAttemptCount: 1,
       executedCallCount: summary.executedCallCount,
       resultStored: summary.status === "ready",
@@ -1135,11 +1198,13 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       assertTerminalArtifact(job, summary, artifactHash);
       markPayloadTerminal(job.jobId, job.state);
       const providerState = await providerStore.read();
+      const detailProviderState = await detailProviderStore.read();
       const receiptId = transactionReceiptId(job, artifactHash);
       return finalizationResponse(
         job,
         summary,
         providerState,
+        detailProviderState,
         artifactHash,
         transactionResults.get(receiptId) || null,
         true
@@ -1171,6 +1236,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
 
     const providerState = await settleProviderArtifact(summary, artifactHash);
+    const detailProviderState = await settleDetailProviderArtifact(summary, artifactHash);
     if (summary.status !== "ready") {
       const nextState = summary.status === "blocked" ? "blocked" : "failed";
       const failureCode = summary.status === "blocked"
@@ -1197,7 +1263,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         jobState: job.state,
         failureCode
       });
-      return finalizationResponse(job, summary, providerState, artifactHash, null, false);
+      return finalizationResponse(job, summary, providerState, detailProviderState, artifactHash, null, false);
     }
 
     if (job.state === "artifact_received") {
@@ -1253,7 +1319,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       workerCommit: targetWorkerCommit,
       jobState: job.state
     });
-    return finalizationResponse(job, summary, providerState, artifactHash, transactionResult, false);
+    return finalizationResponse(job, summary, providerState, detailProviderState, artifactHash, transactionResult, false);
   }
 
   async function finalize(input = {}) {
@@ -1492,9 +1558,23 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         activePayloadCount: activePayloadCount(),
         retainedTerminalPayloadCount: retainedTerminalPayloadCount(),
         maxProviderAttempts: 1,
-        maximumProviderCalls: V2_TOP20_CONTRACT.maximumProviderCalls,
+        maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
         automaticRetry: false,
         automaticFallback: false
+      });
+    },
+    async providerStatus() {
+      const [mainPlace, bookingDetail] = await Promise.all([
+        providerStore.read(),
+        detailProviderStore.read()
+      ]);
+      return Object.freeze({
+        mainPlaceProviderState: mainPlace.state,
+        bookingDetailProviderState: bookingDetail.state,
+        mainPlaceRetryAt: mainPlace.retryAt || null,
+        bookingDetailRetryAt: bookingDetail.retryAt || null,
+        mainPlaceFailureSubtype: mainPlace.lastFailureSubtype || null,
+        bookingDetailFailureSubtype: bookingDetail.lastFailureSubtype || null
       });
     }
   });

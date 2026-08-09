@@ -19,6 +19,11 @@ const {
   V2_TOP20_SCOPE
 } = require("./collection_worker_v2_top20_contract.cjs");
 const {
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  V2_TOP20_RESILIENCE_OPERATION_BUDGETS,
+  providerIdForOperation
+} = require("./collection_worker_v2_top20_resilience.cjs");
+const {
   normalizeV2Top20PrepareContract
 } = require("./collection_worker_v2_top20_protocol.cjs");
 
@@ -32,6 +37,8 @@ const V2_TOP20_PROVIDER_CALL_STARTED_ACK_TYPE = "v2_top20_provider_call_started_
 const V2_TOP20_SAFE_PROVIDER_OPERATIONS = new Set([
   "main_place",
   "booking_business",
+  "booking_business_graphql",
+  "booking_business_place_page",
   "booking_items",
   "daily_schedule"
 ]);
@@ -127,15 +134,17 @@ function buildV2Top20CollectorEnvironment(input = {}) {
     NAVER_COLLECTOR_SCOPE: V2_TOP20_SCOPE,
     NAVER_LIMITED_ACTIVATION_PROFILE: V2_TOP20_PROFILE,
     NAVER_PROVIDER_CALL_BUDGET: "1",
-    NAVER_INVENTORY_CALL_BUDGET: "200",
-    NAVER_TOTAL_CALL_BUDGET: String(V2_TOP20_CONTRACT.maximumProviderCalls),
+    NAVER_INVENTORY_CALL_BUDGET: String(V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS - 1),
+    NAVER_TOTAL_CALL_BUDGET: String(V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS),
     NAVER_INVENTORY_PLACE_LIMIT: "20",
     NAVER_INVENTORY_ITEM_LIMIT: "8",
     NAVER_BOOKING_STOCK_LIMIT: "20",
     NAVER_BOOKING_DETAIL_CONCURRENCY: "1",
     NAVER_SCHEDULE_CONCURRENCY: "1",
     NAVER_SCHEDULE_DELAY_MS: "0",
-    NAVER_BOOKING_ID_FALLBACK: "0",
+    // Two public pages are an explicit, bounded legacy identity resolution
+    // operation; they are not a retry and remain disabled for unapproved runs.
+    NAVER_BOOKING_ID_FALLBACK: input.baseEnvironment?.NODE_ENV === "test" ? "0" : "1",
     NAVER_COUPON_PAGE_FALLBACK: "0",
     NAVER_AUTOMATIC_RETRY: "0",
     NAVER_AUTOMATIC_FALLBACK: "0",
@@ -144,7 +153,9 @@ function buildV2Top20CollectorEnvironment(input = {}) {
     RUN_STAMP: runStamp,
     DATA_DIR: outputRoot,
     OUTPUTS_DIR: outputRoot,
-    CONFIG_DIR: path.join(outputRoot, "config")
+    CONFIG_DIR: path.join(outputRoot, "config"),
+    NAVER_HISTORICAL_BOOKING_HINTS: JSON.stringify(Array.isArray(input.historicalBookingHints) ? input.historicalBookingHints : []),
+    NAVER_DETAIL_LIVE_CALLS_ALLOWED: input.detailLiveCallsAllowed === false ? "0" : "1"
   });
 }
 
@@ -167,12 +178,12 @@ function normalizeProviderCallMessage(message, expectedRequestOrdinal, expectedT
     || !actualKeys.every((key, index) => key === expectedKeys[index])
     || message.type !== expectedType
     || !PROVIDER_CALL_REQUEST_ID_PATTERN.test(String(message.requestId || ""))
-    || message.providerId !== "naver_place_search"
+    || ![providerIdForOperation(String(message.operation || "")), "naver_place_search"].includes(message.providerId)
     || !V2_TOP20_SAFE_PROVIDER_OPERATIONS.has(String(message.operation || ""))
     || !Number.isInteger(requestOrdinal)
     || requestOrdinal !== expectedRequestOrdinal
     || requestOrdinal < 1
-    || requestOrdinal > V2_TOP20_CONTRACT.maximumProviderCalls
+    || requestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
   ) {
     throw collectorError("V2_TOP20_PROVIDER_CALL_IPC_INVALID", "top20 provider call IPC request is invalid", 409);
   }
@@ -181,7 +192,7 @@ function normalizeProviderCallMessage(message, expectedRequestOrdinal, expectedT
   const productOrdinal = message.productOrdinal === null ? null : Number(message.productOrdinal);
   const ordinalShapeValid = operation === "main_place"
     ? companyOrdinal === null && productOrdinal === null
-    : ["booking_business", "booking_items"].includes(operation)
+    : ["booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items"].includes(operation)
       ? Number.isInteger(companyOrdinal)
         && companyOrdinal >= 1
         && companyOrdinal <= V2_TOP20_CONTRACT.maxInventoryCompanies
@@ -197,7 +208,7 @@ function normalizeProviderCallMessage(message, expectedRequestOrdinal, expectedT
   }
   return Object.freeze({
     requestId: String(message.requestId),
-    providerId: "naver_place_search",
+    providerId: message.providerId === "naver_place_search" ? "naver_place_search" : providerIdForOperation(operation),
     operation,
     requestOrdinal,
     companyOrdinal,
@@ -470,7 +481,9 @@ async function executeV2Top20Collector(input = {}) {
       contract: input.contract,
       outputRoot,
       runStamp,
-      baseEnvironment: input.baseEnvironment || process.env
+      baseEnvironment: input.baseEnvironment || process.env,
+      historicalBookingHints: input.historicalBookingHints,
+      detailLiveCallsAllowed: input.detailLiveCallsAllowed
     });
     await heartbeat();
     const intervalMs = Number.isInteger(input.heartbeatIntervalMs) && input.heartbeatIntervalMs >= 1000
@@ -491,18 +504,18 @@ async function executeV2Top20Collector(input = {}) {
         signal: collectorController.signal,
         authorizeProviderCall: async (metadata) => {
           const operation = String(metadata?.operation || "");
-          if (metadata?.providerId !== "naver_place_search" || !V2_TOP20_SAFE_PROVIDER_OPERATIONS.has(operation)) {
+          if (metadata?.providerId !== providerIdForOperation(operation) || !V2_TOP20_SAFE_PROVIDER_OPERATIONS.has(operation)) {
             throw collectorError("V2_TOP20_PROVIDER_CALL_IPC_INVALID", "top20 provider call metadata is invalid", 409);
           }
           await heartbeat();
         },
         onProviderCall: async (metadata) => {
           const operation = String(metadata?.operation || "");
-          if (metadata?.providerId !== "naver_place_search" || !V2_TOP20_SAFE_PROVIDER_OPERATIONS.has(operation)) {
+          if (metadata?.providerId !== providerIdForOperation(operation) || !V2_TOP20_SAFE_PROVIDER_OPERATIONS.has(operation)) {
             throw collectorError("V2_TOP20_PROVIDER_CALL_IPC_INVALID", "top20 provider call metadata is invalid", 409);
           }
           await input.onProviderCall(Object.freeze({
-            providerId: "naver_place_search",
+            providerId: providerIdForOperation(operation),
             operation,
             requestOrdinal: executedCallCount + 1,
             companyOrdinal: metadata.companyOrdinal ?? null,
@@ -565,6 +578,7 @@ async function executeV2Top20Collector(input = {}) {
       providerCallTraceHash: collectorResult.providerCallTraceHash,
       readyCount: artifactInput.summary.readyCount,
       zeroCount: artifactInput.summary.zeroCount,
+      collectionStatus: artifactInput.summary.collectionStatus || "complete",
       files: artifactInput.files
     });
   } finally {

@@ -59,13 +59,13 @@ function safeResponseHeaders(headers) {
   return Object.freeze(result);
 }
 
-function assertLiveRequest(request) {
+function assertLiveRequest(request, expectedProviderId = NAVER_PROVIDER_ID) {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw transportError("NAVER_LEGACY_CANARY_REQUEST_INVALID", "The NAVER canary request is invalid", 400);
   }
   const query = String(request.query || "").normalize("NFC").trim().replace(/\s+/gu, " ");
   if (
-    request.providerId !== NAVER_PROVIDER_ID
+    request.providerId !== expectedProviderId
     || request.providerOperation !== "naver_place_accommodation_search_snapshot"
     || request.actualCallsEnabled !== true
     || request.fixtureOnly !== false
@@ -133,6 +133,10 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
     throw transportError("NAVER_LEGACY_CANARY_TRANSPORT_DISABLED", "The NAVER canary live transport is disabled", 503);
   }
   const timeoutMs = normalizedTimeout(options.timeoutMs);
+  const providerId = String(options.providerId || NAVER_PROVIDER_ID);
+  if (!/^[a-z0-9_]{3,80}$/u.test(providerId)) {
+    throw transportError("NAVER_LEGACY_CANARY_TRANSPORT_INVALID", "The NAVER canary provider identity is invalid", 400);
+  }
   const maxResponseBytes = normalizedResponseLimit(options.maxResponseBytes);
   const allowTextFallback = options.allowTextFallback === true;
   const beforeProviderCall = typeof options.beforeProviderCall === "function"
@@ -144,7 +148,7 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
   let callCount = 0;
 
   const transport = async function naverLegacyCanaryLiveTransport(request, context = {}) {
-    const query = assertLiveRequest(request);
+    const query = assertLiveRequest(request, providerId);
     if (callCount >= 1) {
       throw transportError("NAVER_LEGACY_CANARY_CALL_BUDGET_EXCEEDED", "The NAVER canary call budget was exceeded", 409);
     }
@@ -153,7 +157,7 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
     }
     if (beforeProviderCall) {
       await beforeProviderCall(Object.freeze({
-        providerId: NAVER_PROVIDER_ID,
+        providerId,
         operation: "main_place",
         companyOrdinal: null,
         productOrdinal: null
@@ -181,7 +185,7 @@ function createNaverLegacyCanaryLiveTransport(options = {}) {
       if (onProviderCallStarted) {
         try {
           await onProviderCallStarted(Object.freeze({
-            providerId: NAVER_PROVIDER_ID,
+            providerId,
             operation: "main_place",
             companyOrdinal: null,
             productOrdinal: null

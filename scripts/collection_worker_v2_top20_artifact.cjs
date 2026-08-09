@@ -19,6 +19,12 @@ const {
 const {
   COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION
 } = require("./collection_worker_v2_top20_protocol.cjs");
+const {
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  V2_TOP20_RESILIENCE_OPERATION_BUDGETS,
+  summarizeResilientTop20Collection,
+  validateResilientProviderTrace
+} = require("./collection_worker_v2_top20_resilience.cjs");
 
 const V2_TOP20_ARTIFACT_SCHEMA_VERSION = "collection-worker-v2-top20-artifact.v1";
 const V2_TOP20_PROVIDER_CALL_TRACE_SCHEMA_VERSION = "collection-worker-v2-top20-provider-call-trace.v1";
@@ -65,7 +71,7 @@ function normalizeTraceOrdinal(value, minimum, maximum, label) {
 }
 
 function normalizeV2Top20ProviderCallTrace(trace) {
-  if (!Array.isArray(trace) || trace.length < 1 || trace.length > V2_TOP20_CONTRACT.maximumProviderCalls) {
+  if (!Array.isArray(trace) || trace.length < 1 || trace.length > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS) {
     throw artifactError("V2_TOP20_PROVIDER_CALL_TRACE_INVALID", "top20 provider call trace is invalid", 409);
   }
   return Object.freeze(trace.map((entry, index) => {
@@ -75,7 +81,7 @@ function normalizeV2Top20ProviderCallTrace(trace) {
     const requestOrdinal = normalizeTraceOrdinal(
       entry.requestOrdinal,
       1,
-      V2_TOP20_CONTRACT.maximumProviderCalls,
+      V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
       "provider call request ordinal"
     );
     if (requestOrdinal !== index + 1) {
@@ -88,7 +94,7 @@ function normalizeV2Top20ProviderCallTrace(trace) {
       if (entry.companyOrdinal !== null || entry.productOrdinal !== null) {
         throw artifactError("V2_TOP20_PROVIDER_CALL_TRACE_INVALID", "main Place trace ordinals are invalid", 409);
       }
-    } else if (operation === "booking_business" || operation === "booking_items") {
+    } else if (["booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items"].includes(operation)) {
       companyOrdinal = normalizeTraceOrdinal(
         entry.companyOrdinal,
         1,
@@ -315,6 +321,59 @@ function validateReadyManifest(manifest) {
   return { targetResults, providerCallCount, providerCallTrace, providerCallTraceHash };
 }
 
+function validateResilientManifest(manifest) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 manifest is invalid");
+  }
+  const targets = Array.isArray(manifest.inventoryTargetResults) ? manifest.inventoryTargetResults : [];
+  if (targets.length !== V2_TOP20_CONTRACT.maxInventoryCompanies) {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 manifest does not contain the requested detail targets", 409);
+  }
+  const seen = new Set();
+  const normalizedTargets = targets.map((target, index) => {
+    const placeId = String(target?.placeId || "");
+    const status = String(target?.detailCollectionStatus || target?.status || "not_collected");
+    if (Number(target?.companyOrdinal) !== index + 1 || !/^\d{1,30}$/u.test(placeId) || seen.has(placeId)
+      || !["ready", "zero", "partial", "blocked", "failed", "not_collected", "missing"].includes(status)) {
+      throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 target result is invalid", 409);
+    }
+    seen.add(placeId);
+    return Object.freeze({
+      companyOrdinal: index + 1,
+      placeId,
+      status,
+      detailCollectionStatus: status,
+      bookingBusinessIdSource: String(target?.bookingBusinessIdSource || "none"),
+      revenueInputValid: target?.revenueInputValid === true
+    });
+  });
+  const trace = normalizeV2Top20ProviderCallTrace(manifest.providerCallTrace);
+  const ledger = validateResilientProviderTrace(trace);
+  if (
+    manifest.collectorActivationProfile !== V2_TOP20_PROFILE
+    || manifest.collectorScope !== V2_TOP20_SCOPE
+    || manifest.collectionPurpose !== "revenue_detail"
+    || manifest.collectionMode !== "precision"
+    || manifest.productMode !== "all"
+    || manifest.detailRankRanges !== "1-20"
+    || manifest.automaticRetry !== false
+    || manifest.automaticFallback !== false
+    || manifest.saveRunOnSuccessOnly !== true
+    || manifest.saveFailureRun !== false
+    || Number(manifest.counts?.naverOverall) !== 50
+    || ledger.total !== Number(manifest.providerCallCounts?.total)
+    || manifest.providerCallTraceHash !== computeV2Top20ProviderCallTraceHash(trace)
+  ) {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 manifest resilience contract is invalid", 409);
+  }
+  const summary = summarizeResilientTop20Collection({
+    mainPlaceStatus: "ready",
+    targets: normalizedTargets,
+    detailCircuitOpen: normalizedTargets.some((target) => target.status === "blocked")
+  });
+  return Object.freeze({ targetResults: normalizedTargets, providerCallCount: ledger.total, providerCallTrace: trace, providerCallTraceHash: computeV2Top20ProviderCallTraceHash(trace), resilience: summary });
+}
+
 function parseArtifactFile(files, filePath) {
   const candidates = Array.isArray(files) ? files.filter((file) => file?.path === filePath) : [];
   if (candidates.length !== 1) {
@@ -437,11 +496,7 @@ function buildV2Top20FinalArtifactFiles(input = {}) {
     throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 final artifact identity is invalid");
   }
   const manifest = parseArtifactFile(input.files, MANIFEST_PATH);
-  const validated = validateReadyManifest(manifest);
-  const executionState = synthesizeReadyExecutionState(validated.targetResults, { now: input.now });
-  if (executionState.callLedger.total !== validated.providerCallCount) {
-    throw artifactError("V2_TOP20_ARTIFACT_HASH_MISMATCH", "top20 execution ledger does not match the manifest", 409);
-  }
+  const validated = validateResilientManifest(manifest);
   const payloadFiles = input.files
     .filter((file) => file?.path !== SUMMARY_PATH && file?.path !== CONTENT_RECEIPT_PATH)
     .map((file) => ({ path: safeRelativePath(file.path, "top20 artifact"), content: String(file.content || "") }));
@@ -461,18 +516,28 @@ function buildV2Top20FinalArtifactFiles(input = {}) {
     contractHash,
     executionIdentityHash,
     status: "ready",
+    collectionStatus: validated.resilience.collectionStatus,
+    mainPlaceStatus: validated.resilience.mainPlaceStatus,
+    detailStatus: validated.resilience.detailStatus,
     providerAttemptCount: 1,
     executedCallCount: validated.providerCallCount,
     providerWorkflowRevision,
     automaticRetry: false,
     automaticFallback: false,
-    providerFailureSubtype: null,
+        // The child only passes a subtype when it has been safely classified.
+        // Never infer a particular block subtype from a partial detail result.
+        providerFailureSubtype: manifest.detailCircuitFailureSubtype || null,
     diagnosticId: null,
-    executionState
+    executionState: null,
+    targetCompanyCount: validated.resilience.targetCompanyCount,
+    detailReadyCompanyCount: validated.resilience.detailReadyCompanyCount,
+    revenueReadyCompanyCount: validated.resilience.revenueReadyCompanyCount,
+    detailCoverageRate: validated.resilience.detailCoverageRate,
+    revenueCoverageRate: validated.resilience.revenueCoverageRate
   });
   return deepFreeze({
     summary,
-    executionState,
+    executionState: null,
     files: [
       { path: SUMMARY_PATH, content: JSON.stringify(summary) },
       { path: CONTENT_RECEIPT_PATH, content: JSON.stringify(contentReceipt) },
@@ -490,7 +555,7 @@ async function collectV2Top20ArtifactFiles(input = {}) {
   } catch {
     throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 manifest cannot be read", 502);
   }
-  const validated = validateReadyManifest(manifest);
+  const validated = validateResilientManifest(manifest);
   const detailEntries = Array.isArray(manifest.detailJsonFiles) ? manifest.detailJsonFiles : [];
   if (detailEntries.length > 24) {
     throw artifactError("V2_TOP20_ARTIFACT_OVERSIZE", "top20 detail artifact count exceeds the approved limit", 413);
@@ -553,6 +618,7 @@ async function collectV2Top20ArtifactFiles(input = {}) {
     writeCount: 0,
     organicCount: 50,
     inventoryTargetCount: 20,
+    collectionStatus: validated.resilience.collectionStatus,
     readyCount: validated.targetResults.filter((item) => item.status === "ready").length,
     zeroCount: validated.targetResults.filter((item) => item.status === "zero").length,
     targetResults: validated.targetResults,
@@ -577,6 +643,22 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
   const manifest = readJsonFileFromVerifiedArtifact(verifiedArtifact, MANIFEST_PATH);
   if (summary.schemaVersion === COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION) {
     const receipt = readJsonFileFromVerifiedArtifact(verifiedArtifact, CONTENT_RECEIPT_PATH);
+    if (summary.executionState === null) {
+      const validated = validateResilientManifest(manifest);
+      if (
+        summary.status !== "ready"
+        || !["complete", "partial", "rank_only"].includes(summary.collectionStatus)
+        || summary.contractHash !== expected.contractHash
+        || summary.executionIdentityHash !== expected.executionIdentityHash
+        || summary.executedCallCount !== validated.providerCallCount
+        || summary.automaticRetry !== false
+        || summary.automaticFallback !== false
+        || receipt.schemaVersion !== V2_TOP20_ARTIFACT_SCHEMA_VERSION
+      ) {
+        throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 resilient artifact summary is invalid", 409);
+      }
+      return deepFreeze({ summary, manifest, contentReceipt: receipt, targetResults: validated.targetResults, executionState: null });
+    }
     const state = validateExecutionState(summary.executionState);
     const decision = decideV2Top20Persistence(state);
     if (
@@ -603,7 +685,7 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
     ) {
       throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 final artifact summary is invalid", 409);
     }
-    const validated = validateReadyManifest(manifest);
+    const validated = validateResilientManifest(manifest);
     if (validated.providerCallCount !== summary.executedCallCount) {
       throw artifactError("V2_TOP20_ARTIFACT_HASH_MISMATCH", "top20 final call ledger does not match", 409);
     }
@@ -633,8 +715,8 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
     || summary.executionIdentityHash !== expected.executionIdentityHash
     || summary.providerAttemptCount !== 1
     || !Number.isInteger(summary.executedCallCount)
-    || summary.executedCallCount < 21
-    || summary.executedCallCount > V2_TOP20_CONTRACT.maximumProviderCalls
+    || summary.executedCallCount < 1
+    || summary.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
     || summary.automaticRetry !== false
     || summary.automaticFallback !== false
     || summary.resultStored !== false
@@ -644,7 +726,7 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
   ) {
     throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 artifact summary is invalid", 409);
   }
-  const validated = validateReadyManifest(manifest);
+  const validated = validateResilientManifest(manifest);
   if (
     validated.providerCallCount !== summary.executedCallCount
     || summary.providerCallTraceHash !== validated.providerCallTraceHash
@@ -677,6 +759,7 @@ module.exports = {
   sanitizeText,
   synthesizeReadyExecutionState,
   validateV2Top20ProviderCallTrace,
+  validateResilientManifest,
   validateReadyManifest,
   verifyV2Top20ArtifactContents
 };

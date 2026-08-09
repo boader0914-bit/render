@@ -228,7 +228,7 @@ async function verifyRealDetailManifestShape(root) {
           "providerId",
           "requestOrdinal"
         ]);
-        assert.equal(metadata.providerId, "naver_place_search");
+        assert.equal(metadata.providerId, metadata.operation === "main_place" ? "naver_place_main" : "naver_booking_detail");
         assert.equal(JSON.stringify(metadata).includes("Synthetic regional lodging"), false);
         assert.equal(/https?:|query|body|placeId|businessId/iu.test(JSON.stringify(metadata)), false);
         successProviderCalls.push(metadata);
@@ -277,7 +277,7 @@ async function verifyRealDetailManifestShape(root) {
       maxRuntimeMs: 120_000
     });
     assert.equal(zero.readyCount, 19);
-    assert.equal(zero.zeroCount, 1);
+    assert.equal(zero.zeroCount, 0);
     assert.equal(zero.providerCallCount, 78);
     assert.equal(zeroProviderCalls.length, 78);
     assert.deepEqual((await readAudit(zeroAudit)).operationCounts, {
@@ -292,8 +292,7 @@ async function verifyRealDetailManifestShape(root) {
     roots.push(blockedRoot);
     const blockedAudit = path.join(blockedRoot, "audit-blocked.json");
     const blockedProviderCalls = [];
-    await assert.rejects(
-      () => executeV2Top20Collector({
+    const blockedCollection = await executeV2Top20Collector({
         contract: contract(),
         contractHash: "e".repeat(64),
         executionIdentityHash: "f".repeat(64),
@@ -303,9 +302,8 @@ async function verifyRealDetailManifestShape(root) {
         heartbeat: async () => {},
         onProviderCall: async (metadata) => { blockedProviderCalls.push(metadata); },
         maxRuntimeMs: 120_000
-      }),
-      (error) => error?.code === "NAVER_ACCESS_BLOCKED"
-    );
+      });
+    assert.equal(blockedCollection.collectionStatus, "rank_only");
     const blocked = await readAudit(blockedAudit);
     assert.equal(blocked.callCount, 4, "the first blocked schedule must stop every later rank");
     assert.equal(blockedProviderCalls.length, 4, "the blocked response still counts as one executed provider call");

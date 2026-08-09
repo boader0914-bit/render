@@ -32,6 +32,10 @@ const {
   validateExecutionState
 } = require("./collection_worker_v2_top20_contract.cjs");
 const {
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  providerIdForOperation
+} = require("./collection_worker_v2_top20_resilience.cjs");
+const {
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_DISPATCH_KEY_ID,
@@ -241,7 +245,8 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     "top20ContractHash",
     "contract",
     "top20Contract",
-    "providerSession"
+    "providerSession",
+    "detailProviderSession"
   ], "top20 execution payload");
   exactKeys(value.providerSession, [
     "maximumProviderCalls",
@@ -252,6 +257,7 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     "circuitStateAtReservation",
     "serviceGlobalLockHeld"
   ], "top20 provider session");
+  exactKeys(value.detailProviderSession, ["state", "retryAt", "liveCallsAllowed"], "top20 detail provider session");
   const normalized = normalizeV2Top20PrepareContract(value.contract);
   const expectedTop20Contract = buildV2Top20ExecutionContract(value.contract);
   const expectedTop20Hash = computeV2Top20ContractHash(expectedTop20Contract);
@@ -267,20 +273,24 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     || verifiedJob.contract.keywordHash !== normalized.keywordHash
     || verifiedJob.contract.checkIn !== normalized.checkIn
     || verifiedJob.contract.checkOut !== normalized.checkOut
-    || value.providerSession.maximumProviderCalls !== V2_TOP20_CONTRACT.maximumProviderCalls
+    || value.providerSession.maximumProviderCalls !== V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
     || value.providerSession.providerAttemptCount !== 1
     || value.providerSession.concurrency !== 1
     || value.providerSession.automaticRetry !== false
     || value.providerSession.automaticFallback !== false
     || value.providerSession.circuitStateAtReservation !== "closed"
     || value.providerSession.serviceGlobalLockHeld !== true
+    || !["closed", "open", "probe_allowed"].includes(value.detailProviderSession.state)
+    || typeof value.detailProviderSession.liveCallsAllowed !== "boolean"
+    || value.detailProviderSession.liveCallsAllowed !== (value.detailProviderSession.state === "closed")
   ) {
     throw fail("COLLECTION_WORKER_V2_TOP20_PAYLOAD_INVALID", "top20 execution payload is not authorized", 409);
   }
   return Object.freeze({
     contract: Object.freeze({ ...value.contract }),
     top20Contract: expectedTop20Contract,
-    top20ContractHash: expectedTop20Hash
+    top20ContractHash: expectedTop20Hash,
+    detailProviderSession: Object.freeze({ ...value.detailProviderSession })
   });
 }
 
@@ -415,8 +425,9 @@ function validateFinalArtifactInput(value, expected) {
   if (summaryFiles.length !== 1) {
     throw fail("COLLECTION_WORKER_V2_TOP20_ARTIFACT_INVALID", "top20 final summary is invalid", 500);
   }
-  const state = validateExecutionState(value.executionState);
-  const decision = decideV2Top20Persistence(state);
+  const resilient = value.executionState === null;
+  const state = resilient ? null : validateExecutionState(value.executionState);
+  const decision = resilient ? { saveRun: ["complete", "partial", "rank_only"].includes(value.summary.collectionStatus) } : decideV2Top20Persistence(state);
   if (
     value.summary.schemaVersion !== COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION
     || value.summary.status !== "ready"
@@ -424,10 +435,12 @@ function validateFinalArtifactInput(value, expected) {
     || value.summary.contractHash !== expected.contractHash
     || value.summary.executionIdentityHash !== expected.executionIdentityHash
     || value.summary.providerWorkflowRevision !== expected.providerWorkflowRevision
-    || value.summary.executedCallCount !== state.callLedger.total
+    || !Number.isInteger(value.summary.executedCallCount)
+    || value.summary.executedCallCount < 1
+    || value.summary.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
     || value.summary.automaticRetry !== false
     || value.summary.automaticFallback !== false
-    || stableJson(value.summary.executionState) !== stableJson(state)
+    || !resilient && stableJson(value.summary.executionState) !== stableJson(state)
     || decision.saveRun !== true
   ) {
     throw fail("COLLECTION_WORKER_V2_TOP20_ARTIFACT_INVALID", "top20 final artifact is not persistable", 409);
@@ -634,13 +647,14 @@ async function runCollectionWorkerV2Top20(input = {}) {
       contractHash: verifiedJob.contractHash,
       executionIdentityHash: verifiedJob.executionIdentityHash,
       heartbeat,
+      detailLiveCallsAllowed: execution.detailProviderSession.liveCallsAllowed,
       async onProviderCall(metadata = {}) {
         const requestOrdinal = Number(metadata.requestOrdinal);
         if (
-          metadata.providerId !== "naver_place_search"
-          || !["main_place", "booking_business", "booking_items", "daily_schedule"].includes(String(metadata.operation || ""))
+          ![providerIdForOperation(String(metadata.operation || "")), "naver_place_search"].includes(metadata.providerId)
+          || !["main_place", "booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(String(metadata.operation || ""))
           || requestOrdinal !== providerCallCount + 1
-          || requestOrdinal > V2_TOP20_CONTRACT.maximumProviderCalls
+          || requestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
         ) {
           throw fail(
             "COLLECTION_WORKER_V2_TOP20_PROVIDER_CALL_SEQUENCE_INVALID",

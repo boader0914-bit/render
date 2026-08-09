@@ -144,6 +144,7 @@
     "test:collection-worker-no-store-canary-fixtures": "node scripts/test_collection_worker_no_store.cjs",
     "test:collection-worker-naver-canary-fixtures": "node scripts/test_collection_worker_execution_graph.cjs && node scripts/test_collection_worker_naver_canary.cjs && node scripts/test_collection_worker_canary_http_boundary.cjs",
     "test:collection-worker-v2-top20-fixtures": "node tests/test_collection_worker_v2_top20_contract.cjs && node scripts/test_collection_worker_v2_top20_orchestrator.cjs && node scripts/test_collection_worker_v2_top20_collector.cjs && node scripts/test_collection_worker_v2_top20_worker.cjs && node scripts/test_collection_worker_run_transaction.cjs && node scripts/test_collection_worker_supervisor.cjs && node scripts/test_collection_worker_v2_top20_server_contract.cjs",
+    "test:collection-worker-v2-resilience-fixtures": "node scripts/test_collection_worker_v2_top20_resilience.cjs",
     "test:collection-worker-readiness-fixtures": "npm run test:collection-worker-contract-fixtures && npm run test:collection-worker-artifact-fixtures && npm run test:collection-worker-runtime-fixtures && npm run test:collection-worker-no-store-canary-fixtures && npm run test:collection-worker-naver-canary-fixtures && npm run test:collection-worker-v2-top20-fixtures"
   },
   "engines": {

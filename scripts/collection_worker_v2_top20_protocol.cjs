@@ -7,6 +7,7 @@ const {
   V2_TOP20_SCHEMA_VERSION,
   V2_TOP20_SCOPE
 } = require("./collection_worker_v2_top20_contract.cjs");
+const { V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS } = require("./collection_worker_v2_top20_resilience.cjs");
 
 const COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION = "collection-worker-v2-top20-protocol.v1";
 const COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION = "collection-worker-v2-top20-result.v1";
@@ -155,7 +156,7 @@ function buildV2Top20ExecutionContract(input = {}) {
     rankEnd: normalized.rankEnd,
     detailRankStart: normalized.detailRankStart,
     detailRankEnd: normalized.detailRankEnd,
-    maximumProviderCalls: V2_TOP20_CONTRACT.maximumProviderCalls,
+    maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
     concurrency: V2_TOP20_CONTRACT.concurrency,
     automaticRetry: false,
     automaticFallback: false
