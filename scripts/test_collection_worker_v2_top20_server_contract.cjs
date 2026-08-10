@@ -132,6 +132,21 @@ assert.match(serverSource, /sendCollectionWorkerJson\(/u);
 assert.match(serverSource, /COLLECTION_WORKER_V2_TOP20_DISPATCH_TIMEOUT/u);
 assert.match(serverSource, /prepareDryRunTrustedAdmin/u);
 assert.match(serverSource, /collectionWorkerRunTransactionStore\.finalizeVerifiedRunBundle/u);
+assert.match(
+  serverSource,
+  /!isPreviewWorkerRunId\(entry\.name\) && !await isVisibleCommittedFrozenRun\(dirPath, manifest\)/u,
+  "a committed Worker run must use its signed output transaction validation instead of the frozen V2 manifest gate"
+);
+assert.match(
+  serverSource,
+  /const workerRun = isPreviewWorkerRunId\(path\.basename\(runId\)\);[\s\S]{0,500}!workerRun && !allowUncommittedFrozenRead && !await isVisibleCommittedFrozenRun\(dirPath, manifest\)/u,
+  "Worker run details must bypass only the irrelevant frozen-manifest gate"
+);
+assert.match(
+  serverSource,
+  /\(workerRun && !await isVisibleCommittedWorkerRun\(runId\)\)\s*\) return notFound\(res\);/u,
+  "Worker output downloads must retain the signed transaction and committed-job visibility boundary"
+);
 assert.match(serverSource, /naverProviderHealthStore\.releaseAttempt/u);
 assert.match(serverSource, /collection-worker-v2-top20-cancel\.v1/u);
 assert.match(serverSource, /String\(payload\?\.body\?\.jobId \|\| ""\)\.startsWith\("job-top20-"\)/u);

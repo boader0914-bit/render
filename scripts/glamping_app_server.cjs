@@ -6482,7 +6482,10 @@ async function listRuns() {
     const dirPath = path.join(OUTPUTS_DIR, entry.name);
     const files = await fsp.readdir(dirPath).catch(() => []);
     const manifest = await readManifest(dirPath);
-    if (!await isVisibleCommittedFrozenRun(dirPath, manifest)) continue;
+    // Preview Worker output has its own signed-artifact and output-transaction
+    // commit marker.  It must not be reclassified as a frozen V2 run merely
+    // because its manifest intentionally has a different schema.
+    if (!isPreviewWorkerRunId(entry.name) && !await isVisibleCommittedFrozenRun(dirPath, manifest)) continue;
     if (!manifest && files.length === 0) continue;
     if (isIncompleteRunDirectory(manifest, files)) continue;
     if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) continue;
@@ -14476,6 +14479,7 @@ function resolveRunDir(runId) {
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
+  const workerRun = isPreviewWorkerRunId(path.basename(runId));
   if (!await isVisibleCommittedWorkerRun(path.basename(runId))) return null;
 
   const stat = await fsp.stat(dirPath);
@@ -14483,7 +14487,7 @@ async function loadRun(runId, options = {}) {
   const files = await fsp.readdir(dirPath);
   const manifest = await readManifest(dirPath);
   const allowUncommittedFrozenRead = options.frozenCommitRead === FROZEN_V2_UNCOMMITTED_READ;
-  if (!allowUncommittedFrozenRead && !await isVisibleCommittedFrozenRun(dirPath, manifest)) return null;
+  if (!workerRun && !allowUncommittedFrozenRead && !await isVisibleCommittedFrozenRun(dirPath, manifest)) return null;
   const collectedAt = manifest?.dataAvailableAt
     || manifest?.collectionCompletedAt
     || manifest?.collectionStartedAt
@@ -16056,7 +16060,11 @@ async function serveOutput(reqUrl, res) {
     return notFound(res);
   }
   const manifest = await readManifest(runDirectory);
-  if (!await isVisibleCommittedFrozenRun(runDirectory, manifest)) return notFound(res);
+  const workerRun = isPreviewWorkerRunId(runId);
+  if (
+    (!workerRun && !await isVisibleCommittedFrozenRun(runDirectory, manifest))
+    || (workerRun && !await isVisibleCommittedWorkerRun(runId))
+  ) return notFound(res);
   const filePath = safeJoin(OUTPUTS_DIR, relative);
   if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
   const ext = path.extname(filePath).toLowerCase();
