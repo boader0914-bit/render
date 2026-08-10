@@ -492,7 +492,9 @@ async function failureScenario(root, keys) {
     executedCallCount: 0,
     code: "COLLECTION_WORKER_PROCESS_FAILED",
     providerFailureSubtype: null,
-    diagnosticId: null
+    diagnosticId: null,
+    detector: null,
+    fileRole: null
   };
   const result = await system.orchestrator.recordFailure({
     body,
@@ -543,7 +545,9 @@ async function cancellationScenario(root, keys) {
     executedCallCount: 0,
     code: "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED",
     providerFailureSubtype: null,
-    diagnosticId: null
+    diagnosticId: null,
+    detector: null,
+    fileRole: null
   };
   const result = await system.orchestrator.recordFailure({
     body,
@@ -697,6 +701,33 @@ async function validatedRestartScenario(root, keys) {
   assert.equal(system.callbackCount(), 0, "restart reconciliation must never apply the write transaction");
 }
 
+async function zeroCallArtifactReconciliationScenario(root, keys) {
+  const system = await createSystem(root, keys);
+  const flow = await prepareClaimPreflight(system, keys, "Synthetic zero-call artifact reconciliation lodging");
+  system.clock.tick(6 * 60 * 1000);
+  const candidate = await system.orchestrator.reconciliationCandidate();
+  assert.equal(candidate.jobId, flow.prepared.jobId);
+  assert.equal(candidate.providerAttemptCount, 0);
+  assert.equal(candidate.leaseExpired, true);
+  const reconciled = await system.orchestrator.reconcileZeroCallArtifactFailure({
+    jobId: candidate.jobId,
+    workflowRevision: candidate.workflowRevision,
+    providerWorkflowRevision: candidate.providerWorkflowRevision
+  });
+  assert.equal(reconciled.jobState, "indeterminate");
+  assert.equal(reconciled.code, "COLLECTION_WORKER_V2_TOP20_FAILURE_RECEIPT_MISSING");
+  assert.equal((await system.providerStore.read()).state, "closed");
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  await assert.rejects(
+    () => system.orchestrator.reconcileZeroCallArtifactFailure({
+      jobId: candidate.jobId,
+      workflowRevision: candidate.workflowRevision,
+      providerWorkflowRevision: candidate.providerWorkflowRevision
+    }),
+    (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_RECONCILIATION_NOT_ELIGIBLE"
+  );
+}
+
 async function repeatExecutionScenario(root, keys) {
   const system = await createSystem(root, keys);
   const repeatedContract = contract("Synthetic repeat contract lodging");
@@ -792,6 +823,7 @@ async function main() {
     await identityScenario(path.join(root, "identity"), keys);
     await queuedRestartScenario(path.join(root, "restart-queued"), keys);
     await collectingRestartScenario(path.join(root, "restart-collecting"), keys);
+    await zeroCallArtifactReconciliationScenario(path.join(root, "zero-call-reconciliation"), keys);
     await validatedRestartScenario(path.join(root, "restart-validated"), keys);
     await repeatExecutionScenario(path.join(root, "repeat-execution"), keys);
     await runtimeAttestationScenario(path.join(root, "runtime-attestation"), keys);

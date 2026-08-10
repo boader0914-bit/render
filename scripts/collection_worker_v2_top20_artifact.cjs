@@ -4,6 +4,9 @@ const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const {
+  classifyCollectionArtifactSensitiveContent
+} = require("./collection_artifact_contract.cjs");
+const {
   V2_TOP20_CONTRACT,
   V2_TOP20_PROFILE,
   V2_TOP20_SCHEMA_VERSION,
@@ -33,22 +36,23 @@ const CONTENT_RECEIPT_PATH = "top20-content-receipt.json";
 const MANIFEST_PATH = "run/manifest.json";
 const REQUIRED_CSV_ROLES = Object.freeze(["platform", "overall", "ads", "regional", "ddnayo"]);
 const FORBIDDEN_KEY = /^(?:outputDir|runId|stagingDir|finalDir|absolutePath|rawHtml|rawBody|rawResponse|headers?|cookies?|credentials?|authorization|secrets?|tokens?|passwords?|apiKeys?|sourceUrl|bookingUrl|url|uri)$/iu;
-const URL_PATTERN = /(?:https?|wss?):\/\/[^\s,"'<>]+/giu;
+const URL_PATTERN = /(?:https?|wss?):\/\/[^\s,"'<>]+|\bwww\.[^\s,"'<>]+/giu;
 const RAW_HTML_PATTERN = /<(?:!doctype\s+html|html|head|body|script)\b|window\.__APOLLO_STATE__/iu;
 const SENSITIVE_PATTERN = /\b(?:bearer\s+[A-Za-z0-9._~-]+|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|password)\b/iu;
 
 class CollectionWorkerV2Top20ArtifactError extends Error {
-  constructor(code, message, statusCode = 400) {
+  constructor(code, message, statusCode = 400, safeMeta = null) {
     super(message);
     this.name = "CollectionWorkerV2Top20ArtifactError";
     this.code = code;
     this.statusCode = statusCode;
     this.retryable = false;
+    this.safeMeta = safeMeta && typeof safeMeta === "object" ? Object.freeze({ ...safeMeta }) : null;
   }
 }
 
-function artifactError(code, message, statusCode = 400) {
-  return new CollectionWorkerV2Top20ArtifactError(code, message, statusCode);
+function artifactError(code, message, statusCode = 400, safeMeta = null) {
+  return new CollectionWorkerV2Top20ArtifactError(code, message, statusCode, safeMeta);
 }
 
 function sha256Hex(value) {
@@ -173,10 +177,18 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
-function sanitizeJsonValue(value) {
+function sanitizeArtifactString(value, context = "top20 artifact") {
+  const text = String(value || "").replace(URL_PATTERN, "");
+  if (RAW_HTML_PATTERN.test(text) || SENSITIVE_PATTERN.test(text)) {
+    throw artifactError("V2_TOP20_ARTIFACT_SENSITIVE", `${context} contains prohibited material`, 403);
+  }
+  return text;
+}
+
+function sanitizeJsonValue(value, context = "top20 artifact") {
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
-  if (typeof value === "string") return value.replace(URL_PATTERN, "");
-  if (Array.isArray(value)) return value.map(sanitizeJsonValue);
+  if (typeof value === "string") return sanitizeArtifactString(value, context);
+  if (Array.isArray(value)) return value.map((item, index) => sanitizeJsonValue(item, `${context}[${index}]`));
   if (!value || typeof value !== "object") {
     throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 artifact contains an unsupported value");
   }
@@ -186,17 +198,46 @@ function sanitizeJsonValue(value) {
     if (["__proto__", "prototype", "constructor"].includes(key)) {
       throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 artifact contains an unsafe field");
     }
-    next[key] = sanitizeJsonValue(nested);
+    next[key] = sanitizeJsonValue(nested, `${context}.${key}`);
   }
   return next;
 }
 
 function sanitizeText(value, label) {
-  const text = String(value || "").replace(URL_PATTERN, "");
-  if (RAW_HTML_PATTERN.test(text) || SENSITIVE_PATTERN.test(text)) {
-    throw artifactError("V2_TOP20_ARTIFACT_SENSITIVE", `${label} contains prohibited material`, 403);
-  }
-  return text;
+  return sanitizeArtifactString(value, label);
+}
+
+function top20ArtifactFileRole(filePath) {
+  if (filePath === SUMMARY_PATH) return "summary";
+  if (filePath === CONTENT_RECEIPT_PATH) return "content_receipt";
+  if (filePath === MANIFEST_PATH) return "manifest";
+  const csv = /^run\/(platform|overall|ads|regional|ddnayo)\.csv$/u.exec(String(filePath || ""));
+  if (csv) return `${csv[1]}_csv`;
+  if (/^run\/details\/detail-\d{2}\.json$/u.test(String(filePath || ""))) return "detail_json";
+  return "unknown";
+}
+
+function auditV2Top20ArtifactFiles(files, stage = "bundle_build") {
+  if (!Array.isArray(files)) throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 artifact files are invalid");
+  const audit = files.map((file) => {
+    const filePath = String(file?.path || "");
+    const content = Buffer.isBuffer(file?.content) ? file.content : Buffer.from(String(file?.content || ""), "utf8");
+    const classified = classifyCollectionArtifactSensitiveContent(filePath, content);
+    const safePath = /^(?:top20-summary\.json|top20-content-receipt\.json|run\/(?:manifest\.json|(?:platform|overall|ads|regional|ddnayo)\.csv|details\/detail-\d{2}\.json))$/u.test(filePath)
+      ? filePath
+      : null;
+    const entry = Object.freeze({
+      fileRole: top20ArtifactFileRole(filePath),
+      safePath,
+      filePathHashPrefix: sha256Hex(filePath).slice(0, 12),
+      byteLength: content.length,
+      sha256Prefix: sha256Hex(content).slice(0, 12),
+      accepted: !classified,
+      detector: classified?.detector || null
+    });
+    return entry;
+  });
+  return Object.freeze(audit);
 }
 
 function safeRelativePath(value, label) {
@@ -751,11 +792,13 @@ module.exports = {
   V2_TOP20_ARTIFACT_SCHEMA_VERSION,
   V2_TOP20_PROVIDER_CALL_TRACE_SCHEMA_VERSION,
   buildV2Top20FinalArtifactFiles,
+  auditV2Top20ArtifactFiles,
   collectV2Top20ArtifactFiles,
   computeV2Top20ProviderCallTraceHash,
   expectedV2Top20ProviderCallTrace,
   normalizeV2Top20ProviderCallTrace,
   sanitizeJsonValue,
+  sanitizeArtifactString,
   sanitizeText,
   synthesizeReadyExecutionState,
   validateV2Top20ProviderCallTrace,

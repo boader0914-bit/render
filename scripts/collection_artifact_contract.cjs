@@ -17,21 +17,34 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const BASE64URL_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{86}$/;
-const FORBIDDEN_PATH_TOKEN_PATTERN = /(?:^|[._-])(?:raw[._-]?(?:html|body|response)|html?|urls?|uris?|headers?|cookies?|credentials?|authorization|secrets?|tokens?|passwords?|api[._-]?keys?)(?:[._-]|$)/i;
+const FORBIDDEN_PATH_TOKEN_PATTERN = /(?:^|[./_-])(?:raw[._-]?(?:html|body|response)|html?|urls?|uris?|headers?|cookies?|credentials?|authorization|secrets?|tokens?|passwords?|api[._-]?keys?)(?:[./_-]|$)/i;
 const RAW_HTML_PATTERN = /<(?:!doctype\s+html|html|head|body|script)\b|window\.__APOLLO_STATE__/i;
 const URL_PATTERN = /(?:https?|wss?):\/\/|(?:^|[\s"'=])www\./i;
 const SENSITIVE_CONTENT_PATTERN = /(?:^|[\s"',])(?:raw[._-]?(?:html|body|response)|urls?|uris?|headers?|cookies?|credentials?|authorization|proxy-authorization|secrets?|client[._-]?secret|api[._-]?key|access[._-]?token|refresh[._-]?token|passwords?)["']?\s*[:,=]|\bbearer\s+[A-Za-z0-9._~-]+/im;
+const BEARER_TOKEN_PATTERN = /\bbearer\s+[A-Za-z0-9._~-]+/i;
+const SENSITIVE_KEY_PATTERN = /(?:^|[\s"',])(?:raw[._-]?(?:html|body|response)|urls?|uris?|headers?|cookies?|credentials?|authorization|proxy-authorization|secrets?|client[._-]?secret|api[._-]?key|access[._-]?token|refresh[._-]?token|passwords?)["']?\s*[:,=]/im;
+const SAFE_ARTIFACT_PATH_PATTERN = /^(?:top20-summary\.json|top20-content-receipt\.json|run\/(?:manifest\.json|(?:platform|overall|ads|regional|ddnayo)\.csv|details\/detail-\d{2}\.json))$/u;
+const SENSITIVE_DETECTORS = new Set([
+  "forbidden_path_token",
+  "html_extension",
+  "raw_html",
+  "url_literal",
+  "sensitive_key",
+  "bearer_token",
+  "unknown_sensitive_content"
+]);
 
 class CollectionArtifactContractError extends Error {
-  constructor(code, message) {
+  constructor(code, message, safeMeta = null) {
     super(message);
     this.name = "CollectionArtifactContractError";
     this.code = code;
+    this.safeMeta = safeMeta && typeof safeMeta === "object" ? Object.freeze({ ...safeMeta }) : null;
   }
 }
 
-function fail(code, message) {
-  throw new CollectionArtifactContractError(code, message);
+function fail(code, message, safeMeta = null) {
+  throw new CollectionArtifactContractError(code, message, safeMeta);
 }
 
 function isPlainObject(value) {
@@ -106,6 +119,43 @@ function sha256Hex(value) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
+function hashPrefix(value) {
+  return sha256Hex(value).slice(0, 12);
+}
+
+function safeArtifactPath(filePath) {
+  return typeof filePath === "string" && SAFE_ARTIFACT_PATH_PATTERN.test(filePath) ? filePath : null;
+}
+
+function artifactSensitiveMeta(filePath, content, detector) {
+  const normalizedDetector = SENSITIVE_DETECTORS.has(detector) ? detector : "unknown_sensitive_content";
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content || ""), "utf8");
+  const normalizedPath = typeof filePath === "string" ? filePath : "";
+  return Object.freeze({
+    detector: normalizedDetector,
+    safeFilePath: safeArtifactPath(normalizedPath),
+    filePathHashPrefix: hashPrefix(normalizedPath),
+    contentHashPrefix: hashPrefix(bytes),
+    contentLength: bytes.length
+  });
+}
+
+function classifyCollectionArtifactSensitiveContent(filePath, content) {
+  const normalizedPath = typeof filePath === "string" ? filePath : "";
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content || ""), "utf8");
+  const text = bytes.toString("utf8");
+  if (/\.html?$/i.test(normalizedPath)) return artifactSensitiveMeta(normalizedPath, bytes, "html_extension");
+  if (FORBIDDEN_PATH_TOKEN_PATTERN.test(normalizedPath)) {
+    return artifactSensitiveMeta(normalizedPath, bytes, "forbidden_path_token");
+  }
+  if (RAW_HTML_PATTERN.test(text)) return artifactSensitiveMeta(normalizedPath, bytes, "raw_html");
+  if (URL_PATTERN.test(text)) return artifactSensitiveMeta(normalizedPath, bytes, "url_literal");
+  if (BEARER_TOKEN_PATTERN.test(text)) return artifactSensitiveMeta(normalizedPath, bytes, "bearer_token");
+  if (SENSITIVE_KEY_PATTERN.test(text)) return artifactSensitiveMeta(normalizedPath, bytes, "sensitive_key");
+  if (SENSITIVE_CONTENT_PATTERN.test(text)) return artifactSensitiveMeta(normalizedPath, bytes, "unknown_sensitive_content");
+  return null;
+}
+
 function validateIdentifier(value) {
   if (typeof value !== "string" || !SAFE_IDENTIFIER_PATTERN.test(value)) {
     fail("COLLECTION_ARTIFACT_CONTRACT_INVALID", "Collection artifact identity is invalid.");
@@ -170,8 +220,13 @@ function validateArtifactPath(value) {
   ) {
     fail("COLLECTION_ARTIFACT_PATH_INVALID", "Collection artifact path is invalid.");
   }
-  if (FORBIDDEN_PATH_TOKEN_PATTERN.test(value)) {
-    fail("COLLECTION_ARTIFACT_SENSITIVE_CONTENT", "Collection artifact contains prohibited material.");
+  const pathClassification = classifyCollectionArtifactSensitiveContent(value, Buffer.alloc(0));
+  if (pathClassification?.detector === "forbidden_path_token" || pathClassification?.detector === "html_extension") {
+    fail(
+      "COLLECTION_ARTIFACT_SENSITIVE_CONTENT",
+      "Collection artifact contains prohibited material.",
+      pathClassification
+    );
   }
   return value;
 }
@@ -184,15 +239,8 @@ function toContentBuffer(value) {
 }
 
 function rejectSensitiveContent(filePath, content) {
-  const text = content.toString("utf8");
-  if (
-    /\.html?$/i.test(filePath) ||
-    RAW_HTML_PATTERN.test(text) ||
-    URL_PATTERN.test(text) ||
-    SENSITIVE_CONTENT_PATTERN.test(text)
-  ) {
-    fail("COLLECTION_ARTIFACT_SENSITIVE_CONTENT", "Collection artifact contains prohibited material.");
-  }
+  const classified = classifyCollectionArtifactSensitiveContent(filePath, content);
+  if (classified) fail("COLLECTION_ARTIFACT_SENSITIVE_CONTENT", "Collection artifact contains prohibited material.", classified);
 }
 
 function assertFileAndBundleSize(size, runningTotal) {
@@ -441,6 +489,7 @@ module.exports = {
   COLLECTION_ARTIFACT_SIGNATURE_DOMAIN,
   COLLECTION_ARTIFACT_LIMITS,
   CollectionArtifactContractError,
+  classifyCollectionArtifactSensitiveContent,
   sha256Hex,
   stableSerialize,
   validateArtifactPath,

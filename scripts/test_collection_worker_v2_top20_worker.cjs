@@ -243,6 +243,9 @@ function internalFetch(system, counters, behavior = {}) {
       ) {
         throw Object.assign(new Error("synthetic failure response loss"), { responseLost: true });
       }
+      if (behavior.loseAllFailureResponses === true && pathname === COLLECTION_WORKER_V2_TOP20_FAILURE_PATH) {
+        throw Object.assign(new Error("synthetic failure response loss"), { responseLost: true });
+      }
       return response(result);
     } catch (error) {
       if (error?.responseLost) throw error;
@@ -341,6 +344,57 @@ async function failureScenario(root, keys) {
   assert.equal(system.callbackCount(), 0, "failure receipt must not apply a result transaction");
   assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "failed");
   assert.equal((await system.providerStore.read()).state, "open");
+}
+
+async function artifactFailureScenario(root, keys) {
+  const system = await createSystem(root, keys, { keyword: "Synthetic artifact failure lodging" });
+  const counters = { internal: 0, collector: 0, provider: 0 };
+  await assert.rejects(
+    () => runCollectionWorkerV2Top20({
+      fixtureMode: true,
+      environment: workerEnvironment(keys),
+      internalFetchImpl: internalFetch(system, counters, { loseFirstFailureResponse: true }),
+      now: NOW,
+      runtimeFingerprint: FIXED_V2_WORKER_RUNTIME_FINGERPRINT,
+      tempBase: root,
+      async collectorExecutor() {
+        counters.collector += 1;
+        return { providerCallCount: 0, files: [] };
+      },
+      async artifactFinalizer() {
+        throw Object.assign(new Error("synthetic artifact policy rejection"), {
+          code: "COLLECTION_ARTIFACT_SENSITIVE_CONTENT",
+          statusCode: 403,
+          safeMeta: Object.freeze({ detector: "url_literal", fileRole: "manifest", contentHashPrefix: "a".repeat(12), filePathHashPrefix: "b".repeat(12), contentLength: 24, stage: "bundle_build" })
+        });
+      }
+    }),
+    (error) => error?.code === "COLLECTION_ARTIFACT_SENSITIVE_CONTENT" && error.providerAttemptCount === 0 && error.executedCallCount === 0
+  );
+  assert.equal(counters.collector, 1);
+  assert.equal(counters.provider, 0);
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_FAILURE_PATH], 2, "artifact failure receipt recovery is bounded to one retry");
+  assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "failed");
+  assert.equal((await system.providerStore.read()).state, "closed");
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+
+  const indeterminate = await createSystem(path.join(root, "receipt-indeterminate"), keys, { keyword: "Synthetic receipt indeterminate lodging" });
+  const indeterminateCounters = { internal: 0, collector: 0, provider: 0 };
+  await assert.rejects(
+    () => runCollectionWorkerV2Top20({
+      fixtureMode: true,
+      environment: workerEnvironment(keys),
+      internalFetchImpl: internalFetch(indeterminate, indeterminateCounters, { loseAllFailureResponses: true }),
+      now: NOW,
+      runtimeFingerprint: FIXED_V2_WORKER_RUNTIME_FINGERPRINT,
+      tempBase: root,
+      async collectorExecutor() { return { providerCallCount: 0, files: [] }; },
+      async artifactFinalizer() { throw Object.assign(new Error("synthetic artifact policy rejection"), { code: "COLLECTION_ARTIFACT_SENSITIVE_CONTENT", statusCode: 403 }); }
+    }),
+    (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_RECEIPT_INDETERMINATE"
+  );
+  assert.equal(indeterminateCounters.provider, 0);
+  assert.equal(indeterminateCounters[COLLECTION_WORKER_V2_TOP20_FAILURE_PATH], 2);
 }
 
 async function gateScenario(keys) {
@@ -454,6 +508,7 @@ async function main() {
     await gateScenario(keys);
     await readyScenario(path.join(root, "ready"), keys);
     await failureScenario(path.join(root, "failure"), keys);
+    await artifactFailureScenario(path.join(root, "artifact-failure"), keys);
     assert.equal(unexpectedNetworkCalls, 0, "top20 Worker fixtures must not call external networking");
     console.log("collection worker V2 top20 Worker fixtures passed");
   } finally {

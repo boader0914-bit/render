@@ -16623,11 +16623,13 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const outcome = await refreshTop20WorkerOutcome();
       const providerStatus = await collectionWorkerV2Top20Orchestrator.providerStatus();
+      const reconciliationCandidate = await collectionWorkerV2Top20Orchestrator.reconciliationCandidate();
       const snapshot = await collectionWorkerJobStore.readSnapshot();
       const lastProbeOutcome = latestMainPlaceProbeOutcome(snapshot);
       return send(res, 200, {
         ...collectionWorkerV2Top20Orchestrator.status(),
         ...providerStatus,
+        reconciliationCandidate,
         ...top20WorkerTransportStatus(),
         activeJob: activeTop20WorkerJob ? {
           jobId: activeTop20WorkerJob.jobId,
@@ -16641,6 +16643,13 @@ async function route(req, res) {
       }, "application/json; charset=utf-8", {
         "Cache-Control": "no-store"
       });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/reconcile-zero-call-artifact-failure") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerV2Top20Orchestrator.reconcileZeroCallArtifactFailure(payload);
+      return sendCollectionWorkerJson(res, 200, result);
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/main-place-recovery-probe/status") {

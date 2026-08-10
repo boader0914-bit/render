@@ -96,6 +96,27 @@ const CANCELLATION_FAILURE_CODES = new Set([
 ]);
 const SAFE_SUBTYPE_PATTERN = /^(?:http_403|http_429|challenge_html|unknown_access_block)$/u;
 const DIAGNOSTIC_PATTERN = /^crawl-[a-f0-9]{12}$/u;
+const SAFE_ARTIFACT_DETECTORS = new Set([
+  "forbidden_path_token",
+  "html_extension",
+  "raw_html",
+  "url_literal",
+  "sensitive_key",
+  "bearer_token",
+  "unknown_sensitive_content"
+]);
+const SAFE_ARTIFACT_FILE_ROLES = new Set([
+  "summary",
+  "content_receipt",
+  "manifest",
+  "platform_csv",
+  "overall_csv",
+  "ads_csv",
+  "regional_csv",
+  "ddnayo_csv",
+  "detail_json",
+  "unknown"
+]);
 const TERMINAL_PAYLOAD_REPLAY_GRACE_MS = 15 * 60 * 1000;
 const CLAIM_KEYS = Object.freeze(["workerId", "workerPoolId", "workerCommit"]);
 const PREFLIGHT_KEYS = Object.freeze([
@@ -124,7 +145,9 @@ const FAILURE_KEYS = Object.freeze([
   "executedCallCount",
   "code",
   "providerFailureSubtype",
-  "diagnosticId"
+  "diagnosticId",
+  "detector",
+  "fileRole"
 ]);
 const MAIN_PLACE_PROBE_FINALIZE_KEYS = Object.freeze([
   "jobId", "attemptId", "workflowRevision", "providerWorkflowRevision",
@@ -1630,6 +1653,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || Number(body.providerAttemptCount) === 0 && body.executedCallCount !== 0
       || body.providerFailureSubtype !== null && !SAFE_SUBTYPE_PATTERN.test(String(body.providerFailureSubtype))
       || body.diagnosticId !== null && !DIAGNOSTIC_PATTERN.test(String(body.diagnosticId))
+      || body.detector !== null && !SAFE_ARTIFACT_DETECTORS.has(String(body.detector))
+      || body.fileRole !== null && !SAFE_ARTIFACT_FILE_ROLES.has(String(body.fileRole))
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_INPUT_INVALID", "top20 failure receipt is invalid", 400);
     }
@@ -1665,6 +1690,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         jobState: job.state,
         providerAttemptCount: Number(body.providerAttemptCount),
         executedCallCount: body.executedCallCount,
+        detector: body.detector,
+        fileRole: body.fileRole,
         resultStored: false,
         writeCount: 0,
         replayed: true
@@ -1681,6 +1708,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         jobState: job.state,
         providerAttemptCount: Number(body.providerAttemptCount),
         executedCallCount: body.executedCallCount,
+        detector: body.detector,
+        fileRole: body.fileRole,
         resultStored: false,
         writeCount: 0,
         replayed: true
@@ -1711,6 +1740,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         jobState: job.state,
         providerAttemptCount: Number(body.providerAttemptCount),
         executedCallCount: body.executedCallCount,
+        detector: body.detector,
+        fileRole: body.fileRole,
         resultStored: false,
         writeCount: 0,
         replayed: false
@@ -1764,6 +1795,86 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       jobState: job.state,
       providerAttemptCount: Number(body.providerAttemptCount),
       executedCallCount: body.executedCallCount,
+      detector: body.detector,
+      fileRole: body.fileRole,
+      resultStored: false,
+      writeCount: 0,
+      replayed: false
+    });
+  }
+
+  async function reconcileZeroCallArtifactFailure(input = {}) {
+    assertReady();
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_INPUT_INVALID", "top20 reconciliation input is invalid", 400);
+    }
+    const jobId = String(input.jobId || "");
+    const expectedWorkflowRevision = Number(input.workflowRevision);
+    const expectedProviderWorkflowRevision = Number(input.providerWorkflowRevision);
+    if (
+      !/^job-top20-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(jobId)
+      || !Number.isInteger(expectedWorkflowRevision)
+      || expectedWorkflowRevision < 0
+      || !Number.isInteger(expectedProviderWorkflowRevision)
+      || expectedProviderWorkflowRevision < 0
+    ) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_INPUT_INVALID", "top20 reconciliation identity is invalid", 400);
+    }
+    const job = await readJob(jobId);
+    const entry = job ? payloads.get(job.jobId) : null;
+    const leaseExpired = Date.parse(String(job?.leaseExpiresAt || "")) <= currentTimeMs();
+    if (
+      !job
+      || !entry
+      || job.backendId !== COLLECTION_WORKER_V2_TOP20_BACKEND_ID
+      || job.state !== "collecting"
+      || job.workflowRevision !== expectedWorkflowRevision
+      || Number(entry.providerWorkflowRevision) !== expectedProviderWorkflowRevision
+      || Number(job.providerAttemptCount || 0) !== 0
+      || !leaseExpired
+      || entry.lifecycle !== "active"
+    ) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_RECONCILIATION_NOT_ELIGIBLE", "top20 zero-call reconciliation is not eligible", 409);
+    }
+    const providerState = await providerStore.read();
+    if (
+      providerState.state !== "probe_allowed"
+      || providerState.workflowRevision !== expectedProviderWorkflowRevision
+    ) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_RECONCILIATION_PROVIDER_AMBIGUOUS", "top20 provider reservation is not eligible for reconciliation", 409);
+    }
+    const outcomeReceiptHash = sha256Hex(
+      `collection-worker-v2-top20-zero-call-reconciliation.v1\0${job.jobId}\0${job.workflowRevision}\0${providerState.workflowRevision}`
+    );
+    await providerStore.releaseAttempt({
+      expectedWorkflowRevision: providerState.workflowRevision,
+      outcomeReceiptHash,
+      now: now()
+    });
+    const terminal = await jobStore.transitionJob({
+      jobId: job.jobId,
+      expectedWorkflowRevision: job.workflowRevision,
+      workerId: job.workerId,
+      nextState: "indeterminate",
+      failureCode: "COLLECTION_WORKER_V2_TOP20_FAILURE_RECEIPT_MISSING",
+      now: now()
+    });
+    markPayloadTerminal(terminal.jobId, "indeterminate");
+    safeTop20Log("top20_job_terminal", {
+      timestamp: new Date(now()).toISOString(),
+      jobId: terminal.jobId,
+      contractHash: terminal.contractHash,
+      executionIdentityHash: terminal.executionIdentityHash,
+      workerCommit: targetWorkerCommit,
+      jobState: terminal.state,
+      failureCode: terminal.failureCode
+    });
+    return Object.freeze({
+      status: "indeterminate",
+      code: terminal.failureCode,
+      jobState: terminal.state,
+      providerAttemptCount: 0,
+      executedCallCount: 0,
       resultStored: false,
       writeCount: 0,
       replayed: false
@@ -1848,6 +1959,23 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     prepareMainPlaceRecoveryProbeTrustedAdmin,
     prepareDryRunTrustedAdmin,
     recordFailure,
+    reconcileZeroCallArtifactFailure,
+    async reconciliationCandidate() {
+      const snapshot = await jobStore.readSnapshot();
+      const active = snapshot.jobs
+        .filter((job) => job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID && job.state === "collecting")
+        .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || 0) - Date.parse(left.updatedAt || left.createdAt || 0))[0] || null;
+      const entry = active ? payloads.get(active.jobId) : null;
+      if (!active || !entry) return null;
+      return Object.freeze({
+        jobId: active.jobId,
+        workflowRevision: active.workflowRevision,
+        providerWorkflowRevision: entry.providerWorkflowRevision,
+        providerAttemptCount: Number(active.providerAttemptCount || 0),
+        leaseExpired: Date.parse(String(active.leaseExpiresAt || "")) <= currentTimeMs(),
+        payloadActive: entry.lifecycle === "active"
+      });
+    },
     finalizeMainPlaceRecoveryProbe,
     markTerminalPayload(input = {}) {
       const jobId = String(input.jobId || "");

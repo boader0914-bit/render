@@ -25,6 +25,7 @@ const {
   executeV2Top20MainPlaceRecoveryProbe
 } = require("./collection_worker_v2_top20_collector.cjs");
 const {
+  auditV2Top20ArtifactFiles,
   buildV2Top20FinalArtifactFiles
 } = require("./collection_worker_v2_top20_artifact.cjs");
 const {
@@ -73,6 +74,27 @@ const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SAFE_FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/u;
 const SAFE_SUBTYPE_PATTERN = /^(?:http_403|http_429|challenge_html|unknown_access_block)$/u;
 const DIAGNOSTIC_PATTERN = /^crawl-[a-f0-9]{12}$/u;
+const SAFE_ARTIFACT_DETECTORS = new Set([
+  "forbidden_path_token",
+  "html_extension",
+  "raw_html",
+  "url_literal",
+  "sensitive_key",
+  "bearer_token",
+  "unknown_sensitive_content"
+]);
+const SAFE_ARTIFACT_FILE_ROLES = new Set([
+  "summary",
+  "content_receipt",
+  "manifest",
+  "platform_csv",
+  "overall_csv",
+  "ads_csv",
+  "regional_csv",
+  "ddnayo_csv",
+  "detail_json",
+  "unknown"
+]);
 const MAIN_PLACE_PROBE_CONTRACT_FAILURE_CODES = new Set([
   "NAVER_LEGACY_CANARY_CONTRACT_MISMATCH",
   "V2_TOP20_MAIN_PLACE_PROBE_CONTRACT_INVALID"
@@ -108,6 +130,7 @@ class CollectionWorkerV2Top20WorkerError extends Error {
     this.executedCallCount = Number(meta.executedCallCount || 0);
     this.providerFailureSubtype = meta.providerFailureSubtype || null;
     this.diagnosticId = meta.diagnosticId || null;
+    this.safeMeta = meta.safeMeta && typeof meta.safeMeta === "object" ? Object.freeze({ ...meta.safeMeta }) : null;
     this.retryable = false;
   }
 }
@@ -150,6 +173,12 @@ function safeTop20WorkerLog(event, fields = {}) {
     providerCallAuthorized: fields.providerCallAuthorized === true,
     providerCallStarted: fields.providerCallStarted === true,
     executedCallCount: Number.isInteger(fields.executedCallCount) ? fields.executedCallCount : 0,
+    artifactDetector: String(fields.artifactDetector || ""),
+    artifactFileRole: String(fields.artifactFileRole || ""),
+    artifactFilePathHashPrefix: String(fields.artifactFilePathHashPrefix || ""),
+    artifactContentHashPrefix: String(fields.artifactContentHashPrefix || ""),
+    artifactContentLength: Number.isInteger(fields.artifactContentLength) ? fields.artifactContentLength : null,
+    artifactStage: String(fields.artifactStage || ""),
     pid: process.pid,
     hostname: os.hostname(),
     renderServiceId: String(process.env.RENDER_SERVICE_ID || ""),
@@ -479,6 +508,12 @@ function safeFailureMeta(error, observedProviderCallCount = 0) {
   const diagnosticId = DIAGNOSTIC_PATTERN.test(String(error?.diagnosticId || ""))
     ? error.diagnosticId
     : null;
+  const detector = SAFE_ARTIFACT_DETECTORS.has(String(error?.safeMeta?.detector || ""))
+    ? error.safeMeta.detector
+    : null;
+  const fileRole = SAFE_ARTIFACT_FILE_ROLES.has(String(error?.safeMeta?.fileRole || ""))
+    ? error.safeMeta.fileRole
+    : null;
   return Object.freeze({
     code: SAFE_FAILURE_CODE_PATTERN.test(String(error?.code || ""))
       ? error.code
@@ -486,7 +521,9 @@ function safeFailureMeta(error, observedProviderCallCount = 0) {
     providerAttemptCount: executedCallCount > 0 ? 1 : 0,
     executedCallCount,
     providerFailureSubtype,
-    diagnosticId
+    diagnosticId,
+    detector,
+    fileRole
   });
 }
 
@@ -651,7 +688,9 @@ async function runCollectionWorkerV2Top20(input = {}) {
       executedCallCount: failure.executedCallCount,
       code: failure.code,
       providerFailureSubtype: failure.providerFailureSubtype,
-      diagnosticId: failure.diagnosticId
+      diagnosticId: failure.diagnosticId,
+      detector: failure.detector,
+      fileRole: failure.fileRole
     };
     return postReceiptWithOneInternalRecovery({
       baseUrl: worker.baseUrl,
@@ -662,6 +701,44 @@ async function runCollectionWorkerV2Top20(input = {}) {
       path: COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
       requestPrivateKey: worker.requestPrivateKey
     });
+  }
+
+  async function deliverFailureReceiptOrThrow(error) {
+    try {
+      const receipt = await sendFailure(error);
+      if (
+        !receipt
+        || !["failed", "cancelled"].includes(String(receipt.jobState || ""))
+        || receipt.resultStored !== false
+        || receipt.writeCount !== 0
+      ) {
+        throw fail(
+          "COLLECTION_WORKER_V2_TOP20_FAILURE_RECEIPT_INVALID",
+          "Preview did not terminalize the top20 Worker failure",
+          502,
+          { safeMeta: error?.safeMeta || null }
+        );
+      }
+      return receipt;
+    } catch (receiptError) {
+      safeTop20WorkerLog("top20_failure_receipt_unacknowledged", {
+        jobId: verifiedJob.jobId,
+        contractHash: verifiedJob.contractHash,
+        executionIdentityHash: verifiedJob.executionIdentityHash,
+        workerCommit: worker.commit,
+        jobState: "indeterminate",
+        failureCode: String(error?.code || "COLLECTION_WORKER_V2_TOP20_EXECUTION_FAILED"),
+        parentErrorCode: String(receiptError?.code || "COLLECTION_WORKER_V2_TOP20_RECEIPT_INDETERMINATE"),
+        executedCallCount: safeFailureMeta(error, providerCallCount).executedCallCount
+      });
+      if (String(receiptError?.code || "") === "COLLECTION_WORKER_V2_TOP20_FAILURE_RECEIPT_INVALID") throw receiptError;
+      throw fail(
+        "COLLECTION_WORKER_V2_TOP20_RECEIPT_INDETERMINATE",
+        "Preview did not durably acknowledge the top20 failure receipt",
+        502,
+        { safeMeta: error?.safeMeta || null }
+      );
+    }
   }
 
   try {
@@ -692,7 +769,7 @@ async function runCollectionWorkerV2Top20(input = {}) {
       requestPrivateKey: worker.requestPrivateKey
     });
   } catch (error) {
-    await sendFailure(error).catch(() => {});
+    await deliverFailureReceiptOrThrow(error);
     throw error;
   }
 
@@ -862,14 +939,14 @@ async function runCollectionWorkerV2Top20(input = {}) {
       "buildV2Top20FinalArtifactFiles is not available",
       500
     );
-    await sendFailure(error).catch(() => {});
+    await deliverFailureReceiptOrThrow(error);
     throw error;
   }
 
-  let collected;
   let finalArtifactInput;
+  let signedArtifact;
   try {
-    collected = await collectorExecutor({
+    const collected = await collectorExecutor({
       baseEnvironment: environment,
       contract: execution.contract,
       contractHash: verifiedJob.contractHash,
@@ -937,8 +1014,61 @@ async function runCollectionWorkerV2Top20(input = {}) {
       executionIdentityHash: verifiedJob.executionIdentityHash,
       providerWorkflowRevision
     });
+    const artifactAudit = auditV2Top20ArtifactFiles(finalArtifactInput.files);
+    const rejected = artifactAudit.find((entry) => entry.accepted !== true);
+    if (rejected) {
+      throw fail(
+        "COLLECTION_ARTIFACT_SENSITIVE_CONTENT",
+        "top20 artifact contains prohibited material",
+        403,
+        {
+          safeMeta: {
+            detector: rejected.detector,
+            fileRole: rejected.fileRole,
+            safeFilePath: rejected.safePath,
+            filePathHashPrefix: rejected.filePathHashPrefix,
+            contentHashPrefix: rejected.sha256Prefix,
+            contentLength: rejected.byteLength,
+            stage: "bundle_build"
+          }
+        }
+      );
+    }
+    signedArtifact = buildCollectionArtifactBundle({
+      identity: {
+        jobId: verifiedJob.jobId,
+        attemptId: verifiedJob.attemptId,
+        workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+        workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+        runtimeId,
+        contractHash: verifiedJob.contractHash,
+        executionIdentityHash: verifiedJob.executionIdentityHash
+      },
+      files: finalArtifactInput.files
+    }, {
+      privateKey: worker.artifactPrivateKey,
+      keyId: COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID
+    });
   } catch (error) {
-    await sendFailure(error).catch(() => {});
+    const sensitive = error?.safeMeta || null;
+    if (String(error?.code || "") === "COLLECTION_ARTIFACT_SENSITIVE_CONTENT") {
+      safeTop20WorkerLog("collection_artifact_sensitive_rejected", {
+        jobId: verifiedJob.jobId,
+        contractHash: verifiedJob.contractHash,
+        executionIdentityHash: verifiedJob.executionIdentityHash,
+        workerCommit: worker.commit,
+        jobState: "collecting",
+        failureCode: error.code,
+        executedCallCount: safeFailureMeta(error, providerCallCount).executedCallCount,
+        artifactDetector: String(sensitive?.detector || ""),
+        artifactFileRole: String(sensitive?.fileRole || ""),
+        artifactFilePathHashPrefix: String(sensitive?.filePathHashPrefix || ""),
+        artifactContentHashPrefix: String(sensitive?.contentHashPrefix || ""),
+        artifactContentLength: Number.isInteger(sensitive?.contentLength) ? sensitive.contentLength : null,
+        artifactStage: String(sensitive?.stage || "bundle_build")
+      });
+    }
+    await deliverFailureReceiptOrThrow(error);
     throw fail(
       String(error?.code || "COLLECTION_WORKER_V2_TOP20_EXECUTION_FAILED"),
       "top20 Worker collection failed",
@@ -946,22 +1076,6 @@ async function runCollectionWorkerV2Top20(input = {}) {
       safeFailureMeta(error, providerCallCount)
     );
   }
-
-  const signedArtifact = buildCollectionArtifactBundle({
-    identity: {
-      jobId: verifiedJob.jobId,
-      attemptId: verifiedJob.attemptId,
-      workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
-      workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
-      runtimeId,
-      contractHash: verifiedJob.contractHash,
-      executionIdentityHash: verifiedJob.executionIdentityHash
-    },
-    files: finalArtifactInput.files
-  }, {
-    privateKey: worker.artifactPrivateKey,
-    keyId: COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID
-  });
 
   const finalized = await postReceiptWithOneInternalRecovery({
     baseUrl: worker.baseUrl,
