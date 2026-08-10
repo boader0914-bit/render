@@ -151,6 +151,9 @@
     "test:collection-worker-v2-resilience-fixtures": "node scripts/test_collection_worker_v2_top20_resilience.cjs",
     "test:collection-worker-main-place-probe-fixtures": "node scripts/test_collection_worker_main_place_probe.cjs",
     "test:collection-worker-run-transaction": "node scripts/test_collection_worker_run_transaction.cjs",
+    "test:collection-worker-resilient-run-projection": "node scripts/test_collection_worker_resilient_run_projection.cjs",
+    "test:collection-worker-finalize-terminal-fixtures": "node scripts/test_collection_worker_v2_top20_orchestrator.cjs && node scripts/test_collection_worker_v2_top20_worker.cjs",
+    "test:collection-worker-terminal-ui-fixtures": "node scripts/test_collection_worker_terminal_ui.cjs",
     "test:collection-worker-readiness-fixtures": "npm run test:collection-worker-contract-fixtures && npm run test:collection-worker-artifact-fixtures && npm run test:collection-worker-runtime-fixtures && npm run test:collection-worker-no-store-canary-fixtures && npm run test:collection-worker-naver-canary-fixtures && npm run test:collection-worker-v2-top20-fixtures"
   },
   "engines": {

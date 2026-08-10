@@ -13,6 +13,15 @@ const JOB_ID_PATTERN = /^job[-_][a-z0-9][a-z0-9_-]{7,95}$/u;
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{2,127}$/u;
 const FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/u;
+const COLLECTION_STATUS_VALUES = new Set(["complete", "partial", "rank_only"]);
+const PROVIDER_OPERATIONS = new Set([
+  "main_place",
+  "booking_business",
+  "booking_business_graphql",
+  "booking_business_place_page",
+  "booking_items",
+  "daily_schedule",
+]);
 const TERMINAL_JOB_STATES = new Set([
   "validated_no_store",
   "blocked",
@@ -28,7 +37,7 @@ const TRANSITIONS = Object.freeze({
   collecting: new Set(["artifact_received", "validated_no_store", "failure_received", "blocked", "failed", "cancelled", "indeterminate"]),
   artifact_received: new Set(["validated", "validated_no_store", "blocked", "failed", "rejected"]),
   failure_received: new Set(["failed", "indeterminate"]),
-  validated: new Set(["effects_applied", "rejected"]),
+  validated: new Set(["effects_applied", "rejected", "failed"]),
   effects_applied: new Set(["committed", "indeterminate"]),
   validated_no_store: new Set(),
   blocked: new Set(),
@@ -121,9 +130,24 @@ function validateStoredJob(job) {
   if (job.leaseExpiresAt && !Number.isFinite(Date.parse(String(job.leaseExpiresAt)))) return false;
   if (job.artifactHash && !HASH_PATTERN.test(String(job.artifactHash))) return false;
   if (job.failureReceiptHash && !HASH_PATTERN.test(String(job.failureReceiptHash))) return false;
+  if (job.failureStage && job.failureStage !== "run_projection") return false;
+  if (job.projectionReason && !/^[a-z][a-z_]{2,95}$/u.test(String(job.projectionReason))) return false;
+  if (job.collectionStatus && !COLLECTION_STATUS_VALUES.has(String(job.collectionStatus))) return false;
+  if (job.lastProviderOperation && !PROVIDER_OPERATIONS.has(String(job.lastProviderOperation))) return false;
+  if (
+    job.lastRequestOrdinal !== undefined
+    && job.lastRequestOrdinal !== null
+    && (!Number.isInteger(job.lastRequestOrdinal) || job.lastRequestOrdinal < 1 || job.lastRequestOrdinal > 241)
+  ) return false;
+  if (Boolean(job.lastProviderOperation) !== Boolean(job.lastRequestOrdinal)) return false;
   if (
     job.providerAttemptCount !== undefined
     && (!Number.isInteger(job.providerAttemptCount) || ![0, 1].includes(job.providerAttemptCount))
+  ) return false;
+  if (
+    job.executedCallCount !== undefined
+    && job.executedCallCount !== null
+    && (!Number.isInteger(job.executedCallCount) || job.executedCallCount < 0 || job.executedCallCount > 241)
   ) return false;
   return true;
 }
@@ -218,7 +242,13 @@ function createCollectionJobStore(options = {}) {
         artifactHash: "",
         failureReceiptHash: "",
         providerAttemptCount: 0,
+        executedCallCount: null,
         failureCode: "",
+        failureStage: "",
+        projectionReason: "",
+        collectionStatus: "",
+        lastProviderOperation: "",
+        lastRequestOrdinal: null,
         cancellationRequested: false,
         automaticRetry: false,
         automaticFallback: false,
@@ -295,7 +325,52 @@ function createCollectionJobStore(options = {}) {
       if (input.providerAttemptCount !== undefined) {
         job.providerAttemptCount = boundedProviderCalls(input.providerAttemptCount);
       }
+      if (input.executedCallCount !== undefined) {
+        if (input.executedCallCount === null) {
+          job.executedCallCount = null;
+        } else {
+          const executedCallCount = nonNegativeInteger(input.executedCallCount, "executedCallCount");
+          if (executedCallCount > 241) {
+            throw storeError("COLLECTION_JOB_STORE_INPUT_INVALID", "executedCallCount is invalid", 400);
+          }
+          job.executedCallCount = executedCallCount;
+        }
+      }
       if (input.failureCode) job.failureCode = nonEmptyId(input.failureCode, "failureCode", FAILURE_CODE_PATTERN);
+      if (input.failureStage !== undefined) {
+        const failureStage = String(input.failureStage || "");
+        if (failureStage && failureStage !== "run_projection") {
+          throw storeError("COLLECTION_JOB_STORE_INPUT_INVALID", "failureStage is invalid", 400);
+        }
+        job.failureStage = failureStage;
+      }
+      if (input.projectionReason !== undefined) {
+        const projectionReason = String(input.projectionReason || "");
+        if (projectionReason && !/^[a-z][a-z_]{2,95}$/u.test(projectionReason)) {
+          throw storeError("COLLECTION_JOB_STORE_INPUT_INVALID", "projectionReason is invalid", 400);
+        }
+        job.projectionReason = projectionReason;
+      }
+      if (input.collectionStatus !== undefined) {
+        const collectionStatus = String(input.collectionStatus || "");
+        if (collectionStatus && !COLLECTION_STATUS_VALUES.has(collectionStatus)) {
+          throw storeError("COLLECTION_JOB_STORE_INPUT_INVALID", "collectionStatus is invalid", 400);
+        }
+        job.collectionStatus = collectionStatus;
+      }
+      if (input.lastProviderOperation !== undefined || input.lastRequestOrdinal !== undefined) {
+        const operation = input.lastProviderOperation === null || input.lastProviderOperation === undefined
+          ? ""
+          : String(input.lastProviderOperation);
+        const ordinal = input.lastRequestOrdinal === null || input.lastRequestOrdinal === undefined
+          ? null
+          : Number(input.lastRequestOrdinal);
+        if (Boolean(operation) !== Boolean(ordinal) || operation && !PROVIDER_OPERATIONS.has(operation) || ordinal !== null && (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 241)) {
+          throw storeError("COLLECTION_JOB_STORE_INPUT_INVALID", "last provider call is invalid", 400);
+        }
+        job.lastProviderOperation = operation;
+        job.lastRequestOrdinal = ordinal;
+      }
       if (TERMINAL_JOB_STATES.has(nextState)) job.leaseExpiresAt = "";
       store.workflowRevision += 1;
       updated = job;

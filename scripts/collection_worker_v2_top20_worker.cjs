@@ -1163,6 +1163,41 @@ async function runCollectionWorkerV2Top20(input = {}) {
     path: COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
     requestPrivateKey: worker.requestPrivateKey
   });
+  const projectionTerminal = finalized?.terminalAcknowledged === true
+    && finalized?.status === "failed"
+    && finalized?.jobState === "failed"
+    && finalized?.failureStage === "run_projection"
+    && [
+      "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID",
+      "COLLECTION_RUN_OUTPUT_ARTIFACT_INVALID",
+      "COLLECTION_RUN_OUTPUT_TRANSACTION_INVALID"
+    ].includes(String(finalized?.code || ""));
+  if (projectionTerminal) {
+    // Preview owns a transaction/projection failure after it has accepted this
+    // immutable artifact.  It has already terminalized the job, so emitting a
+    // Worker Failure Receipt would be a second, conflicting terminal path.
+    return Object.freeze({
+      schemaVersion: COLLECTION_WORKER_V2_TOP20_WORKER_SCHEMA_VERSION,
+      status: "failed",
+      code: finalized.code,
+      failureStage: "run_projection",
+      projectionReason: finalized.projectionReason || null,
+      targetServiceId: COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
+      targetCommit: worker.commit,
+      executionIdentityHash: verifiedJob.executionIdentityHash,
+      runtimeFingerprint,
+      providerAttemptCount: finalized.providerAttemptCount ?? finalArtifactInput.summary.providerAttemptCount ?? null,
+      executedCallCount: finalized.executedCallCount ?? finalArtifactInput.summary.executedCallCount ?? null,
+      automaticRetry: false,
+      automaticFallback: false,
+      jobState: "failed",
+      transactionReceiptId: null,
+      resultStored: false,
+      writeCount: 0,
+      terminalAcknowledged: true,
+      replayed: finalized.replayed === true
+    });
+  }
   if (
     finalized?.status !== "ready"
     || finalized.jobState !== "committed"

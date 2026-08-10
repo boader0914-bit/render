@@ -97,6 +97,27 @@ const CANCELLATION_FAILURE_CODES = new Set([
 ]);
 const SAFE_SUBTYPE_PATTERN = /^(?:http_403|http_429|challenge_html|unknown_access_block)$/u;
 const DIAGNOSTIC_PATTERN = /^crawl-[a-f0-9]{12}$/u;
+const RUN_PROJECTION_FAILURE_CODES = new Set([
+  "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID",
+  "COLLECTION_RUN_OUTPUT_ARTIFACT_INVALID",
+  "COLLECTION_RUN_OUTPUT_TRANSACTION_INVALID"
+]);
+const SAFE_PROJECTION_REASONS = new Set([
+  "csv_quoting_invalid",
+  "csv_header_invalid",
+  "csv_row_invalid",
+  "ranking_incomplete",
+  "ranking_duplicate",
+  "company_identity_mismatch",
+  "unsupported_target_status",
+  "ready_product_observation_missing",
+  "ready_revenue_observation_incomplete",
+  "zero_contains_nonzero_observation",
+  "projection_count_mismatch",
+  "projection_reference_mismatch",
+  "projection_schema_invalid",
+  "unknown_projection_failure"
+]);
 const SAFE_ARTIFACT_DETECTORS = new Set([
   "forbidden_path_token",
   "html_extension",
@@ -204,11 +225,60 @@ class CollectionWorkerV2Top20OrchestratorError extends Error {
     this.retryable = false;
     this.retryAt = meta.retryAt || null;
     this.retryAfterSeconds = meta.retryAfterSeconds ?? null;
+    this.safeMeta = meta.safeMeta || null;
   }
 }
 
 function fail(code, message, statusCode = 409, meta = {}) {
   return new CollectionWorkerV2Top20OrchestratorError(code, message, statusCode, meta);
+}
+
+function safeRunProjectionFailure(error, summary) {
+  const source = error?.safeMeta && typeof error.safeMeta === "object" ? error.safeMeta : {};
+  const reason = SAFE_PROJECTION_REASONS.has(String(source.reason || ""))
+    ? String(source.reason)
+    : "unknown_projection_failure";
+  const code = RUN_PROJECTION_FAILURE_CODES.has(String(error?.code || ""))
+    ? String(error.code)
+    : "COLLECTION_RUN_OUTPUT_TRANSACTION_INVALID";
+  return Object.freeze({
+    code,
+    failureStage: "run_projection",
+    projectionReason: reason,
+    safeMeta: Object.freeze({
+      stage: "run_projection",
+      reason,
+      collectionStatus: String(source.collectionStatus || summary.collectionStatus || ""),
+      targetStatus: typeof source.targetStatus === "string" ? source.targetStatus : null,
+      companyOrdinal: Number.isSafeInteger(source.companyOrdinal) ? source.companyOrdinal : null,
+      field: typeof source.field === "string" ? source.field : null,
+      expectedKind: typeof source.expectedKind === "string" ? source.expectedKind : null,
+      observedKind: typeof source.observedKind === "string" ? source.observedKind : null,
+      providerAttemptCount: Number.isSafeInteger(summary.providerAttemptCount) ? summary.providerAttemptCount : null,
+      executedCallCount: Number.isSafeInteger(summary.executedCallCount) ? summary.executedCallCount : null,
+    })
+  });
+}
+
+function safeArtifactLastProviderCall(verifiedArtifact) {
+  try {
+    const manifestFile = verifiedArtifact?.bundle?.files?.find((file) => file?.path === "run/manifest.json");
+    if (!manifestFile || typeof manifestFile.contentBase64 !== "string") return Object.freeze({ operation: null, requestOrdinal: null });
+    const manifest = JSON.parse(Buffer.from(manifestFile.contentBase64, "base64").toString("utf8"));
+    const trace = Array.isArray(manifest?.providerCallTrace) ? manifest.providerCallTrace : [];
+    const last = trace.at(-1);
+    const operation = String(last?.operation || "");
+    const requestOrdinal = Number(last?.requestOrdinal);
+    if (
+      !["main_place", "booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(operation)
+      || !Number.isInteger(requestOrdinal)
+      || requestOrdinal < 1
+      || requestOrdinal > V2_TOP20_CONTRACT.maximumProviderCalls
+    ) return Object.freeze({ operation: null, requestOrdinal: null });
+    return Object.freeze({ operation, requestOrdinal });
+  } catch {
+    return Object.freeze({ operation: null, requestOrdinal: null });
+  }
 }
 
 function exactKeys(value, expected, label) {
@@ -1395,6 +1465,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   }
 
   function assertTerminalArtifact(job, summary, artifactHash) {
+    const projectionTerminal = summary.status === "ready"
+      && job.state === "failed"
+      && job.failureStage === "run_projection"
+      && RUN_PROJECTION_FAILURE_CODES.has(String(job.failureCode || ""));
+    if (projectionTerminal) {
+      if (job.artifactHash !== artifactHash) {
+        throw fail("COLLECTION_WORKER_V2_TOP20_FINALIZE_CONFLICT", "top20 projection terminal artifact conflicts", 409);
+      }
+      return;
+    }
     const expectedState = summary.status === "ready" ? "committed" : summary.status === "blocked" ? "blocked" : "failed";
     const expectedCode = summary.status === "blocked"
       ? "NAVER_ACCESS_BLOCKED"
@@ -1409,25 +1489,37 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   }
 
   function finalizationResponse(job, summary, providerState, detailProviderState, artifactHash, transactionResult, replayed) {
+    const projectionTerminal = job.state === "failed" && job.failureStage === "run_projection";
+    const providerAttemptCount = Number.isSafeInteger(summary.providerAttemptCount)
+      ? summary.providerAttemptCount
+      : Number.isSafeInteger(job.providerAttemptCount) ? job.providerAttemptCount : null;
+    const executedCallCount = Number.isSafeInteger(summary.executedCallCount) ? summary.executedCallCount : null;
     return Object.freeze({
       schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
-      status: summary.status,
+      status: projectionTerminal ? "failed" : summary.status,
       collectionStatus: summary.collectionStatus || (summary.status === "ready" ? "complete" : summary.status),
-      code: summary.status === "blocked"
+      code: projectionTerminal
+        ? job.failureCode
+        : summary.status === "blocked"
         ? "NAVER_ACCESS_BLOCKED"
         : summary.status === "failed" ? "COLLECTION_WORKER_V2_TOP20_NOT_READY" : null,
       jobId: job.jobId,
       jobState: job.state,
       workflowRevision: job.workflowRevision,
       artifactHash,
-      transactionReceiptId: summary.status === "ready" ? transactionReceiptId(job, artifactHash) : null,
+      transactionReceiptId: summary.status === "ready" && !projectionTerminal ? transactionReceiptId(job, artifactHash) : null,
       providerState: providerState.state,
       mainPlaceProviderState: providerState.state,
       bookingDetailProviderState: detailProviderState?.state || null,
-      providerAttemptCount: 1,
-      executedCallCount: summary.executedCallCount,
-      resultStored: summary.status === "ready",
-      writeCount: transactionResult?.writeCount || 0,
+      providerAttemptCount,
+      executedCallCount,
+      lastProviderOperation: job.lastProviderOperation || null,
+      lastRequestOrdinal: Number.isInteger(job.lastRequestOrdinal) ? job.lastRequestOrdinal : null,
+      resultStored: job.state === "committed",
+      writeCount: transactionResult?.writeCount ?? 0,
+      failureStage: projectionTerminal ? "run_projection" : null,
+      projectionReason: projectionTerminal ? job.projectionReason || null : null,
+      terminalAcknowledged: ["committed", "blocked", "failed"].includes(job.state),
       replayed: replayed === true
     });
   }
@@ -1464,6 +1556,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       expectedSigningKeyId: COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID
     });
     const artifactHash = verifiedArtifact.bundle.bundleHash;
+    const artifactLastProviderCall = safeArtifactLastProviderCall(verifiedArtifact);
     const summary = readArtifactSummary(verifiedArtifact, job, entry);
     if (job.artifactHash && job.artifactHash !== artifactHash) {
       throw fail("COLLECTION_WORKER_V2_TOP20_FINALIZE_CONFLICT", "top20 artifact hash conflicts", 409);
@@ -1496,6 +1589,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
           workerId: job.workerId,
           nextState: "artifact_received",
           artifactHash,
+          lastProviderOperation: artifactLastProviderCall.operation,
+          lastRequestOrdinal: artifactLastProviderCall.requestOrdinal,
           now: now()
         });
       } catch (error) {
@@ -1553,16 +1648,52 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     let transactionResult = transactionResults.get(receiptId) || null;
     if (job.state === "validated") {
       if (!transactionResult) {
-        transactionResult = normalizeTransactionResult(await applyReadyTransaction(Object.freeze({
-          receiptId,
-          artifactHash,
-          signedArtifact: input.body.signedArtifact,
-          verifiedArtifact,
-          summary,
-          job: Object.freeze({ ...job }),
-          top20ContractHash: entry.top20ContractHash
-        })), receiptId);
-        transactionResults.set(receiptId, transactionResult);
+        try {
+          transactionResult = normalizeTransactionResult(await applyReadyTransaction(Object.freeze({
+            receiptId,
+            artifactHash,
+            signedArtifact: input.body.signedArtifact,
+            verifiedArtifact,
+            summary,
+            job: Object.freeze({ ...job }),
+            top20ContractHash: entry.top20ContractHash
+          })), receiptId);
+          transactionResults.set(receiptId, transactionResult);
+        } catch (error) {
+          const projectionFailure = safeRunProjectionFailure(error, summary);
+          job = await jobStore.transitionJob({
+            jobId: job.jobId,
+            expectedWorkflowRevision: job.workflowRevision,
+            workerId: job.workerId,
+            nextState: "failed",
+            artifactHash,
+            failureCode: projectionFailure.code,
+            failureStage: projectionFailure.failureStage,
+            projectionReason: projectionFailure.projectionReason,
+            collectionStatus: String(summary.collectionStatus || ""),
+            providerAttemptCount: Number.isSafeInteger(summary.providerAttemptCount)
+              ? summary.providerAttemptCount
+              : job.providerAttemptCount,
+            executedCallCount: Number.isSafeInteger(summary.executedCallCount)
+              ? summary.executedCallCount
+              : null,
+            lastProviderOperation: artifactLastProviderCall.operation,
+            lastRequestOrdinal: artifactLastProviderCall.requestOrdinal,
+            now: now()
+          });
+          markPayloadTerminal(job.jobId, "failed");
+          safeTop20Log("top20_run_projection_rejected", {
+            timestamp: new Date(now()).toISOString(),
+            jobId: job.jobId,
+            contractHash: job.contractHash,
+            executionIdentityHash: job.executionIdentityHash,
+            workerCommit: targetWorkerCommit,
+            failureCode: projectionFailure.code,
+            ...projectionFailure.safeMeta,
+            rawContentLogged: false
+          });
+          return finalizationResponse(job, summary, providerState, detailProviderState, artifactHash, null, false);
+        }
       }
       job = await jobStore.transitionJob({
         jobId: job.jobId,

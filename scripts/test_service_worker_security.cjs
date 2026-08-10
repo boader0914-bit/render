@@ -84,7 +84,7 @@ async function main() {
   assert.ok(listeners.has("fetch"), "fetch handler registered");
   assert.ok(listeners.has("activate"), "activate handler registered");
 
-  const currentCache = "lodging-datalab-pwa-v20260810-top20-artifact-projection-v49";
+  const currentCache = "lodging-datalab-pwa-v20260810-resilient-run-projection-v50";
   stores.set("lodging-datalab-pwa-v20260809-basic-collection-v47", new Map([["https://fixture.local/b2b", new Response("old-v47-private")]]));
   stores.set("lodging-datalab-pwa-v20260806-bounded-inventory-v43", new Map([["https://fixture.local/b2b", new Response("old-v43-private")]]));
   stores.set("lodging-datalab-pwa-v20260804-detail-sheet-v40", new Map([["https://fixture.local/b2b", new Response("old-v40-private")]]));
@@ -124,12 +124,12 @@ async function main() {
     method: "GET",
     mode: "cors",
     destination: "script",
-    url: "https://fixture.local/app.js?v=v2-20260810-top20-artifact-projection-v49"
+    url: "https://fixture.local/app.js?v=v2-20260810-resilient-run-projection-v50"
   });
-  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260810-top20-artifact-projection-v49");
+  assert.equal(await staticResponse.text(), "fresh:https://fixture.local/app.js?v=v2-20260810-resilient-run-projection-v50");
   await Promise.resolve();
   await Promise.resolve();
-  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260810-top20-artifact-projection-v49")), "allowlisted static asset is cached");
+  assert.ok(putCalls.some((call) => call.key.includes("/app.js?v=v2-20260810-resilient-run-projection-v50")), "allowlisted static asset is cached");
 
   fetchImpl = async () => { throw new Error("offline"); };
   const unrelatedStaticFallback = await dispatchFetch({

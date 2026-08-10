@@ -68,7 +68,14 @@ assert.deepEqual(projectedProbe, {
   writeCount: 0,
   code: null,
   jobId: "job-top20-probe",
-  runId: null
+  runId: null,
+  providerAttemptCount: null,
+  executedCallCount: null,
+  failureStage: null,
+  projectionReason: null,
+  collectionStatus: null,
+  lastProviderOperation: null,
+  lastRequestOrdinal: null
 });
 assert.deepEqual(__test.projectTop20TerminalOutcome({ jobId: "job-top20-full", state: "committed" }, { runId: "run-1", writeCount: 3 }), {
   status: "ready",
@@ -80,7 +87,14 @@ assert.deepEqual(__test.projectTop20TerminalOutcome({ jobId: "job-top20-full", s
   writeCount: 3,
   code: null,
   jobId: "job-top20-full",
-  runId: "run-1"
+  runId: "run-1",
+  providerAttemptCount: null,
+  executedCallCount: null,
+  failureStage: null,
+  projectionReason: null,
+  collectionStatus: null,
+  lastProviderOperation: null,
+  lastRequestOrdinal: null
 });
 assert.equal(__test.projectTop20TerminalOutcome({ jobId: "job-top20-blocked", state: "blocked", failureCode: "NAVER_ACCESS_BLOCKED" }).status, "blocked");
 assert.equal(__test.projectTop20TerminalOutcome({ jobId: "job-top20-failed", state: "indeterminate", failureCode: "TEST_FAILED" }).status, "failed");
@@ -100,7 +114,10 @@ assert.deepEqual(adminArtifactFailure, {
   lastProviderOperation: "daily_schedule",
   lastRequestOrdinal: 81,
   detector: "sensitive_key",
-  fileRole: "platform_csv"
+  fileRole: "platform_csv",
+  failureStage: null,
+  projectionReason: null,
+  collectionStatus: null
 });
 
 const root = path.resolve(__dirname, "..");

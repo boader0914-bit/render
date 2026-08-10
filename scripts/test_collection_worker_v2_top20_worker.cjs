@@ -204,6 +204,9 @@ async function createSystem(root, keys, options = {}) {
     operatorTokenSha256: crypto.createHash("sha256").update(OPERATOR_TOKEN).digest("hex"),
     now: () => NOW,
     async applyReadyTransaction(input) {
+      if (typeof options.applyReadyTransaction === "function") {
+        return options.applyReadyTransaction(input);
+      }
       callbackCount += 1;
       return { receiptId: input.receiptId, committed: true, writeCount: 1 };
     }
@@ -303,6 +306,59 @@ async function readyScenario(root, keys) {
   assert.equal(counters[COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH], 22);
   assert.equal(system.callbackCount(), 1, "response loss must not repeat the Preview transaction");
   assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "committed");
+  assert.equal((await system.providerStore.read()).state, "closed");
+}
+
+async function finalizeProjectionTerminalScenario(root, keys) {
+  const system = await createSystem(root, keys, {
+    keyword: "Synthetic top20 worker projection terminal lodging",
+    applyReadyTransaction() {
+      const error = new Error("synthetic Preview projection failure");
+      error.code = "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID";
+      error.safeMeta = Object.freeze({
+        stage: "run_projection",
+        reason: "ready_revenue_observation_incomplete",
+        collectionStatus: "partial",
+        targetStatus: "ready",
+        companyOrdinal: 4,
+      });
+      throw error;
+    },
+  });
+  const counters = { internal: 0, collector: 0, provider: 0 };
+  const result = await runCollectionWorkerV2Top20({
+    fixtureMode: true,
+    environment: workerEnvironment(keys),
+    internalFetchImpl: internalFetch(system, counters),
+    now: NOW,
+    runtimeFingerprint: FIXED_V2_WORKER_RUNTIME_FINGERPRINT,
+    tempBase: root,
+    async collectorExecutor(input) {
+      counters.collector += 1;
+      for (let requestOrdinal = 1; requestOrdinal <= 21; requestOrdinal += 1) {
+        await input.onProviderCall({
+          providerId: "naver_place_search",
+          operation: requestOrdinal === 1 ? "main_place" : "booking_business",
+          requestOrdinal,
+        });
+        counters.provider += 1;
+      }
+      return { providerCallCount: 21, files: manifestFiles() };
+    },
+  });
+  assert.equal(result.status, "failed");
+  assert.equal(result.code, "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID");
+  assert.equal(result.failureStage, "run_projection");
+  assert.equal(result.terminalAcknowledged, true);
+  assert.equal(result.providerAttemptCount, 1);
+  assert.equal(result.executedCallCount, 21);
+  assert.equal(result.resultStored, false);
+  assert.equal(result.writeCount, 0);
+  assert.equal(counters.collector, 1);
+  assert.equal(counters.provider, 21);
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH], 1);
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_FAILURE_PATH] || 0, 0, "Preview terminal projection failure must not send a Worker Failure Receipt");
+  assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "failed");
   assert.equal((await system.providerStore.read()).state, "closed");
 }
 
@@ -567,6 +623,7 @@ async function main() {
   try {
     await gateScenario(keys);
     await readyScenario(path.join(root, "ready"), keys);
+    await finalizeProjectionTerminalScenario(path.join(root, "projection-terminal"), keys);
     await failureScenario(path.join(root, "failure"), keys);
     await artifactFailureScenario(path.join(root, "artifact-failure"), keys);
     assert.equal(unexpectedNetworkCalls, 0, "top20 Worker fixtures must not call external networking");

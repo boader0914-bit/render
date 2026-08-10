@@ -13,13 +13,18 @@ const {
   V2_TOP20_ARTIFACT_SCHEMA_VERSION,
   verifyV2Top20ArtifactContents,
 } = require("./collection_worker_v2_top20_artifact.cjs");
+const {
+  DETAIL_STATUSES: RESILIENT_DETAIL_STATUSES,
+  summarizeResilientTop20Collection,
+} = require("./collection_worker_v2_top20_resilience.cjs");
 
 const COLLECTION_WORKER_TOP20_RESULT_SCHEMA_VERSION = "collection-worker-top20-result.v1";
 const COLLECTION_WORKER_RUN_TRANSACTION_SCHEMA_VERSION = "collection-worker-run-transaction.v1";
 const COLLECTION_WORKER_RUN_TRANSACTION_DOCUMENT_TYPE = "lodging-collection-worker-run-transaction";
 const COLLECTION_WORKER_RUN_OUTPUT_TRANSACTION_SCHEMA_VERSION = "collection-worker-run-output-transaction.v2";
 const COLLECTION_WORKER_RUN_OUTPUT_TRANSACTION_DOCUMENT_TYPE = "lodging-collection-worker-run-output-transaction";
-const COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION = "collection-worker-v2-top20-derived-projections.v1";
+const COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V1 = "collection-worker-v2-top20-derived-projections.v1";
+const COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION = "collection-worker-v2-top20-derived-projections.v2";
 const COLLECTION_WORKER_TOP20_RESULT_PATH = "top20-result.json";
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/u;
@@ -30,23 +35,81 @@ const FORBIDDEN_WORKER_STORAGE_KEY = /^(?:outputDir|runId|transactionId|stagingD
 const RAW_HTML_PATTERN = /<(?:!doctype\s+html|html|head|body|script)\b|window\.__APOLLO_STATE__/iu;
 const URL_PATTERN = /(?:https?|wss?):\/\/|(?:^|[\s"'=])www\./iu;
 const SENSITIVE_TEXT_PATTERN = /\bbearer\s+[A-Za-z0-9._~-]+|(?:client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|password)\s*[:=]/iu;
-const TERMINAL_RESULT_STATUSES = new Set(["ready", "zero"]);
+const LEGACY_TERMINAL_RESULT_STATUSES = new Set(["ready", "zero"]);
+const RESILIENT_COLLECTION_STATUSES = new Set(["complete", "partial", "rank_only"]);
+const PROJECTION_FAILURE_REASONS = new Set([
+  "csv_quoting_invalid",
+  "csv_header_invalid",
+  "csv_row_invalid",
+  "ranking_incomplete",
+  "ranking_duplicate",
+  "company_identity_mismatch",
+  "unsupported_target_status",
+  "ready_product_observation_missing",
+  "ready_revenue_observation_incomplete",
+  "zero_contains_nonzero_observation",
+  "projection_count_mismatch",
+  "projection_reference_mismatch",
+  "projection_schema_invalid",
+  "unknown_projection_failure",
+]);
+const SAFE_PROJECTION_META_FIELDS = new Set([
+  "stage",
+  "reason",
+  "collectionStatus",
+  "targetStatus",
+  "companyOrdinal",
+  "field",
+  "expectedKind",
+  "observedKind",
+  "providerAttemptCount",
+  "executedCallCount",
+]);
 const STAGE_REVISION = 1;
 const COMMIT_REVISION = 2;
 const sharedSecureStore = createSecureJsonStore();
 const runOutputQueues = new Map();
 
 class CollectionWorkerRunTransactionError extends Error {
-  constructor(code, message, statusCode = 409) {
+  constructor(code, message, statusCode = 409, safeMeta = null) {
     super(message);
     this.name = "CollectionWorkerRunTransactionError";
     this.code = code;
     this.statusCode = statusCode;
+    this.safeMeta = safeMeta;
   }
 }
 
 function fail(code, message, statusCode = 409) {
   throw new CollectionWorkerRunTransactionError(code, message, statusCode);
+}
+
+function safeProjectionMeta(value = {}) {
+  const source = isPlainObject(value) ? value : {};
+  const normalized = {};
+  for (const key of SAFE_PROJECTION_META_FIELDS) {
+    if (!Object.hasOwn(source, key)) continue;
+    const candidate = source[key];
+    if (key === "companyOrdinal" || key === "providerAttemptCount" || key === "executedCallCount") {
+      if (Number.isSafeInteger(candidate) && candidate >= 0) normalized[key] = candidate;
+      continue;
+    }
+    if (typeof candidate === "string" && candidate.length <= 96 && !/[\u0000-\u001f\u007f]/u.test(candidate)) {
+      normalized[key] = candidate;
+    }
+  }
+  normalized.stage = "run_projection";
+  return Object.freeze(normalized);
+}
+
+function projectionFail(reason, message, safeMeta = {}) {
+  const normalizedReason = PROJECTION_FAILURE_REASONS.has(reason) ? reason : "unknown_projection_failure";
+  throw new CollectionWorkerRunTransactionError(
+    "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID",
+    message,
+    409,
+    safeProjectionMeta({ ...safeMeta, reason: normalizedReason }),
+  );
 }
 
 function isPlainObject(value) {
@@ -242,7 +305,7 @@ function normalizeTop20Payload(value) {
       fail("COLLECTION_RUN_ARTIFACT_ORDER_INVALID", "top-20 results must be ordered ranks 1 through 20", 409);
     }
     const status = String(entry.status || "");
-    if (!TERMINAL_RESULT_STATUSES.has(status)) {
+    if (!LEGACY_TERMINAL_RESULT_STATUSES.has(status)) {
       fail("COLLECTION_RUN_ARTIFACT_NOT_READY", "all top-20 results must be terminal ready or zero", 409);
     }
     const company = normalizeCompany(entry.company, ordinal);
@@ -533,7 +596,7 @@ function parseProjectionCsv(content, label) {
       continue;
     }
     if (character === '"') {
-      if (field) fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", `${label} CSV quoting is invalid`, 409);
+      if (field) projectionFail("csv_quoting_invalid", `${label} CSV quoting is invalid`, { field: label });
       quoted = true;
     } else if (character === ",") {
       row.push(field);
@@ -547,22 +610,25 @@ function parseProjectionCsv(content, label) {
       field += character;
     }
   }
-  if (quoted) fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", `${label} CSV quoting is incomplete`, 409);
+  if (quoted) projectionFail("csv_quoting_invalid", `${label} CSV quoting is incomplete`, { field: label });
   if (field || row.length) {
     row.push(field.endsWith("\r") ? field.slice(0, -1) : field);
     rows.push(row);
   }
   while (rows.length && rows[rows.length - 1].every((value) => value === "")) rows.pop();
-  if (rows.length < 2) fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", `${label} CSV is empty`, 409);
+  if (rows.length < 2) projectionFail("csv_header_invalid", `${label} CSV is empty`, { field: label });
   const headers = rows.shift().map((value, index) => (
     index === 0 ? String(value).replace(/^\uFEFF/u, "") : String(value)
   ));
   if (headers.some((value) => !value) || new Set(headers).size !== headers.length) {
-    fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", `${label} CSV headers are invalid`, 409);
+    projectionFail("csv_header_invalid", `${label} CSV headers are invalid`, { field: label });
   }
   return rows.map((values, rowIndex) => {
     if (values.length !== headers.length) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", `${label} CSV row ${rowIndex + 1} is invalid`, 409);
+      projectionFail("csv_row_invalid", `${label} CSV row ${rowIndex + 1} is invalid`, {
+        field: label,
+        companyOrdinal: rowIndex + 1,
+      });
     }
     return Object.fromEntries(headers.map((header, index) => [header, values[index]]));
   });
@@ -574,7 +640,7 @@ function projectionInteger(value, label, options = {}) {
   const normalized = text.replaceAll(",", "").replace(/\s*원$/u, "");
   const number = Number(normalized);
   if (!Number.isSafeInteger(number) || number < 0) {
-    fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", `${label} is invalid`, 409);
+    projectionFail("projection_schema_invalid", `${label} is invalid`, { field: label });
   }
   return number;
 }
@@ -582,7 +648,7 @@ function projectionInteger(value, label, options = {}) {
 function projectionDisplayText(value, label, maximum = 240) {
   const text = String(value ?? "").trim();
   if (!text || text.length > maximum || /[\u0000-\u001f\u007f]/u.test(text)) {
-    fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", `${label} is invalid`, 409);
+    projectionFail("projection_schema_invalid", `${label} is invalid`, { field: label });
   }
   return text;
 }
@@ -590,6 +656,25 @@ function projectionDisplayText(value, label, maximum = 240) {
 function buildV2RunProjections(verified, transactionId, runId) {
   const manifest = verified.verifiedContents.manifest;
   const targetResults = verified.verifiedContents.targetResults;
+  const artifactSummary = verified.verifiedContents.summary || {};
+  const derivedSummary = summarizeResilientTop20Collection({
+    mainPlaceStatus: "ready",
+    targets: targetResults,
+    detailCircuitOpen: targetResults.some((target) => String(target.detailCollectionStatus || target.status || "") === "blocked"),
+  });
+  const collectionStatus = String(artifactSummary.collectionStatus || derivedSummary.collectionStatus || "");
+  const mainPlaceStatus = "ready";
+  const detailStatus = String(
+    artifactSummary.detailStatus
+    || derivedSummary.detailStatus
+    || "partial",
+  );
+  if (!RESILIENT_COLLECTION_STATUSES.has(collectionStatus) || mainPlaceStatus !== "ready") {
+    projectionFail("projection_schema_invalid", "top-20 collection summary is invalid", {
+      collectionStatus,
+      observedKind: mainPlaceStatus,
+    });
+  }
   const overallRows = parseProjectionCsv(
     decodeArtifactFile(verified.filesByPath.get("run/overall.csv")),
     "overall",
@@ -599,12 +684,19 @@ function buildV2RunProjections(verified, transactionId, runId) {
     const rank = projectionInteger(row.overall_rank, "overall_rank", { optional: true });
     if (rank === null || rank < 1 || rank > 20) continue;
     if (byRank.has(rank)) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "top-20 rank is duplicated", 409);
+      projectionFail("ranking_duplicate", "top-20 rank is duplicated", {
+        collectionStatus,
+        companyOrdinal: rank,
+      });
     }
     byRank.set(rank, row);
   }
   if (byRank.size !== 20 || !Array.isArray(targetResults) || targetResults.length !== 20) {
-    fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "top-20 projection rows are incomplete", 409);
+    projectionFail("ranking_incomplete", "top-20 projection rows are incomplete", {
+      collectionStatus,
+      expectedKind: "top20",
+      observedKind: String(byRank.size),
+    });
   }
 
   const collectedAt = instant(
@@ -633,15 +725,25 @@ function buildV2RunProjections(verified, transactionId, runId) {
     const row = byRank.get(ordinal);
     const placeId = expectedText(target.placeId, KEY_PATTERN, `targetResults[${index}].placeId`);
     if (String(row.place_id || "").trim() !== placeId || Number(target.companyOrdinal) !== ordinal) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "top-20 company identity does not match the manifest", 409);
+      projectionFail("company_identity_mismatch", "top-20 company identity does not match the manifest", {
+        collectionStatus,
+        companyOrdinal: ordinal,
+      });
     }
-    const status = String(target.status || "");
-    if (!TERMINAL_RESULT_STATUSES.has(status)) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "top-20 company status is invalid", 409);
+    const status = String(target.detailCollectionStatus || target.status || "");
+    if (!RESILIENT_DETAIL_STATUSES.has(status)) {
+      projectionFail("unsupported_target_status", "top-20 company status is invalid", {
+        collectionStatus,
+        targetStatus: status,
+        companyOrdinal: ordinal,
+      });
     }
     const companyKey = expectedText(`naver-place:${placeId}`, KEY_PATTERN, "companyKey");
     if (companyKeys.has(companyKey)) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "top-20 company identity is duplicated", 409);
+      projectionFail("ranking_duplicate", "top-20 company identity is duplicated", {
+        collectionStatus,
+        companyOrdinal: ordinal,
+      });
     }
     companyKeys.add(companyKey);
     const company = Object.freeze({
@@ -651,32 +753,58 @@ function buildV2RunProjections(verified, transactionId, runId) {
       ordinal,
       rank: ordinal,
       status,
+      detailCollectionStatus: status,
       companyKey,
       placeId,
       displayName: projectionDisplayText(row["업체명"], "company.displayName", 160),
       address: String(row["주소"] || "").trim().slice(0, 300),
       regionKey,
+      bookingBusinessIdSource: String(target.bookingBusinessIdSource || "none"),
+      revenueInputValid: target.revenueInputValid === true,
+      collectionStatus,
     });
     companies.push(company);
     resultStatuses.push(Object.freeze({ ordinal, rank: ordinal, companyKey, status }));
 
-    const nightProductCount = projectionInteger(row["숙박상품수"], "nightProductCount", { optional: true }) ?? 0;
-    const dayUseProductCount = projectionInteger(row["데이유즈상품수"], "dayUseProductCount", { optional: true }) ?? 0;
-    const nightAvailableUnits = projectionInteger(row["숙박예약가능수"], "nightAvailableUnits", { optional: true }) ?? 0;
-    const dayUseAvailableUnits = projectionInteger(row["데이유즈예약가능수"], "dayUseAvailableUnits", { optional: true }) ?? 0;
-    const nightPrice = projectionInteger(row["숙박기준일평균판매단가"] || row["예약최저가"], "nightPrice", { optional: true }) ?? 0;
-    const dayUsePrice = projectionInteger(row["데이유즈기준일평균판매단가"], "dayUsePrice", { optional: true }) ?? 0;
-    if (status === "ready" && nightProductCount + dayUseProductCount < 1) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "ready company has no product observation", 409);
-    }
-    if (status === "zero" && (nightProductCount || dayUseProductCount || nightAvailableUnits || dayUseAvailableUnits)) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "zero company contains product inventory", 409);
-    }
-    for (const summary of [
+    const nightProductCount = projectionInteger(row["숙박상품수"], "nightProductCount", { optional: true });
+    const dayUseProductCount = projectionInteger(row["데이유즈상품수"], "dayUseProductCount", { optional: true });
+    const nightAvailableUnits = projectionInteger(row["숙박예약가능수"], "nightAvailableUnits", { optional: true });
+    const dayUseAvailableUnits = projectionInteger(row["데이유즈예약가능수"], "dayUseAvailableUnits", { optional: true });
+    const nightPrice = projectionInteger(row["숙박기준일평균판매단가"] || row["예약최저가"], "nightPrice", { optional: true });
+    const dayUsePrice = projectionInteger(row["데이유즈기준일평균판매단가"], "dayUsePrice", { optional: true });
+    const productSummaries = [
       { stayType: "overnight", count: nightProductCount, price: nightPrice, availableUnits: nightAvailableUnits },
       { stayType: "day_use", count: dayUseProductCount, price: dayUsePrice, availableUnits: dayUseAvailableUnits },
-    ]) {
-      if (!summary.count) continue;
+    ];
+    const observedProductCount = productSummaries.reduce((total, item) => total + (item.count ?? 0), 0);
+    const hasConfirmedProduct = productSummaries.some((item) => item.count !== null && item.count > 0 && item.price !== null && item.availableUnits !== null);
+    if (status === "ready" && !hasConfirmedProduct) {
+      projectionFail("ready_product_observation_missing", "ready company has no product observation", {
+        collectionStatus,
+        targetStatus: status,
+        companyOrdinal: ordinal,
+      });
+    }
+    if (status === "zero" && (observedProductCount > 0 || productSummaries.some((item) => (item.availableUnits ?? 0) > 0))) {
+      projectionFail("zero_contains_nonzero_observation", "zero company contains product inventory", {
+        collectionStatus,
+        targetStatus: status,
+        companyOrdinal: ordinal,
+      });
+    }
+    const productAllowed = status === "ready" || (status === "partial" && target.revenueInputValid === true);
+    for (const summary of productSummaries) {
+      if (!productAllowed || !summary.count) continue;
+      if (summary.price === null || summary.availableUnits === null) {
+        if (status === "ready") {
+          projectionFail("ready_product_observation_missing", "ready company product observation is incomplete", {
+            collectionStatus,
+            targetStatus: status,
+            companyOrdinal: ordinal,
+          });
+        }
+        continue;
+      }
       const productKey = `${companyKey}:${summary.stayType}:summary`;
       products.push(Object.freeze({
         projectionId: `${runId}:product:${productKey}`,
@@ -691,7 +819,7 @@ function buildV2RunProjections(verified, transactionId, runId) {
         sourceProductCount: summary.count,
         price: summary.price,
         availableUnits: summary.availableUnits,
-        status: "ready",
+        status,
         projectionKind: "inventory_summary",
       }));
     }
@@ -700,42 +828,72 @@ function buildV2RunProjections(verified, transactionId, runId) {
     const dayUseRevenue = projectionInteger(row["데이유즈기준일예상매출"], "dayUseRevenue", { optional: true });
     const nightSoldUnits = projectionInteger(row["숙박기준일가격확인판매수량"], "nightSoldUnits", { optional: true });
     const dayUseSoldUnits = projectionInteger(row["데이유즈기준일가격확인판매수량"], "dayUseSoldUnits", { optional: true });
-    if (status === "ready" && [nightRevenue, dayUseRevenue, nightSoldUnits, dayUseSoldUnits].some((value) => value === null)) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "ready company revenue observation is incomplete", 409);
+    const revenueFields = [nightRevenue, dayUseRevenue, nightSoldUnits, dayUseSoldUnits];
+    const revenueObservationComplete = revenueFields.every((value) => value !== null);
+    if (status === "ready" && (target.revenueInputValid !== true || !revenueObservationComplete)) {
+      projectionFail("ready_revenue_observation_incomplete", "ready company revenue observation is incomplete", {
+        collectionStatus,
+        targetStatus: status,
+        companyOrdinal: ordinal,
+      });
     }
     const estimatedRevenue = (nightRevenue ?? 0) + (dayUseRevenue ?? 0);
     const estimatedSoldUnits = (nightSoldUnits ?? 0) + (dayUseSoldUnits ?? 0);
-    if (status === "zero" && (estimatedRevenue || estimatedSoldUnits)) {
-      fail("COLLECTION_RUN_OUTPUT_PROJECTION_INVALID", "zero company revenue is invalid", 409);
+    if (status === "zero" && revenueObservationComplete && (estimatedRevenue || estimatedSoldUnits)) {
+      projectionFail("zero_contains_nonzero_observation", "zero company revenue is invalid", {
+        collectionStatus,
+        targetStatus: status,
+        companyOrdinal: ordinal,
+      });
     }
-    const revenue = Object.freeze({
-      projectionId: `${runId}:revenue:${companyKey}`,
-      runId,
-      artifactHash: verified.artifactHash,
-      companyKey,
-      ordinal,
-      rank: ordinal,
-      status,
-      estimatedRevenue,
-      estimatedSoldUnits,
-      currency: "KRW",
-      estimateBasis: String(manifest.revenueEstimateBasis || "public_inventory_estimate"),
+    const revenueAllowed = target.revenueInputValid === true
+      && revenueObservationComplete
+      && ["ready", "zero", "partial"].includes(status);
+    if (revenueAllowed) {
+      const revenue = Object.freeze({
+        projectionId: `${runId}:revenue:${companyKey}`,
+        runId,
+        artifactHash: verified.artifactHash,
+        companyKey,
+        ordinal,
+        rank: ordinal,
+        status,
+        estimatedRevenue,
+        estimatedSoldUnits,
+        currency: "KRW",
+        estimateBasis: String(manifest.revenueEstimateBasis || "public_inventory_estimate"),
+      });
+      revenues.push(revenue);
+      history.push(Object.freeze({
+        observationId: sha256Hex(`collection-worker-v2-history.v1\0${runId}\0${companyKey}\0${collectedAt}`),
+        runId,
+        artifactHash: verified.artifactHash,
+        companyKey,
+        ordinal,
+        rank: ordinal,
+        status,
+        estimatedRevenue,
+        estimatedSoldUnits,
+        currency: "KRW",
+        source: "naver_booking_public_inventory",
+        observedAt: collectedAt,
+      }));
+    }
+  }
+
+  const statusCount = (status) => resultStatuses.filter((result) => result.status === status).length;
+  const detailReadyCompanyCount = statusCount("ready") + statusCount("zero");
+  const unresolvedCount = 20 - detailReadyCompanyCount;
+  if (
+    collectionStatus === "complete" && (unresolvedCount !== 0 || detailReadyCompanyCount !== 20)
+    || collectionStatus === "partial" && (detailReadyCompanyCount < 1 || unresolvedCount < 1)
+    || collectionStatus === "rank_only" && (detailReadyCompanyCount !== 0 || products.length !== 0 || revenues.length !== 0 || history.length !== 0)
+  ) {
+    projectionFail("projection_count_mismatch", "top-20 collection status does not match target states", {
+      collectionStatus,
+      expectedKind: collectionStatus,
+      observedKind: String(detailReadyCompanyCount),
     });
-    revenues.push(revenue);
-    history.push(Object.freeze({
-      observationId: sha256Hex(`collection-worker-v2-history.v1\0${runId}\0${companyKey}\0${collectedAt}`),
-      runId,
-      artifactHash: verified.artifactHash,
-      companyKey,
-      ordinal,
-      rank: ordinal,
-      status,
-      estimatedRevenue,
-      estimatedSoldUnits,
-      currency: "KRW",
-      source: "naver_booking_public_inventory",
-      observedAt: collectedAt,
-    }));
   }
 
   const run = Object.freeze({
@@ -749,9 +907,23 @@ function buildV2RunProjections(verified, transactionId, runId) {
     status: "ready",
     measurementPeriod,
     collectedAt,
+    collectionStatus,
+    mainPlaceStatus,
+    detailStatus,
     resultCount: 20,
-    readyCount: resultStatuses.filter((result) => result.status === "ready").length,
-    zeroCount: resultStatuses.filter((result) => result.status === "zero").length,
+    readyCount: statusCount("ready"),
+    zeroCount: statusCount("zero"),
+    partialCount: statusCount("partial"),
+    blockedCount: statusCount("blocked"),
+    failedCount: statusCount("failed"),
+    notCollectedCount: statusCount("not_collected"),
+    missingCount: statusCount("missing"),
+    detailReadyCompanyCount,
+    revenueReadyCompanyCount: targetResults.filter((target) => target.revenueInputValid === true).length,
+    detailCoverageRate: detailReadyCompanyCount / 20,
+    revenueCoverageRate: targetResults.filter((target) => target.revenueInputValid === true).length / 20,
+    revenueProjectionCount: revenues.length,
+    historyProjectionCount: history.length,
     resultStatuses: Object.freeze(resultStatuses),
   });
   return Object.freeze({
@@ -858,7 +1030,7 @@ function buildRunOutputStageRecord(verified, now) {
   });
 }
 
-function runOutputProjectionsValid(record) {
+function runOutputProjectionsV1Valid(record) {
   if (!isPlainObject(record.projections) || !isPlainObject(record.projections.run)) return false;
   const { run, companies, products, revenues, history } = record.projections;
   if (
@@ -868,7 +1040,7 @@ function runOutputProjectionsValid(record) {
     || run.jobId !== record.jobId
     || run.contractHash !== record.contractHash
     || run.executionIdentityHash !== record.executionIdentityHash
-    || run.schemaVersion !== COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION
+    || run.schemaVersion !== COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V1
     || run.status !== "ready"
     || run.resultCount !== 20
     || !Number.isFinite(Date.parse(run.collectedAt))
@@ -896,7 +1068,7 @@ function runOutputProjectionsValid(record) {
       || result.ordinal !== ordinal
       || result.rank !== ordinal
       || !KEY_PATTERN.test(String(result.companyKey || ""))
-      || !TERMINAL_RESULT_STATUSES.has(result.status)
+      || !LEGACY_TERMINAL_RESULT_STATUSES.has(result.status)
       || statuses.has(result.companyKey)
     ) return false;
     statuses.set(result.companyKey, result.status);
@@ -988,6 +1160,219 @@ function runOutputProjectionsValid(record) {
   if (new Set(revenues.map((entry) => entry.projectionId)).size !== revenues.length) return false;
   if (new Set(history.map((entry) => entry.observationId)).size !== history.length) return false;
   return sha256Hex(stableSerialize(record.projections)) === record.projectionsHash;
+}
+
+function isSafeNonNegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function runOutputProjectionsV2Valid(record) {
+  if (!isPlainObject(record.projections) || !isPlainObject(record.projections.run)) return false;
+  const { run, companies, products, revenues, history } = record.projections;
+  if (
+    run.runId !== record.runId
+    || run.transactionId !== record.transactionId
+    || run.artifactHash !== record.artifactHash
+    || run.jobId !== record.jobId
+    || run.contractHash !== record.contractHash
+    || run.executionIdentityHash !== record.executionIdentityHash
+    || run.schemaVersion !== COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION
+    || run.status !== "ready"
+    || !RESILIENT_COLLECTION_STATUSES.has(run.collectionStatus)
+    || run.mainPlaceStatus !== "ready"
+    || typeof run.detailStatus !== "string"
+    || !run.detailStatus
+    || run.resultCount !== 20
+    || !Number.isFinite(Date.parse(run.collectedAt))
+    || !isPlainObject(run.measurementPeriod)
+    || !DATE_PATTERN.test(run.measurementPeriod.start)
+    || !DATE_PATTERN.test(run.measurementPeriod.end)
+    || run.measurementPeriod.end < run.measurementPeriod.start
+    || !Array.isArray(run.resultStatuses)
+    || run.resultStatuses.length !== 20
+    || !Array.isArray(companies)
+    || companies.length !== 20
+    || !Array.isArray(products)
+    || products.length > 40
+    || !Array.isArray(revenues)
+    || !Array.isArray(history)
+    || revenues.length !== run.revenueProjectionCount
+    || history.length !== run.historyProjectionCount
+    || history.length !== revenues.length
+    || !isSafeNonNegativeInteger(run.revenueProjectionCount)
+    || !isSafeNonNegativeInteger(run.historyProjectionCount)
+    || !isSafeNonNegativeInteger(run.readyCount)
+    || !isSafeNonNegativeInteger(run.zeroCount)
+    || !isSafeNonNegativeInteger(run.partialCount)
+    || !isSafeNonNegativeInteger(run.blockedCount)
+    || !isSafeNonNegativeInteger(run.failedCount)
+    || !isSafeNonNegativeInteger(run.notCollectedCount)
+    || !isSafeNonNegativeInteger(run.missingCount)
+    || !isSafeNonNegativeInteger(run.detailReadyCompanyCount)
+    || !isSafeNonNegativeInteger(run.revenueReadyCompanyCount)
+    || !Number.isFinite(run.detailCoverageRate)
+    || run.detailCoverageRate < 0
+    || run.detailCoverageRate > 1
+    || !Number.isFinite(run.revenueCoverageRate)
+    || run.revenueCoverageRate < 0
+    || run.revenueCoverageRate > 1
+  ) return false;
+
+  const statuses = new Map();
+  for (let index = 0; index < run.resultStatuses.length; index += 1) {
+    const ordinal = index + 1;
+    const result = run.resultStatuses[index];
+    if (
+      !isPlainObject(result)
+      || result.ordinal !== ordinal
+      || result.rank !== ordinal
+      || !KEY_PATTERN.test(String(result.companyKey || ""))
+      || !RESILIENT_DETAIL_STATUSES.has(result.status)
+      || statuses.has(result.companyKey)
+    ) return false;
+    statuses.set(result.companyKey, result.status);
+  }
+  const statusCount = (status) => [...statuses.values()].filter((value) => value === status).length;
+  if (
+    run.readyCount !== statusCount("ready")
+    || run.zeroCount !== statusCount("zero")
+    || run.partialCount !== statusCount("partial")
+    || run.blockedCount !== statusCount("blocked")
+    || run.failedCount !== statusCount("failed")
+    || run.notCollectedCount !== statusCount("not_collected")
+    || run.missingCount !== statusCount("missing")
+  ) return false;
+  const detailReadyCompanyCount = run.readyCount + run.zeroCount;
+  if (
+    run.detailReadyCompanyCount !== detailReadyCompanyCount
+    || run.detailCoverageRate !== detailReadyCompanyCount / 20
+  ) return false;
+
+  const companyByKey = new Map();
+  for (let index = 0; index < companies.length; index += 1) {
+    const ordinal = index + 1;
+    const company = companies[index];
+    if (
+      !isPlainObject(company)
+      || company.runId !== record.runId
+      || company.artifactHash !== record.artifactHash
+      || company.ordinal !== ordinal
+      || company.rank !== ordinal
+      || company.detailCollectionStatus !== company.status
+      || statuses.get(company.companyKey) !== company.status
+      || company.collectionStatus !== run.collectionStatus
+      || !KEY_PATTERN.test(String(company.companyKey || ""))
+      || !KEY_PATTERN.test(String(company.regionKey || ""))
+      || !KEY_PATTERN.test(String(company.placeId || ""))
+      || typeof company.displayName !== "string"
+      || !company.displayName
+      || typeof company.bookingBusinessIdSource !== "string"
+      || company.bookingBusinessIdSource.length > 64
+      || typeof company.revenueInputValid !== "boolean"
+      || companyByKey.has(company.companyKey)
+    ) return false;
+    companyByKey.set(company.companyKey, company);
+  }
+
+  const productKeys = new Set();
+  const productCounts = new Map([...statuses.keys()].map((companyKey) => [companyKey, 0]));
+  for (const product of products) {
+    const company = companyByKey.get(product?.companyKey);
+    if (
+      !isPlainObject(product)
+      || product.runId !== record.runId
+      || product.artifactHash !== record.artifactHash
+      || !company
+      || !["ready", "partial"].includes(company.status)
+      || product.status !== company.status
+      || product.projectionKind !== "inventory_summary"
+      || !new Set(["overnight", "day_use"]).has(product.stayType)
+      || product.ordinal !== company.ordinal
+      || product.rank !== company.rank
+      || !KEY_PATTERN.test(String(product.productKey || ""))
+      || productKeys.has(product.productKey)
+      || !isSafeNonNegativeInteger(product.sourceProductCount)
+      || product.sourceProductCount < 1
+      || !isSafeNonNegativeInteger(product.price)
+      || !isSafeNonNegativeInteger(product.availableUnits)
+    ) return false;
+    if (company.status === "partial" && company.revenueInputValid !== true) return false;
+    productKeys.add(product.productKey);
+    productCounts.set(company.companyKey, productCounts.get(company.companyKey) + 1);
+  }
+  for (const [companyKey, status] of statuses.entries()) {
+    if (status === "ready" && productCounts.get(companyKey) < 1) return false;
+    if (["zero", "blocked", "failed", "not_collected", "missing"].includes(status) && productCounts.get(companyKey) !== 0) return false;
+  }
+
+  const revenueKeys = new Set();
+  const revenueByCompany = new Map();
+  for (const revenue of revenues) {
+    const company = companyByKey.get(revenue?.companyKey);
+    if (
+      !isPlainObject(revenue)
+      || revenue.runId !== record.runId
+      || revenue.artifactHash !== record.artifactHash
+      || !company
+      || company.revenueInputValid !== true
+      || !["ready", "zero", "partial"].includes(company.status)
+      || revenue.status !== company.status
+      || revenue.ordinal !== company.ordinal
+      || revenue.rank !== company.rank
+      || revenue.currency !== "KRW"
+      || !isSafeNonNegativeInteger(revenue.estimatedRevenue)
+      || !isSafeNonNegativeInteger(revenue.estimatedSoldUnits)
+      || !KEY_PATTERN.test(String(revenue.projectionId || ""))
+      || revenueKeys.has(revenue.projectionId)
+      || revenueByCompany.has(revenue.companyKey)
+      || revenue.status === "zero" && (revenue.estimatedRevenue !== 0 || revenue.estimatedSoldUnits !== 0)
+    ) return false;
+    revenueKeys.add(revenue.projectionId);
+    revenueByCompany.set(revenue.companyKey, revenue);
+  }
+  if (run.revenueReadyCompanyCount !== [...companyByKey.values()].filter((company) => company.revenueInputValid === true).length) return false;
+  if (run.revenueCoverageRate !== run.revenueReadyCompanyCount / 20) return false;
+
+  const observationIds = new Set();
+  const historyCompanies = new Set();
+  for (const observation of history) {
+    const revenue = revenueByCompany.get(observation?.companyKey);
+    if (
+      !isPlainObject(observation)
+      || observation.runId !== record.runId
+      || observation.artifactHash !== record.artifactHash
+      || !revenue
+      || observation.ordinal !== revenue.ordinal
+      || observation.rank !== revenue.rank
+      || observation.status !== revenue.status
+      || !HASH_PATTERN.test(String(observation.observationId || ""))
+      || observationIds.has(observation.observationId)
+      || historyCompanies.has(observation.companyKey)
+      || observation.currency !== "KRW"
+      || !Number.isFinite(Date.parse(observation.observedAt))
+    ) return false;
+    observationIds.add(observation.observationId);
+    historyCompanies.add(observation.companyKey);
+  }
+  if (historyCompanies.size !== revenueByCompany.size) return false;
+  if (new Set(companies.map((entry) => entry.projectionId)).size !== companies.length) return false;
+  if (
+    run.collectionStatus === "complete" && detailReadyCompanyCount !== 20
+    || run.collectionStatus === "partial" && (detailReadyCompanyCount < 1 || detailReadyCompanyCount >= 20)
+    || run.collectionStatus === "rank_only" && (detailReadyCompanyCount !== 0 || products.length !== 0 || revenues.length !== 0 || history.length !== 0)
+  ) return false;
+  return sha256Hex(stableSerialize(record.projections)) === record.projectionsHash;
+}
+
+function runOutputProjectionsValid(record) {
+  const version = record?.projections?.run?.schemaVersion;
+  if (version === COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V1) {
+    return runOutputProjectionsV1Valid(record);
+  }
+  if (version === COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION) {
+    return runOutputProjectionsV2Valid(record);
+  }
+  return false;
 }
 
 function runOutputRecordValid(record, expectedState) {
@@ -1230,7 +1615,7 @@ function transactionRecordValid(record, expectedState) {
       if (
         status.ordinal !== ordinal
         || status.rank !== ordinal
-        || !TERMINAL_RESULT_STATUSES.has(status.status)
+        || !LEGACY_TERMINAL_RESULT_STATUSES.has(status.status)
         || statuses.has(status.companyKey)
       ) return false;
       statuses.set(status.companyKey, status.status);
@@ -1956,6 +2341,7 @@ module.exports = {
   COLLECTION_WORKER_TOP20_RESULT_PATH,
   COLLECTION_WORKER_TOP20_RESULT_SCHEMA_VERSION,
   CollectionWorkerRunTransactionError,
+  buildV2RunProjections,
   createCollectionWorkerRunTransactionStore,
   decodeVerifiedTop20Artifact,
   decodeVerifiedV2RunArtifact,

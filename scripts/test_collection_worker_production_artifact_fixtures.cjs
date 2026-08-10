@@ -25,6 +25,9 @@ const {
   findSingleFinalOutput,
   runCollectorChild
 } = require("./collection_worker_v2_top20_collector.cjs");
+const {
+  createCollectionWorkerRunTransactionStore,
+} = require("./collection_worker_run_transaction.cjs");
 const { installFixtureNetworkGuard } = require("./fixture_network_guard.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -202,6 +205,41 @@ async function runProductionArtifactScenario(root, mode, expectedCollectionStatu
     top20ContractHash: TOP20_CONTRACT_HASH
   });
   assert.equal(contents.summary.collectionStatus, expectedCollectionStatus);
+  const transactionStore = createCollectionWorkerRunTransactionStore({
+    runtimeRoot: path.join(root, `run-transaction-${mode}`),
+  });
+  const verifySignedArtifact = (candidate) => verifyCollectionArtifactBundle(candidate, {
+    publicKey: keys.publicKey,
+    expectedIdentity: identity(),
+    expectedSigningKeyId: "artifact_fixture",
+  });
+  const committed = await transactionStore.finalizeVerifiedRunBundle({
+    signedArtifact: signed,
+    verifier: verifySignedArtifact,
+    now: "2026-08-21T00:01:00.000Z",
+  });
+  assert.equal(committed.state, "committed", `${mode} must commit its actual signed artifact`);
+  assert.equal(committed.reused, false, `${mode} initial transaction must not be a replay`);
+  assert.equal(committed.companyProjectionCount, 20, `${mode} must project all main-place companies`);
+  const visible = await transactionStore.readVisibleState();
+  const run = visible.runs.find((entry) => entry.runId === committed.runId);
+  assert.ok(run, `${mode} committed run must be visible`);
+  assert.equal(run.schemaVersion, "collection-worker-v2-top20-derived-projections.v2");
+  assert.equal(run.collectionStatus, expectedCollectionStatus);
+  assert.equal(visible.companies.length, 20, `${mode} must retain companies without detail observations`);
+  if (expectedCollectionStatus === "rank_only") {
+    assert.equal(visible.products.length, 0);
+    assert.equal(visible.revenues.length, 0);
+    assert.equal(visible.history.length, 0);
+  }
+  const replay = await transactionStore.finalizeVerifiedRunBundle({
+    signedArtifact: signed,
+    verifier: verifySignedArtifact,
+    now: "2026-08-21T00:02:00.000Z",
+  });
+  assert.equal(replay.reused, true, `${mode} transaction replay must not produce another run`);
+  const visibleAfterReplay = await transactionStore.readVisibleState();
+  assert.equal(visibleAfterReplay.runs.length, 1, `${mode} transaction replay must not add a run`);
   return {
     collectionStatus: contents.summary.collectionStatus,
     providerCallCount: contents.summary.executedCallCount,
@@ -210,7 +248,12 @@ async function runProductionArtifactScenario(root, mode, expectedCollectionStatu
     actualExporterUsed: true,
     actualManifestSchemaUsed: true,
     actualCsvHeadersUsed: true,
-    actualDetailSchemaUsed: true
+    actualDetailSchemaUsed: true,
+    transactionCommitted: true,
+    companyProjectionCount: visible.companies.length,
+    revenueProjectionCount: visible.revenues.length,
+    historyProjectionCount: visible.history.length,
+    transactionReplayWriteDelta: visibleAfterReplay.runs.length - visible.runs.length,
   };
 }
 

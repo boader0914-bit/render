@@ -3062,6 +3062,55 @@ function artifactSecurityTerminalText(outcome = null) {
   return `수집 결과가 보안 정제 과정에서 중단되었습니다. ${outcome.code} · provider 시도 ${outcome.providerAttemptCount} · 실행 호출 ${outcome.executedCallCount}${lastOperation}${detector}${fileRole}`;
 }
 
+const TOP20_TERMINAL_JOB_STATES = new Set([
+  "committed",
+  "failed",
+  "blocked",
+  "cancelled",
+  "indeterminate",
+  "rejected",
+  "validated_no_store"
+]);
+
+function isTop20TerminalOutcome(outcome = null) {
+  return Boolean(outcome && TOP20_TERMINAL_JOB_STATES.has(String(outcome.jobState || "")));
+}
+
+function durableTop20TerminalText(outcome = null) {
+  if (!isTop20TerminalOutcome(outcome)) return "";
+  if (
+    outcome.jobState === "failed"
+    && outcome.failureStage === "run_projection"
+    && outcome.code === "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID"
+  ) {
+    return "수집 결과를 저장 데이터로 변환하는 과정에서 오류가 발생했습니다.";
+  }
+  return "";
+}
+
+function applyDurableTop20TerminalOutcome(outcome = null) {
+  if (!isTop20TerminalOutcome(outcome)) return false;
+  clearCrawlStatusTimer();
+  setCrawlProgress(false);
+  const projectionText = durableTop20TerminalText(outcome);
+  if (outcome.jobState === "committed") {
+    setStatus("준비");
+  } else if (outcome.jobState === "validated_no_store") {
+    setStatus("준비");
+  } else {
+    setStatus("수집 실패");
+  }
+  if (els.crawlStatus && projectionText) {
+    els.crawlStatus.textContent = `${projectionText} (${outcome.code})`;
+  }
+  const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
+  if (submitButton && state.top20WorkerTransport?.workerTransportReady === true) {
+    submitButton.disabled = false;
+    submitButton.setAttribute("aria-disabled", "false");
+  }
+  return true;
+}
+
 function applyTop20WorkerTransportStatus(status = null) {
   state.top20WorkerTransport = status && typeof status === "object" ? status : null;
   if (!isAdminRole()) return;
@@ -3073,6 +3122,7 @@ function applyTop20WorkerTransportStatus(status = null) {
   if (!ready && els.crawlStatus) {
     els.crawlStatus.textContent = "수집 서버 연결을 준비하고 있습니다.";
   }
+  if (ready && applyDurableTop20TerminalOutcome(state.top20WorkerTransport?.lastOutcome)) return;
   const artifactTerminalText = artifactSecurityTerminalText(state.top20WorkerTransport?.lastOutcome);
   if (ready && artifactTerminalText && els.crawlStatus) {
     els.crawlStatus.textContent = artifactTerminalText;
@@ -3914,6 +3964,16 @@ function crawlEstimateInlineText(status = {}) {
 async function pollCrawlStatusUntilIdle(notifyIdle = false) {
   clearCrawlStatusTimer();
   try {
+    // A durable Worker terminal state wins over a stale local progress flag or
+    // a transient crawl-status response.  This is read-only and never creates
+    // a new collection request.
+    if (isAdminRole()) {
+      const transport = await loadTop20WorkerTransportStatus();
+      if (applyDurableTop20TerminalOutcome(transport?.lastOutcome)) {
+        await loadRuns(true);
+        return;
+      }
+    }
     const status = await fetchJson("/api/crawl-status");
     if (status.active) {
       const elapsed = formatElapsed(status.elapsedSeconds);
@@ -3954,7 +4014,9 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
       } else {
         setStatus("수집 실패");
         if (els.crawlStatus) {
-          els.crawlStatus.textContent = `Worker 수집이 중단되었습니다. ${workerOutcome.code || "수집 결과가 완결되지 않았습니다."}`;
+          els.crawlStatus.textContent = durableTop20TerminalText(workerOutcome)
+            ? `${durableTop20TerminalText(workerOutcome)} (${workerOutcome.code})`
+            : `Worker 수집이 중단되었습니다. ${workerOutcome.code || "수집 결과가 완결되지 않았습니다."}`;
         }
         if (isAdminRole()) await loadTop20WorkerTransportStatus();
       }

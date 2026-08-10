@@ -19,7 +19,11 @@ const DETAIL_OPERATIONS = new Set([
   "daily_schedule"
 ]);
 const BOOKING_ID_SOURCES = new Set(["live_graphql", "place_page", "historical_verified", "none"]);
-const DETAIL_STATUSES = new Set(["ready", "partial", "zero", "blocked", "failed", "not_collected"]);
+// This is the artifact-level contract for a detail target.  Keep it separate
+// from the legacy ready/zero-only transaction contract: a resilient run can
+// safely persist its verified ranking even when a detail target was not
+// collected or was blocked.
+const DETAIL_STATUSES = new Set(["ready", "partial", "zero", "blocked", "failed", "not_collected", "missing"]);
 
 function resilienceError(code, message) {
   return Object.assign(new Error(message), { code, statusCode: 409, retryable: false });

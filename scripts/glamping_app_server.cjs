@@ -339,7 +339,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260810-top20-artifact-projection-v49";
+const UI_ASSET_VERSION = "v2-20260810-resilient-run-projection-v50";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -15193,6 +15193,15 @@ function projectTop20TerminalOutcome(job, options = {}) {
   const state = String(job?.state || "");
   const jobId = typeof job?.jobId === "string" ? job.jobId : null;
   const code = job?.failureCode || null;
+  const terminalCounts = Object.freeze({
+    providerAttemptCount: Number.isInteger(job?.providerAttemptCount) ? job.providerAttemptCount : null,
+    executedCallCount: Number.isInteger(job?.executedCallCount) ? job.executedCallCount : null,
+    failureStage: job?.failureStage || null,
+    projectionReason: job?.projectionReason || null,
+    collectionStatus: job?.collectionStatus || null,
+    lastProviderOperation: job?.lastProviderOperation || null,
+    lastRequestOrdinal: Number.isInteger(job?.lastRequestOrdinal) ? job.lastRequestOrdinal : null,
+  });
   if (state === "committed") {
     return Object.freeze({
       status: "ready",
@@ -15204,7 +15213,8 @@ function projectTop20TerminalOutcome(job, options = {}) {
       writeCount: Number.isInteger(options.writeCount) ? options.writeCount : null,
       code: null,
       jobId,
-      runId: options.runId || null
+      runId: options.runId || null,
+      ...terminalCounts
     });
   }
   if (state === "validated_no_store") {
@@ -15218,16 +15228,17 @@ function projectTop20TerminalOutcome(job, options = {}) {
       writeCount: 0,
       code: null,
       jobId,
-      runId: null
+      runId: null,
+      ...terminalCounts
     });
   }
   if (state === "blocked") {
-    return Object.freeze({ status: "blocked", success: false, jobState: state, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null });
+    return Object.freeze({ status: "blocked", success: false, jobState: state, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null, ...terminalCounts });
   }
   if (state === "cancelled") {
-    return Object.freeze({ status: "cancelled", success: false, jobState: state, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null });
+    return Object.freeze({ status: "cancelled", success: false, jobState: state, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null, ...terminalCounts });
   }
-  return Object.freeze({ status: "failed", success: false, jobState: state || null, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null });
+  return Object.freeze({ status: "failed", success: false, jobState: state || null, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null, ...terminalCounts });
 }
 
 function latestMainPlaceProbeOutcome(snapshot = {}) {
@@ -15257,12 +15268,19 @@ function projectAdminTop20TerminalOutcome(outcome, snapshot = {}, suppliedDiagno
     : suppliedDiagnostic;
   return Object.freeze({
     ...outcome,
-    providerAttemptCount: diagnostic?.providerAttemptCount ?? Number(job?.providerAttemptCount || 0),
-    executedCallCount: diagnostic?.executedCallCount ?? null,
-    lastProviderOperation: diagnostic?.lastProviderOperation ?? null,
-    lastRequestOrdinal: diagnostic?.lastRequestOrdinal ?? null,
+    providerAttemptCount: diagnostic?.providerAttemptCount
+      ?? (Number.isInteger(job?.providerAttemptCount) ? job.providerAttemptCount : null),
+    executedCallCount: diagnostic?.executedCallCount
+      ?? (Number.isInteger(job?.executedCallCount) ? job.executedCallCount : null),
+    lastProviderOperation: diagnostic?.lastProviderOperation
+      ?? (job?.lastProviderOperation || null),
+    lastRequestOrdinal: diagnostic?.lastRequestOrdinal
+      ?? (Number.isInteger(job?.lastRequestOrdinal) ? job.lastRequestOrdinal : null),
     detector: diagnostic?.detector ?? null,
-    fileRole: diagnostic?.fileRole ?? null
+    fileRole: diagnostic?.fileRole ?? null,
+    failureStage: outcome.failureStage ?? job?.failureStage ?? null,
+    projectionReason: outcome.projectionReason ?? job?.projectionReason ?? null,
+    collectionStatus: outcome.collectionStatus ?? job?.collectionStatus ?? null
   });
 }
 

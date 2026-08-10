@@ -106,7 +106,7 @@ function clockFixture() {
   };
 }
 
-async function createSystem(root, keys) {
+async function createSystem(root, keys, options = {}) {
   await fsp.mkdir(root, { recursive: true });
   const clock = clockFixture();
   const jobStore = createCollectionJobStore({ runtimeRoot: root, defaultLeaseMs: 5 * 60 * 1000 });
@@ -130,6 +130,9 @@ async function createSystem(root, keys) {
       operatorTokenSha256: crypto.createHash("sha256").update(OPERATOR_TOKEN).digest("hex"),
       now: () => clock.now(),
       async applyReadyTransaction(input) {
+        if (typeof options.applyReadyTransaction === "function") {
+          return options.applyReadyTransaction(input);
+        }
         assert.equal(input.summary.status, "ready");
         assert.equal(input.top20ContractHash, input.summary.top20ContractHash);
         assert.equal(callbackReceipts.has(input.receiptId), false, "transaction receipt must be applied once");
@@ -446,6 +449,72 @@ async function readyScenario(root, keys) {
   system.clock.tick(16 * 60 * 1000);
   assert.equal(system.orchestrator.status().activePayloadCount, 0);
   assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 0, "terminal payload replay retention expires");
+}
+
+async function finalizeProjectionFailureScenario(root, keys) {
+  const system = await createSystem(root, keys, {
+    applyReadyTransaction() {
+      const error = new Error("synthetic run output projection rejection");
+      error.code = "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID";
+      error.safeMeta = Object.freeze({
+        stage: "run_projection",
+        reason: "unsupported_target_status",
+        collectionStatus: "partial",
+        targetStatus: "blocked",
+        companyOrdinal: 2,
+      });
+      throw error;
+    },
+  });
+  const flow = await prepareClaimPreflight(system, keys, "Synthetic top20 projection failure lodging");
+  const heartbeatFixture = heartbeatState(system, keys, flow);
+  system.clock.tick();
+  const heartbeat = await system.orchestrator.heartbeat({
+    body: heartbeatFixture.body,
+    signedRequest: heartbeatFixture.request,
+  });
+  const state = readyExecutionState();
+  const artifact = signedArtifact(flow, keys, "ready", state, heartbeat.providerWorkflowRevision);
+  const body = {
+    jobId: flow.prepared.jobId,
+    attemptId: flow.claimed.job.signedJob.attemptId,
+    workflowRevision: heartbeat.workflowRevision,
+    signedArtifact: artifact,
+  };
+  const first = await system.orchestrator.finalize({
+    body,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH, body, keys, system.clock.now()),
+  });
+  assert.equal(first.status, "failed");
+  assert.equal(first.jobState, "failed");
+  assert.equal(first.code, "COLLECTION_RUN_OUTPUT_PROJECTION_INVALID");
+  assert.equal(first.failureStage, "run_projection");
+  assert.equal(first.projectionReason, "unsupported_target_status");
+  assert.equal(first.providerAttemptCount, 1);
+  assert.equal(first.executedCallCount, 21);
+  assert.equal(first.resultStored, false);
+  assert.equal(first.writeCount, 0);
+  assert.equal(first.terminalAcknowledged, true);
+  assert.equal(system.callbackCount(), 0);
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  const failedJob = (await system.jobStore.readSnapshot()).jobs[0];
+  assert.equal(failedJob.state, "failed");
+  assert.equal(failedJob.failureStage, "run_projection");
+  assert.equal(failedJob.projectionReason, "unsupported_target_status");
+  assert.equal(failedJob.providerAttemptCount, 1);
+  assert.equal(failedJob.executedCallCount, 21);
+  assert.equal((await system.providerStore.read()).state, "closed", "projection failure must not open the provider circuit");
+
+  const replay = await system.orchestrator.finalize({
+    body,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH, body, keys, system.clock.now()),
+  });
+  assert.equal(replay.status, "failed");
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.code, first.code);
+  assert.equal(replay.executedCallCount, 21);
+  assert.equal(system.callbackCount(), 0, "finalize replay must not repeat the projection transaction");
+  assert.equal((await system.providerStore.read()).state, "closed");
 }
 
 async function blockedScenario(root, keys) {
@@ -831,6 +900,7 @@ async function main() {
   const keys = keySet();
   try {
     await readyScenario(path.join(root, "ready"), keys);
+    await finalizeProjectionFailureScenario(path.join(root, "projection-failure"), keys);
     await blockedScenario(path.join(root, "blocked"), keys);
     await failureScenario(path.join(root, "failed"), keys);
     await cancellationScenario(path.join(root, "cancelled"), keys);
