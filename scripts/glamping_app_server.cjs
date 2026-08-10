@@ -115,6 +115,8 @@ const {
   COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
   COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+  buildBookingDetailProbeExecutionIdempotencyKey,
+  computeV2Top20ExecutionRequestHash,
   normalizeV2Top20ExecutionRequestId
 } = require("./collection_worker_v2_top20_protocol.cjs");
 const {
@@ -15367,6 +15369,7 @@ function top20PrepareFailureMessage(code = "") {
   if (code === "COLLECTION_WORKER_PREVIEW_DRAINING") return "수집 서버가 배포 전환 중입니다.";
   if (code === "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB") return "이미 진행 중인 수집이 있습니다.";
   if (code === "NAVER_PROVIDER_COOLDOWN_ACTIVE") return "네이버 연결 안정화 대기 중입니다.";
+  if (code === "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_IDEMPOTENCY_INVALID") return "Booking Detail 복구 작업을 준비하지 못했습니다.";
   if ([
     "COLLECTION_WORKER_V2_TOP20_EXECUTION_ALREADY_EXISTS",
     "COLLECTION_JOB_IDEMPOTENCY_CONFLICT",
@@ -15389,6 +15392,18 @@ function top20WorkerTransportStatus() {
     && Number.isFinite(ageMs)
     && ageMs <= TOP20_WORKER_ATTESTATION_MAX_AGE_MS
   );
+  const webFeatureGateEnabled = bookingDetailRecoveryProbeEnabled();
+  const workerFeatureGateEnabled = typeof attestation?.capabilities?.bookingDetailRecoveryProbe === "boolean"
+    ? attestation.capabilities.bookingDetailRecoveryProbe
+    : null;
+  const featureGateMatched = workerFeatureGateEnabled !== null
+    && webFeatureGateEnabled === workerFeatureGateEnabled;
+  const bookingDetailProbeTransportReady = Boolean(
+    workerTransportReady
+    && featureGateMatched
+    && webFeatureGateEnabled
+    && workerFeatureGateEnabled
+  );
   return Object.freeze({
     previewCommit: /^[a-f0-9]{40}$/u.test(previewCommit) ? previewCommit : null,
     attestedWorkerCommit: attestation?.workerCommit || null,
@@ -15396,10 +15411,26 @@ function top20WorkerTransportStatus() {
     workerAttestedAt: attestation?.attestedAt || null,
     workerAttestationAgeSeconds: Number.isFinite(ageMs) ? Math.floor(ageMs / 1000) : null,
     workerAttestationConsecutiveMatches: Number(attestation?.consecutiveMatches || 0),
+    webFeatureGateEnabled,
+    workerFeatureGateEnabled,
+    featureGateMatched,
+    bookingDetailProbeTransportReady,
     internalTransport: "private",
     protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
     previewDraining
   });
+}
+
+function assertBookingDetailProbeTransportReady() {
+  const status = assertTop20WorkerTransportReady();
+  if (!status.bookingDetailProbeTransportReady) {
+    const error = new Error("Booking Detail recovery probe feature gates do not match a ready Worker");
+    error.code = "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_GATE_MISMATCH";
+    error.statusCode = 503;
+    error.retryable = false;
+    throw error;
+  }
+  return status;
 }
 
 function assertTop20WorkerTransportReady() {
@@ -16593,10 +16624,12 @@ async function route(req, res) {
         const prior = lastTop20WorkerAttestation;
         const sameGeneration = prior
           && prior.workerCommit === result.workerCommit
-          && prior.protocolVersion === result.protocolVersion;
+          && prior.protocolVersion === result.protocolVersion
+          && prior.capabilities?.bookingDetailRecoveryProbe === result.capabilities?.bookingDetailRecoveryProbe;
         lastTop20WorkerAttestation = Object.freeze({
           workerCommit: result.workerCommit,
           protocolVersion: result.protocolVersion,
+          capabilities: result.capabilities,
           consecutiveMatches: sameGeneration ? prior.consecutiveMatches + 1 : 1,
           attestedAt: result.attestedAt
         });
@@ -17072,15 +17105,24 @@ async function route(req, res) {
         .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || 0) - Date.parse(left.updatedAt || left.createdAt || 0))[0] || null;
       const provider = await naverBookingDetailProviderHealthStore.read();
       const availability = providerAvailability(provider, { now: new Date() });
+      const transport = top20WorkerTransportStatus();
+      const target = await selectBookingDetailRecoveryProbeTarget();
       return send(res, 200, {
         collectionProfile: COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE,
-        enabled: bookingDetailRecoveryProbeEnabled(),
+        enabled: transport.webFeatureGateEnabled,
+        webFeatureGateEnabled: transport.webFeatureGateEnabled,
+        workerFeatureGateEnabled: transport.workerFeatureGateEnabled,
+        featureGateMatched: transport.featureGateMatched,
+        bookingDetailProbeTransportReady: transport.bookingDetailProbeTransportReady,
         active: Boolean(activeTop20WorkerJob && String(activeTop20WorkerJob.jobId || "").startsWith("job-booking-detail-probe-")),
         bookingDetailProviderState: provider.state,
         bookingDetailWorkflowRevision: provider.workflowRevision,
         retryAt: provider.retryAt || null,
         attemptInFlight: availability.attemptInFlight === true,
-        targetEligible: Boolean(await selectBookingDetailRecoveryProbeTarget()),
+        probeEligible: Boolean(target),
+        // Preserve the prior status projection while consumers move to the
+        // explicitly named Probe capability field.
+        targetEligible: Boolean(target),
         latestJobState: latest?.state || null,
         resultStored: false,
         writeCount: 0,
@@ -17099,8 +17141,24 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/booking-detail-recovery-probe") {
       if (!requireAdminSession(session, req, res)) return;
       if (!isSameOriginMapGeocodingRequest(req)) return send(res, 403, { error: "Same-origin admin action required" });
-      const result = await queueBookingDetailRecoveryProbe();
-      return send(res, 202, result, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
+      try {
+        const result = await queueBookingDetailRecoveryProbe();
+        return send(res, 202, result, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
+      } catch (error) {
+        return send(res, Number(error?.statusCode || 409), {
+          error: top20PrepareFailureMessage(error?.code),
+          code: String(error?.code || "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_PREPARE_FAILED"),
+          stage: "prepare",
+          retryable: false
+        }, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
+      }
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/booking-detail-recovery-probe/prepare-dry-run") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!isSameOriginMapGeocodingRequest(req)) return send(res, 403, { error: "Same-origin admin action required" });
+      const result = await bookingDetailRecoveryProbePrepareDryRun();
+      return send(res, 200, result, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/prepare-dry-run") {
@@ -17603,13 +17661,7 @@ function bookingDetailRecoveryProbeContract() {
 }
 
 async function queueBookingDetailRecoveryProbe() {
-  if (!bookingDetailRecoveryProbeEnabled()) {
-    const error = new Error("Booking Detail 복구 Probe가 비활성 상태입니다.");
-    error.code = "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_DISABLED";
-    error.statusCode = 404;
-    throw error;
-  }
-  assertTop20WorkerTransportReady();
+  assertBookingDetailProbeTransportReady();
   await restoreActiveTop20WorkerJob();
   if (activeCrawlPromise || activeTop20WorkerJob) {
     const error = new Error("다른 Worker 수집 작업이 진행 중입니다.");
@@ -17671,6 +17723,49 @@ async function queueBookingDetailRecoveryProbe() {
     automaticRetry: false,
     automaticFallback: false,
     resultStored: false,
+    writeCount: 0
+  });
+}
+
+async function bookingDetailRecoveryProbePrepareDryRun() {
+  await restoreActiveTop20WorkerJob();
+  const [mainPlaceState, bookingDetailState, target] = await Promise.all([
+    naverPlaceMainProviderHealthStore.read(),
+    naverBookingDetailProviderHealthStore.read(),
+    selectBookingDetailRecoveryProbeTarget()
+  ]);
+  const availability = providerAvailability(bookingDetailState, { now: new Date() });
+  const targetIdentityHash = String(target?.targetIdentityHash || "");
+  const executionRequestId = `booking-detail-probe:${bookingDetailState.workflowRevision}:${targetIdentityHash.slice(0, 12)}:${String(process.env.RENDER_GIT_COMMIT || "").slice(0, 12)}`;
+  const executionRequestHash = computeV2Top20ExecutionRequestHash(executionRequestId);
+  const jobId = `job-booking-detail-probe-${targetIdentityHash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
+  const attemptId = `attempt:booking-detail-probe-${targetIdentityHash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
+  let idempotencyKeyValid = false;
+  try {
+    buildBookingDetailProbeExecutionIdempotencyKey({
+      contractIdempotencyKey: crypto.createHash("sha256").update(stableJson({ domain: "booking-detail-probe-dry-run.v1", executionRequestHash })).digest("hex"),
+      executionRequestHash,
+      targetIdentityHash,
+      jobId,
+      attemptId
+    });
+    idempotencyKeyValid = true;
+  } catch {}
+  const targetEligible = Boolean(target);
+  const retryAtElapsed = !availability.coolingDown;
+  const noActiveJob = !activeCrawlPromise && !activeTop20WorkerJob;
+  return Object.freeze({
+    wouldCreateIfArmed: Boolean(targetEligible && noActiveJob && mainPlaceState.state === "closed" && bookingDetailState.state === "open" && availability.probeRequired && !availability.attemptInFlight && retryAtElapsed),
+    targetEligible,
+    jobIdPatternValid: /^job-booking-detail-probe-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(jobId),
+    attemptIdPatternValid: /^attempt:booking-detail-probe-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(attemptId),
+    idempotencyKeyValid,
+    providerState: bookingDetailState.state,
+    retryAtElapsed,
+    maximumProviderCalls: 3,
+    providerReservationCreated: false,
+    workerClaimStarted: false,
+    providerCallCount: 0,
     writeCount: 0
   });
 }

@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const {
   collectorStartupDiagnostics,
+  bookingDetailProbeGateDiagnostic,
   runTop20WorkerLoop,
   startCollectionWorkerSupervisor
 } = require("./collection_worker_supervisor.cjs");
@@ -14,6 +15,7 @@ const {
     RENDER_GIT_COMMIT: "0b86ad823d8f968a62486a1b32140717a0beb529",
     COLLECTOR_WORKER_MODE: "v2_top20_once",
     COLLECTION_WORKER_V2_TOP20_ENABLED: "true",
+    COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_ENABLED: "false",
     COLLECTION_WORKER_V2_TOP20_EXECUTION_ENABLED: "true",
     COLLECTOR_EXTERNAL_CALLS_ENABLED: "true",
     COLLECTOR_RESULT_WRITE_ENABLED: "true",
@@ -40,6 +42,7 @@ const {
     arch: "x64",
     workerMode: "v2_top20_once",
     top20Enabled: true,
+    bookingDetailProbeEnabled: false,
     executionEnabled: true,
     externalCallsEnabled: true,
     resultWriteEnabled: true,
@@ -48,6 +51,14 @@ const {
     requestPrivateKeyConfigured: true,
     dispatchPublicKeyConfigured: true,
     artifactPrivateKeyConfigured: true
+  });
+  assert.deepEqual(bookingDetailProbeGateDiagnostic({
+    RENDER_GIT_COMMIT: "0b86ad823d8f968a62486a1b32140717a0beb529",
+    COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_ENABLED: "false"
+  }), {
+    event: "booking_detail_probe_gate",
+    workerCommitShort: "0b86ad823d8f",
+    bookingDetailProbeEnabled: false
   });
 
   const controller = new AbortController();

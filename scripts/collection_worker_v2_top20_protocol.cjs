@@ -276,6 +276,37 @@ function buildV2Top20ExecutionIdempotencyKey(input = {}) {
   }));
 }
 
+// Booking Detail recovery probes are a deliberately separate no-store
+// execution profile.  Keep their identifier namespace out of the normal
+// Top20 key builder so a probe can never be mistaken for a persisted job.
+function buildBookingDetailProbeExecutionIdempotencyKey(input = {}) {
+  const contractIdempotencyKey = String(input.contractIdempotencyKey || "");
+  const executionRequestHash = String(input.executionRequestHash || "");
+  const targetIdentityHash = String(input.targetIdentityHash || "");
+  const jobId = String(input.jobId || "");
+  const attemptId = String(input.attemptId || "");
+  if (
+    !HASH_PATTERN.test(contractIdempotencyKey)
+    || !HASH_PATTERN.test(executionRequestHash)
+    || !HASH_PATTERN.test(targetIdentityHash)
+    || !/^job-booking-detail-probe-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(jobId)
+    || !/^attempt:booking-detail-probe-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(attemptId)
+  ) {
+    throw protocolError(
+      "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_IDEMPOTENCY_INVALID",
+      "booking-detail recovery probe idempotency input is invalid"
+    );
+  }
+  return sha256Hex(stableJson({
+    domain: "lodging-datalab.booking-detail-recovery-probe-job-execution.v1",
+    contractIdempotencyKey,
+    executionRequestHash,
+    targetIdentityHash,
+    jobId,
+    attemptId
+  }));
+}
+
 // collection_worker_contract.v1 signs the fixed single-day top-three compatibility
 // shape. The full Top20 range hash is bound by the signed approvalId and is
 // rechecked by the Worker and the signed artifact. This bridge deliberately
@@ -416,6 +447,7 @@ module.exports = {
   artifactKeyProofPayload,
   buildV2Top20ArtifactKeyProof,
   buildV2Top20DispatchCompatibilityContract,
+  buildBookingDetailProbeExecutionIdempotencyKey,
   buildV2Top20ExecutionIdempotencyKey,
   buildV2Top20ExecutionContract,
   computeV2Top20ExecutionRequestHash,

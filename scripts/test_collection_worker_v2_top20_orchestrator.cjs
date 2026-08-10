@@ -914,7 +914,8 @@ async function runtimeAttestationScenario(root, keys) {
     targetServiceId: COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
     targetCommit: COMMIT,
     runtimeFingerprintHash: "f".repeat(64),
-    protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+    protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+    capabilities: { bookingDetailRecoveryProbe: false }
   };
   const result = await system.orchestrator.attestRuntime({
     body,
@@ -922,6 +923,7 @@ async function runtimeAttestationScenario(root, keys) {
   });
   assert.equal(result.status, "ready");
   assert.equal(result.commitMatched, true);
+  assert.equal(result.capabilities.bookingDetailRecoveryProbe, false);
   const mismatch = { ...body, workerCommit: "e".repeat(40) };
   assert.throws(
     () => system.orchestrator.attestRuntime({

@@ -55,6 +55,7 @@ const {
   COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+  buildBookingDetailProbeExecutionIdempotencyKey,
   buildV2Top20DispatchCompatibilityContract,
   buildV2Top20ExecutionIdempotencyKey,
   buildV2Top20ExecutionContract,
@@ -347,11 +348,17 @@ function maskTop20ExecutionJobId(value) {
   return match ? `job-top20-${match[1]}-${match[2]}` : "";
 }
 
+function maskBookingDetailProbeJobId(value) {
+  const text = String(value || "");
+  const match = text.match(/^job-booking-detail-probe-([a-f0-9]{12})-[a-f0-9]{12}$/u);
+  return match ? `job-booking-detail-probe-${match[1]}-redacted` : "";
+}
+
 function safeTop20Log(event, fields = {}) {
   console.warn(`[top20-provenance] ${stableJson({
     timestamp: fields.timestamp || new Date().toISOString(),
     event: String(event || "top20_event"),
-    jobId: maskTop20ExecutionJobId(fields.jobId) || maskJobId(fields.jobId),
+    jobId: maskBookingDetailProbeJobId(fields.jobId) || maskTop20ExecutionJobId(fields.jobId) || maskJobId(fields.jobId),
     contractHash: shortSafeHash(fields.contractHash),
     executionRequestHash: shortSafeHash(fields.executionRequestHash),
     executionIdentityHash: shortSafeHash(fields.executionIdentityHash),
@@ -365,7 +372,11 @@ function safeTop20Log(event, fields = {}) {
     requestOrdinal: Number.isInteger(fields.requestOrdinal) ? fields.requestOrdinal : null,
     jobState: String(fields.jobState || ""),
     failureCode: String(fields.failureCode || ""),
-    existingJobId: maskTop20ExecutionJobId(fields.existingJobId) || maskJobId(fields.existingJobId),
+    targetIdentityHash: shortSafeHash(fields.targetIdentityHash),
+    providerReservationCreated: fields.providerReservationCreated === true,
+    providerReservationReleased: fields.providerReservationReleased === true,
+    jobStoreWrite: fields.jobStoreWrite === true,
+    existingJobId: maskBookingDetailProbeJobId(fields.existingJobId) || maskTop20ExecutionJobId(fields.existingJobId) || maskJobId(fields.existingJobId),
     existingJobState: String(fields.existingJobState || ""),
     pid: process.pid,
     hostname: os.hostname(),
@@ -594,16 +605,19 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       "targetServiceId",
       "targetCommit",
       "runtimeFingerprintHash",
-      "protocolVersion"
+      "protocolVersion",
+      "capabilities"
     ], "top20 runtime attestation");
     const workerCommit = canonicalCommit(body.workerCommit);
     const targetCommit = canonicalCommit(body.targetCommit);
     const fingerprint = String(body.runtimeFingerprintHash || "");
+    const bookingDetailRecoveryProbe = body.capabilities?.bookingDetailRecoveryProbe;
     if (
       body.workerId !== COLLECTION_WORKER_V2_TOP20_WORKER_ID
       || body.workerPoolId !== COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID
       || body.targetServiceId !== COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID
       || !HASH_PATTERN.test(fingerprint)
+      || typeof bookingDetailRecoveryProbe !== "boolean"
       || body.protocolVersion !== COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
       || workerCommit !== targetWorkerCommit
       || targetCommit !== targetWorkerCommit
@@ -623,6 +637,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       workerCommit,
       commitMatched: true,
       protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+      capabilities: Object.freeze({ bookingDetailRecoveryProbe }),
       draining: false,
       attestedAt: new Date(now()).toISOString()
     });
@@ -976,15 +991,24 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         now: createdAt,
         ttlSeconds: 15 * 60
       });
-      const job = await jobStore.createOrReuseJob({
-        jobId,
-        attemptId,
-        idempotencyKey: buildV2Top20ExecutionIdempotencyKey({
+      const executionIdempotencyKey = bookingDetailRecoveryProbe
+        ? buildBookingDetailProbeExecutionIdempotencyKey({
+          contractIdempotencyKey: signedJob.idempotencyKey,
+          executionRequestHash,
+          targetIdentityHash: bookingDetailProbeTarget.targetIdentityHash,
+          jobId,
+          attemptId
+        })
+        : buildV2Top20ExecutionIdempotencyKey({
           contractIdempotencyKey: signedJob.idempotencyKey,
           executionRequestHash,
           jobId,
           attemptId
-        }),
+        });
+      const job = await jobStore.createOrReuseJob({
+        jobId,
+        attemptId,
+        idempotencyKey: executionIdempotencyKey,
         contractHash: signedJob.contractHash,
         executionIdentityHash: signedJob.executionIdentityHash,
         backendId: COLLECTION_WORKER_V2_TOP20_BACKEND_ID,
@@ -1077,12 +1101,32 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         automaticFallback: false
       });
     } catch (error) {
+      let providerReservationReleased = false;
       if (!stored) {
-        await activeProviderStore.releaseAttempt({
-          expectedWorkflowRevision: reservation.state.workflowRevision,
-          now: new Date(now())
-        }).catch(() => {});
+        try {
+          await activeProviderStore.releaseAttempt({
+            expectedWorkflowRevision: reservation.state.workflowRevision,
+            now: new Date(now())
+          });
+          providerReservationReleased = true;
+        } catch (releaseError) {
+          if (bookingDetailRecoveryProbe) {
+            const indeterminate = fail(
+              "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_RESERVATION_INDETERMINATE",
+              "booking-detail recovery probe reservation could not be released",
+              503
+            );
+            indeterminate.providerReservationCreated = true;
+            indeterminate.providerReservationReleased = false;
+            indeterminate.jobStoreWrite = false;
+            indeterminate.prepareFailureCode = String(error?.code || "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_PREPARE_FAILED");
+            throw indeterminate;
+          }
+        }
       }
+      error.providerReservationCreated = true;
+      error.providerReservationReleased = providerReservationReleased;
+      error.jobStoreWrite = stored;
       throw error;
     }
   }
@@ -1110,6 +1154,15 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         sourceRoute: input.provenance?.sourceRoute || "/api/crawl",
         actorKind: input.provenance?.actorKind || "operator",
         collectorBackend: input.provenance?.collectorBackend || "v2_top20_worker",
+        collectionProfile: input.bookingDetailRecoveryProbe === true
+          ? COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE
+          : "",
+        targetIdentityHash: input.bookingDetailRecoveryProbe === true
+          ? input.bookingDetailProbeTarget?.targetIdentityHash
+          : "",
+        providerReservationCreated: error?.providerReservationCreated === true,
+        providerReservationReleased: error?.providerReservationReleased === true,
+        jobStoreWrite: error?.jobStoreWrite === true,
         failureCode: error?.code || "COLLECTION_WORKER_V2_TOP20_PREPARE_FAILED"
       });
       throw error;
@@ -1160,7 +1213,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     if (input.trustedAdmin !== true) {
       throw fail("COLLECTION_WORKER_V2_TOP20_ADMIN_PREPARE_FORBIDDEN", "trusted admin preparation is required", 403);
     }
-    return prepareCore({
+    return prepareWithAudit({
       contract: input.contract,
       executionRequestId: input.executionRequestId,
       provenance: { ...input.provenance, sourceRoute: "/api/admin/collection-worker/v2-top20/booking-detail-recovery-probe" },

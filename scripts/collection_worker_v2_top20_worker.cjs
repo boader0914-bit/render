@@ -166,7 +166,13 @@ function safeHashPrefix(value) {
 function maskJobId(value) {
   const text = String(value || "");
   const match = text.match(/^job-top20-([a-f0-9]{12})-[a-f0-9]{12}$/u);
-  return match ? `job-top20-${match[1]}-redacted` : "";
+  return match ? `job-top20-${match[1]}-redacted` : maskBookingDetailProbeJobId(text);
+}
+
+function maskBookingDetailProbeJobId(value) {
+  const text = String(value || "");
+  const match = text.match(/^job-booking-detail-probe-([a-f0-9]{12})-[a-f0-9]{12}$/u);
+  return match ? `job-booking-detail-probe-${match[1]}-redacted` : "";
 }
 
 function safeTop20WorkerLog(event, fields = {}) {
@@ -814,7 +820,10 @@ async function runCollectionWorkerV2Top20(input = {}) {
         targetServiceId: COLLECTION_WORKER_V2_TOP20_PREVIEW_SERVICE_ID,
         targetCommit: worker.commit,
         runtimeFingerprintHash: sha256Hex(stableJson(runtimeFingerprint)),
-        protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+        protocolVersion: COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION,
+        capabilities: {
+          bookingDetailRecoveryProbe: String(environment[ENV.bookingDetailProbeEnabled] || "false").trim().toLowerCase() === "true"
+        }
       },
       expectedGeneration: generation,
       fetchImpl: internalFetchImpl,
@@ -828,6 +837,7 @@ async function runCollectionWorkerV2Top20(input = {}) {
       || attestation.previewCommit !== worker.commit
       || attestation.workerCommit !== worker.commit
       || attestation.protocolVersion !== COLLECTION_WORKER_V2_TOP20_INTERNAL_PROTOCOL_VERSION
+      || attestation.capabilities?.bookingDetailRecoveryProbe !== (String(environment[ENV.bookingDetailProbeEnabled] || "false").trim().toLowerCase() === "true")
       || attestation.draining === true
     ) {
       throw fail("COLLECTION_WORKER_PREVIEW_GENERATION_MISMATCH", "Preview runtime attestation is not ready", 409);

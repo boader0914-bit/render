@@ -37,6 +37,7 @@ function collectorStartupDiagnostics(environment = process.env, runtime = observ
     arch: String(runtime.arch || ""),
     workerMode: String(environment.COLLECTOR_WORKER_MODE || ""),
     top20Enabled: envFlag(environment, "COLLECTION_WORKER_V2_TOP20_ENABLED"),
+    bookingDetailProbeEnabled: envFlag(environment, "COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_ENABLED"),
     executionEnabled: envFlag(environment, "COLLECTION_WORKER_V2_TOP20_EXECUTION_ENABLED"),
     externalCallsEnabled: envFlag(environment, "COLLECTOR_EXTERNAL_CALLS_ENABLED"),
     resultWriteEnabled: envFlag(environment, "COLLECTOR_RESULT_WRITE_ENABLED"),
@@ -45,6 +46,14 @@ function collectorStartupDiagnostics(environment = process.env, runtime = observ
     requestPrivateKeyConfigured: envConfigured(environment, "COLLECTION_WORKER_REQUEST_PRIVATE_KEY_B64"),
     dispatchPublicKeyConfigured: envConfigured(environment, "COLLECTION_WORKER_DISPATCH_PUBLIC_KEY_B64"),
     artifactPrivateKeyConfigured: envConfigured(environment, "COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64")
+  });
+}
+
+function bookingDetailProbeGateDiagnostic(environment = process.env) {
+  return Object.freeze({
+    event: "booking_detail_probe_gate",
+    workerCommitShort: String(environment.RENDER_GIT_COMMIT || "").slice(0, 12),
+    bookingDetailProbeEnabled: envFlag(environment, "COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_ENABLED")
   });
 }
 
@@ -92,6 +101,7 @@ async function startCollectionWorkerSupervisor(options = {}) {
   const logger = options.log || console.log;
   const runtimeFingerprint = options.runtimeFingerprint || observeRuntimeFingerprint();
   logger(JSON.stringify(collectorStartupDiagnostics(environment, runtimeFingerprint)));
+  logger(JSON.stringify(bookingDetailProbeGateDiagnostic(environment)));
   const mode = String(environment.COLLECTOR_WORKER_MODE || "disabled").trim().toLowerCase();
   if (mode === "disabled") {
     return runIdleWorker({
@@ -123,6 +133,7 @@ module.exports = {
   DEFAULT_POLL_MS,
   FAILURE_POLL_MS,
   TOP20_MODE,
+  bookingDetailProbeGateDiagnostic,
   collectorStartupDiagnostics,
   runTop20WorkerLoop,
   startCollectionWorkerSupervisor
