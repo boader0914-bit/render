@@ -224,6 +224,12 @@ async function fixtureFetch(input, init = {}) {
   if (operation === "booking_items") {
     if (url.hostname !== "m.booking.naver.com" || url.pathname !== "/graphql") throw new Error("unexpected items endpoint");
     const businessId = String(body.variables?.bizItemSearchParams?.businessId || "2001");
+    // Deliberately fail one detail company after Main Place has completed.  The
+    // child must retain a real partial Top20 output rather than collapsing it
+    // to a synthetic hand-written artifact fixture.
+    if (mode === "partial_booking_items_second" && businessId === "2002") {
+      return new Response("{broken", { status: 200, headers: { "content-type": "application/json" } });
+    }
     const fixtureItems = mode === "nine_items"
       ? Array.from({ length: 9 }, (_, index) => ({
           id: `item-${businessId}-${index + 1}`,

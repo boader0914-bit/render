@@ -30,6 +30,7 @@ const {
   V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
+  COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_BACKEND_ID,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
@@ -145,9 +146,18 @@ const FAILURE_KEYS = Object.freeze([
   "executedCallCount",
   "code",
   "providerFailureSubtype",
-  "diagnosticId",
+  "diagnosticId"
+]);
+const ARTIFACT_DIAGNOSTIC_KEYS = Object.freeze([
+  "jobId",
+  "attemptId",
+  "workflowRevision",
   "detector",
-  "fileRole"
+  "fileRole",
+  "providerAttemptCount",
+  "executedCallCount",
+  "lastProviderOperation",
+  "lastRequestOrdinal"
 ]);
 const MAIN_PLACE_PROBE_FINALIZE_KEYS = Object.freeze([
   "jobId", "attemptId", "workflowRevision", "providerWorkflowRevision",
@@ -371,6 +381,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   const heartbeatReceipts = new Map();
   const transactionResults = new Map();
   const finalizationFlights = new Map();
+  const artifactSecurityDiagnostics = new Map();
   let reconciliationComplete = false;
   let reconciliationPromise = null;
 
@@ -1638,6 +1649,61 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     return providerState;
   }
 
+  async function recordArtifactSecurityDiagnostic(input = {}) {
+    assertReady();
+    exactKeys(input.body, ARTIFACT_DIAGNOSTIC_KEYS, "top20 artifact security diagnostic body");
+    verifyWorkerAuth(input.signedRequest, input.body, COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH);
+    const body = input.body;
+    if (
+      !SAFE_ARTIFACT_DETECTORS.has(String(body.detector || ""))
+      || !SAFE_ARTIFACT_FILE_ROLES.has(String(body.fileRole || ""))
+      || ![0, 1].includes(Number(body.providerAttemptCount))
+      || !Number.isInteger(body.executedCallCount)
+      || body.executedCallCount < 0
+      || body.executedCallCount > V2_TOP20_CONTRACT.maximumProviderCalls
+      || Number(body.providerAttemptCount) === 0 && body.executedCallCount !== 0
+      || body.lastProviderOperation !== null && !["main_place", "booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(String(body.lastProviderOperation))
+      || body.lastRequestOrdinal !== null && (!Number.isInteger(body.lastRequestOrdinal) || body.lastRequestOrdinal < 1 || body.lastRequestOrdinal > V2_TOP20_CONTRACT.maximumProviderCalls)
+      || (body.lastProviderOperation === null) !== (body.lastRequestOrdinal === null)
+    ) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_INPUT_INVALID", "top20 artifact security diagnostic is invalid", 400);
+    }
+    const job = await readJob(body.jobId);
+    if (
+      !job
+      || job.workerId !== COLLECTION_WORKER_V2_TOP20_WORKER_ID
+      || job.attemptId !== body.attemptId
+      || job.workflowRevision !== Number(body.workflowRevision)
+      || !["collecting", "failure_received", "failed"].includes(job.state)
+    ) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_FAILURE_CONFLICT", "top20 artifact security diagnostic is stale", 409);
+    }
+    const diagnostic = Object.freeze({
+      detector: String(body.detector),
+      fileRole: String(body.fileRole),
+      providerAttemptCount: Number(body.providerAttemptCount),
+      executedCallCount: Number(body.executedCallCount),
+      lastProviderOperation: body.lastProviderOperation === null ? null : String(body.lastProviderOperation),
+      lastRequestOrdinal: body.lastRequestOrdinal === null ? null : Number(body.lastRequestOrdinal)
+    });
+    const previous = artifactSecurityDiagnostics.get(job.jobId);
+    if (previous && stableJson(previous) !== stableJson(diagnostic)) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_FAILURE_CONFLICT", "top20 artifact security diagnostic conflicts", 409);
+    }
+    artifactSecurityDiagnostics.set(job.jobId, diagnostic);
+    return Object.freeze({
+      status: "accepted",
+      detector: diagnostic.detector,
+      fileRole: diagnostic.fileRole,
+      replayed: Boolean(previous)
+    });
+  }
+
+  function artifactSecurityDiagnostic(jobId) {
+    const diagnostic = artifactSecurityDiagnostics.get(String(jobId || ""));
+    return diagnostic ? Object.freeze({ ...diagnostic }) : null;
+  }
+
   async function recordFailure(input = {}) {
     assertReady();
     exactKeys(input.body, FAILURE_KEYS, "top20 failure body");
@@ -1653,8 +1719,6 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || Number(body.providerAttemptCount) === 0 && body.executedCallCount !== 0
       || body.providerFailureSubtype !== null && !SAFE_SUBTYPE_PATTERN.test(String(body.providerFailureSubtype))
       || body.diagnosticId !== null && !DIAGNOSTIC_PATTERN.test(String(body.diagnosticId))
-      || body.detector !== null && !SAFE_ARTIFACT_DETECTORS.has(String(body.detector))
-      || body.fileRole !== null && !SAFE_ARTIFACT_FILE_ROLES.has(String(body.fileRole))
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_INPUT_INVALID", "top20 failure receipt is invalid", 400);
     }
@@ -1690,8 +1754,6 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         jobState: job.state,
         providerAttemptCount: Number(body.providerAttemptCount),
         executedCallCount: body.executedCallCount,
-        detector: body.detector,
-        fileRole: body.fileRole,
         resultStored: false,
         writeCount: 0,
         replayed: true
@@ -1708,8 +1770,6 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         jobState: job.state,
         providerAttemptCount: Number(body.providerAttemptCount),
         executedCallCount: body.executedCallCount,
-        detector: body.detector,
-        fileRole: body.fileRole,
         resultStored: false,
         writeCount: 0,
         replayed: true
@@ -1740,8 +1800,6 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         jobState: job.state,
         providerAttemptCount: Number(body.providerAttemptCount),
         executedCallCount: body.executedCallCount,
-        detector: body.detector,
-        fileRole: body.fileRole,
         resultStored: false,
         writeCount: 0,
         replayed: false
@@ -1795,8 +1853,6 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       jobState: job.state,
       providerAttemptCount: Number(body.providerAttemptCount),
       executedCallCount: body.executedCallCount,
-      detector: body.detector,
-      fileRole: body.fileRole,
       resultStored: false,
       writeCount: 0,
       replayed: false
@@ -1958,6 +2014,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     prepareTrustedAdmin,
     prepareMainPlaceRecoveryProbeTrustedAdmin,
     prepareDryRunTrustedAdmin,
+    artifactSecurityDiagnostic,
+    recordArtifactSecurityDiagnostic,
     recordFailure,
     reconcileZeroCallArtifactFailure,
     async reconciliationCandidate() {

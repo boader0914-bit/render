@@ -96,6 +96,7 @@ const {
   SIGNED_PREPARE_PATH: COLLECTION_WORKER_SIGNED_PREPARE_PATH
 } = require("./collection_worker_canary_protocol.cjs");
 const {
+  COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
@@ -338,7 +339,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260810-main-place-probe-v48";
+const UI_ASSET_VERSION = "v2-20260810-top20-artifact-projection-v49";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -15039,6 +15040,7 @@ function sendCollectionWorkerJson(res, status, body, extraHeaders = {}) {
 function isCollectionWorkerInternalPath(pathname) {
   return [
     COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH,
+    COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
     COLLECTION_WORKER_PREPARE_PATH,
     COLLECTION_WORKER_V2_TOP20_PREPARE_PATH,
     COLLECTION_WORKER_CLAIM_PATH,
@@ -15242,6 +15244,25 @@ function latestMainPlaceProbeOutcome(snapshot = {}) {
     observedRankCount: 50,
     providerAttemptCount: 1,
     executedCallCount: 1
+  });
+}
+
+function projectAdminTop20TerminalOutcome(outcome, snapshot = {}, suppliedDiagnostic = undefined) {
+  if (!outcome || typeof outcome !== "object" || !outcome.jobId) return outcome;
+  const job = Array.isArray(snapshot.jobs)
+    ? snapshot.jobs.find((candidate) => candidate?.jobId === outcome.jobId) || null
+    : null;
+  const diagnostic = suppliedDiagnostic === undefined
+    ? collectionWorkerV2Top20Orchestrator.artifactSecurityDiagnostic(outcome.jobId)
+    : suppliedDiagnostic;
+  return Object.freeze({
+    ...outcome,
+    providerAttemptCount: diagnostic?.providerAttemptCount ?? Number(job?.providerAttemptCount || 0),
+    executedCallCount: diagnostic?.executedCallCount ?? null,
+    lastProviderOperation: diagnostic?.lastProviderOperation ?? null,
+    lastRequestOrdinal: diagnostic?.lastRequestOrdinal ?? null,
+    detector: diagnostic?.detector ?? null,
+    fileRole: diagnostic?.fileRole ?? null
   });
 }
 
@@ -16347,6 +16368,15 @@ async function route(req, res) {
       return sendCollectionWorkerJson(res, 200, result);
     }
 
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerV2Top20Orchestrator.recordArtifactSecurityDiagnostic({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return sendCollectionWorkerJson(res, 200, result);
+    }
+
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FAILURE_PATH) {
       const payload = await parseJsonBody(req);
       const orchestrator = String(payload?.body?.jobId || "").startsWith("job-top20-")
@@ -16626,6 +16656,7 @@ async function route(req, res) {
       const reconciliationCandidate = await collectionWorkerV2Top20Orchestrator.reconciliationCandidate();
       const snapshot = await collectionWorkerJobStore.readSnapshot();
       const lastProbeOutcome = latestMainPlaceProbeOutcome(snapshot);
+      const adminOutcome = projectAdminTop20TerminalOutcome(outcome, snapshot);
       return send(res, 200, {
         ...collectionWorkerV2Top20Orchestrator.status(),
         ...providerStatus,
@@ -16638,7 +16669,7 @@ async function route(req, res) {
         // A no-store probe proves the transport without creating a run. It is a
         // ready outcome, while lastProbeOutcome retains the probe-specific view
         // after a later full collection replaces lastOutcome.
-        lastOutcome: outcome?.status === "active" ? null : outcome || lastProbeOutcome,
+        lastOutcome: adminOutcome?.status === "active" ? null : adminOutcome || lastProbeOutcome,
         lastProbeOutcome
       }, "application/json; charset=utf-8", {
         "Cache-Control": "no-store"
@@ -17202,6 +17233,7 @@ module.exports = {
     regionInsightStoreFile: REGION_INSIGHT_STORE_FILE,
     resolveRunRegionContext: (data) => resolveRunRegionContext(data, { matcher: matchCanonicalLocationRegion }),
     projectTop20TerminalOutcome,
+    projectAdminTop20TerminalOutcome,
     rowCollectionAddress,
     scaleCrawlStages,
     storedNaverFallbackSearchContract,

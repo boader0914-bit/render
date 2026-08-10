@@ -25,6 +25,7 @@ const {
   expectedV2Top20ProviderCallTrace
 } = require("./collection_worker_v2_top20_artifact.cjs");
 const {
+  COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
@@ -224,8 +225,10 @@ function internalFetch(system, counters, behavior = {}) {
           ? await system.orchestrator.preflight(payload)
           : pathname === COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH
             ? await system.orchestrator.heartbeat(payload)
-            : pathname === COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH
-              ? await system.orchestrator.finalize(payload)
+          : pathname === COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH
+            ? await system.orchestrator.finalize(payload)
+              : pathname === COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH
+                ? await system.orchestrator.recordArtifactSecurityDiagnostic(payload)
               : pathname === COLLECTION_WORKER_V2_TOP20_FAILURE_PATH
                 ? await system.orchestrator.recordFailure(payload)
                 : (() => { throw Object.assign(new Error("unknown fixture path"), { code: "NOT_FOUND", statusCode: 404 }); })();
@@ -349,8 +352,12 @@ async function failureScenario(root, keys) {
 async function artifactFailureScenario(root, keys) {
   const system = await createSystem(root, keys, { keyword: "Synthetic artifact failure lodging" });
   const counters = { internal: 0, collector: 0, provider: 0 };
-  await assert.rejects(
-    () => runCollectionWorkerV2Top20({
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => warnings.push(String(line));
+  try {
+    await assert.rejects(
+      () => runCollectionWorkerV2Top20({
       fixtureMode: true,
       environment: workerEnvironment(keys),
       internalFetchImpl: internalFetch(system, counters, { loseFirstFailureResponse: true }),
@@ -365,18 +372,71 @@ async function artifactFailureScenario(root, keys) {
         throw Object.assign(new Error("synthetic artifact policy rejection"), {
           code: "COLLECTION_ARTIFACT_SENSITIVE_CONTENT",
           statusCode: 403,
-          safeMeta: Object.freeze({ detector: "url_literal", fileRole: "manifest", contentHashPrefix: "a".repeat(12), filePathHashPrefix: "b".repeat(12), contentLength: 24, stage: "bundle_build" })
+          safeMeta: Object.freeze({ detector: "url_literal", fileRole: "manifest", safeFilePath: "run/manifest.json", contentHashPrefix: "a".repeat(12), filePathHashPrefix: "b".repeat(12), contentLength: 24, stage: "bundle_build" })
         });
       }
-    }),
-    (error) => error?.code === "COLLECTION_ARTIFACT_SENSITIVE_CONTENT" && error.providerAttemptCount === 0 && error.executedCallCount === 0
-  );
+      }),
+      (error) => error?.code === "COLLECTION_ARTIFACT_SENSITIVE_CONTENT" && error.providerAttemptCount === 0 && error.executedCallCount === 0
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+  const artifactLogLine = warnings.find((line) => line.startsWith("[top20-provenance] ") && line.includes("top20_artifact_security_rejected"));
+  assert.ok(artifactLogLine, "artifact policy rejection must emit its one safe event");
+  const artifactLog = JSON.parse(artifactLogLine.slice("[top20-provenance] ".length));
+  assert.deepEqual(Object.keys(artifactLog).sort(), [
+    "artifactStage",
+    "contentHashPrefix",
+    "contentLength",
+    "contentLogged",
+    "detector",
+    "event",
+    "executedCallCount",
+    "failureCode",
+    "filePathHashPrefix",
+    "fileRole",
+    "jobId",
+    "lastProviderOperation",
+    "lastRequestOrdinal",
+    "providerAttemptCount",
+    "safeFilePath",
+    "workerCommitShort"
+  ]);
+  assert.match(artifactLog.jobId, /^job-top20-[a-f0-9]{12}-redacted$/u);
+  assert.deepEqual({ ...artifactLog, jobId: "masked" }, {
+    event: "top20_artifact_security_rejected",
+    failureCode: "COLLECTION_ARTIFACT_SENSITIVE_CONTENT",
+    detector: "url_literal",
+    fileRole: "manifest",
+    safeFilePath: "run/manifest.json",
+    filePathHashPrefix: "b".repeat(12),
+    contentHashPrefix: "a".repeat(12),
+    contentLength: 24,
+    artifactStage: "bundle_build",
+    jobId: "masked",
+    providerAttemptCount: 0,
+    executedCallCount: 0,
+    lastProviderOperation: null,
+    lastRequestOrdinal: null,
+    workerCommitShort: COMMIT.slice(0, 12),
+    contentLogged: false
+  });
   assert.equal(counters.collector, 1);
   assert.equal(counters.provider, 0);
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH], 1, "artifact diagnostic must be sent once");
   assert.equal(counters[COLLECTION_WORKER_V2_TOP20_FAILURE_PATH], 2, "artifact failure receipt recovery is bounded to one retry");
   assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "failed");
   assert.equal((await system.providerStore.read()).state, "closed");
   assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  const artifactJobId = (await system.jobStore.readSnapshot()).jobs[0].jobId;
+  assert.deepEqual(system.orchestrator.artifactSecurityDiagnostic(artifactJobId), {
+    detector: "url_literal",
+    fileRole: "manifest",
+    providerAttemptCount: 0,
+    executedCallCount: 0,
+    lastProviderOperation: null,
+    lastRequestOrdinal: null
+  });
 
   const indeterminate = await createSystem(path.join(root, "receipt-indeterminate"), keys, { keyword: "Synthetic receipt indeterminate lodging" });
   const indeterminateCounters = { internal: 0, collector: 0, provider: 0 };

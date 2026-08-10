@@ -38,6 +38,7 @@ const {
   providerIdForOperation
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
+  COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_DISPATCH_KEY_ID,
@@ -149,10 +150,19 @@ function shortSafeHash(value) {
   return /^[a-f0-9]{64}$/u.test(hash) ? hash.slice(0, 12) : "";
 }
 
+function safeHashPrefix(value) {
+  const hash = String(value || "").trim();
+  return /^[a-f0-9]{12}$/u.test(hash)
+    ? hash
+    : /^[a-f0-9]{64}$/u.test(hash)
+      ? hash.slice(0, 12)
+      : null;
+}
+
 function maskJobId(value) {
   const text = String(value || "");
-  const match = text.match(/^job-top20-([a-f0-9]{24})$/u);
-  return match ? `job-top20-${match[1].slice(0, 12)}…` : "";
+  const match = text.match(/^job-top20-([a-f0-9]{12})-[a-f0-9]{12}$/u);
+  return match ? `job-top20-${match[1]}-redacted` : "";
 }
 
 function safeTop20WorkerLog(event, fields = {}) {
@@ -258,6 +268,36 @@ function logInternalTransportFailure(response, byteLength, expected = {}) {
     observedCommitShort: shortCommit(responseHeader(response, "x-lodging-datalab-commit")) || null,
     protocolMatched: responseHeader(response, "x-lodging-datalab-protocol") === expected.protocol,
     bodyLogged: false
+  })}`);
+}
+
+function safeArtifactSecurityPath(value) {
+  const safePath = String(value || "");
+  return /^(?:top20-summary\.json|top20-content-receipt\.json|run\/(?:manifest\.json|(?:platform|overall|ads|regional|ddnayo)\.csv|details\/detail-\d{2}\.json))$/u.test(safePath)
+    ? safePath
+    : null;
+}
+
+function safeArtifactSecurityRejectedLog(fields = {}) {
+  const detector = SAFE_ARTIFACT_DETECTORS.has(String(fields.detector || "")) ? String(fields.detector) : null;
+  const fileRole = SAFE_ARTIFACT_FILE_ROLES.has(String(fields.fileRole || "")) ? String(fields.fileRole) : null;
+  console.warn(`[top20-provenance] ${stableJson({
+    event: "top20_artifact_security_rejected",
+    failureCode: "COLLECTION_ARTIFACT_SENSITIVE_CONTENT",
+    detector,
+    fileRole,
+    safeFilePath: safeArtifactSecurityPath(fields.safeFilePath),
+    filePathHashPrefix: safeHashPrefix(fields.filePathHashPrefix),
+    contentHashPrefix: safeHashPrefix(fields.contentHashPrefix),
+    contentLength: Number.isInteger(fields.contentLength) && fields.contentLength >= 0 ? fields.contentLength : null,
+    artifactStage: String(fields.artifactStage || "bundle_build"),
+    jobId: maskJobId(fields.jobId),
+    providerAttemptCount: Number.isInteger(fields.providerAttemptCount) ? fields.providerAttemptCount : 0,
+    executedCallCount: Number.isInteger(fields.executedCallCount) ? fields.executedCallCount : 0,
+    lastProviderOperation: fields.lastProviderOperation ? String(fields.lastProviderOperation) : null,
+    lastRequestOrdinal: Number.isInteger(fields.lastRequestOrdinal) ? fields.lastRequestOrdinal : null,
+    workerCommitShort: shortCommit(fields.workerCommit),
+    contentLogged: false
   })}`);
 }
 
@@ -676,6 +716,8 @@ async function runCollectionWorkerV2Top20(input = {}) {
   let jobWorkflowRevision = claimed.workflowRevision;
   let providerWorkflowRevision = claimed.providerWorkflowRevision;
   let providerCallCount = 0;
+  let lastProviderOperation = null;
+  let lastRequestOrdinal = null;
 
   async function sendFailure(error) {
     const failure = safeFailureMeta(error, providerCallCount);
@@ -688,9 +730,7 @@ async function runCollectionWorkerV2Top20(input = {}) {
       executedCallCount: failure.executedCallCount,
       code: failure.code,
       providerFailureSubtype: failure.providerFailureSubtype,
-      diagnosticId: failure.diagnosticId,
-      detector: failure.detector,
-      fileRole: failure.fileRole
+      diagnosticId: failure.diagnosticId
     };
     return postReceiptWithOneInternalRecovery({
       baseUrl: worker.baseUrl,
@@ -699,6 +739,31 @@ async function runCollectionWorkerV2Top20(input = {}) {
       fetchImpl: internalFetchImpl,
       now: clock,
       path: COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
+      requestPrivateKey: worker.requestPrivateKey
+    });
+  }
+
+  async function sendArtifactSecurityDiagnostic(error) {
+    const failure = safeFailureMeta(error, providerCallCount);
+    if (failure.code !== "COLLECTION_ARTIFACT_SENSITIVE_CONTENT" || !failure.detector || !failure.fileRole) return null;
+    const body = {
+      jobId: verifiedJob.jobId,
+      attemptId: verifiedJob.attemptId,
+      workflowRevision: jobWorkflowRevision,
+      detector: failure.detector,
+      fileRole: failure.fileRole,
+      providerAttemptCount: failure.providerAttemptCount,
+      executedCallCount: failure.executedCallCount,
+      lastProviderOperation,
+      lastRequestOrdinal
+    };
+    return postSignedWorkerRequest({
+      baseUrl: worker.baseUrl,
+      body,
+      expectedGeneration: !fixtureMode ? generation : null,
+      fetchImpl: internalFetchImpl,
+      now: clock,
+      path: COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
       requestPrivateKey: worker.requestPrivateKey
     });
   }
@@ -968,6 +1033,8 @@ async function runCollectionWorkerV2Top20(input = {}) {
             { providerAttemptCount: providerCallCount > 0 ? 1 : 0, executedCallCount: providerCallCount }
           );
         }
+        lastProviderOperation = String(metadata.operation || "");
+        lastRequestOrdinal = requestOrdinal;
         safeTop20WorkerLog("top20_provider_call_authorized", {
           jobId: verifiedJob.jobId,
           contractHash: verifiedJob.contractHash,
@@ -1052,21 +1119,23 @@ async function runCollectionWorkerV2Top20(input = {}) {
   } catch (error) {
     const sensitive = error?.safeMeta || null;
     if (String(error?.code || "") === "COLLECTION_ARTIFACT_SENSITIVE_CONTENT") {
-      safeTop20WorkerLog("collection_artifact_sensitive_rejected", {
+      const failure = safeFailureMeta(error, providerCallCount);
+      safeArtifactSecurityRejectedLog({
         jobId: verifiedJob.jobId,
-        contractHash: verifiedJob.contractHash,
-        executionIdentityHash: verifiedJob.executionIdentityHash,
         workerCommit: worker.commit,
-        jobState: "collecting",
-        failureCode: error.code,
-        executedCallCount: safeFailureMeta(error, providerCallCount).executedCallCount,
-        artifactDetector: String(sensitive?.detector || ""),
-        artifactFileRole: String(sensitive?.fileRole || ""),
-        artifactFilePathHashPrefix: String(sensitive?.filePathHashPrefix || ""),
-        artifactContentHashPrefix: String(sensitive?.contentHashPrefix || ""),
-        artifactContentLength: Number.isInteger(sensitive?.contentLength) ? sensitive.contentLength : null,
-        artifactStage: String(sensitive?.stage || "bundle_build")
+        providerAttemptCount: failure.providerAttemptCount,
+        executedCallCount: failure.executedCallCount,
+        detector: failure.detector,
+        fileRole: failure.fileRole,
+        safeFilePath: sensitive?.safeFilePath,
+        filePathHashPrefix: sensitive?.filePathHashPrefix,
+        contentHashPrefix: sensitive?.contentHashPrefix,
+        contentLength: sensitive?.contentLength,
+        artifactStage: sensitive?.stage,
+        lastProviderOperation,
+        lastRequestOrdinal
       });
+      await sendArtifactSecurityDiagnostic(error).catch(() => null);
     }
     await deliverFailureReceiptOrThrow(error);
     throw fail(

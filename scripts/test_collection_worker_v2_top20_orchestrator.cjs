@@ -29,6 +29,7 @@ const {
   startV2Top20Execution
 } = require("./collection_worker_v2_top20_contract.cjs");
 const {
+  COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
@@ -483,6 +484,22 @@ async function blockedScenario(root, keys) {
 async function failureScenario(root, keys) {
   const system = await createSystem(root, keys);
   const flow = await prepareClaimPreflight(system, keys, "Synthetic top20 worker failure lodging");
+  const diagnosticBody = {
+    jobId: flow.prepared.jobId,
+    attemptId: flow.claimed.job.signedJob.attemptId,
+    workflowRevision: flow.claimed.job.workflowRevision,
+    detector: "sensitive_key",
+    fileRole: "platform_csv",
+    providerAttemptCount: 0,
+    executedCallCount: 0,
+    lastProviderOperation: null,
+    lastRequestOrdinal: null
+  };
+  const diagnostic = await system.orchestrator.recordArtifactSecurityDiagnostic({
+    body: diagnosticBody,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH, diagnosticBody, keys, system.clock.now())
+  });
+  assert.equal(diagnostic.status, "accepted");
   const body = {
     jobId: flow.prepared.jobId,
     attemptId: flow.claimed.job.signedJob.attemptId,
@@ -492,9 +509,7 @@ async function failureScenario(root, keys) {
     executedCallCount: 0,
     code: "COLLECTION_WORKER_PROCESS_FAILED",
     providerFailureSubtype: null,
-    diagnosticId: null,
-    detector: null,
-    fileRole: null
+    diagnosticId: null
   };
   const result = await system.orchestrator.recordFailure({
     body,
@@ -507,6 +522,7 @@ async function failureScenario(root, keys) {
   assert.equal(system.orchestrator.status().activePayloadCount, 0, "failed payload must not count as active");
   assert.equal(system.orchestrator.status().retainedTerminalPayloadCount, 1);
   assert.equal((await system.providerStore.read()).state, "closed");
+  assert.equal(system.orchestrator.artifactSecurityDiagnostic(flow.prepared.jobId)?.detector, "sensitive_key");
   const replay = await system.orchestrator.recordFailure({
     body,
     signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_FAILURE_PATH, body, keys, system.clock.now())
@@ -545,9 +561,7 @@ async function cancellationScenario(root, keys) {
     executedCallCount: 0,
     code: "COLLECTION_WORKER_V2_TOP20_CANCEL_REQUESTED",
     providerFailureSubtype: null,
-    diagnosticId: null,
-    detector: null,
-    fileRole: null
+    diagnosticId: null
   };
   const result = await system.orchestrator.recordFailure({
     body,

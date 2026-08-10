@@ -208,6 +208,9 @@ assert.match(functionBlock("canMutateB2B"), /isAdminUserViewMode/);
 assert.match(app, /function\s+blockAdminUserViewMutation\s*\(/);
 assert.match(functionBlock("blockAdminUserViewMutation"), /canMutateB2B/);
 assert.match(functionBlock("applyRoleUi"), /adminUserViewBanner/);
+assert.match(functionBlock("artifactSecurityTerminalText"), /COLLECTION_ARTIFACT_SENSITIVE_CONTENT/);
+assert.match(functionBlock("applyTop20WorkerTransportStatus"), /artifactSecurityTerminalText/);
+assert.match(functionBlock("pollCrawlStatusUntilIdle"), /await loadTop20WorkerTransportStatus\(\)/);
 
 function createThemeHarness(storedTheme, systemDark) {
   const domListeners = new Map();

@@ -84,6 +84,24 @@ assert.deepEqual(__test.projectTop20TerminalOutcome({ jobId: "job-top20-full", s
 });
 assert.equal(__test.projectTop20TerminalOutcome({ jobId: "job-top20-blocked", state: "blocked", failureCode: "NAVER_ACCESS_BLOCKED" }).status, "blocked");
 assert.equal(__test.projectTop20TerminalOutcome({ jobId: "job-top20-failed", state: "indeterminate", failureCode: "TEST_FAILED" }).status, "failed");
+const adminArtifactFailure = __test.projectAdminTop20TerminalOutcome(
+  { status: "failed", jobId: "job-top20-artifact", code: "COLLECTION_ARTIFACT_SENSITIVE_CONTENT", resultStored: false, writeCount: 0 },
+  { jobs: [{ jobId: "job-top20-artifact", providerAttemptCount: 1 }] },
+  { detector: "sensitive_key", fileRole: "platform_csv", providerAttemptCount: 1, executedCallCount: 81, lastProviderOperation: "daily_schedule", lastRequestOrdinal: 81 }
+);
+assert.deepEqual(adminArtifactFailure, {
+  status: "failed",
+  jobId: "job-top20-artifact",
+  code: "COLLECTION_ARTIFACT_SENSITIVE_CONTENT",
+  resultStored: false,
+  writeCount: 0,
+  providerAttemptCount: 1,
+  executedCallCount: 81,
+  lastProviderOperation: "daily_schedule",
+  lastRequestOrdinal: 81,
+  detector: "sensitive_key",
+  fileRole: "platform_csv"
+});
 
 const root = path.resolve(__dirname, "..");
 const serverSource = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
@@ -128,4 +146,6 @@ assert.match(appSource, /workerOutcome\.status === "ready" && workerOutcome\.noS
 assert.match(appSource, /네이버 메인 순위 연결 확인이 완료되었습니다/u);
 assert.match(appSource, /await loadTop20WorkerTransportStatus\(\);/u);
 assert.match(serverSource, /lastProbeOutcome/u);
+assert.match(serverSource, /recordArtifactSecurityDiagnostic/u);
+assert.match(serverSource, /COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH/u);
 console.log("collection worker V2 top20 server/UI contract fixtures passed");

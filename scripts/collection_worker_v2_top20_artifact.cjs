@@ -207,6 +207,95 @@ function sanitizeText(value, label) {
   return sanitizeArtifactString(value, label);
 }
 
+function parseArtifactCsv(content, label) {
+  const text = Buffer.isBuffer(content) ? content.toString("utf8") : String(content || "");
+  const rows = [];
+  let row = [];
+  let field = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"') {
+        if (text[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += character;
+      }
+      continue;
+    }
+    if (character === '"') {
+      if (field) throw artifactError("V2_TOP20_ARTIFACT_INVALID", `${label} CSV quoting is invalid`, 409);
+      quoted = true;
+    } else if (character === ",") {
+      row.push(field);
+      field = "";
+    } else if (character === "\n") {
+      row.push(field.endsWith("\r") ? field.slice(0, -1) : field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += character;
+    }
+  }
+  if (quoted) throw artifactError("V2_TOP20_ARTIFACT_INVALID", `${label} CSV quoting is incomplete`, 409);
+  if (field || row.length) {
+    row.push(field.endsWith("\r") ? field.slice(0, -1) : field);
+    rows.push(row);
+  }
+  while (rows.length && rows[rows.length - 1].every((value) => value === "")) rows.pop();
+  if (rows.length < 1) throw artifactError("V2_TOP20_ARTIFACT_INVALID", `${label} CSV is empty`, 409);
+  const headers = rows.shift().map((value, index) => (
+    index === 0 ? String(value).replace(/^\uFEFF/u, "") : String(value)
+  ));
+  if (headers.some((value) => !value) || new Set(headers).size !== headers.length) {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", `${label} CSV headers are invalid`, 409);
+  }
+  for (const [index, values] of rows.entries()) {
+    if (values.length !== headers.length) {
+      throw artifactError("V2_TOP20_ARTIFACT_INVALID", `${label} CSV row ${index + 1} is invalid`, 409);
+    }
+  }
+  return Object.freeze({
+    headers: Object.freeze(headers),
+    rows: Object.freeze(rows.map((values) => Object.freeze(values)))
+  });
+}
+
+function escapeArtifactCsv(value) {
+  const text = String(value ?? "");
+  const formulaSafe = /^[=+\-@]/u.test(text) ? `'${text}` : text;
+  return /[",\r\n]/u.test(formulaSafe) ? `"${formulaSafe.replaceAll('"', '""')}"` : formulaSafe;
+}
+
+function writeArtifactCsv(headers, rows) {
+  return `\uFEFF${[headers, ...rows].map((values) => values.map(escapeArtifactCsv).join(",")).join("\n")}\n`;
+}
+
+function projectV2Top20ArtifactCsv(content, role) {
+  const parsed = parseArtifactCsv(content, `top20 ${role}`);
+  const urlIndex = parsed.headers.indexOf("url");
+  if (urlIndex < 0) {
+    return sanitizeText(content, `top20 ${role}`);
+  }
+  const headers = [...parsed.headers];
+  headers[urlIndex] = "source_available";
+  if (new Set(headers).size !== headers.length) {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", `top20 ${role} CSV projected headers are invalid`, 409);
+  }
+  const rows = parsed.rows.map((values) => values.map((value, index) => (
+    index === urlIndex
+      ? (String(value || "").trim() ? "true" : "false")
+      : sanitizeText(value, `top20 ${role} CSV cell`)
+  )));
+  return writeArtifactCsv(headers, rows);
+}
+
 function top20ArtifactFileRole(filePath) {
   if (filePath === SUMMARY_PATH) return "summary";
   if (filePath === CONTENT_RECEIPT_PATH) return "content_receipt";
@@ -617,7 +706,7 @@ async function collectV2Top20ArtifactFiles(input = {}) {
   for (const role of REQUIRED_CSV_ROLES) {
     const sourceName = safeRelativePath(manifest.fileRoles?.[role], `manifest.fileRoles.${role}`);
     const sourcePath = assertInside(outputDir, path.join(outputDir, sourceName), `top20 ${role}`);
-    const content = sanitizeText(await fs.readFile(sourcePath, "utf8"), `top20 ${role}`);
+    const content = projectV2Top20ArtifactCsv(await fs.readFile(sourcePath, "utf8"), role);
     files.push({ path: `run/${role}.csv`, content });
   }
   const normalizedDetails = [];
@@ -797,6 +886,8 @@ module.exports = {
   computeV2Top20ProviderCallTraceHash,
   expectedV2Top20ProviderCallTrace,
   normalizeV2Top20ProviderCallTrace,
+  parseArtifactCsv,
+  projectV2Top20ArtifactCsv,
   sanitizeJsonValue,
   sanitizeArtifactString,
   sanitizeText,

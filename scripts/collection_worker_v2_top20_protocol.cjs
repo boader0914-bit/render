@@ -28,6 +28,7 @@ const COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH = "/api/internal/collection-work
 const COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH = "/api/internal/collection-worker/jobs/heartbeat";
 const COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH = "/api/internal/collection-worker/results/finalize";
 const COLLECTION_WORKER_V2_TOP20_FAILURE_PATH = "/api/internal/collection-worker/failures";
+const COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH = "/api/internal/collection-worker/v2-top20/artifact-security-diagnostic";
 const COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH = "/api/internal/collection-worker/v2-top20/main-place-recovery-probe/finalize";
 const COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE = "main_place_recovery_probe.v1";
 const COLLECTION_WORKER_V2_TOP20_SUMMARY_PATH = "top20-summary.json";
@@ -349,6 +350,7 @@ function verifyV2Top20ArtifactKeyProof(value, expected, publicKey) {
 }
 
 module.exports = {
+  COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_BACKEND_ID,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,

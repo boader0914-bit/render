@@ -10,6 +10,7 @@ const {
 } = require("./collection_artifact_contract.cjs");
 const {
   auditV2Top20ArtifactFiles,
+  projectV2Top20ArtifactCsv,
   sanitizeArtifactString
 } = require("./collection_worker_v2_top20_artifact.cjs");
 
@@ -56,12 +57,20 @@ assert.equal(audit.length, normalFiles.length);
 const signed = buildCollectionArtifactBundle({ identity, files: normalFiles }, { privateKey, keyId: "artifact_fixture" });
 assert.equal(verifyCollectionArtifactBundle(signed, { publicKey, expectedIdentity: identity, expectedSigningKeyId: "artifact_fixture" }).bundle.fileCount, normalFiles.length);
 assert.equal(sanitizeArtifactString("See https://public.example/path reference", "fixture"), "See  reference");
+const projectedUrlCsv = projectV2Top20ArtifactCsv(
+  "rank,url,note\n1,https://fixture.invalid/item,public\n",
+  "platform"
+);
+assert.match(projectedUrlCsv, /source_available/u);
+assert.equal(classifyCollectionArtifactSensitiveContent("run/platform.csv", projectedUrlCsv), null);
 
 expectSensitive("run/manifest.json", "<html>fixture</html>", "raw_html");
 expectSensitive("run/manifest.json", "https://public.example/path", "url_literal");
 expectSensitive("run/manifest.json", "www.public.example/path", "url_literal");
+expectSensitive("run/platform.csv", "rank,url\n1,https://public.example/path\n", "url_literal");
 expectSensitive("run/manifest.json", "Authorization: Bearer token-value", "bearer_token");
 expectSensitive("run/manifest.json", "client_secret=value", "sensitive_key");
+expectSensitive("run/manifest.json", JSON.stringify({ nested: JSON.stringify({ url: "https://public.example/path" }) }), "url_literal");
 expectSensitive("run/raw-response.json", "safe", "forbidden_path_token");
 expectSensitive("run/details/detail-01.html", "safe", "html_extension");
 const rejectedAudit = auditV2Top20ArtifactFiles([{ path: "run/manifest.json", content: "www.public.example/path" }])[0];

@@ -3049,6 +3049,19 @@ function isTop20CrawlPreview(value = {}) {
     || Number(boundedInventory?.totalCallBudget || 0) >= 1;
 }
 
+function artifactSecurityTerminalText(outcome = null) {
+  if (
+    !outcome
+    || outcome.code !== "COLLECTION_ARTIFACT_SENSITIVE_CONTENT"
+    || !Number.isInteger(outcome.providerAttemptCount)
+    || !Number.isInteger(outcome.executedCallCount)
+  ) return "";
+  const lastOperation = outcome.lastProviderOperation ? ` · 마지막 단계 ${outcome.lastProviderOperation}` : "";
+  const detector = outcome.detector ? ` · 검출 ${outcome.detector}` : "";
+  const fileRole = outcome.fileRole ? ` · 파일 역할 ${outcome.fileRole}` : "";
+  return `수집 결과가 보안 정제 과정에서 중단되었습니다. ${outcome.code} · provider 시도 ${outcome.providerAttemptCount} · 실행 호출 ${outcome.executedCallCount}${lastOperation}${detector}${fileRole}`;
+}
+
 function applyTop20WorkerTransportStatus(status = null) {
   state.top20WorkerTransport = status && typeof status === "object" ? status : null;
   if (!isAdminRole()) return;
@@ -3059,6 +3072,11 @@ function applyTop20WorkerTransportStatus(status = null) {
   submitButton.setAttribute("aria-disabled", ready ? "false" : "true");
   if (!ready && els.crawlStatus) {
     els.crawlStatus.textContent = "수집 서버 연결을 준비하고 있습니다.";
+  }
+  const artifactTerminalText = artifactSecurityTerminalText(state.top20WorkerTransport?.lastOutcome);
+  if (ready && artifactTerminalText && els.crawlStatus) {
+    els.crawlStatus.textContent = artifactTerminalText;
+    return;
   }
   const probe = state.top20WorkerTransport?.lastProbeOutcome;
   if (ready && probe?.status === "ready" && probe?.success === true && probe?.noStore === true) {
@@ -3938,6 +3956,7 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
         if (els.crawlStatus) {
           els.crawlStatus.textContent = `Worker 수집이 중단되었습니다. ${workerOutcome.code || "수집 결과가 완결되지 않았습니다."}`;
         }
+        if (isAdminRole()) await loadTop20WorkerTransportStatus();
       }
       await loadRuns(true);
       return;
