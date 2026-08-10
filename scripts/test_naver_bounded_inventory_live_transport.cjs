@@ -42,7 +42,7 @@ function itemsRequest(index = 1) {
   };
 }
 
-function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
+function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1, date = "2026-08-06") {
   const businessId = String(2000 + companyOrdinal);
   const bizItemId = String(companyOrdinal * 100 + itemOrdinal);
   return {
@@ -53,7 +53,7 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
     companyOrdinal,
     productOrdinal: itemOrdinal,
     businessId,
-    date: "2026-08-06",
+    date,
     body: {
       operationName: "dailySchedule",
       query: GRAPHQL_DOCUMENTS.naver_booking_schedule,
@@ -61,8 +61,8 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
         scheduleParams: {
           businessId,
           businessTypeId: 3,
-          startDateTime: "2026-08-06T00:00:00",
-          endDateTime: "2026-08-06T00:00:00",
+          startDateTime: `${date}T00:00:00`,
+          endDateTime: `${date}T00:00:00`,
           bizItemId
         }
       }
@@ -229,6 +229,23 @@ function scheduleRequest(companyOrdinal = 1, itemOrdinal = 1) {
       { code: "NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID" }
     );
     assert.equal(duplicateProduct.callCounts().total, 3, "a duplicate product ordinal must not start fetch");
+
+    const rangeAware = createNaverBoundedInventoryLiveTransport({
+      enabled: true,
+      budgetProfileId: "top20_v1",
+      bookingRangeDays: 3,
+      fetchImpl: async () => new Response("{}", { status: 200 })
+    });
+    await rangeAware(businessRequest(1));
+    await rangeAware(itemsRequest(1));
+    await rangeAware(scheduleRequest(1, 1, "2026-08-06"));
+    await rangeAware(scheduleRequest(1, 1, "2026-08-07"));
+    await rangeAware(scheduleRequest(1, 1, "2026-08-08"));
+    await assert.rejects(
+      () => rangeAware(scheduleRequest(1, 1, "2026-08-08")),
+      { code: "NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID" }
+    );
+    assert.equal(rangeAware.callCounts().naver_booking_schedule, 3, "the same product is valid once per signed collection day");
 
     let fetchStarted = false;
     let startedMetadata = null;

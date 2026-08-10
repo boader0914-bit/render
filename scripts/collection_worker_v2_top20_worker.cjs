@@ -26,6 +26,15 @@ const {
   executeV2Top20BookingDetailRecoveryProbe
 } = require("./collection_worker_v2_top20_collector.cjs");
 const {
+  executeV2CollectorSingleSource
+} = require("./v2_collector_single_source.cjs");
+const {
+  V2_COLLECTION_EXECUTION_PROFILE,
+  buildV2CollectionJobIdentity,
+  buildV2CollectionPlan,
+  normalizeV2CollectionRequest
+} = require("./v2_collection_request.cjs");
+const {
   auditV2Top20ArtifactFiles,
   buildV2Top20FinalArtifactFiles
 } = require("./collection_worker_v2_top20_artifact.cjs");
@@ -411,6 +420,9 @@ function verifyTop20DispatchCompatibilityBridge({ verifiedJob, normalizedRangeCo
 }
 
 function verifyTop20ExecutionPayload(value, verifiedJob) {
+  if (value?.executionProfile === V2_COLLECTION_EXECUTION_PROFILE) {
+    return verifyV2SingleSourceExecutionPayload(value, verifiedJob);
+  }
   const baseKeys = [
     "schemaVersion",
     "jobId",
@@ -535,10 +547,70 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     contract: Object.freeze({ ...value.contract }),
     top20Contract: expectedTop20Contract,
     top20ContractHash: expectedTop20Hash,
+    maximumProviderCalls: expectedTop20Contract.maximumProviderCalls,
     executionRequestHash: value.executionRequestHash,
     detailProviderSession: Object.freeze({ ...value.detailProviderSession }),
     executionProfile: value.executionProfile,
     bookingDetailProbeTarget
+  });
+}
+
+function verifyV2SingleSourceExecutionPayload(value, verifiedJob) {
+  const keys = [
+    "schemaVersion", "jobId", "attemptId", "contractHash", "executionIdentityHash",
+    "top20ContractHash", "executionRequestHash", "contract",
+    "providerSession", "detailProviderSession", "executionProfile"
+  ];
+  exactKeys(value, keys, "single-source V2 execution payload");
+  exactKeys(value.providerSession, [
+    "maximumProviderCalls", "providerAttemptCount", "concurrency", "automaticRetry",
+    "automaticFallback", "circuitStateAtReservation", "serviceGlobalLockHeld"
+  ], "single-source V2 provider session");
+  exactKeys(value.detailProviderSession, ["state", "retryAt", "liveCallsAllowed"], "single-source V2 detail provider session");
+  let request;
+  try {
+    request = normalizeV2CollectionRequest(value.contract);
+  } catch {
+    throw payloadInvalid("v2_collection_contract_invalid");
+  }
+  const identity = buildV2CollectionJobIdentity(request);
+  const plan = buildV2CollectionPlan(request);
+  if (
+    value.schemaVersion !== COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION
+    || value.jobId !== identity.jobId
+    || value.attemptId !== identity.attemptId
+    || verifiedJob.jobId !== identity.jobId
+    || verifiedJob.attemptId !== identity.attemptId
+    || value.contractHash !== verifiedJob.contractHash
+    || value.contractHash !== request.contractHash
+    || value.executionIdentityHash !== verifiedJob.executionIdentityHash
+    || value.executionRequestHash !== request.executionRequestHash
+    || value.top20ContractHash !== request.contractHash
+    || stableJson(verifiedJob.contract) !== stableJson(request)
+  ) throw payloadInvalid("v2_collection_identity_mismatch");
+  if (verifiedJob.approvalId !== `approval:v2:${request.contractHash}:${request.executionRequestHash}`) {
+    throw payloadInvalid("approval_identity_mismatch");
+  }
+  if (
+    value.providerSession.maximumProviderCalls !== plan.maximumProviderCalls
+    || value.providerSession.providerAttemptCount !== 1
+    || value.providerSession.concurrency !== 1
+    || value.providerSession.automaticRetry !== false
+    || value.providerSession.automaticFallback !== false
+    || !["closed", "open"].includes(value.providerSession.circuitStateAtReservation)
+    || value.providerSession.serviceGlobalLockHeld !== true
+    || !["closed", "open", "probe_allowed"].includes(value.detailProviderSession.state)
+    || typeof value.detailProviderSession.liveCallsAllowed !== "boolean"
+  ) throw payloadInvalid("provider_session_mismatch");
+  return Object.freeze({
+    contract: request,
+    top20ContractHash: request.contractHash,
+    maximumProviderCalls: plan.maximumProviderCalls,
+    executionRequestHash: request.executionRequestHash,
+    providerSession: Object.freeze({ ...value.providerSession }),
+    detailProviderSession: Object.freeze({ ...value.detailProviderSession }),
+    executionProfile: V2_COLLECTION_EXECUTION_PROFILE,
+    bookingDetailProbeTarget: null
   });
 }
 
@@ -1330,7 +1402,9 @@ async function runCollectionWorkerV2Top20(input = {}) {
 
   const collectorExecutor = fixtureMode && typeof input.collectorExecutor === "function"
     ? input.collectorExecutor
-    : executeV2Top20Collector;
+    : execution.executionProfile === V2_COLLECTION_EXECUTION_PROFILE
+      ? executeV2CollectorSingleSource
+      : executeV2Top20Collector;
   const artifactFinalizer = fixtureMode && typeof input.artifactFinalizer === "function"
     ? input.artifactFinalizer
     : buildV2Top20FinalArtifactFiles;
@@ -1354,13 +1428,15 @@ async function runCollectionWorkerV2Top20(input = {}) {
       executionIdentityHash: verifiedJob.executionIdentityHash,
       heartbeat,
       detailLiveCallsAllowed: execution.detailProviderSession.liveCallsAllowed,
+      mainPlaceProvider: { state: execution.providerSession?.circuitStateAtReservation || "closed" },
+      bookingDetailProvider: execution.detailProviderSession,
       async onProviderCall(metadata = {}) {
         const requestOrdinal = Number(metadata.requestOrdinal);
         if (
           ![providerIdForOperation(String(metadata.operation || "")), "naver_place_search"].includes(metadata.providerId)
           || !["main_place", "booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(String(metadata.operation || ""))
           || requestOrdinal !== providerCallCount + 1
-          || requestOrdinal > execution.top20Contract.maximumProviderCalls
+          || requestOrdinal > execution.maximumProviderCalls
         ) {
           throw fail(
             "COLLECTION_WORKER_V2_TOP20_PROVIDER_CALL_SEQUENCE_INVALID",
@@ -1416,7 +1492,7 @@ async function runCollectionWorkerV2Top20(input = {}) {
       contractHash: verifiedJob.contractHash,
       executionIdentityHash: verifiedJob.executionIdentityHash,
       providerWorkflowRevision,
-      maximumProviderCalls: execution.top20Contract.maximumProviderCalls
+      maximumProviderCalls: execution.maximumProviderCalls
     });
     const artifactAudit = auditV2Top20ArtifactFiles(finalArtifactInput.files);
     const rejected = artifactAudit.find((entry) => entry.accepted !== true);

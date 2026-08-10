@@ -125,6 +125,26 @@ async function fixtureFetch(input, init = {}) {
       headers: { "content-type": "text/html; charset=utf-8" }
     });
   }
+  if (
+    (url.hostname === "pcmap.place.naver.com" && /^\/accommodation\/\d+$/u.test(url.pathname))
+    || (url.hostname === "m.place.naver.com" && /^\/accommodation\/\d+\/home$/u.test(url.pathname))
+  ) {
+    record("booking_business_place_page", method);
+    if (method !== "GET") throw new Error("unexpected place-page fixture request");
+    const blocked = fixtureBlock("booking_business_place_page");
+    if (blocked) return blocked;
+    const placeId = url.pathname.split("/")[2];
+    if (mode === "graphql_error_booking_business_first_place_page_success" && placeId === "1001") {
+      return new Response(`<html>booking/3/bizes/2001</html>`, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" }
+      });
+    }
+    return new Response("<html>synthetic place page</html>", {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" }
+    });
+  }
 
   if (process.env.V2_COLLECTOR_COMPATIBILITY_ACTIVATION === "1") {
     if (url.hostname === "nol.yanolja.com" && url.pathname.endsWith("/count")) {
@@ -207,7 +227,13 @@ async function fixtureFetch(input, init = {}) {
     if (mode === "zero_two" && process.env.V2_TOP20_WORKER_ACTIVATION === "1" && placeId === "1002") {
       return jsonResponse({ data: { business: { naverBooking: null } } });
     }
-    if (mode === "business_booking_omitted") {
+    if (mode === "business_booking_omitted" || (
+      ["graphql_error_booking_business_first_place_page_success", "graphql_error_booking_business_first_historical"].includes(mode)
+      && placeId === "1001"
+    )) {
+      if (mode.startsWith("graphql_error_booking_business_first")) {
+        return jsonResponse({ errors: [{ message: "synthetic" }], data: null });
+      }
       return jsonResponse({ data: { business: { base: { id: placeId, name: "Synthetic" } } } });
     }
     return jsonResponse({

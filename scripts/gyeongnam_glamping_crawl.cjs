@@ -1062,6 +1062,7 @@ const NAVER_BOUNDED_INVENTORY_TRANSPORT = NAVER_LEGACY_INVENTORY_ACTIVATION
       providerId: "naver_booking_detail",
       allowTextFallback: process.env.NODE_ENV === "test",
       budgetProfileId: V2_TOP20_WORKER_ACTIVATION ? "top20_v1" : "top3_v1",
+      bookingRangeDays: BOOKING_RANGE_DAYS,
       beforeProviderCall: V2_TOP20_PROVIDER_IPC_ACTIVATION
         ? requestV2Top20ProviderCallHeartbeat
         : undefined,
@@ -1739,18 +1740,15 @@ async function executeBoundedInventoryGraphql(request) {
     throw error;
   }
   if (response.status < 200 || response.status >= 300) {
-    NAVER_BOUNDED_INVENTORY_TRANSPORT.halt();
     throw createCrawlFailure(response.status >= 500 ? "NAVER_TEMPORARY_UNAVAILABLE" : "NAVER_HTTP_ERROR");
   }
   let data;
   try {
     data = JSON.parse(response.body);
   } catch {
-    NAVER_BOUNDED_INVENTORY_TRANSPORT.halt();
     throw createCrawlFailure("COLLECTION_FAILED");
   }
   if (!data || typeof data !== "object" || Array.isArray(data)) {
-    NAVER_BOUNDED_INVENTORY_TRANSPORT.halt();
     throw createCrawlFailure("COLLECTION_FAILED");
   }
   return { status: response.status, data };
@@ -1759,25 +1757,63 @@ async function executeBoundedInventoryGraphql(request) {
 async function getNaverBookingBusiness(placeId, companyOrdinal = null) {
   if (!placeId) return null;
   if (typeof NAVER_LEGACY_INVENTORY_ACTIVATION !== "undefined" && NAVER_LEGACY_INVENTORY_ACTIVATION) {
-    const result = await executeBoundedInventoryGraphql({
-      operation: "naver_booking_business",
-      companyOrdinal,
-      placeId: String(placeId),
-      body: {
-        operationName: "naverBookingBusiness",
-        query: naverBookingBusinessQuery,
-        variables: { id: String(placeId), isNx: false }
-      }
-    });
+    let result;
+    try {
+      result = await executeBoundedInventoryGraphql({
+        operation: "naver_booking_business",
+        companyOrdinal,
+        placeId: String(placeId),
+        body: {
+          operationName: "naverBookingBusiness",
+          query: naverBookingBusinessQuery,
+          variables: { id: String(placeId), isNx: false }
+        }
+      });
+    } catch (error) {
+      // V2 resolves a Booking identity in a bounded order.  A classified
+      // access block remains authoritative, but a non-blocked live lookup
+      // failure is a company-local condition and must continue to the public
+      // page and then a verified historical ID.
+      if (error?.code === "NAVER_ACCESS_BLOCKED") throw error;
+      return {
+        bookingBusinessId: "",
+        bookingUrl: "",
+        providerConfirmedZero: false,
+        status: null,
+        blocked: false,
+        errors: ["live_graphql_unavailable"]
+      };
+    }
     if (Array.isArray(result.data?.errors) && result.data.errors.length) {
-      throw createCrawlFailure("COLLECTION_FAILED");
+      return {
+        bookingBusinessId: "",
+        bookingUrl: "",
+        providerConfirmedZero: false,
+        status: result.status,
+        blocked: false,
+        errors: ["live_graphql_unavailable"]
+      };
     }
     if (!result.data?.data || !Object.prototype.hasOwnProperty.call(result.data.data, "business")) {
-      throw createCrawlFailure("COLLECTION_FAILED");
+      return {
+        bookingBusinessId: "",
+        bookingUrl: "",
+        providerConfirmedZero: false,
+        status: result.status,
+        blocked: false,
+        errors: ["live_graphql_unavailable"]
+      };
     }
     const business = result.data.data.business;
     if (business !== null && (typeof business !== "object" || Array.isArray(business))) {
-      throw createCrawlFailure("COLLECTION_FAILED");
+      return {
+        bookingBusinessId: "",
+        bookingUrl: "",
+        providerConfirmedZero: false,
+        status: result.status,
+        blocked: false,
+        errors: ["live_graphql_unavailable"]
+      };
     }
     if (business === null) throw createCrawlFailure("COLLECTION_FAILED");
     if (!Object.prototype.hasOwnProperty.call(business, "naverBooking")) {
@@ -1804,11 +1840,25 @@ async function getNaverBookingBusiness(placeId, companyOrdinal = null) {
       };
     }
     if (!business.naverBooking || typeof business.naverBooking !== "object" || Array.isArray(business.naverBooking)) {
-      throw createCrawlFailure("COLLECTION_FAILED");
+      return {
+        bookingBusinessId: "",
+        bookingUrl: "",
+        providerConfirmedZero: false,
+        status: result.status,
+        blocked: false,
+        errors: ["live_graphql_unavailable"]
+      };
     }
     const booking = business.naverBooking;
     if (!/^\d{1,30}$/u.test(String(booking.bookingBusinessId || "").trim())) {
-      throw createCrawlFailure("COLLECTION_FAILED");
+      return {
+        bookingBusinessId: "",
+        bookingUrl: "",
+        providerConfirmedZero: false,
+        status: result.status,
+        blocked: false,
+        errors: ["live_graphql_unavailable"]
+      };
     }
     return {
       bookingBusinessId: booking.bookingBusinessId || "",
@@ -2833,7 +2883,15 @@ function operatingTotalBasisFromTotals(totals = [], basisTotal = 0) {
   };
 }
 
-async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSchedules, days, unitLabel = "개") {
+async function collectWeeklyNaverAvailability(
+  bookingBusinessId,
+  items,
+  firstSchedules,
+  days,
+  unitLabel = "개",
+  companyOrdinal = null,
+  productOrdinalOffset = 0
+) {
   if (!items.length || days <= 1) return null;
   const summaries = [];
 
@@ -2841,7 +2899,14 @@ async function collectWeeklyNaverAvailability(bookingBusinessId, items, firstSch
     const date = addDays(CHECK_IN, index);
     const schedules = index === 0
       ? firstSchedules
-      : await collectNaverSchedulesForItems(bookingBusinessId, items, 40, date);
+      : await collectNaverSchedulesForItems(
+        bookingBusinessId,
+        items,
+        40,
+        date,
+        companyOrdinal,
+        productOrdinalOffset
+      );
     const listType = schedules.length ? classifyNaverBookingList(items, schedules) : "";
     const summary = summarizeNaverScheduleGroup(items, schedules, listType);
     const availabilityUnit = listType === "객실 묶음 상품리스트"
@@ -3121,10 +3186,26 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
         ? await getNaverBookingPageCouponSignal(booking.bookingBusinessId, booking.bookingUrl)
         : null);
   const weekly = options.collectRange
-    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, items, schedules, BOOKING_RANGE_DAYS)
+    ? await collectWeeklyNaverAvailability(
+      booking.bookingBusinessId,
+      items,
+      schedules,
+      BOOKING_RANGE_DAYS,
+      "개",
+      companyOrdinal,
+      0
+    )
     : null;
   const dayUseWeekly = options.collectRange
-    ? await collectWeeklyNaverAvailability(booking.bookingBusinessId, dayUseItems, dayUseSchedules, BOOKING_RANGE_DAYS, "회")
+    ? await collectWeeklyNaverAvailability(
+      booking.bookingBusinessId,
+      dayUseItems,
+      dayUseSchedules,
+      BOOKING_RANGE_DAYS,
+      "회",
+      companyOrdinal,
+      schedules.length
+    )
     : null;
 
   const result = {
@@ -3217,7 +3298,13 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
       bookingTasks.push({
         row,
         alreadyKnown: false,
-        collectRange: false,
+        // The Worker V2 profile owns the full signed date range.  The old
+        // Top20 branch accidentally dropped it here, leaving a 3-day Job
+        // with only the first-day detail despite a range-aware contract.
+        collectRange: COLLECTION_PROFILE.collectWeeklyRange
+          && BOOKING_RANGE_DAYS > 1
+          && BOOKING_RANGE_PLACE_LIMIT > 0
+          && index < BOOKING_RANGE_PLACE_LIMIT,
         explicitZero: V2_TOP20_WORKER_ACTIVATION ? false : row.예약 !== "Y",
         companyOrdinal: index + 1
       });

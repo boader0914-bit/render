@@ -136,14 +136,16 @@ const root = path.resolve(__dirname, "..");
 const serverSource = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
 const appSource = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 assert.match(serverSource, /collectionWorkerV2Top20Orchestrator\.prepareTrustedAdmin/u);
-assert.match(serverSource, /executionRequestId: top20ExecutionRequestIdFromPayload\(payload\)/u);
+assert.match(serverSource, /const executionRequestId = top20ExecutionRequestIdFromPayload\(payload\);/u);
+assert.match(serverSource, /clientRequestId: executionRequestId/u);
 assert.match(serverSource, /\? "dispatch-readiness"\s*:\s*"prepare"/u);
 assert.match(serverSource, /assertTop20WorkerTransportReady\(\)/u);
 assert.match(serverSource, /COLLECTION_WORKER_V2_TOP20_RUNTIME_ATTEST_PATH/u);
 assert.match(serverSource, /sendCollectionWorkerJson\(/u);
 assert.match(serverSource, /COLLECTION_WORKER_V2_TOP20_DISPATCH_TIMEOUT/u);
-assert.match(serverSource, /prepareDryRunTrustedAdmin/u);
+assert.match(serverSource, /prepareSingleSourceDryRunTrustedAdmin/u);
 assert.match(serverSource, /collectionWorkerRunTransactionStore\.finalizeVerifiedRunBundle/u);
+assert.match(serverSource, /applyCommittedWorkerProjection\(receipt\.runId\)/u, "new normal Worker runs must apply committed projections automatically");
 assert.match(
   serverSource,
   /!isPreviewWorkerRunId\(entry\.name\) && !await isVisibleCommittedFrozenRun\(dirPath, manifest\)/u,
@@ -177,16 +179,16 @@ assert.match(
 assert.match(serverSource, /naverProviderHealthStore\.releaseAttempt/u);
 assert.match(serverSource, /collection-worker-v2-top20-cancel\.v1/u);
 assert.match(serverSource, /function isV2Top20WorkerJobId\(jobId\)/u);
-assert.match(serverSource, /value\.startsWith\("job-top20-"\) \|\| value\.startsWith\("job-booking-detail-probe-"\)/u);
+assert.match(serverSource, /value\.startsWith\("job-v2-"\) \|\| value\.startsWith\("job-top20-"\) \|\| value\.startsWith\("job-booking-detail-probe-"\)/u);
 assert.match(serverSource, /const orchestrator = isV2Top20WorkerJobId\(payload\?\.body\?\.jobId\)/u);
 assert.match(serverSource, /useTop20Worker \? 202 : 200/u);
 assert.match(serverSource, /const adminPayload = trustedPreviewAdminCrawlPayload\(/u);
-assert.match(serverSource, /&& isV2Top20WorkerEligible\(adminPayload\)/u);
+assert.match(serverSource, /&& isV2SingleSourceWorkerEligible\(adminPayload\)/u);
 assert.match(serverSource, /const explicitLegacyFrozen = isExplicitLegacyFrozenCrawlRequest\(payload\)/u);
-assert.match(serverSource, /top20WorkerEnabled && !explicitLegacyFrozen && !useTop20Worker[\s\S]{0,80}v2Top20WorkerContract\(adminPayload\)/u);
+assert.match(serverSource, /top20WorkerEnabled && !explicitLegacyFrozen && !useTop20Worker[\s\S]{0,100}v2SingleSourceWorkerContract\(adminPayload\)/u);
 assert.match(serverSource, /const trustedPayload = useTop20Worker[\s\S]{0,160}trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
 assert.equal(
-  serverSource.includes("isV2Top20WorkerEligible(trustedPayload)"),
+  serverSource.includes("isV2SingleSourceWorkerEligible(trustedPayload)"),
   false,
   "Top20 eligibility must be evaluated before frozen wrapping"
 );

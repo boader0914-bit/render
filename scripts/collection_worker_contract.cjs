@@ -10,6 +10,12 @@ const {
   V2_COLLECTOR_TRANSPORT_STRATEGY,
   normalizedCompatibilityContract
 } = require("./v2_collector_compatibility.cjs");
+const {
+  V2_COLLECTION_REQUEST_SCHEMA_VERSION,
+  V2_COLLECTION_SCOPE,
+  buildV2CollectionSignedContract,
+  normalizeV2CollectionRequest
+} = require("./v2_collection_request.cjs");
 
 const COLLECTION_WORKER_JOB_DOCUMENT_TYPE = "lodging-collection-worker-job";
 const COLLECTION_WORKER_JOB_SCHEMA_VERSION = "collection-worker-job.v1";
@@ -44,6 +50,19 @@ const FIXED_V2_WORKER_COLLECTOR = deepFreeze({
   collectorScope: V2_COLLECTOR_COMPATIBILITY_SCOPE,
   historicalSourceCommit: FIXED_V2_COLLECTOR_COMPATIBILITY.historicalSourceCommit,
   historicalCollectorBlob: FIXED_V2_COLLECTOR_COMPATIBILITY.historicalCollectorBlob
+});
+
+// New normal jobs invoke the repository's V2 collector child directly.  This
+// descriptor identifies that execution boundary without importing any of its
+// collection decisions into the worker contract.
+const V2_SINGLE_SOURCE_WORKER_COLLECTOR = deepFreeze({
+  activationProfile: "v2_collector_single_source.v2",
+  compatibilitySchemaVersion: V2_COLLECTION_REQUEST_SCHEMA_VERSION,
+  strategy: "existing_v2_collector",
+  transportStrategy: "collector_child",
+  collectorScope: V2_COLLECTION_SCOPE,
+  historicalSourceCommit: "current_repository_v2_collector",
+  historicalCollectorBlob: "runtime_verified"
 });
 
 const FIXED_ONE_SHOT_POLICY = deepFreeze({
@@ -267,7 +286,28 @@ function validateNormalizedCollectionJobContract(value) {
   });
 }
 
+function validateV2SingleSourceCollectionJobContract(value) {
+  let normalized;
+  try {
+    normalized = buildV2CollectionSignedContract(value);
+  } catch (error) {
+    throw contractError("COLLECTION_WORKER_CONTRACT_HASH_INVALID", "V2 collection contract is invalid");
+  }
+  if (stableJson(value) !== stableJson(normalized)) {
+    throw contractError("COLLECTION_WORKER_CONTRACT_HASH_INVALID", "V2 collection contract fields do not match", 409);
+  }
+  return normalized;
+}
+
 function normalizeCollectionJobContract(input = {}) {
+  if (
+    input
+    && typeof input === "object"
+    && !Array.isArray(input)
+    && input.schemaVersion === V2_COLLECTION_REQUEST_SCHEMA_VERSION
+  ) {
+    return validateV2SingleSourceCollectionJobContract(input);
+  }
   if (
     input
     && typeof input === "object"
@@ -289,7 +329,9 @@ function normalizeCollectionJobContract(input = {}) {
 }
 
 function computeCollectionContractHash(contract) {
-  return sha256Hex(stableJson(normalizeCollectionJobContract(contract)));
+  const normalized = normalizeCollectionJobContract(contract);
+  if (normalized.schemaVersion === V2_COLLECTION_REQUEST_SCHEMA_VERSION) return normalized.contractHash;
+  return sha256Hex(stableJson(normalized));
 }
 
 function normalizeWorkerScopes(value = REQUIRED_COLLECTION_WORKER_SCOPES) {
@@ -356,7 +398,11 @@ function normalizePolicy(input = {}) {
 }
 
 function normalizeCollector(input = FIXED_V2_WORKER_COLLECTOR) {
-  return assertExactFixedObject(input, FIXED_V2_WORKER_COLLECTOR, "Collection worker collector");
+  const source = input && typeof input === "object" ? input : {};
+  const fixed = source.collectorScope === V2_COLLECTION_SCOPE
+    ? V2_SINGLE_SOURCE_WORKER_COLLECTOR
+    : FIXED_V2_WORKER_COLLECTOR;
+  return assertExactFixedObject(source, fixed, "Collection worker collector");
 }
 
 function normalizeRuntimeFingerprint(input = FIXED_V2_WORKER_RUNTIME_FINGERPRINT) {
@@ -369,10 +415,14 @@ function buildCollectionIdempotencyKey(contract, options = {}) {
   const audience = normalizedAudience(options.audience);
   const runtimeFingerprint = normalizeRuntimeFingerprint(options.runtimeFingerprint || FIXED_V2_WORKER_RUNTIME_FINGERPRINT);
   return sha256Hex(stableJson({
-    domain: "lodging-datalab.collection-worker.idempotency.v1",
+    domain: normalizedContract.schemaVersion === V2_COLLECTION_REQUEST_SCHEMA_VERSION
+      ? "lodging-datalab.v2-collection-execution.v2"
+      : "lodging-datalab.collection-worker.idempotency.v1",
     audience,
     workerPoolId,
-    collector: FIXED_V2_WORKER_COLLECTOR,
+    collector: normalizedContract.schemaVersion === V2_COLLECTION_REQUEST_SCHEMA_VERSION
+      ? V2_SINGLE_SOURCE_WORKER_COLLECTOR
+      : FIXED_V2_WORKER_COLLECTOR,
     runtimeFingerprint,
     contract: normalizedContract
   }));
@@ -414,10 +464,15 @@ function buildCollectionWorkerJobEnvelope(input = {}, options = {}) {
     workerPoolId: normalizedIdentifier(input.workerPoolId || input.worker?.workerPoolId, "workerPoolId", 80),
     scopes: normalizeWorkerScopes(input.workerScopes || input.worker?.scopes || REQUIRED_COLLECTION_WORKER_SCOPES)
   });
-  const collector = normalizeCollector(input.collector || FIXED_V2_WORKER_COLLECTOR);
+  const request = normalizeCollectionJobContract(input.contract || input);
+  const collector = normalizeCollector(input.collector || (
+    request.schemaVersion === V2_COLLECTION_REQUEST_SCHEMA_VERSION
+      ? V2_SINGLE_SOURCE_WORKER_COLLECTOR
+      : FIXED_V2_WORKER_COLLECTOR
+  ));
   const runtimeFingerprint = normalizeRuntimeFingerprint(input.runtimeFingerprint || FIXED_V2_WORKER_RUNTIME_FINGERPRINT);
   const runtimeFingerprintHash = sha256Hex(stableJson(runtimeFingerprint));
-  const contract = normalizeCollectionJobContract(input.contract || input);
+  const contract = request;
   const contractHash = computeCollectionContractHash(contract);
   const idempotencyKey = buildCollectionIdempotencyKey(contract, {
     workerPoolId: worker.workerPoolId,
@@ -567,7 +622,7 @@ function assertWorkerScopeAllowsJob(envelope, identity = {}) {
   if (
     envelope.worker.workerId !== expectedWorkerId
     || envelope.worker.workerPoolId !== expectedWorkerPoolId
-    || envelope.collector.collectorScope !== V2_COLLECTOR_COMPATIBILITY_SCOPE
+    || ![V2_COLLECTOR_COMPATIBILITY_SCOPE, V2_COLLECTION_SCOPE].includes(envelope.collector.collectorScope)
   ) {
     throw contractError("COLLECTION_WORKER_SCOPE_INVALID", "Collection worker identity or collector scope is not authorized", 403);
   }
@@ -662,6 +717,7 @@ module.exports = {
   CollectionWorkerContractError,
   FIXED_ONE_SHOT_POLICY,
   FIXED_V2_WORKER_COLLECTOR,
+  V2_SINGLE_SOURCE_WORKER_COLLECTOR,
   FIXED_V2_WORKER_RUNTIME_FINGERPRINT,
   REQUIRED_COLLECTION_WORKER_SCOPES,
   assertCollectionWorkerJobExecutable,

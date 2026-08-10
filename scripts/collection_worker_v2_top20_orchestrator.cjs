@@ -4,8 +4,15 @@ const crypto = require("node:crypto");
 const os = require("node:os");
 const {
   COLLECTION_WORKER_JOB_AUDIENCE,
-  buildSignedJobEnvelope
+  buildSignedJobEnvelope,
+  V2_SINGLE_SOURCE_WORKER_COLLECTOR
 } = require("./collection_worker_contract.cjs");
+const {
+  V2_COLLECTION_EXECUTION_PROFILE,
+  buildV2CollectionJobIdentity,
+  buildV2CollectionPlan,
+  normalizeV2CollectionRequest
+} = require("./v2_collection_request.cjs");
 const {
   COLLECTION_WORKER_AUTH_AUDIENCE,
   createWorkerNonceRegistry,
@@ -206,6 +213,7 @@ const SUMMARY_KEYS = Object.freeze([
   "collectionStatus",
   "mainPlaceStatus",
   "detailStatus",
+  "detailProviderLiveCallCount",
   "providerAttemptCount",
   "executedCallCount",
   "providerWorkflowRevision",
@@ -221,9 +229,13 @@ const SUMMARY_KEYS = Object.freeze([
   "revenueCoverageRate"
 ]);
 const LEGACY_SUMMARY_KEYS = Object.freeze(SUMMARY_KEYS.filter((key) => ![
-  "collectionStatus", "mainPlaceStatus", "detailStatus", "targetCompanyCount",
+  "collectionStatus", "mainPlaceStatus", "detailStatus", "detailProviderLiveCallCount", "targetCompanyCount",
   "detailReadyCompanyCount", "revenueReadyCompanyCount", "detailCoverageRate", "revenueCoverageRate"
 ].includes(key)));
+// Existing committed resilient runs predate the safe detail-call ledger field.
+// Their terminal artifacts remain read-only compatible; only new normal jobs
+// emit the field and may use it to settle an elapsed detail circuit.
+const RESILIENT_SUMMARY_KEYS_V1 = Object.freeze(SUMMARY_KEYS.filter((key) => key !== "detailProviderLiveCallCount"));
 
 class CollectionWorkerV2Top20OrchestratorError extends Error {
   constructor(code, message, statusCode = 409, meta = {}) {
@@ -843,6 +855,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   async function prepareCore(input = {}) {
     assertReady();
     await reconcileFirstUse();
+    if (input.singleSource === true) return prepareSingleSourceCore(input);
     const normalized = normalizeV2Top20PrepareContract(input.contract);
     const executionRequestId = input.executionRequestId === undefined || input.executionRequestId === null
       ? crypto.randomUUID()
@@ -1131,6 +1144,182 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
   }
 
+  // Normal Preview collection uses one range-aware signed contract and the
+  // existing V2 child.  Legacy/probe preparation remains below solely for
+  // read compatibility with already-created terminal jobs.
+  async function prepareSingleSourceCore(input = {}) {
+    const request = normalizeV2CollectionRequest(input.contract);
+    const identity = buildV2CollectionJobIdentity(request);
+    const plan = buildV2CollectionPlan(request);
+    const snapshot = await jobStore.readSnapshot();
+    const existingExecution = snapshot.jobs.find((job) => job.jobId === identity.jobId) || null;
+    if (existingExecution) {
+      return Object.freeze({
+        schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
+        status: existingExecution.state,
+        reused: true,
+        jobId: existingExecution.jobId,
+        workflowRevision: existingExecution.workflowRevision,
+        contractHash: existingExecution.contractHash,
+        executionIdentityHash: existingExecution.executionIdentityHash,
+        top20ContractHash: null,
+        executionRequestHash: identity.executionRequestHash,
+        providerWorkflowRevision: existingExecution.providerWorkflowRevision,
+        maxProviderAttempts: 1,
+        maximumProviderCalls: plan.maximumProviderCalls,
+        automaticRetry: false,
+        automaticFallback: false,
+        executionProfile: V2_COLLECTION_EXECUTION_PROFILE
+      });
+    }
+    const active = snapshot.jobs.find((job) => (
+      job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID && ACTIVE_JOB_STATES.has(job.state)
+    ));
+    if (active) {
+      const error = fail("COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB", "another collection job is active", 409);
+      error.existingJobId = active.jobId;
+      error.existingJobState = active.state;
+      throw error;
+    }
+    const createdAt = new Date(now());
+    const mainPlaceState = await providerStore.read();
+    const detailProviderState = await detailProviderStore.read();
+    const mainAvailability = providerAvailability(mainPlaceState, { now: createdAt });
+    if (mainPlaceState.state === "open" && (!mainAvailability.probeRequired || mainAvailability.attemptInFlight)) {
+      throw fail("NAVER_PROVIDER_COOLDOWN_ACTIVE", "main Place provider cooldown is active", 503, retryMeta(mainPlaceState, createdAt));
+    }
+    if (!['closed', 'open'].includes(mainPlaceState.state)) {
+      throw fail("NAVER_PROVIDER_COOLDOWN_ACTIVE", "main Place provider is unavailable", 503, retryMeta(mainPlaceState, createdAt));
+    }
+    const reservation = await providerStore.beginAttempt({
+      expectedWorkflowRevision: mainPlaceState.workflowRevision,
+      explicit: true,
+      now: createdAt
+    });
+    if (!reservation.allowed || reservation.state.state !== "probe_allowed") {
+      throw fail("NAVER_PROVIDER_COOLDOWN_ACTIVE", "main Place provider reservation was not granted", 503, retryMeta(reservation.state, createdAt));
+    }
+    let stored = false;
+    try {
+      const signedJob = buildSignedJobEnvelope({
+        jobId: identity.jobId,
+        attemptId: identity.attemptId,
+        approvalId: `approval:v2:${identity.contractHash}:${identity.executionRequestHash}`,
+        audience: COLLECTION_WORKER_JOB_AUDIENCE,
+        workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+        workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+        nonce: crypto.randomBytes(18).toString("base64url"),
+        collector: V2_SINGLE_SOURCE_WORKER_COLLECTOR,
+        contract: request,
+        authorization: { enabled: true, actualCallsEnabled: true, externalCallApproved: true, authorizedExecutionCount: 1 }
+      }, {
+        privateKey: dispatchPrivateKey(),
+        signerKeyId: COLLECTION_WORKER_V2_TOP20_DISPATCH_KEY_ID,
+        now: createdAt,
+        ttlSeconds: 15 * 60
+      });
+      const job = await jobStore.createOrReuseJob({
+        jobId: identity.jobId,
+        attemptId: identity.attemptId,
+        idempotencyKey: signedJob.idempotencyKey,
+        contractHash: signedJob.contractHash,
+        executionIdentityHash: signedJob.executionIdentityHash,
+        backendId: COLLECTION_WORKER_V2_TOP20_BACKEND_ID,
+        backendVersion: targetWorkerCommit,
+        workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+        providerWorkflowRevision: reservation.state.workflowRevision,
+        maxProviderCalls: plan.maximumProviderCalls,
+        now: createdAt
+      });
+      stored = true;
+      const detailAvailability = providerAvailability(detailProviderState, { now: createdAt });
+      const detailLiveCallsAllowed = detailProviderState.state === "closed"
+        || (detailProviderState.state === "open" && detailAvailability.probeRequired && !detailAvailability.attemptInFlight);
+      // The normal path carries exactly one signed range-aware contract.  The
+      // legacy field name remains only because the existing artifact protocol
+      // signs an opaque secondary identity hash; for v2 it is the contract
+      // hash itself, never a second reconstructed business contract.
+      const top20ContractHash = request.contractHash;
+      const executionPayload = Object.freeze({
+        schemaVersion: COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION,
+        jobId: identity.jobId,
+        attemptId: identity.attemptId,
+        contractHash: signedJob.contractHash,
+        executionIdentityHash: signedJob.executionIdentityHash,
+        top20ContractHash,
+        executionRequestHash: identity.executionRequestHash,
+        contract: request,
+        providerSession: Object.freeze({
+          maximumProviderCalls: plan.maximumProviderCalls,
+          providerAttemptCount: 1,
+          concurrency: 1,
+          automaticRetry: false,
+          automaticFallback: false,
+          circuitStateAtReservation: mainPlaceState.state,
+          serviceGlobalLockHeld: true
+        }),
+        detailProviderSession: Object.freeze({
+          state: detailProviderState.state,
+          retryAt: detailProviderState.retryAt || null,
+          liveCallsAllowed: detailLiveCallsAllowed
+        }),
+        executionProfile: V2_COLLECTION_EXECUTION_PROFILE
+      });
+      payloads.set(identity.jobId, {
+        signedJob,
+        executionPayload,
+        top20ContractHash,
+        executionRequestHash: identity.executionRequestHash,
+        providerWorkflowRevision: reservation.state.workflowRevision,
+        maximumProviderCalls: plan.maximumProviderCalls,
+        preflighted: false,
+        lifecycle: "active",
+        terminalAt: null,
+        terminalState: null,
+        singleSource: true
+      });
+      safeTop20Log("v2_single_source_job_queued", {
+        timestamp: createdAt.toISOString(),
+        jobId: identity.jobId,
+        contractHash: signedJob.contractHash,
+        executionRequestHash: identity.executionRequestHash,
+        executionIdentityHash: signedJob.executionIdentityHash,
+        workerCommit: targetWorkerCommit,
+        sourceRole: input.provenance?.sourceRole || "admin",
+        sourceRoute: input.provenance?.sourceRoute || "/api/crawl",
+        actorKind: input.provenance?.actorKind || "operator",
+        collectorBackend: "v2_collector_single_source",
+        collectionProfile: V2_COLLECTION_EXECUTION_PROFILE,
+        jobState: "queued"
+      });
+      return Object.freeze({
+        schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
+        status: job.state,
+        reused: false,
+        jobId: job.jobId,
+        workflowRevision: job.workflowRevision,
+        contractHash: signedJob.contractHash,
+        executionIdentityHash: signedJob.executionIdentityHash,
+        top20ContractHash,
+        executionRequestHash: identity.executionRequestHash,
+        providerWorkflowRevision: reservation.state.workflowRevision,
+        maxProviderAttempts: 1,
+        maximumProviderCalls: plan.maximumProviderCalls,
+        automaticRetry: false,
+        automaticFallback: false,
+        executionProfile: V2_COLLECTION_EXECUTION_PROFILE
+      });
+    } catch (error) {
+      if (!stored) {
+        await providerStore.releaseAttempt({
+          expectedWorkflowRevision: reservation.state.workflowRevision,
+          now: new Date(now())
+        }).catch(() => {});
+      }
+      throw error;
+    }
+  }
+
   async function prepareWithAudit(input = {}) {
     try {
       return await prepareCore(input);
@@ -1193,7 +1382,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     return prepareWithAudit({
       contract: input.contract,
       executionRequestId: input.executionRequestId,
-      provenance: input.provenance
+      provenance: input.provenance,
+      singleSource: input.singleSource === true
     });
   }
 
@@ -1275,6 +1465,54 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       providerReservationCreated: false,
       workerClaimStarted: false,
       writeCount: 0
+    });
+  }
+
+  async function prepareSingleSourceDryRunTrustedAdmin(input = {}) {
+    if (input.trustedAdmin !== true) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_ADMIN_PREPARE_FORBIDDEN", "trusted admin preparation is required", 403);
+    }
+    assertReady();
+    await reconcileFirstUse();
+    const request = normalizeV2CollectionRequest(input.contract);
+    const identity = buildV2CollectionJobIdentity(request);
+    const snapshot = await jobStore.readSnapshot();
+    const existing = snapshot.jobs.find((job) => job.jobId === identity.jobId) || null;
+    const active = snapshot.jobs.find((job) => (
+      job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID && ACTIVE_JOB_STATES.has(job.state)
+    )) || null;
+    const mainPlace = await providerStore.read();
+    const detail = await detailProviderStore.read();
+    const mainAvailability = providerAvailability(mainPlace, { now: now() });
+    const mainAllowed = mainPlace.state === "closed" || (
+      mainPlace.state === "open" && mainAvailability.probeRequired && !mainAvailability.attemptInFlight
+    );
+    const conflictCode = existing
+      ? "COLLECTION_WORKER_V2_TOP20_EXECUTION_ALREADY_EXISTS"
+      : active
+        ? "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB"
+        : !mainAllowed
+          ? "NAVER_PROVIDER_COOLDOWN_ACTIVE"
+          : null;
+    return Object.freeze({
+      schemaVersion: COLLECTION_WORKER_V2_TOP20_ORCHESTRATOR_SCHEMA_VERSION,
+      wouldCreate: conflictCode === null,
+      conflictCode,
+      generatedJobId: identity.jobId,
+      contractHash: identity.contractHash,
+      executionRequestHash: identity.executionRequestHash,
+      existingJobId: existing?.jobId || null,
+      existingJobState: existing?.state || null,
+      activeJobId: active?.jobId || null,
+      mainPlaceProviderState: mainPlace.state,
+      bookingDetailProviderState: detail.state,
+      bookingDetailDoesNotBlock: true,
+      probeDependency: false,
+      providerReservationCreated: false,
+      workerClaimStarted: false,
+      providerCallCount: 0,
+      writeCount: 0,
+      runCountDelta: 0
     });
   }
 
@@ -1518,7 +1756,13 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     } catch {
       throw fail("COLLECTION_WORKER_V2_TOP20_ARTIFACT_INVALID", "top20 summary artifact is invalid", 400);
     }
-    exactKeys(document, Object.hasOwn(document, "collectionStatus") ? SUMMARY_KEYS : LEGACY_SUMMARY_KEYS, "top20 summary");
+    exactKeys(
+      document,
+      Object.hasOwn(document, "collectionStatus")
+        ? Object.hasOwn(document, "detailProviderLiveCallCount") ? SUMMARY_KEYS : RESILIENT_SUMMARY_KEYS_V1
+        : LEGACY_SUMMARY_KEYS,
+      "top20 summary"
+    );
     if (
       document.schemaVersion !== COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION
       || document.top20SchemaVersion !== V2_TOP20_SCHEMA_VERSION
@@ -1616,23 +1860,34 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   }
 
   async function settleDetailProviderArtifact(summary, artifactHash) {
-    if (summary.detailStatus !== "blocked") return detailProviderStore.read();
+    const detailLiveCallCount = Number(summary.detailProviderLiveCallCount || 0);
     let state = await detailProviderStore.read();
-    if (state.state === "open") return state;
-    if (state.state !== "closed") return state;
+    // The V2 child owns detailed collection semantics.  The Worker only uses
+    // its call ledger: a completed live detail call can reopen an elapsed
+    // booking-detail circuit, while a classified block opens it again.
+    const shouldSettle = summary.detailStatus === "blocked" || (detailLiveCallCount > 0 && state.state === "open");
+    if (!shouldSettle || state.state === "probe_allowed") return state;
+    if (!['closed', 'open'].includes(state.state)) return state;
     const reservation = await detailProviderStore.beginAttempt({
       expectedWorkflowRevision: state.workflowRevision,
       explicit: true,
       now: now()
     });
     if (!reservation.allowed || reservation.state.state !== "probe_allowed") return reservation.state;
-    return detailProviderStore.recordBlock({
+    if (summary.detailStatus === "blocked") {
+      return detailProviderStore.recordBlock({
+        expectedWorkflowRevision: reservation.state.workflowRevision,
+        outcomeReceiptHash: artifactHash,
+        failure: {
+          subtype: summary.providerFailureSubtype || "unknown_access_block",
+          diagnosticId: summary.diagnosticId || null
+        },
+        now: now()
+      });
+    }
+    return detailProviderStore.recordSuccess({
       expectedWorkflowRevision: reservation.state.workflowRevision,
       outcomeReceiptHash: artifactHash,
-      failure: {
-        subtype: summary.providerFailureSubtype || "unknown_access_block",
-        diagnosticId: summary.diagnosticId || null
-      },
       now: now()
     });
   }
@@ -2419,6 +2674,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     prepareMainPlaceRecoveryProbeTrustedAdmin,
     prepareBookingDetailRecoveryProbeTrustedAdmin,
     prepareDryRunTrustedAdmin,
+    prepareSingleSourceDryRunTrustedAdmin,
     artifactSecurityDiagnostic,
     recordArtifactSecurityDiagnostic,
     recordFailure,

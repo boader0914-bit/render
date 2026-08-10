@@ -109,6 +109,7 @@ const GRAPHQL_OPERATION_NAMES = Object.freeze({
 const TOTAL_CALL_BUDGET = 30;
 const MAX_COMPANIES = 3;
 const MAX_PRODUCTS_PER_COMPANY = 8;
+const MAX_BOOKING_RANGE_DAYS = 7;
 const REGISTERED_TRANSPORTS = new WeakSet();
 
 class NaverBoundedInventoryTransportError extends Error {
@@ -184,6 +185,14 @@ function safeBookingAdults(value) {
     throw transportError("NAVER_BOUNDED_INVENTORY_REQUEST_INVALID", "The NAVER inventory adult count is invalid", 400);
   }
   return adults;
+}
+
+function safeBookingRangeDays(value) {
+  const days = Number(value ?? 1);
+  if (!Number.isInteger(days) || days < 1 || days > MAX_BOOKING_RANGE_DAYS) {
+    throw transportError("NAVER_BOUNDED_INVENTORY_TRANSPORT_INVALID", "The NAVER inventory range is invalid", 400);
+  }
+  return days;
 }
 
 function assertGraphqlBody(request, normalized) {
@@ -299,14 +308,25 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
   if (!/^[a-z0-9_]{3,80}$/u.test(providerId)) {
     throw transportError("NAVER_BOUNDED_INVENTORY_TRANSPORT_INVALID", "The NAVER inventory provider identity is invalid", 400);
   }
-  const budgetProfile = BOUNDED_INVENTORY_PROFILES[profileId];
-  if (!budgetProfile) {
+  const baseBudgetProfile = BOUNDED_INVENTORY_PROFILES[profileId];
+  if (!baseBudgetProfile) {
     throw transportError(
       "NAVER_BOUNDED_INVENTORY_TRANSPORT_INVALID",
       "The NAVER inventory transport budget profile is invalid",
       400
     );
   }
+  const bookingRangeDays = safeBookingRangeDays(options.bookingRangeDays);
+  const budgetProfile = Object.freeze({
+    ...baseBudgetProfile,
+    operationLimits: Object.freeze({
+      ...baseBudgetProfile.operationLimits,
+      naver_booking_schedule: baseBudgetProfile.operationLimits.naver_booking_schedule * bookingRangeDays
+    }),
+    totalCallBudget: baseBudgetProfile.totalCallBudget
+      + (baseBudgetProfile.operationLimits.naver_booking_schedule * (bookingRangeDays - 1)),
+    maxScheduleCallsPerCompany: baseBudgetProfile.maxProductsPerCompany * bookingRangeDays
+  });
   const counts = {
     naver_booking_business: 0,
     naver_booking_items: 0,
@@ -314,7 +334,7 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
   };
   const companyCalls = Object.fromEntries(Array.from({ length: budgetProfile.maxCompanies }, (_, index) => [
     String(index + 1),
-    { bookingBusiness: 0, bookingItems: 0, dailySchedule: 0 }
+    { bookingBusiness: 0, bookingItems: 0, dailySchedule: 0, scheduleKeys: new Set() }
   ]));
   let total = 0;
   let active = false;
@@ -351,13 +371,14 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
       }
       return;
     }
-    if (state.bookingItems !== 1 || normalized.productOrdinal !== state.dailySchedule + 1) {
+    const scheduleKey = `${normalized.date}\0${normalized.productOrdinal}`;
+    if (
+      state.bookingItems !== 1
+      || state.scheduleKeys.has(scheduleKey)
+      || state.dailySchedule >= budgetProfile.maxScheduleCallsPerCompany
+    ) {
       halted = true;
-      throw transportError("NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID", "The NAVER inventory product call sequence is invalid", 409);
-    }
-    if (state.dailySchedule >= budgetProfile.maxProductsPerCompany) {
-      halted = true;
-      throw transportError("NAVER_BOUNDED_INVENTORY_CALL_BUDGET_EXCEEDED", "The NAVER inventory company call budget was exceeded", 409);
+      throw transportError("NAVER_BOUNDED_INVENTORY_CALL_SEQUENCE_INVALID", "The NAVER inventory schedule call sequence is invalid", 409);
     }
   }
 
@@ -374,6 +395,7 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
       return;
     }
     state.dailySchedule += 1;
+    state.scheduleKeys.add(`${normalized.date}\0${normalized.productOrdinal}`);
   }
 
   const transport = async function naverBoundedInventoryLiveTransport(request, context = {}) {
@@ -503,7 +525,11 @@ function createNaverBoundedInventoryLiveTransport(options = {}) {
     companyCallCounts: {
       value: () => Object.freeze(Object.fromEntries(Object.entries(companyCalls).map(([key, value]) => [
         key,
-        Object.freeze({ ...value })
+        Object.freeze({
+          bookingBusiness: value.bookingBusiness,
+          bookingItems: value.bookingItems,
+          dailySchedule: value.dailySchedule
+        })
       ]))),
       enumerable: false
     },

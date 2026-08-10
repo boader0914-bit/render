@@ -1216,6 +1216,7 @@ function isSafeNonNegativeInteger(value) {
 function runOutputProjectionsV2Valid(record) {
   if (!isPlainObject(record.projections) || !isPlainObject(record.projections.run)) return false;
   const { run, companies, products, revenues, history } = record.projections;
+  const rangeProjection = run.schemaVersion === COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V3;
   if (
     run.runId !== record.runId
     || run.transactionId !== record.transactionId
@@ -1366,9 +1367,13 @@ function runOutputProjectionsV2Valid(record) {
   }
 
   const revenueKeys = new Set();
-  const revenueByCompany = new Map();
+  const revenueByObservationKey = new Map();
   for (const revenue of revenues) {
     const company = companyByKey.get(revenue?.companyKey);
+    const observationDate = rangeProjection ? String(revenue?.observationDate || "") : "";
+    const observationKey = rangeProjection
+      ? `${String(revenue?.companyKey || "")}\0${observationDate}`
+      : String(revenue?.companyKey || "");
     if (
       !isPlainObject(revenue)
       || revenue.runId !== record.runId
@@ -1384,19 +1389,29 @@ function runOutputProjectionsV2Valid(record) {
       || !isSafeNonNegativeInteger(revenue.estimatedSoldUnits)
       || !KEY_PATTERN.test(String(revenue.projectionId || ""))
       || revenueKeys.has(revenue.projectionId)
-      || revenueByCompany.has(revenue.companyKey)
+      || revenueByObservationKey.has(observationKey)
       || revenue.status === "zero" && (revenue.estimatedRevenue !== 0 || revenue.estimatedSoldUnits !== 0)
+      || rangeProjection && (
+        !DATE_PATTERN.test(observationDate)
+        || observationDate < run.measurementPeriod.start
+        || observationDate > run.measurementPeriod.end
+      )
+      || !rangeProjection && Object.prototype.hasOwnProperty.call(revenue, "observationDate")
     ) return false;
     revenueKeys.add(revenue.projectionId);
-    revenueByCompany.set(revenue.companyKey, revenue);
+    revenueByObservationKey.set(observationKey, revenue);
   }
   if (run.revenueReadyCompanyCount !== [...companyByKey.values()].filter((company) => company.revenueInputValid === true).length) return false;
   if (run.revenueCoverageRate !== run.revenueReadyCompanyCount / 20) return false;
 
   const observationIds = new Set();
-  const historyCompanies = new Set();
+  const historyObservationKeys = new Set();
   for (const observation of history) {
-    const revenue = revenueByCompany.get(observation?.companyKey);
+    const observationDate = rangeProjection ? String(observation?.observationDate || "") : "";
+    const observationKey = rangeProjection
+      ? `${String(observation?.companyKey || "")}\0${observationDate}`
+      : String(observation?.companyKey || "");
+    const revenue = revenueByObservationKey.get(observationKey);
     if (
       !isPlainObject(observation)
       || observation.runId !== record.runId
@@ -1407,14 +1422,20 @@ function runOutputProjectionsV2Valid(record) {
       || observation.status !== revenue.status
       || !HASH_PATTERN.test(String(observation.observationId || ""))
       || observationIds.has(observation.observationId)
-      || historyCompanies.has(observation.companyKey)
+      || historyObservationKeys.has(observationKey)
       || observation.currency !== "KRW"
       || !Number.isFinite(Date.parse(observation.observedAt))
+      || rangeProjection && (
+        !DATE_PATTERN.test(observationDate)
+        || observationDate < run.measurementPeriod.start
+        || observationDate > run.measurementPeriod.end
+      )
+      || !rangeProjection && Object.prototype.hasOwnProperty.call(observation, "observationDate")
     ) return false;
     observationIds.add(observation.observationId);
-    historyCompanies.add(observation.companyKey);
+    historyObservationKeys.add(observationKey);
   }
-  if (historyCompanies.size !== revenueByCompany.size) return false;
+  if (historyObservationKeys.size !== revenueByObservationKey.size) return false;
   if (new Set(companies.map((entry) => entry.projectionId)).size !== companies.length) return false;
   if (
     run.collectionStatus === "complete" && detailReadyCompanyCount !== 20

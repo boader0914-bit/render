@@ -152,7 +152,11 @@ function buildV2Top20CollectorEnvironment(input = {}) {
     NAVER_SCHEDULE_DELAY_MS: "0",
     // Two public pages are an explicit, bounded legacy identity resolution
     // operation; they are not a retry and remain disabled for unapproved runs.
-    NAVER_BOOKING_ID_FALLBACK: input.baseEnvironment?.NODE_ENV === "test" ? "0" : "1",
+    // The production V2 path keeps its bounded identity order intact.  A
+    // fixture may explicitly preserve that same order; normal test runs still
+    // default to no public-page call unless the actual-child fixture requests
+    // it.
+    NAVER_BOOKING_ID_FALLBACK: input.bookingIdFallback === true || input.baseEnvironment?.NODE_ENV !== "test" ? "1" : "0",
     NAVER_COUPON_PAGE_FALLBACK: "0",
     NAVER_AUTOMATIC_RETRY: "0",
     NAVER_AUTOMATIC_FALLBACK: "0",
@@ -885,7 +889,8 @@ async function executeV2Top20Collector(input = {}) {
       runStamp,
       baseEnvironment: input.baseEnvironment || process.env,
       historicalBookingHints: input.historicalBookingHints,
-      detailLiveCallsAllowed: input.detailLiveCallsAllowed
+      detailLiveCallsAllowed: input.detailLiveCallsAllowed,
+      bookingIdFallback: input.bookingIdFallback === true
     });
     await heartbeat();
     const intervalMs = Number.isInteger(input.heartbeatIntervalMs) && input.heartbeatIntervalMs >= 1000

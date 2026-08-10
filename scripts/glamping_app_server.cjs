@@ -125,6 +125,10 @@ const {
   v2Top20ResiliencePlan
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
+  buildV2CollectionPlan,
+  normalizeV2CollectionRequest
+} = require("./v2_collection_request.cjs");
+const {
   buildNaverCollectionFallbackState,
   createNaverSearchContractSignature,
   decideNaverQuotaConsumption,
@@ -336,6 +340,20 @@ const collectionWorkerV2Top20Orchestrator = createCollectionWorkerV2Top20Orchest
       const error = new Error("collection worker run transaction did not commit");
       error.code = "COLLECTION_WORKER_V2_TOP20_TRANSACTION_INVALID";
       throw error;
+    }
+    // New normal Worker runs apply their verified projections immediately
+    // after the transaction commit.  Application failure is deliberately
+    // non-terminal: the immutable Run remains visible and the existing
+    // reconciliation endpoint can replay the idempotent receipt later.
+    try {
+      await applyCommittedWorkerProjection(receipt.runId);
+    } catch (error) {
+      console.log(JSON.stringify({
+        event: "collection_worker_projection_application_deferred",
+        runId: receipt.runId,
+        code: String(error?.code || "COLLECTION_WORKER_PROJECTION_APPLICATION_FAILED").slice(0, 120),
+        rawContentLogged: false
+      }));
     }
     return Object.freeze({
       receiptId: input.receiptId,
@@ -5062,11 +5080,11 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
     && IS_V2_PREVIEW_RUNTIME
     && !isTrustedFrozenPayload(payload)
     && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
-    && isV2Top20WorkerEligible(payload)
+    && isV2SingleSourceWorkerEligible(payload)
   ) {
-    const top20Contract = v2Top20WorkerContract(payload);
-    const bookingRangeDays = top20Contract.bookingRangeDays;
-    const top20Plan = v2Top20ResiliencePlan(bookingRangeDays);
+    const contract = v2SingleSourceWorkerContract(payload);
+    const bookingRangeDays = contract.bookingRangeDays;
+    const top20Plan = buildV2CollectionPlan(contract);
     const top20BoundedInventory = {
       profile: "preview-v2-place-top20-inventory-revenue.v1",
       mainRankRange: "1-50",
@@ -5085,6 +5103,7 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
     return {
       ...base,
       workerTop20: true,
+      collectorBackend: "v2_collector_single_source",
       detailRankRanges: "1-20",
       bookingRangeDays,
       bookingRangePlaceLimit: 20,
@@ -14852,9 +14871,9 @@ async function loadRun(runId, options = {}) {
       }))
   };
 
-  // A Worker bundle is immutable once committed.  Its application receipt is
-  // a separate, explicitly-triggered administrative action; merely opening a
-  // Run must never write the company master, history, or signed output tree.
+  // A Worker bundle is immutable once committed. New normal Worker runs are
+  // applied immediately at commit time; merely opening a Run still never
+  // writes the company master, history, or signed output tree.
   let workerApplication = null;
   if (workerRun) {
     workerApplication = await workerProjectionApplicationForRun(runId);
@@ -15303,6 +15322,39 @@ function v2Top20WorkerContract(payload = {}) {
   });
 }
 
+// Newly created normal jobs use the shared range-aware V2 contract.  The
+// legacy fixed Top20 projection above remains available only to read terminal
+// jobs created by the earlier implementation.
+function v2SingleSourceWorkerContract(payload = {}) {
+  const plan = crawlExecutionPlan(payload);
+  assertSupportedSearchIntent(plan);
+  const executionRequestId = top20ExecutionRequestIdFromPayload(payload);
+  return normalizeV2CollectionRequest({
+    keyword: plan.keyword,
+    searchMode: String(payload.searchMode || process.env.SEARCH_MODE || "keyword").trim(),
+    collectionMode: String(payload.collectionMode || process.env.COLLECTION_MODE || "precision").trim(),
+    collectionPurpose: String(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail").trim(),
+    productMode: String(payload.productMode || process.env.PRODUCT_MODE || "all").trim(),
+    checkIn: String(plan.checkIn || "").trim(),
+    checkOut: String(plan.checkOut || "").trim(),
+    bookingRangeDays: bookingDaysFromRange(String(plan.checkIn || ""), String(plan.checkOut || "")),
+    rankStart: 1,
+    rankEnd: 50,
+    detailRankStart: 1,
+    detailRankEnd: 20,
+    clientRequestId: executionRequestId
+  });
+}
+
+function isV2SingleSourceWorkerEligible(payload = {}) {
+  try {
+    v2SingleSourceWorkerContract(payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isV2Top20WorkerEligible(payload = {}) {
   try {
     v2Top20WorkerContract(payload);
@@ -15345,7 +15397,7 @@ function isCollectionWorkerInternalPath(pathname) {
 
 function isV2Top20WorkerJobId(jobId) {
   const value = String(jobId || "");
-  return value.startsWith("job-top20-") || value.startsWith("job-booking-detail-probe-");
+  return value.startsWith("job-v2-") || value.startsWith("job-top20-") || value.startsWith("job-booking-detail-probe-");
 }
 
 function top20ExecutionRequestIdFromPayload(payload = {}) {
@@ -15705,6 +15757,49 @@ async function queueV2Top20WorkerCollection(payload = {}) {
     maximumProviderCalls: prepared.maximumProviderCalls,
     automaticRetry: false,
     automaticFallback: false
+  });
+}
+
+async function queueV2SingleSourceWorkerCollection(payload = {}) {
+  await restoreActiveTop20WorkerJob();
+  if (activeCrawlPromise) {
+    const error = new Error("이미 진행 중인 수집이 있습니다.");
+    error.code = "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB";
+    error.statusCode = 409;
+    throw error;
+  }
+  const contract = v2SingleSourceWorkerContract(payload);
+  const prepared = await collectionWorkerV2Top20Orchestrator.prepareTrustedAdmin({
+    trustedAdmin: true,
+    singleSource: true,
+    contract,
+    executionRequestId: contract.clientRequestId,
+    provenance: {
+      sourceRoute: "/api/crawl",
+      sourceRole: "admin",
+      actorKind: "operator",
+      collectorBackend: "v2_collector_single_source"
+    }
+  });
+  if (!prepared.reused && !TOP20_WORKER_TERMINAL_STATES.has(prepared.status)) {
+    activeTop20WorkerJob = Object.freeze({
+      jobId: prepared.jobId,
+      startedAt: new Date().toISOString(),
+      contract
+    });
+    lastTop20WorkerOutcome = null;
+  }
+  return Object.freeze({
+    queued: prepared.status === "queued",
+    reused: prepared.reused === true,
+    worker: true,
+    workerJobId: prepared.jobId,
+    contractHash: prepared.contractHash,
+    executionRequestHash: prepared.executionRequestHash,
+    maximumProviderCalls: prepared.maximumProviderCalls,
+    automaticRetry: false,
+    automaticFallback: false,
+    collectorBackend: "v2_collector_single_source"
   });
 }
 
@@ -17164,11 +17259,10 @@ async function route(req, res) {
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/prepare-dry-run") {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
-      const contract = v2Top20WorkerContract(payload);
-      const result = await collectionWorkerV2Top20Orchestrator.prepareDryRunTrustedAdmin({
+      const contract = v2SingleSourceWorkerContract(payload);
+      const result = await collectionWorkerV2Top20Orchestrator.prepareSingleSourceDryRunTrustedAdmin({
         trustedAdmin: true,
         contract,
-        executionRequestId: top20ExecutionRequestIdFromPayload(payload),
         provenance: {
           sourceRoute: "/api/admin/collection-worker/v2-top20/prepare-dry-run",
           sourceRole: "admin",
@@ -17447,9 +17541,9 @@ async function route(req, res) {
       const explicitLegacyFrozen = isExplicitLegacyFrozenCrawlRequest(payload);
       const useTop20Worker = top20WorkerEnabled
         && !explicitLegacyFrozen
-        && isV2Top20WorkerEligible(adminPayload);
+        && isV2SingleSourceWorkerEligible(adminPayload);
       if (top20WorkerEnabled && !explicitLegacyFrozen && !useTop20Worker) {
-        v2Top20WorkerContract(adminPayload);
+        v2SingleSourceWorkerContract(adminPayload);
       }
       const trustedPayload = useTop20Worker
         ? adminPayload
@@ -17458,7 +17552,7 @@ async function route(req, res) {
       if (useTop20Worker) {
         try {
           assertTop20WorkerTransportReady();
-          result = await queueV2Top20WorkerCollection({
+          result = await queueV2SingleSourceWorkerCollection({
             ...trustedPayload,
             clientRequestId: payload.clientRequestId
           });
@@ -17911,6 +18005,7 @@ module.exports = {
     isAdminPreviewMapGeocodingRequest,
     isSameOriginMapGeocodingRequest,
     isExplicitLegacyFrozenCrawlRequest,
+    isV2SingleSourceWorkerEligible,
     isV2Top20WorkerEligible,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
@@ -17929,6 +18024,7 @@ module.exports = {
     storedNaverFallbackSearchContract,
     trustedPreviewAdminCrawlPayload,
     trustedPreviewFrozenCrawlPayload,
+    v2SingleSourceWorkerContract,
     v2Top20WorkerContract,
     validateNaverLegacyLimitedRunManifest,
     summarizeRankingRows,

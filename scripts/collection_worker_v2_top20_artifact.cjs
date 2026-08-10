@@ -707,6 +707,9 @@ function buildV2Top20FinalArtifactFiles(input = {}) {
     collectionStatus: validated.resilience.collectionStatus,
     mainPlaceStatus: validated.resilience.mainPlaceStatus,
     detailStatus: validated.resilience.detailStatus,
+    detailProviderLiveCallCount: validated.providerCallTrace.filter((entry) => (
+      ["booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(entry.operation)
+    )).length,
     providerAttemptCount: 1,
     executedCallCount: validated.providerCallCount,
     providerWorkflowRevision,
