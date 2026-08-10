@@ -1117,10 +1117,13 @@ function currentCrawlFormPayload() {
   const defaultRange = purpose.defaultRange || collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
   const detailRankRanges = /^(none|skip|없음)$/i.test(rawDetailRankRanges) ? defaultRange : (rawDetailRankRanges || defaultRange);
+  const checkIn = els.checkInInput?.value || "";
+  const checkOut = els.checkOutInput?.value || checkIn;
+  const bookingRangeDays = inclusiveCollectionDateDays(checkIn, checkOut);
   return {
     keyword,
-    checkIn: els.checkInInput?.value || "",
-    checkOut: els.checkOutInput?.value || els.checkInInput?.value || "",
+    checkIn,
+    checkOut,
     searchMode: resolvedMode,
     searchIntentMode: "auto",
     clientIntentPreview: clientIntentPreview(intent),
@@ -1129,7 +1132,7 @@ function currentCrawlFormPayload() {
     collectionMode,
     detailRankRanges,
     rankRangeCount: rankRangeCountFromText(detailRankRanges, defaultRange),
-    bookingRangeDays: DEFAULT_BOOKING_DAYS,
+    bookingRangeDays,
     bookingRangePlaceLimit: purpose.collectWeeklyRange ? rankRangePlaceLimitFromText(detailRankRanges, defaultRange) : 0
   };
 }
@@ -1363,11 +1366,65 @@ function runDbApplySummaryModel(data = state.data || {}) {
     historyEligible,
     historyRows,
     targetText,
-    error: companyMaster.error || ""
+    error: companyMaster.error || "",
+    workerProjection: data.workerProjection || null
   };
 }
 
+function inclusiveCollectionDateDays(checkIn, checkOut) {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(String(checkIn || "")) || !/^\d{4}-\d{2}-\d{2}$/u.test(String(checkOut || ""))) return 0;
+  const toUtcMidnight = (value) => Date.UTC(
+    Number(value.slice(0, 4)),
+    Number(value.slice(5, 7)) - 1,
+    Number(value.slice(8, 10))
+  );
+  return Math.floor((toUtcMidnight(checkOut) - toUtcMidnight(checkIn)) / 86400000) + 1;
+}
+
+function collectionDateRangeIsValid(payload = currentCrawlFormPayload()) {
+  return Number.isSafeInteger(payload.bookingRangeDays)
+    && payload.bookingRangeDays >= 1
+    && payload.bookingRangeDays <= 7;
+}
+
 function runDbApplyStatusModel(model = {}) {
+  const workerProjection = model.workerProjection || null;
+  const workerRun = Boolean(workerProjection && workerProjection.projectionValid === true);
+  const workerApplication = workerProjection?.application || null;
+  if (workerRun) {
+    const collectionStatus = String(workerProjection.collectionStatus || "rank_only");
+    if (workerApplication?.state === "applied") {
+      const labels = {
+        complete: "정상 반영",
+        partial: "부분 반영",
+        rank_only: "순위 반영 완료"
+      };
+      const label = labels[collectionStatus] || "반영 완료";
+      const detail = collectionStatus === "rank_only"
+        ? "순위 기준값을 반영했습니다. 상품·가격·매출은 미수집 상태로 유지합니다."
+        : `${workerApplication.companyAppliedCount}개 업체 기준값을 반영했습니다.`;
+      return {
+        key: collectionStatus,
+        state: collectionStatus === "complete" ? "complete" : "partial",
+        tone: collectionStatus === "complete" ? "good" : "watch",
+        semanticTone: collectionStatus === "complete" ? "success" : "warning",
+        icon: collectionStatus === "rank_only" ? "company" : "rate",
+        label,
+        message: detail,
+        actions: []
+      };
+    }
+    return {
+      key: "projection_pending",
+      state: "partial",
+      tone: "watch",
+      semanticTone: "warning",
+      icon: "operation",
+      label: "반영 확인 대기",
+      message: "검증된 Worker 결과는 저장되어 있으며, 관리자 반영 확인을 기다리고 있습니다.",
+      actions: [{ label: "검증된 결과 반영", kind: "worker_projection_reconcile" }]
+    };
+  }
   const route = model.route || {};
   const errors = [];
   const warnings = [];
@@ -1886,13 +1943,31 @@ function renderRunResultApplySummary() {
       <div class="run-apply-actions">
         <button class="primary-button" type="button" data-drawer-tab="rank" data-run-result-resume="rank">플레이스 순서 다시 보기</button>
         <button type="button" data-drawer-tab="historyOps" data-run-result-resume="historyOps">수집 흐름·이력 보기</button>
-        ${status.actions.map((action) => `
-          <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
-        `).join("")}
+        ${status.actions.map((action) => action.kind === "worker_projection_reconcile"
+          ? `<button type="button" data-worker-projection-reconcile="${escapeHtml(run.id || "")}">${escapeHtml(action.label)}</button>`
+          : `<button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>`
+        ).join("")}
       </div>
       ${runDbApplyLinkedQueueHtml(linkedQueue)}
     </section>
   `;
+}
+
+function syncCollectionDateRangeValidity(payload = currentCrawlFormPayload()) {
+  const hasBothDates = Boolean(payload.checkIn && payload.checkOut);
+  const invalid = hasBothDates && !collectionDateRangeIsValid(payload);
+  if (els.checkOutInput?.setCustomValidity) {
+    els.checkOutInput.setCustomValidity(invalid ? "수집 종료일은 시작일 이후이고 최대 7일 범위여야 합니다." : "");
+  }
+  const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
+  if (invalid && submitButton) {
+    submitButton.dataset.dateRangeDisabled = "true";
+    submitButton.disabled = true;
+  } else if (submitButton?.dataset.dateRangeDisabled === "true") {
+    delete submitButton.dataset.dateRangeDisabled;
+    if (!state.crawlProgressRunning) submitButton.disabled = false;
+  }
+  return !invalid;
 }
 
 function updateCrawlSpeedPreview() {
@@ -1900,6 +1975,7 @@ function updateCrawlSpeedPreview() {
   syncCollectionDateWeekdays();
   if (!els.crawlForm) return;
   const payload = currentCrawlFormPayload();
+  syncCollectionDateRangeValidity(payload);
   const preview = crawlPreviewMeta(payload);
   const selectedKey = selectedCrawlSpeedPresetKey(payload);
   const presetOptions = crawlSpeedPresetOptions(payload.collectionPurpose);
@@ -3024,8 +3100,8 @@ function ensureCrawlControls() {
     els.crawlProgressStages = progress.querySelector("#crawlProgressStages");
   }
   if (els.checkOutInput) {
-    els.checkOutInput.readOnly = true;
-    els.checkOutInput.setAttribute("aria-readonly", "true");
+    els.checkOutInput.readOnly = false;
+    els.checkOutInput.removeAttribute("aria-readonly");
   }
 }
 
@@ -3163,12 +3239,17 @@ function top20MaximumProviderCalls(value = {}) {
   return Number.isInteger(maximum) && maximum > 0 ? maximum : null;
 }
 
+function top20CollectionRangeLabel(value = {}) {
+  const days = Number(value?.bookingRangeDays || value?.boundedInventory?.observationDays || 1);
+  return `수집 기간 ${Number.isSafeInteger(days) && days >= 1 && days <= 7 ? days : 1}일`;
+}
+
 function crawlEstimateBasisText(basis = {}) {
   if (!basis || !Object.keys(basis).length) return "조건 기반 예상값입니다.";
   if (basis.boundedInventory) {
     if (isTop20CrawlPreview(basis)) {
       const maximumProviderCalls = top20MaximumProviderCalls(basis);
-      return `메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 순차 수집 · 최대 ${maximumProviderCalls || "—"}요청 · 자동 재시도 없음 · 네이버예약 공개 재고 기반 추정(실제 정산매출 아님)`;
+      return `메인 순위 1~50 · 재고·가격·예상매출 1~20위 · ${top20CollectionRangeLabel(basis)} · 순차 수집 · 최대 ${maximumProviderCalls || "—"}요청 · 자동 재시도 없음 · 네이버예약 공개 재고 기반 추정(실제 정산매출 아님)`;
     }
     return "메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 순차 수집 · 최대 31요청 · 자동 재시도 없음 · 네이버예약 공개 재고 기반 추정(실제 정산매출 아님)";
   }
@@ -3366,7 +3447,7 @@ function renderCrawlReadinessPreview(payload = currentCrawlFormPayload(), previe
   if (els.crawlProgressTitle) els.crawlProgressTitle.textContent = "예상 수집 시간";
   if (els.crawlProgressText) {
     els.crawlProgressText.textContent = isTop20CrawlPreview(preview)
-      ? `${keyword} · 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님`
+      ? `${keyword} · 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · ${top20CollectionRangeLabel(preview)} · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님`
       : preview.boundedInventory
       ? `${keyword} · 메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 최대 31요청 · 실제 정산매출 아님`
       : `${keyword} · ${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} 기준`;
@@ -3396,7 +3477,7 @@ function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()
       const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
       const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
       els.crawlSpeedPreview.textContent = isTop20CrawlPreview(estimate)
-        ? `메인 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 ${top20MaximumProviderCalls(estimate) || "—"}요청 · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 실매출 아님`
+        ? `메인 1~50 · 재고·가격·예상매출 1~20위 · ${top20CollectionRangeLabel(estimate)} · 최대 ${top20MaximumProviderCalls(estimate) || "—"}요청 · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 실매출 아님`
         : estimate.boundedInventory
         ? `메인 1~50 · 재고 상위 3곳 · 1일 · 최대 31요청 · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 실매출 아님`
         : `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)}${safetyText}`;
@@ -28929,16 +29010,17 @@ function renderRegions(companyPoints = companyMapPointRows(state.data?.regions |
 
 function renderDownloads() {
   const downloads = state.data?.downloads || [];
+  const workerProjection = state.data?.workerProjection || null;
   if (!downloads.length) {
     els.downloadList.innerHTML = `<div class="empty">다운로드할 파일이 없습니다.</div>`;
     return;
   }
-  els.downloadList.innerHTML = downloads.map((file) => `
+  els.downloadList.innerHTML = `${workerProjection?.projectionValid ? `<p class="hint"><strong>검증된 산출물</strong> · 서명된 파일만 제공합니다.</p>` : ""}${downloads.map((file) => `
     <a class="download-item" href="${escapeHtml(file.url)}" target="_blank" rel="noreferrer">
       <strong>${escapeHtml(file.label || "파일")}</strong>
       <span>${escapeHtml(file.name || file.url)}</span>
     </a>
-  `).join("");
+  `).join("")}`;
 }
 
 function renderDictionaryQuickButtons() {
@@ -35548,6 +35630,25 @@ async function backfillCompanyMaster(button) {
   }
 }
 
+async function reconcileWorkerRunProjection(runId, button = null) {
+  if (!isAdminRole() || !runId) return;
+  if (button) button.disabled = true;
+  try {
+    await fetchJson("/api/admin/collection-worker/run-projection/reconcile", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId })
+    });
+    await loadRun(runId);
+    setStatus("검증된 Worker 결과를 반영했습니다.");
+  } catch (error) {
+    if (els.crawlStatus) els.crawlStatus.textContent = error.message || "검증된 Worker 결과 반영에 실패했습니다.";
+    setStatus("결과 반영 확인 필요");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function preferredRunForAutoSelection(runs = []) {
   const items = Array.isArray(runs) ? runs.filter(Boolean) : [];
   return items.find((run) => run.autoSelectable !== false) || items[0] || null;
@@ -36081,6 +36182,12 @@ async function submitCrawl(event) {
     els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
   const payload = currentCrawlFormPayload();
+  if (!collectionDateRangeIsValid(payload)) {
+    const message = "수집 기간은 시작일 이후, 최대 7일 범위로 선택해 주세요.";
+    if (els.crawlStatus) els.crawlStatus.textContent = message;
+    setCrawlProgress(false, "", message, crawlPreviewMeta(payload), payload);
+    return;
+  }
   payload.clientRequestId = typeof globalThis.crypto?.randomUUID === "function"
     ? globalThis.crypto.randomUUID()
     : `crawl-${Date.now()}-${Math.random().toString(16).slice(2, 14)}`;
@@ -36114,7 +36221,7 @@ async function submitCrawl(event) {
     true,
     "수집 실행 중",
     isTop20CrawlPreview(preview)
-      ? `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청`
+      ? `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · ${top20CollectionRangeLabel(preview)} · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청`
       : preview.boundedInventory
       ? `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 최대 31요청`
       : `${recrawlText ? `${recrawlText} · ` : ""}${purpose.label} · ${searchModeLabel(payload.searchMode)} · ${detailText}`,
@@ -36125,19 +36232,19 @@ async function submitCrawl(event) {
     setCrawlProgress(
       true,
       "상위 20곳 Worker 수집 중",
-      `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청`,
+      `${recrawlText ? `${recrawlText} · ` : ""}메인 순위 1~50 · 재고·가격·예상매출 1~20위 · ${top20CollectionRangeLabel(preview)} · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청`,
       preview,
       payload
     );
   }
   els.crawlStatus.textContent = isTop20CrawlPreview(preview)
-    ? `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 기준일 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`
+    ? `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · ${top20CollectionRangeLabel(preview)} · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`
     : preview.boundedInventory
     ? `제한 수집을 시작했습니다. 메인 순위 1~50 · 재고 상위 3곳 · 기준일 1일 · 최대 31요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`
     : `${recrawlText ? `${recrawlText} 기준 ` : ""}${purpose.shortLabel || purpose.label} 수집을 시작했습니다. ${detailText}. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
   setStatus("수집 중");
   if (preview.workerTop20) {
-    els.crawlStatus.textContent = `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · 1일 · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
+    els.crawlStatus.textContent = `Worker 수집을 시작합니다. 메인 순위 1~50 · 재고·가격·예상매출 1~20위 · ${top20CollectionRangeLabel(preview)} · 최대 ${top20MaximumProviderCalls(preview) || "—"}요청 · 실제 정산매출 아님. 예상 ${formatElapsed(preview.estimatedTotalSeconds)}.`;
   }
   scheduleCrawlStatusPoll(1500, false);
   try {
@@ -36223,7 +36330,7 @@ function setDefaultDates() {
   const start = new Date(kst);
   const date = start.toISOString().slice(0, 10);
   if (els.checkInInput && !els.checkInInput.value) els.checkInInput.value = date;
-  if (els.checkOutInput) els.checkOutInput.value = els.checkInInput?.value || date;
+  if (els.checkOutInput && !els.checkOutInput.value) els.checkOutInput.value = els.checkInInput?.value || date;
   updateCrawlSpeedPreview();
 }
 
@@ -37137,6 +37244,11 @@ function bindEvents() {
     }
     const backfillButton = event.target.closest("[data-company-backfill]");
     if (backfillButton) backfillCompanyMaster(backfillButton);
+    const workerProjectionReconcile = event.target.closest("[data-worker-projection-reconcile]");
+    if (workerProjectionReconcile) {
+      reconcileWorkerRunProjection(workerProjectionReconcile.dataset.workerProjectionReconcile || "", workerProjectionReconcile);
+      return;
+    }
     if (event.target.closest("[data-close-sheet]")) closeSheet();
     if (event.target.closest("[data-close-drawer]")) closeDrawer();
     const previewGeocodeChoice = event.target.closest("[data-preview-geocode-choice]");
@@ -37589,9 +37701,12 @@ function bindEvents() {
   els.keywordInput?.addEventListener("input", renderSearchIntentHints);
   els.b2bSearchInput?.addEventListener("input", renderSearchIntentHints);
   els.checkInInput?.addEventListener("change", () => {
-    if (els.checkOutInput) els.checkOutInput.value = els.checkInInput.value || els.checkOutInput.value;
+    if (els.checkOutInput && (!els.checkOutInput.value || els.checkOutInput.value < els.checkInInput.value)) {
+      els.checkOutInput.value = els.checkInInput.value;
+    }
     updateCrawlSpeedPreview();
   });
+  els.checkOutInput?.addEventListener("change", updateCrawlSpeedPreview);
   els.crawlForm?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-collection-purpose]");
     if (!button) return;

@@ -65,6 +65,7 @@ const {
   normalizeHistoricalBookingHints,
   providerIdForOperation,
   summarizeResilientTop20Collection,
+  v2Top20ResiliencePlan,
   validateResilientProviderTrace
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const naverBookingBusinessQuery = GRAPHQL_DOCUMENTS.naver_booking_business;
@@ -163,7 +164,9 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision", activ
       collectRegional: false,
       collectOta: false,
       collectBookingStock: true,
-      collectWeeklyRange: false,
+      // The Worker keeps the same bounded detail flow, but its signed
+      // contract may request more than one explicit calendar day.
+      collectWeeklyRange: true,
       regionalSkipNote: "Worker 숙박 수집에서 지역카드 수집을 분리했습니다.",
       otaSkipNote: "Worker 상위 20곳 수집에서 보조 OTA 호출을 생략했습니다."
     };
@@ -383,8 +386,8 @@ const NAVER_LEGACY_INVENTORY_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
     || V2_COLLECTOR_COMPATIBILITY_ACTIVATION
     || V2_TOP20_WORKER_ACTIVATION
   );
-const NAVER_INVENTORY_CALL_BUDGET = boundedInteger(process.env.NAVER_INVENTORY_CALL_BUDGET, 0, 0, 240);
-const NAVER_TOTAL_CALL_BUDGET = boundedInteger(process.env.NAVER_TOTAL_CALL_BUDGET, 0, 0, 241);
+const NAVER_INVENTORY_CALL_BUDGET = boundedInteger(process.env.NAVER_INVENTORY_CALL_BUDGET, 0, 0, 1200);
+const NAVER_TOTAL_CALL_BUDGET = boundedInteger(process.env.NAVER_TOTAL_CALL_BUDGET, 0, 0, 1201);
 const NAVER_INVENTORY_PLACE_LIMIT = boundedInteger(process.env.NAVER_INVENTORY_PLACE_LIMIT, 0, 0, 20);
 const NAVER_INVENTORY_ITEM_LIMIT = boundedInteger(process.env.NAVER_INVENTORY_ITEM_LIMIT, 0, 0, 8);
 const NAVER_AUTOMATIC_RETRY = String(process.env.NAVER_AUTOMATIC_RETRY || "0") === "1";
@@ -1512,12 +1515,14 @@ function assertNaverLegacyLimitedActivationContract() {
     const expectedTransportStrategy = V2_COLLECTOR_COMPATIBILITY_ACTIVATION
       ? V2_COLLECTOR_TRANSPORT_STRATEGY
       : ACTIVE_INVENTORY_ACTIVATION.strategy;
+    const expectedInventoryCallBudget = 80 + (160 * BOOKING_RANGE_DAYS);
+    const expectedTotalCallBudget = 1 + expectedInventoryCallBudget;
     const inventoryValid = NAVER_COLLECTOR_STRATEGY === expectedTransportStrategy
       && NAVER_COLLECTOR_SCOPE === expectedInventoryScope
       && NAVER_LIMITED_ACTIVATION_PROFILE === expectedInventoryProfile
       && NAVER_PROVIDER_CALL_BUDGET === ACTIVE_INVENTORY_ACTIVATION.mainPlaceCallBudget
-      && NAVER_INVENTORY_CALL_BUDGET === 240
-      && NAVER_TOTAL_CALL_BUDGET === 241
+      && NAVER_INVENTORY_CALL_BUDGET === expectedInventoryCallBudget
+      && NAVER_TOTAL_CALL_BUDGET === expectedTotalCallBudget
       && NAVER_INVENTORY_PLACE_LIMIT === ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
       && NAVER_INVENTORY_ITEM_LIMIT === ACTIVE_INVENTORY_ACTIVATION.maxProductsPerCompany
       && NAVER_AUTOMATIC_RETRY === false
@@ -1531,10 +1536,10 @@ function assertNaverLegacyLimitedActivationContract() {
       && COLLECTION_PROFILE.collectRegional === false
       && COLLECTION_PROFILE.collectOta === V2_COLLECTOR_COMPATIBILITY_ACTIVATION
       && COLLECTION_PROFILE.collectBookingStock === true
-      && COLLECTION_PROFILE.collectWeeklyRange === false
+      && COLLECTION_PROFILE.collectWeeklyRange === true
       && (!V2_COLLECTOR_COMPATIBILITY_ACTIVATION || PRODUCT_MODE === "all")
       && DETAIL_RANK_RANGE_LABEL === `${ACTIVE_INVENTORY_ACTIVATION.inventoryRankStart}-${ACTIVE_INVENTORY_ACTIVATION.inventoryRankEnd}`
-      && BOOKING_RANGE_DAYS === 1
+      && BOOKING_RANGE_DAYS >= 1
       && NAVER_BOOKING_STOCK_LIMIT === ACTIVE_INVENTORY_ACTIVATION.maxInventoryCompanies
       && NAVER_BOOKING_DETAIL_CONCURRENCY === 1
       && NAVER_SCHEDULE_CONCURRENCY === 1
@@ -1576,7 +1581,9 @@ function validateV2Top20WorkerRunManifest(manifest = {}) {
     : [];
   let validatedTrace = null;
   try {
-    validatedTrace = validateResilientProviderTrace(manifest.providerCallTrace).total;
+    validatedTrace = validateResilientProviderTrace(manifest.providerCallTrace, {
+      bookingRangeDays: manifest.bookingRangeDays || 1
+    }).total;
   } catch {
     throw createCrawlFailure("COLLECTION_FAILED");
   }
@@ -1586,7 +1593,9 @@ function validateV2Top20WorkerRunManifest(manifest = {}) {
     && manifest.collectionPurpose === "revenue_detail"
     && manifest.collectionMode === "precision"
     && manifest.detailRankRanges === "1-20"
-    && manifest.bookingRangeDays === 1
+    && Number.isInteger(manifest.bookingRangeDays)
+    && manifest.bookingRangeDays >= 1
+    && manifest.bookingRangeDays <= 7
     && manifest.productMode === "all"
     && manifest.automaticRetry === false
     && manifest.automaticFallback === false
@@ -1594,8 +1603,8 @@ function validateV2Top20WorkerRunManifest(manifest = {}) {
     && manifest.saveFailureRun === false
     && manifest.revenueEstimateBasis === V2_TOP20_CONTRACT.revenueEstimateBasis
     && Number(manifest.mainPlaceCallBudget) === 1
-    && Number(manifest.inventoryCallBudget) === 240
-    && Number(manifest.totalCallBudget) === 241
+    && Number(manifest.inventoryCallBudget) === v2Top20ResiliencePlan(manifest.bookingRangeDays).maximumProviderCalls - 1
+    && Number(manifest.totalCallBudget) === v2Top20ResiliencePlan(manifest.bookingRangeDays).maximumProviderCalls
     && Number(manifest.providerConcurrency) === 1
     && Number(manifest.providerMaxObservedConcurrency) === 1
     && Number(manifest.maxInventoryCompanies) === 20
@@ -1606,13 +1615,13 @@ function validateV2Top20WorkerRunManifest(manifest = {}) {
     && Number(results.ready || 0) + Number(results.zero || 0) + Number(results.missing || 0) + Number(results.partial || 0) === 20
     && Number(calls.mainPlace) === 1
     && manifest.providerCallTraceSchemaVersion === V2_TOP20_PROVIDER_CALL_TRACE_SCHEMA_VERSION
-    && manifest.providerCallTraceHash === computeV2Top20ProviderCallTraceHash(manifest.providerCallTrace)
+    && manifest.providerCallTraceHash === computeV2Top20ProviderCallTraceHash(manifest.providerCallTrace, { bookingRangeDays: manifest.bookingRangeDays })
     && validatedTrace === Number(calls.total)
     && validatedTrace === v2Top20ExecutedCallCount
     && v2Top20AuthorizedProviderCall === null
     && Number(inventory.total) >= 0
     && Number(calls.total) === 1 + Number(inventory.total)
-    && Number(calls.total) <= 241
+    && Number(calls.total) <= v2Top20ResiliencePlan(manifest.bookingRangeDays).maximumProviderCalls
     && targets.length === 20
     && targets.every((target, index) => (
       Number(target.companyOrdinal) === index + 1
@@ -3229,6 +3238,19 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
         && Number.isFinite(Number(result.nightEstimatedRevenue || 0))
         && Number.isFinite(Number(result.dayUseEstimatedRevenue || 0))
       );
+      const rangeObservations = (collectRange ? (result.weekly?.dates || []) : []).map((day) => ({
+        date: String(day?.date || ""),
+        availableUnits: Number.isFinite(Number(day?.available)) ? Number(day.available) : null,
+        totalUnits: Number.isFinite(Number(day?.total)) ? Number(day.total) : null,
+        soldOutUnits: Number.isFinite(Number(day?.soldOut)) ? Number(day.soldOut) : null,
+        estimatedRevenue: Number.isFinite(Number(day?.estimatedRevenue)) ? Number(day.estimatedRevenue) : null,
+        estimatedSoldUnits: Number.isFinite(Number(day?.pricedSoldOut)) ? Number(day.pricedSoldOut) : null,
+        missingPriceSoldUnits: Number.isFinite(Number(day?.missingPriceSoldOut)) ? Number(day.missingPriceSoldOut) : null
+      }));
+      const rangeIncomplete = collectRange && rangeObservations.length < BOOKING_RANGE_DAYS;
+      const targetStatus = rangeIncomplete && result.observationStatus === "ready"
+        ? "partial"
+        : result.observationStatus;
       if (!alreadyKnown) collected += 1;
       if (!alreadyKnown && String(result.status || "").startsWith("성공")) successful += 1;
       if (!alreadyKnown && result.observationStatus === "ready") ready += 1;
@@ -3237,13 +3259,14 @@ async function enrichNaverRowsWithBookingAvailability(rows) {
         targetResults.push({
           companyOrdinal,
           placeId: String(row.place_id || ""),
-          status: result.observationStatus,
-          detailCollectionStatus: result.detailCollectionStatus || result.observationStatus,
+          status: targetStatus,
+          detailCollectionStatus: rangeIncomplete ? "partial" : (result.detailCollectionStatus || result.observationStatus),
           bookingBusinessIdSource: result.bookingBusinessIdSource || "none",
           bookingBusinessIdFreshness: result.bookingBusinessIdFreshness || "unknown",
           bookingBusinessIdVerifiedAt: result.bookingBusinessIdVerifiedAt || null,
           bookingBusinessIdSourceRunId: result.bookingBusinessIdSourceRunId || null,
-          revenueInputValid
+          revenueInputValid,
+          rangeObservations
         });
       }
 
@@ -4922,7 +4945,7 @@ async function main() {
     ? v2Top20ProviderCallTrace.map((entry) => ({ ...entry }))
     : null;
   const providerCallTraceHash = V2_TOP20_WORKER_ACTIVATION
-    ? computeV2Top20ProviderCallTraceHash(providerCallTrace)
+    ? computeV2Top20ProviderCallTraceHash(providerCallTrace, { bookingRangeDays: BOOKING_RANGE_DAYS })
     : null;
   if (V2_TOP20_WORKER_ACTIVATION) {
     const traceCounts = providerCallTrace.reduce((counts, item) => {
@@ -5054,6 +5077,7 @@ async function main() {
           bookingBusinessIdSourceRunId: target.bookingBusinessIdSourceRunId || null,
           detailFailureCode: target.detailFailureCode || null,
           revenueInputValid: target.revenueInputValid === true,
+          rangeObservations: Array.isArray(target.rangeObservations) ? target.rangeObservations : [],
           ...boundedInventoryCompanyCallCounts[String(target.companyOrdinal)],
           calls: boundedInventoryCompanyCallCounts[String(target.companyOrdinal)]
         }))
@@ -5121,7 +5145,7 @@ async function main() {
   // allows a detail-circuit block to become a partial/rank-only artifact
   // instead of deleting an already-complete main ranking.
   if (V2_TOP20_WORKER_ACTIVATION) {
-    validateResilientProviderTrace(manifest.providerCallTrace);
+    validateResilientProviderTrace(manifest.providerCallTrace, { bookingRangeDays: BOOKING_RANGE_DAYS });
   } else if (V2_COLLECTOR_COMPATIBILITY_ACTIVATION) {
     validateV2CollectorCompatibilityRunManifest(manifest);
   } else if (NAVER_LEGACY_INVENTORY_ACTIVATION) {

@@ -22,6 +22,7 @@ const {
 const {
   V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
   V2_TOP20_RESILIENCE_OPERATION_BUDGETS,
+  v2Top20ResiliencePlan,
   providerIdForOperation
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
@@ -111,6 +112,7 @@ function selectV2Top20ChildBaseEnvironment(value = {}) {
 
 function buildV2Top20CollectorEnvironment(input = {}) {
   const contract = normalizeV2Top20PrepareContract(input.contract || {});
+  const plan = v2Top20ResiliencePlan(contract.bookingRangeDays);
   const outputRoot = path.resolve(String(input.outputRoot || ""));
   if (!path.isAbsolute(outputRoot)) {
     throw collectorError("V2_TOP20_RUNTIME_PATH_INVALID", "top20 Worker output root must be absolute", 400);
@@ -127,7 +129,7 @@ function buildV2Top20CollectorEnvironment(input = {}) {
     COLLECTION_PURPOSE: "revenue_detail",
     DETAIL_RANK_RANGES: "1-20",
     PRODUCT_MODE: "all",
-    BOOKING_RANGE_DAYS: "1",
+    BOOKING_RANGE_DAYS: String(contract.bookingRangeDays),
     BOOKING_RANGE_PLACE_LIMIT: "20",
     SOURCE_ROLE: "admin",
     COLLECTION_SOURCE: "admin_search",
@@ -140,8 +142,8 @@ function buildV2Top20CollectorEnvironment(input = {}) {
     NAVER_COLLECTOR_SCOPE: V2_TOP20_SCOPE,
     NAVER_LIMITED_ACTIVATION_PROFILE: V2_TOP20_PROFILE,
     NAVER_PROVIDER_CALL_BUDGET: "1",
-    NAVER_INVENTORY_CALL_BUDGET: String(V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS - 1),
-    NAVER_TOTAL_CALL_BUDGET: String(V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS),
+    NAVER_INVENTORY_CALL_BUDGET: String(plan.maximumProviderCalls - 1),
+    NAVER_TOTAL_CALL_BUDGET: String(plan.maximumProviderCalls),
     NAVER_INVENTORY_PLACE_LIMIT: "20",
     NAVER_INVENTORY_ITEM_LIMIT: "8",
     NAVER_BOOKING_STOCK_LIMIT: "20",
@@ -257,7 +259,7 @@ function parseMainPlaceProbeResult(stdout) {
   return Object.freeze({ ...result });
 }
 
-function normalizeProviderCallMessage(message, expectedRequestOrdinal, expectedType = V2_TOP20_PROVIDER_CALL_REQUEST_TYPE) {
+function normalizeProviderCallMessage(message, expectedRequestOrdinal, expectedType = V2_TOP20_PROVIDER_CALL_REQUEST_TYPE, maximumProviderCalls = V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS) {
   const expectedKeys = [
     "companyOrdinal",
     "operation",
@@ -281,7 +283,7 @@ function normalizeProviderCallMessage(message, expectedRequestOrdinal, expectedT
     || !Number.isInteger(requestOrdinal)
     || requestOrdinal !== expectedRequestOrdinal
     || requestOrdinal < 1
-    || requestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+    || requestOrdinal > maximumProviderCalls
   ) {
     throw collectorError("V2_TOP20_PROVIDER_CALL_IPC_INVALID", "top20 provider call IPC request is invalid", 409);
   }
@@ -330,6 +332,9 @@ function runCollectorChild(input = {}) {
   const providerAuthorizeHook = typeof input.authorizeProviderCall === "function"
     ? input.authorizeProviderCall
     : null;
+  const maximumProviderCalls = Number.isSafeInteger(input.maximumProviderCalls)
+    ? input.maximumProviderCalls
+    : V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS;
   const maxRuntimeMs = Number.isInteger(input.maxRuntimeMs) && input.maxRuntimeMs > 0
     ? Math.min(input.maxRuntimeMs, DEFAULT_MAX_RUNTIME_MS)
     : DEFAULT_MAX_RUNTIME_MS;
@@ -409,7 +414,7 @@ function runCollectorChild(input = {}) {
         if (!isAuthorize && !isStarted) {
           throw collectorError("V2_TOP20_PROVIDER_CALL_IPC_INVALID", "top20 provider call IPC phase is invalid", 409);
         }
-        request = normalizeProviderCallMessage(message, executedCallCount + 1, message.type);
+        request = normalizeProviderCallMessage(message, executedCallCount + 1, message.type, maximumProviderCalls);
         const safeMetadata = Object.freeze({
           providerId: request.providerId,
           operation: request.operation,
@@ -498,7 +503,9 @@ function runCollectorChild(input = {}) {
         reject(classifyCollectorProcessFailure({ stderr, stdout, exitCode: code }));
       } else {
         try {
-          const normalizedTrace = normalizeV2Top20ProviderCallTrace(providerCallTrace);
+          const normalizedTrace = normalizeV2Top20ProviderCallTrace(providerCallTrace, {
+            bookingRangeDays: input.bookingRangeDays || 1
+          });
           const probeResult = typeof input.parseResult === "function" ? input.parseResult(stdout) : null;
           resolve({
             code,
@@ -506,7 +513,9 @@ function runCollectorChild(input = {}) {
             stderrLength: Buffer.byteLength(stderr),
             executedCallCount,
             providerCallTrace: normalizedTrace,
-            providerCallTraceHash: computeV2Top20ProviderCallTraceHash(normalizedTrace),
+            providerCallTraceHash: computeV2Top20ProviderCallTraceHash(normalizedTrace, {
+              bookingRangeDays: input.bookingRangeDays || 1
+            }),
             probeResult
           });
         } catch (error) {
@@ -639,6 +648,7 @@ async function executeV2Top20Collector(input = {}) {
   try {
     const outputRoot = path.join(tempRoot, "outputs");
     await fs.mkdir(outputRoot, { recursive: true });
+    const plan = v2Top20ResiliencePlan(contract.bookingRangeDays);
     const runStamp = safeRunStamp(input.runStamp || `${contract.checkIn.replaceAll("-", "")}_000000_${crypto.randomBytes(4).toString("hex")}`);
     const environment = buildV2Top20CollectorEnvironment({
       contract: input.contract,
@@ -696,8 +706,8 @@ async function executeV2Top20Collector(input = {}) {
       });
       collectorResult = {
         executedCallCount,
-        providerCallTrace: normalizeV2Top20ProviderCallTrace(providerCallTrace),
-        providerCallTraceHash: computeV2Top20ProviderCallTraceHash(providerCallTrace)
+        providerCallTrace: normalizeV2Top20ProviderCallTrace(providerCallTrace, { bookingRangeDays: contract.bookingRangeDays }),
+        providerCallTraceHash: computeV2Top20ProviderCallTraceHash(providerCallTrace, { bookingRangeDays: contract.bookingRangeDays })
       };
     } else {
       collectorResult = await runCollectorChild({
@@ -708,6 +718,8 @@ async function executeV2Top20Collector(input = {}) {
         cwd: path.resolve(input.cwd || path.join(__dirname, "..")),
         keyword: contract.keyword,
         environment,
+        maximumProviderCalls: plan.maximumProviderCalls,
+        bookingRangeDays: contract.bookingRangeDays,
         authorizeProviderCall: heartbeat,
         onProviderCall: input.onProviderCall
       });

@@ -27,7 +27,8 @@ const {
   validateExecutionState
 } = require("./collection_worker_v2_top20_contract.cjs");
 const {
-  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
@@ -273,7 +274,7 @@ function safeArtifactLastProviderCall(verifiedArtifact) {
       !["main_place", "booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(operation)
       || !Number.isInteger(requestOrdinal)
       || requestOrdinal < 1
-      || requestOrdinal > V2_TOP20_CONTRACT.maximumProviderCalls
+      || requestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS
     ) return Object.freeze({ operation: null, requestOrdinal: null });
     return Object.freeze({ operation, requestOrdinal });
   } catch {
@@ -800,7 +801,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         executionRequestHash,
         providerWorkflowRevision: existingExecution.providerWorkflowRevision,
         maxProviderAttempts: 1,
-        maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+        maximumProviderCalls: top20Contract.maximumProviderCalls,
         automaticRetry: false,
         automaticFallback: false
       });
@@ -917,7 +918,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         }),
         top20Contract,
         providerSession: Object.freeze({
-          maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+          maximumProviderCalls: top20Contract.maximumProviderCalls,
           providerAttemptCount: 1,
           concurrency: 1,
           automaticRetry: false,
@@ -938,6 +939,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         top20ContractHash,
         executionRequestHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
+        maximumProviderCalls: top20Contract.maximumProviderCalls,
         preflighted: false,
         lifecycle: "active",
         terminalAt: null,
@@ -968,7 +970,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         executionRequestHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
         maxProviderAttempts: 1,
-        maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+          maximumProviderCalls: top20Contract.maximumProviderCalls,
         automaticRetry: false,
         automaticFallback: false
       });
@@ -1248,7 +1250,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       workflowRevision: job.workflowRevision,
       providerWorkflowRevision: entry.providerWorkflowRevision,
       top20ContractHash: entry.top20ContractHash,
-      maximumProviderCalls: V2_TOP20_CONTRACT.maximumProviderCalls,
+      maximumProviderCalls: entry.maximumProviderCalls,
       concurrency: 1,
       automaticRetry: false,
       automaticFallback: false
@@ -1357,7 +1359,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || document.providerAttemptCount !== 1
       || !Number.isInteger(document.executedCallCount)
       || document.executedCallCount < 1
-      || document.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+      || document.executedCallCount > entry.maximumProviderCalls
       || !Number.isInteger(document.providerWorkflowRevision)
       || document.providerWorkflowRevision < 0
       || document.automaticRetry !== false
@@ -1791,10 +1793,10 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || ![0, 1].includes(Number(body.providerAttemptCount))
       || !Number.isInteger(body.executedCallCount)
       || body.executedCallCount < 0
-      || body.executedCallCount > V2_TOP20_CONTRACT.maximumProviderCalls
+      || body.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS
       || Number(body.providerAttemptCount) === 0 && body.executedCallCount !== 0
       || body.lastProviderOperation !== null && !["main_place", "booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(String(body.lastProviderOperation))
-      || body.lastRequestOrdinal !== null && (!Number.isInteger(body.lastRequestOrdinal) || body.lastRequestOrdinal < 1 || body.lastRequestOrdinal > V2_TOP20_CONTRACT.maximumProviderCalls)
+      || body.lastRequestOrdinal !== null && (!Number.isInteger(body.lastRequestOrdinal) || body.lastRequestOrdinal < 1 || body.lastRequestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS)
       || (body.lastProviderOperation === null) !== (body.lastRequestOrdinal === null)
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_INPUT_INVALID", "top20 artifact security diagnostic is invalid", 400);
@@ -1846,7 +1848,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || ![0, 1].includes(Number(body.providerAttemptCount))
       || !Number.isInteger(body.executedCallCount)
       || body.executedCallCount < 0
-      || body.executedCallCount > V2_TOP20_CONTRACT.maximumProviderCalls
+      || body.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS
       || Number(body.providerAttemptCount) === 0 && body.executedCallCount !== 0
       || body.providerFailureSubtype !== null && !SAFE_SUBTYPE_PATTERN.test(String(body.providerFailureSubtype))
       || body.diagnosticId !== null && !DIAGNOSTIC_PATTERN.test(String(body.diagnosticId))

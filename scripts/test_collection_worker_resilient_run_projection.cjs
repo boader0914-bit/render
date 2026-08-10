@@ -66,12 +66,25 @@ function fixture(options = {}) {
   const csv = options.invalidCsv === true
     ? `${headers.join(",")}\n1,"unterminated\n`
     : `${headers.join(",")}\n${rows.map((row) => row.map(csvCell).join(",")).join("\n")}\n`;
+  const checkOut = options.checkOut || "2026-08-10";
+  const rangeDates = checkOut === "2026-08-12"
+    ? ["2026-08-10", "2026-08-11", "2026-08-12"]
+    : [];
   const targetResults = statuses.map((status, index) => ({
     companyOrdinal: index + 1,
     placeId: `place-${index + 1}`,
     detailCollectionStatus: status,
     bookingBusinessIdSource: "none",
     revenueInputValid: status === "ready",
+    rangeObservations: status === "ready" ? rangeDates.map((date, dayOffset) => ({
+      date,
+      availableUnits: 1,
+      totalUnits: 2,
+      soldOutUnits: 1,
+      estimatedRevenue: 100000 + dayOffset,
+      estimatedSoldUnits: 1,
+      missingPriceSoldUnits: 0
+    })) : [],
   }));
   if (options.unsupportedStatusAt) {
     targetResults[options.unsupportedStatusAt - 1].detailCollectionStatus = "unrecognized";
@@ -85,7 +98,7 @@ function fixture(options = {}) {
       manifest: {
         collectionCompletedAt: "2026-08-10T00:00:00.000Z",
         checkIn: "2026-08-10",
-        checkOut: "2026-08-10",
+        checkOut,
         searchRegionKey: "kr_gyeongnam_fixture",
         revenueEstimateBasis: "public_inventory_estimate",
       },
@@ -124,6 +137,14 @@ try {
   assert.equal(complete.companies.length, 20);
   assert.equal(complete.revenues.length, 20);
 
+  const range = buildV2RunProjections(fixture({ checkOut: "2026-08-12" }), TRANSACTION_ID, RUN_ID);
+  assert.equal(range.run.schemaVersion, "collection-worker-v2-top20-derived-projections.v3");
+  assert.equal(range.run.bookingRangeDays, 3);
+  assert.equal(range.run.dateObservationReadyCount, 60);
+  assert.equal(range.revenues.length, 60);
+  assert.equal(range.history.length, 60);
+  assert.equal(range.history.every((entry) => /^2026-08-1[0-2]$/u.test(entry.observationDate)), true);
+
   const partial = buildV2RunProjections(fixture({
     collectionStatus: "partial",
     statuses: ["ready", "blocked", "not_collected", ...Array.from({ length: 17 }, () => "missing")],
@@ -156,6 +177,7 @@ try {
   assert.equal(guard.blockedAttempts(), 0);
   console.log(JSON.stringify({
     complete: true,
+    boundedDateRange: true,
     partial: true,
     rankOnly: true,
     reasons: ["unsupported_target_status", "ready_revenue_observation_incomplete", "ranking_incomplete", "csv_quoting_invalid"],

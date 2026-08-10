@@ -24,8 +24,10 @@ const {
 } = require("./collection_worker_v2_top20_protocol.cjs");
 const {
   V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS,
   V2_TOP20_RESILIENCE_OPERATION_BUDGETS,
   summarizeResilientTop20Collection,
+  v2Top20ResiliencePlan,
   validateResilientProviderTrace
 } = require("./collection_worker_v2_top20_resilience.cjs");
 
@@ -74,8 +76,9 @@ function normalizeTraceOrdinal(value, minimum, maximum, label) {
   return ordinal;
 }
 
-function normalizeV2Top20ProviderCallTrace(trace) {
-  if (!Array.isArray(trace) || trace.length < 1 || trace.length > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS) {
+function normalizeV2Top20ProviderCallTrace(trace, options = {}) {
+  const plan = v2Top20ResiliencePlan(options.bookingRangeDays || 1);
+  if (!Array.isArray(trace) || trace.length < 1 || trace.length > plan.maximumProviderCalls) {
     throw artifactError("V2_TOP20_PROVIDER_CALL_TRACE_INVALID", "top20 provider call trace is invalid", 409);
   }
   return Object.freeze(trace.map((entry, index) => {
@@ -85,7 +88,7 @@ function normalizeV2Top20ProviderCallTrace(trace) {
     const requestOrdinal = normalizeTraceOrdinal(
       entry.requestOrdinal,
       1,
-      V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+      plan.maximumProviderCalls,
       "provider call request ordinal"
     );
     if (requestOrdinal !== index + 1) {
@@ -128,12 +131,12 @@ function normalizeV2Top20ProviderCallTrace(trace) {
   }));
 }
 
-function computeV2Top20ProviderCallTraceHash(trace) {
-  const normalized = normalizeV2Top20ProviderCallTrace(trace);
+function computeV2Top20ProviderCallTraceHash(trace, options = {}) {
+  const normalized = normalizeV2Top20ProviderCallTrace(trace, options);
   return sha256Hex(`${V2_TOP20_PROVIDER_CALL_TRACE_SCHEMA_VERSION}\0${JSON.stringify(normalized)}`);
 }
 
-function expectedV2Top20ProviderCallTrace(targetResults) {
+function expectedV2Top20ProviderCallTrace(targetResults, options = {}) {
   const trace = [{ requestOrdinal: 1, operation: "main_place", companyOrdinal: null, productOrdinal: null }];
   for (const target of targetResults) {
     const companyOrdinal = target.companyOrdinal;
@@ -159,12 +162,12 @@ function expectedV2Top20ProviderCallTrace(targetResults) {
       });
     }
   }
-  return normalizeV2Top20ProviderCallTrace(trace);
+  return normalizeV2Top20ProviderCallTrace(trace, options);
 }
 
-function validateV2Top20ProviderCallTrace(trace, targetResults) {
-  const normalized = normalizeV2Top20ProviderCallTrace(trace);
-  const expected = expectedV2Top20ProviderCallTrace(targetResults);
+function validateV2Top20ProviderCallTrace(trace, targetResults, options = {}) {
+  const normalized = normalizeV2Top20ProviderCallTrace(trace, options);
+  const expected = expectedV2Top20ProviderCallTrace(targetResults, options);
   if (JSON.stringify(normalized) !== JSON.stringify(expected)) {
     throw artifactError("V2_TOP20_PROVIDER_CALL_TRACE_INVALID", "top20 provider call trace does not match target results", 409);
   }
@@ -371,7 +374,7 @@ function normalizeTargetResults(manifest) {
       || target.revenueInputValid !== true
       || Number(target.bookingBusiness || 0) > 1
       || Number(target.bookingItems || 0) > 1
-      || Number(target.dailySchedule || 0) > V2_TOP20_CONTRACT.maxProductsPerCompany
+      || Number(target.dailySchedule || 0) > V2_TOP20_CONTRACT.maxProductsPerCompany * Number(manifest.bookingRangeDays || 1)
     ) {
       throw artifactError("V2_TOP20_ARTIFACT_NOT_READY", "top20 target result is incomplete", 409);
     }
@@ -383,9 +386,44 @@ function normalizeTargetResults(manifest) {
       revenueInputValid: true,
       bookingBusiness: Number(target.bookingBusiness || 0),
       bookingItems: Number(target.bookingItems || 0),
-      dailySchedule: Number(target.dailySchedule || 0)
+      dailySchedule: Number(target.dailySchedule || 0),
+      rangeObservations: normalizeRangeObservations(target.rangeObservations, manifest.bookingRangeDays)
     });
   });
+}
+
+function normalizeRangeObservations(value, bookingRangeDays) {
+  const days = Number(bookingRangeDays || 1);
+  if (!Array.isArray(value)) return Object.freeze([]);
+  if (value.length > days) {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 range observations exceed the requested period", 409);
+  }
+  const seen = new Set();
+  return Object.freeze(value.map((entry) => {
+    const date = String(entry?.date || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(date) || seen.has(date)) {
+      throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 range observation date is invalid", 409);
+    }
+    seen.add(date);
+    const numeric = (field) => {
+      const candidate = entry?.[field];
+      if (candidate === null || candidate === undefined) return null;
+      const number = Number(candidate);
+      if (!Number.isFinite(number) || number < 0) {
+        throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 range observation value is invalid", 409);
+      }
+      return number;
+    };
+    return Object.freeze({
+      date,
+      availableUnits: numeric("availableUnits"),
+      totalUnits: numeric("totalUnits"),
+      soldOutUnits: numeric("soldOutUnits"),
+      estimatedRevenue: numeric("estimatedRevenue"),
+      estimatedSoldUnits: numeric("estimatedSoldUnits"),
+      missingPriceSoldUnits: numeric("missingPriceSoldUnits")
+    });
+  }).sort((left, right) => left.date.localeCompare(right.date)));
 }
 
 function validateReadyManifest(manifest) {
@@ -396,8 +434,8 @@ function validateReadyManifest(manifest) {
   const inventory = calls.inventory || {};
   const results = manifest.inventoryResultCounts || {};
   const targetResults = normalizeTargetResults(manifest);
-  const providerCallTrace = validateV2Top20ProviderCallTrace(manifest.providerCallTrace, targetResults);
-  const providerCallTraceHash = computeV2Top20ProviderCallTraceHash(providerCallTrace);
+  const providerCallTrace = validateV2Top20ProviderCallTrace(manifest.providerCallTrace, targetResults, { bookingRangeDays: manifest.bookingRangeDays || 1 });
+  const providerCallTraceHash = computeV2Top20ProviderCallTraceHash(providerCallTrace, { bookingRangeDays: manifest.bookingRangeDays || 1 });
   const providerCallCount = Number(calls.total);
   const traceCounts = providerCallTrace.reduce((countsByOperation, call) => {
     countsByOperation[call.operation] += 1;
@@ -409,7 +447,9 @@ function validateReadyManifest(manifest) {
     && manifest.collectionMode === "precision"
     && manifest.productMode === "all"
     && manifest.detailRankRanges === "1-20"
-    && manifest.bookingRangeDays === 1
+    && Number.isInteger(manifest.bookingRangeDays)
+    && manifest.bookingRangeDays >= 1
+    && manifest.bookingRangeDays <= 7
     && manifest.automaticRetry === false
     && manifest.automaticFallback === false
     && manifest.saveRunOnSuccessOnly === true
@@ -433,7 +473,7 @@ function validateReadyManifest(manifest) {
     && providerCallCount === 1 + Number(inventory.total)
     && Number.isInteger(providerCallCount)
     && providerCallCount >= 21
-    && providerCallCount <= V2_TOP20_CONTRACT.maximumProviderCalls
+    && providerCallCount <= v2Top20ResiliencePlan(manifest.bookingRangeDays).maximumProviderCalls
     && Number(manifest.providerMaxObservedConcurrency) === 1;
   if (!valid) {
     throw artifactError("V2_TOP20_ARTIFACT_NOT_READY", "top20 manifest is not eligible for persistence", 409);
@@ -474,11 +514,14 @@ function validateResilientManifest(manifest) {
       status,
       detailCollectionStatus: status,
       bookingBusinessIdSource: String(target?.bookingBusinessIdSource || "none"),
-      revenueInputValid: target?.revenueInputValid === true
+      revenueInputValid: target?.revenueInputValid === true,
+      rangeObservations: normalizeRangeObservations(target?.rangeObservations, manifest.bookingRangeDays)
     });
   });
-  const trace = normalizeV2Top20ProviderCallTrace(manifest.providerCallTrace);
-  const ledger = validateResilientProviderTrace(trace);
+  const bookingRangeDays = Number(manifest.bookingRangeDays || 1);
+  const plan = v2Top20ResiliencePlan(bookingRangeDays);
+  const trace = normalizeV2Top20ProviderCallTrace(manifest.providerCallTrace, { bookingRangeDays });
+  const ledger = validateResilientProviderTrace(trace, { bookingRangeDays });
   if (
     manifest.collectorActivationProfile !== V2_TOP20_PROFILE
     || manifest.collectorScope !== V2_TOP20_SCOPE
@@ -486,22 +529,36 @@ function validateResilientManifest(manifest) {
     || manifest.collectionMode !== "precision"
     || manifest.productMode !== "all"
     || manifest.detailRankRanges !== "1-20"
+    || !Number.isInteger(bookingRangeDays)
+    || bookingRangeDays < 1
+    || bookingRangeDays > 7
     || manifest.automaticRetry !== false
     || manifest.automaticFallback !== false
     || manifest.saveRunOnSuccessOnly !== true
     || manifest.saveFailureRun !== false
     || Number(manifest.counts?.naverOverall) !== 50
     || ledger.total !== Number(manifest.providerCallCounts?.total)
-    || manifest.providerCallTraceHash !== computeV2Top20ProviderCallTraceHash(trace)
+    || manifest.providerCallTraceHash !== computeV2Top20ProviderCallTraceHash(trace, { bookingRangeDays })
   ) {
     throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 manifest resilience contract is invalid", 409);
+  }
+  if (bookingRangeDays > 1 && (
+    !/^\d{4}-\d{2}-\d{2}$/u.test(String(manifest.checkIn || ""))
+    || !/^\d{4}-\d{2}-\d{2}$/u.test(String(manifest.checkOut || ""))
+    || manifest.checkIn > manifest.checkOut
+    || normalizedTargets.some((target) => (
+      target.rangeObservations.some((entry) => entry.date < manifest.checkIn || entry.date > manifest.checkOut)
+      || (target.status === "ready" && target.rangeObservations.length !== bookingRangeDays)
+    ))
+  )) {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 date range observations are incomplete", 409);
   }
   const summary = summarizeResilientTop20Collection({
     mainPlaceStatus: "ready",
     targets: normalizedTargets,
     detailCircuitOpen: normalizedTargets.some((target) => target.status === "blocked")
   });
-  return Object.freeze({ targetResults: normalizedTargets, providerCallCount: ledger.total, providerCallTrace: trace, providerCallTraceHash: computeV2Top20ProviderCallTraceHash(trace), resilience: summary });
+  return Object.freeze({ targetResults: normalizedTargets, providerCallCount: ledger.total, providerCallTrace: trace, providerCallTraceHash: computeV2Top20ProviderCallTraceHash(trace, { bookingRangeDays }), resilience: summary });
 }
 
 function parseArtifactFile(files, filePath) {
@@ -526,7 +583,8 @@ function instant(value, label) {
 
 function synthesizeReadyExecutionState(targetResults, input = {}) {
   const end = instant(input.now, "top20 artifact time");
-  let cursor = new Date(end.getTime() - (V2_TOP20_CONTRACT.maximumProviderCalls * 2 + 10) * 1000);
+  const maximumProviderCalls = v2Top20ResiliencePlan(input.bookingRangeDays).maximumProviderCalls;
+  let cursor = new Date(end.getTime() - (maximumProviderCalls * 2 + 10) * 1000);
   const tick = () => {
     cursor = new Date(cursor.getTime() + 1000);
     return cursor.toISOString();
@@ -846,7 +904,7 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
     || summary.providerAttemptCount !== 1
     || !Number.isInteger(summary.executedCallCount)
     || summary.executedCallCount < 1
-    || summary.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+    || summary.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS
     || summary.automaticRetry !== false
     || summary.automaticFallback !== false
     || summary.resultStored !== false

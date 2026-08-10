@@ -12,6 +12,34 @@ const V2_TOP20_RESILIENCE_OPERATION_BUDGETS = Object.freeze({
   daily_schedule: 160
 });
 const V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS = 241;
+const V2_TOP20_SCHEDULE_REQUEST_GRANULARITY = "per_product_day";
+const V2_TOP20_RESILIENCE_MAXIMUM_BOOKING_RANGE_DAYS = 7;
+
+function normalizedBookingRangeDays(value = 1) {
+  const days = Number(value);
+  if (!Number.isSafeInteger(days) || days < 1 || days > 7) {
+    throw resilienceError("V2_TOP20_BOOKING_RANGE_INVALID", "booking range is invalid");
+  }
+  return days;
+}
+
+function v2Top20ResiliencePlan(bookingRangeDays = 1) {
+  const days = normalizedBookingRangeDays(bookingRangeDays);
+  const operationBudgets = Object.freeze({
+    ...V2_TOP20_RESILIENCE_OPERATION_BUDGETS,
+    daily_schedule: V2_TOP20_RESILIENCE_OPERATION_BUDGETS.daily_schedule * days
+  });
+  return Object.freeze({
+    bookingRangeDays: days,
+    scheduleRequestGranularity: V2_TOP20_SCHEDULE_REQUEST_GRANULARITY,
+    operationBudgets,
+    maximumProviderCalls: Object.values(operationBudgets).reduce((sum, count) => sum + count, 0)
+  });
+}
+
+const V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS = v2Top20ResiliencePlan(
+  V2_TOP20_RESILIENCE_MAXIMUM_BOOKING_RANGE_DAYS
+).maximumProviderCalls;
 const DETAIL_OPERATIONS = new Set([
   "booking_business_graphql",
   "booking_business_place_page",
@@ -93,23 +121,24 @@ function summarizeResilientTop20Collection(input = {}) {
   });
 }
 
-function validateResilientProviderTrace(trace) {
-  if (!Array.isArray(trace) || trace.length < 1 || trace.length > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS) {
+function validateResilientProviderTrace(trace, options = {}) {
+  const plan = v2Top20ResiliencePlan(options.bookingRangeDays || 1);
+  if (!Array.isArray(trace) || trace.length < 1 || trace.length > plan.maximumProviderCalls) {
     throw resilienceError("V2_TOP20_PROVIDER_CALL_TRACE_INVALID", "provider call trace is invalid");
   }
-  const counts = Object.fromEntries(Object.keys(V2_TOP20_RESILIENCE_OPERATION_BUDGETS).map((key) => [key, 0]));
+  const counts = Object.fromEntries(Object.keys(plan.operationBudgets).map((key) => [key, 0]));
   trace.forEach((item, index) => {
     const operation = item?.operation === "booking_business" ? "booking_business_graphql" : item?.operation;
     if (Number(item?.requestOrdinal) !== index + 1 || !Object.hasOwn(counts, operation)) {
       throw resilienceError("V2_TOP20_PROVIDER_CALL_TRACE_INVALID", "provider call trace is not contiguous");
     }
     counts[operation] += 1;
-    if (counts[operation] > V2_TOP20_RESILIENCE_OPERATION_BUDGETS[operation]) {
+    if (counts[operation] > plan.operationBudgets[operation]) {
       throw resilienceError("V2_TOP20_CALL_BUDGET_EXCEEDED", "provider call budget exceeded");
     }
   });
   if (counts.main_place !== 1) throw resilienceError("V2_TOP20_PROVIDER_CALL_TRACE_INVALID", "main Place call is required");
-  return Object.freeze({ counts: Object.freeze(counts), total: trace.length });
+  return Object.freeze({ counts: Object.freeze(counts), total: trace.length, plan });
 }
 
 module.exports = {
@@ -117,11 +146,15 @@ module.exports = {
   DETAIL_OPERATIONS,
   DETAIL_STATUSES,
   V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  V2_TOP20_RESILIENCE_MAXIMUM_BOOKING_RANGE_DAYS,
+  V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS,
   V2_TOP20_RESILIENCE_OPERATION_BUDGETS,
+  V2_TOP20_SCHEDULE_REQUEST_GRANULARITY,
   V2_TOP20_RESILIENCE_SCHEMA_VERSION,
   isDetailOperation,
   normalizeHistoricalBookingHints,
   providerIdForOperation,
   summarizeResilientTop20Collection,
+  v2Top20ResiliencePlan,
   validateResilientProviderTrace
 };

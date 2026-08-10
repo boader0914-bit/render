@@ -25,6 +25,7 @@ const COLLECTION_WORKER_RUN_OUTPUT_TRANSACTION_SCHEMA_VERSION = "collection-work
 const COLLECTION_WORKER_RUN_OUTPUT_TRANSACTION_DOCUMENT_TYPE = "lodging-collection-worker-run-output-transaction";
 const COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V1 = "collection-worker-v2-top20-derived-projections.v1";
 const COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION = "collection-worker-v2-top20-derived-projections.v2";
+const COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V3 = "collection-worker-v2-top20-derived-projections.v3";
 const COLLECTION_WORKER_TOP20_RESULT_PATH = "top20-result.json";
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/u;
@@ -110,6 +111,18 @@ function projectionFail(reason, message, safeMeta = {}) {
     409,
     safeProjectionMeta({ ...safeMeta, reason: normalizedReason }),
   );
+}
+
+function inclusiveDateCount(measurementPeriod) {
+  const start = String(measurementPeriod?.start || "");
+  const end = String(measurementPeriod?.end || "");
+  if (!DATE_PATTERN.test(start) || !DATE_PATTERN.test(end)) return 0;
+  const toUtcMidnight = (value) => Date.UTC(
+    Number(value.slice(0, 4)),
+    Number(value.slice(5, 7)) - 1,
+    Number(value.slice(8, 10))
+  );
+  return Math.floor((toUtcMidnight(end) - toUtcMidnight(start)) / 86400000) + 1;
 }
 
 function isPlainObject(value) {
@@ -707,6 +720,8 @@ function buildV2RunProjections(verified, transactionId, runId) {
     start: manifest.checkIn,
     end: manifest.checkOut,
   });
+  const bookingRangeDays = inclusiveDateCount(measurementPeriod);
+  const rangeProjection = bookingRangeDays > 1;
   const regionKey = expectedText(
     manifest.searchRegionKey || manifest.regionKey || manifest.provinceKey || manifest.regionSlug || "region:unresolved",
     KEY_PATTERN,
@@ -849,34 +864,54 @@ function buildV2RunProjections(verified, transactionId, runId) {
     const revenueAllowed = target.revenueInputValid === true
       && revenueObservationComplete
       && ["ready", "zero", "partial"].includes(status);
-    if (revenueAllowed) {
+    const revenueObservations = rangeProjection
+      ? (Array.isArray(target.rangeObservations) ? target.rangeObservations : [])
+        .filter((entry) => (
+          DATE_PATTERN.test(String(entry?.date || ""))
+          && entry.date >= measurementPeriod.start
+          && entry.date <= measurementPeriod.end
+          && Number.isFinite(entry.estimatedRevenue)
+          && Number.isFinite(entry.estimatedSoldUnits)
+          && Number.isFinite(entry.missingPriceSoldUnits)
+          && entry.missingPriceSoldUnits === 0
+        ))
+        .map((entry) => ({
+          date: entry.date,
+          estimatedRevenue: entry.estimatedRevenue,
+          estimatedSoldUnits: entry.estimatedSoldUnits,
+        }))
+      : (revenueAllowed ? [{ date: null, estimatedRevenue, estimatedSoldUnits }] : []);
+    for (const revenueObservation of revenueObservations) {
+      const dateKey = revenueObservation.date || measurementPeriod.start;
       const revenue = Object.freeze({
-        projectionId: `${runId}:revenue:${companyKey}`,
+        projectionId: `${runId}:revenue:${companyKey}:${dateKey}`,
         runId,
         artifactHash: verified.artifactHash,
         companyKey,
         ordinal,
         rank: ordinal,
         status,
-        estimatedRevenue,
-        estimatedSoldUnits,
+        estimatedRevenue: revenueObservation.estimatedRevenue,
+        estimatedSoldUnits: revenueObservation.estimatedSoldUnits,
         currency: "KRW",
         estimateBasis: String(manifest.revenueEstimateBasis || "public_inventory_estimate"),
+        ...(revenueObservation.date ? { observationDate: revenueObservation.date } : {}),
       });
       revenues.push(revenue);
       history.push(Object.freeze({
-        observationId: sha256Hex(`collection-worker-v2-history.v1\0${runId}\0${companyKey}\0${collectedAt}`),
+        observationId: sha256Hex(`collection-worker-v2-history.v1\0${runId}\0${companyKey}\0${dateKey}\0${collectedAt}`),
         runId,
         artifactHash: verified.artifactHash,
         companyKey,
         ordinal,
         rank: ordinal,
         status,
-        estimatedRevenue,
-        estimatedSoldUnits,
+        estimatedRevenue: revenueObservation.estimatedRevenue,
+        estimatedSoldUnits: revenueObservation.estimatedSoldUnits,
         currency: "KRW",
         source: "naver_booking_public_inventory",
         observedAt: collectedAt,
+        ...(revenueObservation.date ? { observationDate: revenueObservation.date } : {}),
       }));
     }
   }
@@ -903,9 +938,21 @@ function buildV2RunProjections(verified, transactionId, runId) {
     jobId: verified.jobId,
     contractHash: verified.contractHash,
     executionIdentityHash: verified.executionIdentityHash,
-    schemaVersion: COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION,
+    schemaVersion: rangeProjection
+      ? COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V3
+      : COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION,
     status: "ready",
     measurementPeriod,
+    ...(rangeProjection ? {
+      bookingRangeDays,
+      dateObservationTargetCount: 20 * bookingRangeDays,
+      dateObservationReadyCount: revenues.length,
+      dateObservationBlockedCount: statusCount("blocked") * bookingRangeDays,
+      dateObservationMissingCount: Math.max(0, (20 * bookingRangeDays) - revenues.length - (statusCount("blocked") * bookingRangeDays)),
+      dateCoverageRate: revenues.length / (20 * bookingRangeDays),
+      companyCoverageRate: detailReadyCompanyCount / 20,
+      missingRevenueDateCount: Math.max(0, (20 * bookingRangeDays) - revenues.length)
+    } : {}),
     collectedAt,
     collectionStatus,
     mainPlaceStatus,
@@ -1176,7 +1223,7 @@ function runOutputProjectionsV2Valid(record) {
     || run.jobId !== record.jobId
     || run.contractHash !== record.contractHash
     || run.executionIdentityHash !== record.executionIdentityHash
-    || run.schemaVersion !== COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION
+    || ![COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION, COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V3].includes(run.schemaVersion)
     || run.status !== "ready"
     || !RESILIENT_COLLECTION_STATUSES.has(run.collectionStatus)
     || run.mainPlaceStatus !== "ready"
@@ -1217,6 +1264,19 @@ function runOutputProjectionsV2Valid(record) {
     || run.revenueCoverageRate < 0
     || run.revenueCoverageRate > 1
   ) return false;
+  if (run.schemaVersion === COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V3) {
+    const expectedDays = inclusiveDateCount(run.measurementPeriod);
+    if (
+      run.bookingRangeDays !== expectedDays
+      || !isSafeNonNegativeInteger(run.dateObservationTargetCount)
+      || !isSafeNonNegativeInteger(run.dateObservationReadyCount)
+      || !isSafeNonNegativeInteger(run.dateObservationBlockedCount)
+      || !isSafeNonNegativeInteger(run.dateObservationMissingCount)
+      || !Number.isFinite(run.dateCoverageRate) || run.dateCoverageRate < 0 || run.dateCoverageRate > 1
+      || !Number.isFinite(run.companyCoverageRate) || run.companyCoverageRate < 0 || run.companyCoverageRate > 1
+      || !isSafeNonNegativeInteger(run.missingRevenueDateCount)
+    ) return false;
+  }
 
   const statuses = new Map();
   for (let index = 0; index < run.resultStatuses.length; index += 1) {
@@ -1370,6 +1430,9 @@ function runOutputProjectionsValid(record) {
     return runOutputProjectionsV1Valid(record);
   }
   if (version === COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION) {
+    return runOutputProjectionsV2Valid(record);
+  }
+  if (version === COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V3) {
     return runOutputProjectionsV2Valid(record);
   }
   return false;
@@ -2347,6 +2410,7 @@ module.exports = {
   COLLECTION_WORKER_RUN_OUTPUT_TRANSACTION_DOCUMENT_TYPE,
   COLLECTION_WORKER_RUN_OUTPUT_TRANSACTION_SCHEMA_VERSION,
   COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION,
+  COLLECTION_WORKER_V2_TOP20_PROJECTION_SCHEMA_VERSION_V3,
   COLLECTION_WORKER_RUN_TRANSACTION_DOCUMENT_TYPE,
   COLLECTION_WORKER_RUN_TRANSACTION_SCHEMA_VERSION,
   COLLECTION_WORKER_TOP20_RESULT_PATH,

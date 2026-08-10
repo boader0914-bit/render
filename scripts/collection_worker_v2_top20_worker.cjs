@@ -34,7 +34,7 @@ const {
   validateExecutionState
 } = require("./collection_worker_v2_top20_contract.cjs");
 const {
-  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS,
   providerIdForOperation
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
@@ -389,7 +389,7 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     || verifiedJob.contract.keywordHash !== normalized.keywordHash
     || verifiedJob.contract.checkIn !== normalized.checkIn
     || verifiedJob.contract.checkOut !== normalized.checkOut
-    || value.providerSession.maximumProviderCalls !== V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+    || value.providerSession.maximumProviderCalls !== expectedTop20Contract.maximumProviderCalls
     || value.providerSession.providerAttemptCount !== 1
     || value.providerSession.concurrency !== 1
     || value.providerSession.automaticRetry !== false
@@ -533,12 +533,12 @@ async function postReceiptWithOneInternalRecovery(input) {
 function safeFailureMeta(error, observedProviderCallCount = 0) {
   const reportedCallCount = Number.isInteger(error?.executedCallCount)
     && error.executedCallCount >= 0
-    && error.executedCallCount <= V2_TOP20_CONTRACT.maximumProviderCalls
+    && error.executedCallCount <= V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS
     ? error.executedCallCount
     : 0;
   const observed = Number.isInteger(observedProviderCallCount)
     && observedProviderCallCount >= 0
-    && observedProviderCallCount <= V2_TOP20_CONTRACT.maximumProviderCalls
+    && observedProviderCallCount <= V2_TOP20_RESILIENCE_MAXIMUM_BOUNDED_PROVIDER_CALLS
     ? observedProviderCallCount
     : 0;
   const executedCallCount = Math.max(reportedCallCount, observed);
@@ -588,7 +588,7 @@ function validateFinalArtifactInput(value, expected) {
     || value.summary.providerWorkflowRevision !== expected.providerWorkflowRevision
     || !Number.isInteger(value.summary.executedCallCount)
     || value.summary.executedCallCount < 1
-    || value.summary.executedCallCount > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+    || value.summary.executedCallCount > expected.maximumProviderCalls
     || value.summary.automaticRetry !== false
     || value.summary.automaticFallback !== false
     || !resilient && stableJson(value.summary.executionState) !== stableJson(state)
@@ -1024,7 +1024,7 @@ async function runCollectionWorkerV2Top20(input = {}) {
           ![providerIdForOperation(String(metadata.operation || "")), "naver_place_search"].includes(metadata.providerId)
           || !["main_place", "booking_business", "booking_business_graphql", "booking_business_place_page", "booking_items", "daily_schedule"].includes(String(metadata.operation || ""))
           || requestOrdinal !== providerCallCount + 1
-          || requestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+          || requestOrdinal > execution.top20Contract.maximumProviderCalls
         ) {
           throw fail(
             "COLLECTION_WORKER_V2_TOP20_PROVIDER_CALL_SEQUENCE_INVALID",
@@ -1079,7 +1079,8 @@ async function runCollectionWorkerV2Top20(input = {}) {
       top20ContractHash: execution.top20ContractHash,
       contractHash: verifiedJob.contractHash,
       executionIdentityHash: verifiedJob.executionIdentityHash,
-      providerWorkflowRevision
+      providerWorkflowRevision,
+      maximumProviderCalls: execution.top20Contract.maximumProviderCalls
     });
     const artifactAudit = auditV2Top20ArtifactFiles(finalArtifactInput.files);
     const rejected = artifactAudit.find((entry) => entry.accepted !== true);

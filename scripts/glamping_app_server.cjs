@@ -81,6 +81,10 @@ const {
   createCollectionWorkerRunTransactionStore
 } = require("./collection_worker_run_transaction.cjs");
 const {
+  createCollectionWorkerProjectionApplicationStore,
+  receiptFrom: workerProjectionApplicationReceipt
+} = require("./collection_worker_projection_application.cjs");
+const {
   V2_ENV_WORKER_OPERATOR_PATH,
   V2_ENV_WORKER_STATUS_PATH,
   v2EnvWorkerOperatorPage,
@@ -112,7 +116,8 @@ const {
   normalizeV2Top20ExecutionRequestId
 } = require("./collection_worker_v2_top20_protocol.cjs");
 const {
-  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS
+  V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+  v2Top20ResiliencePlan
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
   buildNaverCollectionFallbackState,
@@ -284,6 +289,10 @@ const collectionWorkerJobStore = createCollectionJobStore({
 const collectionWorkerRunTransactionStore = createCollectionWorkerRunTransactionStore({
   runtimeRoot: DATA_DIR
 });
+const collectionWorkerProjectionApplicationStore = createCollectionWorkerProjectionApplicationStore({
+  runtimeRoot: DATA_DIR
+});
+const collectionWorkerProjectionApplicationQueues = new Map();
 const collectionWorkerCanaryOrchestrator = createCollectionWorkerCanaryOrchestrator({
   enabled: String(process.env.COLLECTION_WORKER_CANARY_ENABLED || "false").toLowerCase() === "true",
   jobStore: collectionWorkerJobStore,
@@ -339,7 +348,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260810-resilient-run-projection-v50";
+const UI_ASSET_VERSION = "v2-20260810-worker-application-date-range-v51";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -5050,15 +5059,28 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
     && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
     && isV2Top20WorkerEligible(payload)
   ) {
+    const checkIn = String(payload.checkIn || "");
+    const checkOut = String(payload.checkOut || checkIn);
+    const rangeStart = Date.parse(`${checkIn}T00:00:00Z`);
+    const rangeEnd = Date.parse(`${checkOut}T00:00:00Z`);
+    const requestedBookingRangeDays = Number.isFinite(rangeStart) && Number.isFinite(rangeEnd)
+      ? Math.floor((rangeEnd - rangeStart) / 86400000) + 1
+      : 1;
+    const bookingRangeDays = Number.isSafeInteger(requestedBookingRangeDays)
+      && requestedBookingRangeDays >= 1
+      && requestedBookingRangeDays <= 7
+      ? requestedBookingRangeDays
+      : 1;
+    const top20Plan = v2Top20ResiliencePlan(bookingRangeDays);
     const top20BoundedInventory = {
       profile: "preview-v2-place-top20-inventory-revenue.v1",
       mainRankRange: "1-50",
       inventoryRankRange: "1-20",
       inventoryPlaceLimit: 20,
-      observationDays: 1,
+      observationDays: bookingRangeDays,
       maxProductsPerCompany: 8,
-      totalCallBudget: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
-      naverCallBudget: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+      totalCallBudget: top20Plan.maximumProviderCalls,
+      naverCallBudget: top20Plan.maximumProviderCalls,
       otaCallBudget: 0,
       concurrency: 1,
       automaticRetry: false,
@@ -5069,7 +5091,7 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
       ...base,
       workerTop20: true,
       detailRankRanges: "1-20",
-      bookingRangeDays: 1,
+      bookingRangeDays,
       bookingRangePlaceLimit: 20,
       boundedInventory: top20BoundedInventory,
       estimateBasis: {
@@ -5080,7 +5102,7 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
         ? {
             ...stage,
             label: "상위 20곳 재고·가격·예상매출",
-            detail: `Worker가 1위부터 20위까지 한 곳씩 순서대로 확인합니다. 최대 NAVER 요청은 ${V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS}건입니다.`
+            detail: `Worker가 1위부터 20위까지 한 곳씩 순서대로 확인합니다. 최대 NAVER 요청은 ${top20Plan.maximumProviderCalls}건입니다.`
           }
         : stage)
     };
@@ -6467,6 +6489,206 @@ async function isVisibleCommittedWorkerRun(runId) {
     && job.contractHash === committed.contractHash
     && job.executionIdentityHash === committed.executionIdentityHash
   );
+}
+
+function workerProjectionSummary(committed, receipt = null) {
+  const projection = committed?.projections || {};
+  const run = projection.run || {};
+  const application = receipt && receipt.state === "applied"
+    ? {
+        state: "applied",
+        companyAppliedCount: receipt.companyAppliedCount,
+        productAppliedCount: receipt.productAppliedCount,
+        revenueAppliedCount: receipt.revenueAppliedCount,
+        historyAppliedCount: receipt.historyAppliedCount,
+        appliedAt: receipt.appliedAt
+      }
+    : null;
+  return Object.freeze({
+    schemaVersion: String(run.schemaVersion || ""),
+    collectionStatus: String(run.collectionStatus || ""),
+    companyProjectionCount: Array.isArray(projection.companies) ? projection.companies.length : 0,
+    productProjectionCount: Array.isArray(projection.products) ? projection.products.length : 0,
+    revenueProjectionCount: Array.isArray(projection.revenues) ? projection.revenues.length : 0,
+    historyProjectionCount: Array.isArray(projection.history) ? projection.history.length : 0,
+    detailCoverageRate: Number.isFinite(run.detailCoverageRate) ? run.detailCoverageRate : 0,
+    revenueCoverageRate: Number.isFinite(run.revenueCoverageRate) ? run.revenueCoverageRate : 0,
+    projectionValid: Boolean(committed),
+    application
+  });
+}
+
+async function committedWorkerRunRecord(runId) {
+  if (!isPreviewWorkerRunId(runId)) return null;
+  const journal = await collectionWorkerRunTransactionStore.readRunOutputJournal();
+  const committed = journal.committed.find((candidate) => candidate.runId === runId) || null;
+  if (!committed || !await collectionWorkerRunTransactionStore.isCommittedRunOutputValid({
+    transactionId: committed.transactionId,
+    runId,
+    allowDerivedTrafficCache: true
+  })) return null;
+  return committed;
+}
+
+async function workerProjectionApplicationForRun(runId) {
+  const committed = await committedWorkerRunRecord(runId);
+  if (!committed) return { committed: null, receipt: null };
+  const receipt = await collectionWorkerProjectionApplicationStore.read(committed.transactionId);
+  if (receipt && (
+    receipt.runId !== committed.runId
+    || receipt.artifactHash !== committed.artifactHash
+    || receipt.projectionsHash !== committed.projectionsHash
+  )) {
+    const error = new Error("worker projection application receipt conflicts");
+    error.code = "COLLECTION_WORKER_PROJECTION_RECEIPT_CONFLICT";
+    error.statusCode = 409;
+    throw error;
+  }
+  return { committed, receipt };
+}
+
+function workerProjectionCompanyItem(projection = {}) {
+  return {
+    name: String(projection.displayName || "").trim(),
+    region: String(projection.regionKey || "").trim(),
+    placeId: String(projection.placeId || "").trim(),
+    rank: Number(projection.rank || projection.ordinal || 0) || null,
+    sourcePlatform: "naver",
+    sourceId: String(projection.placeId || "").trim(),
+    detailCollectionStatus: String(projection.detailCollectionStatus || projection.status || "not_collected"),
+    collectionStatus: String(projection.collectionStatus || "rank_only"),
+    bookingBusinessIdSource: String(projection.bookingBusinessIdSource || "none"),
+    revenueInputValid: projection.revenueInputValid === true
+  };
+}
+
+async function appendWorkerProjectionHistory(projections = {}) {
+  const history = Array.isArray(projections.history) ? projections.history : [];
+  if (!history.length) return 0;
+  const existing = await readHistoryObservations();
+  const existingIds = new Set(existing.map((item) => String(item?.observationId || "")).filter(Boolean));
+  const rows = history
+    .filter((row) => row?.observationId && !existingIds.has(row.observationId))
+    .map((row) => ({
+      observationId: row.observationId,
+      runId: row.runId,
+      artifactHash: row.artifactHash,
+      companyKey: row.companyKey,
+      rank: row.rank,
+      status: row.status,
+      estimatedRevenue: row.estimatedRevenue,
+      estimatedSoldUnits: row.estimatedSoldUnits,
+      currency: row.currency,
+      observedAt: row.observedAt,
+      collectedAt: row.observedAt,
+      collectedDate: String(row.observedAt || "").slice(0, 10),
+      source: "collection_worker_projection",
+      productType: "worker_revenue"
+    }));
+  if (!rows.length) return 0;
+  const appendPayload = `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
+  const operation = historyObservationAppendQueue.catch(() => {}).then(async () => {
+    await fsp.mkdir(HISTORY_DIR, { recursive: true });
+    await fsp.appendFile(HISTORY_OBSERVATIONS_FILE, appendPayload, "utf8");
+    return rows.length;
+  });
+  historyObservationAppendQueue = operation.catch(() => {});
+  return operation;
+}
+
+async function applyCommittedWorkerProjectionUnsafe(runId) {
+  const { committed, receipt } = await workerProjectionApplicationForRun(runId);
+  if (!committed) {
+    const error = new Error("committed worker run was not found");
+    error.code = "COLLECTION_WORKER_PROJECTION_RUN_NOT_COMMITTED";
+    error.statusCode = 404;
+    throw error;
+  }
+  if (receipt) return Object.freeze({ ...receipt, reused: true, providerCallCount: 0, newRunCount: 0, signedOutputChanged: false });
+
+  const projections = committed.projections;
+  const run = projections.run || {};
+  const master = await readCompanyMaster();
+  const before = companyMasterDocumentHash(master);
+  const projectProducts = Array.isArray(projections.products) ? projections.products : [];
+  const projectRevenues = Array.isArray(projections.revenues) ? projections.revenues : [];
+  let companyAppliedCount = 0;
+  for (const companyProjection of projections.companies || []) {
+    const entity = companyEntityFromItem(workerProjectionCompanyItem(companyProjection), {
+      id: runId,
+      keyword: "",
+      searchMode: "keyword",
+      productMode: "all",
+      collectionPurpose: "revenue_detail",
+      collectionProfile: "v2_top20_worker"
+    }, run.collectedAt || new Date().toISOString());
+    if (!entity.nameKey || !entity.sourceKeys.length) {
+      const error = new Error("worker company projection is not applicable");
+      error.code = "COLLECTION_WORKER_PROJECTION_COMPANY_INVALID";
+      error.statusCode = 409;
+      throw error;
+    }
+    const company = upsertCompanyRecord(master, entity);
+    const products = projectProducts.filter((item) => item.companyKey === companyProjection.companyKey);
+    const revenue = projectRevenues.find((item) => item.companyKey === companyProjection.companyKey) || null;
+    company.workerProjectionLatest = {
+      transactionId: committed.transactionId,
+      runId,
+      artifactHash: committed.artifactHash,
+      collectionStatus: run.collectionStatus,
+      detailCollectionStatus: companyProjection.detailCollectionStatus || companyProjection.status,
+      bookingBusinessIdSource: companyProjection.bookingBusinessIdSource || "none",
+      revenueInputValid: companyProjection.revenueInputValid === true,
+      productProjectionCount: products.length,
+      revenueProjectionCount: revenue ? 1 : 0,
+      estimatedRevenue: revenue ? revenue.estimatedRevenue : null,
+      estimatedSoldUnits: revenue ? revenue.estimatedSoldUnits : null,
+      observedAt: run.collectedAt
+    };
+    companyAppliedCount += 1;
+  }
+  if (companyMasterDocumentHash(master) !== before) await writeCompanyMaster(master);
+  const historyAppliedCount = await appendWorkerProjectionHistory(projections);
+  const counts = {
+    companyProjectionCount: (projections.companies || []).length,
+    companyAppliedCount,
+    productProjectionCount: projectProducts.length,
+    productAppliedCount: projectProducts.length,
+    revenueProjectionCount: projectRevenues.length,
+    revenueAppliedCount: projectRevenues.length,
+    historyProjectionCount: (projections.history || []).length,
+    historyAppliedCount
+  };
+  const nextReceipt = workerProjectionApplicationReceipt({
+    transactionId: committed.transactionId,
+    runId,
+    artifactHash: committed.artifactHash,
+    projectionsHash: committed.projectionsHash,
+    collectionStatus: run.collectionStatus,
+    counts
+  });
+  const saved = await collectionWorkerProjectionApplicationStore.writeOnce(nextReceipt);
+  return Object.freeze({
+    ...saved.receipt,
+    reused: saved.reused,
+    providerCallCount: 0,
+    newRunCount: 0,
+    signedOutputChanged: false
+  });
+}
+
+async function applyCommittedWorkerProjection(runId) {
+  const key = String(runId || "");
+  const previous = collectionWorkerProjectionApplicationQueues.get(key) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => applyCommittedWorkerProjectionUnsafe(key));
+  collectionWorkerProjectionApplicationQueues.set(key, next);
+  try {
+    return await next;
+  } finally {
+    if (collectionWorkerProjectionApplicationQueues.get(key) === next) {
+      collectionWorkerProjectionApplicationQueues.delete(key);
+    }
+  }
 }
 
 async function listRuns() {
@@ -14628,7 +14850,46 @@ async function loadRun(runId, options = {}) {
       }))
   };
 
-  if (!options.skipCompanyMaster) {
+  // A Worker bundle is immutable once committed.  Its application receipt is
+  // a separate, explicitly-triggered administrative action; merely opening a
+  // Run must never write the company master, history, or signed output tree.
+  let workerApplication = null;
+  if (workerRun) {
+    workerApplication = await workerProjectionApplicationForRun(runId);
+    if (!workerApplication.committed) return null;
+    const projectionRun = workerApplication.committed.projections.run || {};
+    result.workerProjection = workerProjectionSummary(workerApplication.committed, workerApplication.receipt);
+    result.run = {
+      ...result.run,
+      collectionStatus: projectionRun.collectionStatus || result.run.collectionStatus || "",
+      mainPlaceStatus: projectionRun.mainPlaceStatus || "",
+      detailStatus: projectionRun.detailStatus || "",
+      measurementPeriod: projectionRun.measurementPeriod || null,
+      bookingRangeDays: projectionRun.bookingRangeDays || result.run.bookingRangeDays || 1,
+      checkIn: projectionRun.measurementPeriod?.start || result.run.checkIn,
+      checkOut: projectionRun.measurementPeriod?.end || result.run.checkOut
+    };
+    // Never derive this UI list from the directory.  The journal's signed
+    // entries are the only files that a committed Worker Run may expose.
+    result.downloads = workerApplication.committed.fileEntries
+      .filter((entry) => /^(?:manifest\.json|(?:platform|overall|ads|regional|ddnayo)\.csv|details\/detail-\d{2}\.json)$/u.test(String(entry.path || "")))
+      .map((entry) => ({
+        name: entry.path,
+        label: downloadLabelForFile(entry.path, manifest || {}),
+        url: `/outputs/${encodeURIComponent(runId)}/${entry.path.split("/").map(encodeURIComponent).join("/")}`
+      }));
+  }
+
+  if (workerRun) {
+    const application = workerApplication.receipt;
+    result.companyMaster = {
+      error: null,
+      currentRunCompanies: application?.companyAppliedCount || 0,
+      inventoryAppliedCompanies: application?.productAppliedCount || 0,
+      demandSignalCompanies: 0,
+      projectionApplication: application ? "applied" : "not_applied"
+    };
+  } else if (!options.skipCompanyMaster) {
     result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt).catch((error) => ({
       error: error.message || String(error),
       totalCompanies: 0,
@@ -14649,7 +14910,13 @@ async function loadRun(runId, options = {}) {
   // receive the same public companyProfile/location contract.
   result.ranking = summarizeRankingRows(overallRows, adRows, regionalRows, result.availability);
 
-  if (!options.skipHistory) {
+  if (workerRun) {
+    result.history = {
+      currentRunObservationCount: workerApplication.receipt?.historyAppliedCount || 0,
+      collectionDbRoute: runCollectionDbRoute(result.run),
+      projectionApplication: workerApplication.receipt ? "applied" : "not_applied"
+    };
+  } else if (!options.skipHistory) {
     let history = await summarizeHistoryForRun(result);
     if (!history.currentRunObservationCount && availability.items.length) {
       await appendHistoryForRun(runId).catch((error) => {
@@ -16715,6 +16982,26 @@ async function route(req, res) {
       }, "application/json; charset=utf-8", {
         "Cache-Control": "no-store"
       });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/run-projection/reconcile") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!isSameOriginMapGeocodingRequest(req)) {
+        return send(res, 403, { error: "Same-origin admin action required" });
+      }
+      const payload = await parseJsonBody(req);
+      const runId = String(payload?.runId || "").trim();
+      if (!isPreviewWorkerRunId(runId)) {
+        return send(res, 400, { error: "Worker Run ID is invalid", code: "COLLECTION_WORKER_PROJECTION_RUN_INVALID" });
+      }
+      const active = await restoreActiveTop20WorkerJob();
+      const snapshot = await collectionWorkerJobStore.readSnapshot();
+      const activePayloadCount = snapshot.jobs.filter((job) => !TOP20_WORKER_TERMINAL_STATES.has(String(job?.state || ""))).length;
+      if (active || activePayloadCount) {
+        return send(res, 409, { error: "Active collection job prevents reconciliation", code: "COLLECTION_WORKER_PROJECTION_ACTIVE_JOB" });
+      }
+      const result = await applyCommittedWorkerProjection(runId);
+      return send(res, 200, result, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/reconcile-zero-call-artifact-failure") {

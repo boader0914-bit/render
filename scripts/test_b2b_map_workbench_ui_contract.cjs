@@ -602,11 +602,15 @@ assert.match(server, /Pragma:\s*"no-cache"/);
 assert.match(server, /"X-Naver-Maps-Usage":\s*"single-display"/);
 assert.match(server, /"X-Naver-Maps-Requester":\s*adminPreviewRequest \? "admin-user-view" : "b2b"/);
 assert.match(server, /previewAdminConditionalApis:[\s\S]*\/api\/b2b-map\/geocode[\s\S]*once-per-runtime-run/);
-const serverLoadRunBlock = functionBlock(server, "loadRun");
+const serverLoadRunStart = server.indexOf("async function loadRun(runId, options = {}) {");
+const serverLoadRunEnd = server.indexOf("\nfunction summarizePlatformRows", serverLoadRunStart);
+assert.notEqual(serverLoadRunStart, -1, "missing loadRun implementation");
+assert.notEqual(serverLoadRunEnd, -1, "missing loadRun implementation boundary");
+const serverLoadRunBlock = server.slice(serverLoadRunStart, serverLoadRunEnd);
 assert.match(
   serverLoadRunBlock,
-  /options\.skipTraffic === true \|\| frozenCollectorRun\s*\? null\s*:\s*await enrichRegionsWithTraffic\(/,
-  "stored Frozen V2 runs must never trigger external traffic enrichment during map reads"
+  /options\.skipTraffic === true \|\| frozenCollectorRun \|\| workerRun\s*\? null\s*:\s*await enrichRegionsWithTraffic\(/,
+  "stored Frozen V2 and Worker runs must never trigger external traffic enrichment during map reads"
 );
 const geocodeRouteStart = server.indexOf('if (req.method === "POST" && reqUrl.pathname === "/api/b2b-map/geocode")');
 assert.notEqual(geocodeRouteStart, -1, "missing B2B map geocoding route");

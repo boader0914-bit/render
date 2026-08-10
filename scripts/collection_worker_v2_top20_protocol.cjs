@@ -7,7 +7,10 @@ const {
   V2_TOP20_SCHEMA_VERSION,
   V2_TOP20_SCOPE
 } = require("./collection_worker_v2_top20_contract.cjs");
-const { V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS } = require("./collection_worker_v2_top20_resilience.cjs");
+const {
+  V2_TOP20_SCHEDULE_REQUEST_GRANULARITY,
+  v2Top20ResiliencePlan
+} = require("./collection_worker_v2_top20_resilience.cjs");
 
 const COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION = "collection-worker-v2-top20-protocol.v1";
 const COLLECTION_WORKER_V2_TOP20_RESULT_SCHEMA_VERSION = "collection-worker-v2-top20-result.v1";
@@ -86,6 +89,17 @@ function canonicalDate(value, label) {
   return text;
 }
 
+function inclusiveKstDateRangeDays(start, end) {
+  const startMs = Date.UTC(Number(start.slice(0, 4)), Number(start.slice(5, 7)) - 1, Number(start.slice(8, 10)));
+  const endMs = Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5, 7)) - 1, Number(end.slice(8, 10)));
+  return Math.floor((endMs - startMs) / 86400000) + 1;
+}
+
+function maxBookingRangeDays() {
+  const configured = Number(process.env.MAX_BOOKING_RANGE_DAYS || 7);
+  return Number.isSafeInteger(configured) && configured >= 1 && configured <= 7 ? configured : 7;
+}
+
 function normalizeV2Top20PrepareContract(input = {}) {
   const keys = [
     "keyword",
@@ -112,7 +126,6 @@ function normalizeV2Top20PrepareContract(input = {}) {
     || input.collectionMode !== "precision"
     || input.collectionPurpose !== "revenue_detail"
     || input.productMode !== "all"
-    || checkIn !== checkOut
     || Number(input.rankStart) !== V2_TOP20_CONTRACT.mainPlaceRankStart
     || Number(input.rankEnd) !== V2_TOP20_CONTRACT.mainPlaceRankEnd
     || Number(input.detailRankStart) !== V2_TOP20_CONTRACT.inventoryRankStart
@@ -123,6 +136,13 @@ function normalizeV2Top20PrepareContract(input = {}) {
       "collection contract does not match the fixed V2 top20 profile",
       409
     );
+  }
+  if (checkOut < checkIn) {
+    throw protocolError("COLLECTION_WORKER_V2_TOP20_DATE_RANGE_INVALID", "collection end date precedes the start date", 422);
+  }
+  const bookingRangeDays = inclusiveKstDateRangeDays(checkIn, checkOut);
+  if (bookingRangeDays < 1 || bookingRangeDays > maxBookingRangeDays()) {
+    throw protocolError("COLLECTION_WORKER_V2_TOP20_DATE_RANGE_EXCEEDED", "collection date range exceeds the allowed limit", 422);
   }
   const serialized = JSON.stringify(input);
   if (/(?:https?|wss?):\/\/|"(?:url|headers?|cookies?|credentials?|secret|token|password)"\s*:/iu.test(serialized)) {
@@ -138,6 +158,8 @@ function normalizeV2Top20PrepareContract(input = {}) {
     checkIn,
     checkOut,
     measurementPeriod: Object.freeze({ start: checkIn, end: checkOut }),
+    bookingRangeDays,
+    scheduleRequestGranularity: V2_TOP20_SCHEDULE_REQUEST_GRANULARITY,
     rankStart: V2_TOP20_CONTRACT.mainPlaceRankStart,
     rankEnd: V2_TOP20_CONTRACT.mainPlaceRankEnd,
     detailRankStart: V2_TOP20_CONTRACT.inventoryRankStart,
@@ -147,6 +169,7 @@ function normalizeV2Top20PrepareContract(input = {}) {
 
 function buildV2Top20ExecutionContract(input = {}) {
   const normalized = normalizeV2Top20PrepareContract(input);
+  const plan = v2Top20ResiliencePlan(normalized.bookingRangeDays);
   return Object.freeze({
     schemaVersion: V2_TOP20_SCHEMA_VERSION,
     profile: V2_TOP20_PROFILE,
@@ -159,11 +182,13 @@ function buildV2Top20ExecutionContract(input = {}) {
     checkIn: normalized.checkIn,
     checkOut: normalized.checkOut,
     measurementPeriod: normalized.measurementPeriod,
+    bookingRangeDays: normalized.bookingRangeDays,
+    scheduleRequestGranularity: plan.scheduleRequestGranularity,
     rankStart: normalized.rankStart,
     rankEnd: normalized.rankEnd,
     detailRankStart: normalized.detailRankStart,
     detailRankEnd: normalized.detailRankEnd,
-    maximumProviderCalls: V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
+    maximumProviderCalls: plan.maximumProviderCalls,
     concurrency: V2_TOP20_CONTRACT.concurrency,
     automaticRetry: false,
     automaticFallback: false
@@ -186,6 +211,8 @@ function computeV2Top20ContractHash(input = {}) {
     "checkIn",
     "checkOut",
     "measurementPeriod",
+    "bookingRangeDays",
+    "scheduleRequestGranularity",
     "rankStart",
     "rankEnd",
     "detailRankStart",
