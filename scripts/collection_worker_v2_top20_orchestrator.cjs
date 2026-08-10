@@ -34,6 +34,8 @@ const {
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_BACKEND_ID,
+  COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH,
+  COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_DISPATCH_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
@@ -185,6 +187,11 @@ const MAIN_PLACE_PROBE_FINALIZE_KEYS = Object.freeze([
   "jobId", "attemptId", "workflowRevision", "providerWorkflowRevision",
   "providerAttemptCount", "executedCallCount", "organicCount", "observedRankCount",
   "providerSubtype", "diagnosticId", "failureCode", "outcome"
+]);
+const BOOKING_DETAIL_PROBE_FINALIZE_KEYS = Object.freeze([
+  "jobId", "attemptId", "workflowRevision", "providerWorkflowRevision",
+  "providerAttemptCount", "executedCallCount", "businessValidated", "overnightItemValidated",
+  "scheduleStatus", "providerSubtype", "diagnosticId", "failureCode", "outcome"
 ]);
 const SUMMARY_KEYS = Object.freeze([
   "schemaVersion",
@@ -434,6 +441,56 @@ function normalizeTransactionResult(value, receiptId) {
   return Object.freeze({ receiptId, committed: true, writeCount: value.writeCount });
 }
 
+function normalizeBookingDetailRecoveryProbeTarget(value = {}) {
+  const target = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const expected = [
+    "placeId", "historicalBookingBusinessId", "sourceRunId", "verifiedAt",
+    "knownBookingItems", "knownDailySchedule", "targetIdentityHash"
+  ].sort();
+  const actual = target ? Object.keys(target).sort() : [];
+  if (
+    actual.length !== expected.length
+    || !actual.every((key, index) => key === expected[index])
+    || !/^\d{1,30}$/u.test(String(target?.placeId || ""))
+    || !/^\d{1,30}$/u.test(String(target?.historicalBookingBusinessId || ""))
+    || !String(target?.sourceRunId || "")
+    || !Number.isFinite(Date.parse(String(target?.verifiedAt || "")))
+    || target?.knownBookingItems !== true
+    || target?.knownDailySchedule !== true
+    || !/^[a-f0-9]{64}$/u.test(String(target?.targetIdentityHash || ""))
+  ) throw fail("BOOKING_DETAIL_PROBE_TARGET_INVALID", "booking-detail recovery probe target is invalid", 409);
+  const expectedHash = sha256Hex(stableJson({
+    placeId: String(target.placeId),
+    historicalBookingBusinessId: String(target.historicalBookingBusinessId),
+    sourceRunId: String(target.sourceRunId),
+    verifiedAt: String(target.verifiedAt),
+    knownBookingItems: true,
+    knownDailySchedule: true
+  }));
+  if (target.targetIdentityHash !== expectedHash) {
+    throw fail("BOOKING_DETAIL_PROBE_TARGET_INVALID", "booking-detail recovery probe target is invalid", 409);
+  }
+  return Object.freeze({
+    placeId: String(target.placeId),
+    historicalBookingBusinessId: String(target.historicalBookingBusinessId),
+    sourceRunId: String(target.sourceRunId),
+    verifiedAt: String(target.verifiedAt),
+    knownBookingItems: true,
+    knownDailySchedule: true,
+    targetIdentityHash: expectedHash
+  });
+}
+
+function bookingDetailProbeApprovalId(top20ContractHash, executionRequestHash, targetIdentityHash) {
+  return sha256Hex(stableJson({
+    domain: "lodging-datalab.booking-detail-recovery-probe-approval.v1",
+    top20ContractHash,
+    executionRequestHash,
+    targetIdentityHash,
+    maximumProviderCalls: 3
+  }));
+}
+
 function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   const enabled = options.enabled === true;
   const externalCallApproved = options.externalCallApproved === true;
@@ -460,6 +517,23 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
   const artifactPublicKey = () => decodeEd25519Key(options.artifactPublicKeyBase64, "public");
   const requestPublicKey = () => decodeEd25519Key(options.requestPublicKeyBase64, "public");
 
+  function isBookingDetailProbeJobId(jobId) {
+    return /^job-booking-detail-probe-[a-f0-9]{12}-[a-f0-9]{12}$/u.test(String(jobId || ""));
+  }
+
+  function isBookingDetailProbeEntry(entry) {
+    return entry?.executionPayload?.executionProfile === COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE
+      || isBookingDetailProbeJobId(entry?.executionPayload?.jobId);
+  }
+
+  function providerStoreForEntry(entry) {
+    return isBookingDetailProbeEntry(entry) ? detailProviderStore : providerStore;
+  }
+
+  function providerStoreForJob(job) {
+    return isBookingDetailProbeJobId(job?.jobId) ? detailProviderStore : providerStore;
+  }
+
   function assertReady() {
     canonicalCommit(targetWorkerCommit);
     if (!enabled || !externalCallApproved || !previewWriteApproved) {
@@ -482,7 +556,10 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || !detailProviderStore
       || typeof detailProviderStore.read !== "function"
       || typeof detailProviderStore.beginAttempt !== "function"
+      || typeof detailProviderStore.refreshAttempt !== "function"
+      || typeof detailProviderStore.recordSuccess !== "function"
       || typeof detailProviderStore.recordBlock !== "function"
+      || typeof detailProviderStore.releaseAttempt !== "function"
       || typeof applyReadyTransaction !== "function"
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_DEPENDENCY_INVALID", "top20 workflow dependency is invalid", 500);
@@ -657,7 +734,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
 
   async function settleAbandonedProviderAttempt(job) {
     const expectedWorkflowRevision = Number(job.providerWorkflowRevision);
-    let providerState = await providerStore.read();
+    const activeProviderStore = providerStoreForJob(job);
+    let providerState = await activeProviderStore.read();
     if (
       providerState.state !== "probe_allowed"
       || !Number.isInteger(expectedWorkflowRevision)
@@ -668,11 +746,11 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
     try {
       providerState = job.state === "queued"
-        ? await providerStore.releaseAttempt({
+        ? await activeProviderStore.releaseAttempt({
             expectedWorkflowRevision,
             now: now()
           })
-        : await providerStore.recordBlock({
+        : await activeProviderStore.recordBlock({
             expectedWorkflowRevision,
             failure: {
               subtype: "unknown_access_block",
@@ -682,7 +760,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
           });
     } catch (error) {
       if (error?.code !== "NAVER_PROVIDER_WORKFLOW_REVISION_CONFLICT") throw error;
-      providerState = await providerStore.read();
+      providerState = await activeProviderStore.read();
     }
     return providerState;
   }
@@ -756,6 +834,22 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       : normalizeV2Top20ExecutionRequestId(input.executionRequestId);
     const executionRequestHash = computeV2Top20ExecutionRequestHash(executionRequestId);
     const top20Contract = buildV2Top20ExecutionContract(input.contract);
+    const mainPlaceRecoveryProbe = input.recoveryProbe === true;
+    const bookingDetailRecoveryProbe = input.bookingDetailRecoveryProbe === true;
+    const recoveryProbe = mainPlaceRecoveryProbe || bookingDetailRecoveryProbe;
+    const bookingDetailProbeTarget = bookingDetailRecoveryProbe
+      ? normalizeBookingDetailRecoveryProbeTarget(input.bookingDetailProbeTarget)
+      : null;
+    const collectionProfile = bookingDetailRecoveryProbe
+      ? COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE
+      : mainPlaceRecoveryProbe
+        ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE
+        : "top20_inventory_revenue";
+    const maximumProviderCalls = bookingDetailRecoveryProbe
+      ? 3
+      : mainPlaceRecoveryProbe
+        ? 1
+        : top20Contract.maximumProviderCalls;
     const top20ContractHash = computeV2Top20ContractHash(top20Contract);
     safeTop20Log("top20_job_prepare_requested", {
       timestamp: new Date(now()).toISOString(),
@@ -766,13 +860,17 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       sourceRoute: "/api/crawl",
       actorKind: "operator",
       collectorBackend: "v2_top20_worker",
-      collectionProfile: input.recoveryProbe === true ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue"
+      collectionProfile
     });
     const snapshot = await jobStore.readSnapshot();
     const contractPrefix = top20ContractHash.slice(0, 12);
     const executionPrefix = executionRequestHash.slice(0, 12);
-    const jobId = `job-top20-${contractPrefix}-${executionPrefix}`;
-    const attemptId = `attempt:top20-${contractPrefix}-${executionPrefix}`;
+    const jobId = bookingDetailRecoveryProbe
+      ? `job-booking-detail-probe-${bookingDetailProbeTarget.targetIdentityHash.slice(0, 12)}-${executionPrefix}`
+      : `job-top20-${contractPrefix}-${executionPrefix}`;
+    const attemptId = bookingDetailRecoveryProbe
+      ? `attempt:booking-detail-probe-${bookingDetailProbeTarget.targetIdentityHash.slice(0, 12)}-${executionPrefix}`
+      : `attempt:top20-${contractPrefix}-${executionPrefix}`;
     const existingExecution = snapshot.jobs.find((job) => job.jobId === jobId) || null;
     if (existingExecution) {
       safeTop20Log("top20_job_prepare_reused", {
@@ -786,7 +884,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         sourceRoute: input.provenance?.sourceRoute || "/api/crawl",
         actorKind: input.provenance?.actorKind || "operator",
         collectorBackend: input.provenance?.collectorBackend || "v2_top20_worker",
-        collectionProfile: input.recoveryProbe === true ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue",
+        collectionProfile,
         jobState: existingExecution.state
       });
       return Object.freeze({
@@ -801,7 +899,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         executionRequestHash,
         providerWorkflowRevision: existingExecution.providerWorkflowRevision,
         maxProviderAttempts: 1,
-        maximumProviderCalls: top20Contract.maximumProviderCalls,
+        maximumProviderCalls,
         automaticRetry: false,
         automaticFallback: false
       });
@@ -817,16 +915,16 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
 
     const createdAt = new Date(now());
-    const providerState = await providerStore.read();
+    const activeProviderStore = bookingDetailRecoveryProbe ? detailProviderStore : providerStore;
+    const providerState = await activeProviderStore.read();
     const detailProviderState = await detailProviderStore.read();
-    const recoveryProbe = input.recoveryProbe === true;
     const availability = providerAvailability(providerState, { now: createdAt });
     if (recoveryProbe && (providerState.state !== "open" || !availability.probeRequired || availability.attemptInFlight)) {
       throw fail(
         providerState.state === "open" && availability.coolingDown
-          ? "COLLECTION_WORKER_MAIN_PLACE_PROBE_COOLDOWN_ACTIVE"
-          : "COLLECTION_WORKER_MAIN_PLACE_PROBE_NOT_REQUIRED",
-        "main-place recovery probe is not eligible for this provider state",
+          ? (bookingDetailRecoveryProbe ? "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_COOLDOWN_ACTIVE" : "COLLECTION_WORKER_MAIN_PLACE_PROBE_COOLDOWN_ACTIVE")
+          : (bookingDetailRecoveryProbe ? "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_NOT_REQUIRED" : "COLLECTION_WORKER_MAIN_PLACE_PROBE_NOT_REQUIRED"),
+        "provider recovery probe is not eligible for this provider state",
         409,
         retryMeta(providerState, createdAt)
       );
@@ -839,7 +937,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         retryMeta(providerState, createdAt)
       );
     }
-    const reservation = await providerStore.beginAttempt({
+    const reservation = await activeProviderStore.beginAttempt({
       expectedWorkflowRevision: providerState.workflowRevision,
       explicit: true,
       now: createdAt
@@ -858,7 +956,9 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       const signedJob = buildSignedJobEnvelope({
         jobId,
         attemptId,
-        approvalId: top20ApprovalId(top20ContractHash, executionRequestHash),
+        approvalId: bookingDetailRecoveryProbe
+          ? bookingDetailProbeApprovalId(top20ContractHash, executionRequestHash, bookingDetailProbeTarget.targetIdentityHash)
+          : top20ApprovalId(top20ContractHash, executionRequestHash),
         audience: COLLECTION_WORKER_JOB_AUDIENCE,
         workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
         workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
@@ -891,7 +991,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         backendVersion: targetWorkerCommit,
         workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
         providerWorkflowRevision: reservation.state.workflowRevision,
-        maxProviderCalls: 1,
+        maxProviderCalls: maximumProviderCalls,
         now: createdAt
       });
       stored = true;
@@ -919,7 +1019,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         }),
         top20Contract,
         providerSession: Object.freeze({
-          maximumProviderCalls: top20Contract.maximumProviderCalls,
+          maximumProviderCalls,
           providerAttemptCount: 1,
           concurrency: 1,
           automaticRetry: false,
@@ -928,11 +1028,12 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
           serviceGlobalLockHeld: true
         }),
         detailProviderSession: Object.freeze({
-          state: detailProviderState.state,
+          state: bookingDetailRecoveryProbe ? "probe_allowed" : detailProviderState.state,
           retryAt: detailProviderState.retryAt || null,
-          liveCallsAllowed: detailProviderState.state === "closed"
+          liveCallsAllowed: bookingDetailRecoveryProbe || detailProviderState.state === "closed"
         }),
-        executionProfile: recoveryProbe ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue"
+        executionProfile: collectionProfile,
+        ...(bookingDetailRecoveryProbe ? { bookingDetailProbeTarget } : {})
       });
       payloads.set(jobId, {
         signedJob,
@@ -940,7 +1041,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         top20ContractHash,
         executionRequestHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
-        maximumProviderCalls: top20Contract.maximumProviderCalls,
+        maximumProviderCalls,
         preflighted: false,
         lifecycle: "active",
         terminalAt: null,
@@ -957,7 +1058,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         sourceRoute: "/api/crawl",
         actorKind: "operator",
         collectorBackend: "v2_top20_worker",
-        collectionProfile: recoveryProbe ? COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE : "top20_inventory_revenue",
+        collectionProfile,
         jobState: "queued"
       });
       return Object.freeze({
@@ -971,13 +1072,13 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
         executionRequestHash,
         providerWorkflowRevision: reservation.state.workflowRevision,
         maxProviderAttempts: 1,
-          maximumProviderCalls: top20Contract.maximumProviderCalls,
+          maximumProviderCalls,
         automaticRetry: false,
         automaticFallback: false
       });
     } catch (error) {
       if (!stored) {
-        await providerStore.releaseAttempt({
+        await activeProviderStore.releaseAttempt({
           expectedWorkflowRevision: reservation.state.workflowRevision,
           now: new Date(now())
         }).catch(() => {});
@@ -1055,6 +1156,19 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     });
   }
 
+  async function prepareBookingDetailRecoveryProbeTrustedAdmin(input = {}) {
+    if (input.trustedAdmin !== true) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_ADMIN_PREPARE_FORBIDDEN", "trusted admin preparation is required", 403);
+    }
+    return prepareCore({
+      contract: input.contract,
+      executionRequestId: input.executionRequestId,
+      provenance: { ...input.provenance, sourceRoute: "/api/admin/collection-worker/v2-top20/booking-detail-recovery-probe" },
+      bookingDetailRecoveryProbe: true,
+      bookingDetailProbeTarget: input.bookingDetailProbeTarget
+    });
+  }
+
   async function prepareDryRunTrustedAdmin(input = {}) {
     if (input.trustedAdmin !== true) {
       throw fail("COLLECTION_WORKER_V2_TOP20_ADMIN_PREPARE_FORBIDDEN", "trusted admin preparation is required", 403);
@@ -1126,7 +1240,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     ));
     if (!candidate) return Object.freeze({ status: "empty", job: null });
     const entry = payloads.get(candidate.jobId);
-    const providerState = await providerStore.read();
+    const activeProviderStore = providerStoreForEntry(entry);
+    const providerState = await activeProviderStore.read();
     if (
       providerState.state !== "probe_allowed"
       || providerState.workflowRevision !== entry.providerWorkflowRevision
@@ -1181,6 +1296,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     await reconcileFirstUse();
     const job = await readJob(input.body.jobId);
     const entry = job ? payloads.get(job.jobId) : null;
+    const activeProviderStore = providerStoreForEntry(entry);
     const identityMatches = Boolean(
       job
       && entry
@@ -1214,7 +1330,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       throw fail("COLLECTION_WORKER_V2_TOP20_PREFLIGHT_CONFLICT", "top20 preflight is stale", 409);
     }
     assertActiveLease(job);
-    const providerState = await providerStore.read();
+    const providerState = await activeProviderStore.read();
     if (
       providerState.state !== "probe_allowed"
       || providerState.workflowRevision !== entry.providerWorkflowRevision
@@ -1269,6 +1385,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
     let job = await readJob(input.body.jobId);
     const entry = job ? payloads.get(job.jobId) : null;
+    const activeProviderStore = providerStoreForEntry(entry);
     const identityMatches = Boolean(
       job
       && entry
@@ -1304,14 +1421,14 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       throw fail("COLLECTION_WORKER_V2_TOP20_HEARTBEAT_CONFLICT", "top20 heartbeat is stale", 409);
     }
     assertActiveLease(job);
-    const providerState = await providerStore.read();
+    const providerState = await activeProviderStore.read();
     if (
       providerState.state !== "probe_allowed"
       || providerState.workflowRevision !== entry.providerWorkflowRevision
     ) {
       throw fail("COLLECTION_WORKER_V2_TOP20_PROVIDER_LEASE_LOST", "top20 provider session lease is unavailable", 409);
     }
-    const providerHeartbeat = await providerStore.refreshAttempt({
+    const providerHeartbeat = await activeProviderStore.refreshAttempt({
       expectedWorkflowRevision: entry.providerWorkflowRevision,
       now: now()
     });
@@ -1747,12 +1864,13 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     }
   }
 
-  async function settleFailureProvider(body, receiptHash) {
+  async function settleFailureProvider(body, receiptHash, entry = null) {
     const expectedRevision = Number(body.providerWorkflowRevision);
     const providerAttemptCount = Number(body.providerAttemptCount);
     const blocked = providerAttemptCount === 1 && SAFE_SUBTYPE_PATTERN.test(String(body.providerFailureSubtype || ""));
     const expectedKind = blocked ? "block" : "release";
-    let providerState = await providerStore.read();
+    const activeProviderStore = providerStoreForEntry(entry);
+    let providerState = await activeProviderStore.read();
     if (providerState.workflowRevision === expectedRevision + 1) {
       if (
         providerState.lastOutcomeKind !== expectedKind
@@ -1766,7 +1884,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       throw fail("COLLECTION_WORKER_V2_TOP20_PROVIDER_FINALIZATION_AMBIGUOUS", "top20 failure provider receipt is ambiguous", 409);
     }
     providerState = blocked
-      ? await providerStore.recordBlock({
+      ? await activeProviderStore.recordBlock({
           expectedWorkflowRevision: expectedRevision,
           outcomeReceiptHash: receiptHash,
           failure: {
@@ -1775,7 +1893,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
           },
           now: now()
         })
-      : await providerStore.releaseAttempt({
+      : await activeProviderStore.releaseAttempt({
           expectedWorkflowRevision: expectedRevision,
           outcomeReceiptHash: receiptHash,
           now: now()
@@ -1916,7 +2034,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       && entry.providerWorkflowRevision === Number(body.providerWorkflowRevision);
     if (cancellationReceipt) {
       assertActiveLease(job);
-      await settleFailureProvider(body, receiptHash);
+      await settleFailureProvider(body, receiptHash, entry);
       job = await jobStore.transitionJob({
         jobId: job.jobId,
         expectedWorkflowRevision: job.workflowRevision,
@@ -1960,7 +2078,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     } else if (job.failureReceiptHash !== receiptHash || job.failureCode !== body.code) {
       throw fail("COLLECTION_WORKER_V2_TOP20_FAILURE_CONFLICT", "top20 failure receipt conflicts", 409);
     }
-    await settleFailureProvider(body, receiptHash);
+    await settleFailureProvider(body, receiptHash, entry);
     if (job.state === "failure_received") {
       job = await jobStore.transitionJob({
         jobId: job.jobId,
@@ -2138,6 +2256,105 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     return Object.freeze({ status: outcome, jobState: job.state, mainPlaceProviderState: state.state, providerAttemptCount: Number(body.providerAttemptCount), executedCallCount: Number(body.executedCallCount), organicCount: Number(body.organicCount), observedRankCount: Number(body.observedRankCount), providerSubtype, resultStored: false, writeCount: 0, replayed: false });
   }
 
+  async function finalizeBookingDetailRecoveryProbe(input = {}) {
+    assertReady();
+    exactKeys(input.body, BOOKING_DETAIL_PROBE_FINALIZE_KEYS, "booking-detail recovery probe receipt");
+    verifyWorkerAuth(input.signedRequest, input.body, COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH);
+    await reconcileFirstUse();
+    const body = input.body;
+    const outcome = String(body.outcome || "");
+    const providerSubtype = body.providerSubtype === null ? null : String(body.providerSubtype || "");
+    const diagnosticId = body.diagnosticId === null ? null : String(body.diagnosticId || "");
+    const failureCode = body.failureCode === null ? null : String(body.failureCode || "");
+    const executedCallCount = Number(body.executedCallCount);
+    const providerAttemptCount = Number(body.providerAttemptCount);
+    const validBooleanFlags = typeof body.businessValidated === "boolean" && typeof body.overnightItemValidated === "boolean";
+    if (
+      !["ready", "blocked", "indeterminate", "target_stale"].includes(outcome)
+      || ![0, 1].includes(providerAttemptCount)
+      || !Number.isInteger(executedCallCount) || executedCallCount < 0 || executedCallCount > 3
+      || (providerAttemptCount === 0 && executedCallCount !== 0)
+      || !validBooleanFlags
+      || ![null, "ready", "zero"].includes(body.scheduleStatus)
+      || (outcome === "ready" && (
+        providerAttemptCount !== 1 || executedCallCount !== 3
+        || body.businessValidated !== true || body.overnightItemValidated !== true
+        || !["ready", "zero"].includes(body.scheduleStatus)
+        || providerSubtype !== "booking_detail_success" || failureCode !== null || diagnosticId !== null
+      ))
+      || (outcome === "blocked" && (
+        providerAttemptCount !== 1 || ![1, 2, 3].includes(executedCallCount)
+        || body.scheduleStatus !== null || !SAFE_SUBTYPE_PATTERN.test(providerSubtype) || failureCode !== null
+      ))
+      || (outcome === "target_stale" && (
+        providerAttemptCount !== 1 || ![1, 2, 3].includes(executedCallCount)
+        || providerSubtype !== null || diagnosticId !== null || body.scheduleStatus !== null
+        || failureCode !== "BOOKING_DETAIL_PROBE_TARGET_STALE"
+      ))
+      || (outcome === "indeterminate" && (
+        providerSubtype !== null || diagnosticId !== null || body.scheduleStatus !== null
+        || ![null, "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_CONTRACT_INVALID"].includes(failureCode)
+      ))
+      || (diagnosticId !== null && !DIAGNOSTIC_PATTERN.test(diagnosticId))
+    ) throw fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_RECEIPT_INVALID", "booking-detail recovery probe receipt is invalid", 409);
+    let job = await readJob(body.jobId);
+    const entry = job ? payloads.get(job.jobId) : null;
+    if (
+      !job || !entry || !isBookingDetailProbeEntry(entry) || job.attemptId !== body.attemptId
+      || entry.executionPayload.executionProfile !== COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE
+    ) throw fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_CONFLICT", "booking-detail recovery probe is stale", 409);
+    const receiptHash = sha256Hex(stableJson(body));
+    if (["validated_no_store", "blocked", "indeterminate"].includes(job.state)) {
+      if (job.failureReceiptHash && job.failureReceiptHash !== receiptHash) throw fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_CONFLICT", "booking-detail recovery probe receipt conflicts", 409);
+      const state = await detailProviderStore.read();
+      return Object.freeze({ status: outcome, jobState: job.state, bookingDetailProviderState: state.state, providerAttemptCount, executedCallCount, resultStored: false, writeCount: 0, replayed: true });
+    }
+    if (job.state !== "collecting" || job.workflowRevision !== Number(body.workflowRevision) || entry.providerWorkflowRevision !== Number(body.providerWorkflowRevision)) {
+      throw fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_CONFLICT", "booking-detail recovery probe is stale", 409);
+    }
+    assertActiveLease(job);
+    let state = await detailProviderStore.read();
+    if (state.state !== "probe_allowed" || state.workflowRevision !== Number(body.providerWorkflowRevision)) {
+      throw fail("COLLECTION_WORKER_V2_TOP20_PROVIDER_LEASE_LOST", "booking-detail provider lease is unavailable", 409);
+    }
+    if (outcome === "ready") {
+      state = await detailProviderStore.recordSuccess({ expectedWorkflowRevision: state.workflowRevision, outcomeReceiptHash: receiptHash, now: now() });
+    } else if (outcome === "blocked") {
+      state = await detailProviderStore.recordBlock({ expectedWorkflowRevision: state.workflowRevision, outcomeReceiptHash: receiptHash, failure: { subtype: providerSubtype, diagnosticId }, now: now() });
+    } else {
+      state = await detailProviderStore.releaseAttempt({ expectedWorkflowRevision: state.workflowRevision, outcomeReceiptHash: receiptHash, now: now() });
+    }
+    job = await jobStore.transitionJob({
+      jobId: job.jobId,
+      expectedWorkflowRevision: job.workflowRevision,
+      workerId: job.workerId,
+      nextState: outcome === "ready" ? "validated_no_store" : outcome === "blocked" ? "blocked" : "indeterminate",
+      failureCode: outcome === "blocked"
+        ? "NAVER_ACCESS_BLOCKED"
+        : outcome === "target_stale"
+          ? "BOOKING_DETAIL_PROBE_TARGET_STALE"
+          : (failureCode || "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_TRANSPORT_UNAVAILABLE"),
+      failureReceiptHash: receiptHash,
+      providerAttemptCount,
+      now: now()
+    });
+    markPayloadTerminal(job.jobId, job.state);
+    return Object.freeze({
+      status: outcome,
+      jobState: job.state,
+      bookingDetailProviderState: state.state,
+      providerAttemptCount,
+      executedCallCount,
+      businessValidated: body.businessValidated,
+      overnightItemValidated: body.overnightItemValidated,
+      scheduleStatus: body.scheduleStatus,
+      providerSubtype,
+      resultStored: false,
+      writeCount: 0,
+      replayed: false
+    });
+  }
+
   return Object.freeze({
     attestRuntime,
     claim,
@@ -2147,6 +2364,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     prepare,
     prepareTrustedAdmin,
     prepareMainPlaceRecoveryProbeTrustedAdmin,
+    prepareBookingDetailRecoveryProbeTrustedAdmin,
     prepareDryRunTrustedAdmin,
     artifactSecurityDiagnostic,
     recordArtifactSecurityDiagnostic,
@@ -2169,6 +2387,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       });
     },
     finalizeMainPlaceRecoveryProbe,
+    finalizeBookingDetailRecoveryProbe,
     markTerminalPayload(input = {}) {
       const jobId = String(input.jobId || "");
       const terminalState = String(input.terminalState || "terminal");

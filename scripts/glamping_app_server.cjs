@@ -101,6 +101,8 @@ const {
 } = require("./collection_worker_canary_protocol.cjs");
 const {
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
+  COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH,
+  COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
   COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH,
@@ -15334,8 +15336,14 @@ function isCollectionWorkerInternalPath(pathname) {
     COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
     COLLECTION_WORKER_FINALIZE_PATH,
     COLLECTION_WORKER_FAILURE_PATH,
-    COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH
+    COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH,
+    COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH
   ].includes(pathname);
+}
+
+function isV2Top20WorkerJobId(jobId) {
+  const value = String(jobId || "");
+  return value.startsWith("job-top20-") || value.startsWith("job-booking-detail-probe-");
 }
 
 function top20ExecutionRequestIdFromPayload(payload = {}) {
@@ -15430,12 +15438,15 @@ async function expireUnclaimedTop20WorkerJob(job) {
     || Number(job.executedCallCount || 0) !== 0
     || Date.now() - Date.parse(job.createdAt || job.updatedAt || 0) < TOP20_WORKER_UNCLAIMED_TIMEOUT_MS
   ) return null;
-  const providerState = await naverPlaceMainProviderHealthStore.read();
+  const providerStore = String(job.jobId || "").startsWith("job-booking-detail-probe-")
+    ? naverBookingDetailProviderHealthStore
+    : naverPlaceMainProviderHealthStore;
+  const providerState = await providerStore.read();
   if (
     providerState.state !== "probe_allowed"
     || providerState.workflowRevision !== Number(job.providerWorkflowRevision)
   ) return null;
-  await naverPlaceMainProviderHealthStore.releaseAttempt({
+  await providerStore.releaseAttempt({
     expectedWorkflowRevision: providerState.workflowRevision,
     outcomeReceiptHash: crypto
       .createHash("sha256")
@@ -15462,7 +15473,7 @@ async function restoreActiveTop20WorkerJob() {
   const snapshot = await collectionWorkerJobStore.readSnapshot();
   const job = snapshot.jobs
     .filter((candidate) => (
-      String(candidate.jobId || "").startsWith("job-top20-")
+      isV2Top20WorkerJobId(candidate.jobId)
       && !TOP20_WORKER_TERMINAL_STATES.has(candidate.state)
     ))
     .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0))[0] || null;
@@ -16607,7 +16618,8 @@ async function route(req, res) {
       COLLECTION_WORKER_V2_TOP20_HEARTBEAT_PATH,
       COLLECTION_WORKER_FINALIZE_PATH,
       COLLECTION_WORKER_FAILURE_PATH,
-      COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH
+      COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_FINALIZE_PATH,
+      COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH
     ].includes(reqUrl.pathname)) {
       return sendCollectionWorkerJson(res, 503, {
         code: "COLLECTION_WORKER_PREVIEW_DRAINING",
@@ -16646,7 +16658,7 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_PREFLIGHT_PATH) {
       const payload = await parseJsonBody(req);
-      const orchestrator = String(payload?.body?.jobId || "").startsWith("job-top20-")
+      const orchestrator = isV2Top20WorkerJobId(payload?.body?.jobId)
         ? collectionWorkerV2Top20Orchestrator
         : collectionWorkerCanaryOrchestrator;
       const result = await orchestrator.preflight({
@@ -16667,7 +16679,7 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FINALIZE_PATH) {
       const payload = await parseJsonBody(req);
-      const orchestrator = String(payload?.body?.jobId || "").startsWith("job-top20-")
+      const orchestrator = isV2Top20WorkerJobId(payload?.body?.jobId)
         ? collectionWorkerV2Top20Orchestrator
         : collectionWorkerCanaryOrchestrator;
       const result = await orchestrator.finalize({
@@ -16686,6 +16698,15 @@ async function route(req, res) {
       return sendCollectionWorkerJson(res, 200, result);
     }
 
+    if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH) {
+      const payload = await parseJsonBody(req);
+      const result = await collectionWorkerV2Top20Orchestrator.finalizeBookingDetailRecoveryProbe({
+        signedRequest: payload.signedRequest,
+        body: payload.body
+      });
+      return sendCollectionWorkerJson(res, 200, result);
+    }
+
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH) {
       const payload = await parseJsonBody(req);
       const result = await collectionWorkerV2Top20Orchestrator.recordArtifactSecurityDiagnostic({
@@ -16697,7 +16718,7 @@ async function route(req, res) {
 
     if (req.method === "POST" && reqUrl.pathname === COLLECTION_WORKER_FAILURE_PATH) {
       const payload = await parseJsonBody(req);
-      const orchestrator = String(payload?.body?.jobId || "").startsWith("job-top20-")
+      const orchestrator = isV2Top20WorkerJobId(payload?.body?.jobId)
         ? collectionWorkerV2Top20Orchestrator
         : collectionWorkerCanaryOrchestrator;
       const result = await orchestrator.recordFailure({
@@ -17043,9 +17064,42 @@ async function route(req, res) {
       }, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/booking-detail-recovery-probe/status") {
+      if (!requireAdminSession(session, req, res)) return;
+      const snapshot = await collectionWorkerJobStore.readSnapshot();
+      const latest = snapshot.jobs
+        .filter((job) => String(job.jobId || "").startsWith("job-booking-detail-probe-"))
+        .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || 0) - Date.parse(left.updatedAt || left.createdAt || 0))[0] || null;
+      const provider = await naverBookingDetailProviderHealthStore.read();
+      const availability = providerAvailability(provider, { now: new Date() });
+      return send(res, 200, {
+        collectionProfile: COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE,
+        enabled: bookingDetailRecoveryProbeEnabled(),
+        active: Boolean(activeTop20WorkerJob && String(activeTop20WorkerJob.jobId || "").startsWith("job-booking-detail-probe-")),
+        bookingDetailProviderState: provider.state,
+        bookingDetailWorkflowRevision: provider.workflowRevision,
+        retryAt: provider.retryAt || null,
+        attemptInFlight: availability.attemptInFlight === true,
+        targetEligible: Boolean(await selectBookingDetailRecoveryProbeTarget()),
+        latestJobState: latest?.state || null,
+        resultStored: false,
+        writeCount: 0,
+        maximumProviderCalls: 3,
+        automaticRetry: false,
+        automaticFallback: false
+      }, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
+    }
+
     if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/main-place-recovery-probe") {
       if (!requireAdminSession(session, req, res)) return;
       const result = await queueMainPlaceRecoveryProbe();
+      return send(res, 202, result, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/admin/collection-worker/v2-top20/booking-detail-recovery-probe") {
+      if (!requireAdminSession(session, req, res)) return;
+      if (!isSameOriginMapGeocodingRequest(req)) return send(res, 403, { error: "Same-origin admin action required" });
+      const result = await queueBookingDetailRecoveryProbe();
       return send(res, 202, result, "application/json; charset=utf-8", { "Cache-Control": "no-store" });
     }
 
@@ -17427,6 +17481,197 @@ function mainPlaceRecoveryProbeContract() {
     // exits before any detail operation and exposes 0 detail coverage.
     detailRankStart: 1,
     detailRankEnd: 20
+  });
+}
+
+function bookingDetailRecoveryProbeEnabled() {
+  return String(process.env.COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_ENABLED || "false").trim().toLowerCase() === "true";
+}
+
+function bookingDetailProbeTargetHash(target = {}) {
+  return crypto.createHash("sha256").update(stableJson({
+    placeId: String(target.placeId || ""),
+    historicalBookingBusinessId: String(target.historicalBookingBusinessId || ""),
+    sourceRunId: String(target.sourceRunId || ""),
+    verifiedAt: String(target.verifiedAt || ""),
+    knownBookingItems: target.knownBookingItems === true,
+    knownDailySchedule: target.knownDailySchedule === true
+  })).digest("hex");
+}
+
+function bookingDetailTargetSourcePriority(value) {
+  return ({ live_graphql: 0, place_page: 1, historical_verified: 2 })[String(value || "")] ?? 3;
+}
+
+function bookingDetailTargetIsOvernight(item = {}) {
+  const details = Array.isArray(item.itemDetails) ? item.itemDetails : [];
+  return details.some((detail) => {
+    const stayType = String(detail?.bizItemSubType || detail?.stayType || detail?.saleType || detail?.productType || "").trim().toUpperCase();
+    return stayType === "ACCOMMODATION_NIGHT" || stayType === "OVERNIGHT" || stayType === "LODGING";
+  });
+}
+
+async function selectBookingDetailRecoveryProbeTarget() {
+  const summaries = await listRuns();
+  const candidates = [];
+  for (const summary of summaries) {
+    const runId = String(summary?.id || "");
+    if (!runId) continue;
+    const data = await loadRun(runId, { skipCompanyMaster: true, skipHistory: true, skipTraffic: true });
+    if (!data) continue;
+    // A rank-only Worker result contains no verified Booking Detail evidence.
+    if (isPreviewWorkerRunId(runId) && !["complete", "partial"].includes(String(data?.run?.collectionStatus || ""))) continue;
+    const sourceRunId = String(data?.run?.id || runId);
+    const verifiedAt = String(data?.run?.dataAvailableAt || data?.run?.collectionCompletedAt || "");
+    if (!Number.isFinite(Date.parse(verifiedAt))) continue;
+    for (const item of Array.isArray(data?.availability?.items) ? data.availability.items : []) {
+      const placeId = String(item?.placeId || item?.place_id || "").trim();
+      const historicalBookingBusinessId = String(item?.bookingBusinessId || "").trim();
+      const knownBookingItems = Number(item?.nightItemCount) >= 1 && bookingDetailTargetIsOvernight(item);
+      const knownDailySchedule = item?.availableRooms !== null
+        && item?.availableRooms !== undefined
+        && item?.totalRooms !== null
+        && item?.totalRooms !== undefined
+        && Number.isFinite(Number(item.availableRooms))
+        && Number.isFinite(Number(item.totalRooms));
+      if (!/^\d{1,30}$/u.test(placeId) || !/^\d{1,30}$/u.test(historicalBookingBusinessId) || !knownBookingItems || !knownDailySchedule) continue;
+      const sourceKind = String(item?.bookingBusinessIdSource || "historical_verified");
+      candidates.push({
+        placeId,
+        historicalBookingBusinessId,
+        sourceRunId,
+        verifiedAt,
+        knownBookingItems: true,
+        knownDailySchedule: true,
+        sourcePriority: bookingDetailTargetSourcePriority(sourceKind),
+        rank: Number(item?.rank || Number.MAX_SAFE_INTEGER)
+      });
+    }
+  }
+  const placeMap = new Map();
+  const businessMap = new Map();
+  for (const candidate of candidates) {
+    const priorByPlace = placeMap.get(candidate.placeId);
+    const priorByBusiness = businessMap.get(candidate.historicalBookingBusinessId);
+    if (priorByPlace && priorByPlace.historicalBookingBusinessId !== candidate.historicalBookingBusinessId) {
+      priorByPlace.conflicted = true;
+      candidate.conflicted = true;
+    }
+    if (priorByBusiness && priorByBusiness.placeId !== candidate.placeId) {
+      priorByBusiness.conflicted = true;
+      candidate.conflicted = true;
+    }
+    placeMap.set(candidate.placeId, candidate);
+    businessMap.set(candidate.historicalBookingBusinessId, candidate);
+  }
+  const target = candidates
+    .filter((candidate) => candidate.conflicted !== true)
+    .sort((left, right) => (
+      left.sourcePriority - right.sourcePriority
+      || Date.parse(right.verifiedAt) - Date.parse(left.verifiedAt)
+      || left.rank - right.rank
+    ))[0] || null;
+  if (!target) return null;
+  const normalized = {
+    placeId: target.placeId,
+    historicalBookingBusinessId: target.historicalBookingBusinessId,
+    sourceRunId: target.sourceRunId,
+    verifiedAt: target.verifiedAt,
+    knownBookingItems: true,
+    knownDailySchedule: true
+  };
+  return Object.freeze({ ...normalized, targetIdentityHash: bookingDetailProbeTargetHash(normalized) });
+}
+
+function bookingDetailRecoveryProbeContract() {
+  return Object.freeze({
+    keyword: "경남 글램핑",
+    searchMode: "keyword",
+    collectionMode: "precision",
+    collectionPurpose: "revenue_detail",
+    productMode: "all",
+    checkIn: "2026-08-23",
+    checkOut: "2026-08-23",
+    bookingRangeDays: 1,
+    rankStart: 1,
+    rankEnd: 50,
+    // The fixed signed Top20 envelope remains valid; the isolated child
+    // exits after its single Booking Detail target and never plans these rows.
+    detailRankStart: 1,
+    detailRankEnd: 20
+  });
+}
+
+async function queueBookingDetailRecoveryProbe() {
+  if (!bookingDetailRecoveryProbeEnabled()) {
+    const error = new Error("Booking Detail 복구 Probe가 비활성 상태입니다.");
+    error.code = "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_DISABLED";
+    error.statusCode = 404;
+    throw error;
+  }
+  assertTop20WorkerTransportReady();
+  await restoreActiveTop20WorkerJob();
+  if (activeCrawlPromise || activeTop20WorkerJob) {
+    const error = new Error("다른 Worker 수집 작업이 진행 중입니다.");
+    error.code = "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_ACTIVE_JOB";
+    error.statusCode = 409;
+    throw error;
+  }
+  const [mainPlaceState, bookingDetailState, target] = await Promise.all([
+    naverPlaceMainProviderHealthStore.read(),
+    naverBookingDetailProviderHealthStore.read(),
+    selectBookingDetailRecoveryProbeTarget()
+  ]);
+  const availability = providerAvailability(bookingDetailState, { now: new Date() });
+  if (mainPlaceState.state !== "closed") {
+    const error = new Error("Main Place Provider 회로가 준비되지 않았습니다.");
+    error.code = "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_MAIN_PLACE_NOT_READY";
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!target) {
+    const error = new Error("검증된 Booking Detail Probe 대상을 찾지 못했습니다.");
+    error.code = "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_TARGET_UNAVAILABLE";
+    error.statusCode = 409;
+    throw error;
+  }
+  if (bookingDetailState.state !== "open" || availability.attemptInFlight || !availability.probeRequired) {
+    const error = new Error("Booking Detail 복구 Probe가 현재 실행 조건을 충족하지 않습니다.");
+    error.code = availability.coolingDown
+      ? "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_COOLDOWN_ACTIVE"
+      : "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_NOT_REQUIRED";
+    error.statusCode = 409;
+    throw error;
+  }
+  const executionRequestId = `booking-detail-probe:${bookingDetailState.workflowRevision}:${target.targetIdentityHash.slice(0, 12)}:${String(process.env.RENDER_GIT_COMMIT || "").slice(0, 12)}`;
+  const prepared = await collectionWorkerV2Top20Orchestrator.prepareBookingDetailRecoveryProbeTrustedAdmin({
+    trustedAdmin: true,
+    contract: bookingDetailRecoveryProbeContract(),
+    executionRequestId,
+    bookingDetailProbeTarget: target,
+    provenance: {
+      sourceRoute: "/api/admin/collection-worker/v2-top20/booking-detail-recovery-probe",
+      sourceRole: "admin",
+      actorKind: "operator",
+      collectorBackend: "v2_top20_worker"
+    }
+  });
+  if (!prepared.reused && !TOP20_WORKER_TERMINAL_STATES.has(prepared.status)) {
+    activeTop20WorkerJob = Object.freeze({ jobId: prepared.jobId, startedAt: new Date().toISOString(), contract: bookingDetailRecoveryProbeContract() });
+    lastTop20WorkerOutcome = null;
+  }
+  return Object.freeze({
+    queued: prepared.status === "queued",
+    reused: prepared.reused === true,
+    worker: true,
+    workerJobId: prepared.jobId,
+    collectionProfile: COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE,
+    targetIdentityHashPrefix: target.targetIdentityHash.slice(0, 12),
+    maximumProviderCalls: 3,
+    automaticRetry: false,
+    automaticFallback: false,
+    resultStored: false,
+    writeCount: 0
   });
 }
 

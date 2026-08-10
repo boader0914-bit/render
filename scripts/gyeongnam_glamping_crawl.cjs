@@ -372,9 +372,14 @@ const V2_TOP20_WORKER_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
   && String(process.env.V2_TOP20_WORKER_ACTIVATION || "0") === "1"
   && NAVER_LIMITED_ACTIVATION_PROFILE === V2_TOP20_PROFILE;
 const NAVER_MAIN_PLACE_RECOVERY_PROBE = String(process.env.NAVER_MAIN_PLACE_RECOVERY_PROBE || "0") === "1";
-const V2_TOP20_PROVIDER_IPC_ACTIVATION = V2_TOP20_WORKER_ACTIVATION || NAVER_MAIN_PLACE_RECOVERY_PROBE;
+const NAVER_BOOKING_DETAIL_RECOVERY_PROBE = String(process.env.NAVER_BOOKING_DETAIL_RECOVERY_PROBE || "0") === "1";
+const V2_TOP20_PROVIDER_IPC_ACTIVATION = V2_TOP20_WORKER_ACTIVATION
+  || NAVER_MAIN_PLACE_RECOVERY_PROBE
+  || NAVER_BOOKING_DETAIL_RECOVERY_PROBE;
 const V2_TOP20_PROVIDER_IPC_MAXIMUM_CALLS = NAVER_MAIN_PLACE_RECOVERY_PROBE
   ? 1
+  : NAVER_BOOKING_DETAIL_RECOVERY_PROBE
+    ? 3
   : V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS;
 const ACTIVE_INVENTORY_ACTIVATION = V2_TOP20_WORKER_ACTIVATION
   ? V2_TOP20_INVENTORY_ACTIVATION
@@ -385,6 +390,7 @@ const NAVER_LEGACY_INVENTORY_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
     NAVER_LIMITED_ACTIVATION_PROFILE === NAVER_LEGACY_INVENTORY_PROFILE
     || V2_COLLECTOR_COMPATIBILITY_ACTIVATION
     || V2_TOP20_WORKER_ACTIVATION
+    || NAVER_BOOKING_DETAIL_RECOVERY_PROBE
   );
 const NAVER_INVENTORY_CALL_BUDGET = boundedInteger(process.env.NAVER_INVENTORY_CALL_BUDGET, 0, 0, 1200);
 const NAVER_TOTAL_CALL_BUDGET = boundedInteger(process.env.NAVER_TOTAL_CALL_BUDGET, 0, 0, 1201);
@@ -1056,10 +1062,10 @@ const NAVER_BOUNDED_INVENTORY_TRANSPORT = NAVER_LEGACY_INVENTORY_ACTIVATION
       providerId: "naver_booking_detail",
       allowTextFallback: process.env.NODE_ENV === "test",
       budgetProfileId: V2_TOP20_WORKER_ACTIVATION ? "top20_v1" : "top3_v1",
-      beforeProviderCall: V2_TOP20_WORKER_ACTIVATION
+      beforeProviderCall: V2_TOP20_PROVIDER_IPC_ACTIVATION
         ? requestV2Top20ProviderCallHeartbeat
         : undefined,
-      onProviderCallStarted: V2_TOP20_WORKER_ACTIVATION
+      onProviderCallStarted: V2_TOP20_PROVIDER_IPC_ACTIVATION
         ? confirmV2Top20ProviderCallStarted
         : undefined
     })
@@ -1501,6 +1507,30 @@ async function getNaverState(query) {
 
 function assertNaverLegacyLimitedActivationContract() {
   if (!NAVER_LEGACY_LIMITED_ACTIVATION) return;
+  if (NAVER_BOOKING_DETAIL_RECOVERY_PROBE) {
+    const valid = NAVER_COLLECTOR_STRATEGY === NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY
+      && NAVER_COLLECTOR_SCOPE === "booking_detail_recovery"
+      && NAVER_LIMITED_ACTIVATION_PROFILE === "booking_detail_recovery_probe.v1"
+      && NAVER_PROVIDER_CALL_BUDGET === 0
+      && NAVER_INVENTORY_CALL_BUDGET === 3
+      && NAVER_TOTAL_CALL_BUDGET === 3
+      && NAVER_INVENTORY_PLACE_LIMIT === 1
+      && NAVER_INVENTORY_ITEM_LIMIT === 1
+      && NAVER_BOOKING_STOCK_LIMIT === 1
+      && NAVER_BOOKING_DETAIL_CONCURRENCY === 1
+      && NAVER_SCHEDULE_CONCURRENCY === 1
+      && NAVER_BOOKING_ID_FALLBACK === false
+      && NAVER_COUPON_PAGE_FALLBACK === false
+      && NAVER_AUTOMATIC_RETRY === false
+      && NAVER_AUTOMATIC_FALLBACK === false
+      && SOURCE_ROLE === "admin"
+      && COLLECTION_SOURCE === "admin_search"
+      && SEARCH_MODE === "keyword"
+      && COLLECTION_MODE === "precision"
+      && COLLECTION_PURPOSE === "revenue_detail";
+    if (!valid) throw createCrawlFailure("BOOKING_DETAIL_PROBE_CONTRACT_INVALID");
+    return;
+  }
   if (NAVER_LEGACY_INVENTORY_ACTIVATION) {
     const expectedInventoryProfile = V2_TOP20_WORKER_ACTIVATION
       ? V2_TOP20_PROFILE
@@ -1751,6 +1781,16 @@ async function getNaverBookingBusiness(placeId, companyOrdinal = null) {
     }
     if (business === null) throw createCrawlFailure("COLLECTION_FAILED");
     if (!Object.prototype.hasOwnProperty.call(business, "naverBooking")) {
+      if (NAVER_BOOKING_DETAIL_RECOVERY_PROBE) {
+        return {
+          bookingBusinessId: "",
+          bookingUrl: "",
+          providerConfirmedZero: true,
+          status: result.status,
+          blocked: false,
+          errors: null
+        };
+      }
       throw createCrawlFailure("COLLECTION_FAILED");
     }
     if (business.naverBooking === null) {
@@ -1999,7 +2039,17 @@ async function getNaverDailySchedule(
         || day.isBusinessDay === false
         || day.isSaleDay === false
       );
-    if (!terminal) throw createCrawlFailure("COLLECTION_FAILED");
+    if (!terminal) {
+      if (NAVER_BOOKING_DETAIL_RECOVERY_PROBE) {
+        return {
+          status: result.status,
+          day: null,
+          observed: false,
+          errors: null
+        };
+      }
+      throw createCrawlFailure("COLLECTION_FAILED");
+    }
   }
   const day = result.data?.data?.schedule?.bizItemSchedule?.daily?.date?.[date] || null;
   return {
@@ -4181,11 +4231,105 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
   return rows;
 }
 
+function bookingDetailProbeTarget() {
+  let target;
+  try {
+    target = JSON.parse(String(process.env.NAVER_BOOKING_DETAIL_RECOVERY_PROBE_TARGET || ""));
+  } catch {
+    throw createCrawlFailure("BOOKING_DETAIL_PROBE_TARGET_INVALID");
+  }
+  if (
+    !target
+    || typeof target !== "object"
+    || Array.isArray(target)
+    || !/^\d{1,30}$/u.test(String(target.placeId || ""))
+    || !/^\d{1,30}$/u.test(String(target.historicalBookingBusinessId || ""))
+    || !String(target.sourceRunId || "")
+    || !Number.isFinite(Date.parse(String(target.verifiedAt || "")))
+    || target.knownBookingItems !== true
+    || target.knownDailySchedule !== true
+  ) {
+    throw createCrawlFailure("BOOKING_DETAIL_PROBE_TARGET_INVALID");
+  }
+  return Object.freeze({
+    placeId: String(target.placeId),
+    historicalBookingBusinessId: String(target.historicalBookingBusinessId),
+    sourceRunId: String(target.sourceRunId),
+    verifiedAt: String(target.verifiedAt),
+    knownBookingItems: true,
+    knownDailySchedule: true
+  });
+}
+
+function emitBookingDetailProbeResult(result = {}) {
+  const payload = {
+    schemaVersion: "booking-detail-recovery-probe-result.v1",
+    status: String(result.status || "target_stale"),
+    providerSubtype: result.status === "ready" ? "booking_detail_success" : null,
+    businessValidated: result.businessValidated === true,
+    overnightItemValidated: result.overnightItemValidated === true,
+    scheduleStatus: ["ready", "zero"].includes(String(result.scheduleStatus || ""))
+      ? String(result.scheduleStatus)
+      : null
+  };
+  console.log(`BOOKING_DETAIL_RECOVERY_PROBE_RESULT=${JSON.stringify(payload)}`);
+}
+
+async function runBookingDetailRecoveryProbe() {
+  const target = bookingDetailProbeTarget();
+  const business = await getNaverBookingBusiness(target.placeId, 1);
+  if (!business?.bookingBusinessId || String(business.bookingBusinessId) !== target.historicalBookingBusinessId) {
+    emitBookingDetailProbeResult({ status: "target_stale" });
+    return;
+  }
+  const itemResult = await getNaverBookingItems(target.historicalBookingBusinessId, 1);
+  const overnightItem = (itemResult.items || []).find((item) => (
+    item?.isImp !== false
+    && item?.isClosedBooking !== true
+    && item?.isClosedBookingUser !== true
+    && String(item?.bizItemSubType || "").toUpperCase() === "ACCOMMODATION_NIGHT"
+    && /^\d{1,30}$/u.test(String(item?.bizItemId || item?.id || ""))
+  ));
+  if (!overnightItem) {
+    emitBookingDetailProbeResult({ status: "target_stale", businessValidated: true });
+    return;
+  }
+  const schedule = await getNaverDailySchedule(
+    target.historicalBookingBusinessId,
+    String(overnightItem.bizItemId || overnightItem.id),
+    CHECK_IN,
+    1,
+    1
+  );
+  const day = schedule?.day;
+  if (!day || typeof day !== "object" || Array.isArray(day)) {
+    emitBookingDetailProbeResult({
+      status: "target_stale",
+      businessValidated: true,
+      overnightItemValidated: true
+    });
+    return;
+  }
+  const stock = Number(day.stock);
+  const scheduleStatus = Number.isFinite(stock) && stock > 0 ? "ready" : "zero";
+  emitBookingDetailProbeResult({
+    status: "ready",
+    businessValidated: true,
+    overnightItemValidated: true,
+    scheduleStatus
+  });
+}
+
 async function main() {
   const collectionStartedAt = new Date().toISOString();
   assertNaverLegacyLimitedActivationContract();
   if (!NAVER_LEGACY_LIMITED_ACTIVATION) {
     await fs.mkdir(OUTPUT_DIR, { recursive: true });
+  }
+
+  if (NAVER_BOOKING_DETAIL_RECOVERY_PROBE) {
+    await runBookingDetailRecoveryProbe();
+    return;
   }
 
   console.log("Collecting Naver main...");

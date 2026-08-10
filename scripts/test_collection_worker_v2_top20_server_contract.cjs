@@ -176,7 +176,9 @@ assert.match(
 );
 assert.match(serverSource, /naverProviderHealthStore\.releaseAttempt/u);
 assert.match(serverSource, /collection-worker-v2-top20-cancel\.v1/u);
-assert.match(serverSource, /String\(payload\?\.body\?\.jobId \|\| ""\)\.startsWith\("job-top20-"\)/u);
+assert.match(serverSource, /function isV2Top20WorkerJobId\(jobId\)/u);
+assert.match(serverSource, /value\.startsWith\("job-top20-"\) \|\| value\.startsWith\("job-booking-detail-probe-"\)/u);
+assert.match(serverSource, /const orchestrator = isV2Top20WorkerJobId\(payload\?\.body\?\.jobId\)/u);
 assert.match(serverSource, /useTop20Worker \? 202 : 200/u);
 assert.match(serverSource, /const adminPayload = trustedPreviewAdminCrawlPayload\(/u);
 assert.match(serverSource, /&& isV2Top20WorkerEligible\(adminPayload\)/u);

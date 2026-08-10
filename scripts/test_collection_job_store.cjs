@@ -41,6 +41,25 @@ async function main() {
       { code: "COLLECTION_JOB_STORE_INPUT_INVALID", statusCode: 400 },
       "the durable queue must reject more than one provider call"
     );
+    const top20Job = await store.createOrReuseJob(jobInput({
+      jobId: "job-top20-budget-0002",
+      idempotencyKey: "d".repeat(64),
+      backendId: "naver_place_top20_inventory",
+      workerPoolId: "top20-runtime-worker",
+      maxProviderCalls: 3
+    }));
+    assert.equal(top20Job.maxProviderCalls, 3, "only the approved Top20 worker may reserve its bounded multi-call plan");
+    await assert.rejects(
+      () => store.createOrReuseJob(jobInput({
+        jobId: "job-top20-budget-0003",
+        idempotencyKey: "e".repeat(64),
+        backendId: "naver_place_top20_inventory",
+        workerPoolId: "top20-runtime-worker",
+        maxProviderCalls: 562
+      })),
+      { code: "COLLECTION_JOB_STORE_INPUT_INVALID", statusCode: 400 },
+      "the Top20 worker must not reserve calls beyond the released provider budget"
+    );
     const created = await store.createOrReuseJob(jobInput());
     assert.equal(created.state, "queued");
     assert.equal(created.attemptNo, 0);
@@ -50,7 +69,7 @@ async function main() {
 
     const reused = await store.createOrReuseJob(jobInput({ jobId: "job-different-0002" }));
     assert.equal(reused.jobId, created.jobId, "same idempotency key must reuse the original job");
-    assert.equal((await store.readSnapshot()).jobs.length, 1);
+    assert.equal((await store.readSnapshot()).jobs.length, 2);
 
     await assert.rejects(
       () => store.createOrReuseJob(jobInput({ contractHash: HASH_A })),
@@ -111,7 +130,7 @@ async function main() {
     );
 
     const restarted = createCollectionJobStore({ runtimeRoot: tempRoot, defaultLeaseMs: 1000 });
-    const reloaded = (await restarted.readSnapshot()).jobs[0];
+    const reloaded = (await restarted.readSnapshot()).jobs.find((job) => job.jobId === claimed.jobId);
     assert.equal(reloaded.state, "collecting", "restart must reload the durable lease");
     assert.equal(reloaded.providerWorkflowRevision, 2, "restart must reload the provider lease revision");
     const expired = await restarted.expireWorkerLeases({ now: "2026-08-06T01:01:03.000Z" });

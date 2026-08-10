@@ -199,6 +199,152 @@ function buildV2Top20MainPlaceProbeEnvironment(input = {}) {
   });
 }
 
+function normalizeBookingDetailRecoveryProbeTarget(value = {}) {
+  const target = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const expected = [
+    "placeId", "historicalBookingBusinessId", "sourceRunId", "verifiedAt",
+    "knownBookingItems", "knownDailySchedule", "targetIdentityHash"
+  ].sort();
+  const actual = target ? Object.keys(target).sort() : [];
+  if (
+    actual.length !== expected.length
+    || !actual.every((key, index) => key === expected[index])
+    || !/^\d{1,30}$/u.test(String(target?.placeId || ""))
+    || !/^\d{1,30}$/u.test(String(target?.historicalBookingBusinessId || ""))
+    || !String(target?.sourceRunId || "")
+    || !Number.isFinite(Date.parse(String(target?.verifiedAt || "")))
+    || target?.knownBookingItems !== true
+    || target?.knownDailySchedule !== true
+    || !/^[a-f0-9]{64}$/u.test(String(target?.targetIdentityHash || ""))
+  ) {
+    throw collectorError("BOOKING_DETAIL_PROBE_TARGET_INVALID", "booking-detail recovery probe target is invalid", 409);
+  }
+  return Object.freeze({
+    placeId: String(target.placeId),
+    historicalBookingBusinessId: String(target.historicalBookingBusinessId),
+    sourceRunId: String(target.sourceRunId),
+    verifiedAt: String(target.verifiedAt),
+    knownBookingItems: true,
+    knownDailySchedule: true,
+    targetIdentityHash: String(target.targetIdentityHash)
+  });
+}
+
+function buildV2Top20BookingDetailProbeEnvironment(input = {}) {
+  const contract = normalizeV2Top20PrepareContract(input.contract || {});
+  const target = normalizeBookingDetailRecoveryProbeTarget(input.target);
+  return Object.freeze({
+    ...buildV2Top20CollectorEnvironment({
+      ...input,
+      contract: input.contract,
+      outputRoot: path.resolve(String(input.outputRoot || path.join(os.tmpdir(), "v2-top20-booking-probe-unused"))),
+      runStamp: input.runStamp || "20260823_000000_deadbeef",
+      detailLiveCallsAllowed: true
+    }),
+    NAVER_COLLECTOR_SCOPE: "booking_detail_recovery",
+    NAVER_LIMITED_ACTIVATION_PROFILE: "booking_detail_recovery_probe.v1",
+    V2_TOP20_WORKER_ACTIVATION: "0",
+    NAVER_MAIN_PLACE_RECOVERY_PROBE: "0",
+    NAVER_BOOKING_DETAIL_RECOVERY_PROBE: "1",
+    NAVER_PROVIDER_CALL_BUDGET: "0",
+    NAVER_INVENTORY_CALL_BUDGET: "3",
+    NAVER_TOTAL_CALL_BUDGET: "3",
+    NAVER_INVENTORY_PLACE_LIMIT: "1",
+    NAVER_INVENTORY_ITEM_LIMIT: "1",
+    NAVER_BOOKING_STOCK_LIMIT: "1",
+    NAVER_BOOKING_ID_FALLBACK: "0",
+    NAVER_COUPON_PAGE_FALLBACK: "0",
+    NAVER_DETAIL_LIVE_CALLS_ALLOWED: "1",
+    NAVER_HISTORICAL_BOOKING_HINTS: "[]",
+    NAVER_BOOKING_DETAIL_RECOVERY_PROBE_TARGET: JSON.stringify({
+      placeId: target.placeId,
+      historicalBookingBusinessId: target.historicalBookingBusinessId,
+      sourceRunId: target.sourceRunId,
+      verifiedAt: target.verifiedAt,
+      knownBookingItems: true,
+      knownDailySchedule: true
+    })
+  });
+}
+
+function assertV2Top20BookingDetailProbeEnvironment(environment = {}) {
+  const expected = {
+    NAVER_LEGACY_LIMITED_ACTIVATION: "1",
+    NAVER_COLLECTOR_STRATEGY: NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY,
+    NAVER_COLLECTOR_SCOPE: "booking_detail_recovery",
+    NAVER_LIMITED_ACTIVATION_PROFILE: "booking_detail_recovery_probe.v1",
+    NAVER_MAIN_PLACE_RECOVERY_PROBE: "0",
+    NAVER_BOOKING_DETAIL_RECOVERY_PROBE: "1",
+    NAVER_PROVIDER_CALL_BUDGET: "0",
+    NAVER_INVENTORY_CALL_BUDGET: "3",
+    NAVER_TOTAL_CALL_BUDGET: "3",
+    NAVER_INVENTORY_PLACE_LIMIT: "1",
+    NAVER_INVENTORY_ITEM_LIMIT: "1",
+    NAVER_BOOKING_STOCK_LIMIT: "1",
+    NAVER_BOOKING_DETAIL_CONCURRENCY: "1",
+    NAVER_SCHEDULE_CONCURRENCY: "1",
+    NAVER_BOOKING_ID_FALLBACK: "0",
+    NAVER_COUPON_PAGE_FALLBACK: "0",
+    NAVER_DETAIL_LIVE_CALLS_ALLOWED: "1",
+    NAVER_AUTOMATIC_RETRY: "0",
+    NAVER_AUTOMATIC_FALLBACK: "0",
+    SOURCE_ROLE: "admin",
+    COLLECTION_SOURCE: "admin_search"
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (environment[key] !== value) {
+      throw collectorError("BOOKING_DETAIL_PROBE_CONTRACT_INVALID", "booking-detail recovery probe environment is invalid", 409);
+    }
+  }
+  try {
+    const target = JSON.parse(String(environment.NAVER_BOOKING_DETAIL_RECOVERY_PROBE_TARGET || ""));
+    normalizeBookingDetailRecoveryProbeTarget({
+      ...target,
+      targetIdentityHash: crypto.createHash("sha256").update(JSON.stringify({
+        historicalBookingBusinessId: String(target?.historicalBookingBusinessId || ""),
+        knownDailySchedule: true,
+        knownBookingItems: true,
+        placeId: String(target?.placeId || ""),
+        sourceRunId: String(target?.sourceRunId || ""),
+        verifiedAt: String(target?.verifiedAt || "")
+      })).digest("hex")
+    });
+  } catch {
+    throw collectorError("BOOKING_DETAIL_PROBE_TARGET_INVALID", "booking-detail recovery probe target is invalid", 409);
+  }
+  return Object.freeze({ ...environment });
+}
+
+function parseBookingDetailProbeResult(stdout) {
+  const marker = "BOOKING_DETAIL_RECOVERY_PROBE_RESULT=";
+  const lines = String(stdout || "").split(/\r?\n/u).filter((line) => line.startsWith(marker));
+  if (lines.length !== 1) throw collectorError("BOOKING_DETAIL_PROBE_RESULT_INVALID", "booking-detail recovery probe result is invalid", 502);
+  let result;
+  try { result = JSON.parse(lines[0].slice(marker.length)); } catch {
+    throw collectorError("BOOKING_DETAIL_PROBE_RESULT_INVALID", "booking-detail recovery probe result is invalid", 502);
+  }
+  const expected = ["businessValidated", "overnightItemValidated", "providerSubtype", "scheduleStatus", "schemaVersion", "status"];
+  const keys = Object.keys(result || {}).sort();
+  if (
+    keys.length !== expected.length
+    || !keys.every((key, index) => key === expected[index])
+    || result.schemaVersion !== "booking-detail-recovery-probe-result.v1"
+    || !["ready", "target_stale"].includes(result.status)
+    || typeof result.businessValidated !== "boolean"
+    || typeof result.overnightItemValidated !== "boolean"
+    || ![null, "booking_detail_success"].includes(result.providerSubtype)
+    || ![null, "ready", "zero"].includes(result.scheduleStatus)
+    || (result.status === "ready" && (
+      result.businessValidated !== true
+      || result.overnightItemValidated !== true
+      || result.providerSubtype !== "booking_detail_success"
+      || !["ready", "zero"].includes(result.scheduleStatus)
+    ))
+    || (result.status === "target_stale" && result.providerSubtype !== null)
+  ) throw collectorError("BOOKING_DETAIL_PROBE_RESULT_INVALID", "booking-detail recovery probe result is invalid", 502);
+  return Object.freeze({ ...result });
+}
+
 function assertV2Top20MainPlaceProbeEnvironment(environment = {}) {
   const expected = {
     NAVER_LEGACY_LIMITED_ACTIVATION: "1",
@@ -589,6 +735,89 @@ async function executeV2Top20MainPlaceRecoveryProbe(input = {}) {
   }
 }
 
+async function executeV2Top20BookingDetailRecoveryProbe(input = {}) {
+  const contract = normalizeV2Top20PrepareContract(input.contract || {});
+  const target = normalizeBookingDetailRecoveryProbeTarget(input.target);
+  if (typeof input.heartbeat !== "function" || typeof input.onProviderCall !== "function") {
+    throw collectorError("V2_TOP20_HEARTBEAT_REQUIRED", "booking-detail recovery probe heartbeat is required", 500);
+  }
+  const tempBase = path.resolve(String(input.tempBase || os.tmpdir()));
+  if (!path.isAbsolute(tempBase)) throw collectorError("V2_TOP20_RUNTIME_PATH_INVALID", "probe temp base must be absolute", 400);
+  const tempRoot = await fs.mkdtemp(path.join(tempBase, "v2-top20-booking-detail-probe-"));
+  const probeDiagnostics = {
+    childStarted: false,
+    providerCallAuthorized: false,
+    providerCallStarted: false
+  };
+  const expectedOperations = ["booking_business_graphql", "booking_items", "daily_schedule"];
+  try {
+    const environment = buildV2Top20BookingDetailProbeEnvironment({
+      contract: input.contract,
+      target,
+      outputRoot: path.join(tempRoot, "unused-output"),
+      runStamp: `20260823_000000_${crypto.randomBytes(4).toString("hex")}`,
+      baseEnvironment: input.baseEnvironment || process.env
+    });
+    assertV2Top20BookingDetailProbeEnvironment(environment);
+    await input.heartbeat();
+    probeDiagnostics.childStarted = true;
+    const collected = await runCollectorChild({
+      spawnImpl: input.spawnImpl,
+      maxRuntimeMs: input.maxRuntimeMs,
+      signal: input.signal,
+      scriptPath: path.resolve(input.scriptPath || path.join(__dirname, "gyeongnam_glamping_crawl.cjs")),
+      cwd: path.resolve(input.cwd || path.join(__dirname, "..")),
+      keyword: contract.keyword,
+      environment,
+      maximumProviderCalls: 3,
+      authorizeProviderCall: async (metadata) => {
+        const expectedOperation = expectedOperations[Number(metadata?.requestOrdinal) - 1];
+        if (
+          metadata?.providerId !== providerIdForOperation(expectedOperation)
+          || metadata?.operation !== expectedOperation
+          || Number(metadata?.requestOrdinal) < 1
+          || Number(metadata?.requestOrdinal) > 3
+        ) throw collectorError("BOOKING_DETAIL_PROBE_SEQUENCE_INVALID", "booking-detail recovery probe call sequence is invalid", 409);
+        probeDiagnostics.providerCallAuthorized = true;
+        if (typeof input.onProviderAuthorize === "function") await input.onProviderAuthorize(metadata);
+        await input.heartbeat();
+      },
+      onProviderCall: async (metadata) => {
+        const expectedOperation = expectedOperations[Number(metadata?.requestOrdinal) - 1];
+        if (
+          metadata?.providerId !== providerIdForOperation(expectedOperation)
+          || metadata?.operation !== expectedOperation
+          || metadata?.companyOrdinal !== 1
+          || (expectedOperation === "daily_schedule" ? metadata?.productOrdinal !== 1 : metadata?.productOrdinal !== null)
+        ) throw collectorError("BOOKING_DETAIL_PROBE_SEQUENCE_INVALID", "booking-detail recovery probe call sequence is invalid", 409);
+        probeDiagnostics.providerCallStarted = true;
+        await input.onProviderCall(metadata);
+      },
+      parseResult: parseBookingDetailProbeResult
+    });
+    const trace = collected.providerCallTrace;
+    const targetStale = collected.probeResult.status === "target_stale";
+    const expectedCount = targetStale ? trace.length : 3;
+    if (
+      !Number.isInteger(expectedCount)
+      || expectedCount < 1
+      || expectedCount > 3
+      || collected.executedCallCount !== expectedCount
+      || trace.length !== expectedCount
+      || !trace.every((entry, index) => entry.operation === expectedOperations[index])
+    ) throw collectorError("BOOKING_DETAIL_PROBE_SEQUENCE_INVALID", "booking-detail recovery probe did not execute the required sequence", 409);
+    return Object.freeze({ ...collected.probeResult, providerCallCount: expectedCount });
+  } catch (error) {
+    error.probeDiagnostics = Object.freeze({
+      ...probeDiagnostics,
+      childFailureCode: typeof error?.code === "string" ? error.code : null
+    });
+    throw error;
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function findSingleFinalOutput(outputRoot) {
   const entries = await fs.readdir(outputRoot, { withFileTypes: true });
   const directories = entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith("config"));
@@ -774,12 +1003,17 @@ module.exports = {
   V2_TOP20_COLLECTOR_SCHEMA_VERSION,
   buildV2Top20CollectorEnvironment,
   buildV2Top20MainPlaceProbeEnvironment,
+  buildV2Top20BookingDetailProbeEnvironment,
   assertV2Top20MainPlaceProbeEnvironment,
+  assertV2Top20BookingDetailProbeEnvironment,
   executeV2Top20MainPlaceRecoveryProbe,
+  executeV2Top20BookingDetailRecoveryProbe,
   executeV2Top20Collector,
   findSingleFinalOutput,
   normalizeProviderCallMessage,
   runCollectorChild,
   parseMainPlaceProbeResult,
+  parseBookingDetailProbeResult,
+  normalizeBookingDetailRecoveryProbeTarget,
   selectV2Top20ChildBaseEnvironment
 };

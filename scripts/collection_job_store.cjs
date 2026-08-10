@@ -14,6 +14,10 @@ const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{2,127}$/u;
 const FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/u;
 const COLLECTION_STATUS_VALUES = new Set(["complete", "partial", "rank_only"]);
+const COLLECTION_WORKER_V2_TOP20_BACKEND_ID = "naver_place_top20_inventory";
+// The signed Top20 contract may include the three-day resilient detail envelope.
+// Per-call execution limits remain enforced by the worker's signed payload.
+const COLLECTION_WORKER_V2_TOP20_MAX_PROVIDER_CALLS = 561;
 const PROVIDER_OPERATIONS = new Set([
   "main_place",
   "booking_business",
@@ -85,12 +89,18 @@ function nonNegativeInteger(value, label) {
   return number;
 }
 
-function boundedProviderCalls(value) {
+function boundedProviderCalls(value, backendId = "") {
   const number = nonNegativeInteger(value, "maxProviderCalls");
-  if (![0, 1].includes(number)) {
+  const isTop20Worker = String(backendId || "") === COLLECTION_WORKER_V2_TOP20_BACKEND_ID;
+  const allowed = isTop20Worker
+    ? number >= 0 && number <= COLLECTION_WORKER_V2_TOP20_MAX_PROVIDER_CALLS
+    : [0, 1].includes(number);
+  if (!allowed) {
     throw storeError(
       "COLLECTION_JOB_STORE_INPUT_INVALID",
-      "maxProviderCalls must be zero for disabled work or one for an approved one-shot job",
+      isTop20Worker
+        ? `maxProviderCalls must be between zero and ${COLLECTION_WORKER_V2_TOP20_MAX_PROVIDER_CALLS} for the approved Top20 worker`
+        : "maxProviderCalls must be zero for disabled work or one for an approved one-shot job",
       400
     );
   }
@@ -115,7 +125,11 @@ function validateStoredJob(job) {
   if (!Object.prototype.hasOwnProperty.call(TRANSITIONS, String(job.state || ""))) return false;
   if (!Number.isInteger(job.workflowRevision) || job.workflowRevision < 1) return false;
   if (!Number.isInteger(job.attemptNo) || job.attemptNo < 0 || job.attemptNo > 1) return false;
-  if (!Number.isInteger(job.maxProviderCalls) || ![0, 1].includes(job.maxProviderCalls)) return false;
+  if (!Number.isInteger(job.maxProviderCalls) || !(
+    job.backendId === COLLECTION_WORKER_V2_TOP20_BACKEND_ID
+      ? job.maxProviderCalls >= 0 && job.maxProviderCalls <= COLLECTION_WORKER_V2_TOP20_MAX_PROVIDER_CALLS
+      : [0, 1].includes(job.maxProviderCalls)
+  )) return false;
   if (
     job.providerWorkflowRevision !== undefined
     && (!Number.isInteger(job.providerWorkflowRevision) || job.providerWorkflowRevision < 0)
@@ -147,7 +161,7 @@ function validateStoredJob(job) {
   if (
     job.executedCallCount !== undefined
     && job.executedCallCount !== null
-    && (!Number.isInteger(job.executedCallCount) || job.executedCallCount < 0 || job.executedCallCount > 241)
+    && (!Number.isInteger(job.executedCallCount) || job.executedCallCount < 0 || job.executedCallCount > job.maxProviderCalls)
   ) return false;
   return true;
 }
@@ -207,7 +221,7 @@ function createCollectionJobStore(options = {}) {
         input.providerWorkflowRevision ?? 0,
         "providerWorkflowRevision"
       ),
-      maxProviderCalls: boundedProviderCalls(input.maxProviderCalls)
+      maxProviderCalls: boundedProviderCalls(input.maxProviderCalls, input.backendId)
     };
     let selected = null;
     await secureStore.updateJsonFile(filePath, (store) => {
@@ -330,7 +344,7 @@ function createCollectionJobStore(options = {}) {
           job.executedCallCount = null;
         } else {
           const executedCallCount = nonNegativeInteger(input.executedCallCount, "executedCallCount");
-          if (executedCallCount > 241) {
+          if (executedCallCount > job.maxProviderCalls) {
             throw storeError("COLLECTION_JOB_STORE_INPUT_INVALID", "executedCallCount is invalid", 400);
           }
           job.executedCallCount = executedCallCount;

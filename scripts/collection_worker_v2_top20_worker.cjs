@@ -22,7 +22,8 @@ const {
 } = require("./collection_worker_runtime.cjs");
 const {
   executeV2Top20Collector,
-  executeV2Top20MainPlaceRecoveryProbe
+  executeV2Top20MainPlaceRecoveryProbe,
+  executeV2Top20BookingDetailRecoveryProbe
 } = require("./collection_worker_v2_top20_collector.cjs");
 const {
   auditV2Top20ArtifactFiles,
@@ -40,6 +41,8 @@ const {
 const {
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_DIAGNOSTIC_PATH,
   COLLECTION_WORKER_V2_TOP20_ARTIFACT_KEY_ID,
+  COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH,
+  COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE,
   COLLECTION_WORKER_V2_TOP20_CLAIM_PATH,
   COLLECTION_WORKER_V2_TOP20_DISPATCH_KEY_ID,
   COLLECTION_WORKER_V2_TOP20_FAILURE_PATH,
@@ -102,6 +105,7 @@ const MAIN_PLACE_PROBE_CONTRACT_FAILURE_CODES = new Set([
 ]);
 const ENV = Object.freeze({
   artifactPrivateKey: "COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64",
+  bookingDetailProbeEnabled: "COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_ENABLED",
   dispatchPublicKey: "COLLECTION_WORKER_DISPATCH_PUBLIC_KEY_B64",
   executionEnabled: "COLLECTION_WORKER_V2_TOP20_EXECUTION_ENABLED",
   externalCalls: "COLLECTOR_EXTERNAL_CALLS_ENABLED",
@@ -401,7 +405,7 @@ function verifyTop20DispatchCompatibilityBridge({ verifiedJob, normalizedRangeCo
 }
 
 function verifyTop20ExecutionPayload(value, verifiedJob) {
-  exactKeys(value, [
+  const baseKeys = [
     "schemaVersion",
     "jobId",
     "attemptId",
@@ -414,7 +418,9 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     "providerSession",
     "detailProviderSession",
     "executionProfile"
-  ], "top20 execution payload");
+  ];
+  const bookingDetailProbe = value?.executionProfile === COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE;
+  exactKeys(value, bookingDetailProbe ? [...baseKeys, "bookingDetailProbeTarget"] : baseKeys, "top20 execution payload");
   exactKeys(value.providerSession, [
     "maximumProviderCalls",
     "providerAttemptCount",
@@ -453,8 +459,13 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     throw payloadInvalid("approval_identity_mismatch");
   }
   const executionRequestHash = String(value.executionRequestHash);
-  const expectedJobId = `job-top20-${expectedTop20Hash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
-  const expectedAttemptId = `attempt:top20-${expectedTop20Hash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
+  const bookingDetailProbeTarget = bookingDetailProbe ? normalizeBookingDetailProbeTarget(value.bookingDetailProbeTarget) : null;
+  const expectedJobId = bookingDetailProbe
+    ? `job-booking-detail-probe-${bookingDetailProbeTarget.targetIdentityHash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`
+    : `job-top20-${expectedTop20Hash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
+  const expectedAttemptId = bookingDetailProbe
+    ? `attempt:booking-detail-probe-${bookingDetailProbeTarget.targetIdentityHash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`
+    : `attempt:top20-${expectedTop20Hash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
   if (
     value.jobId !== expectedJobId
     || verifiedJob.jobId !== expectedJobId
@@ -478,10 +489,13 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
   ) {
     throw payloadInvalid("top20_contract_body_mismatch");
   }
-  if (value.providerSession.maximumProviderCalls !== expectedTop20Contract.maximumProviderCalls) {
+  if (value.providerSession.maximumProviderCalls !== (bookingDetailProbe ? 3 : expectedTop20Contract.maximumProviderCalls)) {
     throw payloadInvalid("maximum_provider_calls_mismatch");
   }
-  if (verifiedJob.approvalId !== top20ApprovalId(expectedTop20Hash, value.executionRequestHash)) {
+  const expectedApprovalId = bookingDetailProbe
+    ? bookingDetailProbeApprovalId(expectedTop20Hash, value.executionRequestHash, bookingDetailProbeTarget.targetIdentityHash)
+    : top20ApprovalId(expectedTop20Hash, value.executionRequestHash);
+  if (verifiedJob.approvalId !== expectedApprovalId) {
     throw payloadInvalid("approval_identity_mismatch");
   }
   if (
@@ -489,7 +503,9 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     || value.providerSession.concurrency !== 1
     || value.providerSession.automaticRetry !== false
     || value.providerSession.automaticFallback !== false
-    || !["closed", "open"].includes(value.providerSession.circuitStateAtReservation)
+    || !(bookingDetailProbe
+      ? value.providerSession.circuitStateAtReservation === "open"
+      : ["closed", "open"].includes(value.providerSession.circuitStateAtReservation))
     || value.providerSession.serviceGlobalLockHeld !== true
   ) {
     throw payloadInvalid("provider_session_mismatch");
@@ -497,13 +513,14 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
   if (
     !["closed", "open", "probe_allowed"].includes(value.detailProviderSession.state)
     || typeof value.detailProviderSession.liveCallsAllowed !== "boolean"
-    || value.detailProviderSession.liveCallsAllowed !== (value.detailProviderSession.state === "closed")
+    || value.detailProviderSession.liveCallsAllowed !== (bookingDetailProbe || value.detailProviderSession.state === "closed")
   ) {
     throw payloadInvalid("provider_session_mismatch");
   }
   if (
-    !["top20_inventory_revenue", COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE].includes(value.executionProfile)
+    !["top20_inventory_revenue", COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE, COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE].includes(value.executionProfile)
     || (value.executionProfile === COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE && value.providerSession.circuitStateAtReservation !== "open")
+    || (value.executionProfile === COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE && value.providerSession.circuitStateAtReservation !== "open")
     || (value.executionProfile === "top20_inventory_revenue" && value.providerSession.circuitStateAtReservation !== "closed")
   ) {
     throw payloadInvalid("execution_profile_mismatch");
@@ -514,8 +531,56 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     top20ContractHash: expectedTop20Hash,
     executionRequestHash: value.executionRequestHash,
     detailProviderSession: Object.freeze({ ...value.detailProviderSession }),
-    executionProfile: value.executionProfile
+    executionProfile: value.executionProfile,
+    bookingDetailProbeTarget
   });
+}
+
+function normalizeBookingDetailProbeTarget(value = {}) {
+  const target = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const expected = [
+    "placeId", "historicalBookingBusinessId", "sourceRunId", "verifiedAt",
+    "knownBookingItems", "knownDailySchedule", "targetIdentityHash"
+  ].sort();
+  const actual = target ? Object.keys(target).sort() : [];
+  if (
+    actual.length !== expected.length
+    || !actual.every((key, index) => key === expected[index])
+    || !/^\d{1,30}$/u.test(String(target?.placeId || ""))
+    || !/^\d{1,30}$/u.test(String(target?.historicalBookingBusinessId || ""))
+    || !String(target?.sourceRunId || "")
+    || !Number.isFinite(Date.parse(String(target?.verifiedAt || "")))
+    || target?.knownBookingItems !== true
+    || target?.knownDailySchedule !== true
+  ) throw payloadInvalid("booking_detail_target_invalid");
+  const targetIdentityHash = crypto.createHash("sha256").update(stableJson({
+    placeId: String(target.placeId),
+    historicalBookingBusinessId: String(target.historicalBookingBusinessId),
+    sourceRunId: String(target.sourceRunId),
+    verifiedAt: String(target.verifiedAt),
+    knownBookingItems: true,
+    knownDailySchedule: true
+  })).digest("hex");
+  if (target.targetIdentityHash !== targetIdentityHash) throw payloadInvalid("booking_detail_target_invalid");
+  return Object.freeze({
+    placeId: String(target.placeId),
+    historicalBookingBusinessId: String(target.historicalBookingBusinessId),
+    sourceRunId: String(target.sourceRunId),
+    verifiedAt: String(target.verifiedAt),
+    knownBookingItems: true,
+    knownDailySchedule: true,
+    targetIdentityHash
+  });
+}
+
+function bookingDetailProbeApprovalId(top20ContractHash, executionRequestHash, targetIdentityHash) {
+  return crypto.createHash("sha256").update(stableJson({
+    domain: "lodging-datalab.booking-detail-recovery-probe-approval.v1",
+    top20ContractHash,
+    executionRequestHash,
+    targetIdentityHash,
+    maximumProviderCalls: 3
+  })).digest("hex");
 }
 
 async function readBoundedJsonResponse(response, expectedGeneration = null) {
@@ -1011,6 +1076,135 @@ async function runCollectionWorkerV2Top20(input = {}) {
       if (heartbeatFlight === task) heartbeatFlight = null;
     }
   };
+
+  if (execution.executionProfile === COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_PROFILE) {
+    if (String(environment[ENV.bookingDetailProbeEnabled] || "false").toLowerCase() !== "true") {
+      const error = fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_DISABLED", "booking-detail recovery probe is disabled", 503);
+      await deliverFailureReceiptOrThrow(error);
+      throw error;
+    }
+    async function finalizeBookingDetailProbe(body) {
+      return postSignedWorkerRequest({
+        baseUrl: worker.baseUrl,
+        body,
+        fetchImpl: internalFetchImpl,
+        now: clock,
+        path: COLLECTION_WORKER_V2_TOP20_BOOKING_DETAIL_PROBE_FINALIZE_PATH,
+        requestPrivateKey: worker.requestPrivateKey
+      });
+    }
+    const expectedOperations = ["booking_business_graphql", "booking_items", "daily_schedule"];
+    try {
+      const probe = await executeV2Top20BookingDetailRecoveryProbe({
+        baseEnvironment: environment,
+        contract: execution.contract,
+        target: execution.bookingDetailProbeTarget,
+        heartbeat,
+        async onProviderCall(metadata) {
+          const expectedOperation = expectedOperations[providerCallCount];
+          if (
+            metadata?.providerId !== providerIdForOperation(expectedOperation)
+            || metadata?.operation !== expectedOperation
+            || Number(metadata?.requestOrdinal) !== providerCallCount + 1
+            || metadata?.companyOrdinal !== 1
+            || (expectedOperation === "daily_schedule" ? metadata?.productOrdinal !== 1 : metadata?.productOrdinal !== null)
+          ) throw fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_SEQUENCE_INVALID", "booking-detail recovery probe call sequence is invalid", 409);
+          await heartbeat();
+          providerCallCount += 1;
+        },
+        signal,
+        tempBase: fixtureMode ? path.resolve(String(input.tempBase || os.tmpdir())) : os.tmpdir()
+      });
+      const targetStale = probe.status === "target_stale";
+      const probeCallCount = Number(probe.providerCallCount);
+      if (!targetStale && (
+        probe.providerSubtype !== "booking_detail_success"
+        || probe.businessValidated !== true
+        || probe.overnightItemValidated !== true
+        || !["ready", "zero"].includes(probe.scheduleStatus)
+      )) {
+        throw fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_RESULT_INVALID", "booking-detail recovery probe result is invalid", 502, { providerAttemptCount: 1, executedCallCount: probeCallCount });
+      }
+      const finalized = await finalizeBookingDetailProbe({
+        jobId: verifiedJob.jobId,
+        attemptId: verifiedJob.attemptId,
+        workflowRevision: jobWorkflowRevision,
+        providerWorkflowRevision,
+        providerAttemptCount: 1,
+        executedCallCount: probeCallCount,
+        businessValidated: probe.businessValidated === true,
+        overnightItemValidated: probe.overnightItemValidated === true,
+        scheduleStatus: targetStale ? null : probe.scheduleStatus,
+        providerSubtype: targetStale ? null : probe.providerSubtype,
+        diagnosticId: null,
+        failureCode: targetStale ? "BOOKING_DETAIL_PROBE_TARGET_STALE" : null,
+        outcome: targetStale ? "target_stale" : "ready"
+      });
+      if (finalized?.resultStored !== false || finalized?.writeCount !== 0 || !["validated_no_store", "indeterminate"].includes(finalized?.jobState)) {
+        throw fail("COLLECTION_WORKER_BOOKING_DETAIL_PROBE_FINALIZE_INVALID", "booking-detail recovery probe finalization is invalid", 409, { providerAttemptCount: 1, executedCallCount: probeCallCount });
+      }
+      return Object.freeze({
+        schemaVersion: COLLECTION_WORKER_V2_TOP20_WORKER_SCHEMA_VERSION,
+        status: targetStale ? "indeterminate" : "validated_no_store",
+        code: targetStale ? "BOOKING_DETAIL_PROBE_TARGET_STALE" : null,
+        targetServiceId: COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
+        targetCommit: worker.commit,
+        executionIdentityHash: verifiedJob.executionIdentityHash,
+        runtimeFingerprint,
+        providerAttemptCount: 1,
+        executedCallCount: probeCallCount,
+        automaticRetry: false,
+        automaticFallback: false,
+        jobState: finalized.jobState,
+        resultStored: false,
+        writeCount: 0
+      });
+    } catch (error) {
+      const failure = safeFailureMeta(error, providerCallCount);
+      const blocked = failure.executedCallCount >= 1 && failure.executedCallCount <= 3
+        && SAFE_SUBTYPE_PATTERN.test(String(failure.providerFailureSubtype || ""));
+      const childFailureCode = String(error?.probeDiagnostics?.childFailureCode || "");
+      const failureCode = /^BOOKING_DETAIL_PROBE_(?:CONTRACT_INVALID|TARGET_INVALID|SEQUENCE_INVALID|RESULT_INVALID)$/u.test(String(error?.code || ""))
+        || /^BOOKING_DETAIL_PROBE_(?:CONTRACT_INVALID|TARGET_INVALID|SEQUENCE_INVALID|RESULT_INVALID)$/u.test(childFailureCode)
+        ? "COLLECTION_WORKER_BOOKING_DETAIL_PROBE_CONTRACT_INVALID"
+        : null;
+      safeTop20WorkerLog("booking_detail_recovery_probe_failed", {
+        jobId: verifiedJob.jobId,
+        contractHash: verifiedJob.contractHash,
+        executionIdentityHash: verifiedJob.executionIdentityHash,
+        workerCommit: worker.commit,
+        jobState: "indeterminate",
+        failureCode: failureCode || failure.code,
+        parentErrorCode: failureCode || failure.code,
+        childFailureCode,
+        childStarted: error?.probeDiagnostics?.childStarted === true,
+        providerCallAuthorized: error?.probeDiagnostics?.providerCallAuthorized === true,
+        providerCallStarted: error?.probeDiagnostics?.providerCallStarted === true,
+        executedCallCount: failure.executedCallCount
+      });
+      await finalizeBookingDetailProbe({
+        jobId: verifiedJob.jobId,
+        attemptId: verifiedJob.attemptId,
+        workflowRevision: jobWorkflowRevision,
+        providerWorkflowRevision,
+        providerAttemptCount: failure.providerAttemptCount,
+        executedCallCount: failure.executedCallCount,
+        businessValidated: false,
+        overnightItemValidated: false,
+        scheduleStatus: null,
+        providerSubtype: blocked ? failure.providerFailureSubtype : null,
+        diagnosticId: blocked ? failure.diagnosticId : null,
+        failureCode,
+        outcome: blocked ? "blocked" : "indeterminate"
+      }).catch(() => {});
+      throw fail(
+        blocked ? "NAVER_ACCESS_BLOCKED" : (failureCode || failure.code),
+        "booking-detail recovery probe failed",
+        Number(error?.statusCode || 502),
+        failure
+      );
+    }
+  }
 
   if (execution.executionProfile === COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE) {
     async function finalizeProbe(body) {
