@@ -3060,6 +3060,16 @@ function applyTop20WorkerTransportStatus(status = null) {
   if (!ready && els.crawlStatus) {
     els.crawlStatus.textContent = "수집 서버 연결을 준비하고 있습니다.";
   }
+  const probe = state.top20WorkerTransport?.lastProbeOutcome;
+  if (ready && probe?.status === "ready" && probe?.success === true && probe?.noStore === true) {
+    if (els.mainPlaceRecoveryProbeButton) {
+      els.mainPlaceRecoveryProbeButton.textContent = "연결 확인 완료";
+      els.mainPlaceRecoveryProbeButton.setAttribute("aria-label", "네이버 메인 순위 연결 확인 완료");
+    }
+    if (els.crawlStatus) {
+      els.crawlStatus.textContent = "네이버 메인 순위 연결 확인이 완료되었습니다. 메인 검색결과 50건을 확인했고 요청은 1회이며, 이 확인은 결과를 저장하지 않습니다.";
+    }
+  }
 }
 
 async function loadTop20WorkerTransportStatus() {
@@ -3917,6 +3927,11 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
         setStatus("준비");
         if (els.crawlStatus) {
           els.crawlStatus.textContent = "상위 20곳 수집이 성공해 run을 저장했습니다. 결과를 갱신했습니다.";
+        }
+      } else if (workerOutcome.status === "ready" && workerOutcome.noStore === true && workerOutcome.operationKind === "main_place_recovery_probe") {
+        setStatus("준비");
+        if (els.crawlStatus) {
+          els.crawlStatus.textContent = "네이버 메인 순위 연결 확인이 완료되었습니다. 메인 검색결과 50건을 확인했고 요청은 1회이며, 이 확인은 결과를 저장하지 않습니다.";
         }
       } else {
         setStatus("수집 실패");

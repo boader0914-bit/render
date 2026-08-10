@@ -53,6 +53,38 @@ assert.equal(__test.isV2Top20WorkerEligible({ ...request, detailRankRanges: "1-1
 assert.equal(__test.isExplicitLegacyFrozenCrawlRequest({ collectorBackend: "legacy_frozen" }), true);
 assert.equal(__test.isExplicitLegacyFrozenCrawlRequest({}), false);
 
+const projectedProbe = __test.projectTop20TerminalOutcome({
+  jobId: "job-top20-probe",
+  state: "validated_no_store",
+  failureCode: ""
+});
+assert.deepEqual(projectedProbe, {
+  status: "ready",
+  success: true,
+  operationKind: "main_place_recovery_probe",
+  jobState: "validated_no_store",
+  noStore: true,
+  resultStored: false,
+  writeCount: 0,
+  code: null,
+  jobId: "job-top20-probe",
+  runId: null
+});
+assert.deepEqual(__test.projectTop20TerminalOutcome({ jobId: "job-top20-full", state: "committed" }, { runId: "run-1", writeCount: 3 }), {
+  status: "ready",
+  success: true,
+  operationKind: "full_collection",
+  jobState: "committed",
+  noStore: false,
+  resultStored: true,
+  writeCount: 3,
+  code: null,
+  jobId: "job-top20-full",
+  runId: "run-1"
+});
+assert.equal(__test.projectTop20TerminalOutcome({ jobId: "job-top20-blocked", state: "blocked", failureCode: "NAVER_ACCESS_BLOCKED" }).status, "blocked");
+assert.equal(__test.projectTop20TerminalOutcome({ jobId: "job-top20-failed", state: "indeterminate", failureCode: "TEST_FAILED" }).status, "failed");
+
 const root = path.resolve(__dirname, "..");
 const serverSource = fs.readFileSync(path.join(__dirname, "glamping_app_server.cjs"), "utf8");
 const appSource = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
@@ -92,4 +124,7 @@ assert.match(serverSource, /workerOutcome\.job\.cancellationRequested === true/u
 assert.match(appSource, /result\.queued && result\.worker/u);
 assert.match(appSource, /상위 20곳의 재고·가격·예상매출/u);
 assert.match(appSource, /workerOutcome\.status === "ready" && workerOutcome\.runId/u);
+assert.match(appSource, /workerOutcome\.status === "ready" && workerOutcome\.noStore === true && workerOutcome\.operationKind === "main_place_recovery_probe"/u);
+assert.match(appSource, /네이버 메인 순위 연결 확인이 완료되었습니다/u);
+assert.match(serverSource, /lastProbeOutcome/u);
 console.log("collection worker V2 top20 server/UI contract fixtures passed");

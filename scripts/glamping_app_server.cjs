@@ -15187,6 +15187,64 @@ async function restoreActiveTop20WorkerJob() {
   return activeTop20WorkerJob;
 }
 
+function projectTop20TerminalOutcome(job, options = {}) {
+  const state = String(job?.state || "");
+  const jobId = typeof job?.jobId === "string" ? job.jobId : null;
+  const code = job?.failureCode || null;
+  if (state === "committed") {
+    return Object.freeze({
+      status: "ready",
+      success: true,
+      operationKind: "full_collection",
+      jobState: state,
+      noStore: false,
+      resultStored: true,
+      writeCount: Number.isInteger(options.writeCount) ? options.writeCount : null,
+      code: null,
+      jobId,
+      runId: options.runId || null
+    });
+  }
+  if (state === "validated_no_store") {
+    return Object.freeze({
+      status: "ready",
+      success: true,
+      operationKind: "main_place_recovery_probe",
+      jobState: state,
+      noStore: true,
+      resultStored: false,
+      writeCount: 0,
+      code: null,
+      jobId,
+      runId: null
+    });
+  }
+  if (state === "blocked") {
+    return Object.freeze({ status: "blocked", success: false, jobState: state, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null });
+  }
+  if (state === "cancelled") {
+    return Object.freeze({ status: "cancelled", success: false, jobState: state, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null });
+  }
+  return Object.freeze({ status: "failed", success: false, jobState: state || null, noStore: false, resultStored: false, writeCount: 0, code, jobId, runId: null });
+}
+
+function latestMainPlaceProbeOutcome(snapshot = {}) {
+  const job = Array.isArray(snapshot.jobs)
+    ? snapshot.jobs
+      .filter((candidate) => candidate?.state === "validated_no_store")
+      .sort((left, right) => Date.parse(right.updatedAt || right.createdAt || 0) - Date.parse(left.updatedAt || left.createdAt || 0))[0] || null
+    : null;
+  if (!job) return null;
+  return Object.freeze({
+    ...projectTop20TerminalOutcome(job),
+    providerSubtype: "apollo_success",
+    organicCount: 50,
+    observedRankCount: 50,
+    providerAttemptCount: 1,
+    executedCallCount: 1
+  });
+}
+
 async function refreshTop20WorkerOutcome() {
   await restoreActiveTop20WorkerJob();
   if (!activeTop20WorkerJob) return lastTop20WorkerOutcome;
@@ -15235,18 +15293,7 @@ async function refreshTop20WorkerOutcome() {
     }
     runId = committed.runId;
   }
-  lastTop20WorkerOutcome = Object.freeze({
-    status: job.state === "committed"
-      ? "ready"
-      : job.state === "blocked"
-        ? "blocked"
-        : job.state === "cancelled"
-          ? "cancelled"
-          : "failed",
-    code: job.failureCode || null,
-    jobId: job.jobId,
-    runId
-  });
+  lastTop20WorkerOutcome = projectTop20TerminalOutcome(job, { runId });
   activeTop20WorkerJob = null;
   return lastTop20WorkerOutcome;
 }
@@ -16576,6 +16623,8 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const outcome = await refreshTop20WorkerOutcome();
       const providerStatus = await collectionWorkerV2Top20Orchestrator.providerStatus();
+      const snapshot = await collectionWorkerJobStore.readSnapshot();
+      const lastProbeOutcome = latestMainPlaceProbeOutcome(snapshot);
       return send(res, 200, {
         ...collectionWorkerV2Top20Orchestrator.status(),
         ...providerStatus,
@@ -16584,7 +16633,11 @@ async function route(req, res) {
           jobId: activeTop20WorkerJob.jobId,
           startedAt: activeTop20WorkerJob.startedAt
         } : null,
-        lastOutcome: outcome?.status === "active" ? null : outcome || null
+        // A no-store probe proves the transport without creating a run. It is a
+        // ready outcome, while lastProbeOutcome retains the probe-specific view
+        // after a later full collection replaces lastOutcome.
+        lastOutcome: outcome?.status === "active" ? null : outcome || lastProbeOutcome,
+        lastProbeOutcome
       }, "application/json; charset=utf-8", {
         "Cache-Control": "no-store"
       });
@@ -17139,6 +17192,7 @@ module.exports = {
     readCompanyMaster,
     regionInsightStoreFile: REGION_INSIGHT_STORE_FILE,
     resolveRunRegionContext: (data) => resolveRunRegionContext(data, { matcher: matchCanonicalLocationRegion }),
+    projectTop20TerminalOutcome,
     rowCollectionAddress,
     scaleCrawlStages,
     storedNaverFallbackSearchContract,
