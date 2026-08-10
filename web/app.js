@@ -35983,8 +35983,14 @@ async function submitCrawl(event) {
   event.preventDefault();
   ensureCrawlControls();
   if (state.top20WorkerTransport?.workerTransportReady !== true) {
-    applyTop20WorkerTransportStatus(state.top20WorkerTransport);
-    return;
+    // The page can load while a freshly deployed Worker is still completing
+    // its second attestation. Re-read the no-store status at the dispatch
+    // boundary instead of requiring the operator to click a second time.
+    await loadTop20WorkerTransportStatus();
+    if (state.top20WorkerTransport?.workerTransportReady !== true) {
+      applyTop20WorkerTransportStatus(state.top20WorkerTransport);
+      return;
+    }
   }
   const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
   const requestedMode = "auto";

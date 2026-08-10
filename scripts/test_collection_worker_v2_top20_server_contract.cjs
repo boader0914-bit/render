@@ -126,5 +126,6 @@ assert.match(appSource, /상위 20곳의 재고·가격·예상매출/u);
 assert.match(appSource, /workerOutcome\.status === "ready" && workerOutcome\.runId/u);
 assert.match(appSource, /workerOutcome\.status === "ready" && workerOutcome\.noStore === true && workerOutcome\.operationKind === "main_place_recovery_probe"/u);
 assert.match(appSource, /네이버 메인 순위 연결 확인이 완료되었습니다/u);
+assert.match(appSource, /await loadTop20WorkerTransportStatus\(\);/u);
 assert.match(serverSource, /lastProbeOutcome/u);
 console.log("collection worker V2 top20 server/UI contract fixtures passed");
