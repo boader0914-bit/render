@@ -911,6 +911,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
           productMode: normalized.productMode,
           checkIn: normalized.checkIn,
           checkOut: normalized.checkOut,
+          bookingRangeDays: normalized.bookingRangeDays,
           rankStart: normalized.rankStart,
           rankEnd: normalized.rankEnd,
           detailRankStart: normalized.detailRankStart,

@@ -78,6 +78,7 @@ function contract(keyword) {
     productMode: "all",
     checkIn: "2026-08-06",
     checkOut: "2026-08-06",
+    bookingRangeDays: 1,
     rankStart: 1,
     rankEnd: 50,
     detailRankStart: 1,
@@ -868,6 +869,35 @@ async function repeatExecutionScenario(root, keys) {
   assert.equal(dryRun.conflictCode, "COLLECTION_WORKER_V2_TOP20_ACTIVE_JOB");
 }
 
+async function threeDayDispatchScenario(root, keys) {
+  const system = await createSystem(root, keys);
+  const threeDayContract = {
+    ...contract("Synthetic three-day contract lodging"),
+    checkOut: "2026-08-08",
+    bookingRangeDays: 3
+  };
+  const prepared = await system.orchestrator.prepareTrustedAdmin({
+    trustedAdmin: true,
+    contract: threeDayContract,
+    executionRequestId: "three-day-request-0001",
+    provenance: { sourceRole: "admin", sourceRoute: "/api/crawl", collectorBackend: "v2_top20_worker" }
+  });
+  assert.equal(prepared.maximumProviderCalls, 561);
+  const claimBody = {
+    workerId: COLLECTION_WORKER_V2_TOP20_WORKER_ID,
+    workerPoolId: COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+    workerCommit: COMMIT
+  };
+  const claimed = await system.orchestrator.claim({
+    body: claimBody,
+    signedRequest: signedRequest(COLLECTION_WORKER_V2_TOP20_CLAIM_PATH, claimBody, keys, system.clock.now())
+  });
+  assert.equal(claimed.job.executionPayload.contract.bookingRangeDays, 3);
+  assert.equal(claimed.job.executionPayload.top20Contract.bookingRangeDays, 3);
+  assert.equal(claimed.job.executionPayload.providerSession.maximumProviderCalls, 561);
+  assert.equal(claimed.job.signedJob.contract.checkOut, "2026-08-06", "the generic single-day bridge must not replace the range-aware execution contract");
+}
+
 async function runtimeAttestationScenario(root, keys) {
   const system = await createSystem(root, keys);
   const body = {
@@ -910,6 +940,7 @@ async function main() {
     await zeroCallArtifactReconciliationScenario(path.join(root, "zero-call-reconciliation"), keys);
     await validatedRestartScenario(path.join(root, "restart-validated"), keys);
     await repeatExecutionScenario(path.join(root, "repeat-execution"), keys);
+    await threeDayDispatchScenario(path.join(root, "three-day-dispatch"), keys);
     await runtimeAttestationScenario(path.join(root, "runtime-attestation"), keys);
     assert.equal(unexpectedNetworkCalls, 0, "top20 orchestrator fixtures must not use external networking");
     console.log("collection worker V2 top20 orchestrator fixtures passed");

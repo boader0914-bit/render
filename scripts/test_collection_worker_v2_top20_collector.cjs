@@ -39,6 +39,7 @@ function contract() {
     productMode: "all",
     checkIn: "2026-08-06",
     checkOut: "2026-08-06",
+    bookingRangeDays: 1,
     rankStart: 1,
     rankEnd: 50,
     detailRankStart: 1,

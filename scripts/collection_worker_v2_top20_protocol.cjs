@@ -109,6 +109,7 @@ function normalizeV2Top20PrepareContract(input = {}) {
     "productMode",
     "checkIn",
     "checkOut",
+    "bookingRangeDays",
     "rankStart",
     "rankEnd",
     "detailRankStart",
@@ -143,6 +144,9 @@ function normalizeV2Top20PrepareContract(input = {}) {
   const bookingRangeDays = inclusiveKstDateRangeDays(checkIn, checkOut);
   if (bookingRangeDays < 1 || bookingRangeDays > maxBookingRangeDays()) {
     throw protocolError("COLLECTION_WORKER_V2_TOP20_DATE_RANGE_EXCEEDED", "collection date range exceeds the allowed limit", 422);
+  }
+  if (Number(input.bookingRangeDays) !== bookingRangeDays) {
+    throw protocolError("COLLECTION_WORKER_V2_TOP20_DATE_RANGE_INVALID", "collection date range day count is invalid", 422);
   }
   const serialized = JSON.stringify(input);
   if (/(?:https?|wss?):\/\/|"(?:url|headers?|cookies?|credentials?|secret|token|password)"\s*:/iu.test(serialized)) {
@@ -270,10 +274,11 @@ function buildV2Top20ExecutionIdempotencyKey(input = {}) {
   }));
 }
 
-// collection_worker_contract.v1 currently signs the fixed top-three compatibility
-// shape. The full top20 hash is therefore included in the signed approvalId and
-// is rechecked in the signed artifact. This bridge does not reduce the top20
-// execution plan; it only keeps the existing dispatch signature interoperable.
+// collection_worker_contract.v1 signs the fixed single-day top-three compatibility
+// shape. The full Top20 range hash is bound by the signed approvalId and is
+// rechecked by the Worker and the signed artifact. This bridge deliberately
+// projects the generic envelope to its supported one-day shape; it must never
+// alter the Top20 execution payload or its range-aware hash.
 function buildV2Top20DispatchCompatibilityContract(input = {}) {
   const normalized = normalizeV2Top20PrepareContract(input);
   return Object.freeze({
@@ -283,7 +288,7 @@ function buildV2Top20DispatchCompatibilityContract(input = {}) {
     collectionPurpose: normalized.collectionPurpose,
     productMode: normalized.productMode,
     checkIn: normalized.checkIn,
-    checkOut: normalized.checkOut,
+    checkOut: normalized.checkIn,
     rankStart: normalized.rankStart,
     rankEnd: normalized.rankEnd,
     detailRankStart: 1,
