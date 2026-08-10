@@ -147,6 +147,21 @@ assert.match(
   /\(workerRun && !await isVisibleCommittedWorkerRun\(runId\)\)\s*\) return notFound\(res\);/u,
   "Worker output downloads must retain the signed transaction and committed-job visibility boundary"
 );
+assert.match(
+  serverSource,
+  /options\.skipTraffic === true \|\| frozenCollectorRun \|\| workerRun/u,
+  "Worker Run reads must not create traffic cache files or issue traffic calls",
+);
+assert.match(
+  serverSource,
+  /allowDerivedTrafficCache: true/u,
+  "Worker Run visibility may retain compatibility only for the historical direct-root traffic cache",
+);
+assert.match(
+  serverSource,
+  /committed\.fileEntries\.some\(\(entry\) => entry\.path === workerRelativePath\)/u,
+  "Worker output downloads must expose only files covered by the signed transaction",
+);
 assert.match(serverSource, /naverProviderHealthStore\.releaseAttempt/u);
 assert.match(serverSource, /collection-worker-v2-top20-cancel\.v1/u);
 assert.match(serverSource, /String\(payload\?\.body\?\.jobId \|\| ""\)\.startsWith\("job-top20-"\)/u);

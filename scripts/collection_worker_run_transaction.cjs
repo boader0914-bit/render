@@ -1852,12 +1852,20 @@ function createCollectionWorkerRunTransactionStore(options = {}) {
     return files.sort();
   }
 
-  async function assertRunOutputTree(root, record) {
+  async function assertRunOutputTree(root, record, options = {}) {
     if (await pathKind(root) !== "directory") {
       fail("COLLECTION_RUN_OUTPUT_NOT_FOUND", "Preview run output is not available", 404);
     }
     const expectedPaths = record.fileEntries.map((entry) => entry.path).sort();
-    const actualPaths = await listOutputTreeFiles(root);
+    // `traffic_metrics.json` was historically written by the read-side regional
+    // enrichment path, not by the signed Worker artifact.  It is never part of
+    // a transaction, projection, or downloadable artifact.  Keep transaction
+    // commit/replay validation exact by default; the read-only compatibility
+    // path may ignore only this one direct-root cache file for already committed
+    // Worker runs.  Any other extra file (or any symlink) still fails closed.
+    const actualPaths = (await listOutputTreeFiles(root)).filter((relative) => (
+      options.allowDerivedTrafficCache !== true || relative !== "traffic_metrics.json"
+    ));
     if (stableSerialize(actualPaths) !== stableSerialize(expectedPaths)) {
       fail("COLLECTION_RUN_OUTPUT_HASH_MISMATCH", "Preview run output file set is invalid", 409);
     }
@@ -2237,7 +2245,9 @@ function createCollectionWorkerRunTransactionStore(options = {}) {
         return false;
       }
       if (!marker || input.runId && marker.runId !== input.runId) return false;
-      await assertRunOutputTree(finalRunOutputPath(marker.runId), marker);
+      await assertRunOutputTree(finalRunOutputPath(marker.runId), marker, {
+        allowDerivedTrafficCache: input.allowDerivedTrafficCache === true,
+      });
       return true;
     } catch {
       return false;
@@ -2329,6 +2339,7 @@ async function isCommittedRunOutputValid(input = {}) {
   return transactionStore.isCommittedRunOutputValid({
     transactionId: input.transactionId,
     runId: input.runId,
+    allowDerivedTrafficCache: input.allowDerivedTrafficCache === true,
   });
 }
 

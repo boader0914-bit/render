@@ -928,6 +928,40 @@ async function testV2RunBundleProjectionMarkerTamperFailsClosed() {
   });
 }
 
+async function testDerivedTrafficCacheCompatibilityIsReadOnlyAndNarrow() {
+  await temporaryRuntime("derived-traffic-cache", async (runtimeRoot) => {
+    const signedArtifact = makeV2RunArtifact();
+    const store = createCollectionWorkerRunTransactionStore({ runtimeRoot, now: () => fixtureNow });
+    const committed = await store.finalizeVerifiedRunBundle({ signedArtifact, verifier: verifiedV2Artifact });
+    const outputRoot = path.join(runtimeRoot, committed.finalRelativePath);
+
+    await fsp.writeFile(path.join(outputRoot, "traffic_metrics.json"), "{}", "utf8");
+    assert.equal(
+      await store.isCommittedRunOutputValid({ runId: committed.runId }),
+      false,
+      "normal transaction validation must keep the signed file set exact",
+    );
+    assert.equal(
+      await store.isCommittedRunOutputValid({
+        runId: committed.runId,
+        allowDerivedTrafficCache: true,
+      }),
+      true,
+      "the read-only compatibility path may ignore only the historical traffic cache",
+    );
+
+    await fsp.writeFile(path.join(outputRoot, "unexpected-extra.json"), "{}", "utf8");
+    assert.equal(
+      await store.isCommittedRunOutputValid({
+        runId: committed.runId,
+        allowDerivedTrafficCache: true,
+      }),
+      false,
+      "an arbitrary extra file must remain fail-closed",
+    );
+  });
+}
+
 async function main() {
   try {
     await testReadyCommitAndReplay();
@@ -943,6 +977,7 @@ async function main() {
     await testV2RunBundleRejectsConflictsAndUnsafeArtifacts();
     await testV2RunBundleTamperAfterRenameFailsClosed();
     await testV2RunBundleProjectionMarkerTamperFailsClosed();
+    await testDerivedTrafficCacheCompatibilityIsReadOnlyAndNarrow();
     assert.equal(unexpectedNetworkCalls, 0);
     process.stdout.write(`${JSON.stringify({
       ok: true,

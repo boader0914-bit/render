@@ -6454,7 +6454,8 @@ async function isVisibleCommittedWorkerRun(runId) {
     !committed
     || !await collectionWorkerRunTransactionStore.isCommittedRunOutputValid({
       transactionId: committed.transactionId,
-      runId
+      runId,
+      allowDerivedTrafficCache: true
     })
   ) return false;
   const jobSnapshot = await collectionWorkerJobStore.readSnapshot();
@@ -14526,7 +14527,11 @@ async function loadRun(runId, options = {}) {
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
   const frozenCollectorRun = manifest?.collectorStrategy === FROZEN_V2_COLLECTOR_STRATEGY;
-  const datalabTrend = options.skipTraffic === true || frozenCollectorRun
+  // Worker outputs are immutable signed artifacts.  Do not run read-side
+  // traffic enrichment for them: it would create a mutable cache in the
+  // signed output directory and could also trigger an unrelated data call
+  // while a user is merely viewing an already committed Run.
+  const datalabTrend = options.skipTraffic === true || frozenCollectorRun || workerRun
     ? null
     : await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
@@ -15323,7 +15328,8 @@ async function refreshTop20WorkerOutcome() {
     const committed = journal.committed.find((candidate) => candidate.jobId === job.jobId) || null;
     if (!committed || !await collectionWorkerRunTransactionStore.isCommittedRunOutputValid({
       transactionId: committed.transactionId,
-      runId: committed.runId
+      runId: committed.runId,
+      allowDerivedTrafficCache: true
     })) {
       lastTop20WorkerOutcome = Object.freeze({
         status: "failed",
@@ -16067,6 +16073,15 @@ async function serveOutput(reqUrl, res) {
   ) return notFound(res);
   const filePath = safeJoin(OUTPUTS_DIR, relative);
   if (!filePath || !fs.existsSync(filePath) || (await fsp.stat(filePath)).isDirectory()) return notFound(res);
+  if (workerRun) {
+    const workerRelativePath = path.relative(runDirectory, filePath).replaceAll("\\", "/");
+    const journal = await collectionWorkerRunTransactionStore.readRunOutputJournal();
+    const committed = journal.committed.find((candidate) => candidate.runId === runId) || null;
+    if (
+      !committed
+      || !committed.fileEntries.some((entry) => entry.path === workerRelativePath)
+    ) return notFound(res);
+  }
   const ext = path.extname(filePath).toLowerCase();
   send(res, 200, await fsp.readFile(filePath), MIME_TYPES[ext] || "application/octet-stream");
 }
