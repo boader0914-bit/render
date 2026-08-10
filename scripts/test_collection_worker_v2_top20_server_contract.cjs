@@ -26,13 +26,23 @@ assert.deepEqual(contract, {
   productMode: "all",
   checkIn: "2026-08-06",
   checkOut: "2026-08-06",
+  bookingRangeDays: 1,
   rankStart: 1,
   rankEnd: 50,
   detailRankStart: 1,
   detailRankEnd: 20
 });
+assert.deepEqual(__test.v2Top20WorkerContract({ ...request, checkOut: "2026-08-08" }), {
+  ...contract,
+  checkOut: "2026-08-08",
+  bookingRangeDays: 3
+});
 assert.throws(
-  () => __test.v2Top20WorkerContract({ ...request, checkOut: "2026-08-07" }),
+  () => __test.v2Top20WorkerContract({ ...request, checkOut: "2026-08-05" }),
+  (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID"
+);
+assert.throws(
+  () => __test.v2Top20WorkerContract({ ...request, checkOut: "2026-08-13" }),
   (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID"
 );
 assert.throws(
@@ -45,7 +55,9 @@ assert.throws(
 );
 assert.equal(__test.isV2Top20WorkerEligible(request), true);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, searchMode: "company" }), false);
-assert.equal(__test.isV2Top20WorkerEligible({ ...request, checkOut: "2026-08-07" }), false);
+assert.equal(__test.isV2Top20WorkerEligible({ ...request, checkOut: "2026-08-08" }), true);
+assert.equal(__test.isV2Top20WorkerEligible({ ...request, checkOut: "2026-08-05" }), false);
+assert.equal(__test.isV2Top20WorkerEligible({ ...request, checkOut: "2026-08-13" }), false);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, collectionMode: "fast" }), false);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, collectionPurpose: "basic_db" }), false);
 assert.equal(__test.isV2Top20WorkerEligible({ ...request, productMode: "lodging" }), false);
@@ -176,10 +188,18 @@ assert.equal(
   false,
   "Top20 eligibility must be evaluated before frozen wrapping"
 );
+const crawlHandlerStart = serverSource.indexOf('if (req.method === "POST" && reqUrl.pathname === "/api/crawl")');
+const crawlHandlerEnd = serverSource.indexOf('if (req.method === "POST" && reqUrl.pathname === "/api/yeogi-import")', crawlHandlerStart);
+const crawlHandlerSource = serverSource.slice(crawlHandlerStart, crawlHandlerEnd);
+assert.ok(crawlHandlerStart >= 0 && crawlHandlerEnd > crawlHandlerStart, "crawl handler must be isolated for routing-order verification");
 assert.ok(
-  serverSource.indexOf("const useTop20Worker =") < serverSource.indexOf("trustedPreviewFrozenCrawlPayload(adminPayload)"),
+  crawlHandlerSource.indexOf("const useTop20Worker =") < crawlHandlerSource.indexOf("trustedPreviewFrozenCrawlPayload(adminPayload)"),
   "Top20 Worker branch must be selected before the frozen V2 route is constructed"
 );
+assert.match(serverSource, /const estimatePayload = \(item\) => \{/u);
+assert.match(serverSource, /isV2Top20WorkerEligible\(adminPayload\)[\s\S]{0,120}\? adminPayload[\s\S]{0,120}: trustedPreviewFrozenCrawlPayload\(adminPayload\)/u);
+assert.match(serverSource, /scheduleRequestGranularity: top20Plan\.scheduleRequestGranularity/u);
+assert.match(serverSource, /maximumProviderCalls: top20Plan\.maximumProviderCalls/u);
 assert.match(serverSource, /reqUrl\.pathname === "\/api\/crawl\/cancel"/u);
 assert.match(serverSource, /collectionWorkerJobStore\.requestCancellation/u);
 assert.match(serverSource, /nextState: "cancelled"/u);

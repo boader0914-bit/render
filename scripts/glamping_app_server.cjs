@@ -116,6 +116,7 @@ const {
   normalizeV2Top20ExecutionRequestId
 } = require("./collection_worker_v2_top20_protocol.cjs");
 const {
+  V2_TOP20_RESILIENCE_MAXIMUM_BOOKING_RANGE_DAYS,
   V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS,
   v2Top20ResiliencePlan
 } = require("./collection_worker_v2_top20_resilience.cjs");
@@ -5059,18 +5060,8 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
     && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true"
     && isV2Top20WorkerEligible(payload)
   ) {
-    const checkIn = String(payload.checkIn || "");
-    const checkOut = String(payload.checkOut || checkIn);
-    const rangeStart = Date.parse(`${checkIn}T00:00:00Z`);
-    const rangeEnd = Date.parse(`${checkOut}T00:00:00Z`);
-    const requestedBookingRangeDays = Number.isFinite(rangeStart) && Number.isFinite(rangeEnd)
-      ? Math.floor((rangeEnd - rangeStart) / 86400000) + 1
-      : 1;
-    const bookingRangeDays = Number.isSafeInteger(requestedBookingRangeDays)
-      && requestedBookingRangeDays >= 1
-      && requestedBookingRangeDays <= 7
-      ? requestedBookingRangeDays
-      : 1;
+    const top20Contract = v2Top20WorkerContract(payload);
+    const bookingRangeDays = top20Contract.bookingRangeDays;
     const top20Plan = v2Top20ResiliencePlan(bookingRangeDays);
     const top20BoundedInventory = {
       profile: "preview-v2-place-top20-inventory-revenue.v1",
@@ -5093,6 +5084,13 @@ async function publicCrawlEstimateForSession(payload = {}, timingStore = null, s
       detailRankRanges: "1-20",
       bookingRangeDays,
       bookingRangePlaceLimit: 20,
+      scheduleRequestGranularity: top20Plan.scheduleRequestGranularity,
+      maximumProviderCalls: top20Plan.maximumProviderCalls,
+      plannedMainPlaceCalls: top20Plan.operationBudgets.main_place,
+      plannedBookingBusinessCalls: top20Plan.operationBudgets.booking_business_graphql,
+      plannedPlacePageCalls: top20Plan.operationBudgets.booking_business_place_page,
+      plannedBookingItemsCalls: top20Plan.operationBudgets.booking_items,
+      plannedDailyScheduleCalls: top20Plan.operationBudgets.daily_schedule,
       boundedInventory: top20BoundedInventory,
       estimateBasis: {
         ...(base.estimateBasis || {}),
@@ -15255,6 +15253,14 @@ function v2Top20WorkerContract(payload = {}) {
   const requestedCollectionPurpose = String(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail").trim();
   const requestedProductMode = String(payload.productMode || process.env.PRODUCT_MODE || "all").trim();
   const requestedDetailRankRanges = rankRangeLabel(parseRankRanges(payload.detailRankRanges || process.env.DETAIL_RANK_RANGES || "1-20", "1-20"));
+  const checkIn = String(plan.checkIn || "").trim();
+  const checkOut = String(plan.checkOut || "").trim();
+  const isIsoCalendarDate = (value) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  const bookingRangeDays = bookingDaysFromRange(checkIn, checkOut);
   if (
     requestedSearchMode !== "keyword"
     || requestedCollectionMode !== "precision"
@@ -15266,9 +15272,12 @@ function v2Top20WorkerContract(payload = {}) {
     || plan.collectionPurpose !== "revenue_detail"
     || plan.productMode !== "all"
     || plan.detailRankRanges !== "1-20"
-    || plan.checkIn !== plan.checkOut
+    || !isIsoCalendarDate(checkIn)
+    || !isIsoCalendarDate(checkOut)
+    || bookingRangeDays < 1
+    || bookingRangeDays > V2_TOP20_RESILIENCE_MAXIMUM_BOOKING_RANGE_DAYS
   ) {
-    const error = new Error("기본 Worker 수집은 체크인과 체크아웃이 같은 1일 기준으로 실행됩니다.");
+    const error = new Error(`기본 Worker 수집 기간은 유효한 날짜 기준 1~${V2_TOP20_RESILIENCE_MAXIMUM_BOOKING_RANGE_DAYS}일이어야 합니다.`);
     error.code = "COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID";
     error.statusCode = 422;
     error.retryable = false;
@@ -15280,8 +15289,9 @@ function v2Top20WorkerContract(payload = {}) {
     collectionMode: "precision",
     collectionPurpose: "revenue_detail",
     productMode: "all",
-    checkIn: plan.checkIn,
-    checkOut: plan.checkOut,
+    checkIn,
+    checkOut,
+    bookingRangeDays,
     rankStart: 1,
     rankEnd: 50,
     detailRankStart: 1,
@@ -17143,12 +17153,24 @@ async function route(req, res) {
       const payload = await parseJsonBody(req);
       const timingStore = readCrawlTimingStoreSync();
       const items = Array.isArray(payload.items) ? payload.items.slice(0, 40) : null;
+      const estimatePayload = (item) => {
+        if (normalizeUserRole(session.role) !== USER_ROLES.admin) return item;
+        const adminPayload = trustedPreviewAdminCrawlPayload(item);
+        const top20WorkerEnabled = IS_V2_PREVIEW_RUNTIME
+          && String(process.env.COLLECTION_WORKER_V2_TOP20_ENABLED || "false").toLowerCase() === "true";
+        const explicitLegacyFrozen = isExplicitLegacyFrozenCrawlRequest(item);
+        return top20WorkerEnabled
+          && !explicitLegacyFrozen
+          && isV2Top20WorkerEligible(adminPayload)
+          ? adminPayload
+          : trustedPreviewFrozenCrawlPayload(adminPayload);
+      };
       if (items) {
         return send(res, 200, {
           items: await Promise.all(items.map(async (item) => ({
             clientKey: item.clientKey || "",
             estimate: await publicCrawlEstimateForSession(
-              normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewFrozenCrawlPayload(item) : item,
+              estimatePayload(item),
               timingStore,
               session
             )
@@ -17156,7 +17178,7 @@ async function route(req, res) {
         });
       }
       return send(res, 200, await publicCrawlEstimateForSession(
-        normalizeUserRole(session.role) === USER_ROLES.admin ? trustedPreviewFrozenCrawlPayload(payload) : payload,
+        estimatePayload(payload),
         timingStore,
         session
       ));
