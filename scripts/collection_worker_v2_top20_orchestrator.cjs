@@ -129,7 +129,7 @@ const FAILURE_KEYS = Object.freeze([
 const MAIN_PLACE_PROBE_FINALIZE_KEYS = Object.freeze([
   "jobId", "attemptId", "workflowRevision", "providerWorkflowRevision",
   "providerAttemptCount", "executedCallCount", "organicCount", "observedRankCount",
-  "providerSubtype", "diagnosticId", "outcome"
+  "providerSubtype", "diagnosticId", "failureCode", "outcome"
 ]);
 const SUMMARY_KEYS = Object.freeze([
   "schemaVersion",
@@ -1779,6 +1779,7 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     const outcome = String(body.outcome || "");
     const providerSubtype = body.providerSubtype === null ? null : String(body.providerSubtype || "");
     const diagnosticId = body.diagnosticId === null ? null : String(body.diagnosticId || "");
+    const failureCode = body.failureCode === null ? null : String(body.failureCode || "");
     if (
       !["ready", "blocked", "indeterminate"].includes(outcome)
       || !Number.isInteger(Number(body.providerAttemptCount)) || ![0, 1].includes(Number(body.providerAttemptCount))
@@ -1788,6 +1789,8 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       || (outcome === "ready" && (body.executedCallCount !== 1 || body.organicCount !== 50 || body.observedRankCount !== 50 || providerSubtype !== "apollo_success"))
       || (outcome === "blocked" && (body.executedCallCount !== 1 || !SAFE_SUBTYPE_PATTERN.test(providerSubtype)))
       || (outcome === "indeterminate" && (![0, 1].includes(Number(body.executedCallCount)) || providerSubtype !== null))
+      || (outcome !== "indeterminate" && failureCode !== null)
+      || (failureCode !== null && failureCode !== "COLLECTION_WORKER_MAIN_PLACE_PROBE_CONTRACT_INVALID")
       || (diagnosticId !== null && !DIAGNOSTIC_PATTERN.test(diagnosticId))
     ) throw fail("COLLECTION_WORKER_MAIN_PLACE_PROBE_RECEIPT_INVALID", "main-place recovery probe receipt is invalid", 409);
     let job = await readJob(body.jobId);
@@ -1821,7 +1824,11 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
       expectedWorkflowRevision: job.workflowRevision,
       workerId: job.workerId,
       nextState: outcome === "ready" ? "validated_no_store" : outcome === "blocked" ? "blocked" : "indeterminate",
-      failureCode: outcome === "blocked" ? "NAVER_ACCESS_BLOCKED" : outcome === "indeterminate" ? "COLLECTION_WORKER_MAIN_PLACE_PROBE_TRANSPORT_UNAVAILABLE" : undefined,
+      failureCode: outcome === "blocked"
+        ? "NAVER_ACCESS_BLOCKED"
+        : outcome === "indeterminate"
+          ? (failureCode || "COLLECTION_WORKER_MAIN_PLACE_PROBE_TRANSPORT_UNAVAILABLE")
+          : undefined,
       failureReceiptHash: receiptHash,
       providerAttemptCount: Number(body.providerAttemptCount),
       now: now()

@@ -25,6 +25,11 @@ const {
   providerIdForOperation
 } = require("./collection_worker_v2_top20_resilience.cjs");
 const {
+  NAVER_LEGACY_LIMITED_ACTIVATION_PROFILE,
+  NAVER_LEGACY_LIMITED_ACTIVATION_SCOPE,
+  NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY
+} = require("./naver_legacy_limited_activation.cjs");
+const {
   normalizeV2Top20PrepareContract
 } = require("./collection_worker_v2_top20_protocol.cjs");
 
@@ -174,11 +179,57 @@ function buildV2Top20MainPlaceProbeEnvironment(input = {}) {
     COLLECTION_MODE: "fast",
     COLLECTION_PURPOSE: "basic_db",
     DETAIL_RANK_RANGES: "",
+    NAVER_COLLECTOR_STRATEGY: NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY,
+    NAVER_COLLECTOR_SCOPE: NAVER_LEGACY_LIMITED_ACTIVATION_SCOPE,
+    NAVER_LIMITED_ACTIVATION_PROFILE: NAVER_LEGACY_LIMITED_ACTIVATION_PROFILE,
     NAVER_LEGACY_INVENTORY_ACTIVATION: "0",
+    V2_TOP20_WORKER_ACTIVATION: "0",
     NAVER_INVENTORY_CALL_BUDGET: "0",
     NAVER_TOTAL_CALL_BUDGET: "1",
+    BOOKING_RANGE_PLACE_LIMIT: "0",
+    NAVER_INVENTORY_PLACE_LIMIT: "0",
+    NAVER_INVENTORY_ITEM_LIMIT: "0",
+    NAVER_BOOKING_STOCK_LIMIT: "0",
+    NAVER_BOOKING_ID_FALLBACK: "0",
+    NAVER_COUPON_PAGE_FALLBACK: "0",
+    NAVER_DETAIL_LIVE_CALLS_ALLOWED: "0",
     NAVER_MAIN_PLACE_RECOVERY_PROBE: "1"
   });
+}
+
+function assertV2Top20MainPlaceProbeEnvironment(environment = {}) {
+  const expected = {
+    NAVER_LEGACY_LIMITED_ACTIVATION: "1",
+    NAVER_COLLECTOR_STRATEGY: NAVER_LEGACY_LIMITED_ACTIVATION_STRATEGY,
+    NAVER_COLLECTOR_SCOPE: NAVER_LEGACY_LIMITED_ACTIVATION_SCOPE,
+    NAVER_LIMITED_ACTIVATION_PROFILE: NAVER_LEGACY_LIMITED_ACTIVATION_PROFILE,
+    COLLECTION_MODE: "fast",
+    COLLECTION_PURPOSE: "basic_db",
+    DETAIL_RANK_RANGES: "",
+    NAVER_LEGACY_INVENTORY_ACTIVATION: "0",
+    V2_TOP20_WORKER_ACTIVATION: "0",
+    NAVER_MAIN_PLACE_RECOVERY_PROBE: "1",
+    NAVER_PROVIDER_CALL_BUDGET: "1",
+    NAVER_INVENTORY_CALL_BUDGET: "0",
+    NAVER_TOTAL_CALL_BUDGET: "1",
+    BOOKING_RANGE_PLACE_LIMIT: "0",
+    NAVER_INVENTORY_PLACE_LIMIT: "0",
+    NAVER_INVENTORY_ITEM_LIMIT: "0",
+    NAVER_BOOKING_STOCK_LIMIT: "0",
+    NAVER_BOOKING_ID_FALLBACK: "0",
+    NAVER_COUPON_PAGE_FALLBACK: "0",
+    NAVER_DETAIL_LIVE_CALLS_ALLOWED: "0",
+    NAVER_AUTOMATIC_RETRY: "0",
+    NAVER_AUTOMATIC_FALLBACK: "0",
+    SOURCE_ROLE: "admin",
+    COLLECTION_SOURCE: "admin_search"
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (environment[key] !== value) {
+      throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_CONTRACT_INVALID", "main-place recovery probe environment is invalid", 409);
+    }
+  }
+  return Object.freeze({ ...environment });
 }
 
 function parseMainPlaceProbeResult(stdout) {
@@ -474,14 +525,21 @@ async function executeV2Top20MainPlaceRecoveryProbe(input = {}) {
   const tempBase = path.resolve(String(input.tempBase || os.tmpdir()));
   if (!path.isAbsolute(tempBase)) throw collectorError("V2_TOP20_RUNTIME_PATH_INVALID", "probe temp base must be absolute", 400);
   const tempRoot = await fs.mkdtemp(path.join(tempBase, "v2-top20-main-place-probe-"));
+  const probeDiagnostics = {
+    childStarted: false,
+    providerCallAuthorized: false,
+    providerCallStarted: false
+  };
   try {
     const environment = buildV2Top20MainPlaceProbeEnvironment({
-      contract,
+      contract: input.contract,
       outputRoot: path.join(tempRoot, "unused-output"),
       runStamp: `20260818_000000_${crypto.randomBytes(4).toString("hex")}`,
       baseEnvironment: input.baseEnvironment || process.env
     });
+    assertV2Top20MainPlaceProbeEnvironment(environment);
     await input.heartbeat();
+    probeDiagnostics.childStarted = true;
     const collected = await runCollectorChild({
       spawnImpl: input.spawnImpl,
       maxRuntimeMs: input.maxRuntimeMs,
@@ -494,12 +552,15 @@ async function executeV2Top20MainPlaceRecoveryProbe(input = {}) {
         if (metadata?.providerId !== providerIdForOperation("main_place") || metadata?.operation !== "main_place") {
           throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_SEQUENCE_INVALID", "probe may only authorize main place", 409);
         }
+        probeDiagnostics.providerCallAuthorized = true;
+        if (typeof input.onProviderAuthorize === "function") await input.onProviderAuthorize(metadata);
         await input.heartbeat();
       },
       onProviderCall: async (metadata) => {
         if (metadata?.providerId !== providerIdForOperation("main_place") || metadata?.operation !== "main_place" || metadata?.requestOrdinal !== 1) {
           throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_SEQUENCE_INVALID", "probe may only start one main-place call", 409);
         }
+        probeDiagnostics.providerCallStarted = true;
         await input.onProviderCall(metadata);
       },
       parseResult: parseMainPlaceProbeResult
@@ -508,6 +569,12 @@ async function executeV2Top20MainPlaceRecoveryProbe(input = {}) {
       throw collectorError("V2_TOP20_MAIN_PLACE_PROBE_SEQUENCE_INVALID", "probe did not execute exactly one main-place call", 409);
     }
     return Object.freeze({ ...collected.probeResult, providerCallCount: 1 });
+  } catch (error) {
+    error.probeDiagnostics = Object.freeze({
+      ...probeDiagnostics,
+      childFailureCode: typeof error?.code === "string" ? error.code : null
+    });
+    throw error;
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
   }
@@ -695,6 +762,7 @@ module.exports = {
   V2_TOP20_COLLECTOR_SCHEMA_VERSION,
   buildV2Top20CollectorEnvironment,
   buildV2Top20MainPlaceProbeEnvironment,
+  assertV2Top20MainPlaceProbeEnvironment,
   executeV2Top20MainPlaceRecoveryProbe,
   executeV2Top20Collector,
   findSingleFinalOutput,

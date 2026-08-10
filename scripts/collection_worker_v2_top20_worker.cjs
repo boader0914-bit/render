@@ -73,6 +73,10 @@ const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SAFE_FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/u;
 const SAFE_SUBTYPE_PATTERN = /^(?:http_403|http_429|challenge_html|unknown_access_block)$/u;
 const DIAGNOSTIC_PATTERN = /^crawl-[a-f0-9]{12}$/u;
+const MAIN_PLACE_PROBE_CONTRACT_FAILURE_CODES = new Set([
+  "NAVER_LEGACY_CANARY_CONTRACT_MISMATCH",
+  "V2_TOP20_MAIN_PLACE_PROBE_CONTRACT_INVALID"
+]);
 const ENV = Object.freeze({
   artifactPrivateKey: "COLLECTION_WORKER_ARTIFACT_PRIVATE_KEY_B64",
   dispatchPublicKey: "COLLECTION_WORKER_DISPATCH_PUBLIC_KEY_B64",
@@ -140,6 +144,12 @@ function safeTop20WorkerLog(event, fields = {}) {
     requestOrdinal: Number.isInteger(fields.requestOrdinal) ? fields.requestOrdinal : null,
     jobState: String(fields.jobState || ""),
     failureCode: String(fields.failureCode || ""),
+    parentErrorCode: String(fields.parentErrorCode || ""),
+    childFailureCode: String(fields.childFailureCode || ""),
+    childStarted: fields.childStarted === true,
+    providerCallAuthorized: fields.providerCallAuthorized === true,
+    providerCallStarted: fields.providerCallStarted === true,
+    executedCallCount: Number.isInteger(fields.executedCallCount) ? fields.executedCallCount : 0,
     pid: process.pid,
     hostname: os.hostname(),
     renderServiceId: String(process.env.RENDER_SERVICE_ID || ""),
@@ -773,6 +783,7 @@ async function runCollectionWorkerV2Top20(input = {}) {
         observedRankCount: probe.observedRankCount,
         providerSubtype: probe.providerSubtype,
         diagnosticId: null,
+        failureCode: null,
         outcome: "ready"
       });
       if (finalized?.jobState !== "validated_no_store" || finalized?.resultStored !== false || finalized?.writeCount !== 0) {
@@ -797,6 +808,25 @@ async function runCollectionWorkerV2Top20(input = {}) {
     } catch (error) {
       const failure = safeFailureMeta(error, providerCallCount);
       const blocked = failure.executedCallCount === 1 && SAFE_SUBTYPE_PATTERN.test(String(failure.providerFailureSubtype || ""));
+      const childFailureCode = String(error?.probeDiagnostics?.childFailureCode || "");
+      const failureCode = MAIN_PLACE_PROBE_CONTRACT_FAILURE_CODES.has(String(error?.code || ""))
+        || MAIN_PLACE_PROBE_CONTRACT_FAILURE_CODES.has(childFailureCode)
+        ? "COLLECTION_WORKER_MAIN_PLACE_PROBE_CONTRACT_INVALID"
+        : null;
+      safeTop20WorkerLog("main_place_recovery_probe_failed", {
+        jobId: verifiedJob.jobId,
+        contractHash: verifiedJob.contractHash,
+        executionIdentityHash: verifiedJob.executionIdentityHash,
+        workerCommit: worker.commit,
+        jobState: "indeterminate",
+        failureCode: failureCode || failure.code,
+        parentErrorCode: failureCode || failure.code,
+        childFailureCode,
+        childStarted: error?.probeDiagnostics?.childStarted === true,
+        providerCallAuthorized: error?.probeDiagnostics?.providerCallAuthorized === true,
+        providerCallStarted: error?.probeDiagnostics?.providerCallStarted === true,
+        executedCallCount: failure.executedCallCount
+      });
       await finalizeProbe({
         jobId: verifiedJob.jobId,
         attemptId: verifiedJob.attemptId,
@@ -808,10 +838,11 @@ async function runCollectionWorkerV2Top20(input = {}) {
         observedRankCount: 0,
         providerSubtype: blocked ? failure.providerFailureSubtype : null,
         diagnosticId: blocked ? failure.diagnosticId : null,
+        failureCode,
         outcome: blocked ? "blocked" : "indeterminate"
       }).catch(() => {});
       throw fail(
-        blocked ? "NAVER_ACCESS_BLOCKED" : failure.code,
+        blocked ? "NAVER_ACCESS_BLOCKED" : (failureCode || failure.code),
         "main-place recovery probe failed",
         Number(error?.statusCode || 502),
         failure

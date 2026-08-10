@@ -368,6 +368,11 @@ const V2_COLLECTOR_COMPATIBILITY_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
 const V2_TOP20_WORKER_ACTIVATION = NAVER_LEGACY_LIMITED_ACTIVATION
   && String(process.env.V2_TOP20_WORKER_ACTIVATION || "0") === "1"
   && NAVER_LIMITED_ACTIVATION_PROFILE === V2_TOP20_PROFILE;
+const NAVER_MAIN_PLACE_RECOVERY_PROBE = String(process.env.NAVER_MAIN_PLACE_RECOVERY_PROBE || "0") === "1";
+const V2_TOP20_PROVIDER_IPC_ACTIVATION = V2_TOP20_WORKER_ACTIVATION || NAVER_MAIN_PLACE_RECOVERY_PROBE;
+const V2_TOP20_PROVIDER_IPC_MAXIMUM_CALLS = NAVER_MAIN_PLACE_RECOVERY_PROBE
+  ? 1
+  : V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS;
 const ACTIVE_INVENTORY_ACTIVATION = V2_TOP20_WORKER_ACTIVATION
   ? V2_TOP20_INVENTORY_ACTIVATION
   : FIXED_INVENTORY_ACTIVATION;
@@ -439,7 +444,7 @@ function handleV2Top20ProviderCallAck(message) {
 }
 
 function closeV2Top20ProviderCallIpc() {
-  if (!V2_TOP20_WORKER_ACTIVATION) return;
+  if (!V2_TOP20_PROVIDER_IPC_ACTIVATION) return;
   process.off("message", handleV2Top20ProviderCallAck);
   for (const requestId of v2Top20ProviderCallAcks.keys()) {
     settleV2Top20ProviderCallAck(requestId, v2Top20ProviderHeartbeatError());
@@ -451,7 +456,7 @@ function closeV2Top20ProviderCallIpc() {
   }
 }
 
-if (V2_TOP20_WORKER_ACTIVATION) {
+if (V2_TOP20_PROVIDER_IPC_ACTIVATION) {
   process.on("message", handleV2Top20ProviderCallAck);
 }
 
@@ -521,11 +526,11 @@ async function sendV2Top20ProviderCallPhase({ request, requestType, ackType, exp
 }
 
 async function requestV2Top20ProviderCallHeartbeat(metadata = {}) {
-  if (!V2_TOP20_WORKER_ACTIVATION) return 0;
+  if (!V2_TOP20_PROVIDER_IPC_ACTIVATION) return 0;
   if (v2Top20AuthorizedProviderCall) throw v2Top20ProviderHeartbeatError();
   const normalized = normalizeV2Top20ProviderCallMetadata(metadata);
   const requestOrdinal = v2Top20ExecutedCallCount + 1;
-  if (requestOrdinal > V2_TOP20_RESILIENCE_MAXIMUM_PROVIDER_CALLS) {
+  if (requestOrdinal > V2_TOP20_PROVIDER_IPC_MAXIMUM_CALLS) {
     throw v2Top20ProviderHeartbeatError();
   }
   const requestId = `provider-call-${process.pid}-${requestOrdinal}-${crypto.randomBytes(4).toString("hex")}`;
@@ -545,7 +550,7 @@ async function requestV2Top20ProviderCallHeartbeat(metadata = {}) {
 }
 
 async function confirmV2Top20ProviderCallStarted(metadata = {}) {
-  if (!V2_TOP20_WORKER_ACTIVATION) return 0;
+  if (!V2_TOP20_PROVIDER_IPC_ACTIVATION) return 0;
   const normalized = normalizeV2Top20ProviderCallMetadata(metadata);
   const authorized = v2Top20AuthorizedProviderCall;
   const request = authorized && Object.freeze({
@@ -1033,10 +1038,10 @@ const NAVER_LEGACY_LIMITED_TRANSPORT = NAVER_LEGACY_LIMITED_ACTIVATION
       fetchImpl: (...args) => fetch(...args),
       providerId: "naver_place_main",
       allowTextFallback: process.env.NODE_ENV === "test",
-      beforeProviderCall: V2_TOP20_WORKER_ACTIVATION
+      beforeProviderCall: V2_TOP20_PROVIDER_IPC_ACTIVATION
         ? requestV2Top20ProviderCallHeartbeat
         : undefined,
-      onProviderCallStarted: V2_TOP20_WORKER_ACTIVATION
+      onProviderCallStarted: V2_TOP20_PROVIDER_IPC_ACTIVATION
         ? confirmV2Top20ProviderCallStarted
         : undefined
     })
