@@ -33,7 +33,10 @@ const {
   COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH,
   COLLECTION_WORKER_V2_TOP20_TARGET_SERVICE_ID,
   COLLECTION_WORKER_V2_TOP20_WORKER_ID,
-  COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID
+  COLLECTION_WORKER_V2_TOP20_WORKER_POOL_ID,
+  buildV2Top20ExecutionContract,
+  computeV2Top20ContractHash,
+  top20ApprovalId
 } = require("./collection_worker_v2_top20_protocol.cjs");
 const {
   createCollectionWorkerV2Top20Orchestrator
@@ -45,7 +48,8 @@ const {
   postReceiptWithOneInternalRecovery,
   resolveWorkerEnvironment,
   runCollectionWorkerV2Top20,
-  safeFatalResult
+  safeFatalResult,
+  verifyTop20ExecutionPayload
 } = require("./collection_worker_v2_top20_worker.cjs");
 
 const NOW = new Date("2026-08-06T12:00:00.000Z");
@@ -212,7 +216,10 @@ async function createSystem(root, keys, options = {}) {
       return { receiptId: input.receiptId, committed: true, writeCount: 1 };
     }
   });
-  await orchestrator.prepare({ operatorToken: OPERATOR_TOKEN, contract: contract(options.keyword) });
+  await orchestrator.prepare({
+    operatorToken: OPERATOR_TOKEN,
+    contract: options.contract || contract(options.keyword)
+  });
   return { callbackCount: () => callbackCount, jobStore, orchestrator, providerStore };
 }
 
@@ -236,6 +243,9 @@ function internalFetch(system, counters, behavior = {}) {
               : pathname === COLLECTION_WORKER_V2_TOP20_FAILURE_PATH
                 ? await system.orchestrator.recordFailure(payload)
                 : (() => { throw Object.assign(new Error("unknown fixture path"), { code: "NOT_FOUND", statusCode: 404 }); })();
+      const outbound = pathname === COLLECTION_WORKER_V2_TOP20_CLAIM_PATH && typeof behavior.transformClaim === "function"
+        ? behavior.transformClaim(structuredClone(result))
+        : result;
       if (
         behavior.loseFirstFinalizeResponse === true
         && pathname === COLLECTION_WORKER_V2_TOP20_FINALIZE_PATH
@@ -253,7 +263,7 @@ function internalFetch(system, counters, behavior = {}) {
       if (behavior.loseAllFailureResponses === true && pathname === COLLECTION_WORKER_V2_TOP20_FAILURE_PATH) {
         throw Object.assign(new Error("synthetic failure response loss"), { responseLost: true });
       }
-      return response(result);
+      return response(outbound);
     } catch (error) {
       if (error?.responseLost) throw error;
       return response({ code: String(error?.code || "FIXTURE_INTERNAL_ERROR") }, Number(error?.statusCode || 500));
@@ -514,6 +524,214 @@ async function artifactFailureScenario(root, keys) {
   assert.equal(indeterminateCounters[COLLECTION_WORKER_V2_TOP20_FAILURE_PATH], 2);
 }
 
+function threeDayExecutionFixture() {
+  const rangeContract = {
+    ...contract("Synthetic three-day Worker bridge lodging"),
+    checkIn: "2026-08-23",
+    checkOut: "2026-08-25",
+    bookingRangeDays: 3
+  };
+  const top20Contract = buildV2Top20ExecutionContract(rangeContract);
+  const top20ContractHash = computeV2Top20ContractHash(top20Contract);
+  const executionRequestHash = "a".repeat(64);
+  const jobId = `job-top20-${top20ContractHash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
+  const attemptId = `attempt:top20-${top20ContractHash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
+  const verifiedJob = {
+    jobId,
+    attemptId,
+    approvalId: top20ApprovalId(top20ContractHash, executionRequestHash),
+    contractHash: "b".repeat(64),
+    executionIdentityHash: "c".repeat(64),
+    contract: {
+      keywordHash: top20Contract.keywordHash,
+      checkIn: rangeContract.checkIn,
+      checkOut: rangeContract.checkIn,
+      measurementPeriod: { start: rangeContract.checkIn, end: rangeContract.checkIn },
+      rankStart: 1,
+      rankEnd: 50,
+      detailRankStart: 1,
+      detailRankEnd: 3
+    }
+  };
+  const payload = {
+    schemaVersion: "collection-worker-v2-top20-protocol.v1",
+    jobId,
+    attemptId,
+    contractHash: verifiedJob.contractHash,
+    executionIdentityHash: verifiedJob.executionIdentityHash,
+    top20ContractHash,
+    executionRequestHash,
+    contract: rangeContract,
+    top20Contract,
+    providerSession: {
+      maximumProviderCalls: 561,
+      providerAttemptCount: 1,
+      concurrency: 1,
+      automaticRetry: false,
+      automaticFallback: false,
+      circuitStateAtReservation: "closed",
+      serviceGlobalLockHeld: true
+    },
+    detailProviderSession: { state: "closed", retryAt: null, liveCallsAllowed: true },
+    executionProfile: "top20_inventory_revenue"
+  };
+  return { payload, rangeContract, verifiedJob };
+}
+
+function assertPayloadInvalid(action, reason) {
+  assert.throws(
+    action,
+    (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_PAYLOAD_INVALID" && error?.safeMeta?.reason === reason
+  );
+}
+
+function rangeBindingTamperScenario() {
+  const fixture = threeDayExecutionFixture();
+  const valid = verifyTop20ExecutionPayload(structuredClone(fixture.payload), structuredClone(fixture.verifiedJob));
+  assert.equal(valid.contract.bookingRangeDays, 3);
+  assert.equal(valid.top20Contract.maximumProviderCalls, 561);
+
+  const tamperedEndDate = structuredClone(fixture.payload);
+  tamperedEndDate.top20Contract.checkOut = tamperedEndDate.contract.checkIn;
+  assertPayloadInvalid(
+    () => verifyTop20ExecutionPayload(tamperedEndDate, structuredClone(fixture.verifiedJob)),
+    "top20_contract_body_mismatch"
+  );
+
+  const tamperedRangeDays = structuredClone(fixture.payload);
+  tamperedRangeDays.contract.bookingRangeDays = 1;
+  assertPayloadInvalid(
+    () => verifyTop20ExecutionPayload(tamperedRangeDays, structuredClone(fixture.verifiedJob)),
+    "range_day_count_mismatch"
+  );
+
+  const tamperedTop20Hash = structuredClone(fixture.payload);
+  tamperedTop20Hash.top20ContractHash = "d".repeat(64);
+  assertPayloadInvalid(
+    () => verifyTop20ExecutionPayload(tamperedTop20Hash, structuredClone(fixture.verifiedJob)),
+    "top20_contract_hash_mismatch"
+  );
+
+  const tamperedBridge = structuredClone(fixture.verifiedJob);
+  tamperedBridge.contract.checkOut = fixture.rangeContract.checkOut;
+  assertPayloadInvalid(
+    () => verifyTop20ExecutionPayload(structuredClone(fixture.payload), tamperedBridge),
+    "dispatch_bridge_end_date_mismatch"
+  );
+
+  const tamperedJobId = structuredClone(fixture.payload);
+  tamperedJobId.jobId = `job-top20-${"e".repeat(12)}-${tamperedJobId.executionRequestHash.slice(0, 12)}`;
+  assertPayloadInvalid(
+    () => verifyTop20ExecutionPayload(tamperedJobId, structuredClone(fixture.verifiedJob)),
+    "job_identity_mismatch"
+  );
+
+  const tamperedApproval = structuredClone(fixture.verifiedJob);
+  tamperedApproval.approvalId = `approval:top20:v2:${"f".repeat(64)}:${fixture.payload.executionRequestHash}`;
+  assertPayloadInvalid(
+    () => verifyTop20ExecutionPayload(structuredClone(fixture.payload), tamperedApproval),
+    "approval_identity_mismatch"
+  );
+}
+
+async function threeDayWorkerBridgeScenario(root, keys) {
+  const rangeContract = {
+    ...contract("Synthetic three-day Worker bridge runtime lodging"),
+    checkIn: "2026-08-23",
+    checkOut: "2026-08-25",
+    bookingRangeDays: 3
+  };
+  const system = await createSystem(root, keys, { contract: rangeContract });
+  const counters = { internal: 0, collector: 0, provider: 0 };
+  await assert.rejects(
+    () => runCollectionWorkerV2Top20({
+      fixtureMode: true,
+      environment: workerEnvironment(keys),
+      internalFetchImpl: internalFetch(system, counters),
+      now: NOW,
+      runtimeFingerprint: FIXED_V2_WORKER_RUNTIME_FINGERPRINT,
+      tempBase: root,
+      async collectorExecutor(input) {
+        counters.collector += 1;
+        assert.equal(input.contract.checkIn, rangeContract.checkIn);
+        assert.equal(input.contract.checkOut, rangeContract.checkOut);
+        assert.equal(input.contract.bookingRangeDays, 3);
+        return { providerCallCount: 0, files: [] };
+      },
+      async artifactFinalizer() {
+        throw Object.assign(new Error("synthetic fixture stopped before provider execution"), {
+          code: "COLLECTION_WORKER_V2_TOP20_FIXTURE_STOP_BEFORE_PROVIDER",
+          statusCode: 409
+        });
+      }
+    }),
+    (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_FIXTURE_STOP_BEFORE_PROVIDER"
+  );
+  assert.equal(counters.collector, 1, "the actual Worker must pass the signed three-day bridge before pre-provider fixture termination");
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH], 1);
+  assert.equal(counters.provider, 0);
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_FAILURE_PATH], 1);
+  assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "failed");
+  assert.equal((await system.providerStore.read()).state, "closed");
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  assert.equal(system.callbackCount(), 0);
+}
+
+async function payloadFailureTerminalScenario(root, keys) {
+  const rangeContract = {
+    ...contract("Synthetic payload terminal failure lodging"),
+    checkIn: "2026-08-23",
+    checkOut: "2026-08-25",
+    bookingRangeDays: 3
+  };
+  const system = await createSystem(root, keys, { contract: rangeContract });
+  const counters = { internal: 0, collector: 0, provider: 0 };
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => warnings.push(String(line));
+  try {
+    await assert.rejects(
+      () => runCollectionWorkerV2Top20({
+        fixtureMode: true,
+        environment: workerEnvironment(keys),
+        internalFetchImpl: internalFetch(system, counters, {
+          transformClaim(result) {
+            result.job.executionPayload.top20Contract.checkOut = rangeContract.checkIn;
+            return result;
+          }
+        }),
+        now: NOW,
+        runtimeFingerprint: FIXED_V2_WORKER_RUNTIME_FINGERPRINT,
+        tempBase: root,
+        async collectorExecutor() {
+          counters.collector += 1;
+          return { providerCallCount: 0, files: [] };
+        }
+      }),
+      (error) => error?.code === "COLLECTION_WORKER_V2_TOP20_PAYLOAD_INVALID"
+        && error?.providerAttemptCount === 0
+        && error?.executedCallCount === 0
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(counters.collector, 0);
+  assert.equal(counters.provider, 0);
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_PREFLIGHT_PATH] || 0, 0);
+  assert.equal(counters[COLLECTION_WORKER_V2_TOP20_FAILURE_PATH], 1);
+  assert.equal((await system.jobStore.readSnapshot()).jobs[0].state, "failed");
+  assert.equal((await system.providerStore.read()).state, "closed");
+  assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  assert.equal(system.callbackCount(), 0);
+  const rejection = warnings.find((line) => line.includes("top20_payload_validation_rejected"));
+  assert.ok(rejection);
+  assert.match(rejection, /"validationReason":"top20_contract_body_mismatch"/u);
+  assert.match(rejection, /"top20ContractHash":"[a-f0-9]{12}"/u);
+  assert.match(rejection, /"executionRequestHash":"[a-f0-9]{12}"/u);
+  assert.equal(rejection.includes(rangeContract.checkIn), false, "payload validation logs must not include raw date or contract values");
+  assert.equal(rejection.includes(rangeContract.checkOut), false, "payload validation logs must not include raw date or contract values");
+}
+
 async function gateScenario(keys) {
   const valid = workerEnvironment(keys);
   assert.equal(assertWorkerEnvironment(valid).commit, COMMIT);
@@ -627,6 +845,9 @@ async function main() {
     await finalizeProjectionTerminalScenario(path.join(root, "projection-terminal"), keys);
     await failureScenario(path.join(root, "failure"), keys);
     await artifactFailureScenario(path.join(root, "artifact-failure"), keys);
+    rangeBindingTamperScenario();
+    await threeDayWorkerBridgeScenario(path.join(root, "three-day-bridge"), keys);
+    await payloadFailureTerminalScenario(path.join(root, "payload-failure-terminal"), keys);
     assert.equal(unexpectedNetworkCalls, 0, "top20 Worker fixtures must not call external networking");
     console.log("collection worker V2 top20 Worker fixtures passed");
   } finally {

@@ -305,7 +305,10 @@ function top20ApprovalId(contractHash, executionRequestHash = null) {
   if (!HASH_PATTERN.test(String(executionRequestHash || ""))) {
     throw protocolError("COLLECTION_WORKER_V2_TOP20_CONTRACT_INVALID", "top20 execution request hash is invalid");
   }
-  return `approval:top20-${String(executionRequestHash).slice(0, 12)}`;
+  // Both full hashes are signed by collection_worker_contract.v1.  A prefix
+  // is still used for the durable job/attempt identifiers, but never for the
+  // approval that authorizes this precise range-aware execution.
+  return `approval:top20:v2:${hash}:${String(executionRequestHash)}`;
 }
 
 function decodeEd25519Key(value, type) {

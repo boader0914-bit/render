@@ -197,8 +197,8 @@ async function prepareClaimPreflight(system, keys, keyword) {
   assert.equal(claimed.job.executionPayload.providerSession.automaticFallback, false);
   assert.equal(
     claimed.job.signedJob.approvalId,
-    `approval:top20-${prepared.executionRequestHash.slice(0, 12)}`,
-    "the signed-job envelope must bind the execution request hash"
+    `approval:top20:v2:${prepared.top20ContractHash}:${prepared.executionRequestHash}`,
+    "the signed-job envelope must bind the full range contract and execution request hashes"
   );
 
   const runtimeId = runtimeIdForCommit(COMMIT);
@@ -788,6 +788,12 @@ async function validatedRestartScenario(root, keys) {
 async function zeroCallArtifactReconciliationScenario(root, keys) {
   const system = await createSystem(root, keys);
   const flow = await prepareClaimPreflight(system, keys, "Synthetic zero-call artifact reconciliation lodging");
+  const cancellation = await system.jobStore.requestCancellation({
+    jobId: flow.prepared.jobId,
+    expectedWorkflowRevision: flow.claimed.job.workflowRevision,
+    now: system.clock.tick()
+  });
+  assert.equal(cancellation.cancellationRequested, true);
   system.clock.tick(6 * 60 * 1000);
   const candidate = await system.orchestrator.reconciliationCandidate();
   assert.equal(candidate.jobId, flow.prepared.jobId);
@@ -802,6 +808,7 @@ async function zeroCallArtifactReconciliationScenario(root, keys) {
   assert.equal(reconciled.code, "COLLECTION_WORKER_V2_TOP20_FAILURE_RECEIPT_MISSING");
   assert.equal((await system.providerStore.read()).state, "closed");
   assert.equal(system.orchestrator.status().activePayloadCount, 0);
+  assert.equal((await system.jobStore.readSnapshot()).jobs[0].cancellationRequested, true);
   await assert.rejects(
     () => system.orchestrator.reconcileZeroCallArtifactFailure({
       jobId: candidate.jobId,

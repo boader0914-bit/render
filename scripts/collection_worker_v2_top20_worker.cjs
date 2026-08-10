@@ -171,12 +171,17 @@ function safeTop20WorkerLog(event, fields = {}) {
     event: String(event || "top20_worker_event"),
     jobId: maskJobId(fields.jobId),
     contractHash: shortSafeHash(fields.contractHash),
+    top20ContractHash: shortSafeHash(fields.top20ContractHash),
+    executionRequestHash: shortSafeHash(fields.executionRequestHash),
     executionIdentityHash: shortSafeHash(fields.executionIdentityHash),
     workerCommit: shortCommit(fields.workerCommit),
     providerOperation: String(fields.providerOperation || ""),
     requestOrdinal: Number.isInteger(fields.requestOrdinal) ? fields.requestOrdinal : null,
     jobState: String(fields.jobState || ""),
     failureCode: String(fields.failureCode || ""),
+    validationReason: /^[a-z][a-z0-9_]{2,95}$/u.test(String(fields.validationReason || ""))
+      ? String(fields.validationReason)
+      : "",
     parentErrorCode: String(fields.parentErrorCode || ""),
     childFailureCode: String(fields.childFailureCode || ""),
     childStarted: fields.childStarted === true,
@@ -348,6 +353,53 @@ function exactKeys(value, expected, label) {
   }
 }
 
+function payloadInvalid(reason, statusCode = 409) {
+  return fail(
+    "COLLECTION_WORKER_V2_TOP20_PAYLOAD_INVALID",
+    "top20 execution payload is not authorized",
+    statusCode,
+    { safeMeta: { reason } }
+  );
+}
+
+function dispatchBridgeInvalid(reason) {
+  return fail(
+    "COLLECTION_WORKER_V2_TOP20_DISPATCH_BRIDGE_INVALID",
+    "top20 dispatch compatibility bridge is invalid",
+    409,
+    { safeMeta: { reason } }
+  );
+}
+
+function verifyTop20DispatchCompatibilityBridge({ verifiedJob, normalizedRangeContract }) {
+  const bridge = verifiedJob?.contract;
+  if (!bridge || typeof bridge !== "object" || Array.isArray(bridge)) {
+    throw dispatchBridgeInvalid("dispatch_bridge_period_mismatch");
+  }
+  if (bridge.keywordHash !== normalizedRangeContract.keywordHash) {
+    throw dispatchBridgeInvalid("dispatch_bridge_keyword_mismatch");
+  }
+  if (bridge.checkIn !== normalizedRangeContract.checkIn) {
+    throw dispatchBridgeInvalid("dispatch_bridge_start_date_mismatch");
+  }
+  // collection_worker_contract.v1 intentionally carries a one-day
+  // compatibility projection.  It must bind the range *start*, not the
+  // range-aware execution end.
+  if (bridge.checkOut !== normalizedRangeContract.checkIn) {
+    throw dispatchBridgeInvalid("dispatch_bridge_end_date_mismatch");
+  }
+  if (
+    bridge.measurementPeriod?.start !== normalizedRangeContract.checkIn
+    || bridge.measurementPeriod?.end !== normalizedRangeContract.checkIn
+    || bridge.rankStart !== normalizedRangeContract.rankStart
+    || bridge.rankEnd !== normalizedRangeContract.rankEnd
+    || bridge.detailRankStart !== 1
+    || bridge.detailRankEnd !== 3
+  ) {
+    throw dispatchBridgeInvalid("dispatch_bridge_period_mismatch");
+  }
+}
+
 function verifyTop20ExecutionPayload(value, verifiedJob) {
   exactKeys(value, [
     "schemaVersion",
@@ -373,37 +425,88 @@ function verifyTop20ExecutionPayload(value, verifiedJob) {
     "serviceGlobalLockHeld"
   ], "top20 provider session");
   exactKeys(value.detailProviderSession, ["state", "retryAt", "liveCallsAllowed"], "top20 detail provider session");
-  const normalized = normalizeV2Top20PrepareContract(value.contract);
-  const expectedTop20Contract = buildV2Top20ExecutionContract(value.contract);
-  const expectedTop20Hash = computeV2Top20ContractHash(expectedTop20Contract);
+  if (!value.top20Contract || typeof value.top20Contract !== "object" || Array.isArray(value.top20Contract)) {
+    throw payloadInvalid("top20_contract_body_mismatch");
+  }
+  let normalized;
+  let expectedTop20Contract;
+  let expectedTop20Hash;
+  try {
+    normalized = normalizeV2Top20PrepareContract(value.contract);
+    expectedTop20Contract = buildV2Top20ExecutionContract(value.contract);
+    expectedTop20Hash = computeV2Top20ContractHash(expectedTop20Contract);
+  } catch (error) {
+    throw payloadInvalid("range_day_count_mismatch", Number(error?.statusCode || 409));
+  }
+  try {
+    verifyTop20DispatchCompatibilityBridge({ verifiedJob, normalizedRangeContract: normalized });
+  } catch (error) {
+    if (error?.code === "COLLECTION_WORKER_V2_TOP20_DISPATCH_BRIDGE_INVALID") {
+      throw payloadInvalid(String(error?.safeMeta?.reason || "dispatch_bridge_period_mismatch"));
+    }
+    throw error;
+  }
+  if (value.schemaVersion !== COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION) {
+    throw payloadInvalid("execution_profile_mismatch");
+  }
+  if (!/^[a-f0-9]{64}$/u.test(String(value.executionRequestHash || ""))) {
+    throw payloadInvalid("approval_identity_mismatch");
+  }
+  const executionRequestHash = String(value.executionRequestHash);
+  const expectedJobId = `job-top20-${expectedTop20Hash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
+  const expectedAttemptId = `attempt:top20-${expectedTop20Hash.slice(0, 12)}-${executionRequestHash.slice(0, 12)}`;
   if (
-    value.schemaVersion !== COLLECTION_WORKER_V2_TOP20_PROTOCOL_SCHEMA_VERSION
-    || value.jobId !== verifiedJob.jobId
-    || value.attemptId !== verifiedJob.attemptId
+    value.jobId !== expectedJobId
+    || verifiedJob.jobId !== expectedJobId
+    || value.attemptId !== expectedAttemptId
+    || verifiedJob.attemptId !== expectedAttemptId
     || value.contractHash !== verifiedJob.contractHash
     || value.executionIdentityHash !== verifiedJob.executionIdentityHash
-    || value.top20ContractHash !== expectedTop20Hash
-    || !/^[a-f0-9]{64}$/u.test(String(value.executionRequestHash || ""))
-    || stableJson(value.top20Contract) !== stableJson(expectedTop20Contract)
-    || verifiedJob.approvalId !== top20ApprovalId(expectedTop20Hash, value.executionRequestHash)
-    || verifiedJob.contract.keywordHash !== normalized.keywordHash
-    || verifiedJob.contract.checkIn !== normalized.checkIn
-    || verifiedJob.contract.checkOut !== normalized.checkOut
-    || value.providerSession.maximumProviderCalls !== expectedTop20Contract.maximumProviderCalls
-    || value.providerSession.providerAttemptCount !== 1
+  ) {
+    throw payloadInvalid("job_identity_mismatch");
+  }
+  if (value.top20ContractHash !== expectedTop20Hash) {
+    throw payloadInvalid("top20_contract_hash_mismatch");
+  }
+  if (
+    stableJson(value.top20Contract) !== stableJson(expectedTop20Contract)
+    || value.top20Contract.checkIn !== expectedTop20Contract.checkIn
+    || value.top20Contract.checkOut !== expectedTop20Contract.checkOut
+    || value.top20Contract.bookingRangeDays !== expectedTop20Contract.bookingRangeDays
+    || stableJson(value.top20Contract.measurementPeriod) !== stableJson(expectedTop20Contract.measurementPeriod)
+    || value.top20Contract.scheduleRequestGranularity !== expectedTop20Contract.scheduleRequestGranularity
+  ) {
+    throw payloadInvalid("top20_contract_body_mismatch");
+  }
+  if (value.providerSession.maximumProviderCalls !== expectedTop20Contract.maximumProviderCalls) {
+    throw payloadInvalid("maximum_provider_calls_mismatch");
+  }
+  if (verifiedJob.approvalId !== top20ApprovalId(expectedTop20Hash, value.executionRequestHash)) {
+    throw payloadInvalid("approval_identity_mismatch");
+  }
+  if (
+    value.providerSession.providerAttemptCount !== 1
     || value.providerSession.concurrency !== 1
     || value.providerSession.automaticRetry !== false
     || value.providerSession.automaticFallback !== false
     || !["closed", "open"].includes(value.providerSession.circuitStateAtReservation)
     || value.providerSession.serviceGlobalLockHeld !== true
-    || !["closed", "open", "probe_allowed"].includes(value.detailProviderSession.state)
+  ) {
+    throw payloadInvalid("provider_session_mismatch");
+  }
+  if (
+    !["closed", "open", "probe_allowed"].includes(value.detailProviderSession.state)
     || typeof value.detailProviderSession.liveCallsAllowed !== "boolean"
     || value.detailProviderSession.liveCallsAllowed !== (value.detailProviderSession.state === "closed")
-    || !["top20_inventory_revenue", COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE].includes(value.executionProfile)
+  ) {
+    throw payloadInvalid("provider_session_mismatch");
+  }
+  if (
+    !["top20_inventory_revenue", COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE].includes(value.executionProfile)
     || (value.executionProfile === COLLECTION_WORKER_V2_TOP20_MAIN_PLACE_PROBE_PROFILE && value.providerSession.circuitStateAtReservation !== "open")
     || (value.executionProfile === "top20_inventory_revenue" && value.providerSession.circuitStateAtReservation !== "closed")
   ) {
-    throw fail("COLLECTION_WORKER_V2_TOP20_PAYLOAD_INVALID", "top20 execution payload is not authorized", 409);
+    throw payloadInvalid("execution_profile_mismatch");
   }
   return Object.freeze({
     contract: Object.freeze({ ...value.contract }),
@@ -712,12 +815,12 @@ async function runCollectionWorkerV2Top20(input = {}) {
     clockSkewSeconds: 30,
     requireExecutable: true
   });
-  const execution = verifyTop20ExecutionPayload(claimed.executionPayload, verifiedJob);
   let jobWorkflowRevision = claimed.workflowRevision;
   let providerWorkflowRevision = claimed.providerWorkflowRevision;
   let providerCallCount = 0;
   let lastProviderOperation = null;
   let lastRequestOrdinal = null;
+  let execution;
 
   async function sendFailure(error) {
     const failure = safeFailureMeta(error, providerCallCount);
@@ -804,6 +907,35 @@ async function runCollectionWorkerV2Top20(input = {}) {
         { safeMeta: error?.safeMeta || null }
       );
     }
+  }
+
+  try {
+    execution = verifyTop20ExecutionPayload(claimed.executionPayload, verifiedJob);
+  } catch (error) {
+    const terminalError = fail(
+      "COLLECTION_WORKER_V2_TOP20_PAYLOAD_INVALID",
+      "top20 Worker payload validation failed",
+      Number(error?.statusCode || 409),
+      {
+        providerAttemptCount: 0,
+        executedCallCount: 0,
+        safeMeta: { reason: String(error?.safeMeta?.reason || "execution_profile_mismatch") }
+      }
+    );
+    safeTop20WorkerLog("top20_payload_validation_rejected", {
+      jobId: verifiedJob.jobId,
+      contractHash: verifiedJob.contractHash,
+      top20ContractHash: claimed.executionPayload?.top20ContractHash,
+      executionIdentityHash: verifiedJob.executionIdentityHash,
+      executionRequestHash: claimed.executionPayload?.executionRequestHash,
+      workerCommit: worker.commit,
+      jobState: "collecting",
+      failureCode: terminalError.code,
+      validationReason: terminalError.safeMeta.reason,
+      executedCallCount: 0
+    });
+    await deliverFailureReceiptOrThrow(terminalError);
+    throw terminalError;
   }
 
   try {
