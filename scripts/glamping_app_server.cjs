@@ -81,6 +81,14 @@ const {
   createCollectionWorkerRunTransactionStore
 } = require("./collection_worker_run_transaction.cjs");
 const {
+  V2_TOP20_PROFILE,
+  V2_TOP20_SCOPE,
+} = require("./collection_worker_v2_top20_contract.cjs");
+const {
+  deriveV2CollectorExecutionMetadata,
+  projectV2CollectorExecution,
+} = require("./v2_collector_execution_metadata.cjs");
+const {
   createCollectionWorkerProjectionApplicationStore,
   receiptFrom: workerProjectionApplicationReceipt
 } = require("./collection_worker_projection_application.cjs");
@@ -371,7 +379,7 @@ const regionInsightRuntime = createRegionInsightRuntime({
   matcher: matchCanonicalLocationRegion
 });
 const LEGAL_POLICY_VERSION = "2026-07-08";
-const UI_ASSET_VERSION = "v2-20260810-worker-application-date-range-v51";
+const UI_ASSET_VERSION = "v2-20260811-v2-execution-metadata-v52";
 const TERMS_VERSION = LEGAL_POLICY_VERSION;
 const PRIVACY_VERSION = LEGAL_POLICY_VERSION;
 const MARKETING_CONSENT_VERSION = LEGAL_POLICY_VERSION;
@@ -14770,6 +14778,17 @@ async function loadRun(runId, options = {}) {
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
   const frozenCollectorRun = manifest?.collectorStrategy === FROZEN_V2_COLLECTOR_STRATEGY;
+  const collectorExecutionMetadata = workerRun || Boolean(manifest?.frozenCollector)
+    ? deriveV2CollectorExecutionMetadata({
+        manifest,
+        workerRun,
+        v2Top20Profile: manifest?.collectorActivationProfile === V2_TOP20_PROFILE,
+        v2Top20Scope: manifest?.collectorScope === V2_TOP20_SCOPE,
+      })
+    : null;
+  const collectorExecution = collectorExecutionMetadata
+    ? projectV2CollectorExecution(collectorExecutionMetadata)
+    : null;
   // Worker outputs are immutable signed artifacts.  Do not run read-side
   // traffic enrichment for them: it would create a mutable cache in the
   // signed output directory and could also trigger an unrelated data call
@@ -14796,6 +14815,8 @@ async function loadRun(runId, options = {}) {
       schemaVersion: manifest?.schemaVersion || 1,
       collectorVersion: manifest?.collectorVersion || "legacy",
       collectorStrategy: manifest?.collectorStrategy || "",
+      rawCollectorStrategy: manifest?.rawCollectorStrategy || manifest?.collectorStrategy || "",
+      collectorExecution,
       frozenSourceBlob: manifest?.frozenCollector?.sourceBlob || "",
       collectionStartedAt: manifest?.collectionStartedAt || "",
       collectionCompletedAt: manifest?.collectionCompletedAt || "",
@@ -14879,9 +14900,11 @@ async function loadRun(runId, options = {}) {
     workerApplication = await workerProjectionApplicationForRun(runId);
     if (!workerApplication.committed) return null;
     const projectionRun = workerApplication.committed.projections.run || {};
+    const projectedCollectorExecution = projectionRun.collectorExecution || collectorExecution;
     result.workerProjection = workerProjectionSummary(workerApplication.committed, workerApplication.receipt);
     result.run = {
       ...result.run,
+      collectorExecution: projectedCollectorExecution,
       collectionStatus: projectionRun.collectionStatus || result.run.collectionStatus || "",
       mainPlaceStatus: projectionRun.mainPlaceStatus || "",
       detailStatus: projectionRun.detailStatus || "",
@@ -14890,6 +14913,7 @@ async function loadRun(runId, options = {}) {
       checkIn: projectionRun.measurementPeriod?.start || result.run.checkIn,
       checkOut: projectionRun.measurementPeriod?.end || result.run.checkOut
     };
+    result.collectorExecution = projectedCollectorExecution;
     // Never derive this UI list from the directory.  The journal's signed
     // entries are the only files that a committed Worker Run may expose.
     result.downloads = workerApplication.committed.fileEntries

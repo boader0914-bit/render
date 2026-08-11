@@ -30,6 +30,9 @@ const {
   v2Top20ResiliencePlan,
   validateResilientProviderTrace
 } = require("./collection_worker_v2_top20_resilience.cjs");
+const {
+  buildV2CollectorExecutionMetadata
+} = require("./v2_collector_execution_metadata.cjs");
 
 const V2_TOP20_ARTIFACT_SCHEMA_VERSION = "collection-worker-v2-top20-artifact.v1";
 const V2_TOP20_PROVIDER_CALL_TRACE_SCHEMA_VERSION = "collection-worker-v2-top20-provider-call-trace.v1";
@@ -491,6 +494,28 @@ function validateReadyManifest(manifest) {
   return { targetResults, providerCallCount, providerCallTrace, providerCallTraceHash };
 }
 
+function collectorExecutionMetadataForV2Manifest(manifest) {
+  try {
+    return buildV2CollectorExecutionMetadata({
+      collectorArchitecture: manifest?.collectorArchitecture || "v2_collector_single_source",
+      collectorBackend: manifest?.collectorBackend || "v2_collector_worker",
+      collectorEntryPoint: manifest?.collectorEntryPoint || "gyeongnam_glamping_crawl",
+      naverSearchStrategy: manifest?.naverSearchStrategy || manifest?.collectorStrategy,
+      rawCollectorStrategy: manifest?.rawCollectorStrategy || manifest?.collectorStrategy,
+      fallbackUsed: manifest?.fallbackUsed === true,
+      probeUsed: manifest?.probeUsed === true,
+      automaticRetry: manifest?.automaticRetry === true,
+      automaticFallback: manifest?.automaticFallback === true,
+      frozenAdapterExecuted: manifest?.frozenAdapterExecuted === true,
+      frozenExecutionProfile: manifest?.frozenExecutionProfile === true,
+      frozenArtifact: Boolean(manifest?.frozenCollector),
+      frozenFallbackReceipt: manifest?.frozenFallbackReceipt === true,
+    });
+  } catch {
+    throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 collector execution metadata is invalid", 409);
+  }
+}
+
 function validateResilientManifest(manifest) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 manifest is invalid");
@@ -558,7 +583,8 @@ function validateResilientManifest(manifest) {
     targets: normalizedTargets,
     detailCircuitOpen: normalizedTargets.some((target) => target.status === "blocked")
   });
-  return Object.freeze({ targetResults: normalizedTargets, providerCallCount: ledger.total, providerCallTrace: trace, providerCallTraceHash: computeV2Top20ProviderCallTraceHash(trace, { bookingRangeDays }), resilience: summary });
+  const collectorExecution = collectorExecutionMetadataForV2Manifest(manifest);
+  return Object.freeze({ targetResults: normalizedTargets, providerCallCount: ledger.total, providerCallTrace: trace, providerCallTraceHash: computeV2Top20ProviderCallTraceHash(trace, { bookingRangeDays }), resilience: summary, collectorExecution });
 }
 
 function parseArtifactFile(files, filePath) {
@@ -724,7 +750,8 @@ function buildV2Top20FinalArtifactFiles(input = {}) {
     detailReadyCompanyCount: validated.resilience.detailReadyCompanyCount,
     revenueReadyCompanyCount: validated.resilience.revenueReadyCompanyCount,
     detailCoverageRate: validated.resilience.detailCoverageRate,
-    revenueCoverageRate: validated.resilience.revenueCoverageRate
+    revenueCoverageRate: validated.resilience.revenueCoverageRate,
+    collectorExecution: validated.collectorExecution
   });
   return deepFreeze({
     summary,
@@ -785,7 +812,9 @@ async function collectV2Top20ArtifactFiles(input = {}) {
     files.push({ path: `run/${targetName}`, content: JSON.stringify(sanitizeJsonValue(parsed)) });
   }
   const sanitizedManifest = sanitizeJsonValue(manifest);
+  const collectorExecution = collectorExecutionMetadataForV2Manifest(sanitizedManifest);
   sanitizedManifest.documentType = "lodging-collection-manifest";
+  Object.assign(sanitizedManifest, collectorExecution);
   sanitizedManifest.fileRoles = normalizedRoles;
   sanitizedManifest.files = [...Object.values(normalizedRoles), ...normalizedDetails];
   sanitizedManifest.detailJsonFiles = normalizedDetails;
@@ -813,6 +842,7 @@ async function collectV2Top20ArtifactFiles(input = {}) {
     readyCount: validated.targetResults.filter((item) => item.status === "ready").length,
     zeroCount: validated.targetResults.filter((item) => item.status === "zero").length,
     targetResults: validated.targetResults,
+    collectorExecution,
     contentHashes
   };
   files.unshift({ path: SUMMARY_PATH, content: JSON.stringify(summary) });
@@ -848,7 +878,7 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
       ) {
         throw artifactError("V2_TOP20_ARTIFACT_INVALID", "top20 resilient artifact summary is invalid", 409);
       }
-      return deepFreeze({ summary, manifest, contentReceipt: receipt, targetResults: validated.targetResults, executionState: null });
+      return deepFreeze({ summary, manifest, contentReceipt: receipt, targetResults: validated.targetResults, collectorExecution: validated.collectorExecution, executionState: null });
     }
     const state = validateExecutionState(summary.executionState);
     const decision = decideV2Top20Persistence(state);
@@ -891,6 +921,7 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
       manifest,
       contentReceipt: receipt,
       targetResults: validated.targetResults,
+      collectorExecution: validated.collectorExecution,
       executionState: state
     });
   }
@@ -930,7 +961,7 @@ function verifyV2Top20ArtifactContents(verifiedArtifact, expected = {}) {
       throw artifactError("V2_TOP20_ARTIFACT_HASH_MISMATCH", "top20 content hash does not match", 409);
     }
   }
-  return deepFreeze({ summary, manifest, targetResults: validated.targetResults });
+  return deepFreeze({ summary, manifest, targetResults: validated.targetResults, collectorExecution: validated.collectorExecution });
 }
 
 module.exports = {

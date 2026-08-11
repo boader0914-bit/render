@@ -183,6 +183,10 @@
     ,"test:v2-full-pipeline-e2e-fixture": "node scripts/test_v2_full_pipeline_e2e_fixture.cjs && node scripts/test_v2_full_pipeline_actual_child_fixture.cjs && node scripts/test_v2_collector_golden_master.cjs && npm run test:collection-worker-run-transaction && npm run test:collection-worker-projection-application"
     ,"test:v2-no-probe-dependency": "node scripts/test_v2_full_pipeline_e2e_fixture.cjs"
     ,"test:v2-new-run-auto-application": "node scripts/test_v2_new_run_auto_application.cjs && npm run test:collection-worker-projection-application && npm run test:collection-worker-resilient-run-projection"
+    ,"test:v2-collector-metadata-separation": "node scripts/test_v2_collector_metadata_separation.cjs"
+    ,"test:v2-legacy-frozen-classification": "node scripts/test_v2_legacy_frozen_classification.cjs"
+    ,"test:v2-existing-run-strategy-projection": "node scripts/test_v2_existing_run_strategy_projection.cjs"
+    ,"test:v2-run-metadata-ui": "node scripts/test_v2_run_metadata_ui.cjs"
   },
   "engines": {
     "node": "26.5.0"

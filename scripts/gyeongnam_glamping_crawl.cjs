@@ -68,6 +68,9 @@ const {
   v2Top20ResiliencePlan,
   validateResilientProviderTrace
 } = require("./collection_worker_v2_top20_resilience.cjs");
+const {
+  buildV2CollectorExecutionMetadata
+} = require("./v2_collector_execution_metadata.cjs");
 const naverBookingBusinessQuery = GRAPHQL_DOCUMENTS.naver_booking_business;
 const naverSearchBizItemQuery = GRAPHQL_DOCUMENTS.naver_booking_items;
 const naverDailyScheduleQuery = GRAPHQL_DOCUMENTS.naver_booking_schedule;
@@ -5196,6 +5199,17 @@ async function main() {
     };
     providerCallCounts = naverProviderCallCounts;
   }
+  const collectorExecutionMetadata = V2_TOP20_WORKER_ACTIVATION
+    ? buildV2CollectorExecutionMetadata({
+        collectorArchitecture: "v2_collector_single_source",
+        collectorBackend: "v2_collector_worker",
+        collectorEntryPoint: "gyeongnam_glamping_crawl",
+        naverSearchStrategy: NAVER_LEGACY_STRATEGY_PLAN?.strategy || "current",
+        rawCollectorStrategy: NAVER_LEGACY_STRATEGY_PLAN?.strategy || "current",
+        automaticRetry: NAVER_AUTOMATIC_RETRY,
+        automaticFallback: NAVER_AUTOMATIC_FALLBACK,
+      })
+    : null;
   const manifest = {
     documentType: "lodging-collection-manifest",
     schemaVersion: 2,
@@ -5238,6 +5252,10 @@ async function main() {
     collectorStrategy: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
       ? V2_COLLECTOR_COMPATIBILITY_STRATEGY
       : (NAVER_LEGACY_STRATEGY_PLAN?.strategy || "current"),
+    rawCollectorStrategy: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
+      ? V2_COLLECTOR_COMPATIBILITY_STRATEGY
+      : (NAVER_LEGACY_STRATEGY_PLAN?.strategy || "current"),
+    ...(collectorExecutionMetadata || {}),
     collectorTransportStrategy: V2_COLLECTOR_COMPATIBILITY_ACTIVATION
       ? V2_COLLECTOR_TRANSPORT_STRATEGY
       : undefined,

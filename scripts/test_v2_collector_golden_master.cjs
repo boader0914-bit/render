@@ -88,6 +88,9 @@ async function executeActualChild(input) {
     assert.equal(complete.collectionStatus, "complete");
     assert.equal(complete.readyCount, 20);
     assert.equal(complete.providerCallCount, 81);
+    assert.deepEqual(artifactSummary(complete).collectorExecution.collectorArchitecture, "v2_collector_single_source");
+    assert.deepEqual(artifactSummary(complete).collectorExecution.naverSearchStrategy, "legacy_candidate");
+    assert.deepEqual(artifactSummary(complete).collectorExecution.legacyFrozenUsed, false);
     assert.equal(providerCalls[0].operation, "main_place");
     assert.equal((await fs.readFile(auditFile, "utf8")).includes("http"), false);
 
@@ -99,6 +102,9 @@ async function executeActualChild(input) {
       providerWorkflowRevision: 1
     });
     assert.equal(oneDayFinalArtifact.summary.collectionStatus, "complete");
+    assert.equal(oneDayFinalArtifact.summary.collectorExecution.collectorArchitecture, "v2_collector_single_source");
+    assert.equal(oneDayFinalArtifact.summary.collectorExecution.naverSearchStrategy, "legacy_candidate");
+    assert.equal(oneDayFinalArtifact.summary.collectorExecution.legacyFrozenUsed, false);
 
     const threeDayRoot = await fs.mkdtemp(path.join(os.tmpdir(), "v2-single-source-three-day-"));
     roots.push(threeDayRoot);

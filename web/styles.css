@@ -32741,6 +32741,58 @@ body.role-admin .admin-db-region-card-grid button.active {
   margin: 0;
 }
 
+.run-collector-execution {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--color-surface-raised) 76%, transparent);
+}
+
+.run-collector-execution-head {
+  display: grid;
+  gap: 3px;
+}
+
+.run-collector-execution-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.run-collector-execution-grid div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: var(--color-surface-base);
+}
+
+.run-collector-execution-grid dt {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.run-collector-execution-grid dd {
+  margin: 3px 0 0;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.run-collector-execution-technical summary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+
+@media (max-width: 640px) {
+  .run-collector-execution-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .run-result-flow {
   min-width: 0;
   display: grid;

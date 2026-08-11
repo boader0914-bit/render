@@ -17,6 +17,10 @@ const {
   DETAIL_STATUSES: RESILIENT_DETAIL_STATUSES,
   summarizeResilientTop20Collection,
 } = require("./collection_worker_v2_top20_resilience.cjs");
+const {
+  buildV2CollectorExecutionMetadata,
+  projectV2CollectorExecution,
+} = require("./v2_collector_execution_metadata.cjs");
 
 const COLLECTION_WORKER_TOP20_RESULT_SCHEMA_VERSION = "collection-worker-top20-result.v1";
 const COLLECTION_WORKER_RUN_TRANSACTION_SCHEMA_VERSION = "collection-worker-run-transaction.v1";
@@ -670,6 +674,17 @@ function buildV2RunProjections(verified, transactionId, runId) {
   const manifest = verified.verifiedContents.manifest;
   const targetResults = verified.verifiedContents.targetResults;
   const artifactSummary = verified.verifiedContents.summary || {};
+  const collectorExecution = verified.verifiedContents.collectorExecution
+    || artifactSummary.collectorExecution
+    || buildV2CollectorExecutionMetadata({
+      collectorArchitecture: manifest.collectorArchitecture || "v2_collector_single_source",
+      collectorBackend: manifest.collectorBackend || "v2_collector_worker",
+      collectorEntryPoint: manifest.collectorEntryPoint || "gyeongnam_glamping_crawl",
+      naverSearchStrategy: manifest.naverSearchStrategy || manifest.collectorStrategy,
+      rawCollectorStrategy: manifest.rawCollectorStrategy || manifest.collectorStrategy,
+      automaticRetry: manifest.automaticRetry === true,
+      automaticFallback: manifest.automaticFallback === true,
+    });
   const derivedSummary = summarizeResilientTop20Collection({
     mainPlaceStatus: "ready",
     targets: targetResults,
@@ -972,6 +987,7 @@ function buildV2RunProjections(verified, transactionId, runId) {
     revenueProjectionCount: revenues.length,
     historyProjectionCount: history.length,
     resultStatuses: Object.freeze(resultStatuses),
+    collectorExecution: projectV2CollectorExecution(collectorExecution),
   });
   return Object.freeze({
     run,

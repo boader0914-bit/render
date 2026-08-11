@@ -1834,6 +1834,37 @@ function runDbApplyLinkedQueueHtml(queue = {}) {
   `;
 }
 
+function v2CollectorExecutionUiHtml(data = {}, run = {}) {
+  const execution = data.collectorExecution || run.collectorExecution || {};
+  if (execution.architecture !== "v2_collector_single_source") return "";
+  const rankOnly = String(run.collectionStatus || "") === "rank_only";
+  const detailBlocked = String(run.detailStatus || "") === "blocked";
+  const currentResult = rankOnly ? "순위만 수집 완료" : "수집 결과 저장 완료";
+  const detailReason = rankOnly && detailBlocked ? "Booking Detail Provider 연결 제한" : "해당 없음";
+  return `
+    <section class="run-collector-execution" aria-label="수집 실행 경로">
+      <div class="run-collector-execution-head">
+        <strong>수집 실행 정보</strong>
+        <small>실행 아키텍처와 네이버 내부 검색 방식을 구분해 표시합니다.</small>
+      </div>
+      <dl class="run-collector-execution-grid">
+        <div><dt>수집 아키텍처</dt><dd>V2 단일 수집기</dd></div>
+        <div><dt>실행 경로</dt><dd>Signed Worker → 기존 V2 Collector</dd></div>
+        <div><dt>네이버 검색 방식</dt><dd>기존 검증 검색 방식</dd></div>
+        <div><dt>Legacy/Frozen</dt><dd>${execution.legacyFrozenUsed ? "사용" : "사용 안 함"}</dd></div>
+        <div><dt>Fallback</dt><dd>${execution.fallbackUsed ? "사용" : "사용 안 함"}</dd></div>
+        <div><dt>자동 재시도</dt><dd>${execution.automaticRetry ? "사용" : "없음"}</dd></div>
+        <div><dt>현재 결과</dt><dd>${escapeHtml(currentResult)}</dd></div>
+        <div><dt>상세 미수집 사유</dt><dd>${escapeHtml(detailReason)}</dd></div>
+      </dl>
+      <details class="run-collector-execution-technical">
+        <summary>관리자 기술 상세</summary>
+        <small>NAVER 검색 전략: ${escapeHtml(execution.naverSearchStrategy || "current")}</small>
+      </details>
+    </section>
+  `;
+}
+
 function renderRunResultApplySummary() {
   if (!isAdminRole() || !els.runApplySummary) return;
   if (!state.data?.run) {
@@ -1924,6 +1955,7 @@ function renderRunResultApplySummary() {
         </div>
       </div>
       ${runPurposeOutcomeHtml(outcome)}
+      ${v2CollectorExecutionUiHtml(state.data, run)}
       <div class="run-apply-check ${escapeHtml(status.tone)} report-tone-${escapeHtml(statusTone)}" data-collection-result-tone="${escapeHtml(statusTone)}" data-collection-result-state="${escapeHtml(statusState)}">
         ${collectionResultIconHtml(status.icon || "operation", statusTone)}
         <div class="run-apply-check-copy">

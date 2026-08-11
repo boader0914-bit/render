@@ -226,16 +226,18 @@ const SUMMARY_KEYS = Object.freeze([
   "detailReadyCompanyCount",
   "revenueReadyCompanyCount",
   "detailCoverageRate",
-  "revenueCoverageRate"
+  "revenueCoverageRate",
+  "collectorExecution"
 ]);
 const LEGACY_SUMMARY_KEYS = Object.freeze(SUMMARY_KEYS.filter((key) => ![
   "collectionStatus", "mainPlaceStatus", "detailStatus", "detailProviderLiveCallCount", "targetCompanyCount",
-  "detailReadyCompanyCount", "revenueReadyCompanyCount", "detailCoverageRate", "revenueCoverageRate"
+  "detailReadyCompanyCount", "revenueReadyCompanyCount", "detailCoverageRate", "revenueCoverageRate", "collectorExecution"
 ].includes(key)));
 // Existing committed resilient runs predate the safe detail-call ledger field.
 // Their terminal artifacts remain read-only compatible; only new normal jobs
 // emit the field and may use it to settle an elapsed detail circuit.
 const RESILIENT_SUMMARY_KEYS_V1 = Object.freeze(SUMMARY_KEYS.filter((key) => key !== "detailProviderLiveCallCount"));
+const RESILIENT_SUMMARY_KEYS_V2 = Object.freeze(SUMMARY_KEYS.filter((key) => key !== "collectorExecution"));
 
 class CollectionWorkerV2Top20OrchestratorError extends Error {
   constructor(code, message, statusCode = 409, meta = {}) {
@@ -1759,7 +1761,9 @@ function createCollectionWorkerV2Top20Orchestrator(options = {}) {
     exactKeys(
       document,
       Object.hasOwn(document, "collectionStatus")
-        ? Object.hasOwn(document, "detailProviderLiveCallCount") ? SUMMARY_KEYS : RESILIENT_SUMMARY_KEYS_V1
+        ? Object.hasOwn(document, "detailProviderLiveCallCount")
+          ? Object.hasOwn(document, "collectorExecution") ? SUMMARY_KEYS : RESILIENT_SUMMARY_KEYS_V2
+          : RESILIENT_SUMMARY_KEYS_V1
         : LEGACY_SUMMARY_KEYS,
       "top20 summary"
     );

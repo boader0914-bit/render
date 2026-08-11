@@ -1,5 +1,5 @@
-const UI_ASSET_VERSION = "v2-20260810-worker-application-date-range-v51";
-const CACHE_VERSION = "lodging-datalab-pwa-v20260810-worker-application-date-range-v51";
+const UI_ASSET_VERSION = "v2-20260811-v2-execution-metadata-v52";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260811-v2-execution-metadata-v52";
 const CACHE_PREFIX = "lodging-datalab-pwa-";
 const APP_SHELL = [
   "/offline.html",
