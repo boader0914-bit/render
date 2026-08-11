@@ -5,13 +5,21 @@
   "type": "commonjs",
   "scripts": {
     "start": "node scripts/glamping_app_server.cjs",
+    "start:v4-worker": "node scripts/v4_worker_once.cjs",
+    "start:v4-shadow": "node --require ./scripts/fixtures/v4_network_blocker.cjs scripts/v4_shadow_supervisor.cjs",
+    "enqueue:v4-shadow-fixture": "node --require ./scripts/fixtures/v4_network_blocker.cjs scripts/v4_shadow_enqueue_fixture.cjs",
+    "check:v4-worker": "node --check scripts/v4_worker_once.cjs && node --check scripts/fixtures/v4_worker_fixture_collector.cjs && node --check scripts/test_v4_worker_once.cjs",
+    "check:v4-shadow": "node --check scripts/fixtures/v4_network_blocker.cjs && node --check scripts/v4_shadow_transport.cjs && node --check scripts/v4_shadow_enqueue_fixture.cjs && node --check scripts/v4_shadow_supervisor.cjs && node --check scripts/test_v4_shadow_supervisor.cjs",
+    "test:v4-worker": "node scripts/test_v4_worker_once.cjs",
+    "test:v4-shadow": "node --require ./scripts/fixtures/v4_network_blocker.cjs scripts/test_v4_shadow_supervisor.cjs",
+    "test:v4-recovery": "npm run check:v4-worker && npm run check:v4-shadow && npm run test:v4-worker && npm run test:v4-shadow",
     "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_surface_contrast.cjs && node scripts/test_surface_contrast.cjs",
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
     "test:surface": "node scripts/test_surface_contrast.cjs",
     "test": "npm run check && npm run test:yeogi"
   },
   "engines": {
-    "node": ">=20"
+    "node": "26.5.0"
   },
   "dependencies": {
     "xlsx": "^0.18.5"
