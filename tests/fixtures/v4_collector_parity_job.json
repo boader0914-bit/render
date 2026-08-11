@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "datalab-v4-worker-job.v1",
+  "jobId": "phase7-parity",
+  "idempotencyKey": "phase7-parity-key",
+  "keyword": "Gyeongnam glamping offline parity fixture",
+  "checkIn": "2026-08-12",
+  "checkOut": "2026-08-18",
+  "adults": 2,
+  "searchMode": "keyword",
+  "productMode": "all",
+  "collectionMode": "precision",
+  "collectionPurpose": "revenue_detail",
+  "detailRankRanges": "1-10",
+  "bookingRangeDays": 7,
+  "bookingRangePlaceLimit": 10
+}

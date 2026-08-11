@@ -8,6 +8,7 @@ const ROOT = path.resolve(__dirname, "..");
 const ORIGINAL_COLLECTOR = path.join(ROOT, "scripts", "gyeongnam_glamping_crawl.cjs");
 const FIXTURE_COLLECTOR = path.join(ROOT, "scripts", "fixtures", "v4_worker_fixture_collector.cjs");
 const OFFLINE_NETWORK_BLOCKER = path.join(ROOT, "scripts", "fixtures", "v4_network_blocker.cjs");
+const PARITY_FIXTURE_TRANSPORT = path.join(ROOT, "scripts", "fixtures", "v4_collector_fixture_transport.cjs");
 const EXPECTED_COLLECTOR_BLOB = "bcbe229998da3afa6f31ee04375fb0766019e56f";
 const BASELINE_COMMIT = "4e4e1906e2967fe58df66f8ad67f832043d2763b";
 const JOB_SCHEMA = "datalab-v4-worker-job.v1";
@@ -18,6 +19,15 @@ const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_ARTIFACT_BYTES = 500 * 1024 * 1024;
 const MAX_INPUT_BYTES = 64 * 1024;
 const MAX_CHILD_OUTPUT_BYTES = 2 * 1024 * 1024;
+const PARITY_FIXTURE_SCENARIOS = new Set([
+  "success",
+  "empty",
+  "duplicate",
+  "missing-field",
+  "booking",
+  "provider-error",
+  "timeout"
+]);
 
 const JOB_FIELDS = new Set([
   "schemaVersion",
@@ -355,7 +365,7 @@ function configuredInteger(name, fallback, min, max) {
   return number;
 }
 
-function minimalChildEnv(job, stage, idempotencyHash, fixtureScenario) {
+function minimalChildEnv(job, stage, idempotencyHash, fixtureScenario, parityScenario = "") {
   const env = {};
   for (const name of BASE_ENV_NAMES) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
@@ -374,7 +384,7 @@ function minimalChildEnv(job, stage, idempotencyHash, fixtureScenario) {
   }
 
   Object.assign(env, {
-    NODE_ENV: fixtureScenario ? "test" : "production",
+    NODE_ENV: fixtureScenario || parityScenario ? "test" : "production",
     CHECK_IN: job.checkIn,
     CHECK_OUT: job.checkOut,
     ADULTS: String(job.adults),
@@ -394,17 +404,22 @@ function minimalChildEnv(job, stage, idempotencyHash, fixtureScenario) {
     CONFIG_DIR: stage.config
   });
   if (fixtureScenario) env.V4_WORKER_FIXTURE_SCENARIO = fixtureScenario;
+  if (parityScenario) {
+    env.V4_PARITY_FIXTURE_SCENARIO = parityScenario;
+    env.V4_PARITY_TRACE_FILE = path.join(stage.config, "network-trace.json");
+  }
   return env;
 }
 
-async function runChild({ collectorScript, job, stage, idempotencyHash, fixtureScenario, signal }) {
+async function runChild({ collectorScript, job, stage, idempotencyHash, fixtureScenario = "", parityScenario = "", signal }) {
   const timeoutMs = configuredInteger("V4_WORKER_TIMEOUT_MS", DEFAULT_TIMEOUT_MS, 1000, 4 * 60 * 60 * 1000);
-  const env = minimalChildEnv(job, stage, idempotencyHash, fixtureScenario);
+  const env = minimalChildEnv(job, stage, idempotencyHash, fixtureScenario, parityScenario);
   return new Promise((resolve, reject) => {
     const childArgs = [];
     if (fixtureScenario && process.env.V4_WORKER_OFFLINE_NETWORK_BLOCKER === "1") {
       childArgs.push("--require", OFFLINE_NETWORK_BLOCKER);
     }
+    if (parityScenario) childArgs.push("--require", PARITY_FIXTURE_TRANSPORT);
     childArgs.push(collectorScript, job.keyword);
     const child = spawn(process.execPath, childArgs, {
       cwd: ROOT,
@@ -463,6 +478,32 @@ async function runChild({ collectorScript, job, stage, idempotencyHash, fixtureS
       resolve({ code, signal: exitSignal, stdout, stderr });
     });
   });
+}
+
+async function readParityTrace(stage, scenario) {
+  const traceFile = path.join(stage.config, "network-trace.json");
+  const trace = await readJson(traceFile, "OFFLINE_PARITY_TRACE_INVALID", "network_isolation");
+  if (
+    trace.schemaVersion !== "datalab-v4-parity-network-trace.v1"
+    || trace.scenario !== scenario
+    || trace.networkBlockerLoaded !== true
+    || trace.actualExternalRequests !== 0
+    || !Number.isInteger(trace.fixtureRequestCount)
+    || !Array.isArray(trace.routes)
+  ) {
+    throw new WorkerError(
+      "OFFLINE_PARITY_TRACE_INVALID",
+      "network_isolation",
+      "Offline parity trace did not prove zero external requests."
+    );
+  }
+  return {
+    scenario: trace.scenario,
+    networkBlockerLoaded: true,
+    fixtureRequestCount: trace.fixtureRequestCount,
+    actualExternalRequests: 0,
+    routes: trace.routes
+  };
 }
 
 async function readJson(filePath, code, stage) {
@@ -656,6 +697,8 @@ async function executeJob(spec, options = {}) {
 
   let lockHandle;
   let stageRoot = null;
+  let stage = null;
+  let activeParityScenario = "";
   try {
     try {
       lockHandle = await fsp.open(lockFile, "wx", 0o600);
@@ -681,7 +724,7 @@ async function executeJob(spec, options = {}) {
 
     stageRoot = await fsp.mkdtemp(path.join(roots.work, `${idempotencyKeyHash.slice(0, 12)}-`));
     assertContained(roots.work, stageRoot, "WORK_PATH_INVALID");
-    const stage = {
+    stage = {
       root: stageRoot,
       data: path.join(stageRoot, "data"),
       config: path.join(stageRoot, "config"),
@@ -693,9 +736,20 @@ async function executeJob(spec, options = {}) {
     }
 
     const fixtureScenario = options.fixtureScenario || "";
+    const parityScenario = options.parityScenario || "";
+    activeParityScenario = parityScenario;
+    if (fixtureScenario && parityScenario) {
+      throw new WorkerError("OFFLINE_MODE_CONFLICT", "environment", "Fixture collector and frozen collector parity modes are mutually exclusive.");
+    }
     const collectorScript = fixtureScenario ? FIXTURE_COLLECTOR : ORIGINAL_COLLECTOR;
     if (fixtureScenario && !(process.env.NODE_ENV === "test" && process.env.V4_WORKER_ALLOW_OFFLINE_FIXTURE === "1")) {
       throw new WorkerError("OFFLINE_FIXTURE_FORBIDDEN", "environment", "Offline fixture mode is allowed only in the test environment.");
+    }
+    if (parityScenario && !(process.env.NODE_ENV === "test" && process.env.V4_WORKER_ALLOW_OFFLINE_PARITY === "1")) {
+      throw new WorkerError("OFFLINE_PARITY_FORBIDDEN", "environment", "Frozen collector parity mode is allowed only in the test environment.");
+    }
+    if (parityScenario && !PARITY_FIXTURE_SCENARIOS.has(parityScenario)) {
+      throw new WorkerError("OFFLINE_PARITY_INVALID", "environment", "Unknown frozen collector parity scenario.");
     }
     const child = await runChild({
       collectorScript,
@@ -703,6 +757,7 @@ async function executeJob(spec, options = {}) {
       stage,
       idempotencyHash: idempotencyKeyHash,
       fixtureScenario,
+      parityScenario,
       signal: options.signal
     });
     if (child.code !== 0) {
@@ -712,6 +767,7 @@ async function executeJob(spec, options = {}) {
       });
     }
 
+    const parityTrace = parityScenario ? await readParityTrace(stage, parityScenario) : null;
     const artifact = await discoverAndValidateArtifact(stage.outputs, job);
     if (fs.existsSync(artifactDir)) {
       throw new WorkerError("ARTIFACT_ALREADY_EXISTS", "promote", "Artifact target already exists without an idempotency record.");
@@ -730,6 +786,7 @@ async function executeJob(spec, options = {}) {
       automaticRetry: false,
       automaticFallback: false
     };
+    if (parityTrace) envelope.offlineParity = parityTrace;
     await writeJsonAtomic(path.join(artifact.runDir, "worker-envelope.json"), envelope);
     const finalInventory = await scanArtifact(
       artifact.runDir,
@@ -764,12 +821,19 @@ async function executeJob(spec, options = {}) {
       totalBytes: record.totalBytes,
       artifactDigest,
       retryable: false,
-      duplicate: false
+      duplicate: false,
+      ...(parityTrace ? { offlineParity: parityTrace } : {})
     };
   } catch (error) {
     const workerError = error instanceof WorkerError
       ? error
       : new WorkerError("WORKER_INTERNAL_ERROR", "worker", sanitizeText(error.message || error));
+    if (activeParityScenario && stage) {
+      const parityTrace = await readParityTrace(stage, activeParityScenario).catch(() => null);
+      if (parityTrace) {
+        workerError.details = { ...(workerError.details || {}), offlineParity: parityTrace };
+      }
+    }
     if (lockHandle && !fs.existsSync(recordFile)) {
       const recovered = await recoverPromotedArtifact({
         artifactDir,
@@ -804,6 +868,7 @@ async function executeJob(spec, options = {}) {
 function parseArgs(argv) {
   let jobFile = "";
   let fixtureScenario = "";
+  let parityScenario = "";
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--job-file") {
@@ -814,6 +879,10 @@ function parseArgs(argv) {
       fixtureScenario = argv[++index] || "success";
     } else if (token.startsWith("--offline-fixture=")) {
       fixtureScenario = token.slice("--offline-fixture=".length) || "success";
+    } else if (token === "--offline-parity") {
+      parityScenario = argv[++index] || "success";
+    } else if (token.startsWith("--offline-parity=")) {
+      parityScenario = token.slice("--offline-parity=".length) || "success";
     } else {
       throw new WorkerError("WORKER_ARGUMENT_INVALID", "input", `Unknown argument: ${token}`);
     }
@@ -821,7 +890,13 @@ function parseArgs(argv) {
   if (fixtureScenario && !["success", "slow", "exit", "partial", "missing-file", "manifest-outside"].includes(fixtureScenario)) {
     throw new WorkerError("OFFLINE_FIXTURE_INVALID", "input", "Unknown offline fixture scenario.");
   }
-  return { jobFile, fixtureScenario };
+  if (parityScenario && !PARITY_FIXTURE_SCENARIOS.has(parityScenario)) {
+    throw new WorkerError("OFFLINE_PARITY_INVALID", "input", "Unknown frozen collector parity scenario.");
+  }
+  if (fixtureScenario && parityScenario) {
+    throw new WorkerError("OFFLINE_MODE_CONFLICT", "input", "Fixture collector and frozen collector parity modes are mutually exclusive.");
+  }
+  return { jobFile, fixtureScenario, parityScenario };
 }
 
 async function readStdin() {
@@ -885,7 +960,11 @@ async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
     rawSpec = await readJobSpec(args.jobFile);
-    output = await executeJob(rawSpec, { fixtureScenario: args.fixtureScenario, signal: shutdown.signal });
+    output = await executeJob(rawSpec, {
+      fixtureScenario: args.fixtureScenario,
+      parityScenario: args.parityScenario,
+      signal: shutdown.signal
+    });
   } catch (error) {
     output = publicFailure(error, rawSpec?.jobId);
     process.exitCode = 1;
@@ -901,6 +980,9 @@ module.exports = {
   EXPECTED_COLLECTOR_BLOB,
   JOB_SCHEMA,
   OFFLINE_NETWORK_BLOCKER,
+  ORIGINAL_COLLECTOR,
+  PARITY_FIXTURE_SCENARIOS,
+  PARITY_FIXTURE_TRANSPORT,
   RESULT_SCHEMA,
   WorkerError,
   ensureDedicatedDataRoot,
@@ -908,6 +990,7 @@ module.exports = {
   gitBlobSha,
   normalizeJob,
   publicFailure,
+  runChild,
   verifyOriginalCollector
 };
 

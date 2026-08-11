@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Proposal only. Do not sync, create, deploy, or restart before Phase 8 approval.
+services:
+  - type: worker
+    name: datalab-v4-collector-parity-shadow
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v4-collector-parity
+    region: singapore
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: off
+    buildCommand: npm ci --omit=dev --ignore-scripts --audit=false --fund=false
+    startCommand: npm run start:v4-parity-shadow
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: datalab-v4-parity-data
+      mountPath: /var/data/v4-parity
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "26.5.0"
+      - key: NODE_ENV
+        value: test
+      - key: V4_PARITY_DATA_DIR
+        value: /var/data/v4-parity
+      - key: V4_PARITY_MODE
+        value: fixture
+      - key: V4_PARITY_EXTERNAL_CALLS_ENABLED
+        value: "0"
+      - key: V4_PARITY_OPERATIONAL_PUBLISH_ENABLED
+        value: "0"
+      - key: V4_PARITY_WEB_IMPORT_ENABLED
+        value: "0"
