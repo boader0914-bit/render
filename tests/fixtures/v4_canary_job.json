@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "datalab-v4-canary-job.v1",
+  "approvalId": "approval-d-offline-only",
+  "jobId": "v4-canary-dry-run-001",
+  "idempotencyKey": "v4-canary-dry-run-001",
+  "provider": "naver-local-search",
+  "keyword": "Gyeongnam glamping offline fixture"
+}

@@ -3,7 +3,7 @@ const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const {
   EXPECTED_COLLECTOR_BLOB,
   JOB_SCHEMA,
@@ -71,6 +71,20 @@ async function readJsonWhenReady(filePath) {
   }, path.basename(filePath));
 }
 
+function waitForExit(child, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timed out waiting for child exit")), timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
 function runEnqueue(dataRoot, input) {
   const result = spawnSync(process.execPath, ["--require", OFFLINE_NETWORK_BLOCKER, ENQUEUE], {
     cwd: ROOT,
@@ -117,7 +131,9 @@ async function main() {
     "V4_SHADOW_POLL_MS",
     "V4_SHADOW_HEARTBEAT_MS",
     "V4_SHADOW_LEASE_MS",
+    "V4_SHADOW_STARTUP_WAIT_MS",
     "V4_SHADOW_SHUTDOWN_GRACE_MS",
+    "V4_SHADOW_FORCE_KILL_MS",
     "V4_SHADOW_BOOTSTRAP_FIXTURE",
     "V4_SHADOW_BOOTSTRAP_ID",
     "V4_SHADOW_BOOTSTRAP_SCENARIO",
@@ -150,7 +166,9 @@ async function main() {
     V4_SHADOW_POLL_MS: "25",
     V4_SHADOW_HEARTBEAT_MS: "50",
     V4_SHADOW_LEASE_MS: "500",
+    V4_SHADOW_STARTUP_WAIT_MS: "100",
     V4_SHADOW_SHUTDOWN_GRACE_MS: "2000",
+    V4_SHADOW_FORCE_KILL_MS: "100",
     V4_SHADOW_BOOTSTRAP_FIXTURE: "1",
     V4_SHADOW_BOOTSTRAP_ID: "phase3-test",
     V4_SHADOW_BOOTSTRAP_SCENARIO: "slow",
@@ -188,7 +206,7 @@ async function main() {
       timeout: 3000
     });
     assert.notEqual(second.status, 0);
-    assert.match(second.stdout, /SUPERVISOR_ALREADY_RUNNING/);
+    assert.match(second.stdout, /SUPERVISOR_LOCK_WAIT_TIMEOUT/);
     assert.equal(second.stdout.includes(TEST_SECRET), false);
     assert.equal(second.stderr.includes(TEST_SECRET), false);
 
@@ -201,6 +219,11 @@ async function main() {
     firstController.abort();
     await firstPromise;
     assert.equal((await readJsonWhenReady(heartbeatFile)).state, "stopped");
+    assert.equal(fs.existsSync(path.join(transportBase, "runtime", "supervisor.lock")), false);
+    assert.match(capturedOutput, /"event":"shutdown_requested"/);
+    assert.match(capturedOutput, /"event":"heartbeat_finalized"/);
+    assert.match(capturedOutput, /"event":"supervisor_lock_released"/);
+    assert.match(capturedOutput, /"event":"shutdown_completed"/);
 
     const restartController = new AbortController();
     const restartPromise = startTrackedSupervisor(restartController);
@@ -237,6 +260,25 @@ async function main() {
     assert.equal(drained.result.status, "succeeded");
     assert.equal((await fsp.readdir(path.join(dataRoot, "artifacts"))).length, 2);
     assert.equal((await readJsonWhenReady(heartbeatFile)).state, "stopped");
+    assert.match(capturedOutput, /"event":"child_drain_started"/);
+    assert.match(capturedOutput, /"event":"child_drain_completed"/);
+
+    const forcedJob = baseJob("forced");
+    const forcedEnqueue = runEnqueue(dataRoot, envelope("forced-signal", forcedJob, "slow"));
+    assert.equal(forcedEnqueue.status, 0);
+    process.env.V4_SHADOW_SHUTDOWN_GRACE_MS = "100";
+    process.env.V4_SHADOW_FORCE_KILL_MS = "100";
+    const forcedController = new AbortController();
+    const forcedPromise = startTrackedSupervisor(forcedController);
+    await readJsonWhenReady(path.join(transportBase, "leases", "forced-signal.json"));
+    forcedController.abort();
+    await forcedPromise;
+    const forced = await readJsonWhenReady(path.join(transportBase, "failed", "forced-signal.json"));
+    assert.equal(forced.status, "failed");
+    assert.equal(forced.retryable, false);
+    assert.match(capturedOutput, /"event":"child_drain_completed"[^\n]*"escalation":"sig(?:term|kill)"/);
+    assert.equal(fs.existsSync(path.join(transportBase, "runtime", "supervisor.lock")), false);
+    process.env.V4_SHADOW_SHUTDOWN_GRACE_MS = "2000";
 
     const workerRoots = await ensureDedicatedDataRoot(dataRoot);
     const roots = await initializeTransport(workerRoots);
@@ -264,6 +306,34 @@ async function main() {
     recoveryController.abort();
     await recoveryPromise;
     assert.equal((await fsp.readdir(path.join(dataRoot, "artifacts"))).length, 2);
+
+    process.env.V4_SHADOW_BOOTSTRAP_FIXTURE = "0";
+    const killed = spawn(process.execPath, ["--require", OFFLINE_NETWORK_BLOCKER, SUPERVISOR], {
+      cwd: ROOT,
+      env: { ...process.env },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const killedExit = waitForExit(killed);
+    const killedLock = await readJsonWhenReady(path.join(roots.runtime, "supervisor.lock"));
+    assert.ok(killedLock.workerId);
+    killed.kill("SIGKILL");
+    await killedExit;
+    assert.equal(fs.existsSync(path.join(roots.runtime, "supervisor.lock")), true);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    const staleRecoveryController = new AbortController();
+    const staleRecoveryPromise = startTrackedSupervisor(staleRecoveryController);
+    const recoveredHeartbeat = await waitFor(async () => {
+      const heartbeat = await readJsonWhenReady(heartbeatFile);
+      return heartbeat.workerId !== killedLock.workerId && heartbeat.state === "idle" ? heartbeat : null;
+    }, "hard-kill stale lock recovery");
+    const recoveredLock = await readJsonWhenReady(path.join(roots.runtime, "supervisor.lock"));
+    assert.equal(recoveredHeartbeat.workerId, recoveredLock.workerId);
+    staleRecoveryController.abort();
+    await staleRecoveryPromise;
+    assert.match(capturedOutput, /"event":"stale_lock_detected"/);
+    assert.match(capturedOutput, /"event":"stale_lock_recovered"/);
 
     assert.equal(capturedOutput.includes(TEST_SECRET), false);
     await scanForSecret(dataRoot, TEST_SECRET);

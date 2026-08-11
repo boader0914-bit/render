@@ -97,7 +97,9 @@ function loadConfig() {
     pollMs: configuredInteger("V4_SHADOW_POLL_MS", 1000, 25, 60000),
     heartbeatMs,
     leaseMs,
+    startupWaitMs: configuredInteger("V4_SHADOW_STARTUP_WAIT_MS", 35000, 0, 300000),
     shutdownGraceMs: configuredInteger("V4_SHADOW_SHUTDOWN_GRACE_MS", 30000, 100, 240000),
+    forceKillMs: configuredInteger("V4_SHADOW_FORCE_KILL_MS", 5000, 50, 60000),
     bootstrap: bootstrap === "1",
     bootstrapId: process.env.V4_SHADOW_BOOTSTRAP_ID || "phase3-shadow-001",
     bootstrapScenario: process.env.V4_SHADOW_BOOTSTRAP_SCENARIO || "success"
@@ -126,9 +128,10 @@ function logEvent(event, fields = {}) {
   })}\n`);
 }
 
-async function acquireSupervisorLock(roots, workerId, leaseMs) {
+async function acquireSupervisorLock(roots, workerId, leaseMs, startupWaitMs = 0) {
   const lockFile = path.join(roots.runtime, "supervisor.lock");
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  const deadline = Date.now() + startupWaitMs;
+  for (;;) {
     let handle;
     try {
       handle = await fsp.open(lockFile, "wx", 0o600);
@@ -151,10 +154,30 @@ async function acquireSupervisorLock(roots, workerId, leaseMs) {
       } catch {
         throw new SupervisorError("SUPERVISOR_LOCK_INVALID", "Existing supervisor lock cannot be verified.");
       }
-      const fresh = Date.parse(existing.expiresAt || "") > Date.now();
-      if (fresh) {
-        throw new SupervisorError("SUPERVISOR_ALREADY_RUNNING", "Another V4 shadow supervisor owns the worker root.");
+      const expiresAt = Date.parse(existing.expiresAt || "");
+      if (
+        existing.schemaVersion !== SUPERVISOR_LOCK_SCHEMA
+        || typeof existing.workerId !== "string"
+        || !Number.isFinite(expiresAt)
+      ) {
+        throw new SupervisorError("SUPERVISOR_LOCK_INVALID", "Existing supervisor lock cannot be verified.");
       }
+      const now = Date.now();
+      const fresh = expiresAt > now;
+      if (fresh) {
+        if (now >= deadline) {
+          throw new SupervisorError(
+            "SUPERVISOR_LOCK_WAIT_TIMEOUT",
+            "Another V4 shadow supervisor still owns the worker root after the bounded startup wait."
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(250, expiresAt - now, deadline - now)));
+        continue;
+      }
+      logEvent("stale_lock_detected", {
+        previousWorkerId: safeText(existing.workerId),
+        expiredAt: new Date(expiresAt).toISOString()
+      });
       const stale = path.join(
         roots.runtime,
         `stale-supervisor-${Date.now()}-${crypto.randomBytes(3).toString("hex")}.json`
@@ -165,17 +188,23 @@ async function acquireSupervisorLock(roots, workerId, leaseMs) {
         if (renameError.code === "ENOENT") continue;
         throw renameError;
       }
+      logEvent("stale_lock_recovered", {
+        previousWorkerId: safeText(existing.workerId),
+        archivedAs: path.basename(stale)
+      });
     }
   }
-  throw new SupervisorError("SUPERVISOR_LOCK_RACE", "Supervisor lock could not be acquired.");
 }
 
 async function releaseSupervisorLock(lockFile, workerId) {
   try {
     const record = JSON.parse(await fsp.readFile(lockFile, "utf8"));
-    if (record.workerId === workerId) await fsp.unlink(lockFile);
+    if (record.workerId !== workerId) return false;
+    await fsp.unlink(lockFile);
+    return true;
   } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+    if (error.code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -294,7 +323,7 @@ async function main(options = {}) {
   const workerRoots = await ensureDedicatedDataRoot(process.env.V4_WORKER_DATA_DIR);
   const roots = await initializeTransport(workerRoots);
   const workerId = `shadow-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
-  const lockFile = await acquireSupervisorLock(roots, workerId, config.leaseMs);
+  const lockFile = await acquireSupervisorLock(roots, workerId, config.leaseMs, config.startupWaitMs);
   let state = "starting";
   let currentClaim = null;
   let currentChild = null;
@@ -307,6 +336,9 @@ async function main(options = {}) {
   let leaseError = null;
   let heartbeatFailure = null;
   let leaseRenewalEnabled = false;
+  let drainStarted = false;
+  let drainEscalation = "none";
+  let heartbeatFinalized = false;
 
   const heartbeatValue = () => {
     const now = Date.now();
@@ -360,21 +392,42 @@ async function main(options = {}) {
     return heartbeatQueue;
   };
 
+  const startChildDrain = () => {
+    if (currentChild && !drainStarted) {
+      drainStarted = true;
+      drainEscalation = "graceful_wait";
+      logEvent("child_drain_started", {
+        workerId,
+        transportId: currentClaim?.envelope.transportId || null,
+        graceMs: config.shutdownGraceMs
+      });
+      shutdownTimer = setTimeout(() => {
+        drainEscalation = "sigterm";
+        currentChild?.kill("SIGTERM");
+        killTimer = setTimeout(() => {
+          drainEscalation = "sigkill";
+          currentChild?.kill("SIGKILL");
+        }, config.forceKillMs);
+        killTimer.unref();
+      }, config.shutdownGraceMs);
+      shutdownTimer.unref();
+    }
+  };
+
   const requestStop = (signal) => {
     if (stopRequested) return;
     stopRequested = true;
     shutdownSignal = signal;
     state = currentClaim ? "draining" : "stopping";
+    logEvent("shutdown_requested", {
+      workerId,
+      signal,
+      state,
+      childActive: Boolean(currentChild)
+    });
     scheduleHeartbeat();
     if (wakeSleep) wakeSleep();
-    if (currentChild) {
-      shutdownTimer = setTimeout(() => {
-        currentChild?.kill("SIGTERM");
-        killTimer = setTimeout(() => currentChild?.kill("SIGKILL"), 5000);
-        killTimer.unref();
-      }, config.shutdownGraceMs);
-      shutdownTimer.unref();
-    }
+    startChildDrain();
   };
 
   const onSigterm = () => requestStop("SIGTERM");
@@ -429,9 +482,21 @@ async function main(options = {}) {
         jobId: currentClaim.envelope.job.jobId,
         fixtureScenario: currentClaim.envelope.fixtureScenario
       });
-      const childRun = await runOneShot(currentClaim, workerRoots.root, (child) => { currentChild = child; });
+      const childRun = await runOneShot(currentClaim, workerRoots.root, (child) => {
+        currentChild = child;
+        if (stopRequested) startChildDrain();
+      });
       currentChild = null;
       leaseRenewalEnabled = false;
+      if (drainStarted) {
+        logEvent("child_drain_completed", {
+          workerId,
+          transportId: currentClaim.envelope.transportId,
+          escalation: drainEscalation,
+          childExitCode: childRun.code
+        });
+        drainStarted = false;
+      }
       await heartbeatQueue;
       if (shutdownTimer) clearTimeout(shutdownTimer);
       if (killTimer) clearTimeout(killTimer);
@@ -465,6 +530,8 @@ async function main(options = {}) {
     }
     state = "stopped";
     await scheduleHeartbeat();
+    heartbeatFinalized = true;
+    logEvent("heartbeat_finalized", { workerId, state });
     logEvent("supervisor_stopped", { workerId, signal: shutdownSignal || null });
   } finally {
     clearInterval(heartbeatTimer);
@@ -474,16 +541,32 @@ async function main(options = {}) {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
     options.signal?.removeEventListener?.("abort", onAbort);
-    await releaseSupervisorLock(lockFile, workerId).catch(() => {});
+    if (!heartbeatFinalized && !heartbeatFailure) {
+      state = stopRequested ? "stopped" : "failed";
+      await scheduleHeartbeat().then(() => {
+        heartbeatFinalized = true;
+        logEvent("heartbeat_finalized", { workerId, state });
+      }).catch(() => {});
+    }
+    const released = await releaseSupervisorLock(lockFile, workerId).catch(() => false);
+    if (released) logEvent("supervisor_lock_released", { workerId });
+    logEvent("shutdown_completed", {
+      workerId,
+      signal: shutdownSignal || null,
+      heartbeatFinalized,
+      lockReleased: released
+    });
   }
 }
 
 module.exports = {
   HEARTBEAT_SCHEMA,
   SupervisorError,
+  acquireSupervisorLock,
   bootstrapEnvelope,
   loadConfig,
-  main
+  main,
+  releaseSupervisorLock
 };
 
 if (require.main === module) {
