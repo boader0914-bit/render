@@ -4,6 +4,7 @@ const { EventEmitter } = require("node:events");
 const fsp = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const actualBullMq = require("bullmq");
 const {
   FIXTURE_JOB_POLICY,
   JOB_SCHEMA,
@@ -23,6 +24,7 @@ const {
 } = require("./v4_fixture_transport_supervisor.cjs");
 const {
   BULLMQ_VERSION,
+  DEFAULT_READY_TIMEOUT_MS,
   RenderKeyValueTransport,
   deterministicJobId,
   redisConnectionOptions
@@ -306,6 +308,82 @@ function createFakeBullMq() {
   };
 }
 
+function createDelayedBullMqLifecycle(options = {}) {
+  const metrics = {
+    clients: [],
+    earlyInfoCalls: 0,
+    infoCalls: 0,
+    metadataWrites: 0,
+    transientErrors: 0
+  };
+  const delayMs = Number.isInteger(options.delayMs) ? options.delayMs : 25;
+  const previousFactory = actualBullMq.RedisConnection.clientFactory;
+
+  class DelayedKeyValueClient extends EventEmitter {
+    constructor(connectionOptions) {
+      super();
+      this.options = connectionOptions;
+      this.status = "connecting";
+      this.timer = options.neverReady === true ? null : setTimeout(() => {
+        this.status = "ready";
+        this.emit("ready");
+      }, delayMs);
+      this.errorTimer = Number.isInteger(options.errorBeforeReadyMs) ? setTimeout(() => {
+        metrics.transientErrors += 1;
+        this.emit("error", new Error("synthetic transient connection error"));
+      }, options.errorBeforeReadyMs) : null;
+      metrics.clients.push(this);
+    }
+
+    defineCommand(name) {
+      this[name] = async () => null;
+    }
+
+    async info() {
+      metrics.infoCalls += 1;
+      if (this.status !== "ready") {
+        metrics.earlyInfoCalls += 1;
+        throw new Error("Stream isn't writeable and enableOfflineQueue options is false");
+      }
+      return "# Server\nvalkey_version:8.1.4\n# Memory\nmaxmemory_policy:noeviction\n";
+    }
+
+    async hset() {
+      if (this.status !== "ready") throw new Error("metadata write before readiness");
+      metrics.metadataWrites += 1;
+      return 1;
+    }
+
+    async quit() {
+      this.disconnect();
+      return "OK";
+    }
+
+    disconnect() {
+      if (this.timer) clearTimeout(this.timer);
+      if (this.errorTimer) clearTimeout(this.errorTimer);
+      this.timer = null;
+      this.errorTimer = null;
+      if (this.status === "end") return;
+      this.status = "end";
+      this.emit("end");
+    }
+  }
+
+  actualBullMq.RedisConnection.clientFactory = (connectionOptions) => (
+    new DelayedKeyValueClient(connectionOptions)
+  );
+
+  return {
+    bullmq: actualBullMq,
+    metrics,
+    restore() {
+      actualBullMq.RedisConnection.clientFactory = previousFactory;
+      for (const client of metrics.clients) client.disconnect();
+    }
+  };
+}
+
 function transportOptions(fake, keyring, suffix, overrides = {}) {
   return {
     redisUrl: "redis://fixture.invalid:6379",
@@ -352,6 +430,7 @@ async function main() {
   assert.equal(normal.worker.opts.maxStalledCount, 0);
   assert.equal(normal.worker.opts.autorun, false);
   assert.equal(normal.worker.opts.lockDuration, 5000);
+  assert.equal(normal.config.readyTimeoutMs, DEFAULT_READY_TIMEOUT_MS);
   assert.deepEqual(redisConnectionOptions("rediss://queue-user:queue-pass@kv.internal:6380/2"), {
     host: "kv.internal",
     port: 6380,
@@ -367,6 +446,89 @@ async function main() {
   assert.equal(producerOnly.worker, null);
   assert.equal(await producerOnly.claim("phase10-disabled-worker", 5000), null);
   mark("producer-only-no-consumer-connection");
+
+  const delayedLifecycle = createDelayedBullMqLifecycle({ delayMs: 30, errorBeforeReadyMs: 5 });
+  let delayedReadiness;
+  try {
+    delayedReadiness = new RenderKeyValueTransport(transportOptions(
+      delayedLifecycle.bullmq,
+      keyring,
+      "delayed-readiness",
+      { claimsEnabled: false }
+    ));
+    const readinessPromiseA = delayedReadiness.ready();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const readinessPromiseB = delayedReadiness.ready();
+    const [readinessA, readinessB] = await Promise.all([readinessPromiseA, readinessPromiseB]);
+    assert.deepEqual(readinessA, { ready: true, claimsEnabled: false });
+    assert.deepEqual(readinessB, readinessA);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.notEqual(delayedReadiness.queue.opts.skipWaitingForReady, true);
+    assert.equal(delayedLifecycle.metrics.clients.length, 1);
+    assert.equal(delayedLifecycle.metrics.earlyInfoCalls, 0);
+    assert.equal(delayedLifecycle.metrics.infoCalls, 1);
+    assert.equal(delayedLifecycle.metrics.metadataWrites, 1);
+    assert.equal(delayedLifecycle.metrics.transientErrors, 1);
+    delayedLifecycle.metrics.clients[0].emit("close");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(delayedReadiness.readiness().ready, false);
+    await assertRejected(delayedReadiness.ready(), "V4_QUEUE_UNAVAILABLE");
+  } finally {
+    await delayedReadiness?.close().catch(() => {});
+    delayedLifecycle.restore();
+  }
+  mark("transient-error-delayed-key-value-ready-before-info");
+  mark("connection-loss-clears-readiness");
+
+  const timeoutLifecycle = createDelayedBullMqLifecycle({ neverReady: true });
+  let timeoutReadiness;
+  try {
+    timeoutReadiness = new RenderKeyValueTransport(transportOptions(
+      timeoutLifecycle.bullmq,
+      keyring,
+      "readiness-timeout",
+      { claimsEnabled: false, readyTimeoutMs: 100 }
+    ));
+    const timeoutStartedAt = Date.now();
+    await assertRejected(timeoutReadiness.ready(), "V4_QUEUE_UNAVAILABLE");
+    assert.ok(Date.now() - timeoutStartedAt >= 80);
+    assert.ok(Date.now() - timeoutStartedAt < 1000);
+    assert.equal(timeoutReadiness.readiness().ready, false);
+    assert.equal(timeoutLifecycle.metrics.earlyInfoCalls, 0);
+    assert.equal(timeoutLifecycle.metrics.infoCalls, 0);
+    assert.equal(timeoutLifecycle.metrics.metadataWrites, 0);
+  } finally {
+    await timeoutReadiness?.close().catch(() => {});
+    timeoutLifecycle.restore();
+  }
+  mark("readiness-timeout-fails-closed");
+
+  const shutdownLifecycle = createDelayedBullMqLifecycle({ neverReady: true });
+  let shutdownReadiness;
+  try {
+    shutdownReadiness = new RenderKeyValueTransport(transportOptions(
+      shutdownLifecycle.bullmq,
+      keyring,
+      "readiness-shutdown",
+      { claimsEnabled: false, readyTimeoutMs: 1000 }
+    ));
+    const readinessOutcome = shutdownReadiness.ready().then(
+      () => ({ status: "fulfilled" }),
+      (error) => ({ status: "rejected", code: error?.code })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const closeStartedAt = Date.now();
+    await shutdownReadiness.close();
+    assert.ok(Date.now() - closeStartedAt < 500);
+    assert.deepEqual(await readinessOutcome, { status: "rejected", code: "V4_QUEUE_UNAVAILABLE" });
+    assert.equal(shutdownReadiness.readiness().ready, false);
+    assert.equal(shutdownLifecycle.metrics.earlyInfoCalls, 0);
+    assert.equal(shutdownLifecycle.metrics.infoCalls, 0);
+  } finally {
+    await shutdownReadiness?.close().catch(() => {});
+    shutdownLifecycle.restore();
+  }
+  mark("shutdown-during-readiness-fails-closed");
 
   const now = Date.now();
   const job = baseJob("normal");

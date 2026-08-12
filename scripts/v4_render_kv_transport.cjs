@@ -19,6 +19,7 @@ const TERMINAL_RESULT_PREFIX = "DATALAB_V4_RESULT:";
 const QUARANTINE_PREFIX = "DATALAB_V4_QUARANTINE:";
 const DEFAULT_QUEUE_NAME = "fixture-jobs";
 const DEFAULT_QUEUE_PREFIX = "datalab-v4-kv-v1";
+const DEFAULT_READY_TIMEOUT_MS = 15 * 1000;
 const DEFAULT_RETENTION_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_COMPLETED_COUNT = 1000;
 const DEFAULT_FAILED_COUNT = 5000;
@@ -176,6 +177,13 @@ function validateConfig(options) {
     prefix: namespacePart(options.prefix, "V4_QUEUE_PREFIX", DEFAULT_QUEUE_PREFIX),
     resolveKey: options.resolveKey,
     claimsEnabled: options.claimsEnabled === true,
+    readyTimeoutMs: configuredInteger(
+      options.readyTimeoutMs,
+      "V4_QUEUE_READY_TIMEOUT_MS",
+      DEFAULT_READY_TIMEOUT_MS,
+      100,
+      2 * 60 * 1000
+    ),
     leaseMs,
     stalledIntervalMs,
     retentionSeconds,
@@ -192,6 +200,7 @@ function configFromEnvironment(env, keyring) {
     prefix: env.V4_QUEUE_PREFIX,
     resolveKey: keyring.resolveKey,
     claimsEnabled: env.V4_QUEUE_CLAIMS_ENABLED === "1",
+    readyTimeoutMs: env.V4_QUEUE_READY_TIMEOUT_MS,
     leaseMs: env.V4_FIXTURE_LEASE_MS,
     stalledIntervalMs: env.V4_QUEUE_STALLED_INTERVAL_MS,
     retentionSeconds: env.V4_QUEUE_RESULT_RETENTION_SECONDS,
@@ -214,6 +223,8 @@ class RenderKeyValueTransport {
     this.active = new Map();
     this.closed = false;
     this.readyState = false;
+    this.hasBeenReady = false;
+    this.readinessAttempt = null;
     this.claimsEnabled = this.config.claimsEnabled;
     this.lastConnectionError = null;
     const queueConnection = {
@@ -231,7 +242,6 @@ class RenderKeyValueTransport {
     this.queue = new this.bullmq.Queue(this.config.queueName, {
       connection: queueConnection,
       prefix: this.config.prefix,
-      skipWaitingForReady: true,
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: keepCompleted,
@@ -249,9 +259,15 @@ class RenderKeyValueTransport {
       removeOnComplete: keepCompleted,
       removeOnFail: keepFailed
     }) : null;
-    const onConnectionError = (error) => { this.lastConnectionError = error || new Error("queue connection error"); };
+    const onConnectionError = (error) => {
+      this.readyState = false;
+      this.lastConnectionError = error || new Error("queue connection error");
+    };
+    const onConnectionClose = () => onConnectionError(new Error("queue connection closed"));
     this.queue.on?.("error", onConnectionError);
+    this.queue.on?.("ioredis:close", onConnectionClose);
     this.worker?.on?.("error", onConnectionError);
+    this.worker?.on?.("ioredis:close", onConnectionClose);
     this.worker?.on?.("ready", () => { this.lastConnectionError = null; });
     assertTransportInterface(this);
   }
@@ -266,20 +282,45 @@ class RenderKeyValueTransport {
     return record;
   }
 
-  async ready() {
-    this.ensureOpen();
+  async initializeReadiness() {
+    let timeoutHandle;
     try {
-      await Promise.all([
-        this.queue.waitUntilReady(),
-        this.worker ? this.worker.waitUntilReady() : Promise.resolve()
+      await Promise.race([
+        Promise.all([
+          this.queue.waitUntilReady(),
+          this.worker ? this.worker.waitUntilReady() : Promise.resolve()
+        ]),
+        new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error("queue readiness timeout")), this.config.readyTimeoutMs);
+        })
       ]);
+      if (this.closed) throw new Error("queue closed during readiness");
       if (this.worker) await this.worker.startStalledCheckTimer();
       this.readyState = true;
+      this.hasBeenReady = true;
       this.lastConnectionError = null;
       return { ready: true, claimsEnabled: this.claimsEnabled };
     } catch {
+      this.readyState = false;
       throw new KeyValueTransportError("V4_QUEUE_UNAVAILABLE", "startup", "Dedicated Key Value is unavailable.", { retryable: true });
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
+  }
+
+  ready() {
+    this.ensureOpen();
+    if (this.readyState) return Promise.resolve({ ready: true, claimsEnabled: this.claimsEnabled });
+    if (this.hasBeenReady && this.lastConnectionError) {
+      return Promise.reject(new KeyValueTransportError(
+        "V4_QUEUE_UNAVAILABLE",
+        "startup",
+        "Dedicated Key Value is unavailable.",
+        { retryable: true }
+      ));
+    }
+    if (!this.readinessAttempt) this.readinessAttempt = this.initializeReadiness();
+    return this.readinessAttempt;
   }
 
   readiness() {
@@ -585,12 +626,12 @@ class RenderKeyValueTransport {
 
   async close() {
     if (this.closed) return;
+    this.closed = true;
     this.stopIntake();
     this.readyState = false;
     if (this.worker) await this.worker.close();
     await this.queue.close();
     this.active.clear();
-    this.closed = true;
   }
 }
 
@@ -601,6 +642,7 @@ module.exports = {
   DEFAULT_NONCE_RETENTION_MS,
   DEFAULT_QUEUE_NAME,
   DEFAULT_QUEUE_PREFIX,
+  DEFAULT_READY_TIMEOUT_MS,
   DEFAULT_RETENTION_SECONDS,
   KV_JOB_NAME,
   KV_JOB_SCHEMA,

@@ -158,6 +158,7 @@ Tuning and retention:
 - `V4_FIXTURE_HEARTBEAT_MS=5000`
 - `V4_FIXTURE_POLL_MS=500`
 - `V4_FIXTURE_CHILD_TIMEOUT_MS=120000`
+- `V4_QUEUE_READY_TIMEOUT_MS=15000`
 - `V4_QUEUE_STALLED_INTERVAL_MS=30000`
 - `V4_QUEUE_RESULT_RETENTION_SECONDS=604800`
 - `V4_QUEUE_NONCE_RETENTION_MS=604800000`
@@ -196,7 +197,8 @@ Background Workers do not expose an HTTP health endpoint. Readiness is the struc
 `fixture_supervisor_ready` event after the Queue client is ready and, when claims are
 enabled, the Worker client is also ready. The local singleton lock must be held, all
 safety gates must be zero, and the log must report the expected transport and
-claim-switch state. `numInstances` must remain `1`.
+claim-switch state. Queue readiness fails closed after `V4_QUEUE_READY_TIMEOUT_MS` and
+does not retry or fall back within the process. `numInstances` must remain `1`.
 
 The first deployment must use `V4_QUEUE_CLAIMS_ENABLED=0` and no bootstrap variables.
 Enabling it and switching to the committed-fixture entrypoint must be one controlled,

@@ -67,6 +67,8 @@ services:
         value: "500"
       - key: V4_FIXTURE_CHILD_TIMEOUT_MS
         value: "120000"
+      - key: V4_QUEUE_READY_TIMEOUT_MS
+        value: "15000"
       - key: V4_QUEUE_STALLED_INTERVAL_MS
         value: "30000"
       - key: V4_QUEUE_RESULT_RETENTION_SECONDS
