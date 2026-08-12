@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "v2-native-main-place-job.v1",
+  "runId": "rebuild-phase1-main-place-offline-003",
+  "mode": "offline",
+  "keyword": "경남 글램핑",
+  "checkIn": "2026-08-13",
+  "checkOut": "2026-08-13",
+  "timeoutMs": 25000
+}

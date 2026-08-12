@@ -1,0 +1,144 @@
+{
+  "schemaVersion": "v2-native-main-place-source-manifest.v1",
+  "baselineCommit": "b5de9c40199f40a4409f93b1b66f0b9ccea17a83",
+  "baselineCollectorBlob": "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3",
+  "referenceCollector": {
+    "commit": "4e4e1906e2967fe58df66f8ad67f832043d2763b",
+    "blob": "bcbe229998da3afa6f31ee04375fb0766019e56f"
+  },
+  "lockfileSha256": "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2",
+  "nodeVersion": "26.5.0",
+  "roots": [
+    "scripts/collection_worker_v2_top20_collector.cjs",
+    "scripts/gyeongnam_glamping_crawl.cjs"
+  ],
+  "externalDependencies": [
+    {
+      "name": "write-excel-file",
+      "version": "4.1.1",
+      "mainPlaceProbeDisposition": "unreachable-and-fail-closed"
+    }
+  ],
+  "files": [
+    {
+      "path": "package-lock.json",
+      "bytes": 1056,
+      "sha256": "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2",
+      "gitBlob": "dabce1c6a80a4541af98f521e9596ddc4c8f9c69"
+    },
+    {
+      "path": "package.json",
+      "bytes": 39443,
+      "sha256": "498ae2bad1beca9a3f38eeff1660184ee09fff946f2907b83d17354d7953be3a",
+      "gitBlob": "404396736e6e97983ac99e14099e552ba52ce6f0"
+    },
+    {
+      "path": "scripts/collection_artifact_contract.cjs",
+      "bytes": 20554,
+      "sha256": "3adb61991feaadb92369c25a0d5147fb6391088f7cc430b5e16479bc0e242bc4",
+      "gitBlob": "0a0b2220a7400eb2c2194d75131877d69ef4d815"
+    },
+    {
+      "path": "scripts/collection_worker_v2_top20_artifact.cjs",
+      "bytes": 43375,
+      "sha256": "23fb7ea879ec5883f316c86e58a586608220c05bc5b6f73850bf8848e099b28a",
+      "gitBlob": "7951f94c76062b43454bb6c23bd4a45d58b9be93"
+    },
+    {
+      "path": "scripts/collection_worker_v2_top20_collector.cjs",
+      "bytes": 44879,
+      "sha256": "b4192c29b606f6d9635c90b5bf618bcff3a5a739174836861c6853288610b730",
+      "gitBlob": "796a785d69c592ffa534360510e07115a04abea0"
+    },
+    {
+      "path": "scripts/collection_worker_v2_top20_contract.cjs",
+      "bytes": 28080,
+      "sha256": "3fd2df78ee5a875d3f73e57810d008f05e7d404bafb593414b20627980f6a704",
+      "gitBlob": "9c6965272a7e78bb6e91d654f108d5675cecd454"
+    },
+    {
+      "path": "scripts/collection_worker_v2_top20_protocol.cjs",
+      "bytes": 20228,
+      "sha256": "7b75a24839a47b940d480932f3ffb40a17ad4fc79903d6e92b4924b423746ae8",
+      "gitBlob": "fb33cb41dbbaa3f5bee17450b7c0df14e70caf8d"
+    },
+    {
+      "path": "scripts/collection_worker_v2_top20_resilience.cjs",
+      "bytes": 7904,
+      "sha256": "f4a4c562e6900da9c600f7db5dc6541dc4ef3077bca20e2202d2a9c159baa70d",
+      "gitBlob": "bc83e663537916d1b00f0f3481a4266798b06058"
+    },
+    {
+      "path": "scripts/crawl_failure_contract.cjs",
+      "bytes": 8990,
+      "sha256": "2368934d58820f6946748500a12270331e0c5cb02934ea604d05d11e569b7c22",
+      "gitBlob": "d6e069a8c9da259b5d65bd124f5745d57e3f73c6"
+    },
+    {
+      "path": "scripts/gyeongnam_glamping_crawl.cjs",
+      "bytes": 232961,
+      "sha256": "49f29b020a3d871460c93b581c6300dfd68e0a07f3ed6990e958436fe58b4bb0",
+      "gitBlob": "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3"
+    },
+    {
+      "path": "scripts/lodging_collection_context.cjs",
+      "bytes": 9874,
+      "sha256": "0371c647d4ad93c5f61f0bd377c2156ca944cefe7fcc2e4985303a90a12ec4f1",
+      "gitBlob": "5e389756faea6e2c44edb5b16b882195be99a670"
+    },
+    {
+      "path": "scripts/naver_bounded_inventory_live_transport.cjs",
+      "bytes": 21671,
+      "sha256": "0699d8efcfcbd7133ebf523d9eb5a655efe96ce106499f936cc2d78abc81f6df",
+      "gitBlob": "da5c15c1d6b964a386d96b1e1cd825ab3c5385aa"
+    },
+    {
+      "path": "scripts/naver_collector_strategy.cjs",
+      "bytes": 39446,
+      "sha256": "80420742f2b18cf2cc6fce1cf9bba86f316415a1aeba4d2f35963bb273180da4",
+      "gitBlob": "4af861102eb7bbc9ece5510086417cc603bc6e2f"
+    },
+    {
+      "path": "scripts/naver_legacy_canary_live_transport.cjs",
+      "bytes": 10434,
+      "sha256": "a403b63a33ecafab618bd25d05d23f979bc23182856a9043df19c609812a8436",
+      "gitBlob": "f346f23e67c358098ef852635fd5351c20cfc891"
+    },
+    {
+      "path": "scripts/naver_legacy_inventory_activation.cjs",
+      "bytes": 30523,
+      "sha256": "121688ccf4130202275f7349b7ed8258a51261bdb508c4e68f443b2e1b7ab36d",
+      "gitBlob": "60b6afd2c75b098371ab2758e8ce572d7fbf7fe9"
+    },
+    {
+      "path": "scripts/naver_legacy_limited_activation.cjs",
+      "bytes": 10565,
+      "sha256": "5f9be9b820734897e448a50797f93267b8b153d348bd2c845d147e201474a4d2",
+      "gitBlob": "b0483b6ae82bb230eb24a24634d99ede175e47d9"
+    },
+    {
+      "path": "scripts/naver_place_apollo_parser.cjs",
+      "bytes": 9151,
+      "sha256": "46045f8507de20758116bf1630673602d569b4400061b8cd47eee480699053c4",
+      "gitBlob": "e83364b96706b293a91af3d89cff2efe5fa89e99"
+    },
+    {
+      "path": "scripts/naver_provider_resilience.cjs",
+      "bytes": 21046,
+      "sha256": "a1e2cbe9ed19e3b4d4a7a50260e17ba6835f343e063758ae077c66bdd22fa54d",
+      "gitBlob": "afef886ed9602a4c0b1213acfe5226678762a7ae"
+    },
+    {
+      "path": "scripts/v2_collector_compatibility.cjs",
+      "bytes": 33292,
+      "sha256": "7768cee6f7ca5eb557fcff9b9406d5c0aed8125ba167fbb2d264b61017d26616",
+      "gitBlob": "790036b09bee498f693f1c2b5b660737469ab4b2"
+    },
+    {
+      "path": "scripts/workbook_export.cjs",
+      "bytes": 4959,
+      "sha256": "e486309f038f3966ea7106e227a3f9238b6da8d218b5f913f2ff26177afcb3f4",
+      "gitBlob": "2bdb4e9ae680c3400e49edd96bf219d61c03c0f8"
+    }
+  ]
+}
