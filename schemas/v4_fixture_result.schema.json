@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datalab.invalid/schemas/v4_fixture_result.schema.json",
+  "title": "Datalab V4 fixture result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "jobId",
+    "idempotencyKey",
+    "attemptId",
+    "status",
+    "stage",
+    "code",
+    "matched",
+    "actualExternalRequests",
+    "operationalWrites",
+    "collectorInvocations",
+    "exitCode",
+    "artifactManifestDigest",
+    "startedAt",
+    "completedAt",
+    "retryable",
+    "scenario"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "datalab-v4-fixture-result.v1" },
+    "jobId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+    "idempotencyKey": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+    "attemptId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+    "status": { "enum": ["succeeded", "failed", "rejected", "duplicate"] },
+    "stage": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+    "code": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+    "matched": { "type": "boolean" },
+    "actualExternalRequests": { "type": "integer", "minimum": 0 },
+    "operationalWrites": { "type": "boolean" },
+    "collectorInvocations": { "type": "integer", "minimum": 0, "maximum": 1 },
+    "exitCode": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 0, "maximum": 255 }
+      ]
+    },
+    "artifactManifestDigest": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      ]
+    },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "retryable": { "type": "boolean" },
+    "scenario": {
+      "enum": ["success", "empty", "duplicate", "missing-field", "booking", "provider-error", "timeout"]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "succeeded" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "matched": { "const": true },
+          "actualExternalRequests": { "const": 0 },
+          "operationalWrites": { "const": false },
+          "collectorInvocations": { "const": 1 },
+          "exitCode": { "const": 0 },
+          "artifactManifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "retryable": { "const": false }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "matched": { "const": false },
+          "artifactManifestDigest": { "const": null }
+        }
+      }
+    }
+  ]
+}

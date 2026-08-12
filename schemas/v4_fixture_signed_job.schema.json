@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://datalab.invalid/schemas/v4_fixture_signed_job.schema.json",
+  "title": "Datalab V4 fixture signed job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "jobId",
+    "idempotencyKey",
+    "nonce",
+    "issuedAt",
+    "expiresAt",
+    "purpose",
+    "scenario",
+    "requestedCommit",
+    "collectorBlob",
+    "payloadDigest",
+    "keyId",
+    "signatureVersion",
+    "job",
+    "signature"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "datalab-v4-fixture-signed-job.v1" },
+    "jobId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+    "idempotencyKey": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+    "nonce": { "type": "string", "minLength": 16, "maxLength": 120, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "purpose": { "const": "parity_fixture" },
+    "scenario": {
+      "enum": ["success", "empty", "duplicate", "missing-field", "booking", "provider-error", "timeout"]
+    },
+    "requestedCommit": { "const": "7f6aba22cd5819fedf3f53c480fec92dfe8b56c2" },
+    "collectorBlob": { "const": "bcbe229998da3afa6f31ee04375fb0766019e56f" },
+    "payloadDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "keyId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "signatureVersion": { "const": "hmac-sha256-v1" },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "jobId",
+        "idempotencyKey",
+        "keyword",
+        "checkIn",
+        "checkOut",
+        "adults",
+        "searchMode",
+        "productMode",
+        "collectionMode",
+        "collectionPurpose",
+        "detailRankRanges",
+        "bookingRangeDays",
+        "bookingRangePlaceLimit"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "datalab-v4-worker-job.v1" },
+        "jobId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+        "idempotencyKey": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$" },
+        "keyword": { "const": "Gyeongnam glamping offline parity fixture" },
+        "checkIn": { "type": "string", "format": "date" },
+        "checkOut": { "type": "string", "format": "date" },
+        "adults": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "searchMode": { "const": "keyword" },
+        "productMode": { "const": "all" },
+        "collectionMode": { "const": "precision" },
+        "collectionPurpose": { "const": "revenue_detail" },
+        "detailRankRanges": { "const": "1-10" },
+        "bookingRangeDays": { "const": 7 },
+        "bookingRangePlaceLimit": { "const": 10 }
+      }
+    },
+    "signature": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

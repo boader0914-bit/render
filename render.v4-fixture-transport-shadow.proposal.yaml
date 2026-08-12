@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Proposal only. Do not sync, create, deploy, or restart before explicit Phase 10 approval.
+# This worker uses a same-process filesystem fixture transport, never a cross-service queue.
+services:
+  - type: worker
+    name: datalab-v4-fixture-transport-shadow
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v4-fixture-transport-contract
+    region: singapore
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: off
+    buildCommand: npm ci --omit=dev --ignore-scripts --audit=false --fund=false && npm run check:v4-fixture-transport
+    startCommand: npm run start:v4-fixture-transport-shadow
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: datalab-v4-fixture-transport-data
+      mountPath: /var/data/v4-fixture-transport
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "26.5.0"
+      - key: NODE_ENV
+        value: test
+      - key: V4_FIXTURE_TRANSPORT_MODE
+        value: fixture
+      - key: V4_FIXTURE_TRANSPORT_ROOT
+        value: /var/data/v4-fixture-transport
+      - key: V4_FIXTURE_JOB_KEY_ID
+        value: phase10-fixture-key-v1
+      - key: V4_FIXTURE_JOB_HMAC_KEY
+        sync: false
+      - key: V4_FIXTURE_EXTERNAL_CALLS_ENABLED
+        value: "0"
+      - key: V4_FIXTURE_OPERATIONAL_PUBLISH_ENABLED
+        value: "0"
+      - key: V4_FIXTURE_WEB_IMPORT_ENABLED
+        value: "0"
+      - key: V4_FIXTURE_WORKER_ID
+        value: phase10-fixture-shadow-worker
+      - key: V4_FIXTURE_LEASE_MS
+        value: "30000"
+      - key: V4_FIXTURE_HEARTBEAT_MS
+        value: "5000"
+      - key: V4_FIXTURE_POLL_MS
+        value: "1000"
+      - key: V4_FIXTURE_CHILD_TIMEOUT_MS
+        value: "120000"
+      - key: V4_FIXTURE_BOOTSTRAP_ENABLED
+        value: "1"
+      - key: V4_FIXTURE_BOOTSTRAP_JOB_FILE
+        value: tests/fixtures/v4_collector_parity_job.json
+      - key: V4_FIXTURE_BOOTSTRAP_SCENARIO
+        value: success
