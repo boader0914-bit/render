@@ -11,17 +11,12 @@ const {
   verifySignedJob
 } = require("./v4_fixture_job_contract.cjs");
 const {
-  claim,
-  complete,
-  fail,
-  heartbeat,
   initializeFixtureTransport,
   readJson,
-  recoverStaleClaims,
-  rejectClaim,
-  releaseOnShutdown,
   writeJsonAtomic
 } = require("./v4_fixture_transport_fs.cjs");
+const { createFilesystemTransport } = require("./v4_fixture_transport.cjs");
+const { loadSigningKeyring } = require("./v4_fixture_signing_keys.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const PARITY_RUNNER = path.join(__dirname, "v4_collector_parity.cjs");
@@ -73,7 +68,8 @@ function configuredInteger(env, name, fallback, min, max) {
 }
 
 function validateSupervisorEnvironment(env = process.env) {
-  if (env.NODE_ENV !== "test" || env.V4_FIXTURE_TRANSPORT_MODE !== "fixture") {
+  const transportMode = String(env.V4_FIXTURE_TRANSPORT_MODE || "");
+  if (env.NODE_ENV !== "test" || !["fixture", "render-key-value"].includes(transportMode)) {
     throw new SupervisorError("FIXTURE_SUPERVISOR_MODE_INVALID", "environment", "Supervisor requires test fixture mode.");
   }
   for (const name of DISABLED_GATES) {
@@ -81,17 +77,18 @@ function validateSupervisorEnvironment(env = process.env) {
       throw new SupervisorError("FIXTURE_SUPERVISOR_GATE_NOT_DISABLED", "environment", `${name} must be exactly 0.`);
     }
   }
-  if (globalThis.__DATALAB_V4_NETWORK_BLOCKED__ !== true) {
+  if (transportMode === "fixture" && globalThis.__DATALAB_V4_NETWORK_BLOCKED__ !== true) {
     throw new SupervisorError("FIXTURE_SUPERVISOR_NETWORK_BLOCKER_REQUIRED", "environment", "Supervisor requires the network blocker preload.");
   }
   const transportRoot = String(env.V4_FIXTURE_TRANSPORT_ROOT || "");
   if (!path.isAbsolute(transportRoot)) {
     throw new SupervisorError("FIXTURE_SUPERVISOR_ROOT_INVALID", "environment", "V4_FIXTURE_TRANSPORT_ROOT must be absolute.");
   }
-  const keyId = String(env.V4_FIXTURE_JOB_KEY_ID || "").trim();
-  const secret = String(env.V4_FIXTURE_JOB_HMAC_KEY || "");
-  if (!keyId || !secret) {
-    throw new SupervisorError("FIXTURE_SUPERVISOR_SIGNING_CONFIG_MISSING", "environment", "Fixture signing configuration is missing.");
+  let keyring;
+  try {
+    keyring = loadSigningKeyring(env, { allowLegacy: transportMode === "fixture" });
+  } catch (error) {
+    throw new SupervisorError(error.code || "FIXTURE_SUPERVISOR_SIGNING_CONFIG_MISSING", "environment", "Fixture signing configuration is invalid.");
   }
   const leaseMs = configuredInteger(env, "V4_FIXTURE_LEASE_MS", 5000, 1000, 10 * 60 * 1000);
   const heartbeatMs = configuredInteger(env, "V4_FIXTURE_HEARTBEAT_MS", 1000, 250, 60 * 1000);
@@ -99,9 +96,12 @@ function validateSupervisorEnvironment(env = process.env) {
     throw new SupervisorError("FIXTURE_SUPERVISOR_HEARTBEAT_INVALID", "environment", "Heartbeat interval must be less than half the lease.");
   }
   return {
+    transportMode,
     transportRoot: path.resolve(transportRoot),
-    keyId,
-    secret,
+    keyId: keyring.current.keyId,
+    secret: keyring.current.secret,
+    keyring,
+    resolveKey: keyring.resolveKey,
     leaseMs,
     heartbeatMs,
     pollMs: configuredInteger(env, "V4_FIXTURE_POLL_MS", 500, 100, 60 * 1000),
@@ -115,7 +115,8 @@ function validateSupervisorEnvironment(env = process.env) {
 
 function sensitiveValues(env = process.env) {
   return Object.entries(env)
-    .filter(([name, value]) => /(KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CREDENTIAL)/i.test(name)
+    .filter(([name, value]) => (/(KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CREDENTIAL)/i.test(name)
+      || name === "V4_QUEUE_REDIS_URL")
       && typeof value === "string" && value.length >= 4)
     .map(([, value]) => value)
     .sort((left, right) => right.length - left.length);
@@ -248,7 +249,10 @@ async function runParityChild(envelope, roots, claimRecord, config, options = {}
     }, config.childTimeoutMs);
     timeout.unref();
     heartbeatTimer = setInterval(() => {
-      heartbeat(roots, claimRecord, config.leaseMs).catch((error) => {
+      const renew = typeof options.heartbeat === "function"
+        ? options.heartbeat
+        : () => Promise.reject(new SupervisorError("FIXTURE_HEARTBEAT_MISSING", "lease", "Transport heartbeat is unavailable."));
+      renew().catch((error) => {
         leaseFailure = error;
         child?.kill("SIGTERM");
       });
@@ -355,26 +359,35 @@ async function runParityChild(envelope, roots, claimRecord, config, options = {}
 }
 
 async function processNext(roots, config, options = {}) {
-  const claimRecord = await claim(roots, config.workerId, config.leaseMs, { nowMs: options.nowMs });
+  const resolveKey = resolverFor(config);
+  const transport = options.transport || createFilesystemTransport(roots, {
+    verifyOptions: { resolveKey }
+  });
+  const claimRecord = await transport.claim(config.workerId, config.leaseMs, { nowMs: options.nowMs });
   if (!claimRecord) return null;
+  if (claimRecord.rejected) return claimRecord.rejection;
   let envelope;
   try {
     envelope = verifySignedJob(claimRecord.envelope, {
       nowMs: options.nowMs,
-      resolveKey: (keyId) => keyId === config.keyId ? config.secret : null
+      resolveKey
     });
   } catch (error) {
-    return rejectClaim(roots, claimRecord, error);
+    if (typeof transport.reject === "function") return transport.reject(claimRecord.claimId, error);
+    throw error;
   }
   const startedAt = new Date(Number.isFinite(options.nowMs) ? Number(options.nowMs) : Date.now()).toISOString();
   const runParity = options.runParity || runParityChild;
   try {
-    const result = await runParity(envelope, roots, claimRecord, config, options);
-    if (result.status === "succeeded") return complete(roots, claimRecord, result);
-    return fail(roots, claimRecord, result);
+    const result = await runParity(envelope, roots, claimRecord, config, {
+      ...options,
+      heartbeat: () => transport.heartbeat(claimRecord.claimId)
+    });
+    if (result.status === "succeeded") return transport.complete(claimRecord.claimId, result);
+    return transport.fail(claimRecord.claimId, result);
   } catch (error) {
     if (options.signal?.aborted || error.code === "FIXTURE_CHILD_ABORTED") {
-      return releaseOnShutdown(roots, claimRecord, envelope, {
+      return transport.releaseOnShutdown(claimRecord.claimId, {
         startedAt,
         attemptId: options.attemptId || claimRecord.claimId,
         collectorInvocations: error.collectorInvocations,
@@ -388,8 +401,13 @@ async function processNext(roots, config, options = {}) {
       startedAt,
       error
     );
-    return fail(roots, claimRecord, result);
+    return transport.fail(claimRecord.claimId, result);
   }
+}
+
+function resolverFor(config) {
+  if (typeof config.resolveKey === "function") return config.resolveKey;
+  return (keyId) => keyId === config.keyId ? config.secret : null;
 }
 
 function supervisorLockFile(roots) {
@@ -465,9 +483,14 @@ function waitForPoll(milliseconds, signal) {
 async function main(options = {}) {
   const config = options.config || validateSupervisorEnvironment();
   const roots = options.roots || await initializeFixtureTransport(config.transportRoot);
+  const resolveKey = resolverFor(config);
+  const transport = options.transport || createFilesystemTransport(roots, {
+    verifyOptions: { resolveKey }
+  });
   const controller = new AbortController();
   const requestStop = (signal) => {
     if (controller.signal.aborted) return;
+    if (typeof transport.stopIntake === "function") transport.stopIntake();
     logEvent("fixture_supervisor_shutdown_requested", { signal });
     controller.abort();
   };
@@ -478,16 +501,20 @@ async function main(options = {}) {
   const lockHandle = await acquireSupervisorLock(roots, config);
   let lockTimer = null;
   try {
-    const recovered = await recoverStaleClaims(roots, {
-      resolveKey: (keyId) => keyId === config.keyId ? config.secret : null
-    });
+    if (typeof transport.ready === "function") await transport.ready();
+    const recovered = typeof transport.recoverStaleClaims === "function"
+      ? await transport.recoverStaleClaims({ resolveKey })
+      : [];
     const startup = typeof options.beforeReady === "function"
       ? await options.beforeReady({ roots, config, recovered })
       : null;
+    const readiness = typeof transport.readiness === "function" ? transport.readiness() : null;
     logEvent("fixture_supervisor_ready", {
       workerId: config.workerId,
       concurrency: 1,
-      mode: "fixture",
+      mode: config.transportMode,
+      transport: transport.adapter || null,
+      claimsEnabled: readiness?.claimsEnabled ?? true,
       automaticRetry: false,
       recoveredWithoutRetry: recovered.length,
       bootstrapStatus: startup?.status || null,
@@ -498,7 +525,7 @@ async function main(options = {}) {
     }, config.heartbeatMs);
     lockTimer.unref();
     while (!controller.signal.aborted) {
-      const result = await processNext(roots, config, { signal: controller.signal });
+      const result = await processNext(roots, config, { signal: controller.signal, transport });
       if (result) {
         logEvent("fixture_job_terminal", {
           status: result.status,
@@ -516,6 +543,7 @@ async function main(options = {}) {
     if (lockTimer) clearInterval(lockTimer);
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
+    await transport.close().catch(() => {});
     const released = await releaseSupervisorLock(roots, lockHandle, config).catch(() => false);
     logEvent("fixture_supervisor_stopped", { workerId: config.workerId, lockReleased: released });
   }
@@ -531,8 +559,11 @@ module.exports = {
   main,
   processNext,
   releaseSupervisorLock,
+  resolverFor,
   renewSupervisorLock,
   runParityChild,
+  sanitizedJson,
+  sensitiveValues,
   validateSupervisorEnvironment
 };
 

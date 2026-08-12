@@ -9,6 +9,7 @@ const {
   enqueue,
   initializeFixtureTransport
 } = require("./v4_fixture_transport_fs.cjs");
+const { loadSigningKeyring } = require("./v4_fixture_signing_keys.cjs");
 
 const PRODUCER_SCHEMA = "datalab-v4-fixture-producer-result.v1";
 const MAX_JOB_BYTES = 64 * 1024;
@@ -29,7 +30,8 @@ class ProducerError extends Error {
 }
 
 function validateProducerEnvironment(env = process.env) {
-  if (env.NODE_ENV !== "test" || env.V4_FIXTURE_TRANSPORT_MODE !== "fixture") {
+  const transportMode = String(env.V4_FIXTURE_TRANSPORT_MODE || "");
+  if (env.NODE_ENV !== "test" || !["fixture", "render-key-value"].includes(transportMode)) {
     throw new ProducerError("FIXTURE_PRODUCER_MODE_INVALID", "environment", "Producer simulator requires test fixture mode.");
   }
   for (const name of DISABLED_GATES) {
@@ -37,19 +39,26 @@ function validateProducerEnvironment(env = process.env) {
       throw new ProducerError("FIXTURE_PRODUCER_GATE_NOT_DISABLED", "environment", `${name} must be exactly 0.`);
     }
   }
-  if (globalThis.__DATALAB_V4_NETWORK_BLOCKED__ !== true) {
+  if (transportMode === "fixture" && globalThis.__DATALAB_V4_NETWORK_BLOCKED__ !== true) {
     throw new ProducerError("FIXTURE_PRODUCER_NETWORK_BLOCKER_REQUIRED", "environment", "Producer simulator requires the network blocker preload.");
   }
   const root = String(env.V4_FIXTURE_TRANSPORT_ROOT || "");
   if (!path.isAbsolute(root)) {
     throw new ProducerError("FIXTURE_PRODUCER_ROOT_INVALID", "environment", "V4_FIXTURE_TRANSPORT_ROOT must be absolute.");
   }
-  const keyId = String(env.V4_FIXTURE_JOB_KEY_ID || "").trim();
-  const secret = String(env.V4_FIXTURE_JOB_HMAC_KEY || "");
-  if (!keyId || !secret) {
-    throw new ProducerError("FIXTURE_PRODUCER_SIGNING_CONFIG_MISSING", "environment", "Fixture signing configuration is missing.");
+  let keyring;
+  try {
+    keyring = loadSigningKeyring(env, { allowLegacy: transportMode === "fixture" });
+  } catch {
+    throw new ProducerError("FIXTURE_PRODUCER_SIGNING_CONFIG_MISSING", "environment", "Fixture signing configuration is invalid.");
   }
-  return { root: path.resolve(root), keyId, secret };
+  return {
+    transportMode,
+    root: path.resolve(root),
+    keyId: keyring.current.keyId,
+    secret: keyring.current.secret,
+    keyring
+  };
 }
 
 async function readJobFile(filePath) {
@@ -82,11 +91,16 @@ async function produceFixtureJob(options) {
     requestedCommit: options.requestedCommit,
     collectorBlob: options.collectorBlob
   });
-  const roots = options.roots || await initializeFixtureTransport(options.root);
-  const accepted = await enqueue(roots, signed, {
-    nowMs: options.nowMs,
-    resolveKey: (keyId) => keyId === options.keyId ? options.secret : null
-  });
+  let accepted;
+  if (options.transport) {
+    accepted = await options.transport.enqueue(signed, { nowMs: options.nowMs });
+  } else {
+    const roots = options.roots || await initializeFixtureTransport(options.root);
+    accepted = await enqueue(roots, signed, {
+      nowMs: options.nowMs,
+      resolveKey: (keyId) => keyId === options.keyId ? options.secret : null
+    });
+  }
   return {
     schemaVersion: PRODUCER_SCHEMA,
     status: accepted.status,

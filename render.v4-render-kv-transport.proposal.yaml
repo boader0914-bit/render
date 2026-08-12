@@ -1,0 +1,92 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# Proposal only. Do not sync, create, deploy, or restart before explicit Phase 11 approval.
+# The first deployment keeps claims disabled and enqueues no job. Phase 11 may switch
+# to the committed-fixture shadow entrypoint and enable claims in one approved deploy.
+services:
+  - type: keyvalue
+    name: datalab-v4-render-kv-queue
+    region: singapore
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+
+  - type: worker
+    name: datalab-v4-render-kv-shadow
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v4-render-kv-transport
+    region: singapore
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: off
+    buildCommand: npm ci --omit=dev --ignore-scripts --audit=false --fund=false && npm run check:v4-render-kv-transport && npm run test:v4-render-kv-transport
+    startCommand: npm run start:v4-render-kv-supervisor
+    maxShutdownDelaySeconds: 60
+    disk:
+      name: datalab-v4-render-kv-artifacts
+      mountPath: /var/data/v4-render-kv-worker
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "26.5.0"
+      - key: NODE_ENV
+        value: test
+      - key: V4_FIXTURE_TRANSPORT_MODE
+        value: render-key-value
+      - key: V4_QUEUE_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: datalab-v4-render-kv-queue
+          property: connectionString
+      - key: V4_QUEUE_NAME
+        value: fixture-jobs
+      - key: V4_QUEUE_PREFIX
+        value: datalab-v4-kv-v1
+      - key: V4_QUEUE_CLAIMS_ENABLED
+        value: "0"
+      - key: V4_FIXTURE_TRANSPORT_ROOT
+        value: /var/data/v4-render-kv-worker
+      - key: V4_FIXTURE_JOB_KEY_ID_CURRENT
+        value: phase11-kv-shadow-v1
+      - key: V4_FIXTURE_JOB_HMAC_KEY_CURRENT
+        sync: false
+      - key: V4_FIXTURE_EXTERNAL_CALLS_ENABLED
+        value: "0"
+      - key: V4_FIXTURE_OPERATIONAL_PUBLISH_ENABLED
+        value: "0"
+      - key: V4_FIXTURE_WEB_IMPORT_ENABLED
+        value: "0"
+      - key: V4_FIXTURE_WORKER_ID
+        value: phase11-kv-shadow-worker
+      - key: V4_FIXTURE_LEASE_MS
+        value: "30000"
+      - key: V4_FIXTURE_HEARTBEAT_MS
+        value: "5000"
+      - key: V4_FIXTURE_POLL_MS
+        value: "500"
+      - key: V4_FIXTURE_CHILD_TIMEOUT_MS
+        value: "120000"
+      - key: V4_QUEUE_STALLED_INTERVAL_MS
+        value: "30000"
+      - key: V4_QUEUE_RESULT_RETENTION_SECONDS
+        value: "604800"
+      - key: V4_QUEUE_NONCE_RETENTION_MS
+        value: "604800000"
+      - key: V4_QUEUE_COMPLETED_RETENTION_COUNT
+        value: "1000"
+      - key: V4_QUEUE_FAILED_RETENTION_COUNT
+        value: "5000"
+
+# Approved Phase 11 fixture-execution diff, not part of the first deployment:
+#
+# startCommand: npm run start:v4-render-kv-shadow
+# envVars:
+#   - key: V4_QUEUE_CLAIMS_ENABLED
+#     value: "1"
+#   - key: V4_FIXTURE_BOOTSTRAP_ENABLED
+#     value: "1"
+#   - key: V4_FIXTURE_BOOTSTRAP_JOB_FILE
+#     value: tests/fixtures/v4_collector_parity_job.json
+#   - key: V4_FIXTURE_BOOTSTRAP_SCENARIO
+#     value: success

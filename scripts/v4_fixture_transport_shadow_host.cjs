@@ -45,6 +45,7 @@ async function bootstrapFixture(options) {
     return await produceFixtureJob({
       roots: options.roots,
       root: options.roots.root,
+      transport: options.transport,
       job,
       keyId: options.config.keyId,
       secret: options.config.secret,

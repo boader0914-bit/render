@@ -60,7 +60,8 @@ const RESULT_SCHEMA_FILE = path.join(ROOT, "schemas", "v4_fixture_result.schema.
 const KEY_ID = "phase9-fixture-key-v1";
 const SECRET = "phase9-synthetic-hmac-key-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const UNKNOWN_SECRET = "phase9-unknown-hmac-key-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const EXPECTED_LOCKFILE_SHA256 = "ec929b3a95d22b80837bd7e59d23ebc61040e5a11344590bfebb23c6880eb123";
+const PHASE9_LOCKFILE_SHA256 = "ec929b3a95d22b80837bd7e59d23ebc61040e5a11344590bfebb23c6880eb123";
+const EXPECTED_LOCKFILE_SHA256 = "c4e2466ca939bef2f79b19151f617fbc7ebceabd997759cba905c54783c1fe79";
 
 function baseJob(suffix, overrides = {}) {
   return {
@@ -557,6 +558,7 @@ async function main() {
       actualExternalRequests: 0,
       operationalWrites: false,
       collectorBlob: EXPECTED_COLLECTOR_BLOB,
+      phase9LockfileSha256: PHASE9_LOCKFILE_SHA256,
       lockfileSha256: EXPECTED_LOCKFILE_SHA256
     })}\n`);
   } finally {

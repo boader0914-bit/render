@@ -24,8 +24,8 @@ third-party schema or queue dependency.
 
 | Failure or attack | Control | Remaining limitation |
 | --- | --- | --- |
-| Forged or modified job | HMAC-SHA256 over canonical normalized JSON | Shared-secret rotation is not yet implemented |
-| Unknown signing key | Exact `keyId` allowlist | One active key in the fixture adapter |
+| Forged or modified job | HMAC-SHA256 over canonical normalized JSON | Secret distribution remains an operator responsibility |
+| Unknown signing key | Exact current/previous `keyId` allowlist | The overlap window must be bounded and removed after drain |
 | Expired or future job | 5-minute default TTL, 10-minute maximum, 30-second skew | Clock synchronization remains an operator dependency |
 | Nonce replay | Atomic nonce ledger | A lost enqueue response is recovered through idempotency/result lookup, not nonce reuse |
 | Same key, different payload | Payload identity conflict is terminal | No operator conflict-resolution command |
@@ -72,7 +72,25 @@ Every accepted claim finishes with a terminal result containing:
 The result file and its idempotency ledger digest are written atomically. A successful
 duplicate returns the stored result and records zero new collector invocations.
 
-## Fixture Transport Interface
+## Common Transport Interface
+
+`scripts/v4_fixture_transport.cjs` defines the transport-neutral interface used by the
+producer and supervisor:
+
+- `enqueue(job)`
+- `claim(workerId, leaseMs)`
+- `heartbeat(claimId)`
+- `complete(claimId, result)`
+- `fail(claimId, result)`
+- `getResult(idempotencyKey)`
+- `releaseOnShutdown(claimId)`
+- `close()`
+
+The Phase 9 filesystem functions remain unchanged.
+`createFilesystemTransport()` only adapts those functions to the common interface, so
+the original fixture tests continue to exercise the same storage implementation.
+
+## Filesystem Fixture Adapter
 
 `scripts/v4_fixture_transport_fs.cjs` implements:
 
@@ -131,16 +149,25 @@ npm run enqueue:v4-fixture-transport -- --job-file tests/fixtures/v4_collector_p
 
 ## Environment Names
 
-Required for producer and supervisor:
+Required for the Phase 10 producer and supervisor:
 
 - `NODE_ENV=test`
 - `V4_FIXTURE_TRANSPORT_MODE=fixture`
 - `V4_FIXTURE_TRANSPORT_ROOT`
-- `V4_FIXTURE_JOB_KEY_ID`
-- `V4_FIXTURE_JOB_HMAC_KEY`
+- `V4_FIXTURE_JOB_KEY_ID_CURRENT`
+- `V4_FIXTURE_JOB_HMAC_KEY_CURRENT`
 - `V4_FIXTURE_EXTERNAL_CALLS_ENABLED=0`
 - `V4_FIXTURE_OPERATIONAL_PUBLISH_ENABLED=0`
 - `V4_FIXTURE_WEB_IMPORT_ENABLED=0`
+
+Optional rotation overlap:
+
+- `V4_FIXTURE_JOB_KEY_ID_PREVIOUS`
+- `V4_FIXTURE_JOB_HMAC_KEY_PREVIOUS`
+
+The legacy names `V4_FIXTURE_JOB_KEY_ID` and `V4_FIXTURE_JOB_HMAC_KEY` remain
+accepted only in `fixture` mode so the Phase 9 deployment and tests are not broken.
+They are rejected in `render-key-value` mode.
 
 Supervisor tuning:
 
@@ -184,8 +211,9 @@ References:
 ## Shutdown Delay
 
 The Phase 8 report does not prove the live value of `maxShutdownDelaySeconds` for
-`srv-d9tog1dbedkc739nvm20`. A fresh authenticated read was unavailable in Phase 9, so
-the observed value remains **unknown**, not 60 seconds.
+`srv-d9tog1dbedkc739nvm20`. On 2026-08-12, an authenticated read-only Dashboard
+inspection did not expose this field, and no authenticated Render API or CLI token was
+available. The observed value therefore remains **unknown**, not 60 seconds.
 
 Render documents a 30-second default when the field is omitted and allows values from
 1 through 300 for web, private, and worker services. After a separate approval, use one
@@ -202,6 +230,19 @@ or add this service field to its managed Blueprint:
 maxShutdownDelaySeconds: 60
 ```
 
+The equivalent API request body for the background worker is:
+
+```json
+{
+  "serviceDetails": {
+    "maxShutdownDelaySeconds": 60
+  }
+}
+```
+
+It would be sent with `PATCH /v1/services/srv-d9tog1dbedkc739nvm20`. This is a diff
+only; it was not sent.
+
 The official Update service documentation states that configuration PATCH changes do
 not deploy automatically; a separate deploy call is required. A Blueprint sync does
 trigger deployment. Neither action is performed in Phase 9.
@@ -213,13 +254,18 @@ References:
 - https://render.com/docs/cli-reference
 - https://api-docs.render.com/reference/update-service
 
+The dedicated Key Value candidate and its additional environment contract are defined
+in `docs/v4_render_kv_transport_contract.md`. Its Redis behavior is not proven by the
+filesystem tests.
+
 ## Known Limits
 
 - No Web 2 producer integration exists.
 - No dedicated Key Value, Postgres, Workflow, or other Render resource exists.
 - No automatic retry or fallback exists.
 - No live Provider call or operational publish path exists.
-- HMAC key rotation and multi-key overlap are not implemented.
+- HMAC current/previous overlap is implemented offline, but no Render secret rotation
+  has been performed.
 - Filesystem behavior is not evidence of distributed delivery semantics.
 - Exactly-once execution is not claimed; the verified property is terminal idempotent
   result reuse after at most one claimed fixture execution on one host.
