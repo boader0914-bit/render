@@ -17,7 +17,7 @@ async function main(options = {}) {
   const bootstrap = validateBootstrapEnvironment(env);
   return runSupervisor({
     ...runtime,
-    beforeReady: () => bootstrapFixture({ ...runtime, bootstrap })
+    beforeReady: ({ transport }) => bootstrapFixture({ ...runtime, transport, bootstrap })
   });
 }
 

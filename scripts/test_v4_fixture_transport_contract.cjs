@@ -117,6 +117,7 @@ function supervisorConfig(roots, overrides = {}) {
     secret: SECRET,
     leaseMs: 5000,
     heartbeatMs: 1000,
+    startupWaitMs: 0,
     pollMs: 250,
     childTimeoutMs: 120000,
     workerId: `phase9-worker-${crypto.randomBytes(5).toString("hex")}`,
@@ -207,6 +208,7 @@ function supervisorEnvironment(root) {
     V4_FIXTURE_WORKER_ID: "phase9-environment-worker",
     V4_FIXTURE_LEASE_MS: "5000",
     V4_FIXTURE_HEARTBEAT_MS: "1000",
+    V4_FIXTURE_SUPERVISOR_STARTUP_WAIT_MS: "0",
     V4_FIXTURE_POLL_MS: "250",
     V4_FIXTURE_CHILD_TIMEOUT_MS: "120000"
   };
@@ -349,7 +351,7 @@ async function main() {
     const lockConfig = supervisorConfig(claimRoots, { workerId: "phase9-lock-owner" });
     const lockHandle = await acquireSupervisorLock(claimRoots, lockConfig, now);
     await assertRejected(acquireSupervisorLock(claimRoots, lockConfig, now + 1), "FIXTURE_SUPERVISOR_ALREADY_RUNNING");
-    assert.equal(await releaseSupervisorLock(claimRoots, lockHandle, lockConfig), true);
+    assert.equal(await releaseSupervisorLock(claimRoots, lockHandle), true);
     mark("single-claim-heartbeat-supervisor-lock");
 
     const staleRoots = await newRoots(temp, "stale-claim");

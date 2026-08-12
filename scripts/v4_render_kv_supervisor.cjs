@@ -21,12 +21,12 @@ async function createRuntime(env = process.env, options = {}) {
     });
   }
   const roots = await initializeFixtureTransport(config.transportRoot);
-  const transport = options.transport || new RenderKeyValueTransport({
+  const createTransport = () => options.transport || new RenderKeyValueTransport({
     ...configFromEnvironment(env, config.keyring),
     bullmq: options.bullmq,
     bullmqVersion: options.bullmqVersion
   });
-  return { config, roots, transport };
+  return { config, roots, createTransport };
 }
 
 async function main(options = {}) {
