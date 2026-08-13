@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { spawn } = require("node:child_process");
+const { EventEmitter } = require("node:events");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { installFixtureNetworkGuard } = require("./fixture_network_guard.cjs");
@@ -19,6 +21,7 @@ const {
 const {
   D2_COMMIT,
   LIVE_APPROVAL,
+  PROCESS_KEEPALIVE_INTERVAL_MS,
   RENDER_JOB_CANONICAL_SHA256,
   RENDER_RUN_ID,
   RENDER_STATE_ROOT,
@@ -111,6 +114,102 @@ function liveEnv(state) {
     V2_RENDER_DIAGNOSTIC_FALLBACK: "0",
     V2_RENDER_DIAGNOSTIC_OPERATIONAL_WRITES: "0"
   };
+}
+
+function exerciseServeProcess(state) {
+  const survivalMs = 10_000;
+  const startupTimeoutMs = 15_000;
+  const shutdownTimeoutMs = 5_000;
+  const preload = path.join(ROOT, "scripts", "fixture_network_guard_preload.cjs");
+  const secretSentinel = "phase3-d4-child-secret-sentinel";
+  const env = {
+    ...process.env,
+    ...readinessEnv(state),
+    NODE_OPTIONS: `--require=${preload.replace(/\\/gu, "/")}`,
+    RENDER_SERVICE_ID: "",
+    RENDER_GIT_COMMIT: "",
+    V2_RENDER_DIAGNOSTIC_LIVE_APPROVED: "",
+    V2_RENDER_DIAGNOSTIC_APPROVED_JOB_SHA256: "",
+    V2_RENDER_DIAGNOSTIC_EXPECTED_ENVELOPE_SHA256: "",
+    V2_RENDER_DIAGNOSTIC_SECRET_SENTINEL: secretSentinel
+  };
+
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const child = spawn(process.execPath, [
+      path.join(ROOT, "scripts", "v2_booking_business_render_one_shot.cjs"),
+      "serve"
+    ], {
+      cwd: ROOT,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    let readinessEvent = null;
+    let shutdownRequested = false;
+    let survivalTimer = null;
+    let shutdownTimer = null;
+
+    const startupTimer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("serve child did not emit readiness before the startup timeout"));
+    }, startupTimeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (readinessEvent) return;
+      for (const line of stdout.split(/\r?\n/u).filter(Boolean)) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.event !== "render_diagnostic_ready") continue;
+          readinessEvent = parsed;
+          clearTimeout(startupTimer);
+          survivalTimer = setTimeout(() => {
+            if (child.exitCode !== null || child.signalCode !== null) return;
+            shutdownRequested = true;
+            child.kill("SIGTERM");
+            shutdownTimer = setTimeout(() => {
+              child.kill("SIGKILL");
+              reject(new Error("serve child did not stop after SIGTERM"));
+            }, shutdownTimeoutMs);
+          }, survivalMs);
+          break;
+        } catch {
+          // Ignore an incomplete line until the next stdout chunk arrives.
+        }
+      }
+    });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", (error) => {
+      clearTimeout(startupTimer);
+      clearTimeout(survivalTimer);
+      clearTimeout(shutdownTimer);
+      reject(error);
+    });
+    child.once("close", (exitCode, signal) => {
+      clearTimeout(startupTimer);
+      clearTimeout(survivalTimer);
+      clearTimeout(shutdownTimer);
+      if (!readinessEvent) {
+        reject(new Error("serve child exited before readiness"));
+        return;
+      }
+      if (!shutdownRequested) {
+        reject(new Error("serve child exited before the approved shutdown signal"));
+        return;
+      }
+      resolve(Object.freeze({
+        readinessEvent,
+        survivedMs: Date.now() - startedAt,
+        exitCode,
+        signal,
+        stderrBytes: Buffer.byteLength(stderr),
+        secretLeaked: stdout.includes(secretSentinel) || stderr.includes(secretSentinel)
+      }));
+    });
+  });
 }
 
 function networkDiagnosticFixture() {
@@ -446,10 +545,37 @@ async function main() {
   check(Object.prototype.hasOwnProperty.call(liveProjection, "bookingBusinessId"), false, "safe projection must remove the raw booking ID");
   check(Object.prototype.hasOwnProperty.call(liveProjection, "bookingUrl"), false, "safe projection must remove the raw booking URL");
 
-  const signalPromise = holdUntilSignal();
-  process.emit("SIGTERM");
-  await signalPromise;
-  check(true, true, "serve mode must respond to a termination signal");
+  const signalTarget = new EventEmitter();
+  const keepaliveToken = Object.freeze({ kind: "offline-keepalive" });
+  let scheduledInterval = null;
+  let clearedToken = null;
+  const signalPromise = holdUntilSignal({
+    signalTarget,
+    setIntervalFn: (_callback, intervalMs) => {
+      scheduledInterval = intervalMs;
+      return keepaliveToken;
+    },
+    clearIntervalFn: (token) => { clearedToken = token; }
+  });
+  check(scheduledInterval, PROCESS_KEEPALIVE_INTERVAL_MS, "serve mode must register an active keepalive handle");
+  signalTarget.emit("SIGTERM");
+  const signalResult = await signalPromise;
+  check(signalResult.signal, "SIGTERM", "serve mode must report its termination signal");
+  check(clearedToken, keepaliveToken, "serve mode must clear its keepalive handle on shutdown");
+  check(signalTarget.listenerCount("SIGTERM"), 0, "serve mode must remove its SIGTERM listener after shutdown");
+  check(signalTarget.listenerCount("SIGINT"), 0, "serve mode must remove its SIGINT listener after shutdown");
+
+  const serveOutcome = await exerciseServeProcess(testState("serve-process-lifetime"));
+  check(serveOutcome.readinessEvent.status, "ready", "serve child must emit readiness before the survival window");
+  check(serveOutcome.readinessEvent.mode, "readiness-only", "serve child must remain in readiness-only mode");
+  check(serveOutcome.readinessEvent.runEnabled, false, "serve child must keep collection disabled");
+  check(serveOutcome.readinessEvent.requestBudget, 0, "serve child must keep its request budget at zero");
+  check(serveOutcome.readinessEvent.externalRequests, 0, "serve child must make no Provider request");
+  check(serveOutcome.readinessEvent.operationalWrites, 0, "serve child must make no operational write");
+  check(serveOutcome.survivedMs >= 10_000, true, "serve child must remain alive for the full survival window");
+  check(serveOutcome.exitCode === 0 || serveOutcome.signal === "SIGTERM", true, "serve child must stop only after controlled SIGTERM");
+  check(serveOutcome.stderrBytes, 0, "serve child must not emit stderr during controlled shutdown");
+  check(serveOutcome.secretLeaked, false, "serve child must not leak the secret sentinel");
 
   const files = await textFiles(OUTPUT_ROOT);
   for (const file of files) {
@@ -470,6 +596,8 @@ async function main() {
     simulatedLiveAuditRequests: 1,
     duplicateCollectorInvocations: 0,
     concurrentCollectorInvocations: concurrentInvocations,
+    serveSurvivalMs: serveOutcome.survivedMs,
+    serveControlledShutdown: true,
     retries: 0,
     fallbacks: 0,
     operationalWrites: 0,

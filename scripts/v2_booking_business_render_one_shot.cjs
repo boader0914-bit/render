@@ -31,6 +31,7 @@ const RENDER_JOB_CANONICAL_SHA256 = "598cb85cbddef5338e1b7d67ed0aa4b16ba7713f85b
 const RENDER_RUN_ID = "rebuild-phase3-booking-business-render-live-001";
 const LIVE_APPROVAL = "N3-D3-Live";
 const RENDER_STATE_ROOT = "/var/data/v2-booking-business-render-diagnostic";
+const PROCESS_KEEPALIVE_INTERVAL_MS = 60_000;
 const JOB_PATH = path.join(ROOT, "docs", "v2_booking_business_render_diagnostic_job.proposal.json");
 const SOURCE_JOB_PATH = path.join(ROOT, "docs", "v2_booking_business_copy_only_live_job.proposal.json");
 const SOURCE_MANIFEST_PATH = path.join(ROOT, "docs", "v2_native_main_place_source_manifest.json");
@@ -594,16 +595,27 @@ async function readiness(env = process.env) {
   });
 }
 
-function holdUntilSignal() {
+function holdUntilSignal({
+  signalTarget = process,
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval,
+  intervalMs = PROCESS_KEEPALIVE_INTERVAL_MS
+} = {}) {
   return new Promise((resolve) => {
     let settled = false;
-    const finish = () => {
+    const keepalive = setIntervalFn(() => {}, intervalMs);
+    const finish = (signal) => {
       if (settled) return;
       settled = true;
-      resolve();
+      clearIntervalFn(keepalive);
+      signalTarget.removeListener("SIGTERM", onSigterm);
+      signalTarget.removeListener("SIGINT", onSigint);
+      resolve(Object.freeze({ signal }));
     };
-    process.once("SIGTERM", finish);
-    process.once("SIGINT", finish);
+    const onSigterm = () => finish("SIGTERM");
+    const onSigint = () => finish("SIGINT");
+    signalTarget.once("SIGTERM", onSigterm);
+    signalTarget.once("SIGINT", onSigint);
   });
 }
 
@@ -635,6 +647,7 @@ module.exports = {
   D2_COMMIT,
   JOB_PATH,
   LIVE_APPROVAL,
+  PROCESS_KEEPALIVE_INTERVAL_MS,
   REFERENCE_COLLECTOR_BLOB,
   RENDER_JOB_CANONICAL_SHA256,
   RENDER_JOB_SCHEMA_VERSION,

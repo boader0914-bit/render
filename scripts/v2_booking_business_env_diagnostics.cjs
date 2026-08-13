@@ -436,7 +436,7 @@ async function runDiagnostics({ writeEvidence = true } = {}) {
   verifyCommitLineage({
     baselineCommit: D1_COMMIT,
     expectedHead: String(process.env.V2_RENDER_DIAGNOSTIC_EXPECTED_DEPLOY_COMMIT || "").trim().toLowerCase() || null,
-    expectedParent: "9fd55f96834d060fb73fe658c6690f57de8a6738",
+    expectedParent: "418fb262539f9a25c1c53135afcec1a8d4ae1ec8",
     protectedTreeEntryCount: 322,
     protectedTreeSha256: "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4",
     mismatchCode: "V2_BOOKING_BUSINESS_ENV_BASELINE_MISMATCH",
