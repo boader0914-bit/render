@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const { createRequire } = require("node:module");
+const { createRenderNetworkRecorder } = require("./v2_booking_business_render_network_diagnostics.cjs");
 
 const PCMAP_GRAPHQL_URL = "https://pcmap-api.place.naver.com/graphql";
 const RESULT_SCHEMA_VERSION = "v2-booking-business-child-result.v1";
@@ -592,8 +593,12 @@ async function execute(config = process.env) {
     `let naverAccessFailure = null;\n${names.map((name) => sources[name]).join("\n")}\nthis.lookup = getNaverBookingBusiness;`,
     sandbox
   );
+  const networkRecorder = config.V2_BOOKING_BUSINESS_NETWORK_DIAGNOSTICS === "1"
+    ? (globalThis.__V2_BOOKING_BUSINESS_RENDER_NETWORK_RECORDER__ || createRenderNetworkRecorder())
+    : null;
   let normalized;
   let error = null;
+  let networkDiagnostic = null;
   try {
     normalized = classifyResult(await sandbox.lookup(placeId, 1));
   } catch (caught) {
@@ -618,6 +623,9 @@ async function execute(config = process.env) {
       providerConfirmedZero: false,
       providerErrors: false
     };
+  } finally {
+    networkDiagnostic = networkRecorder?.snapshot() || null;
+    networkRecorder?.close();
   }
   const transportCounts = transport.callCounts();
   const boundaryAudit = fetchBoundary.audit();
@@ -652,6 +660,7 @@ async function execute(config = process.env) {
     sourceFunctionDigest: sourceDigest,
     querySha256: sha256(expectedQuery),
     request: boundaryAudit.request,
+    networkDiagnostic,
     calls: {
       bookingBusiness: transportCounts.naver_booking_business,
       bookingItems: transportCounts.naver_booking_items,

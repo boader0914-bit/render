@@ -1,0 +1,34 @@
+# Proposal only. Do not apply before separate deployment and live-call approvals.
+services:
+  - type: worker
+    name: datalab-v2-booking-business-render-diagnostic
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v2-booking-business-render-diagnostics
+    autoDeployTrigger: "off"
+    plan: starter
+    region: singapore
+    numInstances: 1
+    buildCommand: npm ci --ignore-scripts --audit=false --fund=false && node --check scripts/v2_booking_business_child.cjs && node --check scripts/v2_booking_business_render_network_diagnostics.cjs && node --check scripts/v2_booking_business_render_one_shot.cjs && node scripts/test_v2_booking_business_render_one_shot.cjs && node scripts/test_v2_booking_business_env_diagnostics.cjs && node scripts/test_v2_booking_business_harness.cjs
+    startCommand: node scripts/v2_booking_business_render_one_shot.cjs serve
+    disk:
+      name: v2-booking-business-render-diagnostic-data
+      mountPath: /var/data/v2-booking-business-render-diagnostic
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 26.5.0
+      - key: V2_RENDER_DIAGNOSTIC_STATE_DIR
+        value: /var/data/v2-booking-business-render-diagnostic
+      - key: V2_RENDER_DIAGNOSTIC_EXPECTED_DEPLOY_COMMIT
+        value: SET_AFTER_APPROVED_COMMIT
+      - key: V2_RENDER_DIAGNOSTIC_RUN_ENABLED
+        value: "0"
+      - key: V2_RENDER_DIAGNOSTIC_REQUEST_BUDGET
+        value: "0"
+      - key: V2_RENDER_DIAGNOSTIC_AUTOMATIC_RETRY
+        value: "0"
+      - key: V2_RENDER_DIAGNOSTIC_FALLBACK
+        value: "0"
+      - key: V2_RENDER_DIAGNOSTIC_OPERATIONAL_WRITES
+        value: "0"

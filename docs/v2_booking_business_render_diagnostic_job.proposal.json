@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "v2-booking-business-render-diagnostic-job.v1",
+  "runId": "rebuild-phase3-booking-business-render-live-001",
+  "mode": "render-copy-only-diagnostic",
+  "source": {
+    "kind": "phase2-live-natural-rank-copy",
+    "sourceJobCanonicalSha256": "35875d7b67f83deff6abe46e8deb606cb6f8506fdd641030f9a829cf51fdc308",
+    "sourceManifestSha256": "89ed646cc3ad57bb38da577cd177d6827aeb3f008553b2c1c8a8df242e642b40",
+    "collectorBlob": "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3",
+    "rank": 1,
+    "placeIdHash": "2da4b6a5cb5efeff892338aa41ebbd81a4d9a49adf20ad414db547a041b4b20c"
+  },
+  "request": {
+    "operationName": "naverBookingBusiness",
+    "method": "POST",
+    "endpointClass": "naver-place-graphql",
+    "expectedEnvelopeSha256": "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d",
+    "requestBudget": 1,
+    "timeoutMs": 25000,
+    "responseSizeLimitBytes": 2097152
+  },
+  "execution": {
+    "concurrency": 1,
+    "automaticRetry": false,
+    "fallback": false,
+    "operationalWrites": false,
+    "rawProviderResponseStored": false
+  }
+}

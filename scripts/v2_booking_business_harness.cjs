@@ -56,6 +56,7 @@ const COPY_ONLY_EXPECTED_ENVELOPE_SHA256 = "2078ad1e1f436f524058822079837a8ab222
 const PHASE3_FILE_ALLOWLIST = new Set([
   "docs/datalab_rebuild_phase3_d1_report.md",
   "docs/datalab_rebuild_phase3_d2_report.md",
+  "docs/datalab_rebuild_phase3_d3_report.md",
   "docs/datalab_rebuild_phase3_report.md",
   "docs/datalab_rebuild_phase4_prompt_draft.md",
   "docs/v2_booking_business_environment_evidence.json",
@@ -63,11 +64,16 @@ const PHASE3_FILE_ALLOWLIST = new Set([
   "docs/v2_booking_business_copy_only_live_job.proposal.json",
   "docs/v2_booking_business_live_job.proposal.json",
   "docs/v2_booking_business_n3_live_evidence_manifest.json",
+  "docs/v2_booking_business_render_diagnostic_job.proposal.json",
+  "render.v2-booking-business-render-diagnostic.proposal.yaml",
   "scripts/test_v2_booking_business_harness.cjs",
   "scripts/test_v2_booking_business_env_diagnostics.cjs",
+  "scripts/test_v2_booking_business_render_one_shot.cjs",
   "scripts/v2_booking_business_child.cjs",
   "scripts/v2_booking_business_env_diagnostics.cjs",
   "scripts/v2_booking_business_harness.cjs",
+  "scripts/v2_booking_business_render_network_diagnostics.cjs",
+  "scripts/v2_booking_business_render_one_shot.cjs",
   "tests/fixtures/v2_booking_business_job.json"
 ]);
 const ALLOWED_FIXTURE_SCENARIOS = new Set([
