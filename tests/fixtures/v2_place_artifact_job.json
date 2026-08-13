@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "v2-place-artifact-job.v1",
+  "runId": "rebuild-phase2-place-artifact-offline-005",
+  "mode": "offline",
+  "keyword": "경남 글램핑",
+  "checkIn": "2026-08-13",
+  "checkOut": "2026-08-13",
+  "timeoutMs": 25000,
+  "responseSizeLimitBytes": 2097152,
+  "fixtureScenario": "success"
+}
