@@ -237,9 +237,9 @@ async function main() {
   );
   check(BASELINE_PROTECTED_TREE_ENTRY_COUNT, 322, "protected baseline tree entry count must remain frozen");
   check(BASELINE_PROTECTED_TREE_SHA256, "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4", "protected baseline tree digest must remain frozen");
-  check(SHALLOW_EXPECTED_PARENT_COMMIT, "418fb262539f9a25c1c53135afcec1a8d4ae1ec8", "shallow deploy must pin its reviewed parent commit");
+  check(SHALLOW_EXPECTED_PARENT_COMMIT, "31f007b12e485b3a1ff280c57b33b5e9889c8ba6", "shallow deploy must pin its reviewed parent commit");
   check(SHALLOW_EXPECTED_HEAD_SOURCE_PATHS, [
-    "docs/datalab_rebuild_phase3_d4_process_lifetime_report.md",
+    "docs/datalab_rebuild_phase3_d5_child_framing_diagnostics_report.md",
     "scripts/test_v2_booking_business_harness.cjs",
     "scripts/test_v2_booking_business_render_one_shot.cjs",
     "scripts/v2_booking_business_env_diagnostics.cjs",

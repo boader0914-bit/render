@@ -55,9 +55,9 @@ const COPY_ONLY_APPROVED_JOB_SHA256 = "35875d7b67f83deff6abe46e8deb606cb6f8506fd
 const COPY_ONLY_EXPECTED_ENVELOPE_SHA256 = "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d";
 const BASELINE_PROTECTED_TREE_ENTRY_COUNT = 322;
 const BASELINE_PROTECTED_TREE_SHA256 = "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4";
-const SHALLOW_EXPECTED_PARENT_COMMIT = "418fb262539f9a25c1c53135afcec1a8d4ae1ec8";
+const SHALLOW_EXPECTED_PARENT_COMMIT = "31f007b12e485b3a1ff280c57b33b5e9889c8ba6";
 const SHALLOW_EXPECTED_HEAD_SOURCE_PATHS = Object.freeze([
-  "docs/datalab_rebuild_phase3_d4_process_lifetime_report.md",
+  "docs/datalab_rebuild_phase3_d5_child_framing_diagnostics_report.md",
   "scripts/test_v2_booking_business_harness.cjs",
   "scripts/test_v2_booking_business_render_one_shot.cjs",
   "scripts/v2_booking_business_env_diagnostics.cjs",
@@ -71,6 +71,7 @@ const PHASE3_FILE_ALLOWLIST = new Set([
   "docs/datalab_rebuild_phase3_d3_readiness_fix_report.md",
   "docs/datalab_rebuild_phase3_d3_shallow_integrity_fix_report.md",
   "docs/datalab_rebuild_phase3_d4_process_lifetime_report.md",
+  "docs/datalab_rebuild_phase3_d5_child_framing_diagnostics_report.md",
   "docs/datalab_rebuild_phase3_report.md",
   "docs/datalab_rebuild_phase4_prompt_draft.md",
   "docs/v2_booking_business_environment_evidence.json",

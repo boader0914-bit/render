@@ -32,6 +32,9 @@ const RENDER_RUN_ID = "rebuild-phase3-booking-business-render-live-001";
 const LIVE_APPROVAL = "N3-D3-Live";
 const RENDER_STATE_ROOT = "/var/data/v2-booking-business-render-diagnostic";
 const PROCESS_KEEPALIVE_INTERVAL_MS = 60_000;
+const CHILD_STDOUT_LIMIT_BYTES = 500_000;
+const CHILD_RESULT_SCHEMA_VERSION = "v2-booking-business-child-result.v1";
+const CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION = "v2-booking-business-render-child-process-diagnostic.v1";
 const JOB_PATH = path.join(ROOT, "docs", "v2_booking_business_render_diagnostic_job.proposal.json");
 const SOURCE_JOB_PATH = path.join(ROOT, "docs", "v2_booking_business_copy_only_live_job.proposal.json");
 const SOURCE_MANIFEST_PATH = path.join(ROOT, "docs", "v2_native_main_place_source_manifest.json");
@@ -47,18 +50,69 @@ const NETWORK_EVENT_NAMES = new Set([
   "undici:request:trailers",
   "undici:request:error"
 ]);
+const SAFE_CHILD_ERROR_CODES = new Set([
+  "EACCES",
+  "ENOENT",
+  "ERR_INVALID_ARG_TYPE",
+  "ERR_MODULE_NOT_FOUND",
+  "ERR_REQUIRE_ESM",
+  "MODULE_NOT_FOUND",
+  "V2_BOOKING_BUSINESS_CALL_AUDIT_INVALID",
+  "V2_BOOKING_BUSINESS_CALL_BUDGET_EXCEEDED",
+  "V2_BOOKING_BUSINESS_CHILD_CONFIG_INVALID",
+  "V2_BOOKING_BUSINESS_CHILD_FAILED",
+  "V2_BOOKING_BUSINESS_ENDPOINT_FORBIDDEN",
+  "V2_BOOKING_BUSINESS_ENVELOPE_MISMATCH",
+  "V2_BOOKING_BUSINESS_FIXTURE_INVALID",
+  "V2_BOOKING_BUSINESS_LIVE_NOT_APPROVED",
+  "V2_BOOKING_BUSINESS_LOOKUP_FAILED",
+  "V2_BOOKING_BUSINESS_REPLAY_INVALID",
+  "V2_BOOKING_BUSINESS_REQUEST_HEADERS_INVALID",
+  "V2_BOOKING_BUSINESS_REQUEST_INVALID",
+  "V2_BOOKING_BUSINESS_SOURCE_INVALID"
+]);
+const SAFE_CHILD_FAILED_CHECKS = new Set([
+  "exit_code",
+  "result_schema",
+  "result_shape",
+  "result_status",
+  "signal",
+  "stderr",
+  "stdout_json",
+  "stdout_line_count",
+  "stdout_truncated",
+  "timeout"
+]);
+const SAFE_RUNNER_ERROR_CODES = new Set([
+  "V2_RENDER_DIAGNOSTIC_BASELINE_MISMATCH",
+  "V2_RENDER_DIAGNOSTIC_CHILD_AUDIT_INVALID",
+  "V2_RENDER_DIAGNOSTIC_CHILD_INVALID",
+  "V2_RENDER_DIAGNOSTIC_COMMAND_INVALID",
+  "V2_RENDER_DIAGNOSTIC_COPY_MISMATCH",
+  "V2_RENDER_DIAGNOSTIC_DEPLOY_COMMIT_MISMATCH",
+  "V2_RENDER_DIAGNOSTIC_EVIDENCE_MISMATCH",
+  "V2_RENDER_DIAGNOSTIC_FAILED",
+  "V2_RENDER_DIAGNOSTIC_FIXTURE_NOT_APPROVED",
+  "V2_RENDER_DIAGNOSTIC_JOB_INVALID",
+  "V2_RENDER_DIAGNOSTIC_JOB_MISMATCH",
+  "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED",
+  "V2_RENDER_DIAGNOSTIC_READINESS_GATE_INVALID",
+  "V2_RENDER_DIAGNOSTIC_SOURCE_MISMATCH",
+  "V2_RENDER_DIAGNOSTIC_STATE_INVALID"
+]);
 
 class V2BookingBusinessRenderDiagnosticError extends Error {
-  constructor(code, message) {
+  constructor(code, message, childProcessDiagnostic = null) {
     super(message);
     this.name = "V2BookingBusinessRenderDiagnosticError";
     this.code = code;
     this.retryable = false;
+    this.childProcessDiagnostic = childProcessDiagnostic;
   }
 }
 
-function fail(code, message) {
-  throw new V2BookingBusinessRenderDiagnosticError(code, message);
+function fail(code, message, childProcessDiagnostic = null) {
+  throw new V2BookingBusinessRenderDiagnosticError(code, message, childProcessDiagnostic);
 }
 
 function exactKeys(value, expected, label) {
@@ -308,10 +362,19 @@ function spawnDiagnosticChild({ env, sourceRoot, sourceJob, mode }) {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
     });
-    let stdout = "";
+    let stdoutTail = Buffer.alloc(0);
+    let stdoutBytes = 0;
+    let stdoutTruncated = false;
     let stderrBytes = 0;
     let timedOut = false;
-    child.stdout.on("data", (chunk) => { stdout = `${stdout}${chunk}`.slice(-500_000); });
+    child.stdout.on("data", (chunk) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      stdoutBytes += bytes.length;
+      stdoutTail = bytes.length >= CHILD_STDOUT_LIMIT_BYTES
+        ? bytes.subarray(bytes.length - CHILD_STDOUT_LIMIT_BYTES)
+        : Buffer.concat([stdoutTail, bytes]).subarray(-CHILD_STDOUT_LIMIT_BYTES);
+      stdoutTruncated = stdoutBytes > stdoutTail.length;
+    });
     child.stderr.on("data", (chunk) => { stderrBytes += Buffer.byteLength(chunk); });
     child.once("error", reject);
     const timer = setTimeout(() => {
@@ -321,24 +384,173 @@ function spawnDiagnosticChild({ env, sourceRoot, sourceJob, mode }) {
     timer.unref?.();
     child.once("close", (exitCode, signal) => {
       clearTimeout(timer);
-      resolve({ exitCode, signal, timedOut, stdout, stderrBytes });
+      resolve({
+        exitCode,
+        signal,
+        timedOut,
+        stdout: stdoutTail.toString("utf8"),
+        stdoutBytes,
+        stdoutRetainedBytes: stdoutTail.length,
+        stdoutTruncated,
+        stderrBytes
+      });
     });
+  });
+}
+
+function safeCount(value, fallback = 0) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : fallback;
+}
+
+function safeChildErrorCode(result) {
+  if (
+    result?.schemaVersion !== CHILD_RESULT_SCHEMA_VERSION
+    || result?.status !== "failed"
+    || !SAFE_CHILD_ERROR_CODES.has(String(result?.error?.code || ""))
+  ) return null;
+  return String(result.error.code);
+}
+
+function safeChildSignal(signal) {
+  const normalized = String(signal || "").toUpperCase();
+  if (!normalized) return null;
+  return ["SIGABRT", "SIGINT", "SIGKILL", "SIGTERM"].includes(normalized) ? normalized : "OTHER";
+}
+
+function childProcessDiagnostic(child, { lines, parsedJson, result, failedChecks }) {
+  const retainedBytes = safeCount(
+    child?.stdoutRetainedBytes,
+    Buffer.byteLength(String(child?.stdout || ""))
+  );
+  const stdoutBytes = safeCount(child?.stdoutBytes, retainedBytes);
+  const resultIsExpectedSchema = result?.schemaVersion === CHILD_RESULT_SCHEMA_VERSION;
+  const resultStatus = resultIsExpectedSchema && ["succeeded", "failed"].includes(result?.status)
+    ? result.status
+    : null;
+  const reportedActualExternal = resultIsExpectedSchema && [0, 1].includes(result?.calls?.actualExternal)
+    ? result.calls.actualExternal
+    : null;
+  const reportedTotalCalls = resultIsExpectedSchema && [0, 1].includes(result?.calls?.total)
+    ? result.calls.total
+    : null;
+  return Object.freeze({
+    schemaVersion: CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION,
+    failedChecks: Object.freeze([...failedChecks]),
+    exitCode: Number.isSafeInteger(child?.exitCode) ? child.exitCode : null,
+    signal: safeChildSignal(child?.signal),
+    timedOut: child?.timedOut === true,
+    stdoutBytes,
+    stdoutRetainedBytes: retainedBytes,
+    stdoutTruncated: child?.stdoutTruncated === true || stdoutBytes > retainedBytes,
+    stdoutLineCount: safeCount(lines?.length),
+    stderrBytes: safeCount(child?.stderrBytes),
+    parsedJson: parsedJson === true,
+    childSchemaVersion: resultIsExpectedSchema ? CHILD_RESULT_SCHEMA_VERSION : null,
+    childStatus: resultStatus,
+    childErrorCode: safeChildErrorCode(result),
+    childReportedActualExternalRequests: reportedActualExternal,
+    childReportedTotalCalls: reportedTotalCalls,
+    childReportedCallCountsTrusted: false,
+    rawStdoutStored: false,
+    rawStderrStored: false,
+    rawProviderResponsesStored: false,
+    rawIdentifiersStored: false,
+    secretValuesStored: false
   });
 }
 
 function parseChildResult(child) {
   const lines = String(child.stdout || "").trim().split(/\r?\n/u).filter(Boolean);
-  if (lines.length !== 1) fail("V2_RENDER_DIAGNOSTIC_CHILD_INVALID", "child stdout framing is invalid");
-  let result;
-  try {
-    result = JSON.parse(lines[0]);
-  } catch {
-    fail("V2_RENDER_DIAGNOSTIC_CHILD_INVALID", "child result JSON is invalid");
+  const failedChecks = [];
+  let result = null;
+  let parsedJson = false;
+  const retainedBytes = safeCount(
+    child?.stdoutRetainedBytes,
+    Buffer.byteLength(String(child?.stdout || ""))
+  );
+  const stdoutBytes = safeCount(child?.stdoutBytes, retainedBytes);
+  if (child.stdoutTruncated === true || stdoutBytes > retainedBytes) failedChecks.push("stdout_truncated");
+  if (lines.length !== 1) {
+    failedChecks.push("stdout_line_count");
+  } else {
+    try {
+      result = JSON.parse(lines[0]);
+      parsedJson = true;
+    } catch {
+      failedChecks.push("stdout_json");
+    }
   }
-  if (!result || typeof result !== "object" || child.exitCode !== 0 || child.signal || child.timedOut || child.stderrBytes !== 0) {
-    fail("V2_RENDER_DIAGNOSTIC_CHILD_INVALID", "child process contract failed");
+  if (parsedJson && (!result || typeof result !== "object" || Array.isArray(result))) {
+    failedChecks.push("result_shape");
+  }
+  if (parsedJson && result && typeof result === "object" && !Array.isArray(result)) {
+    if (result.schemaVersion !== CHILD_RESULT_SCHEMA_VERSION) failedChecks.push("result_schema");
+    if (!["succeeded", "failed"].includes(result.status)) failedChecks.push("result_status");
+  }
+  if (child.exitCode !== 0 && !child.signal) failedChecks.push("exit_code");
+  if (child.signal) failedChecks.push("signal");
+  if (child.timedOut) failedChecks.push("timeout");
+  if (child.stderrBytes !== 0) failedChecks.push("stderr");
+  if (failedChecks.length) {
+    fail(
+      "V2_RENDER_DIAGNOSTIC_CHILD_INVALID",
+      "child process result contract failed",
+      childProcessDiagnostic(child, { lines, parsedJson, result, failedChecks })
+    );
   }
   return result;
+}
+
+function safeFailureDiagnostic(error) {
+  const value = error?.childProcessDiagnostic;
+  if (value?.schemaVersion !== CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION) return null;
+  const failedChecks = Array.isArray(value.failedChecks)
+    ? [...new Set(value.failedChecks.filter((entry) => SAFE_CHILD_FAILED_CHECKS.has(entry)))].sort()
+    : [];
+  return Object.freeze({
+    schemaVersion: CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION,
+    failedChecks: Object.freeze(failedChecks),
+    exitCode: Number.isSafeInteger(value.exitCode) && value.exitCode >= 0 && value.exitCode <= 255
+      ? value.exitCode
+      : null,
+    signal: ["SIGABRT", "SIGINT", "SIGKILL", "SIGTERM", "OTHER"].includes(value.signal) ? value.signal : null,
+    timedOut: value.timedOut === true,
+    stdoutBytes: safeCount(value.stdoutBytes),
+    stdoutRetainedBytes: safeCount(value.stdoutRetainedBytes),
+    stdoutTruncated: value.stdoutTruncated === true,
+    stdoutLineCount: safeCount(value.stdoutLineCount),
+    stderrBytes: safeCount(value.stderrBytes),
+    parsedJson: value.parsedJson === true,
+    childSchemaVersion: value.childSchemaVersion === CHILD_RESULT_SCHEMA_VERSION ? CHILD_RESULT_SCHEMA_VERSION : null,
+    childStatus: ["succeeded", "failed"].includes(value.childStatus) ? value.childStatus : null,
+    childErrorCode: SAFE_CHILD_ERROR_CODES.has(value.childErrorCode) ? value.childErrorCode : null,
+    childReportedActualExternalRequests: [0, 1].includes(value.childReportedActualExternalRequests)
+      ? value.childReportedActualExternalRequests
+      : null,
+    childReportedTotalCalls: [0, 1].includes(value.childReportedTotalCalls) ? value.childReportedTotalCalls : null,
+    childReportedCallCountsTrusted: false,
+    rawStdoutStored: false,
+    rawStderrStored: false,
+    rawProviderResponsesStored: false,
+    rawIdentifiersStored: false,
+    secretValuesStored: false
+  });
+}
+
+function safeRunnerErrorProjection(error) {
+  const diagnostic = safeFailureDiagnostic(error);
+  const code = SAFE_RUNNER_ERROR_CODES.has(String(error?.code || ""))
+    ? String(error.code)
+    : "V2_RENDER_DIAGNOSTIC_FAILED";
+  return Object.freeze({
+    schemaVersion: "v2-booking-business-render-diagnostic-error.v1",
+    status: "failed",
+    code,
+    stage: diagnostic ? "child-process-contract" : "runner",
+    childProcessDiagnostic: diagnostic,
+    retryable: false,
+    externalRequestsAfterRestart: 0
+  });
 }
 
 function safeNetworkProjection(value) {
@@ -559,10 +771,14 @@ async function runOneShot({ mode, env = process.env, childRunner = spawnDiagnost
     await atomicJson(path.join(claim.runRoot, "terminal.json"), terminal);
     return terminal;
   } catch (error) {
+    const diagnostic = safeFailureDiagnostic(error);
+    const safeError = safeRunnerErrorProjection(error);
     await atomicJson(path.join(claim.runRoot, "failure.json"), {
       schemaVersion: "v2-booking-business-render-diagnostic-failure.v1",
       runId: RENDER_RUN_ID,
-      code: String(error?.code || "V2_RENDER_DIAGNOSTIC_FAILED"),
+      code: safeError.code,
+      stage: diagnostic ? "child-process-contract" : "runner",
+      childProcessDiagnostic: diagnostic,
       retryable: false,
       automaticRetry: false,
       rawProviderResponsesStored: false,
@@ -632,18 +848,15 @@ async function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) {
   main().catch((error) => {
-    process.stdout.write(`${JSON.stringify({
-      schemaVersion: "v2-booking-business-render-diagnostic-error.v1",
-      status: "failed",
-      code: String(error?.code || "V2_RENDER_DIAGNOSTIC_FAILED"),
-      retryable: false,
-      externalRequestsAfterRestart: 0
-    })}\n`);
+    process.stdout.write(`${JSON.stringify(safeRunnerErrorProjection(error))}\n`);
     process.exitCode = 1;
   });
 }
 
 module.exports = {
+  CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION,
+  CHILD_RESULT_SCHEMA_VERSION,
+  CHILD_STDOUT_LIMIT_BYTES,
   D2_COMMIT,
   JOB_PATH,
   LIVE_APPROVAL,
@@ -658,12 +871,14 @@ module.exports = {
   assertReadinessGates,
   holdUntilSignal,
   normalizeRenderJob,
+  childProcessDiagnostic,
   parseChildResult,
   readRenderJob,
   readiness,
   runOneShot,
   safeChildEnvironment,
   safeChildProjection,
+  safeRunnerErrorProjection,
   safeNetworkProjection,
   stateRoot,
   verifyPreviousEvidence,

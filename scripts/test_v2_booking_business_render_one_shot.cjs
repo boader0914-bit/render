@@ -19,6 +19,9 @@ const {
   sha256
 } = require("./v2_booking_business_harness.cjs");
 const {
+  CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION,
+  CHILD_RESULT_SCHEMA_VERSION,
+  CHILD_STDOUT_LIMIT_BYTES,
   D2_COMMIT,
   LIVE_APPROVAL,
   PROCESS_KEEPALIVE_INTERVAL_MS,
@@ -30,12 +33,14 @@ const {
   assertReadinessGates,
   holdUntilSignal,
   normalizeRenderJob,
+  parseChildResult,
   readRenderJob,
   readiness,
   runOneShot,
   safeChildEnvironment,
   safeChildProjection,
   safeNetworkProjection,
+  safeRunnerErrorProjection,
   stateRoot,
   verifyRenderDeployIdentity,
   verifyIntegrity
@@ -231,6 +236,7 @@ function networkDiagnosticFixture() {
 
 function syntheticChildResult(mode = "fixture") {
   const result = {
+    schemaVersion: CHILD_RESULT_SCHEMA_VERSION,
     status: "succeeded",
     classification: "resolved",
     placeId: "forbidden-raw-id",
@@ -279,13 +285,82 @@ function syntheticChildResult(mode = "fixture") {
 }
 
 function syntheticChild(mode = "fixture") {
+  const stdout = `${JSON.stringify(syntheticChildResult(mode))}\n`;
   return {
     exitCode: 0,
     signal: null,
     timedOut: false,
     stderrBytes: 0,
-    stdout: `${JSON.stringify(syntheticChildResult(mode))}\n`
+    stdout,
+    stdoutBytes: Buffer.byteLength(stdout),
+    stdoutRetainedBytes: Buffer.byteLength(stdout),
+    stdoutTruncated: false
   };
+}
+
+function exerciseRealChildPreflightFailure(sourceJob) {
+  const preload = path.join(ROOT, "scripts", "fixture_network_guard_preload.cjs");
+  const missingSourceRoot = path.join(OUTPUT_ROOT, "missing-child-source");
+  const sentinel = "phase3-d5-real-child-secret-sentinel";
+  const env = {
+    SystemRoot: process.env.SystemRoot,
+    WINDIR: process.env.WINDIR,
+    PATH: process.env.PATH,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    NODE_ENV: "test",
+    NODE_OPTIONS: `--require=${preload.replace(/\\/gu, "/")}`,
+    V2_BOOKING_BUSINESS_SOURCE_ROOT: missingSourceRoot,
+    V2_BOOKING_BUSINESS_PLACE_ID: sourceJob.placeId,
+    V2_BOOKING_BUSINESS_CHECK_IN: sourceJob.checkIn,
+    V2_BOOKING_BUSINESS_ADULTS: String(sourceJob.adults),
+    V2_BOOKING_BUSINESS_TIMEOUT_MS: String(sourceJob.timeoutMs),
+    V2_BOOKING_BUSINESS_RESPONSE_LIMIT_BYTES: String(sourceJob.responseSizeLimitBytes),
+    V2_BOOKING_BUSINESS_TRANSPORT_MODE: "fixture",
+    V2_BOOKING_BUSINESS_FIXTURE_SCENARIO: "success",
+    V2_BOOKING_BUSINESS_NETWORK_DIAGNOSTICS: "1",
+    V2_RENDER_DIAGNOSTIC_SECRET_SENTINEL: sentinel
+  };
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(ROOT, "scripts", "v2_booking_business_child.cjs")], {
+      cwd: ROOT,
+      env,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderrBytes = 0;
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("real child preflight failure timed out"));
+    }, 5_000);
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderrBytes += Buffer.byteLength(chunk); });
+    child.once("error", reject);
+    child.once("close", (exitCode, signal) => {
+      clearTimeout(timer);
+      resolve(Object.freeze({
+        exitCode,
+        signal,
+        timedOut: false,
+        stdout,
+        stdoutBytes: Buffer.byteLength(stdout),
+        stdoutRetainedBytes: Buffer.byteLength(stdout),
+        stdoutTruncated: false,
+        stderrBytes,
+        secretLeaked: stdout.includes(sentinel)
+      }));
+    });
+  });
+}
+
+function captureChildError(child) {
+  try {
+    parseChildResult(child);
+  } catch (error) {
+    return error;
+  }
+  assert.fail("child process contract unexpectedly passed");
 }
 
 async function main() {
@@ -499,6 +574,153 @@ async function main() {
   check(Object.prototype.hasOwnProperty.call(childEnv, "NODE_EXTRA_CA_CERTS"), false, "custom CA settings must not reach the diagnostic child");
   check(childEnv.NODE_OPTIONS.includes("fixture_network_guard_preload.cjs"), true, "fixture child must preload the network blocker");
 
+  const failedChildResult = {
+    schemaVersion: CHILD_RESULT_SCHEMA_VERSION,
+    status: "failed",
+    classification: "failed",
+    error: {
+      code: "V2_BOOKING_BUSINESS_SOURCE_INVALID",
+      retryable: false,
+      forbiddenDetail: sentinel
+    },
+    calls: {
+      bookingBusiness: 0,
+      bookingItems: 0,
+      dailySchedule: 0,
+      total: 0,
+      actualExternal: 0,
+      fixture: 0
+    },
+    forbiddenRawIdentifier: "forbidden-raw-id"
+  };
+  const failedChildStdout = `${JSON.stringify(failedChildResult)}\n`;
+  const failedChild = {
+    exitCode: 1,
+    signal: null,
+    timedOut: false,
+    stderrBytes: 0,
+    stdout: failedChildStdout,
+    stdoutBytes: Buffer.byteLength(failedChildStdout),
+    stdoutRetainedBytes: Buffer.byteLength(failedChildStdout),
+    stdoutTruncated: false
+  };
+  const failedChildError = captureChildError(failedChild);
+  const failedChildProjection = safeRunnerErrorProjection(failedChildError);
+  check(failedChildProjection.stage, "child-process-contract", "structured child failure must identify its stage");
+  check(failedChildProjection.childProcessDiagnostic.schemaVersion, CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION, "child diagnostic schema must be explicit");
+  check(failedChildProjection.childProcessDiagnostic.failedChecks, ["exit_code"], "non-zero child exit must be distinguished");
+  check(failedChildProjection.childProcessDiagnostic.childErrorCode, "V2_BOOKING_BUSINESS_SOURCE_INVALID", "an allowlisted child error code may be retained");
+  check(failedChildProjection.childProcessDiagnostic.childReportedActualExternalRequests, 0, "child-reported request count may be retained as untrusted evidence");
+  check(failedChildProjection.childProcessDiagnostic.childReportedCallCountsTrusted, false, "failed child call counts must never be treated as trusted");
+  check(JSON.stringify(failedChildProjection).includes(sentinel), false, "structured child diagnostics must remove child details");
+  check(JSON.stringify(failedChildProjection).includes("forbidden-raw-id"), false, "structured child diagnostics must remove raw identifiers");
+
+  const multilineError = captureChildError({
+    ...failedChild,
+    exitCode: 0,
+    stdout: `${sentinel}\n${failedChildStdout}`,
+    stdoutBytes: Buffer.byteLength(`${sentinel}\n${failedChildStdout}`),
+    stdoutRetainedBytes: Buffer.byteLength(`${sentinel}\n${failedChildStdout}`)
+  });
+  const multilineProjection = safeRunnerErrorProjection(multilineError);
+  check(multilineProjection.childProcessDiagnostic.failedChecks, ["stdout_line_count"], "multiple stdout lines must be distinguished");
+  check(multilineProjection.childProcessDiagnostic.stdoutLineCount, 2, "safe diagnostic may retain only the line count");
+  check(JSON.stringify(multilineProjection).includes(sentinel), false, "multiple raw stdout lines must not be retained");
+
+  const emptyStdoutError = captureChildError({
+    ...failedChild,
+    exitCode: 0,
+    stdout: "",
+    stdoutBytes: 0,
+    stdoutRetainedBytes: 0
+  });
+  check(safeRunnerErrorProjection(emptyStdoutError).childProcessDiagnostic.failedChecks, ["stdout_line_count"], "empty stdout must be distinguished");
+  check(safeRunnerErrorProjection(emptyStdoutError).childProcessDiagnostic.stdoutLineCount, 0, "empty stdout must retain only a zero line count");
+
+  const invalidJsonError = captureChildError({
+    ...failedChild,
+    exitCode: 0,
+    stdout: `{${sentinel}`,
+    stdoutBytes: Buffer.byteLength(`{${sentinel}`),
+    stdoutRetainedBytes: Buffer.byteLength(`{${sentinel}`)
+  });
+  check(safeRunnerErrorProjection(invalidJsonError).childProcessDiagnostic.failedChecks, ["stdout_json"], "invalid JSON must be distinguished from line framing");
+  check(JSON.stringify(safeRunnerErrorProjection(invalidJsonError)).includes(sentinel), false, "invalid raw JSON must not be retained");
+
+  const schemaError = captureChildError({
+    ...failedChild,
+    exitCode: 0,
+    stdout: `${JSON.stringify({ schemaVersion: sentinel, status: "failed", error: { code: sentinel } })}\n`
+  });
+  const schemaProjection = safeRunnerErrorProjection(schemaError);
+  check(schemaProjection.childProcessDiagnostic.failedChecks, ["result_schema"], "unexpected child schema must be distinguished");
+  check(schemaProjection.childProcessDiagnostic.childErrorCode, null, "unknown child codes must not enter diagnostics");
+  check(JSON.stringify(schemaProjection).includes(sentinel), false, "unexpected child schema values must not be retained");
+  const statusError = captureChildError({
+    ...failedChild,
+    exitCode: 0,
+    stdout: `${JSON.stringify({ schemaVersion: CHILD_RESULT_SCHEMA_VERSION, status: sentinel })}\n`
+  });
+  check(safeRunnerErrorProjection(statusError).childProcessDiagnostic.failedChecks, ["result_status"], "unexpected child status must be distinguished");
+  check(JSON.stringify(safeRunnerErrorProjection(statusError)).includes(sentinel), false, "unexpected child status values must not be retained");
+
+  const signalError = captureChildError({ ...syntheticChild(), exitCode: null, signal: "SIGTERM" });
+  check(safeRunnerErrorProjection(signalError).childProcessDiagnostic.failedChecks, ["signal"], "signal termination must be distinguished");
+  check(safeRunnerErrorProjection(signalError).childProcessDiagnostic.signal, "SIGTERM", "an allowlisted signal may be retained");
+  const unknownSignalError = captureChildError({ ...syntheticChild(), exitCode: null, signal: sentinel });
+  check(safeRunnerErrorProjection(unknownSignalError).childProcessDiagnostic.signal, "OTHER", "unknown signal values must be reduced to a safe class");
+  check(JSON.stringify(safeRunnerErrorProjection(unknownSignalError)).includes(sentinel), false, "unknown signal values must not be retained");
+
+  const timeoutError = captureChildError({ ...syntheticChild(), exitCode: null, signal: "SIGKILL", timedOut: true });
+  check(safeRunnerErrorProjection(timeoutError).childProcessDiagnostic.failedChecks, ["signal", "timeout"], "timeout and its kill signal must both be visible");
+  const stderrError = captureChildError({ ...syntheticChild(), stderrBytes: 37, forbiddenStderr: sentinel });
+  const stderrProjection = safeRunnerErrorProjection(stderrError);
+  check(stderrProjection.childProcessDiagnostic.failedChecks, ["stderr"], "stderr output must be distinguished");
+  check(stderrProjection.childProcessDiagnostic.stderrBytes, 37, "stderr diagnostics may retain only a byte count");
+  check(JSON.stringify(stderrProjection).includes(sentinel), false, "stderr content must not be retained");
+
+  const truncatedError = captureChildError({
+    ...syntheticChild(),
+    stdoutBytes: CHILD_STDOUT_LIMIT_BYTES + 1,
+    stdoutRetainedBytes: CHILD_STDOUT_LIMIT_BYTES,
+    stdoutTruncated: true
+  });
+  const truncatedProjection = safeRunnerErrorProjection(truncatedError);
+  check(truncatedProjection.childProcessDiagnostic.failedChecks, ["stdout_truncated"], "truncated stdout must fail closed");
+  check(truncatedProjection.childProcessDiagnostic.stdoutTruncated, true, "stdout truncation must be explicit");
+
+  const forgedProjection = safeRunnerErrorProjection({
+    code: sentinel,
+    childProcessDiagnostic: {
+      schemaVersion: CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION,
+      failedChecks: ["stderr", sentinel],
+      childErrorCode: sentinel,
+      signal: sentinel,
+      stdoutBytes: -1,
+      stdoutRetainedBytes: -1,
+      stdoutLineCount: -1,
+      stderrBytes: -1,
+      forbidden: sentinel
+    }
+  });
+  check(forgedProjection.childProcessDiagnostic.failedChecks, ["stderr"], "persisted diagnostics must re-allowlist failed checks");
+  check(forgedProjection.childProcessDiagnostic.childErrorCode, null, "persisted diagnostics must re-allowlist child codes");
+  check(forgedProjection.code, "V2_RENDER_DIAGNOSTIC_FAILED", "unknown outer error codes must reduce to the generic runner code");
+  check(JSON.stringify(forgedProjection).includes(sentinel), false, "forged diagnostic fields must not cross the output boundary");
+
+  const realChildFailure = await exerciseRealChildPreflightFailure(integrity.sourceJob);
+  check(realChildFailure.exitCode, 1, "real child preflight failure must use a non-zero exit code");
+  check(realChildFailure.signal, null, "real child preflight failure must not require a signal");
+  check(realChildFailure.stderrBytes, 0, "real child preflight failure must keep stderr empty");
+  check(realChildFailure.secretLeaked, false, "real child preflight failure must not echo unapproved environment values");
+  const realChildError = captureChildError(realChildFailure);
+  const realChildProjection = safeRunnerErrorProjection(realChildError);
+  check(realChildProjection.childProcessDiagnostic.failedChecks, ["exit_code"], "real one-line child failure must preserve valid framing");
+  check(realChildProjection.childProcessDiagnostic.parsedJson, true, "real child failure JSON must remain parseable");
+  check(realChildProjection.childProcessDiagnostic.childErrorCode, "V2_BOOKING_BUSINESS_SOURCE_INVALID", "real child preflight code must survive the allowlist");
+  check(realChildProjection.childProcessDiagnostic.childReportedActualExternalRequests, 0, "real child preflight failure must report zero requests");
+  check(JSON.stringify(realChildProjection).includes(sentinel), false, "real child diagnostic projection must not leak the sentinel");
+
   const fixtureState = testState("fixture-real-child");
   const fixture = await runOneShot({ mode: "fixture", env: { ...fixtureEnv(fixtureState), V2_RENDER_DIAGNOSTIC_SECRET_SENTINEL: sentinel } });
   check(fixture.observation.event, "render_diagnostic_terminal", "fixture must create one terminal observation");
@@ -538,6 +760,21 @@ async function main() {
   const failureDuplicate = await runOneShot({ mode: "fixture", env: fixtureEnv(failureState), childRunner: async () => syntheticChild("fixture") });
   check(failureDuplicate.status, "duplicate-blocked", "a partial failure must not be retried after restart");
   check(await fs.stat(path.join(failureState, "runs", RENDER_RUN_ID, "failure.json")).then(() => true, () => false), true, "partial failure evidence must be atomic");
+
+  const framingFailureState = testState("child-framing-failure");
+  await rejects(
+    () => runOneShot({ mode: "fixture", env: fixtureEnv(framingFailureState), childRunner: async () => failedChild }),
+    { code: "V2_RENDER_DIAGNOSTIC_CHILD_INVALID" },
+    "a structured child failure must fail without retry"
+  );
+  const framingFailureText = await fs.readFile(path.join(framingFailureState, "runs", RENDER_RUN_ID, "failure.json"), "utf8");
+  const framingFailure = JSON.parse(framingFailureText);
+  check(framingFailure.stage, "child-process-contract", "failure artifact must record the safe child stage");
+  check(framingFailure.childProcessDiagnostic.childErrorCode, "V2_BOOKING_BUSINESS_SOURCE_INVALID", "failure artifact must retain only the allowlisted child code");
+  check(framingFailure.childProcessDiagnostic.childReportedActualExternalRequests, 0, "failure artifact may retain the untrusted child request count");
+  check(framingFailure.childProcessDiagnostic.rawStdoutStored, false, "failure artifact must not store raw stdout");
+  check(framingFailureText.includes(sentinel), false, "failure artifact must not contain the secret sentinel");
+  check(framingFailureText.includes("forbidden-raw-id"), false, "failure artifact must not contain raw identifiers");
 
   const liveProjection = safeChildProjection(syntheticChildResult("live"), "live");
   check(liveProjection.calls.actualExternal, 1, "synthetic live audit must account for exactly one request");
