@@ -1,0 +1,151 @@
+{
+  "schemaVersion": "v2-booking-business-environment-evidence.v1",
+  "baseline": {
+    "diagnosticsCommit": "2daecbb40f351d3916cf30f95bf4435cf58920eb",
+    "sourceBaselineCommit": "b5de9c40199f40a4409f93b1b66f0b9ccea17a83",
+    "v2CollectorBlob": "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3",
+    "referenceCollectorBlob": "bcbe229998da3afa6f31ee04375fb0766019e56f",
+    "lockfileSha256": "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2",
+    "applicationEnvelopeSha256": "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d",
+    "sourceFunctionDigest": "ec8c6e50732adba8720d5f43e5cd25fe36d79623f3bc3728196d69743e40340f",
+    "querySha256": "b248d4911391626ace0a2c7499e3a9be0b0af89dfd0e86fe3ef2c2ae2450d942"
+  },
+  "evidenceSources": {
+    "phase1ReportGitBlob": "645ef4bc52fdc7bc719a4c6d2250d7835123892b",
+    "phase3ReportGitBlob": "08f2c1e38bdc5c59fd363ebb043a49cfbd524bf8",
+    "phase3D1ReportGitBlob": "910cc8aabd0143ed54cdaa40f1f6409f6a446203",
+    "n3LiveManifestGitBlob": "a8ff8ce84b9b63d778ca315e2d2822e7f648d82b",
+    "n3LiveManifestCanonicalSha256": "da4cb9697ed195d54ef62f3c7e15563efbad41a0baa7dbee0b2ebef1e55e3ebf",
+    "copyOnlyObservationSha256": "e38749c0eb310e73f25d8295e880f638a13a6fd1365b2b64affedb9eb839b62d",
+    "copyOnlyAuditSha256": "39599da9575755fc94c6df01cd86bcb4099ac2a2d15e128cfebfc7d65b36e042",
+    "copyOnlyFailureSha256": "cb604fae537bf03754626fb305032fbd957e5fa7b464dea6276522b13084c120"
+  },
+  "observations": [
+    {
+      "id": "render-v2-full-path-success",
+      "evidenceRecordedUtc": "2026-08-10T23:45:00.134Z",
+      "evidenceLevel": "render-log-confirmed",
+      "environment": {
+        "platform": "linux",
+        "architecture": "x64",
+        "nodeVersion": "v26.5.0",
+        "undiciVersion": "8.7.0",
+        "opensslVersion": "3.5.7",
+        "renderServiceId": "srv-d9q6mrfavr4c73atllf0",
+        "renderDeployId": "dep-d9t61augekts73can9ig"
+      },
+      "execution": {
+        "shape": "full-v2-collector-child",
+        "mainPlaceRequests": 1,
+        "bookingBusinessRequests": 1,
+        "mainPlaceBeforeBookingBusiness": true,
+        "precedingEvidenceDeltaMs": 1415,
+        "deltaBasis": "provider-call-start-log-timestamps",
+        "sameProcess": true
+      },
+      "outcome": {
+        "providerStatus": null,
+        "classification": "not-recorded",
+        "terminal": "committed",
+        "resultStored": true
+      }
+    },
+    {
+      "id": "n3-local-original-standalone",
+      "evidenceRecordedUtc": "2026-08-13T02:30:43.5499029Z",
+      "evidenceLevel": "normalized-audit-confirmed",
+      "environment": {
+        "platform": "win32",
+        "architecture": "x64",
+        "nodeVersion": "v26.5.0",
+        "undiciVersion": "8.7.0",
+        "opensslVersion": null,
+        "renderServiceId": null,
+        "renderDeployId": null
+      },
+      "execution": {
+        "shape": "standalone-booking-business",
+        "mainPlaceRequests": 0,
+        "bookingBusinessRequests": 1,
+        "mainPlaceBeforeBookingBusiness": false,
+        "precedingEvidenceDeltaMs": null,
+        "deltaBasis": null,
+        "sameProcess": true
+      },
+      "outcome": {
+        "providerStatus": 200,
+        "classification": "resolved",
+        "terminal": "succeeded",
+        "resultStored": true
+      }
+    },
+    {
+      "id": "n3-local-copied-standalone",
+      "evidenceRecordedUtc": "2026-08-13T02:30:44.069Z",
+      "evidenceLevel": "normalized-audit-confirmed",
+      "environment": {
+        "platform": "win32",
+        "architecture": "x64",
+        "nodeVersion": "v26.5.0",
+        "undiciVersion": "8.7.0",
+        "opensslVersion": null,
+        "renderServiceId": null,
+        "renderDeployId": null
+      },
+      "execution": {
+        "shape": "standalone-booking-business",
+        "mainPlaceRequests": 0,
+        "bookingBusinessRequests": 1,
+        "mainPlaceBeforeBookingBusiness": false,
+        "precedingEvidenceDeltaMs": 519,
+        "deltaBasis": "audit-file-modified-timestamps",
+        "sameProcess": false
+      },
+      "outcome": {
+        "providerStatus": 405,
+        "classification": "failed",
+        "providerFailureSubtype": "not-recorded",
+        "terminal": "failed",
+        "resultStored": false
+      }
+    },
+    {
+      "id": "n3-d1-local-copied-copy-only",
+      "evidenceRecordedUtc": "2026-08-13T04:43:53.9377851Z",
+      "evidenceLevel": "safe-response-diagnostic-confirmed",
+      "environment": {
+        "platform": "win32",
+        "architecture": "x64",
+        "nodeVersion": "v26.5.0",
+        "undiciVersion": "8.7.0",
+        "opensslVersion": null,
+        "renderServiceId": null,
+        "renderDeployId": null
+      },
+      "execution": {
+        "shape": "standalone-booking-business",
+        "mainPlaceRequests": 0,
+        "bookingBusinessRequests": 1,
+        "mainPlaceBeforeBookingBusiness": false,
+        "precedingEvidenceDeltaMs": 7989869,
+        "deltaBasis": "audit-file-modified-timestamps",
+        "sameProcess": false
+      },
+      "outcome": {
+        "providerStatus": 405,
+        "classification": "failed",
+        "providerFailureSubtype": "challenge_html",
+        "terminal": "failed",
+        "resultStored": false,
+        "fetchHeadersElapsedMs": 551
+      }
+    }
+  ],
+  "privacy": {
+    "providerBodiesStored": false,
+    "providerHeaderValuesStored": false,
+    "placeIdStored": false,
+    "bookingBusinessIdStored": false,
+    "secretValuesStored": false
+  }
+}

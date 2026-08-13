@@ -46,7 +46,8 @@ const PREVIOUS_COPIED_AUDIT_PATH = path.join(
 );
 const PREVIOUS_ORIGINAL_AUDIT_SHA256 = "bc526c061660f958903e145ecc093dae50ff211b70c44bb91dbc7524629d540e";
 const PREVIOUS_COPIED_AUDIT_SHA256 = "56e9e67221478e51c9c767fae826e2eb17a77a3219a1b397bc35c9bc7b417708";
-const PREVIOUS_LIVE_EVIDENCE_MANIFEST_SHA256 = "19010627a8ac4ef60e47f5143fdf0cbc34876caec5ab105bfbfdaa93f6dc89e7";
+const PREVIOUS_LIVE_EVIDENCE_MANIFEST_GIT_BLOB = "a8ff8ce84b9b63d778ca315e2d2822e7f648d82b";
+const PREVIOUS_LIVE_EVIDENCE_MANIFEST_CANONICAL_SHA256 = "da4cb9697ed195d54ef62f3c7e15563efbad41a0baa7dbee0b2ebef1e55e3ebf";
 const EXPECTED_BOOKING_BUSINESS_ID_HASH = "e86cc58d94289c15320540e3fcfb841bf1dc780a45dba7f64af85082061e1083";
 const COPY_ONLY_MINIMUM_QUIET_SECONDS = 1800;
 const PREVIOUS_COPIED_AUDIT_MODIFIED_UTC = "2026-08-13T02:30:44.069Z";
@@ -54,14 +55,18 @@ const COPY_ONLY_APPROVED_JOB_SHA256 = "35875d7b67f83deff6abe46e8deb606cb6f8506fd
 const COPY_ONLY_EXPECTED_ENVELOPE_SHA256 = "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d";
 const PHASE3_FILE_ALLOWLIST = new Set([
   "docs/datalab_rebuild_phase3_d1_report.md",
+  "docs/datalab_rebuild_phase3_d2_report.md",
   "docs/datalab_rebuild_phase3_report.md",
   "docs/datalab_rebuild_phase4_prompt_draft.md",
+  "docs/v2_booking_business_environment_evidence.json",
   "docs/v2_booking_business_contract.md",
   "docs/v2_booking_business_copy_only_live_job.proposal.json",
   "docs/v2_booking_business_live_job.proposal.json",
   "docs/v2_booking_business_n3_live_evidence_manifest.json",
   "scripts/test_v2_booking_business_harness.cjs",
+  "scripts/test_v2_booking_business_env_diagnostics.cjs",
   "scripts/v2_booking_business_child.cjs",
+  "scripts/v2_booking_business_env_diagnostics.cjs",
   "scripts/v2_booking_business_harness.cjs",
   "tests/fixtures/v2_booking_business_job.json"
 ]);
@@ -366,11 +371,11 @@ function isolatedD1RunRoot(runId) {
 
 async function verifyPreviousLiveEvidence() {
   const manifestBytes = await fs.readFile(PREVIOUS_LIVE_EVIDENCE_MANIFEST_PATH);
-  if (sha256(manifestBytes) !== PREVIOUS_LIVE_EVIDENCE_MANIFEST_SHA256) {
-    fail("V2_BOOKING_BUSINESS_PREVIOUS_EVIDENCE_MISMATCH", "previous N3 evidence manifest changed");
-  }
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   if (
+    gitBlob("docs/v2_booking_business_n3_live_evidence_manifest.json") !== PREVIOUS_LIVE_EVIDENCE_MANIFEST_GIT_BLOB
+    || sha256(stableJson(manifest)) !== PREVIOUS_LIVE_EVIDENCE_MANIFEST_CANONICAL_SHA256
+    ||
     manifest.schemaVersion !== "v2-booking-business-n3-live-evidence.v1"
     || manifest.runId !== "rebuild-phase3-booking-business-live-001"
     || manifest.original?.auditSha256 !== PREVIOUS_ORIGINAL_AUDIT_SHA256
@@ -416,6 +421,8 @@ async function verifyPreviousLiveEvidence() {
     localEvidenceCrossChecked = true;
   }
   return Object.freeze({
+    manifestGitBlob: PREVIOUS_LIVE_EVIDENCE_MANIFEST_GIT_BLOB,
+    manifestCanonicalSha256: PREVIOUS_LIVE_EVIDENCE_MANIFEST_CANONICAL_SHA256,
     originalAuditSha256: PREVIOUS_ORIGINAL_AUDIT_SHA256,
     copiedAuditSha256: PREVIOUS_COPIED_AUDIT_SHA256,
     expectedBookingBusinessIdHash: EXPECTED_BOOKING_BUSINESS_ID_HASH,
