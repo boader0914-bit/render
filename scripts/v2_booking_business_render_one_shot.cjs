@@ -37,6 +37,18 @@ const PROCESS_KEEPALIVE_INTERVAL_MS = 60_000;
 const CHILD_STDOUT_LIMIT_BYTES = 500_000;
 const CHILD_RESULT_SCHEMA_VERSION = "v2-booking-business-child-result.v1";
 const CHILD_PROCESS_DIAGNOSTIC_SCHEMA_VERSION = "v2-booking-business-render-child-process-diagnostic.v1";
+const LIVE_GATE_DIAGNOSTIC_SCHEMA_VERSION = "v2-booking-business-render-live-gate-diagnostic.v1";
+const LIVE_GATE_CHECK_RESULT_SCHEMA_VERSION = "v2-booking-business-render-live-gate-check.v1";
+const LIVE_GATE_CHECK_NAMES = Object.freeze([
+  "approvedJobDigest",
+  "automaticRetryDisabled",
+  "expectedEnvelopeDigest",
+  "fallbackDisabled",
+  "liveApproval",
+  "operationalWritesDisabled",
+  "requestBudget",
+  "runEnabled"
+]);
 const JOB_PATH = path.join(ROOT, "docs", "v2_booking_business_render_diagnostic_job.proposal.json");
 const SOURCE_JOB_PATH = path.join(ROOT, "docs", "v2_booking_business_copy_only_live_job.proposal.json");
 const SOURCE_MANIFEST_PATH = path.join(ROOT, "docs", "v2_native_main_place_source_manifest.json");
@@ -104,17 +116,18 @@ const SAFE_RUNNER_ERROR_CODES = new Set([
 ]);
 
 class V2BookingBusinessRenderDiagnosticError extends Error {
-  constructor(code, message, childProcessDiagnostic = null) {
+  constructor(code, message, childProcessDiagnostic = null, liveGateDiagnostic = null) {
     super(message);
     this.name = "V2BookingBusinessRenderDiagnosticError";
     this.code = code;
     this.retryable = false;
     this.childProcessDiagnostic = childProcessDiagnostic;
+    this.liveGateDiagnostic = liveGateDiagnostic;
   }
 }
 
-function fail(code, message, childProcessDiagnostic = null) {
-  throw new V2BookingBusinessRenderDiagnosticError(code, message, childProcessDiagnostic);
+function fail(code, message, childProcessDiagnostic = null, liveGateDiagnostic = null) {
+  throw new V2BookingBusinessRenderDiagnosticError(code, message, childProcessDiagnostic, liveGateDiagnostic);
 }
 
 function exactKeys(value, expected, label) {
@@ -303,17 +316,69 @@ function assertFixtureGates(env = process.env) {
   }
 }
 
-function assertLiveGates(env = process.env) {
+function liveGateDiagnostic(env = process.env) {
+  const checks = Object.freeze({
+    approvedJobDigest: env.V2_RENDER_DIAGNOSTIC_APPROVED_JOB_SHA256 === RENDER_JOB_CANONICAL_SHA256,
+    automaticRetryDisabled: String(env.V2_RENDER_DIAGNOSTIC_AUTOMATIC_RETRY || "0") === "0",
+    expectedEnvelopeDigest: env.V2_RENDER_DIAGNOSTIC_EXPECTED_ENVELOPE_SHA256 === COPY_ONLY_EXPECTED_ENVELOPE_SHA256,
+    fallbackDisabled: String(env.V2_RENDER_DIAGNOSTIC_FALLBACK || "0") === "0",
+    liveApproval: env.V2_RENDER_DIAGNOSTIC_LIVE_APPROVED === LIVE_APPROVAL,
+    operationalWritesDisabled: String(env.V2_RENDER_DIAGNOSTIC_OPERATIONAL_WRITES || "0") === "0",
+    requestBudget: env.V2_RENDER_DIAGNOSTIC_REQUEST_BUDGET === "1",
+    runEnabled: env.V2_RENDER_DIAGNOSTIC_RUN_ENABLED === "1"
+  });
+  return Object.freeze({
+    schemaVersion: LIVE_GATE_DIAGNOSTIC_SCHEMA_VERSION,
+    checks,
+    allMatched: Object.values(checks).every(Boolean),
+    valuesStored: false,
+    valueLengthsStored: false,
+    valueDigestsStored: false,
+    rawEnvironmentStored: false
+  });
+}
+
+function safeLiveGateDiagnostic(value) {
+  if (value?.schemaVersion !== LIVE_GATE_DIAGNOSTIC_SCHEMA_VERSION || !value.checks || typeof value.checks !== "object") {
+    return null;
+  }
+  const names = Object.keys(value.checks).sort();
   if (
-    env.V2_RENDER_DIAGNOSTIC_RUN_ENABLED !== "1"
-    || env.V2_RENDER_DIAGNOSTIC_LIVE_APPROVED !== LIVE_APPROVAL
-    || env.V2_RENDER_DIAGNOSTIC_REQUEST_BUDGET !== "1"
-    || env.V2_RENDER_DIAGNOSTIC_APPROVED_JOB_SHA256 !== RENDER_JOB_CANONICAL_SHA256
-    || env.V2_RENDER_DIAGNOSTIC_EXPECTED_ENVELOPE_SHA256 !== COPY_ONLY_EXPECTED_ENVELOPE_SHA256
-    || String(env.V2_RENDER_DIAGNOSTIC_AUTOMATIC_RETRY || "0") !== "0"
-    || String(env.V2_RENDER_DIAGNOSTIC_FALLBACK || "0") !== "0"
-    || String(env.V2_RENDER_DIAGNOSTIC_OPERATIONAL_WRITES || "0") !== "0"
-  ) fail("V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED", "live diagnostic gates do not match the frozen one-shot contract");
+    names.length !== LIVE_GATE_CHECK_NAMES.length
+    || names.some((name, index) => name !== LIVE_GATE_CHECK_NAMES[index])
+    || names.some((name) => typeof value.checks[name] !== "boolean")
+  ) return null;
+  const checks = Object.freeze(Object.fromEntries(LIVE_GATE_CHECK_NAMES.map((name) => [name, value.checks[name]])));
+  const allMatched = Object.values(checks).every(Boolean);
+  if (
+    value.allMatched !== allMatched
+    || value.valuesStored !== false
+    || value.valueLengthsStored !== false
+    || value.valueDigestsStored !== false
+    || value.rawEnvironmentStored !== false
+  ) return null;
+  return Object.freeze({
+    schemaVersion: LIVE_GATE_DIAGNOSTIC_SCHEMA_VERSION,
+    checks,
+    allMatched,
+    valuesStored: false,
+    valueLengthsStored: false,
+    valueDigestsStored: false,
+    rawEnvironmentStored: false
+  });
+}
+
+function assertLiveGates(env = process.env) {
+  const diagnostic = liveGateDiagnostic(env);
+  if (!diagnostic.allMatched) {
+    fail(
+      "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED",
+      "live diagnostic gates do not match the frozen one-shot contract",
+      null,
+      diagnostic
+    );
+  }
+  return diagnostic;
 }
 
 function safeChildEnvironment(env, { sourceRoot, sourceJob, mode }) {
@@ -544,6 +609,7 @@ function safeFailureDiagnostic(error) {
 
 function safeRunnerErrorProjection(error) {
   const diagnostic = safeFailureDiagnostic(error);
+  const gateDiagnostic = safeLiveGateDiagnostic(error?.liveGateDiagnostic);
   const code = SAFE_RUNNER_ERROR_CODES.has(String(error?.code || ""))
     ? String(error.code)
     : "V2_RENDER_DIAGNOSTIC_FAILED";
@@ -553,6 +619,7 @@ function safeRunnerErrorProjection(error) {
     code,
     stage: diagnostic ? "child-process-contract" : "runner",
     childProcessDiagnostic: diagnostic,
+    liveGateDiagnostic: code === "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED" ? gateDiagnostic : null,
     retryable: false,
     externalRequestsAfterRestart: 0
   });
@@ -818,6 +885,28 @@ async function readiness(env = process.env) {
   });
 }
 
+async function inspectLiveGates(env = process.env) {
+  stateRoot(env);
+  await verifyIntegrity(env);
+  const diagnostic = liveGateDiagnostic(env);
+  return Object.freeze({
+    schemaVersion: LIVE_GATE_CHECK_RESULT_SCHEMA_VERSION,
+    event: "render_diagnostic_live_gate_check",
+    status: diagnostic.allMatched ? "matched" : "mismatch",
+    mode: "gate-check-only",
+    integrityVerified: true,
+    liveGateDiagnostic: diagnostic,
+    requestBudgetConsumed: 0,
+    externalRequests: 0,
+    collectorInvocations: 0,
+    operationalWrites: 0,
+    automaticRetry: false,
+    fallback: false,
+    rawProviderResponsesStored: false,
+    secretValuesStored: false
+  });
+}
+
 function holdUntilSignal({
   signalTarget = process,
   setIntervalFn = setInterval,
@@ -843,14 +932,15 @@ function holdUntilSignal({
 }
 
 async function main(argv = process.argv.slice(2)) {
-  if (argv.length !== 1 || !["readiness", "serve", "fixture-once", "live-and-hold"].includes(argv[0])) {
-    fail("V2_RENDER_DIAGNOSTIC_COMMAND_INVALID", "usage: readiness|serve|fixture-once|live-and-hold");
+  if (argv.length !== 1 || !["readiness", "serve", "fixture-once", "gate-check-and-hold", "live-and-hold"].includes(argv[0])) {
+    fail("V2_RENDER_DIAGNOSTIC_COMMAND_INVALID", "usage: readiness|serve|fixture-once|gate-check-and-hold|live-and-hold");
   }
   let result;
   if (["readiness", "serve"].includes(argv[0])) result = await readiness(process.env);
+  else if (argv[0] === "gate-check-and-hold") result = await inspectLiveGates(process.env);
   else result = await runOneShot({ mode: argv[0] === "fixture-once" ? "fixture" : "live", env: process.env });
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  if (["serve", "live-and-hold"].includes(argv[0])) await holdUntilSignal();
+  if (["serve", "gate-check-and-hold", "live-and-hold"].includes(argv[0])) await holdUntilSignal();
 }
 
 if (require.main === module) {
@@ -867,6 +957,9 @@ module.exports = {
   D2_COMMIT,
   JOB_PATH,
   LIVE_APPROVAL,
+  LIVE_GATE_CHECK_RESULT_SCHEMA_VERSION,
+  LIVE_GATE_CHECK_NAMES,
+  LIVE_GATE_DIAGNOSTIC_SCHEMA_VERSION,
   PREVIOUS_RENDER_RUN_ID,
   PROCESS_KEEPALIVE_INTERVAL_MS,
   REFERENCE_COLLECTOR_BLOB,
@@ -878,6 +971,8 @@ module.exports = {
   assertLiveGates,
   assertReadinessGates,
   holdUntilSignal,
+  inspectLiveGates,
+  liveGateDiagnostic,
   normalizeRenderJob,
   childProcessDiagnostic,
   parseChildResult,
@@ -886,6 +981,7 @@ module.exports = {
   runOneShot,
   safeChildEnvironment,
   safeChildProjection,
+  safeLiveGateDiagnostic,
   safeRunnerErrorProjection,
   safeNetworkProjection,
   stateRoot,

@@ -31,6 +31,7 @@ const {
   EXPECTED_BOOKING_BUSINESS_ID_HASH,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT,
   PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT,
   SHALLOW_EXPECTED_HEAD_SOURCE_PATHS,
   SHALLOW_EXPECTED_PARENT_COMMIT,
@@ -236,17 +237,15 @@ async function main() {
     shallowCheckout ? "shallow-pinned-head-parent-protected-tree" : "full-history",
     "lineage verification must match the available Git history"
   );
-  check(BASELINE_PROTECTED_TREE_ENTRY_COUNT, 342, "Place baseline protected tree entry count must remain frozen");
-  check(BASELINE_PROTECTED_TREE_SHA256, "ac9351bda4c757fb38cfa59dd1844fefaf2d4de1f81b1f779d79650207a72f2e", "Place baseline protected tree digest must remain frozen");
+  check(BASELINE_PROTECTED_TREE_ENTRY_COUNT, 346, "D7 baseline protected tree entry count must remain frozen");
+  check(BASELINE_PROTECTED_TREE_SHA256, "239aae66eecd6d8955357894cfc1d1b474dc1ac6fcd28bd54aed95765720a377", "D7 baseline protected tree digest must remain frozen");
   check(PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT, "690f577e1c86d3fa7f8d3f00f9ade6a87c444b14", "Place primary identity baseline must remain frozen");
-  check(SHALLOW_EXPECTED_PARENT_COMMIT, PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT, "shallow deploy must pin its reviewed Place baseline parent");
+  check(LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT, "b7a88ed124adb00e7310ebf60ff1a1be886b9fbd", "D7 must retain the approved readiness baseline");
+  check(SHALLOW_EXPECTED_PARENT_COMMIT, LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT, "shallow deploy must pin its reviewed D7 parent");
   check(SHALLOW_EXPECTED_HEAD_SOURCE_PATHS, [
-    "docs/datalab_rebuild_phase3_pid_readiness_report.md",
-    "render.v2-booking-business-render-diagnostic.proposal.yaml",
-    "scripts/test_v2_booking_business_env_diagnostics.cjs",
+    "docs/datalab_rebuild_phase3_d7_live_gate_diagnostics_report.md",
     "scripts/test_v2_booking_business_harness.cjs",
     "scripts/test_v2_booking_business_render_one_shot.cjs",
-    "scripts/v2_booking_business_env_diagnostics.cjs",
     "scripts/v2_booking_business_harness.cjs",
     "scripts/v2_booking_business_render_one_shot.cjs"
   ], "shallow deploy source attestation must cover every new fix file");

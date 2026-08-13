@@ -25,6 +25,9 @@ const {
   CHILD_STDOUT_LIMIT_BYTES,
   D2_COMMIT,
   LIVE_APPROVAL,
+  LIVE_GATE_CHECK_RESULT_SCHEMA_VERSION,
+  LIVE_GATE_CHECK_NAMES,
+  LIVE_GATE_DIAGNOSTIC_SCHEMA_VERSION,
   PREVIOUS_RENDER_RUN_ID,
   PROCESS_KEEPALIVE_INTERVAL_MS,
   RENDER_JOB_CANONICAL_SHA256,
@@ -34,6 +37,8 @@ const {
   assertLiveGates,
   assertReadinessGates,
   holdUntilSignal,
+  inspectLiveGates,
+  liveGateDiagnostic,
   normalizeRenderJob,
   parseChildResult,
   readRenderJob,
@@ -41,6 +46,7 @@ const {
   runOneShot,
   safeChildEnvironment,
   safeChildProjection,
+  safeLiveGateDiagnostic,
   safeNetworkProjection,
   safeRunnerErrorProjection,
   stateRoot,
@@ -70,6 +76,15 @@ function check(actual, expected, message) {
 function throws(action, expected, message) {
   assertions += 1;
   assert.throws(action, expected, message);
+}
+
+function captureError(action) {
+  try {
+    action();
+  } catch (error) {
+    return error;
+  }
+  assert.fail("operation unexpectedly succeeded");
 }
 
 async function rejects(action, expected, message) {
@@ -123,29 +138,28 @@ function liveEnv(state) {
   };
 }
 
-function exerciseServeProcess(state) {
-  const survivalMs = 10_000;
+function exerciseHoldingProcess({ command, eventName, environment, survivalMs }) {
   const startupTimeoutMs = 15_000;
   const shutdownTimeoutMs = 5_000;
   const preload = path.join(ROOT, "scripts", "fixture_network_guard_preload.cjs");
   const secretSentinel = "phase3-d4-child-secret-sentinel";
   const env = {
     ...process.env,
-    ...readinessEnv(state),
     NODE_OPTIONS: `--require=${preload.replace(/\\/gu, "/")}`,
     RENDER_SERVICE_ID: "",
     RENDER_GIT_COMMIT: "",
     V2_RENDER_DIAGNOSTIC_LIVE_APPROVED: "",
     V2_RENDER_DIAGNOSTIC_APPROVED_JOB_SHA256: "",
     V2_RENDER_DIAGNOSTIC_EXPECTED_ENVELOPE_SHA256: "",
-    V2_RENDER_DIAGNOSTIC_SECRET_SENTINEL: secretSentinel
+    V2_RENDER_DIAGNOSTIC_SECRET_SENTINEL: secretSentinel,
+    ...environment
   };
 
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
     const child = spawn(process.execPath, [
       path.join(ROOT, "scripts", "v2_booking_business_render_one_shot.cjs"),
-      "serve"
+      command
     ], {
       cwd: ROOT,
       env,
@@ -161,7 +175,7 @@ function exerciseServeProcess(state) {
 
     const startupTimer = setTimeout(() => {
       child.kill("SIGTERM");
-      reject(new Error("serve child did not emit readiness before the startup timeout"));
+      reject(new Error(`${command} child did not emit ${eventName} before the startup timeout`));
     }, startupTimeoutMs);
 
     child.stdout.on("data", (chunk) => {
@@ -170,7 +184,7 @@ function exerciseServeProcess(state) {
       for (const line of stdout.split(/\r?\n/u).filter(Boolean)) {
         try {
           const parsed = JSON.parse(line);
-          if (parsed.event !== "render_diagnostic_ready") continue;
+          if (parsed.event !== eventName) continue;
           readinessEvent = parsed;
           clearTimeout(startupTimer);
           survivalTimer = setTimeout(() => {
@@ -200,11 +214,11 @@ function exerciseServeProcess(state) {
       clearTimeout(survivalTimer);
       clearTimeout(shutdownTimer);
       if (!readinessEvent) {
-        reject(new Error("serve child exited before readiness"));
+        reject(new Error(`${command} child exited before ${eventName}`));
         return;
       }
       if (!shutdownRequested) {
-        reject(new Error("serve child exited before the approved shutdown signal"));
+        reject(new Error(`${command} child exited before the approved shutdown signal`));
         return;
       }
       resolve(Object.freeze({
@@ -216,6 +230,24 @@ function exerciseServeProcess(state) {
         secretLeaked: stdout.includes(secretSentinel) || stderr.includes(secretSentinel)
       }));
     });
+  });
+}
+
+function exerciseServeProcess(state) {
+  return exerciseHoldingProcess({
+    command: "serve",
+    eventName: "render_diagnostic_ready",
+    environment: readinessEnv(state),
+    survivalMs: 10_000
+  });
+}
+
+function exerciseGateCheckProcess(state) {
+  return exerciseHoldingProcess({
+    command: "gate-check-and-hold",
+    eventName: "render_diagnostic_live_gate_check",
+    environment: liveEnv(state),
+    survivalMs: 1_000
   });
 }
 
@@ -501,33 +533,106 @@ async function main() {
   check(ready.lineageVerification, expectedLineageVerification, "readiness event must expose the verified lineage mode");
 
   const live = liveEnv(testState("live-gate-only"));
-  assertLiveGates(live);
-  for (const name of [
-    "V2_RENDER_DIAGNOSTIC_RUN_ENABLED",
-    "V2_RENDER_DIAGNOSTIC_LIVE_APPROVED",
-    "V2_RENDER_DIAGNOSTIC_REQUEST_BUDGET",
-    "V2_RENDER_DIAGNOSTIC_APPROVED_JOB_SHA256",
-    "V2_RENDER_DIAGNOSTIC_EXPECTED_ENVELOPE_SHA256"
-  ]) {
+  const approvedGateDiagnostic = assertLiveGates(live);
+  check(approvedGateDiagnostic.schemaVersion, LIVE_GATE_DIAGNOSTIC_SCHEMA_VERSION, "live gate diagnostics must have an explicit schema");
+  check(approvedGateDiagnostic.allMatched, true, "approved live gates must all match");
+  check(Object.keys(approvedGateDiagnostic.checks).sort(), [...LIVE_GATE_CHECK_NAMES], "live gate diagnostics must expose only allowlisted check names");
+  check(Object.values(approvedGateDiagnostic.checks).every((value) => value === true), true, "approved live gate checks must all be true");
+  check(approvedGateDiagnostic.valuesStored, false, "live gate diagnostics must not store values");
+  check(approvedGateDiagnostic.valueLengthsStored, false, "live gate diagnostics must not store value lengths");
+  check(approvedGateDiagnostic.valueDigestsStored, false, "live gate diagnostics must not store value digests");
+  check(approvedGateDiagnostic.rawEnvironmentStored, false, "live gate diagnostics must not store the environment");
+  const gateCheckState = testState("live-gate-check-only");
+  const gateCheck = await inspectLiveGates(liveEnv(gateCheckState));
+  check(gateCheck.schemaVersion, LIVE_GATE_CHECK_RESULT_SCHEMA_VERSION, "gate check must have an explicit result schema");
+  check(gateCheck.event, "render_diagnostic_live_gate_check", "gate check must emit a structured event");
+  check(gateCheck.status, "matched", "approved gates must produce a matched gate check");
+  check(gateCheck.mode, "gate-check-only", "gate check must be distinct from live execution");
+  check(gateCheck.integrityVerified, true, "gate check must verify source and deploy integrity first");
+  check(gateCheck.liveGateDiagnostic, approvedGateDiagnostic, "gate check must expose only the safe boolean matrix");
+  check(gateCheck.requestBudgetConsumed, 0, "gate check must consume no request budget");
+  check(gateCheck.externalRequests, 0, "gate check must make no Provider request");
+  check(gateCheck.collectorInvocations, 0, "gate check must not invoke the copied collector");
+  check(gateCheck.operationalWrites, 0, "gate check must make no operational write");
+  check(Object.keys(gateCheck).some((key) => /commit|digest|hash|blob/iu.test(key)), false, "gate check must not expose value-like integrity fields");
+  check(await fs.stat(gateCheckState).then(() => true, () => false), false, "gate check must not create its state directory");
+  const requiredGateMutations = [
+    ["V2_RENDER_DIAGNOSTIC_RUN_ENABLED", "runEnabled"],
+    ["V2_RENDER_DIAGNOSTIC_LIVE_APPROVED", "liveApproval"],
+    ["V2_RENDER_DIAGNOSTIC_REQUEST_BUDGET", "requestBudget"],
+    ["V2_RENDER_DIAGNOSTIC_APPROVED_JOB_SHA256", "approvedJobDigest"],
+    ["V2_RENDER_DIAGNOSTIC_EXPECTED_ENVELOPE_SHA256", "expectedEnvelopeDigest"]
+  ];
+  for (const [name, failedCheck] of requiredGateMutations) {
     const mutated = { ...live };
     delete mutated[name];
-    throws(
-      () => assertLiveGates(mutated),
-      { code: "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED" },
-      `live execution must reject a missing ${name}`
-    );
+    const gateError = captureError(() => assertLiveGates(mutated));
+    check(gateError.code, "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED", `live execution must reject a missing ${name}`);
+    const gateProjection = safeRunnerErrorProjection(gateError);
+    check(gateProjection.liveGateDiagnostic.checks[failedCheck], false, `${failedCheck} must identify the failed gate`);
+    check(Object.entries(gateProjection.liveGateDiagnostic.checks).filter(([, value]) => value === false).map(([key]) => key), [failedCheck], "only the mismatched gate may be false");
+    check(gateProjection.externalRequestsAfterRestart, 0, "gate mismatch diagnostics must remain before networking");
   }
-  for (const [name, value] of [
-    ["V2_RENDER_DIAGNOSTIC_AUTOMATIC_RETRY", "1"],
-    ["V2_RENDER_DIAGNOSTIC_FALLBACK", "1"],
-    ["V2_RENDER_DIAGNOSTIC_OPERATIONAL_WRITES", "1"]
+  for (const [name, value, failedCheck] of [
+    ["V2_RENDER_DIAGNOSTIC_AUTOMATIC_RETRY", "1", "automaticRetryDisabled"],
+    ["V2_RENDER_DIAGNOSTIC_FALLBACK", "1", "fallbackDisabled"],
+    ["V2_RENDER_DIAGNOSTIC_OPERATIONAL_WRITES", "1", "operationalWritesDisabled"]
   ]) {
-    throws(
-      () => assertLiveGates({ ...live, [name]: value }),
-      { code: "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED" },
-      `${name} must remain disabled`
-    );
+    const gateError = captureError(() => assertLiveGates({ ...live, [name]: value }));
+    check(gateError.code, "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED", `${name} must remain disabled`);
+    const gateProjection = safeRunnerErrorProjection(gateError);
+    check(gateProjection.liveGateDiagnostic.checks[failedCheck], false, `${failedCheck} must identify the enabled safety gate`);
+    check(Object.entries(gateProjection.liveGateDiagnostic.checks).filter(([, entry]) => entry === false).map(([key]) => key), [failedCheck], "only the mismatched safety gate may be false");
   }
+  const liveGateSentinel = "phase3-d7-live-gate-secret-sentinel";
+  const secretGateError = captureError(() => assertLiveGates({
+    ...live,
+    V2_RENDER_DIAGNOSTIC_LIVE_APPROVED: liveGateSentinel,
+    V2_RENDER_DIAGNOSTIC_APPROVED_JOB_SHA256: liveGateSentinel,
+    V2_RENDER_DIAGNOSTIC_EXPECTED_ENVELOPE_SHA256: liveGateSentinel
+  }));
+  const secretGateProjection = safeRunnerErrorProjection(secretGateError);
+  check(secretGateProjection.liveGateDiagnostic.checks.liveApproval, false, "secret approval mismatch must be classified without its value");
+  check(secretGateProjection.liveGateDiagnostic.checks.approvedJobDigest, false, "secret job mismatch must be classified without its value");
+  check(secretGateProjection.liveGateDiagnostic.checks.expectedEnvelopeDigest, false, "secret envelope mismatch must be classified without its value");
+  check(JSON.stringify(secretGateProjection).includes(liveGateSentinel), false, "live gate diagnostics must not leak rejected values");
+  check(JSON.stringify(secretGateProjection).includes(LIVE_APPROVAL), false, "live gate diagnostics must not leak the expected approval value");
+  check(JSON.stringify(secretGateProjection).includes(RENDER_JOB_CANONICAL_SHA256), false, "live gate diagnostics must not leak the expected job digest");
+  check(JSON.stringify(secretGateProjection).includes(COPY_ONLY_EXPECTED_ENVELOPE_SHA256), false, "live gate diagnostics must not leak the expected envelope digest");
+  const mismatchedGateCheckState = testState("live-gate-check-mismatch");
+  const mismatchedGateCheck = await inspectLiveGates({
+    ...liveEnv(mismatchedGateCheckState),
+    V2_RENDER_DIAGNOSTIC_LIVE_APPROVED: liveGateSentinel
+  });
+  check(mismatchedGateCheck.status, "mismatch", "gate-check-only must report mismatch without failing into live execution");
+  check(mismatchedGateCheck.liveGateDiagnostic.checks.liveApproval, false, "gate-check-only must identify the mismatched semantic gate");
+  check(mismatchedGateCheck.externalRequests, 0, "a mismatched gate check must make no Provider request");
+  check(mismatchedGateCheck.collectorInvocations, 0, "a mismatched gate check must not invoke the copied collector");
+  check(JSON.stringify(mismatchedGateCheck).includes(liveGateSentinel), false, "gate-check-only must not leak a mismatched value");
+  check(await fs.stat(mismatchedGateCheckState).then(() => true, () => false), false, "a mismatched gate check must not create its state directory");
+  check(safeLiveGateDiagnostic({ ...liveGateDiagnostic(live), extra: liveGateSentinel }), approvedGateDiagnostic, "unknown outer diagnostic fields must be discarded by reconstruction");
+  check(safeLiveGateDiagnostic({ ...liveGateDiagnostic(live), checks: { ...liveGateDiagnostic(live).checks, extra: true } }), null, "unknown check names must invalidate a forged gate diagnostic");
+  check(safeLiveGateDiagnostic({ ...liveGateDiagnostic(live), allMatched: false }), null, "inconsistent allMatched state must invalidate a forged gate diagnostic");
+  const rejectedGateState = testState("live-gate-rejected-before-claim");
+  let rejectedGateChildInvocations = 0;
+  await rejects(
+    () => runOneShot({
+      mode: "live",
+      env: { ...liveEnv(rejectedGateState), V2_RENDER_DIAGNOSTIC_LIVE_APPROVED: liveGateSentinel },
+      childRunner: async () => {
+        rejectedGateChildInvocations += 1;
+        return syntheticChild("live");
+      }
+    }),
+    { code: "V2_RENDER_DIAGNOSTIC_LIVE_NOT_APPROVED" },
+    "a rejected live gate must stop before claim and child execution"
+  );
+  check(rejectedGateChildInvocations, 0, "a rejected live gate must not invoke the copied child");
+  check(
+    await fs.stat(path.join(rejectedGateState, "runs")).then(() => true, () => false),
+    false,
+    "a rejected live gate must not create a run or claim directory"
+  );
 
   check(headerNames("accept: */*\r\ncontent-type: application/json\r\n"), ["accept", "content-type"], "wire headers must reduce to names");
   check(safeNetworkFailureClass({ cause: { code: "ENOTFOUND" } }), "dns", "DNS errors must be classified without messages");
@@ -852,6 +957,20 @@ async function main() {
   check(serveOutcome.stderrBytes, 0, "serve child must not emit stderr during controlled shutdown");
   check(serveOutcome.secretLeaked, false, "serve child must not leak the secret sentinel");
 
+  const gateCheckProcessState = testState("live-gate-check-process");
+  const gateCheckOutcome = await exerciseGateCheckProcess(gateCheckProcessState);
+  check(gateCheckOutcome.readinessEvent.schemaVersion, LIVE_GATE_CHECK_RESULT_SCHEMA_VERSION, "gate-check process must expose its exact schema");
+  check(gateCheckOutcome.readinessEvent.status, "matched", "gate-check process must observe all approved gates");
+  check(gateCheckOutcome.readinessEvent.mode, "gate-check-only", "gate-check process must remain outside live execution");
+  check(gateCheckOutcome.readinessEvent.externalRequests, 0, "gate-check process must make no Provider request");
+  check(gateCheckOutcome.readinessEvent.collectorInvocations, 0, "gate-check process must not invoke the copied collector");
+  check(gateCheckOutcome.readinessEvent.operationalWrites, 0, "gate-check process must make no operational write");
+  check(gateCheckOutcome.survivedMs >= 1_000, true, "gate-check process must hold after emitting its diagnostic");
+  check(gateCheckOutcome.exitCode === 0 || gateCheckOutcome.signal === "SIGTERM", true, "gate-check process must stop only after controlled SIGTERM");
+  check(gateCheckOutcome.stderrBytes, 0, "gate-check process must not emit stderr during controlled shutdown");
+  check(gateCheckOutcome.secretLeaked, false, "gate-check process must not leak the secret sentinel");
+  check(await fs.stat(gateCheckProcessState).then(() => true, () => false), false, "gate-check process must not create a state directory");
+
   const files = await textFiles(OUTPUT_ROOT);
   for (const file of files) {
     const text = await fs.readFile(file, "utf8");
@@ -873,6 +992,8 @@ async function main() {
     concurrentCollectorInvocations: concurrentInvocations,
     serveSurvivalMs: serveOutcome.survivedMs,
     serveControlledShutdown: true,
+    gateCheckSurvivalMs: gateCheckOutcome.survivedMs,
+    gateCheckControlledShutdown: true,
     retries: 0,
     fallbacks: 0,
     operationalWrites: 0,

@@ -54,16 +54,14 @@ const PREVIOUS_COPIED_AUDIT_MODIFIED_UTC = "2026-08-13T02:30:44.069Z";
 const COPY_ONLY_APPROVED_JOB_SHA256 = "35875d7b67f83deff6abe46e8deb606cb6f8506fdd641030f9a829cf51fdc308";
 const COPY_ONLY_EXPECTED_ENVELOPE_SHA256 = "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d";
 const PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT = "690f577e1c86d3fa7f8d3f00f9ade6a87c444b14";
-const BASELINE_PROTECTED_TREE_ENTRY_COUNT = 342;
-const BASELINE_PROTECTED_TREE_SHA256 = "ac9351bda4c757fb38cfa59dd1844fefaf2d4de1f81b1f779d79650207a72f2e";
-const SHALLOW_EXPECTED_PARENT_COMMIT = PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT;
+const LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT = "b7a88ed124adb00e7310ebf60ff1a1be886b9fbd";
+const BASELINE_PROTECTED_TREE_ENTRY_COUNT = 346;
+const BASELINE_PROTECTED_TREE_SHA256 = "239aae66eecd6d8955357894cfc1d1b474dc1ac6fcd28bd54aed95765720a377";
+const SHALLOW_EXPECTED_PARENT_COMMIT = LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT;
 const SHALLOW_EXPECTED_HEAD_SOURCE_PATHS = Object.freeze([
-  "docs/datalab_rebuild_phase3_pid_readiness_report.md",
-  "render.v2-booking-business-render-diagnostic.proposal.yaml",
-  "scripts/test_v2_booking_business_env_diagnostics.cjs",
+  "docs/datalab_rebuild_phase3_d7_live_gate_diagnostics_report.md",
   "scripts/test_v2_booking_business_harness.cjs",
   "scripts/test_v2_booking_business_render_one_shot.cjs",
-  "scripts/v2_booking_business_env_diagnostics.cjs",
   "scripts/v2_booking_business_harness.cjs",
   "scripts/v2_booking_business_render_one_shot.cjs"
 ]);
@@ -418,7 +416,7 @@ async function verifyBaseline() {
     expectedParent: SHALLOW_EXPECTED_PARENT_COMMIT,
     protectedTreeEntryCount: BASELINE_PROTECTED_TREE_ENTRY_COUNT,
     protectedTreeSha256: BASELINE_PROTECTED_TREE_SHA256,
-    label: "N2 baseline commit"
+    label: "D7 live-gate diagnostics baseline"
   });
   const head = lineage.head;
   if (lineage.verification === "full-history") {
@@ -431,19 +429,28 @@ async function verifyBaseline() {
     } catch {
       fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD does not descend from the Place primary identity baseline");
     }
-    if (head !== PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT) {
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT, head], {
+        cwd: ROOT,
+        stdio: "ignore",
+        windowsHide: true
+      });
+    } catch {
+      fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD does not descend from the D7 live-gate diagnostics baseline");
+    }
+    if (head !== LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT) {
       const identity = readCommitIdentity("HEAD");
-      if (identity.parents.length !== 1 || identity.parents[0] !== PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT) {
-        fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "readiness HEAD must be the direct single child of the Place primary identity baseline");
+      if (identity.parents.length !== 1 || identity.parents[0] !== LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT) {
+        fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "D7 HEAD must be the direct single child of the approved readiness baseline");
       }
     }
-    const committedDelta = git(["diff", "--name-only", PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT, head, "--"])
+    const committedDelta = git(["diff", "--name-only", LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT, head, "--"])
       .split(/\r?\n/u)
       .filter(Boolean)
       .map((entry) => entry.replace(/\\/gu, "/"));
     const forbiddenDelta = committedDelta.filter((entry) => !READINESS_FILE_ALLOWLIST.has(entry));
     if (forbiddenDelta.length) {
-      fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD contains files outside the Place readiness allowlist");
+      fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD contains files outside the D7 live-gate diagnostics allowlist");
     }
   }
   const sourceManifest = JSON.parse(await fs.readFile(SOURCE_MANIFEST_PATH, "utf8"));
@@ -493,6 +500,7 @@ async function verifyBaseline() {
     phase2LiveJobDigest: PHASE2_LIVE_JOB_DIGEST,
     phase2LivePairSha256: PHASE2_LIVE_PAIR_SHA256,
     placePrimaryIdentityBaselineCommit: PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT,
+    liveGateDiagnosticsBaselineCommit: LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT,
     lineageVerification: lineage.verification,
     expectedHeadSourceBlobs: lineage.expectedHeadSourceBlobs || Object.freeze([])
   });
@@ -1193,6 +1201,7 @@ module.exports = {
   JOB_SCHEMA_VERSION,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  LIVE_GATE_DIAGNOSTICS_BASELINE_COMMIT,
   PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT,
   SHALLOW_EXPECTED_PARENT_COMMIT,
   SHALLOW_EXPECTED_HEAD_SOURCE_PATHS,
