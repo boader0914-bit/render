@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "v2-booking-business-copy-only-job.v1",
+  "runId": "rebuild-phase3-booking-business-copy-only-live-001",
+  "mode": "copy-only-live",
+  "placeId": "37812354",
+  "source": {
+    "kind": "phase2_live_natural_rank",
+    "phase2PairSha256": "1f06f3fa167f9bf3f5bc2cf67445e42d49bb9d45357efbf29cfd934b083251ab",
+    "rank": 1
+  },
+  "checkIn": "2026-08-13",
+  "adults": 2,
+  "timeoutMs": 25000,
+  "responseSizeLimitBytes": 2097152,
+  "notBefore": "2026-08-13T03:00:44.069Z",
+  "expectedEnvelopeSha256": "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d",
+  "expectedBookingBusinessIdHash": "e86cc58d94289c15320540e3fcfb841bf1dc780a45dba7f64af85082061e1083",
+  "previousOriginalAuditSha256": "bc526c061660f958903e145ecc093dae50ff211b70c44bb91dbc7524629d540e",
+  "previousCopiedAuditSha256": "56e9e67221478e51c9c767fae826e2eb17a77a3219a1b397bc35c9bc7b417708"
+}

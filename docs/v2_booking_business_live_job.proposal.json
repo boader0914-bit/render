@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "v2-booking-business-job.v1",
+  "runId": "rebuild-phase3-booking-business-live-001",
+  "mode": "live",
+  "placeId": "37812354",
+  "source": {
+    "kind": "phase2_live_natural_rank",
+    "phase2PairSha256": "1f06f3fa167f9bf3f5bc2cf67445e42d49bb9d45357efbf29cfd934b083251ab",
+    "rank": 1
+  },
+  "checkIn": "2026-08-13",
+  "adults": 2,
+  "timeoutMs": 25000,
+  "responseSizeLimitBytes": 2097152,
+  "fixtureScenario": "none"
+}

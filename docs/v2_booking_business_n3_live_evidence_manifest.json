@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "v2-booking-business-n3-live-evidence.v1",
+  "runId": "rebuild-phase3-booking-business-live-001",
+  "original": {
+    "auditSha256": "bc526c061660f958903e145ecc093dae50ff211b70c44bb91dbc7524629d540e",
+    "modifiedUtc": "2026-08-13T02:30:43.5499029Z",
+    "providerStatus": 200,
+    "classification": "resolved",
+    "bookingBusinessIdHash": "e86cc58d94289c15320540e3fcfb841bf1dc780a45dba7f64af85082061e1083",
+    "actualExternalRequests": 1
+  },
+  "replay": {
+    "auditSha256": "d8861bc8357c473dcf98684f8d6774410f7686106d1a22d87ee522caac65a34f",
+    "modifiedUtc": "2026-08-13T02:30:43.6576466Z",
+    "classification": "resolved",
+    "actualExternalRequests": 0
+  },
+  "copied": {
+    "auditSha256": "56e9e67221478e51c9c767fae826e2eb17a77a3219a1b397bc35c9bc7b417708",
+    "modifiedUtc": "2026-08-13T02:30:44.069Z",
+    "providerStatus": 405,
+    "classification": "failed",
+    "errorCode": "NAVER_ACCESS_BLOCKED",
+    "actualExternalRequests": 1
+  },
+  "failureSha256": "9ebb944ce5ede010bfed560b2eda5efd67250f68c88c611987f86a0f3cfdccde",
+  "totalExternalRequests": 2,
+  "retries": 0,
+  "fallbacks": 0,
+  "operationalWrites": 0,
+  "rawProviderResponsesStored": false,
+  "providerResponseBodiesIncluded": false,
+  "secretsIncluded": false
+}
