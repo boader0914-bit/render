@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 const { EventEmitter } = require("node:events");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -11,6 +11,7 @@ const {
   COPY_ONLY_EXPECTED_ENVELOPE_SHA256,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT,
   canonicalGitTextBytes,
   gitBlobFromBytes,
   manifestRecordedTextBytes,
@@ -366,6 +367,11 @@ function captureChildError(child) {
 
 async function main() {
   await fs.rm(OUTPUT_ROOT, { recursive: true, force: true });
+  const expectedLineageVerification = execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    windowsHide: true
+  }).trim() === "true" ? "shallow-pinned-head-parent-protected-tree" : "full-history";
 
   const sourceManifest = JSON.parse(await fs.readFile(path.join(ROOT, "docs", "v2_native_main_place_source_manifest.json"), "utf8"));
   for (const entry of sourceManifest.files) {
@@ -383,6 +389,8 @@ async function main() {
 
   const integrity = await verifyIntegrity();
   check(integrity.baselineCommit, D2_COMMIT, "D3 must descend from the committed D2 baseline");
+  check(integrity.placePrimaryIdentityBaselineCommit, PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT, "readiness must attest the Place primary identity baseline");
+  check(integrity.lineageVerification, expectedLineageVerification, "readiness must verify the available Git lineage mode");
   check(integrity.collectorBlob, COLLECTOR_BLOB, "V2 collector blob must remain exact");
   check(integrity.lockfileSha256, LOCKFILE_SHA256, "lockfile identity must remain exact");
   check(integrity.runtime.nodeVersion, "v26.5.0", "Node runtime must remain exact");
@@ -489,6 +497,8 @@ async function main() {
   check(ready.runEnabled, false, "readiness must not enable execution");
   check(ready.requestBudget, 0, "readiness request budget must remain zero");
   check(ready.externalRequests, 0, "readiness must make no external request");
+  check(ready.placePrimaryIdentityBaselineCommit, PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT, "readiness event must expose the attested Place baseline");
+  check(ready.lineageVerification, expectedLineageVerification, "readiness event must expose the verified lineage mode");
 
   const live = liveEnv(testState("live-gate-only"));
   assertLiveGates(live);

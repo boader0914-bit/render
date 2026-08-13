@@ -15,6 +15,7 @@ const {
   readCopyOnlyJob,
   sha256,
   stableJson,
+  verifyBaseline,
   verifyManifestFileBytes,
   verifyRuntime
 } = require("./v2_booking_business_harness.cjs");
@@ -219,11 +220,12 @@ async function verifyPreviousEvidence() {
 }
 
 async function verifyIntegrity(env = process.env) {
-  const [{ job, digest }, { job: sourceJob, digest: sourceJobDigest }, sourceManifest, previousEvidence] = await Promise.all([
+  const [{ job, digest }, { job: sourceJob, digest: sourceJobDigest }, sourceManifest, previousEvidence, baseline] = await Promise.all([
     readRenderJob(),
     readCopyOnlyJob(SOURCE_JOB_PATH),
     verifySourceManifest(),
-    verifyPreviousEvidence()
+    verifyPreviousEvidence(),
+    verifyBaseline()
   ]);
   const deploy = verifyRenderDeployIdentity(env);
   const collectorBytes = await fs.readFile(path.join(ROOT, "scripts", "gyeongnam_glamping_crawl.cjs"));
@@ -244,6 +246,8 @@ async function verifyIntegrity(env = process.env) {
     jobDigest: digest,
     sourceJob,
     baselineCommit: D2_COMMIT,
+    placePrimaryIdentityBaselineCommit: baseline.placePrimaryIdentityBaselineCommit,
+    lineageVerification: baseline.lineageVerification,
     deployedCommit: deploy.deployedCommit,
     collectorBlob: COLLECTOR_BLOB,
     referenceCollectorBlob: REFERENCE_COLLECTOR_BLOB,
@@ -805,6 +809,8 @@ async function readiness(env = process.env) {
     automaticRetry: false,
     fallback: false,
     baselineCommit: integrity.baselineCommit,
+    placePrimaryIdentityBaselineCommit: integrity.placePrimaryIdentityBaselineCommit,
+    lineageVerification: integrity.lineageVerification,
     deployedCommit: integrity.deployedCommit,
     collectorBlob: integrity.collectorBlob,
     lockfileSha256: integrity.lockfileSha256,

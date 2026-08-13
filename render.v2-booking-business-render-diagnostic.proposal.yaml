@@ -4,7 +4,7 @@ services:
     name: datalab-v2-booking-business-render-diagnostic
     runtime: node
     repo: https://github.com/boader0914-bit/render
-    branch: recovery/v2-booking-business-render-diagnostics
+    branch: recovery/v2-place-primary-identity-readiness
     autoDeployTrigger: "off"
     plan: starter
     region: singapore

@@ -10,7 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { GRAPHQL_DOCUMENTS } = require("./naver_bounded_inventory_live_transport.cjs");
-const { verifyBaseline, verifyCommitLineage, sha256, stableJson } = require("./v2_booking_business_harness.cjs");
+const { verifyBaseline, sha256, stableJson } = require("./v2_booking_business_harness.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const D1_COMMIT = "2daecbb40f351d3916cf30f95bf4435cf58920eb";
@@ -18,6 +18,13 @@ const V2_COLLECTOR_BLOB = "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3";
 const REFERENCE_COLLECTOR_BLOB = "bcbe229998da3afa6f31ee04375fb0766019e56f";
 const LOCKFILE_SHA256 = "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2";
 const APPLICATION_ENVELOPE_SHA256 = "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d";
+const ENVIRONMENT_EVIDENCE_CANONICAL_SHA256 = "90d235e4e897964ac31985e7b5b00a64f67a7047de735ac6c49d8c6f3634426f";
+const ENVIRONMENT_EVIDENCE_SOURCE_BLOBS = Object.freeze({
+  phase1ReportGitBlob: "645ef4bc52fdc7bc719a4c6d2250d7835123892b",
+  phase3ReportGitBlob: "08f2c1e38bdc5c59fd363ebb043a49cfbd524bf8",
+  phase3D1ReportGitBlob: "910cc8aabd0143ed54cdaa40f1f6409f6a446203",
+  n3LiveManifestGitBlob: "a8ff8ce84b9b63d778ca315e2d2822e7f648d82b"
+});
 const EVIDENCE_PATH = path.join(ROOT, "docs", "v2_booking_business_environment_evidence.json");
 const OUTPUT_ROOT = path.join(ROOT, "outputs", "rebuild-phase3-d2");
 const RUN_ID = "rebuild-phase3-booking-business-environment-offline-001";
@@ -370,10 +377,8 @@ async function readEnvironmentEvidence() {
     || value.baseline?.lockfileSha256 !== LOCKFILE_SHA256
     || value.baseline?.applicationEnvelopeSha256 !== APPLICATION_ENVELOPE_SHA256
     || stableJson(value.observations?.map((entry) => entry.id)) !== stableJson(expectedIds)
-    || value.evidenceSources?.phase1ReportGitBlob !== git(["rev-parse", "HEAD:docs/datalab_rebuild_phase1_report.md"])
-    || value.evidenceSources?.phase3ReportGitBlob !== git(["rev-parse", "HEAD:docs/datalab_rebuild_phase3_report.md"])
-    || value.evidenceSources?.phase3D1ReportGitBlob !== git(["rev-parse", "HEAD:docs/datalab_rebuild_phase3_d1_report.md"])
-    || value.evidenceSources?.n3LiveManifestGitBlob !== git(["rev-parse", "HEAD:docs/v2_booking_business_n3_live_evidence_manifest.json"])
+    || Object.entries(ENVIRONMENT_EVIDENCE_SOURCE_BLOBS).some(([key, blob]) => value.evidenceSources?.[key] !== blob)
+    || sha256(stableJson(value)) !== ENVIRONMENT_EVIDENCE_CANONICAL_SHA256
     || Object.values(value.privacy || {}).some((entry) => entry !== false)
   ) fail("V2_BOOKING_BUSINESS_ENV_EVIDENCE_INVALID", "environment evidence contract changed");
   return Object.freeze({ value, canonicalSha256: sha256(stableJson(value)), gitBlob: gitBlob("docs/v2_booking_business_environment_evidence.json") });
@@ -433,15 +438,6 @@ async function runDiagnostics({ writeEvidence = true } = {}) {
     fail("V2_BOOKING_BUSINESS_ENV_RUN_EXISTS", "D2 evidence run already exists");
   }
   const baseline = await verifyBaseline();
-  verifyCommitLineage({
-    baselineCommit: D1_COMMIT,
-    expectedHead: String(process.env.V2_RENDER_DIAGNOSTIC_EXPECTED_DEPLOY_COMMIT || "").trim().toLowerCase() || null,
-    expectedParent: "8a58057e4bb1f2cd7955900d97b792aaba5f3118",
-    protectedTreeEntryCount: 322,
-    protectedTreeSha256: "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4",
-    mismatchCode: "V2_BOOKING_BUSINESS_ENV_BASELINE_MISMATCH",
-    label: "D1 diagnostics commit"
-  });
   if (
     baseline.collectorBlob !== V2_COLLECTOR_BLOB
     || gitBlob("scripts/frozen_v2_4e4e190/gyeongnam_glamping_crawl.cjs") !== REFERENCE_COLLECTOR_BLOB
@@ -567,6 +563,8 @@ module.exports = {
   APPLICATION_ENVELOPE_SHA256,
   CONTROLLED_GRAPHQL_HEADER_NAMES,
   D1_COMMIT,
+  ENVIRONMENT_EVIDENCE_CANONICAL_SHA256,
+  ENVIRONMENT_EVIDENCE_SOURCE_BLOBS,
   LOCKFILE_SHA256,
   REFERENCE_COLLECTOR_BLOB,
   RESULT_SCHEMA_VERSION,

@@ -53,46 +53,21 @@ const COPY_ONLY_MINIMUM_QUIET_SECONDS = 1800;
 const PREVIOUS_COPIED_AUDIT_MODIFIED_UTC = "2026-08-13T02:30:44.069Z";
 const COPY_ONLY_APPROVED_JOB_SHA256 = "35875d7b67f83deff6abe46e8deb606cb6f8506fdd641030f9a829cf51fdc308";
 const COPY_ONLY_EXPECTED_ENVELOPE_SHA256 = "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d";
-const BASELINE_PROTECTED_TREE_ENTRY_COUNT = 322;
-const BASELINE_PROTECTED_TREE_SHA256 = "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4";
-const SHALLOW_EXPECTED_PARENT_COMMIT = "8a58057e4bb1f2cd7955900d97b792aaba5f3118";
+const PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT = "690f577e1c86d3fa7f8d3f00f9ade6a87c444b14";
+const BASELINE_PROTECTED_TREE_ENTRY_COUNT = 342;
+const BASELINE_PROTECTED_TREE_SHA256 = "ac9351bda4c757fb38cfa59dd1844fefaf2d4de1f81b1f779d79650207a72f2e";
+const SHALLOW_EXPECTED_PARENT_COMMIT = PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT;
 const SHALLOW_EXPECTED_HEAD_SOURCE_PATHS = Object.freeze([
-  "docs/datalab_rebuild_phase3_d6_fresh_run_identity_report.md",
-  "docs/v2_booking_business_render_diagnostic_job.proposal.json",
+  "docs/datalab_rebuild_phase3_pid_readiness_report.md",
+  "render.v2-booking-business-render-diagnostic.proposal.yaml",
+  "scripts/test_v2_booking_business_env_diagnostics.cjs",
   "scripts/test_v2_booking_business_harness.cjs",
   "scripts/test_v2_booking_business_render_one_shot.cjs",
   "scripts/v2_booking_business_env_diagnostics.cjs",
   "scripts/v2_booking_business_harness.cjs",
   "scripts/v2_booking_business_render_one_shot.cjs"
 ]);
-const PHASE3_FILE_ALLOWLIST = new Set([
-  "docs/datalab_rebuild_phase3_d1_report.md",
-  "docs/datalab_rebuild_phase3_d2_report.md",
-  "docs/datalab_rebuild_phase3_d3_report.md",
-  "docs/datalab_rebuild_phase3_d3_readiness_fix_report.md",
-  "docs/datalab_rebuild_phase3_d3_shallow_integrity_fix_report.md",
-  "docs/datalab_rebuild_phase3_d4_process_lifetime_report.md",
-  "docs/datalab_rebuild_phase3_d5_child_framing_diagnostics_report.md",
-  "docs/datalab_rebuild_phase3_d6_fresh_run_identity_report.md",
-  "docs/datalab_rebuild_phase3_report.md",
-  "docs/datalab_rebuild_phase4_prompt_draft.md",
-  "docs/v2_booking_business_environment_evidence.json",
-  "docs/v2_booking_business_contract.md",
-  "docs/v2_booking_business_copy_only_live_job.proposal.json",
-  "docs/v2_booking_business_live_job.proposal.json",
-  "docs/v2_booking_business_n3_live_evidence_manifest.json",
-  "docs/v2_booking_business_render_diagnostic_job.proposal.json",
-  "render.v2-booking-business-render-diagnostic.proposal.yaml",
-  "scripts/test_v2_booking_business_harness.cjs",
-  "scripts/test_v2_booking_business_env_diagnostics.cjs",
-  "scripts/test_v2_booking_business_render_one_shot.cjs",
-  "scripts/v2_booking_business_child.cjs",
-  "scripts/v2_booking_business_env_diagnostics.cjs",
-  "scripts/v2_booking_business_harness.cjs",
-  "scripts/v2_booking_business_render_network_diagnostics.cjs",
-  "scripts/v2_booking_business_render_one_shot.cjs",
-  "tests/fixtures/v2_booking_business_job.json"
-]);
+const READINESS_FILE_ALLOWLIST = new Set(SHALLOW_EXPECTED_HEAD_SOURCE_PATHS);
 const ALLOWED_FIXTURE_SCENARIOS = new Set([
   "success",
   "zero_null_booking",
@@ -196,7 +171,7 @@ function readCommitIdentity(commit = "HEAD", root = ROOT) {
   return Object.freeze({ commit: gitAt(root, ["rev-parse", commit]), tree, parents: Object.freeze(parents) });
 }
 
-function protectedTreeSnapshot(root = ROOT, allowedPaths = PHASE3_FILE_ALLOWLIST) {
+function protectedTreeSnapshot(root = ROOT, allowedPaths = READINESS_FILE_ALLOWLIST) {
   const entries = gitAt(root, ["ls-tree", "-r", "--full-tree", "HEAD"])
     .split(/\r?\n/u)
     .filter(Boolean)
@@ -225,7 +200,7 @@ function verifyCommitLineage({
   mismatchCode = "V2_BOOKING_BUSINESS_BASELINE_MISMATCH",
   label = "approved baseline",
   root = ROOT,
-  allowedPaths = PHASE3_FILE_ALLOWLIST,
+  allowedPaths = READINESS_FILE_ALLOWLIST,
   expectedHeadSourcePaths = SHALLOW_EXPECTED_HEAD_SOURCE_PATHS
 }) {
   const head = gitAt(root, ["rev-parse", "HEAD"]);
@@ -447,13 +422,28 @@ async function verifyBaseline() {
   });
   const head = lineage.head;
   if (lineage.verification === "full-history") {
-    const committedDelta = git(["diff", "--name-only", BASELINE_COMMIT, head, "--"])
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT, head], {
+        cwd: ROOT,
+        stdio: "ignore",
+        windowsHide: true
+      });
+    } catch {
+      fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD does not descend from the Place primary identity baseline");
+    }
+    if (head !== PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT) {
+      const identity = readCommitIdentity("HEAD");
+      if (identity.parents.length !== 1 || identity.parents[0] !== PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT) {
+        fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "readiness HEAD must be the direct single child of the Place primary identity baseline");
+      }
+    }
+    const committedDelta = git(["diff", "--name-only", PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT, head, "--"])
       .split(/\r?\n/u)
       .filter(Boolean)
       .map((entry) => entry.replace(/\\/gu, "/"));
-    const forbiddenDelta = committedDelta.filter((entry) => !PHASE3_FILE_ALLOWLIST.has(entry));
+    const forbiddenDelta = committedDelta.filter((entry) => !READINESS_FILE_ALLOWLIST.has(entry));
     if (forbiddenDelta.length) {
-      fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD contains files outside the Phase 3 allowlist");
+      fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD contains files outside the Place readiness allowlist");
     }
   }
   const sourceManifest = JSON.parse(await fs.readFile(SOURCE_MANIFEST_PATH, "utf8"));
@@ -502,6 +492,7 @@ async function verifyBaseline() {
     phase2ReportSha256,
     phase2LiveJobDigest: PHASE2_LIVE_JOB_DIGEST,
     phase2LivePairSha256: PHASE2_LIVE_PAIR_SHA256,
+    placePrimaryIdentityBaselineCommit: PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT,
     lineageVerification: lineage.verification,
     expectedHeadSourceBlobs: lineage.expectedHeadSourceBlobs || Object.freeze([])
   });
@@ -1202,6 +1193,7 @@ module.exports = {
   JOB_SCHEMA_VERSION,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  PLACE_PRIMARY_IDENTITY_BASELINE_COMMIT,
   SHALLOW_EXPECTED_PARENT_COMMIT,
   SHALLOW_EXPECTED_HEAD_SOURCE_PATHS,
   OUTPUT_ROOT,

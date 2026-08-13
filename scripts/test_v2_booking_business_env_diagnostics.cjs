@@ -8,6 +8,8 @@ const {
   APPLICATION_ENVELOPE_SHA256,
   CONTROLLED_GRAPHQL_HEADER_NAMES,
   D1_COMMIT,
+  ENVIRONMENT_EVIDENCE_CANONICAL_SHA256,
+  ENVIRONMENT_EVIDENCE_SOURCE_BLOBS,
   LOCKFILE_SHA256,
   REFERENCE_COLLECTOR_BLOB,
   RESULT_SCHEMA_VERSION,
@@ -52,6 +54,12 @@ async function main() {
   const evidenceFile = await readEnvironmentEvidence();
   const evidence = evidenceFile.value;
   check(evidence.baseline.diagnosticsCommit, D1_COMMIT, "environment evidence must start at the D1 commit");
+  check(evidenceFile.canonicalSha256, ENVIRONMENT_EVIDENCE_CANONICAL_SHA256, "historical environment evidence must remain canonically frozen");
+  check(
+    Object.fromEntries(Object.keys(ENVIRONMENT_EVIDENCE_SOURCE_BLOBS).map((key) => [key, evidence.evidenceSources[key]])),
+    ENVIRONMENT_EVIDENCE_SOURCE_BLOBS,
+    "historical evidence source blobs must remain tied to their recorded commits"
+  );
   check(evidence.baseline.v2CollectorBlob, V2_COLLECTOR_BLOB, "V2 collector identity must remain exact");
   check(evidence.baseline.referenceCollectorBlob, REFERENCE_COLLECTOR_BLOB, "reference collector must remain exact");
   check(evidence.baseline.lockfileSha256, LOCKFILE_SHA256, "lockfile identity must remain exact");
