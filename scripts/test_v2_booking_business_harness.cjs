@@ -1,9 +1,11 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { installFixtureNetworkGuard } = require("./fixture_network_guard.cjs");
 const {
   GRAPHQL_DOCUMENTS
@@ -20,6 +22,8 @@ const {
 const {
   ALLOWED_FIXTURE_SCENARIOS,
   BASELINE_COMMIT,
+  BASELINE_PROTECTED_TREE_ENTRY_COUNT,
+  BASELINE_PROTECTED_TREE_SHA256,
   COLLECTOR_BLOB,
   COPY_ONLY_APPROVED_JOB_SHA256,
   COPY_ONLY_JOB_SCHEMA_VERSION,
@@ -27,6 +31,8 @@ const {
   EXPECTED_BOOKING_BUSINESS_ID_HASH,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  SHALLOW_EXPECTED_HEAD_SOURCE_PATHS,
+  SHALLOW_EXPECTED_PARENT_COMMIT,
   compareTargets,
   isolatedD1RunRoot,
   isolatedRunRoot,
@@ -40,7 +46,9 @@ const {
   runSingleFixture,
   sha256,
   stableJson,
+  protectedTreeSnapshot,
   verifyBaseline,
+  verifyCommitLineage,
   verifyPreviousLiveEvidence,
   verifyRuntime
 } = require("./v2_booking_business_harness.cjs");
@@ -80,6 +88,124 @@ async function textFiles(root) {
   return output;
 }
 
+function gitAt(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true }).trim();
+}
+
+async function verifySyntheticShallowLineage() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "v2-booking-lineage-"));
+  const source = path.join(root, "source");
+  const shallow = path.join(root, "shallow");
+  const mutated = path.join(root, "mutated");
+  const allowedPaths = new Set(["allowed.txt"]);
+  try {
+    await fs.mkdir(source, { recursive: true });
+    gitAt(source, ["init", "-b", "main"]);
+    gitAt(source, ["config", "user.name", "Offline Fixture"]);
+    gitAt(source, ["config", "user.email", "offline-fixture@example.invalid"]);
+    await fs.writeFile(path.join(source, "protected.txt"), "protected\n", "utf8");
+    await fs.writeFile(path.join(source, "allowed.txt"), "baseline\n", "utf8");
+    gitAt(source, ["add", "."]);
+    gitAt(source, ["commit", "-m", "baseline"]);
+    const baselineCommit = gitAt(source, ["rev-parse", "HEAD"]);
+    const protectedTree = protectedTreeSnapshot(source, allowedPaths);
+
+    await fs.writeFile(path.join(source, "allowed.txt"), "parent\n", "utf8");
+    gitAt(source, ["add", "allowed.txt"]);
+    gitAt(source, ["commit", "-m", "parent"]);
+    const parentCommit = gitAt(source, ["rev-parse", "HEAD"]);
+    await fs.writeFile(path.join(source, "allowed.txt"), "head\n", "utf8");
+    gitAt(source, ["add", "allowed.txt"]);
+    gitAt(source, ["commit", "-m", "head"]);
+    const headCommit = gitAt(source, ["rev-parse", "HEAD"]);
+
+    execFileSync("git", ["-c", "protocol.file.allow=always", "clone", "--depth", "1", "--single-branch", "--branch", "main", pathToFileURL(source).href, shallow], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    check(gitAt(shallow, ["rev-parse", "--is-shallow-repository"]), "true", "fixture clone must be shallow");
+    check(
+      verifyCommitLineage({
+        baselineCommit,
+        expectedHead: headCommit,
+        expectedParent: parentCommit,
+        protectedTreeEntryCount: protectedTree.count,
+        protectedTreeSha256: protectedTree.sha256,
+        root: shallow,
+        allowedPaths,
+        expectedHeadSourcePaths: ["allowed.txt"]
+      }).verification,
+      "shallow-pinned-head-parent-protected-tree",
+      "pinned shallow checkout must pass without baseline objects"
+    );
+    throws(() => verifyCommitLineage({
+      baselineCommit,
+      expectedHead: "0".repeat(40),
+      expectedParent: parentCommit,
+      protectedTreeEntryCount: protectedTree.count,
+      protectedTreeSha256: protectedTree.sha256,
+      root: shallow,
+      allowedPaths,
+      expectedHeadSourcePaths: ["allowed.txt"]
+    }), { code: "V2_BOOKING_BUSINESS_BASELINE_MISMATCH" }, "wrong shallow HEAD must fail closed");
+    throws(() => verifyCommitLineage({
+      baselineCommit,
+      expectedHead: headCommit,
+      expectedParent: "0".repeat(40),
+      protectedTreeEntryCount: protectedTree.count,
+      protectedTreeSha256: protectedTree.sha256,
+      root: shallow,
+      allowedPaths,
+      expectedHeadSourcePaths: ["allowed.txt"]
+    }), { code: "V2_BOOKING_BUSINESS_BASELINE_MISMATCH" }, "wrong shallow parent must fail closed");
+
+    await fs.writeFile(path.join(shallow, "allowed.txt"), "tampered source\n", "utf8");
+    throws(() => verifyCommitLineage({
+      baselineCommit,
+      expectedHead: headCommit,
+      expectedParent: parentCommit,
+      protectedTreeEntryCount: protectedTree.count,
+      protectedTreeSha256: protectedTree.sha256,
+      root: shallow,
+      allowedPaths,
+      expectedHeadSourcePaths: ["allowed.txt"]
+    }), { code: "V2_BOOKING_BUSINESS_BASELINE_MISMATCH" }, "approved source worktree mutation must fail closed");
+    await fs.writeFile(path.join(shallow, "allowed.txt"), "head\n", "utf8");
+    await fs.writeFile(path.join(shallow, "protected.txt"), "tampered protected worktree\n", "utf8");
+    throws(() => verifyCommitLineage({
+      baselineCommit,
+      expectedHead: headCommit,
+      expectedParent: parentCommit,
+      protectedTreeEntryCount: protectedTree.count,
+      protectedTreeSha256: protectedTree.sha256,
+      root: shallow,
+      allowedPaths,
+      expectedHeadSourcePaths: ["allowed.txt"]
+    }), { code: "V2_BOOKING_BUSINESS_BASELINE_MISMATCH" }, "protected worktree mutation must fail closed");
+
+    await fs.writeFile(path.join(source, "protected.txt"), "mutated\n", "utf8");
+    gitAt(source, ["add", "protected.txt"]);
+    gitAt(source, ["commit", "-m", "mutated protected tree"]);
+    const mutatedHead = gitAt(source, ["rev-parse", "HEAD"]);
+    execFileSync("git", ["-c", "protocol.file.allow=always", "clone", "--depth", "1", "--single-branch", "--branch", "main", pathToFileURL(source).href, mutated], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    throws(() => verifyCommitLineage({
+      baselineCommit,
+      expectedHead: mutatedHead,
+      expectedParent: headCommit,
+      protectedTreeEntryCount: protectedTree.count,
+      protectedTreeSha256: protectedTree.sha256,
+      root: mutated,
+      allowedPaths,
+      expectedHeadSourcePaths: ["allowed.txt"]
+    }), { code: "V2_BOOKING_BUSINESS_BASELINE_MISMATCH" }, "protected tree mutation must fail closed");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
 function validFetchInit(placeId, body) {
   return {
     method: "POST",
@@ -98,11 +224,46 @@ function validFetchInit(placeId, body) {
 
 async function main() {
   const roots = [];
+  const shallowCheckout = gitAt(ROOT, ["rev-parse", "--is-shallow-repository"]) === "true";
   const baseline = await verifyBaseline();
   check(baseline.baselineCommit, BASELINE_COMMIT, "baseline identity must remain the N2 commit");
   check(baseline.collectorBlob, COLLECTOR_BLOB, "collector blob must remain frozen");
   check(baseline.lockfileSha256, LOCKFILE_SHA256, "lockfile must remain frozen");
   check(baseline.sourceFileCount, 20, "source dependency closure must contain 20 files");
+  check(
+    baseline.lineageVerification,
+    shallowCheckout ? "shallow-pinned-head-parent-protected-tree" : "full-history",
+    "lineage verification must match the available Git history"
+  );
+  check(BASELINE_PROTECTED_TREE_ENTRY_COUNT, 322, "protected baseline tree entry count must remain frozen");
+  check(BASELINE_PROTECTED_TREE_SHA256, "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4", "protected baseline tree digest must remain frozen");
+  check(SHALLOW_EXPECTED_PARENT_COMMIT, "9fd55f96834d060fb73fe658c6690f57de8a6738", "shallow deploy must pin its reviewed parent commit");
+  check(SHALLOW_EXPECTED_HEAD_SOURCE_PATHS, [
+    "docs/datalab_rebuild_phase3_d3_shallow_integrity_fix_report.md",
+    "scripts/test_v2_booking_business_harness.cjs",
+    "scripts/v2_booking_business_env_diagnostics.cjs",
+    "scripts/v2_booking_business_harness.cjs"
+  ], "shallow deploy source attestation must cover every new fix file");
+  if (shallowCheckout) {
+    check(
+      baseline.expectedHeadSourceBlobs.length,
+      SHALLOW_EXPECTED_HEAD_SOURCE_PATHS.length,
+      "shallow verification must attest every fix source"
+    );
+  } else {
+    check(
+      verifyCommitLineage({
+        baselineCommit: BASELINE_COMMIT,
+        expectedHead: "0".repeat(40),
+        expectedParent: "0".repeat(40),
+        protectedTreeEntryCount: 0,
+        protectedTreeSha256: "0".repeat(64)
+      }).verification,
+      "full-history",
+      "full history must not depend on shallow fallback inputs"
+    );
+  }
+  await verifySyntheticShallowLineage();
 
   const offlineRead = await readJob(OFFLINE_JOB);
   const liveRead = await readJob(LIVE_JOB);

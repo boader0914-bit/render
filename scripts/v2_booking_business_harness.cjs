@@ -53,11 +53,21 @@ const COPY_ONLY_MINIMUM_QUIET_SECONDS = 1800;
 const PREVIOUS_COPIED_AUDIT_MODIFIED_UTC = "2026-08-13T02:30:44.069Z";
 const COPY_ONLY_APPROVED_JOB_SHA256 = "35875d7b67f83deff6abe46e8deb606cb6f8506fdd641030f9a829cf51fdc308";
 const COPY_ONLY_EXPECTED_ENVELOPE_SHA256 = "2078ad1e1f436f524058822079837a8ab222eea7e54b375a7ad7fc2bba378d1d";
+const BASELINE_PROTECTED_TREE_ENTRY_COUNT = 322;
+const BASELINE_PROTECTED_TREE_SHA256 = "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4";
+const SHALLOW_EXPECTED_PARENT_COMMIT = "9fd55f96834d060fb73fe658c6690f57de8a6738";
+const SHALLOW_EXPECTED_HEAD_SOURCE_PATHS = Object.freeze([
+  "docs/datalab_rebuild_phase3_d3_shallow_integrity_fix_report.md",
+  "scripts/test_v2_booking_business_harness.cjs",
+  "scripts/v2_booking_business_env_diagnostics.cjs",
+  "scripts/v2_booking_business_harness.cjs"
+]);
 const PHASE3_FILE_ALLOWLIST = new Set([
   "docs/datalab_rebuild_phase3_d1_report.md",
   "docs/datalab_rebuild_phase3_d2_report.md",
   "docs/datalab_rebuild_phase3_d3_report.md",
   "docs/datalab_rebuild_phase3_d3_readiness_fix_report.md",
+  "docs/datalab_rebuild_phase3_d3_shallow_integrity_fix_report.md",
   "docs/datalab_rebuild_phase3_report.md",
   "docs/datalab_rebuild_phase4_prompt_draft.md",
   "docs/v2_booking_business_environment_evidence.json",
@@ -166,6 +176,103 @@ function git(args) {
 
 function gitBlob(relative) {
   return git(["hash-object", `--path=${relative}`, relative]);
+}
+
+function gitAt(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true }).trim();
+}
+
+function readCommitIdentity(commit = "HEAD", root = ROOT) {
+  const raw = gitAt(root, ["cat-file", "-p", commit]);
+  const tree = raw.match(/^tree ([0-9a-f]{40})$/mu)?.[1] || null;
+  const parents = [...raw.matchAll(/^parent ([0-9a-f]{40})$/gmu)].map((match) => match[1]);
+  if (!tree) fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "commit tree identity is unavailable");
+  return Object.freeze({ commit: gitAt(root, ["rev-parse", commit]), tree, parents: Object.freeze(parents) });
+}
+
+function protectedTreeSnapshot(root = ROOT, allowedPaths = PHASE3_FILE_ALLOWLIST) {
+  const entries = gitAt(root, ["ls-tree", "-r", "--full-tree", "HEAD"])
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+) (\w+) ([0-9a-f]{40})\t(.+)$/u);
+      if (!match) fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "Git tree entry is invalid");
+      return Object.freeze({
+        mode: match[1],
+        type: match[2],
+        oid: match[3],
+        path: match[4].replace(/\\/gu, "/")
+      });
+    })
+    .filter((entry) => !allowedPaths.has(entry.path))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const canonical = entries.map((entry) => `${entry.mode}\t${entry.type}\t${entry.oid}\t${entry.path}\n`).join("");
+  return Object.freeze({ count: entries.length, sha256: sha256(canonical) });
+}
+
+function verifyCommitLineage({
+  baselineCommit,
+  expectedHead,
+  expectedParent,
+  protectedTreeEntryCount,
+  protectedTreeSha256,
+  mismatchCode = "V2_BOOKING_BUSINESS_BASELINE_MISMATCH",
+  label = "approved baseline",
+  root = ROOT,
+  allowedPaths = PHASE3_FILE_ALLOWLIST,
+  expectedHeadSourcePaths = SHALLOW_EXPECTED_HEAD_SOURCE_PATHS
+}) {
+  const head = gitAt(root, ["rev-parse", "HEAD"]);
+  let baselineAvailable = true;
+  try {
+    execFileSync("git", ["cat-file", "-e", `${baselineCommit}^{commit}`], {
+      cwd: root,
+      stdio: "ignore",
+      windowsHide: true
+    });
+  } catch {
+    baselineAvailable = false;
+  }
+  if (baselineAvailable) {
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", baselineCommit, head], {
+        cwd: root,
+        stdio: "ignore",
+        windowsHide: true
+      });
+    } catch {
+      fail(mismatchCode, `HEAD does not descend from the ${label}`);
+    }
+    return Object.freeze({ head, verification: "full-history" });
+  }
+
+  const shallow = gitAt(root, ["rev-parse", "--is-shallow-repository"]) === "true";
+  if (!shallow || !expectedHead || head !== expectedHead.toLowerCase()) {
+    fail(mismatchCode, `${label} is unavailable outside the approved shallow checkout`);
+  }
+  const identity = readCommitIdentity("HEAD", root);
+  if (identity.parents.length !== 1 || identity.parents[0] !== expectedParent.toLowerCase()) {
+    fail(mismatchCode, "shallow checkout HEAD parent identity changed");
+  }
+  const protectedTree = protectedTreeSnapshot(root, allowedPaths);
+  if (protectedTree.count !== protectedTreeEntryCount || protectedTree.sha256 !== protectedTreeSha256) {
+    fail(mismatchCode, "shallow checkout protected tree changed");
+  }
+  const protectedWorktreeDelta = gitAt(root, ["diff", "--name-only", "HEAD", "--"])
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .map((entry) => entry.replace(/\\/gu, "/"))
+    .filter((entry) => !allowedPaths.has(entry));
+  if (protectedWorktreeDelta.length) {
+    fail(mismatchCode, "shallow checkout protected worktree changed");
+  }
+  const expectedHeadSourceBlobs = Object.freeze(expectedHeadSourcePaths.map((relative) => {
+    const expectedBlob = gitAt(root, ["rev-parse", `HEAD:${relative}`]);
+    const observedBlob = gitAt(root, ["hash-object", `--path=${relative}`, relative]);
+    if (observedBlob !== expectedBlob) fail(mismatchCode, `shallow checkout source changed: ${relative}`);
+    return Object.freeze({ path: relative, blob: expectedBlob });
+  }));
+  return Object.freeze({ head, verification: "shallow-pinned-head-parent-protected-tree", protectedTree, expectedHeadSourceBlobs });
 }
 
 function normalizeJob(value) {
@@ -323,23 +430,25 @@ async function readCopyOnlyJob(jobPath) {
 }
 
 async function verifyBaseline() {
-  const head = git(["rev-parse", "HEAD"]);
-  try {
-    execFileSync("git", ["merge-base", "--is-ancestor", BASELINE_COMMIT, head], {
-      cwd: ROOT,
-      stdio: "ignore",
-      windowsHide: true
-    });
-  } catch {
-    fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD does not descend from the N2 baseline commit");
-  }
-  const committedDelta = git(["diff", "--name-only", BASELINE_COMMIT, head, "--"])
-    .split(/\r?\n/u)
-    .filter(Boolean)
-    .map((entry) => entry.replace(/\\/gu, "/"));
-  const forbiddenDelta = committedDelta.filter((entry) => !PHASE3_FILE_ALLOWLIST.has(entry));
-  if (forbiddenDelta.length) {
-    fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD contains files outside the Phase 3 allowlist");
+  const expectedHead = String(process.env.V2_RENDER_DIAGNOSTIC_EXPECTED_DEPLOY_COMMIT || "").trim().toLowerCase() || null;
+  const lineage = verifyCommitLineage({
+    baselineCommit: BASELINE_COMMIT,
+    expectedHead,
+    expectedParent: SHALLOW_EXPECTED_PARENT_COMMIT,
+    protectedTreeEntryCount: BASELINE_PROTECTED_TREE_ENTRY_COUNT,
+    protectedTreeSha256: BASELINE_PROTECTED_TREE_SHA256,
+    label: "N2 baseline commit"
+  });
+  const head = lineage.head;
+  if (lineage.verification === "full-history") {
+    const committedDelta = git(["diff", "--name-only", BASELINE_COMMIT, head, "--"])
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .map((entry) => entry.replace(/\\/gu, "/"));
+    const forbiddenDelta = committedDelta.filter((entry) => !PHASE3_FILE_ALLOWLIST.has(entry));
+    if (forbiddenDelta.length) {
+      fail("V2_BOOKING_BUSINESS_BASELINE_MISMATCH", "HEAD contains files outside the Phase 3 allowlist");
+    }
   }
   const sourceManifest = JSON.parse(await fs.readFile(SOURCE_MANIFEST_PATH, "utf8"));
   if (
@@ -357,8 +466,10 @@ async function verifyBaseline() {
     }
     sourceFiles.push(observed);
   }
-  const changed = git(["diff", "--name-only", BASELINE_COMMIT, "--", ...sourceManifest.files.map((entry) => entry.path)]);
-  if (changed) fail("V2_BOOKING_BUSINESS_SOURCE_FILE_MISMATCH", "one or more baseline source files have a diff");
+  if (lineage.verification === "full-history") {
+    const changed = git(["diff", "--name-only", BASELINE_COMMIT, "--", ...sourceManifest.files.map((entry) => entry.path)]);
+    if (changed) fail("V2_BOOKING_BUSINESS_SOURCE_FILE_MISMATCH", "one or more baseline source files have a diff");
+  }
   if (gitBlob("scripts/gyeongnam_glamping_crawl.cjs") !== COLLECTOR_BLOB) {
     fail("V2_BOOKING_BUSINESS_COLLECTOR_MISMATCH", "collector blob changed");
   }
@@ -384,7 +495,9 @@ async function verifyBaseline() {
     sourceBaselineCommit: SOURCE_BASELINE_COMMIT,
     phase2ReportSha256,
     phase2LiveJobDigest: PHASE2_LIVE_JOB_DIGEST,
-    phase2LivePairSha256: PHASE2_LIVE_PAIR_SHA256
+    phase2LivePairSha256: PHASE2_LIVE_PAIR_SHA256,
+    lineageVerification: lineage.verification,
+    expectedHeadSourceBlobs: lineage.expectedHeadSourceBlobs || Object.freeze([])
   });
 }
 
@@ -1071,6 +1184,8 @@ if (require.main === module) {
 module.exports = {
   ALLOWED_FIXTURE_SCENARIOS,
   BASELINE_COMMIT,
+  BASELINE_PROTECTED_TREE_ENTRY_COUNT,
+  BASELINE_PROTECTED_TREE_SHA256,
   COLLECTOR_BLOB,
   COPY_ONLY_APPROVED_JOB_SHA256,
   COPY_ONLY_EXPECTED_ENVELOPE_SHA256,
@@ -1081,6 +1196,8 @@ module.exports = {
   JOB_SCHEMA_VERSION,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  SHALLOW_EXPECTED_PARENT_COMMIT,
+  SHALLOW_EXPECTED_HEAD_SOURCE_PATHS,
   OUTPUT_ROOT,
   PHASE2_LIVE_PAIR_SHA256,
   compareTargets,
@@ -1101,6 +1218,8 @@ module.exports = {
   stableJson,
   verifyManifestFileBytes,
   verifyBaseline,
+  verifyCommitLineage,
+  protectedTreeSnapshot,
   verifyPreviousLiveEvidence,
   verifyRuntime
 };

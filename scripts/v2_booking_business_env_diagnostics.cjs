@@ -10,7 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { GRAPHQL_DOCUMENTS } = require("./naver_bounded_inventory_live_transport.cjs");
-const { verifyBaseline, sha256, stableJson } = require("./v2_booking_business_harness.cjs");
+const { verifyBaseline, verifyCommitLineage, sha256, stableJson } = require("./v2_booking_business_harness.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const D1_COMMIT = "2daecbb40f351d3916cf30f95bf4435cf58920eb";
@@ -433,15 +433,15 @@ async function runDiagnostics({ writeEvidence = true } = {}) {
     fail("V2_BOOKING_BUSINESS_ENV_RUN_EXISTS", "D2 evidence run already exists");
   }
   const baseline = await verifyBaseline();
-  try {
-    execFileSync("git", ["merge-base", "--is-ancestor", D1_COMMIT, baseline.head], {
-      cwd: ROOT,
-      stdio: "ignore",
-      windowsHide: true
-    });
-  } catch {
-    fail("V2_BOOKING_BUSINESS_ENV_BASELINE_MISMATCH", "HEAD does not descend from the D1 diagnostics commit");
-  }
+  verifyCommitLineage({
+    baselineCommit: D1_COMMIT,
+    expectedHead: String(process.env.V2_RENDER_DIAGNOSTIC_EXPECTED_DEPLOY_COMMIT || "").trim().toLowerCase() || null,
+    expectedParent: "9fd55f96834d060fb73fe658c6690f57de8a6738",
+    protectedTreeEntryCount: 322,
+    protectedTreeSha256: "33c33aa6298a69eeb6223731c001a0221d6f392b9d87fd74f240585a01ab89c4",
+    mismatchCode: "V2_BOOKING_BUSINESS_ENV_BASELINE_MISMATCH",
+    label: "D1 diagnostics commit"
+  });
   if (
     baseline.collectorBlob !== V2_COLLECTOR_BLOB
     || gitBlob("scripts/frozen_v2_4e4e190/gyeongnam_glamping_crawl.cjs") !== REFERENCE_COLLECTOR_BLOB
