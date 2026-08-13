@@ -9,6 +9,11 @@ const {
   COPY_ONLY_EXPECTED_ENVELOPE_SHA256,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  canonicalGitTextBytes,
+  gitBlobFromBytes,
+  manifestRecordedTextBytes,
+  stableJson,
+  verifyManifestFileBytes,
   sha256
 } = require("./v2_booking_business_harness.cjs");
 const {
@@ -17,6 +22,7 @@ const {
   RENDER_JOB_CANONICAL_SHA256,
   RENDER_RUN_ID,
   RENDER_STATE_ROOT,
+  SOURCE_MANIFEST_DIGEST,
   assertLiveGates,
   assertReadinessGates,
   holdUntilSignal,
@@ -185,6 +191,20 @@ function syntheticChild(mode = "fixture") {
 
 async function main() {
   await fs.rm(OUTPUT_ROOT, { recursive: true, force: true });
+
+  const sourceManifest = JSON.parse(await fs.readFile(path.join(ROOT, "docs", "v2_native_main_place_source_manifest.json"), "utf8"));
+  for (const entry of sourceManifest.files) {
+    const worktreeBytes = await fs.readFile(path.join(ROOT, entry.path));
+    const lfBytes = canonicalGitTextBytes(worktreeBytes);
+    const crlfBytes = manifestRecordedTextBytes(lfBytes);
+    check(verifyManifestFileBytes(lfBytes, entry).matches, true, `${entry.path} must match from an LF checkout`);
+    check(verifyManifestFileBytes(crlfBytes, entry).matches, true, `${entry.path} must match from a CRLF checkout`);
+    check(gitBlobFromBytes(lfBytes), entry.gitBlob, `${entry.path} canonical bytes must retain the committed Git blob`);
+  }
+  const mutatedEntry = sourceManifest.files.find((entry) => entry.path === "package-lock.json");
+  const mutatedBytes = Buffer.concat([canonicalGitTextBytes(await fs.readFile(path.join(ROOT, mutatedEntry.path))), Buffer.from("x")]);
+  check(verifyManifestFileBytes(mutatedBytes, mutatedEntry).matches, false, "a non-EOL source mutation must fail closed");
+  check(sha256(stableJson(sourceManifest)), SOURCE_MANIFEST_DIGEST, "the historical manifest identity must remain frozen");
 
   const integrity = await verifyIntegrity();
   check(integrity.baselineCommit, D2_COMMIT, "D3 must descend from the committed D2 baseline");

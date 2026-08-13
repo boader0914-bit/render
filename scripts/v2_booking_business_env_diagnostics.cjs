@@ -445,7 +445,7 @@ async function runDiagnostics({ writeEvidence = true } = {}) {
   if (
     baseline.collectorBlob !== V2_COLLECTOR_BLOB
     || gitBlob("scripts/frozen_v2_4e4e190/gyeongnam_glamping_crawl.cjs") !== REFERENCE_COLLECTOR_BLOB
-    || sha256(await fs.readFile(path.join(ROOT, "package-lock.json"))) !== LOCKFILE_SHA256
+    || baseline.lockfileSha256 !== LOCKFILE_SHA256
   ) fail("V2_BOOKING_BUSINESS_ENV_BASELINE_MISMATCH", "collector or lockfile integrity changed");
 
   const [evidence, sourceInspection] = await Promise.all([

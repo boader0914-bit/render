@@ -10,9 +10,12 @@ const {
   COPY_ONLY_EXPECTED_ENVELOPE_SHA256,
   LIVE_PLACE_ID_HASH,
   LOCKFILE_SHA256,
+  canonicalGitTextBytes,
+  manifestRecordedTextBytes,
   readCopyOnlyJob,
   sha256,
   stableJson,
+  verifyManifestFileBytes,
   verifyRuntime
 } = require("./v2_booking_business_harness.cjs");
 const { runtimeFingerprint } = require("./v2_booking_business_env_diagnostics.cjs");
@@ -134,7 +137,7 @@ async function verifySourceManifest() {
   ) fail("V2_RENDER_DIAGNOSTIC_SOURCE_MISMATCH", "source manifest identity changed");
   for (const entry of manifest.files) {
     const content = await fs.readFile(path.join(ROOT, entry.path));
-    if (content.length !== entry.bytes || sha256(content) !== entry.sha256) {
+    if (!verifyManifestFileBytes(content, entry).matches) {
       fail("V2_RENDER_DIAGNOSTIC_SOURCE_MISMATCH", "source closure file hash changed");
     }
   }
@@ -170,10 +173,12 @@ async function verifyIntegrity(env = process.env) {
   const collectorBytes = await fs.readFile(path.join(ROOT, "scripts", "gyeongnam_glamping_crawl.cjs"));
   const referenceCollectorBytes = await fs.readFile(path.join(ROOT, "scripts", "frozen_v2_4e4e190", "gyeongnam_glamping_crawl.cjs"));
   const lockfileBytes = await fs.readFile(path.join(ROOT, "package-lock.json"));
+  const collectorEntry = sourceManifest.files.find((entry) => entry.path === "scripts/gyeongnam_glamping_crawl.cjs");
+  const lockfileEntry = sourceManifest.files.find((entry) => entry.path === "package-lock.json");
   if (
-    sha256(collectorBytes) !== sourceManifest.files.find((entry) => entry.path === "scripts/gyeongnam_glamping_crawl.cjs")?.sha256
-    || sha256(referenceCollectorBytes) !== REFERENCE_COLLECTOR_SHA256
-    || sha256(lockfileBytes) !== LOCKFILE_SHA256
+    !collectorEntry || !verifyManifestFileBytes(collectorBytes, collectorEntry).matches
+    || sha256(manifestRecordedTextBytes(referenceCollectorBytes)) !== REFERENCE_COLLECTOR_SHA256
+    || !lockfileEntry || !verifyManifestFileBytes(lockfileBytes, lockfileEntry).matches
     || sourceJobDigest !== COPY_ONLY_APPROVED_JOB_SHA256
     || sha256(sourceJob.placeId) !== job.source.placeIdHash
   ) fail("V2_RENDER_DIAGNOSTIC_BASELINE_MISMATCH", "source, collector, lockfile, or target identity changed");
@@ -288,7 +293,7 @@ async function materializeCopy(targetRoot) {
     const target = path.join(targetRoot, entry.path);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(path.join(ROOT, entry.path), target);
-    if (sha256(await fs.readFile(target)) !== entry.sha256) {
+    if (!verifyManifestFileBytes(await fs.readFile(target), entry).matches) {
       fail("V2_RENDER_DIAGNOSTIC_COPY_MISMATCH", "source copy hash mismatch");
     }
   }

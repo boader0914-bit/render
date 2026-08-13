@@ -57,6 +57,7 @@ const PHASE3_FILE_ALLOWLIST = new Set([
   "docs/datalab_rebuild_phase3_d1_report.md",
   "docs/datalab_rebuild_phase3_d2_report.md",
   "docs/datalab_rebuild_phase3_d3_report.md",
+  "docs/datalab_rebuild_phase3_d3_readiness_fix_report.md",
   "docs/datalab_rebuild_phase3_report.md",
   "docs/datalab_rebuild_phase4_prompt_draft.md",
   "docs/v2_booking_business_environment_evidence.json",
@@ -109,6 +110,37 @@ function fail(code, message) {
 
 function sha256(value) {
   return crypto.createHash("sha256").update(Buffer.isBuffer(value) ? value : Buffer.from(String(value))).digest("hex");
+}
+
+function canonicalGitTextBytes(value) {
+  const content = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+  return Buffer.from(content.toString("utf8").replace(/\r\n/gu, "\n"), "utf8");
+}
+
+function manifestRecordedTextBytes(value) {
+  const canonical = canonicalGitTextBytes(value);
+  return Buffer.from(canonical.toString("utf8").replace(/\n/gu, "\r\n"), "utf8");
+}
+
+function gitBlobFromBytes(value) {
+  const content = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  return crypto.createHash("sha1")
+    .update(Buffer.from(`blob ${content.length}\0`, "utf8"))
+    .update(content)
+    .digest("hex");
+}
+
+function verifyManifestFileBytes(content, entry) {
+  const canonical = canonicalGitTextBytes(content);
+  const recorded = manifestRecordedTextBytes(canonical);
+  const observedGitBlob = gitBlobFromBytes(canonical);
+  return Object.freeze({
+    path: entry.path,
+    bytes: recorded.length,
+    sha256: sha256(recorded),
+    gitBlob: observedGitBlob,
+    matches: recorded.length === entry.bytes && sha256(recorded) === entry.sha256 && observedGitBlob === entry.gitBlob
+  });
 }
 
 function stableJson(value) {
@@ -319,8 +351,8 @@ async function verifyBaseline() {
   const sourceFiles = [];
   for (const entry of sourceManifest.files) {
     const content = await fs.readFile(path.join(ROOT, entry.path));
-    const observed = { path: entry.path, bytes: content.length, sha256: sha256(content), gitBlob: gitBlob(entry.path) };
-    if (observed.bytes !== entry.bytes || observed.sha256 !== entry.sha256 || observed.gitBlob !== entry.gitBlob) {
+    const observed = verifyManifestFileBytes(content, entry);
+    if (!observed.matches || gitBlob(entry.path) !== entry.gitBlob) {
       fail("V2_BOOKING_BUSINESS_SOURCE_FILE_MISMATCH", `baseline source changed: ${entry.path}`);
     }
     sourceFiles.push(observed);
@@ -330,9 +362,13 @@ async function verifyBaseline() {
   if (gitBlob("scripts/gyeongnam_glamping_crawl.cjs") !== COLLECTOR_BLOB) {
     fail("V2_BOOKING_BUSINESS_COLLECTOR_MISMATCH", "collector blob changed");
   }
-  const lockfileSha256 = sha256(await fs.readFile(path.join(ROOT, "package-lock.json")));
-  if (lockfileSha256 !== LOCKFILE_SHA256) fail("V2_BOOKING_BUSINESS_LOCKFILE_MISMATCH", "package-lock changed");
-  const phase2ReportSha256 = sha256(await fs.readFile(PHASE2_REPORT_PATH));
+  const lockfileEntry = sourceManifest.files.find((entry) => entry.path === "package-lock.json");
+  const lockfileBytes = await fs.readFile(path.join(ROOT, "package-lock.json"));
+  if (!lockfileEntry || !verifyManifestFileBytes(lockfileBytes, lockfileEntry).matches) {
+    fail("V2_BOOKING_BUSINESS_LOCKFILE_MISMATCH", "package-lock changed");
+  }
+  const lockfileSha256 = LOCKFILE_SHA256;
+  const phase2ReportSha256 = sha256(manifestRecordedTextBytes(await fs.readFile(PHASE2_REPORT_PATH)));
   if (phase2ReportSha256 !== PHASE2_REPORT_SHA256) fail("V2_BOOKING_BUSINESS_PHASE2_EVIDENCE_MISMATCH", "Phase 2 report changed");
   const phase2Job = normalizePhase2Job(JSON.parse(await fs.readFile(PHASE2_LIVE_JOB_PATH, "utf8")));
   if (sha256(stableJson(phase2Job)) !== PHASE2_LIVE_JOB_DIGEST) {
@@ -456,7 +492,7 @@ async function materializeCopy(sourceManifest, snapshotRoot) {
     const target = path.join(snapshotRoot, entry.path);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.copyFile(source, target);
-    if (sha256(await fs.readFile(target)) !== entry.sha256) {
+    if (!verifyManifestFileBytes(await fs.readFile(target), entry).matches) {
       fail("V2_BOOKING_BUSINESS_COPY_HASH_MISMATCH", `copied source hash mismatch: ${entry.path}`);
     }
   }
@@ -1058,8 +1094,12 @@ module.exports = {
   runEnvelopeParity,
   runPair,
   runSingleFixture,
+  canonicalGitTextBytes,
+  gitBlobFromBytes,
+  manifestRecordedTextBytes,
   sha256,
   stableJson,
+  verifyManifestFileBytes,
   verifyBaseline,
   verifyPreviousLiveEvidence,
   verifyRuntime
