@@ -27,9 +27,10 @@ const REFERENCE_COLLECTOR_SHA256 = "b114dd542169f45034bef3a13266b3c6c9aa4cead1de
 const SOURCE_MANIFEST_DIGEST = "89ed646cc3ad57bb38da577cd177d6827aeb3f008553b2c1c8a8df242e642b40";
 const PREVIOUS_LIVE_EVIDENCE_DIGEST = "da4cb9697ed195d54ef62f3c7e15563efbad41a0baa7dbee0b2ebef1e55e3ebf";
 const RENDER_JOB_SCHEMA_VERSION = "v2-booking-business-render-diagnostic-job.v1";
-const RENDER_JOB_CANONICAL_SHA256 = "598cb85cbddef5338e1b7d67ed0aa4b16ba7713f85b16bbb28925d0f481d2bd0";
-const RENDER_RUN_ID = "rebuild-phase3-booking-business-render-live-001";
-const LIVE_APPROVAL = "N3-D3-Live";
+const RENDER_JOB_CANONICAL_SHA256 = "dc5fe2afa8e9b90fc601375597ec597930f2910a50749b0a4978ebb07b0de5b4";
+const RENDER_RUN_ID = "rebuild-phase3-booking-business-render-live-002";
+const PREVIOUS_RENDER_RUN_ID = "rebuild-phase3-booking-business-render-live-001";
+const LIVE_APPROVAL = "N3-D6-Live";
 const RENDER_STATE_ROOT = "/var/data/v2-booking-business-render-diagnostic";
 const PROCESS_KEEPALIVE_INTERVAL_MS = 60_000;
 const CHILD_STDOUT_LIMIT_BYTES = 500_000;
@@ -860,6 +861,7 @@ module.exports = {
   D2_COMMIT,
   JOB_PATH,
   LIVE_APPROVAL,
+  PREVIOUS_RENDER_RUN_ID,
   PROCESS_KEEPALIVE_INTERVAL_MS,
   REFERENCE_COLLECTOR_BLOB,
   RENDER_JOB_CANONICAL_SHA256,

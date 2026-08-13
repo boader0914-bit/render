@@ -24,6 +24,7 @@ const {
   CHILD_STDOUT_LIMIT_BYTES,
   D2_COMMIT,
   LIVE_APPROVAL,
+  PREVIOUS_RENDER_RUN_ID,
   PROCESS_KEEPALIVE_INTERVAL_MS,
   RENDER_JOB_CANONICAL_SHA256,
   RENDER_RUN_ID,
@@ -414,6 +415,7 @@ async function main() {
   const { job, digest } = await readRenderJob();
   check(digest, RENDER_JOB_CANONICAL_SHA256, "render diagnostic job digest must remain frozen");
   check(job.runId, RENDER_RUN_ID, "render diagnostic run ID must remain frozen");
+  check(RENDER_RUN_ID === PREVIOUS_RENDER_RUN_ID, false, "a fresh run must never reuse the previous claimed identity");
   check(job.request.requestBudget, 1, "job request budget must be exactly one");
   check(job.execution, {
     concurrency: 1,
@@ -422,6 +424,11 @@ async function main() {
     operationalWrites: false,
     rawProviderResponseStored: false
   }, "job execution contract must fail closed");
+  throws(
+    () => normalizeRenderJob({ ...job, runId: PREVIOUS_RENDER_RUN_ID }),
+    { code: "V2_RENDER_DIAGNOSTIC_JOB_INVALID" },
+    "the previous claimed run identity must be rejected"
+  );
   throws(
     () => normalizeRenderJob({ ...job, request: { ...job.request, requestBudget: 2 } }),
     { code: "V2_RENDER_DIAGNOSTIC_JOB_INVALID" },
@@ -722,7 +729,28 @@ async function main() {
   check(JSON.stringify(realChildProjection).includes(sentinel), false, "real child diagnostic projection must not leak the sentinel");
 
   const fixtureState = testState("fixture-real-child");
+  const previousRunRoot = path.join(fixtureState, "runs", PREVIOUS_RENDER_RUN_ID);
+  const previousFailureText = `${JSON.stringify({
+    schemaVersion: "v2-booking-business-render-diagnostic-failure.v1",
+    runId: PREVIOUS_RENDER_RUN_ID,
+    code: "V2_RENDER_DIAGNOSTIC_CHILD_INVALID",
+    retryable: false
+  })}\n`;
+  await fs.mkdir(previousRunRoot, { recursive: true });
+  await fs.writeFile(path.join(previousRunRoot, "failure.json"), previousFailureText, "utf8");
+  const previousFailureSha256 = sha256(previousFailureText);
   const fixture = await runOneShot({ mode: "fixture", env: { ...fixtureEnv(fixtureState), V2_RENDER_DIAGNOSTIC_SECRET_SENTINEL: sentinel } });
+  check(fixture.observation.runId, RENDER_RUN_ID, "a previous failed run identity must not block the fresh run");
+  check(
+    sha256(await fs.readFile(path.join(previousRunRoot, "failure.json"), "utf8")),
+    previousFailureSha256,
+    "the previous failed run evidence must remain byte-equivalent"
+  );
+  check(
+    await fs.stat(path.join(fixtureState, "runs", RENDER_RUN_ID, "terminal.json")).then(() => true, () => false),
+    true,
+    "the fresh run must commit to its own terminal path"
+  );
   check(fixture.observation.event, "render_diagnostic_terminal", "fixture must create one terminal observation");
   check(fixture.observation.externalRequests, 0, "fixture must make no Provider request");
   check(fixture.observation.collectorInvocations, 1, "fixture must invoke the copied path exactly once");
