@@ -1,5 +1,10 @@
 # DataLab Rebuild Phase 3 D6 Fresh Run Identity
 
+> Here, "run identity" means the immutable identity of one diagnostic execution.
+> It is not the accommodation company identity. The company primary identity is
+> the Naver Place ID; `bookingBusinessId` remains an optional booking integration
+> mapping.
+
 ## Scope
 
 The approved D4 Render execution atomically claimed

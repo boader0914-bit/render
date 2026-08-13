@@ -23,8 +23,11 @@ async function main() {
 
   const { __test } = require("./glamping_app_server.cjs");
   const {
+    b2bMyLodgeCandidateItems,
+    companyEntityFromItem,
     companyMasterFile,
     companyRecordSummary,
+    extractNaverPlaceId,
     mergeCompanyRecords,
     mergeManualCorrectionRecords,
     readCompanyMaster,
@@ -32,6 +35,38 @@ async function main() {
   } = __test;
 
   try {
+    const naverMapUrl = "https://map.naver.com/p/search/%EA%B2%BD%EB%82%A8%20%EA%B8%80%EB%9E%A8%ED%95%91/place/35644668?entry=pll";
+    assert.equal(extractNaverPlaceId({ url: naverMapUrl }), "35644668");
+    assert.equal(extractNaverPlaceId({ url: "https://pcmap.place.naver.com/accommodation/35644668/home" }), "35644668");
+    assert.equal(extractNaverPlaceId({ url: "https://example.invalid/place/35644668" }), "");
+    assert.equal(extractNaverPlaceId({ place_id: "35644668", url: "https://example.invalid/place/999" }), "35644668");
+    assert.equal(extractNaverPlaceId({ place_id: "place-35644668" }), "");
+
+    const placeEntity = companyEntityFromItem({
+      name: "월명글램핑",
+      url: naverMapUrl,
+      bookingBusinessId: "987654321"
+    }, {
+      id: "fixture-place-primary-run",
+      keyword: "경남 글램핑"
+    }, "2026-08-14T00:00:00.000Z");
+    assert.equal(placeEntity.placeId, "35644668");
+    assert.equal(placeEntity.bookingBusinessId, "987654321");
+    assert.equal(placeEntity.observation.sourceId, "35644668");
+    assert.equal(placeEntity.sourceKeys[0], "place:35644668");
+    assert.equal(placeEntity.sourceKeys[1], "booking:987654321");
+
+    const samePlaceCandidates = b2bMyLodgeCandidateItems({
+      availability: {
+        items: [{ name: "월명글램핑", placeId: "35644668", bookingBusinessId: "111", hasInventory: true }]
+      },
+      ranking: {
+        items: [{ name: "월명글램핑", placeId: "35644668", bookingBusinessId: "222", overallRank: 1 }]
+      }
+    }, "월명글램핑");
+    assert.equal(samePlaceCandidates.length, 1, "one Place ID must remain one company when a booking mapping changes");
+    assert.equal(samePlaceCandidates[0].item.placeId, "35644668");
+
     const categoryCorrection = {
       active: true,
       primaryCategoryKey: "pension",

@@ -1,4 +1,4 @@
-# V2 네이버 예약업체 식별 계약
+# V2 Place ID -> 네이버 예약 연동 ID 매핑 계약
 
 기준 커밋: `b1ba55993ef104a698ebafa54c2309f6dc820a05`
 실행 소스 기준: `b5de9c40199f40a4409f93b1b66f0b9ccea17a83`
@@ -8,6 +8,16 @@ Phase 2 live pair SHA-256: `1f06f3fa167f9bf3f5bc2cf67445e42d49bb9d45357efbf29cfd
 이 문서는 UI가 아니라 동결된 V2 collector와 bounded transport 코드를 기준으로 한다. Phase 3
 live pair는 승인된 요청 예산 2회를 재시도 없이 실행했으며, 원형 성공과 replay exact parity는
 확인했지만 해시 복제본의 독립 live 요청이 HTTP 405로 차단되어 independent live parity는 실패했다.
+
+용어를 다음과 같이 고정한다.
+
+- `place_id`: 네이버 업체의 기본 식별자. Phase 2 Place 목록에서 이미 수집한다.
+- `bookingBusinessId`: 해당 Place 업체에 예약 상품·가격·재고 경로를 연결하는 선택적 ID.
+- Phase 3: 업체를 새로 식별하는 단계가 아니라 `place_id -> bookingBusinessId` 매핑을 확인하는 단계.
+
+따라서 Phase 3 실패는 예약 확장 기능의 미확인을 뜻하며, Phase 2에서 확보한 Place 업체·순위·광고
+산출물이나 업체 기본 식별자를 무효화하지 않는다. `bookingBusinessId`는 회사 기본키 또는
+`place_id` 대체값으로 사용하지 않는다.
 
 ## 1. 입력과 실행 경로
 
@@ -21,7 +31,7 @@ Phase 2 natural Place ID
   -> createNaverBoundedInventoryLiveTransport
   -> POST pcmap-api.place.naver.com/graphql
   -> V2 parser
-  -> normalized booking identity audit
+  -> normalized booking mapping audit
 ```
 
 원형 collector에서 변경 없이 추출해 실행하는 함수는 다음 네 개다.
@@ -91,7 +101,7 @@ SHA-256을 pair 결과에 저장한다.
 허용하는 comparison-only 파일은 정규화 audit, sanitized replay와 `pair-result.json`이다. header,
 cookie, credential, full request URL, raw Provider response 전체는 저장하지 않는다. 이 파일은 V2
 native artifact가 아니다. `네이버예약사업자ID`와 `네이버예약URL`을 기존 CSV/XLSX writer에
-통합하는 작업도 이번 identity-only 단계에는 포함하지 않는다.
+통합하는 작업도 이번 mapping-only 단계에는 포함하지 않는다.
 
 ## 5. live 승인 경계와 실행 결과
 
@@ -121,7 +131,8 @@ HTTP 405 원인은 저장된 정규화 audit만으로 확정할 수 없으며 Pr
 
 따라서 현재 판정은 `offline exact parity PASS`, `same-response replay exact parity PASS`,
 `independent live parity FAIL`이다. 이 상태에서는 Phase 3 변경을 구현 완료로 선언하거나
-`N3-Commit`으로 진행하지 않는다.
+`N3-Commit`으로 진행하지 않는다. 이 판정은 선택적 예약 매핑에만 적용되며 Place ID 기본 수집의
+Phase 2 판정은 그대로 유지된다.
 # N3-D1 Diagnostic Addendum
 
 The original-plus-copy live pair is closed after the copied request returned HTTP 405. The current live-capable command can execute only the hash-copied source closure, exactly once, after a separately committed and approved diagnostic change.

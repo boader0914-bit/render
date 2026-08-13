@@ -1,11 +1,16 @@
 # 데이터랩 재구축 Phase 3 실행 보고서
 
 작성일: 2026-08-13 KST
-범위: V2 Place ID -> 네이버 예약업체 ID GraphQL 경로의 로컬 구현·오프라인 및 승인 live 검증
+범위: V2 Place ID -> 선택적 네이버 예약 연동 ID GraphQL 경로의 로컬 구현·오프라인 및 승인 live 검증
 실제 Provider 호출: 2 (원형 1 + 해시 복제본 1)
 Render·운영 데이터 변경: 0
 
 ## 1. 결론
+
+업체 식별의 기준은 Phase 2에서 수집한 네이버 Place ID다. 이 보고서의 Phase 3 작업은 업체 기본
+식별자를 만드는 작업이 아니라, 그 Place ID에 예약 상품·가격·재고 기능을 연결할 수 있는
+`bookingBusinessId`를 선택적으로 매핑하는 작업이다. 아래의 Phase 3 실패 판정은 이 예약 매핑에만
+적용되며 Phase 2 Place 목록·순위·광고 수집 성공을 취소하지 않는다.
 
 Phase 2에서 확인한 자연순위 1위 Place ID를 입력으로, 동결된 V2 collector의 예약업체 식별 함수와
 bounded GraphQL transport를 변경하지 않고 실행하는 독립 harness를 구현했다. 원형 source와
@@ -21,8 +26,8 @@ ID를 식별했고 원형 정제 응답 replay도 exact parity였다. 그러나 
 HTTP 405와 `NAVER_ACCESS_BLOCKED`로 종료됐다. 요청 계약은 동일했지만 독립 live parity는 실패했다.
 승인 예산 2회를 모두 소진했으며 retry와 fallback은 실행하지 않았다.
 
-현재 상태는 `오프라인 exact PASS / replay exact PASS / 독립 live FAIL`이다. Phase 3 구현 완료와
-`N3-Commit` 준비 상태로 분류하지 않는다.
+현재 상태는 `오프라인 exact PASS / replay exact PASS / 독립 live FAIL`이다. 선택적 예약 매핑은
+Phase 3 구현 완료와 `N3-Commit` 준비 상태로 분류하지 않는다. 기본 Place 업체 식별은 완료 상태다.
 
 ## 2. 기준 무결성
 

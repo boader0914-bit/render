@@ -31,6 +31,10 @@ function csvCell(value) {
   return /[",\r\n]/u.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
+function fixturePlaceId(ordinal) {
+  return String(35644667 + ordinal);
+}
+
 function fixture(options = {}) {
   const collectionStatus = options.collectionStatus || "complete";
   const statuses = options.statuses || Array.from({ length: 20 }, () => "ready");
@@ -46,8 +50,8 @@ function fixture(options = {}) {
     const includeRevenue = options.incompleteRevenueAt !== ordinal;
     return [
       ordinal,
-      `place-${ordinal}`,
-      `Synthetic ${ordinal}`,
+      fixturePlaceId(ordinal),
+      ordinal === 1 ? "월명글램핑" : `Synthetic ${ordinal}`,
       `Synthetic address ${ordinal}`,
       ready ? 1 : "",
       "",
@@ -72,7 +76,7 @@ function fixture(options = {}) {
     : [];
   const targetResults = statuses.map((status, index) => ({
     companyOrdinal: index + 1,
-    placeId: `place-${index + 1}`,
+    placeId: fixturePlaceId(index + 1),
     detailCollectionStatus: status,
     bookingBusinessIdSource: "none",
     revenueInputValid: status === "ready",
@@ -88,6 +92,12 @@ function fixture(options = {}) {
   }));
   if (options.unsupportedStatusAt) {
     targetResults[options.unsupportedStatusAt - 1].detailCollectionStatus = "unrecognized";
+  }
+  if (options.identityMismatchAt) {
+    targetResults[options.identityMismatchAt - 1].placeId = "99999999";
+  }
+  if (options.invalidPlaceIdAt) {
+    targetResults[options.invalidPlaceIdAt - 1].placeId = "place-invalid";
   }
   return Object.freeze({
     artifactHash: HASH,
@@ -159,6 +169,13 @@ try {
     statuses: Array.from({ length: 20 }, () => "missing"),
   }), TRANSACTION_ID, RUN_ID);
   assert.equal(rankOnly.companies.length, 20);
+  assert.equal(rankOnly.run.mainPlaceStatus, "ready");
+  assert.equal(rankOnly.run.collectionStatus, "rank_only");
+  assert.equal(rankOnly.companies[0].displayName, "월명글램핑");
+  assert.equal(rankOnly.companies[0].placeId, "35644668");
+  assert.equal(rankOnly.companies[0].companyKey, "naver-place:35644668");
+  assert.equal(rankOnly.companies.every((company) => company.companyKey === `naver-place:${company.placeId}`), true);
+  assert.equal(rankOnly.companies.every((company) => company.bookingBusinessIdSource === "none"), true);
   assert.equal(rankOnly.products.length, 0);
   assert.equal(rankOnly.revenues.length, 0);
   assert.equal(rankOnly.history.length, 0);
@@ -172,6 +189,15 @@ try {
   expectReason(fixture({ removeRankingRow: true }), "ranking_incomplete", {
     collectionStatus: "complete",
   });
+  expectReason(fixture({ identityMismatchAt: 1 }), "company_identity_mismatch", {
+    collectionStatus: "complete", companyOrdinal: 1,
+  });
+  assert.throws(
+    () => buildV2RunProjections(fixture({ invalidPlaceIdAt: 1 }), TRANSACTION_ID, RUN_ID),
+    (error) => error instanceof CollectionWorkerRunTransactionError
+      && error.code === "COLLECTION_RUN_ARTIFACT_INVALID"
+      && /placeId is invalid/u.test(error.message),
+  );
   expectReason(fixture({ invalidCsv: true }), "csv_quoting_invalid", { field: "overall" });
 
   assert.equal(guard.blockedAttempts(), 0);
@@ -180,7 +206,9 @@ try {
     boundedDateRange: true,
     partial: true,
     rankOnly: true,
-    reasons: ["unsupported_target_status", "ready_revenue_observation_incomplete", "ranking_incomplete", "csv_quoting_invalid"],
+    placeIdPrimaryIdentity: true,
+    bookingMappingOptional: true,
+    reasons: ["unsupported_target_status", "ready_revenue_observation_incomplete", "ranking_incomplete", "company_identity_mismatch", "invalid_place_id", "csv_quoting_invalid"],
     externalNetworkCalls: 0,
   }));
 } finally {

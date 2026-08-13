@@ -6,6 +6,21 @@ collector blob: `c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3`
 
 이 문서는 UI가 아니라 동결된 V2 collector 코드와 Phase 2 오프라인·승인 live 실행 결과를 기준으로 한다.
 
+## 0. 업체 기본 식별자
+
+V2 네이버 Place 수집에서 업체의 기본 식별자는 `place_id`다. 네이버 지도 URL의
+`/place/{place_id}` 또는 숙박 상세 URL의 `/accommodation/{place_id}`에 들어 있는 숫자가 같은
+종류의 Place ID다. 예를 들어 `/place/35644668`의 기본 업체 식별자는 `35644668`이다.
+저장 경계에서는 이 값을 1~30자리 숫자로 검증한다.
+
+저장 계층의 업체 키는 `naver-place:{place_id}`로 만든다. 따라서 위 예시의 업체 키는
+`naver-place:35644668`이다. 이름, 주소, 순위 또는 예약업체 ID가 바뀌어도 Place ID가 같으면 같은
+네이버 업체로 다룬다.
+
+`bookingBusinessId`는 Place 업체에 네이버 예약 상품·가격·재고 기능을 연결하기 위한 선택적
+보조 매핑값이다. 이 값이 없거나 조회에 실패해도 Place 목록, 순위, 광고와 `place_id` 산출물은
+유효하며 업체 기본키를 대체하지 않는다.
+
 ## 1. 실행 경계
 
 Place-only 산출물 경로는 다음 환경에서 원형 collector의 native writer까지 도달한다.
@@ -35,6 +50,7 @@ N2-Live에서 원형과 해시 복제본이 이 요청을 각각 정확히 1회 
 | 자연 순위 | 배열 순서의 `index + 1`을 `overall_rank`로 저장 |
 | 광고 순서 | 배열 순서의 `index + 1`을 `ad_order`로 저장 |
 | Place ID | `item.id || ""`; `placeId` fallback은 writer에 없음 |
+| 저장 업체 키 | `naver-place:{place_id}`; 예약업체 ID를 업체 기본키로 사용하지 않음 |
 | 자연 상한 | 첫 50개 |
 | 광고 상한 | 별도 slice 없음. Provider 광고 배열을 그대로 저장 |
 | Provider total | 자연·광고 total을 report에 기록하지만 저장 행 수와 같다고 가정하지 않음 |
@@ -87,6 +103,11 @@ Place-only JSON 파일도 생성하지 않는다. Phase 2의 sanitized replay와
 limited profile은 최종 디렉터리 옆 `.pending-{pid}-{random}` 디렉터리에 먼저 쓴다.
 manifest까지 성공하면 디렉터리 전체를 `fs.rename`으로 최종 경로에 승격한다. 실패 시 pending
 디렉터리를 recursive remove한다. 기존 최종 경로가 있으면 overwrite하지 않고 실행이 실패한다.
+
+Place 목록이 성공한 뒤 예약업체 매핑이나 예약 상세가 전부 실패하면 저장 projection은
+`mainPlaceStatus=ready`, `collectionStatus=rank_only`로 Place 업체 20개를 보존한다. 이 경우
+예약 상품·가격·재고 projection만 0개일 수 있으며 Place 업체 자체를 실패 또는 미수집으로
+삭제하지 않는다.
 
 `승인 N2-Dependencies`에 따라 lockfile을 변경하지 않고 `write-excel-file@4.1.1`과
 `fflate@0.8.3`을 설치했다. 원형·replay·해시 복제본은 각각 실제 XLSX 2개를 생성했다. OOXML

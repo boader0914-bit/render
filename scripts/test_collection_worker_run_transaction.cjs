@@ -8,6 +8,7 @@ const path = require("node:path");
 const {
   buildCollectionArtifactBundle,
   sha256Hex,
+  stableSerialize,
   verifyCollectionArtifactBundle,
 } = require("./collection_artifact_contract.cjs");
 const {
@@ -26,6 +27,7 @@ const {
   COLLECTION_WORKER_TOP20_RESULT_SCHEMA_VERSION,
   createCollectionWorkerRunTransactionStore,
   isCommittedRunOutputValid,
+  validateRunOutputCommitRecord,
 } = require("./collection_worker_run_transaction.cjs");
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
@@ -928,6 +930,50 @@ async function testV2RunBundleProjectionMarkerTamperFailsClosed() {
   });
 }
 
+async function testV2RunBundleRejectsNonPlaceCompanyKey() {
+  await temporaryRuntime("run-place-primary-identity", async (runtimeRoot) => {
+    const store = createCollectionWorkerRunTransactionStore({ runtimeRoot, now: () => fixtureNow });
+    const committed = await store.finalizeVerifiedRunBundle({
+      signedArtifact: makeV2RunArtifact(),
+      verifier: verifiedV2Artifact,
+    });
+    const markerPath = path.join(store.runOutputCommittedRoot, `${committed.transactionId}.json`);
+    const marker = JSON.parse(await fsp.readFile(markerPath, "utf8"));
+    assert.equal(validateRunOutputCommitRecord(marker), true);
+
+    const originalKey = marker.projections.companies[0].companyKey;
+    const incorrectKey = "naver-booking:987654321";
+    function replaceCompanyKey(value) {
+      if (Array.isArray(value)) return value.map(replaceCompanyKey);
+      if (value && typeof value === "object") {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceCompanyKey(item)]));
+      }
+      return typeof value === "string" ? value.replaceAll(originalKey, incorrectKey) : value;
+    }
+    marker.projections = replaceCompanyKey(marker.projections);
+    marker.projectionsHash = sha256Hex(stableSerialize(marker.projections));
+    marker.stageHash = sha256Hex(stableSerialize({
+      transactionId: marker.transactionId,
+      artifactHash: marker.artifactHash,
+      jobId: marker.jobId,
+      contractHash: marker.contractHash,
+      executionIdentityHash: marker.executionIdentityHash,
+      runId: marker.runId,
+      finalRelativePath: marker.finalRelativePath,
+      outputTreeHash: marker.outputTreeHash,
+      projectionsHash: marker.projectionsHash,
+    }));
+    marker.commitMarker.stageHash = marker.stageHash;
+    marker.commitMarker.projectionsHash = marker.projectionsHash;
+
+    assert.equal(
+      validateRunOutputCommitRecord(marker),
+      false,
+      "a self-consistent marker must not replace naver-place:{placeId} with a booking identity",
+    );
+  });
+}
+
 async function testDerivedTrafficCacheCompatibilityIsReadOnlyAndNarrow() {
   await temporaryRuntime("derived-traffic-cache", async (runtimeRoot) => {
     const signedArtifact = makeV2RunArtifact();
@@ -977,6 +1023,7 @@ async function main() {
     await testV2RunBundleRejectsConflictsAndUnsafeArtifacts();
     await testV2RunBundleTamperAfterRenameFailsClosed();
     await testV2RunBundleProjectionMarkerTamperFailsClosed();
+    await testV2RunBundleRejectsNonPlaceCompanyKey();
     await testDerivedTrafficCacheCompatibilityIsReadOnlyAndNarrow();
     assert.equal(unexpectedNetworkCalls, 0);
     process.stdout.write(`${JSON.stringify({
@@ -989,6 +1036,7 @@ async function main() {
       runOutputFaultPoints: 7,
       runOutputConcurrentFinalizers: 10,
       runOutputAtomicRename: true,
+      placeIdPrimaryIdentity: true,
       externalNetworkCalls: unexpectedNetworkCalls,
     })}\n`);
   } finally {

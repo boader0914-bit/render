@@ -6917,7 +6917,13 @@ function b2bMyLodgeCandidateItems(data = {}, targetName = "") {
   const byKey = new Map();
   for (const row of rows) {
     const item = row.item || {};
-    const key = item.bookingBusinessId || item.placeId || item.sourceKey || companyPlatformKey(item.name || item.companyName || "");
+    const placeId = String(item.placeId || "").trim();
+    const bookingBusinessId = String(item.bookingBusinessId || "").trim();
+    const key = placeId
+      ? `place:${placeId}`
+      : bookingBusinessId
+        ? `booking:${bookingBusinessId}`
+        : item.sourceKey || companyPlatformKey(item.name || item.companyName || "");
     if (!key) continue;
     const score = b2bMyLodgeMatchScore(item, targetName);
     const rank = Number(item.overallRank || item.rank || row.index + 1);
@@ -8464,11 +8470,38 @@ async function autoCheckCompanyChannel(company = {}, channelKey = "") {
   return null;
 }
 
+function naverPlaceIdFromUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = raw.startsWith("/")
+      ? new URL(raw, "https://map.naver.com")
+      : new URL(raw);
+    if (!/(^|\.)naver\.com$/iu.test(parsed.hostname)) return "";
+    return parsed.pathname.match(/\/(?:place|accommodation)\/(\d{1,30})(?:\/|$)/u)?.[1] || "";
+  } catch {
+    return "";
+  }
+}
+
 function extractNaverPlaceId(value = {}) {
   const explicit = value.placeId || value.place_id || value["place_id"] || value.naverPlaceId;
-  if (explicit) return String(explicit).trim();
-  const text = `${value.url || ""} ${value["url"] || ""} ${value.naverUrl || ""} ${value["네이버예약URL"] || ""}`;
-  return text.match(/\/accommodation\/(\d+)/)?.[1] || text.match(/[?&]entry=pll[^0-9]*(\d+)/)?.[1] || "";
+  if (explicit) {
+    const placeId = String(explicit).trim();
+    return /^\d{1,30}$/u.test(placeId) ? placeId : "";
+  }
+  const candidates = [
+    value.url,
+    value.naverUrl,
+    value.naverPlaceUrl,
+    value["네이버URL"],
+    value["네이버예약URL"]
+  ];
+  for (const candidate of candidates) {
+    const placeId = naverPlaceIdFromUrl(candidate);
+    if (placeId) return placeId;
+  }
+  return "";
 }
 
 function extractBookingBusinessId(value = {}) {
@@ -17991,6 +18024,7 @@ module.exports = {
     adminRegionReviewMeta,
     applyAdminRegionReviewsToOperations,
     companyMasterFile: COMPANY_MASTER_FILE,
+    companyEntityFromItem,
     companyRecordSummary,
     collectionDbRouteProfile,
     cleanupLimitedRunArtifactsForStamp,
@@ -18000,6 +18034,7 @@ module.exports = {
     crawlRuntimeStageRows,
     crawlTimingConditions,
     estimateCrawlCompletion,
+    extractNaverPlaceId,
     frozenV2ExecutionPlan,
     isAdminPreviewMapGeocodingItemEligible,
     isAdminPreviewMapGeocodingRequest,
@@ -18012,6 +18047,7 @@ module.exports = {
     naverFallbackKeywordIdentity,
     parseRegionInsightApiPath,
     publicB2BRegionReviewSummary,
+    b2bMyLodgeCandidateItems,
     publicRunForRole,
     rankingRowBase,
     readCompanyMaster,

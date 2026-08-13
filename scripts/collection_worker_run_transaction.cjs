@@ -30,6 +30,7 @@ const COLLECTION_WORKER_TOP20_RESULT_PATH = "top20-result.json";
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/u;
 const KEY_PATTERN = /^[a-z0-9][a-z0-9._:@-]{0,127}$/u;
+const NAVER_PLACE_ID_PATTERN = /^\d{1,30}$/u;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const SAFE_OUTPUT_RELATIVE_PATH_PATTERN = /^(?:manifest\.json|(?:platform|overall|ads|regional|ddnayo)\.csv|details\/detail-\d{2}\.json)$/u;
 const FORBIDDEN_WORKER_STORAGE_KEY = /^(?:outputDir|runId|transactionId|stagingDir|finalDir|absolutePath)$/iu;
@@ -738,7 +739,7 @@ function buildV2RunProjections(verified, transactionId, runId) {
     const ordinal = index + 1;
     const target = targetResults[index];
     const row = byRank.get(ordinal);
-    const placeId = expectedText(target.placeId, KEY_PATTERN, `targetResults[${index}].placeId`);
+    const placeId = expectedText(target.placeId, NAVER_PLACE_ID_PATTERN, `targetResults[${index}].placeId`);
     if (String(row.place_id || "").trim() !== placeId || Number(target.companyOrdinal) !== ordinal) {
       projectionFail("company_identity_mismatch", "top-20 company identity does not match the manifest", {
         collectionStatus,
@@ -1324,7 +1325,8 @@ function runOutputProjectionsV2Valid(record) {
       || company.collectionStatus !== run.collectionStatus
       || !KEY_PATTERN.test(String(company.companyKey || ""))
       || !KEY_PATTERN.test(String(company.regionKey || ""))
-      || !KEY_PATTERN.test(String(company.placeId || ""))
+      || !NAVER_PLACE_ID_PATTERN.test(String(company.placeId || ""))
+      || company.companyKey !== `naver-place:${company.placeId}`
       || typeof company.displayName !== "string"
       || !company.displayName
       || typeof company.bookingBusinessIdSource !== "string"
