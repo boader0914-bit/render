@@ -202,6 +202,8 @@
     ,"start:v2-live-basic-place-render-live": "node scripts/v2_live_basic_place_render_worker.cjs live-and-hold"
     ,"check:v2-basic-place-test-ui": "node --check scripts/v2_basic_place_ui_demo_fixture.cjs && node --check scripts/v2_basic_place_test_ui_server.cjs && node --check scripts/v2_naver_ad_browser_transport.cjs && node --check scripts/test_v2_basic_place_test_ui_server.cjs && node --check scripts/test_v2_basic_place_test_ui_contract.cjs && node --check web/v2-basic-place-test/app.js"
     ,"test:v2-basic-place-test-ui": "node scripts/test_v2_basic_place_test_ui_server.cjs && node scripts/test_v2_basic_place_test_ui_contract.cjs && node scripts/test_v2_naver_ad_browser_transport.cjs"
+    ,"check:v2-integrated-search-ad-diagnostics": "node --check scripts/v2_naver_integrated_search_ad_diagnostic.cjs && node --check scripts/test_v2_naver_integrated_search_ad_diagnostic.cjs"
+    ,"test:v2-integrated-search-ad-diagnostics": "node scripts/test_v2_naver_integrated_search_ad_diagnostic.cjs"
     ,"start:v2-basic-place-test-ui": "node scripts/v2_basic_place_test_ui_server.cjs"
   },
   "engines": {
