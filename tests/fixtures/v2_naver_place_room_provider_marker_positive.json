@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "v2-naver-place-room-provider-marker-fixture.v1",
+  "placeId": "1460523479",
+  "captureKind": "sanitized_visible_dom_fixture",
+  "sections": [
+    {
+      "sectionKind": "room_header",
+      "headingText": "객실6",
+      "extraText": "[캠핑톡]"
+    }
+  ]
+}

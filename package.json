@@ -183,6 +183,8 @@
     ,"test:v2-full-pipeline-e2e-fixture": "node scripts/test_v2_full_pipeline_e2e_fixture.cjs && node scripts/test_v2_full_pipeline_actual_child_fixture.cjs && node scripts/test_v2_collector_golden_master.cjs && npm run test:collection-worker-run-transaction && npm run test:collection-worker-projection-application"
     ,"test:v2-no-probe-dependency": "node scripts/test_v2_full_pipeline_e2e_fixture.cjs"
     ,"test:v2-new-run-auto-application": "node scripts/test_v2_new_run_auto_application.cjs && npm run test:collection-worker-projection-application && npm run test:collection-worker-resilient-run-projection"
+    ,"test:v2-naver-place-room-provider-marker": "node scripts/test_v2_naver_place_room_provider_marker.cjs"
+    ,"test:v2-naver-place-room-provider-marker-live": "node scripts/test_v2_naver_place_room_provider_marker_live_one_shot.cjs"
   },
   "engines": {
     "node": "26.5.0"

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "v2-naver-place-room-provider-marker-live-job.v1",
+  "runId": "n5-room-marker-offline-001",
+  "mode": "offline",
+  "placeId": "1460523479",
+  "timeoutMs": 5000,
+  "responseSizeLimitBytes": 262144,
+  "requestBudget": 1,
+  "automaticRetries": 0,
+  "automaticFallbacks": 0,
+  "fixtureScenario": "success"
+}
