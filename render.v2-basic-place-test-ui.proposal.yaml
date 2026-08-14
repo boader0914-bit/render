@@ -1,0 +1,47 @@
+# Proposal only. Do not apply through Blueprint sync.
+services:
+  - type: web
+    name: datalab-v2-basic-place-test-ui
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v2-basic-place-test-ui
+    region: singapore
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: >-
+      npm ci --ignore-scripts --audit=false --fund=false &&
+      npm run check:v2-live-basic-place &&
+      npm run test:v2-live-basic-place &&
+      npm run check:v2-basic-place-test-ui &&
+      npm run test:v2-basic-place-test-ui
+    startCommand: npm run start:v2-basic-place-test-ui
+    healthCheckPath: /healthz
+    disk:
+      name: v2-basic-place-test-ui-data
+      mountPath: /var/data/v2-basic-place-test-ui
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 26.5.0
+      - key: V2_BASIC_UI_EXPECTED_DEPLOY_COMMIT
+        value: SET_AFTER_APPROVED_COMMIT
+      - key: V2_BASIC_UI_STATE_DIR
+        value: /var/data/v2-basic-place-test-ui
+      - key: V2_BASIC_UI_RUN_ENABLED
+        value: "0"
+      - key: V2_BASIC_UI_DAILY_REQUEST_BUDGET
+        value: "0"
+      - key: V2_BASIC_UI_AUTOMATIC_RETRY
+        value: "0"
+      - key: V2_BASIC_UI_FALLBACK
+        value: "0"
+      - key: V2_BASIC_UI_OPERATIONAL_WRITES
+        value: "0"
+      - key: V2_BASIC_UI_DEMO_PUBLIC
+        value: "0"
+      - key: V2_BASIC_UI_OPERATOR_TOKEN_SHA256
+        sync: false
+
+# Readiness deployment permits authenticated Demo collection only.
+# Live collection requires a separate approval to set RUN_ENABLED=1 and a bounded daily budget.

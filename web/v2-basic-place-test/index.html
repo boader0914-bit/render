@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>DataLab Place 수집 콘솔</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand-lockup" aria-label="DataLab">
+        <span class="brand-mark" aria-hidden="true">DL</span>
+        <div>
+          <strong>DataLab</strong>
+          <span>Place 수집 콘솔</span>
+        </div>
+      </div>
+      <div class="service-state" id="serviceState" data-state="loading">
+        <span class="state-dot" aria-hidden="true"></span>
+        <span id="serviceStateText">상태 확인 중</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <section class="control-band" aria-labelledby="collectorTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">NAVER PLACE</p>
+          <h1 id="collectorTitle">수동 수집</h1>
+        </div>
+        <dl class="runtime-strip" aria-label="실행 상태">
+          <div>
+            <dt>오늘 사용</dt>
+            <dd id="budgetValue">0 / 0</dd>
+          </div>
+          <div>
+            <dt>재시도</dt>
+            <dd>0회</dd>
+          </div>
+          <div>
+            <dt>운영 반영</dt>
+            <dd>차단</dd>
+          </div>
+        </dl>
+      </div>
+
+      <form id="collectorForm" class="collector-form" novalidate>
+        <fieldset class="mode-fieldset">
+          <legend>실행 모드</legend>
+          <div class="segmented-control">
+            <input type="radio" name="mode" id="modeDemo" value="demo" checked>
+            <label for="modeDemo">Demo</label>
+            <input type="radio" name="mode" id="modeLive" value="live">
+            <label for="modeLive">Live</label>
+          </div>
+        </fieldset>
+
+        <label class="form-field keyword-field" for="keywordInput">
+          <span>검색어</span>
+          <input id="keywordInput" name="keyword" type="search" maxlength="120" value="경남 글램핑" autocomplete="off" required>
+        </label>
+
+        <label class="form-field token-field" for="tokenInput">
+          <span>관리자 토큰</span>
+          <input id="tokenInput" name="operatorToken" type="password" maxlength="512" autocomplete="off" placeholder="배포 환경에서 입력">
+        </label>
+
+        <button class="primary-action" id="collectButton" type="submit">
+          <span class="button-label">수집 실행</span>
+          <span class="button-progress" aria-hidden="true"></span>
+        </button>
+      </form>
+      <div class="request-message" id="requestMessage" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="result-overview" aria-labelledby="resultTitle">
+      <div class="section-heading compact">
+        <div>
+          <p class="eyebrow">COLLECTION RESULT</p>
+          <h2 id="resultTitle">최근 결과</h2>
+        </div>
+        <div class="result-actions">
+          <button type="button" class="secondary-action" id="downloadJson" disabled>JSON</button>
+          <button type="button" class="secondary-action" id="downloadCsv" disabled>CSV</button>
+        </div>
+      </div>
+
+      <div class="metric-grid" aria-label="결과 요약">
+        <div class="metric-block">
+          <span>일반 업체</span>
+          <strong id="organicCount">-</strong>
+        </div>
+        <div class="metric-block ad-metric">
+          <span>광고 업체</span>
+          <strong id="adCount">-</strong>
+        </div>
+        <div class="metric-block">
+          <span>외부 요청</span>
+          <strong id="requestCount">-</strong>
+        </div>
+        <div class="metric-block">
+          <span>수집 시간</span>
+          <strong id="elapsedValue">-</strong>
+        </div>
+      </div>
+
+      <div class="result-balance" aria-label="일반 업체와 광고 업체 비율">
+        <span id="organicBalance"></span>
+        <span id="adBalance"></span>
+      </div>
+    </section>
+
+    <section class="results-workbench">
+      <div class="tabs" role="tablist" aria-label="수집 결과 보기">
+        <button type="button" role="tab" id="tabOrganic" aria-controls="panelOrganic" aria-selected="true">일반순위 <span id="organicTabCount">0</span></button>
+        <button type="button" role="tab" id="tabAds" aria-controls="panelAds" aria-selected="false">광고 <span id="adTabCount">0</span></button>
+        <button type="button" role="tab" id="tabDiagnostics" aria-controls="panelDiagnostics" aria-selected="false">진단</button>
+      </div>
+
+      <div class="tab-panel" role="tabpanel" id="panelOrganic" aria-labelledby="tabOrganic">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">순위</th>
+                <th scope="col">업체명</th>
+                <th scope="col">Place ID</th>
+                <th scope="col">지역·업종</th>
+                <th scope="col">예약</th>
+                <th scope="col">미리보기</th>
+                <th scope="col">최저가</th>
+              </tr>
+            </thead>
+            <tbody id="organicRows"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="organicEmpty">수집 결과가 없습니다.</div>
+      </div>
+
+      <div class="tab-panel" role="tabpanel" id="panelAds" aria-labelledby="tabAds" hidden>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">광고순서</th>
+                <th scope="col">업체명</th>
+                <th scope="col">Place ID</th>
+                <th scope="col">지역·업종</th>
+                <th scope="col">예약</th>
+                <th scope="col">미리보기</th>
+                <th scope="col">최저가</th>
+              </tr>
+            </thead>
+            <tbody id="adRows"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="adEmpty">광고 결과가 없습니다.</div>
+      </div>
+
+      <div class="tab-panel diagnostic-panel" role="tabpanel" id="panelDiagnostics" aria-labelledby="tabDiagnostics" hidden>
+        <dl class="diagnostic-list">
+          <div><dt>광고 응답 상태</dt><dd id="diagnosticStatus">-</dd></div>
+          <div><dt>광고 후보</dt><dd id="candidateCount">-</dd></div>
+          <div><dt>계약 일치</dt><dd id="matchedCandidateCount">-</dd></div>
+          <div><dt>Apollo Root</dt><dd id="rootKeyCount">-</dd></div>
+          <div><dt>응답 크기</dt><dd id="responseBytes">-</dd></div>
+          <div><dt>응답 Digest</dt><dd class="digest" id="responseDigest">-</dd></div>
+          <div><dt>Manifest Digest</dt><dd class="digest" id="manifestDigest">-</dd></div>
+          <div><dt>원문 저장</dt><dd id="rawStorage">차단</dd></div>
+        </dl>
+      </div>
+    </section>
+  </main>
+
+  <template id="rowTemplate">
+    <tr>
+      <td class="rank-cell"></td>
+      <td><strong class="place-name"></strong><span class="review-text"></span></td>
+      <td><code class="place-id"></code></td>
+      <td><span class="address-text"></span><span class="category-text"></span></td>
+      <td class="booking-cell"></td>
+      <td class="room-cell"></td>
+      <td class="price-cell"></td>
+    </tr>
+  </template>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
