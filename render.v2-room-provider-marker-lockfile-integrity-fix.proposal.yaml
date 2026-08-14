@@ -1,0 +1,44 @@
+# Proposal only. Do not apply through Blueprint sync.
+# Target the existing suspended worker srv-d9vbl5nlk1mc738isrk0 only.
+# Do not create another worker from this file.
+services:
+  - type: worker
+    name: datalab-v2-room-provider-marker-diagnostic
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v2-room-provider-render-lockfile-integrity-fix
+    plan: starter
+    numInstances: 1
+    autoDeploy: false
+    buildCommand: >-
+      npm ci --ignore-scripts --audit=false --fund=false &&
+      npm run test:v2-naver-place-room-provider-marker &&
+      npm run test:v2-naver-place-room-provider-marker-live &&
+      npm run test:v2-naver-place-room-provider-marker-render-readiness &&
+      npm run test:v2-naver-place-room-provider-marker-render-live-adapter
+    startCommand: npm run start:v2-naver-place-room-provider-marker-render-readiness
+    disk:
+      name: v2-room-provider-marker-diagnostic-data
+      mountPath: /var/data/v2-room-provider-marker-diagnostic
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 26.5.0
+      - key: V2_N5_RENDER_EXPECTED_DEPLOY_COMMIT
+        value: <APPROVED_N5_D6_COMMIT_SHA>
+      - key: V2_N5_RENDER_RUN_ENABLED
+        value: "0"
+      - key: V2_N5_RENDER_REQUEST_BUDGET
+        value: "0"
+      - key: V2_N5_RENDER_AUTOMATIC_RETRY
+        value: "0"
+      - key: V2_N5_RENDER_FALLBACK
+        value: "0"
+      - key: V2_N5_RENDER_OPERATIONAL_WRITES
+        value: "0"
+      - key: V2_N5_RENDER_STATE_DIR
+        value: /var/data/v2-room-provider-marker-diagnostic
+
+# The first redeploy remains readiness-only. No live or inner Provider gate is
+# present. Resume/deploy requires a separate approval after the D6 commit is
+# pushed and the expected commit value is replaced with that exact SHA.

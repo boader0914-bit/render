@@ -224,8 +224,8 @@ function exerciseDuplicateProcess(env) {
   const guard = installFixtureNetworkGuard({ label: "N5-D5 Render live adapter tests" });
   try {
     equal(process.version, "v26.5.0");
-    equal(BASELINE_COMMIT, "b4a20ddcbe60f7159242fece7ffd791aa62f57be");
-    equal(D4_READINESS_BLOB, "ca99bbceede09da2d7ea138fe13ae6c8afc53a60");
+    equal(BASELINE_COMMIT, "583c873bb5ec41e8334ecd910db5393c5991de72");
+    equal(D4_READINESS_BLOB, "1c97c51b3d5dfd99c0a68733252127a4b582fdbe");
     equal(JOB_RUN_ID, "n5-room-marker-render-live-20260814-001");
     equal(JOB_CANONICAL_SHA256, "bb00fd2a3fadc8c9644f8b28932f6bf2bb0ad2b96b55de0573eb0a4214e32ef7");
     equal(LIVE_APPROVAL_NAME, "N5-D5-Live");
@@ -245,7 +245,7 @@ function exerciseDuplicateProcess(env) {
     equal(integrity.jobCanonicalSha256, JOB_CANONICAL_SHA256);
     equal(integrity.frozenCollectorBlob, "bcbe229998da3afa6f31ee04375fb0766019e56f");
     equal(integrity.currentCollectorBlob, "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3");
-    equal(integrity.packageLockSha256, "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2");
+    equal(integrity.packageLockSha256, "d01ae4741e2472c2830fc1432cd241c04105fc574ea11c250991cec5aa89956e");
 
     const validEnv = liveEnv("gate-valid");
     equal(assertLiveGates(validEnv), true);
@@ -358,7 +358,7 @@ function exerciseDuplicateProcess(env) {
     equal(claim.frozenCollectorBlob, "bcbe229998da3afa6f31ee04375fb0766019e56f");
     equal(claim.runnerBlob, "70eb4024b8c623569d13666a0757738c447df214");
     equal(claim.contractBlob, "0098a89d940fb4436ac7fa9810e7e6582870d7c2");
-    equal(claim.packageLockSha256, "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2");
+    equal(claim.packageLockSha256, "d01ae4741e2472c2830fc1432cd241c04105fc574ea11c250991cec5aa89956e");
     const storedSuccess = JSON.parse(fs.readFileSync(successPaths.terminalPath, "utf8"));
     equal(storedSuccess.schemaVersion, TERMINAL_RECORD_SCHEMA_VERSION);
     equal(validateTerminalRecord(storedSuccess), true);

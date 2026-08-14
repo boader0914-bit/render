@@ -19,6 +19,9 @@ const {
   READINESS_SCHEMA_VERSION,
   RENDER_STATE_ROOT,
   assertReadinessGates,
+  canonicalGitTextBytes,
+  canonicalTextSha256,
+  fileIdentityDigest,
   gitBlobSha,
   holdUntilSignal,
   readFreshJob,
@@ -167,6 +170,30 @@ function exerciseServeProcess(env) {
     const runnerBytes = fs.readFileSync(path.join(ROOT, "scripts", "v2_naver_place_room_provider_marker_live_one_shot.cjs"));
     equal(gitBlobSha(runnerBytes), "70eb4024b8c623569d13666a0757738c447df214");
     equal(sha256(Buffer.from("fixture", "utf8")), "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d");
+    const packageLockBytes = fs.readFileSync(path.join(ROOT, "package-lock.json"));
+    const packageLockLfBytes = canonicalGitTextBytes(packageLockBytes);
+    const packageLockCrlfBytes = Buffer.from(
+      packageLockLfBytes.toString("utf8").replace(/\n/gu, "\r\n"),
+      "utf8"
+    );
+    const packageLockIdentity = "d01ae4741e2472c2830fc1432cd241c04105fc574ea11c250991cec5aa89956e";
+    equal(canonicalTextSha256(packageLockBytes), packageLockIdentity);
+    equal(canonicalTextSha256(packageLockLfBytes), packageLockIdentity);
+    equal(canonicalTextSha256(packageLockCrlfBytes), packageLockIdentity);
+    equal(sha256(packageLockBytes), "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2");
+    ok(sha256(packageLockLfBytes) !== sha256(packageLockCrlfBytes), "raw LF and CRLF bytes must differ");
+    ok(
+      canonicalTextSha256(Buffer.concat([packageLockLfBytes, Buffer.from("x", "utf8")])) !== packageLockIdentity,
+      "a non-EOL package-lock mutation must fail closed"
+    );
+    equal(
+      fileIdentityDigest({ algorithm: "canonical-sha256" }, packageLockCrlfBytes),
+      packageLockIdentity
+    );
+    throws(
+      () => fileIdentityDigest({ algorithm: "unsupported" }, packageLockLfBytes),
+      (error) => error?.code === "V2_N5_RENDER_INTEGRITY_MISMATCH"
+    );
 
     const readinessPath = path.join(LOCAL_STATE_ROOT, "readiness-no-write");
     equal(fs.existsSync(readinessPath), false);
@@ -252,7 +279,7 @@ function exerciseServeProcess(env) {
     equal(integrity.contractBlob, "0098a89d940fb4436ac7fa9810e7e6582870d7c2");
     equal(integrity.currentCollectorBlob, "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3");
     equal(integrity.frozenCollectorBlob, "bcbe229998da3afa6f31ee04375fb0766019e56f");
-    equal(integrity.packageLockSha256, "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2");
+    equal(integrity.packageLockSha256, "d01ae4741e2472c2830fc1432cd241c04105fc574ea11c250991cec5aa89956e");
 
     const ready = await readiness(readyEnv);
     equal(ready.schemaVersion, READINESS_SCHEMA_VERSION);

@@ -48,8 +48,8 @@ const FILE_IDENTITIES = Object.freeze([
   Object.freeze({
     key: "packageLockSha256",
     path: "package-lock.json",
-    algorithm: "sha256",
-    expected: "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2"
+    algorithm: "canonical-sha256",
+    expected: "d01ae4741e2472c2830fc1432cd241c04105fc574ea11c250991cec5aa89956e"
   })
 ]);
 const SAFE_ERROR_CODES = new Set([
@@ -92,6 +92,17 @@ function gitBlobSha(bytes) {
   const canonical = canonicalGitTextBytes(bytes);
   const header = Buffer.from(`blob ${canonical.length}\0`, "utf8");
   return crypto.createHash("sha1").update(header).update(canonical).digest("hex");
+}
+
+function canonicalTextSha256(bytes) {
+  return sha256(canonicalGitTextBytes(bytes));
+}
+
+function fileIdentityDigest(identity, bytes) {
+  if (identity.algorithm === "git-blob") return gitBlobSha(bytes);
+  if (identity.algorithm === "canonical-sha256") return canonicalTextSha256(bytes);
+  if (identity.algorithm === "sha256") return sha256(bytes);
+  fail("V2_N5_RENDER_INTEGRITY_MISMATCH", "A required source file uses an unsupported identity algorithm");
 }
 
 async function readFreshJob(jobPath = JOB_PATH) {
@@ -184,7 +195,7 @@ async function verifyFileIdentities() {
     } catch {
       fail("V2_N5_RENDER_INTEGRITY_MISMATCH", "A required source file is unavailable");
     }
-    const actual = identity.algorithm === "git-blob" ? gitBlobSha(bytes) : sha256(bytes);
+    const actual = fileIdentityDigest(identity, bytes);
     if (actual !== identity.expected) {
       fail("V2_N5_RENDER_INTEGRITY_MISMATCH", "A required source file identity changed");
     }
@@ -317,6 +328,8 @@ module.exports = {
   V2N5RenderReadinessError,
   assertReadinessGates,
   canonicalGitTextBytes,
+  canonicalTextSha256,
+  fileIdentityDigest,
   gitBlobSha,
   holdUntilSignal,
   main,

@@ -20,8 +20,8 @@ const {
 } = require("./v2_naver_place_room_provider_marker_live_one_shot.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
-const BASELINE_COMMIT = "b4a20ddcbe60f7159242fece7ffd791aa62f57be";
-const D4_READINESS_BLOB = "ca99bbceede09da2d7ea138fe13ae6c8afc53a60";
+const BASELINE_COMMIT = "583c873bb5ec41e8334ecd910db5393c5991de72";
+const D4_READINESS_BLOB = "1c97c51b3d5dfd99c0a68733252127a4b582fdbe";
 const D4_READINESS_PATH = path.join(ROOT, "scripts", "v2_naver_place_room_provider_marker_render_readiness.cjs");
 const LOCAL_STATE_ROOT = path.join(ROOT, "outputs", "rebuild-n5-d5");
 const LIVE_APPROVAL_NAME = "N5-D5-Live";
