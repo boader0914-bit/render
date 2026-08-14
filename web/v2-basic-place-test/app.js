@@ -12,6 +12,9 @@ const elements = {
   collectButton: document.querySelector("#collectButton"),
   buttonLabel: document.querySelector(".button-label"),
   message: document.querySelector("#requestMessage"),
+  bookmarkletLink: document.querySelector("#bookmarkletLink"),
+  browserAdFile: document.querySelector("#browserAdFile"),
+  clearBrowserAds: document.querySelector("#clearBrowserAds"),
   organicCount: document.querySelector("#organicCount"),
   adCount: document.querySelector("#adCount"),
   requestCount: document.querySelector("#requestCount"),
@@ -22,6 +25,7 @@ const elements = {
   adTabCount: document.querySelector("#adTabCount"),
   organicRows: document.querySelector("#organicRows"),
   adRows: document.querySelector("#adRows"),
+  advertisementSource: document.querySelector("#advertisementSource"),
   diagnosticStatus: document.querySelector("#diagnosticStatus"),
   candidateCount: document.querySelector("#candidateCount"),
   matchedCandidateCount: document.querySelector("#matchedCandidateCount"),
@@ -39,6 +43,8 @@ const tabs = [...document.querySelectorAll('[role="tab"]')];
 const panels = [...document.querySelectorAll('[role="tabpanel"]')];
 let serviceStatus = null;
 let latestResult = null;
+let serverResult = null;
+let bookmarkletReady = false;
 
 const ERROR_LABELS = Object.freeze({
   V2_BASIC_UI_UNAUTHORIZED: "관리자 토큰을 확인해 주세요.",
@@ -185,6 +191,9 @@ function renderResult(result) {
 
   const diagnostics = result.diagnostics || {};
   const adDiagnostics = diagnostics.advertisement || {};
+  elements.advertisementSource.textContent = result.advertisementEvidence
+    ? `통합검색 실화면 · ${result.advertisementEvidence.browserVisibleRows}건`
+    : "숙박 목록 snapshot";
   elements.diagnosticStatus.textContent = DIAGNOSTIC_LABELS[diagnostics.status] || diagnostics.status || "-";
   elements.candidateCount.textContent = String(adDiagnostics.candidateCount ?? "-");
   elements.matchedCandidateCount.textContent = String(adDiagnostics.matchedCandidateCount ?? "-");
@@ -216,13 +225,92 @@ function csvCell(value) {
 }
 
 function resultCsv(result) {
-  const headers = ["resultType", "order", "placeId", "name", "category", "address", "hasBooking", "minimumPrice", "roomPreviewCount"];
+  const headers = ["resultType", "order", "placeId", "name", "category", "address", "hasBooking", "minimumPrice", "roomPreviewCount", "source", "evidenceLevel"];
   const rows = [
     ...(result.organic || []).map((row) => ({ resultType: "organic", order: row.rank, ...row })),
     ...(result.advertisements || []).map((row) => ({ resultType: "advertisement", order: row.adOrder, ...row }))
   ];
   return `\uFEFF${[headers, ...rows.map((row) => headers.map((key) => row[key]))].map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`;
 }
+
+function browserAdContract() {
+  const contract = globalThis.V2NaverVisiblePlaceAdContract;
+  if (!contract || typeof contract.validateVisibleAdCaptureEnvelope !== "function" || typeof contract.mergeVisibleAdsWithPlaceResult !== "function") {
+    throw new Error("V2_BROWSER_AD_CONTRACT_UNAVAILABLE");
+  }
+  return contract;
+}
+
+async function readCaptureFile(file) {
+  if (!(file instanceof File) || file.size < 2 || file.size > 64 * 1024) {
+    throw new Error("V2_BROWSER_AD_FILE_INVALID");
+  }
+  let value;
+  try {
+    value = JSON.parse(await file.text());
+  } catch {
+    throw new Error("V2_BROWSER_AD_FILE_INVALID");
+  }
+  return value;
+}
+
+async function loadBookmarklet() {
+  try {
+    const response = await fetch("/naver-ad-bookmarklet.txt", { headers: { accept: "text/plain" } });
+    const value = (await response.text()).trim();
+    if (!response.ok || !value.startsWith("javascript:") || value.length > 20000) throw new Error("BOOKMARKLET_INVALID");
+    elements.bookmarkletLink.href = value;
+    elements.bookmarkletLink.setAttribute("aria-disabled", "false");
+    elements.browserAdFile.disabled = false;
+    bookmarkletReady = true;
+  } catch {
+    elements.bookmarkletLink.setAttribute("aria-disabled", "true");
+    elements.browserAdFile.disabled = true;
+  }
+}
+
+elements.bookmarkletLink.addEventListener("click", async (event) => {
+  event.preventDefault();
+  if (!bookmarkletReady) {
+    setMessage("광고 캡처 도구를 불러오지 못했습니다.", "error");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(elements.bookmarkletLink.href);
+    setMessage("광고 캡처 도구를 복사했습니다.", "success");
+  } catch {
+    setMessage("광고 캡처 링크를 북마크바에 끌어 놓아 주세요.");
+  }
+});
+
+elements.browserAdFile.addEventListener("change", async () => {
+  const file = elements.browserAdFile.files?.[0];
+  elements.browserAdFile.value = "";
+  if (!serverResult) {
+    setMessage("Place 수집을 먼저 실행해 주세요.", "error");
+    return;
+  }
+  try {
+    const contract = browserAdContract();
+    const capture = contract.validateVisibleAdCaptureEnvelope(await readCaptureFile(file), {
+      expectedQuery: serverResult.keyword
+    });
+    const merged = contract.mergeVisibleAdsWithPlaceResult(serverResult, capture);
+    renderResult(merged);
+    elements.clearBrowserAds.disabled = false;
+    setMessage(`통합검색 실화면 광고 ${merged.advertisements.length}건을 반영했습니다.`, "success");
+    activateTab(document.querySelector("#tabAds"));
+  } catch (error) {
+    setMessage(`광고 증거를 반영하지 못했습니다. ${error.code || error.message || "INVALID"}`, "error");
+  }
+});
+
+elements.clearBrowserAds.addEventListener("click", () => {
+  if (!serverResult) return;
+  renderResult(serverResult);
+  elements.clearBrowserAds.disabled = true;
+  setMessage("서버 snapshot 광고 결과로 복원했습니다.");
+});
 
 elements.downloadJson.addEventListener("click", () => {
   if (!latestResult) return;
@@ -292,7 +380,9 @@ elements.form.addEventListener("submit", async (event) => {
       error.providerStatus = Number.isInteger(value.providerStatus) ? value.providerStatus : null;
       throw error;
     }
+    serverResult = value;
     renderResult(value);
+    elements.clearBrowserAds.disabled = true;
     await loadStatus();
     setMessage(`${value.mode === "live" ? "Live" : "Demo"} 수집 완료 · ${value.keyword}`, "success");
   } catch (error) {
@@ -304,4 +394,4 @@ elements.form.addEventListener("submit", async (event) => {
   }
 });
 
-loadStatus();
+Promise.all([loadStatus(), loadBookmarklet()]);

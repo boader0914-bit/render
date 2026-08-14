@@ -13,6 +13,7 @@ const {
 } = require("./v2_live_basic_place_collector.cjs");
 const { normalizeQuery } = require("./naver_place_apollo_parser.cjs");
 const { createBasicPlaceDemoHtml } = require("./v2_basic_place_ui_demo_fixture.cjs");
+const { BOOKMARKLET_PATH, bookmarkletUrl } = require("./v2_naver_ad_browser_transport.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
 const WEB_ROOT = path.join(ROOT, "web", "v2-basic-place-test");
@@ -41,7 +42,11 @@ const STATIC_FILES = Object.freeze({
   "/": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
   "/index.html": Object.freeze({ file: "index.html", type: "text/html; charset=utf-8" }),
   "/app.js": Object.freeze({ file: "app.js", type: "text/javascript; charset=utf-8" }),
-  "/styles.css": Object.freeze({ file: "styles.css", type: "text/css; charset=utf-8" })
+  "/styles.css": Object.freeze({ file: "styles.css", type: "text/css; charset=utf-8" }),
+  "/naver-visible-place-ad-contract.js": Object.freeze({
+    filePath: path.join(ROOT, "scripts", "v2_naver_visible_place_ad_contract.cjs"),
+    type: "text/javascript; charset=utf-8"
+  })
 });
 
 class V2BasicUiError extends Error {
@@ -629,9 +634,14 @@ function createRequestHandler(options = {}) {
         sendJson(response, 200, result);
         return;
       }
+      if (request.method === "GET" && url.pathname === BOOKMARKLET_PATH) {
+        response.writeHead(200, securityHeaders("text/plain; charset=utf-8"));
+        response.end(`${bookmarkletUrl()}\n`);
+        return;
+      }
       const asset = STATIC_FILES[url.pathname];
       if (request.method === "GET" && asset) {
-        const bytes = await fs.readFile(path.join(WEB_ROOT, asset.file));
+        const bytes = await fs.readFile(asset.filePath || path.join(WEB_ROOT, asset.file));
         response.writeHead(200, securityHeaders(asset.type));
         response.end(bytes);
         return;

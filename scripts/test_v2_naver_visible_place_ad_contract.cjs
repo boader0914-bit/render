@@ -4,11 +4,14 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  CAPTURE_SCHEMA_VERSION,
   EVIDENCE_LEVEL,
   SCHEMA_VERSION,
   SOURCE,
   collectVisiblePlaceAds,
-  parseAdvertiserRedirect
+  mergeVisibleAdsWithPlaceResult,
+  parseAdvertiserRedirect,
+  validateVisibleAdCaptureEnvelope
 } = require("./v2_naver_visible_place_ad_contract.cjs");
 
 const fixture = JSON.parse(fs.readFileSync(path.resolve(
@@ -38,6 +41,45 @@ function syntheticCandidate(row, suffix = "") {
     name: row.name,
     href: `https://ader.naver.com/redirect?tracking=must-not-survive-${row.visualOrder}${suffix}&fu=${encodeURIComponent(destination)}`
   };
+}
+
+function captureEnvelope(overrides = {}) {
+  return {
+    schemaVersion: CAPTURE_SCHEMA_VERSION,
+    query: fixture.query,
+    capturedAt: "2026-08-15T00:05:00.000Z",
+    sourceHost: "search.naver.com",
+    sourceSurface: "integrated-search-place",
+    transport: "manual-bookmarklet",
+    advertisements: fixture.advertisements.map((row) => ({
+      adOrder: row.visualOrder,
+      placeId: row.placeId,
+      name: row.name,
+      adTagPresent: true,
+      source: SOURCE,
+      evidenceLevel: EVIDENCE_LEVEL
+    })),
+    diagnostics: {
+      candidateContainerCount: 4,
+      advertiserLinkCount: 40,
+      acceptedCount: 4,
+      duplicateLinkCount: 36,
+      rejectedContainerCount: 0
+    },
+    privacy: {
+      rawHtmlStored: false,
+      trackingUrlsStored: false,
+      cookiesStored: false,
+      providerResponseStored: false,
+      operationalWrites: 0
+    },
+    ...overrides
+  };
+}
+
+function throwsCode(action, code) {
+  assert.throws(action, (error) => error?.code === code);
+  assertions += 1;
 }
 
 function main() {
@@ -90,6 +132,62 @@ function main() {
   assertions += 1;
   assert.throws(() => collectVisiblePlaceAds(new Array(501).fill({})), /at most 500/u);
   assertions += 1;
+
+  const capture = validateVisibleAdCaptureEnvelope(captureEnvelope(), {
+    expectedQuery: fixture.query,
+    now: new Date("2026-08-15T00:10:00.000Z")
+  });
+  equal(capture.schemaVersion, CAPTURE_SCHEMA_VERSION);
+  equal(capture.advertisements.length, 4);
+  equal(capture.diagnostics.duplicateLinkCount, 36);
+  equal(capture.privacy.rawHtmlStored, false);
+
+  const merged = mergeVisibleAdsWithPlaceResult({
+    keyword: fixture.query,
+    organic: [{
+      rank: 1,
+      placeId: "1000421329",
+      name: "합천H글램핑",
+      category: "캠핑,야영장",
+      address: "경상남도 합천군",
+      hasBooking: true,
+      reviewScore: 4.74,
+      reviewCount: 1879,
+      minimumPrice: 180000,
+      roomPreviewCount: 1,
+      roomPreviewNames: ["카바나"]
+    }],
+    advertisements: [{ adOrder: 1, placeId: "server-snapshot" }],
+    counts: { organicRows: 1, advertisementRows: 1 },
+    diagnostics: { status: "current-filter-matched-empty" },
+    rawProviderResponseStored: false,
+    operationalWrites: 0
+  }, captureEnvelope(), { now: new Date("2026-08-15T00:10:00.000Z") });
+  equal(merged.advertisements.length, 4);
+  equal(merged.advertisements[0].category, "캠핑,야영장");
+  equal(merged.advertisements[0].minimumPrice, 180000);
+  equal(merged.advertisements[1].category, "");
+  equal(merged.advertisementEvidence.serverSnapshotRows, 1);
+  equal(merged.advertisementEvidence.browserVisibleRows, 4);
+  equal(merged.counts.advertisementRows, 4);
+  equal(merged.operationalWrites, 0);
+  assert.doesNotMatch(JSON.stringify(merged), /ader\.naver\.com|tracking=|\bfu=|https?:\/\//iu);
+  assertions += 1;
+
+  throwsCode(() => validateVisibleAdCaptureEnvelope(captureEnvelope({ query: "다른 검색어" }), {
+    expectedQuery: fixture.query,
+    now: new Date("2026-08-15T00:10:00.000Z")
+  }), "capture-envelope-invalid");
+  throwsCode(() => validateVisibleAdCaptureEnvelope(captureEnvelope({ capturedAt: "2026-08-14T00:00:00.000Z" }), {
+    now: new Date("2026-08-15T00:10:00.000Z")
+  }), "capture-envelope-invalid");
+  throwsCode(() => validateVisibleAdCaptureEnvelope(captureEnvelope({
+    privacy: { ...captureEnvelope().privacy, trackingUrlsStored: true }
+  }), { now: new Date("2026-08-15T00:10:00.000Z") }), "capture-privacy-invalid");
+  throwsCode(() => validateVisibleAdCaptureEnvelope(captureEnvelope({
+    advertisements: [captureEnvelope().advertisements[0], { ...captureEnvelope().advertisements[0], adOrder: 2 }],
+    diagnostics: { ...captureEnvelope().diagnostics, acceptedCount: 2 }
+  }), { now: new Date("2026-08-15T00:10:00.000Z") }), "capture-advertisement-duplicate");
 
   process.stdout.write(`${JSON.stringify({
     event: "v2_naver_visible_place_ad_contract_tests_complete",

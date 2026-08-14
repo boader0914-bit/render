@@ -113,6 +113,20 @@ async function main() {
     match(pageHtml, /DataLab Place 수집 콘솔/u);
     match(pageHtml, /id="collectorForm"/u);
 
+    const browserContract = await fetch(`${demoBase}/naver-visible-place-ad-contract.js`);
+    const browserContractSource = await browserContract.text();
+    equal(browserContract.status, 200);
+    match(browserContract.headers.get("content-type"), /text\/javascript/u);
+    match(browserContractSource, /V2NaverVisiblePlaceAdContract/u);
+
+    const bookmarkletResponse = await fetch(`${demoBase}/naver-ad-bookmarklet.txt`);
+    const bookmarklet = (await bookmarkletResponse.text()).trim();
+    equal(bookmarkletResponse.status, 200);
+    match(bookmarkletResponse.headers.get("content-type"), /text\/plain/u);
+    match(bookmarklet, /^javascript:\(/u);
+    assert.doesNotMatch(bookmarklet, /V2_BASIC_UI_OPERATOR_TOKEN|document\.cookie|localStorage|sessionStorage/iu);
+    assertions += 1;
+
     const status = await jsonRequest(demoBase, "/api/status");
     equal(status.response.status, 200);
     equal(status.value.status, "ready");
