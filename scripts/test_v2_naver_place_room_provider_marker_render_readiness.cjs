@@ -180,7 +180,16 @@ function exerciseServeProcess(env) {
     equal(canonicalTextSha256(packageLockBytes), packageLockIdentity);
     equal(canonicalTextSha256(packageLockLfBytes), packageLockIdentity);
     equal(canonicalTextSha256(packageLockCrlfBytes), packageLockIdentity);
-    equal(sha256(packageLockBytes), "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2");
+    deepEqual(
+      {
+        lf: sha256(packageLockLfBytes),
+        crlf: sha256(packageLockCrlfBytes)
+      },
+      {
+        lf: packageLockIdentity,
+        crlf: "ba2e05d58f16cff4d8bffbe76d6f0b48faec5aa1c9444b90917dce155b7fc5e2"
+      }
+    );
     ok(sha256(packageLockLfBytes) !== sha256(packageLockCrlfBytes), "raw LF and CRLF bytes must differ");
     ok(
       canonicalTextSha256(Buffer.concat([packageLockLfBytes, Buffer.from("x", "utf8")])) !== packageLockIdentity,
