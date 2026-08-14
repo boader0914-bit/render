@@ -16,6 +16,7 @@ const {
   NAVER_LEGACY_CANARY_MAX_RESPONSE_BYTES,
   NAVER_LEGACY_CANARY_TIMEOUT_MS
 } = require("./naver_legacy_canary_live_transport.cjs");
+const { buildAdResponseDiagnostics } = require("./v2_place_ad_response_diagnostics.cjs");
 
 const SCHEMA_VERSION = "v2-live-basic-place-job.v1";
 const RESULT_SCHEMA_VERSION = "v2-live-basic-place-result.v1";
@@ -188,12 +189,14 @@ function parseProviderBody(body, keyword) {
   const organic = selectNaverOrganicResult(state, keyword, { allowPlaceList: true, required: false });
   if (!organic) fail("V2_BASIC_PLACE_ORGANIC_UNAVAILABLE", "provider-parse", "The organic Place contract was not present");
   const ads = selectAdResult(state, keyword);
+  const providerDiagnostics = buildAdResponseDiagnostics({ state, query: keyword, body });
   return Object.freeze({
     operation: String(organic.operation || organic.type || ""),
     organicTotal: Number(organic.total || 0),
     organic: organic.items.slice(0, 50).map((item, index) => Object.freeze({ rank: index + 1, ...projectPlace(state, item) })),
     adContractPresent: ads.contractPresent,
     adTotal: ads.total,
+    providerDiagnostics,
     advertisements: ads.items.slice(0, 100).map((item, index) => Object.freeze({
       adOrder: index + 1,
       ...projectPlace(state, item),
@@ -237,11 +240,13 @@ async function writeArtifacts(outputRoot, job, parsed, providerEvidence) {
     if (error?.code !== "ENOENT") throw error;
   }
   if (finalExists) fail("V2_BASIC_PLACE_DUPLICATE_RUN", "artifact-write", "An artifact already exists for this run ID");
+  const diagnosticsBytes = Buffer.from(`${JSON.stringify(parsed.providerDiagnostics, null, 2)}\n`, "utf8");
   const files = new Map([
     ["organic.json", `${JSON.stringify(parsed.organic, null, 2)}\n`],
     ["organic.csv", csvFor(parsed.organic, ["rank", "placeId", "name", "category", "address", "hasBooking", "reviewScore", "reviewCount", "visitorReviewCount", "minimumPrice", "roomPreviewCount", "roomPreviewNames"])],
     ["advertisements.json", `${JSON.stringify(parsed.advertisements, null, 2)}\n`],
-    ["advertisements.csv", csvFor(parsed.advertisements, ["adOrder", "placeId", "name", "category", "address", "hasBooking", "reviewScore", "reviewCount", "visitorReviewCount", "minimumPrice", "roomPreviewCount", "roomPreviewNames", "adId", "adDescription"])]
+    ["advertisements.csv", csvFor(parsed.advertisements, ["adOrder", "placeId", "name", "category", "address", "hasBooking", "reviewScore", "reviewCount", "visitorReviewCount", "minimumPrice", "roomPreviewCount", "roomPreviewNames", "adId", "adDescription"])],
+    ["provider-diagnostics.json", diagnosticsBytes]
   ]);
   const fileManifest = {};
   try {
@@ -265,6 +270,11 @@ async function writeArtifacts(outputRoot, job, parsed, providerEvidence) {
         adContractPresent: parsed.adContractPresent,
         adProviderTotal: parsed.adTotal,
         advertisementRows: parsed.advertisements.length
+      },
+      diagnostics: {
+        schemaVersion: parsed.providerDiagnostics.schemaVersion,
+        status: parsed.providerDiagnostics.status,
+        sha256: fileManifest["provider-diagnostics.json"].sha256
       },
       contracts: {
         retryCount: 0,
@@ -378,6 +388,11 @@ async function executeBasicPlaceJob(options) {
     keyword: job.keyword,
     organicRows: parsed.organic.length,
     advertisementRows: parsed.advertisements.length,
+    adDiagnosticStatus: parsed.providerDiagnostics.status,
+    adCandidateCount: parsed.providerDiagnostics.advertisement.candidateCount,
+    adMatchedCandidateCount: parsed.providerDiagnostics.advertisement.matchedCandidateCount,
+    providerResponseDigest: parsed.providerDiagnostics.response.bodySha256,
+    diagnosticsDigest: artifact.manifest.files["provider-diagnostics.json"].sha256,
     externalRequests: providerEvidence.externalRequestCount,
     fixtureRequests: providerEvidence.fixtureRequestCount,
     retryCount: 0,

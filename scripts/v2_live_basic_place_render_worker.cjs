@@ -13,16 +13,25 @@ const {
 
 const ROOT = path.resolve(__dirname, "..");
 const EXPECTED_NODE_VERSION = "v26.5.0";
-const JOB_PATH = path.join(ROOT, "docs", "v2_live_basic_place_render_job.json");
-const JOB_RUN_ID = "rebuild-render-basic-place-20260814-001";
+const JOB_PATH = path.join(ROOT, "docs", "v2_place_ad_diagnostic_render_job.json");
+const JOB_RUN_ID = "rebuild-render-place-ad-diagnostic-20260814-001";
 const JOB_KEYWORD = "경남 글램핑";
 const RENDER_STATE_ROOT = "/var/data/v2-live-basic-place-collector";
 const LOCAL_STATE_ROOT = path.join(ROOT, "outputs", "v2-live-basic-place-render");
-const LIVE_APPROVAL_TOKEN = "N1-Render-Live";
+const LIVE_APPROVAL_TOKEN = "N6-Ad-Diagnostic-Live";
 const KEEPALIVE_INTERVAL_MS = 60_000;
 const MAX_CHILD_OUTPUT_BYTES = 64 * 1024;
+const AD_DIAGNOSTIC_STATUSES = new Set([
+  "ad-operation-absent",
+  "ad-candidates-filtered",
+  "current-filter-matched-with-items",
+  "current-filter-matched-root-shape-mismatch",
+  "current-filter-matched-empty",
+  "current-filter-matched-root-unrecognized"
+]);
 const FILE_IDENTITIES = Object.freeze([
-  Object.freeze({ path: "scripts/v2_live_basic_place_collector.cjs", algorithm: "git-blob", expected: "3763256cd4bfe2b2aaaa3bed98679207f7bda688" }),
+  Object.freeze({ path: "scripts/v2_live_basic_place_collector.cjs", algorithm: "git-blob", expected: "1583533ebd92188c6a377464a881468cd7f2ea06" }),
+  Object.freeze({ path: "scripts/v2_place_ad_response_diagnostics.cjs", algorithm: "git-blob", expected: "7bb18cedecf94d8816239254389abf2cf5490c2d" }),
   Object.freeze({ path: "scripts/naver_place_apollo_parser.cjs", algorithm: "git-blob", expected: "e83364b96706b293a91af3d89cff2efe5fa89e99" }),
   Object.freeze({ path: "scripts/naver_legacy_canary_live_transport.cjs", algorithm: "git-blob", expected: "f346f23e67c358098ef852635fd5351c20cfc891" }),
   Object.freeze({ path: "scripts/gyeongnam_glamping_crawl.cjs", algorithm: "git-blob", expected: "c91c8a4339d573dab2f1ac267ffcc251a5f4b2a3" }),
@@ -333,6 +342,15 @@ function safeChildProjection(child, jobDigest) {
       || !Number.isInteger(result.advertisementRows)
       || result.advertisementRows < 0
       || result.advertisementRows > 100
+      || !AD_DIAGNOSTIC_STATUSES.has(result.adDiagnosticStatus)
+      || !Number.isInteger(result.adCandidateCount)
+      || result.adCandidateCount < 0
+      || result.adCandidateCount > 100
+      || !Number.isInteger(result.adMatchedCandidateCount)
+      || result.adMatchedCandidateCount < 0
+      || result.adMatchedCandidateCount > result.adCandidateCount
+      || !/^[a-f0-9]{64}$/u.test(String(result.providerResponseDigest || ""))
+      || !/^[a-f0-9]{64}$/u.test(String(result.diagnosticsDigest || ""))
       || result.externalRequests !== 1
       || result.retryCount !== 0
       || result.fallbackCount !== 0
@@ -344,6 +362,11 @@ function safeChildProjection(child, jobDigest) {
       status: "completed",
       organicRows: result.organicRows,
       advertisementRows: result.advertisementRows,
+      adDiagnosticStatus: result.adDiagnosticStatus,
+      adCandidateCount: result.adCandidateCount,
+      adMatchedCandidateCount: result.adMatchedCandidateCount,
+      providerResponseDigest: result.providerResponseDigest,
+      diagnosticsDigest: result.diagnosticsDigest,
       manifestDigest: result.manifestDigest,
       errorCode: null,
       externalRequests: 1
@@ -362,6 +385,11 @@ function safeChildProjection(child, jobDigest) {
     status: "failed",
     organicRows: 0,
     advertisementRows: 0,
+    adDiagnosticStatus: null,
+    adCandidateCount: 0,
+    adMatchedCandidateCount: 0,
+    providerResponseDigest: null,
+    diagnosticsDigest: null,
     manifestDigest: null,
     errorCode: result.code,
     externalRequests: result.externalRequests,
@@ -420,13 +448,18 @@ async function executeLive(env = process.env, options = {}) {
   }
   const projection = safeChildProjection(child, integrity.jobIdentity.digest);
   const terminal = Object.freeze({
-    schemaVersion: "v2-live-basic-place-render-terminal.v1",
+    schemaVersion: "v2-live-basic-place-render-terminal.v2",
     event: "v2_live_basic_place_render_terminal",
     runId: JOB_RUN_ID,
     jobDigest: integrity.jobIdentity.digest,
     status: projection.status,
     organicRows: projection.organicRows,
     advertisementRows: projection.advertisementRows,
+    adDiagnosticStatus: projection.adDiagnosticStatus,
+    adCandidateCount: projection.adCandidateCount,
+    adMatchedCandidateCount: projection.adMatchedCandidateCount,
+    providerResponseDigest: projection.providerResponseDigest,
+    diagnosticsDigest: projection.diagnosticsDigest,
     manifestDigest: projection.manifestDigest,
     errorCode: projection.errorCode,
     externalRequests: projection.externalRequests,

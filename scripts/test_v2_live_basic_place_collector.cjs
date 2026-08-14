@@ -61,6 +61,18 @@ function fixtureHtml() {
   return `<html><script>window.__APOLLO_STATE__=${JSON.stringify(state)};</script></html>`;
 }
 
+function fixtureHtmlWithoutAds() {
+  const html = fixtureHtml();
+  const marker = "window.__APOLLO_STATE__=";
+  const start = html.indexOf(marker) + marker.length;
+  const end = html.indexOf(";</script>", start);
+  const state = JSON.parse(html.slice(start, end));
+  for (const key of Object.keys(state.ROOT_QUERY)) {
+    if (key.startsWith("adBusinesses(")) delete state.ROOT_QUERY[key];
+  }
+  return `<html><script>${marker}${JSON.stringify(state)};</script></html>`;
+}
+
 function job(runId, mode = "offline") {
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -111,6 +123,11 @@ async function main() {
     assert.equal(counter.init.redirect, "manual");
     assert.equal(result.organicRows, 2);
     assert.equal(result.advertisementRows, 2);
+    assert.equal(result.adDiagnosticStatus, "current-filter-matched-with-items");
+    assert.equal(result.adCandidateCount, 1);
+    assert.equal(result.adMatchedCandidateCount, 1);
+    assert.match(result.providerResponseDigest, /^[a-f0-9]{64}$/u);
+    assert.match(result.diagnosticsDigest, /^[a-f0-9]{64}$/u);
     assert.equal(result.externalRequests, 0);
     assert.equal(result.fixtureRequests, 1);
     assert.equal(result.operationalWrites, 0);
@@ -119,6 +136,7 @@ async function main() {
     const finalRoot = path.join(root, "offline-basic-success-001");
     const organic = JSON.parse(await fs.readFile(path.join(finalRoot, "organic.json"), "utf8"));
     const ads = JSON.parse(await fs.readFile(path.join(finalRoot, "advertisements.json"), "utf8"));
+    const diagnostics = JSON.parse(await fs.readFile(path.join(finalRoot, "provider-diagnostics.json"), "utf8"));
     const manifest = JSON.parse(await fs.readFile(path.join(finalRoot, "manifest.json"), "utf8"));
     assert.deepEqual(organic.map((row) => row.placeId), ["35644668", "200"]);
     assert.deepEqual(organic.map((row) => row.rank), [1, 2]);
@@ -128,10 +146,32 @@ async function main() {
     assert.equal(organic[0].roomPreviewCount, 1);
     assert.equal(organic[0].minimumPrice, 120000);
     assert.equal(manifest.counts.adContractPresent, true);
+    assert.equal(manifest.diagnostics.status, "current-filter-matched-with-items");
+    assert.equal(manifest.diagnostics.sha256, result.diagnosticsDigest);
+    assert.equal(diagnostics.advertisement.candidateCount, 1);
+    assert.equal(diagnostics.advertisement.matchedCandidateCount, 1);
+    assert.equal(diagnostics.advertisement.matchedDirectItemCount, 2);
+    assert.equal(diagnostics.response.rawProviderResponseStored, false);
     assert.equal(manifest.contracts.rawProviderResponseStored, false);
     assert.equal(manifest.contracts.operationalWrites, 0);
     const allArtifacts = (await Promise.all((await fs.readdir(finalRoot)).map((name) => fs.readFile(path.join(finalRoot, name), "utf8")))).join("\n");
     assert.doesNotMatch(allArtifacts, /__APOLLO_STATE__|set-cookie\s*:|authorization\s*:|fixture-secret-value/iu);
+
+    const noAdsCounter = { calls: 0 };
+    const noAdsBytes = bytes(job("offline-basic-no-ads-001"));
+    const noAdsResult = await executeBasicPlaceJob({
+      jobBytes: noAdsBytes,
+      outputRoot: root,
+      env: {},
+      fetchImpl: fixtureFetch(noAdsCounter, fixtureHtmlWithoutAds())
+    });
+    assert.equal(noAdsCounter.calls, 1);
+    assert.equal(noAdsResult.organicRows, 2);
+    assert.equal(noAdsResult.advertisementRows, 0);
+    assert.equal(noAdsResult.adDiagnosticStatus, "ad-operation-absent");
+    assert.equal(noAdsResult.adCandidateCount, 0);
+    const noAdsDiagnostics = JSON.parse(await fs.readFile(path.join(root, "offline-basic-no-ads-001", "provider-diagnostics.json"), "utf8"));
+    assert.equal(noAdsDiagnostics.status, "ad-operation-absent");
 
     await expectCode(() => executeBasicPlaceJob({
       jobBytes: offlineBytes,
@@ -186,7 +226,7 @@ async function main() {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
-  process.stdout.write(`${JSON.stringify({ event: "v2_live_basic_place_tests_complete", assertions: 40, externalRequests: 0, operationalWrites: 0 })}\n`);
+  process.stdout.write(`${JSON.stringify({ event: "v2_live_basic_place_tests_complete", assertions: 58, externalRequests: 0, operationalWrites: 0 })}\n`);
 }
 
 main().catch((error) => {

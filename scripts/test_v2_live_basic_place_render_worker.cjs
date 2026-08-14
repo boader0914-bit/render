@@ -43,7 +43,7 @@ async function main() {
     assert.equal(job.job.runId, JOB_RUN_ID);
     assert.match(job.digest, /^[a-f0-9]{64}$/u);
     const identities = await verifyFileIdentities();
-    assert.equal(Object.keys(identities).length, 6);
+    assert.equal(Object.keys(identities).length, 7);
 
     const ready = await readiness(baseEnv(stateDir));
     assert.equal(ready.event, "v2_live_basic_place_render_ready");
@@ -87,6 +87,11 @@ async function main() {
             keyword: "경남 글램핑",
             organicRows: 50,
             advertisementRows: 18,
+            adDiagnosticStatus: "current-filter-matched-with-items",
+            adCandidateCount: 1,
+            adMatchedCandidateCount: 1,
+            providerResponseDigest: "b".repeat(64),
+            diagnosticsDigest: "c".repeat(64),
             externalRequests: 1,
             retryCount: 0,
             fallbackCount: 0,
@@ -103,6 +108,11 @@ async function main() {
     assert.equal(terminal.externalRequests, 1);
     assert.equal(terminal.collectorInvocations, 1);
     assert.equal(terminal.operationalWrites, 0);
+    assert.equal(terminal.adDiagnosticStatus, "current-filter-matched-with-items");
+    assert.equal(terminal.adCandidateCount, 1);
+    assert.equal(terminal.adMatchedCandidateCount, 1);
+    assert.equal(terminal.providerResponseDigest, "b".repeat(64));
+    assert.equal(terminal.diagnosticsDigest, "c".repeat(64));
 
     const duplicate = await executeLive(liveEnv, {
       childRunner: async () => {
@@ -127,7 +137,7 @@ async function main() {
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
-  process.stdout.write(`${JSON.stringify({ event: "v2_live_basic_place_render_tests_complete", assertions: 34, externalRequests: 0, operationalWrites: 0 })}\n`);
+  process.stdout.write(`${JSON.stringify({ event: "v2_live_basic_place_render_tests_complete", assertions: 39, externalRequests: 0, operationalWrites: 0 })}\n`);
 }
 
 main().catch((error) => {

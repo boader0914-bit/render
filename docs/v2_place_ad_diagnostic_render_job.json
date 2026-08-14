@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "v2-live-basic-place-job.v1",
+  "runId": "rebuild-render-place-ad-diagnostic-20260814-001",
+  "mode": "live",
+  "keyword": "경남 글램핑",
+  "timeoutMs": 25000,
+  "responseSizeLimitBytes": 2097152
+}
