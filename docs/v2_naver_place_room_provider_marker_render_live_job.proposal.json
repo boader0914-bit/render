@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "v2-naver-place-room-provider-marker-live-job.v1",
+  "runId": "n5-room-marker-render-live-20260814-001",
+  "mode": "live",
+  "placeId": "35644668",
+  "timeoutMs": 15000,
+  "responseSizeLimitBytes": 1048576,
+  "requestBudget": 1,
+  "automaticRetries": 0,
+  "automaticFallbacks": 0,
+  "fixtureScenario": "none"
+}

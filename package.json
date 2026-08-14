@@ -185,6 +185,8 @@
     ,"test:v2-new-run-auto-application": "node scripts/test_v2_new_run_auto_application.cjs && npm run test:collection-worker-projection-application && npm run test:collection-worker-resilient-run-projection"
     ,"test:v2-naver-place-room-provider-marker": "node scripts/test_v2_naver_place_room_provider_marker.cjs"
     ,"test:v2-naver-place-room-provider-marker-live": "node scripts/test_v2_naver_place_room_provider_marker_live_one_shot.cjs"
+    ,"test:v2-naver-place-room-provider-marker-render-readiness": "node scripts/test_v2_naver_place_room_provider_marker_render_readiness.cjs"
+    ,"start:v2-naver-place-room-provider-marker-render-readiness": "node scripts/v2_naver_place_room_provider_marker_render_readiness.cjs serve"
   },
   "engines": {
     "node": "26.5.0"

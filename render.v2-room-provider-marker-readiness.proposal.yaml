@@ -1,0 +1,44 @@
+# Proposal only. Do not apply through Blueprint sync.
+services:
+  - type: worker
+    name: datalab-v2-room-provider-marker-readiness
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v2-room-provider-render-readiness
+    plan: starter
+    numInstances: 1
+    autoDeploy: false
+    buildCommand: >-
+      npm ci --ignore-scripts --audit=false --fund=false &&
+      npm run test:v2-naver-place-room-provider-marker &&
+      npm run test:v2-naver-place-room-provider-marker-live &&
+      npm run test:v2-naver-place-room-provider-marker-render-readiness
+    startCommand: npm run start:v2-naver-place-room-provider-marker-render-readiness
+    disk:
+      name: v2-room-provider-marker-readiness-data
+      mountPath: /var/data/v2-room-provider-marker-diagnostic
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 26.5.0
+      - key: V2_N5_RENDER_EXPECTED_DEPLOY_COMMIT
+        value: <APPROVED_N5_D4_COMMIT_SHA>
+      - key: V2_N5_RENDER_RUN_ENABLED
+        value: "0"
+      - key: V2_N5_RENDER_REQUEST_BUDGET
+        value: "0"
+      - key: V2_N5_RENDER_AUTOMATIC_RETRY
+        value: "0"
+      - key: V2_N5_RENDER_FALLBACK
+        value: "0"
+      - key: V2_N5_RENDER_OPERATIONAL_WRITES
+        value: "0"
+      - key: V2_N5_RENDER_STATE_DIR
+        value: /var/data/v2-room-provider-marker-diagnostic
+
+# Deliberately absent in readiness-only mode:
+# - V2_N5_RENDER_LIVE_APPROVED
+# - V2_N5_RENDER_APPROVED_JOB_SHA256
+# - V2_NAVER_ROOM_MARKER_LIVE_APPROVED
+# - V2_NAVER_ROOM_MARKER_REQUEST_BUDGET
+# - V2_NAVER_ROOM_MARKER_APPROVED_JOB_SHA256
