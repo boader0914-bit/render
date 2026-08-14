@@ -35,6 +35,11 @@ const {
 } = require("./v2_naver_place_room_provider_marker_render_readiness.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
+const INHERITED_CHILD_ENV_PREFIXES = Object.freeze([
+  "RENDER_",
+  "V2_N5_RENDER_",
+  "V2_NAVER_ROOM_MARKER_"
+]);
 let assertions = 0;
 
 function equal(actual, expected, message) {
@@ -85,6 +90,16 @@ function renderEnv(commit = "b".repeat(40)) {
   };
 }
 
+function isolatedChildEnv(overrides, inherited = process.env) {
+  const childEnv = {};
+  for (const [name, value] of Object.entries(inherited)) {
+    const normalizedName = name.toUpperCase();
+    if (INHERITED_CHILD_ENV_PREFIXES.some((prefix) => normalizedName.startsWith(prefix))) continue;
+    childEnv[name] = value;
+  }
+  return { ...childEnv, ...overrides };
+}
+
 function exerciseServeProcess(env) {
   return new Promise((resolve, reject) => {
     const runner = path.join(__dirname, "v2_naver_place_room_provider_marker_render_readiness.cjs");
@@ -92,7 +107,7 @@ function exerciseServeProcess(env) {
     const secret = "n5-render-readiness-secret-sentinel";
     const child = spawn(process.execPath, ["--require", preload, runner, "serve"], {
       cwd: ROOT,
-      env: { ...process.env, ...env, N5_TEST_SECRET: secret },
+      env: isolatedChildEnv({ ...env, N5_TEST_SECRET: secret }),
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
@@ -152,6 +167,28 @@ function exerciseServeProcess(env) {
     equal(JOB_RUN_ID, "n5-room-marker-render-live-20260814-001");
     equal(JOB_CANONICAL_SHA256, "bb00fd2a3fadc8c9644f8b28932f6bf2bb0ad2b96b55de0573eb0a4214e32ef7");
     equal(PROCESS_KEEPALIVE_INTERVAL_MS, 60_000);
+
+    const inheritedChildEnv = {
+      PATH: "fixture-path",
+      RENDER_SERVICE_ID: "srv-inherited-render-parent",
+      RENDER_GIT_COMMIT: "a".repeat(40),
+      V2_N5_RENDER_EXPECTED_DEPLOY_COMMIT: "a".repeat(40),
+      V2_N5_RENDER_LIVE_APPROVED: "1",
+      V2_NAVER_ROOM_MARKER_LIVE_APPROVED: "1"
+    };
+    const isolatedLocalEnv = isolatedChildEnv(localEnv("child-env-isolation"), inheritedChildEnv);
+    equal(isolatedLocalEnv.PATH, "fixture-path");
+    equal(isolatedLocalEnv.RENDER_SERVICE_ID, undefined);
+    equal(isolatedLocalEnv.RENDER_GIT_COMMIT, undefined);
+    equal(isolatedLocalEnv.V2_N5_RENDER_EXPECTED_DEPLOY_COMMIT, undefined);
+    equal(isolatedLocalEnv.V2_N5_RENDER_LIVE_APPROVED, undefined);
+    equal(isolatedLocalEnv.V2_NAVER_ROOM_MARKER_LIVE_APPROVED, undefined);
+    equal(isolatedLocalEnv.V2_N5_RENDER_RUN_ENABLED, "0");
+    equal(isolatedLocalEnv.V2_N5_RENDER_STATE_DIR, path.join(LOCAL_STATE_ROOT, "child-env-isolation"));
+    const explicitRenderCommit = "c".repeat(40);
+    const isolatedRenderEnv = isolatedChildEnv(renderEnv(explicitRenderCommit), inheritedChildEnv);
+    equal(isolatedRenderEnv.RENDER_SERVICE_ID, "srv-n5-readiness-fixture");
+    equal(isolatedRenderEnv.RENDER_GIT_COMMIT, explicitRenderCommit);
 
     const jobIdentity = await readFreshJob();
     equal(jobIdentity.job.runId, JOB_RUN_ID);

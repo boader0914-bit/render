@@ -43,6 +43,11 @@ const {
 const { LIVE_APPROVAL_NAME: INNER_LIVE_APPROVAL_NAME } = require("./v2_naver_place_room_provider_marker_live_one_shot.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
+const INHERITED_CHILD_ENV_PREFIXES = Object.freeze([
+  "RENDER_",
+  "V2_N5_RENDER_",
+  "V2_NAVER_ROOM_MARKER_"
+]);
 const SESSION_ROOT = path.join(LOCAL_STATE_ROOT, `test-${process.pid}`);
 const POSITIVE_HTML = fs.readFileSync(
   path.join(ROOT, "tests", "fixtures", "v2_naver_place_room_provider_marker_positive.sanitized.html"),
@@ -124,6 +129,16 @@ function liveEnv(name, overrides = {}) {
   };
 }
 
+function isolatedChildEnv(overrides, inherited = process.env) {
+  const childEnv = {};
+  for (const [name, value] of Object.entries(inherited)) {
+    const normalizedName = name.toUpperCase();
+    if (INHERITED_CHILD_ENV_PREFIXES.some((prefix) => normalizedName.startsWith(prefix))) continue;
+    childEnv[name] = value;
+  }
+  return { ...childEnv, ...overrides };
+}
+
 function fixtureTransport(body, options = {}) {
   const calls = [];
   const fetchImpl = async (input, init = {}) => {
@@ -164,13 +179,12 @@ function exerciseDuplicateProcess(env) {
     const preload = path.join(__dirname, "fixture_network_guard_preload.cjs");
     const child = spawn(process.execPath, ["--require", preload, runner, "live-and-hold"], {
       cwd: ROOT,
-      env: {
-        ...process.env,
+      env: isolatedChildEnv({
         ...env,
         V2_NAVER_ROOM_MARKER_LIVE_APPROVED: "",
         V2_NAVER_ROOM_MARKER_REQUEST_BUDGET: "",
         V2_NAVER_ROOM_MARKER_APPROVED_JOB_SHA256: ""
-      },
+      }),
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stdout = "";
@@ -237,6 +251,25 @@ function exerciseDuplicateProcess(env) {
       "V2_NAVER_ROOM_MARKER_APPROVED_JOB_SHA256"
     ]);
     equal(await verifyD4ReadinessIdentity(), D4_READINESS_BLOB);
+
+    const inheritedChildEnv = {
+      PATH: "fixture-path",
+      RENDER_SERVICE_ID: "srv-inherited-render-parent",
+      RENDER_GIT_COMMIT: "a".repeat(40),
+      V2_N5_RENDER_EXPECTED_DEPLOY_COMMIT: "a".repeat(40),
+      V2_N5_RENDER_RUN_ENABLED: "0",
+      V2_N5_RENDER_LIVE_APPROVED: "parent-live-gate",
+      V2_NAVER_ROOM_MARKER_LIVE_APPROVED: "parent-inner-gate"
+    };
+    const isolatedLiveEnv = isolatedChildEnv(liveEnv("child-env-isolation"), inheritedChildEnv);
+    equal(isolatedLiveEnv.PATH, "fixture-path");
+    equal(isolatedLiveEnv.RENDER_SERVICE_ID, undefined);
+    equal(isolatedLiveEnv.RENDER_GIT_COMMIT, undefined);
+    equal(isolatedLiveEnv.V2_N5_RENDER_EXPECTED_DEPLOY_COMMIT, undefined);
+    equal(isolatedLiveEnv.V2_N5_RENDER_RUN_ENABLED, "1");
+    equal(isolatedLiveEnv.V2_N5_RENDER_LIVE_APPROVED, LIVE_APPROVAL_NAME);
+    equal(isolatedLiveEnv.V2_NAVER_ROOM_MARKER_LIVE_APPROVED, undefined);
+    equal(isolatedLiveEnv.V2_N5_RENDER_STATE_DIR, stateDir("child-env-isolation"));
 
     const integrity = await verifyLiveIntegrity(liveEnv("integrity"));
     equal(integrity.liveAdapterBaselineCommit, BASELINE_COMMIT);
