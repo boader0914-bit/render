@@ -51,6 +51,7 @@ function envFor(stateDir, overrides = {}) {
     [ENV_NAMES.automaticRetry]: "0",
     [ENV_NAMES.fallback]: "0",
     [ENV_NAMES.operationalWrites]: "0",
+    [ENV_NAMES.publicManualLive]: "0",
     [ENV_NAMES.demoPublic]: "1",
     ...overrides
   };
@@ -85,7 +86,9 @@ async function main() {
     path.join(LOCAL_STATE_ROOT, `live-test-${process.pid}`),
     path.join(LOCAL_STATE_ROOT, `concurrency-test-${process.pid}`),
     path.join(LOCAL_STATE_ROOT, `provider-failure-test-${process.pid}`),
-    path.join(LOCAL_STATE_ROOT, `manual-unlimited-test-${process.pid}`)
+    path.join(LOCAL_STATE_ROOT, `manual-unlimited-test-${process.pid}`),
+    path.join(LOCAL_STATE_ROOT, `public-manual-test-${process.pid}`),
+    path.join(LOCAL_STATE_ROOT, `disabled-private-test-${process.pid}`)
   ];
   await Promise.all(roots.map((root) => fs.rm(root, { recursive: true, force: true })));
   const servers = [];
@@ -95,6 +98,7 @@ async function main() {
     equal(demoConfig.demoPublic, true);
     equal(demoConfig.dailyRequestBudget, 0);
     equal(demoConfig.operationalWrites, false);
+    equal(demoConfig.publicManualLive, false);
 
     const demoCoordinator = createCoordinator({ config: demoConfig });
     const demoServer = createServer({ coordinator: demoCoordinator });
@@ -139,7 +143,19 @@ async function main() {
     equal(status.value.mode, "demo-only");
     equal(status.value.liveEnabled, false);
     equal(status.value.authRequired, false);
+    equal(status.value.accessMode, "demo-public");
     equal(status.value.dailyLiveRequestsUsed, 0);
+
+    const disabledPrivateConfig = parseConfig(envFor(roots[6], {
+      [ENV_NAMES.demoPublic]: "0"
+    }));
+    const disabledPrivateCoordinator = createCoordinator({ config: disabledPrivateConfig });
+    const disabledPrivateServer = createServer({ coordinator: disabledPrivateCoordinator });
+    servers.push(disabledPrivateServer);
+    const disabledPrivateBase = await listen(disabledPrivateServer);
+    const disabledPrivateStatus = await jsonRequest(disabledPrivateBase, "/api/status");
+    equal(disabledPrivateStatus.value.authRequired, true);
+    equal(disabledPrivateStatus.value.accessMode, "disabled-private");
 
     const demoHeaders = { "content-type": "application/json" };
     const demoBody = requestBody("demo", "demo-request-0001");
@@ -277,6 +293,45 @@ async function main() {
     equal(liveStatus.value.dailyLiveRequestsUsed, 2);
     equal(liveStatus.value.dailyLiveRequestLimit, 2);
     equal(liveStatus.value.authRequired, true);
+    equal(liveStatus.value.accessMode, "operator-token");
+
+    let publicManualCalls = 0;
+    const publicManualConfig = parseConfig(envFor(roots[5], {
+      [ENV_NAMES.runEnabled]: "1",
+      [ENV_NAMES.dailyRequestBudget]: "2",
+      [ENV_NAMES.publicManualLive]: "1",
+      [ENV_NAMES.demoPublic]: "0"
+    }));
+    equal(publicManualConfig.liveEnabled, true);
+    equal(publicManualConfig.publicManualLive, true);
+    equal(publicManualConfig.unlimitedLiveRequests, false);
+    equal(publicManualConfig.operatorTokenSha256, "");
+    const publicManualCoordinator = createCoordinator({
+      config: publicManualConfig,
+      fetchImpl: async () => {
+        publicManualCalls += 1;
+        return new Response(createBasicPlaceDemoHtml("경남 글램핑"), {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" }
+        });
+      }
+    });
+    const publicManualServer = createServer({ coordinator: publicManualCoordinator });
+    servers.push(publicManualServer);
+    const publicManualBase = await listen(publicManualServer);
+    const publicManualStatus = await jsonRequest(publicManualBase, "/api/status");
+    equal(publicManualStatus.value.authRequired, false);
+    equal(publicManualStatus.value.accessMode, "tokenless-bounded");
+    equal(publicManualStatus.value.dailyLiveRequestLimit, 2);
+    const publicManualResult = await jsonRequest(publicManualBase, "/api/collect", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: requestBody("live", "public-manual-live-0001")
+    });
+    equal(publicManualResult.response.status, 200);
+    equal(publicManualResult.value.status, "completed");
+    equal(publicManualResult.value.externalRequests, 1);
+    equal(publicManualCalls, 1);
 
     let providerFailureCalls = 0;
     const providerFailureConfig = parseConfig(envFor(roots[3], {
@@ -462,6 +517,23 @@ async function main() {
     }))), "V2_BASIC_UI_CONFIG_INVALID");
     await rejectsCode(() => Promise.resolve().then(() => parseConfig(envFor(roots[2], {
       [ENV_NAMES.dailyRequestBudget]: "unlimited"
+    }))), "V2_BASIC_UI_CONFIG_INVALID");
+    await rejectsCode(() => Promise.resolve().then(() => parseConfig(envFor(roots[2], {
+      [ENV_NAMES.runEnabled]: "1",
+      [ENV_NAMES.dailyRequestBudget]: "unlimited",
+      [ENV_NAMES.publicManualLive]: "1"
+    }))), "V2_BASIC_UI_CONFIG_INVALID");
+    await rejectsCode(() => Promise.resolve().then(() => parseConfig(envFor(roots[2], {
+      [ENV_NAMES.runEnabled]: "1",
+      [ENV_NAMES.dailyRequestBudget]: "1",
+      [ENV_NAMES.publicManualLive]: "1",
+      [ENV_NAMES.operatorTokenSha256]: crypto.createHash("sha256").update(TOKEN).digest("hex")
+    }))), "V2_BASIC_UI_CONFIG_INVALID");
+    await rejectsCode(() => Promise.resolve().then(() => parseConfig(envFor(roots[2], {
+      [ENV_NAMES.publicManualLive]: "1"
+    }))), "V2_BASIC_UI_CONFIG_INVALID");
+    await rejectsCode(() => Promise.resolve().then(() => parseConfig(envFor(roots[2], {
+      [ENV_NAMES.publicManualLive]: "2"
     }))), "V2_BASIC_UI_CONFIG_INVALID");
 
     ok(assertions >= 74);

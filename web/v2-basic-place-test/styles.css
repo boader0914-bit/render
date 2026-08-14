@@ -254,7 +254,7 @@ h2 {
 
 .collector-form {
   display: grid;
-  grid-template-columns: 170px minmax(260px, 1.5fr) minmax(220px, 1fr) 126px;
+  grid-template-columns: 170px minmax(260px, 1fr) 126px;
   align-items: end;
   gap: 12px;
 }
@@ -757,15 +757,11 @@ tbody tr:last-child td {
 
 @media (max-width: 1040px) {
   .collector-form {
-    grid-template-columns: 160px 1fr 1fr;
+    grid-template-columns: 160px 1fr 126px;
   }
 
   .primary-action {
     grid-column: 3;
-  }
-
-  .token-field {
-    grid-column: 2;
   }
 
   .diagnostic-list {
@@ -817,7 +813,6 @@ tbody tr:last-child td {
 
   .mode-fieldset,
   .keyword-field,
-  .token-field,
   .primary-action {
     grid-column: 1;
   }

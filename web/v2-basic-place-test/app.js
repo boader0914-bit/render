@@ -8,7 +8,6 @@ const elements = {
   modeDemo: document.querySelector("#modeDemo"),
   modeLive: document.querySelector("#modeLive"),
   keyword: document.querySelector("#keywordInput"),
-  token: document.querySelector("#tokenInput"),
   collectButton: document.querySelector("#collectButton"),
   buttonLabel: document.querySelector(".button-label"),
   message: document.querySelector("#requestMessage"),
@@ -49,7 +48,7 @@ let bookmarkletReady = false;
 let pendingAdCapture = null;
 
 const ERROR_LABELS = Object.freeze({
-  V2_BASIC_UI_UNAUTHORIZED: "관리자 토큰을 확인해 주세요.",
+  V2_BASIC_UI_UNAUTHORIZED: "이 배포에서는 Live 수집을 사용할 수 없습니다.",
   V2_BASIC_UI_LIVE_DISABLED: "Live 수집이 비활성화되어 있습니다.",
   V2_BASIC_UI_DAILY_BUDGET_EXHAUSTED: "오늘의 Live 요청 한도를 모두 사용했습니다.",
   V2_BASIC_UI_RATE_LIMITED: "다음 수동 수집까지 잠시 기다려 주세요.",
@@ -86,9 +85,11 @@ function setLoading(loading) {
   elements.collectButton.dataset.loading = String(loading);
   elements.buttonLabel.textContent = loading ? "수집 중" : "수집 실행";
   elements.modeDemo.disabled = loading;
-  elements.modeLive.disabled = loading || !serviceStatus?.liveEnabled || serviceStatus?.providerBlocked === true;
+  elements.modeLive.disabled = loading
+    || !serviceStatus?.liveEnabled
+    || serviceStatus?.authRequired === true
+    || serviceStatus?.providerBlocked === true;
   elements.keyword.disabled = loading;
-  elements.token.disabled = loading;
 }
 
 function selectedMode() {
@@ -97,8 +98,6 @@ function selectedMode() {
 
 function updateModeState() {
   const live = selectedMode() === "live";
-  elements.token.required = live || serviceStatus?.authRequired === true;
-  elements.token.placeholder = live ? "Live 관리자 토큰" : "배포 환경에서 입력";
   setMessage(live ? "Live · 네이버 요청 1회" : "Demo · 외부 요청 0회");
 }
 
@@ -400,13 +399,15 @@ async function loadStatus() {
     const value = await response.json();
     if (!response.ok || value.status !== "ready") throw new Error(value.code || "STATUS_FAILED");
     serviceStatus = value;
-    elements.modeLive.disabled = !value.liveEnabled || value.providerBlocked === true;
-    if (!value.liveEnabled || value.providerBlocked) elements.modeDemo.checked = true;
+    elements.modeLive.disabled = !value.liveEnabled || value.authRequired === true || value.providerBlocked === true;
+    if (!value.liveEnabled || value.authRequired || value.providerBlocked) elements.modeDemo.checked = true;
     const limit = value.liveRequestPolicy === "manual-unlimited" ? "제한 없음" : value.dailyLiveRequestLimit;
     elements.budgetValue.textContent = `${value.dailyLiveRequestsUsed} / ${limit}`;
     setServiceState(
-      value.providerBlocked ? "error" : "ready",
-      value.providerBlocked ? `Live 차단 · HTTP ${value.providerBlockStatus}` : value.liveEnabled ? "Live 사용 가능" : "Demo 준비됨"
+      value.providerBlocked || value.authRequired ? "error" : "ready",
+      value.providerBlocked
+        ? `Live 차단 · HTTP ${value.providerBlockStatus}`
+        : value.authRequired ? "토큰 없는 배포 필요" : value.liveEnabled ? "Live 사용 가능" : "Demo 준비됨"
     );
     updateModeState();
   } catch {
@@ -428,18 +429,11 @@ elements.form.addEventListener("submit", async (event) => {
     elements.keyword.focus();
     return;
   }
-  if ((mode === "live" || serviceStatus?.authRequired) && !elements.token.value) {
-    setMessage("관리자 토큰을 입력해 주세요.", "error");
-    elements.token.focus();
-    return;
-  }
-
   setLoading(true);
   setMessage(mode === "live" ? "Live 수집을 실행하고 있습니다." : "Demo 결과를 생성하고 있습니다.");
   try {
     const idempotencyKey = globalThis.crypto?.randomUUID?.() || `ui-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const headers = { "content-type": "application/json", accept: "application/json" };
-    if (elements.token.value) headers["x-v2-basic-operator-token"] = elements.token.value;
     const response = await fetch("/api/collect", {
       method: "POST",
       headers,

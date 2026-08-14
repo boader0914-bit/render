@@ -35,6 +35,7 @@ const ENV_NAMES = Object.freeze({
   fallback: "V2_BASIC_UI_FALLBACK",
   operationalWrites: "V2_BASIC_UI_OPERATIONAL_WRITES",
   operatorTokenSha256: "V2_BASIC_UI_OPERATOR_TOKEN_SHA256",
+  publicManualLive: "V2_BASIC_UI_PUBLIC_MANUAL_LIVE",
   demoPublic: "V2_BASIC_UI_DEMO_PUBLIC"
 });
 
@@ -86,13 +87,18 @@ function parseConfig(env = process.env) {
   const automaticRetry = String(env[ENV_NAMES.automaticRetry] ?? "0");
   const fallback = String(env[ENV_NAMES.fallback] ?? "0");
   const operationalWrites = String(env[ENV_NAMES.operationalWrites] ?? "0");
+  const publicManualLiveRaw = String(env[ENV_NAMES.publicManualLive] ?? "0");
   if (!["0", "1"].includes(runEnabledRaw)) {
     fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Run enabled must be zero or one", 500);
+  }
+  if (!["0", "1"].includes(publicManualLiveRaw)) {
+    fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Public manual Live must be zero or one", 500);
   }
   if (automaticRetry !== "0" || fallback !== "0" || operationalWrites !== "0") {
     fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Safety gates must remain zero", 500);
   }
   const liveEnabled = runEnabledRaw === "1";
+  const publicManualLive = publicManualLiveRaw === "1";
   const unlimitedLiveRequests = dailyBudgetRaw === UNLIMITED_REQUEST_BUDGET;
   const dailyRequestBudget = unlimitedLiveRequests ? null : integer(dailyBudgetRaw);
   if (
@@ -107,9 +113,13 @@ function parseConfig(env = process.env) {
   if (operatorTokenSha256 && !/^[a-f0-9]{64}$/u.test(operatorTokenSha256)) {
     fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Operator token digest is invalid", 500);
   }
-  if (liveEnabled && !operatorTokenSha256) {
+  if (liveEnabled && !operatorTokenSha256 && !publicManualLive) {
     fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Live mode requires an operator token digest", 500);
   }
+  if (
+    publicManualLive
+    && (!liveEnabled || unlimitedLiveRequests || operatorTokenSha256 || dailyRequestBudget < 1)
+  ) fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Public manual Live mode requires a finite tokenless budget", 500);
 
   const configuredState = String(env[ENV_NAMES.stateDir] || "").trim();
   const stateDir = configuredState || path.join(LOCAL_STATE_ROOT, "manual");
@@ -147,6 +157,7 @@ function parseConfig(env = process.env) {
     fallback: false,
     operationalWrites: false,
     operatorTokenSha256,
+    publicManualLive,
     deployedCommit: deployedCommit || null
   });
 }
@@ -158,10 +169,23 @@ function safeEqualHex(left, right) {
 
 function authorized(request, mode, config) {
   if (mode === "demo" && config.demoPublic) return true;
+  if (config.publicManualLive) return true;
   if (!config.operatorTokenSha256) return false;
   const token = String(request.headers[OPERATOR_TOKEN_HEADER] || "");
   if (token.length < 16 || token.length > 512) return false;
   return safeEqualHex(sha256(Buffer.from(token, "utf8")), config.operatorTokenSha256);
+}
+
+function accessMetadata(config) {
+  const accessMode = config.publicManualLive
+    ? "tokenless-bounded"
+    : config.operatorTokenSha256
+      ? "operator-token"
+      : config.demoPublic
+        ? "demo-public"
+        : "disabled-private";
+  const authRequired = config.liveEnabled ? !config.publicManualLive : !config.demoPublic;
+  return Object.freeze({ accessMode, authRequired });
 }
 
 function normalizeCollectRequest(value) {
@@ -478,13 +502,15 @@ function createCoordinator(options = {}) {
     const usage = await readJsonIfPresent(paths.usage);
     const validatedUsage = validateUsage(usage, config, instant);
     const providerBlock = await readProviderBlock(paths, instant);
+    const access = accessMetadata(config);
     return Object.freeze({
       schemaVersion: STATUS_SCHEMA_VERSION,
       status: "ready",
       mode: config.liveEnabled ? "live-enabled" : "demo-only",
       demoEnabled: true,
       liveEnabled: config.liveEnabled,
-      authRequired: !config.demoPublic,
+      authRequired: access.authRequired,
+      accessMode: access.accessMode,
       active,
       dailyLiveRequestLimit: config.dailyRequestBudget,
       dailyLiveRequestsUsed: validatedUsage.consumed,
@@ -664,6 +690,7 @@ function createServer(options = {}) {
 
 async function startServer(env = process.env) {
   const config = parseConfig(env);
+  const access = accessMetadata(config);
   const coordinator = createCoordinator({ config });
   const server = createServer({ coordinator });
   await new Promise((resolve, reject) => {
@@ -682,6 +709,8 @@ async function startServer(env = process.env) {
     automaticRetry: false,
     fallback: false,
     operationalWrites: false,
+    authRequired: access.authRequired,
+    accessMode: access.accessMode,
     rawProviderResponseStored: false,
     deployedCommit: config.deployedCommit
   })}\n`);
