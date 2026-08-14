@@ -23,6 +23,8 @@ const STATUS_SCHEMA_VERSION = "v2-basic-place-test-ui-status.v1";
 const OPERATOR_TOKEN_HEADER = "x-v2-basic-operator-token";
 const MAX_REQUEST_BODY_BYTES = 8 * 1024;
 const MAX_DAILY_LIVE_REQUESTS = 20;
+const MIN_MANUAL_LIVE_INTERVAL_MS = 3_000;
+const UNLIMITED_REQUEST_BUDGET = "unlimited";
 const ENV_NAMES = Object.freeze({
   expectedCommit: "V2_BASIC_UI_EXPECTED_DEPLOY_COMMIT",
   stateDir: "V2_BASIC_UI_STATE_DIR",
@@ -82,13 +84,14 @@ function parseConfig(env = process.env) {
     fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Safety gates must remain zero", 500);
   }
   const liveEnabled = runEnabledRaw === "1";
-  const dailyRequestBudget = integer(dailyBudgetRaw);
+  const unlimitedLiveRequests = dailyBudgetRaw === UNLIMITED_REQUEST_BUDGET;
+  const dailyRequestBudget = unlimitedLiveRequests ? null : integer(dailyBudgetRaw);
   if (
-    dailyRequestBudget === null
-    || dailyRequestBudget < 0
-    || dailyRequestBudget > MAX_DAILY_LIVE_REQUESTS
-    || (liveEnabled && dailyRequestBudget < 1)
-    || (!liveEnabled && dailyRequestBudget !== 0)
+    (!unlimitedLiveRequests && dailyRequestBudget === null)
+    || (!unlimitedLiveRequests && dailyRequestBudget < 0)
+    || (!unlimitedLiveRequests && dailyRequestBudget > MAX_DAILY_LIVE_REQUESTS)
+    || (liveEnabled && !unlimitedLiveRequests && dailyRequestBudget < 1)
+    || (!liveEnabled && (unlimitedLiveRequests || dailyRequestBudget !== 0))
   ) fail("V2_BASIC_UI_CONFIG_INVALID", "config", "Daily request budget is invalid", 500);
 
   const operatorTokenSha256 = String(env[ENV_NAMES.operatorTokenSha256] || "").trim().toLowerCase();
@@ -126,6 +129,9 @@ function parseConfig(env = process.env) {
     render,
     stateDir: path.resolve(stateDir),
     liveEnabled,
+    unlimitedLiveRequests,
+    liveRequestPolicy: unlimitedLiveRequests ? "manual-unlimited" : "daily-bounded",
+    minimumLiveIntervalMs: unlimitedLiveRequests ? MIN_MANUAL_LIVE_INTERVAL_MS : 0,
     demoPublic,
     dailyRequestBudget,
     automaticRetry: false,
@@ -187,9 +193,11 @@ function statePaths(root, requestHash, now) {
     terminalsRoot: path.join(root, "terminals"),
     artifactsRoot: path.join(root, "artifacts"),
     usageRoot: path.join(root, "usage"),
+    providerBlocksRoot: path.join(root, "provider-blocks"),
     claim: path.join(root, "claims", `${requestHash}.json`),
     terminal: path.join(root, "terminals", `${requestHash}.json`),
-    usage: path.join(root, "usage", `${dateKey(now)}.json`)
+    usage: path.join(root, "usage", `${dateKey(now)}.json`),
+    providerBlock: path.join(root, "provider-blocks", `${dateKey(now)}.json`)
   });
 }
 
@@ -198,7 +206,8 @@ async function initializeState(paths) {
     fs.mkdir(paths.claimsRoot, { recursive: true }),
     fs.mkdir(paths.terminalsRoot, { recursive: true }),
     fs.mkdir(paths.artifactsRoot, { recursive: true }),
-    fs.mkdir(paths.usageRoot, { recursive: true })
+    fs.mkdir(paths.usageRoot, { recursive: true }),
+    fs.mkdir(paths.providerBlocksRoot, { recursive: true })
   ]);
 }
 
@@ -236,8 +245,25 @@ async function writeAtomicJson(filePath, value) {
 }
 
 function validateUsage(existing, config, now) {
-  if (!existing) return Object.freeze({ consumed: 0, limit: config.dailyRequestBudget });
+  if (!existing) return Object.freeze({ consumed: 0, limit: config.dailyRequestBudget, lastReservedAt: null });
   const consumed = integer(existing.consumed);
+  if (config.unlimitedLiveRequests) {
+    const lastReservedAtMs = Date.parse(String(existing.lastReservedAt || ""));
+    if (
+      existing.schemaVersion !== "v2-basic-place-test-ui-usage.v2"
+      || existing.date !== dateKey(now)
+      || existing.policy !== "manual-unlimited"
+      || existing.limit !== null
+      || consumed === null
+      || consumed < 0
+      || !Number.isFinite(lastReservedAtMs)
+    ) fail("V2_BASIC_UI_STATE_UNCERTAIN", "budget", "Manual live usage state is invalid", 503);
+    return Object.freeze({
+      consumed,
+      limit: null,
+      lastReservedAt: new Date(lastReservedAtMs).toISOString()
+    });
+  }
   if (
     existing.schemaVersion !== "v2-basic-place-test-ui-usage.v1"
     || existing.date !== dateKey(now)
@@ -246,12 +272,32 @@ function validateUsage(existing, config, now) {
     || consumed > config.dailyRequestBudget
     || integer(existing.limit) !== config.dailyRequestBudget
   ) fail("V2_BASIC_UI_STATE_UNCERTAIN", "budget", "Daily usage state is invalid", 503);
-  return Object.freeze({ consumed, limit: config.dailyRequestBudget });
+  return Object.freeze({ consumed, limit: config.dailyRequestBudget, lastReservedAt: null });
 }
 
 async function reserveLiveBudget(paths, config, now) {
   const existing = await readJsonIfPresent(paths.usage);
-  const { consumed } = validateUsage(existing, config, now);
+  const { consumed, lastReservedAt } = validateUsage(existing, config, now);
+  if (config.unlimitedLiveRequests) {
+    const elapsedMs = lastReservedAt === null ? Number.POSITIVE_INFINITY : now.getTime() - Date.parse(lastReservedAt);
+    if (elapsedMs < config.minimumLiveIntervalMs) {
+      fail("V2_BASIC_UI_RATE_LIMITED", "request-spacing", "Manual live requests are too close together", 429, {
+        retryAfterMs: config.minimumLiveIntervalMs - Math.max(0, elapsedMs),
+        externalRequests: 0
+      });
+    }
+    const next = Object.freeze({
+      schemaVersion: "v2-basic-place-test-ui-usage.v2",
+      date: dateKey(now),
+      policy: "manual-unlimited",
+      consumed: consumed + 1,
+      limit: null,
+      lastReservedAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    });
+    await writeAtomicJson(paths.usage, next);
+    return next;
+  }
   if (consumed >= config.dailyRequestBudget) {
     fail("V2_BASIC_UI_DAILY_BUDGET_EXHAUSTED", "budget", "Daily live request budget is exhausted", 429, {
       consumed,
@@ -267,6 +313,39 @@ async function reserveLiveBudget(paths, config, now) {
   });
   await writeAtomicJson(paths.usage, next);
   return next;
+}
+
+function validateProviderBlock(existing, now) {
+  if (!existing) return null;
+  const providerStatus = integer(existing.providerStatus);
+  const blockedAtMs = Date.parse(String(existing.blockedAt || ""));
+  if (
+    existing.schemaVersion !== "v2-basic-place-test-ui-provider-block.v1"
+    || existing.date !== dateKey(now)
+    || ![403, 429].includes(providerStatus)
+    || !Number.isFinite(blockedAtMs)
+  ) fail("V2_BASIC_UI_STATE_UNCERTAIN", "provider-circuit", "Provider circuit state is invalid", 503);
+  return Object.freeze({
+    providerStatus,
+    providerStatusClass: `${Math.floor(providerStatus / 100)}xx`,
+    blockedAt: new Date(blockedAtMs).toISOString()
+  });
+}
+
+async function readProviderBlock(paths, now) {
+  return validateProviderBlock(await readJsonIfPresent(paths.providerBlock), now);
+}
+
+async function writeProviderBlock(paths, now, providerStatus) {
+  if (![403, 429].includes(providerStatus)) return;
+  await writeAtomicJson(paths.providerBlock, Object.freeze({
+    schemaVersion: "v2-basic-place-test-ui-provider-block.v1",
+    date: dateKey(now),
+    providerStatus,
+    blockedAt: now.toISOString(),
+    externalRequestsAtBlock: 1,
+    automaticRetry: false
+  }));
 }
 
 async function readArtifacts(artifactDirectory) {
@@ -349,7 +428,17 @@ async function defaultRunCollection({ request, requestHash, paths, config, fetch
   });
 }
 
+function safeProviderStatus(error) {
+  const status = Number(error?.details?.status ?? error?.evidence?.status);
+  return Number.isInteger(status) && status >= 100 && status <= 599 ? status : null;
+}
+
+function providerStatusClass(status) {
+  return status === null ? null : `${Math.floor(status / 100)}xx`;
+}
+
 function publicFailure(error, requestHash = null) {
+  const providerStatus = safeProviderStatus(error);
   return Object.freeze({
     schemaVersion: RESULT_SCHEMA_VERSION,
     event: "v2_basic_place_test_ui_failed",
@@ -359,6 +448,8 @@ function publicFailure(error, requestHash = null) {
     code: String(error?.code || "V2_BASIC_UI_UNEXPECTED").slice(0, 120),
     stage: String(error?.stage || "unexpected").slice(0, 80),
     retryable: false,
+    providerStatus,
+    providerStatusClass: providerStatusClass(providerStatus),
     externalRequests: Number(error?.details?.externalRequests || error?.evidence?.externalRequests || 0),
     operationalWrites: 0
   });
@@ -377,6 +468,7 @@ function createCoordinator(options = {}) {
     await initializeState(paths);
     const usage = await readJsonIfPresent(paths.usage);
     const validatedUsage = validateUsage(usage, config, instant);
+    const providerBlock = await readProviderBlock(paths, instant);
     return Object.freeze({
       schemaVersion: STATUS_SCHEMA_VERSION,
       status: "ready",
@@ -387,6 +479,10 @@ function createCoordinator(options = {}) {
       active,
       dailyLiveRequestLimit: config.dailyRequestBudget,
       dailyLiveRequestsUsed: validatedUsage.consumed,
+      liveRequestPolicy: config.liveRequestPolicy,
+      minimumLiveIntervalMs: config.minimumLiveIntervalMs,
+      providerBlocked: providerBlock !== null,
+      providerBlockStatus: providerBlock?.providerStatus || null,
       automaticRetry: false,
       fallback: false,
       operationalWrites: false,
@@ -412,6 +508,13 @@ function createCoordinator(options = {}) {
     if (await readJsonIfPresent(paths.claim)) {
       fail("V2_BASIC_UI_RESULT_UNCERTAIN", "claim", "A claim exists without a terminal result", 409);
     }
+    const providerBlock = request.mode === "live" ? await readProviderBlock(paths, instant) : null;
+    if (providerBlock) {
+      fail("V2_BASIC_UI_PROVIDER_CIRCUIT_OPEN", "provider-circuit", "Live collection is blocked for the current day", 503, {
+        status: providerBlock.providerStatus,
+        externalRequests: 0
+      });
+    }
     if (active) fail("V2_BASIC_UI_BUSY", "concurrency", "Another collection is active", 409);
 
     active = true;
@@ -433,6 +536,7 @@ function createCoordinator(options = {}) {
       } catch (error) {
         const failure = publicFailure(error, requestHash);
         await writeAtomicJson(paths.terminal, failure);
+        if (request.mode === "live") await writeProviderBlock(paths, instant, failure.providerStatus);
         throw error;
       }
       await writeAtomicJson(paths.terminal, result);
@@ -489,12 +593,15 @@ function assertSameOrigin(request) {
 }
 
 function safeHttpFailure(error) {
+  const providerStatus = safeProviderStatus(error);
   return Object.freeze({
     schemaVersion: "v2-basic-place-test-ui-error.v1",
     status: "failed",
     code: String(error?.code || "V2_BASIC_UI_UNEXPECTED").slice(0, 120),
     stage: String(error?.stage || "unexpected").slice(0, 80),
     retryable: false,
+    providerStatus,
+    providerStatusClass: providerStatusClass(providerStatus),
     externalRequests: Number(error?.details?.externalRequests || error?.evidence?.externalRequests || 0),
     operationalWrites: 0
   });
@@ -556,6 +663,8 @@ async function startServer(env = process.env) {
     mode: config.liveEnabled ? "live-enabled" : "demo-only",
     liveEnabled: config.liveEnabled,
     dailyLiveRequestLimit: config.dailyRequestBudget,
+    liveRequestPolicy: config.liveRequestPolicy,
+    minimumLiveIntervalMs: config.minimumLiveIntervalMs,
     automaticRetry: false,
     fallback: false,
     operationalWrites: false,
@@ -576,9 +685,11 @@ module.exports = {
   ENV_NAMES,
   LOCAL_STATE_ROOT,
   MAX_DAILY_LIVE_REQUESTS,
+  MIN_MANUAL_LIVE_INTERVAL_MS,
   OPERATOR_TOKEN_HEADER,
   RENDER_STATE_ROOT,
   RESULT_SCHEMA_VERSION,
+  UNLIMITED_REQUEST_BUDGET,
   V2BasicUiError,
   authorized,
   createCoordinator,

@@ -44,4 +44,7 @@ services:
         sync: false
 
 # Readiness deployment permits authenticated Demo collection only.
-# Live collection requires a separate approval to set RUN_ENABLED=1 and a bounded daily budget.
+# Manual-unlimited Live requires a separate approval to set RUN_ENABLED=1 and
+# DAILY_REQUEST_BUDGET=unlimited. Each submission still permits one Provider
+# request, enforces concurrency 1 and a three-second minimum interval, and opens
+# a same-day circuit on HTTP 403 or 429.

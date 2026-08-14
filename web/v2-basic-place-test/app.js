@@ -44,11 +44,13 @@ const ERROR_LABELS = Object.freeze({
   V2_BASIC_UI_UNAUTHORIZED: "관리자 토큰을 확인해 주세요.",
   V2_BASIC_UI_LIVE_DISABLED: "Live 수집이 비활성화되어 있습니다.",
   V2_BASIC_UI_DAILY_BUDGET_EXHAUSTED: "오늘의 Live 요청 한도를 모두 사용했습니다.",
+  V2_BASIC_UI_RATE_LIMITED: "다음 수동 수집까지 잠시 기다려 주세요.",
+  V2_BASIC_UI_PROVIDER_CIRCUIT_OPEN: "네이버 차단 신호로 오늘의 Live 수집을 중지했습니다.",
   V2_BASIC_UI_BUSY: "다른 수집이 진행 중입니다.",
   V2_BASIC_UI_RESULT_UNCERTAIN: "이전 실행 결과가 확정되지 않아 중단했습니다.",
   V2_BASIC_UI_ORIGIN_BLOCKED: "허용되지 않은 요청 출처입니다.",
   V2_BASIC_PLACE_ACCESS_BLOCKED: "네이버 접근이 차단되어 수집을 중단했습니다.",
-  V2_BASIC_PLACE_HTTP_ERROR: "네이버 응답 상태를 확인할 수 없습니다."
+  V2_BASIC_PLACE_HTTP_ERROR: "네이버가 성공 응답을 반환하지 않았습니다."
 });
 
 const DIAGNOSTIC_LABELS = Object.freeze({
@@ -76,7 +78,7 @@ function setLoading(loading) {
   elements.collectButton.dataset.loading = String(loading);
   elements.buttonLabel.textContent = loading ? "수집 중" : "수집 실행";
   elements.modeDemo.disabled = loading;
-  elements.modeLive.disabled = loading || !serviceStatus?.liveEnabled;
+  elements.modeLive.disabled = loading || !serviceStatus?.liveEnabled || serviceStatus?.providerBlocked === true;
   elements.keyword.disabled = loading;
   elements.token.disabled = loading;
 }
@@ -238,10 +240,14 @@ async function loadStatus() {
     const value = await response.json();
     if (!response.ok || value.status !== "ready") throw new Error(value.code || "STATUS_FAILED");
     serviceStatus = value;
-    elements.modeLive.disabled = !value.liveEnabled;
-    if (!value.liveEnabled) elements.modeDemo.checked = true;
-    elements.budgetValue.textContent = `${value.dailyLiveRequestsUsed} / ${value.dailyLiveRequestLimit}`;
-    setServiceState("ready", value.liveEnabled ? "Live 사용 가능" : "Demo 준비됨");
+    elements.modeLive.disabled = !value.liveEnabled || value.providerBlocked === true;
+    if (!value.liveEnabled || value.providerBlocked) elements.modeDemo.checked = true;
+    const limit = value.liveRequestPolicy === "manual-unlimited" ? "제한 없음" : value.dailyLiveRequestLimit;
+    elements.budgetValue.textContent = `${value.dailyLiveRequestsUsed} / ${limit}`;
+    setServiceState(
+      value.providerBlocked ? "error" : "ready",
+      value.providerBlocked ? `Live 차단 · HTTP ${value.providerBlockStatus}` : value.liveEnabled ? "Live 사용 가능" : "Demo 준비됨"
+    );
     updateModeState();
   } catch {
     setServiceState("error", "상태 확인 실패");
@@ -283,13 +289,16 @@ elements.form.addEventListener("submit", async (event) => {
     if (!response.ok || value.status !== "completed") {
       const error = new Error(value.code || "V2_BASIC_UI_REQUEST_FAILED");
       error.code = value.code;
+      error.providerStatus = Number.isInteger(value.providerStatus) ? value.providerStatus : null;
       throw error;
     }
     renderResult(value);
     await loadStatus();
     setMessage(`${value.mode === "live" ? "Live" : "Demo"} 수집 완료 · ${value.keyword}`, "success");
   } catch (error) {
-    setMessage(ERROR_LABELS[error.code] || `수집이 중단됐습니다. ${error.code || "UNKNOWN"}`, "error");
+    const providerStatus = Number.isInteger(error.providerStatus) ? ` (HTTP ${error.providerStatus})` : "";
+    await loadStatus();
+    setMessage(`${ERROR_LABELS[error.code] || `수집이 중단됐습니다. ${error.code || "UNKNOWN"}`}${providerStatus}`, "error");
   } finally {
     setLoading(false);
   }

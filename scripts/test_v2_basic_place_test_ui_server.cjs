@@ -83,7 +83,9 @@ async function main() {
   const roots = [
     path.join(LOCAL_STATE_ROOT, `server-test-${process.pid}`),
     path.join(LOCAL_STATE_ROOT, `live-test-${process.pid}`),
-    path.join(LOCAL_STATE_ROOT, `concurrency-test-${process.pid}`)
+    path.join(LOCAL_STATE_ROOT, `concurrency-test-${process.pid}`),
+    path.join(LOCAL_STATE_ROOT, `provider-failure-test-${process.pid}`),
+    path.join(LOCAL_STATE_ROOT, `manual-unlimited-test-${process.pid}`)
   ];
   await Promise.all(roots.map((root) => fs.rm(root, { recursive: true, force: true })));
   const servers = [];
@@ -256,6 +258,121 @@ async function main() {
     equal(liveStatus.value.dailyLiveRequestLimit, 2);
     equal(liveStatus.value.authRequired, true);
 
+    let providerFailureCalls = 0;
+    const providerFailureConfig = parseConfig(envFor(roots[3], {
+      [ENV_NAMES.runEnabled]: "1",
+      [ENV_NAMES.dailyRequestBudget]: "1",
+      [ENV_NAMES.demoPublic]: "0",
+      [ENV_NAMES.operatorTokenSha256]: crypto.createHash("sha256").update(TOKEN).digest("hex")
+    }));
+    const providerFailureCoordinator = createCoordinator({
+      config: providerFailureConfig,
+      fetchImpl: async () => {
+        providerFailureCalls += 1;
+        return new Response("synthetic-provider-secret-body", {
+          status: 403,
+          headers: { "content-type": "text/html; charset=utf-8" }
+        });
+      }
+    });
+    const providerFailureServer = createServer({ coordinator: providerFailureCoordinator });
+    servers.push(providerFailureServer);
+    const providerFailureBase = await listen(providerFailureServer);
+    const providerFailure = await jsonRequest(providerFailureBase, "/api/collect", {
+      method: "POST",
+      headers: liveHeaders,
+      body: requestBody("live", "live-provider-failure-01")
+    });
+    equal(providerFailure.response.status, 500);
+    equal(providerFailure.value.code, "V2_BASIC_PLACE_HTTP_ERROR");
+    equal(providerFailure.value.stage, "provider-response");
+    equal(providerFailure.value.providerStatus, 403);
+    equal(providerFailure.value.providerStatusClass, "4xx");
+    equal(providerFailure.value.externalRequests, 1);
+    equal(providerFailureCalls, 1);
+    const providerFailureTerminalNames = await fs.readdir(path.join(roots[3], "terminals"));
+    equal(providerFailureTerminalNames.length, 1);
+    const providerFailureTerminal = JSON.parse(await fs.readFile(
+      path.join(roots[3], "terminals", providerFailureTerminalNames[0]),
+      "utf8"
+    ));
+    equal(providerFailureTerminal.providerStatus, 403);
+    equal(providerFailureTerminal.providerStatusClass, "4xx");
+    assert.doesNotMatch(JSON.stringify(providerFailureTerminal), /synthetic-provider-secret-body/iu);
+    assertions += 1;
+    const providerBlockedStatus = await jsonRequest(providerFailureBase, "/api/status");
+    equal(providerBlockedStatus.value.providerBlocked, true);
+    equal(providerBlockedStatus.value.providerBlockStatus, 403);
+    const providerCircuitBlocked = await jsonRequest(providerFailureBase, "/api/collect", {
+      method: "POST",
+      headers: liveHeaders,
+      body: requestBody("live", "live-provider-blocked-02")
+    });
+    equal(providerCircuitBlocked.response.status, 503);
+    equal(providerCircuitBlocked.value.code, "V2_BASIC_UI_PROVIDER_CIRCUIT_OPEN");
+    equal(providerCircuitBlocked.value.providerStatus, 403);
+    equal(providerCircuitBlocked.value.externalRequests, 0);
+    equal(providerFailureCalls, 1);
+
+    let unlimitedNow = new Date("2026-08-14T15:00:00.000Z");
+    let unlimitedFixtureCalls = 0;
+    const unlimitedConfig = parseConfig(envFor(roots[4], {
+      [ENV_NAMES.runEnabled]: "1",
+      [ENV_NAMES.dailyRequestBudget]: "unlimited",
+      [ENV_NAMES.demoPublic]: "0",
+      [ENV_NAMES.operatorTokenSha256]: crypto.createHash("sha256").update(TOKEN).digest("hex")
+    }));
+    equal(unlimitedConfig.unlimitedLiveRequests, true);
+    equal(unlimitedConfig.dailyRequestBudget, null);
+    equal(unlimitedConfig.liveRequestPolicy, "manual-unlimited");
+    equal(unlimitedConfig.minimumLiveIntervalMs, 3000);
+    const unlimitedCoordinator = createCoordinator({
+      config: unlimitedConfig,
+      now: () => new Date(unlimitedNow.getTime()),
+      fetchImpl: async () => {
+        unlimitedFixtureCalls += 1;
+        return new Response(createBasicPlaceDemoHtml("경남 글램핑"), {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" }
+        });
+      }
+    });
+    const unlimitedServer = createServer({ coordinator: unlimitedCoordinator });
+    servers.push(unlimitedServer);
+    const unlimitedBase = await listen(unlimitedServer);
+    const unlimitedFirst = await jsonRequest(unlimitedBase, "/api/collect", {
+      method: "POST",
+      headers: liveHeaders,
+      body: requestBody("live", "manual-unlimited-live-0001")
+    });
+    equal(unlimitedFirst.response.status, 200);
+    equal(unlimitedFirst.value.externalRequests, 1);
+    equal(unlimitedFixtureCalls, 1);
+    const intervalBlocked = await jsonRequest(unlimitedBase, "/api/collect", {
+      method: "POST",
+      headers: liveHeaders,
+      body: requestBody("live", "manual-unlimited-live-0002")
+    });
+    equal(intervalBlocked.response.status, 429);
+    equal(intervalBlocked.value.code, "V2_BASIC_UI_RATE_LIMITED");
+    equal(intervalBlocked.value.externalRequests, 0);
+    equal(unlimitedFixtureCalls, 1);
+    for (let ordinal = 2; ordinal <= 21; ordinal += 1) {
+      unlimitedNow = new Date(unlimitedNow.getTime() + 3000);
+      const result = await jsonRequest(unlimitedBase, "/api/collect", {
+        method: "POST",
+        headers: liveHeaders,
+        body: requestBody("live", `manual-unlimited-live-${String(ordinal).padStart(4, "0")}`)
+      });
+      equal(result.response.status, 200);
+    }
+    equal(unlimitedFixtureCalls, 21);
+    const unlimitedStatus = await jsonRequest(unlimitedBase, "/api/status");
+    equal(unlimitedStatus.value.liveRequestPolicy, "manual-unlimited");
+    equal(unlimitedStatus.value.dailyLiveRequestLimit, null);
+    equal(unlimitedStatus.value.dailyLiveRequestsUsed, 21);
+    equal(unlimitedStatus.value.providerBlocked, false);
+
     const usageFiles = await fs.readdir(path.join(roots[1], "usage"));
     equal(usageFiles.length, 1);
     await fs.writeFile(path.join(roots[1], "usage", usageFiles[0]), '{"consumed":"invalid"}\n', "utf8");
@@ -322,6 +439,9 @@ async function main() {
     }))), "V2_BASIC_UI_CONFIG_INVALID");
     await rejectsCode(() => Promise.resolve().then(() => parseConfig(envFor(roots[2], {
       [ENV_NAMES.automaticRetry]: "1"
+    }))), "V2_BASIC_UI_CONFIG_INVALID");
+    await rejectsCode(() => Promise.resolve().then(() => parseConfig(envFor(roots[2], {
+      [ENV_NAMES.dailyRequestBudget]: "unlimited"
     }))), "V2_BASIC_UI_CONFIG_INVALID");
 
     ok(assertions >= 74);
