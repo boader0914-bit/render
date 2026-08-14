@@ -119,6 +119,12 @@ async function main() {
     match(browserContract.headers.get("content-type"), /text\/javascript/u);
     match(browserContractSource, /V2NaverVisiblePlaceAdContract/u);
 
+    const handoffContract = await fetch(`${demoBase}/naver-ad-snapshot-handoff-contract.js`);
+    const handoffContractSource = await handoffContract.text();
+    equal(handoffContract.status, 200);
+    match(handoffContract.headers.get("content-type"), /text\/javascript/u);
+    match(handoffContractSource, /V2NaverAdSnapshotHandoffContract/u);
+
     const bookmarkletResponse = await fetch(`${demoBase}/naver-ad-bookmarklet.txt`);
     const bookmarklet = (await bookmarkletResponse.text()).trim();
     equal(bookmarkletResponse.status, 200);

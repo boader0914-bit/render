@@ -4,6 +4,11 @@ const assert = require("node:assert/strict");
 const vm = require("node:vm");
 const { bookmarkletUrl } = require("./v2_naver_ad_browser_transport.cjs");
 const { validateVisibleAdCaptureEnvelope } = require("./v2_naver_visible_place_ad_contract.cjs");
+const {
+  MESSAGE_TYPE,
+  createCaptureSearchUrl,
+  validateHandoffMessage
+} = require("./v2_naver_ad_snapshot_handoff_contract.cjs");
 
 let assertions = 0;
 
@@ -86,22 +91,25 @@ function documentFor(containers) {
   };
 }
 
-function execute(url, containers) {
+function execute(url, containers, options = {}) {
   let captured = null;
   let failure = null;
+  let metadata = null;
   const sandbox = {
     URL,
     Blob,
     setTimeout,
     document: documentFor(containers),
     location: new URL(url),
-    __V2_NAVER_AD_CAPTURE_TEST_HOOK__(value, error) {
+    opener: options.opener || null,
+    __V2_NAVER_AD_CAPTURE_TEST_HOOK__(value, error, delivery) {
       captured = value;
       failure = error;
+      metadata = delivery || null;
     }
   };
   vm.runInNewContext(bookmarkletUrl().slice("javascript:".length), sandbox, { timeout: 1000 });
-  return { captured, failure };
+  return { captured, failure, metadata };
 }
 
 function main() {
@@ -133,6 +141,34 @@ function main() {
   equal(result.captured.diagnostics.duplicateLinkCount, 6);
   equal(result.captured.diagnostics.rejectedContainerCount, 1);
   equal(result.captured.privacy.operationalWrites, 0);
+
+  const handoffCalls = [];
+  const nonce = "0123456789abcdef0123456789abcdef";
+  const handoffUrl = createCaptureSearchUrl({
+    keyword: "경남 글램핑",
+    nonce,
+    returnOrigin: "https://datalab.example"
+  });
+  const handedOff = execute(handoffUrl, containers, {
+    opener: {
+      postMessage(message, targetOrigin) {
+        handoffCalls.push({ message, targetOrigin });
+      }
+    }
+  });
+  equal(handedOff.failure, null);
+  equal(handedOff.metadata.handoffDelivered, true);
+  equal(handoffCalls.length, 1);
+  equal(handoffCalls[0].targetOrigin, "https://datalab.example");
+  equal(handoffCalls[0].message.type, MESSAGE_TYPE);
+  equal(validateHandoffMessage(handoffCalls[0].message, { expectedNonce: nonce }).advertisements.length, 4);
+  assert.doesNotMatch(JSON.stringify(handoffCalls[0].message), /ader\.naver\.com|secret-|tracking=|\bfu=/iu);
+  assertions += 1;
+
+  const invalidHandoff = execute(`${handoffUrl.split("#")[0]}#datalabCapture=${nonce}&datalabOrigin=http%3A%2F%2Fevil.example`, containers, {
+    opener: { postMessage() { throw new Error("must not post"); } }
+  });
+  equal(invalidHandoff.metadata.handoffDelivered, false);
 
   const validated = validateVisibleAdCaptureEnvelope(result.captured, {
     expectedQuery: "경남 글램핑",

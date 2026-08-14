@@ -46,6 +46,10 @@ const STATIC_FILES = Object.freeze({
   "/naver-visible-place-ad-contract.js": Object.freeze({
     filePath: path.join(ROOT, "scripts", "v2_naver_visible_place_ad_contract.cjs"),
     type: "text/javascript; charset=utf-8"
+  }),
+  "/naver-ad-snapshot-handoff-contract.js": Object.freeze({
+    filePath: path.join(ROOT, "scripts", "v2_naver_ad_snapshot_handoff_contract.cjs"),
+    type: "text/javascript; charset=utf-8"
   })
 });
 

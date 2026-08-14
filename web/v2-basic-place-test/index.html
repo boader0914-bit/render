@@ -83,9 +83,10 @@
           <h2 id="resultTitle">최근 결과</h2>
         </div>
         <div class="result-actions">
-          <a class="secondary-action tool-action" id="bookmarkletLink" href="#" draggable="true" aria-disabled="true" title="북마크바에 추가한 뒤 네이버 검색 화면에서 실행">광고 캡처</a>
+          <button type="button" class="secondary-action" id="openAdCapture" disabled title="현재 검색어로 네이버 광고 화면 열기">네이버 광고</button>
+          <a class="secondary-action tool-action" id="bookmarkletLink" href="#" draggable="true" aria-disabled="true" title="네이버 검색 화면용 캡처 도구">캡처 도구</a>
           <label class="secondary-action file-action" for="browserAdFile">
-            광고 JSON
+            스냅샷
             <input class="visually-hidden" id="browserAdFile" type="file" accept="application/json,.json" disabled>
           </label>
           <button type="button" class="secondary-action" id="clearBrowserAds" disabled>광고 복원</button>
@@ -195,6 +196,7 @@
   </template>
 
   <script src="/naver-visible-place-ad-contract.js" defer></script>
+  <script src="/naver-ad-snapshot-handoff-contract.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

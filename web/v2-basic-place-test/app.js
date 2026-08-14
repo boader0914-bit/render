@@ -12,6 +12,7 @@ const elements = {
   collectButton: document.querySelector("#collectButton"),
   buttonLabel: document.querySelector(".button-label"),
   message: document.querySelector("#requestMessage"),
+  openAdCapture: document.querySelector("#openAdCapture"),
   bookmarkletLink: document.querySelector("#bookmarkletLink"),
   browserAdFile: document.querySelector("#browserAdFile"),
   clearBrowserAds: document.querySelector("#clearBrowserAds"),
@@ -45,6 +46,7 @@ let serviceStatus = null;
 let latestResult = null;
 let serverResult = null;
 let bookmarkletReady = false;
+let pendingAdCapture = null;
 
 const ERROR_LABELS = Object.freeze({
   V2_BASIC_UI_UNAUTHORIZED: "관리자 토큰을 확인해 주세요.",
@@ -241,6 +243,36 @@ function browserAdContract() {
   return contract;
 }
 
+function snapshotHandoffContract() {
+  const contract = globalThis.V2NaverAdSnapshotHandoffContract;
+  if (
+    !contract
+    || typeof contract.createCaptureNonce !== "function"
+    || typeof contract.createCaptureSearchUrl !== "function"
+    || typeof contract.validateHandoffMessage !== "function"
+  ) throw new Error("V2_BROWSER_AD_HANDOFF_UNAVAILABLE");
+  return contract;
+}
+
+function syncCaptureControls() {
+  elements.openAdCapture.disabled = !serverResult || !bookmarkletReady;
+  elements.browserAdFile.disabled = !bookmarkletReady;
+}
+
+function applyBrowserAdCapture(capture) {
+  if (!serverResult) throw new Error("V2_BROWSER_AD_PLACE_RESULT_REQUIRED");
+  const contract = browserAdContract();
+  const validated = contract.validateVisibleAdCaptureEnvelope(capture, {
+    expectedQuery: serverResult.keyword
+  });
+  const merged = contract.mergeVisibleAdsWithPlaceResult(serverResult, validated);
+  renderResult(merged);
+  elements.clearBrowserAds.disabled = false;
+  setMessage(`통합검색 실화면 광고 ${merged.advertisements.length}건을 반영했습니다.`, "success");
+  activateTab(document.querySelector("#tabAds"));
+  return merged;
+}
+
 async function readCaptureFile(file) {
   if (!(file instanceof File) || file.size < 2 || file.size > 64 * 1024) {
     throw new Error("V2_BROWSER_AD_FILE_INVALID");
@@ -261,12 +293,12 @@ async function loadBookmarklet() {
     if (!response.ok || !value.startsWith("javascript:") || value.length > 20000) throw new Error("BOOKMARKLET_INVALID");
     elements.bookmarkletLink.href = value;
     elements.bookmarkletLink.setAttribute("aria-disabled", "false");
-    elements.browserAdFile.disabled = false;
     bookmarkletReady = true;
   } catch {
     elements.bookmarkletLink.setAttribute("aria-disabled", "true");
-    elements.browserAdFile.disabled = true;
+    bookmarkletReady = false;
   }
+  syncCaptureControls();
 }
 
 elements.bookmarkletLink.addEventListener("click", async (event) => {
@@ -283,6 +315,54 @@ elements.bookmarkletLink.addEventListener("click", async (event) => {
   }
 });
 
+elements.openAdCapture.addEventListener("click", () => {
+  if (!serverResult || !bookmarkletReady) {
+    setMessage("광고 스냅샷 수집을 시작할 수 없습니다.", "error");
+    return;
+  }
+  try {
+    const contract = snapshotHandoffContract();
+    const nonce = contract.createCaptureNonce(globalThis.crypto);
+    const captureUrl = contract.createCaptureSearchUrl({
+      keyword: serverResult.keyword,
+      nonce,
+      returnOrigin: globalThis.location.origin
+    });
+    const popup = globalThis.open(captureUrl, "datalab-naver-ad-capture", "popup=yes,width=1280,height=900");
+    if (!popup) throw new Error("V2_BROWSER_AD_POPUP_BLOCKED");
+    pendingAdCapture = Object.freeze({
+      nonce,
+      popup,
+      keyword: serverResult.keyword,
+      openedAt: Date.now()
+    });
+    popup.focus?.();
+    setMessage(`네이버 광고 검색창을 열었습니다. ${serverResult.keyword}`);
+  } catch (error) {
+    pendingAdCapture = null;
+    setMessage(`광고 검색창을 열지 못했습니다. ${error.code || error.message || "INVALID"}`, "error");
+  }
+});
+
+globalThis.addEventListener("message", (event) => {
+  const pending = pendingAdCapture;
+  if (!pending || event.origin !== "https://search.naver.com" || event.source !== pending.popup) return;
+  if (Date.now() - pending.openedAt > 10 * 60 * 1000) {
+    pendingAdCapture = null;
+    setMessage("광고 스냅샷 세션이 만료되었습니다.", "error");
+    return;
+  }
+  try {
+    const handoff = snapshotHandoffContract();
+    const capture = handoff.validateHandoffMessage(event.data, { expectedNonce: pending.nonce });
+    applyBrowserAdCapture(capture);
+    pendingAdCapture = null;
+    globalThis.focus?.();
+  } catch (error) {
+    setMessage(`광고 스냅샷을 반영하지 못했습니다. ${error.code || error.message || "INVALID"}`, "error");
+  }
+});
+
 elements.browserAdFile.addEventListener("change", async () => {
   const file = elements.browserAdFile.files?.[0];
   elements.browserAdFile.value = "";
@@ -291,15 +371,7 @@ elements.browserAdFile.addEventListener("change", async () => {
     return;
   }
   try {
-    const contract = browserAdContract();
-    const capture = contract.validateVisibleAdCaptureEnvelope(await readCaptureFile(file), {
-      expectedQuery: serverResult.keyword
-    });
-    const merged = contract.mergeVisibleAdsWithPlaceResult(serverResult, capture);
-    renderResult(merged);
-    elements.clearBrowserAds.disabled = false;
-    setMessage(`통합검색 실화면 광고 ${merged.advertisements.length}건을 반영했습니다.`, "success");
-    activateTab(document.querySelector("#tabAds"));
+    applyBrowserAdCapture(await readCaptureFile(file));
   } catch (error) {
     setMessage(`광고 증거를 반영하지 못했습니다. ${error.code || error.message || "INVALID"}`, "error");
   }
@@ -381,8 +453,10 @@ elements.form.addEventListener("submit", async (event) => {
       throw error;
     }
     serverResult = value;
+    pendingAdCapture = null;
     renderResult(value);
     elements.clearBrowserAds.disabled = true;
+    syncCaptureControls();
     await loadStatus();
     setMessage(`${value.mode === "live" ? "Live" : "Demo"} 수집 완료 · ${value.keyword}`, "success");
   } catch (error) {

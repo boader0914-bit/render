@@ -10,6 +10,9 @@ function browserCaptureMain() {
   const schemaVersion = "v2-naver-visible-place-ad-capture.v1";
   const source = "naver-integrated-search-visible-dom";
   const evidenceLevel = "visible-ad-label-and-place-destination";
+  const handoffMessageType = "v2-naver-visible-place-ad-handoff.v1";
+  const handoffNonceName = "datalabCapture";
+  const handoffOriginName = "datalabOrigin";
   const clean = (value, limit) => String(value || "").normalize("NFC").trim().replace(/\s+/gu, " ").slice(0, limit);
   const finishFailure = (code) => {
     if (typeof root.__V2_NAVER_AD_CAPTURE_TEST_HOOK__ === "function") {
@@ -121,8 +124,32 @@ function browserCaptureMain() {
       operationalWrites: 0
     }
   };
+  let handoffDelivered = false;
+  try {
+    const fragment = new URL(`https://capture.invalid/?${String(page.hash || "").replace(/^#/u, "")}`);
+    const nonce = clean(fragment.searchParams.get(handoffNonceName), 32);
+    const returnOrigin = clean(fragment.searchParams.get(handoffOriginName), 300);
+    const returnUrl = new URL(returnOrigin);
+    const localHttp = returnUrl.protocol === "http:"
+      && ["localhost", "127.0.0.1", "::1", "[::1]"].includes(returnUrl.hostname);
+    const validHandoff = /^[a-f0-9]{32}$/u.test(nonce)
+      && returnUrl.origin === returnOrigin
+      && (returnUrl.protocol === "https:" || localHttp)
+      && root.opener
+      && typeof root.opener.postMessage === "function";
+    if (validHandoff) {
+      root.opener.postMessage({ type: handoffMessageType, nonce, capture: envelope }, returnOrigin);
+      handoffDelivered = true;
+    }
+  } catch {
+    handoffDelivered = false;
+  }
   if (typeof root.__V2_NAVER_AD_CAPTURE_TEST_HOOK__ === "function") {
-    root.__V2_NAVER_AD_CAPTURE_TEST_HOOK__(envelope, null);
+    root.__V2_NAVER_AD_CAPTURE_TEST_HOOK__(envelope, null, { handoffDelivered });
+    return envelope;
+  }
+  if (handoffDelivered) {
+    root.alert?.(`DataLab 광고 스냅샷 ${advertisements.length}건 전달 완료`);
     return envelope;
   }
   const bytes = JSON.stringify(envelope, null, 2) + "\n";
