@@ -189,6 +189,13 @@
     ,"test:v2-naver-place-room-provider-marker-render-live-adapter": "node scripts/test_v2_naver_place_room_provider_marker_render_live_adapter.cjs"
     ,"start:v2-naver-place-room-provider-marker-render-readiness": "node scripts/v2_naver_place_room_provider_marker_render_readiness.cjs serve"
     ,"start:v2-naver-place-room-provider-marker-render-live": "node scripts/v2_naver_place_room_provider_marker_render_live_adapter.cjs live-and-hold"
+    ,"check:v2-live-basic-place": "node --check scripts/v2_live_basic_place_collector.cjs && node --check scripts/test_v2_live_basic_place_collector.cjs"
+    ,"test:v2-live-basic-place": "node scripts/test_v2_live_basic_place_collector.cjs"
+    ,"run:v2-live-basic-place": "node scripts/v2_live_basic_place_collector.cjs"
+    ,"check:v2-live-basic-place-render": "node --check scripts/v2_live_basic_place_render_worker.cjs && node --check scripts/test_v2_live_basic_place_render_worker.cjs"
+    ,"test:v2-live-basic-place-render": "node scripts/test_v2_live_basic_place_render_worker.cjs"
+    ,"start:v2-live-basic-place-render-readiness": "node scripts/v2_live_basic_place_render_worker.cjs serve"
+    ,"start:v2-live-basic-place-render-live": "node scripts/v2_live_basic_place_render_worker.cjs live-and-hold"
   },
   "engines": {
     "node": "26.5.0"
