@@ -186,7 +186,9 @@
     ,"test:v2-naver-place-room-provider-marker": "node scripts/test_v2_naver_place_room_provider_marker.cjs"
     ,"test:v2-naver-place-room-provider-marker-live": "node scripts/test_v2_naver_place_room_provider_marker_live_one_shot.cjs"
     ,"test:v2-naver-place-room-provider-marker-render-readiness": "node scripts/test_v2_naver_place_room_provider_marker_render_readiness.cjs"
+    ,"test:v2-naver-place-room-provider-marker-render-live-adapter": "node scripts/test_v2_naver_place_room_provider_marker_render_live_adapter.cjs"
     ,"start:v2-naver-place-room-provider-marker-render-readiness": "node scripts/v2_naver_place_room_provider_marker_render_readiness.cjs serve"
+    ,"start:v2-naver-place-room-provider-marker-render-live": "node scripts/v2_naver_place_room_provider_marker_render_live_adapter.cjs live-and-hold"
   },
   "engines": {
     "node": "26.5.0"

@@ -1,0 +1,50 @@
+# Proposal only. Do not apply through Blueprint sync.
+services:
+  - type: worker
+    name: datalab-v2-room-provider-marker-diagnostic
+    runtime: node
+    repo: https://github.com/boader0914-bit/render
+    branch: recovery/v2-room-provider-render-live-adapter
+    plan: starter
+    numInstances: 1
+    autoDeploy: false
+    buildCommand: >-
+      npm ci --ignore-scripts --audit=false --fund=false &&
+      npm run test:v2-naver-place-room-provider-marker &&
+      npm run test:v2-naver-place-room-provider-marker-live &&
+      npm run test:v2-naver-place-room-provider-marker-render-readiness &&
+      npm run test:v2-naver-place-room-provider-marker-render-live-adapter
+    startCommand: npm run start:v2-naver-place-room-provider-marker-render-readiness
+    disk:
+      name: v2-room-provider-marker-diagnostic-data
+      mountPath: /var/data/v2-room-provider-marker-diagnostic
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 26.5.0
+      - key: V2_N5_RENDER_EXPECTED_DEPLOY_COMMIT
+        value: <APPROVED_N5_D5_COMMIT_SHA>
+      - key: V2_N5_RENDER_RUN_ENABLED
+        value: "0"
+      - key: V2_N5_RENDER_REQUEST_BUDGET
+        value: "0"
+      - key: V2_N5_RENDER_AUTOMATIC_RETRY
+        value: "0"
+      - key: V2_N5_RENDER_FALLBACK
+        value: "0"
+      - key: V2_N5_RENDER_OPERATIONAL_WRITES
+        value: "0"
+      - key: V2_N5_RENDER_STATE_DIR
+        value: /var/data/v2-room-provider-marker-diagnostic
+
+# Initial deployment remains readiness-only. No live gate is present.
+# A separately approved one-shot transition must be performed while suspended:
+# - startCommand: npm run start:v2-naver-place-room-provider-marker-render-live
+# - V2_N5_RENDER_RUN_ENABLED=1
+# - V2_N5_RENDER_REQUEST_BUDGET=1
+# - V2_N5_RENDER_LIVE_APPROVED=N5-D5-Live
+# - V2_N5_RENDER_APPROVED_JOB_SHA256=bb00fd2a3fadc8c9644f8b28932f6bf2bb0ad2b96b55de0573eb0a4214e32ef7
+# The three V2_NAVER_ROOM_MARKER_* inner gates remain absent; the adapter creates
+# them in memory only after every outer gate, commit, job, source, and disk check passes.
+# Retry, fallback, and operational write gates remain 0 throughout.
+# After one terminal or result-uncertain event, suspend and restore readiness-only.
