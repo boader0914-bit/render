@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "v2-naver-visible-place-ad-observation.v1",
+  "query": "경남 글램핑",
+  "observedDateKst": "2026-08-15",
+  "sourceHost": "search.naver.com",
+  "sourceSurface": "integrated-search-place",
+  "rawHtmlStored": false,
+  "trackingUrlsStored": false,
+  "advertisements": [
+    {
+      "visualOrder": 1,
+      "placeId": "1000421329",
+      "name": "합천H글램핑",
+      "adLabel": "광고",
+      "redirectHost": "ader.naver.com",
+      "destinationPath": "/place/1000421329"
+    },
+    {
+      "visualOrder": 2,
+      "placeId": "1995649140",
+      "name": "럭셔리 비토섬 제이글램핑",
+      "adLabel": "광고",
+      "redirectHost": "ader.naver.com",
+      "destinationPath": "/place/1995649140"
+    },
+    {
+      "visualOrder": 3,
+      "placeId": "2092090019",
+      "name": "옥돌캠핑장",
+      "adLabel": "광고",
+      "redirectHost": "ader.naver.com",
+      "destinationPath": "/place/2092090019"
+    },
+    {
+      "visualOrder": 4,
+      "placeId": "2000486899",
+      "name": "아르비토 호텔 글램핑",
+      "adLabel": "광고",
+      "redirectHost": "ader.naver.com",
+      "destinationPath": "/place/2000486899"
+    }
+  ]
+}

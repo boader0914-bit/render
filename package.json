@@ -194,6 +194,8 @@
     ,"run:v2-live-basic-place": "node scripts/v2_live_basic_place_collector.cjs"
     ,"check:v2-place-ad-diagnostics": "node --check scripts/v2_place_ad_response_diagnostics.cjs && node --check scripts/test_v2_place_ad_response_diagnostics.cjs"
     ,"test:v2-place-ad-diagnostics": "node scripts/test_v2_place_ad_response_diagnostics.cjs"
+    ,"check:v2-visible-place-ads": "node --check scripts/v2_naver_visible_place_ad_contract.cjs && node --check scripts/test_v2_naver_visible_place_ad_contract.cjs"
+    ,"test:v2-visible-place-ads": "node scripts/test_v2_naver_visible_place_ad_contract.cjs"
     ,"check:v2-live-basic-place-render": "node --check scripts/v2_live_basic_place_render_worker.cjs && node --check scripts/test_v2_live_basic_place_render_worker.cjs"
     ,"test:v2-live-basic-place-render": "node scripts/test_v2_live_basic_place_render_worker.cjs"
     ,"start:v2-live-basic-place-render-readiness": "node scripts/v2_live_basic_place_render_worker.cjs serve"
