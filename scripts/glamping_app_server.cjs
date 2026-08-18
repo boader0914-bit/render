@@ -5011,6 +5011,125 @@ async function listRuns() {
   return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+function placeRankComparisonScope(run = {}) {
+  const keyword = compactKeyword(run.keyword || run.label || "").toLowerCase();
+  const searchMode = normalizeSearchMode(run.searchMode || (run.keywordType === "company" ? "company" : "keyword"));
+  const detailRange = String(run.detailRankRanges || "").replace(/\s+/g, "").replace(/~/g, "-") || "unknown";
+  return [keyword, searchMode, detailRange].join("|");
+}
+
+function placeRankIdentity(item = {}) {
+  const placeId = extractNaverPlaceId(item);
+  if (placeId) return `place:${placeId}`;
+  const bookingBusinessId = extractBookingBusinessId(item);
+  if (bookingBusinessId) return `booking:${bookingBusinessId}`;
+  if (item.sourceKey) return `source:${item.sourceKey}`;
+  const name = compactKeyword(item.name || item.companyName || "").toLowerCase();
+  const location = compactKeyword(item.address || item.region || item.addressRegion || "").toLowerCase();
+  return name ? `name:${name}|${location}` : "";
+}
+
+function rankedPlaceRows(data = {}) {
+  const rankingItems = Array.isArray(data?.ranking?.items) && data.ranking.items.length
+    ? data.ranking.items
+    : (Array.isArray(data?.availability?.items) ? data.availability.items : []);
+  const byIdentity = new Map();
+  rankingItems.forEach((item, index) => {
+    const rank = Number(item?.overallRank || item?.rank || index + 1);
+    const identity = placeRankIdentity(item || {});
+    if (!identity || !Number.isFinite(rank) || rank <= 0) return;
+    const row = {
+      identity,
+      name: item.name || item.companyName || "확인불가",
+      rank: Math.round(rank),
+      region: item.region || item.addressRegion || ""
+    };
+    const previous = byIdentity.get(identity);
+    if (!previous || row.rank < previous.rank) byIdentity.set(identity, row);
+  });
+  return [...byIdentity.values()].sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name, "ko"));
+}
+
+function buildPlaceRankComparison(currentData = {}, previousData = {}, previousRun = {}) {
+  const currentRows = rankedPlaceRows(currentData);
+  const previousRows = rankedPlaceRows(previousData);
+  const previousByIdentity = new Map(previousRows.map((row) => [row.identity, row]));
+  const currentByIdentity = new Map(currentRows.map((row) => [row.identity, row]));
+  const changes = [];
+  const stats = { improved: 0, declined: 0, unchanged: 0, newlyRanked: 0, droppedOut: 0 };
+
+  for (const row of currentRows) {
+    const previous = previousByIdentity.get(row.identity);
+    if (!previous) {
+      stats.newlyRanked += 1;
+      changes.push({ type: "new", name: row.name, region: row.region, currentRank: row.rank, previousRank: null, delta: null });
+      continue;
+    }
+    const delta = previous.rank - row.rank;
+    if (delta > 0) {
+      stats.improved += 1;
+      changes.push({ type: "up", name: row.name, region: row.region, currentRank: row.rank, previousRank: previous.rank, delta });
+    } else if (delta < 0) {
+      stats.declined += 1;
+      changes.push({ type: "down", name: row.name, region: row.region, currentRank: row.rank, previousRank: previous.rank, delta });
+    } else {
+      stats.unchanged += 1;
+    }
+  }
+
+  for (const row of previousRows) {
+    if (currentByIdentity.has(row.identity)) continue;
+    stats.droppedOut += 1;
+    changes.push({ type: "out", name: row.name, region: row.region, currentRank: null, previousRank: row.rank, delta: null });
+  }
+
+  const typeWeight = { down: 4, out: 3, up: 2, new: 1 };
+  changes.sort((a, b) => (typeWeight[b.type] - typeWeight[a.type]) || Math.abs(b.delta || 0) - Math.abs(a.delta || 0) || (a.currentRank || a.previousRank || 9999) - (b.currentRank || b.previousRank || 9999));
+  return {
+    available: true,
+    currentRunId: currentData?.run?.id || "",
+    previousRunId: previousRun.id || "",
+    previousRunLabel: previousRun.label || previousData?.run?.label || previousRun.id || "",
+    previousCollectedAt: previousRun.updatedAt || previousData?.run?.collectedAt || "",
+    scope: {
+      keyword: currentData?.run?.keyword || "",
+      detailRankRanges: currentData?.run?.detailRankRanges || "",
+      currentCount: currentRows.length,
+      previousCount: previousRows.length
+    },
+    stats,
+    changes: changes.slice(0, 100)
+  };
+}
+
+async function placeRankComparisonForRun(data = {}) {
+  const currentRun = data?.run || {};
+  const scope = placeRankComparisonScope(currentRun);
+  const currentUpdatedAt = currentRun.updatedAt || currentRun.collectedAt || "";
+  if (!scope || !currentUpdatedAt) {
+    return { available: false, reason: "비교 기준 정보를 확인할 수 없습니다." };
+  }
+  try {
+    const previousRun = (await listRuns()).find((run) => {
+      if (!run?.id || run.id === currentRun.id) return false;
+      return placeRankComparisonScope(run) === scope && String(run.updatedAt || "") < String(currentUpdatedAt);
+    });
+    if (!previousRun) {
+      return { available: false, reason: "동일 키워드·순위 범위의 직전 수집 결과가 없습니다." };
+    }
+    const previousData = await loadRun(previousRun.id, {
+      skipCompanyMaster: true,
+      skipHistory: true,
+      applyCompanyMaster: false,
+      includeRankComparison: false
+    });
+    if (!previousData) return { available: false, reason: "직전 수집 결과를 열 수 없습니다." };
+    return buildPlaceRankComparison(data, previousData, previousRun);
+  } catch (error) {
+    return { available: false, reason: `순위 비교 준비 실패: ${error.message}` };
+  }
+}
+
 function cloneJson(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
@@ -12530,6 +12649,8 @@ async function loadRun(runId, options = {}) {
       productModeLabel: PRODUCT_MODES[conditions.productMode] || PRODUCT_MODES.all,
       bookingRangeDays: manifest?.bookingRangeDays || 1,
       bookingRangePlaceLimit: manifest?.bookingRangePlaceLimit || 0,
+      collectedAt,
+      updatedAt: collectedAt,
       counts: manifest?.counts || {},
       files: {
         regional: regionalFile,
@@ -12557,6 +12678,10 @@ async function loadRun(runId, options = {}) {
         url: `/outputs/${encodeURIComponent(runId)}/${encodeURIComponent(file)}`
       }))
   };
+
+  if (options.includeRankComparison) {
+    result.rankComparison = await placeRankComparisonForRun(result);
+  }
 
   if (!options.skipCompanyMaster) {
     result.companyMaster = await upsertCompanyMasterForRun(result, collectedAt).catch((error) => ({
@@ -13080,8 +13205,8 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260819-reference-ui-v3"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260819-reference-ui-v3"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260819-collection-archive-v4"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260819-collection-archive-v4"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -13521,7 +13646,7 @@ async function route(req, res) {
         return sendForbidden(req, res, "저장 자료는 관리자만 볼 수 있습니다.");
       }
       const runId = decodeURIComponent(reqUrl.pathname.replace("/api/runs/", ""));
-      const data = await loadRun(runId);
+      const data = await loadRun(runId, { includeRankComparison: true });
       return data ? send(res, 200, publicRunForRole(data, session.role)) : notFound(res);
     }
 

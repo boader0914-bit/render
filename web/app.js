@@ -250,7 +250,8 @@ const ADMIN_MOBILE_SECTIONS = {
     adminPanelSection: "collect",
     anchor: "#crawlForm",
     items: [
-      { label: "수집 실행", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" }
+      { label: "수집 실행", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
+      { label: "결과 보관함", tab: "admin", adminPanelSection: "archive", anchor: "#collectionArchive" }
     ]
   },
   analysis: {
@@ -296,6 +297,7 @@ const ADMIN_PANEL_SECTIONS = {
   overview: "운영 홈",
   database: "업체 관리",
   collect: "수집 운영",
+  archive: "결과 보관함",
   members: "회원 관리",
   files: "설정·파일"
 };
@@ -303,6 +305,7 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
   database: { section: "database", anchor: "#adminDatabaseDashboard" },
   overview: { section: "summary", anchor: "#adminConsoleDashboard" },
   collect: { section: "collect", anchor: "#crawlForm" },
+  archive: { section: "collect", anchor: "#collectionArchive" },
   members: { section: "members", anchor: "#adminMemberRequestDashboard" },
   files: { section: "settings", anchor: "#trafficAdminCard" }
 };
@@ -374,6 +377,7 @@ const els = {
   adminDatabaseDashboard: document.getElementById("adminDatabaseDashboard"),
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
   adminMemberRequestDashboard: document.getElementById("adminMemberRequestDashboard"),
+  collectionArchive: document.getElementById("collectionArchive"),
   b2bSearchPanel: document.getElementById("b2bSearchPanel"),
   b2bOnboarding: document.getElementById("b2bOnboarding"),
   b2bSearchForm: document.getElementById("b2bSearchForm"),
@@ -1292,7 +1296,9 @@ function renderRunResultApplySummary() {
         ${status.actions.map((action) => `
           <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
         `).join("")}
+        <button type="button" data-open-collection-archive>결과 보관함</button>
       </div>
+      ${placeRankComparisonSummaryHtml(state.data.rankComparison, { compact: true })}
       ${runDbApplyLinkedQueueHtml(linkedQueue)}
     </section>
   `;
@@ -1383,6 +1389,105 @@ function selectCollectionPurpose(value = "revenue_detail") {
   if (els.crawlStatus) {
     els.crawlStatus.textContent = `${purpose.label} 선택 · ${purpose.status} ${purpose.rangeHint || "순위 범위는 직접 조정할 수 있습니다."}`;
   }
+}
+
+function placeRankChangeView(change = {}) {
+  if (change.type === "new") return { label: "신규 진입", tone: "new", detail: `현재 ${fmtNumber(change.currentRank)}위` };
+  if (change.type === "out") return { label: "순위 이탈", tone: "out", detail: `직전 ${fmtNumber(change.previousRank)}위` };
+  if (change.type === "up") return { label: `▲ ${fmtNumber(change.delta)} 상승`, tone: "up", detail: `${fmtNumber(change.previousRank)}위 → ${fmtNumber(change.currentRank)}위` };
+  return { label: `▼ ${fmtNumber(Math.abs(Number(change.delta || 0)))} 하락`, tone: "down", detail: `${fmtNumber(change.previousRank)}위 → ${fmtNumber(change.currentRank)}위` };
+}
+
+function placeRankComparisonSummaryHtml(comparison = {}, options = {}) {
+  const compact = Boolean(options.compact);
+  if (!comparison?.available) {
+    return `
+      <section class="place-rank-comparison is-pending">
+        <div><span>플레이스 순위 변동</span><strong>비교 대기</strong><small>${escapeHtml(comparison?.reason || "동일 조건 수집이 2회 이상 필요합니다.")}</small></div>
+      </section>
+    `;
+  }
+  const stats = comparison.stats || {};
+  const cards = [
+    ["상승", stats.improved || 0, "up"],
+    ["하락", stats.declined || 0, "down"],
+    ["신규", stats.newlyRanked || 0, "new"],
+    ["이탈", stats.droppedOut || 0, "out"]
+  ];
+  const changes = (comparison.changes || []).slice(0, compact ? 4 : 16);
+  return `
+    <section class="place-rank-comparison">
+      <div class="place-rank-comparison-head">
+        <div>
+          <span>플레이스 순위 변동</span>
+          <strong>직전 수집 대비</strong>
+          <small>${escapeHtml([comparison.previousRunLabel || "직전 수집", comparison.previousCollectedAt ? compactDateTime(comparison.previousCollectedAt) : "", comparison.scope?.detailRankRanges ? `${comparison.scope.detailRankRanges}위 기준` : ""].filter(Boolean).join(" · "))}</small>
+        </div>
+        <em>${fmtNumber(comparison.scope?.currentCount || 0)}개 비교</em>
+      </div>
+      <div class="place-rank-change-stats">
+        ${cards.map(([label, value, tone]) => `<article class="${tone}"><span>${label}</span><strong>${fmtNumber(value)}</strong></article>`).join("")}
+      </div>
+      ${changes.length ? `
+        <div class="place-rank-change-list">
+          ${changes.map((change) => {
+            const view = placeRankChangeView(change);
+            return `<article class="${escapeHtml(view.tone)}"><div><strong>${escapeHtml(change.name || "업체명 확인")}</strong><small>${escapeHtml([change.region, view.detail].filter(Boolean).join(" · "))}</small></div><em>${escapeHtml(view.label)}</em></article>`;
+          }).join("")}
+        </div>
+      ` : `<p class="place-rank-no-change">동일 업체의 플레이스 순위 변동이 없습니다.</p>`}
+    </section>
+  `;
+}
+
+function renderCollectionArchive() {
+  if (!isAdminRole() || !els.collectionArchive) return;
+  const runs = state.runs || [];
+  const activeRunId = state.activeRunId || "";
+  const activeRun = runs.find((run) => run.id === activeRunId) || state.data?.run || null;
+  const comparison = state.data?.run?.id === activeRunId ? state.data.rankComparison : null;
+  if (!runs.length) {
+    els.collectionArchive.innerHTML = `
+      <section class="collection-archive-empty">
+        <span>COLLECTION ARCHIVE</span>
+        <h3>저장된 수집 결과가 없습니다.</h3>
+        <p>수집이 완료되면 당시의 플레이스 순위와 분석 결과가 여기에 보관됩니다.</p>
+        <button class="primary-button" type="button" data-open-collection-run>수집 실행</button>
+      </section>
+    `;
+    return;
+  }
+  els.collectionArchive.innerHTML = `
+    <section class="collection-archive-hero">
+      <div>
+        <span>COLLECTION ARCHIVE</span>
+        <h3>수집 결과 보관함</h3>
+        <p>과거 수집 결과를 다시 열고, 동일 조건의 직전 수집과 플레이스 순위 변동을 확인합니다.</p>
+      </div>
+      <button class="small-button" type="button" data-collection-archive-refresh>목록 새로고침</button>
+    </section>
+    <section class="collection-archive-summary">
+      <article><span>저장 결과</span><strong>${fmtNumber(runs.length)}건</strong><small>최근 수집순</small></article>
+      <article><span>현재 결과</span><strong>${escapeHtml(activeRun?.keyword || activeRun?.label || "선택 대기")}</strong><small>${escapeHtml(activeRun?.updatedAt ? compactDateTime(activeRun.updatedAt) : "결과를 선택하세요")}</small></article>
+      <article><span>비교 범위</span><strong>${escapeHtml(activeRun?.detailRankRanges ? `${activeRun.detailRankRanges}위` : "확인 필요")}</strong><small>동일 키워드·순위 범위끼리 비교</small></article>
+    </section>
+    ${placeRankComparisonSummaryHtml(comparison)}
+    <section class="collection-archive-list" aria-label="저장된 수집 결과 목록">
+      <div class="collection-archive-list-head"><strong>저장된 결과</strong><small>열기를 누르면 수집 당시 결과를 다시 표시합니다.</small></div>
+      ${runs.slice(0, 40).map((run) => {
+        const active = run.id === activeRunId;
+        const range = run.detailRankRanges ? `${run.detailRankRanges}위` : "순위 범위 확인";
+        const count = Number(run.counts?.overall || run.counts?.place || run.counts?.companies || 0);
+        return `
+          <article class="${active ? "active" : ""}">
+            <div><strong>${escapeHtml(run.keyword || run.label || run.id)}</strong><small>${escapeHtml([compactDateTime(run.updatedAt || ""), range, run.collectionPurposeLabel || "수집 결과"].filter(Boolean).join(" · "))}</small></div>
+            <span>${count ? `${fmtNumber(count)}개` : "결과"}</span>
+            <button type="button" data-archive-run-id="${escapeHtml(run.id)}">${active ? "열람 중" : "열기"}</button>
+          </article>
+        `;
+      }).join("")}
+    </section>
+  `;
 }
 
 function focusAdminCrawlProgress() {
@@ -5568,6 +5673,16 @@ function rankMetaChipRow(item = {}) {
   return `<div class="flow-chip-row">${chips.slice(0, 4).map((chip, index) => `<span class="${index === 0 ? "hot" : ""}">${escapeHtml(chip)}</span>`).join("")}</div>`;
 }
 
+function placeRankChangeForItem(item = {}) {
+  if (!isAdminRole()) return null;
+  const rank = Number(item.overallRank || item.rank || 0);
+  const name = String(item.name || item.companyName || "").trim();
+  if (!name || !Number.isFinite(rank) || rank <= 0) return null;
+  return (state.data?.rankComparison?.changes || []).find((change) =>
+    change.type !== "out" && change.currentRank === rank && String(change.name || "").trim() === name
+  ) || null;
+}
+
 function renderCompanies() {
   const analysisItems = state.data?.availability?.items || [];
   const items = isAdminRole() ? rankedCompanyItems() : b2bScopedRankedCompanyItems();
@@ -5590,10 +5705,13 @@ function renderCompanies() {
     const publicMode = !isAdminRole();
     const metric = insight.metricText;
     const stockStatus = item.bookingStatus || (linked ? "재고 분석 완료" : "예약ID 조회 실패/미수집");
+    const placeChange = placeRankChangeForItem(item);
+    const placeChangeView = placeChange ? placeRankChangeView(placeChange) : null;
     return `
       <article class="company-card ${publicMode ? "b2b-public-company" : ""} ${linked ? "" : "rank-only"} ${escapeHtml(insight.tone)}" data-company-index="${index}">
         <div class="company-main">
           <span class="rank-badge">${escapeHtml(item.rank || index + 1)}</span>
+          ${placeChangeView ? `<em class="company-rank-change ${escapeHtml(placeChangeView.tone)}">${escapeHtml(placeChangeView.label)}</em>` : ""}
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>
@@ -27311,7 +27429,10 @@ function renderAll() {
   renderB2BSearchPanel();
   renderB2BAccountPanel();
   if (!state.data) {
-    if (isAdminRole()) renderRunResultApplySummary();
+    if (isAdminRole()) {
+      renderRunResultApplySummary();
+      renderCollectionArchive();
+    }
     renderB2BEmptyPanels();
     if (roleAllowsTab("dictionary")) renderLocationDictionary();
     return;
@@ -27328,6 +27449,7 @@ function renderAll() {
   if (roleAllowsTab("demand")) renderDemand();
   if (roleAllowsTab("historyOps")) renderHistoryOps();
   if (isAdminRole()) {
+    renderCollectionArchive();
     renderCompanyMasterPanel();
     renderDownloads();
     syncYeogiManualInterface();
@@ -30395,6 +30517,39 @@ function bindEvents() {
     const b2bRegionTab = event.target.closest("[data-b2b-region-tab]");
     if (b2bRegionTab) {
       setActiveTab(b2bRegionTab.dataset.b2bRegionTab || "map");
+      return;
+    }
+    if (event.target.closest("[data-open-collection-archive]")) {
+      setActiveTab("admin");
+      setAdminPanelSection("archive");
+      window.requestAnimationFrame(() => els.collectionArchive?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      return;
+    }
+    if (event.target.closest("[data-open-collection-run]")) {
+      setActiveTab("admin");
+      setAdminPanelSection("collect");
+      window.requestAnimationFrame(() => els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      return;
+    }
+    const archiveRun = event.target.closest("[data-archive-run-id]");
+    if (archiveRun) {
+      const runId = archiveRun.dataset.archiveRunId || "";
+      if (!runId) return;
+      setActiveTab("admin");
+      setAdminPanelSection("archive");
+      loadRun(runId).then(() => {
+        window.requestAnimationFrame(() => els.collectionArchive?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }).catch((error) => {
+        if (els.collectionArchive) els.collectionArchive.insertAdjacentHTML("afterbegin", `<div class="empty">${escapeHtml(error.message)}</div>`);
+        setStatus("결과 열기 실패");
+      });
+      return;
+    }
+    if (event.target.closest("[data-collection-archive-refresh]")) {
+      loadRuns(false).catch((error) => {
+        if (els.collectionArchive) els.collectionArchive.insertAdjacentHTML("afterbegin", `<div class="empty">${escapeHtml(error.message)}</div>`);
+        setStatus("보관함 새로고침 실패");
+      });
       return;
     }
     const adminWorkspaceSection = event.target.closest("[data-admin-workspace-section]");

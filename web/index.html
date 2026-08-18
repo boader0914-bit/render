@@ -223,6 +223,7 @@
           <button class="active" type="button" data-admin-section="overview">운영 홈</button>
           <button type="button" data-admin-section="database">업체 관리</button>
           <button type="button" data-admin-section="collect">수집 운영</button>
+          <button type="button" data-admin-section="archive">결과 보관함</button>
           <button type="button" data-admin-section="members">회원 관리</button>
           <button type="button" data-admin-section="files">설정·파일</button>
         </nav>
@@ -319,6 +320,7 @@
           <section class="admin-card" id="runResultAdminCard">
             <div class="card-head">
               <h3>실행 결과</h3>
+              <button class="small-button" type="button" data-open-collection-archive>보관함</button>
               <button class="small-button" id="refreshRuns" type="button">새로고침</button>
             </div>
             <label class="field">
@@ -364,6 +366,10 @@
           </section>
 
         </div>
+        </section>
+
+        <section class="admin-section-panel" data-admin-section-panel="archive" aria-label="수집 결과 보관함">
+          <section class="collection-archive" id="collectionArchive" aria-label="수집 결과 보관함"></section>
         </section>
 
         <section class="admin-section-panel" data-admin-section-panel="members" aria-label="회원 및 삭제 요청">
