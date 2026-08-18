@@ -1,4 +1,10 @@
 const APP_BRAND_NAME = "숙박업 데이터랩 beta";
+const THEME_STORAGE_KEY = "lodging-datalab:theme-mode:v1";
+const THEME_MODES = new Set(["system", "light", "dark"]);
+const THEME_COLORS = {
+  light: "#f4f7fc",
+  dark: "#08111f"
+};
 
 const state = {
   session: {
@@ -11,9 +17,10 @@ const state = {
   data: null,
   activeRunId: null,
   activeTab: "report",
+  themeMode: "system",
   adminMobileSection: "summary",
   adminMobileAnchor: "",
-  adminPanelSection: "database",
+  adminPanelSection: "overview",
   selectedItem: null,
   selectedSheetTab: "booking",
   mapData: null,
@@ -230,11 +237,11 @@ const ADMIN_MOBILE_SECTIONS = {
   database: {
     label: "DB",
     target: "admin",
-    adminPanelSection: "database",
+    adminPanelSection: "overview",
     anchor: "#adminDatabaseDashboard",
     items: [
+      { label: "운영 홈", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" },
       { label: "업체 관리", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard" },
-      { label: "현황", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" },
       { label: "입지사전", tab: "dictionary" }
     ]
   },
@@ -259,11 +266,11 @@ const ADMIN_MOBILE_SECTIONS = {
   }
 };
 const ADMIN_PANEL_SECTIONS = {
+  overview: "운영 홈",
   database: "업체 관리",
-  overview: "현황",
-  collect: "수집 실행",
-  members: "회원·삭제요청",
-  files: "연동·파일"
+  collect: "수집 운영",
+  members: "회원 관리",
+  files: "설정·파일"
 };
 const ADMIN_PANEL_MOBILE_TARGETS = {
   database: { section: "database", anchor: "#adminDatabaseDashboard" },
@@ -284,15 +291,17 @@ const TAB_LABELS = {
   admin: "관리"
 };
 const B2B_TAB_LABELS = {
-  report: "리포트",
-  rank: "순위",
-  map: "지도",
-  demand: "수요"
+  report: "홈",
+  rank: "경쟁",
+  map: "지역 분석",
+  demand: "수요 전망"
 };
 
 const els = {
   pageTitle: document.getElementById("pageTitle"),
   pageSubtitle: document.getElementById("pageSubtitle"),
+  headerRoleBadge: document.getElementById("headerRoleBadge"),
+  themeColorMeta: document.getElementById("themeColorMeta"),
   summaryGrid: document.getElementById("summaryGrid"),
   noticeCard: document.getElementById("noticeCard"),
   reportBody: document.getElementById("reportBody"),
@@ -1433,6 +1442,64 @@ function isAdminRole() {
   return currentRole() === "admin";
 }
 
+function validThemeMode(value) {
+  return THEME_MODES.has(value) ? value : "system";
+}
+
+function systemTheme() {
+  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
+}
+
+function resolvedTheme(mode = state.themeMode) {
+  return mode === "system" ? systemTheme() : mode;
+}
+
+function syncThemeControls() {
+  const mode = validThemeMode(state.themeMode);
+  const resolved = resolvedTheme(mode);
+  document.querySelectorAll("[data-theme-mode]").forEach((button) => {
+    const active = button.dataset.themeMode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    if (active) button.setAttribute("aria-label", `${button.textContent.trim()} 모드 선택됨${mode === "system" ? ` · 현재 ${resolved === "dark" ? "다크" : "라이트"}` : ""}`);
+    else button.removeAttribute("aria-label");
+  });
+}
+
+function applyThemeMode(mode, { persist = true } = {}) {
+  state.themeMode = validThemeMode(mode);
+  const resolved = resolvedTheme(state.themeMode);
+  document.documentElement.dataset.themeMode = state.themeMode;
+  document.documentElement.dataset.themeResolved = resolved;
+  document.documentElement.style.colorScheme = resolved;
+  els.themeColorMeta?.setAttribute("content", THEME_COLORS[resolved]);
+  if (persist) {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, state.themeMode);
+    } catch {
+      // Theme selection remains usable when browser storage is unavailable.
+    }
+  }
+  syncThemeControls();
+}
+
+function initializeThemeMode() {
+  let savedMode = "system";
+  try {
+    savedMode = window.localStorage.getItem(THEME_STORAGE_KEY) || "system";
+  } catch {
+    // Keep the system default when storage is unavailable.
+  }
+  applyThemeMode(savedMode, { persist: false });
+  const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+  if (!media) return;
+  const syncSystemTheme = () => {
+    if (state.themeMode === "system") applyThemeMode("system", { persist: false });
+  };
+  if (media.addEventListener) media.addEventListener("change", syncSystemTheme);
+  else if (media.addListener) media.addListener(syncSystemTheme);
+}
+
 function b2bSearchPolicy() {
   const quota = state.memberSearchQuota || {};
   const isMember = currentRole() === "b2b" && String(state.session?.accountType || "").toLowerCase() === "member";
@@ -1627,7 +1694,7 @@ function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSec
 }
 
 function setAdminPanelSection(sectionKey = "database", options = {}) {
-  if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "database";
+  if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
   state.adminPanelSection = sectionKey;
   if (isAdminRole() && state.activeTab === "admin") {
     const panelTarget = adminPanelMobileTarget(sectionKey);
@@ -1649,7 +1716,7 @@ function setAdminPanelSection(sectionKey = "database", options = {}) {
 
 function syncAdminSectionPanels() {
   const isAdmin = isAdminRole();
-  const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "database";
+  const current = ADMIN_PANEL_SECTIONS[state.adminPanelSection] ? state.adminPanelSection : "overview";
   state.adminPanelSection = current;
   document.querySelectorAll("[data-admin-section]").forEach((button) => {
     button.hidden = !isAdmin;
@@ -1712,8 +1779,14 @@ function applyRoleUi() {
     panel.classList.toggle("active", allowed && panel.dataset.panel === state.activeTab);
   });
   const roleLabel = state.session?.roleLabel || (isAdminRole() ? "관리자" : "B2B");
+  if (els.headerRoleBadge) {
+    els.headerRoleBadge.textContent = isAdminRole() ? "관리자 콘솔" : "사업자 리포트";
+  }
   if (els.adminStatus) {
     els.adminStatus.textContent = `${roleLabel} 모드`;
+  }
+  if (!state.data && els.pageTitle) {
+    els.pageTitle.textContent = isAdminRole() ? "관리자 콘솔" : tabLabel(state.activeTab);
   }
   syncRoleStaticLabels();
   syncB2BSearchRangeControl();
@@ -23512,13 +23585,48 @@ function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   const entries = companyDecisionQueueEntries(master);
   const kpis = adminConsoleKpis(master, entries);
   const latestRun = state.runs?.[0] || {};
+  const waitingEntries = entries.filter((entry) => entry.workflow?.key !== "done").length;
+  const reviewEntries = entries.filter((entry) => ["review", "check", "hold"].includes(entry.workflow?.key)).length;
+  const memberRequests = Number(state.accountDeleteAdmin?.openCount || state.accountDeleteAdmin?.summary?.openCount || 0);
+  const latestRunLabel = latestRun.label || latestRun.id || "아직 실행 기록 없음";
   els.adminConsoleDashboard.innerHTML = `
-    <section class="admin-console-hero">
+    <section class="admin-console-hero admin-workspace-hero">
       <div>
-        <span>관리</span>
-        <h3>운영 현황</h3>
+        <span>ADMIN WORKSPACE · TODAY</span>
+        <h3>오늘의 운영 워크스페이스</h3>
+        <p>데이터 품질, 수집 진행, 회원 요청을 한 곳에서 확인하고 다음 작업으로 바로 이동하세요.</p>
       </div>
-      <small>최근 실행 ${escapeHtml(latestRun.label || latestRun.id || "대기")}</small>
+      <div class="admin-workspace-run-state">
+        <span>최근 실행</span>
+        <strong>${escapeHtml(latestRunLabel)}</strong>
+        <small>${waitingEntries ? `확인 대기 ${fmtNumber(waitingEntries)}건` : "현재 확인 대기 없음"}</small>
+      </div>
+    </section>
+    <section class="admin-workspace-focus" aria-label="우선 작업 바로가기">
+      <article class="priority">
+        <span>업체 품질</span>
+        <strong>${fmtNumber(waitingEntries)}건</strong>
+        <small>${reviewEntries ? `검수 우선 ${fmtNumber(reviewEntries)}건` : "확인 대기 항목 확인"}</small>
+        <button type="button" data-admin-workspace-section="database">업체 관리 열기 <b aria-hidden="true">→</b></button>
+      </article>
+      <article>
+        <span>수집 운영</span>
+        <strong>${escapeHtml(latestRun.id ? "준비" : "대기")}</strong>
+        <small>${escapeHtml(latestRun.id ? "최근 실행 결과와 조건 확인" : "새 수집 조건을 설정하세요")}</small>
+        <button type="button" data-admin-workspace-section="collect">수집 실행 열기 <b aria-hidden="true">→</b></button>
+      </article>
+      <article>
+        <span>회원 요청</span>
+        <strong>${fmtNumber(memberRequests)}건</strong>
+        <small>${memberRequests ? "삭제·계정 요청을 우선 처리" : "새 요청이 없습니다"}</small>
+        <button type="button" data-admin-workspace-section="members">회원 관리 열기 <b aria-hidden="true">→</b></button>
+      </article>
+      <article>
+        <span>연동 상태</span>
+        <strong>점검</strong>
+        <small>API 키와 파일 연동 상태 확인</small>
+        <button type="button" data-admin-workspace-section="files">설정 열기 <b aria-hidden="true">→</b></button>
+      </article>
     </section>
     <section class="admin-kpi-grid">
       ${kpis.map(([label, value, note, tone]) => `
@@ -26659,8 +26767,63 @@ function b2bSearchUsagePanelHtml() {
 
 function renderB2BOnboardingPanel() {
   if (!els.b2bOnboarding) return;
-  els.b2bOnboarding.hidden = true;
-  els.b2bOnboarding.innerHTML = "";
+  if (isAdminRole()) {
+    els.b2bOnboarding.hidden = true;
+    els.b2bOnboarding.innerHTML = "";
+    return;
+  }
+  const profile = state.session?.profile || {};
+  const memberName = String(profile.businessName || profile.name || state.session?.username || "사업자").trim();
+  const rows = state.memberSearchHistory || [];
+  const latest = rows[0] || (state.data?.run ? state.data.run : null);
+  const policy = b2bSearchPolicy();
+  const quota = state.memberSearchQuota || {};
+  const limit = Number(policy.dailyLimit || quota.dailyLimit || 0);
+  const remaining = policy.limited ? Math.max(0, Number(quota.remainingToday ?? (limit - Number(quota.usedToday || 0)))) : null;
+  const interestLodges = readB2BInterestLodges();
+  const latestTitle = latest ? (latest.keyword || latest.runLabel || runSearchTitle(latest)) : "아직 리포트 없음";
+  const latestMeta = latest
+    ? (latest.completedAt ? compactDateTime(latest.completedAt) : runSearchDateLabel(latest))
+    : "첫 지역 검색을 시작하세요";
+  const accountMeta = policy.limited
+    ? `오늘 새 리포트 ${fmtNumber(remaining)}/${fmtNumber(limit)}회 남음`
+    : (state.session?.accountType === "demo" ? "공용 B2B 체험 계정" : "사업자 계정");
+  els.b2bOnboarding.hidden = false;
+  els.b2bOnboarding.innerHTML = `
+    <section class="b2b-home-hero">
+      <div>
+        <span>BUSINESS HOME</span>
+        <h2>${escapeHtml(memberName)}님의 운영 판단 홈</h2>
+        <p>지역 경쟁을 빠르게 확인하고, 관심숙소와 최근 리포트를 연결해 다음 운영 결정을 만드세요.</p>
+      </div>
+      <div class="b2b-home-actions">
+        <button class="primary-button" type="button" data-b2b-home-action="search">지역 분석 시작</button>
+        <button class="secondary-button" type="button" data-b2b-home-action="history">최근 리포트 보기</button>
+      </div>
+    </section>
+    <section class="b2b-home-status" aria-label="사업자 계정 현황">
+      <article>
+        <span>계정 상태</span>
+        <strong>${escapeHtml(state.session?.accountType === "demo" ? "체험 계정" : "활성")}</strong>
+        <small>${escapeHtml(accountMeta)}</small>
+      </article>
+      <article>
+        <span>최근 분석</span>
+        <strong>${escapeHtml(latestTitle)}</strong>
+        <small>${escapeHtml(latestMeta)}</small>
+      </article>
+      <article>
+        <span>관심숙소</span>
+        <strong>${fmtNumber(interestLodges.length)}곳</strong>
+        <small>등록 후 경쟁 기준으로 비교</small>
+      </article>
+    </section>
+    <section class="b2b-home-flow" aria-label="운영 판단 흐름">
+      <article><b>01</b><div><strong>지역 검색</strong><span>지역과 업종을 입력해 경쟁 표본을 만듭니다.</span></div></article>
+      <article><b>02</b><div><strong>경쟁 확인</strong><span>노출·매출·예약률에서 비교할 기준을 찾습니다.</span></div></article>
+      <article><b>03</b><div><strong>운영 판단</strong><span>상품·가격·수요 전망을 다음 실행으로 연결합니다.</span></div></article>
+    </section>
+  `;
 }
 
 function renderB2BSearchPanel() {
@@ -27014,7 +27177,7 @@ function renderB2BEmptyPanels() {
 function renderHeader() {
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
-  els.pageTitle.textContent = tabLabel(state.activeTab);
+  els.pageTitle.textContent = isAdminRole() && state.activeTab === "admin" ? "관리자 콘솔" : tabLabel(state.activeTab);
   if (els.pageSubtitle) els.pageSubtitle.hidden = false;
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
@@ -28248,7 +28411,12 @@ async function loadSession() {
     state.activeTab = "report";
   } else if (location.pathname === "/admin" && state.session.role === "admin") {
     state.activeTab = "admin";
-    state.adminPanelSection = "database";
+    state.adminPanelSection = "overview";
+    state.adminMobileSection = "database";
+    state.adminMobileAnchor = "";
+  } else if (state.session.role === "admin" && !state.adminUserViewMode) {
+    state.activeTab = "admin";
+    state.adminPanelSection = "overview";
     state.adminMobileSection = "database";
     state.adminMobileAnchor = "";
   }
@@ -30088,6 +30256,9 @@ function bindEvents() {
     if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId) return;
     handleAdminDbCompanyHash();
   }, 250);
+  document.querySelectorAll("[data-theme-mode]").forEach((button) => {
+    button.addEventListener("click", () => applyThemeMode(button.dataset.themeMode || "system"));
+  });
   document.querySelectorAll(".bottom-nav button").forEach((button) => {
     button.addEventListener("click", () => {
       const adminPrimary = button.dataset.adminPrimary || "";
@@ -30108,6 +30279,21 @@ function bindEvents() {
     activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
   }, true);
   document.addEventListener("click", (event) => {
+    const b2bHomeAction = event.target.closest("[data-b2b-home-action]");
+    if (b2bHomeAction) {
+      const action = b2bHomeAction.dataset.b2bHomeAction || "search";
+      const target = action === "history" ? els.b2bSearchHistory : els.b2bSearchForm;
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (action === "search") window.setTimeout(() => els.b2bSearchInput?.focus(), 240);
+      return;
+    }
+    const adminWorkspaceSection = event.target.closest("[data-admin-workspace-section]");
+    if (adminWorkspaceSection) {
+      const section = adminWorkspaceSection.dataset.adminWorkspaceSection || "overview";
+      setActiveTab("admin");
+      setAdminPanelSection(section, { scroll: true });
+      return;
+    }
     const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
     if (adminMobileSection) {
       const sectionKey = adminMobileSection.dataset.adminMobileSection || "summary";
@@ -31010,6 +31196,7 @@ function bindEvents() {
 }
 
 async function init() {
+  initializeThemeMode();
   ensureCrawlControls();
   registerPwaServiceWorker();
   bindPwaLifecycleEvents();
