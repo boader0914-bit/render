@@ -37281,3 +37281,376 @@ html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank
 html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-list em.out {
   color: var(--status-warning) !important;
 }
+
+/* Sabun Labs UI alignment v1: preserve the workspace layout and unify its visual language. */
+@font-face {
+  font-family: "Sabun MaruBuri";
+  src: url("https://www.sabun.co.kr/fonts/MaruBuri-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: "Pretendard Variable", "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-number: "Pretendard Variable", "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --font-editorial: "Sabun MaruBuri", "MaruBuri", Georgia, serif;
+}
+
+html[data-theme-resolved="light"] {
+  color-scheme: light;
+  --bg: #f8f9f6;
+  --panel: #ffffff;
+  --surface: #ffffff;
+  --surface-soft: #f1f5f1;
+  --surface-elevated: #f7f5f0;
+  --ink: #162637;
+  --muted: #59636c;
+  --weak: #7a838b;
+  --line: #d8dde1;
+  --line-strong: #aeb5ab;
+  --blue: #3f6350;
+  --blue-dark: #31503f;
+  --green: #227e50;
+  --purple: #6c6682;
+  --orange: #9a694f;
+  --red: #a44743;
+  --theme-accent: #3f6350;
+  --theme-accent-strong: #31503f;
+  --theme-accent-soft: #edf2ee;
+  --theme-glow: rgba(63, 99, 80, .14);
+  --status-positive: #227e50;
+  --status-warning: #8c5e24;
+  --status-danger: #a44743;
+  --shadow: 0 12px 30px rgba(22, 38, 55, .07);
+  --soft-shadow: 0 5px 16px rgba(22, 38, 55, .05);
+}
+
+html[data-theme-resolved="dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --panel: #111111;
+  --surface: #111111;
+  --surface-soft: #171717;
+  --surface-elevated: #151515;
+  --ink: #f5f5f5;
+  --muted: #b5b5b5;
+  --weak: #929292;
+  --line: #2a2a2a;
+  --line-strong: #505050;
+  --blue: #92b29a;
+  --blue-dark: #c5ddc7;
+  --green: #9dccac;
+  --purple: #c6bfd5;
+  --orange: #f0c78d;
+  --red: #ffb0aa;
+  --theme-accent: #92b29a;
+  --theme-accent-strong: #c5ddc7;
+  --theme-accent-soft: rgba(146, 178, 154, .18);
+  --theme-glow: rgba(146, 178, 154, .12);
+  --status-positive: #9dccac;
+  --status-warning: #f0c78d;
+  --status-danger: #ffb0aa;
+  --shadow: 0 14px 34px rgba(0, 0, 0, .42);
+  --soft-shadow: 0 6px 18px rgba(0, 0, 0, .3);
+}
+
+html[data-theme-resolved],
+html[data-theme-resolved] body {
+  background: var(--bg) !important;
+  color: var(--ink);
+}
+
+html[data-theme-resolved="light"] :is(body.role-admin, body.role-b2b) {
+  --bg: #f8f9f6;
+  --panel: #ffffff;
+  --surface: #ffffff;
+  --surface-soft: #f1f5f1;
+  --surface-elevated: #f7f5f0;
+  --ink: #162637;
+  --muted: #59636c;
+  --weak: #7a838b;
+  --line: #d8dde1;
+  --line-strong: #aeb5ab;
+  --blue: #3f6350;
+  --blue-dark: #31503f;
+  --green: #227e50;
+  --orange: #9a694f;
+  --red: #a44743;
+  --theme-accent: #3f6350;
+  --theme-accent-strong: #31503f;
+  --theme-accent-soft: #edf2ee;
+  --theme-glow: rgba(63, 99, 80, .14);
+  --status-positive: #227e50;
+  --status-warning: #8c5e24;
+  --status-danger: #a44743;
+  --shadow: 0 12px 30px rgba(22, 38, 55, .07);
+  --soft-shadow: 0 5px 16px rgba(22, 38, 55, .05);
+  background: #f8f9f6 !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) {
+  --bg: #000000;
+  --panel: #111111;
+  --surface: #111111;
+  --surface-soft: #171717;
+  --surface-elevated: #151515;
+  --ink: #f5f5f5;
+  --muted: #b5b5b5;
+  --weak: #929292;
+  --line: #2a2a2a;
+  --line-strong: #505050;
+  --blue: #92b29a;
+  --blue-dark: #c5ddc7;
+  --green: #9dccac;
+  --orange: #f0c78d;
+  --red: #ffb0aa;
+  --theme-accent: #92b29a;
+  --theme-accent-strong: #c5ddc7;
+  --theme-accent-soft: rgba(146, 178, 154, .18);
+  --theme-glow: rgba(146, 178, 154, .12);
+  --status-positive: #9dccac;
+  --status-warning: #f0c78d;
+  --status-danger: #ffb0aa;
+  --shadow: 0 14px 34px rgba(0, 0, 0, .42);
+  --soft-shadow: 0 6px 18px rgba(0, 0, 0, .3);
+  background: #000000 !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-shell,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
+  background: transparent !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-header {
+  margin: 0 0 26px;
+  padding: 8px 0 22px;
+  border-bottom: 1px solid var(--line) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .brand-eyebrow {
+  gap: 7px;
+  color: var(--theme-accent) !important;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .105em;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .sabun-brand-name {
+  font-weight: 950;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .brand-separator {
+  color: var(--weak);
+  letter-spacing: 0;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .header-role-badge {
+  min-height: 22px;
+  padding: 0 8px;
+  border-color: var(--line) !important;
+  border-radius: 999px;
+  background: var(--surface-soft) !important;
+  color: var(--muted) !important;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-header h1 {
+  margin-top: 10px;
+  font-family: var(--font-editorial);
+  font-size: clamp(30px, 3.6vw, 46px);
+  font-weight: 400;
+  letter-spacing: -.06em;
+  line-height: 1.2;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-header p {
+  color: var(--muted) !important;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.theme-switcher {
+  gap: 0;
+  padding: 3px;
+  border-color: var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  box-shadow: none;
+}
+
+.theme-mode-button {
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.theme-mode-button.active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.header-logout, .header-user-view, .icon-button) {
+  border-color: var(--line) !important;
+  border-radius: 10px;
+  background: var(--panel) !important;
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.bottom-nav, .admin-section-nav, .admin-mobile-nav, .admin-mobile-secondary) {
+  border-color: var(--line) !important;
+  border-radius: 16px;
+  background: var(--panel) !important;
+  box-shadow: var(--soft-shadow) !important;
+  backdrop-filter: none;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.bottom-nav button, .admin-section-nav button, .admin-mobile-primary button, .admin-mobile-secondary button) {
+  color: var(--muted) !important;
+  font-weight: 750;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.bottom-nav button.active, .admin-section-nav button.active, .admin-mobile-primary button.active, .admin-mobile-secondary button.active) {
+  background: var(--theme-accent-soft) !important;
+  color: var(--theme-accent-strong) !important;
+  box-shadow: inset 3px 0 0 var(--theme-accent) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.bottom-nav button.active)::before {
+  background: var(--theme-accent) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.summary-card, .admin-card, .admin-console-panel, .report-card, .company-card, .validation-card, .b2b-search-panel, .b2b-onboarding, .b2b-brief-card, .b2b-rank-brief, .b2b-map-brief, .b2b-demand-playbook, .map-card, .region-card, .demand-hero-card, .demand-chart, .demand-insight-card, .demand-table-card, .demand-company-card, .structure-card, .collection-archive-hero, .collection-archive-empty, .place-rank-comparison, .collection-archive-list, .sheet-panel, .drawer-panel) {
+  border-color: var(--line) !important;
+  border-radius: 14px !important;
+  background: var(--panel) !important;
+  box-shadow: var(--soft-shadow) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.admin-console-hero, .admin-db-hero, .report-hero, .b2b-brief-card, .b2b-rank-brief, .b2b-map-brief, .b2b-demand-playbook, .collection-archive-hero, .place-rank-comparison) {
+  border-color: color-mix(in srgb, var(--theme-accent) 34%, var(--line)) !important;
+  background: color-mix(in srgb, var(--theme-accent-soft) 48%, var(--panel)) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.primary-button, .more-button) {
+  border: 1px solid var(--theme-accent) !important;
+  border-radius: 10px;
+  background: var(--theme-accent) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.secondary-button, .small-button, .collection-archive-list button, .place-rank-replay-notice button) {
+  border-color: var(--line) !important;
+  border-radius: 10px;
+  background: var(--panel) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(input, select, textarea) {
+  border-color: var(--line) !important;
+  border-radius: 10px;
+  background: var(--panel) !important;
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.summary-card strong, .report-metric-grid strong, .b2b-brief-metrics strong, .report-score-card strong, .admin-db-metrics strong, .admin-kpi-grid strong, .company-master-metrics strong) {
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved="light"] :where([data-surface="light"], .surface-light) {
+  --surface-bg-token: #ffffff;
+  --surface-bg-soft-token: #f1f5f1;
+  --surface-border-token: #d8dde1;
+  --surface-text-token: #162637;
+  --surface-muted-token: #59636c;
+  --surface-subtle-token: #7a838b;
+  --surface-accent-token: #3f6350;
+  --surface-green-token: #227e50;
+  --surface-warning-token: #8c5e24;
+  --surface-danger-token: #a44743;
+}
+
+:where([data-surface="dark"], .surface-dark),
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(.company-card, .validation-card, .validation-card-collection, .validation-card-audit, .decision-queue-intro, .company-check-card) {
+  --surface-bg-token: #111111;
+  --surface-bg-soft-token: #171717;
+  --surface-border-token: #2a2a2a;
+  --surface-text-token: #f5f5f5;
+  --surface-muted-token: #b5b5b5;
+  --surface-subtle-token: #929292;
+  --surface-accent-token: #92b29a;
+  --surface-green-token: #9dccac;
+  --surface-warning-token: #f0c78d;
+  --surface-danger-token: #ffb0aa;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(.collection-archive-list > article, .place-rank-change-list article, .place-rank-change-stats article, .collection-archive-summary article, .b2b-home-status article, .b2b-home-flow article, .b2b-account-status article, .admin-workspace-focus article) {
+  border-color: var(--line) !important;
+  background: var(--surface-soft) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .app-main > .bottom-nav {
+  background: #111111 !important;
+}
+
+@media (min-width: 861px) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-shell {
+    width: min(calc(100% - 48px), 1360px);
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
+    grid-template-columns: 232px minmax(0, 1fr);
+    column-gap: 34px;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main > .bottom-nav {
+    width: 232px !important;
+    padding: 9px;
+    border-radius: 14px;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button {
+    min-height: 54px;
+    border-radius: 10px;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button::before {
+    width: 32px;
+    height: 32px;
+    border-color: transparent;
+    border-radius: 9px;
+    background: var(--surface-soft);
+    color: var(--muted);
+  }
+}
+
+@media (max-width: 860px) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-header {
+    margin: 0 0 18px;
+    padding: 4px 0 16px;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-header h1 {
+    font-size: clamp(28px, 9vw, 38px);
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main > .bottom-nav,
+  html[data-theme-resolved] body.role-admin .app-main > .bottom-nav {
+    border-color: var(--line) !important;
+    border-radius: 16px 16px 0 0;
+    background: var(--panel) !important;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, .12) !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active {
+    box-shadow: inset 0 -2px 0 var(--theme-accent) !important;
+  }
+}

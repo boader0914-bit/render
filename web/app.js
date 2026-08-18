@@ -1,9 +1,9 @@
-const APP_BRAND_NAME = "숙박업 데이터랩 beta";
+const APP_BRAND_NAME = "사분 데이터랩";
 const THEME_STORAGE_KEY = "lodging-datalab:theme-mode:v1";
 const THEME_MODES = new Set(["system", "light", "dark"]);
 const THEME_COLORS = {
-  light: "#f4f7fc",
-  dark: "#08111f"
+  light: "#f8f9f6",
+  dark: "#000000"
 };
 
 const state = {

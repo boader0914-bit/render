@@ -1,14 +1,14 @@
 {
-  "name": "숙박업 데이터랩 beta",
-  "short_name": "숙박업랩",
+  "name": "사분 데이터랩",
+  "short_name": "사분 데이터랩",
   "description": "지역 내 노출, 예약율, 예상 매출 흐름을 확인하는 숙박업 경쟁 리포트",
   "id": "/b2b",
   "start_url": "/b2b",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0c1016",
-  "theme_color": "#1457c7",
+  "background_color": "#f8f9f6",
+  "theme_color": "#3f6350",
   "categories": ["business", "productivity"],
   "lang": "ko-KR",
   "icons": [

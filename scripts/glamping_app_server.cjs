@@ -4145,17 +4145,18 @@ function loginPage(message = "") {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="application-name" content="숙박업 데이터랩 beta">
-  <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
-  <meta name="theme-color" content="#1457c7">
+  <meta name="application-name" content="사분 데이터랩">
+  <meta name="apple-mobile-web-app-title" content="사분 데이터랩">
+  <meta name="theme-color" content="#000000">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <title>숙박업 데이터랩 beta 로그인</title>
+  <title>사분 데이터랩 로그인</title>
   <style>
-    :root { color-scheme: dark; font-family: "Pretendard Variable", Pretendard, Arial, "Malgun Gothic", sans-serif; }
+    @font-face { font-family: "Sabun MaruBuri"; src: url("https://www.sabun.co.kr/fonts/MaruBuri-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
+    :root { color-scheme: dark; font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -4167,18 +4168,18 @@ function loginPage(message = "") {
         calc(24px + env(safe-area-inset-right))
         calc(24px + env(safe-area-inset-bottom))
         calc(24px + env(safe-area-inset-left));
-      background: #070b12;
-      color: #f7fbff;
+      background: #000;
+      color: #f5f5f5;
     }
     main {
       width: min(100%, 920px);
       display: grid;
       grid-template-columns: minmax(0, .92fr) minmax(340px, .68fr);
       overflow: hidden;
-      border: 1px solid rgba(148, 163, 184, .26);
-      border-radius: 28px;
-      background: #0c121d;
-      box-shadow: 0 28px 80px rgba(0, 0, 0, .42);
+      border: 1px solid #2a2a2a;
+      border-radius: 18px;
+      background: #111;
+      box-shadow: 0 20px 48px rgba(0, 0, 0, .38);
     }
     .login-brand-panel {
       min-height: 520px;
@@ -4186,10 +4187,8 @@ function loginPage(message = "") {
       flex-direction: column;
       justify-content: center;
       padding: 38px;
-      background:
-        linear-gradient(135deg, rgba(49, 130, 246, .24), rgba(20, 184, 166, .16)),
-        linear-gradient(180deg, #111c2d 0%, #0d1725 100%);
-      border-right: 1px solid rgba(148, 163, 184, .18);
+      background: #151515;
+      border-right: 1px solid #2a2a2a;
     }
     .login-form-panel {
       display: flex;
@@ -4197,97 +4196,86 @@ function loginPage(message = "") {
       justify-content: center;
       min-width: 0;
       padding: 38px;
-      background: rgba(11, 18, 29, .92);
+      background: #111;
     }
-    .brand-beta-badge {
-      display: inline-grid;
-      place-items: center;
-      min-height: 24px;
-      padding: 0 12px;
-      border: 1px solid rgba(94, 234, 212, .42);
-      border-radius: 999px;
-      background: linear-gradient(135deg, rgba(49, 130, 246, .18), rgba(20, 184, 166, .20));
-      color: #dffeff;
+    .brand-kicker {
+      margin: 0 0 12px;
+      color: #92b29a;
       font-size: 11px;
-      font-weight: 900;
-      line-height: 1;
-      text-transform: uppercase;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 8px 18px rgba(20, 184, 166, .12);
+      font-weight: 800;
+      letter-spacing: .11em;
     }
     h1 {
       max-width: 560px;
       margin: 0;
-      color: #fff;
-      font-size: clamp(34px, 5vw, 54px);
-      font-weight: 950;
-      line-height: 1.02;
-      letter-spacing: 0;
-    }
-    h1 .brand-beta-badge {
-      margin-left: 8px;
-      transform: translateY(-.18em);
-      vertical-align: middle;
+      color: #f5f5f5;
+      font-family: "Sabun MaruBuri", "MaruBuri", Georgia, serif;
+      font-size: clamp(34px, 5vw, 52px);
+      font-weight: 400;
+      line-height: 1.18;
+      letter-spacing: -.06em;
     }
     .brand-note {
       max-width: 420px;
       margin: 18px 0 0;
-      color: #b8c4d6;
-      font-size: 18px;
-      font-weight: 800;
+      color: #b5b5b5;
+      font-size: 16px;
+      font-weight: 500;
       line-height: 1.55;
     }
     .form-head { margin-bottom: 22px; }
     .form-head strong {
       display: block;
-      color: #fff;
-      font-size: 28px;
-      font-weight: 950;
-      letter-spacing: 0;
+      color: #f5f5f5;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -.04em;
     }
     .form-head p {
       margin: 8px 0 0;
-      color: #95a3b8;
+      color: #b5b5b5;
       font-size: 14px;
-      font-weight: 750;
+      font-weight: 500;
       line-height: 1.5;
     }
     form { display: grid; gap: 15px; }
-    label { display: grid; gap: 8px; color: #d7e1ef; font-size: 13px; font-weight: 900; }
+    label { display: grid; gap: 8px; color: #e1e1e1; font-size: 13px; font-weight: 700; }
     input {
       width: 100%;
       min-height: 54px;
       padding: 0 15px;
-      border: 1px solid rgba(148, 163, 184, .26);
-      border-radius: 14px;
-      background: #0a111c;
-      color: #f8fbff;
+      border: 1px solid #3a3a3a;
+      border-radius: 10px;
+      background: #171717;
+      color: #f5f5f5;
       font: inherit;
       font-size: 16px;
-      font-weight: 800;
+      font-weight: 600;
       outline: none;
     }
-    input::placeholder { color: #64748b; }
+    input::placeholder { color: #929292; }
     input:focus {
-      border-color: rgba(96, 165, 250, .9);
-      box-shadow: 0 0 0 4px rgba(49, 130, 246, .18);
+      border-color: #92b29a;
+      box-shadow: 0 0 0 3px rgba(146, 178, 154, .16);
     }
     button {
       width: 100%;
       min-height: 56px;
       margin-top: 4px;
       border: 0;
-      border-radius: 15px;
-      background: #3182f6;
+      border: 1px solid #92b29a;
+      border-radius: 10px;
+      background: #92b29a;
       color: #fff;
       font: inherit;
       font-size: 17px;
-      font-weight: 950;
+      font-weight: 800;
       cursor: pointer;
-      box-shadow: 0 14px 30px rgba(49, 130, 246, .28);
+      box-shadow: none;
     }
-    button:hover { background: #2f76df; }
+    button:hover { background: #a8c1ae; }
     button:disabled { opacity: .6; cursor: wait; }
-    .link { display: block; margin-top: 18px; color: #91c4ff; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
+    .link { display: block; margin-top: 18px; color: #c5ddc7; font-size: 13px; font-weight: 800; text-align: center; text-decoration: none; }
     .legal-links {
       display: flex;
       flex-wrap: wrap;
@@ -4296,25 +4284,25 @@ function loginPage(message = "") {
       margin-top: 12px;
     }
     .legal-links a {
-      color: #8ea0b8;
+      color: #929292;
       font-size: 12px;
-      font-weight: 850;
+      font-weight: 700;
       text-decoration: none;
     }
-    .legal-links a:hover { color: #d7e7ff; }
+    .legal-links a:hover { color: #f5f5f5; }
     .security-note {
       margin: 2px 0 0;
-      color: #8ea0b8;
+      color: #929292;
       font-size: 12px;
-      font-weight: 750;
+      font-weight: 500;
       line-height: 1.5;
       word-break: keep-all;
     }
-    .error { min-height: 20px; color: #ff8b8b; font-size: 13px; font-weight: 900; line-height: 1.35; }
+    .error { min-height: 20px; color: #ffb0aa; font-size: 13px; font-weight: 800; line-height: 1.35; }
     @media (max-width: 760px) {
       body { align-items: stretch; padding: 14px; }
-      main { grid-template-columns: 1fr; border-radius: 24px; }
-      .login-brand-panel { min-height: auto; padding: 26px; border-right: 0; border-bottom: 1px solid rgba(148, 163, 184, .18); }
+      main { grid-template-columns: 1fr; border-radius: 16px; }
+      .login-brand-panel { min-height: auto; padding: 26px; border-right: 0; border-bottom: 1px solid #2a2a2a; }
       .login-form-panel { padding: 26px; }
       h1 { font-size: 36px; }
       .brand-note { font-size: 15px; }
@@ -4323,10 +4311,11 @@ function loginPage(message = "") {
 </head>
 <body>
   <main>
-    <section class="login-brand-panel" aria-label="숙박업 데이터랩 beta">
+    <section class="login-brand-panel" aria-label="사분 데이터랩">
       <div>
-        <h1>${brandTitleHtml("숙박업 데이터랩 beta")}</h1>
-        <p class="brand-note">운영전략을 제안해드립니다</p>
+        <p class="brand-kicker">SABUN LABS · DATA LAB</p>
+        <h1>데이터로 운영의<br>기준을 만듭니다.</h1>
+        <p class="brand-note">숙박업의 흐름을 읽고, 다음 판단을 위한 기준을 남깁니다.</p>
       </div>
     </section>
     <section class="login-form-panel" aria-label="로그인">
@@ -4369,24 +4358,24 @@ function signupPage(message = "", values = {}) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="application-name" content="숙박업 데이터랩 beta">
-  <meta name="apple-mobile-web-app-title" content="숙박업 데이터랩 beta">
-  <meta name="theme-color" content="#1457c7">
+  <meta name="application-name" content="사분 데이터랩">
+  <meta name="apple-mobile-web-app-title" content="사분 데이터랩">
+  <meta name="theme-color" content="#f8f9f6">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <title>숙박업 데이터랩 beta 회원가입</title>
+  <title>사분 데이터랩 회원가입</title>
   <style>
-    :root { color-scheme: light; font-family: Arial, "Malgun Gothic", sans-serif; }
+    @font-face { font-family: "Sabun MaruBuri"; src: url("https://www.sabun.co.kr/fonts/MaruBuri-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
+    :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #101828; }
-    main { width: min(100% - 32px, 640px); padding: 30px; border: 1px solid #e4e7ec; border-radius: 24px; background: #fff; box-shadow: 0 18px 48px rgba(16, 24, 40, .10); }
-    .brand-kicker { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 8px; color: #667085; font-size: 13px; font-weight: 900; }
-    .brand-beta-badge { display: inline-grid; place-items: center; min-height: 24px; padding: 0 11px; border: 1px solid rgba(49, 130, 246, .24); border-radius: 999px; background: linear-gradient(135deg, rgba(49, 130, 246, .10), rgba(20, 184, 166, .12)); color: #175cd3; font-size: 11px; font-weight: 900; line-height: 1; text-transform: uppercase; }
-    h1 { margin: 0 0 20px; font-size: 28px; font-weight: 900; letter-spacing: 0; }
-    p { margin: 0 0 18px; color: #667085; line-height: 1.45; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f8f9f6; color: #162637; }
+    main { width: min(100%, 640px); padding: 30px; border: 1px solid #d8dde1; border-radius: 16px; background: #fff; box-shadow: 0 12px 30px rgba(22, 38, 55, .07); }
+    .brand-kicker { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 11px; color: #3f6350; font-size: 11px; font-weight: 800; letter-spacing: .105em; }
+    h1 { margin: 0 0 12px; font-family: "Sabun MaruBuri", "MaruBuri", Georgia, serif; font-size: 34px; font-weight: 400; letter-spacing: -.06em; line-height: 1.2; }
+    p { margin: 0 0 18px; color: #59636c; line-height: 1.55; }
     form { display: grid; gap: 14px; }
     .signup-summary {
       display: grid;
@@ -4398,20 +4387,20 @@ function signupPage(message = "", values = {}) {
       display: grid;
       gap: 4px;
       padding: 12px;
-      border: 1px solid #d5e3f7;
-      border-radius: 15px;
-      background: #f8fbff;
+      border: 1px solid #d8dde1;
+      border-radius: 12px;
+      background: #f1f5f1;
     }
     .signup-summary strong {
-      color: #175cd3;
+      color: #31503f;
       font-size: 13px;
-      font-weight: 950;
+      font-weight: 800;
       line-height: 1.25;
     }
     .signup-summary span {
-      color: #475467;
+      color: #59636c;
       font-size: 11px;
-      font-weight: 800;
+      font-weight: 600;
       line-height: 1.4;
       word-break: keep-all;
     }
@@ -4419,40 +4408,41 @@ function signupPage(message = "", values = {}) {
     .field-with-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
     .password-control { position: relative; display: block; }
     .password-control input { padding-right: 56px; }
-    label { display: grid; gap: 7px; font-size: 13px; font-weight: 850; color: #344054; }
+    label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; color: #364652; }
     label > span:first-child { display: flex; min-height: 18px; align-items: center; gap: 3px; }
-    input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d0d5dd; border-radius: 13px; font: inherit; outline: none; }
-    input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3182f6; }
+    input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d8dde1; border-radius: 10px; background: #fff; color: #162637; font: inherit; outline: none; }
+    input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3f6350; }
     textarea { min-height: 82px; padding-block: 11px; resize: vertical; }
-    input:focus, select:focus, textarea:focus { border-color: #3182f6; box-shadow: 0 0 0 4px rgba(49, 130, 246, .12); }
-    button { width: 100%; min-height: 54px; border: 0; border-radius: 16px; background: #3182f6; color: #fff; font: inherit; font-size: 17px; font-weight: 900; cursor: pointer; }
-    .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d0d5dd; border-radius: 13px; background: #fff; color: #175cd3; font-size: 13px; }
-    .inline-action:hover { border-color: #3182f6; background: #eff6ff; }
-    .icon-action { position: absolute; top: 4px; right: 5px; display: inline-grid; place-items: center; width: 40px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 11px; background: transparent; color: #344054; }
-    .icon-action:hover, .icon-action:focus-visible, .icon-action[data-active="true"] { background: #eff6ff; color: #175cd3; }
+    input:focus, select:focus, textarea:focus { border-color: #3f6350; box-shadow: 0 0 0 3px rgba(63, 99, 80, .13); }
+    button { width: 100%; min-height: 54px; border: 1px solid #3f6350; border-radius: 10px; background: #3f6350; color: #fff; font: inherit; font-size: 17px; font-weight: 800; cursor: pointer; }
+    .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d8dde1; border-radius: 10px; background: #fff; color: #31503f; font-size: 13px; }
+    .inline-action:hover { border-color: #3f6350; background: #edf2ee; }
+    .icon-action { position: absolute; top: 4px; right: 5px; display: inline-grid; place-items: center; width: 40px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #364652; }
+    .icon-action:hover, .icon-action:focus-visible, .icon-action[data-active="true"] { background: #edf2ee; color: #31503f; }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-    .error { min-height: 20px; color: #f04438; font-size: 13px; font-weight: 850; }
-    .hint, .field-status { min-height: 18px; margin: 0; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
-    .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #067647; }
-    .field-status[data-state="error"], .password-match[data-state="error"] { color: #d92d20; }
-    .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #e4e7ec; border-radius: 16px; background: #f9fafb; }
+    .error { min-height: 20px; color: #a44743; font-size: 13px; font-weight: 700; }
+    .hint, .field-status { min-height: 18px; margin: 0; color: #59636c; font-size: 12px; font-weight: 600; line-height: 1.35; }
+    .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #227e50; }
+    .field-status[data-state="error"], .password-match[data-state="error"] { color: #a44743; }
+    .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #d8dde1; border-radius: 12px; background: #f7f5f0; }
     .agreement-note {
       margin: 0;
-      color: #475467;
+      color: #59636c;
       font-size: 12px;
-      font-weight: 800;
+      font-weight: 600;
       line-height: 1.5;
       word-break: keep-all;
     }
-    .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #182230; font-size: 13px; line-height: 1.4; }
-    .check a { color: #175cd3; font-weight: 900; text-decoration: none; }
-    .password-match { min-height: 18px; color: #667085; font-size: 12px; font-weight: 800; line-height: 1.35; }
-    .required { color: #f04438; font-weight: 900; }
-    .link { display: block; margin-top: 14px; color: #175cd3; font-size: 13px; font-weight: 900; text-align: center; text-decoration: none; }
+    .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #162637; font-size: 13px; line-height: 1.4; }
+    .check a { color: #31503f; font-weight: 800; text-decoration: none; }
+    .password-match { min-height: 18px; color: #59636c; font-size: 12px; font-weight: 600; line-height: 1.35; }
+    .required { color: #a44743; font-weight: 800; }
+    .link { display: block; margin-top: 14px; color: #31503f; font-size: 13px; font-weight: 800; text-align: center; text-decoration: none; }
     .legal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 12px; }
-    .legal-links a { color: #667085; font-size: 12px; font-weight: 850; text-decoration: none; }
-    .legal-links a:hover { color: #175cd3; }
+    .legal-links a { color: #59636c; font-size: 12px; font-weight: 700; text-decoration: none; }
+    .legal-links a:hover { color: #31503f; }
     @media (max-width: 560px) {
+      body { padding: 14px; }
       main { padding: 22px; }
       .grid, .signup-summary { grid-template-columns: 1fr; }
       .field-with-action { grid-template-columns: 1fr; }
@@ -4462,7 +4452,7 @@ function signupPage(message = "", values = {}) {
 </head>
 <body>
   <main>
-    <p class="brand-kicker">${brandTitleHtml("숙박업 데이터랩 beta")}</p>
+    <p class="brand-kicker">SABUN LABS · DATA LAB</p>
     <h1>회원가입</h1>
     <p>가입하면 일반 회원 기준으로 시작하며, 검색 이력과 관심숙소는 로그인 아이디 기준으로 관리됩니다.</p>
     <div class="signup-summary" aria-label="회원가입 후 이용 기준">
@@ -4773,7 +4763,7 @@ function securityHeaders() {
       "default-src 'self'",
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-      "font-src 'self' data: https://cdn.jsdelivr.net",
+      "font-src 'self' data: https://cdn.jsdelivr.net https://www.sabun.co.kr",
       "img-src 'self' data:",
       "connect-src 'self' https://cdn.jsdelivr.net",
       "base-uri 'self'",

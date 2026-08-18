@@ -11,6 +11,7 @@ const requiredMarkers = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
   "Dark surface coherence v1",
+  "Sabun Labs UI alignment v1",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]"
 ];
@@ -127,6 +128,13 @@ const appSurfaceContracts = [
   'class="demand-chart'
 ];
 
+const sabunThemeContracts = [
+  'font-family: "Sabun MaruBuri"',
+  '--theme-accent: #3f6350',
+  '--bg: #000000',
+  '--panel: #111111'
+];
+
 function hexToRgb(hex) {
   const normalized = String(hex || "").replace("#", "").trim();
   if (!/^[0-9a-f]{6}$/i.test(normalized)) return null;
@@ -175,20 +183,24 @@ for (const contract of appSurfaceContracts) {
   assert(app.includes(contract), `missing app surface contract: ${contract}`, failures);
 }
 
+for (const contract of sabunThemeContracts) {
+  assert(styles.includes(contract), `missing Sabun theme contract: ${contract}`, failures);
+}
+
 const contrastChecks = [
-  ["light text", "#0f172a", "#ffffff", 7],
-  ["light muted", "#475569", "#ffffff", 4.5],
-  ["light accent", "#1d4ed8", "#ffffff", 4.5],
-  ["light warning", "#b45309", "#fff8db", 4.5],
-  ["light danger", "#b91c1c", "#fff5f5", 4.5],
-  ["dark text", "#f8fbff", "#111923", 7],
-  ["dark muted", "#c8d6e8", "#111923", 4.5],
-  ["dark accent", "#8fc5ff", "#111923", 4.5],
-  ["dark warning", "#fcd56f", "#111923", 4.5],
-  ["dark danger", "#fda4af", "#111923", 4.5],
-  ["dark status positive", "#6de0b3", "#101c2c", 4.5],
-  ["dark status warning", "#ffd166", "#101c2c", 4.5],
-  ["dark status danger", "#ff9eae", "#101c2c", 4.5]
+  ["light text", "#162637", "#ffffff", 7],
+  ["light muted", "#59636c", "#ffffff", 4.5],
+  ["light accent", "#3f6350", "#ffffff", 4.5],
+  ["light warning", "#8c5e24", "#ffffff", 4.5],
+  ["light danger", "#a44743", "#ffffff", 4.5],
+  ["dark text", "#f5f5f5", "#111111", 7],
+  ["dark muted", "#b5b5b5", "#111111", 4.5],
+  ["dark accent", "#92b29a", "#111111", 4.5],
+  ["dark warning", "#f0c78d", "#111111", 4.5],
+  ["dark danger", "#ffb0aa", "#111111", 4.5],
+  ["dark status positive", "#9dccac", "#111111", 4.5],
+  ["dark status warning", "#f0c78d", "#111111", 4.5],
+  ["dark status danger", "#ffb0aa", "#111111", 4.5]
 ];
 
 for (const [label, foreground, background, minimum] of contrastChecks) {
