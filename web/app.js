@@ -2,7 +2,7 @@ const APP_BRAND_NAME = "사분 데이터랩";
 const THEME_STORAGE_KEY = "lodging-datalab:theme-mode:v1";
 const THEME_MODES = new Set(["system", "light", "dark"]);
 const THEME_COLORS = {
-  light: "#f8f9f6",
+  light: "#f7f5f0",
   dark: "#000000"
 };
 
@@ -237,7 +237,7 @@ const ADMIN_MOBILE_SECTIONS = {
   database: {
     label: "업체",
     target: "admin",
-    adminPanelSection: "overview",
+    adminPanelSection: "database",
     anchor: "#adminDatabaseDashboard",
     items: [
       { label: "운영 홈", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" },

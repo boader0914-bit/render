@@ -4,14 +4,17 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const stylesPath = path.join(root, "web", "styles.css");
 const appPath = path.join(root, "web", "app.js");
+const serviceWorkerPath = path.join(root, "web", "sw.js");
 const styles = fs.readFileSync(stylesPath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
+const serviceWorker = fs.readFileSync(serviceWorkerPath, "utf8");
 
 const requiredMarkers = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
   "Dark surface coherence v1",
   "Sabun Labs UI alignment v1",
+  "SABUN × BLACK unified surface contract v2",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]"
 ];
@@ -131,8 +134,25 @@ const appSurfaceContracts = [
 const sabunThemeContracts = [
   'font-family: "Sabun MaruBuri"',
   '--theme-accent: #3f6350',
+  '--bg: #f7f5f0',
   '--bg: #000000',
-  '--panel: #111111'
+  '--panel: #111111',
+  '--card-radius: 12px',
+  '--card-hover: #edf2ee',
+  '--card-hover: #1c1c1c'
+];
+
+const unifiedSurfaceContracts = [
+  '--card-radius: 12px',
+  '--card-radius-large: 14px',
+  '--card-transition: background-color 160ms ease-out',
+  '--card-bg: #ffffff',
+  '--card-bg: #111111',
+  '.admin-kpi-grid > article',
+  '.admin-db-province-card-grid > button',
+  '.admin-db-company-values > span',
+  '.collection-archive-actions button',
+  '@media (hover: hover)'
 ];
 
 function hexToRgb(hex) {
@@ -187,26 +207,43 @@ for (const contract of sabunThemeContracts) {
   assert(styles.includes(contract), `missing Sabun theme contract: ${contract}`, failures);
 }
 
+for (const contract of unifiedSurfaceContracts) {
+  assert(styles.includes(contract), `missing unified surface contract: ${contract}`, failures);
+}
+
 const contrastChecks = [
   ["light text", "#162637", "#ffffff", 7],
   ["light muted", "#59636c", "#ffffff", 4.5],
   ["light accent", "#3f6350", "#ffffff", 4.5],
-  ["light warning", "#8c5e24", "#ffffff", 4.5],
-  ["light danger", "#a44743", "#ffffff", 4.5],
+  ["light status positive", "#287f53", "#ffffff", 4.5],
+  ["light warning", "#90632a", "#ffffff", 4.5],
+  ["light danger", "#ae4d49", "#ffffff", 4.5],
   ["dark text", "#f5f5f5", "#111111", 7],
   ["dark muted", "#b5b5b5", "#111111", 4.5],
-  ["dark accent", "#92b29a", "#111111", 4.5],
-  ["dark warning", "#f0c78d", "#111111", 4.5],
-  ["dark danger", "#ffb0aa", "#111111", 4.5],
-  ["dark status positive", "#9dccac", "#111111", 4.5],
-  ["dark status warning", "#f0c78d", "#111111", 4.5],
-  ["dark status danger", "#ffb0aa", "#111111", 4.5]
+  ["dark accent", "#a7c5ae", "#111111", 4.5],
+  ["dark warning", "#e5b46d", "#111111", 4.5],
+  ["dark danger", "#f09c98", "#111111", 4.5],
+  ["dark status positive", "#76c891", "#111111", 4.5],
+  ["dark status warning", "#e5b46d", "#111111", 4.5],
+  ["dark status danger", "#f09c98", "#111111", 4.5]
 ];
 
 for (const [label, foreground, background, minimum] of contrastChecks) {
   const ratio = contrastRatio(foreground, background);
   assert(ratio >= minimum, `${label} contrast ${ratio.toFixed(2)} below ${minimum}`, failures);
 }
+
+assert(
+  /database:\s*\{[\s\S]*?adminPanelSection:\s*"database"/.test(app),
+  "mobile database navigation must open the database panel",
+  failures
+);
+
+assert(
+  serviceWorker.includes("sabun-black-surface-v23"),
+  "service worker cache must refresh the unified surface release",
+  failures
+);
 
 if (failures.length) {
   console.error("Surface contrast checks failed:");

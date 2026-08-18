@@ -37654,3 +37654,368 @@ html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .app-main >
     box-shadow: inset 0 -2px 0 var(--theme-accent) !important;
   }
 }
+
+/* SABUN × BLACK unified surface contract v2
+   One token set for every dashboard surface. Legacy blue rules above remain
+   for backwards compatibility only; this final layer is the visual source of truth. */
+:root {
+  --card-radius: 12px;
+  --card-radius-large: 14px;
+  --card-transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out;
+}
+
+html[data-theme-resolved="light"] {
+  color-scheme: light;
+  --bg: #f7f5f0;
+  --panel: #ffffff;
+  --surface: #ffffff;
+  --surface-soft: #f1f3ef;
+  --surface-elevated: #ffffff;
+  --card-bg: #ffffff;
+  --card-soft: #f1f3ef;
+  --card-hover: #edf2ee;
+  --card-selected: #e5efe7;
+  --card-border: #d8ddd7;
+  --card-hover-border: #aebdaf;
+  --ink: #162637;
+  --muted: #59636c;
+  --weak: #7a838b;
+  --line: #d8ddd7;
+  --line-strong: #aebdaf;
+  --blue: #3f6350;
+  --blue-dark: #31503f;
+  --green: #287f53;
+  --orange: #90632a;
+  --red: #ae4d49;
+  --theme-accent: #3f6350;
+  --theme-accent-strong: #31503f;
+  --theme-accent-soft: #e5efe7;
+  --theme-glow: rgba(63, 99, 80, .14);
+  --status-positive: #287f53;
+  --status-warning: #90632a;
+  --status-danger: #ae4d49;
+  --card-shadow: 0 2px 8px rgba(22, 38, 55, .04);
+  --shadow: 0 6px 20px rgba(22, 38, 55, .06);
+  --soft-shadow: 0 2px 8px rgba(22, 38, 55, .04);
+}
+
+html[data-theme-resolved="dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --panel: #111111;
+  --surface: #111111;
+  --surface-soft: #171717;
+  --surface-elevated: #171717;
+  --card-bg: #111111;
+  --card-soft: #171717;
+  --card-hover: #1c1c1c;
+  --card-selected: #152219;
+  --card-border: #2a2a2a;
+  --card-hover-border: #4e6253;
+  --ink: #f5f5f5;
+  --muted: #b5b5b5;
+  --weak: #8e8e8e;
+  --line: #2a2a2a;
+  --line-strong: #4e6253;
+  --blue: #a7c5ae;
+  --blue-dark: #c8decc;
+  --green: #76c891;
+  --orange: #e5b46d;
+  --red: #f09c98;
+  --theme-accent: #a7c5ae;
+  --theme-accent-strong: #c8decc;
+  --theme-accent-soft: #152219;
+  --theme-glow: rgba(167, 197, 174, .14);
+  --status-positive: #76c891;
+  --status-warning: #e5b46d;
+  --status-danger: #f09c98;
+  --card-shadow: none;
+  --shadow: none;
+  --soft-shadow: none;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b),
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-shell,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
+  background: var(--bg) !important;
+  color: var(--ink) !important;
+}
+
+/* Semantic card containers. The suffix selectors cover newly added cards too,
+   while tab shells remain transparent layout containers rather than cards. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :where(
+  [class$="-card"],
+  [class*="-card "],
+  [class$="-hero"],
+  [class*="-hero "],
+  [class$="-panel"],
+  [class*="-panel "],
+  .admin-kpi-grid > article,
+  .admin-workspace-focus > article,
+  .report-metric-grid > article,
+  .company-insight-grid > div,
+  .b2b-company-card-summary > div,
+  .admin-db-province-card-grid > button,
+  .admin-db-region-card-grid > button,
+  .admin-db-company,
+  .collection-archive-summary > article,
+  .place-rank-change-list > article,
+  .place-rank-change-stats > article,
+  .sheet-booking-bars,
+  .sheet-weekday-bars > div,
+  .sheet-collection-grid > div,
+  .sheet-b2b-platform-grid > div,
+  .sheet-b2b-detail-grid > div,
+  .sheet-b2b-flow-strip > div,
+  .sheet-b2b-evidence-grid > div,
+  .sheet-b2b-note-grid > div,
+  .location-score-model-head > *,
+  .location-summary-grid > *
+):not(.tab-panel, .admin-section-panel) {
+  border-color: var(--card-border) !important;
+  border-radius: var(--card-radius) !important;
+  background: var(--card-bg) !important;
+  box-shadow: var(--card-shadow) !important;
+  transition: var(--card-transition);
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :where(
+  [class$="-hero"],
+  [class*="-hero "],
+  .admin-console-hero,
+  .admin-db-hero,
+  .report-hero,
+  .collection-archive-hero,
+  .place-rank-comparison
+):not(.tab-panel, .admin-section-panel) {
+  border-color: color-mix(in srgb, var(--theme-accent) 32%, var(--card-border)) !important;
+  background: var(--card-soft) !important;
+  border-radius: var(--card-radius-large) !important;
+}
+
+/* Metric and admin database cards were previously omitted from the final theme
+   layer, leaving the old blue dashboard palette visible in light mode. */
+html[data-theme-resolved] body.role-admin :is(
+  .admin-kpi-grid > article,
+  .admin-workspace-focus > article,
+  .admin-db-metrics > article,
+  .company-master-metrics > article,
+  .admin-db-province-card-grid > button,
+  .admin-db-region-card-grid > button,
+  .admin-db-company,
+  .admin-db-company-values > span,
+  .admin-region-company-metrics > span,
+  .admin-db-flow-rail > button,
+  .admin-db-view-switch > button,
+  .admin-db-quality-cards > button
+) {
+  border-color: var(--card-border) !important;
+  background: var(--card-bg) !important;
+  box-shadow: var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  .admin-kpi-grid > article,
+  .admin-workspace-focus > article,
+  .admin-db-metrics > article,
+  .company-master-metrics > article,
+  .admin-db-province-card-grid > button,
+  .admin-db-region-card-grid > button,
+  .admin-db-company,
+  .admin-db-company-values > span,
+  .admin-region-company-metrics > span,
+  .admin-db-flow-rail > button,
+  .admin-db-view-switch > button,
+  .admin-db-quality-cards > button
+) :is(h1, h2, h3, h4, strong, b) {
+  color: var(--ink) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  .admin-kpi-grid > article,
+  .admin-workspace-focus > article,
+  .admin-db-metrics > article,
+  .company-master-metrics > article,
+  .admin-db-province-card-grid > button,
+  .admin-db-region-card-grid > button,
+  .admin-db-company,
+  .admin-db-company-values > span,
+  .admin-region-company-metrics > span,
+  .admin-db-flow-rail > button,
+  .admin-db-view-switch > button,
+  .admin-db-quality-cards > button
+) :is(p, small, span, em) {
+  color: var(--muted) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  .admin-db-province-card-grid > button.active,
+  .admin-db-region-card-grid > button.active,
+  .admin-db-flow-rail > button.active,
+  .admin-db-view-switch > button.active
+) {
+  border-color: var(--theme-accent) !important;
+  background: var(--card-selected) !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .collection-archive-list > article,
+  .collection-archive-summary > article,
+  .place-rank-change-list > article,
+  .place-rank-change-stats > article,
+  .b2b-home-status > article,
+  .b2b-home-flow > article,
+  .b2b-account-status > article,
+  .admin-workspace-focus > article
+) {
+  background: var(--card-soft) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .primary-button,
+  .more-button
+) {
+  border-color: var(--theme-accent) !important;
+  border-radius: 10px !important;
+  background: var(--theme-accent) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+  transition: var(--card-transition);
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(.primary-button, .more-button) {
+  color: #0b120d !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .secondary-button,
+  .small-button,
+  .icon-button,
+  .header-user-view,
+  .header-logout,
+  .collection-archive-list button,
+  .place-rank-replay-notice button,
+  .collection-archive-actions button
+) {
+  border-color: var(--card-border) !important;
+  border-radius: 10px !important;
+  background: var(--card-bg) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+  transition: var(--card-transition);
+}
+
+/* Hover only marks elements that can actually be opened or actioned. */
+@media (hover: hover) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+    .admin-db-company,
+    [data-admin-db-company-card-select],
+    [data-admin-db-company-select],
+    .admin-db-province-card-grid > button,
+    .admin-db-region-card-grid > button,
+    .admin-db-flow-rail > button,
+    .admin-db-view-switch > button,
+    .admin-db-quality-cards > button,
+    .admin-region-company-inspection-next > button,
+    .collection-archive-list > article,
+    .place-rank-change-list > article,
+    .place-rank-change-stats > article,
+    .b2b-home-status > article,
+    .b2b-home-flow > article,
+    .b2b-account-status > article,
+    .primary-button,
+    .more-button,
+    .secondary-button,
+    .small-button,
+    .icon-button,
+    .header-user-view,
+    .header-logout,
+    .collection-archive-actions button
+  ) {
+    cursor: pointer;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+    .admin-db-company,
+    [data-admin-db-company-card-select],
+    [data-admin-db-company-select],
+    .admin-db-province-card-grid > button,
+    .admin-db-region-card-grid > button,
+    .admin-db-flow-rail > button,
+    .admin-db-view-switch > button,
+    .admin-db-quality-cards > button,
+    .admin-region-company-inspection-next > button,
+    .collection-archive-list > article,
+    .place-rank-change-list > article,
+    .place-rank-change-stats > article,
+    .b2b-home-status > article,
+    .b2b-home-flow > article,
+    .b2b-account-status > article
+  ):hover {
+    border-color: var(--card-hover-border) !important;
+    background: var(--card-hover) !important;
+    box-shadow: var(--card-shadow) !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+    .primary-button,
+    .more-button
+  ):hover {
+    border-color: var(--theme-accent-strong) !important;
+    background: var(--theme-accent-strong) !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+    .secondary-button,
+    .small-button,
+    .icon-button,
+    .header-user-view,
+    .header-logout,
+    .collection-archive-actions button
+  ):hover {
+    border-color: var(--card-hover-border) !important;
+    background: var(--card-hover) !important;
+  }
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, input, select, textarea):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--theme-accent) 58%, transparent) !important;
+  outline-offset: 3px;
+}
+
+/* Status remains a small semantic signal, never a competing full-card palette. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.good, .positive, .success) > :is(strong, b, em, .status) {
+  color: var(--status-positive) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.watch, .warning, .caution) > :is(strong, b, em, .status) {
+  color: var(--status-warning) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.hot, .bad, .danger, .error) > :is(strong, b, em, .status) {
+  color: var(--status-danger) !important;
+}
+
+@media (max-width: 760px) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :where(
+    [class$="-card"],
+    [class*="-card "],
+    [class$="-hero"],
+    [class*="-hero "],
+    [class$="-panel"],
+    [class*="-panel "],
+    .admin-kpi-grid > article,
+    .admin-workspace-focus > article,
+    .report-metric-grid > article,
+    .company-insight-grid > div,
+    .b2b-company-card-summary > div,
+    .admin-db-province-card-grid > button,
+    .admin-db-region-card-grid > button,
+    .admin-db-company
+  ):not(.tab-panel, .admin-section-panel) {
+    border-radius: var(--card-radius) !important;
+  }
+}

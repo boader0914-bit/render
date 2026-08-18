@@ -4177,9 +4177,9 @@ function loginPage(message = "") {
       grid-template-columns: minmax(0, .92fr) minmax(340px, .68fr);
       overflow: hidden;
       border: 1px solid #2a2a2a;
-      border-radius: 18px;
+      border-radius: 14px;
       background: #111;
-      box-shadow: 0 20px 48px rgba(0, 0, 0, .38);
+      box-shadow: none;
     }
     .login-brand-panel {
       min-height: 520px;
@@ -4187,7 +4187,7 @@ function loginPage(message = "") {
       flex-direction: column;
       justify-content: center;
       padding: 38px;
-      background: #151515;
+      background: #171717;
       border-right: 1px solid #2a2a2a;
     }
     .login-form-panel {
@@ -4200,7 +4200,7 @@ function loginPage(message = "") {
     }
     .brand-kicker {
       margin: 0 0 12px;
-      color: #92b29a;
+      color: #a7c5ae;
       font-size: 11px;
       font-weight: 800;
       letter-spacing: .11em;
@@ -4255,27 +4255,28 @@ function loginPage(message = "") {
     }
     input::placeholder { color: #929292; }
     input:focus {
-      border-color: #92b29a;
-      box-shadow: 0 0 0 3px rgba(146, 178, 154, .16);
+      border-color: #a7c5ae;
+      box-shadow: 0 0 0 3px rgba(167, 197, 174, .16);
     }
     button {
       width: 100%;
       min-height: 56px;
       margin-top: 4px;
       border: 0;
-      border: 1px solid #92b29a;
+      border: 1px solid #a7c5ae;
       border-radius: 10px;
-      background: #92b29a;
-      color: #fff;
+      background: #a7c5ae;
+      color: #0b120d;
       font: inherit;
       font-size: 17px;
       font-weight: 800;
       cursor: pointer;
       box-shadow: none;
+      transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out;
     }
-    button:hover { background: #a8c1ae; }
+    button:hover { background: #c8decc; border-color: #c8decc; }
     button:disabled { opacity: .6; cursor: wait; }
-    .link { display: block; margin-top: 18px; color: #c5ddc7; font-size: 13px; font-weight: 800; text-align: center; text-decoration: none; }
+    .link { display: block; margin-top: 18px; color: #c8decc; font-size: 13px; font-weight: 800; text-align: center; text-decoration: none; }
     .legal-links {
       display: flex;
       flex-wrap: wrap;
@@ -4301,7 +4302,7 @@ function loginPage(message = "") {
     .error { min-height: 20px; color: #ffb0aa; font-size: 13px; font-weight: 800; line-height: 1.35; }
     @media (max-width: 760px) {
       body { align-items: stretch; padding: 14px; }
-      main { grid-template-columns: 1fr; border-radius: 16px; }
+      main { grid-template-columns: 1fr; border-radius: 14px; }
       .login-brand-panel { min-height: auto; padding: 26px; border-right: 0; border-bottom: 1px solid #2a2a2a; }
       .login-form-panel { padding: 26px; }
       h1 { font-size: 36px; }
@@ -4360,7 +4361,7 @@ function signupPage(message = "", values = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="application-name" content="사분 데이터랩">
   <meta name="apple-mobile-web-app-title" content="사분 데이터랩">
-  <meta name="theme-color" content="#f8f9f6">
+  <meta name="theme-color" content="#f7f5f0">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -4371,8 +4372,8 @@ function signupPage(message = "", values = {}) {
     @font-face { font-family: "Sabun MaruBuri"; src: url("https://www.sabun.co.kr/fonts/MaruBuri-Regular.otf") format("opentype"); font-weight: 400; font-style: normal; font-display: swap; }
     :root { color-scheme: light; font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f8f9f6; color: #162637; }
-    main { width: min(100%, 640px); padding: 30px; border: 1px solid #d8dde1; border-radius: 16px; background: #fff; box-shadow: 0 12px 30px rgba(22, 38, 55, .07); }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f7f5f0; color: #162637; }
+    main { width: min(100%, 640px); padding: 30px; border: 1px solid #d8ddd7; border-radius: 14px; background: #fff; box-shadow: 0 2px 8px rgba(22, 38, 55, .04); }
     .brand-kicker { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 11px; color: #3f6350; font-size: 11px; font-weight: 800; letter-spacing: .105em; }
     h1 { margin: 0 0 12px; font-family: "Sabun MaruBuri", "MaruBuri", Georgia, serif; font-size: 34px; font-weight: 400; letter-spacing: -.06em; line-height: 1.2; }
     p { margin: 0 0 18px; color: #59636c; line-height: 1.55; }
@@ -4387,9 +4388,9 @@ function signupPage(message = "", values = {}) {
       display: grid;
       gap: 4px;
       padding: 12px;
-      border: 1px solid #d8dde1;
+      border: 1px solid #d8ddd7;
       border-radius: 12px;
-      background: #f1f5f1;
+      background: #f1f3ef;
     }
     .signup-summary strong {
       color: #31503f;
@@ -4410,21 +4411,22 @@ function signupPage(message = "", values = {}) {
     .password-control input { padding-right: 56px; }
     label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; color: #364652; }
     label > span:first-child { display: flex; min-height: 18px; align-items: center; gap: 3px; }
-    input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d8dde1; border-radius: 10px; background: #fff; color: #162637; font: inherit; outline: none; }
+    input, select, textarea { width: 100%; min-height: 48px; padding: 0 13px; border: 1px solid #d8ddd7; border-radius: 10px; background: #fff; color: #162637; font: inherit; outline: none; }
     input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #3f6350; }
     textarea { min-height: 82px; padding-block: 11px; resize: vertical; }
     input:focus, select:focus, textarea:focus { border-color: #3f6350; box-shadow: 0 0 0 3px rgba(63, 99, 80, .13); }
-    button { width: 100%; min-height: 54px; border: 1px solid #3f6350; border-radius: 10px; background: #3f6350; color: #fff; font: inherit; font-size: 17px; font-weight: 800; cursor: pointer; }
-    .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d8dde1; border-radius: 10px; background: #fff; color: #31503f; font-size: 13px; }
+    button { width: 100%; min-height: 54px; border: 1px solid #3f6350; border-radius: 10px; background: #3f6350; color: #fff; font: inherit; font-size: 17px; font-weight: 800; cursor: pointer; transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out; }
+    button:hover { border-color: #31503f; background: #31503f; }
+    .inline-action { width: auto; min-width: 86px; min-height: 48px; padding: 0 14px; border: 1px solid #d8ddd7; border-radius: 10px; background: #fff; color: #31503f; font-size: 13px; }
     .inline-action:hover { border-color: #3f6350; background: #edf2ee; }
     .icon-action { position: absolute; top: 4px; right: 5px; display: inline-grid; place-items: center; width: 40px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: #364652; }
     .icon-action:hover, .icon-action:focus-visible, .icon-action[data-active="true"] { background: #edf2ee; color: #31503f; }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-    .error { min-height: 20px; color: #a44743; font-size: 13px; font-weight: 700; }
+    .error { min-height: 20px; color: #ae4d49; font-size: 13px; font-weight: 700; }
     .hint, .field-status { min-height: 18px; margin: 0; color: #59636c; font-size: 12px; font-weight: 600; line-height: 1.35; }
-    .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #227e50; }
-    .field-status[data-state="error"], .password-match[data-state="error"] { color: #a44743; }
-    .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #d8dde1; border-radius: 12px; background: #f7f5f0; }
+    .field-status[data-state="ok"], .password-match[data-state="ok"] { color: #287f53; }
+    .field-status[data-state="error"], .password-match[data-state="error"] { color: #ae4d49; }
+    .agreements { display: grid; gap: 8px; padding: 14px; border: 1px solid #d8ddd7; border-radius: 12px; background: #f1f3ef; }
     .agreement-note {
       margin: 0;
       color: #59636c;
@@ -4436,7 +4438,7 @@ function signupPage(message = "", values = {}) {
     .check { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px; color: #162637; font-size: 13px; line-height: 1.4; }
     .check a { color: #31503f; font-weight: 800; text-decoration: none; }
     .password-match { min-height: 18px; color: #59636c; font-size: 12px; font-weight: 600; line-height: 1.35; }
-    .required { color: #a44743; font-weight: 800; }
+    .required { color: #ae4d49; font-weight: 800; }
     .link { display: block; margin-top: 14px; color: #31503f; font-size: 13px; font-weight: 800; text-align: center; text-decoration: none; }
     .legal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 12px; }
     .legal-links a { color: #59636c; font-size: 12px; font-weight: 700; text-decoration: none; }
