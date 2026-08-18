@@ -16,6 +16,7 @@ const state = {
   runs: [],
   data: null,
   activeRunId: null,
+  placeRankReplayRunId: null,
   activeTab: "report",
   themeMode: "system",
   adminMobileSection: "summary",
@@ -378,6 +379,7 @@ const els = {
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
   adminMemberRequestDashboard: document.getElementById("adminMemberRequestDashboard"),
   collectionArchive: document.getElementById("collectionArchive"),
+  placeRankReplayNotice: document.getElementById("placeRankReplayNotice"),
   b2bSearchPanel: document.getElementById("b2bSearchPanel"),
   b2bOnboarding: document.getElementById("b2bOnboarding"),
   b2bSearchForm: document.getElementById("b2bSearchForm"),
@@ -1296,6 +1298,7 @@ function renderRunResultApplySummary() {
         ${status.actions.map((action) => `
           <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
         `).join("")}
+        <button class="primary-button" type="button" data-open-place-rank-replay>플레이스 순서 다시 보기</button>
         <button type="button" data-open-collection-archive>결과 보관함</button>
       </div>
       ${placeRankComparisonSummaryHtml(state.data.rankComparison, { compact: true })}
@@ -1471,6 +1474,7 @@ function renderCollectionArchive() {
       <article><span>현재 결과</span><strong>${escapeHtml(activeRun?.keyword || activeRun?.label || "선택 대기")}</strong><small>${escapeHtml(activeRun?.updatedAt ? compactDateTime(activeRun.updatedAt) : "결과를 선택하세요")}</small></article>
       <article><span>비교 범위</span><strong>${escapeHtml(activeRun?.detailRankRanges ? `${activeRun.detailRankRanges}위` : "확인 필요")}</strong><small>동일 키워드·순위 범위끼리 비교</small></article>
     </section>
+    ${activeRun ? `<div class="collection-archive-actions"><button class="primary-button" type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(activeRun.id || "")}">플레이스 순서 다시 보기</button><small>재수집 없이 열람 중인 회차의 저장된 네이버 노출순을 표시합니다.</small></div>` : ""}
     ${placeRankComparisonSummaryHtml(comparison)}
     <section class="collection-archive-list" aria-label="저장된 수집 결과 목록">
       <div class="collection-archive-list-head"><strong>저장된 결과</strong><small>열기를 누르면 수집 당시 결과를 다시 표시합니다.</small></div>
@@ -1482,7 +1486,10 @@ function renderCollectionArchive() {
           <article class="${active ? "active" : ""}">
             <div><strong>${escapeHtml(run.keyword || run.label || run.id)}</strong><small>${escapeHtml([compactDateTime(run.updatedAt || ""), range, run.collectionPurposeLabel || "수집 결과"].filter(Boolean).join(" · "))}</small></div>
             <span>${count ? `${fmtNumber(count)}개` : "결과"}</span>
-            <button type="button" data-archive-run-id="${escapeHtml(run.id)}">${active ? "열람 중" : "열기"}</button>
+            <div class="collection-archive-row-actions">
+              <button type="button" data-archive-run-id="${escapeHtml(run.id)}">${active ? "열람 중" : "열기"}</button>
+              <button type="button" data-open-place-rank-replay="" data-place-rank-run-id="${escapeHtml(run.id)}">순서 보기</button>
+            </div>
           </article>
         `;
       }).join("")}
@@ -5568,6 +5575,28 @@ function rankedCompanyItems() {
     overallRank: item.rank || index + 1,
     rankingSourceLabel: "재고 분석 순위"
   }));
+}
+
+function renderPlaceRankReplayNotice() {
+  if (!els.placeRankReplayNotice) return;
+  const run = state.data?.run || {};
+  const isReplay = Boolean(run.id && state.placeRankReplayRunId === run.id);
+  const items = rankedCompanyItems();
+  els.placeRankReplayNotice.hidden = !isReplay;
+  if (!isReplay) {
+    els.placeRankReplayNotice.innerHTML = "";
+    return;
+  }
+  const range = run.detailRankRanges ? `${run.detailRankRanges}위` : "전체 저장 순위";
+  els.placeRankReplayNotice.innerHTML = `
+    <div>
+      <span>STORED PLACE ORDER</span>
+      <strong>플레이스 순서 다시 보기</strong>
+      <small>${escapeHtml([run.keyword || run.label || "수집 결과", compactDateTime(run.updatedAt || run.collectedAt || ""), range, `${fmtNumber(items.length)}개`].filter(Boolean).join(" · "))}</small>
+    </div>
+    <p>재수집 없이 이 회차에 저장된 네이버 플레이스 노출 순서를 그대로 표시합니다.</p>
+    <button type="button" data-open-collection-archive>보관함</button>
+  `;
 }
 
 function inventoryLinked(item = {}) {
@@ -27414,8 +27443,10 @@ function renderHeader() {
     els.pageSubtitle.textContent = isAdminRole()
       ? `${title} · 상업용 시장 요약 · ${dateRangeLabel(run)}`
       : `${title} · 경쟁업체 매출·노출·수요 전망 · ${dateRangeLabel(run)}`;
-  } else if (state.activeTab === "rank" && !isAdminRole()) {
-    els.pageSubtitle.textContent = `${title} · 네이버 노출 순위 · 매출/판매율 표본`;
+  } else if (state.activeTab === "rank") {
+    els.pageSubtitle.textContent = isAdminRole()
+      ? `${title} · 수집 당시 네이버 플레이스 노출순 · ${dateRangeLabel(run)}`
+      : `${title} · 네이버 노출 순위 · 매출/판매율 표본`;
   } else if (state.activeTab === "map" && !isAdminRole()) {
     els.pageSubtitle.textContent = `${title} · 지역 내·인접 경쟁권 · 반경 노출`;
   } else {
@@ -27433,6 +27464,7 @@ function renderAll() {
       renderRunResultApplySummary();
       renderCollectionArchive();
     }
+    renderPlaceRankReplayNotice();
     renderB2BEmptyPanels();
     if (roleAllowsTab("dictionary")) renderLocationDictionary();
     return;
@@ -27443,6 +27475,7 @@ function renderAll() {
   renderNotice();
   renderReport();
   renderCompanies();
+  renderPlaceRankReplayNotice();
   if (roleAllowsTab("target")) renderTargets();
   if (roleAllowsTab("decisionQueue")) renderDecisionQueue();
   if (roleAllowsTab("map")) renderMap();
@@ -27492,6 +27525,7 @@ function setActiveTab(tab, options = {}) {
   syncPrimaryNavButtons();
   syncB2BRegionSecondaryNav();
   renderHeader();
+  if (state.activeTab === "rank") renderPlaceRankReplayNotice();
   closeDrawer();
   if (!state.data) {
     renderB2BEmptyPanels();
@@ -30024,6 +30058,7 @@ async function loadRun(runId) {
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
   state.data = data;
   state.activeRunId = runId;
+  if (state.placeRankReplayRunId && state.placeRankReplayRunId !== runId) state.placeRankReplayRunId = null;
   if (isAdminRole()) {
     await loadHistoryOps();
     await loadCompanyMasterSummary();
@@ -30059,6 +30094,19 @@ async function loadRun(runId) {
   renderAll();
   if (isAdminRole() && adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
   setStatus("준비");
+}
+
+async function openPlaceRankReplay(runId = "") {
+  if (!isAdminRole()) return;
+  const targetRunId = String(runId || state.activeRunId || state.data?.run?.id || "").trim();
+  if (targetRunId && targetRunId !== state.activeRunId) await loadRun(targetRunId);
+  const run = state.data?.run || {};
+  if (!run.id) throw new Error("플레이스 순서를 열 수 있는 수집 결과가 없습니다.");
+  state.placeRankReplayRunId = run.id;
+  setActiveTab("rank");
+  renderPlaceRankReplayNotice();
+  window.requestAnimationFrame(() => document.querySelector("#rankPanel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  setStatus("저장된 플레이스 순서 열람");
 }
 
 async function loadB2BHistoryRun(runId) {
@@ -30517,6 +30565,16 @@ function bindEvents() {
     const b2bRegionTab = event.target.closest("[data-b2b-region-tab]");
     if (b2bRegionTab) {
       setActiveTab(b2bRegionTab.dataset.b2bRegionTab || "map");
+      return;
+    }
+    const placeRankReplay = event.target.closest("[data-open-place-rank-replay]");
+    if (placeRankReplay) {
+      openPlaceRankReplay(placeRankReplay.dataset.placeRankRunId || "").catch((error) => {
+        setStatus("플레이스 순서 열기 실패");
+        if (els.collectionArchive && state.activeTab === "admin" && state.adminPanelSection === "archive") {
+          els.collectionArchive.insertAdjacentHTML("afterbegin", `<div class="empty">${escapeHtml(error.message)}</div>`);
+        }
+      });
       return;
     }
     if (event.target.closest("[data-open-collection-archive]")) {
