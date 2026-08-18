@@ -446,6 +446,92 @@ html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(butto
   box-shadow: none !important;
 }
 
+/*
+ * Admin legacy-component migration.
+ * These components predate the surface roles and were painted by ID-scoped
+ * navy declarations. Keep the geometry, but map every large surface to the
+ * canonical card/control tokens before status rails are added below.
+ */
+html[data-theme-resolved] body.role-admin #adminConsoleDashboard :is(
+  .admin-location-score-queue,
+  .admin-location-score-queue-list > article,
+  .admin-maintenance-lane,
+  .admin-run-region-grid > article,
+  .admin-region-verdict,
+  .admin-region-approval-grid > article,
+  .admin-region-approval-actions,
+  .admin-region-checklist-grid > article,
+  .admin-region-maintenance-actions,
+  .admin-region-maintenance-actions > article,
+  .admin-region-review-form,
+  .admin-region-correction-gap-list > article,
+  .admin-region-preflight-panel,
+  .admin-region-review-filter-summary,
+  .admin-region-audit-summary,
+  .admin-region-company-list > article
+),
+html[data-theme-resolved] body.role-admin :is(
+  .run-purpose-result,
+  .run-purpose-result-grid > article,
+  .run-apply-grid > article,
+  .crawl-route-preview > article
+),
+html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(
+  .admin-member-row:not(.head),
+  .admin-member-history-list
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminConsoleDashboard :is(
+  .admin-maintenance-lane > button,
+  .admin-region-approval-actions > button,
+  .admin-region-review-filter-summary button,
+  .admin-region-audit-filters > button
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  .crawl-route-preview,
+  .run-purpose-result,
+  .run-purpose-result-grid,
+  .run-apply-grid
+) :is(strong, b, label) {
+  color: var(--text-primary) !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  .crawl-route-preview,
+  .run-purpose-result,
+  .run-purpose-result-grid,
+  .run-apply-grid
+) :is(span, small, em, p) {
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(
+  .admin-member-row,
+  .admin-member-history-list
+) :is(strong, b, mark) {
+  color: var(--text-primary) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(
+  .admin-member-row,
+  .admin-member-history-list
+) :is(span, small, em) {
+  color: var(--text-secondary) !important;
+}
+
 /* State changes are small signals: an inset rail and matching text, never a full-card fill. */
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   [data-ui-status="positive"], [data-ui-status="good"], [data-ui-status="strong"],
