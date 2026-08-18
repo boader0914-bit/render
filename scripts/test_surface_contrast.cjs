@@ -10,6 +10,7 @@ const app = fs.readFileSync(appPath, "utf8");
 const requiredMarkers = [
   "Surface contrast contract v3",
   "Location contrast contract v5",
+  "Dark surface coherence v1",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]"
 ];
@@ -110,7 +111,10 @@ const darkSelectors = [
   ".admin-db-company",
   ".admin-db-flat-list",
   ".admin-console-panel",
-  ".company-review-queue"
+  ".company-review-queue",
+  ".place-rank-change-stats article.up strong",
+  ".admin-db-applied-values",
+  ".location-decision"
 ];
 
 const appSurfaceContracts = [
@@ -181,7 +185,10 @@ const contrastChecks = [
   ["dark muted", "#c8d6e8", "#111923", 4.5],
   ["dark accent", "#8fc5ff", "#111923", 4.5],
   ["dark warning", "#fcd56f", "#111923", 4.5],
-  ["dark danger", "#fda4af", "#111923", 4.5]
+  ["dark danger", "#fda4af", "#111923", 4.5],
+  ["dark status positive", "#6de0b3", "#101c2c", 4.5],
+  ["dark status warning", "#ffd166", "#101c2c", 4.5],
+  ["dark status danger", "#ff9eae", "#101c2c", 4.5]
 ];
 
 for (const [label, foreground, background, minimum] of contrastChecks) {

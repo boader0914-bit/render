@@ -35390,6 +35390,9 @@ html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) {
   --theme-accent-strong: #b6dcff;
   --theme-accent-soft: rgba(96, 171, 255, .16);
   --theme-glow: rgba(77, 151, 255, .23);
+  --status-positive: #6de0b3;
+  --status-warning: #ffd166;
+  --status-danger: #ff9eae;
   --shadow: 0 22px 52px rgba(0, 0, 0, .34);
   --soft-shadow: 0 10px 25px rgba(0, 0, 0, .24);
   background:
@@ -36977,4 +36980,304 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-header h1 {
     align-items: stretch;
     flex-direction: column;
   }
+}
+
+/* Dark surface coherence v1: no unmarked light cards inside a dark workspace. */
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .report-target-row,
+  .report-region-grid div,
+  .demand-signal-card,
+  .demand-region-row,
+  .segment-list div,
+  .company-insight-grid div,
+  .b2b-company-card-summary div,
+  .b2b-rank-metrics article,
+  .b2b-rank-board-grid article,
+  .b2b-rank-action-board div,
+  .b2b-rank-focus button,
+  .b2b-rank-range-row,
+  .b2b-map-region-rank div:not(:first-child),
+  .validation-target-list button,
+  .audit-queue-list button,
+  .audit-status-strip span,
+  .collection-diagnostic-list div,
+  .history-ops-log button,
+  .history-ops-log article,
+  .history-ops-company-list button,
+  .admin-db-audit-detail-grid article,
+  .admin-db-audit-queue article,
+  .admin-db-audit-gate,
+  .admin-db-audit-gates article,
+  .admin-queue-summary-grid article,
+  .admin-queue-row:not(.head),
+  .admin-region-ops-queue-grid article,
+  .admin-location-score-queue-list article,
+  .company-review-queue article,
+  .sheet-audit-summary div,
+  .sheet-audit-grid div,
+  .sheet-audit-criteria article,
+  .sheet-b2b-platform-grid div,
+  .sheet-b2b-detail-grid div,
+  .sheet-b2b-flow-strip div,
+  .sheet-b2b-evidence-grid div,
+  .sheet-b2b-note-grid div,
+  .sheet-b2b-boundary,
+  .sheet-b2b-coupon-line,
+  .search-row,
+  .platform-row,
+  .b2b-correlation-card,
+  .b2b-correlation-chart,
+  .b2b-correlation-list div,
+  .b2b-revenue-board,
+  .b2b-revenue-grid article,
+  .b2b-revenue-row,
+  .b2b-revenue-guide > div:not(.b2b-revenue-subhead),
+  .b2b-demand-action-board div,
+  .b2b-demand-competitors button,
+  .b2b-keyword-focus article,
+  .b2b-keyword-list button,
+  .admin-db-selected-grid article,
+  .admin-db-selected-brief article,
+  .admin-db-selected-next-grid article,
+  .admin-db-selected-task-rail article
+) {
+  --surface-bg-token: var(--panel);
+  --surface-bg-soft-token: var(--surface-soft);
+  --surface-border-token: var(--line);
+  --surface-text-token: var(--ink);
+  --surface-muted-token: var(--muted);
+  --surface-subtle-token: var(--weak);
+  --surface-accent-token: var(--theme-accent);
+  --surface-green-token: var(--status-positive);
+  --surface-warning-token: var(--status-warning);
+  --surface-danger-token: var(--status-danger);
+  border-color: var(--surface-border-token) !important;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #ffffff), var(--panel)) !important;
+  color: var(--surface-text-token) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .demand-signal-card.positive,
+  .history-ops-log article.good,
+  .collection-diagnostic-list div.good,
+  .company-insight-grid div.revenue,
+  .company-insight-grid div.good,
+  .b2b-company-card-summary div.revenue,
+  .b2b-company-card-summary div.strong,
+  .b2b-company-card-summary div.good,
+  .b2b-correlation-card.strong,
+  .b2b-demand-competitors button.strong,
+  .b2b-demand-competitors button.good,
+  .b2b-keyword-focus article.strong,
+  .b2b-keyword-focus article.good,
+  .b2b-keyword-list button.strong,
+  .b2b-keyword-list button.good,
+  .admin-db-selected-grid article.good,
+  .admin-db-selected-brief article.good,
+  .admin-db-selected-next-grid article.good,
+  .admin-db-selected-task-rail article.good
+) {
+  border-color: color-mix(in srgb, var(--status-positive) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-positive) 12%, var(--panel)) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .demand-signal-card.warning,
+  .history-ops-log button.watch,
+  .collection-diagnostic-list div.watch,
+  .company-insight-grid div.watch,
+  .b2b-company-card-summary div.watch,
+  .b2b-correlation-card.watch,
+  .b2b-demand-competitors button.watch,
+  .b2b-keyword-focus article.watch,
+  .b2b-keyword-list button.watch,
+  .admin-db-selected-grid article.watch,
+  .admin-db-selected-brief article.watch,
+  .admin-db-selected-next-grid article.watch,
+  .admin-db-selected-task-rail article.watch
+) {
+  border-color: color-mix(in srgb, var(--status-warning) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-warning) 12%, var(--panel)) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .history-ops-log button.bad,
+  .collection-diagnostic-list div.bad,
+  .company-insight-grid div.hot,
+  .b2b-company-card-summary div.hot,
+  .b2b-demand-competitors button.hot,
+  .b2b-keyword-focus article.hot,
+  .b2b-keyword-list button.hot,
+  .admin-db-selected-grid article.hot,
+  .admin-db-selected-brief article.hot,
+  .admin-db-selected-next-grid article.hot,
+  .admin-db-selected-task-rail article.hot
+) {
+  border-color: color-mix(in srgb, var(--status-danger) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-danger) 12%, var(--panel)) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .location-decision,
+  .location-decision-score,
+  .location-score-model-head > *,
+  .location-score-component-grid article,
+  .location-score-validation-grid article,
+  .location-score-admin-form,
+  .location-score-history article,
+  .admin-region-location-score-panel,
+  .admin-region-location-score-grid article,
+  .location-evidence,
+  .location-candidate-evidence div,
+  .location-request-row,
+  .location-reality-grid > *,
+  .location-compare-bars,
+  .location-target-row,
+  .location-empty-note,
+  .location-action-panel,
+  .location-index,
+  .location-advice-card,
+  .location-summary-grid > *,
+  .region-decision,
+  .region-priority-card,
+  .region-mini-card
+) {
+  --location-light-bg: var(--panel);
+  --location-light-soft: var(--surface-soft);
+  --location-light-line: var(--line);
+  --location-light-ink: var(--ink);
+  --location-light-text: var(--muted);
+  --location-light-muted: var(--muted);
+  --location-light-accent: var(--theme-accent);
+  --location-light-green: var(--status-positive);
+  --location-light-warning: var(--status-warning);
+  --location-light-danger: var(--status-danger);
+  border-color: var(--location-light-line) !important;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #ffffff), var(--panel)) !important;
+  color: var(--location-light-ink) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .location-decision.caution,
+  .location-score-component-grid article.mid,
+  .location-score-component-grid article.weak,
+  .location-score-validation-grid article.mid,
+  .location-index.mid,
+  .location-index.weak
+) {
+  border-color: color-mix(in srgb, var(--status-warning) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-warning) 12%, var(--panel)) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article.risk,
+  .location-score-validation-grid article.risk,
+  .location-index.risk
+) {
+  border-color: color-mix(in srgb, var(--status-danger) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-danger) 12%, var(--panel)) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .location-score-component-grid article.strong,
+  .location-score-validation-grid article.strong,
+  .location-index.strong
+) {
+  border-color: color-mix(in srgb, var(--status-positive) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-positive) 12%, var(--panel)) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) :is(
+  .location-meta-row span,
+  .location-cluster-chip,
+  .location-action-chips span,
+  .location-action-panel span,
+  .location-score-validation-grid mark,
+  .location-decision mark
+) {
+  border-color: color-mix(in srgb, var(--theme-accent) 44%, var(--line)) !important;
+  background: color-mix(in srgb, var(--theme-accent) 14%, var(--panel)) !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .location-cluster-chip b {
+  color: var(--theme-accent-strong) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin :is(
+  .admin-db-applied-values,
+  .admin-db-applied-grid article,
+  .admin-db-review-flash,
+  .admin-db-review-flash.success,
+  .admin-db-review-flash.watch,
+  .admin-db-review-flash.neutral,
+  .admin-db-review-flash.danger
+) {
+  border-color: var(--line) !important;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #ffffff), var(--panel)) !important;
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin :is(
+  .admin-db-applied-head strong,
+  .admin-db-applied-grid strong
+) {
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin .admin-db-applied-head span {
+  color: var(--theme-accent) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin :is(
+  .admin-db-applied-grid span,
+  .admin-db-applied-grid small
+) {
+  color: var(--muted) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin :is(
+  .admin-db-detail-status-tags em,
+  .admin-db-channel-table-head em,
+  .admin-db-channel-state
+) {
+  border-color: color-mix(in srgb, var(--theme-accent) 44%, var(--line)) !important;
+  background: color-mix(in srgb, var(--theme-accent) 14%, var(--panel)) !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin .admin-db-channel-state.good {
+  border-color: color-mix(in srgb, var(--status-positive) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-positive) 12%, var(--panel)) !important;
+  color: var(--status-positive) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin .admin-db-channel-state.watch {
+  border-color: color-mix(in srgb, var(--status-warning) 48%, var(--line)) !important;
+  background: color-mix(in srgb, var(--status-warning) 12%, var(--panel)) !important;
+  color: var(--status-warning) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-stats article.up strong,
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-list em.up,
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .company-rank-change.up {
+  color: var(--status-positive) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-stats article.down strong,
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-list em.down,
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .company-rank-change.down {
+  color: var(--status-danger) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-stats article.new strong,
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-list em.new,
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .company-rank-change.new {
+  color: var(--theme-accent) !important;
+}
+
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-stats article.out strong,
+html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .place-rank-change-list em.out {
+  color: var(--status-warning) !important;
 }
