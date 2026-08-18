@@ -379,12 +379,12 @@
 
         <section class="admin-section-panel" data-admin-section-panel="files" aria-label="API 및 파일">
         <div class="admin-stack admin-stack-files">
-          <section class="admin-card" id="trafficAdminCard">
+          <section class="admin-card" id="trafficAdminCard" data-ui-surface="card">
             <div class="card-head">
               <h3>트래픽 API</h3>
               <span class="state-badge" id="trafficApiState">미설정</span>
             </div>
-            <details class="advanced-box">
+            <details class="advanced-box" data-ui-surface="control">
               <summary>API 키 입력</summary>
               <form id="trafficKeyForm" class="traffic-key-form">
                 <label class="field">
@@ -416,7 +416,7 @@
             </details>
           </section>
 
-          <details class="admin-card admin-files-collapsible" id="companyMasterAdminCard">
+          <details class="admin-card admin-files-collapsible" id="companyMasterAdminCard" data-ui-surface="card">
             <summary>업체 기준값 관리</summary>
             <div class="admin-files-collapsible-body">
             <div class="card-head">
@@ -427,7 +427,7 @@
             </div>
           </details>
 
-          <details class="admin-card admin-files-collapsible" id="downloadAdminCard">
+          <details class="admin-card admin-files-collapsible" id="downloadAdminCard" data-ui-surface="card">
             <summary>파일 다운로드</summary>
             <div class="admin-files-collapsible-body">
             <h3>파일</h3>

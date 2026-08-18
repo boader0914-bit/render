@@ -22828,6 +22828,212 @@ a.platform-row:hover {
   }
 }
 
+/* Explicit surface draft layer
+   Explicit surface metadata replaces the legacy admin-only blue dashboard
+   treatment on nested cards. New UI must use data-ui-surface instead of
+   relying on a class-name suffix. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] {
+  border: 1px solid var(--card-border) !important;
+  border-radius: var(--card-radius) !important;
+  color: var(--ink) !important;
+  text-shadow: none !important;
+  box-shadow: var(--card-shadow) !important;
+  transition: var(--card-transition);
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="card"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="metric"] {
+  background: var(--card-bg) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="soft"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="control"] {
+  background: var(--card-soft) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="soft"] {
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, var(--card-border)) !important;
+  border-radius: var(--card-radius-large) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] :is(h1, h2, h3, h4, strong, b, summary, label) {
+  color: var(--ink) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] :is(p, small, span, em, li) {
+  color: var(--muted) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .admin-member-summary,
+  .admin-delete-summary,
+  .admin-security-grid,
+  .admin-security-storage,
+  .admin-member-meta-grid,
+  .admin-member-search-list,
+  .admin-member-history-list,
+  .admin-db-region-next-grid,
+  .location-score-model-head,
+  .location-score-component-grid
+) [data-ui-surface] {
+  min-width: 0;
+}
+
+/* The former dark settings surfaces are all neutral cards in light mode. */
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  .admin-card,
+  .advanced-box,
+  .download-item,
+  .traffic-verify-result,
+  .legal-inline-notice,
+  .link-fallback input
+) {
+  border-color: var(--card-border) !important;
+  background: var(--card-bg) !important;
+  color: var(--ink) !important;
+  box-shadow: var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .advanced-box,
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .traffic-verify-result,
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .legal-inline-notice {
+  background: var(--card-soft) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  h3, strong, b, summary, label, .field span
+) {
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  p, small, span, em, li, .hint
+) {
+  color: var(--muted) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(button, a) {
+  border-color: var(--card-border) !important;
+  background: var(--card-bg) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  .state-badge,
+  .admin-files-collapsible summary::after
+) {
+  border-color: var(--card-border) !important;
+  background: var(--card-soft) !important;
+  color: var(--theme-accent-strong) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .primary-button {
+  border-color: var(--theme-accent) !important;
+  background: var(--theme-accent) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="files"] .primary-button {
+  color: #0b120d !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .admin-db-view-switch,
+  .admin-db-flow-rail
+) [data-ui-surface="control"].active {
+  border-color: var(--theme-accent) !important;
+  background: var(--card-selected) !important;
+  color: var(--theme-accent-strong) !important;
+  box-shadow: inset 0 -3px 0 var(--theme-accent) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="positive"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="good"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="strong"] {
+  box-shadow: inset 3px 0 0 var(--status-positive), var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="warning"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="watch"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="caution"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="weak"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="mid"] {
+  box-shadow: inset 3px 0 0 var(--status-warning), var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="danger"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="risk"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="bad"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="hot"] {
+  box-shadow: inset 3px 0 0 var(--status-danger), var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status] :is(strong, b, em) {
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="positive"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="good"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="strong"] i > b {
+  background: var(--status-positive) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="warning"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="watch"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="caution"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="weak"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="mid"] i > b {
+  background: var(--status-warning) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="danger"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="risk"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="bad"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="hot"] i > b {
+  background: var(--status-danger) !important;
+}
+
+@media (hover: hover) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-interactive="true"] {
+    cursor: pointer;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-interactive="true"]:hover {
+    border-color: var(--card-hover-border) !important;
+    background: var(--card-hover) !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="control"][data-ui-interactive="true"].active:hover {
+    border-color: var(--theme-accent-strong) !important;
+    background: var(--card-selected) !important;
+    /* Draft-layer rule; final override is emitted at the stylesheet tail. */
+  }
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  .state-badge,
+  .admin-files-collapsible summary::after
+) {
+  border-color: var(--card-border) !important;
+  background: var(--card-soft) !important;
+  color: var(--theme-accent-strong) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .primary-button {
+  border-color: var(--theme-accent) !important;
+  background: var(--theme-accent) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="files"] .primary-button {
+  color: #0b120d !important;
+}
+
 .b2b-demand-playbook {
   min-width: 0;
   display: grid;
@@ -38018,4 +38224,167 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.hot, .bad, .d
   ):not(.tab-panel, .admin-section-panel) {
     border-radius: var(--card-radius) !important;
   }
+}
+
+/* UI surface contract v3
+   Final explicit override for nested admin cards. This layer must remain last
+   so legacy dashboard styles cannot reintroduce navy surfaces in light mode. */
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] {
+  border: 1px solid var(--card-border) !important;
+  border-radius: var(--card-radius) !important;
+  background: var(--card-bg) !important;
+  color: var(--ink) !important;
+  text-shadow: none !important;
+  box-shadow: var(--card-shadow) !important;
+  transition: var(--card-transition);
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="soft"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="control"] {
+  background: var(--card-soft) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="soft"] {
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, var(--card-border)) !important;
+  border-radius: var(--card-radius-large) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] :is(h1, h2, h3, h4, strong, b, summary, label) {
+  color: var(--ink) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] :is(p, small, span, em, li) {
+  color: var(--muted) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  .admin-card,
+  .advanced-box,
+  .download-item,
+  .traffic-verify-result,
+  .legal-inline-notice,
+  .link-fallback input
+) {
+  border-color: var(--card-border) !important;
+  border-radius: var(--card-radius) !important;
+  background: var(--card-bg) !important;
+  color: var(--ink) !important;
+  box-shadow: var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  .advanced-box,
+  .traffic-verify-result,
+  .legal-inline-notice
+) {
+  background: var(--card-soft) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(h3, strong, b, summary, label, .field span) {
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(p, small, span, em, li, .hint) {
+  color: var(--muted) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(button, a) {
+  border-color: var(--card-border) !important;
+  background: var(--card-bg) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .admin-db-view-switch,
+  .admin-db-flow-rail
+) [data-ui-surface="control"].active {
+  border-color: var(--theme-accent) !important;
+  background: var(--card-selected) !important;
+  color: var(--theme-accent-strong) !important;
+  box-shadow: inset 0 -3px 0 var(--theme-accent) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="positive"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="good"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="strong"] {
+  box-shadow: inset 3px 0 0 var(--status-positive), var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="warning"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="watch"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="caution"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="weak"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="mid"] {
+  box-shadow: inset 3px 0 0 var(--status-warning), var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="danger"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="risk"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="bad"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="hot"] {
+  box-shadow: inset 3px 0 0 var(--status-danger), var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status] :is(strong, b, em) {
+  color: var(--ink) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="positive"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="good"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="strong"] i > b {
+  background: var(--status-positive) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="warning"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="watch"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="caution"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="weak"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="mid"] i > b {
+  background: var(--status-warning) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="danger"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="risk"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="bad"] i > b,
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-status="hot"] i > b {
+  background: var(--status-danger) !important;
+}
+
+@media (hover: hover) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-interactive="true"] {
+    cursor: pointer;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-interactive="true"]:hover {
+    border-color: var(--card-hover-border) !important;
+    background: var(--card-hover) !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface="control"][data-ui-interactive="true"].active:hover {
+    border-color: var(--theme-accent-strong) !important;
+    background: var(--card-selected) !important;
+  }
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] :is(
+  .state-badge,
+  .admin-files-collapsible summary::after
+) {
+  border-color: var(--card-border) !important;
+  background: var(--card-soft) !important;
+  color: var(--theme-accent-strong) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .primary-button {
+  border-color: var(--theme-accent) !important;
+  background: var(--theme-accent) !important;
+  color: #ffffff !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="files"] .primary-button {
+  color: #0b120d !important;
 }

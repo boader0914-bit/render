@@ -4,9 +4,11 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const stylesPath = path.join(root, "web", "styles.css");
 const appPath = path.join(root, "web", "app.js");
+const indexPath = path.join(root, "web", "index.html");
 const serviceWorkerPath = path.join(root, "web", "sw.js");
 const styles = fs.readFileSync(stylesPath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
+const indexHtml = fs.readFileSync(indexPath, "utf8");
 const serviceWorker = fs.readFileSync(serviceWorkerPath, "utf8");
 
 const requiredMarkers = [
@@ -15,6 +17,7 @@ const requiredMarkers = [
   "Dark surface coherence v1",
   "Sabun Labs UI alignment v1",
   "SABUN × BLACK unified surface contract v2",
+  "UI surface contract v3",
   "[data-surface=\"light\"]",
   "[data-surface=\"dark\"]"
 ];
@@ -155,6 +158,33 @@ const unifiedSurfaceContracts = [
   '@media (hover: hover)'
 ];
 
+const explicitSurfaceContracts = [
+  '[data-ui-surface="card"]',
+  '[data-ui-surface="metric"]',
+  '[data-ui-surface="control"]',
+  '[data-ui-surface="soft"]',
+  '[data-ui-status="positive"]',
+  '[data-ui-status="warning"]',
+  '[data-ui-status="danger"]',
+  '[data-ui-interactive="true"]',
+  '[data-admin-section-panel="files"] .advanced-box'
+];
+
+const appExplicitSurfaceContracts = [
+  'class="admin-console-panel admin-member-panel" data-ui-surface="card"',
+  'class="admin-db-view-switch" data-ui-surface="control"',
+  'data-ui-surface="metric" data-ui-interactive="true" data-admin-db-province-card=',
+  'class="location-decision ${decision.tone}" data-ui-surface="soft"',
+  'data-ui-status="${escapeHtml(component.tone)}"'
+];
+
+const indexExplicitSurfaceContracts = [
+  'id="trafficAdminCard" data-ui-surface="card"',
+  'class="advanced-box" data-ui-surface="control"',
+  'id="companyMasterAdminCard" data-ui-surface="card"',
+  'id="downloadAdminCard" data-ui-surface="card"'
+];
+
 function hexToRgb(hex) {
   const normalized = String(hex || "").replace("#", "").trim();
   if (!/^[0-9a-f]{6}$/i.test(normalized)) return null;
@@ -211,6 +241,25 @@ for (const contract of unifiedSurfaceContracts) {
   assert(styles.includes(contract), `missing unified surface contract: ${contract}`, failures);
 }
 
+for (const contract of explicitSurfaceContracts) {
+  assert(styles.includes(contract), `missing explicit surface contract: ${contract}`, failures);
+}
+
+for (const contract of appExplicitSurfaceContracts) {
+  assert(app.includes(contract), `missing explicit app surface contract: ${contract}`, failures);
+}
+
+for (const contract of indexExplicitSurfaceContracts) {
+  assert(indexHtml.includes(contract), `missing explicit static surface contract: ${contract}`, failures);
+}
+
+const explicitSurfaceStart = styles.lastIndexOf("UI surface contract v3");
+const legacySurfaceStart = styles.lastIndexOf("SABUN × BLACK unified surface contract v2");
+const explicitSurfaceStyles = explicitSurfaceStart >= 0 ? styles.slice(explicitSurfaceStart) : "";
+assert(explicitSurfaceStart > legacySurfaceStart, "explicit surface contract must be the final theme layer", failures);
+assert(!explicitSurfaceStyles.includes("linear-gradient"), "explicit surface contract must not restore gradients", failures);
+assert(!explicitSurfaceStyles.includes("rgba(74, 144, 226"), "explicit surface contract must not restore legacy blue", failures);
+
 const contrastChecks = [
   ["light text", "#162637", "#ffffff", 7],
   ["light muted", "#59636c", "#ffffff", 4.5],
@@ -240,8 +289,8 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("sabun-black-surface-v23"),
-  "service worker cache must refresh the unified surface release",
+  serviceWorker.includes("explicit-surface-v24"),
+  "service worker cache must refresh the explicit surface release",
   failures
 );
 

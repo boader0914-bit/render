@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260819-sabun-black-surface-v23";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260819-explicit-surface-v24";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

@@ -18581,9 +18581,9 @@ function adminDbViewSwitchHtml(mode = "region", filteredRows = [], rows = [], gr
     ["review", "상세", "수정·확인"]
   ];
   return `
-    <div class="admin-db-view-switch" role="tablist" aria-label="업체 관리 보기 방식">
+    <div class="admin-db-view-switch" data-ui-surface="control" role="tablist" aria-label="업체 관리 보기 방식">
       ${buttons.map(([value, label, note]) => `
-        <button type="button" class="${mode === value ? "active" : ""}" data-admin-db-view="${escapeHtml(value)}" role="tab" aria-selected="${mode === value ? "true" : "false"}">
+        <button type="button" class="${mode === value ? "active" : ""}" data-ui-surface="control" data-ui-interactive="true" data-admin-db-view="${escapeHtml(value)}" role="tab" aria-selected="${mode === value ? "true" : "false"}">
           <span>${escapeHtml(label)}</span>
           <small>${escapeHtml(note)}</small>
         </button>
@@ -18638,9 +18638,9 @@ function adminDbFlowRailHtml(mode = "region", filteredRows = [], rows = [], grou
     }
   ];
   return `
-    <section class="admin-db-flow-rail" aria-label="업체 관리 작업 흐름">
+    <section class="admin-db-flow-rail" data-ui-surface="control" aria-label="업체 관리 작업 흐름">
       ${steps.map((step) => `
-        <button type="button" class="${stage === step.key ? "active" : ""}" data-admin-db-view="${escapeHtml(step.view)}">
+        <button type="button" class="${stage === step.key ? "active" : ""}" data-ui-surface="control" data-ui-interactive="true" data-admin-db-view="${escapeHtml(step.view)}">
           <span>${escapeHtml(step.label)}</span>
           <strong>${escapeHtml(step.value)}</strong>
           <small>${escapeHtml(step.note)}</small>
@@ -18715,37 +18715,37 @@ function adminDbRegionStructurePanel(grouped = [], allGrouped = [], filters = {}
     selectedRegion?.label || (selectedProvince ? "전체 지역" : "광역 선택 전")
   ].filter(Boolean).join(" · ");
   return `
-    <section class="admin-db-region-empty-panel">
+    <section class="admin-db-region-empty-panel" data-ui-surface="card">
       <div>
         <span>다음 단계</span>
         <strong>${escapeHtml(selectedRegion ? `${selectedRegion.label} 업체 리스트 확인` : selectedProvince ? `${selectedProvince.label} 시군구 선택` : "광역을 선택하세요")}</strong>
         <small>${escapeHtml(`${listScope} · ${fmtNumber(filteredRows.length)}개 업체 조건`)}</small>
       </div>
       <div class="admin-db-region-next-grid">
-        <article>
+        <article data-ui-surface="metric">
           <span>업체</span>
           <strong>${fmtNumber(filteredRows.length)}곳</strong>
           <small>현재 조건</small>
         </article>
-        <article>
+        <article data-ui-surface="metric" data-ui-status="warning">
           <span>낮은 신뢰도</span>
           <strong>${fmtNumber(lowConfidence)}곳</strong>
           <small>자동수집값 보정 후보</small>
         </article>
-        <article>
+        <article data-ui-surface="metric" data-ui-status="positive">
           <span>관리자 보정</span>
           <strong>${fmtNumber(manualCount)}곳</strong>
           <small>보정값 우선 적용</small>
         </article>
-        <article>
+        <article data-ui-surface="metric" data-ui-status="warning">
           <span>확인 수집</span>
           <strong>${fmtNumber(confirmNeeded)}곳</strong>
           <small>상세 수집 필요</small>
         </article>
       </div>
       <div class="admin-db-region-empty-actions">
-        <button type="button" data-admin-db-view-link="list">업체 리스트로 보기</button>
-        <button type="button" data-admin-db-view-link="review">상세·수정 열기</button>
+        <button type="button" data-ui-surface="control" data-ui-interactive="true" data-admin-db-view-link="list">업체 리스트로 보기</button>
+        <button type="button" data-ui-surface="control" data-ui-interactive="true" data-admin-db-view-link="review">상세·수정 열기</button>
       </div>
     </section>
   `;
@@ -18779,7 +18779,7 @@ function adminDbProvinceQuickBoard(grouped = [], filters = {}) {
     }))
   ];
   return `
-    <section class="admin-db-province-board" aria-label="광역/도 빠른 분류">
+    <section class="admin-db-province-board" data-ui-surface="soft" aria-label="광역/도 빠른 분류">
       <div class="admin-db-province-board-head">
         <div>
           <span>광역/도</span>
@@ -18799,7 +18799,7 @@ function adminDbProvinceQuickBoard(grouped = [], filters = {}) {
           const decisionNeeded = rows.filter((row) => adminDbStatusMatches(row, "decision_queue")).length;
           const active = card.key === "all" ? filters.province === "all" : filters.province === card.key;
           return `
-            <button type="button" class="${active ? "active" : ""}" data-admin-db-province-card="${escapeHtml(card.key)}">
+            <button type="button" class="${active ? "active" : ""}" data-ui-surface="metric" data-ui-interactive="true" data-admin-db-province-card="${escapeHtml(card.key)}">
               <span>${escapeHtml(card.label)}</span>
               <strong>${fmtNumber(rows.length)}곳</strong>
               <small>${fmtNumber(card.regions || 0)}개 지역 · 평균 ${fmtWon(averageRevenue)}</small>
@@ -18831,7 +18831,7 @@ function adminDbRegionQuickBoard(grouped = [], filters = {}) {
     }))
   ];
   return `
-    <section class="admin-db-region-board" aria-label="시군구 빠른 분류">
+    <section class="admin-db-region-board" data-ui-surface="soft" aria-label="시군구 빠른 분류">
       <div class="admin-db-region-board-head">
         <div>
           <span>시군구 2차 분류</span>
@@ -18851,7 +18851,7 @@ function adminDbRegionQuickBoard(grouped = [], filters = {}) {
           const confirmNeeded = rows.filter((row) => row.metrics?.collection?.key === "confirm_needed").length;
           const active = card.key === "all" ? filters.region === "all" : filters.region === card.key;
           return `
-            <button type="button" class="${active ? "active" : ""}" data-admin-db-region-card="${escapeHtml(card.key)}" data-admin-db-region-card-province="${escapeHtml(province.key || "all")}">
+            <button type="button" class="${active ? "active" : ""}" data-ui-surface="metric" data-ui-interactive="true" data-admin-db-region-card="${escapeHtml(card.key)}" data-admin-db-region-card-province="${escapeHtml(province.key || "all")}">
               <span>${escapeHtml(card.label)}</span>
               <strong>${fmtNumber(rows.length)}곳</strong>
               <small>${fmtNumber(card.regions || 0)}개 지역 · 평균 ${fmtWon(averageRevenue)}</small>
@@ -23470,7 +23470,7 @@ function adminConsoleMemberPanel() {
   const summary = overview.summary || {};
   const rows = members.slice(0, 8);
   return `
-    <section class="admin-console-panel admin-member-panel">
+    <section class="admin-console-panel admin-member-panel" data-ui-surface="card">
       <div class="admin-console-head">
         <div>
           <strong>회원 사용량</strong>
@@ -23479,22 +23479,22 @@ function adminConsoleMemberPanel() {
         <button type="button" data-drawer-tab="admin" data-admin-section-link="members">회원 관리</button>
       </div>
       <div class="admin-member-summary">
-        <article>
+        <article data-ui-surface="metric">
           <span>가입 회원</span>
           <strong>${fmtNumber(summary.memberCount || 0)}</strong>
           <small>활성 ${fmtNumber(summary.activeMemberCount || 0)}명</small>
         </article>
-        <article>
+        <article data-ui-surface="metric">
           <span>오늘 사용자</span>
           <strong>${fmtNumber(summary.todayActiveUsers || 0)}</strong>
           <small>새 수집 ${fmtNumber(summary.todayNewSearches || 0)}회</small>
         </article>
-        <article>
+        <article data-ui-surface="metric">
           <span>차감 없는 재조회</span>
           <strong>${fmtNumber(summary.todayReuseCount || 0)}</strong>
           <small>동일 조건/대기열 재사용</small>
         </article>
-        <article>
+        <article data-ui-surface="metric">
           <span>정책 변경</span>
           <strong>${fmtNumber(summary.todayPolicyChanges || 0)}</strong>
           <small>${escapeHtml(summary.latestPolicyChangeAt ? `최근 ${compactDateTime(summary.latestPolicyChangeAt)}` : "최근 변경 없음")}</small>
@@ -23539,7 +23539,7 @@ function adminConsoleMemberPanel() {
             .slice(0, 3);
           const memberId = escapeHtml(member.memberId || "");
           return `
-            <div class="admin-member-row ${member.status === "disabled" ? "disabled" : ""}">
+            <div class="admin-member-row ${member.status === "disabled" ? "disabled" : ""}" data-ui-surface="card" data-ui-status="${member.status === "disabled" ? "warning" : "neutral"}">
               <div>
                 <strong>${escapeHtml(member.username || "아이디 없음")}</strong>
                 <small>${escapeHtml(companyText)}</small>
@@ -23550,22 +23550,22 @@ function adminConsoleMemberPanel() {
               <small>${escapeHtml(latestText)}</small>
               <div class="admin-member-detail">
                 <div class="admin-member-meta-grid">
-                  <article>
+                  <article data-ui-surface="metric">
                     <span>가입/로그인</span>
                     <strong>${escapeHtml(joinedText)}</strong>
                     <small>${escapeHtml(loginText)}</small>
                   </article>
-                  <article>
+                  <article data-ui-surface="metric">
                     <span>회원 연락처</span>
                     <strong>${escapeHtml(contactText)}</strong>
                     <small>${escapeHtml(companyText)}</small>
                   </article>
-                  <article>
+                  <article data-ui-surface="metric">
                     <span>약관 동의</span>
                     <strong>${escapeHtml(consentText)}</strong>
                     <small>${escapeHtml(consentAt)}</small>
                   </article>
-                  <article>
+                  <article data-ui-surface="metric" data-ui-status="${member.status === "disabled" ? "warning" : "positive"}">
                     <span>운영 상태</span>
                     <strong>${escapeHtml(statusText)}</strong>
                     <small>${escapeHtml(policyText)}</small>
@@ -23573,11 +23573,11 @@ function adminConsoleMemberPanel() {
                 </div>
                 <div class="admin-member-search-list">
                   ${recentSearches.length ? recentSearches.map((entry) => `
-                    <span>
+                    <span data-ui-surface="control">
                       <b>${escapeHtml(entry.keyword || entry.runLabel || "검색어 없음")}</b>
                       <em>${escapeHtml([entry.detailRankRanges ? `${entry.detailRankRanges}위` : "", entry.completedAt ? compactDateTime(entry.completedAt) : "", entry.quotaCounted === false ? "재사용" : "새 수집"].filter(Boolean).join(" · "))}</em>
                     </span>
-                  `).join("") : `<span><b>최근 검색 없음</b><em>회원 검색 이력이 없습니다.</em></span>`}
+                  `).join("") : `<span data-ui-surface="control"><b>최근 검색 없음</b><em>회원 검색 이력이 없습니다.</em></span>`}
                 </div>
                 <div class="admin-member-history-list">
                   <strong>관리자 변경 이력</strong>
@@ -23586,12 +23586,12 @@ function adminConsoleMemberPanel() {
                     const historyAccountType = entry.accountType || member.accountType || "member";
                     const historyStatus = entry.status === "disabled" ? "정지" : "활성";
                     return `
-                      <span>
+                      <span data-ui-surface="control">
                         <b>${escapeHtml(`${compactDateTime(entry.changedAt)} · ${entry.adminUsername || "관리자"}`)}</b>
                         <em>${escapeHtml(`${b2bAccountTypeLabel(historyAccountType)} · ${historyStatus} · ${b2bPolicyLabel(historyPolicy, historyAccountType)}`)}</em>
                       </span>
                     `;
-                  }).join("") : `<span><b>변경 이력 없음</b><em>관리자 정책 변경 기록이 없습니다.</em></span>`}
+                  }).join("") : `<span data-ui-surface="control"><b>변경 이력 없음</b><em>관리자 정책 변경 기록이 없습니다.</em></span>`}
                 </div>
               </div>
               <div class="admin-member-controls">
@@ -23627,7 +23627,7 @@ function adminConsoleAccountDeletePanel() {
   const overview = state.accountDeleteAdmin || {};
   if (overview.error) {
     return `
-      <section class="admin-console-panel admin-delete-panel">
+      <section class="admin-console-panel admin-delete-panel" data-ui-surface="card">
         <div class="admin-console-head">
           <div>
             <strong>계정·데이터 삭제 요청</strong>
@@ -23649,7 +23649,7 @@ function adminConsoleAccountDeletePanel() {
     ["rejected", "반려"]
   ];
   return `
-    <section class="admin-console-panel admin-delete-panel">
+    <section class="admin-console-panel admin-delete-panel" data-ui-surface="card">
       <div class="admin-console-head">
         <div>
           <strong>계정·데이터 삭제 요청</strong>
@@ -23658,10 +23658,10 @@ function adminConsoleAccountDeletePanel() {
         <a href="/account-delete" target="_blank" rel="noopener">공개 요청 화면</a>
       </div>
       <div class="admin-delete-summary">
-        <article><span>미처리</span><strong>${fmtNumber(summary.openCount || 0)}</strong><small>접수·확인·처리중</small></article>
-        <article><span>전체 요청</span><strong>${fmtNumber(summary.totalCount || 0)}</strong><small>${escapeHtml(summary.latestRequestedAt ? `최근 ${compactDateTime(summary.latestRequestedAt)}` : "요청 없음")}</small></article>
-        <article><span>완료</span><strong>${fmtNumber(summary.completedCount || 0)}</strong><small>처리 완료</small></article>
-        <article><span>반려</span><strong>${fmtNumber(summary.rejectedCount || 0)}</strong><small>본인 확인 실패 등</small></article>
+        <article data-ui-surface="metric" data-ui-status="warning"><span>미처리</span><strong>${fmtNumber(summary.openCount || 0)}</strong><small>접수·확인·처리중</small></article>
+        <article data-ui-surface="metric"><span>전체 요청</span><strong>${fmtNumber(summary.totalCount || 0)}</strong><small>${escapeHtml(summary.latestRequestedAt ? `최근 ${compactDateTime(summary.latestRequestedAt)}` : "요청 없음")}</small></article>
+        <article data-ui-surface="metric" data-ui-status="positive"><span>완료</span><strong>${fmtNumber(summary.completedCount || 0)}</strong><small>처리 완료</small></article>
+        <article data-ui-surface="metric" data-ui-status="danger"><span>반려</span><strong>${fmtNumber(summary.rejectedCount || 0)}</strong><small>본인 확인 실패 등</small></article>
       </div>
       <div class="admin-delete-list">
         ${rows.length ? rows.map((request) => {
@@ -23673,7 +23673,7 @@ function adminConsoleAccountDeletePanel() {
             request.consentAcceptedAt ? `${compactDateTime(request.consentAcceptedAt)} 동의` : ""
           ].filter(Boolean).join(" · ") || "동의 버전 대기";
           return `
-            <article class="admin-delete-row ${escapeHtml(status)}">
+            <article class="admin-delete-row ${escapeHtml(status)}" data-ui-surface="card" data-ui-status="${escapeHtml(status === "completed" ? "positive" : status === "rejected" ? "danger" : status === "verifying" || status === "processing" ? "warning" : "neutral")}">
               <div>
                 <span>${escapeHtml(request.requestTypeLabel || "삭제 요청")}</span>
                 <strong>${escapeHtml(request.username || "아이디 없음")}</strong>
@@ -23707,7 +23707,7 @@ function adminConsoleSecurityPanel() {
   const overview = state.securityHardeningAdmin || {};
   if (overview.error) {
     return `
-      <section class="admin-console-panel admin-security-panel">
+      <section class="admin-console-panel admin-security-panel" data-ui-surface="card">
         <div class="admin-console-head">
           <div>
             <strong>보안 하드닝 점검</strong>
@@ -23736,7 +23736,7 @@ function adminConsoleSecurityPanel() {
     session.userAgentBound ? "브라우저 바인딩" : ""
   ].filter(Boolean).join(" · ");
   return `
-    <section class="admin-console-panel admin-security-panel">
+    <section class="admin-console-panel admin-security-panel" data-ui-surface="card">
       <div class="admin-console-head">
         <div>
           <strong>보안 하드닝 점검</strong>
@@ -23746,41 +23746,41 @@ function adminConsoleSecurityPanel() {
         <span>${escapeHtml(overview.checkedAt ? compactDateTime(overview.checkedAt) : "점검 대기")}</span>
       </div>
       <div class="admin-security-grid">
-        <article class="ok">
+        <article class="ok" data-ui-surface="metric" data-ui-status="positive">
           <span>요청 제한</span>
           <strong>적용</strong>
           <small>${escapeHtml(limitText || "정책 대기")}</small>
         </article>
-        <article class="ok">
+        <article class="ok" data-ui-surface="metric" data-ui-status="positive">
           <span>세션 쿠키</span>
           <strong>${escapeHtml(`${fmtNumber(session.ttlHours || 12)}시간`)}</strong>
           <small>${escapeHtml(cookieText || "쿠키 정책 대기")}</small>
         </article>
-        <article class="${password.weakPlaintextCount ? "watch" : "ok"}">
+        <article class="${password.weakPlaintextCount ? "watch" : "ok"}" data-ui-surface="metric" data-ui-status="${password.weakPlaintextCount ? "warning" : "positive"}">
           <span>비밀번호 저장</span>
           <strong>${escapeHtml(password.algorithm || "확인")}</strong>
           <small>${escapeHtml(`${fmtNumber(password.hashedCount || 0)}/${fmtNumber(password.memberCount || 0)} 계정 해시 · 평문 ${fmtNumber(password.weakPlaintextCount || 0)}`)}</small>
         </article>
-        <article class="ok">
+        <article class="ok" data-ui-surface="metric" data-ui-status="positive">
           <span>권한 분리</span>
           <strong>관리자/B2B 분리</strong>
           <small>${escapeHtml(role.b2bPrivateFieldsStripped ? "B2B 관리자 필드 제거 · 관리자 API 차단" : "점검 필요")}</small>
         </article>
       </div>
       <div class="admin-security-storage">
-        <article>
+        <article data-ui-surface="control">
           <strong>고객 DB</strong>
           <small>${escapeHtml([storage.memberDb, storage.searchHistoryDb, storage.accountDeleteRequestDb].filter(Boolean).join(" · ") || "경로 대기")}</small>
         </article>
-        <article>
+        <article data-ui-surface="control">
           <strong>마스터/키 저장소</strong>
           <small>${escapeHtml([storage.companyMasterDb, storage.locationScoreOverrideDb, storage.apiKeyStorage].filter(Boolean).join(" · ") || "경로 대기")}</small>
         </article>
-        <article>
+        <article data-ui-surface="control">
           <strong>관심숙소</strong>
           <small>${escapeHtml(storage.interestLodgeStorage || "브라우저 계정 키 저장소")}</small>
         </article>
-        <article>
+        <article data-ui-surface="control">
           <strong>삭제 요청 로그</strong>
           <small>${escapeHtml(`미처리 ${fmtNumber(deleteLog.openCount || 0)}건 · 전체 ${fmtNumber(deleteLog.totalCount || 0)}건 · 상태 이력 보관`)}</small>
         </article>
@@ -25740,7 +25740,7 @@ function locationDecision(card = {}, clusters = [], runtime = {}, scoreModel = n
 function renderLocationDecisionPanel(card, clusters, runtime, scoreModel = null, tourismMatch = null) {
   const decision = locationDecision(card, clusters, runtime, scoreModel, tourismMatch);
   return `
-    <section class="location-decision ${decision.tone}">
+    <section class="location-decision ${decision.tone}" data-ui-surface="soft" data-ui-status="${escapeHtml(decision.tone)}">
       <div class="location-decision-score">
         <span>입지점수</span>
         <strong>${Number.isFinite(decision.confidence) ? fmtNumber(decision.confidence) : "확인"}</strong>
@@ -25774,17 +25774,17 @@ function renderLocationScoreModel(scoreModel = null) {
         <span>관광·검색·예약·매출·신뢰도 기준</span>
       </div>
       <div class="location-score-model-head">
-        <div>
+        <div data-ui-surface="metric">
           <span>보정 전</span>
           <strong>${fmtNumber(scoreModel.rawScore)}</strong>
           <small>사전·실수집 가중 평균</small>
         </div>
-        <div class="${escapeHtml(confidenceTone)}">
+        <div class="${escapeHtml(confidenceTone)}" data-ui-surface="metric" data-ui-status="${escapeHtml(confidenceTone)}">
           <span>데이터 신뢰도</span>
           <strong>${fmtNumber(scoreModel.confidence)}</strong>
           <small>${scoreModel.confidenceAdjustment >= 0 ? "+" : ""}${fmtNumber(scoreModel.confidenceAdjustment)}점 보정</small>
         </div>
-        <div class="${manual.hasAdjustment ? "strong" : "weak"}">
+        <div class="${manual.hasAdjustment ? "strong" : "weak"}" data-ui-surface="metric" data-ui-status="${manual.hasAdjustment ? "positive" : "neutral"}">
           <span>${escapeHtml(manualLabel)}</span>
           <strong>${manual.hasAdjustment ? escapeHtml(manualAppliedLabel) : escapeHtml(manualEmptyLabel)}</strong>
           <small>${escapeHtml(manualNote)}</small>
@@ -25792,7 +25792,7 @@ function renderLocationScoreModel(scoreModel = null) {
       </div>
       <div class="location-score-component-grid">
         ${scoreModel.components.map((component) => `
-          <article class="${escapeHtml(component.tone)}">
+          <article class="${escapeHtml(component.tone)}" data-ui-surface="metric" data-ui-status="${escapeHtml(component.tone)}">
             <div>
               <strong>${escapeHtml(component.label)}</strong>
               <em>${fmtNumber(component.value)}</em>
