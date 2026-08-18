@@ -3,10 +3,12 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const stylesPath = path.join(root, "web", "styles.css");
+const themePath = path.join(root, "web", "admin-theme.css");
 const appPath = path.join(root, "web", "app.js");
 const indexPath = path.join(root, "web", "index.html");
 const serviceWorkerPath = path.join(root, "web", "sw.js");
 const styles = fs.readFileSync(stylesPath, "utf8");
+const themeStyles = fs.readFileSync(themePath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
 const indexHtml = fs.readFileSync(indexPath, "utf8");
 const serviceWorker = fs.readFileSync(serviceWorkerPath, "utf8");
@@ -170,6 +172,24 @@ const explicitSurfaceContracts = [
   '[data-admin-section-panel="files"] .advanced-box'
 ];
 
+const canonicalThemeContracts = [
+  "SABUN Data Lab theme system",
+  "--app-bg: #f7f8f5",
+  "--surface-card: #ffffff",
+  "--accent: #3e7565",
+  "--app-bg: #000000",
+  "--surface-card: #111111",
+  "--theme-surface-soft: #171717",
+  "--accent: #91bfa9",
+  ".admin-region-ops-queue",
+  ".admin-member-summary > article",
+  ".flow-chip-row > span",
+  ".location-score-component-grid > article",
+  "Every named dashboard surface is neutral",
+  "State changes are small signals",
+  "Desktop navigation is fixed"
+];
+
 const appExplicitSurfaceContracts = [
   'class="admin-console-panel admin-member-panel" data-ui-surface="card"',
   'class="admin-db-view-switch" data-ui-surface="control"',
@@ -245,6 +265,15 @@ for (const contract of explicitSurfaceContracts) {
   assert(styles.includes(contract), `missing explicit surface contract: ${contract}`, failures);
 }
 
+for (const contract of canonicalThemeContracts) {
+  assert(themeStyles.includes(contract), `missing canonical theme contract: ${contract}`, failures);
+}
+
+assert(indexHtml.includes('href="/admin-theme.css"'), "index must load the canonical theme module", failures);
+assert(!themeStyles.includes("linear-gradient"), "canonical theme must not introduce gradients", failures);
+assert(!themeStyles.includes("#08111f"), "canonical theme must not restore legacy navy", failures);
+assert(!themeStyles.includes("rgba(74, 144, 226"), "canonical theme must not restore legacy blue", failures);
+
 for (const contract of appExplicitSurfaceContracts) {
   assert(app.includes(contract), `missing explicit app surface contract: ${contract}`, failures);
 }
@@ -261,6 +290,14 @@ assert(!explicitSurfaceStyles.includes("linear-gradient"), "explicit surface con
 assert(!explicitSurfaceStyles.includes("rgba(74, 144, 226"), "explicit surface contract must not restore legacy blue", failures);
 
 const contrastChecks = [
+  ["canonical light text", "#172235", "#ffffff", 7],
+  ["canonical light muted", "#5e6975", "#ffffff", 4.5],
+  ["canonical light accent", "#3e7565", "#ffffff", 4.5],
+  ["canonical dark text", "#f4f4f5", "#111111", 7],
+  ["canonical dark muted", "#b8b8bd", "#111111", 4.5],
+  ["canonical dark accent", "#91bfa9", "#111111", 4.5],
+  ["canonical dark warning", "#f2c875", "#111111", 4.5],
+  ["canonical dark danger", "#ff9a9a", "#111111", 4.5],
   ["light text", "#162637", "#ffffff", 7],
   ["light muted", "#59636c", "#ffffff", 4.5],
   ["light accent", "#3f6350", "#ffffff", 4.5],
@@ -289,8 +326,8 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("explicit-surface-v24"),
-  "service worker cache must refresh the explicit surface release",
+  serviceWorker.includes("theme-rebuild-v25") && serviceWorker.includes('"/admin-theme.css"'),
+  "service worker cache must refresh the theme rebuild release",
   failures
 );
 

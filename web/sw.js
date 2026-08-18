@@ -1,7 +1,8 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260819-explicit-surface-v24";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260819-theme-rebuild-v25";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",
+  "/admin-theme.css",
   "/app.js",
   "/favicon.svg",
   "/manifest.webmanifest",
@@ -49,7 +50,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (["script", "style", "manifest"].includes(request.destination) || ["/app.js", "/styles.css", "/sw.js"].includes(url.pathname)) {
+  if (["script", "style", "manifest"].includes(request.destination) || ["/app.js", "/styles.css", "/admin-theme.css", "/sw.js"].includes(url.pathname)) {
     event.respondWith(
       fetch(request).then((response) => {
         if (response.ok) {
