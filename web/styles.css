@@ -36131,3 +36131,236 @@ html[data-theme-resolved] body.role-admin .admin-workspace-hero p {
     min-height: 136px;
   }
 }
+
+/* Responsive primary navigation: desktop sidebar, mobile bottom bar. */
+@media (min-width: 861px) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-shell {
+    width: min(100%, 1440px);
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
+    display: grid !important;
+    grid-template-columns: 248px minmax(0, 1fr);
+    align-items: start;
+    column-gap: 28px;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main > .bottom-nav {
+    position: sticky !important;
+    z-index: 18;
+    top: calc(16px + env(safe-area-inset-top));
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    display: grid !important;
+    width: 248px !important;
+    margin: 0;
+    padding: 12px;
+    grid-template-columns: 1fr !important;
+    gap: 5px;
+    overflow: visible;
+    border-radius: 22px;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main > :not(.bottom-nav):not(.admin-mobile-nav) {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  html[data-theme-resolved] body.role-admin .app-main > .admin-mobile-nav {
+    display: none !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button {
+    position: relative;
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    grid-template-rows: minmax(18px, auto) minmax(16px, auto);
+    align-items: center;
+    column-gap: 9px;
+    min-height: 58px;
+    padding: 8px 9px;
+    overflow: visible;
+    border: 1px solid transparent;
+    border-radius: 14px;
+    background: transparent;
+    text-align: left;
+    white-space: normal;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button::before {
+    content: attr(data-nav-icon);
+    grid-row: 1 / 3;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface-soft);
+    color: var(--theme-accent-strong);
+    font-size: 17px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button::after {
+    content: attr(data-nav-detail) !important;
+    grid-column: 2;
+    grid-row: 2;
+    display: block !important;
+    overflow: hidden;
+    color: var(--muted) !important;
+    font-size: 10px;
+    font-weight: 760;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transform: none;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button > strong {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink) !important;
+    font-size: 13px;
+    font-weight: 950;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button > span {
+    display: none;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active {
+    border-color: color-mix(in srgb, var(--theme-accent) 55%, var(--line)) !important;
+    background: color-mix(in srgb, var(--theme-accent) 16%, var(--panel)) !important;
+    box-shadow: inset 3px 0 0 var(--theme-accent), 0 9px 18px color-mix(in srgb, var(--theme-glow) 72%, transparent) !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active::before {
+    border-color: transparent;
+    background: linear-gradient(135deg, var(--theme-accent), var(--theme-accent-strong));
+    color: #ffffff;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active > strong {
+    color: var(--theme-accent-strong) !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-section-nav {
+    width: 100%;
+    margin: 0 0 18px;
+  }
+}
+
+@media (max-width: 860px) {
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-shell {
+    padding-bottom: calc(98px + env(safe-area-inset-bottom));
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
+    display: block !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main > .bottom-nav,
+  html[data-theme-resolved] body.role-admin .app-main > .bottom-nav {
+    position: fixed !important;
+    z-index: 90;
+    top: auto !important;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid !important;
+    width: 100% !important;
+    min-height: 68px;
+    margin: 0;
+    padding: 6px max(8px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-right));
+    border-width: 1px 0 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -14px 32px rgba(0, 0, 0, .2) !important;
+    backdrop-filter: blur(18px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  html[data-theme-resolved] body.role-admin .bottom-nav {
+    grid-template-columns: repeat(7, minmax(64px, 1fr)) !important;
+  }
+
+  html[data-theme-resolved] body.role-b2b .bottom-nav {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: 26px 17px;
+    align-items: center;
+    justify-items: center;
+    min-width: 64px;
+    min-height: 54px;
+    padding: 2px 5px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--muted) !important;
+    box-shadow: none !important;
+    white-space: nowrap;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button::before {
+    content: attr(data-nav-icon);
+    grid-row: 1;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 8px;
+    color: currentColor;
+    font-size: 17px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button::after,
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button > span {
+    display: none !important;
+    content: none !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button > strong {
+    grid-row: 2;
+    min-width: 0;
+    overflow: hidden;
+    color: currentColor !important;
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active {
+    background: var(--theme-accent-soft) !important;
+    color: var(--theme-accent-strong) !important;
+    box-shadow: inset 0 -2px 0 var(--theme-accent) !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-nav,
+  html[data-theme-resolved] body.role-admin .admin-section-nav {
+    display: none !important;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-legal-footer {
+    margin-bottom: calc(82px + env(safe-area-inset-bottom));
+  }
+}

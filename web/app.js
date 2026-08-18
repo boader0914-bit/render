@@ -224,18 +224,16 @@ const ROLE_TABS = {
 };
 const ADMIN_MOBILE_SECTIONS = {
   summary: {
-    label: "요약",
-    target: "report",
+    label: "홈",
+    target: "admin",
+    adminPanelSection: "overview",
+    anchor: "#adminConsoleDashboard",
     items: [
-      { label: "리포트", tab: "report" },
-      { label: "순위", tab: "rank" },
-      { label: "지도", tab: "map" },
-      { label: "수요", tab: "demand" },
-      { label: "수집 이력", tab: "historyOps" }
+      { label: "운영 홈", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" }
     ]
   },
   database: {
-    label: "DB",
+    label: "업체",
     target: "admin",
     adminPanelSection: "overview",
     anchor: "#adminDatabaseDashboard",
@@ -252,6 +250,34 @@ const ADMIN_MOBILE_SECTIONS = {
     anchor: "#crawlForm",
     items: [
       { label: "수집 실행", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" }
+    ]
+  },
+  analysis: {
+    label: "분석",
+    target: "report",
+    items: [
+      { label: "요약 리포트", tab: "report" },
+      { label: "업체 순위", tab: "rank" },
+      { label: "수요구조", tab: "demand" },
+      { label: "수집 이력", tab: "historyOps" }
+    ]
+  },
+  region: {
+    label: "지역 분석",
+    target: "dictionary",
+    items: [
+      { label: "입지사전", tab: "dictionary" },
+      { label: "지역 지도", tab: "map" },
+      { label: "수요구조", tab: "demand" }
+    ]
+  },
+  members: {
+    label: "회원",
+    target: "admin",
+    adminPanelSection: "members",
+    anchor: "#adminMemberRequestDashboard",
+    items: [
+      { label: "회원 관리", tab: "admin", adminPanelSection: "members", anchor: "#adminMemberRequestDashboard" }
     ]
   },
   settings: {
@@ -274,9 +300,9 @@ const ADMIN_PANEL_SECTIONS = {
 };
 const ADMIN_PANEL_MOBILE_TARGETS = {
   database: { section: "database", anchor: "#adminDatabaseDashboard" },
-  overview: { section: "database", anchor: "#adminConsoleDashboard" },
+  overview: { section: "summary", anchor: "#adminConsoleDashboard" },
   collect: { section: "collect", anchor: "#crawlForm" },
-  members: { section: "settings", anchor: "#adminMemberRequestDashboard" },
+  members: { section: "members", anchor: "#adminMemberRequestDashboard" },
   files: { section: "settings", anchor: "#trafficAdminCard" }
 };
 const TAB_LABELS = {
@@ -295,6 +321,21 @@ const B2B_TAB_LABELS = {
   rank: "경쟁",
   map: "지역 분석",
   demand: "수요 전망"
+};
+const ADMIN_NAV_META = {
+  summary: { icon: "⌂", detail: "운영 현황" },
+  database: { icon: "▣", detail: "목록 · 검토" },
+  collect: { icon: "⇩", detail: "실행 · 결과" },
+  analysis: { icon: "▥", detail: "시장 · 수요" },
+  region: { icon: "⌖", detail: "지도 · 입지" },
+  members: { icon: "♙", detail: "권한 · 요청" },
+  settings: { icon: "⚙", detail: "연동 · 보안" }
+};
+const B2B_NAV_META = {
+  report: { icon: "⌂", detail: "검색 · 요약" },
+  rank: { icon: "▥", detail: "경쟁 비교" },
+  map: { icon: "⌖", detail: "지역 판단" },
+  demand: { icon: "◒", detail: "수요 전망" }
 };
 
 const els = {
@@ -1617,16 +1658,26 @@ function syncPrimaryNavButtons() {
       const visible = Boolean(adminPrimary && ADMIN_MOBILE_SECTIONS[adminPrimary]);
       button.hidden = !visible;
       if (visible) {
-        button.textContent = ADMIN_MOBILE_SECTIONS[adminPrimary].label;
+        const config = ADMIN_MOBILE_SECTIONS[adminPrimary];
+        const meta = ADMIN_NAV_META[adminPrimary] || {};
+        button.innerHTML = `<strong>${escapeHtml(config.label)}</strong><span>${escapeHtml(meta.detail || "")}</span>`;
+        button.dataset.navIcon = meta.icon || "";
+        button.dataset.navDetail = meta.detail || "";
+        button.setAttribute("aria-label", [config.label, meta.detail].filter(Boolean).join(" · "));
         button.classList.toggle("active", adminPrimary === adminSectionKey);
         button.setAttribute("aria-pressed", adminPrimary === adminSectionKey ? "true" : "false");
       }
       return;
     }
     const visible = Boolean(tab && allowedTabs.has(tab) && !adminPrimary);
-    button.hidden = !visible;
-    if (visible) {
-      button.textContent = tabLabel(tab);
+      button.hidden = !visible;
+      if (visible) {
+        const label = tabLabel(tab);
+        const meta = B2B_NAV_META[tab] || {};
+        button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(meta.detail || "")}</span>`;
+        button.dataset.navIcon = meta.icon || "";
+        button.dataset.navDetail = meta.detail || "";
+        button.setAttribute("aria-label", [label, meta.detail].filter(Boolean).join(" · "));
       button.classList.toggle("active", tab === state.activeTab);
       button.setAttribute("aria-pressed", tab === state.activeTab ? "true" : "false");
     }
@@ -1678,6 +1729,7 @@ function syncAdminMobileNav() {
       return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-db-status-key="${escapeHtml(adminDbStatus)}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
     }).join("");
   });
+  syncPrimaryNavButtons();
 }
 
 function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSection = "") {
@@ -1693,7 +1745,7 @@ function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSec
   scrollAdminMobileAnchor(state.adminMobileAnchor);
 }
 
-function setAdminPanelSection(sectionKey = "database", options = {}) {
+function setAdminPanelSection(sectionKey = "overview", options = {}) {
   if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
   state.adminPanelSection = sectionKey;
   if (isAdminRole() && state.activeTab === "admin") {
@@ -28412,12 +28464,12 @@ async function loadSession() {
   } else if (location.pathname === "/admin" && state.session.role === "admin") {
     state.activeTab = "admin";
     state.adminPanelSection = "overview";
-    state.adminMobileSection = "database";
+    state.adminMobileSection = "summary";
     state.adminMobileAnchor = "";
   } else if (state.session.role === "admin" && !state.adminUserViewMode) {
     state.activeTab = "admin";
     state.adminPanelSection = "overview";
-    state.adminMobileSection = "database";
+    state.adminMobileSection = "summary";
     state.adminMobileAnchor = "";
   }
   applyRoleUi();
