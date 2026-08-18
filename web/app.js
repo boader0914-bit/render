@@ -220,8 +220,9 @@ const LODGING_CATEGORY_PROFILES = {
 const B2B_MY_LODGE_STORAGE_PREFIX = "glamping-datalab:b2b-my-lodge:v1";
 const ROLE_TABS = {
   admin: ["report", "rank", "dictionary", "map", "demand", "historyOps", "admin"],
-  b2b: ["report", "rank", "map", "demand"]
+  b2b: ["report", "rank", "map", "demand", "account"]
 };
+const B2B_PRIMARY_TABS = new Set(["report", "rank", "map", "account"]);
 const ADMIN_MOBILE_SECTIONS = {
   summary: {
     label: "홈",
@@ -320,7 +321,8 @@ const B2B_TAB_LABELS = {
   report: "홈",
   rank: "경쟁",
   map: "지역 분석",
-  demand: "수요 전망"
+  demand: "수요 전망",
+  account: "계정"
 };
 const ADMIN_NAV_META = {
   summary: { icon: "⌂", detail: "운영 현황" },
@@ -335,7 +337,8 @@ const B2B_NAV_META = {
   report: { icon: "⌂", detail: "검색 · 요약" },
   rank: { icon: "▥", detail: "경쟁 비교" },
   map: { icon: "⌖", detail: "지역 판단" },
-  demand: { icon: "◒", detail: "수요 전망" }
+  demand: { icon: "◒", detail: "수요 전망" },
+  account: { icon: "♙", detail: "이용 · 정책" }
 };
 
 const els = {
@@ -380,6 +383,7 @@ const els = {
   b2bSearchStatus: document.getElementById("b2bSearchStatus"),
   b2bAccountPanel: document.getElementById("b2bAccountPanel"),
   b2bSearchHistory: document.getElementById("b2bSearchHistory"),
+  b2bRegionSecondaryNav: document.getElementById("b2bRegionSecondaryNav"),
   openControlButton: document.getElementById("openControlButton"),
   controlDrawer: document.getElementById("controlDrawer"),
   detailSheet: document.getElementById("detailSheet"),
@@ -1669,18 +1673,30 @@ function syncPrimaryNavButtons() {
       }
       return;
     }
-    const visible = Boolean(tab && allowedTabs.has(tab) && !adminPrimary);
-      button.hidden = !visible;
-      if (visible) {
-        const label = tabLabel(tab);
-        const meta = B2B_NAV_META[tab] || {};
-        button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(meta.detail || "")}</span>`;
-        button.dataset.navIcon = meta.icon || "";
-        button.dataset.navDetail = meta.detail || "";
-        button.setAttribute("aria-label", [label, meta.detail].filter(Boolean).join(" · "));
-      button.classList.toggle("active", tab === state.activeTab);
-      button.setAttribute("aria-pressed", tab === state.activeTab ? "true" : "false");
+    const visible = Boolean(tab && allowedTabs.has(tab) && B2B_PRIMARY_TABS.has(tab) && !adminPrimary);
+    button.hidden = !visible;
+    if (visible) {
+      const label = tabLabel(tab);
+      const meta = B2B_NAV_META[tab] || {};
+      const activeTab = state.activeTab === "demand" ? "map" : state.activeTab;
+      button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(meta.detail || "")}</span>`;
+      button.dataset.navIcon = meta.icon || "";
+      button.dataset.navDetail = meta.detail || "";
+      button.setAttribute("aria-label", [label, meta.detail].filter(Boolean).join(" · "));
+      button.classList.toggle("active", tab === activeTab);
+      button.setAttribute("aria-pressed", tab === activeTab ? "true" : "false");
     }
+  });
+}
+
+function syncB2BRegionSecondaryNav() {
+  if (!els.b2bRegionSecondaryNav) return;
+  const visible = !isAdminRole() && ["map", "demand"].includes(state.activeTab);
+  els.b2bRegionSecondaryNav.hidden = !visible;
+  els.b2bRegionSecondaryNav.querySelectorAll("[data-b2b-region-tab]").forEach((button) => {
+    const active = button.dataset.b2bRegionTab === state.activeTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
   });
 }
 
@@ -1822,6 +1838,7 @@ function applyRoleUi() {
     button.hidden = !canOpenUserView;
   });
   syncPrimaryNavButtons();
+  syncB2BRegionSecondaryNav();
   document.querySelectorAll("[data-drawer-tab]").forEach((button) => {
     button.hidden = !allowedTabs.has(button.dataset.drawerTab);
   });
@@ -26781,7 +26798,39 @@ function renderB2BSearchHistoryPanel() {
 
 function renderB2BAccountPanel() {
   if (!els.b2bAccountPanel) return;
-  els.b2bAccountPanel.innerHTML = "";
+  if (isAdminRole()) {
+    els.b2bAccountPanel.innerHTML = "";
+    return;
+  }
+  const profile = state.session?.profile || {};
+  const memberName = String(profile.businessName || profile.name || state.session?.username || "사업자").trim();
+  const policy = b2bSearchPolicy();
+  const quota = state.memberSearchQuota || {};
+  const limit = Number(policy.dailyLimit || quota.dailyLimit || 0);
+  const remaining = policy.limited ? Math.max(0, Number(quota.remainingToday ?? (limit - Number(quota.usedToday || 0)))) : null;
+  const interestLodges = readB2BInterestLodges();
+  const latest = (state.memberSearchHistory || [])[0] || state.data?.run || null;
+  const latestLabel = latest ? (latest.keyword || latest.runLabel || runSearchTitle(latest)) : "아직 없음";
+  const latestMeta = latest ? (latest.completedAt ? compactDateTime(latest.completedAt) : runSearchDateLabel(latest)) : "첫 분석 후 표시";
+  const accountStatus = state.session?.accountType === "demo" ? "체험 계정" : "활성";
+  const reportValue = policy.limited ? `${fmtNumber(remaining)}/${fmtNumber(limit)}회` : "이용 가능";
+  const reportMeta = policy.limited ? "오늘 새 리포트 잔여" : "계정 정책 기준";
+  els.b2bAccountPanel.innerHTML = `
+    <section class="b2b-account-workspace">
+      <div class="b2b-account-heading">
+        <span>ACCOUNT</span>
+        <h2>계정과 이용 현황</h2>
+        <p>현재 로그인 계정에 연결된 리포트 이용 기준과 관심숙소 상태를 확인합니다.</p>
+      </div>
+      <section class="b2b-account-status" aria-label="계정 이용 현황">
+        <article><span>계정 사업자명</span><strong>${escapeHtml(memberName)}</strong><small>${escapeHtml(accountStatus)} · 로그인 계정 문맥</small></article>
+        <article><span>새 리포트</span><strong>${escapeHtml(reportValue)}</strong><small>${escapeHtml(reportMeta)}</small></article>
+        <article><span>최근 분석 · 기준일</span><strong>${escapeHtml(latestLabel)}</strong><small>${escapeHtml(latestMeta)}</small></article>
+        <article><span>관심숙소</span><strong>${fmtNumber(interestLodges.length)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}곳</strong><small>경쟁 비교 기준으로 사용</small></article>
+      </section>
+      <p class="b2b-account-note">계정정보 수정, 요금제·결제, 약관 변경 및 탈퇴 접수는 아직 연결하지 않았습니다.</p>
+    </section>
+  `;
 }
 
 function b2bSearchUsagePanelHtml() {
@@ -26837,43 +26886,43 @@ function renderB2BOnboardingPanel() {
   const latestMeta = latest
     ? (latest.completedAt ? compactDateTime(latest.completedAt) : runSearchDateLabel(latest))
     : "첫 지역 검색을 시작하세요";
-  const accountMeta = policy.limited
-    ? `오늘 새 리포트 ${fmtNumber(remaining)}/${fmtNumber(limit)}회 남음`
-    : (state.session?.accountType === "demo" ? "공용 B2B 체험 계정" : "사업자 계정");
   els.b2bOnboarding.hidden = false;
   els.b2bOnboarding.innerHTML = `
     <section class="b2b-home-hero">
       <div>
         <span>BUSINESS HOME</span>
-        <h2>${escapeHtml(memberName)}님의 운영 판단 홈</h2>
-        <p>지역 경쟁을 빠르게 확인하고, 관심숙소와 최근 리포트를 연결해 다음 운영 결정을 만드세요.</p>
+        <h2>오늘의 운영 워크스페이스</h2>
+        <p>계정에 저장된 검색 기록과 관심숙소를 빠르게 이어서 확인합니다.</p>
       </div>
       <div class="b2b-home-actions">
         <button class="primary-button" type="button" data-b2b-home-action="search">지역 분석 시작</button>
-        <button class="secondary-button" type="button" data-b2b-home-action="history">최근 리포트 보기</button>
       </div>
     </section>
     <section class="b2b-home-status" aria-label="사업자 계정 현황">
       <article>
-        <span>계정 상태</span>
-        <strong>${escapeHtml(state.session?.accountType === "demo" ? "체험 계정" : "활성")}</strong>
-        <small>${escapeHtml(accountMeta)}</small>
+        <span>계정 사업자명</span>
+        <strong>${escapeHtml(memberName)}</strong>
+        <small>${escapeHtml(state.session?.accountType === "demo" ? "체험 계정 · 로그인 계정 문맥" : "활성 · 로그인 계정 문맥")}</small>
       </article>
       <article>
-        <span>최근 분석</span>
+        <span>새 리포트</span>
+        <strong>${escapeHtml(policy.limited ? `${fmtNumber(remaining)}/${fmtNumber(limit)}회` : "이용 가능")}</strong>
+        <small>${escapeHtml(policy.limited ? "오늘 새 리포트 잔여" : "계정 정책 기준")}</small>
+      </article>
+      <article>
+        <span>최근 분석 · 기준일</span>
         <strong>${escapeHtml(latestTitle)}</strong>
         <small>${escapeHtml(latestMeta)}</small>
       </article>
       <article>
         <span>관심숙소</span>
-        <strong>${fmtNumber(interestLodges.length)}곳</strong>
-        <small>등록 후 경쟁 기준으로 비교</small>
+        <strong>${fmtNumber(interestLodges.length)}/${fmtNumber(B2B_INTEREST_LODGE_LIMIT)}곳</strong>
+        <small>경쟁 비교 기준으로 사용</small>
       </article>
     </section>
-    <section class="b2b-home-flow" aria-label="운영 판단 흐름">
-      <article><b>01</b><div><strong>지역 검색</strong><span>지역과 업종을 입력해 경쟁 표본을 만듭니다.</span></div></article>
-      <article><b>02</b><div><strong>경쟁 확인</strong><span>노출·매출·예약률에서 비교할 기준을 찾습니다.</span></div></article>
-      <article><b>03</b><div><strong>운영 판단</strong><span>상품·가격·수요 전망을 다음 실행으로 연결합니다.</span></div></article>
+    <section class="b2b-home-next-action" aria-label="다음 행동">
+      <div><span>다음 행동</span><strong>지역 분석 시작</strong><small>검색어를 입력해 첫 성과 기준을 만드세요.</small></div>
+      <button class="secondary-button" type="button" data-b2b-home-action="search">검색어 입력</button>
     </section>
   `;
 }
@@ -26881,7 +26930,7 @@ function renderB2BOnboardingPanel() {
 function renderB2BSearchPanel() {
   if (!els.b2bSearchPanel) return;
   const publicMode = !isAdminRole();
-  els.b2bSearchPanel.hidden = !publicMode;
+  els.b2bSearchPanel.hidden = !publicMode || state.activeTab !== "report";
   if (!publicMode) {
     if (els.b2bOnboarding) {
       els.b2bOnboarding.hidden = true;
@@ -27198,7 +27247,8 @@ function renderB2BEmptyPanels() {
     report: "지역을 검색하거나 관심숙소를 먼저 등록하세요.",
     rank: "검색 후 업체 순위를 표시합니다.",
     map: "검색 후 지역 지도와 경쟁권을 표시합니다.",
-    demand: "검색 후 수요 전망을 표시합니다."
+    demand: "검색 후 수요 전망을 표시합니다.",
+    account: "계정 이용 현황을 표시합니다."
   };
   const activeMessage = emptyMessages[state.activeTab] || emptyMessages.report;
   if (els.pageTitle) els.pageTitle.textContent = tabLabel(state.activeTab);
@@ -27224,6 +27274,7 @@ function renderB2BEmptyPanels() {
   if (els.regionList) els.regionList.innerHTML = `<div class="empty">${emptyMessages.map}</div>`;
   if (els.demandState) els.demandState.textContent = "검색 대기";
   if (els.demandDashboard) els.demandDashboard.innerHTML = `<div class="empty">${emptyMessages.demand}</div>`;
+  renderB2BAccountPanel();
 }
 
 function renderHeader() {
@@ -27258,6 +27309,7 @@ function renderHeader() {
 function renderAll() {
   applyRoleUi();
   renderB2BSearchPanel();
+  renderB2BAccountPanel();
   if (!state.data) {
     if (isAdminRole()) renderRunResultApplySummary();
     renderB2BEmptyPanels();
@@ -27316,6 +27368,7 @@ function setActiveTab(tab, options = {}) {
     panel.classList.toggle("active", panel.dataset.panel === state.activeTab && roleAllowsTab(panel.dataset.panel));
   });
   syncPrimaryNavButtons();
+  syncB2BRegionSecondaryNav();
   renderHeader();
   closeDrawer();
   if (!state.data) {
@@ -30337,6 +30390,11 @@ function bindEvents() {
       const target = action === "history" ? els.b2bSearchHistory : els.b2bSearchForm;
       target?.scrollIntoView({ behavior: "smooth", block: "center" });
       if (action === "search") window.setTimeout(() => els.b2bSearchInput?.focus(), 240);
+      return;
+    }
+    const b2bRegionTab = event.target.closest("[data-b2b-region-tab]");
+    if (b2bRegionTab) {
+      setActiveTab(b2bRegionTab.dataset.b2bRegionTab || "map");
       return;
     }
     const adminWorkspaceSection = event.target.closest("[data-admin-workspace-section]");

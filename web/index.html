@@ -40,29 +40,28 @@
       </div>
     </header>
 
-    <section class="b2b-search-panel" id="b2bSearchPanel" hidden>
-      <div class="b2b-onboarding" id="b2bOnboarding" hidden></div>
-      <form class="b2b-search-form" id="b2bSearchForm">
-        <label>
-          <span>지역/키워드</span>
-          <input id="b2bSearchInput" type="search" placeholder="예: 포천글램핑, 경주풀빌라, 하동펜션" autocomplete="off">
-        </label>
-        <label class="b2b-range-field">
-          <span>검색범위</span>
-          <select id="b2bSearchRangeInput">
-            <option value="1-10">기본 분석 1~10위</option>
-            <option value="1-20">확장 분석 1~20위</option>
-          </select>
-        </label>
-        <button class="primary-button" type="submit">검색 실행</button>
-      </form>
-      <div class="b2b-search-results" id="b2bSearchResults"></div>
-      <p class="b2b-search-status" id="b2bSearchStatus">지역과 업종을 입력하세요.</p>
-      <div class="b2b-account-panel" id="b2bAccountPanel"></div>
-      <div class="b2b-search-history" id="b2bSearchHistory"></div>
-    </section>
-
     <main class="app-main" id="appMain" tabindex="-1">
+      <section class="b2b-search-panel" id="b2bSearchPanel" hidden>
+        <div class="b2b-onboarding" id="b2bOnboarding" hidden></div>
+        <form class="b2b-search-form" id="b2bSearchForm">
+          <label>
+            <span>지역/키워드</span>
+            <input id="b2bSearchInput" type="search" placeholder="예: 포천글램핑, 경주풀빌라, 하동펜션" autocomplete="off">
+          </label>
+          <label class="b2b-range-field">
+            <span>검색범위</span>
+            <select id="b2bSearchRangeInput">
+              <option value="1-10">기본 분석 1~10위</option>
+              <option value="1-20">확장 분석 1~20위</option>
+            </select>
+          </label>
+          <button class="primary-button" type="submit">검색 실행</button>
+        </form>
+        <div class="b2b-search-results" id="b2bSearchResults"></div>
+        <p class="b2b-search-status" id="b2bSearchStatus">지역과 업종을 입력하세요.</p>
+        <div class="b2b-search-history" id="b2bSearchHistory"></div>
+      </section>
+
       <section class="summary-grid" id="summaryGrid" aria-label="핵심 지표"></section>
 
       <section class="notice-card" id="noticeCard" hidden></section>
@@ -81,7 +80,7 @@
         <button type="button" data-tab="target">컨택후보</button>
         <button type="button" data-tab="decisionQueue">확인대상</button>
         <button type="button" data-tab="map">지역지도</button>
-        <button type="button" data-tab="demand">수요구조</button>
+        <button type="button" data-tab="account">계정</button>
         <button type="button" data-tab="historyOps">수집이력</button>
         <button type="button" data-tab="admin">관리</button>
       </nav>
@@ -157,6 +156,11 @@
         <div class="decision-queue-list" id="decisionQueueList"></div>
       </section>
 
+      <nav class="b2b-region-secondary-nav" id="b2bRegionSecondaryNav" aria-label="지역 분석 세부 메뉴" hidden>
+        <button type="button" data-b2b-region-tab="map">지도</button>
+        <button type="button" data-b2b-region-tab="demand">수요 전망</button>
+      </nav>
+
       <section class="tab-panel" id="mapPanel" data-panel="map" aria-label="지역지도">
         <div class="section-title">
           <div>
@@ -185,6 +189,10 @@
           <span id="demandState">대기</span>
         </div>
         <div class="demand-dashboard" id="demandDashboard"></div>
+      </section>
+
+      <section class="tab-panel" id="accountPanel" data-panel="account" aria-label="계정">
+        <div class="b2b-account-panel" id="b2bAccountPanel"></div>
       </section>
 
       <section class="tab-panel" id="historyOpsPanel" data-panel="historyOps" aria-label="수집 이력">
