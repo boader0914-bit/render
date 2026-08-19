@@ -653,6 +653,11 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, inp
 
 /* Desktop navigation is fixed in the reading order; mobile returns it to the bottom app bar. */
 @media (min-width: 861px) {
+  /* The fixed left rail is the single administrator primary navigation on desktop. */
+  html[data-theme-resolved] body.role-admin .admin-section-nav {
+    display: none !important;
+  }
+
   html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
     display: grid !important;
     grid-template-columns: 232px minmax(0, 1fr);
