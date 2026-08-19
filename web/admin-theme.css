@@ -230,6 +230,75 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(input::placeho
   opacity: 1;
 }
 
+/* Operating-home shortcuts stay as compact links, not a second row of cards. */
+html[data-theme-resolved] body.role-admin .admin-workspace-focus {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 0 0 22px;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+html[data-theme-resolved] body.role-admin .admin-workspace-focus > article,
+html[data-theme-resolved] body.role-admin .admin-workspace-focus > article.priority {
+  min-height: 0;
+  padding: 15px 18px 14px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-workspace-focus > article + article {
+  border-left: 1px solid var(--border-subtle) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-workspace-focus button[data-admin-workspace-section] {
+  justify-content: flex-start;
+  width: fit-content;
+  min-height: 0;
+  margin-top: 9px;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--accent-strong) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-workspace-focus button[data-admin-workspace-section]:hover {
+  color: var(--accent) !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (max-width: 900px) {
+  html[data-theme-resolved] body.role-admin .admin-workspace-focus {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-workspace-focus > article:nth-child(odd) {
+    border-left: 0 !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-workspace-focus > article:nth-child(n + 3) {
+    border-top: 1px solid var(--border-subtle) !important;
+  }
+}
+
+@media (max-width: 560px) {
+  html[data-theme-resolved] body.role-admin .admin-workspace-focus {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-workspace-focus > article + article {
+    border-top: 1px solid var(--border-subtle) !important;
+    border-left: 0 !important;
+  }
+}
+
 /* Every named dashboard surface is neutral. This compatibility reset replaces old blue/navy component paint. */
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   [data-ui-surface],
@@ -251,7 +320,6 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-db-selected-readonly,
   .admin-db-selected-workbench,
   .admin-kpi-grid > article,
-  .admin-workspace-focus > article,
   .admin-regional-summary-grid > article,
   .admin-region-ops-queue,
   .admin-region-ops-queue-grid > article,
