@@ -352,15 +352,15 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("collection-screen-v32") && serviceWorker.includes('"/admin-theme.css"'),
+  serviceWorker.includes("naver-ota-observation-v33") && serviceWorker.includes('"/admin-theme.css"'),
   "service worker cache must refresh the theme rebuild release",
   failures
 );
 
 assert(
-  server.includes('styles.css?v=v2-20260821-collection-screen-v14')
-    && server.includes('admin-theme.css?v=v2-20260821-collection-screen-v14')
-    && server.includes('app.js?v=v2-20260821-collection-screen-v14'),
+  server.includes('styles.css?v=v2-20260822-naver-ota-observation-v15')
+    && server.includes('admin-theme.css?v=v2-20260822-naver-ota-observation-v15')
+    && server.includes('app.js?v=v2-20260822-naver-ota-observation-v15'),
   "server asset query versions must refresh styles, theme, and app together",
   failures
 );

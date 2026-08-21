@@ -1,6 +1,12 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const {
+  notCollectedObservation,
+  observationToCsvFields,
+  parseNaverPlaceGraphqlObservation,
+  parseNaverPlaceHtmlObservation,
+} = require("./naver_place_ota_observation.cjs");
 let XLSX = null;
 let ArtifactWorkbook = null;
 let ArtifactSpreadsheetFile = null;
@@ -660,6 +666,13 @@ const NAVER_BOOKING_STOCK_LIMIT = boundedInteger(
   0,
   100
 );
+const NAVER_OTA_OBSERVATION_LIMIT = boundedInteger(
+  process.env.NAVER_OTA_OBSERVATION_LIMIT,
+  COLLECTION_PURPOSE === "basic_db" ? Math.min(40, rankRangeCount(DETAIL_RANK_RANGES, 100)) : Math.min(20, rankRangeCount(DETAIL_RANK_RANGES, 100)),
+  0,
+  100
+);
+const NAVER_OTA_OBSERVATION_CONCURRENCY = boundedInteger(process.env.NAVER_OTA_OBSERVATION_CONCURRENCY, 2, 1, 3);
 const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, 2, 1, 4);
 const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, 4, 1, 8);
 const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
@@ -1018,6 +1031,12 @@ function roomNamesFromItem(state, item) {
 }
 
 function mapNaverItem(state, item, extras = {}) {
+  const placeUrl = item.id ? `https://pcmap.place.naver.com/accommodation/${item.id}` : "";
+  const bookingEvidence = {
+    hasBooking: item.hasBooking === true,
+    hasNPay: typeof item.hasNPay === "boolean" ? item.hasNPay : undefined,
+    agencyId: item.agencyId ?? "",
+  };
   return {
     ...extras,
     place_id: item.id || "",
@@ -1032,7 +1051,12 @@ function mapNaverItem(state, item, extras = {}) {
     방문자리뷰: item.placeReviewCount ?? "",
     평점: item.placeReviewScore ?? "",
     예약: item.hasBooking ? "Y" : "N",
-    url: item.id ? `https://pcmap.place.naver.com/accommodation/${item.id}` : "",
+    ...observationToCsvFields(notCollectedObservation({
+      evidenceUrl: placeUrl ? `${placeUrl}/room` : "",
+      bookingEvidence,
+      note: "네이버 플레이스 OTA 관측 전",
+    }), bookingEvidence),
+    url: placeUrl,
   };
 }
 
@@ -1054,6 +1078,47 @@ const naverBookingBusinessQuery = `
         bookingBusinessId
         naverBookingUrl
         naverBookingHubUrl
+      }
+    }
+  }
+`;
+
+const naverPlaceChannelObservationQuery = `
+  query naverPlaceChannelObservation(
+    $id: String!
+    $isNx: Boolean
+    $checkin: String
+    $checkout: String
+    $entry: String
+    $guest: String
+    $roomIds: String
+    $size: Int
+    $page: Int = 0
+  ) {
+    business: placeDetail(input: { id: $id, isNx: $isNx, deviceType: "mobile" }) {
+      base {
+        id
+        name
+      }
+      naverBooking {
+        bookingBusinessId
+        naverBookingUrl
+        naverBookingHubUrl
+      }
+      accommodationBookingDetails(
+        checkin: $checkin
+        checkout: $checkout
+        entry: $entry
+        roomIds: $roomIds
+        guest: $guest
+        size: $size
+        page: $page
+      ) {
+        agencyName
+        rooms {
+          resrvUrl
+          isNPayUsed
+        }
       }
     }
   }
@@ -1124,6 +1189,208 @@ async function mapWithConcurrency(items, limit, mapper) {
   }
   await Promise.all(Array.from({ length: workerCount }, worker));
   return results;
+}
+
+function naverBookingEvidenceFromRow(row = {}) {
+  const nPayText = String(row.네이버페이노출 ?? "").trim().toUpperCase();
+  return {
+    hasBooking: row.예약 === "Y" || row.네이버예약노출상태 === "노출 확인",
+    hasNPay: nPayText === "Y" ? true : nPayText === "N" ? false : undefined,
+    agencyId: row.네이버예약대행사ID ?? "",
+    agencyName: row.네이버예약대행사명 ?? "",
+  };
+}
+
+function applyNaverPlaceOtaObservation(row, observation) {
+  Object.assign(row, observationToCsvFields(observation, naverBookingEvidenceFromRow(row)));
+}
+
+async function collectNaverPlaceOtaObservation(placeId, bookingEvidence = {}) {
+  const evidenceUrl = `https://pcmap.place.naver.com/accommodation/${placeId}/room`;
+  const checkedAt = new Date().toISOString();
+  let graphqlObservation = null;
+  try {
+    const response = await fetch("https://pcmap-api.place.naver.com/graphql", {
+      method: "POST",
+      headers: {
+        ...headers,
+        accept: "*/*",
+        "content-type": "application/json",
+        origin: "https://pcmap.place.naver.com",
+        referer: `${evidenceUrl}?checkin=${CHECK_IN}&checkout=${CHECK_OUT}&guest=${ADULTS}`,
+      },
+      body: JSON.stringify({
+        operationName: "naverPlaceChannelObservation",
+        query: naverPlaceChannelObservationQuery,
+        variables: {
+          id: String(placeId),
+          isNx: false,
+          checkin: CHECK_IN,
+          checkout: CHECK_OUT,
+          entry: "plt",
+          guest: String(ADULTS),
+          roomIds: null,
+          size: 50,
+          page: 0,
+        },
+      }),
+    });
+    const text = await response.text();
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+    graphqlObservation = parseNaverPlaceGraphqlObservation(data, {
+      checkedAt,
+      evidenceUrl,
+      httpStatus: response.status,
+      rawText: text,
+      bookingEvidence,
+    });
+    if (!["blocked", "auto_failed"].includes(graphqlObservation.status)) return graphqlObservation;
+  } catch (error) {
+    graphqlObservation = parseNaverPlaceGraphqlObservation(null, {
+      checkedAt,
+      evidenceUrl,
+      httpStatus: 0,
+      rawText: "",
+      bookingEvidence,
+    });
+    graphqlObservation.note = `GraphQL 관측 실패: ${error.message || error}`;
+  }
+
+  try {
+    const { res, text } = await fetchText(evidenceUrl, {
+      headers: {
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        referer: `https://pcmap.place.naver.com/accommodation/${placeId}`,
+      },
+    });
+    const fallback = parseNaverPlaceHtmlObservation(text, {
+      checkedAt,
+      evidenceUrl,
+      httpStatus: res.status,
+      bookingEvidence,
+    });
+    if (fallback.status === "observed_on_naver") {
+      fallback.note = [
+        `GraphQL ${graphqlObservation?.status || "auto_failed"} 후 플레이스 공개 링크로 보조 확인`,
+        fallback.note,
+      ].filter(Boolean).join(" · ");
+      return fallback;
+    }
+    if (graphqlObservation) {
+      graphqlObservation.note = [
+        graphqlObservation.note,
+        `플레이스 화면 보조 관측 ${fallback.status}: 명시적 외부 예약 URL 없음`
+      ].filter(Boolean).join(" · ");
+      return graphqlObservation;
+    }
+    return fallback;
+  } catch (error) {
+    if (graphqlObservation) {
+      graphqlObservation.note = [
+        graphqlObservation.note,
+        `플레이스 화면 보조 관측 실패: ${error.message || error}`,
+      ].filter(Boolean).join(" · ");
+      return graphqlObservation;
+    }
+    return parseNaverPlaceHtmlObservation("", {
+      checkedAt,
+      evidenceUrl,
+      httpStatus: 0,
+      bookingEvidence,
+    });
+  }
+}
+
+async function enrichNaverRowsWithOtaObservation(rows) {
+  const groupedRows = new Map();
+  const taskGroups = [];
+  let skippedByMode = 0;
+  let skippedByRank = 0;
+  let skippedByLimit = 0;
+
+  for (const row of rows) {
+    const evidenceUrl = row.place_id ? `https://pcmap.place.naver.com/accommodation/${row.place_id}/room` : "";
+    const notCollected = notCollectedObservation({
+      evidenceUrl,
+      bookingEvidence: naverBookingEvidenceFromRow(row),
+      note: row.place_id ? "관측 대상 선정 전" : "place_id 없음",
+    });
+    applyNaverPlaceOtaObservation(row, notCollected);
+    if (!row.place_id) continue;
+    const key = String(row.place_id);
+    if (!groupedRows.has(key)) groupedRows.set(key, []);
+    groupedRows.get(key).push(row);
+  }
+
+  for (const [placeId, placeRows] of groupedRows.entries()) {
+    const eligible = placeRows.some((row) => {
+      const ranks = [asNumber(row.overall_rank), asNumber(row.ad_order), asNumber(row.순위)].filter(Boolean);
+      return ranks.some((rank) => rankInRanges(rank, DETAIL_RANK_RANGES));
+    });
+    if (COLLECTION_MODE === "fast") {
+      skippedByMode += 1;
+      const observation = notCollectedObservation({
+        evidenceUrl: `https://pcmap.place.naver.com/accommodation/${placeId}/room`,
+        bookingEvidence: naverBookingEvidenceFromRow(placeRows[0]),
+        note: "빠른 순위 모드에서는 OTA 관측을 생략",
+      });
+      placeRows.forEach((row) => applyNaverPlaceOtaObservation(row, observation));
+      continue;
+    }
+    if (!eligible) {
+      skippedByRank += 1;
+      const observation = notCollectedObservation({
+        evidenceUrl: `https://pcmap.place.naver.com/accommodation/${placeId}/room`,
+        bookingEvidence: naverBookingEvidenceFromRow(placeRows[0]),
+        note: `상세 분석 범위 ${DETAIL_RANK_RANGE_LABEL} 제외`,
+      });
+      placeRows.forEach((row) => applyNaverPlaceOtaObservation(row, observation));
+      continue;
+    }
+    if (taskGroups.length >= NAVER_OTA_OBSERVATION_LIMIT) {
+      skippedByLimit += 1;
+      const observation = notCollectedObservation({
+        evidenceUrl: `https://pcmap.place.naver.com/accommodation/${placeId}/room`,
+        bookingEvidence: naverBookingEvidenceFromRow(placeRows[0]),
+        note: `OTA 관측 상위 ${NAVER_OTA_OBSERVATION_LIMIT}개 제한`,
+      });
+      placeRows.forEach((row) => applyNaverPlaceOtaObservation(row, observation));
+      continue;
+    }
+    taskGroups.push({ placeId, rows: placeRows });
+  }
+
+  const counts = {
+    observed_on_naver: 0,
+    partner_observed: 0,
+    not_observed_on_naver: 0,
+    blocked: 0,
+    auto_failed: 0,
+  };
+  await mapWithConcurrency(taskGroups, NAVER_OTA_OBSERVATION_CONCURRENCY, async (task) => {
+    const observation = await collectNaverPlaceOtaObservation(task.placeId, naverBookingEvidenceFromRow(task.rows[0]));
+    if (Object.hasOwn(counts, observation.status)) counts[observation.status] += 1;
+    task.rows.forEach((row) => applyNaverPlaceOtaObservation(row, observation));
+  });
+
+  return {
+    limit: NAVER_OTA_OBSERVATION_LIMIT,
+    collected: taskGroups.length,
+    observed: counts.observed_on_naver,
+    partnerObserved: counts.partner_observed,
+    notObserved: counts.not_observed_on_naver,
+    blocked: counts.blocked,
+    failed: counts.auto_failed,
+    skippedByMode,
+    skippedByRank,
+    skippedByLimit,
+    detailRankRanges: DETAIL_RANK_RANGE_LABEL,
+  };
 }
 
 async function getNaverBookingBusiness(placeId) {
@@ -2936,6 +3203,23 @@ function naverRevenueFields(row = {}) {
   };
 }
 
+function naverOtaObservationFields(row = {}) {
+  return {
+    네이버OTA관측상태: row.네이버OTA관측상태 || "not_collected",
+    네이버OTA관측라벨: row.네이버OTA관측라벨 || "미수집",
+    네이버OTA관측시각: row.네이버OTA관측시각 || "",
+    네이버OTA근거URL: row.네이버OTA근거URL || "",
+    네이버OTA관측방식: row.네이버OTA관측방식 || "",
+    네이버OTA관측메모: row.네이버OTA관측메모 || "",
+    네이버OTA노출JSON: row.네이버OTA노출JSON || "[]",
+    네이버예약노출상태: row.네이버예약노출상태 || "네이버 미확인",
+    네이버페이노출: row.네이버페이노출 || "",
+    네이버예약대행사ID: row.네이버예약대행사ID || "",
+    네이버예약대행사명: row.네이버예약대행사명 || "",
+    네이버예약운영신호: row.네이버예약운영신호 || "네이버 예약 운영 신호 미확인",
+  };
+}
+
 function toPlatformRows(naver, nol, yeogi, ddnayo) {
   const rows = [
     ...naver.overall.slice(0, NAVER_BOOKING_STOCK_LIMIT > 0 ? NAVER_BOOKING_STOCK_LIMIT : 20).map((row) => ({
@@ -2950,6 +3234,7 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       price: row.금액,
       ad_flag: "N",
       url: row.url,
+      ...naverOtaObservationFields(row),
       "네이버예약사업자ID": row.네이버예약사업자ID || "",
       "예약리스트유형": row.예약리스트유형 || "",
       "네이버상품구성": row.네이버상품구성 || "",
@@ -3037,6 +3322,7 @@ function toPlatformRows(naver, nol, yeogi, ddnayo) {
       price: row.금액,
       ad_flag: "Y",
       url: row.url,
+      ...naverOtaObservationFields(row),
       "네이버예약사업자ID": row.네이버예약사업자ID || "",
       "예약리스트유형": row.예약리스트유형 || "",
       "네이버상품구성": row.네이버상품구성 || "",
@@ -3220,6 +3506,12 @@ async function main() {
   const ddnayo = COLLECTION_PROFILE.collectOta ? await collectDdnayo() : skippedDdnayo(COLLECTION_PROFILE.otaSkipNote || COLLECTION_PROFILE.note);
 
   applyNaverAdClusters(naver, regional.rows);
+  console.log("Observing external reservation links on Naver Place...");
+  const naverOtaObservation = await enrichNaverRowsWithOtaObservation([
+    ...naver.overall,
+    ...naver.ads,
+    ...regional.rows,
+  ]);
   console.log("Checking Naver booking stock...");
   const naverBookingStock = await enrichNaverRowsWithBookingAvailability([
     ...naver.overall,
@@ -3227,6 +3519,21 @@ async function main() {
     ...regional.rows,
   ]);
   const platformRows = toPlatformRows(naver, nol, yeogi, ddnayo);
+
+  const naverOtaObservationColumns = [
+    "네이버OTA관측상태",
+    "네이버OTA관측라벨",
+    "네이버OTA관측시각",
+    "네이버OTA근거URL",
+    "네이버OTA관측방식",
+    "네이버OTA관측메모",
+    "네이버OTA노출JSON",
+    "네이버예약노출상태",
+    "네이버페이노출",
+    "네이버예약대행사ID",
+    "네이버예약대행사명",
+    "네이버예약운영신호",
+  ];
 
   const revenueColumns = [
     "숙박기준일예상매출",
@@ -3290,6 +3597,7 @@ async function main() {
     "price",
     "ad_flag",
     "url",
+    ...naverOtaObservationColumns,
     "예약리스트유형",
     "네이버상품구성",
     "숙박상품수",
@@ -3398,6 +3706,7 @@ async function main() {
     "방문자리뷰",
     "평점",
     "예약",
+    ...naverOtaObservationColumns,
     "네이버예약재고수집상태",
     "네이버예약사업자ID",
     "네이버예약URL",
@@ -3512,6 +3821,7 @@ async function main() {
     "방문자리뷰",
     "평점",
     "예약",
+    ...naverOtaObservationColumns,
     "네이버예약재고수집상태",
     "네이버예약사업자ID",
     "네이버예약URL",
@@ -3624,6 +3934,7 @@ async function main() {
     "방문자리뷰",
     "평점",
     "예약",
+    ...naverOtaObservationColumns,
     "네이버예약재고수집상태",
     "네이버예약사업자ID",
     "네이버예약URL",
@@ -3728,6 +4039,7 @@ async function main() {
     { 항목: "네이버 전체", 값: `${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집` },
     { 항목: "네이버 광고", 값: `${naver.adTotal}건 수집` },
     { 항목: "네이버 지역별", 값: `${regional.rows.length}건 수집 (${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개)` },
+    { 항목: "네이버 OTA 노출 관측", 값: `상세 범위 ${naverOtaObservation.detailRankRanges} / ${naverOtaObservation.collected}개 확인 / 외부 링크 ${naverOtaObservation.observed}건 / 파트너 신호 ${naverOtaObservation.partnerObserved}건 / 미확인 ${naverOtaObservation.notObserved}건 / 차단·오류 ${naverOtaObservation.blocked + naverOtaObservation.failed}건` },
     { 항목: "네이버 예약재고", 값: `상세 범위 ${naverBookingStock.detailRankRanges} / ${naverBookingStock.collected}개 확인 / 성공 ${naverBookingStock.successful}건 / 범위 제외 ${naverBookingStock.skippedByRank}건` },
     { 항목: "5건 미만 지역", 값: underfilledRegions || "없음" },
     { 항목: "야놀자/NOL", 값: `전체 ${nol.total}건 / 1페이지 원본 ${nol.rawFirstPage}건 중 캠핑형 ${nol.firstPage}건 수집, 제외 ${nol.filteredOut}건` },
@@ -3810,6 +4122,8 @@ async function main() {
 - 지역별 키워드: ${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개 = ${regional.rows.length}건 수집
 - 5건 미만 지역: ${underfilledRegions || "없음"}
 - 광고/비광고 분리: 가능
+- 네이버 OTA 노출 관측: ${naverOtaObservation.collected}개 확인, 외부 링크 ${naverOtaObservation.observed}건, 파트너 운영 신호 ${naverOtaObservation.partnerObserved}건, 외부 OTA 미확인 ${naverOtaObservation.notObserved}건
+- 판정 원칙: 네이버 공개 예약 URL에 허용된 외부 OTA 도메인이 있을 때만 노출 확인으로 저장한다. 대행사명만 파트너 운영 신호로 쓰며, 대행사 ID는 해석하지 않는 원시 식별값으로만 보관한다.
 - 예약재고: 상세 범위 ${naverBookingStock.detailRankRanges}, ${naverBookingStock.collected}개 확인, ${naverBookingStock.successful}건 성공, 범위 제외 ${naverBookingStock.skippedByRank}건
 - 입력기간 예약재고 테스트: ${BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체만 날짜별 잔여 반복 확인` : "비활성"}
 - 예약가능률 산식: 객실별 예약리스트는 예약가능 객실상품 수 / 노출 객실상품 수, 객실 묶음 상품리스트와 객실 종류별 리스트는 숙박 상품에 한해 \`sum(stock - bookingCount - occupiedBookingCount) / sum(stock)\`
@@ -3915,6 +4229,7 @@ async function main() {
     productModeLabel: PRODUCT_MODE_LABEL,
     bookingRangeDays: BOOKING_RANGE_DAYS,
     bookingRangePlaceLimit: BOOKING_RANGE_PLACE_LIMIT,
+    naverOtaObservationLimit: NAVER_OTA_OBSERVATION_LIMIT,
     bookingRangeCollectionText,
     fileRoles,
     files: Object.values(fileRoles),
@@ -3923,6 +4238,15 @@ async function main() {
       naverOverall: naver.overall.length,
       naverAds: naver.ads.length,
       naverRegional: regional.rows.length,
+      naverOtaObservationChecked: naverOtaObservation.collected,
+      naverOtaObserved: naverOtaObservation.observed,
+      naverOtaPartnerObserved: naverOtaObservation.partnerObserved,
+      naverOtaNotObserved: naverOtaObservation.notObserved,
+      naverOtaBlocked: naverOtaObservation.blocked,
+      naverOtaFailed: naverOtaObservation.failed,
+      naverOtaSkippedByMode: naverOtaObservation.skippedByMode,
+      naverOtaSkippedByRank: naverOtaObservation.skippedByRank,
+      naverOtaSkippedByLimit: naverOtaObservation.skippedByLimit,
       naverBookingStockChecked: naverBookingStock.collected,
       naverBookingStockSucceeded: naverBookingStock.successful,
       naverBookingStockSkippedByMode: naverBookingStock.skippedByMode,

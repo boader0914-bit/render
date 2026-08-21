@@ -7,6 +7,7 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { URL } = require("node:url");
 const yeogiImportParser = require("./yeogi_import_parser.cjs");
+const { otaProviderFromUrl } = require("./naver_place_ota_observation.cjs");
 const { createCollector: createTourismCollector } = require("./tourism_collector.cjs");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -6267,7 +6268,13 @@ function normalizeCompanyChannelKey(value = "") {
 function companyChannelStatusLabel(status = "") {
   const key = String(status || "").trim();
   if (key === "exposed") return "OTA 노출 확인";
-  if (key === "not_found") return "OTA 미사용 추정";
+  if (key === "observed_on_naver") return "네이버 화면 노출 확인";
+  if (key === "partner_observed") return "예약 연동 파트너 관측";
+  if (key === "not_observed_on_naver") return "네이버에서 미확인";
+  if (key === "directly_verified") return "직접 확인 완료";
+  if (key === "broken_link") return "연결 오류";
+  if (key === "mismatch") return "업체 동일성 확인";
+  if (key === "not_found") return "외부 OTA 미확인";
   if (key === "similar_name") return "유사명 확인 필요";
   if (key === "onda_manual") return "ONDA 별도 확인";
   if (key === "auto_failed" || key === "blocked") return "자동확인 실패";
@@ -6276,8 +6283,8 @@ function companyChannelStatusLabel(status = "") {
 }
 
 function companyChannelStatusTone(status = "") {
-  if (status === "exposed") return "good";
-  if (["not_found", "manual_only"].includes(status)) return "neutral";
+  if (["exposed", "observed_on_naver", "directly_verified"].includes(status)) return "good";
+  if (["partner_observed", "not_found", "not_observed_on_naver", "manual_only", "onda_manual"].includes(status)) return "neutral";
   return "watch";
 }
 
@@ -6465,7 +6472,23 @@ function sanitizeCompanyChannelProduct(entry = {}) {
 function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
   const key = normalizeCompanyChannelKey(channelKey || entry.channel || entry.channelKey);
   if (!key) return null;
-  const status = ["exposed", "not_found", "needs_manual", "manual_only", "onda_manual", "similar_name", "auto_failed", "blocked", "unknown"].includes(String(entry.status || ""))
+  const status = [
+    "exposed",
+    "observed_on_naver",
+    "partner_observed",
+    "not_observed_on_naver",
+    "directly_verified",
+    "broken_link",
+    "mismatch",
+    "not_found",
+    "needs_manual",
+    "manual_only",
+    "onda_manual",
+    "similar_name",
+    "auto_failed",
+    "blocked",
+    "unknown"
+  ].includes(String(entry.status || ""))
     ? String(entry.status || "")
     : "unknown";
   const rawUrl = externalHttpUrl(entry.url || entry.link || entry.href || "");
@@ -6481,6 +6504,10 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
     .map((product) => sanitizeCompanyChannelProduct(product))
     .filter(Boolean)
     .slice(0, 12);
+  const rawConfidence = Number(entry.confidence);
+  const confidence = Number.isFinite(rawConfidence)
+    ? Math.max(0, Math.min(100, Math.round(rawConfidence > 0 && rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)))
+    : null;
   return {
     channel: key,
     label: COMPANY_CHANNEL_DEFINITIONS[key].label,
@@ -6490,9 +6517,10 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
     url: isOndaDdnayoProxy ? "" : rawUrl,
     price: isOndaDdnayoProxy ? "" : sanitizeCompanyChannelText(entry.price, 80),
     rank: isOndaDdnayoProxy ? null : (Number.isFinite(Number(entry.rank)) && Number(entry.rank) > 0 ? Math.round(Number(entry.rank)) : null),
-    confidence: isOndaDdnayoProxy ? 0 : (Number.isFinite(Number(entry.confidence)) ? Math.max(0, Math.min(100, Math.round(Number(entry.confidence)))) : null),
+    confidence: isOndaDdnayoProxy ? 0 : confidence,
     source: isOndaDdnayoProxy ? "manual" : sanitizeCompanyChannelText(entry.source || "manual", 60),
     method: isOndaDdnayoProxy ? "onda_separate_required" : sanitizeCompanyChannelText(entry.method || "", 80),
+    evidenceUrl: isOndaDdnayoProxy ? "" : externalHttpUrl(entry.evidenceUrl || entry.sourceUrl || ""),
     searchKeyword: sanitizeCompanyChannelText(entry.searchKeyword || entry.keyword || "", 120),
     searchedKeywords: boundedUnique(Array.isArray(entry.searchedKeywords) ? entry.searchedKeywords : [], 8)
       .map((value) => sanitizeCompanyChannelText(value, 120))
@@ -6519,12 +6547,177 @@ function mergeCompanyChannelExposures(target = {}, source = {}) {
     const channelKey = normalizeCompanyChannelKey(key);
     const next = sanitizeCompanyChannelExposure(channelKey, value);
     if (!channelKey || !next) continue;
-    const current = sanitizeCompanyChannelExposure(channelKey, merged[channelKey]);
+    const current = merged[channelKey]
+      ? sanitizeCompanyChannelExposure(channelKey, merged[channelKey])
+      : null;
     const currentTime = Date.parse(current?.updatedAt || current?.checkedAt || "") || 0;
     const nextTime = Date.parse(next.updatedAt || next.checkedAt || "") || 0;
-    if (!current || nextTime >= currentTime) merged[channelKey] = next;
+    const automaticNaverObservation = next.source === "naver_place";
+    const currentVerified = ["exposed", "observed_on_naver", "directly_verified"].includes(current?.status);
+    const currentHumanDecision = current?.source === "manual" || current?.status === "directly_verified";
+    const currentDirectDecision = current?.source !== "naver_place"
+      && ["exposed", "directly_verified", "broken_link", "mismatch"].includes(current?.status);
+    const preserveCurrent = automaticNaverObservation && (
+      currentHumanDecision
+      || currentDirectDecision
+      || (next.status === "not_observed_on_naver" && currentVerified)
+    );
+    if (!current || (!preserveCurrent && nextTime >= currentTime)) merged[channelKey] = next;
   }
   return merged;
+}
+
+const NAVER_CHANNEL_OBSERVATION_STATUSES = new Set([
+  "observed_on_naver",
+  "partner_observed",
+  "not_observed_on_naver",
+  "blocked",
+  "auto_failed",
+  "not_collected",
+  "unknown"
+]);
+
+function naverChannelObservationStatusLabel(status = "") {
+  if (status === "observed_on_naver") return "네이버 화면 OTA 노출 확인";
+  if (status === "partner_observed") return "예약 연동 파트너 관측";
+  if (status === "not_observed_on_naver") return "네이버에서 외부 OTA 미확인";
+  if (status === "blocked" || status === "auto_failed") return "네이버 채널 자동확인 실패";
+  if (status === "not_collected") return "관측 기록 없음";
+  return "확인 필요";
+}
+
+function observationBoolean(value) {
+  if (value === true || value === 1 || String(value || "").trim().toUpperCase() === "Y") return true;
+  if (value === false || value === 0 || String(value || "").trim().toUpperCase() === "N") return false;
+  return null;
+}
+
+function sanitizeNaverChannelObservation(entry = {}) {
+  if (!entry || typeof entry !== "object") return null;
+  const rawStatus = String(entry.status || entry.observationStatus || "").trim();
+  const hasEvidence = rawStatus
+    || entry.observedAt
+    || entry.checkedAt
+    || entry.evidenceUrl
+    || entry.sourceUrl
+    || entry.agencyName
+    || entry.agencyId
+    || entry.operationSignal
+    || entry.partnerSignal
+    || (entry.bookingEvidence && typeof entry.bookingEvidence === "object")
+    || Array.isArray(entry.externalChannels)
+    || Array.isArray(entry.channels);
+  if (!hasEvidence) return null;
+  const status = NAVER_CHANNEL_OBSERVATION_STATUSES.has(rawStatus) ? rawStatus : "unknown";
+  const observedAt = sanitizeCompanyChannelText(entry.observedAt || entry.checkedAt || entry.updatedAt || "", 40);
+  const bookingEvidence = entry.bookingEvidence && typeof entry.bookingEvidence === "object" ? entry.bookingEvidence : {};
+  const externalChannelSource = Array.isArray(entry.externalChannels)
+    ? entry.externalChannels
+    : Array.isArray(entry.channels)
+      ? entry.channels.map((value) => value?.channel || value?.channelKey || value)
+      : [];
+  const externalChannels = externalChannelSource
+    ? externalChannelSource.map((value) => normalizeCompanyChannelKey(value)).filter(Boolean)
+    : [];
+  const agencyName = sanitizeCompanyChannelText(entry.agencyName || entry.partnerName || bookingEvidence.agencyName || "", 100);
+  const agencyId = sanitizeCompanyChannelText(entry.agencyId || entry.rawAgencyId || bookingEvidence.agencyId || "", 60);
+  return {
+    status,
+    statusLabel: sanitizeCompanyChannelText(entry.statusLabel || entry.label || naverChannelObservationStatusLabel(status), 100),
+    tone: ["observed_on_naver"].includes(status) ? "good" : ["not_observed_on_naver", "not_collected"].includes(status) ? "neutral" : "watch",
+    observedAt,
+    evidenceUrl: externalHttpUrl(entry.evidenceUrl || entry.sourceUrl || ""),
+    source: sanitizeCompanyChannelText(entry.source || "naver_place", 60),
+    method: sanitizeCompanyChannelText(entry.method || "", 80),
+    checkIn: sanitizeCompanyChannelText(entry.checkIn || "", 20),
+    checkOut: sanitizeCompanyChannelText(entry.checkOut || "", 20),
+    naverBookingObserved: observationBoolean(entry.naverBookingObserved ?? entry.hasBooking ?? bookingEvidence.hasBooking),
+    naverPayObserved: observationBoolean(entry.naverPayObserved ?? entry.hasNPay ?? bookingEvidence.hasNPay),
+    agencyName,
+    agencyId,
+    operationSignal: sanitizeCompanyChannelText(entry.operationSignal || entry.partnerSignal || bookingEvidence.operationSignal || "", 120),
+    externalChannels: boundedUnique(externalChannels, 8),
+    externalChannelCount: boundedUnique(externalChannels, 8).length,
+    note: sanitizeCompanyChannelText(entry.note || bookingEvidence.note || "", 220),
+    runId: sanitizeCompanyChannelText(entry.runId || "", 120)
+  };
+}
+
+function naverChannelObservationFromItem(item = {}, run = {}) {
+  const direct = item.naverChannelObservation || item.naverOtaObservation || null;
+  const validatedExternalChannels = Object.keys(naverChannelExposuresFromItem(item));
+  if (direct && typeof direct === "object") {
+    const invalidObservedClaim = direct.status === "observed_on_naver" && !validatedExternalChannels.length;
+    return sanitizeNaverChannelObservation({
+      ...direct,
+      status: invalidObservedClaim ? "auto_failed" : direct.status,
+      statusLabel: invalidObservedClaim ? "외부 예약 URL 검증 실패" : direct.statusLabel,
+      externalChannels: validatedExternalChannels,
+      checkIn: direct.checkIn || run.checkIn || "",
+      checkOut: direct.checkOut || run.checkOut || "",
+      note: invalidObservedClaim
+        ? [direct.note, "명시적 외부 예약 URL과 채널 도메인이 일치하지 않아 노출 확정에서 제외했습니다."].filter(Boolean).join(" · ")
+        : direct.note,
+      runId: direct.runId || run.id || ""
+    });
+  }
+  const status = String(item.naverOtaObservationStatus || item["네이버OTA관측상태"] || "").trim();
+  const hasAnyEvidence = status
+    || item["네이버OTA관측시각"]
+    || item["네이버OTA관측메모"]
+    || item["네이버예약노출상태"]
+    || item["네이버예약대행사명"]
+    || item["네이버예약대행사ID"]
+    || item["네이버예약운영신호"];
+  if (!hasAnyEvidence) return null;
+  const invalidObservedClaim = status === "observed_on_naver" && !validatedExternalChannels.length;
+  return sanitizeNaverChannelObservation({
+    status: invalidObservedClaim ? "auto_failed" : (status || "unknown"),
+    statusLabel: invalidObservedClaim ? "외부 예약 URL 검증 실패" : (item["네이버OTA관측라벨"] || ""),
+    observedAt: item["네이버OTA관측시각"] || "",
+    evidenceUrl: item["네이버OTA근거URL"] || item.url || "",
+    source: "naver_place",
+    method: item["네이버OTA관측방식"] || "",
+    checkIn: run.checkIn || "",
+    checkOut: run.checkOut || "",
+    naverBookingObserved: /^노출/.test(String(item["네이버예약노출상태"] || ""))
+      ? true
+      : /미노출|미확인/.test(String(item["네이버예약노출상태"] || ""))
+        ? false
+        : null,
+    naverPayObserved: item["네이버페이노출"],
+    agencyName: item["네이버예약대행사명"] || "",
+    agencyId: item["네이버예약대행사ID"] || "",
+    operationSignal: item["네이버예약운영신호"] || "",
+    externalChannels: validatedExternalChannels,
+    note: invalidObservedClaim
+      ? [item["네이버OTA관측메모"], "명시적 외부 예약 URL과 채널 도메인이 일치하지 않아 노출 확정에서 제외했습니다."].filter(Boolean).join(" · ")
+      : (item["네이버OTA관측메모"] || ""),
+    runId: run.id || ""
+  });
+}
+
+function naverChannelExposuresFromItem(item = {}) {
+  const rows = Array.isArray(item.naverOtaExposures)
+    ? item.naverOtaExposures
+    : jsonArrayField(item, ["네이버OTA노출JSON", "naverOtaExposures"]);
+  const exposures = {};
+  for (const row of rows) {
+    const key = normalizeCompanyChannelKey(row?.channel || row?.channelKey || row?.label || "");
+    if (!key) continue;
+    const explicitUrl = externalHttpUrl(row?.url || row?.link || row?.href || "");
+    const provider = otaProviderFromUrl(explicitUrl);
+    if (!explicitUrl || !provider || normalizeCompanyChannelKey(provider.channel) !== key) continue;
+    const value = sanitizeCompanyChannelExposure(key, {
+      ...row,
+      url: provider.url,
+      status: row.status || "observed_on_naver",
+      source: row.source || "naver_place",
+      method: row.method || "naver_place_outbound_link"
+    });
+    if (value) exposures[key] = value;
+  }
+  return exposures;
 }
 
 function companyChannelCandidateScore(company = {}, candidate = {}) {
@@ -8605,6 +8798,8 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const couponSignal = salesSignal.couponSignal || naverCouponSignalFromItem(item);
   const revenueSnapshot = companyRevenueSnapshotFromItem(item);
   const dbRoute = runCollectionDbRoute(run);
+  const naverChannelObservation = naverChannelObservationFromItem(item, run);
+  const channelExposures = naverChannelExposuresFromItem(item);
   return {
     name,
     nameKey,
@@ -8615,6 +8810,9 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     addressKey,
     placeId,
     bookingBusinessId,
+    hasInventoryEvidence: item.hasInventory !== false,
+    naverChannelObservation,
+    channelExposures,
     sourceKeys,
     url: item.url || "",
     rank: item.rank ?? null,
@@ -8708,6 +8906,10 @@ function createCompanyRecord(companyId, entity) {
       latest: {},
       snapshots: []
     },
+    naverChannelObservation: null,
+    naverChannelObservationHistory: [],
+    channelExposures: {},
+    channelExposureHistory: [],
     manualCorrection: null,
     duplicateNotes: []
   };
@@ -9230,6 +9432,11 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     exposureLayer,
     inventory,
     demandSignals: company.demandSignals || null,
+    naverChannelObservation: sanitizeNaverChannelObservation(company.naverChannelObservation || {}),
+    naverChannelObservationHistory: (company.naverChannelObservationHistory || [])
+      .map((row) => sanitizeNaverChannelObservation(row))
+      .filter(Boolean)
+      .slice(-8),
     channelExposures: publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {}),
     correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection,
@@ -10523,8 +10730,9 @@ function upsertCompanyRecord(master, entity) {
   updateCompanySourceStats(company, entity);
   updateCompanyCollectionRoute(company, entity);
   upsertCompanyKeywordExposure(company, entity);
+  updateCompanyChannelObservation(company, entity);
   const route = entity.collectionDbRoute || collectionDbRouteProfile(entity.collectionPurpose, entity.collectionProfile);
-  if (route.appliesInventory) updateCompanyInventory(company, entity);
+  if (route.appliesInventory && entity.hasInventoryEvidence !== false) updateCompanyInventory(company, entity);
   if (route.appliesDemandLocation) updateCompanyDemandSignals(company, entity);
   for (const key of sourceKeys) master.sourceIndex[key] = companyId;
   return company;
@@ -10638,6 +10846,25 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
       target.manualCorrection = source.manualCorrection;
     }
     target.channelExposures = mergeCompanyChannelExposures(target.channelExposures || {}, source.channelExposures || source.channelExposure || {});
+    const targetObservation = sanitizeNaverChannelObservation(target.naverChannelObservation || {});
+    const sourceObservation = sanitizeNaverChannelObservation(source.naverChannelObservation || {});
+    const targetObservationTime = Date.parse(targetObservation?.observedAt || "") || 0;
+    const sourceObservationTime = Date.parse(sourceObservation?.observedAt || "") || 0;
+    if (!targetObservation || (sourceObservation && sourceObservationTime >= targetObservationTime)) {
+      target.naverChannelObservation = sourceObservation;
+    }
+    const observationsByKey = new Map();
+    for (const row of [
+      ...(target.naverChannelObservationHistory || []),
+      ...(source.naverChannelObservationHistory || [])
+    ]) {
+      const normalized = sanitizeNaverChannelObservation(row);
+      if (!normalized) continue;
+      observationsByKey.set([normalized.runId, normalized.observedAt, normalized.status, normalized.evidenceUrl].join("|"), normalized);
+    }
+    target.naverChannelObservationHistory = [...observationsByKey.values()]
+      .sort((a, b) => String(a.observedAt || "").localeCompare(String(b.observedAt || "")))
+      .slice(-40);
     target.channelExposureHistory = [
       ...(target.channelExposureHistory || []),
       ...(source.channelExposureHistory || [])
@@ -10849,6 +11076,10 @@ async function saveCompanyChannelExposure(payload = {}) {
         statusLabel: entry.statusLabel,
         confidence: entry.confidence ?? null,
         url: entry.url || "",
+        evidenceUrl: entry.evidenceUrl || "",
+        source: entry.source || "",
+        method: entry.method || "",
+        checkedAt: entry.checkedAt || "",
         searchKeyword: entry.searchKeyword || "",
         note: entry.note || ""
       }))
@@ -11168,7 +11399,23 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
   const run = data?.run || {};
   const runDbRoute = runCollectionDbRoute(run);
   const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
-  const items = data?.availability?.items || [];
+  const availabilityItems = data?.availability?.items || [];
+  const rankingItems = data?.ranking?.items || [];
+  const observedRankingItems = rankingItems.filter((item) => {
+    const observation = sanitizeNaverChannelObservation(item?.naverChannelObservation || {});
+    return item?.hasInventory || (observation && observation.status !== "not_collected");
+  });
+  const items = [];
+  const seenItemKeys = new Set();
+  for (const item of [...observedRankingItems, ...availabilityItems]) {
+    const key = item?.sourceKey
+      || (item?.placeId || item?.place_id ? `place:${item.placeId || item.place_id}` : "")
+      || (item?.bookingBusinessId ? `booking:${item.bookingBusinessId}` : "")
+      || `${normalizeCompanyIdentityName(item?.name || "")}:${normalizeAddressKey(item?.address || "")}`;
+    if (!key || seenItemKeys.has(key)) continue;
+    seenItemKeys.add(key);
+    items.push(item);
+  }
   const beforeSnapshot = JSON.stringify({
     companies: master.companies,
     sourceIndex: master.sourceIndex,
@@ -11184,10 +11431,10 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
     const company = upsertCompanyRecord(master, entity);
     const dbRoute = entity.collectionDbRoute || collectionDbRouteProfile(entity.collectionPurpose, entity.collectionProfile);
     touched += 1;
-    if (dbRoute.appliesInventory) inventoryAppliedCompanies += 1;
+    if (dbRoute.appliesInventory && entity.hasInventoryEvidence !== false) inventoryAppliedCompanies += 1;
     if (dbRoute.appliesDemandLocation) demandSignalCompanies += 1;
     const correctedItem = applyCompanyMasterIdentity(applyCompanyManualCorrection(items[index], company), company);
-    if (correctedItem.manualCorrectionApplied && dbRoute.appliesInventory) {
+    if (correctedItem.manualCorrectionApplied && dbRoute.appliesInventory && entity.hasInventoryEvidence !== false) {
       const correctedEntity = companyEntityFromItem(correctedItem, run, collectedAt);
       updateCompanyInventory(company, {
         ...correctedEntity,
@@ -11197,11 +11444,11 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
         ], 12)
       });
     }
-    items[index] = {
+    Object.assign(items[index], {
       ...correctedItem,
       companyId: company.companyId,
       companyProfile: companyRecordSummary(company, keywordKey)
-    };
+    });
   }
 
   const afterSnapshot = JSON.stringify({
@@ -11906,6 +12153,8 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
   const searchRegion = rowSearchRegion(row);
   const addressRegion = rowAddressRegion(row);
   const boundary = regionBoundaryInfo(searchRegion, addressRegion);
+  const naverOtaExposures = jsonArrayField(row, ["네이버OTA노출JSON", "naverOtaExposures"]);
+  const naverChannelObservation = naverChannelObservationFromItem({ ...row, naverOtaExposures });
   return {
     sourceKey: availabilityPlaceKey(row),
     placeId,
@@ -11934,6 +12183,8 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
     naverCouponNames: row["네이버쿠폰명"] || row.naverCouponNames || "",
     naverCouponChannel: row["네이버쿠폰확인채널"] || row.naverCouponChannel || "",
     naverCouponDetail: row["네이버쿠폰상세"] || row.naverCouponDetail || "",
+    naverOtaExposures,
+    naverChannelObservation,
     url: row.url || row["네이버예약URL"] || ""
   };
 }
@@ -12110,6 +12361,8 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
     const naverCouponNames = row["네이버쿠폰명"] || row.naverCouponNames || "";
     const naverCouponChannel = row["네이버쿠폰확인채널"] || row.naverCouponChannel || "";
     const naverCouponDetail = row["네이버쿠폰상세"] || row.naverCouponDetail || "";
+    const naverOtaExposures = jsonArrayField(row, ["네이버OTA노출JSON", "naverOtaExposures"], baseDir);
+    const naverChannelObservation = naverChannelObservationFromItem({ ...row, naverOtaExposures });
     const itemDetails = jsonArrayField(row, ["네이버상품상세JSON", "itemDetailsJson", "itemDetails"], baseDir);
     const weeklyProductDetails = [
       ...jsonArrayField(row, ["네이버요일별상품상세JSON", "weeklyProductDetailsJson", "weeklyProductDetails"], baseDir),
@@ -12147,6 +12400,8 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
       naverCouponNames,
       naverCouponChannel,
       naverCouponDetail,
+      naverOtaExposures,
+      naverChannelObservation,
       itemDetails,
       weeklyProductDetails,
       nightItemCount: numericField(row, ["숙박상품수"]),
@@ -12361,6 +12616,67 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
     },
     items: items.slice(0, 40)
   };
+}
+
+function updateCompanyChannelObservation(company, entity) {
+  const observation = sanitizeNaverChannelObservation(entity.naverChannelObservation || {});
+  if (observation) {
+    const next = {
+      ...observation,
+      runId: observation.runId || entity.runId || "",
+      observedAt: observation.observedAt || entity.collectedAt || ""
+    };
+    const current = sanitizeNaverChannelObservation(company.naverChannelObservation || {});
+    const currentTime = Date.parse(current?.observedAt || "") || 0;
+    const nextTime = Date.parse(next.observedAt || "") || 0;
+    if (!current || nextTime >= currentTime) company.naverChannelObservation = next;
+    const history = [
+      ...(company.naverChannelObservationHistory || []),
+      next
+    ];
+    const byKey = new Map();
+    for (const row of history) {
+      const normalized = sanitizeNaverChannelObservation(row);
+      if (!normalized) continue;
+      const key = [normalized.runId, normalized.observedAt, normalized.status, normalized.evidenceUrl].join("|");
+      byKey.set(key, normalized);
+    }
+    company.naverChannelObservationHistory = [...byKey.values()]
+      .sort((a, b) => String(a.observedAt || "").localeCompare(String(b.observedAt || "")))
+      .slice(-40);
+  }
+
+  const observedExposures = publicCompanyChannelExposures(entity.channelExposures || {});
+  if (Object.keys(observedExposures).length) {
+    company.channelExposures = mergeCompanyChannelExposures(company.channelExposures || {}, observedExposures);
+    const exposureEvent = {
+      at: observation?.observedAt || entity.collectedAt || "",
+      action: "naver_place_observation",
+      runId: entity.runId || "",
+      channels: Object.values(observedExposures).map((entry) => ({
+        channel: entry.channel,
+        label: entry.label,
+        status: entry.status,
+        statusLabel: entry.statusLabel,
+        confidence: entry.confidence ?? null,
+        url: entry.url || "",
+        evidenceUrl: entry.evidenceUrl || "",
+        source: entry.source || "naver_place",
+        method: entry.method || "",
+        checkedAt: entry.checkedAt || "",
+        note: entry.note || ""
+      }))
+    };
+    const history = [...(company.channelExposureHistory || []), exposureEvent];
+    const byKey = new Map();
+    for (const row of history) {
+      const key = [row.action, row.runId, row.at, (row.channels || []).map((entry) => `${entry.channel}:${entry.status}:${entry.url}`).join(",")].join("|");
+      byKey.set(key, row);
+    }
+    company.channelExposureHistory = [...byKey.values()]
+      .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
+      .slice(-80);
+  }
 }
 
 function platformRowGroup(row, platform, statusValue, reasonValue, directionValue, adValue) {
@@ -13216,9 +13532,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260821-collection-screen-v14"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260821-collection-screen-v14"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260821-collection-screen-v14"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260822-naver-ota-observation-v15"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260822-naver-ota-observation-v15"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260822-naver-ota-observation-v15"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

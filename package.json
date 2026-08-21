@@ -5,11 +5,13 @@
   "type": "commonjs",
   "scripts": {
     "start": "node scripts/glamping_app_server.cjs",
-    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_search_mode_classification.cjs && node --check scripts/test_surface_contrast.cjs && node scripts/test_surface_contrast.cjs",
+    "check": "node --check scripts/glamping_app_server.cjs && node --check scripts/gyeongnam_glamping_crawl.cjs && node --check scripts/naver_place_ota_observation.cjs && node --check web/app.js && node --check scripts/yeogi_import_parser.cjs && node --check scripts/test_yeogi_import_parser.cjs && node --check scripts/test_search_mode_classification.cjs && node --check scripts/test_naver_place_ota_observation.cjs && node --check scripts/test_naver_ota_company_master.cjs && node --check scripts/test_surface_contrast.cjs && node scripts/test_surface_contrast.cjs",
     "test:yeogi": "node scripts/test_yeogi_import_parser.cjs",
     "test:surface": "node scripts/test_surface_contrast.cjs",
     "test:search-mode": "node scripts/test_search_mode_classification.cjs",
-    "test": "npm run check && npm run test:yeogi && npm run test:search-mode"
+    "test:naver-ota": "node scripts/test_naver_place_ota_observation.cjs",
+    "test:naver-ota-master": "node scripts/test_naver_ota_company_master.cjs",
+    "test": "npm run check && npm run test:yeogi && npm run test:search-mode && npm run test:naver-ota && npm run test:naver-ota-master"
   },
   "engines": {
     "node": ">=20"
