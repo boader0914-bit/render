@@ -1591,6 +1591,19 @@ const REGIONAL_GLAMPING_BASES = new Set([
   "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9"
 ]);
 
+const REGIONAL_LODGING_SEARCH_SUFFIXES = [
+  "오토캠핑장",
+  "카라반캠핑장",
+  "글램핑장",
+  "캠핑장",
+  "야영장",
+  "풀빌라",
+  "카라반",
+  "글램핑",
+  "펜션",
+  "캠핑"
+];
+
 const BROAD_REGION_BASES = new Set([
   "경남", "경상남도", "경남도", "경북", "경상북도", "경북도", "경기", "경기도", "경기북부", "경기남부", "수도권", "서울근교",
   "강원", "강원도", "제주", "제주도", "전북", "전라북도", "전북특별자치도", "전남", "전라남도",
@@ -1639,12 +1652,18 @@ function regionalGlampingKeywordBase(value) {
   return REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix) ? withoutAdminSuffix : "";
 }
 
-function looksLikeRegionalGlampingKeyword(value) {
-  return Boolean(regionalGlampingKeywordBase(value));
+function looksLikeRegionalLodgingKeyword(value) {
+  const compact = compactCrawlKeyword(value);
+  const lodgingSuffix = REGIONAL_LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix));
+  if (!lodgingSuffix) return false;
+  const base = compact.slice(0, -lodgingSuffix.length);
+  if (!base || base.length > 10) return false;
+  const withoutAdminSuffix = normalizedRegionBase(base);
+  return REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix);
 }
 
 function correctedSearchMode(keyword, mode) {
-  return mode === "company" && looksLikeRegionalGlampingKeyword(keyword) ? "keyword" : mode;
+  return mode === "company" && looksLikeRegionalLodgingKeyword(keyword) ? "keyword" : mode;
 }
 
 function adminUserViewRequested() {

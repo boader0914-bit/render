@@ -346,7 +346,7 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("nav-icons-v28") && serviceWorker.includes('"/admin-theme.css"'),
+  serviceWorker.includes("regional-keywords-v29") && serviceWorker.includes('"/admin-theme.css"'),
   "service worker cache must refresh the theme rebuild release",
   failures
 );

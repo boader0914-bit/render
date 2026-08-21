@@ -377,19 +377,45 @@ const REGIONAL_GLAMPING_BASES = new Set([
   "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9"
 ]);
 
-function looksLikeRegionalGlampingKeyword(value) {
+const REGIONAL_LODGING_SEARCH_SUFFIXES = [
+  "오토캠핑장",
+  "카라반캠핑장",
+  "글램핑장",
+  "캠핑장",
+  "야영장",
+  "풀빌라",
+  "카라반",
+  "글램핑",
+  "펜션",
+  "캠핑"
+];
+
+const REGIONAL_LODGING_BASE_ALIASES = {
+  경상남: "경남",
+  경상북: "경북",
+  전라북: "전북",
+  전북특별자치: "전북",
+  전라남: "전남",
+  충청남: "충남",
+  충청북: "충북"
+};
+
+function looksLikeRegionalLodgingKeyword(value) {
   const compact = compactKeyword(value).normalize("NFKC");
-  const glamping = "\uAE00\uB7A8\uD551";
-  if (!compact.endsWith(glamping)) return false;
-  const base = compact.slice(0, -glamping.length);
+  const lodgingSuffix = REGIONAL_LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix));
+  if (!lodgingSuffix) return false;
+  const base = compact.slice(0, -lodgingSuffix.length);
   if (!base || base.length > 10) return false;
   const withoutAdminSuffix = base.replace(/(\uD2B9\uBCC4\uC790\uCE58\uB3C4|\uAD11\uC5ED\uC2DC|\uD2B9\uBCC4\uC2DC|\uD2B9\uBCC4\uC790\uCE58\uC2DC|\uC790\uCE58\uB3C4|\uC790\uCE58\uC2DC|\uC2DC|\uAD70|\uAD6C|\uB3C4)$/u, "");
-  return REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix);
+  const normalizedBase = REGIONAL_LODGING_BASE_ALIASES[withoutAdminSuffix] || withoutAdminSuffix;
+  return REGIONAL_GLAMPING_BASES.has(base)
+    || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix)
+    || REGIONAL_GLAMPING_BASES.has(normalizedBase);
 }
 
 function resolveSearchModeForCrawl(keyword, value) {
   const mode = normalizeSearchMode(value);
-  return mode === "company" && looksLikeRegionalGlampingKeyword(keyword) ? "keyword" : mode;
+  return mode === "company" && looksLikeRegionalLodgingKeyword(keyword) ? "keyword" : mode;
 }
 
 function crawlExecutionPlan(payload = {}) {
@@ -13177,9 +13203,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260821-nav-icons-v9"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260821-nav-icons-v9"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260821-nav-icons-v9"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260821-regional-keywords-v10"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260821-regional-keywords-v10"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260821-regional-keywords-v10"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
