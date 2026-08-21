@@ -7,11 +7,13 @@ const themePath = path.join(root, "web", "admin-theme.css");
 const appPath = path.join(root, "web", "app.js");
 const indexPath = path.join(root, "web", "index.html");
 const serviceWorkerPath = path.join(root, "web", "sw.js");
+const serverPath = path.join(root, "scripts", "glamping_app_server.cjs");
 const styles = fs.readFileSync(stylesPath, "utf8");
 const themeStyles = fs.readFileSync(themePath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
 const indexHtml = fs.readFileSync(indexPath, "utf8");
 const serviceWorker = fs.readFileSync(serviceWorkerPath, "utf8");
+const server = fs.readFileSync(serverPath, "utf8");
 
 const requiredMarkers = [
   "Surface contrast contract v3",
@@ -304,6 +306,8 @@ const contrastChecks = [
   ["light status positive", "#287f53", "#ffffff", 4.5],
   ["light warning", "#90632a", "#ffffff", 4.5],
   ["light danger", "#ae4d49", "#ffffff", 4.5],
+  ["light rank danger", "#a83c3c", "#f3f6f3", 4.5],
+  ["light rank warning", "#805009", "#f3f6f3", 4.5],
   ["dark text", "#f5f5f5", "#111111", 7],
   ["dark muted", "#b5b5b5", "#111111", 4.5],
   ["dark accent", "#a7c5ae", "#111111", 4.5],
@@ -346,8 +350,38 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("regional-keywords-v29") && serviceWorker.includes('"/admin-theme.css"'),
+  serviceWorker.includes("place-rank-tag-v30") && serviceWorker.includes('"/admin-theme.css"'),
   "service worker cache must refresh the theme rebuild release",
+  failures
+);
+
+assert(
+  server.includes('styles.css?v=v2-20260821-place-rank-tag-v11')
+    && server.includes('admin-theme.css?v=v2-20260821-place-rank-tag-v11')
+    && server.includes('app.js?v=v2-20260821-place-rank-tag-v11'),
+  "server asset query versions must refresh styles, theme, and app together",
+  failures
+);
+
+const companyRankStackIndex = app.indexOf('<div class="company-rank-stack">');
+const companyRankBadgeIndex = app.indexOf('class="rank-badge"', companyRankStackIndex);
+const companyRankChangeIndex = app.indexOf('class="company-rank-change', companyRankStackIndex);
+const companyTitleIndex = app.indexOf('<div class="company-title">', companyRankStackIndex);
+
+assert(
+  companyRankStackIndex >= 0
+    && companyRankBadgeIndex > companyRankStackIndex
+    && companyRankChangeIndex > companyRankBadgeIndex
+    && companyTitleIndex > companyRankChangeIndex,
+  "place rank change badge must render below the rank badge before the company title",
+  failures
+);
+
+assert(
+  /\.confidence-badge,\s*\.company-rank-change\s*\{[^}]*min-height:\s*26px;/i.test(styles)
+    && /\.company-main\s*\{[^}]*grid-template-columns:\s*max-content\s+minmax\(0,\s*1fr\)/i.test(styles)
+    && !/company-rank-change[^{}]*\{[^}]*position:\s*absolute/i.test(styles),
+  "place rank change badge must share status-pill sizing without absolute positioning",
   failures
 );
 

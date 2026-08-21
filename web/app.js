@@ -5893,11 +5893,14 @@ function renderCompanies() {
     const stockStatus = item.bookingStatus || (linked ? "재고 분석 완료" : "예약ID 조회 실패/미수집");
     const placeChange = placeRankChangeForItem(item);
     const placeChangeView = placeChange ? placeRankChangeView(placeChange) : null;
+    const displayRank = item.rank || index + 1;
     return `
       <article class="company-card ${publicMode ? "b2b-public-company" : ""} ${linked ? "" : "rank-only"} ${escapeHtml(insight.tone)}" data-company-index="${index}">
         <div class="company-main">
-          <span class="rank-badge">${escapeHtml(item.rank || index + 1)}</span>
-          ${placeChangeView ? `<em class="company-rank-change ${escapeHtml(placeChangeView.tone)}">${escapeHtml(placeChangeView.label)}</em>` : ""}
+          <div class="company-rank-stack">
+            <span class="rank-badge" aria-label="${escapeHtml(`현재 ${displayRank}위`)}">${escapeHtml(displayRank)}</span>
+            ${placeChangeView ? `<em class="company-rank-change ${escapeHtml(placeChangeView.tone)}" title="${escapeHtml(placeChangeView.detail)}" aria-label="${escapeHtml(`${placeChangeView.detail} · ${placeChangeView.label}`)}">${escapeHtml(placeChangeView.label)}</em>` : ""}
+          </div>
           <div class="company-title">
             <strong>${escapeHtml(item.name || "업체명 확인")}</strong>
             <small>${escapeHtml(categoryText(item))}</small>

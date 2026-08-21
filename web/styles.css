@@ -11640,8 +11640,17 @@ a {
   grid-area: main;
   min-width: 0;
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 12px;
+}
+
+.company-rank-stack {
+  width: max-content;
+  min-width: 48px;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 8px;
 }
 
 .rank-badge {
@@ -11689,7 +11698,8 @@ a {
   min-width: 0;
 }
 
-.confidence-badge {
+.confidence-badge,
+.company-rank-change {
   max-width: 100%;
   min-height: 26px;
   display: inline-flex;
@@ -11705,6 +11715,11 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.company-rank-change {
+  justify-content: center;
+  font-style: normal;
 }
 
 .confidence-badge.good {
@@ -29471,8 +29486,13 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   }
 
   .company-main {
-    grid-template-columns: 40px minmax(0, 1fr);
+    grid-template-columns: max-content minmax(0, 1fr);
     gap: 10px;
+  }
+
+  .company-rank-stack {
+    min-width: 40px;
+    gap: 7px;
   }
 
   .rank-badge {
@@ -37133,20 +37153,6 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-header h1 {
   align-items: center;
   gap: 6px;
   min-width: max-content;
-}
-
-.company-main { position: relative; }
-.company-rank-change {
-  position: absolute;
-  top: -5px;
-  left: 35px;
-  padding: 3px 5px;
-  border-radius: 6px;
-  font-size: 10px;
-  font-style: normal;
-  font-weight: 950;
-  line-height: 1;
-  white-space: nowrap;
 }
 
 @media (max-width: 760px) {

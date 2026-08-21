@@ -31,7 +31,9 @@ html[data-theme-resolved="light"] {
   --accent-contrast: #ffffff;
   --positive: #2f7d5f;
   --warning: #b87912;
+  --warning-strong: #805009;
   --danger: #c54848;
+  --danger-strong: #a83c3c;
   --theme-card-shadow: 0 2px 10px rgba(23, 34, 53, .045);
   --header-rule: #dce4df;
 }
@@ -53,7 +55,9 @@ html[data-theme-resolved="dark"] {
   --accent-contrast: #0b120d;
   --positive: #91d0ac;
   --warning: #f2c875;
+  --warning-strong: #f2c875;
   --danger: #ff9a9a;
+  --danger-strong: #ff9a9a;
   --theme-card-shadow: none;
   --header-rule: #2a2a2a;
 }
@@ -664,6 +668,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .platform-chip,
   .confidence-badge,
   .structure-badge,
+  .company-rank-change,
   .b2b-company-chips > *,
   .report-badge,
   .brand-beta-badge,
@@ -674,6 +679,26 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   background: var(--surface-control) !important;
   color: var(--text-secondary) !important;
   box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-rank-change.up {
+  border-color: color-mix(in srgb, var(--positive) 45%, var(--border-subtle)) !important;
+  color: var(--positive) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-rank-change.down {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-subtle)) !important;
+  color: var(--danger-strong) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-rank-change.new {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle)) !important;
+  color: var(--accent) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .company-rank-change.out {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border-subtle)) !important;
+  color: var(--warning-strong) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
