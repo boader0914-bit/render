@@ -7,8 +7,10 @@
 
 :root {
   --font-editorial: "Sabun MaruBuri", "MaruBuri", Georgia, serif;
-  --ui-radius-card: 14px;
+  --ui-radius-card: 16px;
   --ui-radius-control: 10px;
+  --card-radius: var(--ui-radius-card);
+  --control-radius: var(--ui-radius-control);
   --ui-transition: background-color 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out;
 }
 
@@ -18,12 +20,12 @@ html[data-theme-resolved="light"] {
   --surface-card: #ffffff;
   --theme-surface-soft: #eaf1ed;
   --surface-control: #f3f6f3;
-  --surface-selected: #e1ece5;
+  --surface-selected: #eaf1ed;
   --border-subtle: #dce4df;
   --border-strong: #afc2b5;
   --text-primary: #172235;
   --text-secondary: #5e6975;
-  --text-tertiary: #78818a;
+  --text-tertiary: #68737e;
   --accent: #3e7565;
   --accent-strong: #275747;
   --accent-contrast: #ffffff;
@@ -31,7 +33,7 @@ html[data-theme-resolved="light"] {
   --warning: #b87912;
   --danger: #c54848;
   --theme-card-shadow: 0 2px 10px rgba(23, 34, 53, .045);
-  --header-rule: #1d2939;
+  --header-rule: #dce4df;
 }
 
 html[data-theme-resolved="dark"] {
@@ -86,6 +88,12 @@ html[data-theme-resolved] {
   --card-hover-border: var(--border-strong);
   --card-selected: var(--surface-selected);
   --card-shadow: var(--theme-card-shadow);
+  --shadow: var(--theme-card-shadow);
+  --soft-shadow: var(--theme-card-shadow);
+  --card-radius-large: calc(var(--ui-radius-card) + 2px);
+  --card-transition: var(--ui-transition);
+  --theme-glow: color-mix(in srgb, var(--accent) 14%, transparent);
+  --focus-ring: color-mix(in srgb, var(--accent) 58%, transparent);
 }
 
 html[data-theme-resolved],
@@ -152,6 +160,10 @@ html[data-theme-resolved] :is(.theme-switcher, .bottom-nav, .admin-section-nav, 
   background: var(--surface-card) !important;
   box-shadow: var(--card-shadow) !important;
   backdrop-filter: none;
+}
+
+html[data-theme-resolved] :is(.admin-nav-brand, .admin-desktop-secondary) {
+  display: none;
 }
 
 html[data-theme-resolved] .theme-switcher {
@@ -230,73 +242,257 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(input::placeho
   opacity: 1;
 }
 
-/* Operating-home shortcuts stay as compact links, not a second row of cards. */
-html[data-theme-resolved] body.role-admin .admin-workspace-focus {
+/* Admin home: an information hierarchy, not a wall of action cards. */
+html[data-theme-resolved] body.role-admin .admin-console-dashboard {
+  display: grid;
+  gap: 24px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: clamp(22px, 3vw, 34px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-card);
+  background: var(--surface-soft);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-intro > div:first-child {
+  min-width: 0;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-intro span,
+html[data-theme-resolved] body.role-admin .admin-home-section-head span {
+  color: var(--accent-strong) !important;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .08em;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-intro h2 {
+  margin: 7px 0 6px;
+  color: var(--text-primary);
+  font-family: var(--font-editorial);
+  font-size: clamp(28px, 3.4vw, 42px);
+  font-weight: 500;
+  letter-spacing: -.045em;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-intro p,
+html[data-theme-resolved] body.role-admin .admin-home-intro small {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-basis {
+  display: grid;
+  gap: 4px;
+  min-width: min(280px, 38%);
+  padding: 16px 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-card);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-basis strong {
+  color: var(--text-primary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-section {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--card-shadow);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-section-head,
+html[data-theme-resolved] body.role-admin .admin-home-section-head > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-section-head {
+  margin-bottom: 16px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-section-head h3 {
+  margin: 0;
+  color: var(--text-primary) !important;
+  font-size: 17px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-section-head > small {
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(.admin-home-task-list, .admin-home-freshness-list, .admin-home-log-list) {
+  display: grid;
+  gap: 8px;
+}
+
+html[data-theme-resolved] body.role-admin :is(.admin-home-task-row, .admin-home-log-row) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+html[data-theme-resolved] body.role-admin #adminConsoleDashboard .admin-home-task-row[data-ui-surface="control"],
+html[data-theme-resolved] body.role-admin #adminConsoleDashboard .admin-home-freshness-row[data-ui-surface="control"] {
+  background: var(--surface-control) !important;
+  background-image: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-task-signal {
+  width: 4px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--warning);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-task-row[data-ui-status="danger"] .admin-home-task-signal {
+  background: var(--danger);
+}
+
+html[data-theme-resolved] body.role-admin :is(.admin-home-task-row, .admin-home-log-row) > span:nth-child(2),
+html[data-theme-resolved] body.role-admin .admin-home-log-row > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+html[data-theme-resolved] body.role-admin :is(.admin-home-task-row, .admin-home-log-row) small {
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-arrow {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 850;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
-  margin: 0 0 22px;
-  border-top: 1px solid var(--border-subtle);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 12px;
 }
 
-html[data-theme-resolved] body.role-admin .admin-workspace-focus > article,
-html[data-theme-resolved] body.role-admin .admin-workspace-focus > article.priority {
-  min-height: 0;
-  padding: 15px 18px 14px;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  background-image: none !important;
+html[data-theme-resolved] body.role-admin .admin-home-metric {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  min-height: 176px;
+  padding: 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-card);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--card-shadow);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-metric > span {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-metric > strong {
+  font-size: clamp(27px, 3vw, 38px);
+  letter-spacing: -.045em;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-metric > small {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-metric > mark {
+  justify-self: start;
+  margin-top: auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-secondary) !important;
   box-shadow: none !important;
+  font-size: 11px;
+  font-style: normal;
 }
 
-html[data-theme-resolved] body.role-admin .admin-workspace-focus > article + article {
-  border-left: 1px solid var(--border-subtle) !important;
+html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="positive"] { color: var(--positive) !important; }
+html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="warning"] { color: var(--warning) !important; }
+html[data-theme-resolved] body.role-admin .admin-home-metric > mark[data-ui-status="danger"] { color: var(--danger) !important; }
+
+html[data-theme-resolved] body.role-admin .admin-home-metric > .admin-home-arrow {
+  position: absolute;
+  right: 18px;
+  bottom: 19px;
 }
 
-html[data-theme-resolved] body.role-admin .admin-workspace-focus button[data-admin-workspace-section] {
-  justify-content: flex-start;
-  width: fit-content;
-  min-height: 0;
-  margin-top: 9px;
-  padding: 0;
-  border: 0 !important;
-  border-radius: 0 !important;
+html[data-theme-resolved] body.role-admin .admin-home-lower-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr);
+  gap: 16px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-freshness-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-freshness-row > span {
+  display: grid;
+  gap: 3px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-freshness-row small,
+html[data-theme-resolved] body.role-admin .admin-home-empty span {
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-home-freshness-row b[data-ui-status="positive"] { color: var(--positive); }
+
+html[data-theme-resolved] body.role-admin .admin-home-log-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  border-color: transparent;
   background: transparent !important;
-  color: var(--accent-strong) !important;
-  box-shadow: none !important;
 }
 
-html[data-theme-resolved] body.role-admin .admin-workspace-focus button[data-admin-workspace-section]:hover {
-  color: var(--accent) !important;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+html[data-theme-resolved] body.role-admin .admin-home-empty {
+  display: grid;
+  gap: 5px;
+  padding: 18px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-soft);
 }
 
-@media (max-width: 900px) {
-  html[data-theme-resolved] body.role-admin .admin-workspace-focus {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  html[data-theme-resolved] body.role-admin .admin-workspace-focus > article:nth-child(odd) {
-    border-left: 0 !important;
-  }
-
-  html[data-theme-resolved] body.role-admin .admin-workspace-focus > article:nth-child(n + 3) {
-    border-top: 1px solid var(--border-subtle) !important;
-  }
-}
-
-@media (max-width: 560px) {
-  html[data-theme-resolved] body.role-admin .admin-workspace-focus {
-    grid-template-columns: 1fr;
-  }
-
-  html[data-theme-resolved] body.role-admin .admin-workspace-focus > article + article {
-    border-top: 1px solid var(--border-subtle) !important;
-    border-left: 0 !important;
-  }
+html[data-theme-resolved] body.role-admin #adminConsoleDashboard .admin-home-empty[data-ui-surface="soft"] {
+  background: var(--surface-soft) !important;
 }
 
 /* Every named dashboard surface is neutral. This compatibility reset replaces old blue/navy component paint. */
@@ -323,6 +519,9 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-regional-summary-grid > article,
   .admin-region-ops-queue,
   .admin-region-ops-queue-grid > article,
+  .admin-maintenance-lane,
+  .admin-run-region-panel,
+  .admin-run-region-grid > article,
   .admin-region-review-filterbar,
   .admin-region-review-summary,
   .admin-region-review-grid > article,
@@ -364,6 +563,9 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .collection-archive-list > article,
   .place-rank-change-list > article,
   .place-rank-change-stats > article,
+  .location-hero,
+  .region-compare-row,
+  .region-group-summary > div,
   .location-decision,
   .location-decision-score,
   .location-score-model-head > *,
@@ -383,7 +585,17 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .location-action-panel,
   .location-index,
   .location-advice-card,
-  .location-summary-grid > *
+  .location-summary-grid > *,
+  .company-insight-grid > *,
+  .b2b-company-card-summary > *,
+  .validation-target-list > *,
+  .collection-diagnostic-list > *,
+  .audit-status-strip,
+  .audit-queue-list > *,
+  .b2b-live-search-panel,
+  .admin-db-applied-values,
+  .admin-db-channel-state,
+  .history-ops-log
 ):not(.tab-panel, .admin-section-panel) {
   border-color: var(--border-subtle) !important;
   border-radius: var(--ui-radius-card) !important;
@@ -407,6 +619,30 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   background: var(--surface-soft) !important;
 }
 
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  [data-ui-surface="control"],
+  [data-ui-surface="chip"],
+  .location-score,
+  .location-score-admin-actions > button,
+  .admin-maintenance-lane > button
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-surface="soft"] {
+  background: var(--surface-soft) !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-surface="control"],
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface][data-ui-surface="chip"] {
+  background: var(--surface-control) !important;
+  box-shadow: none !important;
+}
+
 /* Small information carriers are never white in dark mode or blue in light mode. */
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .flow-chip-row > span,
@@ -426,6 +662,11 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-member-search-list > span,
   .admin-member-history-list > span,
   .platform-chip,
+  .confidence-badge,
+  .structure-badge,
+  .b2b-company-chips > *,
+  .report-badge,
+  .brand-beta-badge,
   .state-badge
 ) {
   border-color: var(--border-subtle) !important;
@@ -600,23 +841,252 @@ html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(
   color: var(--text-secondary) !important;
 }
 
+/*
+ * Collection workspace migration.
+ * The collector predates theme tokens and painted its own navy dashboard.
+ * Its geometry remains unchanged; every surface now has one neutral role.
+ */
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
+  .crawl-purpose-panel,
+  .crawl-progress,
+  .run-apply-empty,
+  .run-apply-panel,
+  .run-purpose-result,
+  .run-purpose-result-grid > article,
+  .run-apply-grid > article,
+  .run-apply-check,
+  .run-apply-linked-queue,
+  .run-apply-linked-queue > article,
+  .run-apply-linked-list > article,
+  .crawl-route-preview > article,
+  .advanced-box
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
+  .crawl-purpose-options > button,
+  .crawl-rank-range-field,
+  .crawl-speed-panel,
+  .crawl-speed-options > button,
+  .crawl-progress-stages > span,
+  .crawl-progress-numbers > span,
+  .run-apply-linked-actions > button,
+  .ghost-button
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
+  .crawl-purpose-options > button.active,
+  .crawl-speed-options > button.active
+) {
+  border-color: var(--accent) !important;
+  background: var(--surface-selected) !important;
+  box-shadow: inset 3px 0 0 var(--accent) !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
+  .crawl-purpose-options em,
+  .run-apply-head em,
+  .run-apply-status
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
+  h1, h2, h3, h4, strong, b, label, summary
+) {
+  color: var(--text-primary) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
+  p, small, span, em, li
+) {
+  color: var(--text-secondary) !important;
+  text-shadow: none !important;
+}
+
+/* Region analysis uses the same components as the former home dashboard. */
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  .admin-location-score-queue,
+  .admin-location-score-queue-list > article,
+  .admin-maintenance-lane,
+  .admin-run-region-panel,
+  .admin-region-approval-panel,
+  .admin-region-approval-grid > article,
+  .admin-region-checklist-grid > article,
+  .admin-region-maintenance-actions,
+  .admin-region-maintenance-actions > article,
+  .admin-region-review-form,
+  .admin-region-correction-gap-list > article,
+  .admin-region-preflight-panel,
+  .admin-region-review-filter-summary,
+  .admin-region-audit-summary,
+  .admin-region-company-list > article
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  .admin-maintenance-lane > button,
+  .admin-region-review-filter-summary button,
+  .admin-region-audit-filters > button,
+  .admin-region-card > button,
+  .admin-region-approval-actions > button
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  .admin-maintenance-lane > button.active,
+  .admin-region-review-filter-summary button.active,
+  .admin-region-audit-filters > button.active
+) {
+  border-color: var(--accent) !important;
+  background: var(--surface-selected) !important;
+  box-shadow: inset 3px 0 0 var(--accent) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  details,
+  article,
+  .admin-region-action-box,
+  .admin-region-company-toolbar,
+  .company-review-control,
+  .admin-region-company-inspection-next,
+  .admin-region-verdict
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: var(--card-shadow) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard button {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  background-image: none !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard button.active {
+  border-color: var(--accent) !important;
+  background: var(--surface-selected) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: inset 3px 0 0 var(--accent) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  mark,
+  .admin-region-approval-missing > span,
+  .admin-region-audit-summary > span
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  .admin-region-review-progress,
+  .admin-region-preflight-meter
+) {
+  background: var(--surface-control) !important;
+}
+
+html[data-theme-resolved] body.role-admin #adminRegionAnalysisDashboard :is(
+  .admin-location-score-queue-head > span,
+  .admin-region-ops-queue-head > mark,
+  .admin-maintenance-lane > button > span:first-child,
+  .admin-region-card-head > mark,
+  .admin-region-card-foot > span,
+  .admin-region-reasons > em,
+  .admin-region-approval-head > span
+),
+html[data-theme-resolved] body.role-admin .admin-db-province-board-head > mark,
+html[data-theme-resolved] body.role-admin .report-card-head > span,
+html[data-theme-resolved] body.role-admin .report-target-row > span,
+html[data-theme-resolved] body.role-admin .admin-console-head > span {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(.empty, .legal-inline-notice) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-soft) !important;
+  background-image: none !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
+  .crawl-progress-meter,
+  .location-progress,
+  .location-score-component-grid article > i,
+  .location-compare-bars > div > i
+) {
+  background: var(--surface-control) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-hero > strong {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--accent-strong) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin :is(
+  .admin-region-ops-queue-head > mark,
+  .admin-maintenance-lane > button > span:first-child
+) {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+}
+
 /* State changes are small signals: an inset rail and matching text, never a full-card fill. */
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
-  [data-ui-status="positive"], [data-ui-status="good"], [data-ui-status="strong"],
+  [data-ui-surface][data-ui-status="positive"], [data-ui-surface][data-ui-status="good"], [data-ui-surface][data-ui-status="strong"],
   .good, .positive, .success
 ) {
   box-shadow: inset 3px 0 0 var(--positive), var(--card-shadow) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
-  [data-ui-status="warning"], [data-ui-status="watch"], [data-ui-status="caution"], [data-ui-status="weak"], [data-ui-status="mid"],
+  [data-ui-surface][data-ui-status="warning"], [data-ui-surface][data-ui-status="watch"], [data-ui-surface][data-ui-status="caution"], [data-ui-surface][data-ui-status="weak"], [data-ui-surface][data-ui-status="mid"],
   .watch, .warning, .caution
 ) {
   box-shadow: inset 3px 0 0 var(--warning), var(--card-shadow) !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
-  [data-ui-status="danger"], [data-ui-status="risk"], [data-ui-status="bad"], [data-ui-status="hot"],
+  [data-ui-surface][data-ui-status="danger"], [data-ui-surface][data-ui-status="risk"], [data-ui-surface][data-ui-status="bad"], [data-ui-surface][data-ui-status="hot"],
   .hot, .bad, .danger, .error
 ) {
   box-shadow: inset 3px 0 0 var(--danger), var(--card-shadow) !important;
@@ -625,23 +1095,19 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.good, .positive, .success) > :is(.status, mark, em) { color: var(--positive) !important; }
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.watch, .warning, .caution) > :is(.status, mark, em) { color: var(--warning) !important; }
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.hot, .bad, .danger, .error) > :is(.status, mark, em) { color: var(--danger) !important; }
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="positive"]:not([data-ui-surface]) { color: var(--positive); }
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="warning"]:not([data-ui-surface]) { color: var(--warning); }
+html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="danger"]:not([data-ui-surface]) { color: var(--danger); }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, input, select, textarea):focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--accent) 56%, transparent) !important;
+  outline: 3px solid var(--focus-ring) !important;
   outline-offset: 3px;
 }
 
 @media (hover: hover) {
   html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
     [data-ui-interactive="true"],
-    .admin-db-company,
     .admin-region-ops-queue-list > button,
-    .admin-region-review-grid > article,
-    .admin-region-card,
-    .admin-member-row,
-    .admin-delete-row,
-    .primary-button,
-    .more-button,
     .secondary-button,
     .small-button,
     .icon-button
@@ -649,29 +1115,86 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, inp
     border-color: var(--border-strong) !important;
     background: var(--surface-selected) !important;
   }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.primary-button, .more-button):hover {
+    border-color: var(--accent-strong) !important;
+    background: var(--accent-strong) !important;
+    color: var(--accent-contrast) !important;
+  }
 }
 
-/* Desktop navigation is fixed in the reading order; mobile returns it to the bottom app bar. */
-@media (min-width: 861px) {
-  /* The fixed left rail is the single administrator primary navigation on desktop. */
-  html[data-theme-resolved] body.role-admin .admin-section-nav {
-    display: none !important;
-  }
+html[data-theme-resolved] body.role-b2b .header-system-status { display: none; }
 
+html[data-theme-resolved] body.role-admin .admin-integration-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 16px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-integration-list > article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 13px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+}
+
+html[data-theme-resolved] body.role-admin .admin-integration-list > article > span {
+  display: grid;
+  gap: 3px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-integration-list > article > small {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-integration-list mark {
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle) !important;
+  background: var(--surface-card) !important;
+  color: var(--text-secondary) !important;
+  box-shadow: none !important;
+  font-size: 11px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-integration-list mark[data-ui-status="positive"] { color: var(--positive) !important; }
+html[data-theme-resolved] body.role-admin .admin-integration-list mark[data-ui-status="warning"] { color: var(--warning) !important; }
+
+html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
+  margin-bottom: 24px;
+}
+
+/* Desktop navigation is fixed as one persistent left rail. Mobile uses one five-item bottom bar. */
+@media (min-width: 861px) {
   html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
     display: grid !important;
-    grid-template-columns: 232px minmax(0, 1fr);
-    column-gap: 34px;
+    grid-template-columns: 248px minmax(0, 1fr);
+    column-gap: 32px;
     align-items: start;
   }
 
   html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main > .bottom-nav {
     position: sticky !important;
-    top: 22px;
+    z-index: 20;
+    top: calc(18px + env(safe-area-inset-top));
     grid-column: 1;
-    grid-row: 1 / span 40;
-    width: 232px !important;
-    padding: 9px;
+    grid-row: 1 / span 80;
+    align-self: start;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 5px;
+    width: 248px !important;
+    max-height: calc(100vh - 36px);
+    margin: 0;
+    padding: 10px;
+    overflow-y: auto;
+    overflow-x: hidden;
     border-radius: var(--ui-radius-card);
   }
 
@@ -680,23 +1203,175 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, inp
     min-width: 0;
   }
 
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .admin-mobile-nav {
+    display: none !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-nav-brand {
+    display: grid;
+    gap: 2px;
+    margin: 2px 2px 10px;
+    padding: 14px 12px 15px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-nav-brand strong {
+    color: var(--accent-strong);
+    font-size: 13px;
+    letter-spacing: .07em;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-nav-brand span {
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: .08em;
+  }
+
+  html[data-theme-resolved] body.role-b2b .admin-nav-brand,
+  html[data-theme-resolved] body.role-b2b .admin-desktop-secondary {
+    display: none !important;
+  }
+
   html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button {
+    position: relative;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+    justify-content: stretch;
+    column-gap: 9px;
     min-height: 54px;
+    padding: 9px 10px;
     border-radius: var(--ui-radius-control);
+    text-align: left;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button::before {
+    content: attr(data-nav-icon);
+    grid-row: 1 / span 2;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    color: var(--text-secondary);
+    font-size: 18px;
+  }
+
+  html[data-theme-resolved] body.role-admin .bottom-nav button::before,
+  html[data-theme-resolved] body.role-admin .bottom-nav button::after {
+    display: none !important;
+    content: none !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .bottom-nav .admin-nav-icon-shell {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    display: grid !important;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--surface-control);
+    color: var(--text-secondary);
+    transition: var(--ui-transition);
+  }
+
+  html[data-theme-resolved] body.role-admin .bottom-nav .admin-nav-icon {
+    display: block;
+    width: 20px;
+    height: 20px;
+    pointer-events: none;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button > strong {
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button > span {
+    color: var(--text-secondary);
+    font-size: 10px;
+  }
+
+  html[data-theme-resolved] body.role-admin .bottom-nav .admin-nav-detail {
+    grid-column: 2;
+    grid-row: 2;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active::before,
+  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active > strong {
+    color: var(--accent-strong);
+  }
+
+  html[data-theme-resolved] body.role-admin .bottom-nav button:is(:hover, :focus-visible) .admin-nav-icon-shell {
+    border-color: var(--border-strong);
+    color: var(--accent-strong);
+  }
+
+  html[data-theme-resolved] body.role-admin .bottom-nav button.active .admin-nav-icon-shell {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-contrast);
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-desktop-secondary {
+    display: grid;
+    gap: 3px;
+    margin: 4px 4px 8px 42px;
+    padding: 7px 0 0 10px;
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-desktop-secondary[hidden],
+  html[data-theme-resolved] body.role-admin .admin-desktop-secondary:empty {
+    display: none;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-desktop-secondary button {
+    grid-template-columns: 1fr;
+    min-height: 36px;
+    padding: 7px 9px;
+    border-color: transparent !important;
+    background: transparent !important;
+    color: var(--text-secondary) !important;
+    font-size: 11px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-desktop-secondary button::before {
+    display: none;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-desktop-secondary button.active {
+    background: var(--surface-selected) !important;
+    color: var(--accent-strong) !important;
+    box-shadow: none !important;
   }
 }
 
 @media (max-width: 860px) {
   html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-shell {
-    width: 100%;
-    padding-bottom: calc(98px + env(safe-area-inset-bottom));
+    width: min(calc(100% - 24px), 760px);
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
   }
 
   html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main {
     display: block !important;
   }
 
-  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .app-main > .bottom-nav {
+  html[data-theme-resolved] body.role-admin .app-main > .bottom-nav {
+    display: none !important;
+  }
+
+  html[data-theme-resolved] body.role-b2b .app-main > .bottom-nav {
     position: fixed !important;
     z-index: 90;
     right: 0;
@@ -707,7 +1382,177 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, inp
     background: var(--surface-card) !important;
   }
 
-  html[data-theme-resolved] :is(body.role-admin, body.role-b2b) .bottom-nav button.active {
+  html[data-theme-resolved] body.role-b2b .bottom-nav button.active {
     box-shadow: inset 0 -3px 0 var(--accent) !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-nav {
+    position: fixed !important;
+    z-index: 100;
+    top: auto !important;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: block !important;
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    border: 1px solid var(--border-subtle);
+    border-radius: 18px 18px 0 0;
+    background: var(--surface-card) !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 4px;
+    overflow: visible;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary button {
+    display: grid;
+    place-items: center;
+    gap: 2px;
+    min-width: 0;
+    min-height: 58px;
+    padding: 5px 2px;
+    border: 1px solid transparent !important;
+    background: transparent !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary button > span {
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary .admin-nav-icon-shell {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: var(--text-secondary);
+    transition: var(--ui-transition);
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary .admin-nav-icon {
+    display: block;
+    width: 21px;
+    height: 21px;
+    pointer-events: none;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary button > strong {
+    color: var(--text-secondary);
+    font-size: 10px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary button.active {
+    border-color: var(--border-strong) !important;
+    background: var(--surface-selected) !important;
+    box-shadow: inset 0 -2px 0 var(--accent) !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary button.active > :is(span, strong) {
+    color: var(--accent-strong);
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-primary button.active .admin-nav-icon-shell {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-contrast);
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-secondary {
+    position: absolute;
+    right: 10px;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    left: 10px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+    padding: 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--ui-radius-card);
+    background: var(--surface-card) !important;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, .12) !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-secondary[hidden],
+  html[data-theme-resolved] body.role-admin .admin-mobile-secondary:empty {
+    display: none !important;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-mobile-secondary button {
+    min-height: 40px;
+    padding: 7px 8px;
+    font-size: 11px;
+  }
+
+  html[data-theme-resolved] body.role-admin .app-header {
+    gap: 12px;
+  }
+
+  html[data-theme-resolved] body.role-admin .header-actions {
+    max-width: 100%;
+  }
+
+  html[data-theme-resolved] body.role-admin .header-system-status {
+    display: none;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-home-metric-grid,
+  html[data-theme-resolved] body.role-admin .admin-home-lower-grid,
+  html[data-theme-resolved] body.role-admin .admin-integration-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  html[data-theme-resolved] body.role-admin .admin-home-intro {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-home-basis {
+    min-width: 0;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-home-metric-grid,
+  html[data-theme-resolved] body.role-admin .admin-home-lower-grid,
+  html[data-theme-resolved] body.role-admin .admin-integration-list {
+    grid-template-columns: 1fr;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-home-section {
+    padding: 17px;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-home-metric {
+    min-height: 154px;
+  }
+
+  html[data-theme-resolved] body.role-admin :is(.admin-home-task-row, .admin-home-log-row) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  html[data-theme-resolved] body.role-admin .admin-home-task-row > b,
+  html[data-theme-resolved] body.role-admin .admin-home-log-row > b {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme-resolved] *,
+  html[data-theme-resolved] *::before,
+  html[data-theme-resolved] *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

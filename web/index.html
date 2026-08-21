@@ -21,6 +21,7 @@
 <body class="app-booting">
   <a class="skip-link" href="#appMain">본문 바로가기</a>
   <div class="app-shell">
+    <main class="app-main" id="appMain" tabindex="-1">
     <header class="app-header">
       <div class="header-copy">
         <p class="brand-eyebrow"><span class="sabun-brand-name">SABUN LABS</span><span class="brand-separator" aria-hidden="true">·</span><span>DATA LAB</span><span class="header-role-badge" id="headerRoleBadge">워크스페이스</span></p>
@@ -35,13 +36,13 @@
         </div>
         <a class="small-button header-user-view" id="headerUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener" hidden>User View</a>
         <button class="small-button header-logout" id="headerLogoutButton" type="button">로그아웃</button>
+        <span class="header-system-status" id="adminStatus" role="status" aria-live="polite">준비</span>
         <button class="icon-button" id="openControlButton" type="button" aria-label="필터 및 관리 열기">
           <span aria-hidden="true"></span>
         </button>
       </div>
     </header>
 
-    <main class="app-main" id="appMain" tabindex="-1">
       <section class="b2b-search-panel" id="b2bSearchPanel" hidden>
         <div class="b2b-onboarding" id="b2bOnboarding" hidden></div>
         <form class="b2b-search-form" id="b2bSearchForm">
@@ -68,13 +69,18 @@
       <section class="notice-card" id="noticeCard" hidden></section>
 
       <nav class="bottom-nav" aria-label="주요 화면">
-        <button type="button" data-admin-primary="summary">요약</button>
-        <button type="button" data-admin-primary="database">DB</button>
+        <div class="admin-nav-brand" aria-hidden="true">
+          <strong>SABUN LABS</strong>
+          <span>DATA LAB · ADMIN</span>
+        </div>
+        <button type="button" data-admin-primary="summary">홈</button>
         <button type="button" data-admin-primary="collect">수집</button>
-        <button type="button" data-admin-primary="analysis">분석</button>
-        <button type="button" data-admin-primary="region">지역 분석</button>
+        <button type="button" data-admin-primary="database">DB</button>
+        <button type="button" data-admin-primary="analysis">업종분석</button>
+        <button type="button" data-admin-primary="region">지역분석</button>
         <button type="button" data-admin-primary="members">회원</button>
         <button type="button" data-admin-primary="settings">설정</button>
+        <div class="admin-desktop-secondary" data-admin-desktop-secondary></div>
         <button class="active" type="button" data-tab="report">요약</button>
         <button type="button" data-tab="rank">업체순위</button>
         <button type="button" data-tab="dictionary">입지사전</button>
@@ -88,10 +94,11 @@
 
       <nav class="admin-mobile-nav" aria-label="관리자 모바일 메뉴">
         <div class="admin-mobile-primary">
-          <button type="button" data-admin-mobile-section="summary">요약</button>
-          <button type="button" data-admin-mobile-section="database">DB</button>
+          <button type="button" data-admin-mobile-section="summary">홈</button>
           <button type="button" data-admin-mobile-section="collect">수집</button>
-          <button type="button" data-admin-mobile-section="settings">설정</button>
+          <button type="button" data-admin-mobile-section="database">DB</button>
+          <button type="button" data-admin-mobile-section="analysis">분석</button>
+          <button type="button" data-admin-mobile-section="more">더보기</button>
         </div>
         <div class="admin-mobile-secondary" data-admin-mobile-secondary></div>
       </nav>
@@ -120,6 +127,8 @@
           </div>
           <span id="dictionaryCount">0 지역</span>
         </div>
+
+        <section class="admin-region-analysis-dashboard" id="adminRegionAnalysisDashboard" aria-label="관리자 지역 운영" hidden></section>
 
         <section class="dictionary-search-card">
           <form class="dictionary-search" id="dictionarySearchForm">
@@ -209,29 +218,18 @@
       </section>
 
       <section class="tab-panel" id="adminPanel" data-panel="admin" aria-label="관리">
-        <div class="section-title">
-          <div>
-            <h2>관리자 워크스페이스</h2>
-            <p>업체 품질, 수집 운영, 회원 요청과 연동 상태를 한곳에서 관리합니다.</p>
-          </div>
-          <div class="admin-title-actions">
-            <span id="adminStatus">준비</span>
-            <a class="small-button" id="adminUserViewButton" href="/b2b?userView=admin" target="_blank" rel="noopener">User View</a>
-            <button class="small-button" id="logoutButton" type="button">로그아웃</button>
-          </div>
-        </div>
-
-        <nav class="admin-section-nav" aria-label="관리 탭 구분">
-          <button class="active" type="button" data-admin-section="overview">운영 홈</button>
-          <button type="button" data-admin-section="database">업체 관리</button>
-          <button type="button" data-admin-section="collect">수집 운영</button>
-          <button type="button" data-admin-section="archive">결과 보관함</button>
-          <button type="button" data-admin-section="members">회원 관리</button>
-          <button type="button" data-admin-section="files">설정·파일</button>
-        </nav>
-
         <section class="admin-section-panel" data-admin-section-panel="database" aria-label="업체 관리">
           <section class="admin-console-dashboard" id="adminDatabaseDashboard" aria-label="업체 관리"></section>
+          <details class="admin-card admin-files-collapsible" id="companyMasterAdminCard" data-ui-surface="card">
+            <summary>업체 기준값 관리</summary>
+            <div class="admin-files-collapsible-body">
+              <div class="card-head">
+                <h3>업체 기준값</h3>
+                <span class="state-badge" id="companyMasterState">대기</span>
+              </div>
+              <div class="company-master-panel" id="companyMasterPanel"></div>
+            </div>
+          </details>
         </section>
 
         <section class="admin-section-panel active" data-admin-section-panel="overview" aria-label="운영 홈">
@@ -380,6 +378,7 @@
 
         <section class="admin-section-panel" data-admin-section-panel="files" aria-label="API 및 파일">
         <div class="admin-stack admin-stack-files">
+          <section class="admin-integration-registry" id="adminIntegrationRegistry" aria-label="API 연동 레지스트리"></section>
           <section class="admin-card" id="trafficAdminCard" data-ui-surface="card">
             <div class="card-head">
               <h3>트래픽 API</h3>
@@ -417,17 +416,7 @@
             </details>
           </section>
 
-          <details class="admin-card admin-files-collapsible" id="companyMasterAdminCard" data-ui-surface="card">
-            <summary>업체 기준값 관리</summary>
-            <div class="admin-files-collapsible-body">
-            <div class="card-head">
-              <h3>업체 기준값</h3>
-              <span class="state-badge" id="companyMasterState">대기</span>
-            </div>
-            <div class="company-master-panel" id="companyMasterPanel"></div>
-            </div>
-          </details>
-
+          <section class="admin-security-dashboard" id="adminSecurityDashboard" aria-label="보안 상태"></section>
           <details class="admin-card admin-files-collapsible" id="downloadAdminCard" data-ui-surface="card">
             <summary>파일 다운로드</summary>
             <div class="admin-files-collapsible-body">

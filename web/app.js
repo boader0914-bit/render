@@ -231,18 +231,18 @@ const ADMIN_MOBILE_SECTIONS = {
     adminPanelSection: "overview",
     anchor: "#adminConsoleDashboard",
     items: [
-      { label: "운영 홈", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" }
+      { label: "전체 대시보드", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" }
     ]
   },
   database: {
-    label: "업체",
+    label: "DB",
     target: "admin",
     adminPanelSection: "database",
     anchor: "#adminDatabaseDashboard",
     items: [
-      { label: "운영 홈", tab: "admin", adminPanelSection: "overview", anchor: "#adminConsoleDashboard" },
-      { label: "업체 관리", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard" },
-      { label: "입지사전", tab: "dictionary" }
+      { label: "업체 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbViewMode: "list" },
+      { label: "지역 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbViewMode: "region" },
+      { label: "업체 기준값", tab: "admin", adminPanelSection: "database", anchor: "#companyMasterAdminCard" }
     ]
   },
   collect: {
@@ -251,27 +251,27 @@ const ADMIN_MOBILE_SECTIONS = {
     adminPanelSection: "collect",
     anchor: "#crawlForm",
     items: [
-      { label: "수집 실행", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
-      { label: "결과 보관함", tab: "admin", adminPanelSection: "archive", anchor: "#collectionArchive" }
-    ]
-  },
-  analysis: {
-    label: "분석",
-    target: "report",
-    items: [
-      { label: "요약 리포트", tab: "report" },
-      { label: "업체 순위", tab: "rank" },
-      { label: "수요구조", tab: "demand" },
+      { label: "검색·시장 수집", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
+      { label: "OTA 수집", tab: "admin", adminPanelSection: "collect", anchor: "#yeogiAdminCard" },
+      { label: "결과 보관함", tab: "admin", adminPanelSection: "archive", anchor: "#collectionArchive" },
       { label: "수집 이력", tab: "historyOps" }
     ]
   },
+  analysis: {
+    label: "업종분석",
+    target: "report",
+    items: [
+      { label: "업종 현황", tab: "report" },
+      { label: "경쟁 비교", tab: "rank" }
+    ]
+  },
   region: {
-    label: "지역 분석",
+    label: "지역분석",
     target: "dictionary",
     items: [
-      { label: "입지사전", tab: "dictionary" },
+      { label: "지역 현황·입지", tab: "dictionary" },
       { label: "지역 지도", tab: "map" },
-      { label: "수요구조", tab: "demand" }
+      { label: "수요 전망", tab: "demand" }
     ]
   },
   members: {
@@ -289,8 +289,32 @@ const ADMIN_MOBILE_SECTIONS = {
     adminPanelSection: "files",
     anchor: "#trafficAdminCard",
     items: [
-      { label: "회원·삭제요청", tab: "admin", adminPanelSection: "members", anchor: "#adminMemberRequestDashboard" },
-      { label: "연동·파일", tab: "admin", adminPanelSection: "files", anchor: "#trafficAdminCard" }
+      { label: "API·연동", tab: "admin", adminPanelSection: "files", anchor: "#adminIntegrationRegistry" },
+      { label: "보안", tab: "admin", adminPanelSection: "files", anchor: "#adminSecurityDashboard" },
+      { label: "파일", tab: "admin", adminPanelSection: "files", anchor: "#downloadAdminCard" }
+    ]
+  }
+};
+const ADMIN_COMPACT_SECTIONS = {
+  summary: ADMIN_MOBILE_SECTIONS.summary,
+  collect: ADMIN_MOBILE_SECTIONS.collect,
+  database: ADMIN_MOBILE_SECTIONS.database,
+  analysis: {
+    label: "분석",
+    target: "report",
+    items: [
+      { label: "업종분석", tab: "report" },
+      { label: "지역분석", tab: "dictionary" }
+    ]
+  },
+  more: {
+    label: "더보기",
+    target: "admin",
+    adminPanelSection: "members",
+    anchor: "#adminMemberRequestDashboard",
+    items: [
+      { label: "회원", tab: "admin", adminPanelSection: "members", anchor: "#adminMemberRequestDashboard" },
+      { label: "설정", tab: "admin", adminPanelSection: "files", anchor: "#adminIntegrationRegistry" }
     ]
   }
 };
@@ -307,8 +331,8 @@ const ADMIN_PANEL_MOBILE_TARGETS = {
   overview: { section: "summary", anchor: "#adminConsoleDashboard" },
   collect: { section: "collect", anchor: "#crawlForm" },
   archive: { section: "collect", anchor: "#collectionArchive" },
-  members: { section: "members", anchor: "#adminMemberRequestDashboard" },
-  files: { section: "settings", anchor: "#trafficAdminCard" }
+  members: { section: "more", anchor: "#adminMemberRequestDashboard" },
+  files: { section: "more", anchor: "#adminIntegrationRegistry" }
 };
 const TAB_LABELS = {
   report: "요약 리포트",
@@ -329,14 +353,53 @@ const B2B_TAB_LABELS = {
   account: "계정"
 };
 const ADMIN_NAV_META = {
-  summary: { icon: "⌂", detail: "운영 현황" },
-  database: { icon: "▣", detail: "목록 · 검토" },
-  collect: { icon: "⇩", detail: "실행 · 결과" },
-  analysis: { icon: "▥", detail: "시장 · 수요" },
-  region: { icon: "⌖", detail: "지도 · 입지" },
-  members: { icon: "♙", detail: "권한 · 요청" },
-  settings: { icon: "⚙", detail: "연동 · 보안" }
+  summary: { icon: "home", detail: "운영 현황" },
+  database: { icon: "database", detail: "목록 · 검토" },
+  collect: { icon: "collect", detail: "실행 · 결과" },
+  analysis: { icon: "industry", detail: "시장 · 경쟁" },
+  region: { icon: "region", detail: "지도 · 입지" },
+  members: { icon: "members", detail: "권한 · 요청" },
+  settings: { icon: "settings", detail: "연동 · 보안" }
 };
+const ADMIN_COMPACT_NAV_META = {
+  summary: { icon: "home" },
+  collect: { icon: "collect" },
+  database: { icon: "database" },
+  analysis: { icon: "industry" },
+  more: { icon: "more" }
+};
+const ADMIN_NAV_ICON_PATHS = Object.freeze({
+  home: '<path d="M3.5 10.5 12 3.5l8.5 7v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M9 20.5v-6h6v6"/>',
+  collect: '<path d="M12 3.5v10"/><path d="m8.5 10.5 3.5 3.5 3.5-3.5"/><path d="M4 16.5v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+  database: '<ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/><path d="M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/>',
+  industry: '<rect x="4" y="10" width="4" height="10" rx="1"/><rect x="10" y="4" width="4" height="16" rx="1"/><rect x="16" y="13" width="4" height="7" rx="1"/>',
+  region: '<path d="M19 10c0 4.8-7 11-7 11S5 14.8 5 10a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+  members: '<circle cx="12" cy="8" r="3.25"/><path d="M5.5 20.5c.5-4 2.7-6.25 6.5-6.25s6 2.25 6.5 6.25"/>',
+  settings: '<path d="M4 6h7m4 0h5"/><circle cx="13" cy="6" r="2"/><path d="M4 12h3m4 0h9"/><circle cx="9" cy="12" r="2"/><path d="M4 18h9m4 0h3"/><circle cx="15" cy="18" r="2"/>',
+  more: '<circle cx="5" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.25" fill="currentColor" stroke="none"/>'
+});
+
+function adminNavIconSvg(iconKey) {
+  const paths = ADMIN_NAV_ICON_PATHS[iconKey] || ADMIN_NAV_ICON_PATHS.home;
+  return `<svg class="admin-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths}</svg>`;
+}
+const ADMIN_INTEGRATIONS = [
+  { key: "naver-datalab", group: "네이버", provider: "NAVER", name: "검색 트렌드", liveKey: "datalab" },
+  { key: "naver-searchad", group: "네이버", provider: "NAVER", name: "검색광고 키워드", liveKey: "searchad" },
+  { key: "holiday", group: "과학기술", provider: "한국천문연구원", name: "특일 정보" },
+  { key: "rural-lodging", group: "문화관광", provider: "행정안전부", name: "농어촌민박업 조회" },
+  { key: "gocamping", group: "문화관광", provider: "한국관광공사", name: "고캠핑 정보 조회" },
+  { key: "kosis", group: "공공행정", provider: "국가데이터처", name: "KOSIS 통계자료" },
+  { key: "tourist-hotel", group: "문화관광", provider: "행정안전부", name: "관광숙박업 조회" },
+  { key: "lodging", group: "문화관광", provider: "행정안전부", name: "숙박업 조회" },
+  { key: "tour-api", group: "문화관광", provider: "한국관광공사", name: "국문 관광정보" },
+  { key: "concentration-forecast", group: "문화관광", provider: "한국관광공사", name: "관광지 집중률 방문 추이 예측" },
+  { key: "tourism-diversity", group: "문화관광", provider: "한국관광공사", name: "지역별 관광 다양성" },
+  { key: "tourism-resource-demand", group: "문화관광", provider: "한국관광공사", name: "지역별 관광 자원 수요" },
+  { key: "tourism-demand-strength", group: "문화관광", provider: "한국관광공사", name: "지역별 관광 수요 강도" },
+  { key: "regional-visitors", group: "문화관광", provider: "한국관광공사", name: "지역별 방문자수" },
+  { key: "tourism-pension", group: "문화관광", provider: "행정안전부", name: "관광펜션업 조회" }
+];
 const B2B_NAV_META = {
   report: { icon: "⌂", detail: "검색 · 요약" },
   rank: { icon: "▥", detail: "경쟁 비교" },
@@ -377,6 +440,9 @@ const els = {
   adminStatus: document.getElementById("adminStatus"),
   adminDatabaseDashboard: document.getElementById("adminDatabaseDashboard"),
   adminConsoleDashboard: document.getElementById("adminConsoleDashboard"),
+  adminRegionAnalysisDashboard: document.getElementById("adminRegionAnalysisDashboard"),
+  adminIntegrationRegistry: document.getElementById("adminIntegrationRegistry"),
+  adminSecurityDashboard: document.getElementById("adminSecurityDashboard"),
   adminMemberRequestDashboard: document.getElementById("adminMemberRequestDashboard"),
   collectionArchive: document.getElementById("collectionArchive"),
   placeRankReplayNotice: document.getElementById("placeRankReplayNotice"),
@@ -1750,7 +1816,7 @@ function adminPanelMobileTarget(sectionKey = "database") {
   return ADMIN_PANEL_MOBILE_TARGETS[sectionKey] || ADMIN_PANEL_MOBILE_TARGETS.database;
 }
 
-function adminMobileSectionForTab(tab, preferred = "") {
+function adminPrimarySectionForTab(tab, preferred = "") {
   if (!isAdminRole()) return "";
   const preferredSection = preferred ? ADMIN_MOBILE_SECTIONS[preferred] : null;
   if (preferredSection) {
@@ -1758,15 +1824,38 @@ function adminMobileSectionForTab(tab, preferred = "") {
     if (preferredTabs.has(tab)) return preferred;
   }
   if (tab === "admin") {
-    return adminPanelMobileTarget(state.adminPanelSection).section;
+    return {
+      overview: "summary",
+      database: "database",
+      collect: "collect",
+      archive: "collect",
+      members: "members",
+      files: "settings"
+    }[state.adminPanelSection] || "summary";
   }
+  if (["report", "rank"].includes(tab)) return "analysis";
+  if (["dictionary", "map", "demand"].includes(tab)) return "region";
+  if (tab === "historyOps") return "collect";
+  return "summary";
+}
+
+function adminMobileSectionForTab(tab, preferred = "") {
+  if (!isAdminRole()) return "";
+  const preferredSection = preferred ? ADMIN_COMPACT_SECTIONS[preferred] : null;
+  if (preferredSection) {
+    const preferredTabs = new Set([preferredSection.target, ...(preferredSection.items || []).map((item) => item.tab)]);
+    if (preferredTabs.has(tab)) return preferred;
+  }
+  if (tab === "admin") return adminPanelMobileTarget(state.adminPanelSection).section;
+  if (["report", "rank", "dictionary", "map", "demand"].includes(tab)) return "analysis";
+  if (tab === "historyOps") return "collect";
   return "summary";
 }
 
 function syncPrimaryNavButtons() {
   const allowedTabs = new Set(roleTabs());
   const admin = isAdminRole();
-  const adminSectionKey = adminMobileSectionForTab(state.activeTab, state.adminMobileSection) || "summary";
+  const adminSectionKey = adminPrimarySectionForTab(state.activeTab) || "summary";
   document.querySelectorAll(".bottom-nav button").forEach((button) => {
     const adminPrimary = button.dataset.adminPrimary || "";
     const tab = button.dataset.tab || "";
@@ -1776,12 +1865,14 @@ function syncPrimaryNavButtons() {
       if (visible) {
         const config = ADMIN_MOBILE_SECTIONS[adminPrimary];
         const meta = ADMIN_NAV_META[adminPrimary] || {};
-        button.innerHTML = `<strong>${escapeHtml(config.label)}</strong><span>${escapeHtml(meta.detail || "")}</span>`;
-        button.dataset.navIcon = meta.icon || "";
-        button.dataset.navDetail = meta.detail || "";
+        button.innerHTML = `<span class="admin-nav-icon-shell" aria-hidden="true">${adminNavIconSvg(meta.icon)}</span><strong>${escapeHtml(config.label)}</strong><small class="admin-nav-detail">${escapeHtml(meta.detail || "")}</small>`;
+        button.removeAttribute("data-nav-icon");
+        button.removeAttribute("data-nav-detail");
         button.setAttribute("aria-label", [config.label, meta.detail].filter(Boolean).join(" · "));
         button.classList.toggle("active", adminPrimary === adminSectionKey);
         button.setAttribute("aria-pressed", adminPrimary === adminSectionKey ? "true" : "false");
+        if (adminPrimary === adminSectionKey) button.setAttribute("aria-current", "page");
+        else button.removeAttribute("aria-current");
       }
       return;
     }
@@ -1799,6 +1890,29 @@ function syncPrimaryNavButtons() {
       button.setAttribute("aria-pressed", tab === activeTab ? "true" : "false");
     }
   });
+  syncAdminDesktopSecondaryNav();
+}
+
+function syncAdminDesktopSecondaryNav() {
+  const isAdmin = isAdminRole();
+  const primaryKey = adminPrimarySectionForTab(state.activeTab) || "summary";
+  const section = ADMIN_MOBILE_SECTIONS[primaryKey] || ADMIN_MOBILE_SECTIONS.summary;
+  document.querySelectorAll("[data-admin-desktop-secondary]").forEach((container) => {
+    const items = primaryKey === "summary" ? [] : (section.items || []);
+    container.hidden = !isAdmin || !items.length;
+    if (!isAdmin) {
+      container.innerHTML = "";
+      return;
+    }
+    container.innerHTML = items.map((item) => {
+      const tab = item.tab || section.target || "admin";
+      const panel = item.adminPanelSection || section.adminPanelSection || "";
+      const active = tab === state.activeTab
+        && (!panel || panel === state.adminPanelSection)
+        && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode);
+      return `<button type="button" class="${active ? "active" : ""}" data-admin-desktop-tab="${escapeHtml(tab)}" data-admin-primary-key="${escapeHtml(primaryKey)}" data-admin-panel-section-key="${escapeHtml(panel)}" data-admin-db-view-mode="${escapeHtml(item.adminDbViewMode || "")}" data-admin-desktop-anchor="${escapeHtml(item.anchor || "")}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
+    }).join("");
+  });
 }
 
 function syncB2BRegionSecondaryNav() {
@@ -1813,7 +1927,7 @@ function syncB2BRegionSecondaryNav() {
 }
 
 function isAdminMobileLayout() {
-  return isAdminRole() && window.matchMedia && window.matchMedia("(max-width: 720px)").matches;
+  return isAdminRole() && window.matchMedia && window.matchMedia("(max-width: 860px)").matches;
 }
 
 function scrollAdminMobileAnchor(anchor) {
@@ -1828,21 +1942,28 @@ function syncAdminMobileNav() {
   const isAdmin = isAdminRole();
   const panelTarget = state.activeTab === "admin" ? adminPanelMobileTarget(state.adminPanelSection) : null;
   const sectionKey = panelTarget?.section || adminMobileSectionForTab(state.activeTab, state.adminMobileSection) || "summary";
-  const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.summary;
+  const section = ADMIN_COMPACT_SECTIONS[sectionKey] || ADMIN_COMPACT_SECTIONS.summary;
   state.adminMobileSection = sectionKey;
   if (state.activeTab !== "admin") state.adminMobileAnchor = "";
   if (state.activeTab === "admin") state.adminMobileAnchor = panelTarget?.anchor || section.anchor || "";
 
   document.querySelectorAll("[data-admin-mobile-section]").forEach((button) => {
     const key = button.dataset.adminMobileSection || "";
-    const config = ADMIN_MOBILE_SECTIONS[key];
+    const config = ADMIN_COMPACT_SECTIONS[key];
     button.hidden = !isAdmin || !config;
     button.classList.toggle("active", isAdmin && key === sectionKey);
-    if (config) button.textContent = config.label;
+    if (config) {
+      const meta = ADMIN_COMPACT_NAV_META[key] || {};
+      button.innerHTML = `<span class="admin-nav-icon-shell" aria-hidden="true">${adminNavIconSvg(meta.icon)}</span><strong>${escapeHtml(config.label)}</strong>`;
+      button.setAttribute("aria-label", config.label);
+      button.setAttribute("aria-pressed", isAdmin && key === sectionKey ? "true" : "false");
+      if (isAdmin && key === sectionKey) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
   });
 
   document.querySelectorAll("[data-admin-mobile-secondary]").forEach((container) => {
-    const items = section.items || [];
+    const items = sectionKey === "summary" ? [] : (section.items || []);
     container.hidden = !isAdmin || !items.length;
     if (!isAdmin) {
       container.innerHTML = "";
@@ -1853,8 +1974,10 @@ function syncAdminMobileNav() {
       const anchor = item.anchor || "";
       const adminPanelSection = item.adminPanelSection || section.adminPanelSection || "";
       const adminDbStatus = item.adminDbStatus || "";
-      const active = tab === state.activeTab && (!anchor || anchor === state.adminMobileAnchor);
-      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-db-status-key="${escapeHtml(adminDbStatus)}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
+      const active = tab === state.activeTab
+        && (!adminPanelSection || adminPanelSection === state.adminPanelSection)
+        && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode);
+      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-db-status-key="${escapeHtml(adminDbStatus)}" data-admin-db-view-mode="${escapeHtml(item.adminDbViewMode || "")}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
     }).join("");
   });
   syncPrimaryNavButtons();
@@ -1862,7 +1985,7 @@ function syncAdminMobileNav() {
 
 function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSection = "") {
   if (!isAdminRole()) return;
-  const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.summary;
+  const section = ADMIN_COMPACT_SECTIONS[sectionKey] || ADMIN_COMPACT_SECTIONS.summary;
   const nextTab = roleAllowsTab(tab) ? tab : section.target;
   state.adminMobileSection = sectionKey;
   state.adminMobileAnchor = anchor || section.anchor || "";
@@ -1871,6 +1994,18 @@ function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSec
   }
   setActiveTab(nextTab, { adminMobileSection: sectionKey });
   scrollAdminMobileAnchor(state.adminMobileAnchor);
+}
+
+function activateAdminPrimaryNav(sectionKey = "summary") {
+  if (!isAdminRole()) return;
+  const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.summary;
+  const nextTab = roleAllowsTab(section.target) ? section.target : "admin";
+  if (nextTab === "admin") state.adminPanelSection = section.adminPanelSection || "overview";
+  setActiveTab(nextTab, { adminMobileSection: adminMobileSectionForTab(nextTab) });
+  if (nextTab === "admin") setAdminPanelSection(state.adminPanelSection);
+  if (section.anchor) {
+    window.requestAnimationFrame(() => document.querySelector(section.anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
 }
 
 function setAdminPanelSection(sectionKey = "overview", options = {}) {
@@ -1883,6 +2018,8 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
   }
   syncAdminSectionPanels();
   syncAdminMobileNav();
+  syncAdminDesktopSecondaryNav();
+  if (isAdminRole() && state.activeTab === "admin") renderHeader();
   if (sectionKey === "collect") {
     ensureCrawlControls();
     updateCrawlSpeedPreview();
@@ -1967,7 +2104,8 @@ function applyRoleUi() {
     els.adminStatus.textContent = `${roleLabel} 모드`;
   }
   if (!state.data && els.pageTitle) {
-    els.pageTitle.textContent = isAdminRole() ? "관리자 콘솔" : tabLabel(state.activeTab);
+    if (isAdminRole()) renderHeader();
+    else els.pageTitle.textContent = tabLabel(state.activeTab);
   }
   syncRoleStaticLabels();
   syncB2BSearchRangeControl();
@@ -5308,7 +5446,7 @@ function inventoryConfidenceBadge(item = {}) {
 
 function inventoryStructureBadge(item = {}) {
   const info = inventoryStructureInfo(item);
-  const flagText = info.flags.includes("dynamic_capacity") ? " · 총량변동" : info.flags.includes("dayuse_rotation") ? " · 당일병행" : "";
+  const flagText = info.flags.includes("dynamic_capacity") ? " · 오프라인신호" : info.flags.includes("dayuse_rotation") ? " · 당일병행" : "";
   return `<span class="structure-badge ${escapeHtml(info.tone)}" title="${escapeHtml(info.summary)}">${escapeHtml(info.label)}${escapeHtml(flagText)}</span>`;
 }
 
@@ -5528,7 +5666,7 @@ function renderSummary() {
     </article>
     <article class="summary-card">
       <span class="summary-icon amber">${summaryIcon("trust")}</span>
-      <div><strong>${fmtNumber(lowConfidence)}</strong><small>검증 필요 · 변동 ${fmtNumber(stockVariance)}</small></div>
+      <div><strong>${fmtNumber(lowConfidence)}</strong><small>신뢰도 낮음 · 오프라인 신호 ${fmtNumber(stockVariance)}</small></div>
     </article>
   `;
 }
@@ -6775,18 +6913,10 @@ function inventoryAuditProfile(item = {}) {
   }
 
   if (flags.has("dynamic_capacity") || (Number.isFinite(totalGapRate) && totalGap >= 2 && totalGapRate >= 0.25)) {
-    if (statusKey === "normal") {
-      statusKey = "phone_stock";
-      tone = "watch";
-    }
-    priority += 48;
     reasons.push(totalMin && totalMax
-      ? `날짜별 총량 변동 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`
-      : "날짜별 총량 변동 감지");
-    actions.push("전체 객실 후보, 운영 판매 기준, 일시 차단 수량을 분리 확인");
-    otaSignals.push("날짜별 총량 변동");
-    issueChannels.add("전화예약/오프라인");
-    issueChannels.add("네이버 날짜별 재고");
+      ? `오프라인·타 채널 판매 신호 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개`
+      : "오프라인·타 채널 판매 신호 감지");
+    actions.push("날짜별 총량 차이를 오프라인·타 채널 판매 추정에 반영");
   }
 
   if (structuralBlockedTotal > 0) {
@@ -6802,10 +6932,7 @@ function inventoryAuditProfile(item = {}) {
   }
 
   if (varianceRows.length) {
-    priority += Math.min(30, varianceRows.length * 8);
-    reasons.push(`총량 튐 ${fmtNumber(varianceRows.length)}일`);
-    otaSignals.push("총량 이상치");
-    issueChannels.add("네이버 날짜별 재고");
+    reasons.push(`오프라인 판매 추정일 ${fmtNumber(varianceRows.length)}일`);
   }
 
   if (missingCount) {
@@ -6971,18 +7098,6 @@ function inventoryAuditProfile(item = {}) {
       reason: `자동 수집 신뢰도 ${confidence.grade} · ${structure.label}`,
       action: structure.action || "객실별/상품별 수량 재확인"
     } : null,
-    capacityVolatile ? {
-      key: "capacity",
-      label: "날짜별 총량 변동 큼",
-      reason: totalMax ? `총량 ${fmtNumber(totalMin)}~${fmtNumber(totalMax)}개` : "날짜별 원시 총량 변동",
-      action: "미오픈/차단/온라인 미노출은 오프라인 예약 가능성으로 메모"
-    } : null,
-    gapTypes.length ? {
-      key: "gap",
-      label: "판매 공백 큼",
-      reason: `네이버 노출 대비 ${gapTypes.join("/")} 공백`,
-      action: "금요일/일요일/평일 가격과 연박 조건 확인"
-    } : null,
     dataIncomplete ? {
       key: "data",
       label: "가격/수량 미확보",
@@ -7111,8 +7226,6 @@ function renderValidationQueue(items = []) {
   const chips = [
     ["OTA 확인 필요", counts.ota || 0, "bad"],
     ["수량 구조 불명확", counts.quantity || 0, "watch"],
-    ["총량 변동 큼", counts.capacity || 0, "watch"],
-    ["판매 공백 큼", counts.gap || 0, "watch"],
     ["매출 근거 보강", counts.revenue || 0, "watch"],
     ["가격/수량 미확보", counts.data || 0, "watch"],
     ["정상/확정", counts.clean || 0, "good"]
@@ -7208,7 +7321,7 @@ function renderValidationBoard(items = []) {
           ${validationCardValue("전체 판매율", fmtRate(flow.all.rate), `${fmtNumber(flow.all.sold)}/${fmtNumber(flow.all.total)}개`)}
           ${validationCardValue("평일 기준", Number.isFinite(flow.weekday.rate) ? fmtRate(flow.weekday.rate) : "확인필요", `${fmtNumber(flow.weekday.count)}일 관측`)}
           ${validationCardValue("토요일", Number.isFinite(flow.saturday.rate) ? fmtRate(flow.saturday.rate) : "확인필요", "주말 수요")}
-          ${validationCardValue("검증 필요", fmtNumber(lowConfidence), `총량변동 ${fmtNumber(stockVariance)} · 당일 ${fmtNumber(dayUseMixed)}`)}
+      ${validationCardValue("신뢰도 낮음", fmtNumber(lowConfidence), `오프라인 신호 ${fmtNumber(stockVariance)} · 당일 ${fmtNumber(dayUseMixed)}`)}
         </div>
         ${structureSummary ? `<div class="structure-summary-strip">${escapeHtml(structureSummary)}${bookingIdReused ? ` · 예약ID 재확인 ${fmtNumber(bookingIdReused)}` : ""}</div>` : ""}
       </div>
@@ -7657,16 +7770,16 @@ function companyRecrawlComparison(company = {}) {
       label: "판매 공백",
       before: `${fmtNumber(before.gapCount)}개 유형`,
       after: `${fmtNumber(current.gapCount)}개 유형`,
-      tone: queueDeltaTone(before.gapCount, current.gapCount, false),
-      note: current.gapCount ? "금/일/평일 공백 확인" : "공백 신호 해소"
+      tone: "same",
+      note: current.gapCount ? "가격·상품 분석 신호" : "공백 신호 없음"
     },
     {
       key: "stock",
       label: "총량 변동",
       before: before.stockVariance ? "있음" : "없음",
       after: current.stockVariance ? "있음" : "없음",
-      tone: queueBooleanResolvedTone(before.stockVariance, current.stockVariance),
-      note: current.stockVariance ? "날짜별 총량 변동" : "총량 안정"
+      tone: "same",
+      note: current.stockVariance ? "오프라인·타 채널 판매 신호" : "신호 없음"
     },
     {
       key: "offline",
@@ -7714,7 +7827,7 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
   const issues = new Set((profile.issues || []).map((issue) => issue.key));
   const current = compare.current || queueSnapshotMetrics(company.inventory?.latest || {});
   const revenueEvidence = queueRevenueEvidenceProfile(companyQueueRevenueImpact(company));
-  const quantityIssue = criteria.has("quantity") || criteria.has("capacity") || issues.has("structure") || issues.has("booking") || issues.has("offline");
+  const quantityIssue = criteria.has("quantity") || issues.has("structure") || issues.has("booking");
   const noQuantity = !current.totalSupply && !current.totalSold;
   const priceIssue = current.totalMissingPriceSoldOut > 0 || (!current.totalPricedSoldOut && current.totalSold > 0);
   if (!compare.hasComparison) {
@@ -7731,8 +7844,8 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
   if (noQuantity) {
     return { status: "recrawl_needed", label: "재수집 필요", tone: "watch", reasons: ["최신 수집에서 판매/총량 데이터가 충분히 확보되지 않았습니다."] };
   }
-  if (quantityIssue || current.quantityWeak || current.stockVariance) {
-    return { status: "manual_needed", label: "보정 필요", tone: "bad", reasons: ["수량 구조 또는 날짜별 총량 변동이 남아 있어 관리자 보정/확인이 필요합니다."] };
+  if (quantityIssue || current.quantityWeak) {
+    return { status: "manual_needed", label: "보정 필요", tone: "bad", reasons: ["객실·상품 수량 구조가 불명확하여 관리자 보정/확인이 필요합니다."] };
   }
   if (priceIssue) {
     return { status: "recrawl_needed", label: "재수집 필요", tone: "watch", reasons: ["판매수량은 있으나 가격 누락이 남아 매출 판단이 불완전합니다."] };
@@ -7740,8 +7853,8 @@ function companyRecrawlAutoRecommendation(company = {}, profile = {}, decision =
   if (revenueEvidence.weak) {
     return { status: "recrawl_needed", label: "매출 근거 보강", tone: "watch", reasons: revenueEvidence.reasons.slice(0, 3) };
   }
-  if (criteria.has("ota") || issues.has("ota") || criteria.has("gap") || issues.has("gap")) {
-    return { status: "check_needed", label: "확인 필요", tone: "watch", reasons: ["OTA 또는 요일별 판매 공백은 사람이 채널/상품 조건을 확인해야 합니다."] };
+  if (criteria.has("ota") || issues.has("ota")) {
+    return { status: "check_needed", label: "확인 필요", tone: "watch", reasons: ["네이버만으로 확정하기 어려운 수량 구조는 OTA 보조 확인이 필요합니다."] };
   }
   if (!decision.inQueue || compare.improved >= 2 || company.salesTarget?.category === "contact") {
     return { status: "contact_ready", label: "컨택 가능", tone: "good", reasons: ["재수집 후 핵심 수량/가격 문제가 해소되어 컨택 후보로 볼 수 있습니다."] };
@@ -7754,7 +7867,7 @@ function companyAdminReviewOutcome(status = "") {
     contact_ready: { label: "컨택 후보", detail: "바로 컨택 가능한 업체로 분리", tone: "good" },
     confirmed: { label: "확정 타깃", detail: "관리자가 판단 맞음으로 확정", tone: "good" },
     recrawl_needed: { label: "확인 대상 유지", detail: "재수집 후 전후 비교 필요", tone: "watch" },
-    check_needed: { label: "확인 대상 유지", detail: "채널/공백 확인 후 재검토", tone: "watch" },
+    check_needed: { label: "확인 대상 유지", detail: "채널·수량 구조 확인 후 재검토", tone: "watch" },
     manual_needed: { label: "보정 후 재검토", detail: "총량/상품 수량 보정 필요", tone: "bad" },
     hold: { label: "보류 유지", detail: "컨택 제외, 관찰 또는 추후 확인", tone: "hold" },
     exclude: { label: "관리 제외", detail: "컨택 후보와 확인 대상에서 제외", tone: "bad" }
@@ -7777,7 +7890,7 @@ function companyQueueResolutionProfile(company = {}, profile = {}, workflow = {}
     contact_ready: "컨택 기록을 남기고 응답/관심도를 추적",
     confirmed: "확정 타깃으로 유지하며 후속 일정 관리",
     recrawl_needed: "수집 설정 적용 후 같은 기간으로 재수집",
-    check_needed: "OTA, 네이버 객실 탭, 공백 날짜를 확인",
+    check_needed: "OTA와 네이버 객실 탭의 수량 구조를 확인",
     manual_needed: "기준 총량과 상품별 수량 보정 후 재검토",
     hold: "보류 사유를 남기고 다음 수집에서 변화 확인",
     exclude: "동일성/업종 부적합 근거를 남기고 제외"
@@ -15753,13 +15866,13 @@ function companyDecisionQueueProfile(company = {}) {
     isAfterDate(latest.collectedAt, review.updatedAt)
   );
   const revenueEvidence = queueRevenueEvidenceProfile(companyQueueRevenueImpact(company));
-  const gapLabels = [
+  const salesGapLabels = [
     signals.fridayWeak ? `금요일 ${fmtRate(signals.fridayRate)}` : "",
     signals.sundayWeak ? `일요일 ${fmtRate(signals.sundayRate)}` : "",
     signals.weekdayWeak ? `평일 ${fmtRate(signals.weekdayRate)}` : ""
   ].filter(Boolean);
   const criteria = [
-    (signals.otaReviewNeeded || structureFlags.has("booking_id_reused") || structureFlags.has("dynamic_capacity")) ? {
+    (signals.otaReviewNeeded || structureFlags.has("booking_id_reused")) ? {
       key: "ota",
       label: "OTA 확인 필요",
       reason: "네이버 기준만으로 컨택 여부를 확정하기 어려움",
@@ -15770,18 +15883,6 @@ function companyDecisionQueueProfile(company = {}) {
       label: "수량 구조 불명확",
       reason: `자동 수집 신뢰도 ${confidenceGrade} · ${structureLabel}`,
       action: "네이버 객실 탭에서 객실/상품 단위와 실제 총량 확인"
-    } : null,
-    (signals.stockVariance || structureFlags.has("dynamic_capacity")) ? {
-      key: "capacity",
-      label: "날짜별 총량 변동 큼",
-      reason: "날짜별 판매 가능 총량이 흔들림",
-      action: "미오픈/차단/온라인 미노출은 오프라인 예약 가능성으로 메모"
-    } : null,
-    gapLabels.length ? {
-      key: "gap",
-      label: "판매 공백 큼",
-      reason: `네이버 노출 대비 ${gapLabels.join(" · ")} 공백`,
-      action: "금요일/일요일/평일 가격, 연박, 퇴실 조건 확인"
     } : null,
     manualNeedsReview ? {
       key: "manual_recheck",
@@ -15809,8 +15910,6 @@ function companyDecisionQueueProfile(company = {}) {
   const channels = [];
   if (criteria.some((criterion) => criterion.key === "ota")) channels.push("여기어때 수동", "NOL/야놀자", "떠나요");
   if (criteria.some((criterion) => criterion.key === "quantity")) channels.push("네이버 객실 탭");
-  if (criteria.some((criterion) => criterion.key === "capacity")) channels.push("전화예약/오프라인");
-  if (criteria.some((criterion) => criterion.key === "gap")) channels.push("네이버 가격/일자");
   if (criteria.some((criterion) => criterion.key === "manual_recheck")) channels.push("관리자 보정 메모");
   if (criteria.some((criterion) => criterion.key === "revenue")) channels.push("네이버 가격/상품");
   return {
@@ -15820,13 +15919,13 @@ function companyDecisionQueueProfile(company = {}) {
     label: criteria[0]?.label || "판단 대기",
     reasons: criteria.map((criterion) => `${criterion.label}: ${criterion.reason}`),
     actions: criteria.map((criterion) => criterion.action).filter(Boolean),
-    problemDateText: compactListText([salesSignal.checkIn, ...gapLabels].filter(Boolean), "최근 수집일 기준", 4),
+    problemDateText: compactListText([salesSignal.checkIn, ...salesGapLabels].filter(Boolean), "최근 수집일 기준", 4),
     quantityConfidence: `자동 수집 신뢰도 ${confidenceGrade} · ${structureLabel}`,
-    gapType: compactListText(gapLabels, "공백 특이 없음", 3),
+    gapType: compactListText(salesGapLabels, "공백 특이 없음", 3),
     channelText: compactListText(channels, "네이버 기준", 4),
     correctionText: hasManualCorrection ? (company.correctionStatus?.detail || "관리자 보정") : "자동추정",
     adminReviewText: review.label || companyAdminReviewLabel(review.status),
-    tone: criteria.some((criterion) => ["ota", "quantity", "capacity", "revenue"].includes(criterion.key)) ? "watch" : "good"
+    tone: criteria.some((criterion) => ["ota", "quantity", "revenue"].includes(criterion.key)) ? "watch" : "good"
   };
 }
 
@@ -15845,17 +15944,11 @@ function companyNeedsCorrection(company = {}) {
   if (signals.bookingIdReused || hasText("예약ID")) {
     issues.push({ key: "booking", label: "예약ID", task: "네이버 예약ID와 상품명이 현재 객실 구조와 맞는지 확인" });
   }
-  if (signals.stockVariance || hasText("오프라인")) {
-    issues.push({ key: "offline", label: "총량변동", task: "전화예약/비연동 채널 조절 가능성을 메모" });
-  }
   if (signals.dayUseMissing || hasText("당일") || hasText("캠프닉")) {
     issues.push({ key: "dayuse", label: "당일상품", task: "데이유즈/캠프닉 회차와 판매 가능 수량 확인" });
   }
   if (signals.otaReviewNeeded || hasText("OTA")) {
     issues.push({ key: "ota", label: "OTA", task: "NOL/떠나요/여기어때 노출과 가격 보조 확인" });
-  }
-  if ((signals.fridayWeak || signals.sundayWeak || signals.weekdayWeak) && !issues.some((issue) => issue.key === "gap")) {
-    issues.push({ key: "gap", label: "판매 공백", task: "금요일/일요일/평일 공백을 확인한 뒤 컨택 여부 판단" });
   }
   if (decision.criteria.some((criterion) => criterion.key === "manual_recheck") && !issues.some((issue) => issue.key === "manual")) {
     issues.unshift({ key: "manual", label: "보정 후 재검토", task: "수동 보정값 적용 후 판단을 다시 저장" });
@@ -15879,7 +15972,7 @@ function companyCheckEntryType(company = {}, profile = {}) {
   if (reviewStatus === "contact_ready") return { key: "contact", label: "컨택 가능" };
   if (reviewStatus === "manual_needed") return { key: "correction", label: "보정 필요" };
   const issues = profile.issues || [];
-  if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
+  if (issues.some((issue) => ["structure", "booking", "dayuse", "manual"].includes(issue.key))) {
     return { key: "correction", label: "보정 필요" };
   }
   if ((profile.decision?.criteria || []).some((criterion) => criterion.key === "revenue")) return { key: "recrawl", label: "매출 근거 보강" };
@@ -15905,12 +15998,11 @@ function companyCheckRecommendation(company = {}, profile = {}, workflow = {}, d
   if (workflow.key === "recheck") return "기존 검수 이후 조건이 바뀌었습니다. 변경 사유만 확인하고 상태를 다시 저장하세요.";
   if (workflow.key === "done") return "이미 처리된 업체입니다. 새 신호가 생기면 재확인 큐로 자동 이동합니다.";
   const issues = profile.issues || [];
-  if (issues.some((issue) => ["structure", "booking", "offline", "dayuse", "manual"].includes(issue.key))) {
+  if (issues.some((issue) => ["structure", "booking", "dayuse", "manual"].includes(issue.key))) {
     return profile.applied ? "보정값이 적용되어 있습니다. 실제 총량과 맞는지 확인 후 확정하세요." : "수량 구조를 확인하고 필요하면 관리자 보정값을 입력하세요.";
   }
   if ((decision.criteria || []).some((criterion) => criterion.key === "revenue")) return "요일별 가격과 상품종류별 수량 근거를 먼저 보강한 뒤 컨택 가능 여부를 다시 판단하세요.";
   if (issues.some((issue) => issue.key === "ota")) return "OTA 노출과 가격을 확인한 뒤 컨택/보류를 결정하세요.";
-  if ((decision.criteria || []).some((criterion) => criterion.key === "gap") || issues.some((issue) => issue.key === "gap")) return "판매 공백 날짜의 가격/연박 조건을 확인한 뒤 바로 컨택할지 보류할지 정하세요.";
   if (company.salesTarget?.category === "contact") return "노출은 있으나 개선 여지가 있는 업체입니다. 컨택 후보로 검토하세요.";
   if (company.salesTarget?.category === "benchmark") return "광역과 로컬에서 강한 업체입니다. 벤치마크로 관찰하세요.";
   if (company.salesTarget?.category === "exclude" || company.identityConfidence?.level === "review") return "글램핑 적합성 또는 업체 동일성을 확인한 뒤 제외 여부를 정하세요.";
@@ -16230,10 +16322,6 @@ function companyCheckPriority(company = {}, profile = {}, type = {}, workflow = 
   const sales = latest.salesSignal || {};
   const lodging = sales.lodging || {};
   const dayUse = sales.dayUse || {};
-  if (lodging.fridayWeak) score += 8;
-  if (lodging.sundayWeak) score += 8;
-  if (lodging.weekdayWeak) score += 6;
-  if (lodging.stockVariance || sales.stockVariance) score += 12;
   if (dayUse.days === 0 && sales.dayUseMissing) score += 6;
   if (company.salesTarget?.category === "contact") score += 14;
   if (company.salesTarget?.category === "verify") score += 10;
@@ -16516,9 +16604,9 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
   const keywordPlan = companyRecrawlKeywordPlan(company, run);
   const rank = Number(keywordPlan.rank || company.bestRank || 0);
   let range = "1-20";
-  if (!rank || rank > 20 || criteria.has("ota") || criteria.has("quantity") || criteria.has("capacity") || issues.has("booking")) {
+  if (!rank || rank > 20 || criteria.has("ota") || criteria.has("quantity") || issues.has("booking")) {
     range = "1-30";
-  } else if (rank <= 5 && !(criteria.has("quantity") || criteria.has("capacity"))) {
+  } else if (rank <= 5 && !criteria.has("quantity")) {
     range = "1-10";
   }
   const dateText = decision.problemDateText && decision.problemDateText !== "최근 수집일 기준"
@@ -16611,11 +16699,11 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
     ? companyAdminReviewLabel(company.adminReview.status)
     : recheckComparison.hasComparison
       ? autoRecommendation.label
-    : criteria.has("manual_recheck") || issues.has("manual") || issues.has("structure") || issues.has("offline")
+    : criteria.has("manual_recheck") || issues.has("manual") || issues.has("structure")
       ? "보정 필요"
-      : workflow.key === "recheck" || criteria.has("quantity") || criteria.has("capacity") || issues.has("booking")
+      : workflow.key === "recheck" || criteria.has("quantity") || issues.has("booking")
         ? "재수집 필요"
-        : criteria.has("gap") || criteria.has("ota") || issues.has("ota")
+        : criteria.has("ota") || issues.has("ota")
           ? "확인 필요"
           : company.salesTarget?.category === "contact"
             ? "컨택 가능"
@@ -16624,7 +16712,7 @@ function companyQueueActionPlan(company = {}, profile = {}, workflow = {}, decis
     ["추천 처리", statusSuggestion, "버튼으로 처리 상태 저장"],
     ["해소 경로", resolution.outcome.label, resolution.outcome.detail],
     ["다음 액션", resolution.nextAction, resolution.canMoveToTarget ? "컨택 후보로 후속 관리" : "확인 대상에서 근거 보강"],
-    ["자동 재검토", recheckComparison.hasComparison ? `${autoRecommendation.label} · 개선 ${fmtNumber(recheckComparison.improved)} / 악화 ${fmtNumber(recheckComparison.worsened)}` : "비교 대기", "재수집 전후 수량/가격/공백 비교"],
+    ["자동 재검토", recheckComparison.hasComparison ? `${autoRecommendation.label} · 개선 ${fmtNumber(recheckComparison.improved)} / 악화 ${fmtNumber(recheckComparison.worsened)}` : "비교 대기", "재수집 전후 수량·가격 근거 비교"],
     ["재수집 설정", `정밀분석 · 상세 ${plan.range}위`, "순위 범위 문제 또는 수량 구조 확인용"],
     ["예상 소요", `${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}`, "수집 실행 전 ETA 기준"],
     ["문제 날짜", plan.dateText || "최근 수집일 기준", "동일 기간 재수집 또는 날짜별 직접 확인"],
@@ -17259,7 +17347,7 @@ function companyMasterCheckPanel(master = {}) {
       <div class="company-check-head">
         <div>
           <strong>확인 대상</strong>
-          <small>OTA, 수량 구조, 날짜별 총량 변동, 판매 공백, 보정 후 재검토 기준으로 확인할 업체입니다.</small>
+          <small>OTA, 수량 구조, 예약ID, 가격 근거, 보정 후 재검토 기준으로 확인할 업체입니다.</small>
         </div>
         <span>${fmtNumber(displayedEntries.length)}/${fmtNumber(visibleEntries.length)}개 표시 · 필터 ${fmtNumber(filteredEntries.length)} · 전체 ${fmtNumber(entries.length)}</span>
       </div>
@@ -18103,8 +18191,7 @@ function adminDbCollectionProfile(company = {}, metrics = {}) {
     || metrics.workType?.key === "recrawl"
     || metrics.workType?.key === "missingRevenue"
     || metrics.workType?.key === "missingReservation"
-    || metrics.adminReview?.status === "recrawl_needed"
-    || Boolean(metrics.stockVariance);
+    || metrics.adminReview?.status === "recrawl_needed";
   if (adminReviewed || manualCorrected) {
     return {
       key: "admin_verified",
@@ -18331,7 +18418,7 @@ function adminDbStatusMatches(row = {}, status = "all") {
   const contactStatus = String(company.salesContact?.status || "");
   const lowConfidence = Boolean(metrics.lowConfidence || metrics.confidenceScore <= 2);
   const unreviewed = !metrics.adminReview && !company.adminReview;
-  const recrawl = workKey === "recrawl" || reviewStatus === "recrawl_needed" || Boolean(metrics.stockVariance);
+  const recrawl = workKey === "recrawl" || reviewStatus === "recrawl_needed";
   const manual = workKey === "manual" || reviewStatus === "manual_needed" || lowConfidence;
   const excluded = reviewStatus === "exclude" || salesCategory === "exclude" || contactStatus === "excluded";
   const decisionQueueActive = companyDecisionQueueProfile(company).inQueue;
@@ -18964,7 +19051,6 @@ function adminDbAuditCompanyTasks(row = {}) {
   if (!metrics.revenue) tasks.push("매출 표본 보강");
   if (!metrics.channels?.count) tasks.push("OTA 채널 확인");
   if (!metrics.adminReview && !row.company?.adminReview) tasks.push("관리자 검수");
-  if (metrics.stockVariance) tasks.push("총량 변동 확인");
   if (metrics.workType?.key === "manual" || metrics.adminReview?.status === "manual_needed") tasks.push("보정값 입력");
   return [...new Set(tasks.length ? tasks : ["유지 관리"])];
 }
@@ -19062,8 +19148,7 @@ function adminDbAuditDetailPanel(region = null) {
         || metrics.confidenceScore <= 2
         || !metrics.revenue
         || !metrics.channels?.count
-        || !metrics.adminReview
-        || metrics.stockVariance;
+        || !metrics.adminReview;
     })
     .sort((a, b) => adminDbWorkPriority(b) - adminDbWorkPriority(a) || (a.metrics.rank || 9999) - (b.metrics.rank || 9999));
   const stats = region.stats || adminDbAuditStats(region.rows || []);
@@ -19245,7 +19330,7 @@ function adminDbWorkReason(row = {}) {
   const issues = metrics.issues || [];
   if (metrics.lowConfidence) return "수량 신뢰도가 낮아 객실 총량과 상품 구성을 먼저 확인해야 합니다.";
   if (workType.key === "manual") return "보정이 필요한 상태입니다. 객실수/상품별 수량을 확정하세요.";
-  if (workType.key === "recrawl") return "총량 변동 또는 조건 변화가 있어 같은 기간으로 재수집이 필요합니다.";
+  if (workType.key === "recrawl") return "수량·가격 근거 또는 수집 조건을 같은 기간으로 다시 확인해야 합니다.";
   if (!metrics.revenue) return "매출 표본이 없어 가격 또는 판매수량 연결 상태를 확인해야 합니다.";
   if (!Number.isFinite(metrics.rate)) return "예약율 표본이 없어 네이버 예약 기준 판매율 확인이 필요합니다.";
   if (!metrics.adminReview) return "";
@@ -19349,7 +19434,7 @@ function adminDbRequiredCheckChannels(row = {}) {
   const channels = [];
   if (!Number.isFinite(metrics.rate) || !metrics.revenue || metrics.lowConfidence) channels.push("네이버 예약");
   if (!metrics.channels?.count || metrics.collection?.needsConfirm) channels.push("OTA");
-  if (metrics.lowConfidence || metrics.stockVariance || metrics.signal?.lodgingStructuralBlockedTotal) channels.push("전화예약/오프라인");
+  if (metrics.lowConfidence || metrics.signal?.lodgingStructuralBlockedTotal) channels.push("전화예약/오프라인");
   if (adminDbCouponSummary(row.company || {}, metrics).visible) channels.push("네이버 쿠폰");
   return Array.from(new Set(channels)).slice(0, 4);
 }
@@ -19448,8 +19533,7 @@ function adminDbSelectedNextAction(row = {}, requiredChannels = []) {
     || metrics.confidenceScore <= 2;
   const needsCollect = requiredChannels.length
     || metrics.collection?.needsConfirm
-    || ["recrawl", "missingRevenue", "missingReservation"].includes(workKey)
-    || metrics.stockVariance;
+    || ["recrawl", "missingRevenue", "missingReservation"].includes(workKey);
   if (needsCorrection) {
     return {
       label: "기준값 수정",
@@ -19748,7 +19832,6 @@ function adminDbWorkPriority(row = {}) {
   };
   return (order[workType.key] || 40)
     + (metrics.lowConfidence ? 24 : 0)
-    + (metrics.stockVariance ? 18 : 0)
     + (!metrics.revenue ? 12 : 0)
     + (!metrics.adminReview ? 8 : 0);
 }
@@ -19769,7 +19852,7 @@ function adminDbWorkPanel(rows = []) {
   const workRows = adminDbWorkRows(rows);
   const lowConfidence = rows.filter((row) => row.metrics.lowConfidence || row.metrics.confidenceScore <= 2).length;
   const unreviewed = rows.filter((row) => !row.metrics.adminReview).length;
-  const recrawl = rows.filter((row) => row.metrics.workType?.key === "recrawl" || row.metrics.stockVariance).length;
+  const recrawl = rows.filter((row) => row.metrics.workType?.key === "recrawl").length;
   const manual = rows.filter((row) => row.metrics.workType?.key === "manual" || row.metrics.adminReview?.status === "manual_needed").length;
   const ready = rows.filter((row) => ["publicReady", "reviewed"].includes(row.metrics.workType?.key || "")).length;
   return `
@@ -19838,8 +19921,7 @@ function adminDbConfirmCollectFocus(row = {}) {
   const decision = companyDecisionQueueProfile(company);
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
   const focus = [];
-  if (metrics.lowConfidence || metrics.confidenceScore <= 2 || criteria.has("quantity") || criteria.has("capacity")) focus.push("객실 총량·상품 수량");
-  if (metrics.stockVariance) focus.push("날짜별 총량 변동");
+  if (metrics.lowConfidence || metrics.confidenceScore <= 2 || criteria.has("quantity")) focus.push("객실 총량·상품 수량");
   if (!metrics.revenue || workKey === "missingRevenue" || criteria.has("revenue")) focus.push("요일별 가격·매출 표본");
   if (!Number.isFinite(metrics.rate) || workKey === "missingReservation") focus.push("네이버 예약율 표본");
   if (!metrics.channels?.count || criteria.has("ota")) focus.push("OTA·채널 노출");
@@ -19956,15 +20038,15 @@ function adminDbRecheckComparisonRows(comparison = {}) {
       label: "판매 공백",
       before: `${fmtNumber(before.gapCount)}유형`,
       current: `${fmtNumber(current.gapCount)}유형`,
-      tone: queueDeltaTone(before.gapCount, current.gapCount, false),
-      note: current.gapCount ? "요일별 공백 확인" : "공백 완화"
+      tone: "same",
+      note: current.gapCount ? "가격·상품 분석 신호" : "공백 신호 없음"
     },
     {
       label: "총량 변동",
       before: before.stockVariance ? "있음" : "없음",
       current: current.stockVariance ? "있음" : "없음",
-      tone: queueBooleanResolvedTone(before.stockVariance, current.stockVariance),
-      note: current.stockVariance ? "날짜별 총량 변동" : "총량 안정"
+      tone: "same",
+      note: current.stockVariance ? "오프라인·타 채널 판매 신호" : "신호 없음"
     },
     {
       label: "오프라인 추정",
@@ -21206,6 +21288,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       ` : ""}
       <section class="admin-db-page-surface ${escapeHtml(viewMode)}" data-admin-db-page="${escapeHtml(viewMode)}">
         ${mainViewHtml}
+        ${viewMode === "region" ? adminRegionalDatabasePanel(master) : ""}
       </section>
     </section>
   `;
@@ -21358,11 +21441,10 @@ function adminRegionalSummaryCells(summary = {}) {
 
 function adminRegionMaintenanceFallback(region = {}, rows = []) {
   const lowConfidence = rows.filter((row) => row.metrics.lowConfidence).length || Number(region.lowConfidenceCount || 0);
-  const stockVariance = rows.filter((row) => row.metrics.stockVariance).length || Number(region.stockVarianceCount || 0);
   const missingRevenue = Math.max(0, 3 - Number(region.revenueSampleCount || 0));
   const missingReservation = Math.max(0, 5 - Number(region.reservationSampleCount || 0));
   const reviewGap = Math.max(0, Math.min(Number(region.companyCount || rows.length || 0), 5) - Number(region.adminReviewCount || 0));
-  const riskCount = lowConfidence + stockVariance + Number(region.structuralBlockedCount || 0) + Number(region.outsideExposureCount || 0);
+  const riskCount = lowConfidence + Number(region.structuralBlockedCount || 0) + Number(region.outsideExposureCount || 0);
   const readinessScore = Math.max(0, Math.min(100, Math.round(
     Number(region.status?.score || 0)
     + Number(region.manualCorrectionCount || 0) * 4
@@ -21375,7 +21457,6 @@ function adminRegionMaintenanceFallback(region = {}, rows = []) {
     missingReservation ? { key: "reservation_sample", label: "예약 표본 보강", detail: `네이버 예약 기준 ${missingReservation}곳 이상 추가 확인`, priority: 96, tone: "hot" } : null,
     missingRevenue ? { key: "revenue_sample", label: "매출 표본 보강", detail: `가격/판매 기준 ${missingRevenue}곳 이상 보강`, priority: 92, tone: "hot" } : null,
     lowConfidence ? { key: "quantity_correction", label: "수량 신뢰도 보정", detail: `수량 신뢰도 낮은 업체 ${lowConfidence}곳`, priority: 86, tone: "watch" } : null,
-    stockVariance ? { key: "capacity_review", label: "총량 변동 검토", detail: `날짜별 총량 변동 ${stockVariance}곳`, priority: 82, tone: "watch" } : null,
     region.outsideExposureCount ? { key: "boundary_check", label: "검색권 경계 확인", detail: `지역 밖 노출 ${fmtNumber(region.outsideExposureCount)}곳`, priority: 66, tone: "neutral" } : null,
     reviewGap ? { key: "admin_review", label: "관리자 사전 검수", detail: `상위 표본 ${reviewGap}곳 추가 판단`, priority: 62, tone: "neutral" } : null
   ].filter(Boolean);
@@ -21385,7 +21466,7 @@ function adminRegionMaintenanceFallback(region = {}, rows = []) {
     : (readinessScore >= 68 && !missingRevenue && !missingReservation
       ? { key: "review", label: "검수 후 공개", tone: "watch" }
       : { key: "sample_needed", label: missingRevenue || missingReservation ? "표본 보강" : "공개 보류", tone: "hot" });
-  const maintenancePriority = Math.max(0, Math.min(100, 100 - readinessScore + missingReservation * 9 + missingRevenue * 10 + lowConfidence * 5 + stockVariance * 4));
+  const maintenancePriority = Math.max(0, Math.min(100, 100 - readinessScore + missingReservation * 9 + missingRevenue * 10 + lowConfidence * 5));
   return {
     readinessScore,
     preflightStatus: status,
@@ -21459,7 +21540,6 @@ function adminRegionCompanyMetrics(company = {}, region = {}) {
   );
   const issues = [
     lowConfidence ? "수량 신뢰도 낮음" : "",
-    stockVariance ? "총량 변동" : "",
     signal.structureWeak ? "상품 구조 확인" : "",
     signal.lodgingStructuralBlockedTotal ? "미오픈/차단 확인" : "",
     !Number.isFinite(rate) ? "예약율 표본 없음" : "",
@@ -21468,7 +21548,6 @@ function adminRegionCompanyMetrics(company = {}, region = {}) {
   ].filter(Boolean);
   const priority = issues.length * 12
     + (lowConfidence ? 18 : 0)
-    + (stockVariance ? 14 : 0)
     + (!totalRevenue ? 10 : 0)
     + (!adminReview ? 8 : 0)
     + (Number(company.salesTarget?.score || 0) / 8)
@@ -21514,7 +21593,7 @@ function adminRegionCompanyWorkType(row = {}) {
   const status = metrics.adminReview?.status || "";
   if (!metrics.adminReview) return { key: "unreviewed", label: "관리자 검수전", tone: "watch" };
   if (status === "manual_needed" || metrics.lowConfidence) return { key: "manual", label: "보정 필요", tone: "hot" };
-  if (status === "recrawl_needed" || metrics.stockVariance) return { key: "recrawl", label: "재수집", tone: "watch" };
+  if (status === "recrawl_needed") return { key: "recrawl", label: "재수집", tone: "watch" };
   if (!metrics.totalRevenue) return { key: "missingRevenue", label: "매출 없음", tone: "watch" };
   if (!Number.isFinite(metrics.rate)) return { key: "missingReservation", label: "예약율 없음", tone: "neutral" };
   if (["confirmed", "contact_ready"].includes(status)) return { key: "publicReady", label: "공개 가능", tone: "good" };
@@ -21549,8 +21628,8 @@ function adminRegionCompanyFilterOptions(rows = []) {
       key: "recrawl",
       label: "재수집",
       note: "조건 재확인",
-      count: count((row) => row.metrics.adminReview?.status === "recrawl_needed" || row.metrics.stockVariance),
-      match: (row) => row.metrics.adminReview?.status === "recrawl_needed" || row.metrics.stockVariance
+      count: count((row) => row.metrics.adminReview?.status === "recrawl_needed"),
+      match: (row) => row.metrics.adminReview?.status === "recrawl_needed"
     },
     {
       key: "missingRevenue",
@@ -22105,14 +22184,12 @@ function adminSelectedRegion(master = {}) {
 
 function adminRegionActionItems(region = {}, rows = []) {
   const lowConfidence = rows.filter((row) => row.metrics.lowConfidence).length;
-  const stockVariance = rows.filter((row) => row.metrics.stockVariance).length;
   const missingRevenue = rows.filter((row) => !row.metrics.totalRevenue).length;
   const unreviewed = rows.filter((row) => !row.metrics.adminReview).length;
   return [
     region.revenueSampleCount < 3 ? "매출 표본 3곳 이상 확보" : "",
     region.reservationSampleCount < 5 ? "예약율 표본 5곳 이상 확보" : "",
     lowConfidence ? `수량 신뢰도 낮은 업체 ${fmtNumber(lowConfidence)}곳 보정` : "",
-    stockVariance ? `총량 변동 업체 ${fmtNumber(stockVariance)}곳 재검토` : "",
     missingRevenue ? `매출 표본 없는 업체 ${fmtNumber(missingRevenue)}곳 가격 확인` : "",
     unreviewed ? `관리자 검수전 업체 ${fmtNumber(unreviewed)}곳 판단` : "",
     region.outsideExposureCount ? "지역 밖 노출 업체 주소/검색권 확인" : ""
@@ -22234,7 +22311,6 @@ function adminRegionDetailFocusPanel(region = {}, rows = [], maintenance = {}) {
   const regionReview = adminRegionEffectiveReview(region);
   const reinforceRows = rows.filter((row) =>
     row.metrics?.lowConfidence ||
-    row.metrics?.stockVariance ||
     !row.metrics?.totalRevenue ||
     !Number.isFinite(row.metrics?.rate)
   );
@@ -22290,10 +22366,10 @@ function adminRegionOperationalVerdict(region = {}, rows = [], maintenance = {})
   }
   const actionKey = maintenance.primaryAction?.key || "";
   const ready = maintenance.preflightStatus?.key === "ready" || region.status?.key === "public_ready";
-  if (stats.recrawlNeeded || actionKey === "capacity_review") {
+  if (stats.recrawlNeeded) {
     return {
       label: "재수집 필요",
-      note: "총량 변동이나 조건 재확인이 필요한 업체가 있습니다.",
+      note: "조건 재확인이 필요한 업체가 있습니다.",
       tone: "hot"
     };
   }
@@ -22337,7 +22413,6 @@ function adminRegionPreflightChecklistItems(region = {}, rows = [], profile = {}
   const reviewDone = Math.max(0, Number(region.adminReviewCount || 0));
   const riskCount = Number(coverage.riskCount ?? (
     Number(region.lowConfidenceCount || 0) +
-    Number(region.stockVarianceCount || 0) +
     Number(region.structuralBlockedCount || 0) +
     Number(region.outsideExposureCount || 0)
   ));
@@ -22591,7 +22666,6 @@ function adminRegionCorrectionGapReason(row = {}) {
   const metrics = row.metrics || {};
   const reasons = [];
   if (metrics.lowConfidence) reasons.push("수량 신뢰도 낮음");
-  if (metrics.stockVariance) reasons.push("날짜별 총량 변동");
   if (metrics.signal?.structureWeak) reasons.push("상품 구조 확인");
   if (!Number.isFinite(metrics.rate)) reasons.push("예약율 표본 없음");
   if (!metrics.totalRevenue) reasons.push("가격/매출 표본 없음");
@@ -23051,7 +23125,7 @@ function adminRegionalMaintenanceBoard(regions = [], selectedRegionKey = "") {
       <div class="admin-maintenance-lane">
         <div>
           <strong>오늘 먼저 볼 지역</strong>
-          <small>표본·수량·총량·지역 밖 노출 기준</small>
+          <small>표본·수량·지역 밖 노출 기준</small>
         </div>
         ${urgent.length ? urgent.map((entry, index) => itemHtml(entry, index)).join("") : `
           <p>즉시 보강이 필요한 지역은 없습니다. 주간 유지 점검만 진행하면 됩니다.</p>
@@ -23075,12 +23149,12 @@ function adminRegionOperationsQueuePanel(regions = [], selectedRegionKey = "") {
     ready: { label: "공개 후보", note: "B2B 노출 가능", tone: "good", rows: [] },
     urgent: { label: "즉시 보강", note: "표본·수량 우선", tone: "hot", rows: [] },
     sample: { label: "표본 보강", note: "예약·매출 추가", tone: "watch", rows: [] },
-    correction: { label: "수량/경계", note: "총량·지역권 확인", tone: "watch", rows: [] },
+    correction: { label: "수량/경계", note: "수량·지역권 확인", tone: "watch", rows: [] },
     review: { label: "감수 대기", note: "검수 필요", tone: "neutral", rows: [] },
     keep: { label: "유지 점검", note: "주간 확인", tone: "good", rows: [] }
   };
   const sampleKeys = new Set(["reservation_sample", "revenue_sample"]);
-  const correctionKeys = new Set(["quantity_correction", "capacity_review", "boundary_check"]);
+  const correctionKeys = new Set(["quantity_correction", "boundary_check"]);
   regions.forEach((region) => {
     const profile = adminRegionMaintenanceProfile(region, []);
     const publicStatus = adminRegionPublicStatus(region);
@@ -23184,8 +23258,33 @@ function adminRunRegionalOpsHtml(runOps = null) {
   `;
 }
 
-function adminRegionalOperationsPanel(master = {}) {
-  const { masterOps, runOps, summary, regions } = adminRegionalOpsSource(master);
+function adminRegionalDatabasePanel(master = {}) {
+  const { masterOps, runOps, regions } = adminRegionalOpsSource(master);
+  const selectedRegion = adminSelectedRegion(master);
+  const generatedAt = masterOps.generatedAt ? compactDateTime(masterOps.generatedAt) : "기준시각 없음";
+  return `
+    <section class="admin-console-panel admin-regional-db-panel" data-ui-surface="card">
+      <div class="admin-console-head">
+        <div>
+          <strong>지역 DB 운영</strong>
+          <small>지역별 수집 보강, 갱신 우선순위, 현재 선택 수집을 관리합니다.</small>
+        </div>
+        <span>갱신 ${escapeHtml(generatedAt)}</span>
+      </div>
+      <div class="admin-regional-layout">
+        <div class="admin-regional-main">
+          ${adminRegionOperationsQueuePanel(regions, selectedRegion?.regionKey || "")}
+          ${adminRegionalMaintenanceBoard(regions, selectedRegion?.regionKey || "")}
+          <p class="admin-regional-rule">지역 운영 큐는 데이터 보강과 갱신 작업만 다룹니다. 지역 판정과 공개 검수는 지역분석에서 확인합니다.</p>
+        </div>
+        ${adminRunRegionalOpsHtml(runOps)}
+      </div>
+    </section>
+  `;
+}
+
+function adminRegionalAnalysisPanel(master = {}) {
+  const { masterOps, summary, regions } = adminRegionalOpsSource(master);
   const filteredRegions = adminRegionFilteredRegions(regions);
   const topRegions = filteredRegions.slice(0, 9);
   const selectedFilter = adminRegionSelectedReviewFilter(regions);
@@ -23212,8 +23311,6 @@ function adminRegionalOperationsPanel(master = {}) {
             `).join("")}
           </div>
           ${adminLocationScoreReviewQueuePanel(master)}
-          ${adminRegionOperationsQueuePanel(regions, selectedRegion?.regionKey || "")}
-          ${adminRegionalMaintenanceBoard(regions, selectedRegion?.regionKey || "")}
           ${adminRegionReviewFilterBar(regions)}
           <div class="admin-region-card-grid">
             ${topRegions.length ? topRegions.map((region) => adminRegionCardHtml(region, selectedRegion?.regionKey || "")).join("") : `
@@ -23224,7 +23321,6 @@ function adminRegionalOperationsPanel(master = {}) {
             실제 주소 지역을 우선 적용하고, 없으면 수집 지역과 검색 기준 지역 순으로 분류합니다.${generatedAt ? ` · 갱신 ${escapeHtml(generatedAt)}` : ""}
           </p>
         </div>
-        ${adminRunRegionalOpsHtml(runOps)}
       </div>
       ${adminRegionalDetailPanel(selectedRegion, master)}
     </section>
@@ -23789,75 +23885,236 @@ function adminConsoleSecurityPanel() {
   `;
 }
 
+function adminIntegrationRows() {
+  const traffic = state.trafficKeyState || {};
+  return ADMIN_INTEGRATIONS.map((integration) => {
+    if (!integration.liveKey) {
+      return { ...integration, status: "planned", statusLabel: "연결 예정", statusNote: "인증키 노출 없이 순차 연결" };
+    }
+    const verification = traffic.verification?.[integration.liveKey] || {};
+    const configured = Boolean(traffic[`${integration.liveKey}Configured`]);
+    if (verification.ok) {
+      return { ...integration, status: "connected", statusLabel: "연동 정상", statusNote: "실제 연결 확인" };
+    }
+    if (configured) {
+      return { ...integration, status: "configured", statusLabel: "키 저장됨", statusNote: "연결 테스트 필요" };
+    }
+    return { ...integration, status: "missing", statusLabel: "미설정", statusNote: "관리자 설정 필요" };
+  });
+}
+
+function adminHomeSourceTimestamp(value = "") {
+  const timestamp = value ? Date.parse(value) : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function adminHomeLatestRun() {
+  return (state.runs || []).find(Boolean) || state.data?.run || {};
+}
+
+function adminHomeBasis(master = {}) {
+  const latestRun = adminHomeLatestRun();
+  const regional = master.adminRegionalOperations || {};
+  const candidates = [
+    latestRun.completedAt,
+    latestRun.collectedAt,
+    latestRun.updatedAt,
+    latestRun.createdAt,
+    regional.generatedAt,
+    master.updatedAt,
+    master.generatedAt
+  ].filter(Boolean);
+  const latest = candidates
+    .map((value) => ({ value, timestamp: adminHomeSourceTimestamp(value) }))
+    .sort((a, b) => b.timestamp - a.timestamp)[0];
+  return latest?.timestamp ? `기준 ${compactDateTime(latest.value)}` : "데이터 수집 전";
+}
+
+function adminHomeTasks(master = {}, entries = []) {
+  const regionalSummary = master.adminRegionalOperations?.summary || {};
+  const regionWork = Number(regionalSummary.adminReviewNeededRegionCount || 0)
+    + Number(regionalSummary.adminCollectNeededRegionCount || 0);
+  const memberRequests = Number(state.accountDeleteAdmin?.openCount || state.accountDeleteAdmin?.summary?.openCount || 0);
+  const openEntries = entries.filter((entry) => entry.workflow?.key !== "done");
+  const tasks = [];
+  if (openEntries.length) {
+    tasks.push({ route: "company-review", label: "업체 데이터 확인", value: `${fmtNumber(openEntries.length)}건`, note: "지속적인 구조 변화와 관리자 판단 대상", tone: "warning" });
+  }
+  if (regionWork) {
+    tasks.push({ route: "region-review", label: "지역 데이터 보강", value: `${fmtNumber(regionWork)}건`, note: "지역 공개 기준의 검토·보강 대상", tone: "warning" });
+  }
+  if (memberRequests) {
+    tasks.push({ route: "members", label: "회원 요청 처리", value: `${fmtNumber(memberRequests)}건`, note: "계정·데이터 요청 확인", tone: "danger" });
+  }
+  const integrations = adminIntegrationRows().filter((row) => row.liveKey);
+  const integrationIssues = integrations.filter((row) => !["connected", "configured"].includes(row.status)).length;
+  if (state.trafficKeyState && integrationIssues) {
+    tasks.push({ route: "settings", label: "네이버 연동 점검", value: `${fmtNumber(integrationIssues)}건`, note: "검색·트렌드 설정 상태 확인", tone: "warning" });
+  }
+  return tasks;
+}
+
+function adminHomeTaskRows(tasks = []) {
+  if (!tasks.length) {
+    return `<div class="admin-home-empty" data-ui-surface="soft"><strong>오늘 즉시 처리할 항목이 없습니다.</strong><span>각 핵심 운영 현황에 새로운 주의 항목이 생기면 이곳에 표시됩니다.</span></div>`;
+  }
+  return tasks.map((task) => `
+    <button type="button" class="admin-home-task-row" data-admin-home-route="${escapeHtml(task.route)}" data-ui-surface="control" data-ui-interactive="true" data-ui-status="${escapeHtml(task.tone)}">
+      <span class="admin-home-task-signal" aria-hidden="true"></span>
+      <span><strong>${escapeHtml(task.label)}</strong><small>${escapeHtml(task.note)}</small></span>
+      <b>${escapeHtml(task.value)}</b>
+      <span class="admin-home-arrow" aria-hidden="true">→</span>
+    </button>
+  `).join("");
+}
+
+function adminHomeMetricCards(master = {}, entries = []) {
+  const companies = master.companies || [];
+  const totalCompanies = Number(master.totalCompanies || companies.length || 0);
+  const openEntries = entries.filter((entry) => entry.workflow?.key !== "done").length;
+  const regionalSummary = master.adminRegionalOperations?.summary || {};
+  const regionCount = Number(regionalSummary.regionCount || 0);
+  const regionWork = Number(regionalSummary.adminReviewNeededRegionCount || 0)
+    + Number(regionalSummary.adminCollectNeededRegionCount || 0);
+  const memberSummary = state.b2bMemberAdmin?.summary || {};
+  const memberCount = Number(memberSummary.memberCount || 0);
+  const memberRequests = Number(state.accountDeleteAdmin?.openCount || state.accountDeleteAdmin?.summary?.openCount || 0);
+  const integrationRows = adminIntegrationRows();
+  const connected = integrationRows.filter((row) => row.status === "connected").length;
+  const configured = integrationRows.filter((row) => row.status === "configured").length;
+  const cards = [
+    { route: "database", eyebrow: "업체 데이터", value: `${fmtNumber(totalCompanies)}개`, note: "네이버 플레이스 기반 업체 마스터", warning: openEntries ? `확인 ${fmtNumber(openEntries)}건` : "정상", tone: openEntries ? "warning" : "positive" },
+    { route: "region", eyebrow: "지역 데이터", value: `${fmtNumber(regionCount)}개`, note: "지역 공통 Core·운영 기준", warning: regionWork ? `보강 ${fmtNumber(regionWork)}건` : "정상", tone: regionWork ? "warning" : "positive" },
+    { route: "members", eyebrow: "회원 데이터", value: `${fmtNumber(memberCount)}명`, note: "가입·이용·계정 요청", warning: memberRequests ? `요청 ${fmtNumber(memberRequests)}건` : "정상", tone: memberRequests ? "danger" : "positive" },
+    { route: "settings", eyebrow: "API·연동", value: `${fmtNumber(connected)}/${fmtNumber(ADMIN_INTEGRATIONS.length)}`, note: configured ? `정상 ${fmtNumber(connected)} · 키 저장 ${fmtNumber(configured)} · 예정 ${fmtNumber(ADMIN_INTEGRATIONS.length - connected - configured)}` : `정상 ${fmtNumber(connected)} · 연결 예정 ${fmtNumber(ADMIN_INTEGRATIONS.length - connected)}`, warning: connected + configured >= 2 ? "운영 준비" : "설정 확인", tone: connected + configured >= 2 ? "positive" : "warning" }
+  ];
+  return cards.map((card) => `
+    <button type="button" class="admin-home-metric" data-admin-home-route="${escapeHtml(card.route)}" data-ui-surface="card" data-ui-interactive="true">
+      <span>${escapeHtml(card.eyebrow)}</span>
+      <strong>${escapeHtml(card.value)}</strong>
+      <small>${escapeHtml(card.note)}</small>
+      <mark data-ui-status="${escapeHtml(card.tone)}">${escapeHtml(card.warning)}</mark>
+      <i class="admin-home-arrow" aria-hidden="true">→</i>
+    </button>
+  `).join("");
+}
+
+function adminHomeFreshness(master = {}) {
+  const latestRun = adminHomeLatestRun();
+  const regional = master.adminRegionalOperations || {};
+  const rows = [
+    ["REGION CORE", regional.generatedAt ? compactDateTime(regional.generatedAt) : "수집 전", "공공·지역 공통 자료", regional.generatedAt ? "positive" : "neutral"],
+    ["MARKET LIVE", latestRun.completedAt || latestRun.collectedAt || latestRun.createdAt ? compactDateTime(latestRun.completedAt || latestRun.collectedAt || latestRun.createdAt) : "수집 전", "네이버·OTA 시장 관측", latestRun.id || latestRun.completedAt ? "positive" : "neutral"],
+    ["BUSINESS ACTUAL", "연결 예정", "매출·예약·광고비 비공개 저장", "neutral"],
+    ["DECISION ENGINE", state.data ? "분석 가능" : "데이터 대기", "가격·광고·상품·채널 제안", state.data ? "positive" : "neutral"]
+  ];
+  return rows.map(([label, value, note, tone]) => `
+    <div class="admin-home-freshness-row" data-ui-surface="control">
+      <span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(note)}</small></span>
+      <b data-ui-status="${escapeHtml(tone)}">${escapeHtml(value)}</b>
+    </div>
+  `).join("");
+}
+
+function adminHomeRecentRows(master = {}) {
+  const runs = (state.runs || []).filter(Boolean).slice(0, 4);
+  if (!runs.length) {
+    return `<div class="admin-home-empty" data-ui-surface="soft"><strong>최근 운영 기록이 없습니다.</strong><span>첫 수집이 완료되면 실행 시각과 결과가 기록됩니다.</span></div>`;
+  }
+  return runs.map((run) => {
+    const at = run.completedAt || run.collectedAt || run.updatedAt || run.createdAt || "";
+    return `
+      <button type="button" class="admin-home-log-row" data-admin-home-route="archive" data-ui-interactive="true">
+        <span><strong>${escapeHtml(run.label || run.keyword || run.id || "수집 실행")}</strong><small>${escapeHtml(at ? compactDateTime(at) : "시각 미기록")}</small></span>
+        <b>${escapeHtml(run.statusLabel || run.status || "결과 보기")}</b>
+        <span class="admin-home-arrow" aria-hidden="true">→</span>
+      </button>
+    `;
+  }).join("");
+}
+
+function renderAdminRegionAnalysisDashboard(master = adminConsoleMasterSource()) {
+  if (!els.adminRegionAnalysisDashboard) return;
+  const visible = isAdminRole();
+  els.adminRegionAnalysisDashboard.hidden = !visible;
+  els.adminRegionAnalysisDashboard.innerHTML = visible ? adminRegionalAnalysisPanel(master) : "";
+}
+
+function renderAdminIntegrationRegistry() {
+  if (!els.adminIntegrationRegistry || !isAdminRole()) return;
+  const rows = adminIntegrationRows();
+  const connected = rows.filter((row) => row.status === "connected").length;
+  const configured = rows.filter((row) => row.status === "configured").length;
+  els.adminIntegrationRegistry.innerHTML = `
+    <section class="admin-console-panel" data-ui-surface="card">
+      <div class="admin-console-head">
+        <div><strong>API·연동 레지스트리</strong><small>신청한 15개 연동의 실제 연결 여부를 구분합니다. 인증키 값은 화면에 표시하지 않습니다.</small></div>
+        <span>${fmtNumber(connected)} 정상 · ${fmtNumber(configured)} 키 저장 · ${fmtNumber(rows.length - connected - configured)} 예정</span>
+      </div>
+      <div class="admin-integration-list">
+        ${rows.map((row) => `
+          <article data-ui-surface="control">
+            <span><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(`${row.provider} · ${row.group}`)}</small></span>
+            <mark data-ui-status="${escapeHtml(row.status === "connected" ? "positive" : row.status === "missing" ? "warning" : "neutral")}">${escapeHtml(row.statusLabel)}</mark>
+            <small>${escapeHtml(row.statusNote)}</small>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderAdminSecurityDashboard() {
+  if (!els.adminSecurityDashboard || !isAdminRole()) return;
+  els.adminSecurityDashboard.innerHTML = adminConsoleSecurityPanel();
+}
+
 function renderAdminConsoleDashboard(master = adminConsoleMasterSource()) {
   if (!isAdminRole()) return;
   renderAdminMemberRequestDashboard();
   renderAdminDatabaseDashboard(master);
+  renderAdminRegionAnalysisDashboard(master);
+  renderAdminIntegrationRegistry();
+  renderAdminSecurityDashboard();
   if (!els.adminConsoleDashboard) return;
   if (master.error) {
     els.adminConsoleDashboard.innerHTML = `<div class="admin-console-empty">관리자 콘솔 로딩 실패: ${escapeHtml(master.error)}</div>`;
     return;
   }
   const entries = companyDecisionQueueEntries(master);
-  const kpis = adminConsoleKpis(master, entries);
-  const latestRun = state.runs?.[0] || {};
-  const waitingEntries = entries.filter((entry) => entry.workflow?.key !== "done").length;
-  const reviewEntries = entries.filter((entry) => ["review", "check", "hold"].includes(entry.workflow?.key)).length;
-  const memberRequests = Number(state.accountDeleteAdmin?.openCount || state.accountDeleteAdmin?.summary?.openCount || 0);
-  const latestRunLabel = latestRun.label || latestRun.id || "아직 실행 기록 없음";
+  const tasks = adminHomeTasks(master, entries);
+  const latestRun = adminHomeLatestRun();
+  const latestRunLabel = latestRun.label || latestRun.keyword || latestRun.id || "아직 실행 기록 없음";
   els.adminConsoleDashboard.innerHTML = `
-    <section class="admin-console-hero admin-workspace-hero">
+    <section class="admin-home-intro" data-ui-surface="soft">
       <div>
         <span>ADMIN WORKSPACE · TODAY</span>
-        <h3>오늘의 운영 워크스페이스</h3>
-        <p>데이터 품질, 수집 진행, 회원 요청을 한 곳에서 확인하고 다음 작업으로 바로 이동하세요.</p>
+        <h2>오늘의 운영 요약</h2>
+        <p>업체·지역·회원·연동 상태에서 먼저 판단할 항목만 보여줍니다.</p>
       </div>
-      <div class="admin-workspace-run-state">
-        <span>최근 실행</span>
-        <strong>${escapeHtml(latestRunLabel)}</strong>
-        <small>${waitingEntries ? `확인 대기 ${fmtNumber(waitingEntries)}건` : "현재 확인 대기 없음"}</small>
+      <div class="admin-home-basis">
+        <span>최근 데이터 기준</span>
+        <strong>${escapeHtml(adminHomeBasis(master))}</strong>
+        <small>${escapeHtml(latestRunLabel)}</small>
       </div>
     </section>
-    <section class="admin-workspace-focus" aria-label="우선 작업 바로가기">
-      <article class="priority">
-        <span>업체 품질</span>
-        <strong>${fmtNumber(waitingEntries)}건</strong>
-        <small>${reviewEntries ? `검수 우선 ${fmtNumber(reviewEntries)}건` : "확인 대기 항목 확인"}</small>
-        <button type="button" data-admin-workspace-section="database">업체 관리 열기 <b aria-hidden="true">→</b></button>
-      </article>
-      <article>
-        <span>수집 운영</span>
-        <strong>${escapeHtml(latestRun.id ? "준비" : "대기")}</strong>
-        <small>${escapeHtml(latestRun.id ? "최근 실행 결과와 조건 확인" : "새 수집 조건을 설정하세요")}</small>
-        <button type="button" data-admin-workspace-section="collect">수집 실행 열기 <b aria-hidden="true">→</b></button>
-      </article>
-      <article>
-        <span>회원 요청</span>
-        <strong>${fmtNumber(memberRequests)}건</strong>
-        <small>${memberRequests ? "삭제·계정 요청을 우선 처리" : "새 요청이 없습니다"}</small>
-        <button type="button" data-admin-workspace-section="members">회원 관리 열기 <b aria-hidden="true">→</b></button>
-      </article>
-      <article>
-        <span>연동 상태</span>
-        <strong>점검</strong>
-        <small>API 키와 파일 연동 상태 확인</small>
-        <button type="button" data-admin-workspace-section="files">설정 열기 <b aria-hidden="true">→</b></button>
-      </article>
+    <section class="admin-home-section" aria-labelledby="adminHomeTasksTitle">
+      <div class="admin-home-section-head"><div><span>01</span><h3 id="adminHomeTasksTitle">오늘 확인할 업무</h3></div><small>${tasks.length ? `${fmtNumber(tasks.length)}개 업무` : "대기 업무 없음"}</small></div>
+      <div class="admin-home-task-list">${adminHomeTaskRows(tasks)}</div>
     </section>
-    <section class="admin-kpi-grid">
-      ${kpis.map(([label, value, note, tone]) => `
-        <article class="${escapeHtml(tone)}">
-          <span>${escapeHtml(label)}</span>
-          <strong>${escapeHtml(typeof value === "number" ? fmtNumber(value) : String(value))}</strong>
-          <small>${escapeHtml(note)}</small>
-        </article>
-      `).join("")}
+    <section class="admin-home-section" aria-labelledby="adminHomeCoreTitle">
+      <div class="admin-home-section-head"><div><span>02</span><h3 id="adminHomeCoreTitle">핵심 운영 현황</h3></div><small>주의 항목은 각 데이터 안에 표시</small></div>
+      <div class="admin-home-metric-grid">${adminHomeMetricCards(master, entries)}</div>
     </section>
-    ${adminRegionalOperationsPanel(master)}
-    <section class="admin-console-layout">
-      ${adminConsoleQueuePreview(entries)}
-      ${adminConsoleCrawlPanel(entries)}
-      ${adminConsoleTaskQueue(master, entries)}
+    <section class="admin-home-lower-grid">
+      <section class="admin-home-section" aria-labelledby="adminHomeFreshnessTitle">
+        <div class="admin-home-section-head"><div><span>03</span><h3 id="adminHomeFreshnessTitle">데이터 최신성</h3></div><small>기준시점 고정</small></div>
+        <div class="admin-home-freshness-list">${adminHomeFreshness(master)}</div>
+      </section>
+      <section class="admin-home-section" aria-labelledby="adminHomeRecentTitle">
+        <div class="admin-home-section-head"><div><span>04</span><h3 id="adminHomeRecentTitle">최근 운영 기록</h3></div><small>최근 ${fmtNumber(Math.min(4, (state.runs || []).length))}건</small></div>
+        <div class="admin-home-log-list">${adminHomeRecentRows(master)}</div>
+      </section>
     </section>
   `;
 }
@@ -23874,7 +24131,6 @@ function renderAdminMemberRequestDashboard() {
     </section>
     ${adminConsoleMemberPanel()}
     ${adminConsoleAccountDeletePanel()}
-    ${adminConsoleSecurityPanel()}
   `;
 }
 
@@ -23899,7 +24155,7 @@ function renderDecisionQueue() {
   els.decisionQueueList.innerHTML = `
     <div class="decision-queue-intro">
       <strong>확인 대상 기준</strong>
-      <p>OTA, 수량 구조, 날짜별 총량 변동, 판매 공백, 보정 신호가 있으면 컨택 전 확인 대상으로 묶습니다.</p>
+      <p>OTA, 수량 구조, 예약ID, 가격 근거, 보정 신호가 있으면 컨택 전 확인 대상으로 묶습니다. 날짜별 총량 변동과 요일별 판매 공백은 영업 분석 신호로만 사용합니다.</p>
     </div>
     ${companyMasterCheckPanel(master)}
   `;
@@ -26408,6 +26664,7 @@ function renderLocationGroupDictionary(group) {
 }
 
 function renderLocationDictionary(match = null) {
+  renderAdminRegionAnalysisDashboard();
   if (!els.dictionaryResult) return;
   const cards = state.dictionary?.cards || [];
   const groups = state.dictionary?.regionGroups || [];
@@ -27424,10 +27681,43 @@ function renderB2BEmptyPanels() {
   renderB2BAccountPanel();
 }
 
+function adminHeaderView() {
+  if (state.activeTab === "admin") {
+    return {
+      overview: ["운영 홈", "오늘 판단할 운영 현황과 데이터 기준시점"],
+      database: ["DB", "업체·지역·업종 기준 데이터 관리"],
+      collect: ["수집", "검색 의도·숙소 유형·OTA 수집 운영"],
+      archive: ["결과 보관함", "수집 결과와 플레이스 순서 다시 보기"],
+      members: ["회원", "회원 이용과 계정·데이터 요청 관리"],
+      files: ["설정", "API·연동·보안·파일 관리"]
+    }[state.adminPanelSection] || ["운영 홈", "오늘 판단할 운영 현황과 데이터 기준시점"];
+  }
+  return {
+    report: ["업종분석", "업종 현황과 시장 요약"],
+    rank: ["업종분석 · 경쟁 비교", "네이버 플레이스 노출순과 경쟁 표본"],
+    dictionary: ["지역분석", "지역 현황·입지 보정·지역 운영"],
+    map: ["지역분석 · 지도", "지역 내·인접 경쟁권과 반경 노출"],
+    demand: ["지역분석 · 수요 전망", "시즌 수요와 네이버 트렌드"],
+    historyOps: ["수집 · 이력", "반복 수집 회차와 업체별 변화"],
+    admin: ["운영 홈", "오늘 판단할 운영 현황과 데이터 기준시점"]
+  }[state.activeTab] || ["관리자 콘솔", "운영 현황"];
+}
+
 function renderHeader() {
+  if (isAdminRole()) {
+    const [viewTitle, viewDescription] = adminHeaderView();
+    const basis = adminHomeBasis(adminConsoleMasterSource());
+    els.pageTitle.textContent = viewTitle;
+    if (els.pageSubtitle) {
+      els.pageSubtitle.hidden = false;
+      els.pageSubtitle.textContent = `${viewDescription} · ${basis}`;
+    }
+    document.title = `${APP_BRAND_NAME} · ${viewTitle}`;
+    return;
+  }
   const run = state.data?.run || {};
   const title = run.label || `${activeKeyword()} 분석`;
-  els.pageTitle.textContent = isAdminRole() && state.activeTab === "admin" ? "관리자 콘솔" : tabLabel(state.activeTab);
+  els.pageTitle.textContent = tabLabel(state.activeTab);
   if (els.pageSubtitle) els.pageSubtitle.hidden = false;
   if (state.activeTab === "dictionary") {
     els.pageSubtitle.textContent = "저장된 지역 카드 · 8대 지수 · 클러스터 판정";
@@ -27463,6 +27753,7 @@ function renderAll() {
     if (isAdminRole()) {
       renderRunResultApplySummary();
       renderCollectionArchive();
+      renderAdminConsoleDashboard();
     }
     renderPlaceRankReplayNotice();
     renderB2BEmptyPanels();
@@ -27486,6 +27777,7 @@ function renderAll() {
     renderCompanyMasterPanel();
     renderDownloads();
     syncYeogiManualInterface();
+    renderAdminConsoleDashboard();
   }
   if (roleAllowsTab("dictionary")) renderLocationDictionary();
 }
@@ -27514,7 +27806,7 @@ function setActiveTab(tab, options = {}) {
     state.adminMobileSection = adminMobileSectionForTab(state.activeTab, options.adminMobileSection || "");
     if (state.activeTab !== "admin") state.adminMobileAnchor = "";
     if (state.activeTab === "admin" && !state.adminMobileAnchor) {
-      state.adminMobileAnchor = ADMIN_MOBILE_SECTIONS[state.adminMobileSection]?.anchor || "";
+      state.adminMobileAnchor = ADMIN_COMPACT_SECTIONS[state.adminMobileSection]?.anchor || "";
     }
   }
   if (!options.fromHistory) syncAppHistoryState(Boolean(options.pushHistory ?? true));
@@ -28047,7 +28339,7 @@ function sheetInventoryStructure(item = {}) {
   const flags = structure.flags || [];
   const rows = [
     ["리스트 구조", structure.label, structure.summary],
-    ["검증 액션", structure.action, flags.includes("dynamic_capacity") ? "날짜별 총량 변동은 전화예약, 시설점검, 채널별 재고조정 가능성으로 우선 해석합니다." : ""],
+    ["분석 처리", structure.action, flags.includes("dynamic_capacity") ? "날짜별 총량 차이는 오프라인·타 채널 판매 가능성으로 분석합니다." : ""],
     ["수량 기준", item.inventoryScope || "네이버예약 채널/날짜 기준 재고", item.inventoryMemo || "실제 전체 객실수와 다를 수 있습니다."],
     ["보정 상태", correctionStatus.label, correctionStatus.key === "admin" ? correctionStatus.summary : `자동추정 근거: ${confidence.label} · ${confidence.summary}`]
   ];
@@ -28070,7 +28362,7 @@ function sheetInventoryStructure(item = {}) {
         <div class="structure-flag-row">
           ${flags.map((flag) => `<span>${escapeHtml({
             dayuse_rotation: "당일 회전형 병행",
-            dynamic_capacity: "날짜별 총량 변동",
+            dynamic_capacity: "오프라인·타 채널 판매 신호",
             raw_calc_gap: "원시/계산 재고 차이",
             grouped_range: "객실 범위형 상품",
             booking_id_reused: "예약ID 재확인",
@@ -28334,7 +28626,7 @@ function renderSheetBooking(item) {
             <strong>날짜별 원시재고</strong>
             <small>${escapeHtml(item.weeklyRawStockVariance)}</small>
           </div>
-          <strong>총량 변동</strong>
+          <strong>오프라인 판매 신호</strong>
         </div>
       ` : ""}
       <div class="search-row">
@@ -30323,6 +30615,10 @@ function renderTrafficState(data) {
       : "미설정";
   renderTrafficVerification(data);
   renderDemand();
+  if (isAdminRole()) {
+    renderAdminIntegrationRegistry();
+    renderAdminConsoleDashboard();
+  }
 }
 
 async function loadTrafficState() {
@@ -30485,6 +30781,56 @@ function handleAdminDbCompanyHash() {
   return true;
 }
 
+function openAdminHomeRoute(route = "summary") {
+  if (!isAdminRole()) return;
+  if (route === "company-review") {
+    state.adminDbFilters = { ...(state.adminDbFilters || {}), status: "needs_work" };
+    state.adminDbViewMode = "list";
+    state.adminDbOpsOpen = true;
+    setActiveTab("admin");
+    setAdminPanelSection("database");
+    renderAdminDatabaseDashboard();
+    return;
+  }
+  if (route === "database" || route === "region-db") {
+    state.adminDbViewMode = route === "region-db" ? "region" : "list";
+    setActiveTab("admin");
+    setAdminPanelSection("database");
+    renderAdminDatabaseDashboard();
+    return;
+  }
+  if (route === "region" || route === "region-review") {
+    setActiveTab("dictionary");
+    window.requestAnimationFrame(() => els.adminRegionAnalysisDashboard?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    return;
+  }
+  if (route === "members") {
+    setActiveTab("admin");
+    setAdminPanelSection("members");
+    return;
+  }
+  if (route === "settings") {
+    setActiveTab("admin");
+    setAdminPanelSection("files");
+    return;
+  }
+  if (route === "collect") {
+    setActiveTab("admin");
+    setAdminPanelSection("collect");
+    return;
+  }
+  if (route === "archive") {
+    setActiveTab("admin");
+    setAdminPanelSection("archive");
+    return;
+  }
+  if (route === "industry") {
+    setActiveTab("report");
+    return;
+  }
+  if (route === "history") setActiveTab("historyOps");
+}
+
 function bindAdminDbCompanySelectButtons() {
   document.querySelectorAll("[data-admin-db-company-select]").forEach((button) => {
     if (button.getAttribute("data-admin-db-select-bound") === "1") return;
@@ -30538,8 +30884,7 @@ function bindEvents() {
     button.addEventListener("click", () => {
       const adminPrimary = button.dataset.adminPrimary || "";
       if (adminPrimary && isAdminRole()) {
-        const section = ADMIN_MOBILE_SECTIONS[adminPrimary] || ADMIN_MOBILE_SECTIONS.summary;
-        activateAdminMobileNav(adminPrimary, section.target, section.anchor || "", section.adminPanelSection || "");
+        activateAdminPrimaryNav(adminPrimary);
         return;
       }
       if (button.dataset.tab) setActiveTab(button.dataset.tab);
@@ -30589,6 +30934,11 @@ function bindEvents() {
       window.requestAnimationFrame(() => els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" }));
       return;
     }
+    const adminHomeRoute = event.target.closest("[data-admin-home-route]");
+    if (adminHomeRoute) {
+      openAdminHomeRoute(adminHomeRoute.dataset.adminHomeRoute || "summary");
+      return;
+    }
     const archiveRun = event.target.closest("[data-archive-run-id]");
     if (archiveRun) {
       const runId = archiveRun.dataset.archiveRunId || "";
@@ -30620,7 +30970,7 @@ function bindEvents() {
     const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
     if (adminMobileSection) {
       const sectionKey = adminMobileSection.dataset.adminMobileSection || "summary";
-      const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.summary;
+      const section = ADMIN_COMPACT_SECTIONS[sectionKey] || ADMIN_COMPACT_SECTIONS.summary;
       const adminDbStatus = (section.items || []).find((item) => item.adminDbStatus)?.adminDbStatus || "";
       if (adminDbStatus) {
         state.adminDbFilters = { ...(state.adminDbFilters || {}), status: adminDbStatus };
@@ -30638,12 +30988,29 @@ function bindEvents() {
         state.adminDbViewMode = "list";
         state.adminDbOpsOpen = true;
       }
+      const adminDbViewMode = adminMobileTab.dataset.adminDbViewMode || "";
+      if (adminDbViewMode) state.adminDbViewMode = adminDbViewMode;
       activateAdminMobileNav(
         adminMobileTab.dataset.adminMobileSectionKey || state.adminMobileSection || "summary",
         adminMobileTab.dataset.adminMobileTab || "",
         adminMobileTab.dataset.adminMobileAnchor || "",
         adminMobileTab.dataset.adminPanelSectionKey || ""
       );
+      return;
+    }
+    const adminDesktopTab = event.target.closest("[data-admin-desktop-tab]");
+    if (adminDesktopTab) {
+      const viewMode = adminDesktopTab.dataset.adminDbViewMode || "";
+      if (viewMode) state.adminDbViewMode = viewMode;
+      const tab = adminDesktopTab.dataset.adminDesktopTab || "admin";
+      const panel = adminDesktopTab.dataset.adminPanelSectionKey || "";
+      const anchor = adminDesktopTab.dataset.adminDesktopAnchor || "";
+      setActiveTab(tab, { adminMobileSection: adminMobileSectionForTab(tab) });
+      if (tab === "admin" && panel) setAdminPanelSection(panel);
+      if (panel === "database") renderAdminDatabaseDashboard();
+      if (anchor) {
+        window.requestAnimationFrame(() => document.querySelector(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }
       return;
     }
     const adminSectionButton = event.target.closest("[data-admin-section]");
@@ -31145,7 +31512,7 @@ function bindEvents() {
     if (recrawlBatch) applyRecrawlBatchSetting(recrawlBatch);
     if (event.target.closest("[data-company-master-focus]")) {
       setActiveTab("admin");
-      setAdminPanelSection("files");
+      setAdminPanelSection("database");
       window.requestAnimationFrame(() => {
         els.companyMasterPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
       });

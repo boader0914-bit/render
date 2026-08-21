@@ -22832,6 +22832,7 @@ a.platform-row:hover {
    Explicit surface metadata replaces the legacy admin-only blue dashboard
    treatment on nested cards. New UI must use data-ui-surface instead of
    relying on a class-name suffix. */
+@media not all {
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] {
   border: 1px solid var(--card-border) !important;
   border-radius: var(--card-radius) !important;
@@ -23033,6 +23034,8 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .pr
 html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="files"] .primary-button {
   color: #0b120d !important;
 }
+
+} /* end disabled surface draft */
 
 .b2b-demand-playbook {
   min-width: 0;
@@ -27105,7 +27108,7 @@ body.role-b2b .structure-action-list li::before {
   box-shadow: 0 8px 18px rgba(106, 168, 255, .18);
 }
 
-body.role-admin {
+body.role-admin.legacy-admin-theme-disabled {
   color-scheme: dark;
   --bg: #0f1117;
   --panel: #171b22;
@@ -37864,6 +37867,7 @@ html[data-theme-resolved="dark"] :is(body.role-admin, body.role-b2b) .app-main >
 /* SABUN × BLACK unified surface contract v2
    One token set for every dashboard surface. Legacy blue rules above remain
    for backwards compatibility only; this final layer is the visual source of truth. */
+@media not all {
 :root {
   --card-radius: 12px;
   --card-radius-large: 14px;
@@ -38225,10 +38229,12 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(.hot, .bad, .d
     border-radius: var(--card-radius) !important;
   }
 }
+}
 
 /* UI surface contract v3
    Final explicit override for nested admin cards. This layer must remain last
    so legacy dashboard styles cannot reintroduce navy surfaces in light mode. */
+@media not all {
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-surface] {
   border: 1px solid var(--card-border) !important;
   border-radius: var(--card-radius) !important;
@@ -38387,4 +38393,5 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .pr
 
 html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="files"] .primary-button {
   color: #0b120d !important;
+}
 }

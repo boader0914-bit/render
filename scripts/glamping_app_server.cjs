@@ -6972,7 +6972,7 @@ function evaluateInventoryStructure(context = {}) {
 
   if (context.weeklyRawStockVariance || context.dayUseWeeklyRawStockVariance) {
     flags.push("dynamic_capacity");
-    notes.push("날짜별 총량 변동은 운영 기준과 일시 차단을 분리");
+    notes.push("날짜별 총량 변동은 오프라인·타 채널 판매 신호로 분리");
   }
 
   if (context.rawTotalStock && context.totalRooms && context.rawTotalStock !== context.totalRooms) {
@@ -6997,7 +6997,7 @@ function evaluateInventoryStructure(context = {}) {
   const action = flags.includes("booking_id_reused")
     ? "네이버 예약ID 재확인"
     : flags.includes("dynamic_capacity")
-      ? "전화예약·정비·채널조정 확인"
+      ? "오프라인·타 채널 판매 신호로 기록"
       : type === "grouped_stock"
         ? "상품명 범위와 stock 대조"
         : type === "room_type_stock"
@@ -7044,11 +7044,6 @@ function evaluateInventoryConfidence(context = {}) {
   const weeklyOperatingTotal = Number(context.weeklyOperatingTotal);
   const weeklyStructuralBlockedTotal = Number(context.weeklyStructuralBlockedTotal);
   const weeklyOfflineReservedTotal = Number(context.weeklyOfflineReservedTotal);
-  const weeklyMaxTotalDays = Number(context.weeklyMaxTotalDays);
-  const weeklyTotalVarianceGap = Number(context.weeklyTotalVarianceGap);
-  const weeklyVarianceRatio = Number.isFinite(weeklyBasisTotal) && weeklyBasisTotal > 0 && Number.isFinite(weeklyTotalVarianceGap)
-    ? weeklyTotalVarianceGap / weeklyBasisTotal
-    : 0;
   if (Number.isFinite(weeklyBasisTotal) && weeklyBasisTotal > 0 && context.weeklyDays >= 2) {
     score += 7;
     reasons.push("날짜별 숙박 총량 최대값을 전체 객실수 후보로 적용");
@@ -7080,20 +7075,9 @@ function evaluateInventoryConfidence(context = {}) {
 
   if (context.weeklyRawStockVariance) {
     const hasOfflineEstimate = Number.isFinite(weeklyOfflineReservedTotal) && weeklyOfflineReservedTotal > 0;
-    if (hasOfflineEstimate) {
-      reasons.push("운영 기준 미만 날짜는 오프라인 예약/일시 차단으로 보정");
-      score -= Number.isFinite(weeklyMaxTotalDays) && weeklyMaxTotalDays >= 2 ? 2 : 5;
-      alerts.push(Number.isFinite(weeklyMaxTotalDays) && weeklyMaxTotalDays < 2
-        ? "최대 총량 반복 확인 부족"
-        : "날짜별 총량 변동 재검토");
-    } else {
-      score -= 8;
-      alerts.push("날짜별 총량 변동");
-    }
-    if (weeklyVarianceRatio >= 0.35) {
-      score -= 5;
-      if (!alerts.includes("날짜별 총량 변동 큼")) alerts.push("날짜별 총량 변동 큼");
-    }
+    reasons.push(hasOfflineEstimate
+      ? "운영 기준 미만 날짜는 오프라인·타 채널 판매로 추정"
+      : "날짜별 총량 변동은 오프라인·타 채널 판매 신호로 기록");
   }
 
   if (context.rawTotalStock && context.totalRooms && context.rawTotalStock !== context.totalRooms) {
@@ -7111,7 +7095,7 @@ function evaluateInventoryConfidence(context = {}) {
   }
 
   if (structure.flags.includes("dynamic_capacity")) {
-    reasons.push("전화예약/정비/채널조정 가능성");
+    reasons.push("오프라인·타 채널 판매 가능성");
   }
 
   if (alerts.length) score = Math.min(score, 86);
@@ -9500,7 +9484,6 @@ function regionalOpsMaintenanceProfile(bucket = {}, status = {}) {
   const revenueGap = Math.max(0, 3 - Number(bucket.revenueSampleCount || 0));
   const reviewGap = Math.max(0, Math.min(companyCount, 5) - Number(bucket.adminReviewCount || 0));
   const riskCount = Number(bucket.lowConfidenceCount || 0)
-    + Number(bucket.stockVarianceCount || 0)
     + Number(bucket.structuralBlockedCount || 0)
     + Number(bucket.outsideExposureCount || 0);
   const sampleScore = Math.min(42, Number(bucket.reservationSampleCount || 0) * 4 + Number(bucket.revenueSampleCount || 0) * 5);
@@ -9508,7 +9491,6 @@ function regionalOpsMaintenanceProfile(bucket = {}, status = {}) {
   const scaleScore = Math.min(14, companyCount * 1.4);
   const riskPenalty = Math.min(44,
     Number(bucket.lowConfidenceCount || 0) * 7
-    + Number(bucket.stockVarianceCount || 0) * 6
     + Number(bucket.structuralBlockedCount || 0) * 5
     + Number(bucket.outsideExposureCount || 0) * 2
   );
@@ -9526,9 +9508,6 @@ function regionalOpsMaintenanceProfile(bucket = {}, status = {}) {
   }
   if (bucket.lowConfidenceCount) {
     addAction("quantity_correction", "수량 신뢰도 보정", `수량 신뢰도 낮은 업체 ${bucket.lowConfidenceCount}곳`, 86, "watch");
-  }
-  if (bucket.stockVarianceCount) {
-    addAction("capacity_review", "총량 변동 검토", `날짜별 총량 변동 ${bucket.stockVarianceCount}곳`, 82, "watch");
   }
   if (bucket.structuralBlockedCount) {
     addAction("maintenance_check", "미오픈/차단 확인", `오프라인 예약 또는 운영 차단 의심 ${bucket.structuralBlockedCount}곳`, 76, "watch");
@@ -9558,7 +9537,6 @@ function regionalOpsMaintenanceProfile(bucket = {}, status = {}) {
     + reservationGap * 9
     + revenueGap * 10
     + Number(bucket.lowConfidenceCount || 0) * 5
-    + Number(bucket.stockVarianceCount || 0) * 4
     + Number(bucket.structuralBlockedCount || 0) * 3
   )));
   const nextCycle = maintenancePriority >= 80
@@ -9588,7 +9566,7 @@ function regionalOpsMaintenanceProfile(bucket = {}, status = {}) {
 function regionalOpsStatus(bucket = {}) {
   const sampleScore = Math.min(40, (bucket.reservationSampleCount * 3) + (bucket.revenueSampleCount * 4) + (bucket.companyCount * 1.5));
   const correctionScore = Math.min(12, bucket.manualCorrectionCount * 3);
-  const riskPenalty = Math.min(35, (bucket.lowConfidenceCount * 5) + (bucket.stockVarianceCount * 4) + (bucket.outsideExposureCount * 2));
+  const riskPenalty = Math.min(35, (bucket.lowConfidenceCount * 5) + (bucket.outsideExposureCount * 2));
   const score = Math.max(0, Math.min(100, Math.round(45 + sampleScore + correctionScore - riskPenalty)));
   if (score >= 78 && bucket.reservationSampleCount >= 5 && bucket.revenueSampleCount >= 3) {
     return { key: "public_ready", label: "공개 가능", score };
@@ -9606,7 +9584,6 @@ function finalizeRegionalOpsBucket(bucket = {}) {
     : null;
   const reviewReasons = [
     bucket.lowConfidenceCount ? `수량 신뢰도 낮음 ${bucket.lowConfidenceCount}곳` : "",
-    bucket.stockVarianceCount ? `총량 변동 ${bucket.stockVarianceCount}곳` : "",
     bucket.outsideExposureCount ? `지역 밖 노출 ${bucket.outsideExposureCount}곳` : "",
     bucket.structuralBlockedCount ? `메인터넌스/차단 의심 ${bucket.structuralBlockedCount}곳` : "",
     bucket.reservationSampleCount < 5 ? "예약 표본 보강 필요" : "",
@@ -9646,6 +9623,9 @@ function finalizeRegionalOpsBucket(bucket = {}) {
     },
     maintenance,
     reviewReasons,
+    marketSignals: [
+      bucket.stockVarianceCount ? `오프라인·타 채널 판매 신호 ${bucket.stockVarianceCount}곳` : ""
+    ].filter(Boolean),
     sampleCompanies: bucket.sampleCompanies.slice(0, 8)
   };
 }
@@ -10021,7 +10001,7 @@ function buildRegionalOperationsFromItems({ basis = "run", items = [], run = {},
     rules: [
       "실제 주소 지역을 우선 적용하고 없으면 수집 지역, 검색 기준 지역 순서로 분류합니다.",
       "검색 기준과 실제 소재 지역이 다르면 지역 밖 노출로 별도 집계합니다.",
-      "예약 표본, 매출 표본, 수량 신뢰도, 총량 변동, 관리자 보정 여부를 지역 공개 품질의 기초 지표로 저장합니다."
+      "예약 표본, 매출 표본, 수량 신뢰도, 관리자 보정 여부를 지역 공개 품질의 기초 지표로 저장하고 총량 변동은 오프라인·타 채널 판매 신호로 분리합니다."
     ]
   };
 }
@@ -10106,7 +10086,7 @@ function companySalesTargetSignals(company = {}) {
   const bookingIdReused = Boolean(signal.bookingIdReused || structureFlags.includes("booking_id_reused"));
   const productNamingReview = Boolean(structureWeak || bookingIdReused || signal.groupedStock);
   const dayUseMissing = Boolean(signal.dayUseMissing && (lodging.totalSupply || lodging.days));
-  const otaReviewNeeded = Boolean(structureWeak || stockVariance || bookingIdReused);
+  const otaReviewNeeded = Boolean(structureWeak || bookingIdReused);
   const normalizedCouponSignal = naverCouponSignalFromItem({
     naverCouponStatus: couponSignal.status || signal.naverCouponStatus || "",
     naverCouponNames: couponSignal.names || signal.naverCouponNames || "",
@@ -10158,7 +10138,7 @@ function companySalesTargetSignalReasons(signals = {}) {
   add(signals.weekdayWeak, 5, "평일 약함", "월~목 평균 판매가 낮아 평일 패키지/타깃 보완 여지");
   add(signals.dayUseMissing, 5, "당일상품 공백", "데이유즈/캠프닉 확인 수량이 없어 당일상품 확장 검토");
   add(signals.structureWeak, 6, "수량구조 확인", "객실 수량 구조가 흔들려 총량/상품 단위 검증 필요");
-  add(signals.stockVariance, 5, "재고조정 반영", "전체객실수 후보와 운영 판매 기준을 분리하고 운영 기준 미만만 전화예약/차단 가능성");
+  add(signals.stockVariance, 5, "오프라인 판매 신호", "날짜별 총량 차이는 오프라인·타 채널 판매 가능성으로 분석에 반영");
   add(signals.bookingIdReused, 5, "예약ID 확인", "예약ID 또는 상품 구조 재사용 가능성이 있어 네이버 상품 구조 재확인 필요");
   add(signals.productNamingReview, 4, "상품명 검토", "네이버 예약 상품명/구성이 고객 관점에서 재정리될 여지");
   add(signals.otaReviewNeeded, 4, "OTA 확인", "판단이 흔들리는 업체로 OTA/채널 비교 확인 필요");
@@ -13197,8 +13177,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260819-dark-surface-coherence-v6"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260819-dark-surface-coherence-v6"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260821-nav-icons-v9"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260821-nav-icons-v9"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260821-nav-icons-v9"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

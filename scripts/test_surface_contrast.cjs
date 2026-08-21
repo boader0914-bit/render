@@ -326,7 +326,27 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("theme-rebuild-v25") && serviceWorker.includes('"/admin-theme.css"'),
+  app.includes("const ADMIN_NAV_ICON_PATHS = Object.freeze({")
+    && app.includes('class="admin-nav-icon"')
+    && app.includes('stroke="currentColor"')
+    && app.includes('class="admin-nav-icon-shell"'),
+  "admin navigation must use the shared currentColor SVG icon system",
+  failures
+);
+
+const adminNavMetaBlock = app.slice(
+  app.indexOf("const ADMIN_NAV_META ="),
+  app.indexOf("const ADMIN_NAV_ICON_PATHS =")
+);
+
+assert(
+  adminNavMetaBlock.length > 0 && !/[⌂▣⇩▥⌖♙⚙•]/.test(adminNavMetaBlock),
+  "admin navigation must not regress to font-dependent symbol icons",
+  failures
+);
+
+assert(
+  serviceWorker.includes("nav-icons-v28") && serviceWorker.includes('"/admin-theme.css"'),
   "service worker cache must refresh the theme rebuild release",
   failures
 );
