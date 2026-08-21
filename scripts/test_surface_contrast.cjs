@@ -8,12 +8,14 @@ const appPath = path.join(root, "web", "app.js");
 const indexPath = path.join(root, "web", "index.html");
 const serviceWorkerPath = path.join(root, "web", "sw.js");
 const serverPath = path.join(root, "scripts", "glamping_app_server.cjs");
+const crawlerPath = path.join(root, "scripts", "gyeongnam_glamping_crawl.cjs");
 const styles = fs.readFileSync(stylesPath, "utf8");
 const themeStyles = fs.readFileSync(themePath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
 const indexHtml = fs.readFileSync(indexPath, "utf8");
 const serviceWorker = fs.readFileSync(serviceWorkerPath, "utf8");
 const server = fs.readFileSync(serverPath, "utf8");
+const crawler = fs.readFileSync(crawlerPath, "utf8");
 
 const requiredMarkers = [
   "Surface contrast contract v3",
@@ -350,16 +352,97 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("place-rank-tag-v30") && serviceWorker.includes('"/admin-theme.css"'),
+  serviceWorker.includes("collection-screen-v32") && serviceWorker.includes('"/admin-theme.css"'),
   "service worker cache must refresh the theme rebuild release",
   failures
 );
 
 assert(
-  server.includes('styles.css?v=v2-20260821-place-rank-tag-v11')
-    && server.includes('admin-theme.css?v=v2-20260821-place-rank-tag-v11')
-    && server.includes('app.js?v=v2-20260821-place-rank-tag-v11'),
+  server.includes('styles.css?v=v2-20260821-collection-screen-v14')
+    && server.includes('admin-theme.css?v=v2-20260821-collection-screen-v14')
+    && server.includes('app.js?v=v2-20260821-collection-screen-v14'),
   "server asset query versions must refresh styles, theme, and app together",
+  failures
+);
+
+const crawlFormMatch = indexHtml.match(/<form class="admin-card" id="crawlForm">([\s\S]*?)<\/form>/);
+const crawlFormMarkup = crawlFormMatch?.[1] || "";
+const purposeOptionsMarkup = crawlFormMarkup.match(/<div class="crawl-purpose-options">([\s\S]*?)<\/div>/)?.[1] || "";
+const purposeButtons = [...crawlFormMarkup.matchAll(/data-collection-purpose="([^"]+)"/g)].map((match) => match[1]);
+const ensureCrawlControlsBlock = app.slice(
+  app.indexOf("function ensureCrawlControls()"),
+  app.indexOf("function searchModeLabel", app.indexOf("function ensureCrawlControls()"))
+);
+const currentCrawlPayloadBlock = app.slice(
+  app.indexOf("function currentCrawlFormPayload()"),
+  app.indexOf("function selectedCrawlSpeedPresetKey", app.indexOf("function currentCrawlFormPayload()"))
+);
+
+assert(
+  crawlFormMarkup.includes("<h3>키워드</h3>") && !crawlFormMarkup.includes("새 수집"),
+  "collection form must use keyword as the heading without the old new-collection title",
+  failures
+);
+
+assert(
+  /id="searchModeInput" type="hidden" value="keyword"/.test(crawlFormMarkup)
+    && /id="productModeInput" type="hidden" value="all"/.test(crawlFormMarkup)
+    && ensureCrawlControlsBlock.includes('modeInput.type = "hidden"')
+    && !ensureCrawlControlsBlock.includes("<select"),
+  "collection mode and product scope must stay hidden while preserving internal values",
+  failures
+);
+
+assert(
+  crawlFormMarkup.includes("<span>시작일</span>")
+    && crawlFormMarkup.includes("<span>종료일</span>")
+    && !crawlFormMarkup.includes("<span>체크인</span>"),
+  "collection date labels must read start and end date",
+  failures
+);
+
+assert(
+  purposeButtons.length === 2
+    && purposeButtons[0] === "basic_db"
+    && purposeButtons[1] === "revenue_detail"
+    && !crawlFormMarkup.includes('data-collection-purpose="demand_location"')
+    && !crawlFormMarkup.includes("crawlPurposeRoutePreview")
+    && !/<(?:span|em)\b/.test(purposeOptionsMarkup),
+  "collection form must expose only the two simplified collection purposes",
+  failures
+);
+
+assert(
+  /id="collectionPurposeInput" type="hidden" value="basic_db"/.test(crawlFormMarkup)
+    && /id="detailRankEndInput"[^>]*value="40"[^>]*max="40"/.test(crawlFormMarkup)
+    && /id="detailRankRangesInput" type="hidden" value="1-40"/.test(crawlFormMarkup),
+  "basic collection must start at 1-40 with an editable end-rank control",
+  failures
+);
+
+assert(
+  /basic_db:\s*\{[\s\S]*?defaultRange:\s*"1-40"/.test(app)
+    && /revenue_detail:\s*\{[\s\S]*?defaultRange:\s*"1-20"/.test(app)
+    && currentCrawlPayloadBlock.includes('productMode: "all"'),
+  "client collection defaults must be basic 1-40, detail 1-20, and all products",
+  failures
+);
+
+assert(
+  /\.crawl-purpose-options\s*\{[^}]*grid-template-columns:\s*repeat\(2,/i.test(styles)
+    && /\.crawl-rank-range-control\s*\{[^}]*grid-template-columns:/i.test(styles),
+  "collection purpose buttons and editable rank range must keep the simplified responsive layout",
+  failures
+);
+
+assert(
+  /if \(purpose === "basic_db"\) return "1-40";[\s\S]*?return "1-20";/.test(server)
+    && /if \(purpose === "basic_db"\) return "1-40";[\s\S]*?return "1-20";/.test(crawler)
+    && server.includes("NAVER_BOOKING_STOCK_LIMIT: String(plan.bookingStockPlaceLimit)")
+    && crawler.includes("NAVER_BOOKING_STOCK_LIMIT > 0 ? NAVER_BOOKING_STOCK_LIMIT : 20")
+    && crawler.includes("const items = [...nightItems, ...unknownItems];")
+    && server.includes("items: items.slice(0, 40)"),
+  "server and crawler must honor the simplified collection ranges through the stored result boundary",
   failures
 );
 

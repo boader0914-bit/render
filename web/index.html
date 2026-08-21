@@ -239,14 +239,14 @@
         <section class="admin-section-panel" data-admin-section-panel="collect" aria-label="수집 실행">
         <div class="admin-stack admin-stack-collect">
           <form class="admin-card" id="crawlForm">
-            <h3>새 수집</h3>
-            <label class="field">
-              <span>키워드</span>
-              <input id="keywordInput" type="text" value="경북글램핑" autocomplete="off">
+            <h3>키워드</h3>
+            <label class="field crawl-keyword-field">
+              <span class="sr-only">키워드</span>
+              <input id="keywordInput" type="text" value="경북글램핑" autocomplete="off" aria-label="키워드">
             </label>
             <div class="field-grid">
               <label class="field">
-                <span>체크인</span>
+                <span>시작일</span>
                 <input id="checkInInput" type="date">
               </label>
               <label class="field">
@@ -254,45 +254,33 @@
                 <input id="checkOutInput" type="date">
               </label>
             </div>
-            <label class="field">
-              <span>상품 범위</span>
-              <select id="productModeInput">
-                <option value="all">전체</option>
-                <option value="lodging">숙박</option>
-                <option value="campnic">데이유즈/캠프닉</option>
-              </select>
-            </label>
-            <input id="collectionPurposeInput" type="hidden" value="revenue_detail">
+            <input id="searchModeInput" type="hidden" value="keyword">
+            <input id="productModeInput" type="hidden" value="all">
+            <input id="collectionPurposeInput" type="hidden" value="basic_db">
             <input id="collectionModeInput" type="hidden" value="precision">
             <section class="crawl-purpose-panel" aria-label="수집 목적">
               <div class="crawl-purpose-head">
                 <strong>수집 목적</strong>
-                <span>DB를 어떤 깊이로 채울지 먼저 선택합니다.</span>
               </div>
               <div class="crawl-purpose-options">
-                <button type="button" data-collection-purpose="basic_db">
+                <button type="button" data-collection-purpose="basic_db" class="active" aria-pressed="true">
                   <strong>기본정보 수집</strong>
-                  <span>순위·상품·상품별 금액·예약채널</span>
-                  <em>권장 1-50위</em>
                 </button>
-                <button type="button" data-collection-purpose="revenue_detail" class="active">
+                <button type="button" data-collection-purpose="revenue_detail" aria-pressed="false">
                   <strong>상세정보 수집</strong>
-                  <span>요일별 매출·예약율·수량·가격·OTA</span>
-                  <em>권장 1-10위</em>
-                </button>
-                <button type="button" data-collection-purpose="demand_location">
-                  <strong>지역정보 수집</strong>
-                  <span>수요·입지·클러스터</span>
-                  <em>권장 1-20위</em>
                 </button>
               </div>
             </section>
-            <div class="crawl-route-preview" id="crawlPurposeRoutePreview" aria-live="polite"></div>
             <label class="field crawl-rank-range-field">
-              <span>순위 범위</span>
-              <input id="detailRankRangesInput" type="text" value="1-10" placeholder="예: 1-10, 1-50, 1-100">
-              <small>수집 목적에 따라 자동 설정되며 직접 수정할 수 있습니다.</small>
+              <span>수집 범위</span>
+              <span class="crawl-rank-range-control">
+                <b>1위</b>
+                <i aria-hidden="true">~</i>
+                <input id="detailRankEndInput" type="number" value="40" min="1" max="40" step="1" inputmode="numeric" aria-label="종료 순위">
+                <b>위</b>
+              </span>
             </label>
+            <input id="detailRankRangesInput" type="hidden" value="1-40">
             <div class="crawl-progress is-preview" id="crawlProgress">
               <span class="crawl-spinner" aria-hidden="true"></span>
               <div class="crawl-progress-copy">
@@ -313,7 +301,7 @@
               <button class="primary-button" type="submit">수집 실행</button>
               <span id="crawlSubmitMeta">예상 시간 계산 중</span>
             </div>
-            <p class="hint" id="crawlStatus">수집 목적과 순위 범위를 확인한 뒤 실행하세요.</p>
+            <p class="hint" id="crawlStatus">수집 목적과 범위를 확인한 뒤 실행하세요.</p>
             <p class="legal-inline-notice">수집 실행 전 <a href="/data-collection-notice" target="_blank" rel="noopener">데이터 수집 범위</a>와 <a href="/collection-failure-notice" target="_blank" rel="noopener">수집 실패 가능성</a>을 확인하세요.</p>
           </form>
 

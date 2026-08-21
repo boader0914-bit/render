@@ -69,9 +69,9 @@ function normalizeCollectionPurpose(value) {
 
 function collectionPurposeDefaultRange(value) {
   const purpose = normalizeCollectionPurpose(value);
-  if (purpose === "basic_db") return "1-50";
+  if (purpose === "basic_db") return "1-40";
   if (purpose === "demand_location") return "1-20";
-  return "1-10";
+  return "1-20";
 }
 
 function collectionExecutionProfile(purposeValue, modeValue = "precision") {
@@ -118,8 +118,8 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   }
   return {
     key: "revenue_detail_deep",
-    label: "상세 매출 중심",
-    note: "예약 수량, 요일별 가격, 기간별 예상 매출과 보조 채널을 함께 확인합니다.",
+    label: "기본정보 + 예상 판매율",
+    note: "기본정보와 예상 판매율을 함께 확인합니다.",
     collectRegional: true,
     collectOta: true,
     collectBookingStock: true,
@@ -159,17 +159,22 @@ function rankRangeLabel(ranges = []) {
     : "없음";
 }
 
-function rankRangePlaceLimit(ranges = []) {
+function rankRangeCount(ranges = [], maximum = 100) {
+  const limit = boundedInteger(maximum, 100, 1, 100);
   const ranks = new Set();
   for (const range of ranges) {
     const from = boundedInteger(range.from, 0, 1, 100);
     const to = boundedInteger(range.to, from, 1, 100);
     for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
       ranks.add(rank);
-      if (ranks.size >= 20) return 20;
+      if (ranks.size >= limit) return limit;
     }
   }
-  return Math.max(0, Math.min(20, ranks.size));
+  return Math.max(0, Math.min(limit, ranks.size));
+}
+
+function rankRangePlaceLimit(ranges = []) {
+  return Math.min(20, rankRangeCount(ranges, 20));
 }
 
 function rankInRanges(rank, ranges = []) {
@@ -649,7 +654,12 @@ const XLSX_CELL_TEXT_LIMIT = 32000;
 const detailJsonFiles = [];
 const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const REGIONAL_SEARCH_CONCURRENCY = boundedInteger(process.env.REGIONAL_SEARCH_CONCURRENCY, 4, 1, 8);
-const NAVER_BOOKING_STOCK_LIMIT = Number(process.env.NAVER_BOOKING_STOCK_LIMIT || 20);
+const NAVER_BOOKING_STOCK_LIMIT = boundedInteger(
+  process.env.NAVER_BOOKING_STOCK_LIMIT,
+  COLLECTION_PURPOSE === "basic_db" ? Math.min(40, rankRangeCount(DETAIL_RANK_RANGES, 100)) : Math.min(20, rankRangeCount(DETAIL_RANK_RANGES, 100)),
+  0,
+  100
+);
 const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, 2, 1, 4);
 const NAVER_SCHEDULE_CONCURRENCY = boundedInteger(process.env.NAVER_SCHEDULE_CONCURRENCY, 4, 1, 8);
 const NAVER_SCHEDULE_DELAY_MS = boundedInteger(process.env.NAVER_SCHEDULE_DELAY_MS, 35, 0, 500);
@@ -2232,7 +2242,7 @@ async function collectNaverBookingAvailability(placeId, cache, options = {}) {
   const nightItems = allItems.filter((item) => naverBookingSaleType(item) === "숙박");
   const dayUseItems = allItems.filter((item) => naverBookingSaleType(item) === "데이유즈");
   const unknownItems = allItems.filter((item) => naverBookingSaleType(item) === "미분류");
-  const items = nightItems.length ? nightItems : unknownItems;
+  const items = [...nightItems, ...unknownItems];
   const schedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, items, 40);
   const dayUseSchedules = await collectNaverSchedulesForItems(booking.bookingBusinessId, dayUseItems, 20);
   const couponSeed = summarizeNaverCouponExposure([
@@ -2928,7 +2938,7 @@ function naverRevenueFields(row = {}) {
 
 function toPlatformRows(naver, nol, yeogi, ddnayo) {
   const rows = [
-    ...naver.overall.slice(0, 20).map((row) => ({
+    ...naver.overall.slice(0, NAVER_BOOKING_STOCK_LIMIT > 0 ? NAVER_BOOKING_STOCK_LIMIT : 20).map((row) => ({
       channel: "네이버",
       section: "비광고",
       rank_or_order: row.overall_rank,

@@ -478,6 +478,7 @@ const els = {
   collectionPurposeInput: document.getElementById("collectionPurposeInput"),
   collectionModeInput: document.getElementById("collectionModeInput"),
   detailRankRangesInput: document.getElementById("detailRankRangesInput"),
+  detailRankEndInput: document.getElementById("detailRankEndInput"),
   crawlPurposeRoutePreview: document.getElementById("crawlPurposeRoutePreview"),
   crawlSpeedPresetRow: document.getElementById("crawlSpeedPresetRow"),
   crawlSpeedPreview: document.getElementById("crawlSpeedPreview"),
@@ -704,7 +705,7 @@ const COLLECTION_PURPOSE_PROFILES = {
     key: "basic_db",
     label: "기본정보 수집",
     shortLabel: "기본정보",
-    defaultRange: "1-50",
+    defaultRange: "1-40",
     note: "순위, 상품 및 상품별 금액, 예약채널을 넓게 확보",
     status: "업체 기본정보 DB를 채우는 수집입니다."
   },
@@ -712,9 +713,9 @@ const COLLECTION_PURPOSE_PROFILES = {
     key: "revenue_detail",
     label: "상세정보 수집",
     shortLabel: "상세정보",
-    defaultRange: "1-10",
-    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 취합",
-    status: "요일별 매출과 예약율 판단에 필요한 상세정보를 수집합니다."
+    defaultRange: "1-20",
+    note: "기본정보와 예상 판매율을 함께 확인",
+    status: "기본정보와 예상 판매율 판단에 필요한 상세정보를 수집합니다."
   },
   demand_location: {
     key: "demand_location",
@@ -736,8 +737,8 @@ const COLLECTION_PURPOSE_EXECUTION_PROFILES = {
     collectWeeklyRange: false
   },
   revenue_detail: {
-    depthLabel: "상세정보 중심",
-    depthNote: "기간 매출 포함",
+    depthLabel: "기본정보 + 예상 판매율",
+    depthNote: "예상 판매율 포함",
     collectRegional: true,
     collectOta: true,
     collectBookingStock: true,
@@ -763,22 +764,22 @@ const COLLECTION_PURPOSE_UI_COPY = {
     dbTarget: "업체 기준값",
     dbApplyText: "기본정보 반영",
     excludeText: "기간별 매출 누적 제외",
-    rangeHint: "권장 1-50위 · 최대 1-100위",
+    rangeHint: "기본 1-40위",
     depthLabel: "기본정보 중심",
     depthNote: "기간 매출 제외"
   },
   revenue_detail: {
     label: "상세정보 수집",
     shortLabel: "상세정보",
-    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 취합합니다.",
-    status: "요일별 매출과 예약율 판단에 필요한 상세정보를 수집합니다.",
-    cardSummary: "요일별 매출·예약율·수량·가격·OTA",
+    note: "기본정보와 예상 판매율을 함께 확인합니다.",
+    status: "기본정보와 예상 판매율 판단에 필요한 상세정보를 수집합니다.",
+    cardSummary: "기본정보·예상 판매율",
     dbTarget: "매출 이력",
     dbApplyText: "매출 히스토리 반영",
     excludeText: "범위 밖 업체는 매출 누적 제외",
-    rangeHint: "권장 1-10위 · 확장 1-20위",
-    depthLabel: "상세정보 중심",
-    depthNote: "기간 매출 포함"
+    rangeHint: "기본 1-20위",
+    depthLabel: "기본정보 + 예상 판매율",
+    depthNote: "예상 판매율 포함"
   },
   demand_location: {
     label: "지역정보 수집",
@@ -803,6 +804,10 @@ function normalizeCollectionPurpose(value) {
   return "revenue_detail";
 }
 
+function normalizeCrawlFormPurpose(value) {
+  return normalizeCollectionPurpose(value) === "basic_db" ? "basic_db" : "revenue_detail";
+}
+
 function collectionPurposeProfile(value) {
   const key = normalizeCollectionPurpose(value);
   return {
@@ -817,7 +822,7 @@ function collectionPurposeLabel(value) {
 }
 
 function collectionPurposeDefaultRange(value) {
-  return collectionPurposeProfile(value).defaultRange || "1-10";
+  return collectionPurposeProfile(value).defaultRange || "1-20";
 }
 
 function normalizedRankRangeText(value = "") {
@@ -825,6 +830,51 @@ function normalizedRankRangeText(value = "") {
     .normalize("NFKC")
     .replace(/[~–—]/g, "-")
     .replace(/\s+/g, "");
+}
+
+function collectionPurposeMaxRank(value) {
+  return normalizeCrawlFormPurpose(value) === "basic_db" ? 40 : 20;
+}
+
+function rankRangeEndFromText(value = "", fallback = "1-20") {
+  const source = normalizedRankRangeText(value) || normalizedRankRangeText(fallback);
+  const ranks = [];
+  source.split(",").forEach((part) => {
+    const match = part.match(/^(\d{1,3})(?:-(\d{1,3}))?$/);
+    if (!match) return;
+    ranks.push(Number(match[1]), Number(match[2] || match[1]));
+  });
+  const validRanks = ranks.filter(Number.isFinite);
+  if (!validRanks.length && source !== normalizedRankRangeText(fallback)) {
+    return rankRangeEndFromText(fallback, "1-20");
+  }
+  return Math.max(1, Math.min(100, Math.max(...validRanks, 1)));
+}
+
+function canonicalCrawlFormRange(value = "", purposeValue = "basic_db") {
+  const isBasic = String(purposeValue || "").trim() === "basic_db";
+  const fallback = isBasic ? "1-40" : "1-20";
+  const maxRank = isBasic ? 40 : 20;
+  return `1-${Math.min(maxRank, rankRangeEndFromText(value, fallback))}`;
+}
+
+function setDetailRankRange(value = "", purposeValue = els.collectionPurposeInput?.value || "basic_db") {
+  const purpose = collectionPurposeProfile(normalizeCrawlFormPurpose(purposeValue));
+  const maxRank = collectionPurposeMaxRank(purpose.key);
+  const canonicalRange = canonicalCrawlFormRange(value || purpose.defaultRange, purpose.key);
+  const endRank = rankRangeEndFromText(canonicalRange, purpose.defaultRange);
+  if (els.detailRankRangesInput) els.detailRankRangesInput.value = canonicalRange;
+  if (els.detailRankEndInput) {
+    els.detailRankEndInput.max = String(maxRank);
+    els.detailRankEndInput.value = String(endRank);
+  }
+  return endRank;
+}
+
+function syncDetailRankRangeFromEnd() {
+  const purpose = collectionPurposeProfile(els.collectionPurposeInput?.value || "basic_db");
+  const rawEndRank = String(els.detailRankEndInput?.value || "").trim();
+  return setDetailRankRange(rawEndRank ? `1-${rawEndRank}` : purpose.defaultRange, purpose.key);
 }
 
 function rankRangeCountFromText(value = "", fallback = "1-10") {
@@ -857,9 +907,7 @@ function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.valu
   if (purpose === "basic_db") {
     return [
       { key: "top10", label: "1-20위", collectionMode: "precision", range: "1-20", note: "작은 지역 기본정보 확인", collectionPurpose: "basic_db" },
-      { key: "top20", label: "1-50위", collectionMode: "precision", range: "1-50", note: "기본정보 권장", collectionPurpose: "basic_db" },
-      { key: "top50", label: "1-100위", collectionMode: "precision", range: "1-100", note: "넓은 후보 확보", collectionPurpose: "basic_db" },
-      { key: "top100", label: "10-100위", collectionMode: "precision", range: "10-100", note: "상위권 제외 보강", collectionPurpose: "basic_db" }
+      { key: "top20", label: "1-40위", collectionMode: "precision", range: "1-40", note: "기본정보 권장", collectionPurpose: "basic_db" }
     ];
   }
   if (purpose === "demand_location") {
@@ -873,8 +921,7 @@ function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.valu
   return [
     { key: "top10", label: "1-5위", collectionMode: "precision", range: "1-5", note: "핵심 경쟁사 정밀", collectionPurpose: "revenue_detail" },
     { key: "top20", label: "1-10위", collectionMode: "precision", range: "1-10", note: "상세 매출 권장", collectionPurpose: "revenue_detail" },
-    { key: "top50", label: "1-20위", collectionMode: "precision", range: "1-20", note: "확장 매출 비교", collectionPurpose: "revenue_detail" },
-    { key: "top100", label: "10-20위", collectionMode: "precision", range: "10-20", note: "중위권 보강", collectionPurpose: "revenue_detail" }
+    { key: "top50", label: "1-20위", collectionMode: "precision", range: "1-20", note: "상세정보 권장", collectionPurpose: "revenue_detail" }
   ];
 }
 
@@ -883,7 +930,7 @@ function currentCrawlFormPayload() {
   const requestedMode = els.searchModeInput?.value || "keyword";
   const resolvedMode = correctedSearchMode(keyword, requestedMode);
   const collectionMode = "precision";
-  const collectionPurpose = normalizeCollectionPurpose(els.collectionPurposeInput?.value || "revenue_detail");
+  const collectionPurpose = normalizeCrawlFormPurpose(els.collectionPurposeInput?.value || "basic_db");
   const purpose = collectionPurposeProfile(collectionPurpose);
   const defaultRange = purpose.defaultRange || collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
@@ -894,7 +941,7 @@ function currentCrawlFormPayload() {
     checkOut: els.checkOutInput?.value || "",
     searchMode: resolvedMode,
     requestedMode,
-    productMode: els.productModeInput?.value || "all",
+    productMode: "all",
     collectionPurpose,
     collectionMode,
     detailRankRanges,
@@ -1408,10 +1455,7 @@ function applyCrawlSpeedPreset(key = "") {
   if (!preset) return;
   if (els.collectionPurposeInput && preset.collectionPurpose) els.collectionPurposeInput.value = preset.collectionPurpose;
   if (els.collectionModeInput) els.collectionModeInput.value = preset.collectionMode;
-  if (els.detailRankRangesInput) {
-    els.detailRankRangesInput.value = preset.range;
-    els.detailRankRangesInput.disabled = false;
-  }
+  setDetailRankRange(preset.range, preset.collectionPurpose || currentPurpose);
   syncCollectionModeInputs();
   updateCrawlSpeedPreview();
   if (els.crawlStatus) {
@@ -1424,39 +1468,31 @@ function applyCrawlSpeedPreset(key = "") {
 
 function syncCollectionModeInputs() {
   if (els.collectionPurposeInput) {
-    els.collectionPurposeInput.value = normalizeCollectionPurpose(els.collectionPurposeInput.value || "revenue_detail");
+    els.collectionPurposeInput.value = normalizeCrawlFormPurpose(els.collectionPurposeInput.value || "basic_db");
   }
-  const purpose = collectionPurposeProfile(els.collectionPurposeInput?.value || "revenue_detail");
+  const purpose = collectionPurposeProfile(els.collectionPurposeInput?.value || "basic_db");
   if (els.collectionModeInput) els.collectionModeInput.value = "precision";
-  if (els.detailRankRangesInput) {
-    els.detailRankRangesInput.disabled = false;
-    els.detailRankRangesInput.placeholder = "예: 1-10, 1-50, 1-100";
-    if (!els.detailRankRangesInput.value.trim()) els.detailRankRangesInput.value = purpose.defaultRange;
-  }
+  if (els.productModeInput) els.productModeInput.value = "all";
+  setDetailRankRange(els.detailRankRangesInput?.value || purpose.defaultRange, purpose.key);
   els.crawlForm?.querySelectorAll("[data-collection-purpose]").forEach((button) => {
     const buttonPurpose = collectionPurposeProfile(button.dataset.collectionPurpose);
     button.classList.toggle("active", buttonPurpose.key === purpose.key);
     button.setAttribute("aria-pressed", buttonPurpose.key === purpose.key ? "true" : "false");
-    button.title = `${buttonPurpose.depthLabel || buttonPurpose.label} · ${buttonPurpose.depthNote || buttonPurpose.note || ""}`;
+    button.title = buttonPurpose.label;
     const title = button.querySelector("strong");
-    const summary = button.querySelector("span");
-    const helper = button.querySelector("em");
     if (title) title.textContent = buttonPurpose.label;
-    if (summary) summary.textContent = buttonPurpose.cardSummary || buttonPurpose.note || "";
-    if (helper) helper.textContent = `${buttonPurpose.dbApplyText || buttonPurpose.depthNote || ""} · ${buttonPurpose.rangeHint || buttonPurpose.defaultRange}`;
   });
   updateCrawlSpeedPreview();
 }
 
-function selectCollectionPurpose(value = "revenue_detail") {
+function selectCollectionPurpose(value = "basic_db") {
   const purpose = collectionPurposeProfile(value);
   if (els.collectionPurposeInput) els.collectionPurposeInput.value = purpose.key;
-  if (els.detailRankRangesInput) {
-    els.detailRankRangesInput.value = purpose.defaultRange;
-  }
+  setDetailRankRange(purpose.defaultRange, purpose.key);
   syncCollectionModeInputs();
   if (els.crawlStatus) {
-    els.crawlStatus.textContent = `${purpose.label} 선택 · ${purpose.status} ${purpose.rangeHint || "순위 범위는 직접 조정할 수 있습니다."}`;
+    const endRank = rankRangeEndFromText(purpose.defaultRange, purpose.defaultRange);
+    els.crawlStatus.textContent = `${purpose.label} · 1위~${fmtNumber(endRank)}위`;
   }
 }
 
@@ -2163,18 +2199,12 @@ function ensureCrawlControls() {
   if (!els.crawlForm) return;
 
   if (!els.searchModeInput) {
-    const keywordLabel = els.keywordInput?.closest(".field");
-    const modeLabel = document.createElement("label");
-    modeLabel.className = "field";
-    modeLabel.innerHTML = `
-      <span>수집 모드</span>
-      <select id="searchModeInput">
-        <option value="keyword">키워드/권역</option>
-        <option value="company">업체명</option>
-      </select>
-    `;
-    keywordLabel?.after(modeLabel);
-    els.searchModeInput = modeLabel.querySelector("#searchModeInput");
+    const modeInput = document.createElement("input");
+    modeInput.type = "hidden";
+    modeInput.id = "searchModeInput";
+    modeInput.value = "keyword";
+    els.crawlForm.append(modeInput);
+    els.searchModeInput = modeInput;
   }
 
   if (!els.crawlProgress) {
@@ -2227,10 +2257,10 @@ function formatClockTime(value) {
 
 function crawlEstimateBasisText(basis = {}) {
   if (!basis || !Object.keys(basis).length) return "조건 기반 예상값입니다.";
-  const range = Number(basis.bookingRangeDays) > 1
+  const range = basis.collectWeeklyRange && Number(basis.bookingRangeDays) > 1
     ? `${fmtNumber(basis.bookingRangeDays)}일 · 상세 대상 중 최대 ${fmtNumber(basis.bookingRangePlaceLimit)}개`
-    : "1일 기준";
-  const detail = `수집 범위 ${basis.detailRankRanges || "1-10"}위`;
+    : `기준일 상품 최대 ${fmtNumber(basis.bookingStockPlaceLimit || 0)}개`;
+  const detail = `수집 범위 ${basis.detailRankRanges || "1-20"}위`;
   const timing = basis.timing || {};
   let timingText = "예상 기준: 조건 모델";
   if (timing.source === "measured") {
@@ -2255,12 +2285,16 @@ function crawlPreviewMeta(payload = {}) {
   const fast = payload.collectionMode === "fast";
   const purpose = collectionPurposeProfile(payload.collectionPurpose || "revenue_detail");
   const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
+  const bookingStockPlaceLimit = !fast && purpose.collectBookingStock
+    ? Math.min(purpose.key === "basic_db" ? 40 : 20, rangeCount)
+    : 0;
   const placeLimit = days > 1 && !fast && purpose.collectWeeklyRange
     ? Math.max(0, Math.min(20, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange))))
     : 0;
   const searchSeconds = payload.searchMode === "company" ? 55 : 95;
   const trendSeconds = payload.searchMode === "keyword" ? (purpose.key === "demand_location" ? 55 : 25) : 10;
-  const productSeconds = fast || !purpose.collectBookingStock ? 0 : (payload.productMode === "all" ? 45 : 26);
+  const productScale = Math.max(1, bookingStockPlaceLimit / 20);
+  const productSeconds = fast || !purpose.collectBookingStock ? 0 : (payload.productMode === "all" ? 45 : 26) * productScale;
   const rangeSeconds = !fast && placeLimit
     ? placeLimit * days * (payload.productMode === "all" ? 5.5 : 4.2)
     : 0;
@@ -2327,6 +2361,7 @@ function crawlPreviewMeta(payload = {}) {
       detailRankRanges: payload.detailRankRanges,
       bookingRangeDays: days,
       bookingRangePlaceLimit: placeLimit,
+      bookingStockPlaceLimit,
       rankRangeCount: rangeCount
     }
   };
@@ -16626,9 +16661,7 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
   const keywordPlan = companyRecrawlKeywordPlan(company, run);
   const rank = Number(keywordPlan.rank || company.bestRank || 0);
   let range = "1-20";
-  if (!rank || rank > 20 || criteria.has("ota") || criteria.has("quantity") || issues.has("booking")) {
-    range = "1-30";
-  } else if (rank <= 5 && !criteria.has("quantity")) {
+  if (rank > 0 && rank <= 5 && !criteria.has("quantity") && !criteria.has("ota") && !issues.has("booking")) {
     range = "1-10";
   }
   const dateText = decision.problemDateText && decision.problemDateText !== "최근 수집일 기준"
@@ -16644,14 +16677,15 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
     checkIn: run.checkIn || els.checkInInput?.value || "",
     checkOut: run.checkOut || els.checkOutInput?.value || "",
     searchMode: correctedSearchMode(keyword, run.searchMode || "keyword"),
-    productMode: run.productMode || "all",
+    productMode: "all",
     collectionMode: "precision",
     collectionPurpose: "revenue_detail"
   };
 }
 
 function recrawlRankRangePresets(selectedRange = "1-20") {
-  return [...new Set([selectedRange || "1-20", "1-5", "1-10", "10-20", "1-20", "1-30"].filter(Boolean))];
+  const canonicalSelected = canonicalCrawlFormRange(selectedRange || "1-20", "revenue_detail");
+  return [...new Set([canonicalSelected, "1-5", "1-10", "1-20"])];
 }
 
 function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange = "1-20", source = "" } = {}) {
@@ -16670,12 +16704,15 @@ function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange =
 }
 
 function applyRecrawlRangeOverride(plan = {}, range = "") {
-  const value = String(range || "").trim();
-  if (!value) return { ...plan };
+  const collectionPurpose = normalizeCrawlFormPurpose(plan.collectionPurpose || "revenue_detail");
+  const value = String(range || plan.detailRankRanges || plan.range || collectionPurposeDefaultRange(collectionPurpose)).trim();
+  const canonicalRange = canonicalCrawlFormRange(value, collectionPurpose);
   return {
     ...plan,
-    range: value,
-    detailRankRanges: value,
+    range: canonicalRange,
+    detailRankRanges: canonicalRange,
+    productMode: "all",
+    collectionPurpose,
     collectionMode: "precision"
   };
 }
@@ -30172,11 +30209,9 @@ function applyCollectionQualitySetting(button) {
   if (els.keywordInput) els.keywordInput.value = keyword;
   if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, "keyword");
   if (els.productModeInput) els.productModeInput.value = "all";
-  if (els.collectionModeInput) els.collectionModeInput.value = mode;
-  if (els.detailRankRangesInput) {
-    els.detailRankRangesInput.disabled = mode === "fast";
-    els.detailRankRangesInput.value = mode === "fast" ? "" : range;
-  }
+  if (els.collectionPurposeInput) els.collectionPurposeInput.value = "revenue_detail";
+  if (els.collectionModeInput) els.collectionModeInput.value = "precision";
+  setDetailRankRange(mode === "fast" ? "1-20" : range, "revenue_detail");
   syncCollectionModeInputs();
   focusAdminCrawlProgress();
   if (els.crawlStatus) {
@@ -30232,13 +30267,10 @@ function applyQueueRecrawlSetting(button) {
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
   if (els.checkOutInput && plan.checkOut) els.checkOutInput.value = plan.checkOut;
   if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword");
-  if (els.productModeInput) els.productModeInput.value = plan.productMode || "all";
+  if (els.productModeInput) els.productModeInput.value = "all";
   if (els.collectionPurposeInput) els.collectionPurposeInput.value = plan.collectionPurpose || "revenue_detail";
   if (els.collectionModeInput) els.collectionModeInput.value = "precision";
-  if (els.detailRankRangesInput) {
-    els.detailRankRangesInput.disabled = false;
-    els.detailRankRangesInput.value = plan.range || "1-20";
-  }
+  setDetailRankRange(plan.range || "1-20", plan.collectionPurpose || "revenue_detail");
   syncCollectionModeInputs();
   focusAdminCrawlProgress();
   renderCrawlReadinessPreview(currentCrawlFormPayload(), eta);
@@ -30283,12 +30315,10 @@ function applyRecrawlBatchSetting(button) {
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
   if (els.checkOutInput && plan.checkOut) els.checkOutInput.value = plan.checkOut;
   if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword");
-  if (els.productModeInput) els.productModeInput.value = plan.productMode || "all";
+  if (els.productModeInput) els.productModeInput.value = "all";
+  if (els.collectionPurposeInput) els.collectionPurposeInput.value = plan.collectionPurpose || "revenue_detail";
   if (els.collectionModeInput) els.collectionModeInput.value = plan.collectionMode || "precision";
-  if (els.detailRankRangesInput) {
-    els.detailRankRangesInput.disabled = false;
-    els.detailRankRangesInput.value = plan.range || plan.detailRankRanges || "1-20";
-  }
+  setDetailRankRange(plan.range || plan.detailRankRanges || "1-20", plan.collectionPurpose || "revenue_detail");
   syncCollectionModeInputs();
   focusAdminCrawlProgress();
   renderCrawlReadinessPreview(currentCrawlFormPayload(), eta);
@@ -30389,22 +30419,6 @@ async function loadRun(runId) {
   }
   if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
-  const run = data.run || {};
-  if (els.keywordInput) els.keywordInput.value = run.keyword || (run.label || "").split("·")[0].trim() || els.keywordInput.value;
-  if (els.searchModeInput) {
-    const runMode = run.searchMode || (run.keywordType === "company" ? "company" : "keyword");
-    els.searchModeInput.value = correctedSearchMode(run.keyword || "", runMode);
-  }
-  if (els.productModeInput && run.productMode) els.productModeInput.value = run.productMode;
-  if (els.collectionModeInput) els.collectionModeInput.value = run.collectionMode || "precision";
-  if (els.detailRankRangesInput) {
-    const rawDetailRankRanges = String(run.detailRankRanges || "").trim();
-    const useDefaultDetailRange = !rawDetailRankRanges || /^(none|skip|없음)$/i.test(rawDetailRankRanges);
-    els.detailRankRangesInput.value = run.collectionMode === "fast"
-      ? ""
-      : (useDefaultDetailRange ? "1-20" : rawDetailRankRanges);
-  }
-  syncCollectionModeInputs();
   renderAll();
   if (isAdminRole() && adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
   setStatus("준비");
@@ -31849,16 +31863,33 @@ function bindEvents() {
   els.crawlForm?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-collection-purpose]");
     if (!button) return;
-    selectCollectionPurpose(button.dataset.collectionPurpose || "revenue_detail");
+    selectCollectionPurpose(button.dataset.collectionPurpose || "basic_db");
   });
   els.crawlSpeedPresetRow?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-crawl-speed-preset]");
     if (!button) return;
     applyCrawlSpeedPreset(button.dataset.crawlSpeedPreset || "");
   });
-  [els.keywordInput, els.checkInInput, els.checkOutInput, els.searchModeInput, els.productModeInput, els.collectionPurposeInput, els.detailRankRangesInput].forEach((input) => {
+  [els.checkInInput, els.checkOutInput, els.searchModeInput, els.productModeInput, els.collectionPurposeInput].forEach((input) => {
     input?.addEventListener("input", updateCrawlSpeedPreview);
     input?.addEventListener("change", updateCrawlSpeedPreview);
+  });
+  ["input", "change"].forEach((eventName) => {
+    els.keywordInput?.addEventListener(eventName, () => {
+      if (els.searchModeInput) els.searchModeInput.value = "keyword";
+      updateCrawlSpeedPreview();
+    });
+  });
+  els.detailRankEndInput?.addEventListener("input", () => {
+    const rawEndRank = String(els.detailRankEndInput?.value || "").trim();
+    if (rawEndRank) syncDetailRankRangeFromEnd();
+    updateCrawlSpeedPreview();
+  });
+  ["change", "blur"].forEach((eventName) => {
+    els.detailRankEndInput?.addEventListener(eventName, () => {
+      syncDetailRankRangeFromEnd();
+      updateCrawlSpeedPreview();
+    });
   });
   els.dictionarySearchForm?.addEventListener("submit", (event) => {
     event.preventDefault();

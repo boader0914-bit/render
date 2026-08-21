@@ -31,6 +31,37 @@ const CASES = [
   { keyword: "경남펜션", requested: "keyword", expected: "keyword" }
 ];
 
+const COLLECTION_RANGE_CASES = [
+  {
+    label: "basic default",
+    payload: { keyword: "경남펜션", searchMode: "keyword", collectionPurpose: "basic_db", collectionMode: "precision" },
+    expectedRange: "1-40",
+    expectedStockLimit: 40,
+    expectedWeeklyLimit: 0
+  },
+  {
+    label: "detail default",
+    payload: { keyword: "경남펜션", searchMode: "keyword", collectionPurpose: "revenue_detail", collectionMode: "precision" },
+    expectedRange: "1-20",
+    expectedStockLimit: 20,
+    expectedWeeklyLimit: 20
+  },
+  {
+    label: "basic custom",
+    payload: { keyword: "경남펜션", searchMode: "keyword", collectionPurpose: "basic_db", collectionMode: "precision", detailRankRanges: "1-15" },
+    expectedRange: "1-15",
+    expectedStockLimit: 15,
+    expectedWeeklyLimit: 0
+  },
+  {
+    label: "fast safety",
+    payload: { keyword: "경남펜션", searchMode: "keyword", collectionPurpose: "basic_db", collectionMode: "fast" },
+    expectedRange: "없음",
+    expectedStockLimit: 0,
+    expectedWeeklyLimit: 0
+  }
+];
+
 async function freePort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -135,6 +166,29 @@ async function verifyClientClassifier() {
   }
 }
 
+async function verifyClientCollectionRangeHelpers() {
+  const appPath = path.resolve(__dirname, "..", "web", "app.js");
+  const source = await fsp.readFile(appPath, "utf8");
+  const start = source.indexOf("function normalizedRankRangeText");
+  const end = source.indexOf("function rankRangeCountFromText", start);
+  assert.ok(start >= 0 && end > start, "client collection range helper block not found");
+  const context = {};
+  vm.runInNewContext(
+    `${source.slice(start, end)}\nthis.__collectionRangeTest = { rankRangeEndFromText, canonicalCrawlFormRange };`,
+    context,
+    { filename: appPath }
+  );
+  const helper = context.__collectionRangeTest.rankRangeEndFromText;
+  assert.equal(helper("1-40", "1-20"), 40, "basic end rank should stay 40");
+  assert.equal(helper("1-20", "1-40"), 20, "detail end rank should stay 20");
+  assert.equal(helper("", "1-40"), 40, "empty end rank should restore the purpose default");
+  assert.equal(helper("invalid", "1-20"), 20, "invalid end rank should restore the purpose default");
+  const canonical = context.__collectionRangeTest.canonicalCrawlFormRange;
+  assert.equal(canonical("10-20", "revenue_detail"), "1-20", "detail recrawl ranges must start at rank 1");
+  assert.equal(canonical("1-30", "revenue_detail"), "1-20", "detail recrawl ranges must stay within rank 20");
+  assert.equal(canonical("1-15", "basic_db"), "1-15", "basic custom ranges must remain editable");
+}
+
 async function verifyServerClassifier() {
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "search-mode-classification-"));
   const port = await freePort();
@@ -171,6 +225,16 @@ async function verifyServerClassifier() {
       assert.equal(estimate.body.searchMode, testCase.expected, `server mode mismatch for ${testCase.keyword}`);
       assert.equal(estimate.body.estimateBasis?.searchMode, testCase.expected, `server basis mismatch for ${testCase.keyword}`);
     }
+
+    for (const testCase of COLLECTION_RANGE_CASES) {
+      const estimate = await request(baseUrl, "POST", "/api/crawl-estimate", testCase.payload, login.cookies);
+      assert.equal(estimate.statusCode, 200, `estimate failed for ${testCase.label}`);
+      assert.equal(estimate.body.productMode, "all", `${testCase.label} should collect all products`);
+      assert.equal(estimate.body.detailRankRanges, testCase.expectedRange, `${testCase.label} range mismatch`);
+      assert.equal(estimate.body.bookingStockPlaceLimit, testCase.expectedStockLimit, `${testCase.label} stock limit mismatch`);
+      assert.equal(estimate.body.bookingRangePlaceLimit, testCase.expectedWeeklyLimit, `${testCase.label} weekly limit mismatch`);
+      assert.equal(estimate.body.estimateBasis?.bookingStockPlaceLimit, testCase.expectedStockLimit, `${testCase.label} basis stock limit mismatch`);
+    }
   } finally {
     await stopChild(child);
     await fsp.rm(tmp, { recursive: true, force: true });
@@ -179,6 +243,7 @@ async function verifyServerClassifier() {
 
 async function main() {
   await verifyClientClassifier();
+  await verifyClientCollectionRangeHelpers();
   await verifyServerClassifier();
   console.log("Search mode classification tests passed");
 }

@@ -215,9 +215,9 @@ function normalizeCollectionPurpose(value) {
 
 function collectionPurposeDefaultRange(value) {
   const purpose = normalizeCollectionPurpose(value);
-  if (purpose === "basic_db") return "1-50";
+  if (purpose === "basic_db") return "1-40";
   if (purpose === "demand_location") return "1-20";
-  return "1-10";
+  return "1-20";
 }
 
 function collectionExecutionProfile(purposeValue, modeValue = "precision") {
@@ -258,8 +258,8 @@ function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   }
   return {
     key: "revenue_detail_deep",
-    label: "상세정보 중심",
-    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 함께 확인합니다.",
+    label: "기본정보 + 예상 판매율",
+    note: "기본정보와 예상 판매율을 함께 확인합니다.",
     collectRegional: true,
     collectOta: true,
     collectBookingStock: true,
@@ -345,17 +345,22 @@ function rankRangeLabel(ranges = []) {
     : "없음";
 }
 
-function rankRangePlaceLimit(ranges = []) {
+function rankRangeCount(ranges = [], maximum = 100) {
+  const limit = Math.max(1, Math.min(100, Math.floor(Number(maximum) || 100)));
   const ranks = new Set();
   for (const range of ranges) {
     const from = Math.max(1, Math.min(100, Math.floor(Number(range.from) || 0)));
     const to = Math.max(1, Math.min(100, Math.floor(Number(range.to) || from)));
     for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
       ranks.add(rank);
-      if (ranks.size >= 20) return 20;
+      if (ranks.size >= limit) return limit;
     }
   }
-  return Math.max(0, Math.min(20, ranks.size));
+  return Math.max(0, Math.min(limit, ranks.size));
+}
+
+function rankRangePlaceLimit(ranges = []) {
+  return Math.min(20, rankRangeCount(ranges, 20));
 }
 
 const REGIONAL_GLAMPING_BASES = new Set([
@@ -436,6 +441,9 @@ function crawlExecutionPlan(payload = {}) {
   );
   const detailRankRanges = rankRangeLabel(parsedDetailRankRanges);
   const detailPlaceLimit = collectionMode === "fast" ? 0 : (rankRangePlaceLimit(parsedDetailRankRanges) || 10);
+  const bookingStockPlaceLimit = executionProfile.collectBookingStock
+    ? Math.max(0, Math.min(collectionPurpose === "basic_db" ? 40 : 20, rankRangeCount(parsedDetailRankRanges, 100)))
+    : 0;
   const rawBookingDays = Number(
     payload.bookingDays ||
     payload.bookingRangeDays ||
@@ -459,6 +467,7 @@ function crawlExecutionPlan(payload = {}) {
     checkOut,
     bookingRangeDays,
     bookingRangePlaceLimit,
+    bookingStockPlaceLimit,
     requestedSearchMode,
     resolvedSearchMode,
     productMode,
@@ -480,7 +489,8 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
   const rangePlaceCount = plan.collectWeeklyRange && plan.bookingRangeDays > 1 ? plan.bookingRangePlaceLimit : 0;
   const fast = plan.collectionMode === "fast";
   const searchSeconds = plan.resolvedSearchMode === "company" ? 55 : 95;
-  const productSeconds = fast || !plan.collectBookingStock ? 0 : (plan.productMode === "all" ? 45 : 26);
+  const productScale = Math.max(1, Number(plan.bookingStockPlaceLimit || 0) / 20);
+  const productSeconds = fast || !plan.collectBookingStock ? 0 : (plan.productMode === "all" ? 45 : 26) * productScale;
   const trendSeconds = plan.resolvedSearchMode === "keyword" ? (plan.collectionPurpose === "demand_location" ? 55 : 25) : 10;
   const rangeSeconds = !fast && rangePlaceCount
     ? rangePlaceCount * plan.bookingRangeDays * (plan.productMode === "all" ? 5.5 : 4.2)
@@ -578,6 +588,7 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
       detailRankRanges: plan.detailRankRanges,
       bookingRangeDays: plan.bookingRangeDays,
       bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
+      bookingStockPlaceLimit: plan.bookingStockPlaceLimit,
       timing
     }
   };
@@ -736,6 +747,7 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     detailRankRanges: estimate.detailRankRanges,
     bookingRangeDays: estimate.bookingRangeDays,
     bookingRangePlaceLimit: estimate.bookingRangePlaceLimit,
+    bookingStockPlaceLimit: estimate.bookingStockPlaceLimit,
     estimatedTotalSeconds: estimate.estimatedTotalSeconds,
     estimatedCompleteAt: new Date(Date.now() + Math.max(0, estimate.estimatedTotalSeconds || 0) * 1000).toISOString(),
     estimateBasis: estimate.basis,
@@ -12347,7 +12359,7 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
         return acc;
       }, {})
     },
-    items: items.slice(0, 30)
+    items: items.slice(0, 40)
   };
 }
 
@@ -13134,6 +13146,7 @@ async function runCrawlerInternal(payload) {
     PRODUCT_MODE: plan.productMode,
     BOOKING_RANGE_DAYS: String(plan.bookingRangeDays),
     BOOKING_RANGE_PLACE_LIMIT: String(plan.bookingRangePlaceLimit),
+    NAVER_BOOKING_STOCK_LIMIT: String(plan.bookingStockPlaceLimit),
     SOURCE_ROLE: sourceRole,
     COLLECTION_SOURCE: collectionSource,
     COLLECTION_SOURCE_LABEL: collectionSourceLabel(collectionSource),
@@ -13203,9 +13216,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260821-place-rank-tag-v11"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260821-place-rank-tag-v11"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260821-place-rank-tag-v11"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260821-collection-screen-v14"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260821-collection-screen-v14"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260821-collection-screen-v14"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
