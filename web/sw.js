@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260823-company-autocomplete-v53";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260823-company-autocomplete-tone-v55";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

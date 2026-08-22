@@ -35,6 +35,7 @@ html[data-theme-resolved="light"] {
   --danger: #c54848;
   --danger-strong: #a83c3c;
   --theme-card-shadow: 0 2px 10px rgba(23, 34, 53, .045);
+  --theme-floating-subtle-shadow: 0 8px 18px rgba(23, 34, 53, .075);
   --header-rule: #dce4df;
 }
 
@@ -59,6 +60,7 @@ html[data-theme-resolved="dark"] {
   --danger: #ff9a9a;
   --danger-strong: #ff9a9a;
   --theme-card-shadow: none;
+  --theme-floating-subtle-shadow: 0 8px 18px rgba(0, 0, 0, .32);
   --header-rule: #2a2a2a;
 }
 
@@ -1112,6 +1114,18 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) [data-ui-status="d
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, input, select, textarea):focus-visible {
   outline: 3px solid var(--focus-ring) !important;
   outline-offset: 3px;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-autocomplete-option:hover {
+  border-color: transparent !important;
+  background: var(--surface-card) !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-autocomplete-option:focus-visible {
+  border-color: transparent !important;
+  background: var(--surface-card) !important;
+  outline: 2px solid var(--focus-ring) !important;
+  outline-offset: -2px;
 }
 
 @media (hover: hover) {

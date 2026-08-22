@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-autocomplete-v53";
-const expectedAssetVersion = "v2-20260823-company-autocomplete-v35";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-autocomplete-tone-v55";
+const expectedAssetVersion = "v2-20260823-company-autocomplete-tone-v37";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -691,6 +691,10 @@ const adminDbAutocompleteBlock = app.slice(
   app.indexOf("function adminDbAutocompleteSuggestions("),
   app.indexOf("function adminDbCompanyAutocompleteHtml(", app.indexOf("function adminDbAutocompleteSuggestions("))
 );
+const adminDbAutocompleteCssBlock = styles.slice(
+  styles.indexOf(".admin-db-autocomplete {"),
+  styles.indexOf(".admin-db-company-filter {", styles.indexOf(".admin-db-autocomplete {"))
+);
 const adminDbExplorerBlock = app.slice(
   app.indexOf("function adminDbCompanyExplorerHtml("),
   app.indexOf("function adminDbMetricCard(", app.indexOf("function adminDbCompanyExplorerHtml("))
@@ -780,6 +784,19 @@ assert(
     && app.includes('event.key === "ArrowDown"')
     && app.includes('(adminDbQuery || autocompleteOption) && event.key === "Escape"'),
   "one-character company autocomplete must rank name and alias matches, cap suggestions at eight, and support keyboard navigation",
+  failures
+);
+
+assert(
+  (themeStyles.match(/--theme-floating-subtle-shadow:/g) || []).length === 2
+    && themeStyles.includes("body.role-admin .admin-db-autocomplete-option:focus-visible")
+    && adminDbAutocompleteCssBlock.includes("background: var(--surface-control);")
+    && adminDbAutocompleteCssBlock.includes("box-shadow: var(--theme-floating-subtle-shadow);")
+    && adminDbAutocompleteCssBlock.includes("border-radius: var(--ui-radius-control);")
+    && adminDbAutocompleteCssBlock.includes("background: var(--surface-card);")
+    && adminDbAutocompleteCssBlock.includes("outline: 2px solid var(--focus-ring);")
+    && !adminDbAutocompleteCssBlock.includes("border-color: var(--theme-accent);"),
+  "company autocomplete must use a quiet neutral surface with subtle elevation and focus-only accent treatment",
   failures
 );
 

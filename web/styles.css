@@ -40698,10 +40698,10 @@ html[data-theme-resolved] body.role-admin .admin-db-hero p {
   display: grid;
   gap: 4px;
   border: 1px solid var(--border-subtle);
-  border-radius: 14px;
-  background: var(--surface-card);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
   padding: 6px;
-  box-shadow: var(--card-shadow);
+  box-shadow: var(--theme-floating-subtle-shadow);
 }
 
 .admin-db-autocomplete[hidden] {
@@ -40718,6 +40718,7 @@ html[data-theme-resolved] body.role-admin .admin-db-hero p {
   color: var(--text-primary);
   padding: 10px 12px;
   text-decoration: none;
+  transition: var(--ui-transition);
 }
 
 .admin-db-autocomplete-option strong {
@@ -40739,11 +40740,17 @@ html[data-theme-resolved] body.role-admin .admin-db-hero p {
   padding: 12px;
 }
 
-.admin-db-autocomplete-option:hover,
-.admin-db-autocomplete-option:focus-visible {
-  border-color: var(--theme-accent);
-  background: var(--surface-control);
+.admin-db-autocomplete-option:hover {
+  border-color: transparent;
+  background: var(--surface-card);
   outline: 0;
+}
+
+.admin-db-autocomplete-option:focus-visible {
+  border-color: transparent;
+  background: var(--surface-card);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .admin-db-company-filter {
