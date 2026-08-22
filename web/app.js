@@ -21782,25 +21782,31 @@ function adminDbReferenceChannelRowHtml(item = {}, company = {}) {
   const linked = adminDbChannelStatusLinked(item.status);
   const needsReview = adminDbChannelStatusNeedsReview(item.status);
   const isNaver = item.key === "naver";
+  const naverObservation = isNaver ? adminDbNaverChannelObservation(company) : {};
+  const naverPartnerName = String(naverObservation.agencyName || "").trim();
   const hasNaverBooking = Boolean(
     (company.bookingBusinessIds || []).length
     || company.bookingBusinessId
     || company.bookingUrl
     || company.naverBookingUrl
   );
-  const statusText = needsReview
-    ? (item.statusText || "확인 필요")
-    : isNaver && hasNaverBooking
-      ? "예약 노출 확인"
+  const statusText = isNaver
+    ? (naverPartnerName
+      ? `공식 연동 표기 · ${naverPartnerName}`
+      : (hasNaverBooking ? "공식 연동 표기 미확인" : "네이버 예약상품 미확인"))
+    : needsReview
+      ? (item.statusText || "확인 필요")
       : linked
         ? (item.statusText || "확인 완료")
-        : (isNaver
-          ? (item.statusText || "관측 대기")
-          : (item.status && item.status !== "unknown" ? (item.statusText || "수동 확인") : "수동 확인"));
-  const statusTone = needsReview ? "warning" : linked || (isNaver && hasNaverBooking) ? "positive" : "neutral";
+        : (item.status && item.status !== "unknown" ? (item.statusText || "수동 확인") : "수동 확인");
+  const statusTone = isNaver
+    ? (naverPartnerName ? "positive" : "neutral")
+    : (needsReview ? "warning" : linked ? "positive" : "neutral");
   const brandMeta = ADMIN_REFERENCE_CHANNEL_BRAND_META[item.key] || {};
   const displayLabel = brandMeta.label || item.label;
-  const channelDetail = isNaver ? "네이버 공개 화면 관측" : item.key === "yanolja" ? "NOL·야놀자 채널 상태" : `${item.label} 채널 상태`;
+  const channelDetail = isNaver
+    ? (naverPartnerName ? "네이버 판매상품 공식 표기" : "네이버 판매상품 · 필요 시 수동 확인")
+    : item.key === "yanolja" ? "NOL·야놀자 채널 상태" : `${item.label} 채널 상태`;
   return `
     <article class="admin-reference-channel-row" data-channel="${escapeHtml(item.key || "channel")}">
       ${adminDbReferenceChannelIconHtml(item)}

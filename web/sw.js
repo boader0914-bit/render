@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260822-channel-brand-icons-v49";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260822-company-controls-v51";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

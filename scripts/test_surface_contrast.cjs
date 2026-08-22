@@ -359,8 +359,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260822-channel-brand-icons-v49";
-const expectedAssetVersion = "v2-20260822-channel-brand-icons-v31";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260822-company-controls-v51";
+const expectedAssetVersion = "v2-20260822-company-controls-v33";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -711,6 +711,10 @@ const referenceDashboardBlock = app.slice(
   app.indexOf("function adminDbCompanyReferenceDashboardHtml("),
   app.indexOf("function adminDbInlineCollectionHtml(", app.indexOf("function adminDbCompanyReferenceDashboardHtml("))
 );
+const referenceChannelRowBlock = app.slice(
+  app.indexOf("function adminDbReferenceChannelRowHtml("),
+  app.indexOf("function adminDbReferenceChannelsCard(", app.indexOf("function adminDbReferenceChannelRowHtml("))
+);
 const cumulativeCssBlock = styles.slice(
   styles.indexOf("/* Company cumulative DB v1:"),
   styles.indexOf("/* Region keyword readability", styles.indexOf("/* Company cumulative DB v1:"))
@@ -746,6 +750,28 @@ assert(
     && adminDbDetailBlock.includes('data-admin-db-open-fold="collect"')
     && adminDbDetailBlock.includes("admin-company-maintenance"),
   "company review must lead with the attached reference dashboard, inline auto collection, and collapsed detail tools",
+  failures
+);
+
+assert(
+  indexHtml.includes('class="theme-switcher"')
+    && indexHtml.includes('data-theme-mode="light"')
+    && indexHtml.includes('data-theme-mode="dark"')
+    && indexHtml.includes('id="headerLogoutButton"')
+    && indexHtml.includes('id="openControlButton"')
+    && !/body\.role-admin #openControlButton\s*\{\s*display:\s*none;?\s*\}/.test(styles)
+    && !/body\.role-admin:has\(#adminPanel\.active \[data-layout-contract="company-db-reference-v1"\]\) \.app-header\s*\{\s*display:\s*none;?\s*\}/.test(themeStyles),
+  "company review must keep the shared theme, logout, filter management, and navigation header visible",
+  failures
+);
+
+assert(
+  referenceChannelRowBlock.includes("naverPartnerName")
+    && referenceChannelRowBlock.includes("공식 연동 표기 ·")
+    && referenceChannelRowBlock.includes("공식 연동 표기 미확인")
+    && referenceChannelRowBlock.includes("네이버 예약상품 미확인")
+    && referenceChannelRowBlock.includes("필요 시 수동 확인"),
+  "Naver channel UI must show official product partner labels and keep missing labels as manual-review evidence",
   failures
 );
 

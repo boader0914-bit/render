@@ -27435,10 +27435,6 @@ body.role-admin #adminPanel > .section-title {
   display: none;
 }
 
-body.role-admin #openControlButton {
-  display: none;
-}
-
 body.role-admin .admin-section-nav button,
 body.role-admin .bottom-nav button,
 body.role-admin .admin-mobile-primary button,

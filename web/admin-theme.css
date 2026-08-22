@@ -1601,9 +1601,6 @@ html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-co
     box-sizing: border-box;
   }
 
-  html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) .app-header {
-    display: none;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
