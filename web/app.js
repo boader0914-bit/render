@@ -19289,7 +19289,6 @@ function adminDbCompanyDetailUrl(companyId = "") {
 
 function adminDbCompanyUseNativeLink(event = null, element = null) {
   if (!element || element.tagName !== "A") return false;
-  if (element.hasAttribute("data-admin-db-company-select")) return true;
   return Boolean(
     event?.defaultPrevented ||
     event?.button === 1 ||
@@ -19309,15 +19308,43 @@ function setAdminDbCompanyRoute(companyId = "", replace = false) {
   window.history[replace ? "replaceState" : "pushState"](null, "", target);
 }
 
+function restoreAdminDbInlineSearchViewport(position = null, options = {}) {
+  const targetPosition = position || state.adminDbInlineSearchScroll;
+  if (!targetPosition) return;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      window.scrollTo({
+        left: Number(targetPosition.left || 0),
+        top: Number(targetPosition.top || 0),
+        behavior: "auto"
+      });
+      if (options.clear !== false) state.adminDbInlineSearchScroll = null;
+    });
+  });
+}
+
 function activateAdminDbCompanyDetail(companyId = "", options = {}) {
   const selectedCompanyId = String(companyId || "").trim();
   if (!selectedCompanyId) return false;
+  const preservedScroll = options.scroll === false
+    ? (state.adminDbInlineSearchScroll || { left: window.scrollX || 0, top: window.scrollY || 0 })
+    : null;
   state.adminDbRouteCompanyId = selectedCompanyId;
   state.adminDbSelectedCompanyId = selectedCompanyId;
   state.adminDbViewMode = "review";
-  const opened = openAdminDbCompanyReview(selectedCompanyId);
+  const opened = openAdminDbCompanyReview(selectedCompanyId, {
+    scroll: options.scroll !== false,
+    load: false
+  });
   if (options.updateRoute !== false) setAdminDbCompanyRoute(selectedCompanyId, Boolean(options.replaceRoute));
-  loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});
+  const detailRequest = loadAdminDbCompanyDetail(selectedCompanyId);
+  if (preservedScroll) {
+    state.adminDbInlineSearchScroll = preservedScroll;
+    restoreAdminDbInlineSearchViewport(preservedScroll, { clear: false });
+    detailRequest.finally(() => restoreAdminDbInlineSearchViewport(preservedScroll)).catch(() => {});
+  } else {
+    detailRequest.catch(() => {});
+  }
   return opened;
 }
 
@@ -23618,6 +23645,10 @@ function refreshAdminDbAutocomplete(input) {
   const markup = adminDbCompanyAutocompleteHtml(adminDbRows(adminConsoleMasterSource()), query);
   if (markup) input.insertAdjacentHTML("afterend", markup);
   input.setAttribute("aria-expanded", compactSearchText(query) ? "true" : "false");
+}
+
+function adminDbQueryUsesInlineAutocomplete(input = null) {
+  return Boolean(input?.closest?.("[data-admin-db-persistent-search]"));
 }
 
 function scheduleAdminDbQueryRender(input, delay = 40) {
@@ -33351,7 +33382,7 @@ function setDefaultDates() {
   updateCrawlSpeedPreview();
 }
 
-function openAdminDbCompanyReview(companyId = "") {
+function openAdminDbCompanyReview(companyId = "", options = {}) {
   const selectedCompanyId = String(companyId || "").trim();
   if (!selectedCompanyId) return false;
   state.adminDbRouteCompanyId = selectedCompanyId;
@@ -33359,16 +33390,19 @@ function openAdminDbCompanyReview(companyId = "") {
   state.adminDbViewMode = "review";
   state.adminDbOpsOpen = true;
   renderAdminConsoleDashboard();
-  loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});
-  window.requestAnimationFrame(() => {
-    document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
+  if (options.load !== false) loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});
+  if (options.scroll !== false) {
+    window.requestAnimationFrame(() => {
+      document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
   return true;
 }
 
 function handleAdminDbCompanyHash() {
   const companyId = adminDbCompanyIdFromRoute();
   if (!companyId || !isAdminRole()) return false;
+  if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId) return true;
   if (state.activeTab !== "admin") setActiveTab("admin");
   setAdminPanelSection("database");
   openAdminDbCompanyReview(companyId);
@@ -33433,13 +33467,17 @@ function bindAdminDbCompanySelectButtons() {
       if (adminDbCompanyUseNativeLink(event, button)) return;
       event.preventDefault();
       event.stopPropagation();
-      activateAdminDbCompanyDetail(button.getAttribute("data-admin-db-company-select") || "");
+      activateAdminDbCompanyDetail(button.getAttribute("data-admin-db-company-select") || "", {
+        scroll: !button.closest("[data-admin-db-persistent-search]")
+      });
     });
     button.addEventListener("pointerup", (event) => {
       if (button.tagName === "A" || adminDbCompanyUseNativeLink(event, button)) return;
       event.preventDefault();
       event.stopPropagation();
-      activateAdminDbCompanyDetail(button.getAttribute("data-admin-db-company-select") || "");
+      activateAdminDbCompanyDetail(button.getAttribute("data-admin-db-company-select") || "", {
+        scroll: !button.closest("[data-admin-db-persistent-search]")
+      });
     });
   });
   document.querySelectorAll("[data-admin-db-company-card-select]").forEach((card) => {
@@ -33469,7 +33507,9 @@ function bindEvents() {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation?.();
-    activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
+    activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "", {
+      scroll: !adminDbCompanySelect.closest("[data-admin-db-persistent-search]")
+    });
   }, true);
   window.setInterval(() => {
     const companyId = adminDbCompanyIdFromRoute();
@@ -33496,7 +33536,9 @@ function bindEvents() {
     if (adminDbCompanySelect.tagName === "A" || adminDbCompanyUseNativeLink(event, adminDbCompanySelect)) return;
     event.preventDefault();
     event.stopPropagation();
-    activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
+    activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "", {
+      scroll: !adminDbCompanySelect.closest("[data-admin-db-persistent-search]")
+    });
   }, true);
   document.addEventListener("click", (event) => {
     const b2bHomeAction = event.target.closest("[data-b2b-home-action]");
@@ -33634,7 +33676,9 @@ function bindEvents() {
       if (adminDbCompanyUseNativeLink(event, adminDbCompanySelect)) return;
       event.preventDefault();
       event.stopPropagation();
-      activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "");
+      activateAdminDbCompanyDetail(adminDbCompanySelect.getAttribute("data-admin-db-company-select") || "", {
+        scroll: !adminDbCompanySelect.closest("[data-admin-db-persistent-search]")
+      });
       return;
     }
     if (event.target.closest("[data-admin-db-clear]")) {
@@ -33661,7 +33705,14 @@ function bindEvents() {
     }
     const adminDbQueryCommit = event.target.closest("[data-admin-db-query-commit]");
     if (adminDbQueryCommit) {
-      const input = document.querySelector("[data-admin-db-query]");
+      const searchShell = adminDbQueryCommit.closest(".admin-db-company-search-shell");
+      const input = searchShell?.querySelector("[data-admin-db-query]") || document.querySelector("[data-admin-db-query]");
+      if (adminDbQueryUsesInlineAutocomplete(input)) {
+        refreshAdminDbAutocomplete(input);
+        const firstOption = searchShell?.querySelector("[data-admin-db-autocomplete-option]");
+        (firstOption || input)?.focus();
+        return;
+      }
       commitAdminDbQueryRender(input?.value || "", input?.selectionStart, input?.selectionEnd);
       return;
     }
@@ -34239,6 +34290,10 @@ function bindEvents() {
     const adminDbQuery = event.target.closest("[data-admin-db-query]");
     if (adminDbQuery) {
       state.adminDbQueryComposing = false;
+      if (adminDbQueryUsesInlineAutocomplete(adminDbQuery)) {
+        refreshAdminDbAutocomplete(adminDbQuery);
+        return;
+      }
       scheduleAdminDbQueryRender(adminDbQuery, 0);
       return;
     }
@@ -34280,6 +34335,11 @@ function bindEvents() {
     }
     const adminDbQuery = event.target.closest("[data-admin-db-query]");
     if (adminDbQuery) {
+      if (adminDbQueryUsesInlineAutocomplete(adminDbQuery)) {
+        state.adminDbInlineSearchScroll = { left: window.scrollX || 0, top: window.scrollY || 0 };
+        refreshAdminDbAutocomplete(adminDbQuery);
+        return;
+      }
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.query = adminDbQuery.value || "";
       state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;

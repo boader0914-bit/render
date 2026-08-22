@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-detail-search-card-v57";
-const expectedAssetVersion = "v2-20260823-company-detail-search-card-v39";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-inline-search-v58";
+const expectedAssetVersion = "v2-20260823-company-inline-search-v40";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -711,6 +711,11 @@ const adminDbQueryRenderBlock = app.slice(
   app.indexOf("function commitAdminDbQueryRender("),
   app.indexOf("function commitAdminRegionCompanyQueryRender(", app.indexOf("function commitAdminDbQueryRender("))
 );
+const adminDbNativeLinkBlock = app.slice(
+  app.indexOf("function adminDbCompanyUseNativeLink("),
+  app.indexOf("function setAdminDbCompanyRoute(", app.indexOf("function adminDbCompanyUseNativeLink("))
+);
+const adminDbBindEventsBlock = app.slice(app.indexOf("function bindEvents()"));
 const adminDbExplorerCssBlock = styles.slice(styles.indexOf("/* Company DB explorer v1:"));
 const adminDbDetailBlock = app.slice(
   app.indexOf("function adminDbSelectedDetailPanel("),
@@ -787,10 +792,22 @@ assert(
   adminDbRenderBlock.includes('adminDbCompanySearchShellHtml(searchContext, { compact: true, queryValue: "" })')
     && adminDbRenderBlock.indexOf('adminDbCompanySearchShellHtml(searchContext, { compact: true, queryValue: "" })')
       < adminDbRenderBlock.indexOf("adminDbSelectedDetailPanel(rows)")
-    && adminDbQueryRenderBlock.includes("clearAdminDbCompanyHash();")
+    && app.includes("function adminDbQueryUsesInlineAutocomplete(input = null)")
+    && adminDbNativeLinkBlock.includes("event?.ctrlKey")
+    && !adminDbNativeLinkBlock.includes('element.hasAttribute("data-admin-db-company-select")')
+    && adminDbBindEventsBlock.includes("adminDbQueryUsesInlineAutocomplete(adminDbQuery)")
+    && adminDbBindEventsBlock.includes("refreshAdminDbAutocomplete(adminDbQuery);")
+    && adminDbBindEventsBlock.includes('scroll: !adminDbCompanySelect.closest("[data-admin-db-persistent-search]")')
+    && adminDbBindEventsBlock.includes("(firstOption || input)?.focus();")
+    && adminDbBindEventsBlock.includes("state.adminDbInlineSearchScroll = { left: window.scrollX || 0, top: window.scrollY || 0 };")
+    && app.includes("function restoreAdminDbInlineSearchViewport(position = null, options = {})")
+    && app.includes("restoreAdminDbInlineSearchViewport(preservedScroll, { clear: false });")
+    && app.includes("detailRequest.finally(() => restoreAdminDbInlineSearchViewport(preservedScroll)).catch(() => {});")
+    && app.includes("if (options.load !== false) loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});")
+    && app.includes('if (state.adminDbViewMode === "review" && state.adminDbSelectedCompanyId === companyId) return true;')
     && /\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*minmax\(170px,\s*0\.34fr\)\s*minmax\(0,\s*1fr\)/i.test(styles)
     && /@media \(max-width: 760px\)[\s\S]*?\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*1fr/i.test(styles),
-  "company detail must keep a compact search field above the selected company and return typed queries to the company list",
+  "company detail search must keep the current screen, show inline autocomplete, and replace only the selected company detail",
   failures
 );
 
