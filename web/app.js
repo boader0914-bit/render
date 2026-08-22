@@ -23592,7 +23592,18 @@ function commitAdminDbQueryRender(value = "", selectionStart = null, selectionEn
   restoreAdminSearchInput("[data-admin-db-query]", state.adminDbFilters.query || "", selectionStart, selectionEnd);
 }
 
-function scheduleAdminDbQueryRender(input, delay = 200) {
+function refreshAdminDbAutocomplete(input) {
+  if (!input) return;
+  const wrapper = input.closest(".admin-db-company-query-wrap");
+  if (!wrapper) return;
+  wrapper.querySelector("#adminDbAutocomplete")?.remove();
+  const query = input.value || "";
+  const markup = adminDbCompanyAutocompleteHtml(adminDbRows(adminConsoleMasterSource()), query);
+  if (markup) input.insertAdjacentHTML("afterend", markup);
+  input.setAttribute("aria-expanded", compactSearchText(query) ? "true" : "false");
+}
+
+function scheduleAdminDbQueryRender(input, delay = 40) {
   if (!input) return;
   state.adminDbFilters = state.adminDbFilters || {};
   state.adminDbFilters.query = input.value || "";
@@ -23604,6 +23615,7 @@ function scheduleAdminDbQueryRender(input, delay = 200) {
   const value = input.value || "";
   const selectionStart = input.selectionStart;
   const selectionEnd = input.selectionEnd;
+  refreshAdminDbAutocomplete(input);
   if (state.adminDbQueryRenderTimer) window.clearTimeout(state.adminDbQueryRenderTimer);
   state.adminDbQueryRenderTimer = window.setTimeout(() => {
     state.adminDbQueryRenderTimer = null;
@@ -34251,7 +34263,10 @@ function bindEvents() {
       state.adminDbFilters = state.adminDbFilters || {};
       state.adminDbFilters.query = adminDbQuery.value || "";
       state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
-      if (event.isComposing || state.adminDbQueryComposing) return;
+      if (event.isComposing || state.adminDbQueryComposing) {
+        refreshAdminDbAutocomplete(adminDbQuery);
+        return;
+      }
       scheduleAdminDbQueryRender(adminDbQuery);
       return;
     }

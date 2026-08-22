@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260822-company-db-explorer-v52";
-const expectedAssetVersion = "v2-20260822-company-db-explorer-v34";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-autocomplete-v53";
+const expectedAssetVersion = "v2-20260823-company-autocomplete-v35";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -774,6 +774,9 @@ assert(
     && adminDbAutocompleteBlock.includes("aliases.some((alias) => alias.startsWith(query))")
     && adminDbAutocompleteBlock.includes("Math.min(8")
     && app.includes("data-admin-db-autocomplete-option")
+    && app.includes("function refreshAdminDbAutocomplete(input)")
+    && app.includes("function scheduleAdminDbQueryRender(input, delay = 40)")
+    && app.includes('input.insertAdjacentHTML("afterend", markup)')
     && app.includes('event.key === "ArrowDown"')
     && app.includes('(adminDbQuery || autocompleteOption) && event.key === "Escape"'),
   "one-character company autocomplete must rank name and alias matches, cap suggestions at eight, and support keyboard navigation",
