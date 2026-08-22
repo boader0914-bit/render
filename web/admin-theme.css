@@ -191,6 +191,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-mobile-primary button,
   .admin-mobile-secondary button,
   .secondary-button,
+  .ghost-button,
   .small-button,
   .icon-button,
   .header-user-view,
@@ -206,6 +207,14 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   color: var(--text-primary) !important;
   box-shadow: none !important;
   transition: var(--ui-transition);
+}
+
+html[data-theme-resolved] body.role-admin .admin-files-collapsible summary::after {
+  border-color: var(--border-subtle) !important;
+  background: var(--surface-control) !important;
+  background-image: none !important;
+  color: var(--accent-strong) !important;
+  box-shadow: none !important;
 }
 
 html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
@@ -804,12 +813,7 @@ html[data-theme-resolved] body.role-admin #adminConsoleDashboard :is(
   .admin-region-audit-summary,
   .admin-region-company-list > article
 ),
-html[data-theme-resolved] body.role-admin :is(
-  .run-purpose-result,
-  .run-purpose-result-grid > article,
-  .run-apply-grid > article,
-  .crawl-route-preview > article
-),
+html[data-theme-resolved] body.role-admin .crawl-route-preview > article,
 html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(
   .admin-member-row:not(.head),
   .admin-member-history-list
@@ -834,21 +838,11 @@ html[data-theme-resolved] body.role-admin #adminConsoleDashboard :is(
   box-shadow: none !important;
 }
 
-html[data-theme-resolved] body.role-admin :is(
-  .crawl-route-preview,
-  .run-purpose-result,
-  .run-purpose-result-grid,
-  .run-apply-grid
-) :is(strong, b, label) {
+html[data-theme-resolved] body.role-admin .crawl-route-preview :is(strong, b, label) {
   color: var(--text-primary) !important;
 }
 
-html[data-theme-resolved] body.role-admin :is(
-  .crawl-route-preview,
-  .run-purpose-result,
-  .run-purpose-result-grid,
-  .run-apply-grid
-) :is(span, small, em, p) {
+html[data-theme-resolved] body.role-admin .crawl-route-preview :is(span, small, em, p) {
   color: var(--text-secondary) !important;
 }
 
@@ -874,15 +868,6 @@ html[data-theme-resolved] body.role-admin #adminMemberRequestDashboard :is(
 html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
   .crawl-purpose-panel,
   .crawl-progress,
-  .run-apply-empty,
-  .run-apply-panel,
-  .run-purpose-result,
-  .run-purpose-result-grid > article,
-  .run-apply-grid > article,
-  .run-apply-check,
-  .run-apply-linked-queue,
-  .run-apply-linked-queue > article,
-  .run-apply-linked-list > article,
   .crawl-route-preview > article,
   .advanced-box
 ) {
@@ -900,8 +885,7 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :
   .crawl-speed-options > button,
   .crawl-progress-stages > span,
   .crawl-progress-numbers > span,
-  .run-apply-linked-actions > button,
-  .ghost-button
+  .run-result-receipt-kpis > article
 ) {
   border-color: var(--border-subtle) !important;
   background: var(--surface-control) !important;
@@ -920,9 +904,7 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :
 }
 
 html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :is(
-  .crawl-purpose-options em,
-  .run-apply-head em,
-  .run-apply-status
+  .crawl-purpose-options em
 ) {
   border-color: var(--border-subtle) !important;
   background: var(--surface-control) !important;
@@ -942,6 +924,10 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] :
 ) {
   color: var(--text-secondary) !important;
   text-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin [data-admin-section-panel="collect"] .run-result-receipt-head > div > span {
+  color: var(--accent) !important;
 }
 
 /* Region analysis uses the same components as the former home dashboard. */
@@ -1134,6 +1120,7 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, inp
     [data-ui-interactive="true"],
     .admin-region-ops-queue-list > button,
     .secondary-button,
+    .ghost-button,
     .small-button,
     .icon-button
   ):hover {

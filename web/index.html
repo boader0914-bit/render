@@ -230,6 +230,44 @@
               <div class="company-master-panel" id="companyMasterPanel"></div>
             </div>
           </details>
+          <details class="admin-card admin-files-collapsible" id="yeogiAdminCard" data-ui-surface="card">
+            <summary>OTA 보조 도구</summary>
+            <div class="admin-files-collapsible-body">
+              <div class="card-head">
+                <h3>여기어때 일괄 가져오기</h3>
+                <span class="state-badge" id="yeogiManualBadge">대기</span>
+              </div>
+              <p class="hint">업체별 OTA 연결 상태와 확인 작업은 업체 검수 화면에서 처리합니다.</p>
+              <div class="yeogi-actions">
+                <button class="secondary-button" id="yeogiOpenButton" type="button">결과 화면 열기</button>
+                <button class="ghost-button" id="yeogiCopyLinkButton" type="button">링크만 복사</button>
+              </div>
+              <p class="hint" id="yeogiCurrentKeyword">현재 키워드 기준</p>
+              <div class="link-fallback" id="yeogiLinkBox" hidden>
+                <input id="yeogiLinkOutput" type="text" readonly>
+              </div>
+              <details class="advanced-box" data-ui-surface="control">
+                <summary>PC용 추출 코드</summary>
+                <div class="yeogi-actions">
+                  <button class="secondary-button" id="yeogiScriptButton" type="button">코드 복사</button>
+                  <button class="ghost-button" id="yeogiToggleScriptButton" type="button">코드 보기</button>
+                </div>
+                <div class="script-fallback" id="yeogiScriptBox" hidden>
+                  <textarea id="yeogiScriptOutput" rows="6" readonly></textarea>
+                </div>
+              </details>
+              <label class="field">
+                <span>여기어때 검색 결과 붙여넣기</span>
+                <textarea id="yeogiImportInput" rows="7" placeholder="여기어때 결과 화면에서 복사한 숙소 목록 텍스트 또는 PC 추출 CSV를 붙여넣으세요."></textarea>
+              </label>
+              <div class="yeogi-actions">
+                <button class="primary-button" id="yeogiImportButton" type="button" disabled>통합하기</button>
+                <button class="ghost-button" id="yeogiClearButton" type="button">입력 지우기</button>
+              </div>
+              <p class="import-status" id="yeogiPreviewStatus">붙여넣기 대기</p>
+              <p class="import-status" id="yeogiImportStatus">통합하면 화면이 자동 갱신됩니다.</p>
+            </div>
+          </details>
         </section>
 
         <section class="admin-section-panel active" data-admin-section-panel="overview" aria-label="운영 홈">
@@ -307,50 +345,9 @@
 
           <section class="admin-card" id="runResultAdminCard">
             <div class="card-head">
-              <h3>실행 결과</h3>
-              <button class="small-button" type="button" data-open-collection-archive>보관함</button>
-              <button class="small-button" id="refreshRuns" type="button">새로고침</button>
+              <h3>최근 수집 결과</h3>
             </div>
-            <label class="field">
-              <span>결과 선택</span>
-              <select id="runSelect"></select>
-            </label>
             <div class="run-apply-summary" id="runApplySummary" aria-live="polite"></div>
-          </section>
-
-          <section class="admin-card" id="yeogiAdminCard">
-            <div class="card-head">
-              <h3>여기어때 통합</h3>
-              <span class="state-badge" id="yeogiManualBadge">대기</span>
-            </div>
-            <div class="yeogi-actions">
-              <button class="secondary-button" id="yeogiOpenButton" type="button">결과 화면 열기</button>
-              <button class="ghost-button" id="yeogiCopyLinkButton" type="button">링크만 복사</button>
-            </div>
-            <p class="hint" id="yeogiCurrentKeyword">현재 키워드 기준</p>
-            <div class="link-fallback" id="yeogiLinkBox" hidden>
-              <input id="yeogiLinkOutput" type="text" readonly>
-            </div>
-            <details class="advanced-box">
-              <summary>PC용 추출 코드</summary>
-              <div class="yeogi-actions">
-                <button class="secondary-button" id="yeogiScriptButton" type="button">코드 복사</button>
-                <button class="ghost-button" id="yeogiToggleScriptButton" type="button">코드 보기</button>
-              </div>
-              <div class="script-fallback" id="yeogiScriptBox" hidden>
-                <textarea id="yeogiScriptOutput" rows="6" readonly></textarea>
-              </div>
-            </details>
-            <label class="field">
-              <span>여기어때 검색 결과 붙여넣기</span>
-              <textarea id="yeogiImportInput" rows="7" placeholder="여기어때 결과 화면에서 복사한 숙소 목록 텍스트 또는 PC 추출 CSV를 붙여넣으세요."></textarea>
-            </label>
-            <div class="yeogi-actions">
-              <button class="primary-button" id="yeogiImportButton" type="button" disabled>통합하기</button>
-              <button class="ghost-button" id="yeogiClearButton" type="button">입력 지우기</button>
-            </div>
-            <p class="import-status" id="yeogiPreviewStatus">붙여넣기 대기</p>
-            <p class="import-status" id="yeogiImportStatus">통합하면 화면이 자동 갱신됩니다.</p>
           </section>
 
         </div>

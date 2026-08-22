@@ -4994,6 +4994,28 @@ function downloadLabelForFile(file, manifest = {}) {
   return file;
 }
 
+function runCollectedAt(runId = "", manifest = {}, stat = {}) {
+  for (const value of [
+    manifest.completedAt,
+    manifest.finishedAt,
+    manifest.collectedAt,
+    manifest.startedAt,
+    manifest.createdAt
+  ]) {
+    const time = Date.parse(String(value || ""));
+    if (Number.isFinite(time)) return new Date(time).toISOString();
+  }
+  // A legacy run id can contain the requested check-in date, so it is not a
+  // trustworthy collection timestamp. Prefer the directory creation time and
+  // only use the earliest remaining filesystem timestamp as a legacy fallback.
+  const birthtime = Date.parse(String(stat.birthtime || ""));
+  if (Number.isFinite(birthtime) && birthtime > 0) return new Date(birthtime).toISOString();
+  const fallbackTimes = [stat.ctime, stat.mtime]
+    .map((value) => Date.parse(String(value || "")))
+    .filter((time) => Number.isFinite(time) && time > 0);
+  return fallbackTimes.length ? new Date(Math.min(...fallbackTimes)).toISOString() : "";
+}
+
 async function listRuns() {
   await fsp.mkdir(OUTPUTS_DIR, { recursive: true });
   const entries = await fsp.readdir(OUTPUTS_DIR, { withFileTypes: true });
@@ -5009,6 +5031,7 @@ async function listRuns() {
     if (manifest && /^\?+$/.test(String(manifest.keyword || "").trim())) continue;
     const stat = await fsp.stat(dirPath);
     const provinceKey = provinceKeyForRun(entry.name, manifest);
+    const collectedAt = runCollectedAt(entry.name, manifest || {}, stat);
 
     runs.push({
       id: entry.name,
@@ -5033,13 +5056,17 @@ async function listRuns() {
       checkOut: manifest?.checkOut || "",
       province: provinceKey,
       provinceLabel: (PROVINCES[provinceKey] || PROVINCES.local).label,
+      collectedAt,
       updatedAt: stat.mtime.toISOString(),
       counts: manifest?.counts || {},
       files: manifest?.files || files
     });
   }
 
-  return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return runs.sort((a, b) =>
+    String(b.collectedAt || "").localeCompare(String(a.collectedAt || ""))
+    || String(b.id || "").localeCompare(String(a.id || ""))
+  );
 }
 
 function placeRankComparisonScope(run = {}) {
@@ -5929,6 +5956,166 @@ function normalizeYeogiManualRows(rows) {
   return normalized;
 }
 
+function yeogiImportCompanyLocationMatches(row = {}, company = {}) {
+  const rowLocation = normalizeAddressKey(
+    row.location || row.address || row["주소"] || row["지역"] || ""
+  );
+  if (!rowLocation) return false;
+  const companyLocations = uniqueTexts([
+    ...(company.addresses || []),
+    ...(company.regions || []),
+    ...companyChannelRegionSearchVariants(company)
+  ])
+    .map(normalizeAddressKey)
+    .filter((value) => value && value.length >= 2);
+  return companyLocations.some((location) => (
+    location.includes(rowLocation) || rowLocation.includes(location)
+  ));
+}
+
+function yeogiBulkImportProtectedExposure(exposure = {}) {
+  const current = sanitizeCompanyChannelExposure("yeogi", exposure || {});
+  if (!current) return false;
+  return current.method === "admin_manual"
+    || ["directly_verified", "broken_link", "mismatch", "not_found"].includes(current.status);
+}
+
+function richerCompanyChannelText(currentValue = "", nextValue = "") {
+  const current = String(currentValue || "").trim();
+  const next = String(nextValue || "").trim();
+  if (!current) return next;
+  if (!next) return current;
+  return current.length >= next.length ? current : next;
+}
+
+function mergeYeogiBulkExposure(currentExposure = {}, nextExposure = {}) {
+  const current = sanitizeCompanyChannelExposure("yeogi", currentExposure || {});
+  const next = sanitizeCompanyChannelExposure("yeogi", nextExposure || {});
+  if (!next) return current;
+  if (!current) return next;
+  return sanitizeCompanyChannelExposure("yeogi", {
+    ...next,
+    url: current.url || next.url,
+    evidenceUrl: current.evidenceUrl || next.evidenceUrl,
+    price: next.price || current.price,
+    rank: next.rank || current.rank,
+    searchKeyword: next.searchKeyword || current.searchKeyword,
+    searchedKeywords: boundedUnique([
+      ...(current.searchedKeywords || []),
+      ...(next.searchedKeywords || [])
+    ], 8),
+    note: richerCompanyChannelText(current.note, next.note),
+    products: (current.products || []).length ? current.products : next.products
+  });
+}
+
+async function applyYeogiImportToCompanyMaster(rows = [], context = {}) {
+  const master = await readCompanyMaster();
+  const nameIndex = new Map();
+  for (const company of Object.values(master.companies || {})) {
+    if (!context.runId || !(company.runIds || []).includes(context.runId)) continue;
+    const names = [company.primaryName, ...(company.aliases || [])];
+    for (const name of names) {
+      const key = normalizeCompanyIdentityName(name);
+      if (!key) continue;
+      if (!nameIndex.has(key)) nameIndex.set(key, new Set());
+      nameIndex.get(key).add(company.companyId);
+    }
+  }
+
+  const changedByCompany = new Map();
+  let matched = 0;
+  let ambiguous = 0;
+  let unmatched = 0;
+  let preserved = 0;
+  for (const row of rows) {
+    const name = row.name || row["업체명"] || "";
+    const key = normalizeCompanyIdentityName(name);
+    const nameMatchedIds = [...(nameIndex.get(key) || [])];
+    const companyIds = nameMatchedIds.filter((companyId) => {
+      const company = master.companies?.[companyId];
+      return company && yeogiImportCompanyLocationMatches(row, company);
+    });
+    if (companyIds.length !== 1) {
+      if (companyIds.length > 1 || (nameMatchedIds.length && !companyIds.length)) ambiguous += 1;
+      else unmatched += 1;
+      continue;
+    }
+    const company = master.companies?.[companyIds[0]];
+    if (!company) {
+      unmatched += 1;
+      continue;
+    }
+    const nextExposure = sanitizeCompanyChannelExposure("yeogi", {
+      status: "directly_verified",
+      url: row.url || "",
+      price: row.price || "",
+      rank: row.rank_or_order || row.rank || null,
+      confidence: 100,
+      source: "manual",
+      method: "yeogi_bulk_import",
+      evidenceUrl: row.url || "",
+      searchKeyword: context.keyword || "",
+      note: "여기어때 결과 화면 수동 가져오기에서 노출 확인",
+      checkedAt: context.checkedAt,
+      updatedAt: context.checkedAt
+    });
+    if (!nextExposure) {
+      unmatched += 1;
+      continue;
+    }
+    const currentExposure = company.channelExposures?.yeogi || company.channelExposure?.yeogi || null;
+    matched += 1;
+    if (yeogiBulkImportProtectedExposure(currentExposure)) {
+      preserved += 1;
+      continue;
+    }
+    const exposure = mergeYeogiBulkExposure(currentExposure, nextExposure);
+    if (!exposure) {
+      unmatched += 1;
+      matched -= 1;
+      continue;
+    }
+    company.channelExposures = {
+      ...publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {}),
+      yeogi: exposure
+    };
+    changedByCompany.set(company.companyId, exposure);
+  }
+
+  for (const [companyId, exposure] of changedByCompany) {
+    const company = master.companies[companyId];
+    company.channelExposureHistory = [
+      ...(company.channelExposureHistory || []),
+      {
+        at: context.checkedAt,
+        action: "yeogi_bulk_import",
+        runId: context.runId || "",
+        channels: [{
+          channel: exposure.channel,
+          label: exposure.label,
+          status: exposure.status,
+          statusLabel: exposure.statusLabel,
+          confidence: exposure.confidence,
+          url: exposure.url,
+          evidenceUrl: exposure.evidenceUrl,
+          source: exposure.source,
+          method: exposure.method,
+          checkedAt: exposure.checkedAt,
+          searchKeyword: exposure.searchKeyword,
+          note: exposure.note
+        }]
+      }
+    ].slice(-80);
+    company.duplicateNotes = [
+      ...(company.duplicateNotes || []),
+      { at: context.checkedAt, reason: "여기어때 일괄 가져오기 노출 확인" }
+    ].slice(-40);
+  }
+  if (changedByCompany.size) await writeCompanyMaster(master);
+  return { matched, ambiguous, unmatched, preserved };
+}
+
 async function importYeogiSupplement(payload) {
   const runId = String(payload.runId || "").trim();
   const sourceText = String(payload.sourceText || "").trim();
@@ -5936,8 +6123,19 @@ async function importYeogiSupplement(payload) {
   if (!runId || !dirPath || !fs.existsSync(dirPath)) throw new Error("선택한 실행 결과를 찾을 수 없습니다.");
   if (!sourceText) throw new Error("붙여넣기 데이터가 비어 있습니다.");
 
+  const stat = await fsp.stat(dirPath);
   const files = await fsp.readdir(dirPath);
   const manifest = (await readManifest(dirPath)) || {};
+  const collectedAt = runCollectedAt(runId, manifest, stat);
+  if (collectedAt && ![
+    manifest.completedAt,
+    manifest.finishedAt,
+    manifest.collectedAt,
+    manifest.startedAt,
+    manifest.createdAt
+  ].some((value) => Number.isFinite(Date.parse(String(value || ""))))) {
+    manifest.collectedAt = collectedAt;
+  }
   const platformFile = manifestFile(manifest, "platform", files, (file) => file.endsWith("_glamping_crawl_test.csv"));
   if (!platformFile) throw new Error("플랫폼 결과 CSV를 찾을 수 없습니다.");
 
@@ -5950,7 +6148,8 @@ async function importYeogiSupplement(payload) {
     throw new Error("여기어때 숙소 행을 찾지 못했습니다. CSV 헤더 또는 페이지 텍스트를 다시 확인하세요.");
   }
 
-  const importedAt = new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+  const importedAtIso = new Date().toISOString();
+  const importedAt = new Date(importedAtIso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
   const importedRows = normalizeYeogiManualRows(parsedRows.map((row, index) => ({
     channel: "여기어때",
     section: row.section,
@@ -5985,16 +6184,37 @@ async function importYeogiSupplement(payload) {
   const importFile = `${prefix}_여기어때수동보완.csv`;
   await writeCsv(path.join(dirPath, importFile), importedRows, orderedColumns(importedRows, columns));
 
+  const companyLink = await applyYeogiImportToCompanyMaster(importedRows, {
+    runId,
+    keyword: manifest.keyword || manifest.searchKeyword || "",
+    checkedAt: importedAtIso
+  }).catch((error) => ({ matched: 0, ambiguous: 0, unmatched: importedRows.length, preserved: 0, error: error.message || String(error) }));
+
   manifest.files = Array.from(new Set([...(manifest.files || []), importFile]));
   manifest.fileRoles = { ...(manifest.fileRoles || {}), yeogiManual: importFile };
   manifest.counts = { ...(manifest.counts || {}), yeogiManual: importedRows.length };
-  manifest.yeogiImport = { importedAt, count: importedRows.length, method: "browser_or_manual" };
+  manifest.yeogiImport = {
+    importedAt,
+    importedAtIso,
+    count: importedRows.length,
+    method: "browser_or_manual",
+    companyMatched: companyLink.matched,
+    companyAmbiguous: companyLink.ambiguous,
+    companyUnmatched: companyLink.unmatched,
+    companyPreserved: companyLink.preserved,
+    companyLinkError: companyLink.error || ""
+  };
   await fsp.writeFile(path.join(dirPath, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
-  await appendHistoryForRun(runId).catch((error) => {
-    console.warn(`Could not append history for ${runId}: ${error.message || error}`);
-  });
 
-  return { importedCount: importedRows.length, data: await loadRun(runId) };
+  return {
+    importedCount: importedRows.length,
+    companyMatchedCount: companyLink.matched,
+    companyAmbiguousCount: companyLink.ambiguous,
+    companyUnmatchedCount: companyLink.unmatched,
+    companyPreservedCount: companyLink.preserved,
+    companyLinkError: companyLink.error || "",
+    data: await loadRun(runId, { skipCompanyMaster: true, skipHistory: true, applyCompanyMaster: true })
+  };
 }
 
 function minPrice(value) {
@@ -9438,6 +9658,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
       .filter(Boolean)
       .slice(-8),
     channelExposures: publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {}),
+    channelExposureHistory: (company.channelExposureHistory || []).slice(-12),
     correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection,
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
@@ -11689,9 +11910,9 @@ async function readHistoryObservations() {
 async function appendHistoryForRun(runId) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return { appended: 0, reason: "run_not_found" };
-  const stat = await fsp.stat(dirPath);
-  const collectedAt = stat.mtime.toISOString();
   const data = await loadRun(runId, { skipHistory: true });
+  if (!data) return { appended: 0, reason: "run_not_found" };
+  const collectedAt = data.run?.collectedAt || "";
   const dbRoute = runCollectionDbRoute(data?.run || {});
   if (!dbRoute.appliesHistory) {
     return {
@@ -12890,10 +13111,10 @@ async function loadRun(runId, options = {}) {
   if (!dirPath || !fs.existsSync(dirPath)) return null;
 
   const stat = await fsp.stat(dirPath);
-  const collectedAt = stat.mtime.toISOString();
   const files = await fsp.readdir(dirPath);
   const manifest = await readManifest(dirPath);
   if (isIncompleteRunDirectory(manifest, files)) return null;
+  const collectedAt = runCollectedAt(runId, manifest || {}, stat);
   const provinceKey = provinceKeyForRun(runId, manifest);
   const province = PROVINCES[provinceKey] || PROVINCES.local;
   const regionalFile = manifestFile(manifest, "regional", files, (file) => file.endsWith("_naver_place_glamping_clusters.csv"));
@@ -13532,9 +13753,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260822-naver-ota-observation-v15"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260822-naver-ota-observation-v15"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260822-naver-ota-observation-v15"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260822-collection-receipt-v17"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260822-collection-receipt-v17"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260822-collection-receipt-v17"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

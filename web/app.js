@@ -242,7 +242,8 @@ const ADMIN_MOBILE_SECTIONS = {
     items: [
       { label: "업체 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbViewMode: "list" },
       { label: "지역 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbViewMode: "region" },
-      { label: "업체 기준값", tab: "admin", adminPanelSection: "database", anchor: "#companyMasterAdminCard" }
+      { label: "업체 기준값", tab: "admin", adminPanelSection: "database", anchor: "#companyMasterAdminCard" },
+      { label: "OTA 보조 도구", tab: "admin", adminPanelSection: "database", anchor: "#yeogiAdminCard" }
     ]
   },
   collect: {
@@ -252,7 +253,6 @@ const ADMIN_MOBILE_SECTIONS = {
     anchor: "#crawlForm",
     items: [
       { label: "검색·시장 수집", tab: "admin", adminPanelSection: "collect", anchor: "#crawlForm" },
-      { label: "OTA 수집", tab: "admin", adminPanelSection: "collect", anchor: "#yeogiAdminCard" },
       { label: "결과 보관함", tab: "admin", adminPanelSection: "archive", anchor: "#collectionArchive" },
       { label: "수집 이력", tab: "historyOps" }
     ]
@@ -1111,111 +1111,163 @@ function runDbApplyStatusModel(model = {}) {
   };
 }
 
-function runResultChannelLabels(item = {}) {
-  const labels = new Set();
-  if (item.url || item.naverUrl || item.naverPlaceUrl || item.bookingUrl || item.naverBookingUrl || item.reservationUrl) {
-    labels.add("네이버");
-  }
-  [
-    item.companyChannelExposures,
-    item.channelExposures,
-    item.companyProfile?.channelExposures,
-    item.manualMeta?.channelExposures
-  ].forEach((source) => {
-    Object.entries(source || {}).forEach(([key, value]) => {
-      const label = String(value?.label || key || "").trim();
-      const status = String(value?.status || value?.result || value || "").toLowerCase();
-      const hasStructuredStatus = Boolean(value && typeof value === "object" && (value.status || value.result));
-      if (label && (adminDbChannelStatusLinked(status) || (!hasStructuredStatus && !/not_found|not_observed|hidden|none|없음|미노출|fail/.test(status)))) labels.add(label);
-    });
-  });
-  [
-    ...(item.manualMeta?.otaChannels || []),
-    ...(item.manualCorrection?.otaChannels || [])
-  ].forEach((value) => {
-    const label = String(value || "").trim();
-    if (label) labels.add(label);
-  });
-  return [...labels].filter(Boolean);
+function runResultEntityNameKeys(source = {}) {
+  const company = source.company || {};
+  const names = [...new Set([
+    source.name,
+    source.primaryName,
+    source.companyName,
+    company.primaryName,
+    company.name,
+    ...(company.aliases || [])
+  ].map((value) => companyKey(value || "")).filter(Boolean))];
+  const addresses = [...new Set([
+    source.address,
+    source.location,
+    company.address,
+    company.region,
+    ...(company.addresses || []),
+    ...(company.regions || [])
+  ].map((value) => companyKey(value || "")).filter(Boolean))];
+  return [
+    ...names.map((name) => `name:${name}`),
+    ...names.flatMap((name) => addresses.map((address) => `name:${name}|${address}`))
+  ];
 }
 
-function runPurposeOutcomeCards(model = {}, status = {}) {
+function runResultCanonicalEntityMap(rows = []) {
+  const candidates = new Map();
+  const add = (key, canonical) => {
+    if (!key || !canonical) return;
+    if (!candidates.has(key)) candidates.set(key, new Set());
+    candidates.get(key).add(canonical);
+  };
+  rows.forEach((row) => {
+    const company = row.company || {};
+    const companyId = row.companyId || company.companyId || "";
+    if (!companyId) return;
+    const canonical = `id:${companyId}`;
+    [row.placeId, row.naverPlaceId, company.placeId, ...(company.placeIds || [])]
+      .filter(Boolean)
+      .forEach((id) => add(`place:${id}`, canonical));
+    [row.bookingBusinessId, company.bookingBusinessId, ...(company.bookingBusinessIds || [])]
+      .filter(Boolean)
+      .forEach((id) => add(`booking:${id}`, canonical));
+    runResultEntityNameKeys(row).forEach((key) => add(key, canonical));
+  });
+  return new Map(
+    [...candidates.entries()]
+      .filter(([, values]) => values.size === 1)
+      .map(([key, values]) => [key, [...values][0]])
+  );
+}
+
+function runResultEntityKey(source = {}, fallback = "", canonicalMap = new Map()) {
+  const company = source.company || {};
+  const companyId = source.companyId || company.companyId || "";
+  if (companyId) return `id:${companyId}`;
+  const placeId = source.placeId || source.naverPlaceId || company.placeId || company.placeIds?.[0] || "";
+  if (placeId && canonicalMap.has(`place:${placeId}`)) return canonicalMap.get(`place:${placeId}`);
+  const bookingId = source.bookingBusinessId || company.bookingBusinessId || company.bookingBusinessIds?.[0] || "";
+  if (bookingId && canonicalMap.has(`booking:${bookingId}`)) return canonicalMap.get(`booking:${bookingId}`);
+  for (const key of runResultEntityNameKeys(source)) {
+    if (canonicalMap.has(key)) return canonicalMap.get(key);
+  }
+  if (placeId) return `place:${placeId}`;
+  if (bookingId) return `booking:${bookingId}`;
+  if (source.id) return `id:${source.id}`;
+  const fallbackNameKey = runResultEntityNameKeys(source).find((key) => key.includes("|"))
+    || runResultEntityNameKeys(source)[0];
+  if (fallbackNameKey) return fallbackNameKey;
+  return fallback;
+}
+
+function runResultReceiptModel(model = {}, status = {}, linkedQueue = {}) {
   const data = state.data || {};
   const run = model.run || data.run || {};
   const items = data.availability?.items || [];
   const ranking = data.ranking || {};
   const diag = collectionDiagnosticProfile(items);
-  const revenue = summarizeRevenue(items);
-  const revenueAmount = finiteNumber(revenue.adjustedRevenue) + finiteNumber(revenue.dayAdjustedRevenue)
-    || finiteNumber(revenue.revenue) + finiteNumber(revenue.dayRevenue);
-  const soldCount = finiteNumber(revenue.pricedSoldOut)
-    + finiteNumber(revenue.missingPriceSoldOut)
-    + finiteNumber(revenue.dayPricedSoldOut)
-    + finiteNumber(revenue.dayMissingPriceSoldOut);
-  const channelCompanyCount = items.filter((item) => runResultChannelLabels(item).length).length;
   const rankCandidateCount = finiteNumber(ranking.total, 0) || finiteNumber(ranking.items?.length, 0) || finiteNumber(model.currentRunCompanies, 0) || items.length;
-  const detailRange = run.detailRankRanges ? `${run.detailRankRanges}위` : "범위 미확인";
-  const checkedText = diag.checked ? `${fmtNumber(diag.succeeded)}/${fmtNumber(diag.checked)}` : (items.length ? fmtNumber(items.length) : "대기");
-  const issueCount = finiteNumber(diag.priceMissing) + finiteNumber(diag.quantityUnclear) + finiteNumber(diag.missingDates);
-  const regionKeyword = run.keyword || run.label || "검색 지역";
-  if (model.purpose?.key === "basic_db") {
-    return {
-      key: "basic",
-      title: "기본정보 확보 결과",
-      note: "순위, 상품 및 상품별 금액, 예약채널을 업체 기준값에 반영합니다.",
-      cards: [
-        { label: "순위 후보", value: fmtNumber(rankCandidateCount), note: `${detailRange} 수집 범위` },
-        { label: "상품·금액", value: model.route?.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외", note: diag.succeeded ? `상세 확인 ${checkedText}` : "상품/가격 최신값 반영" },
-        { label: "예약채널", value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "확인 대기", note: "네이버·OTA 노출 신호" },
-        { label: "기준값 반영", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
-      ]
-    };
-  }
-  if (model.purpose?.key === "demand_location") {
-    return {
-      key: "region",
-      title: "지역정보 확보 결과",
-      note: "수요, 입지, 클러스터 신호를 지역카드와 수요구조에 반영합니다.",
-      cards: [
-        { label: "수요 신호", value: model.route?.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외", note: "검색수요·트렌드" },
-        { label: "입지·클러스터", value: model.demandSignalCompanies ? "반영" : "대기", note: `${regionKeyword} 기준` },
-        { label: "지역 범위", value: detailRange, note: "지도/클러스터 연결 범위" },
-        { label: "기준값 연결", value: fmtNumber(model.currentRunCompanies), note: status.label || "반영 상태", tone: status.tone || "good" }
-      ]
-    };
-  }
-  return {
-    key: "detail",
-    title: "상세정보 확보 결과",
-    note: "요일별 매출, 예약율, 수량, 가격, OTA 정보를 누적합니다.",
-    cards: [
-      { label: "예약율 표본", value: checkedText, note: "네이버 플레이스 기준" },
-      { label: "요일별 매출", value: revenueAmount ? fmtWon(revenueAmount) : fmtNumber(model.historyRows), note: revenueAmount ? `${fmtNumber(soldCount)}개/회 판매 반영` : "매출 관측치" },
-      { label: "수량·가격 확인", value: issueCount ? `${fmtNumber(issueCount)}건` : "정상", note: `가격 ${fmtNumber(diag.priceMissing)} · 수량 ${fmtNumber(diag.quantityUnclear)}`, tone: issueCount ? "watch" : "good" },
-      { label: "OTA 취합", value: channelCompanyCount ? `${fmtNumber(channelCompanyCount)}곳` : "대기", note: "보조 채널 노출 신호" }
+  const range = effectiveDetailRankRange(run);
+  const detailRange = /생략/.test(range) ? range : `${range}위`;
+  const itemProfiles = items.map((item) => collectionStatusProfile(item));
+  const canonicalEntityMap = runResultCanonicalEntityMap(linkedQueue.runRows || []);
+  const productIssueKeys = new Set();
+  itemProfiles.forEach((profile, index) => {
+    if (profile.statusKey !== "ready" || profile.priceMissing || profile.quantityUnclear || profile.missingDates.length) {
+      productIssueKeys.add(runResultEntityKey(items[index], `item:${index}`, canonicalEntityMap));
+    }
+  });
+  const channelIssueKeys = new Set();
+  (linkedQueue.runRows || []).forEach((row, index) => {
+    if (Number(row.metrics?.channels?.reviewNeeded || 0) > 0) {
+      channelIssueKeys.add(runResultEntityKey(row, `channel:${index}`, canonicalEntityMap));
+    }
+  });
+  const reviewKeys = new Set([...productIssueKeys, ...channelIssueKeys]);
+  (linkedQueue.queueRows || []).forEach((entry, index) => {
+    reviewKeys.add(runResultEntityKey(entry.row || {}, `queue:${index}`, canonicalEntityMap));
+  });
+  const handledKeys = new Set([...productIssueKeys, ...channelIssueKeys]);
+  const otherReviewCount = [...reviewKeys].filter((key) => !handledKeys.has(key)).length;
+  const channelOnlyIssueCount = [...channelIssueKeys].filter((key) => !productIssueKeys.has(key)).length;
+  const reviewCount = reviewKeys.size;
+  const salesRateCount = items.filter((item) => {
+    const lodging = salesStats(item, "lodging");
+    const day = salesStats(item, "day");
+    return (lodging.supply > 0 && Number.isFinite(lodging.rate))
+      || (day.supply > 0 && Number.isFinite(day.rate));
+  }).length;
+  const statusUi = status.key === "complete" ? "positive" : status.key === "partial" ? "warning" : "danger";
+  const needsReview = reviewCount > 0 || status.key !== "complete";
+  const exceptionParts = [
+    productIssueKeys.size ? `가격·상품 ${fmtNumber(productIssueKeys.size)}곳` : "",
+    channelOnlyIssueCount ? `채널 ${fmtNumber(channelOnlyIssueCount)}곳` : "",
+    otherReviewCount ? `기타 ${fmtNumber(otherReviewCount)}곳` : ""
+  ].filter(Boolean);
+  const purposeKey = model.purpose?.key || "basic_db";
+  const kpis = purposeKey === "revenue_detail"
+    ? [
+      { label: "확인 업체", value: fmtNumber(diag.succeeded), note: diag.checked ? `${fmtNumber(diag.checked)}곳 확인 시도` : "상세정보 확인 결과" },
+      { label: "판매율 산출", value: fmtNumber(salesRateCount), note: "판매 가능 총량 기준" },
+      { label: "확인 필요", value: fmtNumber(reviewCount), note: "업체 검수큐 연결" }
     ]
+    : purposeKey === "demand_location"
+      ? [
+        { label: "지역 신호", value: fmtNumber(model.demandSignalCompanies), note: "수요·입지 자료 반영" },
+        { label: "DB 반영", value: fmtNumber(model.currentRunCompanies), note: "업체 기준값 연결" },
+        { label: "확인 필요", value: fmtNumber(reviewCount), note: "업체 검수큐 연결" }
+      ]
+      : [
+        { label: "발견 업체", value: fmtNumber(rankCandidateCount), note: `${detailRange} 기준` },
+        { label: "DB 반영", value: fmtNumber(model.currentRunCompanies), note: "업체 기준값 저장" },
+        { label: "확인 필요", value: fmtNumber(reviewCount), note: "업체 검수큐 연결" }
+      ];
+  const observedAt = compactDateTime(
+    run.completedAt || run.finishedAt || run.updatedAt || run.collectedAt || run.createdAt || ""
+  );
+  return {
+    run,
+    kpis,
+    reviewCount,
+    needsReview,
+    statusUi,
+    statusLabel: status.key === "complete" ? "DB 반영 완료" : status.key === "partial" ? "DB 일부 확인" : "DB 반영 확인",
+    meta: [
+      run.keyword || run.label || "",
+      model.purpose?.shortLabel || model.purpose?.label || model.route?.label || "수집 결과",
+      detailRange,
+      dateRangeLabel(run),
+      observedAt
+    ].filter(Boolean).join(" · "),
+    exceptionLabel: reviewCount ? `확인 필요 ${fmtNumber(reviewCount)}곳` : needsReview ? "DB 반영 상태 확인" : "추가 확인 없음",
+    exceptionDetail: exceptionParts.length
+      ? exceptionParts.join(" · ")
+      : needsReview
+        ? status.message
+        : "업체·상품·채널 정보가 정상 반영되었습니다."
   };
-}
-
-function runPurposeOutcomeHtml(outcome = {}) {
-  return `
-    <div class="run-purpose-result ${escapeHtml(outcome.key || "")}">
-      <div class="run-purpose-result-head">
-        <span>수집 목적별 결과</span>
-        <strong>${escapeHtml(outcome.title || "수집 결과")}</strong>
-        <small>${escapeHtml(outcome.note || "")}</small>
-      </div>
-      <div class="run-purpose-result-grid">
-        ${(outcome.cards || []).map((card) => `
-          <article class="${escapeHtml(card.tone || "")}">
-            <span>${escapeHtml(card.label || "")}</span>
-            <strong>${escapeHtml(String(card.value ?? ""))}</strong>
-            <small>${escapeHtml(card.note || "")}</small>
-          </article>
-        `).join("")}
-      </div>
-    </div>
-  `;
 }
 
 function collectionRouteRunCount(company = {}, routeKey = "") {
@@ -1227,7 +1279,10 @@ function collectionRouteRunCount(company = {}, routeKey = "") {
 }
 
 function runDbApplyCompanyMatchSets(data = state.data || {}) {
-  const items = data.availability?.items || [];
+  const items = [
+    ...(data.availability?.items || []),
+    ...(data.ranking?.items || [])
+  ];
   const ids = new Set();
   const names = new Set();
   items.forEach((item) => {
@@ -1235,7 +1290,7 @@ function runDbApplyCompanyMatchSets(data = state.data || {}) {
     const name = compactSearchText(item.name || item.primaryName || "");
     if (name) names.add(name);
   });
-  return { ids, names, runId: data.run?.runId || "" };
+  return { ids, names, runId: data.run?.runId || data.run?.id || "" };
 }
 
 function rowMatchesRunApply(row = {}, match = {}) {
@@ -1303,120 +1358,51 @@ function runDbApplyLinkedQueueModel(model = {}, status = {}) {
   };
 }
 
-function runDbApplyLinkedQueueHtml(queue = {}) {
-  const rows = queue.queueRows || [];
-  const visibleRows = rows.slice(0, 4);
-  return `
-    <div class="run-apply-linked-queue ${escapeHtml(queue.tone || "watch")}">
-      <div class="run-apply-linked-head">
-        <div>
-          <span>보강 큐 연결</span>
-          <strong>${rows.length ? `${fmtNumber(rows.length)}곳 확인 필요` : "연결된 보강 대상 없음"}</strong>
-          <small>${escapeHtml(queue.summary || "수집 결과 기준으로 보강 대상을 자동 확인합니다.")}</small>
-        </div>
-        <mark>${escapeHtml(queue.lowConfidenceCount ? `낮은 신뢰도 ${fmtNumber(queue.lowConfidenceCount)}` : queue.confirmNeededCount ? `상세 수집 ${fmtNumber(queue.confirmNeededCount)}` : "정상")}</mark>
-      </div>
-      ${visibleRows.length ? `
-        <div class="run-apply-linked-list">
-          ${visibleRows.map(({ row, reasons }) => {
-            const company = row.company || {};
-            const metrics = row.metrics || {};
-            return `
-              <article>
-                <div>
-                  <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
-                  <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.rank ? `${fmtNumber(metrics.rank)}위` : "", metrics.collection?.label].filter(Boolean).join(" · "))}</small>
-                </div>
-                <p>${escapeHtml(reasons.join(" · "))}</p>
-              </article>
-            `;
-          }).join("")}
-          ${rows.length > visibleRows.length ? `<small class="run-apply-linked-more">외 ${fmtNumber(rows.length - visibleRows.length)}곳은 업체 관리 필터에서 이어서 확인합니다.</small>` : ""}
-        </div>
-      ` : `
-        <p>이번 실행에서 낮은 신뢰도나 보정 필요 신호가 잡힌 업체는 없습니다.</p>
-      `}
-      <div class="run-apply-linked-actions">
-        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">처리 필요 보기</button>
-        <button type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="low_confidence" ${queue.lowConfidenceCount ? "" : "disabled"}>낮은 신뢰도</button>
-        <button type="button" data-admin-db-source-link="confirm_needed" ${queue.confirmNeededCount ? "" : "disabled"}>상세 수집 대상</button>
-      </div>
-    </div>
-  `;
-}
-
 function renderRunResultApplySummary() {
   if (!isAdminRole() || !els.runApplySummary) return;
   if (!state.data?.run) {
     els.runApplySummary.innerHTML = `
       <div class="run-apply-empty">
-        <strong>결과를 선택하면 DB 반영 위치를 표시합니다.</strong>
-        <small>기본정보, 상세정보, 지역정보 중 어디에 반영됐는지 확인합니다.</small>
+        <strong>아직 수집 결과가 없습니다.</strong>
+        <small>키워드와 조건을 확인한 뒤 수집을 실행하세요.</small>
       </div>
     `;
     return;
   }
   const model = runDbApplySummaryModel(state.data);
-  const run = model.run || {};
   const status = runDbApplyStatusModel(model);
   const linkedQueue = runDbApplyLinkedQueueModel(model, status);
-  const outcome = runPurposeOutcomeCards(model, status);
-  const detailText = run.detailRankRanges ? `${run.detailRankRanges}위` : "범위 미확인";
-  const dateText = dateRangeLabel(run);
-  const historyValue = model.historyEligible ? fmtNumber(model.historyRows) : "제외";
-  const historyNote = model.historyEligible ? "이번 결과 매출 관측치" : "이 수집 목적은 매출 누적 제외";
-  const demandValue = model.route.appliesDemandLocation ? fmtNumber(model.demandSignalCompanies) : "제외";
-  const demandNote = model.route.appliesDemandLocation ? "지역정보 신호 반영" : "지역정보 수집 아님";
+  const receipt = runResultReceiptModel(model, status, linkedQueue);
   els.runApplySummary.innerHTML = `
-    <section class="run-apply-panel ${escapeHtml(model.route.key || "unknown")} ${escapeHtml(status.tone)}">
-      <div class="run-apply-head">
+    <section class="run-result-receipt">
+      <div class="run-result-receipt-head">
         <div>
-          <span>이번 수집 반영</span>
-          <strong>${escapeHtml(model.purpose.label || model.route.label || "수집 결과")}</strong>
-          <small>${escapeHtml([run.keyword || run.label || "", detailText, dateText].filter(Boolean).join(" · "))}</small>
+          <span>최근 결과</span>
+          <strong>수집 완료</strong>
+          <small>${escapeHtml(receipt.meta)}</small>
         </div>
-        <div class="run-apply-badges">
-          <mark class="run-apply-status ${escapeHtml(status.tone)}">${escapeHtml(status.label)}</mark>
-          <em>${escapeHtml(model.purpose.dbApplyText || model.targetText || "DB 반영")}</em>
-        </div>
+        <mark class="run-result-receipt-status" data-ui-status="${escapeHtml(receipt.statusUi)}" aria-label="DB 반영 상태: ${escapeHtml(receipt.statusLabel)}">${escapeHtml(receipt.statusLabel)}</mark>
       </div>
-      ${runPurposeOutcomeHtml(outcome)}
-      <div class="run-apply-check ${escapeHtml(status.tone)}">
-        <strong>${escapeHtml(status.label)}</strong>
-        <span>${escapeHtml(status.message)}</span>
-      </div>
-      <div class="run-apply-grid">
-        <article>
-          <span>업체 기준값</span>
-          <strong>${fmtNumber(model.currentRunCompanies)}</strong>
-          <small>이번 결과 업체 반영</small>
-        </article>
-        <article>
-          <span>상품·가격</span>
-          <strong>${model.route.appliesInventory ? fmtNumber(model.inventoryApplied) : "제외"}</strong>
-          <small>${model.route.appliesInventory ? "상품/가격 최신값 반영" : "노출 기록 중심"}</small>
-        </article>
-        <article>
-          <span>매출 이력</span>
-          <strong>${escapeHtml(historyValue)}</strong>
-          <small>${escapeHtml(historyNote)}</small>
-        </article>
-        <article>
-          <span>지역정보</span>
-          <strong>${escapeHtml(demandValue)}</strong>
-          <small>${escapeHtml(demandNote)}</small>
-        </article>
-      </div>
-      <p>${escapeHtml(model.error ? `업체 기준값 반영 오류: ${model.error}` : model.targetText)}</p>
-      <div class="run-apply-actions">
-        ${status.actions.map((action) => `
-          <button type="button" data-drawer-tab="admin" data-admin-section-link="${escapeHtml(action.section)}"${action.status ? ` data-admin-db-status-link="${escapeHtml(action.status)}"` : ""}>${escapeHtml(action.label)}</button>
+      <div class="run-result-receipt-kpis" aria-label="수집 결과 핵심 지표">
+        ${receipt.kpis.map((kpi) => `
+          <article data-ui-surface="control">
+            <span>${escapeHtml(kpi.label)}</span>
+            <strong>${escapeHtml(String(kpi.value))}</strong>
+            <small>${escapeHtml(kpi.note)}</small>
+          </article>
         `).join("")}
-        <button class="primary-button" type="button" data-open-place-rank-replay>플레이스 순서 다시 보기</button>
-        <button type="button" data-open-collection-archive>결과 보관함</button>
       </div>
-      ${placeRankComparisonSummaryHtml(state.data.rankComparison, { compact: true })}
-      ${runDbApplyLinkedQueueHtml(linkedQueue)}
+      <div class="run-result-receipt-exception" data-ui-status="${escapeHtml(receipt.needsReview ? receipt.statusUi === "positive" ? "warning" : receipt.statusUi : "positive")}">
+        <strong>${escapeHtml(receipt.exceptionLabel)}</strong>
+        <span>${escapeHtml(receipt.exceptionDetail)}</span>
+      </div>
+      <div class="run-result-receipt-actions">
+        ${receipt.needsReview
+          ? `<button class="primary-button" type="button" data-drawer-tab="admin" data-admin-section-link="database" data-admin-db-status-link="needs_work">전체 업체 검수큐 열기</button>`
+          : `<button class="primary-button" type="button" data-open-place-rank-replay>업종분석 · 경쟁 비교 보기</button>`}
+        <button class="secondary-button" type="button" data-open-collection-archive>결과 보관함</button>
+        <button class="ghost-button" type="button" data-open-collection-run>다음 수집</button>
+      </div>
     </section>
   `;
 }
@@ -1872,6 +1858,31 @@ function adminPanelMobileTarget(sectionKey = "database") {
   return ADMIN_PANEL_MOBILE_TARGETS[sectionKey] || ADMIN_PANEL_MOBILE_TARGETS.database;
 }
 
+function adminSectionAllowsAnchor(section = {}, anchor = "", tab = state.activeTab, panel = state.adminPanelSection) {
+  if (!anchor) return false;
+  const sectionTab = section.target || "admin";
+  const sectionPanel = section.adminPanelSection || "";
+  if (anchor === section.anchor
+    && sectionTab === tab
+    && (!sectionPanel || tab !== "admin" || sectionPanel === panel)) {
+    return true;
+  }
+  return (section.items || []).some((item) => {
+    const itemTab = item.tab || sectionTab;
+    const itemPanel = item.adminPanelSection || sectionPanel;
+    return item.anchor === anchor
+      && itemTab === tab
+      && (!itemPanel || tab !== "admin" || itemPanel === panel);
+  });
+}
+
+function adminAnchorAllowedForState(anchor, section = {}) {
+  if (adminSectionAllowsAnchor(section, anchor)) return true;
+  const primaryKey = adminPrimarySectionForTab(state.activeTab) || "summary";
+  const primarySection = ADMIN_MOBILE_SECTIONS[primaryKey] || ADMIN_MOBILE_SECTIONS.summary;
+  return primarySection !== section && adminSectionAllowsAnchor(primarySection, anchor);
+}
+
 function adminPrimarySectionForTab(tab, preferred = "") {
   if (!isAdminRole()) return "";
   const preferredSection = preferred ? ADMIN_MOBILE_SECTIONS[preferred] : null;
@@ -1965,8 +1976,9 @@ function syncAdminDesktopSecondaryNav() {
       const panel = item.adminPanelSection || section.adminPanelSection || "";
       const active = tab === state.activeTab
         && (!panel || panel === state.adminPanelSection)
-        && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode);
-      return `<button type="button" class="${active ? "active" : ""}" data-admin-desktop-tab="${escapeHtml(tab)}" data-admin-primary-key="${escapeHtml(primaryKey)}" data-admin-panel-section-key="${escapeHtml(panel)}" data-admin-db-view-mode="${escapeHtml(item.adminDbViewMode || "")}" data-admin-desktop-anchor="${escapeHtml(item.anchor || "")}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
+        && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode)
+        && (!item.anchor || item.anchor === state.adminMobileAnchor);
+      return `<button type="button" class="${active ? "active" : ""}" aria-pressed="${active ? "true" : "false"}"${active ? ' aria-current="page"' : ""} data-admin-desktop-tab="${escapeHtml(tab)}" data-admin-primary-key="${escapeHtml(primaryKey)}" data-admin-panel-section-key="${escapeHtml(panel)}" data-admin-db-view-mode="${escapeHtml(item.adminDbViewMode || "")}" data-admin-desktop-anchor="${escapeHtml(item.anchor || "")}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
     }).join("");
   });
 }
@@ -1990,6 +2002,7 @@ function scrollAdminMobileAnchor(anchor) {
   if (!anchor || !isAdminMobileLayout()) return;
   window.setTimeout(() => {
     const target = document.querySelector(anchor);
+    if (target instanceof HTMLDetailsElement) target.open = true;
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, 120);
 }
@@ -2001,7 +2014,9 @@ function syncAdminMobileNav() {
   const section = ADMIN_COMPACT_SECTIONS[sectionKey] || ADMIN_COMPACT_SECTIONS.summary;
   state.adminMobileSection = sectionKey;
   if (state.activeTab !== "admin") state.adminMobileAnchor = "";
-  if (state.activeTab === "admin") state.adminMobileAnchor = panelTarget?.anchor || section.anchor || "";
+  if (state.activeTab === "admin" && !adminAnchorAllowedForState(state.adminMobileAnchor, section)) {
+    state.adminMobileAnchor = panelTarget?.anchor || section.anchor || "";
+  }
 
   document.querySelectorAll("[data-admin-mobile-section]").forEach((button) => {
     const key = button.dataset.adminMobileSection || "";
@@ -2032,8 +2047,9 @@ function syncAdminMobileNav() {
       const adminDbStatus = item.adminDbStatus || "";
       const active = tab === state.activeTab
         && (!adminPanelSection || adminPanelSection === state.adminPanelSection)
-        && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode);
-      return `<button type="button" class="${active ? "active" : ""}" data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-db-status-key="${escapeHtml(adminDbStatus)}" data-admin-db-view-mode="${escapeHtml(item.adminDbViewMode || "")}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
+        && (!item.adminDbViewMode || item.adminDbViewMode === state.adminDbViewMode)
+        && (!item.anchor || item.anchor === state.adminMobileAnchor);
+      return `<button type="button" class="${active ? "active" : ""}" aria-pressed="${active ? "true" : "false"}"${active ? ' aria-current="page"' : ""} data-admin-mobile-tab="${escapeHtml(tab)}" data-admin-mobile-section-key="${escapeHtml(sectionKey)}" data-admin-panel-section-key="${escapeHtml(adminPanelSection)}" data-admin-db-status-key="${escapeHtml(adminDbStatus)}" data-admin-db-view-mode="${escapeHtml(item.adminDbViewMode || "")}" data-admin-mobile-anchor="${escapeHtml(anchor)}">${escapeHtml(item.label || tabLabel(tab))}</button>`;
     }).join("");
   });
   syncPrimaryNavButtons();
@@ -2043,13 +2059,14 @@ function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSec
   if (!isAdminRole()) return;
   const section = ADMIN_COMPACT_SECTIONS[sectionKey] || ADMIN_COMPACT_SECTIONS.summary;
   const nextTab = roleAllowsTab(tab) ? tab : section.target;
+  const requestedAnchor = anchor || section.anchor || "";
   state.adminMobileSection = sectionKey;
-  state.adminMobileAnchor = anchor || section.anchor || "";
+  state.adminMobileAnchor = requestedAnchor;
   if (nextTab === "admin") {
     state.adminPanelSection = adminPanelSection || section.adminPanelSection || "overview";
   }
   setActiveTab(nextTab, { adminMobileSection: sectionKey });
-  scrollAdminMobileAnchor(state.adminMobileAnchor);
+  scrollAdminMobileAnchor(requestedAnchor);
 }
 
 function activateAdminPrimaryNav(sectionKey = "summary") {
@@ -2057,6 +2074,7 @@ function activateAdminPrimaryNav(sectionKey = "summary") {
   const section = ADMIN_MOBILE_SECTIONS[sectionKey] || ADMIN_MOBILE_SECTIONS.summary;
   const nextTab = roleAllowsTab(section.target) ? section.target : "admin";
   if (nextTab === "admin") state.adminPanelSection = section.adminPanelSection || "overview";
+  state.adminMobileAnchor = section.anchor || "";
   setActiveTab(nextTab, { adminMobileSection: adminMobileSectionForTab(nextTab) });
   if (nextTab === "admin") setAdminPanelSection(state.adminPanelSection);
   if (section.anchor) {
@@ -2064,13 +2082,56 @@ function activateAdminPrimaryNav(sectionKey = "summary") {
   }
 }
 
+let latestCollectionResultPromise = null;
+
+function ensureLatestCollectionResult(options = {}) {
+  if (!isAdminRole() || !state.runs?.length) return;
+  const forceLatestRequest = options.force === true;
+  const latestRunId = String(state.runs[0]?.id || "").trim();
+  const renderedRunId = String(state.data?.run?.id || state.data?.run?.runId || "").trim();
+  if (!latestRunId || (!forceLatestRequest && latestRunId === state.activeRunId && latestRunId === renderedRunId) || latestCollectionResultPromise) return;
+  if (els.runApplySummary) {
+    els.runApplySummary.innerHTML = `<div class="run-apply-empty"><strong>최근 수집 결과를 불러오는 중입니다.</strong><small>보관함에서 본 과거 결과 대신 최신 회차로 전환합니다.</small></div>`;
+  }
+  let retryStaleLoad = false;
+  latestCollectionResultPromise = loadRun(latestRunId)
+    .then((result) => {
+      retryStaleLoad = result === null;
+      return result;
+    })
+    .catch((error) => {
+      setStatus("최근 수집 결과 로딩 실패");
+      if (els.runApplySummary) {
+        els.runApplySummary.innerHTML = `<div class="run-apply-empty"><strong>최근 수집 결과를 불러오지 못했습니다.</strong><small>${escapeHtml(error.message)}</small></div>`;
+      }
+    })
+    .finally(() => {
+      latestCollectionResultPromise = null;
+      if (!retryStaleLoad) return;
+      const currentLatestRunId = String(state.runs?.[0]?.id || "").trim();
+      const collectionPanelActive = isAdminRole()
+        && state.activeTab === "admin"
+        && state.adminPanelSection === "collect";
+      if (collectionPanelActive && currentLatestRunId) {
+        window.setTimeout(() => {
+          if (isAdminRole() && state.activeTab === "admin" && state.adminPanelSection === "collect") {
+            ensureLatestCollectionResult({ force: true });
+          }
+        }, 0);
+      }
+    });
+}
+
 function setAdminPanelSection(sectionKey = "overview", options = {}) {
   if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
   state.adminPanelSection = sectionKey;
   if (isAdminRole() && state.activeTab === "admin") {
     const panelTarget = adminPanelMobileTarget(sectionKey);
+    const compactSection = ADMIN_COMPACT_SECTIONS[panelTarget.section] || ADMIN_COMPACT_SECTIONS.summary;
     state.adminMobileSection = panelTarget.section;
-    state.adminMobileAnchor = panelTarget.anchor;
+    if (!adminAnchorAllowedForState(state.adminMobileAnchor, compactSection)) {
+      state.adminMobileAnchor = panelTarget.anchor;
+    }
   }
   syncAdminSectionPanels();
   syncAdminMobileNav();
@@ -2079,6 +2140,7 @@ function setAdminPanelSection(sectionKey = "overview", options = {}) {
   if (sectionKey === "collect") {
     ensureCrawlControls();
     updateCrawlSpeedPreview();
+    ensureLatestCollectionResult();
   }
   if (options.scroll) {
     window.setTimeout(() => {
@@ -3008,8 +3070,7 @@ function spacedGlampingKeyword(value) {
   return text;
 }
 
-function yeogiSearchUrl(keyword = activeKeyword()) {
-  const run = state.data?.run || {};
+function yeogiSearchUrl(keyword = activeKeyword(), run = state.data?.run || {}) {
   const url = new URL("https://www.yeogi.com/domestic-accommodations");
   url.searchParams.set("freeForm", "true");
   url.searchParams.set("keyword", spacedGlampingKeyword(keyword));
@@ -3018,6 +3079,15 @@ function yeogiSearchUrl(keyword = activeKeyword()) {
   if (run.checkOut) url.searchParams.set("checkOut", run.checkOut);
   url.searchParams.set("personal", "2");
   return url.toString();
+}
+
+function yeogiTargetRun() {
+  return state.runs?.[0] || state.data?.run || null;
+}
+
+function yeogiTargetSearchUrl() {
+  const run = yeogiTargetRun() || {};
+  return yeogiSearchUrl(run.keyword || run.searchKeyword || activeKeyword(), run);
 }
 
 function companyKey(value) {
@@ -3863,6 +3933,7 @@ function platformsForItem(item) {
   });
   const exposureSource = item.companyProfile?.channelExposures || item.companyChannelExposures || {};
   Object.entries(exposureSource).forEach(([channel, exposure]) => {
+    if (!adminDbChannelStatusLinked(exposure?.status)) return;
     const status = exposure?.statusLabel || exposure?.status || "확인 필요";
     pushManualRow(exposure?.label || channel, status, {
       url: exposure?.url || "",
@@ -18548,6 +18619,7 @@ function adminDbStatusMatches(row = {}, status = "all") {
   const salesCategory = String(company.salesTarget?.category || "");
   const contactStatus = String(company.salesContact?.status || "");
   const lowConfidence = Boolean(metrics.lowConfidence || metrics.confidenceScore <= 2);
+  const channelReviewNeeded = Number(metrics.channels?.reviewNeeded || 0) > 0;
   const unreviewed = !metrics.adminReview && !company.adminReview;
   const recrawl = workKey === "recrawl" || reviewStatus === "recrawl_needed";
   const manual = workKey === "manual" || reviewStatus === "manual_needed" || lowConfidence;
@@ -18562,6 +18634,7 @@ function adminDbStatusMatches(row = {}, status = "all") {
       || manual
       || workKey === "missingRevenue"
       || workKey === "missingReservation"
+      || channelReviewNeeded
       || decisionQueueActive;
   }
   if (status === "low_confidence") return lowConfidence;
@@ -30510,7 +30583,9 @@ async function loadRuns(selectLatest = false) {
   setStatus("결과 로딩");
   const data = await fetchJson("/api/runs");
   state.runs = data.runs || [];
-  els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
+  if (els.runSelect) {
+    els.runSelect.innerHTML = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.label || run.id)}</option>`).join("");
+  }
   if (!state.runs.length) {
     state.data = null;
     renderRunResultApplySummary();
@@ -30530,15 +30605,19 @@ async function loadRuns(selectLatest = false) {
   if (selectLatest || !state.activeRunId || !state.runs.some((run) => run.id === state.activeRunId)) {
     state.activeRunId = state.runs[0].id;
   }
-  els.runSelect.value = state.activeRunId;
+  if (els.runSelect) els.runSelect.value = state.activeRunId;
   renderB2BSearchPanel();
   await loadRun(state.activeRunId);
 }
 
+let loadRunRequestSequence = 0;
+
 async function loadRun(runId) {
   if (!runId) return;
+  const requestSequence = ++loadRunRequestSequence;
   setStatus("데이터 로딩");
   const data = await fetchJson(`/api/runs/${encodeURIComponent(runId)}`);
+  if (requestSequence !== loadRunRequestSequence) return null;
   state.data = data;
   state.activeRunId = runId;
   if (state.placeRankReplayRunId && state.placeRankReplayRunId !== runId) state.placeRankReplayRunId = null;
@@ -30556,11 +30635,13 @@ async function loadRun(runId) {
     state.accountDeleteAdmin = null;
     state.securityHardeningAdmin = null;
   }
+  if (requestSequence !== loadRunRequestSequence) return null;
   if (roleAllowsTab("dictionary")) syncDictionaryInputToActiveRun(true);
   if (els.runSelect) els.runSelect.value = runId;
   renderAll();
   if (isAdminRole() && adminDbCompanyIdFromRoute()) handleAdminDbCompanyHash();
   setStatus("준비");
+  return data;
 }
 
 async function openPlaceRankReplay(runId = "") {
@@ -30597,14 +30678,19 @@ async function loadB2BHistoryRun(runId) {
 }
 
 function syncYeogiManualInterface() {
-  const url = yeogiSearchUrl();
+  const targetRun = yeogiTargetRun();
+  const targetKeyword = targetRun?.keyword || targetRun?.searchKeyword || activeKeyword();
+  const url = yeogiTargetSearchUrl();
   if (els.yeogiLinkOutput) els.yeogiLinkOutput.value = url;
   if (els.yeogiCurrentKeyword) {
-    els.yeogiCurrentKeyword.textContent = `${spacedGlampingKeyword(activeKeyword())} · ${productModeLabel(els.productModeInput?.value)} 기준`;
+    const targetTime = compactDateTime(targetRun?.collectedAt || targetRun?.updatedAt || "");
+    els.yeogiCurrentKeyword.textContent = targetRun
+      ? `통합 대상 · ${spacedGlampingKeyword(targetKeyword)} · ${dateRangeLabel(targetRun)}${targetTime ? ` · ${targetTime}` : ""}`
+      : "통합할 최신 수집 결과가 없습니다.";
   }
   const text = els.yeogiImportInput?.value?.trim() || "";
   const lineCount = text ? text.split(/\r?\n/).filter(Boolean).length : 0;
-  const ready = text.length >= 8 && state.activeRunId;
+  const ready = text.length >= 8 && targetRun?.id;
   if (els.yeogiPreviewStatus) {
     els.yeogiPreviewStatus.textContent = ready ? `${fmtNumber(lineCount)}줄 감지 · 통합 가능` : "붙여넣기 대기";
   }
@@ -30636,7 +30722,7 @@ async function copyText(text) {
 }
 
 async function copyYeogiSearchLink() {
-  const url = yeogiSearchUrl();
+  const url = yeogiTargetSearchUrl();
   if (els.yeogiLinkBox) els.yeogiLinkBox.hidden = false;
   if (els.yeogiLinkOutput) {
     els.yeogiLinkOutput.value = url;
@@ -30648,7 +30734,7 @@ async function copyYeogiSearchLink() {
 
 async function openYeogiSearch() {
   await copyYeogiSearchLink();
-  window.open(yeogiSearchUrl(), "_blank", "noopener,noreferrer");
+  window.open(yeogiTargetSearchUrl(), "_blank", "noopener,noreferrer");
 }
 
 async function copyYeogiScript() {
@@ -30672,8 +30758,10 @@ function clearYeogiImport() {
 
 async function submitYeogiImport() {
   const sourceText = els.yeogiImportInput.value.trim();
-  if (!sourceText || !state.activeRunId) {
-    els.yeogiImportStatus.textContent = "선택된 결과와 붙여넣은 내용이 필요합니다.";
+  const targetRun = yeogiTargetRun();
+  const targetRunId = String(targetRun?.id || "").trim();
+  if (!sourceText || !targetRunId) {
+    els.yeogiImportStatus.textContent = "최신 수집 결과와 붙여넣은 내용이 필요합니다.";
     return;
   }
   setYeogiBadge("통합 중");
@@ -30684,18 +30772,28 @@ async function submitYeogiImport() {
     const result = await fetchJson("/api/yeogi-import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ runId: state.activeRunId, sourceText })
+      body: JSON.stringify({ runId: targetRunId, sourceText })
     });
     state.runs = result.runs || state.runs;
     state.data = result.data || state.data;
+    state.activeRunId = targetRunId;
     if (selectedKey) {
       const updatedItem = (state.data?.availability?.items || []).find((item) => companyKey(item.name) === selectedKey);
       if (updatedItem) state.selectedItem = updatedItem;
     }
     els.yeogiImportInput.value = "";
     setYeogiBadge("통합완료");
-    els.yeogiImportStatus.textContent = `통합 완료: ${fmtNumber(result.importedCount || 0)}건 반영 · 화면 자동 갱신`;
+    const linked = Number(result.companyMatchedCount || 0);
+    const needsMatch = Number(result.companyAmbiguousCount || 0) + Number(result.companyUnmatchedCount || 0);
+    els.yeogiImportStatus.textContent = [
+      `통합 완료: ${fmtNumber(result.importedCount || 0)}건 반영`,
+      linked ? `업체 DB ${fmtNumber(linked)}곳 연결` : "",
+      needsMatch ? `업체 매칭 ${fmtNumber(needsMatch)}곳 확인 필요` : "",
+      result.companyLinkError ? "업체 DB 연결 오류" : "",
+      "화면 자동 갱신"
+    ].filter(Boolean).join(" · ");
     await loadHistoryOps();
+    await loadCompanyMasterSummary();
     renderAll();
     if (state.selectedItem && els.detailSheet && !els.detailSheet.hidden) renderSheet();
   } catch (error) {
@@ -31180,11 +31278,17 @@ function bindEvents() {
       const tab = adminDesktopTab.dataset.adminDesktopTab || "admin";
       const panel = adminDesktopTab.dataset.adminPanelSectionKey || "";
       const anchor = adminDesktopTab.dataset.adminDesktopAnchor || "";
+      if (tab === "admin" && panel) state.adminPanelSection = panel;
+      state.adminMobileAnchor = anchor;
       setActiveTab(tab, { adminMobileSection: adminMobileSectionForTab(tab) });
       if (tab === "admin" && panel) setAdminPanelSection(panel);
       if (panel === "database") renderAdminDatabaseDashboard();
       if (anchor) {
-        window.requestAnimationFrame(() => document.querySelector(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+        window.requestAnimationFrame(() => {
+          const target = document.querySelector(anchor);
+          if (target instanceof HTMLDetailsElement) target.open = true;
+          target?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
       }
       return;
     }
@@ -31976,11 +32080,11 @@ function bindEvents() {
     closeSheet();
     closeDrawer();
   });
-  els.runSelect.addEventListener("change", (event) => loadRun(event.target.value).catch((error) => {
+  els.runSelect?.addEventListener("change", (event) => loadRun(event.target.value).catch((error) => {
     setStatus("오류");
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }));
-  els.refreshRuns.addEventListener("click", () => loadRuns(true).catch((error) => {
+  els.refreshRuns?.addEventListener("click", () => loadRuns(true).catch((error) => {
     setStatus("오류");
     els.companyList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }));

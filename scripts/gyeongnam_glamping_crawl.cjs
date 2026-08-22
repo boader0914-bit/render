@@ -4196,6 +4196,7 @@ async function main() {
 
   const manifest = {
     outputDir: OUTPUT_DIR,
+    collectedAt: new Date().toISOString(),
     keyword: RAW_KEYWORD,
     keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),
     searchMode: SEARCH_MODE,

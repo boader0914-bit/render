@@ -352,15 +352,15 @@ assert(
 );
 
 assert(
-  serviceWorker.includes("naver-ota-observation-v33") && serviceWorker.includes('"/admin-theme.css"'),
+  serviceWorker.includes("collection-receipt-v35") && serviceWorker.includes('"/admin-theme.css"'),
   "service worker cache must refresh the theme rebuild release",
   failures
 );
 
 assert(
-  server.includes('styles.css?v=v2-20260822-naver-ota-observation-v15')
-    && server.includes('admin-theme.css?v=v2-20260822-naver-ota-observation-v15')
-    && server.includes('app.js?v=v2-20260822-naver-ota-observation-v15'),
+  server.includes('styles.css?v=v2-20260822-collection-receipt-v17')
+    && server.includes('admin-theme.css?v=v2-20260822-collection-receipt-v17')
+    && server.includes('app.js?v=v2-20260822-collection-receipt-v17'),
   "server asset query versions must refresh styles, theme, and app together",
   failures
 );
@@ -443,6 +443,175 @@ assert(
     && crawler.includes("const items = [...nightItems, ...unknownItems];")
     && server.includes("items: items.slice(0, 40)"),
   "server and crawler must honor the simplified collection ranges through the stored result boundary",
+  failures
+);
+
+const databasePanelStart = indexHtml.indexOf('data-admin-section-panel="database"');
+const overviewPanelStart = indexHtml.indexOf('data-admin-section-panel="overview"', databasePanelStart);
+const collectPanelStart = indexHtml.indexOf('data-admin-section-panel="collect"');
+const archivePanelStart = indexHtml.indexOf('data-admin-section-panel="archive"', collectPanelStart);
+const databasePanelMarkup = indexHtml.slice(databasePanelStart, overviewPanelStart);
+const collectPanelMarkup = indexHtml.slice(collectPanelStart, archivePanelStart);
+const runResultCardStart = collectPanelMarkup.indexOf('id="runResultAdminCard"');
+const runResultCardMarkup = runResultCardStart >= 0 ? collectPanelMarkup.slice(runResultCardStart) : "";
+const receiptEntityBlock = app.slice(
+  app.indexOf("function runResultCanonicalEntityMap("),
+  app.indexOf("function runResultReceiptModel(", app.indexOf("function runResultCanonicalEntityMap("))
+);
+const receiptModelBlock = app.slice(
+  app.indexOf("function runResultReceiptModel("),
+  app.indexOf("function collectionRouteRunCount", app.indexOf("function runResultReceiptModel("))
+);
+const receiptRendererBlock = app.slice(
+  app.indexOf("function renderRunResultApplySummary()"),
+  app.indexOf("function updateCrawlSpeedPreview", app.indexOf("function renderRunResultApplySummary()"))
+);
+const receiptCssBlock = styles.slice(
+  styles.indexOf(".run-apply-summary"),
+  styles.indexOf("body.role-admin .crawl-purpose-panel", styles.indexOf(".run-apply-summary"))
+);
+const loadRunsBlock = app.slice(
+  app.indexOf("async function loadRuns("),
+  app.indexOf("async function loadRun(", app.indexOf("async function loadRuns("))
+);
+const bindEventsBlock = app.slice(app.indexOf("function bindEvents()"));
+
+assert(
+  runResultCardMarkup.includes("최근 수집 결과")
+    && !runResultCardMarkup.includes('id="runSelect"')
+    && !runResultCardMarkup.includes('id="refreshRuns"'),
+  "collection result card must show only the latest receipt without duplicate history controls",
+  failures
+);
+
+assert(
+  receiptRendererBlock.includes('class="run-result-receipt"')
+    && receiptRendererBlock.includes('class="run-result-receipt-kpis"')
+    && receiptRendererBlock.includes('class="run-result-receipt-exception"')
+    && receiptRendererBlock.includes('data-admin-db-status-link="needs_work"')
+    && receiptRendererBlock.includes("data-open-place-rank-replay")
+    && receiptRendererBlock.includes("data-open-collection-archive")
+    && receiptRendererBlock.includes("data-open-collection-run")
+    && receiptRendererBlock.includes("전체 업체 검수큐 열기")
+    && !receiptRendererBlock.includes('class="run-result-receipt" data-ui-surface="card"')
+    && !receiptRendererBlock.includes("placeRankComparisonSummaryHtml")
+    && !receiptRendererBlock.includes("runDbApplyLinkedQueueHtml"),
+  "collection receipt must keep three summary layers and route details to their dedicated screens",
+  failures
+);
+
+assert(
+  receiptModelBlock.includes('label: "발견 업체"')
+    && receiptModelBlock.includes('label: "DB 반영"')
+    && receiptModelBlock.includes('label: "확인 업체"')
+    && receiptModelBlock.includes('label: "판매율 산출"')
+    && receiptModelBlock.includes('label: "확인 필요"'),
+  "collection receipt must expose the agreed basic and detail KPI labels",
+  failures
+);
+
+assert(
+  receiptEntityBlock.includes("function runResultCanonicalEntityMap(")
+    && receiptEntityBlock.includes("company.placeIds")
+    && receiptEntityBlock.includes("company.bookingBusinessIds")
+    && receiptEntityBlock.includes("canonicalMap.has")
+    && receiptModelBlock.includes("const canonicalEntityMap")
+    && receiptModelBlock.includes("canonicalEntityMap)")
+    && receiptModelBlock.includes("const channelOnlyIssueCount")
+    && receiptModelBlock.includes('salesStats(item, "day")'),
+  "collection receipt must deduplicate by stable IDs, keep issue totals disjoint, and count day-use sales rates",
+  failures
+);
+
+assert(
+  /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(receiptCssBlock)
+    && /@media \(max-width:\s*560px\)[\s\S]*?\.run-result-receipt-kpis\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(receiptCssBlock)
+    && receiptCssBlock.includes("cursor: default")
+    && !/\.run-apply-empty,\s*\.run-result-receipt\s*\{[^}]*\b(?:border|background|box-shadow):/i.test(receiptCssBlock)
+    && !/rgba\(|linear-gradient/.test(receiptCssBlock),
+  "collection receipt must use a flat static token-based three-column layout with a one-column mobile fallback",
+  failures
+);
+
+assert(
+  /\.secondary-button,\s*\.ghost-button,\s*\.small-button,/.test(themeStyles)
+    && themeStyles.includes("body.role-admin .admin-files-collapsible summary::after")
+    && !themeStyles.includes(".run-result-receipt-exception,"),
+  "moved OTA controls and receipt status rails must keep global theme tokens without scoped navy overrides",
+  failures
+);
+
+assert(
+  !/(run-purpose-result|run-apply-grid|run-apply-linked|run-apply-panel|run-apply-check)/.test(`${app}\n${styles}\n${themeStyles}`),
+  "removed collection-result layers must not remain as legacy rendering or theme rules",
+  failures
+);
+
+assert(
+  databasePanelMarkup.includes('id="yeogiAdminCard"')
+    && databasePanelMarkup.includes("OTA 보조 도구")
+    && !collectPanelMarkup.includes('id="yeogiAdminCard"')
+    && !app.includes('{ label: "OTA 수집"')
+    && app.includes('{ label: "OTA 보조 도구", tab: "admin", adminPanelSection: "database", anchor: "#yeogiAdminCard" }'),
+  "OTA batch tooling must live under company data while the collection receipt stays focused",
+  failures
+);
+
+const desktopSecondaryNavBlock = app.slice(
+  app.indexOf("function syncAdminDesktopSecondaryNav()"),
+  app.indexOf("function syncB2BRegionSecondaryNav()")
+);
+const mobileSecondaryNavBlock = app.slice(
+  app.indexOf("function syncAdminMobileNav()"),
+  app.indexOf("let latestCollectionResultPromise")
+);
+const adminPanelSectionBlock = app.slice(
+  app.indexOf("function setAdminPanelSection("),
+  app.indexOf("function syncAdminSectionPanels()")
+);
+
+assert(
+  app.includes("function adminSectionAllowsAnchor(")
+    && app.includes("function adminAnchorAllowedForState(")
+    && desktopSecondaryNavBlock.includes("(!item.anchor || item.anchor === state.adminMobileAnchor)")
+    && mobileSecondaryNavBlock.includes("(!item.anchor || item.anchor === state.adminMobileAnchor)")
+    && desktopSecondaryNavBlock.includes('aria-pressed="${active ? "true" : "false"}"')
+    && mobileSecondaryNavBlock.includes('aria-pressed="${active ? "true" : "false"}"')
+    && mobileSecondaryNavBlock.includes("scrollAdminMobileAnchor(requestedAnchor)")
+    && adminPanelSectionBlock.includes("adminAnchorAllowedForState(state.adminMobileAnchor, compactSection)"),
+  "admin secondary navigation must preserve explicit anchors and expose only the clicked destination as active",
+  failures
+);
+
+assert(
+  loadRunsBlock.includes("if (els.runSelect)")
+    && bindEventsBlock.includes('els.runSelect?.addEventListener("change"')
+    && bindEventsBlock.includes('els.refreshRuns?.addEventListener("click"')
+    && app.includes("function ensureLatestCollectionResult(options = {})")
+    && app.includes("const forceLatestRequest = options.force === true;")
+    && app.includes("retryStaleLoad = result === null;")
+    && app.includes("if (!retryStaleLoad) return;")
+    && app.includes("ensureLatestCollectionResult({ force: true });")
+    && app.includes('if (sectionKey === "collect")')
+    && app.includes("ensureLatestCollectionResult();")
+    && app.includes("let loadRunRequestSequence = 0;")
+    && app.includes("if (requestSequence !== loadRunRequestSequence) return null;")
+    && server.includes("function runCollectedAt(")
+    && crawler.includes("collectedAt: new Date().toISOString()")
+    && server.includes("const collectedAt = runCollectedAt(runId, manifest || {}, stat);")
+    && server.includes("String(b.collectedAt || \"\").localeCompare(String(a.collectedAt || \"\"))"),
+  "removing result selectors must remain runtime-safe and collection entry must restore the latest run",
+  failures
+);
+
+assert(
+  app.includes("function yeogiTargetRun()")
+    && app.includes("const targetRunId = String(targetRun?.id || \"\").trim();")
+    && app.includes("adminDbChannelStatusLinked(exposure?.status)")
+    && app.includes("const channelReviewNeeded = Number(metrics.channels?.reviewNeeded || 0) > 0;")
+    && server.includes("async function applyYeogiImportToCompanyMaster(")
+    && server.includes('method: "yeogi_bulk_import"'),
+  "OTA tools must target the explicit latest run, expose only confirmed links, and persist matched Yeogi evidence to company review data",
   failures
 );
 
