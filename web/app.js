@@ -59,7 +59,7 @@ const state = {
     feature: "all",
     quality: "all"
   },
-  adminDbViewMode: "region",
+  adminDbViewMode: "list",
   adminDbListPage: 1,
   adminDbListPageKey: "",
   adminDbSelectedCompanyId: "",
@@ -244,9 +244,7 @@ const ADMIN_MOBILE_SECTIONS = {
     anchor: "#adminDatabaseDashboard",
     items: [
       { label: "업체 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbViewMode: "list" },
-      { label: "지역 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbViewMode: "region" },
-      { label: "업체 기준값", tab: "admin", adminPanelSection: "database", anchor: "#companyMasterAdminCard" },
-      { label: "OTA 보조 도구", tab: "admin", adminPanelSection: "database", anchor: "#yeogiAdminCard" }
+      { label: "지역 DB", tab: "admin", adminPanelSection: "database", anchor: "#adminDatabaseDashboard", adminDbViewMode: "region" }
     ]
   },
   collect: {
@@ -18998,6 +18996,251 @@ function adminDbSelectOptions(options = [], selected = "all", allLabel = "전체
   ].join("");
 }
 
+function adminDbAutocompleteSuggestions(rows = [], rawQuery = "", limit = 8) {
+  const query = compactSearchText(rawQuery || "");
+  if (!query) return [];
+  return rows
+    .map((row) => {
+      const company = row.company || {};
+      const primary = compactSearchText(company.primaryName || "");
+      const aliases = (Array.isArray(company.aliases) ? company.aliases : [company.aliases])
+        .map((value) => compactSearchText(value || ""))
+        .filter(Boolean);
+      const location = compactSearchText([
+        row.provinceLabel,
+        row.localityLabel,
+        row.regionLabel,
+        ...(company.regions || []),
+        ...(company.addresses || [])
+      ].filter(Boolean).join(" "));
+      let score = Number.POSITIVE_INFINITY;
+      if (primary === query) score = 0;
+      else if (primary.startsWith(query)) score = 1;
+      else if (aliases.some((alias) => alias === query)) score = 2;
+      else if (aliases.some((alias) => alias.startsWith(query))) score = 3;
+      else if (primary.includes(query)) score = 4;
+      else if (aliases.some((alias) => alias.includes(query))) score = 5;
+      else if (query.length >= 2 && location.includes(query)) score = 6;
+      if (!Number.isFinite(score)) return null;
+      return { row, score };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.score - b.score || String(a.row.company?.primaryName || "").localeCompare(String(b.row.company?.primaryName || ""), "ko-KR", { numeric: true, sensitivity: "base" }))
+    .slice(0, Math.max(1, Math.min(8, Number(limit) || 8)))
+    .map((entry) => entry.row);
+}
+
+function adminDbCompanyAutocompleteHtml(rows = [], query = "") {
+  const normalizedQuery = compactSearchText(query || "");
+  if (!normalizedQuery) return "";
+  const suggestions = adminDbAutocompleteSuggestions(rows, query, 8);
+  return `
+    <div class="admin-db-autocomplete" id="adminDbAutocomplete" role="listbox" aria-label="유사 업체 자동완성">
+      ${suggestions.length ? suggestions.map((row) => {
+        const company = row.company || {};
+        return `
+          <a class="admin-db-autocomplete-option" href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" role="option" data-admin-db-autocomplete-option data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">
+            <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+            <small>${escapeHtml([row.provinceLabel, row.localityLabel, row.metrics?.category?.label].filter(Boolean).join(" · ") || "지역·업종 확인")}</small>
+          </a>
+        `;
+      }).join("") : `<p class="admin-db-autocomplete-empty">유사 업체가 없습니다. 다른 글자를 입력해 보세요.</p>`}
+    </div>
+  `;
+}
+
+function adminDbCompanyExplorerFiltersHtml(context = {}) {
+  const filters = context.filters || {};
+  const active = ["category", "status", "confidence", "source", "feature"].some((key) => filters[key] && filters[key] !== "all") || filters.sort !== "name";
+  const statusOptions = context.statusOptions || [];
+  const confidenceOptions = context.confidenceOptions || [];
+  const sourceOptions = context.sourceOptions || [];
+  return `
+    <details class="admin-db-company-filter" ${active ? "open" : ""}>
+      <summary data-ui-interactive="true">
+        <span>필터</span>
+        <small>${active ? "적용 중" : "필요할 때 펼치기"}</small>
+      </summary>
+      <div class="admin-db-company-filter-grid">
+        <label>
+          <span>정렬</span>
+          <select data-admin-db-sort>
+            ${[
+              ["name", "업체 가나다순"],
+              ["rank", "플레이스 순위순"],
+              ["latest_desc", "최근 수집일순"],
+              ["confidence_low", "확인 필요순"]
+            ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>숙소 유형</span>
+          <select data-admin-db-category>${adminDbSelectOptions(context.categoryOptions || [], filters.category, "전체 유형")}</select>
+        </label>
+        <label>
+          <span>관리 상태</span>
+          <select data-admin-db-status>
+            ${statusOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.status === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>수집 구분</span>
+          <select data-admin-db-source>
+            ${sourceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.source === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>자료 상태</span>
+          <select data-admin-db-confidence>
+            ${confidenceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.confidence === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
+          </select>
+        </label>
+        <label>
+          <span>시설</span>
+          <select data-admin-db-feature>
+            ${[
+              ["all", "시설 전체"],
+              ["pool", "수영장"],
+              ["seminar", "세미나실"],
+              ["pet", "애견동반"],
+              ["bbq", "바베큐"]
+            ].map(([value, label]) => `<option value="${value}" ${filters.feature === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </label>
+        <button type="button" class="admin-db-company-filter-reset" data-admin-db-clear>필터 초기화</button>
+      </div>
+    </details>
+  `;
+}
+
+function adminDbCompanyProvinceCardsHtml(grouped = [], filters = {}) {
+  return `
+    <section class="admin-db-company-explorer-section" data-admin-db-company-step="province" aria-labelledby="adminDbProvinceHeading">
+      <div class="admin-db-company-explorer-heading">
+        <div>
+          <span>1</span>
+          <div>
+            <h4 id="adminDbProvinceHeading">광역 지역을 선택하세요</h4>
+            <p>업체 수가 아니라 지역부터 차례로 좁혀 봅니다.</p>
+          </div>
+        </div>
+        <small>${fmtNumber(grouped.length)}개 광역</small>
+      </div>
+      <div class="admin-db-company-province-grid">
+        ${grouped.length ? grouped.map((province) => `
+          <button type="button" class="${filters.province === province.key ? "active" : ""}" data-ui-surface="control" data-ui-interactive="true" data-admin-db-company-province="${escapeHtml(province.key || "unknown")}">
+            <strong>${escapeHtml(province.label || "미분류")}</strong>
+            <small>${fmtNumber((province.regions || []).length)}개 시·군</small>
+          </button>
+        `).join("") : `<p class="admin-console-empty">저장된 지역 분류가 없습니다.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function adminDbCompanyRegionCardsHtml(grouped = [], filters = {}) {
+  if (!filters.province || filters.province === "all") return "";
+  const province = grouped.find((item) => item.key === filters.province) || null;
+  if (!province) return "";
+  return `
+    <section class="admin-db-company-explorer-section" data-admin-db-company-step="region" aria-labelledby="adminDbRegionHeading">
+      <div class="admin-db-company-explorer-heading">
+        <div>
+          <span>2</span>
+          <div>
+            <h4 id="adminDbRegionHeading">${escapeHtml(province.label || "선택 지역")}의 시·군</h4>
+            <p>산청·합천처럼 실제 지역을 선택하면 업체가 펼쳐집니다.</p>
+          </div>
+        </div>
+        <small>${fmtNumber((province.regions || []).length)}개 지역</small>
+      </div>
+      <div class="admin-db-company-region-grid">
+        ${(province.regions || []).map((region) => `
+          <button type="button" class="${filters.region === region.key ? "active" : ""}" data-ui-surface="control" data-ui-interactive="true" data-admin-db-company-region="${escapeHtml(region.key || "unknown")}" data-admin-db-company-region-province="${escapeHtml(province.key || "unknown")}">
+            <strong>${escapeHtml(region.label || "지역 미확인")}</strong>
+            <small>${fmtNumber((region.rows || []).length)}개 업체</small>
+          </button>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function adminDbCompanyExplorerResultsHtml(rows = [], allRows = [], filters = {}) {
+  const queryActive = Boolean(compactSearchText(filters.query || ""));
+  const regionActive = filters.region && filters.region !== "all";
+  if (!queryActive && !regionActive) return "";
+  const pageSize = 8;
+  const pageKey = JSON.stringify({ explorer: true, query: filters.query || "", province: filters.province || "all", region: filters.region || "all", sort: filters.sort || "name", category: filters.category || "all", status: filters.status || "all", confidence: filters.confidence || "all", source: filters.source || "all", feature: filters.feature || "all" });
+  if (state.adminDbListPageKey !== pageKey) {
+    state.adminDbListPageKey = pageKey;
+    state.adminDbListPage = 1;
+  }
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const page = Math.max(1, Math.min(totalPages, Number(state.adminDbListPage || 1)));
+  state.adminDbListPage = page;
+  const startIndex = (page - 1) * pageSize;
+  const shown = rows.slice(startIndex, startIndex + pageSize);
+  const location = regionActive
+    ? (allRows.find((row) => row.regionKey === filters.region && (filters.province === "all" || row.provinceKey === filters.province))?.localityLabel || "선택 지역")
+    : "";
+  const title = queryActive ? `“${filters.query.trim()}” 검색 결과` : `${location} 업체`;
+  return `
+    <section class="admin-db-company-explorer-results" data-admin-db-company-step="results" aria-labelledby="adminDbCompanyResultsHeading">
+      <div class="admin-db-company-explorer-heading">
+        <div>
+          <span>3</span>
+          <div>
+            <h4 id="adminDbCompanyResultsHeading">${escapeHtml(title)}</h4>
+            <p>업체를 선택하면 기본정보·예약채널·누적지표를 검토할 수 있습니다.</p>
+          </div>
+        </div>
+        <small>${fmtNumber(rows.length)}개 업체</small>
+      </div>
+      <div class="admin-db-company-list admin-db-company-explorer-list">
+        ${shown.length ? shown.map((row, index) => adminDbCompanyRow(row, { index: startIndex + index + 1, minimal: true })).join("") : `<div class="admin-console-empty">조건에 맞는 업체가 없습니다.</div>`}
+      </div>
+      ${rows.length > pageSize ? `
+        <div class="admin-db-pagination">
+          <button type="button" data-admin-db-list-page="${page - 1}" ${page <= 1 ? "disabled" : ""}>이전</button>
+          <span>${fmtNumber(startIndex + 1)}-${fmtNumber(Math.min(rows.length, startIndex + shown.length))} / ${fmtNumber(rows.length)}개</span>
+          <button type="button" data-admin-db-list-page="${page + 1}" ${page >= totalPages ? "disabled" : ""}>다음</button>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function adminDbCompanyExplorerHtml(context = {}) {
+  const filters = context.filters || {};
+  const rows = context.rows || [];
+  const filteredRows = context.filteredRows || [];
+  const grouped = context.grouped || [];
+  const queryActive = Boolean(compactSearchText(filters.query || ""));
+  return `
+    <section class="admin-db-company-explorer" aria-label="업체 DB 검색과 지역 탐색">
+      <section class="admin-db-company-search-shell" aria-labelledby="adminDbCompanySearchHeading">
+        <div class="admin-db-company-search-copy">
+          <span>업체 검색</span>
+          <h4 id="adminDbCompanySearchHeading">업체명을 입력하세요</h4>
+          <p>한 글자만 입력해도 저장된 DB에서 유사 업체를 최대 8개까지 보여줍니다.</p>
+        </div>
+        <div class="admin-db-company-query-row">
+          <div class="admin-db-company-query-wrap">
+            <input type="search" data-admin-db-query value="${escapeHtml(filters.query || "")}" placeholder="예: 월, 월명글램핑" role="combobox" aria-autocomplete="list" aria-controls="adminDbAutocomplete" aria-expanded="${queryActive ? "true" : "false"}" autocomplete="off">
+            ${adminDbCompanyAutocompleteHtml(rows, filters.query || "")}
+          </div>
+          <button type="button" class="primary-button" data-admin-db-query-commit>검색</button>
+          ${adminDbCompanyExplorerFiltersHtml(context)}
+        </div>
+      </section>
+      ${queryActive ? "" : adminDbCompanyProvinceCardsHtml(grouped, filters)}
+      ${queryActive ? "" : adminDbCompanyRegionCardsHtml(grouped, filters)}
+      ${adminDbCompanyExplorerResultsHtml(filteredRows, rows, filters)}
+    </section>
+  `;
+}
+
 function adminDbMetricCard(label, value, note, tone = "") {
   return `
     <article class="${escapeHtml(tone)}">
@@ -19009,12 +19252,12 @@ function adminDbMetricCard(label, value, note, tone = "") {
 }
 
 function adminDbViewMode() {
-  return ["region", "list", "review"].includes(state.adminDbViewMode) ? state.adminDbViewMode : "region";
+  return ["region", "list", "review"].includes(state.adminDbViewMode) ? state.adminDbViewMode : "list";
 }
 
 function adminDbPageScrollSelector(mode = "region") {
   if (mode === "review") return ".admin-db-selected-panel, .admin-db-user-view-bridge, #adminDatabaseBoard";
-  if (mode === "list") return ".admin-db-flat-list, .admin-db-page-guide, #adminDatabaseBoard";
+  if (mode === "list") return ".admin-db-company-explorer-results, .admin-db-company-explorer, #adminDatabaseBoard";
   return ".admin-db-region-board, .admin-db-province-board, .admin-db-page-guide, #adminDatabaseBoard";
 }
 
@@ -23091,9 +23334,11 @@ function adminDbCompanyRow(row = {}, options = {}) {
         </div>
         <small>${escapeHtml(row.provinceLabel || "미분류")} · ${escapeHtml(row.localityLabel || "지역 미확인")} · ${escapeHtml(metrics.category?.label || "숙박업")}</small>
       </div>
-      <div class="admin-db-company-tags">
-        ${adminDbCompanyCompactTags(row)}
-      </div>
+      ${options.minimal ? "" : `
+        <div class="admin-db-company-tags">
+          ${adminDbCompanyCompactTags(row)}
+        </div>
+      `}
       <div class="admin-db-company-action">
         <a class="primary" href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">검토</a>
       </div>
@@ -23337,17 +23582,25 @@ function restoreAdminSearchInput(selector = "", value = "", selectionStart = nul
 function commitAdminDbQueryRender(value = "", selectionStart = null, selectionEnd = null) {
   state.adminDbFilters = state.adminDbFilters || {};
   state.adminDbFilters.query = value || "";
-  state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
+  if (state.adminDbFilters.query.trim()) {
+    state.adminDbFilters.province = "all";
+    state.adminDbFilters.region = "all";
+  }
+  state.adminDbViewMode = "list";
   state.adminDbListPage = 1;
   renderAdminConsoleDashboard();
   restoreAdminSearchInput("[data-admin-db-query]", state.adminDbFilters.query || "", selectionStart, selectionEnd);
 }
 
-function scheduleAdminDbQueryRender(input, delay = 120) {
+function scheduleAdminDbQueryRender(input, delay = 200) {
   if (!input) return;
   state.adminDbFilters = state.adminDbFilters || {};
   state.adminDbFilters.query = input.value || "";
-  state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
+  if (state.adminDbFilters.query.trim()) {
+    state.adminDbFilters.province = "all";
+    state.adminDbFilters.region = "all";
+  }
+  state.adminDbViewMode = "list";
   const value = input.value || "";
   const selectionStart = input.selectionStart;
   const selectionEnd = input.selectionEnd;
@@ -23443,165 +23696,30 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const mainViewHtml = viewMode === "review"
     ? `<section class="admin-db-review-surface">${reviewPanelsHtml}</section>`
     : viewMode === "list"
-      ? adminDbFlatListPanel(filteredRows, rows, filters)
+      ? adminDbCompanyExplorerHtml({
+        rows,
+        filteredRows,
+        filters,
+        grouped: allGrouped,
+        categoryOptions,
+        statusOptions,
+        confidenceOptions,
+        sourceOptions
+      })
       : adminDbRegionWorkspaceHtml(grouped, allGrouped, filters, rows, filteredRows);
-  const advancedFilterOpen = Boolean(
-    filters.category !== "all"
-    || filters.status !== "all"
-    || filters.confidence !== "all"
-    || filters.source !== "all"
-    || filters.ota !== "all"
-    || filters.feature !== "all"
-    || filters.quality !== "all"
-  );
-  const primaryFilterOpen = Boolean(
-    (filters.query || "").trim()
-    || filters.province !== "all"
-    || filters.region !== "all"
-    || filters.sort !== "name"
-    || advancedFilterOpen
-  );
-  const activeFilterSummary = [
-    (filters.query || "").trim() ? "검색어" : "",
-    filters.province !== "all" ? "광역" : "",
-    filters.region !== "all" ? "지역" : "",
-    filters.sort !== "name" ? "정렬" : "",
-    advancedFilterOpen ? "상세" : ""
-  ].filter(Boolean).join(" · ") || "전체 조건";
-  const filterToolbarHtml = `
-    <div class="admin-db-filter-shell">
-      <div class="admin-db-toolbar admin-db-toolbar-main">
-        <label class="admin-db-filter-query">
-          <span>업체 검색</span>
-          <input type="search" data-admin-db-query value="${escapeHtml(filters.query || "")}" placeholder="업체명, 지역, 키워드">
-        </label>
-        <label>
-          <span>광역</span>
-          <select data-admin-db-province>${adminDbSelectOptions(provinceOptions, filters.province, "전체 광역")}</select>
-        </label>
-        <label>
-          <span>지역</span>
-          <select data-admin-db-region>${adminDbSelectOptions(regionOptions, filters.region, "전체 지역")}</select>
-        </label>
-        <label>
-          <span>정렬</span>
-          <select data-admin-db-sort>
-            ${[
-              ["name", "업체 가나다순"],
-              ["rank", "노출순"],
-              ["revenue_desc", "매출 높은순"],
-              ["revenue_asc", "매출 낮은순"],
-              ["rate_desc", "예약율 높은순"],
-              ["rate_asc", "예약율 낮은순"],
-              ["rooms_desc", "객실수 많은순"],
-              ["rooms_asc", "객실수 적은순"],
-              ["confidence_low", "낮은 신뢰도순"],
-              ["latest_desc", "최근 수집일순"]
-            ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? "selected" : ""}>${label}</option>`).join("")}
-          </select>
-        </label>
-        <button class="admin-db-filter-reset" type="button" data-admin-db-clear>초기화</button>
-      </div>
-      <details class="admin-db-filter-more" ${advancedFilterOpen ? "open" : ""}>
-        <summary>
-          <div>
-            <strong>상세 필터</strong>
-            <small>관리 상태, 신뢰도, 수집 구분, OTA, 시설 조건을 추가로 좁힙니다.</small>
-          </div>
-          <span>${advancedFilterOpen ? "적용중" : "열기"}</span>
-        </summary>
-        <div class="admin-db-toolbar admin-db-toolbar-advanced">
-          <label>
-            <span>카테고리</span>
-            <select data-admin-db-category>${adminDbSelectOptions(categoryOptions, filters.category, "전체 카테고리")}</select>
-          </label>
-          <label class="admin-db-filter-wide">
-            <span>관리 상태</span>
-            <select data-admin-db-status>
-              ${statusOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.status === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
-            </select>
-          </label>
-          <label class="admin-db-filter-wide">
-            <span>신뢰도</span>
-            <select data-admin-db-confidence>
-              ${confidenceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.confidence === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
-            </select>
-          </label>
-          <label class="admin-db-filter-wide">
-            <span>수집 구분</span>
-            <select data-admin-db-source>
-              ${sourceOptions.map(([value, label, count]) => `<option value="${escapeHtml(value)}" ${filters.source === value ? "selected" : ""}>${escapeHtml(label)} · ${fmtNumber(count)}</option>`).join("")}
-            </select>
-          </label>
-          <label>
-            <span>OTA 채널</span>
-            <small>야놀자·여기어때·떠나요·ONDA·Airbnb 노출 상태</small>
-            <select data-admin-db-ota>
-              ${[
-                ["all", "전체 채널"],
-                ["naver", "네이버"],
-                ["yeogi", "여기어때"],
-                ["yanolja", "야놀자"],
-                ["tteonayo", "떠나요"],
-                ["onda", "ONDA"],
-                ["airbnb", "Airbnb"],
-                ["channel_needs_manual", "자동 보완 필요"],
-                ["channel_not_found", "외부 OTA 검색 미확인"],
-                ["ota_missing", "외부 OTA 관측 없음"]
-              ].map(([value, label]) => `<option value="${value}" ${filters.ota === value ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
-          </label>
-          <label class="admin-db-filter-feature">
-            <span>시설 조건</span>
-            <small>수영장, 세미나실, 애견동반, 바베큐 등 업체 시설 문구 기준</small>
-            <select data-admin-db-feature>
-              ${[
-                ["all", "시설 전체"],
-                ["pool", "수영장 포함"],
-                ["seminar", "세미나실 포함"],
-                ["pet", "애견동반 포함"],
-                ["bbq", "바베큐 포함"]
-              ].map(([value, label]) => `<option value="${value}" ${filters.feature === value ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
-          </label>
-        </div>
-      </details>
-    </div>
-  `;
+  const heroProfile = viewMode === "region"
+    ? { eyebrow: "DB / 지역 DB", title: "지역 DB", note: "광역과 시·군별 수집 상태를 별도 화면에서 관리합니다.", count: `${fmtNumber(allGrouped.length)}개 광역` }
+    : { eyebrow: "DB / 업체 DB", title: "업체 DB", note: "업체명을 검색하거나 광역과 시·군을 차례로 선택하세요.", count: `${fmtNumber(rows.length)}개 업체` };
   els.adminDatabaseDashboard.innerHTML = `
     <section class="admin-db-board" id="adminDatabaseBoard">
       <div class="admin-db-hero">
         <div>
-          <span>업체 관리</span>
-          <h3>지역·업체</h3>
+          <span>${escapeHtml(heroProfile.eyebrow)}</span>
+          <h3>${escapeHtml(heroProfile.title)}</h3>
+          <p>${escapeHtml(heroProfile.note)}</p>
         </div>
-        <strong>${fmtNumber(filteredRows.length)} / ${fmtNumber(rows.length)}개 표시</strong>
+        <strong>${escapeHtml(heroProfile.count)}</strong>
       </div>
-      ${adminDbViewSwitchHtml(viewMode, filteredRows, rows, grouped)}
-      ${adminDbPageGuideHtml(viewMode, filteredRows, rows, grouped, filters)}
-      ${viewMode === "region" ? `
-        <details class="admin-db-search-drawer">
-          <summary>
-            <div>
-              <strong>업체 검색·필터 열기</strong>
-            </div>
-            <span>필터</span>
-          </summary>
-          ${filterToolbarHtml}
-        </details>
-      ` : ""}
-      ${viewMode === "list" ? `
-        <details class="admin-db-search-drawer list" ${primaryFilterOpen ? "open" : ""}>
-          <summary>
-            <div>
-              <strong>검색·필터</strong>
-              <small>${escapeHtml(activeFilterSummary)}</small>
-            </div>
-            <span>${primaryFilterOpen ? "적용중" : "열기"}</span>
-          </summary>
-          ${filterToolbarHtml}
-        </details>
-      ` : ""}
       <section class="admin-db-page-surface ${escapeHtml(viewMode)}" data-admin-db-page="${escapeHtml(viewMode)}">
         ${mainViewHtml}
         ${viewMode === "region" ? adminRegionalDatabasePanel(master) : ""}
@@ -33488,6 +33606,7 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-admin-db-clear]")) {
+      const resetViewMode = state.adminDbViewMode === "region" ? "region" : "list";
       state.adminDbFilters = {
         query: "",
         province: "all",
@@ -33501,10 +33620,44 @@ function bindEvents() {
         feature: "all",
         quality: "all"
       };
-      state.adminDbViewMode = "region";
+      state.adminDbViewMode = resetViewMode;
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
         document.querySelector("#adminDatabaseBoard")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    const adminDbQueryCommit = event.target.closest("[data-admin-db-query-commit]");
+    if (adminDbQueryCommit) {
+      const input = document.querySelector("[data-admin-db-query]");
+      commitAdminDbQueryRender(input?.value || "", input?.selectionStart, input?.selectionEnd);
+      return;
+    }
+    const adminDbCompanyProvince = event.target.closest("[data-admin-db-company-province]");
+    if (adminDbCompanyProvince) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.query = "";
+      state.adminDbFilters.province = adminDbCompanyProvince.dataset.adminDbCompanyProvince || "all";
+      state.adminDbFilters.region = "all";
+      state.adminDbViewMode = "list";
+      state.adminDbListPage = 1;
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector('[data-admin-db-company-step="region"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    const adminDbCompanyRegion = event.target.closest("[data-admin-db-company-region]");
+    if (adminDbCompanyRegion) {
+      state.adminDbFilters = state.adminDbFilters || {};
+      state.adminDbFilters.query = "";
+      state.adminDbFilters.province = adminDbCompanyRegion.dataset.adminDbCompanyRegionProvince || state.adminDbFilters.province || "all";
+      state.adminDbFilters.region = adminDbCompanyRegion.dataset.adminDbCompanyRegion || "all";
+      state.adminDbViewMode = "list";
+      state.adminDbListPage = 1;
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => {
+        document.querySelector('[data-admin-db-company-step="results"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       return;
     }
@@ -33577,7 +33730,7 @@ function bindEvents() {
       state.adminDbViewMode = "list";
       renderAdminConsoleDashboard();
       window.requestAnimationFrame(() => {
-        document.querySelector(".admin-db-flat-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        document.querySelector(".admin-db-company-explorer-results, .admin-db-flat-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       return;
     }
@@ -34249,6 +34402,35 @@ function bindEvents() {
     });
   });
   document.addEventListener("keydown", (event) => {
+    const adminDbQuery = event.target.closest?.("[data-admin-db-query]");
+    const autocompleteOption = event.target.closest?.("[data-admin-db-autocomplete-option]");
+    if (adminDbQuery && event.key === "ArrowDown") {
+      const firstOption = document.querySelector("[data-admin-db-autocomplete-option]");
+      if (firstOption) {
+        event.preventDefault();
+        firstOption.focus();
+      }
+      return;
+    }
+    if (autocompleteOption && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+      const options = Array.from(document.querySelectorAll("[data-admin-db-autocomplete-option]"));
+      const currentIndex = options.indexOf(autocompleteOption);
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex = (currentIndex + direction + options.length) % options.length;
+      if (options[nextIndex]) {
+        event.preventDefault();
+        options[nextIndex].focus();
+      }
+      return;
+    }
+    if ((adminDbQuery || autocompleteOption) && event.key === "Escape") {
+      event.preventDefault();
+      document.querySelector("#adminDbAutocomplete")?.setAttribute("hidden", "");
+      const input = document.querySelector("[data-admin-db-query]");
+      input?.setAttribute("aria-expanded", "false");
+      input?.focus();
+      return;
+    }
     const mapCompany = event.target.closest?.(".company-map-marker[data-open-company]");
     if (mapCompany && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();

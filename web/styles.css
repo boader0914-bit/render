@@ -27675,7 +27675,6 @@ body.role-admin .admin-db-selected-issues em,
 body.role-admin .company-master-row-tags span,
 body.role-admin .company-review-badge,
 body.role-admin .state-badge,
-body.role-admin .admin-db-hero span,
 body.role-admin .admin-db-quality-head mark,
 body.role-admin .admin-db-audit-head mark,
 body.role-admin .admin-db-selected-head mark,
@@ -40566,4 +40565,478 @@ html[data-theme-resolved] body.role-admin [data-admin-section-panel="files"] .pr
 html[data-theme-resolved="dark"] body.role-admin [data-admin-section-panel="files"] .primary-button {
   color: #0b120d !important;
 }
+}
+
+/* Company DB explorer v1: search first, then province, municipality, and company. */
+html[data-theme-resolved] body.role-admin .admin-db-hero {
+  border-color: var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: var(--card-shadow);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-hero span {
+  border: 0;
+  background: transparent;
+  color: var(--theme-accent-strong);
+  box-shadow: none;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-hero h3,
+html[data-theme-resolved] body.role-admin .admin-db-hero > strong {
+  color: var(--text-primary);
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-hero p {
+  max-width: 680px;
+  color: var(--text-secondary);
+}
+
+.admin-db-company-explorer {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.admin-db-company-search-shell,
+.admin-db-company-explorer-section,
+.admin-db-company-explorer-results {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: var(--card-shadow);
+}
+
+.admin-db-company-search-shell {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  z-index: 5;
+}
+
+.admin-db-company-search-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-db-company-search-copy > span {
+  color: var(--theme-accent-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-db-company-search-copy h4,
+.admin-db-company-explorer-heading h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.admin-db-company-search-copy h4 {
+  font-size: 22px;
+}
+
+.admin-db-company-search-copy p,
+.admin-db-company-explorer-heading p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.admin-db-company-query-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.admin-db-company-query-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.admin-db-company-query-wrap > input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 11px 14px;
+  font: inherit;
+  font-weight: 750;
+}
+
+.admin-db-company-query-wrap > input::placeholder {
+  color: var(--text-secondary);
+}
+
+.admin-db-company-query-wrap > input:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--theme-accent) 28%, transparent);
+  outline-offset: 2px;
+  border-color: var(--theme-accent);
+}
+
+.admin-db-company-query-row > .primary-button,
+.admin-db-company-filter > summary {
+  min-height: 48px;
+}
+
+.admin-db-autocomplete {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 30;
+  max-height: 360px;
+  overflow: auto;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--surface-card);
+  padding: 6px;
+  box-shadow: var(--card-shadow);
+}
+
+.admin-db-autocomplete[hidden] {
+  display: none;
+}
+
+.admin-db-autocomplete-option {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.admin-db-autocomplete-option strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-db-autocomplete-option small,
+.admin-db-autocomplete-empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.admin-db-autocomplete-empty {
+  margin: 0;
+  padding: 12px;
+}
+
+.admin-db-autocomplete-option:hover,
+.admin-db-autocomplete-option:focus-visible {
+  border-color: var(--theme-accent);
+  background: var(--surface-control);
+  outline: 0;
+}
+
+.admin-db-company-filter {
+  position: relative;
+}
+
+.admin-db-company-filter > summary {
+  min-width: 100px;
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 7px 13px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-db-company-filter > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-company-filter > summary span {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-db-company-filter > summary small {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.admin-db-company-filter-grid {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 25;
+  width: min(720px, calc(100vw - 48px));
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--surface-card);
+  padding: 14px;
+  box-shadow: var(--card-shadow);
+}
+
+.admin-db-company-filter:not([open]) > .admin-db-company-filter-grid {
+  display: none;
+}
+
+.admin-db-company-filter-grid label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.admin-db-company-filter-grid select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 7px 9px;
+}
+
+.admin-db-company-filter-reset {
+  min-height: 40px;
+  align-self: end;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.admin-db-company-explorer-section,
+.admin-db-company-explorer-results {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.admin-db-company-explorer-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-db-company-explorer-heading > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.admin-db-company-explorer-heading > div > span {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface-control);
+  color: var(--theme-accent-strong);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.admin-db-company-explorer-heading > div > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-company-explorer-heading h4 {
+  font-size: 17px;
+}
+
+.admin-db-company-explorer-heading > small {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-db-company-province-grid,
+.admin-db-company-region-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-db-company-province-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.admin-db-company-region-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-db-company-province-grid > button,
+.admin-db-company-region-grid > button {
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 13px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 13px;
+  text-align: left;
+}
+
+.admin-db-company-province-grid > button strong,
+.admin-db-company-region-grid > button strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.admin-db-company-province-grid > button small,
+.admin-db-company-region-grid > button small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.admin-db-company-province-grid > button.active,
+.admin-db-company-region-grid > button.active {
+  border-color: var(--theme-accent);
+  background: var(--card-selected);
+}
+
+.admin-db-company-explorer-list {
+  display: grid;
+  gap: 8px;
+}
+
+body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-company-simple {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
+  border-color: var(--border-subtle);
+  background: var(--surface-control);
+  padding: 12px 14px;
+  box-shadow: none;
+}
+
+.admin-db-company-explorer-list .admin-db-company-action {
+  min-width: 74px;
+}
+
+.admin-db-company-explorer-list .admin-db-company-action a {
+  min-height: 38px;
+  display: inline-grid;
+  place-items: center;
+}
+
+@media (max-width: 900px) {
+  .admin-db-company-province-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-db-company-region-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-db-company-search-shell,
+  .admin-db-company-explorer-section,
+  .admin-db-company-explorer-results {
+    padding: 16px;
+  }
+
+  .admin-db-company-query-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-db-company-query-wrap {
+    grid-column: 1 / -1;
+  }
+
+  .admin-db-company-query-row > .primary-button,
+  .admin-db-company-filter {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .admin-db-company-filter-grid {
+    position: static;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 7px;
+  }
+
+  .admin-db-company-province-grid,
+  .admin-db-company-region-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-company-simple {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@media (max-width: 460px) {
+  .admin-db-company-search-copy h4 {
+    font-size: 19px;
+  }
+
+  .admin-db-company-query-row > .primary-button,
+  .admin-db-company-filter {
+    width: 100%;
+  }
+
+  .admin-db-company-filter > summary {
+    width: 100%;
+  }
+
+  .admin-db-company-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-db-company-explorer-heading {
+    align-items: flex-start;
+  }
+
+  .admin-db-company-explorer-heading p {
+    display: none;
+  }
+
+  .admin-db-company-province-grid > button,
+  .admin-db-company-region-grid > button {
+    min-height: 68px;
+    padding: 11px;
+  }
+
+  body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-company-simple {
+    min-height: 0;
+    padding: 11px;
+  }
 }

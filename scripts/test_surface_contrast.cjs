@@ -204,8 +204,9 @@ const canonicalThemeContracts = [
 
 const appExplicitSurfaceContracts = [
   'class="admin-console-panel admin-member-panel" data-ui-surface="card"',
-  'class="admin-db-view-switch" data-ui-surface="control"',
-  'data-ui-surface="metric" data-ui-interactive="true" data-admin-db-province-card=',
+  'class="admin-db-company-explorer" aria-label="업체 DB 검색과 지역 탐색"',
+  'data-ui-surface="control" data-ui-interactive="true" data-admin-db-company-province=',
+  'data-ui-surface="control" data-ui-interactive="true" data-admin-db-company-region=',
   'class="location-decision ${decision.tone}" data-ui-surface="soft"',
   'data-ui-status="${escapeHtml(component.tone)}"'
 ];
@@ -359,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260822-company-controls-v51";
-const expectedAssetVersion = "v2-20260822-company-controls-v33";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260822-company-db-explorer-v52";
+const expectedAssetVersion = "v2-20260822-company-db-explorer-v34";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -614,10 +615,13 @@ assert(
 assert(
   databasePanelMarkup.includes('id="yeogiAdminCard"')
     && databasePanelMarkup.includes("OTA 보조 도구")
+    && databasePanelMarkup.includes('id="yeogiAdminCard" data-ui-surface="card" hidden aria-hidden="true"')
+    && databasePanelMarkup.includes('id="companyMasterAdminCard" data-ui-surface="card" hidden aria-hidden="true"')
     && !collectPanelMarkup.includes('id="yeogiAdminCard"')
     && !app.includes('{ label: "OTA 수집"')
-    && app.includes('{ label: "OTA 보조 도구", tab: "admin", adminPanelSection: "database", anchor: "#yeogiAdminCard" }'),
-  "OTA batch tooling must live under company data while the collection receipt stays focused",
+    && !app.includes('{ label: "OTA 보조 도구", tab: "admin", adminPanelSection: "database", anchor: "#yeogiAdminCard" }')
+    && !app.includes('{ label: "업체 기준값", tab: "admin", adminPanelSection: "database", anchor: "#companyMasterAdminCard" }'),
+  "OTA batch tooling may remain available internally but must not compete with company and region DB navigation",
   failures
 );
 
@@ -683,6 +687,19 @@ const adminDbCompanyRowBlock = app.slice(
   app.indexOf("function adminDbCompanyRow("),
   app.indexOf("function adminDbRegionGroup(", app.indexOf("function adminDbCompanyRow("))
 );
+const adminDbAutocompleteBlock = app.slice(
+  app.indexOf("function adminDbAutocompleteSuggestions("),
+  app.indexOf("function adminDbCompanyAutocompleteHtml(", app.indexOf("function adminDbAutocompleteSuggestions("))
+);
+const adminDbExplorerBlock = app.slice(
+  app.indexOf("function adminDbCompanyExplorerHtml("),
+  app.indexOf("function adminDbMetricCard(", app.indexOf("function adminDbCompanyExplorerHtml("))
+);
+const adminDbRenderBlock = app.slice(
+  app.indexOf("function renderAdminDatabaseDashboard("),
+  app.indexOf("function adminConsoleKpis(", app.indexOf("function renderAdminDatabaseDashboard("))
+);
+const adminDbExplorerCssBlock = styles.slice(styles.indexOf("/* Company DB explorer v1:"));
 const adminDbDetailBlock = app.slice(
   app.indexOf("function adminDbSelectedDetailPanel("),
   app.indexOf("function adminDbCompanyRow(", app.indexOf("function adminDbSelectedDetailPanel("))
@@ -733,6 +750,67 @@ assert(
     && !adminDbCompanyRowBlock.includes("자동 수집 신뢰도")
     && !adminDbCompanyRowBlock.includes("data-queue-recrawl-company"),
   "company DB list rows must stay identity-focused with one review action",
+  failures
+);
+
+assert(
+  app.includes('adminDbViewMode: "list"')
+    && adminDbExplorerBlock.includes('role="combobox"')
+    && adminDbExplorerBlock.includes('aria-autocomplete="list"')
+    && adminDbExplorerBlock.includes('aria-controls="adminDbAutocomplete"')
+    && adminDbExplorerBlock.includes("adminDbCompanyProvinceCardsHtml(grouped, filters)")
+    && adminDbExplorerBlock.includes("adminDbCompanyRegionCardsHtml(grouped, filters)")
+    && adminDbExplorerBlock.includes("adminDbCompanyExplorerResultsHtml(filteredRows, rows, filters)")
+    && adminDbRenderBlock.includes("adminDbCompanyExplorerHtml({")
+    && adminDbRenderBlock.includes('viewMode === "region" ? adminRegionalDatabasePanel(master) : ""')
+    && !adminDbExplorerBlock.includes("data-admin-db-ota"),
+  "company DB must open with search, then province, municipality, and company results while region DB remains separate",
+  failures
+);
+
+assert(
+  adminDbAutocompleteBlock.includes("if (!query) return [];")
+    && adminDbAutocompleteBlock.includes("primary.startsWith(query)")
+    && adminDbAutocompleteBlock.includes("aliases.some((alias) => alias.startsWith(query))")
+    && adminDbAutocompleteBlock.includes("Math.min(8")
+    && app.includes("data-admin-db-autocomplete-option")
+    && app.includes('event.key === "ArrowDown"')
+    && app.includes('(adminDbQuery || autocompleteOption) && event.key === "Escape"'),
+  "one-character company autocomplete must rank name and alias matches, cap suggestions at eight, and support keyboard navigation",
+  failures
+);
+
+const autocompleteSandbox = {
+  compactSearchText(value) {
+    return String(value || "").normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  }
+};
+vm.createContext(autocompleteSandbox);
+vm.runInContext(`${adminDbAutocompleteBlock}\nthis.adminDbAutocompleteSuggestions = adminDbAutocompleteSuggestions;`, autocompleteSandbox);
+const autocompleteFixture = [
+  { company: { primaryName: "월명글램핑", aliases: ["월명 캠프"] }, provinceLabel: "경남", localityLabel: "산청" },
+  { company: { primaryName: "달빛글램핑", aliases: ["월빛 캠핑"] }, provinceLabel: "경남", localityLabel: "합천" },
+  ...Array.from({ length: 10 }, (_, index) => ({ company: { primaryName: `월하${index}글램핑`, aliases: [] }, provinceLabel: "경남", localityLabel: "산청" }))
+];
+const autocompleteResult = autocompleteSandbox.adminDbAutocompleteSuggestions(autocompleteFixture, "월", 8);
+assert(
+  autocompleteResult.length === 8
+    && autocompleteResult[0]?.company?.primaryName === "월명글램핑"
+    && autocompleteResult.every((row) => /월/.test(`${row.company?.primaryName || ""}${(row.company?.aliases || []).join("")}`)),
+  "one Korean character must return at most eight deterministic existing-company suggestions",
+  failures
+);
+
+assert(
+  adminDbExplorerCssBlock.includes(".admin-db-company-autocomplete") === false
+    && adminDbExplorerCssBlock.includes(".admin-db-autocomplete")
+    && adminDbExplorerCssBlock.includes('.admin-db-company-filter:not([open]) > .admin-db-company-filter-grid')
+    && adminDbExplorerCssBlock.includes("grid-template-columns: repeat(5, minmax(0, 1fr))")
+    && adminDbExplorerCssBlock.includes("grid-template-columns: repeat(4, minmax(0, 1fr))")
+    && adminDbExplorerCssBlock.includes("@media (max-width: 460px)")
+    && !/#[0-9a-f]{3,8}|linear-gradient|radial-gradient|!important/i.test(adminDbExplorerCssBlock)
+    && !/body\.role-admin \.admin-db-hero span,/.test(styles),
+  "company explorer must use token-only light and dark surfaces and remove the legacy invisible hero label paint",
   failures
 );
 
