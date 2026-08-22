@@ -221,6 +221,8 @@ function collectionPurposeDefaultRange(value) {
   return "1-20";
 }
 
+const ADMIN_COLLECTION_RANK_SAFETY_MAX = 1000;
+
 function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   const purpose = normalizeCollectionPurpose(purposeValue);
   const mode = normalizeCollectionMode(modeValue);
@@ -327,13 +329,13 @@ function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return [];
-  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 100 }];
+  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: ADMIN_COLLECTION_RANK_SAFETY_MAX }];
   const ranges = [];
   for (const part of source.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)) {
-    const match = part.match(/^(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?$/);
+    const match = part.match(/^(\d{1,4})(?:\s*[-~]\s*(\d{1,4}))?$/);
     if (!match) continue;
-    const left = Math.max(1, Math.min(100, Math.floor(Number(match[1]))));
-    const right = Math.max(1, Math.min(100, Math.floor(Number(match[2] || match[1]))));
+    const left = Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(match[1]))));
+    const right = Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(match[2] || match[1]))));
     if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
     ranges.push({ from: Math.min(left, right), to: Math.max(left, right) });
   }
@@ -346,12 +348,12 @@ function rankRangeLabel(ranges = []) {
     : "없음";
 }
 
-function rankRangeCount(ranges = [], maximum = 100) {
-  const limit = Math.max(1, Math.min(100, Math.floor(Number(maximum) || 100)));
+function rankRangeCount(ranges = [], maximum = ADMIN_COLLECTION_RANK_SAFETY_MAX) {
+  const limit = Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(maximum) || ADMIN_COLLECTION_RANK_SAFETY_MAX)));
   const ranks = new Set();
   for (const range of ranges) {
-    const from = Math.max(1, Math.min(100, Math.floor(Number(range.from) || 0)));
-    const to = Math.max(1, Math.min(100, Math.floor(Number(range.to) || from)));
+    const from = Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(range.from) || 0)));
+    const to = Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(range.to) || from)));
     for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
       ranks.add(rank);
       if (ranks.size >= limit) return limit;
@@ -361,7 +363,12 @@ function rankRangeCount(ranges = [], maximum = 100) {
 }
 
 function rankRangePlaceLimit(ranges = []) {
-  return Math.min(20, rankRangeCount(ranges, 20));
+  return rankRangeCount(ranges, ADMIN_COLLECTION_RANK_SAFETY_MAX);
+}
+
+function rankIncludedInRanges(rank, ranges = []) {
+  const value = Math.round(Number(rank) || 0);
+  return value > 0 && ranges.some((range) => value >= Number(range.from || 0) && value <= Number(range.to || 0));
 }
 
 const REGIONAL_GLAMPING_BASES = new Set([
@@ -380,7 +387,8 @@ const REGIONAL_GLAMPING_BASES = new Set([
   "\uACBD\uC8FC", "\uD3EC\uD56D", "\uC548\uB3D9", "\uC601\uCC9C", "\uBB38\uACBD", "\uCCAD\uB3C4", "\uC131\uC8FC", "\uCE60\uACE1", "\uAE40\uCC9C", "\uAD6C\uBBF8", "\uC601\uC8FC", "\uC0C1\uC8FC", "\uC601\uB355", "\uC6B8\uC9C4",
   "\uC804\uC8FC", "\uC644\uC8FC", "\uAD70\uC0B0", "\uC775\uC0B0", "\uBB34\uC8FC", "\uC9C4\uC548", "\uC7A5\uC218", "\uB0A8\uC6D0", "\uC784\uC2E4", "\uC21C\uCC3D", "\uACE0\uCC3D", "\uBD80\uC548", "\uC815\uC74D",
   "\uCC9C\uC548", "\uC544\uC0B0", "\uACF5\uC8FC", "\uBCF4\uB839", "\uC11C\uC0B0", "\uB2F9\uC9C4", "\uBD80\uC5EC", "\uC608\uC0B0", "\uD64D\uC131", "\uD0DC\uC548",
-  "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9"
+  "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9",
+  "경산", "의성", "청송", "영양", "고령", "예천", "봉화", "울릉", "김제", "논산", "계룡", "금산", "서천", "청양", "증평", "진천", "음성", "경기광주"
 ]);
 
 const REGIONAL_LODGING_SEARCH_SUFFIXES = [
@@ -393,8 +401,27 @@ const REGIONAL_LODGING_SEARCH_SUFFIXES = [
   "카라반",
   "글램핑",
   "펜션",
-  "캠핑"
+  "캠핑",
+  "숙박",
+  "숙소"
 ];
+
+const BROAD_LODGING_SEARCH_SUFFIXES = new Set(["숙박", "숙소"]);
+
+const LODGING_SEARCH_SCOPE_LABELS = {
+  오토캠핑장: "캠핑·야영장",
+  카라반캠핑장: "캠핑·야영장",
+  글램핑장: "글램핑",
+  캠핑장: "캠핑·야영장",
+  야영장: "캠핑·야영장",
+  풀빌라: "풀빌라",
+  카라반: "캠핑·야영장",
+  글램핑: "글램핑",
+  펜션: "펜션",
+  캠핑: "캠핑·야영장",
+  숙박: "전체 숙박",
+  숙소: "전체 숙박"
+};
 
 const REGIONAL_LODGING_BASE_ALIASES = {
   경상남: "경남",
@@ -406,31 +433,106 @@ const REGIONAL_LODGING_BASE_ALIASES = {
   충청북: "충북"
 };
 
-function looksLikeRegionalLodgingKeyword(value) {
-  const compact = compactKeyword(value).normalize("NFKC");
-  const lodgingSuffix = REGIONAL_LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix));
-  if (!lodgingSuffix) return false;
-  const base = compact.slice(0, -lodgingSuffix.length);
-  if (!base || base.length > 10) return false;
+function normalizedRegionalLodgingBase(value = "") {
+  const base = compactKeyword(value).normalize("NFKC");
   const withoutAdminSuffix = base.replace(/(\uD2B9\uBCC4\uC790\uCE58\uB3C4|\uAD11\uC5ED\uC2DC|\uD2B9\uBCC4\uC2DC|\uD2B9\uBCC4\uC790\uCE58\uC2DC|\uC790\uCE58\uB3C4|\uC790\uCE58\uC2DC|\uC2DC|\uAD70|\uAD6C|\uB3C4)$/u, "");
   const normalizedBase = REGIONAL_LODGING_BASE_ALIASES[withoutAdminSuffix] || withoutAdminSuffix;
-  return REGIONAL_GLAMPING_BASES.has(base)
-    || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix)
-    || REGIONAL_GLAMPING_BASES.has(normalizedBase);
+  if (REGIONAL_GLAMPING_BASES.has(normalizedBase)) return normalizedBase;
+  const normalizedRaw = REGIONAL_LODGING_BASE_ALIASES[base] || base;
+  return REGIONAL_GLAMPING_BASES.has(normalizedRaw) ? normalizedRaw : (normalizedBase || normalizedRaw);
 }
 
-function resolveSearchModeForCrawl(keyword, value) {
+function regionalLodgingSearchIntent(value) {
+  const compact = compactKeyword(value).normalize("NFKC");
+  const lodgingSuffix = REGIONAL_LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix));
+  if (!lodgingSuffix) {
+    return { kind: "keyword", region: "", suffix: "", scope: "keyword", label: "키워드 검색", needsRegion: false };
+  }
+  const base = compact.slice(0, -lodgingSuffix.length);
+  if (!base) {
+    return {
+      kind: BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix) ? "missing_region" : "keyword",
+      region: "",
+      suffix: lodgingSuffix,
+      scope: BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix) ? "all_lodging" : "keyword",
+      label: LODGING_SEARCH_SCOPE_LABELS[lodgingSuffix] || lodgingSuffix,
+      needsRegion: BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix)
+    };
+  }
+  if (base.length > 10) {
+    return { kind: "keyword", region: "", suffix: lodgingSuffix, scope: "keyword", label: "키워드 검색", needsRegion: false };
+  }
+  const normalizedBase = normalizedRegionalLodgingBase(base);
+  const regional = REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(normalizedBase);
+  if (!regional) {
+    return { kind: "keyword", region: "", suffix: lodgingSuffix, scope: "keyword", label: "키워드 검색", needsRegion: false };
+  }
+  const broad = BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix);
+  return {
+    kind: broad ? "broad_lodging" : "typed_lodging",
+    region: normalizedBase || base,
+    suffix: lodgingSuffix,
+    scope: broad ? "all_lodging" : `lodging_type:${lodgingSuffix}`,
+    label: LODGING_SEARCH_SCOPE_LABELS[lodgingSuffix] || lodgingSuffix,
+    needsRegion: false
+  };
+}
+
+function looksLikeRegionalLodgingKeyword(value) {
+  return ["broad_lodging", "typed_lodging"].includes(regionalLodgingSearchIntent(value).kind);
+}
+
+function hasExplicitCompanyCollectionTarget(value = {}, keyword = "") {
+  const context = value?.recrawlContext || value || {};
+  if (context.type !== "company") return false;
+  const hasStableTarget = Boolean(
+    context.companyId ||
+    context.placeId ||
+    context.naverPlaceId ||
+    context.companyIds?.length
+  );
+  if (!hasStableTarget) return false;
+  if (keyword) {
+    const keywordKey = compactKeyword(keyword).toLowerCase();
+    const targetKeywords = (Array.isArray(context.companyNames) ? context.companyNames : [])
+      .map((item) => compactKeyword(item).toLowerCase())
+      .filter(Boolean);
+    if (!targetKeywords.length || !targetKeywords.includes(keywordKey)) return false;
+  }
+  return true;
+}
+
+function resolveSearchModeForCrawl(keyword, value, payload = {}) {
   const mode = normalizeSearchMode(value);
-  return mode === "company" && looksLikeRegionalLodgingKeyword(keyword) ? "keyword" : mode;
+  if (hasExplicitCompanyCollectionTarget(payload, keyword)) return "company";
+  return mode === "company" && looksLikeRegionalLodgingKeyword(keyword)
+    ? "keyword"
+    : mode;
 }
 
 function crawlExecutionPlan(payload = {}) {
   const keyword = String(payload.keyword || "").trim();
+  const rawSearchIntent = regionalLodgingSearchIntent(keyword);
+  const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
+  const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode, payload);
+  const explicitCompanyTarget = hasExplicitCompanyCollectionTarget(payload, keyword);
+  if (rawSearchIntent.needsRegion && !explicitCompanyTarget) {
+    const error = new Error("숙박 또는 숙소 앞에 지역명을 함께 입력하세요. 예: 경남 숙소");
+    error.statusCode = 400;
+    throw error;
+  }
+  const searchIntent = resolvedSearchMode === "company"
+    ? { kind: "company", region: "", suffix: "", scope: "company", label: "업체 1곳", needsRegion: false }
+    : rawSearchIntent;
   const checkIn = payload.checkIn || process.env.CHECK_IN || kstDate(0);
   const checkOut = payload.checkOut || process.env.CHECK_OUT || kstDate(6);
   const productMode = normalizeProductMode(payload.productMode || process.env.PRODUCT_MODE || "all");
-  const collectionMode = normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
-  const collectionPurpose = normalizeCollectionPurpose(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail");
+  const broadLodging = rawSearchIntent.kind === "broad_lodging" && resolvedSearchMode !== "company";
+  const collectionMode = broadLodging
+    ? "precision"
+    : normalizeCollectionMode(payload.collectionMode || process.env.COLLECTION_MODE || "precision");
+  const requestedCollectionPurpose = normalizeCollectionPurpose(payload.collectionPurpose || process.env.COLLECTION_PURPOSE || "revenue_detail");
+  const collectionPurpose = broadLodging ? "basic_db" : requestedCollectionPurpose;
   const executionProfile = collectionExecutionProfile(collectionPurpose, collectionMode);
   const defaultDetailRankRanges = collectionMode === "fast" ? "" : collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = collectionMode === "fast"
@@ -443,7 +545,7 @@ function crawlExecutionPlan(payload = {}) {
   const detailRankRanges = rankRangeLabel(parsedDetailRankRanges);
   const detailPlaceLimit = collectionMode === "fast" ? 0 : (rankRangePlaceLimit(parsedDetailRankRanges) || 10);
   const bookingStockPlaceLimit = executionProfile.collectBookingStock
-    ? Math.max(0, Math.min(collectionPurpose === "basic_db" ? 40 : 20, rankRangeCount(parsedDetailRankRanges, 100)))
+    ? Math.max(0, rankRangeCount(parsedDetailRankRanges, ADMIN_COLLECTION_RANK_SAFETY_MAX))
     : 0;
   const rawBookingDays = Number(
     payload.bookingDays ||
@@ -460,8 +562,6 @@ function crawlExecutionPlan(payload = {}) {
         detailPlaceLimit
       )
     : 0;
-  const requestedSearchMode = payload.searchMode || process.env.SEARCH_MODE || "keyword";
-  const resolvedSearchMode = resolveSearchModeForCrawl(keyword, requestedSearchMode);
   return {
     keyword,
     checkIn,
@@ -471,6 +571,10 @@ function crawlExecutionPlan(payload = {}) {
     bookingStockPlaceLimit,
     requestedSearchMode,
     resolvedSearchMode,
+    searchIntent: searchIntent.kind,
+    searchRegion: searchIntent.region,
+    searchScope: searchIntent.scope,
+    searchScopeLabel: searchIntent.label,
     productMode,
     collectionMode,
     collectionPurpose,
@@ -573,6 +677,10 @@ function estimateCrawlCompletion(payload = {}, timingStore = null) {
     basis: {
       searchMode: plan.resolvedSearchMode,
       searchModeLabel: SEARCH_MODES[plan.resolvedSearchMode] || SEARCH_MODES.keyword,
+      searchIntent: plan.searchIntent,
+      searchRegion: plan.searchRegion,
+      searchScope: plan.searchScope,
+      searchScopeLabel: plan.searchScopeLabel,
       productMode: plan.productMode,
       productModeLabel: PRODUCT_MODES[plan.productMode] || PRODUCT_MODES.all,
       collectionPurpose: plan.collectionPurpose,
@@ -619,7 +727,7 @@ function crawlTimingConditions(plan = {}) {
     collectionProfile: plan.collectionProfile || collectionExecutionProfile(plan.collectionPurpose, plan.collectionMode).key,
     detailRankRanges: plan.detailRankRanges || "없음",
     bookingRangeDays: Math.max(1, Math.min(31, Math.round(Number(plan.bookingRangeDays) || 1))),
-    bookingRangePlaceLimit: Math.max(0, Math.min(20, Math.round(Number(plan.bookingRangePlaceLimit) || 0)))
+    bookingRangePlaceLimit: Math.max(0, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.round(Number(plan.bookingRangePlaceLimit) || 0)))
   };
 }
 
@@ -734,6 +842,10 @@ function publicCrawlEstimate(payload = {}, timingStore = null) {
     checkIn: estimate.checkIn,
     checkOut: estimate.checkOut,
     searchMode: estimate.resolvedSearchMode,
+    searchIntent: estimate.searchIntent,
+    searchRegion: estimate.searchRegion,
+    searchScope: estimate.searchScope,
+    searchScopeLabel: estimate.searchScopeLabel,
     productMode: estimate.productMode,
     collectionMode: estimate.collectionMode,
     collectionPurpose: estimate.collectionPurpose,
@@ -781,6 +893,7 @@ function crawlPayloadSignature(payload = {}) {
     bookingRangePlaceLimit: plan.bookingRangePlaceLimit,
     searchMode: plan.resolvedSearchMode,
     requestedSearchMode: normalizeSearchMode(plan.requestedSearchMode),
+    searchScope: plan.searchScope,
     productMode: plan.productMode,
     collectionMode: plan.collectionMode,
     collectionPurpose: plan.collectionPurpose,
@@ -2745,6 +2858,22 @@ async function publicB2BSearchUsageForSession(session = {}, store = null) {
   };
 }
 
+function assertB2BMemberRankRange(crawlPayload = {}, policy = {}) {
+  const detailRankRanges = String(crawlPayload.detailRankRanges || B2B_MEMBER_ALLOWED_RANK_RANGE).trim() || B2B_MEMBER_ALLOWED_RANK_RANGE;
+  const expandedAllowed = policy.expandedSearchAllowed === true
+    || policy.allowedRankRange === B2B_MEMBER_EXPANDED_RANK_RANGE;
+  const allowedRankRanges = expandedAllowed
+    ? [B2B_MEMBER_ALLOWED_RANK_RANGE, B2B_MEMBER_EXPANDED_RANK_RANGE]
+    : [B2B_MEMBER_ALLOWED_RANK_RANGE];
+  if (!allowedRankRanges.includes(detailRankRanges)) {
+    const allowedText = allowedRankRanges.map((range) => `${range.replace("-", "~")}위`).join(" 또는 ");
+    const error = new Error(`이 계정은 ${allowedText} 분석만 사용할 수 있습니다.`);
+    error.statusCode = 403;
+    throw error;
+  }
+  return detailRankRanges;
+}
+
 async function assertB2BMemberSearchPolicy(crawlPayload = {}, session = {}, reusableSearch = null) {
   const policy = await effectiveB2BMemberPolicyForSession(session);
   if (policy.status === "disabled") {
@@ -2756,12 +2885,7 @@ async function assertB2BMemberSearchPolicy(crawlPayload = {}, session = {}, reus
     return { limited: false, allowed: true };
   }
 
-  const detailRankRanges = String(crawlPayload.detailRankRanges || "1-10").trim() || "1-10";
-  if (!policy.expandedSearchAllowed && detailRankRanges !== B2B_MEMBER_ALLOWED_RANK_RANGE) {
-    const error = new Error("이 계정은 기본 분석 1~10위만 사용할 수 있습니다.");
-    error.statusCode = 403;
-    throw error;
-  }
+  assertB2BMemberRankRange(crawlPayload, policy);
 
   const quota = await b2bMemberDailySearchQuota(session, null, policy);
   if (reusableSearch) {
@@ -3492,14 +3616,16 @@ function completedB2BSearchReuseEstimate(base = {}, reuse = {}) {
 }
 
 async function publicCrawlEstimateForSession(payload = {}, timingStore = null, session = {}) {
-  const base = publicCrawlEstimate(payload, timingStore);
-  if (normalizeUserRole(session?.role) !== USER_ROLES.b2b) return base;
+  if (normalizeUserRole(session?.role) !== USER_ROLES.b2b) return publicCrawlEstimate(payload, timingStore);
   let crawlPayload = null;
   try {
     crawlPayload = b2bSearchPayload(payload);
   } catch {
-    return base;
+    return publicCrawlEstimate(payload, timingStore);
   }
+  const policy = await effectiveB2BMemberPolicyForSession(session);
+  assertB2BMemberRankRange(crawlPayload, policy);
+  const base = publicCrawlEstimate(crawlPayload, timingStore);
   const reuse = await findReusableCompletedB2BSearch(crawlPayload).catch(() => null);
   return reuse ? completedB2BSearchReuseEstimate(base, reuse) : base;
 }
@@ -5039,6 +5165,10 @@ async function listRuns() {
       keyword: manifest?.keyword || (PROVINCES[provinceKey] || PROVINCES.local).keyword || "",
       searchKeyword: manifest?.searchKeyword || "",
       naverKeyword: manifest?.naverKeyword || "",
+      searchIntent: manifest?.searchIntent || "",
+      searchRegion: manifest?.searchRegion || "",
+      searchScope: manifest?.searchScope || "",
+      searchScopeLabel: manifest?.searchScopeLabel || "",
       keywordType: manifest?.keywordType || "province",
       searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
       searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
@@ -5071,9 +5201,10 @@ async function listRuns() {
 
 function placeRankComparisonScope(run = {}) {
   const keyword = compactKeyword(run.keyword || run.label || "").toLowerCase();
+  const observedKeyword = compactKeyword(run.naverKeyword || run.searchKeyword || run.keyword || run.label || "").toLowerCase();
   const searchMode = normalizeSearchMode(run.searchMode || (run.keywordType === "company" ? "company" : "keyword"));
   const detailRange = String(run.detailRankRanges || "").replace(/\s+/g, "").replace(/~/g, "-") || "unknown";
-  return [keyword, searchMode, detailRange].join("|");
+  return [keyword, observedKeyword, searchMode, detailRange].join("|");
 }
 
 function placeRankIdentity(item = {}) {
@@ -5091,11 +5222,12 @@ function rankedPlaceRows(data = {}) {
   const rankingItems = Array.isArray(data?.ranking?.items) && data.ranking.items.length
     ? data.ranking.items
     : (Array.isArray(data?.availability?.items) ? data.availability.items : []);
+  const comparisonRanges = parseRankRanges(data?.run?.detailRankRanges, "1-50");
   const byIdentity = new Map();
   rankingItems.forEach((item, index) => {
     const rank = Number(item?.overallRank || item?.rank || index + 1);
     const identity = placeRankIdentity(item || {});
-    if (!identity || !Number.isFinite(rank) || rank <= 0) return;
+    if (!identity || !Number.isFinite(rank) || rank <= 0 || !rankIncludedInRanges(rank, comparisonRanges)) return;
     const row = {
       identity,
       name: item.name || item.companyName || "확인불가",
@@ -5283,7 +5415,7 @@ function b2bSearchPayload(value = {}) {
     throw error;
   }
   const detailRankRanges = String(value.detailRankRanges || "1-10").trim() || "1-10";
-  const detailPlaceLimit = rankRangePlaceLimit(parseRankRanges(detailRankRanges, "1-10")) || 10;
+  const detailPlaceLimit = Math.min(20, rankRangePlaceLimit(parseRankRanges(detailRankRanges, "1-10")) || 10);
   const providedPlaceLimit = Math.max(0, Math.min(20, Math.round(Number(value.bookingRangePlaceLimit) || 0)));
   return {
     keyword,
@@ -6261,6 +6393,7 @@ const LODGING_SEARCH_SUFFIXES = [
   "모텔",
   "캠핑",
   "스테이",
+  "숙박",
   "숙소"
 ];
 
@@ -6401,7 +6534,7 @@ function keywordLayerCore(keyword) {
     .normalize("NFKC")
     .replace(/[·ㆍ|].*$/u, "")
     .replace(/\d{4}-?\d{2}-?\d{2}.*/u, "")
-    .replace(/(글램핑|캠핑|카라반|펜션)$/u, "")
+    .replace(/(글램핑|캠핑|카라반|펜션|숙박|숙소)$/u, "")
     .toLowerCase();
 }
 
@@ -8077,7 +8210,7 @@ function summarizeRegionalRows(rows, provinceKey, fallbackKeyword = "") {
       trafficKeywordForRegion(row["검색키워드"] || row["기준키워드"] || fallbackKeyword || `${region}글램핑`, region)
     );
     increment(item.priceBuckets, row["가격대클러스터"]);
-    increment(item.typeBuckets, row["상품유형클러스터"]);
+    increment(item.typeBuckets, row["숙박유형클러스터"] || row["상품유형클러스터"]);
     increment(item.adBuckets, row["광고집행클러스터"]);
 
     const adCluster = normalizeClusterName(row["광고집행클러스터"]);
@@ -8099,7 +8232,7 @@ function summarizeRegionalRows(rows, provinceKey, fallbackKeyword = "") {
       price: row["금액"] || row["가격"] || "",
       roomNamePreview: row["객실명(일부)"] || row.roomNamePreview || row.roomNames || "",
       ad: normalizeClusterName(row["광고집행클러스터"]),
-      type: normalizeClusterName(row["상품유형클러스터"]),
+      type: normalizeClusterName(row["숙박유형클러스터"] || row["상품유형클러스터"]),
       productTypeSummary: row["네이버상품구성"] || "",
       nightItemCount: row["숙박상품수"] || "",
       dayUseItemCount: row["데이유즈상품수"] || "",
@@ -8393,11 +8526,11 @@ function bookingDaysFromRange(checkIn, checkOut) {
 
 function resolveBookingRangePlaceLimit(value, bookingRangeDays, fallbackLimit = 10) {
   const text = String(value ?? "").trim();
-  const fallback = Math.max(0, Math.min(20, Math.floor(Number(fallbackLimit) || 0)));
+  const fallback = Math.max(0, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(fallbackLimit) || 0)));
   if (!text) return Number(bookingRangeDays) > 1 ? fallback : 0;
   const number = Number(text);
   if (!Number.isFinite(number)) return Number(bookingRangeDays) > 1 ? fallback : 0;
-  return Math.max(0, Math.min(20, Math.floor(number)));
+  return Math.max(0, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(number)));
 }
 
 function formatRate(value) {
@@ -9038,6 +9171,11 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     rank: item.rank ?? null,
     keyword: run.keyword || run.label || "",
     keywordKey: compactKeyword(run.keyword || run.label || "").toLowerCase(),
+    searchIntent: run.searchIntent || "",
+    searchRegion: run.searchRegion || "",
+    searchScope: run.searchScope || "",
+    searchScopeLabel: run.searchScopeLabel || "",
+    lodgingType: item.lodgingType || item.accommodationMarketType || item["숙박유형클러스터"] || "",
     keywordLayer: keywordLayer.type,
     keywordLayerLabel: keywordLayer.label,
     keywordLayerNote: keywordLayer.note,
@@ -9102,6 +9240,7 @@ function createCompanyRecord(companyId, entity) {
     aliases: boundedUnique([entity.name]),
     placeIds: boundedUnique([entity.placeId]),
     bookingBusinessIds: boundedUnique([entity.bookingBusinessId]),
+    lodgingTypes: boundedUnique([entity.lodgingType]),
     regions: boundedUnique([entity.region]),
     addresses: boundedUnique([entity.address]),
     urls: boundedUnique([entity.url]),
@@ -9139,6 +9278,7 @@ function mergeCompanyFieldArrays(company, entity) {
   company.aliases = boundedUnique([...(company.aliases || []), entity.name], 30);
   company.placeIds = boundedUnique([...(company.placeIds || []), entity.placeId], 20);
   company.bookingBusinessIds = boundedUnique([...(company.bookingBusinessIds || []), entity.bookingBusinessId], 20);
+  company.lodgingTypes = boundedUnique([...(company.lodgingTypes || []), entity.lodgingType], 12);
   company.regions = boundedUnique([...(company.regions || []), entity.region], 20);
   company.addresses = boundedUnique([...(company.addresses || []), entity.address], 20);
   company.urls = boundedUnique([...(company.urls || []), entity.url], 30);
@@ -9282,6 +9422,11 @@ function upsertCompanyKeywordExposure(company, entity) {
     collectionSourceLabel: entity.collectionSourceLabel || "",
     keywordLayer: entity.keywordLayer || "",
     keywordLayerLabel: entity.keywordLayerLabel || "",
+    searchIntent: entity.searchIntent || "",
+    searchRegion: entity.searchRegion || "",
+    searchScope: entity.searchScope || "",
+    searchScopeLabel: entity.searchScopeLabel || "",
+    lodgingType: entity.lodgingType || "",
     provinceKey: entity.provinceKey || ""
   };
   if (existingIndex >= 0) keyword.runs[existingIndex] = { ...keyword.runs[existingIndex], ...exposure };
@@ -9296,6 +9441,10 @@ function upsertCompanyKeywordExposure(company, entity) {
   keyword.latestRunId = entity.runId;
   keyword.keywordLayer = entity.keywordLayer || keyword.keywordLayer || "";
   keyword.keywordLayerLabel = entity.keywordLayerLabel || keyword.keywordLayerLabel || "";
+  keyword.searchIntent = entity.searchIntent || keyword.searchIntent || "";
+  keyword.searchRegion = entity.searchRegion || keyword.searchRegion || "";
+  keyword.searchScope = entity.searchScope || keyword.searchScope || "";
+  keyword.searchScopeLabel = entity.searchScopeLabel || keyword.searchScopeLabel || "";
   keyword.provinceKey = entity.provinceKey || keyword.provinceKey || "";
   const ranks = keyword.runs.map((row) => Number(row.rank)).filter((rank) => Number.isFinite(rank) && rank > 0);
   keyword.bestRank = ranks.length ? Math.min(...ranks) : null;
@@ -9616,6 +9765,10 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
         latestRank: row.latestRank,
         lastSeenAt: row.lastSeenAt,
         latestRunId: row.latestRunId,
+        searchIntent: row.searchIntent || "",
+        searchRegion: row.searchRegion || "",
+        searchScope: row.searchScope || "",
+        searchScopeLabel: row.searchScopeLabel || "",
         layer
       };
     });
@@ -9628,6 +9781,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     aliases: (company.aliases || []).slice(0, 6),
     placeIds: company.placeIds || [],
     bookingBusinessIds: company.bookingBusinessIds || [],
+    lodgingTypes: company.lodgingTypes || [],
     regions,
     addresses: (company.addresses || []).slice(0, 3),
     firstSeenAt: company.firstSeenAt,
@@ -10982,6 +11136,10 @@ function mergeCompanyKeyword(targetKeyword = {}, sourceKeyword = {}) {
     latestRunId: latest.runId || "",
     keywordLayer: targetKeyword.keywordLayer || sourceKeyword.keywordLayer || latest.keywordLayer || "",
     keywordLayerLabel: targetKeyword.keywordLayerLabel || sourceKeyword.keywordLayerLabel || latest.keywordLayerLabel || "",
+    searchIntent: targetKeyword.searchIntent || sourceKeyword.searchIntent || latest.searchIntent || "",
+    searchRegion: targetKeyword.searchRegion || sourceKeyword.searchRegion || latest.searchRegion || "",
+    searchScope: targetKeyword.searchScope || sourceKeyword.searchScope || latest.searchScope || "",
+    searchScopeLabel: targetKeyword.searchScopeLabel || sourceKeyword.searchScopeLabel || latest.searchScopeLabel || "",
     provinceKey: targetKeyword.provinceKey || sourceKeyword.provinceKey || latest.provinceKey || "",
     runCount: runs.length,
     runs
@@ -11035,6 +11193,7 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
     target.aliases = boundedUnique([...(target.aliases || []), ...(source.aliases || []), source.primaryName], 40);
     target.placeIds = boundedUnique([...(target.placeIds || []), ...(source.placeIds || [])], 30);
     target.bookingBusinessIds = boundedUnique([...(target.bookingBusinessIds || []), ...(source.bookingBusinessIds || [])], 30);
+    target.lodgingTypes = boundedUnique([...(target.lodgingTypes || []), ...(source.lodgingTypes || [])], 20);
     target.regions = boundedUnique([...(target.regions || []), ...(source.regions || [])], 30);
     target.addresses = boundedUnique([...(target.addresses || []), ...(source.addresses || [])], 30);
     target.urls = boundedUnique([...(target.urls || []), ...(source.urls || [])], 40);
@@ -11622,10 +11781,17 @@ async function upsertCompanyMasterForRun(data, collectedAt) {
   const keywordKey = compactKeyword(run.keyword || run.label || "").toLowerCase();
   const availabilityItems = data?.availability?.items || [];
   const rankingItems = data?.ranking?.items || [];
-  const observedRankingItems = rankingItems.filter((item) => {
-    const observation = sanitizeNaverChannelObservation(item?.naverChannelObservation || {});
-    return item?.hasInventory || (observation && observation.status !== "not_collected");
+  const rankingRanges = parseRankRanges(run.detailRankRanges, collectionPurposeDefaultRange(run.collectionPurpose));
+  const scopedRankingItems = rankingItems.filter((item, index) => {
+    const rank = Number(item?.overallRank || item?.rank || index + 1);
+    return rankIncludedInRanges(rank, rankingRanges);
   });
+  const observedRankingItems = run.searchScope === "all_lodging"
+    ? scopedRankingItems
+    : scopedRankingItems.filter((item) => {
+        const observation = sanitizeNaverChannelObservation(item?.naverChannelObservation || {});
+        return item?.hasInventory || (observation && observation.status !== "not_collected");
+      });
   const items = [];
   const seenItemKeys = new Set();
   for (const item of [...observedRankingItems, ...availabilityItems]) {
@@ -12396,6 +12562,8 @@ function rankingRowBase(row = {}, fallbackRank = 0, source = "overall") {
     outsideSearchRegion: boundary.outside,
     name: row["업체명"] || row.name || "확인불가",
     category: row["카테고리"] || row.category || "",
+    lodgingType: row["숙박유형클러스터"] || row.accommodationMarketType || row.lodgingType || "",
+    accommodationMarketType: row["숙박유형클러스터"] || row.accommodationMarketType || row.lodgingType || "",
     region: rowDisplayRegion(row),
     address: row["주소"] || row.location || "",
     price: row["예약최저가"] || row["금액"] || row.price || "",
@@ -12473,8 +12641,7 @@ function summarizeRankingRows(overallRows = [], adRows = [], regionalRows = [], 
         bookingStatus: base.bookingStatus || linked?.item?.basis || (linked ? "재고 분석 완료" : "재고 미수집")
       };
     })
-    .sort((a, b) => Number(a.rank || 9999) - Number(b.rank || 9999))
-    .slice(0, 50);
+    .sort((a, b) => Number(a.rank || 9999) - Number(b.rank || 9999));
 
   return {
     source: source === "overall" ? "naver_overall" : source === "regional" ? "naver_regional" : "naver_ad",
@@ -12835,7 +13002,7 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
         return acc;
       }, {})
     },
-    items: items.slice(0, 40)
+    items
   };
 }
 
@@ -13094,8 +13261,7 @@ function summarizeCompanyPlatforms(rows) {
         })
         .slice(0, 8)
     }))
-    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999))
-    .slice(0, 40);
+    .sort((a, b) => (a.bestRank || 9999) - (b.bestRank || 9999));
 }
 
 function resolveRunDir(runId) {
@@ -13165,9 +13331,15 @@ async function loadRun(runId, options = {}) {
       id: runId,
       label: displayNameForRun(runId, manifest),
       keyword: manifest?.keyword || conditions.keyword || "",
+      searchKeyword: manifest?.searchKeyword || "",
+      naverKeyword: manifest?.naverKeyword || "",
       keywordType: manifest?.keywordType || "province",
       searchMode: manifest?.searchMode || (manifest?.keywordType === "company" ? "company" : "keyword"),
       searchModeLabel: SEARCH_MODES[manifest?.searchMode] || (manifest?.keywordType === "company" ? SEARCH_MODES.company : SEARCH_MODES.keyword),
+      searchIntent: manifest?.searchIntent || "",
+      searchRegion: manifest?.searchRegion || "",
+      searchScope: manifest?.searchScope || "",
+      searchScopeLabel: manifest?.searchScopeLabel || "",
       collectionMode: manifest?.collectionMode || "precision",
       collectionModeLabel: manifest?.collectionModeLabel || COLLECTION_MODES[manifest?.collectionMode] || COLLECTION_MODES.precision,
       collectionPurpose: manifest?.collectionPurpose || "revenue_detail",
@@ -13677,6 +13849,10 @@ async function runCrawlerInternal(payload) {
     SEARCH_MODE: plan.resolvedSearchMode,
     SEARCH_MODE_REQUESTED: normalizeSearchMode(plan.requestedSearchMode),
     SEARCH_MODE_AUTO_CORRECTED: plan.resolvedSearchMode !== normalizeSearchMode(plan.requestedSearchMode) ? "1" : "0",
+    SEARCH_INTENT: plan.searchIntent,
+    SEARCH_REGION: plan.searchRegion,
+    SEARCH_SCOPE: plan.searchScope,
+    SEARCH_SCOPE_LABEL: plan.searchScopeLabel,
     COLLECTION_MODE: plan.collectionMode,
     COLLECTION_PURPOSE: plan.collectionPurpose,
     DETAIL_RANK_RANGES: plan.detailRankRanges,
@@ -13753,9 +13929,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260822-collection-receipt-v17"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260822-collection-receipt-v17"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260822-collection-receipt-v17"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260822-editable-rank-range-v19"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260822-editable-rank-range-v19"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260822-editable-rank-range-v19"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

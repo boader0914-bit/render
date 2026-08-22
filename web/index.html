@@ -280,7 +280,7 @@
             <h3>키워드</h3>
             <label class="field crawl-keyword-field">
               <span class="sr-only">키워드</span>
-              <input id="keywordInput" type="text" value="경북글램핑" autocomplete="off" aria-label="키워드">
+              <input id="keywordInput" type="text" value="경북글램핑" placeholder="예: 경남 숙소, 경남 펜션" autocomplete="off" aria-label="키워드" required>
             </label>
             <div class="field-grid">
               <label class="field">
@@ -299,12 +299,13 @@
             <section class="crawl-purpose-panel" aria-label="수집 목적">
               <div class="crawl-purpose-head">
                 <strong>수집 목적</strong>
+                <span id="crawlPurposeHint" role="status" aria-live="polite">검색어에 맞춰 자동 설정합니다.</span>
               </div>
               <div class="crawl-purpose-options">
-                <button type="button" data-collection-purpose="basic_db" class="active" aria-pressed="true">
+                <button type="button" data-collection-purpose="basic_db" class="active" aria-pressed="true" aria-describedby="crawlPurposeHint">
                   <strong>기본정보 수집</strong>
                 </button>
-                <button type="button" data-collection-purpose="revenue_detail" aria-pressed="false">
+                <button type="button" data-collection-purpose="revenue_detail" aria-pressed="false" aria-describedby="crawlPurposeHint">
                   <strong>상세정보 수집</strong>
                 </button>
               </div>
@@ -314,7 +315,7 @@
               <span class="crawl-rank-range-control">
                 <b>1위</b>
                 <i aria-hidden="true">~</i>
-                <input id="detailRankEndInput" type="number" value="40" min="1" max="40" step="1" inputmode="numeric" aria-label="종료 순위">
+                <input id="detailRankEndInput" type="number" value="40" min="1" step="1" inputmode="numeric" aria-label="종료 순위">
                 <b>위</b>
               </span>
             </label>

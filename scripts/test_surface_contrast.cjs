@@ -351,17 +351,25 @@ assert(
   failures
 );
 
+const expectedCacheVersion = "lodging-datalab-pwa-v20260822-editable-rank-range-v37";
+const expectedAssetVersion = "v2-20260822-editable-rank-range-v19";
+const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
+const assetVersionAssignments = [...server.matchAll(
+  /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
+)].map((match) => ({ asset: match[2], version: match[3] }));
+
 assert(
-  serviceWorker.includes("collection-receipt-v35") && serviceWorker.includes('"/admin-theme.css"'),
-  "service worker cache must refresh the theme rebuild release",
+  cacheVersionAssignment?.[1] === expectedCacheVersion
+    && /const APP_SHELL = \[[\s\S]*?"\/styles\.css"[\s\S]*?"\/admin-theme\.css"[\s\S]*?"\/app\.js"[\s\S]*?\];/.test(serviceWorker),
+  "service worker CACHE_VERSION assignment and app shell must match the broad-lodging release exactly",
   failures
 );
 
 assert(
-  server.includes('styles.css?v=v2-20260822-collection-receipt-v17')
-    && server.includes('admin-theme.css?v=v2-20260822-collection-receipt-v17')
-    && server.includes('app.js?v=v2-20260822-collection-receipt-v17'),
-  "server asset query versions must refresh styles, theme, and app together",
+  assetVersionAssignments.length === 3
+    && assetVersionAssignments.map((entry) => entry.asset).join("|") === "styles.css|admin-theme.css|app.js"
+    && assetVersionAssignments.every((entry) => entry.version === expectedAssetVersion),
+  "server asset query assignments must version styles, theme, and app exactly and together",
   failures
 );
 
@@ -377,10 +385,31 @@ const currentCrawlPayloadBlock = app.slice(
   app.indexOf("function currentCrawlFormPayload()"),
   app.indexOf("function selectedCrawlSpeedPresetKey", app.indexOf("function currentCrawlFormPayload()"))
 );
+const broadLodgingPolicyBlock = app.slice(
+  app.indexOf("function syncBroadLodgingPurposePolicy("),
+  app.indexOf("function updateCrawlSpeedPreview", app.indexOf("function syncBroadLodgingPurposePolicy("))
+);
+const updateCrawlSpeedPreviewBlock = app.slice(
+  app.indexOf("function updateCrawlSpeedPreview()"),
+  app.indexOf("function applyCrawlSpeedPreset", app.indexOf("function updateCrawlSpeedPreview()"))
+);
+const submitCrawlBlock = app.slice(
+  app.indexOf("async function submitCrawl(event)"),
+  app.indexOf("function bindEvents()", app.indexOf("async function submitCrawl(event)"))
+);
+const broadPolicyBindEventsBlock = app.slice(app.indexOf("function bindEvents()"));
 
 assert(
   crawlFormMarkup.includes("<h3>키워드</h3>") && !crawlFormMarkup.includes("새 수집"),
   "collection form must use keyword as the heading without the old new-collection title",
+  failures
+);
+
+assert(
+  /id="keywordInput"[^>]*placeholder="예: 경남 숙소, 경남 펜션"[^>]*required/.test(crawlFormMarkup)
+    && /<span id="crawlPurposeHint" role="status" aria-live="polite">[^<]+<\/span>/.test(crawlFormMarkup)
+    && (crawlFormMarkup.match(/aria-describedby="crawlPurposeHint"/g) || []).length === 2,
+  "collection form must guide regional broad-lodging input and expose its automatic policy hint",
   failures
 );
 
@@ -414,9 +443,10 @@ assert(
 
 assert(
   /id="collectionPurposeInput" type="hidden" value="basic_db"/.test(crawlFormMarkup)
-    && /id="detailRankEndInput"[^>]*value="40"[^>]*max="40"/.test(crawlFormMarkup)
+    && /id="detailRankEndInput"[^>]*value="40"/.test(crawlFormMarkup)
+    && !/id="detailRankEndInput"[^>]*\bmax=/.test(crawlFormMarkup)
     && /id="detailRankRangesInput" type="hidden" value="1-40"/.test(crawlFormMarkup),
-  "basic collection must start at 1-40 with an editable end-rank control",
+  "basic collection must start at 1-40 without treating the default as an input cap",
   failures
 );
 
@@ -425,6 +455,29 @@ assert(
     && /revenue_detail:\s*\{[\s\S]*?defaultRange:\s*"1-20"/.test(app)
     && currentCrawlPayloadBlock.includes('productMode: "all"'),
   "client collection defaults must be basic 1-40, detail 1-20, and all products",
+  failures
+);
+
+assert(
+  app.includes("function regionalLodgingSearchIntent(value)")
+    && app.includes("function syncBroadLodgingPurposePolicy(options = {})")
+    && broadLodgingPolicyBlock.includes('els.detailRankEndInput.disabled = false')
+    && broadLodgingPolicyBlock.includes('collectionPurposeDefaultRange("basic_db")')
+    && !broadLodgingPolicyBlock.includes('setDetailRankRange("1-40", "basic_db")')
+    && broadLodgingPolicyBlock.includes('button.disabled = blocked')
+    && broadLodgingPolicyBlock.includes('button.classList.toggle("active"')
+    && broadLodgingPolicyBlock.includes('button.setAttribute("aria-pressed"')
+    && broadLodgingPolicyBlock.includes('전체 숙박은 기본정보로 수집합니다. 종료 순위는 직접 조절할 수 있습니다. 상세정보는 경남 펜션처럼 업종을 지정하세요.')
+    && app.includes('숙박 또는 숙소 앞에 지역명을 함께 입력하세요. 예: 경남 숙소'),
+  "regional lodging keywords must be interpreted automatically and broad lodging must use the safe basic-information path",
+  failures
+);
+
+assert(
+  updateCrawlSpeedPreviewBlock.includes("syncBroadLodgingPurposePolicy();")
+    && submitCrawlBlock.includes("syncBroadLodgingPurposePolicy();")
+    && /els\.keywordInput\?\.addEventListener\(eventName,[\s\S]*?syncBroadLodgingPurposePolicy\(\{ resetRangeOnEntry: true \}\);/.test(broadPolicyBindEventsBlock),
+  "broad lodging policy must run for keyword edits, previews, and final submission",
   failures
 );
 
@@ -441,8 +494,9 @@ assert(
     && server.includes("NAVER_BOOKING_STOCK_LIMIT: String(plan.bookingStockPlaceLimit)")
     && crawler.includes("NAVER_BOOKING_STOCK_LIMIT > 0 ? NAVER_BOOKING_STOCK_LIMIT : 20")
     && crawler.includes("const items = [...nightItems, ...unknownItems];")
-    && server.includes("items: items.slice(0, 40)"),
-  "server and crawler must honor the simplified collection ranges through the stored result boundary",
+    && !server.includes("items: items.slice(0, 40)")
+    && !/\.sort\(\(a, b\) => Number\(a\.rank \|\| 9999\) - Number\(b\.rank \|\| 9999\)\)\s*\.slice\(0, 50\)/.test(server),
+  "server and crawler must preserve administrator-selected ranges through the stored result boundary",
   failures
 );
 
@@ -505,8 +559,10 @@ assert(
     && receiptModelBlock.includes('label: "DB 반영"')
     && receiptModelBlock.includes('label: "확인 업체"')
     && receiptModelBlock.includes('label: "판매율 산출"')
-    && receiptModelBlock.includes('label: "확인 필요"'),
-  "collection receipt must expose the agreed basic and detail KPI labels",
+    && receiptModelBlock.includes('label: "확인 필요"')
+    && receiptModelBlock.includes('`요청 ${fmtNumber(requestedRankCount)}곳 · 실제 ${fmtNumber(observedRankCount)}곳 확인`')
+    && receiptModelBlock.includes("rankInSegments"),
+  "collection receipt must expose the agreed KPIs and distinguish the requested range from actual Naver observations",
   failures
 );
 

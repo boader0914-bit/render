@@ -104,6 +104,8 @@ async function writeRun(outputsDir, config) {
   const placeId = String(config.placeId || "987654321");
   const companyName = config.companyName || "채널 관측 테스트 펜션";
   const address = config.address || "경남 산청군 테스트로 1";
+  const category = config.category || "펜션";
+  const lodgingType = config.lodgingType || "펜션";
   const placeUrl = `https://pcmap.place.naver.com/accommodation/${placeId}`;
   await fsp.mkdir(runDir, { recursive: true });
   const channels = config.channels || [];
@@ -113,6 +115,7 @@ async function writeRun(outputsDir, config) {
     "place_id",
     "업체명",
     "카테고리",
+    "숙박유형클러스터",
     "주소",
     "예약",
     "url",
@@ -131,10 +134,11 @@ async function writeRun(outputsDir, config) {
   ];
   const values = [
     "테스트펜션",
-    "1",
+    String(config.rank || 1),
     placeId,
     companyName,
-    "펜션",
+    category,
+    lodgingType,
     address,
     "N",
     placeUrl,
@@ -160,6 +164,10 @@ async function writeRun(outputsDir, config) {
   await fsp.writeFile(path.join(runDir, "manifest.json"), JSON.stringify({
     keyword: config.keyword || "테스트펜션",
     searchMode: "keyword",
+    searchIntent: config.searchIntent || "typed_lodging",
+    searchRegion: config.searchRegion || "경남",
+    searchScope: config.searchScope || "lodging_type:펜션",
+    searchScopeLabel: config.searchScopeLabel || "펜션",
     collectionMode: "precision",
     collectionPurpose: "basic_db",
     collectionPurposeLabel: "기본 DB 수집",
@@ -191,6 +199,8 @@ async function main() {
   const homonymTargetRunId = "yeogi_homonym_target_test";
   const homonymOtherRunId = "yeogi_homonym_other_test";
   const manualProtectedRunId = "yeogi_manual_protected_test";
+  const broadLodgingRunId = "broad_all_lodging_test";
+  const broadOutOfRangeRunId = "broad_all_lodging_out_of_range_test";
   await writeRun(outputsDir, {
     runId: firstRunId,
     status: "observed_on_naver",
@@ -225,6 +235,24 @@ async function main() {
     status: "not_observed_on_naver",
     statusLabel: "네이버에서 외부 OTA 노출 미확인",
     observedAt: "2026-08-22T02:00:00.000Z",
+    channels: []
+  });
+  await writeRun(outputsDir, {
+    runId: broadOutOfRangeRunId,
+    placeId: "800000005",
+    companyName: "전체 숙박 범위 밖 호텔 테스트",
+    category: "호텔",
+    lodgingType: "호텔·리조트",
+    rank: 41,
+    keyword: "경남 숙소",
+    searchIntent: "broad_lodging",
+    searchRegion: "경남",
+    searchScope: "all_lodging",
+    searchScopeLabel: "전체 숙박",
+    completedAt: "2026-08-17T05:30:00.000Z",
+    status: "not_collected",
+    statusLabel: "네이버 OTA 관측 미수집",
+    observedAt: "2026-08-17T05:30:00.000Z",
     channels: []
   });
   await writeRun(outputsDir, {
@@ -320,6 +348,23 @@ async function main() {
     observedAt: "2026-08-22T05:20:00.000Z",
     channels: []
   });
+  await writeRun(outputsDir, {
+    runId: broadLodgingRunId,
+    placeId: "800000004",
+    companyName: "전체 숙박 호텔 테스트",
+    category: "호텔",
+    lodgingType: "호텔·리조트",
+    keyword: "경남 숙소",
+    searchIntent: "broad_lodging",
+    searchRegion: "경남",
+    searchScope: "all_lodging",
+    searchScopeLabel: "전체 숙박",
+    completedAt: "2026-08-18T05:30:00.000Z",
+    status: "not_collected",
+    statusLabel: "네이버 OTA 관측 미수집",
+    observedAt: "2026-08-18T05:30:00.000Z",
+    channels: []
+  });
 
   const port = await freePort();
   const child = spawn(process.execPath, [path.join(__dirname, "glamping_app_server.cjs")], {
@@ -389,6 +434,14 @@ async function main() {
     assert.equal(firstRun.body.ranking?.items?.[0]?.naverOtaExposures?.length, 2, `run exposure parse failed: ${JSON.stringify(firstRun.body.ranking?.items?.[0] || {})}`);
     assert.deepEqual(firstRun.body.ranking?.items?.[0]?.naverChannelObservation?.externalChannels, ["yanolja"]);
 
+    const broadLodgingRun = await request(baseUrl, "GET", `/api/runs/${broadLodgingRunId}`, null, cookies);
+    assert.equal(broadLodgingRun.statusCode, 200);
+    assert.equal(broadLodgingRun.body.run.searchScope, "all_lodging");
+    assert.equal(broadLodgingRun.body.companyMaster.currentRunCompanies, 1, "all-lodging ranking rows must be saved without inventory or OTA evidence");
+    const broadOutOfRangeRun = await request(baseUrl, "GET", `/api/runs/${broadOutOfRangeRunId}`, null, cookies);
+    assert.equal(broadOutOfRangeRun.statusCode, 200);
+    assert.equal(broadOutOfRangeRun.body.companyMaster.currentRunCompanies, 0, "rank 41 must not enter a 1-40 company-master snapshot");
+
     let summary = await request(baseUrl, "GET", "/api/company-master/summary", null, cookies);
     assert.equal(summary.statusCode, 200);
     let company = summary.body.companies.find((row) => row.placeIds?.includes("987654321"));
@@ -401,6 +454,15 @@ async function main() {
     assert.equal(company.channelExposures.yeogi, undefined, "mismatched channel domain must not be stored");
     assert.deepEqual(company.naverChannelObservation.externalChannels, ["yanolja"]);
     assert.equal(company.inventory?.latest?.runId || "", "", "channel observation must not create inventory confidence data");
+    const broadCompany = summary.body.companies.find((row) => row.placeIds?.includes("800000004"));
+    assert.ok(broadCompany, "broad all-lodging ranking company must be present in the company master");
+    assert.ok(broadCompany.lodgingTypes?.includes("호텔·리조트"), "broad all-lodging company type must be preserved");
+    assert.equal(broadCompany.inventory?.latest?.runId || "", "", "ranking-only broad lodging must not create inventory confidence data");
+    assert.equal(
+      summary.body.companies.some((row) => row.placeIds?.includes("800000005")),
+      false,
+      "out-of-range all-lodging companies must not be stored"
+    );
     const companyBeforeSupplement = {
       firstSeenAt: company.firstSeenAt,
       lastSeenAt: company.lastSeenAt,

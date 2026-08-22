@@ -42,7 +42,7 @@ function compactText(value = "") {
 
 function stripBusinessWords(value = "") {
   return compactText(value)
-    .replace(/글램핑|캠핑장|캠핑|카라반|펜션|풀빌라|숙소|호텔|리조트|모텔|야영장|오토캠핑|스테이|빌리지/g, "")
+    .replace(/글램핑|캠핑장|캠핑|카라반|펜션|풀빌라|숙박|숙소|호텔|리조트|모텔|야영장|오토캠핑|스테이|빌리지/g, "")
     .replace(/특별자치도|특별자치시|광역시|특별시|자치시|자치도|시|군|구|도$/g, "");
 }
 

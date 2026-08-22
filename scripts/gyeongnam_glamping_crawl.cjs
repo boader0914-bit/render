@@ -80,6 +80,8 @@ function collectionPurposeDefaultRange(value) {
   return "1-20";
 }
 
+const ADMIN_COLLECTION_RANK_SAFETY_MAX = 1000;
+
 function collectionExecutionProfile(purposeValue, modeValue = "precision") {
   const purpose = normalizeCollectionPurpose(purposeValue);
   const mode = normalizeCollectionMode(modeValue);
@@ -145,13 +147,13 @@ function parseRankRanges(value, fallback = "1-20") {
   const text = String(value ?? "").trim();
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? fallback : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return [];
-  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: 100 }];
+  if (/^(all|전체)$/i.test(source)) return [{ from: 1, to: ADMIN_COLLECTION_RANK_SAFETY_MAX }];
   const ranges = [];
   for (const part of source.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)) {
-    const match = part.match(/^(\d{1,3})(?:\s*[-~]\s*(\d{1,3}))?$/);
+    const match = part.match(/^(\d{1,4})(?:\s*[-~]\s*(\d{1,4}))?$/);
     if (!match) continue;
-    const left = boundedInteger(match[1], 0, 1, 100);
-    const right = boundedInteger(match[2] || match[1], left, 1, 100);
+    const left = boundedInteger(match[1], 0, 1, ADMIN_COLLECTION_RANK_SAFETY_MAX);
+    const right = boundedInteger(match[2] || match[1], left, 1, ADMIN_COLLECTION_RANK_SAFETY_MAX);
     const from = Math.min(left, right);
     const to = Math.max(left, right);
     ranges.push({ from, to });
@@ -165,12 +167,12 @@ function rankRangeLabel(ranges = []) {
     : "없음";
 }
 
-function rankRangeCount(ranges = [], maximum = 100) {
-  const limit = boundedInteger(maximum, 100, 1, 100);
+function rankRangeCount(ranges = [], maximum = ADMIN_COLLECTION_RANK_SAFETY_MAX) {
+  const limit = boundedInteger(maximum, ADMIN_COLLECTION_RANK_SAFETY_MAX, 1, ADMIN_COLLECTION_RANK_SAFETY_MAX);
   const ranks = new Set();
   for (const range of ranges) {
-    const from = boundedInteger(range.from, 0, 1, 100);
-    const to = boundedInteger(range.to, from, 1, 100);
+    const from = boundedInteger(range.from, 0, 1, ADMIN_COLLECTION_RANK_SAFETY_MAX);
+    const to = boundedInteger(range.to, from, 1, ADMIN_COLLECTION_RANK_SAFETY_MAX);
     for (let rank = Math.min(from, to); rank <= Math.max(from, to); rank += 1) {
       ranks.add(rank);
       if (ranks.size >= limit) return limit;
@@ -180,7 +182,7 @@ function rankRangeCount(ranges = [], maximum = 100) {
 }
 
 function rankRangePlaceLimit(ranges = []) {
-  return Math.min(20, rankRangeCount(ranges, 20));
+  return rankRangeCount(ranges, ADMIN_COLLECTION_RANK_SAFETY_MAX);
 }
 
 function rankInRanges(rank, ranges = []) {
@@ -236,17 +238,10 @@ const BOOKING_RANGE_DAYS = boundedInteger(process.env.BOOKING_RANGE_DAYS, 7, 1, 
 const RAW_KEYWORD = process.argv[2] || "경남글램핑";
 const SEARCH_MODE = normalizeSearchMode(process.env.SEARCH_MODE || "keyword");
 const SEARCH_MODE_LABEL = SEARCH_MODES[SEARCH_MODE];
-const COLLECTION_MODE = normalizeCollectionMode(process.env.COLLECTION_MODE || "precision");
-const COLLECTION_MODE_LABEL = COLLECTION_MODES[COLLECTION_MODE];
-const COLLECTION_PURPOSE = normalizeCollectionPurpose(process.env.COLLECTION_PURPOSE || "revenue_detail");
-const COLLECTION_PURPOSE_LABEL = COLLECTION_PURPOSES[COLLECTION_PURPOSE];
-const COLLECTION_PROFILE = collectionExecutionProfile(COLLECTION_PURPOSE, COLLECTION_MODE);
-const DETAIL_RANK_RANGES = parseRankRanges(process.env.DETAIL_RANK_RANGES, COLLECTION_MODE === "fast" ? "" : collectionPurposeDefaultRange(COLLECTION_PURPOSE));
-const DETAIL_RANK_RANGE_LABEL = rankRangeLabel(DETAIL_RANK_RANGES);
-const DETAIL_RANGE_PLACE_LIMIT = COLLECTION_MODE === "fast" ? 0 : (rankRangePlaceLimit(DETAIL_RANK_RANGES) || 10);
-const BOOKING_RANGE_PLACE_LIMIT = COLLECTION_PROFILE.collectWeeklyRange
-  ? boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? DETAIL_RANGE_PLACE_LIMIT : 0, 0, 20)
-  : 0;
+const REQUESTED_SEARCH_INTENT = String(process.env.SEARCH_INTENT || "").trim();
+const REQUESTED_SEARCH_REGION = String(process.env.SEARCH_REGION || "").trim();
+const REQUESTED_SEARCH_SCOPE = String(process.env.SEARCH_SCOPE || "").trim();
+const REQUESTED_SEARCH_SCOPE_LABEL = String(process.env.SEARCH_SCOPE_LABEL || "").trim();
 const SOURCE_ROLE = String(process.env.SOURCE_ROLE || "admin").trim() || "admin";
 const COLLECTION_SOURCE = String(process.env.COLLECTION_SOURCE || (SOURCE_ROLE === "b2b" ? "b2b_search" : "admin_search")).trim();
 const COLLECTION_SOURCE_LABEL = String(process.env.COLLECTION_SOURCE_LABEL || (COLLECTION_SOURCE === "b2b_search" ? "B2B 검색" : "관리자 수집")).trim();
@@ -476,8 +471,9 @@ function compactKeyword(value) {
 }
 
 const LODGING_SEARCH_SUFFIXES = [
-  "글램핑장",
   "오토캠핑장",
+  "카라반캠핑장",
+  "글램핑장",
   "캠핑장",
   "야영장",
   "풀빌라",
@@ -489,8 +485,11 @@ const LODGING_SEARCH_SUFFIXES = [
   "모텔",
   "캠핑",
   "스테이",
+  "숙박",
   "숙소"
 ];
+
+const BROAD_LODGING_SEARCH_SUFFIXES = new Set(["숙박", "숙소"]);
 
 function lodgingSearchSuffix(value = "") {
   const compact = compactKeyword(value);
@@ -520,6 +519,43 @@ function spacedLodgingKeyword(value = "", fallbackSuffix = "글램핑") {
   if (!normalized || !suffix) return normalized;
   const base = normalized.slice(0, -suffix.length);
   return `${base} ${suffix}`.trim();
+}
+
+function lodgingQueryPlan(value = "", searchMode = "keyword", requestedScope = "", knownRegion = true) {
+  const raw = String(value || "").trim();
+  const terminalSuffix = lodgingSearchSuffix(raw);
+  const embeddedSuffix = terminalSuffix || lodgingSearchSuffixInKeyword(raw);
+  const companyMode = String(searchMode || "").trim() === "company";
+  const missingRegion = !companyMode && BROAD_LODGING_SEARCH_SUFFIXES.has(terminalSuffix) && !stripLodgingSearchSuffix(raw);
+  const scope = String(requestedScope || "").trim();
+  const broadScopeAllowed = scope ? scope === "all_lodging" : Boolean(knownRegion);
+  const broad = !companyMode && !missingRegion && broadScopeAllowed && BROAD_LODGING_SEARCH_SUFFIXES.has(terminalSuffix);
+  const preserveRaw = !companyMode && !terminalSuffix && Boolean(embeddedSuffix);
+  const suffix = terminalSuffix || embeddedSuffix || "글램핑";
+  const exactQuery = terminalSuffix
+    ? spacedLodgingKeyword(raw, terminalSuffix)
+    : preserveRaw
+      ? raw
+      : spacedLodgingKeyword(raw, suffix);
+  return {
+    suffix,
+    broad,
+    missingRegion,
+    preserveRaw,
+    exactQuery,
+    searchIntent: missingRegion ? "missing_region" : (broad ? "broad_lodging" : (companyMode ? "company" : (terminalSuffix ? "typed_lodging" : "keyword"))),
+    searchScope: missingRegion || broad ? "all_lodging" : (companyMode ? "company" : (terminalSuffix ? `lodging_type:${terminalSuffix}` : "keyword")),
+    searchScopeLabel: missingRegion || broad ? "전체 숙박" : (companyMode ? "업체 1곳" : (terminalSuffix || "키워드 검색"))
+  };
+}
+
+function lodgingCollectionPolicy(queryPlan = {}, requestedMode = "precision", requestedPurpose = "revenue_detail", requestedRanges = "") {
+  const broad = Boolean(queryPlan?.broad);
+  return {
+    collectionMode: broad ? "precision" : normalizeCollectionMode(requestedMode || "precision"),
+    collectionPurpose: broad ? "basic_db" : normalizeCollectionPurpose(requestedPurpose || "revenue_detail"),
+    detailRankRanges: String(requestedRanges || "").trim()
+  };
 }
 
 function spacedGlampingKeyword(value) {
@@ -644,11 +680,56 @@ function makeCompanyConfig(keyword) {
 }
 
 const province = SEARCH_MODE === "company" ? makeCompanyConfig(RAW_KEYWORD) : (detectProvince(RAW_KEYWORD) || makeLocalConfig(RAW_KEYWORD));
-const RAW_KEYWORD_SUFFIX = lodgingSearchSuffixInKeyword(RAW_KEYWORD) || "글램핑";
-const QUERY = province.mainQuery || (province.isCompany ? RAW_KEYWORD.trim() : (province.isLocal ? spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX) : `${province.short} ${RAW_KEYWORD_SUFFIX}`));
-const NAVER_QUERY = province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} ${RAW_KEYWORD_SUFFIX}`));
-const DDNAYO_QUERY_EXACT = province.ddnayoQuery || (province.isCompany ? QUERY : spacedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX));
-const DDNAYO_QUERY_NORMALIZED = compactKeyword(province.ddnayoQuery || (province.isCompany ? QUERY : normalizedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX)));
+const directRegionBase = stripLodgingSearchSuffix(RAW_KEYWORD);
+const directKnownRegion = Boolean(
+  detectProvince(RAW_KEYWORD) ||
+  parentProvinceForRegion(directRegionBase) ||
+  regionSlugMap[directRegionBase]
+);
+const LODGING_QUERY_PLAN = lodgingQueryPlan(RAW_KEYWORD, SEARCH_MODE, REQUESTED_SEARCH_SCOPE, directKnownRegion);
+if (LODGING_QUERY_PLAN.missingRegion) {
+  throw new Error("숙박 또는 숙소 앞에 지역명을 함께 입력하세요. 예: 경남 숙소");
+}
+const LODGING_COLLECTION_POLICY = lodgingCollectionPolicy(
+  LODGING_QUERY_PLAN,
+  process.env.COLLECTION_MODE,
+  process.env.COLLECTION_PURPOSE,
+  process.env.DETAIL_RANK_RANGES
+);
+const RAW_BROAD_LODGING_REQUEST = LODGING_QUERY_PLAN.broad;
+const COLLECTION_MODE = LODGING_COLLECTION_POLICY.collectionMode;
+const COLLECTION_MODE_LABEL = COLLECTION_MODES[COLLECTION_MODE];
+const COLLECTION_PURPOSE = LODGING_COLLECTION_POLICY.collectionPurpose;
+const COLLECTION_PURPOSE_LABEL = COLLECTION_PURPOSES[COLLECTION_PURPOSE];
+const COLLECTION_PROFILE = collectionExecutionProfile(COLLECTION_PURPOSE, COLLECTION_MODE);
+const DETAIL_RANK_RANGES = parseRankRanges(
+  LODGING_COLLECTION_POLICY.detailRankRanges,
+  COLLECTION_MODE === "fast" ? "" : collectionPurposeDefaultRange(COLLECTION_PURPOSE)
+);
+const DETAIL_RANK_RANGE_LABEL = rankRangeLabel(DETAIL_RANK_RANGES);
+const DETAIL_RANGE_PLACE_LIMIT = COLLECTION_MODE === "fast" ? 0 : (rankRangePlaceLimit(DETAIL_RANK_RANGES) || 10);
+const BOOKING_RANGE_PLACE_LIMIT = COLLECTION_PROFILE.collectWeeklyRange
+  ? boundedInteger(process.env.BOOKING_RANGE_PLACE_LIMIT, BOOKING_RANGE_DAYS > 1 ? DETAIL_RANGE_PLACE_LIMIT : 0, 0, ADMIN_COLLECTION_RANK_SAFETY_MAX)
+  : 0;
+const RAW_KEYWORD_SUFFIX = LODGING_QUERY_PLAN.suffix;
+const IS_BROAD_LODGING_SEARCH = LODGING_QUERY_PLAN.broad;
+const SEARCH_INTENT = REQUESTED_SEARCH_INTENT || LODGING_QUERY_PLAN.searchIntent;
+const SEARCH_REGION = REQUESTED_SEARCH_REGION || (province.isCompany ? "" : province.short);
+const SEARCH_SCOPE = REQUESTED_SEARCH_SCOPE || LODGING_QUERY_PLAN.searchScope;
+const SEARCH_SCOPE_LABEL = REQUESTED_SEARCH_SCOPE_LABEL || LODGING_QUERY_PLAN.searchScopeLabel;
+const EXACT_LODGING_QUERY = LODGING_QUERY_PLAN.exactQuery;
+const QUERY = IS_BROAD_LODGING_SEARCH || LODGING_QUERY_PLAN.preserveRaw
+  ? EXACT_LODGING_QUERY
+  : (province.mainQuery || (province.isCompany ? RAW_KEYWORD.trim() : (province.isLocal ? EXACT_LODGING_QUERY : `${province.short} ${RAW_KEYWORD_SUFFIX}`)));
+const NAVER_QUERY = IS_BROAD_LODGING_SEARCH || LODGING_QUERY_PLAN.preserveRaw
+  ? EXACT_LODGING_QUERY
+  : (province.naverQuery || (province.isCompany ? QUERY : (province.isLocal ? QUERY : `${province.full} ${RAW_KEYWORD_SUFFIX}`)));
+const DDNAYO_QUERY_EXACT = IS_BROAD_LODGING_SEARCH || LODGING_QUERY_PLAN.preserveRaw
+  ? EXACT_LODGING_QUERY
+  : (province.ddnayoQuery || (province.isCompany ? QUERY : EXACT_LODGING_QUERY));
+const DDNAYO_QUERY_NORMALIZED = compactKeyword(IS_BROAD_LODGING_SEARCH || LODGING_QUERY_PLAN.preserveRaw
+  ? EXACT_LODGING_QUERY
+  : (province.ddnayoQuery || (province.isCompany ? QUERY : normalizedLodgingKeyword(RAW_KEYWORD, RAW_KEYWORD_SUFFIX))));
 const RUN_DATE = CHECK_IN.replaceAll("-", "");
 const RUN_TIME = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour12: false }).replaceAll(":", "");
 const RUN_STAMP = process.env.RUN_STAMP || `${RUN_DATE}_${RUN_TIME}`;
@@ -662,15 +743,15 @@ const REGIONAL_LIMIT = Number(process.env.REGIONAL_LIMIT || 10);
 const REGIONAL_SEARCH_CONCURRENCY = boundedInteger(process.env.REGIONAL_SEARCH_CONCURRENCY, 4, 1, 8);
 const NAVER_BOOKING_STOCK_LIMIT = boundedInteger(
   process.env.NAVER_BOOKING_STOCK_LIMIT,
-  COLLECTION_PURPOSE === "basic_db" ? Math.min(40, rankRangeCount(DETAIL_RANK_RANGES, 100)) : Math.min(20, rankRangeCount(DETAIL_RANK_RANGES, 100)),
+  rankRangeCount(DETAIL_RANK_RANGES, ADMIN_COLLECTION_RANK_SAFETY_MAX),
   0,
-  100
+  ADMIN_COLLECTION_RANK_SAFETY_MAX
 );
 const NAVER_OTA_OBSERVATION_LIMIT = boundedInteger(
   process.env.NAVER_OTA_OBSERVATION_LIMIT,
-  COLLECTION_PURPOSE === "basic_db" ? Math.min(40, rankRangeCount(DETAIL_RANK_RANGES, 100)) : Math.min(20, rankRangeCount(DETAIL_RANK_RANGES, 100)),
+  rankRangeCount(DETAIL_RANK_RANGES, ADMIN_COLLECTION_RANK_SAFETY_MAX),
   0,
-  100
+  ADMIN_COLLECTION_RANK_SAFETY_MAX
 );
 const NAVER_OTA_OBSERVATION_CONCURRENCY = boundedInteger(process.env.NAVER_OTA_OBSERVATION_CONCURRENCY, 2, 1, 3);
 const NAVER_BOOKING_DETAIL_CONCURRENCY = boundedInteger(process.env.NAVER_BOOKING_DETAIL_CONCURRENCY, 2, 1, 4);
@@ -918,6 +999,25 @@ function tourismCluster(locationCluster) {
   return locationCluster ? "기타/인접권" : "";
 }
 
+function accommodationMarketType(row = {}) {
+  const text = [
+    row.업체명,
+    row.name,
+    row.카테고리,
+    row.category,
+    row["객실명(일부)"],
+    row.특장점
+  ].filter(Boolean).join(" ");
+  if (/풀빌라/.test(text)) return "풀빌라";
+  if (/글램핑/.test(text)) return "글램핑";
+  if (/오토캠핑|캠핑장|야영장|카라반|캠핑/.test(text)) return "캠핑·야영장";
+  if (/펜션/.test(text)) return "펜션";
+  if (/호텔|리조트|콘도/.test(text)) return "호텔·리조트";
+  if (/모텔/.test(text)) return "모텔";
+  if (/농어촌민박|민박|게스트하우스|게스트 하우스|한옥스테이|한옥 스테이|스테이/.test(text)) return "민박·게스트하우스·스테이";
+  return "복합·미분류";
+}
+
 function productTypeCluster(row) {
   const text = [
     row.업체명,
@@ -979,6 +1079,7 @@ function addClusterFields(row, options = {}) {
   row.검색클러스터 = searchCluster;
   row.소재지클러스터 = locationCluster;
   row.관광권역클러스터 = tourismCluster(locationCluster);
+  row.숙박유형클러스터 = accommodationMarketType(row);
   row.상품유형클러스터 = productTypeCluster(row);
   row.가격대클러스터 = priceCluster(row);
   if (!row.광고집행클러스터) row.광고집행클러스터 = options.adCluster || "확인불가";
@@ -3578,6 +3679,7 @@ async function main() {
     "검색클러스터",
     "소재지클러스터",
     "관광권역클러스터",
+    "숙박유형클러스터",
     "상품유형클러스터",
     "가격대클러스터",
     "광고집행클러스터",
@@ -3683,6 +3785,7 @@ async function main() {
     "검색클러스터",
     "소재지클러스터",
     "관광권역클러스터",
+    "숙박유형클러스터",
     "상품유형클러스터",
     "가격대클러스터",
     "광고집행클러스터",
@@ -3796,6 +3899,7 @@ async function main() {
     "검색클러스터",
     "소재지클러스터",
     "관광권역클러스터",
+    "숙박유형클러스터",
     "상품유형클러스터",
     "가격대클러스터",
     "광고집행클러스터",
@@ -3911,6 +4015,7 @@ async function main() {
     "검색클러스터",
     "소재지클러스터",
     "관광권역클러스터",
+    "숙박유형클러스터",
     "상품유형클러스터",
     "가격대클러스터",
     "광고집행클러스터",
@@ -4031,12 +4136,13 @@ async function main() {
   const summaryRows = [
     { 항목: "수집일시", 값: new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) },
     { 항목: "수집 모드", 값: SEARCH_MODE_LABEL },
+    { 항목: "검색 범위", 값: [SEARCH_REGION, SEARCH_SCOPE_LABEL].filter(Boolean).join(" · ") || "키워드 검색" },
     { 항목: "수집 목적", 값: COLLECTION_PURPOSE_LABEL },
     { 항목: "수집 방식", 값: COLLECTION_MODE_LABEL },
     { 항목: "조건", 값: bookingConditionText },
     { 항목: "상세 분석 순위", 값: COLLECTION_MODE === "fast" ? "빠른 순위 모드: 상세 분석 생략" : `${DETAIL_RANK_RANGE_LABEL}위` },
     { 항목: "예약재고 기간", 값: BOOKING_RANGE_DAYS > 1 ? `${BOOKING_RANGE_DAYS}일 테스트, 상세 대상 중 최대 ${BOOKING_RANGE_PLACE_LIMIT}개 업체 날짜별 상세` : "1일 기준" },
-    { 항목: "네이버 전체", 값: `${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집` },
+    { 항목: "네이버 전체", 값: `${naver.total}건 중 ${naver.overall.length}건 확인 · 요청 범위 ${DETAIL_RANK_RANGE_LABEL}위` },
     { 항목: "네이버 광고", 값: `${naver.adTotal}건 수집` },
     { 항목: "네이버 지역별", 값: `${regional.rows.length}건 수집 (${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개)` },
     { 항목: "네이버 OTA 노출 관측", 값: `상세 범위 ${naverOtaObservation.detailRankRanges} / ${naverOtaObservation.collected}개 확인 / 외부 링크 ${naverOtaObservation.observed}건 / 파트너 신호 ${naverOtaObservation.partnerObserved}건 / 미확인 ${naverOtaObservation.notObserved}건 / 차단·오류 ${naverOtaObservation.blocked + naverOtaObservation.failed}건` },
@@ -4091,6 +4197,7 @@ async function main() {
 - 네이버 전체 키워드: ${naver.usedQuery || NAVER_QUERY}
 - 네이버 업체명 후보: ${naverAttemptText || "해당없음"}
 - 수집 모드: ${SEARCH_MODE_LABEL}
+- 검색 범위: ${[SEARCH_REGION, SEARCH_SCOPE_LABEL].filter(Boolean).join(" · ") || "키워드 검색"}
 - 수집 목적: ${COLLECTION_PURPOSE_LABEL}
 - 수집 방식: ${COLLECTION_MODE_LABEL}
 - 상세 분석 순위: ${COLLECTION_MODE === "fast" ? "빠른 순위 모드: 상세 분석 생략" : `${DETAIL_RANK_RANGE_LABEL}위`}
@@ -4117,7 +4224,7 @@ async function main() {
 
 ## 네이버
 - 상태: 성공
-- 전체 순위: ${naver.total}건 중 첫 페이지 ${naver.overall.length}건 수집
+- 전체 순위: 요청 ${DETAIL_RANK_RANGE_LABEL}위 · 네이버 제공 목록 ${naver.overall.length}건 확인 (전체 ${naver.total}건)
 - 광고 집행 순위: ${naver.adTotal}건 수집
 - 지역별 키워드: ${regions.length}개 지역, 지역별 최대 ${REGIONAL_LIMIT}개 = ${regional.rows.length}건 수집
 - 5건 미만 지역: ${underfilledRegions || "없음"}
@@ -4134,6 +4241,7 @@ async function main() {
 - 검색클러스터: 검색 키워드 기준 노출 지역
 - 소재지클러스터: 업체 주소 기준 실제 시군
 - 관광권역클러스터: ${Object.keys(province.tourismClusters || {}).join(", ")}
+- 숙박유형클러스터: 펜션/풀빌라/글램핑/캠핑·야영장/호텔·리조트/모텔/민박·게스트하우스·스테이/복합·미분류
 - 상품유형클러스터: 글램핑/카라반/캠핑장/펜션형/풀빌라·리조트형/키즈·가족형/반려견 동반형
 - 가격대클러스터: 저가형(<10만원), 중가형(10만~20만원), 고가형(20만~35만원), 프리미엄(35만원 이상)
 - 광고집행클러스터: 광고 집행, 비광고 상위 노출, 광고+비광고 동시 노출, 확인불가
@@ -4201,6 +4309,10 @@ async function main() {
     keywordType: province.isCompany ? "company" : (province.isLocal ? "local" : "province"),
     searchMode: SEARCH_MODE,
     searchModeLabel: SEARCH_MODE_LABEL,
+    searchIntent: SEARCH_INTENT,
+    searchRegion: SEARCH_REGION,
+    searchScope: SEARCH_SCOPE,
+    searchScopeLabel: SEARCH_SCOPE_LABEL,
     collectionMode: COLLECTION_MODE,
     collectionModeLabel: COLLECTION_MODE_LABEL,
     collectionPurpose: COLLECTION_PURPOSE,

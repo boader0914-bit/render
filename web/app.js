@@ -477,6 +477,7 @@ const els = {
   productModeInput: document.getElementById("productModeInput"),
   collectionPurposeInput: document.getElementById("collectionPurposeInput"),
   collectionModeInput: document.getElementById("collectionModeInput"),
+  crawlPurposeHint: document.getElementById("crawlPurposeHint"),
   detailRankRangesInput: document.getElementById("detailRankRangesInput"),
   detailRankEndInput: document.getElementById("detailRankEndInput"),
   crawlPurposeRoutePreview: document.getElementById("crawlPurposeRoutePreview"),
@@ -727,6 +728,10 @@ const COLLECTION_PURPOSE_PROFILES = {
   }
 };
 
+// 40/20 are convenience defaults, not purpose-specific limits. This generous
+// guard only prevents accidental or maliciously huge range expansion.
+const ADMIN_COLLECTION_RANK_SAFETY_MAX = 1000;
+
 const COLLECTION_PURPOSE_EXECUTION_PROFILES = {
   basic_db: {
     depthLabel: "기본 DB 중심",
@@ -832,15 +837,11 @@ function normalizedRankRangeText(value = "") {
     .replace(/\s+/g, "");
 }
 
-function collectionPurposeMaxRank(value) {
-  return normalizeCrawlFormPurpose(value) === "basic_db" ? 40 : 20;
-}
-
 function rankRangeEndFromText(value = "", fallback = "1-20") {
   const source = normalizedRankRangeText(value) || normalizedRankRangeText(fallback);
   const ranks = [];
   source.split(",").forEach((part) => {
-    const match = part.match(/^(\d{1,3})(?:-(\d{1,3}))?$/);
+    const match = part.match(/^(\d{1,4})(?:-(\d{1,4}))?$/);
     if (!match) return;
     ranks.push(Number(match[1]), Number(match[2] || match[1]));
   });
@@ -848,24 +849,22 @@ function rankRangeEndFromText(value = "", fallback = "1-20") {
   if (!validRanks.length && source !== normalizedRankRangeText(fallback)) {
     return rankRangeEndFromText(fallback, "1-20");
   }
-  return Math.max(1, Math.min(100, Math.max(...validRanks, 1)));
+  return Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.max(...validRanks, 1)));
 }
 
 function canonicalCrawlFormRange(value = "", purposeValue = "basic_db") {
   const isBasic = String(purposeValue || "").trim() === "basic_db";
   const fallback = isBasic ? "1-40" : "1-20";
-  const maxRank = isBasic ? 40 : 20;
-  return `1-${Math.min(maxRank, rankRangeEndFromText(value, fallback))}`;
+  return `1-${rankRangeEndFromText(value, fallback)}`;
 }
 
 function setDetailRankRange(value = "", purposeValue = els.collectionPurposeInput?.value || "basic_db") {
   const purpose = collectionPurposeProfile(normalizeCrawlFormPurpose(purposeValue));
-  const maxRank = collectionPurposeMaxRank(purpose.key);
   const canonicalRange = canonicalCrawlFormRange(value || purpose.defaultRange, purpose.key);
   const endRank = rankRangeEndFromText(canonicalRange, purpose.defaultRange);
   if (els.detailRankRangesInput) els.detailRankRangesInput.value = canonicalRange;
   if (els.detailRankEndInput) {
-    els.detailRankEndInput.max = String(maxRank);
+    els.detailRankEndInput.removeAttribute("max");
     els.detailRankEndInput.value = String(endRank);
   }
   return endRank;
@@ -881,13 +880,13 @@ function rankRangeCountFromText(value = "", fallback = "1-10") {
   const text = normalizedRankRangeText(value);
   const source = (!text || /^(none|skip|없음)$/i.test(text)) ? normalizedRankRangeText(fallback) : text;
   if (!source || /^(none|skip|없음)$/i.test(source)) return 0;
-  if (/^(all|전체)$/i.test(source)) return 100;
+  if (/^(all|전체)$/i.test(source)) return ADMIN_COLLECTION_RANK_SAFETY_MAX;
   const ranks = new Set();
   source.split(",").forEach((part) => {
-    const match = part.match(/^(\d{1,3})(?:-(\d{1,3}))?$/);
+    const match = part.match(/^(\d{1,4})(?:-(\d{1,4}))?$/);
     if (!match) return;
-    const left = Math.max(1, Math.min(100, Math.floor(Number(match[1]))));
-    const right = Math.max(1, Math.min(100, Math.floor(Number(match[2] || match[1]))));
+    const left = Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(match[1]))));
+    const right = Math.max(1, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, Math.floor(Number(match[2] || match[1]))));
     for (let rank = Math.min(left, right); rank <= Math.max(left, right); rank += 1) {
       ranks.add(rank);
     }
@@ -895,11 +894,11 @@ function rankRangeCountFromText(value = "", fallback = "1-10") {
   if (!ranks.size && source !== normalizedRankRangeText(fallback)) {
     return rankRangeCountFromText(fallback, "");
   }
-  return Math.max(0, Math.min(100, ranks.size));
+  return Math.max(0, Math.min(ADMIN_COLLECTION_RANK_SAFETY_MAX, ranks.size));
 }
 
 function rankRangePlaceLimitFromText(value = "", fallback = "1-10") {
-  return Math.max(0, Math.min(20, rankRangeCountFromText(value, fallback)));
+  return Math.max(0, rankRangeCountFromText(value, fallback));
 }
 
 function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.value || "revenue_detail") {
@@ -928,9 +927,16 @@ function crawlSpeedPresetOptions(purposeValue = els.collectionPurposeInput?.valu
 function currentCrawlFormPayload() {
   const keyword = els.keywordInput?.value?.trim() || "";
   const requestedMode = els.searchModeInput?.value || "keyword";
-  const resolvedMode = correctedSearchMode(keyword, requestedMode);
+  const rawSearchIntent = regionalLodgingSearchIntent(keyword);
+  const explicitCompanyOptions = { recrawlContext: state.pendingRecrawlContext };
+  const resolvedMode = correctedSearchMode(keyword, requestedMode, explicitCompanyOptions);
+  const searchIntent = resolvedMode === "company"
+    ? { kind: "company", region: "", suffix: "", scope: "company", label: "업체 1곳", needsRegion: false }
+    : rawSearchIntent;
   const collectionMode = "precision";
-  const collectionPurpose = normalizeCrawlFormPurpose(els.collectionPurposeInput?.value || "basic_db");
+  const requestedCollectionPurpose = normalizeCrawlFormPurpose(els.collectionPurposeInput?.value || "basic_db");
+  const broadLodging = rawSearchIntent.kind === "broad_lodging" && resolvedMode !== "company";
+  const collectionPurpose = broadLodging ? "basic_db" : requestedCollectionPurpose;
   const purpose = collectionPurposeProfile(collectionPurpose);
   const defaultRange = purpose.defaultRange || collectionPurposeDefaultRange(collectionPurpose);
   const rawDetailRankRanges = els.detailRankRangesInput?.value?.trim() || "";
@@ -941,6 +947,10 @@ function currentCrawlFormPayload() {
     checkOut: els.checkOutInput?.value || "",
     searchMode: resolvedMode,
     requestedMode,
+    searchIntent: searchIntent.kind,
+    searchRegion: searchIntent.region,
+    searchScope: searchIntent.scope,
+    searchScopeLabel: searchIntent.label,
     productMode: "all",
     collectionPurpose,
     collectionMode,
@@ -1188,9 +1198,19 @@ function runResultReceiptModel(model = {}, status = {}, linkedQueue = {}) {
   const items = data.availability?.items || [];
   const ranking = data.ranking || {};
   const diag = collectionDiagnosticProfile(items);
-  const rankCandidateCount = finiteNumber(ranking.total, 0) || finiteNumber(ranking.items?.length, 0) || finiteNumber(model.currentRunCompanies, 0) || items.length;
   const range = effectiveDetailRankRange(run);
   const detailRange = /생략/.test(range) ? range : `${range}위`;
+  const requestedRankCount = /생략/.test(range)
+    ? 0
+    : rankRangeCountFromText(run.detailRankRanges || model.purpose?.defaultRange || "1-20", model.purpose?.defaultRange || "1-20");
+  const rankSegments = rankRangeSegments(range);
+  const observedRankingItems = Array.isArray(ranking.items) ? ranking.items : [];
+  const observedRankCount = observedRankingItems.length
+    ? observedRankingItems.filter((item, index) => rankInSegments(item.overallRank || item.rank || index + 1, rankSegments)).length
+    : Math.min(requestedRankCount || Number.MAX_SAFE_INTEGER, finiteNumber(ranking.total, 0) || finiteNumber(model.currentRunCompanies, 0) || items.length);
+  const rangeCoverageNote = requestedRankCount
+    ? `요청 ${fmtNumber(requestedRankCount)}곳 · 실제 ${fmtNumber(observedRankCount)}곳 확인`
+    : `${detailRange} 기준`;
   const itemProfiles = items.map((item) => collectionStatusProfile(item));
   const canonicalEntityMap = runResultCanonicalEntityMap(linkedQueue.runRows || []);
   const productIssueKeys = new Set();
@@ -1240,7 +1260,7 @@ function runResultReceiptModel(model = {}, status = {}, linkedQueue = {}) {
         { label: "확인 필요", value: fmtNumber(reviewCount), note: "업체 검수큐 연결" }
       ]
       : [
-        { label: "발견 업체", value: fmtNumber(rankCandidateCount), note: `${detailRange} 기준` },
+        { label: "발견 업체", value: fmtNumber(observedRankCount), note: rangeCoverageNote },
         { label: "DB 반영", value: fmtNumber(model.currentRunCompanies), note: "업체 기준값 저장" },
         { label: "확인 필요", value: fmtNumber(reviewCount), note: "업체 검수큐 연결" }
       ];
@@ -1256,6 +1276,7 @@ function runResultReceiptModel(model = {}, status = {}, linkedQueue = {}) {
     statusLabel: status.key === "complete" ? "DB 반영 완료" : status.key === "partial" ? "DB 일부 확인" : "DB 반영 확인",
     meta: [
       run.keyword || run.label || "",
+      run.searchScopeLabel || "",
       model.purpose?.shortLabel || model.purpose?.label || model.route?.label || "수집 결과",
       detailRange,
       dateRangeLabel(run),
@@ -1407,9 +1428,67 @@ function renderRunResultApplySummary() {
   `;
 }
 
+function crawlKeywordInterpretationLabel(payload = currentCrawlFormPayload()) {
+  if (payload.searchIntent === "broad_lodging") {
+    return [payload.searchRegion, "전체 숙박"].filter(Boolean).join(" · ");
+  }
+  if (payload.searchIntent === "typed_lodging") {
+    return [payload.searchRegion, payload.searchScopeLabel].filter(Boolean).join(" · ");
+  }
+  return payload.keyword || "키워드 입력 대기";
+}
+
+function syncBroadLodgingPurposePolicy(options = {}) {
+  if (!els.crawlForm) return false;
+  const keyword = els.keywordInput?.value?.trim() || "";
+  const intent = regionalLodgingSearchIntent(keyword);
+  const explicitCompanyTarget = hasExplicitCompanyCollectionTarget({ recrawlContext: state.pendingRecrawlContext }, keyword);
+  const active = intent.kind === "broad_lodging" && !explicitCompanyTarget;
+  const intentKey = active ? `${intent.region}|${intent.suffix}` : "";
+  const previousIntentKey = els.crawlForm.dataset.broadLodgingIntentKey || "";
+  const currentPurpose = normalizeCrawlFormPurpose(els.collectionPurposeInput?.value || "basic_db");
+  const currentPurposeDefault = collectionPurposeDefaultRange(currentPurpose);
+  const currentRange = canonicalCrawlFormRange(els.detailRankRangesInput?.value || currentPurposeDefault, currentPurpose);
+  if (active && currentPurpose !== "basic_db") {
+    if (els.collectionPurposeInput) els.collectionPurposeInput.value = "basic_db";
+    const enteredBroad = previousIntentKey !== intentKey;
+    const shouldUseBasicDefault = Boolean(options.resetRangeOnEntry && enteredBroad && currentRange === currentPurposeDefault);
+    setDetailRankRange(shouldUseBasicDefault ? collectionPurposeDefaultRange("basic_db") : currentRange, "basic_db");
+  }
+  els.crawlForm.dataset.broadLodgingIntentKey = intentKey;
+  if (els.detailRankEndInput) {
+    els.detailRankEndInput.disabled = false;
+    els.detailRankEndInput.setAttribute("aria-disabled", "false");
+    els.detailRankEndInput.title = "수집할 마지막 순위를 직접 설정합니다.";
+  }
+  const selectedPurpose = collectionPurposeProfile(els.collectionPurposeInput?.value || "basic_db");
+  els.crawlForm.querySelectorAll("[data-collection-purpose]").forEach((button) => {
+    const buttonPurpose = collectionPurposeProfile(button.dataset.collectionPurpose);
+    const blocked = active && button.dataset.collectionPurpose === "revenue_detail";
+    button.disabled = blocked;
+    button.setAttribute("aria-disabled", blocked ? "true" : "false");
+    button.classList.toggle("active", buttonPurpose.key === selectedPurpose.key);
+    button.setAttribute("aria-pressed", buttonPurpose.key === selectedPurpose.key ? "true" : "false");
+    button.title = blocked
+      ? "전체 숙박은 기본정보부터 수집합니다. 업종을 지정하면 상세정보를 수집할 수 있습니다."
+      : buttonPurpose.label;
+  });
+  if (els.crawlPurposeHint) {
+    els.crawlPurposeHint.textContent = intent.kind === "missing_region" && !explicitCompanyTarget
+      ? "지역명을 함께 입력하세요. 예: 경남 숙소"
+      : explicitCompanyTarget
+        ? "선택한 업체 1곳을 기준으로 상세정보를 수집합니다."
+        : active
+      ? "전체 숙박은 기본정보로 수집합니다. 종료 순위는 직접 조절할 수 있습니다. 상세정보는 경남 펜션처럼 업종을 지정하세요."
+          : "검색어에 맞춰 자동 설정합니다.";
+  }
+  return active;
+}
+
 function updateCrawlSpeedPreview() {
   ensureCrawlControls();
   if (!els.crawlForm) return;
+  syncBroadLodgingPurposePolicy();
   const payload = currentCrawlFormPayload();
   const preview = crawlPreviewMeta(payload);
   const selectedKey = selectedCrawlSpeedPresetKey(payload);
@@ -1428,8 +1507,8 @@ function updateCrawlSpeedPreview() {
     const purpose = collectionPurposeProfile(payload.collectionPurpose);
     const detailText = `${payload.detailRankRanges || collectionPurposeDefaultRange(payload.collectionPurpose)}위`;
     const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
-    const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
-    els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}${safetyText}`;
+    const rangeText = rangeCount > 20 ? " · 넓은 범위는 수집시간 증가" : "";
+    els.crawlSpeedPreview.textContent = `${crawlKeywordInterpretationLabel(payload)} · ${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(preview.estimatedTotalSeconds)} · 완료 ${formatClockTime(preview.estimatedCompleteAt)}${rangeText}`;
   }
   renderCollectionPurposeRoutePreview(payload, preview);
   renderCrawlReadinessPreview(payload, preview);
@@ -1454,6 +1533,7 @@ function applyCrawlSpeedPreset(key = "") {
 }
 
 function syncCollectionModeInputs() {
+  syncBroadLodgingPurposePolicy();
   if (els.collectionPurposeInput) {
     els.collectionPurposeInput.value = normalizeCrawlFormPurpose(els.collectionPurposeInput.value || "basic_db");
   }
@@ -1465,7 +1545,7 @@ function syncCollectionModeInputs() {
     const buttonPurpose = collectionPurposeProfile(button.dataset.collectionPurpose);
     button.classList.toggle("active", buttonPurpose.key === purpose.key);
     button.setAttribute("aria-pressed", buttonPurpose.key === purpose.key ? "true" : "false");
-    button.title = buttonPurpose.label;
+    if (!button.disabled) button.title = buttonPurpose.label;
     const title = button.querySelector("strong");
     if (title) title.textContent = buttonPurpose.label;
   });
@@ -1473,6 +1553,13 @@ function syncCollectionModeInputs() {
 }
 
 function selectCollectionPurpose(value = "basic_db") {
+  if (value === "revenue_detail" && syncBroadLodgingPurposePolicy()) {
+    if (els.crawlStatus) {
+      els.crawlStatus.textContent = "전체 숙박은 기본정보부터 수집합니다. 경남 펜션처럼 업종을 지정하면 상세정보를 선택할 수 있습니다.";
+    }
+    updateCrawlSpeedPreview();
+    return;
+  }
   const purpose = collectionPurposeProfile(value);
   if (els.collectionPurposeInput) els.collectionPurposeInput.value = purpose.key;
   setDetailRankRange(purpose.defaultRange, purpose.key);
@@ -1611,7 +1698,8 @@ const REGIONAL_GLAMPING_BASES = new Set([
   "\uACBD\uC8FC", "\uD3EC\uD56D", "\uC548\uB3D9", "\uC601\uCC9C", "\uBB38\uACBD", "\uCCAD\uB3C4", "\uC131\uC8FC", "\uCE60\uACE1", "\uAE40\uCC9C", "\uAD6C\uBBF8", "\uC601\uC8FC", "\uC0C1\uC8FC", "\uC601\uB355", "\uC6B8\uC9C4",
   "\uC804\uC8FC", "\uC644\uC8FC", "\uAD70\uC0B0", "\uC775\uC0B0", "\uBB34\uC8FC", "\uC9C4\uC548", "\uC7A5\uC218", "\uB0A8\uC6D0", "\uC784\uC2E4", "\uC21C\uCC3D", "\uACE0\uCC3D", "\uBD80\uC548", "\uC815\uC74D",
   "\uCC9C\uC548", "\uC544\uC0B0", "\uACF5\uC8FC", "\uBCF4\uB839", "\uC11C\uC0B0", "\uB2F9\uC9C4", "\uBD80\uC5EC", "\uC608\uC0B0", "\uD64D\uC131", "\uD0DC\uC548",
-  "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9"
+  "\uCCAD\uC8FC", "\uCDA9\uC8FC", "\uC81C\uCC9C", "\uB2E8\uC591", "\uAD34\uC0B0", "\uBCF4\uC740", "\uC625\uCC9C", "\uC601\uB3D9",
+  "경산", "의성", "청송", "영양", "고령", "예천", "봉화", "울릉", "김제", "논산", "계룡", "금산", "서천", "청양", "증평", "진천", "음성", "경기광주"
 ]);
 
 const REGIONAL_LODGING_SEARCH_SUFFIXES = [
@@ -1624,8 +1712,27 @@ const REGIONAL_LODGING_SEARCH_SUFFIXES = [
   "카라반",
   "글램핑",
   "펜션",
-  "캠핑"
+  "캠핑",
+  "숙박",
+  "숙소"
 ];
+
+const BROAD_LODGING_SEARCH_SUFFIXES = new Set(["숙박", "숙소"]);
+
+const LODGING_SEARCH_SCOPE_LABELS = {
+  오토캠핑장: "캠핑·야영장",
+  카라반캠핑장: "캠핑·야영장",
+  글램핑장: "글램핑",
+  캠핑장: "캠핑·야영장",
+  야영장: "캠핑·야영장",
+  풀빌라: "풀빌라",
+  카라반: "캠핑·야영장",
+  글램핑: "글램핑",
+  펜션: "펜션",
+  캠핑: "캠핑·야영장",
+  숙박: "전체 숙박",
+  숙소: "전체 숙박"
+};
 
 const BROAD_REGION_BASES = new Set([
   "경남", "경상남도", "경남도", "경북", "경상북도", "경북도", "경기", "경기도", "경기북부", "경기남부", "수도권", "서울근교",
@@ -1662,7 +1769,10 @@ function compactCrawlKeyword(value) {
 function normalizedRegionBase(value) {
   const raw = compactCrawlKeyword(value);
   const base = raw.replace(/(특별자치도|광역시|특별시|특별자치시|자치도|자치시|시|군|구|도)$/u, "");
-  return REGION_BASE_ALIASES[base] || REGION_BASE_ALIASES[raw] || base || raw;
+  const normalizedBase = REGION_BASE_ALIASES[base] || base;
+  if (REGIONAL_GLAMPING_BASES.has(normalizedBase)) return normalizedBase;
+  const normalizedRaw = REGION_BASE_ALIASES[raw] || raw;
+  return REGIONAL_GLAMPING_BASES.has(normalizedRaw) ? normalizedRaw : (normalizedBase || normalizedRaw);
 }
 
 function regionalGlampingKeywordBase(value) {
@@ -1676,17 +1786,82 @@ function regionalGlampingKeywordBase(value) {
 }
 
 function looksLikeRegionalLodgingKeyword(value) {
-  const compact = compactCrawlKeyword(value);
-  const lodgingSuffix = REGIONAL_LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix));
-  if (!lodgingSuffix) return false;
-  const base = compact.slice(0, -lodgingSuffix.length);
-  if (!base || base.length > 10) return false;
-  const withoutAdminSuffix = normalizedRegionBase(base);
-  return REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix);
+  return ["broad_lodging", "typed_lodging"].includes(regionalLodgingSearchIntent(value).kind);
 }
 
-function correctedSearchMode(keyword, mode) {
-  return mode === "company" && looksLikeRegionalLodgingKeyword(keyword) ? "keyword" : mode;
+function regionalLodgingSearchIntent(value) {
+  const compact = compactCrawlKeyword(value);
+  const lodgingSuffix = REGIONAL_LODGING_SEARCH_SUFFIXES.find((suffix) => compact.endsWith(suffix));
+  if (!lodgingSuffix) {
+    return { kind: "keyword", region: "", suffix: "", scope: "keyword", label: "키워드 검색", needsRegion: false };
+  }
+  const base = compact.slice(0, -lodgingSuffix.length);
+  if (!base) {
+    return {
+      kind: BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix) ? "missing_region" : "keyword",
+      region: "",
+      suffix: lodgingSuffix,
+      scope: BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix) ? "all_lodging" : "keyword",
+      label: LODGING_SEARCH_SCOPE_LABELS[lodgingSuffix] || lodgingSuffix,
+      needsRegion: BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix)
+    };
+  }
+  if (base.length > 10) {
+    return { kind: "keyword", region: "", suffix: lodgingSuffix, scope: "keyword", label: "키워드 검색", needsRegion: false };
+  }
+  const withoutAdminSuffix = normalizedRegionBase(base);
+  const regional = REGIONAL_GLAMPING_BASES.has(base) || REGIONAL_GLAMPING_BASES.has(withoutAdminSuffix);
+  if (!regional) {
+    return { kind: "keyword", region: "", suffix: lodgingSuffix, scope: "keyword", label: "키워드 검색", needsRegion: false };
+  }
+  const broad = BROAD_LODGING_SEARCH_SUFFIXES.has(lodgingSuffix);
+  return {
+    kind: broad ? "broad_lodging" : "typed_lodging",
+    region: withoutAdminSuffix || base,
+    suffix: lodgingSuffix,
+    scope: broad ? "all_lodging" : `lodging_type:${lodgingSuffix}`,
+    label: LODGING_SEARCH_SCOPE_LABELS[lodgingSuffix] || lodgingSuffix,
+    needsRegion: false
+  };
+}
+
+function hasExplicitCompanyCollectionTarget(value = {}, keyword = "") {
+  const context = value?.recrawlContext || value || {};
+  if (context.type !== "company") return false;
+  const hasStableTarget = Boolean(
+    context.companyId ||
+    context.placeId ||
+    context.naverPlaceId ||
+    context.companyIds?.length
+  );
+  if (!hasStableTarget) return false;
+  if (keyword) {
+    const keywordKey = compactCrawlKeyword(keyword).toLowerCase();
+    const targetKeywords = (Array.isArray(context.companyNames) ? context.companyNames : [])
+      .map((item) => compactCrawlKeyword(item).toLowerCase())
+      .filter(Boolean);
+    if (!targetKeywords.length || !targetKeywords.includes(keywordKey)) return false;
+  }
+  return true;
+}
+
+function companyCollectionTargetNames(company = {}) {
+  const seen = new Set();
+  return [company.primaryName, ...(company.aliases || [])]
+    .map((name) => String(name || "").trim())
+    .filter((name) => {
+      const key = compactCrawlKeyword(name).toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function correctedSearchMode(keyword, mode, options = {}) {
+  if (hasExplicitCompanyCollectionTarget(options, keyword)) return "company";
+  return mode === "company" && looksLikeRegionalLodgingKeyword(keyword)
+    ? "keyword"
+    : mode;
 }
 
 function adminUserViewRequested() {
@@ -2332,7 +2507,8 @@ function crawlEstimateBasisText(basis = {}) {
     timingText = `예상 기준: 동일 조건 최근 결과${timing.ageSeconds ? ` · ${formatElapsed(timing.ageSeconds)} 전 수집` : ""}`;
   }
   const purposeLabel = basis.collectionPurposeLabel || collectionPurposeLabel(basis.collectionPurpose || "revenue_detail");
-  return `${purposeLabel} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
+  const scopeLabel = basis.searchScopeLabel || "";
+  return `${scopeLabel ? `${scopeLabel} · ` : ""}${purposeLabel} · ${basis.searchModeLabel || "수집"} · ${basis.productModeLabel || "전체"} · ${detail} · ${range} · ${timingText}`;
 }
 
 function crawlStageFallbacks() {
@@ -2349,10 +2525,10 @@ function crawlPreviewMeta(payload = {}) {
   const purpose = collectionPurposeProfile(payload.collectionPurpose || "revenue_detail");
   const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
   const bookingStockPlaceLimit = !fast && purpose.collectBookingStock
-    ? Math.min(purpose.key === "basic_db" ? 40 : 20, rangeCount)
+    ? rangeCount
     : 0;
   const placeLimit = days > 1 && !fast && purpose.collectWeeklyRange
-    ? Math.max(0, Math.min(20, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange))))
+    ? Math.max(0, Math.round(Number(payload.bookingRangePlaceLimit) || rankRangePlaceLimitFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange)))
     : 0;
   const searchSeconds = payload.searchMode === "company" ? 55 : 95;
   const trendSeconds = payload.searchMode === "keyword" ? (purpose.key === "demand_location" ? 55 : 25) : 10;
@@ -2408,6 +2584,10 @@ function crawlPreviewMeta(payload = {}) {
     estimateBasis: {
       searchMode: payload.searchMode,
       searchModeLabel: searchModeLabel(payload.searchMode),
+      searchIntent: payload.searchIntent || "keyword",
+      searchRegion: payload.searchRegion || "",
+      searchScope: payload.searchScope || "keyword",
+      searchScopeLabel: payload.searchScopeLabel || "",
       productMode: payload.productMode,
       productModeLabel: productModeLabel(payload.productMode),
       collectionPurpose: purpose.key,
@@ -2481,7 +2661,7 @@ function crawlReadinessMeta(payload = {}, preview = crawlPreviewMeta(payload)) {
 function renderCrawlReadinessPreview(payload = currentCrawlFormPayload(), preview = crawlPreviewMeta(payload)) {
   if (!isAdminRole() || !els.crawlProgress || state.crawlProgressRunning) return;
   const meta = crawlReadinessMeta(payload, preview);
-  const keyword = payload.keyword || "키워드 입력 대기";
+  const keyword = crawlKeywordInterpretationLabel(payload);
   const purpose = collectionPurposeProfile(payload.collectionPurpose);
   const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
   els.crawlProgress.hidden = false;
@@ -2513,8 +2693,8 @@ function scheduleCrawlEstimatePreviewRefresh(payload = currentCrawlFormPayload()
       const purpose = collectionPurposeProfile(payload.collectionPurpose);
       const detailText = `${payload.detailRankRanges || purpose.defaultRange}위`;
       const rangeCount = rankRangeCountFromText(payload.detailRankRanges || purpose.defaultRange, purpose.defaultRange);
-      const safetyText = rangeCount > 20 ? " · 상세 확인은 안전 한도 적용" : "";
-      els.crawlSpeedPreview.textContent = `${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}${safetyText}`;
+      const rangeText = rangeCount > 20 ? " · 넓은 범위는 수집시간 증가" : "";
+      els.crawlSpeedPreview.textContent = `${crawlKeywordInterpretationLabel(payload)} · ${purpose.shortLabel} · ${detailText} · ${purpose.dbApplyText || "DB 반영"} · 예상 ${formatElapsed(estimate.estimatedTotalSeconds)} · 완료 ${formatClockTime(estimate.estimatedCompleteAt)}${rangeText}`;
     }
   }, 220);
 }
@@ -2853,6 +3033,7 @@ function crawlEstimatePayloadFromPlan(plan = {}) {
     searchMode: plan.searchMode || "keyword",
     productMode: plan.productMode || "all",
     collectionMode: plan.collectionMode || "precision",
+    collectionPurpose: plan.collectionPurpose || "revenue_detail",
     detailRankRanges: plan.detailRankRanges || plan.range || "1-10"
   };
 }
@@ -2866,6 +3047,7 @@ function crawlEtaKey(plan = {}) {
     payload.searchMode,
     payload.productMode,
     payload.collectionMode,
+    payload.collectionPurpose,
     payload.detailRankRanges
   ].map((value) => String(value || "").trim()).join("|");
 }
@@ -16730,7 +16912,14 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
   const run = state.data?.run || {};
   const criteria = new Set((decision.criteria || []).map((criterion) => criterion.key));
   const issues = new Set((profile.issues || []).map((issue) => issue.key));
-  const keywordPlan = companyRecrawlKeywordPlan(company, run);
+  const sourceKeywordPlan = companyRecrawlKeywordPlan(company, run);
+  const keywordPlan = regionalLodgingSearchIntent(sourceKeywordPlan.keyword).kind === "broad_lodging" && company.primaryName
+    ? {
+        ...sourceKeywordPlan,
+        keyword: company.primaryName,
+        keywordSource: "전체 숙박 결과 업체명"
+      }
+    : sourceKeywordPlan;
   const rank = Number(keywordPlan.rank || company.bestRank || 0);
   let range = "1-20";
   if (rank > 0 && rank <= 5 && !criteria.has("quantity") && !criteria.has("ota") && !issues.has("booking")) {
@@ -16740,6 +16929,9 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
     ? decision.problemDateText
     : dateRangeLabel(run);
   const keyword = keywordPlan.keyword || company.bestKeyword || activeKeyword();
+  const normalizedKeyword = compactCrawlKeyword(keyword).toLowerCase();
+  const companyNameMatch = companyCollectionTargetNames(company)
+    .some((name) => compactCrawlKeyword(name).toLowerCase() === normalizedKeyword);
   return {
     keyword,
     regionScope: keywordPlan.regionScope || regionalGlampingKeywordBase(keyword) || "",
@@ -16748,7 +16940,7 @@ function companyQueueRecrawlPlan(company = {}, profile = {}, decision = {}) {
     dateText,
     checkIn: run.checkIn || els.checkInInput?.value || "",
     checkOut: run.checkOut || els.checkOutInput?.value || "",
-    searchMode: correctedSearchMode(keyword, run.searchMode || "keyword"),
+    searchMode: companyNameMatch ? "company" : correctedSearchMode(keyword, run.searchMode || "keyword"),
     productMode: "all",
     collectionMode: "precision",
     collectionPurpose: "revenue_detail"
@@ -16776,7 +16968,10 @@ function recrawlRangePresetHtml({ companyId = "", batchKey = "", selectedRange =
 }
 
 function applyRecrawlRangeOverride(plan = {}, range = "") {
-  const collectionPurpose = normalizeCrawlFormPurpose(plan.collectionPurpose || "revenue_detail");
+  const broadLodging = regionalLodgingSearchIntent(plan.keyword || "").kind === "broad_lodging" && normalizeSearchMode(plan.searchMode || "keyword") !== "company";
+  const collectionPurpose = broadLodging
+    ? "basic_db"
+    : normalizeCrawlFormPurpose(plan.collectionPurpose || "revenue_detail");
   const value = String(range || plan.detailRankRanges || plan.range || collectionPurposeDefaultRange(collectionPurpose)).trim();
   const canonicalRange = canonicalCrawlFormRange(value, collectionPurpose);
   return {
@@ -30450,7 +30645,7 @@ function applyQueueRecrawlSetting(button) {
     label: "개별 재수집",
     count: 1,
     companyIds: [company.companyId || ""].filter(Boolean),
-    companyNames: [company.primaryName || ""].filter(Boolean),
+    companyNames: companyCollectionTargetNames(company),
     keyword: plan.keyword || activeKeyword(),
     range: plan.range || "1-20",
     regionScope: plan.regionScope || "",
@@ -30478,7 +30673,7 @@ function applyQueueRecrawlSetting(button) {
   if (els.keywordInput) els.keywordInput.value = keyword;
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
   if (els.checkOutInput && plan.checkOut) els.checkOutInput.value = plan.checkOut;
-  if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword");
+  if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword", { recrawlContext: state.pendingRecrawlContext });
   if (els.productModeInput) els.productModeInput.value = "all";
   if (els.collectionPurposeInput) els.collectionPurposeInput.value = plan.collectionPurpose || "revenue_detail";
   if (els.collectionModeInput) els.collectionModeInput.value = "precision";
@@ -30503,16 +30698,24 @@ function applyRecrawlBatchSetting(button) {
     setStatus("묶음 재수집 설정 실패");
     return;
   }
-  const plan = applyRecrawlRangeOverride(batch.plan || {}, button?.dataset?.recrawlBatchRange || "");
+  const rawPlan = batch.plan || {};
+  const batchCount = Number(batch.count || batch.rows?.length || 0);
+  const singleCompanyTarget = batchCount === 1 && normalizeSearchMode(rawPlan.searchMode || "keyword") === "company";
+  const plan = applyRecrawlRangeOverride(
+    singleCompanyTarget ? rawPlan : { ...rawPlan, searchMode: normalizeSearchMode(rawPlan.searchMode || "keyword") === "company" ? "keyword" : rawPlan.searchMode },
+    button?.dataset?.recrawlBatchRange || ""
+  );
   const eta = button?.dataset?.recrawlBatchRange ? crawlEtaForPlan(plan) : (batch.eta || crawlEtaForPlan(plan));
   state.pendingRecrawlContext = {
-    type: "batch",
+    type: singleCompanyTarget ? "company" : "batch",
     key: crawlEtaKey(plan),
     batchKey: batch.key,
-    label: "묶음 재수집",
-    count: batch.count || 0,
+    label: singleCompanyTarget ? "단건 재수집" : "묶음 재수집",
+    count: batchCount,
     companyIds: batch.rows.map((row) => row.company.companyId || "").filter(Boolean),
-    companyNames: batch.names || [],
+    companyNames: singleCompanyTarget
+      ? companyCollectionTargetNames(batch.rows[0]?.company || {})
+      : (batch.names || []),
     keyword: plan.keyword || activeKeyword(),
     range: plan.range || plan.detailRankRanges || "1-20",
     regionScope: plan.regionScope || batch.regionScopes?.join("/") || "",
@@ -30526,7 +30729,9 @@ function applyRecrawlBatchSetting(button) {
   if (els.keywordInput) els.keywordInput.value = keyword;
   if (els.checkInInput && plan.checkIn) els.checkInInput.value = plan.checkIn;
   if (els.checkOutInput && plan.checkOut) els.checkOutInput.value = plan.checkOut;
-  if (els.searchModeInput) els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword");
+  if (els.searchModeInput) {
+    els.searchModeInput.value = correctedSearchMode(keyword, plan.searchMode || "keyword", { recrawlContext: state.pendingRecrawlContext });
+  }
   if (els.productModeInput) els.productModeInput.value = "all";
   if (els.collectionPurposeInput) els.collectionPurposeInput.value = plan.collectionPurpose || "revenue_detail";
   if (els.collectionModeInput) els.collectionModeInput.value = plan.collectionMode || "precision";
@@ -30537,7 +30742,9 @@ function applyRecrawlBatchSetting(button) {
   if (els.crawlStatus) {
     const saved = batch.savedSeconds ? ` · 개별 실행 대비 ${formatElapsed(batch.savedSeconds)} 절감` : "";
     const label = source === "sales_gate" ? "보류 업체" : "후보";
-    els.crawlStatus.textContent = `${fmtNumber(batch.count)}개 ${label} 묶음 재수집 설정을 적용했습니다. 상세 ${plan.range || plan.detailRankRanges || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
+    const purposeLabel = collectionPurposeProfile(plan.collectionPurpose || "revenue_detail").label;
+    const executionLabel = singleCompanyTarget ? "단건 재수집" : "묶음 재수집";
+    els.crawlStatus.textContent = `${fmtNumber(batchCount)}개 ${label} ${executionLabel} 설정을 적용했습니다. ${purposeLabel} · ${plan.range || plan.detailRankRanges || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}${saved}.`;
   }
   setStatus("묶음 재수집 설정 적용");
 }
@@ -30920,17 +31127,33 @@ async function submitCrawl(event) {
   event.preventDefault();
   ensureCrawlControls();
   const submitButton = els.crawlForm?.querySelector('button[type="submit"]');
+  const keyword = els.keywordInput?.value?.trim() || "";
+  const intent = regionalLodgingSearchIntent(keyword);
+  const explicitCompanyOptions = { recrawlContext: state.pendingRecrawlContext };
+  if (intent.needsRegion && !hasExplicitCompanyCollectionTarget(explicitCompanyOptions, keyword)) {
+    if (els.crawlStatus) els.crawlStatus.textContent = "숙박 또는 숙소 앞에 지역명을 함께 입력하세요. 예: 경남 숙소";
+    if (els.crawlPurposeHint) els.crawlPurposeHint.textContent = "지역명을 함께 입력하세요. 예: 경남 숙소";
+    els.keywordInput?.focus();
+    return;
+  }
+  syncBroadLodgingPurposePolicy();
   const requestedMode = els.searchModeInput?.value || "keyword";
-  const resolvedMode = correctedSearchMode(els.keywordInput.value.trim(), requestedMode);
+  const resolvedMode = correctedSearchMode(keyword, requestedMode, explicitCompanyOptions);
   if (els.searchModeInput && resolvedMode !== requestedMode) {
     els.searchModeInput.value = resolvedMode;
-    els.crawlStatus.textContent = "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
+    els.crawlStatus.textContent = hasExplicitCompanyCollectionTarget(explicitCompanyOptions, keyword)
+      ? "선택한 업체 1곳의 확인 수집으로 설정했습니다."
+      : "지역 키워드로 판단되어 키워드/권역 모드로 자동 전환했습니다.";
   }
   const payload = currentCrawlFormPayload();
   payload.searchMode = resolvedMode;
-  if (recrawlContextMatchesPayload(state.pendingRecrawlContext, payload)) {
+  if (
+    recrawlContextMatchesPayload(state.pendingRecrawlContext, payload) ||
+    hasExplicitCompanyCollectionTarget({ recrawlContext: state.pendingRecrawlContext }, keyword)
+  ) {
     payload.recrawlContext = state.pendingRecrawlContext;
   }
+  payload.searchMode = correctedSearchMode(keyword, requestedMode, { recrawlContext: payload.recrawlContext });
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
   clearCrawlEstimateTimer();
@@ -32120,6 +32343,7 @@ function bindEvents() {
   ["input", "change"].forEach((eventName) => {
     els.keywordInput?.addEventListener(eventName, () => {
       if (els.searchModeInput) els.searchModeInput.value = "keyword";
+      syncBroadLodgingPurposePolicy({ resetRangeOnEntry: true });
       updateCrawlSpeedPreview();
     });
   });
