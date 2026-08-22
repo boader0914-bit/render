@@ -133,7 +133,7 @@ async function writeRun(outputsDir, config) {
     "네이버예약운영신호"
   ];
   const values = [
-    "테스트펜션",
+    config.keyword || "테스트펜션",
     String(config.rank || 1),
     placeId,
     companyName,
@@ -155,6 +155,10 @@ async function writeRun(outputsDir, config) {
     config.agencyId || "",
     config.operationSignal || "네이버 예약 운영 신호 미확인"
   ];
+  for (const [key, value] of Object.entries(config.inventory || {})) {
+    headers.push(key);
+    values.push(value && typeof value === "object" ? JSON.stringify(value) : value);
+  }
   await fsp.writeFile(path.join(runDir, overallFile), `${headers.map(csvCell).join(",")}\n${values.map(csvCell).join(",")}\n`, "utf8");
   await fsp.writeFile(
     path.join(runDir, platformFile),
@@ -169,13 +173,14 @@ async function writeRun(outputsDir, config) {
     searchScope: config.searchScope || "lodging_type:펜션",
     searchScopeLabel: config.searchScopeLabel || "펜션",
     collectionMode: "precision",
-    collectionPurpose: "basic_db",
-    collectionPurposeLabel: "기본 DB 수집",
-    collectionProfile: "basic_db_light",
-    collectionProfileLabel: "기본 DB 중심",
+    collectionPurpose: config.collectionPurpose || "basic_db",
+    collectionPurposeLabel: config.collectionPurposeLabel || "기본 DB 수집",
+    collectionProfile: config.collectionProfile || "basic_db_light",
+    collectionProfileLabel: config.collectionProfileLabel || "기본 DB 중심",
     detailRankRanges: "1-40",
     checkIn: config.checkIn || "2026-08-22",
     checkOut: config.checkOut || "2026-08-23",
+    bookingRangeDays: config.bookingRangeDays || 1,
     ...(config.omitCollectionTimestamp ? {} : { completedAt: config.completedAt || config.observedAt || "" }),
     adults: 2,
     fileRoles: { overall: overallFile, platform: platformFile },
@@ -201,6 +206,9 @@ async function main() {
   const manualProtectedRunId = "yeogi_manual_protected_test";
   const broadLodgingRunId = "broad_all_lodging_test";
   const broadOutOfRangeRunId = "broad_all_lodging_out_of_range_test";
+  const detailFirstRunId = "company_detail_snapshot_first_test";
+  const detailSecondRunId = "company_detail_snapshot_second_test";
+  const detailSparseRunId = "company_detail_snapshot_sparse_test";
   await writeRun(outputsDir, {
     runId: firstRunId,
     status: "observed_on_naver",
@@ -365,6 +373,157 @@ async function main() {
     observedAt: "2026-08-18T05:30:00.000Z",
     channels: []
   });
+  const detailProducts = (secondObservation = false) => [
+    {
+      date: "2026-08-29",
+      bizItemId: "room-a",
+      name: "올데이 풀빌라",
+      saleType: "숙박",
+      listType: "객실 종류별 리스트",
+      availabilityUnit: "객실",
+      total: 2,
+      available: secondObservation ? 1 : 2,
+      price: 100000
+    },
+    {
+      date: "2026-08-29",
+      bizItemId: "room-b",
+      name: "포레스트 B",
+      saleType: "숙박",
+      listType: "객실 종류별 리스트",
+      availabilityUnit: "객실",
+      total: 3,
+      available: 2,
+      price: 100000
+    },
+    {
+      date: "2026-08-30",
+      bizItemId: "room-a",
+      name: "올데이 풀빌라",
+      saleType: "숙박",
+      listType: "객실 종류별 리스트",
+      availabilityUnit: "객실",
+      total: 2,
+      available: secondObservation ? 0 : 1,
+      price: 100000
+    },
+    {
+      date: "2026-08-30",
+      bizItemId: "room-b",
+      name: "포레스트 B",
+      saleType: "숙박",
+      listType: "객실 종류별 리스트",
+      availabilityUnit: "객실",
+      total: 3,
+      available: secondObservation ? 1 : 2,
+      price: 100000
+    }
+  ];
+  const detailInventory = (secondObservation = false) => ({
+    숙박예약가능수: secondObservation ? 3 : 4,
+    숙박확인재고수: 5,
+    주간재고수집일수: 2,
+    주간잔여상세: secondObservation ? "08/29 3/5, 08/30 1/5" : "08/29 4/5, 08/30 3/5",
+    주간평균예약률: secondObservation ? 0.6 : 0.3,
+    주간예약률상세: secondObservation ? "08/29 40%(2/5), 08/30 80%(4/5)" : "08/29 20%(1/5), 08/30 40%(2/5)",
+    주간판매수량합계: secondObservation ? 6 : 3,
+    주간전체수량합계: 10,
+    주간기준재고수: 5,
+    주간운영판매기준수: 5,
+    주간숙박예상매출: secondObservation ? 600000 : 300000,
+    weeklyAdjustedRevenue: secondObservation ? 600000 : 300000,
+    weeklyRevenuePrecisionRate: 1,
+    주간숙박가격확인판매수량: secondObservation ? 6 : 3,
+    주간숙박가격누락판매수량: 0,
+    주간숙박평균판매단가: 100000,
+    주간숙박매출상세: secondObservation
+      ? "08/29 200,000원(2개), 08/30 400,000원(4개)"
+      : "08/29 100,000원(1개), 08/30 200,000원(2개)",
+    예약최저가: 100000,
+    예약리스트유형: "객실 종류별 리스트",
+    네이버예약재고수집상태: "수집 완료",
+    네이버요일별상품상세JSON: detailProducts(secondObservation)
+  });
+  await writeRun(outputsDir, {
+    runId: detailFirstRunId,
+    placeId: "900000001",
+    companyName: "상세 스냅샷 테스트 글램핑",
+    category: "글램핑",
+    lodgingType: "글램핑",
+    keyword: "경남글램핑",
+    searchIntent: "regional_lodging",
+    searchRegion: "경남",
+    searchScope: "lodging_type:글램핑",
+    searchScopeLabel: "글램핑",
+    rank: 8,
+    checkIn: "2026-08-29",
+    checkOut: "2026-08-31",
+    bookingRangeDays: 2,
+    completedAt: "2026-08-20T01:00:00.000Z",
+    observedAt: "2026-08-20T01:00:00.000Z",
+    collectionPurpose: "revenue_detail",
+    collectionPurposeLabel: "상세 정보 수집",
+    collectionProfile: "revenue_detail_deep",
+    collectionProfileLabel: "상세 정보 중심",
+    status: "not_observed_on_naver",
+    statusLabel: "네이버에서 외부 OTA 노출 미확인",
+    channels: [],
+    inventory: detailInventory(false)
+  });
+  await writeRun(outputsDir, {
+    runId: detailSecondRunId,
+    placeId: "900000001",
+    companyName: "상세 스냅샷 테스트 글램핑",
+    category: "글램핑",
+    lodgingType: "글램핑",
+    keyword: "경남글램핑",
+    searchIntent: "regional_lodging",
+    searchRegion: "경남",
+    searchScope: "lodging_type:글램핑",
+    searchScopeLabel: "글램핑",
+    rank: 5,
+    checkIn: "2026-08-29",
+    checkOut: "2026-08-31",
+    bookingRangeDays: 2,
+    completedAt: "2026-08-22T01:00:00.000Z",
+    observedAt: "2026-08-22T01:00:00.000Z",
+    collectionPurpose: "revenue_detail",
+    collectionPurposeLabel: "상세 정보 수집",
+    collectionProfile: "revenue_detail_deep",
+    collectionProfileLabel: "상세 정보 중심",
+    status: "not_observed_on_naver",
+    statusLabel: "네이버에서 외부 OTA 노출 미확인",
+    channels: [],
+    inventory: detailInventory(true)
+  });
+  const sparseDetailInventory = detailInventory(true);
+  delete sparseDetailInventory.네이버요일별상품상세JSON;
+  await writeRun(outputsDir, {
+    runId: detailSparseRunId,
+    placeId: "900000001",
+    companyName: "상세 스냅샷 테스트 글램핑",
+    category: "글램핑",
+    lodgingType: "글램핑",
+    keyword: "경남글램핑",
+    searchIntent: "regional_lodging",
+    searchRegion: "경남",
+    searchScope: "lodging_type:글램핑",
+    searchScopeLabel: "글램핑",
+    rank: 4,
+    checkIn: "2026-08-29",
+    checkOut: "2026-08-31",
+    bookingRangeDays: 2,
+    completedAt: "2026-08-22T03:00:00.000Z",
+    observedAt: "2026-08-22T03:00:00.000Z",
+    collectionPurpose: "revenue_detail",
+    collectionPurposeLabel: "상세 정보 수집",
+    collectionProfile: "revenue_detail_deep",
+    collectionProfileLabel: "상세 정보 중심",
+    status: "not_observed_on_naver",
+    statusLabel: "네이버에서 외부 OTA 노출 미확인",
+    channels: [],
+    inventory: sparseDetailInventory
+  });
 
   const port = await freePort();
   const child = spawn(process.execPath, [path.join(__dirname, "glamping_app_server.cjs")], {
@@ -442,8 +601,300 @@ async function main() {
     assert.equal(broadOutOfRangeRun.statusCode, 200);
     assert.equal(broadOutOfRangeRun.body.companyMaster.currentRunCompanies, 0, "rank 41 must not enter a 1-40 company-master snapshot");
 
+    const detailFirstRun = await request(baseUrl, "GET", `/api/runs/${detailFirstRunId}`, null, cookies);
+    const detailSecondRun = await request(baseUrl, "GET", `/api/runs/${detailSecondRunId}`, null, cookies);
+    assert.equal(detailFirstRun.statusCode, 200);
+    assert.equal(detailSecondRun.statusCode, 200);
+    assert.equal(detailFirstRun.body.companyMaster.historyEligible, true);
+    assert.equal(detailSecondRun.body.companyMaster.historyEligible, true);
+
     let summary = await request(baseUrl, "GET", "/api/company-master/summary", null, cookies);
     assert.equal(summary.statusCode, 200);
+    const detailCompany = summary.body.companies.find((row) => row.placeIds?.includes("900000001"));
+    assert.ok(detailCompany, "detailed collection company must be stored");
+    assert.equal(detailCompany.inventory?.latest?.productSnapshot?.summary?.productCount, 2);
+    assert.equal(detailCompany.inventory?.latest?.productSnapshot?.products, undefined, "company list must not duplicate product payloads");
+    assert.equal(detailCompany.inventory?.snapshots?.[0]?.productSnapshot?.products, undefined, "company list history must stay compact");
+    assert.equal(detailCompany.keywords?.[0]?.recentRuns?.length, 2, "summary must expose recent keyword observations");
+
+    const missingCompanyId = await request(baseUrl, "GET", "/api/company-master/detail", null, cookies);
+    assert.equal(missingCompanyId.statusCode, 400);
+    const companyDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(detailCompany.companyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(companyDetail.statusCode, 200);
+    assert.equal(companyDetail.body.company.companyId, detailCompany.companyId);
+    assert.equal(companyDetail.body.products.length, 2, "product identities must remain distinct even when prices are equal");
+    assert.ok(companyDetail.body.products.every((row) => row.productType === "lodging"), "explicit lodging type must win even when a product name contains day text");
+    assert.equal(companyDetail.body.priceGroups.length, 1, "same date-price pattern should form one presentation group");
+    assert.deepEqual(
+      companyDetail.body.daily.filter((row) => row.productType === "lodging").map((row) => [row.date, row.estimatedRevenue]),
+      [["2026-08-29", 200000], ["2026-08-30", 400000]]
+    );
+    assert.ok(companyDetail.body.daily.every((row) => row.actualRevenue === null && row.revenueType === "estimated"));
+    assert.deepEqual(companyDetail.body.rankTrend.points.map((row) => row.rank), [8, 5]);
+    assert.equal(companyDetail.body.rankTrend.points.at(-1).delta, 3);
+    assert.equal(companyDetail.body.rankTrend.points.at(-1).regionalMedianRank, 5);
+    const availableRankKeyword = companyDetail.body.rankTrend.availableKeywords.find((row) => row.keyword === "경남글램핑");
+    assert.ok(availableRankKeyword, "rank trend must expose every stored keyword as an available scope");
+    assert.equal(availableRankKeyword.latestRank, 5, "available keyword must expose the latest stored rank without synthesis");
+    assert.equal(availableRankKeyword.previousRank, 8, "available keyword must expose the previous stored rank without synthesis");
+    assert.equal(availableRankKeyword.latestRunId, detailSecondRunId);
+    assert.equal(availableRankKeyword.latestCollectedAt, "2026-08-22T01:00:00.000Z");
+    assert.equal(availableRankKeyword.searchRegion, "경남");
+    assert.equal(availableRankKeyword.searchScope, "lodging_type:글램핑");
+    assert.equal(availableRankKeyword.searchScopeLabel, "글램핑");
+    assert.equal(availableRankKeyword.detailRankRanges, "1-40", "rank position bars must use the stored run range rather than a UI hard cap");
+    assert.equal(companyDetail.body.performanceTrend.points.length, 2);
+    assert.equal(companyDetail.body.performanceTrend.points.at(-1).estimatedRevenue, 600000);
+    assert.equal(companyDetail.body.performanceTrend.points.at(-1).actualRevenue, null);
+    assert.equal(companyDetail.body.leadTime.status, "ready");
+    assert.equal(companyDetail.body.leadTime.pickupCount, 3);
+    assert.equal(companyDetail.body.leadTime.observationCount, 4);
+    assert.equal(companyDetail.body.leadTime.averageDays, 7.7);
+    assert.equal(companyDetail.body.leadTime.medianDays, 8);
+    assert.equal(companyDetail.body.observationBasis.products.collectedAt, "2026-08-22T01:00:00.000Z");
+    assert.equal(companyDetail.body.observationBasis.daily.collectedAt, "2026-08-22T01:00:00.000Z");
+    assert.equal(companyDetail.body.observationBasis.daily.source, "product_snapshot", "stored product daily data must keep priority over history fallback");
+    assert.equal(companyDetail.body.company.lastRunId, detailSecondRunId);
+
+    const reopenedOlderDetailRun = await request(baseUrl, "GET", `/api/runs/${detailFirstRunId}`, null, cookies);
+    assert.equal(reopenedOlderDetailRun.statusCode, 200);
+    let detailAfterReopen = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(detailCompany.companyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(detailAfterReopen.body.company.inventory?.latest?.runId, detailSecondRunId, "opening an older run must not replace the latest company snapshot");
+    assert.equal(detailAfterReopen.body.company.lastRunId, detailSecondRunId, "opening an older run must not replace the latest company run marker");
+    assert.deepEqual(detailAfterReopen.body.rankTrend.points.map((row) => row.rank), [8, 5]);
+    assert.equal(detailAfterReopen.body.products.length, 2);
+
+    const sparseDetailRun = await request(baseUrl, "GET", `/api/runs/${detailSparseRunId}`, null, cookies);
+    assert.equal(sparseDetailRun.statusCode, 200);
+    const importedTimestampMasterFile = path.join(dataDir, "company_master", "companies.json");
+    const importedTimestampMaster = JSON.parse(await fsp.readFile(importedTimestampMasterFile, "utf8"));
+    const importedTimestampCompany = importedTimestampMaster.companies[detailCompany.companyId];
+    const importedTimestampKeyword = Object.values(importedTimestampCompany.keywords || {})
+      .find((row) => row.keyword === "경남글램핑");
+    const importedTimestampRun = importedTimestampKeyword.runs.find((row) => row.runId === detailSparseRunId);
+    assert.ok(importedTimestampRun, "timestamp correction fixture must find the imported master run");
+    importedTimestampRun.collectedAt = "2026-08-24T09:00:00.000Z";
+    importedTimestampRun.collectedDate = "2026-08-24";
+    importedTimestampKeyword.lastSeenAt = importedTimestampRun.collectedAt;
+    await fsp.writeFile(importedTimestampMasterFile, JSON.stringify(importedTimestampMaster, null, 2), "utf8");
+    detailAfterReopen = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(detailCompany.companyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(detailAfterReopen.body.company.inventory?.latest?.runId, detailSparseRunId);
+    assert.equal(detailAfterReopen.body.products.length, 2, "a newer sparse observation must preserve the last detailed product identities");
+    assert.equal(detailAfterReopen.body.priceGroups.length, 1, "a newer sparse observation must preserve exact price groups");
+    assert.equal(detailAfterReopen.body.observationBasis.products.runId, detailSecondRunId, "preserved products must retain their own source run");
+    assert.equal(detailAfterReopen.body.observationBasis.products.collectedAt, "2026-08-22T01:00:00.000Z", "preserved products must not be presented as newly observed");
+    assert.equal(detailAfterReopen.body.observationBasis.daily.runId, detailSparseRunId, "new daily data must retain its own source run");
+    assert.equal(detailAfterReopen.body.observationBasis.daily.collectedAt, "2026-08-22T03:00:00.000Z");
+    const latestAvailableRankKeyword = detailAfterReopen.body.rankTrend.availableKeywords.find((row) => row.keyword === "경남글램핑");
+    assert.equal(latestAvailableRankKeyword.latestRank, 4, "available keyword scope must follow the latest stored observation");
+    assert.equal(latestAvailableRankKeyword.previousRank, 5);
+    assert.equal(latestAvailableRankKeyword.latestRunId, detailSparseRunId);
+    assert.equal(latestAvailableRankKeyword.latestCollectedAt, "2026-08-22T03:00:00.000Z", "history observation time must override the later master re-import time");
+    assert.equal(
+      detailAfterReopen.body.rankTrend.points.find((row) => row.runId === detailSparseRunId)?.collectedAt,
+      "2026-08-22T03:00:00.000Z",
+      "rank timeline point must use the original history observation time"
+    );
+    const persistedMaster = JSON.parse(await fsp.readFile(path.join(dataDir, "company_master", "companies.json"), "utf8"));
+    const persistedDetailCompany = persistedMaster.companies[detailCompany.companyId];
+    assert.ok(persistedDetailCompany.inventory.snapshots.every((snapshot) => !Array.isArray(snapshot.productSnapshot?.products)), "archived inventory snapshots must not duplicate full product arrays");
+
+    const fallbackCompanyId = "cmp_place_900000097";
+    const fallbackCompanyName = "이력 복원 글램핑";
+    persistedMaster.companies[fallbackCompanyId] = {
+      ...structuredClone(persistedDetailCompany),
+      companyId: fallbackCompanyId,
+      primaryName: fallbackCompanyName,
+      nameKey: "이력복원글램핑",
+      looseNameKey: "이력복원글램핑",
+      aliases: [fallbackCompanyName],
+      placeIds: ["900000097"],
+      bookingBusinessIds: [],
+      firstRunId: "history_fallback_master",
+      lastRunId: "history_fallback_master",
+      runIds: ["history_fallback_master"],
+      keywords: {},
+      inventory: {
+        latest: {
+          runId: "history_fallback_master",
+          collectedAt: "2026-08-20T00:00:00.000Z",
+          productSnapshot: null
+        },
+        previousLatest: null,
+        snapshots: [],
+        runIds: ["history_fallback_master"],
+        structureCounts: {},
+        confidenceCounts: {}
+      },
+      duplicateNotes: []
+    };
+    persistedMaster.sourceIndex["place:900000097"] = fallbackCompanyId;
+    await fsp.writeFile(path.join(dataDir, "company_master", "companies.json"), JSON.stringify(persistedMaster, null, 2), "utf8");
+
+    const fallbackObservation = (overrides = {}) => {
+      const supply = overrides.supply ?? 10;
+      const available = overrides.available ?? 7;
+      const sold = overrides.sold ?? (supply - available);
+      return {
+        schemaVersion: 1,
+        observationId: overrides.observationId,
+        runId: overrides.runId,
+        companyKey: overrides.companyKey ?? fallbackCompanyId,
+        companyName: overrides.companyName ?? fallbackCompanyName,
+        productType: overrides.productType || "lodging",
+        stayDate: overrides.stayDate,
+        collectedAt: overrides.collectedAt,
+        collectedDate: String(overrides.collectedAt || "").slice(0, 10),
+        supply,
+        available,
+        sold,
+        saleRate: supply > 0 ? sold / supply : null,
+        price: overrides.price ?? "120,000원"
+      };
+    };
+    const fallbackObservations = Array.from({ length: 70 }, (_, index) => {
+      const stayDate = new Date(Date.UTC(2026, 7, 1 + index)).toISOString().slice(0, 10);
+      const sold = index % 5;
+      return fallbackObservation({
+        observationId: `fallback-base-${index}`,
+        runId: `fallback-run-${index}`,
+        stayDate,
+        collectedAt: new Date(Date.UTC(2026, 7, 20, 0, index)).toISOString(),
+        available: 10 - sold,
+        sold
+      });
+    });
+    fallbackObservations.push(
+      fallbackObservation({
+        observationId: "fallback-latest-lodging-old",
+        runId: "fallback-lodging-old",
+        stayDate: "2026-10-09",
+        collectedAt: "2026-08-21T01:00:00.000Z",
+        available: 8,
+        sold: 2,
+        price: "100,000원"
+      }),
+      fallbackObservation({
+        observationId: "fallback-latest-lodging-new",
+        runId: "fallback-lodging-new",
+        stayDate: "2026-10-09",
+        collectedAt: "2026-08-23T01:00:00.000Z",
+        available: 3,
+        sold: 7,
+        price: "120,000원"
+      }),
+      fallbackObservation({
+        observationId: "fallback-latest-dayuse",
+        runId: "fallback-dayuse",
+        productType: "dayuse",
+        stayDate: "2026-10-09",
+        collectedAt: "2026-08-23T02:00:00.000Z",
+        supply: 4,
+        available: 1,
+        sold: 3,
+        price: "50,000원"
+      }),
+      fallbackObservation({
+        observationId: "fallback-legacy-name-identity",
+        runId: "fallback-name-identity",
+        companyKey: "이력복원글램핑",
+        stayDate: "2026-10-10",
+        collectedAt: "2026-08-24T01:00:00.000Z",
+        supply: 6,
+        available: 2,
+        sold: 4,
+        price: "가격 확인 불가"
+      }),
+      fallbackObservation({
+        observationId: "fallback-conflicting-measures",
+        runId: "fallback-conflict",
+        stayDate: "2026-10-11",
+        collectedAt: "2026-08-25T01:00:00.000Z",
+        supply: 10,
+        available: 3,
+        sold: 9,
+        price: "130,000원"
+      }),
+      fallbackObservation({
+        observationId: "fallback-same-name-other-company",
+        runId: "fallback-contaminant",
+        companyKey: "cmp_place_900000096",
+        companyName: fallbackCompanyName,
+        stayDate: "2026-10-10",
+        collectedAt: "2026-08-26T01:00:00.000Z",
+        supply: 999,
+        available: 0,
+        sold: 999,
+        price: "999,000원"
+      })
+    );
+    const fallbackHistoryFile = path.join(dataDir, "history", "observations.jsonl");
+    await fsp.mkdir(path.dirname(fallbackHistoryFile), { recursive: true });
+    await fsp.appendFile(
+      fallbackHistoryFile,
+      `${fallbackObservations.map((row) => JSON.stringify(row)).join("\n")}\n`,
+      "utf8"
+    );
+    const fallbackDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(fallbackCompanyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(fallbackDetail.statusCode, 200);
+    assert.equal(fallbackDetail.body.daily.length, 64, "history daily fallback must keep a bounded latest window");
+    assert.equal(fallbackDetail.body.observationBasis.daily.source, "history_observations");
+    assert.equal(fallbackDetail.body.observationBasis.daily.file, "history/observations.jsonl");
+    assert.equal(fallbackDetail.body.observationBasis.daily.runId, "fallback-conflict");
+    assert.equal(fallbackDetail.body.observationBasis.daily.collectedAt, "2026-08-25T01:00:00.000Z");
+    assert.equal(fallbackDetail.body.observationBasis.daily.dateRange.end, "2026-10-11");
+    assert.equal(fallbackDetail.body.observationBasis.daily.rowCount, 64);
+    assert.equal(fallbackDetail.body.observationBasis.daily.truncated, true);
+    const fallbackLatestLodging = fallbackDetail.body.daily.find((row) => row.date === "2026-10-09" && row.productType === "lodging");
+    const fallbackLatestDayUse = fallbackDetail.body.daily.find((row) => row.date === "2026-10-09" && row.productType === "dayuse");
+    const fallbackLegacyName = fallbackDetail.body.daily.find((row) => row.date === "2026-10-10" && row.productType === "lodging");
+    const fallbackConflict = fallbackDetail.body.daily.find((row) => row.date === "2026-10-11" && row.productType === "lodging");
+    assert.deepEqual(
+      [fallbackLatestLodging.total, fallbackLatestLodging.available, fallbackLatestLodging.sold, fallbackLatestLodging.saleRate],
+      [10, 3, 7, 0.7],
+      "the latest observation for one lodging stay date must win"
+    );
+    assert.equal(fallbackLatestLodging.estimatedRevenue, 840000, "estimated revenue requires both observed price and inferred sold quantity");
+    assert.equal(fallbackLatestLodging.actualRevenue, null);
+    assert.equal(fallbackLatestLodging.revenueType, "estimated");
+    assert.deepEqual(
+      [fallbackLatestDayUse.total, fallbackLatestDayUse.available, fallbackLatestDayUse.sold, fallbackLatestDayUse.estimatedRevenue],
+      [4, 1, 3, 150000],
+      "day-use must stay separate from lodging on the same stay date"
+    );
+    assert.equal(fallbackLegacyName.total, 6, "legacy name identity may restore the same company when no conflicting canonical id is present");
+    assert.equal(fallbackLegacyName.price, null);
+    assert.equal(fallbackLegacyName.estimatedRevenue, null, "missing price evidence must not create estimated won revenue");
+    assert.equal(fallbackConflict.sold, null, "conflicting sold and available evidence must not create a false sold quantity");
+    assert.equal(fallbackConflict.saleRate, null);
+    assert.equal(fallbackConflict.estimatedRevenue, null);
+    assert.ok(fallbackDetail.body.daily.every((row) => row.total !== 999), "a same-name row with another canonical company id must be excluded");
+    assert.ok(fallbackDetail.body.daily.every((row) => row.actualRevenue === null && row.actualRevenueAvailable === false));
+
     let company = summary.body.companies.find((row) => row.placeIds?.includes("987654321"));
     assert.ok(company, "company without Naver inventory must still be stored");
     assert.equal(company.naverChannelObservation.status, "observed_on_naver");
@@ -605,6 +1056,195 @@ async function main() {
     assert.equal(invalidCompany.naverChannelObservation.status, "auto_failed");
     assert.deepEqual(invalidCompany.naverChannelObservation.externalChannels, []);
     assert.deepEqual(invalidCompany.channelExposures, {});
+
+    const masterFile = path.join(dataDir, "company_master", "companies.json");
+    const mergeMaster = JSON.parse(await fsp.readFile(masterFile, "utf8"));
+    const mergeSource = mergeMaster.companies[detailCompany.companyId];
+    const mergeTargetId = "cmp_place_900000099";
+    const noPriceMixedId = "cmp_place_900000098";
+    const incompleteMixedId = "cmp_place_900000097";
+    const incompleteSoldId = "cmp_place_900000096";
+    const priceOnlyId = "cmp_place_900000095";
+    mergeMaster.companies[mergeTargetId] = {
+      ...structuredClone(mergeSource),
+      companyId: mergeTargetId,
+      primaryName: "상세 스냅샷 병합 대상",
+      placeIds: ["900000099"],
+      inventory: {
+        ...(mergeSource.inventory || {}),
+        latest: {
+          ...(mergeSource.inventory?.latest || {}),
+          runId: "merge_sparse_newer",
+          collectedAt: "2026-08-23T01:00:00.000Z",
+          productSnapshot: null
+        },
+        previousLatest: null,
+        snapshots: []
+      }
+    };
+    mergeMaster.companies[noPriceMixedId] = {
+      ...structuredClone(mergeSource),
+      companyId: noPriceMixedId,
+      primaryName: "가격 미관측 혼합상품 테스트",
+      placeIds: ["900000098"],
+      inventory: {
+        latest: {
+          runId: "mixed_no_price",
+          collectedAt: "2026-08-23T00:30:00.000Z",
+          salesSignal: {
+            checkIn: "2026-08-29",
+            lodging: { days: 1, totalSupply: 10, totalSold: 2, averageRate: 0.2 },
+            dayUse: { days: 1, totalSupply: 10, totalSold: 8, averageRate: 0.8 }
+          },
+          revenue: {
+            lodging: { revenue: 0, adjustedRevenue: 0, pricedSoldOut: 0, missingPriceSoldOut: 2 },
+            dayUse: { revenue: 0, adjustedRevenue: 0, pricedSoldOut: 0, missingPriceSoldOut: 8 }
+          },
+          productSnapshot: null
+        },
+        previousLatest: null,
+        snapshots: [],
+        runIds: ["mixed_no_price"],
+        structureCounts: {},
+        confidenceCounts: {}
+      }
+    };
+    mergeMaster.companies[incompleteMixedId] = {
+      ...structuredClone(mergeSource),
+      companyId: incompleteMixedId,
+      primaryName: "혼합상품 일부 수량 누락 테스트",
+      placeIds: ["900000097"],
+      inventory: {
+        latest: {
+          runId: "mixed_incomplete_quantity",
+          collectedAt: "2026-08-23T00:40:00.000Z",
+          salesSignal: {
+            checkIn: "2026-08-29",
+            lodging: { days: 1, totalSupply: 10, totalSold: 2, averageRate: 0.2 },
+            dayUse: { days: 1, totalSold: 8, averageRate: 0.8 }
+          },
+          revenue: {},
+          productSnapshot: null
+        },
+        previousLatest: null,
+        snapshots: [],
+        runIds: ["mixed_incomplete_quantity"],
+        structureCounts: {},
+        confidenceCounts: {}
+      }
+    };
+    mergeMaster.companies[incompleteSoldId] = {
+      ...structuredClone(mergeSource),
+      companyId: incompleteSoldId,
+      primaryName: "혼합상품 일부 판매량 누락 테스트",
+      placeIds: ["900000096"],
+      inventory: {
+        latest: {
+          runId: "mixed_incomplete_sold",
+          collectedAt: "2026-08-23T00:50:00.000Z",
+          salesSignal: {
+            checkIn: "2026-08-29",
+            lodging: { days: 1, totalSupply: 10, totalSold: 2, averageRate: 0.2 },
+            dayUse: { days: 1, totalSupply: 10, averageRate: 0.8 }
+          },
+          revenue: {},
+          productSnapshot: null
+        },
+        previousLatest: null,
+        snapshots: [],
+        runIds: ["mixed_incomplete_sold"],
+        structureCounts: {},
+        confidenceCounts: {}
+      }
+    };
+    mergeMaster.companies[priceOnlyId] = {
+      ...structuredClone(mergeSource),
+      companyId: priceOnlyId,
+      primaryName: "가격만 있고 매출산식 없는 테스트",
+      placeIds: ["900000095"],
+      inventory: {
+        latest: {
+          runId: "price_only_without_revenue_evidence",
+          collectedAt: "2026-08-23T01:00:00.000Z",
+          price: 149000,
+          salesSignal: {
+            checkIn: "2026-08-29",
+            lodging: { days: 1, totalSupply: 10, totalSold: 0, averageRate: 0 }
+          },
+          revenue: { lodging: {} },
+          productSnapshot: { summary: { priceGroupCount: 1 } }
+        },
+        previousLatest: null,
+        snapshots: [],
+        runIds: ["price_only_without_revenue_evidence"],
+        structureCounts: {},
+        confidenceCounts: {}
+      }
+    };
+    mergeMaster.sourceIndex["place:900000099"] = mergeTargetId;
+    mergeMaster.sourceIndex["place:900000098"] = noPriceMixedId;
+    mergeMaster.sourceIndex["place:900000097"] = incompleteMixedId;
+    mergeMaster.sourceIndex["place:900000096"] = incompleteSoldId;
+    mergeMaster.sourceIndex["place:900000095"] = priceOnlyId;
+    await fsp.writeFile(masterFile, JSON.stringify(mergeMaster, null, 2), "utf8");
+    const noPriceMixedDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(noPriceMixedId)}`,
+      null,
+      cookies
+    );
+    assert.equal(noPriceMixedDetail.statusCode, 200);
+    assert.equal(noPriceMixedDetail.body.performanceTrend.points.at(-1).reservationRate, 0.5, "mixed lodging/day-use rate must use the same combined supply basis");
+    assert.equal(noPriceMixedDetail.body.performanceTrend.points.at(-1).estimatedRevenue, null, "zero revenue without price evidence must remain unknown");
+    assert.equal(noPriceMixedDetail.body.performanceTrend.points.at(-1).priceEvidenceObserved, false);
+    const incompleteMixedDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(incompleteMixedId)}`,
+      null,
+      cookies
+    );
+    assert.equal(incompleteMixedDetail.statusCode, 200);
+    assert.equal(incompleteMixedDetail.body.performanceTrend.points.at(-1).totalSupply, null, "mixed product supply must remain unknown when one observed type is missing its quantity");
+    assert.equal(incompleteMixedDetail.body.performanceTrend.points.at(-1).reservationRate, null, "mixed product rate must remain unknown when supply and sold do not share a complete basis");
+    const incompleteSoldDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(incompleteSoldId)}`,
+      null,
+      cookies
+    );
+    assert.equal(incompleteSoldDetail.statusCode, 200);
+    assert.equal(incompleteSoldDetail.body.performanceTrend.points.at(-1).totalSupply, 20);
+    assert.equal(incompleteSoldDetail.body.performanceTrend.points.at(-1).totalSold, null, "mixed product sold count must remain unknown when one observed type is missing its quantity");
+    assert.equal(incompleteSoldDetail.body.performanceTrend.points.at(-1).reservationRate, null, "mixed product rate must remain unknown when sold counts are incomplete");
+    const priceOnlyDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(priceOnlyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(priceOnlyDetail.statusCode, 200);
+    assert.equal(priceOnlyDetail.body.performanceTrend.points.at(-1).estimatedRevenue, null, "price presence alone must not manufacture zero estimated revenue");
+    assert.equal(priceOnlyDetail.body.performanceTrend.points.at(-1).priceEvidenceObserved, false, "price-only snapshots must wait for a revenue calculation basis");
+    const mergedCompany = await request(baseUrl, "POST", "/api/company-master/duplicates", {
+      action: "merge",
+      candidateKey: "product-snapshot-merge-regression",
+      companyIds: [mergeTargetId, detailCompany.companyId]
+    }, cookies);
+    assert.equal(mergedCompany.statusCode, 200);
+    const mergedCompanyDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(mergeTargetId)}`,
+      null,
+      cookies
+    );
+    assert.equal(mergedCompanyDetail.statusCode, 200);
+    assert.equal(mergedCompanyDetail.body.products.length, 2, "company merge must preserve the only detailed product snapshot");
+    assert.equal(mergedCompanyDetail.body.observationBasis.products.runId, detailSecondRunId);
   } finally {
     await stopChild(child);
     await fsp.rm(tmp, { recursive: true, force: true });

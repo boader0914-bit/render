@@ -524,7 +524,6 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(
   .admin-db-company,
   .admin-db-flat-list,
   .admin-db-review-surface,
-  .admin-db-selected-panel,
   .admin-db-selected-overview,
   .admin-db-selected-readonly,
   .admin-db-selected-workbench,
@@ -1554,6 +1553,55 @@ html[data-theme-resolved] body.role-admin .admin-region-analysis-dashboard {
 
   html[data-theme-resolved] body.role-admin .admin-home-task-row > b,
   html[data-theme-resolved] body.role-admin .admin-home-log-row > b {
+    display: none;
+  }
+}
+
+/* Company review focuses the selected business and mirrors the compact A/B/D/C reference. */
+html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) #adminDatabaseBoard > :is(
+  .admin-db-hero,
+  .admin-db-view-switch,
+  .admin-db-page-guide
+),
+html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) .admin-db-review-surface > :is(
+  .admin-db-user-view-bridge,
+  .admin-db-review-support
+),
+html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) #adminPanel > .admin-section-panel.active > :is(
+  #companyMasterAdminCard,
+  #yeogiAdminCard
+) {
+  display: none;
+}
+
+html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) :is(
+  .admin-db-page-surface.review,
+  .admin-db-review-surface
+) {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+@media (min-width: 861px) {
+  html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) .app-shell {
+    width: min(calc(100% - 8px), 1480px);
+    padding: 8px 8px 36px;
+  }
+
+  html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) .app-main {
+    grid-template-columns: 228px minmax(0, 1fr);
+    column-gap: 24px;
+  }
+
+  html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) .app-main > .bottom-nav {
+    width: 228px !important;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  html[data-theme-resolved] body.role-admin:has(#adminPanel.active [data-layout-contract="company-db-reference-v1"]) .app-header {
     display: none;
   }
 }

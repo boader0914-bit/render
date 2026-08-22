@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
 const root = path.resolve(__dirname, "..");
 const stylesPath = path.join(root, "web", "styles.css");
@@ -9,6 +10,13 @@ const indexPath = path.join(root, "web", "index.html");
 const serviceWorkerPath = path.join(root, "web", "sw.js");
 const serverPath = path.join(root, "scripts", "glamping_app_server.cjs");
 const crawlerPath = path.join(root, "scripts", "gyeongnam_glamping_crawl.cjs");
+const channelAssetPaths = {
+  naver: path.join(root, "web", "assets", "channels", "naver.webp"),
+  nol: path.join(root, "web", "assets", "channels", "nol.png"),
+  yeogi: path.join(root, "web", "assets", "channels", "yeogi.webp"),
+  ddnayo: path.join(root, "web", "assets", "channels", "ddnayo.ico"),
+  sources: path.join(root, "web", "assets", "channels", "SOURCES.md")
+};
 const styles = fs.readFileSync(stylesPath, "utf8");
 const themeStyles = fs.readFileSync(themePath, "utf8");
 const app = fs.readFileSync(appPath, "utf8");
@@ -351,8 +359,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260822-editable-rank-range-v37";
-const expectedAssetVersion = "v2-20260822-editable-rank-range-v19";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260822-channel-brand-icons-v49";
+const expectedAssetVersion = "v2-20260822-channel-brand-icons-v31";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -668,6 +676,391 @@ assert(
     && server.includes("async function applyYeogiImportToCompanyMaster(")
     && server.includes('method: "yeogi_bulk_import"'),
   "OTA tools must target the explicit latest run, expose only confirmed links, and persist matched Yeogi evidence to company review data",
+  failures
+);
+
+const adminDbCompanyRowBlock = app.slice(
+  app.indexOf("function adminDbCompanyRow("),
+  app.indexOf("function adminDbRegionGroup(", app.indexOf("function adminDbCompanyRow("))
+);
+const adminDbDetailBlock = app.slice(
+  app.indexOf("function adminDbSelectedDetailPanel("),
+  app.indexOf("function adminDbCompanyRow(", app.indexOf("function adminDbSelectedDetailPanel("))
+);
+const adminDbOverviewBlock = app.slice(
+  app.indexOf("function adminDbSelectedOverviewCardsHtml("),
+  app.indexOf("function adminDbSelectedDetailTabs(", app.indexOf("function adminDbSelectedOverviewCardsHtml("))
+);
+const inlineRecrawlBlock = app.slice(
+  app.indexOf("function applyQueueRecrawlSetting("),
+  app.indexOf("function applyRecrawlBatchSetting(", app.indexOf("function applyQueueRecrawlSetting("))
+);
+const adminCompanyChartBlock = app.slice(
+  app.indexOf("function adminDbChartSafeId("),
+  app.indexOf("function adminDbInlineCollectionHtml(", app.indexOf("function adminDbChartSafeId("))
+);
+const cumulativeDashboardModelBlock = app.slice(
+  app.indexOf("function adminDbCumulativeDashboardModel("),
+  app.indexOf("function adminDbCumulativeKpiStripHtml(", app.indexOf("function adminDbCumulativeDashboardModel("))
+);
+const cumulativeDashboardBlock = app.slice(
+  app.indexOf("function adminDbCompanyCumulativeDashboardHtml("),
+  app.indexOf("function adminDbInlineCollectionHtml(", app.indexOf("function adminDbCompanyCumulativeDashboardHtml("))
+);
+const referenceDashboardBlock = app.slice(
+  app.indexOf("function adminDbCompanyReferenceDashboardHtml("),
+  app.indexOf("function adminDbInlineCollectionHtml(", app.indexOf("function adminDbCompanyReferenceDashboardHtml("))
+);
+const cumulativeCssBlock = styles.slice(
+  styles.indexOf("/* Company cumulative DB v1:"),
+  styles.indexOf("/* Region keyword readability", styles.indexOf("/* Company cumulative DB v1:"))
+);
+const referenceCssBlock = styles.slice(
+  styles.indexOf("/* Company DB reference v1:"),
+  styles.indexOf("/* Region keyword readability", styles.indexOf("/* Company DB reference v1:"))
+);
+
+assert(
+  adminDbCompanyRowBlock.includes('>검토</a>')
+    && adminDbCompanyRowBlock.includes("admin-db-company-simple")
+    && !adminDbCompanyRowBlock.includes("admin-db-company-values")
+    && !adminDbCompanyRowBlock.includes("7일 매출")
+    && !adminDbCompanyRowBlock.includes("예약율")
+    && !adminDbCompanyRowBlock.includes("자동 수집 신뢰도")
+    && !adminDbCompanyRowBlock.includes("data-queue-recrawl-company"),
+  "company DB list rows must stay identity-focused with one review action",
+  failures
+);
+
+assert(
+  adminDbOverviewBlock.includes("adminDbCompanyReferenceDashboardHtml")
+    && adminDbOverviewBlock.includes("admin-company-overview-reference")
+    && !adminDbOverviewBlock.includes("admin-company-evidence-fold")
+    && adminDbDetailBlock.includes('data-queue-recrawl-source="admin_db_detail"')
+    && adminDbDetailBlock.includes("globalInlineBusy")
+    && adminDbDetailBlock.includes("collectButtonLabel")
+    && adminDbDetailBlock.includes("다른 업체 수집 중")
+    && adminDbDetailBlock.includes("admin-company-reference-header")
+    && adminDbDetailBlock.includes("admin-company-reference-freshness")
+    && adminDbDetailBlock.includes('data-admin-db-open-fold="review"')
+    && adminDbDetailBlock.includes('data-admin-db-open-fold="collect"')
+    && adminDbDetailBlock.includes("admin-company-maintenance"),
+  "company review must lead with the attached reference dashboard, inline auto collection, and collapsed detail tools",
+  failures
+);
+
+const referenceSlotOrder = [
+  'data-layout-slot="basics-channels"',
+  "adminDbReferenceTrendSection(row, detail, model)",
+  "adminDbReferenceRecentSection(model)"
+].map((token) => referenceDashboardBlock.indexOf(token));
+
+assert(
+  referenceDashboardBlock.includes('data-layout-contract="company-db-reference-v1"')
+    && referenceSlotOrder.every((index) => index >= 0)
+    && referenceSlotOrder.every((index, position) => position === 0 || index > referenceSlotOrder[position - 1])
+    && referenceDashboardBlock.includes("adminDbReferenceBasicsCard(row, detail, model)")
+    && referenceDashboardBlock.includes("adminDbReferenceChannelsCard(row)")
+    && adminCompanyChartBlock.includes("A · 업체 기본정보") === false
+    && adminCompanyChartBlock.includes("업체 기본정보")
+    && adminCompanyChartBlock.includes("예약 채널")
+    && adminCompanyChartBlock.includes("누적 변동 지표")
+    && adminCompanyChartBlock.includes("최근 판매 관측")
+    && adminCompanyChartBlock.includes("실제 예약·결제자료가 아닙니다")
+    && adminCompanyChartBlock.includes("네이버 예약 노출과 외부 OTA 입점·재고 연동은 서로 다른 근거"),
+  "company reference dashboard must render A and B first, then D cumulative evidence and C recent observations",
+  failures
+);
+
+assert(
+  referenceCssBlock.includes("grid-template-columns: minmax(0, 1.33fr) minmax(340px, 1fr)")
+    && referenceCssBlock.includes("grid-template-columns: repeat(4, minmax(0, 1fr))")
+    && referenceCssBlock.includes("grid-template-columns: repeat(2, minmax(0, 1fr))")
+    && referenceCssBlock.includes(".admin-reference-product-table")
+    && referenceCssBlock.includes(".admin-reference-recent-table")
+    && referenceCssBlock.includes("@media (max-width: 760px)")
+    && !/(#[0-9a-f]{3,8}|linear-gradient|radial-gradient|!important)/i.test(referenceCssBlock),
+  "company reference layout must preserve the attached desktop geometry and token-only responsive styling",
+  failures
+);
+
+assert(
+  adminCompanyChartBlock.includes("const performanceBasisComparable")
+    && adminCompanyChartBlock.includes("sameObservedHorizon")
+    && adminCompanyChartBlock.includes("currentPerformanceAligned")
+    && adminCompanyChartBlock.includes("Math.abs(optionalNumber(latestPerformance.estimatedRevenue) - optionalNumber(model.estimatedRevenue)) < 1")
+    && adminCompanyChartBlock.includes('model.observationBasis?.daily?.source === "history_observations"')
+    && adminCompanyChartBlock.includes("dailyRows.some((item) =>")
+    && adminCompanyChartBlock.includes('role="columnheader"')
+    && adminCompanyChartBlock.includes('role="cell"'),
+  "company reference evidence must not promote missing representative prices or incomparable snapshots",
+  failures
+);
+
+const channelAssetSignatures = {
+  naver: fs.existsSync(channelAssetPaths.naver) ? fs.readFileSync(channelAssetPaths.naver).subarray(0, 12).toString("ascii") : "",
+  nol: fs.existsSync(channelAssetPaths.nol) ? fs.readFileSync(channelAssetPaths.nol).subarray(0, 8).toString("hex") : "",
+  yeogi: fs.existsSync(channelAssetPaths.yeogi) ? fs.readFileSync(channelAssetPaths.yeogi).subarray(0, 12).toString("ascii") : "",
+  ddnayo: fs.existsSync(channelAssetPaths.ddnayo) ? fs.readFileSync(channelAssetPaths.ddnayo).subarray(0, 4).toString("hex") : ""
+};
+
+assert(
+  Object.values(channelAssetPaths).every((filePath) => fs.existsSync(filePath))
+    && channelAssetSignatures.naver.startsWith("RIFF") && channelAssetSignatures.naver.endsWith("WEBP")
+    && channelAssetSignatures.nol === "89504e470d0a1a0a"
+    && channelAssetSignatures.yeogi.startsWith("RIFF") && channelAssetSignatures.yeogi.endsWith("WEBP")
+    && channelAssetSignatures.ddnayo === "00000100"
+    && adminCompanyChartBlock.includes('naver: { src: "/assets/channels/naver.webp"')
+    && adminCompanyChartBlock.includes('yeogi: { src: "/assets/channels/yeogi.webp"')
+    && adminCompanyChartBlock.includes('yanolja: { src: "/assets/channels/nol.png"')
+    && adminCompanyChartBlock.includes('tteonayo: { src: "/assets/channels/ddnayo.ico"')
+    && adminCompanyChartBlock.includes('label: "NOL(야놀자)"')
+    && app.includes('img[data-channel-brand-icon]')
+    && app.includes('image.closest(".admin-reference-channel-icon")?.classList.add("is-fallback")')
+    && ["naver.webp", "nol.png", "yeogi.webp", "ddnayo.ico"].every((fileName) => serviceWorker.includes(`/assets/channels/${fileName}`))
+    && server.includes('".webp": "image/webp"')
+    && server.includes('".ico": "image/x-icon"'),
+  "company booking channels must use verified local brand assets with an accessible text fallback and offline cache coverage",
+  failures
+);
+
+const cumulativeSlotOrder = [
+  "adminDbCumulativeKpiStripHtml(model)",
+  "adminDbCumulativeHistoryHtml(row, model)",
+  'data-layout-slot="comparison"',
+  "adminDbCumulativeWeekdayHtml(row, model)"
+].map((token) => cumulativeDashboardBlock.indexOf(token));
+
+assert(
+  cumulativeDashboardBlock.includes('data-layout-contract="cumulative-db-v1"')
+    && cumulativeSlotOrder.every((index) => index >= 0)
+    && cumulativeSlotOrder.every((index, position) => position === 0 || index > cumulativeSlotOrder[position - 1])
+    && adminCompanyChartBlock.includes('data-layout-slot="kpi-strip"')
+    && adminCompanyChartBlock.includes('data-layout-slot="history"')
+    && adminCompanyChartBlock.includes('data-layout-slot="company-trend"')
+    && adminCompanyChartBlock.includes("키워드별 누적 수집 이력")
+    && adminCompanyChartBlock.includes("수집 회차 비교")
+    && adminCompanyChartBlock.includes("데이터 신뢰도 로그")
+    && adminCompanyChartBlock.includes("업체별 누적 추이")
+    && adminCompanyChartBlock.includes("상품·가격 기준 열기")
+    && adminCompanyChartBlock.includes("function adminDbRankRangeEnd(")
+    && adminCompanyChartBlock.includes("function adminDbDailyDateCoverage(")
+    && adminCompanyChartBlock.includes("dailyCoverage.supply === dailyCoverage.total")
+    && adminCompanyChartBlock.includes("const hasCompleteDailyPair")
+    && adminCompanyChartBlock.includes("rankModel.keywordKey")
+    && adminCompanyChartBlock.includes("matches.length !== 1")
+    && !adminCompanyChartBlock.includes("Math.max(40")
+    && cumulativeDashboardModelBlock.includes("const hasComparablePrevious")
+    && cumulativeDashboardModelBlock.includes("synthetic: !hasComparablePrevious")
+    && cumulativeDashboardModelBlock.includes("const latestRevenueComplete")
+    && !cumulativeDashboardModelBlock.includes("optionalNumber(metrics.revenue)")
+    && adminCompanyChartBlock.includes('data-chart="history-line"')
+    && adminCompanyChartBlock.includes('data-chart="weekday-bars"')
+    && adminCompanyChartBlock.includes('data-chart-point=')
+    && adminCompanyChartBlock.includes('data-weekday=')
+    && adminCompanyChartBlock.includes('{ label: "월", day: 1 }')
+    && adminCompanyChartBlock.includes('{ label: "일", day: 0 }'),
+  "company cumulative dashboard must keep the mockup slot order and functional chart landmarks",
+  failures
+);
+
+assert(
+  cumulativeCssBlock.includes("grid-template-columns: repeat(3, minmax(0, 1fr))")
+    && cumulativeCssBlock.includes("grid-template-columns: repeat(2, minmax(0, 1fr))")
+    && cumulativeCssBlock.includes("grid-template-columns: minmax(0, 2.5fr) minmax(220px, 1fr)")
+    && cumulativeCssBlock.includes("min-height: 314px")
+    && cumulativeCssBlock.includes("min-height: 242px")
+    && cumulativeCssBlock.includes("min-height: 234px")
+    && cumulativeCssBlock.includes("grid-template-columns: repeat(7, minmax(0, 1fr))")
+    && cumulativeCssBlock.includes("stroke-dasharray: 10 9")
+    && !/(#[0-9a-f]{3,8}|linear-gradient|radial-gradient|!important)/i.test(cumulativeCssBlock),
+  "company cumulative mockup geometry must stay token-only without legacy gradients or important overrides",
+  failures
+);
+
+const companyRangeHelperSource = app.slice(
+  app.indexOf("function adminDbRankRangeEnd("),
+  app.indexOf("function adminDbDailyDateCoverage(")
+);
+const companyDailyHelperSource = app.slice(
+  app.indexOf("function adminDbDailyDateCoverage("),
+  app.indexOf("function adminDbCumulativeDashboardModel(")
+);
+const companyChartSandbox = {};
+vm.createContext(companyChartSandbox);
+vm.runInContext(
+  `const adminDbChartClamp = (value, min, max) => Math.min(max, Math.max(min, Number(value) || 0));\n${companyRangeHelperSource}\n${companyDailyHelperSource}`,
+  companyChartSandbox
+);
+const companyDailyCoverageFixture = companyChartSandbox.adminDbDailyDateCoverage([
+  { date: "2026-09-01", productType: "lodging", total: 10, sold: 4, estimatedRevenue: 400000 },
+  { date: "2026-09-01", productType: "dayuse", total: 5, sold: NaN, estimatedRevenue: NaN },
+  { date: "2026-09-02", productType: "lodging", total: 8, sold: 2, estimatedRevenue: 200000 },
+  { date: "2026-09-02", productType: "dayuse", total: 2, sold: 1, estimatedRevenue: 50000 }
+]);
+
+assert(
+  companyDailyCoverageFixture.length === 2
+    && companyDailyCoverageFixture[0].total === 15
+    && Number.isNaN(companyDailyCoverageFixture[0].sold)
+    && Number.isNaN(companyDailyCoverageFixture[0].estimatedRevenue)
+    && Number.isNaN(companyDailyCoverageFixture[0].rate)
+    && companyDailyCoverageFixture[1].total === 10
+    && companyDailyCoverageFixture[1].sold === 3
+    && companyDailyCoverageFixture[1].estimatedRevenue === 250000
+    && companyDailyCoverageFixture[1].rate === 0.3,
+  "company cumulative daily metrics must aggregate by date and keep incomplete product-type contributions unknown",
+  failures
+);
+
+assert(
+  companyChartSandbox.adminDbPerformanceComparisonIsComplete(
+    { rate: 0.3, supply: 20, sold: 6 },
+    { rate: 0.25, supply: 20, sold: NaN },
+    2
+  ) === false
+    && companyChartSandbox.adminDbPerformanceComparisonIsComplete(
+      { rate: 0.3, supply: 20, sold: 6 },
+      { rate: 0.25, supply: 20, sold: 5 },
+      2
+    ) === true
+    && companyChartSandbox.adminDbPerformanceComparisonIsComplete(
+      { rate: 0.3, supply: NaN, sold: 6 },
+      { rate: 0.25, supply: 20, sold: 5 },
+      2
+    ) === false,
+  "company collection comparison must be marked actual only when both runs share complete rate, supply, and sold evidence",
+  failures
+);
+
+assert(
+  companyChartSandbox.adminDbRankRangeEnd("1-65") === 65
+    && Number.isNaN(companyChartSandbox.adminDbRankRangeEnd("1-10,21-30"))
+    && Number.isNaN(companyChartSandbox.adminDbRankRangeEnd("11-30")),
+  "company rank position must use only one stored continuous 1-N range and never reinterpret multi-range collections",
+  failures
+);
+
+assert(
+  adminCompanyChartBlock.includes("function adminDbDailyChartModel(")
+    && adminCompanyChartBlock.includes("function adminDbRankTrendModel(")
+    && adminCompanyChartBlock.includes("function adminDbPerformanceChartModel(")
+    && adminCompanyChartBlock.includes("function adminDbLeadTimeChartHtml(")
+    && adminCompanyChartBlock.includes('evidenceClass: "synthetic"')
+    && adminCompanyChartBlock.includes("presentationOnly: true")
+    && adminCompanyChartBlock.includes("decisionEligible: false")
+    && adminCompanyChartBlock.includes("판단·추천 계산에는 사용하지 않습니다")
+    && adminCompanyChartBlock.includes("admin-company-history-chart")
+    && adminCompanyChartBlock.includes('role="img"')
+    && adminCompanyChartBlock.includes("<title id=")
+    && adminCompanyChartBlock.includes("<desc id=")
+    && styles.includes(".admin-company-trend-layout")
+    && styles.includes(".admin-company-chart-rank-line.is-synthetic")
+    && styles.includes("stroke-dasharray")
+    && styles.includes("@media (max-width: 460px)"),
+  "company cumulative charts must separate observed, derived, and presentation-only synthetic evidence with accessible graph markup",
+  failures
+);
+
+assert(
+  app.includes("function adminDbFoldedItemsHtml(")
+    && app.includes('options.limit || 5')
+    && app.includes('개 더보기')
+    && app.includes('접기')
+    && app.includes("상품명은 원본 그대로 보존")
+    && app.includes("동일 가격 패턴만 묶음")
+    && app.includes("const exactPriceGroups = Array.isArray(detail.priceGroups)")
+    && app.includes("productSummary.priceGroupCount")
+    && app.includes("관측가격과 예상매출")
+    && app.includes("실제 결제 매출이 아닙니다"),
+  "company detail lists must fold after five items and keep product names, price groups, and estimate labels explicit",
+  failures
+);
+
+assert(
+  inlineRecrawlBlock.includes("activeInlineBusy")
+    && inlineRecrawlBlock.includes("crawlSubmitBusy")
+    && inlineRecrawlBlock.includes("진행 중인 수집이 끝난 뒤")
+    && app.includes("다른 업체 자동수집 진행 중"),
+  "company inline collection must keep one global in-flight owner and reject overlapping company requests",
+  failures
+);
+
+assert(
+  !server.includes("profiledCompanies.slice(0, 300)")
+    && server.includes("function mergeCompanyProductSnapshots(")
+    && !server.includes("const expandedDays = events.flatMap")
+    && app.includes("externalPlatformUrl(entry.url) || adminDbChannelFallbackSearchUrl")
+    && app.includes("hasPriceEvidence ? rawEstimatedRevenue : NaN"),
+  "company detail must preserve sparse history, avoid hard list caps, sanitize channel links, and never invent zero revenue",
+  failures
+);
+
+const companyQuickToolStyles = styles.slice(
+  styles.indexOf(".admin-db-quick-edit {"),
+  styles.indexOf(".admin-db-selected-empty-step {", styles.indexOf(".admin-db-quick-edit {"))
+);
+const companyChannelToolStyles = styles.slice(
+  styles.indexOf(".admin-db-recheck-panel {"),
+  styles.indexOf(".admin-db-collect-planline {", styles.indexOf(".admin-db-recheck-panel {"))
+);
+const companyLegacyDetailStyles = styles.slice(
+  styles.indexOf("/* Admin company detail v21:"),
+  styles.indexOf("/* Admin company review workspace:", styles.indexOf("/* Admin company detail v21:"))
+);
+const hardcodedCompanyPaint = /(?:background(?:-image)?|border(?:-color)?|color|box-shadow|text-shadow)\s*:[^;]*(?:#[0-9a-f]{3,8}|rgba?\(|linear-gradient\()/i;
+
+assert(
+  !/adminDbChannelComparisonPanel[\s\S]*?data-surface="light"[\s\S]*?function adminDbChannelExposureForm/.test(app)
+    && !/adminDbChannelExposureForm[\s\S]*?data-surface="light"[\s\S]*?function adminDbNaverChannelObservationHtml/.test(app)
+    && !themeStyles.includes("Company review tools keep the same neutral surface contract")
+    && companyQuickToolStyles.includes("background: var(--surface-card)")
+    && companyChannelToolStyles.includes("background: var(--surface-control)")
+    && companyLegacyDetailStyles.includes("background: var(--surface-selected)")
+    && /\.company-manual-section\s*\{[^}]*border:\s*1px solid var\(--border-subtle\)[^}]*background:\s*var\(--surface-control\)/i.test(styles)
+    && /\.company-manual-structured-grid fieldset\s*\{[^}]*border:\s*1px solid var\(--border-subtle\)[^}]*background:\s*var\(--surface-card\)/i.test(styles)
+    && /\.admin-db-user-view-bridge\s*\{[^}]*border:\s*1px solid var\(--border-subtle\)[^}]*background:\s*var\(--surface-card\)/i.test(styles)
+    && !styles.includes("body.role-admin .company-manual-section,")
+    && !styles.includes("body.role-admin .company-manual-structured-grid fieldset,")
+    && !styles.includes("body.role-admin .admin-db-user-view-bridge,")
+    && !hardcodedCompanyPaint.test(companyQuickToolStyles)
+    && !hardcodedCompanyPaint.test(companyChannelToolStyles)
+    && !hardcodedCompanyPaint.test(companyLegacyDetailStyles)
+    && !companyQuickToolStyles.includes("!important")
+    && !companyChannelToolStyles.includes("!important")
+    && !companyLegacyDetailStyles.includes("!important"),
+  "expanded company correction and channel tools must own token paint without legacy override layers",
+  failures
+);
+
+assert(
+  styles.includes(".admin-db-company:not(.admin-db-company-simple)")
+    && styles.includes(".admin-company-channels-card .admin-company-channel-row")
+    && /\.admin-company-channels-card \.admin-company-channel-actions\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/i.test(styles),
+  "simplified company rows and narrow channel cards must remain unclipped across desktop and mobile",
+  failures
+);
+
+assert(
+  inlineRecrawlBlock.includes('const inlineDetail = source === "admin_db_detail";')
+    && inlineRecrawlBlock.includes("if (!inlineDetail) focusAdminCrawlProgress();")
+    && submitCrawlBlock.includes('payload.recrawlContext?.source === "admin_db_detail"')
+    && submitCrawlBlock.includes('status: "running"')
+    && submitCrawlBlock.includes('status: "complete"')
+    && submitCrawlBlock.includes('status: "error"')
+    && submitCrawlBlock.includes('if (completedRecrawlContext?.source === "admin_db_detail")'),
+  "company auto collection must run and report progress without leaving the company review screen",
+  failures
+);
+
+assert(
+  styles.includes(".admin-company-primary-grid")
+    && styles.includes(".admin-company-trend-grid")
+    && styles.includes(".admin-company-daily-row")
+    && styles.includes("@media (prefers-reduced-motion: reduce)")
+    && /\.admin-company-primary-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.7fr\)\s+minmax\(300px,\s*\.82fr\)/i.test(styles)
+    && /@media \(max-width:\s*760px\)[\s\S]*?\.admin-company-primary-grid\s*\{[^}]*grid-template-columns:\s*1fr/i.test(styles),
+  "company review layout must keep a wide evidence column, compact channel column, and one-column mobile fallback",
   failures
 );
 

@@ -63,6 +63,9 @@ const state = {
   adminDbListPage: 1,
   adminDbListPageKey: "",
   adminDbSelectedCompanyId: "",
+  adminDbCompanyDetails: {},
+  adminDbCompanyDetailLoading: {},
+  adminDbInlineCollect: null,
   adminDbRouteCompanyId: "",
   adminDbOpsOpen: false,
   adminDbCorrectionFlash: null,
@@ -3212,6 +3215,15 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
       const stage = status.currentStage || {};
       const delayed = Boolean(status.isDelayed);
       const recrawlText = recrawlContextStatusText(status.recrawlContext);
+      if (status.recrawlContext?.source === "admin_db_detail" && status.recrawlContext.companyIds?.length === 1) {
+        state.adminDbInlineCollect = {
+          companyId: status.recrawlContext.companyIds[0],
+          status: "running",
+          startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
+          message: stage.label ? `${stage.label} · ${stage.detail || "자료를 확인하고 있습니다."}` : "네이버 자료를 확인하고 있습니다."
+        };
+        if (isAdminRole() && state.adminDbSelectedCompanyId === status.recrawlContext.companyIds[0]) renderAdminConsoleDashboard();
+      }
       setCrawlProgress(
         true,
         delayed ? "예상보다 지연 중" : (stage.label ? `${stage.label} 진행 중` : "수집 진행 중"),
@@ -3232,7 +3244,22 @@ async function pollCrawlStatusUntilIdle(notifyIdle = false) {
     setCrawlProgress(false);
     setStatus("준비");
     if (notifyIdle && els.crawlStatus) els.crawlStatus.textContent = "진행 중인 수집이 끝났습니다. 결과를 갱신했습니다.";
+    const inlineCompanyId = state.adminDbInlineCollect?.status === "running" ? state.adminDbInlineCollect.companyId : "";
     await loadRuns(true);
+    if (inlineCompanyId) {
+      state.adminDbInlineCollect = {
+        companyId: inlineCompanyId,
+        status: "complete",
+        startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
+        message: "최신 상품·가격·예약 관측을 업체 DB에 반영했습니다."
+      };
+      await loadAdminDbCompanyDetail(inlineCompanyId, { force: true });
+      state.adminDbSelectedCompanyId = inlineCompanyId;
+      state.adminDbViewMode = "review";
+      setActiveTab("admin");
+      setAdminPanelSection("database");
+      renderAdminConsoleDashboard();
+    }
   } catch (error) {
     if (els.crawlStatus) els.crawlStatus.textContent = `수집 상태 확인 실패: ${error.message}`;
   }
@@ -13551,7 +13578,7 @@ function renderReport() {
           <span>필터</span>
           <strong>관리 상태 · OTA · 시설 · 순위/매출 정렬</strong>
           <em>${fmtNumber(allTargets.length)}건</em>
-          <small>컨택 가능 여부는 상세 수정에서 저장합니다.</small>
+          <small>컨택 가능 여부는 업체 검토에서 저장합니다.</small>
         </button>
       </div>
     </section>`}
@@ -18017,7 +18044,7 @@ function adminDbQuickCorrectionPanel(row = {}) {
   const companyId = company.companyId || "";
   const cards = adminDbQuickCorrectionSummaryCards(row);
   return `
-    <section class="admin-db-quick-edit" data-admin-db-quick-edit="${escapeHtml(companyId)}">
+    <section class="admin-db-quick-edit" data-ui-surface="card" data-admin-db-quick-edit="${escapeHtml(companyId)}">
       <div class="admin-db-quick-edit-head">
         <div>
           <span>기준값 수정</span>
@@ -19031,6 +19058,7 @@ function activateAdminDbCompanyDetail(companyId = "", options = {}) {
   state.adminDbViewMode = "review";
   const opened = openAdminDbCompanyReview(selectedCompanyId);
   if (options.updateRoute !== false) setAdminDbCompanyRoute(selectedCompanyId, Boolean(options.replaceRoute));
+  loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});
   return opened;
 }
 
@@ -19118,7 +19146,7 @@ function adminDbFlowRailHtml(mode = "region", filteredRows = [], rows = [], grou
     {
       key: "review",
       view: "review",
-      label: "4. 상세·수정",
+      label: "4. 업체 검토",
       value: state.adminDbSelectedCompanyId ? "선택됨" : "대기",
       note: "보정·확인 수집"
     }
@@ -19165,7 +19193,7 @@ function adminDbPageGuideHtml(mode = "region", filteredRows = [], rows = [], gro
     },
     review: {
       label: "상세",
-      title: "상세 수정",
+      title: "업체 검토",
       copy: "",
       metric: state.adminDbSelectedCompanyId ? "선택 업체 검수" : "우선 검수 업체"
     }
@@ -19231,7 +19259,7 @@ function adminDbRegionStructurePanel(grouped = [], allGrouped = [], filters = {}
       </div>
       <div class="admin-db-region-empty-actions">
         <button type="button" data-ui-surface="control" data-ui-interactive="true" data-admin-db-view-link="list">업체 리스트로 보기</button>
-        <button type="button" data-ui-surface="control" data-ui-interactive="true" data-admin-db-view-link="review">상세·수정 열기</button>
+        <button type="button" data-ui-surface="control" data-ui-interactive="true" data-admin-db-view-link="review">업체 검토 열기</button>
       </div>
     </section>
   `;
@@ -19560,7 +19588,7 @@ function adminDbAuditDetailPanel(region = null) {
         <div>
           <span>선택 지역 감수 큐</span>
           <strong>${escapeHtml(region.provinceLabel || "미분류")} · ${escapeHtml(region.regionLabel || "지역 미확인")}</strong>
-          <small>점수가 낮은 원인을 업체 단위로 풀어서 확인합니다. 확인 수집과 상세 수정을 여기서 바로 시작합니다.</small>
+          <small>점수가 낮은 원인을 업체 단위로 확인하고 필요한 자동수집과 검토를 같은 화면에서 처리합니다.</small>
         </div>
         <mark class="${escapeHtml(stats.tone || "watch")}">${fmtNumber(stats.score)}점 · ${escapeHtml(stats.nextAction || "확인")}</mark>
       </div>
@@ -19596,7 +19624,7 @@ function adminDbAuditDetailPanel(region = null) {
               </div>
               <div class="admin-db-audit-company-actions">
                 <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_region_audit_queue" data-queue-recrawl-autostart="1">확인 수집</button>
-                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세 수정</a>
+                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">검토</a>
               </div>
             </article>
           `;
@@ -19715,13 +19743,15 @@ function adminDbCollectionChip(collection = {}) {
 }
 
 function adminDbCompanyCompactTags(row = {}) {
+  const company = row.company || {};
   const metrics = row.metrics || {};
-  const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
+  const products = company.inventory?.latest?.productSnapshot?.products || [];
+  const latestAt = company.inventory?.latest?.collectedAt || company.lastSeenAt || "";
   const tags = [
-    { label: workType.label || "검수 대기", tone: workType.tone || "watch" },
-    { label: metrics.collection?.key === "confirm_needed" ? "" : (metrics.collection?.label || "자동수집"), tone: metrics.collection?.tone || "neutral" },
-    { label: metrics.roomTotal ? `${fmtNumber(metrics.roomTotal)}실` : "", tone: "neutral" },
-    { label: adminDbChannelSummary(metrics), tone: metrics.channels?.reviewNeeded ? "watch" : metrics.channels?.externalCount ? "good" : "neutral" }
+    { label: products.length ? `상품 ${fmtNumber(products.length)}종` : (metrics.roomTotal ? `총량 ${fmtNumber(metrics.roomTotal)}개` : ""), tone: "neutral" },
+    { label: metrics.channels?.externalCount ? `외부 OTA ${fmtNumber(metrics.channels.externalCount)}개` : "채널 확인 전", tone: metrics.channels?.externalCount ? "good" : "neutral" },
+    { label: metrics.channels?.reviewNeeded ? `채널 검토 ${fmtNumber(metrics.channels.reviewNeeded)}건` : "", tone: "watch" },
+    { label: latestAt ? `최근 ${compactDateTime(latestAt)}` : "", tone: "neutral" }
   ];
   return tags
     .filter((tag) => tag.label)
@@ -20210,6 +20240,1802 @@ function adminDbSelectedStatusPanel(row = {}, nextAction = {}, requiredChannels 
   `;
 }
 
+function adminDbDetailPayload(companyId = "") {
+  return state.adminDbCompanyDetails?.[companyId] || null;
+}
+
+function adminDbFoldedItemsHtml(items = [], renderItem = () => "", options = {}) {
+  const rows = Array.isArray(items) ? items : [];
+  const limit = Math.max(1, Number(options.limit || 5));
+  const visible = rows.slice(0, limit);
+  const hidden = rows.slice(limit);
+  const noun = options.noun || "항목";
+  return `
+    <div class="admin-db-limited-list ${escapeHtml(options.className || "")}">
+      ${visible.map((item, index) => renderItem(item, index)).join("")}
+      ${hidden.length ? `
+        <details class="admin-db-more-list">
+          <summary>
+            <span class="admin-db-more-list-closed">${fmtNumber(hidden.length)}개 더보기</span>
+            <span class="admin-db-more-list-open">${noun} 접기</span>
+          </summary>
+          <div>${hidden.map((item, index) => renderItem(item, index + limit)).join("")}</div>
+        </details>
+      ` : ""}
+    </div>
+  `;
+}
+
+function adminDbProductRows(row = {}, detail = {}) {
+  const company = detail.company || row.company || {};
+  const latest = company.inventory?.latest || row.company?.inventory?.latest || {};
+  const snapshot = detail.productSnapshot || latest.productSnapshot || {};
+  const stored = Array.isArray(detail.products)
+    ? detail.products
+    : (Array.isArray(snapshot.products) ? snapshot.products : []);
+  if (stored.length) return stored;
+  return manualCorrectionRoomSegments(company.manualCorrection || row.company?.manualCorrection || {}).map((segment, index) => ({
+    key: `manual-${index}`,
+    name: segment.name || segment.type || segment.roomType || `상품 ${index + 1}`,
+    totalQuantity: optionalNumber(segment.count),
+    weekdayPrice: optionalNumber(segment.weekdayPrice),
+    fridayPrice: optionalNumber(segment.fridayPrice),
+    saturdayPrice: optionalNumber(segment.saturdayPrice),
+    sundayPrice: optionalNumber(segment.sundayPrice),
+    source: "관리자 보정"
+  }));
+}
+
+function adminDbProductPrice(product = {}, key = "weekday") {
+  const aliases = {
+    weekday: ["weekdayPrice", "weekday", "평일"],
+    friday: ["fridayPrice", "friday", "금요일"],
+    saturday: ["saturdayPrice", "saturday", "토요일"],
+    sunday: ["sundayPrice", "sunday", "일요일"]
+  }[key] || [];
+  for (const alias of aliases) {
+    const value = optionalNumber(product[alias] ?? product.prices?.[alias]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return NaN;
+}
+
+function adminDbProductQuantity(product = {}) {
+  return optionalNumber(product.totalQuantity ?? product.maxTotal ?? product.total ?? product.quantity);
+}
+
+function adminDbProductPriceRange(products = [], key = "weekday") {
+  const prices = products.map((product) => adminDbProductPrice(product, key)).filter((value) => Number.isFinite(value) && value > 0);
+  if (!prices.length) return "관측 대기";
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  return min === max ? fmtWon(min) : `${fmtWon(min)}~${fmtWon(max)}`;
+}
+
+function adminDbProductPriceGroupCount(products = []) {
+  const signatures = new Set();
+  products.forEach((product) => {
+    const signature = ["weekday", "friday", "saturday", "sunday"]
+      .map((key) => adminDbProductPrice(product, key))
+      .map((value) => Number.isFinite(value) ? Math.round(value) : "-")
+      .join("|");
+    if (signature !== "-|-|-|-") signatures.add(signature);
+  });
+  return signatures.size;
+}
+
+function adminDbProductRowHtml(product = {}) {
+  const quantity = adminDbProductQuantity(product);
+  const priceCells = ["weekday", "friday", "saturday", "sunday"].map((key) => {
+    const price = adminDbProductPrice(product, key);
+    return `<span>${Number.isFinite(price) ? escapeHtml(fmtWon(price)) : "-"}</span>`;
+  }).join("");
+  return `
+    <article class="admin-company-product-row" data-ui-surface="control">
+      <div>
+        <strong>${escapeHtml(product.name || product.productName || product.roomType || "상품명 확인")}</strong>
+        <small>${escapeHtml([product.saleType || product.stayType || "숙박", product.source || product.priceGroupLabel || "자동수집"].filter(Boolean).join(" · "))}</small>
+      </div>
+      <b>${Number.isFinite(quantity) ? `${fmtNumber(quantity)}개` : "수량 대기"}</b>
+      <div class="admin-company-product-prices" aria-label="평일 금요일 토요일 일요일 관측가격">${priceCells}</div>
+    </article>
+  `;
+}
+
+function adminDbCompanyBasicsCard(row = {}, detail = {}) {
+  const company = detail.company || row.company || {};
+  const metrics = row.metrics || {};
+  const latest = company.inventory?.latest || row.company?.inventory?.latest || {};
+  const snapshot = detail.productSnapshot || latest.productSnapshot || {};
+  const products = adminDbProductRows(row, detail);
+  const exactPriceGroups = Array.isArray(detail.priceGroups)
+    ? detail.priceGroups
+    : (Array.isArray(snapshot.priceGroups) ? snapshot.priceGroups : []);
+  const productSummary = detail.productSummary || snapshot.summary || {};
+  const priceGroupLabels = new Map(exactPriceGroups.map((group, index) => [group.priceGroupId, `가격군 ${index + 1}`]));
+  const displayProducts = products.map((product) => ({
+    ...product,
+    priceGroupLabel: product.priceGroupId
+      ? (priceGroupLabels.get(product.priceGroupId) || product.priceGroupLabel || "가격군 확인")
+      : (product.priceGroupLabel || "가격 미확인")
+  }));
+  const summedQuantity = products.reduce((sum, product) => sum + (adminDbProductQuantity(product) || 0), 0);
+  const totalQuantity = optionalNumber(snapshot.totalSellable ?? snapshot.totalQuantity) || summedQuantity || optionalNumber(metrics.roomTotal);
+  const priceGroupCount = Number(
+    exactPriceGroups.length
+    || productSummary.priceGroupCount
+    || adminDbProductPriceGroupCount(products)
+    || 0
+  );
+  const placeId = (company.placeIds || [])[0] || "확인 대기";
+  const collectedAt = detail.observationBasis?.products?.collectedAt || latest.collectedAt || company.lastSeenAt || "";
+  const address = (company.addresses || [])[0] || "주소 확인 대기";
+  return `
+    <section class="admin-company-card admin-company-basics-card" data-ui-surface="card" aria-labelledby="adminCompanyBasicsTitle">
+      <div class="admin-company-card-head">
+        <div><span>A · 업체 기본</span><h3 id="adminCompanyBasicsTitle">상품과 가격 구조</h3></div>
+        <small>${escapeHtml(collectedAt ? `상품 관측 ${compactDateTime(collectedAt)}` : "상세 수집 대기")}</small>
+      </div>
+      <div class="admin-company-identity" data-ui-surface="soft">
+        <div><span>업체명</span><strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong></div>
+        <div><span>지역·업종</span><strong>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label].filter(Boolean).join(" · ") || "분류 대기")}</strong></div>
+        <div><span>주소</span><strong>${escapeHtml(address)}</strong></div>
+        <div><span>Place ID</span><strong>${escapeHtml(placeId)}</strong></div>
+      </div>
+      <div class="admin-company-summary-metrics">
+        <article data-ui-surface="metric"><span>판매상품</span><strong>${products.length ? `${fmtNumber(products.length)}종` : "수집 대기"}</strong><small>상품명은 원본 그대로 보존</small></article>
+        <article data-ui-surface="metric"><span>가격군</span><strong>${priceGroupCount ? `${fmtNumber(priceGroupCount)}개` : "판별 대기"}</strong><small>동일 가격 패턴만 묶음</small></article>
+        <article data-ui-surface="metric"><span>판매 가능 총량</span><strong>${Number.isFinite(totalQuantity) && totalQuantity > 0 ? `${fmtNumber(totalQuantity)}개` : "수집 대기"}</strong><small>상품별 수량 합계</small></article>
+      </div>
+      <div class="admin-company-price-band" data-ui-surface="soft">
+        ${[["평일", "weekday"], ["금요일", "friday"], ["토요일", "saturday"], ["일요일", "sunday"]].map(([label, key]) => `<div><span>${label} 관측가격</span><strong>${escapeHtml(adminDbProductPriceRange(products, key))}</strong></div>`).join("")}
+      </div>
+      <div class="admin-company-product-head"><strong>상품별 관측</strong><small>상품명과 가격군은 별도로 관리합니다.</small></div>
+      ${displayProducts.length
+        ? adminDbFoldedItemsHtml(displayProducts, adminDbProductRowHtml, { noun: "상품", limit: 5, className: "admin-company-product-list" })
+        : `<div class="admin-company-empty" data-ui-surface="soft">상세정보를 자동수집하면 상품명·수량·요일별 관측가격이 표시됩니다.</div>`}
+    </section>
+  `;
+}
+
+function adminDbChannelRowHtml(item = {}) {
+  const linked = adminDbChannelStatusLinked(item.status);
+  const needsReview = adminDbChannelStatusNeedsReview(item.status);
+  const status = linked ? "positive" : needsReview ? "warning" : "neutral";
+  const manualLabel = item.key === "naver" ? "네이버 화면 자동관측" : `${item.label} 수동 채널 확인`;
+  return `
+    <article class="admin-company-channel-row" data-ui-surface="control" data-ui-status="${status}">
+      <div><strong>${escapeHtml(item.key === "naver" ? "네이버 예약·OTA 연동" : item.label)}</strong><small>${escapeHtml(manualLabel)}</small></div>
+      <div><mark data-ui-status="${status}">${escapeHtml(item.statusText || "미확인")}</mark><small>${escapeHtml(item.checkedText || "확인 전")}</small></div>
+      <div class="admin-company-channel-actions">
+        ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer" data-ui-interactive="true">확인</a>` : ""}
+        ${item.key !== "naver" ? `<button type="button" data-admin-db-open-fold="channel" data-ui-interactive="true">상태 기록</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function adminDbCompanyChannelsCard(row = {}) {
+  const rows = adminDbChannelTableRows(row);
+  return `
+    <section class="admin-company-card admin-company-channels-card" data-ui-surface="card" aria-labelledby="adminCompanyChannelsTitle">
+      <div class="admin-company-card-head">
+        <div><span>B · 예약 채널</span><h3 id="adminCompanyChannelsTitle">연동·수동 확인</h3></div>
+        <button type="button" data-admin-db-open-fold="channel" data-ui-interactive="true">채널 관리</button>
+      </div>
+      ${adminDbFoldedItemsHtml(rows, adminDbChannelRowHtml, { noun: "채널", limit: 5, className: "admin-company-channel-list" })}
+      <p class="admin-company-card-note">네이버 화면의 연동 관측과 실제 OTA 입점·재고 동기화는 구분하여 기록합니다.</p>
+    </section>
+  `;
+}
+
+function adminDbDailyRows(row = {}, detail = {}) {
+  const company = detail.company || row.company || {};
+  const snapshot = detail.productSnapshot || company.inventory?.latest?.productSnapshot || {};
+  return (Array.isArray(detail.daily) ? detail.daily : (Array.isArray(snapshot.daily) ? snapshot.daily : []))
+    .map((item) => {
+      const total = optionalNumber(item.total ?? item.totalQuantity ?? item.supply);
+      const available = optionalNumber(item.available ?? item.availableQuantity);
+      const sold = optionalNumber(item.sold ?? item.soldQuantity ?? item.soldOut);
+      const resolvedSold = Number.isFinite(sold) ? sold : (Number.isFinite(total) && Number.isFinite(available) ? Math.max(0, total - available) : NaN);
+      const rate = optionalNumber(item.reservationRate ?? item.saleRate ?? item.rate);
+      const priceMin = optionalNumber(item.observedPriceMin ?? item.minPrice ?? item.priceMin ?? item.price);
+      const priceMax = optionalNumber(item.observedPriceMax ?? item.maxPrice ?? item.priceMax ?? item.price);
+      const rawEstimatedRevenue = optionalNumber(item.estimatedRevenue ?? item.revenue);
+      const hasPriceEvidence = (Number.isFinite(priceMin) && priceMin > 0)
+        || (Number.isFinite(priceMax) && priceMax > 0)
+        || (Number.isFinite(rawEstimatedRevenue) && rawEstimatedRevenue > 0);
+      return {
+        ...item,
+        date: item.date || item.stayDate || "",
+        total,
+        available,
+        sold: resolvedSold,
+        rate: Number.isFinite(rate) ? rate : (Number.isFinite(total) && total > 0 && Number.isFinite(resolvedSold) ? resolvedSold / total : NaN),
+        priceMin,
+        priceMax,
+        estimatedRevenue: hasPriceEvidence ? rawEstimatedRevenue : NaN
+      };
+    })
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+}
+
+function adminDbDailyRowHtml(item = {}) {
+  const priceText = Number.isFinite(item.priceMin)
+    ? (Number.isFinite(item.priceMax) && item.priceMax !== item.priceMin ? `${fmtWon(item.priceMin)}~${fmtWon(item.priceMax)}` : fmtWon(item.priceMin))
+    : "가격 대기";
+  return `
+    <article class="admin-company-daily-row" data-ui-surface="control">
+      <strong>${escapeHtml([item.date || "날짜 확인", item.productType === "dayuse" ? "데이유즈" : item.productType === "lodging" ? "숙박" : ""].filter(Boolean).join(" · "))}</strong>
+      <span><small>총량</small><b>${Number.isFinite(item.total) ? fmtNumber(item.total) : "-"}</b></span>
+      <span><small>판매완료·마감 추정</small><b>${Number.isFinite(item.sold) ? fmtNumber(item.sold) : "-"}</b></span>
+      <span><small>추정 예약율</small><b>${Number.isFinite(item.rate) ? fmtRate(item.rate) : "-"}</b></span>
+      <span><small>관측가격</small><b>${escapeHtml(priceText)}</b></span>
+      <span><small>예상매출</small><b>${Number.isFinite(item.estimatedRevenue) ? escapeHtml(fmtWon(item.estimatedRevenue)) : "-"}</b></span>
+    </article>
+  `;
+}
+
+function adminDbChartSafeId(value = "chart") {
+  const safe = String(value || "chart").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return safe || "chart";
+}
+
+function adminDbChartSeed(value = "") {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0);
+}
+
+function adminDbChartClamp(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value) || 0));
+}
+
+function adminDbChartRate(value) {
+  const number = optionalNumber(value);
+  if (!Number.isFinite(number)) return NaN;
+  return adminDbChartClamp(number > 1 && number <= 100 ? number / 100 : number, 0, 1);
+}
+
+function adminDbChartDateLabel(value = "", index = 0) {
+  const text = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(5, 10).replace("-", "/");
+  if (text) return text.length > 8 ? text.slice(-8) : text;
+  return `D-${Math.max(0, 6 - index)}`;
+}
+
+function adminDbSyntheticDailyPoints(row = {}, summary = {}) {
+  const company = row.company || {};
+  const seed = adminDbChartSeed(company.companyId || company.primaryName || "company");
+  const supplySum = optionalNumber(summary.supply);
+  const soldSum = optionalNumber(summary.sold);
+  const observedRate = adminDbChartRate(summary.rate);
+  const baseTotal = Number.isFinite(supplySum) && supplySum > 0
+    ? Math.max(1, Math.round(supplySum / 7))
+    : Math.max(6, Number(row.metrics?.roomTotal || 12));
+  const baseRate = Number.isFinite(observedRate)
+    ? adminDbChartClamp(observedRate, 0.02, 0.98)
+    : (Number.isFinite(soldSum) && Number.isFinite(supplySum) && supplySum > 0
+      ? adminDbChartClamp(soldSum / supplySum, 0.02, 0.98)
+      : 0.32);
+  const rateOffsets = [-0.08, -0.04, 0.01, 0.09, 0.16, 0.04, -0.03];
+  const totalOffsets = [-1, 0, 0, 1, 2, 1, 0];
+  return rateOffsets.map((offset, index) => {
+    const total = Math.max(1, baseTotal + totalOffsets[(index + (seed % 3)) % totalOffsets.length]);
+    const rate = adminDbChartClamp(baseRate + offset + (((seed >> (index % 8)) & 1) ? 0.015 : -0.015), 0.02, 0.98);
+    return {
+      date: `D-${6 - index}`,
+      total,
+      sold: Math.min(total, Math.max(0, Math.round(total * rate))),
+      rate,
+      synthetic: true,
+      presentationOnly: true,
+      decisionEligible: false
+    };
+  });
+}
+
+function adminDbDailyChartModel(row = {}, daily = [], summary = {}) {
+  const normalized = (Array.isArray(daily) ? daily : [])
+    .filter((item) => Number.isFinite(item.total) || Number.isFinite(item.sold) || Number.isFinite(item.rate))
+    .map((item) => {
+      const normalizedRate = adminDbChartRate(item.rate);
+      const rate = Number.isFinite(normalizedRate)
+        ? normalizedRate
+        : (Number.isFinite(item.total) && item.total > 0 && Number.isFinite(item.sold)
+          ? adminDbChartClamp(item.sold / item.total, 0, 1)
+          : NaN);
+      const total = Number.isFinite(item.total) && item.total > 0 ? item.total : NaN;
+      const sold = Number.isFinite(item.sold) ? item.sold : (Number.isFinite(total) && Number.isFinite(rate) ? total * rate : NaN);
+      return { ...item, total, sold, rate, synthetic: false, decisionEligible: true };
+    });
+  const byDate = new Map();
+  normalized.forEach((item, index) => {
+    const key = item.date || `observation-${index}`;
+    const current = byDate.get(key) || { date: item.date || "", total: 0, sold: 0, totalKnown: false, soldKnown: false };
+    if (Number.isFinite(item.total)) {
+      current.total += item.total;
+      current.totalKnown = true;
+    }
+    if (Number.isFinite(item.sold)) {
+      current.sold += item.sold;
+      current.soldKnown = true;
+    }
+    current.rateFallback = Number.isFinite(item.rate) ? item.rate : current.rateFallback;
+    byDate.set(key, current);
+  });
+  const actual = [...byDate.values()].slice(-14).map((item) => {
+    const total = item.totalKnown ? item.total : NaN;
+    const sold = item.soldKnown ? item.sold : NaN;
+    const rate = Number.isFinite(total) && total > 0 && Number.isFinite(sold)
+      ? adminDbChartClamp(sold / total, 0, 1)
+      : item.rateFallback;
+    return { date: item.date, total, sold, rate, synthetic: false, decisionEligible: true };
+  });
+  if (actual.length) {
+    return {
+      points: actual,
+      evidenceClass: "derived",
+      badge: "실제 관측 · 관측 기반 추정",
+      disclosure: `저장된 날짜별 관측 ${fmtNumber(actual.length)}일을 표시합니다. 예약율은 공개 재고 변화로 계산한 추정값입니다.`,
+      presentationOnly: false,
+      decisionEligible: true
+    };
+  }
+  return {
+    points: adminDbSyntheticDailyPoints(row, summary),
+    evidenceClass: "synthetic",
+    badge: "합성 보조 · 화면용",
+    disclosure: "날짜별 원자료가 없어 현재 총량·예약율을 기준으로 7일 표시 패턴을 합성했습니다. 판단·추천 계산에는 사용하지 않습니다.",
+    presentationOnly: true,
+    decisionEligible: false
+  };
+}
+
+function adminDbDailyChartHtml(row = {}, model = {}) {
+  const points = Array.isArray(model.points) ? model.points : [];
+  if (!points.length) return `<div class="admin-company-empty" data-ui-surface="soft">그래프를 구성할 수집자료가 없습니다.</div>`;
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminCompanySalesChart-${adminDbChartSafeId(companyId)}`;
+  const width = 760;
+  const height = 248;
+  const left = 42;
+  const right = 24;
+  const top = 24;
+  const bottom = 40;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const maxTotal = Math.max(1, ...points.map((point) => Number(point.total) || 0));
+  const step = plotWidth / Math.max(1, points.length);
+  const barWidth = Math.min(36, Math.max(12, step * 0.5));
+  const coordinates = points.map((point, index) => {
+    const x = left + step * index + step / 2;
+    const rate = Number.isFinite(point.rate) ? adminDbChartClamp(point.rate, 0, 1) : 0;
+    const y = top + (1 - rate) * plotHeight;
+    return { point, index, x, y, rate };
+  });
+  const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const y = top + (1 - ratio) * plotHeight;
+    return `<g><line class="admin-company-chart-gridline" x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}"></line><text class="admin-company-chart-y-label" x="${left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${Math.round(ratio * 100)}%</text></g>`;
+  }).join("");
+  const bars = coordinates.map(({ point, index, x, rate }) => {
+    const total = Math.max(0, Number(point.total) || 0);
+    const sold = Math.max(0, Number(point.sold) || 0);
+    const totalHeight = (total / maxTotal) * plotHeight;
+    const soldHeight = total > 0 ? totalHeight * adminDbChartClamp(sold / total, 0, 1) : 0;
+    const totalY = top + plotHeight - totalHeight;
+    const soldY = top + plotHeight - soldHeight;
+    const labelVisible = points.length <= 8 || index === 0 || index === points.length - 1 || index % Math.ceil(points.length / 6) === 0;
+    return `<g class="${point.synthetic ? "is-synthetic" : "is-observed"}">
+      <title>${escapeHtml(`${point.date || `관측 ${index + 1}`} · 총량 ${Number.isFinite(point.total) ? fmtNumber(point.total) : "-"} · 판매완료·마감 추정 ${Number.isFinite(point.sold) ? fmtNumber(point.sold) : "-"} · 예약율 ${Number.isFinite(point.rate) ? fmtRate(point.rate) : "-"}`)}</title>
+      <rect class="admin-company-chart-bar-total" x="${(x - barWidth / 2).toFixed(1)}" y="${totalY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(1, totalHeight).toFixed(1)}" rx="5"></rect>
+      <rect class="admin-company-chart-bar-sold" x="${(x - barWidth / 2).toFixed(1)}" y="${soldY.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(1, soldHeight).toFixed(1)}" rx="5"></rect>
+      <text class="admin-company-chart-rate-label" x="${x.toFixed(1)}" y="${Math.max(13, top + (1 - rate) * plotHeight - 8).toFixed(1)}" text-anchor="middle">${Number.isFinite(point.rate) ? Math.round(point.rate * 100) : "-"}%</text>
+      ${labelVisible ? `<text class="admin-company-chart-x-label" x="${x.toFixed(1)}" y="${height - 14}" text-anchor="middle">${escapeHtml(adminDbChartDateLabel(point.date, index))}</text>` : ""}
+    </g>`;
+  }).join("");
+  const best = [...points].filter((point) => Number.isFinite(point.rate)).sort((a, b) => b.rate - a.rate)[0];
+  const weakest = [...points].filter((point) => Number.isFinite(point.rate)).sort((a, b) => a.rate - b.rate)[0];
+  const insightText = best && weakest
+    ? `${adminDbChartDateLabel(best.date)} ${fmtRate(best.rate)}가 가장 높고, ${adminDbChartDateLabel(weakest.date)} ${fmtRate(weakest.rate)}가 가장 낮습니다.`
+    : "수집자료가 쌓이면 강한 날짜와 판매 공백을 자동으로 비교합니다.";
+  return `
+    <div class="admin-company-chart-layout">
+      <figure class="admin-company-chart-panel" data-ui-surface="soft" data-evidence-class="${escapeHtml(model.evidenceClass || "derived")}">
+        <div class="admin-company-chart-heading">
+          <div><strong>날짜별 판매 흐름</strong><small>판매 가능 총량 · 판매완료·마감 추정 · 추정 예약율</small></div>
+          <mark data-evidence-badge="${escapeHtml(model.evidenceClass || "derived")}">${escapeHtml(model.badge || "관측 기반 추정")}</mark>
+        </div>
+        <svg class="admin-company-history-chart ${model.presentationOnly ? "is-synthetic" : "is-observed"}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+          <title id="${chartId}Title">날짜별 판매 흐름 그래프</title>
+          <desc id="${chartId}Desc">${escapeHtml(model.disclosure || "날짜별 총량과 판매완료·마감 추정, 예약율을 함께 표시합니다.")}</desc>
+          ${grid}
+          ${bars}
+          <polyline class="admin-company-chart-rate-line" points="${linePoints}"></polyline>
+          ${coordinates.map(({ x, y, point }) => `<circle class="admin-company-chart-rate-point ${point.synthetic ? "is-synthetic" : "is-observed"}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"></circle>`).join("")}
+        </svg>
+        <figcaption>${escapeHtml(model.disclosure || "")}</figcaption>
+        <ul class="sr-only">${points.map((point) => `<li>${escapeHtml(`${point.date || "날짜 미상"}: 총량 ${Number.isFinite(point.total) ? fmtNumber(point.total) : "미확인"}, 판매완료·마감 추정 ${Number.isFinite(point.sold) ? fmtNumber(point.sold) : "미확인"}, 추정 예약율 ${Number.isFinite(point.rate) ? fmtRate(point.rate) : "미확인"}`)}</li>`).join("")}</ul>
+      </figure>
+      <aside class="admin-company-chart-insight" data-ui-surface="control">
+        <span>그래프 해석</span>
+        <strong>${escapeHtml(model.presentationOnly ? "화면용 합성 패턴" : "실제 관측 기간 비교")}</strong>
+        <p>${escapeHtml(insightText)}</p>
+        <div class="admin-company-chart-legend"><i data-chart-legend="total"></i>총량 <i data-chart-legend="sold"></i>판매완료·마감 추정 <i data-chart-legend="rate"></i>예약율</div>
+      </aside>
+    </div>
+  `;
+}
+
+function adminDbCompanyRecentCard(row = {}, detail = {}) {
+  const company = detail.company || row.company || {};
+  const metrics = row.metrics || {};
+  const latest = company.inventory?.latest || row.company?.inventory?.latest || {};
+  const lodging = latest.salesSignal?.lodging || metrics.lodging || {};
+  const dayUse = latest.salesSignal?.dayUse || metrics.dayUse || {};
+  const daily = adminDbDailyRows(row, detail);
+  const dailyCollectedAt = detail.observationBasis?.daily?.collectedAt || latest.collectedAt || company.lastSeenAt || "";
+  const dateStart = daily[0]?.date || lodging.checkIn || latest.salesSignal?.checkIn || "";
+  const dateEnd = daily.at(-1)?.date || lodging.checkOut || latest.salesSignal?.checkOut || "";
+  const knownSum = (values = []) => {
+    const finite = values.map(optionalNumber).filter(Number.isFinite);
+    return finite.length ? finite.reduce((sum, value) => sum + value, 0) : NaN;
+  };
+  const latestSupply = knownSum([
+    lodging.totalSupply ?? lodging.weeklyTotalStock ?? lodging.totalRooms,
+    dayUse.totalSupply ?? dayUse.weeklyTotalStock ?? dayUse.totalRooms
+  ]);
+  const latestSold = knownSum([
+    lodging.totalSold ?? lodging.weeklyTotalSoldOut ?? lodging.soldOutRooms,
+    dayUse.totalSold ?? dayUse.weeklyTotalSoldOut ?? dayUse.soldOutRooms
+  ]);
+  const dailySupply = daily.length && daily.every((item) => Number.isFinite(item.total))
+    ? daily.reduce((sum, item) => sum + item.total, 0)
+    : NaN;
+  const dailySold = daily.length && daily.every((item) => Number.isFinite(item.sold))
+    ? daily.reduce((sum, item) => sum + item.sold, 0)
+    : NaN;
+  const supply = daily.length ? dailySupply : latestSupply;
+  const sold = daily.length ? dailySold : latestSold;
+  const fallbackRate = optionalNumber(lodging.averageRate ?? dayUse.averageRate ?? metrics.rate);
+  const rate = Number.isFinite(supply) && supply > 0 && Number.isFinite(sold)
+    ? sold / supply
+    : fallbackRate;
+  const latestRevenueParts = [latest.revenue?.lodging || {}, latest.revenue?.dayUse || {}]
+    .map((part) => optionalNumber(part.adjustedRevenue ?? part.revenue));
+  const latestRevenue = latestRevenueParts.some(Number.isFinite)
+    ? latestRevenueParts.filter(Number.isFinite).reduce((sum, value) => sum + value, 0)
+    : optionalNumber(metrics.revenue);
+  const dailyRevenue = knownSum(daily.map((item) => item.estimatedRevenue));
+  const rawEstimatedRevenue = daily.length ? dailyRevenue : latestRevenue;
+  const productPriceObserved = adminDbProductRows(row, detail).some((product) =>
+    ["weekday", "friday", "saturday", "sunday"].some((key) => Number.isFinite(adminDbProductPrice(product, key)))
+  );
+  const dailyPriceObserved = daily.some((item) =>
+    (Number.isFinite(item.priceMin) && item.priceMin > 0)
+    || (Number.isFinite(item.priceMax) && item.priceMax > 0)
+    || (Number.isFinite(item.estimatedRevenue) && item.estimatedRevenue > 0)
+  );
+  const estimatedRevenue = Number.isFinite(rawEstimatedRevenue) && (
+    rawEstimatedRevenue > 0
+    || productPriceObserved
+    || dailyPriceObserved
+  )
+    ? rawEstimatedRevenue
+    : NaN;
+  const chartModel = adminDbDailyChartModel(row, daily, { supply, sold, rate, estimatedRevenue });
+  return `
+    <section class="admin-company-card admin-company-recent-card" data-ui-surface="card" aria-labelledby="adminCompanyRecentTitle">
+      <div class="admin-company-card-head">
+        <div><span>C · 최근 수집</span><h3 id="adminCompanyRecentTitle">날짜별 판매 관측</h3></div>
+        <small>${escapeHtml(dateStart
+          ? `${dateStart}${dateEnd && dateEnd !== dateStart ? ` ~ ${dateEnd}` : ""}${dailyCollectedAt ? ` · 관측 ${compactDateTime(dailyCollectedAt)}` : ""}`
+          : "기간 수집 대기")}</small>
+      </div>
+      <div class="admin-company-summary-metrics admin-company-recent-metrics">
+        <article data-ui-surface="metric"><span>판매 가능 총량</span><strong>${Number.isFinite(supply) ? fmtNumber(supply) : "대기"}</strong><small>관측 기간 합계</small></article>
+        <article data-ui-surface="metric"><span>판매완료·마감 추정</span><strong>${Number.isFinite(sold) ? fmtNumber(sold) : "대기"}</strong><small>공개 잔여재고 변화 기반</small></article>
+        <article data-ui-surface="metric"><span>추정 예약율</span><strong>${Number.isFinite(rate) ? fmtRate(rate) : "대기"}</strong><small>실제 결제 예약과 구분</small></article>
+        <article data-ui-surface="metric"><span>예상매출</span><strong>${Number.isFinite(estimatedRevenue) ? escapeHtml(fmtWon(estimatedRevenue)) : "대기"}</strong><small>상품별 관측가격 × 판매추정</small></article>
+      </div>
+      ${adminDbDailyChartHtml(row, chartModel)}
+      ${daily.length
+        ? `<details class="admin-company-source-fold" data-ui-surface="soft">
+            <summary><span>날짜별 원자료 보기</span><strong>${fmtNumber(daily.length)}일</strong></summary>
+            ${adminDbFoldedItemsHtml(daily, adminDbDailyRowHtml, { noun: "날짜", limit: 5, className: "admin-company-daily-list" })}
+          </details>`
+        : `<div class="admin-company-empty" data-ui-surface="soft">날짜별 상세는 자동수집 자료가 누적되면 표시됩니다. 현재 집계값은 위에서 확인할 수 있습니다.</div>`}
+      <p class="admin-company-card-note">관측가격과 예상매출은 네이버 공개 가격·재고를 이용한 추정값이며 실제 결제 매출이 아닙니다.</p>
+    </section>
+  `;
+}
+
+function adminDbTrendPoints(row = {}, detail = {}, kind = "rank") {
+  const company = detail.company || row.company || {};
+  if (kind === "rank") {
+    const points = detail.rankTrend?.points;
+    if (Array.isArray(points) && points.length) return points;
+    const keyword = (company.keywords || [])[0] || {};
+    return Array.isArray(keyword.recentRuns) ? keyword.recentRuns : [];
+  }
+  const points = detail.performanceTrend?.points;
+  if (Array.isArray(points) && points.length) return points;
+  const inventory = company.inventory || {};
+  return [...(inventory.snapshots || [])].reverse().concat(inventory.latest ? [inventory.latest] : []);
+}
+
+function adminDbSyntheticRankPoints(anchorRank, seedValue = "") {
+  const seed = adminDbChartSeed(seedValue);
+  const anchor = Number.isFinite(anchorRank) && anchorRank > 0 ? Math.round(anchorRank) : 20;
+  const offsets = [5, 4, 4, 3, 2, 2, 1, 0];
+  return offsets.map((offset, index) => ({
+    label: index === offsets.length - 1 && Number.isFinite(anchorRank) ? "현재 관측" : `보조 ${index + 1}`,
+    rank: Math.max(1, anchor + offset + (((seed >> (index % 8)) & 1) && index < offsets.length - 1 ? 1 : 0)),
+    synthetic: true,
+    actualAnchor: index === offsets.length - 1 && Number.isFinite(anchorRank),
+    presentationOnly: true,
+    decisionEligible: false
+  }));
+}
+
+function adminDbRankTrendModel(row = {}, detail = {}) {
+  const observed = adminDbTrendPoints(row, detail, "rank")
+    .filter((point) => Number.isFinite(Number(point.rank)) && Number(point.rank) > 0)
+    .slice(-12)
+    .map((point) => ({ ...point, rank: Number(point.rank), synthetic: false, decisionEligible: true }));
+  const availableKeywords = Array.isArray(detail.rankTrend?.availableKeywords) ? detail.rankTrend.availableKeywords : [];
+  const selectedKeywordKey = String(detail.rankTrend?.keywordKey || observed.at(-1)?.keywordKey || "").trim();
+  const availableLatest = availableKeywords.find((item) => selectedKeywordKey && String(item.keywordKey || "") === selectedKeywordKey)
+    || availableKeywords.find((item) => Number.isFinite(Number(item.latestRank)) && Number(item.latestRank) > 0);
+  const latestRank = optionalNumber(observed.at(-1)?.rank ?? detail.rankTrend?.currentRank ?? availableLatest?.latestRank ?? row.metrics?.rank);
+  const regionalRank = optionalNumber(
+    observed.at(-1)?.regionalMedianRank
+      ?? detail.rankTrend?.regionalMedianRank
+      ?? detail.rankTrend?.benchmarkRank
+  );
+  if (observed.length >= 2) {
+    return {
+      points: observed,
+      observed,
+      latestRank,
+      regionalRank,
+      availableKeywords,
+      keyword: detail.rankTrend?.keyword || observed.at(-1)?.keyword || availableLatest?.keyword || "",
+      keywordKey: selectedKeywordKey || availableLatest?.keywordKey || "",
+      evidenceClass: "observed",
+      badge: `실제 순위 관측 ${fmtNumber(observed.length)}회`,
+      disclosure: "저장된 동일 키워드 순위 관측을 실선으로 연결했습니다. 검색범위가 달라진 회차는 해석 시 함께 확인해야 합니다.",
+      presentationOnly: false,
+      decisionEligible: true
+    };
+  }
+  const synthetic = adminDbSyntheticRankPoints(latestRank, row.company?.companyId || row.company?.primaryName || "company");
+  return {
+    points: synthetic,
+    observed,
+    latestRank,
+    regionalRank,
+    availableKeywords,
+    keyword: detail.rankTrend?.keyword || observed.at(-1)?.keyword || availableLatest?.keyword || "",
+    keywordKey: selectedKeywordKey || availableLatest?.keywordKey || "",
+    evidenceClass: "synthetic",
+    badge: observed.length || Number.isFinite(latestRank) ? "실제 기준점 1회 + 합성 보조" : "합성 보조 · 표시 예시",
+    disclosure: observed.length || Number.isFinite(latestRank)
+      ? "실제 순위 기준점은 유지하고, 이전 구간은 화면 구조를 보여주기 위한 합성 점선입니다. 증감 판단에는 사용하지 않습니다."
+      : "순위 이력이 없어 화면 구조 확인용 점선을 표시합니다. 실제 순위로 해석하거나 판단에 사용하지 않습니다.",
+    presentationOnly: true,
+    decisionEligible: false
+  };
+}
+
+function adminDbRankScopeRowHtml(item = {}) {
+  const rank = optionalNumber(item.latestRank);
+  const label = item.searchRegion || item.layerLabel || item.keyword || "수집 범위";
+  return `
+    <article class="admin-company-rank-scope-row" data-ui-surface="control">
+      <div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(item.keyword || item.searchScopeLabel || "키워드 확인")}</small></div>
+      <div><b>${Number.isFinite(rank) && rank > 0 ? `${fmtNumber(rank)}위` : "대기"}</b><small>${escapeHtml(item.latestCollectedAt ? compactDateTime(item.latestCollectedAt) : `${fmtNumber(item.runCount || 0)}회 관측`)}</small></div>
+    </article>
+  `;
+}
+
+function adminDbRankHistoryChartHtml(row = {}, model = {}) {
+  const points = Array.isArray(model.points) ? model.points : [];
+  if (!points.length) return `<div class="admin-company-empty" data-ui-surface="soft">순위 그래프를 구성할 자료가 없습니다.</div>`;
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminCompanyRankChart-${adminDbChartSafeId(companyId)}`;
+  const width = 820;
+  const height = 190;
+  const left = 52;
+  const right = 26;
+  const top = 22;
+  const bottom = 32;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const values = points.map((point) => Number(point.rank)).filter(Number.isFinite);
+  if (Number.isFinite(model.regionalRank)) values.push(Number(model.regionalRank));
+  const domainMin = Math.max(1, Math.floor(Math.min(...values) - 1));
+  const domainMax = Math.max(domainMin + 2, Math.ceil(Math.max(...values) + 1));
+  const yFor = (value) => top + ((Number(value) - domainMin) / Math.max(1, domainMax - domainMin)) * plotHeight;
+  const xFor = (index) => left + index * (plotWidth / Math.max(1, points.length - 1));
+  const coordinates = points.map((point, index) => ({ point, index, x: xFor(index), y: yFor(point.rank) }));
+  const grid = [0, 0.33, 0.66, 1].map((ratio) => {
+    const rank = Math.round(domainMin + (domainMax - domainMin) * ratio);
+    const y = yFor(rank);
+    return `<g><line class="admin-company-chart-gridline" x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}"></line><text class="admin-company-chart-y-label" x="${left - 10}" y="${(y + 4).toFixed(1)}" text-anchor="end">${rank}위</text></g>`;
+  }).join("");
+  const benchmark = Number.isFinite(model.regionalRank)
+    ? `<g><line class="admin-company-chart-benchmark" x1="${left}" y1="${yFor(model.regionalRank).toFixed(1)}" x2="${width - right}" y2="${yFor(model.regionalRank).toFixed(1)}"></line><text class="admin-company-chart-benchmark-label" x="${width - right}" y="${Math.max(14, yFor(model.regionalRank) - 7).toFixed(1)}" text-anchor="end">권역 중앙 ${fmtNumber(model.regionalRank)}위</text></g>`
+    : "";
+  const polyline = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  return `
+    <figure class="admin-company-chart-panel admin-company-rank-chart-panel" data-ui-surface="soft" data-evidence-class="${escapeHtml(model.evidenceClass || "observed")}">
+      <div class="admin-company-chart-heading">
+        <div><strong>플레이스 순위 누적</strong><small>낮을수록 상위 · 권역 기준 비교</small></div>
+        <mark data-evidence-badge="${escapeHtml(model.evidenceClass || "observed")}">${escapeHtml(model.badge || "실제 관측")}</mark>
+      </div>
+      <svg class="admin-company-history-chart ${model.presentationOnly ? "is-synthetic" : "is-observed"}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+        <title id="${chartId}Title">플레이스 순위 누적 그래프</title>
+        <desc id="${chartId}Desc">${escapeHtml(model.disclosure || "플레이스 순위 변화를 표시합니다.")}</desc>
+        ${grid}${benchmark}
+        <polyline class="admin-company-chart-rank-line ${model.presentationOnly ? "is-synthetic" : "is-observed"}" points="${polyline}"></polyline>
+        ${coordinates.map(({ point, index, x, y }) => {
+          const labelVisible = points.length <= 8 || index === 0 || index === points.length - 1 || index === Math.floor(points.length / 2);
+          const label = adminDbChartDateLabel(point.collectedAt || point.label || "", index);
+          const evidenceLabel = point.actualAnchor ? "실제 기준점" : point.synthetic ? "합성 보조" : "실제 관측";
+          return `<g><title>${escapeHtml(`${point.collectedAt || point.label || `관측 ${index + 1}`} · ${fmtNumber(point.rank)}위 · ${evidenceLabel}`)}</title><circle class="admin-company-chart-rank-point ${point.synthetic && !point.actualAnchor ? "is-synthetic" : "is-observed"}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5"></circle>${labelVisible ? `<text class="admin-company-chart-x-label" x="${x.toFixed(1)}" y="${height - 14}" text-anchor="middle">${escapeHtml(label)}</text>` : ""}</g>`;
+        }).join("")}
+      </svg>
+      <figcaption>${escapeHtml(model.disclosure || "")}</figcaption>
+      <ul class="sr-only">${points.map((point) => `<li>${escapeHtml(`${point.collectedAt || point.label || "시점 미상"}: ${fmtNumber(point.rank)}위, ${point.actualAnchor ? "실제 기준점" : point.synthetic ? "합성 보조" : "실제 관측"}`)}</li>`).join("")}</ul>
+    </figure>
+  `;
+}
+
+function adminDbSyntheticPerformancePoints(baseRate, baseRevenue, seedValue = "") {
+  const seed = adminDbChartSeed(seedValue);
+  const rate = Number.isFinite(baseRate) ? adminDbChartClamp(baseRate, 0.02, 0.98) : 0.32;
+  const revenue = Number.isFinite(baseRevenue) && baseRevenue > 0 ? baseRevenue : NaN;
+  const factors = [0.72, 0.78, 0.81, 0.88, 0.92, 0.97, 1];
+  return factors.map((factor, index) => ({
+    label: index === factors.length - 1 ? "현재 기준" : `보조 ${index + 1}`,
+    reservationRate: index === factors.length - 1 && Number.isFinite(baseRate)
+      ? adminDbChartClamp(baseRate, 0, 1)
+      : adminDbChartClamp(rate * factor + (((seed >> (index % 8)) & 1) ? 0.01 : -0.01), 0.02, 0.98),
+    estimatedRevenue: Number.isFinite(revenue) ? Math.round(revenue * factor) : null,
+    momentumIndex: Math.round(100 * factor),
+    synthetic: true,
+    actualAnchor: index === factors.length - 1 && (Number.isFinite(baseRate) || Number.isFinite(baseRevenue)),
+    presentationOnly: true,
+    decisionEligible: false
+  }));
+}
+
+function adminDbPerformanceChartModel(row = {}, detail = {}) {
+  const raw = adminDbTrendPoints(row, detail, "performance").slice(-12);
+  const observed = raw.map((point) => ({
+    ...point,
+    reservationRate: adminDbChartRate(point.reservationRate ?? point.salesSignal?.lodging?.averageRate ?? point.rate),
+    estimatedRevenue: point.priceEvidenceObserved === false ? NaN : optionalNumber(point.estimatedRevenue ?? point.revenue?.lodging?.adjustedRevenue ?? point.revenue?.lodging?.revenue ?? point.revenue),
+    synthetic: false,
+    decisionEligible: true
+  })).filter((point) => Number.isFinite(point.reservationRate) || Number.isFinite(point.estimatedRevenue));
+  const latest = observed.at(-1) || {};
+  const latestRate = adminDbChartRate(latest.reservationRate ?? row.metrics?.rate);
+  const latestRevenue = optionalNumber(latest.estimatedRevenue ?? row.metrics?.revenue);
+  if (observed.length >= 2) {
+    return {
+      points: observed,
+      observed,
+      latestRate,
+      latestRevenue,
+      evidenceClass: "derived",
+      badge: `관측 기반 추정 ${fmtNumber(observed.length)}회`,
+      disclosure: "공개 재고·가격 Snapshot으로 계산한 추정 예약율과 예상매출입니다. 실제 결제 매출과 구분합니다.",
+      presentationOnly: false,
+      decisionEligible: true,
+      revenueMode: observed.some((point) => Number.isFinite(point.estimatedRevenue) && point.estimatedRevenue >= 0) ? "currency" : "index"
+    };
+  }
+  const synthetic = adminDbSyntheticPerformancePoints(latestRate, latestRevenue, row.company?.companyId || row.company?.primaryName || "company");
+  return {
+    points: synthetic,
+    observed,
+    latestRate,
+    latestRevenue,
+    evidenceClass: "synthetic",
+    badge: observed.length ? "추정 기준점 1회 + 합성 보조" : "합성 보조 · 화면용",
+    disclosure: observed.length
+      ? "현재 추정값은 유지하고 이전 구간은 화면용 점선으로 보완했습니다. 합성값은 판단·추천 계산에 사용하지 않습니다."
+      : "누적 Snapshot이 없어 판매 모멘텀 표시 예시를 제공합니다. 실제 매출·예약율로 해석하지 않습니다.",
+    presentationOnly: true,
+    decisionEligible: false,
+    revenueMode: Number.isFinite(latestRevenue) && latestRevenue > 0 ? "currency" : "index"
+  };
+}
+
+function adminDbPerformanceChartHtml(row = {}, model = {}) {
+  const points = Array.isArray(model.points) ? model.points : [];
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminCompanyPerformanceChart-${adminDbChartSafeId(companyId)}`;
+  const width = 620;
+  const height = 145;
+  const left = 40;
+  const right = 22;
+  const top = 18;
+  const bottom = 28;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const values = points.map((point) => model.revenueMode === "currency" ? optionalNumber(point.estimatedRevenue) : optionalNumber(point.momentumIndex)).map((value) => Number.isFinite(value) ? Math.max(0, value) : 0);
+  const maxValue = Math.max(1, ...values);
+  const step = plotWidth / Math.max(1, points.length);
+  const barWidth = Math.min(34, Math.max(12, step * 0.48));
+  const coordinates = points.map((point, index) => {
+    const x = left + step * index + step / 2;
+    const rate = Number.isFinite(point.reservationRate) ? adminDbChartClamp(point.reservationRate, 0, 1) : 0;
+    return { point, index, x, y: top + (1 - rate) * plotHeight, rate };
+  });
+  const grid = [0, 0.5, 1].map((ratio) => {
+    const y = top + (1 - ratio) * plotHeight;
+    return `<g><line class="admin-company-chart-gridline" x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}"></line><text class="admin-company-chart-y-label" x="${left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${Math.round(ratio * 100)}%</text></g>`;
+  }).join("");
+  const bars = coordinates.map(({ point, index, x }) => {
+    const value = values[index];
+    const barHeight = (value / maxValue) * plotHeight;
+    const labelVisible = points.length <= 8 || index === 0 || index === points.length - 1;
+    const evidenceLabel = point.actualAnchor ? "실제 추정 기준점" : point.synthetic ? "합성 보조" : "관측 기반 추정";
+    return `<g><title>${escapeHtml(`${point.collectedAt || point.label || `관측 ${index + 1}`} · ${model.revenueMode === "currency" && Number.isFinite(point.estimatedRevenue) ? fmtWon(point.estimatedRevenue) : `모멘텀 ${fmtNumber(point.momentumIndex || 0)}`} · 예약율 ${Number.isFinite(point.reservationRate) ? fmtRate(point.reservationRate) : "-"} · ${evidenceLabel}`)}</title><rect class="admin-company-chart-performance-bar ${point.synthetic && !point.actualAnchor ? "is-synthetic" : "is-observed"}" x="${(x - barWidth / 2).toFixed(1)}" y="${(top + plotHeight - barHeight).toFixed(1)}" width="${barWidth.toFixed(1)}" height="${Math.max(1, barHeight).toFixed(1)}" rx="5"></rect>${labelVisible ? `<text class="admin-company-chart-x-label" x="${x.toFixed(1)}" y="${height - 13}" text-anchor="middle">${escapeHtml(adminDbChartDateLabel(point.collectedAt || point.label || "", index))}</text>` : ""}</g>`;
+  }).join("");
+  const ratePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  return `
+    <figure class="admin-company-chart-panel admin-company-performance-chart" data-ui-surface="soft" data-evidence-class="${escapeHtml(model.evidenceClass || "derived")}">
+      <div class="admin-company-chart-heading">
+        <div><strong>${model.revenueMode === "currency" ? "예상매출·예약율 추이" : "판매 모멘텀 보조지수"}</strong><small>${model.revenueMode === "currency" ? "예상매출 막대 · 예약율 선" : "가격 미반영 지수 막대 · 예약율 선"}</small></div>
+        <mark data-evidence-badge="${escapeHtml(model.evidenceClass || "derived")}">${escapeHtml(model.badge || "관측 기반 추정")}</mark>
+      </div>
+      <svg class="admin-company-history-chart ${model.presentationOnly ? "is-synthetic" : "is-observed"}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+        <title id="${chartId}Title">${model.revenueMode === "currency" ? "예상매출과 추정 예약율" : "판매 모멘텀 보조지수"} 그래프</title>
+        <desc id="${chartId}Desc">${escapeHtml(model.disclosure || "누적 판매 흐름을 표시합니다.")}</desc>
+        ${grid}${bars}
+        <polyline class="admin-company-chart-rate-line ${model.presentationOnly ? "is-synthetic" : "is-observed"}" points="${ratePoints}"></polyline>
+        ${coordinates.map(({ point, x, y }) => `<circle class="admin-company-chart-rate-point ${point.synthetic && !point.actualAnchor ? "is-synthetic" : "is-observed"}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"></circle>`).join("")}
+      </svg>
+      <figcaption>${escapeHtml(model.disclosure || "")}</figcaption>
+    </figure>
+  `;
+}
+
+function adminDbLeadTimeChartHtml(row = {}, detail = {}) {
+  const leadTime = detail.leadTime || {};
+  const buckets = (Array.isArray(leadTime.buckets) ? leadTime.buckets : [])
+    .filter((item) => Number.isFinite(Number(item.leadTimeDays)) && Number.isFinite(Number(item.pickup)) && Number(item.pickup) > 0)
+    .slice(0, 10);
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminCompanyLeadTimeChart-${adminDbChartSafeId(companyId)}`;
+  if (!buckets.length) {
+    const observedDates = Math.max(0, Number(leadTime.collectedDateCount || 0));
+    const step = observedDates >= 2 ? 2 : observedDates >= 1 ? 1 : 0;
+    return `
+      <figure class="admin-company-chart-panel admin-company-leadtime-chart" data-ui-surface="soft">
+        <div class="admin-company-chart-heading"><div><strong>리드타임·Pickup</strong><small>같은 숙박일 반복 관측으로 계산</small></div><mark data-evidence-badge="derived">누적 준비도</mark></div>
+        <div class="admin-company-readiness-flow" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+          <strong id="${chartId}Title" class="sr-only">리드타임 자료 준비도</strong>
+          <span class="${step >= 0 ? "active" : ""}"><i>1</i><b>숙박일 관측</b><small>${observedDates ? "확인" : "대기"}</small></span>
+          <span class="${step >= 1 ? "active" : ""}"><i>2</i><b>동일 날짜 재수집</b><small>${observedDates >= 2 ? "확인" : "1회 더 필요"}</small></span>
+          <span class="${step >= 2 ? "active" : ""}"><i>3</i><b>Pickup 계산</b><small>${Number(leadTime.pickupCount || 0) > 0 ? `${fmtNumber(leadTime.pickupCount)}건` : "변화 대기"}</small></span>
+        </div>
+        <figcaption id="${chartId}Desc">가짜 리드타임을 만들지 않고, 동일 숙박일의 반복수집이 준비된 정도를 표시합니다.</figcaption>
+      </figure>
+    `;
+  }
+  const width = 400;
+  const height = 220;
+  const left = 34;
+  const right = 18;
+  const top = 28;
+  const bottom = 40;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const maxPickup = Math.max(1, ...buckets.map((item) => Number(item.pickup) || 0));
+  const stepWidth = plotWidth / buckets.length;
+  const bars = buckets.map((item, index) => {
+    const pickup = Number(item.pickup) || 0;
+    const heightValue = (pickup / maxPickup) * plotHeight;
+    const x = left + stepWidth * index + stepWidth * 0.2;
+    return `<g><title>${escapeHtml(`체크인 ${fmtNumber(item.leadTimeDays)}일 전 · Pickup ${fmtNumber(pickup)}건`)}</title><rect class="admin-company-chart-pickup-bar" x="${x.toFixed(1)}" y="${(top + plotHeight - heightValue).toFixed(1)}" width="${Math.max(8, stepWidth * 0.6).toFixed(1)}" height="${Math.max(1, heightValue).toFixed(1)}" rx="5"></rect><text class="admin-company-chart-rate-label" x="${(x + Math.max(8, stepWidth * 0.6) / 2).toFixed(1)}" y="${Math.max(14, top + plotHeight - heightValue - 7).toFixed(1)}" text-anchor="middle">${fmtNumber(pickup)}</text><text class="admin-company-chart-x-label" x="${(x + Math.max(8, stepWidth * 0.6) / 2).toFixed(1)}" y="${height - 14}" text-anchor="middle">T-${fmtNumber(item.leadTimeDays)}</text></g>`;
+  }).join("");
+  return `
+    <figure class="admin-company-chart-panel admin-company-leadtime-chart" data-ui-surface="soft" data-evidence-class="derived">
+      <div class="admin-company-chart-heading"><div><strong>리드타임·Pickup</strong><small>체크인까지 남은 일수별 판매 증가</small></div><mark data-evidence-badge="derived">관측 기반 추정</mark></div>
+      <svg class="admin-company-history-chart is-observed" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+        <title id="${chartId}Title">예약 리드타임 Pickup 그래프</title><desc id="${chartId}Desc">${escapeHtml(`평균 ${Number.isFinite(Number(leadTime.averageDays)) ? Number(leadTime.averageDays).toFixed(1) : "-"}일 · Pickup ${fmtNumber(leadTime.pickupCount || 0)}건`)}</desc>
+        <line class="admin-company-chart-gridline" x1="${left}" y1="${top + plotHeight}" x2="${width - right}" y2="${top + plotHeight}"></line>${bars}
+      </svg>
+      <figcaption>동일 숙박일의 판매추정 증가분만 Pickup으로 집계합니다. 실제 예약 접수일과 구분합니다.</figcaption>
+    </figure>
+  `;
+}
+
+function adminDbTrendChangeText(current, previous, options = {}) {
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return "비교 대기";
+  const delta = current - previous;
+  if (options.rank) {
+    if (!delta) return "변동 없음";
+    return delta < 0 ? `${fmtNumber(Math.abs(delta))}계단 상승` : `${fmtNumber(delta)}계단 하락`;
+  }
+  if (options.rate) return `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(1)}%p`;
+  return delta === 0 ? "변동 없음" : formatSignedWon(delta);
+}
+
+function adminDbCompanyTrendCard(row = {}, detail = {}) {
+  const rankModel = adminDbRankTrendModel(row, detail);
+  const performanceModel = adminDbPerformanceChartModel(row, detail);
+  const rankObserved = rankModel.observed || [];
+  const performanceObserved = performanceModel.observed || [];
+  const latestRank = optionalNumber(rankModel.latestRank);
+  const previousRank = optionalNumber(rankObserved.at(-2)?.rank);
+  const regionalRank = optionalNumber(rankModel.regionalRank);
+  const latestRevenue = optionalNumber(performanceModel.latestRevenue);
+  const previousRevenue = optionalNumber(performanceObserved.at(-2)?.estimatedRevenue);
+  const latestRate = optionalNumber(performanceModel.latestRate);
+  const previousRate = optionalNumber(performanceObserved.at(-2)?.reservationRate);
+  const leadTime = detail.leadTime || {};
+  const averageLeadTime = optionalNumber(leadTime.averageDays ?? leadTime.averageLeadTimeDays);
+  const observationCount = Number(leadTime.observationCount || 0);
+  const pickupCount = Number(leadTime.pickupCount || 0);
+  const scopeRows = Array.isArray(rankModel.availableKeywords) ? rankModel.availableKeywords : [];
+  const hasRankComparison = rankObserved.length >= 2 && Number.isFinite(latestRank) && Number.isFinite(previousRank);
+  const hasPerformanceComparison = performanceObserved.length >= 2;
+  const currentJudgement = Number.isFinite(latestRate)
+    ? (latestRate >= 0.55 ? "판매속도가 강한 구간" : latestRate <= 0.2 ? "판매 공백 우선 확인" : "가격·상품 흐름 유지 관찰")
+    : (Number.isFinite(latestRank) ? "순위 기준점 확보" : "누적 기준점 수집 중");
+  const opportunity = Number.isFinite(latestRank) && Number.isFinite(regionalRank)
+    ? (latestRank < regionalRank ? `권역 중앙보다 ${fmtNumber(regionalRank - latestRank)}계단 앞` : `권역 중앙까지 ${fmtNumber(latestRank - regionalRank)}계단`)
+    : "같은 키워드 회차 비교 필요";
+  const evidence = [
+    rankObserved.length ? `순위 실제 ${fmtNumber(rankObserved.length)}회` : "순위 이력 대기",
+    performanceObserved.length ? `판매 Snapshot ${fmtNumber(performanceObserved.length)}회` : "판매 Snapshot 대기",
+    pickupCount ? `Pickup ${fmtNumber(pickupCount)}건` : `리드타임 관측 ${fmtNumber(observationCount)}회`
+  ].join(" · ");
+  const nextAction = !hasRankComparison || !hasPerformanceComparison
+    ? "같은 조건으로 한 번 더 자동수집"
+    : (Number.isFinite(latestRate) && latestRate >= 0.55 ? "잔여 객실 가격 유지·인상 검토" : "약한 날짜의 상품·가격부터 비교");
+  return `
+    <section class="admin-company-card admin-company-trends-card" data-ui-surface="card" aria-labelledby="adminCompanyTrendsTitle">
+      <div class="admin-company-card-head">
+        <div><span>D · 누적 변동</span><h3 id="adminCompanyTrendsTitle">순위·예상매출·리드타임</h3></div>
+        <small>${escapeHtml(rankObserved.length || performanceObserved.length ? `실제 누적 ${fmtNumber(Math.max(rankObserved.length, performanceObserved.length))}회` : "누적 수집 대기")}</small>
+      </div>
+      <div class="admin-company-trend-layout">
+        ${adminDbRankHistoryChartHtml(row, rankModel)}
+        <aside class="admin-company-rank-summary" data-ui-surface="soft">
+          <div class="admin-company-trend-headline">
+            <span>현재 순위 기준점</span>
+            <strong>${Number.isFinite(latestRank) && latestRank > 0 ? `${fmtNumber(latestRank)}위` : "대기"}</strong>
+            <small>${escapeHtml(hasRankComparison ? adminDbTrendChangeText(latestRank, previousRank, { rank: true }) : "실제 2회 이상부터 변동 계산")}${Number.isFinite(regionalRank) ? ` · 권역 중앙 ${fmtNumber(regionalRank)}위` : ""}</small>
+          </div>
+          <div class="admin-company-rank-scope-head"><strong>권역·키워드별 실제 기준점</strong><small>저장된 최근 순위</small></div>
+          ${scopeRows.length
+            ? adminDbFoldedItemsHtml(scopeRows, adminDbRankScopeRowHtml, { noun: "범위", limit: 5, className: "admin-company-rank-scope-list" })
+            : `<div class="admin-company-empty" data-ui-surface="control">권역별 실제 순위는 동일 업체가 여러 키워드에서 수집되면 표시됩니다.</div>`}
+        </aside>
+        ${adminDbPerformanceChartHtml(row, performanceModel)}
+        ${adminDbLeadTimeChartHtml(row, detail)}
+      </div>
+      <div class="admin-company-insight-strip" data-ui-surface="soft">
+        <div><span>현재 상태</span><strong>${escapeHtml(currentJudgement)}</strong></div>
+        <i aria-hidden="true">→</i>
+        <div><span>문제·기회</span><strong>${escapeHtml(opportunity)}</strong></div>
+        <i aria-hidden="true">→</i>
+        <div><span>근거 데이터</span><strong>${escapeHtml(evidence)}</strong></div>
+        <i aria-hidden="true">→</i>
+        <div><span>다음 확인</span><strong>${escapeHtml(nextAction)}</strong></div>
+      </div>
+      <p class="admin-company-card-note">순위는 낮을수록 좋습니다. 예상매출·예약율·리드타임은 같은 기준시점의 누적 Snapshot으로 비교합니다.</p>
+    </section>
+  `;
+}
+
+function adminDbCumulativeKpiIconSvg(kind = "rank") {
+  const paths = {
+    rank: '<path d="M6 19V9m6 10V5m6 14v-7"/><path d="m4 7 5-4 4 3 7-4"/>',
+    history: '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M8 3v4m8-4v4M3.5 10h17"/><path d="M8 14h3m2 0h3m-8 3h3"/>',
+    revenue: '<path d="M5 5.5h14v13H5z"/><path d="M8 9.5h8M8 14.5h8"/><path d="M12 7v10"/>'
+  };
+  return `<svg class="admin-cumulative-kpi-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths[kind] || paths.rank}</svg>`;
+}
+
+function adminDbRankRangeEnd(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    const matches = [...text.matchAll(/(?:^|[^\d])(\d{1,4})\s*(?:-|~|–|—|〜)\s*(\d{1,4})(?:\s*위)?(?=$|[^\d])/g)];
+    if (matches.length !== 1 || /[,;]/.test(text)) continue;
+    const start = Number(matches[0][1]);
+    const end = Number(matches[0][2]);
+    if (start === 1 && Number.isFinite(end) && end > 0) return end;
+  }
+  return NaN;
+}
+
+function adminDbDailyDateCoverage(daily = []) {
+  const groups = new Map();
+  (Array.isArray(daily) ? daily : []).forEach((item, index) => {
+    const date = String(item.date || "").trim();
+    const key = date || `observation-${index}`;
+    const group = groups.get(key) || {
+      date,
+      rowCount: 0,
+      totalKnownCount: 0,
+      soldKnownCount: 0,
+      revenueKnownCount: 0,
+      totalSum: 0,
+      soldSum: 0,
+      revenueSum: 0
+    };
+    group.rowCount += 1;
+    if (Number.isFinite(item.total)) {
+      group.totalKnownCount += 1;
+      group.totalSum += item.total;
+    }
+    if (Number.isFinite(item.sold)) {
+      group.soldKnownCount += 1;
+      group.soldSum += item.sold;
+    }
+    if (Number.isFinite(item.estimatedRevenue)) {
+      group.revenueKnownCount += 1;
+      group.revenueSum += item.estimatedRevenue;
+    }
+    groups.set(key, group);
+  });
+  return [...groups.values()].map((group) => {
+    const total = group.rowCount > 0 && group.totalKnownCount === group.rowCount ? group.totalSum : NaN;
+    const sold = group.rowCount > 0 && group.soldKnownCount === group.rowCount ? group.soldSum : NaN;
+    const estimatedRevenue = group.rowCount > 0 && group.revenueKnownCount === group.rowCount ? group.revenueSum : NaN;
+    return {
+      date: group.date,
+      total,
+      sold,
+      estimatedRevenue,
+      rate: Number.isFinite(total) && total > 0 && Number.isFinite(sold) ? adminDbChartClamp(sold / total, 0, 1) : NaN,
+      rowCount: group.rowCount,
+      totalKnownCount: group.totalKnownCount,
+      soldKnownCount: group.soldKnownCount,
+      revenueKnownCount: group.revenueKnownCount
+    };
+  }).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+}
+
+function adminDbPerformanceComparisonIsComplete(current = {}, previous = {}, observedPointCount = 0) {
+  return Number(observedPointCount) >= 2
+    && [current.rate, current.supply, current.sold, previous.rate, previous.supply, previous.sold].every(Number.isFinite);
+}
+
+function adminDbCumulativeDashboardModel(row = {}, detail = {}) {
+  const company = detail.company || row.company || {};
+  const metrics = row.metrics || {};
+  const latest = company.inventory?.latest || row.company?.inventory?.latest || {};
+  const lodging = latest.salesSignal?.lodging || metrics.lodging || {};
+  const dayUse = latest.salesSignal?.dayUse || metrics.dayUse || {};
+  const daily = adminDbDailyRows(row, detail);
+  const dailyByDate = adminDbDailyDateCoverage(daily);
+  const completeSum = (values = []) => {
+    const normalized = values.map(optionalNumber);
+    return normalized.length && normalized.every(Number.isFinite)
+      ? normalized.reduce((sum, value) => sum + value, 0)
+      : NaN;
+  };
+  const hasSignal = (signal = {}) => Object.values(signal || {}).some((value) => value !== "" && value !== null && value !== undefined);
+  const latestSignals = [lodging, dayUse].filter(hasSignal);
+  const latestSupply = completeSum(latestSignals.map((signal) => signal.totalSupply ?? signal.weeklyTotalStock ?? signal.totalRooms));
+  const latestSold = completeSum(latestSignals.map((signal) => signal.totalSold ?? signal.weeklyTotalSoldOut ?? signal.soldOutRooms));
+  const dailyCoverage = {
+    total: dailyByDate.length,
+    supply: dailyByDate.filter((item) => Number.isFinite(item.total)).length,
+    sold: dailyByDate.filter((item) => Number.isFinite(item.sold)).length,
+    revenue: dailyByDate.filter((item) => Number.isFinite(item.estimatedRevenue)).length
+  };
+  const dailySupply = dailyCoverage.total > 0 && dailyCoverage.supply === dailyCoverage.total
+    ? completeSum(dailyByDate.map((item) => item.total))
+    : NaN;
+  const dailySold = dailyCoverage.total > 0 && dailyCoverage.sold === dailyCoverage.total
+    ? completeSum(dailyByDate.map((item) => item.sold))
+    : NaN;
+  const hasCompleteDailyPair = Number.isFinite(dailySupply) && Number.isFinite(dailySold);
+  const hasCompleteLatestPair = Number.isFinite(latestSupply) && Number.isFinite(latestSold);
+  const supply = hasCompleteDailyPair ? dailySupply : (hasCompleteLatestPair ? latestSupply : NaN);
+  const sold = hasCompleteDailyPair ? dailySold : (hasCompleteLatestPair ? latestSold : NaN);
+  const fallbackRate = adminDbChartRate(lodging.averageRate ?? dayUse.averageRate ?? metrics.rate);
+  const rate = Number.isFinite(supply) && supply > 0 && Number.isFinite(sold)
+    ? adminDbChartClamp(sold / supply, 0, 1)
+    : fallbackRate;
+  const dailyRevenue = dailyCoverage.total > 0 && dailyCoverage.revenue === dailyCoverage.total
+    ? completeSum(dailyByDate.map((item) => item.estimatedRevenue))
+    : NaN;
+  const latestRevenueEntries = [
+    { signal: lodging, revenue: latest.revenue?.lodging || {} },
+    { signal: dayUse, revenue: latest.revenue?.dayUse || {} }
+  ].filter((entry) => hasSignal(entry.signal));
+  const latestRevenueComplete = latestRevenueEntries.length > 0 && latestRevenueEntries.every((entry) => {
+    const revenueValue = optionalNumber(entry.revenue.adjustedRevenue ?? entry.revenue.revenue);
+    const precisionRate = optionalNumber(entry.revenue.revenuePrecisionRate);
+    const pricedSoldOut = optionalNumber(entry.revenue.pricedSoldOut);
+    const missingPriceSoldOut = optionalNumber(entry.revenue.missingPriceSoldOut);
+    const hasCompleteCoverage = Number.isFinite(precisionRate)
+      ? precisionRate >= 0.9999
+      : Number.isFinite(pricedSoldOut) && Number.isFinite(missingPriceSoldOut) && missingPriceSoldOut === 0;
+    return Number.isFinite(revenueValue) && hasCompleteCoverage;
+  });
+  const latestRevenue = latestRevenueComplete
+    ? completeSum(latestRevenueEntries.map((entry) => entry.revenue.adjustedRevenue ?? entry.revenue.revenue))
+    : NaN;
+  const hasPriceEvidence = daily.some((item) =>
+    (Number.isFinite(item.priceMin) && item.priceMin > 0)
+    || (Number.isFinite(item.priceMax) && item.priceMax > 0)
+    || (Number.isFinite(item.estimatedRevenue) && item.estimatedRevenue > 0)
+  ) || adminDbProductRows(row, detail).some((product) =>
+    ["weekday", "friday", "saturday", "sunday"].some((key) => Number.isFinite(adminDbProductPrice(product, key)))
+  );
+  const estimatedRevenueCandidate = Number.isFinite(dailyRevenue)
+    ? dailyRevenue
+    : latestRevenue;
+  const estimatedRevenue = Number.isFinite(estimatedRevenueCandidate) && (estimatedRevenueCandidate > 0 || hasPriceEvidence)
+    ? estimatedRevenueCandidate
+    : NaN;
+  const dailyModel = adminDbDailyChartModel(row, dailyByDate, { supply, sold, rate, estimatedRevenue });
+  const rankModel = adminDbRankTrendModel(row, detail);
+  const performanceModel = adminDbPerformanceChartModel(row, detail);
+  const leadTime = detail.leadTime || {};
+  const rankObserved = Array.isArray(rankModel.observed) ? rankModel.observed : [];
+  const performanceObserved = Array.isArray(performanceModel.observed) ? performanceModel.observed : [];
+  const latestRank = optionalNumber(rankModel.latestRank);
+  const keywordProfile = (rankModel.availableKeywords || []).find((item) => rankModel.keywordKey && String(item.keywordKey || "") === String(rankModel.keywordKey))
+    || (rankModel.availableKeywords || []).find((item) => Number.isFinite(Number(item.latestRank)))
+    || (rankModel.availableKeywords || [])[0]
+    || {};
+  const keyword = rankModel.keyword || keywordProfile.keyword || rankObserved.at(-1)?.keyword || metrics.keyword || company.primaryName || "수집 키워드";
+  const rankRangeEnd = adminDbRankRangeEnd(keywordProfile.detailRankRanges, keywordProfile.searchScopeLabel);
+  const observedDates = dailyByDate.map((item) => item.date).filter(Boolean);
+  const dateStart = observedDates[0] || lodging.checkIn || latest.salesSignal?.checkIn || "";
+  const dateEnd = observedDates.at(-1) || lodging.checkOut || latest.salesSignal?.checkOut || "";
+  const collectedAt = detail.observationBasis?.daily?.collectedAt
+    || keywordProfile.latestCollectedAt
+    || rankObserved.at(-1)?.collectedAt
+    || latest.collectedAt
+    || company.lastSeenAt
+    || "";
+  const previousPerformance = performanceObserved.at(-2) || {};
+  const previousRateObserved = adminDbChartRate(previousPerformance.reservationRate ?? previousPerformance.rate);
+  const previousSupplyObserved = optionalNumber(previousPerformance.totalSupply ?? previousPerformance.supply);
+  const previousSoldObserved = optionalNumber(previousPerformance.totalSold ?? previousPerformance.sold);
+  const hasComparablePrevious = adminDbPerformanceComparisonIsComplete(
+    { rate, supply, sold },
+    { rate: previousRateObserved, supply: previousSupplyObserved, sold: previousSoldObserved },
+    performanceObserved.length
+  );
+  const seed = adminDbChartSeed(company.companyId || company.primaryName || "company");
+  const comparisonFactor = 0.88 + (seed % 5) / 100;
+  const previousRate = hasComparablePrevious
+    ? previousRateObserved
+    : (Number.isFinite(rate) ? adminDbChartClamp(rate * comparisonFactor, 0, 1) : NaN);
+  const previousSupply = hasComparablePrevious
+    ? previousSupplyObserved
+    : (Number.isFinite(supply) ? Math.max(0, Math.round(supply * (0.96 + (seed % 3) / 100))) : NaN);
+  const previousSold = hasComparablePrevious
+    ? previousSoldObserved
+    : (Number.isFinite(previousSupply) && Number.isFinite(previousRate) ? Math.round(previousSupply * previousRate) : NaN);
+  const weekdayOrder = [
+    { label: "월", day: 1 },
+    { label: "화", day: 2 },
+    { label: "수", day: 3 },
+    { label: "목", day: 4 },
+    { label: "금", day: 5 },
+    { label: "토", day: 6 },
+    { label: "일", day: 0 }
+  ];
+  const recentDateSet = new Set(observedDates.slice(-7));
+  const weekdayBuckets = new Map(weekdayOrder.map((item) => [item.day, { ...item, total: 0, sold: 0, rowCount: 0, totalKnownCount: 0, soldKnownCount: 0, dates: [] }]));
+  dailyByDate.filter((item) => !item.date || recentDateSet.has(item.date)).forEach((item) => {
+    const match = String(item.date || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return;
+    const day = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`).getUTCDay();
+    const bucket = weekdayBuckets.get(day);
+    if (!bucket) return;
+    bucket.rowCount += 1;
+    if (Number.isFinite(item.total)) {
+      bucket.total += item.total;
+      bucket.totalKnownCount += 1;
+    }
+    if (Number.isFinite(item.sold)) {
+      bucket.sold += item.sold;
+      bucket.soldKnownCount += 1;
+    }
+    bucket.dates.push(item.date);
+  });
+  let weekdays = weekdayOrder.map(({ day }) => {
+    const bucket = weekdayBuckets.get(day);
+    const bucketComplete = bucket.rowCount > 0
+      && bucket.totalKnownCount === bucket.rowCount
+      && bucket.soldKnownCount === bucket.rowCount;
+    const bucketRate = bucketComplete && bucket.total > 0
+      ? adminDbChartClamp(bucket.sold / bucket.total, 0, 1)
+      : NaN;
+    return {
+      ...bucket,
+      rate: Number.isFinite(bucketRate) ? bucketRate : NaN,
+      synthetic: false,
+      decisionEligible: Number.isFinite(bucketRate)
+    };
+  });
+  if (!weekdays.some((item) => Number.isFinite(item.rate))) {
+    weekdays = weekdayOrder.map((item, index) => {
+      const point = dailyModel.points[index % Math.max(1, dailyModel.points.length)] || {};
+      return {
+        ...item,
+        total: optionalNumber(point.total),
+        sold: optionalNumber(point.sold),
+        rate: adminDbChartRate(point.rate),
+        synthetic: true,
+        presentationOnly: true,
+        decisionEligible: false,
+        dates: []
+      };
+    });
+  }
+  return {
+    company,
+    keyword,
+    keywordProfile,
+    daily,
+    dailyByDate,
+    dailyModel,
+    rankModel,
+    performanceModel,
+    leadTime,
+    observationBasis: detail.observationBasis || {},
+    rankObserved,
+    performanceObserved,
+    latestRank,
+    regionalRank: optionalNumber(rankModel.regionalRank),
+    supply,
+    sold,
+    rate,
+    estimatedRevenue,
+    dailyCoverage,
+    rankRangeEnd,
+    observedDayCount: observedDates.length,
+    observedDates,
+    dateStart,
+    dateEnd,
+    collectedAt,
+    comparison: {
+      synthetic: !hasComparablePrevious,
+      current: { rate, sold, supply },
+      previous: { rate: previousRate, sold: previousSold, supply: previousSupply }
+    },
+    weekdays,
+    weekdayEvidenceClass: weekdays.some((item) => item.synthetic) ? "synthetic" : "derived"
+  };
+}
+
+function adminDbCumulativeKpiStripHtml(model = {}) {
+  const rankNote = model.keyword ? `${model.keyword} 기준` : "검색 키워드 기준";
+  const observationValue = model.observedDayCount ? `${fmtNumber(model.observedDayCount)}일` : "대기";
+  const observationNote = model.observedDayCount ? "실제 날짜별 관측" : "자동수집 후 표시";
+  const revenueCoverage = model.dailyCoverage?.total
+    ? `${fmtNumber(model.dailyCoverage.revenue)}/${fmtNumber(model.dailyCoverage.total)}일 가격 근거`
+    : "관측가격 × 판매추정";
+  return `
+    <section class="admin-cumulative-kpi-strip" data-layout-slot="kpi-strip" aria-label="업체 누적 핵심 지표">
+      <article data-surface-role="metric">
+        <i class="admin-cumulative-kpi-icon">${adminDbCumulativeKpiIconSvg("rank")}</i>
+        <div><span>현재 순위</span><strong>${Number.isFinite(model.latestRank) && model.latestRank > 0 ? `${fmtNumber(model.latestRank)}위` : "대기"}</strong><small>${escapeHtml(rankNote)}</small></div>
+      </article>
+      <article data-surface-role="metric">
+        <i class="admin-cumulative-kpi-icon">${adminDbCumulativeKpiIconSvg("history")}</i>
+        <div><span>누적 관측</span><strong>${escapeHtml(observationValue)}</strong><small>${escapeHtml(observationNote)}</small></div>
+      </article>
+      <article data-surface-role="metric">
+        <i class="admin-cumulative-kpi-icon">${adminDbCumulativeKpiIconSvg("revenue")}</i>
+        <div><span>예상매출</span><strong>${Number.isFinite(model.estimatedRevenue) ? escapeHtml(fmtWon(model.estimatedRevenue)) : "대기"}</strong><small>${escapeHtml(revenueCoverage)}</small></div>
+      </article>
+    </section>
+  `;
+}
+
+function adminDbCumulativeHistoryHtml(row = {}, model = {}) {
+  const sourcePoints = Array.isArray(model.rankModel?.points) ? model.rankModel.points.slice(-7) : [];
+  const points = sourcePoints.filter((point) => Number.isFinite(Number(point.rank)) && Number(point.rank) > 0);
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminCumulativeHistory-${adminDbChartSafeId(companyId)}`;
+  const width = 960;
+  const height = 150;
+  const left = 12;
+  const right = 12;
+  const top = 16;
+  const bottom = 30;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const ranks = points.map((point) => Number(point.rank));
+  const minRank = ranks.length ? Math.max(1, Math.floor(Math.min(...ranks) - 1)) : 1;
+  const maxRank = ranks.length ? Math.max(minRank + 2, Math.ceil(Math.max(...ranks) + 1)) : 40;
+  const xFor = (index) => left + index * (plotWidth / Math.max(1, points.length - 1));
+  const yFor = (rank) => top + ((Number(rank) - minRank) / Math.max(1, maxRank - minRank)) * plotHeight;
+  const coordinates = points.map((point, index) => ({ point, index, x: xFor(index), y: yFor(point.rank) }));
+  const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const observedCount = model.rankObserved?.length || 0;
+  const rankScaleMax = Number(model.rankRangeEnd);
+  const hasRankScale = Number.isFinite(rankScaleMax) && rankScaleMax > 0 && Number.isFinite(model.latestRank) && model.latestRank > 0;
+  const progress = hasRankScale
+    ? adminDbChartClamp((((rankScaleMax + 1) - model.latestRank) / rankScaleMax) * 100, 4, 100)
+    : 0;
+  const collectedLabel = model.collectedAt ? compactDateTime(model.collectedAt) : "관측시각 대기";
+  const periodLabel = model.dateStart
+    ? `${model.dateStart}${model.dateEnd && model.dateEnd !== model.dateStart ? ` ~ ${model.dateEnd}` : ""}`
+    : "판매기간 수집 대기";
+  return `
+    <section class="admin-cumulative-history-card" data-layout-slot="history" data-surface-role="card" aria-labelledby="${chartId}Heading">
+      <div class="admin-cumulative-card-head">
+        <div>
+          <span>키워드별 누적 수집 이력</span>
+          <h3 id="${chartId}Heading">${escapeHtml(model.keyword || "수집 키워드")}</h3>
+          <small>${escapeHtml(`${collectedLabel} · 실제 순위 ${fmtNumber(observedCount)}회 · 판매일 ${fmtNumber(model.observedDayCount || 0)}일`)}</small>
+        </div>
+        <div class="admin-cumulative-history-value">
+          <mark>${observedCount ? "운영중" : "누적 준비"}</mark>
+          <strong>${Number.isFinite(model.latestRank) && model.latestRank > 0 ? `${fmtNumber(model.latestRank)}위` : "대기"}</strong>
+          <small>${Number.isFinite(model.regionalRank) ? `권역 중앙 ${fmtNumber(model.regionalRank)}위` : "권역 비교 표본 수집 중"}</small>
+        </div>
+      </div>
+      <div class="admin-cumulative-progress${hasRankScale ? "" : " is-unavailable"}" aria-label="${hasRankScale ? `${fmtNumber(rankScaleMax)}위까지 수집한 회차에서 현재 순위의 상대 위치` : "이전 수집 범위 기준이 없어 상대 위치를 계산하지 않음"}"${hasRankScale ? "" : ' title="이전 수집 범위 기준이 저장되지 않아 위치 막대를 계산하지 않습니다."'}>${hasRankScale ? `<span style="--progress:${progress.toFixed(1)}%"></span>` : ""}</div>
+      ${points.length ? `
+        <figure class="admin-cumulative-history-figure" data-chart="history-line" data-evidence-class="${escapeHtml(model.rankModel?.evidenceClass || "observed")}">
+          <svg viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+            <title id="${chartId}Title">${escapeHtml(model.keyword || "키워드")} 플레이스 순위 누적 그래프</title>
+            <desc id="${chartId}Desc">${escapeHtml(model.rankModel?.disclosure || "저장된 플레이스 순위 관측을 표시합니다.")}</desc>
+            <line class="admin-cumulative-history-baseline" x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
+            <polyline class="admin-cumulative-history-line ${model.rankModel?.presentationOnly ? "is-synthetic" : "is-observed"}" points="${linePoints}"></polyline>
+            ${coordinates.map(({ point, index, x, y }) => {
+              const labelVisible = index === 0 || index === coordinates.length - 1 || index === Math.floor(coordinates.length / 2);
+              const pointClass = point.synthetic && !point.actualAnchor ? "is-synthetic" : "is-observed";
+              return `<g data-chart-point="${index + 1}"><title>${escapeHtml(`${point.collectedAt || point.label || `관측 ${index + 1}`} · ${fmtNumber(point.rank)}위 · ${pointClass === "is-observed" ? "실제 기준점" : "합성 보조"}`)}</title><circle class="admin-cumulative-history-point ${pointClass}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5.5"></circle>${labelVisible ? `<text x="${x.toFixed(1)}" y="${height - 8}" text-anchor="middle">${escapeHtml(adminDbChartDateLabel(point.collectedAt || point.label || "", index))}</text>` : ""}</g>`;
+            }).join("")}
+          </svg>
+          <figcaption><mark data-evidence-badge="${escapeHtml(model.rankModel?.evidenceClass || "observed")}">${escapeHtml(model.rankModel?.badge || "실제 관측")}</mark><span>${escapeHtml(model.rankModel?.disclosure || "")}</span></figcaption>
+        </figure>
+      ` : `<div class="admin-cumulative-chart-empty">순위 기준점을 자동수집하면 이 영역에 누적 선그래프가 표시됩니다.</div>`}
+      <div class="admin-cumulative-history-foot"><span>${escapeHtml(periodLabel)}</span><strong>총량 ${Number.isFinite(model.supply) ? fmtNumber(model.supply) : "-"} · 판매완료·마감 추정 ${Number.isFinite(model.sold) ? fmtNumber(model.sold) : "-"}</strong></div>
+    </section>
+  `;
+}
+
+function adminDbCumulativeComparisonHtml(model = {}) {
+  const current = model.comparison?.current || {};
+  const previous = model.comparison?.previous || {};
+  const synthetic = Boolean(model.comparison?.synthetic);
+  const rateDelta = Number.isFinite(current.rate) && Number.isFinite(previous.rate) ? current.rate - previous.rate : NaN;
+  const soldDelta = Number.isFinite(current.sold) && Number.isFinite(previous.sold) ? current.sold - previous.sold : NaN;
+  const supplyDelta = Number.isFinite(current.supply) && Number.isFinite(previous.supply) ? current.supply - previous.supply : NaN;
+  const rows = [
+    ["추정 예약율", Number.isFinite(current.rate) ? fmtRate(current.rate) : "대기", Number.isFinite(previous.rate) ? fmtRate(previous.rate) : "대기", Number.isFinite(rateDelta) ? `${rateDelta >= 0 ? "+" : ""}${(rateDelta * 100).toFixed(1)}%p` : "비교 대기"],
+    ["판매완료·마감", Number.isFinite(current.sold) ? `${fmtNumber(current.sold)}개` : "대기", Number.isFinite(previous.sold) ? `${fmtNumber(previous.sold)}개` : "대기", Number.isFinite(soldDelta) ? `${soldDelta >= 0 ? "+" : ""}${fmtNumber(soldDelta)}개` : "비교 대기"],
+    ["판매 가능 총량", Number.isFinite(current.supply) ? `${fmtNumber(current.supply)}개` : "대기", Number.isFinite(previous.supply) ? `${fmtNumber(previous.supply)}개` : "대기", Number.isFinite(supplyDelta) ? `${supplyDelta >= 0 ? "+" : ""}${fmtNumber(supplyDelta)}개` : "비교 대기"]
+  ];
+  return `
+    <section class="admin-cumulative-secondary-card" data-surface-role="card" aria-labelledby="adminCumulativeComparisonTitle">
+      <div class="admin-cumulative-secondary-head"><div><span>수집 회차 비교</span><h3 id="adminCumulativeComparisonTitle">현재와 직전 기준</h3></div><mark data-evidence-badge="${synthetic ? "synthetic" : "derived"}">${synthetic ? "합성 보조 · 판단 제외" : "실제 회차 비교"}</mark></div>
+      <div class="admin-cumulative-comparison-rows">
+        ${rows.map(([label, currentValue, previousValue, delta]) => `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(currentValue)}</strong><small>${synthetic ? `보조 기준 ${previousValue}` : `직전 ${previousValue}`} · ${synthetic ? "증감 판단 제외" : delta}</small></article>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function adminDbCumulativeEvidenceHtml(model = {}) {
+  const rankCount = model.rankObserved?.length || 0;
+  const observedDays = model.observedDayCount || 0;
+  const pickupCount = Number(model.leadTime?.pickupCount || 0);
+  const leadTimeObservationCount = Number(model.leadTime?.observationCount || model.leadTime?.collectedDateCount || 0);
+  const coverage = model.dailyCoverage || {};
+  const dailyComplete = Number(coverage.total || 0) > 0
+    && Number(coverage.supply || 0) === Number(coverage.total || 0)
+    && Number(coverage.sold || 0) === Number(coverage.total || 0);
+  const rows = [
+    { label: "날짜별 판매 관측", value: observedDays ? `실제 ${fmtNumber(observedDays)}일` : "수집 대기", note: observedDays ? (dailyComplete ? "총량·판매 근거 전체 저장" : `총량 ${fmtNumber(coverage.supply || 0)}/${fmtNumber(coverage.total || 0)}일 · 판매 ${fmtNumber(coverage.sold || 0)}/${fmtNumber(coverage.total || 0)}일`) : "자동수집 후 생성", tone: observedDays ? (dailyComplete ? "positive" : "warning") : "neutral" },
+    { label: "플레이스 순위", value: rankCount ? `실제 ${fmtNumber(rankCount)}회` : "기준점 대기", note: rankCount >= 2 ? "순위변동 계산 가능" : "변동 계산에는 1회 더 필요", tone: rankCount >= 2 ? "positive" : rankCount ? "warning" : "neutral" },
+    { label: "리드타임·Pickup", value: pickupCount ? `${fmtNumber(pickupCount)}건` : "계산 대기", note: pickupCount ? "동일 숙박일 반복관측" : `${fmtNumber(leadTimeObservationCount)}회 관측 · 같은 날짜 재수집 필요`, tone: pickupCount ? "positive" : "neutral" }
+  ];
+  return `
+    <section class="admin-cumulative-secondary-card" data-surface-role="card" aria-labelledby="adminCumulativeEvidenceTitle">
+      <div class="admin-cumulative-secondary-head"><div><span>데이터 신뢰도 로그</span><h3 id="adminCumulativeEvidenceTitle">실제 근거와 준비도</h3></div></div>
+      <div class="admin-cumulative-evidence-rows">
+        ${rows.map((item) => `<article data-status="${item.tone}"><i aria-hidden="true"></i><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.note)}</small></div><b>${escapeHtml(item.value)}</b></article>`).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function adminDbCumulativeWeekdayHtml(row = {}, model = {}) {
+  const weekdays = Array.isArray(model.weekdays) ? model.weekdays : [];
+  const finite = weekdays.filter((item) => Number.isFinite(item.rate));
+  const strongest = [...finite].sort((a, b) => b.rate - a.rate)[0];
+  const weakestRate = finite.length ? Math.min(...finite.map((item) => item.rate)) : NaN;
+  const weakest = finite.filter((item) => Number.isFinite(weakestRate) && Math.abs(item.rate - weakestRate) < 0.000001);
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminCumulativeWeekday-${adminDbChartSafeId(companyId)}`;
+  const synthetic = model.weekdayEvidenceClass === "synthetic";
+  return `
+    <section class="admin-cumulative-weekday-card" data-layout-slot="company-trend" data-surface-role="card" aria-labelledby="${chartId}Title">
+      <div class="admin-cumulative-weekday-chart">
+        <div class="admin-cumulative-secondary-head">
+          <div><span>업체별 누적 추이</span><h3 id="${chartId}Title">요일별 판매 흐름</h3><small>${escapeHtml(model.dateStart ? `${model.dateStart}${model.dateEnd && model.dateEnd !== model.dateStart ? ` ~ ${model.dateEnd}` : ""}` : "최근 관측기간 대기")}</small></div>
+          <mark data-evidence-badge="${synthetic ? "synthetic" : "derived"}">${synthetic ? "합성 보조 · 화면용" : "실제 관측 · 추정 예약율"}</mark>
+        </div>
+        <div class="admin-cumulative-weekday-bars" data-chart="weekday-bars" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+          ${weekdays.map((item) => {
+            const percent = Number.isFinite(item.rate) ? Math.round(adminDbChartClamp(item.rate, 0, 1) * 100) : 0;
+            const evidence = item.synthetic ? "합성 보조" : Number.isFinite(item.rate) ? "관측 기반 추정" : "미관측";
+            return `<div class="admin-cumulative-weekday" data-weekday="${escapeHtml(item.label)}" title="${escapeHtml(`${item.label}요일 · ${Number.isFinite(item.rate) ? `${percent}%` : "미관측"} · ${evidence}`)}"><strong>${Number.isFinite(item.rate) ? `${percent}%` : "-"}</strong><div class="admin-cumulative-weekday-track"><i style="--bar-percent:${percent}%"></i></div><span>${escapeHtml(item.label)}</span></div>`;
+          }).join("")}
+        </div>
+        <p id="${chartId}Desc" class="admin-cumulative-chart-disclosure">${escapeHtml(synthetic ? "화면 구조 확인용 합성 막대이며 판단·추천 계산에는 사용하지 않습니다." : "저장된 최근 관측을 요일별로 묶었습니다. 예약율은 공개 잔여재고로 계산한 추정값입니다.")}</p>
+      </div>
+      <aside class="admin-cumulative-weekday-insight">
+        <span>현재 해석</span>
+        <strong>${strongest ? `${strongest.label}요일 판매 흐름 강함` : "판매 흐름 수집 중"}</strong>
+        <p>${strongest ? `강한 날은 ${strongest.label}요일 ${fmtRate(strongest.rate)}, 약한 날은 ${weakest.map((item) => item.label).join("·") || "-"}요일 ${Number.isFinite(weakestRate) ? fmtRate(weakestRate) : "-"}입니다.` : "요일별 관측이 쌓이면 강한 날과 판매 공백을 비교합니다."}</p>
+        <button type="button" data-admin-db-open-fold="correction" data-ui-interactive="true">상품·가격 기준 열기 <span aria-hidden="true">→</span></button>
+      </aside>
+    </section>
+  `;
+}
+
+function adminDbCompanyCumulativeDashboardHtml(row = {}, detail = {}) {
+  const model = adminDbCumulativeDashboardModel(row, detail);
+  return `
+    <div class="admin-cumulative-dashboard" data-layout-contract="cumulative-db-v1">
+      ${adminDbCumulativeKpiStripHtml(model)}
+      ${adminDbCumulativeHistoryHtml(row, model)}
+      <div class="admin-cumulative-comparison-grid" data-layout-slot="comparison">
+        ${adminDbCumulativeComparisonHtml(model)}
+        ${adminDbCumulativeEvidenceHtml(model)}
+      </div>
+      ${adminDbCumulativeWeekdayHtml(row, model)}
+    </div>
+  `;
+}
+
+function adminDbReferenceDateLabel(value = "") {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return text || "날짜 확인";
+  const weekday = ["일", "월", "화", "수", "목", "금", "토"][new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00Z`).getUTCDay()];
+  return `${Number(match[2])}/${Number(match[3])} (${weekday})`;
+}
+
+function adminDbReferencePriceText(minValue, maxValue, fallback = "가격 대기") {
+  const min = optionalNumber(minValue);
+  const max = optionalNumber(maxValue);
+  if (!Number.isFinite(min) && !Number.isFinite(max)) return fallback;
+  const resolvedMin = Number.isFinite(min) ? min : max;
+  const resolvedMax = Number.isFinite(max) ? max : min;
+  return resolvedMin === resolvedMax ? fmtWon(resolvedMin) : `${fmtWon(Math.min(resolvedMin, resolvedMax))}~${fmtWon(Math.max(resolvedMin, resolvedMax))}`;
+}
+
+function adminDbReferenceDailyRows(model = {}) {
+  const groups = new Map();
+  (Array.isArray(model.daily) ? model.daily : []).forEach((item, index) => {
+    const date = String(item.date || "").trim();
+    const key = date || `observation-${index}`;
+    const group = groups.get(key) || {
+      date,
+      rows: 0,
+      totalKnown: 0,
+      soldKnown: 0,
+      revenueKnown: 0,
+      priceKnown: 0,
+      total: 0,
+      sold: 0,
+      estimatedRevenue: 0,
+      prices: []
+    };
+    group.rows += 1;
+    if (Number.isFinite(item.total)) {
+      group.totalKnown += 1;
+      group.total += item.total;
+    }
+    if (Number.isFinite(item.sold)) {
+      group.soldKnown += 1;
+      group.sold += item.sold;
+    }
+    if (Number.isFinite(item.estimatedRevenue)) {
+      group.revenueKnown += 1;
+      group.estimatedRevenue += item.estimatedRevenue;
+    }
+    const priceMin = optionalNumber(item.priceMin);
+    const priceMax = optionalNumber(item.priceMax);
+    if (Number.isFinite(priceMin) || Number.isFinite(priceMax)) {
+      group.priceKnown += 1;
+      if (Number.isFinite(priceMin)) group.prices.push(priceMin);
+      if (Number.isFinite(priceMax)) group.prices.push(priceMax);
+    }
+    groups.set(key, group);
+  });
+  return [...groups.values()]
+    .map((group) => {
+      const total = group.rows > 0 && group.totalKnown === group.rows ? group.total : NaN;
+      const sold = group.rows > 0 && group.soldKnown === group.rows ? group.sold : NaN;
+      const estimatedRevenue = group.rows > 0 && group.revenueKnown === group.rows ? group.estimatedRevenue : NaN;
+      const priceComplete = group.rows > 0 && group.priceKnown === group.rows;
+      return {
+        date: group.date,
+        total,
+        sold,
+        rate: Number.isFinite(total) && total > 0 && Number.isFinite(sold) ? adminDbChartClamp(sold / total, 0, 1) : NaN,
+        estimatedRevenue,
+        priceMin: group.prices.length ? Math.min(...group.prices) : NaN,
+        priceMax: group.prices.length ? Math.max(...group.prices) : NaN,
+        priceComplete,
+        rowCount: group.rows
+      };
+    })
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+}
+
+function adminDbReferenceProductRowHtml(product = {}) {
+  const quantity = adminDbProductQuantity(product);
+  const groupLabel = product.priceGroupLabel || "가격 미확인";
+  const cells = [
+    `<span role="cell" data-label="상품명"><strong>${escapeHtml(product.name || product.productName || product.roomType || "상품명 확인")}</strong><small>${escapeHtml(product.productType === "dayuse" ? "데이유즈" : "숙박")}</small></span>`,
+    `<span role="cell" data-label="수량">${Number.isFinite(quantity) ? `${fmtNumber(quantity)}개` : "-"}</span>`,
+    ...[["평일", "weekday"], ["금요일", "friday"], ["토요일", "saturday"], ["일요일", "sunday"]].map(([label, key]) => {
+      const price = adminDbProductPrice(product, key);
+      return `<span role="cell" data-label="${label}">${Number.isFinite(price) ? escapeHtml(fmtWon(price)) : "-"}</span>`;
+    }),
+    `<span role="cell" data-label="가격군">${escapeHtml(groupLabel)}</span>`
+  ];
+  return `<article class="admin-reference-table-row admin-reference-product-row" role="row">${cells.join("")}</article>`;
+}
+
+function adminDbReferenceBasicsCard(row = {}, detail = {}, model = {}) {
+  const company = detail.company || row.company || {};
+  const metrics = row.metrics || {};
+  const latest = company.inventory?.latest || row.company?.inventory?.latest || {};
+  const snapshot = detail.productSnapshot || latest.productSnapshot || {};
+  const products = adminDbProductRows(row, detail);
+  const exactPriceGroups = Array.isArray(detail.priceGroups)
+    ? detail.priceGroups
+    : (Array.isArray(snapshot.priceGroups) ? snapshot.priceGroups : []);
+  const productSummary = detail.productSummary || snapshot.summary || {};
+  const groupLabels = new Map(exactPriceGroups.map((group, index) => [group.priceGroupId, `가격군 ${String.fromCharCode(65 + index)}`]));
+  const displayProducts = products.map((product) => ({
+    ...product,
+    priceGroupLabel: product.priceGroupId
+      ? (groupLabels.get(product.priceGroupId) || product.priceGroupLabel || "가격군 확인")
+      : (product.priceGroupLabel || "가격 미확인")
+  }));
+  const productNames = displayProducts.map((product) => product.name || product.productName || product.roomType).filter(Boolean);
+  const productQuantities = products.map((product) => adminDbProductQuantity(product));
+  const productQuantityComplete = products.length > 0 && productQuantities.every(Number.isFinite);
+  const totalQuantity = productQuantityComplete
+    ? productQuantities.reduce((sum, quantity) => sum + quantity, 0)
+    : optionalNumber(metrics.roomTotal);
+  const totalQuantitySource = productQuantityComplete
+    ? "상품 수량 합계"
+    : (Number.isFinite(totalQuantity) ? "공개재고 집계" : "수집 대기");
+  const priceGroupCount = Number(exactPriceGroups.length || productSummary.priceGroupCount || adminDbProductPriceGroupCount(products) || 0);
+  const allPrices = products.flatMap((product) => ["weekday", "friday", "saturday", "sunday"].map((key) => adminDbProductPrice(product, key))).filter(Number.isFinite);
+  const address = (company.addresses || [])[0] || "주소 확인 대기";
+  const placeId = (company.placeIds || [])[0] || "확인 대기";
+  const bookingId = (company.bookingBusinessIds || [])[0] || company.bookingBusinessId || "";
+  const primaryProducts = productNames.slice(0, 4).join(", ") || "상세정보 자동수집 후 표시";
+  const representativePrice = allPrices.length
+    ? adminDbReferencePriceText(Math.min(...allPrices), Math.max(...allPrices))
+    : "관측 대기";
+  return `
+    <section class="admin-reference-card admin-reference-basics" aria-labelledby="adminReferenceBasicsTitle">
+      <div class="admin-reference-section-title"><b>A</b><h3 id="adminReferenceBasicsTitle">업체 기본정보</h3></div>
+      <dl class="admin-reference-identity-list">
+        <div><dt>주소</dt><dd>${escapeHtml(address)}</dd></div>
+        <div><dt>플레이스 ID</dt><dd>${escapeHtml(placeId)}${bookingId ? ` · 예약 ID ${escapeHtml(bookingId)}` : ""}</dd></div>
+        <div><dt>주요 상품</dt><dd>${escapeHtml(primaryProducts)}</dd></div>
+      </dl>
+      <div class="admin-reference-basic-metrics" aria-label="상품 기본 지표">
+        <article><span>판매상품</span><strong>${products.length ? `${fmtNumber(products.length)}종` : "대기"}</strong></article>
+        <article><span>가격군</span><strong>${priceGroupCount ? `${fmtNumber(priceGroupCount)}개` : "대기"}</strong></article>
+        <article><span>판매 가능 총량</span><strong>${Number.isFinite(totalQuantity) && totalQuantity > 0 ? `${fmtNumber(totalQuantity)}개` : "대기"}</strong><small>${escapeHtml(totalQuantitySource)}</small></article>
+        <article><span>대표 관측가격</span><strong>${escapeHtml(representativePrice)}</strong></article>
+      </div>
+      <div class="admin-reference-table admin-reference-product-table" role="table" aria-label="상품별 수량과 요일별 관측가격">
+        <div class="admin-reference-table-head" role="row"><span role="columnheader">상품명</span><span role="columnheader">수량</span><span role="columnheader">평일</span><span role="columnheader">금요일</span><span role="columnheader">토요일</span><span role="columnheader">일요일</span><span role="columnheader">가격군</span></div>
+        ${displayProducts.length
+          ? adminDbFoldedItemsHtml(displayProducts, adminDbReferenceProductRowHtml, { noun: "상품", limit: 5, className: "admin-reference-product-list" })
+          : `<div class="admin-reference-empty">구조화된 상품 자료가 없습니다. 상세정보 자동수집 후 상품명·수량·요일별 관측가격을 표시합니다.</div>`}
+      </div>
+      <p class="admin-reference-footnote">판매 가능 총량과 가격은 네이버 공개 화면 관측 기준이며 실제 보유 객실·결제 매출과 구분합니다.</p>
+    </section>
+  `;
+}
+
+const ADMIN_REFERENCE_CHANNEL_BRAND_META = Object.freeze({
+  naver: { src: "/assets/channels/naver.webp", fallback: "N", label: "네이버 예약" },
+  yeogi: { src: "/assets/channels/yeogi.webp", fallback: "여", label: "여기어때" },
+  yanolja: { src: "/assets/channels/nol.png", fallback: "N", label: "NOL(야놀자)" },
+  tteonayo: { src: "/assets/channels/ddnayo.ico", fallback: "떠", label: "떠나요" }
+});
+
+function adminDbReferenceChannelIconHtml(item = {}) {
+  const meta = ADMIN_REFERENCE_CHANNEL_BRAND_META[item.key] || {};
+  const fallback = meta.fallback || "·";
+  return `
+    <span class="admin-reference-channel-icon" aria-hidden="true">
+      <span class="admin-reference-channel-icon-fallback">${escapeHtml(fallback)}</span>
+      ${meta.src ? `<img src="${escapeHtml(meta.src)}" alt="" width="29" height="29" loading="eager" decoding="async" data-channel-brand-icon="${escapeHtml(item.key || "channel")}">` : ""}
+    </span>
+  `;
+}
+
+function adminDbReferenceChannelRowHtml(item = {}, company = {}) {
+  const linked = adminDbChannelStatusLinked(item.status);
+  const needsReview = adminDbChannelStatusNeedsReview(item.status);
+  const isNaver = item.key === "naver";
+  const hasNaverBooking = Boolean(
+    (company.bookingBusinessIds || []).length
+    || company.bookingBusinessId
+    || company.bookingUrl
+    || company.naverBookingUrl
+  );
+  const statusText = needsReview
+    ? (item.statusText || "확인 필요")
+    : isNaver && hasNaverBooking
+      ? "예약 노출 확인"
+      : linked
+        ? (item.statusText || "확인 완료")
+        : (isNaver
+          ? (item.statusText || "관측 대기")
+          : (item.status && item.status !== "unknown" ? (item.statusText || "수동 확인") : "수동 확인"));
+  const statusTone = needsReview ? "warning" : linked || (isNaver && hasNaverBooking) ? "positive" : "neutral";
+  const brandMeta = ADMIN_REFERENCE_CHANNEL_BRAND_META[item.key] || {};
+  const displayLabel = brandMeta.label || item.label;
+  const channelDetail = isNaver ? "네이버 공개 화면 관측" : item.key === "yanolja" ? "NOL·야놀자 채널 상태" : `${item.label} 채널 상태`;
+  return `
+    <article class="admin-reference-channel-row" data-channel="${escapeHtml(item.key || "channel")}">
+      ${adminDbReferenceChannelIconHtml(item)}
+      <div><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(channelDetail)}</small></div>
+      <mark data-ui-status="${statusTone}">${escapeHtml(statusText)}</mark>
+      <div class="admin-reference-channel-actions">
+        ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(displayLabel)} 외부 화면 열기">열기</a>` : ""}
+        ${!isNaver ? `<button type="button" data-admin-db-open-fold="channel" aria-label="${escapeHtml(displayLabel)} 상태 기록">기록</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function adminDbReferenceChannelsCard(row = {}) {
+  const company = row.company || {};
+  const preferredKeys = ["naver", "yeogi", "yanolja", "tteonayo"];
+  const rows = adminDbChannelTableRows(row)
+    .filter((item) => preferredKeys.includes(item.key))
+    .sort((a, b) => preferredKeys.indexOf(a.key) - preferredKeys.indexOf(b.key));
+  return `
+    <section class="admin-reference-card admin-reference-channels" aria-labelledby="adminReferenceChannelsTitle">
+      <div class="admin-reference-section-title"><b>B</b><h3 id="adminReferenceChannelsTitle">예약 채널</h3></div>
+      <div class="admin-reference-channel-list">
+        ${rows.map((item) => adminDbReferenceChannelRowHtml(item, company)).join("")}
+      </div>
+      <p class="admin-reference-footnote">네이버 예약 노출과 외부 OTA 입점·재고 연동은 서로 다른 근거로 관리합니다.</p>
+    </section>
+  `;
+}
+
+function adminDbReferenceDeltaTag(text = "비교 대기", tone = "neutral") {
+  return `<mark class="admin-reference-delta" data-ui-status="${escapeHtml(tone)}">${escapeHtml(text)}</mark>`;
+}
+
+function adminDbReferenceTrendSection(row = {}, detail = {}, model = {}) {
+  const rankObserved = Array.isArray(model.rankObserved) ? model.rankObserved : [];
+  const performanceObserved = Array.isArray(model.performanceObserved) ? model.performanceObserved : [];
+  const previousRank = optionalNumber(rankObserved.at(-2)?.rank);
+  const rankDelta = Number.isFinite(model.latestRank) && Number.isFinite(previousRank) ? previousRank - model.latestRank : NaN;
+  const latestPerformance = performanceObserved.at(-1) || {};
+  const previousPerformance = performanceObserved.at(-2) || {};
+  const sameObservedHorizon = Number(latestPerformance.observedDays || 0) > 0
+    && Number(latestPerformance.observedDays) === Number(previousPerformance.observedDays)
+    && String(latestPerformance.checkIn || "") === String(previousPerformance.checkIn || "");
+  const currentPerformanceAligned = [
+    [optionalNumber(latestPerformance.reservationRate), optionalNumber(model.rate)],
+    [optionalNumber(latestPerformance.totalSupply), optionalNumber(model.supply)],
+    [optionalNumber(latestPerformance.totalSold), optionalNumber(model.sold)]
+  ].every(([observed, displayed]) => Number.isFinite(observed) && Number.isFinite(displayed) && Math.abs(observed - displayed) < 0.0001);
+  const performanceBasisComparable = performanceObserved.length >= 2
+    && sameObservedHorizon
+    && currentPerformanceAligned;
+  const previousRevenue = optionalNumber(previousPerformance.estimatedRevenue);
+  const revenueEvidenceComplete = (point = {}) => {
+    const coverage = optionalNumber(point.priceCoverageRate);
+    const missing = optionalNumber(point.missingPriceEstimatedRevenue);
+    return point.priceEvidenceObserved === true
+      && (Number.isFinite(coverage) ? coverage >= 0.9999 : (Number.isFinite(missing) && missing === 0));
+  };
+  const revenueComparable = performanceBasisComparable
+    && revenueEvidenceComplete(latestPerformance)
+    && revenueEvidenceComplete(previousPerformance)
+    && Number.isFinite(optionalNumber(latestPerformance.estimatedRevenue))
+    && Number.isFinite(optionalNumber(model.estimatedRevenue))
+    && Math.abs(optionalNumber(latestPerformance.estimatedRevenue) - optionalNumber(model.estimatedRevenue)) < 1
+    && Number.isFinite(previousRevenue)
+    && previousRevenue > 0;
+  const revenueDeltaRate = revenueComparable
+    ? (optionalNumber(latestPerformance.estimatedRevenue) - previousRevenue) / previousRevenue
+    : NaN;
+  const currentRate = model.rate;
+  const comparisonCurrent = model.comparison?.current || {};
+  const comparisonPrevious = model.comparison?.previous || {};
+  const rateDelta = model.comparison?.synthetic === false
+    && performanceBasisComparable
+    && Number.isFinite(comparisonCurrent.rate)
+    && Number.isFinite(comparisonPrevious.rate)
+    ? comparisonCurrent.rate - comparisonPrevious.rate
+    : NaN;
+  const averageLeadTime = optionalNumber(model.leadTime?.averageDays ?? model.leadTime?.medianDays);
+  const pickupCount = Number(model.leadTime?.pickupCount || 0);
+  const regionalGap = Number.isFinite(model.latestRank) && Number.isFinite(model.regionalRank) ? model.regionalRank - model.latestRank : NaN;
+  const rankTag = Number.isFinite(rankDelta)
+    ? adminDbReferenceDeltaTag(`${rankDelta > 0 ? "▲" : rankDelta < 0 ? "▼" : ""} ${rankDelta ? `${fmtNumber(Math.abs(rankDelta))}계단` : "변동 없음"}`, rankDelta > 0 ? "positive" : rankDelta < 0 ? "warning" : "neutral")
+    : adminDbReferenceDeltaTag(rankObserved.length ? `실제 ${fmtNumber(rankObserved.length)}회` : "관측 대기");
+  const revenueTag = Number.isFinite(revenueDeltaRate)
+    ? adminDbReferenceDeltaTag(`${revenueDeltaRate >= 0 ? "▲" : "▼"} ${Math.abs(revenueDeltaRate * 100).toFixed(1)}%`, revenueDeltaRate >= 0 ? "positive" : "warning")
+    : adminDbReferenceDeltaTag("비교 대기");
+  const rateTag = Number.isFinite(rateDelta)
+    ? adminDbReferenceDeltaTag(`${rateDelta >= 0 ? "▲" : "▼"} ${Math.abs(rateDelta * 100).toFixed(1)}%p`, rateDelta >= 0 ? "positive" : "warning")
+    : adminDbReferenceDeltaTag("비교 대기");
+  const leadTimeTag = pickupCount > 0 ? adminDbReferenceDeltaTag(`Pickup ${fmtNumber(pickupCount)}건`, "positive") : adminDbReferenceDeltaTag("반복수집 필요");
+  const observedRunCount = Math.max(rankObserved.length, performanceObserved.length);
+  const evidenceMeta = [observedRunCount ? `최근 ${fmtNumber(observedRunCount)}회 수집` : "누적 수집 대기", model.keyword ? `${model.keyword} 기준` : "키워드 기준"].join(" · ");
+  const insightRows = [
+    {
+      title: Number.isFinite(regionalGap) ? `권역 대비 순위 ${regionalGap > 0 ? `+${fmtNumber(regionalGap)}` : regionalGap < 0 ? fmtNumber(regionalGap) : "동일"}` : "권역 순위 비교 대기",
+      note: Number.isFinite(regionalGap) ? `현재 ${fmtNumber(model.latestRank)}위 · 권역 중앙 ${fmtNumber(model.regionalRank)}위` : "동일 키워드 권역 표본이 필요합니다."
+    },
+    {
+      title: Number.isFinite(revenueDeltaRate) ? `예상매출 ${revenueDeltaRate >= 0 ? "상승" : "하락"}` : "예상매출 비교 대기",
+      note: Number.isFinite(model.estimatedRevenue) ? `${fmtWon(model.estimatedRevenue)} · 실제 결제 매출 아님` : "가격 근거를 추가 수집합니다."
+    },
+    {
+      title: pickupCount > 0 && Number.isFinite(averageLeadTime) ? `추정 리드타임 ${averageLeadTime.toFixed(1)}일` : "예약 리드타임 계산 대기",
+      note: pickupCount > 0 && Number.isFinite(averageLeadTime) ? `동일 숙박일 Pickup ${fmtNumber(pickupCount)}건` : "같은 숙박일을 2회 이상 관측해야 합니다."
+    },
+    {
+      title: "네이버 공개 가격·재고 기반 추정",
+      note: "실제 예약·결제자료 연결 전에는 의사결정 보조값으로 사용합니다."
+    }
+  ];
+  return `
+    <section class="admin-reference-card admin-reference-trends" data-layout-slot="cumulative" aria-labelledby="adminReferenceTrendTitle">
+      <div class="admin-reference-section-title admin-reference-section-title-meta"><b>D</b><h3 id="adminReferenceTrendTitle">누적 변동 지표</h3><small>${escapeHtml(evidenceMeta)}</small></div>
+      <div class="admin-reference-kpi-grid">
+        <article><span>플레이스 순위</span><div><strong>${Number.isFinite(model.latestRank) ? `${fmtNumber(model.latestRank)}위` : "대기"}</strong>${rankTag}</div><small>${Number.isFinite(model.regionalRank) ? `권역 중앙값 ${fmtNumber(model.regionalRank)}위` : "권역 표본 수집 중"}</small></article>
+        <article><span>예상매출</span><div><strong>${Number.isFinite(model.estimatedRevenue) ? escapeHtml(fmtWon(model.estimatedRevenue)) : "대기"}</strong>${revenueTag}</div><small>공개가격 × 판매완료·마감 추정</small></article>
+        <article><span>평균 추정 예약율</span><div><strong>${Number.isFinite(currentRate) ? escapeHtml(fmtRate(currentRate)) : "대기"}</strong>${rateTag}</div><small>공개 총량·잔여재고 기준</small></article>
+        <article><span>추정 리드타임</span><div><strong>${pickupCount > 0 && Number.isFinite(averageLeadTime) ? `${averageLeadTime.toFixed(1)}일` : "계산 대기"}</strong>${leadTimeTag}</div><small>동일 숙박일 반복관측 기준</small></article>
+      </div>
+      <div class="admin-reference-chart-grid">
+        ${adminDbRankHistoryChartHtml(row, model.rankModel || {})}
+        ${adminDbPerformanceChartHtml(row, model.performanceModel || {})}
+      </div>
+      <div class="admin-reference-insight-strip">
+        ${insightRows.map((item) => `<article><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.note)}</small></article>`).join("")}
+      </div>
+      <div class="admin-reference-section-actions"><button type="button" data-admin-db-open-fold="collect">수집 이력·근거 열기 <span aria-hidden="true">›</span></button></div>
+    </section>
+  `;
+}
+
+function adminDbReferenceRecentRowHtml(item = {}) {
+  const pricePrefix = item.representativePrice ? "대표가 " : "";
+  return `
+    <article class="admin-reference-table-row admin-reference-recent-row" role="row">
+      <span role="cell" data-label="숙박일"><strong>${escapeHtml(adminDbReferenceDateLabel(item.date))}</strong></span>
+      <span role="cell" data-label="총량">${Number.isFinite(item.total) ? `${fmtNumber(item.total)}개` : "-"}</span>
+      <span role="cell" data-label="예상판매">${Number.isFinite(item.sold) ? `${fmtNumber(item.sold)}개` : "-"}</span>
+      <span role="cell" data-label="추정 예약율">${Number.isFinite(item.rate) ? escapeHtml(fmtRate(item.rate)) : "-"}</span>
+      <span role="cell" data-label="가격 근거">${escapeHtml(`${pricePrefix}${adminDbReferencePriceText(item.priceMin, item.priceMax)}`)}${item.priceComplete || item.representativePrice ? "" : `<small> · 일부 미확인</small>`}</span>
+      <span role="cell" data-label="예상매출">${Number.isFinite(item.estimatedRevenue) ? escapeHtml(fmtWon(item.estimatedRevenue)) : "-"}</span>
+    </article>
+  `;
+}
+
+function adminDbReferenceRecentSection(model = {}) {
+  const dailyRows = adminDbReferenceDailyRows(model);
+  const representativePrice = model.observationBasis?.daily?.source === "history_observations"
+    && dailyRows.some((item) => (Number.isFinite(item.priceMin) && item.priceMin > 0) || (Number.isFinite(item.priceMax) && item.priceMax > 0));
+  dailyRows.forEach((item) => { item.representativePrice = representativePrice; });
+  const displayRows = [...dailyRows.slice(-5), ...dailyRows.slice(0, -5)];
+  const priceCompleteCount = dailyRows.filter((item) => item.priceComplete).length;
+  const period = model.dateStart
+    ? `${adminDbReferenceDateLabel(model.dateStart)}~${adminDbReferenceDateLabel(model.dateEnd || model.dateStart)}`
+    : "관측 대기";
+  const missingPriceCount = representativePrice ? dailyRows.length : Math.max(0, dailyRows.length - priceCompleteCount);
+  return `
+    <section class="admin-reference-card admin-reference-recent" data-layout-slot="recent" aria-labelledby="adminReferenceRecentTitle">
+      <div class="admin-reference-recent-head">
+        <div class="admin-reference-section-title"><b>C</b><h3 id="adminReferenceRecentTitle">최근 판매 관측</h3><small>목록은 최근 5개까지 먼저 표시합니다.</small></div>
+        <div class="admin-reference-recent-summary">
+          <span>관측기간 <strong>${escapeHtml(period)}</strong></span>
+          <span>예상매출 <strong>${Number.isFinite(model.estimatedRevenue) ? escapeHtml(fmtWon(model.estimatedRevenue)) : "대기"}</strong></span>
+          <span>평균 추정 예약율 <strong>${Number.isFinite(model.rate) ? escapeHtml(fmtRate(model.rate)) : "대기"}</strong></span>
+          <span>가격 근거 <strong>${representativePrice ? "대표가 1회" : (dailyRows.length ? `${Math.round((priceCompleteCount / dailyRows.length) * 100)}%` : "대기")}</strong></span>
+          ${representativePrice ? `<mark data-ui-status="warning">날짜별 가격 미확인</mark>` : (missingPriceCount ? `<mark data-ui-status="warning">가격 미확인 ${fmtNumber(missingPriceCount)}건</mark>` : "")}
+        </div>
+      </div>
+      <div class="admin-reference-table admin-reference-recent-table" role="table" aria-label="숙박일별 공개재고 관측">
+        <div class="admin-reference-table-head" role="row"><span role="columnheader">숙박일</span><span role="columnheader">총량</span><span role="columnheader">예상판매</span><span role="columnheader">추정 예약율</span><span role="columnheader">${representativePrice ? "대표가격 근거" : "관측가격"}</span><span role="columnheader">예상매출</span></div>
+        ${displayRows.length
+          ? adminDbFoldedItemsHtml(displayRows, adminDbReferenceRecentRowHtml, { noun: "예약일", limit: 5, className: "admin-reference-recent-list" })
+          : `<div class="admin-reference-empty">날짜별 공개재고를 상세정보로 자동수집하면 숙박일별 판매추정과 예상매출이 표시됩니다.</div>`}
+      </div>
+      <p class="admin-reference-footnote">예상판매·추정 예약율·예상매출은 네이버 공개 총량과 잔여재고 및 ${representativePrice ? "회차 대표가격" : "날짜별 관측가격"}으로 계산하며 실제 예약·결제자료가 아닙니다.</p>
+    </section>
+  `;
+}
+
+function adminDbCompanyReferenceDashboardHtml(row = {}, detail = {}) {
+  const model = adminDbCumulativeDashboardModel(row, detail);
+  return `
+    <div class="admin-reference-dashboard" data-layout-contract="company-db-reference-v1">
+      <div class="admin-reference-top-grid" data-layout-slot="basics-channels">
+        ${adminDbReferenceBasicsCard(row, detail, model)}
+        ${adminDbReferenceChannelsCard(row)}
+      </div>
+      ${adminDbReferenceTrendSection(row, detail, model)}
+      ${adminDbReferenceRecentSection(model)}
+    </div>
+  `;
+}
+
+function adminDbInlineCollectionHtml(companyId = "") {
+  const inline = state.adminDbInlineCollect;
+  if (!inline) return "";
+  const busy = ["preparing", "waiting", "running"].includes(inline.status);
+  if (inline.companyId !== companyId) {
+    return busy ? `
+      <div class="admin-company-inline-collect" data-ui-surface="soft" data-ui-status="neutral" role="status" aria-live="polite" aria-busy="true">
+        <i class="admin-company-loading" aria-hidden="true"></i>
+        <div><strong>다른 업체 자동수집 진행 중</strong><small>진행 중인 수집이 끝나면 이 업체의 자동수집을 시작할 수 있습니다.</small></div>
+      </div>
+    ` : "";
+  }
+  const statusMap = {
+    preparing: ["수집 준비 중", "업체와 기간을 확인하고 있습니다.", "warning"],
+    running: ["자동수집 진행 중", inline.message || "네이버 상품·가격·예약 가능 여부를 확인하고 있습니다.", "warning"],
+    complete: ["자동수집 완료", inline.message || "최신 자료를 업체 DB에 반영했습니다.", "positive"],
+    error: ["자동수집 실패", inline.message || "조건을 확인한 뒤 다시 실행하세요.", "danger"]
+  };
+  const [title, message, tone] = statusMap[inline.status] || statusMap.preparing;
+  return `
+    <div class="admin-company-inline-collect" data-ui-surface="soft" data-ui-status="${tone}" role="status" aria-live="polite" ${busy ? `aria-busy="true"` : ""}>
+      ${busy ? `<i class="admin-company-loading" aria-hidden="true"></i>` : `<i class="admin-company-status-dot" aria-hidden="true"></i>`}
+      <div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(message)}</small></div>
+    </div>
+  `;
+}
+
+function adminDbSelectedOverviewCardsHtml(row = {}) {
+  const company = row.company || {};
+  const detail = adminDbDetailPayload(company.companyId || "") || {};
+  const loading = Boolean(state.adminDbCompanyDetailLoading?.[company.companyId || ""]);
+  return `
+    ${loading ? `<div class="admin-company-detail-loading" data-ui-surface="soft" role="status"><i class="admin-company-loading" aria-hidden="true"></i><span>날짜별·누적 상세를 불러오는 중입니다.</span></div>` : ""}
+    ${detail.error ? `<div class="admin-company-detail-error" data-ui-surface="soft" data-ui-status="warning">${escapeHtml(detail.error)} 기존 저장값을 먼저 표시합니다.</div>` : ""}
+    <div class="admin-company-overview admin-company-overview-reference">
+      ${adminDbCompanyReferenceDashboardHtml(row, detail)}
+    </div>
+  `;
+}
+
 function adminDbSelectedDetailTabs(activeFold = "") {
   const tabs = [
     ["correction", "기준값"],
@@ -20218,7 +22044,7 @@ function adminDbSelectedDetailTabs(activeFold = "") {
     ["review", "검수"]
   ];
   return `
-    <div class="admin-db-detail-tabs" aria-label="상세 수정 메뉴">
+    <div class="admin-db-detail-tabs" aria-label="업체 검토 메뉴">
       ${tabs.map(([key, label]) => `
         <button type="button" class="${activeFold === key ? "active" : ""}" data-admin-db-open-fold="${escapeHtml(key)}">${escapeHtml(label)}</button>
       `).join("")}
@@ -20305,7 +22131,7 @@ function adminDbWorkPanel(rows = []) {
               <p>${escapeHtml(adminDbWorkReason(row))}</p>
               <div class="admin-db-work-actions">
                 <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db" data-queue-recrawl-autostart="1">확인 수집</button>
-                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세 수정</a>
+                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">검토</a>
               </div>
               ${companyReviewActionsHtml(company, true, "admin_db")}
             </article>
@@ -20705,7 +22531,7 @@ function adminDbChannelTableRows(row = {}) {
     const soldQuantity = product.soldQuantity ?? "";
     const url = key === "naver"
       ? (externalPlatformUrl(entry.evidenceUrl) || externalPlatformUrl(company.naverPlaceUrl) || externalPlatformUrl(company.naverUrl) || externalPlatformUrl(company.bookingUrl) || platformFallbackSearchUrl("네이버", company))
-      : (entry.url || adminDbChannelFallbackSearchUrl(key, company));
+      : (externalPlatformUrl(entry.url) || adminDbChannelFallbackSearchUrl(key, company));
     const agencyText = key === "naver"
       ? (entry.agencyName || (entry.agencyId ? `네이버 내부 ID ${entry.agencyId} · 해석 안 함` : "네이버 수집 관측"))
       : "";
@@ -20828,7 +22654,7 @@ function adminDbChannelComparisonPanel(row = {}) {
   const savedProductCount = rows.filter((item) => item.hasProduct).length;
   const visibleRows = rows.filter((item) => item.hasProduct || (item.entry.status && item.entry.status !== "unknown"));
   return `
-    <div class="admin-db-channel-compare" data-surface="light">
+    <div class="admin-db-channel-compare" data-ui-surface="card">
       <div class="admin-db-channel-compare-head">
         <div>
           <span>채널 기준 비교</span>
@@ -20839,7 +22665,7 @@ function adminDbChannelComparisonPanel(row = {}) {
       </div>
       <div class="admin-db-channel-compare-grid">
         ${visibleRows.length ? visibleRows.map((item) => `
-          <article class="${escapeHtml(item.tone)}" data-surface="light">
+          <article class="${escapeHtml(item.tone)}" data-ui-surface="control">
             <div class="admin-db-channel-compare-title">
               <strong>${escapeHtml(item.label)}</strong>
               <span>${escapeHtml(adminDbChannelStatusLabel(item.entry.status || "unknown"))}</span>
@@ -20863,7 +22689,7 @@ function adminDbChannelComparisonPanel(row = {}) {
             </dl>
           </article>
         `).join("") : `
-          <article class="neutral admin-db-channel-compare-empty" data-surface="light">
+          <article class="neutral admin-db-channel-compare-empty" data-ui-surface="control">
             <div class="admin-db-channel-compare-title">
               <strong>채널 상품 기준 입력 대기</strong>
               <span>미입력</span>
@@ -20891,7 +22717,7 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
   const soldQuantityValue = String(product.soldQuantity ?? "");
   const productOpen = adminDbChannelProductHasValue(product) ? "open" : "";
   return `
-    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-surface="light" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
+    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-ui-surface="card" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
       <div class="admin-db-channel-row-head">
         <div>
           <strong>${escapeHtml(label)}</strong>
@@ -21007,7 +22833,7 @@ function adminDbNaverChannelObservationHtml(company = {}) {
       ? "네이버 화면에서 보이지 않았다는 뜻이며, 실제 OTA 미연동으로 판단하지 않습니다."
       : "네이버 공식 화면에서 확인한 관측 기록입니다.");
   return `
-    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-surface="light">
+    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-ui-surface="card">
       <div class="admin-db-channel-row-head">
         <div>
           <strong>네이버 1차 수집 관측</strong>
@@ -21026,7 +22852,7 @@ function adminDbChannelExposurePanel(row = {}) {
   const company = row.company || {};
   if (!company.companyId) return "";
   return `
-    <section class="admin-db-channel-panel" data-surface="light">
+    <section class="admin-db-channel-panel" data-ui-surface="card">
       <div class="admin-db-channel-head">
         <div>
           <span>채널별 보정</span>
@@ -21093,7 +22919,7 @@ function adminDbCollectionPanel(rows = []) {
               <div>
                 ${adminDbCollectionChip(collection)}
                 <button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_confirm_collect" data-queue-recrawl-autostart="1">확인 수집</button>
-                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세 수정</a>
+                <a href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">검토</a>
               </div>
             </article>
           `;
@@ -21115,7 +22941,7 @@ function adminDbSelectedDetailPanel(rows = []) {
   if (!row) {
     return `
       <section class="admin-db-selected-panel empty">
-        <strong>상세 수정 대기</strong>
+        <strong>업체 검토 대기</strong>
         <p>필터 조건에 맞는 업체가 없습니다.</p>
       </section>
     `;
@@ -21125,6 +22951,16 @@ function adminDbSelectedDetailPanel(rows = []) {
   const workType = metrics.workType || { label: "확인 필요", tone: "watch" };
   const requiredChannels = adminDbRequiredCheckChannels(row);
   const selectedId = company.companyId || "";
+  const selectedDetail = adminDbDetailPayload(selectedId) || {};
+  const referenceModel = adminDbCumulativeDashboardModel(row, selectedDetail);
+  const regionChip = [row.provinceLabel, row.localityLabel].filter(Boolean).join(" ") || "지역 미분류";
+  const categoryChip = metrics.category?.label || "숙박업";
+  const collectedLabel = referenceModel.collectedAt ? compactDateTime(referenceModel.collectedAt) : "최근 수집 대기";
+  const storedRange = String(referenceModel.keywordProfile?.detailRankRanges || referenceModel.keywordProfile?.searchScopeLabel || "").trim();
+  const rangeLabel = storedRange
+    ? (/위|범위/.test(storedRange) ? storedRange : `${storedRange}위`)
+    : (Number.isFinite(referenceModel.rankRangeEnd) ? `1-${fmtNumber(referenceModel.rankRangeEnd)}위` : "수집범위 대기");
+  const freshnessBasis = [referenceModel.keyword || metrics.keyword || "키워드 대기", rangeLabel].filter(Boolean).join(" · ");
   const correctionBody = adminDbQuickCorrectionPanel(row);
   const channelBody = adminDbChannelExposurePanel(row);
   const rawCollectBody = [
@@ -21138,7 +22974,10 @@ function adminDbSelectedDetailPanel(rows = []) {
     </div>
   `;
   const nextAction = adminDbSelectedNextAction(row, requiredChannels);
-  const needsCollectAction = Boolean(nextAction.runCollect || rawCollectBody || metrics.collection?.needsConfirm || requiredChannels.length);
+  const activeInlineCollect = state.adminDbInlineCollect;
+  const globalInlineBusy = Boolean(activeInlineCollect && ["preparing", "waiting", "running"].includes(activeInlineCollect.status));
+  const collectingThisCompany = globalInlineBusy && activeInlineCollect.companyId === selectedId;
+  const collectButtonLabel = collectingThisCompany ? "자동수집 중" : (globalInlineBusy ? "다른 업체 수집 중" : "자동수집");
   const reviewBody = `
     <div class="admin-db-selected-review">
       <div>
@@ -21150,67 +22989,83 @@ function adminDbSelectedDetailPanel(rows = []) {
   `;
   state.adminDbSelectedCompanyId = selectedId;
   return `
-    <section class="admin-db-selected-panel ${escapeHtml(workType.tone || "watch")}" data-admin-db-selected-company="${escapeHtml(selectedId)}">
-      <div class="admin-db-detail-top">
-        <div>
-          <span>업체 상세</span>
-          <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
-          <small>${escapeHtml([row.provinceLabel, row.localityLabel, metrics.category?.label, metrics.sourceLabel].filter(Boolean).join(" · "))}</small>
+    <section class="admin-db-selected-panel admin-db-selected-panel-cumulative" data-admin-db-selected-company="${escapeHtml(selectedId)}">
+      <div class="admin-company-detail-header admin-company-reference-header">
+        <div class="admin-company-reference-title-block">
+          <nav aria-label="현재 위치"><span>업체 DB</span><i aria-hidden="true">/</i><strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong></nav>
+          <div class="admin-company-reference-title-row">
+            <h2>${escapeHtml(company.primaryName || "업체명 확인")}</h2>
+            <span class="admin-company-reference-chip">${escapeHtml(regionChip)}</span>
+            <span class="admin-company-reference-chip">${escapeHtml(categoryChip)}</span>
+          </div>
         </div>
-        <div class="admin-db-detail-top-actions">
-          <a href="/b2b?userView=admin" target="_blank" rel="noreferrer">사업자 화면</a>
-          ${needsCollectAction ? `<button type="button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1">상세 수집</button>` : ""}
-          <button type="button" data-admin-db-open-fold="review">검수 저장</button>
+        <div class="admin-company-detail-actions">
+          <button type="button" class="secondary-button" data-admin-db-open-fold="review">검토</button>
+          <button type="button" class="primary-button" data-queue-recrawl-company="${escapeHtml(selectedId)}" data-queue-recrawl-source="admin_db_detail" data-queue-recrawl-autostart="1" ${globalInlineBusy ? `disabled${collectingThisCompany ? ` aria-busy="true"` : ""}` : ""}>${escapeHtml(collectButtonLabel)}</button>
         </div>
       </div>
-      ${adminDbSelectedStatusPanel(row, nextAction, requiredChannels)}
-      ${adminDbSelectedKpiCardsHtml(row)}
-      ${adminDbChannelExposureTable(row)}
-      <section class="admin-db-selected-workbench" aria-label="수정과 처리">
-        ${adminDbSelectedDetailTabs(nextAction.foldKey)}
-        ${adminDbReviewFlashHtml(selectedId)}
-        <div class="admin-db-selected-workbench-stack">
-          ${adminDbSelectedFoldBlock({
-            label: "기준값",
-            title: "객실 총량·상품·가격 기준 수정",
-            note: nextAction.foldKey === "correction" ? "먼저 처리" : "접어서 보관",
-            body: correctionBody,
-            open: nextAction.foldKey === "correction",
-            tone: "edit",
-            foldKey: "correction"
-          })}
-          ${adminDbSelectedFoldBlock({
-            label: "채널",
-            title: "OTA 노출·URL·총량·판매갯수 보정",
-            note: nextAction.foldKey === "channel" ? "먼저 처리" : "접어서 보관",
-            body: channelBody,
-            open: nextAction.foldKey === "channel",
-            tone: "channel",
-            foldKey: "channel"
-          })}
-          ${adminDbSelectedFoldBlock({
-            label: "수집",
-            title: "요일별 매출·예약율·수량 근거 보강",
-            note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
-            body: collectBody,
-            open: nextAction.foldKey === "collect",
-            tone: "collect",
-            foldKey: "collect"
-          })}
-          ${adminDbSelectedFoldBlock({
-            label: "검수",
-            title: "완료·보류·보정 필요 상태 저장",
-            note: nextAction.foldKey === "review" ? "먼저 처리" : "최종 상태 저장",
-            body: reviewBody,
-            open: nextAction.foldKey === "review",
-            tone: "review",
-            foldKey: "review"
-          })}
-        </div>
-        <div class="admin-db-detail-bottom-actions">
-          <button type="button" data-admin-db-view-link="list">목록으로</button>
-        </div>
-      </section>
+      <div class="admin-company-reference-freshness" role="status" aria-label="최근 수집 기준">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5v5l3 2"></path></svg>
+        <span>최근 수집</span>
+        <strong>${escapeHtml(collectedLabel)}</strong>
+        <i aria-hidden="true">·</i>
+        <span>${escapeHtml(freshnessBasis)}</span>
+        <button type="button" data-admin-db-open-fold="collect">수집 근거</button>
+      </div>
+      ${adminDbInlineCollectionHtml(selectedId)}
+      ${adminDbSelectedOverviewCardsHtml(row)}
+      <details class="admin-company-maintenance" data-ui-surface="card">
+        <summary>
+          <div><strong>검토·수정 도구</strong><small>기준값, 채널, 수집 근거, 검수 상태가 필요할 때만 엽니다.</small></div>
+          <span>도구 열기</span>
+        </summary>
+        <section class="admin-db-selected-workbench" aria-label="검토와 수정">
+          ${adminDbSelectedDetailTabs(nextAction.foldKey)}
+          ${adminDbReviewFlashHtml(selectedId)}
+          <div class="admin-db-selected-workbench-stack">
+            ${adminDbSelectedFoldBlock({
+              label: "기준값",
+              title: "객실 총량·상품·가격 기준 수정",
+              note: nextAction.foldKey === "correction" ? "먼저 처리" : "접어서 보관",
+              body: correctionBody,
+              open: nextAction.foldKey === "correction",
+              tone: "edit",
+              foldKey: "correction"
+            })}
+            ${adminDbSelectedFoldBlock({
+              label: "채널",
+              title: "OTA 노출·URL·총량·판매갯수 보정",
+              note: nextAction.foldKey === "channel" ? "먼저 처리" : "접어서 보관",
+              body: channelBody,
+              open: nextAction.foldKey === "channel",
+              tone: "channel",
+              foldKey: "channel"
+            })}
+            ${adminDbSelectedFoldBlock({
+              label: "수집",
+              title: "요일별 예상매출·추정 예약율·수량 근거",
+              note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
+              body: collectBody,
+              open: nextAction.foldKey === "collect",
+              tone: "collect",
+              foldKey: "collect"
+            })}
+            ${adminDbSelectedFoldBlock({
+              label: "검수",
+              title: "완료·보류·보정 필요 상태 저장",
+              note: nextAction.foldKey === "review" ? "먼저 처리" : "최종 상태 저장",
+              body: reviewBody,
+              open: nextAction.foldKey === "review",
+              tone: "review",
+              foldKey: "review"
+            })}
+          </div>
+          <div class="admin-db-detail-bottom-actions">
+            <button type="button" data-admin-db-view-link="list">목록으로</button>
+            <a href="/b2b?userView=admin" target="_blank" rel="noreferrer">사업자 화면</a>
+          </div>
+        </section>
+      </details>
     </section>
   `;
 }
@@ -21219,33 +23074,22 @@ function adminDbCompanyRow(row = {}, options = {}) {
   const company = row.company || {};
   const metrics = row.metrics || {};
   const workType = metrics.workType || { label: "검수 대기", tone: "watch" };
-  const rateText = Number.isFinite(metrics.rate) ? fmtRate(metrics.rate) : "예약율 확인";
-  const rankText = metrics.rank ? `${fmtNumber(metrics.rank)}위` : "순위 대기";
   const selected = state.adminDbSelectedCompanyId && state.adminDbSelectedCompanyId === company.companyId;
-  const reason = adminDbWorkReason(row);
   const listIndex = Number(options.index || 0);
   return `
-    <article class="admin-db-company ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-surface="dark" data-admin-db-company-card-select="${escapeHtml(company.companyId || "")}">
+    <article class="admin-db-company admin-db-company-simple ${escapeHtml(workType.tone || "neutral")} ${selected ? "selected" : ""}" data-ui-surface="card" data-admin-db-company-card-select="${escapeHtml(company.companyId || "")}">
       <div class="admin-db-company-main">
         <div class="admin-db-company-title-row">
           ${listIndex ? `<span class="admin-db-company-index">${fmtNumber(listIndex)}</span>` : ""}
           <strong title="${escapeHtml(company.primaryName || "업체명 확인")}">${escapeHtml(company.primaryName || "업체명 확인")}</strong>
         </div>
         <small>${escapeHtml(row.provinceLabel || "미분류")} · ${escapeHtml(row.localityLabel || "지역 미확인")} · ${escapeHtml(metrics.category?.label || "숙박업")}</small>
-        <p class="admin-db-company-reason">${escapeHtml(reason)}</p>
-      </div>
-      <div class="admin-db-company-values" data-surface="dark">
-        <span><small>노출</small><b>${escapeHtml(rankText)}</b></span>
-        <span><small>7일 매출</small><b>${escapeHtml(fmtWon(metrics.revenue || 0))}</b></span>
-        <span><small>예약율</small><b>${escapeHtml(rateText)}</b></span>
-        <span><small>자동 수집 신뢰도</small><b>${escapeHtml(metrics.confidenceGrade || "대기")}</b></span>
       </div>
       <div class="admin-db-company-tags">
         ${adminDbCompanyCompactTags(row)}
       </div>
       <div class="admin-db-company-action">
-        <a class="primary" href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">상세·수정</a>
-        ${metrics.collection?.needsConfirm ? `<button type="button" data-queue-recrawl-company="${escapeHtml(company.companyId || "")}" data-queue-recrawl-source="admin_db" data-queue-recrawl-autostart="1">확인 수집</button>` : ""}
+        <a class="primary" href="${escapeHtml(adminDbCompanyDetailUrl(company.companyId || ""))}" data-admin-db-company-select="${escapeHtml(company.companyId || "")}" data-admin-db-view="review" data-admin-db-company-id="${escapeHtml(company.companyId || "")}">검토</a>
       </div>
     </article>
   `;
@@ -29691,6 +31535,37 @@ async function loadCompanyMasterSummary() {
   }
 }
 
+async function loadAdminDbCompanyDetail(companyId = "", options = {}) {
+  const selectedCompanyId = String(companyId || "").trim();
+  if (!isAdminRole() || !selectedCompanyId) return null;
+  state.adminDbCompanyDetails = state.adminDbCompanyDetails || {};
+  state.adminDbCompanyDetailLoading = state.adminDbCompanyDetailLoading || {};
+  if (!options.force && state.adminDbCompanyDetails[selectedCompanyId]) {
+    return state.adminDbCompanyDetails[selectedCompanyId];
+  }
+  if (state.adminDbCompanyDetailLoading[selectedCompanyId]) return null;
+  state.adminDbCompanyDetailLoading[selectedCompanyId] = true;
+  if (state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
+  try {
+    const detail = await fetchJson(`/api/company-master/detail?companyId=${encodeURIComponent(selectedCompanyId)}`);
+    state.adminDbCompanyDetails[selectedCompanyId] = detail;
+    const companyIndex = (state.companyMaster?.companies || []).findIndex((company) => company.companyId === selectedCompanyId);
+    if (companyIndex >= 0 && detail?.company) {
+      state.companyMaster.companies[companyIndex] = {
+        ...state.companyMaster.companies[companyIndex],
+        ...detail.company
+      };
+    }
+    return detail;
+  } catch (error) {
+    state.adminDbCompanyDetails[selectedCompanyId] = { error: error.message || "상세 데이터를 불러오지 못했습니다." };
+    return null;
+  } finally {
+    delete state.adminDbCompanyDetailLoading[selectedCompanyId];
+    if (state.adminDbSelectedCompanyId === selectedCompanyId) renderAdminDatabaseDashboard();
+  }
+}
+
 async function resolveCompanyDuplicate(button) {
   const action = button?.dataset?.companyDuplicateAction;
   const candidateKey = button?.dataset?.candidateKey || "";
@@ -30630,6 +32505,16 @@ function applyCollectionQualitySetting(button) {
 
 function applyQueueRecrawlSetting(button) {
   const companyId = button?.dataset?.queueRecrawlCompany || "";
+  const source = button?.dataset?.queueRecrawlSource || "decision_queue";
+  const inlineDetail = source === "admin_db_detail";
+  const activeInlineBusy = ["preparing", "waiting", "running"].includes(state.adminDbInlineCollect?.status);
+  const crawlSubmitBusy = Boolean(els.crawlForm?.querySelector('button[type="submit"]')?.disabled);
+  if (inlineDetail && (activeInlineBusy || crawlSubmitBusy)) {
+    setStatus(activeInlineBusy ? "다른 업체 자동수집 진행 중" : "수집 진행 중");
+    if (els.crawlStatus) els.crawlStatus.textContent = "진행 중인 수집이 끝난 뒤 이 업체의 자동수집을 시작할 수 있습니다.";
+    if (isAdminRole()) renderAdminConsoleDashboard();
+    return;
+  }
   const company = (companyMasterSource().companies || []).find((row) => row.companyId === companyId);
   if (!company) {
     setStatus("재수집 설정 실패");
@@ -30653,8 +32538,16 @@ function applyQueueRecrawlSetting(button) {
     checkIn: plan.checkIn || "",
     checkOut: plan.checkOut || "",
     etaSeconds: eta.estimatedTotalSeconds || 0,
-    source: button?.dataset?.queueRecrawlSource || "decision_queue"
+    source
   };
+  if (inlineDetail) {
+    state.adminDbInlineCollect = {
+      companyId: company.companyId || "",
+      status: "preparing",
+      startedAt: Date.now(),
+      message: "업체와 수집 범위를 확인하고 있습니다."
+    };
+  }
   state.adminDbOpsOpen = true;
   setAdminDbDetailFlash(company.companyId || "", {
     status: "confirm_collect_ready",
@@ -30679,12 +32572,15 @@ function applyQueueRecrawlSetting(button) {
   if (els.collectionModeInput) els.collectionModeInput.value = "precision";
   setDetailRankRange(plan.range || "1-20", plan.collectionPurpose || "revenue_detail");
   syncCollectionModeInputs();
-  focusAdminCrawlProgress();
+  if (!inlineDetail) focusAdminCrawlProgress();
   renderCrawlReadinessPreview(currentCrawlFormPayload(), eta);
   if (els.crawlStatus) {
-    els.crawlStatus.textContent = `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
+    els.crawlStatus.textContent = inlineDetail
+      ? `${company.primaryName || "업체"} 자동수집을 준비했습니다. 현재 화면에서 바로 실행합니다.`
+      : `${company.primaryName || "업체"} 재수집 설정을 적용했습니다. 상세 ${plan.range || "1-20"}위 · 예상 ${crawlEtaShortText(eta)} · ${crawlEtaSourceText(eta)}. 조건을 확인한 뒤 수집 실행을 누르세요.`;
   }
-  setStatus("재수집 설정 적용");
+  if (inlineDetail && isAdminRole()) renderAdminConsoleDashboard();
+  setStatus(inlineDetail ? "자동수집 준비" : "재수집 설정 적용");
   startQueueRecrawlIfRequested(button);
 }
 
@@ -31154,8 +33050,18 @@ async function submitCrawl(event) {
     payload.recrawlContext = state.pendingRecrawlContext;
   }
   payload.searchMode = correctedSearchMode(keyword, requestedMode, { recrawlContext: payload.recrawlContext });
+  const inlineDetailContext = payload.recrawlContext?.source === "admin_db_detail" ? payload.recrawlContext : null;
   if (submitButton?.disabled) return;
   if (submitButton) submitButton.disabled = true;
+  if (inlineDetailContext?.companyIds?.length === 1) {
+    state.adminDbInlineCollect = {
+      companyId: inlineDetailContext.companyIds[0],
+      status: "running",
+      startedAt: Date.now(),
+      message: "네이버 상품·가격·예약 가능 여부를 확인하고 있습니다."
+    };
+    if (isAdminRole()) renderAdminConsoleDashboard();
+  }
   clearCrawlEstimateTimer();
   state.crawlEstimateRequestId += 1;
   const purpose = collectionPurposeProfile(payload.collectionPurpose);
@@ -31206,12 +33112,39 @@ async function submitCrawl(event) {
           "결과 갱신"
         ]
       });
+      if (completedRecrawlContext.source === "admin_db_detail") {
+        state.adminDbInlineCollect = {
+          companyId: completedRecrawlContext.companyIds[0],
+          status: "complete",
+          startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
+          message: "최신 상품·가격·예약 관측을 업체 DB에 반영했습니다."
+        };
+        await loadAdminDbCompanyDetail(completedRecrawlContext.companyIds[0], { force: true });
+      }
       if (isAdminRole()) renderAdminConsoleDashboard();
     }
     if (payload.recrawlContext) state.pendingRecrawlContext = null;
-    setActiveTab("rank");
+    if (completedRecrawlContext?.source === "admin_db_detail") {
+      state.adminDbViewMode = "review";
+      state.adminDbSelectedCompanyId = completedRecrawlContext.companyIds?.[0] || state.adminDbSelectedCompanyId;
+      setActiveTab("admin");
+      setAdminPanelSection("database");
+      renderAdminConsoleDashboard();
+    } else {
+      setActiveTab("rank");
+    }
   } catch (error) {
     if (error.status === 409) {
+      if (inlineDetailContext?.companyIds?.length === 1) {
+        state.adminDbInlineCollect = {
+          companyId: inlineDetailContext.companyIds[0],
+          status: "error",
+          startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
+          message: "다른 수집이 먼저 진행 중입니다. 완료된 뒤 다시 눌러주세요."
+        };
+        state.pendingRecrawlContext = null;
+        if (isAdminRole()) renderAdminConsoleDashboard();
+      }
       setCrawlProgress(true, "수집 대기 중", "이미 진행 중인 수집이 끝나면 결과를 자동으로 불러옵니다.", { stages: crawlStageFallbacks() });
       els.crawlStatus.textContent = `${error.message} 결과가 생기면 자동으로 갱신합니다.`;
       setStatus("수집 중");
@@ -31233,6 +33166,14 @@ async function submitCrawl(event) {
             "결과 미반영"
           ]
         });
+        if (failedRecrawlContext.source === "admin_db_detail") {
+          state.adminDbInlineCollect = {
+            companyId: failedRecrawlContext.companyIds[0],
+            status: "error",
+            startedAt: state.adminDbInlineCollect?.startedAt || Date.now(),
+            message: error.message || "자동수집 중 문제가 발생했습니다."
+          };
+        }
         if (isAdminRole()) renderAdminConsoleDashboard();
       }
       els.crawlStatus.textContent = `수집 실패: ${error.message}`;
@@ -31262,6 +33203,7 @@ function openAdminDbCompanyReview(companyId = "") {
   state.adminDbViewMode = "review";
   state.adminDbOpsOpen = true;
   renderAdminConsoleDashboard();
+  loadAdminDbCompanyDetail(selectedCompanyId).catch(() => {});
   window.requestAnimationFrame(() => {
     document.querySelector(".admin-db-selected-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
@@ -31355,6 +33297,12 @@ function bindAdminDbCompanySelectButtons() {
 }
 
 function bindEvents() {
+  document.addEventListener("error", (event) => {
+    const image = event.target?.closest?.("img[data-channel-brand-icon]");
+    if (!image) return;
+    image.hidden = true;
+    image.closest(".admin-reference-channel-icon")?.classList.add("is-fallback");
+  }, true);
   window.addEventListener("hashchange", () => {
     handleAdminDbCompanyHash();
   });
@@ -32000,6 +33948,8 @@ function bindEvents() {
       const folds = Array.from(document.querySelectorAll(".admin-db-selected-fold[data-admin-db-fold]"));
       const target = folds.find((fold) => fold.dataset.adminDbFold === key);
       if (target) {
+        const maintenance = target.closest(".admin-company-maintenance");
+        if (maintenance) maintenance.open = true;
         folds.forEach((fold) => {
           fold.open = fold === target;
         });

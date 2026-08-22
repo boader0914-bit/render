@@ -1623,6 +1623,8 @@ const MIME_TYPES = {
   ".csv": "text/csv; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
   ".png": "image/png",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
   ".svg": "image/svg+xml",
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 };
@@ -9088,6 +9090,432 @@ function companyRevenueSnapshotFromItem(item = {}) {
   };
 }
 
+const COMPANY_PRODUCT_SNAPSHOT_SOURCE_LIMIT = 5200;
+const COMPANY_PRODUCT_SNAPSHOT_PRODUCT_LIMIT = 100;
+const COMPANY_PRODUCT_SNAPSHOT_PRICE_DATE_LIMIT = 31;
+const COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT = 64;
+
+function productSnapshotNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const normalized = String(value).replace(/,/g, "").replace(/[^\d.-]/g, "");
+  if (!normalized || normalized === "-" || normalized === ".") return null;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
+function productSnapshotType(row = {}) {
+  const explicit = [row.saleType, row.bizItemSubType, row.productType]
+    .filter(Boolean)
+    .join(" ");
+  if (/숙박|lodging|overnight|night/i.test(explicit)) return "lodging";
+  if (/데이유즈|당일|대실|campnic|camp_nic|dayuse|day_use/i.test(explicit)) return "dayuse";
+  const name = String(row.name || row.productName || row.itemName || row.roomName || "");
+  return /데이유즈|당일|대실|캠프닉|campnic|camp_nic|dayuse|day_use/i.test(name) ? "dayuse" : "lodging";
+}
+
+function productSnapshotDate(value = "", fallbackDate = "") {
+  const text = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(fallbackDate || "")) ? fallbackDate : "";
+}
+
+function productSnapshotObservation(row = {}, fallbackDate = "", index = 0) {
+  if (!row || typeof row !== "object") return null;
+  const name = String(row.name || row.productName || row.itemName || row.roomName || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  const bizItemId = String(row.bizItemId || row.productId || "").trim().slice(0, 100);
+  const rawKey = String(row.key || "").trim().slice(0, 180);
+  if (!name && !bizItemId && !rawKey) return null;
+  const productType = productSnapshotType(row);
+  const date = productSnapshotDate(row.date || row.stayDate, fallbackDate);
+  const totalValue = productSnapshotNumber(row.total ?? row.stock ?? row.totalQuantity);
+  const availableValue = productSnapshotNumber(row.available ?? row.availableQuantity);
+  const bookingCount = Math.max(0, productSnapshotNumber(row.bookingCount) || 0)
+    + Math.max(0, productSnapshotNumber(row.occupiedBookingCount) || 0);
+  const total = totalValue !== null && totalValue >= 0 ? Math.round(totalValue) : null;
+  const available = total !== null && availableValue !== null
+    ? Math.max(0, Math.min(total, Math.round(availableValue)))
+    : (availableValue !== null && availableValue >= 0 ? Math.round(availableValue) : null);
+  const explicitSold = productSnapshotNumber(row.soldOut ?? row.sold ?? row.soldQuantity);
+  const sold = explicitSold !== null
+    ? Math.max(0, total !== null ? Math.min(total, Math.round(explicitSold)) : Math.round(explicitSold))
+    : (total !== null && available !== null ? Math.max(0, total - available) : Math.round(bookingCount));
+  const priceValue = productSnapshotNumber(row.price);
+  const price = priceValue !== null && priceValue > 0 ? Math.round(priceValue) : null;
+  const identity = bizItemId
+    ? `id:${bizItemId}`
+    : (rawKey || `name:${normalizeCompanyIdentityName(name) || index}`);
+  return {
+    date,
+    key: identity,
+    bizItemId,
+    name: name || "상품명 확인",
+    productType,
+    saleType: String(row.saleType || "").trim().slice(0, 80),
+    bizItemSubType: String(row.bizItemSubType || "").trim().slice(0, 80),
+    listType: String(row.listType || "").trim().slice(0, 100),
+    availabilityUnit: String(row.availabilityUnit || "").trim().slice(0, 60),
+    total,
+    available,
+    sold,
+    price,
+    open: row.open === false ? false : true
+  };
+}
+
+function productSnapshotObservationScore(row = {}) {
+  return [row.date, row.bizItemId, row.name, row.total, row.available, row.sold, row.price]
+    .filter((value) => value !== null && value !== undefined && value !== "").length;
+}
+
+function compactProductSnapshotObservations(item = {}, run = {}) {
+  const fallbackDate = String(run.checkIn || runDateFromId(run.id) || "").slice(0, 10);
+  const sourceRows = [
+    ...(Array.isArray(item.weeklyProductDetails) ? item.weeklyProductDetails : []),
+    ...(Array.isArray(item.itemDetails) ? item.itemDetails : [])
+  ].slice(0, COMPANY_PRODUCT_SNAPSHOT_SOURCE_LIMIT);
+  const byKey = new Map();
+  sourceRows.forEach((row, index) => {
+    const observation = productSnapshotObservation(row, fallbackDate, index);
+    if (!observation) return;
+    const key = [observation.productType, observation.date || fallbackDate || "basis", observation.key].join("|");
+    const current = byKey.get(key);
+    if (!current || productSnapshotObservationScore(observation) > productSnapshotObservationScore(current)) {
+      byKey.set(key, observation);
+    }
+  });
+  return [...byKey.values()].sort((a, b) =>
+    String(a.date || "").localeCompare(String(b.date || ""))
+    || String(a.productType || "").localeCompare(String(b.productType || ""))
+    || String(a.name || "").localeCompare(String(b.name || ""), "ko")
+  );
+}
+
+function representativeProductSnapshotPrice(values = []) {
+  const prices = values
+    .map(productSnapshotNumber)
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .map((value) => Math.round(value))
+    .sort((a, b) => a - b);
+  if (!prices.length) return null;
+  const frequency = new Map();
+  prices.forEach((price) => frequency.set(price, (frequency.get(price) || 0) + 1));
+  const median = prices[Math.floor(prices.length / 2)];
+  return [...frequency.entries()]
+    .sort((a, b) => b[1] - a[1] || Math.abs(a[0] - median) - Math.abs(b[0] - median))[0][0];
+}
+
+function productSnapshotDayPriceKey(dateText = "") {
+  const day = dayOfWeekFromDate(dateText);
+  if (day === 5) return "friday";
+  if (day === 6) return "saturday";
+  if (day === 0) return "sunday";
+  return day !== null ? "weekday" : "unknown";
+}
+
+function compactProductSnapshotProducts(observations = []) {
+  const byProduct = new Map();
+  for (const row of observations) {
+    const key = `${row.productType}:${row.key}`;
+    const current = byProduct.get(key) || {
+      key,
+      bizItemId: row.bizItemId || "",
+      name: row.name || "상품명 확인",
+      productType: row.productType || "lodging",
+      saleType: row.saleType || "",
+      bizItemSubType: row.bizItemSubType || "",
+      listType: row.listType || "",
+      availabilityUnit: row.availabilityUnit || "",
+      observations: []
+    };
+    current.observations.push(row);
+    byProduct.set(key, current);
+  }
+
+  const products = [...byProduct.values()].map((product) => {
+    const dated = product.observations
+      .filter((row) => row.date)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const latest = dated.at(-1) || product.observations.at(-1) || {};
+    const prices = product.observations.map((row) => row.price).filter((value) => Number.isFinite(value) && value > 0);
+    const pricesByDay = { weekday: [], friday: [], saturday: [], sunday: [], unknown: [] };
+    dated.forEach((row) => {
+      if (Number.isFinite(row.price) && row.price > 0) pricesByDay[productSnapshotDayPriceKey(row.date)].push(row.price);
+    });
+    const priceByDate = dated
+      .slice(-COMPANY_PRODUCT_SNAPSHOT_PRICE_DATE_LIMIT)
+      .map((row) => ({ date: row.date, price: row.price }));
+    const totalValues = product.observations.map((row) => row.total).filter(Number.isFinite);
+    return {
+      key: product.key,
+      bizItemId: product.bizItemId,
+      name: product.name,
+      productType: product.productType,
+      saleType: product.saleType,
+      bizItemSubType: product.bizItemSubType,
+      listType: product.listType,
+      availabilityUnit: product.availabilityUnit,
+      observedDateCount: new Set(dated.map((row) => row.date)).size,
+      total: totalValues.length ? Math.max(...totalValues) : null,
+      latestTotal: latest.total ?? null,
+      latestAvailable: latest.available ?? null,
+      latestSold: latest.sold ?? null,
+      minPrice: prices.length ? Math.min(...prices) : null,
+      maxPrice: prices.length ? Math.max(...prices) : null,
+      prices: {
+        weekday: representativeProductSnapshotPrice(pricesByDay.weekday),
+        friday: representativeProductSnapshotPrice(pricesByDay.friday),
+        saturday: representativeProductSnapshotPrice(pricesByDay.saturday),
+        sunday: representativeProductSnapshotPrice(pricesByDay.sunday)
+      },
+      priceByDate
+    };
+  }).sort((a, b) => String(a.productType).localeCompare(String(b.productType)) || String(a.name).localeCompare(String(b.name), "ko"));
+  const observedProductCount = products.length;
+  products.splice(COMPANY_PRODUCT_SNAPSHOT_PRODUCT_LIMIT);
+
+  const priceGroups = new Map();
+  for (const product of products) {
+    const datedPrices = product.priceByDate || [];
+    if (!datedPrices.some((row) => Number.isFinite(row.price) && row.price > 0)) {
+      product.priceGroupId = "";
+      continue;
+    }
+    const signature = datedPrices.map((row) => `${row.date}:${Number.isFinite(row.price) && row.price > 0 ? row.price : "missing"}`).join("|");
+    const priceGroupId = `price_${stableHash(signature)}`;
+    product.priceGroupId = priceGroupId;
+    const group = priceGroups.get(priceGroupId) || {
+      priceGroupId,
+      productKeys: [],
+      productNames: [],
+      productCount: 0,
+      minPrice: product.minPrice,
+      maxPrice: product.maxPrice,
+      prices: product.prices,
+      priceByDate: product.priceByDate
+    };
+    group.productKeys.push(product.key);
+    group.productNames.push(product.name);
+    group.productCount += 1;
+    priceGroups.set(priceGroupId, group);
+  }
+
+  return {
+    products,
+    priceGroups: [...priceGroups.values()],
+    observedProductCount,
+    productTruncated: observedProductCount > products.length,
+    unconfirmedProductCount: products.filter((product) => !product.priceGroupId).length
+  };
+}
+
+function parseProductSnapshotRevenueDetail(detail = "", checkIn = "", productType = "lodging") {
+  const rows = [];
+  const matches = String(detail || "").matchAll(/(\d{1,2}\/\d{1,2})\s+([\d,]+)\s*원\(([^)]*)\)/g);
+  for (const match of matches) {
+    const date = dateFromMonthDay(match[1], checkIn);
+    if (!date) continue;
+    const body = match[3] || "";
+    const pricedMatch = body.match(/([\d,]+)\s*(?:개|회)/);
+    const offlineMatch = body.match(/오프라인\s+([\d,]+)/);
+    const missingMatch = body.match(/가격누락\s+([\d,]+)/);
+    rows.push({
+      date,
+      productType,
+      estimatedRevenue: Number(String(match[2] || "0").replace(/,/g, "")) || 0,
+      pricedSoldOut: pricedMatch ? Number(pricedMatch[1].replace(/,/g, "")) || 0 : null,
+      offlineReserved: offlineMatch ? Number(offlineMatch[1].replace(/,/g, "")) || 0 : 0,
+      missingPriceSoldOut: missingMatch ? Number(missingMatch[1].replace(/,/g, "")) || 0 : 0
+    });
+  }
+  return rows;
+}
+
+function compactProductSnapshotDaily(item = {}, run = {}, observations = []) {
+  const checkIn = String(run.checkIn || runDateFromId(run.id) || "").slice(0, 10);
+  const byDate = new Map();
+  for (const row of observations) {
+    if (!row.date) continue;
+    const key = `${row.productType}:${row.date}`;
+    const bucket = byDate.get(key) || {
+      date: row.date,
+      productType: row.productType,
+      productKeys: new Set(),
+      total: 0,
+      totalObserved: false,
+      available: 0,
+      availableObserved: false,
+      sold: 0,
+      soldObserved: false,
+      pricedSoldOut: 0,
+      missingPriceSoldOut: 0,
+      estimatedRevenue: 0,
+      estimatedRevenueObserved: false,
+      prices: []
+    };
+    bucket.productKeys.add(row.key);
+    if (Number.isFinite(row.total)) {
+      bucket.total += row.total;
+      bucket.totalObserved = true;
+    }
+    if (Number.isFinite(row.available)) {
+      bucket.available += row.available;
+      bucket.availableObserved = true;
+    }
+    if (Number.isFinite(row.sold)) {
+      bucket.sold += row.sold;
+      bucket.soldObserved = true;
+      if (Number.isFinite(row.price) && row.price > 0) {
+        bucket.pricedSoldOut += row.sold;
+        bucket.estimatedRevenue += row.sold * row.price;
+        bucket.estimatedRevenueObserved = true;
+      } else {
+        bucket.missingPriceSoldOut += row.sold;
+      }
+    }
+    if (Number.isFinite(row.price) && row.price > 0) bucket.prices.push(row.price);
+    byDate.set(key, bucket);
+  }
+
+  for (const productType of ["lodging", "dayuse"]) {
+    for (const row of historySeriesForItem(item, productType, checkIn)) {
+      if (!row.stayDate) continue;
+      const key = `${productType}:${row.stayDate}`;
+      const bucket = byDate.get(key) || {
+        date: row.stayDate,
+        productType,
+        productKeys: new Set(),
+        total: 0,
+        totalObserved: false,
+        available: 0,
+        availableObserved: false,
+        sold: 0,
+        soldObserved: false,
+        pricedSoldOut: 0,
+        missingPriceSoldOut: 0,
+        estimatedRevenue: 0,
+        estimatedRevenueObserved: false,
+        prices: []
+      };
+      const total = productSnapshotNumber(row.total);
+      const available = productSnapshotNumber(row.available);
+      if (total !== null && total > 0 && available !== null) {
+        bucket.total = Math.round(total);
+        bucket.totalObserved = true;
+        bucket.available = Math.max(0, Math.min(bucket.total, Math.round(available)));
+        bucket.availableObserved = true;
+        bucket.sold = Math.max(0, bucket.total - bucket.available);
+        bucket.soldObserved = true;
+      }
+      bucket.offlineReserved = Math.max(0, Math.round(productSnapshotNumber(row.offlineReserved) || 0));
+      byDate.set(key, bucket);
+    }
+  }
+
+  const revenueRows = [
+    ...parseProductSnapshotRevenueDetail(item.weeklyRevenueDetail, checkIn, "lodging"),
+    ...parseProductSnapshotRevenueDetail(item.dayUseWeeklyRevenueDetail, checkIn, "dayuse")
+  ];
+  for (const row of revenueRows) {
+    const key = `${row.productType}:${row.date}`;
+    const bucket = byDate.get(key) || {
+      date: row.date,
+      productType: row.productType,
+      productKeys: new Set(),
+      total: 0,
+      totalObserved: false,
+      available: 0,
+      availableObserved: false,
+      sold: 0,
+      soldObserved: false,
+      pricedSoldOut: 0,
+      missingPriceSoldOut: 0,
+      estimatedRevenue: 0,
+      estimatedRevenueObserved: false,
+      prices: []
+    };
+    bucket.estimatedRevenue = row.estimatedRevenue;
+    bucket.estimatedRevenueObserved = true;
+    if (row.pricedSoldOut !== null) bucket.pricedSoldOut = row.pricedSoldOut;
+    bucket.missingPriceSoldOut = row.missingPriceSoldOut;
+    bucket.offlineReserved = row.offlineReserved;
+    byDate.set(key, bucket);
+  }
+
+  return [...byDate.values()].map((bucket) => ({
+    date: bucket.date,
+    dayOfWeek: dayOfWeekFromDate(bucket.date),
+    productType: bucket.productType,
+    productCount: bucket.productKeys.size,
+    total: bucket.totalObserved ? bucket.total : null,
+    available: bucket.availableObserved ? bucket.available : null,
+    sold: bucket.soldObserved ? bucket.sold : null,
+    reservationRate: bucket.totalObserved && bucket.total > 0 && bucket.soldObserved
+      ? Number((bucket.sold / bucket.total).toFixed(4))
+      : null,
+    minPrice: bucket.prices.length ? Math.min(...bucket.prices) : null,
+    maxPrice: bucket.prices.length ? Math.max(...bucket.prices) : null,
+    estimatedRevenue: bucket.estimatedRevenueObserved && Number.isFinite(bucket.estimatedRevenue)
+      ? Math.round(bucket.estimatedRevenue)
+      : null,
+    actualRevenue: null,
+    pricedSoldOut: Number.isFinite(bucket.pricedSoldOut) ? bucket.pricedSoldOut : null,
+    missingPriceSoldOut: Number.isFinite(bucket.missingPriceSoldOut) ? bucket.missingPriceSoldOut : null,
+    offlineReserved: Number.isFinite(bucket.offlineReserved) ? bucket.offlineReserved : 0,
+    revenueType: "estimated"
+  }))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.productType).localeCompare(String(b.productType)))
+    .slice(-COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT);
+}
+
+function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
+  const observations = compactProductSnapshotObservations(item, run);
+  const daily = compactProductSnapshotDaily(item, run, observations);
+  if (!observations.length && !daily.length) return null;
+  const productProfile = compactProductSnapshotProducts(observations);
+  const revenue = companyRevenueSnapshotFromItem(item);
+  const revenuePartValue = (part = {}, field = "revenue") => {
+    const value = snapshotNumber(part[field]);
+    return value === null ? 0 : value;
+  };
+  const confirmedEstimatedRevenue = revenuePartValue(revenue.lodging) + revenuePartValue(revenue.dayUse);
+  const adjustedEstimatedRevenue = (
+    snapshotNumber(revenue.lodging?.adjustedRevenue) ?? snapshotNumber(revenue.lodging?.revenue) ?? 0
+  ) + (
+    snapshotNumber(revenue.dayUse?.adjustedRevenue) ?? snapshotNumber(revenue.dayUse?.revenue) ?? 0
+  );
+  const dates = daily.map((row) => row.date).filter(Boolean).sort();
+  return {
+    schemaVersion: 1,
+    source: "naver_public_observation",
+    revenueType: "estimated",
+    actualRevenueAvailable: false,
+    runId: run.id || "",
+    collectedAt: collectedAt || "",
+    productsRunId: run.id || "",
+    productsCollectedAt: collectedAt || "",
+    dailyRunId: run.id || "",
+    dailyCollectedAt: collectedAt || "",
+    dateRange: { start: dates[0] || "", end: dates.at(-1) || "" },
+    summary: {
+      productCount: productProfile.products.length,
+      observedProductCount: productProfile.observedProductCount,
+      productTruncated: productProfile.productTruncated,
+      lodgingProductCount: productProfile.products.filter((row) => row.productType === "lodging").length,
+      dayUseProductCount: productProfile.products.filter((row) => row.productType === "dayuse").length,
+      priceGroupCount: productProfile.priceGroups.length,
+      unconfirmedProductCount: productProfile.unconfirmedProductCount,
+      dailyCount: daily.length,
+      confirmedEstimatedRevenue,
+      adjustedEstimatedRevenue,
+      actualRevenue: null
+    },
+    products: productProfile.products,
+    priceGroups: productProfile.priceGroups,
+    daily
+  };
+}
+
 function emptyCompanyMaster() {
   return {
     schemaVersion: 1,
@@ -9150,6 +9578,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
   const salesSignal = companySalesSignalFromItem(item, run);
   const couponSignal = salesSignal.couponSignal || naverCouponSignalFromItem(item);
   const revenueSnapshot = companyRevenueSnapshotFromItem(item);
+  const productSnapshot = compactCompanyProductSnapshot(item, run, collectedAt);
   const dbRoute = runCollectionDbRoute(run);
   const naverChannelObservation = naverChannelObservationFromItem(item, run);
   const channelExposures = naverChannelExposuresFromItem(item);
@@ -9169,12 +9598,16 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     sourceKeys,
     url: item.url || "",
     rank: item.rank ?? null,
+    overallRank: item.overallRank ?? item.rank ?? null,
+    regionalRank: item.regionalRank ?? null,
+    adRank: item.adRank ?? null,
     keyword: run.keyword || run.label || "",
     keywordKey: compactKeyword(run.keyword || run.label || "").toLowerCase(),
     searchIntent: run.searchIntent || "",
     searchRegion: run.searchRegion || "",
     searchScope: run.searchScope || "",
     searchScopeLabel: run.searchScopeLabel || "",
+    detailRankRanges: run.detailRankRanges || "",
     lodgingType: item.lodgingType || item.accommodationMarketType || item["숙박유형클러스터"] || "",
     keywordLayer: keywordLayer.type,
     keywordLayerLabel: keywordLayer.label,
@@ -9226,6 +9659,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     salesSignal,
     couponSignal,
     revenueSnapshot,
+    productSnapshot,
     price: item.price || ""
   };
 }
@@ -9308,11 +9742,13 @@ function updateCompanySourceStats(company, entity) {
     runCount: 0
   };
   const alreadySeenRun = entity.runId && (stat.runIds || []).includes(entity.runId);
+  const replacesLatestRun = !stat.lastSeenAt
+    || String(entity.collectedAt || "").localeCompare(String(stat.lastSeenAt || "")) >= 0;
   stat.sourceRole = sourceRole;
   stat.label = sourceLabel;
   stat.firstSeenAt = [stat.firstSeenAt, entity.collectedAt].filter(Boolean).sort()[0] || entity.collectedAt || "";
   stat.lastSeenAt = [stat.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt || "";
-  stat.lastRunId = entity.runId || stat.lastRunId || "";
+  if (replacesLatestRun) stat.lastRunId = entity.runId || stat.lastRunId || "";
   stat.runIds = boundedUnique([...(stat.runIds || []), entity.runId], 80);
   stat.keywords = boundedUnique([...(stat.keywords || []), entity.keyword], 40);
   if (!alreadySeenRun || !entity.runId) stat.observationCount = Number(stat.observationCount || 0) + 1;
@@ -9337,11 +9773,13 @@ function updateCompanyCollectionRoute(company, entity) {
     targets: route.targets || []
   };
   const alreadySeenRun = entity.runId && (stat.runIds || []).includes(entity.runId);
+  const replacesLatestRun = !stat.lastSeenAt
+    || String(entity.collectedAt || "").localeCompare(String(stat.lastSeenAt || "")) >= 0;
   stat.label = route.label || stat.label || routeKey;
   stat.note = route.note || stat.note || "";
   stat.firstSeenAt = [stat.firstSeenAt, entity.collectedAt].filter(Boolean).sort()[0] || entity.collectedAt || "";
   stat.lastSeenAt = [stat.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt || "";
-  stat.lastRunId = entity.runId || stat.lastRunId || "";
+  if (replacesLatestRun) stat.lastRunId = entity.runId || stat.lastRunId || "";
   stat.runIds = boundedUnique([...(stat.runIds || []), entity.runId], 80);
   stat.keywords = boundedUnique([...(stat.keywords || []), entity.keyword], 40);
   stat.targets = boundedUnique([...(stat.targets || []), ...(route.targets || [])], 12);
@@ -9368,20 +9806,17 @@ function updateCompanyCollectionRoute(company, entity) {
   company.collectionRouteHistory = [
     latest,
     ...(company.collectionRouteHistory || []).filter((row) => row.runId !== latest.runId || row.routeKey !== latest.routeKey)
-  ].filter((row) => row.runId || row.collectedAt).slice(0, 20);
+  ]
+    .filter((row) => row.runId || row.collectedAt)
+    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))
+    .slice(0, 20);
 }
 
 function updateCompanyDemandSignals(company, entity) {
   const signals = company.demandSignals || { latest: {}, snapshots: [] };
   const currentLatest = signals.latest || {};
   const isSameRun = Boolean(entity.runId && currentLatest.runId && entity.runId === currentLatest.runId);
-  if ((currentLatest.runId || currentLatest.collectedAt) && !isSameRun) {
-    signals.snapshots = [
-      currentLatest,
-      ...(signals.snapshots || []).filter((row) => row.runId !== currentLatest.runId)
-    ].filter((row) => row.runId || row.collectedAt).slice(0, 12);
-  }
-  signals.latest = {
+  const next = {
     runId: entity.runId || "",
     collectedAt: entity.collectedAt || "",
     keyword: entity.keyword || "",
@@ -9394,6 +9829,22 @@ function updateCompanyDemandSignals(company, entity) {
     collectionProfile: entity.collectionProfile || "",
     collectionProfileLabel: entity.collectionProfileLabel || ""
   };
+  const replacesLatest = isSameRun
+    || !(currentLatest.runId || currentLatest.collectedAt)
+    || String(next.collectedAt || "").localeCompare(String(currentLatest.collectedAt || "")) >= 0;
+  const archived = replacesLatest ? currentLatest : next;
+  const archivedKey = archived.runId || archived.collectedAt || "";
+  const retainedLatestKey = replacesLatest ? (next.runId || next.collectedAt || "") : (currentLatest.runId || currentLatest.collectedAt || "");
+  if (archivedKey && archivedKey !== retainedLatestKey) {
+    signals.snapshots = [
+      archived,
+      ...(signals.snapshots || []).filter((row) => row.runId !== archived.runId)
+    ]
+      .filter((row) => row.runId || row.collectedAt)
+      .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))
+      .slice(0, 12);
+  }
+  if (replacesLatest) signals.latest = next;
   company.demandSignals = signals;
 }
 
@@ -9415,6 +9866,9 @@ function upsertCompanyKeywordExposure(company, entity) {
     collectedAt: entity.collectedAt,
     collectedDate: entity.collectedDate,
     rank: Number(entity.rank) || null,
+    overallRank: Number(entity.overallRank) || Number(entity.rank) || null,
+    regionalRank: Number(entity.regionalRank) || null,
+    adRank: Number(entity.adRank) || null,
     searchMode: entity.searchMode || "",
     productMode: entity.productMode || "",
     sourceRole: entity.sourceRole || "",
@@ -9426,6 +9880,7 @@ function upsertCompanyKeywordExposure(company, entity) {
     searchRegion: entity.searchRegion || "",
     searchScope: entity.searchScope || "",
     searchScopeLabel: entity.searchScopeLabel || "",
+    detailRankRanges: entity.detailRankRanges || "",
     lodgingType: entity.lodgingType || "",
     provinceKey: entity.provinceKey || ""
   };
@@ -9437,15 +9892,17 @@ function upsertCompanyKeywordExposure(company, entity) {
     .slice(0, 80);
   keyword.firstSeenAt = [keyword.firstSeenAt, entity.collectedAt].filter(Boolean).sort()[0] || entity.collectedAt;
   keyword.lastSeenAt = [keyword.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt;
-  keyword.latestRank = exposure.rank;
-  keyword.latestRunId = entity.runId;
-  keyword.keywordLayer = entity.keywordLayer || keyword.keywordLayer || "";
-  keyword.keywordLayerLabel = entity.keywordLayerLabel || keyword.keywordLayerLabel || "";
-  keyword.searchIntent = entity.searchIntent || keyword.searchIntent || "";
-  keyword.searchRegion = entity.searchRegion || keyword.searchRegion || "";
-  keyword.searchScope = entity.searchScope || keyword.searchScope || "";
-  keyword.searchScopeLabel = entity.searchScopeLabel || keyword.searchScopeLabel || "";
-  keyword.provinceKey = entity.provinceKey || keyword.provinceKey || "";
+  const newestExposure = keyword.runs[0] || exposure;
+  keyword.latestRank = newestExposure.rank;
+  keyword.latestRunId = newestExposure.runId || "";
+  keyword.keywordLayer = newestExposure.keywordLayer || keyword.keywordLayer || "";
+  keyword.keywordLayerLabel = newestExposure.keywordLayerLabel || keyword.keywordLayerLabel || "";
+  keyword.searchIntent = newestExposure.searchIntent || keyword.searchIntent || "";
+  keyword.searchRegion = newestExposure.searchRegion || keyword.searchRegion || "";
+  keyword.searchScope = newestExposure.searchScope || keyword.searchScope || "";
+  keyword.searchScopeLabel = newestExposure.searchScopeLabel || keyword.searchScopeLabel || "";
+  keyword.detailRankRanges = newestExposure.detailRankRanges || keyword.detailRankRanges || "";
+  keyword.provinceKey = newestExposure.provinceKey || keyword.provinceKey || "";
   const ranks = keyword.runs.map((row) => Number(row.rank)).filter((rank) => Number.isFinite(rank) && rank > 0);
   keyword.bestRank = ranks.length ? Math.min(...ranks) : null;
   keyword.runCount = keyword.runs.length;
@@ -9457,12 +9914,7 @@ function updateCompanyInventory(company, entity) {
   const alreadyCounted = entity.runId && (inventory.runIds || []).includes(entity.runId);
   const currentLatest = inventory.latest || {};
   const isSameRun = Boolean(entity.runId && currentLatest.runId && entity.runId === currentLatest.runId);
-  if ((currentLatest.runId || currentLatest.collectedAt) && !isSameRun) {
-    const previousSnapshot = companyInventorySnapshot(currentLatest);
-    inventory.previousLatest = previousSnapshot;
-    inventory.snapshots = mergeInventorySnapshots([previousSnapshot, ...(inventory.snapshots || [])]);
-  }
-  inventory.latest = {
+  const nextLatest = {
     runId: entity.runId,
     collectedAt: entity.collectedAt,
     sourceRole: entity.sourceRole || "",
@@ -9477,8 +9929,26 @@ function updateCompanyInventory(company, entity) {
     salesSignal: entity.salesSignal || {},
     couponSignal: entity.couponSignal || entity.salesSignal?.couponSignal || {},
     revenue: entity.revenueSnapshot || {},
+    productSnapshot: entity.productSnapshot || null,
     price: entity.price
   };
+  const hasCurrentLatest = Boolean(currentLatest.runId || currentLatest.collectedAt);
+  const incomingIsLatest = !hasCurrentLatest
+    || isSameRun
+    || String(nextLatest.collectedAt || "").localeCompare(String(currentLatest.collectedAt || "")) >= 0;
+  if (incomingIsLatest) {
+    nextLatest.productSnapshot = mergeCompanyProductSnapshots(
+      currentLatest.productSnapshot,
+      nextLatest.productSnapshot
+    );
+    if (hasCurrentLatest && !isSameRun) {
+      inventory.snapshots = mergeInventorySnapshots([currentLatest, ...(inventory.snapshots || [])]);
+    }
+    inventory.latest = nextLatest;
+  } else {
+    inventory.snapshots = mergeInventorySnapshots([nextLatest, ...(inventory.snapshots || [])]);
+  }
+  inventory.previousLatest = inventory.snapshots?.[0] || null;
   if (!alreadyCounted && entity.inventoryStructureLabel) {
     inventory.structureCounts[entity.inventoryStructureLabel] = (inventory.structureCounts[entity.inventoryStructureLabel] || 0) + 1;
   }
@@ -9505,6 +9975,7 @@ function companyInventorySnapshot(latest = {}) {
     salesSignal: latest.salesSignal || {},
     couponSignal: latest.couponSignal || latest.salesSignal?.couponSignal || {},
     revenue: latest.revenue || {},
+    productSnapshot: companyProductSnapshotSummary(latest.productSnapshot),
     price: latest.price || "",
     manualCorrectionApplied: Boolean(latest.manualCorrectionApplied),
     correctionBasis: latest.correctionBasis || null
@@ -9697,6 +10168,77 @@ function companyInventoryWithManualCorrection(company = {}) {
   };
 }
 
+function companyProductSnapshotSummary(snapshot = null) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  return {
+    schemaVersion: snapshot.schemaVersion || 1,
+    source: snapshot.source || "",
+    revenueType: snapshot.revenueType || "estimated",
+    actualRevenueAvailable: Boolean(snapshot.actualRevenueAvailable),
+    runId: snapshot.runId || "",
+    collectedAt: snapshot.collectedAt || "",
+    dateRange: snapshot.dateRange || { start: "", end: "" },
+    summary: snapshot.summary || null
+  };
+}
+
+function mergeCompanyProductSnapshots(previous = null, incoming = null) {
+  if (!incoming || typeof incoming !== "object") return previous || null;
+  if (!previous || typeof previous !== "object") return incoming;
+  const incomingProducts = Array.isArray(incoming.products) && incoming.products.length;
+  const incomingDaily = Array.isArray(incoming.daily) && incoming.daily.length;
+  const productSource = incomingProducts ? incoming : previous;
+  const dailySource = incomingDaily ? incoming : previous;
+  const previousSummary = previous.summary || {};
+  const incomingSummary = incoming.summary || {};
+  const summary = { ...previousSummary, ...incomingSummary };
+  if (!incomingProducts) {
+    for (const key of [
+      "productCount",
+      "observedProductCount",
+      "productTruncated",
+      "lodgingProductCount",
+      "dayUseProductCount",
+      "priceGroupCount",
+      "unconfirmedProductCount"
+    ]) {
+      if (Object.hasOwn(previousSummary, key)) summary[key] = previousSummary[key];
+    }
+  }
+  if (!incomingDaily && Object.hasOwn(previousSummary, "dailyCount")) {
+    summary.dailyCount = previousSummary.dailyCount;
+  }
+  return {
+    ...previous,
+    ...incoming,
+    products: Array.isArray(productSource.products) ? productSource.products : [],
+    priceGroups: Array.isArray(productSource.priceGroups) ? productSource.priceGroups : [],
+    daily: Array.isArray(dailySource.daily) ? dailySource.daily : [],
+    productsRunId: productSource.productsRunId || productSource.runId || "",
+    productsCollectedAt: productSource.productsCollectedAt || productSource.collectedAt || "",
+    dailyRunId: dailySource.dailyRunId || dailySource.runId || "",
+    dailyCollectedAt: dailySource.dailyCollectedAt || dailySource.collectedAt || "",
+    dateRange: incomingDaily ? incoming.dateRange : (previous.dateRange || incoming.dateRange),
+    summary
+  };
+}
+
+function companyInventorySummaryView(inventory = {}) {
+  const summarizeSnapshot = (snapshot) => {
+    if (!snapshot || typeof snapshot !== "object") return snapshot || null;
+    return {
+      ...snapshot,
+      productSnapshot: companyProductSnapshotSummary(snapshot.productSnapshot)
+    };
+  };
+  return {
+    ...inventory,
+    latest: summarizeSnapshot(inventory.latest || {}),
+    previousLatest: summarizeSnapshot(inventory.previousLatest),
+    snapshots: (inventory.snapshots || []).map(summarizeSnapshot)
+  };
+}
+
 function companyRegionsWithManualCorrection(company = {}) {
   const regions = Array.isArray(company.regions) ? company.regions : [];
   const override = sanitizeManualCorrectionMeta(company.manualCorrection || {}).regionOverride;
@@ -9749,8 +10291,47 @@ function companyCorrectionStatus(company = {}, inventory = null) {
   };
 }
 
+function companyKeywordRecentRuns(keyword = {}, limit = 12, observedTimesByRunId = null) {
+  return (Array.isArray(keyword.runs) ? keyword.runs : [])
+    .filter((row) => row && (row.runId || row.collectedAt))
+    .map((row) => {
+      const observed = observedTimesByRunId?.get(String(row.runId || "")) || null;
+      if (!observed) return row;
+      const collectedAt = observed.collectedAt || observed.collectedDate || row.collectedAt || "";
+      return {
+        ...row,
+        collectedAt,
+        collectedDate: observed.collectedDate || String(collectedAt).slice(0, 10) || row.collectedDate || ""
+      };
+    })
+    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")))
+    .slice(0, Math.max(1, Math.min(40, Number(limit) || 12)))
+    .map((row) => ({
+      runId: row.runId || "",
+      collectedAt: row.collectedAt || "",
+      collectedDate: row.collectedDate || String(row.collectedAt || "").slice(0, 10),
+      rank: Number(row.rank) || null,
+      overallRank: Number(row.overallRank) || Number(row.rank) || null,
+      regionalRank: Number(row.regionalRank) || null,
+      adRank: Number(row.adRank) || null,
+      searchMode: row.searchMode || "",
+      productMode: row.productMode || "",
+      collectionSource: row.collectionSource || "",
+      collectionSourceLabel: row.collectionSourceLabel || "",
+      keywordLayer: row.keywordLayer || "",
+      keywordLayerLabel: row.keywordLayerLabel || "",
+      searchIntent: row.searchIntent || "",
+      searchRegion: row.searchRegion || "",
+      searchScope: row.searchScope || "",
+      searchScopeLabel: row.searchScopeLabel || "",
+      detailRankRanges: row.detailRankRanges || "",
+      lodgingType: row.lodgingType || "",
+      provinceKey: row.provinceKey || ""
+    }));
+}
+
 function companyRecordSummary(company = {}, activeKeywordKey = "") {
-  const inventory = companyInventoryWithManualCorrection(company);
+  const inventory = companyInventorySummaryView(companyInventoryWithManualCorrection(company));
   const manualCorrection = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : null;
   const regions = companyRegionsWithManualCorrection(company);
   const keywords = Object.values(company.keywords || {})
@@ -9769,6 +10350,8 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
         searchRegion: row.searchRegion || "",
         searchScope: row.searchScope || "",
         searchScopeLabel: row.searchScopeLabel || "",
+        detailRankRanges: row.detailRankRanges || "",
+        recentRuns: companyKeywordRecentRuns(row),
         layer
       };
     });
@@ -9786,6 +10369,7 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
     addresses: (company.addresses || []).slice(0, 3),
     firstSeenAt: company.firstSeenAt,
     lastSeenAt: company.lastSeenAt,
+    lastRunId: company.lastRunId || "",
     runCount: (company.runIds || []).length,
     sourceRoles: company.sourceRoles || [],
     collectionSources: company.collectionSources || [],
@@ -11099,8 +11683,10 @@ function upsertCompanyRecord(master, entity) {
       }
     ].slice(-20);
   }
+  const replacesLatestRun = !company.lastSeenAt
+    || String(entity.collectedAt || "").localeCompare(String(company.lastSeenAt || "")) >= 0;
   company.lastSeenAt = [company.lastSeenAt, entity.collectedAt].filter(Boolean).sort().at(-1) || entity.collectedAt;
-  company.lastRunId = entity.runId || company.lastRunId;
+  if (replacesLatestRun) company.lastRunId = entity.runId || company.lastRunId;
   mergeCompanyFieldArrays(company, entity);
   updateCompanySourceStats(company, entity);
   updateCompanyCollectionRoute(company, entity);
@@ -11147,8 +11733,17 @@ function mergeCompanyKeyword(targetKeyword = {}, sourceKeyword = {}) {
 }
 
 function mergeCompanyInventory(targetInventory = {}, sourceInventory = {}) {
+  const targetLatest = targetInventory.latest || {};
+  const sourceLatest = sourceInventory.latest || {};
+  const sourceIsNewer = String(sourceLatest.collectedAt || "").localeCompare(String(targetLatest.collectedAt || "")) > 0;
+  const newestLatest = sourceIsNewer ? sourceLatest : targetLatest;
+  const olderLatest = sourceIsNewer ? targetLatest : sourceLatest;
+  const mergedLatest = {
+    ...newestLatest,
+    productSnapshot: mergeCompanyProductSnapshots(olderLatest.productSnapshot, newestLatest.productSnapshot)
+  };
   const merged = {
-    latest: targetInventory.latest || sourceInventory.latest || {},
+    latest: mergedLatest,
     structureCounts: { ...(targetInventory.structureCounts || {}) },
     confidenceCounts: { ...(targetInventory.confidenceCounts || {}) },
     runIds: boundedUnique([...(targetInventory.runIds || []), ...(sourceInventory.runIds || [])], 120),
@@ -11166,13 +11761,6 @@ function mergeCompanyInventory(targetInventory = {}, sourceInventory = {}) {
   }
   for (const [key, count] of Object.entries(sourceInventory.confidenceCounts || {})) {
     merged.confidenceCounts[key] = (merged.confidenceCounts[key] || 0) + Number(count || 0);
-  }
-  if (
-    sourceInventory.latest?.collectedAt
-    && String(sourceInventory.latest.collectedAt).localeCompare(String(merged.latest?.collectedAt || "")) > 0
-  ) {
-    merged.snapshots = mergeInventorySnapshots([merged.latest, ...merged.snapshots]);
-    merged.latest = sourceInventory.latest;
   }
   merged.previousLatest = merged.snapshots.find((row) => (row.runId || row.collectedAt) !== (merged.latest?.runId || merged.latest?.collectedAt)) || null;
   return merged;
@@ -11922,7 +12510,605 @@ async function summarizeCompanyMaster() {
     adminRegionalOperations: summarizeCompanyMasterRegionalOperations(profiledCompanies, master),
     updatedAt: master.updatedAt || "",
     principle: "네이버 place_id/예약ID 우선, 그 다음 업체명+주소/지역으로 동일 업체를 병합",
-    companies: profiledCompanies.slice(0, 300)
+    companies: profiledCompanies
+  };
+}
+
+function medianRank(values = []) {
+  const rows = values
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (!rows.length) return null;
+  const middle = Math.floor(rows.length / 2);
+  return rows.length % 2 ? rows[middle] : Number(((rows[middle - 1] + rows[middle]) / 2).toFixed(1));
+}
+
+function companyRankBenchmarkMap(master = {}) {
+  const buckets = new Map();
+  for (const company of Object.values(master.companies || {})) {
+    for (const keyword of Object.values(company.keywords || {})) {
+      const keywordKey = keyword.keywordKey || compactKeyword(keyword.keyword || "").toLowerCase();
+      if (!keywordKey) continue;
+      for (const row of keyword.runs || []) {
+        const runId = String(row.runId || "").trim();
+        const rank = Number(row.rank);
+        if (!runId || !Number.isFinite(rank) || rank <= 0) continue;
+        const key = `${keywordKey}|${runId}`;
+        const bucket = buckets.get(key) || [];
+        bucket.push(rank);
+        buckets.set(key, bucket);
+      }
+    }
+  }
+  return new Map([...buckets.entries()].map(([key, ranks]) => [key, {
+    medianRank: medianRank(ranks),
+    sampleCount: ranks.length
+  }]));
+}
+
+function companyRankObservationTimeMap(company = {}, observations = []) {
+  const keys = companyHistoryKeys(company);
+  const byRunId = new Map();
+  for (const row of Array.isArray(observations) ? observations : []) {
+    const runId = String(row?.runId || "").trim();
+    if (!runId || !historyObservationMatchesCompany(row, company, keys)) continue;
+    const collectedAt = String(row.collectedAt || "").trim();
+    const collectedDate = String(row.collectedDate || collectedAt.slice(0, 10) || "").trim();
+    if (!collectedAt && !collectedDate) continue;
+    const candidate = { collectedAt, collectedDate };
+    const current = byRunId.get(runId);
+    if (!current) {
+      byRunId.set(runId, candidate);
+      continue;
+    }
+    const currentValue = current.collectedAt || current.collectedDate || "";
+    const candidateValue = candidate.collectedAt || candidate.collectedDate || "";
+    const currentHasTime = Boolean(current.collectedAt);
+    const candidateHasTime = Boolean(candidate.collectedAt);
+    if ((candidateHasTime && !currentHasTime) || (candidateHasTime === currentHasTime && candidateValue < currentValue)) {
+      byRunId.set(runId, candidate);
+    }
+  }
+  return byRunId;
+}
+
+function preferredCompanyRankKeyword(company = {}, observedTimesByRunId = null) {
+  const rows = Object.values(company.keywords || {}).map((keyword) => ({
+    keyword,
+    layer: keywordExposureLayer(keyword),
+    latestCollectedAt: companyKeywordRecentRuns(keyword, 1, observedTimesByRunId)[0]?.collectedAt || keyword.lastSeenAt || ""
+  }));
+  const layerPriority = { regional: 4, local: 3, company: 2, unknown: 1 };
+  return rows.sort((a, b) =>
+    (layerPriority[b.layer?.type] || 0) - (layerPriority[a.layer?.type] || 0)
+    || String(b.latestCollectedAt).localeCompare(String(a.latestCollectedAt))
+    || Number(b.keyword.runCount || b.keyword.runs?.length || 0) - Number(a.keyword.runCount || a.keyword.runs?.length || 0)
+  )[0] || null;
+}
+
+function companyRankTrend(company = {}, master = {}, observations = []) {
+  const observedTimesByRunId = companyRankObservationTimeMap(company, observations);
+  const selected = preferredCompanyRankKeyword(company, observedTimesByRunId);
+  const availableKeywords = Object.values(company.keywords || {})
+    .map((keyword) => {
+      const layer = keywordExposureLayer(keyword);
+      const recentRuns = companyKeywordRecentRuns(keyword, 40, observedTimesByRunId);
+      const latestRun = recentRuns[0] || null;
+      const previousRun = recentRuns[1] || null;
+      const storedLatestRank = Number(keyword.latestRank);
+      return {
+        keyword: keyword.keyword || "",
+        keywordKey: keyword.keywordKey || "",
+        layer: layer.type,
+        layerLabel: layer.label,
+        runCount: Number(keyword.runCount || keyword.runs?.length || 0),
+        lastSeenAt: keyword.lastSeenAt || "",
+        latestRank: latestRun?.rank ?? (Number.isFinite(storedLatestRank) && storedLatestRank > 0 ? storedLatestRank : null),
+        previousRank: previousRun?.rank ?? null,
+        latestRunId: latestRun?.runId || keyword.latestRunId || "",
+        latestCollectedAt: latestRun?.collectedAt || keyword.lastSeenAt || "",
+        searchRegion: latestRun?.searchRegion || keyword.searchRegion || "",
+        searchScope: latestRun?.searchScope || keyword.searchScope || "",
+        searchScopeLabel: latestRun?.searchScopeLabel || keyword.searchScopeLabel || "",
+        detailRankRanges: latestRun?.detailRankRanges || keyword.detailRankRanges || ""
+      };
+    })
+    .sort((a, b) => String(b.latestCollectedAt).localeCompare(String(a.latestCollectedAt)));
+  if (!selected) {
+    return {
+      keyword: "",
+      keywordKey: "",
+      benchmarkBasis: "same_keyword_same_run_median",
+      benchmarkLabel: "동일 키워드·회차 중앙값",
+      availableKeywords,
+      points: []
+    };
+  }
+  const keyword = selected.keyword;
+  const keywordKey = keyword.keywordKey || compactKeyword(keyword.keyword || "").toLowerCase();
+  const benchmarks = companyRankBenchmarkMap(master);
+  const rows = companyKeywordRecentRuns(keyword, 40, observedTimesByRunId)
+    .filter((row) => Number.isFinite(Number(row.rank)) && Number(row.rank) > 0)
+    .sort((a, b) => String(a.collectedAt || "").localeCompare(String(b.collectedAt || "")))
+    .slice(-24);
+  const points = rows.map((row, index) => {
+    const previous = index > 0 ? rows[index - 1] : null;
+    const rank = Number(row.rank);
+    const previousRank = previous ? Number(previous.rank) : null;
+    const delta = Number.isFinite(previousRank) ? previousRank - rank : null;
+    const benchmark = benchmarks.get(`${keywordKey}|${row.runId}`) || {};
+    return {
+      runId: row.runId || "",
+      collectedAt: row.collectedAt || "",
+      rank,
+      previousRank: Number.isFinite(previousRank) ? previousRank : null,
+      delta,
+      changeRate: Number.isFinite(previousRank) && previousRank > 0
+        ? Number(((previousRank - rank) / previousRank).toFixed(4))
+        : null,
+      keyword: keyword.keyword || "",
+      keywordKey,
+      searchRegion: row.searchRegion || "",
+      searchScope: row.searchScope || "",
+      searchScopeLabel: row.searchScopeLabel || "",
+      regionalMedianRank: benchmark.medianRank ?? null,
+      regionalSampleCount: Number(benchmark.sampleCount || 0)
+    };
+  });
+  return {
+    keyword: keyword.keyword || "",
+    keywordKey,
+    layer: selected.layer?.type || "unknown",
+    layerLabel: selected.layer?.label || "",
+    benchmarkBasis: "same_keyword_same_run_median",
+    benchmarkLabel: "동일 키워드·회차 중앙값",
+    availableKeywords,
+    points
+  };
+}
+
+function companySnapshotEstimatedRevenue(snapshot = {}) {
+  const parts = [snapshot.revenue?.lodging || {}, snapshot.revenue?.dayUse || {}];
+  const snapshotPriceGroupCount = snapshotNumber(snapshot.productSnapshot?.summary?.priceGroupCount);
+  const snapshotPrice = snapshotNumber(snapshot.price);
+  let hasPriceEvidence = (snapshotPriceGroupCount !== null && snapshotPriceGroupCount > 0)
+    || (snapshotPrice !== null && snapshotPrice > 0);
+  let hasRevenueFields = false;
+  let estimatedRevenue = 0;
+  let confirmedPriceEstimatedRevenue = 0;
+  let missingPriceEstimatedRevenue = 0;
+  let pricedSoldOut = 0;
+  let missingPriceSoldOut = 0;
+  for (const part of parts) {
+    const base = snapshotNumber(part.revenue);
+    const adjusted = snapshotNumber(part.adjustedRevenue);
+    const missingRevenue = snapshotNumber(part.missingPriceEstimatedRevenue);
+    const priced = snapshotNumber(part.pricedSoldOut);
+    const missing = snapshotNumber(part.missingPriceSoldOut);
+    if ([base, adjusted, missingRevenue, priced, missing].some((value) => value !== null)) {
+      hasRevenueFields = true;
+    }
+    if ([base, adjusted, missingRevenue].some((value) => value !== null && value > 0) || (priced !== null && priced > 0)) {
+      hasPriceEvidence = true;
+    }
+    confirmedPriceEstimatedRevenue += base || 0;
+    estimatedRevenue += adjusted ?? base ?? 0;
+    missingPriceEstimatedRevenue += missingRevenue || 0;
+    pricedSoldOut += priced || 0;
+    missingPriceSoldOut += missing || 0;
+  }
+  const pricedTotal = pricedSoldOut + missingPriceSoldOut;
+  const hasEstimate = hasRevenueFields && hasPriceEvidence;
+  return {
+    estimatedRevenue: hasEstimate ? Math.round(estimatedRevenue) : null,
+    confirmedPriceEstimatedRevenue: hasEstimate ? Math.round(confirmedPriceEstimatedRevenue) : null,
+    missingPriceEstimatedRevenue: hasEstimate ? Math.round(missingPriceEstimatedRevenue) : null,
+    pricedSoldOut: hasEstimate ? pricedSoldOut : null,
+    missingPriceSoldOut: hasEstimate ? missingPriceSoldOut : null,
+    priceCoverageRate: pricedTotal > 0 ? Number((pricedSoldOut / pricedTotal).toFixed(4)) : null,
+    priceEvidenceObserved: hasEstimate
+  };
+}
+
+function companyPerformanceTrend(company = {}, observations = []) {
+  const inventory = company.inventory || {};
+  const observedTimesByRunId = companyRankObservationTimeMap(company, observations);
+  const performanceCollectedAt = (snapshot = {}) => {
+    const observed = observedTimesByRunId.get(String(snapshot.runId || "").trim()) || {};
+    return observed.collectedAt || observed.collectedDate || snapshot.collectedAt || "";
+  };
+  const byKey = new Map();
+  for (const snapshot of [
+    ...(inventory.snapshots || []),
+    inventory.previousLatest,
+    inventory.latest
+  ]) {
+    if (!snapshot || !(snapshot.runId || snapshot.collectedAt)) continue;
+    const key = snapshot.runId || snapshot.collectedAt;
+    const current = byKey.get(key);
+    if (!current || String(snapshot.collectedAt || "").localeCompare(String(current.collectedAt || "")) >= 0) byKey.set(key, snapshot);
+  }
+  const points = [...byKey.values()]
+    .sort((a, b) => String(performanceCollectedAt(a)).localeCompare(String(performanceCollectedAt(b))))
+    .slice(-12)
+    .map((snapshot) => {
+      const signal = snapshot.salesSignal || {};
+      const lodging = signal.lodging || {};
+      const dayUse = signal.dayUse || {};
+      const lodgingRate = snapshotNumber(lodging.averageRate);
+      const dayUseRate = snapshotNumber(dayUse.averageRate);
+      const observedTypes = [lodging, dayUse].filter((part) =>
+        Number(part.days || 0) > 0
+        || Number(part.totalSupply || 0) > 0
+        || Number(part.totalSold || 0) > 0
+        || snapshotNumber(part.averageRate) !== null
+      );
+      const supplyValues = observedTypes.map((part) => snapshotNumber(part.totalSupply));
+      const soldValues = observedTypes.map((part) => snapshotNumber(part.totalSold));
+      const hasCompleteSupply = observedTypes.length > 0 && supplyValues.every((value) => value !== null);
+      const hasCompleteSold = observedTypes.length > 0 && soldValues.every((value) => value !== null);
+      const totalSupply = hasCompleteSupply
+        ? supplyValues.reduce((sum, value) => sum + value, 0)
+        : null;
+      const totalSold = hasCompleteSold
+        ? soldValues.reduce((sum, value) => sum + value, 0)
+        : null;
+      const combinedRate = totalSupply !== null
+        && totalSupply > 0
+        && totalSold !== null
+        ? Number((totalSold / totalSupply).toFixed(4))
+        : (observedTypes.length === 1 ? snapshotNumber(observedTypes[0].averageRate) : null);
+      const revenue = companySnapshotEstimatedRevenue(snapshot);
+      return {
+        runId: snapshot.runId || "",
+        collectedAt: performanceCollectedAt(snapshot),
+        checkIn: signal.checkIn || "",
+        observedDays: Number(lodging.days || dayUse.days || 0),
+        reservationRate: combinedRate,
+        lodgingReservationRate: lodgingRate,
+        dayUseReservationRate: dayUseRate,
+        totalSupply,
+        totalSold,
+        estimatedRevenue: revenue.estimatedRevenue,
+        confirmedPriceEstimatedRevenue: revenue.confirmedPriceEstimatedRevenue,
+        missingPriceEstimatedRevenue: revenue.missingPriceEstimatedRevenue,
+        priceCoverageRate: revenue.priceCoverageRate,
+        priceEvidenceObserved: revenue.priceEvidenceObserved,
+        actualRevenue: null,
+        revenueType: "estimated"
+      };
+    });
+  return {
+    source: "company_master_inventory_snapshots",
+    revenueType: "estimated",
+    actualRevenueAvailable: false,
+    points
+  };
+}
+
+function companyHistoryKeys(company = {}) {
+  return new Set([
+    company.companyId,
+    normalizeCompanyIdentityName(company.primaryName),
+    ...(company.aliases || []).map(normalizeCompanyIdentityName)
+  ].filter(Boolean).map((value) => String(value).toLowerCase()));
+}
+
+function historyObservationMatchesCompany(row = {}, company = {}, keys = companyHistoryKeys(company)) {
+  const companyKey = String(row.companyKey || "").toLowerCase();
+  if (companyKey && keys.has(companyKey)) return true;
+  const nameKey = normalizeCompanyIdentityName(row.companyName || "").toLowerCase();
+  return Boolean(nameKey && keys.has(nameKey));
+}
+
+function companyHistoryDailyIdentity(company = {}) {
+  const companyIds = new Set([
+    company.companyId,
+    ...(company.duplicateNotes || []).map((row) => row?.mergedCompanyId)
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean));
+  const nameKeys = new Set([
+    company.primaryName,
+    company.nameKey,
+    ...(company.aliases || [])
+  ]
+    .map((value) => normalizeCompanyIdentityName(value).toLowerCase())
+    .filter(Boolean));
+  return { companyIds, nameKeys };
+}
+
+function historyDailyObservationMatchesCompany(row = {}, identity = {}) {
+  const companyKey = String(row.companyKey || "").trim().toLowerCase();
+  if (companyKey && identity.companyIds?.has(companyKey)) return true;
+  // A canonical company id is stronger than a display name. Never let an
+  // unrelated same-name company leak into the selected company's daily series.
+  if (/^cmp_/i.test(companyKey)) return false;
+  const companyKeyAsName = normalizeCompanyIdentityName(companyKey).toLowerCase();
+  const observationNameKey = normalizeCompanyIdentityName(row.companyName || "").toLowerCase();
+  return Boolean(
+    (companyKeyAsName && identity.nameKeys?.has(companyKeyAsName))
+    || (observationNameKey && identity.nameKeys?.has(observationNameKey))
+  );
+}
+
+function historyDailyObservationOrder(row = {}) {
+  const collectedAt = String(row.collectedAt || "").trim();
+  const parsed = Date.parse(collectedAt);
+  return {
+    timestamp: Number.isFinite(parsed) ? parsed : 0,
+    collectedAt,
+    collectedDate: String(row.collectedDate || collectedAt.slice(0, 10) || "").trim(),
+    runId: String(row.runId || "").trim()
+  };
+}
+
+function historyDailyObservationIsNewer(candidate = {}, current = {}) {
+  const left = historyDailyObservationOrder(candidate);
+  const right = historyDailyObservationOrder(current);
+  if (left.timestamp !== right.timestamp) return left.timestamp > right.timestamp;
+  const collectedAtOrder = left.collectedAt.localeCompare(right.collectedAt);
+  if (collectedAtOrder) return collectedAtOrder > 0;
+  const collectedDateOrder = left.collectedDate.localeCompare(right.collectedDate);
+  if (collectedDateOrder) return collectedDateOrder > 0;
+  return left.runId.localeCompare(right.runId) > 0;
+}
+
+function companyHistoryDailyFallback(company = {}, observations = []) {
+  const identity = companyHistoryDailyIdentity(company);
+  const latestByStayDate = new Map();
+  for (const row of observations) {
+    const productType = String(row?.productType || "").trim().toLowerCase();
+    if (!(["lodging", "dayuse"].includes(productType))) continue;
+    if (!historyDailyObservationMatchesCompany(row, identity)) continue;
+    const date = productSnapshotDate(row.stayDate || row.date);
+    if (!date) continue;
+    const key = `${productType}:${date}`;
+    const current = latestByStayDate.get(key);
+    if (!current || historyDailyObservationIsNewer(row, current)) latestByStayDate.set(key, row);
+  }
+
+  const observedRows = [...latestByStayDate.entries()]
+    .map(([key, row]) => {
+      const [productType, date] = key.split(":");
+      const supplyValue = productSnapshotNumber(row.supply ?? row.total);
+      const total = supplyValue !== null && supplyValue > 0 ? Math.round(supplyValue) : null;
+      const availableValue = productSnapshotNumber(row.available);
+      const available = total !== null
+        && availableValue !== null
+        && availableValue >= 0
+        && availableValue <= total
+        ? Math.round(availableValue)
+        : null;
+      const soldValue = productSnapshotNumber(row.sold);
+      const explicitSold = total !== null
+        && soldValue !== null
+        && soldValue >= 0
+        && soldValue <= total
+        ? Math.round(soldValue)
+        : null;
+      const derivedSold = total !== null && available !== null ? total - available : null;
+      const sold = explicitSold !== null && derivedSold !== null && explicitSold !== derivedSold
+        ? null
+        : (explicitSold ?? derivedSold);
+      const priceValue = productSnapshotNumber(row.price);
+      const price = priceValue !== null && priceValue > 0 ? Math.round(priceValue) : null;
+      const estimatedRevenue = sold !== null && price !== null ? Math.round(sold * price) : null;
+      return {
+        date,
+        dayOfWeek: dayOfWeekFromDate(date),
+        productType,
+        productCount: null,
+        total,
+        supply: total,
+        available,
+        sold,
+        saleRate: total !== null && sold !== null ? Number((sold / total).toFixed(4)) : null,
+        reservationRate: total !== null && sold !== null ? Number((sold / total).toFixed(4)) : null,
+        price,
+        minPrice: price,
+        maxPrice: price,
+        estimatedRevenue,
+        actualRevenue: null,
+        pricedSoldOut: sold !== null && price !== null ? sold : null,
+        missingPriceSoldOut: sold !== null && price === null ? sold : null,
+        offlineReserved: null,
+        revenueType: "estimated",
+        reservationRateType: "public_inventory_estimate",
+        actualRevenueAvailable: false,
+        source: "history_observations",
+        runId: String(row.runId || ""),
+        collectedAt: String(row.collectedAt || ""),
+        collectedDate: String(row.collectedDate || row.collectedAt || "").slice(0, 10)
+      };
+    })
+    .filter((row) => row.total !== null || row.available !== null || row.sold !== null || row.price !== null)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.productType).localeCompare(String(b.productType)));
+  const daily = observedRows.slice(-COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT);
+  const dates = daily.map((row) => row.date).filter(Boolean).sort();
+  const collectedRows = [...daily].sort((a, b) => {
+    const order = historyDailyObservationOrder(a);
+    const other = historyDailyObservationOrder(b);
+    return order.timestamp - other.timestamp
+      || order.collectedAt.localeCompare(other.collectedAt)
+      || order.collectedDate.localeCompare(other.collectedDate)
+      || order.runId.localeCompare(other.runId);
+  });
+  const latest = collectedRows.at(-1) || {};
+  const collectedAtValues = daily.map((row) => row.collectedAt).filter(Boolean).sort();
+  const collectedDateValues = daily.map((row) => row.collectedDate).filter(Boolean).sort();
+  return {
+    daily,
+    basis: {
+      source: "history_observations",
+      sourceLabel: "실제 수집 이력",
+      file: "history/observations.jsonl",
+      runId: latest.runId || "",
+      runIds: boundedUnique(daily.map((row) => row.runId).filter(Boolean), COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT),
+      collectedAt: latest.collectedAt || "",
+      collectedDate: latest.collectedDate || "",
+      observationRange: {
+        start: collectedAtValues[0] || collectedDateValues[0] || "",
+        end: collectedAtValues.at(-1) || collectedDateValues.at(-1) || ""
+      },
+      dateRange: { start: dates[0] || "", end: dates.at(-1) || "" },
+      rowCount: daily.length,
+      observedRowCount: observedRows.length,
+      truncated: observedRows.length > daily.length,
+      actualObservation: true
+    }
+  };
+}
+
+function companyLeadTimeSummary(company = {}, observations = []) {
+  const keys = companyHistoryKeys(company);
+  const byObservation = new Map();
+  for (const row of observations) {
+    if (row.productType !== "lodging" || !historyObservationMatchesCompany(row, company, keys) || !row.stayDate) continue;
+    const collectedAt = row.collectedAt || row.collectedDate || "";
+    const key = [row.productType, row.stayDate, collectedAt].join("|");
+    const current = byObservation.get(key);
+    if (!current || Number(row.supply || 0) > Number(current.supply || 0)) byObservation.set(key, row);
+  }
+  const rows = [...byObservation.values()];
+  const byStay = new Map();
+  for (const row of rows) {
+    const key = `${row.productType}:${row.stayDate}`;
+    const bucket = byStay.get(key) || [];
+    bucket.push(row);
+    byStay.set(key, bucket);
+  }
+  const events = [];
+  let negativeChangeCount = 0;
+  for (const bucket of byStay.values()) {
+    bucket.sort((a, b) => String(a.collectedAt || a.collectedDate || "").localeCompare(String(b.collectedAt || b.collectedDate || "")));
+    for (let index = 1; index < bucket.length; index += 1) {
+      const previous = bucket[index - 1];
+      const current = bucket[index];
+      const soldDelta = Number(current.sold || 0) - Number(previous.sold || 0);
+      if (soldDelta < 0) {
+        negativeChangeCount += Math.abs(soldDelta);
+        continue;
+      }
+      if (soldDelta <= 0) continue;
+      const leadTimeDays = Number.isFinite(Number(current.leadTimeDays))
+        ? Number(current.leadTimeDays)
+        : dateDiffDays(String(current.collectedDate || current.collectedAt || "").slice(0, 10), current.stayDate);
+      if (!Number.isFinite(leadTimeDays) || leadTimeDays < 0) continue;
+      events.push({
+        stayDate: current.stayDate,
+        collectedAt: current.collectedAt || "",
+        leadTimeDays,
+        pickup: soldDelta,
+        previousSold: Number(previous.sold || 0),
+        currentSold: Number(current.sold || 0)
+      });
+    }
+  }
+  const pickupCount = events.reduce((sum, row) => sum + row.pickup, 0);
+  const weightedDays = events.reduce((sum, row) => sum + row.leadTimeDays * row.pickup, 0);
+  const averageDays = pickupCount > 0 ? Number((weightedDays / pickupCount).toFixed(1)) : null;
+  const weightedMedianLowerRank = Math.floor((pickupCount + 1) / 2);
+  const weightedMedianUpperRank = Math.floor(pickupCount / 2) + 1;
+  let weightedMedianRunning = 0;
+  let weightedMedianLower = null;
+  let weightedMedianUpper = null;
+  let medianDays = null;
+  for (const event of [...events].sort((a, b) => a.leadTimeDays - b.leadTimeDays)) {
+    weightedMedianRunning += event.pickup;
+    if (weightedMedianLower === null && weightedMedianRunning >= weightedMedianLowerRank) weightedMedianLower = event.leadTimeDays;
+    if (weightedMedianRunning < weightedMedianUpperRank) continue;
+    weightedMedianUpper = event.leadTimeDays;
+    break;
+  }
+  if (weightedMedianLower !== null && weightedMedianUpper !== null) {
+    medianDays = Number(((weightedMedianLower + weightedMedianUpper) / 2).toFixed(1));
+  }
+  const collectedDateCount = new Set(rows.map((row) => row.collectedDate || String(row.collectedAt || "").slice(0, 10)).filter(Boolean)).size;
+  const status = collectedDateCount < 2
+    ? "insufficient_observations"
+    : (pickupCount > 0 ? "ready" : "no_pickup_observed");
+  const bucketMap = new Map();
+  events.forEach((row) => bucketMap.set(row.leadTimeDays, (bucketMap.get(row.leadTimeDays) || 0) + row.pickup));
+  return {
+    averageDays,
+    medianDays,
+    pickupCount,
+    observationCount: rows.length,
+    collectedDateCount,
+    status,
+    statusLabel: status === "ready" ? "추정 가능" : status === "no_pickup_observed" ? "픽업 관측 대기" : "동일 숙박일 2회 이상 관측 필요",
+    source: "inventory_pickup_estimate",
+    actualBookingLeadTime: false,
+    negativeChangeCount,
+    buckets: [...bucketMap.entries()]
+      .map(([leadTimeDays, pickup]) => ({ leadTimeDays, pickup }))
+      .sort((a, b) => b.leadTimeDays - a.leadTimeDays),
+    recentEvents: events.sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || ""))).slice(0, 20)
+  };
+}
+
+async function summarizeCompanyMasterDetail(companyId = "") {
+  const id = String(companyId || "").trim();
+  if (!id) return null;
+  const [master, observations] = await Promise.all([readCompanyMaster(), readHistoryObservations()]);
+  const rawCompany = master.companies?.[id];
+  if (!rawCompany) return null;
+  const company = companyRecordSummary(rawCompany);
+  const productSnapshotCandidates = [
+    rawCompany.inventory?.latest,
+    rawCompany.inventory?.previousLatest,
+    ...(rawCompany.inventory?.snapshots || [])
+  ]
+    .filter(Boolean)
+    .map((inventory) => inventory.productSnapshot)
+    .filter((snapshot) => snapshot && typeof snapshot === "object")
+    .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")));
+  const latestSnapshot = productSnapshotCandidates[0] || rawCompany.inventory?.latest?.productSnapshot || null;
+  const productSnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.products) && snapshot.products.length) || latestSnapshot;
+  const dailySnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.daily) && snapshot.daily.length) || latestSnapshot;
+  const snapshotDaily = Array.isArray(dailySnapshot?.daily) ? dailySnapshot.daily : [];
+  const historyDailyFallback = snapshotDaily.length ? null : companyHistoryDailyFallback(rawCompany, observations);
+  const daily = snapshotDaily.length ? snapshotDaily : historyDailyFallback.daily;
+  const observationBasis = {
+    latest: {
+      runId: latestSnapshot?.runId || "",
+      collectedAt: latestSnapshot?.collectedAt || ""
+    },
+    products: {
+      runId: productSnapshot?.productsRunId || productSnapshot?.runId || "",
+      collectedAt: productSnapshot?.productsCollectedAt || productSnapshot?.collectedAt || ""
+    },
+    daily: snapshotDaily.length
+      ? {
+          source: "product_snapshot",
+          sourceLabel: "업체 마스터 상품 스냅샷",
+          runId: dailySnapshot?.dailyRunId || dailySnapshot?.runId || "",
+          collectedAt: dailySnapshot?.dailyCollectedAt || dailySnapshot?.collectedAt || "",
+          dateRange: dailySnapshot?.dateRange || { start: "", end: "" },
+          rowCount: snapshotDaily.length,
+          actualObservation: true
+        }
+      : historyDailyFallback.basis
+  };
+  return {
+    company,
+    products: Array.isArray(productSnapshot?.products) ? productSnapshot.products : [],
+    daily,
+    priceGroups: Array.isArray(productSnapshot?.priceGroups) ? productSnapshot.priceGroups : [],
+    productSummary: productSnapshot?.summary || latestSnapshot?.summary || null,
+    observationBasis,
+    rankTrend: companyRankTrend(rawCompany, master, observations),
+    performanceTrend: companyPerformanceTrend(rawCompany, observations),
+    leadTime: companyLeadTimeSummary(rawCompany, observations),
+    definitions: {
+      estimatedRevenue: "네이버 공개 가격과 재고 변화로 계산한 예상매출",
+      actualRevenue: "업체 실제 예약·결제 자료가 연결되기 전에는 제공하지 않음",
+      dailyReservationRate: "네이버 공개 재고의 전체 수량과 잔여 수량 차이로 계산한 판매 추정률",
+      leadTime: "동일 숙박일의 반복 재고 관측에서 증가한 판매 추정량 기준",
+      regionalMedianRank: "동일 키워드·동일 수집 회차에 관측된 업체 순위 중앙값"
+    }
   };
 }
 
@@ -13929,9 +15115,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260822-editable-rank-range-v19"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260822-editable-rank-range-v19"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260822-editable-rank-range-v19"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260822-channel-brand-icons-v31"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260822-channel-brand-icons-v31"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260822-channel-brand-icons-v31"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -14272,6 +15458,15 @@ async function route(req, res) {
     if (req.method === "GET" && reqUrl.pathname === "/api/company-master/summary") {
       if (!requireAdminSession(session, req, res)) return;
       return send(res, 200, await summarizeCompanyMaster());
+    }
+
+    if (req.method === "GET" && reqUrl.pathname === "/api/company-master/detail") {
+      if (!requireAdminSession(session, req, res)) return;
+      const companyId = String(reqUrl.searchParams.get("companyId") || "").trim();
+      if (!companyId) return send(res, 400, { error: "companyId가 필요합니다." });
+      const detail = await summarizeCompanyMasterDetail(companyId);
+      if (!detail) return send(res, 404, { error: "업체를 찾을 수 없습니다." });
+      return send(res, 200, detail);
     }
 
     if (req.method === "GET" && reqUrl.pathname === "/api/location-card-requests") {

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260822-editable-rank-range-v37";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260822-channel-brand-icons-v49";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",
@@ -8,7 +8,11 @@ const APP_SHELL = [
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
-  "/icons/maskable-512.png"
+  "/icons/maskable-512.png",
+  "/assets/channels/naver.webp",
+  "/assets/channels/nol.png",
+  "/assets/channels/yeogi.webp",
+  "/assets/channels/ddnayo.ico"
 ];
 
 self.addEventListener("install", (event) => {
