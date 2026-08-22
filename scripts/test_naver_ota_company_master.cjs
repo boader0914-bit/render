@@ -661,6 +661,44 @@ async function main() {
     assert.equal(companyDetail.body.observationBasis.daily.collectedAt, "2026-08-22T01:00:00.000Z");
     assert.equal(companyDetail.body.observationBasis.daily.source, "product_snapshot", "stored product daily data must keep priority over history fallback");
     assert.equal(companyDetail.body.company.lastRunId, detailSecondRunId);
+    assert.equal(companyDetail.body.salesHistory.schemaVersion, 1);
+    assert.equal(companyDetail.body.salesHistory.current.summary.observedDays, 2, "sales history must aggregate stored dates without the old 64-row presentation limit");
+    assert.equal(companyDetail.body.salesHistory.current.summary.calendarDays, 8, "current coverage must count today through the latest stored stay date");
+    assert.equal(companyDetail.body.salesHistory.current.daily.length, 2);
+    assert.equal(companyDetail.body.salesHistory.definitions.week, "월요일부터 일요일");
+
+    const savedAdminProfile = await request(baseUrl, "POST", "/api/company-master/admin-profile", {
+      companyId: detailCompany.companyId,
+      primaryName: "관리자 확정 테스트 글램핑",
+      aliases: "테스트 별칭, 확정 별칭",
+      address: "경남 산청군 확정로 1",
+      region: "경남 산청",
+      lodgingType: "글램핑",
+      lodgingBasisTotal: 12,
+      dayUseBasisTotal: 3,
+      roomSegments: [{ type: "확정 객실", count: 12, weekdayPrice: 100000 }],
+      businessVerificationStatus: "confirmed",
+      businessName: "테스트 사업자",
+      registrationNumber: "123-45-67890",
+      representativeName: "홍길동",
+      businessVerifiedAt: "2026-08-23",
+      businessVerificationNote: "관리자 서류 확인",
+      note: "자동수집과 분리된 고정값"
+    }, cookies);
+    assert.equal(savedAdminProfile.statusCode, 200);
+    assert.equal(savedAdminProfile.body.company.adminProfile.primaryName, "관리자 확정 테스트 글램핑");
+    assert.deepEqual(savedAdminProfile.body.company.adminProfile.aliases, ["테스트 별칭", "확정 별칭"]);
+    assert.equal(savedAdminProfile.body.company.adminProfile.roomBasis.lodgingBasisTotal, 12);
+    assert.equal(savedAdminProfile.body.company.adminProfile.businessVerification.status, "confirmed");
+    const adminProfileDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(detailCompany.companyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(adminProfileDetail.body.company.adminProfile.registrationNumber, undefined);
+    assert.equal(adminProfileDetail.body.company.adminProfile.businessVerification.registrationNumber, "123-45-67890");
 
     const reopenedOlderDetailRun = await request(baseUrl, "GET", `/api/runs/${detailFirstRunId}`, null, cookies);
     assert.equal(reopenedOlderDetailRun.statusCode, 200);
@@ -673,6 +711,7 @@ async function main() {
     );
     assert.equal(detailAfterReopen.body.company.inventory?.latest?.runId, detailSecondRunId, "opening an older run must not replace the latest company snapshot");
     assert.equal(detailAfterReopen.body.company.lastRunId, detailSecondRunId, "opening an older run must not replace the latest company run marker");
+    assert.equal(detailAfterReopen.body.company.adminProfile.primaryName, "관리자 확정 테스트 글램핑", "opening or collecting a run must not overwrite administrator-confirmed fixed fields");
     assert.deepEqual(detailAfterReopen.body.rankTrend.points.map((row) => row.rank), [8, 5]);
     assert.equal(detailAfterReopen.body.products.length, 2);
 
@@ -862,6 +901,8 @@ async function main() {
     );
     assert.equal(fallbackDetail.statusCode, 200);
     assert.equal(fallbackDetail.body.daily.length, 64, "history daily fallback must keep a bounded latest window");
+    assert.ok(fallbackDetail.body.salesArchive.daily.length > 64, "sales archive must retain observations beyond the latest detail window");
+    assert.equal(fallbackDetail.body.salesArchive.source, "history_observations");
     assert.equal(fallbackDetail.body.observationBasis.daily.source, "history_observations");
     assert.equal(fallbackDetail.body.observationBasis.daily.file, "history/observations.jsonl");
     assert.equal(fallbackDetail.body.observationBasis.daily.runId, "fallback-conflict");

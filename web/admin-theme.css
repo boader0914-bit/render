@@ -1128,14 +1128,27 @@ html[data-theme-resolved="dark"] body.role-admin .admin-db-autocomplete {
   box-shadow: var(--theme-floating-subtle-shadow) !important;
 }
 
-html[data-theme-resolved] body.role-admin .admin-db-autocomplete-option:hover {
+html[data-theme-resolved] body.role-admin a.admin-db-autocomplete-option {
+  min-height: 0;
+  display: grid;
+  align-items: initial;
+  justify-content: initial;
   border-color: transparent !important;
-  background: var(--surface-card) !important;
+  border-radius: var(--ui-radius-control);
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  padding: 10px 12px;
+  box-shadow: none !important;
+}
+
+html[data-theme-resolved] body.role-admin .admin-db-autocomplete-option:hover {
+  border-color: var(--border-subtle) !important;
+  background: transparent !important;
 }
 
 html[data-theme-resolved] body.role-admin .admin-db-autocomplete-option:focus-visible {
-  border-color: transparent !important;
-  background: var(--surface-card) !important;
+  border-color: var(--border-strong) !important;
+  background: transparent !important;
   outline: 2px solid var(--focus-ring) !important;
   outline-offset: -2px;
 }

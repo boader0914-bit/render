@@ -2860,6 +2860,52 @@ async function publicB2BSearchUsageForSession(session = {}, store = null) {
   };
 }
 
+function sanitizeCompanyAdminProfileList(value, limit = 20, maxLength = 100) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "").split(/\s*(?:,|·|ㆍ|\||\n|\r)\s*/);
+  return boundedUnique(
+    source.map((item) => sanitizeMemberText(item, maxLength)).filter(Boolean),
+    limit
+  );
+}
+
+function sanitizeCompanyAdminProfile(payload = {}, previous = {}, session = {}) {
+  const verificationStatus = sanitizeMemberText(payload.businessVerificationStatus, 24);
+  const allowedVerificationStatuses = new Set(["unconfirmed", "confirmed", "mismatch", "not_applicable"]);
+  const roomSegments = sanitizeManualCorrectionRoomSegments(payload.roomSegments);
+  const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
+  const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
+  const updatedAt = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    active: true,
+    primaryName: sanitizeMemberText(payload.primaryName, 120),
+    aliases: sanitizeCompanyAdminProfileList(payload.aliases, 30, 120),
+    address: sanitizeMemberText(payload.address, 220),
+    region: sanitizeMemberText(payload.region, 100),
+    lodgingType: sanitizeMemberText(payload.lodgingType, 100),
+    roomBasis: {
+      lodgingBasisTotal: Number.isFinite(lodgingBasisTotal) && lodgingBasisTotal > 0 ? Math.round(lodgingBasisTotal) : null,
+      dayUseBasisTotal: Number.isFinite(dayUseBasisTotal) && dayUseBasisTotal > 0 ? Math.round(dayUseBasisTotal) : null,
+      roomSegments
+    },
+    businessVerification: {
+      status: allowedVerificationStatuses.has(verificationStatus) ? verificationStatus : "unconfirmed",
+      businessName: sanitizeMemberText(payload.businessName, 120),
+      registrationNumber: sanitizeMemberText(payload.registrationNumber, 40),
+      representativeName: sanitizeMemberText(payload.representativeName, 80),
+      verifiedAt: sanitizeMemberText(payload.businessVerifiedAt, 40),
+      note: sanitizeMemberText(payload.businessVerificationNote, 240)
+    },
+    note: sanitizeMemberText(payload.note, 300),
+    source: "admin_confirmed",
+    updatedAt,
+    updatedBy: sanitizeMemberText(session.username || session.memberId || previous.updatedBy || "admin", 80),
+    revision: Math.max(1, Number(previous.revision || 0) + 1)
+  };
+}
+
 function assertB2BMemberRankRange(crawlPayload = {}, policy = {}) {
   const detailRankRanges = String(crawlPayload.detailRankRanges || B2B_MEMBER_ALLOWED_RANK_RANGE).trim() || B2B_MEMBER_ALLOWED_RANK_RANGE;
   const expandedAllowed = policy.expandedSearchAllowed === true
@@ -5363,6 +5409,8 @@ const B2B_PRIVATE_FIELD_KEYS = new Set([
   "regionalOperations",
   "manualCorrection",
   "manualCorrectionHistory",
+  "adminProfile",
+  "adminProfileHistory",
   "companyManualCorrection",
   "manualCorrectionApplied",
   "adminReview",
@@ -9626,7 +9674,7 @@ function companyEntityFromItem(item = {}, run = {}, collectedAt = "") {
     collectionDbRoute: dbRoute,
     runId: run.id || "",
     collectedAt,
-    collectedDate: String(collectedAt || "").slice(0, 10),
+    collectedDate: collectedAt ? kstDayKeyFromValue(collectedAt) : "",
     listType: item.listType || "",
     inventoryStructureType: item.inventoryStructureType || "",
     inventoryStructureLabel: item.inventoryStructureLabel || "",
@@ -9703,6 +9751,8 @@ function createCompanyRecord(companyId, entity) {
     naverChannelObservationHistory: [],
     channelExposures: {},
     channelExposureHistory: [],
+    adminProfile: null,
+    adminProfileHistory: [],
     manualCorrection: null,
     duplicateNotes: []
   };
@@ -10397,6 +10447,8 @@ function companyRecordSummary(company = {}, activeKeywordKey = "") {
       .slice(-8),
     channelExposures: publicCompanyChannelExposures(company.channelExposures || company.channelExposure || {}),
     channelExposureHistory: (company.channelExposureHistory || []).slice(-12),
+    adminProfile: company.adminProfile || null,
+    adminProfileHistory: (company.adminProfileHistory || []).slice(-8),
     correctionStatus: companyCorrectionStatus(company, inventory),
     manualCorrection,
     manualCorrectionHistory: (company.manualCorrectionHistory || []).slice(-8),
@@ -11839,6 +11891,17 @@ function mergeCompanyRecords(master, companyIds = [], candidateKey = "") {
     ]
       .sort((a, b) => String(a.at || "").localeCompare(String(b.at || "")))
       .slice(-80);
+    const latestAdminProfile = [target.adminProfile, source.adminProfile]
+      .filter(Boolean)
+      .sort((a, b) => String(a.updatedAt || "").localeCompare(String(b.updatedAt || "")))
+      .at(-1);
+    if (latestAdminProfile) target.adminProfile = latestAdminProfile;
+    target.adminProfileHistory = [
+      ...(target.adminProfileHistory || []),
+      ...(source.adminProfileHistory || [])
+    ]
+      .sort((a, b) => String(a.at || a.updatedAt || "").localeCompare(String(b.at || b.updatedAt || "")))
+      .slice(-50);
     target.manualCorrectionHistory = [
       ...(target.manualCorrectionHistory || []),
       ...(source.manualCorrectionHistory || [])
@@ -12514,6 +12577,41 @@ async function summarizeCompanyMaster() {
   };
 }
 
+async function saveCompanyAdminProfile(payload = {}, session = {}) {
+  const companyId = String(payload.companyId || "").trim();
+  const master = await readCompanyMaster();
+  const company = master.companies?.[companyId];
+  if (!company) {
+    const error = new Error("고정 기본정보를 저장할 업체를 찾지 못했습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const now = new Date().toISOString();
+  const clear = payload.active === false || String(payload.action || "").trim() === "clear";
+  if (clear) {
+    company.adminProfile = null;
+  } else {
+    company.adminProfile = sanitizeCompanyAdminProfile(payload, company.adminProfile || {}, session);
+  }
+  company.adminProfileHistory = [
+    ...(company.adminProfileHistory || []),
+    {
+      at: now,
+      action: clear ? "clear" : "save",
+      revision: company.adminProfile?.revision || null,
+      updatedBy: sanitizeMemberText(session.username || session.memberId || "admin", 80),
+      primaryName: company.adminProfile?.primaryName || "",
+      businessVerificationStatus: company.adminProfile?.businessVerification?.status || "unconfirmed"
+    }
+  ].slice(-50);
+  await writeCompanyMaster(master);
+  return {
+    ...(await summarizeCompanyMaster()),
+    company: companyRecordSummary(company),
+    resolved: { action: clear ? "clearAdminProfile" : "saveAdminProfile", companyId }
+  };
+}
+
 function medianRank(values = []) {
   const rows = values
     .map(Number)
@@ -12764,6 +12862,7 @@ function companyPerformanceTrend(company = {}, observations = []) {
         runId: snapshot.runId || "",
         collectedAt: performanceCollectedAt(snapshot),
         checkIn: signal.checkIn || "",
+        checkOut: signal.checkOut || "",
         observedDays: Number(lodging.days || dayUse.days || 0),
         reservationRate: combinedRate,
         lodgingReservationRate: lodgingRate,
@@ -12910,6 +13009,8 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
         minPrice: price,
         maxPrice: price,
         estimatedRevenue,
+        priceEvidenceType: price !== null ? "representative_observed_price" : "none",
+        revenueEligible: false,
         actualRevenue: null,
         pricedSoldOut: sold !== null && price !== null ? sold : null,
         missingPriceSoldOut: sold !== null && price === null ? sold : null,
@@ -12940,6 +13041,7 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
   const collectedDateValues = daily.map((row) => row.collectedDate).filter(Boolean).sort();
   return {
     daily,
+    archiveDaily: observedRows,
     basis: {
       source: "history_observations",
       sourceLabel: "실제 수집 이력",
@@ -12957,6 +13059,195 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
       observedRowCount: observedRows.length,
       truncated: observedRows.length > daily.length,
       actualObservation: true
+    }
+  };
+}
+
+function companySalesHistorySummary(archiveRows = [], snapshotRows = [], today = kstDate(0)) {
+  const isoDate = (value) => {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return "";
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    const iso = Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : "";
+    return iso === `${match[1]}-${match[2]}-${match[3]}` ? iso : "";
+  };
+  const shiftDate = (value, days) => {
+    const iso = isoDate(value);
+    if (!iso) return "";
+    const date = new Date(`${iso}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + Number(days || 0));
+    return date.toISOString().slice(0, 10);
+  };
+  const dayCount = (start, end) => {
+    const first = Date.parse(`${isoDate(start)}T00:00:00Z`);
+    const last = Date.parse(`${isoDate(end)}T00:00:00Z`);
+    return Number.isFinite(first) && Number.isFinite(last) && last >= first
+      ? Math.floor((last - first) / 86400000) + 1
+      : 0;
+  };
+  const normalized = new Map();
+  const addRow = (row = {}, snapshot = false) => {
+    const date = isoDate(row.date || row.stayDate);
+    const productType = String(row.productType || "lodging").toLowerCase();
+    if (!date || !["lodging", "dayuse"].includes(productType)) return;
+    const key = `${productType}:${date}`;
+    const total = productSnapshotNumber(row.total ?? row.supply);
+    const sold = productSnapshotNumber(row.sold);
+    const estimatedRevenue = productSnapshotNumber(row.estimatedRevenue);
+    const price = productSnapshotNumber(row.price ?? row.minPrice);
+    const existing = normalized.get(key);
+    const next = {
+      date,
+      productType,
+      total: total !== null && total >= 0 ? total : null,
+      sold: sold !== null && sold >= 0 ? sold : null,
+      estimatedRevenue: estimatedRevenue !== null && estimatedRevenue >= 0 ? estimatedRevenue : null,
+      price: price !== null && price > 0 ? price : null,
+      priceEvidenceType: snapshot && price !== null && price > 0 ? "stay_date_observed_price" : (row.priceEvidenceType || "none"),
+      revenueEligible: snapshot && estimatedRevenue !== null && estimatedRevenue >= 0,
+      collectedAt: String(row.collectedAt || ""),
+      collectedDate: row.collectedAt ? kstDayKeyFromValue(row.collectedAt) : isoDate(row.collectedDate),
+      runId: String(row.runId || ""),
+      source: snapshot ? "product_snapshot" : "history_observations"
+    };
+    if (!existing || snapshot || historyDailyObservationIsNewer(next, existing)) normalized.set(key, next);
+  };
+  (Array.isArray(archiveRows) ? archiveRows : []).forEach((row) => addRow(row, false));
+  (Array.isArray(snapshotRows) ? snapshotRows : []).forEach((row) => addRow(row, true));
+
+  const byDate = new Map();
+  for (const row of normalized.values()) {
+    const group = byDate.get(row.date) || { date: row.date, rows: [] };
+    group.rows.push(row);
+    byDate.set(row.date, group);
+  }
+  const daily = [...byDate.values()].map((group) => {
+    const completeQuantity = group.rows.length > 0 && group.rows.every((row) => row.total !== null && row.sold !== null);
+    const total = completeQuantity ? group.rows.reduce((sum, row) => sum + row.total, 0) : null;
+    const sold = completeQuantity ? group.rows.reduce((sum, row) => sum + row.sold, 0) : null;
+    const revenueEligible = completeQuantity && group.rows.every((row) => row.sold === 0 || row.revenueEligible === true);
+    const estimatedRevenue = revenueEligible
+      ? group.rows.reduce((sum, row) => sum + Number(row.estimatedRevenue || 0), 0)
+      : null;
+    const collected = [...group.rows]
+      .sort((a, b) => String(a.collectedAt || a.collectedDate).localeCompare(String(b.collectedAt || b.collectedDate)))
+      .at(-1) || {};
+    return {
+      date: group.date,
+      total,
+      sold,
+      reservationRate: total !== null && total > 0 && sold !== null ? Number((sold / total).toFixed(4)) : null,
+      estimatedRevenue,
+      rateEligible: total !== null && total > 0 && sold !== null,
+      revenueEligible,
+      priceEvidenceType: revenueEligible ? "stay_date_observed_price" : (group.rows.some((row) => row.price !== null) ? "representative_only" : "none"),
+      observedProductTypes: boundedUnique(group.rows.map((row) => row.productType), 4),
+      collectedAt: collected.collectedAt || "",
+      collectedDate: collected.collectedDate || "",
+      runIds: boundedUnique(group.rows.map((row) => row.runId).filter(Boolean), 12)
+    };
+  }).sort((a, b) => a.date.localeCompare(b.date));
+
+  const summaryFor = (rows, rangeStart, rangeEnd) => {
+    const rateRows = rows.filter((row) => row.rateEligible);
+    const revenueRows = rows.filter((row) => row.revenueEligible);
+    const supply = rateRows.reduce((sum, row) => sum + Number(row.total || 0), 0);
+    const sold = rateRows.reduce((sum, row) => sum + Number(row.sold || 0), 0);
+    const calendarDays = dayCount(rangeStart, rangeEnd);
+    return {
+      rangeStart: isoDate(rangeStart),
+      rangeEnd: isoDate(rangeEnd),
+      calendarDays,
+      observedDays: rows.length,
+      missingDays: Math.max(0, calendarDays - rows.length),
+      rateObservedDays: rateRows.length,
+      revenueObservedDays: revenueRows.length,
+      supply: rateRows.length ? supply : null,
+      sold: rateRows.length ? sold : null,
+      reservationRate: supply > 0 ? Number((sold / supply).toFixed(4)) : null,
+      estimatedRevenue: revenueRows.length ? Math.round(revenueRows.reduce((sum, row) => sum + Number(row.estimatedRevenue || 0), 0)) : null
+    };
+  };
+  const previousDay = shiftDate(today, -1);
+  const currentRows = daily.filter((row) => row.date >= today);
+  const pastRows = daily.filter((row) => row.date <= previousDay);
+  const firstPastDate = pastRows[0]?.date || "";
+  const latestCurrentDate = currentRows.at(-1)?.date || "";
+  const monthMap = new Map();
+  pastRows.forEach((row) => {
+    const monthKey = row.date.slice(0, 7);
+    const bucket = monthMap.get(monthKey) || [];
+    bucket.push(row);
+    monthMap.set(monthKey, bucket);
+  });
+  const months = [...monthMap.entries()].map(([monthKey, rows]) => {
+    const [year, month] = monthKey.split("-").map(Number);
+    const monthStart = `${monthKey}-01`;
+    const monthEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+    const rangeStart = firstPastDate > monthStart ? firstPastDate : monthStart;
+    const rangeEnd = previousDay < monthEnd ? previousDay : monthEnd;
+    const weekMap = new Map();
+    rows.forEach((row) => {
+      const date = new Date(`${row.date}T00:00:00Z`);
+      const day = date.getUTCDay();
+      const monday = shiftDate(row.date, -(day === 0 ? 6 : day - 1));
+      const bucket = weekMap.get(monday) || [];
+      bucket.push(row);
+      weekMap.set(monday, bucket);
+    });
+    const weeks = [...weekMap.entries()].map(([weekStart, weekRows]) => {
+      const weekEnd = shiftDate(weekStart, 6);
+      const boundedStart = weekStart < rangeStart ? rangeStart : weekStart;
+      const boundedEnd = weekEnd > rangeEnd ? rangeEnd : weekEnd;
+      return {
+        key: weekStart,
+        label: `${boundedStart}~${boundedEnd}`,
+        summary: summaryFor(weekRows, boundedStart, boundedEnd),
+        daily: weekRows
+      };
+    }).sort((a, b) => a.key.localeCompare(b.key));
+    return {
+      key: monthKey,
+      year,
+      month,
+      summary: summaryFor(rows, rangeStart, rangeEnd),
+      weeks
+    };
+  }).sort((a, b) => b.key.localeCompare(a.key));
+  const yearMap = new Map();
+  months.forEach((month) => {
+    const bucket = yearMap.get(month.year) || [];
+    bucket.push(month);
+    yearMap.set(month.year, bucket);
+  });
+  return {
+    schemaVersion: 1,
+    source: "history_observations",
+    actualObservation: true,
+    generatedAt: new Date().toISOString(),
+    current: {
+      summary: currentRows.length ? summaryFor(currentRows, today, latestCurrentDate) : null,
+      daily: currentRows
+    },
+    past: {
+      rangeStart: firstPastDate,
+      rangeEnd: pastRows.length ? previousDay : "",
+      years: [...yearMap.entries()]
+        .sort((a, b) => b[0] - a[0])
+        .map(([year, yearMonths]) => {
+          const rows = pastRows.filter((row) => Number(row.date.slice(0, 4)) === Number(year));
+          const yearStart = `${year}-01-01`;
+          const yearEnd = `${year}-12-31`;
+          const rangeStart = firstPastDate > yearStart ? firstPastDate : yearStart;
+          const rangeEnd = previousDay < yearEnd ? previousDay : yearEnd;
+          return { year, summary: summaryFor(rows, rangeStart, rangeEnd), months: yearMonths };
+        })
+    },
+    definitions: {
+      reservationRate: "판매추정수 합계 ÷ 공개 총량 합계",
+      estimatedRevenue: "숙박일별 가격 근거가 확인된 판매추정 건만 합산",
+      missingDates: "수집하지 않은 날짜는 0으로 계산하지 않음",
+      week: "월요일부터 일요일"
     }
   };
 }
@@ -12994,7 +13285,7 @@ function companyLeadTimeSummary(company = {}, observations = []) {
       if (soldDelta <= 0) continue;
       const leadTimeDays = Number.isFinite(Number(current.leadTimeDays))
         ? Number(current.leadTimeDays)
-        : dateDiffDays(String(current.collectedDate || current.collectedAt || "").slice(0, 10), current.stayDate);
+        : dateDiffDays(current.collectedAt ? kstDayKeyFromValue(current.collectedAt) : String(current.collectedDate || "").slice(0, 10), current.stayDate);
       if (!Number.isFinite(leadTimeDays) || leadTimeDays < 0) continue;
       events.push({
         stayDate: current.stayDate,
@@ -13025,7 +13316,9 @@ function companyLeadTimeSummary(company = {}, observations = []) {
   if (weightedMedianLower !== null && weightedMedianUpper !== null) {
     medianDays = Number(((weightedMedianLower + weightedMedianUpper) / 2).toFixed(1));
   }
-  const collectedDateCount = new Set(rows.map((row) => row.collectedDate || String(row.collectedAt || "").slice(0, 10)).filter(Boolean)).size;
+  const observationDates = rows.map((row) => row.collectedAt ? kstDayKeyFromValue(row.collectedAt) : row.collectedDate).filter(Boolean).sort();
+  const collectedDateCount = new Set(observationDates).size;
+  const stayDates = rows.map((row) => row.stayDate).filter(Boolean).sort();
   const status = collectedDateCount < 2
     ? "insufficient_observations"
     : (pickupCount > 0 ? "ready" : "no_pickup_observed");
@@ -13041,6 +13334,8 @@ function companyLeadTimeSummary(company = {}, observations = []) {
     statusLabel: status === "ready" ? "추정 가능" : status === "no_pickup_observed" ? "픽업 관측 대기" : "동일 숙박일 2회 이상 관측 필요",
     source: "inventory_pickup_estimate",
     actualBookingLeadTime: false,
+    observationRange: { start: observationDates[0] || "", end: observationDates.at(-1) || "" },
+    stayDateRange: { start: stayDates[0] || "", end: stayDates.at(-1) || "" },
     negativeChangeCount,
     buckets: [...bucketMap.entries()]
       .map(([leadTimeDays, pickup]) => ({ leadTimeDays, pickup }))
@@ -13070,6 +13365,7 @@ async function summarizeCompanyMasterDetail(companyId = "") {
   const dailySnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.daily) && snapshot.daily.length) || latestSnapshot;
   const snapshotDaily = Array.isArray(dailySnapshot?.daily) ? dailySnapshot.daily : [];
   const historyDailyFallback = snapshotDaily.length ? null : companyHistoryDailyFallback(rawCompany, observations);
+  const historySalesArchive = historyDailyFallback || companyHistoryDailyFallback(rawCompany, observations);
   const daily = snapshotDaily.length ? snapshotDaily : historyDailyFallback.daily;
   const observationBasis = {
     latest: {
@@ -13096,6 +13392,17 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     company,
     products: Array.isArray(productSnapshot?.products) ? productSnapshot.products : [],
     daily,
+    salesArchive: {
+      source: "history_observations",
+      sourceLabel: "실제 수집 이력",
+      daily: Array.isArray(historySalesArchive?.archiveDaily) ? historySalesArchive.archiveDaily : [],
+      rowCount: Number(historySalesArchive?.archiveDaily?.length || 0),
+      actualObservation: true
+    },
+    salesHistory: companySalesHistorySummary(
+      Array.isArray(historySalesArchive?.archiveDaily) ? historySalesArchive.archiveDaily : [],
+      snapshotDaily
+    ),
     priceGroups: Array.isArray(productSnapshot?.priceGroups) ? productSnapshot.priceGroups : [],
     productSummary: productSnapshot?.summary || latestSnapshot?.summary || null,
     observationBasis,
@@ -13107,7 +13414,7 @@ async function summarizeCompanyMasterDetail(companyId = "") {
       actualRevenue: "업체 실제 예약·결제 자료가 연결되기 전에는 제공하지 않음",
       dailyReservationRate: "네이버 공개 재고의 전체 수량과 잔여 수량 차이로 계산한 판매 추정률",
       leadTime: "동일 숙박일의 반복 재고 관측에서 증가한 판매 추정량 기준",
-      regionalMedianRank: "동일 키워드·동일 수집 회차에 관측된 업체 순위 중앙값"
+      regionalMedianRank: "같은 키워드·같은 수집 회차에서 관측된 업체들을 순위순으로 놓았을 때의 중간순위. 지역 전체 숙박시장 평균이 아님"
     }
   };
 }
@@ -13166,7 +13473,7 @@ function buildHistoryObservations(data, collectedAt) {
   const run = data?.run || {};
   const dbRoute = runCollectionDbRoute(run);
   const checkIn = run.checkIn || runDateFromId(run.id) || kstDate(0);
-  const collectedDate = String(collectedAt || "").slice(0, 10) || runDateFromId(run.id) || kstDate(0);
+  const collectedDate = collectedAt ? kstDayKeyFromValue(collectedAt) : (runDateFromId(run.id) || kstDate(0));
   const keyword = run.keyword || run.label || "";
   const keywordKey = compactKeyword(keyword).toLowerCase();
   const items = data?.availability?.items || [];
@@ -15115,9 +15422,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-company-inline-search-v40"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-company-inline-search-v40"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-company-inline-search-v40"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-company-fixed-profile-v43"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-company-fixed-profile-v43"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-company-fixed-profile-v43"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -15513,6 +15820,12 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyManualCorrection(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/admin-profile") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveCompanyAdminProfile(payload, session));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/channel-exposure") {

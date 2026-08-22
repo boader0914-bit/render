@@ -34062,7 +34062,7 @@ body.role-admin .admin-db-company-action a {
   text-decoration: none;
 }
 
-body.role-admin a[data-admin-db-company-select] {
+body.role-admin a[data-admin-db-company-select]:not(.admin-db-autocomplete-option) {
   border: 1px solid rgba(121, 184, 255, .54);
   border-radius: 8px;
   background: linear-gradient(180deg, #4a90e2, #2f74d0);
@@ -37012,6 +37012,208 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   overflow-wrap: anywhere;
 }
 
+.admin-reference-inline-more {
+  display: inline;
+  margin-inline-start: 6px;
+}
+
+.admin-reference-inline-more summary {
+  display: inline;
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 850;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-reference-inline-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-reference-inline-more[open] {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+}
+
+.admin-reference-inline-more span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.admin-reference-subsection-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  margin: 9px 3px 5px;
+}
+
+.admin-reference-subsection-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.admin-reference-subsection-head strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 920;
+}
+
+.admin-reference-subsection-head small {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 720;
+}
+
+.admin-reference-subsection-head mark,
+.admin-reference-subsection-head button {
+  min-height: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 3px 7px;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.admin-reference-subsection-head button {
+  cursor: pointer;
+}
+
+.admin-reference-observed-head {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+
+.admin-reference-fixed-basis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  margin: 6px 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-control);
+}
+
+.admin-reference-fixed-basis > article {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+}
+
+.admin-reference-fixed-basis > article + article {
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.admin-reference-fixed-basis span,
+.admin-reference-fixed-basis small {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 740;
+}
+
+.admin-reference-fixed-basis strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.admin-reference-fixed-segments {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border-subtle);
+  padding: 5px 8px;
+}
+
+.admin-reference-fixed-segment {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.admin-db-profile-form {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-db-profile-intro,
+.admin-db-profile-section {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-card);
+  padding: 12px;
+}
+
+.admin-db-profile-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-profile-intro > div,
+.admin-db-profile-section > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-profile-intro span,
+.admin-db-profile-section small,
+.admin-db-profile-note > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.admin-db-profile-intro strong,
+.admin-db-profile-section strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 920;
+}
+
+.admin-db-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-db-profile-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.admin-db-profile-grid label,
+.admin-db-profile-note {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.admin-db-profile-grid label > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.admin-db-profile-grid :is(input, select),
+.admin-db-profile-note input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  box-sizing: border-box;
+}
+
 .admin-reference-basic-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -37339,8 +37541,7 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   max-height: 188px;
 }
 
-.admin-reference-chart-grid .admin-company-chart-panel figcaption,
-.admin-reference-recent > .admin-reference-footnote {
+.admin-reference-chart-grid .admin-company-chart-panel figcaption {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -37479,6 +37680,230 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   text-align: center;
 }
 
+.admin-reference-recent {
+  display: grid;
+  gap: 9px;
+}
+
+.admin-reference-current-observation,
+.admin-reference-archive {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-card);
+}
+
+.admin-reference-observation-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 10px;
+}
+
+.admin-reference-observation-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-reference-observation-head strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 920;
+}
+
+.admin-reference-observation-head small {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 740;
+}
+
+.admin-reference-current-metrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-reference-current-metrics > article {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 9px 8px 10px;
+  text-align: center;
+}
+
+.admin-reference-current-metrics > article + article {
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.admin-reference-current-metrics span {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 780;
+}
+
+.admin-reference-current-metrics strong {
+  color: var(--text-primary);
+  font-size: clamp(15px, 1.65vw, 20px);
+  font-weight: 950;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+}
+
+.admin-reference-archive-tree {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 7px;
+}
+
+.admin-reference-archive-level {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-card);
+}
+
+.admin-reference-archive-level > summary {
+  min-width: 0;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 18px minmax(105px, .65fr) minmax(220px, 1.35fr);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  color: var(--text-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-reference-archive-level > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-reference-archive-level > summary::before {
+  content: "›";
+  color: var(--text-secondary);
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  transform-origin: center;
+  transition: transform 140ms ease;
+}
+
+.admin-reference-archive-level[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.admin-reference-archive-level > summary:hover {
+  background: var(--surface-control);
+}
+
+.admin-reference-archive-level > summary:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.admin-reference-archive-year > summary {
+  background: var(--surface-soft);
+}
+
+.admin-reference-archive-month > summary {
+  background: var(--surface-control);
+}
+
+.admin-reference-archive-children {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--border-subtle);
+  padding: 6px 6px 6px 22px;
+}
+
+.admin-reference-archive-week .admin-reference-archive-children {
+  padding-inline-start: 30px;
+}
+
+.admin-reference-archive-label {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.admin-reference-archive-label strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 920;
+}
+
+.admin-reference-archive-label small {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 720;
+}
+
+.admin-reference-archive-metrics {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 760;
+  text-align: right;
+}
+
+.admin-reference-archive-metrics > span {
+  white-space: nowrap;
+}
+
+.admin-reference-archive-metrics strong {
+  margin-inline-start: 4px;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 920;
+}
+
+.admin-reference-archive-metrics small {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  padding: 2px 6px;
+  color: var(--text-secondary);
+  font-size: 8px;
+  font-weight: 850;
+}
+
+.admin-reference-archive-days {
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding: 5px 7px 7px 25px;
+}
+
+.admin-reference-archive-days :is(.admin-reference-table-head, .admin-reference-recent-row) {
+  grid-template-columns: minmax(110px, .8fr) minmax(120px, 1fr) minmax(120px, 1fr);
+}
+
+.admin-reference-recent > .admin-reference-footnote {
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-control);
+  padding: 7px 9px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 720;
+  line-height: 1.4;
+}
+
 @media (max-width: 980px) {
   .admin-reference-top-grid {
     grid-template-columns: 1fr;
@@ -37511,6 +37936,10 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-recent-summary {
     justify-content: flex-start;
     padding: 0 3px 8px;
+  }
+
+  .admin-reference-archive-level > summary {
+    grid-template-columns: 18px minmax(92px, .55fr) minmax(200px, 1.45fr);
   }
 }
 
@@ -37548,6 +37977,29 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-kpi-grid,
   .admin-reference-chart-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-reference-subsection-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-reference-subsection-head button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .admin-reference-fixed-basis,
+  .admin-db-profile-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-reference-fixed-basis > article + article {
+    border-inline-start: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .admin-db-profile-grid .wide {
+    grid-column: auto;
   }
 
   .admin-reference-chart-grid {
@@ -37618,6 +38070,31 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
     border-inline-start: 0;
     padding-inline-start: 0;
   }
+
+  .admin-reference-observation-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .admin-reference-archive-level > summary {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .admin-reference-archive-metrics {
+    grid-column: 2;
+    justify-content: flex-start;
+    padding-bottom: 2px;
+    text-align: left;
+  }
+
+  .admin-reference-archive-children {
+    padding-inline-start: 12px;
+  }
+
+  .admin-reference-archive-days {
+    padding-inline-start: 7px;
+  }
 }
 
 @media (max-width: 460px) {
@@ -37673,6 +38150,24 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-recent-summary {
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .admin-reference-current-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-reference-current-metrics > article:nth-child(3) {
+    border-inline-start: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .admin-reference-current-metrics > article:nth-child(4) {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .admin-reference-archive-metrics {
+    display: grid;
+    gap: 2px;
   }
 }
 

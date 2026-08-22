@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-inline-search-v58";
-const expectedAssetVersion = "v2-20260823-company-inline-search-v40";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-fixed-profile-v61";
+const expectedAssetVersion = "v2-20260823-company-fixed-profile-v43";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -745,6 +745,10 @@ const referenceDashboardBlock = app.slice(
   app.indexOf("function adminDbCompanyReferenceDashboardHtml("),
   app.indexOf("function adminDbInlineCollectionHtml(", app.indexOf("function adminDbCompanyReferenceDashboardHtml("))
 );
+const referenceSalesHistoryBlock = app.slice(
+  app.indexOf("function adminDbReferenceDateLabel("),
+  app.indexOf("function adminDbReferenceProductRowHtml(", app.indexOf("function adminDbReferenceDateLabel("))
+);
 const referenceChannelRowBlock = app.slice(
   app.indexOf("function adminDbReferenceChannelRowHtml("),
   app.indexOf("function adminDbReferenceChannelsCard(", app.indexOf("function adminDbReferenceChannelRowHtml("))
@@ -818,11 +822,16 @@ assert(
     && adminDbAutocompleteBlock.includes("Math.min(8")
     && app.includes("data-admin-db-autocomplete-option")
     && app.includes("function refreshAdminDbAutocomplete(input)")
+    && app.includes("function closeAdminDbAutocomplete()")
     && app.includes("function scheduleAdminDbQueryRender(input, delay = 40)")
     && app.includes('input.insertAdjacentHTML("afterend", markup)')
+    && adminDbBindEventsBlock.includes('document.addEventListener("pointerdown", (event) => {')
+    && adminDbBindEventsBlock.includes('if (event.target.closest?.(".admin-db-company-search-shell")) return;')
+    && adminDbBindEventsBlock.includes('document.addEventListener("focusin", (event) => {')
+    && adminDbBindEventsBlock.includes("closeAdminDbAutocomplete();")
     && app.includes('event.key === "ArrowDown"')
     && app.includes('(adminDbQuery || autocompleteOption) && event.key === "Escape"'),
-  "one-character company autocomplete must rank name and alias matches, cap suggestions at eight, and support keyboard navigation",
+  "one-character company autocomplete must rank name and alias matches, cap suggestions at eight, support keyboard navigation, and close on outside interaction",
   failures
 );
 
@@ -832,12 +841,13 @@ assert(
     && adminDbAutocompleteCssBlock.includes("background: var(--surface-control);")
     && adminDbAutocompleteCssBlock.includes("box-shadow: var(--theme-floating-subtle-shadow);")
     && adminDbAutocompleteCssBlock.includes("border-radius: var(--ui-radius-control);")
-    && adminDbAutocompleteCssBlock.includes("background: var(--surface-card);")
     && adminDbAutocompleteCssBlock.includes("outline: 2px solid var(--focus-ring);")
     && !adminDbAutocompleteCssBlock.includes("border-color: var(--theme-accent);")
+    && styles.includes('body.role-admin a[data-admin-db-company-select]:not(.admin-db-autocomplete-option)')
+    && /html\[data-theme-resolved\] body\.role-admin a\.admin-db-autocomplete-option\s*\{[^}]*display:\s*grid;[^}]*border-color:\s*transparent\s*!important;[^}]*background:\s*transparent\s*!important;[^}]*color:\s*var\(--text-primary\)\s*!important;[^}]*box-shadow:\s*none\s*!important;/i.test(themeStyles)
     && /html\[data-theme-resolved="light"\] body\.role-admin \.admin-db-autocomplete\s*\{[^}]*border-color:\s*#ffffff\s*!important;[^}]*background:\s*var\(--surface-card\)\s*!important;[^}]*box-shadow:\s*0 0 0 1px var\(--border-subtle\),\s*var\(--theme-floating-subtle-shadow\)\s*!important;/i.test(themeStyles)
     && /html\[data-theme-resolved="dark"\] body\.role-admin \.admin-db-autocomplete\s*\{[^}]*border-color:\s*var\(--border-subtle\)\s*!important;[^}]*background:\s*transparent\s*!important;[^}]*box-shadow:\s*var\(--theme-floating-subtle-shadow\)\s*!important;/i.test(themeStyles),
-  "company autocomplete must use a white card and white border effect in light mode, and a transparent surface with the existing border effect in dark mode",
+  "company autocomplete must not inherit blue company links, must use a white card and border effect in light mode, and a transparent surface in dark mode",
   failures
 );
 
@@ -907,9 +917,9 @@ assert(
 assert(
   referenceChannelRowBlock.includes("naverPartnerName")
     && referenceChannelRowBlock.includes("공식 연동 표기 ·")
-    && referenceChannelRowBlock.includes("공식 연동 표기 미확인")
-    && referenceChannelRowBlock.includes("네이버 예약상품 미확인")
-    && referenceChannelRowBlock.includes("필요 시 수동 확인"),
+    && referenceChannelRowBlock.includes("공식 연동 표기 없음")
+    && referenceChannelRowBlock.includes("관리자 확인값")
+    && referenceChannelRowBlock.includes("checkedLabel"),
   "Naver channel UI must show official product partner labels and keep missing labels as manual-review evidence",
   failures
 );
@@ -931,9 +941,25 @@ assert(
     && adminCompanyChartBlock.includes("예약 채널")
     && adminCompanyChartBlock.includes("누적 변동 지표")
     && adminCompanyChartBlock.includes("최근 판매 관측")
-    && adminCompanyChartBlock.includes("실제 예약·결제자료가 아닙니다")
+    && adminCompanyChartBlock.includes("실제 보유 객실·결제 매출과 구분")
     && adminCompanyChartBlock.includes("네이버 예약 노출과 외부 OTA 입점·재고 연동은 서로 다른 근거"),
   "company reference dashboard must render A and B first, then D cumulative evidence and C recent observations",
+  failures
+);
+
+assert(
+  adminCompanyChartBlock.includes("관리자 확정 기본정보")
+    && adminCompanyChartBlock.includes("최근 자동관측 상품정보")
+    && adminCompanyChartBlock.includes("사업자 확인값")
+    && adminCompanyChartBlock.includes('data-admin-db-open-fold="profile"')
+    && !adminCompanyChartBlock.includes("플레이스 ID")
+    && adminDbDetailBlock.includes('foldKey: "profile"')
+    && app.includes("function adminDbAdminProfilePanel(")
+    && app.includes("function saveCompanyAdminProfile(")
+    && app.includes('fetchJson("/api/company-master/admin-profile"')
+    && server.includes('reqUrl.pathname === "/api/company-master/admin-profile"')
+    && server.includes("sanitizeCompanyAdminProfile(payload"),
+  "company basics must separate administrator-confirmed fixed fields from recent observed products without exposing Naver ids",
   failures
 );
 
@@ -942,10 +968,61 @@ assert(
     && referenceCssBlock.includes("grid-template-columns: repeat(4, minmax(0, 1fr))")
     && referenceCssBlock.includes("grid-template-columns: repeat(2, minmax(0, 1fr))")
     && referenceCssBlock.includes(".admin-reference-product-table")
-    && referenceCssBlock.includes(".admin-reference-recent-table")
+    && referenceCssBlock.includes(".admin-reference-current-observation")
+    && referenceCssBlock.includes(".admin-reference-archive-year")
+    && referenceCssBlock.includes(".admin-reference-archive-month")
+    && referenceCssBlock.includes(".admin-reference-archive-week")
     && referenceCssBlock.includes("@media (max-width: 760px)")
     && !/(#[0-9a-f]{3,8}|linear-gradient|radial-gradient|!important)/i.test(referenceCssBlock),
   "company reference layout must preserve the attached desktop geometry and token-only responsive styling",
+  failures
+);
+
+assert(
+  adminCompanyChartBlock.includes("현재 관측 · 오늘 ~ 최신 확보 예약일")
+    && adminCompanyChartBlock.includes("지난 관측자료")
+    && adminCompanyChartBlock.includes("연도 → 월 → 주")
+    && adminCompanyChartBlock.includes("adminDbReferenceResolvedSalesHistory(model)")
+    && adminCompanyChartBlock.includes("model.salesHistory")
+    && adminCompanyChartBlock.includes("adminDbReferenceArchiveHtml(history.archive)")
+    && adminCompanyChartBlock.includes('class="admin-reference-archive-level admin-reference-archive-year"')
+    && adminCompanyChartBlock.includes('class="admin-reference-archive-level admin-reference-archive-month"')
+    && adminCompanyChartBlock.includes('class="admin-reference-archive-level admin-reference-archive-week"'),
+  "recent sales observations must separate current dates and expose a year-month-week archive",
+  failures
+);
+
+const salesHistorySandbox = {
+  todayIsoDate: () => "2026-08-23",
+  adminDbChartClamp: (value, min, max) => Math.max(min, Math.min(max, value)),
+  optionalNumber(value) {
+    if (value === "" || value === null || value === undefined) return NaN;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  }
+};
+vm.createContext(salesHistorySandbox);
+vm.runInContext(`${referenceSalesHistoryBlock}\nthis.adminDbReferenceSalesHistoryModel = adminDbReferenceSalesHistoryModel;`, salesHistorySandbox);
+const salesHistoryModel = salesHistorySandbox.adminDbReferenceSalesHistoryModel({
+  daily: [
+    { date: "2026-08-23", productType: "lodging", total: 10, sold: 5, estimatedRevenue: 500000 },
+    { date: "2026-08-25", productType: "lodging", total: 10, sold: 6, estimatedRevenue: 600000 },
+    { date: "2026-08-20", productType: "lodging", total: 10, sold: 2, estimatedRevenue: 200000 },
+    { date: "2026-08-15", productType: "lodging", total: 10, sold: 4, estimatedRevenue: 400000 },
+    { date: "2025-12-30", productType: "lodging", total: 8, sold: 2, estimatedRevenue: 180000 }
+  ]
+}, "2026-08-23");
+
+assert(
+  salesHistoryModel.current.observedDays === 2
+    && Math.abs(salesHistoryModel.current.rate - 0.55) < 0.0001
+    && salesHistoryModel.current.estimatedRevenue === 1100000
+    && salesHistoryModel.expectedCurrentDays === 3
+    && salesHistoryModel.missingCurrentDays === 1
+    && salesHistoryModel.archive.map((year) => year.key).join("|") === "2026|2025"
+    && salesHistoryModel.archive[0].months[0].key === "2026-08"
+    && salesHistoryModel.archive[0].months[0].weeks.length === 2,
+  "sales observation grouping must preserve current coverage and descending year-month-week history",
   failures
 );
 
@@ -954,8 +1031,12 @@ assert(
     && adminCompanyChartBlock.includes("sameObservedHorizon")
     && adminCompanyChartBlock.includes("currentPerformanceAligned")
     && adminCompanyChartBlock.includes("Math.abs(optionalNumber(latestPerformance.estimatedRevenue) - optionalNumber(model.estimatedRevenue)) < 1")
-    && adminCompanyChartBlock.includes('model.observationBasis?.daily?.source === "history_observations"')
-    && adminCompanyChartBlock.includes("dailyRows.some((item) =>")
+    && cumulativeDashboardModelBlock.includes("const salesArchiveDaily = adminDbDailyRows")
+    && cumulativeDashboardModelBlock.includes("salesArchiveDaily,")
+    && adminCompanyChartBlock.includes("model.salesArchiveDaily")
+    && adminCompanyChartBlock.includes("items.every((item) => Number.isFinite(item[key]))")
+    && adminCompanyChartBlock.includes("가격 미관측으로 계산 불가")
+    && adminCompanyChartBlock.includes("미수집 날짜는 0으로 계산하지 않습니다")
     && adminCompanyChartBlock.includes('role="columnheader"')
     && adminCompanyChartBlock.includes('role="cell"'),
   "company reference evidence must not promote missing representative prices or incomparable snapshots",
@@ -1016,7 +1097,7 @@ assert(
     && adminCompanyChartBlock.includes("matches.length !== 1")
     && !adminCompanyChartBlock.includes("Math.max(40")
     && cumulativeDashboardModelBlock.includes("const hasComparablePrevious")
-    && cumulativeDashboardModelBlock.includes("synthetic: !hasComparablePrevious")
+    && cumulativeDashboardModelBlock.includes("available: hasComparablePrevious")
     && cumulativeDashboardModelBlock.includes("const latestRevenueComplete")
     && !cumulativeDashboardModelBlock.includes("optionalNumber(metrics.revenue)")
     && adminCompanyChartBlock.includes('data-chart="history-line"')
@@ -1111,10 +1192,13 @@ assert(
     && adminCompanyChartBlock.includes("function adminDbRankTrendModel(")
     && adminCompanyChartBlock.includes("function adminDbPerformanceChartModel(")
     && adminCompanyChartBlock.includes("function adminDbLeadTimeChartHtml(")
-    && adminCompanyChartBlock.includes('evidenceClass: "synthetic"')
-    && adminCompanyChartBlock.includes("presentationOnly: true")
+    && !adminCompanyChartBlock.includes("function adminDbSyntheticRankPoints(")
+    && !adminCompanyChartBlock.includes("function adminDbSyntheticPerformancePoints(")
+    && adminCompanyChartBlock.includes('evidenceClass: "observed"')
+    && adminCompanyChartBlock.includes('evidenceClass: "derived"')
     && adminCompanyChartBlock.includes("decisionEligible: false")
-    && adminCompanyChartBlock.includes("판단·추천 계산에는 사용하지 않습니다")
+    && adminCompanyChartBlock.includes("실제 관측점 1개만 표시합니다")
+    && adminCompanyChartBlock.includes("해당 기간의 실제 판매 관측이 없습니다")
     && adminCompanyChartBlock.includes("admin-company-history-chart")
     && adminCompanyChartBlock.includes('role="img"')
     && adminCompanyChartBlock.includes("<title id=")
