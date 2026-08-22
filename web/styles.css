@@ -40617,6 +40617,25 @@ html[data-theme-resolved] body.role-admin .admin-db-hero p {
   z-index: 5;
 }
 
+.admin-db-company-search-shell.compact {
+  grid-template-columns: minmax(170px, 0.34fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 14px 16px;
+}
+
+.admin-db-company-search-shell.compact .admin-db-company-search-copy h4 {
+  font-size: 17px;
+}
+
+.admin-db-company-search-shell.compact .admin-db-company-search-copy p {
+  font-size: 12px;
+}
+
+.admin-db-company-search-shell.compact .admin-db-company-query-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .admin-db-company-search-copy {
   display: grid;
   gap: 4px;
@@ -40981,6 +41000,11 @@ body.role-admin .admin-db-company-explorer-list .admin-db-company.admin-db-compa
 
   .admin-db-company-query-row {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .admin-db-company-search-shell.compact {
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   .admin-db-company-query-wrap {

@@ -19211,6 +19211,36 @@ function adminDbCompanyExplorerResultsHtml(rows = [], allRows = [], filters = {}
   `;
 }
 
+function adminDbCompanySearchShellHtml(context = {}, options = {}) {
+  const filters = context.filters || {};
+  const rows = context.rows || [];
+  const compact = Boolean(options.compact);
+  const queryValue = options.queryValue === undefined ? (filters.query || "") : String(options.queryValue || "");
+  const headingId = compact ? "adminDbCompanySearchHeadingReview" : "adminDbCompanySearchHeading";
+  const heading = compact ? "다른 업체 검색" : "업체명을 입력하세요";
+  const description = compact
+    ? "한 글자만 입력하면 업체 검색 결과로 바로 이동합니다."
+    : "한 글자만 입력해도 저장된 DB에서 유사 업체를 최대 8개까지 보여줍니다.";
+  const queryActive = Boolean(compactSearchText(queryValue));
+  return `
+    <section class="admin-db-company-search-shell${compact ? " compact" : ""}" aria-labelledby="${headingId}"${compact ? ' data-admin-db-persistent-search="true"' : ""}>
+      <div class="admin-db-company-search-copy">
+        <span>업체 검색</span>
+        <h4 id="${headingId}">${heading}</h4>
+        <p>${description}</p>
+      </div>
+      <div class="admin-db-company-query-row">
+        <div class="admin-db-company-query-wrap">
+          <input type="search" data-admin-db-query value="${escapeHtml(queryValue)}" placeholder="예: 월, 월명글램핑" role="combobox" aria-autocomplete="list" aria-controls="adminDbAutocomplete" aria-expanded="${queryActive ? "true" : "false"}" autocomplete="off">
+          ${adminDbCompanyAutocompleteHtml(rows, queryValue)}
+        </div>
+        <button type="button" class="primary-button" data-admin-db-query-commit>검색</button>
+        ${compact ? "" : adminDbCompanyExplorerFiltersHtml(context)}
+      </div>
+    </section>
+  `;
+}
+
 function adminDbCompanyExplorerHtml(context = {}) {
   const filters = context.filters || {};
   const rows = context.rows || [];
@@ -19219,21 +19249,7 @@ function adminDbCompanyExplorerHtml(context = {}) {
   const queryActive = Boolean(compactSearchText(filters.query || ""));
   return `
     <section class="admin-db-company-explorer" aria-label="업체 DB 검색과 지역 탐색">
-      <section class="admin-db-company-search-shell" aria-labelledby="adminDbCompanySearchHeading">
-        <div class="admin-db-company-search-copy">
-          <span>업체 검색</span>
-          <h4 id="adminDbCompanySearchHeading">업체명을 입력하세요</h4>
-          <p>한 글자만 입력해도 저장된 DB에서 유사 업체를 최대 8개까지 보여줍니다.</p>
-        </div>
-        <div class="admin-db-company-query-row">
-          <div class="admin-db-company-query-wrap">
-            <input type="search" data-admin-db-query value="${escapeHtml(filters.query || "")}" placeholder="예: 월, 월명글램핑" role="combobox" aria-autocomplete="list" aria-controls="adminDbAutocomplete" aria-expanded="${queryActive ? "true" : "false"}" autocomplete="off">
-            ${adminDbCompanyAutocompleteHtml(rows, filters.query || "")}
-          </div>
-          <button type="button" class="primary-button" data-admin-db-query-commit>검색</button>
-          ${adminDbCompanyExplorerFiltersHtml(context)}
-        </div>
-      </section>
+      ${adminDbCompanySearchShellHtml(context)}
       ${queryActive ? "" : adminDbCompanyProvinceCardsHtml(grouped, filters)}
       ${queryActive ? "" : adminDbCompanyRegionCardsHtml(grouped, filters)}
       ${adminDbCompanyExplorerResultsHtml(filteredRows, rows, filters)}
@@ -23586,6 +23602,7 @@ function commitAdminDbQueryRender(value = "", selectionStart = null, selectionEn
     state.adminDbFilters.province = "all";
     state.adminDbFilters.region = "all";
   }
+  clearAdminDbCompanyHash();
   state.adminDbViewMode = "list";
   state.adminDbListPage = 1;
   renderAdminConsoleDashboard();
@@ -23610,6 +23627,7 @@ function scheduleAdminDbQueryRender(input, delay = 40) {
   if (state.adminDbFilters.query.trim()) {
     state.adminDbFilters.province = "all";
     state.adminDbFilters.region = "all";
+    clearAdminDbCompanyHash();
   }
   state.adminDbViewMode = "list";
   const value = input.value || "";
@@ -23686,9 +23704,20 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
       ${adminDbMetricCard("평균 7일 매출", fmtWon(averageRevenue), `${fmtNumber(revenueRows.length)}개 표본`, "good")}
     </div>
   `;
+  const searchContext = {
+    rows,
+    filteredRows,
+    filters,
+    grouped: allGrouped,
+    categoryOptions,
+    statusOptions,
+    confidenceOptions,
+    sourceOptions
+  };
   const reviewPanelsHtml = viewMode === "review" ? `
-    ${adminDbUserViewBridgeHtml(adminDbSelectedRow(filteredRows))}
-    ${adminDbSelectedDetailPanel(filteredRows)}
+    ${adminDbCompanySearchShellHtml(searchContext, { compact: true, queryValue: "" })}
+    ${adminDbUserViewBridgeHtml(adminDbSelectedRow(rows))}
+    ${adminDbSelectedDetailPanel(rows)}
     <details class="admin-db-review-support">
       <summary>
         <div>
@@ -23708,16 +23737,7 @@ function renderAdminDatabaseDashboard(master = adminConsoleMasterSource()) {
   const mainViewHtml = viewMode === "review"
     ? `<section class="admin-db-review-surface">${reviewPanelsHtml}</section>`
     : viewMode === "list"
-      ? adminDbCompanyExplorerHtml({
-        rows,
-        filteredRows,
-        filters,
-        grouped: allGrouped,
-        categoryOptions,
-        statusOptions,
-        confidenceOptions,
-        sourceOptions
-      })
+      ? adminDbCompanyExplorerHtml(searchContext)
       : adminDbRegionWorkspaceHtml(grouped, allGrouped, filters, rows, filteredRows);
   const heroProfile = viewMode === "region"
     ? { eyebrow: "DB / 지역 DB", title: "지역 DB", note: "광역과 시·군별 수집 상태를 별도 화면에서 관리합니다.", count: `${fmtNumber(allGrouped.length)}개 광역` }

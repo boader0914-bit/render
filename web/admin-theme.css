@@ -1116,6 +1116,18 @@ html[data-theme-resolved] :is(body.role-admin, body.role-b2b) :is(button, a, inp
   outline-offset: 3px;
 }
 
+html[data-theme-resolved="light"] body.role-admin .admin-db-autocomplete {
+  border-color: #ffffff !important;
+  background: var(--surface-card) !important;
+  box-shadow: 0 0 0 1px var(--border-subtle), var(--theme-floating-subtle-shadow) !important;
+}
+
+html[data-theme-resolved="dark"] body.role-admin .admin-db-autocomplete {
+  border-color: var(--border-subtle) !important;
+  background: transparent !important;
+  box-shadow: var(--theme-floating-subtle-shadow) !important;
+}
+
 html[data-theme-resolved] body.role-admin .admin-db-autocomplete-option:hover {
   border-color: transparent !important;
   background: var(--surface-card) !important;

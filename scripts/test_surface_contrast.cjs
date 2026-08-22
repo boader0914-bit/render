@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-autocomplete-tone-v55";
-const expectedAssetVersion = "v2-20260823-company-autocomplete-tone-v37";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-company-detail-search-card-v57";
+const expectedAssetVersion = "v2-20260823-company-detail-search-card-v39";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -695,6 +695,10 @@ const adminDbAutocompleteCssBlock = styles.slice(
   styles.indexOf(".admin-db-autocomplete {"),
   styles.indexOf(".admin-db-company-filter {", styles.indexOf(".admin-db-autocomplete {"))
 );
+const adminDbSearchShellBlock = app.slice(
+  app.indexOf("function adminDbCompanySearchShellHtml("),
+  app.indexOf("function adminDbCompanyExplorerHtml(", app.indexOf("function adminDbCompanySearchShellHtml("))
+);
 const adminDbExplorerBlock = app.slice(
   app.indexOf("function adminDbCompanyExplorerHtml("),
   app.indexOf("function adminDbMetricCard(", app.indexOf("function adminDbCompanyExplorerHtml("))
@@ -702,6 +706,10 @@ const adminDbExplorerBlock = app.slice(
 const adminDbRenderBlock = app.slice(
   app.indexOf("function renderAdminDatabaseDashboard("),
   app.indexOf("function adminConsoleKpis(", app.indexOf("function renderAdminDatabaseDashboard("))
+);
+const adminDbQueryRenderBlock = app.slice(
+  app.indexOf("function commitAdminDbQueryRender("),
+  app.indexOf("function commitAdminRegionCompanyQueryRender(", app.indexOf("function commitAdminDbQueryRender("))
 );
 const adminDbExplorerCssBlock = styles.slice(styles.indexOf("/* Company DB explorer v1:"));
 const adminDbDetailBlock = app.slice(
@@ -759,16 +767,30 @@ assert(
 
 assert(
   app.includes('adminDbViewMode: "list"')
-    && adminDbExplorerBlock.includes('role="combobox"')
-    && adminDbExplorerBlock.includes('aria-autocomplete="list"')
-    && adminDbExplorerBlock.includes('aria-controls="adminDbAutocomplete"')
+    && adminDbSearchShellBlock.includes('role="combobox"')
+    && adminDbSearchShellBlock.includes('aria-autocomplete="list"')
+    && adminDbSearchShellBlock.includes('aria-controls="adminDbAutocomplete"')
+    && adminDbSearchShellBlock.includes('data-admin-db-persistent-search="true"')
+    && adminDbSearchShellBlock.includes("다른 업체 검색")
+    && adminDbExplorerBlock.includes("adminDbCompanySearchShellHtml(context)")
     && adminDbExplorerBlock.includes("adminDbCompanyProvinceCardsHtml(grouped, filters)")
     && adminDbExplorerBlock.includes("adminDbCompanyRegionCardsHtml(grouped, filters)")
     && adminDbExplorerBlock.includes("adminDbCompanyExplorerResultsHtml(filteredRows, rows, filters)")
-    && adminDbRenderBlock.includes("adminDbCompanyExplorerHtml({")
+    && adminDbRenderBlock.includes("adminDbCompanyExplorerHtml(searchContext)")
     && adminDbRenderBlock.includes('viewMode === "region" ? adminRegionalDatabasePanel(master) : ""')
     && !adminDbExplorerBlock.includes("data-admin-db-ota"),
   "company DB must open with search, then province, municipality, and company results while region DB remains separate",
+  failures
+);
+
+assert(
+  adminDbRenderBlock.includes('adminDbCompanySearchShellHtml(searchContext, { compact: true, queryValue: "" })')
+    && adminDbRenderBlock.indexOf('adminDbCompanySearchShellHtml(searchContext, { compact: true, queryValue: "" })')
+      < adminDbRenderBlock.indexOf("adminDbSelectedDetailPanel(rows)")
+    && adminDbQueryRenderBlock.includes("clearAdminDbCompanyHash();")
+    && /\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*minmax\(170px,\s*0\.34fr\)\s*minmax\(0,\s*1fr\)/i.test(styles)
+    && /@media \(max-width: 760px\)[\s\S]*?\.admin-db-company-search-shell\.compact\s*\{[^}]*grid-template-columns:\s*1fr/i.test(styles),
+  "company detail must keep a compact search field above the selected company and return typed queries to the company list",
   failures
 );
 
@@ -795,8 +817,10 @@ assert(
     && adminDbAutocompleteCssBlock.includes("border-radius: var(--ui-radius-control);")
     && adminDbAutocompleteCssBlock.includes("background: var(--surface-card);")
     && adminDbAutocompleteCssBlock.includes("outline: 2px solid var(--focus-ring);")
-    && !adminDbAutocompleteCssBlock.includes("border-color: var(--theme-accent);"),
-  "company autocomplete must use a quiet neutral surface with subtle elevation and focus-only accent treatment",
+    && !adminDbAutocompleteCssBlock.includes("border-color: var(--theme-accent);")
+    && /html\[data-theme-resolved="light"\] body\.role-admin \.admin-db-autocomplete\s*\{[^}]*border-color:\s*#ffffff\s*!important;[^}]*background:\s*var\(--surface-card\)\s*!important;[^}]*box-shadow:\s*0 0 0 1px var\(--border-subtle\),\s*var\(--theme-floating-subtle-shadow\)\s*!important;/i.test(themeStyles)
+    && /html\[data-theme-resolved="dark"\] body\.role-admin \.admin-db-autocomplete\s*\{[^}]*border-color:\s*var\(--border-subtle\)\s*!important;[^}]*background:\s*transparent\s*!important;[^}]*box-shadow:\s*var\(--theme-floating-subtle-shadow\)\s*!important;/i.test(themeStyles),
+  "company autocomplete must use a white card and white border effect in light mode, and a transparent surface with the existing border effect in dark mode",
   failures
 );
 
