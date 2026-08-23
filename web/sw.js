@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260823-yeogi-paste-v73";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260823-naver-base-channel-v74";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

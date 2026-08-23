@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-yeogi-paste-v73";
-const expectedAssetVersion = "v2-20260823-yeogi-paste-v55";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-naver-base-channel-v74";
+const expectedAssetVersion = "v2-20260823-naver-base-channel-v56";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -968,11 +968,15 @@ assert(
   referenceChannelRowBlock.includes("adminDbChannelInventoryModeLabel")
     && referenceChannelRowBlock.includes("data-company-channel-manual-collect")
     && referenceChannelRowBlock.includes(">수동 수집</button>")
-    && referenceChannelRowBlock.includes(">판매 중</mark>")
-    && !referenceChannelRowBlock.includes("naverPartnerName")
-    && app.includes('const preferredKeys = ["tteonayo", "yanolja", "yeogi"];')
+    && referenceChannelRowBlock.includes("naverPartnerName")
+    && referenceChannelRowBlock.includes('item.key === "naver"')
+    && referenceChannelRowBlock.includes("공식 연동상품")
+    && referenceChannelRowBlock.includes("공식 연동 표기 없음")
+    && referenceChannelRowBlock.includes("예약상품 관측 없음")
+    && app.includes('const preferredKeys = ["naver", "tteonayo", "yanolja", "yeogi"];')
+    && app.includes('item.key === "naver" || (preferredKeys.includes(item.key)')
     && app.includes('item.appliedToSummary && item.status === "directly_verified"'),
-  "booking channel summary must show applied selling channels with inventory mode and manual collection controls",
+  "booking channel summary must always show Naver as the base channel and show only applied external selling channels",
   failures
 );
 
@@ -1038,7 +1042,7 @@ assert(
     && adminCompanyChartBlock.includes("추정 평일 예약율")
     && adminCompanyChartBlock.includes("누적 리드타임 추이")
     && adminCompanyChartBlock.includes("data-admin-db-rank-keyword")
-    && adminCompanyChartBlock.includes("관리자가 판매·연동 확인 후 적용한 채널만 표시합니다."),
+    && adminCompanyChartBlock.includes("네이버는 기본 채널로 항상 표시하며"),
   "company reference dashboard must render A and B first, then C current observations and D cumulative history with keyword-scoped rank",
   failures
 );

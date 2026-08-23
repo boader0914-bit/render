@@ -22499,24 +22499,41 @@ function adminDbReferenceChannelIconHtml(item = {}) {
 }
 
 function adminDbReferenceChannelRowHtml(item = {}, company = {}) {
+  const isNaver = item.key === "naver";
+  const naverObservation = isNaver ? adminDbNaverChannelObservation(company) : {};
+  const naverObservationStatus = isNaver ? adminDbNaverChannelObservationStatus(naverObservation) : "";
+  const naverPartnerName = String(naverObservation.agencyName || "").trim();
   const routineNeedsReview = adminDbChannelStatusNeedsReview(item.lastRoutineStatus);
   const routineStatusText = item.lastRoutineStatus
     ? (routineNeedsReview ? "최근 수집 재확인" : "최근 수집 완료")
     : "수집 전";
-  const statusTone = routineNeedsReview ? "warning" : "positive";
+  const statusTone = isNaver ? (naverPartnerName ? "positive" : "neutral") : routineNeedsReview ? "warning" : "positive";
   const brandMeta = ADMIN_REFERENCE_CHANNEL_BRAND_META[item.key] || {};
   const displayLabel = brandMeta.label || item.label;
-  const checkedAt = item.lastRoutineCheckedAt || item.checkedAt || item.updatedAt || "";
+  const checkedAt = isNaver
+    ? (naverObservation.observedAt || naverObservation.checkedAt || "")
+    : (item.lastRoutineCheckedAt || item.checkedAt || item.updatedAt || "");
   const checkedLabel = checkedAt ? `${compactDateTime(checkedAt)} 확인` : "확인일 없음";
-  const channelDetail = `${adminDbChannelInventoryModeLabel(item.inventoryMode)} · ${checkedLabel}`;
+  const statusText = isNaver
+    ? naverPartnerName
+      ? "공식 연동상품"
+      : naverObservationStatus
+        ? "공식 연동 표기 없음"
+        : "예약상품 관측 없음"
+    : "판매 중";
+  const channelDetail = isNaver
+    ? naverPartnerName
+      ? `${naverPartnerName} · ${checkedLabel}`
+      : `${naverObservationStatus ? "네이버 공개 화면 기준" : "최근 관측 자료 없음"} · ${checkedLabel}`
+    : `${adminDbChannelInventoryModeLabel(item.inventoryMode)} · ${checkedLabel}`;
   return `
     <article class="admin-reference-channel-row" data-channel="${escapeHtml(item.key || "channel")}">
       ${adminDbReferenceChannelIconHtml(item)}
       <div><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(channelDetail)}</small></div>
-      <mark data-ui-status="${statusTone}" title="${escapeHtml(routineStatusText)}">판매 중</mark>
+      <mark data-ui-status="${statusTone}" title="${escapeHtml(isNaver ? statusText : routineStatusText)}">${escapeHtml(statusText)}</mark>
       <div class="admin-reference-channel-actions">
         ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(displayLabel)} 외부 화면 열기">열기</a>` : ""}
-        <button type="button" data-company-channel-manual-collect data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(item.key || "")}" data-channel-url="${escapeHtml(item.url || "")}" aria-label="${escapeHtml(displayLabel)} 수동 수집">수동 수집</button>
+        ${isNaver ? "" : `<button type="button" data-company-channel-manual-collect data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(item.key || "")}" data-channel-url="${escapeHtml(item.url || "")}" aria-label="${escapeHtml(displayLabel)} 수동 수집">수동 수집</button>`}
       </div>
     </article>
   `;
@@ -22524,19 +22541,17 @@ function adminDbReferenceChannelRowHtml(item = {}, company = {}) {
 
 function adminDbReferenceChannelsCard(row = {}) {
   const company = row.company || {};
-  const preferredKeys = ["tteonayo", "yanolja", "yeogi"];
+  const preferredKeys = ["naver", "tteonayo", "yanolja", "yeogi"];
   const rows = adminDbChannelTableRows(row)
-    .filter((item) => preferredKeys.includes(item.key) && item.appliedToSummary && item.status === "directly_verified")
+    .filter((item) => item.key === "naver" || (preferredKeys.includes(item.key) && item.appliedToSummary && item.status === "directly_verified"))
     .sort((a, b) => preferredKeys.indexOf(a.key) - preferredKeys.indexOf(b.key));
   return `
     <section class="admin-reference-card admin-reference-channels" aria-labelledby="adminReferenceChannelsTitle">
       <div class="admin-reference-section-title"><b>B</b><h3 id="adminReferenceChannelsTitle">예약 채널</h3></div>
       <div class="admin-reference-channel-list">
-        ${rows.length
-          ? rows.map((item) => adminDbReferenceChannelRowHtml(item, company)).join("")
-          : `<div class="admin-reference-channel-empty"><strong>확인된 판매 채널 없음</strong><small>검토 수정도구에서 연동 여부와 URL을 확인한 뒤 적용하세요.</small></div>`}
+        ${rows.map((item) => adminDbReferenceChannelRowHtml(item, company)).join("")}
       </div>
-      <p class="admin-reference-footnote">관리자가 판매·연동 확인 후 적용한 채널만 표시합니다.</p>
+      <p class="admin-reference-footnote">네이버는 기본 채널로 항상 표시하며, 외부 OTA는 관리자가 판매·연동 확인 후 적용한 채널만 표시합니다.</p>
     </section>
   `;
 }
