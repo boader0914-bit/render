@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-collected-correction-v68";
-const expectedAssetVersion = "v2-20260823-collected-correction-v50";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-confirmed-quantity-v69";
+const expectedAssetVersion = "v2-20260823-confirmed-quantity-v51";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -769,6 +769,10 @@ const referenceBasicsCardBlock = app.slice(
   app.indexOf("function adminDbReferenceBasicsCard("),
   app.indexOf("const ADMIN_REFERENCE_CHANNEL_BRAND_META", app.indexOf("function adminDbReferenceBasicsCard("))
 );
+const referenceProductQuantityBlock = app.slice(
+  app.indexOf("function adminDbReferenceProductNameKey("),
+  app.indexOf("function adminDbReferenceProductRowHtml(", app.indexOf("function adminDbReferenceProductNameKey("))
+);
 const adminProfilePanelBlock = app.slice(
   app.indexOf("function adminDbAdminProfilePanel("),
   app.indexOf("function companyMasterSalesTargetsPanel(", app.indexOf("function adminDbAdminProfilePanel("))
@@ -1158,6 +1162,51 @@ assert(
     && styles.includes("color: var(--text-primary);")
     && app.includes('adminDbReferenceDeltaTag("비교 대기")'),
   "company trend comparison waiting labels must remain readable in light and dark themes",
+  failures
+);
+
+const referenceProductQuantitySandbox = {
+  optionalNumber(value) {
+    if (value === "" || value === null || value === undefined) return NaN;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  },
+  adminDbProductQuantity(product = {}) {
+    const value = product.totalQuantity ?? product.maxTotal ?? product.total ?? product.quantity;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  }
+};
+vm.createContext(referenceProductQuantitySandbox);
+vm.runInContext(
+  `${referenceProductQuantityBlock}\nthis.adminDbReferenceProductQuantityProfile = adminDbReferenceProductQuantityProfile;`,
+  referenceProductQuantitySandbox
+);
+const wolmyeongFixedQuantity = referenceProductQuantitySandbox.adminDbReferenceProductQuantityProfile({
+  name: "월명 빌라 스테이 / BBQ PKG(조식포함)",
+  total: 3,
+  latestTotal: 2
+}, [{ type: "월명 빌라 스테이 / BBQ PKG(조식포함)", count: "2" }]);
+const wolmyeongObservedQuantity = referenceProductQuantitySandbox.adminDbReferenceProductQuantityProfile({
+  name: "월명 빌라 스테이 / BBQ PKG(조식포함)",
+  total: 3,
+  latestTotal: 2
+}, []);
+const unmatchedFixedQuantity = referenceProductQuantitySandbox.adminDbReferenceProductQuantityProfile({
+  name: "월명 빌라 스테이 / BBQ PKG(조식포함)",
+  total: 3,
+  latestTotal: 2
+}, [{ type: "월명 스탠다드", count: "7" }]);
+assert(
+  wolmyeongFixedQuantity.primary === 2
+    && wolmyeongFixedQuantity.primarySource === "관리자 확정"
+    && wolmyeongFixedQuantity.observedLatest === 2
+    && wolmyeongFixedQuantity.observedMaximum === 3
+    && wolmyeongObservedQuantity.primary === 2
+    && wolmyeongObservedQuantity.primarySource === "최근 자동관측"
+    && unmatchedFixedQuantity.primary === 2
+    && unmatchedFixedQuantity.hasFixed === false,
+  "A-card product quantities must prefer exact admin-confirmed counts, otherwise the latest observation, while preserving the observed-period maximum as evidence",
   failures
 );
 

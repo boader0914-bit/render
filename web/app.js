@@ -22185,11 +22185,61 @@ function adminDbReferenceDailyRows(model = {}) {
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 }
 
-function adminDbReferenceProductRowHtml(product = {}) {
-  const quantity = adminDbProductQuantity(product);
+function adminDbReferenceProductNameKey(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^0-9a-z가-힣]/g, "");
+}
+
+function adminDbReferenceFixedProductSegment(product = {}, fixedSegments = []) {
+  const productNameKey = adminDbReferenceProductNameKey(product.name || product.productName || product.roomName);
+  if (!productNameKey) return null;
+  return (Array.isArray(fixedSegments) ? fixedSegments : []).find((segment) => {
+    const segmentNameKey = adminDbReferenceProductNameKey(segment?.type || segment?.name || segment?.roomType);
+    return segmentNameKey && segmentNameKey === productNameKey;
+  }) || null;
+}
+
+function adminDbReferenceProductQuantityProfile(product = {}, fixedSegments = []) {
+  const fixedSegment = adminDbReferenceFixedProductSegment(product, fixedSegments);
+  const fixedQuantity = optionalNumber(fixedSegment?.count ?? fixedSegment?.totalQuantity ?? fixedSegment?.quantity);
+  const observedLatest = optionalNumber(product.latestTotal ?? product.latestQuantity);
+  const observedMaximum = adminDbProductQuantity(product);
+  const hasFixed = Number.isFinite(fixedQuantity) && fixedQuantity >= 0;
+  const hasLatest = Number.isFinite(observedLatest) && observedLatest >= 0;
+  const hasMaximum = Number.isFinite(observedMaximum) && observedMaximum >= 0;
+  return {
+    primary: hasFixed ? fixedQuantity : (hasLatest ? observedLatest : (hasMaximum ? observedMaximum : NaN)),
+    primarySource: hasFixed ? "관리자 확정" : (hasLatest ? "최근 자동관측" : (hasMaximum ? "관측기간 최대" : "수량 미관측")),
+    fixedQuantity: hasFixed ? fixedQuantity : NaN,
+    observedLatest: hasLatest ? observedLatest : NaN,
+    observedMaximum: hasMaximum ? observedMaximum : NaN,
+    hasFixed
+  };
+}
+
+function adminDbReferenceProductQuantityHtml(product = {}, fixedSegments = []) {
+  const profile = adminDbReferenceProductQuantityProfile(product, fixedSegments);
+  const observedParts = [];
+  if (Number.isFinite(profile.observedLatest)) observedParts.push(`최근 자동관측 ${fmtNumber(profile.observedLatest)}개`);
+  if (Number.isFinite(profile.observedMaximum)
+    && (!Number.isFinite(profile.observedLatest) || profile.observedMaximum !== profile.observedLatest)) {
+    observedParts.push(`관측기간 최대 ${fmtNumber(profile.observedMaximum)}개`);
+  }
+  return `
+    <span class="admin-reference-product-quantity" role="cell" data-label="수량">
+      <strong>${Number.isFinite(profile.primary) ? `${fmtNumber(profile.primary)}개` : "-"}</strong>
+      <small>${escapeHtml(profile.primarySource)}</small>
+      ${profile.hasFixed && observedParts.length ? `<small>${escapeHtml(observedParts.join(" · "))}</small>` : ""}
+    </span>
+  `;
+}
+
+function adminDbReferenceProductRowHtml(product = {}, fixedSegments = []) {
   const cells = [
     `<span role="cell" data-label="상품명"><strong>${escapeHtml(product.name || product.productName || product.roomType || "상품명 확인")}</strong><small>${escapeHtml(product.productType === "dayuse" ? "데이유즈" : "숙박")}</small></span>`,
-    `<span role="cell" data-label="수량">${Number.isFinite(quantity) ? `${fmtNumber(quantity)}개` : "-"}</span>`,
+    adminDbReferenceProductQuantityHtml(product, fixedSegments),
     ...[["평일", "weekday"], ["금요일", "friday"], ["토요일", "saturday"], ["일요일", "sunday"]].map(([label, key]) => {
       const price = adminDbProductPrice(product, key);
       return `<span role="cell" data-label="${label}">${Number.isFinite(price) ? escapeHtml(adminDbReferencePriceText(price, price)) : "-"}</span>`;
@@ -22394,7 +22444,7 @@ function adminDbReferenceBasicsCard(row = {}, detail = {}, model = {}) {
       <div class="admin-reference-table admin-reference-product-table" role="table" aria-label="상품별 최신 저장가격">
         <div class="admin-reference-table-head" role="row"><span role="columnheader">상품명</span><span role="columnheader">수량</span><span role="columnheader">평일</span><span role="columnheader">금요일</span><span role="columnheader">토요일</span><span role="columnheader">일요일</span></div>
         ${displayProducts.length
-          ? adminDbFoldedItemsHtml(displayProducts, adminDbReferenceProductRowHtml, { noun: "상품", limit: 5, className: "admin-reference-product-list" })
+          ? adminDbFoldedItemsHtml(displayProducts, (product) => adminDbReferenceProductRowHtml(product, fixed.roomSegments), { noun: "상품", limit: 5, className: "admin-reference-product-list" })
           : legacyProductPreview
             ? adminDbReferenceLegacyProductPreviewHtml(legacyProductPreview)
             : `<div class="admin-reference-empty">구조화된 상품 자료가 없습니다. 상세정보 자동수집 후 상품명·수량·요일별 관측가격을 표시합니다.</div>`}

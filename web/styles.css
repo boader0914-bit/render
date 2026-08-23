@@ -37402,7 +37402,7 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 .admin-reference-product-table :is(.admin-reference-table-head, .admin-reference-product-row) {
-  grid-template-columns: minmax(140px, 1.35fr) 48px repeat(4, minmax(68px, .72fr));
+  grid-template-columns: minmax(140px, 1.35fr) minmax(96px, .8fr) repeat(4, minmax(68px, .72fr));
 }
 
 .admin-reference-table-head {
@@ -37447,6 +37447,17 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 .admin-reference-product-row > span:first-child {
   display: grid;
   gap: 1px;
+}
+
+.admin-reference-product-quantity {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  line-height: 1.2;
+}
+
+.admin-reference-product-quantity small {
+  overflow-wrap: anywhere;
 }
 
 .admin-reference-legacy-products {
@@ -38250,6 +38261,10 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-recent-row > span:first-child {
     grid-column: 1 / -1;
     text-align: left;
+  }
+
+  .admin-reference-product-quantity {
+    justify-items: start;
   }
 
   .admin-reference-product-row > span:last-child,
