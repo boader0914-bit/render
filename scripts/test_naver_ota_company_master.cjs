@@ -209,6 +209,11 @@ async function main() {
   const detailFirstRunId = "company_detail_snapshot_first_test";
   const detailSecondRunId = "company_detail_snapshot_second_test";
   const detailSparseRunId = "company_detail_snapshot_sparse_test";
+  const legacyProductRunId = "legacy_product_preview_test";
+  const recoveryOlderRunId = "recovery_old_glamping_20260810_010000";
+  const recoveryNewerRunId = "recovery_new_glamping_20260811_010000";
+  const recoveryPlaceConflictRunId = "recovery_place_conflict_glamping_20260812_010000";
+  const recoveryBookingConflictRunId = "recovery_booking_conflict_glamping_20260813_010000";
   await writeRun(outputsDir, {
     runId: firstRunId,
     status: "observed_on_naver",
@@ -524,6 +529,148 @@ async function main() {
     channels: [],
     inventory: sparseDetailInventory
   });
+  await writeRun(outputsDir, {
+    runId: legacyProductRunId,
+    placeId: "900000099",
+    companyName: "레거시 상품요약 글램핑",
+    category: "글램핑",
+    lodgingType: "글램핑",
+    keyword: "경남글램핑",
+    searchIntent: "regional_lodging",
+    searchRegion: "경남",
+    searchScope: "lodging_type:글램핑",
+    searchScopeLabel: "글램핑",
+    rank: 3,
+    checkIn: "2026-06-27",
+    checkOut: "2026-06-28",
+    bookingRangeDays: 1,
+    completedAt: "2026-06-27T08:01:53.632Z",
+    observedAt: "2026-06-27T08:01:53.632Z",
+    collectionPurpose: "revenue_detail",
+    collectionPurposeLabel: "상세 정보 수집",
+    collectionProfile: "revenue_detail_deep",
+    collectionProfileLabel: "상세 정보 중심",
+    status: "not_observed_on_naver",
+    statusLabel: "네이버에서 외부 OTA 노출 미확인",
+    channels: [],
+    inventory: {
+      숙박예약가능수: 10,
+      숙박확인재고수: 16,
+      숙박상품수: 5,
+      "객실명(일부)": "스탠다드, 슈페리어, 디럭스, 스위트",
+      금액: "159,000~349,000원",
+      예약최저가: "259,000원",
+      주간재고수집일수: 1,
+      주간잔여상세: "06/27 10/16",
+      주간예약률상세: "06/27 38%(6/16)",
+      주간판매수량합계: 6,
+      주간전체수량합계: 16,
+      주간기준재고수: 16,
+      예약리스트유형: "객실 종류별 리스트",
+      네이버예약재고수집상태: "수집 완료"
+    }
+  });
+  const recoveryProductRows = (name, price, longWindow = false) => {
+    const dates = longWindow
+      ? Array.from({ length: 33 }, (_, index) => new Date(Date.UTC(2026, 6, 1 + index)).toISOString().slice(0, 10))
+      : ["2026-08-15"];
+    return dates.map((date, index) => ({
+      date,
+      bizItemId: "recovery-room",
+      name,
+      saleType: "숙박",
+      listType: "객실 종류별 리스트",
+      availabilityUnit: "객실",
+      total: 2,
+      available: 1,
+      price: longWindow && (index === 0 || index === dates.length - 1) ? null : price
+    }));
+  };
+  const recoveryInventory = ({ name, price, bookingBusinessId, longWindow = false }) => ({
+    bookingBusinessId,
+    숙박예약가능수: 1,
+    숙박확인재고수: 2,
+    주간재고수집일수: longWindow ? 33 : 1,
+    주간잔여상세: "08/15 1/2",
+    주간예약률상세: "08/15 50%(1/2)",
+    주간판매수량합계: 1,
+    주간전체수량합계: 2,
+    주간기준재고수: 2,
+    예약최저가: price,
+    예약리스트유형: "객실 종류별 리스트",
+    네이버예약재고수집상태: "수집 완료",
+    네이버요일별상품상세JSON: recoveryProductRows(name, price, longWindow)
+  });
+  const recoveryRunBase = {
+    companyName: "구조화 상품 회수 글램핑",
+    category: "글램핑",
+    lodgingType: "글램핑",
+    keyword: "경남글램핑",
+    searchIntent: "regional_lodging",
+    searchRegion: "경남",
+    searchScope: "lodging_type:글램핑",
+    searchScopeLabel: "글램핑",
+    rank: 7,
+    checkIn: "2026-07-01",
+    checkOut: "2026-08-03",
+    bookingRangeDays: 33,
+    collectionPurpose: "revenue_detail",
+    collectionPurposeLabel: "상세 정보 수집",
+    collectionProfile: "revenue_detail_deep",
+    collectionProfileLabel: "상세 정보 중심",
+    status: "not_observed_on_naver",
+    statusLabel: "네이버에서 외부 OTA 노출 미확인",
+    channels: []
+  };
+  await writeRun(outputsDir, {
+    ...recoveryRunBase,
+    runId: recoveryOlderRunId,
+    placeId: "900000088",
+    completedAt: "2026-08-10T01:00:00.000Z",
+    observedAt: "2026-08-10T01:00:00.000Z",
+    inventory: recoveryInventory({
+      name: "이전 회수 상품",
+      price: 110000,
+      bookingBusinessId: "555000111"
+    })
+  });
+  await writeRun(outputsDir, {
+    ...recoveryRunBase,
+    runId: recoveryNewerRunId,
+    placeId: "900000088",
+    completedAt: "2026-08-11T01:00:00.000Z",
+    observedAt: "2026-08-11T01:00:00.000Z",
+    inventory: recoveryInventory({
+      name: "최신 회수 상품",
+      price: 120000,
+      bookingBusinessId: "555000111",
+      longWindow: true
+    })
+  });
+  await writeRun(outputsDir, {
+    ...recoveryRunBase,
+    runId: recoveryPlaceConflictRunId,
+    placeId: "900000089",
+    completedAt: "2026-08-12T01:00:00.000Z",
+    observedAt: "2026-08-12T01:00:00.000Z",
+    inventory: recoveryInventory({
+      name: "플레이스 충돌 상품",
+      price: 130000,
+      bookingBusinessId: "555000111"
+    })
+  });
+  await writeRun(outputsDir, {
+    ...recoveryRunBase,
+    runId: recoveryBookingConflictRunId,
+    placeId: "900000088",
+    completedAt: "2026-08-13T01:00:00.000Z",
+    observedAt: "2026-08-13T01:00:00.000Z",
+    inventory: recoveryInventory({
+      name: "예약 ID 충돌 상품",
+      price: 140000,
+      bookingBusinessId: "555000999"
+    })
+  });
 
   const port = await freePort();
   const child = spawn(process.execPath, [path.join(__dirname, "glamping_app_server.cjs")], {
@@ -603,19 +750,162 @@ async function main() {
 
     const detailFirstRun = await request(baseUrl, "GET", `/api/runs/${detailFirstRunId}`, null, cookies);
     const detailSecondRun = await request(baseUrl, "GET", `/api/runs/${detailSecondRunId}`, null, cookies);
+    const legacyProductRun = await request(baseUrl, "GET", `/api/runs/${legacyProductRunId}`, null, cookies);
     assert.equal(detailFirstRun.statusCode, 200);
     assert.equal(detailSecondRun.statusCode, 200);
+    assert.equal(legacyProductRun.statusCode, 200);
     assert.equal(detailFirstRun.body.companyMaster.historyEligible, true);
     assert.equal(detailSecondRun.body.companyMaster.historyEligible, true);
+
+    const recoveryBackfill = await request(baseUrl, "POST", "/api/company-master/backfill", {
+      runIds: [recoveryOlderRunId, recoveryNewerRunId]
+    }, cookies);
+    assert.equal(recoveryBackfill.statusCode, 200);
+    assert.deepEqual(
+      new Set(recoveryBackfill.body.backfill.runs.map((row) => row.runId)),
+      new Set([recoveryOlderRunId, recoveryNewerRunId]),
+      "recovery fixture must import only the two non-conflicting source runs"
+    );
+    const recoveryCompany = recoveryBackfill.body.companies.find((row) => row.placeIds?.includes("900000088"));
+    assert.ok(recoveryCompany, "structured product recovery company must be stored");
+    assert.ok(recoveryCompany.bookingBusinessIds?.includes("555000111"));
+
+    const recoveryMasterFile = path.join(dataDir, "company_master", "companies.json");
+    const recoveryMaster = JSON.parse(await fsp.readFile(recoveryMasterFile, "utf8"));
+    const recoveryStoredCompany = recoveryMaster.companies[recoveryCompany.companyId];
+    assert.ok(recoveryStoredCompany, "recovery fixture must resolve its stored company record");
+    for (const snapshot of [
+      recoveryStoredCompany.inventory?.latest,
+      recoveryStoredCompany.inventory?.previousLatest,
+      ...(recoveryStoredCompany.inventory?.snapshots || [])
+    ]) {
+      if (!snapshot?.productSnapshot) continue;
+      delete snapshot.productSnapshot.products;
+      delete snapshot.productSnapshot.priceGroups;
+    }
+    recoveryStoredCompany.runIds = [
+      ...new Set([
+        ...(recoveryStoredCompany.runIds || []),
+        recoveryPlaceConflictRunId,
+        recoveryBookingConflictRunId
+      ])
+    ];
+    recoveryStoredCompany.inventory.runIds = [
+      ...new Set([
+        ...(recoveryStoredCompany.inventory?.runIds || []),
+        recoveryPlaceConflictRunId,
+        recoveryBookingConflictRunId
+      ])
+    ];
+    await fsp.writeFile(recoveryMasterFile, JSON.stringify(recoveryMaster, null, 2), "utf8");
+
+    const recoveryTrafficCacheFile = path.join(outputsDir, recoveryNewerRunId, "traffic_metrics.json");
+    await fsp.writeFile(recoveryTrafficCacheFile, JSON.stringify({
+      source: "naver_traffic_sources",
+      metrics: {},
+      trends: {
+        "경남글램핑": {
+          source: "naver_datalab_search",
+          keyword: "경남글램핑",
+          configured: true,
+          collectable: true,
+          status: 200,
+          startDate: "2026-01-01",
+          endDate: "2026-08-11",
+          timeUnit: "month",
+          series: [{ period: "2026-08-01", ratio: 50 }],
+          collectedAt: "2026-08-11T01:00:00.000Z"
+        }
+      }
+    }, null, 2), "utf8");
+    const datalabStoreFile = path.join(dataDir, "history", "datalab_trends.json");
+    const datalabBeforeRecovery = await readTextIfExists(datalabStoreFile);
+    const recoveryMasterBeforeDetail = await fsp.readFile(recoveryMasterFile, "utf8");
+    const recoveryTrafficBeforeDetail = await fsp.readFile(recoveryTrafficCacheFile, "utf8");
+    const recoveredNewestDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(recoveryCompany.companyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(recoveredNewestDetail.statusCode, 200);
+    assert.equal(recoveredNewestDetail.body.products.length, 1);
+    assert.equal(recoveredNewestDetail.body.products[0].name, "최신 회수 상품", "latest valid structured manifest run must win");
+    assert.equal(recoveredNewestDetail.body.observationBasis.products.runId, recoveryNewerRunId);
+    assert.equal(recoveredNewestDetail.body.observationBasis.products.collectedAt, "2026-08-11T01:00:00.000Z");
+    assert.equal(recoveredNewestDetail.body.products[0].priceDateTotalCount, 33);
+    assert.equal(recoveredNewestDetail.body.products[0].priceDateStoredCount, 31);
+    assert.equal(recoveredNewestDetail.body.products[0].priceDateTruncated, true);
+    assert.equal(recoveredNewestDetail.body.products[0].priceMissingDateCount, 2, "all original missing-price dates must remain countable");
+    assert.equal(recoveredNewestDetail.body.products[0].priceMissingStoredDateCount, 1, "stored-window missing dates must count only the retained 31 dates");
+    assert.equal(await readTextIfExists(datalabStoreFile), datalabBeforeRecovery, "detail recovery must not enrich or persist DataLab traffic state");
+    assert.equal(await fsp.readFile(recoveryMasterFile, "utf8"), recoveryMasterBeforeDetail, "detail recovery must not rewrite company master state");
+    assert.equal(await fsp.readFile(recoveryTrafficCacheFile, "utf8"), recoveryTrafficBeforeDetail, "detail recovery must not rewrite a run traffic cache");
+
+    const recoveryHistoryFile = path.join(dataDir, "history", "observations.jsonl");
+    await fsp.mkdir(path.dirname(recoveryHistoryFile), { recursive: true });
+    await fsp.appendFile(recoveryHistoryFile, `${JSON.stringify({
+      schemaVersion: 1,
+      observationId: "recovery-older-actual-history",
+      runId: recoveryOlderRunId,
+      companyKey: recoveryCompany.companyId,
+      companyName: "구조화 상품 회수 글램핑",
+      productType: "lodging",
+      stayDate: "2026-08-15",
+      collectedAt: "2026-08-14T01:00:00.000Z",
+      collectedDate: "2026-08-14",
+      supply: 2,
+      available: 1,
+      sold: 1,
+      saleRate: 0.5,
+      price: "110,000원"
+    })}\n`, "utf8");
+    const recoveredActualHistoryDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(recoveryCompany.companyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(recoveredActualHistoryDetail.statusCode, 200);
+    assert.equal(recoveredActualHistoryDetail.body.products[0].name, "이전 회수 상품", "actual history time must take priority over manifest, stored, and insertion fallbacks");
+    assert.equal(recoveredActualHistoryDetail.body.observationBasis.products.runId, recoveryOlderRunId);
+    assert.equal(recoveredActualHistoryDetail.body.observationBasis.products.collectedAt, "2026-08-14T01:00:00.000Z");
 
     let summary = await request(baseUrl, "GET", "/api/company-master/summary", null, cookies);
     assert.equal(summary.statusCode, 200);
     const detailCompany = summary.body.companies.find((row) => row.placeIds?.includes("900000001"));
+    const legacyProductCompany = summary.body.companies.find((row) => row.placeIds?.includes("900000099"));
     assert.ok(detailCompany, "detailed collection company must be stored");
+    assert.ok(legacyProductCompany, "legacy product summary company must be stored");
     assert.equal(detailCompany.inventory?.latest?.productSnapshot?.summary?.productCount, 2);
     assert.equal(detailCompany.inventory?.latest?.productSnapshot?.products, undefined, "company list must not duplicate product payloads");
     assert.equal(detailCompany.inventory?.snapshots?.[0]?.productSnapshot?.products, undefined, "company list history must stay compact");
     assert.equal(detailCompany.keywords?.[0]?.recentRuns?.length, 2, "summary must expose recent keyword observations");
+
+    const legacyProductDetail = await request(
+      baseUrl,
+      "GET",
+      `/api/company-master/detail?companyId=${encodeURIComponent(legacyProductCompany.companyId)}`,
+      null,
+      cookies
+    );
+    assert.equal(legacyProductDetail.statusCode, 200);
+    assert.equal(legacyProductDetail.body.products.length, 0, "legacy preview must not fabricate structured products");
+    assert.equal(legacyProductDetail.body.legacyProductPreview.structured, false);
+    assert.equal(legacyProductDetail.body.legacyProductPreview.productCount, 5);
+    assert.deepEqual(legacyProductDetail.body.legacyProductPreview.previewNames, ["스탠다드", "슈페리어", "디럭스", "스위트"]);
+    assert.equal(legacyProductDetail.body.legacyProductPreview.previewComplete, false);
+    assert.equal(legacyProductDetail.body.legacyProductPreview.missingNameCount, 1);
+    assert.deepEqual(legacyProductDetail.body.legacyProductPreview.listedPriceRange, {
+      raw: "159,000~349,000원",
+      min: 159000,
+      max: 349000
+    });
+    assert.equal(legacyProductDetail.body.legacyProductPreview.representativeMinimum.amount, 259000);
+    assert.equal(legacyProductDetail.body.legacyProductPreview.observedAt, "2026-06-27T08:01:53.632Z");
+    assert.equal(legacyProductDetail.body.legacyProductPreview.seasonPriceAvailable, false, "an overall legacy price range must never become a same-product season band");
 
     const missingCompanyId = await request(baseUrl, "GET", "/api/company-master/detail", null, cookies);
     assert.equal(missingCompanyId.statusCode, 400);
@@ -630,6 +920,7 @@ async function main() {
     assert.equal(companyDetail.body.company.companyId, detailCompany.companyId);
     assert.equal(companyDetail.body.products.length, 2, "product identities must remain distinct even when prices are equal");
     assert.ok(companyDetail.body.products.every((row) => row.productType === "lodging"), "explicit lodging type must win even when a product name contains day text");
+    assert.ok(companyDetail.body.products.every((row) => row.priceDateTotalCount === 2 && row.priceDateStoredCount === 2 && row.priceDateTruncated === false), "product price provenance must expose the actual stored date window");
     assert.equal(companyDetail.body.priceGroups.length, 1, "same date-price pattern should form one presentation group");
     assert.deepEqual(
       companyDetail.body.daily.filter((row) => row.productType === "lodging").map((row) => [row.date, row.estimatedRevenue]),
@@ -873,6 +1164,36 @@ async function main() {
         price: "130,000원"
       }),
       fallbackObservation({
+        observationId: "fallback-basis-older-total-20",
+        runId: "fallback-basis-older",
+        stayDate: "2026-10-12",
+        collectedAt: "2026-08-27T01:00:00.000Z",
+        supply: 20,
+        available: 10,
+        sold: 10,
+        price: "140,000원"
+      }),
+      fallbackObservation({
+        observationId: "fallback-basis-latest-total-15",
+        runId: "fallback-basis-latest",
+        stayDate: "2026-10-13",
+        collectedAt: "2026-08-28T01:00:00.000Z",
+        supply: 15,
+        available: 8,
+        sold: 7,
+        price: "150,000원"
+      }),
+      fallbackObservation({
+        observationId: "fallback-basis-latest-total-16",
+        runId: "fallback-basis-latest",
+        stayDate: "2026-10-14",
+        collectedAt: "2026-08-28T01:00:00.000Z",
+        supply: 16,
+        available: 8,
+        sold: 8,
+        price: "160,000원"
+      }),
+      fallbackObservation({
         observationId: "fallback-same-name-other-company",
         runId: "fallback-contaminant",
         companyKey: "cmp_place_900000096",
@@ -900,14 +1221,25 @@ async function main() {
       cookies
     );
     assert.equal(fallbackDetail.statusCode, 200);
+    assert.equal(fallbackDetail.body.products.length, 0, "aggregate-only inventory history must not fabricate structured products");
+    assert.equal(fallbackDetail.body.observationBasis.products.collectedAt, "");
+    assert.equal(fallbackDetail.body.observationBasis.daily.actualObservation, true, "aggregate inventory history must keep an actual observation basis");
     assert.equal(fallbackDetail.body.daily.length, 64, "history daily fallback must keep a bounded latest window");
     assert.ok(fallbackDetail.body.salesArchive.daily.length > 64, "sales archive must retain observations beyond the latest detail window");
     assert.equal(fallbackDetail.body.salesArchive.source, "history_observations");
     assert.equal(fallbackDetail.body.observationBasis.daily.source, "history_observations");
     assert.equal(fallbackDetail.body.observationBasis.daily.file, "history/observations.jsonl");
-    assert.equal(fallbackDetail.body.observationBasis.daily.runId, "fallback-conflict");
-    assert.equal(fallbackDetail.body.observationBasis.daily.collectedAt, "2026-08-25T01:00:00.000Z");
-    assert.equal(fallbackDetail.body.observationBasis.daily.dateRange.end, "2026-10-11");
+    assert.equal(fallbackDetail.body.observationBasis.daily.runId, "fallback-basis-latest");
+    assert.equal(fallbackDetail.body.observationBasis.daily.collectedAt, "2026-08-28T01:00:00.000Z");
+    assert.equal(fallbackDetail.body.observationBasis.daily.dateRange.end, "2026-10-14");
+    assert.equal(fallbackDetail.body.observationBasis.daily.lodgingBasisTotal, 16, "lodging basis must use the latest run's own maximum instead of an older global maximum");
+    assert.equal(fallbackDetail.body.observationBasis.daily.lodgingBasisRunId, "fallback-basis-latest");
+    assert.equal(fallbackDetail.body.observationBasis.daily.lodgingBasisCollectedAt, "2026-08-28T01:00:00.000Z");
+    assert.equal(
+      Math.max(...fallbackDetail.body.daily.filter((row) => row.productType === "lodging").map((row) => row.total || 0)),
+      20,
+      "the fixture must retain an older total 20 while exposing latest-run basis 16"
+    );
     assert.equal(fallbackDetail.body.observationBasis.daily.rowCount, 64);
     assert.equal(fallbackDetail.body.observationBasis.daily.truncated, true);
     const fallbackLatestLodging = fallbackDetail.body.daily.find((row) => row.date === "2026-10-09" && row.productType === "lodging");

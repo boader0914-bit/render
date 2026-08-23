@@ -37271,7 +37271,7 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 .admin-reference-product-table :is(.admin-reference-table-head, .admin-reference-product-row) {
-  grid-template-columns: minmax(140px, 1.45fr) 48px repeat(4, minmax(72px, .82fr)) 66px;
+  grid-template-columns: minmax(140px, 1.35fr) 48px repeat(4, minmax(68px, .72fr)) minmax(150px, 1.35fr);
 }
 
 .admin-reference-table-head {
@@ -37316,6 +37316,104 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 .admin-reference-product-row > span:first-child {
   display: grid;
   gap: 1px;
+}
+
+.admin-reference-season-note {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+
+.admin-reference-season-note b {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.admin-reference-season-note[data-season-status="detected"] b {
+  color: var(--positive);
+}
+
+.admin-reference-season-note > small {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 720;
+  line-height: 1.3;
+}
+
+.admin-reference-legacy-products {
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-control);
+  padding: 12px;
+}
+
+.admin-reference-legacy-products > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-reference-legacy-products > div:first-child strong {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.admin-reference-legacy-products > div:first-child small,
+.admin-reference-legacy-products > p {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 720;
+  line-height: 1.4;
+}
+
+.admin-reference-legacy-product-names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.admin-reference-legacy-product-names > span {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  padding: 4px 7px;
+  font-size: 9px;
+  font-weight: 780;
+}
+
+.admin-reference-legacy-products dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.admin-reference-legacy-products dl > div {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-reference-legacy-products :is(dt, dd, p) {
+  margin: 0;
+}
+
+.admin-reference-legacy-products dt {
+  color: var(--text-secondary);
+  font-size: 8px;
+  font-weight: 780;
+}
+
+.admin-reference-legacy-products dd {
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .admin-reference-product-list > .admin-db-more-list,
@@ -37370,7 +37468,7 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 .admin-reference-footnote {
   margin: 7px 3px 0;
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1.4;
 }
@@ -38047,6 +38145,32 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-product-row > span:last-child,
   .admin-reference-recent-row > span:last-child {
     border-bottom: 0;
+  }
+
+  .admin-reference-product-row > span:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .admin-reference-season-note b {
+    font-size: 11px;
+  }
+
+  .admin-reference-season-note > small {
+    font-size: 11px;
+  }
+
+  .admin-reference-footnote {
+    font-size: 11px;
+  }
+
+  .admin-reference-legacy-products > div:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .admin-reference-legacy-products dl {
+    grid-template-columns: 1fr;
   }
 
   .admin-reference-recent-row > span:last-child {

@@ -21964,7 +21964,10 @@ function adminDbReferencePriceText(minValue, maxValue, fallback = "가격 대기
   if (!Number.isFinite(min) && !Number.isFinite(max)) return fallback;
   const resolvedMin = Number.isFinite(min) ? min : max;
   const resolvedMax = Number.isFinite(max) ? max : min;
-  return resolvedMin === resolvedMax ? fmtWon(resolvedMin) : `${fmtWon(Math.min(resolvedMin, resolvedMax))}~${fmtWon(Math.max(resolvedMin, resolvedMax))}`;
+  const exactWon = (value) => `${fmtNumber(Math.round(value))}원`;
+  return resolvedMin === resolvedMax
+    ? exactWon(resolvedMin)
+    : `${exactWon(Math.min(resolvedMin, resolvedMax))}~${exactWon(Math.max(resolvedMin, resolvedMax))}`;
 }
 
 function adminDbReferenceDailyRows(model = {}) {
@@ -22039,15 +22042,14 @@ function adminDbReferenceDailyRows(model = {}) {
 
 function adminDbReferenceProductRowHtml(product = {}) {
   const quantity = adminDbProductQuantity(product);
-  const groupLabel = product.priceGroupLabel || "가격 미확인";
   const cells = [
     `<span role="cell" data-label="상품명"><strong>${escapeHtml(product.name || product.productName || product.roomType || "상품명 확인")}</strong><small>${escapeHtml(product.productType === "dayuse" ? "데이유즈" : "숙박")}</small></span>`,
     `<span role="cell" data-label="수량">${Number.isFinite(quantity) ? `${fmtNumber(quantity)}개` : "-"}</span>`,
     ...[["평일", "weekday"], ["금요일", "friday"], ["토요일", "saturday"], ["일요일", "sunday"]].map(([label, key]) => {
       const price = adminDbProductPrice(product, key);
-      return `<span role="cell" data-label="${label}">${Number.isFinite(price) ? escapeHtml(fmtWon(price)) : "-"}</span>`;
+      return `<span role="cell" data-label="${label}">${Number.isFinite(price) ? escapeHtml(adminDbReferencePriceText(price, price)) : "-"}</span>`;
     }),
-    `<span role="cell" data-label="가격군">${escapeHtml(groupLabel)}</span>`
+    `<span role="cell" data-label="성수기 참고">${adminDbReferenceProductSeasonHtml(product)}</span>`
   ];
   return `<article class="admin-reference-table-row admin-reference-product-row" role="row">${cells.join("")}</article>`;
 }
@@ -22109,38 +22111,279 @@ function adminDbFixedRoomBasisHtml(profile = {}) {
   `;
 }
 
+function adminDbReferenceObservedInventoryBasis(detail = {}, latest = {}) {
+  const snapshot = detail.productSnapshot || latest.productSnapshot || {};
+  const legacyProductPreview = detail.legacyProductPreview && detail.legacyProductPreview.structured === false
+    ? detail.legacyProductPreview
+    : null;
+  const products = Array.isArray(detail.products)
+    ? detail.products
+    : (Array.isArray(snapshot.products) ? snapshot.products : []);
+  const daily = Array.isArray(detail.daily)
+    ? detail.daily
+    : (Array.isArray(snapshot.daily) ? snapshot.daily : []);
+  const productsBasis = detail.observationBasis?.products || {};
+  const dailyBasis = detail.observationBasis?.daily || {};
+  const productQuantities = products.map((product) => adminDbProductQuantity(product));
+  const productQuantityComplete = products.length > 0 && productQuantities.every(Number.isFinite);
+  const productQuantityTotal = productQuantityComplete
+    ? productQuantities.reduce((sum, quantity) => sum + quantity, 0)
+    : NaN;
+  const lodgingDailyRows = daily
+    .filter((item) => !/dayuse|day_use|day-use|데이유즈|당일|대실/i.test(String(item.productType || item.saleType || "")));
+  const latestBasisRunId = String(dailyBasis.lodgingBasisRunId || dailyBasis.runId || "").trim();
+  const runScopedLodgingRows = dailyBasis.source === "history_observations" && latestBasisRunId
+    ? lodgingDailyRows.filter((item) => String(item.runId || "").trim() === latestBasisRunId)
+    : lodgingDailyRows;
+  const lodgingDailyTotals = runScopedLodgingRows
+    .map((item) => optionalNumber(item.total ?? item.totalQuantity ?? item.supply))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const atomicBasisTotal = optionalNumber(dailyBasis.lodgingBasisTotal ?? legacyProductPreview?.publicStockBasisTotal);
+  const observedDailyTotal = Number.isFinite(atomicBasisTotal) && atomicBasisTotal > 0
+    ? atomicBasisTotal
+    : (lodgingDailyTotals.length ? Math.max(...lodgingDailyTotals) : NaN);
+  const correctedSalesSignal = latest.manualCorrectionApplied === true
+    || latest.salesSignal?.manualCorrectionApplied === true
+    || latest.salesSignal?.lodging?.manualCorrectionApplied === true;
+  const automaticTotals = [
+    snapshot.totalSellable,
+    snapshot.totalQuantity,
+    observedDailyTotal,
+    latest.salesSignal?.lodgingBasisTotal,
+    latest.stockBasis?.lodgingBasisTotal,
+    latest.stockBasis?.lodgingOperatingTotal,
+    correctedSalesSignal ? NaN : latest.salesSignal?.lodging?.maxTotal
+  ]
+    .map(optionalNumber)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const productObservedAt = String(productsBasis.collectedAt || snapshot.productsCollectedAt || snapshot.collectedAt || "").trim();
+  const inventoryObservedAt = dailyBasis.actualObservation === true
+    ? String(dailyBasis.lodgingBasisCollectedAt || dailyBasis.collectedAt || dailyBasis.collectedDate || "").trim()
+    : String(legacyProductPreview?.observedAt || "").trim();
+  const productObservedTime = Date.parse(productObservedAt);
+  const inventoryObservedTime = Date.parse(inventoryObservedAt);
+  const observedDailyIsSameOrNewer = Number.isFinite(observedDailyTotal)
+    && Boolean(inventoryObservedAt)
+    && (
+      !Number.isFinite(productQuantityTotal)
+      || !productObservedAt
+      || (Number.isFinite(inventoryObservedTime) && Number.isFinite(productObservedTime) && inventoryObservedTime >= productObservedTime)
+    );
+  const totalQuantity = observedDailyIsSameOrNewer
+    ? observedDailyTotal
+    : (Number.isFinite(productQuantityTotal) && productQuantityTotal > 0
+      ? productQuantityTotal
+      : (automaticTotals[0] ?? NaN));
+  const totalQuantityObservedAt = observedDailyIsSameOrNewer
+    ? inventoryObservedAt
+    : (Number.isFinite(productQuantityTotal) && productQuantityTotal > 0 ? productObservedAt : inventoryObservedAt);
+  return {
+    products,
+    totalQuantity,
+    totalQuantitySource: observedDailyIsSameOrNewer
+      ? "최근 공개재고 기준총량"
+      : (Number.isFinite(productQuantityTotal) && productQuantityTotal > 0
+        ? "구조화 상품 수량 합계"
+        : (Number.isFinite(totalQuantity) && totalQuantity > 0 ? "공개재고 기준총량" : "수집 대기")),
+    totalQuantityObservedAt,
+    productObservedAt,
+    inventoryObservedAt,
+    hasDetailedObservation: products.length > 0 && Boolean(productObservedAt),
+    hasInventoryObservation: Number.isFinite(totalQuantity) && totalQuantity > 0 && Boolean(inventoryObservedAt),
+    hasAutomaticTotal: Number.isFinite(totalQuantity) && totalQuantity > 0,
+    legacyProductPreview
+  };
+}
+
+function adminDbReferenceObservedInventoryLabel(basis = {}) {
+  if (basis.hasDetailedObservation) {
+    const totalObservedAt = String(basis.totalQuantityObservedAt || "").trim();
+    const inventorySuffix = totalObservedAt && totalObservedAt !== String(basis.productObservedAt || "").trim()
+      ? ` · 재고 총량 ${compactDateTime(totalObservedAt)} 관측`
+      : "";
+    return `상품상세 관측 ${compactDateTime(basis.productObservedAt)}${inventorySuffix}`;
+  }
+  if (basis.legacyProductPreview) {
+    const observedAt = String(basis.legacyProductPreview.observedAt || "").trim();
+    return `과거 수집 요약${observedAt ? ` ${compactDateTime(observedAt)} 관측` : " · 관측일 확인 필요"} · 구조화 상품상세 없음`;
+  }
+  if (basis.hasInventoryObservation) return `재고 총량 관측 ${compactDateTime(basis.inventoryObservedAt)} · 구조화 상품상세 없음`;
+  if (basis.products?.length) return "구조화 상품 관측 · 관측일 확인 필요";
+  if (basis.hasAutomaticTotal) return "재고 총량 관측 · 관측일 확인 필요";
+  return "자동관측 자료 없음";
+}
+
+function adminDbProductSeasonWindowProfile(product = {}, referenceDate = todayIsoDate()) {
+  const referenceYear = adminDbReferenceIsoDate(referenceDate).slice(0, 4);
+  const rowsByDate = new Map();
+  (Array.isArray(product.priceByDate) ? product.priceByDate : []).forEach((row) => {
+    const date = adminDbReferenceIsoDate(row?.date || row?.stayDate);
+    const price = optionalNumber(row?.price);
+    if (!date || !referenceYear || !date.startsWith(`${referenceYear}-`) || !Number.isFinite(price) || price <= 0) return;
+    rowsByDate.set(date, { date, price: Math.round(price) });
+  });
+  const rows = [...rowsByDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  const seasonStart = `${referenceYear}-07-15`;
+  const seasonEnd = `${referenceYear}-08-20`;
+  const dayBucket = (date) => {
+    const day = new Date(`${date}T00:00:00Z`).getUTCDay();
+    if (day === 5) return "friday";
+    if (day === 6) return "saturday";
+    if (day === 0) return "sunday";
+    return "weekday";
+  };
+  const median = (values = []) => {
+    const sorted = values.slice().sort((a, b) => a - b);
+    if (!sorted.length) return NaN;
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+  };
+  const normalByBucket = new Map();
+  rows.filter((row) => row.date < seasonStart || row.date > seasonEnd).forEach((row) => {
+    const key = dayBucket(row.date);
+    const values = normalByBucket.get(key) || [];
+    values.push(row.price);
+    normalByBucket.set(key, values);
+  });
+  const baselineByBucket = new Map(
+    [...normalByBucket.entries()]
+      .filter(([, values]) => values.length >= 2)
+      .map(([key, values]) => [key, median(values)])
+  );
+  const candidates = rows
+    .filter((row) => row.date >= seasonStart && row.date <= seasonEnd)
+    .map((row) => {
+      const baseline = baselineByBucket.get(dayBucket(row.date));
+      const premiumAmount = Number.isFinite(baseline) ? row.price - baseline : NaN;
+      const premiumRate = Number.isFinite(baseline) && baseline > 0 ? premiumAmount / baseline : NaN;
+      return {
+        ...row,
+        baseline,
+        premiumAmount,
+        premiumRate,
+        qualifies: Number.isFinite(premiumRate) && premiumRate >= 0.15 && premiumAmount >= 10000
+      };
+    });
+  const qualifyingRuns = [];
+  let currentRun = [];
+  candidates.filter((row) => row.qualifies).forEach((row) => {
+    const previous = currentRun.at(-1);
+    const isNextDay = previous
+      ? Date.parse(`${row.date}T00:00:00Z`) - Date.parse(`${previous.date}T00:00:00Z`) === 86400000
+      : true;
+    if (!isNextDay && currentRun.length) qualifyingRuns.push(currentRun);
+    currentRun = isNextDay ? [...currentRun, row] : [row];
+  });
+  if (currentRun.length) qualifyingRuns.push(currentRun);
+  const detectedRun = qualifyingRuns
+    .filter((run) => run.length >= 3)
+    .sort((a, b) => b.length - a.length || b.reduce((sum, row) => sum + row.premiumRate, 0) / b.length - a.reduce((sum, row) => sum + row.premiumRate, 0) / a.length)[0] || [];
+  const comparableDateCount = candidates.filter((row) => Number.isFinite(row.baseline)).length;
+  const averagePremiumRate = detectedRun.length
+    ? detectedRun.reduce((sum, row) => sum + row.premiumRate, 0) / detectedRun.length
+    : NaN;
+  const status = !rows.length
+    ? "no_current_year"
+    : detectedRun.length
+      ? "detected"
+      : comparableDateCount >= 3
+        ? "no_peak"
+        : "insufficient";
+  return {
+    status,
+    referenceYear,
+    seasonWindow: { start: seasonStart, end: seasonEnd },
+    observedDateCount: rows.length,
+    comparableDateCount,
+    baselineBucketCount: baselineByBucket.size,
+    detected: detectedRun.length ? {
+      start: detectedRun[0].date,
+      end: detectedRun.at(-1).date,
+      dayCount: detectedRun.length,
+      averagePremiumRate
+    } : null,
+    truncated: product.priceDateTruncated === true,
+    storedMissingPriceDateCount: Number(product.priceMissingStoredDateCount || 0),
+    totalMissingPriceDateCount: Number(product.priceMissingDateCount || 0)
+  };
+}
+
+function adminDbReferenceProductSeasonHtml(product = {}) {
+  const profile = adminDbProductSeasonWindowProfile(product);
+  const detected = profile.detected;
+  const windowLabel = `${adminDbReferenceDateLabel(profile.seasonWindow.start)}~${adminDbReferenceDateLabel(profile.seasonWindow.end)}`;
+  const missingEvidence = profile.truncated
+    ? [
+      profile.storedMissingPriceDateCount > 0 ? `최근 보존구간 가격 미관측 ${fmtNumber(profile.storedMissingPriceDateCount)}일` : "",
+      profile.totalMissingPriceDateCount > 0 ? `전체 원본 가격 미관측 ${fmtNumber(profile.totalMissingPriceDateCount)}일` : ""
+    ].filter(Boolean)
+    : (profile.totalMissingPriceDateCount > 0 ? [`가격 미관측 ${fmtNumber(profile.totalMissingPriceDateCount)}일`] : []);
+  const title = profile.status === "detected"
+    ? "성수기 가격 관측"
+    : profile.status === "no_peak"
+      ? "뚜렷한 성수기 상승 없음"
+      : profile.status === "no_current_year"
+        ? "해당 연도 가격 관측 없음"
+        : "성수기 가격 확인 전";
+  const evidence = profile.status === "detected"
+    ? `${adminDbReferenceDateLabel(detected.start)}~${adminDbReferenceDateLabel(detected.end)} · 같은 요일구간 대비 평균 +${Math.round(detected.averagePremiumRate * 100)}%`
+    : profile.status === "no_peak"
+      ? `${windowLabel} · 15%·10,000원 이상 연속 상승 없음`
+      : `${profile.referenceYear || "현재 연도"}년 같은 요일구간 비교자료 부족`;
+  return `
+    <span class="admin-reference-season-note" data-season-status="${escapeHtml(profile.status)}">
+      <b>${escapeHtml(title)}</b>
+      <small>${escapeHtml([evidence, profile.truncated ? "최근 최대 31개 예약일 보존" : "", ...missingEvidence].filter(Boolean).join(" · "))}</small>
+    </span>
+  `;
+}
+
+function adminDbReferenceLegacyProductPreviewHtml(preview = {}) {
+  const names = Array.isArray(preview.previewNames) ? preview.previewNames : [];
+  const productCount = optionalNumber(preview.productCount);
+  const listedRange = preview.listedPriceRange || {};
+  const representative = optionalNumber(preview.representativeMinimum?.amount);
+  const rangeText = adminDbReferencePriceText(listedRange.min, listedRange.max, "가격범위 미보존");
+  const countText = Number.isFinite(productCount)
+    ? `전체 ${fmtNumber(productCount)}종 · 상품명 ${fmtNumber(names.length)}종 보존`
+    : `상품명 ${fmtNumber(names.length)}종 보존`;
+  const missingNameCount = optionalNumber(preview.missingNameCount);
+  return `
+    <section class="admin-reference-legacy-products" aria-label="과거 수집 상품 요약">
+      <div>
+        <strong>과거 수집 상품명 미리보기</strong>
+        <small>${escapeHtml(`${countText}${Number.isFinite(missingNameCount) && missingNameCount > 0 ? ` · ${fmtNumber(missingNameCount)}종 상세명 미보존` : ""}`)}</small>
+      </div>
+      ${names.length ? adminDbFoldedItemsHtml(names, (name) => `<span>${escapeHtml(name)}</span>`, { noun: "상품명", limit: 5, className: "admin-reference-legacy-product-names" }) : ""}
+      <dl>
+        <div><dt>당시 화면 가격범위</dt><dd>${escapeHtml(rangeText)}</dd></div>
+        <div><dt>당시 예약최저가</dt><dd>${Number.isFinite(representative) ? escapeHtml(adminDbReferencePriceText(representative, representative)) : "미보존"}</dd></div>
+      </dl>
+      <p>상품별 수량·날짜별 가격은 당시 원본에 보존되지 않아 시즌 가격을 분류하지 않습니다. 상세정보 재수집 후 정확한 상품표로 교체됩니다.</p>
+    </section>
+  `;
+}
+
 function adminDbReferenceBasicsCard(row = {}, detail = {}, model = {}) {
   const company = detail.company || row.company || {};
   const fixed = adminDbCompanyFixedProfile(company);
-  const metrics = row.metrics || {};
   const latest = company.inventory?.latest || row.company?.inventory?.latest || {};
   const snapshot = detail.productSnapshot || latest.productSnapshot || {};
-  const products = adminDbProductRows(row, detail);
-  const exactPriceGroups = Array.isArray(detail.priceGroups)
-    ? detail.priceGroups
-    : (Array.isArray(snapshot.priceGroups) ? snapshot.priceGroups : []);
-  const productSummary = detail.productSummary || snapshot.summary || {};
-  const groupLabels = new Map(exactPriceGroups.map((group, index) => [group.priceGroupId, `가격군 ${String.fromCharCode(65 + index)}`]));
-  const displayProducts = products.map((product) => ({
-    ...product,
-    priceGroupLabel: product.priceGroupId
-      ? (groupLabels.get(product.priceGroupId) || product.priceGroupLabel || "가격군 확인")
-      : (product.priceGroupLabel || "가격 미확인")
-  }));
-  const productQuantities = products.map((product) => adminDbProductQuantity(product));
-  const productQuantityComplete = products.length > 0 && productQuantities.every(Number.isFinite);
-  const totalQuantity = productQuantityComplete
-    ? productQuantities.reduce((sum, quantity) => sum + quantity, 0)
-    : optionalNumber(metrics.roomTotal);
-  const totalQuantitySource = productQuantityComplete
-    ? "상품 수량 합계"
-    : (Number.isFinite(totalQuantity) ? "공개재고 집계" : "수집 대기");
-  const priceGroupCount = Number(exactPriceGroups.length || productSummary.priceGroupCount || adminDbProductPriceGroupCount(products) || 0);
+  const observedInventory = adminDbReferenceObservedInventoryBasis(detail, latest);
+  const products = observedInventory.products;
+  const legacyProductPreview = observedInventory.legacyProductPreview;
+  const displayProducts = products;
+  const totalQuantity = observedInventory.totalQuantity;
+  const totalQuantitySource = observedInventory.totalQuantitySource;
+  const pricedProductCount = products.filter((product) => ["weekday", "friday", "saturday", "sunday"].some((key) => Number.isFinite(adminDbProductPrice(product, key)))).length;
+  const displayedProductCount = products.length || optionalNumber(legacyProductPreview?.productCount);
   const allPrices = products.flatMap((product) => ["weekday", "friday", "saturday", "sunday"].map((key) => adminDbProductPrice(product, key))).filter(Number.isFinite);
-  const productObservedAt = detail.observationBasis?.products?.collectedAt || snapshot.productsCollectedAt || snapshot.collectedAt || "";
+  const observedInventoryLabel = adminDbReferenceObservedInventoryLabel(observedInventory);
   const representativePrice = allPrices.length
     ? adminDbReferencePriceText(Math.min(...allPrices), Math.max(...allPrices))
-    : "관측 대기";
+    : legacyProductPreview
+      ? adminDbReferencePriceText(legacyProductPreview.listedPriceRange?.min, legacyProductPreview.listedPriceRange?.max, "관측 대기")
+      : "관측 대기";
   return `
     <section class="admin-reference-card admin-reference-basics" aria-labelledby="adminReferenceBasicsTitle">
       <div class="admin-reference-section-title"><b>A</b><h3 id="adminReferenceBasicsTitle">업체 기본정보</h3></div>
@@ -22158,22 +22401,24 @@ function adminDbReferenceBasicsCard(row = {}, detail = {}, model = {}) {
       </dl>
       ${adminDbFixedRoomBasisHtml(fixed)}
       <div class="admin-reference-subsection-head admin-reference-observed-head">
-        <div><strong>최근 자동관측 상품정보</strong><small>${productObservedAt ? `${compactDateTime(productObservedAt)} 기준` : "관측자료 없음"}</small></div>
+        <div><strong>최근 자동관측 상품정보</strong><small>${escapeHtml(observedInventoryLabel)}</small></div>
         <mark data-ui-status="neutral">변동 정보</mark>
       </div>
       <div class="admin-reference-basic-metrics" aria-label="상품 기본 지표">
-        <article><span>판매상품</span><strong>${products.length ? `${fmtNumber(products.length)}종` : "대기"}</strong></article>
-        <article><span>가격군</span><strong>${priceGroupCount ? `${fmtNumber(priceGroupCount)}개` : "대기"}</strong></article>
-        <article><span>판매 가능 총량</span><strong>${Number.isFinite(totalQuantity) && totalQuantity > 0 ? `${fmtNumber(totalQuantity)}개` : "대기"}</strong><small>${escapeHtml(totalQuantitySource)}</small></article>
+        <article><span>판매상품</span><strong>${Number.isFinite(displayedProductCount) && displayedProductCount > 0 ? `${fmtNumber(displayedProductCount)}종` : "대기"}</strong></article>
+        <article><span>최근 가격 저장</span><strong>${pricedProductCount ? `${fmtNumber(pricedProductCount)}종` : "대기"}</strong><small>${observedInventory.productObservedAt ? `${escapeHtml(compactDateTime(observedInventory.productObservedAt))} 관측` : "상품별 가격 관측 대기"}</small></article>
+        <article><span>판매 가능 총량</span><strong>${Number.isFinite(totalQuantity) && totalQuantity > 0 ? `${fmtNumber(totalQuantity)}개` : "대기"}</strong><small>${escapeHtml(`${totalQuantitySource}${observedInventory.totalQuantityObservedAt ? ` · ${compactDateTime(observedInventory.totalQuantityObservedAt)} 관측` : ""}`)}</small></article>
         <article><span>대표 관측가격</span><strong>${escapeHtml(representativePrice)}</strong></article>
       </div>
-      <div class="admin-reference-table admin-reference-product-table" role="table" aria-label="상품별 수량과 요일별 관측가격">
-        <div class="admin-reference-table-head" role="row"><span role="columnheader">상품명</span><span role="columnheader">수량</span><span role="columnheader">평일</span><span role="columnheader">금요일</span><span role="columnheader">토요일</span><span role="columnheader">일요일</span><span role="columnheader">가격군</span></div>
+      <div class="admin-reference-table admin-reference-product-table" role="table" aria-label="상품별 최신 저장가격과 성수기 참고" aria-describedby="adminReferenceSeasonNote">
+        <div class="admin-reference-table-head" role="row"><span role="columnheader">상품명</span><span role="columnheader">수량</span><span role="columnheader">평일</span><span role="columnheader">금요일</span><span role="columnheader">토요일</span><span role="columnheader">일요일</span><span role="columnheader">성수기 참고</span></div>
         ${displayProducts.length
           ? adminDbFoldedItemsHtml(displayProducts, adminDbReferenceProductRowHtml, { noun: "상품", limit: 5, className: "admin-reference-product-list" })
-          : `<div class="admin-reference-empty">구조화된 상품 자료가 없습니다. 상세정보 자동수집 후 상품명·수량·요일별 관측가격을 표시합니다.</div>`}
+          : legacyProductPreview
+            ? adminDbReferenceLegacyProductPreviewHtml(legacyProductPreview)
+            : `<div class="admin-reference-empty">구조화된 상품 자료가 없습니다. 상세정보 자동수집 후 상품명·수량·요일별 관측가격을 표시합니다.</div>`}
       </div>
-      <p class="admin-reference-footnote">관리자 확정 기본정보는 자동수집으로 덮지 않습니다. 상품명·수량·가격은 최근 네이버 공개 화면 관측이며 실제 보유 객실·결제 매출과 구분합니다.</p>
+      <p class="admin-reference-footnote" id="adminReferenceSeasonNote">관리자 확정 기본정보는 자동수집으로 덮지 않습니다. 상품 가격은 가장 최근에 저장된 완전한 Snapshot을 우선 표시합니다. 과거 연도와 월별 소폭 변동은 성수기로 분류하지 않으며, 같은 해 7/15~8/20에 같은 요일구간보다 15%·10,000원 이상 높은 가격이 3일 이상 연속 관측될 때만 성수기 참고로 표시합니다. 네이버 공개 관측가는 실제 보유 객실·결제 매출과 구분합니다.</p>
     </section>
   `;
 }

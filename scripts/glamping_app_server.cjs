@@ -9293,6 +9293,14 @@ function compactProductSnapshotProducts(observations = []) {
     const priceByDate = dated
       .slice(-COMPANY_PRODUCT_SNAPSHOT_PRICE_DATE_LIMIT)
       .map((row) => ({ date: row.date, price: row.price }));
+    const priceDateTotalCount = new Set(dated.map((row) => row.date)).size;
+    const priceDateStoredCount = new Set(priceByDate.map((row) => row.date)).size;
+    const priceMissingDateCount = new Set(
+      dated.filter((row) => !Number.isFinite(row.price) || row.price <= 0).map((row) => row.date)
+    ).size;
+    const priceMissingStoredDateCount = new Set(
+      priceByDate.filter((row) => !Number.isFinite(row.price) || row.price <= 0).map((row) => row.date)
+    ).size;
     const totalValues = product.observations.map((row) => row.total).filter(Number.isFinite);
     return {
       key: product.key,
@@ -9310,6 +9318,11 @@ function compactProductSnapshotProducts(observations = []) {
       latestSold: latest.sold ?? null,
       minPrice: prices.length ? Math.min(...prices) : null,
       maxPrice: prices.length ? Math.max(...prices) : null,
+      priceDateTotalCount,
+      priceDateStoredCount,
+      priceDateTruncated: priceDateTotalCount > priceDateStoredCount,
+      priceMissingDateCount,
+      priceMissingStoredDateCount,
       prices: {
         weekday: representativeProductSnapshotPrice(pricesByDay.weekday),
         friday: representativeProductSnapshotPrice(pricesByDay.friday),
@@ -9561,6 +9574,68 @@ function compactCompanyProductSnapshot(item = {}, run = {}, collectedAt = "") {
     products: productProfile.products,
     priceGroups: productProfile.priceGroups,
     daily
+  };
+}
+
+function legacyProductPreviewPrice(value = "") {
+  const raw = String(value || "").trim().slice(0, 120);
+  const amounts = [...raw.matchAll(/\d[\d,]*/g)]
+    .map((match) => Number(String(match[0] || "").replace(/,/g, "")))
+    .filter((amount) => Number.isFinite(amount) && amount > 0);
+  if (!amounts.length) return { raw, min: null, max: null };
+  return {
+    raw,
+    min: Math.min(...amounts),
+    max: Math.max(...amounts)
+  };
+}
+
+function legacyProductPreviewFromItem(item = {}, run = {}, observedAt = "") {
+  const previewNames = boundedUnique(
+    String(item.roomNamePreview || "")
+      .split(/\s*,\s*/)
+      .map((name) => String(name || "").trim().slice(0, 160))
+      .filter(Boolean),
+    12
+  );
+  const productCountValue = productSnapshotNumber(item.nightItemCount);
+  const productCount = productCountValue !== null && productCountValue > 0
+    ? Math.round(productCountValue)
+    : null;
+  const listedPriceRange = legacyProductPreviewPrice(item.listedPriceRangeText || "");
+  const representativeMinimum = legacyProductPreviewPrice(item.representativeMinimumPriceText || "");
+  const hasPriceRange = listedPriceRange.min !== null || listedPriceRange.max !== null;
+  const hasRepresentativePrice = representativeMinimum.min !== null;
+  if (!previewNames.length && !productCount && !hasPriceRange && !hasRepresentativePrice) return null;
+  const dates = Array.isArray(item.weeklyProductDetails)
+    ? item.weeklyProductDetails.map((row) => productSnapshotDate(row?.date || row?.stayDate)).filter(Boolean).sort()
+    : [];
+  return {
+    schemaVersion: 1,
+    source: "legacy_output_summary",
+    sourceLabel: "과거 수집 요약",
+    structured: false,
+    runId: String(run.id || "").trim(),
+    observedAt: String(observedAt || "").trim(),
+    stayDateRange: {
+      start: dates[0] || String(run.checkIn || "").slice(0, 10),
+      end: dates.at(-1) || String(run.checkOut || "").slice(0, 10)
+    },
+    productCount,
+    previewNames,
+    previewCount: previewNames.length,
+    previewComplete: false,
+    missingNameCount: productCount !== null ? Math.max(0, productCount - previewNames.length) : null,
+    listedPriceRange,
+    representativeMinimum: {
+      raw: representativeMinimum.raw,
+      amount: representativeMinimum.min
+    },
+    publicStockBasisTotal: productSnapshotNumber(item.weeklyBasisTotal ?? item.weeklyMaxTotal),
+    individualQuantityAvailable: false,
+    perDatePriceAvailable: false,
+    priceGroupAvailable: false,
+    seasonPriceAvailable: false
   };
 }
 
@@ -13028,7 +13103,7 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
     .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.productType).localeCompare(String(b.productType)));
   const daily = observedRows.slice(-COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT);
   const dates = daily.map((row) => row.date).filter(Boolean).sort();
-  const collectedRows = [...daily].sort((a, b) => {
+  const collectedRows = [...observedRows].sort((a, b) => {
     const order = historyDailyObservationOrder(a);
     const other = historyDailyObservationOrder(b);
     return order.timestamp - other.timestamp
@@ -13037,6 +13112,11 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
       || order.runId.localeCompare(other.runId);
   });
   const latest = collectedRows.at(-1) || {};
+  const latestLodgingTotals = observedRows
+    .filter((row) => row.runId === latest.runId && row.productType === "lodging")
+    .map((row) => productSnapshotNumber(row.total ?? row.supply))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const lodgingBasisTotal = latestLodgingTotals.length ? Math.max(...latestLodgingTotals) : null;
   const collectedAtValues = daily.map((row) => row.collectedAt).filter(Boolean).sort();
   const collectedDateValues = daily.map((row) => row.collectedDate).filter(Boolean).sort();
   return {
@@ -13050,6 +13130,9 @@ function companyHistoryDailyFallback(company = {}, observations = []) {
       runIds: boundedUnique(daily.map((row) => row.runId).filter(Boolean), COMPANY_PRODUCT_SNAPSHOT_DAILY_LIMIT),
       collectedAt: latest.collectedAt || "",
       collectedDate: latest.collectedDate || "",
+      lodgingBasisTotal,
+      lodgingBasisRunId: lodgingBasisTotal !== null ? (latest.runId || "") : "",
+      lodgingBasisCollectedAt: lodgingBasisTotal !== null ? (latest.collectedAt || latest.collectedDate || "") : "",
       observationRange: {
         start: collectedAtValues[0] || collectedDateValues[0] || "",
         end: collectedAtValues.at(-1) || collectedDateValues.at(-1) || ""
@@ -13344,6 +13427,147 @@ function companyLeadTimeSummary(company = {}, observations = []) {
   };
 }
 
+function companyProductStoredRunTimeMap(company = {}) {
+  const byRunId = new Map();
+  const remember = (row = {}) => {
+    const runId = String(row?.runId || "").trim();
+    const collectedAt = String(row?.collectedAt || row?.collectedDate || "").trim();
+    if (!runId || !collectedAt) return;
+    const current = byRunId.get(runId) || "";
+    if (!current || collectedAt > current) byRunId.set(runId, collectedAt);
+  };
+  const inventory = company.inventory || {};
+  [
+    inventory.latest,
+    inventory.previousLatest,
+    ...(inventory.snapshots || []),
+    company.latestCollection,
+    ...(company.collectionRouteHistory || []),
+    company.demandSignals?.latest,
+    ...(company.demandSignals?.snapshots || [])
+  ].filter(Boolean).forEach(remember);
+  Object.values(company.keywords || {}).forEach((keyword) => (keyword.runs || []).forEach(remember));
+  return byRunId;
+}
+
+function companyProductRecoveryRunIds(company = {}, observations = [], runTimes = new Map()) {
+  const observedTimes = companyRankObservationTimeMap(company, observations);
+  const storedTimes = companyProductStoredRunTimeMap(company);
+  const runIds = boundedUnique([
+    ...(company.runIds || []),
+    ...(company.inventory?.runIds || []),
+    ...Object.values(company.keywords || {}).flatMap((keyword) => (keyword.runs || []).map((row) => row.runId)),
+    company.lastRunId,
+    company.firstRunId
+  ], 120);
+  const insertionOrder = new Map(runIds.map((runId, index) => [runId, index]));
+  return runIds
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftObserved = observedTimes.get(left) || {};
+      const rightObserved = observedTimes.get(right) || {};
+      const leftAt = leftObserved.collectedAt
+        || leftObserved.collectedDate
+        || runTimes.get(left)
+        || storedTimes.get(left)
+        || "";
+      const rightAt = rightObserved.collectedAt
+        || rightObserved.collectedDate
+        || runTimes.get(right)
+        || storedTimes.get(right)
+        || "";
+      return String(rightAt).localeCompare(String(leftAt))
+        || Number(insertionOrder.get(right) || 0) - Number(insertionOrder.get(left) || 0);
+    })
+    .slice(0, 20);
+}
+
+function companyProductRunObservedAt(company = {}, observations = [], runId = "") {
+  const identity = companyHistoryDailyIdentity(company);
+  return (Array.isArray(observations) ? observations : [])
+    .filter((row) => String(row?.runId || "") === String(runId || "") && historyDailyObservationMatchesCompany(row, identity))
+    .map((row) => String(row.collectedAt || row.collectedDate || "").trim())
+    .filter(Boolean)
+    .sort()[0] || "";
+}
+
+function companyProductAvailabilityMatch(company = {}, item = {}) {
+  const placeIds = new Set((company.placeIds || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const bookingIds = new Set((company.bookingBusinessIds || []).map((value) => String(value || "").trim()).filter(Boolean));
+  const placeId = String(extractNaverPlaceId(item) || "").trim();
+  const bookingId = String(extractBookingBusinessId(item) || "").trim();
+  if (placeId && placeIds.size && !placeIds.has(placeId)) return "";
+  if (bookingId && bookingIds.size && !bookingIds.has(bookingId)) return "";
+  if (placeId && placeIds.has(placeId)) return "place_id";
+  if (bookingId && bookingIds.has(bookingId)) return "booking_business_id";
+  return "";
+}
+
+async function recoverCompanyProductSourceFromRuns(company = {}, observations = []) {
+  const listedRuns = await listRuns().catch(() => []);
+  const listedRunTimes = new Map(listedRuns.map((run) => [
+    String(run?.id || "").trim(),
+    String(run?.collectedAt || run?.updatedAt || "").trim()
+  ]));
+  const storedTimes = companyProductStoredRunTimeMap(company);
+  const loadedCandidates = [];
+  for (const runId of companyProductRecoveryRunIds(company, observations, listedRunTimes)) {
+    const data = await loadRun(runId, {
+      skipCompanyMaster: true,
+      skipHistory: true,
+      skipTraffic: true
+    }).catch(() => null);
+    if (!data) continue;
+    const item = (data.availability?.items || []).find((candidate) => companyProductAvailabilityMatch(company, candidate));
+    if (!item) continue;
+    const actualObservedAt = companyProductRunObservedAt(company, observations, runId);
+    const runObservedAt = String(data.run?.collectedAt || data.run?.updatedAt || "").trim();
+    loadedCandidates.push({
+      runId,
+      data,
+      item,
+      identityMatch: companyProductAvailabilityMatch(company, item),
+      observedAt: actualObservedAt || runObservedAt || storedTimes.get(runId) || "",
+      insertionOrder: company.runIds?.indexOf(runId) ?? -1
+    });
+  }
+  loadedCandidates.sort((left, right) =>
+    String(right.observedAt || "").localeCompare(String(left.observedAt || ""))
+    || (Number.isInteger(right.insertionOrder) ? right.insertionOrder : -1)
+      - (Number.isInteger(left.insertionOrder) ? left.insertionOrder : -1)
+  );
+
+  let legacyProductPreview = null;
+  for (const candidate of loadedCandidates) {
+    const { data, item, identityMatch, observedAt } = candidate;
+    const recoveredSnapshot = compactCompanyProductSnapshot(item, data.run || {}, observedAt);
+    if (Array.isArray(recoveredSnapshot?.products) && recoveredSnapshot.products.length) {
+      return {
+        productSnapshot: recoveredSnapshot,
+        legacyProductPreview: null,
+        recoveredFromRun: true,
+        identityMatch
+      };
+    }
+    if (!legacyProductPreview) {
+      const preview = legacyProductPreviewFromItem(item, data.run || {}, observedAt);
+      if (preview) {
+        legacyProductPreview = {
+          ...preview,
+          sourceFile: data.run?.files?.overall || "",
+          identityMatch
+        };
+      }
+    }
+  }
+  return {
+    productSnapshot: null,
+    legacyProductPreview,
+    recoveredFromRun: Boolean(legacyProductPreview),
+    identityMatch: legacyProductPreview?.identityMatch || ""
+  };
+}
+
 async function summarizeCompanyMasterDetail(companyId = "") {
   const id = String(companyId || "").trim();
   if (!id) return null;
@@ -13361,7 +13585,13 @@ async function summarizeCompanyMasterDetail(companyId = "") {
     .filter((snapshot) => snapshot && typeof snapshot === "object")
     .sort((a, b) => String(b.collectedAt || "").localeCompare(String(a.collectedAt || "")));
   const latestSnapshot = productSnapshotCandidates[0] || rawCompany.inventory?.latest?.productSnapshot || null;
-  const productSnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.products) && snapshot.products.length) || latestSnapshot;
+  let productSnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.products) && snapshot.products.length) || latestSnapshot;
+  const recoveredProductSource = Array.isArray(productSnapshot?.products) && productSnapshot.products.length
+    ? { productSnapshot: null, legacyProductPreview: null, recoveredFromRun: false }
+    : await recoverCompanyProductSourceFromRuns(rawCompany, observations);
+  if (Array.isArray(recoveredProductSource.productSnapshot?.products) && recoveredProductSource.productSnapshot.products.length) {
+    productSnapshot = recoveredProductSource.productSnapshot;
+  }
   const dailySnapshot = productSnapshotCandidates.find((snapshot) => Array.isArray(snapshot.daily) && snapshot.daily.length) || latestSnapshot;
   const snapshotDaily = Array.isArray(dailySnapshot?.daily) ? dailySnapshot.daily : [];
   const historyDailyFallback = snapshotDaily.length ? null : companyHistoryDailyFallback(rawCompany, observations);
@@ -13391,6 +13621,7 @@ async function summarizeCompanyMasterDetail(companyId = "") {
   return {
     company,
     products: Array.isArray(productSnapshot?.products) ? productSnapshot.products : [],
+    legacyProductPreview: recoveredProductSource.legacyProductPreview || null,
     daily,
     salesArchive: {
       source: "history_observations",
@@ -14275,6 +14506,8 @@ function summarizeAvailabilityRows(rows, baseDir = "") {
       outsideSearchRegion: boundary.outside,
       address: row["주소"] || row.location || "",
       roomNamePreview: row["객실명(일부)"] || row.roomNamePreview || row.roomNames || "",
+      listedPriceRangeText: row["금액"] || row.listedPriceRange || "",
+      representativeMinimumPriceText: row["예약최저가"] || row.representativeMinimumPrice || "",
       listType: row["예약리스트유형"] || "",
       productTypeSummary: row["네이버상품구성"] || "",
       naverCouponStatus,
@@ -14806,7 +15039,9 @@ async function loadRun(runId, options = {}) {
       ]
     : platformRows;
   const regions = summarizeRegionalRows(regionalRows, provinceKey, manifest?.keyword || conditions.keyword || "");
-  const datalabTrend = await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
+  const datalabTrend = options.skipTraffic
+    ? null
+    : await enrichRegionsWithTraffic(regions, dirPath, demandKeywordForRun(manifest, conditions, regions));
   const stats = summarizeStats(regions);
   if (datalabTrend) stats.datalabTrend = datalabTrend;
   const availability = summarizeAvailabilityRows([...overallRows, ...adRows, ...regionalRows, ...displayPlatformRows], dirPath);
@@ -15422,9 +15657,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-company-fixed-profile-v43"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-company-fixed-profile-v43"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-company-fixed-profile-v43"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-latest-price-season-v46"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-latest-price-season-v46"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-latest-price-season-v46"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
