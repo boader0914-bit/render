@@ -18063,46 +18063,18 @@ function adminDbQuickCorrectionPanel(row = {}) {
 function adminDbAdminProfilePanel(row = {}) {
   const company = row.company || {};
   const fixed = adminDbCompanyFixedProfile(company);
-  const business = fixed.businessVerification || {};
-  const correction = {
-    roomSegments: fixed.roomSegments,
-    lodgingBasisTotal: fixed.lodgingBasisTotal,
-    dayUseBasisTotal: fixed.dayUseBasisTotal
-  };
   return `
     <form class="admin-db-profile-form company-manual-form" data-company-admin-profile-form data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
       <div class="admin-db-profile-intro">
-        <div><span>관리자 확정 기본정보</span><strong>자동수집으로 바뀌지 않는 업체 기준값</strong><small>업체명·별칭·주소·지역·업종·객실 기준·사업자 확인값만 저장합니다.</small></div>
+        <div><span>관리자 확정 기본정보</span><strong>자동수집으로 바뀌지 않는 업체 기준값</strong><small>업체명·주소·지역·업종·객실 기준을 저장합니다.</small></div>
         <mark data-ui-status="${fixed.confirmed ? "positive" : "neutral"}">${fixed.confirmed ? `확정 ${compactDateTime(fixed.updatedAt)}` : "확인 전"}</mark>
       </div>
       <div class="admin-db-profile-grid">
         <label><span>업체명</span><input type="text" data-admin-profile-field="primaryName" value="${escapeHtml(fixed.primaryName)}"></label>
-        <label><span>업체명 별칭</span><input type="text" data-admin-profile-field="aliases" value="${escapeHtml(fixed.aliases.filter((name) => name && name !== fixed.primaryName).join(", "))}" placeholder="쉼표로 구분"></label>
         <label class="wide"><span>주소</span><input type="text" data-admin-profile-field="address" value="${escapeHtml(fixed.address === "주소 확인 대기" ? "" : fixed.address)}"></label>
         <label><span>지역</span><input type="text" data-admin-profile-field="region" value="${escapeHtml(fixed.region === "지역 확인 대기" ? "" : fixed.region)}"></label>
         <label><span>업종</span><input type="text" data-admin-profile-field="lodgingType" value="${escapeHtml(fixed.lodgingType === "업종 확인 대기" ? "" : fixed.lodgingType)}"></label>
       </div>
-      <section class="admin-db-profile-section">
-        <div><strong>관리자가 확정한 객실·상품 기준</strong><small>최근 자동관측 상품과 섞지 않고 별도 보관합니다.</small></div>
-        <div class="company-manual-total-grid">
-          <label><span>숙박 운영 기준</span><input type="number" min="0" data-manual-lodging value="${escapeHtml(fixed.lodgingBasisTotal || "")}"></label>
-          <label><span>데이유즈 운영 기준</span><input type="number" min="0" data-manual-dayuse value="${escapeHtml(fixed.dayUseBasisTotal || "")}"></label>
-        </div>
-        ${manualCorrectionRoomSegmentsField(correction)}
-      </section>
-      <section class="admin-db-profile-section">
-        <div><strong>사업자 확인값</strong><small>확인한 값만 입력하고 확인일을 함께 남깁니다.</small></div>
-        <div class="admin-db-profile-grid">
-          <label><span>확인 상태</span><select data-admin-profile-field="businessVerificationStatus">${[
-            ["unconfirmed", "확인 전"], ["confirmed", "확인 완료"], ["mismatch", "정보 불일치"], ["not_applicable", "확인 대상 아님"]
-          ].map(([value, label]) => `<option value="${value}" ${business.status === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
-          <label><span>상호·법인명</span><input type="text" data-admin-profile-field="businessName" value="${escapeHtml(business.businessName || "")}"></label>
-          <label><span>사업자번호</span><input type="text" data-admin-profile-field="registrationNumber" value="${escapeHtml(business.registrationNumber || "")}"></label>
-          <label><span>대표자</span><input type="text" data-admin-profile-field="representativeName" value="${escapeHtml(business.representativeName || "")}"></label>
-          <label><span>확인일</span><input type="date" data-admin-profile-field="businessVerifiedAt" value="${escapeHtml(String(business.verifiedAt || "").slice(0, 10))}"></label>
-          <label class="wide"><span>확인 메모</span><input type="text" data-admin-profile-field="businessVerificationNote" value="${escapeHtml(business.note || "")}"></label>
-        </div>
-      </section>
       <label class="admin-db-profile-note"><span>기본정보 메모</span><input type="text" data-admin-profile-field="note" value="${escapeHtml(company.adminProfile?.note || "")}"></label>
       <div class="company-manual-actions">
         <button type="button" data-save-company-admin-profile>고정 기본정보 저장</button>
@@ -22048,8 +22020,7 @@ function adminDbReferenceProductRowHtml(product = {}) {
     ...[["평일", "weekday"], ["금요일", "friday"], ["토요일", "saturday"], ["일요일", "sunday"]].map(([label, key]) => {
       const price = adminDbProductPrice(product, key);
       return `<span role="cell" data-label="${label}">${Number.isFinite(price) ? escapeHtml(adminDbReferencePriceText(price, price)) : "-"}</span>`;
-    }),
-    `<span role="cell" data-label="성수기 참고">${adminDbReferenceProductSeasonHtml(product)}</span>`
+    })
   ];
   return `<article class="admin-reference-table-row admin-reference-product-row" role="row">${cells.join("")}</article>`;
 }
@@ -22074,41 +22045,6 @@ function adminDbCompanyFixedProfile(company = {}) {
     updatedAt: saved?.updatedAt || "",
     updatedBy: saved?.updatedBy || ""
   };
-}
-
-function adminDbBusinessVerificationText(value = {}) {
-  const status = String(value.status || "unconfirmed");
-  const label = {
-    confirmed: "사업자 확인 완료",
-    mismatch: "사업자 정보 불일치",
-    not_applicable: "확인 대상 아님",
-    unconfirmed: "사업자 확인 전"
-  }[status] || "사업자 확인 전";
-  const detail = [value.businessName, value.registrationNumber, value.representativeName].filter(Boolean).join(" · ");
-  return detail ? `${label} · ${detail}` : label;
-}
-
-function adminDbInlineFoldedText(items = [], noun = "항목") {
-  const values = [...new Set((Array.isArray(items) ? items : []).map((item) => String(item || "").trim()).filter(Boolean))];
-  if (!values.length) return "없음";
-  const visible = values.slice(0, 5);
-  const hidden = values.slice(5);
-  return `${escapeHtml(visible.join(", "))}${hidden.length ? `<details class="admin-reference-inline-more"><summary>${fmtNumber(hidden.length)}개 ${escapeHtml(noun)} 더보기</summary><span>${escapeHtml(hidden.join(", "))}</span></details>` : ""}`;
-}
-
-function adminDbFixedRoomBasisHtml(profile = {}) {
-  const segments = Array.isArray(profile.roomSegments) ? profile.roomSegments : [];
-  const metrics = [
-    ["숙박 운영 기준", Number.isFinite(profile.lodgingBasisTotal) ? `${fmtNumber(profile.lodgingBasisTotal)}개` : "확인 전"],
-    ["데이유즈 운영 기준", Number.isFinite(profile.dayUseBasisTotal) ? `${fmtNumber(profile.dayUseBasisTotal)}개` : "확인 전"],
-    ["확정 상품 기준", segments.length ? `${fmtNumber(segments.length)}종` : "확인 전"]
-  ];
-  return `
-    <div class="admin-reference-fixed-basis">
-      ${metrics.map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join("")}
-      ${segments.length ? adminDbFoldedItemsHtml(segments, (segment) => `<article class="admin-reference-fixed-segment"><strong>${escapeHtml(segment.type || "상품명 확인")}</strong><span>${segment.count ? `${fmtNumber(segment.count)}개` : "수량 확인 전"}</span></article>`, { noun: "확정 상품", limit: 5, className: "admin-reference-fixed-segments" }) : ""}
-    </div>
-  `;
 }
 
 function adminDbReferenceObservedInventoryBasis(detail = {}, latest = {}) {
@@ -22213,131 +22149,6 @@ function adminDbReferenceObservedInventoryLabel(basis = {}) {
   return "자동관측 자료 없음";
 }
 
-function adminDbProductSeasonWindowProfile(product = {}, referenceDate = todayIsoDate()) {
-  const referenceYear = adminDbReferenceIsoDate(referenceDate).slice(0, 4);
-  const rowsByDate = new Map();
-  (Array.isArray(product.priceByDate) ? product.priceByDate : []).forEach((row) => {
-    const date = adminDbReferenceIsoDate(row?.date || row?.stayDate);
-    const price = optionalNumber(row?.price);
-    if (!date || !referenceYear || !date.startsWith(`${referenceYear}-`) || !Number.isFinite(price) || price <= 0) return;
-    rowsByDate.set(date, { date, price: Math.round(price) });
-  });
-  const rows = [...rowsByDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-  const seasonStart = `${referenceYear}-07-15`;
-  const seasonEnd = `${referenceYear}-08-20`;
-  const dayBucket = (date) => {
-    const day = new Date(`${date}T00:00:00Z`).getUTCDay();
-    if (day === 5) return "friday";
-    if (day === 6) return "saturday";
-    if (day === 0) return "sunday";
-    return "weekday";
-  };
-  const median = (values = []) => {
-    const sorted = values.slice().sort((a, b) => a - b);
-    if (!sorted.length) return NaN;
-    const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
-  };
-  const normalByBucket = new Map();
-  rows.filter((row) => row.date < seasonStart || row.date > seasonEnd).forEach((row) => {
-    const key = dayBucket(row.date);
-    const values = normalByBucket.get(key) || [];
-    values.push(row.price);
-    normalByBucket.set(key, values);
-  });
-  const baselineByBucket = new Map(
-    [...normalByBucket.entries()]
-      .filter(([, values]) => values.length >= 2)
-      .map(([key, values]) => [key, median(values)])
-  );
-  const candidates = rows
-    .filter((row) => row.date >= seasonStart && row.date <= seasonEnd)
-    .map((row) => {
-      const baseline = baselineByBucket.get(dayBucket(row.date));
-      const premiumAmount = Number.isFinite(baseline) ? row.price - baseline : NaN;
-      const premiumRate = Number.isFinite(baseline) && baseline > 0 ? premiumAmount / baseline : NaN;
-      return {
-        ...row,
-        baseline,
-        premiumAmount,
-        premiumRate,
-        qualifies: Number.isFinite(premiumRate) && premiumRate >= 0.15 && premiumAmount >= 10000
-      };
-    });
-  const qualifyingRuns = [];
-  let currentRun = [];
-  candidates.filter((row) => row.qualifies).forEach((row) => {
-    const previous = currentRun.at(-1);
-    const isNextDay = previous
-      ? Date.parse(`${row.date}T00:00:00Z`) - Date.parse(`${previous.date}T00:00:00Z`) === 86400000
-      : true;
-    if (!isNextDay && currentRun.length) qualifyingRuns.push(currentRun);
-    currentRun = isNextDay ? [...currentRun, row] : [row];
-  });
-  if (currentRun.length) qualifyingRuns.push(currentRun);
-  const detectedRun = qualifyingRuns
-    .filter((run) => run.length >= 3)
-    .sort((a, b) => b.length - a.length || b.reduce((sum, row) => sum + row.premiumRate, 0) / b.length - a.reduce((sum, row) => sum + row.premiumRate, 0) / a.length)[0] || [];
-  const comparableDateCount = candidates.filter((row) => Number.isFinite(row.baseline)).length;
-  const averagePremiumRate = detectedRun.length
-    ? detectedRun.reduce((sum, row) => sum + row.premiumRate, 0) / detectedRun.length
-    : NaN;
-  const status = !rows.length
-    ? "no_current_year"
-    : detectedRun.length
-      ? "detected"
-      : comparableDateCount >= 3
-        ? "no_peak"
-        : "insufficient";
-  return {
-    status,
-    referenceYear,
-    seasonWindow: { start: seasonStart, end: seasonEnd },
-    observedDateCount: rows.length,
-    comparableDateCount,
-    baselineBucketCount: baselineByBucket.size,
-    detected: detectedRun.length ? {
-      start: detectedRun[0].date,
-      end: detectedRun.at(-1).date,
-      dayCount: detectedRun.length,
-      averagePremiumRate
-    } : null,
-    truncated: product.priceDateTruncated === true,
-    storedMissingPriceDateCount: Number(product.priceMissingStoredDateCount || 0),
-    totalMissingPriceDateCount: Number(product.priceMissingDateCount || 0)
-  };
-}
-
-function adminDbReferenceProductSeasonHtml(product = {}) {
-  const profile = adminDbProductSeasonWindowProfile(product);
-  const detected = profile.detected;
-  const windowLabel = `${adminDbReferenceDateLabel(profile.seasonWindow.start)}~${adminDbReferenceDateLabel(profile.seasonWindow.end)}`;
-  const missingEvidence = profile.truncated
-    ? [
-      profile.storedMissingPriceDateCount > 0 ? `최근 보존구간 가격 미관측 ${fmtNumber(profile.storedMissingPriceDateCount)}일` : "",
-      profile.totalMissingPriceDateCount > 0 ? `전체 원본 가격 미관측 ${fmtNumber(profile.totalMissingPriceDateCount)}일` : ""
-    ].filter(Boolean)
-    : (profile.totalMissingPriceDateCount > 0 ? [`가격 미관측 ${fmtNumber(profile.totalMissingPriceDateCount)}일`] : []);
-  const title = profile.status === "detected"
-    ? "성수기 가격 관측"
-    : profile.status === "no_peak"
-      ? "뚜렷한 성수기 상승 없음"
-      : profile.status === "no_current_year"
-        ? "해당 연도 가격 관측 없음"
-        : "성수기 가격 확인 전";
-  const evidence = profile.status === "detected"
-    ? `${adminDbReferenceDateLabel(detected.start)}~${adminDbReferenceDateLabel(detected.end)} · 같은 요일구간 대비 평균 +${Math.round(detected.averagePremiumRate * 100)}%`
-    : profile.status === "no_peak"
-      ? `${windowLabel} · 15%·10,000원 이상 연속 상승 없음`
-      : `${profile.referenceYear || "현재 연도"}년 같은 요일구간 비교자료 부족`;
-  return `
-    <span class="admin-reference-season-note" data-season-status="${escapeHtml(profile.status)}">
-      <b>${escapeHtml(title)}</b>
-      <small>${escapeHtml([evidence, profile.truncated ? "최근 최대 31개 예약일 보존" : "", ...missingEvidence].filter(Boolean).join(" · "))}</small>
-    </span>
-  `;
-}
-
 function adminDbReferenceLegacyProductPreviewHtml(preview = {}) {
   const names = Array.isArray(preview.previewNames) ? preview.previewNames : [];
   const productCount = optionalNumber(preview.productCount);
@@ -22359,7 +22170,7 @@ function adminDbReferenceLegacyProductPreviewHtml(preview = {}) {
         <div><dt>당시 화면 가격범위</dt><dd>${escapeHtml(rangeText)}</dd></div>
         <div><dt>당시 예약최저가</dt><dd>${Number.isFinite(representative) ? escapeHtml(adminDbReferencePriceText(representative, representative)) : "미보존"}</dd></div>
       </dl>
-      <p>상품별 수량·날짜별 가격은 당시 원본에 보존되지 않아 시즌 가격을 분류하지 않습니다. 상세정보 재수집 후 정확한 상품표로 교체됩니다.</p>
+      <p>상품별 수량·날짜별 가격은 당시 원본에 보존되지 않았습니다. 상세정보 재수집 후 정확한 상품표로 교체됩니다.</p>
     </section>
   `;
 }
@@ -22394,12 +22205,9 @@ function adminDbReferenceBasicsCard(row = {}, detail = {}, model = {}) {
       </div>
       <dl class="admin-reference-identity-list">
         <div><dt>업체명</dt><dd>${escapeHtml(fixed.primaryName)}</dd></div>
-        <div><dt>업체명 별칭</dt><dd>${adminDbInlineFoldedText(fixed.aliases.filter((name) => name && name !== fixed.primaryName), "별칭")}</dd></div>
         <div><dt>주소·지역</dt><dd>${escapeHtml(`${fixed.address} · ${fixed.region}`)}</dd></div>
         <div><dt>업종</dt><dd>${escapeHtml(fixed.lodgingType)}</dd></div>
-        <div><dt>사업자 확인값</dt><dd>${escapeHtml(adminDbBusinessVerificationText(fixed.businessVerification))}</dd></div>
       </dl>
-      ${adminDbFixedRoomBasisHtml(fixed)}
       <div class="admin-reference-subsection-head admin-reference-observed-head">
         <div><strong>최근 자동관측 상품정보</strong><small>${escapeHtml(observedInventoryLabel)}</small></div>
         <mark data-ui-status="neutral">변동 정보</mark>
@@ -22410,15 +22218,14 @@ function adminDbReferenceBasicsCard(row = {}, detail = {}, model = {}) {
         <article><span>판매 가능 총량</span><strong>${Number.isFinite(totalQuantity) && totalQuantity > 0 ? `${fmtNumber(totalQuantity)}개` : "대기"}</strong><small>${escapeHtml(`${totalQuantitySource}${observedInventory.totalQuantityObservedAt ? ` · ${compactDateTime(observedInventory.totalQuantityObservedAt)} 관측` : ""}`)}</small></article>
         <article><span>대표 관측가격</span><strong>${escapeHtml(representativePrice)}</strong></article>
       </div>
-      <div class="admin-reference-table admin-reference-product-table" role="table" aria-label="상품별 최신 저장가격과 성수기 참고" aria-describedby="adminReferenceSeasonNote">
-        <div class="admin-reference-table-head" role="row"><span role="columnheader">상품명</span><span role="columnheader">수량</span><span role="columnheader">평일</span><span role="columnheader">금요일</span><span role="columnheader">토요일</span><span role="columnheader">일요일</span><span role="columnheader">성수기 참고</span></div>
+      <div class="admin-reference-table admin-reference-product-table" role="table" aria-label="상품별 최신 저장가격">
+        <div class="admin-reference-table-head" role="row"><span role="columnheader">상품명</span><span role="columnheader">수량</span><span role="columnheader">평일</span><span role="columnheader">금요일</span><span role="columnheader">토요일</span><span role="columnheader">일요일</span></div>
         ${displayProducts.length
           ? adminDbFoldedItemsHtml(displayProducts, adminDbReferenceProductRowHtml, { noun: "상품", limit: 5, className: "admin-reference-product-list" })
           : legacyProductPreview
             ? adminDbReferenceLegacyProductPreviewHtml(legacyProductPreview)
             : `<div class="admin-reference-empty">구조화된 상품 자료가 없습니다. 상세정보 자동수집 후 상품명·수량·요일별 관측가격을 표시합니다.</div>`}
       </div>
-      <p class="admin-reference-footnote" id="adminReferenceSeasonNote">관리자 확정 기본정보는 자동수집으로 덮지 않습니다. 상품 가격은 가장 최근에 저장된 완전한 Snapshot을 우선 표시합니다. 과거 연도와 월별 소폭 변동은 성수기로 분류하지 않으며, 같은 해 7/15~8/20에 같은 요일구간보다 15%·10,000원 이상 높은 가격이 3일 이상 연속 관측될 때만 성수기 참고로 표시합니다. 네이버 공개 관측가는 실제 보유 객실·결제 매출과 구분합니다.</p>
     </section>
   `;
 }
@@ -23779,7 +23586,7 @@ function adminDbSelectedDetailPanel(rows = []) {
           <div class="admin-db-selected-workbench-stack">
             ${adminDbSelectedFoldBlock({
               label: "기본정보",
-              title: "업체명·별칭·주소·업종·사업자 확인값",
+              title: "업체명·주소·지역·업종",
               note: company.adminProfile ? "관리자 확정값 저장됨" : "확정 전",
               body: profileBody,
               open: nextAction.foldKey === "profile",
@@ -32453,19 +32260,9 @@ async function saveCompanyAdminProfile(button, clear = false) {
   const payload = clear ? { companyId, active: false } : {
     companyId,
     primaryName: field("primaryName"),
-    aliases: field("aliases"),
     address: field("address"),
     region: field("region"),
     lodgingType: field("lodgingType"),
-    lodgingBasisTotal: form.querySelector("[data-manual-lodging]")?.value || "",
-    dayUseBasisTotal: form.querySelector("[data-manual-dayuse]")?.value || "",
-    roomSegments: collectManualCorrectionRoomSegments(form),
-    businessVerificationStatus: field("businessVerificationStatus"),
-    businessName: field("businessName"),
-    registrationNumber: field("registrationNumber"),
-    representativeName: field("representativeName"),
-    businessVerifiedAt: field("businessVerifiedAt"),
-    businessVerificationNote: field("businessVerificationNote"),
     note: field("note")
   };
   try {

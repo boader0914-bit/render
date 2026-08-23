@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-latest-price-season-v64";
-const expectedAssetVersion = "v2-20260823-latest-price-season-v46";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-a-card-blind-v66";
+const expectedAssetVersion = "v2-20260823-a-card-blind-v48";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -751,15 +751,19 @@ const referenceObservedInventoryBasisBlock = app.slice(
 );
 const referenceObservedInventoryLabelBlock = app.slice(
   app.indexOf("function adminDbReferenceObservedInventoryLabel("),
-  app.indexOf("function adminDbProductSeasonWindowProfile(", app.indexOf("function adminDbReferenceObservedInventoryLabel("))
+  app.indexOf("function adminDbReferenceLegacyProductPreviewHtml(", app.indexOf("function adminDbReferenceObservedInventoryLabel("))
 );
-const referenceProductSeasonProfileBlock = app.slice(
-  app.indexOf("function adminDbProductSeasonWindowProfile("),
-  app.indexOf("function adminDbReferenceProductSeasonHtml(", app.indexOf("function adminDbProductSeasonWindowProfile("))
+const referenceBasicsCardBlock = app.slice(
+  app.indexOf("function adminDbReferenceBasicsCard("),
+  app.indexOf("const ADMIN_REFERENCE_CHANNEL_BRAND_META", app.indexOf("function adminDbReferenceBasicsCard("))
 );
-const referenceProductSeasonHtmlBlock = app.slice(
-  app.indexOf("function adminDbReferenceProductSeasonHtml("),
-  app.indexOf("function adminDbReferenceLegacyProductPreviewHtml(", app.indexOf("function adminDbReferenceProductSeasonHtml("))
+const adminProfilePanelBlock = app.slice(
+  app.indexOf("function adminDbAdminProfilePanel("),
+  app.indexOf("function companyMasterSalesTargetsPanel(", app.indexOf("function adminDbAdminProfilePanel("))
+);
+const saveAdminProfileBlock = app.slice(
+  app.indexOf("async function saveCompanyAdminProfile("),
+  app.indexOf("async function saveCompanyChannelExposure(", app.indexOf("async function saveCompanyAdminProfile("))
 );
 const referenceSalesHistoryBlock = app.slice(
   app.indexOf("function adminDbReferenceDateLabel("),
@@ -957,7 +961,6 @@ assert(
     && adminCompanyChartBlock.includes("예약 채널")
     && adminCompanyChartBlock.includes("누적 변동 지표")
     && adminCompanyChartBlock.includes("최근 판매 관측")
-    && adminCompanyChartBlock.includes("실제 보유 객실·결제 매출과 구분")
     && adminCompanyChartBlock.includes("네이버 예약 노출과 외부 OTA 입점·재고 연동은 서로 다른 근거"),
   "company reference dashboard must render A and B first, then D cumulative evidence and C recent observations",
   failures
@@ -970,16 +973,58 @@ assert(
     && adminCompanyChartBlock.includes("구조화 상품상세 없음")
     && adminCompanyChartBlock.includes("자동관측 자료 없음")
     && adminCompanyChartBlock.includes("detail.observationBasis?.daily")
-    && adminCompanyChartBlock.includes("사업자 확인값")
     && adminCompanyChartBlock.includes('data-admin-db-open-fold="profile"')
     && !adminCompanyChartBlock.includes("플레이스 ID")
+    && !referenceBasicsCardBlock.includes("업체명 별칭")
+    && !referenceBasicsCardBlock.includes("사업자 확인값")
+    && !referenceBasicsCardBlock.includes("성수기 참고")
+    && !referenceBasicsCardBlock.includes("시즌 가격")
+    && !referenceBasicsCardBlock.includes("숙박 운영 기준")
+    && !referenceBasicsCardBlock.includes("데이유즈 운영 기준")
+    && !referenceBasicsCardBlock.includes("확정 상품 기준")
+    && !referenceBasicsCardBlock.includes("adminDbFixedRoomBasisHtml")
+    && !referenceBasicsCardBlock.includes("adminDbReferenceProductSeasonHtml")
+    && referenceBasicsCardBlock.includes('aria-label="상품별 최신 저장가격"')
+    && !referenceBasicsCardBlock.includes("관리자 확정 기본정보는 자동수집으로 덮지 않습니다")
+    && !referenceBasicsCardBlock.includes("상품 가격은 가장 최근에 저장된 완전한 Snapshot")
+    && !referenceBasicsCardBlock.includes("과거 연도와 월별 소폭 변동")
+    && !referenceBasicsCardBlock.includes("네이버 공개 관측가는 실제 보유 객실·결제 매출과 구분")
+    && !referenceBasicsCardBlock.includes("네이버 공개 관측가는 실제 결제자료와 구분")
+    && !adminProfilePanelBlock.includes("업체명 별칭")
+    && !adminProfilePanelBlock.includes("사업자 확인값")
+    && !adminProfilePanelBlock.includes('data-admin-profile-field="aliases"')
+    && !adminProfilePanelBlock.includes('data-admin-profile-field="businessVerificationStatus"')
+    && !adminProfilePanelBlock.includes("관리자가 확정한 객실·상품 기준")
+    && !adminProfilePanelBlock.includes("data-manual-lodging")
+    && !adminProfilePanelBlock.includes("data-manual-dayuse")
+    && !adminProfilePanelBlock.includes("manualCorrectionRoomSegmentsField")
+    && !saveAdminProfileBlock.includes('aliases: field("aliases")')
+    && !saveAdminProfileBlock.includes('businessVerificationStatus: field("businessVerificationStatus")')
+    && !saveAdminProfileBlock.includes("lodgingBasisTotal:")
+    && !saveAdminProfileBlock.includes("dayUseBasisTotal:")
+    && !saveAdminProfileBlock.includes("roomSegments:")
     && adminDbDetailBlock.includes('foldKey: "profile"')
     && app.includes("function adminDbAdminProfilePanel(")
     && app.includes("function saveCompanyAdminProfile(")
     && app.includes('fetchJson("/api/company-master/admin-profile"')
     && server.includes('reqUrl.pathname === "/api/company-master/admin-profile"')
-    && server.includes("sanitizeCompanyAdminProfile(payload"),
-  "company basics must separate administrator-confirmed fixed fields from recent observed products without exposing Naver ids",
+    && server.includes("sanitizeCompanyAdminProfile(payload")
+    && server.includes('Object.hasOwn(payload, "aliases") ? payload.aliases : previous.aliases')
+    && server.includes('Object.hasOwn(payload, "lodgingBasisTotal") ? payload.lodgingBasisTotal : previousRoomBasis.lodgingBasisTotal')
+    && server.includes('Object.hasOwn(payload, "dayUseBasisTotal") ? payload.dayUseBasisTotal : previousRoomBasis.dayUseBasisTotal')
+    && server.includes('Object.hasOwn(payload, "roomSegments") ? payload.roomSegments : previousRoomBasis.roomSegments')
+    && server.includes('Object.hasOwn(payload, "businessVerificationStatus") ? payload.businessVerificationStatus : previousVerification.status'),
+  "company basics must keep aliases, business verification, room basis, fixed products, Naver ids, and season notes out of the primary A-card and maintenance UI while preserving stored hidden values",
+  failures
+);
+
+assert(
+  styles.includes('.admin-reference-delta[data-ui-status="positive"]')
+    && styles.includes('.admin-reference-delta[data-ui-status="warning"]')
+    && styles.includes(".admin-reference-insight-strip strong")
+    && styles.includes("color: var(--text-primary);")
+    && app.includes('adminDbReferenceDeltaTag("비교 대기")'),
+  "company trend comparison waiting labels must remain readable in light and dark themes",
   failures
 );
 
@@ -1107,77 +1152,6 @@ assert(
     && mixedHistoryRunsBasis.totalQuantityObservedAt === "2026-08-23T01:00:00.000Z"
     && observedInventorySandbox.adminDbReferenceObservedInventoryLabel(legacyPreviewBasis) === "과거 수집 요약 2026-06-27T08:01:53.632Z 관측 · 구조화 상품상세 없음",
   "aggregate inventory observations must use the original history time, the newest evidence must determine total quantity, and manual-only values must stay out of the automatic panel",
-  failures
-);
-
-const productSeasonSandbox = {
-  optionalNumber(value) {
-    if (value === "" || value === null || value === undefined) return NaN;
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : NaN;
-  },
-  adminDbReferenceIsoDate(value) {
-    const text = String(value || "").slice(0, 10);
-    return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
-  },
-  adminDbReferenceDateLabel(value) {
-    return String(value || "");
-  },
-  todayIsoDate() {
-    return "2026-08-23";
-  },
-  fmtNumber(value) {
-    return String(Number(value || 0));
-  },
-  escapeHtml(value) {
-    return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-};
-vm.createContext(productSeasonSandbox);
-vm.runInContext(`${referenceProductSeasonProfileBlock}\n${referenceProductSeasonHtmlBlock}\nthis.adminDbProductSeasonWindowProfile = adminDbProductSeasonWindowProfile;\nthis.adminDbReferenceProductSeasonHtml = adminDbReferenceProductSeasonHtml;`, productSeasonSandbox);
-const normalPriceRows = [
-  ["2026-06-01", 100000], ["2026-06-02", 100000],
-  ["2026-06-05", 120000], ["2026-06-12", 120000],
-  ["2026-06-06", 150000], ["2026-06-13", 150000],
-  ["2026-06-07", 110000], ["2026-06-14", 110000]
-].map(([date, price]) => ({ date, price }));
-const peakPriceRows = [
-  ["2026-07-27", 120000], ["2026-07-28", 120000], ["2026-07-29", 120000], ["2026-07-30", 120000],
-  ["2026-07-31", 144000], ["2026-08-01", 180000], ["2026-08-02", 132000]
-].map(([date, price]) => ({ date, price }));
-const smallMonthlyDriftRows = [
-  ["2026-07-27", 108000], ["2026-07-28", 108000], ["2026-07-29", 108000], ["2026-07-30", 108000],
-  ["2026-07-31", 128000], ["2026-08-01", 160000], ["2026-08-02", 118000]
-].map(([date, price]) => ({ date, price }));
-const detectedSeason = productSeasonSandbox.adminDbProductSeasonWindowProfile({ priceByDate: [...normalPriceRows, ...peakPriceRows] }, "2026-08-23");
-const ignoredMonthlyDrift = productSeasonSandbox.adminDbProductSeasonWindowProfile({ priceByDate: [...normalPriceRows, ...smallMonthlyDriftRows] }, "2026-08-23");
-const insufficientSeason = productSeasonSandbox.adminDbProductSeasonWindowProfile({ priceByDate: peakPriceRows }, "2026-08-23");
-const pastYearOnly = productSeasonSandbox.adminDbProductSeasonWindowProfile({
-  priceByDate: peakPriceRows.map((row) => ({ ...row, date: row.date.replace("2026-", "2025-") }))
-}, "2026-08-23");
-const allMissingPriceHtml = productSeasonSandbox.adminDbReferenceProductSeasonHtml({
-  priceDateTruncated: true,
-  priceDateStoredCount: 31,
-  priceDateTotalCount: 40,
-  priceMissingStoredDateCount: 31,
-  priceMissingDateCount: 40,
-  priceByDate: Array.from({ length: 31 }, (_, index) => ({ date: `2026-09-${String(index + 1).padStart(2, "0")}`, price: null }))
-});
-assert(
-  detectedSeason.status === "detected"
-    && detectedSeason.detected.start === "2026-07-27"
-    && detectedSeason.detected.end === "2026-08-02"
-    && detectedSeason.detected.dayCount === 7
-    && Math.round(detectedSeason.detected.averagePremiumRate * 100) === 20
-    && ignoredMonthlyDrift.status === "no_peak"
-    && ignoredMonthlyDrift.detected === null
-    && insufficientSeason.status === "insufficient"
-    && pastYearOnly.status === "no_current_year"
-    && allMissingPriceHtml.includes("해당 연도 가격 관측 없음")
-    && allMissingPriceHtml.includes("최근 보존구간 가격 미관측 31일")
-    && allMissingPriceHtml.includes("전체 원본 가격 미관측 40일")
-    && !allMissingPriceHtml.includes('data-season-status="detected"'),
-  "A-card season notes must use only current-year same-day-bucket evidence, ignore small monthly drift and past years, and preserve missing-price provenance",
   failures
 );
 
@@ -1435,15 +1409,14 @@ assert(
     && app.includes('개 더보기')
     && app.includes('접기')
     && app.includes("상품명은 원본 그대로 보존")
-    && app.includes("function adminDbProductSeasonWindowProfile(")
-    && app.includes("과거 연도와 월별 소폭 변동은 성수기로 분류하지 않으며")
-    && app.includes("같은 해 7/15~8/20")
-    && app.includes('aria-describedby="adminReferenceSeasonNote"')
+    && !app.includes("function adminDbProductSeasonWindowProfile(")
+    && !app.includes("function adminDbReferenceProductSeasonHtml(")
+    && !referenceBasicsCardBlock.includes("성수기")
+    && !referenceBasicsCardBlock.includes('id="adminReferenceProductNote"')
     && app.includes("과거 수집 상품명 미리보기")
-    && app.includes("시즌 가격을 분류하지 않습니다")
     && app.includes("관측가격과 예상매출")
     && app.includes("실제 결제 매출이 아닙니다"),
-  "company detail lists must fold after five items and keep latest prices, current-year peak-season evidence, legacy boundaries, and estimate labels explicit",
+  "company detail lists must fold after five items, keep latest prices and legacy boundaries explicit, and keep season notes out of the primary A-card",
   failures
 );
 

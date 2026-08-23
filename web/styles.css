@@ -37012,35 +37012,6 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   overflow-wrap: anywhere;
 }
 
-.admin-reference-inline-more {
-  display: inline;
-  margin-inline-start: 6px;
-}
-
-.admin-reference-inline-more summary {
-  display: inline;
-  color: var(--accent-strong);
-  font-size: 10px;
-  font-weight: 850;
-  cursor: pointer;
-  list-style: none;
-}
-
-.admin-reference-inline-more summary::-webkit-details-marker {
-  display: none;
-}
-
-.admin-reference-inline-more[open] {
-  display: grid;
-  gap: 4px;
-  margin: 4px 0 0;
-}
-
-.admin-reference-inline-more span {
-  color: var(--text-secondary);
-  font-size: 10px;
-}
-
 .admin-reference-subsection-head {
   min-width: 0;
   display: grid;
@@ -37087,46 +37058,6 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 .admin-reference-observed-head {
   border-top: 1px solid var(--border-subtle);
   padding-top: 8px;
-}
-
-.admin-reference-fixed-basis {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  overflow: hidden;
-  margin: 6px 3px 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface-control);
-}
-
-.admin-reference-fixed-basis > article {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-  padding: 7px 8px;
-}
-
-.admin-reference-fixed-basis > article + article {
-  border-inline-start: 1px solid var(--border-subtle);
-}
-
-.admin-reference-fixed-basis span,
-.admin-reference-fixed-basis small {
-  color: var(--text-secondary);
-  font-size: 9px;
-  font-weight: 740;
-}
-
-.admin-reference-fixed-basis strong {
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.admin-reference-fixed-segments {
-  grid-column: 1 / -1;
-  border-top: 1px solid var(--border-subtle);
-  padding: 5px 8px;
 }
 
 .admin-reference-fixed-segment {
@@ -37271,7 +37202,7 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 .admin-reference-product-table :is(.admin-reference-table-head, .admin-reference-product-row) {
-  grid-template-columns: minmax(140px, 1.35fr) 48px repeat(4, minmax(68px, .72fr)) minmax(150px, 1.35fr);
+  grid-template-columns: minmax(140px, 1.35fr) 48px repeat(4, minmax(68px, .72fr));
 }
 
 .admin-reference-table-head {
@@ -37316,30 +37247,6 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 .admin-reference-product-row > span:first-child {
   display: grid;
   gap: 1px;
-}
-
-.admin-reference-season-note {
-  display: grid;
-  gap: 3px;
-  text-align: left;
-}
-
-.admin-reference-season-note b {
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 850;
-  overflow-wrap: anywhere;
-}
-
-.admin-reference-season-note[data-season-status="detected"] b {
-  color: var(--positive);
-}
-
-.admin-reference-season-note > small {
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 720;
-  line-height: 1.3;
 }
 
 .admin-reference-legacy-products {
@@ -37546,10 +37453,19 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   background: var(--surface-control);
+  color: var(--text-primary);
   padding: 4px 8px;
   font-size: 10px;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.admin-reference-delta[data-ui-status="positive"] {
+  color: var(--positive);
+}
+
+.admin-reference-delta[data-ui-status="warning"] {
+  color: var(--warning-strong);
 }
 
 .admin-reference-channel-actions {
@@ -37675,7 +37591,7 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 .admin-reference-insight-strip strong {
-  color: var(--accent-strong);
+  color: var(--text-primary);
   font-size: 11px;
   font-weight: 900;
 }
@@ -38086,14 +38002,8 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
     width: 100%;
   }
 
-  .admin-reference-fixed-basis,
   .admin-db-profile-grid {
     grid-template-columns: 1fr;
-  }
-
-  .admin-reference-fixed-basis > article + article {
-    border-inline-start: 0;
-    border-top: 1px solid var(--border-subtle);
   }
 
   .admin-db-profile-grid .wide {
@@ -38145,18 +38055,6 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-product-row > span:last-child,
   .admin-reference-recent-row > span:last-child {
     border-bottom: 0;
-  }
-
-  .admin-reference-product-row > span:last-child {
-    grid-column: 1 / -1;
-  }
-
-  .admin-reference-season-note b {
-    font-size: 11px;
-  }
-
-  .admin-reference-season-note > small {
-    font-size: 11px;
   }
 
   .admin-reference-footnote {

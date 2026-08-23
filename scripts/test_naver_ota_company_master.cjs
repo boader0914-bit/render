@@ -991,6 +991,22 @@ async function main() {
     assert.equal(adminProfileDetail.body.company.adminProfile.registrationNumber, undefined);
     assert.equal(adminProfileDetail.body.company.adminProfile.businessVerification.registrationNumber, "123-45-67890");
 
+    const savedVisibleAdminProfile = await request(baseUrl, "POST", "/api/company-master/admin-profile", {
+      companyId: detailCompany.companyId,
+      primaryName: "관리자 확정 테스트 글램핑",
+      address: "경남 산청군 확정로 2",
+      region: "경남 산청",
+      lodgingType: "글램핑",
+      note: "화면에 노출된 기본정보만 수정"
+    }, cookies);
+    assert.equal(savedVisibleAdminProfile.statusCode, 200);
+    assert.deepEqual(savedVisibleAdminProfile.body.company.adminProfile.aliases, ["테스트 별칭", "확정 별칭"], "blinded aliases must survive visible-field updates");
+    assert.equal(savedVisibleAdminProfile.body.company.adminProfile.roomBasis.lodgingBasisTotal, 12, "blinded lodging basis must survive visible-field updates");
+    assert.equal(savedVisibleAdminProfile.body.company.adminProfile.roomBasis.dayUseBasisTotal, 3, "blinded day-use basis must survive visible-field updates");
+    assert.equal(savedVisibleAdminProfile.body.company.adminProfile.roomBasis.roomSegments.length, 1, "blinded fixed product segments must survive visible-field updates");
+    assert.equal(savedVisibleAdminProfile.body.company.adminProfile.businessVerification.status, "confirmed", "blinded business verification status must survive visible-field updates");
+    assert.equal(savedVisibleAdminProfile.body.company.adminProfile.businessVerification.registrationNumber, "123-45-67890", "blinded business verification details must survive visible-field updates");
+
     const reopenedOlderDetailRun = await request(baseUrl, "GET", `/api/runs/${detailFirstRunId}`, null, cookies);
     assert.equal(reopenedOlderDetailRun.statusCode, 200);
     let detailAfterReopen = await request(

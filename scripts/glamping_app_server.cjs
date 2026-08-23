@@ -2871,17 +2871,40 @@ function sanitizeCompanyAdminProfileList(value, limit = 20, maxLength = 100) {
 }
 
 function sanitizeCompanyAdminProfile(payload = {}, previous = {}, session = {}) {
-  const verificationStatus = sanitizeMemberText(payload.businessVerificationStatus, 24);
+  const previousVerification = previous.businessVerification && typeof previous.businessVerification === "object"
+    ? previous.businessVerification
+    : {};
+  const previousRoomBasis = previous.roomBasis && typeof previous.roomBasis === "object"
+    ? previous.roomBasis
+    : {};
+  const verificationStatus = sanitizeMemberText(
+    Object.hasOwn(payload, "businessVerificationStatus") ? payload.businessVerificationStatus : previousVerification.status,
+    24
+  );
   const allowedVerificationStatuses = new Set(["unconfirmed", "confirmed", "mismatch", "not_applicable"]);
-  const roomSegments = sanitizeManualCorrectionRoomSegments(payload.roomSegments);
-  const lodgingBasisTotal = Number(payload.lodgingBasisTotal);
-  const dayUseBasisTotal = Number(payload.dayUseBasisTotal);
+  const preservedVerificationText = (payloadKey, previousKey, maxLength) => sanitizeMemberText(
+    Object.hasOwn(payload, payloadKey) ? payload[payloadKey] : previousVerification[previousKey],
+    maxLength
+  );
+  const roomSegments = sanitizeManualCorrectionRoomSegments(
+    Object.hasOwn(payload, "roomSegments") ? payload.roomSegments : previousRoomBasis.roomSegments
+  );
+  const lodgingBasisTotal = Number(
+    Object.hasOwn(payload, "lodgingBasisTotal") ? payload.lodgingBasisTotal : previousRoomBasis.lodgingBasisTotal
+  );
+  const dayUseBasisTotal = Number(
+    Object.hasOwn(payload, "dayUseBasisTotal") ? payload.dayUseBasisTotal : previousRoomBasis.dayUseBasisTotal
+  );
   const updatedAt = new Date().toISOString();
   return {
     schemaVersion: 1,
     active: true,
     primaryName: sanitizeMemberText(payload.primaryName, 120),
-    aliases: sanitizeCompanyAdminProfileList(payload.aliases, 30, 120),
+    aliases: sanitizeCompanyAdminProfileList(
+      Object.hasOwn(payload, "aliases") ? payload.aliases : previous.aliases,
+      30,
+      120
+    ),
     address: sanitizeMemberText(payload.address, 220),
     region: sanitizeMemberText(payload.region, 100),
     lodgingType: sanitizeMemberText(payload.lodgingType, 100),
@@ -2892,11 +2915,11 @@ function sanitizeCompanyAdminProfile(payload = {}, previous = {}, session = {}) 
     },
     businessVerification: {
       status: allowedVerificationStatuses.has(verificationStatus) ? verificationStatus : "unconfirmed",
-      businessName: sanitizeMemberText(payload.businessName, 120),
-      registrationNumber: sanitizeMemberText(payload.registrationNumber, 40),
-      representativeName: sanitizeMemberText(payload.representativeName, 80),
-      verifiedAt: sanitizeMemberText(payload.businessVerifiedAt, 40),
-      note: sanitizeMemberText(payload.businessVerificationNote, 240)
+      businessName: preservedVerificationText("businessName", "businessName", 120),
+      registrationNumber: preservedVerificationText("registrationNumber", "registrationNumber", 40),
+      representativeName: preservedVerificationText("representativeName", "representativeName", 80),
+      verifiedAt: preservedVerificationText("businessVerifiedAt", "verifiedAt", 40),
+      note: preservedVerificationText("businessVerificationNote", "note", 240)
     },
     note: sanitizeMemberText(payload.note, 300),
     source: "admin_confirmed",
@@ -15657,9 +15680,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-latest-price-season-v46"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-latest-price-season-v46"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-latest-price-season-v46"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-a-card-blind-v48"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-a-card-blind-v48"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-a-card-blind-v48"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
