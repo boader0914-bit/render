@@ -66,6 +66,7 @@ const state = {
   adminDbCompanyDetails: {},
   adminDbCompanyDetailLoading: {},
   adminDbRankKeywordByCompany: {},
+  adminDbChannelDraftsByCompany: {},
   adminDbInlineCollect: null,
   adminDbRouteCompanyId: "",
   adminDbOpsOpen: false,
@@ -18429,9 +18430,10 @@ const ADMIN_DB_CHANNEL_OPTIONS = [
   ["airbnb", "Airbnb"]
 ];
 
-const ADMIN_DB_MANAGED_CHANNELS = ADMIN_DB_CHANNEL_OPTIONS.filter(([key]) => key !== "naver");
+const ADMIN_DB_MANAGED_CHANNEL_KEYS = ["tteonayo", "yanolja", "yeogi"];
+const ADMIN_DB_MANAGED_CHANNELS = ADMIN_DB_CHANNEL_OPTIONS.filter(([key]) => ADMIN_DB_MANAGED_CHANNEL_KEYS.includes(key));
 const ADMIN_DB_AUTO_CHANNEL_KEYS = ["yanolja", "tteonayo"];
-const ADMIN_DB_MANUAL_CHANNEL_KEYS = ["yeogi", "onda", "airbnb"];
+const ADMIN_DB_MANUAL_CHANNEL_KEYS = ["yeogi"];
 const ADMIN_DB_CHANNEL_LINKED_STATUSES = ["exposed", "observed_on_naver", "directly_verified"];
 const ADMIN_DB_CHANNEL_REVIEW_STATUSES = ["broken_link", "mismatch", "similar_name", "auto_failed", "blocked", "needs_manual"];
 
@@ -18441,6 +18443,16 @@ function adminDbChannelStatusLinked(status = "") {
 
 function adminDbChannelStatusNeedsReview(status = "") {
   return ADMIN_DB_CHANNEL_REVIEW_STATUSES.includes(String(status || "").trim());
+}
+
+function adminDbChannelAppliedToSummary(entry = {}) {
+  return entry?.status === "directly_verified" && entry?.appliedToSummary === true;
+}
+
+function adminDbChannelInventoryModeLabel(mode = "") {
+  if (mode === "pooled") return "통합 재고";
+  if (mode === "split") return "분리 재고";
+  return "재고 방식 미확인";
 }
 
 function adminDbChannelExposureMap(company = {}) {
@@ -18478,6 +18490,7 @@ function adminDbChannelStatusLabel(status = "") {
   if (status === "broken_link") return "연결 오류";
   if (status === "mismatch") return "업체 동일성 확인";
   if (status === "not_found") return "외부 OTA 미확인";
+  if (status === "not_linked") return "연동 없음";
   if (status === "similar_name") return "유사명 확인 필요";
   if (status === "onda_manual") return "ONDA 별도 확인";
   if (status === "auto_failed" || status === "blocked") return "자동확인 실패";
@@ -18487,7 +18500,7 @@ function adminDbChannelStatusLabel(status = "") {
 
 function adminDbChannelStatusTone(status = "") {
   if (adminDbChannelStatusLinked(status)) return "good";
-  if (["partner_observed", "not_observed_on_naver", "not_found", "manual_only", "onda_manual"].includes(status)) return "neutral";
+  if (["partner_observed", "not_observed_on_naver", "not_found", "not_linked", "manual_only", "onda_manual"].includes(status)) return "neutral";
   return "watch";
 }
 
@@ -22486,40 +22499,24 @@ function adminDbReferenceChannelIconHtml(item = {}) {
 }
 
 function adminDbReferenceChannelRowHtml(item = {}, company = {}) {
-  const linked = adminDbChannelStatusLinked(item.status);
-  const needsReview = adminDbChannelStatusNeedsReview(item.status);
-  const isNaver = item.key === "naver";
-  const naverObservation = isNaver ? adminDbNaverChannelObservation(company) : {};
-  const naverPartnerName = String(naverObservation.agencyName || "").trim();
-  const statusText = isNaver
-    ? (naverPartnerName
-      ? `공식 연동 표기 · ${naverPartnerName}`
-      : "공식 연동 표기 없음 · 수동 확인 가능")
-    : needsReview
-      ? (item.statusText || "확인 필요")
-      : linked
-        ? (item.statusText || "확인 완료")
-        : (item.status && item.status !== "unknown" ? (item.statusText || "수동 확인") : "수동 확인");
-  const statusTone = isNaver
-    ? (naverPartnerName ? "positive" : "neutral")
-    : (needsReview ? "warning" : linked ? "positive" : "neutral");
+  const routineNeedsReview = adminDbChannelStatusNeedsReview(item.lastRoutineStatus);
+  const routineStatusText = item.lastRoutineStatus
+    ? (routineNeedsReview ? "최근 수집 재확인" : "최근 수집 완료")
+    : "수집 전";
+  const statusTone = routineNeedsReview ? "warning" : "positive";
   const brandMeta = ADMIN_REFERENCE_CHANNEL_BRAND_META[item.key] || {};
   const displayLabel = brandMeta.label || item.label;
-  const checkedAt = isNaver
-    ? (naverObservation.observedAt || naverObservation.checkedAt || "")
-    : (item.checkedAt || item.updatedAt || "");
+  const checkedAt = item.lastRoutineCheckedAt || item.checkedAt || item.updatedAt || "";
   const checkedLabel = checkedAt ? `${compactDateTime(checkedAt)} 확인` : "확인일 없음";
-  const channelDetail = isNaver
-    ? (naverPartnerName ? `네이버 판매상품 공식 표기 · ${checkedLabel}` : `공식 연동 표기 없음 · ${checkedLabel}`)
-    : item.key === "yanolja" ? `NOL·야놀자 관리자 확인값 · ${checkedLabel}` : `${item.label} 관리자 확인값 · ${checkedLabel}`;
+  const channelDetail = `${adminDbChannelInventoryModeLabel(item.inventoryMode)} · ${checkedLabel}`;
   return `
     <article class="admin-reference-channel-row" data-channel="${escapeHtml(item.key || "channel")}">
       ${adminDbReferenceChannelIconHtml(item)}
       <div><strong>${escapeHtml(displayLabel)}</strong><small>${escapeHtml(channelDetail)}</small></div>
-      <mark data-ui-status="${statusTone}">${escapeHtml(statusText)}</mark>
+      <mark data-ui-status="${statusTone}" title="${escapeHtml(routineStatusText)}">판매 중</mark>
       <div class="admin-reference-channel-actions">
         ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer" aria-label="${escapeHtml(displayLabel)} 외부 화면 열기">열기</a>` : ""}
-        ${!isNaver ? `<button type="button" data-admin-db-open-fold="channel" aria-label="${escapeHtml(displayLabel)} 상태 기록">기록</button>` : ""}
+        <button type="button" data-company-channel-manual-collect data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(item.key || "")}" data-channel-url="${escapeHtml(item.url || "")}" aria-label="${escapeHtml(displayLabel)} 수동 수집">수동 수집</button>
       </div>
     </article>
   `;
@@ -22527,17 +22524,19 @@ function adminDbReferenceChannelRowHtml(item = {}, company = {}) {
 
 function adminDbReferenceChannelsCard(row = {}) {
   const company = row.company || {};
-  const preferredKeys = ["naver", "yeogi", "yanolja", "tteonayo"];
+  const preferredKeys = ["tteonayo", "yanolja", "yeogi"];
   const rows = adminDbChannelTableRows(row)
-    .filter((item) => preferredKeys.includes(item.key))
+    .filter((item) => preferredKeys.includes(item.key) && item.appliedToSummary && item.status === "directly_verified")
     .sort((a, b) => preferredKeys.indexOf(a.key) - preferredKeys.indexOf(b.key));
   return `
     <section class="admin-reference-card admin-reference-channels" aria-labelledby="adminReferenceChannelsTitle">
       <div class="admin-reference-section-title"><b>B</b><h3 id="adminReferenceChannelsTitle">예약 채널</h3></div>
       <div class="admin-reference-channel-list">
-        ${rows.map((item) => adminDbReferenceChannelRowHtml(item, company)).join("")}
+        ${rows.length
+          ? rows.map((item) => adminDbReferenceChannelRowHtml(item, company)).join("")
+          : `<div class="admin-reference-channel-empty"><strong>확인된 판매 채널 없음</strong><small>검토 수정도구에서 연동 여부와 URL을 확인한 뒤 적용하세요.</small></div>`}
       </div>
-      <p class="admin-reference-footnote">네이버 예약 노출과 외부 OTA 입점·재고 연동은 서로 다른 근거로 관리합니다.</p>
+      <p class="admin-reference-footnote">관리자가 판매·연동 확인 후 적용한 채널만 표시합니다.</p>
     </section>
   `;
 }
@@ -23070,7 +23069,7 @@ function adminDbSelectedDetailTabs(activeFold = "") {
   const tabs = [
     ["profile", "기본정보"],
     ["correction", "기준값"],
-    ["channel", "채널"],
+    ["channel", "채널 보정"],
     ["collect", "수집"],
     ["review", "검수"]
   ];
@@ -23426,6 +23425,7 @@ function adminDbChannelStatusOptions(selected = "") {
     ["partner_observed", "예약 연동 파트너 관측"],
     ["not_observed_on_naver", "네이버에서 미확인"],
     ["directly_verified", "직접 확인 완료"],
+    ["not_linked", "연동 없음"],
     ["broken_link", "연결 오류"],
     ["mismatch", "업체 동일성 확인"],
     ["not_found", "외부 OTA 미확인"],
@@ -23437,6 +23437,23 @@ function adminDbChannelStatusOptions(selected = "") {
   if (selected === "needs_manual") options.push(["needs_manual", "수동 확인"]);
   if (selected === "blocked") options.push(["blocked", "자동확인 실패"]);
   return options.map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function adminDbChannelLinkStateOptions(status = "") {
+  const selected = status === "directly_verified" ? "linked" : status === "not_linked" ? "not_linked" : "unknown";
+  return [
+    ["unknown", "확인 전"],
+    ["linked", "판매·연동 확인"],
+    ["not_linked", "연동 없음"]
+  ].map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
+}
+
+function adminDbChannelInventoryModeOptions(selected = "") {
+  return [
+    ["unknown", "확인 필요"],
+    ["pooled", "통합 재고"],
+    ["split", "분리 재고"]
+  ].map(([value, label]) => `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`).join("");
 }
 
 function adminDbChannelProductEntry(entry = {}) {
@@ -23579,7 +23596,14 @@ function adminDbChannelTableRows(row = {}) {
       totalText: totalQuantity ? `${fmtNumber(totalQuantity)}실` : "대기",
       soldText: soldQuantity !== "" ? `${fmtNumber(soldQuantity)}실` : "대기",
       productText: product.productName || product.roomType || defaults.productName || "상품 기준 대기",
-      checkedText: (entry.observedAt || entry.checkedAt) ? compactDateTime(entry.observedAt || entry.checkedAt) : (key === "naver" ? "관측 대기" : "확인 전")
+      checkedText: (entry.observedAt || entry.checkedAt) ? compactDateTime(entry.observedAt || entry.checkedAt) : (key === "naver" ? "관측 대기" : "확인 전"),
+      checkedAt: entry.checkedAt || entry.observedAt || "",
+      updatedAt: entry.updatedAt || "",
+      inventoryMode: entry.inventoryMode || "unknown",
+      appliedToSummary: adminDbChannelAppliedToSummary(entry),
+      routineMode: entry.routineMode || "",
+      lastRoutineStatus: entry.lastRoutineStatus || "",
+      lastRoutineCheckedAt: entry.lastRoutineCheckedAt || ""
     };
   });
 }
@@ -23733,53 +23757,76 @@ function adminDbChannelComparisonPanel(row = {}) {
   `;
 }
 
-function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
+function adminDbChannelDraftKeys(companyId = "") {
+  const keys = Array.isArray(state.adminDbChannelDraftsByCompany?.[companyId])
+    ? state.adminDbChannelDraftsByCompany[companyId]
+    : [];
+  const allowed = new Set(ADMIN_DB_MANAGED_CHANNELS.map(([key]) => key));
+  return [...new Set(keys.map((key) => String(key || "").trim()).filter((key) => allowed.has(key)))];
+}
+
+function adminDbChannelExposureForm(row = {}, channelKey = "", label = "", options = {}) {
   const company = row.company || {};
   const entry = adminDbChannelExposureMap(company)[channelKey] || {};
+  const saved = options.saved === true || Boolean(entry.channel || entry.status || entry.checkedAt || entry.updatedAt);
   const status = entry.status || "unknown";
   const searchUrl = entry.url || adminDbChannelFallbackSearchUrl(channelKey, company);
   const checked = entry.checkedAt ? compactDateTime(entry.checkedAt) : "확인 전";
-  const confidence = Number.isFinite(Number(entry.confidence)) ? ` · 신뢰 ${fmtNumber(entry.confidence)}%` : "";
-  const searchKeyword = entry.searchKeyword ? ` · 검색어 ${entry.searchKeyword}` : "";
   const product = adminDbChannelProductEntry(entry);
   const basisDefaults = adminDbChannelBasisProductDefaults(row);
   const productValue = (key) => String(product[key] ?? basisDefaults[key] ?? "");
   const totalQuantityValue = String(product.totalQuantity ?? product.quantity ?? basisDefaults.totalQuantity ?? "");
   const soldQuantityValue = String(product.soldQuantity ?? "");
   const productOpen = adminDbChannelProductHasValue(product) ? "open" : "";
+  const applied = adminDbChannelAppliedToSummary(entry);
+  const sourceLabel = applied ? "B카드 적용" : saved ? "설정 저장됨" : "설정 전";
+  const routineLabel = ADMIN_DB_AUTO_CHANNEL_KEYS.includes(channelKey)
+    ? "B카드에서 누르면 공개 화면을 자동 확인합니다."
+    : "B카드에서 누르면 화면 전체 붙여넣기 수집창이 열립니다.";
   return `
-    <div class="admin-db-channel-row ${escapeHtml(adminDbChannelStatusTone(status))}" data-ui-surface="card" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}">
+    <div class="admin-db-channel-row admin-db-channel-row-compact ${escapeHtml(adminDbChannelStatusTone(status))}" data-ui-surface="card" data-company-channel-form data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="${escapeHtml(channelKey)}" data-channel-saved="${saved ? "1" : "0"}">
       <div class="admin-db-channel-row-head">
         <div>
           <strong>${escapeHtml(label)}</strong>
-          <small>${escapeHtml(`${adminDbChannelStatusLabel(status)} · ${checked}${confidence}${searchKeyword}`)}</small>
+          <small>${escapeHtml(`${adminDbChannelStatusLabel(status)} · ${checked} · ${routineLabel}`)}</small>
         </div>
-        <span>${escapeHtml(entry.source === "automatic" ? "자동" : entry.source === "manual" ? "수동" : "대기")}</span>
+        <div class="admin-db-channel-row-tools">
+          <span>${escapeHtml(sourceLabel)}</span>
+          ${saved ? `<button type="button" data-company-channel-clear>설정 삭제</button>` : ""}
+        </div>
       </div>
-      <div class="admin-db-channel-fields">
+      <div class="admin-db-channel-fields admin-db-channel-routing-fields">
         <label>
-          <span>상태</span>
-          <select data-company-channel-status>${adminDbChannelStatusOptions(status)}</select>
+          <span>연동 확인 유무</span>
+          <select data-company-channel-link-state>${adminDbChannelLinkStateOptions(status)}</select>
         </label>
         <label>
+          <span>재고 방식</span>
+          <select data-company-channel-inventory-mode>${adminDbChannelInventoryModeOptions(entry.inventoryMode || "unknown")}</select>
+        </label>
+        <label class="admin-db-channel-url-field">
           <span>URL</span>
-          <input type="url" data-company-channel-url value="${escapeHtml(entry.url || "")}" placeholder="${escapeHtml(searchUrl || "확인 URL")}">
+          <input type="url" data-company-channel-url value="${escapeHtml(entry.url || "")}" placeholder="판매 업체 상세 URL을 입력하세요">
         </label>
-        <label>
-          <span>채널 대표가</span>
-          <input type="text" data-company-channel-price value="${escapeHtml(entry.price || "")}" placeholder="${escapeHtml(productValue("weekdayPrice") || "네이버 기준가")}">
-        </label>
-        <label>
-          <span>메모</span>
-          <input type="text" data-company-channel-note value="${escapeHtml(entry.note || "")}" placeholder="예: 유사명 확인 필요">
-        </label>
+      </div>
+      <div class="admin-db-channel-actions admin-db-channel-apply-actions">
+        ${searchUrl ? `<a href="${escapeHtml(searchUrl)}" target="_blank" rel="noreferrer">채널 화면 열기</a>` : ""}
+        <button type="button" data-company-channel-save>적용</button>
       </div>
       <details class="admin-db-channel-product-box" ${productOpen}>
-        <summary>
-          <strong>네이버 기준 상품 · 채널 총량/판매</strong>
-          <small>${escapeHtml(basisDefaults.basisText || "네이버 기준 상품과 가격을 먼저 보정하세요.")}</small>
-        </summary>
-        <div class="admin-db-channel-product-grid">
+            <summary>
+              <strong>상품·수량 보정 (선택)</strong>
+              <small>${escapeHtml(basisDefaults.basisText || "필요할 때만 입력합니다.")}</small>
+            </summary>
+            <div class="admin-db-channel-product-grid">
+          <label>
+            <span>채널 대표가</span>
+            <input type="text" data-company-channel-price value="${escapeHtml(entry.price || "")}" placeholder="예: 149,000원">
+          </label>
+          <label class="admin-db-channel-product-note">
+            <span>채널 메모</span>
+            <input type="text" data-company-channel-note value="${escapeHtml(entry.note || "")}" placeholder="예: 업체명·주소 일치 확인">
+          </label>
           <label>
             <span>상품명</span>
             <input type="text" data-company-channel-product-name value="${escapeHtml(productValue("productName"))}" placeholder="예: 스탠다드 글램핑">
@@ -23824,17 +23871,12 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "") {
             <span>상품 메모</span>
             <input type="text" data-company-channel-product-note value="${escapeHtml(product.note || "")}" placeholder="예: 조식 포함 / 패키지 제외">
           </label>
-        </div>
-        <div class="admin-db-channel-product-checks">
-          <label><input type="checkbox" data-company-channel-price-confirmed ${product.priceConfirmed ? "checked" : ""}> 가격 확인</label>
-          <label><input type="checkbox" data-company-channel-quantity-confirmed ${product.quantityConfirmed ? "checked" : ""}> 수량 확인</label>
-        </div>
+            </div>
+            <div class="admin-db-channel-product-checks">
+              <label><input type="checkbox" data-company-channel-price-confirmed ${product.priceConfirmed ? "checked" : ""}> 가격 확인</label>
+              <label><input type="checkbox" data-company-channel-quantity-confirmed ${product.quantityConfirmed ? "checked" : ""}> 수량 확인</label>
+            </div>
       </details>
-      <div class="admin-db-channel-actions">
-        ${searchUrl ? `<a href="${escapeHtml(searchUrl)}" target="_blank" rel="noreferrer">검색 열기</a>` : ""}
-        <button type="button" data-company-channel-save>저장</button>
-        <button type="button" data-company-channel-clear>삭제</button>
-      </div>
     </div>
   `;
 }
@@ -23882,26 +23924,18 @@ function adminDbNaverChannelObservationHtml(company = {}) {
 function adminDbChannelExposurePanel(row = {}) {
   const company = row.company || {};
   if (!company.companyId) return "";
+  const exposures = adminDbChannelExposureMap(company);
   return `
-    <section class="admin-db-channel-panel" data-ui-surface="card">
+    <section class="admin-db-channel-panel" data-ui-surface="card" data-company-channel-panel data-company-id="${escapeHtml(company.companyId)}">
       <div class="admin-db-channel-head">
         <div>
-          <span>채널별 보정</span>
-          <strong>네이버 기준 상품에 맞춰 OTA 총량과 판매갯수를 저장합니다.</strong>
-          <small>야놀자·떠나요는 자동 확인 결과를 쓰고, ONDA·여기어때·Airbnb는 확인한 링크와 기준값을 직접 보정합니다.</small>
+          <span>채널 보정</span>
+          <strong>OTA 및 기타 보정</strong>
+          <small>떠나요·야놀자·여기어때의 연동 여부, 재고 방식, URL을 확인해 B카드에 적용합니다.</small>
         </div>
-        <button type="button" data-company-channel-auto data-company-id="${escapeHtml(company.companyId || "")}">자동 채널 확인</button>
       </div>
-      ${adminDbNaverChannelObservationHtml(company)}
-      <details class="admin-db-channel-compare-drawer">
-        <summary>
-          <span>상품 기준 비교 보기</span>
-          <small>네이버 기준과 OTA 입력값 차이를 확인합니다.</small>
-        </summary>
-        ${adminDbChannelComparisonPanel(row)}
-      </details>
       <div class="admin-db-channel-list">
-        ${ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => adminDbChannelExposureForm(row, key, label)).join("")}
+        ${ADMIN_DB_MANAGED_CHANNELS.map(([key, label]) => adminDbChannelExposureForm(row, key, label, { saved: Boolean(exposures[key]) })).join("")}
       </div>
     </section>
   `;
@@ -23997,8 +24031,8 @@ function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextActi
             foldKey: "correction"
           })}
           ${adminDbSelectedFoldBlock({
-            label: "채널",
-            title: "OTA 노출·URL·총량·판매갯수 보정",
+            label: "채널 보정",
+            title: "OTA 및 기타 보정",
             note: nextAction.foldKey === "channel" ? "먼저 처리" : "접어서 보관",
             body: channelBody,
             open: nextAction.foldKey === "channel",
@@ -32769,6 +32803,7 @@ async function saveCompanyAdminProfile(button, clear = false) {
 }
 
 function companyChannelPayloadFromForm(form = null, action = "save") {
+  const productBox = form?.querySelector(".admin-db-channel-product-box");
   const totalQuantity = form?.querySelector("[data-company-channel-total-quantity]")?.value
     || form?.querySelector("[data-company-channel-quantity]")?.value
     || "";
@@ -32788,26 +32823,102 @@ function companyChannelPayloadFromForm(form = null, action = "save") {
     priceConfirmed: Boolean(form?.querySelector("[data-company-channel-price-confirmed]")?.checked),
     quantityConfirmed: Boolean(form?.querySelector("[data-company-channel-quantity-confirmed]")?.checked)
   };
-  const hasProduct = adminDbChannelProductHasValue(product);
+  const hasProduct = Boolean(productBox?.open) && adminDbChannelProductHasValue(product);
+  const linkState = form?.querySelector("[data-company-channel-link-state]")?.value || "unknown";
+  const status = linkState === "linked" ? "directly_verified" : linkState === "not_linked" ? "not_linked" : "unknown";
+  const channel = form?.dataset?.channelKey || "";
   return {
     action,
     companyId: form?.dataset?.companyId || "",
-    channel: form?.dataset?.channelKey || "",
-    status: form?.querySelector("[data-company-channel-status]")?.value || "unknown",
+    channel,
+    status,
     url: form?.querySelector("[data-company-channel-url]")?.value || "",
     price: form?.querySelector("[data-company-channel-price]")?.value || "",
     note: form?.querySelector("[data-company-channel-note]")?.value || "",
+    inventoryMode: form?.querySelector("[data-company-channel-inventory-mode]")?.value || "unknown",
+    appliedToSummary: status === "directly_verified",
+    routineMode: ADMIN_DB_AUTO_CHANNEL_KEYS.includes(channel) ? "manual_trigger_auto" : "manual_trigger_review",
     products: hasProduct ? [product] : [],
-    source: "manual"
+    source: "manual",
+    method: "admin_manual_routine"
   };
+}
+
+function setAdminDbChannelDrafts(companyId = "", keys = []) {
+  const selectedCompanyId = String(companyId || "").trim();
+  if (!selectedCompanyId) return;
+  state.adminDbChannelDraftsByCompany = state.adminDbChannelDraftsByCompany || {};
+  const allowed = new Set(ADMIN_DB_MANAGED_CHANNELS.map(([key]) => key));
+  const next = [...new Set(keys.map((key) => String(key || "").trim()).filter((key) => allowed.has(key)))];
+  if (next.length) state.adminDbChannelDraftsByCompany[selectedCompanyId] = next;
+  else delete state.adminDbChannelDraftsByCompany[selectedCompanyId];
+}
+
+function removeAdminDbChannelDraft(companyId = "", channelKey = "") {
+  setAdminDbChannelDrafts(
+    companyId,
+    adminDbChannelDraftKeys(companyId).filter((key) => key !== String(channelKey || "").trim())
+  );
+}
+
+function focusAdminDbChannelEditor(companyId = "", channelKey = "", options = {}) {
+  const selectedPanel = Array.from(document.querySelectorAll("[data-admin-db-selected-company]"))
+    .find((panel) => panel.dataset.adminDbSelectedCompany === companyId);
+  const fold = selectedPanel?.querySelector('.admin-db-selected-fold[data-admin-db-fold="channel"]');
+  const maintenance = fold?.closest(".admin-company-maintenance");
+  if (maintenance) maintenance.open = true;
+  if (fold) fold.open = true;
+  const form = Array.from(selectedPanel?.querySelectorAll("[data-company-channel-form]") || [])
+    .find((entry) => entry.dataset.channelKey === channelKey);
+  if (form && options.openEntry !== false) {
+    const details = form.querySelector(".admin-db-channel-entry-details");
+    if (details) details.open = true;
+  }
+  (form || fold)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function rerenderAdminDbChannelEditor(companyId = "", channelKey = "", options = {}) {
+  state.adminDbSelectedCompanyId = companyId || state.adminDbSelectedCompanyId;
+  state.adminDbOpsOpen = true;
+  renderAdminConsoleDashboard();
+  window.requestAnimationFrame(() => focusAdminDbChannelEditor(companyId, channelKey, options));
+}
+
+function addAdminDbChannelDraft(button = null) {
+  const panel = button?.closest("[data-company-channel-panel]");
+  const companyId = panel?.dataset?.companyId || "";
+  const select = panel?.querySelector("[data-company-channel-add-select]");
+  const channelKey = String(select?.value || "").trim();
+  if (!companyId || !channelKey) {
+    setStatus("추가할 채널을 선택하세요.");
+    return;
+  }
+  setAdminDbChannelDrafts(companyId, [...adminDbChannelDraftKeys(companyId), channelKey]);
+  rerenderAdminDbChannelEditor(companyId, channelKey, { openEntry: true });
+  setStatus("채널 입력 행을 추가했습니다.");
+}
+
+function removeAdminDbChannelDraftRow(button = null) {
+  const form = button?.closest("[data-company-channel-form]");
+  const companyId = form?.dataset?.companyId || "";
+  const channelKey = form?.dataset?.channelKey || "";
+  if (!companyId || !channelKey) return;
+  removeAdminDbChannelDraft(companyId, channelKey);
+  rerenderAdminDbChannelEditor(companyId, "", { openEntry: false });
+  setStatus("저장하지 않은 채널 행을 삭제했습니다.");
 }
 
 async function saveCompanyChannelExposure(button, action = "save") {
   const form = button?.closest("[data-company-channel-form]");
   const payload = companyChannelPayloadFromForm(form, action);
   if (!payload.companyId || !payload.channel) return;
+  if (action === "save" && payload.appliedToSummary && !String(payload.url || "").trim()) {
+    setStatus("B카드에 적용하려면 판매 업체 상세 URL을 입력하세요.");
+    form?.querySelector("[data-company-channel-url]")?.focus();
+    return;
+  }
   button.disabled = true;
-  setStatus(action === "clear" ? "채널 정보 삭제 중" : "채널 정보 저장 중");
+  setStatus(action === "clear" ? "채널 설정 삭제 중" : "채널 설정 적용 중");
   try {
     const data = await fetchJson("/api/company-master/channel-exposure", {
       method: "POST",
@@ -32815,25 +32926,29 @@ async function saveCompanyChannelExposure(button, action = "save") {
       body: JSON.stringify(payload)
     });
     state.companyMaster = data;
+    removeAdminDbChannelDraft(payload.companyId, payload.channel);
     state.adminDbSelectedCompanyId = payload.companyId;
     state.adminDbOpsOpen = true;
     setAdminDbDetailFlash(payload.companyId, {
       status: `channel_${action}`,
       tone: action === "clear" ? "neutral" : "success",
-      title: action === "clear" ? "채널 정보 삭제 완료" : "채널 정보 저장 완료",
-      message: action === "clear" ? "선택한 채널 정보를 삭제했습니다." : `${adminDbChannelStatusLabel(payload.status)} 상태로 저장했습니다.`,
-      next: "업체 상세의 채널 확인 목록에 바로 반영했습니다.",
+      title: action === "clear" ? "채널 설정 삭제 완료" : "채널 설정 적용 완료",
+      message: action === "clear" ? "선택한 채널 설정을 삭제했습니다." : `${adminDbChannelStatusLabel(payload.status)} · ${adminDbChannelInventoryModeLabel(payload.inventoryMode)}로 저장했습니다.`,
+      next: payload.appliedToSummary ? "B카드에 반영했으며 수동 수집 버튼을 사용할 수 있습니다." : "B카드에는 판매·연동 확인 채널만 표시합니다.",
       items: [
         payload.channel ? payload.channel.toUpperCase() : "채널",
         payload.url ? "URL 저장" : "URL 없음",
-        payload.price ? "가격 메모 있음" : "가격 미입력",
-        payload.products?.length ? "상품 기준 저장" : "상품 기준 없음"
+        adminDbChannelInventoryModeLabel(payload.inventoryMode),
+        payload.appliedToSummary ? "B카드 적용" : "B카드 미적용"
       ]
     });
     renderCompanyMasterPanel();
     renderDecisionQueue();
-    if (isAdminRole()) renderAdminConsoleDashboard();
-    setStatus(action === "clear" ? "채널 정보 삭제 완료" : "채널 정보 저장 완료");
+    if (isAdminRole()) {
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => focusAdminDbChannelEditor(payload.companyId, payload.channel, { openEntry: action !== "clear" }));
+    }
+    setStatus(action === "clear" ? "채널 설정 삭제 완료" : "채널 설정 적용 완료");
   } catch (error) {
     setStatus(`채널 정보 저장 실패: ${error.message}`);
     form?.insertAdjacentHTML("beforeend", `<div class="empty">채널 저장 실패: ${escapeHtml(error.message)}</div>`);
@@ -32844,9 +32959,12 @@ async function saveCompanyChannelExposure(button, action = "save") {
 
 async function autoCheckCompanyChannelExposure(button) {
   const companyId = button?.dataset?.companyId || "";
+  const requestedChannel = String(button?.dataset?.channelKey || "").trim();
   if (!companyId) return;
+  const channels = ADMIN_DB_AUTO_CHANNEL_KEYS.includes(requestedChannel) ? [requestedChannel] : ADMIN_DB_AUTO_CHANNEL_KEYS;
+  const channelLabels = channels.map((key) => Object.fromEntries(ADMIN_DB_CHANNEL_OPTIONS)[key] || key);
   button.disabled = true;
-  setStatus("네이버 외 채널 자동 확인 중");
+  setStatus(`${channelLabels.join("·")} 수동 수집 중`);
   try {
     const data = await fetchJson("/api/company-master/channel-exposure", {
       method: "POST",
@@ -32854,7 +32972,7 @@ async function autoCheckCompanyChannelExposure(button) {
       body: JSON.stringify({
         action: "auto_check",
         companyId,
-        channels: ADMIN_DB_AUTO_CHANNEL_KEYS
+        channels
       })
     });
     state.companyMaster = data;
@@ -32863,20 +32981,159 @@ async function autoCheckCompanyChannelExposure(button) {
     setAdminDbDetailFlash(companyId, {
       status: "channel_auto_check",
       tone: "success",
-      title: "채널 자동 확인 완료",
-      message: "야놀자·떠나요 노출 상태를 다시 확인했습니다.",
-      next: "ONDA·여기어때·Airbnb는 공개 링크가 확인될 때 수동으로 저장하세요.",
-      items: ["야놀자", "떠나요", "ONDA 별도 확인"]
+      title: `${channelLabels.join("·")} 수동 수집 완료`,
+      message: "저장된 채널 루틴으로 공개 판매 화면을 다시 확인했습니다.",
+      next: "관리자가 적용한 연동 여부·재고 방식·URL은 그대로 유지됩니다.",
+      items: [...channelLabels, "관리자 설정 유지"]
     });
     renderCompanyMasterPanel();
     renderDecisionQueue();
     if (isAdminRole()) renderAdminConsoleDashboard();
-    setStatus("채널 자동 확인 완료");
+    setStatus(`${channelLabels.join("·")} 수동 수집 완료`);
   } catch (error) {
     setStatus(`채널 자동 확인 실패: ${error.message}`);
   } finally {
     button.disabled = false;
   }
+}
+
+function adminDbCompanyById(companyId = "") {
+  return (state.companyMaster?.companies || []).find((company) => company.companyId === companyId) || null;
+}
+
+function closeAdminDbYeogiPasteDialog(dialog = null) {
+  const target = dialog || document.querySelector("[data-admin-db-yeogi-paste-dialog]");
+  if (!target) return;
+  if (typeof target.close === "function" && target.open) target.close();
+  else target.remove();
+}
+
+function openAdminDbYeogiPasteDialog(companyId = "", channelUrl = "") {
+  const company = adminDbCompanyById(companyId);
+  if (!company) {
+    setStatus("여기어때 자료를 저장할 업체를 찾지 못했습니다.");
+    return;
+  }
+  closeAdminDbYeogiPasteDialog();
+  const dialog = document.createElement("dialog");
+  dialog.className = "admin-db-yeogi-paste-dialog";
+  dialog.dataset.adminDbYeogiPasteDialog = "1";
+  dialog.dataset.companyId = companyId;
+  dialog.innerHTML = `
+    <div class="admin-db-yeogi-paste-shell">
+      <header>
+        <div>
+          <span>여기어때 · 수동 수집</span>
+          <strong>${escapeHtml(company.primaryName || "업체명 확인")}</strong>
+          <small>업체 화면 전체를 복사해 붙여넣으면 업체명·지역·가격·예약 가능 여부를 확인합니다.</small>
+        </div>
+        <button type="button" data-admin-db-yeogi-paste-close aria-label="여기어때 수동 수집 닫기">닫기</button>
+      </header>
+      <ol>
+        <li>여기어때 업체 화면에서 Ctrl+A를 누릅니다.</li>
+        <li>Ctrl+C로 화면 전체를 복사합니다.</li>
+        <li>아래 입력창에 Ctrl+V로 붙여넣고 내용 확인을 누릅니다.</li>
+      </ol>
+      <div class="admin-db-yeogi-paste-source-actions">
+        ${channelUrl ? `<a href="${escapeHtml(channelUrl)}" target="_blank" rel="noreferrer">여기어때 업체 화면 열기</a>` : ""}
+        <span>전체 원문은 저장하지 않고 확인된 요약값만 저장합니다.</span>
+      </div>
+      <label class="admin-db-yeogi-paste-field">
+        <span>화면 전체 붙여넣기</span>
+        <textarea rows="10" data-admin-db-yeogi-paste-input placeholder="여기어때 화면에서 복사한 전체 내용을 여기에 붙여넣으세요."></textarea>
+      </label>
+      <div class="admin-db-yeogi-paste-preview" data-admin-db-yeogi-paste-preview aria-live="polite">
+        <strong>내용 확인 전</strong>
+        <small>선택 업체와 붙여넣은 업체가 일치하는지 먼저 검사합니다.</small>
+      </div>
+      <footer>
+        <button type="button" data-admin-db-yeogi-paste-preview-button>내용 확인</button>
+        <button type="button" data-admin-db-yeogi-paste-apply disabled>업체에 저장</button>
+      </footer>
+    </div>
+  `;
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.appendChild(dialog);
+  dialog.showModal();
+  window.requestAnimationFrame(() => dialog.querySelector("[data-admin-db-yeogi-paste-input]")?.focus());
+}
+
+function adminDbYeogiPastePreviewHtml(preview = {}) {
+  return `
+    <div class="admin-db-yeogi-paste-preview-head">
+      <strong>${escapeHtml(preview.matchedName || "업체명 확인")}</strong>
+      <mark data-ui-status="positive">일치 ${escapeHtml(`${fmtNumber(preview.score || 0)}점`)}</mark>
+    </div>
+    <dl>
+      <div><dt>선택 업체</dt><dd>${escapeHtml(preview.companyName || "확인 필요")}</dd></div>
+      <div><dt>지역</dt><dd>${escapeHtml(preview.location || "미확인")}</dd></div>
+      <div><dt>대표 가격</dt><dd>${escapeHtml(preview.price || "가격 미확인")}</dd></div>
+      <div><dt>예약 상태</dt><dd>${escapeHtml(preview.availabilityLabel || "미확인")}</dd></div>
+    </dl>
+    <small>붙여넣기에서 ${escapeHtml(`${fmtNumber(preview.parsedCount || 0)}개 업체`)}를 읽었으며 선택 업체에 해당하는 값만 저장합니다.</small>
+  `;
+}
+
+async function submitAdminDbYeogiPaste(button = null, action = "preview") {
+  const dialog = button?.closest("[data-admin-db-yeogi-paste-dialog]");
+  const companyId = dialog?.dataset?.companyId || "";
+  const sourceText = dialog?.querySelector("[data-admin-db-yeogi-paste-input]")?.value?.trim() || "";
+  const previewBox = dialog?.querySelector("[data-admin-db-yeogi-paste-preview]");
+  const applyButton = dialog?.querySelector("[data-admin-db-yeogi-paste-apply]");
+  if (!dialog || !companyId || !sourceText) {
+    if (previewBox) previewBox.innerHTML = `<strong>붙여넣기 필요</strong><small>여기어때 화면 전체를 붙여넣으세요.</small>`;
+    return;
+  }
+  button.disabled = true;
+  if (applyButton) applyButton.disabled = true;
+  if (previewBox) previewBox.innerHTML = `<strong>${action === "apply" ? "저장 중" : "내용 확인 중"}</strong><small>업체명과 지역을 비교하고 있습니다.</small>`;
+  try {
+    const data = await fetchJson("/api/company-master/yeogi-manual-import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, companyId, sourceText })
+    });
+    if (action === "preview") {
+      if (previewBox) previewBox.innerHTML = adminDbYeogiPastePreviewHtml(data.preview || {});
+      if (applyButton) applyButton.disabled = !data.preview?.canApply;
+      setStatus("여기어때 붙여넣기 내용 확인 완료");
+      return;
+    }
+    state.companyMaster = data;
+    state.adminDbSelectedCompanyId = companyId;
+    state.adminDbOpsOpen = true;
+    setAdminDbDetailFlash(companyId, {
+      status: "yeogi_manual_paste",
+      tone: "success",
+      title: "여기어때 수동 수집 완료",
+      message: `${data.preview?.price || "가격 미확인"} · ${data.preview?.availabilityLabel || "예약 여부 미확인"}으로 저장했습니다.`,
+      next: "B카드의 관리자 연동·재고 설정은 유지됩니다.",
+      items: ["화면 전체 붙여넣기", "업체명·지역 일치", "요약값 저장"]
+    });
+    closeAdminDbYeogiPasteDialog(dialog);
+    renderCompanyMasterPanel();
+    renderDecisionQueue();
+    if (isAdminRole()) renderAdminConsoleDashboard();
+    setStatus("여기어때 수동 수집 완료");
+  } catch (error) {
+    if (previewBox) previewBox.innerHTML = `<strong>확인 실패</strong><small>${escapeHtml(error.message)}</small>`;
+    setStatus(`여기어때 수동 수집 실패: ${error.message}`);
+  } finally {
+    if (button?.isConnected) button.disabled = false;
+  }
+}
+
+function manualCollectCompanyChannel(button = null) {
+  const companyId = button?.dataset?.companyId || "";
+  const channelKey = String(button?.dataset?.channelKey || "").trim();
+  if (!companyId || !channelKey) return;
+  if (ADMIN_DB_AUTO_CHANNEL_KEYS.includes(channelKey)) {
+    autoCheckCompanyChannelExposure(button);
+    return;
+  }
+  const url = String(button?.dataset?.channelUrl || "").trim();
+  openAdminDbYeogiPasteDialog(companyId, url);
+  setStatus("여기어때 화면 전체 붙여넣기 창을 열었습니다.");
 }
 
 async function saveLocationScoreOverride(button, clear = false) {
@@ -34684,9 +34941,39 @@ function bindEvents() {
       });
       return;
     }
+    const yeogiPasteClose = event.target.closest("[data-admin-db-yeogi-paste-close]");
+    if (yeogiPasteClose) {
+      closeAdminDbYeogiPasteDialog(yeogiPasteClose.closest("[data-admin-db-yeogi-paste-dialog]"));
+      return;
+    }
+    const yeogiPastePreview = event.target.closest("[data-admin-db-yeogi-paste-preview-button]");
+    if (yeogiPastePreview) {
+      submitAdminDbYeogiPaste(yeogiPastePreview, "preview");
+      return;
+    }
+    const yeogiPasteApply = event.target.closest("[data-admin-db-yeogi-paste-apply]");
+    if (yeogiPasteApply) {
+      submitAdminDbYeogiPaste(yeogiPasteApply, "apply");
+      return;
+    }
     const companyChannelAuto = event.target.closest("[data-company-channel-auto]");
     if (companyChannelAuto) {
       autoCheckCompanyChannelExposure(companyChannelAuto);
+      return;
+    }
+    const companyChannelManualCollect = event.target.closest("[data-company-channel-manual-collect]");
+    if (companyChannelManualCollect) {
+      manualCollectCompanyChannel(companyChannelManualCollect);
+      return;
+    }
+    const companyChannelAdd = event.target.closest("[data-company-channel-add]");
+    if (companyChannelAdd) {
+      addAdminDbChannelDraft(companyChannelAdd);
+      return;
+    }
+    const companyChannelDraftRemove = event.target.closest("[data-company-channel-draft-remove]");
+    if (companyChannelDraftRemove) {
+      removeAdminDbChannelDraftRow(companyChannelDraftRemove);
       return;
     }
     const companyChannelSave = event.target.closest("[data-company-channel-save]");

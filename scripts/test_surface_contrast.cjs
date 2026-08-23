@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-current-history-v70";
-const expectedAssetVersion = "v2-20260823-current-history-v52";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-yeogi-paste-v73";
+const expectedAssetVersion = "v2-20260823-yeogi-paste-v55";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -789,6 +789,14 @@ const referenceChannelRowBlock = app.slice(
   app.indexOf("function adminDbReferenceChannelRowHtml("),
   app.indexOf("function adminDbReferenceChannelsCard(", app.indexOf("function adminDbReferenceChannelRowHtml("))
 );
+const channelCorrectionFormBlock = app.slice(
+  app.indexOf("function adminDbChannelDraftKeys("),
+  app.indexOf("function adminDbNaverChannelObservationHtml(", app.indexOf("function adminDbChannelDraftKeys("))
+);
+const channelCorrectionPanelBlock = app.slice(
+  app.indexOf("function adminDbChannelExposurePanel("),
+  app.indexOf("function adminDbCollectionPanel(", app.indexOf("function adminDbChannelExposurePanel("))
+);
 const cumulativeCssBlock = styles.slice(
   styles.indexOf("/* Company cumulative DB v1:"),
   styles.indexOf("/* Region keyword readability", styles.indexOf("/* Company cumulative DB v1:"))
@@ -957,12 +965,56 @@ assert(
 );
 
 assert(
-  referenceChannelRowBlock.includes("naverPartnerName")
-    && referenceChannelRowBlock.includes("공식 연동 표기 ·")
-    && referenceChannelRowBlock.includes("공식 연동 표기 없음")
-    && referenceChannelRowBlock.includes("관리자 확인값")
-    && referenceChannelRowBlock.includes("checkedLabel"),
-  "Naver channel UI must show official product partner labels and keep missing labels as manual-review evidence",
+  referenceChannelRowBlock.includes("adminDbChannelInventoryModeLabel")
+    && referenceChannelRowBlock.includes("data-company-channel-manual-collect")
+    && referenceChannelRowBlock.includes(">수동 수집</button>")
+    && referenceChannelRowBlock.includes(">판매 중</mark>")
+    && !referenceChannelRowBlock.includes("naverPartnerName")
+    && app.includes('const preferredKeys = ["tteonayo", "yanolja", "yeogi"];')
+    && app.includes('item.appliedToSummary && item.status === "directly_verified"'),
+  "booking channel summary must show applied selling channels with inventory mode and manual collection controls",
+  failures
+);
+
+assert(
+  app.includes('label: "채널 보정"')
+    && app.includes('title: "OTA 및 기타 보정"')
+    && channelCorrectionPanelBlock.includes("떠나요·야놀자·여기어때")
+    && channelCorrectionPanelBlock.includes("ADMIN_DB_MANAGED_CHANNELS.map")
+    && !channelCorrectionPanelBlock.includes("adminDbNaverChannelObservationHtml")
+    && !channelCorrectionPanelBlock.includes("네이버 기준")
+    && channelCorrectionFormBlock.includes("data-company-channel-link-state")
+    && channelCorrectionFormBlock.includes("data-company-channel-inventory-mode")
+    && channelCorrectionFormBlock.includes("data-company-channel-url")
+    && channelCorrectionFormBlock.includes(">적용</button>")
+    && channelCorrectionFormBlock.includes("data-company-channel-clear")
+    && app.includes("const hasProduct = Boolean(productBox?.open) && adminDbChannelProductHasValue(product);")
+    && app.includes('["not_linked", "연동 없음"]')
+    && app.includes('appliedToSummary: status === "directly_verified"')
+    && app.includes('routineMode: ADMIN_DB_AUTO_CHANNEL_KEYS.includes(channel)')
+    && server.includes("const preserveAppliedRoutine")
+    && server.includes("lastRoutineStatus: checked.status")
+    && server.includes("inventoryMode: entry.inventoryMode || \"unknown\"")
+    && server.includes('if (key === "not_linked") return "연동 없음";')
+    && server.includes('"not_linked",\n    "needs_manual"'),
+  "channel correction must hide Naver controls, configure three external channels, apply only verified sales, and preserve manual routine settings",
+  failures
+);
+
+assert(
+  app.includes("function openAdminDbYeogiPasteDialog(")
+    && app.includes("data-admin-db-yeogi-paste-input")
+    && app.includes("data-admin-db-yeogi-paste-preview-button")
+    && app.includes("data-admin-db-yeogi-paste-apply")
+    && app.includes('fetchJson("/api/company-master/yeogi-manual-import"')
+    && app.includes("업체 화면 전체를 복사해 붙여넣으면")
+    && styles.includes(".admin-db-yeogi-paste-dialog")
+    && styles.includes(".admin-db-yeogi-paste-preview dl")
+    && server.includes("async function resolveYeogiCompanyPaste(")
+    && server.includes("companyChannelCandidateScore(company")
+    && server.includes('action: "yeogi_manual_paste"')
+    && server.includes('reqUrl.pathname === "/api/company-master/yeogi-manual-import"'),
+  "Yeogi B-card manual collection must preview full-screen paste, verify the selected company, and save only parsed summary evidence",
   failures
 );
 
@@ -986,7 +1038,7 @@ assert(
     && adminCompanyChartBlock.includes("추정 평일 예약율")
     && adminCompanyChartBlock.includes("누적 리드타임 추이")
     && adminCompanyChartBlock.includes("data-admin-db-rank-keyword")
-    && adminCompanyChartBlock.includes("네이버 예약 노출과 외부 OTA 입점·재고 연동은 서로 다른 근거"),
+    && adminCompanyChartBlock.includes("관리자가 판매·연동 확인 후 적용한 채널만 표시합니다."),
   "company reference dashboard must render A and B first, then C current observations and D cumulative history with keyword-scoped rank",
   failures
 );

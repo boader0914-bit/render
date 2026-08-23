@@ -5722,6 +5722,138 @@ a {
   gap: 8px;
 }
 
+.admin-db-channel-add-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-control);
+  padding: 9px 10px;
+}
+
+.admin-db-channel-add-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-db-channel-add-row strong,
+.admin-db-channel-entry-details summary strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.admin-db-channel-add-row small,
+.admin-db-channel-entry-details summary small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+
+.admin-db-channel-add-row select,
+.admin-db-channel-add-row button,
+.admin-db-channel-row-tools button {
+  min-height: 34px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.admin-db-channel-add-row button {
+  color: var(--accent-strong);
+}
+
+.admin-db-channel-add-row button:disabled,
+.admin-db-channel-add-row select:disabled {
+  opacity: .55;
+}
+
+.admin-db-channel-empty {
+  border: 1px dashed var(--border-subtle);
+  border-radius: 12px;
+  color: var(--muted);
+  padding: 14px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.admin-db-channel-row-compact {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-db-channel-row-tools {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-db-channel-row-tools > span {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-card);
+  color: var(--accent-strong);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.admin-db-channel-row-tools button {
+  min-height: 30px;
+  color: var(--muted);
+  padding-inline: 9px;
+}
+
+.admin-db-channel-entry-details {
+  min-width: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+
+.admin-db-channel-entry-details > summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-db-channel-entry-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-db-channel-entry-details > summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.admin-db-channel-entry-details[open] > summary::after {
+  content: "−";
+}
+
+.admin-db-channel-entry-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
 .admin-db-channel-row.good {
   border-color: color-mix(in srgb, var(--positive) 45%, var(--border-subtle));
 }
@@ -5749,6 +5881,236 @@ a {
   display: grid;
   grid-template-columns: .75fr minmax(140px, 1.2fr) minmax(100px, .9fr) minmax(140px, 1.2fr);
   gap: 8px;
+}
+
+.admin-db-channel-routing-fields {
+  grid-template-columns: minmax(140px, .8fr) minmax(140px, .8fr) minmax(240px, 2fr);
+}
+
+.admin-db-channel-url-field {
+  min-width: 0;
+}
+
+.admin-db-channel-apply-actions {
+  justify-content: flex-end;
+}
+
+.admin-db-channel-apply-actions button {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+}
+
+.admin-db-yeogi-paste-dialog {
+  width: min(720px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 0;
+  overflow: visible;
+}
+
+.admin-db-yeogi-paste-dialog::backdrop {
+  background: color-mix(in srgb, var(--text-primary) 48%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.admin-db-yeogi-paste-shell {
+  min-width: 0;
+  max-height: calc(100vh - 28px);
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  background: var(--surface-card);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  overflow: auto;
+}
+
+.admin-db-yeogi-paste-shell > header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-yeogi-paste-shell > header > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-yeogi-paste-shell > header span,
+.admin-db-yeogi-paste-shell > header small,
+.admin-db-yeogi-paste-source-actions span,
+.admin-db-yeogi-paste-field > span,
+.admin-db-yeogi-paste-preview small {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.48;
+}
+
+.admin-db-yeogi-paste-shell > header strong {
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.admin-db-yeogi-paste-shell > header button,
+.admin-db-yeogi-paste-shell > footer button,
+.admin-db-yeogi-paste-source-actions a {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.admin-db-yeogi-paste-shell > ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 10px 12px 10px 32px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.admin-db-yeogi-paste-source-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-db-yeogi-paste-source-actions a {
+  color: var(--accent-strong);
+  white-space: nowrap;
+}
+
+.admin-db-yeogi-paste-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.admin-db-yeogi-paste-field textarea {
+  width: 100%;
+  min-height: 190px;
+  resize: vertical;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 11px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.admin-db-yeogi-paste-preview {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-control);
+  padding: 11px;
+}
+
+.admin-db-yeogi-paste-preview > strong,
+.admin-db-yeogi-paste-preview-head strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.admin-db-yeogi-paste-preview-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-db-yeogi-paste-preview-head mark {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--theme-accent-soft);
+  color: var(--accent-strong);
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.admin-db-yeogi-paste-preview dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.admin-db-yeogi-paste-preview dl div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 7px;
+}
+
+.admin-db-yeogi-paste-preview dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-db-yeogi-paste-preview dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-yeogi-paste-shell > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-db-yeogi-paste-shell > footer [data-admin-db-yeogi-paste-apply] {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+}
+
+.admin-db-yeogi-paste-shell > footer button:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+}
+
+.admin-db-yeogi-paste-shell :is(button, a, textarea):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .admin-db-channel-fields label {
@@ -28765,6 +29127,32 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
       calc(13px + env(safe-area-inset-left));
   }
 
+  .admin-db-yeogi-paste-dialog {
+    width: calc(100vw - 18px);
+    max-height: calc(100vh - 18px);
+  }
+
+  .admin-db-yeogi-paste-shell {
+    max-height: calc(100vh - 18px);
+    border-radius: 14px;
+    padding: 12px;
+  }
+
+  .admin-db-yeogi-paste-source-actions,
+  .admin-db-yeogi-paste-shell > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .admin-db-yeogi-paste-source-actions a,
+  .admin-db-yeogi-paste-shell > footer button {
+    width: 100%;
+  }
+
+  .admin-db-yeogi-paste-preview dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .admin-region-review-filterbar > div:last-child {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -28784,6 +29172,7 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
   .admin-db-collect-metrics,
   .admin-db-collect-list article,
   .admin-db-channel-summary,
+  .admin-db-channel-add-row,
   .admin-db-channel-fields,
   .admin-db-channel-product-grid,
   .admin-db-confirm-grid,
@@ -28879,6 +29268,20 @@ body.role-admin .company-master-row-tags .company-route-tag.route-pending {
 
   .admin-db-channel-product-note {
     grid-column: auto;
+  }
+
+  .admin-db-channel-add-row select,
+  .admin-db-channel-add-row button {
+    width: 100%;
+  }
+
+  .admin-db-channel-row-tools {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .admin-db-channel-entry-details > summary {
+    align-items: flex-start;
   }
 
   .admin-console-hero {
@@ -37596,6 +37999,27 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 .admin-reference-channel-list {
   display: grid;
   margin-top: 4px;
+}
+
+.admin-reference-channel-empty {
+  min-height: 188px;
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.admin-reference-channel-empty strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-reference-channel-empty small {
+  max-width: 280px;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .admin-reference-channel-row {

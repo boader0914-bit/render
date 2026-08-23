@@ -1413,6 +1413,40 @@ async function main() {
       "protected manual decision must not create a misleading bulk-applied history entry"
     );
 
+    const yeogiCompanyScreenText = "펜션 채널 관측 테스트 펜션 산청군 예약 가능 120,000원";
+    const yeogiCompanyPreview = await request(baseUrl, "POST", "/api/company-master/yeogi-manual-import", {
+      companyId: company.companyId,
+      action: "preview",
+      sourceText: yeogiCompanyScreenText
+    }, cookies);
+    assert.equal(yeogiCompanyPreview.statusCode, 200);
+    assert.equal(yeogiCompanyPreview.body.preview.companyId, company.companyId);
+    assert.equal(yeogiCompanyPreview.body.preview.matchedName, company.primaryName);
+    assert.equal(yeogiCompanyPreview.body.preview.location, "산청군");
+    assert.equal(yeogiCompanyPreview.body.preview.price, "120,000원");
+    assert.equal(yeogiCompanyPreview.body.preview.availability, "Y");
+    assert.equal(yeogiCompanyPreview.body.preview.canApply, true);
+
+    const wrongYeogiCompanyPreview = await request(baseUrl, "POST", "/api/company-master/yeogi-manual-import", {
+      companyId: company.companyId,
+      action: "preview",
+      sourceText: "펜션 전혀 다른 숙소 펜션 통영시 예약 가능 90,000원"
+    }, cookies);
+    assert.equal(wrongYeogiCompanyPreview.statusCode, 400, "pasted screen must not be saved to a different selected company");
+
+    const yeogiCompanyApply = await request(baseUrl, "POST", "/api/company-master/yeogi-manual-import", {
+      companyId: company.companyId,
+      action: "apply",
+      sourceText: yeogiCompanyScreenText
+    }, cookies);
+    assert.equal(yeogiCompanyApply.statusCode, 200);
+    assert.equal(yeogiCompanyApply.body.company.channelExposures.yeogi.status, "directly_verified");
+    assert.equal(yeogiCompanyApply.body.company.channelExposures.yeogi.appliedToSummary, true);
+    assert.equal(yeogiCompanyApply.body.company.channelExposures.yeogi.routineMode, "manual_paste");
+    assert.equal(yeogiCompanyApply.body.company.channelExposures.yeogi.lastRoutineAvailability, "Y");
+    assert.equal(yeogiCompanyApply.body.company.channelExposures.yeogi.price, "120,000원");
+    assert.ok(yeogiCompanyApply.body.company.channelExposureHistory.some((entry) => entry.action === "yeogi_manual_paste"));
+
     const direct = await request(baseUrl, "POST", "/api/company-master/channel-exposure", {
       companyId: company.companyId,
       action: "save",
@@ -1420,10 +1454,49 @@ async function main() {
       status: "directly_verified",
       url: "https://nol.yanolja.com/stay/domestic/12345",
       source: "manual",
-      method: "admin_manual",
+      method: "admin_manual_routine",
+      inventoryMode: "pooled",
+      appliedToSummary: true,
+      routineMode: "manual_trigger_auto",
       note: "관리자 직접 확인"
     }, cookies);
     assert.equal(direct.statusCode, 200);
+    assert.equal(direct.body.company.channelExposures.yanolja.appliedToSummary, true);
+    assert.equal(direct.body.company.channelExposures.yanolja.inventoryMode, "pooled");
+    assert.equal(direct.body.company.channelExposures.yanolja.routineMode, "manual_trigger_auto");
+
+    const missingAppliedUrl = await request(baseUrl, "POST", "/api/company-master/channel-exposure", {
+      companyId: company.companyId,
+      action: "save",
+      channel: "tteonayo",
+      status: "directly_verified",
+      source: "manual",
+      inventoryMode: "split",
+      appliedToSummary: true,
+      routineMode: "manual_trigger_auto"
+    }, cookies);
+    assert.equal(missingAppliedUrl.statusCode, 400, "B-card selling channel must have an exact sales URL");
+
+    const notLinked = await request(baseUrl, "POST", "/api/company-master/channel-exposure", {
+      companyId: company.companyId,
+      action: "save",
+      channel: "airbnb",
+      status: "not_linked",
+      source: "manual",
+      method: "admin_manual",
+      note: "관리자 연동 없음 확인"
+    }, cookies);
+    assert.equal(notLinked.statusCode, 200);
+    assert.equal(notLinked.body.company.channelExposures.airbnb.status, "not_linked");
+    assert.equal(notLinked.body.company.channelExposures.airbnb.statusLabel, "연동 없음");
+
+    const clearedChannel = await request(baseUrl, "POST", "/api/company-master/channel-exposure", {
+      companyId: company.companyId,
+      action: "clear",
+      channel: "airbnb"
+    }, cookies);
+    assert.equal(clearedChannel.statusCode, 200);
+    assert.equal(clearedChannel.body.company.channelExposures.airbnb, undefined);
 
     const secondRun = await request(baseUrl, "GET", `/api/runs/${secondRunId}`, null, cookies);
     assert.equal(secondRun.statusCode, 200);

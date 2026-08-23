@@ -6321,6 +6321,165 @@ async function applyYeogiImportToCompanyMaster(rows = [], context = {}) {
   return { matched, ambiguous, unmatched, preserved };
 }
 
+function yeogiCompanyPasteAvailability(value = "") {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "Y") return { value: "Y", label: "예약 가능" };
+  if (normalized === "N") return { value: "N", label: "예약 마감" };
+  return { value: "unknown", label: "예약 여부 미확인" };
+}
+
+async function resolveYeogiCompanyPaste(payload = {}) {
+  const companyId = String(payload.companyId || "").trim();
+  const sourceText = String(payload.sourceText || "").trim();
+  if (!companyId) {
+    const error = new Error("여기어때 자료를 저장할 업체를 선택하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!sourceText) {
+    const error = new Error("여기어때 화면에서 복사한 내용을 붙여넣으세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (sourceText.length > 500000) {
+    const error = new Error("붙여넣은 내용이 너무 큽니다. 여기어때 업체 화면만 다시 복사하세요.");
+    error.statusCode = 413;
+    throw error;
+  }
+
+  const master = await readCompanyMaster();
+  const company = master.companies?.[companyId];
+  if (!company) {
+    const error = new Error("여기어때 자료를 저장할 업체를 찾지 못했습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const currentExposure = sanitizeCompanyChannelExposure(
+    "yeogi",
+    company.channelExposures?.yeogi || company.channelExposure?.yeogi || {}
+  );
+  if (!currentExposure?.appliedToSummary || currentExposure.status !== "directly_verified") {
+    const error = new Error("먼저 채널 보정에서 여기어때 연동 여부와 URL을 적용하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const rows = yeogiImportParser.parseYeogiImport(sourceText);
+  if (!rows.length) {
+    const error = new Error("여기어때 업체명·가격 행을 찾지 못했습니다. 업체 화면 전체를 다시 복사하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const candidates = rows
+    .map((row, index) => ({
+      row,
+      index,
+      score: companyChannelCandidateScore(company, {
+        name: row.name || row["업체명"] || "",
+        location: row.location || row.address || row["주소"] || row["지역"] || ""
+      })
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  const best = candidates[0] || null;
+  if (!best || best.score < 82) {
+    const error = new Error(`붙여넣은 내용에서 ${company.primaryName || "선택 업체"}를 확정하지 못했습니다.`);
+    error.statusCode = 400;
+    throw error;
+  }
+  const availability = yeogiCompanyPasteAvailability(best.row.reservationAvailable);
+  const matchedUrl = externalHttpUrl(best.row.url || "") || currentExposure.url;
+  return {
+    master,
+    company,
+    currentExposure,
+    matchedRow: best.row,
+    preview: {
+      companyId,
+      companyName: company.primaryName || "업체명 확인",
+      parsedCount: rows.length,
+      matchedName: sanitizeCompanyChannelText(best.row.name || best.row["업체명"] || "", 120),
+      location: sanitizeCompanyChannelText(best.row.location || best.row.address || best.row["주소"] || best.row["지역"] || "", 160),
+      price: sanitizeCompanyChannelText(best.row.price || "", 80),
+      availability: availability.value,
+      availabilityLabel: availability.label,
+      url: matchedUrl,
+      score: best.score,
+      canApply: Boolean(matchedUrl)
+    }
+  };
+}
+
+async function saveYeogiCompanyPaste(payload = {}) {
+  const action = String(payload.action || "preview").trim();
+  const resolved = await resolveYeogiCompanyPaste(payload);
+  if (action !== "apply") return { preview: resolved.preview };
+  if (!resolved.preview.canApply) {
+    const error = new Error("저장할 여기어때 URL이 없습니다. 채널 보정에서 URL을 먼저 입력하세요.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const now = new Date().toISOString();
+  const availabilityNote = [
+    resolved.preview.availabilityLabel,
+    resolved.preview.price ? `대표가 ${resolved.preview.price}` : "가격 미확인",
+    resolved.preview.location || ""
+  ].filter(Boolean).join(" · ");
+  const exposure = sanitizeCompanyChannelExposure("yeogi", {
+    ...resolved.currentExposure,
+    status: "directly_verified",
+    url: resolved.currentExposure.url || resolved.preview.url,
+    price: resolved.preview.price || resolved.currentExposure.price,
+    source: "manual",
+    method: resolved.currentExposure.method || "yeogi_manual_paste",
+    inventoryMode: resolved.currentExposure.inventoryMode || "unknown",
+    appliedToSummary: true,
+    routineMode: "manual_paste",
+    lastRoutineStatus: "exposed",
+    lastRoutineCheckedAt: now,
+    lastRoutineNote: availabilityNote,
+    lastRoutineAvailability: resolved.preview.availability,
+    checkedAt: now,
+    updatedAt: now
+  });
+  resolved.company.channelExposures = {
+    ...publicCompanyChannelExposures(resolved.company.channelExposures || resolved.company.channelExposure || {}),
+    yeogi: exposure
+  };
+  resolved.company.channelExposureHistory = [
+    ...(resolved.company.channelExposureHistory || []),
+    {
+      at: now,
+      action: "yeogi_manual_paste",
+      channels: [{
+        channel: "yeogi",
+        label: "여기어때",
+        status: exposure.status,
+        statusLabel: exposure.statusLabel,
+        url: exposure.url,
+        price: exposure.price,
+        inventoryMode: exposure.inventoryMode,
+        appliedToSummary: true,
+        routineMode: exposure.routineMode,
+        lastRoutineAvailability: exposure.lastRoutineAvailability,
+        checkedAt: exposure.checkedAt,
+        note: exposure.lastRoutineNote
+      }]
+    }
+  ].slice(-80);
+  resolved.company.duplicateNotes = [
+    ...(resolved.company.duplicateNotes || []),
+    { at: now, reason: "여기어때 업체 화면 붙여넣기 수동 수집" }
+  ].slice(-40);
+  await writeCompanyMaster(resolved.master);
+  return {
+    ...(await summarizeCompanyMaster()),
+    company: companyRecordSummary(resolved.company),
+    preview: resolved.preview,
+    resolved: { action: "yeogi_manual_paste", companyId: resolved.company.companyId }
+  };
+}
+
 async function importYeogiSupplement(payload) {
   const runId = String(payload.runId || "").trim();
   const sourceText = String(payload.sourceText || "").trim();
@@ -6701,6 +6860,7 @@ function companyChannelStatusLabel(status = "") {
   if (key === "broken_link") return "연결 오류";
   if (key === "mismatch") return "업체 동일성 확인";
   if (key === "not_found") return "외부 OTA 미확인";
+  if (key === "not_linked") return "연동 없음";
   if (key === "similar_name") return "유사명 확인 필요";
   if (key === "onda_manual") return "ONDA 별도 확인";
   if (key === "auto_failed" || key === "blocked") return "자동확인 실패";
@@ -6710,7 +6870,7 @@ function companyChannelStatusLabel(status = "") {
 
 function companyChannelStatusTone(status = "") {
   if (["exposed", "observed_on_naver", "directly_verified"].includes(status)) return "good";
-  if (["partner_observed", "not_found", "not_observed_on_naver", "manual_only", "onda_manual"].includes(status)) return "neutral";
+  if (["partner_observed", "not_found", "not_linked", "not_observed_on_naver", "manual_only", "onda_manual"].includes(status)) return "neutral";
   return "watch";
 }
 
@@ -6898,7 +7058,7 @@ function sanitizeCompanyChannelProduct(entry = {}) {
 function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
   const key = normalizeCompanyChannelKey(channelKey || entry.channel || entry.channelKey);
   if (!key) return null;
-  const status = [
+  const allowedStatuses = [
     "exposed",
     "observed_on_naver",
     "partner_observed",
@@ -6907,6 +7067,7 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
     "broken_link",
     "mismatch",
     "not_found",
+    "not_linked",
     "needs_manual",
     "manual_only",
     "onda_manual",
@@ -6914,7 +7075,8 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
     "auto_failed",
     "blocked",
     "unknown"
-  ].includes(String(entry.status || ""))
+  ];
+  const status = allowedStatuses.includes(String(entry.status || ""))
     ? String(entry.status || "")
     : "unknown";
   const rawUrl = externalHttpUrl(entry.url || entry.link || entry.href || "");
@@ -6934,6 +7096,18 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
   const confidence = Number.isFinite(rawConfidence)
     ? Math.max(0, Math.min(100, Math.round(rawConfidence > 0 && rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence)))
     : null;
+  const inventoryMode = ["pooled", "split", "unknown"].includes(String(entry.inventoryMode || ""))
+    ? String(entry.inventoryMode || "")
+    : "unknown";
+  const hasAppliedFlag = Object.prototype.hasOwnProperty.call(entry, "appliedToSummary");
+  const appliedToSummary = normalizedStatus === "directly_verified"
+    && (hasAppliedFlag ? entry.appliedToSummary === true || entry.appliedToSummary === "true" : true);
+  const lastRoutineStatus = allowedStatuses.includes(String(entry.lastRoutineStatus || ""))
+    ? String(entry.lastRoutineStatus || "")
+    : "";
+  const lastRoutineAvailability = ["Y", "N", "unknown"].includes(String(entry.lastRoutineAvailability || ""))
+    ? String(entry.lastRoutineAvailability || "")
+    : "unknown";
   return {
     channel: key,
     label: COMPANY_CHANNEL_DEFINITIONS[key].label,
@@ -6946,6 +7120,13 @@ function sanitizeCompanyChannelExposure(channelKey = "", entry = {}) {
     confidence: isOndaDdnayoProxy ? 0 : confidence,
     source: isOndaDdnayoProxy ? "manual" : sanitizeCompanyChannelText(entry.source || "manual", 60),
     method: isOndaDdnayoProxy ? "onda_separate_required" : sanitizeCompanyChannelText(entry.method || "", 80),
+    inventoryMode: isOndaDdnayoProxy ? "unknown" : inventoryMode,
+    appliedToSummary: isOndaDdnayoProxy ? false : appliedToSummary,
+    routineMode: isOndaDdnayoProxy ? "" : sanitizeCompanyChannelText(entry.routineMode || "", 60),
+    lastRoutineStatus: isOndaDdnayoProxy ? "" : lastRoutineStatus,
+    lastRoutineCheckedAt: isOndaDdnayoProxy ? "" : sanitizeCompanyChannelText(entry.lastRoutineCheckedAt || "", 40),
+    lastRoutineNote: isOndaDdnayoProxy ? "" : sanitizeCompanyChannelText(entry.lastRoutineNote || "", 220),
+    lastRoutineAvailability: isOndaDdnayoProxy ? "unknown" : lastRoutineAvailability,
     evidenceUrl: isOndaDdnayoProxy ? "" : externalHttpUrl(entry.evidenceUrl || entry.sourceUrl || ""),
     searchKeyword: sanitizeCompanyChannelText(entry.searchKeyword || entry.keyword || "", 120),
     searchedKeywords: boundedUnique(Array.isArray(entry.searchedKeywords) ? entry.searchedKeywords : [], 8)
@@ -12157,8 +12338,36 @@ async function saveCompanyChannelExposure(payload = {}) {
       if (!channel) continue;
       const checked = await autoCheckCompanyChannel(company, channel);
       if (!checked) continue;
-      company.channelExposures[channel] = checked;
-      changed.push(checked);
+      const current = company.channelExposures[channel]
+        ? sanitizeCompanyChannelExposure(channel, company.channelExposures[channel])
+        : null;
+      const preserveAppliedRoutine = current?.status === "directly_verified" && current?.appliedToSummary === true;
+      const saved = preserveAppliedRoutine
+        ? sanitizeCompanyChannelExposure(channel, {
+          ...current,
+          status: current.status,
+          url: current.url,
+          source: current.source || "manual",
+          method: current.method || "admin_manual_routine",
+          inventoryMode: current.inventoryMode || "unknown",
+          appliedToSummary: true,
+          routineMode: current.routineMode || "manual_trigger_auto",
+          price: checked.price || current.price,
+          rank: checked.rank ?? current.rank,
+          confidence: checked.confidence,
+          evidenceUrl: checked.evidenceUrl || current.evidenceUrl,
+          searchedKeywords: checked.searchedKeywords || current.searchedKeywords,
+          searchKeyword: checked.searchKeyword || current.searchKeyword,
+          products: checked.products?.length ? checked.products : current.products,
+          lastRoutineStatus: checked.status,
+          lastRoutineCheckedAt: checked.checkedAt || now,
+          lastRoutineNote: checked.note || "",
+          checkedAt: checked.checkedAt || now,
+          updatedAt: now
+        })
+        : checked;
+      company.channelExposures[channel] = saved;
+      changed.push(saved);
       if (["yanolja", "tteonayo"].includes(channel)) await sleep(180);
     }
   } else if (action === "clear") {
@@ -12189,6 +12398,11 @@ async function saveCompanyChannelExposure(payload = {}) {
       error.statusCode = 400;
       throw error;
     }
+    if (saved.appliedToSummary && !saved.url) {
+      const error = new Error("B카드에 적용하려면 판매 업체 상세 URL을 입력하세요.");
+      error.statusCode = 400;
+      throw error;
+    }
     company.channelExposures[channel] = saved;
     changed.push(saved);
   }
@@ -12208,6 +12422,11 @@ async function saveCompanyChannelExposure(payload = {}) {
         evidenceUrl: entry.evidenceUrl || "",
         source: entry.source || "",
         method: entry.method || "",
+        inventoryMode: entry.inventoryMode || "unknown",
+        appliedToSummary: Boolean(entry.appliedToSummary),
+        routineMode: entry.routineMode || "",
+        lastRoutineStatus: entry.lastRoutineStatus || "",
+        lastRoutineCheckedAt: entry.lastRoutineCheckedAt || "",
         checkedAt: entry.checkedAt || "",
         searchKeyword: entry.searchKeyword || "",
         note: entry.note || ""
@@ -15688,9 +15907,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-current-history-v52"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-current-history-v52"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-current-history-v52"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-yeogi-paste-v55"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-yeogi-paste-v55"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-yeogi-paste-v55"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);
@@ -16098,6 +16317,12 @@ async function route(req, res) {
       if (!requireAdminSession(session, req, res)) return;
       const payload = await parseJsonBody(req);
       return send(res, 200, await saveCompanyChannelExposure(payload));
+    }
+
+    if (req.method === "POST" && reqUrl.pathname === "/api/company-master/yeogi-manual-import") {
+      if (!requireAdminSession(session, req, res)) return;
+      const payload = await parseJsonBody(req);
+      return send(res, 200, await saveYeogiCompanyPaste(payload));
     }
 
     if (req.method === "POST" && reqUrl.pathname === "/api/company-master/admin-review") {
