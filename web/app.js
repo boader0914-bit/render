@@ -23794,6 +23794,7 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "", optio
   const soldQuantityValue = String(product.soldQuantity ?? "");
   const productOpen = adminDbChannelProductHasValue(product) ? "open" : "";
   const applied = adminDbChannelAppliedToSummary(entry);
+  const canPasteYeogiScreen = channelKey === "yeogi" && applied && Boolean(entry.url);
   const sourceLabel = applied ? "B카드 적용" : saved ? "설정 저장됨" : "설정 전";
   const routineLabel = ADMIN_DB_AUTO_CHANNEL_KEYS.includes(channelKey)
     ? "B카드에서 누르면 공개 화면을 자동 확인합니다."
@@ -23826,6 +23827,7 @@ function adminDbChannelExposureForm(row = {}, channelKey = "", label = "", optio
       </div>
       <div class="admin-db-channel-actions admin-db-channel-apply-actions">
         ${searchUrl ? `<a href="${escapeHtml(searchUrl)}" target="_blank" rel="noreferrer">채널 화면 열기</a>` : ""}
+        ${channelKey === "yeogi" ? `<button type="button" data-company-channel-manual-collect data-company-id="${escapeHtml(company.companyId || "")}" data-channel-key="yeogi" data-channel-url="${escapeHtml(entry.url || "")}" ${canPasteYeogiScreen ? "" : "disabled"} title="${escapeHtml(canPasteYeogiScreen ? "여기어때 업체 화면 전체를 붙여넣습니다." : "연동 확인 유무, 재고 방식, URL을 먼저 적용하세요.")}">${canPasteYeogiScreen ? "전체 화면 붙여넣기" : "적용 후 붙여넣기"}</button>` : ""}
         <button type="button" data-company-channel-save>적용</button>
       </div>
       <details class="admin-db-channel-product-box" ${productOpen}>

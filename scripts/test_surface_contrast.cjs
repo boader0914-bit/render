@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-naver-base-channel-v74";
-const expectedAssetVersion = "v2-20260823-naver-base-channel-v56";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-yeogi-channel-paste-v75";
+const expectedAssetVersion = "v2-20260823-yeogi-channel-paste-v57";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -990,6 +990,10 @@ assert(
     && channelCorrectionFormBlock.includes("data-company-channel-link-state")
     && channelCorrectionFormBlock.includes("data-company-channel-inventory-mode")
     && channelCorrectionFormBlock.includes("data-company-channel-url")
+    && channelCorrectionFormBlock.includes('channelKey === "yeogi"')
+    && channelCorrectionFormBlock.includes("canPasteYeogiScreen")
+    && channelCorrectionFormBlock.includes('"전체 화면 붙여넣기"')
+    && channelCorrectionFormBlock.includes('"적용 후 붙여넣기"')
     && channelCorrectionFormBlock.includes(">적용</button>")
     && channelCorrectionFormBlock.includes("data-company-channel-clear")
     && app.includes("const hasProduct = Boolean(productBox?.open) && adminDbChannelProductHasValue(product);")
@@ -1001,7 +1005,7 @@ assert(
     && server.includes("inventoryMode: entry.inventoryMode || \"unknown\"")
     && server.includes('if (key === "not_linked") return "연동 없음";')
     && server.includes('"not_linked",\n    "needs_manual"'),
-  "channel correction must hide Naver controls, configure three external channels, apply only verified sales, and preserve manual routine settings",
+  "channel correction must hide Naver controls, configure three external channels, expose Yeogi full-screen paste after apply, and preserve manual routine settings",
   failures
 );
 
