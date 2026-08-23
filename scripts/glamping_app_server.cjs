@@ -12786,6 +12786,39 @@ function preferredCompanyRankKeyword(company = {}, observedTimesByRunId = null) 
 function companyRankTrend(company = {}, master = {}, observations = []) {
   const observedTimesByRunId = companyRankObservationTimeMap(company, observations);
   const selected = preferredCompanyRankKeyword(company, observedTimesByRunId);
+  const benchmarks = companyRankBenchmarkMap(master);
+  const rankPointsForKeyword = (keyword = {}) => {
+    const keywordKey = keyword.keywordKey || compactKeyword(keyword.keyword || "").toLowerCase();
+    const rows = companyKeywordRecentRuns(keyword, 40, observedTimesByRunId)
+      .filter((row) => Number.isFinite(Number(row.rank)) && Number(row.rank) > 0)
+      .sort((a, b) => String(a.collectedAt || "").localeCompare(String(b.collectedAt || "")))
+      .slice(-24);
+    return rows.map((row, index) => {
+      const previous = index > 0 ? rows[index - 1] : null;
+      const rank = Number(row.rank);
+      const previousRank = previous ? Number(previous.rank) : null;
+      const delta = Number.isFinite(previousRank) ? previousRank - rank : null;
+      const benchmark = benchmarks.get(`${keywordKey}|${row.runId}`) || {};
+      return {
+        runId: row.runId || "",
+        collectedAt: row.collectedAt || "",
+        rank,
+        previousRank: Number.isFinite(previousRank) ? previousRank : null,
+        delta,
+        changeRate: Number.isFinite(previousRank) && previousRank > 0
+          ? Number(((previousRank - rank) / previousRank).toFixed(4))
+          : null,
+        keyword: keyword.keyword || "",
+        keywordKey,
+        searchRegion: row.searchRegion || "",
+        searchScope: row.searchScope || "",
+        searchScopeLabel: row.searchScopeLabel || "",
+        detailRankRanges: row.detailRankRanges || keyword.detailRankRanges || "",
+        regionalMedianRank: benchmark.medianRank ?? null,
+        regionalSampleCount: Number(benchmark.sampleCount || 0)
+      };
+    });
+  };
   const availableKeywords = Object.values(company.keywords || {})
     .map((keyword) => {
       const layer = keywordExposureLayer(keyword);
@@ -12793,6 +12826,7 @@ function companyRankTrend(company = {}, master = {}, observations = []) {
       const latestRun = recentRuns[0] || null;
       const previousRun = recentRuns[1] || null;
       const storedLatestRank = Number(keyword.latestRank);
+      const points = rankPointsForKeyword(keyword);
       return {
         keyword: keyword.keyword || "",
         keywordKey: keyword.keywordKey || "",
@@ -12807,7 +12841,8 @@ function companyRankTrend(company = {}, master = {}, observations = []) {
         searchRegion: latestRun?.searchRegion || keyword.searchRegion || "",
         searchScope: latestRun?.searchScope || keyword.searchScope || "",
         searchScopeLabel: latestRun?.searchScopeLabel || keyword.searchScopeLabel || "",
-        detailRankRanges: latestRun?.detailRankRanges || keyword.detailRankRanges || ""
+        detailRankRanges: latestRun?.detailRankRanges || keyword.detailRankRanges || "",
+        points
       };
     })
     .sort((a, b) => String(b.latestCollectedAt).localeCompare(String(a.latestCollectedAt)));
@@ -12823,35 +12858,8 @@ function companyRankTrend(company = {}, master = {}, observations = []) {
   }
   const keyword = selected.keyword;
   const keywordKey = keyword.keywordKey || compactKeyword(keyword.keyword || "").toLowerCase();
-  const benchmarks = companyRankBenchmarkMap(master);
-  const rows = companyKeywordRecentRuns(keyword, 40, observedTimesByRunId)
-    .filter((row) => Number.isFinite(Number(row.rank)) && Number(row.rank) > 0)
-    .sort((a, b) => String(a.collectedAt || "").localeCompare(String(b.collectedAt || "")))
-    .slice(-24);
-  const points = rows.map((row, index) => {
-    const previous = index > 0 ? rows[index - 1] : null;
-    const rank = Number(row.rank);
-    const previousRank = previous ? Number(previous.rank) : null;
-    const delta = Number.isFinite(previousRank) ? previousRank - rank : null;
-    const benchmark = benchmarks.get(`${keywordKey}|${row.runId}`) || {};
-    return {
-      runId: row.runId || "",
-      collectedAt: row.collectedAt || "",
-      rank,
-      previousRank: Number.isFinite(previousRank) ? previousRank : null,
-      delta,
-      changeRate: Number.isFinite(previousRank) && previousRank > 0
-        ? Number(((previousRank - rank) / previousRank).toFixed(4))
-        : null,
-      keyword: keyword.keyword || "",
-      keywordKey,
-      searchRegion: row.searchRegion || "",
-      searchScope: row.searchScope || "",
-      searchScopeLabel: row.searchScopeLabel || "",
-      regionalMedianRank: benchmark.medianRank ?? null,
-      regionalSampleCount: Number(benchmark.sampleCount || 0)
-    };
-  });
+  const points = availableKeywords.find((item) => item.keywordKey === keywordKey)?.points
+    || rankPointsForKeyword(keyword);
   return {
     keyword: keyword.keyword || "",
     keywordKey,
@@ -15680,9 +15688,9 @@ async function serveStatic(reqUrl, res) {
   if (["/", "/view", "/admin", "/b2b"].includes(reqUrl.pathname)) {
     const html = await fsp.readFile(path.join(WEB_DIR, "index.html"), "utf8");
     const publicHtml = html
-      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-confirmed-quantity-v51"')
-      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-confirmed-quantity-v51"')
-      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-confirmed-quantity-v51"');
+      .replace('href="/styles.css"', 'href="/styles.css?v=v2-20260823-current-history-v52"')
+      .replace('href="/admin-theme.css"', 'href="/admin-theme.css?v=v2-20260823-current-history-v52"')
+      .replace('src="/app.js"', 'src="/app.js?v=v2-20260823-current-history-v52"');
     return send(res, 200, publicHtml, "text/html; charset=utf-8");
   }
   const filePath = safeJoin(WEB_DIR, reqUrl.pathname);

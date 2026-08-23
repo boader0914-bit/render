@@ -65,6 +65,7 @@ const state = {
   adminDbSelectedCompanyId: "",
   adminDbCompanyDetails: {},
   adminDbCompanyDetailLoading: {},
+  adminDbRankKeywordByCompany: {},
   adminDbInlineCollect: null,
   adminDbRouteCompanyId: "",
   adminDbOpsOpen: false,
@@ -21222,21 +21223,33 @@ function adminDbTrendPoints(row = {}, detail = {}, kind = "rank") {
 }
 
 function adminDbRankTrendModel(row = {}, detail = {}) {
-  const observed = adminDbTrendPoints(row, detail, "rank")
-    .filter((point) => Number.isFinite(Number(point.rank)) && Number(point.rank) > 0)
-    .slice(-12)
-    .map((point) => ({ ...point, rank: Number(point.rank), synthetic: false, decisionEligible: true }));
+  const companyId = String(row.company?.companyId || detail.company?.companyId || "").trim();
   const availableKeywords = Array.isArray(detail.rankTrend?.availableKeywords) ? detail.rankTrend.availableKeywords : [];
-  const selectedKeywordKey = String(detail.rankTrend?.keywordKey || observed.at(-1)?.keywordKey || "").trim();
-  const availableLatest = availableKeywords.find((item) => selectedKeywordKey && String(item.keywordKey || "") === selectedKeywordKey)
-    || availableKeywords.find((item) => Number.isFinite(Number(item.latestRank)) && Number(item.latestRank) > 0);
-  const latestRank = optionalNumber(observed.at(-1)?.rank ?? detail.rankTrend?.currentRank ?? availableLatest?.latestRank ?? row.metrics?.rank);
+  const serverKeywordKey = String(detail.rankTrend?.keywordKey || "").trim();
+  const requestedKeywordKey = String(state.adminDbRankKeywordByCompany?.[companyId] || "").trim();
+  const requestedProfile = availableKeywords.find((item) => requestedKeywordKey && String(item.keywordKey || "") === requestedKeywordKey);
+  const serverProfile = availableKeywords.find((item) => serverKeywordKey && String(item.keywordKey || "") === serverKeywordKey);
+  const selectedProfile = requestedProfile
+    || serverProfile
+    || availableKeywords.find((item) => Number.isFinite(Number(item.latestRank)) && Number(item.latestRank) > 0)
+    || availableKeywords[0]
+    || {};
+  const selectedKeywordKey = String(selectedProfile.keywordKey || serverKeywordKey || "").trim();
+  const rootPoints = adminDbTrendPoints(row, detail, "rank");
+  const rawPoints = Array.isArray(selectedProfile.points)
+    ? selectedProfile.points
+    : (!selectedKeywordKey || selectedKeywordKey === serverKeywordKey ? rootPoints : []);
+  const observed = rawPoints
+    .filter((point) => Number.isFinite(Number(point.rank)) && Number(point.rank) > 0)
+    .slice(-24)
+    .map((point) => ({ ...point, rank: Number(point.rank), synthetic: false, decisionEligible: true }));
+  const latestRank = optionalNumber(observed.at(-1)?.rank ?? selectedProfile.latestRank ?? (selectedKeywordKey === serverKeywordKey ? detail.rankTrend?.currentRank : NaN));
   const regionalRank = optionalNumber(
     observed.at(-1)?.regionalMedianRank
-      ?? detail.rankTrend?.regionalMedianRank
-      ?? detail.rankTrend?.benchmarkRank
+      ?? (selectedKeywordKey === serverKeywordKey ? detail.rankTrend?.regionalMedianRank : NaN)
+      ?? (selectedKeywordKey === serverKeywordKey ? detail.rankTrend?.benchmarkRank : NaN)
   );
-  const regionalSampleCount = Number(observed.at(-1)?.regionalSampleCount || detail.rankTrend?.regionalSampleCount || 0);
+  const regionalSampleCount = Number(observed.at(-1)?.regionalSampleCount || (selectedKeywordKey === serverKeywordKey ? detail.rankTrend?.regionalSampleCount : 0) || 0);
   return {
     points: observed,
     observed,
@@ -21244,8 +21257,9 @@ function adminDbRankTrendModel(row = {}, detail = {}) {
     regionalRank,
     regionalSampleCount,
     availableKeywords,
-    keyword: detail.rankTrend?.keyword || observed.at(-1)?.keyword || availableLatest?.keyword || "",
-    keywordKey: selectedKeywordKey || availableLatest?.keywordKey || "",
+    keyword: selectedProfile.keyword || observed.at(-1)?.keyword || (selectedKeywordKey === serverKeywordKey ? detail.rankTrend?.keyword : "") || "",
+    keywordKey: selectedKeywordKey,
+    latestCollectedAt: observed.at(-1)?.collectedAt || selectedProfile.latestCollectedAt || "",
     evidenceClass: "observed",
     badge: observed.length ? `실제 순위 관측 ${fmtNumber(observed.length)}회` : "순위 관측 없음",
     disclosure: observed.length >= 2
@@ -21301,11 +21315,11 @@ function adminDbRankHistoryChartHtml(row = {}, model = {}) {
   return `
     <figure class="admin-company-chart-panel admin-company-rank-chart-panel" data-ui-surface="soft" data-evidence-class="${escapeHtml(model.evidenceClass || "observed")}">
       <div class="admin-company-chart-heading">
-        <div><strong>플레이스 순위 누적</strong><small>낮을수록 상위 · 권역 기준 비교</small></div>
+        <div><strong>${escapeHtml(model.keyword ? `${model.keyword} · 플레이스 누적순위` : "플레이스 누적순위")}</strong><small>동일 집계 키워드만 연결 · 낮을수록 상위</small></div>
         <mark data-evidence-badge="${escapeHtml(model.evidenceClass || "observed")}">${escapeHtml(model.badge || "실제 관측")}</mark>
       </div>
       <svg class="admin-company-history-chart ${model.presentationOnly ? "is-synthetic" : "is-observed"}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
-        <title id="${chartId}Title">플레이스 순위 누적 그래프</title>
+        <title id="${chartId}Title">${escapeHtml(model.keyword ? `${model.keyword} 플레이스 순위 누적 그래프` : "플레이스 순위 누적 그래프")}</title>
         <desc id="${chartId}Desc">${escapeHtml(model.disclosure || "플레이스 순위 변화를 표시합니다.")}</desc>
         ${grid}${benchmark}
         ${coordinates.length >= 2 ? `<polyline class="admin-company-chart-rank-line is-observed" points="${polyline}"></polyline>` : ""}
@@ -22532,6 +22546,242 @@ function adminDbReferenceDeltaTag(text = "비교 대기", tone = "neutral") {
   return `<mark class="admin-reference-delta" data-ui-status="${escapeHtml(tone)}">${escapeHtml(text)}</mark>`;
 }
 
+function adminDbReferenceRankKeywordControlHtml(row = {}, rankModel = {}) {
+  const companyId = String(row.company?.companyId || "").trim();
+  const profiles = Array.isArray(rankModel.availableKeywords) ? rankModel.availableKeywords : [];
+  if (!profiles.length) {
+    return `<span class="admin-reference-rank-keyword-empty">순위 집계 키워드 없음</span>`;
+  }
+  if (profiles.length === 1) {
+    return `<span class="admin-reference-rank-keyword-static"><span>순위 집계 키워드</span><strong>${escapeHtml(rankModel.keyword || profiles[0].keyword || "키워드 확인")}</strong></span>`;
+  }
+  return `
+    <label class="admin-reference-rank-keyword-control">
+      <span>순위 집계 키워드</span>
+      <select data-admin-db-rank-keyword data-company-id="${escapeHtml(companyId)}" aria-label="플레이스 순위 집계 키워드">
+        ${profiles.map((profile) => {
+          const key = String(profile.keywordKey || "");
+          const label = profile.keyword || profile.searchRegion || "키워드 확인";
+          const scope = profile.searchScopeLabel || profile.detailRankRanges || "";
+          return `<option value="${escapeHtml(key)}"${key === rankModel.keywordKey ? " selected" : ""}>${escapeHtml(`${label}${scope ? ` · ${scope}` : ""}`)}</option>`;
+        }).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function adminDbReferenceWeekdayRate(rows = [], label = "평일", days = []) {
+  const matching = (Array.isArray(rows) ? rows : []).filter((item) => {
+    const date = adminDbReferenceIsoDate(item.date);
+    return date && days.includes(new Date(`${date}T00:00:00Z`).getUTCDay());
+  });
+  const complete = matching.filter((item) => Number.isFinite(optionalNumber(item.total)) && Number.isFinite(optionalNumber(item.sold)));
+  const total = complete.reduce((sum, item) => sum + Number(item.total), 0);
+  const sold = complete.reduce((sum, item) => sum + Number(item.sold), 0);
+  return {
+    label,
+    rate: complete.length && total > 0 ? adminDbChartClamp(sold / total, 0, 1) : NaN,
+    observedDays: complete.length,
+    matchingDays: matching.length,
+    total,
+    sold
+  };
+}
+
+function adminDbReferencePeriodRateChartHtml(row = {}, rows = [], periodLabel = "") {
+  const points = (Array.isArray(rows) ? rows : []).map((item) => {
+    const total = optionalNumber(item.total);
+    const sold = optionalNumber(item.sold);
+    const explicitRate = optionalNumber(item.reservationRate ?? item.rate);
+    const rate = Number.isFinite(total) && total > 0 && Number.isFinite(sold)
+      ? adminDbChartClamp(sold / total, 0, 1)
+      : (Number.isFinite(explicitRate) ? adminDbChartClamp(explicitRate, 0, 1) : NaN);
+    return { ...item, date: adminDbReferenceIsoDate(item.date), rate };
+  }).filter((item) => item.date && Number.isFinite(item.rate)).sort((a, b) => adminDbReferenceDateRowCompare(a, b));
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminReferencePeriodRate-${adminDbChartSafeId(companyId)}`;
+  if (!points.length) {
+    return `
+      <figure class="admin-reference-period-chart admin-company-chart-panel" data-ui-surface="soft">
+        <div class="admin-company-chart-heading"><div><strong>기간별 예약율</strong><small>${escapeHtml(periodLabel || "오늘 이후 예약일")}</small></div><mark data-evidence-badge="derived">관측 대기</mark></div>
+        <div class="admin-reference-chart-empty">해당 기간 관측 없음</div>
+      </figure>
+    `;
+  }
+  const width = 760;
+  const height = 190;
+  const left = 44;
+  const right = 22;
+  const top = 22;
+  const bottom = 34;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const xFor = (index) => left + index * (plotWidth / Math.max(1, points.length - 1));
+  const yFor = (rate) => top + (1 - adminDbChartClamp(rate, 0, 1)) * plotHeight;
+  const coordinates = points.map((point, index) => ({ point, index, x: xFor(index), y: yFor(point.rate) }));
+  const grid = [0, 0.5, 1].map((ratio) => {
+    const y = yFor(ratio);
+    return `<g><line class="admin-company-chart-gridline" x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}"></line><text class="admin-company-chart-y-label" x="${left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${Math.round(ratio * 100)}%</text></g>`;
+  }).join("");
+  const polyline = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  return `
+    <figure class="admin-reference-period-chart admin-company-chart-panel" data-ui-surface="soft" data-evidence-class="derived">
+      <div class="admin-company-chart-heading"><div><strong>기간별 예약율</strong><small>${escapeHtml(periodLabel || "실제 예약일 관측")}</small></div><mark data-evidence-badge="derived">실제 관측 ${fmtNumber(points.length)}일</mark></div>
+      <svg class="admin-company-history-chart is-observed" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+        <title id="${chartId}Title">기간별 추정 예약율 그래프</title>
+        <desc id="${chartId}Desc">저장된 예약일별 공개 재고 관측으로 계산한 예약율만 표시합니다.</desc>
+        ${grid}
+        ${coordinates.length >= 2 ? `<polyline class="admin-company-chart-rate-line is-observed" points="${polyline}"></polyline>` : ""}
+        ${coordinates.map(({ point, index, x, y }) => {
+          const labelVisible = points.length <= 8 || index === 0 || index === points.length - 1 || index === Math.floor(points.length / 2);
+          return `<g><title>${escapeHtml(`${point.date} · ${fmtRate(point.rate)}`)}</title><circle class="admin-company-chart-rate-point is-observed" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"></circle>${labelVisible ? `<text class="admin-company-chart-x-label" x="${x.toFixed(1)}" y="${height - 13}" text-anchor="middle">${escapeHtml(adminDbChartDateLabel(point.date, index))}</text>` : ""}</g>`;
+        }).join("")}
+      </svg>
+      <figcaption>미수집 날짜는 0%로 만들지 않고 그래프에서 제외합니다.</figcaption>
+    </figure>
+  `;
+}
+
+function adminDbReferenceDateRowCompare(a = {}, b = {}) {
+  return String(a.date || "").localeCompare(String(b.date || ""));
+}
+
+function adminDbReferenceCurrentSection(row = {}, model = {}) {
+  const history = adminDbReferenceResolvedSalesHistory(model);
+  const currentRows = Array.isArray(history.currentRows) ? history.currentRows : [];
+  const currentPeriod = history.currentEnd
+    ? `${adminDbReferenceDateLabel(history.today)} ~ ${adminDbReferenceDateLabel(history.currentEnd)}`
+    : "오늘 이후 확보된 예약일 없음";
+  const rateBuckets = [
+    adminDbReferenceWeekdayRate(currentRows, "추정 평일 예약율", [1, 2, 3, 4]),
+    adminDbReferenceWeekdayRate(currentRows, "추정 금요일 예약율", [5]),
+    adminDbReferenceWeekdayRate(currentRows, "추정 토요일 예약율", [6]),
+    adminDbReferenceWeekdayRate(currentRows, "추정 일요일 예약율", [0])
+  ];
+  const rankObserved = Array.isArray(model.rankObserved) ? model.rankObserved : [];
+  const latestRankPoint = rankObserved.at(-1) || {};
+  const previousRank = optionalNumber(rankObserved.at(-2)?.rank);
+  const rankDelta = Number.isFinite(model.latestRank) && Number.isFinite(previousRank) ? previousRank - model.latestRank : NaN;
+  const rankTag = Number.isFinite(rankDelta)
+    ? adminDbReferenceDeltaTag(rankDelta ? `${rankDelta > 0 ? "▲" : "▼"} ${fmtNumber(Math.abs(rankDelta))}계단` : "변동 없음", rankDelta > 0 ? "positive" : rankDelta < 0 ? "warning" : "neutral")
+    : adminDbReferenceDeltaTag(rankObserved.length ? `실제 ${fmtNumber(rankObserved.length)}회` : "관측 대기");
+  const rankBasis = Number.isFinite(model.latestRank)
+    ? `${model.keyword || "키워드"} · ${adminDbReferenceDateLabel(latestRankPoint.collectedAt || model.rankModel?.latestCollectedAt || model.collectedAt)} 관측`
+    : `${model.keyword || "선택 키워드"} · 해당 기간 관측 없음`;
+  const revenue = optionalNumber(history.current?.estimatedRevenue);
+  const observedDays = Number(history.current?.observedDays || 0);
+  const revenueValue = Number.isFinite(revenue)
+    ? fmtWon(revenue)
+    : (observedDays ? "가격 미관측으로 계산 불가" : "해당 기간 관측 없음");
+  const rateBasis = observedDays ? `${currentPeriod} · ${fmtNumber(observedDays)}일 관측` : "해당 기간 관측 없음";
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  return `
+    <section class="admin-reference-card admin-reference-current" data-layout-slot="current" aria-labelledby="adminReferenceCurrentTitle-${escapeHtml(adminDbChartSafeId(companyId))}">
+      <div class="admin-reference-section-title admin-reference-section-title-with-control">
+        <b>C</b><h3 id="adminReferenceCurrentTitle-${escapeHtml(adminDbChartSafeId(companyId))}">최근 운영 관측</h3>
+        <small>${escapeHtml(currentPeriod)}</small>
+        ${adminDbReferenceRankKeywordControlHtml(row, model.rankModel || {})}
+      </div>
+      <div class="admin-reference-current-grid">
+        <div class="admin-reference-current-kpis">
+          <article><span>플레이스 순위</span><div><strong>${Number.isFinite(model.latestRank) ? `${fmtNumber(model.latestRank)}위` : "해당 기간 관측 없음"}</strong>${rankTag}</div><small>${escapeHtml(rankBasis)}${Number.isFinite(model.regionalRank) ? ` · 같은 키워드 중간순위 ${fmtNumber(model.regionalRank)}위 · ${fmtNumber(model.rankModel?.regionalSampleCount || 0)}곳 기준` : ""}</small></article>
+          <article><span>예상매출</span><strong>${escapeHtml(revenueValue)}</strong><small>${escapeHtml(rateBasis)}</small></article>
+          ${rateBuckets.map((bucket) => `<article><span>${escapeHtml(bucket.label)}</span><strong>${Number.isFinite(bucket.rate) ? escapeHtml(fmtRate(bucket.rate)) : "해당 기간 관측 없음"}</strong><small>${bucket.observedDays ? `${fmtNumber(bucket.observedDays)}일 · 판매추정 ${fmtNumber(bucket.sold)}/${fmtNumber(bucket.total)}` : "수량 근거 없음"}</small></article>`).join("")}
+        </div>
+        ${adminDbReferencePeriodRateChartHtml(row, currentRows, currentPeriod)}
+      </div>
+      <p class="admin-reference-footnote">예약율과 예상매출은 네이버 공개 가격·재고 관측 기반 추정값입니다. 미수집 날짜는 0으로 계산하지 않습니다.</p>
+    </section>
+  `;
+}
+
+function adminDbLeadTimeTrendChartHtml(row = {}, detail = {}) {
+  const leadTime = detail.leadTime || {};
+  const byDate = new Map();
+  (Array.isArray(leadTime.recentEvents) ? leadTime.recentEvents : []).forEach((event) => {
+    const date = adminDbReferenceIsoDate(event.collectedAt || event.collectedDate);
+    const days = optionalNumber(event.leadTimeDays);
+    const pickup = optionalNumber(event.pickup);
+    if (!date || !Number.isFinite(days) || !Number.isFinite(pickup) || pickup <= 0) return;
+    const bucket = byDate.get(date) || { date, weightedDays: 0, pickup: 0 };
+    bucket.weightedDays += days * pickup;
+    bucket.pickup += pickup;
+    byDate.set(date, bucket);
+  });
+  const points = [...byDate.values()].map((item) => ({ ...item, averageDays: item.weightedDays / item.pickup })).sort(adminDbReferenceDateRowCompare);
+  const companyId = row.company?.companyId || row.company?.primaryName || "company";
+  const chartId = `adminCompanyLeadTimeTrend-${adminDbChartSafeId(companyId)}`;
+  if (!points.length) {
+    return `
+      <figure class="admin-company-chart-panel admin-reference-leadtime-trend" data-ui-surface="soft">
+        <div class="admin-company-chart-heading"><div><strong>누적 리드타임 추이</strong><small>동일 숙박일 Pickup 기반 추정</small></div><mark data-evidence-badge="derived">반복수집 필요</mark></div>
+        <div class="admin-reference-chart-empty">반복수집 자료 없음</div>
+      </figure>
+    `;
+  }
+  const width = 560;
+  const height = 190;
+  const left = 42;
+  const right = 22;
+  const top = 24;
+  const bottom = 34;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const maxDays = Math.max(1, ...points.map((point) => point.averageDays));
+  const yMax = Math.max(7, Math.ceil(maxDays / 7) * 7);
+  const xFor = (index) => left + index * (plotWidth / Math.max(1, points.length - 1));
+  const yFor = (value) => top + (1 - adminDbChartClamp(value / yMax, 0, 1)) * plotHeight;
+  const coordinates = points.map((point, index) => ({ point, index, x: xFor(index), y: yFor(point.averageDays) }));
+  const grid = [0, 0.5, 1].map((ratio) => {
+    const y = top + (1 - ratio) * plotHeight;
+    return `<g><line class="admin-company-chart-gridline" x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}"></line><text class="admin-company-chart-y-label" x="${left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${(yMax * ratio).toFixed(0)}일</text></g>`;
+  }).join("");
+  const polyline = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  return `
+    <figure class="admin-company-chart-panel admin-reference-leadtime-trend" data-ui-surface="soft" data-evidence-class="derived">
+      <div class="admin-company-chart-heading"><div><strong>누적 리드타임 추이</strong><small>동일 숙박일 Pickup 기반 추정</small></div><mark data-evidence-badge="derived">실제 관측 ${fmtNumber(points.length)}회</mark></div>
+      <svg class="admin-company-history-chart is-observed" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="${chartId}Title" aria-describedby="${chartId}Desc">
+        <title id="${chartId}Title">누적 리드타임 추이 그래프</title><desc id="${chartId}Desc">수집일별 Pickup 가중 평균 리드타임을 표시합니다.</desc>
+        ${grid}
+        ${coordinates.length >= 2 ? `<polyline class="admin-company-chart-leadtime-line is-observed" points="${polyline}"></polyline>` : ""}
+        ${coordinates.map(({ point, index, x, y }) => `<g><title>${escapeHtml(`${point.date} · ${point.averageDays.toFixed(1)}일 · Pickup ${fmtNumber(point.pickup)}건`)}</title><circle class="admin-company-chart-leadtime-point is-observed" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"></circle>${points.length <= 6 || index === 0 || index === points.length - 1 ? `<text class="admin-company-chart-x-label" x="${x.toFixed(1)}" y="${height - 13}" text-anchor="middle">${escapeHtml(adminDbChartDateLabel(point.date, index))}</text>` : ""}</g>`).join("")}
+      </svg>
+      <figcaption>실제 예약 접수일이 아니라 동일 숙박일의 공개 재고 감소 시점으로 추정합니다.</figcaption>
+    </figure>
+  `;
+}
+
+function adminDbReferenceHistorySection(row = {}, detail = {}, model = {}, maintenanceHtml = "") {
+  const history = adminDbReferenceResolvedSalesHistory(model);
+  const pastPeriod = history.pastStart
+    ? `${adminDbReferenceDateLabel(history.pastStart)} ~ ${adminDbReferenceDateLabel(history.pastEnd || history.yesterday)}`
+    : "지난 관측자료 없음";
+  const rankRunCount = model.rankObserved?.length || 0;
+  const performanceRunCount = model.performanceObserved?.length || 0;
+  const historyMeta = [
+    model.keyword ? `${model.keyword} 순위 ${fmtNumber(rankRunCount)}회` : "순위 키워드 없음",
+    performanceRunCount ? `판매 ${fmtNumber(performanceRunCount)}회` : "판매 누적 대기"
+  ].join(" · ");
+  return `
+    <section class="admin-reference-card admin-reference-history" data-layout-slot="history" aria-labelledby="adminReferenceHistoryTitle">
+      <div class="admin-reference-section-title admin-reference-section-title-meta"><b>D</b><h3 id="adminReferenceHistoryTitle">누적 이력·관리</h3><small>${escapeHtml(historyMeta)}</small></div>
+      <div class="admin-reference-history-chart-grid">
+        ${adminDbRankHistoryChartHtml(row, model.rankModel || {})}
+        ${adminDbPerformanceChartHtml(row, model.performanceModel || {})}
+        ${adminDbLeadTimeTrendChartHtml(row, detail)}
+      </div>
+      <details class="admin-reference-history-fold">
+        <summary><div><strong>지난 관측자료</strong><small>${escapeHtml(pastPeriod)} · 연도 → 월 → 주 → 일</small></div><span>${history.archive.length ? `${fmtNumber(history.archive.length)}개 연도` : "자료 없음"}</span></summary>
+        <div class="admin-reference-archive-tree">
+          ${history.archive.length ? adminDbReferenceArchiveHtml(history.archive) : `<div class="admin-reference-empty">어제 이전의 날짜별 관측자료가 없습니다.</div>`}
+        </div>
+      </details>
+      ${maintenanceHtml}
+      <p class="admin-reference-footnote">누적 그래프는 실제로 저장된 관측점만 표시합니다. 순위 그래프는 선택한 하나의 집계 키워드 이력만 연결합니다.</p>
+    </section>
+  `;
+}
+
 function adminDbReferenceTrendSection(row = {}, detail = {}, model = {}) {
   const rankObserved = Array.isArray(model.rankObserved) ? model.rankObserved : [];
   const performanceObserved = Array.isArray(model.performanceObserved) ? model.performanceObserved : [];
@@ -22684,8 +22934,8 @@ function adminDbReferenceArchiveWeekHtml(week = {}) {
 }
 
 function adminDbReferenceArchiveHtml(archive = []) {
-  return archive.map((year, yearIndex) => `
-    <details class="admin-reference-archive-level admin-reference-archive-year"${yearIndex === 0 ? " open" : ""}>
+  return archive.map((year) => `
+    <details class="admin-reference-archive-level admin-reference-archive-year">
       <summary><span class="admin-reference-archive-label"><strong>${escapeHtml(`${year.year || year.key}년`)}</strong><small>${fmtNumber(year.summary?.observedDays ?? year.rows?.length ?? 0)}일 관측</small></span>${adminDbReferenceArchiveMetricsHtml(year.summary)}</summary>
       <div class="admin-reference-archive-children">
         ${(year.months || []).map((month, monthIndex) => `
@@ -22762,16 +23012,16 @@ function adminDbReferenceRecentSection(model = {}) {
   `;
 }
 
-function adminDbCompanyReferenceDashboardHtml(row = {}, detail = {}) {
+function adminDbCompanyReferenceDashboardHtml(row = {}, detail = {}, maintenanceHtml = "") {
   const model = adminDbCumulativeDashboardModel(row, detail);
   return `
-    <div class="admin-reference-dashboard" data-layout-contract="company-db-reference-v1">
+    <div class="admin-reference-dashboard" data-layout-contract="company-db-reference-v2">
       <div class="admin-reference-top-grid" data-layout-slot="basics-channels">
         ${adminDbReferenceBasicsCard(row, detail, model)}
         ${adminDbReferenceChannelsCard(row)}
       </div>
-      ${adminDbReferenceTrendSection(row, detail, model)}
-      ${adminDbReferenceRecentSection(model)}
+      ${adminDbReferenceCurrentSection(row, model)}
+      ${adminDbReferenceHistorySection(row, detail, model, maintenanceHtml)}
     </div>
   `;
 }
@@ -22803,7 +23053,7 @@ function adminDbInlineCollectionHtml(companyId = "") {
   `;
 }
 
-function adminDbSelectedOverviewCardsHtml(row = {}) {
+function adminDbSelectedOverviewCardsHtml(row = {}, maintenanceHtml = "") {
   const company = row.company || {};
   const detail = adminDbDetailPayload(company.companyId || "") || {};
   const loading = Boolean(state.adminDbCompanyDetailLoading?.[company.companyId || ""]);
@@ -22811,7 +23061,7 @@ function adminDbSelectedOverviewCardsHtml(row = {}) {
     ${loading ? `<div class="admin-company-detail-loading" data-ui-surface="soft" role="status"><i class="admin-company-loading" aria-hidden="true"></i><span>날짜별·누적 상세를 불러오는 중입니다.</span></div>` : ""}
     ${detail.error ? `<div class="admin-company-detail-error" data-ui-surface="soft" data-ui-status="warning">${escapeHtml(detail.error)} 기존 저장값을 먼저 표시합니다.</div>` : ""}
     <div class="admin-company-overview admin-company-overview-reference">
-      ${adminDbCompanyReferenceDashboardHtml(row, detail)}
+      ${adminDbCompanyReferenceDashboardHtml(row, detail, maintenanceHtml)}
     </div>
   `;
 }
@@ -23717,6 +23967,72 @@ function adminDbSelectedRow(rows = []) {
   return selected || adminDbWorkRows(rows)[0] || rows[0] || null;
 }
 
+function adminDbCompanyMaintenanceHtml({ company = {}, selectedId = "", nextAction = {}, profileBody = "", correctionBody = "", channelBody = "", collectBody = "", reviewBody = "" } = {}) {
+  return `
+    <details class="admin-company-maintenance" data-ui-surface="card">
+      <summary>
+        <div><strong>검토·수정 도구</strong><small>기준값, 채널, 수집 근거, 검수 상태가 필요할 때만 엽니다.</small></div>
+        <span>도구 열기</span>
+      </summary>
+      <section class="admin-db-selected-workbench" aria-label="검토와 수정">
+        ${adminDbSelectedDetailTabs(nextAction.foldKey)}
+        ${adminDbReviewFlashHtml(selectedId)}
+        <div class="admin-db-selected-workbench-stack">
+          ${adminDbSelectedFoldBlock({
+            label: "기본정보",
+            title: "업체명·주소·지역·업종",
+            note: company.adminProfile ? "관리자 확정값 저장됨" : "확정 전",
+            body: profileBody,
+            open: nextAction.foldKey === "profile",
+            tone: "profile",
+            foldKey: "profile"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "기준값",
+            title: "객실 총량·상품·가격 기준 수정",
+            note: nextAction.foldKey === "correction" ? "먼저 처리" : "접어서 보관",
+            body: correctionBody,
+            open: nextAction.foldKey === "correction",
+            tone: "edit",
+            foldKey: "correction"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "채널",
+            title: "OTA 노출·URL·총량·판매갯수 보정",
+            note: nextAction.foldKey === "channel" ? "먼저 처리" : "접어서 보관",
+            body: channelBody,
+            open: nextAction.foldKey === "channel",
+            tone: "channel",
+            foldKey: "channel"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "수집",
+            title: "요일별 예상매출·추정 예약율·수량 근거",
+            note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
+            body: collectBody,
+            open: nextAction.foldKey === "collect",
+            tone: "collect",
+            foldKey: "collect"
+          })}
+          ${adminDbSelectedFoldBlock({
+            label: "검수",
+            title: "완료·보류·보정 필요 상태 저장",
+            note: nextAction.foldKey === "review" ? "먼저 처리" : "최종 상태 저장",
+            body: reviewBody,
+            open: nextAction.foldKey === "review",
+            tone: "review",
+            foldKey: "review"
+          })}
+        </div>
+        <div class="admin-db-detail-bottom-actions">
+          <button type="button" data-admin-db-view-link="list">목록으로</button>
+          <a href="/b2b?userView=admin" target="_blank" rel="noreferrer">사업자 화면</a>
+        </div>
+      </section>
+    </details>
+  `;
+}
+
 function adminDbSelectedDetailPanel(rows = []) {
   const row = adminDbSelectedRow(rows);
   if (!row) {
@@ -23771,6 +24087,16 @@ function adminDbSelectedDetailPanel(rows = []) {
       ${companyReviewActionsHtml(company, true, "admin_db_detail")}
     </div>
   `;
+  const maintenanceHtml = adminDbCompanyMaintenanceHtml({
+    company,
+    selectedId,
+    nextAction,
+    profileBody,
+    correctionBody,
+    channelBody,
+    collectBody,
+    reviewBody
+  });
   state.adminDbSelectedCompanyId = selectedId;
   return `
     <section class="admin-db-selected-panel admin-db-selected-panel-cumulative" data-admin-db-selected-company="${escapeHtml(selectedId)}">
@@ -23797,68 +24123,7 @@ function adminDbSelectedDetailPanel(rows = []) {
         <button type="button" data-admin-db-open-fold="collect">수집 근거</button>
       </div>
       ${adminDbInlineCollectionHtml(selectedId)}
-      ${adminDbSelectedOverviewCardsHtml(row)}
-      <details class="admin-company-maintenance" data-ui-surface="card">
-        <summary>
-          <div><strong>검토·수정 도구</strong><small>기준값, 채널, 수집 근거, 검수 상태가 필요할 때만 엽니다.</small></div>
-          <span>도구 열기</span>
-        </summary>
-        <section class="admin-db-selected-workbench" aria-label="검토와 수정">
-          ${adminDbSelectedDetailTabs(nextAction.foldKey)}
-          ${adminDbReviewFlashHtml(selectedId)}
-          <div class="admin-db-selected-workbench-stack">
-            ${adminDbSelectedFoldBlock({
-              label: "기본정보",
-              title: "업체명·주소·지역·업종",
-              note: company.adminProfile ? "관리자 확정값 저장됨" : "확정 전",
-              body: profileBody,
-              open: nextAction.foldKey === "profile",
-              tone: "profile",
-              foldKey: "profile"
-            })}
-            ${adminDbSelectedFoldBlock({
-              label: "기준값",
-              title: "객실 총량·상품·가격 기준 수정",
-              note: nextAction.foldKey === "correction" ? "먼저 처리" : "접어서 보관",
-              body: correctionBody,
-              open: nextAction.foldKey === "correction",
-              tone: "edit",
-              foldKey: "correction"
-            })}
-            ${adminDbSelectedFoldBlock({
-              label: "채널",
-              title: "OTA 노출·URL·총량·판매갯수 보정",
-              note: nextAction.foldKey === "channel" ? "먼저 처리" : "접어서 보관",
-              body: channelBody,
-              open: nextAction.foldKey === "channel",
-              tone: "channel",
-              foldKey: "channel"
-            })}
-            ${adminDbSelectedFoldBlock({
-              label: "수집",
-              title: "요일별 예상매출·추정 예약율·수량 근거",
-              note: nextAction.foldKey === "collect" ? "먼저 처리" : (collectBody ? "필요 시 실행" : "현재 추가 없음"),
-              body: collectBody,
-              open: nextAction.foldKey === "collect",
-              tone: "collect",
-              foldKey: "collect"
-            })}
-            ${adminDbSelectedFoldBlock({
-              label: "검수",
-              title: "완료·보류·보정 필요 상태 저장",
-              note: nextAction.foldKey === "review" ? "먼저 처리" : "최종 상태 저장",
-              body: reviewBody,
-              open: nextAction.foldKey === "review",
-              tone: "review",
-              foldKey: "review"
-            })}
-          </div>
-          <div class="admin-db-detail-bottom-actions">
-            <button type="button" data-admin-db-view-link="list">목록으로</button>
-            <a href="/b2b?userView=admin" target="_blank" rel="noreferrer">사업자 화면</a>
-          </div>
-        </section>
-      </details>
+      ${adminDbSelectedOverviewCardsHtml(row, maintenanceHtml)}
     </section>
   `;
 }
@@ -34905,6 +35170,18 @@ function bindEvents() {
     rerenderCompanyMasterPreservingSearch();
   });
   document.addEventListener("change", (event) => {
+    const rankKeyword = event.target.closest("[data-admin-db-rank-keyword]");
+    if (rankKeyword) {
+      const companyId = String(rankKeyword.dataset.companyId || state.adminDbSelectedCompanyId || "").trim();
+      if (companyId) {
+        state.adminDbRankKeywordByCompany = state.adminDbRankKeywordByCompany || {};
+        state.adminDbRankKeywordByCompany[companyId] = rankKeyword.value || "";
+      }
+      renderAdminConsoleDashboard();
+      window.requestAnimationFrame(() => Array.from(document.querySelectorAll("[data-admin-db-rank-keyword]"))
+        .find((control) => control.dataset.companyId === companyId)?.focus());
+      return;
+    }
     const deleteStatus = event.target.closest("[data-account-delete-status]");
     if (deleteStatus) {
       updateAccountDeleteRequestStatus(deleteStatus.dataset.accountDeleteStatus || "", {

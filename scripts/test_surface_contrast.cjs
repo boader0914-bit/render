@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-confirmed-quantity-v69";
-const expectedAssetVersion = "v2-20260823-confirmed-quantity-v51";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-current-history-v70";
+const expectedAssetVersion = "v2-20260823-current-history-v52";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -794,8 +794,8 @@ const cumulativeCssBlock = styles.slice(
   styles.indexOf("/* Region keyword readability", styles.indexOf("/* Company cumulative DB v1:"))
 );
 const referenceCssBlock = styles.slice(
-  styles.indexOf("/* Company DB reference v1:"),
-  styles.indexOf("/* Region keyword readability", styles.indexOf("/* Company DB reference v1:"))
+  styles.indexOf("/* Company DB reference v2:"),
+  styles.indexOf("/* Region keyword readability", styles.indexOf("/* Company DB reference v2:"))
 );
 
 assert(
@@ -937,7 +937,9 @@ assert(
     && adminDbDetailBlock.includes("admin-company-reference-freshness")
     && adminDbDetailBlock.includes('data-admin-db-open-fold="review"')
     && adminDbDetailBlock.includes('data-admin-db-open-fold="collect"')
-    && adminDbDetailBlock.includes("admin-company-maintenance"),
+    && adminDbDetailBlock.includes("maintenanceHtml")
+    && app.includes("function adminDbCompanyMaintenanceHtml(")
+    && referenceDashboardBlock.includes("adminDbReferenceHistorySection(row, detail, model, maintenanceHtml)"),
   "company review must lead with the attached reference dashboard, inline auto collection, and collapsed detail tools",
   failures
 );
@@ -949,7 +951,7 @@ assert(
     && indexHtml.includes('id="headerLogoutButton"')
     && indexHtml.includes('id="openControlButton"')
     && !/body\.role-admin #openControlButton\s*\{\s*display:\s*none;?\s*\}/.test(styles)
-    && !/body\.role-admin:has\(#adminPanel\.active \[data-layout-contract="company-db-reference-v1"\]\) \.app-header\s*\{\s*display:\s*none;?\s*\}/.test(themeStyles),
+    && !/body\.role-admin:has\(#adminPanel\.active \[data-layout-contract="company-db-reference-v2"\]\) \.app-header\s*\{\s*display:\s*none;?\s*\}/.test(themeStyles),
   "company review must keep the shared theme, logout, filter management, and navigation header visible",
   failures
 );
@@ -966,12 +968,12 @@ assert(
 
 const referenceSlotOrder = [
   'data-layout-slot="basics-channels"',
-  "adminDbReferenceTrendSection(row, detail, model)",
-  "adminDbReferenceRecentSection(model)"
+  "adminDbReferenceCurrentSection(row, model)",
+  "adminDbReferenceHistorySection(row, detail, model, maintenanceHtml)"
 ].map((token) => referenceDashboardBlock.indexOf(token));
 
 assert(
-  referenceDashboardBlock.includes('data-layout-contract="company-db-reference-v1"')
+  referenceDashboardBlock.includes('data-layout-contract="company-db-reference-v2"')
     && referenceSlotOrder.every((index) => index >= 0)
     && referenceSlotOrder.every((index, position) => position === 0 || index > referenceSlotOrder[position - 1])
     && referenceDashboardBlock.includes("adminDbReferenceBasicsCard(row, detail, model)")
@@ -979,10 +981,13 @@ assert(
     && adminCompanyChartBlock.includes("A · 업체 기본정보") === false
     && adminCompanyChartBlock.includes("업체 기본정보")
     && adminCompanyChartBlock.includes("예약 채널")
-    && adminCompanyChartBlock.includes("누적 변동 지표")
-    && adminCompanyChartBlock.includes("최근 판매 관측")
+    && adminCompanyChartBlock.includes("최근 운영 관측")
+    && adminCompanyChartBlock.includes("누적 이력·관리")
+    && adminCompanyChartBlock.includes("추정 평일 예약율")
+    && adminCompanyChartBlock.includes("누적 리드타임 추이")
+    && adminCompanyChartBlock.includes("data-admin-db-rank-keyword")
     && adminCompanyChartBlock.includes("네이버 예약 노출과 외부 OTA 입점·재고 연동은 서로 다른 근거"),
-  "company reference dashboard must render A and B first, then D cumulative evidence and C recent observations",
+  "company reference dashboard must render A and B first, then C current observations and D cumulative history with keyword-scoped rank",
   failures
 );
 
@@ -1023,7 +1028,7 @@ assert(
     && !saveAdminProfileBlock.includes("lodgingBasisTotal:")
     && !saveAdminProfileBlock.includes("dayUseBasisTotal:")
     && !saveAdminProfileBlock.includes("roomSegments:")
-    && adminDbDetailBlock.includes('foldKey: "profile"')
+    && app.includes('foldKey: "profile"')
     && app.includes("function adminDbAdminProfilePanel(")
     && app.includes("function saveCompanyAdminProfile(")
     && app.includes('fetchJson("/api/company-master/admin-profile"')
@@ -1341,8 +1346,12 @@ assert(
   referenceCssBlock.includes("grid-template-columns: minmax(0, 1.33fr) minmax(340px, 1fr)")
     && referenceCssBlock.includes("grid-template-columns: repeat(4, minmax(0, 1fr))")
     && referenceCssBlock.includes("grid-template-columns: repeat(2, minmax(0, 1fr))")
+    && referenceCssBlock.includes("grid-template-columns: minmax(410px, .95fr) minmax(0, 1.35fr)")
+    && referenceCssBlock.includes("grid-template-columns: repeat(3, minmax(0, 1fr))")
     && referenceCssBlock.includes(".admin-reference-product-table")
-    && referenceCssBlock.includes(".admin-reference-current-observation")
+    && referenceCssBlock.includes(".admin-reference-current-grid")
+    && referenceCssBlock.includes(".admin-reference-history-chart-grid")
+    && referenceCssBlock.includes(".admin-reference-history-fold")
     && referenceCssBlock.includes(".admin-reference-archive-year")
     && referenceCssBlock.includes(".admin-reference-archive-month")
     && referenceCssBlock.includes(".admin-reference-archive-week")
@@ -1353,16 +1362,22 @@ assert(
 );
 
 assert(
-  adminCompanyChartBlock.includes("현재 관측 · 오늘 ~ 최신 확보 예약일")
+  adminCompanyChartBlock.includes("function adminDbReferenceCurrentSection(")
+    && adminCompanyChartBlock.includes("오늘 이후 확보된 예약일 없음")
+    && adminCompanyChartBlock.includes("추정 평일 예약율")
+    && adminCompanyChartBlock.includes("추정 금요일 예약율")
+    && adminCompanyChartBlock.includes("추정 토요일 예약율")
+    && adminCompanyChartBlock.includes("추정 일요일 예약율")
+    && adminCompanyChartBlock.includes("기간별 예약율")
     && adminCompanyChartBlock.includes("지난 관측자료")
-    && adminCompanyChartBlock.includes("연도 → 월 → 주")
+    && adminCompanyChartBlock.includes("연도 → 월 → 주 → 일")
     && adminCompanyChartBlock.includes("adminDbReferenceResolvedSalesHistory(model)")
     && adminCompanyChartBlock.includes("model.salesHistory")
     && adminCompanyChartBlock.includes("adminDbReferenceArchiveHtml(history.archive)")
     && adminCompanyChartBlock.includes('class="admin-reference-archive-level admin-reference-archive-year"')
     && adminCompanyChartBlock.includes('class="admin-reference-archive-level admin-reference-archive-month"')
     && adminCompanyChartBlock.includes('class="admin-reference-archive-level admin-reference-archive-week"'),
-  "recent sales observations must separate current dates and expose a year-month-week archive",
+  "current sales observations must separate weekday rates and expose a year-month-week-day archive under cumulative history",
   failures
 );
 
@@ -1506,6 +1521,10 @@ const companyDailyHelperSource = app.slice(
   app.indexOf("function adminDbDailyDateCoverage("),
   app.indexOf("function adminDbCumulativeDashboardModel(")
 );
+const companyRankTrendModelSource = app.slice(
+  app.indexOf("function adminDbRankTrendModel("),
+  app.indexOf("function adminDbRankScopeRowHtml(", app.indexOf("function adminDbRankTrendModel("))
+);
 const companyChartSandbox = {};
 vm.createContext(companyChartSandbox);
 vm.runInContext(
@@ -1558,6 +1577,45 @@ assert(
     && Number.isNaN(companyChartSandbox.adminDbRankRangeEnd("1-10,21-30"))
     && Number.isNaN(companyChartSandbox.adminDbRankRangeEnd("11-30")),
   "company rank position must use only one stored continuous 1-N range and never reinterpret multi-range collections",
+  failures
+);
+
+const rankKeywordSandbox = {
+  state: { adminDbRankKeywordByCompany: { company_a: "local-key" } },
+  adminDbTrendPoints(row, detail) { return detail.rankTrend?.points || []; },
+  optionalNumber(value) {
+    if (value === "" || value === null || value === undefined) return NaN;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  },
+  fmtNumber(value) { return String(value); }
+};
+vm.createContext(rankKeywordSandbox);
+vm.runInContext(companyRankTrendModelSource, rankKeywordSandbox);
+const selectedRankKeywordModel = rankKeywordSandbox.adminDbRankTrendModel(
+  { company: { companyId: "company_a" }, metrics: { rank: 99 } },
+  {
+    rankTrend: {
+      keyword: "경남글램핑",
+      keywordKey: "regional-key",
+      points: [{ keyword: "경남글램핑", keywordKey: "regional-key", rank: 5, collectedAt: "2026-08-22" }],
+      availableKeywords: [
+        { keyword: "경남글램핑", keywordKey: "regional-key", latestRank: 5, points: [{ keywordKey: "regional-key", rank: 5, collectedAt: "2026-08-22" }] },
+        { keyword: "산청글램핑", keywordKey: "local-key", latestRank: 2, points: [{ keywordKey: "local-key", rank: 4, collectedAt: "2026-08-20" }, { keywordKey: "local-key", rank: 2, collectedAt: "2026-08-22" }] }
+      ]
+    }
+  }
+);
+assert(
+  selectedRankKeywordModel.keyword === "산청글램핑"
+    && selectedRankKeywordModel.keywordKey === "local-key"
+    && selectedRankKeywordModel.latestRank === 2
+    && selectedRankKeywordModel.points.map((point) => point.rank).join(",") === "4,2"
+    && selectedRankKeywordModel.points.every((point) => point.keywordKey === "local-key")
+    && adminDbBindEventsBlock.includes("data-admin-db-rank-keyword")
+    && adminDbBindEventsBlock.includes("adminDbRankKeywordByCompany")
+    && adminDbBindEventsBlock.includes("renderAdminConsoleDashboard()"),
+  "company rank selector must switch the KPI and cumulative chart to one keyword-specific history without falling back to another keyword",
   failures
 );
 

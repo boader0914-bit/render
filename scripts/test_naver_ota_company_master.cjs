@@ -940,6 +940,8 @@ async function main() {
     assert.equal(availableRankKeyword.searchScope, "lodging_type:글램핑");
     assert.equal(availableRankKeyword.searchScopeLabel, "글램핑");
     assert.equal(availableRankKeyword.detailRankRanges, "1-40", "rank position bars must use the stored run range rather than a UI hard cap");
+    assert.deepEqual(availableRankKeyword.points.map((row) => row.rank), [8, 5], "each selectable keyword must carry its own bounded rank history");
+    assert.ok(availableRankKeyword.points.every((row) => row.keywordKey === availableRankKeyword.keywordKey), "a selectable rank series must never mix keyword keys");
     assert.equal(companyDetail.body.performanceTrend.points.length, 2);
     assert.equal(companyDetail.body.performanceTrend.points.at(-1).estimatedRevenue, 600000);
     assert.equal(companyDetail.body.performanceTrend.points.at(-1).actualRevenue, null);
@@ -1054,6 +1056,7 @@ async function main() {
     assert.equal(latestAvailableRankKeyword.previousRank, 5);
     assert.equal(latestAvailableRankKeyword.latestRunId, detailSparseRunId);
     assert.equal(latestAvailableRankKeyword.latestCollectedAt, "2026-08-22T03:00:00.000Z", "history observation time must override the later master re-import time");
+    assert.deepEqual(latestAvailableRankKeyword.points.map((row) => row.rank), [8, 5, 4]);
     assert.equal(
       detailAfterReopen.body.rankTrend.points.find((row) => row.runId === detailSparseRunId)?.collectedAt,
       "2026-08-22T03:00:00.000Z",

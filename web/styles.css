@@ -35797,7 +35797,8 @@ body.role-admin .admin-db-company-simple .admin-db-company-tags {
 }
 
 .admin-company-chart-rate-line,
-.admin-company-chart-rank-line {
+.admin-company-chart-rank-line,
+.admin-company-chart-leadtime-line {
   fill: none;
   stroke: currentColor;
   stroke-width: 2.75;
@@ -35813,7 +35814,8 @@ body.role-admin .admin-db-company-simple .admin-db-company-tags {
 }
 
 .admin-company-chart-rate-point,
-.admin-company-chart-rank-point {
+.admin-company-chart-rank-point,
+.admin-company-chart-leadtime-point {
   fill: var(--surface-card);
   stroke: currentColor;
   stroke-width: 2;
@@ -36968,7 +36970,7 @@ body.role-admin .admin-db-selected-panel-cumulative .admin-company-detail-header
   .admin-company-loading { animation: none; }
 }
 
-/* Company DB reference v1: attached A/B/D/C review layout with live evidence. */
+/* Company DB reference v2: A/B basics, C current observation, D cumulative history and management. */
 .admin-db-selected-panel-cumulative .admin-company-reference-header,
 .admin-company-overview-reference {
   width: min(100%, 1240px);
@@ -37702,8 +37704,240 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 }
 
 .admin-reference-trends,
-.admin-reference-recent {
+.admin-reference-recent,
+.admin-reference-current,
+.admin-reference-history {
   padding: 9px 10px 10px;
+}
+
+.admin-reference-section-title-with-control {
+  flex-wrap: wrap;
+}
+
+.admin-reference-section-title-with-control > small {
+  margin-inline-end: auto;
+}
+
+.admin-reference-rank-keyword-control,
+.admin-reference-rank-keyword-static,
+.admin-reference-rank-keyword-empty {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.admin-reference-rank-keyword-control select {
+  min-width: 180px;
+  min-height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 4px 28px 4px 9px;
+  font-size: 11px;
+  font-weight: 880;
+}
+
+.admin-reference-rank-keyword-control select:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.admin-reference-rank-keyword-static strong {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--accent-strong);
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 920;
+}
+
+.admin-reference-current-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(410px, .95fr) minmax(0, 1.35fr);
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.admin-reference-current-kpis {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-reference-current-kpis > article {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-card);
+  padding: 10px 11px;
+}
+
+.admin-reference-current-kpis > article > span,
+.admin-reference-current-kpis > article > small {
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 780;
+  line-height: 1.35;
+}
+
+.admin-reference-current-kpis > article > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.admin-reference-current-kpis > article strong {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: clamp(16px, 1.7vw, 22px);
+  font-weight: 950;
+  line-height: 1.08;
+  letter-spacing: -.02em;
+  overflow-wrap: anywhere;
+}
+
+.admin-reference-period-chart,
+.admin-reference-history-chart-grid .admin-company-chart-panel {
+  min-height: 0;
+  padding: 10px;
+}
+
+.admin-reference-period-chart .admin-company-history-chart,
+.admin-reference-history-chart-grid .admin-company-history-chart {
+  max-height: 188px;
+}
+
+.admin-reference-chart-empty {
+  min-height: 142px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 7px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 12px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.admin-reference-history-chart-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.admin-reference-history-chart-grid .admin-company-chart-heading strong {
+  font-size: 12px;
+}
+
+.admin-reference-history-chart-grid .admin-company-chart-heading small,
+.admin-reference-history-chart-grid .admin-company-chart-panel figcaption {
+  font-size: 9px;
+}
+
+.admin-reference-history-chart-grid .admin-company-chart-heading mark {
+  padding: 4px 6px;
+  font-size: 8px;
+}
+
+.admin-reference-history-fold {
+  min-width: 0;
+  overflow: hidden;
+  margin-top: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-card);
+}
+
+.admin-reference-history-fold > summary {
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-reference-history-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-reference-history-fold > summary::before {
+  content: "›";
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 20px;
+  font-weight: 900;
+  transition: transform 140ms ease;
+}
+
+.admin-reference-history-fold[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.admin-reference-history-fold > summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  margin-inline-end: auto;
+}
+
+.admin-reference-history-fold > summary strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 920;
+}
+
+.admin-reference-history-fold > summary small,
+.admin-reference-history-fold > summary > span {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.admin-reference-history-fold > summary > span {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  padding: 4px 8px;
+}
+
+.admin-reference-history-fold > .admin-reference-archive-tree {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.admin-reference-history > .admin-company-maintenance {
+  margin-top: 10px;
+  border-radius: 8px;
+  background: var(--surface-card);
+}
+
+.admin-reference-history > .admin-company-maintenance > summary {
+  min-height: 52px;
+  padding: 10px 12px;
 }
 
 .admin-reference-kpi-grid {
@@ -38134,6 +38368,18 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
     grid-template-columns: 1fr;
   }
 
+  .admin-reference-current-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-reference-history-chart-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-reference-history-chart-grid > :last-child {
+    grid-column: 1 / -1;
+  }
+
   .admin-reference-basics,
   .admin-reference-channels {
     min-height: 0;
@@ -38202,6 +38448,38 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-kpi-grid,
   .admin-reference-chart-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-reference-section-title-with-control {
+    align-items: flex-start;
+  }
+
+  .admin-reference-section-title-with-control > small {
+    width: calc(100% - 39px);
+    margin-inline-start: 31px;
+  }
+
+  .admin-reference-rank-keyword-control,
+  .admin-reference-rank-keyword-static,
+  .admin-reference-rank-keyword-empty {
+    width: 100%;
+    justify-content: space-between;
+    margin-inline-start: 0;
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 7px;
+  }
+
+  .admin-reference-rank-keyword-control select {
+    width: min(100%, 250px);
+    min-width: 0;
+  }
+
+  .admin-reference-history-chart-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-reference-history-chart-grid > :last-child {
+    grid-column: auto;
   }
 
   .admin-reference-subsection-head {
@@ -38342,7 +38620,9 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
   .admin-reference-basics,
   .admin-reference-channels,
   .admin-reference-trends,
-  .admin-reference-recent {
+  .admin-reference-recent,
+  .admin-reference-current,
+  .admin-reference-history {
     padding: 8px;
   }
 
@@ -38352,6 +38632,18 @@ body.role-admin .admin-db-selected-panel.admin-db-selected-panel-cumulative {
 
   .admin-reference-kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-reference-current-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-reference-current-kpis > article {
+    padding: 9px;
+  }
+
+  .admin-reference-current-kpis > article strong {
+    font-size: 15px;
   }
 
   .admin-reference-insight-strip {
