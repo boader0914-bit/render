@@ -1124,7 +1124,7 @@ html[data-theme-resolved="light"] body.role-admin .admin-db-autocomplete {
 
 html[data-theme-resolved="dark"] body.role-admin .admin-db-autocomplete {
   border-color: var(--border-subtle) !important;
-  background: transparent !important;
+  background: var(--surface-card) !important;
   box-shadow: var(--theme-floating-subtle-shadow) !important;
 }
 

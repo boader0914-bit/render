@@ -1,4 +1,4 @@
-const CACHE_VERSION = "lodging-datalab-pwa-v20260823-a-card-blind-v66";
+const CACHE_VERSION = "lodging-datalab-pwa-v20260823-collected-correction-v68";
 const APP_SHELL = [
   "/offline.html",
   "/styles.css",

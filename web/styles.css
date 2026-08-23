@@ -5037,6 +5037,206 @@ a {
   background: var(--surface-card);
 }
 
+.admin-db-collected-correction {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 13px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  padding: 11px;
+}
+
+.admin-db-collected-correction-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-db-collected-correction-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-db-collected-correction-head span,
+.admin-db-collected-correction-head small,
+.admin-db-collected-correction-row small,
+.admin-db-collected-correction p,
+.admin-db-collected-correction-legacy-summary dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.4;
+}
+
+.admin-db-collected-correction-head strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 950;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-collected-correction-head mark {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.admin-db-collected-correction-list,
+.admin-db-collected-correction-list > .admin-db-more-list > div {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.admin-db-collected-correction-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(150px, .8fr) minmax(0, 1.45fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 11px;
+  background: var(--surface-control);
+  padding: 9px 10px;
+}
+
+.admin-db-collected-correction-row > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-db-collected-correction-row strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-collected-correction-row dl {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.admin-db-collected-correction-row dl > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.admin-db-collected-correction-row dt {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.admin-db-collected-correction-row dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 950;
+  overflow-wrap: anywhere;
+}
+
+.admin-db-collected-correction p {
+  margin: 0;
+}
+
+.admin-db-collected-correction-note {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 9px;
+}
+
+.admin-db-collected-correction-legacy-list,
+.admin-db-collected-correction-legacy-list > .admin-db-more-list > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-db-collected-correction-legacy-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.admin-db-collected-correction-legacy-summary {
+  margin: 0;
+}
+
+.admin-db-collected-correction-legacy-summary > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 11px;
+  background: var(--surface-control);
+  padding: 9px 10px;
+}
+
+.admin-db-collected-correction-legacy-summary dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 950;
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .admin-db-collected-correction-head,
+  .admin-db-collected-correction-row,
+  .admin-db-collected-correction-legacy-summary > div {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .admin-db-collected-correction-head {
+    display: grid;
+  }
+
+  .admin-db-collected-correction-head mark {
+    justify-self: start;
+  }
+
+  .admin-db-collected-correction-row dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-db-collected-correction-legacy-summary > div {
+    display: grid;
+  }
+
+  .admin-db-collected-correction-legacy-summary dd {
+    text-align: left;
+  }
+}
+
 .admin-db-quick-edit > .admin-db-correction-flash {
   width: 100%;
   min-width: 0;

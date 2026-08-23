@@ -74,7 +74,6 @@ const state = {
   adminDbMasterEnsureRequested: false,
   adminDbAuditRegionKey: "",
   adminDbQueryComposing: false,
-  adminDbQueryRenderTimer: null,
   adminRegionCompanyQueryComposing: false,
   adminRegionCompanyQueryRenderTimer: null,
   adminUserViewMode: false,
@@ -4365,11 +4364,11 @@ function manualCorrectionRoomSegmentRowHtml(row = {}, index = 0, totalRows = 1) 
   `;
 }
 
-function manualCorrectionRoomSegmentsField(correction = {}) {
+function manualCorrectionRoomSegmentsField(correction = {}, options = {}) {
   const rows = manualCorrectionRoomSegments(correction);
   const displayRows = rows.length ? rows : [cleanManualCorrectionSegment({})];
   return `
-    <details class="company-manual-segments" data-manual-segments>
+    <details class="company-manual-segments" data-manual-segments ${options.open ? "open" : ""}>
       <summary class="company-manual-segments-head">
         <div>
           <strong>객실종류/요일가격 보정</strong>
@@ -17743,6 +17742,11 @@ function companyMasterCheckPanel(master = {}) {
 
 function companyCorrectionFormHtml(company = {}, compact = false, options = {}) {
   const correction = manualCorrectionHasValue(company.manualCorrection) ? company.manualCorrection : {};
+  const showCollectedBasis = Object.hasOwn(options, "detail");
+  const collectedBasis = showCollectedBasis ? adminDbCollectedCorrectionBasis(company, options.detail || {}) : {};
+  const correctionDraft = showCollectedBasis
+    ? adminDbCollectedCorrectionDraft(correction, collectedBasis)
+    : { correction, prefilled: false, savedSegmentCount: manualCorrectionRoomSegments(correction).length };
   const regionPlaceholder = (company.regions || [])[0] || "예: 포천";
   const feedback = String(options.feedback || "").trim();
   const meta = manualCorrectionMeta(correction);
@@ -17758,6 +17762,7 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
   );
   return `
     <div class="company-manual-form correction-inline-form ${compact ? "compact" : ""}" data-company-manual-form data-company-id="${escapeHtml(company.companyId || "")}">
+      ${showCollectedBasis ? adminDbCollectedCorrectionEvidenceHtml(collectedBasis, correctionDraft) : ""}
       <section class="company-manual-section">
         <div class="company-manual-section-head">
           <span>1. 기준값</span>
@@ -17767,14 +17772,14 @@ function companyCorrectionFormHtml(company = {}, compact = false, options = {}) 
         <div class="company-manual-total-grid">
           <label>
             <span>숙박 운영 기준</span>
-            <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correction.lodgingBasisTotal || "")}" placeholder="예: 26">
+            <input type="number" min="0" inputmode="numeric" data-manual-lodging value="${escapeHtml(correctionDraft.correction.lodgingBasisTotal || "")}" placeholder="예: 26">
           </label>
           <label>
             <span>데이유즈 운영 기준</span>
-            <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correction.dayUseBasisTotal || "")}" placeholder="예: 12">
+            <input type="number" min="0" inputmode="numeric" data-manual-dayuse value="${escapeHtml(correctionDraft.correction.dayUseBasisTotal || "")}" placeholder="예: 12">
           </label>
         </div>
-        ${manualCorrectionRoomSegmentsField(correction)}
+        ${manualCorrectionRoomSegmentsField(correctionDraft.correction, { open: correctionDraft.prefilled || correctionDraft.savedSegmentCount > 0 })}
       </section>
       <details class="company-manual-section company-manual-advanced" ${advancedOpen ? "open" : ""}>
         <summary>
@@ -18037,7 +18042,7 @@ function adminDbCorrectionImpactHtml(row = {}) {
   `;
 }
 
-function adminDbQuickCorrectionPanel(row = {}) {
+function adminDbQuickCorrectionPanel(row = {}, detail = {}) {
   const company = row.company || {};
   const companyId = company.companyId || "";
   const cards = adminDbQuickCorrectionSummaryCards(row);
@@ -18055,7 +18060,7 @@ function adminDbQuickCorrectionPanel(row = {}) {
         ${cards.map(adminDbSelectedMetricCard).join("")}
       </div>
       ${adminDbCorrectionImpactHtml(row)}
-      ${companyCorrectionFormHtml(company, true)}
+      ${companyCorrectionFormHtml(company, true, { detail })}
     </section>
   `;
 }
@@ -20613,6 +20618,174 @@ function adminDbProductPrice(product = {}, key = "weekday") {
 
 function adminDbProductQuantity(product = {}) {
   return optionalNumber(product.totalQuantity ?? product.maxTotal ?? product.total ?? product.quantity);
+}
+
+function adminDbCorrectionProductType(product = {}) {
+  const explicit = [product.productType, product.saleType, product.bizItemSubType]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ");
+  if (/숙박|lodging|overnight|night/i.test(explicit)) return "lodging";
+  if (/데이유즈|당일|대실|campnic|camp_nic|dayuse|day_use/i.test(explicit)) return "dayuse";
+  const name = String(product.name || product.productName || product.roomName || "").trim();
+  return /데이유즈|당일|대실|캠프닉|campnic|camp_nic|dayuse|day_use/i.test(name) ? "dayuse" : "lodging";
+}
+
+function adminDbCollectedCorrectionBasis(company = {}, detail = {}) {
+  const detailCompany = detail.company || company || {};
+  const latest = detailCompany.inventory?.latest || company.inventory?.latest || {};
+  const snapshot = detail.productSnapshot || latest.productSnapshot || {};
+  const products = (Array.isArray(detail.products)
+    ? detail.products
+    : (Array.isArray(snapshot.products) ? snapshot.products : []))
+    .filter((product) => product && typeof product === "object");
+  const productsBasis = detail.observationBasis?.products || {};
+  const observedAt = String(productsBasis.collectedAt || snapshot.productsCollectedAt || snapshot.collectedAt || "").trim();
+  const legacyProductPreview = detail.legacyProductPreview && detail.legacyProductPreview.structured === false
+    ? detail.legacyProductPreview
+    : null;
+  const mappedProducts = products.map((product, index) => {
+    const quantity = adminDbProductQuantity(product);
+    return {
+      key: String(product.key || product.bizItemId || `product-${index + 1}`),
+      name: String(product.name || product.productName || product.roomName || `상품 ${index + 1}`).trim().slice(0, 80),
+      productType: adminDbCorrectionProductType(product),
+      quantity: Number.isFinite(quantity) && quantity >= 0 ? Math.round(quantity) : NaN,
+      weekdayPrice: adminDbProductPrice(product, "weekday"),
+      fridayPrice: adminDbProductPrice(product, "friday"),
+      saturdayPrice: adminDbProductPrice(product, "saturday"),
+      sundayPrice: adminDbProductPrice(product, "sunday")
+    };
+  });
+  const lodgingProducts = mappedProducts.filter((product) => product.productType === "lodging");
+  const dayUseProducts = mappedProducts.filter((product) => product.productType === "dayuse");
+  const lodgingSegments = lodgingProducts
+    .map((product) => cleanManualCorrectionSegment({
+      type: product.name,
+      count: product.quantity,
+      weekdayPrice: product.weekdayPrice,
+      fridayPrice: product.fridayPrice,
+      saturdayPrice: product.saturdayPrice,
+      sundayPrice: product.sundayPrice
+    }))
+    .filter((segment) => manualCorrectionSegmentHasValue(segment))
+    .slice(0, B2B_MY_LODGE_SEGMENT_LIMIT);
+  const completeQuantityTotal = (rows = []) => rows.length > 0 && rows.every((product) => Number.isFinite(product.quantity) && product.quantity > 0)
+    ? rows.reduce((sum, product) => sum + product.quantity, 0)
+    : NaN;
+  return {
+    products: mappedProducts,
+    lodgingSegments,
+    lodgingBasisTotal: completeQuantityTotal(lodgingProducts),
+    dayUseBasisTotal: completeQuantityTotal(dayUseProducts),
+    observedAt,
+    runId: String(productsBasis.runId || snapshot.productsRunId || snapshot.runId || "").trim(),
+    legacyProductPreview,
+    structured: mappedProducts.length > 0,
+    editableProductLimit: B2B_MY_LODGE_SEGMENT_LIMIT,
+    omittedEditableCount: Math.max(0, lodgingProducts.length - B2B_MY_LODGE_SEGMENT_LIMIT)
+  };
+}
+
+function adminDbCollectedCorrectionDraft(correction = {}, basis = {}) {
+  const savedSegments = manualCorrectionRoomSegments(correction);
+  const savedLodgingTotal = optionalNumber(correction.lodgingBasisTotal);
+  const savedDayUseTotal = optionalNumber(correction.dayUseBasisTotal);
+  const observedSegments = Array.isArray(basis.lodgingSegments) ? basis.lodgingSegments : [];
+  const useObservedSegments = savedSegments.length === 0 && observedSegments.length > 0;
+  const useObservedLodgingTotal = !(Number.isFinite(savedLodgingTotal) && savedLodgingTotal > 0)
+    && savedSegments.length === 0
+    && Number.isFinite(basis.lodgingBasisTotal)
+    && basis.lodgingBasisTotal > 0;
+  const useObservedDayUseTotal = !(Number.isFinite(savedDayUseTotal) && savedDayUseTotal > 0)
+    && Number.isFinite(basis.dayUseBasisTotal)
+    && basis.dayUseBasisTotal > 0;
+  return {
+    correction: {
+      ...correction,
+      lodgingBasisTotal: Number.isFinite(savedLodgingTotal) && savedLodgingTotal > 0
+        ? savedLodgingTotal
+        : (useObservedLodgingTotal ? basis.lodgingBasisTotal : correction.lodgingBasisTotal),
+      dayUseBasisTotal: Number.isFinite(savedDayUseTotal) && savedDayUseTotal > 0
+        ? savedDayUseTotal
+        : (useObservedDayUseTotal ? basis.dayUseBasisTotal : correction.dayUseBasisTotal),
+      roomSegments: savedSegments.length ? savedSegments : (useObservedSegments ? observedSegments : correction.roomSegments)
+    },
+    prefilled: useObservedSegments || useObservedLodgingTotal || useObservedDayUseTotal,
+    savedSegmentCount: savedSegments.length,
+    usedObservedSegments: useObservedSegments,
+    usedObservedLodgingTotal: useObservedLodgingTotal,
+    usedObservedDayUseTotal: useObservedDayUseTotal
+  };
+}
+
+function adminDbCollectedCorrectionPriceText(value) {
+  return Number.isFinite(value) && value > 0 ? fmtWon(value) : "미관측";
+}
+
+function adminDbCollectedCorrectionEvidenceRowHtml(product = {}) {
+  const typeLabel = product.productType === "dayuse" ? "데이유즈" : "숙박";
+  return `
+    <article class="admin-db-collected-correction-row">
+      <div><strong>${escapeHtml(product.name || "상품명 확인")}</strong><small>${escapeHtml(typeLabel)}</small></div>
+      <dl>
+        <div><dt>수량</dt><dd>${Number.isFinite(product.quantity) ? `${fmtNumber(product.quantity)}개` : "미관측"}</dd></div>
+        <div><dt>평일</dt><dd>${escapeHtml(adminDbCollectedCorrectionPriceText(product.weekdayPrice))}</dd></div>
+        <div><dt>금</dt><dd>${escapeHtml(adminDbCollectedCorrectionPriceText(product.fridayPrice))}</dd></div>
+        <div><dt>토</dt><dd>${escapeHtml(adminDbCollectedCorrectionPriceText(product.saturdayPrice))}</dd></div>
+        <div><dt>일</dt><dd>${escapeHtml(adminDbCollectedCorrectionPriceText(product.sundayPrice))}</dd></div>
+      </dl>
+    </article>
+  `;
+}
+
+function adminDbCollectedCorrectionEvidenceHtml(basis = {}, draft = {}) {
+  if (basis.structured) {
+    const sourceText = basis.observedAt ? `${compactDateTime(basis.observedAt)} 관측` : "관측일 확인 필요";
+    const totalText = Number.isFinite(basis.lodgingBasisTotal)
+      ? `숙박 수량 합계 ${fmtNumber(basis.lodgingBasisTotal)}개`
+      : "상품별 수량 일부 미관측";
+    return `
+      <section class="admin-db-collected-correction" aria-label="최근 수집 상품 기준">
+        <div class="admin-db-collected-correction-head">
+          <div><span>최근 수집 Snapshot</span><strong>수집된 객실 종류와 가격</strong><small>${escapeHtml(`${sourceText} · 상품 ${fmtNumber(basis.products.length)}종 · ${totalText}`)}</small></div>
+          <mark data-ui-status="neutral">수집 근거</mark>
+        </div>
+        ${adminDbFoldedItemsHtml(basis.products, adminDbCollectedCorrectionEvidenceRowHtml, { noun: "수집 상품", limit: 5, className: "admin-db-collected-correction-list" })}
+        ${basis.omittedEditableCount > 0 ? `<p>수집 상품은 모두 표시하며 수정 초안은 현재 입력 한도에 따라 앞 ${fmtNumber(basis.editableProductLimit)}개 숙박상품까지 불러옵니다.</p>` : ""}
+        <p class="admin-db-collected-correction-note">${draft.prefilled
+          ? "수집값을 입력 초안으로 불러왔습니다. 보정 저장을 누르기 전에는 관리자 확정값이 아닙니다."
+          : "저장된 관리자 수정값이 있으면 그 값을 유지하며, 위 수집값은 비교 근거로만 표시합니다."}</p>
+      </section>
+    `;
+  }
+  if (basis.legacyProductPreview) {
+    const preview = basis.legacyProductPreview;
+    const names = Array.isArray(preview.previewNames) ? preview.previewNames : [];
+    const count = optionalNumber(preview.productCount);
+    const minPrice = optionalNumber(preview.listedPriceRange?.min);
+    const maxPrice = optionalNumber(preview.listedPriceRange?.max);
+    const rangeText = Number.isFinite(minPrice) && Number.isFinite(maxPrice)
+      ? adminDbReferencePriceText(minPrice, maxPrice)
+      : "가격범위 미보존";
+    const observedAt = String(preview.observedAt || "").trim();
+    return `
+      <section class="admin-db-collected-correction legacy" aria-label="과거 수집 상품 요약">
+        <div class="admin-db-collected-correction-head">
+          <div><span>과거 수집 요약</span><strong>${Number.isFinite(count) ? `전체 ${fmtNumber(count)}종` : "상품수 확인 필요"} · 상품명 ${fmtNumber(names.length)}종 보존</strong><small>${escapeHtml(observedAt ? `${compactDateTime(observedAt)} 관측` : "관측일 확인 필요")}</small></div>
+          <mark data-ui-status="warning">상세 미보존</mark>
+        </div>
+        ${names.length ? adminDbFoldedItemsHtml(names, (name) => `<span class="admin-db-collected-correction-legacy-name">${escapeHtml(name)}</span>`, { noun: "상품명", limit: 5, className: "admin-db-collected-correction-legacy-list" }) : ""}
+        <dl class="admin-db-collected-correction-legacy-summary"><div><dt>당시 화면 가격범위</dt><dd>${escapeHtml(rangeText)}</dd></div></dl>
+        <p class="admin-db-collected-correction-note">상품별 수량·요일가격은 원본에 미보존되어 수정칸을 임의로 채우지 않았습니다. 직접 입력하거나 상세 자동수집이 필요합니다.</p>
+      </section>
+    `;
+  }
+  return `
+    <section class="admin-db-collected-correction empty" aria-label="수집 상품 자료 없음">
+      <div class="admin-db-collected-correction-head"><div><span>최근 수집값</span><strong>구조화 상품 수집자료 없음</strong><small>직접 입력하거나 상세 자동수집 후 다시 확인하세요.</small></div><mark data-ui-status="neutral">입력 대기</mark></div>
+    </section>
+  `;
 }
 
 function adminDbProductPriceRange(products = [], key = "weekday") {
@@ -23522,7 +23695,7 @@ function adminDbSelectedDetailPanel(rows = []) {
     : (Number.isFinite(referenceModel.rankRangeEnd) ? `1-${fmtNumber(referenceModel.rankRangeEnd)}위` : "수집범위 대기");
   const freshnessBasis = [referenceModel.keyword || metrics.keyword || "키워드 대기", rangeLabel].filter(Boolean).join(" · ");
   const profileBody = adminDbAdminProfilePanel(row);
-  const correctionBody = adminDbQuickCorrectionPanel(row);
+  const correctionBody = adminDbQuickCorrectionPanel(row, selectedDetail);
   const channelBody = adminDbChannelExposurePanel(row);
   const rawCollectBody = [
     adminDbConfirmCollectPlanHtml(row),
@@ -23938,25 +24111,17 @@ function adminDbQueryUsesInlineAutocomplete(input = null) {
   return Boolean(input?.closest?.("[data-admin-db-persistent-search]"));
 }
 
-function scheduleAdminDbQueryRender(input, delay = 40) {
-  if (!input) return;
-  state.adminDbFilters = state.adminDbFilters || {};
-  state.adminDbFilters.query = input.value || "";
-  if (state.adminDbFilters.query.trim()) {
-    state.adminDbFilters.province = "all";
-    state.adminDbFilters.region = "all";
-    clearAdminDbCompanyHash();
-  }
-  state.adminDbViewMode = "list";
-  const value = input.value || "";
-  const selectionStart = input.selectionStart;
-  const selectionEnd = input.selectionEnd;
+function openFirstAdminDbAutocompleteOption(input = null) {
+  const searchShell = input?.closest?.(".admin-db-company-search-shell");
   refreshAdminDbAutocomplete(input);
-  if (state.adminDbQueryRenderTimer) window.clearTimeout(state.adminDbQueryRenderTimer);
-  state.adminDbQueryRenderTimer = window.setTimeout(() => {
-    state.adminDbQueryRenderTimer = null;
-    commitAdminDbQueryRender(value, selectionStart, selectionEnd);
-  }, delay);
+  const firstOption = searchShell?.querySelector("[data-admin-db-autocomplete-option]");
+  const companyId = firstOption?.getAttribute("data-admin-db-company-select") || "";
+  if (!companyId) {
+    input?.focus();
+    return false;
+  }
+  activateAdminDbCompanyDetail(companyId, { scroll: false });
+  return true;
 }
 
 function commitAdminRegionCompanyQueryRender(value = "", selectionStart = null, selectionEnd = null) {
@@ -34048,9 +34213,7 @@ function bindEvents() {
       const searchShell = adminDbQueryCommit.closest(".admin-db-company-search-shell");
       const input = searchShell?.querySelector("[data-admin-db-query]") || document.querySelector("[data-admin-db-query]");
       if (adminDbQueryUsesInlineAutocomplete(input)) {
-        refreshAdminDbAutocomplete(input);
-        const firstOption = searchShell?.querySelector("[data-admin-db-autocomplete-option]");
-        (firstOption || input)?.focus();
+        openFirstAdminDbAutocompleteOption(input);
         return;
       }
       commitAdminDbQueryRender(input?.value || "", input?.selectionStart, input?.selectionEnd);
@@ -34628,7 +34791,6 @@ function bindEvents() {
   document.addEventListener("compositionstart", (event) => {
     if (event.target.closest("[data-admin-db-query]")) {
       state.adminDbQueryComposing = true;
-      if (state.adminDbQueryRenderTimer) window.clearTimeout(state.adminDbQueryRenderTimer);
       return;
     }
     if (event.target.closest("[data-admin-region-company-search]")) {
@@ -34640,11 +34802,7 @@ function bindEvents() {
     const adminDbQuery = event.target.closest("[data-admin-db-query]");
     if (adminDbQuery) {
       state.adminDbQueryComposing = false;
-      if (adminDbQueryUsesInlineAutocomplete(adminDbQuery)) {
-        refreshAdminDbAutocomplete(adminDbQuery);
-        return;
-      }
-      scheduleAdminDbQueryRender(adminDbQuery, 0);
+      refreshAdminDbAutocomplete(adminDbQuery);
       return;
     }
     const regionCompanySearch = event.target.closest("[data-admin-region-company-search]");
@@ -34687,17 +34845,8 @@ function bindEvents() {
     if (adminDbQuery) {
       if (adminDbQueryUsesInlineAutocomplete(adminDbQuery)) {
         state.adminDbInlineSearchScroll = { left: window.scrollX || 0, top: window.scrollY || 0 };
-        refreshAdminDbAutocomplete(adminDbQuery);
-        return;
       }
-      state.adminDbFilters = state.adminDbFilters || {};
-      state.adminDbFilters.query = adminDbQuery.value || "";
-      state.adminDbViewMode = state.adminDbFilters.query.trim() ? "list" : state.adminDbViewMode;
-      if (event.isComposing || state.adminDbQueryComposing) {
-        refreshAdminDbAutocomplete(adminDbQuery);
-        return;
-      }
-      scheduleAdminDbQueryRender(adminDbQuery);
+      refreshAdminDbAutocomplete(adminDbQuery);
       return;
     }
     const search = event.target.closest("[data-company-master-search]");
@@ -34849,6 +34998,15 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     const adminDbQuery = event.target.closest?.("[data-admin-db-query]");
     const autocompleteOption = event.target.closest?.("[data-admin-db-autocomplete-option]");
+    if (adminDbQuery && event.key === "Enter") {
+      event.preventDefault();
+      if (adminDbQueryUsesInlineAutocomplete(adminDbQuery)) {
+        openFirstAdminDbAutocompleteOption(adminDbQuery);
+      } else {
+        commitAdminDbQueryRender(adminDbQuery.value || "", adminDbQuery.selectionStart, adminDbQuery.selectionEnd);
+      }
+      return;
+    }
     if (adminDbQuery && event.key === "ArrowDown") {
       const firstOption = document.querySelector("[data-admin-db-autocomplete-option]");
       if (firstOption) {

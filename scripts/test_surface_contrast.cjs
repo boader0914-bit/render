@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-a-card-blind-v66";
-const expectedAssetVersion = "v2-20260823-a-card-blind-v48";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260823-collected-correction-v68";
+const expectedAssetVersion = "v2-20260823-collected-correction-v50";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -753,6 +753,18 @@ const referenceObservedInventoryLabelBlock = app.slice(
   app.indexOf("function adminDbReferenceObservedInventoryLabel("),
   app.indexOf("function adminDbReferenceLegacyProductPreviewHtml(", app.indexOf("function adminDbReferenceObservedInventoryLabel("))
 );
+const companyCorrectionFormBlock = app.slice(
+  app.indexOf("function companyCorrectionFormHtml("),
+  app.indexOf("function companyManualFeedbackHtml(", app.indexOf("function companyCorrectionFormHtml("))
+);
+const collectedCorrectionBlock = app.slice(
+  app.indexOf("function adminDbCorrectionProductType("),
+  app.indexOf("function adminDbProductPriceRange(", app.indexOf("function adminDbCorrectionProductType("))
+);
+const collectedCorrectionCssBlock = styles.slice(
+  styles.indexOf(".admin-db-collected-correction {"),
+  styles.indexOf(".admin-db-quick-edit > .admin-db-correction-flash", styles.indexOf(".admin-db-collected-correction {"))
+);
 const referenceBasicsCardBlock = app.slice(
   app.indexOf("function adminDbReferenceBasicsCard("),
   app.indexOf("const ADMIN_REFERENCE_CHANNEL_BRAND_META", app.indexOf("function adminDbReferenceBasicsCard("))
@@ -822,7 +834,8 @@ assert(
     && adminDbBindEventsBlock.includes("adminDbQueryUsesInlineAutocomplete(adminDbQuery)")
     && adminDbBindEventsBlock.includes("refreshAdminDbAutocomplete(adminDbQuery);")
     && adminDbBindEventsBlock.includes('scroll: !adminDbCompanySelect.closest("[data-admin-db-persistent-search]")')
-    && adminDbBindEventsBlock.includes("(firstOption || input)?.focus();")
+    && app.includes("function openFirstAdminDbAutocompleteOption(input = null)")
+    && adminDbBindEventsBlock.includes("openFirstAdminDbAutocompleteOption(input);")
     && adminDbBindEventsBlock.includes("state.adminDbInlineSearchScroll = { left: window.scrollX || 0, top: window.scrollY || 0 };")
     && app.includes("function restoreAdminDbInlineSearchViewport(position = null, options = {})")
     && app.includes("restoreAdminDbInlineSearchViewport(preservedScroll, { clear: false });")
@@ -843,15 +856,18 @@ assert(
     && app.includes("data-admin-db-autocomplete-option")
     && app.includes("function refreshAdminDbAutocomplete(input)")
     && app.includes("function closeAdminDbAutocomplete()")
-    && app.includes("function scheduleAdminDbQueryRender(input, delay = 40)")
+    && !app.includes("function scheduleAdminDbQueryRender(")
+    && !app.includes("adminDbQueryRenderTimer")
     && app.includes('input.insertAdjacentHTML("afterend", markup)')
     && adminDbBindEventsBlock.includes('document.addEventListener("pointerdown", (event) => {')
     && adminDbBindEventsBlock.includes('if (event.target.closest?.(".admin-db-company-search-shell")) return;')
     && adminDbBindEventsBlock.includes('document.addEventListener("focusin", (event) => {')
     && adminDbBindEventsBlock.includes("closeAdminDbAutocomplete();")
     && app.includes('event.key === "ArrowDown"')
+    && adminDbBindEventsBlock.includes('adminDbQuery && event.key === "Enter"')
+    && adminDbBindEventsBlock.includes("commitAdminDbQueryRender(adminDbQuery.value")
     && app.includes('(adminDbQuery || autocompleteOption) && event.key === "Escape"'),
-  "one-character company autocomplete must rank name and alias matches, cap suggestions at eight, support keyboard navigation, and close on outside interaction",
+  "one-character company autocomplete must stay separate from committed results, support button and keyboard commit, cap suggestions at eight, and close on outside interaction",
   failures
 );
 
@@ -866,8 +882,8 @@ assert(
     && styles.includes('body.role-admin a[data-admin-db-company-select]:not(.admin-db-autocomplete-option)')
     && /html\[data-theme-resolved\] body\.role-admin a\.admin-db-autocomplete-option\s*\{[^}]*display:\s*grid;[^}]*border-color:\s*transparent\s*!important;[^}]*background:\s*transparent\s*!important;[^}]*color:\s*var\(--text-primary\)\s*!important;[^}]*box-shadow:\s*none\s*!important;/i.test(themeStyles)
     && /html\[data-theme-resolved="light"\] body\.role-admin \.admin-db-autocomplete\s*\{[^}]*border-color:\s*#ffffff\s*!important;[^}]*background:\s*var\(--surface-card\)\s*!important;[^}]*box-shadow:\s*0 0 0 1px var\(--border-subtle\),\s*var\(--theme-floating-subtle-shadow\)\s*!important;/i.test(themeStyles)
-    && /html\[data-theme-resolved="dark"\] body\.role-admin \.admin-db-autocomplete\s*\{[^}]*border-color:\s*var\(--border-subtle\)\s*!important;[^}]*background:\s*transparent\s*!important;[^}]*box-shadow:\s*var\(--theme-floating-subtle-shadow\)\s*!important;/i.test(themeStyles),
-  "company autocomplete must not inherit blue company links, must use a white card and border effect in light mode, and a transparent surface in dark mode",
+    && /html\[data-theme-resolved="dark"\] body\.role-admin \.admin-db-autocomplete\s*\{[^}]*border-color:\s*var\(--border-subtle\)\s*!important;[^}]*background:\s*var\(--surface-card\)\s*!important;[^}]*box-shadow:\s*var\(--theme-floating-subtle-shadow\)\s*!important;/i.test(themeStyles),
+  "company autocomplete must not inherit blue company links, must use a white card and border effect in light mode, and an opaque charcoal card in dark mode",
   failures
 );
 
@@ -1015,6 +1031,123 @@ assert(
     && server.includes('Object.hasOwn(payload, "roomSegments") ? payload.roomSegments : previousRoomBasis.roomSegments')
     && server.includes('Object.hasOwn(payload, "businessVerificationStatus") ? payload.businessVerificationStatus : previousVerification.status'),
   "company basics must keep aliases, business verification, room basis, fixed products, Naver ids, and season notes out of the primary A-card and maintenance UI while preserving stored hidden values",
+  failures
+);
+
+assert(
+  companyCorrectionFormBlock.includes("adminDbCollectedCorrectionBasis(company, options.detail || {})")
+    && companyCorrectionFormBlock.includes("adminDbCollectedCorrectionDraft(correction, collectedBasis)")
+    && companyCorrectionFormBlock.includes("adminDbCollectedCorrectionEvidenceHtml(collectedBasis, correctionDraft)")
+    && companyCorrectionFormBlock.includes("correctionDraft.correction.lodgingBasisTotal")
+    && companyCorrectionFormBlock.includes("correctionDraft.correction.dayUseBasisTotal")
+    && companyCorrectionFormBlock.includes("manualCorrectionRoomSegmentsField(correctionDraft.correction")
+    && adminDbDetailBlock.includes("adminDbQuickCorrectionPanel(row, selectedDetail)")
+    && app.includes("companyCorrectionFormHtml(company, true, { detail })")
+    && collectedCorrectionBlock.includes("최근 수집 Snapshot")
+    && collectedCorrectionBlock.includes("수집값을 입력 초안으로 불러왔습니다")
+    && collectedCorrectionBlock.includes("상품별 수량·요일가격은 원본에 미보존")
+    && collectedCorrectionBlock.includes('limit: 5')
+    && collectedCorrectionCssBlock.includes("background: var(--surface-card);")
+    && collectedCorrectionCssBlock.includes("background: var(--surface-control);")
+    && !/(#[0-9a-f]{3,8}|linear-gradient|radial-gradient|!important)/i.test(collectedCorrectionCssBlock),
+  "company correction must show collected products first, prefill editable drafts only from structured snapshots, and keep legacy summaries read-only with token surfaces",
+  failures
+);
+
+const collectedCorrectionSandbox = {
+  B2B_MY_LODGE_SEGMENT_LIMIT: 8,
+  optionalNumber(value) {
+    if (value === "" || value === null || value === undefined) return NaN;
+    const parsed = Number(String(value).replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : NaN;
+  },
+  adminDbProductQuantity(product = {}) {
+    const parsed = Number(product.totalQuantity ?? product.maxTotal ?? product.total ?? product.quantity);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  },
+  adminDbProductPrice(product = {}, key = "weekday") {
+    const aliases = {
+      weekday: ["weekdayPrice", "weekday"],
+      friday: ["fridayPrice", "friday"],
+      saturday: ["saturdayPrice", "saturday"],
+      sunday: ["sundayPrice", "sunday"]
+    }[key] || [];
+    for (const alias of aliases) {
+      const parsed = Number(product[alias] ?? product.prices?.[alias]);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return NaN;
+  },
+  cleanManualCorrectionSegment(row = {}) {
+    const number = (value) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
+    };
+    return {
+      type: String(row.type || "").trim(),
+      count: number(row.count),
+      weekdayPrice: number(row.weekdayPrice),
+      fridayPrice: number(row.fridayPrice),
+      saturdayPrice: number(row.saturdayPrice),
+      sundayPrice: number(row.sundayPrice)
+    };
+  },
+  manualCorrectionSegmentHasValue(row = {}) {
+    return Boolean(row.type || row.count || row.weekdayPrice || row.fridayPrice || row.saturdayPrice || row.sundayPrice);
+  },
+  manualCorrectionRoomSegments(correction = {}) {
+    return (Array.isArray(correction.roomSegments) ? correction.roomSegments : [])
+      .map((row) => collectedCorrectionSandbox.cleanManualCorrectionSegment(row))
+      .filter((row) => collectedCorrectionSandbox.manualCorrectionSegmentHasValue(row))
+      .slice(0, 8);
+  }
+};
+vm.createContext(collectedCorrectionSandbox);
+vm.runInContext(
+  `${collectedCorrectionBlock}\nthis.adminDbCollectedCorrectionBasis = adminDbCollectedCorrectionBasis;\nthis.adminDbCollectedCorrectionDraft = adminDbCollectedCorrectionDraft;`,
+  collectedCorrectionSandbox
+);
+const collectedStructuredBasis = collectedCorrectionSandbox.adminDbCollectedCorrectionBasis({}, {
+  products: [
+    { key: "a", name: "스탠다드", productType: "lodging", totalQuantity: 2, weekdayPrice: 149000, fridayPrice: 179000, saturdayPrice: 229000, sundayPrice: 189000 },
+    { key: "b", name: "패밀리", saleType: "숙박", totalQuantity: 3, weekdayPrice: 199000, fridayPrice: 229000, saturdayPrice: 279000, sundayPrice: 239000 },
+    { key: "c", name: "오토캠핑", productType: "dayuse", totalQuantity: 4, weekdayPrice: 49000, fridayPrice: 59000, saturdayPrice: 79000, sundayPrice: 59000 }
+  ],
+  observationBasis: { products: { collectedAt: "2026-08-22T01:32:00.000Z", runId: "structured-run" } }
+});
+const collectedDraft = collectedCorrectionSandbox.adminDbCollectedCorrectionDraft({}, collectedStructuredBasis);
+const savedDraft = collectedCorrectionSandbox.adminDbCollectedCorrectionDraft({
+  lodgingBasisTotal: 7,
+  roomSegments: [{ type: "관리자 객실", count: 7, weekdayPrice: 120000 }]
+}, collectedStructuredBasis);
+const collectedLegacyBasis = collectedCorrectionSandbox.adminDbCollectedCorrectionBasis({}, {
+  products: [],
+  legacyProductPreview: {
+    structured: false,
+    productCount: 5,
+    previewNames: ["스탠다드", "슈페리어", "디럭스", "스위트"],
+    listedPriceRange: { min: 159000, max: 349000 }
+  }
+});
+const legacyDraft = collectedCorrectionSandbox.adminDbCollectedCorrectionDraft({}, collectedLegacyBasis);
+assert(
+  collectedStructuredBasis.structured === true
+    && collectedStructuredBasis.products.length === 3
+    && collectedStructuredBasis.lodgingSegments.length === 2
+    && collectedStructuredBasis.lodgingBasisTotal === 5
+    && collectedStructuredBasis.dayUseBasisTotal === 4
+    && collectedDraft.prefilled === true
+    && collectedDraft.correction.roomSegments[0].type === "스탠다드"
+    && collectedDraft.correction.lodgingBasisTotal === 5
+    && collectedDraft.correction.dayUseBasisTotal === 4
+    && savedDraft.correction.roomSegments[0].type === "관리자 객실"
+    && savedDraft.correction.lodgingBasisTotal === 7
+    && savedDraft.usedObservedSegments === false
+    && collectedLegacyBasis.structured === false
+    && collectedLegacyBasis.lodgingSegments.length === 0
+    && legacyDraft.prefilled === false
+    && !Array.isArray(legacyDraft.correction.roomSegments),
+  "structured product snapshots must prefill lodging rows and complete totals, saved admin values must win, and legacy summaries must never fabricate editable products",
   failures
 );
 
