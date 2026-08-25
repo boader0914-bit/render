@@ -2242,6 +2242,7 @@ function activateAdminMobileNav(sectionKey, tab = "", anchor = "", adminPanelSec
   if (nextTab === "admin") {
     state.adminPanelSection = adminPanelSection || section.adminPanelSection || "overview";
   }
+  if (nextTab === "admin" && state.adminPanelSection === "collect") resetCollectionKeywordForFreshEntry();
   setActiveTab(nextTab, { adminMobileSection: sectionKey });
   scrollAdminMobileAnchor(requestedAnchor);
 }
@@ -2253,13 +2254,25 @@ function activateAdminPrimaryNav(sectionKey = "summary") {
   if (nextTab === "admin") state.adminPanelSection = section.adminPanelSection || "overview";
   state.adminMobileAnchor = section.anchor || "";
   setActiveTab(nextTab, { adminMobileSection: adminMobileSectionForTab(nextTab) });
-  if (nextTab === "admin") setAdminPanelSection(state.adminPanelSection);
+  if (nextTab === "admin") setAdminPanelSection(state.adminPanelSection, { freshEntry: sectionKey === "collect" });
   if (section.anchor) {
     window.requestAnimationFrame(() => document.querySelector(section.anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 }
 
 let latestCollectionResultPromise = null;
+
+function resetCollectionKeywordForFreshEntry() {
+  state.pendingRecrawlContext = null;
+  if (els.keywordInput) {
+    els.keywordInput.value = "";
+    els.keywordInput.defaultValue = "";
+    els.keywordInput.setAttribute("autocomplete", "off");
+  }
+  if (els.searchModeInput) els.searchModeInput.value = "keyword";
+  syncBroadLodgingPurposePolicy({ resetRangeOnEntry: false });
+  updateCrawlSpeedPreview();
+}
 
 function ensureLatestCollectionResult(options = {}) {
   if (!isAdminRole() || !state.runs?.length) return;
@@ -2301,6 +2314,7 @@ function ensureLatestCollectionResult(options = {}) {
 
 function setAdminPanelSection(sectionKey = "overview", options = {}) {
   if (!ADMIN_PANEL_SECTIONS[sectionKey]) sectionKey = "overview";
+  if (sectionKey === "collect" && options.freshEntry === true) resetCollectionKeywordForFreshEntry();
   state.adminPanelSection = sectionKey;
   if (isAdminRole() && state.activeTab === "admin") {
     const panelTarget = adminPanelMobileTarget(sectionKey);
@@ -34524,7 +34538,7 @@ function openAdminHomeRoute(route = "summary") {
   }
   if (route === "collect") {
     setActiveTab("admin");
-    setAdminPanelSection("collect");
+    setAdminPanelSection("collect", { freshEntry: true });
     return;
   }
   if (route === "archive") {
@@ -34666,7 +34680,7 @@ function bindEvents() {
     }
     if (event.target.closest("[data-open-collection-run]")) {
       setActiveTab("admin");
-      setAdminPanelSection("collect");
+      setAdminPanelSection("collect", { freshEntry: true });
       window.requestAnimationFrame(() => els.crawlForm?.scrollIntoView({ behavior: "smooth", block: "start" }));
       return;
     }
@@ -34700,7 +34714,7 @@ function bindEvents() {
     if (adminWorkspaceSection) {
       const section = adminWorkspaceSection.dataset.adminWorkspaceSection || "overview";
       setActiveTab("admin");
-      setAdminPanelSection(section, { scroll: true });
+      setAdminPanelSection(section, { scroll: true, freshEntry: section === "collect" });
       return;
     }
     const adminMobileSection = event.target.closest("[data-admin-mobile-section]");
@@ -34744,7 +34758,7 @@ function bindEvents() {
       if (tab === "admin" && panel) state.adminPanelSection = panel;
       state.adminMobileAnchor = anchor;
       setActiveTab(tab, { adminMobileSection: adminMobileSectionForTab(tab) });
-      if (tab === "admin" && panel) setAdminPanelSection(panel);
+      if (tab === "admin" && panel) setAdminPanelSection(panel, { freshEntry: panel === "collect" });
       if (panel === "database") renderAdminDatabaseDashboard();
       if (anchor) {
         window.requestAnimationFrame(() => {
@@ -34757,7 +34771,8 @@ function bindEvents() {
     }
     const adminSectionButton = event.target.closest("[data-admin-section]");
     if (adminSectionButton) {
-      setAdminPanelSection(adminSectionButton.dataset.adminSection || "overview", { scroll: true });
+      const section = adminSectionButton.dataset.adminSection || "overview";
+      setAdminPanelSection(section, { scroll: true, freshEntry: section === "collect" });
       return;
     }
     const adminUserViewOpen = event.target.closest("[data-admin-user-view-open]");

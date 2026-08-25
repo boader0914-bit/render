@@ -360,8 +360,8 @@ assert(
   failures
 );
 
-const expectedCacheVersion = "lodging-datalab-pwa-v20260823-yeogi-channel-paste-v75";
-const expectedAssetVersion = "v2-20260823-yeogi-channel-paste-v57";
+const expectedCacheVersion = "lodging-datalab-pwa-v20260825-blank-collection-keyword-v76";
+const expectedAssetVersion = "v2-20260825-blank-collection-keyword-v58";
 const cacheVersionAssignment = serviceWorker.match(/^const CACHE_VERSION = "([^"]+)";$/m);
 const assetVersionAssignments = [...server.matchAll(
   /^\s*\.replace\('(href|src)="\/(styles\.css|admin-theme\.css|app\.js)"', '\1="\/\2\?v=([^"]+)"'\);?$/gm
@@ -416,9 +416,11 @@ assert(
 
 assert(
   /id="keywordInput"[^>]*placeholder="예: 경남 숙소, 경남 펜션"[^>]*required/.test(crawlFormMarkup)
+    && !/id="keywordInput"[^>]*\bvalue=/.test(crawlFormMarkup)
+    && /id="keywordInput"[^>]*autocomplete="off"[^>]*autocorrect="off"[^>]*spellcheck="false"/.test(crawlFormMarkup)
     && /<span id="crawlPurposeHint" role="status" aria-live="polite">[^<]+<\/span>/.test(crawlFormMarkup)
     && (crawlFormMarkup.match(/aria-describedby="crawlPurposeHint"/g) || []).length === 2,
-  "collection form must guide regional broad-lodging input and expose its automatic policy hint",
+  "collection form must start with a blank non-restored keyword and expose its automatic policy hint",
   failures
 );
 
@@ -636,6 +638,17 @@ const mobileSecondaryNavBlock = app.slice(
 const adminPanelSectionBlock = app.slice(
   app.indexOf("function setAdminPanelSection("),
   app.indexOf("function syncAdminSectionPanels()")
+);
+
+assert(
+  app.includes("function resetCollectionKeywordForFreshEntry()")
+    && app.includes('els.keywordInput.value = "";')
+    && app.includes('els.keywordInput.defaultValue = "";')
+    && adminPanelSectionBlock.includes('sectionKey === "collect" && options.freshEntry === true')
+    && app.includes('setAdminPanelSection("collect", { freshEntry: true });')
+    && app.includes('{ scroll: true, freshEntry: section === "collect" }'),
+  "fresh collection navigation must clear the keyword while programmatic recrawl navigation can preserve its assigned keyword",
+  failures
 );
 
 assert(
