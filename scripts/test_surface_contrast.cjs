@@ -436,6 +436,85 @@ assert(
   failures
 );
 
+const sancheongLocationProfileBlock = app.slice(
+  app.indexOf('const SANCHEONG_LOCATION_REGION_KEY = "kr_gyeongnam_sancheong";'),
+  app.indexOf("function renderLocationDictionary(", app.indexOf('const SANCHEONG_LOCATION_REGION_KEY = "kr_gyeongnam_sancheong";'))
+);
+
+assert(
+  sancheongLocationProfileBlock.includes('/api/tourism-data/location-history?regionKey=')
+    && sancheongLocationProfileBlock.includes("function locationProfileTrafficEvidence(")
+    && sancheongLocationProfileBlock.includes("function locationProfilePlaceEvidence(")
+    && sancheongLocationProfileBlock.includes("function locationProfileVisitorEvidence(")
+    && sancheongLocationProfileBlock.includes("function locationProfileStrengthEvidence(")
+    && sancheongLocationProfileBlock.includes("정확히 일치하는 DataLab 관측이 없습니다")
+    && sancheongLocationProfileBlock.includes("상세/재고 미관측")
+    && sancheongLocationProfileBlock.includes("부분수집·미관측은 선 단절")
+    && sancheongLocationProfileBlock.includes("기존 내부 입지판단 기준")
+    && app.includes('const preserveOpenLocationCard = state.activeTab === "dictionary"')
+    && server.includes('reqUrl.pathname === "/api/tourism-data/location-history"'),
+  "Sancheong location profile must lead with exact source-backed evidence and keep missing observations non-zero",
+  failures
+);
+
+assert(
+  styles.includes("Sancheong location profile v1")
+    && styles.includes(".location-profile-grid")
+    && styles.includes(".location-profile-chart-line")
+    && styles.includes(".location-profile-source-list")
+    && styles.includes(".location-profile-internal")
+    && /@media \(max-width: 600px\)[\s\S]*?\.location-profile-source-list > div\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(styles),
+  "Sancheong location profile must keep token-based cards, charts, sources, and mobile stacking",
+  failures
+);
+
+assert(
+  indexHtml.includes('data-location-workspace')
+    && indexHtml.includes('id="dictionaryProvinceSelect"')
+    && indexHtml.includes('id="dictionaryQuickButtons"')
+    && indexHtml.includes('class="dictionary-admin-operations"')
+    && indexHtml.indexOf('id="dictionaryResult"') < indexHtml.indexOf('class="dictionary-admin-operations"')
+    && indexHtml.includes('data-dictionary-view="dictionary"')
+    && indexHtml.includes('data-dictionary-view="demand"')
+    && indexHtml.includes('data-dictionary-view="compare"')
+    && indexHtml.includes('data-dictionary-view="sources"'),
+  "location dictionary must lead with search, province and region selection before collapsed admin operations",
+  failures
+);
+
+assert(
+  app.includes('dictionaryProvince: "경남"')
+    && app.includes('dictionaryDetailTab: "basic"')
+    && app.includes('data-location-region-item data-location-region-key=')
+    && app.includes('function selectDictionaryProvince(')
+    && app.includes('function selectDictionaryRegion(')
+    && app.includes('const LOCATION_PROFILE_TABS = new Set(["basic", "tourism", "supply", "history"])')
+    && app.includes('data-location-profile-tab=')
+    && app.includes('data-location-profile-panel=')
+    && app.includes('role="tabpanel"')
+    && app.includes('" hidden"')
+    && app.includes('state.dictionaryDetailTab = tab')
+    && app.includes('state.dictionaryPendingRegion = card ? null : region')
+    && app.includes('Boolean(state.selectedLocationCard || state.dictionaryPendingRegion)'),
+  "location dictionary must preserve exact province and region selection and expose four state-backed detail tabs",
+  failures
+);
+
+assert(
+  styles.includes("Location dictionary workspace v2")
+    && styles.includes(".location-dictionary-workspace")
+    && styles.includes(".dictionary-region-item.active")
+    && styles.includes(".location-profile-tabs button[aria-selected=\"true\"]")
+    && styles.includes(".dictionary-admin-operations")
+    && styles.includes("background: var(--surface-card)")
+    && styles.includes("background: var(--surface-control)")
+    && styles.includes("background: var(--surface-selected)")
+    && /@media \(max-width: 900px\)[\s\S]*?\.location-dictionary-workspace\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(styles)
+    && /@media \(max-width: 600px\)[\s\S]*?\.location-profile-definition-list > div\s*\{[\s\S]*?grid-template-columns:\s*1fr/.test(styles),
+  "location dictionary workspace must use theme tokens and collapse cleanly for tablet and mobile",
+  failures
+);
+
 const crawlFormMatch = indexHtml.match(/<form class="admin-card" id="crawlForm">([\s\S]*?)<\/form>/);
 const crawlFormMarkup = crawlFormMatch?.[1] || "";
 const purposeOptionsMarkup = crawlFormMarkup.match(/<div class="crawl-purpose-options">([\s\S]*?)<\/div>/)?.[1] || "";

@@ -34816,6 +34816,1035 @@ body.role-admin .admin-db-company-action a + a {
   }
 }
 
+/* Sancheong location profile v1: actual regional evidence precedes internal dictionary rules. */
+.location-profile-card {
+  display: grid;
+  gap: 16px;
+}
+
+.location-profile-basic,
+.location-profile-panel,
+.location-profile-sources,
+.location-profile-internal {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius-large);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: var(--card-shadow);
+}
+
+.location-profile-basic {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  padding: 20px;
+}
+
+.location-profile-basic > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.location-profile-basic .eyebrow,
+.location-profile-section-head .eyebrow,
+.location-profile-panel-head .eyebrow {
+  margin: 0;
+  color: var(--theme-accent-strong);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.location-profile-basic h3,
+.location-profile-section-head h3,
+.location-profile-panel-head h4 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.location-profile-basic h3 {
+  font-size: clamp(24px, 3vw, 34px);
+}
+
+.location-profile-basic p:not(.eyebrow),
+.location-profile-section-head > span,
+.location-profile-panel-head small,
+.location-profile-basis,
+.location-profile-sources > p,
+.location-profile-internal-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.location-profile-api-state,
+.location-profile-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.location-profile-api-state.is-ready,
+.location-profile-status.is-observed {
+  border-color: color-mix(in srgb, var(--theme-accent) 48%, var(--border-subtle));
+  background: color-mix(in srgb, var(--surface-card) 88%, var(--theme-accent));
+  color: var(--theme-accent-strong);
+}
+
+.location-profile-api-state.is-loading {
+  border-style: dashed;
+}
+
+.location-profile-basic dl {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.location-profile-basic dl > div,
+.location-profile-kpi-row > div,
+.location-profile-mini-dl > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  padding: 12px;
+}
+
+.location-profile-basic dt,
+.location-profile-mini-dl dt,
+.location-profile-kpi-row span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.location-profile-basic dd,
+.location-profile-mini-dl dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-live {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.location-profile-section-head,
+.location-profile-panel-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.location-profile-section-head > div,
+.location-profile-panel-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.location-profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
+  gap: 12px;
+}
+
+.location-profile-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 16px;
+}
+
+.location-profile-wide {
+  grid-column: 1 / -1;
+}
+
+.location-profile-place-list {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.location-profile-place-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 54px minmax(120px, .8fr) minmax(170px, 1.2fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-control);
+  padding: 10px 11px;
+}
+
+.location-profile-place-list b,
+.location-profile-place-list strong,
+.location-profile-place-list small,
+.location-profile-place-list em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-place-list b {
+  color: var(--theme-accent-strong);
+  font-size: 12px;
+}
+
+.location-profile-place-list strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.location-profile-place-list small,
+.location-profile-place-list em {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.location-profile-place-more {
+  display: grid;
+  gap: 8px;
+}
+
+.location-profile-place-more summary {
+  width: 100%;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: var(--surface-control);
+  color: var(--theme-accent-strong);
+  padding: 9px 12px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+  list-style: none;
+}
+
+.location-profile-place-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.location-profile-place-more[open] summary {
+  margin-bottom: 8px;
+}
+
+.location-profile-traffic-total {
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 12px;
+}
+
+.location-profile-traffic-total strong {
+  color: var(--text-primary);
+  font-size: clamp(26px, 4vw, 38px);
+  line-height: 1;
+}
+
+.location-profile-traffic-total span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.location-profile-mini-dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.location-profile-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.location-profile-kpi-row strong {
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.location-profile-kpi-row small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.location-profile-chart-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  padding: 8px;
+}
+
+.location-profile-chart {
+  --profile-series-accent: var(--theme-accent);
+  display: block;
+  width: 100%;
+  min-width: 620px;
+  height: auto;
+}
+
+.location-profile-chart.is-stay {
+  --profile-series-accent: var(--theme-accent-strong);
+}
+
+.location-profile-chart.is-spend {
+  --profile-series-accent: var(--text-secondary);
+}
+
+.location-profile-chart-gridline line {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+}
+
+.location-profile-chart-gridline text,
+.location-profile-chart-axis,
+.location-profile-chart-unit {
+  fill: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.location-profile-chart-line {
+  fill: none;
+  stroke: var(--profile-series-accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.location-profile-chart-point {
+  fill: var(--surface-card);
+  stroke: var(--profile-series-accent);
+  stroke-width: 3;
+}
+
+.location-profile-chart-empty,
+.location-profile-empty {
+  min-height: 92px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 18px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.location-profile-strength-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.location-profile-series-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius);
+  background: var(--surface-control);
+  padding: 12px;
+}
+
+.location-profile-series-card > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.location-profile-series-card span,
+.location-profile-series-card > small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.location-profile-series-card strong {
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.location-profile-sources {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.location-profile-source-list {
+  display: grid;
+  gap: 7px;
+}
+
+.location-profile-source-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, .7fr) auto minmax(190px, 1.2fr) minmax(130px, .8fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-control);
+  padding: 10px 12px;
+}
+
+.location-profile-source-list > div > span:first-child,
+.location-profile-source-list strong,
+.location-profile-source-list small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-source-list > div > span:first-child,
+.location-profile-source-list strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.location-profile-source-list small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.location-profile-internal {
+  overflow: hidden;
+}
+
+.location-profile-internal > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 17px 18px;
+  color: var(--text-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.location-profile-internal > summary::-webkit-details-marker {
+  display: none;
+}
+
+.location-profile-internal > summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.location-profile-internal > summary strong {
+  font-size: 15px;
+}
+
+.location-profile-internal > summary span,
+.location-profile-internal > summary b {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.location-profile-internal[open] > summary {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.location-profile-internal-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.location-profile-internal-note {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-control);
+  padding: 11px 12px;
+}
+
+@media (max-width: 900px) {
+  .location-profile-basic dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .location-profile-grid,
+  .location-profile-strength-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .location-profile-wide {
+    grid-column: auto;
+  }
+
+  .location-profile-source-list > div {
+    grid-template-columns: minmax(120px, .8fr) auto minmax(180px, 1.2fr);
+  }
+
+  .location-profile-source-list small {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .location-profile-card {
+    gap: 12px;
+  }
+
+  .location-profile-basic {
+    grid-template-columns: 1fr;
+    padding: 15px;
+  }
+
+  .location-profile-api-state {
+    grid-row: 2;
+  }
+
+  .location-profile-basic dl,
+  .location-profile-mini-dl,
+  .location-profile-kpi-row {
+    grid-template-columns: 1fr;
+  }
+
+  .location-profile-section-head,
+  .location-profile-panel-head {
+    display: grid;
+  }
+
+  .location-profile-panel,
+  .location-profile-sources {
+    padding: 14px;
+  }
+
+  .location-profile-place-list > div {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .location-profile-place-list small,
+  .location-profile-place-list em {
+    grid-column: 2;
+  }
+
+  .location-profile-chart {
+    min-width: 560px;
+  }
+
+  .location-profile-source-list > div {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .location-profile-source-list small {
+    grid-column: auto;
+  }
+
+  .location-profile-internal > summary {
+    align-items: flex-start;
+  }
+
+  .location-profile-internal > summary b {
+    flex: 0 0 auto;
+  }
+}
+
+/* Location dictionary workspace v2: region first, evidence second. */
+.dictionary-view-tabs {
+  display: flex;
+  gap: 6px;
+  margin: -4px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.dictionary-view-tabs button {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.dictionary-view-tabs button.active,
+.dictionary-view-tabs button[aria-current="page"] {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.dictionary-search-card {
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border-color: var(--border-subtle);
+  background: var(--surface-card);
+}
+
+.dictionary-search {
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 176px) auto;
+  align-items: end;
+}
+
+.dictionary-search .field {
+  gap: 6px;
+}
+
+.dictionary-search .field > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.dictionary-search :is(input, select, button) {
+  min-height: 42px;
+}
+
+.dictionary-search-card .hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.location-dictionary-workspace {
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.location-region-browser {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--theme-card-shadow);
+}
+
+.location-region-browser-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.location-region-browser-head strong {
+  font-size: 14px;
+}
+
+.location-region-browser-head span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.location-region-browser .dictionary-chip-row {
+  display: block;
+}
+
+.dictionary-region-list {
+  display: grid;
+  gap: 5px;
+}
+
+.dictionary-region-item {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.dictionary-region-item strong {
+  min-width: 0;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.dictionary-region-item span {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.dictionary-region-item:hover {
+  border-color: var(--border-subtle);
+  background: var(--surface-control);
+  color: var(--text-primary);
+}
+
+.dictionary-region-item.active,
+.dictionary-region-item[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface-selected);
+  color: var(--accent-strong);
+}
+
+.dictionary-region-more {
+  margin-top: 6px;
+}
+
+.dictionary-region-more > summary {
+  cursor: pointer;
+  padding: 8px 4px 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 800;
+  list-style: none;
+}
+
+.dictionary-region-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dictionary-region-more[open] > summary {
+  margin-bottom: 4px;
+  color: var(--accent-strong);
+}
+
+.dictionary-result {
+  min-width: 0;
+}
+
+.location-profile-card {
+  gap: 14px;
+  padding: 14px;
+  border-color: var(--border-subtle);
+  background: var(--surface-card);
+}
+
+.location-profile-overview {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 2px 0;
+}
+
+.location-profile-overview > div {
+  min-width: 0;
+}
+
+.location-profile-overview .eyebrow {
+  margin: 0 0 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.location-profile-overview h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(20px, 3vw, 26px);
+}
+
+.location-profile-overview p:not(.eyebrow) {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.location-profile-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.location-profile-summary-grid article {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+}
+
+.location-profile-summary-grid span,
+.location-profile-summary-grid small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.location-profile-summary-grid strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-endpoint-state {
+  margin: -2px 2px 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: right;
+}
+
+.location-profile-tabs {
+  display: flex;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.location-profile-tabs button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-control);
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.location-profile-tabs button.active,
+.location-profile-tabs button[aria-selected="true"] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+  color: var(--accent-strong);
+}
+
+.location-profile-tab-panel {
+  min-width: 0;
+  padding: 2px;
+}
+
+.location-profile-tab-panel > .location-profile-grid {
+  margin: 0;
+}
+
+.location-profile-definition-list {
+  display: grid;
+}
+
+.location-profile-definition-list > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(90px, .6fr) minmax(0, 1.35fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.location-profile-definition-list > div:last-child {
+  border-bottom: 0;
+}
+
+.location-profile-definition-list span,
+.location-profile-definition-list small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.location-profile-definition-list strong {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.location-profile-definition-list small {
+  text-align: right;
+}
+
+.location-profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.location-profile-action-note {
+  margin: 8px 0 0;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 750;
+  text-align: right;
+}
+
+.dictionary-admin-operations {
+  margin-top: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--ui-radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--theme-card-shadow);
+}
+
+.dictionary-admin-operations > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  list-style: none;
+}
+
+.dictionary-admin-operations > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dictionary-admin-operations > summary span {
+  display: grid;
+  gap: 2px;
+}
+
+.dictionary-admin-operations > summary strong,
+.dictionary-admin-operations > summary b {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.dictionary-admin-operations > summary small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.dictionary-admin-operations > summary b {
+  color: var(--accent-strong);
+}
+
+.dictionary-admin-operations[open] > summary {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dictionary-admin-operations > :not(summary) {
+  margin: 12px;
+}
+
+@media (max-width: 900px) {
+  .location-dictionary-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .dictionary-region-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .location-profile-tab-panel .location-profile-grid,
+  .location-profile-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .location-profile-tab-panel .location-profile-wide {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 700px) {
+  .dictionary-search {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dictionary-search .field:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .dictionary-search {
+    grid-template-columns: 1fr;
+  }
+
+  .dictionary-search .field:first-child,
+  .dictionary-search-submit {
+    grid-column: auto;
+  }
+
+  .dictionary-region-list {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .location-profile-card,
+  .location-region-browser,
+  .dictionary-search-card {
+    padding: 12px;
+  }
+
+  .location-profile-overview {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .location-profile-api-state {
+    align-self: flex-start;
+  }
+
+  .location-profile-definition-list > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .location-profile-definition-list small {
+    text-align: left;
+  }
+
+  .location-profile-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .location-profile-actions button {
+    width: 100%;
+  }
+
+  .location-profile-action-note,
+  .location-profile-endpoint-state {
+    text-align: left;
+  }
+}
+
 /* Regional visitor history: actual complete-month observations only. */
 .tourism-visitor-history-card {
   --visitor-accent: #087f5b;

@@ -7713,10 +7713,10 @@ function demandKeywordForRun(manifest, conditions, regions) {
 
 function trafficKeywordForRegion(keyword, region) {
   const compact = compactKeyword(keyword);
-  const regionName = compactKeyword(region);
+  const regionName = adminRegionToken(region);
   const suffix = lodgingSearchSuffixInKeyword(compact) || "글램핑";
-  if (regionName && compact.includes(regionName)) return normalizeSearchKeyword(compact);
-  return normalizeSearchKeyword(compact || `${regionName}${suffix}`);
+  if (regionName) return normalizeSearchKeyword(`${regionName}${suffix}`);
+  return normalizeSearchKeyword(compact);
 }
 
 function normalizeClusterName(value) {
@@ -15499,6 +15499,449 @@ function unavailableTourismDemandStrengthHistory(reason, status = "unavailable")
   };
 }
 
+const TOURISM_LOCATION_HISTORY_MONTHS = 36;
+const TOURISM_LOCATION_HISTORY_QUERY_FIELDS = new Set(["regionKey", "regionName"]);
+const TOURISM_LOCATION_HISTORY_FORBIDDEN_QUERY_FIELDS = new Set([
+  "servicekey",
+  "apikey",
+  "endpoint",
+  "url",
+  "params",
+  "extraparams"
+]);
+
+function tourismRequestHasForbiddenConnectionFields(value = {}) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).some((field) => (
+    TOURISM_LOCATION_HISTORY_FORBIDDEN_QUERY_FIELDS.has(String(field || "").trim().toLowerCase())
+  )));
+}
+
+function tourismLocationHistorySelector(reqUrl) {
+  const queryFields = [...new Set(reqUrl.searchParams.keys())];
+  const forbiddenField = queryFields.find((field) => (
+    TOURISM_LOCATION_HISTORY_FORBIDDEN_QUERY_FIELDS.has(String(field || "").trim().toLowerCase())
+  ));
+  if (forbiddenField) {
+    const error = new Error("API 주소나 인증키는 요청에서 지정할 수 없습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const unsupportedField = queryFields.find((field) => !TOURISM_LOCATION_HISTORY_QUERY_FIELDS.has(field));
+  if (unsupportedField) {
+    const error = new Error("regionKey 또는 regionName만 지정할 수 있습니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const values = [
+    ...reqUrl.searchParams.getAll("regionKey").map((value) => ({ type: "regionKey", value: String(value || "").trim() })),
+    ...reqUrl.searchParams.getAll("regionName").map((value) => ({ type: "regionName", value: String(value || "").trim() }))
+  ].filter((entry) => entry.value);
+  if (values.length !== 1) {
+    const error = new Error("regionKey 또는 regionName 중 하나만 지정해야 합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (values[0].value.length > 120) {
+    const error = new Error("지역 선택값은 120자 이하여야 합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return values[0];
+}
+
+function tourismSigunguSelectorToken(value = "") {
+  return adminRegionToken(
+    String(value || "")
+      .replace(/글램핑|카라반|캠핑장|캠핑|야영장|펜션|풀빌라|리조트|호텔|숙소|숙박/gu, "")
+  );
+}
+
+function tourismRegionMatchesExactSigungu(region = {}, regionName = "") {
+  const selectorToken = tourismSigunguSelectorToken(regionName);
+  if (!selectorToken) return false;
+  return [region.sigungu, ...(Array.isArray(region.aliases) ? region.aliases : [])]
+    .map(tourismSigunguSelectorToken)
+    .filter(Boolean)
+    .some((candidate) => candidate === selectorToken);
+}
+
+function publicTourismLocationRegion(region = {}) {
+  return {
+    regionKey: region.regionKey || "",
+    sidoKey: region.sidoKey || "",
+    sido: region.sido || "",
+    sidoFull: region.sidoFull || "",
+    sigungu: region.sigungu || "",
+    areaCd: String(region.ktoSidoCd || ""),
+    signguCd: String(region.ktoSggCd || ""),
+    unit: region.unit || "sigungu",
+    codeStatus: region.codeStatus || ""
+  };
+}
+
+function tourismSnapshotKeywordKey(value = "") {
+  return compactKeyword(String(value || "").normalize("NFKC")).toLowerCase();
+}
+
+function tourismSnapshotOptionalNumber(value, options = {}) {
+  const text = String(value ?? "").replace(/,/g, "").trim();
+  if (!text) return null;
+  const number = Number(text);
+  if (!Number.isFinite(number)) return null;
+  if (options.zeroIsMissing && number === 0) return null;
+  return number;
+}
+
+function tourismSnapshotIsoDate(value = "") {
+  const parsed = Date.parse(String(value || ""));
+  if (!Number.isFinite(parsed)) return "";
+  const kst = new Date(parsed + 9 * 60 * 60 * 1000);
+  return `${kst.getUTCFullYear()}-${String(kst.getUTCMonth() + 1).padStart(2, "0")}-${String(kst.getUTCDate()).padStart(2, "0")}`;
+}
+
+function tourismRunIdObservation(runId = "") {
+  const match = String(runId || "").match(/_glamping_(\d{4})(\d{2})(\d{2})(?:_(\d{2})(\d{2})(\d{2}))?$/i);
+  if (!match) return null;
+  const observedDate = `${match[1]}-${match[2]}-${match[3]}`;
+  const localTimestamp = `${observedDate}T${match[4] || "00"}:${match[5] || "00"}:${match[6] || "00"}+09:00`;
+  const parsed = Date.parse(localTimestamp);
+  return Number.isFinite(parsed)
+    ? { observedAt: new Date(parsed).toISOString(), observedDate, observedAtBasis: "run_id_fallback" }
+    : null;
+}
+
+function tourismRunObservation(manifest = {}, trafficCache = {}, run = {}) {
+  for (const [value, basis] of [
+    [manifest.completedAt, "manifest.completedAt"],
+    [manifest.finishedAt, "manifest.finishedAt"],
+    [manifest.collectedAt, "manifest.collectedAt"],
+    [manifest.startedAt, "manifest.startedAt"],
+    [manifest.createdAt, "manifest.createdAt"],
+    [trafficCache.updatedAt, "traffic_metrics.updatedAt"]
+  ]) {
+    const parsed = Date.parse(String(value || ""));
+    if (Number.isFinite(parsed)) {
+      const observedAt = new Date(parsed).toISOString();
+      return { observedAt, observedDate: tourismSnapshotIsoDate(observedAt), observedAtBasis: basis };
+    }
+  }
+  const fromRunId = tourismRunIdObservation(run.id);
+  if (fromRunId) return fromRunId;
+  const parsed = Date.parse(String(run.collectedAt || run.updatedAt || ""));
+  if (!Number.isFinite(parsed)) return { observedAt: null, observedDate: null, observedAtBasis: "unavailable" };
+  const observedAt = new Date(parsed).toISOString();
+  return { observedAt, observedDate: tourismSnapshotIsoDate(observedAt), observedAtBasis: "filesystem_fallback" };
+}
+
+function newerTourismSnapshot(candidate = null, current = null) {
+  if (!candidate) return current;
+  if (!current) return candidate;
+  const candidateTime = Date.parse(String(candidate.observedAt || ""));
+  const currentTime = Date.parse(String(current.observedAt || ""));
+  if (Number.isFinite(candidateTime) && Number.isFinite(currentTime) && candidateTime !== currentTime) {
+    return candidateTime > currentTime ? candidate : current;
+  }
+  if (Number.isFinite(candidateTime) !== Number.isFinite(currentTime)) {
+    return Number.isFinite(candidateTime) ? candidate : current;
+  }
+  return String(candidate.runId || "").localeCompare(String(current.runId || "")) > 0 ? candidate : current;
+}
+
+async function tourismLocationDictionaryKeyword(region = {}) {
+  try {
+    const dictionary = JSON.parse((await fsp.readFile(path.join(WEB_DIR, "data", "location_dictionary.json"), "utf8")).replace(/^\uFEFF/, ""));
+    const card = (Array.isArray(dictionary.cards) ? dictionary.cards : [])
+      .find((item) => item?.regionKey === region.regionKey);
+    if (card?.searchKeyword) return String(card.searchKeyword).trim();
+  } catch {
+    // Fall through to a deterministic sigungu keyword when the dictionary is unavailable.
+  }
+  const sigungu = tourismSigunguSelectorToken(region.sigungu || "");
+  return sigungu ? spacedLodgingKeyword(`${sigungu}글램핑`) : "";
+}
+
+function tourismPlaceRowMatchesRegion(row = {}, region = {}, exactKeyword = "", provinceKey = "") {
+  if (region.sidoKey && provinceKey && provinceKey !== "local" && provinceKey !== region.sidoKey) return false;
+  const regionToken = tourismSigunguSelectorToken(region.sigungu || "");
+  const rowRegionTokens = [row["지역"], row["검색클러스터"], row["소재지클러스터"]]
+    .map(tourismSigunguSelectorToken)
+    .filter(Boolean);
+  if (!regionToken || !rowRegionTokens.includes(regionToken)) return false;
+  const rowKeyword = String(row["검색키워드"] || row["기준키워드"] || "").trim();
+  const exactKey = tourismSnapshotKeywordKey(exactKeyword);
+  return !rowKeyword || !exactKey || tourismSnapshotKeywordKey(rowKeyword).includes(exactKey);
+}
+
+function publicTourismPlaceRow(row = {}) {
+  const rank = tourismSnapshotOptionalNumber(row["순위"]);
+  const detailStatus = String(row["네이버예약재고수집상태"] || "").trim();
+  const detailObserved = /^성공(?:$|\()/u.test(detailStatus);
+  return {
+    rank,
+    placeId: String(row.place_id || row.placeId || "").trim() || null,
+    name: String(row["업체명"] || "").trim() || null,
+    category: String(row["카테고리"] || "").trim() || null,
+    address: String(row["주소"] || row["주소 또는 지역"] || "").trim() || null,
+    price: String(row["금액"] || row["가격"] || "").trim() || null,
+    roomCount: tourismSnapshotOptionalNumber(row["객실수(노출)"]),
+    roomNamePreview: String(row["객실명(일부)"] || row.roomNamePreview || "").trim() || null,
+    totalReviews: tourismSnapshotOptionalNumber(row["총리뷰"]),
+    visitorReviews: tourismSnapshotOptionalNumber(row["방문자리뷰"]),
+    rating: tourismSnapshotOptionalNumber(row["평점"], { zeroIsMissing: true }),
+    bookingAvailable: String(row["예약"] || "").trim() || null,
+    reservationLowestPrice: String(row["예약최저가"] || "").trim() || null,
+    detailObserved,
+    detailStatus: detailStatus || null,
+    detailReason: detailObserved ? null : (detailStatus || "상세 관측 없음"),
+    url: String(row.url || row["상품 URL"] || "").trim() || null
+  };
+}
+
+function tourismExactSearchAdMetric(trafficCache = {}, exactKeyword = "") {
+  const target = tourismSnapshotKeywordKey(exactKeyword);
+  if (!target) return null;
+  return Object.entries(trafficCache.metrics || {}).map(([key, value]) => ({ key, value }))
+    .find(({ key, value }) => [key, value?.keyword, value?.relKeyword]
+      .some((candidate) => tourismSnapshotKeywordKey(candidate) === target)) || null;
+}
+
+function publicTourismSearchAdMetric(entry = null) {
+  if (!entry?.value || entry.value.collectable !== true) return null;
+  const metric = entry.value;
+  const totalSearchVolume = tourismSnapshotOptionalNumber(metric.totalSearchVolume);
+  if (totalSearchVolume === null) return null;
+  return {
+    keyword: String(metric.keyword || entry.key || "").trim() || null,
+    relKeyword: String(metric.relKeyword || metric.keyword || entry.key || "").trim() || null,
+    status: tourismSnapshotOptionalNumber(metric.status),
+    monthlyPc: tourismSnapshotOptionalNumber(metric.monthlyPc),
+    monthlyMobile: tourismSnapshotOptionalNumber(metric.monthlyMobile),
+    totalSearchVolume,
+    monthlyPcClicks: tourismSnapshotOptionalNumber(metric.monthlyPcClicks),
+    monthlyMobileClicks: tourismSnapshotOptionalNumber(metric.monthlyMobileClicks),
+    totalClicks: tourismSnapshotOptionalNumber(metric.totalClicks),
+    pcCtr: tourismSnapshotOptionalNumber(metric.pcCtr),
+    mobileCtr: tourismSnapshotOptionalNumber(metric.mobileCtr),
+    combinedCtr: tourismSnapshotOptionalNumber(metric.combinedCtr),
+    competition: String(metric.competition || "").trim() || null
+  };
+}
+
+async function readTourismLocationNaverSnapshots(region = {}) {
+  const exactKeyword = await tourismLocationDictionaryKeyword(region);
+  const runs = await listRuns();
+  let latestPlace = null;
+  let latestKeyword = null;
+
+  for (const run of runs) {
+    const dirPath = resolveRunDir(run.id);
+    if (!dirPath) continue;
+    const files = await fsp.readdir(dirPath).catch(() => []);
+    const manifest = await readManifest(dirPath) || {};
+    const trafficFile = files.includes("traffic_metrics.json") ? path.join(dirPath, "traffic_metrics.json") : "";
+    const trafficCache = trafficFile ? await readTrafficCache(trafficFile) : { source: "", metrics: {} };
+    const observation = tourismRunObservation(manifest, trafficCache, run);
+    const provinceKey = provinceKeyForRun(run.id, manifest);
+    const regionalFile = manifestFile(
+      manifest,
+      "regional",
+      files,
+      (file) => file.endsWith("_naver_place_glamping_clusters.csv") || file.includes("네이버지역별순위.csv")
+    );
+
+    if (regionalFile) {
+      try {
+        const matchedSourceRows = parseCsv((await fsp.readFile(path.join(dirPath, regionalFile), "utf8")).replace(/^\uFEFF/, ""))
+          .filter((row) => tourismPlaceRowMatchesRegion(row, region, exactKeyword, provinceKey));
+        const rows = matchedSourceRows
+          .map(publicTourismPlaceRow)
+          .filter((row) => Number.isInteger(row.rank) && row.rank >= 1 && row.rank <= 10)
+          .sort((a, b) => a.rank - b.rank);
+        const uniqueRows = [];
+        const seenPlaces = new Set();
+        for (const row of rows) {
+          const key = row.placeId || `${row.rank}|${row.name || ""}`;
+          if (seenPlaces.has(key)) continue;
+          seenPlaces.add(key);
+          uniqueRows.push(row);
+        }
+        if (uniqueRows.length) {
+          const finalRows = uniqueRows.slice(0, 10);
+          const detailObservedCount = finalRows.filter((row) => row.detailObserved).length;
+          latestPlace = newerTourismSnapshot({
+            status: "observed",
+            reason: "",
+            dictionaryKeyword: exactKeyword || null,
+            searchKeyword: String(
+              matchedSourceRows[0]?.["검색키워드"]
+              || exactKeyword
+              || ""
+            ).trim() || null,
+            ...observation,
+            collectedAt: observation.observedAt,
+            runId: run.id,
+            source: "naver_place_saved_run",
+            sourceFile: regionalFile,
+            rowCount: finalRows.length,
+            detailCount: detailObservedCount,
+            unobservedDetailCount: finalRows.length - detailObservedCount,
+            detailObservedCount,
+            detailMissingCount: finalRows.length - detailObservedCount,
+            items: finalRows,
+            rows: finalRows
+          }, latestPlace);
+        }
+      } catch {
+        // A malformed legacy CSV must not hide a valid snapshot from another run.
+      }
+    }
+
+    const searchAdEntry = tourismExactSearchAdMetric(trafficCache, exactKeyword);
+    const metric = publicTourismSearchAdMetric(searchAdEntry);
+    if (metric) {
+      latestKeyword = newerTourismSnapshot({
+        status: "observed",
+        reason: "",
+        searchKeyword: exactKeyword || null,
+        ...observation,
+        keyword: metric.keyword,
+        totalSearchVolume: metric.totalSearchVolume,
+        monthlyPc: metric.monthlyPc,
+        monthlyMobile: metric.monthlyMobile,
+        competition: metric.competition,
+        updatedAt: observation.observedAt,
+        runId: run.id,
+        source: String(trafficCache.source || "naver_searchad_keywordstool"),
+        sourceFile: "traffic_metrics.json",
+        metric
+      }, latestKeyword);
+    }
+  }
+
+  return {
+    naverPlace: latestPlace || {
+      status: "unavailable",
+      reason: "matching_saved_place_snapshot_not_found",
+      dictionaryKeyword: exactKeyword || null,
+      searchKeyword: exactKeyword || null,
+      observedAt: null,
+      observedDate: null,
+      observedAtBasis: "unavailable",
+      collectedAt: null,
+      runId: null,
+      source: "naver_place_saved_run",
+      sourceFile: null,
+      rowCount: 0,
+      detailCount: 0,
+      unobservedDetailCount: 0,
+      detailObservedCount: 0,
+      detailMissingCount: 0,
+      items: [],
+      rows: []
+    },
+    naverKeyword: latestKeyword || {
+      status: "unavailable",
+      reason: "exact_searchad_keyword_snapshot_not_found",
+      searchKeyword: exactKeyword || null,
+      observedAt: null,
+      observedDate: null,
+      observedAtBasis: "unavailable",
+      keyword: exactKeyword ? compactKeyword(exactKeyword) : null,
+      totalSearchVolume: null,
+      monthlyPc: null,
+      monthlyMobile: null,
+      competition: null,
+      updatedAt: null,
+      runId: null,
+      source: "naver_searchad_keywordstool",
+      sourceFile: null,
+      metric: null
+    }
+  };
+}
+
+async function readTourismLocationHistoryCache(selector = {}) {
+  if (typeof tourismCollector.resolveRegion !== "function"
+    || typeof tourismCollector.collectVisitorHistory !== "function"
+    || typeof tourismCollector.collectDemandStrengthHistory !== "function") {
+    const error = new Error("지역 관광 이력 캐시 조회기가 준비되지 않았습니다.");
+    error.statusCode = 503;
+    throw error;
+  }
+  const match = await tourismCollector.resolveRegion(
+    selector.type === "regionKey"
+      ? { regionKey: selector.value }
+      : { keyword: selector.value }
+  );
+  if (!match?.region) {
+    const error = new Error("관광공사 시군구 코드와 일치하는 지역을 찾을 수 없습니다.");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (selector.type === "regionName" && !tourismRegionMatchesExactSigungu(match.region, selector.value)) {
+    const error = new Error("광역권이 아닌 정확한 시군구명을 지정해야 합니다.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const region = publicTourismLocationRegion(match.region);
+  const cacheInput = {
+    regionKeys: [region.regionKey],
+    months: TOURISM_LOCATION_HISTORY_MONTHS,
+    collectMissing: false,
+    refresh: false,
+    force: false
+  };
+  const [tourismVisitorHistory, tourismDemandStrengthHistory] = await Promise.all([
+    tourismCollector.collectVisitorHistory(cacheInput),
+    tourismCollector.collectDemandStrengthHistory(cacheInput)
+  ]);
+  const { naverPlace, naverKeyword } = await readTourismLocationNaverSnapshots(match.region);
+  const visitorNetworkAttempts = Number(tourismVisitorHistory?.collection?.networkAttemptedMonths || 0);
+  const demandStrengthNetworkAttempts = Number(tourismDemandStrengthHistory?.collection?.networkAttemptedMonths || 0);
+  const externalRequestsAttempted = visitorNetworkAttempts + demandStrengthNetworkAttempts;
+  if (externalRequestsAttempted !== 0) {
+    const error = new Error("캐시 전용 지역 이력 조회 중 외부 요청이 감지되었습니다.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return {
+    ok: true,
+    selector: {
+      type: selector.type,
+      value: selector.value,
+      matchConfidence: Number(match.confidence || 0),
+      matchReason: match.reason || ""
+    },
+    region,
+    tourismVisitorHistory,
+    tourismDemandStrengthHistory,
+    naverPlace,
+    naverKeyword,
+    cache: {
+      mode: "cache_only",
+      requestedMonths: TOURISM_LOCATION_HISTORY_MONTHS,
+      externalRequestsAttempted,
+      visitors: {
+        cacheHitMonths: Number(tourismVisitorHistory?.collection?.cacheHitMonths || 0),
+        missingCacheMonths: Number(tourismVisitorHistory?.collection?.missingCacheMonths || 0)
+      },
+      demandStrength: {
+        cacheHitMonths: Number(tourismDemandStrengthHistory?.collection?.cacheHitMonths || 0),
+        missingCacheMonths: Number(tourismDemandStrengthHistory?.collection?.missingCacheMonths || 0)
+      }
+    },
+    policy: {
+      adminOnly: true,
+      cacheOnly: true,
+      externalRequestsAllowed: false,
+      missingIsNotZero: true,
+      singleSigungu: true
+    }
+  };
+}
+
 async function loadRun(runId, options = {}) {
   const dirPath = resolveRunDir(runId);
   if (!dirPath || !fs.existsSync(dirPath)) return null;
@@ -16615,6 +17058,12 @@ async function route(req, res) {
       return send(res, 200, await tourismCollector.status());
     }
 
+    if (req.method === "GET" && reqUrl.pathname === "/api/tourism-data/location-history") {
+      if (!requireAdminSession(session, req, res)) return;
+      const selector = tourismLocationHistorySelector(reqUrl);
+      return send(res, 200, await readTourismLocationHistoryCache(selector));
+    }
+
     if (req.method === "POST" && reqUrl.pathname === "/api/tourism-data/visitors/history") {
       if (!requireAdminSession(session, req, res)) return;
       assertRequestRateLimit(req, "adminTourism", RATE_LIMIT_POLICIES.adminTourism, session.username || "");
@@ -16622,6 +17071,9 @@ async function route(req, res) {
         return send(res, 503, { error: "지역별 방문자수 이력 수집기가 준비되지 않았습니다." });
       }
       const payload = await parseJsonBody(req);
+      if (tourismRequestHasForbiddenConnectionFields(payload)) {
+        return send(res, 400, { error: "API 주소나 인증키는 요청 본문에서 지정할 수 없습니다." });
+      }
       const cleanList = (value) => Array.from(new Set(
         (Array.isArray(value) ? value : value ? [value] : [])
           .map((item) => String(item || "").trim().slice(0, 120))
@@ -16669,8 +17121,7 @@ async function route(req, res) {
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
         return send(res, 400, { error: "요청 본문은 JSON 객체여야 합니다." });
       }
-      const forbiddenFields = ["serviceKey", "apiKey", "endpoint", "url", "params", "extraParams"];
-      if (forbiddenFields.some((key) => Object.prototype.hasOwnProperty.call(payload, key))) {
+      if (tourismRequestHasForbiddenConnectionFields(payload)) {
         return send(res, 400, { error: "API 주소나 인증키는 요청 본문에서 지정할 수 없습니다." });
       }
       const cleanSelectorList = (...values) => Array.from(new Set(
